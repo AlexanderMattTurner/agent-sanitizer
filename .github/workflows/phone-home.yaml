@@ -43,7 +43,7 @@ jobs:
           GITLEAKS_VERSION: "8.30.1"
           # Published SHA-256 of gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz.
           # Verify before extracting so a tampered release asset can't inject a
-          # malicious binary next to the TEMPLATE_SYNC_TOKEN step. MUST match
+          # malicious binary next to the TEMPLATE_SYNC_TOKEN_ORG step. MUST match
           # GITLEAKS_VERSION and stay in lockstep with gitleaks.yaml's pin.
           GITLEAKS_SHA256: "551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb"
         run: |
@@ -66,7 +66,7 @@ jobs:
       - name: Submit to template repo
         if: steps.extract.outputs.has_lessons == 'true'
         env:
-          GH_TOKEN: ${{ secrets.TEMPLATE_SYNC_TOKEN || secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.TEMPLATE_SYNC_TOKEN_ORG || secrets.GITHUB_TOKEN }}
           PR_TITLE: ${{ steps.extract.outputs.pr_title }}
           PR_URL: ${{ steps.extract.outputs.pr_url }}
           SOURCE_REPO: ${{ steps.extract.outputs.source_repo }}

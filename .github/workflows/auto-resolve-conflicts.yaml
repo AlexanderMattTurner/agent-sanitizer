@@ -12,7 +12,7 @@
 # re-validated by CI + human review before it can merge. The workflow comments on
 # a PR only when it actually pushes something (or fails mid-resolution) — a run
 # that ends up doing nothing says nothing. The merge commit is pushed with the
-# workflow-capable TEMPLATE_SYNC_TOKEN (the only token GitHub allows to update
+# workflow-capable TEMPLATE_SYNC_TOKEN_ORG (the only token GitHub allows to update
 # workflow files, and a PAT so the push retriggers the PR's checks); if that
 # secret is absent the PR is labeled `auto-resolve-blocked` and skipped until a
 # human provisions the token and removes the label — otherwise every base push
@@ -273,7 +273,7 @@ jobs:
           # .github/workflows/, which no other available token can push, and being
           # a PAT the push retriggers the PR's checks. Absent ⇒ finalize labels the
           # PR auto-resolve-blocked and stops.
-          TEMPLATE_SYNC_TOKEN: ${{ secrets.TEMPLATE_SYNC_TOKEN }}
+          TEMPLATE_SYNC_TOKEN_ORG: ${{ secrets.TEMPLATE_SYNC_TOKEN_ORG }}
           CONFLICT_LIST: ${{ steps.prepare.outputs.conflict_list }}
           DEFERRED_REGEN: ${{ steps.prepare.outputs.deferred_regen }}
           PROTECTED_PATHS: ${{ steps.prepare.outputs.protected_paths }}

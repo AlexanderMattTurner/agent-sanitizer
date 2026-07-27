@@ -36,7 +36,12 @@ jobs:
       contents: read # sparse-checkout the trusted approval scripts
       pull-requests: write # submit the approving review; no other scope
     env:
-      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      # The org PAT, not the Actions GITHUB_TOKEN: the sweep's whole job is to
+      # submit approving reviews, which GitHub rejects from GITHUB_TOKEN
+      # ("GitHub Actions is not permitted to approve pull requests"). Falls
+      # back to GITHUB_TOKEN — which then fails loud on the approve — if the
+      # PAT is unset.
+      GH_TOKEN: ${{ secrets.TEMPLATE_SYNC_TOKEN_ORG || secrets.GITHUB_TOKEN }}
       GH_REPO: ${{ github.repository }}
     steps:
       - name: Checkout the trusted approval scripts (default branch)

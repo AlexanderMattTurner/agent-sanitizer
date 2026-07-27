@@ -56,7 +56,7 @@ function midMerge(bContent = "b base\n") {
 // Run finalize.sh in `work` with a fake `gh` on PATH that records every
 // invocation, so a test can assert on the comment(s)/labels the script posts.
 // `env` overrides/extends the script's environment (e.g. PROTECTED_PATHS, or
-// TEMPLATE_SYNC_TOKEN: "" to exercise the fail-closed path). Returns the error
+// TEMPLATE_SYNC_TOKEN_ORG: "" to exercise the fail-closed path). Returns the error
 // (null on success), whether a merge is still in progress (MERGE_HEAD present),
 // and the recorded gh argv lines.
 function runFinalize(work, conflictList, env = {}) {
@@ -87,7 +87,7 @@ function runFinalize(work, conflictList, env = {}) {
         // Push token present by default so the happy path pushes to the local
         // file:// origin (the extraheader auth is a no-op for file transport).
         // A test overrides it to "" to exercise the fail-closed branch.
-        TEMPLATE_SYNC_TOKEN: "x",
+        TEMPLATE_SYNC_TOKEN_ORG: "x",
         CONFLICT_LIST: conflictList,
         ...env,
         PATH: `${ghBin}:${process.env.PATH ?? ""}`,
@@ -214,7 +214,7 @@ test("finalize FAILS CLOSED (labels auto-resolve-blocked, no push) when no push 
   writeFileSync(join(work, "a.md"), "resolved: feature + main\n");
   const before = git(origin, "rev-parse", "feature").trim();
   const { error, ghCalls } = runFinalize(work, "a.md", {
-    TEMPLATE_SYNC_TOKEN: "", // absent → no token can reliably push
+    TEMPLATE_SYNC_TOKEN_ORG: "", // absent → no token can reliably push
   });
   assert.notEqual(error, null); // fails loud rather than pushing with a weak token
   assert.equal(git(origin, "rev-parse", "feature").trim(), before); // nothing pushed
@@ -222,5 +222,5 @@ test("finalize FAILS CLOSED (labels auto-resolve-blocked, no push) when no push 
   assert.ok(ghCalls.some((c) => c.includes("auto-resolve-blocked")));
   const comments = ghCalls.filter((c) => c.startsWith("pr comment"));
   assert.equal(comments.length, 1);
-  assert.ok(comments[0].includes("TEMPLATE_SYNC_TOKEN"));
+  assert.ok(comments[0].includes("TEMPLATE_SYNC_TOKEN_ORG"));
 });
