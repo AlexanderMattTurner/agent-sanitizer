@@ -107,7 +107,7 @@ if [[ ${#scan_paths[@]} -gt 0 ]] && git grep -nE "$marker_re" -- "${scan_paths[@
   fail "conflict markers still present in the tree" "the resolution left conflict markers behind."
 fi
 
-# The merge is pushed with TEMPLATE_SYNC_TOKEN — the template's workflow-capable
+# The merge is pushed with TEMPLATE_SYNC_TOKEN_ORG — the template's workflow-capable
 # PAT. It is the only sanctioned push token here for two reasons: (1) as a PAT it
 # RETRIGGERS the PR's checks so the resolved head is re-validated before it can
 # auto-merge (a default GITHUB_TOKEN push does not retrigger — GitHub's recursion
@@ -115,7 +115,7 @@ fi
 # and (2) when the merge commit changes files under .github/workflows/ (the base
 # branch moved a workflow underneath the PR, or a workflow itself conflicted),
 # GitHub refuses the push from any token lacking the workflow scope — which the
-# Actions GITHUB_TOKEN can never hold. TEMPLATE_SYNC_TOKEN carries that scope by
+# Actions GITHUB_TOKEN can never hold. TEMPLATE_SYNC_TOKEN_ORG carries that scope by
 # construction. If it is ABSENT, there is no token that can reliably push this
 # merge (a plain GITHUB_TOKEN would fail on any workflow-file change and would not
 # retrigger CI even otherwise), so fail closed BEFORE building the merge commit:
@@ -123,14 +123,14 @@ fi
 # doesn't re-run a paid resolve into the same wall) and stop until a human
 # provisions the secret and removes the label. Checked before the commit so
 # fail()'s `git merge --abort` cleanly unwinds the in-progress merge.
-if [[ -z "${TEMPLATE_SYNC_TOKEN:-}" ]]; then
+if [[ -z "${TEMPLATE_SYNC_TOKEN_ORG:-}" ]]; then
   gh label create auto-resolve-blocked --color e4e669 --force \
     --description "Auto-resolve cannot push to this PR; remove the label to let it retry" || echo "[auto-resolve] gh label create failed" >&2
   gh pr edit "$PR" --add-label auto-resolve-blocked || echo "[auto-resolve] failed to add auto-resolve-blocked label to PR #${PR}" >&2
-  fail "no push token configured (TEMPLATE_SYNC_TOKEN is unset)" \
-    "the resolution was computed but cannot be pushed: no \`TEMPLATE_SYNC_TOKEN\` secret is set (a PAT with the \`workflow\` scope is required to push a merge that may touch workflow files and to retrigger CI). Set it, then remove the \`auto-resolve-blocked\` label to let auto-resolve retry — while it is present this PR is skipped."
+  fail "no push token configured (TEMPLATE_SYNC_TOKEN_ORG is unset)" \
+    "the resolution was computed but cannot be pushed: no \`TEMPLATE_SYNC_TOKEN_ORG\` secret is set (a PAT with the \`workflow\` scope is required to push a merge that may touch workflow files and to retrigger CI). Set it, then remove the \`auto-resolve-blocked\` label to let auto-resolve retry — while it is present this PR is skipped."
 fi
-token="$TEMPLATE_SYNC_TOKEN"
+token="$TEMPLATE_SYNC_TOKEN_ORG"
 
 # --no-verify: this commit COMPLETES a merge, so its index carries the whole
 # base<->head delta (every file the merge touched), not just the resolved
@@ -165,7 +165,7 @@ if ! push_out="$(git push origin "HEAD:${HEAD_REF}" 2>&1)"; then
       --description "Auto-resolve cannot push to this PR; remove the label to let it retry" || echo "[auto-resolve] gh label create failed" >&2
     gh pr edit "$PR" --add-label auto-resolve-blocked || echo "[auto-resolve] failed to add auto-resolve-blocked label to PR #${PR}" >&2
     fail "push rejected: the merge touches .github/workflows/ and the push token lacks the workflow scope" \
-      "the resolved merge carries workflow-file changes from \`${BASE_REF}\`, and the \`TEMPLATE_SYNC_TOKEN\` push token lacks the \`workflow\` scope. Grant it the \`workflow\` scope (or resolve the conflict locally), then remove the \`auto-resolve-blocked\` label to let auto-resolve retry — while it is present this PR is skipped."
+      "the resolved merge carries workflow-file changes from \`${BASE_REF}\`, and the \`TEMPLATE_SYNC_TOKEN_ORG\` push token lacks the \`workflow\` scope. Grant it the \`workflow\` scope (or resolve the conflict locally), then remove the \`auto-resolve-blocked\` label to let auto-resolve retry — while it is present this PR is skipped."
   fi
   fail "push to ${HEAD_REF} rejected" \
     "the resolved merge could not be pushed — most likely the branch moved while resolving. The next conflict scan will retry."

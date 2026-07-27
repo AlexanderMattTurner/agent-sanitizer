@@ -153,13 +153,13 @@ jobs:
           # resolveReviewThread is not available to the Actions GITHUB_TOKEN — it
           # can reply to a thread but a resolve returns "Resource not accessible by
           # integration" even with pull-requests:write, so resolving needs a PAT
-          # acting as a user. TEMPLATE_SYNC_TOKEN (the repo's PAT, already used by
+          # acting as a user. TEMPLATE_SYNC_TOKEN_ORG (the repo's PAT, already used by
           # claude.yaml/template-sync.yaml) is scoped to THIS step only, never the
           # Haiku step, so it is out of reach of a model injection. The ambient
           # GH_TOKEN (GITHUB_TOKEN) still posts the audit reply, keeping the
           # github-actions[bot] identity. Falls back to GITHUB_TOKEN — which then
           # fails loud on the resolve — if the PAT is unset.
-          GH_RESOLVE_TOKEN: ${{ secrets.TEMPLATE_SYNC_TOKEN || secrets.GITHUB_TOKEN }}
+          GH_RESOLVE_TOKEN: ${{ secrets.TEMPLATE_SYNC_TOKEN_ORG || secrets.GITHUB_TOKEN }}
         run: bash .github/scripts/resolve-addressed-threads.sh
 
       # State-based, and deliberately NOT gated on has_threads: the approval is a
