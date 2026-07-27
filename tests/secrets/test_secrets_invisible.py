@@ -1,6 +1,6 @@
 """Invisible-charset tests.
 
-The charset is not defined here — it is imported from agent-input-sanitizer's
+The charset is not defined here — it is imported from agent-sanitizer's
 shared SSOT. These tests pin the sharing (the redactor's set equals the
 sanitizer's), the strip semantics, and the fail-closed behaviour when the shared
 dependency is unavailable.
@@ -10,8 +10,8 @@ import unicodedata
 
 import pytest
 
-from agent_input_sanitizer.secrets import strip_invisible
-from agent_input_sanitizer.secrets.invisible import (
+from agent_sanitizer.secrets import strip_invisible
+from agent_sanitizer.secrets.invisible import (
     default_charset,
     invisible_run_pattern,
 )
@@ -32,7 +32,7 @@ _STRIP_CF_CPS = [
 
 
 def _extra() -> frozenset[int]:
-    from agent_input_sanitizer.invisible import INVISIBLE_EXTRA
+    from agent_sanitizer.invisible import INVISIBLE_EXTRA
 
     return INVISIBLE_EXTRA
 
@@ -41,7 +41,7 @@ def _extra() -> frozenset[int]:
 
 
 def _pinned_cf() -> frozenset[int]:
-    from agent_input_sanitizer.invisible import cf_codepoints
+    from agent_sanitizer.invisible import cf_codepoints
 
     return cf_codepoints()
 
@@ -71,7 +71,7 @@ def test_default_charset_does_not_depend_on_runtime_unicode_version():
 
 @pytest.mark.drift_guard
 def test_shared_extra_matches_sanitizer_ssot():
-    """The extra (non-Cf) set the redactor consumes is the one agent-input-sanitizer
+    """The extra (non-Cf) set the redactor consumes is the one agent-sanitizer
     publishes from invisible.mjs (VS + BLANK_NON_CF): variation selectors, Hangul
     and Braille fillers, and the zero-width combining marks U+034F/U+17B4/U+17B5.
     A member dropped on either side diverges the two engines."""
@@ -161,8 +161,8 @@ def test_env_invis_run_domain_equals_charset():
 def test_default_charset_fails_closed_without_shared_dep(monkeypatch):
     """If the shared SSOT cannot be read, resolution RAISES rather than falling
     back to a partial set — a silent under-match is a security regression."""
-    import agent_input_sanitizer.invisible as inv
-    import agent_input_sanitizer.secrets.invisible as redactor_inv
+    import agent_sanitizer.invisible as inv
+    import agent_sanitizer.secrets.invisible as redactor_inv
 
     def _boom():
         raise RuntimeError("shared charset unavailable")

@@ -7,7 +7,7 @@ bridge cannot: a bare ``python3`` filter in a minimal sandbox with no Node, no
 pip extras, and no ``detect-secrets``. The CLI-bridged entry points in
 ``__init__`` stay the single source for everything that CAN reach Node; this
 module is the sanctioned exception for the no-Node context, exactly like
-:mod:`agent_input_sanitizer.invisible` (charset) and the ``secrets`` engine.
+:mod:`agent_sanitizer.invisible` (charset) and the ``secrets`` engine.
 
 A character is deleted if this interpreter classifies it as category ``Cf`` OR it
 is in the pinned cross-language set from :mod:`.invisible` (``invisible_charset``

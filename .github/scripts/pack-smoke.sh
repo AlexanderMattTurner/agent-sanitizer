@@ -70,15 +70,15 @@ echo "::endgroup::"
 #    resolver, so a dropped file or a broken `exports` map is caught.
 echo "::group::import every documented entry point"
 node --input-type=module -e '
-import "agent-input-sanitizer";
-import "agent-input-sanitizer/invisible";
-import "agent-input-sanitizer/html";
-import "agent-input-sanitizer/confusables";
-import "agent-input-sanitizer/instructions";
-import "agent-input-sanitizer/prompt";
-import "agent-input-sanitizer/output";
-import "agent-input-sanitizer/view-map";
-import "agent-input-sanitizer/rehydrate";
+import "agent-sanitizer";
+import "agent-sanitizer/invisible";
+import "agent-sanitizer/html";
+import "agent-sanitizer/confusables";
+import "agent-sanitizer/instructions";
+import "agent-sanitizer/prompt";
+import "agent-sanitizer/output";
+import "agent-sanitizer/view-map";
+import "agent-sanitizer/rehydrate";
 console.log("all entry points imported");
 '
 echo "::endgroup::"

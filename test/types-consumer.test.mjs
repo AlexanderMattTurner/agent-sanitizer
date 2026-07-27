@@ -45,7 +45,7 @@ describe("public types: downstream consumer typecheck", () => {
   it("type-checks a name-resolved consumer against the emitted declarations", () => {
     const tmp = mkdtempSync(path.join(os.tmpdir(), "ais-consumer-"));
     // Lay the package out as it installs: node_modules/<name>/{package.json,types}.
-    const pkgDir = path.join(tmp, "node_modules", "agent-input-sanitizer");
+    const pkgDir = path.join(tmp, "node_modules", "agent-sanitizer");
     mkdirSync(path.join(pkgDir, "types"), { recursive: true });
 
     // Emit declarations into the temp package, not the repo's types/ — same
@@ -69,7 +69,7 @@ describe("public types: downstream consumer typecheck", () => {
     );
 
     // Consumer + its tsconfig must sit inside tmp so bare-specifier resolution
-    // finds tmp/node_modules/agent-input-sanitizer.
+    // finds tmp/node_modules/agent-sanitizer.
     copyFileSync(
       path.join(repoRoot, "type-fixtures", "consumer", "consumer.mts"),
       path.join(tmp, "consumer.mts"),

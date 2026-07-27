@@ -15,21 +15,21 @@ import {
   SECRET_HINT,
   SECRET_HINT_EXT,
   matchesSecretHint,
-} from "agent-input-sanitizer";
-import { STRIP, SGR_RE, stripInvisible } from "agent-input-sanitizer/invisible";
-import { HTML_TAG_PRESENT, MD_LINK_HINT } from "agent-input-sanitizer/html";
+} from "agent-sanitizer";
+import { STRIP, SGR_RE, stripInvisible } from "agent-sanitizer/invisible";
+import { HTML_TAG_PRESENT, MD_LINK_HINT } from "agent-sanitizer/html";
 import {
   hasNonAscii,
   normalizeConfusables,
-} from "agent-input-sanitizer/confusables";
-import { scanInstructionFiles } from "agent-input-sanitizer/instructions";
-import { classifyPrompt } from "agent-input-sanitizer/prompt";
-import { sanitizeText } from "agent-input-sanitizer/output";
-import { occurrences } from "agent-input-sanitizer/view-map";
+} from "agent-sanitizer/confusables";
+import { scanInstructionFiles } from "agent-sanitizer/instructions";
+import { classifyPrompt } from "agent-sanitizer/prompt";
+import { sanitizeText } from "agent-sanitizer/output";
+import { occurrences } from "agent-sanitizer/view-map";
 import {
   rehydrateRedacted,
   DEFAULT_HINT,
-} from "agent-input-sanitizer/rehydrate";
+} from "agent-sanitizer/rehydrate";
 
 // `0 extends 1 & T` is only true when T is `any`, so this flags the exact
 // regression that shipped in 1.0.1: a declaration that widened to `any`. A bare

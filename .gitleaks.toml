@@ -17,5 +17,5 @@ description = "Secret-redaction engine sample fixtures (not real secrets)"
 # directory an attacker adds) would otherwise bypass the Required scan.
 paths = [
   '''^tests/secrets/.*''',
-  '''^python/agent_input_sanitizer/secrets/data/secret-detectors\.json$''',
+  '''^python/agent_sanitizer/secrets/data/secret-detectors\.json$''',
 ]

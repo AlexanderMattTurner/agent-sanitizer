@@ -1,6 +1,6 @@
 # Threat model
 
-`agent-input-sanitizer` defends the boundary where untrusted text enters an
+`agent-sanitizer` defends the boundary where untrusted text enters an
 agent-driven pipeline (agent tool output, RAG retrieval, fetched web pages). It is
 a detect/neutralize layer, not an enforcement boundary: it makes hidden content
 visible-or-gone and surfaces exfil-shaped URLs, so the model and the operator

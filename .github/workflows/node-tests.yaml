@@ -28,7 +28,7 @@ jobs:
       - name: Setup base environment
         uses: ./.github/actions/setup-base-env
         # The rehydrate property test drives the real Python redactor
-        # (agent_input_sanitizer.secrets) as its single source of truth, so the
+        # (agent_sanitizer.secrets) as its single source of truth, so the
         # suite needs uv + the Python deps available.
         with:
           setup-python: "true"

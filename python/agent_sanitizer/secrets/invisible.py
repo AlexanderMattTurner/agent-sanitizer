@@ -1,14 +1,14 @@
-"""Invisible-character handling — charset SOURCED from agent-input-sanitizer.
+"""Invisible-character handling — charset SOURCED from agent-sanitizer.
 
 The redactor strips payload-capable invisible characters before detection and
 tolerates them spliced *between* the characters of an env-bound key (an attacker
 who wedges a zero-width char into a leaked key must not slip it past exact-match
 redaction). That charset is a cross-package security boundary: it MUST equal
-agent-input-sanitizer's deletion set, or a key spliced with a code point one side
+agent-sanitizer's deletion set, or a key spliced with a code point one side
 omits escapes BOTH layers.
 
 So this module does NOT define the set — it imports it from the shared SSOT
-(:mod:`agent_input_sanitizer.invisible`, the sibling package). There is
+(:mod:`agent_sanitizer.invisible`, the sibling package). There is
 deliberately no local copy and no fallback: if the SSOT data file is absent,
 :func:`default_charset` raises (fail closed) rather than silently under-matching
 with a partial set.
@@ -23,7 +23,7 @@ from ..invisible import invisible_charset as _shared_charset
 
 def default_charset() -> frozenset[int]:
     """The payload-capable invisible code points to strip / tolerate, from the
-    shared agent-input-sanitizer SSOT. Raises (fail closed) if that dependency is
+    shared agent-sanitizer SSOT. Raises (fail closed) if that dependency is
     unavailable — a partial charset silently under-matches, which is a security
     regression, so no fallback is offered."""
     return _shared_charset()

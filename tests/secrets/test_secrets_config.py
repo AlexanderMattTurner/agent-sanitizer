@@ -1,7 +1,7 @@
 """RedactorConfig: env-secret union semantics and charset resolution."""
 
-from agent_input_sanitizer.secrets import RedactorConfig, redact
-from agent_input_sanitizer.secrets.config import DEFAULT_MIN_SECRET_LEN
+from agent_sanitizer.secrets import RedactorConfig, redact
+from agent_sanitizer.secrets.config import DEFAULT_MIN_SECRET_LEN
 
 _LONG = "qZ7vK2mNp9rT4wX1cY6bA8dF3gH5jL0e"
 
@@ -53,7 +53,7 @@ def test_explicit_charset_is_used_without_touching_shared_dep():
 
 
 def test_resolved_charset_defaults_to_shared_ssot():
-    from agent_input_sanitizer.invisible import invisible_charset
+    from agent_sanitizer.invisible import invisible_charset
 
     assert RedactorConfig().resolved_charset() == invisible_charset()
 

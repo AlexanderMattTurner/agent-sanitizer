@@ -1,9 +1,9 @@
-# Installable Python distribution for the agent-input-sanitizer client.
+# Installable Python distribution for the agent-sanitizer client.
 #
 # The sanitization logic has a single source of truth: the JavaScript in `src/`.
 # The wheel ships a self-contained, single-file BUILD of that CLI (src/ plus its
 # npm deps bundled into one .mjs by `scripts/bundle-python-cli.mjs`) at
-# `agent_input_sanitizer/_bundled/sanitize-cli.mjs`, so `pip install` plus
+# `agent_sanitizer/_bundled/sanitize-cli.mjs`, so `pip install` plus
 # Node.js (>=22) on PATH works with no separate JavaScript checkout. The bundle
 # is a versioned artifact from src/ at one version — not a hand-maintained port,
 # so it cannot drift. It is git-ignored and regenerated per release; the
@@ -15,7 +15,7 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "agent-input-sanitizer"
+name = "agent-sanitizer"
 # FROZEN PLACEHOLDER — do not hand-edit. Since the wheel bundles a build of
 # `src/`, the Python distribution and the npm package are the SAME logic in two
 # ecosystems, so they share ONE version: the release workflow
@@ -23,12 +23,12 @@ name = "agent-input-sanitizer"
 # Commits, publishes npm AND PyPI at that number from the same commit, and injects
 # it here at build time (working tree only, never committed) — mirroring how
 # package.json's version stays frozen while the npm registry + git tag are the
-# source of truth. So `pip install agent-input-sanitizer` and `npm i
-# agent-input-sanitizer` report the SAME version, and the wheel bundles `src/` at
+# source of truth. So `pip install agent-sanitizer` and `npm i
+# agent-sanitizer` report the SAME version, and the wheel bundles `src/` at
 # exactly that version. The guard in tests/test_python_version.py pins this to the
 # 0.0.0 sentinel so a stray hand-edit fails CI instead of shipping a wrong number.
 version = "0.0.0"
-description = "Python client for agent-input-sanitizer: a thin bridge to the Node.js CLI for byte-identical sanitization verdicts."
+description = "Python client for agent-sanitizer: a thin bridge to the Node.js CLI for byte-identical sanitization verdicts."
 readme = "README.md"
 requires-python = ">=3.10"
 # SPDX expression (PEP 639), matching the repo's actual license (LICENSE at repo
@@ -41,15 +41,15 @@ keywords = ["sanitizer", "prompt-injection", "unicode", "ansi", "security"]
 classifiers = ["License :: OSI Approved :: Apache Software License"]
 
 [project.urls]
-Homepage = "https://github.com/AlexanderMattTurner/agent-input-sanitizer"
-Repository = "https://github.com/AlexanderMattTurner/agent-input-sanitizer"
-Issues = "https://github.com/AlexanderMattTurner/agent-input-sanitizer/issues"
+Homepage = "https://github.com/AlexanderMattTurner/agent-sanitizer"
+Repository = "https://github.com/AlexanderMattTurner/agent-sanitizer"
+Issues = "https://github.com/AlexanderMattTurner/agent-sanitizer/issues"
 
 # The base install is dependency-free. The `secrets` extra pulls in the only
 # third-party dependency in the tree — detect-secrets, the detection oracle for
-# the `agent_input_sanitizer.secrets` subpackage (the folded-in redaction
+# the `agent_sanitizer.secrets` subpackage (the folded-in redaction
 # engine). Every detect-secrets import lives inside that subpackage, so a plain
-# `import agent_input_sanitizer` never touches it; install `[secrets]` to use the
+# `import agent_sanitizer` never touches it; install `[secrets]` to use the
 # engine or the console scripts below.
 [project.optional-dependencies]
 secrets = ["detect-secrets>=1.5.0"]
@@ -59,19 +59,19 @@ secrets = ["detect-secrets>=1.5.0"]
 # these exact console-script names. Both fail loud on import when the `secrets`
 # extra is absent (detect-secrets missing) rather than degrading — fail closed.
 [project.scripts]
-agent-secret-redactor = "agent_input_sanitizer.secrets.cli:main"
-agent-secret-redactor-daemon = "agent_input_sanitizer.secrets.daemon:main"
+agent-secret-redactor = "agent_sanitizer.secrets.cli:main"
+agent-secret-redactor-daemon = "agent_sanitizer.secrets.daemon:main"
 
 # The bundled CLI is git-ignored (a build artifact), so hatchling's VCS-aware
 # file collection skips it by default. `artifacts` force-includes it into BOTH
 # the sdist and the wheel — the release build regenerates it before packaging.
 [tool.hatch.build]
-artifacts = ["agent_input_sanitizer/_bundled/sanitize-cli.mjs"]
+artifacts = ["agent_sanitizer/_bundled/sanitize-cli.mjs"]
 
 [tool.hatch.build.targets.wheel]
-packages = ["agent_input_sanitizer"]
+packages = ["agent_sanitizer"]
 # The invisible-charset SSOT is data, not code, so it is not auto-included.
-artifacts = ["agent_input_sanitizer/data/invisible-charset.json"]
+artifacts = ["agent_sanitizer/data/invisible-charset.json"]
 # `license-files` (the `[project]` glob above) only resolves against files already
 # present in THIS build's source tree; when `uv build`/`pip wheel` build the wheel
 # FROM the sdist (the normal path, not straight off this checkout), the sdist's own
@@ -80,7 +80,7 @@ artifacts = ["agent_input_sanitizer/data/invisible-charset.json"]
 # needed. hatchling packages it into `*.dist-info/licenses/LICENSE`.
 
 [tool.hatch.build.targets.sdist]
-include = ["agent_input_sanitizer", "README.md"]
+include = ["agent_sanitizer", "README.md"]
 
 # The actual LICENSE lives at the repo root (shared with the npm package), one
 # level above this project root (`python/`) — force-include copies it into the

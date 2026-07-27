@@ -38,13 +38,13 @@ def test_nested_lookalike_is_not_allowlisted() -> None:
     # Negative: a nested directory an attacker adds must NOT be allowlisted.
     assert not any(c.search("x/tests/secrets/foo") for c in compiled)
     assert not any(
-        c.search("evil/python/agent_input_sanitizer/secrets/data/secret-detectors.json")
+        c.search("evil/python/agent_sanitizer/secrets/data/secret-detectors.json")
         for c in compiled
     )
     # Positive markers: the real fixture paths still match, so we know the
     # patterns are live and the negatives above aren't passing vacuously.
     assert any(c.search("tests/secrets/aws.txt") for c in compiled)
     assert any(
-        c.search("python/agent_input_sanitizer/secrets/data/secret-detectors.json")
+        c.search("python/agent_sanitizer/secrets/data/secret-detectors.json")
         for c in compiled
     )

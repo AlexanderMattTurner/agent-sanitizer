@@ -9,8 +9,8 @@ import types
 
 import pytest
 
-import agent_input_sanitizer.secrets.engine as E
-from agent_input_sanitizer.secrets import (
+import agent_sanitizer.secrets.engine as E
+from agent_sanitizer.secrets import (
     DEFAULT_MIN_SECRET_LEN,
     detected_secret_values,
     redact,
@@ -281,7 +281,7 @@ def test_redact_env_bound_tolerates_interior_invisibles(sep):
     ids=["variation-selector", "hangul-filler", "braille-blank", "arabic-letter-mark"],
 )
 def test_env_value_re_tolerates_non_enumerated_invisible_splice(cp):
-    from agent_input_sanitizer.secrets.invisible import default_charset
+    from agent_sanitizer.secrets.invisible import default_charset
 
     value = "sk-abcdefghijklmnopqrstuvwxyz0123456789"
     spliced = value[:6] + chr(cp) + value[6:]

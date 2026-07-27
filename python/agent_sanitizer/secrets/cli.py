@@ -1,9 +1,9 @@
 """One-shot command-line entry: read text on stdin, write the redaction JSON.
 
-A thin convenience wrapper over :func:`agent_input_sanitizer.secrets.handle_request`. It
+A thin convenience wrapper over :func:`agent_sanitizer.secrets.handle_request`. It
 configures detect-secrets per invocation (a fresh process), so it is fine for a
 one-off but not a hot path — for that, run the daemon package or hold a
-:func:`~agent_input_sanitizer.secrets.configure_plugins` block open.
+:func:`~agent_sanitizer.secrets.configure_plugins` block open.
 
 Flags:
 

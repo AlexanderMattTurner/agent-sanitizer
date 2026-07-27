@@ -5,8 +5,8 @@ import re
 
 import pytest
 
-import agent_input_sanitizer.secrets.detectors as D
-import agent_input_sanitizer.secrets.engine as E
+import agent_sanitizer.secrets.detectors as D
+import agent_sanitizer.secrets.engine as E
 from redactor_helpers import SAMPLES, run_plain
 
 _DETECTORS_JSON = D.DETECTORS_FILE

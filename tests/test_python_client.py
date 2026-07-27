@@ -1,4 +1,4 @@
-"""Tests for the Python client (`python/agent_input_sanitizer`).
+"""Tests for the Python client (`python/agent_sanitizer`).
 
 The client is a thin bridge to the Node CLI, so these assert the bridge holds:
 Layer 1 strips, the html flag reaches Layers 2/3, the persistent worker agrees
@@ -25,8 +25,8 @@ from tests._helpers import REPO_ROOT
 
 sys.path.insert(0, str(REPO_ROOT / "python"))
 
-import agent_input_sanitizer as ais  # noqa: E402
-from agent_input_sanitizer import (  # noqa: E402
+import agent_sanitizer as ais  # noqa: E402
+from agent_sanitizer import (  # noqa: E402
     PromptVerdict,
     Sanitizer,
     SanitizeResult,
@@ -70,7 +70,7 @@ def _no_bundled_cli_by_default(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         ais,
         "_BUNDLED_CLI",
-        REPO_ROOT / "python" / "agent_input_sanitizer" / "_bundled" / "absent.mjs",
+        REPO_ROOT / "python" / "agent_sanitizer" / "_bundled" / "absent.mjs",
     )
 
 
@@ -593,7 +593,7 @@ def test_atexit_teardown_reaps_real_node_process() -> None:
     script = (
         "import sys\n"
         f"sys.path.insert(0, {str(REPO_ROOT / 'python')!r})\n"
-        "import agent_input_sanitizer as ais\n"
+        "import agent_sanitizer as ais\n"
         "ais.sanitize('x', persist=True)\n"
         "print(ais._worker._proc.pid, flush=True)\n"
         # Exit without shutdown_worker(): only the atexit hook can reap it.

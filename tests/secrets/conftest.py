@@ -10,7 +10,7 @@ import pytest
 from tests._helpers import REPO_ROOT
 
 # The distribution package lives under python/; put it on the path so
-# `import agent_input_sanitizer.secrets` resolves to the working tree. The
+# `import agent_sanitizer.secrets` resolves to the working tree. The
 # engine import in the fixture below (and in redactor_helpers) depends on this.
 _PKG = REPO_ROOT / "python"
 if str(_PKG) not in sys.path:
@@ -20,7 +20,7 @@ if str(_PKG) not in sys.path:
 @pytest.fixture
 def eng():
     """The engine module (private helpers live here)."""
-    import agent_input_sanitizer.secrets.engine as engine
+    import agent_sanitizer.secrets.engine as engine
 
     return engine
 

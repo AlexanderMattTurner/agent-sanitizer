@@ -8,7 +8,7 @@
 # comment without clobbering each other.
 #
 # The model's text is derived from the untrusted merge delta, so it is run
-# through the SAME agent-input-sanitizer as the input before it reaches a posted
+# through the SAME agent-sanitizer as the input before it reaches a posted
 # comment — a hidden payload the model echoed from the delta can't ride into the
 # comment.
 #

@@ -1,4 +1,4 @@
-"""Shared helpers for the agent_input_sanitizer.secrets test suite.
+"""Shared helpers for the agent_sanitizer.secrets test suite.
 
 The engine takes config *in* (never discovered), so these helpers call the
 public API directly: ``run_plain`` returns ``None`` when nothing is emitted
@@ -14,12 +14,12 @@ from pathlib import Path
 from tests._helpers import REPO_ROOT
 
 # The distribution package lives under python/; put it on the path so
-# `import agent_input_sanitizer.secrets` resolves to the working tree.
+# `import agent_sanitizer.secrets` resolves to the working tree.
 _PKG = REPO_ROOT / "python"
 if str(_PKG) not in sys.path:
     sys.path.insert(0, str(_PKG))
 
-from agent_input_sanitizer.secrets import (  # noqa: E402
+from agent_sanitizer.secrets import (  # noqa: E402
     RedactorConfig,
     handle_request,
     redact_map,

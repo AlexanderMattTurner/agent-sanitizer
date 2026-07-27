@@ -1,6 +1,6 @@
 # Security Policy
 
-`agent-input-sanitizer` is a security library: it sits between untrusted text
+`agent-sanitizer` is a security library: it sits between untrusted text
 and a model, so a vulnerability here can defeat the very protection a downstream
 pipeline is relying on. Please treat reports accordingly.
 
@@ -11,7 +11,7 @@ report tips off attackers before downstream users can update.
 
 Instead, report privately through one of:
 
-- GitHub's [private vulnerability reporting](https://github.com/AlexanderMattTurner/agent-input-sanitizer/security/advisories/new)
+- GitHub's [private vulnerability reporting](https://github.com/AlexanderMattTurner/agent-sanitizer/security/advisories/new)
   ("Report a vulnerability" under the **Security** tab), or
 - email the maintainer at `security@turntrout.com`.
 

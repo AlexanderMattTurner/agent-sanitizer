@@ -1,6 +1,6 @@
-# agent-input-sanitizer (Python client)
+# agent-sanitizer (Python client)
 
-A thin Python bridge to the [`agent-input-sanitizer`](https://github.com/AlexanderMattTurner/agent-input-sanitizer)
+A thin Python bridge to the [`agent-sanitizer`](https://github.com/AlexanderMattTurner/agent-sanitizer)
 Node.js CLI. The sanitization logic has a single source of truth — the
 JavaScript in `src/` — so this package shells out to the CLI rather than
 re-implementing it, giving a Python pipeline byte-identical verdicts with no
@@ -11,7 +11,7 @@ second implementation to keep in sync.
 - **Node.js (>= 22) on `PATH`.** The sanitizer is JavaScript; something has to
   run it. There is deliberately no pure-Python fallback.
 
-That's it — `pip install agent-input-sanitizer` and, with Node available, you're
+That's it — `pip install agent-sanitizer` and, with Node available, you're
 ready to go. The wheel ships a self-contained, single-file build of the CLI
 (the `src/` logic and its npm dependencies bundled into one `.mjs` at release
 time), so there is no separate JavaScript checkout to clone and no environment
@@ -27,7 +27,7 @@ imported directly from a repo checkout, the source CLI is found automatically.
 ## Usage
 
 ```python
-from agent_input_sanitizer import sanitize
+from agent_sanitizer import sanitize
 
 result = sanitize("untrusted text", html=True)
 print(result.cleaned, result.found, result.warnings)
@@ -40,25 +40,25 @@ See the package docstring for the full set of entry points (`sanitize_text`,
 ## Secret redaction (`[secrets]` extra)
 
 The base install is dependency-free. The optional `secrets` extra adds a
-pure-Python secret-redaction engine under `agent_input_sanitizer.secrets` —
+pure-Python secret-redaction engine under `agent_sanitizer.secrets` —
 detect-secrets plus custom detectors, benign-value skipping, cross-line
 reassembly, PEM collapse, and exact-match redaction of caller-supplied env-var
 values. Unlike the sanitizer above it needs **no Node.js**; its only dependency
 is `detect-secrets`, pulled in by the extra:
 
 ```bash
-pip install "agent-input-sanitizer[secrets]"
+pip install "agent-sanitizer[secrets]"
 ```
 
 Every detect-secrets import lives inside this subpackage, so a plain
-`import agent_input_sanitizer` never touches it. The engine shares the parent
-package's invisible-character SSOT (`agent_input_sanitizer.invisible`) rather
+`import agent_sanitizer` never touches it. The engine shares the parent
+package's invisible-character SSOT (`agent_sanitizer.invisible`) rather
 than forking it — a fork would be a silent security regression.
 
 ### In-process
 
 ```python
-from agent_input_sanitizer.secrets import RedactorConfig, redact, redact_map
+from agent_sanitizer.secrets import RedactorConfig, redact, redact_map
 
 redacted, found = redact("aws_key = AKIAIOSFODNN7EXAMPLE")
 # -> ("aws_key = [REDACTED: AWS Access Key]", ["AWS Access Key"])
@@ -108,8 +108,8 @@ a silent no-op.
 ## Versioning
 
 This package is versioned in lockstep with the npm
-[`agent-input-sanitizer`](https://www.npmjs.com/package/agent-input-sanitizer):
+[`agent-sanitizer`](https://www.npmjs.com/package/agent-sanitizer):
 each release publishes both at the same version from the same commit, and the
 wheel bundles `src/` at exactly that version. So `pip install
-agent-input-sanitizer==X.Y.Z` and `npm i agent-input-sanitizer@X.Y.Z` are the
+agent-sanitizer==X.Y.Z` and `npm i agent-sanitizer@X.Y.Z` are the
 same underlying logic.

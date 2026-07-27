@@ -34,8 +34,8 @@ class RedactorConfig:
 
     ``invisible_charset`` is the set of payload-capable invisible code points to
     strip before detection and to tolerate spliced inside env-bound keys. Leave
-    it ``None`` (the default) to source it from agent-input-sanitizer's shared
-    SSOT via :func:`~agent_input_sanitizer.secrets.invisible.default_charset` — the two
+    it ``None`` (the default) to source it from agent-sanitizer's shared
+    SSOT via :func:`~agent_sanitizer.secrets.invisible.default_charset` — the two
     layers MUST use the same set or a key spliced with a code point one omits
     escapes both. Resolving it raises if that shared dependency is absent (fail
     closed); pass an explicit set only to override for a test or a bespoke layer.

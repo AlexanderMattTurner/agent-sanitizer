@@ -1,4 +1,4 @@
-"""Python client for ``agent-input-sanitizer``.
+"""Python client for ``agent-sanitizer``.
 
 The sanitization logic has a single source of truth: the JavaScript in
 ``src/``. This module is a thin client that shells out to the
@@ -33,7 +33,7 @@ Locating the CLI: the sanitizer's logic has a single source of truth, the
 JavaScript in ``src/``. The wheel ships a self-contained, single-file **build**
 of that CLI (``src/`` plus its npm dependencies bundled into one ``.mjs`` by
 ``scripts/bundle-python-cli.mjs`` at release time), so ``pip install
-agent-input-sanitizer`` plus Node.js (>=22) on ``PATH`` works with no separate
+agent-sanitizer`` plus Node.js (>=22) on ``PATH`` works with no separate
 JavaScript checkout. That bundle is a versioned build artifact from ``src/`` at
 one version, not a hand-maintained port, so it cannot drift. Resolution order:
 
@@ -41,7 +41,7 @@ one version, not a hand-maintained port, so it cannot drift. Resolution order:
    compatible CLI). An escape hatch to pin the client at a specific JS checkout's
    ``bin/sanitize-cli.mjs``; it overrides the bundled CLI.
 #. The bundled CLI shipped inside the installed package
-   (``agent_input_sanitizer/_bundled/sanitize-cli.mjs``). Present in a
+   (``agent_sanitizer/_bundled/sanitize-cli.mjs``). Present in a
    pip-installed wheel; absent in a repo checkout, where it is a git-ignored
    build artifact and the source sibling below is used instead.
 #. The source-tree sibling — when this module is imported from a repo checkout,
@@ -74,7 +74,7 @@ _CLI_ENV = "AGENT_SANITIZER_CLI"
 _BUNDLED_CLI = Path(__file__).resolve().parent / "_bundled" / "sanitize-cli.mjs"
 
 # The source-tree fallback: this module is at
-# <repo>/python/agent_input_sanitizer/__init__.py, so <repo>/bin/sanitize-cli.mjs
+# <repo>/python/agent_sanitizer/__init__.py, so <repo>/bin/sanitize-cli.mjs
 # is two parents up. This resolves only when imported from a checkout; an
 # installed package uses the bundled CLI. Kept as a module attribute so the
 # resolver (and tests) can read or override it.
@@ -139,7 +139,7 @@ class InstructionFinding:
 def _node_missing(node: str) -> RuntimeError:
     return RuntimeError(
         f"Node.js (>=22) is required but {node!r} was not found on PATH. "
-        "agent-input-sanitizer keeps a single JavaScript source of truth and "
+        "agent-sanitizer keeps a single JavaScript source of truth and "
         "has no pure-Python fallback; install Node to use the Python client."
     )
 

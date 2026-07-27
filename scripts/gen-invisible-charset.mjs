@@ -22,8 +22,8 @@
  *
  * Writes two generated artifacts, both from the SAME pinned data so they cannot
  * drift:
- *   - `python/agent_input_sanitizer/data/invisible-charset.json` (packaged with
- *     the Python client; read by `agent_input_sanitizer.invisible`).
+ *   - `python/agent_sanitizer/data/invisible-charset.json` (packaged with
+ *     the Python client; read by `agent_sanitizer.invisible`).
  *   - `src/cf-charset.mjs` (shipped in the npm package; read by `src/invisible.mjs`).
  * Run from the repo root: `node scripts/gen-invisible-charset.mjs`.
  * `test/invisible-charset.test.mjs` fails CI if either committed artifact drifts
@@ -115,7 +115,7 @@ export const OUTPUT_PATH = join(
   __dirname,
   "..",
   "python",
-  "agent_input_sanitizer",
+  "agent_sanitizer",
   "data",
   "invisible-charset.json",
 );

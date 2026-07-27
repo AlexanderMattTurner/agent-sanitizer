@@ -26,7 +26,7 @@
  *     - a greedy-alignment collision (ANSI final "m" abutting kept "m"s).
  *
  * The redactor is NOT re-implemented here. Each construct's model-visible view
- * is read back from the REAL Python engine (`agent_input_sanitizer.secrets`)
+ * is read back from the REAL Python engine (`agent_sanitizer.secrets`)
  * over a long-lived worker — the single source of truth — so a placeholder the
  * test edits against is exactly the one production redaction emits, never a
  * hand-rolled stand-in that could drift on detection or offsets. The fuzzing

@@ -2,14 +2,14 @@
 
 Spawning a fresh interpreter and reloading the detect-secrets plugin set for
 every secret-shaped payload is slow enough to time out under load. This daemon
-pays that cost ONCE — :func:`~agent_input_sanitizer.secrets.configure_plugins` at
+pays that cost ONCE — :func:`~agent_sanitizer.secrets.configure_plugins` at
 startup — then serves each request as just a scan, so a transient stall fails
 only that one call and the next succeeds.
 
 Wire protocol (both directions): a 4-byte big-endian unsigned length prefix then
 that many bytes of UTF-8 JSON. Request: ``{"text", "map", "web_ingress",
 "env_secrets"}``. Response: exactly what a one-shot
-:func:`~agent_input_sanitizer.secrets.handle_request` returns — the response object, or
+:func:`~agent_sanitizer.secrets.handle_request` returns — the response object, or
 JSON ``null`` for the "nothing to redact" case, or ``{"error"}`` when the daemon
 could not vet the input. ``env_secrets`` is ``name -> value`` supplied per
 request (the socket may be shared across sessions, so the daemon must redact the
