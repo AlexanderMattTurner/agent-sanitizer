@@ -7,7 +7,10 @@
 # their own. This script is the single source of the pinned version.
 set -euo pipefail
 
-SANITIZER_VERSION="1.38.0"
+# First version published under the agent-sanitizer name: the rename's feat!
+# merge makes auto-version cut a major from the 1.47.x line. Nothing older
+# exists under this name, so a lower pin can never resolve.
+SANITIZER_VERSION="2.0.0"
 
 npm install --prefix .github/scripts --no-save --no-package-lock \
   --ignore-scripts --no-audit --no-fund \
