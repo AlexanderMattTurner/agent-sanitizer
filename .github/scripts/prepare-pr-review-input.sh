@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Fetch the untrusted PR diff + metadata and run them through the
-# agent-input-sanitizer (sanitize-pr-input.mjs) BEFORE the review agent sees
+# agent-sanitizer (sanitize-pr-input.mjs) BEFORE the review agent sees
 # them. The agent reads only the sanitized files this writes — never the raw
 # `gh pr diff` — so an injection payload hidden in the diff (zero-width control
 # text, ANSI escapes, exfil beacons) cannot reach the agent intact.
@@ -13,7 +13,7 @@
 # caller posts a "please review manually" notice instead of spending the read.
 #
 # Requires: gh authenticated (GH_TOKEN/GH_REPO), node + `pnpm install` done
-# (agent-input-sanitizer on the module path). Emits to GITHUB_OUTPUT:
+# (agent-sanitizer on the module path). Emits to GITHUB_OUTPUT:
 #   oversized=true|false       — whether the review was skipped for size
 #   diff_lines=<n>             — the diff's line count (only when oversized)
 # Writes into $PR_INPUT_DIR (only when NOT oversized):

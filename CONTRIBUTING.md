@@ -1,6 +1,6 @@
 # Contributing
 
-Thanks for helping improve `agent-input-sanitizer`. This is a security library,
+Thanks for helping improve `agent-sanitizer`. This is a security library,
 so the bar for changes to the detection and transform layers is high—read the
 notes below before opening a PR.
 

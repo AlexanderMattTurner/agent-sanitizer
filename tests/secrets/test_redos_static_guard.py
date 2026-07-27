@@ -20,7 +20,7 @@ import subprocess
 
 import pytest
 
-import agent_input_sanitizer.secrets.engine as E
+import agent_sanitizer.secrets.engine as E
 from tests._helpers import REPO_ROOT
 
 # Atomic groups / possessive quantifiers cannot backtrack, so a pattern using
@@ -33,7 +33,7 @@ _ATOMIC_MARKERS = ("*+", "++", "?+", "}+", "(?>")
 _DETECTORS_JSON = (
     REPO_ROOT
     / "python"
-    / "agent_input_sanitizer"
+    / "agent_sanitizer"
     / "secrets"
     / "data"
     / "secret-detectors.json"

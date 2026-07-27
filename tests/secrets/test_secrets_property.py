@@ -14,7 +14,7 @@ chars, and newlines:
 from hypothesis import given, settings
 from hypothesis import strategies as st
 
-from agent_input_sanitizer.secrets import RedactorConfig, redact, redact_map
+from agent_sanitizer.secrets import RedactorConfig, redact, redact_map
 from redactor_helpers import reconstruct
 
 # A configured env-bound value, exercised by weaving it into the text too.

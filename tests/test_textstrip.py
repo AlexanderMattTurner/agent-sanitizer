@@ -1,4 +1,4 @@
-"""Tests for the stdlib-only strip (:mod:`agent_input_sanitizer.textstrip`).
+"""Tests for the stdlib-only strip (:mod:`agent_sanitizer.textstrip`).
 
 ``textstrip.strip_untrusted`` is a pure-Python port of ``src/invisible.mjs``'s
 ``applyLayer1`` (ANSI + invisible-char removal) for no-Node contexts. These
@@ -22,12 +22,12 @@ from tests._helpers import REPO_ROOT
 
 sys.path.insert(0, str(REPO_ROOT / "python"))
 
-from agent_input_sanitizer.invisible import (  # noqa: E402
+from agent_sanitizer.invisible import (  # noqa: E402
     cf_codepoints,
     extra_codepoints,
     invisible_charset,
 )
-from agent_input_sanitizer.textstrip import strip_untrusted  # noqa: E402
+from agent_sanitizer.textstrip import strip_untrusted  # noqa: E402
 
 _INVISIBLE = invisible_charset()
 
@@ -113,7 +113,7 @@ def test_live_cf_beyond_pinned_is_stripped(monkeypatch):
     to simulate a host interpreter AHEAD of the package's Unicode version — U+200B
     (``Cf`` on every build) must still be removed, so the port never under-strips
     when the host is newer than the package."""
-    monkeypatch.setattr("agent_input_sanitizer.textstrip.invisible_charset", frozenset)
+    monkeypatch.setattr("agent_sanitizer.textstrip.invisible_charset", frozenset)
     assert strip_untrusted(f"a{chr(0x200B)}b") == "ab"
 
 

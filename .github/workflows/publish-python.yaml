@@ -8,7 +8,7 @@ name: Publish Python to PyPI (break-glass)
 # the LATEST vX.Y.Z tag and publishes it. It never runs automatically.
 #
 # One-time PyPI setup (Trusted Publishing has no secret to rotate): on pypi.org,
-# add a "pending publisher" for project `agent-input-sanitizer` pointing at this
+# add a "pending publisher" for project `agent-sanitizer` pointing at this
 # repo and workflow file `publish-python.yaml` (no environment). The primary
 # auto-version.yaml needs its own publisher entry.
 # https://docs.pypi.org/trusted-publishers/

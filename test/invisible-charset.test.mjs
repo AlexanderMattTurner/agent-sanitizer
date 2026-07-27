@@ -1,6 +1,6 @@
 /**
  * Drift guard: the generated invisible-charset SSOT
- * (`python/agent_input_sanitizer/data/invisible-charset.json`) must equal what
+ * (`python/agent_sanitizer/data/invisible-charset.json`) must equal what
  * `scripts/gen-invisible-charset.mjs` produces from `src/invisible.mjs` right
  * now. The JSON is what non-JS consumers (the Python `agent-secret-redactor`
  * engine) read instead of forking the invisible-character set; if it drifts from

@@ -17,7 +17,7 @@
  *   6. A deny always carries a non-empty reason and no updatedInput.
  *
  * The redactor is NOT re-implemented here. `io.redactMap`/`io.redact` are driven
- * by the REAL Python engine (`agent_input_sanitizer.secrets.redact_map`) over a
+ * by the REAL Python engine (`agent_sanitizer.secrets.redact_map`) over a
  * long-lived worker — the single source of truth — so the view these invariants
  * anchor against is exactly what production redaction produces, offsets and all.
  */

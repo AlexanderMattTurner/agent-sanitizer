@@ -9,7 +9,7 @@ from pathlib import Path
 
 import pytest
 
-from agent_input_sanitizer.secrets import daemon as S
+from agent_sanitizer.secrets import daemon as S
 
 
 # ─── Framing (_read_frame) over a fake connection ────────────────────────────

@@ -18,7 +18,7 @@ name: Claude review-thread resolver
 #   1. checks out the BASE branch, never the untrusted PR head — no fork-authored
 #      code is checked out or executed;
 #   2. reads the PR's diff only as DATA, pre-sanitized through the
-#      agent-input-sanitizer, and the reviewer-thread bodies it acts on were
+#      agent-sanitizer, and the reviewer-thread bodies it acts on were
 #      authored by our own bot; the Haiku prompt treats both as untrusted input;
 #   3. holds least privilege — contents:read + pull-requests:write only, so even a
 #      successful injection can resolve/reply/approve on THIS PR but cannot push
@@ -97,7 +97,7 @@ jobs:
         # Self-contained install (into .github/scripts/node_modules) so the diff
         # can be sanitized before Haiku sees it, with no sanitizer entry needed
         # in the repo's own package.json.
-        run: bash .github/scripts/install-input-sanitizer.sh
+        run: bash .github/scripts/install-sanitizer.sh
 
       - name: Fetch and sanitize the untrusted PR diff
         if: steps.threads.outputs.has_threads == 'true' || steps.bodyhold.outputs.has_body_hold == 'true'

@@ -114,4 +114,4 @@ def test_version_injection_script_produces_a_valid_release(tmp_path: Path) -> No
     injected = _read_version(staged)
     assert injected == sample and re.fullmatch(r"\d+\.\d+\.\d+", injected)
     # Exactly one version line changed: the description/other lines are intact.
-    assert 'name = "agent-input-sanitizer"' in staged.read_text(encoding="utf-8")
+    assert 'name = "agent-sanitizer"' in staged.read_text(encoding="utf-8")

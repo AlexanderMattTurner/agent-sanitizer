@@ -11,8 +11,8 @@ import time
 
 import pytest
 
-import agent_input_sanitizer.secrets.engine as E
-from agent_input_sanitizer.secrets import (
+import agent_sanitizer.secrets.engine as E
+from agent_sanitizer.secrets import (
     RedactorConfig,
     detected_secret_values,
     mask_secret_lines,
@@ -1512,7 +1512,7 @@ def test_configure_plugins_then_redact_configured():
     """The daemon's hot path: configure the plugin set ONCE, then redact many
     times without the per-call cache dance. Result must equal the one-shot
     ``redact``."""
-    from agent_input_sanitizer.secrets import configure_plugins, redact_configured
+    from agent_sanitizer.secrets import configure_plugins, redact_configured
 
     text = "key: AKIAIOSFODNN7EXAMPLE"
     with configure_plugins():
@@ -1529,7 +1529,7 @@ def test_env_value_re_not_memoized_so_no_plaintext_retention():
     their ABSENCE proves distinct plaintext values are not retained across calls.
     re.compile self-caches the compiled Pattern, so no function-level memo is
     needed for perf and the pattern is still built correctly."""
-    from agent_input_sanitizer.secrets.invisible import default_charset
+    from agent_sanitizer.secrets.invisible import default_charset
 
     assert not hasattr(E._env_value_re, "cache_info")
     assert not hasattr(E._env_value_re, "cache_clear")
@@ -1542,7 +1542,7 @@ def test_configure_plugins_exit_propagates_cache_clear_error(eng, monkeypatch):
     `try` body. A `return` inside the `finally` would mask a failing
     ``cache_clear()``; the fixed version releases the transient settings in the
     `finally` and lets the exception propagate."""
-    from agent_input_sanitizer.secrets import configure_plugins
+    from agent_sanitizer.secrets import configure_plugins
 
     class _Boom(Exception):
         pass
@@ -1567,7 +1567,7 @@ def test_precision_legit_nonsecret_input_yields_zero_findings():
             "The quick brown fox jumps over the lazy dog.",
             "user: alice",
             "port: 8080",
-            "path: /usr/local/bin/agent-input-sanitizer",
+            "path: /usr/local/bin/agent-sanitizer",
             "retries: 3",
             "level: info",
         ]

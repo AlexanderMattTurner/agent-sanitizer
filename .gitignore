@@ -52,7 +52,7 @@ __pycache__/
 
 # Generated: the self-contained CLI bundled into the Python wheel at build time
 # (see scripts/bundle-python-cli.mjs). A build artifact from src/, never committed.
-python/agent_input_sanitizer/_bundled/
+python/agent_sanitizer/_bundled/
 
 # Stryker mutation testing
 .stryker-tmp/

@@ -1,5 +1,5 @@
 /**
- * Top-level convenience entry for agent-input-sanitizer.
+ * Top-level convenience entry for agent-sanitizer.
  *
  * `sanitize` always runs the zero-dependency Layer 1 (invisible-char + ANSI
  * stripping, lone-surrogate normalization) and, when `html` is requested,

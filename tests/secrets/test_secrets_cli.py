@@ -1,9 +1,9 @@
-"""Tests for the one-shot CLI (agent_input_sanitizer.secrets.cli)."""
+"""Tests for the one-shot CLI (agent_sanitizer.secrets.cli)."""
 
 import io
 import json
 
-from agent_input_sanitizer.secrets import cli
+from agent_sanitizer.secrets import cli
 
 
 def _run(argv, text, monkeypatch):

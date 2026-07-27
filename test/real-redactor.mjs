@@ -1,7 +1,7 @@
 /**
  * Test bridge to the REAL redaction engine — the single source of truth.
  *
- * The secret redactor lives once, in Python (`agent_input_sanitizer.secrets`).
+ * The secret redactor lives once, in Python (`agent_sanitizer.secrets`).
  * `rehydrate.mjs` consumes it through an injected `io.redactMap` callback, so a
  * JS test needs *some* implementation of that callback. Rather than hand-roll a
  * second redactor in JS (which silently drifts from the real one — e.g. emitting
@@ -36,8 +36,8 @@ const pythonDir = join(repoRoot, "python");
 const DRIVER = `
 import sys, json
 sys.path.insert(0, ${JSON.stringify(pythonDir)})
-from agent_input_sanitizer.secrets.engine import redact_map
-from agent_input_sanitizer.secrets.config import RedactorConfig
+from agent_sanitizer.secrets.engine import redact_map
+from agent_sanitizer.secrets.config import RedactorConfig
 for line in sys.stdin:
     line = line.rstrip("\\n")
     if not line:

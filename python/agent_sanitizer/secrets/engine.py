@@ -7,7 +7,7 @@ collapse, cross-line reassembly, and exact-match redaction of caller-supplied
 env-var values.
 
 Everything environment-specific is supplied by the caller through
-:class:`~agent_input_sanitizer.secrets.config.RedactorConfig` — the engine discovers
+:class:`~agent_sanitizer.secrets.config.RedactorConfig` — the engine discovers
 nothing on its own. detect-secrets is the ONE detection oracle; no second port to
 keep in sync.
 
@@ -820,12 +820,12 @@ def _redact_line(
     Detection runs against an invisible-character-STRIPPED view of ``line`` (so a
     key with a zero-width character spliced into its body is seen whole by every
     structural/plugin detector, not just the env-bound matcher's own tolerance —
-    see :func:`~agent_input_sanitizer.secrets.invisible.strip_invisible_with_map`),
+    see :func:`~agent_sanitizer.secrets.invisible.strip_invisible_with_map`),
     then matched spans are translated back to ``line``'s ORIGINAL offsets before
     redacting, so the invisible characters inside a redacted span disappear along
     with the secret and everything outside a match is untouched byte-for-byte.
     ``charset`` defaults to the shared SSOT charset (see
-    :func:`~agent_input_sanitizer.secrets.invisible.default_charset`); callers on
+    :func:`~agent_sanitizer.secrets.invisible.default_charset`); callers on
     the hot path should pass ``config.resolved_charset()`` to avoid re-resolving
     it per line.
 

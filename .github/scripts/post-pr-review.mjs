@@ -14,7 +14,7 @@
 // to post, or `SKIP` when there is nothing to post (missing/invalid review.json,
 // or no findings and no summary). Diagnostics go to stderr.
 import { readFileSync, writeFileSync } from "node:fs";
-import { sanitize } from "agent-input-sanitizer";
+import { sanitize } from "agent-sanitizer";
 import { readRunCost, formatDollars, plansLine } from "./lib-review-cost.mjs";
 
 // The review text is MODEL output derived from the (untrusted) PR diff, so run

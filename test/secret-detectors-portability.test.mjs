@@ -28,7 +28,7 @@ const DETECTORS_FILE = join(
   dirname(fileURLToPath(import.meta.url)),
   "..",
   "python",
-  "agent_input_sanitizer",
+  "agent_sanitizer",
   "secrets",
   "data",
   "secret-detectors.json",

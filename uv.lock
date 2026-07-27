@@ -3,7 +3,7 @@ revision = 3
 requires-python = ">=3.10"
 
 [[package]]
-name = "agent-input-sanitizer"
+name = "agent-sanitizer"
 version = "0.0.0"
 source = { virtual = "." }
 

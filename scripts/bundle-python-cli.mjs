@@ -3,7 +3,7 @@
  * Bundle the sanitizer CLI into a single self-contained `.mjs` for the Python
  * wheel.
  *
- * The Python client (`python/agent_input_sanitizer`) shells out to the Node
+ * The Python client (`python/agent_sanitizer`) shells out to the Node
  * CLI. So `pip install` alone works — with only Node on PATH, no separate
  * JavaScript checkout and no `AGENT_SANITIZER_CLI` — this bundles
  * `bin/sanitize-cli.mjs` and everything it imports (the `src/` logic AND its npm
@@ -29,7 +29,7 @@ const entry = join(repoRoot, "bin", "sanitize-cli.mjs");
 const outfile = join(
   repoRoot,
   "python",
-  "agent_input_sanitizer",
+  "agent_sanitizer",
   "_bundled",
   "sanitize-cli.mjs",
 );

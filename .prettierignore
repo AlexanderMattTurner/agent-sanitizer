@@ -17,7 +17,7 @@ __pycache__/
 uv.lock
 
 # Generated: the self-contained CLI bundled into the Python wheel at build time.
-python/agent_input_sanitizer/_bundled/
+python/agent_sanitizer/_bundled/
 
 # Template sync
 .template-version
@@ -36,4 +36,4 @@ CHANGELOG.md
 # Generated: the invisible-charset SSOT is written by scripts/gen-invisible-charset.mjs
 # with JSON.stringify (one code point per line); prettier would repack the array
 # and fight the generator on every regeneration. The generator owns its format.
-python/agent_input_sanitizer/data/invisible-charset.json
+python/agent_sanitizer/data/invisible-charset.json

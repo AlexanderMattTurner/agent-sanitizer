@@ -1,9 +1,9 @@
 [project]
-name = "agent-input-sanitizer"
+name = "agent-sanitizer"
 version = "0.0.0"
 requires-python = ">=3.10"
 
-# detect-secrets + hypothesis back the agent_input_sanitizer.secrets test suite
+# detect-secrets + hypothesis back the agent_sanitizer.secrets test suite
 # (the folded-in redaction engine). detect-secrets is the engine's only runtime
 # dependency (shipped via the wheel's `[secrets]` extra), pulled in here so
 # `uv run --extra dev pytest tests/` exercises the engine and its property tests.
