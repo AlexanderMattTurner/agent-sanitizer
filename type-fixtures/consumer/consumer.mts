@@ -18,18 +18,12 @@ import {
 } from "agent-sanitizer";
 import { STRIP, SGR_RE, stripInvisible } from "agent-sanitizer/invisible";
 import { HTML_TAG_PRESENT, MD_LINK_HINT } from "agent-sanitizer/html";
-import {
-  hasNonAscii,
-  normalizeConfusables,
-} from "agent-sanitizer/confusables";
+import { hasNonAscii, normalizeConfusables } from "agent-sanitizer/confusables";
 import { scanInstructionFiles } from "agent-sanitizer/instructions";
 import { classifyPrompt } from "agent-sanitizer/prompt";
 import { sanitizeText } from "agent-sanitizer/output";
 import { occurrences } from "agent-sanitizer/view-map";
-import {
-  rehydrateRedacted,
-  DEFAULT_HINT,
-} from "agent-sanitizer/rehydrate";
+import { rehydrateRedacted, DEFAULT_HINT } from "agent-sanitizer/rehydrate";
 
 // `0 extends 1 & T` is only true when T is `any`, so this flags the exact
 // regression that shipped in 1.0.1: a declaration that widened to `any`. A bare
