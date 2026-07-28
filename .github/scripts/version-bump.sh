@@ -167,6 +167,25 @@ log "Highest live npm version: $CURRENT_VERSION"
 # Find the latest version tag to determine which commits to analyze
 LAST_TAG=$(git describe --tags --match "v*" --abbrev=0 HEAD 2>/dev/null || echo "")
 
+# Skip when HEAD's release already happened. The tag lands on the release-docs
+# commit, a CHILD of the published SHA, so a re-run against that published SHA
+# sees only ANCESTOR tags: `git describe` reports the PREVIOUS release, so the
+# run re-cuts the same commit range under a fresh version number (this is how
+# 2.0.2 shipped as a byte-identical duplicate of 2.0.1). `--contains` looks the
+# other way down the history and is the only view that sees a tag written after
+# HEAD. It also subsumes the "is HEAD itself tagged?" case: a tag ON HEAD
+# contains HEAD.
+#
+# Ascending: with several releases since, the tag that actually released HEAD is
+# the LOWEST one containing it, so a descending sort would name the wrong version
+# to whoever is reading the log.
+RELEASED_TAGS=$(git tag --contains HEAD --list "v*" --sort=v:refname)
+RELEASED_BY=${RELEASED_TAGS%%$'\n'*}
+if [[ -n "$RELEASED_BY" ]]; then
+  log "HEAD is already released as $RELEASED_BY. Skipping."
+  exit 0
+fi
+
 # The version base must exceed every existing release marker, not just npm. npm
 # and git tags are both declared sources of truth, and a flow migration or a
 # publish that failed after tagging can leave them disagreeing (e.g. a tag
@@ -180,14 +199,8 @@ if [[ "$BASE_VERSION" != "$CURRENT_VERSION" ]]; then
 fi
 
 if [[ -n "$LAST_TAG" ]]; then
-  # Skip if HEAD is already tagged (no new commits since last release)
-  LAST_TAG_SHA=$(git rev-list -1 "$LAST_TAG")
-  HEAD_SHA=$(git rev-parse HEAD)
-  if [[ "$LAST_TAG_SHA" = "$HEAD_SHA" ]]; then
-    log "No new commits since $LAST_TAG. Skipping."
-    exit 0
-  fi
-
+  # No "is HEAD itself tagged?" check here: a tag ON HEAD is also a tag that
+  # CONTAINS HEAD, so the already-released guard above has already exited.
   COMMITS_RAW=$(git log "$LAST_TAG"..HEAD --pretty=format:"- %s" --no-merges)
   COMMIT_SUBJECTS=$(git log "$LAST_TAG"..HEAD --pretty=format:%s --no-merges)
   COMMIT_MESSAGES=$(git log "$LAST_TAG"..HEAD --pretty=format:%B --no-merges)
@@ -213,11 +226,12 @@ if [[ -z "$COMMITS" ]]; then
   exit 0
 fi
 
-# Skip when every commit since the tag is this script's own release-docs commit
-# ("docs: release X.Y.Z [skip ci]"). The tag is pushed BEFORE the docs commit
-# (tag = published SHA), so after a successful release HEAD sits one docs commit
-# past the tag; without this guard a manual re-dispatch with no real work would
-# read that docs commit as releasable and cut a spurious patch.
+# Skip when every commit since the tag is a release-docs commit
+# ("docs: release X.Y.Z [skip ci]"). A successful release tags the docs commit
+# itself, so this fires for the leftovers the already-released guard can't see:
+# a docs commit from a release whose tag never landed, or one cherry-picked past
+# the tag. Without it a re-dispatch with no real work would read that docs commit
+# as releasable and cut a spurious patch.
 if ! grep -Evq '^docs: release [0-9]+\.[0-9]+\.[0-9]+ \[skip ci\]$' <<<"$COMMIT_SUBJECTS"; then
   log "Only release-docs commits since $LAST_TAG. Skipping."
   exit 0
@@ -462,8 +476,10 @@ push_with_rebase() {
 # notes. package.json stays dirty (npm is the source of truth for version). A
 # bot identity and `[skip ci]` keep the resulting push from spawning another
 # workflow run. The tag is created AFTER this commit (and only when it reached
-# the branch — see RELEASE_DOCS_PUSH_FAILED) so HEAD == tag SHA and the next run
-# sees "HEAD is already tagged".
+# the branch — see RELEASE_DOCS_PUSH_FAILED) so HEAD == tag SHA. Note the tag
+# therefore sits on a CHILD of the SHA that was published: a re-run against that
+# published SHA only sees the tag via `git tag --contains` (the already-released
+# guard near the top), never via `git describe`.
 #
 # actions/checkout leaves the runner in detached HEAD even for `push` events,
 # so `git rev-parse --abbrev-ref HEAD` returns the literal string "HEAD", not
@@ -496,8 +512,12 @@ if [[ "$RELEASE_DOCS_PUSH_FAILED" = "1" ]]; then
   exit 1
 fi
 
-# Tag the release for future commit-range detection. Tag HEAD (which now
-# includes the release-docs commit, if any) so a re-trigger sees HEAD == tag SHA.
+# Tag the release for future commit-range detection. Tag HEAD, which now includes
+# the release-docs commit — so the tag sits on a CHILD of the SHA that was
+# published, and a re-trigger against that published SHA sees the tag only via
+# `git tag --contains` (the already-released guard near the top), NOT via
+# `git describe` and NOT as HEAD == tag SHA. Assuming the latter is what shipped
+# 2.0.2 as a duplicate of 2.0.1.
 # Guard against an existing tag: BASE_VERSION already keeps NEW_VERSION ahead of
 # every tag, but a re-run of the same release must stay idempotent rather than
 # abort under `set -e` when the local tag already exists.

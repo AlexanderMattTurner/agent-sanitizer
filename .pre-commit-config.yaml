@@ -65,9 +65,23 @@ repos:
 
   - repo: local
     hooks:
+      # Offline audits only. zizmor runs its one online audit
+      # (`known-vulnerable-actions`, which queries api.github.com/advisories)
+      # solely when a token is visible via GH_TOKEN/GITHUB_TOKEN — which is true
+      # in agent/CI sessions and false on a normal dev machine, so the audit was
+      # never running consistently anywhere. Where it DID fire, an egress policy
+      # that blocks the advisories endpoint returns 403 and zizmor treats that as
+      # fatal (`fatal: no audit was performed`), making every `.github/` change
+      # unpushable from a network-restricted session. Failing closed on an
+      # unreachable third-party API is a liveness bug, not a security control.
+      # The offline audits — pinned-SHA, template-injection, dangerous-triggers,
+      # bot-conditions, artipacked, cache-poisoning — all still run here and in
+      # CI. Restore online coverage by giving `.github/workflows/zizmor.yaml` a
+      # GH_TOKEN and dropping this flag THERE, not by re-enabling it in a hook
+      # that cannot reach the network.
       - id: zizmor
-        name: zizmor (GitHub Actions security audit)
-        entry: zizmor
+        name: zizmor (GitHub Actions security audit, offline)
+        entry: zizmor --no-online-audits
         language: python
         additional_dependencies: ["zizmor==1.25.2"]
         pass_filenames: false

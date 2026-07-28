@@ -180,7 +180,7 @@ test("an E404 npm view treats the package as unpublished (0.0.0)", () => {
   try {
     const { status, stderr } = runScript(dir, binDir);
     // HEAD is already tagged v0.0.0, so the script logs the resolved version and
-    // exits 0 at the "no new commits" guard — proving E404 -> 0.0.0, no abort.
+    // exits 0 at the already-released guard — proving E404 -> 0.0.0, no abort.
     assert.equal(status, 0, "E404 must not abort the release run");
     assert.match(stderr, /Highest live npm version: 0\.0\.0/);
   } finally {
@@ -217,6 +217,66 @@ fi`;
     assert.match(stderr, /New version: 1\.38\.0/);
     assert.doesNotMatch(stderr, /New version: 1\.7\.0/); // not the lagging-tag bump
     assert.doesNotMatch(stderr, /New version: 6\./); // deprecated major excluded
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// --- Re-running a completed release must not republish it ------------------
+// Real incident: run #148 was re-run against the merge SHA it had already
+// released as 2.0.1, computed 2.0.2, and published a byte-identical duplicate
+// that now sits at `latest` with no tag and no CHANGELOG entry. The release tag
+// lands on the release-docs commit — a CHILD of the published SHA — so from the
+// published SHA `git describe` reports the PREVIOUS release and the run re-cuts
+// the same commit range under a fresh version. Only `git tag --contains HEAD`
+// sees a tag written after HEAD.
+
+test("a re-run against an already-released SHA skips instead of republishing", () => {
+  // npm reports 1.1.0 live (what the first run published), so an unguarded run
+  // would bump to 1.1.1 and republish the same commits. Every `@version` probe
+  // answers "exists" so nothing can publish even if the guard regressed.
+  const { dir, binDir } = makeSandbox(`if [[ "$2" == *@* ]]; then
+  exit 0
+else
+  echo '["1.1.0"]'
+fi`);
+  try {
+    const git = (...args) =>
+      execFileSync("git", args, { cwd: dir, stdio: "ignore" });
+    // The exact released topology: published SHA -> release-docs commit -> tag.
+    git("commit", "-q", "--allow-empty", "-m", "feat: the released feature");
+    const publishedSha = execFileSync("git", ["rev-parse", "HEAD"], {
+      cwd: dir,
+      encoding: "utf8",
+    }).trim();
+    git("commit", "-q", "--allow-empty", "-m", "docs: release 1.1.0 [skip ci]");
+    git("tag", "v1.1.0");
+    // Re-run: the workflow checks out the SHA the run was dispatched for.
+    git("checkout", "-q", publishedSha);
+
+    // The premise of the bug — from the published SHA the tag is invisible to
+    // `describe`, so the guard cannot be passing for the wrong reason.
+    assert.equal(
+      execFileSync(
+        "git",
+        ["describe", "--tags", "--match", "v*", "--abbrev=0"],
+        {
+          cwd: dir,
+          encoding: "utf8",
+        },
+      ).trim(),
+      "v0.0.0",
+      "precondition: the released tag must be invisible to `git describe` here",
+    );
+
+    const { status, stderr } = runScript(dir, binDir);
+    assert.equal(status, 0, stderr);
+    assert.match(stderr, /HEAD is already released as v1\.1\.0\. Skipping\./);
+    assert.doesNotMatch(
+      stderr,
+      /New version:/,
+      "the re-run must exit before computing a version",
+    );
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
