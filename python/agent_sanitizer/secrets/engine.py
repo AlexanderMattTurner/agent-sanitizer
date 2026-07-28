@@ -260,7 +260,15 @@ FIELD_VALUE_RE = re.compile(
     # Disjoint separator/body classes make each `[_-]`-delimited segment parse
     # exactly one way, so the match is linear in the input length (see
     # tests/secrets/test_secrets_engine.py::test_field_value_re_linear_on_underscore_run).
-    rf"(?P<field_prefix>(?:{_FIELD_NAMES})(?:[_-][A-Za-z0-9]+)*[\"']?\s*(?::=|==|=>|:[-+?]|[:=])\s*"
+    # The one-byte `[:=]` arm carries a negative lookahead over the operator
+    # CONTINUATION bytes (`-+?=>~`): an operator this alternation doesn't know
+    # (`=~`, a future `:@`) must fail to match AT ALL — a false negative — never
+    # match its first byte and glue the rest onto the value, where the stray byte
+    # breaks every fullmatch-anchored value-shape skip at once and produces the
+    # false positive that mangles real content. `===` is explicit for the same
+    # reason: `==` alone would leave the third `=` on the value.
+    rf"(?P<field_prefix>(?:{_FIELD_NAMES})(?:[_-][A-Za-z0-9]+)*[\"']?\s*"
+    r"(?::=|===|==|=>|:[-+?]|[:=](?![-+?=>~]))\s*"
     r"(?:(?:Bearer|Token|Basic)\s+)?)"
     r"(?P<openbracket>[(\[{]?)"
     r"(?P<quote>[\"']?)"
