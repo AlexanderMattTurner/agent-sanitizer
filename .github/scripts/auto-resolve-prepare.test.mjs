@@ -19,10 +19,13 @@ const scratch = () => mkdtempSync(join(tmpdir(), "auto-resolve-"));
 const git = (cwd, ...args) =>
   execFileSync("git", ["-C", cwd, ...args], { encoding: "utf8" });
 
-// Build an origin repo whose `main` and `feature` branches both edit `file`, so
-// merging main into feature conflicts on exactly that path. Returns a `work`
-// clone checked out on feature (with `origin` pointing at the bare repo).
-function fixtureConflictingOn(file) {
+// Build an origin repo whose `main` and `feature` branches both edit every path
+// in `files` (a string or array), so merging main into feature conflicts on
+// exactly those paths. `baseExtras` maps extra path → content committed on the
+// base only (e.g. a .gitattributes marking a path unmergeable). Returns a
+// `work` clone checked out on feature (with `origin` pointing at the bare repo).
+function fixtureConflictingOn(files, baseExtras = {}) {
+  files = Array.isArray(files) ? files : [files];
   const root = scratch();
   const origin = join(root, "origin.git");
   const work = join(root, "work");
@@ -31,20 +34,26 @@ function fixtureConflictingOn(file) {
   git(work, "config", "user.email", "t@t");
   git(work, "config", "user.name", "t");
 
-  mkdirSync(dirname(join(work, file)), { recursive: true });
-  writeFileSync(join(work, file), "base\n");
+  for (const [p, content] of Object.entries(baseExtras)) {
+    mkdirSync(dirname(join(work, p)), { recursive: true });
+    writeFileSync(join(work, p), content);
+  }
+  for (const file of files) {
+    mkdirSync(dirname(join(work, file)), { recursive: true });
+    writeFileSync(join(work, file), "base\n");
+  }
   git(work, "add", "-A");
   git(work, "commit", "-q", "-m", "base");
   git(work, "branch", "-M", "main");
   git(work, "push", "-q", "origin", "main");
 
   git(work, "checkout", "-q", "-b", "feature");
-  writeFileSync(join(work, file), "feature side\n");
+  for (const file of files) writeFileSync(join(work, file), "feature side\n");
   git(work, "commit", "-q", "-am", "feature");
   git(work, "push", "-q", "origin", "feature");
 
   git(work, "checkout", "-q", "main");
-  writeFileSync(join(work, file), "main side\n");
+  for (const file of files) writeFileSync(join(work, file), "main side\n");
   git(work, "commit", "-q", "-am", "main change");
   git(work, "push", "-q", "origin", "main");
 
@@ -165,6 +174,44 @@ test("each protected prefix is reported and handed to the LLM, member by member"
     );
     assert.equal(commented, false, `${path} must not comment from prepare`);
   }
+});
+
+test("a conflicted lockfile is deferred to owning-tool regeneration, never the LLM", () => {
+  // pnpm is a hard dependency of this repo's toolchain, so `command -v pnpm`
+  // holds wherever this suite runs — the lockfile must classify as
+  // deferred_lock, with no LLM pass and no human handoff.
+  const work = fixtureConflictingOn("pnpm-lock.yaml");
+  const { outputs, merging, commented } = runPrepare(work);
+  assert.equal(outputs.needs_llm, "false");
+  assert.equal(outputs.needs_commit, "true");
+  assert.equal(outputs.conflict_list, "");
+  assert.equal(outputs.deferred_lock, "pnpm-lock.yaml");
+  assert.equal(outputs.unresolvable, undefined);
+  assert.equal(merging, true); // merge kept mid-flight for finalize's regen
+  assert.equal(commented, false);
+});
+
+test("a manifest+lockfile conflict splits: manifest to the LLM, lockfile to regen", () => {
+  const work = fixtureConflictingOn(["package.json", "pnpm-lock.yaml"]);
+  const { outputs, merging } = runPrepare(work);
+  assert.equal(outputs.needs_llm, "true");
+  assert.equal(outputs.needs_commit, "true");
+  assert.equal(outputs.conflict_list, "package.json");
+  assert.equal(outputs.deferred_lock, "pnpm-lock.yaml");
+  assert.equal(outputs.unresolvable, undefined);
+  assert.equal(merging, true);
+});
+
+test("a `-merge`-attributed conflict with no owning tool is handed off as unresolvable", () => {
+  const work = fixtureConflictingOn("assets/logo.bin", {
+    ".gitattributes": "*.bin -merge\n",
+  });
+  const { outputs, commented } = runPrepare(work);
+  assert.equal(outputs.needs_llm, "false");
+  assert.equal(outputs.needs_commit, "false");
+  assert.equal(outputs.unresolvable, "assets/logo.bin");
+  // Prepare never talks to GitHub — the handoff comment is the HANDOFF step's.
+  assert.equal(commented, false);
 });
 
 test("a clean merge (no conflict) is a no-op", () => {

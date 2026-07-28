@@ -55,7 +55,8 @@ fi
 # left marker-less and at "ours" (a `-merge`-attributed lockfile, a binary)
 # would silently commit a wrong "ours" resolution — and refuse any such path
 # smuggled into the list itself, since an edit-based "resolution" of it can
-# never be verified (prepare hands those off to a human before the LLM runs).
+# never be verified (prepare defers known lockfiles to DEFERRED_LOCK
+# regeneration and hands the rest to a human before the LLM runs).
 for f in "${allowed_list[@]}"; do
   if is_unmergeable "$f"; then
     fail "unmergeable (lockfile/binary) path '${f}' in CONFLICT_LIST" "\`${f}\` cannot be merged textually; resolve it by hand (e.g. re-run the lockfile tool after merging)."
@@ -81,6 +82,23 @@ if [[ ${#deferred_list[@]} -gt 0 ]] && has_resolve_generated; then
   fi
 fi
 
+# Deferred lockfile regeneration: prepare routed every conflicted lockfile with
+# a known, available owning tool here. Git leaves such a conflict marker-less at
+# "ours" (`-merge`-attributed) or marker-laden (plain text), and neither state
+# is hand-mergeable — the only correct resolution is re-running the owning tool
+# against the manifests, which are resolved by now (staged above when they
+# conflicted, merged clean otherwise). Check the lockfile out at "ours" first so
+# the tool starts from parseable content, regenerate, stage. A regen failure
+# (tool error, unreachable registry) aborts loud and leaves the conflict for a
+# human — never a guessed lockfile.
+read -ra lock_list <<<"${DEFERRED_LOCK:-}"
+for f in "${lock_list[@]}"; do
+  if ! { git checkout --ours -- "$f" && regen_lockfile "$f"; }; then
+    fail "lockfile '${f}' could not be regenerated" "regenerating \`${f}\` with its owning tool failed. Merge \`${BASE_REF}\` locally, re-run the tool by hand (e.g. \`pnpm install --lockfile-only\` / \`uv lock\`), and push the merge commit."
+  fi
+  git add -- "$f"
+done
+
 # Nothing conflicted may survive: every conflicted path was either staged above
 # (LLM resolution) or regenerated — anything still unmerged was never resolved.
 if [[ -n "$(git ls-files -u)" ]]; then
@@ -91,7 +109,7 @@ fi
 # so a whole-tree scan would abort on a legitimate line in any committed doc. The
 # resolver is bounded to CONFLICT_LIST (the out-of-set guard above), so a genuine
 # leftover marker can only live in the resolved set.
-scan_paths=("${allowed_list[@]}" "${deferred_list[@]}")
+scan_paths=("${allowed_list[@]}" "${deferred_list[@]}" "${lock_list[@]}")
 if [[ ${#scan_paths[@]} -gt 0 ]] && git grep -nE "$marker_re" -- "${scan_paths[@]}" >/dev/null 2>&1; then
   echo "Conflict markers still present:"
   git grep -nE "$marker_re" -- "${scan_paths[@]}" || echo "[auto-resolve] conflict-marker re-scan errored" >&2

@@ -11,11 +11,15 @@
 #                       FINALIZE regenerates them after the LLM resolves the
 #                       sources — the LLM never sees a generated artifact
 #                       (always empty in a repo with no resolve-generated script)
-#   unresolvable=...    `-merge`-attributed (lockfile) or binary conflicts not
-#                       owned by a generator: git leaves NO text markers and the
-#                       working tree at "ours", so neither an LLM edit nor a
-#                       regen can produce a correct resolution — the workflow
-#                       hands off to a human BEFORE any LLM cost
+#   deferred_lock=...   conflicted lockfiles a known, available tool owns
+#                       (pnpm-lock.yaml, package-lock.json, uv.lock); FINALIZE
+#                       re-runs the owning tool against the resolved manifests —
+#                       a lockfile is never hand-merged, by an LLM or otherwise
+#   unresolvable=...    binary or `-merge`-attributed conflicts with no owning
+#                       tool (or whose tool is absent from PATH): git leaves NO
+#                       text markers and the working tree at "ours", so neither
+#                       an LLM edit nor a regen can produce a correct resolution
+#                       — the workflow hands off to a human BEFORE any LLM cost
 #   needs_llm=true      conflict_list is non-empty
 #   needs_commit=true   there is a resolution (deterministic and/or LLM) to commit
 #   protected_paths=... conflicted paths in PROTECTED areas
@@ -105,16 +109,24 @@ fi
 
 # Partition. An owned conflict means its source ALSO conflicted (the pre-pass
 # already resolved the clean-source ones) — finalize regenerates it after the
-# LLM resolves the source. A `-merge`-attributed or binary conflict has no
-# markers to resolve and no generator to rerun: only a human (relocking,
-# re-exporting the asset) can produce the right content.
+# LLM resolves the source. A lockfile with a known, available owning tool is
+# deferred the same way: finalize re-runs the tool against the resolved
+# manifests (never hand-merged — marker-edited lockfile content can't be
+# trusted, and a `-merge`-attributed one has no markers at all). What remains
+# unmergeable — a binary, or a lockfile whose tool is missing — has no
+# resolution this job can produce: only a human (relocking, re-exporting the
+# asset) can supply the right content.
 llm_list=()
 deferred_regen=()
+deferred_lock=()
 unresolvable=()
 for f in "${conflicts[@]}"; do
+  tool="$(lockfile_tool "$f")"
   if [[ -n "${owned["$f"]:-}" ]]; then
     deferred_regen+=("$f")
-  elif is_unmergeable "$f"; then
+  elif [[ -n "$tool" ]] && command -v "$tool" >/dev/null 2>&1; then
+    deferred_lock+=("$f")
+  elif [[ -n "$tool" ]] || is_unmergeable "$f"; then
     unresolvable+=("$f")
   else
     llm_list+=("$f")
@@ -151,10 +163,14 @@ echo "Handing ${#llm_list[@]} source conflict(s) to Claude: ${llm_list[*]:-<none
 if [[ ${#deferred_regen[@]} -gt 0 ]]; then
   echo "Deferring ${#deferred_regen[@]} generated file(s) to post-LLM regeneration: ${deferred_regen[*]}"
 fi
+if [[ ${#deferred_lock[@]} -gt 0 ]]; then
+  echo "Deferring ${#deferred_lock[@]} lockfile(s) to owning-tool regeneration: ${deferred_lock[*]}"
+fi
 {
   echo "needs_llm=${needs_llm}"
   echo "needs_commit=true"
   echo "conflict_list=${llm_list[*]:-}"
   echo "deferred_regen=${deferred_regen[*]:-}"
+  echo "deferred_lock=${deferred_lock[*]:-}"
   echo "protected_paths=${protected_hits[*]:-}"
 } >>"$out"

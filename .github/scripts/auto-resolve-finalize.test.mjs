@@ -18,10 +18,10 @@ const scratch = () => mkdtempSync(join(tmpdir(), "auto-resolve-fin-"));
 const git = (cwd, ...args) =>
   execFileSync("git", ["-C", cwd, ...args], { encoding: "utf8" });
 
-// A work clone mid-merge: `main` and `feature` both edit docs/a.md, and docs/b.md
-// exists cleanly on both. Merging main into feature conflicts on docs/a.md only.
-// Returns { work, origin }.
-function midMerge(bContent = "b base\n") {
+// A work clone mid-merge: `main` and `feature` both edit `file` (default a.md),
+// and b.md exists cleanly on both. Merging main into feature conflicts on
+// `file` only. Returns { work, origin }.
+function midMerge(bContent = "b base\n", file = "a.md") {
   const root = scratch();
   const origin = join(root, "origin.git");
   const work = join(root, "work");
@@ -30,18 +30,18 @@ function midMerge(bContent = "b base\n") {
   git(work, "config", "user.email", "t@t");
   git(work, "config", "user.name", "t");
   git(work, "config", "commit.gpgsign", "false");
-  writeFileSync(join(work, "a.md"), "base\n");
+  writeFileSync(join(work, file), "base\n");
   writeFileSync(join(work, "b.md"), bContent);
   git(work, "add", "-A");
   git(work, "commit", "-q", "-m", "base");
   git(work, "branch", "-M", "main");
   git(work, "push", "-q", "origin", "main");
   git(work, "checkout", "-q", "-b", "feature");
-  writeFileSync(join(work, "a.md"), "feature side\n");
+  writeFileSync(join(work, file), "feature side\n");
   git(work, "commit", "-q", "-am", "feature");
   git(work, "push", "-q", "origin", "feature");
   git(work, "checkout", "-q", "main");
-  writeFileSync(join(work, "a.md"), "main side\n");
+  writeFileSync(join(work, file), "main side\n");
   git(work, "commit", "-q", "-am", "main change");
   git(work, "checkout", "-q", "feature");
   try {
@@ -56,10 +56,12 @@ function midMerge(bContent = "b base\n") {
 // Run finalize.sh in `work` with a fake `gh` on PATH that records every
 // invocation, so a test can assert on the comment(s)/labels the script posts.
 // `env` overrides/extends the script's environment (e.g. PROTECTED_PATHS, or
-// TEMPLATE_SYNC_TOKEN_ORG: "" to exercise the fail-closed path). Returns the error
+// TEMPLATE_SYNC_TOKEN_ORG: "" to exercise the fail-closed path). `shims` maps
+// extra executable name → bash body, installed on PATH ahead of the real tool
+// (e.g. a fake `pnpm` standing in for lockfile regeneration). Returns the error
 // (null on success), whether a merge is still in progress (MERGE_HEAD present),
 // and the recorded gh argv lines.
-function runFinalize(work, conflictList, env = {}) {
+function runFinalize(work, conflictList, env = {}, shims = {}) {
   // The shim lives OUTSIDE the work clone: finalize.sh refuses any untracked
   // file inside the tree, so parking .fakebin/.gh-calls there would trip it.
   const root = dirname(work);
@@ -73,6 +75,11 @@ function runFinalize(work, conflictList, env = {}) {
     `#!/usr/bin/env bash\nprintf '%s\\n' "$*" >> "${ghLog}"\nexit 0\n`,
   );
   chmodSync(ghPath, 0o755);
+  for (const [name, body] of Object.entries(shims)) {
+    const p = join(ghBin, name);
+    writeFileSync(p, `#!/usr/bin/env bash\n${body}\n`);
+    chmodSync(p, 0o755);
+  }
   let error = null;
   try {
     execFileSync("bash", [SCRIPT], {
@@ -207,6 +214,48 @@ test("a successful finalize with PROTECTED_PATHS folds the warning into the succ
   assert.ok(comments[0].includes("Auto-resolved the merge conflict"));
   assert.ok(comments[0].includes("protected path"));
   assert.ok(comments[0].includes(".github/workflows/ci.yaml"));
+});
+
+test("finalize regenerates a deferred lockfile with its owning tool and pushes", () => {
+  // Conflict on pnpm-lock.yaml only; a fake `pnpm` on PATH stands in for the
+  // real regeneration (the real one would hit the network). Finalize must check
+  // the file out at "ours", run the tool, stage the result, and push it.
+  const { work, origin } = midMerge("b base\n", "pnpm-lock.yaml");
+  const before = git(origin, "rev-parse", "feature").trim();
+  const { error, merging, ghCalls } = runFinalize(
+    work,
+    "",
+    { DEFERRED_LOCK: "pnpm-lock.yaml" },
+    { pnpm: `printf 'lockfileVersion: regenerated\\n' > pnpm-lock.yaml` },
+  );
+  assert.equal(error, null);
+  assert.equal(merging, false);
+  assert.notEqual(git(origin, "rev-parse", "feature").trim(), before); // pushed
+  assert.equal(
+    git(origin, "show", "feature:pnpm-lock.yaml"),
+    "lockfileVersion: regenerated\n", // the TOOL's output, not either side's
+  );
+  const comments = ghCalls.filter((c) => c.startsWith("pr comment"));
+  assert.equal(comments.length, 1);
+  assert.ok(comments[0].includes("Auto-resolved the merge conflict"));
+});
+
+test("a failing lockfile regeneration aborts loud and pushes nothing", () => {
+  const { work, origin } = midMerge("b base\n", "pnpm-lock.yaml");
+  const before = git(origin, "rev-parse", "feature").trim();
+  const { error, merging, ghCalls } = runFinalize(
+    work,
+    "",
+    { DEFERRED_LOCK: "pnpm-lock.yaml" },
+    { pnpm: "exit 1" },
+  );
+  assert.notEqual(error, null); // failed rather than guessing a lockfile
+  assert.equal(merging, false); // merge aborted for a human
+  assert.equal(git(origin, "rev-parse", "feature").trim(), before); // no push
+  const comments = ghCalls.filter((c) => c.startsWith("pr comment"));
+  assert.equal(comments.length, 1);
+  assert.ok(comments[0].includes("could not finish"));
+  assert.ok(comments[0].includes("pnpm-lock.yaml"));
 });
 
 test("finalize FAILS CLOSED (labels auto-resolve-blocked, no push) when no push token is set", () => {
