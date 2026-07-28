@@ -234,10 +234,18 @@ FIELD_VALUE_RE = re.compile(
     # `$(...)`/`foo(...)` still begin with `$`/a letter, never the peeled bracket,
     # so they neither match here nor (as before) reach the length floor.
     # The assignment operator is `:` `=` or one of the multi-char forms `:=`
-    # `=>` `==` (Go/Pascal walrus, Ruby/PHP hash-rocket, comparison-as-config).
-    # A bare `[:=]` matched only the first char of `:=`/`=>`, leaving the value
-    # to start at the second operator byte (`= "v"` / `> "v"`), which is <20
-    # contiguous chars, so the arm failed and the secret leaked.
+    # `=>` `==` (Go/Pascal walrus, Ruby/PHP hash-rocket, comparison-as-config)
+    # and the shell parameter-expansion operators `:-` `:+` `:?`
+    # (`${SECRET_FILE:-/etc/app/secret}`). A bare `[:=]` matched only the first
+    # char of these, leaving the value to start at the second operator byte
+    # (`= "v"` / `> "v"` / `-/etc/app/secret`). For `:=`/`=>` that value was <20
+    # contiguous chars, so the arm failed and the secret leaked; for `:-`/`:+`/`:?`
+    # the operator byte glued onto the front of the value instead, so a shell
+    # default the value-shape skips below would have passed (a filesystem path, an
+    # env reference, a placeholder) no longer matched its shape and was redacted —
+    # the FALSE POSITIVE that mangles ordinary shell source. Consuming the whole
+    # operator hands each skip the value the author actually wrote, while a real
+    # hardcoded default (`${TOKEN:-ghp_…}`) still redacts.
     #
     # `(?:[_-][A-Za-z0-9]+)*` after the keyword lets it be a PREFIX of a longer
     # underscore/hyphen-segmented identifier (`api_key_prod`, `secret_value`,
@@ -252,7 +260,7 @@ FIELD_VALUE_RE = re.compile(
     # Disjoint separator/body classes make each `[_-]`-delimited segment parse
     # exactly one way, so the match is linear in the input length (see
     # tests/secrets/test_secrets_engine.py::test_field_value_re_linear_on_underscore_run).
-    rf"(?P<field_prefix>(?:{_FIELD_NAMES})(?:[_-][A-Za-z0-9]+)*[\"']?\s*(?::=|==|=>|[:=])\s*"
+    rf"(?P<field_prefix>(?:{_FIELD_NAMES})(?:[_-][A-Za-z0-9]+)*[\"']?\s*(?::=|==|=>|:[-+?]|[:=])\s*"
     r"(?:(?:Bearer|Token|Basic)\s+)?)"
     r"(?P<openbracket>[(\[{]?)"
     r"(?P<quote>[\"']?)"
@@ -434,10 +442,14 @@ def _is_placeholder_value(value: str) -> bool:
 # A field named `secret_type` / `token_name` / `key_label` holds metadata *about*
 # a secret (its kind, its display name), not the secret itself — `secret_type =
 # "Anthropic API Key"` trips KeywordDetector and corrupts ordinary code/test
-# output. Skip when the identifier directly before the matched value's
-# assignment ends in a metadata suffix. Real secrets live under the bare
-# keyword fields, which have no such suffix.
-_METADATA_SUFFIXES = ("type", "name", "label", "keyword", "kind")
+# output. Likewise `secret_path` / `ssh_private_key_file` name WHERE a secret
+# lives (`secret_path="$RUN_DIR/secret"`, `key_file=args.ssh_private_key_path`),
+# not its bytes — and the location value (a relative path, a variable-rooted
+# path, an attribute chain) routinely escapes the value-shape skips, which only
+# know absolute paths and anchored env references. Skip when the identifier
+# directly before the matched value's assignment ends in a metadata suffix. Real
+# secrets live under the bare keyword fields, which have no such suffix.
+_METADATA_SUFFIXES = ("type", "name", "label", "keyword", "kind", "path", "file")
 _ASSIGN_OP_CHARS = "=:!>"
 
 
