@@ -9,8 +9,9 @@
 # hand-merged; a conflict with no textual resolution AND no owning tool (a binary,
 # an unsupported lockfile) fails the run with a PR comment BEFORE any LLM cost and
 # labels the PR `auto-resolve-blocked` so base pushes don't retry into the same
-# refusal. Safety
-# rails: same-repo PRs only (a fork's token is read-only and its author is
+# refusal.
+#
+# Safety rails: same-repo PRs only (a fork's token is read-only and its author is
 # untrusted), non-bot / non-draft authors, conflicts in protected paths (this
 # repo's Claude config and CI machinery) are still resolved by the LLM but flagged
 # for human review in the pushed-resolution comment, and the resolved head is

@@ -47,10 +47,13 @@ raw_prs() {
 }
 
 # An emittable PR: open, not draft, non-bot, same-repo, CONFLICTING, and not
-# opted out via the auto-resolve-blocked label (finalize applies it when a
-# resolution cannot be pushed — e.g. the token can't carry workflow-file
-# changes — so every base push doesn't re-run a paid resolve into the same
-# wall; a human removes the label to re-enable).
+# opted out via the auto-resolve-blocked label. Two steps apply that label, both
+# for conflicts no base push can change: finalize when a computed resolution
+# cannot be pushed (the token can't carry workflow-file changes), and handoff
+# when a conflict is unmergeable with no owning tool to rerun (a binary, an
+# unsupported lockfile). Skipping them here is what stops every base push from
+# re-running a paid resolve into the same wall; a human removes the label to
+# re-enable.
 emit_filter='select(.state == "OPEN" and .isDraft == false
   and .isCrossRepository == false and ((.author.is_bot) | not)
   and .mergeable == "CONFLICTING"

@@ -66,7 +66,7 @@ function fixtureConflictingOn(files, baseExtras = {}) {
 // protected path is finalize's job, via the `protected_paths` output). Returns
 // the parsed $GITHUB_OUTPUT, whether a merge is still in progress (MERGE_HEAD
 // present), and the recorded gh argv lines.
-function runPrepare(work) {
+function runPrepare(work, { path, shims = {} } = {}) {
   const outFile = join(work, ".gh-output");
   writeFileSync(outFile, "");
   const ghLog = join(work, ".gh-calls");
@@ -79,6 +79,14 @@ function runPrepare(work) {
     `#!/usr/bin/env bash\nprintf '%s\\n' "$*" >> "${ghLog}"\nexit 0\n`,
   );
   chmodSync(ghPath, 0o755);
+  // Stub the lockfile tools rather than relying on the host's toolchain:
+  // prepare only probes them with `command -v`, so a stub is enough, and it
+  // keeps classification tests hermetic on a runner where (say) uv is absent.
+  for (const [name, body] of Object.entries(shims)) {
+    const p = join(ghBin, name);
+    writeFileSync(p, `#!/usr/bin/env bash\n${body}\n`);
+    chmodSync(p, 0o755);
+  }
   let error = null;
   try {
     execFileSync("bash", [SCRIPT], {
@@ -90,7 +98,7 @@ function runPrepare(work) {
         HEAD_REF: "feature",
         GITHUB_TOKEN: "x",
         GITHUB_OUTPUT: outFile,
-        PATH: `${ghBin}:${process.env.PATH ?? ""}`,
+        PATH: `${ghBin}:${path ?? process.env.PATH ?? ""}`,
       },
     });
   } catch (err) {
@@ -176,18 +184,94 @@ test("each protected prefix is reported and handed to the LLM, member by member"
   }
 });
 
-test("a conflicted lockfile is deferred to owning-tool regeneration, never the LLM", () => {
-  // pnpm is a hard dependency of this repo's toolchain, so `command -v pnpm`
-  // holds wherever this suite runs — the lockfile must classify as
-  // deferred_lock, with no LLM pass and no human handoff.
-  const work = fixtureConflictingOn("pnpm-lock.yaml");
-  const { outputs, merging, commented } = runPrepare(work);
-  assert.equal(outputs.needs_llm, "false");
-  assert.equal(outputs.needs_commit, "true");
+// Every lockfile in lib.sh's `lockfile_tool` table, with the manifest its tool
+// requires beside it. All three tools are present in this repo's toolchain, so
+// `command -v` holds wherever this suite runs. Kept in lockstep with the case
+// table: a lockfile added there without a case here classifies untested.
+const LOCKFILES = [
+  {
+    lock: "pnpm-lock.yaml",
+    tool: "pnpm",
+    manifest: "package.json",
+    manifestBody: "{}\n",
+  },
+  {
+    lock: "package-lock.json",
+    tool: "npm",
+    manifest: "package.json",
+    manifestBody: "{}\n",
+  },
+  {
+    lock: "uv.lock",
+    tool: "uv",
+    manifest: "pyproject.toml",
+    manifestBody: "[project]\nname = 'x'\n",
+  },
+];
+
+for (const { lock, tool, manifest, manifestBody } of LOCKFILES) {
+  test(`a conflicted ${lock} is deferred to owning-tool regeneration, never the LLM`, () => {
+    const work = fixtureConflictingOn(lock, { [manifest]: manifestBody });
+    const { outputs, merging, commented } = runPrepare(work, {
+      shims: { [tool]: "exit 0" },
+    });
+    assert.equal(outputs.needs_llm, "false");
+    assert.equal(outputs.needs_commit, "true");
+    assert.equal(outputs.conflict_list, "");
+    assert.equal(outputs.deferred_lock, lock);
+    assert.equal(outputs.unresolvable, undefined);
+    assert.equal(merging, true); // merge kept mid-flight for finalize's regen
+    assert.equal(commented, false);
+  });
+}
+
+test("a lockfile in a SUBDIRECTORY is claimed via its own sibling manifest", () => {
+  const work = fixtureConflictingOn("sub/pnpm-lock.yaml", {
+    "sub/package.json": "{}\n",
+  });
+  const { outputs } = runPrepare(work, { shims: { pnpm: "exit 0" } });
+  assert.equal(outputs.deferred_lock, "sub/pnpm-lock.yaml");
   assert.equal(outputs.conflict_list, "");
-  assert.equal(outputs.deferred_lock, "pnpm-lock.yaml");
+});
+
+test("a lockfile-NAMED file with no sibling manifest is NOT claimed — it goes to the LLM", () => {
+  // Precision over recall: a committed fixture named package-lock.json is not a
+  // lockfile. Claiming it would be SILENT corruption — `npm install
+  // --package-lock-only` in a manifest-less directory succeeds and writes an
+  // empty-dependency lockfile over the fixture while the run stays green.
+  const work = fixtureConflictingOn("test/fixtures/package-lock.json");
+  const { outputs, merging } = runPrepare(work, { shims: { npm: "exit 0" } });
+  assert.equal(outputs.deferred_lock, "");
+  assert.equal(outputs.conflict_list, "test/fixtures/package-lock.json");
   assert.equal(outputs.unresolvable, undefined);
-  assert.equal(merging, true); // merge kept mid-flight for finalize's regen
+  assert.equal(merging, true);
+});
+
+test("a lockfile whose owning tool is ABSENT from PATH is unresolvable, not sent to the LLM", () => {
+  // The `command -v` gate's other branch: with no tool to rerun, an edit-based
+  // "resolution" can never be verified, so it must hand off to a human rather
+  // than fall through to the LLM.
+  const work = fixtureConflictingOn("pnpm-lock.yaml", {
+    "package.json": "{}\n",
+  });
+  // No pnpm shim, and every real pnpm stripped from PATH.
+  const pnpmDirs = new Set(
+    execFileSync("bash", ["-c", "command -v pnpm || true"], {
+      encoding: "utf8",
+    })
+      .split("\n")
+      .filter(Boolean)
+      .map((p) => dirname(p)),
+  );
+  const path = (process.env.PATH ?? "")
+    .split(":")
+    .filter((d) => d && !pnpmDirs.has(d))
+    .join(":");
+  const { outputs, commented } = runPrepare(work, { path });
+  assert.equal(outputs.needs_llm, "false");
+  assert.equal(outputs.needs_commit, "false");
+  assert.equal(outputs.unresolvable, "pnpm-lock.yaml");
+  assert.equal(outputs.conflict_list, undefined);
   assert.equal(commented, false);
 });
 

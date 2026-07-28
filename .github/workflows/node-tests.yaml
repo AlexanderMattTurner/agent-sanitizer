@@ -41,6 +41,15 @@ jobs:
         if: steps.check.outputs.configured == 'true'
         run: pnpm test
 
+      # `node --test`'s default discovery skips dot-directories, so nothing
+      # under .github/scripts runs via `pnpm test`. Run the auto-resolve suites
+      # explicitly: they gate a workflow that pushes merge commits to PR
+      # branches with a workflow-scoped PAT, so they must not be decorative.
+      # Scoped to auto-resolve-* rather than the whole directory — the other
+      # suites there have unmet dependencies and would fail this required check.
+      - name: Run auto-resolve workflow-script tests
+        run: node --test .github/scripts/auto-resolve-*.test.mjs
+
   # Stable Required check: runs even when `test` is cancelled/skipped, so a
   # protected branch never gets stuck on a check that never reports.
   node-tests-passed: # required-check: true
