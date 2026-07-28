@@ -1,12 +1,13 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import {
   mkdtempSync,
   writeFileSync,
   readFileSync,
   mkdirSync,
   chmodSync,
+  existsSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
@@ -254,19 +255,28 @@ test("a lockfile whose owning tool is ABSENT from PATH is unresolvable, not sent
   const work = fixtureConflictingOn("pnpm-lock.yaml", {
     "package.json": "{}\n",
   });
-  // No pnpm shim, and every real pnpm stripped from PATH.
-  const pnpmDirs = new Set(
-    execFileSync("bash", ["-c", "command -v pnpm || true"], {
-      encoding: "utf8",
-    })
-      .split("\n")
-      .filter(Boolean)
-      .map((p) => dirname(p)),
-  );
+  // No pnpm shim, and EVERY directory holding a pnpm dropped from PATH —
+  // `command -v` names only the first match, so filtering by its answer alone
+  // leaves a second pnpm reachable on runners that install more than one.
   const path = (process.env.PATH ?? "")
     .split(":")
-    .filter((d) => d && !pnpmDirs.has(d))
+    .filter((d) => d && !existsSync(join(d, "pnpm")))
     .join(":");
+  // Prove the premise instead of assuming it: this test is about the
+  // tool-absent branch, so a PATH that still resolves pnpm silently tests the
+  // deferred-lock branch and passes for the wrong reason. Assert prepare's own
+  // helpers survived the surgery too — losing `dirname` would make
+  // lockfile_tool decline the path and route it to the LLM, a third wrong
+  // branch that also looks like a pass on the first assertion.
+  const reachable = (bin) =>
+    spawnSync("bash", ["-c", `command -v ${bin}`], {
+      env: { ...process.env, PATH: path },
+      encoding: "utf8",
+    }).status === 0;
+  assert.equal(reachable("pnpm"), false, "premise: pnpm must be unreachable");
+  for (const bin of ["git", "dirname"]) {
+    assert.equal(reachable(bin), true, `premise: ${bin} must stay reachable`);
+  }
   const { outputs, commented } = runPrepare(work, { path });
   assert.equal(outputs.needs_llm, "false");
   assert.equal(outputs.needs_commit, "false");
