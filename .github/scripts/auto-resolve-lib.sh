@@ -17,9 +17,9 @@ is_unmergeable() {
 # together with regen_lockfile below — the two case tables must stay in sync.
 lockfile_tool() {
   case "${1##*/}" in
-    pnpm-lock.yaml) echo pnpm ;;
-    package-lock.json) echo npm ;;
-    uv.lock) echo uv ;;
+  pnpm-lock.yaml) echo pnpm ;;
+  package-lock.json) echo npm ;;
+  uv.lock) echo uv ;;
   esac
 }
 
@@ -34,10 +34,10 @@ regen_lockfile() {
   local dir
   dir="$(dirname "$1")"
   case "${1##*/}" in
-    pnpm-lock.yaml) (cd "$dir" && pnpm install --lockfile-only --no-frozen-lockfile --ignore-scripts) ;;
-    package-lock.json) (cd "$dir" && npm install --package-lock-only --ignore-scripts) ;;
-    uv.lock) (cd "$dir" && uv lock) ;;
-    *) return 1 ;;
+  pnpm-lock.yaml) (cd "$dir" && pnpm install --lockfile-only --no-frozen-lockfile --ignore-scripts) ;;
+  package-lock.json) (cd "$dir" && npm install --package-lock-only --ignore-scripts) ;;
+  uv.lock) (cd "$dir" && uv lock) ;;
+  *) return 1 ;;
   esac
 }
 
