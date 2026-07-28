@@ -8,6 +8,16 @@ adhere to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+## [2.0.3] - 2026-07-28
+
+### Changed
+
+- fix(ci): stop the zizmor hook failing closed on an unreachable advisory API
+- fix(ci): restore the executable bit on version-bump.sh
+- fix(release): name the tag that actually released HEAD when skipping
+- test(release): cover a re-run against an already-released SHA
+- fix(release): skip re-runs against an already-released SHA
+
 ## [2.0.1] - 2026-07-28
 
 ### Changed
