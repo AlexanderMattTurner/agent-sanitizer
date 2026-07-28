@@ -8,6 +8,19 @@ adhere to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+## [2.0.1] - 2026-07-28
+
+### Changed
+
+- fix(secrets): make unknown assignment operators fail wholesale, never partially match
+- fix(secrets): stop redacting shell parameter-expansion defaults and secret-location fields
+- ci: print PyPI's rejection reason on publish failures
+- fix(hooks): stop tag pushes from rebuilding the whole pre-commit suite
+- fix(ci): give the conflict resolver uvx so the pre-push hook can run
+- ci: approve with the org PAT in the reviewer-hold clear paths
+- style: apply prettier
+- ci: source the org PAT (TEMPLATE_SYNC_TOKEN_ORG) in every workflow
+
 ## [1.47.14] - 2026-07-23
 
 ### Changed
