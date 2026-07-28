@@ -169,6 +169,16 @@ jobs:
       - name: Set up Node + install deps
         uses: ./.github/actions/setup-base-env
 
+      # The resolution push runs the checked-out branch's .hooks/pre-push
+      # (pnpm install sets core.hooksPath), which drives the pushed-range
+      # pre-commit suite through uvx. Without uv on PATH the hook degrades —
+      # and a PR head carrying an older hook fails CLOSED, rejecting every
+      # resolution push with "required tool 'pre-commit' not found".
+      - name: Set up uv (pre-push hook runs pre-commit via uvx)
+        uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39 # v8.2.0
+        with:
+          enable-cache: false
+
       - name: Stage the resolver scripts from the trusted base ref
         # The checkout above is the PR HEAD. Running its copy of the resolver
         # scripts would (a) fail with 127 on any PR whose branch predates them and
