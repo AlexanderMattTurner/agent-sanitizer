@@ -175,7 +175,11 @@ LAST_TAG=$(git describe --tags --match "v*" --abbrev=0 HEAD 2>/dev/null || echo 
 # other way down the history and is the only view that sees a tag written after
 # HEAD. It also subsumes the "is HEAD itself tagged?" case: a tag ON HEAD
 # contains HEAD.
-RELEASED_TAGS=$(git tag --contains HEAD --list "v*" --sort=-v:refname)
+#
+# Ascending: with several releases since, the tag that actually released HEAD is
+# the LOWEST one containing it, so a descending sort would name the wrong version
+# to whoever is reading the log.
+RELEASED_TAGS=$(git tag --contains HEAD --list "v*" --sort=v:refname)
 RELEASED_BY=${RELEASED_TAGS%%$'\n'*}
 if [[ -n "$RELEASED_BY" ]]; then
   log "HEAD is already released as $RELEASED_BY. Skipping."
@@ -508,8 +512,12 @@ if [[ "$RELEASE_DOCS_PUSH_FAILED" = "1" ]]; then
   exit 1
 fi
 
-# Tag the release for future commit-range detection. Tag HEAD (which now
-# includes the release-docs commit, if any) so a re-trigger sees HEAD == tag SHA.
+# Tag the release for future commit-range detection. Tag HEAD, which now includes
+# the release-docs commit — so the tag sits on a CHILD of the SHA that was
+# published, and a re-trigger against that published SHA sees the tag only via
+# `git tag --contains` (the already-released guard near the top), NOT via
+# `git describe` and NOT as HEAD == tag SHA. Assuming the latter is what shipped
+# 2.0.2 as a duplicate of 2.0.1.
 # Guard against an existing tag: BASE_VERSION already keeps NEW_VERSION ahead of
 # every tag, but a re-run of the same release must stay idempotent rather than
 # abort under `set -e` when the local tag already exists.
