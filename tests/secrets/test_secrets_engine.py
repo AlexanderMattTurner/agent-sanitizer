@@ -997,6 +997,47 @@ def test_shell_parameter_expansion_secret_default_still_redacted(label, text, ex
     assert result["text"] == expected, label
 
 
+# ─── Operator × skip-shape grid ──────────────────────────────────────────────
+# Every value-shape skip is a fullmatch, so ONE operator byte glued onto the
+# value defeats all of them at once — the shape of both shipped instances of
+# this bug (`:=` matching as `:` + `=value`, `:-` matching as `:` + `-/path`).
+# The grid crosses every accepted operator with every skip family: a new
+# operator or a new skip that mishandles the boundary goes red here the day it
+# is written, not when a consumer hits the false positive.
+_GRID_OPERATORS = [":", "=", ":=", "==", "===", "=>", ":-", ":+", ":?"]
+_GRID_BENIGN_VALUES = [
+    ("env reference", "$MY_SERVICE_CREDENTIAL_ENV_VAR"),
+    ("placeholder", "<paste-your-token-here-now>"),
+    ("uuid", "12345678-90ab-cdef-1234-567890abcdef"),
+    ("filesystem path", "/etc/vault/agent/current-token"),
+]
+_GRID_OPAQUE = "q9X2mN7pK4rT8wY1cV5bZ3dF6gH0jL2e"
+
+
+@pytest.mark.parametrize("op", _GRID_OPERATORS)
+@pytest.mark.parametrize("label, value", _GRID_BENIGN_VALUES)
+def test_operator_grid_benign_shapes_not_redacted(op, label, value):
+    assert run_plain(f"token{op}{value}") is None, f"{label} after {op!r}"
+
+
+# The positive marker proving each grid operator is actually recognized — an
+# operator the regex silently stopped matching would make the benign half of
+# the grid pass vacuously.
+@pytest.mark.parametrize("op", _GRID_OPERATORS)
+def test_operator_grid_opaque_value_redacted(op):
+    result = run_plain(f"token{op}{_GRID_OPAQUE}")
+    assert result is not None, f"operator {op!r} not recognized"
+    assert _GRID_OPAQUE not in result["text"], op
+
+
+# An operator the alternation does NOT know must fail wholesale (a false
+# negative), never match its first byte and glue the rest onto the value.
+@pytest.mark.parametrize("op", ["=~", ":~"])
+def test_unknown_operator_fails_wholesale(op):
+    m = E.FIELD_VALUE_RE.search(f"token{op}/etc/vault/agent/current-token")
+    assert m is None, f"operator {op!r} partially matched"
+
+
 @pytest.mark.parametrize(
     "label, value",
     [
