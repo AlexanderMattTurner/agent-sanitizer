@@ -631,6 +631,11 @@ def test_is_metadata_field_uses_explicit_offset():
         ("secret_type", 'secret_type = "Anthropic API Key"'),
         ("kubernetes secret type", 'secret_type: "kubernetes.io/tls"'),
         ("token_kind", 'token_kind = "refresh-token-v2-long"'),
+        # *_path / *_file fields hold WHERE a secret lives — a variable-rooted or
+        # relative location the absolute-path/env-reference value skips miss.
+        ("secret_path var-rooted", 'secret_path="$SBX_RS_RUN_DIR/secret-file"'),
+        ("key path attr chain", "key_path = args.ssh_private_key_path,"),
+        ("token_file relative", "token_file: state/rotating/current-token"),
     ],
 )
 def test_metadata_fields_not_redacted(label, text):
@@ -941,6 +946,55 @@ def test_unforgeable_env_root_trusted_on_web_ingress(value):
 )
 def test_code_constructs_not_redacted(label, text):
     assert run_plain(text) is None, label
+
+
+# A shell parameter expansion `${VAR:-default}` / `${VAR:+alt}` is not an
+# assignment: the operator is two bytes, so a one-byte `:` left the `-`/`+` glued
+# to the front of the value and every value-shape skip (path, env reference,
+# placeholder) stopped matching — redacting an ordinary shell default. These are
+# the exact shapes that broke.
+@pytest.mark.parametrize(
+    "label, text",
+    [
+        (
+            "default path",
+            "F=${GLOVEBOX_MONITOR_SECRET_FILE:-/etc/glovebox/monitor-secret}",
+        ),
+        ("alternate path", "echo ${API_KEY_OVERRIDE:+/var/lib/glovebox/override-key}"),
+        ("default env ref", "api_key=${API_KEY:-$FALLBACK_API_KEY_FOR_LOCAL_DEV}"),
+        ("default placeholder", "token=${GH_TOKEN:-<paste-your-token-here-ok>}"),
+        # `:=` already consumed both bytes; pinned so the arm can't regress.
+        (
+            "assign-default path",
+            'X="${MONITOR_SECRET_PATH:=/etc/glovebox/monitor-secret}"',
+        ),
+    ],
+)
+def test_shell_parameter_expansion_defaults_not_redacted(label, text):
+    assert run_plain(text) is None, label
+
+
+# The precision fix must not cost recall: a credential hardcoded as the default
+# still redacts, and the operator itself is never swallowed into the placeholder.
+@pytest.mark.parametrize(
+    "label, text, expected",
+    [
+        (
+            "prefix-detected token default",
+            "TOKEN=${GH_TOKEN:-ghp_A1b2C3d4E5f6G7h8I9j0K1l2M3n4O5p6Q7r8}",
+            "TOKEN=${GH_TOKEN:-[" + "REDACTED: GitHub Token]}",
+        ),
+        (
+            "keyword-field opaque default",
+            "url=${API_KEY:-a1b2c3d4e5f6g7h8i9j0k1l2}",
+            "url=${API_KEY:-[" + "REDACTED]}",
+        ),
+    ],
+)
+def test_shell_parameter_expansion_secret_default_still_redacted(label, text, expected):
+    result = run_plain(text)
+    assert result is not None, label
+    assert result["text"] == expected, label
 
 
 @pytest.mark.parametrize(
