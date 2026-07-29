@@ -1,9 +1,4 @@
 {
-  // The Claude Code hook sources and their build script. Separate from
-  // tsconfig.json because tsconfig.build.json extends that one with
-  // `rootDir: src` to emit the published types — these files are not part of
-  // that emit, but they are the plugin's security-relevant code and get the
-  // same strict checkJs treatment.
   "extends": "./tsconfig.json",
   "include": ["claude-hooks/**/*.mjs", "plugin/scripts/**/*.mjs"]
 }
