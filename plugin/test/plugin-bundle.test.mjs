@@ -116,6 +116,31 @@ function stubBin(t, omit) {
 
 // ─── The committed artifact ──────────────────────────────────────────────────
 
+test("the shipped artifacts are tracked by git, not just present on disk", () => {
+  // The build writes these locally, so every other assertion in this file passes
+  // against an UNTRACKED file — a .gitignore rule that swallows them ships a
+  // plugin with no bundle at all, and only a fresh clone notices. Ask git what it
+  // tracks rather than the filesystem what exists.
+  const tracked = spawnSync(
+    "git",
+    ["ls-files", "--", "plugin/dist", "plugin/requirements.txt"],
+    {
+      cwd: ROOT,
+      encoding: "utf8",
+    },
+  )
+    .stdout.split("\n")
+    .filter(Boolean);
+  for (const required of [
+    "plugin/dist/hooks/plugin-hooks.bundle.mjs",
+    "plugin/requirements.txt",
+  ])
+    assert.ok(
+      tracked.includes(required),
+      `${required} is not tracked by git (an ignore rule is swallowing it); tracked: ${JSON.stringify(tracked)}`,
+    );
+});
+
 test("committed bundle matches a fresh build from the pinned engine", async () => {
   assert.equal(readFileSync(BUNDLE_PATH, "utf-8"), await bundlePluginHook());
 });
