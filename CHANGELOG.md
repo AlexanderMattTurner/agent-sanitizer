@@ -8,6 +8,15 @@ adhere to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+## [2.1.0] - 2026-07-29
+
+### Changed
+
+- test(ci): strip every pnpm from PATH and assert the absent-tool premise
+- fix(ci): seed lockfile regeneration from the base side and scrub credentials
+- style(ci): apply shfmt case-indent formatting to auto-resolve-lib
+- feat(ci): auto-regenerate conflicted lockfiles instead of refusing them
+
 ## [2.0.3] - 2026-07-28
 
 ### Changed
