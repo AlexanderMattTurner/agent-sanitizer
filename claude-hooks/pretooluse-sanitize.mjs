@@ -1,4 +1,3 @@
-#!/usr/bin/env node
 /**
  * PreToolUse content-protection orchestrator. Runs four layers in ONE process:
  *

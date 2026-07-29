@@ -1,4 +1,3 @@
-#!/usr/bin/env node
 /**
  * Build the Claude Code plugin's shipped artifact: one self-contained ESM bundle
  * with every package inlined, so an installed plugin needs no node_modules.

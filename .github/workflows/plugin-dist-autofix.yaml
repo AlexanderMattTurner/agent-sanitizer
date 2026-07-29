@@ -8,7 +8,10 @@ name: Plugin dist autofix
 # pushed commit; when this workflow cannot run, that test stays red and blocks
 # the merge — the artifact is never silently stale.
 on:
-  pull_request:
+  # not-required-check — this workflow pushes a regenerated artifact onto the PR
+  # branch; the reproducibility test in the Required node-tests check is what
+  # gates the merge, so a paths filter here strands nothing.
+  pull_request: # not-required-check
     paths:
       - package.json
       - pnpm-lock.yaml

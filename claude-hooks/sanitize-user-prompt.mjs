@@ -1,4 +1,3 @@
-#!/usr/bin/env node
 /**
  * UserPromptSubmit: gate user prompts on payload-capable invisible Unicode
  * and ANSI escapes. A prompt pasted from a tampered web page can carry tag

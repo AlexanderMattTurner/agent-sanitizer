@@ -1,4 +1,3 @@
-#!/usr/bin/env node
 /**
  * PostToolUse: sanitize tool output before the model sees it.
  *

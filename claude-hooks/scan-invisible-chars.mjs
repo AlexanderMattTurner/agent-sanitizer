@@ -1,4 +1,3 @@
-#!/usr/bin/env node
 /**
  * SessionStart: scan CLAUDE.md and .claude/ markdown for runs of invisible
  * Unicode that may encode hidden instructions. Pasted markdown can embed
