@@ -24,6 +24,33 @@ fail() {
   exit 1
 }
 
+# The merge is pushed with TEMPLATE_SYNC_TOKEN_ORG — the template's workflow-capable
+# PAT. It is the only sanctioned push token here for two reasons: (1) as a PAT it
+# RETRIGGERS the PR's checks so the resolved head is re-validated before it can
+# auto-merge (a default GITHUB_TOKEN push does not retrigger — GitHub's recursion
+# guard — which would strand stale green checks on a tree they never ran against);
+# and (2) when the merge commit changes files under .github/workflows/ (the base
+# branch moved a workflow underneath the PR, or a workflow itself conflicted),
+# GitHub refuses the push from any token lacking the workflow scope — which the
+# Actions GITHUB_TOKEN can never hold. TEMPLATE_SYNC_TOKEN_ORG carries that scope by
+# construction. If it is ABSENT, there is no token that can reliably push this
+# merge (a plain GITHUB_TOKEN would fail on any workflow-file change and would not
+# retrigger CI even otherwise), so fail closed: label the PR auto-resolve-blocked
+# (which discover excludes, so every base push doesn't re-run a paid resolve into
+# the same wall) and stop until a human provisions the secret and removes the
+# label. Called BEFORE the regeneration stages and the merge commit: regeneration
+# runs network-hitting package managers over PR-authored manifests, which is
+# wasted (and needless) work for a resolution that can never be pushed.
+# fail()'s `git merge --abort` cleanly unwinds the in-progress merge from there.
+require_push_token() {
+  [[ -n "${TEMPLATE_SYNC_TOKEN_ORG:-}" ]] && return 0
+  gh label create auto-resolve-blocked --color e4e669 --force \
+    --description "Auto-resolve cannot push to this PR; remove the label to let it retry" || echo "[auto-resolve] gh label create failed" >&2
+  gh pr edit "$PR" --add-label auto-resolve-blocked || echo "[auto-resolve] failed to add auto-resolve-blocked label to PR #${PR}" >&2
+  fail "no push token configured (TEMPLATE_SYNC_TOKEN_ORG is unset)" \
+    "the resolution was computed but cannot be pushed: no \`TEMPLATE_SYNC_TOKEN_ORG\` secret is set (a PAT with the \`workflow\` scope is required to push a merge that may touch workflow files and to retrigger CI). Set it, then remove the \`auto-resolve-blocked\` label to let auto-resolve retry — while it is present this PR is skipped."
+}
+
 # Defense in depth: the resolver may only have touched the files it was asked to
 # resolve, checked BEFORE staging. The resolver (Claude, restricted to Edit/Write
 # over the working tree) removed conflict markers but staged nothing, so the
@@ -55,7 +82,8 @@ fi
 # left marker-less and at "ours" (a `-merge`-attributed lockfile, a binary)
 # would silently commit a wrong "ours" resolution — and refuse any such path
 # smuggled into the list itself, since an edit-based "resolution" of it can
-# never be verified (prepare hands those off to a human before the LLM runs).
+# never be verified (prepare defers known lockfiles to DEFERRED_LOCK
+# regeneration and hands the rest to a human before the LLM runs).
 for f in "${allowed_list[@]}"; do
   if is_unmergeable "$f"; then
     fail "unmergeable (lockfile/binary) path '${f}' in CONFLICT_LIST" "\`${f}\` cannot be merged textually; resolve it by hand (e.g. re-run the lockfile tool after merging)."
@@ -64,6 +92,11 @@ done
 if [[ ${#allowed_list[@]} -gt 0 ]]; then
   git add -- "${allowed_list[@]}"
 fi
+
+# Fail closed BEFORE either regeneration stage: both re-run tools that hit the
+# network and execute PR-authored code, and a resolution that cannot be pushed
+# is wasted work either way. See the token rationale below the regen stages.
+require_push_token
 
 # Deferred regeneration: generator-owned outputs whose sources were among the
 # LLM-resolved conflicts. With the sources now staged clean, the regen pre-pass
@@ -81,6 +114,35 @@ if [[ ${#deferred_list[@]} -gt 0 ]] && has_resolve_generated; then
   fi
 fi
 
+# Deferred lockfile regeneration: prepare routed every conflicted lockfile with
+# a known, available owning tool here. Git leaves such a conflict marker-less at
+# "ours" (`-merge`-attributed) or marker-laden (plain text), and neither state
+# is hand-mergeable — the only correct resolution is re-running the owning tool
+# against the manifests, which are resolved by now (staged above when they
+# conflicted, merged clean otherwise). A regen failure (tool error, unreachable
+# registry) aborts loud and leaves the conflict for a human — never a guessed
+# lockfile.
+#
+# Seed from --theirs (the BASE side; we are on the PR head merging origin/BASE,
+# so --ours is the PR's own lockfile). Every one of these tools PRESERVES the
+# resolutions it finds on disk that still satisfy the manifests, and only adds
+# what is missing — so the seed decides which side's manifest-INVISIBLE lockfile
+# work survives. Base's is the side that must: a `pnpm dedupe`, a transitive
+# security bump, or a `uv lock --upgrade` on main changes no manifest, so
+# seeding from the PR's lockfile would regenerate it byte-identical and silently
+# revert main's work under an "auto-resolved" comment — the wrong-"ours"
+# resolution this script exists to prevent. Seeding from base loses only the
+# PR's own manifest-invisible churn, which its author sees missing on the next
+# CI run. A lockfile conflict with no base-side stage (base deleted it) fails
+# the checkout and escalates, rather than guessing.
+read -ra lock_list <<<"${DEFERRED_LOCK:-}"
+for f in "${lock_list[@]}"; do
+  if ! { git checkout --theirs -- "$f" && regen_lockfile "$f"; }; then
+    fail "lockfile '${f}' could not be regenerated" "regenerating \`${f}\` with its owning tool failed. Merge \`${BASE_REF}\` locally, re-run the tool by hand (e.g. \`pnpm install --lockfile-only\` / \`uv lock\`), and push the merge commit."
+  fi
+  git add -- "$f"
+done
+
 # Nothing conflicted may survive: every conflicted path was either staged above
 # (LLM resolution) or regenerated — anything still unmerged was never resolved.
 if [[ -n "$(git ls-files -u)" ]]; then
@@ -91,7 +153,7 @@ fi
 # so a whole-tree scan would abort on a legitimate line in any committed doc. The
 # resolver is bounded to CONFLICT_LIST (the out-of-set guard above), so a genuine
 # leftover marker can only live in the resolved set.
-scan_paths=("${allowed_list[@]}" "${deferred_list[@]}")
+scan_paths=("${allowed_list[@]}" "${deferred_list[@]}" "${lock_list[@]}")
 if [[ ${#scan_paths[@]} -gt 0 ]] && git grep -nE "$marker_re" -- "${scan_paths[@]}" >/dev/null 2>&1; then
   echo "Conflict markers still present:"
   git grep -nE "$marker_re" -- "${scan_paths[@]}" || echo "[auto-resolve] conflict-marker re-scan errored" >&2
@@ -107,30 +169,7 @@ if [[ ${#scan_paths[@]} -gt 0 ]] && git grep -nE "$marker_re" -- "${scan_paths[@
   fail "conflict markers still present in the tree" "the resolution left conflict markers behind."
 fi
 
-# The merge is pushed with TEMPLATE_SYNC_TOKEN_ORG — the template's workflow-capable
-# PAT. It is the only sanctioned push token here for two reasons: (1) as a PAT it
-# RETRIGGERS the PR's checks so the resolved head is re-validated before it can
-# auto-merge (a default GITHUB_TOKEN push does not retrigger — GitHub's recursion
-# guard — which would strand stale green checks on a tree they never ran against);
-# and (2) when the merge commit changes files under .github/workflows/ (the base
-# branch moved a workflow underneath the PR, or a workflow itself conflicted),
-# GitHub refuses the push from any token lacking the workflow scope — which the
-# Actions GITHUB_TOKEN can never hold. TEMPLATE_SYNC_TOKEN_ORG carries that scope by
-# construction. If it is ABSENT, there is no token that can reliably push this
-# merge (a plain GITHUB_TOKEN would fail on any workflow-file change and would not
-# retrigger CI even otherwise), so fail closed BEFORE building the merge commit:
-# label the PR auto-resolve-blocked (which discover excludes, so every base push
-# doesn't re-run a paid resolve into the same wall) and stop until a human
-# provisions the secret and removes the label. Checked before the commit so
-# fail()'s `git merge --abort` cleanly unwinds the in-progress merge.
-if [[ -z "${TEMPLATE_SYNC_TOKEN_ORG:-}" ]]; then
-  gh label create auto-resolve-blocked --color e4e669 --force \
-    --description "Auto-resolve cannot push to this PR; remove the label to let it retry" || echo "[auto-resolve] gh label create failed" >&2
-  gh pr edit "$PR" --add-label auto-resolve-blocked || echo "[auto-resolve] failed to add auto-resolve-blocked label to PR #${PR}" >&2
-  fail "no push token configured (TEMPLATE_SYNC_TOKEN_ORG is unset)" \
-    "the resolution was computed but cannot be pushed: no \`TEMPLATE_SYNC_TOKEN_ORG\` secret is set (a PAT with the \`workflow\` scope is required to push a merge that may touch workflow files and to retrigger CI). Set it, then remove the \`auto-resolve-blocked\` label to let auto-resolve retry — while it is present this PR is skipped."
-fi
-token="$TEMPLATE_SYNC_TOKEN_ORG"
+token="$TEMPLATE_SYNC_TOKEN_ORG" # presence enforced by require_push_token, above the regen stages
 
 # --no-verify: this commit COMPLETES a merge, so its index carries the whole
 # base<->head delta (every file the merge touched), not just the resolved
