@@ -44,6 +44,15 @@ if [ -n "$src_nonmjs" ]; then
   exit 1
 fi
 
+# The Claude Code plugin is distributed from the repo (a marketplace source), not
+# from the npm package: its committed bundle is ~1.8 MB of inlined dependencies,
+# which every consumer of the library would otherwise download. Assert the
+# `files` allowlist keeps it out.
+if grep -qE '(^|[[:space:]])plugin/' <<<"$pack_listing"; then
+  echo "ERROR: tarball ships the plugin tree (bundle + packaging); it is distributed from the repo, not npm" >&2
+  exit 1
+fi
+
 # 2. Build the real tarball.
 echo "::group::npm pack"
 tarball="$(npm pack 2>/dev/null | tail -n 1)"

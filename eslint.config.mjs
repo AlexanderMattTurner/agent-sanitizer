@@ -15,6 +15,9 @@ export default tseslint.config(
       ".hooks/**",
       "config/**",
       "tests/**",
+      // The committed plugin bundle is generated (~1.8 MB of inlined
+      // dependencies); the sources it is built from are linted instead.
+      "plugin/dist/**",
       // Stryker copies the project into a sandbox here during a mutation run and
       // mutates the sources in place; never lint that transient mutated copy.
       ".stryker-tmp/**",
@@ -26,9 +29,19 @@ export default tseslint.config(
   },
   js.configs.recommended,
   {
-    files: ["src/**/*.mjs", "test/**/*.mjs", "scripts/**/*.mjs"],
+    files: [
+      "src/**/*.mjs",
+      "test/**/*.mjs",
+      "scripts/**/*.mjs",
+      "claude-hooks/**/*.mjs",
+      "plugin/scripts/**/*.mjs",
+      "plugin/test/**/*.mjs",
+    ],
     languageOptions: {
-      ecmaVersion: 2023,
+      // "latest" rather than a pinned year: the hook config modules are loaded
+      // with import attributes (`with { type: "json" }`), which no fixed
+      // ecmaVersion below 2025 parses.
+      ecmaVersion: "latest",
       sourceType: "module",
       globals: {
         ...globals.node,

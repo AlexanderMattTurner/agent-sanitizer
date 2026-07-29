@@ -1,0 +1,49 @@
+{
+  $schema: "https://docs.renovatebot.com/renovate-schema.json",
+  extends: ["config:recommended"],
+  // Dependabot stays enabled for SECURITY updates only (see .github/dependabot.yml).
+  // Renovate's job here is narrower: keep the plugin's pinned engine and its
+  // build/runtime peers current, since the committed bundle is only rebuilt when
+  // one of these moves.
+  enabledManagers: ["npm", "pip_requirements"],
+  schedule: ["* 0-6 * * *"],
+  rangeStrategy: "pin",
+  // Default off, then opt each watched pin in below — a blanket enable would
+  // open PRs for the whole dev toolchain, none of which affects the artifact.
+  packageRules: [
+    {
+      matchPackageNames: ["*"],
+      enabled: false,
+    },
+    {
+      // The npm alias and the PyPI requirement are two halves of ONE pin: the
+      // bundle is built from the npm release and the redactor daemon is
+      // installed from the PyPI release of the same version. Grouping them keeps
+      // both in a single PR, so the test asserting requirements.txt matches the
+      // alias never goes red on a half-applied bump.
+      groupName: "sanitizer-engine",
+      matchPackageNames: ["agent-sanitizer", "sanitizer-engine"],
+      enabled: true,
+      automerge: true,
+    },
+    {
+      // Inlined into the bundle, so a bump changes the committed artifact.
+      groupName: "plugin runtime peers",
+      matchPackageNames: ["agent-control-plane-core", "namespace-guard"],
+      enabled: true,
+      automerge: true,
+    },
+    {
+      // The bundler itself: its output bytes are part of the reproducibility
+      // contract, so a version bump must go through the same regenerate-and-verify
+      // path as an engine bump.
+      matchPackageNames: ["esbuild"],
+      enabled: true,
+      automerge: true,
+    },
+  ],
+  // Automerge only once the required checks are green — the plugin-dist-autofix
+  // workflow pushes the regenerated bundle onto the bump PR first, and the
+  // reproducibility test is what proves it landed.
+  platformAutomerge: true,
+}
