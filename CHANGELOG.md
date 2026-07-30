@@ -8,6 +8,14 @@ adhere to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+## [2.6.0] - 2026-07-30
+
+### Changed
+
+- fix(hooks): repair the merge-dropped comma and rename the guard-pair map
+- fix(ci): make the gate script executable and stop tracking gh CLI state
+- feat(ci): gate merges on unresolved review findings instead of a minted approval
+
 ## [2.5.0] - 2026-07-30
 
 ### Changed
