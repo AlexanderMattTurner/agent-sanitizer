@@ -1081,6 +1081,33 @@ describe("rehydrate: hidden-span safety", () => {
     assert.equal(out.updatedInput, undefined);
   });
 
+  it("R1: the deny reports the disk byte range of both the match and the secret", async () => {
+    // The refusal is conservative, so the caller needs the two ranges to tell a
+    // real overlap from a redaction whose recorded span is too wide.
+    const content = `PASSWORD=${SECRET_A}\nDEBUG=1\n`;
+    const out = await rehydrateRedacted(
+      "Edit",
+      {
+        file_path: "/f",
+        old_string: FRAGMENT_ONLY_IN_SECRET,
+        new_string: "Z",
+      },
+      liveIo(content, [{ value: SECRET_A, placeholder: PH }], reRedact),
+    );
+    const matchStart = content.indexOf(FRAGMENT_ONLY_IN_SECRET);
+    const secretStart = content.indexOf(SECRET_A);
+    assert.match(
+      out.deny,
+      new RegExp(
+        `matches bytes ${matchStart}-${matchStart + FRAGMENT_ONLY_IN_SECRET.length},`,
+      ),
+    );
+    assert.match(
+      out.deny,
+      new RegExp(`at bytes ${secretStart}-${secretStart + SECRET_A.length} `),
+    );
+  });
+
   it("R1: denies a hint-free replace_all fragment that would splice inside the secret", async () => {
     // "2xA" is hint-free, invisible in the view, but on disk sits inside the
     // secret. replace_all would splice it there; deny (viewOcc===0 branch).

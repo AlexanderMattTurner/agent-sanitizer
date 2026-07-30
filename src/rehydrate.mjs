@@ -183,21 +183,31 @@ async function rehydrateEdit(
       // (the model supplied the secret's real bytes itself, e.g. a rotation)
       // extracts nothing and is left to the literal resolver below.
       const diskSpans = pairDiskSpans(view, deletions);
-      const intrudes = occurrences(content, oldS).some((matchStart) => {
+      let intrusion = null;
+      for (const matchStart of occurrences(content, oldS)) {
         const matchEnd = matchStart + oldS.length;
-        return diskSpans.some(
-          (secret) =>
-            matchStart < secret.end &&
-            secret.start < matchEnd &&
-            !(matchStart <= secret.start && secret.end <= matchEnd),
+        const secret = diskSpans.find(
+          (span) =>
+            matchStart < span.end &&
+            span.start < matchEnd &&
+            !(matchStart <= span.start && span.end <= matchEnd),
         );
-      });
-      if (intrudes)
+        if (secret) {
+          intrusion = { matchStart, matchEnd, secret };
+          break;
+        }
+      }
+      // Report both byte ranges. The refusal is conservative — it fires on an
+      // overlap with the redacted span the caller cannot see — so the caller
+      // needs the ranges to tell a true overlap from a mis-sized redaction.
+      if (intrusion)
         return {
           deny:
-            `old_string matches bytes inside a ${hint}…] redacted secret in ` +
-            `${ti.file_path} that are hidden from your view; edit only text you can ` +
-            `see (include each placeholder whole), or ask the user to make this change`,
+            `old_string does not appear in the sanitized view of ${ti.file_path}; on disk ` +
+            `it matches bytes ${intrusion.matchStart}-${intrusion.matchEnd}, which fall ` +
+            `inside a ${hint}…] redacted secret at bytes ${intrusion.secret.start}-` +
+            `${intrusion.secret.end} that are hidden from your view; edit only text you ` +
+            `can see (include each placeholder whole), or ask the user to make this change`,
         };
       const literalRes = rehydrateNewString(
         oldS,

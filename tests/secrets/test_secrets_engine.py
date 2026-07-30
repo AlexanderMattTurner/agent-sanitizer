@@ -288,6 +288,71 @@ def test_redact_pem_public_labels_survive_verbatim(label):
     assert found == [], label
 
 
+def test_redact_pem_lone_header_leaves_following_text_visible():
+    """A bare "-----BEGIN PRIVATE KEY-----" is not a truncated key whose body is
+    the rest of the document: everything after it stays visible."""
+    found: list[str] = []
+    tail = '\n(workspace / "deploy.pem").write_text(header)\nassert ok\n'
+    text = '("-----BEGIN PRIVATE KEY-----\\n")' + tail
+    assert E._redact_pem_blocks(text, found) == '("[REDACTED: Private Key]\\n")' + tail
+    assert found == ["Private Key"]
+
+
+def test_redact_pem_lone_header_keeps_its_line_break():
+    found: list[str] = []
+    text = "-----BEGIN PRIVATE KEY-----\nprint(1)\n"
+    assert E._redact_pem_blocks(text, found) == "[REDACTED: Private Key]\nprint(1)\n"
+
+
+def test_redact_pem_unterminated_body_still_collapses():
+    """Truncated output has no END line; its base64 body must not survive."""
+    found: list[str] = []
+    text = (
+        "-----BEGIN PRIVATE KEY-----\n"
+        "Proc-Type: 4,ENCRYPTED\n"
+        "\n"
+        "MIIEvgIBADANBgkqhkiG9w0BAQEFAASCBKgwggSkSECRETBODYMATERIAL12345\n"
+        "Q29udGludWVkIGtleQ=="
+    )
+    assert E._redact_pem_blocks(text, found) == "[REDACTED: Private Key]"
+    assert found == ["Private Key"]
+
+
+def test_redact_pem_unterminated_body_survives_an_inner_env_redaction():
+    """Env-bound redaction runs first; its placeholder inside the base64 must not
+    end the unterminated block and leave the rest of the body visible."""
+    value = "venicekeyvenicekeyvenicekeyX"
+    text = f"-----BEGIN PRIVATE KEY-----\nZm9vYmFy{value}cXV4\nUExBSU5UQUlM\n"
+    result = run_plain(text, cfg(provider_vars={"VENICE_INFERENCE_KEY": value}))
+    assert result["text"] == "[REDACTED: Private Key]\n"
+
+
+def test_redact_pem_unterminated_block_does_not_reach_a_later_end_line():
+    found: list[str] = []
+    text = (
+        "-----BEGIN PRIVATE KEY-----\n"
+        "keep me\n"
+        "-----BEGIN RSA PRIVATE KEY-----\nQUJDREVG\n-----END RSA PRIVATE KEY-----"
+    )
+    assert (
+        E._redact_pem_blocks(text, found)
+        == "[REDACTED: Private Key]\nkeep me\n[REDACTED: Private Key]"
+    )
+    assert found == ["Private Key", "Private Key"]
+
+
+def test_redact_pem_single_line_block_collapses_whole_body():
+    """A PEM inside a JSON string keeps its body on one line as \\n escapes; the
+    terminated-block branch still swallows it."""
+    found: list[str] = []
+    body = "MIIEvgIBADANBgkqhkiG9w0BAQEFAASCBKgwggSkSECRETBODYMATERIAL12345"
+    text = (
+        f'{{"key": "-----BEGIN PRIVATE KEY-----\\n{body}\\n-----END PRIVATE KEY-----"}}'
+    )
+    assert E._redact_pem_blocks(text, found) == '{"key": "[REDACTED: Private Key]"}'
+    assert body not in E._redact_pem_blocks(text, [])
+
+
 def test_redact_pem_label_length_is_bounded():
     found: list[str] = []
     runaway = "-----BEGIN " + "A" * 500 + "PRIVATE KEY" + "A" * 500 + "-----\nx\n"
