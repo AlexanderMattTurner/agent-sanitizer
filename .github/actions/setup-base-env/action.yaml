@@ -21,10 +21,6 @@ inputs:
 runs:
   using: "composite"
   steps:
-    # pnpm-lock.yaml is intentionally gitignored here, so setup-node's built-in
-    # `cache: pnpm` (which keys on the committed lockfile) can't engage and hard-
-    # errors "Dependencies lock file is not found". Omit dependency caching rather
-    # than fail the run or restore a store that never gets written back.
     - name: Install pnpm
       if: hashFiles('package.json') != ''
       uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
@@ -35,7 +31,12 @@ runs:
       with:
         node-version: ${{ inputs.node-version }}
         registry-url: ${{ inputs.registry-url }}
+        cache: pnpm
 
+    # Frozen by default in CI: the committed plugin bundle is byte-compared
+    # against a fresh esbuild of the same dependency graph, so a resolution that
+    # drifts from the lockfile would fail that comparison on a diff that changed
+    # nothing.
     - name: Install Node Dependencies
       if: hashFiles('package.json') != ''
       run: pnpm install
