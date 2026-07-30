@@ -8,6 +8,14 @@ adhere to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+## [2.2.1] - 2026-07-30
+
+### Changed
+
+- docs(skills): carry the current-head rule into the update-after-commits skeleton
+- docs(skills): trim the current-head rule to substitutions, not additions
+- docs(skills): require PR bodies to state the current head, never their own history
+
 ## [2.2.0] - 2026-07-30
 
 ### Changed
