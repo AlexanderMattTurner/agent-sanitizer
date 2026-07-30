@@ -162,6 +162,27 @@ await rehydrateRedacted("Edit", toolInput, {
 }); // { updatedInput, context } | { deny } | null — a deny never exposes a secret
 ```
 
+The credential-noun vocabulary — the words that make an identifier name a secret —
+is published as data so a consumer with its own matcher derives it from one list
+instead of forking one. Each noun carries the `uses` it is valid for: `env-name`
+for a matcher that inspects a variable NAME only, `field-value` for one that
+redacts whatever follows `noun = ` (a broad noun there mangles ordinary text, so
+`key` and `pat` are name-only).
+
+```js
+import { createRequire } from "node:module";
+const vocabulary = createRequire(import.meta.url)(
+  "agent-sanitizer/credential-names",
+);
+vocabulary.nouns; // [{ parts: ["api", "key"], uses: ["env-name", "field-value"] }, …]
+```
+
+```python
+from agent_sanitizer.secrets import credential_name_segments
+
+credential_name_segments()  # ("API_KEY", "APIKEY", "ACCESS_KEY", …) — rendered for a NAME matcher
+```
+
 ## Limits
 
 The CLI (and the worker that backs the Python client) rejects any single request

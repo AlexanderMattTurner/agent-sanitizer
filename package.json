@@ -134,10 +134,12 @@
     "./rehydrate": {
       "types": "./types/rehydrate.d.mts",
       "default": "./src/rehydrate.mjs"
-    }
+    },
+    "./credential-names": "./python/agent_sanitizer/secrets/data/credential-names.json"
   },
   "files": [
     "src/*.mjs",
+    "python/agent_sanitizer/secrets/data/credential-names.json",
     "bin/sanitize-cli.mjs",
     "types",
     "LICENSE",

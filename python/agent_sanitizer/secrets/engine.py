@@ -31,6 +31,7 @@ from detect_secrets.settings import transient_settings
 
 from . import detectors
 from .config import RedactorConfig
+from .credential_names import credential_field_name_patterns
 from .invisible import invisible_run_pattern, strip_invisible_with_map
 
 PLUGINS = [
@@ -192,20 +193,12 @@ def _redact_env_bound(
 # detect-secrets' KeywordDetector knows only a fixed set of field names, omitting
 # the token family (token/access_token/authorization/bearer); this regex carries
 # them for both unquoted (`TOKEN=abc123…`) and quoted (`"token": "abc123…"`) forms.
-_FIELD_NAMES = "|".join(
-    [
-        r"api[_-]?key",
-        r"secret(?:[_-]?key)?",
-        r"client[_-]?secret",
-        r"access[_-]?(?:key|token)",
-        r"private[_-]?key",
-        r"auth(?:orization|[_-]?(?:key|token))",
-        r"password",
-        r"passwd",
-        r"bearer",
-        r"token",
-    ]
-)
+# The nouns come from the published vocabulary (data/credential-names.json), which
+# also feeds env-var-NAME matchers in other packages, so a newly recognized noun
+# reaches every consumer at once. Only nouns the vocabulary marks `field-value`
+# appear here: a noun broad enough for a name scrub (`key`, `pat`) would redact
+# whatever follows `key = ` throughout ordinary text.
+_FIELD_NAMES = "|".join(credential_field_name_patterns())
 FIELD_VALUE_RE = re.compile(
     # An optional quote after the field name absorbs a quoted KEY (`"token": …`),
     # and the value's own optional opening quote is captured so it can wrap

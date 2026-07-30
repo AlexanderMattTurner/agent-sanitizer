@@ -35,6 +35,15 @@ function exportedFiles() {
   const types = [];
   const runtime = [];
   for (const target of Object.values(pkg.exports)) {
+    // A subpath may name its file directly instead of through a conditions
+    // object (`"./credential-names": "./…/credential-names.json"`). Iterating
+    // such a string with Object.entries yields character indices, none of which
+    // is a file condition — so the subpath would be skipped and its file left
+    // unguarded, which is the fail-open this branch closes.
+    if (typeof target === "string") {
+      runtime.push(target.replace(/^\.\//, ""));
+      continue;
+    }
     for (const [condition, value] of Object.entries(target)) {
       if (!FILE_CONDITIONS.includes(condition)) continue;
       const file = value.replace(/^\.\//, "");
@@ -52,7 +61,13 @@ function packedFiles() {
     ["pack", "--dry-run", "--json", "--ignore-scripts=false"],
     { cwd: repoRoot, encoding: "utf8" },
   );
-  return new Set(JSON.parse(out)[0].files.map((f) => f.path));
+  // `prepack` runs `pnpm build:types`, and pnpm's deps check writes its
+  // "Progress: resolved …" line to STDOUT — so npm's JSON is not necessarily the
+  // whole stream. Slice from the array start, or the test reds on a first
+  // invocation for a reason that has nothing to do with the packaging contract.
+  const start = out.indexOf("[");
+  assert.notEqual(start, -1, `npm pack emitted no JSON array:\n${out}`);
+  return new Set(JSON.parse(out.slice(start))[0].files.map((f) => f.path));
 }
 
 describe("packaging contract: exports map vs. published tarball", () => {

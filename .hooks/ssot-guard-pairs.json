@@ -8,6 +8,9 @@
       "test/invisible-charset.test.mjs",
       "test/instructions.test.mjs"
     ],
-    "src/instructions.mjs": ["test/instructions.test.mjs"]
+    "src/instructions.mjs": ["test/instructions.test.mjs"],
+    "python/agent_sanitizer/secrets/data/credential-names.json": [
+      "test/credential-names-export.test.mjs"
+    ]
   }
 }

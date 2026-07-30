@@ -14,6 +14,7 @@ import pytest
 import agent_sanitizer.secrets.engine as E
 from agent_sanitizer.secrets import (
     RedactorConfig,
+    credential_field_name_patterns,
     detected_secret_values,
     mask_secret_lines,
     redact,
@@ -1700,27 +1701,19 @@ def _top_level_alternatives(pattern: str) -> list[str]:
     return alts
 
 
-_FIELD_NAME_REPRESENTATIVES = [
-    "api_key",
-    "secret",
-    "client_secret",
-    "access_token",
-    "private_key",
-    "authorization",
-    "password",
-    "passwd",
-    "bearer",
-    "token",
-]
-
-
 def test_field_names_every_member_redacts():
+    """Every alternative in `_FIELD_NAMES` redacts a following value.
+
+    The alternation is built from the published vocabulary
+    (`credential_field_name_patterns()`), so its members are enumerated from that
+    accessor and a noun added there is covered with no edit here. Each member's
+    representative instance is derived by picking `_` for the fragment's optional
+    separator, and the fullmatch assertion is what proves the derivation still
+    names an instance of the fragment it came from."""
     alts = _top_level_alternatives(E._FIELD_NAMES)
-    assert len(alts) == len(_FIELD_NAME_REPRESENTATIVES), {
-        "members": alts,
-        "representatives": _FIELD_NAME_REPRESENTATIVES,
-    }
-    for alt, field in zip(alts, _FIELD_NAME_REPRESENTATIVES, strict=True):
+    assert alts == list(credential_field_name_patterns())
+    for alt in alts:
+        field = alt.replace("[_-]?", "_")
         assert re.fullmatch(alt, field), f"{field!r} is not an instance of {alt!r}"
         out, found = redact(f"{field} = {_BRACKET_NEEDLE}")
         assert _BRACKET_NEEDLE not in out, f"{field} value survived redaction"

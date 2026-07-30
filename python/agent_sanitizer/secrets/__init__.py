@@ -16,9 +16,21 @@ Public entry points:
 * :func:`strip_invisible` — delete payload-capable invisible chars.
 * :func:`configure_plugins` / :func:`redact_configured` — configure once, redact
   many (the daemon's hot path).
+* :func:`credential_name_segments` / :func:`credential_field_name_patterns` /
+  :func:`non_secret_name_segments` — the published credential-noun vocabulary,
+  rendered for a name matcher or a ``field = value`` matcher. Exported so a
+  consumer with its own matcher (an env-var scrubber, a hook pre-gate) derives it
+  from this list instead of forking one; the same source is published to
+  JavaScript as the npm subpath export ``agent-sanitizer/credential-names``.
 """
 
 from .config import DEFAULT_MIN_SECRET_LEN, RedactorConfig
+from .credential_names import (
+    CREDENTIAL_NAMES_FILE,
+    credential_field_name_patterns,
+    credential_name_segments,
+    non_secret_name_segments,
+)
 from .engine import (
     configure_plugins,
     detected_secret_values,
@@ -37,6 +49,10 @@ from .invisible import (
 __all__ = [
     "RedactorConfig",
     "DEFAULT_MIN_SECRET_LEN",
+    "CREDENTIAL_NAMES_FILE",
+    "credential_name_segments",
+    "credential_field_name_patterns",
+    "non_secret_name_segments",
     "default_charset",
     "redact",
     "redact_map",
