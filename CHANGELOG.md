@@ -8,6 +8,13 @@ adhere to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+## [2.4.0] - 2026-07-30
+
+### Changed
+
+- fix(ci): drop the claude-hooks coverage floor, which cannot fail for its stated reason
+- feat: publish the Claude Code hooks as agent-sanitizer/claude-hooks
+
 ## [2.3.0] - 2026-07-30
 
 ### Changed
