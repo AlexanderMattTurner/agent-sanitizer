@@ -15,7 +15,7 @@
 #          commit that carries the tag and NOT again on later untagged pushes
 #          (re-tag to run again).
 #       2. The reviewer has NEVER reviewed this PR — the first whole-diff pass,
-#          on HAIKU, for a PR whose earlier events all skipped. A push is never a
+#          on the cheap tier, for a PR whose earlier events all skipped. A push is never a
 #          RE-read: the reviewer reads a PR once, and later pushes make progress
 #          by the thread resolver closing findings out, which is what the
 #          review-findings gate reads. This automatic pass NEVER spends Opus —
@@ -34,8 +34,8 @@ KEYWORD="[opus-review]"
 REVIEW_LABEL="needs-auto-review"
 # The reviewer posts with GITHUB_TOKEN, so its reviews are authored by this bot.
 REVIEWER="github-actions[bot]"
-OPUS_MODEL="claude-opus-4-8"
-HAIKU_MODEL="claude-haiku-4-5"
+OPUS_MODEL="claude-opus-5"
+CHEAP_MODEL="claude-sonnet-5"
 
 emit() {
   # $1 run, $2 reason, $3 model (defaults to Opus — the thorough first-look model)
@@ -102,7 +102,11 @@ fi
 # that page's reviews array), so the filter must flatten BOTH levels (`.[][]`) to
 # walk every review across every page. A single `.[]` iterates PAGES, so
 # `.user.login`/`.state` index a page ARRAY — jq errors and the recheck silently
-# misbehaves. `--slurp` keeps the whole result in one document so `--jq` runs ONCE.
+# misbehaves. The filter runs in a SEPARATE `jq`, not gh's `--jq`: gh rejects
+# `--slurp` together with `--jq`/`--template` outright ("the `--slurp` option is
+# not supported with `--jq`"), and it exits 1 before issuing the request, so the
+# fail-closed branch below would swallow that as a transient API error and this
+# trigger would never fire.
 #
 # The exit STATUS is captured separately from the state, because the two empty
 # results mean opposite things: a successful query returning "" means nobody ever
@@ -110,12 +114,15 @@ fi
 # yields "" and must not be read that way — folding them together would review on
 # every push forever whenever the API is flaky or the filter is malformed.
 reviews_rc=0
-state="$(gh api "repos/$REPO/pulls/${PR:-}/reviews" --paginate --slurp \
-  --jq "[.[][] | select(.user.login == \"$REVIEWER\") | select((.body // \"\") != \"\")] | last | .state // empty" 2>/dev/null)" || reviews_rc=$?
+state=""
+pages="$(gh api "repos/$REPO/pulls/${PR:-}/reviews" --paginate --slurp 2>/dev/null)" || reviews_rc=$?
+if [[ "$reviews_rc" -eq 0 ]]; then
+  state="$(jq -r "[.[][] | select(.user.login == \"$REVIEWER\") | select((.body // \"\") != \"\")] | last | .state // empty" <<<"$pages")" || reviews_rc=$?
+fi
 if [[ "$reviews_rc" -ne 0 ]]; then
   emit false "could not read $REPO#${PR:-} reviews (rc=$reviews_rc) — not reviewing rather than guessing"
 elif [[ -z "$state" ]]; then
-  emit true "$REVIEWER has never reviewed this PR — running the first pass this push" "$HAIKU_MODEL"
+  emit true "$REVIEWER has never reviewed this PR — running the first pass this push" "$CHEAP_MODEL"
 else
   emit false "$REVIEWER already reviewed this PR (latest: $state) — a push is not re-read; put $KEYWORD in a commit title for a full re-read"
 fi

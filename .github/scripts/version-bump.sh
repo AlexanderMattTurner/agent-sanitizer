@@ -316,7 +316,7 @@ Use the changelog_draft tool to report the result."
     -d "$(jq -n \
       --arg prompt "$PROMPT" \
       '{
-        model: "claude-haiku-4-5-20251001",
+        model: "claude-sonnet-5",
         max_tokens: 2048,
         tool_choice: {type: "tool", name: "changelog_draft"},
         tools: [{
