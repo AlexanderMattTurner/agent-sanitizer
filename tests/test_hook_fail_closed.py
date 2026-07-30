@@ -204,7 +204,7 @@ def test_pre_commit_warns_when_lint_staged_missing(tmp_path: Path) -> None:
 
 # --------------------------------------------------------------------------- #
 # pre-commit: staged SSOT source runs its paired guard test and blocks the
-# commit when the guard fails (map: .hooks/ssot-guard-pairs.json).
+# commit when the guard fails (map: .hooks/guard-pairs.json).
 # --------------------------------------------------------------------------- #
 
 
@@ -217,8 +217,8 @@ def _sandbox_ssot_repo(tmp_path: Path, guard_body: str) -> Path:
     fake.chmod(0o755)
     hooks = repo / ".hooks"
     hooks.mkdir()
-    shutil.copy(REPO_ROOT / ".hooks" / "run-ssot-guards.mjs", hooks)
-    (hooks / "ssot-guard-pairs.json").write_text(
+    shutil.copy(REPO_ROOT / ".hooks" / "run-guard-pairs.mjs", hooks)
+    (hooks / "guard-pairs.json").write_text(
         '{"pairs": {"data.json": ["guard.test.mjs"]}}'
     )
     (repo / "guard.test.mjs").write_text(guard_body)

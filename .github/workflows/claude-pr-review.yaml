@@ -128,6 +128,7 @@ jobs:
     permissions:
       contents: read # checkout the trusted base branch
       pull-requests: write # post the review
+      checks: write # re-post the "Review findings resolved" verdict on the head
     steps:
       - name: Checkout base (trusted) branch
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
@@ -244,26 +245,49 @@ jobs:
           EXECUTION_FILE: ${{ steps.claude_review.outputs.execution_file }}
         run: bash .github/scripts/post-pr-review.sh
 
+      # A review posted with GITHUB_TOKEN fires NO pull_request_review webhook, so
+      # review-findings-gate.yaml never wakes on the review this job just filed —
+      # the head would keep its pre-review verdict (green, from before any finding
+      # existed) until the next push. Re-deriving the predicate here is what turns
+      # the gate red for the findings above.
+      #
+      # No `if:` — the predicate is stateless, so it is correct on the oversized
+      # path too (no review posted -> the gate stays red on its not-reviewed leg,
+      # which is exactly the human-read-needed outcome that path wants).
+      - name: Re-evaluate the review-findings gate on the head
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          PR: ${{ github.event.pull_request.number }}
+          REPORT_SHA: ${{ github.event.pull_request.head.sha }}
+        run: bash .github/scripts/review-findings-gate.sh
+
   # Auto-approve the PRs the reviewer deliberately SKIPS (see `decide` above:
   # low-risk chore/style by title, machine-cut `release:` PRs, and
-  # bot-authored PRs like Dependabot). Under a review-required ruleset the Claude
-  # review IS the approval for the PRs it reads (looks_good -> APPROVE), so a class
-  # it never reads would otherwise be stranded with no approving review and never
-  # auto-merge. This posts that approval so the ruleset can let them through, and
-  # its body points a human at the `needs-auto-review` label to force a real Opus
-  # read when one is wanted. Draft PRs are excluded — they
-  # can't merge anyway and get reviewed on `ready_for_review`. Fires only on the
-  # first-look events (opened/ready_for_review), never on `synchronize`: it relies
-  # on the ruleset NOT dismissing approvals on push (the same assumption the
-  # reviewer makes by not re-reviewing every push).
+  # bot-authored PRs like Dependabot), and clear the review-findings gate for
+  # them. A skipped PR gets no reviewer review at all, so the gate's
+  # reviewed-at-all leg is red on it and would block the class forever — the
+  # deliberate skip decision is what licenses the merge, and the check run posted
+  # below is that decision made legible on the PR. Its body points a human at the
+  # `needs-auto-review` label to force a real Opus read when one is wanted. Draft
+  # PRs are excluded — they can't merge anyway and get reviewed on
+  # `ready_for_review`.
+  #
+  # The job runs on `synchronize` TOO, but its two steps have different reasons to
+  # fire, so each carries its own condition. The approval is a first-look act and
+  # persists across pushes (the ruleset does not dismiss on push), so it stays on
+  # opened/ready_for_review. The gate check run is per-SHA and does NOT carry
+  # over: every new head starts with no clearing check, and review-findings-gate
+  # posts a RED verdict there (nothing reviewed this PR), so without a push-time
+  # re-clear a skipped PR would merge on its first head and be blocked forever
+  # after its second.
   #
   # Title/author come from the event payload (set by GitHub, unspoofable by the
-  # triggering actor). This posts a review only; it needs no checkout, runs no PR
-  # code, and holds pull-requests:write and nothing else.
+  # triggering actor). This posts a review and a check run, runs no PR code, and
+  # holds pull-requests:write + checks:write and nothing else.
   auto-approve-skipped:
     name: Auto-approve low-risk and bot PRs the reviewer skips
     if: >-
-      (github.event.action == 'opened' || github.event.action == 'ready_for_review') &&
       github.event.pull_request.draft == false &&
       (
         github.event.pull_request.user.type == 'Bot' ||
@@ -278,7 +302,8 @@ jobs:
     timeout-minutes: 5
     permissions:
       contents: read # sparse-checkout the trusted approval script
-      pull-requests: write # submit an approving review; no other scope
+      pull-requests: write # submit an approving review
+      checks: write # clear the review-findings gate for the skipped class
     steps:
       - name: Checkout base (trusted) approval script
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
@@ -290,8 +315,35 @@ jobs:
           sparse-checkout: .github/scripts/auto-approve-skipped-pr.sh
           sparse-checkout-cone-mode: false
       - name: Approve so a review-required ruleset doesn't strand a skipped PR
+        if: >-
+          github.event.action == 'opened' ||
+          github.event.action == 'ready_for_review'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GH_REPO: ${{ github.repository }}
           PR: ${{ github.event.pull_request.number }}
         run: bash .github/scripts/auto-approve-skipped-pr.sh
+
+      # Posted directly, NOT through review-findings-gate.sh: the gate's predicate
+      # would (correctly) say red here, because nothing reviewed this PR. This
+      # class merges on the strength of the skip decision instead, and the check
+      # run's summary says exactly that — so the PR's own check list records why
+      # it was allowed through rather than hiding it in a workflow condition.
+      #
+      # The name must stay byte-identical to the CHECK_NAME in
+      # review-findings-gate.sh and the merge_gate job's `name:`: one required
+      # context, and a rename here would leave this class blocked again.
+      # No `if:` — every head of a skipped PR needs its own clearing check run.
+      - name: Clear the review-findings gate for the skipped class
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          gh api --method POST "repos/${GH_REPO}/check-runs" \
+            -f "name=Review findings resolved" \
+            -f "head_sha=${HEAD_SHA}" \
+            -f "status=completed" \
+            -f "conclusion=success" \
+            -f "output[title]=green: review deliberately skipped" \
+            -f "output[summary]=This PR is in the class the reviewer skips (bot-authored, or a chore/style/release title), so no automated review was run and there are no findings to resolve. Add the needs-auto-review label to force a full review." >/dev/null
