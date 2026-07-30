@@ -67961,3 +67961,5 @@ if (isMain(import.meta.url)) {
 export {
   main2 as main
 };
+
+// KILL TEST 2: dist-only corruption; autofix does not watch plugin/dist.
