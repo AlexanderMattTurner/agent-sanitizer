@@ -102,7 +102,11 @@ fi
 # that page's reviews array), so the filter must flatten BOTH levels (`.[][]`) to
 # walk every review across every page. A single `.[]` iterates PAGES, so
 # `.user.login`/`.state` index a page ARRAY — jq errors and the recheck silently
-# misbehaves. `--slurp` keeps the whole result in one document so `--jq` runs ONCE.
+# misbehaves. The filter runs in a SEPARATE `jq`, not gh's `--jq`: gh rejects
+# `--slurp` together with `--jq`/`--template` outright ("the `--slurp` option is
+# not supported with `--jq`"), and it exits 1 before issuing the request, so the
+# fail-closed branch below would swallow that as a transient API error and this
+# trigger would never fire.
 #
 # The exit STATUS is captured separately from the state, because the two empty
 # results mean opposite things: a successful query returning "" means nobody ever
@@ -110,8 +114,11 @@ fi
 # yields "" and must not be read that way — folding them together would review on
 # every push forever whenever the API is flaky or the filter is malformed.
 reviews_rc=0
-state="$(gh api "repos/$REPO/pulls/${PR:-}/reviews" --paginate --slurp \
-  --jq "[.[][] | select(.user.login == \"$REVIEWER\") | select((.body // \"\") != \"\")] | last | .state // empty" 2>/dev/null)" || reviews_rc=$?
+state=""
+pages="$(gh api "repos/$REPO/pulls/${PR:-}/reviews" --paginate --slurp 2>/dev/null)" || reviews_rc=$?
+if [[ "$reviews_rc" -eq 0 ]]; then
+  state="$(jq -r "[.[][] | select(.user.login == \"$REVIEWER\") | select((.body // \"\") != \"\")] | last | .state // empty" <<<"$pages")" || reviews_rc=$?
+fi
 if [[ "$reviews_rc" -ne 0 ]]; then
   emit false "could not read $REPO#${PR:-} reviews (rc=$reviews_rc) — not reviewing rather than guessing"
 elif [[ -z "$state" ]]; then
