@@ -8,6 +8,12 @@ adhere to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+## [2.7.2] - 2026-07-30
+
+### Changed
+
+- fix(release): tag the published SHA so a raced merge still releases
+
 ## [2.7.1] - 2026-07-30
 
 ### Changed
