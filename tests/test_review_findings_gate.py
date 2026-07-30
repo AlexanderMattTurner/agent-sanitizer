@@ -672,10 +672,21 @@ def test_the_skipped_class_is_cleared_under_the_same_check_name() -> None:
     assert "opened" not in (job["if"] or "")
 
 
-def test_the_gate_script_and_the_required_job_agree_on_the_check_name() -> None:
-    # The gate posts its PR-head check runs under CHECK_NAME; the ruleset's
-    # required context comes from the merge_gate job's `name:`. They are two
-    # reporting surfaces for ONE context, so a drift between them leaves every
-    # PR head reporting a context nothing requires — and the required one never
-    # reported at all.
+def test_drift_guard_the_check_name_is_duplicated_in_the_gate_script() -> None:
+    """DRIFT GUARD — this asserts two copies of one string agree, which means the
+    check name is duplicated rather than sourced once. Naming it honestly instead
+    of "…agree on the check name", which launders exactly the smell a drift guard
+    should expose.
+
+    Why a true SSOT is infeasible here: the required-check context is a GitHub job
+    `name:`, and a job name cannot be computed — it must be a static literal in the
+    workflow YAML. The gate script needs the same string at runtime to POST its
+    check runs under that context. Nothing can generate both, and having the script
+    grep the name out of the workflow at runtime trades this guard for hand-rolled
+    YAML parsing in bash, which is worse.
+
+    What the drift costs if it happens: every PR head reports a context nothing
+    requires, and the required context is never reported at all — so PRs hang at
+    "Expected" forever. That is why the duplication is guarded rather than left bare.
+    """
     assert f'CHECK_NAME="{CHECK_NAME}"' in SCRIPT.read_text(encoding="utf-8")

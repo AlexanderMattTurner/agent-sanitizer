@@ -1,5 +1,5 @@
 /**
- * Contract test for the SSOT guard-pair map (.hooks/ssot-guard-pairs.json)
+ * Contract test for the SSOT guard-pair map (.hooks/guard-pairs.json)
  * that the pre-commit hook uses to run a source's paired contract test in the
  * same commit as the source. A pair pointing at a moved/renamed file would
  * make the hook a silent no-op for exactly the SSOT it was added to protect,
@@ -17,7 +17,7 @@ const repoRoot = execFileSync("git", ["rev-parse", "--show-toplevel"], {
 }).trim();
 
 const { pairs } = JSON.parse(
-  readFileSync(join(repoRoot, ".hooks", "ssot-guard-pairs.json"), "utf8"),
+  readFileSync(join(repoRoot, ".hooks", "guard-pairs.json"), "utf8"),
 );
 
 describe("SSOT guard-pair map", () => {

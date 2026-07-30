@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /**
  * SSOT guard-test pairing: run the cheap contract test(s) paired with each
- * staged SSOT source (pairs live in .hooks/ssot-guard-pairs.json) and exit
+ * staged SSOT source (pairs live in .hooks/guard-pairs.json) and exit
  * non-zero if any fails — so "edited the data, forgot its guard test" is
  * caught at commit time instead of as a red main. Invoked by .hooks/pre-commit
  * with the staged paths as argv; only tests whose paired source is staged run,
@@ -14,7 +14,7 @@ import { fileURLToPath } from "node:url";
 
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
 const { pairs } = JSON.parse(
-  readFileSync(join(repoRoot, ".hooks", "ssot-guard-pairs.json"), "utf8"),
+  readFileSync(join(repoRoot, ".hooks", "guard-pairs.json"), "utf8"),
 );
 
 const staged = new Set(process.argv.slice(2));
