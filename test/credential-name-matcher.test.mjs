@@ -213,16 +213,41 @@ describe("an unusable vocabulary throws rather than matching nothing", () => {
 });
 
 describe("a hostile variable NAME cannot stall the matcher", () => {
+  // The bound asserted is the COUNT of membership tests, not elapsed time. Both
+  // say the same thing about the algorithm, but a wall-clock threshold also
+  // reports on the machine that ran it: the linear/quadratic ratio on this input
+  // is ~20000, so any threshold separating them passes locally and reds under
+  // load. `invisible.test.mjs` carries the scar from that — its ratio test flaked
+  // while passing locally, and its replacement is still a wall clock. A count has
+  // no machine-dependent term at all: the same number every run, everywhere.
   it("stays linear in the name's segment count", () => {
     // The caller does not choose these names: an env-var scrub is handed whatever
     // the surrounding process exported. One alternation of the 28 renderings is a
     // pattern a redos analyzer measures as polynomial on exactly this input, and
     // an unbounded run walk is quadratic on it.
-    const name = `${"A_".repeat(20_000)}TOKENISH`;
-    const holds = credentialNameMatcher({ scope: "any-segment" });
-    const started = process.hrtime.bigint();
-    assert.equal(holds(name), false);
-    const elapsedMs = Number(process.hrtime.bigint() - started) / 1e6;
-    assert.ok(elapsedMs < 1000, `took ${elapsedMs}ms`);
+    const segments = 20_000;
+    const name = `${"A_".repeat(segments)}TOKENISH`;
+    const realHas = Set.prototype.has;
+    let lookups = 0;
+    Set.prototype.has = function countingHas(value) {
+      lookups += 1;
+      return realHas.call(this, value);
+    };
+    try {
+      assert.equal(
+        credentialNameMatcher({ scope: "any-segment" })(name),
+        false,
+      );
+    } finally {
+      Set.prototype.has = realHas;
+    }
+    // Linear: at most `maxRun` runs per starting segment. The longest noun in the
+    // packaged vocabulary is 3 words, so 4x the segment count is generous headroom
+    // over the true bound and still four orders of magnitude under the quadratic
+    // walk's ~2e8 for this input.
+    assert.ok(
+      lookups <= 4 * segments,
+      `${lookups} membership tests for ${segments} segments is not linear`,
+    );
   });
 });

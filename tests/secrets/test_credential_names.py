@@ -23,7 +23,6 @@ must raise rather than build a pattern.
 
 import json
 import re
-import time
 
 import pytest
 from agent_sanitizer.secrets import (
@@ -34,6 +33,7 @@ from agent_sanitizer.secrets import (
     non_secret_name_segments,
     redact,
 )
+from agent_sanitizer.secrets import credential_names
 from agent_sanitizer.secrets.credential_names import (
     ENV_NAME_USE,
     FIELD_VALUE_USE,
@@ -359,11 +359,37 @@ def test_an_unusable_vocabulary_reaches_no_matcher() -> None:
         credential_name_matcher(spec={})
 
 
-def test_a_hostile_variable_name_cannot_stall_the_matcher() -> None:
+def test_a_hostile_variable_name_cannot_stall_the_matcher(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """The caller does not choose these names — a scrub is handed whatever the
     surrounding process exported. One alternation of the renderings backtracks
-    polynomially on this input, and an unbounded run walk is quadratic on it."""
-    name = "A_" * 20_000 + "TOKENISH"
-    started = time.perf_counter()
+    polynomially on this input, and an unbounded run walk is quadratic on it.
+
+    The bound asserted is the COUNT of membership tests, not elapsed time. Both
+    say the same thing about the algorithm, but a wall-clock threshold also
+    reports on the machine that ran it: the ratio between linear and quadratic
+    here is ~20000, so any threshold separating them passes locally and reds
+    under load, which is the flake this suite already carries a scar from
+    (``test/invisible.test.mjs`` names one). A count has no such term — it is
+    identical on every machine and on every run.
+    """
+    counted = []
+
+    class CountingFrozenset(frozenset):  # type: ignore[type-arg]
+        def __contains__(self, item: object) -> bool:
+            counted.append(item)
+            return super().__contains__(item)
+
+    # raising=False because `frozenset` is a builtin, not a module attribute: this
+    # ADDS a module global, which the matcher's name lookup finds before builtins.
+    monkeypatch.setattr(credential_names, "frozenset", CountingFrozenset, raising=False)
+    segments = 20_000
+    name = "A_" * segments + "TOKENISH"
     assert not credential_name_matcher(scope="any-segment")(name)
-    assert time.perf_counter() - started < 1.0
+
+    # Linear: at most `max_run` runs per starting segment. The longest noun in the
+    # packaged vocabulary is 3 words, so 4x the segment count is generous headroom
+    # over the true bound while still an order of magnitude under the quadratic
+    # walk's ~2e8 for this input.
+    assert len(counted) <= 4 * segments
