@@ -86,6 +86,113 @@ like `found`:
 | `filter-flagged`      | The filter flagged the output as a possible injection without deleting (content intact) |
 | `filter-error`        | The filter reported a non-fatal internal error while scanning (a fatal filter throws)   |
 
+## Using it with Claude Code
+
+The entry points above are a library — you supply the wiring. For Claude Code
+the wiring is already written, as four hooks that put Layers 1–4 on the tool
+stream: tool input, tool output, user prompts, and a session-start scan of the
+instruction files.
+
+### The plugin (recommended)
+
+```
+/plugin marketplace add AlexanderMattTurner/agent-sanitizer
+/plugin install agent-sanitizer@agent-sanitizer
+```
+
+The plugin ships a self-contained bundle and a committed Python zipapp of the
+secret-redaction engine, so it needs no `node_modules` and no install step
+beyond a `python3` on PATH.
+
+### Without the plugin
+
+Install the package and point your `settings.json` at the published hook entry.
+One entry point dispatches all four modes on `--hook=`:
+
+```jsonc
+{
+  "hooks": {
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node ./node_modules/agent-sanitizer/claude-hooks/plugin-hooks.mjs --hook=sanitize-user-prompt",
+          },
+        ],
+      },
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node ./node_modules/agent-sanitizer/claude-hooks/plugin-hooks.mjs --hook=pretooluse-sanitize",
+          },
+        ],
+      },
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node ./node_modules/agent-sanitizer/claude-hooks/plugin-hooks.mjs --hook=sanitize-output",
+          },
+        ],
+      },
+    ],
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node ./node_modules/agent-sanitizer/claude-hooks/plugin-hooks.mjs --hook=scan-invisible-chars",
+          },
+        ],
+      },
+    ],
+  },
+}
+```
+
+Resolve the path however your project prefers — `require.resolve("agent-sanitizer/claude-hooks")` gives it without hardcoding a layout. Importing the module instead of spawning it is a no-op, so a build step that pulls it in will not consume stdin.
+
+**Layer 4 needs the Python engine.** Secret redaction runs out-of-process
+against `agent-secret-redactor-daemon`, from the `secrets` extra on PyPI:
+
+```bash
+pip install 'agent-sanitizer[secrets]'   # version-match the npm package
+```
+
+Without it, `sanitize-output` **fails closed** on secret-shaped output — the
+tool result is suppressed and replaced with a placeholder rather than shown
+unvetted. That is the intended posture, not a degradation to ignore: Layers 1–3
+still run, but a missing daemon means every secret-shaped output is withheld.
+
+**Layer 5 (second-model injection filtering) is not included.** The `/output`
+seam accepts a `filterInjection` callback, but these hooks never supply one, so
+nothing here calls out to a model or leaves the machine.
+
+### Internal environment variables
+
+These tune the hooks' internals. They are **not a stable interface** — they
+carry a leading underscore and may change between minor versions. The stable
+surface is the `--hook=` CLI and the settings wiring above.
+
+| Variable                               | Effect                                                             |
+| -------------------------------------- | ------------------------------------------------------------------ |
+| `_AGENT_SANITIZER_REDACTOR_DAEMON`     | Path to the redactor daemon binary                                 |
+| `_AGENT_SANITIZER_REDACTOR_SOCKET`     | Unix socket the daemon binds; per-session and private by default   |
+| `_AGENT_SANITIZER_REDACTOR_WAIT_MS`    | How long to wait for a freshly spawned daemon to accept            |
+| `_AGENT_SANITIZER_REDACTOR_REQUEST_MS` | Deadline for one request; bounds a daemon that accepts then stalls |
+| `_AGENT_SANITIZER_SANITIZE_BUDGET_MS`  | Total wall-clock budget for one hook run's daemon calls            |
+| `_AGENT_SANITIZER_TRACE`               | `info` or `debug` to emit one JSON line per layer engagement       |
+| `_AGENT_SANITIZER_TRACE_FILE`          | Trace sink; stderr when unset                                      |
+| `_AGENT_SANITIZER_REVEAL_DIR`          | Where Layer 2 stores pre-splice text for the model to read back    |
+
 ## How this compares
 
 The "sanitize untrusted LLM input" space mostly splits into two camps: ML

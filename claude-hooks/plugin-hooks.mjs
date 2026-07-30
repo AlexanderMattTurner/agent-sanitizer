@@ -13,14 +13,6 @@
  *
  * Layer 2/3 (the remark/rehype HTML parser graph) is inlined and runs locally.
  */
-import * as controlPlaneCore from "agent-control-plane-core";
-import * as controlPlaneClaude from "agent-control-plane-core/claude";
-import * as sanitizerRoot from "agent-sanitizer";
-import * as sanitizerConfusables from "agent-sanitizer/confusables";
-import * as sanitizerInvisible from "agent-sanitizer/invisible";
-import * as sanitizerOutput from "agent-sanitizer/output";
-import * as sanitizerRehydrate from "agent-sanitizer/rehydrate";
-import * as namespaceGuard from "namespace-guard";
 import {
   claimCliEntry,
   isMain,
@@ -28,6 +20,50 @@ import {
   readFlag,
   readStdinJson,
 } from "./lib/hook-io.mjs";
+
+// The packages the hooks lazy-load, each behind a thunk whose import specifier
+// is a LITERAL — esbuild only inlines `import("…")` it can read statically, so
+// an `import(variable)` here would survive into the bundle as a runtime dial
+// against a node_modules the plugin does not ship, and every registration would
+// fail at once.
+const LAZY_LOADERS = {
+  "agent-control-plane-core": () => import("agent-control-plane-core"),
+  "agent-control-plane-core/claude": () =>
+    import("agent-control-plane-core/claude"),
+  "agent-sanitizer": () => import("agent-sanitizer"),
+  "agent-sanitizer/confusables": () => import("agent-sanitizer/confusables"),
+  "agent-sanitizer/invisible": () => import("agent-sanitizer/invisible"),
+  "agent-sanitizer/output": () => import("agent-sanitizer/output"),
+  "agent-sanitizer/rehydrate": () => import("agent-sanitizer/rehydrate"),
+  "namespace-guard": () => import("namespace-guard"),
+};
+
+/**
+ * Pre-register every package the hooks lazy-load, skipping any that will not
+ * load.
+ *
+ * A top-level static import of these would abort the process before `main`
+ * runs, and an aborted hook writes NOTHING to stdout — which Claude Code reads
+ * as a non-blocking hook error and shows the raw tool output. That is a
+ * fail-OPEN on the very hook that withholds secrets. Registering what resolves
+ * and leaving the rest absent hands the gap to each hook's own lazyImport
+ * guard, whose posture is to block.
+ * @returns {Promise<void>}
+ */
+async function registerAvailableModules() {
+  /** @type {Record<string, Record<string, any>>} */
+  const loaded = {};
+  await Promise.all(
+    Object.entries(LAZY_LOADERS).map(async ([specifier, load]) => {
+      try {
+        loaded[specifier] = await load();
+      } catch {
+        // Left unregistered on purpose — see the fail-open note above.
+      }
+    }),
+  );
+  registerLazyModules(loaded);
+}
 
 /**
  * Dispatch to the hook named by `--hook=<name>` in argv. Exported and guarded by
@@ -40,16 +76,7 @@ export async function main() {
   // module shares this file's import.meta.url, so without the claim the inlined
   // hooks' own isMain-guarded CLIs would also fire and consume stdin.
   claimCliEntry();
-  registerLazyModules({
-    "agent-control-plane-core": controlPlaneCore,
-    "agent-control-plane-core/claude": controlPlaneClaude,
-    "agent-sanitizer": sanitizerRoot,
-    "agent-sanitizer/confusables": sanitizerConfusables,
-    "agent-sanitizer/invisible": sanitizerInvisible,
-    "agent-sanitizer/output": sanitizerOutput,
-    "agent-sanitizer/rehydrate": sanitizerRehydrate,
-    "namespace-guard": namespaceGuard,
-  });
+  await registerAvailableModules();
 
   const mode = readFlag(process.argv, "hook");
   switch (mode) {
