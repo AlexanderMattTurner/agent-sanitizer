@@ -128,6 +128,10 @@
       "types": "./types/output.d.mts",
       "default": "./src/output.mjs"
     },
+    "./credential-names-matcher": {
+      "types": "./types/credential-names.d.mts",
+      "default": "./src/credential-names.mjs"
+    },
     "./view-map": {
       "types": "./types/view-map.d.mts",
       "default": "./src/view-map.mjs"

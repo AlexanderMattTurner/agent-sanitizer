@@ -18,6 +18,10 @@
     {
       "id": "index-prompt-gates",
       "mutate": "src/index.mjs,src/prompt.mjs,src/gates.mjs,src/cf-charset.mjs"
+    },
+    {
+      "id": "credential-names",
+      "mutate": "src/credential-names.mjs"
     }
   ]
 }
