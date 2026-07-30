@@ -8,6 +8,12 @@ adhere to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+## [2.4.1] - 2026-07-30
+
+### Changed
+
+- docs(readme): cut the README by a quarter and unbury the examples
+
 ## [2.4.0] - 2026-07-30
 
 ### Changed
