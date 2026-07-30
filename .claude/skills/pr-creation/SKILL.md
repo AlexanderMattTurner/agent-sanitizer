@@ -91,9 +91,10 @@ reviewable diff (a ~10-line change is a few sentences, not a 500-word skeleton);
 ritual sections instead of spending a paragraph to say "None"; and add a **Review focus**
 line naming the file to read first, the cross-file invariant, and the part you're least sure
 of — the single element most correlated with a human actually engaging, which matters because
-agent-authored PRs are systematically _under_-reviewed. Use the exact headings from
-pr-templates.md (`What & why` / `Review focus` / `How it was tested` / `Decisions made` /
-`Lessons Learned`) so a reviewer can scan by habit.
+agent-authored PRs are systematically _under_-reviewed. Describe the diff as it currently
+stands, never its own history (pr-templates.md carries the rule). Use the
+exact headings from pr-templates.md (`What & why` / `Review focus` / `How it was tested` /
+`Decisions made` / `Lessons Learned`) so a reviewer can scan by habit.
 
 ### Step 3: Iterative Compress-Critique-Fix Loop
 

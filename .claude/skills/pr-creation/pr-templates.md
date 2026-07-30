@@ -35,8 +35,9 @@ cross-file invariant the diff can't show on one screen, and the part you'd most 
 scrutinized ("the locking in `worker.ts:88`; the rest is a mechanical rename").>
 
 ## How it was tested
-<What you ran and the outcome. Always this exact heading — never rename it to
-"Tests"/"Verification"/"Testing"; one stable name lets a reviewer scan by habit.>
+<The claims that hold the current head, each with the command that falsifies it and its
+outcome. Always this exact heading — never rename it to "Tests"/"Verification"/"Testing";
+one stable name lets a reviewer scan by habit.>
 
 ## Decisions made
 <!-- Only if there are genuinely reviewer-owned judgments. Delete otherwise. -->
@@ -103,6 +104,11 @@ to engage, not raise it. Concretely:
 - **Match the diff's vocabulary.** Use the same identifiers and file paths in the prose as in
   the diff, and link claims to specific files/lines — that lexical "scent" is how a reviewer
   navigates to the code (information foraging).
+- **A section describes the diff as it stands, never its own history.** When you rewrite a
+  body, replace the old text — don't narrate the replacement, keep a corrections section,
+  or recount the runs that established a fact; state the fact. A decision still live in
+  the diff goes in `## Decisions made` as a present-tense statement of the choice and its
+  consequence.
 - Note any breaking changes.
 - **Default to NO “Lessons Learned” section.** It exists only for a genuinely novel, cross-project insight that would improve the template for a downstream repo sharing none of this code — a rare case; most PRs have none. Each lesson filed triggers the phone-home workflow (one issue per PR on the template repo), so a low-value or repo-specific “lesson” is triage noise, not a contribution. When you do include one, each lesson must specify **what** to change, **where**, and **why**. **Never write a negative placeholder** (“none applicable”, “N/A”, “nothing generalizable”): phone-home now drops those, so the sentence achieves nothing — omit the whole heading instead.
 - **Skip the Lessons Learned section entirely when the PR targets the `claude-automation-template` repo itself.** Phone-home propagates lessons _from_ downstream repos _into_ the template; a change made directly in the template is already there, so the section propagates nothing and is just noise.
@@ -125,7 +131,8 @@ gh pr edit --body "$(cat <<'EOF'
 <Reading order + least-certain part, updated for the current diff.>
 
 ## How it was tested
-<What you ran and the outcome, updated.>
+<The claims that hold the current head, each with the command that falsifies it and its
+outcome — re-stated for this head, not appended to the previous list.>
 
 ## Decisions made
 <!-- Delete if none. -->
