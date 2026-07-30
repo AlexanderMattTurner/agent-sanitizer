@@ -287,3 +287,5 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
       : `plugin artifacts already current (engine ${enginePin()})\n`,
   );
 }
+
+// kill-test touch
