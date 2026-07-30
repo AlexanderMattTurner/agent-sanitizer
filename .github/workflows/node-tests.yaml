@@ -56,6 +56,13 @@ jobs:
       # only thing standing between a broken credential and a green reviewer that
       # read nothing — a decorative test file here would restore exactly the
       # silent pass it exists to prevent.
+      # post-pr-review.mjs imports agent-sanitizer by name, and
+      # .github/scripts/package.json ends the package scope there, so the
+      # self-reference never resolves — the import needs the same
+      # .github/scripts/node_modules install the review workflow does.
+      - name: Install the input sanitizer
+        run: bash .github/scripts/install-sanitizer.sh
+
       - name: Run PR-review script tests
         run: node --test .github/scripts/post-pr-review.test.mjs
 
