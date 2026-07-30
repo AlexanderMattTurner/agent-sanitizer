@@ -167,14 +167,21 @@ log "Highest live npm version: $CURRENT_VERSION"
 # Find the latest version tag to determine which commits to analyze
 LAST_TAG=$(git describe --tags --match "v*" --abbrev=0 HEAD 2>/dev/null || echo "")
 
-# Skip when HEAD's release already happened. The tag lands on the release-docs
-# commit, a CHILD of the published SHA, so a re-run against that published SHA
-# sees only ANCESTOR tags: `git describe` reports the PREVIOUS release, so the
-# run re-cuts the same commit range under a fresh version number (this is how
-# 2.0.2 shipped as a byte-identical duplicate of 2.0.1). `--contains` looks the
-# other way down the history and is the only view that sees a tag written after
-# HEAD. It also subsumes the "is HEAD itself tagged?" case: a tag ON HEAD
-# contains HEAD.
+# Skip when HEAD's tree is already released. Every tag sits on the SHA that was
+# PUBLISHED (see the tag step below), so a tag containing HEAD means HEAD is that
+# published commit or an ancestor of it — either way its content already shipped,
+# and re-cutting the range would republish it under a fresh number (this is how
+# 2.0.2 shipped as a byte-identical duplicate of 2.0.1). `git describe` cannot
+# answer this: it reports the previous release when HEAD is itself the published
+# SHA. `--contains` looks down the history instead, and subsumes the "is HEAD
+# itself tagged?" case, since a tag ON HEAD contains HEAD.
+#
+# This is only sound because the tag marks the published SHA rather than the
+# release-docs commit. Tagging the docs commit made the guard mistake "a release
+# was pushed after my merge landed" for "my merge was released": push_with_rebase
+# replays that docs commit onto whatever tip it finds, so a release of tree A
+# ends up tagged on a DESCENDANT of an unrelated merge B that raced it, and B
+# then skips its own release forever. That is what stranded #192.
 #
 # Ascending: with several releases since, the tag that actually released HEAD is
 # the LOWEST one containing it, so a descending sort would name the wrong version
@@ -486,6 +493,12 @@ push_with_rebase() {
 # the branch name — that would push to the bogus ref "HEAD:HEAD". GITHUB_REF_NAME
 # is the actual triggering branch in Actions; only fall back to git for local runs.
 RELEASE_DOCS_PUSH_FAILED=0
+# The SHA whose tree was published, captured BEFORE the release-docs commit and
+# before any rebase can move that commit. This is the one fact the tag must
+# record, and topology cannot carry it: push_with_rebase replays the docs commit
+# onto whatever tip it finds, so after a racing merge the docs commit's position
+# says nothing about what shipped.
+PUBLISHED_SHA=$(git rev-parse HEAD)
 DEFAULT_BRANCH="${GITHUB_REF_NAME:-$(git rev-parse --abbrev-ref HEAD)}"
 git config user.name "github-actions[bot]"
 git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
@@ -512,17 +525,18 @@ if [[ "$RELEASE_DOCS_PUSH_FAILED" = "1" ]]; then
   exit 1
 fi
 
-# Tag the release for future commit-range detection. Tag HEAD, which now includes
-# the release-docs commit — so the tag sits on a CHILD of the SHA that was
-# published, and a re-trigger against that published SHA sees the tag only via
-# `git tag --contains` (the already-released guard near the top), NOT via
-# `git describe` and NOT as HEAD == tag SHA. Assuming the latter is what shipped
-# 2.0.2 as a duplicate of 2.0.1.
+# Tag the SHA that was PUBLISHED, not the local HEAD. The two differ whenever a
+# release-docs commit was made, and they diverge unrecoverably when that commit
+# was rebased onto a racing merge — tagging the local HEAD there certifies a tree
+# that was never published, and makes the already-released guard skip the racing
+# merge's own release. Pinning the tag to PUBLISHED_SHA keeps the tag meaning
+# exactly "this tree shipped as vX.Y.Z", which is what both the guard and
+# `git describe`'s commit-range cut read it as.
 # Guard against an existing tag: BASE_VERSION already keeps NEW_VERSION ahead of
 # every tag, but a re-run of the same release must stay idempotent rather than
 # abort under `set -e` when the local tag already exists.
 if ! git rev-parse -q --verify "refs/tags/v$NEW_VERSION" >/dev/null; then
-  git tag "v$NEW_VERSION"
+  git tag "v$NEW_VERSION" "$PUBLISHED_SHA"
 fi
 # Fail loudly if the tag never lands: the tag is what stops the next run from
 # re-analyzing these commits (re-drafting the changelog, re-pushing release
