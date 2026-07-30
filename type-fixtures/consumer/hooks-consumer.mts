@@ -1,5 +1,7 @@
-// Consumer-perspective type fixture for the `claude-hooks/*` composition
-// surface. Companion to consumer.mts (which covers the library subpaths); this
+// Consumer-perspective type fixture for the CURATED `claude-hooks` composition
+// surface — the six subpaths the exports map publishes, and only those. A module
+// this file cannot import is the point, not an omission: the de-exports are
+// asserted in test/claude-hooks-exports.test.mjs. Companion to consumer.mts (which covers the library subpaths); this
 // file imports each hook module BY NAME through the published `exports` map, so
 // it fails both when a subpath stops resolving and when its generated `.d.mts`
 // widens an export to `any`. The accompanying types-consumer.test.mjs builds the
@@ -27,14 +29,7 @@ import {
   HookEvent,
   PermissionDecision,
 } from "agent-sanitizer/claude-hooks/lib/hook-io";
-import { sanitizeAuthoredContent } from "agent-sanitizer/claude-hooks/lib/authored-content";
 import { runJudgeCli } from "agent-sanitizer/claude-hooks/lib/control-plane";
-import { looksLikeCredentialVar } from "agent-sanitizer/claude-hooks/lib/env-config";
-import { invisibleCharAlert } from "agent-sanitizer/claude-hooks/lib/invisible-alert";
-import { redactViaDaemon } from "agent-sanitizer/claude-hooks/lib/redactor-client";
-import { persistReveal } from "agent-sanitizer/claude-hooks/lib/reveal";
-import { hasEnvBoundSecret } from "agent-sanitizer/claude-hooks/lib/secret-annotate";
-import { trace } from "agent-sanitizer/claude-hooks/lib/trace";
 
 // `0 extends 1 & T` is only true when T is `any` — see consumer.mts for why a
 // plain annotation cannot catch a declaration that collapsed to `any`.
@@ -49,14 +44,7 @@ const _judgePreToolUseNotAny: IsAny<typeof judgePreToolUseSanitize> = false;
 const _judgePromptNotAny: IsAny<typeof judgeSanitizeUserPrompt> = false;
 const _scanFileNotAny: IsAny<typeof scanFile> = false;
 const _lazyImportNotAny: IsAny<typeof lazyImport> = false;
-const _authoredNotAny: IsAny<typeof sanitizeAuthoredContent> = false;
 const _runJudgeCliNotAny: IsAny<typeof runJudgeCli> = false;
-const _credentialVarNotAny: IsAny<typeof looksLikeCredentialVar> = false;
-const _alertNotAny: IsAny<typeof invisibleCharAlert> = false;
-const _redactNotAny: IsAny<typeof redactViaDaemon> = false;
-const _revealNotAny: IsAny<typeof persistReveal> = false;
-const _envSecretNotAny: IsAny<typeof hasEnvBoundSecret> = false;
-const _traceNotAny: IsAny<typeof trace> = false;
 
 // SECRET_HINT is re-exported from the package root through a destructured
 // lazyImport — the shape most at risk of emitting as `any`.
@@ -81,6 +69,26 @@ const _evaluated: {
 const _context: string = composeContext(true, ["w"], "Bash");
 const _failClosed = failClosedReplacement("raw", "why");
 
+// The host-extension bag, at the shape a composer actually writes it: the
+// callbacks must type-check against the generated declaration, so a `.d.mts`
+// that dropped or widened the parameter is a compile error here rather than a
+// runtime surprise in the composing repo.
+const _extended = await sanitizeText("x", "Bash", undefined, {
+  postText: async (cleaned, ctx) => {
+    const _toolName: string = ctx.toolName;
+    const _webIngress: boolean = ctx.webIngress;
+    const _budget: number = ctx.deadline.remainingMs();
+    return cleaned.length > 0 ? { warning: "host note" } : null;
+  },
+  redactNote: (raw) => (raw.length > 0 ? " (host)" : undefined),
+  audit: async (record) => {
+    const _modified: boolean = record.modified;
+    void record.tool;
+    void record.output;
+  },
+});
+const _extendedCleaned: string = _extended.cleaned;
+
 // hook-io: the frozen enums must keep their literal-keyed types, so a typo is a
 // compile error rather than an undefined lookup.
 const _event: "PostToolUse" = HookEvent.POST_TOOL_USE;
@@ -93,11 +101,8 @@ const _flag: string | undefined = readFlag(["--hook=x"], "hook");
 const _lazy: Record<string, any> = await lazyImport("agent-sanitizer");
 registerLazyModules({});
 
-// The remaining libs, called at their documented signatures.
+// The remaining exported pieces, called at their documented signatures.
 const _threshold: number = LONG_RUN_THRESHOLD;
-const _credential: boolean = looksLikeCredentialVar("MY_API_TOKEN");
-const _envSecret: boolean = hasEnvBoundSecret("text");
-const _alerted: string | null = invisibleCharAlert();
 
 // Reference every binding so readers (and noUnusedLocals, if ever enabled) see
 // them as load-bearing assertions rather than dead code.
@@ -109,14 +114,7 @@ export const _assertions = [
   _judgePromptNotAny,
   _scanFileNotAny,
   _lazyImportNotAny,
-  _authoredNotAny,
   _runJudgeCliNotAny,
-  _credentialVarNotAny,
-  _alertNotAny,
-  _redactNotAny,
-  _revealNotAny,
-  _envSecretNotAny,
-  _traceNotAny,
   _secretNotAny,
   _secret,
   _textCleaned,
@@ -126,13 +124,11 @@ export const _assertions = [
   _evaluated,
   _context,
   _failClosed,
+  _extendedCleaned,
   _event,
   _decision,
   _remaining,
   _flag,
   _lazy,
   _threshold,
-  _credential,
-  _envSecret,
-  _alerted,
 ] as const;
