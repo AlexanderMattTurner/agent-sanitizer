@@ -20,7 +20,6 @@
     "prepare": "pnpm build:types && if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then git config core.hooksPath .hooks; fi",
     "test": "c8 node --test",
     "coverage": "c8 node --test",
-    "coverage:hooks": "c8 --config .c8rc.claude-hooks.json node --test plugin/test/*.test.mjs",
     "check": "tsc --noEmit && tsc -p tsconfig.hooks.json --noEmit",
     "typecheck": "tsc --noEmit && tsc -p tsconfig.hooks.json --noEmit",
     "build:types": "tsc -p tsconfig.build.json",
@@ -62,8 +61,6 @@
     ]
   },
   "devDependencies": {
-    "agent-control-plane-core": "0.2.13",
-    "namespace-guard": "0.20.0",
     "sanitizer-engine": "npm:agent-sanitizer@2.1.0",
     "@commitlint/cli": "^21.0.1",
     "@commitlint/config-conventional": "^21.0.1",
@@ -139,11 +136,15 @@
       "types": "./types/rehydrate.d.mts",
       "default": "./src/rehydrate.mjs"
     },
-    "./credential-names": "./python/agent_sanitizer/secrets/data/credential-names.json"
+    "./credential-names": "./python/agent_sanitizer/secrets/data/credential-names.json",
+    "./claude-hooks": "./claude-hooks/plugin-hooks.mjs"
   },
   "files": [
     "src/*.mjs",
     "python/agent_sanitizer/secrets/data/credential-names.json",
+    "claude-hooks/*.mjs",
+    "claude-hooks/lib/*.mjs",
+    "claude-hooks/config/*.json",
     "bin/sanitize-cli.mjs",
     "types",
     "LICENSE",
@@ -152,6 +153,8 @@
     "SECURITY.md"
   ],
   "dependencies": {
+    "agent-control-plane-core": "0.2.13",
+    "namespace-guard": "0.20.0",
     "css-tree": "^3.2.1",
     "rehype-parse": "9.0.1",
     "remark-gfm": "4.0.1",

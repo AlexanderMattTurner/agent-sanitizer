@@ -102,14 +102,14 @@ function launchAsync(pluginRoot, event, hook, payload, { env = {} } = {}) {
  * consumer of the published package gets, which the repo's npm alias otherwise
  * denies. Returns { dir, hooks }.
  */
-function stageSources(t) {
+function stageSources(t, { omit = [] } = {}) {
   const dir = scratch(t);
   const hooks = join(dir, "claude-hooks");
   cpSync(HOOKS_DIR, hooks, { recursive: true });
   const modules = join(dir, "node_modules");
   mkdirSync(modules, { recursive: true });
   for (const [name, target] of Object.entries(packageDirs()))
-    symlinkSync(target, join(modules, name), "dir");
+    if (!omit.includes(name)) symlinkSync(target, join(modules, name), "dir");
   return { dir, hooks };
 }
 
@@ -649,6 +649,38 @@ test("importing the entry does not run the dispatch", (t) => {
   );
   assert.equal(res.status, 0, res.stderr);
   assert.equal(res.stdout, "imported");
+});
+
+test("a missing peer package fails the output hook CLOSED, not open", (t) => {
+  // Only reachable un-bundled — the bundle inlines everything. A static top-level
+  // import of the packages the hooks lazy-load would abort the process here, and
+  // an aborted hook writes NOTHING to stdout, which Claude Code reads as a
+  // non-blocking error and answers by showing the RAW tool output. On the hook
+  // that withholds secrets that is the worst available outcome, so the entry
+  // registers what resolves and lets each hook's own guard block the rest.
+  const { dir, hooks } = stageSources(t, {
+    omit: ["agent-control-plane-core"],
+  });
+
+  const res = spawnSync(
+    process.execPath,
+    [join(hooks, "plugin-hooks.mjs"), "--hook=sanitize-output"],
+    {
+      input: JSON.stringify({
+        hook_event_name: "PostToolUse",
+        tool_name: "Bash",
+        tool_input: {},
+        tool_response: { stdout: "aws_key=AKIAIOSFODNN7EXAMPLE" },
+      }),
+      encoding: "utf8",
+      cwd: dir,
+    },
+  );
+
+  assert.ok(res.stdout.trim().length > 0, "empty stdout fails OPEN");
+  const out = JSON.parse(res.stdout).hookSpecificOutput;
+  assert.match(out.updatedToolOutput.stdout, /SANITIZATION FAILED/);
+  assert.ok(!JSON.stringify(out).includes("AKIAIOSFODNN7EXAMPLE"));
 });
 
 // ─── Renamed env vars: each one reached through behaviour, not through grep ───

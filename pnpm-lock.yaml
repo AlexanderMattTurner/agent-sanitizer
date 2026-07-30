@@ -8,9 +8,15 @@ importers:
 
   .:
     dependencies:
+      agent-control-plane-core:
+        specifier: 0.2.13
+        version: 0.2.13
       css-tree:
         specifier: ^3.2.1
         version: 3.2.1
+      namespace-guard:
+        specifier: 0.20.0
+        version: 0.20.0
       rehype-parse:
         specifier: 9.0.1
         version: 9.0.1
@@ -48,9 +54,6 @@ importers:
       '@types/node':
         specifier: 25.9.1
         version: 25.9.1
-      agent-control-plane-core:
-        specifier: 0.2.13
-        version: 0.2.13
       c8:
         specifier: 11.0.0
         version: 11.0.0
@@ -69,9 +72,6 @@ importers:
       lint-staged:
         specifier: ^17.0.5
         version: 17.2.0
-      namespace-guard:
-        specifier: 0.20.0
-        version: 0.20.0
       prettier:
         specifier: ^3.0.0
         version: 3.9.6
