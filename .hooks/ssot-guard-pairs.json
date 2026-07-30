@@ -11,6 +11,7 @@
     "src/instructions.mjs": ["test/instructions.test.mjs"],
     "python/agent_sanitizer/secrets/data/credential-names.json": [
       "test/credential-names-export.test.mjs"
-    ]
+    ],
+    "package.json": ["test/claude-hooks-exports.test.mjs"]
   }
 }

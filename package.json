@@ -22,7 +22,7 @@
     "coverage": "c8 node --test",
     "check": "tsc --noEmit && tsc -p tsconfig.hooks.json --noEmit",
     "typecheck": "tsc --noEmit && tsc -p tsconfig.hooks.json --noEmit",
-    "build:types": "tsc -p tsconfig.build.json",
+    "build:types": "tsc -p tsconfig.build.json && tsc -p tsconfig.build-hooks.json",
     "prepack": "pnpm build:types",
     "gen:joining-type": "node scripts/gen-joining-type.mjs",
     "lint": "eslint .",
@@ -137,7 +137,14 @@
       "default": "./src/rehydrate.mjs"
     },
     "./credential-names": "./python/agent_sanitizer/secrets/data/credential-names.json",
-    "./claude-hooks": "./claude-hooks/plugin-hooks.mjs"
+    "./claude-hooks": {
+      "types": "./types/claude-hooks/plugin-hooks.d.mts",
+      "default": "./claude-hooks/plugin-hooks.mjs"
+    },
+    "./claude-hooks/*": {
+      "types": "./types/claude-hooks/*.d.mts",
+      "default": "./claude-hooks/*.mjs"
+    }
   },
   "files": [
     "src/*.mjs",
