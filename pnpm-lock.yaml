@@ -26,9 +26,6 @@ importers:
       remark-parse:
         specifier: 11.0.0
         version: 11.0.0
-      style-to-object:
-        specifier: 1.0.14
-        version: 1.0.14
       unified:
         specifier: 11.0.5
         version: 11.0.5

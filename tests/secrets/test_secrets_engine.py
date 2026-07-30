@@ -1235,6 +1235,29 @@ _SLACK_WEBHOOK = (
             "https://user:s3cr3tpassw0rd@example.com/api",
             False,
         ),
+        # Userinfo needs no colon to be a credential: a bare-token clone URL is
+        # exactly this shape, and its all-letter token trips no opaque-run gate.
+        (
+            "bare-token userinfo, no colon",
+            "https://ghptokenabcdefghijklmn@github.com/owner/repo.git",
+            False,
+        ),
+        (
+            "bare-token userinfo on a webhook host",
+            "https://xoxbslacktokenletters@hooks.slack.com/services",
+            False,
+        ),
+        # ...while an `@` outside the authority is not userinfo at all. Only the URL
+        # grammar knows where the authority ends.
+        (
+            "scoped package path, @ in the path",
+            "https://registry.npmjs.org/@scope/pkg",
+            True,
+        ),
+        ("@ in the query", "https://example.com/cb?next=user@example.com", True),
+        # An authority the URL parser refuses to read is one we cannot clear, so the
+        # value stays redacted rather than being waved through as public.
+        ("unparseable authority fails safe", "https://[::1/api", False),
         (
             "opaque token in query",
             "https://example.com/cb?access=aB3xK9mN2pQ7rT4wY1cV5bZ8",
@@ -1250,12 +1273,16 @@ def test_is_public_endpoint_url(label, value, expected):
 
 @pytest.mark.parametrize(
     "field",
-    ["token_url", "access_token_url", "secret_endpoint", "auth_url"],
+    ["token_url", "access_token_url", "secret_endpoint"],
 )
 def test_public_endpoint_url_skipped_after_keyword(field):
     # A public endpoint under a credential-named field is NOT a secret; skip it
     # on BOTH local and web ingress (a clean URL smuggles no credential).
     text = f"{field} = https://oauth2.googleapis.com/token"
+    # The skip is only meaningful if the field-value matcher reached the value at
+    # all — without this, a field name the vocabulary does not carry would make
+    # `out == text` true for the wrong reason and assert nothing.
+    assert E.FIELD_VALUE_RE.search(text) is not None, field
     for web in (False, True):
         out, found = redact(text, cfg(web_ingress=web))
         assert out == text, (field, web)
@@ -1277,6 +1304,11 @@ def test_public_endpoint_url_skipped_after_keyword(field):
             "userinfo password",
             "auth_url = https://user:s3cr3tpassw0rd@example.com/api",
             "s3cr3tpassw0rd",
+        ),
+        (
+            "bare-token userinfo",
+            "token_url = https://ghptokenabcdefghijklmn@github.com/owner/repo.git",
+            "ghptokenabcdefghijklmn",
         ),
     ],
 )
