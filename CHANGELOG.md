@@ -8,6 +8,13 @@ adhere to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+## [2.7.0] - 2026-07-30
+
+### Changed
+
+- test(secrets): assert the linearity bound by count, not by wall clock
+- feat(secrets): export the credential-name matcher, not just the vocabulary
+
 ## [2.6.0] - 2026-07-30
 
 ### Changed
