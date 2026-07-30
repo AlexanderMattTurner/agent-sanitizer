@@ -7,19 +7,31 @@
  */
 import { readFileSync, globSync, writeFileSync, unlinkSync } from "node:fs";
 import { join, relative } from "node:path";
-import { isMain, lazyImport, writeFileNoFollow } from "./lib/hook-io.mjs";
+import {
+  isMain,
+  lazyImport,
+  markerIsTrusted,
+  writeFileNoFollow,
+} from "./lib/hook-io.mjs";
 import {
   ALERT_FILE,
   ALERT_ACK_FILE,
   PROJECT_DIR,
 } from "./lib/invisible-alert.mjs";
+import {
+  awaitControlPlaneBindings,
+  hookgateMarkerPath,
+  probeSetupAlive,
+} from "./lib/control-plane.mjs";
 import { trace, TraceEvent } from "./lib/trace.mjs";
 
 // Layer-1 primitives, bound via lazyImport (see its doc for the fail-OPEN
 // hazard of a bare static npm import — here the instruction files would load
-// UNSCANNED). A failed load leaves the bindings undefined, and cliMain's guard
-// below fails loud rather than silently passing.
-const {
+// UNSCANNED). A failed load leaves the bindings undefined; on a cold container
+// (node deps not yet installed) cliMain's guard below waits out session-setup
+// before giving up, and fails loud rather than silently passing.
+// `let`, not `const`: the cold-start poll re-binds these once the package loads.
+let {
   LONG_RUN_RE,
   LONG_RUN_THRESHOLD,
   SCATTERED_THRESHOLD: TOTAL_INVISIBLE_THRESHOLD,
@@ -28,6 +40,44 @@ const {
 } = /** @type {typeof import("agent-sanitizer/invisible")} */ (
   await lazyImport("agent-sanitizer/invisible")
 );
+
+/**
+ * Re-attempt the sanitizer import, waiting out an in-flight session-setup before
+ * giving up. On a cold container the node deps this hook needs are still being
+ * installed when SessionStart fires; without this wait `stripInvisible` is
+ * undefined, the scan is skipped, and the instruction files load UNSCANNED for the
+ * whole session (fail open) — silently. Reuses the control-plane poll (marker +
+ * PID liveness) so the wait bound matches every other cold-start-aware gate.
+ * @returns {Promise<boolean>} whether the sanitizer is now bound
+ */
+async function ensureSanitizerLoaded() {
+  if (typeof stripInvisible === "function") return true;
+  /* c8 ignore start -- cold-start reload: only runs when the top-level
+     agent-sanitizer import above failed (node deps not yet installed), which
+     can't be simulated in-process or in the spawned-subprocess CLI run the tests
+     observe (the test env always has the deps, so the guard above early-returns).
+     The reload reuses awaitControlPlaneBindings / markerIsTrusted /
+     probeSetupAlive, each unit-tested directly. */
+  const marker = hookgateMarkerPath();
+  const reloaded = await awaitControlPlaneBindings({
+    tryImport: async () => {
+      const mod = await lazyImport("agent-sanitizer/invisible");
+      return typeof mod.stripInvisible === "function" ? mod : null;
+    },
+    markerPresent: () => markerIsTrusted(marker),
+    setupAlive: () => probeSetupAlive(marker),
+  });
+  if (!reloaded) return false;
+  ({
+    LONG_RUN_RE,
+    LONG_RUN_THRESHOLD,
+    SCATTERED_THRESHOLD: TOTAL_INVISIBLE_THRESHOLD,
+    STRIP,
+    stripInvisible,
+  } = /** @type {typeof import("agent-sanitizer/invisible")} */ (reloaded));
+  return true;
+  /* c8 ignore stop */
+}
 
 // Decoder
 
@@ -229,14 +279,15 @@ export async function cliMain() {
   /* c8 ignore start -- fail-closed module-load guard: only reachable when the
      agent-sanitizer import above failed, which can't be simulated in the
      spawned-subprocess CLI run the tests observe. */
-  if (typeof stripInvisible !== "function") {
+  if (!(await ensureSanitizerLoaded())) {
     // Emit the engagement event with a "skipped" outcome so the loss is LOUD on
     // the trace channel — a scan that never ran is otherwise invisible, and the
     // downstream PreToolUse sanitize gate then passes cleanly all session.
     trace(TraceEvent.SCAN_INVISIBLE_CHARS_RAN, { outcome: "skipped" });
     process.stderr.write(
-      "scan-invisible-chars: agent-sanitizer failed to load; instruction " +
-        "files were NOT scanned for hidden Unicode.\n",
+      "scan-invisible-chars: agent-sanitizer failed to load (node deps not " +
+        "installed and session-setup did not finish in time); instruction " +
+        "files were NOT scanned for hidden Unicode. Run `pnpm install`.\n",
     );
     process.exit(1);
   }

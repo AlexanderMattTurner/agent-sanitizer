@@ -155,6 +155,14 @@ export function registeredLazyModule(specifier) {
 }
 
 /**
+ * Last load error per specifier, recorded when {@link lazyImport} swallows a
+ * failed import. Read by {@link lazyImportErrorFor} so a fail-closed hook can
+ * say WHY its dependency is absent instead of a bare "unavailable".
+ * @type {Map<string, unknown>}
+ */
+const lazyImportErrors = new Map();
+
+/**
  * Dynamic-import `specifier`, yielding `{}` when the module cannot be loaded.
  * Hooks bind their npm packages through this instead of a bare static import: a
  * static npm import resolves before any try/catch, so a missing node_modules
@@ -169,12 +177,112 @@ export function registeredLazyModule(specifier) {
  */
 export async function lazyImport(specifier) {
   const registered = registeredLazyModules[specifier];
-  if (registered) return registered;
+  if (registered) {
+    lazyImportErrors.delete(specifier);
+    return registered;
+  }
   try {
-    return await import(specifier);
-  } catch {
+    const loaded = await import(specifier);
+    lazyImportErrors.delete(specifier);
+    return loaded;
+  } catch (err) {
+    // Delete before set: a Map keeps a re-set key at its ORIGINAL insertion
+    // position, and both readers below are recency-ordered — so re-recording in
+    // place would let a stale first failure outrank the one that just happened.
+    lazyImportErrors.delete(specifier);
+    lazyImportErrors.set(specifier, err);
     return {};
   }
+}
+
+/**
+ * The most recently recorded load error for `pkg` under any of its specifiers —
+ * the bare package or a subpath export (`pkg/output`, `pkg/invisible`) — or
+ * undefined when none is recorded. Hooks import a package through several
+ * subpaths; any one of them names why the package is absent, and the newest
+ * record reflects the current failure when they differ.
+ * @param {string} pkg
+ * @returns {unknown}
+ */
+export function lazyImportErrorFor(pkg) {
+  for (const [specifier, err] of [...lazyImportErrors].reverse())
+    if (specifier === pkg || specifier.startsWith(`${pkg}/`)) return err;
+  return undefined;
+}
+
+/**
+ * Package names (never relative-path specifiers) with a recorded load error,
+ * newest first — so a fail-closed reason can name whichever dependency actually
+ * failed instead of consulting a hardcoded package list.
+ * @returns {string[]}
+ */
+export function failedLazyPackages() {
+  const pkgs = new Set();
+  for (const specifier of [...lazyImportErrors.keys()].reverse()) {
+    // Only bare package names: relative/absolute paths and URL specifiers
+    // (file:, node:) are not npm packages a reinstall could restore.
+    if (!/^[\w@]/.test(specifier) || specifier.includes(":")) continue;
+    const parts = specifier.split("/");
+    pkgs.add(
+      specifier.startsWith("@") ? parts.slice(0, 2).join("/") : parts[0],
+    );
+  }
+  return [...pkgs];
+}
+
+/**
+ * The remedy {@link missingPackageMessage} states when the host does not supply
+ * one of its own. A host whose install has a specific entry point (a setup
+ * script, a devcontainer rebuild) passes that instead, so the reason names the
+ * command the reader should actually run.
+ */
+export const DEFAULT_MISSING_PACKAGE_REMEDY =
+  "reinstall the hook dependencies (pnpm install) and retry.";
+
+/**
+ * The fail-closed reason for a package a hook could not load: the recorded
+ * loader error plus the remedy. The cause is scrubbed (it is spliced into
+ * reasons shown to user and model) and its cap is COMPUTED so that
+ * prefix + cause + remedy always fits the downstream 300-char safeErrMessage
+ * re-scrub — the remedy can never be truncated off, whatever the package name.
+ * @param {string} pkg
+ * @param {unknown} [err]
+ * @param {string} [remedy]
+ * @returns {string}
+ */
+export function missingPackageMessage(
+  pkg,
+  err = lazyImportErrorFor(pkg),
+  remedy = DEFAULT_MISSING_PACKAGE_REMEDY,
+) {
+  const prefix = `${pkg} is unavailable: `;
+  // 2 for the "; " joiner; 12 for safeErrMessage's own "…[truncated]" marker,
+  // which lands past its cap when the cause is cut.
+  const causeCap = 300 - prefix.length - remedy.length - 2 - 12;
+  const cause =
+    err === undefined
+      ? "no load error recorded — the package likely loaded but lacks an expected export (version skew)"
+      : safeErrMessage(err, causeCap);
+  return `${prefix}${cause}; ${remedy}`;
+}
+
+/**
+ * {@link missingPackageMessage} as a throwable, tagged `code: "DEP_UNAVAILABLE"`
+ * so downstream reason-builders can recognize it structurally and not append a
+ * second copy of the same cause.
+ * @param {string} pkg
+ * @param {unknown} [err]
+ * @param {string} [remedy]
+ * @returns {Error}
+ */
+export function missingPackageError(
+  pkg,
+  err = lazyImportErrorFor(pkg),
+  remedy = DEFAULT_MISSING_PACKAGE_REMEDY,
+) {
+  return Object.assign(new Error(missingPackageMessage(pkg, err, remedy)), {
+    code: "DEP_UNAVAILABLE",
+  });
 }
 
 /**
