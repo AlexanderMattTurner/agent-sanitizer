@@ -59,7 +59,14 @@ if (provision.status !== 0) {
   process.exit(1);
 }
 const daemon = join(dataDir, "venv", "bin", "agent-secret-redactor-daemon");
-const live = { _AGENT_SANITIZER_REDACTOR_DAEMON: daemon };
+// A fresh socket per run, or a daemon left on the DEFAULT socket by anything
+// else on the machine would serve every check and this corpus would never
+// spawn — or test — the engine it just provisioned. (Found by the echo-stub
+// kill test: with the socket ambient, a pass-through daemon still went green.)
+const live = {
+  _AGENT_SANITIZER_REDACTOR_DAEMON: daemon,
+  _AGENT_SANITIZER_REDACTOR_SOCKET: join(dataDir, "live-engine.sock"),
+};
 
 // ── The golden corpus ────────────────────────────────────────────────────────
 
@@ -99,9 +106,12 @@ const live = { _AGENT_SANITIZER_REDACTOR_DAEMON: daemon };
     },
     { ...live, MYSERVICE_API_KEY: value },
   );
+  // Positive control first: silence also excludes the value (the hook emits
+  // nothing when nothing changed), so requiring the REDACTED marker is what
+  // distinguishes a redaction from a pass-through.
   check(
     "a credential-var value is redacted by exact match",
-    !res.body.includes(value),
+    /REDACTED/.test(res.stdout) && !res.body.includes(value),
     res.body.slice(0, 400),
   );
 }
