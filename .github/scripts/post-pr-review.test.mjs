@@ -20,6 +20,17 @@ import { fileURLToPath } from "node:url";
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const SCRIPT = join(__dirname, "post-pr-review.mjs");
 
+// The severity model's SSOT, read rather than restated: the marker and
+// synthetic-anchor tests below iterate `gating` member-by-member, so a severity
+// added to (or dropped from) the config is covered without editing this file —
+// and review-findings-gate.sh builds its predicate from the same list.
+const SEVERITIES = JSON.parse(
+  readFileSync(
+    new URL("../../config/review-severities.json", import.meta.url),
+    "utf8",
+  ),
+);
+
 // A unified diff for src/foo.js whose one hunk yields these commentable lines:
 //   RIGHT (new file): 1, 2, 3, 4, 5      LEFT (old file): 1, 2, 3, 4
 // Line 5 is RIGHT-only (a context line whose old-side number, 4, differs), which
@@ -101,9 +112,12 @@ describe("post-pr-review: anchored inline comments", () => {
     assert.equal(c.line, 2);
     assert.equal(c.side, "RIGHT");
     assert.equal(c.start_line, undefined);
+    // Exact body INCLUDING the hidden severity marker, which trails the
+    // suggestion fence — the gate matches it as a whole line, and the fence must
+    // still close before it.
     assert.equal(
       c.body,
-      "🟡 bug — wrong value\n\n```suggestion\nconst b = 4;\n```",
+      "🟡 bug — wrong value\n\n```suggestion\nconst b = 4;\n```\n\n<!-- severity: warning -->",
     );
   });
 
@@ -210,13 +224,20 @@ describe("post-pr-review: severity icons", () => {
           },
         ],
       });
-      assert.equal(payload.comments[0].body, `${expected} t — b`);
+      // First line only: the hidden severity marker the gate reads is appended
+      // to every anchored body and is asserted in its own block below.
+      assert.equal(
+        payload.comments[0].body.split("\n")[0],
+        `${expected} t — b`,
+      );
     });
   }
 });
 
 describe("post-pr-review: summary + spill", () => {
-  it("spills an un-anchorable finding into Additional notes, not comments", () => {
+  it("spills an un-anchorable NIT into Additional notes, not comments", () => {
+    // Only a non-gating severity spills: a gating one is anchored synthetically
+    // so it opens a thread the status gate can see (asserted in its own block).
     const { payload } = run({
       summary: "verdict line",
       findings: [
@@ -224,7 +245,7 @@ describe("post-pr-review: summary + spill", () => {
           path: "src/foo.js",
           line: 999,
           side: "RIGHT",
-          severity: "blocking",
+          severity: "nit",
           title: "t",
           body: "b",
         },
@@ -262,61 +283,31 @@ describe("post-pr-review: summary + spill", () => {
   });
 });
 
-describe("post-pr-review: verdict drives the review event", () => {
+describe("post-pr-review: the review event carries no merge consequence", () => {
+  // Every review posts as a COMMENT — what holds the merge is the
+  // review-findings status gate, which reads the threads, not the review event.
+  // A verdict that used to mint APPROVE/REQUEST_CHANGES must no longer do so:
+  // an APPROVE here would satisfy a review-required ruleset on the strength of
+  // the model's prose, and a REQUEST_CHANGES would strand the PR with no
+  // approval minter left to clear it.
   for (const verdict of [
+    "looks_good",
+    "LOOKS_GOOD",
     "needs_changes",
-    "blocking",
-    "NEEDS_CHANGES",
     " Blocking ",
+    "bogus",
+    "",
+    undefined,
   ]) {
-    it(`posts REQUEST_CHANGES for a ${JSON.stringify(verdict)} verdict`, () => {
-      const { payload } = run({
-        summary: "please fix",
-        verdict,
-        findings: [
-          {
-            path: "src/foo.js",
-            line: 2,
-            side: "RIGHT",
-            severity: "blocking",
-            title: "t",
-            body: "b",
-          },
-        ],
-      });
-      assert.equal(payload.event, "REQUEST_CHANGES");
+    it(`posts COMMENT for verdict ${JSON.stringify(verdict)}`, () => {
+      const review = { summary: "s", findings: [] };
+      if (verdict !== undefined) review.verdict = verdict;
+      const { payload } = run(review);
+      assert.equal(payload.event, "COMMENT");
     });
   }
 
-  it("blocks with REQUEST_CHANGES even when there are no anchorable findings", () => {
-    const { payload } = run({
-      summary: "please fix",
-      verdict: "needs_changes",
-      findings: [],
-    });
-    assert.equal(payload.event, "REQUEST_CHANGES");
-    assert.deepEqual(payload.comments, []);
-  });
-
-  it("does not fail open: a blocking verdict with empty summary + no findings still posts", () => {
-    const { status, payload } = run({
-      summary: "",
-      verdict: "blocking",
-      findings: [],
-    });
-    assert.equal(status, "PAYLOAD");
-    assert.equal(payload.event, "REQUEST_CHANGES");
-    assert.equal(payload.body, "Automated review.");
-  });
-
-  for (const verdict of ["looks_good", "LOOKS_GOOD", " Looks_Good "]) {
-    it(`posts APPROVE for a ${JSON.stringify(verdict)} verdict`, () => {
-      const { payload } = run({ summary: "all good", verdict, findings: [] });
-      assert.equal(payload.event, "APPROVE");
-    });
-  }
-
-  it("approves with the inline nits carried, when looks_good still has findings", () => {
+  it("carries the inline findings on the comment review", () => {
     const { payload } = run({
       summary: "minor only",
       verdict: "looks_good",
@@ -331,18 +322,153 @@ describe("post-pr-review: verdict drives the review event", () => {
         },
       ],
     });
-    assert.equal(payload.event, "APPROVE");
+    assert.equal(payload.event, "COMMENT");
     assert.equal(payload.comments.length, 1);
   });
 
-  for (const verdict of ["bogus", "", undefined]) {
-    it(`posts a non-blocking COMMENT for an unrecognized verdict ${JSON.stringify(verdict)}`, () => {
-      const review = { summary: "ok", findings: [] };
-      if (verdict !== undefined) review.verdict = verdict;
-      const { payload } = run(review);
-      assert.equal(payload.event, "COMMENT");
+  it("skips entirely when the reviewer produced no findings and no summary", () => {
+    // The gate does not count a skipped run as a review, so this leaves the PR
+    // RED rather than passing it unreviewed — the fail-closed direction.
+    const { status } = run({ summary: "", verdict: "blocking", findings: [] });
+    assert.equal(status, "SKIP");
+  });
+});
+
+describe("post-pr-review: the severity marker the gate reads", () => {
+  const anchored = (severity) => ({
+    summary: "s",
+    findings: [
+      {
+        path: "src/foo.js",
+        line: 2,
+        side: "RIGHT",
+        severity,
+        title: "t",
+        body: "b",
+      },
+    ],
+  });
+
+  // Iterated from the SSOT so a severity added to config/review-severities.json
+  // is covered without editing this test — and so a gating severity that stopped
+  // being stamped cannot pass here.
+  for (const severity of SEVERITIES.gating) {
+    it(`stamps a whole-line marker for the gating severity ${severity}`, () => {
+      const { payload } = run(anchored(severity));
+      assert.equal(payload.comments.length, 1);
+      // Whole-LINE match is what the gate's jq predicate does, so assert the
+      // marker is its own line rather than merely a substring.
+      assert.ok(
+        payload.comments[0].body
+          .split("\n")
+          .includes(`<!-- severity: ${severity} -->`),
+        `no whole-line marker for ${severity}: ${payload.comments[0].body}`,
+      );
     });
   }
+
+  it("stamps the marker for a non-gating severity too (the gate filters, not the writer)", () => {
+    const { payload } = run(anchored("nit"));
+    assert.ok(
+      payload.comments[0].body.split("\n").includes("<!-- severity: nit -->"),
+    );
+  });
+
+  it("stamps no marker for a severity outside the model", () => {
+    const { payload } = run(anchored("catastrophic"));
+    assert.doesNotMatch(payload.comments[0].body, /<!-- severity:/u);
+  });
+
+  it("puts the marker after the suggestion fence, never inside it", () => {
+    const { payload } = run({
+      summary: "s",
+      findings: [
+        {
+          path: "src/foo.js",
+          line: 2,
+          side: "RIGHT",
+          severity: "blocking",
+          title: "t",
+          body: "b",
+          suggestion: "const x = 1;",
+        },
+      ],
+    });
+    const body = payload.comments[0].body;
+    assert.ok(body.includes("```suggestion"));
+    assert.ok(
+      body.indexOf("<!-- severity: blocking -->") > body.lastIndexOf("```"),
+      `marker landed inside the fence: ${body}`,
+    );
+  });
+});
+
+describe("post-pr-review: an unanchorable gating finding still opens a thread", () => {
+  // The status gate can only see THREADS. A gating finding that spilled into the
+  // review body would hold nothing, which is the one way this reviewer could
+  // silently lose its grip on a merge.
+  const unanchorable = (severity) => ({
+    summary: "s",
+    findings: [
+      {
+        path: "src/foo.js",
+        line: 9999,
+        side: "RIGHT",
+        severity,
+        title: "t",
+        body: "b",
+      },
+    ],
+  });
+
+  for (const severity of SEVERITIES.gating) {
+    it(`anchors a ${severity} finding synthetically instead of spilling`, () => {
+      const { payload } = run(unanchorable(severity));
+      assert.equal(payload.comments.length, 1);
+      assert.match(payload.comments[0].body, /PR-wide finding at/u);
+      assert.ok(
+        payload.comments[0].body
+          .split("\n")
+          .includes(`<!-- severity: ${severity} -->`),
+      );
+      // Its original coordinates stay legible to the author.
+      assert.match(payload.comments[0].body, /src\/foo\.js:9999/u);
+      assert.doesNotMatch(payload.body, /Additional notes/u);
+    });
+  }
+
+  it("still spills a nit, which gates nothing either way", () => {
+    const { payload } = run(unanchorable("nit"));
+    assert.deepEqual(payload.comments, []);
+    assert.match(payload.body, /Additional notes/u);
+  });
+
+  it("normalizes the severity, so a cased gating value cannot spill", () => {
+    const { payload } = run(unanchorable(" Blocking "));
+    assert.equal(payload.comments.length, 1);
+    assert.match(payload.comments[0].body, /PR-wide finding at/u);
+  });
+
+  it("carries no suggestion onto a synthetic anchor", () => {
+    // The synthetic line is not the line the finding is about, so an applied
+    // suggestion there would edit unrelated code.
+    const { payload } = run({
+      summary: "s",
+      findings: [
+        {
+          path: "src/foo.js",
+          line: 9999,
+          side: "RIGHT",
+          severity: "blocking",
+          title: "t",
+          body: "b",
+          suggestion: "const x = 1;",
+        },
+      ],
+    });
+    assert.equal(payload.comments.length, 1);
+    assert.doesNotMatch(payload.comments[0].body, /```suggestion/u);
+  });
 });
 
 describe("post-pr-review: commit pinning", () => {

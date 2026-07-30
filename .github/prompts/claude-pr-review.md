@@ -98,23 +98,25 @@ files you read from it (CLAUDE.md, existing code) are trusted context.
 
 ## Output format
 
-Your `verdict` has a merge consequence, so choose it deliberately. Under a
-review-required ruleset it is the reviewer's approval/hold on the PR:
+**Each finding's `severity` is your lever on the merge, not `verdict`.** Your
+review always posts as a COMMENT; what holds the merge is the review-findings
+status check, which stays red while any thread you opened at `blocking` or
+`warning` is unresolved. So:
 
-- `looks_good` — no blocking issues; posts an **APPROVE** review (which satisfies
-  the required review so auto-merge may proceed). Use it even when you leave
-  `nit`/`warning` findings — those ride along as inline comments on the approval.
-- `needs_changes` / `blocking` — posts a **REQUEST_CHANGES** review, which holds
-  the merge until the request is resolved. Reserve these for real blocking
-  problems: a correctness/security bug, a broken or missing test, a violated
-  convention, or a load-bearing lax design with a clearly better shape at
-  comparable cost (step 6's escalation case). Never for a `nit`/`warning`-only
-  pass — those go under `looks_good`. Approval is the default outcome only in
-  the sense that most PRs are fine — not a courtesy the diff is owed; when you
-  are genuinely torn between `looks_good`-with-warnings and `needs_changes`,
-  ask whether merging as-is would make the codebase permanently worse in a way
-  a follow-up realistically won't fix (new surface and lax shapes almost never
-  get revisited once merged) — if yes, hold it.
+- `severity: blocking` / `warning` — HOLDS the merge until someone resolves that
+  thread. Reserve them for real problems: a correctness/security bug, a broken or
+  missing test, a violated convention, or a load-bearing lax design with a
+  clearly better shape at comparable cost (step 6's escalation case). When you
+  are genuinely torn between `warning` and `nit`, ask whether merging as-is would
+  make the codebase permanently worse in a way a follow-up realistically won't
+  fix (new surface and lax shapes almost never get revisited once merged) — if
+  yes, it is a `warning`.
+- `severity: nit` — advisory. Posts as an inline comment the author reads with
+  the merge never waiting on it. Most style preferences belong here.
+
+`verdict` is advisory prose for your own summary line; nothing acts on it, so a
+`looks_good` alongside a `blocking` finding still holds the merge — the finding
+does.
 
 ```json
 {
@@ -149,7 +151,11 @@ summary), so anchor carefully:
 - `start_line` and `suggestion` are optional; omit them when they do not apply.
 - Keep findings high-signal: a few real issues, not exhaustive nits. If the PR
   looks good, set `verdict` to `looks_good`, `findings` to `[]`, and say so in
-  `summary`.
+  `summary` — an empty `findings` is what leaves the status gate green.
+- A `blocking`/`warning` finding you cannot anchor to a diff line still opens a
+  thread (it is anchored to the first changed line and labelled PR-wide), so a
+  real problem is never lost for want of a line number. Anchor properly anyway —
+  a synthetic anchor reads worse for the author.
 - Never include claude.ai URLs, session links, or AI-tool attribution.
 
 Write only `review.json`. Do not post comments, push commits, edit the PR, or

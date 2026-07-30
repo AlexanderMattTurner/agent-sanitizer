@@ -14,18 +14,12 @@
 #          re-read. Head-scoped (once-per-tag): the re-review fires for the
 #          commit that carries the tag and NOT again on later untagged pushes
 #          (re-tag to run again).
-#       2. The reviewer's latest verdict is a non-approving review that still
-#          blocks the merge — CHANGES_REQUESTED (an explicit hold) OR COMMENTED
-#          (a review the reviewer left without approving). Under a review-required
-#          ruleset both leave the PR at zero approvals, so both must clear the
-#          same way: EVERY push gets a cheap HAIKU re-check, so a push that
-#          addresses the concerns is re-evaluated and can flip the verdict to
-#          APPROVE (clearing the block) instead of the stale hold gating the PR
-#          until someone re-tags it by hand. Self-terminating: once the re-check
-#          approves, the latest verdict is no longer a non-approving review and
-#          later pushes stop re-running. This automatic recheck NEVER spends
-#          Opus — the expensive model is only ever the explicit [opus-review]
-#          opt-in.
+#       2. The reviewer has NEVER reviewed this PR — the first whole-diff pass,
+#          on HAIKU, for a PR whose earlier events all skipped. A push is never a
+#          RE-read: the reviewer reads a PR once, and later pushes make progress
+#          by the thread resolver closing findings out, which is what the
+#          review-findings gate reads. This automatic pass NEVER spends Opus —
+#          the expensive model is only ever the explicit [opus-review] opt-in.
 #
 # Read under pull_request_target, so the untrusted PR head is NEVER checked out
 # or executed here: the head commit's message and the PR's reviews are fetched as
@@ -38,8 +32,7 @@ set -euo pipefail
 
 KEYWORD="[opus-review]"
 REVIEW_LABEL="needs-auto-review"
-# The reviewer posts with GITHUB_TOKEN, so its reviews are authored by this bot;
-# the latest review it left is the effective verdict that gates the PR.
+# The reviewer posts with GITHUB_TOKEN, so its reviews are authored by this bot.
 REVIEWER="github-actions[bot]"
 OPUS_MODEL="claude-opus-4-8"
 HAIKU_MODEL="claude-haiku-4-5"
@@ -88,27 +81,41 @@ if grep -qiF "$KEYWORD" <<<"$subject"; then
   exit 0
 fi
 
-# synchronize, trigger 2: a cheap Haiku re-check on every push while the
-# reviewer's latest verdict is a non-approving review it can supersede —
-# CHANGES_REQUESTED or COMMENTED. The latest review authored by the reviewer bot
-# is the effective verdict; both of these leave the PR at zero approvals under a
-# review-required ruleset, so the push gets the re-check that can flip it to
-# APPROVE. The other states are deliberately NOT re-checked, mirroring
-# approve-if-reviewer-hold-clear.sh's allowlist: APPROVED is already through, and
-# DISMISSED / "" (the reviewer never reviewed this PR) are not a reviewer hold to
-# clear. `--paginate --slurp` returns an array with ONE element PER PAGE (each
-# element is that page's reviews array), so the filter must flatten BOTH levels
-# (`.[][]`) to walk every review across every page, then `last` picks the most
-# recent. A single `.[]` iterates PAGES, so `.user.login`/`.state` index a page
-# ARRAY — jq errors, the `2>/dev/null` swallows it to empty, and the recheck
-# silently never fires (the bug that stranded every held PR). `--slurp` keeps the
-# whole result in one document so `--jq` runs ONCE and emits a single line; bare
-# `--paginate` would run the filter per page and concatenate. A transient API
-# failure yields empty -> no re-review.
+# synchronize, trigger 2: the FIRST whole-diff pass, when this PR has never had
+# one. A push is never a re-read — the reviewer reviews a PR once, and what makes
+# progress on later pushes is the thread resolver closing the findings out (which
+# is what the review-findings gate reads). Only the $KEYWORD opt-in above buys
+# another whole-diff pass.
+#
+# Do NOT key this on the latest review's STATE being non-approving: every review
+# posts as COMMENTED (the merge consequence lives in the review-findings gate), so
+# that condition is always true and would fire a Haiku re-read on every push to
+# every reviewed PR.
+#
+# Empty-bodied reviews are filtered out because GitHub synthesizes one, authored
+# by this same bot, around every standalone review-comment POST the thread
+# resolver makes — counting one as "already reviewed" would permanently suppress
+# the first real pass on the PR. Non-empty body is the real-review discriminator
+# (post-pr-review.mjs always posts prose, falling back to "Automated review.").
+#
+# `--paginate --slurp` returns an array with ONE element PER PAGE (each element is
+# that page's reviews array), so the filter must flatten BOTH levels (`.[][]`) to
+# walk every review across every page. A single `.[]` iterates PAGES, so
+# `.user.login`/`.state` index a page ARRAY — jq errors and the recheck silently
+# misbehaves. `--slurp` keeps the whole result in one document so `--jq` runs ONCE.
+#
+# The exit STATUS is captured separately from the state, because the two empty
+# results mean opposite things: a successful query returning "" means nobody ever
+# looked at this PR (the strongest reason to review), while a FAILED query also
+# yields "" and must not be read that way — folding them together would review on
+# every push forever whenever the API is flaky or the filter is malformed.
+reviews_rc=0
 state="$(gh api "repos/$REPO/pulls/${PR:-}/reviews" --paginate --slurp \
-  --jq "[.[][] | select(.user.login == \"$REVIEWER\")] | last | .state // empty" 2>/dev/null || true)"
-if [[ "$state" == "CHANGES_REQUESTED" || "$state" == "COMMENTED" ]]; then
-  emit true "outstanding $REVIEWER hold ($state) — re-checking on Haiku" "$HAIKU_MODEL"
+  --jq "[.[][] | select(.user.login == \"$REVIEWER\") | select((.body // \"\") != \"\")] | last | .state // empty" 2>/dev/null)" || reviews_rc=$?
+if [[ "$reviews_rc" -ne 0 ]]; then
+  emit false "could not read $REPO#${PR:-} reviews (rc=$reviews_rc) — not reviewing rather than guessing"
+elif [[ -z "$state" ]]; then
+  emit true "$REVIEWER has never reviewed this PR — running the first pass this push" "$HAIKU_MODEL"
 else
-  emit false "no $KEYWORD opt-in and no outstanding reviewer hold"
+  emit false "$REVIEWER already reviewed this PR (latest: $state) — a push is not re-read; put $KEYWORD in a commit title for a full re-read"
 fi

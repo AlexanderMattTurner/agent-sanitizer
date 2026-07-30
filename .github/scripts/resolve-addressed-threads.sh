@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
-# Resolve the reviewer threads Haiku judged addressed. Resolving ONLY — the
-# approval that clears the reviewer's hold once every thread is resolved lives in
-# approve-if-reviewer-hold-clear.sh, run as a separate always-on step so it fires
-# no matter WHO resolved the last thread (this run, a human, or a prior race).
+# Resolve the reviewer threads Haiku judged addressed. Resolving ONLY — what
+# clears the merge is the review-findings gate, whose predicate is re-derived from
+# the PR's unresolved threads by review-findings-gate.sh; the resolver workflow
+# re-posts that verdict in a separate always-on step so it lands no matter WHO
+# resolved the last thread (this run, a human, or a prior race).
 #
 # Flow:
 #   1. select-resolvable-threads.mjs turns (threads.json, verdicts.json) into
