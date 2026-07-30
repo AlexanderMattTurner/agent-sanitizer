@@ -151,6 +151,7 @@ test("the shipped artifacts are tracked by git, not just present on disk", () =>
     .filter(Boolean);
   for (const required of [
     "plugin/dist/hooks/plugin-hooks.bundle.mjs",
+    "plugin/dist/redactor/daemon.pyz",
     "plugin/requirements.txt",
   ])
     assert.ok(
@@ -275,11 +276,12 @@ test("hooks.json wires exactly the four modes, each through the launcher", () =>
   // reads as "no objection" and passes the guarded action through.
   for (const command of commands.filter((c) => c.includes("--hook=")))
     assert.match(command, /safe-launch\.sh/);
-  // The redactor daemon path is handed to the two hooks that redact.
-  for (const command of commands.filter((c) =>
-    /--hook=(pretooluse-sanitize|sanitize-output)/.test(c),
-  ))
-    assert.match(command, /_AGENT_SANITIZER_REDACTOR_DAEMON=/);
+  // Daemon resolution lives in the LAUNCHER (venv when provisioned, committed
+  // zipapp as the floor), so no command may pin a daemon path here: an env
+  // prefix in hooks.json would point at the venv unconditionally and reopen
+  // the no-venv cold-start hole the zipapp exists to close.
+  for (const command of commands)
+    assert.doesNotMatch(command, /_AGENT_SANITIZER_REDACTOR_DAEMON=/);
 });
 
 test("every wired mode is dispatchable (no unknown-mode fail-closed)", (t) => {
@@ -1104,4 +1106,117 @@ test("empty stdin produces a fail-closed verdict for every stdin-reading hook", 
     assert.equal(res.status, 0, `${hook}: ${res.stderr}`);
     assert.ok(res.stdout.trim().length > 0, `${hook}: empty stdout fails OPEN`);
   }
+});
+
+test("every wired hook sits in exactly one degraded-verdict posture", () => {
+  // The launcher keys its degraded verdict on the EVENT, and Claude Code
+  // ignores a verdict shaped for the wrong event — silently, which is a fail
+  // open. So each wired (event, hook) must be claimed by exactly one posture:
+  // fail-closed (the event has a verdict channel and the launcher must use it)
+  // or advisory (SessionStart has no channel; stderr is the loud signal). A
+  // hook in neither table is the defect class this pins — wired, but with no
+  // stated degraded behaviour.
+  const FAIL_CLOSED = new Set([
+    "UserPromptSubmit", // decision:"block"
+    "PostToolUse", // updatedToolOutput suppression
+    "PreToolUse", // permissionDecision:"ask"
+  ]);
+  const ADVISORY = new Set(["SessionStart"]);
+  for (const [event, hook] of wiredHooks()) {
+    const closed = FAIL_CLOSED.has(event);
+    const advisory = ADVISORY.has(event);
+    assert.ok(
+      closed !== advisory,
+      `${event}/${hook} is in ${closed && advisory ? "BOTH" : "NEITHER"} posture table`,
+    );
+  }
+  // Non-vacuity: the posture tables must jointly cover a non-empty wiring.
+  assert.ok(wiredHooks().length >= 4);
+});
+
+// ─── The committed Python artifact ───────────────────────────────────────────
+//
+// The redactor daemon ships as a committed, self-contained zipapp so a session
+// with no provisioned venv and no network still redacts from the first tool
+// call — the same cold-start hole the JS bundle closes, on the Python side.
+
+const PYZ_PATH = join(PLUGIN_DIR, "dist", "redactor", "daemon.pyz");
+
+test("the redactor zipapp is platform-independent (no compiled artifacts)", () => {
+  // A .pyz committed from one machine with a .so inside runs nowhere else —
+  // worse than no bundle. PyYAML and charset_normalizer both fall back to pure
+  // Python when their speedups are absent, which is what makes this possible.
+  const res = spawnSync(
+    "python3",
+    [
+      "-c",
+      `import sys, zipfile
+bad = [n for n in zipfile.ZipFile(sys.argv[1]).namelist() if n.endswith((".so", ".pyd", ".pyc"))]
+sys.exit(1 if bad else 0)`,
+      PYZ_PATH,
+    ],
+    { encoding: "utf8" },
+  );
+  assert.equal(res.status, 0, "compiled artifacts found inside daemon.pyz");
+});
+
+test("with no venv and no env override, the output hook redacts via the committed zipapp", (t) => {
+  // The whole point of the artifact: this is a REAL engine run — python3 plus
+  // the committed .pyz, nothing provisioned — driven through the launcher the
+  // way Claude Code drives it.
+  const plugin = stagePlugin(t);
+  const res = launch(
+    plugin,
+    "PostToolUse",
+    "sanitize-output",
+    {
+      hook_event_name: "PostToolUse",
+      tool_name: "Bash",
+      tool_input: {},
+      tool_response: { stdout: "key=AKIAIOSFODNN7EXAMPLE done" },
+    },
+    { env: { _AGENT_SANITIZER_REDACTOR_SOCKET: join(scratch(t), "pyz.sock") } },
+  );
+  assert.equal(res.status, 0, res.stderr);
+  const out = JSON.parse(res.stdout).hookSpecificOutput;
+  assert.ok(!JSON.stringify(out).includes("AKIAIOSFODNN7EXAMPLE"));
+  assert.match(out.updatedToolOutput.stdout, /REDACTED/);
+});
+
+test("the launcher prefers a provisioned venv daemon over the zipapp", (t) => {
+  // Behavioural pair proving the preference order. The fake venv daemon never
+  // binds, so if the launcher exported it the hook fails closed; if the
+  // launcher ignored it, the zipapp would redact and this test would see a
+  // clean verdict instead.
+  const plugin = stagePlugin(t);
+  const data = scratch(t);
+  mkdirSync(join(data, "venv", "bin"), { recursive: true });
+  const fake = join(data, "venv", "bin", "agent-secret-redactor-daemon");
+  writeFileSync(fake, "#!/usr/bin/env bash\nexit 0\n", { mode: 0o755 });
+
+  const res = launch(
+    plugin,
+    "PostToolUse",
+    "sanitize-output",
+    {
+      hook_event_name: "PostToolUse",
+      tool_name: "Bash",
+      tool_input: {},
+      tool_response: { stdout: "key=AKIAIOSFODNN7EXAMPLE" },
+    },
+    {
+      env: {
+        CLAUDE_PLUGIN_DATA: data,
+        _AGENT_SANITIZER_REDACTOR_SOCKET: join(scratch(t), "venv.sock"),
+        _AGENT_SANITIZER_REDACTOR_WAIT_MS: "400",
+        _AGENT_SANITIZER_REDACTOR_REQUEST_MS: "400",
+        _AGENT_SANITIZER_SANITIZE_BUDGET_MS: "3000",
+      },
+    },
+  );
+  assert.equal(res.status, 0, res.stderr);
+  assert.match(
+    JSON.parse(res.stdout).hookSpecificOutput.updatedToolOutput.stdout,
+    /SANITIZATION FAILED/,
+  );
 });

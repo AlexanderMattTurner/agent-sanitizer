@@ -54687,9 +54687,17 @@ import { existsSync, lstatSync as lstatSync2 } from "node:fs";
 import { createConnection } from "node:net";
 import { tmpdir as tmpdir2, userInfo as userInfo2 } from "node:os";
 import { dirname, join as join2 } from "node:path";
+import { fileURLToPath as fileURLToPath2 } from "node:url";
 function positiveMsOr(raw, fallback) {
   const ms = Number(raw);
   return Number.isFinite(ms) && ms > 0 ? ms : fallback;
+}
+function daemonCommand() {
+  const configured = process.env._AGENT_SANITIZER_REDACTOR_DAEMON;
+  if (configured) return [configured];
+  const pyz = fileURLToPath2(new URL("../redactor/daemon.pyz", import.meta.url));
+  if (existsSync(pyz)) return ["python3", pyz];
+  return ["agent-secret-redactor-daemon"];
 }
 function requestDeadlineMs() {
   return positiveMsOr(process.env._AGENT_SANITIZER_REDACTOR_REQUEST_MS, 2e4);
@@ -54806,8 +54814,12 @@ function connectAndRequest(socketPath, request, deadlineMs = requestDeadlineMs()
     );
   });
 }
-function spawnDaemon(socketPath, bin = DAEMON_BIN) {
-  const child = spawn(bin, [socketPath], { detached: true, stdio: "ignore" });
+function spawnDaemon(socketPath, command = daemonCommand()) {
+  const [bin, ...leading] = command;
+  const child = spawn(bin, [...leading, socketPath], {
+    detached: true,
+    stdio: "ignore"
+  });
   child.on("error", () => {
   });
   child.unref();
@@ -54895,14 +54907,13 @@ async function redactViaDaemon(text5, opts = {}) {
     }
   }
 }
-var FRAME_CAP, DEFAULT_SOCKET_PATH, DAEMON_BIN, WAIT_DEADLINE_MS, sleep;
+var FRAME_CAP, DEFAULT_SOCKET_PATH, WAIT_DEADLINE_MS, sleep;
 var init_redactor_client = __esm({
   "claude-hooks/lib/redactor-client.mjs"() {
     "use strict";
     init_env_config();
     FRAME_CAP = 16 * 1024 * 1024;
     DEFAULT_SOCKET_PATH = process.env._AGENT_SANITIZER_REDACTOR_SOCKET || join2(tmpdir2(), "agent-sanitizer-redactor", "redactor.sock");
-    DAEMON_BIN = process.env._AGENT_SANITIZER_REDACTOR_DAEMON || "agent-secret-redactor-daemon";
     WAIT_DEADLINE_MS = positiveMsOr(
       process.env._AGENT_SANITIZER_REDACTOR_WAIT_MS,
       8e3

@@ -52,7 +52,20 @@ if ! command -v node >/dev/null 2>&1; then
   exit 0
 fi
 
-bundle="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)/dist/hooks/plugin-hooks.bundle.mjs"
+plugin_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
+bundle="$plugin_root/dist/hooks/plugin-hooks.bundle.mjs"
+
+# Daemon resolution order (matching the client's): an explicit
+# _AGENT_SANITIZER_REDACTOR_DAEMON wins (tests point it at dead paths to drive
+# the fail-closed arm — a fallback from an explicit setting would turn those
+# arms into silent passes); else prefer the venv the SessionStart provisioner
+# built, when it exists (faster cold start than the zipapp's self-extract);
+# else the client falls back to the committed dist/redactor/daemon.pyz, which
+# needs only python3 — so a session with no venv and no network still redacts.
+venv_daemon="${CLAUDE_PLUGIN_DATA:-}/venv/bin/agent-secret-redactor-daemon"
+if [[ -z "${_AGENT_SANITIZER_REDACTOR_DAEMON:-}" && -x "$venv_daemon" ]]; then
+  export _AGENT_SANITIZER_REDACTOR_DAEMON="$venv_daemon"
+fi
 
 # `node --check` catches a missing, unreadable, or truncated bundle in one
 # probe; a bundle that parses but fails later is covered by the in-process

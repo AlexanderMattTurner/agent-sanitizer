@@ -64,9 +64,12 @@ jobs:
           persist-credentials: false
           fetch-depth: 0
 
+      # The zipapp rebuild installs the pinned engine from PyPI, so it needs uv.
       - name: Setup base environment
         if: steps.guard.outputs.enabled == 'true'
         uses: ./.github/actions/setup-base-env
+        with:
+          setup-python: "true"
 
       # The PyPI half of the pin is what the plugin installs at SessionStart, and
       # npm and PyPI releases can land minutes apart. A bundle regenerated against
@@ -84,6 +87,7 @@ jobs:
         if: steps.guard.outputs.enabled == 'true'
         run: |
           node plugin/scripts/build-plugin.mjs
+          node plugin/scripts/build-redactor-pyz.mjs
           # `git diff --quiet` exits non-zero exactly when the build changed files.
           if git diff --quiet; then
             echo "changed=false" >>"$GITHUB_OUTPUT"

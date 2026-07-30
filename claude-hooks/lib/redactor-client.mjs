@@ -22,6 +22,7 @@ import { existsSync, lstatSync } from "node:fs";
 import { createConnection } from "node:net";
 import { tmpdir, userInfo } from "node:os";
 import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { envBoundSecretVars } from "./env-config.mjs";
 
 // Refuse absurd frames rather than buffer unbounded (mirrors the daemon's cap).
@@ -50,12 +51,31 @@ export const DEFAULT_SOCKET_PATH =
   process.env._AGENT_SANITIZER_REDACTOR_SOCKET ||
   join(tmpdir(), "agent-sanitizer-redactor", "redactor.sock");
 
-// The daemon is the packaged console script; the plugin's hooks.json points this
-// at the interpreter it provisioned under the plugin data dir, and tests override
-// it to drive the unreachable-daemon path.
-const DAEMON_BIN =
-  process.env._AGENT_SANITIZER_REDACTOR_DAEMON ||
-  "agent-secret-redactor-daemon";
+/**
+ * The daemon command, as [argv0, ...leadingArgs]. Resolution order:
+ *
+ * 1. `_AGENT_SANITIZER_REDACTOR_DAEMON` — authoritative when set (the launcher
+ *    sets it to the provisioned venv's console script when one exists, and
+ *    tests point it at dead paths to drive the fail-closed arm; a fallback
+ *    from an explicit setting would turn those arms into silent passes).
+ * 2. The committed self-contained zipapp shipped BESIDE this bundle
+ *    (`plugin/dist/redactor/daemon.pyz`) — the guaranteed floor: it needs only
+ *    a python3 on PATH, so a cold start with no venv and no network still
+ *    redacts instead of failing closed on every tool call.
+ * 3. The packaged console script from PATH — the un-bundled/dev case, where
+ *    no sibling dist tree exists.
+ * @returns {string[]}
+ */
+function daemonCommand() {
+  const configured = process.env._AGENT_SANITIZER_REDACTOR_DAEMON;
+  if (configured) return [configured];
+  // Inside the built bundle import.meta.url is .../plugin/dist/hooks/<bundle>,
+  // so the committed zipapp sits one level up; from the raw sources no such
+  // sibling exists and the check falls through.
+  const pyz = fileURLToPath(new URL("../redactor/daemon.pyz", import.meta.url));
+  if (existsSync(pyz)) return ["python3", pyz];
+  return ["agent-secret-redactor-daemon"];
+}
 // How long to wait for a freshly-spawned daemon to start accepting. A cold start
 // pays the detect-secrets import + plugin prime (~1-3s), so the default leaves
 // margin; tests shorten it to exercise the give-up-and-fail-closed path quickly.
@@ -328,11 +348,16 @@ export function connectAndRequest(
  * is the cross-process mutex, so a racing second spawn just exits — the spawn is
  * idempotent and needs no lock here.
  * @param {string} socketPath
- * @param {string} [bin] daemon command (injectable so tests can drive the
- * missing-binary arm in-process; production always uses DAEMON_BIN)
+ * @param {string[]} [command] daemon command as [argv0, ...leadingArgs]
+ * (injectable so tests can drive the missing-binary arm in-process;
+ * production always uses daemonCommand())
  */
-export function spawnDaemon(socketPath, bin = DAEMON_BIN) {
-  const child = spawn(bin, [socketPath], { detached: true, stdio: "ignore" });
+export function spawnDaemon(socketPath, command = daemonCommand()) {
+  const [bin, ...leading] = command;
+  const child = spawn(bin, [...leading, socketPath], {
+    detached: true,
+    stdio: "ignore",
+  });
   // A missing daemon binary surfaces as an async 'error' event; UNHANDLED it
   // kills this hook process, which the harness reads as "no objection" — the
   // tool output would pass through UNSANITIZED (fail open). Swallowed, the

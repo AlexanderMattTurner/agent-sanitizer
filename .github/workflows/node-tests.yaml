@@ -93,6 +93,15 @@ jobs:
       - name: Drive the hooks against the real engine
         run: node .github/scripts/plugin-live-engine.mjs
 
+      # The zipapp's reproducibility check lives here rather than in the default
+      # suite because rebuilding it needs PyPI; the network-free suite asserts
+      # the committed artifact's properties (tracked, pure-Python, runnable)
+      # without rebuilding.
+      - name: Rebuild the redactor zipapp and byte-compare
+        run: |
+          node plugin/scripts/build-redactor-pyz.mjs
+          git diff --exit-code plugin/dist/redactor
+
   # Ungated on purpose: a dist-only PR is exactly the case this catches, so it
   # must not sit behind a paths filter that such a PR would miss.
   dist-provenance:
