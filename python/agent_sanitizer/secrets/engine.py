@@ -23,6 +23,7 @@ import functools
 import json
 import re
 from pathlib import Path
+from urllib.parse import urlsplit
 
 from detect_secrets.core.plugins.util import get_mapping_from_secret_type_to_class
 from detect_secrets.core.potential_secret import PotentialSecret
@@ -553,9 +554,6 @@ def _is_filesystem_path(m: re.Match[str]) -> bool:
 # strips a public endpoint for no security gain. Skip a URL that carries no
 # credential material; keep redacting one that DOES embed a secret.
 _ENDPOINT_URL_RE = re.compile(r"https?://[^\s]+\Z", re.IGNORECASE)
-# Userinfo credentials in the authority (`https://user:pass@host/…`): a password
-# before the `@` is a real secret, so such a URL is never skipped.
-_URL_USERINFO_RE = re.compile(r"https?://[^/@\s]*:[^/@\s]*@", re.IGNORECASE)
 # An opaque credential-shaped run: >=20 CONTIGUOUS base64/hex-alphabet chars
 # mixing letters AND digits (a Slack webhook token path, a bearer blob) — the
 # high-entropy shape a benign path segment (`token`, `authorize`, `v2`,
@@ -574,16 +572,37 @@ def _has_opaque_run(value: str) -> bool:
     )
 
 
+def _has_userinfo(value: str) -> bool:
+    """True when the URL's authority carries userinfo — credential material.
+
+    The authority is delimited by the URL grammar, so ``urlsplit`` is asked for it
+    rather than a pattern being written for it. That matters for what it catches:
+    userinfo needs no colon to be a credential (``https://ghp_…@github.com`` is a
+    bare-token clone URL), and a ``user:pass@`` pattern requiring one lets exactly
+    that spelling through. It also matters for what it does NOT catch — an ``@``
+    later in the path or query (``/@scope/pkg``) is not userinfo, and only the
+    grammar knows where the authority ends.
+    """
+    try:
+        parsed = urlsplit(value)
+    except ValueError:
+        # An authority `urlsplit` refuses to read (a bracketed-host/port error) is
+        # one we cannot clear, so it is not a public endpoint. This is the fail-safe
+        # direction: the value stays redacted.
+        return True
+    return bool(parsed.username or parsed.password)
+
+
 def _is_public_endpoint_url(value: str) -> bool:
     """True when the value is a bare origin/endpoint URL carrying no credential
-    material (no userinfo password, no opaque high-entropy token in the
-    path/query), so redacting it would strip a public endpoint. A URL that DOES
-    embed a secret (a Slack ``webhook_url`` token path, ``user:pass@``) is not
+    material (no userinfo, no opaque high-entropy token in the path/query), so
+    redacting it would strip a public endpoint. A URL that DOES embed a secret (a
+    Slack ``webhook_url`` token path, ``user:pass@``, a bare ``token@``) is not
     skipped. Attacker-safe on web ingress: a clean URL hides no secret, and a
     smuggled token in the path trips the opaque-run gate."""
     if _ENDPOINT_URL_RE.fullmatch(value) is None:
         return False
-    if _URL_USERINFO_RE.match(value):
+    if _has_userinfo(value):
         return False
     return not _has_opaque_run(value)
 

@@ -365,10 +365,10 @@ const HIDDEN_STYLE_CASES = [
   ["display:none !\\69mportant", true], // with a space before the escaped flag
   ["display:block!\\69mportant", false], // decodes to "block!important" -> stripped -> "block", visible
   ["visibility:hi\\64 den!important", true], // escaped value AND a plain important flag
-  // ── raw fallback for declarations style-to-object cannot parse at all ──
+  // ── raw fallback for declarations the declaration parser cannot read at all ──
   // An escape in the PROPERTY NAME is valid CSS a browser applies, but a parse
-  // error to style-to-object even in isolation; the raw first-colon fallback
-  // must still detect it (previously a hidden-content bypass).
+  // error to the declaration parser even in isolation; the raw first-colon
+  // fallback must still detect it (a hidden-content bypass otherwise).
   ["\\64 isplay:none", true], // `\64` -> 'd': browser reads `display:none`
   ["\\76 isibility:hidden", true], // `\76` -> 'v': browser reads `visibility:hidden`
   ["color:red;\\64 isplay:none", true], // valid decl first, escaped hider second
@@ -387,7 +387,7 @@ const HIDDEN_STYLE_CASES = [
 ];
 
 // Negative corpus for the raw-declaration fallback: realistic legitimate
-// styles — including parse-breaking ones style-to-object rejects — must
+// styles — including parse-breaking ones the declaration parser rejects — must
 // produce ZERO hidden verdicts, or the fallback would splice real content
 // (precision-over-recall doctrine).
 const LEGIT_STYLE_CORPUS = [
