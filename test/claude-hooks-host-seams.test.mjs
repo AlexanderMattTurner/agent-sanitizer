@@ -29,9 +29,10 @@ const {
   missingPackageError,
   safeErrMessage,
   DEFAULT_MISSING_PACKAGE_REMEDY,
+  hookgateMarkerPath,
+  probeSetupAlive,
+  awaitLazyDependency,
 } = await import("../claude-hooks/lib/hook-io.mjs");
-const { hookgateMarkerPath, probeSetupAlive, awaitControlPlaneBindings } =
-  await import("../claude-hooks/lib/control-plane.mjs");
 const { judgeSanitizeUserPrompt, USER_PROMPT_MESSAGES } =
   await import("../claude-hooks/sanitize-user-prompt.mjs");
 const {
@@ -395,7 +396,7 @@ describe("cold-start wait", () => {
 
   it("returns immediately on a warm session, with no sleep at all", async () => {
     let slept = 0;
-    const bindings = await awaitControlPlaneBindings({
+    const bindings = await awaitLazyDependency({
       tryImport: async () => ({ ok: true }),
       markerPresent: never,
       setupAlive: never,
@@ -408,7 +409,7 @@ describe("cold-start wait", () => {
   });
 
   it("gives up after the grace window when no setup was ever seen", async () => {
-    const bindings = await awaitControlPlaneBindings({
+    const bindings = await awaitLazyDependency({
       tryImport: async () => null,
       markerPresent: never,
       setupAlive: never,
@@ -424,7 +425,7 @@ describe("cold-start wait", () => {
   it("waits out a live install past the grace window, then settles", async () => {
     let attempts = 0;
     let installing = true;
-    const bindings = await awaitControlPlaneBindings({
+    const bindings = await awaitLazyDependency({
       tryImport: async () => {
         attempts += 1;
         // Setup finishes without ever providing the dep.
@@ -449,7 +450,7 @@ describe("cold-start wait", () => {
 
   it("stops at the ceiling when setup is alive but hung", async () => {
     let attempts = 0;
-    const bindings = await awaitControlPlaneBindings({
+    const bindings = await awaitLazyDependency({
       tryImport: async () => {
         attempts += 1;
         return null;

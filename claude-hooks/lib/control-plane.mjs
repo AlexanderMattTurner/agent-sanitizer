@@ -8,14 +8,15 @@
  * (runJudgeCli).
  */
 import {
+  awaitLazyDependency,
   errMessage,
+  hookgateMarkerPath,
   lazyImport,
   markerIsTrusted,
   missingPackageError,
+  probeSetupAlive,
   readStdinJson,
 } from "./hook-io.mjs";
-
-import { readFileSync } from "node:fs";
 
 // Loaded via a *caught* dynamic import — never a bare static `import … from`.
 // A static npm import resolves before any try/catch, so a missing node_modules
@@ -31,144 +32,13 @@ let Decision;
 /** @type {typeof import("agent-control-plane-core").EventKind | undefined} */
 let EventKind;
 
-/** The marker filename stem; the project directory is appended to it. */
-const HOOKGATE_MARKER_STEM = "agent-sanitizer-hookgate-inflight-";
-
-/**
- * Path of the cold-start in-flight marker a host's setup script writes
- * SYNCHRONOUSLY before it starts installing deps (its own PID as the contents)
- * and removes once the hook dependencies are provisioned. A hook that fires
- * before setup finishes finds the marker and WAITS for its dependency rather
- * than failing closed on it — so the first turn is merely delayed, never
- * blocked, for as long as setup is still alive (the PID lets the hook tell a
- * live install from a stale marker left by a killed setup). Derived purely from
- * the raw CLAUDE_PROJECT_DIR the harness sets for both processes (no
- * canonicalization — the two must produce byte-identical paths), so no env has
- * to propagate from setup to the hook. Null when CLAUDE_PROJECT_DIR is unset (no
- * setup ran → nothing to wait on).
- * @param {string | undefined} [projectDir]
- * @param {string | undefined} [runtimeDir]
- * @returns {string | null}
- */
-export function hookgateMarkerPath(
-  projectDir = process.env.CLAUDE_PROJECT_DIR,
-  runtimeDir = process.env.XDG_RUNTIME_DIR,
-) {
-  if (!projectDir) return null;
-  // Prefer the per-user, mode-0700 runtime dir when the harness gives an
-  // absolute one; else the world-writable /tmp, where markerIsTrusted() — not
-  // the path — defends against a squatted marker.
-  const base = runtimeDir && runtimeDir.startsWith("/") ? runtimeDir : "/tmp";
-  return `${base}/${HOOKGATE_MARKER_STEM}${projectDir.replace(/[^A-Za-z0-9]/g, "_")}`;
-}
-
-/**
- * Is the setup process that wrote `markerPath` still alive? `process.kill(pid, 0)`
- * probes liveness without signalling: it throws ESRCH once the process is gone (a
- * killed setup → stale marker, so stop waiting) and EPERM when it exists but isn't
- * ours (still alive). An unreadable / not-yet-written marker is treated as alive —
- * favouring a brief wait over a premature give-up during setup's write race. A null
- * markerPath (no project dir → no setup to wait on) reads as alive so the caller's
- * own grace/ceiling bound governs.
- * @param {string | null} markerPath
- * @returns {boolean}
- */
-export function probeSetupAlive(markerPath) {
-  if (markerPath === null) return true;
-  let pid;
-  try {
-    pid = parseInt(readFileSync(markerPath, "utf8"), 10);
-  } catch {
-    return true;
-  }
-  if (!Number.isInteger(pid) || pid <= 0) return true;
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch (err) {
-    return /** @type {NodeJS.ErrnoException} */ (err).code === "EPERM";
-  }
-}
-
-/**
- * Resolve a lazily-loaded dependency, blocking through the cold-start window while
- * setup is still installing it. Returns the loaded value, or null once it gives up
- * (the caller leaves its bindings undefined so the hook fails closed). It waits for
- * as long as setup is genuinely alive, so a slow install is never cut off; the only
- * bound on that wait is a backstop ceiling that stays under the hook's harness
- * timeout — a hook killed for running over is a fail-OPEN, the opposite of what a
- * gate wants. The give-up cases are the honest ones (setup finished/died without the
- * dep, or no setup at all), so a genuinely-absent dep fails closed fast, never after
- * a long block:
- *   - import succeeds                 → return immediately (warm session: no wait).
- *   - marker present AND setup alive  → setup is working; wait it out (ceilingMs is a
- *                                        backstop only, for a hung-but-alive setup).
- *   - was installing, now not (marker cleared, or a stale marker from a killed setup)
- *                                     → settleMs grace for a just-orphaned install to
- *                                        land, then give up: the dep is absent.
- *   - no live setup ever seen         → wait only graceMs (tolerating setup not having
- *                                        written the marker yet), then give up.
- * @param {{
- *   tryImport: () => Promise<object | null>,
- *   markerPresent: () => boolean,
- *   setupAlive: () => boolean,
- *   now?: () => number,
- *   sleep?: (ms: number) => Promise<void>,
- *   graceMs?: number,
- *   settleMs?: number,
- *   ceilingMs?: number,
- *   intervalMs?: number,
- * }} deps
- * @returns {Promise<object | null>}
- */
-export async function awaitControlPlaneBindings({
-  tryImport,
-  markerPresent,
-  setupAlive,
-  now = () => Date.now(),
-  sleep = (ms) =>
-    new Promise((resolve) => {
-      setTimeout(resolve, ms);
-    }),
-  graceMs = 5000,
-  settleMs = 1000,
-  ceilingMs = 900000,
-  intervalMs = 250,
-}) {
-  const start = now();
-  let sawInstalling = false;
-  let enteredDone = false;
-  let doneAt = 0;
-  for (;;) {
-    const bindings = await tryImport();
-    if (bindings) return bindings;
-    const installing = markerPresent() && setupAlive();
-    let giveUp;
-    if (installing) {
-      sawInstalling = true;
-      enteredDone = false;
-      giveUp = now() - start > ceilingMs;
-    } else if (sawInstalling) {
-      if (!enteredDone) {
-        enteredDone = true;
-        doneAt = now();
-      }
-      giveUp = now() - doneAt > settleMs;
-    } else {
-      giveUp = now() - start > graceMs;
-    }
-    if (giveUp) return null;
-    await sleep(intervalMs);
-  }
-}
-
 /* c8 ignore start -- module-load boundary: the real import resolves in every
    in-process test and spawned CLI run, and a missing node_modules can't be
    simulated in-process, so this glue's failure arm is unobservable here. The
-   observable logic lives in awaitControlPlaneBindings, unit-tested directly. */
+   observable logic lives in awaitLazyDependency, unit-tested directly. */
 // Stryker disable all
 const marker = hookgateMarkerPath();
-const loaded = await awaitControlPlaneBindings({
+const loaded = await awaitLazyDependency({
   tryImport: async () => {
     // lazyImport is the shared caught npm import (see hook-io): it returns the
     // module on success and {} on a failed load, so a missing binding is the

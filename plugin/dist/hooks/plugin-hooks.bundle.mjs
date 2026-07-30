@@ -49,6 +49,7 @@ import {
   openSync,
   closeSync,
   lstatSync,
+  readFileSync,
   unlinkSync,
   writeFileSync
 } from "node:fs";
@@ -161,6 +162,69 @@ function emitHookResponse(hookEventName, fields) {
     JSON.stringify({ hookSpecificOutput: { hookEventName, ...fields } })
   );
 }
+function hookgateMarkerPath(projectDir = process.env.CLAUDE_PROJECT_DIR, runtimeDir = process.env.XDG_RUNTIME_DIR) {
+  if (!projectDir) return null;
+  const base2 = runtimeDir && runtimeDir.startsWith("/") ? runtimeDir : "/tmp";
+  return `${base2}/${HOOKGATE_MARKER_STEM}${projectDir.replace(/[^A-Za-z0-9]/g, "_")}`;
+}
+function probeSetupAlive(markerPath) {
+  if (markerPath === null) return true;
+  let pid;
+  try {
+    pid = parseInt(readFileSync(markerPath, "utf8"), 10);
+  } catch {
+    return true;
+  }
+  if (!Number.isInteger(pid) || pid <= 0) return true;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (err) {
+    return (
+      /** @type {NodeJS.ErrnoException} */
+      err.code === "EPERM"
+    );
+  }
+}
+async function awaitLazyDependency({
+  tryImport,
+  markerPresent,
+  setupAlive,
+  now = () => Date.now(),
+  sleep: sleep2 = (ms) => new Promise((resolve2) => {
+    setTimeout(resolve2, ms);
+  }),
+  graceMs = 5e3,
+  settleMs = 1e3,
+  ceilingMs = 9e5,
+  intervalMs = 250
+}) {
+  const start = now();
+  let sawInstalling = false;
+  let enteredDone = false;
+  let doneAt = 0;
+  for (; ; ) {
+    const bindings = await tryImport();
+    if (bindings) return bindings;
+    const installing = markerPresent() && setupAlive();
+    let giveUp;
+    if (installing) {
+      sawInstalling = true;
+      enteredDone = false;
+      giveUp = now() - start > ceilingMs;
+    } else if (sawInstalling) {
+      if (!enteredDone) {
+        enteredDone = true;
+        doneAt = now();
+      }
+      giveUp = now() - doneAt > settleMs;
+    } else {
+      giveUp = now() - start > graceMs;
+    }
+    if (giveUp) return null;
+    await sleep2(intervalMs);
+  }
+}
 function markerIsTrusted(path2) {
   if (path2 === null) return false;
   let st;
@@ -199,7 +263,7 @@ function writeFileNoFollow(path2, content3, mode = 384) {
     closeSync(fd);
   }
 }
-var cliEntryClaimed, HookEvent, PermissionDecision, LONE_SURROGATE_RE, MAX_STDIN_BYTES, registeredLazyModules, lazyImportErrors, DEFAULT_MISSING_PACKAGE_REMEDY, UNTRUSTED_TEXT_CAP;
+var cliEntryClaimed, HookEvent, PermissionDecision, LONE_SURROGATE_RE, MAX_STDIN_BYTES, registeredLazyModules, lazyImportErrors, DEFAULT_MISSING_PACKAGE_REMEDY, UNTRUSTED_TEXT_CAP, HOOKGATE_MARKER_STEM;
 var init_hook_io = __esm({
   "claude-hooks/lib/hook-io.mjs"() {
     "use strict";
@@ -221,6 +285,7 @@ var init_hook_io = __esm({
     lazyImportErrors = /* @__PURE__ */ new Map();
     DEFAULT_MISSING_PACKAGE_REMEDY = "reinstall the hook dependencies (pnpm install) and retry.";
     UNTRUSTED_TEXT_CAP = 500;
+    HOOKGATE_MARKER_STEM = "agent-sanitizer-hookgate-inflight-";
   }
 });
 
@@ -66580,70 +66645,6 @@ var init_dist2 = __esm({
 });
 
 // claude-hooks/lib/control-plane.mjs
-import { readFileSync } from "node:fs";
-function hookgateMarkerPath(projectDir = process.env.CLAUDE_PROJECT_DIR, runtimeDir = process.env.XDG_RUNTIME_DIR) {
-  if (!projectDir) return null;
-  const base2 = runtimeDir && runtimeDir.startsWith("/") ? runtimeDir : "/tmp";
-  return `${base2}/${HOOKGATE_MARKER_STEM}${projectDir.replace(/[^A-Za-z0-9]/g, "_")}`;
-}
-function probeSetupAlive(markerPath) {
-  if (markerPath === null) return true;
-  let pid;
-  try {
-    pid = parseInt(readFileSync(markerPath, "utf8"), 10);
-  } catch {
-    return true;
-  }
-  if (!Number.isInteger(pid) || pid <= 0) return true;
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch (err) {
-    return (
-      /** @type {NodeJS.ErrnoException} */
-      err.code === "EPERM"
-    );
-  }
-}
-async function awaitControlPlaneBindings({
-  tryImport,
-  markerPresent,
-  setupAlive,
-  now = () => Date.now(),
-  sleep: sleep2 = (ms) => new Promise((resolve2) => {
-    setTimeout(resolve2, ms);
-  }),
-  graceMs = 5e3,
-  settleMs = 1e3,
-  ceilingMs = 9e5,
-  intervalMs = 250
-}) {
-  const start = now();
-  let sawInstalling = false;
-  let enteredDone = false;
-  let doneAt = 0;
-  for (; ; ) {
-    const bindings = await tryImport();
-    if (bindings) return bindings;
-    const installing = markerPresent() && setupAlive();
-    let giveUp;
-    if (installing) {
-      sawInstalling = true;
-      enteredDone = false;
-      giveUp = now() - start > ceilingMs;
-    } else if (sawInstalling) {
-      if (!enteredDone) {
-        enteredDone = true;
-        doneAt = now();
-      }
-      giveUp = now() - doneAt > settleMs;
-    } else {
-      giveUp = now() - start > graceMs;
-    }
-    if (giveUp) return null;
-    await sleep2(intervalMs);
-  }
-}
 function controlPlane(overrides = {}) {
   const bindings = { claudeAdapter: claudeAdapter2, Decision: Decision2, EventKind: EventKind2, ...overrides };
   if (!bindings.claudeAdapter || !bindings.Decision || !bindings.EventKind)
@@ -66685,14 +66686,13 @@ async function runJudgeCli(hookName, judge, {
     onError(err, input);
   }
 }
-var claudeAdapter2, Decision2, EventKind2, HOOKGATE_MARKER_STEM, marker, loaded;
+var claudeAdapter2, Decision2, EventKind2, marker, loaded;
 var init_control_plane2 = __esm({
   async "claude-hooks/lib/control-plane.mjs"() {
     "use strict";
     init_hook_io();
-    HOOKGATE_MARKER_STEM = "agent-sanitizer-hookgate-inflight-";
     marker = hookgateMarkerPath();
-    loaded = await awaitControlPlaneBindings({
+    loaded = await awaitLazyDependency({
       tryImport: async () => {
         const { claudeAdapter: adapter } = (
           /** @type {Partial<typeof import("agent-control-plane-core/claude")>} */
@@ -68058,7 +68058,7 @@ import { join as join4, relative } from "node:path";
 async function ensureSanitizerLoaded() {
   if (typeof stripInvisible3 === "function") return true;
   const marker2 = hookgateMarkerPath();
-  const reloaded = await awaitControlPlaneBindings({
+  const reloaded = await awaitLazyDependency({
     tryImport: async () => {
       const mod = await lazyImport("agent-sanitizer/invisible");
       return typeof mod.stripInvisible === "function" ? mod : null;
@@ -68239,7 +68239,6 @@ var init_scan_invisible_chars = __esm({
     "use strict";
     init_hook_io();
     await init_invisible_alert();
-    await init_control_plane2();
     init_trace2();
     ({
       LONG_RUN_RE: LONG_RUN_RE3,

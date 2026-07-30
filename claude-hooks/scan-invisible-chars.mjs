@@ -8,9 +8,12 @@
 import { readFileSync, globSync, writeFileSync, unlinkSync } from "node:fs";
 import { join, relative } from "node:path";
 import {
+  awaitLazyDependency,
+  hookgateMarkerPath,
   isMain,
   lazyImport,
   markerIsTrusted,
+  probeSetupAlive,
   writeFileNoFollow,
 } from "./lib/hook-io.mjs";
 import {
@@ -18,11 +21,6 @@ import {
   ALERT_ACK_FILE,
   PROJECT_DIR,
 } from "./lib/invisible-alert.mjs";
-import {
-  awaitControlPlaneBindings,
-  hookgateMarkerPath,
-  probeSetupAlive,
-} from "./lib/control-plane.mjs";
 import { trace, TraceEvent } from "./lib/trace.mjs";
 
 // Layer-1 primitives, bound via lazyImport (see its doc for the fail-OPEN
@@ -56,10 +54,10 @@ async function ensureSanitizerLoaded() {
      agent-sanitizer import above failed (node deps not yet installed), which
      can't be simulated in-process or in the spawned-subprocess CLI run the tests
      observe (the test env always has the deps, so the guard above early-returns).
-     The reload reuses awaitControlPlaneBindings / markerIsTrusted /
+     The reload reuses awaitLazyDependency / markerIsTrusted /
      probeSetupAlive, each unit-tested directly. */
   const marker = hookgateMarkerPath();
-  const reloaded = await awaitControlPlaneBindings({
+  const reloaded = await awaitLazyDependency({
     tryImport: async () => {
       const mod = await lazyImport("agent-sanitizer/invisible");
       return typeof mod.stripInvisible === "function" ? mod : null;
