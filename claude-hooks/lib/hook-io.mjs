@@ -9,6 +9,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { userInfo } from "node:os";
+import { createHash } from "node:crypto";
 import { pathToFileURL } from "node:url";
 
 let cliEntryClaimed = false;
@@ -246,6 +247,8 @@ export const DEFAULT_MISSING_PACKAGE_REMEDY =
  * reasons shown to user and model) and its cap is COMPUTED so that
  * prefix + cause + remedy always fits the downstream 300-char safeErrMessage
  * re-scrub — the remedy can never be truncated off, whatever the package name.
+ * A remedy that alone exceeds that budget (roughly 260 characters) leaves the
+ * cause nothing to spend and still overruns; keep host remedies to a sentence.
  * @param {string} pkg
  * @param {unknown} [err]
  * @param {string} [remedy]
@@ -258,8 +261,13 @@ export function missingPackageMessage(
 ) {
   const prefix = `${pkg} is unavailable: `;
   // 2 for the "; " joiner; 12 for safeErrMessage's own "…[truncated]" marker,
-  // which lands past its cap when the cause is cut.
-  const causeCap = 300 - prefix.length - remedy.length - 2 - 12;
+  // which lands past its cap when the cause is cut. Clamped at 0 because the
+  // remedy is host text: a long one drives the budget negative, and
+  // safeErrMessage does not clamp — `slice(0, -n)` trims from the END, returning
+  // nearly the whole cause and pushing the joined message past 300, so the
+  // downstream re-scrub cuts the remedy off. At 0 the cause degrades to the
+  // truncation marker and the remedy always survives.
+  const causeCap = Math.max(0, 300 - prefix.length - remedy.length - 2 - 12);
   const cause =
     err === undefined
       ? "no load error recorded — the package likely loaded but lacks an expected export (version skew)"
@@ -411,7 +419,18 @@ export function hookgateMarkerPath(
   // absolute one; else the world-writable /tmp, where markerIsTrusted() — not
   // the path — defends against a squatted marker.
   const base = runtimeDir && runtimeDir.startsWith("/") ? runtimeDir : "/tmp";
-  return `${base}/${HOOKGATE_MARKER_STEM}${projectDir.replace(/[^A-Za-z0-9]/g, "_")}`;
+  // The flattened dir is for a human reading `ls /tmp`; the digest of the RAW
+  // dir is the identity. Flattening alone is lossy — /work/a-b, /work/a_b and
+  // "/work/a b" all collapse to one name — and two such projects on one machine
+  // would then share a marker: B's hook waits out A's install for a dependency A
+  // is not installing, and A clearing the marker aborts B's legitimate wait. Both
+  // directions are silent. A setup script reproduces the digest with sha256sum.
+  const digest = createHash("sha256")
+    .update(projectDir)
+    .digest("hex")
+    .slice(0, 8);
+  const flattened = projectDir.replace(/[^A-Za-z0-9]/g, "_");
+  return `${base}/${HOOKGATE_MARKER_STEM}${flattened}-${digest}`;
 }
 
 /**

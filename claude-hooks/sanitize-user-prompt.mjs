@@ -90,14 +90,20 @@ try {
  * @param {import("agent-control-plane-core").ToolCallEvent} event
  * @param {((s: string) => string) | null} [strip]  the ANSI stripper (defaults
  *   to the package's stripAnsiFully; injectable so the fail-closed path is testable)
- * @param {typeof USER_PROMPT_MESSAGES} [messages]  host-facing reason overrides
+ * @param {Partial<typeof USER_PROMPT_MESSAGES>} [overrides]  reason overrides,
+ *   merged over the defaults so a partial table can never leave a field unset
  * @returns {import("agent-control-plane-core").Verdict}
  */
 export function judgeSanitizeUserPrompt(
   event,
   strip = stripAnsiFully,
-  messages = USER_PROMPT_MESSAGES,
+  overrides = USER_PROMPT_MESSAGES,
 ) {
+  // MERGED over the defaults, never substituted for them — a host that overrides
+  // one field would otherwise leave the rest undefined. main() threads the same
+  // object into its onError, where a missing field throws out of the catch and
+  // the gate emits nothing, which the harness reads as a pass: fail OPEN.
+  const messages = { ...USER_PROMPT_MESSAGES, ...overrides };
   const { Decision, EventKind } = controlPlane();
   // A payload the adapter cannot classify carries no readable prompt, so an
   // abstain would fail OPEN on harness contract drift; this gate's posture is
@@ -136,15 +142,19 @@ export function judgeSanitizeUserPrompt(
  * @param {(chunk: string) => void} write
  * @param {((s: string) => string) | null} [strip]  the ANSI stripper (defaults
  *   to the package's stripAnsiFully; injectable so the fail-closed path is testable)
- * @param {typeof USER_PROMPT_MESSAGES} [messages]  host-facing reason overrides
+ * @param {Partial<typeof USER_PROMPT_MESSAGES>} [overrides]  reason overrides,
+ *   merged over the defaults so a partial table can never leave a field unset
  * @returns {Promise<void>}
  */
 export async function main(
   read,
   write,
   strip = stripAnsiFully,
-  messages = USER_PROMPT_MESSAGES,
+  overrides = USER_PROMPT_MESSAGES,
 ) {
+  // Merged, not substituted — see judgeSanitizeUserPrompt. onError below is the
+  // call site where a missing field would throw out of the catch and fail OPEN.
+  const messages = { ...USER_PROMPT_MESSAGES, ...overrides };
   // Delegate the parse → judge → render → write contract to the shared
   // runJudgeCli so this hook doesn't re-implement the control-plane boundary:
   // runJudgeCli reads stdin BEFORE loading the control-plane package, so a

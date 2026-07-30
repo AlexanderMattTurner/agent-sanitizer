@@ -284,11 +284,19 @@ function assembleResponse({
  * fail-closed posture holds even when the adapter never loaded.
  * @param {import("agent-control-plane-core").ToolCallEvent} event
  * @param {(tool: string, toolInput: any) => ReturnType<typeof rehydrateRedacted>} [rehydrate]
- * @param {{ messages?: typeof PRE_TOOL_USE_MESSAGES, gates?: HostGate[] }} [opts]
+ * @param {{ messages?: Partial<typeof PRE_TOOL_USE_MESSAGES>, gates?: HostGate[] }} [opts]
+ *   messages are merged over the defaults, so a partial table is supported
  * @returns {Promise<import("agent-control-plane-core").Verdict>}
  */
 export async function judgePreToolUseSanitize(event, rehydrate, opts = {}) {
-  const { messages = PRE_TOOL_USE_MESSAGES, gates = [] } = opts;
+  const { gates = [] } = opts;
+  // MERGED over the defaults, never substituted for them. A host that overrides
+  // one field would otherwise leave the rest undefined, and the miss lands in
+  // the fail-closed path: failClosedFields runs inside runJudgeCli's catch, so a
+  // TypeError on a missing field escapes the handler, the hook exits with no
+  // stdout, and Claude reads a PreToolUse hook that produced no response as
+  // non-blocking — the fail-closed ask becomes a fail-OPEN pass.
+  const messages = { ...PRE_TOOL_USE_MESSAGES, ...opts.messages };
   const { Decision, EventKind } = controlPlane();
   // A payload the adapter cannot classify (a missing/unexpected hook_event_name)
   // would drive the pipeline with an empty event and no-op to ALLOW — a silent
@@ -350,6 +358,14 @@ export function depLoadHint(
 ) {
   if (/** @type {{code?: unknown}} */ (err)?.code === "DEP_UNAVAILABLE")
     return "";
+  // Only a TypeError. The recorded-failure set is process-wide and carries no
+  // link to THIS error, so naming a package from it is an inference — sound only
+  // for the failure this hint exists to explain, where an unloaded binding is
+  // called and V8 raises a TypeError ("X is not a function", "Cannot read
+  // properties of undefined"). Any other throw is a layer engine reporting its
+  // own problem, and appending a package name there sends the reader to a
+  // reinstall that fixes nothing.
+  if (!(err instanceof TypeError)) return "";
   const [pkg] = failedPackages();
   return pkg === undefined
     ? ""
@@ -366,11 +382,14 @@ export function depLoadHint(
  * so it ASKS to keep a human in the loop rather than hard-block on infrastructure.
  * @param {boolean} parsedOk whether the input parsed before the failure
  * @param {unknown} err
- * @param {{ messages?: typeof PRE_TOOL_USE_MESSAGES, hint?: string }} [opts]
+ * @param {{ messages?: Partial<typeof PRE_TOOL_USE_MESSAGES>, hint?: string }} [opts]
  * @returns {Record<string, unknown>}
  */
 export function failClosedFields(parsedOk, err, opts = {}) {
-  const { messages = PRE_TOOL_USE_MESSAGES, hint = depLoadHint(err) } = opts;
+  const { hint = depLoadHint(err) } = opts;
+  // Merged, not substituted — see judgePreToolUseSanitize. This is the call site
+  // where a missing field would throw out of the catch and fail OPEN.
+  const messages = { ...PRE_TOOL_USE_MESSAGES, ...opts.messages };
   const cause = `${safeErrMessage(err)}${hint}`;
   return {
     permissionDecision: parsedOk
@@ -392,14 +411,15 @@ export function failClosedFields(parsedOk, err, opts = {}) {
  * loads) can run the exact same wiring instead of duplicating the onError
  * posture.
  * @param {{
- *   messages?: typeof PRE_TOOL_USE_MESSAGES,
+ *   messages?: Partial<typeof PRE_TOOL_USE_MESSAGES>,
  *   gates?: HostGate[],
  *   remedy?: string,
  * }} [opts]
  * @returns {Promise<void>}
  */
 export async function cliMain(opts = {}) {
-  const { messages = PRE_TOOL_USE_MESSAGES, gates = [], remedy } = opts;
+  const { gates = [], remedy } = opts;
+  const messages = { ...PRE_TOOL_USE_MESSAGES, ...opts.messages };
   await runJudgeCli(
     HOOK_NAME,
     (event) => judgePreToolUseSanitize(event, undefined, { messages, gates }),

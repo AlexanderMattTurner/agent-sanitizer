@@ -110,6 +110,28 @@ describe("dependency-load diagnostics", () => {
     assert.ok(safeErrMessage(message).endsWith(HOST_REMEDY));
   });
 
+  it("spends the whole budget on the remedy when the REMEDY is what is long", () => {
+    // The symmetric case to the one above, and the one the host knob opened: a
+    // remedy long enough to drive the cause budget negative. safeErrMessage does
+    // not clamp a negative cap — `slice(0, -n)` trims from the END — so without
+    // the clamp the cause survives nearly whole and pushes the message far past
+    // the budget. Clamped, the cause collapses to the truncation marker and the
+    // overflow is only what the remedy itself costs.
+    const longRemedy = `${"reinstall the dependencies ".repeat(11)}and retry.`;
+    assert.ok(longRemedy.length > 260, "remedy must overrun the budget");
+    const cause = "a".repeat(400);
+    const message = missingPackageMessage(
+      "a-package",
+      new Error(cause),
+      longRemedy,
+    );
+    assert.ok(message.endsWith(longRemedy));
+    assert.ok(
+      !message.includes("aaaaaaaaaa"),
+      "the cause must not survive when the remedy has spent the budget",
+    );
+  });
+
   it("says so when nothing was recorded, rather than inventing a cause", () => {
     const message = missingPackageMessage("a-package", undefined, HOST_REMEDY);
     assert.match(message, /version skew/u);
@@ -143,6 +165,24 @@ describe("dependency-load diagnostics", () => {
       "",
     );
   });
+
+  it("names a package only for the error shape an unloaded binding produces", async () => {
+    await lazyImport("no-such-package-ffc1a9");
+    // The recorded-failure set is process-wide and carries no link to the error
+    // being reported, so naming a package from it is only sound for the failure
+    // this hint explains: calling an undefined binding, which raises a TypeError.
+    // A layer engine reporting its own problem must not be answered with a
+    // reinstall that fixes nothing.
+    assert.equal(
+      depLoadHint(new Error("redactor daemon refused"), HOST_REMEDY),
+      "",
+    );
+    assert.equal(
+      depLoadHint(new RangeError("depth exceeded"), HOST_REMEDY),
+      "",
+    );
+    assert.notEqual(depLoadHint(new TypeError("x is not a function")), "");
+  });
 });
 
 describe("user-prompt gate reason table", () => {
@@ -167,6 +207,26 @@ describe("user-prompt gate reason table", () => {
     assert.equal(
       verdict.reason,
       "blocked: fix the adapter parse in hooks/prompt.mjs",
+    );
+  });
+
+  it("fills the unset fields of a PARTIAL reason table", () => {
+    // Same fail-open shape as the PreToolUse gate: main() threads this object
+    // into its onError. A partial table would also silently drop sgrNote and
+    // blockContext from the verdict rather than erroring.
+    const verdict = judgeSanitizeUserPrompt(unknownEvent(), undefined, {
+      unknownEvent: "host blind deny",
+    });
+    assert.equal(verdict.reason, "host blind deny");
+    const blocked = parse({
+      hook_event_name: "UserPromptSubmit",
+      prompt: `hello${"\u{E0041}".repeat(20)}`,
+    });
+    assert.equal(
+      judgeSanitizeUserPrompt(blocked, undefined, {
+        unknownEvent: "host blind deny",
+      }).additional_context,
+      USER_PROMPT_MESSAGES.blockContext,
     );
   });
 
@@ -264,6 +324,25 @@ describe("PreToolUse host gates", () => {
     assert.equal(got.tool_name, "Bash");
   });
 
+  it("fills the unset fields of a PARTIAL reason table", async () => {
+    // Every other seam case spreads the whole default table, which is exactly the
+    // shape that cannot expose a wholesale substitution. A bare one-field object
+    // is what a host actually writes — and the field it did NOT set is consumed
+    // inside runJudgeCli's catch, where an undefined reason-builder throws out of
+    // the handler and the hook emits nothing at all: a fail-OPEN pass.
+    const verdict = await judgePreToolUseSanitize(unknownEvent(), undefined, {
+      messages: { unknownEvent: "host blind deny" },
+    });
+    assert.equal(verdict.reason, "host blind deny");
+    const fields = failClosedFields(true, new Error("boom"), {
+      messages: { unknownEvent: "host blind deny" },
+    });
+    assert.equal(
+      fields.permissionDecisionReason,
+      PRE_TOOL_USE_MESSAGES.failed("boom"),
+    );
+  });
+
   it("lets a broken gate throw rather than swallowing it", async () => {
     // The throw reaches the CLI's fail-closed catch, which ASKS. Swallowing it
     // would silently downgrade a broken host gate into a pass.
@@ -342,6 +421,9 @@ describe("cold-start marker", () => {
     assert.equal(hookgateMarkerPath(undefined, "/run/user/1000"), null);
   });
 
+  // Both arguments are passed explicitly throughout: omitting one falls back to
+  // its process.env default, and a CI runner (which sets XDG_RUNTIME_DIR) then
+  // takes a different branch than a developer shell (which usually does not).
   it("prefers an absolute runtime dir over world-writable /tmp", () => {
     assert.ok(
       hookgateMarkerPath("/w/p", "/run/user/1000").startsWith(
@@ -349,14 +431,40 @@ describe("cold-start marker", () => {
       ),
     );
     assert.ok(hookgateMarkerPath("/w/p", "relative/dir").startsWith("/tmp/"));
-    assert.ok(hookgateMarkerPath("/w/p", undefined).startsWith("/tmp/"));
+    assert.ok(hookgateMarkerPath("/w/p", "").startsWith("/tmp/"));
+  });
+
+  it("reads both defaults from the environment", () => {
+    const saved = { ...process.env };
+    try {
+      process.env.CLAUDE_PROJECT_DIR = "/env/project";
+      process.env.XDG_RUNTIME_DIR = "/run/user/4242";
+      // Compared against the explicit-argument call rather than a literal path,
+      // so this pins where the defaults come FROM without restating the stem.
+      assert.equal(
+        hookgateMarkerPath(),
+        hookgateMarkerPath("/env/project", "/run/user/4242"),
+      );
+      delete process.env.CLAUDE_PROJECT_DIR;
+      assert.equal(hookgateMarkerPath(), null);
+    } finally {
+      process.env = saved;
+    }
   });
 
   it("flattens the project dir so the path is one filename", () => {
-    const path = hookgateMarkerPath("/work/my proj", undefined);
+    const path = hookgateMarkerPath("/work/my proj", "");
     assert.equal(path.slice("/tmp/".length).includes("/"), false);
-    // Two projects must not collide onto one marker.
-    assert.notEqual(path, hookgateMarkerPath("/work/other", undefined));
+  });
+
+  it("keeps dirs that flatten alike on separate markers", () => {
+    // The flattening is lossy, so it cannot be the identity: these three differ
+    // only in characters it replaces. Sharing a marker would make each project's
+    // hook wait on the others' installs, silently, in both directions.
+    const paths = ["/work/a-b", "/work/a_b", "/work/a b"].map((dir) =>
+      hookgateMarkerPath(dir, ""),
+    );
+    assert.equal(new Set(paths).size, 3);
   });
 });
 

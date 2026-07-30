@@ -54,6 +54,7 @@ import {
   writeFileSync
 } from "node:fs";
 import { userInfo } from "node:os";
+import { createHash } from "node:crypto";
 import { pathToFileURL } from "node:url";
 function isMain(importMetaUrl) {
   if (cliEntryClaimed) return false;
@@ -123,7 +124,7 @@ function failedLazyPackages() {
 }
 function missingPackageMessage(pkg, err = lazyImportErrorFor(pkg), remedy = DEFAULT_MISSING_PACKAGE_REMEDY) {
   const prefix = `${pkg} is unavailable: `;
-  const causeCap = 300 - prefix.length - remedy.length - 2 - 12;
+  const causeCap = Math.max(0, 300 - prefix.length - remedy.length - 2 - 12);
   const cause = err === void 0 ? "no load error recorded \u2014 the package likely loaded but lacks an expected export (version skew)" : safeErrMessage(err, causeCap);
   return `${prefix}${cause}; ${remedy}`;
 }
@@ -165,7 +166,9 @@ function emitHookResponse(hookEventName, fields) {
 function hookgateMarkerPath(projectDir = process.env.CLAUDE_PROJECT_DIR, runtimeDir = process.env.XDG_RUNTIME_DIR) {
   if (!projectDir) return null;
   const base2 = runtimeDir && runtimeDir.startsWith("/") ? runtimeDir : "/tmp";
-  return `${base2}/${HOOKGATE_MARKER_STEM}${projectDir.replace(/[^A-Za-z0-9]/g, "_")}`;
+  const digest = createHash("sha256").update(projectDir).digest("hex").slice(0, 8);
+  const flattened = projectDir.replace(/[^A-Za-z0-9]/g, "_");
+  return `${base2}/${HOOKGATE_MARKER_STEM}${flattened}-${digest}`;
 }
 function probeSetupAlive(markerPath) {
   if (markerPath === null) return true;
@@ -66722,7 +66725,7 @@ var init_control_plane2 = __esm({
 
 // claude-hooks/lib/invisible-alert.mjs
 import { readFileSync as readFileSync2 } from "node:fs";
-import { createHash } from "node:crypto";
+import { createHash as createHash2 } from "node:crypto";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 function invisibleCharAlert() {
@@ -66750,7 +66753,7 @@ var init_invisible_alert = __esm({
     ({ applyLayer1: applyLayer12 } = /** @type {typeof import("agent-sanitizer")} */
     await lazyImport("agent-sanitizer"));
     PROJECT_DIR = process.env.CLAUDE_PROJECT_DIR || process.cwd();
-    PROJECT_HASH = createHash("sha256").update(PROJECT_DIR).digest("hex").slice(0, 8);
+    PROJECT_HASH = createHash2("sha256").update(PROJECT_DIR).digest("hex").slice(0, 8);
     ALERT_FILE = join(
       tmpdir(),
       `.claude-invisible-char-alert-${PROJECT_HASH}`
@@ -67394,7 +67397,8 @@ function assembleResponse({
   return fields;
 }
 async function judgePreToolUseSanitize(event, rehydrate, opts = {}) {
-  const { messages = PRE_TOOL_USE_MESSAGES, gates = [] } = opts;
+  const { gates = [] } = opts;
+  const messages = { ...PRE_TOOL_USE_MESSAGES, ...opts.messages };
   const { Decision: Decision3, EventKind: EventKind3 } = controlPlane();
   if (event.event === EventKind3.UNKNOWN)
     return { decision: Decision3.DENY, reason: messages.unknownEvent };
@@ -67429,11 +67433,13 @@ function depLoadHint(err, remedy = DEFAULT_MISSING_PACKAGE_REMEDY, failedPackage
     err?.code === "DEP_UNAVAILABLE"
   )
     return "";
+  if (!(err instanceof TypeError)) return "";
   const [pkg] = failedPackages();
   return pkg === void 0 ? "" : ` ${missingPackageMessage(pkg, loadErrorFor(pkg), remedy)}`;
 }
 function failClosedFields(parsedOk, err, opts = {}) {
-  const { messages = PRE_TOOL_USE_MESSAGES, hint = depLoadHint(err) } = opts;
+  const { hint = depLoadHint(err) } = opts;
+  const messages = { ...PRE_TOOL_USE_MESSAGES, ...opts.messages };
   const cause = `${safeErrMessage(err)}${hint}`;
   return {
     permissionDecision: parsedOk ? PermissionDecision.ASK : PermissionDecision.DENY,
@@ -67441,7 +67447,8 @@ function failClosedFields(parsedOk, err, opts = {}) {
   };
 }
 async function cliMain(opts = {}) {
-  const { messages = PRE_TOOL_USE_MESSAGES, gates = [], remedy } = opts;
+  const { gates = [], remedy } = opts;
+  const messages = { ...PRE_TOOL_USE_MESSAGES, ...opts.messages };
   await runJudgeCli(
     HOOK_NAME,
     (event) => judgePreToolUseSanitize(event, void 0, { messages, gates }),
@@ -67529,7 +67536,7 @@ var init_secret_annotate = __esm({
 });
 
 // claude-hooks/lib/reveal.mjs
-import { createHash as createHash2 } from "node:crypto";
+import { createHash as createHash3 } from "node:crypto";
 import { mkdirSync, lstatSync as lstatSync3 } from "node:fs";
 import { tmpdir as tmpdir3, userInfo as userInfo3 } from "node:os";
 import { join as join3, resolve, sep } from "node:path";
@@ -67537,7 +67544,7 @@ function revealDir() {
   return process.env._AGENT_SANITIZER_REVEAL_DIR || join3(tmpdir3(), "agent-sanitizer-layer2-reveal");
 }
 function revealPathFor(content3) {
-  const digest = createHash2("sha256").update(content3, "utf8").digest("hex");
+  const digest = createHash3("sha256").update(content3, "utf8").digest("hex");
   return join3(revealDir(), `${digest}.txt`);
 }
 function revealDirIsSafe(dir) {
@@ -67969,7 +67976,8 @@ __export(sanitize_user_prompt_exports, {
   judgeSanitizeUserPrompt: () => judgeSanitizeUserPrompt,
   main: () => main
 });
-function judgeSanitizeUserPrompt(event, strip = stripAnsiFully3, messages = USER_PROMPT_MESSAGES) {
+function judgeSanitizeUserPrompt(event, strip = stripAnsiFully3, overrides = USER_PROMPT_MESSAGES) {
+  const messages = { ...USER_PROMPT_MESSAGES, ...overrides };
   const { Decision: Decision3, EventKind: EventKind3 } = controlPlane();
   if (event.event === EventKind3.UNKNOWN)
     return { decision: Decision3.DENY, reason: messages.unknownEvent };
@@ -67991,7 +67999,8 @@ function judgeSanitizeUserPrompt(event, strip = stripAnsiFully3, messages = USER
     additional_context: messages.blockContext
   };
 }
-async function main(read, write, strip = stripAnsiFully3, messages = USER_PROMPT_MESSAGES) {
+async function main(read, write, strip = stripAnsiFully3, overrides = USER_PROMPT_MESSAGES) {
+  const messages = { ...USER_PROMPT_MESSAGES, ...overrides };
   await runJudgeCli(
     "sanitize-user-prompt",
     (event) => {
