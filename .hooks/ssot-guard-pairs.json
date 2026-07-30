@@ -13,5 +13,6 @@
       "test/credential-names-export.test.mjs"
     ],
     "config/review-severities.json": [".github/scripts/post-pr-review.test.mjs"]
+    "package.json": ["test/claude-hooks-exports.test.mjs"]
   }
 }

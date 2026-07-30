@@ -113,6 +113,28 @@ To wire them yourself instead, one entry dispatches all four modes on `--hook=`:
 `require.resolve("agent-sanitizer/claude-hooks")` gives the path without
 hardcoding a layout. Importing the module rather than spawning it is a no-op.
 
+**To compose the hooks instead of spawning them**, each module is a subpath of
+its own, typed, with the pieces exported individually:
+
+```js
+import {
+  sanitizeText,
+  evaluateToolOutput,
+} from "agent-sanitizer/claude-hooks/sanitize-output";
+import {
+  lazyImport,
+  makeDeadline,
+} from "agent-sanitizer/claude-hooks/lib/hook-io";
+```
+
+`agent-sanitizer/claude-hooks/<module>` for the four hooks
+(`sanitize-output`, `pretooluse-sanitize`, `sanitize-user-prompt`,
+`scan-invisible-chars`) and `agent-sanitizer/claude-hooks/lib/<module>` for the
+shared libs. Importing one runs no CLI and reads no stdin. Same stability
+posture as the `_AGENT_SANITIZER_*` variables below: reachable and typed, but
+the supported surface is the `--hook=` CLI, so these move between minor
+versions.
+
 **Layer 4 needs the Python engine** — `pip install 'agent-sanitizer[secrets]'`,
 version-matched to the npm package. Without it `sanitize-output` fails closed:
 secret-shaped output is suppressed, not shown unvetted. Layers 1–3 still run.
