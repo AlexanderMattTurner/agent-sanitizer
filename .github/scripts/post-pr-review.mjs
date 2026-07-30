@@ -15,7 +15,12 @@
 // or no findings and no summary). Diagnostics go to stderr.
 import { readFileSync, writeFileSync } from "node:fs";
 import { sanitize } from "agent-sanitizer";
-import { readRunCost, formatDollars, plansLine } from "./lib-review-cost.mjs";
+import {
+  readRunCost,
+  runErrored,
+  formatDollars,
+  plansLine,
+} from "./lib-review-cost.mjs";
 
 // The review text is MODEL output derived from the (untrusted) PR diff, so run
 // every string bound for a posted GitHub comment through the same Layer-1
@@ -39,6 +44,20 @@ const summaryPath = `${dir}/review-summary.txt`;
 function skip(msg) {
   process.stdout.write("SKIP\n");
   process.stderr.write(`::warning::${msg}\n`);
+  process.exit(0);
+}
+
+// A run that reported `is_error` never reviewed anything, so its ABSENCE of
+// findings means nothing — reporting SKIP for it would post a green check for a
+// review that did not happen. Checked before the review is read at all, because
+// an errored run's partial output is not evidence either way.
+if (runErrored()) {
+  process.stdout.write("ERRORED\n");
+  process.stderr.write(
+    "::error::the review agent's run reported is_error — it did not review this PR " +
+      "(a dead or unentitled credential, an unavailable model, or a hard API error). " +
+      "Re-run with `show_full_output: true` on the claude-run step to see why.\n",
+  );
   process.exit(0);
 }
 

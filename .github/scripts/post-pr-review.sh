@@ -16,6 +16,12 @@ set -euo pipefail
 : "${PR_INPUT_DIR:?PR_INPUT_DIR required}"
 
 status="$(node .github/scripts/post-pr-review.mjs)"
+# ERRORED means the agent's session failed, so it never reviewed. Fail the job:
+# the action exits 0 on an errored session, so without this the PR shows a green
+# reviewer that silently looked at nothing.
+if [[ "$status" == "ERRORED" ]]; then
+  exit 1
+fi
 if [[ "$status" != "PAYLOAD" ]]; then
   echo "no structured review to post" >&2
   exit 0

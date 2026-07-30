@@ -50,6 +50,15 @@ jobs:
       - name: Run auto-resolve workflow-script tests
         run: node --test .github/scripts/auto-resolve-*.test.mjs
 
+      # Same reason, same dot-directory blind spot: this suite pins that an agent
+      # run which reported `is_error` fails the job instead of reporting a clean
+      # review. claude-code-action exits 0 on a dead session, so that check is the
+      # only thing standing between a broken credential and a green reviewer that
+      # read nothing — a decorative test file here would restore exactly the
+      # silent pass it exists to prevent.
+      - name: Run PR-review script tests
+        run: node --test .github/scripts/post-pr-review.test.mjs
+
       # Named explicitly rather than left to `pnpm test`'s discovery. This suite
       # gates the shipped plugin artifact — the reproducibility byte-compare and
       # every hook's fail-closed verdict — so which invocation reaches it must be

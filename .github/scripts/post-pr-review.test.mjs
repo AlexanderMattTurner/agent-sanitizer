@@ -673,3 +673,73 @@ describe("post-pr-review: output sanitization", () => {
     assert.equal(payload.body, "all good here");
   });
 });
+
+// The failure this exists to stop: claude-code-action EXITS 0 when the agent's
+// session dies (a dead credential, an unentitled model, a hard API error), and
+// its own terminal event still reads `subtype: "success"`. Only `is_error`
+// separates "reviewed and found nothing" from "never reviewed". Without the
+// check, that run reports SKIP and the PR shows a green reviewer that looked at
+// nothing — observed live on agent-sanitizer#194, where both OAuth credentials
+// failed in 472ms at $0 and the job stayed green.
+describe("post-pr-review: an errored agent run is not a clean review", () => {
+  function executionLog(events) {
+    const dir = mkdtempSync(join(tmpdir(), "prr-exec-"));
+    dirs.push(dir);
+    const file = join(dir, "claude-execution-output.json");
+    writeFileSync(file, JSON.stringify(events));
+    return file;
+  }
+
+  it("reports ERRORED when the run set is_error, whatever the review says", () => {
+    const { status, payload } = run(
+      { findings: [], summary: "looks good to me" },
+      {
+        executionFile: executionLog([
+          { type: "system", subtype: "init", model: "claude-opus-4-8" },
+          {
+            type: "result",
+            subtype: "success",
+            is_error: true,
+            num_turns: 1,
+            total_cost_usd: 0,
+          },
+        ]),
+      },
+    );
+    assert.equal(status, "ERRORED");
+    assert.equal(payload, null, "an errored run must post nothing");
+  });
+
+  it("still posts a real review when the run did not error", () => {
+    const { status } = run(
+      {
+        findings: [
+          {
+            path: "src/foo.js",
+            line: 4,
+            side: "RIGHT",
+            severity: "warning",
+            body: "a real finding",
+          },
+        ],
+        summary: "s",
+      },
+      {
+        executionFile: executionLog([
+          {
+            type: "result",
+            subtype: "success",
+            is_error: false,
+            total_cost_usd: 1.2,
+          },
+        ]),
+      },
+    );
+    assert.equal(status, "PAYLOAD");
+  });
+
+  it("leaves the no-log case alone (SKIP, not a failure)", () => {
+    const { status } = run({ findings: [], summary: "" });
+    assert.equal(status, "SKIP");
+  });
+});
