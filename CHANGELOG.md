@@ -8,6 +8,13 @@ adhere to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+## [2.2.0] - 2026-07-30
+
+### Changed
+
+- test(secrets): name the dedup test for what it asserts
+- feat(secrets): publish the credential-noun vocabulary as a shared export
+
 ## [2.1.0] - 2026-07-29
 
 ### Changed
