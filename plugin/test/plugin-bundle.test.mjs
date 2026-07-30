@@ -1220,3 +1220,7 @@ test("the launcher prefers a provisioned venv daemon over the zipapp", (t) => {
     /SANITIZATION FAILED/,
   );
 });
+
+test("KILL TEST: deliberate red to observe the required check fail (reverted next commit)", () => {
+  assert.fail("wiring probe: node-tests-passed must go red on this commit");
+});
