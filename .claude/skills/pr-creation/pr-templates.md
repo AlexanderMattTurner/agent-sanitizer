@@ -131,7 +131,8 @@ gh pr edit --body "$(cat <<'EOF'
 <Reading order + least-certain part, updated for the current diff.>
 
 ## How it was tested
-<What you ran and the outcome, updated.>
+<The claims that hold the current head, each with the command that falsifies it and its
+outcome — re-stated for this head, not appended to the previous list.>
 
 ## Decisions made
 <!-- Delete if none. -->
