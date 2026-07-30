@@ -8,6 +8,25 @@ adhere to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+## [2.3.0] - 2026-07-30
+
+### Changed
+
+- feat(plugin): announce prompt-gate engagement on the trace channel
+- test(plugin): revert the deliberate red; isolate the live-engine socket
+- test(plugin): deliberate red to observe node-tests-passed fail
+- feat(plugin): ship the redaction engine as a committed zipapp
+- chore(plugin): regenerate dist for the pinned engine
+- test(plugin): dist-only corruption to observe node-tests-passed go red
+- chore(plugin): regenerate dist for the pinned engine
+- test(plugin): corrupt the bundle to observe node-tests-passed go red
+- fix(plugin): inline the JSON data css-tree requires at runtime
+- fix(ci): commit the lockfile the bundle's reproducibility gate depends on
+- fix(plugin): commit the bundle the .gitignore was swallowing
+- fix(plugin): drop JSONC comments from tsconfig.hooks.json
+- chore(plugin): drop unused shebangs and mark the dist autofix never-required
+- chore(plugin): ship the Claude Code plugin from this repo
+
 ## [2.2.2] - 2026-07-30
 
 ### Changed
