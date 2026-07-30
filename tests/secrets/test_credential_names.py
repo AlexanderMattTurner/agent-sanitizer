@@ -161,9 +161,9 @@ def test_field_name_patterns_carry_no_unbounded_metacharacter() -> None:
         assert re.fullmatch(r"[a-z0-9]+(?:\[_-\]\?[a-z0-9]+)*", fragment), fragment
 
 
-def test_renderings_are_deduplicated_and_ordered() -> None:
-    """Deterministic output: a generator materializing these into a committed file
-    needs a stable order, and a duplicate would inflate a consumer's alternation."""
+def test_renderings_are_deduplicated() -> None:
+    """A duplicate would inflate a consumer's alternation, and a generator
+    materializing these into a committed file would emit it twice."""
     for rendered in (
         credential_name_segments(),
         credential_field_name_patterns(),
