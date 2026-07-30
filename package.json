@@ -141,9 +141,29 @@
       "types": "./types/claude-hooks/plugin-hooks.d.mts",
       "default": "./claude-hooks/plugin-hooks.mjs"
     },
-    "./claude-hooks/*": {
-      "types": "./types/claude-hooks/*.d.mts",
-      "default": "./claude-hooks/*.mjs"
+    "./claude-hooks/pretooluse-sanitize": {
+      "types": "./types/claude-hooks/pretooluse-sanitize.d.mts",
+      "default": "./claude-hooks/pretooluse-sanitize.mjs"
+    },
+    "./claude-hooks/sanitize-output": {
+      "types": "./types/claude-hooks/sanitize-output.d.mts",
+      "default": "./claude-hooks/sanitize-output.mjs"
+    },
+    "./claude-hooks/sanitize-user-prompt": {
+      "types": "./types/claude-hooks/sanitize-user-prompt.d.mts",
+      "default": "./claude-hooks/sanitize-user-prompt.mjs"
+    },
+    "./claude-hooks/scan-invisible-chars": {
+      "types": "./types/claude-hooks/scan-invisible-chars.d.mts",
+      "default": "./claude-hooks/scan-invisible-chars.mjs"
+    },
+    "./claude-hooks/lib/hook-io": {
+      "types": "./types/claude-hooks/lib/hook-io.d.mts",
+      "default": "./claude-hooks/lib/hook-io.mjs"
+    },
+    "./claude-hooks/lib/control-plane": {
+      "types": "./types/claude-hooks/lib/control-plane.d.mts",
+      "default": "./claude-hooks/lib/control-plane.mjs"
     }
   },
   "files": [

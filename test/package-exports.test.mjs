@@ -9,13 +9,9 @@
  *
  * `npm pack --dry-run --json` runs `prepack` exactly as a real publish does and
  * reports the resulting file list, so this asserts against what would actually
- * be shipped rather than the working tree. Each literal `types`/`default` target
- * in the exports map must appear in that list; the `.d.mts` half is asserted
- * non-empty so the check can never pass vacuously if the type targets disappear.
- *
- * A `*` subpath (`"./claude-hooks/*"`) names a family rather than a file, so it
- * gets the pairwise form instead: every packed file the pattern exposes must
- * have its declaration packed under the same `*` substitution.
+ * be shipped rather than the working tree. Each `types`/`default` target in the
+ * exports map must appear in that list; the `.d.mts` half is asserted non-empty
+ * so the check can never pass vacuously if the type targets disappear.
  */
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
@@ -51,42 +47,15 @@ function conditionFiles(target) {
   );
 }
 
-/** Literal (non-pattern) subpath targets, split by condition kind. */
+/** Subpath targets, split by condition kind. */
 function exportedFiles() {
   const types = [];
   const runtime = [];
-  for (const [subpath, target] of Object.entries(pkg.exports)) {
-    if (subpath.includes("*")) continue; // asserted by patternSubpaths below
+  for (const target of Object.values(pkg.exports)) {
     for (const [condition, file] of Object.entries(conditionFiles(target)))
       (condition === "types" ? types : runtime).push(file);
   }
   return { types, runtime };
-}
-
-/** Subpath patterns (`"./claude-hooks/*"`), keyed by subpath. */
-function patternSubpaths() {
-  return Object.entries(pkg.exports)
-    .filter(([subpath]) => subpath.includes("*"))
-    .map(([subpath, target]) => ({ subpath, ...conditionFiles(target) }));
-}
-
-/**
- * A regex matching the files a `*` target covers, capturing the substitution.
- * `claude-hooks/*.mjs` → `/^claude-hooks\/(.+)\.mjs$/`, so the capture from a
- * packed runtime file is the same `*` value that must fill the types target.
- */
-function patternRe(pattern) {
-  const parts = pattern.split("*");
-  // Node substitutes only the first `*`; a second one would silently make the
-  // rest of this function match the wrong span.
-  assert.equal(
-    parts.length,
-    2,
-    `exports pattern needs exactly one *: ${pattern}`,
-  );
-  const [prefix, suffix] = parts;
-  const quote = (s) => s.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
-  return new RegExp(`^${quote(prefix)}(.+)${quote(suffix)}$`, "u");
 }
 
 // Pack list as it would publish: `--dry-run` runs `prepack` (building the
@@ -132,40 +101,6 @@ describe("packaging contract: exports map vs. published tarball", () => {
       [],
       `exports promise runtime files the tarball does not ship: ${missing.join(", ")}`,
     );
-  });
-
-  // A `*` subpath cannot be checked for exact membership — its target names a
-  // family, not a file. The contract that matters is pairwise: every runtime
-  // file the pattern actually exposes must have its declaration packed under
-  // the same `*` substitution. That is what a consumer's deep import needs, and
-  // it catches the half-shipped case (a hook module packed with no .d.mts)
-  // which an "at least one match" check would wave through.
-  it("ships a paired declaration for every file a `*` subpath exposes", () => {
-    const patterns = patternSubpaths();
-    assert.ok(patterns.length > 0, "no `*` subpaths found — guard is vacuous");
-    for (const {
-      subpath,
-      default: runtimePattern,
-      types: typesPattern,
-    } of patterns) {
-      assert.ok(typesPattern, `${subpath} has no types condition`);
-      const re = patternRe(runtimePattern);
-      const exposed = [...packed].filter((f) => re.test(f));
-      assert.ok(
-        exposed.length > 0,
-        `${subpath} exposes no packed file — is ${runtimePattern} in "files"?`,
-      );
-      const missing = exposed
-        // Replacer function, not a string: a `$` in a filename would otherwise
-        // be read as a substitution pattern and silently corrupt the path.
-        .map((f) => typesPattern.replace("*", () => f.match(re)[1]))
-        .filter((d) => !packed.has(d));
-      assert.deepEqual(
-        missing,
-        [],
-        `${subpath} exposes runtime files whose declarations are not packed: ${missing.join(", ")}`,
-      );
-    }
   });
 
   // Top-level docs a consumer reaches for from an installed copy: the license,

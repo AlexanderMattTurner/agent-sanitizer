@@ -120,12 +120,44 @@ export function dynamicSecretVars(env = process.env) {
   );
 }
 
+// Operator-supplied additions to the env-bound redaction set, comma-separated.
+// The name-shape heuristic above only catches vars whose trailing segment reads
+// as a credential (`…_TOKEN`, `…_KEY`); a deployment that forwards a secret under
+// a name of its own choosing (`GLOVEBOX_ATTESTATION_SEED`) has no way to reach
+// the set without this.
+const EXTRA_SECRET_VARS_ENV = "_AGENT_SANITIZER_EXTRA_SECRET_VARS";
+
+// Digits allowed here but not in CRED_TOKEN_RE: that one gates regex-interpolated
+// name SEGMENTS, while these are whole variable names an operator typed, and real
+// ones carry digits (`AWS_S3_KEY2`). Both exclude metacharacters.
+const EXTRA_TOKEN_RE = /^[A-Z0-9_]+$/;
+
+/**
+ * The operator-declared extra secret variable names, or throw. A malformed entry
+ * fails CLOSED — dropping it silently would leave the operator believing a
+ * forwarded credential is masked while its value flows to the model verbatim.
+ * @param {Record<string, string | undefined>} [env]
+ * @returns {string[]}
+ */
+export function extraSecretVars(env = process.env) {
+  const raw = env[EXTRA_SECRET_VARS_ENV];
+  if (raw === undefined || raw.trim() === "") return [];
+  const tokens = raw.split(",").map((token) => token.trim());
+  for (const token of tokens)
+    if (!EXTRA_TOKEN_RE.test(token))
+      throw new Error(
+        `${EXTRA_SECRET_VARS_ENV}: ${JSON.stringify(token)} is not a variable name ` +
+          "(expected comma-separated [A-Z0-9_] names)",
+      );
+  return tokens;
+}
+
 /**
  * The env-bound redaction set: the UNION of the inference keys, the curated host
- * credentials, and any credential-shaped var present in the environment. The
- * redactor binds the same union; every consumer (the sanitize-output pre-gate,
- * the redactor client's per-request env snapshot) must mirror it exactly, else a
- * credential value would never trip the daemon.
+ * credentials, any credential-shaped var present in the environment, and the
+ * operator's declared extras. The redactor binds the same union; every consumer
+ * (the sanitize-output pre-gate, the redactor client's per-request env snapshot)
+ * must mirror it exactly, else a credential value would never trip the daemon.
  * @param {Record<string, string | undefined>} [env]
  * @returns {string[]}
  */
@@ -135,6 +167,7 @@ export function envBoundSecretVars(env = process.env) {
       ...inferenceKeyVars(),
       ...scrubbed.vars,
       ...dynamicSecretVars(env),
+      ...extraSecretVars(env),
     ]),
   ];
 }

@@ -66843,16 +66843,28 @@ function dynamicSecretVars(env = process.env) {
     (name50) => looksLikeCredentialVar(name50) && (env[name50]?.length ?? 0) >= floor
   );
 }
+function extraSecretVars(env = process.env) {
+  const raw = env[EXTRA_SECRET_VARS_ENV];
+  if (raw === void 0 || raw.trim() === "") return [];
+  const tokens = raw.split(",").map((token) => token.trim());
+  for (const token of tokens)
+    if (!EXTRA_TOKEN_RE.test(token))
+      throw new Error(
+        `${EXTRA_SECRET_VARS_ENV}: ${JSON.stringify(token)} is not a variable name (expected comma-separated [A-Z0-9_] names)`
+      );
+  return tokens;
+}
 function envBoundSecretVars(env = process.env) {
   return [
     .../* @__PURE__ */ new Set([
       ...inferenceKeyVars(),
       ...scrubbed_env_vars_default.vars,
-      ...dynamicSecretVars(env)
+      ...dynamicSecretVars(env),
+      ...extraSecretVars(env)
     ])
   ];
 }
-var CRED_TOKEN_RE, _credentialNameRes;
+var CRED_TOKEN_RE, _credentialNameRes, EXTRA_SECRET_VARS_ENV, EXTRA_TOKEN_RE;
 var init_env_config = __esm({
   "claude-hooks/lib/env-config.mjs"() {
     "use strict";
@@ -66860,6 +66872,8 @@ var init_env_config = __esm({
     init_inference_key_vars();
     init_scrubbed_env_vars();
     CRED_TOKEN_RE = /^[A-Z_]+$/;
+    EXTRA_SECRET_VARS_ENV = "_AGENT_SANITIZER_EXTRA_SECRET_VARS";
+    EXTRA_TOKEN_RE = /^[A-Z0-9_]+$/;
   }
 });
 
@@ -67425,7 +67439,7 @@ async function redactSecrets(text5, webIngress = false, deadline) {
     await redactViaDaemon(text5, { webIngress, deadline })
   );
 }
-async function sanitizeText2(text5, toolName, deadline = makeDeadline(SANITIZE_BUDGET_MS)) {
+async function sanitizeText2(text5, toolName, deadline = makeDeadline(SANITIZE_BUDGET_MS), ext = {}) {
   const webIngress = isUntrustedIngress(toolName);
   const html4 = WEB_INGRESS_TOOLS.has(toolName) || isMcpTool(toolName) && HTML_TAG_PRESENT2.test(text5);
   const seamOptions = {
@@ -67449,17 +67463,39 @@ async function sanitizeText2(text5, toolName, deadline = makeDeadline(SANITIZE_B
         );
         throw l4err;
       }
-      return secrets ? { text: secrets.text, found: secrets.found } : null;
+      if (!secrets) return null;
+      const note = ext.redactNote?.(content3);
+      return note ? { text: secrets.text, found: secrets.found, note } : { text: secrets.text, found: secrets.found };
     }
   };
-  return (
+  const result = (
     /** @type {{ cleaned: string, warnings: string[], modified: boolean, sgrNote: boolean, reveal?: string }} */
     await sanitizeTextSeam(text5, seamOptions)
   );
+  return ext.postText ? applyPostText(
+    result,
+    await ext.postText(result.cleaned, {
+      toolName,
+      webIngress,
+      deadline
+    })
+  ) : result;
 }
-async function sanitizeValue2(value, toolName, warnings, reveals = [], deadline = makeDeadline(SANITIZE_BUDGET_MS)) {
+function applyPostText(result, post) {
+  if (post === null || post === void 0) return result;
+  const cleaned = post.cleaned ?? result.cleaned;
+  const rewrote = cleaned !== result.cleaned;
+  return {
+    ...result,
+    cleaned,
+    warnings: post.warning ? [...result.warnings, post.warning] : result.warnings,
+    modified: result.modified || rewrote,
+    sgrNote: result.sgrNote && !rewrote
+  };
+}
+async function sanitizeValue2(value, toolName, warnings, reveals = [], deadline = makeDeadline(SANITIZE_BUDGET_MS), ext = {}) {
   if (typeof value === "string") {
-    const result = await sanitizeText2(value, toolName, deadline);
+    const result = await sanitizeText2(value, toolName, deadline, ext);
     warnings.push(...result.warnings);
     if (result.reveal !== void 0) reveals.push(result.reveal);
     return {
@@ -67478,7 +67514,8 @@ async function sanitizeValue2(value, toolName, warnings, reveals = [], deadline 
         toolName,
         warnings,
         reveals,
-        deadline
+        deadline,
+        ext
       );
       out.push(result.value);
       if (result.modified) modified = true;
@@ -67487,10 +67524,10 @@ async function sanitizeValue2(value, toolName, warnings, reveals = [], deadline 
     return { value: out, modified, sgrNote };
   }
   if (value !== null && typeof value === "object")
-    return sanitizeObject(value, toolName, warnings, reveals, deadline);
+    return sanitizeObject(value, toolName, warnings, reveals, deadline, ext);
   return { value, modified: false, sgrNote: false };
 }
-async function sanitizeObject(value, toolName, warnings, reveals, deadline) {
+async function sanitizeObject(value, toolName, warnings, reveals, deadline, ext) {
   const out = {};
   let modified = false;
   let sgrNote = false;
@@ -67505,7 +67542,8 @@ async function sanitizeObject(value, toolName, warnings, reveals, deadline) {
       toolName,
       warnings,
       reveals,
-      deadline
+      deadline,
+      ext
     );
     if (Object.hasOwn(out, keyResult.cleaned))
       throw new Error(
@@ -67546,7 +67584,7 @@ function emitFailClosed(input, message, emit = (fields) => emitHookResponse(Hook
     emit({ updatedToolOutput: message, additionalContext });
   }
 }
-async function evaluateToolOutput(input) {
+async function evaluateToolOutput(input, ext = {}) {
   const emit = (outcome, fields2) => {
     trace(TraceEvent.HOOK_RAN, {
       hook: HOOK_NAME2,
@@ -67571,7 +67609,8 @@ async function evaluateToolOutput(input) {
     input.tool_name,
     warnings,
     reveals,
-    deadline
+    deadline,
+    ext
   );
   for (const original of reveals) {
     let stored;
@@ -67592,17 +67631,29 @@ async function evaluateToolOutput(input) {
   if (modified) fields.mutated_output = sanitized;
   return emit(modified ? "modified" : "flagged", fields);
 }
-async function judgeSanitizeOutput(event) {
+async function judgeSanitizeOutput(event, ext = {}) {
   const { Decision: Decision3, EventKind: EventKind3 } = controlPlane();
   if (event.event === EventKind3.UNKNOWN)
     throw new Error(
       "sanitize-output: unrecognized hook payload (not PostToolUse)"
     );
-  const fields = await evaluateToolOutput({
-    tool_name: event.tool,
-    tool_input: event.input,
-    tool_response: event.response
-  });
+  const fields = await evaluateToolOutput(
+    {
+      tool_name: event.tool,
+      tool_input: event.input,
+      tool_response: event.response
+    },
+    ext
+  );
+  if (ext.audit && event.response !== null && event.response !== void 0) {
+    const modified = fields !== null && Object.hasOwn(fields, "mutated_output");
+    await ext.audit({
+      tool: event.tool,
+      modified,
+      output: modified ? fields?.mutated_output : event.response,
+      context: fields?.additional_context
+    });
+  }
   const verdict = { decision: Decision3.ALLOW };
   return fields === null ? verdict : { ...verdict, ...fields };
 }
@@ -67612,21 +67663,25 @@ function withPostToolUseDefault(input) {
     return input;
   return { ...input, hook_event_name: HookEvent.POST_TOOL_USE };
 }
-async function cliMain2() {
-  await runJudgeCli("sanitize-output", judgeSanitizeOutput, {
-    transformInput: withPostToolUseDefault,
-    // Fail closed: replace every string leaf of the original output with the
-    // placeholder, preserving shape so the harness honors the suppression
-    // instead of falling back to the raw, unvetted output (runJudgeCli hands
-    // back the parsed `input` even when the control-plane load failed, so the
-    // suppression shape-matches the real tool_response). emitFailClosed itself
-    // falls back to a bare string if that shape-matching replacement or its
-    // serialization throws, so even a pathological input fails closed.
-    onError: (err, input) => emitFailClosed(
-      input,
-      "[SANITIZATION FAILED \u2014 original output suppressed for safety. Hook error: " + safeErrMessage(err) + "]"
-    )
-  });
+async function cliMain2(ext = {}) {
+  await runJudgeCli(
+    "sanitize-output",
+    (event) => judgeSanitizeOutput(event, ext),
+    {
+      transformInput: withPostToolUseDefault,
+      // Fail closed: replace every string leaf of the original output with the
+      // placeholder, preserving shape so the harness honors the suppression
+      // instead of falling back to the raw, unvetted output (runJudgeCli hands
+      // back the parsed `input` even when the control-plane load failed, so the
+      // suppression shape-matches the real tool_response). emitFailClosed itself
+      // falls back to a bare string if that shape-matching replacement or its
+      // serialization throws, so even a pathological input fails closed.
+      onError: (err, input) => emitFailClosed(
+        input,
+        "[SANITIZATION FAILED \u2014 original output suppressed for safety. Hook error: " + safeErrMessage(err) + "]"
+      )
+    }
+  );
 }
 var _sanitizer, HTML_TAG_PRESENT2, applyLayer13, matchesSecretHint2, SECRET_HINT2, SECRET_HINT_EXT2, _output, sanitizeTextSeam, composeContextSeam, describeRemoved3, describeWarned3, suppressToolOutput2, HOOK_NAME2, SANITIZE_BUDGET_MS, SGR_OUTPUT_NOTE, WEB_INGRESS_TOOLS, FAIL_CLOSED_CONTEXT, MISSING_DEPS_HINT;
 var init_sanitize_output = __esm({

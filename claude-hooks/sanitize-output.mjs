@@ -161,6 +161,40 @@ async function redactSecrets(text, webIngress = false, deadline) {
 }
 
 /**
+ * Host-supplied extensions to this hook, threaded from {@link cliMain} down to
+ * each string leaf. Every field is optional and the bag defaults to `{}`, so a
+ * composer that supplies none gets exactly the behavior of this module alone —
+ * which is what lets the extension points ship without changing any shipped
+ * verdict. The callbacks own all policy: this module decides only WHERE they run,
+ * never WHETHER their result is applied.
+ *
+ * A callback that throws is not caught here. That is deliberate: the throw lands
+ * in the CLI's fail-closed catch and the tool output is suppressed, so a broken
+ * extension cannot degrade into showing unvetted output.
+ *
+ * These are NOT the Layer-5 injection-filter seam and do not inherit its
+ * delete-only, closed-enum restriction. (Its identifier is deliberately unspoken
+ * here: the plugin-bundle suite pins Layer 5 absent by asserting the name appears
+ * nowhere in this file, and that absolute check is worth more than the precision
+ * of one comment.) That restriction exists because such a
+ * filter is a MODEL, so its output is attacker-reachable and must not be able to
+ * inject text into the model-facing context. These callbacks are code the
+ * composer wrote and linked at build time — the same trust level as the injected
+ * redactor — so free-text warnings and arbitrary rewrites are theirs to own.
+ *
+ * @typedef {object} SanitizeExtensions
+ * @property {(cleaned: string, ctx: { toolName: string, webIngress: boolean, deadline: { remainingMs: () => number } }) => Promise<{ cleaned?: string, warning?: string } | null | undefined> | { cleaned?: string, warning?: string } | null | undefined} [postText]
+ *   Runs once per string leaf, AFTER Layers 1-4. Returning `cleaned` replaces the
+ *   model-facing text; `warning` joins this leaf's warnings.
+ * @property {(raw: string) => string | undefined} [redactNote]
+ *   Given the pre-redaction text of a leaf that tripped Layer 4, returns a note
+ *   appended to that leaf's "API keys/secrets redacted: …" warning.
+ * @property {(record: { tool: string | null, modified: boolean, output: unknown, context?: string }) => Promise<void> | void} [audit]
+ *   Awaited once per judged event that carried a tool response, with the output
+ *   the model will actually see.
+ */
+
+/**
  * Run Layers 1-4 over a single text blob, delegated to the package's output seam
  * (sanitizeTextSeam) bound here to this hook's per-tool policy: which tools get
  * the HTML rewrite (Layer 2) and the exfil-URL scan (Layer 3), the injected
@@ -171,12 +205,14 @@ async function redactSecrets(text, webIngress = false, deadline) {
  * @param {string} toolName  gates the SGR carve-out and the untrusted-ingress passes
  * @param {{remainingMs: () => number}} [deadline] shared wall-clock budget across
  *   all leaves of one hook run; a direct caller gets a fresh full budget
+ * @param {SanitizeExtensions} [ext]
  * @returns {Promise<{ cleaned: string, warnings: string[], modified: boolean, sgrNote: boolean, reveal?: string }>}
  */
 export async function sanitizeText(
   text,
   toolName,
   deadline = makeDeadline(SANITIZE_BUDGET_MS),
+  ext = {},
 ) {
   const webIngress = isUntrustedIngress(toolName);
   // Layer 2 (HTML rewrite) runs on WebFetch/WebSearch always, and on MCP output
@@ -211,12 +247,56 @@ export async function sanitizeText(
         );
         throw l4err;
       }
-      return secrets ? { text: secrets.text, found: secrets.found } : null;
+      if (!secrets) return null;
+      // The note is derived from the PRE-redaction text: the caller's reason for
+      // annotating (which variable, which provenance) is exactly what redaction
+      // is about to remove.
+      const note = ext.redactNote?.(content);
+      return note
+        ? { text: secrets.text, found: secrets.found, note }
+        : { text: secrets.text, found: secrets.found };
     },
   };
-  return /** @type {{ cleaned: string, warnings: string[], modified: boolean, sgrNote: boolean, reveal?: string }} */ (
-    await sanitizeTextSeam(text, seamOptions)
-  );
+  const result =
+    /** @type {{ cleaned: string, warnings: string[], modified: boolean, sgrNote: boolean, reveal?: string }} */ (
+      await sanitizeTextSeam(text, seamOptions)
+    );
+  return ext.postText
+    ? applyPostText(
+        result,
+        await ext.postText(result.cleaned, {
+          toolName,
+          webIngress,
+          deadline,
+        }),
+      )
+    : result;
+}
+
+/**
+ * Fold a `postText` callback's result into the seam's, leaving the seam's result
+ * untouched when the callback declined (null/undefined) or returned no `cleaned`.
+ * `modified` widens to cover the callback's rewrite, and `sgrNote` is dropped
+ * when it does: that flag downgrades the model-facing banner to "display-only
+ * ANSI color stripped", which would be a false statement about bytes a callback
+ * has since rewritten for its own reasons.
+ * @param {{ cleaned: string, warnings: string[], modified: boolean, sgrNote: boolean, reveal?: string }} result
+ * @param {{ cleaned?: string, warning?: string } | null | undefined} post
+ * @returns {{ cleaned: string, warnings: string[], modified: boolean, sgrNote: boolean, reveal?: string }}
+ */
+function applyPostText(result, post) {
+  if (post === null || post === undefined) return result;
+  const cleaned = post.cleaned ?? result.cleaned;
+  const rewrote = cleaned !== result.cleaned;
+  return {
+    ...result,
+    cleaned,
+    warnings: post.warning
+      ? [...result.warnings, post.warning]
+      : result.warnings,
+    modified: result.modified || rewrote,
+    sgrNote: result.sgrNote && !rewrote,
+  };
 }
 
 /**
@@ -239,6 +319,7 @@ export async function sanitizeText(
  * @param {string[]} [reveals]
  * @param {{remainingMs: () => number}} [deadline] shared wall-clock budget across
  *   every leaf of this value (created once by the top-level caller)
+ * @param {SanitizeExtensions} [ext]
  * @returns {Promise<{ value: any, modified: boolean, sgrNote: boolean }>}
  */
 export async function sanitizeValue(
@@ -247,9 +328,10 @@ export async function sanitizeValue(
   warnings,
   reveals = [],
   deadline = makeDeadline(SANITIZE_BUDGET_MS),
+  ext = {},
 ) {
   if (typeof value === "string") {
-    const result = await sanitizeText(value, toolName, deadline);
+    const result = await sanitizeText(value, toolName, deadline, ext);
     warnings.push(...result.warnings);
     if (result.reveal !== undefined) reveals.push(result.reveal);
     return {
@@ -269,6 +351,7 @@ export async function sanitizeValue(
         warnings,
         reveals,
         deadline,
+        ext,
       );
       out.push(result.value);
       if (result.modified) modified = true;
@@ -277,7 +360,7 @@ export async function sanitizeValue(
     return { value: out, modified, sgrNote };
   }
   if (value !== null && typeof value === "object")
-    return sanitizeObject(value, toolName, warnings, reveals, deadline);
+    return sanitizeObject(value, toolName, warnings, reveals, deadline, ext);
   return { value, modified: false, sgrNote: false };
 }
 
@@ -291,14 +374,27 @@ export async function sanitizeValue(
  * @param {string[]} warnings
  * @param {string[]} reveals
  * @param {{remainingMs: () => number}} deadline shared wall-clock budget
+ * @param {SanitizeExtensions} ext
  * @returns {Promise<{ value: Record<string, any>, modified: boolean, sgrNote: boolean }>}
  */
-async function sanitizeObject(value, toolName, warnings, reveals, deadline) {
+async function sanitizeObject(
+  value,
+  toolName,
+  warnings,
+  reveals,
+  deadline,
+  ext,
+) {
   /** @type {Record<string, any>} */
   const out = {};
   let modified = false;
   let sgrNote = false;
   for (const [key, item] of Object.entries(value)) {
+    // Layers 1-4 only — `ext` is deliberately NOT passed for a field NAME. A
+    // callback sees just the string and the tool, so it cannot tell a schema key
+    // from content; a rewrite here can collapse two fields into one name, which
+    // the guard below turns into whole-output suppression. Extensions run on
+    // value leaves.
     const keyResult = await sanitizeText(key, toolName, deadline);
     warnings.push(...keyResult.warnings);
     if (keyResult.reveal !== undefined) reveals.push(keyResult.reveal);
@@ -310,6 +406,7 @@ async function sanitizeObject(value, toolName, warnings, reveals, deadline) {
       warnings,
       reveals,
       deadline,
+      ext,
     );
     // Two distinct raw keys can sanitize to the same name (e.g. `token` and a
     // `token` carrying a zero-width space stripped by Layer 1). Overwriting would
@@ -458,9 +555,10 @@ export function emitFailClosed(
  * fields unchanged. The trace lives here, not in the CLI block below, so it
  * rides the in-process, mutation-tested path.
  * @param {any} input  the tool_name / tool_input / tool_response to sanitize
+ * @param {SanitizeExtensions} [ext]
  * @returns {Promise<{ mutated_output?: unknown, additional_context?: string } | null>}
  */
-export async function evaluateToolOutput(input) {
+export async function evaluateToolOutput(input, ext = {}) {
   /**
    * @param {string} outcome  noop | clean | flagged | modified
    * @param {{ mutated_output?: unknown, additional_context?: string } | null} fields
@@ -504,6 +602,7 @@ export async function evaluateToolOutput(input) {
     warnings,
     reveals,
     deadline,
+    ext,
   );
   // Persist each leaf's pre-Layer-2 text (deduped by content) so the model can
   // Read back what the HTML splice removed; a successful write appends a hint
@@ -569,9 +668,10 @@ export async function evaluateToolOutput(input) {
  * translation. Throws only if a layer engine throws (or on an UNKNOWN event);
  * the CLI fails closed on any throw.
  * @param {import("agent-control-plane-core").ToolCallEvent} event
+ * @param {SanitizeExtensions} [ext]
  * @returns {Promise<import("agent-control-plane-core").Verdict>}
  */
-export async function judgeSanitizeOutput(event) {
+export async function judgeSanitizeOutput(event, ext = {}) {
   const { Decision, EventKind } = controlPlane();
   // Fail closed on a payload the adapter cannot classify (contract/harness
   // drift): this hook only ever receives PostToolUse, so an UNKNOWN event is an
@@ -584,11 +684,30 @@ export async function judgeSanitizeOutput(event) {
   // evaluateToolOutput keys its tool checks on the CANONICAL names (`Read`, the
   // WEB_INGRESS_TOOLS set, `mcp__…`), so it takes `event.tool` — the normalized
   // name — not the raw `meta.native_tool`.
-  const fields = await evaluateToolOutput({
-    tool_name: event.tool,
-    tool_input: event.input,
-    tool_response: event.response,
-  });
+  const fields = await evaluateToolOutput(
+    {
+      tool_name: event.tool,
+      tool_input: event.input,
+      tool_response: event.response,
+    },
+    ext,
+  );
+  // Audit sees what the MODEL will see, which is the whole point of putting the
+  // call here rather than beside the walk: `mutated_output` is present only when
+  // the sanitizer actually rewrote bytes, so its absence means the original
+  // response IS the model-facing output. Gated on a response existing, so an
+  // event with nothing to sanitize records nothing. Awaited (not fired and
+  // forgotten) so a recorder that throws fails the hook CLOSED — an audit trail
+  // with silent holes is worse than a suppressed tool output.
+  if (ext.audit && event.response !== null && event.response !== undefined) {
+    const modified = fields !== null && Object.hasOwn(fields, "mutated_output");
+    await ext.audit({
+      tool: event.tool,
+      modified,
+      output: modified ? fields?.mutated_output : event.response,
+      context: fields?.additional_context,
+    });
+  }
   /** @type {import("agent-control-plane-core").Verdict} */
   const verdict = { decision: Decision.ALLOW };
   return fields === null ? verdict : { ...verdict, ...fields };
@@ -627,27 +746,34 @@ export function withPostToolUseDefault(input) {
  * The hook's CLI: parse → judge → render, with this hook's fail-closed posture.
  * Exported so a bundle entry (which must claim the CLI slot before this module
  * loads) can run the exact same wiring instead of duplicating the onError
- * posture.
+ * posture. That entry is also the only place a host's {@link SanitizeExtensions}
+ * can be injected, which is why the bag enters here and not through the
+ * environment: a callback is code, and code belongs to the composer.
+ * @param {SanitizeExtensions} [ext]
  * @returns {Promise<void>}
  */
-export async function cliMain() {
-  await runJudgeCli("sanitize-output", judgeSanitizeOutput, {
-    transformInput: withPostToolUseDefault,
-    // Fail closed: replace every string leaf of the original output with the
-    // placeholder, preserving shape so the harness honors the suppression
-    // instead of falling back to the raw, unvetted output (runJudgeCli hands
-    // back the parsed `input` even when the control-plane load failed, so the
-    // suppression shape-matches the real tool_response). emitFailClosed itself
-    // falls back to a bare string if that shape-matching replacement or its
-    // serialization throws, so even a pathological input fails closed.
-    onError: (err, input) =>
-      emitFailClosed(
-        input,
-        "[SANITIZATION FAILED — original output suppressed for safety. Hook error: " +
-          safeErrMessage(err) +
-          "]",
-      ),
-  });
+export async function cliMain(ext = {}) {
+  await runJudgeCli(
+    "sanitize-output",
+    (event) => judgeSanitizeOutput(event, ext),
+    {
+      transformInput: withPostToolUseDefault,
+      // Fail closed: replace every string leaf of the original output with the
+      // placeholder, preserving shape so the harness honors the suppression
+      // instead of falling back to the raw, unvetted output (runJudgeCli hands
+      // back the parsed `input` even when the control-plane load failed, so the
+      // suppression shape-matches the real tool_response). emitFailClosed itself
+      // falls back to a bare string if that shape-matching replacement or its
+      // serialization throws, so even a pathological input fails closed.
+      onError: (err, input) =>
+        emitFailClosed(
+          input,
+          "[SANITIZATION FAILED — original output suppressed for safety. Hook error: " +
+            safeErrMessage(err) +
+            "]",
+        ),
+    },
+  );
 }
 
 // Guard so importing (e.g. property tests) doesn't block on stdin.
