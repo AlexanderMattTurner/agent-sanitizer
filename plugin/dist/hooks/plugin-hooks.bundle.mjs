@@ -67961,5 +67961,3 @@ if (isMain(import.meta.url)) {
 export {
   main2 as main
 };
-
-// KILL TEST: deliberate corruption, reverted in the next commit.
