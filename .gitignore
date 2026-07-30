@@ -5,13 +5,19 @@
 # Dependencies
 node_modules
 .pnpm-store/
-pnpm-lock.yaml
 
 # Build outputs
 dist/
 build/
 out/
 types/
+
+# ...except the Claude Code plugin's bundle, which is a COMMITTED artifact: an
+# installed plugin has no node_modules and no build step, so the shipped bytes
+# have to be in the repo. A test asserts it is tracked and byte-identical to a
+# fresh build. The directory itself must be re-included before its contents —
+# git cannot re-include a file whose parent directory is excluded.
+!plugin/dist/
 
 # Environment files
 .env

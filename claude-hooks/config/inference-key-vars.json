@@ -1,0 +1,17 @@
+{
+  "description": "Inference-provider API-key env vars whose VALUES the redactor masks by exact match, plus the placeholder floor below which a configured value is treated as a doc stub rather than a real key. Mirrors agent_sanitizer.secrets.config.DEFAULT_MIN_SECRET_LEN; the hooks send these names' current values to the redactor daemon per request (see lib/redactor-client.mjs).",
+  "min_secret_len": 16,
+  "vars": [
+    "ANTHROPIC_API_KEY",
+    "ANTHROPIC_AUTH_TOKEN",
+    "OPENAI_API_KEY",
+    "OPENROUTER_API_KEY",
+    "GEMINI_API_KEY",
+    "GOOGLE_API_KEY",
+    "MISTRAL_API_KEY",
+    "GROQ_API_KEY",
+    "DEEPSEEK_API_KEY",
+    "XAI_API_KEY",
+    "VENICE_INFERENCE_KEY"
+  ]
+}

@@ -50,11 +50,82 @@ jobs:
       - name: Run auto-resolve workflow-script tests
         run: node --test .github/scripts/auto-resolve-*.test.mjs
 
+      # Named explicitly rather than left to `pnpm test`'s discovery. This suite
+      # gates the shipped plugin artifact — the reproducibility byte-compare and
+      # every hook's fail-closed verdict — so which invocation reaches it must be
+      # visible here, not inferred from a default that a future config change
+      # could silently narrow.
+      - name: Run plugin tests
+        run: node --test plugin/test/*.test.mjs
+
+      # claude-hooks/ sits outside the 100%-or-fail glob that covers src/, and
+      # that exclusion is deliberate rather than incidental: the suite drives the
+      # hooks as Claude Code does — as subprocesses running the BUNDLE — so c8
+      # attributes almost nothing back to these sources however good the tests
+      # are. The floor is therefore a ratchet against DELETING the un-bundled
+      # entry tests (the only runs that touch these files in-process), not a
+      # quality bar. What actually gates this code is behavioural: the
+      # degraded-verdict matrix, the env-var coverage enumeration, the egress pin
+      # and the live-engine job. Raise the floor, never lower it.
+      - name: Coverage floor for the ported hook sources
+        run: pnpm coverage:hooks
+
+  # The only leg that runs the REAL redaction engine. Everything else stubs the
+  # daemon in-process, so without this a pinned-engine bump could automerge green
+  # with a broken redactor: the wire protocol would be satisfied by the stub and
+  # the engine itself never executed.
+  live-engine:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+
+      - name: Setup base environment
+        uses: ./.github/actions/setup-base-env
+        with:
+          setup-python: "true"
+
+      # Installs the pinned agent-sanitizer[secrets] from PyPI into a scratch
+      # CLAUDE_PLUGIN_DATA, exactly as the SessionStart provisioner does, then
+      # drives all four hooks through the launcher against a golden corpus.
+      - name: Drive the hooks against the real engine
+        run: node .github/scripts/plugin-live-engine.mjs
+
+      # The zipapp's reproducibility check lives here rather than in the default
+      # suite because rebuilding it needs PyPI; the network-free suite asserts
+      # the committed artifact's properties (tracked, pure-Python, runnable)
+      # without rebuilding.
+      - name: Rebuild the redactor zipapp and byte-compare
+        run: |
+          node plugin/scripts/build-redactor-pyz.mjs
+          git diff --exit-code plugin/dist/redactor
+
+  # Ungated on purpose: a dist-only PR is exactly the case this catches, so it
+  # must not sit behind a paths filter that such a PR would miss.
+  dist-provenance:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Check the bundle only moved with its inputs
+        run: |
+          git fetch --no-tags origin "${BASE_REF}"
+          bash .github/scripts/check-dist-provenance.sh "origin/${BASE_REF}"
+        env:
+          BASE_REF: ${{ github.base_ref }}
+
   # Stable Required check: runs even when `test` is cancelled/skipped, so a
   # protected branch never gets stuck on a check that never reports.
   node-tests-passed: # required-check: true
     if: always()
-    needs: [test]
+    needs: [test, live-engine, dist-provenance]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -70,4 +141,15 @@ jobs:
         with:
           run: "true"
           decide-result: "success"
-          result: ${{ needs.test.result }}
+          # Worst-of the two work jobs. Reporting only `test` here would let a
+          # red live-engine ride through green — the reporter takes one result,
+          # so the combining has to happen at the call site. Passing the failing
+          # job's own result (rather than a flattened 'failure') keeps the
+          # reporter's cancelled-vs-superseded adjudication intact.
+          # dist-provenance is skipped on push-to-main (it needs a PR base), and
+          # a skip there is benign, so it is compared against both.
+          result: >-
+            ${{ needs.test.result != 'success' && needs.test.result
+             || needs.live-engine.result != 'success' && needs.live-engine.result
+             || (needs.dist-provenance.result == 'skipped' && 'success')
+             || needs.dist-provenance.result }}

@@ -20,8 +20,9 @@
     "prepare": "pnpm build:types && if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then git config core.hooksPath .hooks; fi",
     "test": "c8 node --test",
     "coverage": "c8 node --test",
-    "check": "tsc --noEmit",
-    "typecheck": "tsc --noEmit",
+    "coverage:hooks": "c8 --config .c8rc.claude-hooks.json node --test plugin/test/*.test.mjs",
+    "check": "tsc --noEmit && tsc -p tsconfig.hooks.json --noEmit",
+    "typecheck": "tsc --noEmit && tsc -p tsconfig.hooks.json --noEmit",
     "build:types": "tsc -p tsconfig.build.json",
     "prepack": "pnpm build:types",
     "gen:joining-type": "node scripts/gen-joining-type.mjs",
@@ -61,6 +62,9 @@
     ]
   },
   "devDependencies": {
+    "agent-control-plane-core": "0.2.13",
+    "namespace-guard": "0.20.0",
+    "sanitizer-engine": "npm:agent-sanitizer@2.1.0",
     "@commitlint/cli": "^21.0.1",
     "@commitlint/config-conventional": "^21.0.1",
     "@eslint/js": "10.0.1",

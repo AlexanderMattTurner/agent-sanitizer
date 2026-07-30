@@ -1,0 +1,15 @@
+{
+  "description": "The GUARANTEED FLOOR of credential-bearing environment variables whose values must never reach the model through tool output. On top of this list the redactor self-populates with any credential-shaped var present in the environment (looksLikeCredentialVar in lib/env-config.mjs), so a newly-forwarded token is redacted without editing this file — this list only pins the names that must always be covered regardless of shape. The Layer-4 secret redactor treats each as an env-bound secret (env_secrets).",
+  "vars": [
+    "CLAUDE_CODE_OAUTH_TOKEN",
+    "GH_TOKEN",
+    "GITHUB_TOKEN",
+    "AWS_ACCESS_KEY_ID",
+    "AWS_SECRET_ACCESS_KEY",
+    "AWS_SESSION_TOKEN",
+    "NPM_TOKEN",
+    "PYPI_TOKEN",
+    "DOCKER_PASSWORD",
+    "DOCKER_AUTH_CONFIG"
+  ]
+}

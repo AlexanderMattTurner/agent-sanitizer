@@ -1,0 +1,113 @@
+name: Plugin dist autofix
+
+# The plugin ships a committed esbuild bundle built against the PINNED published
+# engine, so the artifact only changes when the pin or the hook sources change.
+# Regenerating it by hand is the step a dependency-bump PR cannot take, so this
+# rebuilds and pushes the artifact on any PR that touches a build input. The
+# reproducibility test (committed bundle == fresh build) then passes on the
+# pushed commit; when this workflow cannot run, that test stays red and blocks
+# the merge — the artifact is never silently stale.
+on:
+  # not-required-check — this workflow pushes a regenerated artifact onto the PR
+  # branch; the reproducibility test in the Required node-tests check is what
+  # gates the merge, so a paths filter here strands nothing.
+  pull_request: # not-required-check
+    paths:
+      - package.json
+      - pnpm-lock.yaml
+      - claude-hooks/**
+      - plugin/scripts/**
+      - plugin/requirements.txt
+
+concurrency:
+  group: plugin-dist-autofix-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  regenerate:
+    # Same-repo PRs only — a token cannot push to a fork's branch. Unlike the
+    # Prettier autofix this DOES run on bot-authored PRs: a Renovate engine-pin
+    # bump is the main reason the artifact needs regenerating, and excluding bots
+    # would leave every such PR red on the reproducibility test with no way for
+    # the bot to fix it.
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      # A GITHUB_TOKEN push does not re-trigger workflows, so the Required
+      # node-tests check would stay pending on the fixed commit and block the PR.
+      # `secrets` can't be read in a job-level `if`, hence this preflight step.
+      - name: Check for AUTOFIX_TOKEN_ORG
+        id: guard
+        env:
+          AUTOFIX_TOKEN_ORG: ${{ secrets.AUTOFIX_TOKEN_ORG }}
+        run: |
+          if [ -n "$AUTOFIX_TOKEN_ORG" ]; then
+            echo "enabled=true" >>"$GITHUB_OUTPUT"
+          else
+            echo "enabled=false" >>"$GITHUB_OUTPUT"
+            echo "::notice::AUTOFIX_TOKEN_ORG secret is not set; skipping plugin dist regeneration. The reproducibility test will fail until the bundle is rebuilt and committed by hand."
+          fi
+
+      - if: steps.guard.outputs.enabled == 'true'
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          ref: ${{ github.event.pull_request.head.ref }}
+          # persist-credentials:false — do NOT leave any push token in .git/config.
+          # `pnpm install` and the build below run PR-defined lifecycle scripts; a
+          # persisted org-write PAT would be readable by that attacker-controlled
+          # code. The PAT is injected only into the final push step, which runs no
+          # PR code.
+          persist-credentials: false
+          fetch-depth: 0
+
+      # The zipapp rebuild installs the pinned engine from PyPI, so it needs uv.
+      - name: Setup base environment
+        if: steps.guard.outputs.enabled == 'true'
+        uses: ./.github/actions/setup-base-env
+        with:
+          setup-python: "true"
+
+      # The PyPI half of the pin is what the plugin installs at SessionStart, and
+      # npm and PyPI releases can land minutes apart. A bundle regenerated against
+      # a version PyPI does not have yet would merge green (the tests never touch
+      # the network) and then fail every user's provisioning, so verify it exists
+      # before pushing. This lives here rather than in the build script so the
+      # reproducibility rebuild stays offline.
+      - name: Verify the engine pin exists on PyPI
+        id: verify
+        if: steps.guard.outputs.enabled == 'true'
+        run: bash .github/scripts/verify-engine-pin.sh
+
+      - name: Rebuild the plugin artifacts and commit
+        id: build
+        if: steps.guard.outputs.enabled == 'true'
+        run: |
+          node plugin/scripts/build-plugin.mjs
+          node plugin/scripts/build-redactor-pyz.mjs
+          # `git diff --quiet` exits non-zero exactly when the build changed files.
+          if git diff --quiet; then
+            echo "changed=false" >>"$GITHUB_OUTPUT"
+            echo "Plugin artifacts already current; nothing to regenerate."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "chore(plugin): regenerate dist for the pinned engine"
+          echo "changed=true" >>"$GITHUB_OUTPUT"
+
+      # Push in a dedicated step whose only secret is the PAT. No PR code runs
+      # here, so the token cannot be exfiltrated.
+      - name: Push the regenerated artifacts
+        if: steps.guard.outputs.enabled == 'true' && steps.build.outputs.changed == 'true'
+        env:
+          AUTOFIX_TOKEN_ORG: ${{ secrets.AUTOFIX_TOKEN_ORG }}
+          HEAD_REF: ${{ github.event.pull_request.head.ref }}
+        run: |
+          git push \
+            "https://x-access-token:${AUTOFIX_TOKEN_ORG}@github.com/${GITHUB_REPOSITORY}.git" \
+            "HEAD:${HEAD_REF}"

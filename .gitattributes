@@ -1,0 +1,1 @@
+plugin/dist/** -merge linguist-generated=true
