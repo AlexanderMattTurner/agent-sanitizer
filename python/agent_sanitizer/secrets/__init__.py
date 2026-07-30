@@ -16,20 +16,28 @@ Public entry points:
 * :func:`strip_invisible` — delete payload-capable invisible chars.
 * :func:`configure_plugins` / :func:`redact_configured` — configure once, redact
   many (the daemon's hot path).
+* :func:`credential_name_matcher` — a predicate over an env-var NAME, built from
+  the published credential-noun vocabulary. ``scope`` picks the rule: ``trailing``
+  for a redactor (the noun ends the name), ``any-segment`` for an env scrub (the
+  noun sits anywhere in it). Exported so a consumer stops re-deriving the rule;
+  the JavaScript twin is the npm subpath ``agent-sanitizer/credential-names-matcher``.
 * :func:`credential_name_segments` / :func:`credential_field_name_patterns` /
-  :func:`non_secret_name_segments` — the published credential-noun vocabulary,
-  rendered for a name matcher or a ``field = value`` matcher. Exported so a
-  consumer with its own matcher (an env-var scrubber, a hook pre-gate) derives it
-  from this list instead of forking one; the same source is published to
-  JavaScript as the npm subpath export ``agent-sanitizer/credential-names``.
+  :func:`non_secret_name_segments` — the vocabulary's raw renderings, for a
+  consumer that needs the words rather than the predicate (an alternation for a
+  different matcher, a generated config file); the same source is published to
+  JavaScript as ``agent-sanitizer/credential-names``.
 """
 
 from .config import DEFAULT_MIN_SECRET_LEN, RedactorConfig
 from .credential_names import (
+    ANY_SEGMENT_SCOPE,
     CREDENTIAL_NAMES_FILE,
+    TRAILING_SCOPE,
     credential_field_name_patterns,
+    credential_name_matcher,
     credential_name_segments,
     non_secret_name_segments,
+    parse_credential_names,
 )
 from .engine import (
     configure_plugins,
@@ -50,6 +58,10 @@ __all__ = [
     "RedactorConfig",
     "DEFAULT_MIN_SECRET_LEN",
     "CREDENTIAL_NAMES_FILE",
+    "TRAILING_SCOPE",
+    "ANY_SEGMENT_SCOPE",
+    "credential_name_matcher",
+    "parse_credential_names",
     "credential_name_segments",
     "credential_field_name_patterns",
     "non_secret_name_segments",

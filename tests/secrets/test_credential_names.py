@@ -28,10 +28,12 @@ import pytest
 from agent_sanitizer.secrets import (
     CREDENTIAL_NAMES_FILE,
     credential_field_name_patterns,
+    credential_name_matcher,
     credential_name_segments,
     non_secret_name_segments,
     redact,
 )
+from agent_sanitizer.secrets import credential_names
 from agent_sanitizer.secrets.credential_names import (
     ENV_NAME_USE,
     FIELD_VALUE_USE,
@@ -275,3 +277,119 @@ def test_an_empty_alternation_would_be_permissive_or_blind() -> None:
     and an interpolated metacharacter matches everything, so all output blanks."""
     assert re.search(r"(?:^|_)(?:)$", "MY_TOKEN") is None
     assert re.search(r"(?:^|_)(?:KEY|.*)$", "TOTALLY_INNOCENT") is not None
+
+
+# ── the NAME matcher: the rule built from the vocabulary ─────────────────────
+#
+# The renderings above are the words. These cover the RULE, and every case here is
+# one a consumer's hand-rolled matcher has got wrong in practice.
+
+_MATCHER_SPEC = {
+    "nouns": [
+        {"parts": ["api", "key"], "uses": [ENV_NAME_USE, FIELD_VALUE_USE]},
+        {"parts": ["access", "token"], "uses": [ENV_NAME_USE, FIELD_VALUE_USE]},
+        {"parts": ["token"], "uses": [ENV_NAME_USE]},
+    ],
+    "nonSecretSuffixes": [["key", "id"]],
+}
+
+
+@pytest.mark.parametrize(
+    "name",
+    ["GITHUB_TOKEN", "DEPLOY_API_KEY", "npm_config__authToken", "deploy_apikey"],
+)
+def test_a_credential_name_matches_in_any_case(name: str) -> None:
+    """Case is folded: npm renders its config into the environment as
+    ``npm_config_<key>`` and reads the same names back, so a registry token arrives
+    lower-case without anyone exporting a credential-looking variable."""
+    assert credential_name_matcher()(name)
+
+
+@pytest.mark.parametrize(
+    "name", ["PATH", "TOKENIZERS_PARALLELISM", "UV_KEYRING_PROVIDER", "HOME"]
+)
+def test_a_name_that_merely_contains_a_noun_does_not_match(name: str) -> None:
+    """Runs are compared whole. PATH matters most: a scrub that strips it leaves
+    the command it was protecting unable to find its own executable."""
+    assert not credential_name_matcher(scope="any-segment")(name)
+
+
+@pytest.mark.parametrize(
+    "name", ["TEMPLATE_SYNC_TOKEN_ORG", "OAUTH_ACCESS_TOKEN_FALLBACK_4"]
+)
+def test_scope_decides_whether_a_mid_name_noun_counts(name: str) -> None:
+    """The two scopes must actually differ, or the argument is a lie. Both names
+    hold a live credential and neither ENDS in a noun, so a trailing-only matcher
+    reports "not a credential" — which is the leak this matcher exists to stop a
+    consumer from re-inventing."""
+    assert not credential_name_matcher(spec=_MATCHER_SPEC)(name)
+    assert credential_name_matcher(spec=_MATCHER_SPEC, scope="any-segment")(name)
+
+
+def test_a_multi_word_noun_is_compared_as_one_run() -> None:
+    """ACCESS_TOKEN is a noun; ACCESS alone is not. Word-by-word matching would
+    strip ACCESS_LOG_LEVEL."""
+    holds = credential_name_matcher(spec=_MATCHER_SPEC, scope="any-segment")
+    assert holds("SERVICE_ACCESS_TOKEN_V2")
+    assert not holds("ACCESS_LOG_LEVEL")
+
+
+def test_a_non_secret_suffix_is_declined_unless_the_caller_opts_out() -> None:
+    """DEPLOY_API_KEY_ID carries a noun mid-name AND ends in a non-secret marker,
+    so it is exactly where a redactor and a scrub want opposite answers: redacting
+    an identifier out of output is a visible defect, forwarding a credential is a
+    silent one."""
+    assert not credential_name_matcher(spec=_MATCHER_SPEC, scope="any-segment")(
+        "DEPLOY_API_KEY_ID"
+    )
+    assert credential_name_matcher(
+        spec=_MATCHER_SPEC, scope="any-segment", decline_non_secret=False
+    )("DEPLOY_API_KEY_ID")
+
+
+def test_an_unknown_scope_is_refused_rather_than_defaulted() -> None:
+    with pytest.raises(ValueError, match="unknown scope"):
+        credential_name_matcher(spec=_MATCHER_SPEC, scope="suffix")
+
+
+def test_an_unusable_vocabulary_reaches_no_matcher() -> None:
+    """A matcher over an empty noun set answers "no credential here" for every name
+    it is asked about — a scrub that forwards every secret while reporting success."""
+    with pytest.raises(ValueError, match="nouns is empty or missing"):
+        credential_name_matcher(spec={})
+
+
+def test_a_hostile_variable_name_cannot_stall_the_matcher(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The caller does not choose these names — a scrub is handed whatever the
+    surrounding process exported. One alternation of the renderings backtracks
+    polynomially on this input, and an unbounded run walk is quadratic on it.
+
+    The bound asserted is the COUNT of membership tests, not elapsed time. Both
+    say the same thing about the algorithm, but a wall-clock threshold also
+    reports on the machine that ran it: the ratio between linear and quadratic
+    here is ~20000, so any threshold separating them passes locally and reds
+    under load, which is the flake this suite already carries a scar from
+    (``test/invisible.test.mjs`` names one). A count has no such term — it is
+    identical on every machine and on every run.
+    """
+    counted = []
+
+    class CountingFrozenset(frozenset):  # type: ignore[type-arg]
+        def __contains__(self, item: object) -> bool:
+            counted.append(item)
+            return super().__contains__(item)
+
+    # raising=False because `frozenset` is a builtin, not a module attribute: this
+    # ADDS a module global, which the matcher's name lookup finds before builtins.
+    monkeypatch.setattr(credential_names, "frozenset", CountingFrozenset, raising=False)
+    segments = 20_000
+    name = "A_" * segments + "TOKENISH"
+    assert not credential_name_matcher(scope="any-segment")(name)
+
+    # Linear: at most `max_run` runs per starting segment. The longest noun in the
+    # packaged vocabulary is 3 words, so 4x the segment count is generous headroom
+    # over the true bound while still an order of magnitude under the quadratic
+    # walk's ~2e8 for this input.
+    assert len(counted) <= 4 * segments

@@ -9,10 +9,18 @@ renders it for the two matchers that need it, which are deliberately NOT unified
   separator the author wrote (``api[_-]?key``) — :func:`credential_field_name_patterns`,
   which the engine's ``_FIELD_NAMES`` alternation is built from.
 
-Rendering the same nouns two ways is the point: unifying the *predicates* would
-either weaken the name scrub or flood the redactor with false positives, so only
-the vocabulary is shared. A noun the JSON marks ``env-name`` only is excluded from
-the field-value rendering for exactly that reason.
+Rendering the same nouns two ways is the point: one predicate over both would
+either weaken the name scrub or flood the redactor with false positives, so the
+renderings stay apart. A noun the JSON marks ``env-name`` only is excluded from the
+field-value rendering for exactly that reason.
+
+For the name side the matcher itself is provided —
+:func:`credential_name_matcher` — because sharing the vocabulary shares the words
+but not the RULE, and the rule is where consumers go wrong: whether the noun must
+end the name or may sit anywhere in it, whether case is folded, whether a
+multi-word noun is compared as one run, and whether the walk stays linear on a
+name a caller does not choose. Those mechanics are fixed here; the one genuinely
+per-consumer choice, how far into the name to look, is the ``scope`` argument.
 
 A malformed spec raises rather than degrading: an empty list yields an alternation
 that matches nothing (every credential forwarded verbatim) and a part carrying a
@@ -26,7 +34,7 @@ The same file is published to JavaScript consumers as the npm subpath export
 import functools
 import json
 import re
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 from typing import NamedTuple
 
@@ -168,6 +176,77 @@ def credential_field_name_patterns() -> tuple[str, ...]:
     may join them into an alternation directly.
     """
     return _rendered().field_name_patterns
+
+
+TRAILING_SCOPE = "trailing"
+ANY_SEGMENT_SCOPE = "any-segment"
+_SCOPES = frozenset({TRAILING_SCOPE, ANY_SEGMENT_SCOPE})
+
+
+def _trailing_runs(words: Sequence[str], max_run: int) -> tuple[str, ...]:
+    """The name's trailing underscore-joined runs, longest run bounded."""
+    return tuple(
+        "_".join(words[len(words) - span :])
+        for span in range(1, min(max_run, len(words)) + 1)
+    )
+
+
+def credential_name_matcher(
+    *,
+    scope: str = TRAILING_SCOPE,
+    decline_non_secret: bool = True,
+    spec: Mapping[str, object] | None = None,
+) -> Callable[[str], bool]:
+    """A predicate: does this env-var NAME hold a credential?
+
+    The vocabulary is shared knowledge; this is the RULE built from it, and the
+    rule is where consumers go wrong. Rendering the nouns into one alternation
+    yields a pattern with polynomial backtracking on a long name; anchoring on the
+    trailing segment alone reports "not a credential" for ``DEPLOY_TOKEN_ORG`` or
+    ``OAUTH_TOKEN_FALLBACK_4``. Matching here is set membership over the name's
+    underscore-delimited runs, bounded by the longest noun, so it is linear in the
+    name's segment count and no name can stall it.
+
+    ``scope`` keeps the POLICY with the caller, because the two rules are not
+    interchangeable and neither is a better default:
+
+    * ``trailing`` — the noun is the name's last run. What a REDACTOR wants: it
+      decides what to cut from text a human reads, where over-matching mangles
+      legitimate output.
+    * ``any-segment`` — the noun is any whole run. What an env-var SCRUB wants:
+      it decides what a subprocess may inherit, where the error directions are
+      asymmetric — an unstripped credential leaks silently, an over-stripped one
+      breaks the command loudly.
+
+    ``decline_non_secret`` applies ``nonSecretSuffixes``: a name ending in one
+    holds an identifier or a public key (``AWS_ACCESS_KEY_ID``), not a secret.
+    Leave it on for a redactor; turn it off for a scrub that prefers to
+    over-strip. It is applied to the trailing run under both scopes, since a
+    non-secret marker means nothing mid-name.
+
+    The returned predicate closes over the parsed vocabulary — build it once.
+    """
+    if scope not in _SCOPES:
+        raise ValueError(f"credential_name_matcher: unknown scope {scope!r}")
+    rendered = _rendered() if spec is None else parse_credential_names(spec)
+    nouns = frozenset(rendered.segments)
+    non_secret = frozenset(rendered.non_secret_segments)
+    max_run = max(len(noun.split("_")) for noun in rendered.segments)
+
+    def holds_credential(name: str) -> bool:
+        words = name.upper().split("_")
+        trailing = _trailing_runs(words, max_run)
+        if decline_non_secret and any(run in non_secret for run in trailing):
+            return False
+        if scope == TRAILING_SCOPE:
+            return any(run in nouns for run in trailing)
+        return any(
+            "_".join(words[start : start + span]) in nouns
+            for start in range(len(words))
+            for span in range(1, min(max_run, len(words) - start) + 1)
+        )
+
+    return holds_credential
 
 
 def non_secret_name_segments() -> tuple[str, ...]:
