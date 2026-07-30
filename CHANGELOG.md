@@ -8,6 +8,18 @@ adhere to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+## [2.8.0] - 2026-07-30
+
+### Changed
+
+- feat(ci): give claude-run the six-credential OAuth ladder
+- docs: release 2.7.2 [skip ci]
+- fix(ci): raise every agent model to at least Sonnet 5, and make the gh stub reject --slurp with --
+- fix(ci): stop the review trigger from failing closed on every push
+- ci(node-tests): install the sanitizer before the PR-review script tests
+- fix(ci): route claude-run's model input through claude_args
+- fix(ci): fail the PR reviewer when its agent run errored, and drop a dead model input
+
 ## [2.7.2] - 2026-07-30
 
 ### Changed
