@@ -840,32 +840,49 @@ test("_AGENT_SANITIZER_TRACE and _AGENT_SANITIZER_TRACE_FILE route trace lines t
   const plugin = stagePlugin(t);
   const traceFile = join(scratch(t), "trace.jsonl");
 
-  // pretooluse-sanitize is one of the two hooks that announce engagement on the
-  // channel; sanitize-user-prompt emits nothing today (recorded in the PR body).
-  const res = launch(
-    plugin,
-    "PreToolUse",
-    "pretooluse-sanitize",
-    {
-      hook_event_name: "PreToolUse",
-      tool_name: "Bash",
-      tool_input: { command: "echo hello" },
-    },
-    {
-      env: {
-        _AGENT_SANITIZER_TRACE: "info",
-        _AGENT_SANITIZER_TRACE_FILE: traceFile,
+  // Every stdin hook must announce engagement — a silently-disabled layer is
+  // otherwise invisible on the channel, which is the channel's whole point.
+  const traceEnv = {
+    _AGENT_SANITIZER_TRACE: "info",
+    _AGENT_SANITIZER_TRACE_FILE: traceFile,
+  };
+  const payloads = {
+    "pretooluse-sanitize": [
+      "PreToolUse",
+      {
+        hook_event_name: "PreToolUse",
+        tool_name: "Bash",
+        tool_input: { command: "echo hello" },
       },
-    },
-  );
-  assert.equal(res.status, 0, res.stderr);
+    ],
+    "sanitize-output": [
+      "PostToolUse",
+      {
+        hook_event_name: "PostToolUse",
+        tool_name: "Bash",
+        tool_input: {},
+        tool_response: { stdout: "plain" },
+      },
+    ],
+    "sanitize-user-prompt": [
+      "UserPromptSubmit",
+      { hook_event_name: "UserPromptSubmit", prompt: "an ordinary prompt" },
+    ],
+  };
+  for (const [hook, [event, payload]] of Object.entries(payloads)) {
+    const res = launch(plugin, event, hook, payload, { env: traceEnv });
+    assert.equal(res.status, 0, `${hook}: ${res.stderr}`);
+  }
 
-  const lines = readFileSync(traceFile, "utf8").trim().split("\n");
-  assert.ok(lines.length > 0, "trace file exists but is empty");
-  const events = lines.map((l) => JSON.parse(l));
-  // Every layer announcing that it RAN is the point of the channel: a missing
-  // announcement is how a silently-disabled layer shows up.
-  assert.ok(events.some((e) => e.event === "hook_ran"));
+  const events = readFileSync(traceFile, "utf8")
+    .trim()
+    .split("\n")
+    .map((l) => JSON.parse(l));
+  for (const hook of Object.keys(payloads))
+    assert.ok(
+      events.some((e) => e.event === "hook_ran" && e.hook === hook),
+      `${hook} never announced hook_ran on the trace channel`,
+    );
   for (const e of events) assert.ok(["info", "debug"].includes(e.level));
 });
 

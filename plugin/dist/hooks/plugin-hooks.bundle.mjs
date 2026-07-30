@@ -55574,7 +55574,14 @@ function judgeSanitizeUserPrompt(event, strip = stripAnsiFully3) {
 async function main(read, write, strip = stripAnsiFully3) {
   await runJudgeCli(
     "sanitize-user-prompt",
-    (event) => judgeSanitizeUserPrompt(event, strip),
+    (event) => {
+      const verdict = judgeSanitizeUserPrompt(event, strip);
+      trace(TraceEvent.HOOK_RAN, {
+        hook: "sanitize-user-prompt",
+        outcome: verdict.decision === controlPlane().Decision.DENY ? "deny" : verdict.additional_context ? "note" : "allow"
+      });
+      return verdict;
+    },
     {
       readInput: read,
       write,
@@ -55593,6 +55600,7 @@ var init_sanitize_user_prompt = __esm({
     "use strict";
     init_hook_io();
     await init_control_plane();
+    init_trace2();
     BLOCK_CONTEXT = "User prompt blocked: payload-capable invisible/ANSI characters detected.";
     SGR_NOTE = "The prompt contains ANSI SGR color codes (pasted terminal output). They are display-only formatting noise; read through them.";
     try {

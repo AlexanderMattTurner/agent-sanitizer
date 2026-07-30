@@ -20,6 +20,7 @@
  */
 import { readStdinJson, safeErrMessage, isMain } from "./lib/hook-io.mjs";
 import { controlPlane, runJudgeCli } from "./lib/control-plane.mjs";
+import { trace, TraceEvent } from "./lib/trace.mjs";
 // classifyPrompt (the user-prompt verdict) and stripAnsiFully (its ANSI stripper)
 // come from the agent-sanitizer package. They are bound by a *caught* dynamic
 // import, never a bare top-level `import … from "…"`: a static npm import
@@ -123,7 +124,21 @@ export async function main(read, write, strip = stripAnsiFully) {
   // is exactly what may have failed to load.
   await runJudgeCli(
     "sanitize-user-prompt",
-    (event) => judgeSanitizeUserPrompt(event, strip),
+    (event) => {
+      const verdict = judgeSanitizeUserPrompt(event, strip);
+      // Announce engagement on the trace channel like the other stdin hooks —
+      // a prompt gate that silently stopped running is otherwise invisible.
+      trace(TraceEvent.HOOK_RAN, {
+        hook: "sanitize-user-prompt",
+        outcome:
+          verdict.decision === controlPlane().Decision.DENY
+            ? "deny"
+            : verdict.additional_context
+              ? "note"
+              : "allow",
+      });
+      return verdict;
+    },
     {
       readInput: read,
       write,
