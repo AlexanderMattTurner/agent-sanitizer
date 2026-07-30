@@ -418,7 +418,7 @@ describe("sanitize-output fail-closed context", () => {
 
 describe("cold-start marker", () => {
   it("has no path when no project dir is set — nothing installed it", () => {
-    assert.equal(hookgateMarkerPath(undefined, "/run/user/1000"), null);
+    assert.equal(hookgateMarkerPath("", "/run/user/1000"), null);
   });
 
   // Both arguments are passed explicitly throughout: omitting one falls back to
