@@ -15,7 +15,7 @@
 #          commit that carries the tag and NOT again on later untagged pushes
 #          (re-tag to run again).
 #       2. The reviewer has NEVER reviewed this PR — the first whole-diff pass,
-#          on HAIKU, for a PR whose earlier events all skipped. A push is never a
+#          on the cheap tier, for a PR whose earlier events all skipped. A push is never a
 #          RE-read: the reviewer reads a PR once, and later pushes make progress
 #          by the thread resolver closing findings out, which is what the
 #          review-findings gate reads. This automatic pass NEVER spends Opus —
@@ -34,8 +34,8 @@ KEYWORD="[opus-review]"
 REVIEW_LABEL="needs-auto-review"
 # The reviewer posts with GITHUB_TOKEN, so its reviews are authored by this bot.
 REVIEWER="github-actions[bot]"
-OPUS_MODEL="claude-opus-4-8"
-HAIKU_MODEL="claude-haiku-4-5"
+OPUS_MODEL="claude-opus-5"
+CHEAP_MODEL="claude-sonnet-5"
 
 emit() {
   # $1 run, $2 reason, $3 model (defaults to Opus — the thorough first-look model)
@@ -122,7 +122,7 @@ fi
 if [[ "$reviews_rc" -ne 0 ]]; then
   emit false "could not read $REPO#${PR:-} reviews (rc=$reviews_rc) — not reviewing rather than guessing"
 elif [[ -z "$state" ]]; then
-  emit true "$REVIEWER has never reviewed this PR — running the first pass this push" "$HAIKU_MODEL"
+  emit true "$REVIEWER has never reviewed this PR — running the first pass this push" "$CHEAP_MODEL"
 else
   emit false "$REVIEWER already reviewed this PR (latest: $state) — a push is not re-read; put $KEYWORD in a commit title for a full re-read"
 fi

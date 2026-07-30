@@ -27,8 +27,11 @@ SCRIPT = REPO_ROOT / ".github" / "scripts" / "decide-pr-review-trigger.sh"
 
 _FAKE_GH = r"""#!/usr/bin/env python3
 # gh stub: serves `repos/.../pulls/N/reviews` and `repos/.../commits/SHA` from
-# canned files, running the caller's --jq through real jq. REVIEWS_RC forces the
-# reviews read to fail so the fail-safe branch can be tested.
+# canned files, running the caller's --jq through real jq and printing raw JSON
+# when there is none. It rejects --slurp alongside --jq exactly as the real gh
+# does, so a caller that pairs them is caught here instead of failing closed in
+# CI. REVIEWS_RC forces the reviews read to fail so the fail-safe branch can be
+# tested.
 import json, os, shutil, subprocess, sys
 
 JQ = shutil.which("jq")
@@ -38,11 +41,13 @@ if JQ is None:
 
 args = sys.argv[1:]
 assert args and args[0] == "api", args
-args, jq, path = args[1:], None, None
+args, jq, path, slurp = args[1:], None, None, False
 i = 0
 while i < len(args):
     a = args[i]
-    if a in ("--paginate", "--slurp"):
+    if a == "--slurp":
+        slurp, i = True, i + 1
+    elif a == "--paginate":
         i += 1
     elif a == "--jq":
         jq, i = args[i + 1], i + 2
@@ -51,8 +56,17 @@ while i < len(args):
     else:
         i += 1
 
+if slurp and jq is not None:
+    sys.stderr.write(
+        "the `--slurp` option is not supported with `--jq` or `--template`\n"
+    )
+    sys.exit(1)
+
 
 def emit(doc):
+    if jq is None:
+        sys.stdout.write(json.dumps(doc))
+        sys.exit(0)
     r = subprocess.run(
         [JQ, "-r", jq], input=json.dumps(doc), text=True, capture_output=True
     )
@@ -155,7 +169,8 @@ def test_a_push_runs_the_first_pass_when_nothing_ever_reviewed(
     got = _decide(tmp_path, action="synchronize", reviews=[])
     assert got["run"] == "true"
     # The automatic pass never spends Opus; only the [opus-review] opt-in does.
-    assert "haiku" in got["model"]
+    assert "opus" not in got["model"]
+    assert got["model"]
 
 
 def test_a_push_is_not_a_re_read_once_the_reviewer_has_reviewed(

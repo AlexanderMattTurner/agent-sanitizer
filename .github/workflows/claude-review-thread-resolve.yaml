@@ -103,7 +103,7 @@ jobs:
           # Haiku is enough for a per-thread yes/no "does the diff address this?"
           # judgement — far cheaper than the Opus reviewer that raises the concerns.
           claude_args: >-
-            --model claude-haiku-4-5-20251001
+            --model claude-sonnet-5
             --setting-sources user
             --allowedTools "Read,Grep,Glob,Write"
             --add-dir "${{ runner.temp }}/pr-input"
