@@ -37,6 +37,10 @@ import {
 const ROOT = dirname(dirname(dirname(fileURLToPath(import.meta.url))));
 const PLUGIN_DIR = join(ROOT, "plugin");
 const HOOKS_DIR = join(ROOT, "claude-hooks");
+// The published credential-noun vocabulary, at the package-relative path the hook
+// libs import it from.
+const VOCAB_REL = join("python", "agent_sanitizer", "secrets", "data");
+const VOCAB_FILE = "credential-names.json";
 const ESC = "";
 
 /** Tag-character encoding of `s` — the ASCII-smuggling payload class. */
@@ -106,6 +110,14 @@ function stageSources(t, { omit = [] } = {}) {
   const dir = scratch(t);
   const hooks = join(dir, "claude-hooks");
   cpSync(HOOKS_DIR, hooks, { recursive: true });
+  // The hook libs reach the published credential-noun vocabulary at its
+  // package-relative path (`../../python/…`), so staging claude-hooks/ alone
+  // would model a layout npm never installs — every `files` entry lands under
+  // one root. Without this the env-config import throws at module load, which
+  // looks exactly like the fail-OPEN the omit-a-package test exists to detect.
+  const vocabDir = join(dir, VOCAB_REL);
+  mkdirSync(vocabDir, { recursive: true });
+  cpSync(join(ROOT, VOCAB_REL, VOCAB_FILE), join(vocabDir, VOCAB_FILE));
   const modules = join(dir, "node_modules");
   mkdirSync(modules, { recursive: true });
   for (const [name, target] of Object.entries(packageDirs()))
