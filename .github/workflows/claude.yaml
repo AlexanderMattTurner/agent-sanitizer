@@ -74,6 +74,10 @@ jobs:
         uses: ./.github/actions/claude-run
         with:
           oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
-          fallback_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN_FALLBACK }}
+          oauth_token_fallback: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN_FALLBACK }}
+          oauth_token_fallback_3: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN_FALLBACK_3 }}
+          oauth_token_fallback_4: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN_FALLBACK_4 }}
+          oauth_token_fallback_5: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN_FALLBACK_5 }}
+          oauth_token_fallback_6: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN_FALLBACK_6 }}
           github_token: ${{ secrets.TEMPLATE_SYNC_TOKEN_ORG || secrets.GITHUB_TOKEN }}
           model: claude-sonnet-5
