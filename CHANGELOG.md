@@ -8,6 +8,12 @@ adhere to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+## [2.5.0] - 2026-07-30
+
+### Changed
+
+- feat: publish the claude-hooks composition surface as typed subpaths
+
 ## [2.4.1] - 2026-07-30
 
 ### Changed
