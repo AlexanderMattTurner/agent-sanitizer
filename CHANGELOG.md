@@ -8,6 +8,12 @@ adhere to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+## [2.2.2] - 2026-07-30
+
+### Changed
+
+- fix(secrets): stop a lone PEM header from redacting the rest of the file
+
 ## [2.2.1] - 2026-07-30
 
 ### Changed
