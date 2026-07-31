@@ -185,12 +185,14 @@ import { cliMain } from "agent-sanitizer/claude-hooks/scan-invisible-chars";
 await cliMain({ trace: (event, fields) => myChannel.emit(event, fields) });
 ```
 
-The sink is the last argument of each hook's entry point — `cliMain({trace})` on
+The sink rides each hook's options bag — `cliMain({trace})` on
 `scan-invisible-chars` and `pretooluse-sanitize`, the extension bag's `trace` on
-`sanitize-output`, and a trailing parameter on `sanitize-user-prompt`'s `main`.
-It receives the same `TraceEvent` names the default emits, and it **replaces**
-the default rather than running alongside it — the package channel goes silent,
-so there is one announcement to detect, not two.
+`sanitize-output`, `main(read, write, {trace})` on `sanitize-user-prompt`. It
+receives the same `TraceEvent` names the default emits, and it **replaces** the
+default rather than running alongside it — the package channel goes silent, so
+there is one announcement to detect, not two. It may throw freely: each hook
+binds the sink it is given through `bestEffortTrace`, so an announcement can
+never be the thing that breaks a hook.
 
 **A host's own cold-start marker can replace the derived one.** The hooks wait
 out an in-flight dependency install by polling a marker file whose path they

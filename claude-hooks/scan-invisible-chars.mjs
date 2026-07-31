@@ -21,7 +21,7 @@ import {
   ALERT_ACK_FILE,
   PROJECT_DIR,
 } from "./lib/invisible-alert.mjs";
-import { trace, TraceEvent } from "./lib/trace.mjs";
+import { bestEffortTrace, trace, TraceEvent } from "./lib/trace.mjs";
 
 // Layer-1 primitives, bound via lazyImport (see its doc for the fail-OPEN
 // hazard of a bare static npm import — here the instruction files would load
@@ -276,7 +276,11 @@ function scanProject() {
  *   sink so the announcement lands where its detector reads (see lib/trace.mjs).
  * @returns {Promise<void>}
  */
-export async function cliMain({ trace: emitTrace = trace } = {}) {
+export async function cliMain({ trace: sink = trace } = {}) {
+  // Bound best-effort: the announcements below run BEFORE the auto-clean and
+  // the alert write, with no catch above them, so a throwing host sink would
+  // abort the scan silently (see bestEffortTrace).
+  const emitTrace = bestEffortTrace(sink);
   /* c8 ignore start -- fail-closed module-load guard: only reachable when the
      agent-sanitizer import above failed, which can't be simulated in the
      spawned-subprocess CLI run the tests observe. */

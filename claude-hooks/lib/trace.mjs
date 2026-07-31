@@ -24,6 +24,10 @@ import { appendFileSync } from "node:fs";
  * The sink shape a hook emits through: the event name, its metadata fields, and
  * the level. A host implementation receives the same {@link TraceEvent} names the
  * default emits, so it can remap them onto its own channel's vocabulary.
+ *
+ * A sink is NOT required to be total — throw freely. Every hook binds the one it
+ * was given through {@link bestEffortTrace}, which is what upholds the channel's
+ * never-breaks-a-hook posture on host code that cannot promise it.
  * @typedef {(event: string, fields?: Record<string, unknown>, level?: "info"|"debug") => void} TraceFn
  */
 
@@ -71,4 +75,32 @@ export function trace(event, fields = {}, level = "info") {
   } catch {
     // best-effort: a trace we can't write must never break a hook.
   }
+}
+
+/**
+ * `sink` with {@link trace}'s best-effort posture forced onto it: a throw is
+ * swallowed, so an announcement can never break the hook making it.
+ *
+ * This is what makes the sink safely injectable. The announcement call sites were
+ * placed under the guarantee that emitting cannot fail, and one of them relies on
+ * it outright: scan-invisible-chars announces BEFORE it auto-cleans the
+ * contaminated instruction files and arms the PreToolUse gate, with no catch
+ * above it, so a throwing sink there would abort the scan — leaving the payload on
+ * disk, the gate un-armed, and NO announcement on any channel. The loss the
+ * announcement exists to make loud would itself be silent.
+ *
+ * Swallowing is right here and is not licence to swallow elsewhere in this tree:
+ * a dropped announcement is already loud in the host's own detector — that is what
+ * a trace channel is — whereas a killed hook is loud nowhere.
+ * @param {TraceFn} sink
+ * @returns {TraceFn}
+ */
+export function bestEffortTrace(sink) {
+  return (event, fields, level) => {
+    try {
+      sink(event, fields, level);
+    } catch {
+      // See above: an announcement must never be the thing that breaks a hook.
+    }
+  };
 }

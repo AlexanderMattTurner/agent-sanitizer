@@ -50,7 +50,7 @@ import {
   authoredContext,
 } from "./lib/authored-content.mjs";
 import { redactViaDaemon } from "./lib/redactor-client.mjs";
-import { trace, TraceEvent } from "./lib/trace.mjs";
+import { bestEffortTrace, trace, TraceEvent } from "./lib/trace.mjs";
 
 const HOOK_NAME = "pretooluse-sanitize";
 
@@ -174,15 +174,18 @@ function emitTraced(emitTrace, toolName, fields) {
  * @param {(tool: string, toolInput: any) => ReturnType<typeof rehydrateRedacted>} [rehydrate]
  * injectable for tests; the default binds the real redactor-daemon io (the
  * layer reads the target file and maps secrets through the daemon)
- * @param {import("./lib/trace.mjs").TraceFn} [emitTrace]  where engagement is
+ * @param {import("./lib/trace.mjs").TraceFn} [sink]  where engagement is
  * announced; a host with its own trace channel passes its sink (see lib/trace.mjs)
  * @returns {Promise<Record<string, unknown> | null>}
  */
 export async function buildPreToolUseResponse(
   input,
   rehydrate = defaultRehydrate,
-  emitTrace = trace,
+  sink = trace,
 ) {
+  // Every path into the announcement runs through here, so this is the one place
+  // a host sink has to be made best-effort (see bestEffortTrace).
+  const emitTrace = bestEffortTrace(sink);
   const asks = [];
   const contexts = [];
 

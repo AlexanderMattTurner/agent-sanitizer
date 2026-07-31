@@ -67361,6 +67361,14 @@ function trace(event, fields = {}, level = "info") {
   } catch {
   }
 }
+function bestEffortTrace(sink) {
+  return (event, fields, level) => {
+    try {
+      sink(event, fields, level);
+    } catch {
+    }
+  };
+}
 var TraceEvent, LEVELS;
 var init_trace2 = __esm({
   "claude-hooks/lib/trace.mjs"() {
@@ -67395,7 +67403,8 @@ function emitTraced(emitTrace, toolName, fields) {
   emitTrace(TraceEvent.HOOK_RAN, { hook: HOOK_NAME, tool: toolName, outcome });
   return fields;
 }
-async function buildPreToolUseResponse(input, rehydrate = defaultRehydrate, emitTrace = trace) {
+async function buildPreToolUseResponse(input, rehydrate = defaultRehydrate, sink = trace) {
+  const emitTrace = bestEffortTrace(sink);
   const asks = [];
   const contexts = [];
   const findings = invisibleCharAlert();
@@ -67852,8 +67861,9 @@ function emitFailClosed(input, message, emit = (fields) => emitHookResponse(Hook
   }
 }
 async function evaluateToolOutput(input, ext = {}) {
+  const emitTrace = bestEffortTrace(ext.trace ?? trace);
   const emit = (outcome, fields2) => {
-    (ext.trace ?? trace)(TraceEvent.HOOK_RAN, {
+    emitTrace(TraceEvent.HOOK_RAN, {
       hook: HOOK_NAME2,
       tool: input.tool_name,
       outcome
@@ -68026,7 +68036,13 @@ function judgeSanitizeUserPrompt(event, strip = stripAnsiFully3, overrides = USE
     additional_context: messages.blockContext
   };
 }
-async function main(read, write, strip = stripAnsiFully3, overrides = USER_PROMPT_MESSAGES, emitTrace = trace) {
+async function main(read, write, opts = {}) {
+  const {
+    strip = stripAnsiFully3,
+    overrides = USER_PROMPT_MESSAGES,
+    trace: sink = trace
+  } = opts;
+  const emitTrace = bestEffortTrace(sink);
   const messages = { ...USER_PROMPT_MESSAGES, ...overrides };
   await runJudgeCli(
     "sanitize-user-prompt",
@@ -68225,7 +68241,8 @@ function scanProject() {
   }
   return allFindings;
 }
-async function cliMain3({ trace: emitTrace = trace } = {}) {
+async function cliMain3({ trace: sink = trace } = {}) {
+  const emitTrace = bestEffortTrace(sink);
   if (!await ensureSanitizerLoaded()) {
     emitTrace(TraceEvent.SCAN_INVISIBLE_CHARS_RAN, { outcome: "skipped" });
     process.stderr.write(

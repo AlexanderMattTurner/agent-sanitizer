@@ -20,13 +20,21 @@
  *
  * Both are asserted for all four hooks member-by-member rather than for a
  * representative one: the threading is hand-written per hook (an options bag
- * here, an extension bag there, a positional parameter in the prompt gate), so a
- * hook that drops the sink is exactly the regression this file exists to catch.
+ * here, an extension bag there), so a hook that drops the sink is exactly the
+ * regression this file exists to catch. A third case per hook covers the sink
+ * THROWING, which host code is free to do and the announcement sites were written
+ * assuming it never would.
  */
 import { describe, it, after } from "node:test";
 import assert from "node:assert/strict";
 import { Readable } from "node:stream";
-import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import {
+  existsSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -142,7 +150,7 @@ const HOOKS = [
       });
       const write = () => {};
       return sink
-        ? userPrompt.main(read, write, undefined, undefined, sink)
+        ? userPrompt.main(read, write, { trace: sink })
         : userPrompt.main(read, write);
     },
   },
@@ -177,8 +185,53 @@ for (const hook of HOOKS) {
       );
       assert.deepEqual(packageChannel(file), []);
     });
+
+    it("survives a host sink that throws", async () => {
+      freshTraceFile();
+      // Host code carries no never-throws contract, and the announcement sites
+      // were placed under one — see bestEffortTrace, which is what makes this
+      // hold. scan-invisible-chars gets the assertion with teeth below.
+      await assert.doesNotReject(() =>
+        hook.run(() => {
+          throw new Error("host channel down");
+        }),
+      );
+    });
   });
 }
+
+// The one hook where a throwing sink costs more than an announcement: its
+// announcement runs BEFORE the auto-clean and the alert write, with no catch
+// above it, so an abort here leaves the payload on disk and the PreToolUse gate
+// un-armed — and says so on no channel at all. Asserted on the work, not on the
+// absence of a throw. Runs last: it contaminates the shared project dir the
+// cases above rely on being clean.
+describe("scan-invisible-chars with a throwing sink", () => {
+  it("still cleans the contaminated instruction file", async () => {
+    // Tag characters (U+E0041…) — a long enough run to clear the finding
+    // threshold, and the file is auto-cleanable, so the scan reaches the write.
+    const payload = Array.from({ length: 40 }, (_, i) =>
+      String.fromCodePoint(0xe0041 + (i % 26)),
+    ).join("");
+    const file = join(projectDir, "CLAUDE.md");
+    writeFileSync(file, `# Project\n\nhello${payload}world\n`);
+
+    const stderr = process.stderr.write;
+    // @ts-expect-error -- narrower than the overloaded write signature.
+    process.stderr.write = () => true;
+    try {
+      await scanInvisible.cliMain({
+        trace: () => {
+          throw new Error("host channel down");
+        },
+      });
+    } finally {
+      process.stderr.write = stderr;
+    }
+
+    assert.equal(readFileSync(file, "utf8").includes(payload), false);
+  });
+});
 
 after(() => {
   for (const dir of [traceDir, projectDir])

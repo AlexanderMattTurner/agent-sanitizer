@@ -34,7 +34,7 @@ import {
   HookEvent,
 } from "./lib/hook-io.mjs";
 import { controlPlane, runJudgeCli } from "./lib/control-plane.mjs";
-import { trace, TraceEvent } from "./lib/trace.mjs";
+import { bestEffortTrace, trace, TraceEvent } from "./lib/trace.mjs";
 import { hasEnvBoundSecret } from "./lib/secret-annotate.mjs";
 import {
   persistReveal,
@@ -580,13 +580,16 @@ export function emitFailClosed(
  * @returns {Promise<{ mutated_output?: unknown, additional_context?: string } | null>}
  */
 export async function evaluateToolOutput(input, ext = {}) {
+  // Best-effort, like the default sink: a host callback that throws must not be
+  // the thing that suppresses a tool output (see bestEffortTrace).
+  const emitTrace = bestEffortTrace(ext.trace ?? trace);
   /**
    * @param {string} outcome  noop | clean | flagged | modified
    * @param {{ mutated_output?: unknown, additional_context?: string } | null} fields
    * @returns {{ mutated_output?: unknown, additional_context?: string } | null}
    */
   const emit = (outcome, fields) => {
-    (ext.trace ?? trace)(TraceEvent.HOOK_RAN, {
+    emitTrace(TraceEvent.HOOK_RAN, {
       hook: HOOK_NAME,
       tool: input.tool_name,
       outcome,
