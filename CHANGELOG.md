@@ -8,6 +8,15 @@ adhere to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+## [2.9.1] - 2026-07-31
+
+### Changed
+
+- fix(claude-hooks): guard both prompt bindings, reach the third gate's remedy
+- fix(repo): stop shipping a packed tarball in the published tree
+- fix(claude-hooks): give the prompt gate a real load error and a host remedy
+- docs: release 2.9.0 [skip ci]
+
 ## [2.9.0] - 2026-07-31
 
 ### Changed
