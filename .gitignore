@@ -68,3 +68,6 @@ stryker.shard.json
 
 # gh CLI state, written when a tool run puts HOME inside the checkout.
 .local/
+
+# `pnpm pack` output: a build artifact regenerated on demand, never a source.
+*.tgz
