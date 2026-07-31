@@ -50,7 +50,7 @@ import {
   authoredContext,
 } from "./lib/authored-content.mjs";
 import { redactViaDaemon } from "./lib/redactor-client.mjs";
-import { trace, TraceEvent } from "./lib/trace.mjs";
+import { bestEffortTrace, trace, TraceEvent } from "./lib/trace.mjs";
 
 const HOOK_NAME = "pretooluse-sanitize";
 
@@ -150,18 +150,19 @@ const defaultRehydrate = (tool, toolInput) =>
  * it unchanged. The trace lives on this in-process, mutation-tested path, not in
  * the CLI block, so engagement is announced (hook_ran — metadata only: hook
  * name, tool, outcome) for every exit.
+ * @param {import("./lib/trace.mjs").TraceFn} emitTrace
  * @param {string} toolName
  * @param {Record<string, unknown> | null} fields
  * @returns {Record<string, unknown> | null}
  */
-function emitTraced(toolName, fields) {
+function emitTraced(emitTrace, toolName, fields) {
   let outcome = "modified";
   if (fields === null) outcome = "noop";
   else if (fields.permissionDecision === PermissionDecision.DENY)
     outcome = "deny";
   else if (fields.permissionDecision === PermissionDecision.ASK)
     outcome = "ask";
-  trace(TraceEvent.HOOK_RAN, { hook: HOOK_NAME, tool: toolName, outcome });
+  emitTrace(TraceEvent.HOOK_RAN, { hook: HOOK_NAME, tool: toolName, outcome });
   return fields;
 }
 
@@ -173,12 +174,18 @@ function emitTraced(toolName, fields) {
  * @param {(tool: string, toolInput: any) => ReturnType<typeof rehydrateRedacted>} [rehydrate]
  * injectable for tests; the default binds the real redactor-daemon io (the
  * layer reads the target file and maps secrets through the daemon)
+ * @param {import("./lib/trace.mjs").TraceFn} [sink]  where engagement is
+ * announced; a host with its own trace channel passes its sink (see lib/trace.mjs)
  * @returns {Promise<Record<string, unknown> | null>}
  */
 export async function buildPreToolUseResponse(
   input,
   rehydrate = defaultRehydrate,
+  sink = trace,
 ) {
+  // Every path into the announcement runs through here, so this is the one place
+  // a host sink has to be made best-effort (see bestEffortTrace).
+  const emitTrace = bestEffortTrace(sink);
   const asks = [];
   const contexts = [];
 
@@ -227,7 +234,7 @@ export async function buildPreToolUseResponse(
   // above, so it returns immediately.
   const rehydrated = await rehydrate(tool, current);
   if (rehydrated && "deny" in rehydrated)
-    return emitTraced(input.tool_name, {
+    return emitTraced(emitTrace, input.tool_name, {
       permissionDecision: PermissionDecision.DENY,
       permissionDecisionReason: rehydrated.deny,
     });
@@ -238,6 +245,7 @@ export async function buildPreToolUseResponse(
   }
 
   return emitTraced(
+    emitTrace,
     input.tool_name,
     assembleResponse({ changed, current, asks, contexts, pendingGateAck }),
   );
@@ -290,12 +298,16 @@ function assembleResponse({
  * fail-closed posture holds even when the adapter never loaded.
  * @param {import("agent-control-plane-core").ToolCallEvent} event
  * @param {(tool: string, toolInput: any) => ReturnType<typeof rehydrateRedacted>} [rehydrate]
- * @param {{ messages?: Partial<typeof PRE_TOOL_USE_MESSAGES>, gates?: HostGate[] }} [opts]
+ * @param {{
+ *   messages?: Partial<typeof PRE_TOOL_USE_MESSAGES>,
+ *   gates?: HostGate[],
+ *   trace?: import("./lib/trace.mjs").TraceFn,
+ * }} [opts]
  *   messages are merged over the defaults, so a partial table is supported
  * @returns {Promise<import("agent-control-plane-core").Verdict>}
  */
 export async function judgePreToolUseSanitize(event, rehydrate, opts = {}) {
-  const { gates = [] } = opts;
+  const { gates = [], trace: emitTrace = trace } = opts;
   // MERGED over the defaults, never substituted for them. A host that overrides
   // one field would otherwise leave the rest undefined, and the miss lands in
   // the fail-closed path: failClosedFields runs inside runJudgeCli's catch, so a
@@ -327,7 +339,7 @@ export async function judgePreToolUseSanitize(event, rehydrate, opts = {}) {
     const denyReason = gate(input);
     if (denyReason) return { decision: Decision.DENY, reason: denyReason };
   }
-  const fields = await buildPreToolUseResponse(input, rehydrate);
+  const fields = await buildPreToolUseResponse(input, rehydrate, emitTrace);
   if (fields === null) return { decision: Decision.ALLOW };
   /** @type {Record<string, unknown>} */
   const verdict = {
@@ -419,15 +431,21 @@ export function failClosedFields(parsedOk, err, opts = {}) {
  * @param {{
  *   messages?: Partial<typeof PRE_TOOL_USE_MESSAGES>,
  *   gates?: HostGate[],
+ *   trace?: import("./lib/trace.mjs").TraceFn,
  * }} [opts]
  * @returns {Promise<void>}
  */
 export async function cliMain(opts = {}) {
-  const { gates = [] } = opts;
+  const { gates = [], trace: emitTrace = trace } = opts;
   const messages = { ...PRE_TOOL_USE_MESSAGES, ...opts.messages };
   await runJudgeCli(
     HOOK_NAME,
-    (event) => judgePreToolUseSanitize(event, undefined, { messages, gates }),
+    (event) =>
+      judgePreToolUseSanitize(event, undefined, {
+        messages,
+        gates,
+        trace: emitTrace,
+      }),
     {
       // Fail closed WITHOUT the package: unparsable INPUT (`input` undefined)
       // hard-denies (adversary-inducible, no benefit to failing); any throw

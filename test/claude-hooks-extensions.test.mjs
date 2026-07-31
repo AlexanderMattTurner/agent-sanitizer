@@ -251,10 +251,10 @@ describe("redactNote", () => {
 });
 
 describe("audit", () => {
-  /** @param {any} response @param {any} ext */
-  const judge = (response, ext) =>
+  /** @param {any} response @param {any} ext @param {any} [meta] */
+  const judge = (response, ext, meta) =>
     judgeSanitizeOutput(
-      { event: "PostToolUse", tool: "Bash", input: {}, response },
+      { event: "PostToolUse", tool: "Bash", input: {}, response, meta },
       ext,
     );
 
@@ -265,10 +265,24 @@ describe("audit", () => {
     assert.equal(records.length, 1);
     assert.deepEqual(records[0], {
       tool: "Bash",
+      session_id: undefined,
       modified: false,
       output: "plain output",
       context: undefined,
     });
+  });
+
+  it("is handed the session the record belongs to", async () => {
+    /** @type {any[]} */
+    const records = [];
+    await judge(
+      "plain output",
+      { audit: (r) => records.push(r) },
+      { session_id: "sess-42" },
+    );
+    // The identity travels in `meta`, never alongside the tool fields, so a
+    // recorder that files one trail per session has no other way to reach it.
+    assert.equal(records[0].session_id, "sess-42");
   });
 
   it("is handed the mutated output the model will actually see", async () => {
