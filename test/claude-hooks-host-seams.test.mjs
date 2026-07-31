@@ -250,6 +250,17 @@ describe("user-prompt gate reason table", () => {
     assert.throws(() => judgeSanitizeUserPrompt(event, null), {
       code: "DEP_UNAVAILABLE",
     });
+    // The remedy travels in the same table as the reasons, so a host that
+    // supplies its wording once cannot have it apply to the deny reasons and
+    // silently not to the one message that tells a reader what to run.
+    assert.throws(
+      () =>
+        judgeSanitizeUserPrompt(event, null, {
+          remedy: "run ./setup.sh first.",
+        }),
+      (err) =>
+        /** @type {Error} */ (err).message.endsWith("run ./setup.sh first."),
+    );
   });
 });
 

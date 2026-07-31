@@ -72,6 +72,7 @@ const HOOK_NAME = "pretooluse-sanitize";
  *   unknownEvent: string,
  *   failed: (cause: string) => string,
  *   unparsable: (cause: string) => string,
+ *   remedy: string,
  * }>}
  */
 export const PRE_TOOL_USE_MESSAGES = Object.freeze({
@@ -79,6 +80,11 @@ export const PRE_TOOL_USE_MESSAGES = Object.freeze({
     "PreToolUse sanitization blocked (fail-closed): unrecognized hook payload.",
   failed: (cause) => `PreToolUse sanitization failed (fail-closed): ${cause}`,
   unparsable: (cause) => `PreToolUse input unparsable (fail-closed): ${cause}`,
+  // What a reader should run when a dependency is what is missing. It rides in
+  // this table rather than a separate argument because it is host text exactly
+  // like the reasons above, and one channel means a host cannot supply its
+  // wording in one place and forget it in the other.
+  remedy: DEFAULT_MISSING_PACKAGE_REMEDY,
 });
 
 // Layers 2 & 4 come from the agent-sanitizer package, bound via lazyImport (see
@@ -413,12 +419,11 @@ export function failClosedFields(parsedOk, err, opts = {}) {
  * @param {{
  *   messages?: Partial<typeof PRE_TOOL_USE_MESSAGES>,
  *   gates?: HostGate[],
- *   remedy?: string,
  * }} [opts]
  * @returns {Promise<void>}
  */
 export async function cliMain(opts = {}) {
-  const { gates = [], remedy } = opts;
+  const { gates = [] } = opts;
   const messages = { ...PRE_TOOL_USE_MESSAGES, ...opts.messages };
   await runJudgeCli(
     HOOK_NAME,
@@ -434,7 +439,7 @@ export async function cliMain(opts = {}) {
           HookEvent.PRE_TOOL_USE,
           failClosedFields(input !== undefined, err, {
             messages,
-            hint: depLoadHint(err, remedy),
+            hint: depLoadHint(err, messages.remedy),
           }),
         ),
     },

@@ -31,6 +31,7 @@ const HOST_REMEDY =
   "re-run .claude/hooks/session-setup.sh (or pnpm install) and retry.";
 
 const HOST_PROMPT_MESSAGES = {
+  remedy: HOST_REMEDY,
   unknownEvent:
     "User prompt blocked (fail-closed): unrecognized hook payload — the " +
     "harness's hook-input shape no longer parses as a UserPromptSubmit " +
@@ -89,6 +90,19 @@ describe("a host can retire its fork through the seams", () => {
       safeErrMessage(
         /** @type {string} */ (fields.permissionDecisionReason),
       ).endsWith(HOST_REMEDY),
+    );
+  });
+
+  it("names the host's remedy when the prompt gate's own package is absent", () => {
+    // The gate throws rather than returning a verdict, because this hook is the
+    // only defense on user input — and the throw's message is what the host's
+    // fail-closed envelope relays, so the remedy has to reach it from the table.
+    const event = parse({ hook_event_name: "UserPromptSubmit", prompt: "hi" });
+    assert.throws(
+      () => judgeSanitizeUserPrompt(event, null, HOST_PROMPT_MESSAGES),
+      (err) =>
+        /** @type {{code?: string}} */ (err).code === "DEP_UNAVAILABLE" &&
+        /** @type {Error} */ (err).message.endsWith(HOST_REMEDY),
     );
   });
 

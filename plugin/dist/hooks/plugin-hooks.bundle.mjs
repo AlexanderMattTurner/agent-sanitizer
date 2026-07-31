@@ -55869,6 +55869,65 @@ var init_output = __esm({
   }
 });
 
+// agent-sanitizer/src/prompt.mjs
+var prompt_exports = {};
+__export(prompt_exports, {
+  classifyPrompt: () => classifyPrompt,
+  formatReason: () => formatReason
+});
+function isSgrColorOnly(prompt) {
+  return isSgrOnly(prompt);
+}
+function formatReason(categories, invisibleCount, longRunSample) {
+  const parts2 = [
+    `Detected: ${categories.join(", ")}.`,
+    `Invisible char count: ${invisibleCount} (long-run threshold: ${LONG_RUN_THRESHOLD}, scattered threshold: ${SCATTERED_THRESHOLD}).`
+  ];
+  if (longRunSample) {
+    const cps = [...longRunSample].slice(0, 16).map(
+      (ch) => "U+" + /** @type {number} */
+      ch.codePointAt(0).toString(16).toUpperCase().padStart(4, "0")
+    ).join(" ");
+    parts2.push(`Long-run sample (first 16 code points): ${cps}.`);
+  }
+  parts2.push(
+    "Resubmit the prompt with invisible/ANSI characters removed. If you pasted this from a webpage, the source may be carrying a prompt-injection payload."
+  );
+  return parts2.join(" ");
+}
+function classifyPrompt(prompt, strip = stripAnsiFully) {
+  if (!prompt) return { action: "pass" };
+  const hasAnsi = ANSI_INTRODUCER.test(prompt);
+  const deAnsi = strip(prompt);
+  const longRunSample = deAnsi.match(LONG_RUN_RE)?.[0] ?? null;
+  const payloadInvisible = countPayloadInvisible(deAnsi);
+  const surplusPreservedJoiners = Math.max(
+    0,
+    [...deAnsi].length - [...stripInvisible(deAnsi)].length - payloadInvisible
+  );
+  const invisibleCount = payloadInvisible + surplusPreservedJoiners;
+  const invisiblesBelowThreshold = longRunSample === null && invisibleCount < SCATTERED_THRESHOLD;
+  if (!hasAnsi && invisiblesBelowThreshold) return { action: "pass" };
+  if (hasAnsi && invisiblesBelowThreshold && isSgrColorOnly(prompt))
+    return { action: "note" };
+  const categories = CHECKS.filter(([, re]) => deAnsi.search(re) !== -1).map(
+    ([code4]) => CATEGORY_LABELS[code4]
+  );
+  if (hasAnsi) categories.push(CATEGORY_LABELS[CATEGORY.ANSI]);
+  return {
+    action: "block",
+    reason: formatReason(categories, invisibleCount, longRunSample)
+  };
+}
+var ANSI_INTRODUCER;
+var init_prompt = __esm({
+  "node_modules/.pnpm/agent-sanitizer@2.1.0/node_modules/agent-sanitizer/src/prompt.mjs"() {
+    init_invisible();
+    init_layer1();
+    ANSI_INTRODUCER = /[\u001b\u0080-\u009f]/;
+  }
+});
+
 // agent-sanitizer/src/view-map.mjs
 function occurrences(haystack, needle) {
   if (needle === "") return [];
@@ -67447,7 +67506,7 @@ function failClosedFields(parsedOk, err, opts = {}) {
   };
 }
 async function cliMain(opts = {}) {
-  const { gates = [], remedy } = opts;
+  const { gates = [] } = opts;
   const messages = { ...PRE_TOOL_USE_MESSAGES, ...opts.messages };
   await runJudgeCli(
     HOOK_NAME,
@@ -67462,7 +67521,7 @@ async function cliMain(opts = {}) {
         HookEvent.PRE_TOOL_USE,
         failClosedFields(input !== void 0, err, {
           messages,
-          hint: depLoadHint(err, remedy)
+          hint: depLoadHint(err, messages.remedy)
         })
       )
     }
@@ -67482,7 +67541,12 @@ var init_pretooluse_sanitize = __esm({
     PRE_TOOL_USE_MESSAGES = Object.freeze({
       unknownEvent: "PreToolUse sanitization blocked (fail-closed): unrecognized hook payload.",
       failed: (cause) => `PreToolUse sanitization failed (fail-closed): ${cause}`,
-      unparsable: (cause) => `PreToolUse input unparsable (fail-closed): ${cause}`
+      unparsable: (cause) => `PreToolUse input unparsable (fail-closed): ${cause}`,
+      // What a reader should run when a dependency is what is missing. It rides in
+      // this table rather than a separate argument because it is host text exactly
+      // like the reasons above, and one channel means a host cannot supply its
+      // wording in one place and forget it in the other.
+      remedy: DEFAULT_MISSING_PACKAGE_REMEDY
     });
     ({ normalizeConfusables: normalizeConfusables2, normalizeContext: normalizeContext2 } = /** @type {typeof import("agent-sanitizer/confusables")} */
     await lazyImport("agent-sanitizer/confusables"));
@@ -67767,8 +67831,8 @@ function failClosedContext(depsLoaded = sanitizerDepsLoaded, remedy = DEFAULT_MI
   if (depsLoaded()) return FAIL_CLOSED_CONTEXT;
   return `${FAIL_CLOSED_CONTEXT} ${missingPackageMessage("agent-sanitizer", lazyImportErrorFor("agent-sanitizer"), remedy)}`;
 }
-function emitFailClosed(input, message, emit = (fields) => emitHookResponse(HookEvent.POST_TOOL_USE, fields)) {
-  const additionalContext = failClosedContext();
+function emitFailClosed(input, message, emit = (fields) => emitHookResponse(HookEvent.POST_TOOL_USE, fields), remedy = DEFAULT_MISSING_PACKAGE_REMEDY) {
+  const additionalContext = failClosedContext(sanitizerDepsLoaded, remedy);
   try {
     emit({
       updatedToolOutput: failClosedReplacement(input, message),
@@ -67872,7 +67936,9 @@ async function cliMain2(ext = {}) {
       // serialization throws, so even a pathological input fails closed.
       onError: (err, input) => emitFailClosed(
         input,
-        "[SANITIZATION FAILED \u2014 original output suppressed for safety. Hook error: " + safeErrMessage(err) + "]"
+        "[SANITIZATION FAILED \u2014 original output suppressed for safety. Hook error: " + safeErrMessage(err) + "]",
+        void 0,
+        ext.remedy
       )
     }
   );
@@ -67909,65 +67975,6 @@ var init_sanitize_output = __esm({
   }
 });
 
-// agent-sanitizer/src/prompt.mjs
-var prompt_exports = {};
-__export(prompt_exports, {
-  classifyPrompt: () => classifyPrompt,
-  formatReason: () => formatReason
-});
-function isSgrColorOnly(prompt) {
-  return isSgrOnly(prompt);
-}
-function formatReason(categories, invisibleCount, longRunSample) {
-  const parts2 = [
-    `Detected: ${categories.join(", ")}.`,
-    `Invisible char count: ${invisibleCount} (long-run threshold: ${LONG_RUN_THRESHOLD}, scattered threshold: ${SCATTERED_THRESHOLD}).`
-  ];
-  if (longRunSample) {
-    const cps = [...longRunSample].slice(0, 16).map(
-      (ch) => "U+" + /** @type {number} */
-      ch.codePointAt(0).toString(16).toUpperCase().padStart(4, "0")
-    ).join(" ");
-    parts2.push(`Long-run sample (first 16 code points): ${cps}.`);
-  }
-  parts2.push(
-    "Resubmit the prompt with invisible/ANSI characters removed. If you pasted this from a webpage, the source may be carrying a prompt-injection payload."
-  );
-  return parts2.join(" ");
-}
-function classifyPrompt(prompt, strip = stripAnsiFully) {
-  if (!prompt) return { action: "pass" };
-  const hasAnsi = ANSI_INTRODUCER.test(prompt);
-  const deAnsi = strip(prompt);
-  const longRunSample = deAnsi.match(LONG_RUN_RE)?.[0] ?? null;
-  const payloadInvisible = countPayloadInvisible(deAnsi);
-  const surplusPreservedJoiners = Math.max(
-    0,
-    [...deAnsi].length - [...stripInvisible(deAnsi)].length - payloadInvisible
-  );
-  const invisibleCount = payloadInvisible + surplusPreservedJoiners;
-  const invisiblesBelowThreshold = longRunSample === null && invisibleCount < SCATTERED_THRESHOLD;
-  if (!hasAnsi && invisiblesBelowThreshold) return { action: "pass" };
-  if (hasAnsi && invisiblesBelowThreshold && isSgrColorOnly(prompt))
-    return { action: "note" };
-  const categories = CHECKS.filter(([, re]) => deAnsi.search(re) !== -1).map(
-    ([code4]) => CATEGORY_LABELS[code4]
-  );
-  if (hasAnsi) categories.push(CATEGORY_LABELS[CATEGORY.ANSI]);
-  return {
-    action: "block",
-    reason: formatReason(categories, invisibleCount, longRunSample)
-  };
-}
-var ANSI_INTRODUCER;
-var init_prompt = __esm({
-  "node_modules/.pnpm/agent-sanitizer@2.1.0/node_modules/agent-sanitizer/src/prompt.mjs"() {
-    init_invisible();
-    init_layer1();
-    ANSI_INTRODUCER = /[\u001b\u0080-\u009f]/;
-  }
-});
-
 // claude-hooks/sanitize-user-prompt.mjs
 var sanitize_user_prompt_exports = {};
 __export(sanitize_user_prompt_exports, {
@@ -67983,7 +67990,14 @@ function judgeSanitizeUserPrompt(event, strip = stripAnsiFully3, overrides = USE
     return { decision: Decision3.DENY, reason: messages.unknownEvent };
   if (event.event !== EventKind3.PROMPT_SUBMIT)
     return { decision: Decision3.ALLOW };
-  if (typeof strip !== "function") throw missingPackageError("agent-sanitizer");
+  if (typeof strip !== "function")
+    throw missingPackageError("agent-sanitizer", void 0, messages.remedy);
+  if (typeof classifyPrompt2 !== "function")
+    throw missingPackageError(
+      "agent-sanitizer/prompt",
+      void 0,
+      messages.remedy
+    );
   const prompt = (
     /** @type {string} */
     event.input.prompt
@@ -68034,13 +68048,17 @@ var init_sanitize_user_prompt = __esm({
       unknownEvent: "User prompt blocked (fail-closed): unrecognized hook payload.",
       blockContext: "User prompt blocked: payload-capable invisible/ANSI characters detected.",
       sgrNote: "The prompt contains ANSI SGR color codes (pasted terminal output). They are display-only formatting noise; read through them.",
-      hookFailed: (cause) => `sanitize-user-prompt hook failed (fail-closed): ${cause}`
+      hookFailed: (cause) => `sanitize-user-prompt hook failed (fail-closed): ${cause}`,
+      // What a reader should run when the package itself is what is missing. It
+      // rides in this table rather than a separate argument because it is host text
+      // exactly like the reasons above, and one channel means a host cannot supply
+      // its wording in one place and forget it in the other.
+      remedy: DEFAULT_MISSING_PACKAGE_REMEDY
     });
-    try {
-      ({ classifyPrompt: classifyPrompt2 } = await Promise.resolve().then(() => (init_prompt(), prompt_exports)));
-      ({ stripAnsiFully: stripAnsiFully3 } = await Promise.resolve().then(() => (init_src2(), src_exports2)));
-    } catch {
-    }
+    ({ classifyPrompt: classifyPrompt2 } = /** @type {typeof import("agent-sanitizer/prompt")} */
+    await lazyImport("agent-sanitizer/prompt"));
+    ({ stripAnsiFully: stripAnsiFully3 } = /** @type {typeof import("agent-sanitizer")} */
+    await lazyImport("agent-sanitizer"));
     if (isMain(import.meta.url)) {
       void main(readStdinJson, (chunk) => process.stdout.write(chunk));
     }
@@ -68272,6 +68290,7 @@ var LAZY_LOADERS = {
   "agent-sanitizer/confusables": () => Promise.resolve().then(() => (init_confusables(), confusables_exports)),
   "agent-sanitizer/invisible": () => Promise.resolve().then(() => (init_invisible(), invisible_exports)),
   "agent-sanitizer/output": () => Promise.resolve().then(() => (init_output(), output_exports)),
+  "agent-sanitizer/prompt": () => Promise.resolve().then(() => (init_prompt(), prompt_exports)),
   "agent-sanitizer/rehydrate": () => Promise.resolve().then(() => (init_rehydrate(), rehydrate_exports)),
   "namespace-guard": () => Promise.resolve().then(() => (init_dist2(), dist_exports))
 };
