@@ -22,7 +22,9 @@ import {
   readStdinJson,
   safeErrMessage,
   isMain,
+  lazyImport,
   missingPackageError,
+  DEFAULT_MISSING_PACKAGE_REMEDY,
 } from "./lib/hook-io.mjs";
 import { controlPlane, runJudgeCli } from "./lib/control-plane.mjs";
 import { trace, TraceEvent } from "./lib/trace.mjs";
@@ -31,7 +33,7 @@ import { trace, TraceEvent } from "./lib/trace.mjs";
 // import, never a bare top-level `import … from "…"`: a static npm import
 // resolves before any try/catch, so a missing node_modules would crash this hook
 // at load and let the prompt through UNSANITIZED (fail-open). A failed load
-// leaves the bindings undefined, which main()'s typeof guard turns into a
+// leaves the bindings undefined, which the judge's typeof guard turns into a
 // fail-closed block.
 /** @type {typeof import("agent-sanitizer/prompt").classifyPrompt} */
 export let classifyPrompt;
@@ -49,6 +51,7 @@ let stripAnsiFully;
  *   blockContext: string,
  *   sgrNote: string,
  *   hookFailed: (cause: string) => string,
+ *   remedy: string,
  * }>}
  */
 export const USER_PROMPT_MESSAGES = Object.freeze({
@@ -59,24 +62,31 @@ export const USER_PROMPT_MESSAGES = Object.freeze({
     "The prompt contains ANSI SGR color codes (pasted terminal output). They are display-only formatting noise; read through them.",
   hookFailed: (cause) =>
     `sanitize-user-prompt hook failed (fail-closed): ${cause}`,
+  // What a reader should run when the package itself is what is missing. It
+  // rides in this table rather than a separate argument because it is host text
+  // exactly like the reasons above, and one channel means a host cannot supply
+  // its wording in one place and forget it in the other.
+  remedy: DEFAULT_MISSING_PACKAGE_REMEDY,
 });
 
 /* c8 ignore start — module-load boundary: the imports resolve in every real
  * run, and their failure (the package absent) can't be simulated in-process, so
- * neither arm is observable to the in-process tests. main()'s typeof guard
+ * neither arm is observable to the in-process tests. The judge's typeof guard
  * converts an undefined stripper into a fail-closed block — that guard IS tested. */
 // Stryker disable all
-try {
-  // The /prompt subpath is imported first: if it fails, the catch fires before
-  // stripAnsiFully is assigned, so a half-load can never leave the stripper set
-  // while the classifier is missing (main guards on the stripper alone).
-  ({ classifyPrompt } = await import("agent-sanitizer/prompt"));
-  ({ stripAnsiFully } = await import("agent-sanitizer"));
-} catch {
-  // Leave classifyPrompt/stripAnsiFully undefined so main()'s typeof guard fails
-  // closed — the prompt is blocked, never passed through with the package
-  // half-loaded.
-}
+// lazyImport rather than a bare `await import` in a try/catch: it RECORDS the
+// loader error, which is the only thing that can tell a missing install apart
+// from a present package missing an export. Discarding it leaves
+// missingPackageError with nothing to report but a guess.
+// The cast asserts the loaded SHAPE, not that it loaded: lazyImport yields {} on
+// failure, so either binding can still be undefined here — which is exactly what
+// the judge's typeof guard turns into a fail-closed block.
+({ classifyPrompt } = /** @type {typeof import("agent-sanitizer/prompt")} */ (
+  await lazyImport("agent-sanitizer/prompt")
+));
+({ stripAnsiFully } = /** @type {typeof import("agent-sanitizer")} */ (
+  await lazyImport("agent-sanitizer")
+));
 // Stryker restore all
 /* c8 ignore stop */
 
@@ -115,10 +125,10 @@ export function judgeSanitizeUserPrompt(
   if (event.event !== EventKind.PROMPT_SUBMIT)
     return { decision: Decision.ALLOW };
   // The module-load guard: a missing stripper means agent-sanitizer never
-  // loaded. Guarding on the stripper alone is sufficient — it loads AFTER
-  // classifyPrompt in the same try, so a present stripper proves the classifier
-  // loaded too.
-  if (typeof strip !== "function") throw missingPackageError("agent-sanitizer");
+  // loaded. Guarding on the stripper alone is sufficient — it is bound AFTER
+  // classifyPrompt, so a present stripper proves the classifier loaded too.
+  if (typeof strip !== "function")
+    throw missingPackageError("agent-sanitizer", undefined, messages.remedy);
   // The contract guarantees a string here: every adapter normalizes the
   // prompt-submit input (Claude's parse coerces a missing/non-string prompt to
   // "" via asString), so a defensive typeof re-check is a dead branch.

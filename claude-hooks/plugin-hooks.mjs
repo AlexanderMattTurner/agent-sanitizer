@@ -34,6 +34,7 @@ const LAZY_LOADERS = {
   "agent-sanitizer/confusables": () => import("agent-sanitizer/confusables"),
   "agent-sanitizer/invisible": () => import("agent-sanitizer/invisible"),
   "agent-sanitizer/output": () => import("agent-sanitizer/output"),
+  "agent-sanitizer/prompt": () => import("agent-sanitizer/prompt"),
   "agent-sanitizer/rehydrate": () => import("agent-sanitizer/rehydrate"),
   "namespace-guard": () => import("namespace-guard"),
 };
