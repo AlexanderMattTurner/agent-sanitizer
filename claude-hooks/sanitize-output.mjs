@@ -192,9 +192,17 @@ async function redactSecrets(text, webIngress = false, deadline) {
  * @property {(raw: string) => string | undefined} [redactNote]
  *   Given the pre-redaction text of a leaf that tripped Layer 4, returns a note
  *   appended to that leaf's "API keys/secrets redacted: …" warning.
- * @property {(record: { tool: string | null, modified: boolean, output: unknown, context?: string }) => Promise<void> | void} [audit]
+ * @property {(record: { tool: string | null, session_id?: string, modified: boolean, output: unknown, context?: string }) => Promise<void> | void} [audit]
  *   Awaited once per judged event that carried a tool response, with the output
- *   the model will actually see.
+ *   the model will actually see. `session_id` is the harness's session identity,
+ *   lifted from the event's `meta` — an audit trail that cannot say WHICH session
+ *   produced a record cannot be read back per-session, and the tool fields alone
+ *   do not carry it. Absent when the payload omitted it.
+ * @property {import("./lib/trace.mjs").TraceFn} [trace]
+ *   Where this hook announces engagement. A host that already runs a trace
+ *   channel under its own environment variables passes its sink here, so the
+ *   announcement lands where its detector reads instead of on this package's
+ *   channel. Defaults to lib/trace.mjs's `trace`.
  * @property {string} [remedy]
  *   What a reader should run when the sanitizer's own bindings are what is
  *   missing. This hook's host channel is `ext`, where the other two gates use a
@@ -578,7 +586,7 @@ export async function evaluateToolOutput(input, ext = {}) {
    * @returns {{ mutated_output?: unknown, additional_context?: string } | null}
    */
   const emit = (outcome, fields) => {
-    trace(TraceEvent.HOOK_RAN, {
+    (ext.trace ?? trace)(TraceEvent.HOOK_RAN, {
       hook: HOOK_NAME,
       tool: input.tool_name,
       outcome,
@@ -716,6 +724,10 @@ export async function judgeSanitizeOutput(event, ext = {}) {
     const modified = fields !== null && Object.hasOwn(fields, "mutated_output");
     await ext.audit({
       tool: event.tool,
+      // The session identity travels in `meta`, not alongside the tool fields, so
+      // a recorder filing one trail per session cannot reach it unless it is
+      // lifted here.
+      session_id: event.meta?.session_id,
       modified,
       output: modified ? fields?.mutated_output : event.response,
       context: fields?.additional_context,

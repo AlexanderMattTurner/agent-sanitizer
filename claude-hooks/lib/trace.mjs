@@ -9,9 +9,23 @@
  *
  * METADATA ONLY — never pass a tool_input body or secret material as a field; the
  * channel is not redaction-aware.
+ *
+ * The sink is INJECTABLE. A host that already runs a trace channel under its own
+ * environment variables — and a detector that reds when a defense layer stops
+ * announcing itself — passes its own {@link TraceFn} to each hook's entry point
+ * (`cliMain`, or `main` for the prompt gate) instead of forking this module. Left
+ * unsupplied, every hook uses {@link trace} below, so the shipped behavior is
+ * unchanged.
  */
 
 import { appendFileSync } from "node:fs";
+
+/**
+ * The sink shape a hook emits through: the event name, its metadata fields, and
+ * the level. A host implementation receives the same {@link TraceEvent} names the
+ * default emits, so it can remap them onto its own channel's vocabulary.
+ * @typedef {(event: string, fields?: Record<string, unknown>, level?: "info"|"debug") => void} TraceFn
+ */
 
 /** Trace-channel event names. */
 export const TraceEvent = Object.freeze({

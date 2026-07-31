@@ -395,6 +395,43 @@ export function emitHookResponse(hookEventName, fields) {
 const HOOKGATE_MARKER_STEM = "agent-sanitizer-hookgate-inflight-";
 
 /**
+ * Host-supplied marker path, replacing the derived one. Null (the default) keeps
+ * the derivation below.
+ * @type {string | null}
+ */
+let hookgateMarkerOverride = null;
+
+/** Whether {@link hookgateMarkerPath} has already handed a path to a caller. */
+let hookgateMarkerResolved = false;
+
+/**
+ * Adopt a host's own cold-start marker path in place of the derived one, so a
+ * host whose setup script already writes a marker under its own convention can
+ * use these hooks without running a second, disagreeing wait loop against a path
+ * nothing writes.
+ *
+ * ORDERING, same rule as {@link registerLazyModules}: call this before importing
+ * any hook module. `lib/control-plane.mjs` resolves the marker at MODULE scope,
+ * so a call that lands after that import cannot reach the wait it was meant to
+ * steer. A late call is reported on stderr rather than thrown: a throw at a
+ * bundle entry's top level kills the hook process before it writes a response,
+ * and a hook that emits nothing is read as non-blocking — the fail-OPEN this
+ * whole file is built to avoid. The late call still takes effect for every
+ * later resolution.
+ * @param {string | null} path  absolute marker path, or null to restore the derivation
+ * @returns {void}
+ */
+export function configureHookgateMarker(path) {
+  if (hookgateMarkerResolved)
+    process.stderr.write(
+      "agent-sanitizer: configureHookgateMarker called after a marker path was " +
+        "already resolved; whatever resolved it is using the previous path and " +
+        "cannot be re-steered. Call it before importing any hook module.\n",
+    );
+  hookgateMarkerOverride = path;
+}
+
+/**
  * Path of the cold-start in-flight marker a host's setup script writes
  * SYNCHRONOUSLY before it starts installing deps (its own PID as the contents)
  * and removes once the hook dependencies are provisioned. A hook that fires
@@ -405,7 +442,8 @@ const HOOKGATE_MARKER_STEM = "agent-sanitizer-hookgate-inflight-";
  * the raw CLAUDE_PROJECT_DIR the harness sets for both processes (no
  * canonicalization — the two must produce byte-identical paths), so no env has
  * to propagate from setup to the hook. Null when CLAUDE_PROJECT_DIR is unset (no
- * setup ran → nothing to wait on).
+ * setup ran → nothing to wait on), or whatever a host set via
+ * {@link configureHookgateMarker}.
  * @param {string | undefined} [projectDir]
  * @param {string | undefined} [runtimeDir]
  * @returns {string | null}
@@ -414,6 +452,8 @@ export function hookgateMarkerPath(
   projectDir = process.env.CLAUDE_PROJECT_DIR,
   runtimeDir = process.env.XDG_RUNTIME_DIR,
 ) {
+  hookgateMarkerResolved = true;
+  if (hookgateMarkerOverride !== null) return hookgateMarkerOverride;
   if (!projectDir) return null;
   // Prefer the per-user, mode-0700 runtime dir when the harness gives an
   // absolute one; else the world-writable /tmp, where markerIsTrusted() — not

@@ -165,6 +165,8 @@ export function judgeSanitizeUserPrompt(
  *   to the package's stripAnsiFully; injectable so the fail-closed path is testable)
  * @param {Partial<typeof USER_PROMPT_MESSAGES>} [overrides]  reason overrides,
  *   merged over the defaults so a partial table can never leave a field unset
+ * @param {import("./lib/trace.mjs").TraceFn} [emitTrace]  where engagement is
+ *   announced; a host with its own trace channel passes its sink (see lib/trace.mjs)
  * @returns {Promise<void>}
  */
 export async function main(
@@ -172,6 +174,7 @@ export async function main(
   write,
   strip = stripAnsiFully,
   overrides = USER_PROMPT_MESSAGES,
+  emitTrace = trace,
 ) {
   // Merged, not substituted — see judgeSanitizeUserPrompt. onError below is the
   // call site where a missing field would throw out of the catch and fail OPEN.
@@ -189,7 +192,7 @@ export async function main(
       const verdict = judgeSanitizeUserPrompt(event, strip, messages);
       // Announce engagement on the trace channel like the other stdin hooks —
       // a prompt gate that silently stopped running is otherwise invisible.
-      trace(TraceEvent.HOOK_RAN, {
+      emitTrace(TraceEvent.HOOK_RAN, {
         hook: "sanitize-user-prompt",
         outcome:
           verdict.decision === controlPlane().Decision.DENY

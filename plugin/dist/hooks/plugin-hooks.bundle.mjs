@@ -164,6 +164,8 @@ function emitHookResponse(hookEventName, fields) {
   );
 }
 function hookgateMarkerPath(projectDir = process.env.CLAUDE_PROJECT_DIR, runtimeDir = process.env.XDG_RUNTIME_DIR) {
+  hookgateMarkerResolved = true;
+  if (hookgateMarkerOverride !== null) return hookgateMarkerOverride;
   if (!projectDir) return null;
   const base2 = runtimeDir && runtimeDir.startsWith("/") ? runtimeDir : "/tmp";
   const digest = createHash("sha256").update(projectDir).digest("hex").slice(0, 8);
@@ -266,7 +268,7 @@ function writeFileNoFollow(path2, content3, mode = 384) {
     closeSync(fd);
   }
 }
-var cliEntryClaimed, HookEvent, PermissionDecision, LONE_SURROGATE_RE, MAX_STDIN_BYTES, registeredLazyModules, lazyImportErrors, DEFAULT_MISSING_PACKAGE_REMEDY, UNTRUSTED_TEXT_CAP, HOOKGATE_MARKER_STEM;
+var cliEntryClaimed, HookEvent, PermissionDecision, LONE_SURROGATE_RE, MAX_STDIN_BYTES, registeredLazyModules, lazyImportErrors, DEFAULT_MISSING_PACKAGE_REMEDY, UNTRUSTED_TEXT_CAP, HOOKGATE_MARKER_STEM, hookgateMarkerOverride, hookgateMarkerResolved;
 var init_hook_io = __esm({
   "claude-hooks/lib/hook-io.mjs"() {
     "use strict";
@@ -289,6 +291,8 @@ var init_hook_io = __esm({
     DEFAULT_MISSING_PACKAGE_REMEDY = "reinstall the hook dependencies (pnpm install) and retry.";
     UNTRUSTED_TEXT_CAP = 500;
     HOOKGATE_MARKER_STEM = "agent-sanitizer-hookgate-inflight-";
+    hookgateMarkerOverride = null;
+    hookgateMarkerResolved = false;
   }
 });
 
@@ -67381,17 +67385,17 @@ __export(pretooluse_sanitize_exports, {
 });
 import { createRequire as createRequire4 } from "node:module";
 import { readFileSync as readFileSync3 } from "node:fs";
-function emitTraced(toolName, fields) {
+function emitTraced(emitTrace, toolName, fields) {
   let outcome = "modified";
   if (fields === null) outcome = "noop";
   else if (fields.permissionDecision === PermissionDecision.DENY)
     outcome = "deny";
   else if (fields.permissionDecision === PermissionDecision.ASK)
     outcome = "ask";
-  trace(TraceEvent.HOOK_RAN, { hook: HOOK_NAME, tool: toolName, outcome });
+  emitTrace(TraceEvent.HOOK_RAN, { hook: HOOK_NAME, tool: toolName, outcome });
   return fields;
 }
-async function buildPreToolUseResponse(input, rehydrate = defaultRehydrate) {
+async function buildPreToolUseResponse(input, rehydrate = defaultRehydrate, emitTrace = trace) {
   const asks = [];
   const contexts = [];
   const findings = invisibleCharAlert();
@@ -67423,7 +67427,7 @@ async function buildPreToolUseResponse(input, rehydrate = defaultRehydrate) {
   }
   const rehydrated = await rehydrate(tool, current);
   if (rehydrated && "deny" in rehydrated)
-    return emitTraced(input.tool_name, {
+    return emitTraced(emitTrace, input.tool_name, {
       permissionDecision: PermissionDecision.DENY,
       permissionDecisionReason: rehydrated.deny
     });
@@ -67433,6 +67437,7 @@ async function buildPreToolUseResponse(input, rehydrate = defaultRehydrate) {
     contexts.push(rehydrated.context);
   }
   return emitTraced(
+    emitTrace,
     input.tool_name,
     assembleResponse({ changed, current, asks, contexts, pendingGateAck })
   );
@@ -67456,7 +67461,7 @@ function assembleResponse({
   return fields;
 }
 async function judgePreToolUseSanitize(event, rehydrate, opts = {}) {
-  const { gates = [] } = opts;
+  const { gates = [], trace: emitTrace = trace } = opts;
   const messages = { ...PRE_TOOL_USE_MESSAGES, ...opts.messages };
   const { Decision: Decision3, EventKind: EventKind3 } = controlPlane();
   if (event.event === EventKind3.UNKNOWN)
@@ -67470,7 +67475,7 @@ async function judgePreToolUseSanitize(event, rehydrate, opts = {}) {
     const denyReason = gate(input);
     if (denyReason) return { decision: Decision3.DENY, reason: denyReason };
   }
-  const fields = await buildPreToolUseResponse(input, rehydrate);
+  const fields = await buildPreToolUseResponse(input, rehydrate, emitTrace);
   if (fields === null) return { decision: Decision3.ALLOW };
   const verdict = {
     decision: fields.permissionDecision ?? Decision3.ALLOW
@@ -67506,11 +67511,15 @@ function failClosedFields(parsedOk, err, opts = {}) {
   };
 }
 async function cliMain(opts = {}) {
-  const { gates = [] } = opts;
+  const { gates = [], trace: emitTrace = trace } = opts;
   const messages = { ...PRE_TOOL_USE_MESSAGES, ...opts.messages };
   await runJudgeCli(
     HOOK_NAME,
-    (event) => judgePreToolUseSanitize(event, void 0, { messages, gates }),
+    (event) => judgePreToolUseSanitize(event, void 0, {
+      messages,
+      gates,
+      trace: emitTrace
+    }),
     {
       // Fail closed WITHOUT the package: unparsable INPUT (`input` undefined)
       // hard-denies (adversary-inducible, no benefit to failing); any throw
@@ -67844,7 +67853,7 @@ function emitFailClosed(input, message, emit = (fields) => emitHookResponse(Hook
 }
 async function evaluateToolOutput(input, ext = {}) {
   const emit = (outcome, fields2) => {
-    trace(TraceEvent.HOOK_RAN, {
+    (ext.trace ?? trace)(TraceEvent.HOOK_RAN, {
       hook: HOOK_NAME2,
       tool: input.tool_name,
       outcome
@@ -67907,6 +67916,10 @@ async function judgeSanitizeOutput(event, ext = {}) {
     const modified = fields !== null && Object.hasOwn(fields, "mutated_output");
     await ext.audit({
       tool: event.tool,
+      // The session identity travels in `meta`, not alongside the tool fields, so
+      // a recorder filing one trail per session cannot reach it unless it is
+      // lifted here.
+      session_id: event.meta?.session_id,
       modified,
       output: modified ? fields?.mutated_output : event.response,
       context: fields?.additional_context
@@ -68013,13 +68026,13 @@ function judgeSanitizeUserPrompt(event, strip = stripAnsiFully3, overrides = USE
     additional_context: messages.blockContext
   };
 }
-async function main(read, write, strip = stripAnsiFully3, overrides = USER_PROMPT_MESSAGES) {
+async function main(read, write, strip = stripAnsiFully3, overrides = USER_PROMPT_MESSAGES, emitTrace = trace) {
   const messages = { ...USER_PROMPT_MESSAGES, ...overrides };
   await runJudgeCli(
     "sanitize-user-prompt",
     (event) => {
       const verdict = judgeSanitizeUserPrompt(event, strip, messages);
-      trace(TraceEvent.HOOK_RAN, {
+      emitTrace(TraceEvent.HOOK_RAN, {
         hook: "sanitize-user-prompt",
         outcome: verdict.decision === controlPlane().Decision.DENY ? "deny" : verdict.additional_context ? "note" : "allow"
       });
@@ -68212,9 +68225,9 @@ function scanProject() {
   }
   return allFindings;
 }
-async function cliMain3() {
+async function cliMain3({ trace: emitTrace = trace } = {}) {
   if (!await ensureSanitizerLoaded()) {
-    trace(TraceEvent.SCAN_INVISIBLE_CHARS_RAN, { outcome: "skipped" });
+    emitTrace(TraceEvent.SCAN_INVISIBLE_CHARS_RAN, { outcome: "skipped" });
     process.stderr.write(
       "scan-invisible-chars: agent-sanitizer failed to load (node deps not installed and session-setup did not finish in time); instruction files were NOT scanned for hidden Unicode. Run `pnpm install`.\n"
     );
@@ -68228,10 +68241,10 @@ async function cliMain3() {
   }
   const allFindings = scanProject();
   if (allFindings.length === 0) {
-    trace(TraceEvent.SCAN_INVISIBLE_CHARS_RAN, { outcome: "clean" });
+    emitTrace(TraceEvent.SCAN_INVISIBLE_CHARS_RAN, { outcome: "clean" });
     return;
   }
-  trace(TraceEvent.SCAN_INVISIBLE_CHARS_RAN, {
+  emitTrace(TraceEvent.SCAN_INVISIBLE_CHARS_RAN, {
     outcome: "found",
     files: allFindings.length
   });

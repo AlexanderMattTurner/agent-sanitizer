@@ -271,9 +271,12 @@ function scanProject() {
  * the alert for the PreToolUse gate otherwise. Exported so a bundle entry
  * (which must claim the CLI slot before this module loads) can run the exact
  * same scan instead of duplicating it.
+ * @param {{ trace?: import("./lib/trace.mjs").TraceFn }} [opts]  `trace` is where
+ *   this scan announces engagement; a host with its own trace channel passes its
+ *   sink so the announcement lands where its detector reads (see lib/trace.mjs).
  * @returns {Promise<void>}
  */
-export async function cliMain() {
+export async function cliMain({ trace: emitTrace = trace } = {}) {
   /* c8 ignore start -- fail-closed module-load guard: only reachable when the
      agent-sanitizer import above failed, which can't be simulated in the
      spawned-subprocess CLI run the tests observe. */
@@ -281,7 +284,7 @@ export async function cliMain() {
     // Emit the engagement event with a "skipped" outcome so the loss is LOUD on
     // the trace channel — a scan that never ran is otherwise invisible, and the
     // downstream PreToolUse sanitize gate then passes cleanly all session.
-    trace(TraceEvent.SCAN_INVISIBLE_CHARS_RAN, { outcome: "skipped" });
+    emitTrace(TraceEvent.SCAN_INVISIBLE_CHARS_RAN, { outcome: "skipped" });
     process.stderr.write(
       "scan-invisible-chars: agent-sanitizer failed to load (node deps not " +
         "installed and session-setup did not finish in time); instruction " +
@@ -304,10 +307,10 @@ export async function cliMain() {
   const allFindings = scanProject();
 
   if (allFindings.length === 0) {
-    trace(TraceEvent.SCAN_INVISIBLE_CHARS_RAN, { outcome: "clean" });
+    emitTrace(TraceEvent.SCAN_INVISIBLE_CHARS_RAN, { outcome: "clean" });
     return;
   }
-  trace(TraceEvent.SCAN_INVISIBLE_CHARS_RAN, {
+  emitTrace(TraceEvent.SCAN_INVISIBLE_CHARS_RAN, {
     outcome: "found",
     files: allFindings.length,
   });
