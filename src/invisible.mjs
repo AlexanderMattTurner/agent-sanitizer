@@ -13,8 +13,18 @@ import { joiningType, isVirama } from "./joining-type.mjs";
 import { isStandardizedVariant } from "./standardized-variants.mjs";
 import { CF_CODEPOINTS } from "./cf-charset.mjs";
 
+// Unicode's Variation_Selector property, whole: the FE00 run, the Mongolian
+// free variation selectors, and the astral E0100 supplement. The Mongolian four
+// are general category Mn, so \p{Cf} does not reach them and CF_CODEPOINTS
+// carries only U+180E (the vowel SEPARATOR) — without them a run of U+180B..D
+// renders as nothing, survives untouched, and counts as VISIBLE length, which
+// also widens the preserved-joiner budget.
 export const VS = [
   ...Array.from({ length: 16 }, (_, i) => 0xfe00 + i),
+  0x180b,
+  0x180c,
+  0x180d,
+  0x180f,
   ...Array.from({ length: 240 }, (_, i) => 0xe0100 + i),
 ]
   .map((codePoint) => String.fromCodePoint(codePoint))

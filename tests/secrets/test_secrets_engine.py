@@ -673,6 +673,17 @@ def test_placeholder_values_not_redacted(label, text):
         ("value not in line", "secret_type = x", "missing", False),
         ("operator with empty field", '"= "secretvalue', "secretvalue", False),
         ("no-space quoted assign", 'key_type="somevalue"', "somevalue", True),
+        # The accepted precision cost of the no-offset refusal, pinned as stated
+        # behavior: both occurrences ARE metadata-assigned, and a per-occurrence
+        # walk would skip — but that walk re-slices the prefix each time, which
+        # is quadratic on a many-repeat line. Anyone attempting that refinement
+        # has to change this row deliberately.
+        (
+            "repeated value, both metadata",
+            "secret_name = X_LONG_VALUE_abcdefghijkl  secret_path = X_LONG_VALUE_abcdefghijkl",
+            "X_LONG_VALUE_abcdefghijkl",
+            False,
+        ),
     ],
 )
 def test_is_metadata_field(label, line, value, expected):
@@ -729,6 +740,34 @@ def test_repeated_value_defeats_the_metadata_skip(label, text):
     redacted = run_plain(text)
     assert redacted is not None, f"{label}: the secret was forwarded verbatim"
     assert "Hunter2Passw0rdABC" not in redacted, label
+
+
+# `passphrase` carries `field-value`; `credential`/`credentials` deliberately do
+# NOT. They are everyday variable names, and an attribute chain clears
+# FIELD_VALUE_RE's 20-byte floor while escaping every value-shape skip (which
+# knows only absolute paths and anchored env references), so a field-value
+# rendering would rewrite ordinary source lines in tool output.
+@pytest.mark.parametrize(
+    "label, text",
+    [
+        (
+            "google sdk credentials",
+            "credentials = service_account.Credentials.from_service_account_info(info)",
+        ),
+        ("go option chain", "credentials := option.WithCredentialsFile(path)"),
+        ("webauthn call", "credential = navigator.credentials.get(opts)"),
+    ],
+)
+def test_ordinary_credential_variables_are_not_redacted(label, text):
+    assert run_plain(text) is None, label
+
+
+def test_passphrase_is_redacted_though_credential_is_not():
+    """Non-vacuity for the corpus above: the three lines survive because of the
+    noun's `uses`, not because the engine ignores this shape — the same
+    assignment under `passphrase` redacts."""
+    assert run_plain("passphrase = s3cr3tDiceWareValue99xyz") is not None
+    assert run_plain("credential = s3cr3tDiceWareValue99xyz") is None
 
 
 # ─── Markdown code prose not redacted ────────────────────────────────────────
