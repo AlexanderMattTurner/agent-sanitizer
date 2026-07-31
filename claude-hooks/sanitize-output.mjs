@@ -195,6 +195,11 @@ async function redactSecrets(text, webIngress = false, deadline) {
  * @property {(record: { tool: string | null, modified: boolean, output: unknown, context?: string }) => Promise<void> | void} [audit]
  *   Awaited once per judged event that carried a tool response, with the output
  *   the model will actually see.
+ * @property {string} [remedy]
+ *   What a reader should run when the sanitizer's own bindings are what is
+ *   missing. This hook's host channel is `ext`, where the other two gates use a
+ *   frozen message table; either way it is one channel per gate, so a host
+ *   cannot supply its wording somewhere the fail-closed context never reads.
  */
 
 /**
@@ -528,14 +533,19 @@ export function failClosedContext(
  * @param {any} input  parsed hook input, or undefined if parsing threw
  * @param {string} message
  * @param {(fields: Record<string, unknown>) => void} [emit]
+ * @param {string} [remedy]  what a reader should run; hosts pass their own
  * @returns {void}
  */
 export function emitFailClosed(
   input,
   message,
   emit = (fields) => emitHookResponse(HookEvent.POST_TOOL_USE, fields),
+  remedy = DEFAULT_MISSING_PACKAGE_REMEDY,
 ) {
-  const additionalContext = failClosedContext();
+  // Threaded rather than defaulted here: this is the ONLY production caller of
+  // failClosedContext, so a remedy it does not pass is a remedy no host can ever
+  // reach — the parameter would be live only from tests.
+  const additionalContext = failClosedContext(sanitizerDepsLoaded, remedy);
   try {
     emit({
       updatedToolOutput: failClosedReplacement(input, message),
@@ -774,6 +784,8 @@ export async function cliMain(ext = {}) {
           "[SANITIZATION FAILED — original output suppressed for safety. Hook error: " +
             safeErrMessage(err) +
             "]",
+          undefined,
+          ext.remedy,
         ),
     },
   );

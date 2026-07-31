@@ -33,8 +33,9 @@ import { trace, TraceEvent } from "./lib/trace.mjs";
 // import, never a bare top-level `import … from "…"`: a static npm import
 // resolves before any try/catch, so a missing node_modules would crash this hook
 // at load and let the prompt through UNSANITIZED (fail-open). A failed load
-// leaves the bindings undefined, which the judge's typeof guard turns into a
-// fail-closed block.
+// leaves that binding undefined, which the judge's typeof guards turn into a
+// fail-closed block — one guard each, since the two loads succeed or fail
+// independently.
 /** @type {typeof import("agent-sanitizer/prompt").classifyPrompt} */
 export let classifyPrompt;
 /** @type {typeof import("agent-sanitizer").stripAnsiFully} */
@@ -124,11 +125,21 @@ export function judgeSanitizeUserPrompt(
     return { decision: Decision.DENY, reason: messages.unknownEvent };
   if (event.event !== EventKind.PROMPT_SUBMIT)
     return { decision: Decision.ALLOW };
-  // The module-load guard: a missing stripper means agent-sanitizer never
-  // loaded. Guarding on the stripper alone is sufficient — it is bound AFTER
-  // classifyPrompt, so a present stripper proves the classifier loaded too.
+  // The module-load guard, one arm per binding. The two lazyImports are
+  // INDEPENDENT — each yields {} on its own failure — so a present stripper does
+  // not prove the classifier loaded, and guarding on it alone would let a
+  // classifier-only failure reach `classifyPrompt(...)` as a bare TypeError
+  // naming no package, no cause and no remedy: the exact diagnostic this hook
+  // now exists to produce. lazyImportErrorFor matches subpaths, so naming
+  // `agent-sanitizer/prompt` still recovers the recorded cause.
   if (typeof strip !== "function")
     throw missingPackageError("agent-sanitizer", undefined, messages.remedy);
+  if (typeof classifyPrompt !== "function")
+    throw missingPackageError(
+      "agent-sanitizer/prompt",
+      undefined,
+      messages.remedy,
+    );
   // The contract guarantees a string here: every adapter normalizes the
   // prompt-submit input (Claude's parse coerces a missing/non-string prompt to
   // "" via asString), so a defensive typeof re-check is a dead branch.

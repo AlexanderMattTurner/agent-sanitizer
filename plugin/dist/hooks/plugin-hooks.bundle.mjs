@@ -67831,8 +67831,8 @@ function failClosedContext(depsLoaded = sanitizerDepsLoaded, remedy = DEFAULT_MI
   if (depsLoaded()) return FAIL_CLOSED_CONTEXT;
   return `${FAIL_CLOSED_CONTEXT} ${missingPackageMessage("agent-sanitizer", lazyImportErrorFor("agent-sanitizer"), remedy)}`;
 }
-function emitFailClosed(input, message, emit = (fields) => emitHookResponse(HookEvent.POST_TOOL_USE, fields)) {
-  const additionalContext = failClosedContext();
+function emitFailClosed(input, message, emit = (fields) => emitHookResponse(HookEvent.POST_TOOL_USE, fields), remedy = DEFAULT_MISSING_PACKAGE_REMEDY) {
+  const additionalContext = failClosedContext(sanitizerDepsLoaded, remedy);
   try {
     emit({
       updatedToolOutput: failClosedReplacement(input, message),
@@ -67936,7 +67936,9 @@ async function cliMain2(ext = {}) {
       // serialization throws, so even a pathological input fails closed.
       onError: (err, input) => emitFailClosed(
         input,
-        "[SANITIZATION FAILED \u2014 original output suppressed for safety. Hook error: " + safeErrMessage(err) + "]"
+        "[SANITIZATION FAILED \u2014 original output suppressed for safety. Hook error: " + safeErrMessage(err) + "]",
+        void 0,
+        ext.remedy
       )
     }
   );
@@ -67990,6 +67992,12 @@ function judgeSanitizeUserPrompt(event, strip = stripAnsiFully3, overrides = USE
     return { decision: Decision3.ALLOW };
   if (typeof strip !== "function")
     throw missingPackageError("agent-sanitizer", void 0, messages.remedy);
+  if (typeof classifyPrompt2 !== "function")
+    throw missingPackageError(
+      "agent-sanitizer/prompt",
+      void 0,
+      messages.remedy
+    );
   const prompt = (
     /** @type {string} */
     event.input.prompt
