@@ -8,6 +8,17 @@ adhere to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+## [2.9.0] - 2026-07-31
+
+### Changed
+
+- test(claude-hooks): compose the three seams the way a real host would
+- test(claude-hooks): pin the last marker-path case to an explicit argument
+- fix(claude-hooks): stop a partial reason table from failing the gate OPEN
+- refactor(claude-hooks): move the cold-start wait into hook-io, name it for what it waits on
+- feat(claude-hooks): let a host inject its own fail-closed reasons and deny gates
+- docs: release 2.8.0 [skip ci]
+
 ## [2.8.0] - 2026-07-30
 
 ### Changed
