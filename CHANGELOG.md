@@ -8,6 +8,14 @@ adhere to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+## [2.10.0] - 2026-07-31
+
+### Changed
+
+- fix(claude-hooks): keep a throwing host trace sink from aborting a hook
+- feat(claude-hooks): let a host supply the trace sink and the hookgate marker
+- docs: release 2.9.1 [skip ci]
+
 ## [2.9.1] - 2026-07-31
 
 ### Changed
