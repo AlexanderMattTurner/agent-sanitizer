@@ -74,9 +74,16 @@ def test_shared_extra_matches_sanitizer_ssot():
     """The extra (non-Cf) set the redactor consumes is the one agent-sanitizer
     publishes from invisible.mjs (VS + BLANK_NON_CF): variation selectors, Hangul
     and Braille fillers, and the zero-width combining marks U+034F/U+17B4/U+17B5.
-    A member dropped on either side diverges the two engines."""
+    A member dropped on either side diverges the two engines.
+
+    The variation selectors are all THREE runs of Unicode's Variation_Selector
+    property, not just the two Cf-adjacent ones: the Mongolian free variation
+    selectors (U+180B..U+180D, U+180F) are category Mn, so neither `\\p{Cf}` nor
+    this interpreter's Cf pin reaches them, and a run of them renders as nothing.
+    """
     expected = (
         set(range(0xFE00, 0xFE10))
+        | {0x180B, 0x180C, 0x180D, 0x180F}
         | set(range(0xE0100, 0xE01F0))
         | {0x115F, 0x1160, 0x3164, 0xFFA0, 0x2800, 0x034F, 0x17B4, 0x17B5}
     )

@@ -136,16 +136,28 @@ function findMdFiles(dir) {
  * under `dir`. Claude Code loads these as project instructions on entry to their
  * containing directory — a load path that bypasses the PostToolUse sanitizer — so
  * a payload planted in e.g. `packages/foo/CLAUDE.md` reaches the model uncleaned
- * unless it is scanned here. Skips node_modules; `**` skips dot directories by
- * default (`.git`, and `.claude`, which the caller scans separately).
+ * unless it is scanned here. Skips node_modules.
+ *
+ * `**` does not descend into dot directories, so NESTED `.claude/` trees need
+ * their own pattern: the caller scans only the project-root `.claude`, which
+ * would leave a directory-scoped skill at `packages/foo/.claude/skills/x/SKILL.md`
+ * — model context by the same load path — never scanned.
  * @param {string} dir
  * @returns {string[]}
  */
 function findInstructionFiles(dir) {
-  return globSync(["**/CLAUDE.md", "**/CLAUDE.local.md", "**/AGENTS.md"], {
-    cwd: dir,
-    exclude: (name) => name === "node_modules",
-  }).map((name) => join(dir, name));
+  return globSync(
+    [
+      "**/CLAUDE.md",
+      "**/CLAUDE.local.md",
+      "**/AGENTS.md",
+      "**/.claude/**/*.md",
+    ],
+    {
+      cwd: dir,
+      exclude: (name) => name === "node_modules",
+    },
+  ).map((name) => join(dir, name));
 }
 
 // Scanner

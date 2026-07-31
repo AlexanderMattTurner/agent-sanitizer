@@ -1069,6 +1069,23 @@ const VOID_ELEMENTS = new Set([
   "wbr",
 ]);
 
+// Foreign-content roots. Inside SVG and MathML the HTML parser honours a
+// self-closing `/>` (it does not in HTML content), so such a tag opens and
+// closes in one node and the text after it is a sibling, not its child.
+const FOREIGN_ELEMENTS = new Set(["svg", "math"]);
+
+/**
+ * True when `value` is a foreign-content tag that closed itself. Splicing it as
+ * a balance region instead would run to the container's end and delete every
+ * visible word after a decorative hidden `<svg/>`.
+ * @param {string} tagName
+ * @param {string} value
+ * @returns {boolean}
+ */
+function isSelfClosedForeign(tagName, value) {
+  return FOREIGN_ELEMENTS.has(tagName) && /\/\s*>\s*$/.test(value);
+}
+
 // Elements whose content is RAW TEXT / RCDATA / script data: parse5 recognizes
 // NO markup inside them (a `<!…` is not a comment, a `<b>` is not a tag) until
 // the matching end tag. The per-tag balance walk must model this or it would
@@ -1523,7 +1540,10 @@ function scanInlineChildren(node, text, ranges, warned) {
         // A void element never emits a matching close, so a balance region
         // would extend to the container end and splice out following visible
         // text. Emit a single-node range instead (the source branch does too).
-        if (VOID_ELEMENTS.has(tagName))
+        // A self-closed FOREIGN element behaves the same way: in SVG/MathML
+        // content the HTML spec honours the `/>` flag, so the element closes
+        // immediately and everything after it renders.
+        if (VOID_ELEMENTS.has(tagName) || isSelfClosedForeign(tagName, value))
           ranges.push({ start: base, end, kind: "hidden" });
         else {
           state.tag = tagName;

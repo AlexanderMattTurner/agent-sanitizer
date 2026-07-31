@@ -112,20 +112,27 @@ const ANSI_RE = new RegExp(`(?:${OSC_BRANCH}|${CSI_BRANCH})`, "gu");
 export const LONE_SURROGATE_RE =
   /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g;
 
+const MAX_ANSI_PASSES = 3;
+
 /**
  * Strip ANSI escape sequences to a fixed point. Removing one sequence can
  * reconstitute another around it (a lone ESC left of `ESC[32m[0m` gains the
  * trailing `[0m` once the inner sequence is removed, forming a brand-new valid
- * sequence the single pass would miss), so iterate until stable: every changed
- * pass consumes at least one ESC introducer, so the pass count is bounded by
- * the input's ESC count, and ANSI-free text exits after one pass.
+ * sequence the single pass would miss), so iterate — but only a fixed few
+ * times. Bounding by the input's ESC count is quadratic on attacker-controlled
+ * text: `("\x1b[").repeat(n) + "m".repeat(n)` reconstitutes exactly ONE
+ * sequence per pass, so n full O(n) scans run, and 48 KB already costs seconds.
+ * The passes are not what makes Layer 1 safe — applyLayer1's residual
+ * CONTROL_INTRODUCER_RE sweep is, and it removes every ESC/C1 byte whatever
+ * survives here. Past the bound a reconstituted sequence therefore degrades to
+ * VISIBLE text rather than a hidden control, which is the fail-open direction.
  * @param {string} input
  * @returns {string}
  */
 export function stripAnsiFully(input) {
   let prev = input;
   let out = prev.replace(ANSI_RE, "");
-  while (out !== prev) {
+  for (let pass = 1; pass < MAX_ANSI_PASSES && out !== prev; pass++) {
     prev = out;
     out = prev.replace(ANSI_RE, "");
   }
