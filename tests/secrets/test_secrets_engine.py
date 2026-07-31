@@ -708,6 +708,29 @@ def test_metadata_fields_not_redacted(label, text):
     assert run_plain(text) is None, label
 
 
+# The Secret Keyword detector reports no match offset, so `_is_metadata_field`
+# has to locate the value itself. A decoy metadata field carrying the SAME value
+# as a real secret field puts a metadata-suffixed prefix in front of the first
+# occurrence, and skipping on it forwards the real credential in cleartext.
+@pytest.mark.parametrize(
+    "label, text",
+    [
+        (
+            "decoy metadata field precedes the real one",
+            'password_name="Hunter2Passw0rdABC", password="Hunter2Passw0rdABC"',
+        ),
+        (
+            "decoy is a different metadata suffix",
+            'key_file: "Hunter2Passw0rdABC"  password: "Hunter2Passw0rdABC"',
+        ),
+    ],
+)
+def test_repeated_value_defeats_the_metadata_skip(label, text):
+    redacted = run_plain(text)
+    assert redacted is not None, f"{label}: the secret was forwarded verbatim"
+    assert "Hunter2Passw0rdABC" not in redacted, label
+
+
 # ─── Markdown code prose not redacted ────────────────────────────────────────
 
 
