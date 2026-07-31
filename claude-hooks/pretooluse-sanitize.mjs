@@ -27,6 +27,10 @@ import { readFileSync } from "node:fs";
 import {
   isMain,
   lazyImport,
+  lazyImportErrorFor,
+  failedLazyPackages,
+  missingPackageMessage,
+  DEFAULT_MISSING_PACKAGE_REMEDY,
   registeredLazyModule,
   emitHookResponse,
   safeErrMessage,
@@ -49,6 +53,33 @@ import { redactViaDaemon } from "./lib/redactor-client.mjs";
 import { trace, TraceEvent } from "./lib/trace.mjs";
 
 const HOOK_NAME = "pretooluse-sanitize";
+
+/**
+ * A host-supplied deny gate: given the PreToolUse input, the reason this call
+ * must be blocked, or null to let the pipeline continue. Hosts use these for
+ * policy the package has no view of (a required workflow step, a project-local
+ * rule); the package ships none.
+ * @typedef {(input: { tool_name: string | null, tool_input: any, session_id?: string })
+ *   => string | null | undefined} HostGate
+ */
+
+/**
+ * The reasons this hook emits, as a table a host overrides. A host that knows
+ * which of ITS files wires the adapter, and what a reader should do about a
+ * failure, can say so — the package cannot, since it has no idea where it is
+ * installed.
+ * @type {Readonly<{
+ *   unknownEvent: string,
+ *   failed: (cause: string) => string,
+ *   unparsable: (cause: string) => string,
+ * }>}
+ */
+export const PRE_TOOL_USE_MESSAGES = Object.freeze({
+  unknownEvent:
+    "PreToolUse sanitization blocked (fail-closed): unrecognized hook payload.",
+  failed: (cause) => `PreToolUse sanitization failed (fail-closed): ${cause}`,
+  unparsable: (cause) => `PreToolUse input unparsable (fail-closed): ${cause}`,
+});
 
 // Layers 2 & 4 come from the agent-sanitizer package, bound via lazyImport (see
 // its doc for the fail-OPEN hazard of a bare static npm import); a failed load
@@ -253,9 +284,19 @@ function assembleResponse({
  * fail-closed posture holds even when the adapter never loaded.
  * @param {import("agent-control-plane-core").ToolCallEvent} event
  * @param {(tool: string, toolInput: any) => ReturnType<typeof rehydrateRedacted>} [rehydrate]
+ * @param {{ messages?: Partial<typeof PRE_TOOL_USE_MESSAGES>, gates?: HostGate[] }} [opts]
+ *   messages are merged over the defaults, so a partial table is supported
  * @returns {Promise<import("agent-control-plane-core").Verdict>}
  */
-export async function judgePreToolUseSanitize(event, rehydrate) {
+export async function judgePreToolUseSanitize(event, rehydrate, opts = {}) {
+  const { gates = [] } = opts;
+  // MERGED over the defaults, never substituted for them. A host that overrides
+  // one field would otherwise leave the rest undefined, and the miss lands in
+  // the fail-closed path: failClosedFields runs inside runJudgeCli's catch, so a
+  // TypeError on a missing field escapes the handler, the hook exits with no
+  // stdout, and Claude reads a PreToolUse hook that produced no response as
+  // non-blocking — the fail-closed ask becomes a fail-OPEN pass.
+  const messages = { ...PRE_TOOL_USE_MESSAGES, ...opts.messages };
   const { Decision, EventKind } = controlPlane();
   // A payload the adapter cannot classify (a missing/unexpected hook_event_name)
   // would drive the pipeline with an empty event and no-op to ALLOW — a silent
@@ -264,15 +305,23 @@ export async function judgePreToolUseSanitize(event, rehydrate) {
   // never a real call: deny-when-blind. Rewarding an unclassifiable payload with
   // a pass is the one incentive a gate must never create.
   if (event.event === EventKind.UNKNOWN)
-    return {
-      decision: Decision.DENY,
-      reason:
-        "PreToolUse sanitization blocked (fail-closed): unrecognized hook payload.",
-    };
-  const fields = await buildPreToolUseResponse(
-    { tool_name: event.tool, tool_input: event.input },
-    rehydrate,
-  );
+    return { decision: Decision.DENY, reason: messages.unknownEvent };
+  // The session identity travels in `meta`, not alongside the tool input; a host
+  // gate keyed on the session (a once-per-session checkpoint) cannot tell two
+  // sessions apart without it.
+  const input = {
+    tool_name: event.tool,
+    tool_input: event.input,
+    session_id: event.meta?.session_id,
+  };
+  // Host gates run BEFORE any rewriting layer, because they decide whether the
+  // call may happen at all rather than what its input contains — and returning
+  // early keeps a denied call from also being reported as a sanitized one.
+  for (const gate of gates) {
+    const denyReason = gate(input);
+    if (denyReason) return { decision: Decision.DENY, reason: denyReason };
+  }
+  const fields = await buildPreToolUseResponse(input, rehydrate);
   if (fields === null) return { decision: Decision.ALLOW };
   /** @type {Record<string, unknown>} */
   const verdict = {
@@ -288,6 +337,42 @@ export async function judgePreToolUseSanitize(event, rehydrate) {
 }
 
 /**
+ * The dependency-load failure hiding behind a hook error, or "". A binding that
+ * never loaded surfaces at use time as a bare TypeError ("X is not a function")
+ * that names neither the package nor the remedy; when any lazily-loaded package
+ * has a recorded load error, name it — the failed set is derived from the
+ * loader's own records, so a future dependency is covered without editing a list
+ * here. An error already reporting a missing package (missingPackageError's
+ * `DEP_UNAVAILABLE` tag) gets no second copy.
+ * @param {unknown} err
+ * @param {string} [remedy]  what a reader should run; hosts pass their own
+ * @param {() => string[]} [failedPackages]
+ * @param {(pkg: string) => unknown} [loadErrorFor]
+ * @returns {string}
+ */
+export function depLoadHint(
+  err,
+  remedy = DEFAULT_MISSING_PACKAGE_REMEDY,
+  failedPackages = failedLazyPackages,
+  loadErrorFor = lazyImportErrorFor,
+) {
+  if (/** @type {{code?: unknown}} */ (err)?.code === "DEP_UNAVAILABLE")
+    return "";
+  // Only a TypeError. The recorded-failure set is process-wide and carries no
+  // link to THIS error, so naming a package from it is an inference — sound only
+  // for the failure this hint exists to explain, where an unloaded binding is
+  // called and V8 raises a TypeError ("X is not a function", "Cannot read
+  // properties of undefined"). Any other throw is a layer engine reporting its
+  // own problem, and appending a package name there sends the reader to a
+  // reinstall that fixes nothing.
+  if (!(err instanceof TypeError)) return "";
+  const [pkg] = failedPackages();
+  return pkg === undefined
+    ? ""
+    : ` ${missingPackageMessage(pkg, loadErrorFor(pkg), remedy)}`;
+}
+
+/**
  * The fail-closed hookSpecificOutput fields for a hook-level failure, chosen by
  * WHICH failure it was. Corrupt/unparsable INPUT (`parsedOk` false — a JSON parse
  * error or the oversize-body cap) is a state an adversary can induce with no
@@ -297,16 +382,22 @@ export async function judgePreToolUseSanitize(event, rehydrate) {
  * so it ASKS to keep a human in the loop rather than hard-block on infrastructure.
  * @param {boolean} parsedOk whether the input parsed before the failure
  * @param {unknown} err
+ * @param {{ messages?: Partial<typeof PRE_TOOL_USE_MESSAGES>, hint?: string }} [opts]
  * @returns {Record<string, unknown>}
  */
-export function failClosedFields(parsedOk, err) {
+export function failClosedFields(parsedOk, err, opts = {}) {
+  const { hint = depLoadHint(err) } = opts;
+  // Merged, not substituted — see judgePreToolUseSanitize. This is the call site
+  // where a missing field would throw out of the catch and fail OPEN.
+  const messages = { ...PRE_TOOL_USE_MESSAGES, ...opts.messages };
+  const cause = `${safeErrMessage(err)}${hint}`;
   return {
     permissionDecision: parsedOk
       ? PermissionDecision.ASK
       : PermissionDecision.DENY,
     permissionDecisionReason: parsedOk
-      ? `PreToolUse sanitization failed (fail-closed): ${safeErrMessage(err)}`
-      : `PreToolUse input unparsable (fail-closed): ${safeErrMessage(err)}`,
+      ? messages.failed(cause)
+      : messages.unparsable(cause),
   };
 }
 
@@ -319,21 +410,35 @@ export function failClosedFields(parsedOk, err) {
  * Exported so a bundle entry (which must claim the CLI slot before this module
  * loads) can run the exact same wiring instead of duplicating the onError
  * posture.
+ * @param {{
+ *   messages?: Partial<typeof PRE_TOOL_USE_MESSAGES>,
+ *   gates?: HostGate[],
+ *   remedy?: string,
+ * }} [opts]
  * @returns {Promise<void>}
  */
-export async function cliMain() {
-  await runJudgeCli("pretooluse-sanitize", judgePreToolUseSanitize, {
-    // Fail closed WITHOUT the package: unparsable INPUT (`input` undefined)
-    // hard-denies (adversary-inducible, no benefit to failing); any throw
-    // after a clean parse — a layer engine down or the control-plane package
-    // unavailable — asks to keep a human in the loop. emitHookResponse renders
-    // natively, so this posture holds even when the adapter never loaded.
-    onError: (err, input) =>
-      emitHookResponse(
-        HookEvent.PRE_TOOL_USE,
-        failClosedFields(input !== undefined, err),
-      ),
-  });
+export async function cliMain(opts = {}) {
+  const { gates = [], remedy } = opts;
+  const messages = { ...PRE_TOOL_USE_MESSAGES, ...opts.messages };
+  await runJudgeCli(
+    HOOK_NAME,
+    (event) => judgePreToolUseSanitize(event, undefined, { messages, gates }),
+    {
+      // Fail closed WITHOUT the package: unparsable INPUT (`input` undefined)
+      // hard-denies (adversary-inducible, no benefit to failing); any throw
+      // after a clean parse — a layer engine down or the control-plane package
+      // unavailable — asks to keep a human in the loop. emitHookResponse renders
+      // natively, so this posture holds even when the adapter never loaded.
+      onError: (err, input) =>
+        emitHookResponse(
+          HookEvent.PRE_TOOL_USE,
+          failClosedFields(input !== undefined, err, {
+            messages,
+            hint: depLoadHint(err, remedy),
+          }),
+        ),
+    },
+  );
 }
 
 if (isMain(import.meta.url)) {

@@ -7,7 +7,16 @@
  * transport rule (nativeStdout), and the shared judge-CLI transport
  * (runJudgeCli).
  */
-import { errMessage, lazyImport, readStdinJson } from "./hook-io.mjs";
+import {
+  awaitLazyDependency,
+  errMessage,
+  hookgateMarkerPath,
+  lazyImport,
+  markerIsTrusted,
+  missingPackageError,
+  probeSetupAlive,
+  readStdinJson,
+} from "./hook-io.mjs";
 
 // Loaded via a *caught* dynamic import — never a bare static `import … from`.
 // A static npm import resolves before any try/catch, so a missing node_modules
@@ -26,20 +35,36 @@ let EventKind;
 /* c8 ignore start -- module-load boundary: the real import resolves in every
    in-process test and spawned CLI run, and a missing node_modules can't be
    simulated in-process, so this glue's failure arm is unobservable here. The
-   observable behaviour is controlPlane()'s throw, unit-tested directly. */
+   observable logic lives in awaitLazyDependency, unit-tested directly. */
 // Stryker disable all
-{
-  const { claudeAdapter: adapter } =
-    /** @type {Partial<typeof import("agent-control-plane-core/claude")>} */ (
-      await lazyImport("agent-control-plane-core/claude")
+const marker = hookgateMarkerPath();
+const loaded = await awaitLazyDependency({
+  tryImport: async () => {
+    // lazyImport is the shared caught npm import (see hook-io): it returns the
+    // module on success and {} on a failed load, so a missing binding is the
+    // null signal the poll loop waits on — no bare import()/try-catch here.
+    const { claudeAdapter: adapter } =
+      /** @type {Partial<typeof import("agent-control-plane-core/claude")>} */ (
+        await lazyImport("agent-control-plane-core/claude")
+      );
+    const { Decision: decision, EventKind: eventKind } =
+      /** @type {Partial<typeof import("agent-control-plane-core")>} */ (
+        await lazyImport("agent-control-plane-core")
+      );
+    if (!adapter || !decision || !eventKind) return null;
+    return { claudeAdapter: adapter, Decision: decision, EventKind: eventKind };
+  },
+  markerPresent: () => markerIsTrusted(marker),
+  setupAlive: () => probeSetupAlive(marker),
+});
+if (loaded) {
+  const bound =
+    /** @type {{ claudeAdapter: typeof claudeAdapter, Decision: typeof Decision, EventKind: typeof EventKind }} */ (
+      loaded
     );
-  const { Decision: decision, EventKind: eventKind } =
-    /** @type {Partial<typeof import("agent-control-plane-core")>} */ (
-      await lazyImport("agent-control-plane-core")
-    );
-  claudeAdapter = adapter;
-  Decision = decision;
-  EventKind = eventKind;
+  claudeAdapter = bound.claudeAdapter;
+  Decision = bound.Decision;
+  EventKind = bound.EventKind;
 }
 // Stryker restore all
 /* c8 ignore stop */
@@ -58,7 +83,7 @@ let EventKind;
 export function controlPlane(overrides = {}) {
   const bindings = { claudeAdapter, Decision, EventKind, ...overrides };
   if (!bindings.claudeAdapter || !bindings.Decision || !bindings.EventKind)
-    throw new Error("agent-control-plane-core is unavailable");
+    throw missingPackageError("agent-control-plane-core");
   return /** @type {ReturnType<typeof controlPlane>} */ (bindings);
 }
 

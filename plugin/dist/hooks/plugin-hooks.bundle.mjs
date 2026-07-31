@@ -49,10 +49,12 @@ import {
   openSync,
   closeSync,
   lstatSync,
+  readFileSync,
   unlinkSync,
   writeFileSync
 } from "node:fs";
 import { userInfo } from "node:os";
+import { createHash } from "node:crypto";
 import { pathToFileURL } from "node:url";
 function isMain(importMetaUrl) {
   if (cliEntryClaimed) return false;
@@ -90,12 +92,46 @@ function registeredLazyModule(specifier) {
 }
 async function lazyImport(specifier) {
   const registered = registeredLazyModules[specifier];
-  if (registered) return registered;
+  if (registered) {
+    lazyImportErrors.delete(specifier);
+    return registered;
+  }
   try {
-    return await import(specifier);
-  } catch {
+    const loaded2 = await import(specifier);
+    lazyImportErrors.delete(specifier);
+    return loaded2;
+  } catch (err) {
+    lazyImportErrors.delete(specifier);
+    lazyImportErrors.set(specifier, err);
     return {};
   }
+}
+function lazyImportErrorFor(pkg) {
+  for (const [specifier, err] of [...lazyImportErrors].reverse())
+    if (specifier === pkg || specifier.startsWith(`${pkg}/`)) return err;
+  return void 0;
+}
+function failedLazyPackages() {
+  const pkgs = /* @__PURE__ */ new Set();
+  for (const specifier of [...lazyImportErrors.keys()].reverse()) {
+    if (!/^[\w@]/.test(specifier) || specifier.includes(":")) continue;
+    const parts2 = specifier.split("/");
+    pkgs.add(
+      specifier.startsWith("@") ? parts2.slice(0, 2).join("/") : parts2[0]
+    );
+  }
+  return [...pkgs];
+}
+function missingPackageMessage(pkg, err = lazyImportErrorFor(pkg), remedy = DEFAULT_MISSING_PACKAGE_REMEDY) {
+  const prefix = `${pkg} is unavailable: `;
+  const causeCap = Math.max(0, 300 - prefix.length - remedy.length - 2 - 12);
+  const cause = err === void 0 ? "no load error recorded \u2014 the package likely loaded but lacks an expected export (version skew)" : safeErrMessage(err, causeCap);
+  return `${prefix}${cause}; ${remedy}`;
+}
+function missingPackageError(pkg, err = lazyImportErrorFor(pkg), remedy = DEFAULT_MISSING_PACKAGE_REMEDY) {
+  return Object.assign(new Error(missingPackageMessage(pkg, err, remedy)), {
+    code: "DEP_UNAVAILABLE"
+  });
 }
 function makeDeadline(budgetMs, now = Date.now) {
   const end = now() + budgetMs;
@@ -126,6 +162,71 @@ function emitHookResponse(hookEventName, fields) {
   process.stdout.write(
     JSON.stringify({ hookSpecificOutput: { hookEventName, ...fields } })
   );
+}
+function hookgateMarkerPath(projectDir = process.env.CLAUDE_PROJECT_DIR, runtimeDir = process.env.XDG_RUNTIME_DIR) {
+  if (!projectDir) return null;
+  const base2 = runtimeDir && runtimeDir.startsWith("/") ? runtimeDir : "/tmp";
+  const digest = createHash("sha256").update(projectDir).digest("hex").slice(0, 8);
+  const flattened = projectDir.replace(/[^A-Za-z0-9]/g, "_");
+  return `${base2}/${HOOKGATE_MARKER_STEM}${flattened}-${digest}`;
+}
+function probeSetupAlive(markerPath) {
+  if (markerPath === null) return true;
+  let pid;
+  try {
+    pid = parseInt(readFileSync(markerPath, "utf8"), 10);
+  } catch {
+    return true;
+  }
+  if (!Number.isInteger(pid) || pid <= 0) return true;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (err) {
+    return (
+      /** @type {NodeJS.ErrnoException} */
+      err.code === "EPERM"
+    );
+  }
+}
+async function awaitLazyDependency({
+  tryImport,
+  markerPresent,
+  setupAlive,
+  now = () => Date.now(),
+  sleep: sleep2 = (ms) => new Promise((resolve2) => {
+    setTimeout(resolve2, ms);
+  }),
+  graceMs = 5e3,
+  settleMs = 1e3,
+  ceilingMs = 9e5,
+  intervalMs = 250
+}) {
+  const start = now();
+  let sawInstalling = false;
+  let enteredDone = false;
+  let doneAt = 0;
+  for (; ; ) {
+    const bindings = await tryImport();
+    if (bindings) return bindings;
+    const installing = markerPresent() && setupAlive();
+    let giveUp;
+    if (installing) {
+      sawInstalling = true;
+      enteredDone = false;
+      giveUp = now() - start > ceilingMs;
+    } else if (sawInstalling) {
+      if (!enteredDone) {
+        enteredDone = true;
+        doneAt = now();
+      }
+      giveUp = now() - doneAt > settleMs;
+    } else {
+      giveUp = now() - start > graceMs;
+    }
+    if (giveUp) return null;
+    await sleep2(intervalMs);
+  }
 }
 function markerIsTrusted(path2) {
   if (path2 === null) return false;
@@ -165,7 +266,7 @@ function writeFileNoFollow(path2, content3, mode = 384) {
     closeSync(fd);
   }
 }
-var cliEntryClaimed, HookEvent, PermissionDecision, LONE_SURROGATE_RE, MAX_STDIN_BYTES, registeredLazyModules, UNTRUSTED_TEXT_CAP;
+var cliEntryClaimed, HookEvent, PermissionDecision, LONE_SURROGATE_RE, MAX_STDIN_BYTES, registeredLazyModules, lazyImportErrors, DEFAULT_MISSING_PACKAGE_REMEDY, UNTRUSTED_TEXT_CAP, HOOKGATE_MARKER_STEM;
 var init_hook_io = __esm({
   "claude-hooks/lib/hook-io.mjs"() {
     "use strict";
@@ -184,7 +285,10 @@ var init_hook_io = __esm({
     LONE_SURROGATE_RE = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g;
     MAX_STDIN_BYTES = 64 * 1024 * 1024;
     registeredLazyModules = /* @__PURE__ */ Object.create(null);
+    lazyImportErrors = /* @__PURE__ */ new Map();
+    DEFAULT_MISSING_PACKAGE_REMEDY = "reinstall the hook dependencies (pnpm install) and retry.";
     UNTRUSTED_TEXT_CAP = 500;
+    HOOKGATE_MARKER_STEM = "agent-sanitizer-hookgate-inflight-";
   }
 });
 
@@ -35413,15 +35517,15 @@ function tokenizeAttention(effects, ok3) {
   const attentionMarkers2 = this.parser.constructs.attentionMarkers.null;
   const previous3 = this.previous;
   const before = classifyCharacter(previous3);
-  let marker;
+  let marker2;
   return start;
   function start(code4) {
-    marker = code4;
+    marker2 = code4;
     effects.enter("attentionSequence");
     return inside(code4);
   }
   function inside(code4) {
-    if (code4 === marker) {
+    if (code4 === marker2) {
       effects.consume(code4);
       return inside;
     }
@@ -35429,8 +35533,8 @@ function tokenizeAttention(effects, ok3) {
     const after = classifyCharacter(code4);
     const open = !after || after === 2 && before || attentionMarkers2.includes(code4);
     const close = !before || before === 2 && after || attentionMarkers2.includes(previous3);
-    token._open = Boolean(marker === 42 ? open : open && (before || !close));
-    token._close = Boolean(marker === 42 ? close : close && (after || !open));
+    token._open = Boolean(marker2 === 42 ? open : open && (before || !close));
+    token._close = Boolean(marker2 === 42 ? close : close && (after || !open));
     return ok3(code4);
   }
 }
@@ -35760,7 +35864,7 @@ function tokenizeCodeFenced(effects, ok3, nok) {
   };
   let initialPrefix = 0;
   let sizeOpen = 0;
-  let marker;
+  let marker2;
   return start;
   function start(code4) {
     return beforeSequenceOpen(code4);
@@ -35768,14 +35872,14 @@ function tokenizeCodeFenced(effects, ok3, nok) {
   function beforeSequenceOpen(code4) {
     const tail = self.events[self.events.length - 1];
     initialPrefix = tail && tail[1].type === "linePrefix" ? tail[2].sliceSerialize(tail[1], true).length : 0;
-    marker = code4;
+    marker2 = code4;
     effects.enter("codeFenced");
     effects.enter("codeFencedFence");
     effects.enter("codeFencedFenceSequence");
     return sequenceOpen(code4);
   }
   function sequenceOpen(code4) {
-    if (code4 === marker) {
+    if (code4 === marker2) {
       sizeOpen++;
       effects.consume(code4);
       return sequenceOpen;
@@ -35808,7 +35912,7 @@ function tokenizeCodeFenced(effects, ok3, nok) {
       effects.exit("codeFencedFenceInfo");
       return factorySpace(effects, metaBefore, "whitespace")(code4);
     }
-    if (code4 === 96 && code4 === marker) {
+    if (code4 === 96 && code4 === marker2) {
       return nok(code4);
     }
     effects.consume(code4);
@@ -35830,7 +35934,7 @@ function tokenizeCodeFenced(effects, ok3, nok) {
       effects.exit("codeFencedFenceMeta");
       return infoBefore(code4);
     }
-    if (code4 === 96 && code4 === marker) {
+    if (code4 === 96 && code4 === marker2) {
       return nok(code4);
     }
     effects.consume(code4);
@@ -35881,14 +35985,14 @@ function tokenizeCodeFenced(effects, ok3, nok) {
       return markdownSpace(code4) ? factorySpace(effects2, beforeSequenceClose, "linePrefix", self.parser.constructs.disable.null.includes("codeIndented") ? void 0 : 4)(code4) : beforeSequenceClose(code4);
     }
     function beforeSequenceClose(code4) {
-      if (code4 === marker) {
+      if (code4 === marker2) {
         effects2.enter("codeFencedFenceSequence");
         return sequenceClose(code4);
       }
       return nok2(code4);
     }
     function sequenceClose(code4) {
-      if (code4 === marker) {
+      if (code4 === marker2) {
         size++;
         effects2.consume(code4);
         return sequenceClose;
@@ -36734,7 +36838,7 @@ var init_micromark_factory_label = __esm({
 
 // node_modules/.pnpm/micromark-factory-title@2.0.1/node_modules/micromark-factory-title/index.js
 function factoryTitle(effects, ok3, nok, type, markerType, stringType) {
-  let marker;
+  let marker2;
   return start;
   function start(code4) {
     if (code4 === 34 || code4 === 39 || code4 === 40) {
@@ -36742,13 +36846,13 @@ function factoryTitle(effects, ok3, nok, type, markerType, stringType) {
       effects.enter(markerType);
       effects.consume(code4);
       effects.exit(markerType);
-      marker = code4 === 40 ? 41 : code4;
+      marker2 = code4 === 40 ? 41 : code4;
       return begin;
     }
     return nok(code4);
   }
   function begin(code4) {
-    if (code4 === marker) {
+    if (code4 === marker2) {
       effects.enter(markerType);
       effects.consume(code4);
       effects.exit(markerType);
@@ -36759,9 +36863,9 @@ function factoryTitle(effects, ok3, nok, type, markerType, stringType) {
     return atBreak(code4);
   }
   function atBreak(code4) {
-    if (code4 === marker) {
+    if (code4 === marker2) {
       effects.exit(stringType);
-      return begin(marker);
+      return begin(marker2);
     }
     if (code4 === null) {
       return nok(code4);
@@ -36778,7 +36882,7 @@ function factoryTitle(effects, ok3, nok, type, markerType, stringType) {
     return inside(code4);
   }
   function inside(code4) {
-    if (code4 === marker || code4 === null || markdownLineEnding(code4)) {
+    if (code4 === marker2 || code4 === null || markdownLineEnding(code4)) {
       effects.exit("chunkString");
       return atBreak(code4);
     }
@@ -36786,7 +36890,7 @@ function factoryTitle(effects, ok3, nok, type, markerType, stringType) {
     return code4 === 92 ? escape : inside;
   }
   function escape(code4) {
-    if (code4 === marker || code4 === 92) {
+    if (code4 === marker2 || code4 === 92) {
       effects.consume(code4);
       return inside;
     }
@@ -37138,7 +37242,7 @@ function resolveToHtmlFlow(events) {
 }
 function tokenizeHtmlFlow(effects, ok3, nok) {
   const self = this;
-  let marker;
+  let marker2;
   let closingTag;
   let buffer;
   let index2;
@@ -37165,7 +37269,7 @@ function tokenizeHtmlFlow(effects, ok3, nok) {
     }
     if (code4 === 63) {
       effects.consume(code4);
-      marker = 3;
+      marker2 = 3;
       return self.interrupt ? ok3 : continuationDeclarationInside;
     }
     if (asciiAlpha(code4)) {
@@ -37178,18 +37282,18 @@ function tokenizeHtmlFlow(effects, ok3, nok) {
   function declarationOpen(code4) {
     if (code4 === 45) {
       effects.consume(code4);
-      marker = 2;
+      marker2 = 2;
       return commentOpenInside;
     }
     if (code4 === 91) {
       effects.consume(code4);
-      marker = 5;
+      marker2 = 5;
       index2 = 0;
       return cdataOpenInside;
     }
     if (asciiAlpha(code4)) {
       effects.consume(code4);
-      marker = 4;
+      marker2 = 4;
       return self.interrupt ? ok3 : continuationDeclarationInside;
     }
     return nok(code4);
@@ -37225,18 +37329,18 @@ function tokenizeHtmlFlow(effects, ok3, nok) {
       const slash = code4 === 47;
       const name50 = buffer.toLowerCase();
       if (!slash && !closingTag && htmlRawNames.includes(name50)) {
-        marker = 1;
+        marker2 = 1;
         return self.interrupt ? ok3(code4) : continuation(code4);
       }
       if (htmlBlockNames.includes(buffer.toLowerCase())) {
-        marker = 6;
+        marker2 = 6;
         if (slash) {
           effects.consume(code4);
           return basicSelfClosing;
         }
         return self.interrupt ? ok3(code4) : continuation(code4);
       }
-      marker = 7;
+      marker2 = 7;
       return self.interrupt && !self.parser.lazy[self.now().line] ? nok(code4) : closingTag ? completeClosingTagAfter(code4) : completeAttributeNameBefore(code4);
     }
     if (code4 === 45 || asciiAlphanumeric(code4)) {
@@ -37351,27 +37455,27 @@ function tokenizeHtmlFlow(effects, ok3, nok) {
     return nok(code4);
   }
   function continuation(code4) {
-    if (code4 === 45 && marker === 2) {
+    if (code4 === 45 && marker2 === 2) {
       effects.consume(code4);
       return continuationCommentInside;
     }
-    if (code4 === 60 && marker === 1) {
+    if (code4 === 60 && marker2 === 1) {
       effects.consume(code4);
       return continuationRawTagOpen;
     }
-    if (code4 === 62 && marker === 4) {
+    if (code4 === 62 && marker2 === 4) {
       effects.consume(code4);
       return continuationClose;
     }
-    if (code4 === 63 && marker === 3) {
+    if (code4 === 63 && marker2 === 3) {
       effects.consume(code4);
       return continuationDeclarationInside;
     }
-    if (code4 === 93 && marker === 5) {
+    if (code4 === 93 && marker2 === 5) {
       effects.consume(code4);
       return continuationCdataInside;
     }
-    if (markdownLineEnding(code4) && (marker === 6 || marker === 7)) {
+    if (markdownLineEnding(code4) && (marker2 === 6 || marker2 === 7)) {
       effects.exit("htmlFlowData");
       return effects.check(blankLineBefore, continuationAfter, continuationStart)(code4);
     }
@@ -37441,7 +37545,7 @@ function tokenizeHtmlFlow(effects, ok3, nok) {
       effects.consume(code4);
       return continuationClose;
     }
-    if (code4 === 45 && marker === 2) {
+    if (code4 === 45 && marker2 === 2) {
       effects.consume(code4);
       return continuationDeclarationInside;
     }
@@ -37511,7 +37615,7 @@ var init_html_flow = __esm({
 // node_modules/.pnpm/micromark-core-commonmark@2.0.3/node_modules/micromark-core-commonmark/lib/html-text.js
 function tokenizeHtmlText(effects, ok3, nok) {
   const self = this;
-  let marker;
+  let marker2;
   let index2;
   let returnState;
   return start;
@@ -37739,7 +37843,7 @@ function tokenizeHtmlText(effects, ok3, nok) {
     }
     if (code4 === 34 || code4 === 39) {
       effects.consume(code4);
-      marker = code4;
+      marker2 = code4;
       return tagOpenAttributeValueQuoted;
     }
     if (markdownLineEnding(code4)) {
@@ -37754,9 +37858,9 @@ function tokenizeHtmlText(effects, ok3, nok) {
     return tagOpenAttributeValueUnquoted;
   }
   function tagOpenAttributeValueQuoted(code4) {
-    if (code4 === marker) {
+    if (code4 === marker2) {
       effects.consume(code4);
-      marker = void 0;
+      marker2 = void 0;
       return tagOpenAttributeValueQuotedAfter;
     }
     if (code4 === null) {
@@ -38149,18 +38253,18 @@ var init_line_ending = __esm({
 // node_modules/.pnpm/micromark-core-commonmark@2.0.3/node_modules/micromark-core-commonmark/lib/thematic-break.js
 function tokenizeThematicBreak(effects, ok3, nok) {
   let size = 0;
-  let marker;
+  let marker2;
   return start;
   function start(code4) {
     effects.enter("thematicBreak");
     return before(code4);
   }
   function before(code4) {
-    marker = code4;
+    marker2 = code4;
     return atBreak(code4);
   }
   function atBreak(code4) {
-    if (code4 === marker) {
+    if (code4 === marker2) {
       effects.enter("thematicBreakSequence");
       return sequence(code4);
     }
@@ -38171,7 +38275,7 @@ function tokenizeThematicBreak(effects, ok3, nok) {
     return nok(code4);
   }
   function sequence(code4) {
-    if (code4 === marker) {
+    if (code4 === marker2) {
       effects.consume(code4);
       size++;
       return sequence;
@@ -38379,7 +38483,7 @@ function resolveToSetextUnderline(events, context) {
 }
 function tokenizeSetextUnderline(effects, ok3, nok) {
   const self = this;
-  let marker;
+  let marker2;
   return start;
   function start(code4) {
     let index2 = self.events.length;
@@ -38392,7 +38496,7 @@ function tokenizeSetextUnderline(effects, ok3, nok) {
     }
     if (!self.parser.lazy[self.now().line] && (self.interrupt || paragraph2)) {
       effects.enter("setextHeadingLine");
-      marker = code4;
+      marker2 = code4;
       return before(code4);
     }
     return nok(code4);
@@ -38402,7 +38506,7 @@ function tokenizeSetextUnderline(effects, ok3, nok) {
     return inside(code4);
   }
   function inside(code4) {
-    if (code4 === marker) {
+    if (code4 === marker2) {
       effects.consume(code4);
       return inside;
     }
@@ -40948,13 +41052,13 @@ var init_format_code_as_indented = __esm({
 
 // node_modules/.pnpm/mdast-util-to-markdown@2.1.2/node_modules/mdast-util-to-markdown/lib/util/check-fence.js
 function checkFence(state) {
-  const marker = state.options.fence || "`";
-  if (marker !== "`" && marker !== "~") {
+  const marker2 = state.options.fence || "`";
+  if (marker2 !== "`" && marker2 !== "~") {
     throw new Error(
-      "Cannot serialize code with `" + marker + "` for `options.fence`, expected `` ` `` or `~`"
+      "Cannot serialize code with `" + marker2 + "` for `options.fence`, expected `` ` `` or `~`"
     );
   }
-  return marker;
+  return marker2;
 }
 var init_check_fence = __esm({
   "node_modules/.pnpm/mdast-util-to-markdown@2.1.2/node_modules/mdast-util-to-markdown/lib/util/check-fence.js"() {
@@ -40963,9 +41067,9 @@ var init_check_fence = __esm({
 
 // node_modules/.pnpm/mdast-util-to-markdown@2.1.2/node_modules/mdast-util-to-markdown/lib/handle/code.js
 function code2(node2, _, state, info) {
-  const marker = checkFence(state);
+  const marker2 = checkFence(state);
   const raw = node2.value || "";
-  const suffix = marker === "`" ? "GraveAccent" : "Tilde";
+  const suffix = marker2 === "`" ? "GraveAccent" : "Tilde";
   if (formatCodeAsIndented(node2, state)) {
     const exit4 = state.enter("codeIndented");
     const value2 = state.indentLines(raw, map2);
@@ -40973,7 +41077,7 @@ function code2(node2, _, state, info) {
     return value2;
   }
   const tracker = state.createTracker(info);
-  const sequence = marker.repeat(Math.max(longestStreak(raw, marker) + 1, 3));
+  const sequence = marker2.repeat(Math.max(longestStreak(raw, marker2) + 1, 3));
   const exit3 = state.enter("codeFenced");
   let value = tracker.move(sequence);
   if (node2.lang) {
@@ -41022,13 +41126,13 @@ var init_code = __esm({
 
 // node_modules/.pnpm/mdast-util-to-markdown@2.1.2/node_modules/mdast-util-to-markdown/lib/util/check-quote.js
 function checkQuote(state) {
-  const marker = state.options.quote || '"';
-  if (marker !== '"' && marker !== "'") {
+  const marker2 = state.options.quote || '"';
+  if (marker2 !== '"' && marker2 !== "'") {
     throw new Error(
-      "Cannot serialize title with `" + marker + "` for `options.quote`, expected `\"`, or `'`"
+      "Cannot serialize title with `" + marker2 + "` for `options.quote`, expected `\"`, or `'`"
     );
   }
-  return marker;
+  return marker2;
 }
 var init_check_quote = __esm({
   "node_modules/.pnpm/mdast-util-to-markdown@2.1.2/node_modules/mdast-util-to-markdown/lib/util/check-quote.js"() {
@@ -41098,13 +41202,13 @@ var init_definition2 = __esm({
 
 // node_modules/.pnpm/mdast-util-to-markdown@2.1.2/node_modules/mdast-util-to-markdown/lib/util/check-emphasis.js
 function checkEmphasis(state) {
-  const marker = state.options.emphasis || "*";
-  if (marker !== "*" && marker !== "_") {
+  const marker2 = state.options.emphasis || "*";
+  if (marker2 !== "*" && marker2 !== "_") {
     throw new Error(
-      "Cannot serialize emphasis with `" + marker + "` for `options.emphasis`, expected `*`, or `_`"
+      "Cannot serialize emphasis with `" + marker2 + "` for `options.emphasis`, expected `*`, or `_`"
     );
   }
-  return marker;
+  return marker2;
 }
 var init_check_emphasis = __esm({
   "node_modules/.pnpm/mdast-util-to-markdown@2.1.2/node_modules/mdast-util-to-markdown/lib/util/check-emphasis.js"() {
@@ -41121,7 +41225,7 @@ var init_encode_character_reference = __esm({
 });
 
 // node_modules/.pnpm/mdast-util-to-markdown@2.1.2/node_modules/mdast-util-to-markdown/lib/util/encode-info.js
-function encodeInfo(outside, inside, marker) {
+function encodeInfo(outside, inside, marker2) {
   const outsideKind = classifyCharacter(outside);
   const insideKind = classifyCharacter(inside);
   if (outsideKind === void 0) {
@@ -41129,7 +41233,7 @@ function encodeInfo(outside, inside, marker) {
       // Letter inside:
       // we have to encode *both* letters for `_` as it is looser.
       // it already forms for `*` (and GFMs `~`).
-      marker === "_" ? { inside: true, outside: true } : { inside: false, outside: false }
+      marker2 === "_" ? { inside: true, outside: true } : { inside: false, outside: false }
     ) : insideKind === 1 ? (
       // Whitespace inside: encode both (letter, whitespace).
       { inside: true, outside: true }
@@ -41169,13 +41273,13 @@ var init_encode_info = __esm({
 
 // node_modules/.pnpm/mdast-util-to-markdown@2.1.2/node_modules/mdast-util-to-markdown/lib/handle/emphasis.js
 function emphasis(node2, _, state, info) {
-  const marker = checkEmphasis(state);
+  const marker2 = checkEmphasis(state);
   const exit3 = state.enter("emphasis");
   const tracker = state.createTracker(info);
-  const before = tracker.move(marker);
+  const before = tracker.move(marker2);
   let between = tracker.move(
     state.containerPhrasing(node2, {
-      after: marker,
+      after: marker2,
       before,
       ...tracker.current()
     })
@@ -41184,17 +41288,17 @@ function emphasis(node2, _, state, info) {
   const open = encodeInfo(
     info.before.charCodeAt(info.before.length - 1),
     betweenHead,
-    marker
+    marker2
   );
   if (open.inside) {
     between = encodeCharacterReference(betweenHead) + between.slice(1);
   }
   const betweenTail = between.charCodeAt(between.length - 1);
-  const close = encodeInfo(info.after.charCodeAt(0), betweenTail, marker);
+  const close = encodeInfo(info.after.charCodeAt(0), betweenTail, marker2);
   if (close.inside) {
     between = between.slice(0, -1) + encodeCharacterReference(betweenTail);
   }
-  const after = tracker.move(marker);
+  const after = tracker.move(marker2);
   exit3();
   state.attentionEncodeSurroundingInfo = {
     after: close.outside,
@@ -41621,13 +41725,13 @@ var init_link_reference = __esm({
 
 // node_modules/.pnpm/mdast-util-to-markdown@2.1.2/node_modules/mdast-util-to-markdown/lib/util/check-bullet.js
 function checkBullet(state) {
-  const marker = state.options.bullet || "*";
-  if (marker !== "*" && marker !== "+" && marker !== "-") {
+  const marker2 = state.options.bullet || "*";
+  if (marker2 !== "*" && marker2 !== "+" && marker2 !== "-") {
     throw new Error(
-      "Cannot serialize items with `" + marker + "` for `options.bullet`, expected `*`, `+`, or `-`"
+      "Cannot serialize items with `" + marker2 + "` for `options.bullet`, expected `*`, `+`, or `-`"
     );
   }
-  return marker;
+  return marker2;
 }
 var init_check_bullet = __esm({
   "node_modules/.pnpm/mdast-util-to-markdown@2.1.2/node_modules/mdast-util-to-markdown/lib/util/check-bullet.js"() {
@@ -41661,13 +41765,13 @@ var init_check_bullet_other = __esm({
 
 // node_modules/.pnpm/mdast-util-to-markdown@2.1.2/node_modules/mdast-util-to-markdown/lib/util/check-bullet-ordered.js
 function checkBulletOrdered(state) {
-  const marker = state.options.bulletOrdered || ".";
-  if (marker !== "." && marker !== ")") {
+  const marker2 = state.options.bulletOrdered || ".";
+  if (marker2 !== "." && marker2 !== ")") {
     throw new Error(
-      "Cannot serialize items with `" + marker + "` for `options.bulletOrdered`, expected `.` or `)`"
+      "Cannot serialize items with `" + marker2 + "` for `options.bulletOrdered`, expected `.` or `)`"
     );
   }
-  return marker;
+  return marker2;
 }
 var init_check_bullet_ordered = __esm({
   "node_modules/.pnpm/mdast-util-to-markdown@2.1.2/node_modules/mdast-util-to-markdown/lib/util/check-bullet-ordered.js"() {
@@ -41676,13 +41780,13 @@ var init_check_bullet_ordered = __esm({
 
 // node_modules/.pnpm/mdast-util-to-markdown@2.1.2/node_modules/mdast-util-to-markdown/lib/util/check-rule.js
 function checkRule(state) {
-  const marker = state.options.rule || "*";
-  if (marker !== "*" && marker !== "-" && marker !== "_") {
+  const marker2 = state.options.rule || "*";
+  if (marker2 !== "*" && marker2 !== "-" && marker2 !== "_") {
     throw new Error(
-      "Cannot serialize rules with `" + marker + "` for `options.rule`, expected `*`, `-`, or `_`"
+      "Cannot serialize rules with `" + marker2 + "` for `options.rule`, expected `*`, `-`, or `_`"
     );
   }
-  return marker;
+  return marker2;
 }
 var init_check_rule = __esm({
   "node_modules/.pnpm/mdast-util-to-markdown@2.1.2/node_modules/mdast-util-to-markdown/lib/util/check-rule.js"() {
@@ -41856,13 +41960,13 @@ var init_root = __esm({
 
 // node_modules/.pnpm/mdast-util-to-markdown@2.1.2/node_modules/mdast-util-to-markdown/lib/util/check-strong.js
 function checkStrong(state) {
-  const marker = state.options.strong || "*";
-  if (marker !== "*" && marker !== "_") {
+  const marker2 = state.options.strong || "*";
+  if (marker2 !== "*" && marker2 !== "_") {
     throw new Error(
-      "Cannot serialize strong with `" + marker + "` for `options.strong`, expected `*`, or `_`"
+      "Cannot serialize strong with `" + marker2 + "` for `options.strong`, expected `*`, or `_`"
     );
   }
-  return marker;
+  return marker2;
 }
 var init_check_strong = __esm({
   "node_modules/.pnpm/mdast-util-to-markdown@2.1.2/node_modules/mdast-util-to-markdown/lib/util/check-strong.js"() {
@@ -41871,13 +41975,13 @@ var init_check_strong = __esm({
 
 // node_modules/.pnpm/mdast-util-to-markdown@2.1.2/node_modules/mdast-util-to-markdown/lib/handle/strong.js
 function strong(node2, _, state, info) {
-  const marker = checkStrong(state);
+  const marker2 = checkStrong(state);
   const exit3 = state.enter("strong");
   const tracker = state.createTracker(info);
-  const before = tracker.move(marker + marker);
+  const before = tracker.move(marker2 + marker2);
   let between = tracker.move(
     state.containerPhrasing(node2, {
-      after: marker,
+      after: marker2,
       before,
       ...tracker.current()
     })
@@ -41886,17 +41990,17 @@ function strong(node2, _, state, info) {
   const open = encodeInfo(
     info.before.charCodeAt(info.before.length - 1),
     betweenHead,
-    marker
+    marker2
   );
   if (open.inside) {
     between = encodeCharacterReference(betweenHead) + between.slice(1);
   }
   const betweenTail = between.charCodeAt(between.length - 1);
-  const close = encodeInfo(info.after.charCodeAt(0), betweenTail, marker);
+  const close = encodeInfo(info.after.charCodeAt(0), betweenTail, marker2);
   if (close.inside) {
     between = between.slice(0, -1) + encodeCharacterReference(betweenTail);
   }
-  const after = tracker.move(marker + marker);
+  const after = tracker.move(marker2 + marker2);
   exit3();
   state.attentionEncodeSurroundingInfo = {
     after: close.outside,
@@ -42729,17 +42833,17 @@ function resolveToPotentialGfmFootnoteCall(events, context) {
     start: Object.assign({}, events[index2 + 3][1].start),
     end: Object.assign({}, events[events.length - 1][1].end)
   };
-  const marker = {
+  const marker2 = {
     type: "gfmFootnoteCallMarker",
     start: Object.assign({}, events[index2 + 3][1].end),
     end: Object.assign({}, events[index2 + 3][1].end)
   };
-  marker.end.column++;
-  marker.end.offset++;
-  marker.end._bufferIndex++;
+  marker2.end.column++;
+  marker2.end.offset++;
+  marker2.end._bufferIndex++;
   const string3 = {
     type: "gfmFootnoteCallString",
-    start: Object.assign({}, marker.end),
+    start: Object.assign({}, marker2.end),
     end: Object.assign({}, events[events.length - 1][1].start)
   };
   const chunk = {
@@ -42757,8 +42861,8 @@ function resolveToPotentialGfmFootnoteCall(events, context) {
     events[index2 + 3],
     events[index2 + 4],
     // The `^`.
-    ["enter", marker, context],
-    ["exit", marker, context],
+    ["enter", marker2, context],
+    ["exit", marker2, context],
     // Everything in between.
     ["enter", string3, context],
     ["enter", chunk, context],
@@ -66547,7 +66651,7 @@ var init_dist2 = __esm({
 function controlPlane(overrides = {}) {
   const bindings = { claudeAdapter: claudeAdapter2, Decision: Decision2, EventKind: EventKind2, ...overrides };
   if (!bindings.claudeAdapter || !bindings.Decision || !bindings.EventKind)
-    throw new Error("agent-control-plane-core is unavailable");
+    throw missingPackageError("agent-control-plane-core");
   return (
     /** @type {ReturnType<typeof controlPlane>} */
     bindings
@@ -66585,35 +66689,48 @@ async function runJudgeCli(hookName, judge, {
     onError(err, input);
   }
 }
-var claudeAdapter2, Decision2, EventKind2;
+var claudeAdapter2, Decision2, EventKind2, marker, loaded;
 var init_control_plane2 = __esm({
   async "claude-hooks/lib/control-plane.mjs"() {
     "use strict";
     init_hook_io();
-    {
-      const { claudeAdapter: adapter } = (
-        /** @type {Partial<typeof import("agent-control-plane-core/claude")>} */
-        await lazyImport("agent-control-plane-core/claude")
+    marker = hookgateMarkerPath();
+    loaded = await awaitLazyDependency({
+      tryImport: async () => {
+        const { claudeAdapter: adapter } = (
+          /** @type {Partial<typeof import("agent-control-plane-core/claude")>} */
+          await lazyImport("agent-control-plane-core/claude")
+        );
+        const { Decision: decision, EventKind: eventKind } = (
+          /** @type {Partial<typeof import("agent-control-plane-core")>} */
+          await lazyImport("agent-control-plane-core")
+        );
+        if (!adapter || !decision || !eventKind) return null;
+        return { claudeAdapter: adapter, Decision: decision, EventKind: eventKind };
+      },
+      markerPresent: () => markerIsTrusted(marker),
+      setupAlive: () => probeSetupAlive(marker)
+    });
+    if (loaded) {
+      const bound = (
+        /** @type {{ claudeAdapter: typeof claudeAdapter, Decision: typeof Decision, EventKind: typeof EventKind }} */
+        loaded
       );
-      const { Decision: decision, EventKind: eventKind } = (
-        /** @type {Partial<typeof import("agent-control-plane-core")>} */
-        await lazyImport("agent-control-plane-core")
-      );
-      claudeAdapter2 = adapter;
-      Decision2 = decision;
-      EventKind2 = eventKind;
+      claudeAdapter2 = bound.claudeAdapter;
+      Decision2 = bound.Decision;
+      EventKind2 = bound.EventKind;
     }
   }
 });
 
 // claude-hooks/lib/invisible-alert.mjs
-import { readFileSync } from "node:fs";
-import { createHash } from "node:crypto";
+import { readFileSync as readFileSync2 } from "node:fs";
+import { createHash as createHash2 } from "node:crypto";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 function invisibleCharAlert() {
   if (!markerIsTrusted(ALERT_FILE)) return null;
-  const raw = readFileSync(ALERT_FILE, "utf-8").trim();
+  const raw = readFileSync2(ALERT_FILE, "utf-8").trim();
   return scrubUntrustedText(raw, applyLayer12);
 }
 function alertAcknowledged() {
@@ -66636,7 +66753,7 @@ var init_invisible_alert = __esm({
     ({ applyLayer1: applyLayer12 } = /** @type {typeof import("agent-sanitizer")} */
     await lazyImport("agent-sanitizer"));
     PROJECT_DIR = process.env.CLAUDE_PROJECT_DIR || process.cwd();
-    PROJECT_HASH = createHash("sha256").update(PROJECT_DIR).digest("hex").slice(0, 8);
+    PROJECT_HASH = createHash2("sha256").update(PROJECT_DIR).digest("hex").slice(0, 8);
     ALERT_FILE = join(
       tmpdir(),
       `.claude-invisible-char-alert-${PROJECT_HASH}`
@@ -67196,13 +67313,15 @@ var init_trace2 = __esm({
 // claude-hooks/pretooluse-sanitize.mjs
 var pretooluse_sanitize_exports = {};
 __export(pretooluse_sanitize_exports, {
+  PRE_TOOL_USE_MESSAGES: () => PRE_TOOL_USE_MESSAGES,
   buildPreToolUseResponse: () => buildPreToolUseResponse,
   cliMain: () => cliMain,
+  depLoadHint: () => depLoadHint,
   failClosedFields: () => failClosedFields,
   judgePreToolUseSanitize: () => judgePreToolUseSanitize
 });
 import { createRequire as createRequire4 } from "node:module";
-import { readFileSync as readFileSync2 } from "node:fs";
+import { readFileSync as readFileSync3 } from "node:fs";
 function emitTraced(toolName, fields) {
   let outcome = "modified";
   if (fields === null) outcome = "noop";
@@ -67277,17 +67396,22 @@ function assembleResponse({
   if (pendingGateAck) acknowledgeAlert();
   return fields;
 }
-async function judgePreToolUseSanitize(event, rehydrate) {
+async function judgePreToolUseSanitize(event, rehydrate, opts = {}) {
+  const { gates = [] } = opts;
+  const messages = { ...PRE_TOOL_USE_MESSAGES, ...opts.messages };
   const { Decision: Decision3, EventKind: EventKind3 } = controlPlane();
   if (event.event === EventKind3.UNKNOWN)
-    return {
-      decision: Decision3.DENY,
-      reason: "PreToolUse sanitization blocked (fail-closed): unrecognized hook payload."
-    };
-  const fields = await buildPreToolUseResponse(
-    { tool_name: event.tool, tool_input: event.input },
-    rehydrate
-  );
+    return { decision: Decision3.DENY, reason: messages.unknownEvent };
+  const input = {
+    tool_name: event.tool,
+    tool_input: event.input,
+    session_id: event.meta?.session_id
+  };
+  for (const gate of gates) {
+    const denyReason = gate(input);
+    if (denyReason) return { decision: Decision3.DENY, reason: denyReason };
+  }
+  const fields = await buildPreToolUseResponse(input, rehydrate);
   if (fields === null) return { decision: Decision3.ALLOW };
   const verdict = {
     decision: fields.permissionDecision ?? Decision3.ALLOW
@@ -67303,26 +67427,48 @@ async function judgePreToolUseSanitize(event, rehydrate) {
     verdict
   );
 }
-function failClosedFields(parsedOk, err) {
+function depLoadHint(err, remedy = DEFAULT_MISSING_PACKAGE_REMEDY, failedPackages = failedLazyPackages, loadErrorFor = lazyImportErrorFor) {
+  if (
+    /** @type {{code?: unknown}} */
+    err?.code === "DEP_UNAVAILABLE"
+  )
+    return "";
+  if (!(err instanceof TypeError)) return "";
+  const [pkg] = failedPackages();
+  return pkg === void 0 ? "" : ` ${missingPackageMessage(pkg, loadErrorFor(pkg), remedy)}`;
+}
+function failClosedFields(parsedOk, err, opts = {}) {
+  const { hint = depLoadHint(err) } = opts;
+  const messages = { ...PRE_TOOL_USE_MESSAGES, ...opts.messages };
+  const cause = `${safeErrMessage(err)}${hint}`;
   return {
     permissionDecision: parsedOk ? PermissionDecision.ASK : PermissionDecision.DENY,
-    permissionDecisionReason: parsedOk ? `PreToolUse sanitization failed (fail-closed): ${safeErrMessage(err)}` : `PreToolUse input unparsable (fail-closed): ${safeErrMessage(err)}`
+    permissionDecisionReason: parsedOk ? messages.failed(cause) : messages.unparsable(cause)
   };
 }
-async function cliMain() {
-  await runJudgeCli("pretooluse-sanitize", judgePreToolUseSanitize, {
-    // Fail closed WITHOUT the package: unparsable INPUT (`input` undefined)
-    // hard-denies (adversary-inducible, no benefit to failing); any throw
-    // after a clean parse — a layer engine down or the control-plane package
-    // unavailable — asks to keep a human in the loop. emitHookResponse renders
-    // natively, so this posture holds even when the adapter never loaded.
-    onError: (err, input) => emitHookResponse(
-      HookEvent.PRE_TOOL_USE,
-      failClosedFields(input !== void 0, err)
-    )
-  });
+async function cliMain(opts = {}) {
+  const { gates = [], remedy } = opts;
+  const messages = { ...PRE_TOOL_USE_MESSAGES, ...opts.messages };
+  await runJudgeCli(
+    HOOK_NAME,
+    (event) => judgePreToolUseSanitize(event, void 0, { messages, gates }),
+    {
+      // Fail closed WITHOUT the package: unparsable INPUT (`input` undefined)
+      // hard-denies (adversary-inducible, no benefit to failing); any throw
+      // after a clean parse — a layer engine down or the control-plane package
+      // unavailable — asks to keep a human in the loop. emitHookResponse renders
+      // natively, so this posture holds even when the adapter never loaded.
+      onError: (err, input) => emitHookResponse(
+        HookEvent.PRE_TOOL_USE,
+        failClosedFields(input !== void 0, err, {
+          messages,
+          hint: depLoadHint(err, remedy)
+        })
+      )
+    }
+  );
 }
-var HOOK_NAME, normalizeConfusables2, normalizeContext2, rehydrateRedacted2, require5, confusableScan, redactorIo, defaultRehydrate;
+var HOOK_NAME, PRE_TOOL_USE_MESSAGES, normalizeConfusables2, normalizeContext2, rehydrateRedacted2, require5, confusableScan, redactorIo, defaultRehydrate;
 var init_pretooluse_sanitize = __esm({
   async "claude-hooks/pretooluse-sanitize.mjs"() {
     "use strict";
@@ -67333,6 +67479,11 @@ var init_pretooluse_sanitize = __esm({
     init_redactor_client();
     init_trace2();
     HOOK_NAME = "pretooluse-sanitize";
+    PRE_TOOL_USE_MESSAGES = Object.freeze({
+      unknownEvent: "PreToolUse sanitization blocked (fail-closed): unrecognized hook payload.",
+      failed: (cause) => `PreToolUse sanitization failed (fail-closed): ${cause}`,
+      unparsable: (cause) => `PreToolUse input unparsable (fail-closed): ${cause}`
+    });
     ({ normalizeConfusables: normalizeConfusables2, normalizeContext: normalizeContext2 } = /** @type {typeof import("agent-sanitizer/confusables")} */
     await lazyImport("agent-sanitizer/confusables"));
     ({ rehydrateRedacted: rehydrateRedacted2 } = /** @type {typeof import("agent-sanitizer/rehydrate")} */
@@ -67342,7 +67493,7 @@ var init_pretooluse_sanitize = __esm({
       text5
     );
     redactorIo = {
-      readFile: (path2) => readFileSync2(path2, "utf8"),
+      readFile: (path2) => readFileSync3(path2, "utf8"),
       redactMap: async (text5) => (
         /** @type {any} */
         await redactViaDaemon(text5, { map: true })
@@ -67385,7 +67536,7 @@ var init_secret_annotate = __esm({
 });
 
 // claude-hooks/lib/reveal.mjs
-import { createHash as createHash2 } from "node:crypto";
+import { createHash as createHash3 } from "node:crypto";
 import { mkdirSync, lstatSync as lstatSync3 } from "node:fs";
 import { tmpdir as tmpdir3, userInfo as userInfo3 } from "node:os";
 import { join as join3, resolve, sep } from "node:path";
@@ -67393,7 +67544,7 @@ function revealDir() {
   return process.env._AGENT_SANITIZER_REVEAL_DIR || join3(tmpdir3(), "agent-sanitizer-layer2-reveal");
 }
 function revealPathFor(content3) {
-  const digest = createHash2("sha256").update(content3, "utf8").digest("hex");
+  const digest = createHash3("sha256").update(content3, "utf8").digest("hex");
   return join3(revealDir(), `${digest}.txt`);
 }
 function revealDirIsSafe(dir) {
@@ -67612,8 +67763,9 @@ function failClosedReplacement(input, message) {
 function sanitizerDepsLoaded() {
   return typeof sanitizeTextSeam === "function" && typeof suppressToolOutput2 === "function";
 }
-function failClosedContext(depsLoaded = sanitizerDepsLoaded) {
-  return depsLoaded() ? FAIL_CLOSED_CONTEXT : FAIL_CLOSED_CONTEXT + MISSING_DEPS_HINT;
+function failClosedContext(depsLoaded = sanitizerDepsLoaded, remedy = DEFAULT_MISSING_PACKAGE_REMEDY) {
+  if (depsLoaded()) return FAIL_CLOSED_CONTEXT;
+  return `${FAIL_CLOSED_CONTEXT} ${missingPackageMessage("agent-sanitizer", lazyImportErrorFor("agent-sanitizer"), remedy)}`;
 }
 function emitFailClosed(input, message, emit = (fields) => emitHookResponse(HookEvent.POST_TOOL_USE, fields)) {
   const additionalContext = failClosedContext();
@@ -67725,7 +67877,7 @@ async function cliMain2(ext = {}) {
     }
   );
 }
-var _sanitizer, HTML_TAG_PRESENT2, applyLayer13, matchesSecretHint2, SECRET_HINT2, SECRET_HINT_EXT2, _output, sanitizeTextSeam, composeContextSeam, describeRemoved3, describeWarned3, suppressToolOutput2, HOOK_NAME2, SANITIZE_BUDGET_MS, SGR_OUTPUT_NOTE, WEB_INGRESS_TOOLS, FAIL_CLOSED_CONTEXT, MISSING_DEPS_HINT;
+var _sanitizer, HTML_TAG_PRESENT2, applyLayer13, matchesSecretHint2, SECRET_HINT2, SECRET_HINT_EXT2, _output, sanitizeTextSeam, composeContextSeam, describeRemoved3, describeWarned3, suppressToolOutput2, HOOK_NAME2, SANITIZE_BUDGET_MS, SGR_OUTPUT_NOTE, WEB_INGRESS_TOOLS, FAIL_CLOSED_CONTEXT;
 var init_sanitize_output = __esm({
   async "claude-hooks/sanitize-output.mjs"() {
     "use strict";
@@ -67751,7 +67903,6 @@ var init_sanitize_output = __esm({
     SGR_OUTPUT_NOTE = "Display-only ANSI color stripped; pipe through cat -v to inspect raw escapes.";
     WEB_INGRESS_TOOLS = /* @__PURE__ */ new Set(["WebFetch", "WebSearch"]);
     FAIL_CLOSED_CONTEXT = "CRITICAL: sanitize-output hook failed; this tool's output was suppressed (replaced with a placeholder) to fail closed -- the unsanitized output was not shown. Investigate the hook error before relying on this tool.";
-    MISSING_DEPS_HINT = " The cause is a missing dependency (agent-sanitizer did not load), not a hook defect: reinstall the plugin, then retry the tool call.";
     if (isMain(import.meta.url)) {
       await cliMain2();
     }
@@ -67820,21 +67971,19 @@ var init_prompt = __esm({
 // claude-hooks/sanitize-user-prompt.mjs
 var sanitize_user_prompt_exports = {};
 __export(sanitize_user_prompt_exports, {
+  USER_PROMPT_MESSAGES: () => USER_PROMPT_MESSAGES,
   classifyPrompt: () => classifyPrompt2,
   judgeSanitizeUserPrompt: () => judgeSanitizeUserPrompt,
   main: () => main
 });
-function judgeSanitizeUserPrompt(event, strip = stripAnsiFully3) {
+function judgeSanitizeUserPrompt(event, strip = stripAnsiFully3, overrides = USER_PROMPT_MESSAGES) {
+  const messages = { ...USER_PROMPT_MESSAGES, ...overrides };
   const { Decision: Decision3, EventKind: EventKind3 } = controlPlane();
   if (event.event === EventKind3.UNKNOWN)
-    return {
-      decision: Decision3.DENY,
-      reason: "User prompt blocked (fail-closed): unrecognized hook payload."
-    };
+    return { decision: Decision3.DENY, reason: messages.unknownEvent };
   if (event.event !== EventKind3.PROMPT_SUBMIT)
     return { decision: Decision3.ALLOW };
-  if (typeof strip !== "function")
-    throw new Error("agent-sanitizer is unavailable");
+  if (typeof strip !== "function") throw missingPackageError("agent-sanitizer");
   const prompt = (
     /** @type {string} */
     event.input.prompt
@@ -67843,18 +67992,19 @@ function judgeSanitizeUserPrompt(event, strip = stripAnsiFully3) {
   const verdict = classifyPrompt2(prompt, strip);
   if (verdict.action === "pass") return { decision: Decision3.ALLOW };
   if (verdict.action === "note")
-    return { decision: Decision3.ALLOW, additional_context: SGR_NOTE };
+    return { decision: Decision3.ALLOW, additional_context: messages.sgrNote };
   return {
     decision: Decision3.DENY,
     reason: verdict.reason,
-    additional_context: BLOCK_CONTEXT
+    additional_context: messages.blockContext
   };
 }
-async function main(read, write, strip = stripAnsiFully3) {
+async function main(read, write, strip = stripAnsiFully3, overrides = USER_PROMPT_MESSAGES) {
+  const messages = { ...USER_PROMPT_MESSAGES, ...overrides };
   await runJudgeCli(
     "sanitize-user-prompt",
     (event) => {
-      const verdict = judgeSanitizeUserPrompt(event, strip);
+      const verdict = judgeSanitizeUserPrompt(event, strip, messages);
       trace(TraceEvent.HOOK_RAN, {
         hook: "sanitize-user-prompt",
         outcome: verdict.decision === controlPlane().Decision.DENY ? "deny" : verdict.additional_context ? "note" : "allow"
@@ -67867,21 +68017,25 @@ async function main(read, write, strip = stripAnsiFully3) {
       onError: (err) => write(
         JSON.stringify({
           decision: "block",
-          reason: `sanitize-user-prompt hook failed (fail-closed): ${safeErrMessage(err)}`
+          reason: messages.hookFailed(safeErrMessage(err))
         })
       )
     }
   );
 }
-var classifyPrompt2, stripAnsiFully3, BLOCK_CONTEXT, SGR_NOTE;
+var classifyPrompt2, stripAnsiFully3, USER_PROMPT_MESSAGES;
 var init_sanitize_user_prompt = __esm({
   async "claude-hooks/sanitize-user-prompt.mjs"() {
     "use strict";
     init_hook_io();
     await init_control_plane2();
     init_trace2();
-    BLOCK_CONTEXT = "User prompt blocked: payload-capable invisible/ANSI characters detected.";
-    SGR_NOTE = "The prompt contains ANSI SGR color codes (pasted terminal output). They are display-only formatting noise; read through them.";
+    USER_PROMPT_MESSAGES = Object.freeze({
+      unknownEvent: "User prompt blocked (fail-closed): unrecognized hook payload.",
+      blockContext: "User prompt blocked: payload-capable invisible/ANSI characters detected.",
+      sgrNote: "The prompt contains ANSI SGR color codes (pasted terminal output). They are display-only formatting noise; read through them.",
+      hookFailed: (cause) => `sanitize-user-prompt hook failed (fail-closed): ${cause}`
+    });
     try {
       ({ classifyPrompt: classifyPrompt2 } = await Promise.resolve().then(() => (init_prompt(), prompt_exports)));
       ({ stripAnsiFully: stripAnsiFully3 } = await Promise.resolve().then(() => (init_src2(), src_exports2)));
@@ -67908,8 +68062,30 @@ __export(scan_invisible_chars_exports, {
   formatReport: () => formatReport,
   scanFile: () => scanFile
 });
-import { readFileSync as readFileSync3, globSync, writeFileSync as writeFileSync2, unlinkSync as unlinkSync2 } from "node:fs";
+import { readFileSync as readFileSync4, globSync, writeFileSync as writeFileSync2, unlinkSync as unlinkSync2 } from "node:fs";
 import { join as join4, relative } from "node:path";
+async function ensureSanitizerLoaded() {
+  if (typeof stripInvisible3 === "function") return true;
+  const marker2 = hookgateMarkerPath();
+  const reloaded = await awaitLazyDependency({
+    tryImport: async () => {
+      const mod = await lazyImport("agent-sanitizer/invisible");
+      return typeof mod.stripInvisible === "function" ? mod : null;
+    },
+    markerPresent: () => markerIsTrusted(marker2),
+    setupAlive: () => probeSetupAlive(marker2)
+  });
+  if (!reloaded) return false;
+  ({
+    LONG_RUN_RE: LONG_RUN_RE3,
+    LONG_RUN_THRESHOLD: LONG_RUN_THRESHOLD2,
+    SCATTERED_THRESHOLD: TOTAL_INVISIBLE_THRESHOLD,
+    STRIP: STRIP3,
+    stripInvisible: stripInvisible3
+  } = /** @type {typeof import("agent-sanitizer/invisible")} */
+  reloaded);
+  return true;
+}
 function decodeRun(run) {
   const cps = [...run].map((ch) => (
     /** @type {number} */
@@ -67949,7 +68125,7 @@ function findInstructionFiles(dir) {
   }).map((name50) => join4(dir, name50));
 }
 function scanFile(filePath) {
-  const content3 = readFileSync3(filePath, "utf-8");
+  const content3 = readFileSync4(filePath, "utf-8");
   const findings = [];
   LONG_RUN_RE3.lastIndex = 0;
   let match;
@@ -68019,10 +68195,10 @@ function scanProject() {
   return allFindings;
 }
 async function cliMain3() {
-  if (typeof stripInvisible3 !== "function") {
+  if (!await ensureSanitizerLoaded()) {
     trace(TraceEvent.SCAN_INVISIBLE_CHARS_RAN, { outcome: "skipped" });
     process.stderr.write(
-      "scan-invisible-chars: agent-sanitizer failed to load; instruction files were NOT scanned for hidden Unicode.\n"
+      "scan-invisible-chars: agent-sanitizer failed to load (node deps not installed and session-setup did not finish in time); instruction files were NOT scanned for hidden Unicode. Run `pnpm install`.\n"
     );
     process.exit(1);
   }
@@ -68045,7 +68221,7 @@ async function cliMain3() {
   for (const { file } of allFindings) {
     const absPath = join4(PROJECT_DIR, file);
     try {
-      const original = readFileSync3(absPath, "utf-8");
+      const original = readFileSync4(absPath, "utf-8");
       const stripped = stripInvisible3(original);
       if (stripped !== original) {
         writeFileSync2(absPath, stripped);
@@ -68100,16 +68276,16 @@ var LAZY_LOADERS = {
   "namespace-guard": () => Promise.resolve().then(() => (init_dist2(), dist_exports))
 };
 async function registerAvailableModules() {
-  const loaded = {};
+  const loaded2 = {};
   await Promise.all(
     Object.entries(LAZY_LOADERS).map(async ([specifier, load]) => {
       try {
-        loaded[specifier] = await load();
+        loaded2[specifier] = await load();
       } catch {
       }
     })
   );
-  registerLazyModules(loaded);
+  registerLazyModules(loaded2);
 }
 async function main2() {
   claimCliEntry();

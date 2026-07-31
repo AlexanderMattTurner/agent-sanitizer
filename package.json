@@ -168,6 +168,34 @@
     "./claude-hooks/lib/control-plane": {
       "types": "./types/claude-hooks/lib/control-plane.d.mts",
       "default": "./claude-hooks/lib/control-plane.mjs"
+    },
+    "./claude-hooks/lib/invisible-alert": {
+      "types": "./types/claude-hooks/lib/invisible-alert.d.mts",
+      "default": "./claude-hooks/lib/invisible-alert.mjs"
+    },
+    "./claude-hooks/lib/authored-content": {
+      "types": "./types/claude-hooks/lib/authored-content.d.mts",
+      "default": "./claude-hooks/lib/authored-content.mjs"
+    },
+    "./claude-hooks/lib/env-config": {
+      "types": "./types/claude-hooks/lib/env-config.d.mts",
+      "default": "./claude-hooks/lib/env-config.mjs"
+    },
+    "./claude-hooks/lib/secret-annotate": {
+      "types": "./types/claude-hooks/lib/secret-annotate.d.mts",
+      "default": "./claude-hooks/lib/secret-annotate.mjs"
+    },
+    "./claude-hooks/lib/reveal": {
+      "types": "./types/claude-hooks/lib/reveal.d.mts",
+      "default": "./claude-hooks/lib/reveal.mjs"
+    },
+    "./claude-hooks/lib/redactor-client": {
+      "types": "./types/claude-hooks/lib/redactor-client.d.mts",
+      "default": "./claude-hooks/lib/redactor-client.mjs"
+    },
+    "./claude-hooks/lib/trace": {
+      "types": "./types/claude-hooks/lib/trace.d.mts",
+      "default": "./claude-hooks/lib/trace.mjs"
     }
   },
   "files": [

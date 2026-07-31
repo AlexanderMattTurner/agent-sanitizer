@@ -18,7 +18,12 @@
  * (cursor movement, erase, OSC title-set, DCS/APC/PM) still blocks, as do the
  * invisible-char thresholds, which are the actual web-paste payload defense.
  */
-import { readStdinJson, safeErrMessage, isMain } from "./lib/hook-io.mjs";
+import {
+  readStdinJson,
+  safeErrMessage,
+  isMain,
+  missingPackageError,
+} from "./lib/hook-io.mjs";
 import { controlPlane, runJudgeCli } from "./lib/control-plane.mjs";
 import { trace, TraceEvent } from "./lib/trace.mjs";
 // classifyPrompt (the user-prompt verdict) and stripAnsiFully (its ANSI stripper)
@@ -33,10 +38,28 @@ export let classifyPrompt;
 /** @type {typeof import("agent-sanitizer").stripAnsiFully} */
 let stripAnsiFully;
 
-const BLOCK_CONTEXT =
-  "User prompt blocked: payload-capable invisible/ANSI characters detected.";
-const SGR_NOTE =
-  "The prompt contains ANSI SGR color codes (pasted terminal output). They are display-only formatting noise; read through them.";
+/**
+ * The reasons this gate emits, as a table a host overrides. A host that knows
+ * which of ITS files wires the adapter, and what a reader should do about a
+ * failure, can say so — the package cannot, since it has no idea where it is
+ * installed. Every field is a plain string or a string-returning function, so
+ * an override is auditable next to the default it replaces.
+ * @type {Readonly<{
+ *   unknownEvent: string,
+ *   blockContext: string,
+ *   sgrNote: string,
+ *   hookFailed: (cause: string) => string,
+ * }>}
+ */
+export const USER_PROMPT_MESSAGES = Object.freeze({
+  unknownEvent: "User prompt blocked (fail-closed): unrecognized hook payload.",
+  blockContext:
+    "User prompt blocked: payload-capable invisible/ANSI characters detected.",
+  sgrNote:
+    "The prompt contains ANSI SGR color codes (pasted terminal output). They are display-only formatting noise; read through them.",
+  hookFailed: (cause) =>
+    `sanitize-user-prompt hook failed (fail-closed): ${cause}`,
+});
 
 /* c8 ignore start — module-load boundary: the imports resolve in every real
  * run, and their failure (the package absent) can't be simulated in-process, so
@@ -67,9 +90,20 @@ try {
  * @param {import("agent-control-plane-core").ToolCallEvent} event
  * @param {((s: string) => string) | null} [strip]  the ANSI stripper (defaults
  *   to the package's stripAnsiFully; injectable so the fail-closed path is testable)
+ * @param {Partial<typeof USER_PROMPT_MESSAGES>} [overrides]  reason overrides,
+ *   merged over the defaults so a partial table can never leave a field unset
  * @returns {import("agent-control-plane-core").Verdict}
  */
-export function judgeSanitizeUserPrompt(event, strip = stripAnsiFully) {
+export function judgeSanitizeUserPrompt(
+  event,
+  strip = stripAnsiFully,
+  overrides = USER_PROMPT_MESSAGES,
+) {
+  // MERGED over the defaults, never substituted for them — a host that overrides
+  // one field would otherwise leave the rest undefined. main() threads the same
+  // object into its onError, where a missing field throws out of the catch and
+  // the gate emits nothing, which the harness reads as a pass: fail OPEN.
+  const messages = { ...USER_PROMPT_MESSAGES, ...overrides };
   const { Decision, EventKind } = controlPlane();
   // A payload the adapter cannot classify carries no readable prompt, so an
   // abstain would fail OPEN on harness contract drift; this gate's posture is
@@ -77,18 +111,14 @@ export function judgeSanitizeUserPrompt(event, strip = stripAnsiFully) {
   // channel — a non-PRE_TOOL event has no permissionDecision body — which Claude
   // honors on UserPromptSubmit.)
   if (event.event === EventKind.UNKNOWN)
-    return {
-      decision: Decision.DENY,
-      reason: "User prompt blocked (fail-closed): unrecognized hook payload.",
-    };
+    return { decision: Decision.DENY, reason: messages.unknownEvent };
   if (event.event !== EventKind.PROMPT_SUBMIT)
     return { decision: Decision.ALLOW };
   // The module-load guard: a missing stripper means agent-sanitizer never
   // loaded. Guarding on the stripper alone is sufficient — it loads AFTER
   // classifyPrompt in the same try, so a present stripper proves the classifier
   // loaded too.
-  if (typeof strip !== "function")
-    throw new Error("agent-sanitizer is unavailable");
+  if (typeof strip !== "function") throw missingPackageError("agent-sanitizer");
   // The contract guarantees a string here: every adapter normalizes the
   // prompt-submit input (Claude's parse coerces a missing/non-string prompt to
   // "" via asString), so a defensive typeof re-check is a dead branch.
@@ -97,13 +127,13 @@ export function judgeSanitizeUserPrompt(event, strip = stripAnsiFully) {
   const verdict = classifyPrompt(prompt, strip);
   if (verdict.action === "pass") return { decision: Decision.ALLOW };
   if (verdict.action === "note")
-    return { decision: Decision.ALLOW, additional_context: SGR_NOTE };
+    return { decision: Decision.ALLOW, additional_context: messages.sgrNote };
   // block: carry the reason AND a context note — UserPromptSubmit can't rewrite
   // the prompt, so the context is the only forward signal about why it dropped.
   return {
     decision: Decision.DENY,
     reason: verdict.reason,
-    additional_context: BLOCK_CONTEXT,
+    additional_context: messages.blockContext,
   };
 }
 
@@ -112,9 +142,19 @@ export function judgeSanitizeUserPrompt(event, strip = stripAnsiFully) {
  * @param {(chunk: string) => void} write
  * @param {((s: string) => string) | null} [strip]  the ANSI stripper (defaults
  *   to the package's stripAnsiFully; injectable so the fail-closed path is testable)
+ * @param {Partial<typeof USER_PROMPT_MESSAGES>} [overrides]  reason overrides,
+ *   merged over the defaults so a partial table can never leave a field unset
  * @returns {Promise<void>}
  */
-export async function main(read, write, strip = stripAnsiFully) {
+export async function main(
+  read,
+  write,
+  strip = stripAnsiFully,
+  overrides = USER_PROMPT_MESSAGES,
+) {
+  // Merged, not substituted — see judgeSanitizeUserPrompt. onError below is the
+  // call site where a missing field would throw out of the catch and fail OPEN.
+  const messages = { ...USER_PROMPT_MESSAGES, ...overrides };
   // Delegate the parse → judge → render → write contract to the shared
   // runJudgeCli so this hook doesn't re-implement the control-plane boundary:
   // runJudgeCli reads stdin BEFORE loading the control-plane package, so a
@@ -125,7 +165,7 @@ export async function main(read, write, strip = stripAnsiFully) {
   await runJudgeCli(
     "sanitize-user-prompt",
     (event) => {
-      const verdict = judgeSanitizeUserPrompt(event, strip);
+      const verdict = judgeSanitizeUserPrompt(event, strip, messages);
       // Announce engagement on the trace channel like the other stdin hooks —
       // a prompt gate that silently stopped running is otherwise invisible.
       trace(TraceEvent.HOOK_RAN, {
@@ -146,7 +186,7 @@ export async function main(read, write, strip = stripAnsiFully) {
         write(
           JSON.stringify({
             decision: "block",
-            reason: `sanitize-user-prompt hook failed (fail-closed): ${safeErrMessage(err)}`,
+            reason: messages.hookFailed(safeErrMessage(err)),
           }),
         ),
     },

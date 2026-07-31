@@ -28,6 +28,9 @@ import {
   errMessage,
   safeErrMessage,
   makeDeadline,
+  lazyImportErrorFor,
+  missingPackageMessage,
+  DEFAULT_MISSING_PACKAGE_REMEDY,
   HookEvent,
 } from "./lib/hook-io.mjs";
 import { controlPlane, runJudgeCli } from "./lib/control-plane.mjs";
@@ -478,13 +481,6 @@ const FAIL_CLOSED_CONTEXT =
   "(replaced with a placeholder) to fail closed -- the unsanitized output was " +
   "not shown. Investigate the hook error before relying on this tool.";
 
-// The one cause that is a broken INSTALL rather than a broken hook: the
-// sanitizer's bindings are absent, so every subsequent tool call fails closed
-// with no visible cause. Name the remedy in the emission itself.
-const MISSING_DEPS_HINT =
-  " The cause is a missing dependency (agent-sanitizer did not load), not a" +
-  " hook defect: reinstall the plugin, then retry the tool call.";
-
 /**
  * Whether the sanitizer's bindings actually loaded. lazyImport swallows a
  * missing package and yields `{}`, so the absence shows up as an undefined
@@ -501,15 +497,22 @@ export function sanitizerDepsLoaded() {
 }
 
 /**
- * The model-facing note for a fail-closed emission, with the missing-dependency
- * remedy appended when the sanitizer's bindings are the thing that is absent.
+ * The model-facing note for a fail-closed emission. When the sanitizer's own
+ * bindings are what is absent — a broken INSTALL rather than a broken hook, and
+ * otherwise invisible because every later tool call then fails closed with no
+ * stated cause — the recorded loader error and its remedy ride along. The text
+ * comes from missingPackageMessage so this hook, the PreToolUse gate and the
+ * prompt gate cannot drift apart on what a missing dependency reads like.
  * @param {() => boolean} [depsLoaded]  injectable seam for testing
+ * @param {string} [remedy]  what a reader should run; hosts pass their own
  * @returns {string}
  */
-export function failClosedContext(depsLoaded = sanitizerDepsLoaded) {
-  return depsLoaded()
-    ? FAIL_CLOSED_CONTEXT
-    : FAIL_CLOSED_CONTEXT + MISSING_DEPS_HINT;
+export function failClosedContext(
+  depsLoaded = sanitizerDepsLoaded,
+  remedy = DEFAULT_MISSING_PACKAGE_REMEDY,
+) {
+  if (depsLoaded()) return FAIL_CLOSED_CONTEXT;
+  return `${FAIL_CLOSED_CONTEXT} ${missingPackageMessage("agent-sanitizer", lazyImportErrorFor("agent-sanitizer"), remedy)}`;
 }
 
 /**

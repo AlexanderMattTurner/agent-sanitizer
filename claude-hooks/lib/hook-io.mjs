@@ -4,10 +4,12 @@ import {
   openSync,
   closeSync,
   lstatSync,
+  readFileSync,
   unlinkSync,
   writeFileSync,
 } from "node:fs";
 import { userInfo } from "node:os";
+import { createHash } from "node:crypto";
 import { pathToFileURL } from "node:url";
 
 let cliEntryClaimed = false;
@@ -155,6 +157,14 @@ export function registeredLazyModule(specifier) {
 }
 
 /**
+ * Last load error per specifier, recorded when {@link lazyImport} swallows a
+ * failed import. Read by {@link lazyImportErrorFor} so a fail-closed hook can
+ * say WHY its dependency is absent instead of a bare "unavailable".
+ * @type {Map<string, unknown>}
+ */
+const lazyImportErrors = new Map();
+
+/**
  * Dynamic-import `specifier`, yielding `{}` when the module cannot be loaded.
  * Hooks bind their npm packages through this instead of a bare static import: a
  * static npm import resolves before any try/catch, so a missing node_modules
@@ -169,12 +179,119 @@ export function registeredLazyModule(specifier) {
  */
 export async function lazyImport(specifier) {
   const registered = registeredLazyModules[specifier];
-  if (registered) return registered;
+  if (registered) {
+    lazyImportErrors.delete(specifier);
+    return registered;
+  }
   try {
-    return await import(specifier);
-  } catch {
+    const loaded = await import(specifier);
+    lazyImportErrors.delete(specifier);
+    return loaded;
+  } catch (err) {
+    // Delete before set: a Map keeps a re-set key at its ORIGINAL insertion
+    // position, and both readers below are recency-ordered — so re-recording in
+    // place would let a stale first failure outrank the one that just happened.
+    lazyImportErrors.delete(specifier);
+    lazyImportErrors.set(specifier, err);
     return {};
   }
+}
+
+/**
+ * The most recently recorded load error for `pkg` under any of its specifiers —
+ * the bare package or a subpath export (`pkg/output`, `pkg/invisible`) — or
+ * undefined when none is recorded. Hooks import a package through several
+ * subpaths; any one of them names why the package is absent, and the newest
+ * record reflects the current failure when they differ.
+ * @param {string} pkg
+ * @returns {unknown}
+ */
+export function lazyImportErrorFor(pkg) {
+  for (const [specifier, err] of [...lazyImportErrors].reverse())
+    if (specifier === pkg || specifier.startsWith(`${pkg}/`)) return err;
+  return undefined;
+}
+
+/**
+ * Package names (never relative-path specifiers) with a recorded load error,
+ * newest first — so a fail-closed reason can name whichever dependency actually
+ * failed instead of consulting a hardcoded package list.
+ * @returns {string[]}
+ */
+export function failedLazyPackages() {
+  const pkgs = new Set();
+  for (const specifier of [...lazyImportErrors.keys()].reverse()) {
+    // Only bare package names: relative/absolute paths and URL specifiers
+    // (file:, node:) are not npm packages a reinstall could restore.
+    if (!/^[\w@]/.test(specifier) || specifier.includes(":")) continue;
+    const parts = specifier.split("/");
+    pkgs.add(
+      specifier.startsWith("@") ? parts.slice(0, 2).join("/") : parts[0],
+    );
+  }
+  return [...pkgs];
+}
+
+/**
+ * The remedy {@link missingPackageMessage} states when the host does not supply
+ * one of its own. A host whose install has a specific entry point (a setup
+ * script, a devcontainer rebuild) passes that instead, so the reason names the
+ * command the reader should actually run.
+ */
+export const DEFAULT_MISSING_PACKAGE_REMEDY =
+  "reinstall the hook dependencies (pnpm install) and retry.";
+
+/**
+ * The fail-closed reason for a package a hook could not load: the recorded
+ * loader error plus the remedy. The cause is scrubbed (it is spliced into
+ * reasons shown to user and model) and its cap is COMPUTED so that
+ * prefix + cause + remedy always fits the downstream 300-char safeErrMessage
+ * re-scrub — the remedy can never be truncated off, whatever the package name.
+ * A remedy that alone exceeds that budget (roughly 260 characters) leaves the
+ * cause nothing to spend and still overruns; keep host remedies to a sentence.
+ * @param {string} pkg
+ * @param {unknown} [err]
+ * @param {string} [remedy]
+ * @returns {string}
+ */
+export function missingPackageMessage(
+  pkg,
+  err = lazyImportErrorFor(pkg),
+  remedy = DEFAULT_MISSING_PACKAGE_REMEDY,
+) {
+  const prefix = `${pkg} is unavailable: `;
+  // 2 for the "; " joiner; 12 for safeErrMessage's own "…[truncated]" marker,
+  // which lands past its cap when the cause is cut. Clamped at 0 because the
+  // remedy is host text: a long one drives the budget negative, and
+  // safeErrMessage does not clamp — `slice(0, -n)` trims from the END, returning
+  // nearly the whole cause and pushing the joined message past 300, so the
+  // downstream re-scrub cuts the remedy off. At 0 the cause degrades to the
+  // truncation marker and the remedy always survives.
+  const causeCap = Math.max(0, 300 - prefix.length - remedy.length - 2 - 12);
+  const cause =
+    err === undefined
+      ? "no load error recorded — the package likely loaded but lacks an expected export (version skew)"
+      : safeErrMessage(err, causeCap);
+  return `${prefix}${cause}; ${remedy}`;
+}
+
+/**
+ * {@link missingPackageMessage} as a throwable, tagged `code: "DEP_UNAVAILABLE"`
+ * so downstream reason-builders can recognize it structurally and not append a
+ * second copy of the same cause.
+ * @param {string} pkg
+ * @param {unknown} [err]
+ * @param {string} [remedy]
+ * @returns {Error}
+ */
+export function missingPackageError(
+  pkg,
+  err = lazyImportErrorFor(pkg),
+  remedy = DEFAULT_MISSING_PACKAGE_REMEDY,
+) {
+  return Object.assign(new Error(missingPackageMessage(pkg, err, remedy)), {
+    code: "DEP_UNAVAILABLE",
+  });
 }
 
 /**
@@ -272,6 +389,148 @@ export function emitHookResponse(hookEventName, fields) {
   process.stdout.write(
     JSON.stringify({ hookSpecificOutput: { hookEventName, ...fields } }),
   );
+}
+
+/** The marker filename stem; the project directory is appended to it. */
+const HOOKGATE_MARKER_STEM = "agent-sanitizer-hookgate-inflight-";
+
+/**
+ * Path of the cold-start in-flight marker a host's setup script writes
+ * SYNCHRONOUSLY before it starts installing deps (its own PID as the contents)
+ * and removes once the hook dependencies are provisioned. A hook that fires
+ * before setup finishes finds the marker and WAITS for its dependency rather
+ * than failing closed on it — so the first turn is merely delayed, never
+ * blocked, for as long as setup is still alive (the PID lets the hook tell a
+ * live install from a stale marker left by a killed setup). Derived purely from
+ * the raw CLAUDE_PROJECT_DIR the harness sets for both processes (no
+ * canonicalization — the two must produce byte-identical paths), so no env has
+ * to propagate from setup to the hook. Null when CLAUDE_PROJECT_DIR is unset (no
+ * setup ran → nothing to wait on).
+ * @param {string | undefined} [projectDir]
+ * @param {string | undefined} [runtimeDir]
+ * @returns {string | null}
+ */
+export function hookgateMarkerPath(
+  projectDir = process.env.CLAUDE_PROJECT_DIR,
+  runtimeDir = process.env.XDG_RUNTIME_DIR,
+) {
+  if (!projectDir) return null;
+  // Prefer the per-user, mode-0700 runtime dir when the harness gives an
+  // absolute one; else the world-writable /tmp, where markerIsTrusted() — not
+  // the path — defends against a squatted marker.
+  const base = runtimeDir && runtimeDir.startsWith("/") ? runtimeDir : "/tmp";
+  // The flattened dir is for a human reading `ls /tmp`; the digest of the RAW
+  // dir is the identity. Flattening alone is lossy — /work/a-b, /work/a_b and
+  // "/work/a b" all collapse to one name — and two such projects on one machine
+  // would then share a marker: B's hook waits out A's install for a dependency A
+  // is not installing, and A clearing the marker aborts B's legitimate wait. Both
+  // directions are silent. A setup script reproduces the digest with sha256sum.
+  const digest = createHash("sha256")
+    .update(projectDir)
+    .digest("hex")
+    .slice(0, 8);
+  const flattened = projectDir.replace(/[^A-Za-z0-9]/g, "_");
+  return `${base}/${HOOKGATE_MARKER_STEM}${flattened}-${digest}`;
+}
+
+/**
+ * Is the setup process that wrote `markerPath` still alive? `process.kill(pid, 0)`
+ * probes liveness without signalling: it throws ESRCH once the process is gone (a
+ * killed setup → stale marker, so stop waiting) and EPERM when it exists but isn't
+ * ours (still alive). An unreadable / not-yet-written marker is treated as alive —
+ * favouring a brief wait over a premature give-up during setup's write race. A null
+ * markerPath (no project dir → no setup to wait on) reads as alive so the caller's
+ * own grace/ceiling bound governs.
+ * @param {string | null} markerPath
+ * @returns {boolean}
+ */
+export function probeSetupAlive(markerPath) {
+  if (markerPath === null) return true;
+  let pid;
+  try {
+    pid = parseInt(readFileSync(markerPath, "utf8"), 10);
+  } catch {
+    return true;
+  }
+  if (!Number.isInteger(pid) || pid <= 0) return true;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (err) {
+    return /** @type {NodeJS.ErrnoException} */ (err).code === "EPERM";
+  }
+}
+
+/**
+ * Resolve a lazily-loaded dependency, blocking through the cold-start window while
+ * setup is still installing it. Returns the loaded value, or null once it gives up
+ * (the caller leaves its bindings undefined so the hook fails closed). It waits for
+ * as long as setup is genuinely alive, so a slow install is never cut off; the only
+ * bound on that wait is a backstop ceiling that stays under the hook's harness
+ * timeout — a hook killed for running over is a fail-OPEN, the opposite of what a
+ * gate wants. The give-up cases are the honest ones (setup finished/died without the
+ * dep, or no setup at all), so a genuinely-absent dep fails closed fast, never after
+ * a long block:
+ *   - import succeeds                 → return immediately (warm session: no wait).
+ *   - marker present AND setup alive  → setup is working; wait it out (ceilingMs is a
+ *                                        backstop only, for a hung-but-alive setup).
+ *   - was installing, now not (marker cleared, or a stale marker from a killed setup)
+ *                                     → settleMs grace for a just-orphaned install to
+ *                                        land, then give up: the dep is absent.
+ *   - no live setup ever seen         → wait only graceMs (tolerating setup not having
+ *                                        written the marker yet), then give up.
+ * @param {{
+ *   tryImport: () => Promise<object | null>,
+ *   markerPresent: () => boolean,
+ *   setupAlive: () => boolean,
+ *   now?: () => number,
+ *   sleep?: (ms: number) => Promise<void>,
+ *   graceMs?: number,
+ *   settleMs?: number,
+ *   ceilingMs?: number,
+ *   intervalMs?: number,
+ * }} deps
+ * @returns {Promise<object | null>}
+ */
+export async function awaitLazyDependency({
+  tryImport,
+  markerPresent,
+  setupAlive,
+  now = () => Date.now(),
+  sleep = (ms) =>
+    new Promise((resolve) => {
+      setTimeout(resolve, ms);
+    }),
+  graceMs = 5000,
+  settleMs = 1000,
+  ceilingMs = 900000,
+  intervalMs = 250,
+}) {
+  const start = now();
+  let sawInstalling = false;
+  let enteredDone = false;
+  let doneAt = 0;
+  for (;;) {
+    const bindings = await tryImport();
+    if (bindings) return bindings;
+    const installing = markerPresent() && setupAlive();
+    let giveUp;
+    if (installing) {
+      sawInstalling = true;
+      enteredDone = false;
+      giveUp = now() - start > ceilingMs;
+    } else if (sawInstalling) {
+      if (!enteredDone) {
+        enteredDone = true;
+        doneAt = now();
+      }
+      giveUp = now() - doneAt > settleMs;
+    } else {
+      giveUp = now() - start > graceMs;
+    }
+    if (giveUp) return null;
+    await sleep(intervalMs);
+  }
 }
 
 /**
