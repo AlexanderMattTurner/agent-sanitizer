@@ -8,6 +8,14 @@ adhere to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+## [2.10.1] - 2026-07-31
+
+### Changed
+
+- fix(layers): stop Layer 1 and Layer 2 deleting text a reader can see
+- fix(secrets): stop two paths that forwarded credentials in cleartext
+- docs: release 2.10.0 [skip ci]
+
 ## [2.10.0] - 2026-07-31
 
 ### Changed
