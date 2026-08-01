@@ -8,6 +8,14 @@ adhere to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+## [2.11.0] - 2026-08-01
+
+### Added
+- Claude hooks now support a host registry that drives env-bound secret configuration, and the missing-package remedy message is host-configurable.
+
+### Fixed
+- Claude hooks now validate the env-config host source lazily and completely, avoiding premature or partial validation errors.
+
 ## [2.10.1] - 2026-07-31
 
 ### Changed
