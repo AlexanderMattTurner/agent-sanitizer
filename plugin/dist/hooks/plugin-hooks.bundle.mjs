@@ -268,17 +268,18 @@ function writeFileNoFollow(path2, content3, mode = 384) {
     closeSync(fd);
   }
 }
-var shared, HookEvent, PermissionDecision, LONE_SURROGATE_RE, MAX_STDIN_BYTES, lazyImportErrors, DEFAULT_MISSING_PACKAGE_REMEDY, UNTRUSTED_TEXT_CAP, HOOKGATE_MARKER_STEM;
+var defaultSharedState, shared, HookEvent, PermissionDecision, LONE_SURROGATE_RE, MAX_STDIN_BYTES, lazyImportErrors, DEFAULT_MISSING_PACKAGE_REMEDY, UNTRUSTED_TEXT_CAP, HOOKGATE_MARKER_STEM;
 var init_hook_io = __esm({
   "claude-hooks/lib/hook-io.mjs"() {
     "use strict";
-    shared = {
+    defaultSharedState = () => ({
       lazyModules: /* @__PURE__ */ Object.create(null),
       cliEntryClaimed: false,
       missingPackageRemedy: null,
       hookgateMarker: null,
       hookgateMarkerResolved: false
-    };
+    });
+    shared = defaultSharedState();
     HookEvent = Object.freeze({
       PRE_TOOL_USE: "PreToolUse",
       POST_TOOL_USE: "PostToolUse",

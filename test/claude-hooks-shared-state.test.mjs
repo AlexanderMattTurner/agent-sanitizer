@@ -180,6 +180,34 @@ describe("adoptHookIoSharedState", () => {
     );
   });
 
+  it("fills a root that omits lazyModules, which would otherwise throw", async () => {
+    // The loudest of the omissions. Pre-fill, the carry-over loop indexes
+    // `state.lazyModules[specifier]` on an undefined — a TypeError at a bundle
+    // entry's top level, which kills the hook before it writes a response.
+    const [, packaged] = await twoInstances();
+    packaged.registerLazyModules({ "pkg/one": ALPHA });
+    const bareRoot = /** @type {any} */ ({});
+    packaged.adoptHookIoSharedState(bareRoot);
+    assert.equal(packaged.registeredLazyModule("pkg/one"), ALPHA);
+  });
+
+  it("carries a remedy and marker onto a root that omits those slots", async () => {
+    // What makes the fill load-bearing for these two: the carry-over arms test
+    // `state.x === null`, which is FALSE for an absent slot, so without the fill
+    // the adopting instance's own configured values are dropped on the floor
+    // rather than moved onto the root.
+    const [, packaged] = await twoInstances();
+    packaged.configureMissingPackageRemedy(HOST_REMEDY);
+    packaged.configureHookgateMarker(HOST_MARKER);
+    const legacyRoot = /** @type {any} */ ({
+      lazyModules: Object.create(null),
+      cliEntryClaimed: false,
+    });
+    packaged.adoptHookIoSharedState(legacyRoot);
+    assert.equal(legacyRoot.hookgateMarker, HOST_MARKER);
+    assert.equal(legacyRoot.missingPackageRemedy, HOST_REMEDY);
+  });
+
   it("is a no-op on the instance's own state", async () => {
     const [host] = await twoInstances();
     host.registerLazyModules({ "pkg/one": ALPHA });
