@@ -8,6 +8,11 @@ adhere to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+## [2.13.0] - 2026-08-01
+
+### Changed
+- Advanced the pinned plugin engine version and removed the second (redundant) hook matcher, simplifying hook matching behavior.
+
 ## [2.12.0] - 2026-08-01
 
 ### Fixed
