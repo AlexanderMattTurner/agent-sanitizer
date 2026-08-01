@@ -8,6 +8,14 @@ adhere to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+## [2.14.0] - 2026-08-01
+
+### Added
+- claude-hooks: hosts can now share a single lazy-module registry across multiple hook-io instances.
+
+### Fixed
+- claude-hooks: all four host-visible hook-io slots are now shared, instead of only two.
+
 ## [2.13.0] - 2026-08-01
 
 ### Changed
