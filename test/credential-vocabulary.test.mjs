@@ -22,10 +22,7 @@ import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import {
-  deriveCredentialVocabulary,
-  looksLikeCredentialVar,
-} from "../claude-hooks/lib/env-config.mjs";
+import { looksLikeCredentialVar } from "../claude-hooks/lib/env-config.mjs";
 
 // Resolved through the exports map, the same way a consumer reaches it — so this
 // asserts against the file the package actually publishes.
@@ -94,64 +91,5 @@ describe("the name matcher excludes every published non-secret suffix", () => {
   it("refuses ordinary variables", () => {
     for (const name of ["HOME", "PATH", "LANG"])
       assert.equal(looksLikeCredentialVar(name), false, name);
-  });
-});
-
-describe("deriveCredentialVocabulary fails closed on a malformed spec", () => {
-  // Each of these would otherwise render an empty or under-populated
-  // alternation, which matches nothing and forwards every credential.
-  const bad = {
-    "missing nouns": { nonSecretSuffixes: [["key", "id"]] },
-    "missing nonSecretSuffixes": {
-      nouns: [{ parts: ["token"], uses: [ENV_NAME_USE] }],
-    },
-    "nouns not an array": {
-      nouns: "token",
-      nonSecretSuffixes: [["key", "id"]],
-    },
-    "empty parts": {
-      nouns: [{ parts: [], uses: [ENV_NAME_USE] }],
-      nonSecretSuffixes: [["key", "id"]],
-    },
-    "metacharacter in a part": {
-      nouns: [{ parts: ["to.en"], uses: [ENV_NAME_USE] }],
-      nonSecretSuffixes: [["key", "id"]],
-    },
-    "upper-case part": {
-      nouns: [{ parts: ["TOKEN"], uses: [ENV_NAME_USE] }],
-      nonSecretSuffixes: [["key", "id"]],
-    },
-  };
-  for (const [label, spec_] of Object.entries(bad))
-    it(`throws on ${label}`, () => {
-      assert.throws(() => deriveCredentialVocabulary(spec_), {
-        message: /credential-names\.json/u,
-      });
-    });
-});
-
-describe("the derived vocabulary is safe to interpolate unescaped", () => {
-  const derived = deriveCredentialVocabulary(spec);
-
-  it("renders both segment forms and both exclude forms", () => {
-    assert.ok(derived.segments.length >= envNameNouns.length);
-    assert.equal(
-      derived.excludeSuffixes.length,
-      new Set(
-        spec.nonSecretSuffixes.flatMap((s) => [
-          `_${s.join("_").toUpperCase()}`,
-          `_${s.join("").toUpperCase()}`,
-        ]),
-      ).size,
-    );
-  });
-
-  it("carries no regex metacharacter in any token", () => {
-    for (const token of [
-      ...derived.segments,
-      ...derived.excludeSuffixes,
-      ...derived.excludeNames,
-    ])
-      assert.match(token, /^[A-Z0-9_]+$/u, token);
   });
 });

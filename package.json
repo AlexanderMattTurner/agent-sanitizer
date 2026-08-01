@@ -61,7 +61,7 @@
     ]
   },
   "devDependencies": {
-    "sanitizer-engine": "npm:agent-sanitizer@2.1.0",
+    "sanitizer-engine": "npm:agent-sanitizer@2.12.0",
     "@commitlint/cli": "^21.0.1",
     "@commitlint/config-conventional": "^21.0.1",
     "@eslint/js": "10.0.1",

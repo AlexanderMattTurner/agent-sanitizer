@@ -73,8 +73,8 @@ importers:
         specifier: ^3.0.0
         version: 3.9.6
       sanitizer-engine:
-        specifier: npm:agent-sanitizer@2.1.0
-        version: agent-sanitizer@2.1.0
+        specifier: npm:agent-sanitizer@2.12.0
+        version: agent-sanitizer@2.12.0
       typescript:
         specifier: 6.0.3
         version: 6.0.3
@@ -835,8 +835,8 @@ packages:
     resolution: {integrity: sha512-oB+XY3kUbWln4T1y0PUM3ll2Y2wIGlA/wo/NxSZKKyZNVvsJFAjEOF25Tjr4Z0uE6OYNhgb24Bw4rSuH/qgjdA==}
     engines: {node: '>=20'}
 
-  agent-sanitizer@2.1.0:
-    resolution: {integrity: sha512-r6b0LJYRn4Jc9vkwezoUv7Yb2lANPmnuOA2TlxpG+WHTg995/H8t5jnSQUmKeZV9Xpg+av1Jlf/xTI1T5ovJLw==}
+  agent-sanitizer@2.12.0:
+    resolution: {integrity: sha512-AAJ1M5OpIzh7RLdfbDCbSZiopp9z6cVVRmh677HsBpAULNOrmqCCweZFUFfG+8rCCTzyQrTdf1VOmJBzhiV1XA==}
     engines: {node: '>=22'}
     hasBin: true
 
@@ -1300,9 +1300,6 @@ packages:
   ini@6.0.0:
     resolution: {integrity: sha512-IBTdIkzZNOpqm7q3dRqJvMaldXjDHWkEDfrwGEQTs5eaQMWV+djAhR+wahyNNMAa+qpbDUhBMVt4ZKNwpPm7xQ==}
     engines: {node: ^20.17.0 || >=22.9.0}
-
-  inline-style-parser@0.2.7:
-    resolution: {integrity: sha512-Nb2ctOyNR8DqQoR0OwRG95uNWIC0C1lCgf5Naz5H6Ji72KZ8OcFZLz2P5sNgwlyoJ8Yif11oMuYs5pBQa86csA==}
 
   is-arrayish@0.2.1:
     resolution: {integrity: sha512-zz06S8t0ozoDXMG+ube26zeCTNXcKIPJZJi8hBrF4idCLms4CG9QtK7qBl1boi5ODzFpjswb5JPmHCbMpjaYzg==}
@@ -1825,9 +1822,6 @@ packages:
   strip-final-newline@4.0.0:
     resolution: {integrity: sha512-aulFJcD6YK8V1G7iRB5tigAP4TsHBZZrOV8pjV++zdUwmeV8uzbY7yn6h9MswN62adStNZFuCIx4haBnRuMDaw==}
     engines: {node: '>=18'}
-
-  style-to-object@1.0.14:
-    resolution: {integrity: sha512-LIN7rULI0jBscWQYaSswptyderlarFkjQ+t79nzty8tcIAceVomEVlLzH5VP4Cmsv6MtKhs7qaAiwlcp+Mgaxw==}
 
   supports-color@7.2.0:
     resolution: {integrity: sha512-qpCAvRl9stuOHveKsn7HncJRvv501qIacKzQlO/+Lwxc9+0q2wLyv4Dfvt80/DPn2pqOBsJdDiogXGR9+OvwRw==}
@@ -2829,17 +2823,27 @@ snapshots:
     dependencies:
       semver: 7.8.5
 
-  agent-sanitizer@2.1.0:
+  agent-sanitizer@2.12.0:
     dependencies:
+      agent-control-plane-core: 0.2.13
       css-tree: 3.2.1
+      namespace-guard: 0.20.0
       rehype-parse: 9.0.1
       remark-gfm: 4.0.1
       remark-parse: 11.0.0
-      style-to-object: 1.0.14
       unified: 11.0.5
       unist-util-visit: 5.1.0
     transitivePeerDependencies:
+      - '@mikro-orm/core'
+      - '@prisma/client'
+      - drizzle-orm
+      - knex
+      - kysely
+      - mongoose
+      - pg
+      - sequelize
       - supports-color
+      - typeorm
 
   ajv@6.15.0:
     dependencies:
@@ -3333,8 +3337,6 @@ snapshots:
   inherits@2.0.4: {}
 
   ini@6.0.0: {}
-
-  inline-style-parser@0.2.7: {}
 
   is-arrayish@0.2.1: {}
 
@@ -3957,10 +3959,6 @@ snapshots:
       ansi-regex: 6.2.2
 
   strip-final-newline@4.0.0: {}
-
-  style-to-object@1.0.14:
-    dependencies:
-      inline-style-parser: 0.2.7
 
   supports-color@7.2.0:
     dependencies:

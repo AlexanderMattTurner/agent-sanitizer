@@ -1,4 +1,4 @@
 allowBuilds:
   esbuild: true
 minimumReleaseAgeExclude:
-  - agent-sanitizer@2.1.0
+  - agent-sanitizer@2.12.0
