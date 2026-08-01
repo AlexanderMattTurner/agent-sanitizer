@@ -218,9 +218,9 @@ replaces the placeholder floor and unions extra `[A-Z0-9_]` variable names into
 `envBoundSecretVars()`, so a host that already declares its forwarded
 credentials (and their length floor) in a registry of its own feeds the packaged
 helpers from it instead of forking the module. Unset fields keep the package
-derivation; `null` restores it entirely. A malformed source throws on first use,
-inside the consuming hook's fail-closed catch, and an unread key is reported on
-stderr.
+derivation; `null` restores it entirely. A malformed source — a non-object, a
+key the seam does not read, a bad field — throws on first use, inside the
+consuming hook's fail-closed catch, never at configure time.
 
 Hook internals are tuned by `_AGENT_SANITIZER_*` variables (redactor daemon
 path/socket/timeouts, sanitize budget, trace channel, Layer-2 reveal dir). The

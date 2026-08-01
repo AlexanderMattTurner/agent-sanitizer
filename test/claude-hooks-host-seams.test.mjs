@@ -368,25 +368,47 @@ describe("env-config host source seam", () => {
     }
   });
 
-  it("reports an unread key on stderr instead of leaving the seam silently inert", () => {
-    // A misspelled field must not be swallowed — the host would believe a
-    // forwarded credential is masked while nothing changed — but it must not
-    // throw either (bundle-entry top level: a throw there is a fail-OPEN hook).
-    const written = [];
-    const original = process.stderr.write;
-    // @ts-expect-error -- narrower than the overloaded write signature; the
-    // caller here only ever passes a string chunk.
-    process.stderr.write = (chunk) => {
-      written.push(String(chunk));
-      return true;
-    };
+  it("treats an undefined source as unconfigured, not as a configure-time crash", () => {
+    // The shape a host actually produces: configureEnvConfigSource(
+    // hostConfig.envSource) with the field absent. A throw here would land at
+    // the bundle entry's top level — a fail-OPEN hook — for a host that simply
+    // has nothing to configure.
+    const packageFloor = minEnvSecretLen();
+    configureEnvConfigSource(/** @type {any} */ (undefined));
     try {
-      configureEnvConfigSource(/** @type {any} */ ({ extra_vars: ["OOPS"] }));
+      assert.equal(minEnvSecretLen(), packageFloor);
+      assert.ok(envBoundSecretVars(env).includes("MY_API_KEY"));
     } finally {
-      process.stderr.write = original;
       configureEnvConfigSource(null);
     }
-    assert.match(written.join(""), /unknown key "extra_vars"/u);
+  });
+
+  it("throws at USE on a non-object source, never running silently inert", () => {
+    const nonObject = /** @type {any} */ ("X");
+    configureEnvConfigSource(nonObject);
+    try {
+      assert.throws(() => minEnvSecretLen(), /must be an object/u);
+      assert.throws(() => envBoundSecretVars({}), /must be an object/u);
+    } finally {
+      configureEnvConfigSource(null);
+    }
+  });
+
+  it("throws at USE on a key the seam does not read", () => {
+    // A typo'd field name must not leave the helpers on the package derivation
+    // while the host believes it configured them — same fail-closed contract as
+    // a malformed field value, and same USE-time timing (a configure-time throw
+    // lands at the bundle entry's top level, a fail-OPEN hook).
+    configureEnvConfigSource(/** @type {any} */ ({ minSecretLength: 32 }));
+    try {
+      assert.throws(() => minEnvSecretLen(), /unknown key "minSecretLength"/u);
+      assert.throws(
+        () => envBoundSecretVars({}),
+        /unknown key "minSecretLength"/u,
+      );
+    } finally {
+      configureEnvConfigSource(null);
+    }
   });
 });
 

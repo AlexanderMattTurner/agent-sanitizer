@@ -39,6 +39,8 @@ let hostEnvConfigSource = null;
 
 const HOST_SOURCE_LABEL = "configureEnvConfigSource";
 
+const HOST_SOURCE_KEYS = ["minSecretLen", "extraVars"];
+
 /**
  * Adopt a host's own secret config in place of the package's: `minSecretLen`
  * replaces the placeholder floor, and `extraVars` are unioned into the
@@ -46,32 +48,44 @@ const HOST_SOURCE_LABEL = "configureEnvConfigSource";
  * registry already names its forwarded secrets (and their length floor) drive
  * the packaged helpers from that registry instead of forking this module —
  * a fork is the drift channel that lets the two redaction sets silently
- * disagree. Unset fields keep their package derivation. Like the missing-package
- * remedy seam there is no too-late window: the source is consulted at each
- * helper call, never resolved at module scope, so a later call steers every
- * later answer. VALIDATION stays lazy, matching this module's load posture: a
- * malformed source throws on first use inside the consuming hook's fail-closed
- * catch, not at configure time, where a top-level throw in a bundle entry would
- * kill the hook before its catch installs (fail OPEN).
- * A key this seam does not read is reported on stderr, not thrown: a misspelled
- * `extraVars` would otherwise leave the seam silently inert — the host believes
- * a forwarded credential is masked while its value flows to the model — and a
- * throw at a bundle entry's top level would kill the hook before its fail-closed
- * catch installs (fail OPEN, same posture as configureHookgateMarker's late-call
- * report).
+ * disagree. Unset fields keep their package derivation; `undefined` and `null`
+ * both restore it entirely. Like the missing-package remedy seam there is no
+ * too-late window: the source is consulted at each helper call, never resolved
+ * at module scope, so a later call steers every later answer. A malformed
+ * source — a non-object, a key this seam does not read, a bad field — throws
+ * on first use, not here (see {@link hostSource}).
  * @param {{ minSecretLen?: number, extraVars?: string[] } | null} source
  *   host config, or null to restore the package derivation
  * @returns {void}
  */
 export function configureEnvConfigSource(source) {
-  if (source !== null)
-    for (const key of Object.keys(source))
-      if (key !== "minSecretLen" && key !== "extraVars")
-        process.stderr.write(
-          `agent-sanitizer: ${HOST_SOURCE_LABEL} ignoring unknown key ` +
-            `${JSON.stringify(key)}; it reads minSecretLen and extraVars.\n`,
-        );
-  hostEnvConfigSource = source;
+  hostEnvConfigSource = source ?? null;
+}
+
+/**
+ * The stored host source with its shape validated, or null when unconfigured.
+ * Shape errors — a non-object source, a key this seam does not read — throw
+ * HERE, on first use inside the consuming hook's fail-closed catch, never at
+ * configure time: a top-level throw in a bundle entry would kill the hook
+ * before that catch installs (fail OPEN), and silently ignoring the problem
+ * is worse — a typo'd `minSecretLength: 32` must not leave the helpers
+ * running at the package floor while the host believes it configured 32.
+ * @returns {{ minSecretLen?: number, extraVars?: string[] } | null}
+ */
+function hostSource() {
+  const source = hostEnvConfigSource;
+  if (source === null) return null;
+  if (typeof source !== "object")
+    throw new Error(
+      `${HOST_SOURCE_LABEL}: source must be an object, got ${typeof source}`,
+    );
+  for (const key of Object.keys(source))
+    if (!HOST_SOURCE_KEYS.includes(key))
+      throw new Error(
+        `${HOST_SOURCE_LABEL}: unknown key ${JSON.stringify(key)}; it reads ` +
+          `${HOST_SOURCE_KEYS.join(" and ")}`,
+      );
+  return source;
 }
 
 /**
@@ -83,7 +97,7 @@ export function configureEnvConfigSource(source) {
  * @returns {number}
  */
 export function minEnvSecretLen() {
-  const hostLen = hostEnvConfigSource?.minSecretLen;
+  const hostLen = hostSource()?.minSecretLen;
   if (hostLen === undefined) return inferenceKeys.min_secret_len;
   if (!Number.isInteger(hostLen) || hostLen <= 0)
     throw new Error(
@@ -100,7 +114,7 @@ export function minEnvSecretLen() {
  * @returns {string[]}
  */
 function hostExtraSecretVars() {
-  const vars = hostEnvConfigSource?.extraVars;
+  const vars = hostSource()?.extraVars;
   if (vars === undefined) return [];
   if (!Array.isArray(vars))
     throw new Error(`${HOST_SOURCE_LABEL}: extraVars must be an array`);

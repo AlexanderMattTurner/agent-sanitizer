@@ -66990,8 +66990,22 @@ var init_scrubbed_env_vars = __esm({
 function inferenceKeyVars() {
   return inference_key_vars_default.vars;
 }
+function hostSource() {
+  const source = hostEnvConfigSource;
+  if (source === null) return null;
+  if (typeof source !== "object")
+    throw new Error(
+      `${HOST_SOURCE_LABEL}: source must be an object, got ${typeof source}`
+    );
+  for (const key of Object.keys(source))
+    if (!HOST_SOURCE_KEYS.includes(key))
+      throw new Error(
+        `${HOST_SOURCE_LABEL}: unknown key ${JSON.stringify(key)}; it reads ${HOST_SOURCE_KEYS.join(" and ")}`
+      );
+  return source;
+}
 function minEnvSecretLen() {
-  const hostLen = hostEnvConfigSource?.minSecretLen;
+  const hostLen = hostSource()?.minSecretLen;
   if (hostLen === void 0) return inference_key_vars_default.min_secret_len;
   if (!Number.isInteger(hostLen) || hostLen <= 0)
     throw new Error(
@@ -67000,7 +67014,7 @@ function minEnvSecretLen() {
   return hostLen;
 }
 function hostExtraSecretVars() {
-  const vars = hostEnvConfigSource?.extraVars;
+  const vars = hostSource()?.extraVars;
   if (vars === void 0) return [];
   if (!Array.isArray(vars))
     throw new Error(`${HOST_SOURCE_LABEL}: extraVars must be an array`);
@@ -67103,7 +67117,7 @@ function envBoundSecretVars(env = process.env) {
     ])
   ];
 }
-var hostEnvConfigSource, HOST_SOURCE_LABEL, CRED_TOKEN_RE, VOCAB_LABEL, EXCLUDE_NAMES, ENV_NAME_USE, _credentialNameRes, EXTRA_SECRET_VARS_ENV, EXTRA_TOKEN_RE;
+var hostEnvConfigSource, HOST_SOURCE_LABEL, HOST_SOURCE_KEYS, CRED_TOKEN_RE, VOCAB_LABEL, EXCLUDE_NAMES, ENV_NAME_USE, _credentialNameRes, EXTRA_SECRET_VARS_ENV, EXTRA_TOKEN_RE;
 var init_env_config = __esm({
   "claude-hooks/lib/env-config.mjs"() {
     "use strict";
@@ -67112,6 +67126,7 @@ var init_env_config = __esm({
     init_scrubbed_env_vars();
     hostEnvConfigSource = null;
     HOST_SOURCE_LABEL = "configureEnvConfigSource";
+    HOST_SOURCE_KEYS = ["minSecretLen", "extraVars"];
     CRED_TOKEN_RE = /^[A-Z0-9_]+$/;
     VOCAB_LABEL = "credential-names.json";
     EXCLUDE_NAMES = ["SSH_AUTH_SOCK"];
