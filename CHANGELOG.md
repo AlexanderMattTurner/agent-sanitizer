@@ -8,6 +8,12 @@ adhere to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+## [2.12.0] - 2026-08-01
+
+### Fixed
+- Fixed non-secret exclusion matching in claude-hooks to only apply at name boundaries, preventing unintended matches within longer variable names.
+- Claude-hooks now uses the package's own credential matcher to decide credential names, improving consistency of detection.
+
 ## [2.11.0] - 2026-08-01
 
 ### Added
