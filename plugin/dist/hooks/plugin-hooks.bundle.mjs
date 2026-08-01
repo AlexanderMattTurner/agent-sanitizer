@@ -122,13 +122,13 @@ function failedLazyPackages() {
   }
   return [...pkgs];
 }
-function missingPackageMessage(pkg, err = lazyImportErrorFor(pkg), remedy = DEFAULT_MISSING_PACKAGE_REMEDY) {
+function missingPackageMessage(pkg, err = lazyImportErrorFor(pkg), remedy = missingPackageRemedyOverride ?? DEFAULT_MISSING_PACKAGE_REMEDY) {
   const prefix = `${pkg} is unavailable: `;
   const causeCap = Math.max(0, 300 - prefix.length - remedy.length - 2 - 12);
   const cause = err === void 0 ? "no load error recorded \u2014 the package likely loaded but lacks an expected export (version skew)" : safeErrMessage(err, causeCap);
   return `${prefix}${cause}; ${remedy}`;
 }
-function missingPackageError(pkg, err = lazyImportErrorFor(pkg), remedy = DEFAULT_MISSING_PACKAGE_REMEDY) {
+function missingPackageError(pkg, err = lazyImportErrorFor(pkg), remedy = missingPackageRemedyOverride ?? DEFAULT_MISSING_PACKAGE_REMEDY) {
   return Object.assign(new Error(missingPackageMessage(pkg, err, remedy)), {
     code: "DEP_UNAVAILABLE"
   });
@@ -268,7 +268,7 @@ function writeFileNoFollow(path2, content3, mode = 384) {
     closeSync(fd);
   }
 }
-var cliEntryClaimed, HookEvent, PermissionDecision, LONE_SURROGATE_RE, MAX_STDIN_BYTES, registeredLazyModules, lazyImportErrors, DEFAULT_MISSING_PACKAGE_REMEDY, UNTRUSTED_TEXT_CAP, HOOKGATE_MARKER_STEM, hookgateMarkerOverride, hookgateMarkerResolved;
+var cliEntryClaimed, HookEvent, PermissionDecision, LONE_SURROGATE_RE, MAX_STDIN_BYTES, registeredLazyModules, lazyImportErrors, DEFAULT_MISSING_PACKAGE_REMEDY, missingPackageRemedyOverride, UNTRUSTED_TEXT_CAP, HOOKGATE_MARKER_STEM, hookgateMarkerOverride, hookgateMarkerResolved;
 var init_hook_io = __esm({
   "claude-hooks/lib/hook-io.mjs"() {
     "use strict";
@@ -289,6 +289,7 @@ var init_hook_io = __esm({
     registeredLazyModules = /* @__PURE__ */ Object.create(null);
     lazyImportErrors = /* @__PURE__ */ new Map();
     DEFAULT_MISSING_PACKAGE_REMEDY = "reinstall the hook dependencies (pnpm install) and retry.";
+    missingPackageRemedyOverride = null;
     UNTRUSTED_TEXT_CAP = 500;
     HOOKGATE_MARKER_STEM = "agent-sanitizer-hookgate-inflight-";
     hookgateMarkerOverride = null;
@@ -66990,7 +66991,25 @@ function inferenceKeyVars() {
   return inference_key_vars_default.vars;
 }
 function minEnvSecretLen() {
-  return inference_key_vars_default.min_secret_len;
+  const hostLen = hostEnvConfigSource?.minSecretLen;
+  if (hostLen === void 0) return inference_key_vars_default.min_secret_len;
+  if (!Number.isInteger(hostLen) || hostLen <= 0)
+    throw new Error(
+      `${HOST_SOURCE_LABEL}: minSecretLen must be a positive integer, got ${JSON.stringify(hostLen)}`
+    );
+  return hostLen;
+}
+function hostExtraSecretVars() {
+  const vars = hostEnvConfigSource?.extraVars;
+  if (vars === void 0) return [];
+  if (!Array.isArray(vars))
+    throw new Error(`${HOST_SOURCE_LABEL}: extraVars must be an array`);
+  for (const name50 of vars)
+    if (typeof name50 !== "string" || !EXTRA_TOKEN_RE.test(name50))
+      throw new Error(
+        `${HOST_SOURCE_LABEL}: ${JSON.stringify(name50)} is not a variable name (expected [A-Z0-9_] names)`
+      );
+  return vars;
 }
 function segmentForms(parts2) {
   return [
@@ -67079,17 +67098,20 @@ function envBoundSecretVars(env = process.env) {
       ...inferenceKeyVars(),
       ...scrubbed_env_vars_default.vars,
       ...dynamicSecretVars(env),
-      ...extraSecretVars(env)
+      ...extraSecretVars(env),
+      ...hostExtraSecretVars()
     ])
   ];
 }
-var CRED_TOKEN_RE, VOCAB_LABEL, EXCLUDE_NAMES, ENV_NAME_USE, _credentialNameRes, EXTRA_SECRET_VARS_ENV, EXTRA_TOKEN_RE;
+var hostEnvConfigSource, HOST_SOURCE_LABEL, CRED_TOKEN_RE, VOCAB_LABEL, EXCLUDE_NAMES, ENV_NAME_USE, _credentialNameRes, EXTRA_SECRET_VARS_ENV, EXTRA_TOKEN_RE;
 var init_env_config = __esm({
   "claude-hooks/lib/env-config.mjs"() {
     "use strict";
     init_credential_names();
     init_inference_key_vars();
     init_scrubbed_env_vars();
+    hostEnvConfigSource = null;
+    HOST_SOURCE_LABEL = "configureEnvConfigSource";
     CRED_TOKEN_RE = /^[A-Z0-9_]+$/;
     VOCAB_LABEL = "credential-names.json";
     EXCLUDE_NAMES = ["SSH_AUTH_SOCK"];
