@@ -241,6 +241,15 @@ _BAD_SPECS = [
         "nonSecretSuffixes[0]",
     ),
     (
+        # The same anchoring case as ``part_trailing_newline``, on the other path
+        # through the validator. ``re.fullmatch`` rejects it; a ``^…$`` pattern
+        # would accept it here and be rejected by the JavaScript twin reading the
+        # same file, which is the split that has to stay closed on BOTH paths.
+        "suffix_trailing_newline",
+        {**_GOOD, "nonSecretSuffixes": [["key", "id\n"]]},
+        "nonSecretSuffixes[0]",
+    ),
+    (
         "no_env_name_noun",
         {**_GOOD, "nouns": [{"parts": ["token"], "uses": [FIELD_VALUE_USE]}]},
         "env-name",
@@ -393,3 +402,74 @@ def test_a_hostile_variable_name_cannot_stall_the_matcher(
     # over the true bound while still an order of magnitude under the quadratic
     # walk's ~2e8 for this input.
     assert len(counted) <= 4 * segments
+
+
+@pytest.mark.parametrize("segment", credential_name_segments())
+def test_every_rendered_segment_drives_the_real_matcher(segment: str) -> None:
+    """Member by member, from the vocabulary: a name ending in each rendered
+    segment holds a credential, in every spelling an environment produces.
+
+    The per-noun tests above assert that a segment is RENDERED. This asserts the
+    matcher then acts on it, which is a different failure: a noun can reach the
+    segment list and still be unreachable by the walk that consumes it.
+
+    The trailing-newline case is asserted NEGATIVE, and that is the point of it.
+    ``KEY\\n`` is not the noun ``KEY``, so the name does not hold a credential —
+    but Python's ``$`` also matches just before a trailing newline, so a matcher
+    rebuilt around ``re.search(r"KEY$", name)`` would answer True here while its
+    JavaScript twin answered False, and a value would reach the transcript through
+    whichever path ran second. ``test/credential-matcher-parity.test.mjs`` checks
+    the two implementations against each other; this pins the Python side alone,
+    so the suite still fails if the JavaScript side is renamed away.
+    """
+    holds = credential_name_matcher()
+    assert holds(f"DEPLOY_{segment}")
+    assert holds(f"deploy_{segment.lower()}")
+    assert not holds(f"DEPLOY_{segment}\n")
+
+
+@pytest.mark.parametrize("marker", non_secret_name_segments())
+def test_every_non_secret_marker_declines_a_credential_name(marker: str) -> None:
+    """Member by member: each marker turns a name that otherwise holds a
+    credential into one the redactor declines, and ``decline_non_secret=False``
+    turns it back on for a scrub that prefers over-stripping.
+
+    Built from the vocabulary rather than named, so a marker added to the JSON is
+    covered with no edit here. Asserting both directions is what stops this from
+    passing on a matcher that simply never matched the name at all.
+    """
+    name = f"{credential_name_segments()[0]}_{marker}"
+    assert not credential_name_matcher()(name)
+    assert credential_name_matcher(scope="any-segment", decline_non_secret=False)(name)
+
+
+def test_a_missing_data_file_raises_rather_than_rendering_nothing(
+    monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
+    """The reader's own failure, which no ``spec`` case reaches: every bad-spec
+    case above drives the pure validator, and a missing FILE never gets that far.
+
+    It is worth pinning because the tempting repair — catching the read so
+    start-up survives a packaging mistake — yields an empty vocabulary, and a
+    matcher over an empty noun set answers "not a credential" for every name it is
+    asked about. That forwards every credential with no error anywhere.
+    """
+    monkeypatch.setattr(
+        credential_names, "CREDENTIAL_NAMES_FILE", tmp_path / "absent.json"
+    )
+    # The renderings are memoized, so the patched path is only read if the cache
+    # is cleared first — and restored afterwards so no later test sees the gap.
+    credential_names._rendered.cache_clear()
+    try:
+        with pytest.raises(FileNotFoundError):
+            credential_name_matcher()
+    finally:
+        # Undo before the cache clear, not after: the accessor re-reads on the
+        # next call, and monkeypatch's own teardown would otherwise run second and
+        # leave the cache holding the failure for every later test in the session.
+        monkeypatch.undo()
+        credential_names._rendered.cache_clear()
+    # Non-vacuity: the accessor works again with the real file back, so the raise
+    # above was the missing file rather than a cache left poisoned by an earlier
+    # test — which would make this pass without exercising anything.
+    assert credential_name_segments()

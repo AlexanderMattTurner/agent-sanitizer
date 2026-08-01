@@ -15,12 +15,23 @@
  */
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 import {
   credentialNameMatcher,
   credentialNames,
   parseCredentialNames,
 } from "../src/credential-names.mjs";
+
+const MODULE_PATH = join(
+  dirname(fileURLToPath(import.meta.url)),
+  "..",
+  "src",
+  "credential-names.mjs",
+);
 
 const SPEC = {
   nouns: [
@@ -200,6 +211,34 @@ describe("an unusable vocabulary throws rather than matching nothing", () => {
       assert.throws(() => credentialNameMatcher({ spec }), message);
     });
   }
+
+  it("an unreadable data file throws instead of rendering an empty vocabulary", async () => {
+    // The reader's own failure, which no `spec` case reaches: every branch above
+    // drives the pure validator, and a missing FILE never gets that far. It is
+    // worth pinning because the tempting repair — catching the read and returning
+    // an empty vocabulary so start-up survives — turns the matcher into one that
+    // answers "not a credential" for every name, with no error anywhere.
+    //
+    // Driven by importing a COPY of the module from a directory where its data
+    // file's relative path resolves to nothing. `DATA_FILE` is a module constant
+    // derived from `import.meta.url`, so there is no in-process seam to redirect;
+    // this costs no coverage, because the fail-closed branches this file's other
+    // cases exercise all live in `parseCredentialNames`, which is already driven
+    // directly.
+    const directory = mkdtempSync(join(tmpdir(), "credential-names-"));
+    const copy = join(directory, "credential-names.mjs");
+    writeFileSync(copy, readFileSync(MODULE_PATH));
+    try {
+      const { credentialNames: orphaned, parseCredentialNames: validator } =
+        await import(pathToFileURL(copy).href);
+      // The validator still works from the copy, so the throw below is the
+      // missing file and not a broken import.
+      assert.ok(validator(SPEC).segments.length > 0);
+      assert.throws(() => orphaned(), /ENOENT|no such file/);
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
 
   it("no spec at all means the packaged vocabulary, not an empty one", () => {
     // The one absent-spec case that must NOT throw: omitting `spec` is how every
