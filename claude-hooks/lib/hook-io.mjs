@@ -39,14 +39,21 @@ import { pathToFileURL } from "node:url";
  * }} HookIoSharedState
  */
 
-/** @type {HookIoSharedState} */
-let shared = {
+/**
+ * A fresh state object with every slot at its default. Called per use, never
+ * hoisted to one shared literal, so each caller gets its own `lazyModules`.
+ * @returns {HookIoSharedState}
+ */
+const defaultSharedState = () => ({
   lazyModules: Object.create(null),
   cliEntryClaimed: false,
   missingPackageRemedy: null,
   hookgateMarker: null,
   hookgateMarkerResolved: false,
-};
+});
+
+/** @type {HookIoSharedState} */
+let shared = defaultSharedState();
 
 /**
  * This instance's state object, for a host to hand to another instance.
@@ -98,6 +105,18 @@ export function hookIoSharedState() {
  */
 export function adoptHookIoSharedState(state) {
   if (state === shared) return;
+  // Fill any slot `state` omits before anything reads it. A host builds this
+  // object itself, so one written against an earlier version of this package
+  // lacks the slots added since — and every reader below tests `!== null`, which
+  // an ABSENT slot satisfies. Unfilled, hookgateMarkerPath returns undefined
+  // instead of deriving a path; probeSetupAlive then throws internally on it and
+  // reports setup alive forever, so awaitLazyDependency waits out its whole
+  // ceiling, the harness kills the hook, and a killed hook is non-blocking — the
+  // fail-OPEN this module exists to prevent. `??=` and not `=`: it must not
+  // clobber a slot the host deliberately set, including `false`.
+  const slots = /** @type {Record<string, any>} */ (state);
+  for (const [slot, value] of Object.entries(defaultSharedState()))
+    slots[slot] ??= value;
   for (const [specifier, namespace] of Object.entries(shared.lazyModules))
     if (state.lazyModules[specifier] === undefined)
       state.lazyModules[specifier] = namespace;
