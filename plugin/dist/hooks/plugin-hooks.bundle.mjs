@@ -57,11 +57,11 @@ import { userInfo } from "node:os";
 import { createHash } from "node:crypto";
 import { pathToFileURL } from "node:url";
 function isMain(importMetaUrl) {
-  if (cliEntryClaimed) return false;
+  if (shared.cliEntryClaimed) return false;
   return Boolean(process.argv[1]) && importMetaUrl === pathToFileURL(process.argv[1]).href;
 }
 function claimCliEntry() {
-  cliEntryClaimed = true;
+  shared.cliEntryClaimed = true;
 }
 function readFlag(argv, name50) {
   const prefix = `--${name50}=`;
@@ -85,13 +85,13 @@ async function readStdinJson(maxBytes = MAX_STDIN_BYTES) {
   return JSON.parse((await readAllBounded(process.stdin, maxBytes)).toString());
 }
 function registerLazyModules(modules) {
-  Object.assign(registeredLazyModules, modules);
+  Object.assign(shared.lazyModules, modules);
 }
 function registeredLazyModule(specifier) {
-  return registeredLazyModules[specifier];
+  return shared.lazyModules[specifier];
 }
 async function lazyImport(specifier) {
-  const registered = registeredLazyModules[specifier];
+  const registered = shared.lazyModules[specifier];
   if (registered) {
     lazyImportErrors.delete(specifier);
     return registered;
@@ -122,13 +122,13 @@ function failedLazyPackages() {
   }
   return [...pkgs];
 }
-function missingPackageMessage(pkg, err = lazyImportErrorFor(pkg), remedy = missingPackageRemedyOverride ?? DEFAULT_MISSING_PACKAGE_REMEDY) {
+function missingPackageMessage(pkg, err = lazyImportErrorFor(pkg), remedy = shared.missingPackageRemedy ?? DEFAULT_MISSING_PACKAGE_REMEDY) {
   const prefix = `${pkg} is unavailable: `;
   const causeCap = Math.max(0, 300 - prefix.length - remedy.length - 2 - 12);
   const cause = err === void 0 ? "no load error recorded \u2014 the package likely loaded but lacks an expected export (version skew)" : safeErrMessage(err, causeCap);
   return `${prefix}${cause}; ${remedy}`;
 }
-function missingPackageError(pkg, err = lazyImportErrorFor(pkg), remedy = missingPackageRemedyOverride ?? DEFAULT_MISSING_PACKAGE_REMEDY) {
+function missingPackageError(pkg, err = lazyImportErrorFor(pkg), remedy = shared.missingPackageRemedy ?? DEFAULT_MISSING_PACKAGE_REMEDY) {
   return Object.assign(new Error(missingPackageMessage(pkg, err, remedy)), {
     code: "DEP_UNAVAILABLE"
   });
@@ -164,8 +164,8 @@ function emitHookResponse(hookEventName, fields) {
   );
 }
 function hookgateMarkerPath(projectDir = process.env.CLAUDE_PROJECT_DIR, runtimeDir = process.env.XDG_RUNTIME_DIR) {
-  hookgateMarkerResolved = true;
-  if (hookgateMarkerOverride !== null) return hookgateMarkerOverride;
+  shared.hookgateMarkerResolved = true;
+  if (shared.hookgateMarker !== null) return shared.hookgateMarker;
   if (!projectDir) return null;
   const base2 = runtimeDir && runtimeDir.startsWith("/") ? runtimeDir : "/tmp";
   const digest = createHash("sha256").update(projectDir).digest("hex").slice(0, 8);
@@ -268,11 +268,17 @@ function writeFileNoFollow(path2, content3, mode = 384) {
     closeSync(fd);
   }
 }
-var cliEntryClaimed, HookEvent, PermissionDecision, LONE_SURROGATE_RE, MAX_STDIN_BYTES, registeredLazyModules, lazyImportErrors, DEFAULT_MISSING_PACKAGE_REMEDY, missingPackageRemedyOverride, UNTRUSTED_TEXT_CAP, HOOKGATE_MARKER_STEM, hookgateMarkerOverride, hookgateMarkerResolved;
+var shared, HookEvent, PermissionDecision, LONE_SURROGATE_RE, MAX_STDIN_BYTES, lazyImportErrors, DEFAULT_MISSING_PACKAGE_REMEDY, UNTRUSTED_TEXT_CAP, HOOKGATE_MARKER_STEM;
 var init_hook_io = __esm({
   "claude-hooks/lib/hook-io.mjs"() {
     "use strict";
-    cliEntryClaimed = false;
+    shared = {
+      lazyModules: /* @__PURE__ */ Object.create(null),
+      cliEntryClaimed: false,
+      missingPackageRemedy: null,
+      hookgateMarker: null,
+      hookgateMarkerResolved: false
+    };
     HookEvent = Object.freeze({
       PRE_TOOL_USE: "PreToolUse",
       POST_TOOL_USE: "PostToolUse",
@@ -286,14 +292,10 @@ var init_hook_io = __esm({
     });
     LONE_SURROGATE_RE = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g;
     MAX_STDIN_BYTES = 64 * 1024 * 1024;
-    registeredLazyModules = /* @__PURE__ */ Object.create(null);
     lazyImportErrors = /* @__PURE__ */ new Map();
     DEFAULT_MISSING_PACKAGE_REMEDY = "reinstall the hook dependencies (pnpm install) and retry.";
-    missingPackageRemedyOverride = null;
     UNTRUSTED_TEXT_CAP = 500;
     HOOKGATE_MARKER_STEM = "agent-sanitizer-hookgate-inflight-";
-    hookgateMarkerOverride = null;
-    hookgateMarkerResolved = false;
   }
 });
 

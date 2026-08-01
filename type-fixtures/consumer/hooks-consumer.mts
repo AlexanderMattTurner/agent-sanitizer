@@ -24,6 +24,8 @@ import {
 import {
   lazyImport,
   registerLazyModules,
+  hookIoSharedState,
+  adoptHookIoSharedState,
   makeDeadline,
   readFlag,
   HookEvent,
@@ -100,6 +102,9 @@ const _remaining: number = makeDeadline(1000).remainingMs();
 const _flag: string | undefined = readFlag(["--hook=x"], "hook");
 const _lazy: Record<string, any> = await lazyImport("agent-sanitizer");
 registerLazyModules({});
+// The cross-instance seam, at the shape a host bundle uses it: read one
+// instance's state object and hand it to another.
+adoptHookIoSharedState(hookIoSharedState());
 
 // The remaining exported pieces, called at their documented signatures.
 const _threshold: number = LONG_RUN_THRESHOLD;
