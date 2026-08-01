@@ -35,6 +35,12 @@ const {
   awaitLazyDependency,
 } = await import("../claude-hooks/lib/hook-io.mjs");
 const { controlPlane } = await import("../claude-hooks/lib/control-plane.mjs");
+const {
+  configureEnvConfigSource,
+  minEnvSecretLen,
+  envBoundSecretVars,
+  dynamicSecretVars,
+} = await import("../claude-hooks/lib/env-config.mjs");
 const { judgeSanitizeUserPrompt, USER_PROMPT_MESSAGES } =
   await import("../claude-hooks/sanitize-user-prompt.mjs");
 const {
@@ -277,6 +283,110 @@ describe("missing-package remedy seam", () => {
     } finally {
       configureMissingPackageRemedy(null);
     }
+  });
+});
+
+describe("env-config host source seam", () => {
+  // A value long enough for the package floor (16) but short of the host's.
+  const env = { MY_API_KEY: "x".repeat(20), PATH: "/usr/bin" };
+
+  it("is inert by default: unconfigured answers are identical after a round trip", () => {
+    const floorBefore = minEnvSecretLen();
+    const setBefore = envBoundSecretVars(env);
+    // Non-vacuous baseline: the shape-inferred path really ran.
+    assert.ok(setBefore.includes("MY_API_KEY"));
+    configureEnvConfigSource({
+      minSecretLen: 99,
+      extraVars: ["HOST_SEAM_VAR"],
+    });
+    configureEnvConfigSource(null);
+    assert.equal(minEnvSecretLen(), floorBefore);
+    assert.deepEqual(envBoundSecretVars(env), setBefore);
+  });
+
+  it("applies a configured floor to the helpers that consult it", () => {
+    configureEnvConfigSource({ minSecretLen: 99 });
+    try {
+      assert.equal(minEnvSecretLen(), 99);
+      // 20 chars is below the host floor: no longer secret-shaped enough.
+      assert.ok(!dynamicSecretVars(env).includes("MY_API_KEY"));
+      assert.ok(!envBoundSecretVars(env).includes("MY_API_KEY"));
+      // A value clearing the host floor still qualifies — it is a floor, not a block.
+      assert.ok(
+        dynamicSecretVars({ MY_API_KEY: "x".repeat(120) }).includes(
+          "MY_API_KEY",
+        ),
+      );
+    } finally {
+      configureEnvConfigSource(null);
+    }
+  });
+
+  it("unions configured extraVars into the redaction set, keeping the package floor", () => {
+    const floorBefore = minEnvSecretLen();
+    configureEnvConfigSource({ extraVars: ["GLOVEBOX_PROVIDER_SEED"] });
+    try {
+      assert.ok(envBoundSecretVars({}).includes("GLOVEBOX_PROVIDER_SEED"));
+      // A partial source keeps the unset field on its package derivation.
+      assert.equal(minEnvSecretLen(), floorBefore);
+    } finally {
+      configureEnvConfigSource(null);
+    }
+  });
+
+  it("fails closed on a malformed source at USE, not at configure", () => {
+    // Configure itself must not throw: it runs at a bundle entry's top level,
+    // where a throw kills the hook before its fail-closed catch installs.
+    for (const bad of [0, "16"]) {
+      configureEnvConfigSource({
+        minSecretLen: /** @type {number} */ (bad),
+      });
+      try {
+        assert.throws(() => minEnvSecretLen(), /minSecretLen/u);
+        assert.throws(() => dynamicSecretVars(env), /minSecretLen/u);
+      } finally {
+        configureEnvConfigSource(null);
+      }
+    }
+    for (const bad of ["bad-name", 7]) {
+      configureEnvConfigSource({
+        extraVars: /** @type {string[]} */ ([bad]),
+      });
+      try {
+        assert.throws(() => envBoundSecretVars({}), /not a variable name/u);
+      } finally {
+        configureEnvConfigSource(null);
+      }
+    }
+    configureEnvConfigSource({
+      extraVars: /** @type {string[]} */ (/** @type {unknown} */ ("X")),
+    });
+    try {
+      assert.throws(() => envBoundSecretVars({}), /must be an array/u);
+    } finally {
+      configureEnvConfigSource(null);
+    }
+  });
+
+  it("reports an unread key on stderr instead of leaving the seam silently inert", () => {
+    // A misspelled field must not be swallowed — the host would believe a
+    // forwarded credential is masked while nothing changed — but it must not
+    // throw either (bundle-entry top level: a throw there is a fail-OPEN hook).
+    const written = [];
+    const original = process.stderr.write;
+    // @ts-expect-error -- narrower than the overloaded write signature; the
+    // caller here only ever passes a string chunk.
+    process.stderr.write = (chunk) => {
+      written.push(String(chunk));
+      return true;
+    };
+    try {
+      configureEnvConfigSource(/** @type {any} */ ({ extra_vars: ["OOPS"] }));
+    } finally {
+      process.stderr.write = original;
+      configureEnvConfigSource(null);
+    }
+    assert.match(written.join(""), /unknown key "extra_vars"/u);
   });
 });
 

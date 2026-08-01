@@ -31,12 +31,86 @@ export function inferenceKeyVars() {
 }
 
 /**
+ * Host-supplied secret-vocabulary source, consulted before the package configs.
+ * Null (the default) keeps the package derivation.
+ * @type {{ minSecretLen?: number, extraVars?: string[] } | null}
+ */
+let hostEnvConfigSource = null;
+
+const HOST_SOURCE_LABEL = "configureEnvConfigSource";
+
+/**
+ * Adopt a host's own secret config in place of the package's: `minSecretLen`
+ * replaces the placeholder floor, and `extraVars` are unioned into the
+ * env-bound redaction set. This seam is what lets a host whose credential
+ * registry already names its forwarded secrets (and their length floor) drive
+ * the packaged helpers from that registry instead of forking this module —
+ * a fork is the drift channel that lets the two redaction sets silently
+ * disagree. Unset fields keep their package derivation. Like the missing-package
+ * remedy seam there is no too-late window: the source is consulted at each
+ * helper call, never resolved at module scope, so a later call steers every
+ * later answer. VALIDATION stays lazy, matching this module's load posture: a
+ * malformed source throws on first use inside the consuming hook's fail-closed
+ * catch, not at configure time, where a top-level throw in a bundle entry would
+ * kill the hook before its catch installs (fail OPEN).
+ * A key this seam does not read is reported on stderr, not thrown: a misspelled
+ * `extraVars` would otherwise leave the seam silently inert — the host believes
+ * a forwarded credential is masked while its value flows to the model — and a
+ * throw at a bundle entry's top level would kill the hook before its fail-closed
+ * catch installs (fail OPEN, same posture as configureHookgateMarker's late-call
+ * report).
+ * @param {{ minSecretLen?: number, extraVars?: string[] } | null} source
+ *   host config, or null to restore the package derivation
+ * @returns {void}
+ */
+export function configureEnvConfigSource(source) {
+  if (source !== null)
+    for (const key of Object.keys(source))
+      if (key !== "minSecretLen" && key !== "extraVars")
+        process.stderr.write(
+          `agent-sanitizer: ${HOST_SOURCE_LABEL} ignoring unknown key ` +
+            `${JSON.stringify(key)}; it reads minSecretLen and extraVars.\n`,
+        );
+  hostEnvConfigSource = source;
+}
+
+/**
  * The placeholder floor: a candidate value shorter than this is too short to be a
- * real secret and is skipped by the env-bound redaction pre-gate.
+ * real secret and is skipped by the env-bound redaction pre-gate. A malformed
+ * host floor throws rather than degrading to the package's — a host that set 32
+ * must not silently run at a laxer floor, and a non-positive one would admit
+ * empty placeholders as secrets.
  * @returns {number}
  */
 export function minEnvSecretLen() {
-  return inferenceKeys.min_secret_len;
+  const hostLen = hostEnvConfigSource?.minSecretLen;
+  if (hostLen === undefined) return inferenceKeys.min_secret_len;
+  if (!Number.isInteger(hostLen) || hostLen <= 0)
+    throw new Error(
+      `${HOST_SOURCE_LABEL}: minSecretLen must be a positive integer, got ${JSON.stringify(hostLen)}`,
+    );
+  return hostLen;
+}
+
+/**
+ * The host's declared extra secret variable names, or throw. A malformed entry
+ * fails CLOSED, same contract as {@link extraSecretVars}: dropping it silently
+ * would leave the host believing a forwarded credential is masked while its
+ * value flows to the model verbatim.
+ * @returns {string[]}
+ */
+function hostExtraSecretVars() {
+  const vars = hostEnvConfigSource?.extraVars;
+  if (vars === undefined) return [];
+  if (!Array.isArray(vars))
+    throw new Error(`${HOST_SOURCE_LABEL}: extraVars must be an array`);
+  for (const name of vars)
+    if (typeof name !== "string" || !EXTRA_TOKEN_RE.test(name))
+      throw new Error(
+        `${HOST_SOURCE_LABEL}: ${JSON.stringify(name)} is not a variable name ` +
+          "(expected [A-Z0-9_] names)",
+      );
+  return vars;
 }
 
 // A rendered vocabulary token. Restricting it to A-Z/0-9/_ is what lets the
@@ -239,10 +313,11 @@ export function extraSecretVars(env = process.env) {
 
 /**
  * The env-bound redaction set: the UNION of the inference keys, the curated host
- * credentials, any credential-shaped var present in the environment, and the
- * operator's declared extras. The redactor binds the same union; every consumer
- * (the sanitize-output pre-gate, the redactor client's per-request env snapshot)
- * must mirror it exactly, else a credential value would never trip the daemon.
+ * credentials, any credential-shaped var present in the environment, the
+ * operator's declared extras, and the host's configured extras. The redactor
+ * binds the same union; every consumer (the sanitize-output pre-gate, the
+ * redactor client's per-request env snapshot) must mirror it exactly, else a
+ * credential value would never trip the daemon.
  * @param {Record<string, string | undefined>} [env]
  * @returns {string[]}
  */
@@ -253,6 +328,7 @@ export function envBoundSecretVars(env = process.env) {
       ...scrubbed.vars,
       ...dynamicSecretVars(env),
       ...extraSecretVars(env),
+      ...hostExtraSecretVars(),
     ]),
   ];
 }
