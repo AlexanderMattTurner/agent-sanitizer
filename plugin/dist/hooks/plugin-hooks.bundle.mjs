@@ -57,11 +57,11 @@ import { userInfo } from "node:os";
 import { createHash } from "node:crypto";
 import { pathToFileURL } from "node:url";
 function isMain(importMetaUrl) {
-  if (cliEntryClaimed) return false;
+  if (shared.cliEntryClaimed) return false;
   return Boolean(process.argv[1]) && importMetaUrl === pathToFileURL(process.argv[1]).href;
 }
 function claimCliEntry() {
-  cliEntryClaimed = true;
+  shared.cliEntryClaimed = true;
 }
 function readFlag(argv, name50) {
   const prefix = `--${name50}=`;
@@ -85,13 +85,13 @@ async function readStdinJson(maxBytes = MAX_STDIN_BYTES) {
   return JSON.parse((await readAllBounded(process.stdin, maxBytes)).toString());
 }
 function registerLazyModules(modules) {
-  Object.assign(registeredLazyModules, modules);
+  Object.assign(shared.lazyModules, modules);
 }
 function registeredLazyModule(specifier) {
-  return registeredLazyModules[specifier];
+  return shared.lazyModules[specifier];
 }
 async function lazyImport(specifier) {
-  const registered = registeredLazyModules[specifier];
+  const registered = shared.lazyModules[specifier];
   if (registered) {
     lazyImportErrors.delete(specifier);
     return registered;
@@ -268,11 +268,11 @@ function writeFileNoFollow(path2, content3, mode = 384) {
     closeSync(fd);
   }
 }
-var cliEntryClaimed, HookEvent, PermissionDecision, LONE_SURROGATE_RE, MAX_STDIN_BYTES, registeredLazyModules, lazyImportErrors, DEFAULT_MISSING_PACKAGE_REMEDY, missingPackageRemedyOverride, UNTRUSTED_TEXT_CAP, HOOKGATE_MARKER_STEM, hookgateMarkerOverride, hookgateMarkerResolved;
+var shared, HookEvent, PermissionDecision, LONE_SURROGATE_RE, MAX_STDIN_BYTES, lazyImportErrors, DEFAULT_MISSING_PACKAGE_REMEDY, missingPackageRemedyOverride, UNTRUSTED_TEXT_CAP, HOOKGATE_MARKER_STEM, hookgateMarkerOverride, hookgateMarkerResolved;
 var init_hook_io = __esm({
   "claude-hooks/lib/hook-io.mjs"() {
     "use strict";
-    cliEntryClaimed = false;
+    shared = { lazyModules: /* @__PURE__ */ Object.create(null), cliEntryClaimed: false };
     HookEvent = Object.freeze({
       PRE_TOOL_USE: "PreToolUse",
       POST_TOOL_USE: "PostToolUse",
@@ -286,7 +286,6 @@ var init_hook_io = __esm({
     });
     LONE_SURROGATE_RE = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g;
     MAX_STDIN_BYTES = 64 * 1024 * 1024;
-    registeredLazyModules = /* @__PURE__ */ Object.create(null);
     lazyImportErrors = /* @__PURE__ */ new Map();
     DEFAULT_MISSING_PACKAGE_REMEDY = "reinstall the hook dependencies (pnpm install) and retry.";
     missingPackageRemedyOverride = null;

@@ -12,7 +12,63 @@ import { userInfo } from "node:os";
 import { createHash } from "node:crypto";
 import { pathToFileURL } from "node:url";
 
-let cliEntryClaimed = false;
+/**
+ * The process-wide state these helpers keep: the pre-registered module
+ * namespaces {@link lazyImport} answers from, and the CLI-entry latch
+ * {@link isMain} reads.
+ *
+ * `lazyModules` is empty when the hooks run from source; a build-time BUNDLE
+ * (which ships with no node_modules for the runtime `import()` to resolve)
+ * statically imports its packages and registers them here before importing the
+ * hooks that lazy-load them, so the same hook source runs unchanged in both
+ * worlds.
+ *
+ * Both fields live on ONE object so a second instance of this module can adopt
+ * it — see {@link adoptHookIoSharedState}.
+ * @typedef {{lazyModules: Record<string, Record<string, any>>, cliEntryClaimed: boolean}} HookIoSharedState
+ */
+
+/** @type {HookIoSharedState} */
+let shared = { lazyModules: Object.create(null), cliEntryClaimed: false };
+
+/**
+ * This instance's state object, for a host to hand to another instance.
+ * @returns {HookIoSharedState}
+ */
+export function hookIoSharedState() {
+  return shared;
+}
+
+/**
+ * Route this instance's registry and CLI-entry latch through `state`.
+ *
+ * A host that bundles its own copy of these helpers beside the packaged hooks
+ * ends up with TWO instances of this module in one process, each with its own
+ * registry object and its own latch. Without this seam the host must register
+ * every specifier twice — once per instance — and claim the CLI slot twice, and
+ * a specifier it registers on only one instance is invisible to the binders on
+ * the other: those binders then resolve it at RUNTIME, inside a bundle that has
+ * no node_modules, and the gate fails closed on every call. Adopting one state
+ * object is what removes that failure mode rather than policing it.
+ *
+ * Call it before importing any module that lazy-loads a specifier, for the same
+ * reason {@link registerLazyModules} carries that rule: a binder reads the
+ * registry at its own module scope.
+ *
+ * Registrations and a claim already made on this instance carry over, so a call
+ * that lands after them keeps them rather than dropping them; an entry already
+ * present in `state` wins, since it is the host's own choice for that specifier.
+ * @param {HookIoSharedState} state
+ * @returns {void}
+ */
+export function adoptHookIoSharedState(state) {
+  if (state === shared) return;
+  for (const [specifier, namespace] of Object.entries(shared.lazyModules))
+    if (state.lazyModules[specifier] === undefined)
+      state.lazyModules[specifier] = namespace;
+  if (shared.cliEntryClaimed) state.cliEntryClaimed = true;
+  shared = state;
+}
 
 /**
  * True when this module is the process entry point (run directly as a CLI, not
@@ -29,7 +85,7 @@ export function isMain(importMetaUrl) {
   // alongside the real entry's and consume its stdin. An entry that claimed the
   // CLI slot (claimCliEntry) therefore makes every later isMain call answer
   // false — module bodies run in dependency order, so the claim lands first.
-  if (cliEntryClaimed) return false;
+  if (shared.cliEntryClaimed) return false;
   return (
     Boolean(process.argv[1]) &&
     importMetaUrl === pathToFileURL(process.argv[1]).href
@@ -43,7 +99,7 @@ export function isMain(importMetaUrl) {
  * @returns {void}
  */
 export function claimCliEntry() {
-  cliEntryClaimed = true;
+  shared.cliEntryClaimed = true;
 }
 
 /**
@@ -122,17 +178,6 @@ export async function readStdinJson(maxBytes = MAX_STDIN_BYTES) {
 }
 
 /**
- * Pre-registered module namespaces consulted by {@link lazyImport} before it
- * dials the loader. Empty when the hooks run from source; a build-time BUNDLE
- * (which ships with no node_modules for the runtime `import()` to resolve)
- * statically imports its packages and registers them here before importing the
- * hooks that lazy-load them, so the same hook source runs unchanged in both
- * worlds.
- * @type {Record<string, Record<string, any>>}
- */
-const registeredLazyModules = Object.create(null);
-
-/**
  * Register already-loaded module namespaces for {@link lazyImport} to return in
  * place of a runtime dynamic import. Call before importing any module that
  * lazy-loads the given specifiers.
@@ -140,7 +185,7 @@ const registeredLazyModules = Object.create(null);
  * @returns {void}
  */
 export function registerLazyModules(modules) {
-  Object.assign(registeredLazyModules, modules);
+  Object.assign(shared.lazyModules, modules);
 }
 
 /**
@@ -153,7 +198,7 @@ export function registerLazyModules(modules) {
  * @returns {Record<string, any> | undefined}
  */
 export function registeredLazyModule(specifier) {
-  return registeredLazyModules[specifier];
+  return shared.lazyModules[specifier];
 }
 
 /**
@@ -178,7 +223,7 @@ const lazyImportErrors = new Map();
  * @returns {Promise<Record<string, any>>}
  */
 export async function lazyImport(specifier) {
-  const registered = registeredLazyModules[specifier];
+  const registered = shared.lazyModules[specifier];
   if (registered) {
     lazyImportErrors.delete(specifier);
     return registered;
