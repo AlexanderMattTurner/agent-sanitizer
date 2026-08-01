@@ -20,6 +20,30 @@
  * against a hand-written expectation. The vocabulary is read at run time, so a
  * noun added to the JSON is covered with no edit to this file.
  *
+ * WHY TWO IMPLEMENTATIONS AT ALL — this file guards a duplication, so it owes an
+ * account of why the duplication cannot simply be removed. A test that polices
+ * two copies is usually a sign the copies should be one; here they cannot be:
+ *
+ * * `credential-names.mjs` is a published standalone export
+ *   (`agent-sanitizer/credential-names-matcher`). Consumers import it with no
+ *   Python present, so it cannot delegate to the Python side.
+ * * The JavaScript matcher gates tool output IN FRONT OF the Python redactor
+ *   daemon and must fail closed when that daemon is down. Asking the daemon for
+ *   the verdict would make the gate depend on the thing it protects.
+ * * The rule is control flow, not data, so it cannot move into the shared JSON
+ *   the way the VOCABULARY already has.
+ *
+ * The renderings alone could be generated once into a committed artifact with a
+ * `committed == regenerate(source)` freshness check. That was rejected: both
+ * languages publish their validator, and `spec=` validates a CALLER's runtime
+ * vocabulary, so neither validator could be deleted. Generating would add an
+ * artifact on top of the duplication rather than removing it, and then need code
+ * to keep the two in step — more copies, not fewer.
+ *
+ * The duplication is therefore load-bearing, and this suite is the instrument
+ * that keeps it honest. If either bullet above stops being true, delete the
+ * redundant implementation instead of extending this file.
+ *
  * `python-credential-matcher.mjs` drives the real Python matcher over one
  * long-lived worker; see its header for the protocol.
  *
