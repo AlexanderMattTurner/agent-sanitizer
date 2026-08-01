@@ -202,6 +202,16 @@ hook module, and every consumer waits on that path instead. `lib/control-plane`
 resolves the marker at module scope, so a call that lands after that import
 warns on stderr — it cannot steer the wait that already started.
 
+**A host's own remedy can replace the packaged one in every fail-closed
+reason.** Deep call sites (`lib/control-plane`'s missing-package throw) take no
+remedy argument, so by default they can only say `pnpm install`. A host whose
+install has one entry point calls `configureMissingPackageRemedy(text)` (from
+`lib/hook-io`) — typically at its bundle entry — and every remedy-less
+`missingPackageMessage`/`missingPackageError` states that text instead. An
+explicit per-call remedy (including a per-gate `MESSAGES.remedy`) still wins,
+and `null` restores the packaged wording. Keep it to a sentence: past ~260
+characters it overruns the 300-char message budget.
+
 Hook internals are tuned by `_AGENT_SANITIZER_*` variables (redactor daemon
 path/socket/timeouts, sanitize budget, trace channel, Layer-2 reveal dir). The
 leading underscore marks them unstable — the supported surface is the `--hook=`

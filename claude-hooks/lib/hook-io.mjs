@@ -242,6 +242,33 @@ export const DEFAULT_MISSING_PACKAGE_REMEDY =
   "reinstall the hook dependencies (pnpm install) and retry.";
 
 /**
+ * Host-supplied default remedy, replacing DEFAULT_MISSING_PACKAGE_REMEDY. Null
+ * (the default) keeps the package's wording.
+ * @type {string | null}
+ */
+let missingPackageRemedyOverride = null;
+
+/**
+ * Adopt a host's own remedy as the default {@link missingPackageMessage} and
+ * {@link missingPackageError} state when their caller passes none. This refusal
+ * to hard-code the wording is what prevents a fail-closed reason whose remedy
+ * names a command the host doesn't have: deep call sites (controlPlane's
+ * missing-package throw) never take a remedy argument, so without this seam
+ * they can only ever tell a reader to run `pnpm install` — wrong advice in a
+ * host whose one install entry point is its own setup script. An explicit
+ * per-call remedy still wins over the configured one. Unlike the hookgate
+ * marker there is no too-late window: the remedy is consulted at each throw,
+ * never resolved at module scope, so a later call steers every later message.
+ * Keep it to a sentence — a remedy beyond ~260 characters overruns the 300-char
+ * message budget (see missingPackageMessage).
+ * @param {string | null} remedy  host remedy text, or null to restore the package default
+ * @returns {void}
+ */
+export function configureMissingPackageRemedy(remedy) {
+  missingPackageRemedyOverride = remedy;
+}
+
+/**
  * The fail-closed reason for a package a hook could not load: the recorded
  * loader error plus the remedy. The cause is scrubbed (it is spliced into
  * reasons shown to user and model) and its cap is COMPUTED so that
@@ -257,7 +284,7 @@ export const DEFAULT_MISSING_PACKAGE_REMEDY =
 export function missingPackageMessage(
   pkg,
   err = lazyImportErrorFor(pkg),
-  remedy = DEFAULT_MISSING_PACKAGE_REMEDY,
+  remedy = missingPackageRemedyOverride ?? DEFAULT_MISSING_PACKAGE_REMEDY,
 ) {
   const prefix = `${pkg} is unavailable: `;
   // 2 for the "; " joiner; 12 for safeErrMessage's own "…[truncated]" marker,
@@ -287,7 +314,7 @@ export function missingPackageMessage(
 export function missingPackageError(
   pkg,
   err = lazyImportErrorFor(pkg),
-  remedy = DEFAULT_MISSING_PACKAGE_REMEDY,
+  remedy = missingPackageRemedyOverride ?? DEFAULT_MISSING_PACKAGE_REMEDY,
 ) {
   return Object.assign(new Error(missingPackageMessage(pkg, err, remedy)), {
     code: "DEP_UNAVAILABLE",

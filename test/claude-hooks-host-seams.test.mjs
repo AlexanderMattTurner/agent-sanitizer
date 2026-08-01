@@ -29,10 +29,12 @@ const {
   missingPackageError,
   safeErrMessage,
   DEFAULT_MISSING_PACKAGE_REMEDY,
+  configureMissingPackageRemedy,
   hookgateMarkerPath,
   probeSetupAlive,
   awaitLazyDependency,
 } = await import("../claude-hooks/lib/hook-io.mjs");
+const { controlPlane } = await import("../claude-hooks/lib/control-plane.mjs");
 const { judgeSanitizeUserPrompt, USER_PROMPT_MESSAGES } =
   await import("../claude-hooks/sanitize-user-prompt.mjs");
 const {
@@ -182,6 +184,99 @@ describe("dependency-load diagnostics", () => {
       "",
     );
     assert.notEqual(depLoadHint(new TypeError("x is not a function")), "");
+  });
+});
+
+describe("missing-package remedy seam", () => {
+  it("is inert by default: unconfigured output is byte-identical after a round trip", () => {
+    const before = missingPackageMessage("a-package", new Error("boom"));
+    configureMissingPackageRemedy(HOST_REMEDY);
+    configureMissingPackageRemedy(null);
+    assert.equal(missingPackageMessage("a-package", new Error("boom")), before);
+    assert.equal(
+      before,
+      `a-package is unavailable: boom; ${DEFAULT_MISSING_PACKAGE_REMEDY}`,
+    );
+  });
+
+  it("reaches controlPlane's missing-package throw end-to-end", () => {
+    // The consumer that motivated the seam: controlPlane() throws with no
+    // remedy argument, so before the seam it could only ever say pnpm install.
+    configureMissingPackageRemedy(HOST_REMEDY);
+    try {
+      assert.throws(
+        () => controlPlane({ claudeAdapter: undefined }),
+        (err) => {
+          assert.equal(
+            /** @type {{code?: string}} */ (err).code,
+            "DEP_UNAVAILABLE",
+          );
+          const message = /** @type {Error} */ (err).message;
+          assert.match(message, /agent-control-plane-core is unavailable/u);
+          assert.ok(message.endsWith(HOST_REMEDY));
+          return true;
+        },
+      );
+    } finally {
+      configureMissingPackageRemedy(null);
+    }
+  });
+
+  it("still lets an explicit per-call remedy win", () => {
+    configureMissingPackageRemedy(HOST_REMEDY);
+    try {
+      const message = missingPackageMessage(
+        "a-package",
+        new Error("boom"),
+        "explicit remedy.",
+      );
+      assert.ok(message.endsWith("explicit remedy."));
+      assert.ok(!message.includes(HOST_REMEDY));
+      assert.ok(
+        missingPackageError(
+          "a-package",
+          new Error("boom"),
+          "explicit remedy.",
+        ).message.endsWith("explicit remedy."),
+      );
+    } finally {
+      configureMissingPackageRemedy(null);
+    }
+  });
+
+  it("is re-steerable, not latched: the last configure wins", () => {
+    configureMissingPackageRemedy("first remedy.");
+    configureMissingPackageRemedy(HOST_REMEDY);
+    try {
+      assert.ok(
+        missingPackageMessage("a-package", new Error("boom")).endsWith(
+          HOST_REMEDY,
+        ),
+      );
+    } finally {
+      configureMissingPackageRemedy(null);
+    }
+  });
+
+  it("keeps a long configured remedy whole through the 300-char budget", () => {
+    // Same clamp the explicit-remedy test above exercises, but through the
+    // configured default — the path a host actually takes.
+    const longRemedy = `${"run the host installer ".repeat(12)}and retry.`;
+    assert.ok(longRemedy.length > 260, "remedy must overrun the budget");
+    configureMissingPackageRemedy(longRemedy);
+    try {
+      const message = missingPackageMessage(
+        "a-package",
+        new Error("a".repeat(400)),
+      );
+      assert.ok(message.endsWith(longRemedy));
+      assert.ok(
+        !message.includes("aaaaaaaaaa"),
+        "the cause must not survive when the remedy has spent the budget",
+      );
+    } finally {
+      configureMissingPackageRemedy(null);
+    }
   });
 });
 
