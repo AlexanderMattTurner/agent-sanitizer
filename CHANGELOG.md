@@ -8,6 +8,11 @@ adhere to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+## [2.14.1] - 2026-08-01
+
+### Fixed
+- Claude hooks shared state now fills in missing slots when a host root object omits them, preventing gaps in the derived defaults.
+
 ## [2.14.0] - 2026-08-01
 
 ### Added
