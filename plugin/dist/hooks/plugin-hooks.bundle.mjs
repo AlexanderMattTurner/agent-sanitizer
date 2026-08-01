@@ -67040,9 +67040,7 @@ function deriveCredentialVocabulary(spec2) {
     if (Array.isArray(noun?.uses) && noun.uses.includes(ENV_NAME_USE))
       segments.push(...segmentForms(parts(noun.parts, "nouns[].parts")));
   const excludeSuffixes = nonSecret.flatMap(
-    (suffix) => segmentForms(parts(suffix, "nonSecretSuffixes[]")).map(
-      (form) => `_${form}`
-    )
+    (suffix) => segmentForms(parts(suffix, "nonSecretSuffixes[]"))
   );
   return {
     segments: [...new Set(segments)],
@@ -67074,7 +67072,7 @@ function buildCredentialNameRes(spec2) {
   return {
     match: new RegExp(`(?:^|_)(?:${segments.join("|")})$`, "i"),
     exclude: new RegExp(
-      `(?:${excludeSuffixes.join("|")})$|^(?:${excludeNames.join("|")})$`,
+      `(?:^|_)(?:${excludeSuffixes.join("|")})$|^(?:${excludeNames.join("|")})$`,
       "i"
     )
   };

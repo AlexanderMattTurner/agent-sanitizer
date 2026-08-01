@@ -74,6 +74,19 @@ describe("the name matcher excludes every published non-secret suffix", () => {
     });
   }
 
+  it("refuses a non-secret run that IS the whole name", () => {
+    // The exclusion rendered a leading underscore into its tokens, so it was
+    // reachable only when something preceded the run: `PUBLIC_KEY` matched on
+    // its trailing `KEY` and its value was cut out of every tool output
+    // carrying it. Asserted for every published run, bare and joined.
+    for (const suffix of spec.nonSecretSuffixes) {
+      const joined = suffix.join("_").toUpperCase();
+      const bare = suffix.join("").toUpperCase();
+      assert.equal(looksLikeCredentialVar(joined), false, joined);
+      assert.equal(looksLikeCredentialVar(bare), false, bare);
+    }
+  });
+
   it("refuses the ssh-agent socket, whose value is a path", () => {
     assert.equal(looksLikeCredentialVar("SSH_AUTH_SOCK"), false);
   });

@@ -185,10 +185,13 @@ export function deriveCredentialVocabulary(spec) {
   for (const noun of nouns)
     if (Array.isArray(noun?.uses) && noun.uses.includes(ENV_NAME_USE))
       segments.push(...segmentForms(parts(noun.parts, "nouns[].parts")));
+  // Rendered WITHOUT a leading underscore; the boundary is applied in the regex
+  // below, symmetrically with the match pattern. Baking `_` into the token makes
+  // the exclusion reachable only when something precedes the run, so a variable
+  // named exactly `PUBLIC_KEY` matched on its trailing `KEY` and never reached
+  // its exclusion — its value was then cut out of every tool output carrying it.
   const excludeSuffixes = nonSecret.flatMap((suffix) =>
-    segmentForms(parts(suffix, "nonSecretSuffixes[]")).map(
-      (form) => `_${form}`,
-    ),
+    segmentForms(parts(suffix, "nonSecretSuffixes[]")),
   );
   return {
     segments: [...new Set(segments)],
@@ -244,7 +247,7 @@ export function buildCredentialNameRes(spec) {
   return {
     match: new RegExp(`(?:^|_)(?:${segments.join("|")})$`, "i"),
     exclude: new RegExp(
-      `(?:${excludeSuffixes.join("|")})$|^(?:${excludeNames.join("|")})$`,
+      `(?:^|_)(?:${excludeSuffixes.join("|")})$|^(?:${excludeNames.join("|")})$`,
       "i",
     ),
   };
