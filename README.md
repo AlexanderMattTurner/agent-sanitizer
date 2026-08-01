@@ -202,6 +202,26 @@ hook module, and every consumer waits on that path instead. `lib/control-plane`
 resolves the marker at module scope, so a call that lands after that import
 warns on stderr — it cannot steer the wait that already started.
 
+**A host's own remedy can replace the packaged one in every fail-closed
+reason.** Deep call sites (`lib/control-plane`'s missing-package throw) take no
+remedy argument, so by default they can only say `pnpm install`. A host whose
+install has one entry point calls `configureMissingPackageRemedy(text)` (from
+`lib/hook-io`) — typically at its bundle entry — and every remedy-less
+`missingPackageMessage`/`missingPackageError` states that text instead. An
+explicit per-call remedy (including a per-gate `MESSAGES.remedy`) still wins,
+and `null` restores the packaged wording. Keep it to a sentence: past ~260
+characters it overruns the 300-char message budget.
+
+**A host's own secret registry can drive the env-bound redaction set.**
+`configureEnvConfigSource({ minSecretLen, extraVars })` (from `lib/env-config`)
+replaces the placeholder floor and unions extra `[A-Z0-9_]` variable names into
+`envBoundSecretVars()`, so a host that already declares its forwarded
+credentials (and their length floor) in a registry of its own feeds the packaged
+helpers from it instead of forking the module. Unset fields keep the package
+derivation; `null` restores it entirely. A malformed source — a non-object, a
+key the seam does not read, a bad field — throws on first use, inside the
+consuming hook's fail-closed catch, never at configure time.
+
 Hook internals are tuned by `_AGENT_SANITIZER_*` variables (redactor daemon
 path/socket/timeouts, sanitize budget, trace channel, Layer-2 reveal dir). The
 leading underscore marks them unstable — the supported surface is the `--hook=`

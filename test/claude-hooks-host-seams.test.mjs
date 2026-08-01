@@ -29,10 +29,18 @@ const {
   missingPackageError,
   safeErrMessage,
   DEFAULT_MISSING_PACKAGE_REMEDY,
+  configureMissingPackageRemedy,
   hookgateMarkerPath,
   probeSetupAlive,
   awaitLazyDependency,
 } = await import("../claude-hooks/lib/hook-io.mjs");
+const { controlPlane } = await import("../claude-hooks/lib/control-plane.mjs");
+const {
+  configureEnvConfigSource,
+  minEnvSecretLen,
+  envBoundSecretVars,
+  dynamicSecretVars,
+} = await import("../claude-hooks/lib/env-config.mjs");
 const { judgeSanitizeUserPrompt, USER_PROMPT_MESSAGES } =
   await import("../claude-hooks/sanitize-user-prompt.mjs");
 const {
@@ -182,6 +190,225 @@ describe("dependency-load diagnostics", () => {
       "",
     );
     assert.notEqual(depLoadHint(new TypeError("x is not a function")), "");
+  });
+});
+
+describe("missing-package remedy seam", () => {
+  it("is inert by default: unconfigured output is byte-identical after a round trip", () => {
+    const before = missingPackageMessage("a-package", new Error("boom"));
+    configureMissingPackageRemedy(HOST_REMEDY);
+    configureMissingPackageRemedy(null);
+    assert.equal(missingPackageMessage("a-package", new Error("boom")), before);
+    assert.equal(
+      before,
+      `a-package is unavailable: boom; ${DEFAULT_MISSING_PACKAGE_REMEDY}`,
+    );
+  });
+
+  it("reaches controlPlane's missing-package throw end-to-end", () => {
+    // The consumer that motivated the seam: controlPlane() throws with no
+    // remedy argument, so before the seam it could only ever say pnpm install.
+    configureMissingPackageRemedy(HOST_REMEDY);
+    try {
+      assert.throws(
+        () => controlPlane({ claudeAdapter: undefined }),
+        (err) => {
+          assert.equal(
+            /** @type {{code?: string}} */ (err).code,
+            "DEP_UNAVAILABLE",
+          );
+          const message = /** @type {Error} */ (err).message;
+          assert.match(message, /agent-control-plane-core is unavailable/u);
+          assert.ok(message.endsWith(HOST_REMEDY));
+          return true;
+        },
+      );
+    } finally {
+      configureMissingPackageRemedy(null);
+    }
+  });
+
+  it("still lets an explicit per-call remedy win", () => {
+    configureMissingPackageRemedy(HOST_REMEDY);
+    try {
+      const message = missingPackageMessage(
+        "a-package",
+        new Error("boom"),
+        "explicit remedy.",
+      );
+      assert.ok(message.endsWith("explicit remedy."));
+      assert.ok(!message.includes(HOST_REMEDY));
+      assert.ok(
+        missingPackageError(
+          "a-package",
+          new Error("boom"),
+          "explicit remedy.",
+        ).message.endsWith("explicit remedy."),
+      );
+    } finally {
+      configureMissingPackageRemedy(null);
+    }
+  });
+
+  it("is re-steerable, not latched: the last configure wins", () => {
+    configureMissingPackageRemedy("first remedy.");
+    configureMissingPackageRemedy(HOST_REMEDY);
+    try {
+      assert.ok(
+        missingPackageMessage("a-package", new Error("boom")).endsWith(
+          HOST_REMEDY,
+        ),
+      );
+    } finally {
+      configureMissingPackageRemedy(null);
+    }
+  });
+
+  it("keeps a long configured remedy whole through the 300-char budget", () => {
+    // Same clamp the explicit-remedy test above exercises, but through the
+    // configured default — the path a host actually takes.
+    const longRemedy = `${"run the host installer ".repeat(12)}and retry.`;
+    assert.ok(longRemedy.length > 260, "remedy must overrun the budget");
+    configureMissingPackageRemedy(longRemedy);
+    try {
+      const message = missingPackageMessage(
+        "a-package",
+        new Error("a".repeat(400)),
+      );
+      assert.ok(message.endsWith(longRemedy));
+      assert.ok(
+        !message.includes("aaaaaaaaaa"),
+        "the cause must not survive when the remedy has spent the budget",
+      );
+    } finally {
+      configureMissingPackageRemedy(null);
+    }
+  });
+});
+
+describe("env-config host source seam", () => {
+  // A value long enough for the package floor (16) but short of the host's.
+  const env = { MY_API_KEY: "x".repeat(20), PATH: "/usr/bin" };
+
+  it("is inert by default: unconfigured answers are identical after a round trip", () => {
+    const floorBefore = minEnvSecretLen();
+    const setBefore = envBoundSecretVars(env);
+    // Non-vacuous baseline: the shape-inferred path really ran.
+    assert.ok(setBefore.includes("MY_API_KEY"));
+    configureEnvConfigSource({
+      minSecretLen: 99,
+      extraVars: ["HOST_SEAM_VAR"],
+    });
+    configureEnvConfigSource(null);
+    assert.equal(minEnvSecretLen(), floorBefore);
+    assert.deepEqual(envBoundSecretVars(env), setBefore);
+  });
+
+  it("applies a configured floor to the helpers that consult it", () => {
+    configureEnvConfigSource({ minSecretLen: 99 });
+    try {
+      assert.equal(minEnvSecretLen(), 99);
+      // 20 chars is below the host floor: no longer secret-shaped enough.
+      assert.ok(!dynamicSecretVars(env).includes("MY_API_KEY"));
+      assert.ok(!envBoundSecretVars(env).includes("MY_API_KEY"));
+      // A value clearing the host floor still qualifies — it is a floor, not a block.
+      assert.ok(
+        dynamicSecretVars({ MY_API_KEY: "x".repeat(120) }).includes(
+          "MY_API_KEY",
+        ),
+      );
+    } finally {
+      configureEnvConfigSource(null);
+    }
+  });
+
+  it("unions configured extraVars into the redaction set, keeping the package floor", () => {
+    const floorBefore = minEnvSecretLen();
+    configureEnvConfigSource({ extraVars: ["GLOVEBOX_PROVIDER_SEED"] });
+    try {
+      assert.ok(envBoundSecretVars({}).includes("GLOVEBOX_PROVIDER_SEED"));
+      // A partial source keeps the unset field on its package derivation.
+      assert.equal(minEnvSecretLen(), floorBefore);
+    } finally {
+      configureEnvConfigSource(null);
+    }
+  });
+
+  it("fails closed on a malformed source at USE, not at configure", () => {
+    // Configure itself must not throw: it runs at a bundle entry's top level,
+    // where a throw kills the hook before its fail-closed catch installs.
+    for (const bad of [0, "16"]) {
+      configureEnvConfigSource({
+        minSecretLen: /** @type {number} */ (bad),
+      });
+      try {
+        assert.throws(() => minEnvSecretLen(), /minSecretLen/u);
+        assert.throws(() => dynamicSecretVars(env), /minSecretLen/u);
+      } finally {
+        configureEnvConfigSource(null);
+      }
+    }
+    for (const bad of ["bad-name", 7]) {
+      configureEnvConfigSource({
+        extraVars: /** @type {string[]} */ ([bad]),
+      });
+      try {
+        assert.throws(() => envBoundSecretVars({}), /not a variable name/u);
+      } finally {
+        configureEnvConfigSource(null);
+      }
+    }
+    configureEnvConfigSource({
+      extraVars: /** @type {string[]} */ (/** @type {unknown} */ ("X")),
+    });
+    try {
+      assert.throws(() => envBoundSecretVars({}), /must be an array/u);
+    } finally {
+      configureEnvConfigSource(null);
+    }
+  });
+
+  it("treats an undefined source as unconfigured, not as a configure-time crash", () => {
+    // The shape a host actually produces: configureEnvConfigSource(
+    // hostConfig.envSource) with the field absent. A throw here would land at
+    // the bundle entry's top level — a fail-OPEN hook — for a host that simply
+    // has nothing to configure.
+    const packageFloor = minEnvSecretLen();
+    configureEnvConfigSource(/** @type {any} */ (undefined));
+    try {
+      assert.equal(minEnvSecretLen(), packageFloor);
+      assert.ok(envBoundSecretVars(env).includes("MY_API_KEY"));
+    } finally {
+      configureEnvConfigSource(null);
+    }
+  });
+
+  it("throws at USE on a non-object source, never running silently inert", () => {
+    const nonObject = /** @type {any} */ ("X");
+    configureEnvConfigSource(nonObject);
+    try {
+      assert.throws(() => minEnvSecretLen(), /must be an object/u);
+      assert.throws(() => envBoundSecretVars({}), /must be an object/u);
+    } finally {
+      configureEnvConfigSource(null);
+    }
+  });
+
+  it("throws at USE on a key the seam does not read", () => {
+    // A typo'd field name must not leave the helpers on the package derivation
+    // while the host believes it configured them — same fail-closed contract as
+    // a malformed field value, and same USE-time timing (a configure-time throw
+    // lands at the bundle entry's top level, a fail-OPEN hook).
+    configureEnvConfigSource(/** @type {any} */ ({ minSecretLength: 32 }));
+    try {
+      assert.throws(() => minEnvSecretLen(), /unknown key "minSecretLength"/u);
+      assert.throws(
+        () => envBoundSecretVars({}),
+        /unknown key "minSecretLength"/u,
+      );
+    } finally {
+      configureEnvConfigSource(null);
+    }
   });
 });
 

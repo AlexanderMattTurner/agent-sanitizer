@@ -31,12 +31,100 @@ export function inferenceKeyVars() {
 }
 
 /**
+ * Host-supplied secret-vocabulary source, consulted before the package configs.
+ * Null (the default) keeps the package derivation.
+ * @type {{ minSecretLen?: number, extraVars?: string[] } | null}
+ */
+let hostEnvConfigSource = null;
+
+const HOST_SOURCE_LABEL = "configureEnvConfigSource";
+
+const HOST_SOURCE_KEYS = ["minSecretLen", "extraVars"];
+
+/**
+ * Adopt a host's own secret config in place of the package's: `minSecretLen`
+ * replaces the placeholder floor, and `extraVars` are unioned into the
+ * env-bound redaction set. This seam is what lets a host whose credential
+ * registry already names its forwarded secrets (and their length floor) drive
+ * the packaged helpers from that registry instead of forking this module —
+ * a fork is the drift channel that lets the two redaction sets silently
+ * disagree. Unset fields keep their package derivation; `undefined` and `null`
+ * both restore it entirely. Like the missing-package remedy seam there is no
+ * too-late window: the source is consulted at each helper call, never resolved
+ * at module scope, so a later call steers every later answer. A malformed
+ * source — a non-object, a key this seam does not read, a bad field — throws
+ * on first use, not here (see {@link hostSource}).
+ * @param {{ minSecretLen?: number, extraVars?: string[] } | null} source
+ *   host config, or null to restore the package derivation
+ * @returns {void}
+ */
+export function configureEnvConfigSource(source) {
+  hostEnvConfigSource = source ?? null;
+}
+
+/**
+ * The stored host source with its shape validated, or null when unconfigured.
+ * Shape errors — a non-object source, a key this seam does not read — throw
+ * HERE, on first use inside the consuming hook's fail-closed catch, never at
+ * configure time: a top-level throw in a bundle entry would kill the hook
+ * before that catch installs (fail OPEN), and silently ignoring the problem
+ * is worse — a typo'd `minSecretLength: 32` must not leave the helpers
+ * running at the package floor while the host believes it configured 32.
+ * @returns {{ minSecretLen?: number, extraVars?: string[] } | null}
+ */
+function hostSource() {
+  const source = hostEnvConfigSource;
+  if (source === null) return null;
+  if (typeof source !== "object")
+    throw new Error(
+      `${HOST_SOURCE_LABEL}: source must be an object, got ${typeof source}`,
+    );
+  for (const key of Object.keys(source))
+    if (!HOST_SOURCE_KEYS.includes(key))
+      throw new Error(
+        `${HOST_SOURCE_LABEL}: unknown key ${JSON.stringify(key)}; it reads ` +
+          `${HOST_SOURCE_KEYS.join(" and ")}`,
+      );
+  return source;
+}
+
+/**
  * The placeholder floor: a candidate value shorter than this is too short to be a
- * real secret and is skipped by the env-bound redaction pre-gate.
+ * real secret and is skipped by the env-bound redaction pre-gate. A malformed
+ * host floor throws rather than degrading to the package's — a host that set 32
+ * must not silently run at a laxer floor, and a non-positive one would admit
+ * empty placeholders as secrets.
  * @returns {number}
  */
 export function minEnvSecretLen() {
-  return inferenceKeys.min_secret_len;
+  const hostLen = hostSource()?.minSecretLen;
+  if (hostLen === undefined) return inferenceKeys.min_secret_len;
+  if (!Number.isInteger(hostLen) || hostLen <= 0)
+    throw new Error(
+      `${HOST_SOURCE_LABEL}: minSecretLen must be a positive integer, got ${JSON.stringify(hostLen)}`,
+    );
+  return hostLen;
+}
+
+/**
+ * The host's declared extra secret variable names, or throw. A malformed entry
+ * fails CLOSED, same contract as {@link extraSecretVars}: dropping it silently
+ * would leave the host believing a forwarded credential is masked while its
+ * value flows to the model verbatim.
+ * @returns {string[]}
+ */
+function hostExtraSecretVars() {
+  const vars = hostSource()?.extraVars;
+  if (vars === undefined) return [];
+  if (!Array.isArray(vars))
+    throw new Error(`${HOST_SOURCE_LABEL}: extraVars must be an array`);
+  for (const name of vars)
+    if (typeof name !== "string" || !EXTRA_TOKEN_RE.test(name))
+      throw new Error(
+        `${HOST_SOURCE_LABEL}: ${JSON.stringify(name)} is not a variable name ` +
+          "(expected [A-Z0-9_] names)",
+      );
+  return vars;
 }
 
 // A rendered vocabulary token. Restricting it to A-Z/0-9/_ is what lets the
@@ -239,10 +327,11 @@ export function extraSecretVars(env = process.env) {
 
 /**
  * The env-bound redaction set: the UNION of the inference keys, the curated host
- * credentials, any credential-shaped var present in the environment, and the
- * operator's declared extras. The redactor binds the same union; every consumer
- * (the sanitize-output pre-gate, the redactor client's per-request env snapshot)
- * must mirror it exactly, else a credential value would never trip the daemon.
+ * credentials, any credential-shaped var present in the environment, the
+ * operator's declared extras, and the host's configured extras. The redactor
+ * binds the same union; every consumer (the sanitize-output pre-gate, the
+ * redactor client's per-request env snapshot) must mirror it exactly, else a
+ * credential value would never trip the daemon.
  * @param {Record<string, string | undefined>} [env]
  * @returns {string[]}
  */
@@ -253,6 +342,7 @@ export function envBoundSecretVars(env = process.env) {
       ...scrubbed.vars,
       ...dynamicSecretVars(env),
       ...extraSecretVars(env),
+      ...hostExtraSecretVars(),
     ]),
   ];
 }
