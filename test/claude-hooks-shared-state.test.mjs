@@ -48,6 +48,12 @@ const entryUrl = pathToFileURL(process.argv[1]).href;
 const HOST_REMEDY = "run ./setup.sh in the project root and retry.";
 const HOST_MARKER = "/run/host-hookgate-inflight";
 
+/** What hookgateMarkerPath DERIVES for ("/proj", "/run") when no host path is set
+ * -- the answer an omitted `hookgateMarker` slot must not displace. */
+const DERIVED_MARKER = (
+  await import("../claude-hooks/lib/hook-io.mjs?derived")
+).hookgateMarkerPath("/proj", "/run");
+
 describe("hook-io instances are separate without the seam", () => {
   it("neither registrations nor a CLI claim cross instances", async () => {
     const [host, packaged] = await twoInstances();
@@ -152,6 +158,26 @@ describe("adoptHookIoSharedState", () => {
     packaged.registerLazyModules({ "pkg/one": BETA });
     packaged.adoptHookIoSharedState(host.hookIoSharedState());
     assert.equal(packaged.registeredLazyModule("pkg/one"), ALPHA);
+  });
+
+  it("fills slots a host root object omits", async () => {
+    // A host builds this object itself, so one written against an earlier version
+    // of the package lacks the slots added since. Every reader tests `!== null`,
+    // which an absent slot satisfies -- so unfilled, hookgateMarkerPath answers
+    // `undefined` instead of deriving a path, and the cold-start wait then treats
+    // setup as alive forever.
+    const [, packaged] = await twoInstances();
+    const legacyRoot = /** @type {any} */ ({
+      lazyModules: Object.create(null),
+      cliEntryClaimed: false,
+    });
+    packaged.adoptHookIoSharedState(legacyRoot);
+    assert.equal(packaged.hookgateMarkerPath("/proj", "/run"), DERIVED_MARKER);
+    assert.ok(
+      packaged
+        .missingPackageMessage("pkg")
+        .endsWith(packaged.DEFAULT_MISSING_PACKAGE_REMEDY),
+    );
   });
 
   it("is a no-op on the instance's own state", async () => {

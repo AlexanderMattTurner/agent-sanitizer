@@ -98,6 +98,20 @@ export function hookIoSharedState() {
  */
 export function adoptHookIoSharedState(state) {
   if (state === shared) return;
+  // Fill any slot `state` omits before anything reads it. A host builds this
+  // object itself, so one written against an earlier version of this package
+  // lacks the slots added since — and every reader below tests `!== null`, which
+  // an ABSENT slot satisfies. Unfilled, hookgateMarkerPath returns undefined
+  // instead of deriving a path; probeSetupAlive then throws internally on it and
+  // reports setup alive forever, so awaitLazyDependency waits out its whole
+  // ceiling, the harness kills the hook, and a killed hook is non-blocking — the
+  // fail-OPEN this module exists to prevent. `??=` and not `=`: it must not
+  // clobber a slot the host deliberately set, including `false`.
+  state.lazyModules ??= Object.create(null);
+  state.cliEntryClaimed ??= false;
+  state.missingPackageRemedy ??= null;
+  state.hookgateMarker ??= null;
+  state.hookgateMarkerResolved ??= false;
   for (const [specifier, namespace] of Object.entries(shared.lazyModules))
     if (state.lazyModules[specifier] === undefined)
       state.lazyModules[specifier] = namespace;
