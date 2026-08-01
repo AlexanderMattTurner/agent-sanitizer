@@ -1,12 +1,16 @@
 /**
  * The cross-instance seam on hook-io: `hookIoSharedState` / `adoptHookIoSharedState`.
  *
- * A host that bundles its own copy of these helpers beside the packaged hooks
- * runs TWO instances of this module in one process. Each keeps its own lazy
- * registry and its own CLI-entry latch, so a specifier registered on one is
- * invisible to the binders on the other — inside a bundle those binders then
- * dial a loader with no node_modules and the gate fails closed on every call.
- * The seam lets the second instance adopt the first's state object instead.
+ * A host that ships its own hook-io module beside the packaged hooks runs TWO
+ * instances of this file's state in one process. Each keeps its own copy of all
+ * four host-visible slots — the lazy registry, the CLI-entry latch, the
+ * missing-package remedy and the hookgate marker path — so a slot set on one is
+ * invisible to the readers on the other. Every one of those splits fails
+ * SILENTLY, which is why each has a test here: an unregistered specifier makes
+ * the gate fail closed on every call, a lost claim makes an inlined CLI eat the
+ * entry's stdin, a lost remedy names a command the host does not have, and a
+ * lost marker path makes the cold-start wait poll a file nobody writes. The seam
+ * lets the second instance adopt the first's state object instead.
  *
  * Two module instances are produced here the same way a bundler produces them:
  * by importing the module under two distinct specifiers, which gives two
@@ -40,6 +44,9 @@ const BETA = { beta: 2 };
 
 /** The argv[1] URL isMain compares against, so a claim is what flips it. */
 const entryUrl = pathToFileURL(process.argv[1]).href;
+
+const HOST_REMEDY = "run ./setup.sh in the project root and retry.";
+const HOST_MARKER = "/run/host-hookgate-inflight";
 
 describe("hook-io instances are separate without the seam", () => {
   it("neither registrations nor a CLI claim cross instances", async () => {
@@ -81,6 +88,62 @@ describe("adoptHookIoSharedState", () => {
     packaged.adoptHookIoSharedState(host.hookIoSharedState());
     assert.equal(host.registeredLazyModule("pkg/two"), BETA);
     assert.equal(host.isMain(entryUrl), false);
+  });
+
+  it("keeps a claim already made on the adopted state", async () => {
+    // The mirror of the case above, and the one that pins `if (claimed) set true`
+    // against a plain `state.x = shared.x`: the plain form erases a claim the
+    // adopted root already holds. An entry that claims and then adopts would
+    // silently lose the claim, and per isMain's own note the inlined hook's CLI
+    // then fires alongside the entry's and eats its stdin — a fail-open.
+    const [host, packaged] = await twoInstances();
+    host.claimCliEntry();
+    packaged.adoptHookIoSharedState(host.hookIoSharedState());
+    assert.equal(host.isMain(entryUrl), false);
+    assert.equal(packaged.isMain(entryUrl), false);
+  });
+
+  it("carries the host remedy and marker path to the other instance", async () => {
+    // The two slots beyond the registry and the latch. Split, they fail the same
+    // silent way: the packaged control-plane waits on a marker path nobody
+    // writes, and a fail-closed reason names `pnpm install` in a host whose one
+    // install entry point is its own setup script.
+    const [host, packaged] = await twoInstances();
+    packaged.adoptHookIoSharedState(host.hookIoSharedState());
+    host.configureMissingPackageRemedy(HOST_REMEDY);
+    host.configureHookgateMarker(HOST_MARKER);
+    assert.match(
+      packaged.missingPackageMessage("pkg"),
+      new RegExp(HOST_REMEDY),
+    );
+    assert.equal(packaged.hookgateMarkerPath("/proj"), HOST_MARKER);
+  });
+
+  it("keeps a remedy and a marker set before the adopt", async () => {
+    const [host, packaged] = await twoInstances();
+    packaged.configureMissingPackageRemedy(HOST_REMEDY);
+    packaged.configureHookgateMarker(HOST_MARKER);
+    packaged.adoptHookIoSharedState(host.hookIoSharedState());
+    assert.match(host.missingPackageMessage("pkg"), new RegExp(HOST_REMEDY));
+    assert.equal(host.hookgateMarkerPath("/proj"), HOST_MARKER);
+  });
+
+  it("keeps the adopted state's own remedy and marker when both hold one", async () => {
+    // The adopted root is the host's choice, so its value wins over whatever the
+    // adopting instance had. Without that arm the carry-over above overwrites the
+    // root and the host's own configuration is silently replaced by the packaged
+    // instance's.
+    const [host, packaged] = await twoInstances();
+    host.configureMissingPackageRemedy(HOST_REMEDY);
+    host.configureHookgateMarker(HOST_MARKER);
+    packaged.configureMissingPackageRemedy("some other remedy.");
+    packaged.configureHookgateMarker("/run/other-marker");
+    packaged.adoptHookIoSharedState(host.hookIoSharedState());
+    assert.match(
+      packaged.missingPackageMessage("pkg"),
+      new RegExp(HOST_REMEDY),
+    );
+    assert.equal(packaged.hookgateMarkerPath("/proj"), HOST_MARKER);
   });
 
   it("keeps the adopted state's own entry for a specifier both hold", async () => {

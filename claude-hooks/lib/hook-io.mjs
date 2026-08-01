@@ -13,23 +13,40 @@ import { createHash } from "node:crypto";
 import { pathToFileURL } from "node:url";
 
 /**
- * The process-wide state these helpers keep: the pre-registered module
- * namespaces {@link lazyImport} answers from, and the CLI-entry latch
- * {@link isMain} reads.
+ * EVERY process-wide slot these helpers keep — the four a host can observe or
+ * steer, so a second instance that adopts this object is steered in all four at
+ * once. A slot left off this object is one a host must configure per instance,
+ * and forgetting the second call fails silently; that is the whole failure class
+ * {@link adoptHookIoSharedState} exists to remove, so the object is complete
+ * rather than covering only the registry.
  *
- * `lazyModules` is empty when the hooks run from source; a build-time BUNDLE
- * (which ships with no node_modules for the runtime `import()` to resolve)
- * statically imports its packages and registers them here before importing the
- * hooks that lazy-load them, so the same hook source runs unchanged in both
- * worlds.
- *
- * Both fields live on ONE object so a second instance of this module can adopt
- * it — see {@link adoptHookIoSharedState}.
- * @typedef {{lazyModules: Record<string, Record<string, any>>, cliEntryClaimed: boolean}} HookIoSharedState
+ * - `lazyModules` — the namespaces {@link lazyImport} answers from. Empty when
+ *   the hooks run from source; a build-time BUNDLE (which ships with no
+ *   node_modules for the runtime `import()` to resolve) statically imports its
+ *   packages and registers them here before importing the hooks that lazy-load
+ *   them, so the same hook source runs unchanged in both worlds.
+ * - `cliEntryClaimed` — the CLI-entry latch {@link isMain} reads.
+ * - `missingPackageRemedy` — the host remedy {@link configureMissingPackageRemedy}
+ *   sets; null keeps {@link DEFAULT_MISSING_PACKAGE_REMEDY}.
+ * - `hookgateMarker` — the marker path {@link configureHookgateMarker} sets, and
+ *   `hookgateMarkerResolved`, the latch that makes a too-late call say so.
+ * @typedef {{
+ *   lazyModules: Record<string, Record<string, any>>,
+ *   cliEntryClaimed: boolean,
+ *   missingPackageRemedy: string | null,
+ *   hookgateMarker: string | null,
+ *   hookgateMarkerResolved: boolean,
+ * }} HookIoSharedState
  */
 
 /** @type {HookIoSharedState} */
-let shared = { lazyModules: Object.create(null), cliEntryClaimed: false };
+let shared = {
+  lazyModules: Object.create(null),
+  cliEntryClaimed: false,
+  missingPackageRemedy: null,
+  hookgateMarker: null,
+  hookgateMarkerResolved: false,
+};
 
 /**
  * This instance's state object, for a host to hand to another instance.
@@ -40,24 +57,42 @@ export function hookIoSharedState() {
 }
 
 /**
- * Route this instance's registry and CLI-entry latch through `state`.
+ * Route every slot of {@link HookIoSharedState} on this instance through `state`.
  *
- * A host that bundles its own copy of these helpers beside the packaged hooks
- * ends up with TWO instances of this module in one process, each with its own
- * registry object and its own latch. Without this seam the host must register
- * every specifier twice — once per instance — and claim the CLI slot twice, and
- * a specifier it registers on only one instance is invisible to the binders on
- * the other: those binders then resolve it at RUNTIME, inside a bundle that has
- * no node_modules, and the gate fails closed on every call. Adopting one state
- * object is what removes that failure mode rather than policing it.
+ * A host that ships its OWN hook-io module beside the packaged hooks ends up
+ * with two instances of this file's state in one process, each with its own
+ * registry and its own latches. Without this seam the host configures each slot
+ * twice, and a slot it sets on only one instance is invisible to the readers on
+ * the other. For the registry that means those readers resolve a specifier at
+ * RUNTIME, inside a bundle with no node_modules, and the gate fails closed on
+ * every call. Adopting one state object removes that failure mode rather than
+ * policing it.
  *
- * Call it before importing any module that lazy-loads a specifier, for the same
- * reason {@link registerLazyModules} carries that rule: a binder reads the
- * registry at its own module scope.
+ * WHY AN API AND NOT A BUNDLER ALIAS: collapsing the two module records at build
+ * time (an esbuild `alias` from the host's module to this one) is the cheaper
+ * fix and needs no API — but it works only when the host's module is a COPY of
+ * this one. The motivating host's is not: it exports names this module does not
+ * have and lacks names this one exports, so an alias breaks every call site of
+ * the difference. `test/claude-hooks-exports.test.mjs` still states the rule for
+ * a true copy — share this module, never duplicate it. This seam serves the
+ * other case, a host with its own module that must agree with ours on state.
  *
- * Registrations and a claim already made on this instance carry over, so a call
- * that lands after them keeps them rather than dropping them; an entry already
- * present in `state` wins, since it is the host's own choice for that specifier.
+ * Call it before importing any module that reads a slot, for the same reason
+ * {@link registerLazyModules} carries that rule: a reader binds at its own
+ * module scope.
+ *
+ * Slots already set on EITHER side survive: this instance's registrations and
+ * latches carry over, and a value already present in `state` wins, since it is
+ * the adopted root's own choice. Adopting the state this instance already holds
+ * is a no-op.
+ *
+ * CONSTRAINT: every instance must adopt the same root object, and none may adopt
+ * a second, different one. `shared` is reassigned, so a later `B.adopt(C)` would
+ * leave an earlier `A.adopt(B)` pointing at an abandoned object whose readers
+ * nothing reaches. This is not enforced with a throw: callers are bundle entry
+ * points, and a throw at their top level kills the hook before it writes a
+ * response — a hook that emits nothing reads as non-blocking, which is the
+ * fail-OPEN this whole module is built to avoid.
  * @param {HookIoSharedState} state
  * @returns {void}
  */
@@ -67,6 +102,14 @@ export function adoptHookIoSharedState(state) {
     if (state.lazyModules[specifier] === undefined)
       state.lazyModules[specifier] = namespace;
   if (shared.cliEntryClaimed) state.cliEntryClaimed = true;
+  if (
+    shared.missingPackageRemedy !== null &&
+    state.missingPackageRemedy === null
+  )
+    state.missingPackageRemedy = shared.missingPackageRemedy;
+  if (shared.hookgateMarker !== null && state.hookgateMarker === null)
+    state.hookgateMarker = shared.hookgateMarker;
+  if (shared.hookgateMarkerResolved) state.hookgateMarkerResolved = true;
   shared = state;
 }
 
@@ -287,13 +330,6 @@ export const DEFAULT_MISSING_PACKAGE_REMEDY =
   "reinstall the hook dependencies (pnpm install) and retry.";
 
 /**
- * Host-supplied default remedy, replacing DEFAULT_MISSING_PACKAGE_REMEDY. Null
- * (the default) keeps the package's wording.
- * @type {string | null}
- */
-let missingPackageRemedyOverride = null;
-
-/**
  * Adopt a host's own remedy as the default {@link missingPackageMessage} and
  * {@link missingPackageError} state when their caller passes none. This refusal
  * to hard-code the wording is what prevents a fail-closed reason whose remedy
@@ -310,7 +346,7 @@ let missingPackageRemedyOverride = null;
  * @returns {void}
  */
 export function configureMissingPackageRemedy(remedy) {
-  missingPackageRemedyOverride = remedy;
+  shared.missingPackageRemedy = remedy;
 }
 
 /**
@@ -329,7 +365,7 @@ export function configureMissingPackageRemedy(remedy) {
 export function missingPackageMessage(
   pkg,
   err = lazyImportErrorFor(pkg),
-  remedy = missingPackageRemedyOverride ?? DEFAULT_MISSING_PACKAGE_REMEDY,
+  remedy = shared.missingPackageRemedy ?? DEFAULT_MISSING_PACKAGE_REMEDY,
 ) {
   const prefix = `${pkg} is unavailable: `;
   // 2 for the "; " joiner; 12 for safeErrMessage's own "…[truncated]" marker,
@@ -359,7 +395,7 @@ export function missingPackageMessage(
 export function missingPackageError(
   pkg,
   err = lazyImportErrorFor(pkg),
-  remedy = missingPackageRemedyOverride ?? DEFAULT_MISSING_PACKAGE_REMEDY,
+  remedy = shared.missingPackageRemedy ?? DEFAULT_MISSING_PACKAGE_REMEDY,
 ) {
   return Object.assign(new Error(missingPackageMessage(pkg, err, remedy)), {
     code: "DEP_UNAVAILABLE",
@@ -467,16 +503,6 @@ export function emitHookResponse(hookEventName, fields) {
 const HOOKGATE_MARKER_STEM = "agent-sanitizer-hookgate-inflight-";
 
 /**
- * Host-supplied marker path, replacing the derived one. Null (the default) keeps
- * the derivation below.
- * @type {string | null}
- */
-let hookgateMarkerOverride = null;
-
-/** Whether {@link hookgateMarkerPath} has already handed a path to a caller. */
-let hookgateMarkerResolved = false;
-
-/**
  * Adopt a host's own cold-start marker path in place of the derived one, so a
  * host whose setup script already writes a marker under its own convention can
  * use these hooks without running a second, disagreeing wait loop against a path
@@ -494,13 +520,13 @@ let hookgateMarkerResolved = false;
  * @returns {void}
  */
 export function configureHookgateMarker(path) {
-  if (hookgateMarkerResolved)
+  if (shared.hookgateMarkerResolved)
     process.stderr.write(
       "agent-sanitizer: configureHookgateMarker called after a marker path was " +
         "already resolved; whatever resolved it is using the previous path and " +
         "cannot be re-steered. Call it before importing any hook module.\n",
     );
-  hookgateMarkerOverride = path;
+  shared.hookgateMarker = path;
 }
 
 /**
@@ -524,8 +550,8 @@ export function hookgateMarkerPath(
   projectDir = process.env.CLAUDE_PROJECT_DIR,
   runtimeDir = process.env.XDG_RUNTIME_DIR,
 ) {
-  hookgateMarkerResolved = true;
-  if (hookgateMarkerOverride !== null) return hookgateMarkerOverride;
+  shared.hookgateMarkerResolved = true;
+  if (shared.hookgateMarker !== null) return shared.hookgateMarker;
   if (!projectDir) return null;
   // Prefer the per-user, mode-0700 runtime dir when the harness gives an
   // absolute one; else the world-writable /tmp, where markerIsTrusted() — not

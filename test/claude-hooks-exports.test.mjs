@@ -12,7 +12,10 @@
  * modules plus lib/hook-io and lib/control-plane are what a consumer needs to
  * compose the hooks; hook-io in particular MUST be shared rather than copied,
  * because it owns the lazy-module registry and the CLI-slot singleton — two
- * inlined copies would double-fire the inlined CLIs.
+ * inlined copies would double-fire the inlined CLIs. A host that cannot share it
+ * because its own hook-io module is not a copy — it exports names this one does
+ * not have — reconciles the two through `adoptHookIoSharedState` instead, which
+ * puts both instances on one state object.
  *
  * These drive Node's real exports resolution via `import.meta.resolve` against
  * the package's own name — the same resolution a consumer's bare import
