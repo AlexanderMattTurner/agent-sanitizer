@@ -17,8 +17,6 @@
  * rather than at module load where a throw would abort before that catch installs
  * and let the harness pass the tool output through UNSANITIZED (fail OPEN).
  */
-import { credentialNameMatcher } from "../../src/credential-names.mjs";
-
 import credentialNames from "../../python/agent_sanitizer/secrets/data/credential-names.json" with { type: "json" };
 import inferenceKeys from "../config/inference-key-vars.json" with { type: "json" };
 import scrubbed from "../config/scrubbed-env-vars.json" with { type: "json" };
@@ -129,30 +127,147 @@ function hostExtraSecretVars() {
   return vars;
 }
 
-/** @type {((name: string) => boolean) | undefined} */
-let _credentialRule;
+// A rendered vocabulary token. Restricting it to A-Z/0-9/_ is what lets the
+// regexes below interpolate it unescaped: a stray metacharacter (or an empty
+// list, which would make the match regex accept nothing and leak every forwarded
+// credential) fails closed here instead of silently under-matching. Digits are
+// admitted because a noun part may legitimately carry one (the vocabulary's parts
+// are `[a-z0-9]+`); a digit cannot be a metacharacter, so it is safe to embed.
+const CRED_TOKEN_RE = /^[A-Z0-9_]+$/;
+
+const VOCAB_LABEL = "credential-names.json";
+
+// Names ending in a credential noun whose value is not a secret. SSH_AUTH_SOCK
+// holds a filesystem path, and redacting it would strip the agent socket out of
+// tool output. Site-independent (anyone running an ssh-agent has it), so it lives
+// with the consumer rather than in the published vocabulary, which describes
+// which WORDS name a secret and cannot know about a specific variable.
+const EXCLUDE_NAMES = ["SSH_AUTH_SOCK"];
+
+// Which noun renderings apply to a variable NAME (the other use, `field-value`,
+// feeds the redactor's `field = value` matcher and is not a name matcher).
+const ENV_NAME_USE = "env-name";
+
 /**
- * The credential-var-NAME predicate, memoized after the first build. Matching by
+ * The whole-name forms of `parts`: underscore-joined and bare-joined, upper-cased.
+ * Both are emitted because both spellings occur in the wild (`API_KEY`, `APIKEY`)
+ * and a matcher anchored on underscore-delimited segments sees them as different
+ * tokens; a single-part noun collapses to one form. Mirrors the Python renderer
+ * (`_segment_forms` in agent_sanitizer/secrets/credential_names.py) so the two
+ * ecosystems derive the same vocabulary from the same file.
+ * @param {string[]} parts
+ * @returns {string[]}
+ */
+function segmentForms(parts) {
+  return [
+    ...new Set([parts.join("_").toUpperCase(), parts.join("").toUpperCase()]),
+  ];
+}
+
+/**
+ * Render the published credential-noun vocabulary into the name-matcher spec:
+ * the credential segments, and the trailing suffixes that mark a
+ * credential-shaped name as holding a non-secret.
+ *
+ * The vocabulary is the SINGLE source both ecosystems read — a curated second
+ * copy of these renderings is what let this matcher fall twelve segments behind
+ * the engine, so a variable named `…_ACCESS_TOKEN` was never recognized as
+ * credential-bearing and its value was never handed to the redactor.
+ * @param {Record<string, any>} spec
+ * @returns {{ segments: string[], excludeSuffixes: string[], excludeNames: string[] }}
+ */
+export function deriveCredentialVocabulary(spec) {
+  const nouns = spec?.nouns;
+  const nonSecret = spec?.nonSecretSuffixes;
+  if (!Array.isArray(nouns) || !Array.isArray(nonSecret))
+    throw new Error(`${VOCAB_LABEL}: nouns/nonSecretSuffixes missing`);
+  const segments = [];
+  for (const noun of nouns)
+    if (Array.isArray(noun?.uses) && noun.uses.includes(ENV_NAME_USE))
+      segments.push(...segmentForms(parts(noun.parts, "nouns[].parts")));
+  // Rendered WITHOUT a leading underscore; the boundary is applied in the regex
+  // below, symmetrically with the match pattern. Baking `_` into the token makes
+  // the exclusion reachable only when something precedes the run, so a variable
+  // named exactly `PUBLIC_KEY` matched on its trailing `KEY` and never reached
+  // its exclusion — its value was then cut out of every tool output carrying it.
+  const excludeSuffixes = nonSecret.flatMap((suffix) =>
+    segmentForms(parts(suffix, "nonSecretSuffixes[]")),
+  );
+  return {
+    segments: [...new Set(segments)],
+    excludeSuffixes: [...new Set(excludeSuffixes)],
+    excludeNames: EXCLUDE_NAMES,
+  };
+}
+
+/**
+ * `value` as a validated non-empty array of lower-case noun parts, or throw. A
+ * malformed part must not render into a token that silently under-matches.
+ * @param {unknown} value
+ * @param {string} field
+ * @returns {string[]}
+ */
+function parts(value, field) {
+  if (!Array.isArray(value) || value.length === 0)
+    throw new Error(`${VOCAB_LABEL}: ${field} is empty or missing`);
+  for (const part of value)
+    if (typeof part !== "string" || !/^[a-z0-9]+$/u.test(part))
+      throw new Error(`${VOCAB_LABEL}: bad part ${part} in ${field}`);
+  return value;
+}
+
+/**
+ * The validated token list under `field`, or throw. An absent, empty, or
+ * metacharacter-bearing list must not degrade into a pattern that matches nothing,
+ * which would leak every forwarded credential.
+ * @param {Record<string, unknown>} spec
+ * @param {string} field
+ * @returns {string[]}
+ */
+function credentialTokens(spec, field) {
+  const group = spec[field];
+  if (!Array.isArray(group) || group.length === 0)
+    throw new Error(`${VOCAB_LABEL}: ${field} is empty or missing`);
+  for (const token of group)
+    if (typeof token !== "string" || !CRED_TOKEN_RE.test(token))
+      throw new Error(`${VOCAB_LABEL}: bad token ${token} in ${field}`);
+  return group;
+}
+
+/**
+ * Validate a rendered name-matcher spec and build its match/exclude regexes. Pure
+ * and exported so the fail-closed paths can be driven directly with a bad spec.
+ * @param {Record<string, unknown>} spec
+ * @returns {{ match: RegExp, exclude: RegExp }}
+ */
+export function buildCredentialNameRes(spec) {
+  const segments = credentialTokens(spec, "segments");
+  const excludeSuffixes = credentialTokens(spec, "excludeSuffixes");
+  const excludeNames = credentialTokens(spec, "excludeNames");
+  return {
+    match: new RegExp(`(?:^|_)(?:${segments.join("|")})$`, "i"),
+    exclude: new RegExp(
+      `(?:^|_)(?:${excludeSuffixes.join("|")})$|^(?:${excludeNames.join("|")})$`,
+      "i",
+    ),
+  };
+}
+
+/** @type {{ match: RegExp, exclude: RegExp } | undefined} */
+let _credentialNameRes;
+/**
+ * The credential-var-NAME regexes, memoized after the first build. Matching by
  * trailing segment lets the redaction set self-populate with any token the
  * process actually holds; a curated list drifts. The curated sets
  * (inferenceKeyVars + scrubbed vars) stay the guaranteed floor; this only ADDS
  * lookalikes.
- *
- * Built by credentialNameMatcher — the package's one credential-name decision —
- * rather than a second regex pair derived here. A local copy is how this module
- * came to read `nonSecretSuffixes` as suffixes needing a PRECEDING underscore,
- * so a variable named exactly `PUBLIC_KEY` was reported credential-bearing and
- * its value cut out of tool output; the matcher compares whole trailing runs and
- * declines it. One decision means the two cannot disagree again.
- * @returns {(name: string) => boolean}
+ * @returns {{ match: RegExp, exclude: RegExp }}
  */
-function credentialRule() {
-  if (_credentialRule !== undefined) return _credentialRule;
-  return (_credentialRule = credentialNameMatcher({
-    spec: credentialNames,
-    scope: "trailing",
-    declineNonSecret: true,
-  }));
+function credentialNameRes() {
+  if (_credentialNameRes !== undefined) return _credentialNameRes;
+  return (_credentialNameRes = buildCredentialNameRes(
+    deriveCredentialVocabulary(credentialNames),
+  ));
 }
 
 /**
@@ -162,7 +277,8 @@ function credentialRule() {
  * @returns {boolean}
  */
 export function looksLikeCredentialVar(name) {
-  return credentialRule()(name);
+  const res = credentialNameRes();
+  return res.match.test(name) && !res.exclude.test(name);
 }
 
 /**
@@ -187,9 +303,9 @@ export function dynamicSecretVars(env = process.env) {
 // the set without this.
 const EXTRA_SECRET_VARS_ENV = "_AGENT_SANITIZER_EXTRA_SECRET_VARS";
 
-// These are whole variable names an operator typed, and real ones carry digits
-// (`AWS_S3_KEY2`); metacharacters are excluded so a malformed entry fails closed
-// rather than widening the set.
+// Digits allowed here but not in CRED_TOKEN_RE: that one gates regex-interpolated
+// name SEGMENTS, while these are whole variable names an operator typed, and real
+// ones carry digits (`AWS_S3_KEY2`). Both exclude metacharacters.
 const EXTRA_TOKEN_RE = /^[A-Z0-9_]+$/;
 
 /**

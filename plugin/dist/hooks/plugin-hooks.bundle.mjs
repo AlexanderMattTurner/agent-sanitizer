@@ -7835,7 +7835,7 @@ var require_util = __commonJS({
       return path2;
     });
     exports.normalize = normalize3;
-    function join6(aRoot, aPath) {
+    function join5(aRoot, aPath) {
       if (aRoot === "") {
         aRoot = ".";
       }
@@ -7867,7 +7867,7 @@ var require_util = __commonJS({
       }
       return joined;
     }
-    exports.join = join6;
+    exports.join = join5;
     exports.isAbsolute = function(aPath) {
       return aPath.charAt(0) === "/" || urlRegexp.test(aPath);
     };
@@ -8081,7 +8081,7 @@ var require_util = __commonJS({
             parsed.path = parsed.path.substring(0, index2 + 1);
           }
         }
-        sourceURL = join6(urlGenerate(parsed), sourceURL);
+        sourceURL = join5(urlGenerate(parsed), sourceURL);
       }
       return normalize3(sourceURL);
     }
@@ -31752,9 +31752,9 @@ var init_lib5 = __esm({
        * @returns {undefined}
        *   Nothing.
        */
-      set dirname(dirname3) {
+      set dirname(dirname2) {
         assertPath(this.basename, "dirname");
-        this.path = default2.join(dirname3 || "", this.basename);
+        this.path = default2.join(dirname2 || "", this.basename);
       }
       /**
        * Get the extname (including dot) (example: `'.js'`).
@@ -66904,126 +66904,9 @@ var init_authored_content = __esm({
   }
 });
 
-// src/credential-names.mjs
-import { readFileSync as readFileSync3 } from "node:fs";
-import { dirname, join as join2 } from "node:path";
-import { fileURLToPath as fileURLToPath2 } from "node:url";
-function dedupe(values) {
-  return [...new Set(values)];
-}
-function segmentForms(parts2) {
-  return dedupe([parts2.join("_").toUpperCase(), parts2.join("").toUpperCase()]);
-}
-function parts(value, field) {
-  if (!Array.isArray(value) || value.length === 0)
-    throw new Error(`${FILE_LABEL}: ${field} is empty or missing`);
-  const bad = value.filter(
-    (part) => typeof part !== "string" || !PART_RE.test(part)
-  );
-  if (bad.length)
-    throw new Error(
-      `${FILE_LABEL}: bad part(s) ${JSON.stringify(bad)} in ${field}`
-    );
-  return value;
-}
-function uses(value, field) {
-  if (!Array.isArray(value) || value.length === 0)
-    throw new Error(`${FILE_LABEL}: ${field} is empty or missing`);
-  const unknown = value.filter((use) => !KNOWN_USES.has(use)).sort();
-  if (unknown.length)
-    throw new Error(
-      `${FILE_LABEL}: unknown use(s) ${JSON.stringify(unknown)} in ${field}`
-    );
-  return new Set(value);
-}
-function parseCredentialNames(spec2) {
-  const nouns = spec2?.nouns;
-  if (!Array.isArray(nouns) || nouns.length === 0)
-    throw new Error(`${FILE_LABEL}: nouns is empty or missing`);
-  const segments = [];
-  const fieldNamePatterns = [];
-  nouns.forEach((noun, index2) => {
-    if (typeof noun !== "object" || noun === null || Array.isArray(noun))
-      throw new Error(`${FILE_LABEL}: nouns[${index2}] is not an object`);
-    const nounParts = parts(noun.parts, `nouns[${index2}].parts`);
-    const nounUses = uses(noun.uses, `nouns[${index2}].uses`);
-    if (nounUses.has(ENV_NAME_USE)) segments.push(...segmentForms(nounParts));
-    if (nounUses.has(FIELD_VALUE_USE))
-      fieldNamePatterns.push(nounParts.join("[_-]?"));
-  });
-  const suffixes = spec2?.nonSecretSuffixes;
-  if (!Array.isArray(suffixes) || suffixes.length === 0)
-    throw new Error(`${FILE_LABEL}: nonSecretSuffixes is empty or missing`);
-  const nonSecretSegments = suffixes.flatMap(
-    (suffix, index2) => segmentForms(parts(suffix, `nonSecretSuffixes[${index2}]`))
-  );
-  if (!segments.length)
-    throw new Error(`${FILE_LABEL}: no noun is marked ${ENV_NAME_USE}`);
-  if (!fieldNamePatterns.length)
-    throw new Error(`${FILE_LABEL}: no noun is marked ${FIELD_VALUE_USE}`);
-  return {
-    segments: dedupe(segments),
-    fieldNamePatterns: dedupe(fieldNamePatterns),
-    nonSecretSegments: dedupe(nonSecretSegments)
-  };
-}
-function credentialNames() {
-  return _packaged ??= parseCredentialNames(
-    JSON.parse(readFileSync3(DATA_FILE, "utf8"))
-  );
-}
-function credentialNameMatcher(options = {}) {
-  const { scope = "trailing", declineNonSecret = true, spec: spec2 } = options;
-  if (scope !== "trailing" && scope !== "any-segment")
-    throw new Error(
-      `credentialNameMatcher: unknown scope ${JSON.stringify(scope)}`
-    );
-  const vocabulary = spec2 ? parseCredentialNames(spec2) : credentialNames();
-  const nouns = new Set(vocabulary.segments);
-  const nonSecret = new Set(vocabulary.nonSecretSegments);
-  const maxRun = Math.max(
-    ...vocabulary.segments.map((noun) => noun.split("_").length)
-  );
-  const trailingRuns = (words) => Array.from(
-    { length: Math.min(maxRun, words.length) },
-    (_, i) => words.slice(words.length - (i + 1)).join("_")
-  );
-  return (name50) => {
-    const words = name50.toUpperCase().split("_");
-    if (declineNonSecret && trailingRuns(words).some((run) => nonSecret.has(run)))
-      return false;
-    if (scope === "trailing")
-      return trailingRuns(words).some((run) => nouns.has(run));
-    for (let start = 0; start < words.length; start++)
-      for (let span = 1; span <= maxRun && start + span <= words.length; span++)
-        if (nouns.has(words.slice(start, start + span).join("_"))) return true;
-    return false;
-  };
-}
-var DATA_FILE, FILE_LABEL, ENV_NAME_USE, FIELD_VALUE_USE, KNOWN_USES, PART_RE, _packaged;
-var init_credential_names = __esm({
-  "src/credential-names.mjs"() {
-    "use strict";
-    DATA_FILE = join2(
-      dirname(fileURLToPath2(import.meta.url)),
-      "..",
-      "python",
-      "agent_sanitizer",
-      "secrets",
-      "data",
-      "credential-names.json"
-    );
-    FILE_LABEL = "credential-names.json";
-    ENV_NAME_USE = "env-name";
-    FIELD_VALUE_USE = "field-value";
-    KNOWN_USES = /* @__PURE__ */ new Set([ENV_NAME_USE, FIELD_VALUE_USE]);
-    PART_RE = /^[a-z0-9]+$/;
-  }
-});
-
 // python/agent_sanitizer/secrets/data/credential-names.json
 var credential_names_default;
-var init_credential_names2 = __esm({
+var init_credential_names = __esm({
   "python/agent_sanitizer/secrets/data/credential-names.json"() {
     credential_names_default = {
       $comment: "The credential-noun vocabulary: the words that make an identifier name a secret. Published so every consumer derives its own matcher from ONE list \u2014 a newly recognized noun reaches them all through a version bump instead of N hand edits. Read it from Python via agent_sanitizer.secrets (credential_name_segments / credential_field_name_patterns / non_secret_name_segments) or from JavaScript via the npm subpath export `agent-sanitizer/credential-names`. `parts` are the lowercase words of the noun; a consumer renders them for its own matcher (underscore-joined `API_KEY` and bare-joined `APIKEY` for an env-var NAME, `api[_-]?key` for a `field = value` regex). `uses` says which matcher may use the noun, because the two are not interchangeable: `env-name` matches a variable NAME and never inspects a value, so a broad noun there costs nothing, while `field-value` redacts whatever follows `noun = ` and a broad noun there mangles ordinary text \u2014 `key = <20 chars>` is a false-positive flood, so `key`, `pat`, `credential`, `credentials` and `secrets` are env-name only \u2014 `credential`/`credentials` are everyday variable names, and an attribute chain (`credentials = service_account.Credentials.from_service_account_info(info)`) escapes every value-shape skip, so a field-value rendering would redact ordinary source lines. `passphrase` is the exception among them: it is as shape-specific as `password`, and detect-secrets' own KeywordDetector DENYLIST omits it, so name-only would let `passphrase = <secret>` reach the model in cleartext. `nonSecretSuffixes` are the trailing words that make a credential-shaped name hold a NON-secret (a key's identifier, the public half of a keypair), which a consumer must not redact. Every part is restricted to a-z0-9 so it carries no regex metacharacter; the accessors enforce that and fail closed on a violation, an empty list, or an unknown `uses` value. It sits inside the Python package because a wheel can only ship data under its package directory, while npm's `files`/`exports` can name any path \u2014 so ONE physical file backs both ecosystems and there is no copy to drift.",
@@ -67142,16 +67025,67 @@ function hostExtraSecretVars() {
       );
   return vars;
 }
-function credentialRule() {
-  if (_credentialRule !== void 0) return _credentialRule;
-  return _credentialRule = credentialNameMatcher({
-    spec: credential_names_default,
-    scope: "trailing",
-    declineNonSecret: true
-  });
+function segmentForms(parts2) {
+  return [
+    .../* @__PURE__ */ new Set([parts2.join("_").toUpperCase(), parts2.join("").toUpperCase()])
+  ];
+}
+function deriveCredentialVocabulary(spec2) {
+  const nouns = spec2?.nouns;
+  const nonSecret = spec2?.nonSecretSuffixes;
+  if (!Array.isArray(nouns) || !Array.isArray(nonSecret))
+    throw new Error(`${VOCAB_LABEL}: nouns/nonSecretSuffixes missing`);
+  const segments = [];
+  for (const noun of nouns)
+    if (Array.isArray(noun?.uses) && noun.uses.includes(ENV_NAME_USE))
+      segments.push(...segmentForms(parts(noun.parts, "nouns[].parts")));
+  const excludeSuffixes = nonSecret.flatMap(
+    (suffix) => segmentForms(parts(suffix, "nonSecretSuffixes[]"))
+  );
+  return {
+    segments: [...new Set(segments)],
+    excludeSuffixes: [...new Set(excludeSuffixes)],
+    excludeNames: EXCLUDE_NAMES
+  };
+}
+function parts(value, field) {
+  if (!Array.isArray(value) || value.length === 0)
+    throw new Error(`${VOCAB_LABEL}: ${field} is empty or missing`);
+  for (const part of value)
+    if (typeof part !== "string" || !/^[a-z0-9]+$/u.test(part))
+      throw new Error(`${VOCAB_LABEL}: bad part ${part} in ${field}`);
+  return value;
+}
+function credentialTokens(spec2, field) {
+  const group = spec2[field];
+  if (!Array.isArray(group) || group.length === 0)
+    throw new Error(`${VOCAB_LABEL}: ${field} is empty or missing`);
+  for (const token of group)
+    if (typeof token !== "string" || !CRED_TOKEN_RE.test(token))
+      throw new Error(`${VOCAB_LABEL}: bad token ${token} in ${field}`);
+  return group;
+}
+function buildCredentialNameRes(spec2) {
+  const segments = credentialTokens(spec2, "segments");
+  const excludeSuffixes = credentialTokens(spec2, "excludeSuffixes");
+  const excludeNames = credentialTokens(spec2, "excludeNames");
+  return {
+    match: new RegExp(`(?:^|_)(?:${segments.join("|")})$`, "i"),
+    exclude: new RegExp(
+      `(?:^|_)(?:${excludeSuffixes.join("|")})$|^(?:${excludeNames.join("|")})$`,
+      "i"
+    )
+  };
+}
+function credentialNameRes() {
+  if (_credentialNameRes !== void 0) return _credentialNameRes;
+  return _credentialNameRes = buildCredentialNameRes(
+    deriveCredentialVocabulary(credential_names_default)
+  );
 }
 function looksLikeCredentialVar(name50) {
-  return credentialRule()(name50);
+  const res = credentialNameRes();
+  return res.match.test(name50) && !res.exclude.test(name50);
 }
 function dynamicSecretVars(env = process.env) {
   const floor = minEnvSecretLen();
@@ -67181,17 +67115,20 @@ function envBoundSecretVars(env = process.env) {
     ])
   ];
 }
-var hostEnvConfigSource, HOST_SOURCE_LABEL, HOST_SOURCE_KEYS, _credentialRule, EXTRA_SECRET_VARS_ENV, EXTRA_TOKEN_RE;
+var hostEnvConfigSource, HOST_SOURCE_LABEL, HOST_SOURCE_KEYS, CRED_TOKEN_RE, VOCAB_LABEL, EXCLUDE_NAMES, ENV_NAME_USE, _credentialNameRes, EXTRA_SECRET_VARS_ENV, EXTRA_TOKEN_RE;
 var init_env_config = __esm({
   "claude-hooks/lib/env-config.mjs"() {
     "use strict";
     init_credential_names();
-    init_credential_names2();
     init_inference_key_vars();
     init_scrubbed_env_vars();
     hostEnvConfigSource = null;
     HOST_SOURCE_LABEL = "configureEnvConfigSource";
     HOST_SOURCE_KEYS = ["minSecretLen", "extraVars"];
+    CRED_TOKEN_RE = /^[A-Z0-9_]+$/;
+    VOCAB_LABEL = "credential-names.json";
+    EXCLUDE_NAMES = ["SSH_AUTH_SOCK"];
+    ENV_NAME_USE = "env-name";
     EXTRA_SECRET_VARS_ENV = "_AGENT_SANITIZER_EXTRA_SECRET_VARS";
     EXTRA_TOKEN_RE = /^[A-Z0-9_]+$/;
   }
@@ -67202,8 +67139,8 @@ import { spawn } from "node:child_process";
 import { existsSync, lstatSync as lstatSync2 } from "node:fs";
 import { createConnection } from "node:net";
 import { tmpdir as tmpdir2, userInfo as userInfo2 } from "node:os";
-import { dirname as dirname2, join as join3 } from "node:path";
-import { fileURLToPath as fileURLToPath3 } from "node:url";
+import { dirname, join as join2 } from "node:path";
+import { fileURLToPath as fileURLToPath2 } from "node:url";
 function positiveMsOr(raw, fallback) {
   const ms = Number(raw);
   return Number.isFinite(ms) && ms > 0 ? ms : fallback;
@@ -67211,7 +67148,7 @@ function positiveMsOr(raw, fallback) {
 function daemonCommand() {
   const configured = process.env._AGENT_SANITIZER_REDACTOR_DAEMON;
   if (configured) return [configured];
-  const pyz = fileURLToPath3(new URL("../redactor/daemon.pyz", import.meta.url));
+  const pyz = fileURLToPath2(new URL("../redactor/daemon.pyz", import.meta.url));
   if (existsSync(pyz)) return ["python3", pyz];
   return ["agent-secret-redactor-daemon"];
 }
@@ -67253,7 +67190,7 @@ function classifySocket(socketPath, deps = {}) {
   if (!st.isSocket() || st.uid !== uid) return "untrusted";
   let dir;
   try {
-    dir = lstat(dirname2(socketPath));
+    dir = lstat(dirname(socketPath));
   } catch {
     return "untrusted";
   }
@@ -67429,7 +67366,7 @@ var init_redactor_client = __esm({
     "use strict";
     init_env_config();
     FRAME_CAP = 16 * 1024 * 1024;
-    DEFAULT_SOCKET_PATH = process.env._AGENT_SANITIZER_REDACTOR_SOCKET || join3(tmpdir2(), "agent-sanitizer-redactor", "redactor.sock");
+    DEFAULT_SOCKET_PATH = process.env._AGENT_SANITIZER_REDACTOR_SOCKET || join2(tmpdir2(), "agent-sanitizer-redactor", "redactor.sock");
     WAIT_DEADLINE_MS = positiveMsOr(
       process.env._AGENT_SANITIZER_REDACTOR_WAIT_MS,
       8e3
@@ -67490,7 +67427,7 @@ __export(pretooluse_sanitize_exports, {
   judgePreToolUseSanitize: () => judgePreToolUseSanitize
 });
 import { createRequire as createRequire4 } from "node:module";
-import { readFileSync as readFileSync4 } from "node:fs";
+import { readFileSync as readFileSync3 } from "node:fs";
 function emitTraced(emitTrace, toolName, fields) {
   let outcome = "modified";
   if (fields === null) outcome = "noop";
@@ -67673,7 +67610,7 @@ var init_pretooluse_sanitize = __esm({
       text5
     );
     redactorIo = {
-      readFile: (path2) => readFileSync4(path2, "utf8"),
+      readFile: (path2) => readFileSync3(path2, "utf8"),
       redactMap: async (text5) => (
         /** @type {any} */
         await redactViaDaemon(text5, { map: true })
@@ -67719,13 +67656,13 @@ var init_secret_annotate = __esm({
 import { createHash as createHash3 } from "node:crypto";
 import { mkdirSync, lstatSync as lstatSync3 } from "node:fs";
 import { tmpdir as tmpdir3, userInfo as userInfo3 } from "node:os";
-import { join as join4, resolve, sep } from "node:path";
+import { join as join3, resolve, sep } from "node:path";
 function revealDir() {
-  return process.env._AGENT_SANITIZER_REVEAL_DIR || join4(tmpdir3(), "agent-sanitizer-layer2-reveal");
+  return process.env._AGENT_SANITIZER_REVEAL_DIR || join3(tmpdir3(), "agent-sanitizer-layer2-reveal");
 }
 function revealPathFor(content3) {
   const digest = createHash3("sha256").update(content3, "utf8").digest("hex");
-  return join4(revealDir(), `${digest}.txt`);
+  return join3(revealDir(), `${digest}.txt`);
 }
 function revealDirIsSafe(dir) {
   try {
@@ -68207,8 +68144,8 @@ __export(scan_invisible_chars_exports, {
   formatReport: () => formatReport,
   scanFile: () => scanFile
 });
-import { readFileSync as readFileSync5, globSync, writeFileSync as writeFileSync2, unlinkSync as unlinkSync2 } from "node:fs";
-import { join as join5, relative } from "node:path";
+import { readFileSync as readFileSync4, globSync, writeFileSync as writeFileSync2, unlinkSync as unlinkSync2 } from "node:fs";
+import { join as join4, relative } from "node:path";
 async function ensureSanitizerLoaded() {
   if (typeof stripInvisible3 === "function") return true;
   const marker2 = hookgateMarkerPath();
@@ -68261,7 +68198,7 @@ function findMdFiles(dir) {
   return globSync("**/*.md", {
     cwd: dir,
     exclude: (name50) => name50 === "node_modules"
-  }).map((name50) => join5(dir, name50));
+  }).map((name50) => join4(dir, name50));
 }
 function findInstructionFiles(dir) {
   return globSync(
@@ -68275,10 +68212,10 @@ function findInstructionFiles(dir) {
       cwd: dir,
       exclude: (name50) => name50 === "node_modules"
     }
-  ).map((name50) => join5(dir, name50));
+  ).map((name50) => join4(dir, name50));
 }
 function scanFile(filePath) {
-  const content3 = readFileSync5(filePath, "utf-8");
+  const content3 = readFileSync4(filePath, "utf-8");
   const findings = [];
   LONG_RUN_RE3.lastIndex = 0;
   let match;
@@ -68332,7 +68269,7 @@ function scanProject() {
   const targets = [
     .../* @__PURE__ */ new Set([
       ...findInstructionFiles(PROJECT_DIR),
-      ...findMdFiles(join5(PROJECT_DIR, ".claude"))
+      ...findMdFiles(join4(PROJECT_DIR, ".claude"))
     ])
   ];
   const allFindings = [];
@@ -68373,9 +68310,9 @@ async function cliMain3({ trace: sink = trace } = {}) {
   });
   let cleaned = 0;
   for (const { file } of allFindings) {
-    const absPath = join5(PROJECT_DIR, file);
+    const absPath = join4(PROJECT_DIR, file);
     try {
-      const original = readFileSync5(absPath, "utf-8");
+      const original = readFileSync4(absPath, "utf-8");
       const stripped = stripInvisible3(original);
       if (stripped !== original) {
         writeFileSync2(absPath, stripped);

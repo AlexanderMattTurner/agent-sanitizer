@@ -22,7 +22,10 @@ import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { looksLikeCredentialVar } from "../claude-hooks/lib/env-config.mjs";
+import {
+  deriveCredentialVocabulary,
+  looksLikeCredentialVar,
+} from "../claude-hooks/lib/env-config.mjs";
 
 // Resolved through the exports map, the same way a consumer reaches it — so this
 // asserts against the file the package actually publishes.
@@ -71,6 +74,19 @@ describe("the name matcher excludes every published non-secret suffix", () => {
     });
   }
 
+  it("refuses a non-secret run that IS the whole name", () => {
+    // The exclusion rendered a leading underscore into its tokens, so it was
+    // reachable only when something preceded the run: `PUBLIC_KEY` matched on
+    // its trailing `KEY` and its value was cut out of every tool output
+    // carrying it. Asserted for every published run, bare and joined.
+    for (const suffix of spec.nonSecretSuffixes) {
+      const joined = suffix.join("_").toUpperCase();
+      const bare = suffix.join("").toUpperCase();
+      assert.equal(looksLikeCredentialVar(joined), false, joined);
+      assert.equal(looksLikeCredentialVar(bare), false, bare);
+    }
+  });
+
   it("refuses the ssh-agent socket, whose value is a path", () => {
     assert.equal(looksLikeCredentialVar("SSH_AUTH_SOCK"), false);
   });
@@ -81,18 +97,61 @@ describe("the name matcher excludes every published non-secret suffix", () => {
   });
 });
 
-describe("a non-secret run that IS the whole name is declined", () => {
-  // The regression this module's own matcher copy carried: it read
-  // nonSecretSuffixes as suffixes needing a PRECEDING underscore, so a variable
-  // named exactly `PUBLIC_KEY` matched on its trailing `KEY` and never reached
-  // the exclusion. Its value was then cut out of every tool output carrying it.
-  // Asserted for every published non-secret run, not just the one that broke.
-  it("declines each published non-secret run as a bare name", () => {
-    for (const suffix of spec.nonSecretSuffixes) {
-      const joined = suffix.join("_").toUpperCase();
-      const bare = suffix.join("").toUpperCase();
-      assert.equal(looksLikeCredentialVar(joined), false, joined);
-      assert.equal(looksLikeCredentialVar(bare), false, bare);
-    }
+describe("deriveCredentialVocabulary fails closed on a malformed spec", () => {
+  // Each of these would otherwise render an empty or under-populated
+  // alternation, which matches nothing and forwards every credential.
+  const bad = {
+    "missing nouns": { nonSecretSuffixes: [["key", "id"]] },
+    "missing nonSecretSuffixes": {
+      nouns: [{ parts: ["token"], uses: [ENV_NAME_USE] }],
+    },
+    "nouns not an array": {
+      nouns: "token",
+      nonSecretSuffixes: [["key", "id"]],
+    },
+    "empty parts": {
+      nouns: [{ parts: [], uses: [ENV_NAME_USE] }],
+      nonSecretSuffixes: [["key", "id"]],
+    },
+    "metacharacter in a part": {
+      nouns: [{ parts: ["to.en"], uses: [ENV_NAME_USE] }],
+      nonSecretSuffixes: [["key", "id"]],
+    },
+    "upper-case part": {
+      nouns: [{ parts: ["TOKEN"], uses: [ENV_NAME_USE] }],
+      nonSecretSuffixes: [["key", "id"]],
+    },
+  };
+  for (const [label, spec_] of Object.entries(bad))
+    it(`throws on ${label}`, () => {
+      assert.throws(() => deriveCredentialVocabulary(spec_), {
+        message: /credential-names\.json/u,
+      });
+    });
+});
+
+describe("the derived vocabulary is safe to interpolate unescaped", () => {
+  const derived = deriveCredentialVocabulary(spec);
+
+  it("renders both segment forms and both exclude forms", () => {
+    assert.ok(derived.segments.length >= envNameNouns.length);
+    assert.equal(
+      derived.excludeSuffixes.length,
+      new Set(
+        spec.nonSecretSuffixes.flatMap((s) => [
+          `_${s.join("_").toUpperCase()}`,
+          `_${s.join("").toUpperCase()}`,
+        ]),
+      ).size,
+    );
+  });
+
+  it("carries no regex metacharacter in any token", () => {
+    for (const token of [
+      ...derived.segments,
+      ...derived.excludeSuffixes,
+      ...derived.excludeNames,
+    ])
+      assert.match(token, /^[A-Z0-9_]+$/u, token);
   });
 });
