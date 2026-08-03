@@ -3,7 +3,10 @@ name: Auto version bump and publish
 # On every push to the default branch, decide a Conventional-Commits semver bump
 # from the commits since the last vX.Y.Z tag and publish the package to npm with
 # provenance (OIDC trusted publishing — no NPM_TOKEN). The version is tracked by
-# the npm registry and git tags, never committed to package.json. The Claude API
+# the npm registry and git tags, never committed to package.json. The one
+# exception is the Claude Code plugin manifest (plugin/.claude-plugin/plugin.json):
+# Claude Code reads it out of the git checkout, so the release commit stamps the
+# published version into it alongside the CHANGELOG. The Claude API
 # drafts the CHANGELOG prose and degrades to a plain commit list when it is
 # unavailable. See .github/scripts/version-bump.sh for the full logic.
 #

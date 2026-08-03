@@ -20,6 +20,10 @@ source "$SCRIPT_DIR/lib/retry.bash"
 
 log() { echo "$@" >&2; }
 
+# Claude Code plugin manifest. Its `version` is the one version string in the
+# repo that must be COMMITTED at release time (see the stamping step below).
+PLUGIN_MANIFEST="plugin/.claude-plugin/plugin.json"
+
 # Publish a step output for the workflow (no-op outside GitHub Actions). The
 # auto-version workflow reads `released`/`version` to decide whether — and at
 # what version — to also build and publish the coupled Python wheel to PyPI.
@@ -433,15 +437,30 @@ if [[ -f CHANGELOG.md ]] && [[ -n "$CHANGELOG_SECTION" ]]; then
     node "$SCRIPT_DIR/promote-changelog.mjs"
 fi
 
+# Stamp the released version into the Claude Code plugin manifest. Unlike
+# package.json (npm owns the version; the committed value is a frozen
+# placeholder), this one MUST be committed: Claude Code reads
+# plugin/.claude-plugin/plugin.json out of the git checkout when installing the
+# plugin from this repo's marketplace, so the committed value is the version
+# users are shown. Left unstamped it froze at 0.1.0 while npm climbed to 2.x.
+# A failure here is loud but non-fatal: npm has already published, and aborting
+# would skip the tag push and strand the release (the next run would re-analyze
+# these commits and cut a duplicate).
+if [[ -f "$PLUGIN_MANIFEST" ]]; then
+  if ! NEW_VERSION="$NEW_VERSION" node "$SCRIPT_DIR/set-plugin-version.mjs"; then
+    log "⚠️ Failed to stamp $NEW_VERSION into $PLUGIN_MANIFEST; the plugin manifest is now stale and must be fixed by hand."
+  fi
+fi
+
 # Push HEAD to $branch on origin, tolerating a concurrent advance of the branch.
 # The auto-version concurrency group serializes THIS workflow, but $branch can
 # still move mid-run via an ordinary PR merge from another actor — so the run
 # checked out a now-stale tip and a plain `git push` is rejected non-fast-forward.
 # Retrying the identical push (what retry_cmd does) can never win: the remote
 # never rewinds. Instead, on rejection, fetch the new tip and REBASE our commits
-# onto it, then retry. The release-docs commit only touches CHANGELOG.md and
-# concurrent merges never hand-edit the `## Unreleased` block, so the replay
-# applies cleanly; a genuine conflict aborts loudly rather than force-pushing
+# onto it, then retry. The release-docs commit only touches CHANGELOG.md and the
+# plugin manifest's `version`; concurrent merges never hand-edit the
+# `## Unreleased` block nor that field, so the replay applies cleanly; a genuine conflict aborts loudly rather than force-pushing
 # over the other commit. A transient network failure degrades to the same
 # fetch-then-retry path (the fetch also fails, we back off and retry the push).
 # $1: branch, $2: max attempts, $3: initial backoff seconds (doubles each retry).
@@ -479,8 +498,9 @@ push_with_rebase() {
   return 1
 }
 
-# Commit the CHANGELOG entry back to the default branch so users see the release
-# notes. package.json stays dirty (npm is the source of truth for version). A
+# Commit the CHANGELOG entry and the stamped plugin manifest back to the default
+# branch so users see the release notes and the plugin reports the version that
+# was actually published. package.json stays dirty (npm is the source of truth for version). A
 # bot identity and `[skip ci]` keep the resulting push from spawning another
 # workflow run. The tag is created AFTER this commit (and only when it reached
 # the branch — see RELEASE_DOCS_PUSH_FAILED) so HEAD == tag SHA. Note the tag
@@ -502,10 +522,19 @@ PUBLISHED_SHA=$(git rev-parse HEAD)
 DEFAULT_BRANCH="${GITHUB_REF_NAME:-$(git rev-parse --abbrev-ref HEAD)}"
 git config user.name "github-actions[bot]"
 git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-if git diff --quiet -- CHANGELOG.md; then
-  log "No CHANGELOG changes to commit."
+# Only pass paths that exist: `git add` (unlike `git diff`) fails hard on a
+# pathspec matching nothing, which would abort the run after a successful
+# publish in a repo that ships no CHANGELOG or no plugin manifest.
+RELEASE_DOCS_PATHS=()
+for release_doc in CHANGELOG.md "$PLUGIN_MANIFEST"; do
+  if [[ -f "$release_doc" ]]; then
+    RELEASE_DOCS_PATHS+=("$release_doc")
+  fi
+done
+if [[ "${#RELEASE_DOCS_PATHS[@]}" -eq 0 ]] || git diff --quiet -- "${RELEASE_DOCS_PATHS[@]}"; then
+  log "No release-docs changes to commit."
 else
-  git add -- CHANGELOG.md
+  git add -- "${RELEASE_DOCS_PATHS[@]}"
   git commit -m "docs: release $NEW_VERSION [skip ci]"
   # Push to the default branch explicitly so this works whether actions/checkout
   # left us on a branch or in detached HEAD state. Rebase-on-reject so a racing
