@@ -15,6 +15,24 @@ const PHONE_HOME_DIR = "/tmp/phone-home";
 const NEGATIVE_DECLARATION =
   /^(none(?!\s+of)|nothing|n\/?a|not applicable|no (lessons?|generaliz\w*|template|broadly|applicable|insights?))\b/i;
 
+/**
+ * Remove HTML comments, repeating until the text stops changing. A single pass
+ * of `/<!--[\s\S]*?-->/g` is unsafe: deleting one comment can splice the
+ * surrounding text into a fresh `<!-- … -->` (e.g. `<!<!-- -->-- x -->` becomes
+ * `<!-- x -->`), so a lone replace leaves a comment behind (CodeQL
+ * js/incomplete-multi-character-sanitization). Iterating to a fixed point
+ * guarantees no comment survives.
+ * @param {string} text
+ */
+function stripHtmlComments(text) {
+  let previous;
+  do {
+    previous = text;
+    text = text.replace(/<!--[\s\S]*?-->/g, "");
+  } while (text !== previous);
+  return text;
+}
+
 /** @param {string} text */
 function isNegativeDeclaration(text) {
   const firstLine = text
@@ -73,11 +91,10 @@ module.exports = async ({ context, core }) => {
     return;
   }
 
-  // Strip HTML comments first with a newline-aware pattern so multi-line
-  // <!-- ... --> placeholders are removed too (a per-line /^<!--.*-->$/ only
-  // catches single-line comments).
-  const filtered = lessons
-    .replace(/<!--[\s\S]*?-->/g, "")
+  // Strip HTML comments first (fixed-point, newline-aware) so multi-line
+  // <!-- ... --> placeholders are removed too and no comment can survive by
+  // re-forming from the surrounding text.
+  const filtered = stripHtmlComments(lessons)
     .split("\n")
     .filter((line) => !line.trim().match(/^<[^>]*>$/))
     // Drop AI-attribution footers — session links, "Generated with Claude

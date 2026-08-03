@@ -735,6 +735,11 @@ describe("unit: urlHost exact verdicts", () => {
     assert.equal(urlHost("https://exa mple.example/p"), "(unparsable URL)"));
   it("treats a URL that literally starts with the sentinel base as absolute", () =>
     assert.equal(urlHost("http://relative.invalid/x"), "relative.invalid"));
+  it("does not treat a lookalike host sharing the sentinel prefix as relative", () =>
+    assert.equal(
+      urlHost("http://relative.invalid.evil.example/x?token=1"),
+      "relative.invalid.evil.example",
+    ));
 });
 
 describe("unit: looksLikeHtmlSource exact verdicts", () => {

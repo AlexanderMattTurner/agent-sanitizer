@@ -1727,6 +1727,19 @@ const SCRIPT_URI_RE = /^\s*(?:javascript|vbscript):/i;
 
 const RELATIVE_URL_BASE = "http://relative.invalid";
 
+// Matches a URL that ABSOLUTELY targets the sentinel origin — the base followed
+// by a path/query/fragment boundary or end-of-string — as opposed to a relative
+// URL that merely RESOLVES to that origin once the base is prepended. A bare
+// `url.startsWith(RELATIVE_URL_BASE)` cannot separate the two and, worse, also
+// accepts a lookalike host like `http://relative.invalid.evil.example`, where
+// the sentinel prefix is followed by an arbitrary authority (CodeQL
+// js/incomplete-url-substring-sanitization). The trailing boundary class pins
+// the match to the exact origin. Built from the constant so the two never drift.
+const SENTINEL_ORIGIN_RE = new RegExp(
+  `^${RELATIVE_URL_BASE.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?:[/?#]|$)`,
+  "i",
+);
+
 // Parameter NAMES that legitimately carry a LONG opaque (base64/hex) value, so
 // a blob in one of them is NOT exfil: CDN request-signing (AWS SigV4 /
 // CloudFront `X-Amz-*`/`Signature`/`Policy`/`Key-Pair-Id`, GCS `X-Goog-*`,
@@ -2034,10 +2047,7 @@ export function urlHost(url) {
     // WHATWG rejects (e.g. a non-ASCII host).
     return "(unparsable URL)";
   }
-  if (
-    parsed.origin === RELATIVE_URL_BASE &&
-    !url.startsWith(RELATIVE_URL_BASE)
-  ) {
+  if (parsed.origin === RELATIVE_URL_BASE && !SENTINEL_ORIGIN_RE.test(url)) {
     return "(relative URL)";
   }
   return parsed.host;
@@ -2058,9 +2068,7 @@ function isOffOrigin(url) {
   } catch {
     return false;
   }
-  return (
-    parsed.origin !== RELATIVE_URL_BASE || url.startsWith(RELATIVE_URL_BASE)
-  );
+  return parsed.origin !== RELATIVE_URL_BASE || SENTINEL_ORIGIN_RE.test(url);
 }
 
 /**

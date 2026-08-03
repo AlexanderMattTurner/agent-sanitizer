@@ -116,6 +116,24 @@ describe("phone-home-extract", () => {
     assert.doesNotMatch(written, /Co-authored-by/i);
   });
 
+  it("fully strips a comment that re-forms after a single removal pass", async () => {
+    // `<!<!-- -->-- note -->`: one pass removes the inner `<!-- -->` and splices
+    // the remainder back into `<!-- note -->`, so a lone replace would leave a
+    // comment behind. The fixed-point strip must remove it entirely.
+    const body = [
+      "## Lessons Learned",
+      "",
+      "<!<!-- -->-- attacker-smuggled note -->",
+      "- A real lesson: iterate sanitizers to a fixed point.",
+    ].join("\n");
+    const outputs = await run(body);
+    assert.equal(outputs.has_lessons, "true");
+    const written = readFileSync(LESSONS_FILE, "utf8");
+    assert.match(written, /iterate sanitizers/);
+    assert.doesNotMatch(written, /<!--/);
+    assert.doesNotMatch(written, /attacker-smuggled/);
+  });
+
   it("does not fire when the section is absent", async () => {
     const outputs = await run(
       "## Summary\n\njust a change, no lessons section",

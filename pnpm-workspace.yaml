@@ -2,3 +2,8 @@ allowBuilds:
   esbuild: true
 minimumReleaseAgeExclude:
   - agent-sanitizer@2.12.0
+# Force the patched qs across the dev-only stryker -> typed-rest-client chain:
+# qs <=6.15.1 has a remotely-triggerable DoS (GHSA-q8mj-m7cp-5q26). Dev-only, but
+# the bump is a compatible patch. Lift once typed-rest-client ships a patched qs.
+overrides:
+  qs@>=6.11.1 <=6.15.1: ">=6.15.2"
