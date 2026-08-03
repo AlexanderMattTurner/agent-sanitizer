@@ -339,6 +339,101 @@ for (const { name, subject, body } of [
 // out from under it, and proves the release lands without clobbering the racing
 // commit.
 
+test("a release stamps the plugin manifest and commits it with the release docs", () => {
+  // The Claude Code plugin manifest is read out of the git checkout, so its
+  // version must be COMMITTED at release time — left unstamped it froze at
+  // 0.1.0 while npm climbed to 2.x, and the installed plugin reported 0.1.
+  const dir = mkdtempSync(join(tmpdir(), "vbump-plugin-"));
+  const remote = join(dir, "remote.git");
+  const work = join(dir, "work");
+  const manifestRel = "plugin/.claude-plugin/plugin.json";
+  const npmStub = `if [[ "$2" == *@* ]]; then
+  if [[ "$3" == "version" ]]; then exit 1; fi
+  exit 0
+else
+  echo '["1.0.0"]'
+fi`;
+  const gitW = (...args) =>
+    execFileSync("git", args, { cwd: work, stdio: "ignore" });
+
+  try {
+    execFileSync("git", ["init", "-q", "--bare", "-b", "main", remote]);
+    mkdirSync(work);
+    gitW("init", "-q", "-b", "main");
+    gitW("config", "user.email", "t@t.test");
+    gitW("config", "user.name", "t");
+    writeFileSync(
+      join(work, "package.json"),
+      JSON.stringify({ name: "sandbox-pkg", version: "1.0.0" }) + "\n",
+    );
+    writeFileSync(
+      join(work, "CHANGELOG.md"),
+      "# Changelog\n\n## Unreleased\n\n### Added\n\n- A thing.\n",
+    );
+    mkdirSync(join(work, "plugin", ".claude-plugin"), { recursive: true });
+    writeFileSync(
+      join(work, manifestRel),
+      '{\n  "name": "sandbox-plugin",\n  "version": "0.1.0"\n}\n',
+    );
+    const binDir = join(work, "stub-bin");
+    mkdirSync(binDir);
+    writeFileSync(join(binDir, "npm"), `#!/usr/bin/env bash\n${npmStub}\n`);
+    chmodSync(join(binDir, "npm"), 0o755);
+    writeFileSync(
+      join(binDir, "pnpm"),
+      "#!/usr/bin/env bash\necho 'stub publish ok'\nexit 0\n",
+    );
+    chmodSync(join(binDir, "pnpm"), 0o755);
+    gitW("add", "-A");
+    gitW("commit", "-q", "-m", "chore: seed");
+    gitW("tag", "v1.0.0");
+    gitW("remote", "add", "origin", remote);
+    gitW("push", "-q", "origin", "main");
+    gitW("push", "-q", "origin", "v1.0.0");
+    gitW("commit", "-q", "--allow-empty", "-m", "feat: add a thing");
+
+    const env = { ...process.env, PATH: `${binDir}:${process.env.PATH}` };
+    delete env.ANTHROPIC_API_KEY;
+    delete env.GITHUB_OUTPUT;
+    delete env.GITHUB_REF_NAME;
+    delete env.GITHUB_REF;
+    const res = spawnSync("bash", [LIVE_SCRIPT], {
+      cwd: work,
+      env,
+      encoding: "utf8",
+    });
+    assert.equal(res.error, undefined, "failed to spawn the release script");
+    assert.equal(res.status, 0, res.stderr);
+
+    // The stamped manifest must reach the remote inside the release-docs commit
+    // — a working-tree-only bump (the package.json pattern) is exactly the bug.
+    const pushedManifest = execFileSync(
+      "git",
+      ["-C", remote, "show", `main:${manifestRel}`],
+      { encoding: "utf8" },
+    );
+    assert.equal(JSON.parse(pushedManifest).version, "1.1.0");
+    const touched = execFileSync(
+      "git",
+      ["-C", remote, "show", "--name-only", "--pretty=", "main"],
+      { encoding: "utf8" },
+    );
+    assert.match(touched, /CHANGELOG\.md/);
+    assert.match(touched, /plugin\/\.claude-plugin\/plugin\.json/);
+    // package.json must stay at its committed placeholder: npm owns that one.
+    assert.equal(
+      JSON.parse(
+        execFileSync("git", ["-C", remote, "show", "main:package.json"], {
+          encoding: "utf8",
+        }),
+      ).version,
+      "1.0.0",
+    );
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("release-docs push rebases onto a branch that advanced mid-run", () => {
   const dir = mkdtempSync(join(tmpdir(), "vbump-race-"));
   const remote = join(dir, "remote.git");
