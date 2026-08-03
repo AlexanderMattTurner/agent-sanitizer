@@ -13,8 +13,7 @@ deterministic transform you can unit-test with equality assertions.
 npm install agent-sanitizer
 ```
 
-**As a Claude Code plugin** — four hooks that put Layers 1–4 on the tool stream,
-no `node_modules` and no build step:
+**As a Claude Code plugin:**
 
 ```
 /plugin marketplace add AlexanderMattTurner/agent-sanitizer
