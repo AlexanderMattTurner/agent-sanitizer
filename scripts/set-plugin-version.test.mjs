@@ -121,6 +121,40 @@ for (const { name, manifest, env } of [
   });
 }
 
+// The rewrite is a non-global regex, so it targets the FIRST `"version":` in
+// the file. A nested one ahead of the top-level field is exactly what the
+// reparse checks exist for — and each ordering trips a different guard, so both
+// are pinned here. Without them the guards could be deleted undetected, and the
+// script would be no safer than the cheaper `set-pyproject-version.sh` awk shape.
+for (const { name, topLevelVersion, expected } of [
+  {
+    name: "leaves the top-level version stale",
+    topLevelVersion: "0.1.0",
+    expected: /rewrite did not set the top-level "version"/,
+  },
+  {
+    name: "leaves the top-level version already correct",
+    topLevelVersion: "3.4.5",
+    expected: /changed other fields/,
+  },
+]) {
+  test(`refuses a rewrite that ${name} because a nested "version" came first`, () => {
+    const nested = `{
+  "dependencies": { "some-plugin": { "version": "9.9.9" } },
+  "version": "${topLevelVersion}"
+}
+`;
+    const { status, stderr, after } = runInSandbox(nested, {
+      NEW_VERSION: "3.4.5",
+    });
+    assert.notEqual(status, 0, "must exit non-zero");
+    // Pin WHICH guard fires: each ordering exercises a different one, so a
+    // looser assertion would let one guard's deletion hide behind the other.
+    assert.match(stderr, expected);
+    assert.equal(after, nested, "a failed run must not rewrite the file");
+  });
+}
+
 // --- Standing invariants on the committed manifest ------------------------
 
 test("the committed plugin manifest advertises a real released version", () => {

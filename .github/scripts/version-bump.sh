@@ -459,9 +459,11 @@ fi
 # Retrying the identical push (what retry_cmd does) can never win: the remote
 # never rewinds. Instead, on rejection, fetch the new tip and REBASE our commits
 # onto it, then retry. The release-docs commit only touches CHANGELOG.md and the
-# plugin manifest's `version`; concurrent merges never hand-edit the
-# `## Unreleased` block nor that field, so the replay applies cleanly; a genuine conflict aborts loudly rather than force-pushing
-# over the other commit. A transient network failure degrades to the same
+# plugin manifest's `version`; concurrent merges practically never hand-edit the
+# `## Unreleased` block or that field, so the replay applies cleanly. A merge
+# that DOES hand-edit either (correcting a drifted manifest version, say)
+# conflicts here and aborts loudly rather than force-pushing over that commit.
+# A transient network failure degrades to the same
 # fetch-then-retry path (the fetch also fails, we back off and retry the push).
 # $1: branch, $2: max attempts, $3: initial backoff seconds (doubles each retry).
 #
