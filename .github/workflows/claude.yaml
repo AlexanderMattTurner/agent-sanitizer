@@ -7,7 +7,7 @@ name: Claude
 #
 # WHY THIS EXISTS — template-sync linkage:
 #   template-sync.yaml opens a sync PR and, when a sync hits merge conflicts,
-#   posts an "@claude Resolve this..." comment (see request-claude-resolve.sh).
+#   posts an "@claude ..." comment asking for help.
 #   Without a listener, that comment lands in the void, so a human has to
 #   remember to open a Claude session and resolve the conflicts by hand. This
 #   workflow IS that listener — it turns the existing @claude comment into a
@@ -74,6 +74,7 @@ jobs:
         uses: ./.github/actions/claude-run
         with:
           oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+<<<<<<< local
           oauth_token_fallback: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN_FALLBACK }}
           oauth_token_fallback_3: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN_FALLBACK_3 }}
           oauth_token_fallback_4: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN_FALLBACK_4 }}
@@ -81,3 +82,18 @@ jobs:
           oauth_token_fallback_6: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN_FALLBACK_6 }}
           github_token: ${{ secrets.TEMPLATE_SYNC_TOKEN_ORG || secrets.GITHUB_TOKEN }}
           model: claude-sonnet-5
+=======
+          fallback_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN_FALLBACK }}
+          fallback_oauth_token_2: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN_FALLBACK_2 }}
+          fallback_oauth_token_3: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN_FALLBACK_3 }}
+          fallback_oauth_token_4: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN_FALLBACK_4 }}
+          fallback_oauth_token_5: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN_FALLBACK_5 }}
+          fallback_oauth_token_6: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN_FALLBACK_6 }}
+          model: claude-sonnet-4-6
+          # TEMPLATE_SYNC_TOKEN is optional (see the AUTH note above) — repos
+          # that haven't configured it still get a working responder under
+          # GITHUB_TOKEN, just without the recursion-guard-evading push identity
+          # downstream sync-conflict auto-resolution needs.
+          # token-fallback-ok: designed graceful degradation, not an accident.
+          github_token: ${{ secrets.TEMPLATE_SYNC_TOKEN || secrets.GITHUB_TOKEN }}
+>>>>>>> template

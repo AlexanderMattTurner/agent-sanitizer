@@ -15,11 +15,21 @@ set -euo pipefail
 : "${GH_REPO:?GH_REPO required}"
 : "${PR_INPUT_DIR:?PR_INPUT_DIR required}"
 
+<<<<<<< local
 status="$(node .github/scripts/post-pr-review.mjs)"
 # ERRORED means the agent's session failed, so it never reviewed. Fail the job:
 # the action exits 0 on an errored session, so without this the PR shows a green
 # reviewer that silently looked at nothing.
 if [[ "$status" == "ERRORED" ]]; then
+=======
+# A non-zero exit from the reader means the reviewer produced no valid
+# review.json — it crashed before writing its verdict. Surface that as a RED step
+# (fail loud) rather than the reader's old silent green, so a broken reviewer
+# can't masquerade as a clean pass. `if !` suspends set -e for the substitution so
+# we can react to the failure instead of dying on it.
+if ! status="$(node .github/scripts/post-pr-review.mjs)"; then
+  echo "::error::the reviewer wrote no valid review.json — it likely crashed; see the reader's diagnostics above" >&2
+>>>>>>> template
   exit 1
 fi
 if [[ "$status" != "PAYLOAD" ]]; then

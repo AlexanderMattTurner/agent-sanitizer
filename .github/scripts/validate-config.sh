@@ -24,6 +24,9 @@ if [[ -f .claude/settings.json ]]; then
     resolved=$(echo "$cmd" | sed 's|"\$CLAUDE_PROJECT_DIR"/\?|./|g; s|"||g; s|\$CLAUDE_PROJECT_DIR/\?|./|g')
     read -ra tokens <<<"$resolved"
     for token in "${tokens[@]}"; do
+      # Filter — only hook-path-shaped tokens get an existence check; every
+      # other token (flags, other args) is correctly ignored.
+      # case-default-ok: no-match is the intended no-op, not a missed case.
       case "$token" in
       ./.claude/hooks/* | ./.hooks/*)
         if [[ ! -f "$token" ]]; then
@@ -48,6 +51,9 @@ for f in .hooks/* .claude/hooks/*; do
   rc=0
   IFS= read -r first_line <"$f" || rc=$?
   [[ "${rc:-0}" -le 1 ]] || error "Failed to read $f (exit $rc)"
+  # Filter — has_shebang is already initialized to 0; a non-matching first
+  # line correctly leaves it at that default.
+  # case-default-ok: no-match is the intended no-op, not a missed case.
   case "$first_line" in '#!'*) has_shebang=1 ;; esac
   if [[ "$has_shebang" = "1" ]] && [[ ! -x "$f" ]]; then
     error "$f has a shebang but is not executable"

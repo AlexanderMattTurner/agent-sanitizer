@@ -1,15 +1,19 @@
 // Behavior tests for post-pr-review.mjs: run the real script over a temp
 // PR_INPUT_DIR (diff.txt + review.json) and assert on the reviews-API payload it
 // emits — anchor validation, suggested-edit rendering, the summary spill path,
-// and the SKIP paths. Drives the script as a subprocess (its real entry point),
-// never re-implements its logic.
+// the SKIP paths, and the fail-loud path (a crashed reviewer that wrote no
+// review.json exits non-zero). Drives the script as a subprocess (its real entry
+// point), never re-implements its logic.
 import { describe, it, afterEach } from "node:test";
 import assert from "node:assert/strict";
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import {
   mkdtempSync,
+  mkdirSync,
   writeFileSync,
   readFileSync,
+  copyFileSync,
+  symlinkSync,
   existsSync,
   rmSync,
 } from "node:fs";
@@ -105,7 +109,10 @@ describe("post-pr-review: anchored inline comments", () => {
       ],
     });
     assert.equal(status, "PAYLOAD");
-    assert.equal(payload.event, "COMMENT");
+    // A warning-severity finding holds the merge even with no verdict (see the
+    // finding-severity gate suite below); this test's focus is the suggestion
+    // block, but the event reflects that escalation.
+    assert.equal(payload.event, "REQUEST_CHANGES");
     assert.equal(payload.comments.length, 1);
     const c = payload.comments[0];
     assert.equal(c.path, "src/foo.js");
@@ -200,6 +207,196 @@ describe("post-pr-review: anchored inline comments", () => {
       ],
     });
     assert.match(payload.comments[0].body, /````suggestion\na ``` b\n````/);
+  });
+});
+
+describe("post-pr-review: diff-view anchor remap", () => {
+  // In DIFF the physical lines of diff.txt are: 1-5 headers/hunk, then content:
+  //   6 ` const a = 1;` (ctx, new 1)   7 `-const b = 2;` (old 2)
+  //   8 `+const b = 3;` (new 2)        9 `+const c = 4;` (new 3)
+  //   10 ` const d = 5;` (new 4)       11 ` const e = 6;` (new 5)
+  // Views 6-11 never collide with the commentable new-file lines 1-5, so a
+  // finding carrying a view number is unambiguously un-anchorable pre-remap.
+
+  it("remaps a diff-file line number to the real new-file line", () => {
+    const { payload } = run({
+      summary: "s",
+      findings: [
+        {
+          path: "src/foo.js",
+          line: 8,
+          side: "RIGHT",
+          severity: "blocking",
+          title: "t",
+          body: "b",
+        },
+      ],
+    });
+    assert.equal(payload.comments.length, 1);
+    assert.equal(payload.comments[0].line, 2);
+    assert.equal(payload.comments[0].side, "RIGHT");
+    assert.doesNotMatch(payload.body, /Additional notes/);
+  });
+
+  it("keeps a suggestion riding a remapped added-line anchor", () => {
+    const { payload } = run({
+      summary: "s",
+      findings: [
+        {
+          path: "src/foo.js",
+          line: 9,
+          side: "RIGHT",
+          severity: "warning",
+          title: "t",
+          body: "b",
+          suggestion: "const c = 5;",
+        },
+      ],
+    });
+    assert.equal(payload.comments.length, 1);
+    assert.equal(payload.comments[0].line, 3);
+    assert.match(payload.comments[0].body, /```suggestion\nconst c = 5;\n```/);
+  });
+
+  it("remaps a removed-line diff-view number to the LEFT side", () => {
+    const { payload } = run({
+      summary: "s",
+      findings: [
+        {
+          path: "src/foo.js",
+          line: 7,
+          side: "RIGHT",
+          severity: "nit",
+          title: "t",
+          body: "b",
+        },
+      ],
+    });
+    assert.equal(payload.comments.length, 1);
+    assert.equal(payload.comments[0].line, 2);
+    assert.equal(payload.comments[0].side, "LEFT");
+  });
+
+  it("spills a suggestion pointed at a removed diff-view line (RIGHT-only)", () => {
+    const { payload } = run({
+      summary: "s",
+      findings: [
+        {
+          path: "src/foo.js",
+          line: 7,
+          side: "RIGHT",
+          severity: "warning",
+          title: "t",
+          body: "b",
+          suggestion: "const b = 9;",
+        },
+      ],
+    });
+    assert.equal(payload.comments.length, 0);
+    assert.match(payload.body, /`src\/foo\.js:7`: t — b/);
+  });
+
+  it("remaps start_line through the same coordinate space", () => {
+    const { payload } = run({
+      summary: "s",
+      findings: [
+        {
+          path: "src/foo.js",
+          line: 9,
+          start_line: 8,
+          side: "RIGHT",
+          severity: "warning",
+          title: "t",
+          body: "b",
+          suggestion: "const b = 3;\nconst c = 5;",
+        },
+      ],
+    });
+    const c = payload.comments[0];
+    assert.equal(c.line, 3);
+    assert.equal(c.start_line, 2);
+    assert.equal(c.start_side, "RIGHT");
+  });
+
+  it("drops an unremappable start_line but still posts the remapped line", () => {
+    // start_line 7 is a removed line: it can only remap LEFT, so it cannot open
+    // a RIGHT-side range — the comment posts single-line at the remapped anchor.
+    const { payload } = run({
+      summary: "s",
+      findings: [
+        {
+          path: "src/foo.js",
+          line: 9,
+          start_line: 7,
+          side: "RIGHT",
+          severity: "warning",
+          title: "t",
+          body: "b",
+        },
+      ],
+    });
+    const c = payload.comments[0];
+    assert.equal(c.line, 3);
+    assert.equal(c.start_line, undefined);
+  });
+
+  it("does not remap across paths: a view line in another file's hunk spills", () => {
+    // Two-file diff: view line 14 is bar.js content (new-file line 2). Claimed
+    // under foo.js it must spill, not anchor to the wrong file's coordinates;
+    // claimed under bar.js it remaps.
+    const twoFileDiff = `diff --git a/src/foo.js b/src/foo.js
+index 1111111..2222222 100644
+--- a/src/foo.js
++++ b/src/foo.js
+@@ -1,1 +1,2 @@
+ const a = 1;
++const b = 3;
+diff --git a/src/bar.js b/src/bar.js
+index 3333333..4444444 100644
+--- a/src/bar.js
++++ b/src/bar.js
+@@ -1,1 +1,2 @@
+ const x = 1;
++const y = 2;
+`;
+    const mismatch = run(
+      {
+        summary: "s",
+        findings: [
+          {
+            path: "src/foo.js",
+            line: 14,
+            side: "RIGHT",
+            severity: "warning",
+            title: "t",
+            body: "b",
+          },
+        ],
+      },
+      { diff: twoFileDiff },
+    );
+    assert.equal(mismatch.payload.comments.length, 0);
+    assert.match(mismatch.payload.body, /`src\/foo\.js:14`: t — b/);
+
+    const match = run(
+      {
+        summary: "s",
+        findings: [
+          {
+            path: "src/bar.js",
+            line: 14,
+            side: "RIGHT",
+            severity: "warning",
+            title: "t",
+            body: "b",
+          },
+        ],
+      },
+      { diff: twoFileDiff },
+    );
+    assert.equal(match.payload.comments.length, 1);
+    assert.equal(match.payload.comments[0].path, "src/bar.js");
+    assert.equal(match.payload.comments[0].line, 2);
   });
 });
 
@@ -367,6 +564,7 @@ describe("post-pr-review: the severity marker the gate reads", () => {
     });
   }
 
+<<<<<<< local
   it("stamps the marker for a non-gating severity too (the gate filters, not the writer)", () => {
     const { payload } = run(anchored("nit"));
     assert.ok(
@@ -380,6 +578,9 @@ describe("post-pr-review: the severity marker the gate reads", () => {
   });
 
   it("puts the marker after the suggestion fence, never inside it", () => {
+=======
+  it("escalates a looks_good verdict to REQUEST_CHANGES when a nit is filed", () => {
+>>>>>>> template
     const { payload } = run({
       summary: "s",
       findings: [
@@ -394,12 +595,17 @@ describe("post-pr-review: the severity marker the gate reads", () => {
         },
       ],
     });
+<<<<<<< local
     const body = payload.comments[0].body;
     assert.ok(body.includes("```suggestion"));
     assert.ok(
       body.indexOf("<!-- severity: blocking -->") > body.lastIndexOf("```"),
       `marker landed inside the fence: ${body}`,
     );
+=======
+    assert.equal(payload.event, "REQUEST_CHANGES");
+    assert.equal(payload.comments.length, 1);
+>>>>>>> template
   });
 });
 
@@ -471,6 +677,91 @@ describe("post-pr-review: an unanchorable gating finding still opens a thread", 
   });
 });
 
+describe("post-pr-review: any real finding holds the merge", () => {
+  const warnFinding = {
+    path: "src/foo.js",
+    line: 2,
+    side: "RIGHT",
+    severity: "warning",
+    title: "lax shape",
+    body: "a tighter design is available",
+  };
+
+  it("escalates a looks_good verdict to REQUEST_CHANGES on a warning finding", () => {
+    const { payload } = run({
+      summary: "minor design concern",
+      verdict: "looks_good",
+      findings: [warnFinding],
+    });
+    assert.equal(payload.event, "REQUEST_CHANGES");
+    assert.equal(payload.comments.length, 1);
+  });
+
+  it("escalates a looks_good verdict to REQUEST_CHANGES on a blocking-severity finding", () => {
+    // A 🔴 finding stamped looks_good (model inconsistency) must still hold: a
+    // warning gates, so the strictly-more-severe blocking severity must too.
+    const { payload } = run({
+      summary: "should not have approved",
+      verdict: "looks_good",
+      findings: [{ ...warnFinding, severity: "blocking" }],
+    });
+    assert.equal(payload.event, "REQUEST_CHANGES");
+  });
+
+  it("escalates a verdict-less COMMENT to REQUEST_CHANGES on a warning finding", () => {
+    const review = {
+      summary: "no verdict, one warning",
+      findings: [warnFinding],
+    };
+    const { payload } = run(review);
+    assert.equal(payload.event, "REQUEST_CHANGES");
+  });
+
+  it("holds even when the warning finding spills to the summary (un-anchorable)", () => {
+    const { payload } = run({
+      summary: "design note",
+      verdict: "looks_good",
+      findings: [{ ...warnFinding, line: 999 }],
+    });
+    assert.equal(payload.event, "REQUEST_CHANGES");
+    assert.equal(payload.comments.length, 0);
+    assert.match(payload.body, /#### Additional notes/);
+  });
+
+  it("gates on a cased/padded severity ( Warning )", () => {
+    const { payload } = run({
+      summary: "s",
+      verdict: "looks_good",
+      findings: [{ ...warnFinding, severity: " Warning " }],
+    });
+    assert.equal(payload.event, "REQUEST_CHANGES");
+  });
+
+  it("gates on a nit too — looks_good escalates to REQUEST_CHANGES", () => {
+    const { payload } = run({
+      summary: "cosmetic only",
+      verdict: "looks_good",
+      findings: [{ ...warnFinding, severity: "nit" }],
+    });
+    assert.equal(payload.event, "REQUEST_CHANGES");
+    assert.equal(payload.comments.length, 1);
+  });
+
+  it("does NOT gate on a detail-less finding (nothing to resolve)", () => {
+    // A finding with no title/body is dropped, so it can't hold the merge with no
+    // comment or note for the author to resolve — the verdict's event stands.
+    const { payload } = run({
+      summary: "ok",
+      verdict: "looks_good",
+      findings: [
+        { path: "src/foo.js", line: 2, side: "RIGHT", severity: "warning" },
+      ],
+    });
+    assert.equal(payload.event, "APPROVE");
+    assert.deepEqual(payload.comments, []);
+  });
+});
+
 describe("post-pr-review: commit pinning", () => {
   it("pins commit_id from HEAD_SHA", () => {
     const { payload } = run(
@@ -493,12 +784,6 @@ describe("post-pr-review: SKIP paths", () => {
     assert.equal(payload, null);
   });
 
-  it("skips (does not throw) on invalid review.json", () => {
-    const { status, payload } = run("{ not valid json");
-    assert.equal(status, "SKIP");
-    assert.equal(payload, null);
-  });
-
   it("drops a finding with no title/body", () => {
     const { status, payload } = run({
       summary: "",
@@ -508,6 +793,87 @@ describe("post-pr-review: SKIP paths", () => {
     });
     assert.equal(status, "SKIP");
     assert.equal(payload, null);
+  });
+});
+
+describe("post-pr-review: fail loud on a crashed reviewer", () => {
+  // Run the poster expecting a NON-ZERO exit; returns { code, stderr }. A missing
+  // or unparsable review.json means the reviewer crashed before writing its
+  // verdict — that must go red, not skip green. `writeReview: false` omits
+  // review.json entirely (the crash that produced #2366's silent green).
+  // The fail-loud path is gated on the run having actually reached the model:
+  // a positive total_cost_usd means the reviewer RAN and then crashed (red),
+  // whereas zero/absent cost means it never reached the model (unconfigured /
+  // credential failure) and skips green. Every fail case therefore writes a
+  // cost>0 execution log so it exercises the "ran and crashed" branch.
+  function ranExecLog() {
+    const dir = mkdtempSync(join(tmpdir(), "prr-exec-"));
+    dirs.push(dir);
+    const path = join(dir, "claude-execution-output.json");
+    writeFileSync(
+      path,
+      JSON.stringify([{ type: "result", total_cost_usd: 0.1 }]),
+    );
+    return path;
+  }
+
+  function runPoster(review, { writeReview = true, executionFile = "" } = {}) {
+    const dir = mkdtempSync(join(tmpdir(), "prr-"));
+    dirs.push(dir);
+    writeFileSync(join(dir, "diff.txt"), DIFF);
+    if (writeReview)
+      writeFileSync(
+        join(dir, "review.json"),
+        typeof review === "string" ? review : JSON.stringify(review),
+      );
+    const env = {
+      ...process.env,
+      PR_INPUT_DIR: dir,
+      EXECUTION_FILE: executionFile,
+    };
+    delete env.RUNNER_TEMP;
+    // spawnSync captures stdout AND stderr regardless of exit code, so the
+    // skip-path warning (emitted on a zero exit) is observable too.
+    const res = spawnSync("node", [SCRIPT], { env, encoding: "utf8" });
+    if (res.error) throw res.error;
+    return {
+      code: res.status,
+      stdout: res.stdout ?? "",
+      stderr: res.stderr ?? "",
+      payload: existsSync(join(dir, "review-payload.json")),
+    };
+  }
+
+  it("exits non-zero when the reviewer RAN (cost>0) but wrote no review.json", () => {
+    const { code, stderr, payload } = runPoster(null, {
+      writeReview: false,
+      executionFile: ranExecLog(),
+    });
+    assert.equal(code, 1);
+    assert.match(stderr, /::error::/);
+    assert.match(stderr, /crashed/);
+    assert.equal(payload, false);
+  });
+
+  it("exits non-zero on an unparsable review.json when the reviewer ran", () => {
+    const { code, stderr, payload } = runPoster("{ not valid json", {
+      executionFile: ranExecLog(),
+    });
+    assert.equal(code, 1);
+    assert.match(stderr, /::error::/);
+    assert.equal(payload, false);
+  });
+
+  it("SKIPS (green) when review.json is missing and run cost is zero/absent — the reviewer never reached the model (unconfigured / credential failure)", () => {
+    const { code, stdout, stderr, payload } = runPoster(null, {
+      writeReview: false,
+      executionFile: "", // no execution log → readRunCost() returns {}
+    });
+    assert.equal(code, 0);
+    assert.match(stdout, /SKIP/);
+    assert.match(stderr, /never reached the model/);
+    assert.match(stderr, /CLAUDE_CODE_OAUTH_TOKEN/);
+    assert.equal(payload, false);
   });
 });
 
@@ -674,6 +1040,7 @@ describe("post-pr-review: output sanitization", () => {
   });
 });
 
+<<<<<<< local
 // The failure this exists to stop: claude-code-action EXITS 0 when the agent's
 // session dies (a dead credential, an unentitled model, a hard API error), and
 // its own terminal event still reads `subtype: "success"`. Only `is_error`
@@ -742,4 +1109,142 @@ describe("post-pr-review: an errored agent run is not a clean review", () => {
     const { status } = run({ findings: [], summary: "" });
     assert.equal(status, "SKIP");
   });
+=======
+// The severity model lives in config/review-severities.json. These tests stage a
+// COPY of the script beside a config of their own, because the script resolves
+// that file relative to its own location — the property that keeps an untrusted
+// PR head from supplying the config that decides which of its findings hold the
+// merge. Editing the real config in place would race every other test.
+describe("post-pr-review: the severity config is the single source of truth", () => {
+  const SCRIPTS = __dirname;
+
+  // Stage <root>/.github/scripts/{post-pr-review,lib-review-cost}.mjs beside
+  // <root>/config/review-severities.json, with node_modules symlinked so the
+  // sanitizer import still resolves. Returns the staged script's path.
+  function stage(configText) {
+    const root = mkdtempSync(join(tmpdir(), "prr-ssot-"));
+    dirs.push(root);
+    const scripts = join(root, ".github", "scripts");
+    mkdirSync(scripts, { recursive: true });
+    mkdirSync(join(root, "config"), { recursive: true });
+    for (const f of ["post-pr-review.mjs", "lib-review-cost.mjs"])
+      copyFileSync(join(SCRIPTS, f), join(scripts, f));
+    symlinkSync(join(SCRIPTS, "node_modules"), join(scripts, "node_modules"));
+    if (configText !== null)
+      writeFileSync(join(root, "config", "review-severities.json"), configText);
+    return join(scripts, "post-pr-review.mjs");
+  }
+
+  // Same contract as run() above, against a staged script + config.
+  function runStaged(configText, review) {
+    const script = stage(configText);
+    const dir = mkdtempSync(join(tmpdir(), "prr-in-"));
+    dirs.push(dir);
+    writeFileSync(join(dir, "diff.txt"), DIFF);
+    writeFileSync(join(dir, "review.json"), JSON.stringify(review));
+    const env = { ...process.env, PR_INPUT_DIR: dir, EXECUTION_FILE: "" };
+    delete env.RUNNER_TEMP;
+    const res = spawnSync("node", [script], { env, encoding: "utf8" });
+    const payloadPath = join(dir, "review-payload.json");
+    return {
+      code: res.status,
+      stderr: res.stderr,
+      payload: existsSync(payloadPath)
+        ? JSON.parse(readFileSync(payloadPath, "utf8"))
+        : null,
+    };
+  }
+
+  const NIT = {
+    verdict: "looks_good",
+    summary: "one small thing",
+    findings: [
+      {
+        path: "src/foo.js",
+        line: 2,
+        side: "RIGHT",
+        severity: "nit",
+        title: "naming",
+        body: "prefer b2",
+      },
+    ],
+  };
+  const config = (over) =>
+    JSON.stringify({
+      gating: ["blocking", "warning", "nit"],
+      icons: { blocking: "🔴", warning: "🟡", nit: "🔵" },
+      ...over,
+    });
+
+  it("drops a severity from `gating` and the review stops holding the merge", () => {
+    // THE falsifier for the whole wiring: identical input, one edited config
+    // value, and the posted review event changes. If both runs agreed, the
+    // config would be documentation nobody reads.
+    const held = runStaged(config({}), NIT);
+    assert.equal(held.payload.event, "REQUEST_CHANGES");
+    const released = runStaged(
+      config({ gating: ["blocking", "warning"] }),
+      NIT,
+    );
+    assert.equal(released.payload.event, "APPROVE");
+    assert.equal(
+      released.payload.comments.length,
+      1,
+      "the finding still posts",
+    );
+  });
+
+  it("an edited icon reaches the posted comment body", () => {
+    const { payload } = runStaged(
+      config({ icons: { blocking: "🔴", warning: "🟡", nit: "🧢" } }),
+      NIT,
+    );
+    assert.match(payload.comments[0].body, /^🧢 /);
+  });
+
+  it("renders the icon for a severity the model cased differently", () => {
+    // The gate lowercases before testing membership, so a cased severity holds
+    // the merge; the glyph must follow it rather than falling back to "•".
+    const { payload } = runStaged(config({}), {
+      ...NIT,
+      findings: [{ ...NIT.findings[0], severity: " Nit " }],
+    });
+    assert.equal(payload.event, "REQUEST_CHANGES");
+    assert.match(payload.comments[0].body, /^🔵 /);
+  });
+
+  it("an absent config keeps the shipped model rather than failing", () => {
+    // `config/` is not in template-sync's SYNC_PATHS, so every repo that syncs
+    // this script gets it WITHOUT the config file. Treating that as fatal would
+    // red every review in every downstream repo, on a file that cannot arrive.
+    const { code, payload } = runStaged(null, NIT);
+    assert.equal(code, 0);
+    assert.equal(payload.event, "REQUEST_CHANGES", "nit gates by default");
+    assert.match(payload.comments[0].body, /^🔵 /);
+  });
+
+  for (const [why, text] of [
+    ["the config is not JSON", "{ not json"],
+    // An empty gating set approves every review and retires the hold with no
+    // other symptom — the one failure a default would make invisible.
+    ["`gating` is empty", config({ gating: [] })],
+    ["`gating` is absent", '{"icons":{"nit":"🔵"}}'],
+    ["`icons` is absent", '{"gating":["nit"]}'],
+    ["the config is a bare JSON null", "null"],
+    ["`icons` is an array", '{"gating":["0"],"icons":["🔵"]}'],
+    ["a gating severity has no icon", config({ icons: { blocking: "🔴" } })],
+    ["an icon is not a string", config({ icons: { nit: 7 } })],
+  ]) {
+    it(`fails closed when ${why}`, () => {
+      const { code, payload, stderr } = runStaged(text, NIT);
+      assert.notEqual(code, 0, stderr);
+      assert.equal(
+        payload,
+        null,
+        "nothing may post on an unknown severity model",
+      );
+      assert.match(stderr, /review-severities\.json/);
+    });
+  }
+>>>>>>> template
 });

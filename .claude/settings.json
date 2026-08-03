@@ -10,7 +10,9 @@
       "Read(**/.env)",
       "Read(**/.env.*)",
       "Read(**/*.pem)",
-      "Read(**/*.key)"
+      "Read(**/*.key)",
+      "Bash(*env -i*)",
+      "Bash(*env --ignore-environment*)"
     ]
   },
   "hooks": {

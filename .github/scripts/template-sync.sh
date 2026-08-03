@@ -58,12 +58,16 @@ main() {
   CONFLICT_REPORT="$WORK_DIR/conflict_report.md"
   DELETED_FILES="$WORK_DIR/deleted_files.txt"
   AUTO_MERGED_FILES="$WORK_DIR/auto_merged_files.txt"
+  DOWNGRADE_FILES="$WORK_DIR/downgrade_files.txt"
+  DOWNGRADE_REPORT="$WORK_DIR/downgrade_report.md"
   PREV_TEMPLATE_FILES="$WORK_DIR/prev_template_files.txt"
 
   : >"$CONFLICT_FILES"
   : >"$CONFLICT_REPORT"
   : >"$DELETED_FILES"
   : >"$AUTO_MERGED_FILES"
+  : >"$DOWNGRADE_FILES"
+  : >"$DOWNGRADE_REPORT"
 
   is_excluded() {
     local candidate="$1" exclude
@@ -96,6 +100,19 @@ main() {
       printf '%s\n' "$content"
       echo "$sentinel"
     } >>"$GITHUB_OUTPUT"
+  }
+
+  # Count non-blank lines present in the pre-sync local file but absent from a
+  # candidate result. A clean 3-way merge should preserve every adopter line; a
+  # nonzero count means the merge REMOVED content the adopter had — the silent
+  # downgrade this report exists to surface. Order-insensitive (sorted comm) so a
+  # merely-moved line does not count. grep -c exits 1 with "0" when nothing
+  # matches, so the ||-default keeps set -e from aborting on an all-preserved file.
+  count_dropped_lines() {
+    local local_f="$1" result_f="$2" n
+    n=$(comm -23 <(sort "$local_f") <(sort "$result_f") |
+      grep -cv '^[[:space:]]*$') || n=0
+    printf '%s' "${n:-0}"
   }
 
   #############################################
@@ -235,11 +252,32 @@ main() {
     local merge_result="$WORK_DIR/merge_result_${safe_name}"
     cp "$rel_path" "$merge_result"
 
-    if git merge-file -L "local" -L "base" -L "template" \
+    # --diff3 keeps the merge-base section between `|||||||` and `=======` in a
+    # conflict. It is what lets the structural resolver work on the result at
+    # all: mergiraf refuses a diff2-style conflict outright and returns no
+    # solution, so without this every sync conflict would need a model or a
+    # human. It also shows a human reviewer what the text was before either side
+    # touched it.
+    if git merge-file --diff3 -L "local" -L "base" -L "template" \
       "$merge_result" "$base_file" "$template_file" 2>/dev/null; then
+      # Detect a silent downgrade: the merge base here is the single repo-wide
+      # PREV_SHA, which can be STALE for a file first synced at a different
+      # template SHA. A stale base makes git report a "clean" merge while
+      # actually dropping adopter-modified lines. Measure that against the
+      # pre-sync local ($rel_path, not yet overwritten) and surface it loudly so
+      # the reviewer never trusts "auto-merged" to mean "nothing lost".
+      local dropped
+      dropped=$(count_dropped_lines "$rel_path" "$merge_result")
       cp "$merge_result" "$rel_path"
       echo "Auto-merged: $rel_path (clean 3-way merge)"
       echo "$rel_path" >>"$AUTO_MERGED_FILES"
+      if [[ "${dropped:-0}" -gt 0 ]]; then
+        echo "$rel_path" >>"$DOWNGRADE_FILES"
+        # %s are printf specifiers, not shell expansions; single quotes are correct.
+        # shellcheck disable=SC2016
+        printf -- '- `%s` — auto-merge dropped %s line(s) present in the local copy\n' \
+          "$rel_path" "$dropped" >>"$DOWNGRADE_REPORT"
+      fi
       rm -f "$base_file" "$merge_result"
       return
     fi
@@ -345,6 +383,21 @@ main() {
   if [[ -s "$AUTO_MERGED_FILES" ]]; then
     auto_merged=$(tr '\n' ' ' <"$AUTO_MERGED_FILES")
     echo "auto_merged_files=$auto_merged" >>"$GITHUB_OUTPUT"
+  fi
+
+  # Downgrade risk: files whose "clean" auto-merge dropped adopter content. This
+  # is the loud counterpart to the silent regression the sync used to ship — the
+  # PR body renders it as a prominent "adopter is ahead" section so the reviewer
+  # eyeballs exactly these files instead of trusting the auto-merge.
+  if [[ -s "$DOWNGRADE_FILES" ]]; then
+    downgrade=$(tr '\n' ' ' <"$DOWNGRADE_FILES")
+    {
+      echo "has_downgrades=true"
+      echo "downgrade_files=$downgrade"
+    } >>"$GITHUB_OUTPUT"
+    emit_multiline_output "downgrade_report" "$(cat "$DOWNGRADE_REPORT")"
+  else
+    echo "has_downgrades=false" >>"$GITHUB_OUTPUT"
   fi
 
   if [[ -s "$CONFLICT_FILES" ]]; then

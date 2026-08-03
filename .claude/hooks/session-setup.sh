@@ -81,6 +81,9 @@ _check_hook_syntax() {
   for dir in "$PROJECT_DIR/.claude/hooks" "$PROJECT_DIR/.hooks"; do
     [ -d "$dir" ] || continue
     while IFS= read -r -d '' file; do
+      # Filter — only extensions this function knows how to syntax-check are
+      # handled; any other file is correctly skipped.
+      # case-default-ok: no-match is the intended no-op, not a missed case.
       case "$file" in
       *.sh | *.bash)
         if ! out=$(bash -n "$file" 2>&1); then

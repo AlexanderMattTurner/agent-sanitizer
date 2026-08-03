@@ -32,6 +32,9 @@
 # module path.
 set -euo pipefail
 
+# shellcheck source=.github/scripts/lib/merge-delta-verdict.bash
+source "$(dirname "${BASH_SOURCE[0]}")/lib/merge-delta-verdict.bash"
+
 : "${PR:?PR number required}"
 : "${GH_REPO:?GH_REPO required}"
 : "${PR_INPUT_DIR:?PR_INPUT_DIR required}"
@@ -65,10 +68,12 @@ block="$(mktemp)"
 
 # Only a *findings* body warrants CREATING the standalone fallback; a clean
 # verdict (model found nothing, or there are no deltas) only ever UPDATES an
-# existing one — so a fork PR that never had a concern stays silent.
+# existing one — so a fork PR that never had a concern stays silent. The verdict
+# is read through the shared predicate, so a review that merely mentions or
+# quotes the all-clear among findings is a concern here, exactly as it is to the
+# resolver's self-review.
 is_concern=false
-if [[ "$had_deltas" == "true" ]] &&
-  ! grep -q "No suspicious merge-resolution deltas" "$review"; then
+if [[ "$had_deltas" == "true" ]] && ! review_is_clean "$review"; then
   is_concern=true
 fi
 

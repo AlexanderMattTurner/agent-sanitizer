@@ -8,8 +8,11 @@ name: Release canary
 # fails; the "Build/publish failure notify" (ntfy) and "CI failure notify"
 # (tracking issue) workflow_run listeners turn that failure into a notification.
 #
-# A repo that does not publish to npm (package.json "private": true — e.g. the
-# template itself) is a no-op: release-canary.sh skips before touching npm.
+# A repo that does not publish to npm is a no-op, not a daily red alert:
+# release-canary.sh skips (exit 0 with "disable me" guidance) when package.json
+# is "private": true (e.g. the template itself) OR when the package was never
+# published and declares no "publishConfig". It only fails when a repo that
+# genuinely publishes is out of sync — the failure mode this canary exists for.
 
 on:
   schedule:

@@ -1,11 +1,13 @@
 #!/bin/bash
 # Pre-commit hook: Format and lint staged files via lint-staged.
-# When lint-staged is not installed (non-Node projects), exits 0 without
-# formatting — CI's pre-commit run still covers the pushed files.
+# Projects without a package.json have no lint-staged config to run; a Node
+# project whose tools are missing FAILS the commit (see lib-gate.sh).
 
 set -euo pipefail
 
 git_root=$(git rev-parse --show-toplevel)
+# shellcheck source=.hooks/lib-gate.sh
+source "$git_root/.hooks/lib-gate.sh"
 
 # Reject unresolved merge conflict markers (and whitespace errors) in staged
 # content. A hook file left with <<<<<<< markers is a bash syntax error that
@@ -35,6 +37,7 @@ if ! git diff --quiet; then
   fi
 fi
 
+<<<<<<< local
 # Fresh clones (and non-Node projects) have no lint-staged binary. Don't block
 # the commit, but WARN loudly on stderr: a silent skip lets a fresh clone commit
 # with zero lint/format enforcement and no signal that anything was bypassed.
@@ -67,6 +70,17 @@ if [[ -f "$git_root/.hooks/guard-pairs.json" ]]; then
   else
     echo "pre-commit WARNING: node not found — SSOT guard tests SKIPPED for this commit." >&2
   fi
+=======
+# No package.json: not a Node project, so there is no lint-staged gate to run.
+if [[ ! -f "$git_root/package.json" ]]; then
+  exit 0
+fi
+
+# A Node project with lint-staged absent means the gate CANNOT run — fail the
+# commit rather than let it through with zero lint/format enforcement.
+if [[ ! -f "$git_root/node_modules/.bin/lint-staged" ]]; then
+  gate_die_missing_tool pre-commit lint-staged "run 'pnpm install' to provision the lint/format checks, then retry the commit."
+>>>>>>> template
 fi
 
 if command -v pnpm >/dev/null 2>&1; then
@@ -74,9 +88,5 @@ if command -v pnpm >/dev/null 2>&1; then
 elif command -v npm >/dev/null 2>&1; then
   npx lint-staged --allow-empty
 else
-  # lint-staged is installed (guarded above) but no package manager is on PATH:
-  # run the binary directly rather than silently exiting 0 and committing with
-  # zero lint/format enforcement.
-  echo "pre-commit: neither pnpm nor npm on PATH — invoking lint-staged directly." >&2
-  "$git_root/node_modules/.bin/lint-staged" --allow-empty
+  gate_die_missing_tool pre-commit pnpm "install pnpm (or npm) so lint-staged can run, then retry the commit."
 fi

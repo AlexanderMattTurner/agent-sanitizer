@@ -5,6 +5,8 @@
 set -euo pipefail
 
 git_root="$(git rev-parse --show-toplevel)"
+# shellcheck source=.hooks/lib-gate.sh
+source "$git_root/.hooks/lib-gate.sh"
 
 # Git hooks run in a separate shell and don't inherit CLAUDE_ENV_FILE modifications.
 # Explicitly add .venv/bin to PATH so Python tools from uv are available.
@@ -31,8 +33,12 @@ elif command -v npx >/dev/null 2>&1; then
 elif [[ "${ALLOW_UNLINTED_COMMITS:-}" == "1" ]]; then
   echo "commit-msg: commitlint unavailable (no Node.js); ALLOW_UNLINTED_COMMITS=1 — skipping validation." >&2
 else
+<<<<<<< local
   echo "commit-msg: commitlint unavailable (no Node.js) and ALLOW_UNLINTED_COMMITS is not 1." >&2
   echo "commit-msg: refusing the commit — an unvalidated subject corrupts the next release's version/notes." >&2
   echo "commit-msg: install Node or set ALLOW_UNLINTED_COMMITS=1 to override." >&2
   exit 1
+=======
+  gate_die_missing_tool commit-msg commitlint "install Node.js with pnpm or npx so commit messages can be validated, then retry the commit."
+>>>>>>> template
 fi

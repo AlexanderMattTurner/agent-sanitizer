@@ -34,6 +34,12 @@ import { pathToFileURL } from "node:url";
  * short dependent chain (read -> edit -> test) never trips it. */
 export const SERIAL_TOOL_TURN_THRESHOLD = 15;
 
+/** Cross-turn cadence: after this many consecutive user-turns with NO sub-agent
+ * delegation anywhere, re-ask whether the remaining work is delegable — the
+ * complement to the within-turn serial streak, catching a long run that stays
+ * serial across turns even when no single turn crosses the streak threshold. */
+export const TURN_CADENCE_THRESHOLD = 8;
+
 /** Tools whose use IS parallel delegation — any one of them in the current
  * user-turn segment proves sub-agents are engaged and silences the nudge.
  * (`Task` is the Claude Code CLI's native name for the sub-agent tool;
@@ -103,6 +109,8 @@ export function analyzeParallelism(jsonlText) {
   /** @type {Map<string, { calls: number, delegations: number }>} */
   let turns = new Map();
   let segmentKey = "head";
+  // Cross-segment: whole-tail count of user-turns since the last delegation.
+  let turnsSinceDelegation = 0;
   for (const line of jsonlText.split("\n")) {
     if (line.trim() === "") continue;
     /** @type {any} */
@@ -119,9 +127,10 @@ export function analyzeParallelism(jsonlText) {
       !("toolUseResult" in entry)
     ) {
       // A real user prompt (tool results always carry toolUseResult): the
-      // measured segment restarts here.
+      // measured segment restarts here; the cross-segment turn counter ticks.
       turns = new Map();
       segmentKey = typeof entry.uuid === "string" ? entry.uuid : "head";
+      turnsSinceDelegation += 1;
       continue;
     }
     const uses = toolUsesOf(entry);
@@ -136,6 +145,8 @@ export function analyzeParallelism(jsonlText) {
       DELEGATION_TOOLS.has(block.name),
     ).length;
     turns.set(id, turn);
+    if (uses.some((block) => DELEGATION_TOOLS.has(block.name)))
+      turnsSinceDelegation = 0;
   }
   let totalCalls = 0;
   let batchedTurns = 0;
@@ -154,6 +165,7 @@ export function analyzeParallelism(jsonlText) {
     maxBatch,
     delegations,
     segmentKey,
+    turnsSinceDelegation,
   };
 }
 
@@ -174,6 +186,49 @@ export function nudgeMessage(stats) {
     `dependent, continue — this note is advisory and fires at most once ` +
     `per user turn.`
   );
+}
+
+/**
+ * The cross-turn cadence nudge text: a question re-asked every
+ * TURN_CADENCE_THRESHOLD turns without a delegation.
+ * @param {number} turnsSinceDelegation
+ * @returns {string}
+ */
+export function cadenceNudgeMessage(turnsSinceDelegation) {
+  return (
+    `Subagent check: ${turnsSinceDelegation} turns have passed since you last ` +
+    `delegated to a sub-agent. Before continuing, ask whether ANY remaining ` +
+    `work is independently delegable right now — a standalone file plus its ` +
+    `tests, a research question, a probe, a report, an independent ` +
+    `investigation. CLAUDE.md says to run independent steps in parallel: if ` +
+    `yes, partition the work and fan every disjoint piece out to parallel ` +
+    `sub-agents (Task/Agent) in one batch, keeping only the truly serial or ` +
+    `guard-blocked residue (.claude/) for yourself. If every remaining piece ` +
+    `is genuinely dependent, continue — this note is advisory and re-asks ` +
+    `every ${TURN_CADENCE_THRESHOLD} turns.`
+  );
+}
+
+/**
+ * The nudge text for `stats` when one is warranted, else null. The within-turn
+ * serial streak takes precedence over the cross-turn cadence when both fire (its
+ * concrete per-turn counts are the more actionable signal):
+ *   - serial: this segment has ZERO delegations and crossed the serial
+ *     tool-turn threshold.
+ *   - cadence: a positive multiple of TURN_CADENCE_THRESHOLD whole turns has
+ *     elapsed since the last delegation.
+ * @param {ReturnType<typeof analyzeParallelism>} stats
+ * @returns {string | null}
+ */
+export function nudgeFor(stats) {
+  if (stats.delegations === 0 && stats.toolTurns >= SERIAL_TOOL_TURN_THRESHOLD)
+    return nudgeMessage(stats);
+  if (
+    stats.turnsSinceDelegation >= TURN_CADENCE_THRESHOLD &&
+    stats.turnsSinceDelegation % TURN_CADENCE_THRESHOLD === 0
+  )
+    return cadenceNudgeMessage(stats.turnsSinceDelegation);
+  return null;
 }
 
 /**
@@ -212,14 +267,14 @@ export function judgeParallelism(payload, deps) {
   if (typeof transcriptPath !== "string" || typeof sessionId !== "string")
     return null;
   const stats = analyzeParallelism(deps.readTranscript(transcriptPath));
-  if (stats.delegations > 0 || stats.toolTurns < SERIAL_TOOL_TURN_THRESHOLD)
-    return null;
+  const message = nudgeFor(stats);
+  if (message === null) return null;
   if (deps.alreadyNudged(sessionId, stats.segmentKey)) return null;
   deps.recordNudged(sessionId, stats.segmentKey);
   return {
     hookSpecificOutput: {
       hookEventName: "PostToolUse",
-      additionalContext: nudgeMessage(stats),
+      additionalContext: message,
     },
   };
 }

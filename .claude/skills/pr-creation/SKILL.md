@@ -77,10 +77,13 @@ You MUST read [pr-templates.md](pr-templates.md) for the PR template and formatt
 
 1. Push the branch: `git push -u origin HEAD`
 2. Check if a PR already exists for the current branch:
+
    ```bash
    EXISTING_PR=$(gh pr list --head "$(git branch --show-current)" --json number --jq '.[0].number' 2>/dev/null)
    ```
+
    If a PR already exists, update it with `gh pr edit` instead of creating a new one.
+
 3. Create the PR using `gh pr create` with the template from the resource file. Make sure that you use the target branch
 
 **Write the body for the reviewer's cognitive budget, not as an investigation archive** —
@@ -136,6 +139,7 @@ Push any commits made during the critique and validation steps, then update the 
 
 2. Re-read the diff (`git diff $CLAUDE_CODE_BASE_REF...HEAD`) and commit log (`git log $CLAUDE_CODE_BASE_REF..HEAD --oneline`) to see the full scope
 3. Rewrite the title and body to accurately describe the **current totality** of changes, not just the original scope:
+
    ```bash
    gh pr edit <pr-number> --title "<type>: <updated description>" --body "$(cat <<'EOF'
    <updated body using template from pr-templates.md>
@@ -188,7 +192,7 @@ State each insight as one concrete line. Skip this step if the task was trivial 
 7. Runs `pnpm check && pnpm test && pnpm lint`—all pass
 8. Pushes fixes, updates PR description to reflect the null-check fix
 9. Watches CI with `gh pr checks 47 --watch`—all green
-10. Reports: “PR #47 created and all CI checks pass: https://github.com/org/repo/pull/47"
+10. Reports: “PR #47 created and all CI checks pass: <https://github.com/org/repo/pull/47>"
 
 ### Example 2: Multi-Commit Feature
 
@@ -222,3 +226,17 @@ State each insight as one concrete line. Skip this step if the task was trivial 
 - **Push fails**: Check branch permissions and remote configuration
 - **PR already exists (HTTP 422)**: Check for existing PRs first with `gh pr list --head "$(git branch --show-current)"`, then use `gh pr edit` to update
 - **No changes to PR**: Confirm with the user that work is committed
+
+## Shaping the PR
+
+**Default to ONE consolidated PR even when a task produces several independent changes.** Every PR boots the full workflow fan-out on a shared runner pool, so N small PRs cost ~N× the CI _and_ each one's required checks queue behind the others' long jobs. Land related and merely co-discovered work on one branch, one CI run, one review. Split only when a piece must land on its own timeline, or the consolidated diff would be too large to review coherently. One big PR still owes the reviewer legibility: one commit per separable concern, plus a `## Partitions` map in the body.
+
+Use the `/pr-creation` skill. For contributions to others' repos, before writing a PR description, check for `CONTRIBUTING.md` or `.github/PULL_REQUEST_TEMPLATE.md` in the target repo and follow its conventions. **Never** include `claude.ai` URLs, session links, or AI-tool attribution links in PRs.
+
+**A `## Lessons Learned` section is the exception, not the norm — most PRs should have none.** Each PR that carries one files an issue on the template repo (`phone-home` propagates it on merge), so the bar is high: include one **only** for a genuinely novel, non-obvious insight that generalizes to a downstream repo sharing none of this code and would change a template file (`.claude/`, `.hooks/`, `.github/workflows/`, `CLAUDE.md`, `setup.sh`). A repo-specific fix, a restatement of an existing rule, or an obvious CI tweak is triage noise — omit the section. When you do include one, each lesson must be actionable: **what** to change in the template, **where** (file/component), and **why**. **Never write a negative placeholder** ("none applicable", "N/A", "nothing generalizable") — phone-home drops those, so the sentence only churns; delete the heading entirely.
+
+**Skip the `## Lessons Learned` section entirely when the PR targets the `claude-automation-template` repo itself.** phone-home propagates lessons _from_ downstream repos _into_ the template; a change made directly in the template is already there, so a lessons section here propagates nothing and is pure noise.
+
+**Lessons only reach the template repo if they appear in the PR description**—lessons mentioned only in chat are never propagated and are permanently lost.
+
+**Resolve each review thread once you've addressed it**, so the unresolved count reflects only what still needs attention and auto-merge isn't held on stale threads. Resolve **only** a thread you actually addressed — a fix or a reply first, never resolving to clear the count.
