@@ -8,6 +8,11 @@ adhere to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+## [2.14.2] - 2026-08-03
+
+### Fixed
+- The published version number is now correctly stamped into the Claude Code plugin manifest during release.
+
 ## [2.14.1] - 2026-08-01
 
 ### Fixed
