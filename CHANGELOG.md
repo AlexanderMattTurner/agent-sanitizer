@@ -8,6 +8,11 @@ adhere to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+## [2.14.3] - 2026-08-03
+
+### Changed
+- Documented the Claude Code plugin installation method alongside the npm install instructions in the README.
+
 ## [2.14.2] - 2026-08-03
 
 ### Fixed
