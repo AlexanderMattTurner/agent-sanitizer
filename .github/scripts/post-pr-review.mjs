@@ -58,20 +58,6 @@ function skip(msg) {
   process.exit(0);
 }
 
-<<<<<<< local
-// A run that reported `is_error` never reviewed anything, so its ABSENCE of
-// findings means nothing — reporting SKIP for it would post a green check for a
-// review that did not happen. Checked before the review is read at all, because
-// an errored run's partial output is not evidence either way.
-if (runErrored()) {
-  process.stdout.write("ERRORED\n");
-  process.stderr.write(
-    "::error::the review agent's run reported is_error — it did not review this PR " +
-      "(a dead or unentitled credential, an unavailable model, or a hard API error). " +
-      "Re-run with `show_full_output: true` on the claude-run step to see why.\n",
-  );
-  process.exit(0);
-=======
 // A missing or unparsable review.json is not "nothing to review" — the reviewer
 // is instructed to always write its verdict there, so its absence means the agent
 // crashed before producing one. Fail loud (non-zero exit) so the job goes RED
@@ -80,7 +66,6 @@ if (runErrored()) {
 function fail(msg) {
   process.stderr.write(`::error::${msg}\n`);
   process.exit(1);
->>>>>>> template
 }
 
 // A compact cost footnote: the review's API-equivalent cost, plus (via
@@ -127,16 +112,6 @@ try {
 const findings = Array.isArray(review.findings) ? review.findings : [];
 const summary = typeof review.summary === "string" ? review.summary.trim() : "";
 
-<<<<<<< local
-// Every review posts as a COMMENT: the review event carries no merge consequence
-// at all. What holds a merge is the review-findings STATUS gate
-// (review-findings-gate.sh), which is red exactly while an unresolved reviewer
-// thread carries a gating-severity finding — so the reviewer's whole lever over
-// the merge is the inline threads it opens, never an APPROVE/REQUEST_CHANGES
-// verdict. (review.json's `verdict` field is advisory prose the reviewer folds
-// into its own summary; nothing here acts on it.)
-const event = "COMMENT";
-=======
 // The reviewer's verdict picks the base review EVENT — the lever this review has
 // over a review-required ruleset (which is what makes it gate auto-merge):
 //   looks_good              -> APPROVE          (satisfies the required review; auto-merge may proceed)
@@ -240,7 +215,6 @@ function loadSeverities() {
 }
 
 const { gating: GATING_SEVERITIES, icons: ICONS } = loadSeverities();
->>>>>>> template
 
 // Commentable (path, line) positions per side, parsed from the unified diff.
 // Context lines are commentable on both sides; added lines on RIGHT, removed on
@@ -249,15 +223,7 @@ const { gating: GATING_SEVERITIES, icons: ICONS } = loadSeverities();
 // remap.
 const rightOk = new Set();
 const leftOk = new Set();
-<<<<<<< local
-// The first commentable RIGHT-side line per path, and the first overall — the
-// synthetic-anchor ladder for a gating finding whose own anchor is not in the
-// diff (nearest: its own file's first changed line; else the diff's first).
-const firstRightByPath = new Map();
-let firstRightOverall = null;
-=======
 const diffViewLines = [];
->>>>>>> template
 let path = null;
 let oldLine = 0;
 let newLine = 0;
@@ -283,12 +249,7 @@ for (let i = 0; i < diffLines.length; i++) {
   const kind = raw[0];
   if (kind === "+") {
     rightOk.add(`${path}\t${newLine}`);
-<<<<<<< local
-    if (!firstRightByPath.has(path)) firstRightByPath.set(path, newLine);
-    if (!firstRightOverall) firstRightOverall = { path, line: newLine };
-=======
     diffViewLines[i + 1] = { path, kind, newLine, oldLine: null };
->>>>>>> template
     newLine += 1;
   } else if (kind === "-") {
     leftOk.add(`${path}\t${oldLine}`);
@@ -297,48 +258,12 @@ for (let i = 0; i < diffLines.length; i++) {
   } else if (kind === " ") {
     rightOk.add(`${path}\t${newLine}`);
     leftOk.add(`${path}\t${oldLine}`);
-<<<<<<< local
-    if (!firstRightByPath.has(path)) firstRightByPath.set(path, newLine);
-    if (!firstRightOverall) firstRightOverall = { path, line: newLine };
-=======
     diffViewLines[i + 1] = { path, kind, newLine, oldLine };
->>>>>>> template
     oldLine += 1;
     newLine += 1;
   }
 }
 
-<<<<<<< local
-// The severity model's SSOT, shared with review-findings-gate.sh: this file
-// renders each finding's icon from `icons` and stamps the hidden marker below,
-// and the gate re-derives which severities gate the merge from `gating` in the
-// same file — so the writer of the signal and its reader cannot drift apart.
-const SEVERITY_CONFIG = JSON.parse(
-  readFileSync(new URL("../../config/review-severities.json", import.meta.url)),
-);
-const ICON = SEVERITY_CONFIG.icons;
-const icon = (sev) => ICON[sev] || "•";
-// Severities that HOLD the merge. Excluding `nit` is what keeps 🔵 nits
-// advisory: they post as review comments the author reads without the merge
-// waiting on them.
-const GATING_SEVERITIES = new Set(SEVERITY_CONFIG.gating);
-// Normalized before ANY severity lookup: the severity now decides whether a
-// finding gates the merge, so a cased or padded "Blocking" from the model must
-// not miss GATING_SEVERITIES and spill a blocking finding into the body, where
-// the gate cannot see it.
-const normSeverity = (s) =>
-  typeof s === "string" ? s.trim().toLowerCase() : "";
-
-// The machine-readable severity, stamped hidden on every inline finding: the
-// merge gate reads this marker off an unresolved thread's ROOT comment to decide
-// whether that thread gates the merge (the leading icon is only its pre-marker
-// fallback). Only a KNOWN severity is stamped — an unknown one would teach the
-// gate a severity the config does not carry, and it renders as the "•" fallback
-// above precisely because it is not part of the model. `scrub` runs with
-// `{ html: false }`, so Layer 2 never splices this comment back out.
-const severityMarker = (sev) =>
-  ICON[sev] ? `\n\n<!-- severity: ${sev} -->` : "";
-=======
 // Recover a diff-view anchor (see header): remap viewLine — a 1-based line
 // number of diff.txt itself — to the file-side coordinates of the content line
 // at that position, but ONLY when that line belongs to the finding's own path
@@ -357,7 +282,6 @@ function remapDiffViewAnchor(findingPath, viewLine, hasSuggestion) {
 // merge always renders the glyph its hold is named after — a cased "Blocking"
 // that gated but posted the "•" fallback would read as an unclassified note.
 const icon = (sev) => ICONS.get(normSeverity(sev)) || "•";
->>>>>>> template
 
 // A `suggestion` renders as a GitHub suggested-change block the author can apply
 // with one click. Suggestions can only target the new file (RIGHT side), so a
@@ -380,14 +304,10 @@ let hasGatingFinding = false;
 for (const f of findings) {
   const detail = [f.title, f.body].filter(Boolean).join(" — ").trim();
   if (!detail) continue;
-<<<<<<< local
-  const sev = normSeverity(f.severity);
-=======
   // A detail-less finding is dropped (above), so it can't hold the merge with
   // nothing to resolve — only a finding that actually posts (as an inline
   // comment or a spilled summary note) counts toward the gate.
   if (GATING_SEVERITIES.has(normSeverity(f.severity))) hasGatingFinding = true;
->>>>>>> template
   const line = Number.isInteger(f.line) ? f.line : null;
   const hasSuggestion =
     typeof f.suggestion === "string" && f.suggestion.length > 0;
@@ -418,15 +338,9 @@ for (const f of findings) {
   if (f.path && anchorLine && anchorOk.has(`${f.path}\t${anchorLine}`)) {
     const comment = {
       path: f.path,
-<<<<<<< local
-      line,
-      side,
-      body: `${icon(sev)} ${detail}`,
-=======
       line: anchorLine,
       side: anchorSide,
       body: `${icon(f.severity)} ${detail}`,
->>>>>>> template
     };
     // Multi-line suggestion/anchor: keep it only when the whole RIGHT-side range
     // is in the diff, else GitHub 422s the review.

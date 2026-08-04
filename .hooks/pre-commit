@@ -37,40 +37,6 @@ if ! git diff --quiet; then
   fi
 fi
 
-<<<<<<< local
-# Fresh clones (and non-Node projects) have no lint-staged binary. Don't block
-# the commit, but WARN loudly on stderr: a silent skip lets a fresh clone commit
-# with zero lint/format enforcement and no signal that anything was bypassed.
-if [[ ! -f "$git_root/node_modules/.bin/lint-staged" ]]; then
-  # Fail open (a fresh clone must still be able to commit) but never silently:
-  # an unwarned skip here let unformatted/unchecked changes land more than once.
-  {
-    echo "=================================================================="
-    echo "pre-commit WARNING: lint-staged not installed — formatting/lint"
-    echo "checks and SSOT guard tests SKIPPED for this commit."
-    echo "Run 'pnpm install' to restore them."
-    echo "=================================================================="
-  } >&2
-  exit 0
-fi
-
-# SSOT guard-test pairing: when a mapped SSOT source is staged, run its cheap
-# paired contract test(s) (map: .hooks/guard-pairs.json) so the data and
-# its guard can only change together — this repo has twice broken main by
-# editing a guarded source without its test. Skipped (with a warning, never
-# silently) when node or the pair map is unavailable — e.g. a sandboxed
-# environment or a downstream repo that hasn't adopted the map.
-if [[ -f "$git_root/.hooks/guard-pairs.json" ]]; then
-  if command -v node >/dev/null 2>&1; then
-    staged_files=()
-    while IFS= read -r line; do staged_files+=("$line"); done < <(git diff --cached --name-only --diff-filter=ACMRD)
-    if [[ "${#staged_files[@]}" -gt 0 ]]; then
-      node "$git_root/.hooks/run-guard-pairs.mjs" "${staged_files[@]}"
-    fi
-  else
-    echo "pre-commit WARNING: node not found — SSOT guard tests SKIPPED for this commit." >&2
-  fi
-=======
 # No package.json: not a Node project, so there is no lint-staged gate to run.
 if [[ ! -f "$git_root/package.json" ]]; then
   exit 0
@@ -80,7 +46,6 @@ fi
 # commit rather than let it through with zero lint/format enforcement.
 if [[ ! -f "$git_root/node_modules/.bin/lint-staged" ]]; then
   gate_die_missing_tool pre-commit lint-staged "run 'pnpm install' to provision the lint/format checks, then retry the commit."
->>>>>>> template
 fi
 
 if command -v pnpm >/dev/null 2>&1; then

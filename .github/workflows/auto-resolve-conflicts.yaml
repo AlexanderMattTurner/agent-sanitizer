@@ -1,30 +1,6 @@
 # Auto-resolve a PR's merge conflicts with its base branch: an OPTIONAL
 # deterministic generated-file pre-pass (`pnpm resolve-generated`, only when the
 # repo defines that script) plus an LLM pass over the remaining SOURCE conflicts,
-<<<<<<< local
-# pushed back as a normal merge commit. Generated files whose sources also
-# conflicted are excluded from the LLM prompt and regenerated in finalize once the
-# sources are resolved; a conflicted lockfile with a known owning tool
-# (pnpm-lock.yaml, package-lock.json, uv.lock) is regenerated deterministically in
-# finalize by re-running that tool against the resolved manifests — never
-# hand-merged; a conflict with no textual resolution AND no owning tool (a binary,
-# an unsupported lockfile) fails the run with a PR comment BEFORE any LLM cost and
-# labels the PR `auto-resolve-blocked` so base pushes don't retry into the same
-# refusal.
-#
-# Safety rails: same-repo PRs only (a fork's token is read-only and its author is
-# untrusted), non-bot / non-draft authors, conflicts in protected paths (this
-# repo's Claude config and CI machinery) are still resolved by the LLM but flagged
-# for human review in the pushed-resolution comment, and the resolved head is
-# re-validated by CI + human review before it can merge. The workflow comments on
-# a PR only when it actually pushes something (or fails mid-resolution) — a run
-# that ends up doing nothing says nothing. The merge commit is pushed with the
-# workflow-capable TEMPLATE_SYNC_TOKEN_ORG (the only token GitHub allows to update
-# workflow files, and a PAT so the push retriggers the PR's checks); if that
-# secret is absent the PR is labeled `auto-resolve-blocked` and skipped until a
-# human provisions the token and removes the label — otherwise every base push
-# would re-run a paid resolve into the same rejection.
-=======
 # one bounded model call per conflicted file, pushed back as a normal merge
 # commit. Generated files whose sources also conflicted are excluded from the LLM
 # prompt and regenerated once the sources are resolved; a conflict with no textual
@@ -42,7 +18,6 @@
 # `auto-resolve-blocked` and skipped until a human provisions the token and
 # removes the label — otherwise every base push would re-run a paid resolve into
 # the same rejection.
->>>>>>> template
 # It mutates the PR branch, so — like the pre-commit autofix — it is NOT a
 # required check.
 #
@@ -435,19 +410,6 @@ jobs:
         # below, which reads the execution log and fails loud with an actionable
         # message rather than a bare error.
         continue-on-error: true
-<<<<<<< local
-        uses: ./.github/actions/claude-conflict-resolve
-        with:
-          oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
-          oauth_token_fallback: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN_FALLBACK }}
-          oauth_token_fallback_3: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN_FALLBACK_3 }}
-          oauth_token_fallback_4: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN_FALLBACK_4 }}
-          oauth_token_fallback_5: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN_FALLBACK_5 }}
-          oauth_token_fallback_6: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN_FALLBACK_6 }}
-          github_token: ${{ secrets.GITHUB_TOKEN }}
-          pr_number: ${{ matrix.pr.number }}
-          conflict_list: ${{ steps.prepare.outputs.conflict_list }}
-=======
         env:
           RESOLVER_DIR: ${{ steps.resolver.outputs.dir }}
           BASE_WORKTREE: ${{ steps.resolver.outputs.base }}
@@ -461,7 +423,6 @@ jobs:
           CONFLICT_LIST: ${{ steps.prepare.outputs.conflict_list }}
           MODIFY_DELETE_PATHS: ${{ steps.prepare.outputs.modify_delete }}
         run: bash "${RESOLVER_DIR}/claude-conflict-resolve.sh"
->>>>>>> template
 
       - name: Fail loud if the Claude resolution errored
         id: assert_llm
@@ -482,20 +443,6 @@ jobs:
         id: bundle
         if: steps.prepare.outputs.needs_commit == 'true'
         env:
-<<<<<<< local
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # Workflow-capable PAT: the merge commit may carry base-branch edits to
-          # .github/workflows/, which no other available token can push, and being
-          # a PAT the push retriggers the PR's checks. Absent ⇒ finalize labels the
-          # PR auto-resolve-blocked and stops.
-          TEMPLATE_SYNC_TOKEN_ORG: ${{ secrets.TEMPLATE_SYNC_TOKEN_ORG }}
-          CONFLICT_LIST: ${{ steps.prepare.outputs.conflict_list }}
-          DEFERRED_REGEN: ${{ steps.prepare.outputs.deferred_regen }}
-          # Conflicted lockfiles finalize regenerates by re-running their owning
-          # tool (pnpm/npm/uv) against the resolved manifests.
-          DEFERRED_LOCK: ${{ steps.prepare.outputs.deferred_lock }}
-          PROTECTED_PATHS: ${{ steps.prepare.outputs.protected_paths }}
-=======
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           RESOLVER_DIR: ${{ steps.resolver.outputs.dir }}
           BUNDLE_DIR: ${{ runner.temp }}/auto-resolve-bundle
@@ -520,7 +467,6 @@ jobs:
           # either way.
           MODIFY_DELETE_PATHS: ${{ steps.prepare.outputs.modify_delete }}
           MODIFY_DELETE_VERDICTS: ${{ steps.resolve_llm.outputs.verdict_file }}
->>>>>>> template
           # Empty when the LLM step was skipped (deterministic-only resolution);
           # bundle defaults it to 0. Non-zero + leftover markers ⇒ the resolver
           # may have been blocked, so the handoff comment names the real cause.

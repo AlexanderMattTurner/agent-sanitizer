@@ -67,11 +67,6 @@ jobs:
           registry-url: https://registry.npmjs.org
 
       - name: Bump version and publish if commits warrant a release
-<<<<<<< local
-        id: release
-        env:
-          ANTHROPIC_API_KEY: ${{ secrets.GH_ACTION_ANTHROPIC_API_KEY }}
-=======
         # The changelog-prose call walks the anthropic-ladder.bash credential
         # ladder: subscription tokens first, the metered ANTHROPIC_API_KEY last.
         env:
@@ -83,7 +78,6 @@ jobs:
           CLAUDE_CODE_OAUTH_TOKEN_FALLBACK_5: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN_FALLBACK_5 }}
           CLAUDE_CODE_OAUTH_TOKEN_FALLBACK_6: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN_FALLBACK_6 }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
->>>>>>> template
         run: bash .github/scripts/version-bump.sh
 
       # Coupled PyPI release (PRIMARY path). When version-bump.sh actually

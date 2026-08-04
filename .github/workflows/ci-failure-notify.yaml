@@ -18,11 +18,8 @@ on: # zizmor: ignore[dangerous-triggers]
     workflows:
       - Auto-resolve merge conflicts
       - Auto version bump and publish
-<<<<<<< local
-=======
       - CI failure-rate report
       - Claude reviewer-hold sweeper
->>>>>>> template
       - Format check
       - Gitleaks Secret Scanning
       - Hook lifecycle

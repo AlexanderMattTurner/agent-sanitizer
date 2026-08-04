@@ -18,14 +18,8 @@
 # Env: GH_TOKEN, GH_REPO (owner/name), PR, PR_INPUT_DIR; REVIEWER_LOGIN optional.
 set -euo pipefail
 
-<<<<<<< local
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-# shellcheck source=.github/scripts/lib/review-threads.bash
-source "$SCRIPT_DIR/lib/review-threads.bash"
-=======
 # shellcheck source=.github/scripts/lib-ci-retry.sh
 source "$(dirname "${BASH_SOURCE[0]}")/lib-ci-retry.sh"
->>>>>>> template
 
 : "${GH_REPO:?GH_REPO required}"
 : "${PR:?PR number required}"
@@ -56,12 +50,6 @@ export REVIEWER_LOGIN_BARE
 # reaches the file — never a plain `retry` here, whose failing-attempt stdout
 # (gh's HTTP error body) would concatenate into threads.ndjson.
 ndjson="${PR_INPUT_DIR}/threads.ndjson"
-<<<<<<< local
-fetch_review_threads "$owner" "$name" "$PR" \
-  ".[] | select(.isResolved == false)
-       | $REVIEW_THREAD_ROOT_IS_REVIEWER
-       | {id, path, line, body: .comments.nodes[0].body}" >"$ndjson"
-=======
 threads_ndjson="$(retry_stdout gh api graphql --paginate \
   -f query="$QUERY" -f owner="$owner" -f name="$name" -F pr="$PR" \
   --jq '.data.repository.pullRequest.reviewThreads.nodes[]
@@ -69,7 +57,6 @@ threads_ndjson="$(retry_stdout gh api graphql --paginate \
         | select((.comments.nodes[0].author.login // "" | sub("\\[bot\\]$"; "")) == env.REVIEWER_LOGIN_BARE)
         | {id, path, line, body: .comments.nodes[0].body}')"
 printf '%s\n' "$threads_ndjson" >"$ndjson"
->>>>>>> template
 
 # Slurp the NDJSON into an array and stamp a 1-based index onto each thread.
 jq -s 'to_entries | map(.value + {index: (.key + 1)})' "$ndjson" >"${PR_INPUT_DIR}/threads.json"
