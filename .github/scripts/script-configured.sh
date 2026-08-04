@@ -1,31 +1,32 @@
 #!/usr/bin/env bash
-# Classify whether package.json configures $1 as a real script.
+# Predicate: is package.json script $1 configured (present and not the
+# template's "ERROR: Configure" placeholder)?
 #
-#   exit 0  -> configured (script present, body is not the placeholder)
-#   exit 1  -> not configured (script absent, or still the "ERROR: Configure"
-#              placeholder emitted by the template's unfilled scripts)
-#   exit 2  -> package.json is malformed (jq PARSE failure) — fail LOUD
-#
-# The exit-2 case is the load-bearing distinction: conflating a corrupt
-# package.json with "not configured" lets the caller skip the step and a
-# required check (node-tests / lint) report GREEN with zero work run. Mirrors
-# has_script() in .claude/hooks/lib-checks.sh.
-#
-# Used by lint / test workflows via script-configured-output.sh to skip steps
-# in repos that haven't filled in the placeholder scripts.
+# Exit contract (callers MUST distinguish 1 from >=2 — see
+# script-configured-output.sh, the fail-closed wrapper CI workflows use):
+#   0  - configured
+#   1  - not configured (script missing/placeholder, or no package.json)
+#   2+ - could NOT determine (malformed package.json, jq failure) — loud on
+#        stderr; treating this as "not configured" would green a required
+#        check with zero checks run.
 
-set -uo pipefail
+set -euo pipefail
 
 : "${1:?script name required}"
 
-# `2>&1` captures jq's own error text; a non-zero jq exit here is a PARSE
-# failure (invalid JSON), NOT a missing key — `// empty` makes a missing key a
-# clean empty string with exit 0.
-if ! val=$(jq -r --arg name "$1" '.scripts[$name] // empty' package.json 2>&1); then
-  echo "ERROR: package.json is not valid JSON, cannot check for script \"$1\": $val" >&2
-  exit 2
-fi
+# No package.json at all: nothing is configured — a legitimate skip, not an
+# unreadable one.
+[[ -f package.json ]] || exit 1
 
-# Empty (absent) or placeholder body => not configured (exit 1 via set -e on the
-# final failing test); otherwise exit 0.
-[[ -n "$val" && "$val" != *"ERROR: Configure"* ]]
+# Use jq so the script name is never interpolated into an expression string.
+# jq -e exits 1 when the script key is absent (null); any other failure is a
+# parse/system error that must surface, not read as "not configured".
+rc=0
+val=$(jq -re --arg name "$1" '.scripts[$name]' package.json 2>&1) || rc=$?
+if [[ "$rc" -ge 2 ]]; then
+  echo "ERROR: script-configured.sh: cannot read package.json (jq exit $rc): $val" >&2
+  exit "$rc"
+elif [[ "$rc" -ne 0 ]]; then
+  exit 1
+fi
+! grep -q 'ERROR: Configure' <<<"$val"

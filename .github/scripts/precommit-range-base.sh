@@ -16,10 +16,15 @@
 # job operates on.
 set -euo pipefail
 
+# shellcheck source=.github/scripts/lib-ci-retry.sh
+source "$(dirname "${BASH_SOURCE[0]}")/lib-ci-retry.sh"
+
 : "${GITHUB_REPOSITORY:?}" "${GITHUB_BASE_REF:?}" "${GH_TOKEN:?}"
 
 head="$(git rev-parse HEAD)"
-base="$(gh api "repos/${GITHUB_REPOSITORY}/compare/${GITHUB_BASE_REF}...${head}" \
+# retry_stdout in a command substitution: the compare API is an idempotent GET, so
+# a 5xx blip re-runs cleanly and only the succeeding attempt's sha is captured.
+base="$(retry_stdout gh api "repos/${GITHUB_REPOSITORY}/compare/${GITHUB_BASE_REF}...${head}" \
   --jq '.merge_base_commit.sha')"
 [[ -n "$base" ]] || {
   echo "could not resolve the merge-base for ${GITHUB_BASE_REF}...${head}" >&2

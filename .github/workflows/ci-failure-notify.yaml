@@ -18,12 +18,14 @@ on: # zizmor: ignore[dangerous-triggers]
     workflows:
       - Auto-resolve merge conflicts
       - Auto version bump and publish
+      - CI failure-rate report
+      - Claude reviewer-hold sweeper
       - Format check
       - Gitleaks Secret Scanning
       - Hook lifecycle
       - Lint
-      - Merge-conflict early warning
       - Node tests
+      - PR meta (privileged)
       - pre-commit
       - Release canary
       - Weekly Security & Dependency Remediation

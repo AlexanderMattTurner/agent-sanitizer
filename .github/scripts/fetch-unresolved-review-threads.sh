@@ -18,9 +18,8 @@
 # Env: GH_TOKEN, GH_REPO (owner/name), PR, PR_INPUT_DIR; REVIEWER_LOGIN optional.
 set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-# shellcheck source=.github/scripts/lib/review-threads.bash
-source "$SCRIPT_DIR/lib/review-threads.bash"
+# shellcheck source=.github/scripts/lib-ci-retry.sh
+source "$(dirname "${BASH_SOURCE[0]}")/lib-ci-retry.sh"
 
 : "${GH_REPO:?GH_REPO required}"
 : "${PR:?PR number required}"
@@ -32,7 +31,9 @@ REVIEWER_LOGIN="${REVIEWER_LOGIN:-github-actions[bot]}"
 # threads are actually matched. Comparing the REST-shaped `github-actions[bot]`
 # matched zero threads, so has_threads was always false and the Haiku resolver
 # never ran.
-REVIEWER_LOGIN_BARE="${REVIEWER_LOGIN%'[bot]'}"
+# Exported so the gh child inside retry_stdout's subshell sees it — the --jq
+# filter below reads env.REVIEWER_LOGIN_BARE.
+export REVIEWER_LOGIN_BARE="${REVIEWER_LOGIN%'[bot]'}"
 
 mkdir -p "$PR_INPUT_DIR"
 owner="${GH_REPO%%/*}"
@@ -44,11 +45,18 @@ name="${GH_REPO##*/}"
 # Exported for the jq inside the external `gh` process, which reads it from `env`.
 export REVIEWER_LOGIN_BARE
 
+# retry_stdout inside a command substitution: a 5xx blip on any --paginate page
+# re-runs the whole (idempotent) query and only the succeeding attempt's NDJSON
+# reaches the file — never a plain `retry` here, whose failing-attempt stdout
+# (gh's HTTP error body) would concatenate into threads.ndjson.
 ndjson="${PR_INPUT_DIR}/threads.ndjson"
-fetch_review_threads "$owner" "$name" "$PR" \
-  ".[] | select(.isResolved == false)
-       | $REVIEW_THREAD_ROOT_IS_REVIEWER
-       | {id, path, line, body: .comments.nodes[0].body}" >"$ndjson"
+threads_ndjson="$(retry_stdout gh api graphql --paginate \
+  -f query="$QUERY" -f owner="$owner" -f name="$name" -F pr="$PR" \
+  --jq '.data.repository.pullRequest.reviewThreads.nodes[]
+        | select(.isResolved == false)
+        | select((.comments.nodes[0].author.login // "" | sub("\\[bot\\]$"; "")) == env.REVIEWER_LOGIN_BARE)
+        | {id, path, line, body: .comments.nodes[0].body}')"
+printf '%s\n' "$threads_ndjson" >"$ndjson"
 
 # Slurp the NDJSON into an array and stamp a 1-based index onto each thread.
 jq -s 'to_entries | map(.value + {index: (.key + 1)})' "$ndjson" >"${PR_INPUT_DIR}/threads.json"

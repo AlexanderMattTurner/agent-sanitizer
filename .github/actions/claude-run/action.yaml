@@ -78,6 +78,29 @@ inputs:
     description: 'Passed through to claude-code-action (e.g. "claude"); empty = default.'
     required: false
     default: ""
+  untrusted_files:
+    description: >-
+      Newline-separated entries naming the files that hold untrusted input for
+      this run (each entry is rendered as a bullet, so "label: /path (note)" is
+      fine). When non-empty, the canonical untrusted-data guard in
+      .github/prompts/untrusted-data-preamble.md is prepended to the prompt.
+      Declare WHICH files are untrusted; never restate the rule in your prompt.
+    required: false
+    default: ""
+  gate_execution:
+    description: >-
+      Fail the run when its execution log reports is_error (or is missing,
+      corrupt, or carries no result event). Defaults to "true": a green
+      claude-code-action step is not proof Claude ran, so the gate belongs on by
+      default. Set "false" only with a stated reason at the call site.
+    required: false
+    default: "true"
+  gate_context:
+    description: >-
+      Label the gate puts in its error messages ("<context> ended in error ...").
+      Empty falls back to the script's own "Claude run".
+    required: false
+    default: ""
 outputs:
   execution_file:
     description: "Execution-log path of the LAST attempt that ran (newest first)."
@@ -470,3 +493,17 @@ runs:
       run: |
         echo "::error::claude-run: every configured Claude credential failed (set CLAUDE_CODE_OAUTH_TOKEN and CLAUDE_CODE_OAUTH_TOKEN_FALLBACK[_3..6])." >&2
         exit 1
+    # A rung exiting 0 is NOT proof Claude ran: an auth failure, a crash before
+    # the result event, and a corrupt log all leave the step green. This gate is
+    # what turns that silent skip into a red step. It lives HERE, not at each
+    # call site, so a new caller inherits it instead of having to remember it —
+    # the obligation was previously open-coded and 5 of 7 call sites had missed
+    # it. Removing this step re-opens every caller to a silent no-op run.
+    - name: Gate on the execution log (is_error / missing / corrupt)
+      id: gate
+      if: inputs.gate_execution == 'true'
+      shell: bash
+      env:
+        CONTEXT: ${{ inputs.gate_context }}
+        EXECUTION_FILE: ${{ steps.resolve_log.outputs.execution_file }}
+      run: bash "${GITHUB_ACTION_PATH}/../../scripts/check-claude-execution.sh"
