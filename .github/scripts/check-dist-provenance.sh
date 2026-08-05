@@ -19,6 +19,14 @@ input_changed=false
 while IFS= read -r file; do
   [[ -n "$file" ]] || continue
   case "$file" in
+  # The zipapp is the one artifact whose inputs are NOT all committed: only
+  # `agent-sanitizer[secrets]==X.Y.Z` is pinned, its transitive Python deps
+  # float, so a new dep release moves the bytes with no diff in this repo at
+  # all. That drift is legitimate and is caught the strong way instead — the
+  # live-engine job (ungated, every PR) rebuilds the zipapp from PyPI and
+  # `git diff --exit-code`s it, which refuses a hand-edited artifact outright.
+  # Counting it here only ever fires on the honest rebuild.
+  plugin/dist/redactor/*) ;;
   plugin/dist/*) dist_changed=true ;;
   package.json | pnpm-lock.yaml | claude-hooks/* | plugin/scripts/* | plugin/requirements.txt)
     input_changed=true

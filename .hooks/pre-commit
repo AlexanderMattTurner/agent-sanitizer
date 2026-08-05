@@ -37,6 +37,22 @@ if ! git diff --quiet; then
   fi
 fi
 
+# SSOT guard-test pairing: when a mapped SSOT source is staged, run its cheap
+# paired contract test(s) (map: .hooks/guard-pairs.json) so the data and its
+# guard can only change together — this repo has twice broken main by editing a
+# guarded source without its test. Ahead of the Node-project gate below: the map
+# guards data of any language, so a repo without a package.json still wants it.
+if [[ -f "$git_root/.hooks/guard-pairs.json" ]]; then
+  if ! command -v node >/dev/null 2>&1; then
+    gate_die_missing_tool pre-commit node "install Node so the paired SSOT guard tests can run, then retry the commit."
+  fi
+  staged_files=()
+  while IFS= read -r line; do staged_files+=("$line"); done < <(git diff --cached --name-only --diff-filter=ACMRD)
+  if [[ "${#staged_files[@]}" -gt 0 ]]; then
+    node "$git_root/.hooks/run-guard-pairs.mjs" "${staged_files[@]}"
+  fi
+fi
+
 # No package.json: not a Node project, so there is no lint-staged gate to run.
 if [[ ! -f "$git_root/package.json" ]]; then
   exit 0
@@ -53,5 +69,9 @@ if command -v pnpm >/dev/null 2>&1; then
 elif command -v npm >/dev/null 2>&1; then
   npx lint-staged --allow-empty
 else
-  gate_die_missing_tool pre-commit pnpm "install pnpm (or npm) so lint-staged can run, then retry the commit."
+  # lint-staged is installed (guarded above) but no package manager is on PATH:
+  # run the binary directly rather than failing a commit whose gate can in fact
+  # still run. This is not a fail-open — the checks execute either way.
+  echo "pre-commit: neither pnpm nor npm on PATH — invoking lint-staged directly." >&2
+  "$git_root/node_modules/.bin/lint-staged" --allow-empty
 fi

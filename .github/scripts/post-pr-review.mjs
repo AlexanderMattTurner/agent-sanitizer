@@ -68,6 +68,20 @@ function fail(msg) {
   process.exit(1);
 }
 
+// A run that reported `is_error` never reviewed anything, so its ABSENCE of
+// findings means nothing — reporting SKIP for it would post a green check for a
+// review that did not happen. Checked before the review is read at all, because
+// an errored run's partial output is not evidence either way.
+if (runErrored()) {
+  process.stdout.write("ERRORED\n");
+  process.stderr.write(
+    "::error::the review agent's run reported is_error — it did not review this PR " +
+      "(a dead or unentitled credential, an unavailable model, or a hard API error). " +
+      "Re-run with `show_full_output: true` on the claude-run step to see why.\n",
+  );
+  process.exit(0);
+}
+
 // A compact cost footnote: the review's API-equivalent cost, plus (via
 // plansLine) how many PRs/week that rate sustains on a Max 20x plan — the
 // budget-relative signal a single percentage used to carry, in the form a reader
@@ -112,34 +126,27 @@ try {
 const findings = Array.isArray(review.findings) ? review.findings : [];
 const summary = typeof review.summary === "string" ? review.summary.trim() : "";
 
-// The reviewer's verdict picks the base review EVENT — the lever this review has
-// over a review-required ruleset (which is what makes it gate auto-merge):
-//   looks_good              -> APPROVE          (satisfies the required review; auto-merge may proceed)
-//   needs_changes|blocking  -> REQUEST_CHANGES  (holds the merge until resolved)
-//   unknown/empty/missing   -> COMMENT          (no verdict signal; leave the gate to a human)
-// Matching is trim + lowercased so a cased/padded verdict from the model still
-// maps (fail toward the explicit signal rather than silently to COMMENT).
-// The finding-severity gate (below) can still escalate this base event: a review
-// carrying any detail-bearing finding (nit, warning, or blocking) is held to
-// REQUEST_CHANGES.
-const verdict =
-  typeof review.verdict === "string" ? review.verdict.trim().toLowerCase() : "";
-const EVENT_BY_VERDICT = {
-  looks_good: "APPROVE",
-  needs_changes: "REQUEST_CHANGES",
-  blocking: "REQUEST_CHANGES",
-};
-let event = EVENT_BY_VERDICT[verdict] || "COMMENT";
+// Every review posts as a COMMENT: the review event carries no merge consequence
+// at all. What holds a merge is the review-findings STATUS gate
+// (review-findings-gate.sh), which is red exactly while an unresolved reviewer
+// thread carries a gating-severity finding — so the reviewer's whole lever over
+// the merge is the inline threads it opens, never an APPROVE/REQUEST_CHANGES
+// verdict. An APPROVE here would satisfy a review-required ruleset on the
+// strength of the model's prose; a REQUEST_CHANGES would strand the PR with no
+// approval minter left to clear it. (review.json's `verdict` field is advisory
+// prose the reviewer folds into its own summary; nothing here acts on it.)
+const event = "COMMENT";
 
 // The severity model is CONFIG, not code: config/review-severities.json says
 // which severities hold the merge and what emoji each finding leads with.
 //
-// `gating` lists the severities that escalate the posted event to
-// REQUEST_CHANGES. The gate blocks on the FINDING, not only on a
-// needs_changes/blocking VERDICT: a reviewer that files a finding but still
-// stamps looks_good would otherwise let it ride through on an APPROVE. A
-// detail-less finding is still dropped below and never gates (nothing to
-// resolve).
+// `gating` lists the severities that HOLD the merge. A gating finding must open
+// an inline THREAD — that thread is the whole lever, since review-findings-gate.sh
+// reads threads, not the review event — so a gating finding whose own anchor is
+// not in the diff earns a synthetic anchor rather than spilling into the body
+// where the gate cannot see it. Excluding a severity from `gating` is what makes
+// it advisory: it posts for the author to read, without the merge waiting on it.
+// A detail-less finding is dropped below and never posts (nothing to resolve).
 //
 // The shipped model. `config/` is NOT in template-sync's SYNC_PATHS, so an
 // adopter repo receives this script without the config file — absent therefore
@@ -165,9 +172,9 @@ const normSeverity = (s) =>
 // Absent is a choice; malformed is a mistake. A repo that never wrote the file
 // gets DEFAULT_SEVERITIES. A repo that DID write one and got it wrong fails
 // loud, because the failure it would otherwise cause is invisible: an empty
-// `gating` set makes hasGatingFinding permanently false, so every review posts
-// as APPROVE and the reviewer silently stops holding anything —
-// indistinguishable from a repo where nothing is ever wrong.
+// `gating` set means no finding ever earns a synthetic anchor, so every gating
+// finding spills into the review body where review-findings-gate.sh cannot see
+// it — indistinguishable from a repo where nothing is ever wrong.
 function loadSeverities() {
   let text;
   try {
@@ -223,6 +230,11 @@ const { gating: GATING_SEVERITIES, icons: ICONS } = loadSeverities();
 // remap.
 const rightOk = new Set();
 const leftOk = new Set();
+// The first commentable RIGHT-side line per path, and the first overall — the
+// synthetic-anchor ladder for a gating finding whose own anchor is not in the
+// diff (nearest: its own file's first changed line; else the diff's first).
+const firstRightByPath = new Map();
+let firstRightOverall = null;
 const diffViewLines = [];
 let path = null;
 let oldLine = 0;
@@ -249,6 +261,8 @@ for (let i = 0; i < diffLines.length; i++) {
   const kind = raw[0];
   if (kind === "+") {
     rightOk.add(`${path}\t${newLine}`);
+    if (!firstRightByPath.has(path)) firstRightByPath.set(path, newLine);
+    if (!firstRightOverall) firstRightOverall = { path, line: newLine };
     diffViewLines[i + 1] = { path, kind, newLine, oldLine: null };
     newLine += 1;
   } else if (kind === "-") {
@@ -258,6 +272,8 @@ for (let i = 0; i < diffLines.length; i++) {
   } else if (kind === " ") {
     rightOk.add(`${path}\t${newLine}`);
     leftOk.add(`${path}\t${oldLine}`);
+    if (!firstRightByPath.has(path)) firstRightByPath.set(path, newLine);
+    if (!firstRightOverall) firstRightOverall = { path, line: newLine };
     diffViewLines[i + 1] = { path, kind, newLine, oldLine };
     oldLine += 1;
     newLine += 1;
@@ -283,6 +299,18 @@ function remapDiffViewAnchor(findingPath, viewLine, hasSuggestion) {
 // that gated but posted the "•" fallback would read as an unclassified note.
 const icon = (sev) => ICONS.get(normSeverity(sev)) || "•";
 
+// The machine-readable severity, stamped hidden on every inline finding: the
+// merge gate reads this marker off an unresolved thread's ROOT comment to decide
+// whether that thread gates the merge (the leading icon is only its pre-marker
+// fallback). Only a KNOWN severity is stamped — an unknown one would teach the
+// gate a severity the config does not carry, and it renders as the "•" fallback
+// above precisely because it is not part of the model. `scrub` runs with
+// `{ html: false }`, so Layer 2 never splices this comment back out.
+const severityMarker = (sev) =>
+  ICONS.has(normSeverity(sev))
+    ? `\n\n<!-- severity: ${normSeverity(sev)} -->`
+    : "";
+
 // A `suggestion` renders as a GitHub suggested-change block the author can apply
 // with one click. Suggestions can only target the new file (RIGHT side), so a
 // finding carrying one is forced RIGHT. A fence longer than any run of backticks
@@ -300,14 +328,14 @@ const commentableRight = (p, l) => l !== null && rightOk.has(`${p}\t${l}`);
 
 const comments = [];
 const spill = [];
-let hasGatingFinding = false;
 for (const f of findings) {
   const detail = [f.title, f.body].filter(Boolean).join(" — ").trim();
   if (!detail) continue;
-  // A detail-less finding is dropped (above), so it can't hold the merge with
-  // nothing to resolve — only a finding that actually posts (as an inline
-  // comment or a spilled summary note) counts toward the gate.
-  if (GATING_SEVERITIES.has(normSeverity(f.severity))) hasGatingFinding = true;
+  // Normalized once, here, before ANY severity lookup: the severity decides
+  // whether a finding gates the merge, so a cased or padded "Blocking" from the
+  // model must not miss GATING_SEVERITIES and spill a blocking finding into the
+  // body, where the gate cannot see it.
+  const sev = normSeverity(f.severity);
   const line = Number.isInteger(f.line) ? f.line : null;
   const hasSuggestion =
     typeof f.suggestion === "string" && f.suggestion.length > 0;
@@ -392,11 +420,6 @@ for (const f of findings) {
     }
   }
 }
-
-// Any real finding holds the merge regardless of the verdict: escalate
-// APPROVE/COMMENT to REQUEST_CHANGES. (A verdict that already maps to
-// REQUEST_CHANGES is unchanged.)
-if (hasGatingFinding) event = "REQUEST_CHANGES";
 
 // Sanitize the model-authored strings before they reach the payload: each inline
 // comment body (which already carries its suggestion block) and the composite
