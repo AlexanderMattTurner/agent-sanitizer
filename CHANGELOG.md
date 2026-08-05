@@ -8,6 +8,13 @@ adhere to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+## [2.14.10] - 2026-08-05
+
+### Fixed
+
+- Stop Renovate from editing the hashed lock file; widen the lock guard to prevent unintended modifications.
+- Lock the redactor's Python dependency tree with hashes for improved supply chain security.
+
 ## [2.14.9] - 2026-08-05
 
 ### Fixed
