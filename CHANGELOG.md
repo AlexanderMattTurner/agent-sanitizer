@@ -8,6 +8,13 @@ adhere to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+## [2.14.6] - 2026-08-05
+
+### Fixed
+
+- Fixed CI workflow step IDs that were dropped during template sync, and added guard to prevent regression.
+- Fixed nightly-fuzz issue script to properly quote failing test names instead of coverage tail output.
+
 ## [2.14.5] - 2026-08-05
 
 ### Added
