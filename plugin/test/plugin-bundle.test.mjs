@@ -219,7 +219,12 @@ test("every locked requirement is version- and hash-pinned", () => {
   // Ignoring blank lines, comments, and the `--hash=` continuations themselves,
   // what's left is one line per requirement. Each must be an `==` pin, and each
   // must be followed by at least one hash — a single unpinned or unhashed line
-  // is enough for pip to re-resolve or to accept an unverified artifact.
+  // is enough for pip to re-resolve or to accept an unverified artifact. The
+  // optional ` ; <marker>` tail is allowed because a universal resolution emits
+  // one on any dependency that is conditional across the supported Python range
+  // (`tomli==2.0.1 ; python_full_version < '3.11' \`); such a line is pinned and
+  // hashed like any other, and rejecting it would fail this test on a re-lock
+  // that is in fact correct.
   const lines = readFileSync(REQUIREMENTS_LOCK_PATH, "utf-8").split("\n");
   const requirements = lines.filter((l) => /^[A-Za-z0-9]/.test(l));
   assert.ok(
@@ -228,7 +233,11 @@ test("every locked requirement is version- and hash-pinned", () => {
   );
   for (const [i, line] of lines.entries()) {
     if (!/^[A-Za-z0-9]/.test(line)) continue;
-    assert.match(line, /^[A-Za-z0-9._-]+==\d[^\s]*\s+\\$/, `unpinned: ${line}`);
+    assert.match(
+      line,
+      /^[A-Za-z0-9._-]+==\d\S*(?: ;[^\\]*)?\s+\\$/,
+      `unpinned: ${line}`,
+    );
     assert.match(lines[i + 1] ?? "", /^\s+--hash=sha256:/, `unhashed: ${line}`);
   }
 });

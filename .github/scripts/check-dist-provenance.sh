@@ -8,9 +8,14 @@
 # the JS bundle, plugin/requirements.txt (hash-pinned) for the zipapp — so every
 # dependency-driven change to either artifact shows up as a lockfile change in
 # the same diff. A dist diff with no input diff therefore has no legitimate
-# cause, and the check cannot fire on an honest PR. (Before the Python side was
-# locked it could: a transitive PyPI release moved the zipapp's bytes with no
-# diff anywhere here, and this fired on the corrective rebuild.)
+# cause on an honest PR — with one residual gap: the zipapp installs its sdists
+# under PEP 517 build isolation, so the build BACKENDS (setuptools/hatchling and
+# their own build-system.requires) are resolved from PyPI per build and are not
+# in plugin/requirements.txt. A backend release that changes the generated
+# METADATA — the one dist-info file the zipapp keeps — can still move its bytes
+# with no diff here. If that ever fires, pin the backend; do not re-exempt the
+# artifact. (An earlier exemption existed for exactly that shape of drift one
+# layer up, when the Python tree itself was unlocked.)
 set -euo pipefail
 
 base_ref="${1:?usage: check-dist-provenance.sh <base-ref>}"

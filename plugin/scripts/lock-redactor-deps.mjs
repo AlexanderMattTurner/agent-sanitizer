@@ -115,7 +115,7 @@ export function lockIsStale() {
   );
 }
 
-if (process.argv[1]?.endsWith("lock-redactor-deps.mjs")) {
+if (process.argv[1] === import.meta.filename) {
   // `--if-stale` is what CI runs. An unconditional re-lock there would re-resolve
   // the transitive tree on every artifact-regenerating PR, reintroducing exactly
   // the floating-dependency drift this lock exists to stop. Refreshing
