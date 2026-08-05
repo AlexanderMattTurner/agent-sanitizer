@@ -67,6 +67,11 @@ jobs:
           registry-url: https://registry.npmjs.org
 
       - name: Bump version and publish if commits warrant a release
+        # `id: release` is load-bearing, not decoration: six steps below gate on
+        # `steps.release.outputs.released`, and an undefined step id renders to
+        # the empty string rather than erroring — so without it the whole coupled
+        # PyPI half of the release silently no-ops on every publish.
+        id: release
         # The changelog-prose call walks the anthropic-ladder.bash credential
         # ladder: subscription tokens first, the metered ANTHROPIC_API_KEY last.
         env:
