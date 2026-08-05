@@ -20,8 +20,9 @@ npm install agent-sanitizer
 /plugin install agent-sanitizer@agent-sanitizer
 ```
 
-See [Using it with Claude Code](#using-it-with-claude-code) for what each hook
-covers and how to wire the hooks by hand instead.
+[What installing entails](#what-installing-entails) covers the footprint of each
+path and how a failure looks; [Using it with Claude
+Code](#using-it-with-claude-code) covers each hook and hand-wiring.
 
 ## Quick start
 
@@ -92,11 +93,61 @@ owns each message, and any value outside the enum makes `sanitizeText` **throw**
 | `filter-flagged`      | The filter flagged the output as a possible injection without deleting (content intact) |
 | `filter-error`        | The filter reported a non-fatal internal error while scanning (a fatal filter throws)   |
 
+## What installing entails
+
+**`npm install`** is inert: no hooks, no daemon, no network — it acts only when
+you call it. Node 22+; `/html` lazy-loads its parser stack (~200 ms, once per
+process). Layer 4 (secret redaction) is not in the npm package —
+`pip install 'agent-sanitizer[secrets]'` and wire `/output`'s `redact` seam.
+Layer 5 is yours to supply.
+
+**The plugin** is the opposite: four hooks on every session. It needs Node 22+
+and `python3` (3.11+) or `uv`. The first session provisions the Layer-4 engine
+into a venv (one-time download, tens of seconds); the plugin also ships a
+self-contained zipapp, so an offline cold start still redacts. Secret redaction
+**is** included here — `detect-secrets`, locally, over a private 0600 socket.
+What you'll notice:
+
+| Event         | What happens                                                                                                                |
+| ------------- | --------------------------------------------------------------------------------------------------------------------------- |
+| Session start | `CLAUDE.md`/`AGENTS.md`/`.claude/**.md` scanned for hidden Unicode, auto-cleaned where possible                             |
+| Prompt submit | Blocked if it carries payload-capable invisible/ANSI (pasted SGR color passes with a note)                                  |
+| Tool input    | Confusables folded to ASCII, escapes stripped, redacted `Edit`/`Write` re-anchored onto on-disk bytes                       |
+| Tool output   | Invisibles/ANSI stripped, hidden HTML spliced out (original kept in a reveal sidecar), exfil URLs flagged, secrets redacted |
+
+Expect ~1–3 s on the first secret-shaped output (redactor cold start), ~200 ms on
+the first HTML page, and occasional over-redaction of credential-shaped text.
+`AGENT_SANITIZER_OUTPUT_DISABLED=1` opts out of the rewrites (or
+`_INVISIBLE_`/`_TERMINAL_` individually).
+
+### Warning signs
+
+Every layer fails **closed**, so breakage shows up as friction, not silence:
+
+| What you see                                                                      | Meaning                                                                |
+| --------------------------------------------------------------------------------- | ---------------------------------------------------------------------- |
+| `[output sanitizer unavailable — original output suppressed]`                     | Hook couldn't start — `node` missing or bundle corrupt                 |
+| `[SANITIZATION FAILED — original output suppressed for safety …]`                 | The output hook threw; raw output withheld                             |
+| `CRITICAL: secret redaction failed … Failing closed`                              | Layer-4 daemon unreachable — check `python3`/`uv`, restart the session |
+| `python3 not found — the secret-redaction engine (Layer 4) cannot be provisioned` | No Python at session start                                             |
+| `User prompt blocked: payload-capable invisible/ANSI characters detected.`        | Working as intended — retype the prompt                                |
+| `… (fail-closed): unrecognized hook payload.`                                     | Payload shape mismatch — check versions                                |
+| Every tool call turning into a permission ask                                     | The input gate can't reach a verdict; the reason names the cause       |
+| `instruction files were NOT scanned`                                              | Session-start scan didn't run                                          |
+
+**Silence is the one failure that isn't loud.** Claude Code reads a crashed hook
+as "no objection", so a quiet session isn't proof of a working one. Confirm with
+`/plugin`, or set `_AGENT_SANITIZER_TRACE=info` (plus
+`_AGENT_SANITIZER_TRACE_FILE=…`) and look for `hook_ran` /
+`scan_invisible_chars_ran` lines — a missing one means that layer never engaged,
+and `"outcome":"skipped"` means it gave up before reading anything.
+
 ## Using it with Claude Code
 
 The plugin installed above puts four hooks on the tool stream: tool input, tool
 output, user prompts, and a session-start scan of the instruction files. It
-needs only `python3` on PATH, for Layer 4.
+needs only `python3` on PATH, for Layer 4 — the plugin ships the engine itself
+(see [What installing entails](#what-installing-entails)).
 
 ```
 /plugin marketplace add AlexanderMattTurner/agent-sanitizer
@@ -175,9 +226,11 @@ Beyond the credential-shaped names it infers, the env-bound redaction set unions
 variable names whose values a deployment forwards under names of its own
 choosing. A malformed entry throws rather than being dropped.
 
-**Layer 4 needs the Python engine** — `pip install 'agent-sanitizer[secrets]'`,
-version-matched to the npm package. Without it `sanitize-output` fails closed:
-secret-shaped output is suppressed, not shown unvetted. Layers 1–3 still run.
+**Layer 4 needs the Python engine.** The plugin ships it and provisions it at
+SessionStart; a hand-wired npm install does not, so install it yourself —
+`pip install 'agent-sanitizer[secrets]'`, version-matched to the npm package.
+Without it `sanitize-output` fails closed: secret-shaped output is suppressed,
+not shown unvetted. Layers 1–3 still run.
 
 **Layer 5 (second-model injection filtering) is not included.** These hooks
 never supply the `/output` seam's `filterInjection` callback, so nothing here
