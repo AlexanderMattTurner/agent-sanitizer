@@ -20,8 +20,9 @@ npm install agent-sanitizer
 /plugin install agent-sanitizer@agent-sanitizer
 ```
 
-See [Using it with Claude Code](#using-it-with-claude-code) for what each hook
-covers and how to wire the hooks by hand instead.
+[What installing entails](#what-installing-entails) covers the footprint of each
+path and how a failure looks; [Using it with Claude
+Code](#using-it-with-claude-code) covers each hook and hand-wiring.
 
 ## Quick start
 
@@ -92,11 +93,40 @@ owns each message, and any value outside the enum makes `sanitizeText` **throw**
 | `filter-flagged`      | The filter flagged the output as a possible injection without deleting (content intact) |
 | `filter-error`        | The filter reported a non-fatal internal error while scanning (a fatal filter throws)   |
 
+## What installing entails
+
+Installing the plugin puts four hooks on every session, and this is what they
+buy you:
+
+1. Your `CLAUDE.md`, `AGENTS.md` and `.claude/` markdown are scanned at session
+   start for hidden-Unicode payloads and auto-cleaned where possible.
+2. Prompts carrying payload-capable invisible or ANSI characters are blocked
+   before they reach the model; pasted terminal color passes with a note.
+3. Look-alike glyphs in tool inputs are folded to ASCII, so a Cyrillic `а` can't
+   walk a command past a deny rule.
+4. Tool output has invisible characters and terminal escapes stripped, hidden
+   HTML spliced out with a placeholder, and exfil-shaped URLs flagged.
+5. Secrets in tool output are redacted locally by `detect-secrets` — the engine
+   ships with the plugin and provisions itself on first run, no setup from you.
+6. Edits the model composes against the redacted view are re-anchored onto the
+   real bytes on disk, and anything ambiguous is denied rather than guessed.
+7. The costs are a few seconds on the first secret-shaped output, ~200 ms on the
+   first web page, and the occasional over-redaction of credential-shaped text —
+   `AGENT_SANITIZER_OUTPUT_DISABLED=1` opts out of the rewrites.
+
+Failure is loud by design: every layer fails closed, so you see suppressed tool
+output (`[output sanitizer unavailable — original output suppressed]`), blocked
+prompts, or permission asks whose reason names the cause. The exception is a
+plugin that never loaded at all — Claude Code reads a crashed hook as "no
+objection", so confirm with `/plugin` rather than reading a quiet session as a
+working one.
+
 ## Using it with Claude Code
 
 The plugin installed above puts four hooks on the tool stream: tool input, tool
 output, user prompts, and a session-start scan of the instruction files. It
-needs only `python3` on PATH, for Layer 4.
+needs only `python3` on PATH, for Layer 4 — the plugin ships the engine itself
+(see [What installing entails](#what-installing-entails)).
 
 ```
 /plugin marketplace add AlexanderMattTurner/agent-sanitizer
@@ -175,9 +205,11 @@ Beyond the credential-shaped names it infers, the env-bound redaction set unions
 variable names whose values a deployment forwards under names of its own
 choosing. A malformed entry throws rather than being dropped.
 
-**Layer 4 needs the Python engine** — `pip install 'agent-sanitizer[secrets]'`,
-version-matched to the npm package. Without it `sanitize-output` fails closed:
-secret-shaped output is suppressed, not shown unvetted. Layers 1–3 still run.
+**Layer 4 needs the Python engine.** The plugin ships it and provisions it at
+SessionStart; a hand-wired npm install does not, so install it yourself —
+`pip install 'agent-sanitizer[secrets]'`, version-matched to the npm package.
+Without it `sanitize-output` fails closed: secret-shaped output is suppressed,
+not shown unvetted. Layers 1–3 still run.
 
 **Layer 5 (second-model injection filtering) is not included.** These hooks
 never supply the `/output` seam's `filterInjection` callback, so nothing here

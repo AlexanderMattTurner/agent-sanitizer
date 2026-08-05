@@ -6,7 +6,13 @@ a detect/neutralize layer, not an enforcement boundary: it makes hidden content
 visible-or-gone and surfaces exfil-shaped URLs, so the model and the operator
 see the same thing. Egress controls remain your enforcement layer.
 
-The three layers are independent; use only the ones your ingress needs.
+Five sanitization layers are documented below — invisible characters/ANSI (1),
+hidden HTML (2), exfil URLs (3), secret redaction (4, an injected redactor) and
+injection filtering (5, an injected filter the caller wires) — plus the entry
+points built on them: confusable folding, instruction-file scanning, the
+user-prompt verdict and edit rehydration. All are independent; use only the ones
+your ingress needs. The README's [entry-point
+table](./README.md#entry-points) maps each to its import.
 
 ## Layer 1—invisible characters & ANSI (zero-dependency)
 
