@@ -86,9 +86,29 @@ payload-bearing query/fragment), suitable for a warning shown to the operator.
 `./confusables` folds look-alike glyphs in tool-call **input** fields (paths,
 commands) to their ASCII canon. A denied path/command spelled in homoglyphs (a
 Cyrillic `а` for ASCII `a`) would not match an ASCII deny rule; folding closes
-that cross-script bypass (CVE-2025-54794 class). Folding is per-character and
-context-free, so it also catches an **isolated** confusable with no ASCII anchor
-that a context-sensitive canonicaliser would leave alone. The homoglyph engine
+that cross-script bypass (CVE-2025-54794 class).
+
+Folding is gated per **token** (a maximal run of ASCII alphanumerics and
+non-ASCII glyphs; every other ASCII character is a boundary): a token folds only
+when doing so leaves it **pure ASCII**. The bypass requires the folded token to
+come out byte-equal to an ASCII deny-rule target, so a token that still holds an
+unmapped glyph after folding could not match one either way — skipping it
+forfeits no enforcement. `/etc/pаsswd`, an isolated `/а` with no ASCII anchor,
+and an all-Cyrillic `раѕѕwd` all still fold; `Привет` and `пароль.txt` pass
+through untouched, because their unmapped letters (П/и/в/т, п/л/ь) survive any
+fold. Without this gate the layer transliterated ordinary Cyrillic and Greek
+text — a commit message, an issue body, a filename — into garbage, which this
+repo weighs as the worse failure.
+
+The gate is per-token and never per-field: a field-level "any prose here → skip
+the field" rule would let an attacker switch folding off for a whole command by
+appending one foreign word.
+
+**Known false positive:** a short foreign word composed _entirely_ of mapped
+confusables — the Russian `сор` → `cop` — is by construction indistinguishable
+from a disguised ASCII token, and still folds.
+
+The homoglyph engine
 is **injected** (`{ scan }`)—the package owns no glyph map. An all-ASCII field
 never invokes the scanner. This narrows a steganographic channel; it is not an
 enforcement boundary (distinct code points would not match a deny rule anyway).

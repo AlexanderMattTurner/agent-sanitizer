@@ -14,6 +14,7 @@ import {
   normalizeContext,
   foldConfusables,
   normalizeConfusables,
+  selectFoldableFindings,
 } from "../src/confusables.mjs";
 import { cp } from "./test-helpers.mjs";
 
@@ -381,6 +382,133 @@ describe("normalizeConfusables: folding", () => {
       updatedInput: { a: "/a", b: "/o" },
       normalized: ['a (U+0430 → "a")', 'b (U+043E → "o")'],
     });
+  });
+});
+
+// ─── selectFoldableFindings: the per-token precision gate ───────────────────
+
+// Real words spelled with the fake scanner's mapped glyphs where they belong.
+// Written as escapes because the whole point is which code points they carry;
+// the comment gives the readable form.
+const PRIVET = `П${cp(0x0440)}ив${cp(0x0435)}т`; // Привет — р/е mapped, П/и/в/т not
+const PAROL = `п${cp(0x0430)}${cp(0x0440)}${cp(0x043e)}ль`; // пароль — а/р/о mapped
+
+describe("selectFoldableFindings", () => {
+  it("keeps every finding when the token folds to pure ASCII", () => {
+    const text = `/etc/p${CYR_A}sswd`;
+    assert.deepEqual(
+      selectFoldableFindings(text, scan(text).findings),
+      scan(text).findings,
+    );
+  });
+
+  it("drops findings in a token that keeps an unmapped non-ASCII glyph", () => {
+    // Non-vacuity: the scanner DOES flag glyphs here (р and е of Привет) — the
+    // gate is what rejects them, not an empty scan.
+    assert.equal(scan(PRIVET).findings.length, 2);
+    assert.deepEqual(selectFoldableFindings(PRIVET, scan(PRIVET).findings), []);
+  });
+
+  it("judges each token independently within one field", () => {
+    const text = `/etc/p${CYR_A}sswd ${PRIVET}`;
+    const kept = selectFoldableFindings(text, scan(text).findings);
+    // Three flagged glyphs: the path's а, and Привет's р and е.
+    assert.equal(scan(text).findings.length, 3);
+    assert.deepEqual(kept, [{ index: 6, char: CYR_A, latinEquivalent: "a" }]);
+  });
+
+  it("still validates every finding before judging it (fails loud, not silent)", () => {
+    // A bogus finding inside a token the gate would REJECT must still throw:
+    // dropping it quietly would let an adversarial scanner hide behind prose.
+    assert.throws(
+      () =>
+        selectFoldableFindings(PRIVET, [
+          { index: 0, char: CYR_A, latinEquivalent: "a" },
+        ]),
+      /does not match input at index 0/,
+    );
+  });
+
+  it("returns an empty list for no findings", () => {
+    assert.deepEqual(selectFoldableFindings("/etc/passwd", []), []);
+  });
+
+  it("counts every offset a multi-code-point match covers as flagged", () => {
+    // A scanner may report one finding spanning several code points. Only its
+    // START offset being treated as flagged would leave the rest looking
+    // unmapped, and the gate would reject a token that does fold to ASCII.
+    const text = `${CYR_A}${CYR_O}`;
+    const finding = {
+      index: 0,
+      char: `${CYR_A}${CYR_O}`,
+      latinEquivalent: "ao",
+    };
+    assert.deepEqual(selectFoldableFindings(text, [finding]), [finding]);
+  });
+});
+
+// ─── normalizeConfusables: precision on genuine non-Latin text ───────────────
+
+describe("normalizeConfusables: non-Latin prose precision", () => {
+  for (const [name, tool, input] of [
+    [
+      "leaves Cyrillic prose in a Bash command alone",
+      "Bash",
+      { command: `gh issue create --body "${PRIVET} ми${cp(0x0440)}"` },
+    ],
+    [
+      "leaves a Cyrillic filename alone",
+      "Read",
+      { file_path: `/home/user/${PAROL}.txt` },
+    ],
+    [
+      "leaves a Cyrillic Grep pattern alone",
+      "Grep",
+      { pattern: PRIVET, path: "/tmp" },
+    ],
+  ]) {
+    it(name, () => {
+      // Non-vacuity: the scanner flags glyphs in every one of these — null comes
+      // from the gate, not from an input the engine never looked at.
+      const field = Object.values(input).find((v) => scan(v).findings.length);
+      assert.ok(field, "no field carries a flagged glyph — test is vacuous");
+      assert.equal(normalizeConfusables(tool, input, { scan }), null);
+    });
+  }
+
+  it("folds a disguised path while leaving prose in the same command verbatim", () => {
+    const result = normalizeConfusables(
+      "Bash",
+      { command: `cat /etc/p${CYR_A}sswd # ${PRIVET}` },
+      { scan },
+    );
+    assert.deepEqual(result, {
+      updatedInput: { command: `cat /etc/passwd # ${PRIVET}` },
+      normalized: ['command (U+0430 → "a")'],
+    });
+  });
+
+  it("folds an all-confusable disguised word (no unmapped glyph to stop it)", () => {
+    // The homoglyph attack with no ASCII anchor at all: every glyph maps, so the
+    // token folds to ASCII and the deny-rule bypass is closed.
+    const disguised = `${cp(0x0440)}${cp(0x0430)}${cp(0x0455)}${cp(0x0455)}wd`;
+    const result = normalizeConfusables(
+      "Bash",
+      { command: `cat ${disguised}` },
+      { scan },
+    );
+    assert.equal(result.updatedInput.command, "cat passwd");
+  });
+
+  it("reports only the folds applied, not the glyphs merely scanned", () => {
+    // The rejected token's glyphs are still in the field the model sees, so
+    // naming them in the context line would be a lie.
+    const result = normalizeConfusables(
+      "Bash",
+      { command: `cat /${CYR_O}pt # ${PAROL}` },
+      { scan },
+    );
+    assert.deepEqual(result.normalized, ['command (U+043E → "o")']);
   });
 });
 
