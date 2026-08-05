@@ -54,6 +54,12 @@ def init_repo(tmp_path: Path) -> Path:
     repo = tmp_path / "repo"
     repo.mkdir()
     subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+    # Every .hooks/ hook sources lib-gate.sh relative to the sandbox's own git
+    # root, not to the hook's own path, so the helper has to exist here even
+    # when the hook under test is invoked from REPO_ROOT.
+    hooks = repo / ".hooks"
+    hooks.mkdir()
+    shutil.copy(REPO_ROOT / ".hooks" / "lib-gate.sh", hooks)
     return repo
 
 
@@ -155,6 +161,7 @@ def test_pre_commit_runs_lint_staged_directly_without_package_manager(
     tmp_path: Path,
 ) -> None:
     repo = init_repo(tmp_path)
+    (repo / "package.json").write_text("{}\n")
     binp = repo / "node_modules" / ".bin"
     binp.mkdir(parents=True)
     marker = tmp_path / "lint-staged-ran"
@@ -178,13 +185,14 @@ def test_pre_commit_runs_lint_staged_directly_without_package_manager(
 
 
 # --------------------------------------------------------------------------- #
-# pre-commit: lint-staged absent → still exits 0 (fresh clones must commit)
-# but must WARN loudly, never skip silently.
+# pre-commit: lint-staged absent in a NODE project → refuse the commit (K7); a
+# repo with no package.json has no lint-staged gate to run and passes.
 # --------------------------------------------------------------------------- #
 
 
-def test_pre_commit_warns_when_lint_staged_missing(tmp_path: Path) -> None:
+def test_pre_commit_fails_closed_when_lint_staged_missing(tmp_path: Path) -> None:
     repo = init_repo(tmp_path)
+    (repo / "package.json").write_text("{}\n")
     (repo / "a.txt").write_text("hello\n")
     subprocess.run(["git", "add", "a.txt"], cwd=repo, check=True)
     path = curated_path(tmp_path, BASE_TOOLS)  # no node_modules in repo at all
@@ -195,11 +203,28 @@ def test_pre_commit_warns_when_lint_staged_missing(tmp_path: Path) -> None:
         capture_output=True,
         text=True,
     )
-    assert result.returncode == 0, result.stderr
-    assert "lint-staged not installed" in result.stderr, (
-        "the fail-open skip must print a prominent warning, not pass silently"
+    assert result.returncode != 0, (
+        "a Node project whose lint/format gate cannot run must refuse the commit"
     )
+    assert "lint-staged" in result.stderr
     assert "pnpm install" in result.stderr
+
+
+def test_pre_commit_passes_without_package_json(tmp_path: Path) -> None:
+    # Positive control for the test above: the refusal comes from "Node project
+    # with a broken gate", not from "no lint-staged binary" on its own.
+    repo = init_repo(tmp_path)
+    (repo / "a.txt").write_text("hello\n")
+    subprocess.run(["git", "add", "a.txt"], cwd=repo, check=True)
+    path = curated_path(tmp_path, BASE_TOOLS)
+    result = subprocess.run(
+        ["bash", str(REPO_ROOT / ".hooks" / "pre-commit")],
+        cwd=repo,
+        env=base_env(path),
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stderr
 
 
 # --------------------------------------------------------------------------- #
@@ -216,7 +241,6 @@ def _sandbox_ssot_repo(tmp_path: Path, guard_body: str) -> Path:
     fake.write_text("#!/bin/bash\nexit 0\n")
     fake.chmod(0o755)
     hooks = repo / ".hooks"
-    hooks.mkdir()
     shutil.copy(REPO_ROOT / ".hooks" / "run-guard-pairs.mjs", hooks)
     (hooks / "guard-pairs.json").write_text(
         '{"pairs": {"data.json": ["guard.test.mjs"]}}'

@@ -142,6 +142,31 @@ def test_provisioning_failure_skips_instead_of_blocking(sandbox: Path) -> None:
     assert len(uvx_calls(sandbox)) == 1
 
 
+def test_missing_precommit_skips_loudly_instead_of_blocking(sandbox: Path) -> None:
+    """Neither uvx nor pre-commit on PATH is a machine that CANNOT run the suite,
+    not a machine hiding a failure — and this repo's own format/dist autofix jobs
+    push from exactly such runners, so refusing here strands every autofix."""
+    tmp_path = sandbox.parent
+    bare_bin = tmp_path / "bare-bin"
+    bare_bin.mkdir()
+    for name in ("bash", "git", "grep", "sed", "cat", "printf"):
+        real = shutil.which(name)
+        if real:
+            (bare_bin / name).symlink_to(real)
+    base, head = rev(sandbox, "HEAD~1"), rev(sandbox, "HEAD")
+    result = subprocess.run(
+        ["bash", str(sandbox / ".hooks" / "pre-push")],
+        cwd=sandbox,
+        input=f"refs/heads/topic {head} refs/heads/topic {base}\n",
+        env={"HOME": str(tmp_path / "home"), "PATH": str(bare_bin)},
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stderr
+    assert "SKIPPING" in result.stderr
+    assert "CI still enforces the suite" in result.stderr
+
+
 def test_lint_failure_aborts_the_push(sandbox: Path) -> None:
     base, head = rev(sandbox, "HEAD~1"), rev(sandbox, "HEAD")
     result = run_hook(sandbox, f"refs/heads/topic {head} refs/heads/topic {base}\n", 1)
