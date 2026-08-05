@@ -76,6 +76,13 @@ jobs:
       - name: Run nightly-fuzz reporter tests
         run: node --test .github/scripts/nightly-fuzz-issue.test.mjs
 
+      # Same blind spot again. This one guards every workflow and composite
+      # action against a `steps.<id>` reference no step defines — Actions renders
+      # an unknown id as the empty string rather than erroring, so the bug is
+      # invisible until a gate silently no-ops or fails for the wrong reason.
+      - name: Run workflow step-reference guard
+        run: node --test .github/scripts/workflow-step-refs.test.mjs
+
       # Named explicitly rather than left to `pnpm test`'s discovery. This suite
       # gates the shipped plugin artifact — the reproducibility byte-compare and
       # every hook's fail-closed verdict — so which invocation reaches it must be
