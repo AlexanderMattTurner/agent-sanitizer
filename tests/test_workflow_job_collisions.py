@@ -24,11 +24,12 @@ WHAT A PASS DOES NOT MEAN. This detects CANCELLATION, not duplication. A stale
 copy whose group is derived from `${{ github.workflow }}` — the idiom about half
 this repo's workflows use — resolves to a group unique to its own file, so it
 never cancels its replacement: both copies simply run, doing the work twice.
-`history-integrity.yaml` and `cancel-on-pr-close.yaml` are exactly that shape and
-still live here; this guard is structurally unable to see them. Widening it to
-catch them would flag every legitimate `${{ github.workflow }}` user, so the
-check stays narrow on purpose and this paragraph carries the rest: a green run
-here means nothing is cancelling its twin, NOT that no leftovers exist.
+`history-integrity.yaml` and `cancel-on-pr-close.yaml` were exactly that shape,
+and this guard never saw them; they were found by reading `pr-meta.yaml`'s
+`# ── <file> ──` provenance headers, not by any check. Widening the predicate to
+catch that shape would flag every legitimate `${{ github.workflow }}` user, so
+the check stays narrow on purpose and this paragraph carries the rest: a green
+run here means nothing is cancelling its twin, NOT that no leftovers exist.
 """
 
 import re
