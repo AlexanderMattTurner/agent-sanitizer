@@ -8,6 +8,12 @@ adhere to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+## [2.14.13] - 2026-08-05
+
+### Fixed
+
+- Remove superseded CI workflows that were causing cancellation conflicts with their replacements.
+
 ## [2.14.10] - 2026-08-05
 
 ### Fixed
