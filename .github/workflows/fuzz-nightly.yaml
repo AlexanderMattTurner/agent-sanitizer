@@ -19,6 +19,7 @@ concurrency:
 
 permissions:
   contents: read
+  issues: write # open/append a rollup issue when a fresh seed finds a failure
 
 jobs:
   fuzz:
@@ -57,31 +58,18 @@ jobs:
       - name: Run full test suite with unseeded fast-check
         id: fuzz
         if: steps.check.outputs.configured == 'true'
-        # Tee the output so the report step can quote fast-check's counterexample
+        # Tee the output so the issue step can quote fast-check's counterexample
         # + seed. pipefail keeps the step's failure the step's failure, not tee's.
         run: |
           set -o pipefail
           pnpm test 2>&1 | tee fuzz-output.log
 
       # No one watches the nightly Actions tab, so a counterexample here would
-      # rot silently. Push it to a phone instead. An auto-filed issue only moved
-      # the ignoring to the issue tracker; the full report stays in the run log,
-      # one tap away via the notification's click target.
-      - name: Build the failure report
-        id: report
+      # rot silently. Turn it into a tracked, deduped issue instead.
+      - name: Open an issue on a fuzz failure
         if: failure() && steps.fuzz.outcome == 'failure'
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
         with:
           script: |
-            const run = require('./.github/scripts/nightly-fuzz-report.js')
-            await run({context, core})
-
-      - name: Notify ntfy
-        if: failure() && steps.fuzz.outcome == 'failure'
-        uses: ./.github/actions/notify-ntfy
-        with:
-          topic: ${{ secrets.GH_NTFY_SUBJECT }}
-          base-url: ${{ secrets.GH_NTFY_URL }}
-          title: "${{ github.repository }}: ${{ steps.report.outputs.title }}"
-          message: ${{ steps.report.outputs.message }}
-          click: ${{ steps.report.outputs.run_url }}
+            const run = require('./.github/scripts/nightly-fuzz-issue.js')
+            await run({github, context, core})

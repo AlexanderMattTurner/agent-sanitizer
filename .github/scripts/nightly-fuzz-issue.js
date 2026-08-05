@@ -3,8 +3,9 @@
 
 const fs = require("fs");
 
+const LABEL = "nightly-fuzz";
 const LOG_FILE = "fuzz-output.log";
-// Keep the report body bounded. The budget is spent on the FAILING TAP blocks
+// Keep the issue body bounded. The budget is spent on the FAILING TAP blocks
 // (which carry fast-check's counterexample + seed), never on the run's tail:
 // `pnpm test` ends with a 2000-test summary and a coverage table, so a raw tail
 // quotes neither the failure nor the seed — the exact reason #211 was unactionable.
@@ -96,7 +97,7 @@ function fence(text) {
 }
 
 /**
- * Build the human-readable report for a failed nightly run.
+ * Build the issue/comment body for a failed nightly run.
  *
  * @param {string} log - the teed `pnpm test` output
  * @param {string} runUrl
@@ -157,47 +158,18 @@ function report(log, runUrl) {
   };
 }
 
-// ntfy rejects a message body over 4096 BYTES outright, so the report — whose
-// own budget is 6000 characters of quoted TAP — has to be cut for the push.
-// Bytes, not characters: the body carries em dashes and curly quotes, and a
-// failing test name can carry anything the suite put in it.
-const MAX_NOTIFICATION_BYTES = 4000;
-const TRUNCATION_NOTE = "\n… (truncated — full report in the run log)";
-
 /**
- * The report body, cut to something ntfy will accept. Truncation is announced
- * rather than silent: a body that merely stops reads as the whole failure.
- *
- * @param {string} body
- * @returns {string}
- */
-function forNotification(body) {
-  if (Buffer.byteLength(body, "utf8") <= MAX_NOTIFICATION_BYTES) return body;
-  const budget = MAX_NOTIFICATION_BYTES - Buffer.byteLength(TRUNCATION_NOTE);
-  // Decoding a buffer cut mid-character yields U+FFFD, which re-encodes WIDER
-  // than the bytes it replaced. Cut with the string decoder's own boundary
-  // handling instead: slice to the budget, drop any trailing replacement char.
-  const cut = Buffer.from(body, "utf8")
-    .subarray(0, budget)
-    .toString("utf8")
-    .replace(/\uFFFD+$/u, "");
-  return cut + TRUNCATION_NOTE;
-}
-
-/**
- * Push the nightly fuzz verdict to ntfy. Called by fuzz-nightly.yaml via
- * actions/github-script only on failure; it does not deliver the notification
- * itself, it hands `title`/`message` to the notify-ntfy step as outputs.
- *
- * Delivery is a phone push rather than a tracking issue: nobody watches the
- * nightly Actions tab, and an auto-filed issue only moved the ignoring to the
- * issue tracker. The full report stays in the run log, one tap away.
+ * Open (or update) a single rollup issue when the nightly unseeded fuzz run
+ * fails. Called by fuzz-nightly.yaml via actions/github-script only on failure.
+ * Idempotent: one open `nightly-fuzz` issue at a time — later failures append a
+ * comment rather than spawning duplicates.
  *
  * @param {object} params
+ * @param {import("@octokit/rest").Octokit} params.github
  * @param {object} params.context - GitHub Actions run context
- * @param {{ setOutput(name: string, value: string): void, notice(msg: string): void }} params.core
+ * @param {{ notice(msg: string): void }} params.core
  */
-module.exports = async ({ context, core }) => {
+module.exports = async ({ github, context, core }) => {
   const { owner, repo } = context.repo;
   const runUrl = `${context.serverUrl}/${owner}/${repo}/actions/runs/${context.runId}`;
 
@@ -209,11 +181,36 @@ module.exports = async ({ context, core }) => {
   }
   const { title, body } = report(log, runUrl);
 
-  core.setOutput("title", title);
-  core.setOutput("message", forNotification(body));
-  core.setOutput("run_url", runUrl);
-  core.notice(title);
+  const existing = await github.rest.issues.listForRepo({
+    owner,
+    repo,
+    state: "open",
+    labels: LABEL,
+    per_page: 1,
+  });
+
+  if (existing.data.length > 0) {
+    const issueNumber = existing.data[0].number;
+    await github.rest.issues.createComment({
+      owner,
+      repo,
+      issue_number: issueNumber,
+      body,
+    });
+    core.notice(
+      `Appended nightly fuzz failure to existing issue #${issueNumber}`,
+    );
+    return;
+  }
+
+  const created = await github.rest.issues.create({
+    owner,
+    repo,
+    title,
+    body,
+    labels: [LABEL],
+  });
+  core.notice(`Opened nightly fuzz issue #${created.data.number}`);
 };
 
 module.exports.report = report;
-module.exports.forNotification = forNotification;
