@@ -401,7 +401,11 @@ main() {
   fi
 
   if [[ -s "$CONFLICT_FILES" ]]; then
+    # `tr` turns the list's final newline into a trailing space. That space rides
+    # into .template-sync-conflicts, where pre-commit's trailing-whitespace fixer
+    # strips it on the next run and fails CI with "hook(s) made changes".
     conflicts=$(tr '\n' ' ' <"$CONFLICT_FILES")
+    conflicts="${conflicts% }"
     {
       echo "has_conflicts=true"
       echo "conflict_files=$conflicts"
