@@ -67,14 +67,15 @@ jobs:
         run: node --test .github/scripts/post-pr-review.test.mjs
 
       # Same dot-directory blind spot. This suite pins what the nightly-fuzz
-      # issue actually says: it must quote the FAILING tests (not the run's
-      # coverage-table tail) and must not dress an ordinary red suite up as a
-      # fast-check counterexample. Both regressions shipped in #211, and the
-      # only reader of that issue is a human deciding whether to go look — a
-      # decorative test here restores exactly the unactionable report it exists
-      # to prevent. No extra deps: the suite is node builtins only.
+      # notification actually says: it must quote the FAILING tests (not the
+      # run's coverage-table tail), must not dress an ordinary red suite up as a
+      # fast-check counterexample, and must fit ntfy's body limit. Both
+      # regressions shipped in #211, and the only reader of that push is a human
+      # deciding whether to go look — a decorative test here restores exactly the
+      # unactionable report it exists to prevent. No extra deps: the suite is
+      # node builtins only.
       - name: Run nightly-fuzz reporter tests
-        run: node --test .github/scripts/nightly-fuzz-issue.test.mjs
+        run: node --test .github/scripts/nightly-fuzz-report.test.mjs
 
       # Same blind spot again. This one guards every workflow and composite
       # action against a `steps.<id>` reference no step defines — Actions renders

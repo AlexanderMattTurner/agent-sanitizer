@@ -19,8 +19,8 @@
       "scripts/set-plugin-version.test.mjs"
     ],
     ".github/mutation-shards.json": ["test/mutation-shards.test.mjs"],
-    ".github/scripts/nightly-fuzz-issue.js": [
-      ".github/scripts/nightly-fuzz-issue.test.mjs"
+    ".github/scripts/nightly-fuzz-report.js": [
+      ".github/scripts/nightly-fuzz-report.test.mjs"
     ],
     "src/invisible.mjs": [
       "test/invisible-charset.test.mjs",
