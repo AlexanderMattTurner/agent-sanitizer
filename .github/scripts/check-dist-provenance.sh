@@ -4,10 +4,18 @@
 # The reproducibility test already refuses a bundle that differs from a fresh
 # build, which stops a hand-edited artifact. This closes the other direction: an
 # artifact change riding a PR that touches none of the things the artifact is
-# built from. Since the lockfile is committed, every dependency-driven change to
-# the bundle shows up as a pnpm-lock.yaml change in the same diff — so a dist
-# diff with no input diff has no legitimate cause, and the check cannot fire on
-# an honest PR.
+# built from. BOTH dependency trees are locked and committed — pnpm-lock.yaml for
+# the JS bundle, plugin/requirements.txt (hash-pinned) for the zipapp — so every
+# dependency-driven change to either artifact shows up as a lockfile change in
+# the same diff. A dist diff with no input diff therefore has no legitimate
+# cause on an honest PR — with one residual gap: the zipapp installs its sdists
+# under PEP 517 build isolation, so the build BACKENDS (setuptools/hatchling and
+# their own build-system.requires) are resolved from PyPI per build and are not
+# in plugin/requirements.txt. A backend release that changes the generated
+# METADATA — the one dist-info file the zipapp keeps — can still move its bytes
+# with no diff here. If that ever fires, pin the backend; do not re-exempt the
+# artifact. (An earlier exemption existed for exactly that shape of drift one
+# layer up, when the Python tree itself was unlocked.)
 set -euo pipefail
 
 base_ref="${1:?usage: check-dist-provenance.sh <base-ref>}"
@@ -19,16 +27,8 @@ input_changed=false
 while IFS= read -r file; do
   [[ -n "$file" ]] || continue
   case "$file" in
-  # The zipapp is the one artifact whose inputs are NOT all committed: only
-  # `agent-sanitizer[secrets]==X.Y.Z` is pinned, its transitive Python deps
-  # float, so a new dep release moves the bytes with no diff in this repo at
-  # all. That drift is legitimate and is caught the strong way instead — the
-  # live-engine job (ungated, every PR) rebuilds the zipapp from PyPI and
-  # `git diff --exit-code`s it, which refuses a hand-edited artifact outright.
-  # Counting it here only ever fires on the honest rebuild.
-  plugin/dist/redactor/*) ;;
   plugin/dist/*) dist_changed=true ;;
-  package.json | pnpm-lock.yaml | claude-hooks/* | plugin/scripts/* | plugin/requirements.txt)
+  package.json | pnpm-lock.yaml | claude-hooks/* | plugin/scripts/* | plugin/requirements.in | plugin/requirements.txt)
     input_changed=true
     ;;
   esac
@@ -36,10 +36,11 @@ done <<<"$changed"
 
 if [[ "$dist_changed" == true && "$input_changed" == false ]]; then
   echo "::error::plugin/dist changed but no build input did." >&2
-  echo "The bundle is generated from package.json + pnpm-lock.yaml + claude-hooks/ +" >&2
-  echo "plugin/scripts/. A dist-only diff means the artifact was edited by hand or" >&2
-  echo "carried over from another branch. Rebuild with:" >&2
-  echo "  node plugin/scripts/build-plugin.mjs" >&2
+  echo "The artifacts are generated from package.json + pnpm-lock.yaml + claude-hooks/ +" >&2
+  echo "plugin/scripts/ + plugin/requirements.{in,txt}. A dist-only diff means the" >&2
+  echo "artifact was edited by hand or carried over from another branch. Rebuild with:" >&2
+  echo "  node plugin/scripts/build-plugin.mjs        # JS bundle + requirements.in" >&2
+  echo "  node plugin/scripts/build-redactor-pyz.mjs  # zipapp, from the committed lock" >&2
   git diff --stat "$base_ref"...HEAD -- plugin/dist >&2
   exit 1
 fi

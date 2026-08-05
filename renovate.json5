@@ -5,7 +5,16 @@
   // Renovate's job here is narrower: keep the plugin's pinned engine and its
   // build/runtime peers current, since the committed bundle is only rebuilt when
   // one of these moves.
-  enabledManagers: ["npm", "pip_requirements"],
+  // npm ONLY. The `pip_requirements` manager's default file match covers
+  // `requirements.txt` but not `requirements.in`, so with the Python tree locked
+  // it would edit plugin/requirements.txt — rewriting the `==` pin in place
+  // WITHOUT regenerating the `--hash=` lines beside it, producing a lock whose
+  // hashes belong to the old version. `build-redactor-pyz.mjs` then fails hash
+  // verification, and `lock-redactor-deps.mjs --if-stale` sees the engine
+  // version already matching and skips the re-lock that would repair it. The
+  // engine bump is driven by the npm alias alone: build-plugin.mjs regenerates
+  // requirements.in from it and --if-stale re-locks from there, hashes included.
+  enabledManagers: ["npm"],
   schedule: ["* 0-6 * * *"],
   rangeStrategy: "pin",
   // Default off, then opt each watched pin in below — a blanket enable would
@@ -16,11 +25,12 @@
       enabled: false,
     },
     {
-      // The npm alias and the PyPI requirement are two halves of ONE pin: the
-      // bundle is built from the npm release and the redactor daemon is
-      // installed from the PyPI release of the same version. Grouping them keeps
-      // both in a single PR, so the test asserting requirements.txt matches the
-      // alias never goes red on a half-applied bump.
+      // The npm alias is the ONE place the engine pin lives; the PyPI half is
+      // derived from it (build-plugin.mjs writes plugin/requirements.in, then
+      // lock-redactor-deps.mjs compiles the hashed lock). Both spellings are
+      // matched because an npm alias reports depName `sanitizer-engine` and
+      // packageName `agent-sanitizer`, and which one a rule sees has changed
+      // across Renovate versions.
       groupName: "sanitizer-engine",
       matchPackageNames: ["agent-sanitizer", "sanitizer-engine"],
       enabled: true,

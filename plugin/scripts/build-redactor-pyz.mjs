@@ -14,21 +14,35 @@
  * rebuilds and byte-compares it; the default suite asserts the committed
  * artifact's properties (tracked, pure-Python, runnable) without rebuilding.
  *
- * Determinism: `--no-binary :all:` installs every package from its sdist (the
- * pure-Python source files are copied verbatim, so the tree does not vary by
- * build platform); compiled speedups (PyYAML's _yaml, charset_normalizer's
- * mypyc) are stripped — both packages fall back to pure Python — and asserted
- * absent; installer-varying metadata (RECORD, INSTALLER, WHEEL, direct_url)
- * is dropped, keeping only METADATA per dist-info; the zip is written with
- * sorted entries, fixed 1980-01-01 timestamps, fixed permissions, and no
- * compression (deflate output varies with the host zlib).
+ * Determinism: the install comes from the fully resolved, hash-pinned
+ * plugin/requirements.txt, so no transitive release can change these bytes —
+ * pinning only the engine left certifi/charset-normalizer/idna/pyyaml/requests/
+ * urllib3 to be re-resolved on every build, and each of their releases silently
+ * invalidated the committed artifact. `--no-binary :all:` installs every
+ * package from its sdist (the pure-Python source files are copied verbatim, so
+ * the tree does not vary by build platform); compiled speedups (PyYAML's _yaml,
+ * charset_normalizer's mypyc) are stripped — both packages fall back to pure
+ * Python — and asserted absent; installer-varying metadata (RECORD, INSTALLER,
+ * WHEEL, direct_url) is dropped, keeping only METADATA per dist-info; the zip is
+ * written with sorted entries, fixed 1980-01-01 timestamps, fixed permissions,
+ * and no compression (deflate output varies with the host zlib).
  */
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, rmSync, existsSync, mkdirSync } from "node:fs";
+import {
+  mkdtempSync,
+  rmSync,
+  existsSync,
+  mkdirSync,
+  readFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { enginePin } from "./build-plugin.mjs";
+import {
+  REQUIREMENTS_LOCK_PATH,
+  enginePin,
+  lockedEngineVersion,
+} from "./build-plugin.mjs";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
 
@@ -132,13 +146,27 @@ function run(cmd, args, env = {}) {
 
 export function buildRedactorPyz() {
   const version = enginePin();
+  // The lock is what actually gets installed, so a lock that pins some other
+  // engine would silently ship a zipapp disagreeing with the JS bundle beside
+  // it. Refuse rather than build the mismatch.
+  const locked = lockedEngineVersion(
+    readFileSync(REQUIREMENTS_LOCK_PATH, "utf-8"),
+  );
+  if (locked !== version)
+    throw new Error(
+      `${REQUIREMENTS_LOCK_PATH} pins agent-sanitizer==${locked}, but the ` +
+        `sanitizer-engine alias in package.json pins ${version}. Re-lock with ` +
+        "`node plugin/scripts/build-plugin.mjs && node plugin/scripts/lock-redactor-deps.mjs`.",
+    );
   const work = mkdtempSync(join(tmpdir(), "agent-sanitizer-pyz-"));
   try {
     const target = join(work, "site");
     // uv when available (CI installs it; much faster sdist builds), pip
-    // otherwise. Both get the same determinism-bearing flags.
+    // otherwise. Both get the same determinism-bearing flags. `--require-hashes`
+    // is explicit rather than left to be inferred from the lock carrying
+    // hashes: an unhashed line slipping in must fail the build, not quietly
+    // disable hash checking for the whole file.
     const uv = spawnSync("uv", ["--version"]).status === 0;
-    const spec = `agent-sanitizer[secrets]==${version}`;
     if (uv) {
       run("uv", [
         "pip",
@@ -149,7 +177,9 @@ export function buildRedactorPyz() {
         "--no-binary",
         ":all:",
         "--no-compile-bytecode",
-        spec,
+        "--require-hashes",
+        "-r",
+        REQUIREMENTS_LOCK_PATH,
       ]);
     } else {
       run("python3", [
@@ -162,7 +192,9 @@ export function buildRedactorPyz() {
         "--no-binary",
         ":all:",
         "--no-compile",
-        spec,
+        "--require-hashes",
+        "-r",
+        REQUIREMENTS_LOCK_PATH,
       ]);
     }
     mkdirSync(dirname(PYZ_PATH), { recursive: true });
