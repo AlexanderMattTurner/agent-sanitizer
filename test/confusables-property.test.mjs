@@ -71,21 +71,28 @@ const manualFold = (text) => {
 // explicit code-point ranges, so the two formulations can disagree.
 const isBoundary = (ch) => ch.charCodeAt(0) < 128 && /[^A-Za-z0-9]/.test(ch);
 
-/** The non-empty tokens of `text`, in order (boundaries dropped). */
-const tokensOf = (text) => {
-  const tokens = [];
+/** `text` split into alternating tokens and boundary characters, in order. */
+const partsOf = (text) => {
+  const parts = [];
   let token = "";
   for (const ch of text) {
     if (!isBoundary(ch)) {
       token += ch;
       continue;
     }
-    if (token) tokens.push(token);
+    if (token) parts.push({ token });
+    parts.push({ boundary: ch });
     token = "";
   }
-  if (token) tokens.push(token);
-  return tokens;
+  if (token) parts.push({ token });
+  return parts;
 };
+
+/** The non-empty tokens of `text`, in order (boundaries dropped). */
+const tokensOf = (text) =>
+  partsOf(text)
+    .filter((part) => part.token !== undefined)
+    .map((part) => part.token);
 
 const isAllAscii = (text) =>
   [...text].every((ch) => /** @type {number} */ (ch.codePointAt(0)) <= 0x7f);
@@ -95,25 +102,14 @@ const isAllAscii = (text) =>
  * fold a token only when folding leaves it pure ASCII, otherwise emit it
  * verbatim. Boundaries pass through untouched.
  */
-const manualGatedFold = (text) => {
-  let out = "";
-  let token = "";
-  const flushToken = () => {
-    const folded = manualFold(token);
-    out += isAllAscii(folded) ? folded : token;
-    token = "";
-  };
-  for (const ch of text) {
-    if (!isBoundary(ch)) {
-      token += ch;
-      continue;
-    }
-    flushToken();
-    out += ch;
-  }
-  flushToken();
-  return out;
-};
+const manualGatedFold = (text) =>
+  partsOf(text)
+    .map((part) => {
+      if (part.boundary !== undefined) return part.boundary;
+      const folded = manualFold(part.token);
+      return isAllAscii(folded) ? folded : part.token;
+    })
+    .join("");
 
 // Alphabet: confusables (BMP + astral), plain ASCII anchors, a benign non-ASCII
 // non-confusable (é, never flagged), and structural chars.
