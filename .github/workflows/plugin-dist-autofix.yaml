@@ -17,6 +17,7 @@ on:
       - pnpm-lock.yaml
       - claude-hooks/**
       - plugin/scripts/**
+      - plugin/requirements.in
       - plugin/requirements.txt
 
 concurrency:
@@ -87,6 +88,10 @@ jobs:
         if: steps.guard.outputs.enabled == 'true'
         run: |
           node plugin/scripts/build-plugin.mjs
+          # --if-stale: re-resolve the Python tree ONLY when the engine pin moved.
+          # An unconditional re-lock here would pull in new transitives on every
+          # artifact-regenerating PR, which is the drift the lock exists to stop.
+          node plugin/scripts/lock-redactor-deps.mjs --if-stale
           node plugin/scripts/build-redactor-pyz.mjs
           # `git diff --quiet` exits non-zero exactly when the build changed files.
           if git diff --quiet; then
