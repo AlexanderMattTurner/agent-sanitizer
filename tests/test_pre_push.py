@@ -46,6 +46,9 @@ def sandbox(tmp_path: Path) -> Path:
 
     hooks = repo / ".hooks"
     hooks.mkdir()
+    # pre-push sources lib-gate.sh relative to the sandbox's own git root, so the
+    # helper has to travel with it or every hook run dies before its first check.
+    shutil.copy2(REPO_ROOT / ".hooks" / "lib-gate.sh", hooks / "lib-gate.sh")
     shutil.copy2(REPO_ROOT / ".hooks" / "pre-push", hooks / "pre-push")
     (hooks / "pre-push").chmod(0o755)
 

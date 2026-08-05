@@ -66,8 +66,16 @@ zero=0000000000000000000000000000000000000000
 # otherwise swallow the remaining ref lines, so a multi-ref push checked only
 # its first range.
 exec 3<&0 0</dev/null
-while read -r -u 3 _local_ref local_sha _remote_ref remote_sha; do
+while read -r -u 3 _local_ref local_sha remote_ref remote_sha; do
   [[ "$local_sha" == "$zero" ]] && continue # branch deletion: nothing to check
+  # A tag push introduces no commits — the tagged commit already reached the
+  # remote on some branch and was checked then. Tags also have no upstream to
+  # diff against, so without this they hit the new-ref fallback below and get
+  # swept against the merge base with origin/HEAD, which can point at a stale
+  # branch: `git push origin v2.0.0` then rebuilds every hook environment to
+  # re-lint history that is already on main. Skipping before the tool gate keeps
+  # a tag push working on a machine without pre-commit, since it checks nothing.
+  [[ "$remote_ref" == refs/tags/* ]] && continue
   if [[ ${#precommit_cmd[@]} -eq 0 ]]; then
     gate_die_missing_tool pre-push pre-commit "install uv (https://docs.astral.sh/uv/) or 'pip install pre-commit' so the pushed range can be checked, then push again."
   fi
