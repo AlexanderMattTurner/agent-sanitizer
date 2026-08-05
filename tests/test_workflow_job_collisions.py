@@ -19,24 +19,27 @@ The sync cannot catch this on its own: it only ever COPIES files the template
 has, so a file the template deleted lingers locally forever. It reports the
 deletion in the PR body as "consider removing", which is prose in a long
 description that nobody actioned across several syncs.
+
+WHAT A PASS DOES NOT MEAN. This detects CANCELLATION, not duplication. A stale
+copy whose group is derived from `${{ github.workflow }}` — the idiom about half
+this repo's workflows use — resolves to a group unique to its own file, so it
+never cancels its replacement: both copies simply run, doing the work twice.
+`history-integrity.yaml` and `cancel-on-pr-close.yaml` were exactly that, and
+this guard was structurally unable to see them. Widening the predicate to catch
+them would flag every legitimate `${{ github.workflow }}` user, so the check
+stays narrow on purpose and this paragraph carries the rest: a green run here
+means nothing is cancelling its twin, NOT that no leftovers exist.
 """
 
 import re
-import subprocess
 from collections import defaultdict
 from pathlib import Path
 
 import pytest
 import yaml
 
-REPO_ROOT = Path(
-    subprocess.run(
-        ["git", "rev-parse", "--show-toplevel"],
-        capture_output=True,
-        text=True,
-        check=True,
-    ).stdout.strip()
-)
+from tests._helpers import REPO_ROOT
+
 WORKFLOW_DIR = REPO_ROOT / ".github" / "workflows"
 
 
@@ -74,8 +77,8 @@ def resolve_group(group: str, workflow_name: str) -> str:
     return re.sub(r"\$\{\{\s*github\.workflow\s*\}\}", lambda _: workflow_name, group)
 
 
-def job_slots(path: Path) -> list[tuple[str, str]]:
-    """Every (display name, effective concurrency group) this workflow declares.
+def job_slots(path: Path) -> list[tuple[str, str, str]]:
+    """Every (display name, effective concurrency group, job id) declared here.
 
     The effective group is the job's own when it has one, else the workflow's —
     the same precedence GitHub applies. Jobs with no group either way cannot
@@ -101,7 +104,7 @@ def job_slots(path: Path) -> list[tuple[str, str]]:
         name = job.get("name") or job_id
         if not isinstance(name, str):
             continue
-        slots.append((name, group))
+        slots.append((name, group, job_id))
     return slots
 
 
@@ -112,28 +115,29 @@ def test_workflow_dir_is_not_empty() -> None:
     assert any(job_slots(p) for p in files), "no workflow declared a concurrency group"
 
 
-def test_no_two_workflows_share_a_job_name_and_concurrency_group() -> None:
-    """Same display name + same group across files == the copies cancel each other.
+def test_no_two_jobs_share_a_job_name_and_concurrency_group() -> None:
+    """Same display name + same group == the two jobs cancel each other.
 
     Both halves must match. Two workflows sharing a group on purpose (to
     serialize against each other) is legitimate and stays passing; so does the
-    same job name under different groups. It is the pair that means one file is
-    a stale duplicate of the other.
+    same job name under different groups. It is the pair that means one job is a
+    stale duplicate of the other.
+
+    Not scoped to distinct FILES: two jobs in one workflow can collide the same
+    way, and that is why `pr-meta.yaml`'s `report_render` and `report_comment`
+    carry distinct groups rather than inheriting one.
     """
     owners: dict[tuple[str, str], list[str]] = defaultdict(list)
     for path in workflow_files():
-        for slot in job_slots(path):
-            owners[slot].append(path.name)
+        for name, group, job_id in job_slots(path):
+            owners[(name, group)].append(f"{path.name}:{job_id}")
 
-    collisions = {
-        slot: sorted(set(files))
-        for slot, files in owners.items()
-        if len(set(files)) > 1
-    }
+    collisions = {slot: sites for slot, sites in owners.items() if len(sites) > 1}
     assert not collisions, "\n".join(
-        f"job {name!r} runs in {files} under the same concurrency group {group!r} "
-        "— the second run to start cancels the first; delete the stale copy"
-        for (name, group), files in sorted(collisions.items())
+        f"job {name!r} runs at {sorted(sites)} under the same concurrency group "
+        f"{group!r} — the second run to start cancels the first; delete the "
+        "stale copy"
+        for (name, group), sites in sorted(collisions.items())
     )
 
 
