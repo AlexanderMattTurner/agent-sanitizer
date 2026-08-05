@@ -8,6 +8,26 @@ adhere to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+## [2.14.5] - 2026-08-05
+
+### Added
+- Claude review workflow for automated PR analysis and approval decisions
+- Automated conflict resolution workflow with self-review and retry logic
+- New CI skills and rules documentation for Claude automation
+- Threat model documentation with security layer details
+- Support for Claude OAuth and reviewer hold management
+
+### Changed
+- README installation section now clearly documents setup steps and failure modes
+- Threat model layer count corrected and sync rules documented
+- Enhanced CI reviewer logic with template sync restoration
+
+### Fixed
+- Restored review thread query to unblock autofix push
+- Fixed reviewer merge-lever contract settlement on threads
+- Restored CI reviewer logic dropped by template sync
+- Fixed local work clobbered by template sync
+
 ## [2.14.3] - 2026-08-03
 
 ### Changed
