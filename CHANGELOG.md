@@ -8,6 +8,12 @@ adhere to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+## [2.14.9] - 2026-08-05
+
+### Fixed
+
+- Stop folding one-letter non-Latin words and genuine non-Latin text into ASCII confusables, improving accuracy for mixed-script content.
+
 ## [2.14.8] - 2026-08-05
 
 ### Changed
