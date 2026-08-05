@@ -95,52 +95,31 @@ owns each message, and any value outside the enum makes `sanitizeText` **throw**
 
 ## What installing entails
 
-**`npm install`** is inert: no hooks, no daemon, no network — it acts only when
-you call it. Node 22+; `/html` lazy-loads its parser stack (~200 ms, once per
-process). Layer 4 (secret redaction) is not in the npm package —
-`pip install 'agent-sanitizer[secrets]'` and wire `/output`'s `redact` seam.
-Layer 5 is yours to supply.
+Installing the plugin puts four hooks on every session, and this is what they
+buy you:
 
-**The plugin** is the opposite: four hooks on every session. It needs Node 22+
-and `python3` (3.11+) or `uv`. The first session provisions the Layer-4 engine
-into a venv (one-time download, tens of seconds); the plugin also ships a
-self-contained zipapp, so an offline cold start still redacts. Secret redaction
-**is** included here — `detect-secrets`, locally, over a private 0600 socket.
-What you'll notice:
+1. Your `CLAUDE.md`, `AGENTS.md` and `.claude/` markdown are scanned at session
+   start for hidden-Unicode payloads and auto-cleaned where possible.
+2. Prompts carrying payload-capable invisible or ANSI characters are blocked
+   before they reach the model; pasted terminal color passes with a note.
+3. Look-alike glyphs in tool inputs are folded to ASCII, so a Cyrillic `а` can't
+   walk a command past a deny rule.
+4. Tool output has invisible characters and terminal escapes stripped, hidden
+   HTML spliced out with a placeholder, and exfil-shaped URLs flagged.
+5. Secrets in tool output are redacted locally by `detect-secrets` — the engine
+   ships with the plugin and provisions itself on first run, no setup from you.
+6. Edits the model composes against the redacted view are re-anchored onto the
+   real bytes on disk, and anything ambiguous is denied rather than guessed.
+7. The costs are a few seconds on the first secret-shaped output, ~200 ms on the
+   first web page, and the occasional over-redaction of credential-shaped text —
+   `AGENT_SANITIZER_OUTPUT_DISABLED=1` opts out of the rewrites.
 
-| Event         | What happens                                                                                                                |
-| ------------- | --------------------------------------------------------------------------------------------------------------------------- |
-| Session start | `CLAUDE.md`/`AGENTS.md`/`.claude/**.md` scanned for hidden Unicode, auto-cleaned where possible                             |
-| Prompt submit | Blocked if it carries payload-capable invisible/ANSI (pasted SGR color passes with a note)                                  |
-| Tool input    | Confusables folded to ASCII, escapes stripped, redacted `Edit`/`Write` re-anchored onto on-disk bytes                       |
-| Tool output   | Invisibles/ANSI stripped, hidden HTML spliced out (original kept in a reveal sidecar), exfil URLs flagged, secrets redacted |
-
-Expect ~1–3 s on the first secret-shaped output (redactor cold start), ~200 ms on
-the first HTML page, and occasional over-redaction of credential-shaped text.
-`AGENT_SANITIZER_OUTPUT_DISABLED=1` opts out of the rewrites (or
-`_INVISIBLE_`/`_TERMINAL_` individually).
-
-### Warning signs
-
-Every layer fails **closed**, so breakage shows up as friction, not silence:
-
-| What you see                                                                      | Meaning                                                                |
-| --------------------------------------------------------------------------------- | ---------------------------------------------------------------------- |
-| `[output sanitizer unavailable — original output suppressed]`                     | Hook couldn't start — `node` missing or bundle corrupt                 |
-| `[SANITIZATION FAILED — original output suppressed for safety …]`                 | The output hook threw; raw output withheld                             |
-| `CRITICAL: secret redaction failed … Failing closed`                              | Layer-4 daemon unreachable — check `python3`/`uv`, restart the session |
-| `python3 not found — the secret-redaction engine (Layer 4) cannot be provisioned` | No Python at session start                                             |
-| `User prompt blocked: payload-capable invisible/ANSI characters detected.`        | Working as intended — retype the prompt                                |
-| `… (fail-closed): unrecognized hook payload.`                                     | Payload shape mismatch — check versions                                |
-| Every tool call turning into a permission ask                                     | The input gate can't reach a verdict; the reason names the cause       |
-| `instruction files were NOT scanned`                                              | Session-start scan didn't run                                          |
-
-**Silence is the one failure that isn't loud.** Claude Code reads a crashed hook
-as "no objection", so a quiet session isn't proof of a working one. Confirm with
-`/plugin`, or set `_AGENT_SANITIZER_TRACE=info` (plus
-`_AGENT_SANITIZER_TRACE_FILE=…`) and look for `hook_ran` /
-`scan_invisible_chars_ran` lines — a missing one means that layer never engaged,
-and `"outcome":"skipped"` means it gave up before reading anything.
+Failure is loud by design: every layer fails closed, so you see suppressed tool
+output (`[output sanitizer unavailable — original output suppressed]`), blocked
+prompts, or permission asks whose reason names the cause. The exception is a
+plugin that never loaded at all — Claude Code reads a crashed hook as "no
+objection", so confirm with `/plugin` rather than reading a quiet session as a
+working one.
 
 ## Using it with Claude Code
 
