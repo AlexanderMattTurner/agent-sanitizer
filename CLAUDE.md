@@ -61,6 +61,11 @@ Commits MUST use [Conventional Commits](https://www.conventionalcommits.org/) (`
 - **Iterating word-split command output under the shared `shellharden` + `shellcheck` hooks**: don’t write `for x in $(cmd)` — `shellharden` auto-quotes `$(cmd)`, killing the split, and `shellcheck` then fails with `SC2066`. Don’t reach for `mapfile`/`readarray` if the script must run on macOS bash 3.2 (it’s bash 4+). Use a portable `while IFS= read -r line; do arr+=("$line"); done < <(cmd)` array, consumed as `"${arr[@]}"`.
 - **Escape every metacharacter class in a single pass when embedding text into a shell/DSL.** Chained `.replace()` calls where a later pass can re-touch an earlier pass’s inserted escape character are the classic source of CodeQL’s _incomplete string escaping_ findings.
 
+## Docs
+
+- **Adding, removing, or renumbering a layer means updating every doc that counts them.** `THREAT-MODEL.md`'s opening paragraph names the layers and their count, the README's entry-point table indexes the imports, and `plugin/README.md` lists the hooks — all three go stale silently, leaving the docs advertising a smaller (or wrong) surface than what ships. Update them in the same commit as the layer.
+- Keep the layer numbering stable: `Layer N` appears in warning strings, hook messages and issue reports, so renumbering an existing layer is a breaking change, not a doc edit.
+
 ## Self-Critique Loop
 
 Before declaring any non-trivial coding task done, **iteratively critique and fix your own work until you reach a fixed point.** Read what you actually wrote (not what you intended to write) as if it came from a developer you cannot stand—assume it is wrong until proven otherwise.
