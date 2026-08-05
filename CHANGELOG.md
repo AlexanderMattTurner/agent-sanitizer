@@ -8,6 +8,14 @@ adhere to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+## [2.14.8] - 2026-08-05
+
+### Changed
+- Removed duplicate reviewer workflow from CI configuration.
+
+### Fixed
+- Regenerated the redactor zipapp plugin to ensure reproducible builds.
+
 ## [2.14.6] - 2026-08-05
 
 ### Fixed
