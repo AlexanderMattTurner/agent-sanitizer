@@ -15,8 +15,6 @@
 set -euo pipefail
 
 git_root=$(git rev-parse --show-toplevel)
-# shellcheck source=.hooks/lib-gate.sh
-source "$git_root/.hooks/lib-gate.sh"
 
 # Git hooks run in a bare shell and don't inherit session PATH edits; surface
 # the venv's tools plus uv/uvx and cargo installs.
@@ -28,8 +26,9 @@ export PATH="$HOME/.local/bin:$HOME/.cargo/bin:$PATH"
 # Mirror CI's invocation: pre-commit.yaml runs `uvx pre-commit==<pin>`, and that
 # workflow line is the one authoritative pin — read it from there so this hook
 # can't drift to a different version. Fall back to a PATH pre-commit when uvx is
-# absent; when neither exists, the push FAILS as soon as a range actually needs
-# checking (a no-op push, e.g. a branch deletion, still goes through).
+# absent; when neither exists, skip loudly (CI still runs the full suite on the
+# PR) rather than blocking the push on a tool the machine doesn't have — this
+# repo's own autofix bots push from runners that carry neither.
 precommit_cmd=()
 if command -v uvx >/dev/null 2>&1; then
   workflow="$git_root/.github/workflows/pre-commit.yaml"
@@ -45,6 +44,9 @@ if command -v uvx >/dev/null 2>&1; then
   precommit_cmd=(uvx --python "$python_version" --from "pre-commit==$pin" pre-commit)
 elif command -v pre-commit >/dev/null 2>&1; then
   precommit_cmd=(pre-commit)
+else
+  echo "pre-push: neither uvx nor pre-commit found on PATH — SKIPPING the pushed-range pre-commit run." >&2
+  echo "pre-push: install uv (https://docs.astral.sh/uv/) or 'pip install pre-commit'; CI still enforces the suite." >&2
 fi
 
 # origin's default branch — the base the new-branch fallback diffs against.
@@ -76,9 +78,8 @@ while read -r -u 3 _local_ref local_sha remote_ref remote_sha; do
   # re-lint history that is already on main. Skipping before the tool gate keeps
   # a tag push working on a machine without pre-commit, since it checks nothing.
   [[ "$remote_ref" == refs/tags/* ]] && continue
-  if [[ ${#precommit_cmd[@]} -eq 0 ]]; then
-    gate_die_missing_tool pre-push pre-commit "install uv (https://docs.astral.sh/uv/) or 'pip install pre-commit' so the pushed range can be checked, then push again."
-  fi
+  # No pre-commit anywhere: already announced above, so skip quietly here.
+  [[ ${#precommit_cmd[@]} -eq 0 ]] && continue
   from_ref="$remote_sha"
   if [[ "$from_ref" == "$zero" ]]; then
     from_ref=$(git merge-base "$default_branch" "$local_sha" 2>/dev/null) ||
