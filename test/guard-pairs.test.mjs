@@ -50,6 +50,11 @@ describe("SSOT guard-pair map", () => {
   it("pins the pairings that actually broke main (release-token + instructions guards)", () => {
     assert.deepEqual(pairs[".github/workflows/auto-version.yaml"], [
       "scripts/version-bump.test.mjs",
+      // The workflow's six PyPI-publish steps gate on `steps.release.outputs`,
+      // and a sync once dropped the `id: release` that defines it — an unknown
+      // step id renders empty rather than erroring, so the whole coupled half
+      // no-opped silently. The step-ref guard is what catches that.
+      ".github/scripts/workflow-step-refs.test.mjs",
     ]);
     assert.deepEqual(pairs["src/instructions.mjs"], [
       "test/instructions.test.mjs",

@@ -104,7 +104,7 @@ inputs:
 outputs:
   execution_file:
     description: "Execution-log path of the LAST attempt that ran (newest first)."
-    value: ${{ steps.a6.outputs.execution_file || steps.a5.outputs.execution_file || steps.a4.outputs.execution_file || steps.a3.outputs.execution_file || steps.a2.outputs.execution_file || steps.a1r.outputs.execution_file || steps.a1.outputs.execution_file }}
+    value: ${{ steps.resolve_log.outputs.execution_file }}
   errored:
     description: >-
       'true'/'false' from the LAST attempt that ran. A skipped attempt's check
@@ -493,6 +493,20 @@ runs:
       run: |
         echo "::error::claude-run: every configured Claude credential failed (set CLAUDE_CODE_OAUTH_TOKEN and CLAUDE_CODE_OAUTH_TOKEN_FALLBACK[_3..6])." >&2
         exit 1
+    # The gate and this composite's own `execution_file` output both need the log
+    # of whichever rung actually ran. Resolve it ONCE here, newest-first, so the
+    # two cannot drift: sync #169 pointed the gate at a `steps.resolve_log` this
+    # six-rung ladder never had, and a missing step id is not an Actions error —
+    # the expression just renders empty. Every gated caller then failed with
+    # "produced no execution log" even when a rung had run Claude to completion.
+    # No `if:` — a ladder where every credential failed exits at the step above.
+    - name: Resolve the execution log of the rung that ran
+      id: resolve_log
+      shell: bash
+      env:
+        EXECUTION_FILE: ${{ steps.a6.outputs.execution_file || steps.a5.outputs.execution_file || steps.a4.outputs.execution_file || steps.a3.outputs.execution_file || steps.a2.outputs.execution_file || steps.a1r.outputs.execution_file || steps.a1.outputs.execution_file }}
+      run: echo "execution_file=${EXECUTION_FILE}" >>"$GITHUB_OUTPUT"
+
     # A rung exiting 0 is NOT proof Claude ran: an auth failure, a crash before
     # the result event, and a corrupt log all leave the step green. This gate is
     # what turns that silent skip into a red step. It lives HERE, not at each

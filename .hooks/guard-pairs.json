@@ -1,7 +1,13 @@
 {
   "$comment": "Guard pairs: source file -> the cheap guard test(s) that cover it. When a listed source is staged, .hooks/run-guard-pairs.mjs runs the paired `node --test` files and blocks the commit on failure \u2014 so a guard test can never silently break on main because the data it reads changed without it (this bit twice: the release-token guard on auto-version.yaml, and the instructions guard tests). These are GUARDS, not an SSOT: a pair says \"run this check when that file changes\", and naming it otherwise would launder the very smell a drift guard should expose. Keep every paired test fast (~1s); test/guard-pairs.test.mjs asserts all paths here exist.",
   "pairs": {
-    ".github/workflows/auto-version.yaml": ["scripts/version-bump.test.mjs"],
+    ".github/workflows/auto-version.yaml": [
+      "scripts/version-bump.test.mjs",
+      ".github/scripts/workflow-step-refs.test.mjs"
+    ],
+    ".github/actions/claude-run/action.yaml": [
+      ".github/scripts/workflow-step-refs.test.mjs"
+    ],
     ".github/scripts/version-bump.sh": [
       "scripts/version-bump.test.mjs",
       "scripts/set-plugin-version.test.mjs"
@@ -13,6 +19,9 @@
       "scripts/set-plugin-version.test.mjs"
     ],
     ".github/mutation-shards.json": ["test/mutation-shards.test.mjs"],
+    ".github/scripts/nightly-fuzz-issue.js": [
+      ".github/scripts/nightly-fuzz-issue.test.mjs"
+    ],
     "src/invisible.mjs": [
       "test/invisible-charset.test.mjs",
       "test/instructions.test.mjs"
