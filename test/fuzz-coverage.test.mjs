@@ -60,6 +60,7 @@ const FUZZ_REQUIRED = [
   // target each — the same obligation extended to the new entry points).
   "normalizeConfusables",
   "foldConfusables",
+  "selectFoldableFindings",
   "scanText",
   "decodeRun",
   "classifyPrompt",
@@ -93,6 +94,7 @@ const SEMANTIC_FUZZ_REQUIRED = [
   "urlHost",
   "normalizeConfusables",
   "foldConfusables",
+  "selectFoldableFindings",
   "scanText",
   "classifyPrompt",
   "sanitizeText",

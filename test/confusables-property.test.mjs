@@ -11,7 +11,11 @@ import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import fc from "fast-check";
 
-import { foldConfusables, normalizeConfusables } from "../src/confusables.mjs";
+import {
+  foldConfusables,
+  normalizeConfusables,
+  selectFoldableFindings,
+} from "../src/confusables.mjs";
 import { fcRunOptions, cp } from "./test-helpers.mjs";
 
 const runOptions = fcRunOptions({ numRuns: 500 });
@@ -34,6 +38,10 @@ const FOLD_MAP = {
   // splice was never exercised against a growing replacement.
   [cp(0xfb01)]: "fi", // ﬁ LATIN SMALL LIGATURE FI
   [cp(0x0133)]: "ij", // ĳ LATIN SMALL LIGATURE IJ
+  // A fold whose ASCII canon contains a token BOUNDARY: ½ → "1/2" splits one
+  // input token into two output tokens. Exercises the case where the gate's
+  // one-token-in decision produces more than one token out.
+  [cp(0x00bd)]: "1/2", // ½ VULGAR FRACTION ONE HALF
 };
 
 /** Deterministic confusable scanner over FOLD_MAP, iterating by code point. */
@@ -62,6 +70,60 @@ const manualFold = (text) => {
   return out;
 };
 
+// A token boundary is any ASCII character that is not a letter or digit. Stated
+// as an ASCII test plus a regex class, independently of the implementation's
+// explicit code-point ranges, so the two formulations can disagree.
+const isBoundary = (ch) => ch.charCodeAt(0) < 128 && /[^A-Za-z0-9]/.test(ch);
+
+/** `text` split into alternating tokens and boundary characters, in order. */
+const partsOf = (text) => {
+  const parts = [];
+  let token = "";
+  for (const ch of text) {
+    if (!isBoundary(ch)) {
+      token += ch;
+      continue;
+    }
+    if (token) parts.push({ token });
+    parts.push({ boundary: ch });
+    token = "";
+  }
+  if (token) parts.push({ token });
+  return parts;
+};
+
+/** The non-empty tokens of `text`, in order (boundaries dropped). */
+const tokensOf = (text) =>
+  partsOf(text)
+    .filter((part) => part.token !== undefined)
+    .map((part) => part.token);
+
+const isAllAscii = (text) =>
+  [...text].every((ch) => /** @type {number} */ (ch.codePointAt(0)) <= 0x7f);
+
+/**
+ * True for a token the gate declines on sight: a single non-ASCII code point
+ * standing alone between boundaries, with no ASCII alphanumeric beside it. Such
+ * a token is a one-letter foreign word (Russian `с`, `о`, `у`, `а`) as often as
+ * it is a disguised argument, and one character is not a deny-rule target.
+ */
+const isLoneGlyph = (token) => [...token].length === 1 && !isAllAscii(token);
+
+/**
+ * Independent oracle for the per-token fold gate normalizeConfusables applies:
+ * fold a token only when folding leaves it pure ASCII and the token is more
+ * than a lone glyph, otherwise emit it verbatim. Boundaries pass untouched.
+ */
+const manualGatedFold = (text) =>
+  partsOf(text)
+    .map((part) => {
+      if (part.boundary !== undefined) return part.boundary;
+      if (isLoneGlyph(part.token)) return part.token;
+      const folded = manualFold(part.token);
+      return isAllAscii(folded) ? folded : part.token;
+    })
+    .join("");
+
 // Alphabet: confusables (BMP + astral), plain ASCII anchors, a benign non-ASCII
 // non-confusable (é, never flagged), and structural chars.
 const charCp = fc.constantFrom(
@@ -74,6 +136,7 @@ const charCp = fc.constantFrom(
   0x1d401,
   0xfb01, // ﬁ (1→2 fold)
   0x0133, // ĳ (1→2 fold)
+  0x00bd, // ½ (fold whose canon carries a token boundary)
   0x61, // a
   0x2f, // /
   0x2e, // .
@@ -176,13 +239,91 @@ describe("normalizeConfusables (property)", () => {
     check(text, (t) => {
       const input = { file_path: t };
       const result = normalizeConfusables("Read", input, { scan });
-      const folded = foldConfusables(t, scan(t).findings);
-      // null iff the field is unchanged by folding.
-      assert.equal(result === null, folded === t);
+      // The gated oracle, not a raw fold: a token that would keep a non-ASCII
+      // glyph after folding is left alone (see manualGatedFold).
+      const gated = manualGatedFold(t);
+      // null iff the field is unchanged by the gated fold.
+      assert.equal(result === null, gated === t);
       if (result !== null) {
-        assert.equal(result.updatedInput.file_path, folded);
+        assert.equal(result.updatedInput.file_path, gated);
         // The original input object is not mutated.
         assert.equal(input.file_path, t);
+      }
+    });
+  });
+
+  it("rewrites a token only into its pure-ASCII fold, never half-folds one", () => {
+    // The precision property, stated without assuming a 1:1 token count: a fold
+    // whose canon contains a boundary (½ → "1/2") splits one token into two. So
+    // assert on the SET instead — every output token either survived from the
+    // input verbatim or is pure ASCII. A token that comes back changed but still
+    // non-ASCII is the prose-mangling bug.
+    check(text, (t) => {
+      const result = normalizeConfusables("Read", { file_path: t }, { scan });
+      if (result === null) return;
+      const before = new Set(tokensOf(t));
+      for (const token of tokensOf(result.updatedInput.file_path)) {
+        if (before.has(token)) continue;
+        assert.ok(
+          isAllAscii(token),
+          `output token ${JSON.stringify(token)} is neither an input token nor pure ASCII`,
+        );
+      }
+    });
+  });
+});
+
+describe("selectFoldableFindings (property)", () => {
+  it("returns a subsequence of the input findings, by identity", () => {
+    // The gate only ever DROPS findings: it must not clone, reorder, rewrite or
+    // invent one. Walk the two arrays together rather than filtering the input
+    // by the output, which would hold for any output the gate produced.
+    check(text, (t) => {
+      const findings = scan(t).findings;
+      const kept = selectFoldableFindings(t, findings);
+      assert.ok(kept.length <= findings.length);
+      let cursor = 0;
+      for (const finding of kept) {
+        while (cursor < findings.length && findings[cursor] !== finding)
+          cursor++;
+        assert.ok(
+          cursor < findings.length,
+          `kept a finding that is not an element of the input at its original position: ${JSON.stringify(finding)}`,
+        );
+        cursor++;
+      }
+    });
+  });
+
+  it("folding the selected findings equals the gated oracle", () => {
+    check(text, (t) => {
+      const kept = selectFoldableFindings(t, scan(t).findings);
+      assert.equal(foldConfusables(t, kept), manualGatedFold(t));
+    });
+  });
+
+  it("keeps a finding exactly when the oracle folds the token it sits in", () => {
+    check(text, (t) => {
+      const kept = new Set(
+        selectFoldableFindings(t, scan(t).findings).map((f) => f.index),
+      );
+      // Walk the INPUT tokens, deciding each one independently — indexing into
+      // the folded token list would misalign the moment a fold introduces a
+      // boundary (½ → "1/2" turns one token into two).
+      let offset = 0;
+      for (const part of partsOf(t)) {
+        const piece = part.token ?? part.boundary;
+        if (part.token !== undefined) {
+          const folds =
+            !isLoneGlyph(part.token) && isAllAscii(manualFold(part.token));
+          for (const finding of scan(part.token).findings)
+            assert.equal(
+              kept.has(offset + finding.index),
+              folds,
+              `finding at ${offset + finding.index} in token ${JSON.stringify(part.token)}: expected kept=${folds}`,
+            );
+        }
+        offset += piece.length;
       }
     });
   });

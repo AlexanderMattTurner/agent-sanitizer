@@ -92,12 +92,50 @@ payload-bearing query/fragment), suitable for a warning shown to the operator.
 `./confusables` folds look-alike glyphs in tool-call **input** fields (paths,
 commands) to their ASCII canon. A denied path/command spelled in homoglyphs (a
 Cyrillic `а` for ASCII `a`) would not match an ASCII deny rule; folding closes
-that cross-script bypass (CVE-2025-54794 class). Folding is per-character and
-context-free, so it also catches an **isolated** confusable with no ASCII anchor
-that a context-sensitive canonicaliser would leave alone. The homoglyph engine
-is **injected** (`{ scan }`)—the package owns no glyph map. An all-ASCII field
-never invokes the scanner. This narrows a steganographic channel; it is not an
-enforcement boundary (distinct code points would not match a deny rule anyway).
+that cross-script bypass (CVE-2025-54794 class).
+
+Folding is gated per **token** — a maximal run of ASCII alphanumerics and
+non-ASCII glyphs, with every other ASCII character a boundary. A token folds only
+when both hold:
+
+1. **Folding leaves it pure ASCII.** The bypass requires the folded token to come
+   out byte-equal to an ASCII deny-rule target, so a token that still holds an
+   unmapped glyph after folding could not match one either way — skipping it
+   forfeits no enforcement.
+2. **It is more than a lone non-ASCII glyph.** A single-code-point token is a
+   one-letter foreign word — Russian `с` (with), `о` (about), `у` (at), `а`
+   (and), all mapped confusables and all among the most frequent words in the
+   language — as readily as it is a disguised argument, and no deny rule targets
+   a single character.
+
+So `/etc/pаsswd` and an all-Cyrillic `раѕѕwd` still fold, while `Привет`,
+`пароль.txt`, and `работа с файлом` pass through untouched. Without this gate the
+layer transliterated ordinary Cyrillic and Greek text — a commit message, an
+issue body, a filename — into garbage, which this repo weighs as the worse
+failure.
+
+The gate is per-token and never per-field: a field-level "any prose here → skip
+the field" rule would let an attacker switch folding off for a whole command by
+appending one foreign word.
+
+**Known false positive:** a multi-letter foreign word composed _entirely_ of
+mapped confusables — the Russian `сор` → `cop`, `со` → `co` — is by construction
+indistinguishable from a disguised ASCII token, and still folds.
+
+**Known false negative:** splicing one unmapped non-ASCII glyph into an otherwise
+all-confusable token switches its fold off. It buys an attacker nothing on its
+own — the unmapped glyph is still in the field, so the token cannot match an
+ASCII deny rule either. A filter reading the raw field is what closes that, not
+folding.
+
+The soundness argument assumes no later layer erases code points from the same
+field, which could remove an unmapped glyph the gate relied on after the decision
+was made. Layer 4 runs before `sanitizeAuthoredContent` on `Bash.command`.
+
+The homoglyph engine is **injected** (`{ scan }`) — the package owns no glyph
+map. An all-ASCII field never invokes the scanner. This narrows a steganographic
+channel; it is not an enforcement boundary (distinct code points would not match
+a deny rule anyway).
 
 ## Instruction-file scanning
 
