@@ -8,26 +8,38 @@
  * filter by spelling it in look-alike code points.
  *
  * Folding is gated per TOKEN (a maximal run of ASCII alphanumerics and
- * non-ASCII glyphs — see isTokenBoundary): a token folds only when doing so
- * makes it pure ASCII, i.e. every non-ASCII code point in it is flagged. The
- * bypass requires the folded token to come out byte-equal to an ASCII deny-rule
- * target, so a token left holding an unmapped glyph could never match one
- * anyway — skipping it costs no enforcement. That still catches an ISOLATED
- * confusable with no ASCII anchor (a lone Cyrillic "а" in "/а", or an
- * all-Cyrillic "раѕѕwd"), which is exactly the bypass to close, while leaving
- * genuine non-Latin prose intact: "Привет" keeps unmapped П/и/в/т, so its
- * mapped р/е are not folded and the word survives byte-for-byte.
+ * non-ASCII glyphs — see isTokenBoundary). A token folds only when both hold:
+ *
+ *   1. Folding makes it pure ASCII — every non-ASCII code point in it is
+ *      flagged. The bypass requires the folded token to come out byte-equal to
+ *      an ASCII deny-rule target, so a token left holding an unmapped glyph
+ *      could never match one anyway; skipping it costs no enforcement.
+ *   2. It is more than a lone non-ASCII glyph standing between two boundaries.
+ *      A one-code-point token is a one-letter foreign word — Russian "с", "о",
+ *      "у", "а" are among the most frequent words in the language — as readily
+ *      as it is a disguised argument, and no deny rule targets a single
+ *      character, so the evidence does not support rewriting it.
+ *
+ * That still catches the all-confusable disguise ("раѕѕwd" → "passwd") and the
+ * anchored one ("pаsswd" → "passwd"), which is exactly the bypass to
+ * close, while leaving genuine non-Latin prose intact: "Привет" keeps unmapped
+ * П/и/в/т, so its mapped р/е are not folded and the word survives byte-for-byte.
  *
  * WHY THE GATE: without it, folding mangled any Cyrillic/Greek text passing
  * through a command or path — a Russian commit message, issue body, or filename
  * came out transliterated into garbage. A false positive here rewrites content
  * the operator wrote, which this repo weighs as the worse failure.
  *
- * RESIDUAL: a short foreign word composed ENTIRELY of mapped confusables (the
- * Russian "сор" → "cop") is indistinguishable from a disguised ASCII token by
- * construction, and still folds. Documented in THREAT-MODEL.md, not worked
+ * RESIDUAL: a multi-letter foreign word composed ENTIRELY of mapped confusables
+ * (the Russian "сор" → "cop") is indistinguishable from a disguised ASCII token
+ * by construction, and still folds. Documented in THREAT-MODEL.md, not worked
  * around — the alternatives (a field-level gate, a "looks like a path" shape
  * heuristic) either open a bypass or trade one guess for another.
+ *
+ * ORDERING: the soundness argument assumes no later layer erases code points
+ * from the same field, which would let an unmapped glyph the gate relied on
+ * disappear after the decision. Layer 4 runs before sanitizeAuthoredContent on
+ * Bash.command; keep it there.
  *
  * Genuine non-confusable non-ASCII (accented Latin, CJK, emoji) is untouched
  * regardless, since a faithful scanner does not flag it.
@@ -134,6 +146,15 @@ function assertFinding(text, finding) {
     throw new Error(
       `Confusable finding at index ${finding.index} has an empty char`,
     );
+  // An ASCII `char` is not a confusable — it is already its own canon. Folding
+  // it is a no-op at best, but the fold gate reads a non-ASCII code point's
+  // flagged/unflagged status to decide a token's fate, so a scanner claiming an
+  // ASCII character is confusable is reporting something the contract says
+  // cannot happen. Fail loud rather than act on a finding we cannot interpret.
+  if (!hasNonAscii(finding.char))
+    throw new Error(
+      `Confusable finding at index ${finding.index} names an ASCII char ${JSON.stringify(finding.char)}`,
+    );
   if (!text.startsWith(finding.char, finding.index))
     throw new Error(
       `Confusable finding does not match input at index ${finding.index}: expected ${JSON.stringify(finding.char)}`,
@@ -166,9 +187,10 @@ function assertFinding(text, finding) {
 /**
  * True for a code point that ends a token: any ASCII character that is not a
  * letter or digit (space, `/`, `.`, `-`, `_`, quotes, shell metacharacters). A
- * token is therefore a maximal run of ASCII alphanumerics and non-ASCII glyphs —
- * the unit a deny rule or a filesystem lookup actually matches on. Non-ASCII
- * never breaks a token, so a word of foreign prose stays whole.
+ * token is therefore a maximal run of ASCII alphanumerics and non-ASCII glyphs.
+ * That is not a shell word or a path segment — it is deliberately the SMALLEST
+ * unit that still keeps a word of foreign prose whole, so one such word can
+ * never switch folding off for the tokens around it.
  * @param {string} ch a single code point
  * @returns {boolean}
  */
@@ -182,20 +204,9 @@ function isTokenBoundary(ch) {
 }
 
 /**
- * Keep only the findings whose TOKEN folds to pure ASCII — i.e. every non-ASCII
- * code point in the token is itself flagged.
- *
- * This is the precision gate on the fold (see the module header). The
- * cross-script bypass it exists to close requires the folded token to come out
- * byte-equal to an ASCII deny-rule target, so a token that still holds an
- * unmapped non-ASCII glyph after folding cannot match one either way: declining
- * to fold it forfeits no enforcement, and folding it would mangle genuine
- * non-Latin text. `/etc/pаsswd`, a lone `/а`, and an all-Cyrillic `раѕѕwd` all
- * still fold; `Привет` (unmapped П/и/в/т remain) does not.
- *
- * The gate is per-TOKEN, never per-field: a field-level "any prose here → skip
- * the field" rule would let an attacker switch folding off for a whole command
- * by appending one foreign word.
+ * Keep only the findings whose TOKEN is foldable — see the module header for the
+ * two conditions (folds to pure ASCII; is not a lone glyph) and THREAT-MODEL.md
+ * for why declining the rest forfeits no enforcement.
  *
  * Every finding is validated before it is judged, so an adversarial scanner's
  * bogus finding throws rather than being quietly dropped by the gate.
@@ -205,7 +216,6 @@ function isTokenBoundary(ch) {
  */
 export function selectFoldableFindings(text, findings) {
   for (const finding of findings) assertFinding(text, finding);
-  if (findings.length === 0) return [];
 
   // Every UTF-16 offset a finding covers, not just its start: a scanner is free
   // to report a multi-code-point match, and treating only the first offset as
@@ -221,25 +231,40 @@ export function selectFoldableFindings(text, findings) {
   const foldableAt = new Uint8Array(text.length);
   let start = 0;
   let foldable = true;
+  let glyphs = 0;
+  let anchored = false;
   let index = 0;
-  /** @param {number} end */
-  const closeToken = (end) => {
-    if (foldable) foldableAt.fill(1, start, end);
+  /**
+   * Close the token ending at `end`, marking it foldable when it holds no
+   * unmapped glyph and is more than a lone glyph, then reset for the next one.
+   * @param {number} end
+   */
+  const flushToken = (end) => {
+    if (foldable && (glyphs > 1 || anchored)) foldableAt.fill(1, start, end);
     foldable = true;
+    glyphs = 0;
+    anchored = false;
   };
   for (const ch of text) {
     if (isTokenBoundary(ch)) {
-      closeToken(index);
+      flushToken(index);
       start = index + ch.length;
-    } else if (hasNonAscii(ch) && !flagged.has(index)) {
+    } else {
+      glyphs++;
+      if (!hasNonAscii(ch)) anchored = true;
       // An unmapped non-ASCII glyph: this token cannot fold to ASCII.
-      foldable = false;
+      else if (!flagged.has(index)) foldable = false;
     }
     index += ch.length;
   }
-  closeToken(index);
+  flushToken(index);
 
-  return findings.filter((finding) => foldableAt[finding.index] === 1);
+  // Every offset the finding covers, not just its first: `char` may span a
+  // boundary into a token the gate rejected, and folding it would rewrite that
+  // token — the exact mangling this gate exists to prevent.
+  return findings.filter((finding) =>
+    [...finding.char].every((_, i) => foldableAt[finding.index + i] === 1),
+  );
 }
 
 /**

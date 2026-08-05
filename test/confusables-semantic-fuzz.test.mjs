@@ -135,6 +135,24 @@ for (const t of PROSE_TOKENS) {
   );
 }
 
+// One-letter Russian prepositions/conjunctions. Each is a single ENTIRELY
+// mapped glyph, so condition 1 of the gate (folds to pure ASCII) is satisfied
+// and only the lone-glyph rule spares them — the opposite situation from
+// PROSE_TOKENS, and the one that keeps ordinary sentences readable.
+const LONE_GLYPH_WORDS = [CYR_A, CYR_O, CYR_C]; // а (and), о (about), с (with)
+
+for (const t of LONE_GLYPH_WORDS) {
+  assert.equal(
+    [...t].length,
+    1,
+    `LONE_GLYPH word ${JSON.stringify(t)} is not a single code point`,
+  );
+  assert.ok(
+    Object.prototype.hasOwnProperty.call(FOLD_MAP, t),
+    `LONE_GLYPH word ${JSON.stringify(t)} is unmapped — it would survive vacuously`,
+  );
+}
+
 const pieceGen = fc.oneof(
   fc.constantFrom(...KEEP_TOKENS).map((t) => ({ kind: "keep", t })),
   fc.constantFrom(...FOLD_TOKENS).map((t) => ({ kind: "fold", ...t })),
@@ -210,9 +228,13 @@ describe("semantic-correctness fuzz: confusable-folding precision on mixed comma
   it("leaves genuine Cyrillic/Greek prose verbatim while still folding disguised tokens beside it", () => {
     // The regression this suite missed: real words whose letters include mapped
     // confusables (Привет, пароль, κοσμος) must reach the command untouched, in
-    // the same field as a homoglyph-disguised path that still has to fold.
+    // the same field as a homoglyph-disguised path that still has to fold. The
+    // one-letter prepositions are here too — they are spared by a different
+    // clause of the gate, and both clauses have to hold at once.
     const proseGen = fc.oneof(
-      fc.constantFrom(...PROSE_TOKENS).map((t) => ({ kind: "prose", t })),
+      fc
+        .constantFrom(...PROSE_TOKENS, ...LONE_GLYPH_WORDS)
+        .map((t) => ({ kind: "prose", t })),
       fc.constantFrom(...FOLD_TOKENS).map((t) => ({ kind: "fold", ...t })),
       fc.constantFrom("echo", "cat", "--body", "#").map((t) => ({
         kind: "filler",
@@ -223,6 +245,14 @@ describe("semantic-correctness fuzz: confusable-folding precision on mixed comma
       fc.property(
         fc.array(proseGen, { minLength: 1, maxLength: 8 }),
         (pieces) => {
+          // Track each piece's offset while joining. indexOf would be wrong: a
+          // one-letter prose word ("с") also occurs inside a disguised token
+          // ("саt"), and locating it there proves nothing about the word.
+          let at = 0;
+          for (const p of pieces) {
+            p.at = at;
+            at += (p.kind === "fold" ? p.bad : p.t).length + 1;
+          }
           const command = pieces
             .map((p) => (p.kind === "fold" ? p.bad : p.t))
             .join(" ");
@@ -231,15 +261,18 @@ describe("semantic-correctness fuzz: confusable-folding precision on mixed comma
           const kept = selectFoldableFindings(command, scan(command).findings);
           for (const p of pieces) {
             if (p.kind === "prose") {
+              // No finding inside the word is selected, so the splice cannot
+              // reach it — the load-bearing check, since a length-changing fold
+              // elsewhere (astral 𝐜 → c) shifts output offsets.
+              assert.ok(
+                !kept.some(
+                  (f) => f.index >= p.at && f.index < p.at + p.t.length,
+                ),
+                `a finding inside ${JSON.stringify(p.t)} was selected for folding`,
+              );
               assert.ok(
                 out.includes(p.t),
                 `genuine word ${JSON.stringify(p.t)} was transliterated`,
-              );
-              // …and the gate is why: no finding inside the word is selected.
-              const at = command.indexOf(p.t);
-              assert.ok(
-                !kept.some((f) => f.index >= at && f.index < at + p.t.length),
-                `a finding inside ${JSON.stringify(p.t)} was selected for folding`,
               );
             } else if (p.kind === "fold") {
               assert.ok(out.includes(p.good));
