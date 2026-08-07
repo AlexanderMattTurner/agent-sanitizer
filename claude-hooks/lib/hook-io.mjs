@@ -194,6 +194,86 @@ export const PermissionDecision = Object.freeze({
   ASK: "ask",
 });
 
+/**
+ * The public knob over the hooks' INFRASTRUCTURE failure posture. Installed as
+ * Claude Code hooks these fail OPEN by default — a hook that could not run lets
+ * the guarded action through with a loud warning rather than blocking the
+ * session on its own breakage. Setting it to `"0"` restores the fail-CLOSED
+ * posture (block/ask/suppress).
+ *
+ * The knob covers the hooks' own failures ONLY. What a working sanitizer
+ * DECIDED is untouched by it, and so is the {@link failClosedFields}-style
+ * wiring a downstream host does directly — a host that wants strictness gets it
+ * by construction, not by remembering to set an env var.
+ */
+export const FAIL_OPEN_ENV = "AGENT_SANITIZER_FAIL_OPEN";
+
+/**
+ * Values that turn the default posture back to fail-closed. Matched exactly,
+ * so the launcher's shell `case` can state the same two literals — a
+ * case-insensitive match here would need `tr`, which the launcher cannot reach
+ * (it runs its no-node arm on shell builtins alone) and the two would drift.
+ */
+const FAIL_CLOSED_VALUES = new Set(["0", "false"]);
+
+/**
+ * Whether hook failures pass the guarded action through. True unless the caller
+ * explicitly asked for the closed posture.
+ *
+ * The accepted opt-out spellings are a SET rather than the single exact `"1"`
+ * the AGENT_SANITIZER_*_DISABLED knobs use, because the direction of the
+ * mistake is reversed: those default to the safe side, so an unrecognized value
+ * there costs nothing, while here it leaves an operator who asked for
+ * strictness without it. `"false"` is the one spelling reached for by reflex,
+ * so it is honored; everything else (`""`, `"no"`, `"off"`) is the open posture.
+ * @param {NodeJS.ProcessEnv | Record<string, string | undefined>} [env]
+ * @returns {boolean}
+ */
+export function failOpenEnabled(env = process.env) {
+  return !FAIL_CLOSED_VALUES.has(env[FAIL_OPEN_ENV] ?? "");
+}
+
+/**
+ * The model-facing warning accompanying a fail-open pass-through. Emitted as
+ * `additionalContext` so the transcript still carries the failure: the posture
+ * gives up ENFORCEMENT, not visibility, and stdout is never left empty (which
+ * Claude Code would record as a clean run rather than a degraded one).
+ *
+ * The reinstall remedy rides along when the failure looks like an unloaded
+ * binding. A `DEP_UNAVAILABLE` error already carries its remedy in the message
+ * `safeErrMessage` splices in below, but the bare TypeError V8 raises for an
+ * undefined binding names neither the package nor the fix — and under this
+ * posture there is no permissionDecisionReason carrying one either, so the only
+ * message telling a reader how to un-break the install would be the one that
+ * went missing. `failedPackages`/`packageMessage` are injectable for the same
+ * reason `depLoadHint`'s are: the recorded-failure set is process-wide and
+ * untestable otherwise.
+ * @param {string} hookName
+ * @param {string} guarded  what passed through, e.g. "tool output"
+ * @param {unknown} err
+ * @param {() => string[]} [failedPackages]
+ * @param {(pkg: string) => string} [packageMessage]
+ * @returns {string}
+ */
+export function failOpenContext(
+  hookName,
+  guarded,
+  err,
+  failedPackages = failedLazyPackages,
+  packageMessage = missingPackageMessage,
+) {
+  // Same inference depLoadHint makes, and confined the same way: only a
+  // TypeError, only while the loader holds a recorded failure. Naming a package
+  // on any other throw would send the reader to a reinstall that fixes nothing.
+  const [pkg] = err instanceof TypeError ? failedPackages() : [];
+  const hint = pkg === undefined ? "" : ` ${packageMessage(pkg)}`;
+  return (
+    `WARNING: the ${hookName} hook failed (${safeErrMessage(err)}) — this ` +
+    `${guarded} passed through UNSANITIZED. Treat its contents as ` +
+    `untrusted.${hint} Set ${FAIL_OPEN_ENV}=0 to fail closed on hook failures.`
+  );
+}
+
 // Unpaired UTF-16 surrogates: a high half with no low follower, or a low half
 // with no high lead. Hook text spliced into the model's context must be
 // well-formed UTF-16 there, so the sanitizers normalize these out before

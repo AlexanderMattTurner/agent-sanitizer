@@ -215,3 +215,49 @@ are load-bearing and **fail closed**:
 
 File access and the redactor are injected via `io`; the package performs no I/O
 of its own and bundles no secret engine.
+
+## Failure posture (`AGENT_SANITIZER_FAIL_OPEN`)
+
+Installed as Claude Code hooks, these fail **open**: a hook that could not
+complete lets the guarded action through with a warning in `additionalContext`
+rather than blocking the session. `AGENT_SANITIZER_FAIL_OPEN=0` (or `false`)
+restores the fail-closed verdicts — block, ask, suppress. The posture covers
+every way a hook can fail: the launcher not starting (no `node`, missing or
+corrupt bundle), the package never loading, a payload that never parsed, and a
+layer that ran and threw.
+
+**The open default is not enforceable against content.** Several of those
+failures are composable by whoever authored the payload — in the output hook
+alone, the key-collision guard (two field names that collapse to one after
+Layer 1), a nesting depth that overflows the sanitize walk, and a redaction
+budget exhausted by many secret-shaped leaves. Under the open posture a tool
+response crafted to provoke one is shown to the model verbatim, secrets
+included. So an attacker who controls tool output has a route past these layers
+whenever the default is left in place, and the mitigation is the knob, not a
+narrower failure classification: `=0` closes all of it.
+
+That trade is deliberate, and it is scoped to the Claude Code plugin. The
+library's own fail-closed entry points are unchanged and knob-blind —
+`failClosedFields` in `claude-hooks/pretooluse-sanitize.mjs` and `emitFailClosed`
+in `claude-hooks/sanitize-output.mjs` — so a host that wires those directly (as
+`test/downstream-parity.test.mjs` shows) keeps strict failure semantics by
+construction, with no env var to remember and none an agent could set for it.
+
+Two things the posture does NOT reach, in either direction:
+
+- **Detection verdicts.** It speaks only to the hook FAILING; a working
+  sanitizer that found an injection blocks under both settings.
+- **An unknown `--hook=` mode**, which still exits 2. That is static wiring
+  corruption, and passing it through would mean no hook ever runs — silently,
+  for the life of the install.
+
+The knob is operator configuration read from the process environment, so
+anything that can set it for a session — `.claude/settings.json`'s `env` block,
+a shell rc file, `direnv` — can also set it the other way, and a prompt-injected
+agent with edit access to those files is such a thing. That is not a regression
+under an open default (there is nothing for it to disarm), but it does mean `=0`
+is only as durable as the files carrying it.
+
+The knob adds no layer and changes no layer's semantics. Ambiguous input still
+fails open at the detection level (precision over recall), as it always has —
+that is a separate, and unrelated, sense of the phrase.

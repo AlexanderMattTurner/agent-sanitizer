@@ -68,6 +68,14 @@ function readFlag(argv, name50) {
   const match = argv.find((arg) => arg.startsWith(prefix));
   return match === void 0 ? void 0 : match.slice(prefix.length);
 }
+function failOpenEnabled(env = process.env) {
+  return !FAIL_CLOSED_VALUES.has(env[FAIL_OPEN_ENV] ?? "");
+}
+function failOpenContext(hookName, guarded, err, failedPackages = failedLazyPackages, packageMessage = missingPackageMessage) {
+  const [pkg] = err instanceof TypeError ? failedPackages() : [];
+  const hint = pkg === void 0 ? "" : ` ${packageMessage(pkg)}`;
+  return `WARNING: the ${hookName} hook failed (${safeErrMessage(err)}) \u2014 this ${guarded} passed through UNSANITIZED. Treat its contents as untrusted.${hint} Set ${FAIL_OPEN_ENV}=0 to fail closed on hook failures.`;
+}
 async function readAllBounded(stream, maxBytes = MAX_STDIN_BYTES) {
   const chunks = [];
   let total = 0;
@@ -268,7 +276,7 @@ function writeFileNoFollow(path2, content3, mode = 384) {
     closeSync(fd);
   }
 }
-var defaultSharedState, shared, HookEvent, PermissionDecision, LONE_SURROGATE_RE, MAX_STDIN_BYTES, lazyImportErrors, DEFAULT_MISSING_PACKAGE_REMEDY, UNTRUSTED_TEXT_CAP, HOOKGATE_MARKER_STEM;
+var defaultSharedState, shared, HookEvent, PermissionDecision, FAIL_OPEN_ENV, FAIL_CLOSED_VALUES, LONE_SURROGATE_RE, MAX_STDIN_BYTES, lazyImportErrors, DEFAULT_MISSING_PACKAGE_REMEDY, UNTRUSTED_TEXT_CAP, HOOKGATE_MARKER_STEM;
 var init_hook_io = __esm({
   "claude-hooks/lib/hook-io.mjs"() {
     "use strict";
@@ -291,6 +299,8 @@ var init_hook_io = __esm({
       DENY: "deny",
       ASK: "ask"
     });
+    FAIL_OPEN_ENV = "AGENT_SANITIZER_FAIL_OPEN";
+    FAIL_CLOSED_VALUES = /* @__PURE__ */ new Set(["0", "false"]);
     LONE_SURROGATE_RE = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g;
     MAX_STDIN_BYTES = 64 * 1024 * 1024;
     lazyImportErrors = /* @__PURE__ */ new Map();
@@ -67255,7 +67265,7 @@ function isRespawnable(err) {
 function failClosed(cause) {
   const detail = cause instanceof Error ? cause.message : String(cause);
   return new Error(
-    `secret redaction unavailable (${detail}); cannot vet secret-shaped output \u2014 failing closed`
+    `secret redaction unavailable (${detail}); secret-shaped output could not be vetted`
   );
 }
 function classifySocket(socketPath, deps = {}) {
@@ -67503,6 +67513,7 @@ __export(pretooluse_sanitize_exports, {
   cliMain: () => cliMain,
   depLoadHint: () => depLoadHint,
   failClosedFields: () => failClosedFields,
+  hookFailureFields: () => hookFailureFields,
   judgePreToolUseSanitize: () => judgePreToolUseSanitize
 });
 import { createRequire as createRequire4 } from "node:module";
@@ -67633,6 +67644,11 @@ function failClosedFields(parsedOk, err, opts = {}) {
     permissionDecisionReason: parsedOk ? messages.failed(cause) : messages.unparsable(cause)
   };
 }
+function hookFailureFields(parsedOk, err, opts = {}) {
+  if (failOpenEnabled(opts.env))
+    return { additionalContext: failOpenContext(HOOK_NAME, "tool input", err) };
+  return failClosedFields(parsedOk, err, opts);
+}
 async function cliMain(opts = {}) {
   const { gates = [], trace: emitTrace = trace } = opts;
   const messages = { ...PRE_TOOL_USE_MESSAGES, ...opts.messages };
@@ -67644,14 +67660,15 @@ async function cliMain(opts = {}) {
       trace: emitTrace
     }),
     {
-      // Fail closed WITHOUT the package: unparsable INPUT (`input` undefined)
-      // hard-denies (adversary-inducible, no benefit to failing); any throw
-      // after a clean parse — a layer engine down or the control-plane package
-      // unavailable — asks to keep a human in the loop. emitHookResponse renders
-      // natively, so this posture holds even when the adapter never loaded.
+      // The caller's posture, WITHOUT the package: pass through with a warning
+      // by default, or — under AGENT_SANITIZER_FAIL_OPEN=0 — hard-deny an
+      // unparsable INPUT (`input` undefined; adversary-inducible, no benefit to
+      // failing) and ASK on any throw after a clean parse, keeping a human in
+      // the loop. emitHookResponse renders natively, so either posture holds
+      // even when the adapter never loaded.
       onError: (err, input) => emitHookResponse(
         HookEvent.PRE_TOOL_USE,
-        failClosedFields(input !== void 0, err, {
+        hookFailureFields(input !== void 0, err, {
           messages,
           hint: depLoadHint(err, messages.remedy)
         })
@@ -67804,6 +67821,7 @@ __export(sanitize_output_exports, {
   describeRemoved: () => describeRemoved3,
   describeWarned: () => describeWarned3,
   emitFailClosed: () => emitFailClosed,
+  emitHookFailure: () => emitHookFailure,
   evaluateToolOutput: () => evaluateToolOutput,
   failClosedContext: () => failClosedContext,
   failClosedReplacement: () => failClosedReplacement,
@@ -67836,18 +67854,19 @@ async function sanitizeText2(text5, toolName, deadline = makeDeadline(SANITIZE_B
     exfilScan: webIngress,
     sgrCarveOut: !webIngress,
     deadline,
-    // Layer 4 — the seam fails closed on a redactor throw (rethrows wrapped,
-    // which the CLI turns into output suppression). Surface the failure to the
-    // operator's terminal here first: the suppression rides in
-    // additionalContext, which only the model sees, so a degraded redactor
-    // would otherwise be invisible to the human.
+    // Layer 4 — the seam rethrows a redactor throw wrapped, and the CLI applies
+    // the caller's posture to it. Surface the failure to the operator's
+    // terminal here first: whatever the CLI decides rides in additionalContext,
+    // which only the model sees, so a degraded redactor would otherwise be
+    // invisible to the human — and under the fail-open default this line is the
+    // ONLY signal the human gets.
     redact: async (content3) => {
       let secrets;
       try {
         secrets = await redactSecrets(content3, webIngress, deadline);
       } catch (l4err) {
         process.stderr.write(
-          `sanitize-output: CRITICAL: secret redaction failed (${errMessage(l4err)}). Failing closed \u2014 tool output suppressed. Fix the redactor installation.
+          `sanitize-output: CRITICAL: secret redaction failed (${errMessage(l4err)}). This output was never vetted for secrets. Fix the redactor installation.
 `
         );
         throw l4err;
@@ -67974,6 +67993,20 @@ function emitFailClosed(input, message, emit = (fields) => emitHookResponse(Hook
     emit({ updatedToolOutput: message, additionalContext });
   }
 }
+function emitHookFailure(input, err, emit = (fields) => emitHookResponse(HookEvent.POST_TOOL_USE, fields), remedy = DEFAULT_MISSING_PACKAGE_REMEDY, env = process.env) {
+  if (failOpenEnabled(env)) {
+    emit({
+      additionalContext: failOpenContext("sanitize-output", "tool output", err)
+    });
+    return;
+  }
+  emitFailClosed(
+    input,
+    `[SANITIZATION FAILED \u2014 original output suppressed for safety. Hook error: ${safeErrMessage(err)}]`,
+    emit,
+    remedy
+  );
+}
 async function evaluateToolOutput(input, ext = {}) {
   const emitTrace = bestEffortTrace(ext.trace ?? trace);
   const emit = (outcome, fields2) => {
@@ -68070,13 +68103,10 @@ async function cliMain2(ext = {}) {
       // back the parsed `input` even when the control-plane load failed, so the
       // suppression shape-matches the real tool_response). emitFailClosed itself
       // falls back to a bare string if that shape-matching replacement or its
-      // serialization throws, so even a pathological input fails closed.
-      onError: (err, input) => emitFailClosed(
-        input,
-        "[SANITIZATION FAILED \u2014 original output suppressed for safety. Hook error: " + safeErrMessage(err) + "]",
-        void 0,
-        ext.remedy
-      )
+      // serialization throws, so even a pathological input fails closed. A caller
+      // that set AGENT_SANITIZER_FAIL_OPEN=1 gets the warning-only pass-through
+      // instead — see emitHookFailure.
+      onError: (err, input) => emitHookFailure(input, err, void 0, ext.remedy)
     }
   );
 }
@@ -68154,7 +68184,8 @@ async function main(read, write, opts = {}) {
   const {
     strip = stripAnsiFully3,
     overrides = USER_PROMPT_MESSAGES,
-    trace: sink = trace
+    trace: sink = trace,
+    env = process.env
   } = opts;
   const emitTrace = bestEffortTrace(sink);
   const messages = { ...USER_PROMPT_MESSAGES, ...overrides };
@@ -68172,10 +68203,21 @@ async function main(read, write, opts = {}) {
       readInput: read,
       write,
       onError: (err) => write(
-        JSON.stringify({
-          decision: "block",
-          reason: messages.hookFailed(safeErrMessage(err))
-        })
+        JSON.stringify(
+          failOpenEnabled(env) ? {
+            hookSpecificOutput: {
+              hookEventName: HookEvent.USER_PROMPT_SUBMIT,
+              additionalContext: failOpenContext(
+                "sanitize-user-prompt",
+                "prompt",
+                err
+              )
+            }
+          } : {
+            decision: "block",
+            reason: messages.hookFailed(safeErrMessage(err))
+          }
+        )
       )
     }
   );

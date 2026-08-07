@@ -27,6 +27,8 @@ import {
   emitHookResponse,
   errMessage,
   safeErrMessage,
+  failOpenEnabled,
+  failOpenContext,
   makeDeadline,
   lazyImportErrorFor,
   missingPackageMessage,
@@ -247,11 +249,12 @@ export async function sanitizeText(
     exfilScan: webIngress,
     sgrCarveOut: !webIngress,
     deadline,
-    // Layer 4 — the seam fails closed on a redactor throw (rethrows wrapped,
-    // which the CLI turns into output suppression). Surface the failure to the
-    // operator's terminal here first: the suppression rides in
-    // additionalContext, which only the model sees, so a degraded redactor
-    // would otherwise be invisible to the human.
+    // Layer 4 — the seam rethrows a redactor throw wrapped, and the CLI applies
+    // the caller's posture to it. Surface the failure to the operator's
+    // terminal here first: whatever the CLI decides rides in additionalContext,
+    // which only the model sees, so a degraded redactor would otherwise be
+    // invisible to the human — and under the fail-open default this line is the
+    // ONLY signal the human gets.
     redact: async (/** @type {string} */ content) => {
       let secrets;
       try {
@@ -259,7 +262,7 @@ export async function sanitizeText(
       } catch (l4err) {
         process.stderr.write(
           `sanitize-output: CRITICAL: secret redaction failed (${errMessage(l4err)}). ` +
-            "Failing closed — tool output suppressed. Fix the redactor installation.\n",
+            "This output was never vetted for secrets. Fix the redactor installation.\n",
         );
         throw l4err;
       }
@@ -565,6 +568,48 @@ export function emitFailClosed(
 }
 
 /**
+ * Emit the PostToolUse failure response under the CALLER's chosen posture:
+ * fail-OPEN by default — a warning context and NO `updatedToolOutput`, leaving
+ * the original tool output in the model's view — or the fail-closed
+ * suppression of {@link emitFailClosed} when the caller set
+ * AGENT_SANITIZER_FAIL_OPEN=0.
+ *
+ * This is the hook where the two postures diverge the most, so state the open
+ * one plainly: several of these layers throw on inputs an attacker composes
+ * (colliding field names, a nesting depth that overflows the walk, a redaction
+ * budget spent on a thousand secret-shaped leaves), and each of those throws is
+ * guarding content the open posture hands to the model verbatim, secrets
+ * included. An operator who cares more about withholding a secret than about
+ * keeping the session moving sets the knob to `0`.
+ * @param {any} input  parsed hook input, or undefined if parsing threw
+ * @param {unknown} err
+ * @param {(fields: Record<string, unknown>) => void} [emit]
+ * @param {string} [remedy]  what a reader should run; hosts pass their own
+ * @param {NodeJS.ProcessEnv | Record<string, string | undefined>} [env]
+ * @returns {void}
+ */
+export function emitHookFailure(
+  input,
+  err,
+  emit = (fields) => emitHookResponse(HookEvent.POST_TOOL_USE, fields),
+  remedy = DEFAULT_MISSING_PACKAGE_REMEDY,
+  env = process.env,
+) {
+  if (failOpenEnabled(env)) {
+    emit({
+      additionalContext: failOpenContext("sanitize-output", "tool output", err),
+    });
+    return;
+  }
+  emitFailClosed(
+    input,
+    `[SANITIZATION FAILED — original output suppressed for safety. Hook error: ${safeErrMessage(err)}]`,
+    emit,
+    remedy,
+  );
+}
+
+/**
  * Run the sanitization pipeline over a tool output and return the contract-
  * shaped verdict fields — `mutated_output` (the shape-matching sanitized value)
  * and/or `additional_context` (the model-facing note) — or null when there is
@@ -771,7 +816,7 @@ export function withPostToolUseDefault(input) {
 // failClosedReplacement) is exercised in-process by the unit suite; the
 // end-to-end wire contract is pinned by the subprocess tests.
 /**
- * The hook's CLI: parse → judge → render, with this hook's fail-closed posture.
+ * The hook's CLI: parse → judge → render, under the caller's failure posture.
  * Exported so a bundle entry (which must claim the CLI slot before this module
  * loads) can run the exact same wiring instead of duplicating the onError
  * posture. That entry is also the only place a host's {@link SanitizeExtensions}
@@ -792,16 +837,11 @@ export async function cliMain(ext = {}) {
       // back the parsed `input` even when the control-plane load failed, so the
       // suppression shape-matches the real tool_response). emitFailClosed itself
       // falls back to a bare string if that shape-matching replacement or its
-      // serialization throws, so even a pathological input fails closed.
+      // serialization throws, so even a pathological input fails closed. A caller
+      // that set AGENT_SANITIZER_FAIL_OPEN=1 gets the warning-only pass-through
+      // instead — see emitHookFailure.
       onError: (err, input) =>
-        emitFailClosed(
-          input,
-          "[SANITIZATION FAILED — original output suppressed for safety. Hook error: " +
-            safeErrMessage(err) +
-            "]",
-          undefined,
-          ext.remedy,
-        ),
+        emitHookFailure(input, err, undefined, ext.remedy),
     },
   );
 }
