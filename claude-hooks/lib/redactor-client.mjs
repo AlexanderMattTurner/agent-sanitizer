@@ -148,15 +148,17 @@ function isRespawnable(err) {
 }
 
 /**
- * The error thrown to fail a single redaction closed; the caller suppresses the
- * output.
+ * The error thrown when a single redaction cannot be completed. What the caller
+ * then does is its posture, not this module's — the message therefore states
+ * the FACT (the output was never vetted) and no consequence, since a hook
+ * running fail-open splices it into a warning that says the opposite.
  * @param {unknown} cause
  * @returns {Error}
  */
 function failClosed(cause) {
   const detail = cause instanceof Error ? cause.message : String(cause);
   return new Error(
-    `secret redaction unavailable (${detail}); cannot vet secret-shaped output — failing closed`,
+    `secret redaction unavailable (${detail}); secret-shaped output could not be vetted`,
   );
 }
 

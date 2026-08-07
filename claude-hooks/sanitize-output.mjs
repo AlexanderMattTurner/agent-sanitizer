@@ -249,11 +249,12 @@ export async function sanitizeText(
     exfilScan: webIngress,
     sgrCarveOut: !webIngress,
     deadline,
-    // Layer 4 — the seam fails closed on a redactor throw (rethrows wrapped,
-    // which the CLI turns into output suppression). Surface the failure to the
-    // operator's terminal here first: the suppression rides in
-    // additionalContext, which only the model sees, so a degraded redactor
-    // would otherwise be invisible to the human.
+    // Layer 4 — the seam rethrows a redactor throw wrapped, and the CLI applies
+    // the caller's posture to it. Surface the failure to the operator's
+    // terminal here first: whatever the CLI decides rides in additionalContext,
+    // which only the model sees, so a degraded redactor would otherwise be
+    // invisible to the human — and under the fail-open default this line is the
+    // ONLY signal the human gets.
     redact: async (/** @type {string} */ content) => {
       let secrets;
       try {
@@ -261,7 +262,7 @@ export async function sanitizeText(
       } catch (l4err) {
         process.stderr.write(
           `sanitize-output: CRITICAL: secret redaction failed (${errMessage(l4err)}). ` +
-            "Failing closed — tool output suppressed. Fix the redactor installation.\n",
+            "This output was never vetted for secrets. Fix the redactor installation.\n",
         );
         throw l4err;
       }

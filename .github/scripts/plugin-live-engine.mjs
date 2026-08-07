@@ -28,11 +28,16 @@ process.on("exit", () => rmSync(dataDir, { recursive: true, force: true }));
 
 /** Run one hook through the shipped launcher, from a cwd that is not the repo. */
 function hook(event, mode, payload, env = {}) {
+  // The posture knob is stripped from the inherited environment, never
+  // inherited: a runner that exported it either way would silently turn the
+  // checks below into assertions about the other posture.
+  const inherited = { ...process.env };
+  delete inherited.AGENT_SANITIZER_FAIL_OPEN;
   const res = spawnSync("bash", [LAUNCHER, event, `--hook=${mode}`], {
     input: typeof payload === "string" ? payload : JSON.stringify(payload),
     encoding: "utf8",
     cwd: tmpdir(),
-    env: { ...process.env, CLAUDE_PLUGIN_ROOT: PLUGIN, ...env },
+    env: { ...inherited, CLAUDE_PLUGIN_ROOT: PLUGIN, ...env },
   });
   return { ...res, body: res.stdout + res.stderr };
 }
@@ -191,34 +196,47 @@ const live = {
   check("session scan runs", res.status === 0, res.body.slice(0, 400));
 }
 
-// 7. Fail-closed: the daemon path is dead. This is the arm that must never
-//    regress into passing the raw bytes through, and it is asserted HERE (with
-//    a real engine available elsewhere in the run) so a green corpus above
-//    cannot be produced by an engine that redacts everything unconditionally.
+// 7. Both failure postures, against a dead daemon path. The opt-out arm is the
+//    one that must never regress into passing the raw bytes through, and it is
+//    asserted HERE (with a real engine available elsewhere in the run) so a
+//    green corpus above cannot be produced by an engine that redacts
+//    everything unconditionally. The default arm is asserted beside it because
+//    an install whose knob quietly stopped being read would otherwise look
+//    identical to one honouring it.
 {
-  const res = hook(
-    "PostToolUse",
-    "sanitize-output",
-    {
-      hook_event_name: "PostToolUse",
-      tool_name: "Bash",
-      tool_input: {},
-      tool_response: { stdout: "deploy key=AKIAIOSFODNN7EXAMPLE done" },
-    },
-    {
-      _AGENT_SANITIZER_REDACTOR_DAEMON:
-        "/nonexistent/agent-secret-redactor-daemon",
-      _AGENT_SANITIZER_REDACTOR_SOCKET: join(dataDir, "no-such.sock"),
-      _AGENT_SANITIZER_REDACTOR_WAIT_MS: "300",
-      _AGENT_SANITIZER_REDACTOR_REQUEST_MS: "300",
-      _AGENT_SANITIZER_SANITIZE_BUDGET_MS: "3000",
-    },
-  );
+  const deadDaemon = {
+    _AGENT_SANITIZER_REDACTOR_DAEMON:
+      "/nonexistent/agent-secret-redactor-daemon",
+    _AGENT_SANITIZER_REDACTOR_SOCKET: join(dataDir, "no-such.sock"),
+    _AGENT_SANITIZER_REDACTOR_WAIT_MS: "300",
+    _AGENT_SANITIZER_REDACTOR_REQUEST_MS: "300",
+    _AGENT_SANITIZER_SANITIZE_BUDGET_MS: "3000",
+  };
+  const payload = {
+    hook_event_name: "PostToolUse",
+    tool_name: "Bash",
+    tool_input: {},
+    tool_response: { stdout: "deploy key=AKIAIOSFODNN7EXAMPLE done" },
+  };
+
+  const closed = hook("PostToolUse", "sanitize-output", payload, {
+    ...deadDaemon,
+    AGENT_SANITIZER_FAIL_OPEN: "0",
+  });
   check(
-    "a dead daemon fails CLOSED",
-    /SANITIZATION FAILED/.test(res.stdout) &&
-      !res.stdout.includes("AKIAIOSFODNN7EXAMPLE"),
-    res.body.slice(0, 400),
+    "a dead daemon fails CLOSED under AGENT_SANITIZER_FAIL_OPEN=0",
+    /SANITIZATION FAILED/.test(closed.stdout) &&
+      !closed.stdout.includes("AKIAIOSFODNN7EXAMPLE"),
+    closed.body.slice(0, 400),
+  );
+
+  const open = hook("PostToolUse", "sanitize-output", payload, deadDaemon);
+  const openOut = JSON.parse(open.stdout).hookSpecificOutput;
+  check(
+    "a dead daemon fails OPEN by default, with the warning attached",
+    openOut.updatedToolOutput === undefined &&
+      /UNSANITIZED/.test(openOut.additionalContext ?? ""),
+    open.body.slice(0, 400),
   );
 }
 

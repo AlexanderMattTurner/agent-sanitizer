@@ -67265,7 +67265,7 @@ function isRespawnable(err) {
 function failClosed(cause) {
   const detail = cause instanceof Error ? cause.message : String(cause);
   return new Error(
-    `secret redaction unavailable (${detail}); cannot vet secret-shaped output \u2014 failing closed`
+    `secret redaction unavailable (${detail}); secret-shaped output could not be vetted`
   );
 }
 function classifySocket(socketPath, deps = {}) {
@@ -67854,18 +67854,19 @@ async function sanitizeText2(text5, toolName, deadline = makeDeadline(SANITIZE_B
     exfilScan: webIngress,
     sgrCarveOut: !webIngress,
     deadline,
-    // Layer 4 — the seam fails closed on a redactor throw (rethrows wrapped,
-    // which the CLI turns into output suppression). Surface the failure to the
-    // operator's terminal here first: the suppression rides in
-    // additionalContext, which only the model sees, so a degraded redactor
-    // would otherwise be invisible to the human.
+    // Layer 4 — the seam rethrows a redactor throw wrapped, and the CLI applies
+    // the caller's posture to it. Surface the failure to the operator's
+    // terminal here first: whatever the CLI decides rides in additionalContext,
+    // which only the model sees, so a degraded redactor would otherwise be
+    // invisible to the human — and under the fail-open default this line is the
+    // ONLY signal the human gets.
     redact: async (content3) => {
       let secrets;
       try {
         secrets = await redactSecrets(content3, webIngress, deadline);
       } catch (l4err) {
         process.stderr.write(
-          `sanitize-output: CRITICAL: secret redaction failed (${errMessage(l4err)}). Failing closed \u2014 tool output suppressed. Fix the redactor installation.
+          `sanitize-output: CRITICAL: secret redaction failed (${errMessage(l4err)}). This output was never vetted for secrets. Fix the redactor installation.
 `
         );
         throw l4err;
