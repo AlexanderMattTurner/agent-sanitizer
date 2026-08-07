@@ -35,6 +35,9 @@ jobs:
           - '.github/scripts/run-hook-lifecycle.sh'
           - '.github/scripts/time-session-setup.sh'
           - '.github/scripts/lib/phase-timer.bash'
+          - '.github/scripts/append-timing-history.sh'
+          - '.github/scripts/render-timing-trend.mjs'
+          - '.github/scripts/lib/retry.bash'
           - '.github/scripts/check-symlinks.sh'
           - '.github/actions/setup-base-env/**'
           - '.github/workflows/hook-lifecycle.yaml'
@@ -94,11 +97,63 @@ jobs:
           enable-cache: false
 
       - name: Time session setup end-to-end
+        env:
+          TIMER_JSON_OUT: ${{ runner.temp }}/setup-timing.json
         run: bash .github/scripts/time-session-setup.sh
+
+      # Handed to record-setup-timing rather than pushed from here: this job
+      # runs `pnpm install` and `uv sync`, so it must never hold a token that
+      # can write to the repository.
+      - name: Upload the timing record
+        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5.0.0
+        with:
+          name: setup-timing
+          path: ${{ runner.temp }}/setup-timing.json
+          if-no-files-found: error
+          retention-days: 7
+
+  # Append this commit's numbers to the timing-history branch and render the
+  # over-time trend. Push-to-main only: a PR's numbers are measured on a commit
+  # that may never land, so mixing them into the series would make the trend
+  # meaningless. PRs still get the per-run waterfall from the job above.
+  record-setup-timing:
+    needs: [decide, setup-timing]
+    if: >-
+      needs.decide.outputs.run == 'true'
+      && needs.setup-timing.result == 'success'
+      && github.event_name == 'push'
+      && github.ref_name == github.event.repository.default_branch
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      # persist-credentials stays on: the recorder pushes the history branch
+      # through this checkout's credentials. Nothing else runs in this job.
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0 # zizmor: ignore[artipacked] — the persisted credential is the point; see above
+        with:
+          sparse-checkout: .github/scripts
+
+      - uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0.0
+        with:
+          name: setup-timing
+          path: ${{ runner.temp }}/timing
+
+      - name: Record the run and render the trend
+        env:
+          TIMING_JSON: ${{ runner.temp }}/timing/setup-timing.json
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          TREND_TITLE: Session setup
+          # The cold number is the one a fresh session pays; the total also
+          # carries the warm re-run, so both are worth watching.
+          TREND_SERIES: |
+            total
+            session-setup (cold cache)
+        run: bash .github/scripts/append-timing-history.sh
 
   hook-lifecycle-passed: # required-check: true
     if: always()
-    needs: [decide, hook-lifecycle, setup-timing]
+    needs: [decide, hook-lifecycle, setup-timing, record-setup-timing]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -120,6 +175,11 @@ jobs:
           # fails on a slow run, not that its crashes are ignored. Passing the
           # failing job's own result keeps the reporter's cancelled-vs-
           # superseded adjudication intact.
+          # record-setup-timing is skipped on every PR (it only records
+          # push-to-main), and a skip there is benign, so it is compared
+          # against both.
           result: >-
             ${{ needs.hook-lifecycle.result != 'success' && needs.hook-lifecycle.result
-             || needs.setup-timing.result }}
+             || needs.setup-timing.result != 'success' && needs.setup-timing.result
+             || (needs.record-setup-timing.result == 'skipped' && 'success')
+             || needs.record-setup-timing.result }}
