@@ -7,6 +7,8 @@ from typing import Callable
 
 import pytest
 
+from tests._helpers import REPO_ROOT
+
 
 def write_settings(sandbox: Path, settings: dict) -> None:
     (sandbox / ".claude").mkdir(exist_ok=True)
@@ -179,24 +181,109 @@ def _pretooluse_settings(cmd: str) -> dict:
     }
 
 
-def test_pretooluse_without_safe_launch_fails(tmp_path: Path, copy_script) -> None:
-    """PreToolUse hooks that bypass safe-launch.sh must be rejected. Both hook
-    files exist so the failure isolates check 3, not the missing-file check."""
-    cmd = '"$CLAUDE_PROJECT_DIR"/.claude/hooks/pre-push-check.sh'
+_BOOTSTRAP_PREFIX = (
+    'bash -n "$CLAUDE_PROJECT_DIR"/.claude/hooks/safe-launch.sh 2>/dev/null'
+    ' && exec bash "$CLAUDE_PROJECT_DIR"/.claude/hooks/safe-launch.sh'
+    ' "$CLAUDE_PROJECT_DIR"/.claude/hooks/pre-push-check.sh'
+)
+_ASK_ARM = (
+    'printf \'%s\\n\' \'{"hookSpecificOutput":{"hookEventName":"PreToolUse",'
+    '"permissionDecision":"ask","permissionDecisionReason":"corrupt"}}\''
+)
+_OPEN_ARM = (
+    'printf \'%s\\n\' \'{"hookSpecificOutput":{"hookEventName":"PreToolUse",'
+    '"additionalContext":"corrupt, ran UNCHECKED"}}\''
+)
+
+
+def _posture_case(fail_open_arm: str, closed_arm: str) -> str:
+    return (
+        f'{_BOOTSTRAP_PREFIX}; case "${{AGENT_SANITIZER_FAIL_OPEN:-}}" in '
+        f"0 | false) {closed_arm} ;; *) {fail_open_arm} ;; esac"
+    )
+
+
+# A syntactically-valid bootstrap whose fallback is `&&`-joined instead of
+# `;`-separated: when `bash -n` fails, the whole && chain short-circuits and
+# NOTHING is printed — empty stdout with exit 0 is Claude Code's allow, so the
+# guarded tool runs with no record that the guard was skipped.
+AND_JOINED_FALLBACK_CMD = (
+    f'{_BOOTSTRAP_PREFIX} && case "${{AGENT_SANITIZER_FAIL_OPEN:-}}" in '
+    f"0 | false) {_ASK_ARM} ;; *) {_OPEN_ARM} ;; esac"
+)
+
+
+@pytest.mark.parametrize(
+    "cmd, description",
+    [
+        (
+            '"$CLAUDE_PROJECT_DIR"/.claude/hooks/pre-push-check.sh',
+            "bare hook, no safe-launch at all",
+        ),
+        (
+            '"$CLAUDE_PROJECT_DIR"/.claude/hooks/safe-launch.sh "$CLAUDE_PROJECT_DIR"/.claude/hooks/pre-push-check.sh',
+            "first-token safe-launch without the self-checking bootstrap",
+        ),
+        (
+            _BOOTSTRAP_PREFIX,
+            "bootstrap prefix with no degraded-response fallback at all",
+        ),
+        (
+            AND_JOINED_FALLBACK_CMD,
+            "&&-joined fallback prints nothing when the syntax check fails",
+        ),
+        (
+            f"{_BOOTSTRAP_PREFIX}; {_OPEN_ARM}",
+            "open-only fallback strands a host that pinned FAIL_OPEN=0",
+        ),
+        (
+            f"{_BOOTSTRAP_PREFIX}; {_ASK_ARM}",
+            "closed-only fallback reintroduces the unconditional prompt stall",
+        ),
+    ],
+    ids=[
+        "bare-hook",
+        "unguarded-safe-launch",
+        "no-fallback",
+        "and-joined-fallback",
+        "open-only-fallback",
+        "closed-only-fallback",
+    ],
+)
+def test_pretooluse_without_bootstrap_fails(
+    tmp_path: Path, copy_script, cmd: str, description: str
+) -> None:
+    """PreToolUse hooks that bypass the safe-launch bootstrap must be rejected.
+    All hook files exist so the failure isolates check 3, not the missing-file
+    check."""
     write_settings(tmp_path, _pretooluse_settings(cmd))
     make_hook(tmp_path, ".claude/hooks/safe-launch.sh")
     make_hook(tmp_path, ".claude/hooks/pre-push-check.sh")
     result = run_validator(tmp_path, copy_script)
-    assert result.returncode == 1
-    assert "not invoked through safe-launch.sh" in result.stdout + result.stderr
+    assert result.returncode == 1, description
+    assert "must use the safe-launch bootstrap" in result.stdout + result.stderr
 
 
-def test_pretooluse_with_safe_launch_passes(tmp_path: Path, copy_script) -> None:
-    """PreToolUse hooks properly wrapped with safe-launch.sh must pass."""
-    cmd = '"$CLAUDE_PROJECT_DIR"/.claude/hooks/safe-launch.sh "$CLAUDE_PROJECT_DIR"/.claude/hooks/pre-push-check.sh'
-    write_settings(tmp_path, _pretooluse_settings(cmd))
+def test_pretooluse_with_shipped_bootstrap_passes(tmp_path: Path, copy_script) -> None:
+    """The PreToolUse block actually shipped in this repo's settings.json —
+    copied verbatim, not a hand-written approximation — must pass, including
+    check 1's path scan, which must strip the `;` that word-splitting glues
+    onto the target path in a compound command."""
+    shipped = json.loads((REPO_ROOT / ".claude" / "settings.json").read_text())
+    write_settings(tmp_path, {"hooks": {"PreToolUse": shipped["hooks"]["PreToolUse"]}})
     make_hook(tmp_path, ".claude/hooks/safe-launch.sh")
     make_hook(tmp_path, ".claude/hooks/pre-push-check.sh")
     result = run_validator(tmp_path, copy_script)
     assert result.returncode == 0, result.stdout + result.stderr
     assert "All checks passed" in result.stdout
+
+
+def test_both_posture_arms_pass(tmp_path: Path, copy_script) -> None:
+    """A bootstrap carrying both posture arms is what check 3 accepts — pairs
+    the negative open-only/closed-only cases above so their rejection is
+    attributable to the missing arm, not to the shape in general."""
+    write_settings(tmp_path, _pretooluse_settings(_posture_case(_OPEN_ARM, _ASK_ARM)))
+    make_hook(tmp_path, ".claude/hooks/safe-launch.sh")
+    make_hook(tmp_path, ".claude/hooks/pre-push-check.sh")
+    result = run_validator(tmp_path, copy_script)
+    assert result.returncode == 0, result.stdout + result.stderr

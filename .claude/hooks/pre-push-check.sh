@@ -4,12 +4,12 @@
 #
 # Registered in .claude/settings.json as a PreToolUse hook on the "Bash" tool.
 # Claude Code hook matchers filter on the tool NAME only — they do not match
-# command patterns — so we cannot narrow to `git push` / `gh pr create` in the
-# matcher. (The newer `if` field could, but is deliberately avoided here to stay
-# compatible across Claude Code versions that would reject an unknown key.)
-# Instead we read the PreToolUse payload from stdin and gate on the command
-# ourselves. Fail closed: if the command cannot be positively identified as
-# something other than a push/PR-create, the checks run anyway.
+# command patterns — so settings.json narrows to `git push` / `gh pr create`
+# via each handler's `if` field. This in-script gate stays as defense in depth
+# for Claude Code versions that ignore an unrecognized `if` key and fire the
+# hook on every Bash call: we read the PreToolUse payload from stdin and gate
+# on the command ourselves. Fail closed: if the command cannot be positively
+# identified as something other than a push/PR-create, the checks run anyway.
 
 set -uo pipefail
 
