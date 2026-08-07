@@ -9,7 +9,7 @@
     {
       "name": "agent-sanitizer",
       "source": "./plugin",
-      "description": "Fail-closed sanitization for tool inputs, tool outputs, and user prompts: invisible-Unicode/ANSI stripping, hidden-HTML splicing, exfil-URL detection, confusable normalization, and detect-secrets-backed secret redaction."
+      "description": "Sanitization for tool inputs, tool outputs, and user prompts: invisible-Unicode/ANSI stripping, hidden-HTML splicing, exfil-URL detection, confusable normalization, and detect-secrets-backed secret redaction."
     }
   ]
 }

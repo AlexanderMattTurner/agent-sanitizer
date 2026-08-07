@@ -186,17 +186,20 @@ test("the hooks Claude Code loads are where it looks for them", () => {
   assert.ok(Object.keys(readJson(path).hooks).length > 0);
 });
 
-test("plugin.json does not advertise a posture the hooks do not take", () => {
+test("neither description advertises a posture the hooks do not take", () => {
   // The default posture is fail-OPEN (a hook that cannot run warns and passes
-  // the action through). The manifest description is what the /plugin picker
-  // shows, and it claimed "every layer fails closed" for several releases after
+  // the action through). Both descriptions are pre-install surfaces — the
+  // marketplace entry is what `/plugin marketplace` lists, the manifest is what
+  // the picker shows — and both claimed fail-closed for several releases after
   // the default flipped.
   assert.equal(
     failOpenEnabled({}),
     true,
-    "default posture changed — revisit the manifest description",
+    "default posture changed — revisit both descriptions",
   );
-  assert.doesNotMatch(manifest.description, /fails? closed/i);
+  const entry = marketplace.plugins.find((p) => p.source === "./plugin");
+  for (const text of [manifest.description, entry.description])
+    assert.doesNotMatch(text, /fails?[- ]closed/i);
 });
 
 // ─── the install commands the docs advertise ─────────────────────────────────
@@ -218,4 +221,5 @@ test("both READMEs advertise the marketplace and plugin these manifests define",
     assert.ok(text.includes(add), `${doc} is missing: ${add}`);
   }
   assert.equal(manifest.repository, `https://github.com/${slug}`);
+  assert.equal(manifest.homepage, `https://github.com/${slug}#readme`);
 });
