@@ -16,7 +16,12 @@
       "scripts/set-plugin-version.test.mjs"
     ],
     "plugin/.claude-plugin/plugin.json": [
-      "scripts/set-plugin-version.test.mjs"
+      "scripts/set-plugin-version.test.mjs",
+      "plugin/test/enable-auto-update.test.mjs"
+    ],
+    ".claude-plugin/marketplace.json": [
+      "plugin/test/enable-auto-update.test.mjs",
+      "plugin/test/plugin-manifest.test.mjs"
     ],
     ".github/mutation-shards.json": ["test/mutation-shards.test.mjs"],
     ".github/scripts/nightly-fuzz-issue.js": [

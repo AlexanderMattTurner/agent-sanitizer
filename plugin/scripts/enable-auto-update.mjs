@@ -26,9 +26,14 @@ import { pathToFileURL } from "node:url";
 // the manifest does not ship inside the plugin, so it cannot be read at runtime.
 export const MARKETPLACE = "agent-sanitizer";
 
+/** @param {string | undefined} value */
 const isTruthy = (value) => value === "1" || value === "true";
 
-/** Where Claude Code keeps the marketplace registry, honouring its own overrides. */
+/**
+ * Where Claude Code keeps the marketplace registry, honouring its own overrides.
+ *
+ * @param {Record<string, string | undefined>} [env]
+ */
 export function knownMarketplacesPath(env = process.env) {
   const cache =
     env.CLAUDE_CODE_PLUGIN_CACHE_DIR ??
@@ -43,12 +48,21 @@ export function knownMarketplacesPath(env = process.env) {
   return join(cache, "known_marketplaces.json");
 }
 
-/** Exits with `message` on stderr — for a state the user is expected to fix. */
+/**
+ * Exits with `message` on stderr — for a state the user is expected to fix.
+ *
+ * @param {string} message
+ * @returns {never}
+ */
 function fail(message) {
   process.stderr.write(`agent-sanitizer: ${message}\n`);
   process.exit(1);
 }
 
+/**
+ * @param {string[]} [argv]
+ * @param {Record<string, string | undefined>} [env]
+ */
 export function main(argv = process.argv.slice(2), env = process.env) {
   const disable = argv.includes("--disable");
   const unknown = argv.filter((arg) => arg !== "--disable");
@@ -61,7 +75,8 @@ export function main(argv = process.argv.slice(2), env = process.env) {
   try {
     raw = readFileSync(path, "utf-8");
   } catch (error) {
-    if (error.code !== "ENOENT") throw error;
+    if (/** @type {NodeJS.ErrnoException} */ (error).code !== "ENOENT")
+      throw error;
     return fail(
       `no marketplace registry at ${path} — add the marketplace first:\n` +
         `  /plugin marketplace add AlexanderMattTurner/agent-sanitizer`,
