@@ -140,9 +140,10 @@ needs only `python3` on PATH, for Layer 4 — the plugin ships the engine itself
 
 Claude Code auto-updates Anthropic's own marketplaces by default and nobody
 else's, so that install pins you to the release you added and later detector
-fixes never arrive. There is no slash command for the toggle: run `/plugin`,
-open the **Marketplaces** tab, select `agent-sanitizer`, and choose **Enable
-auto-update**. To pull a release by hand instead:
+fixes never arrive. Claude Code ships no slash command for the toggle, so the
+plugin ships one — `/agent-sanitizer:enable-auto-update` writes the same bit the
+`/plugin` picker's **Enable auto-update** does, and refuses loudly rather than
+guessing if the marketplace was never added. To pull a release by hand instead:
 
 ```
 /plugin marketplace update agent-sanitizer
