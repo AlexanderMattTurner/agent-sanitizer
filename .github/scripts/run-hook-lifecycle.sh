@@ -11,6 +11,9 @@ set -euo pipefail
 repo_root="$(git rev-parse --show-toplevel)"
 cd "$repo_root"
 
+# shellcheck source=.github/scripts/lib/phase-timer.bash
+source "$repo_root/.github/scripts/lib/phase-timer.bash"
+
 # lint-staged stashes the working tree, which needs a committer identity that CI
 # runners don't configure by default.
 git config user.email "ci@example.com"
@@ -22,11 +25,13 @@ git config user.name "CI"
 CLAUDE_ENV_FILE=$(mktemp "${RUNNER_TEMP:-/tmp}/claude_env_XXXXXX")
 export CLAUDE_ENV_FILE
 setup_log=$(mktemp "${RUNNER_TEMP:-/tmp}/session-setup_XXXXXX.log")
-trap 'rm -f "$CLAUDE_ENV_FILE" "$setup_log"' EXIT
+# Report on the way out too, so a lifecycle that dies partway still publishes
+# how long it got through — that is the diagnostic for a hang or a timeout.
+trap 'rm -f "$CLAUDE_ENV_FILE" "$setup_log"; timer_report "Hook lifecycle"' EXIT
 
-echo "::group::session-setup.sh"
-.claude/hooks/session-setup.sh 2>&1 | tee "$setup_log"
-echo "::endgroup::"
+timer_start
+run_session_setup() { .claude/hooks/session-setup.sh 2>&1 | tee "$setup_log"; }
+timed_phase "session-setup.sh" run_session_setup
 # shellcheck disable=SC1090
 source "$CLAUDE_ENV_FILE"
 
@@ -43,22 +48,17 @@ fi
 #    (repo-wide formatting is covered by the pre-commit and format-check
 #    workflows) — this leg verifies the hook script itself runs without error.
 git add -A
-echo "::group::pre-commit"
-.hooks/pre-commit
-echo "::endgroup::"
+timed_phase "pre-commit" .hooks/pre-commit
 
 # 3. Pre-push checks (build/lint/test/ruff — whichever are configured).
 export CLAUDE_PROJECT_DIR="$repo_root"
-echo "::group::pre-push-check.sh"
-.claude/hooks/pre-push-check.sh
-echo "::endgroup::"
+timed_phase "pre-push-check.sh" .claude/hooks/pre-push-check.sh
 
 # 4. Git pre-push hook. Feed it an empty ref list (a push with nothing to push)
 #    so the pushed-range pre-commit loop is a no-op and the leg verifies the
 #    hook itself — tool discovery, the workflow pin read, the symlink check —
 #    runs without error.
-echo "::group::pre-push"
-.hooks/pre-push origin "$(git remote get-url origin)" </dev/null
-echo "::endgroup::"
+run_pre_push() { .hooks/pre-push origin "$(git remote get-url origin)" </dev/null; }
+timed_phase "pre-push" run_pre_push
 
 echo "Hook lifecycle completed successfully."
