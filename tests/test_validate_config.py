@@ -179,22 +179,55 @@ def _pretooluse_settings(cmd: str) -> dict:
     }
 
 
-def test_pretooluse_without_safe_launch_fails(tmp_path: Path, copy_script) -> None:
-    """PreToolUse hooks that bypass safe-launch.sh must be rejected. Both hook
-    files exist so the failure isolates check 3, not the missing-file check."""
-    cmd = '"$CLAUDE_PROJECT_DIR"/.claude/hooks/pre-push-check.sh'
+# The canonical PreToolUse bootstrap: syntax-check safe-launch.sh, exec through
+# it on success, degrade to an "ask" verdict when the shim itself is corrupt.
+BOOTSTRAP_CMD = (
+    'bash -n "$CLAUDE_PROJECT_DIR"/.claude/hooks/safe-launch.sh 2>/dev/null'
+    ' && exec bash "$CLAUDE_PROJECT_DIR"/.claude/hooks/safe-launch.sh'
+    ' "$CLAUDE_PROJECT_DIR"/.claude/hooks/pre-push-check.sh;'
+    " printf '%s\\n'"
+    ' \'{"hookSpecificOutput":{"hookEventName":"PreToolUse",'
+    '"permissionDecision":"ask","permissionDecisionReason":"corrupt"}}\''
+)
+
+
+@pytest.mark.parametrize(
+    "cmd, description",
+    [
+        (
+            '"$CLAUDE_PROJECT_DIR"/.claude/hooks/pre-push-check.sh',
+            "bare hook, no safe-launch at all",
+        ),
+        (
+            '"$CLAUDE_PROJECT_DIR"/.claude/hooks/safe-launch.sh "$CLAUDE_PROJECT_DIR"/.claude/hooks/pre-push-check.sh',
+            "first-token safe-launch without the self-checking bootstrap",
+        ),
+        (
+            'bash -n "$CLAUDE_PROJECT_DIR"/.claude/hooks/safe-launch.sh 2>/dev/null && exec bash "$CLAUDE_PROJECT_DIR"/.claude/hooks/safe-launch.sh "$CLAUDE_PROJECT_DIR"/.claude/hooks/pre-push-check.sh',
+            "bootstrap prefix without the ask-verdict fallback",
+        ),
+    ],
+    ids=["bare-hook", "unguarded-safe-launch", "no-ask-fallback"],
+)
+def test_pretooluse_without_bootstrap_fails(
+    tmp_path: Path, copy_script, cmd: str, description: str
+) -> None:
+    """PreToolUse hooks that bypass the safe-launch bootstrap must be rejected.
+    All hook files exist so the failure isolates check 3, not the missing-file
+    check."""
     write_settings(tmp_path, _pretooluse_settings(cmd))
     make_hook(tmp_path, ".claude/hooks/safe-launch.sh")
     make_hook(tmp_path, ".claude/hooks/pre-push-check.sh")
     result = run_validator(tmp_path, copy_script)
-    assert result.returncode == 1
-    assert "not invoked through safe-launch.sh" in result.stdout + result.stderr
+    assert result.returncode == 1, description
+    assert "must use the safe-launch bootstrap" in result.stdout + result.stderr
 
 
-def test_pretooluse_with_safe_launch_passes(tmp_path: Path, copy_script) -> None:
-    """PreToolUse hooks properly wrapped with safe-launch.sh must pass."""
-    cmd = '"$CLAUDE_PROJECT_DIR"/.claude/hooks/safe-launch.sh "$CLAUDE_PROJECT_DIR"/.claude/hooks/pre-push-check.sh'
-    write_settings(tmp_path, _pretooluse_settings(cmd))
+def test_pretooluse_with_bootstrap_passes(tmp_path: Path, copy_script) -> None:
+    """The canonical bootstrap must pass — including check 1's path scan, which
+    must strip the `;` that word-splitting glues onto the target path in a
+    compound command."""
+    write_settings(tmp_path, _pretooluse_settings(BOOTSTRAP_CMD))
     make_hook(tmp_path, ".claude/hooks/safe-launch.sh")
     make_hook(tmp_path, ".claude/hooks/pre-push-check.sh")
     result = run_validator(tmp_path, copy_script)

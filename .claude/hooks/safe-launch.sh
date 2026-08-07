@@ -8,8 +8,15 @@
 # can never lock the session.
 #
 # Behavior:
-#   * Fast path — if <hook-script> parses cleanly, exec it. The PreToolUse
-#     stdin payload is forwarded transparently.
+#   * Fast path — if <hook-script> parses cleanly, run it as a child with the
+#     PreToolUse stdin payload forwarded transparently and its stdout (JSON
+#     verdicts included) passed through verbatim. A runtime exit 2 from the
+#     target — bash abort, argparse/grep/jq usage error, `set -e` propagation —
+#     is Claude Code's hard-block signal and would lock the guarded tool, so it
+#     is converted into a permissionDecision="ask" verdict instead. Contract:
+#     a wrapped hook signals denial via JSON permissionDecision, NEVER exit 2;
+#     any exit 2 that reaches this shim is treated as a fault, and the worst
+#     case the user sees is a manual-approval prompt, not a lockout.
 #   * Degraded path — if <hook-script> fails `bash -n`, fall back to a
 #     fail-safe policy instead of exiting non-zero (which Claude Code would
 #     treat as a tool block):
@@ -17,6 +24,11 @@
 #         .hooks/ are allowed so the broken hook can be repaired in-session.
 #       - Everything else returns permissionDecision="ask", forcing a
 #         conscious user override on a tool-by-tool basis.
+#
+# This shim is itself guarded: .claude/settings.json invokes it through an
+# inline bootstrap (`bash -n … && exec bash … ; printf <ask-verdict>`) so a
+# parse error in THIS file also degrades to "ask" instead of a lockout.
+# .github/scripts/validate-config.sh enforces that bootstrap shape.
 #
 # This mirrors the launcher shim from
 # alexander-turner/secure-claude-code-defaults#109.
@@ -66,10 +78,39 @@ case "$target" in
   ;;
 esac
 
-# Fast path: target parses — run it via its interpreter. The PreToolUse stdin
-# payload is inherited automatically because we exec into the target.
+# Fast path: target parses — run it via its interpreter as a CHILD, not an
+# exec: an exec'd target that later dies with status 2 (bash abort, argparse/
+# grep/jq usage error, `set -e` propagating an inner exit 2) becomes the hook's
+# own exit code, which Claude Code treats as a HARD BLOCK — the lockout this
+# shim exists to prevent. Stdout is buffered and replayed verbatim on any exit
+# other than 2, so JSON verdicts (including a deliberate "deny") pass through
+# untouched; stderr is captured for the ask reason and replayed to our stderr.
 if "${syntax_check[@]}" 2>/dev/null; then
-  exec "$interp" "$target" "$@"
+  err_snippet=""
+  if stderr_file=$(mktemp 2>/dev/null) && [[ -n "$stderr_file" ]]; then
+    out=$("$interp" "$target" "$@" 2>"$stderr_file")
+    rc=$?
+    cat "$stderr_file" >&2
+    # JSON strings cannot carry raw control characters, and a byte-truncated
+    # multibyte sequence would make the verdict invalid UTF-8 — keep printable
+    # ASCII only, replaced in a single pass so nothing re-touches an escape.
+    err_snippet=$(head -c 300 "$stderr_file" | tr -c '\40-\176' ' ' | tr -s ' ')
+    rm -f "$stderr_file"
+  else
+    # mktemp unavailable: still guard the exit code, just without a captured
+    # stderr snippet (the target's stderr streams through directly).
+    out=$("$interp" "$target" "$@")
+    rc=$?
+  fi
+  if [[ "$rc" -eq 2 ]]; then
+    # Partial stdout from a crashed hook is not a trustworthy verdict — drop
+    # it and emit the fail-soft "ask" instead of letting exit 2 hard-block.
+    echo "safe-launch: target hook exited 2 at runtime — degrading hard block to ask: $target" >&2
+    emit_ask "safe-launch: hook '$(basename "$target")' failed with exit 2 (${err_snippet:-no stderr}); manual override required."
+    exit 0
+  fi
+  [[ -n "$out" ]] && printf '%s\n' "$out"
+  exit "$rc"
 fi
 
 # Degraded path. Read the PreToolUse payload before we touch stdin again.

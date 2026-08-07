@@ -34,13 +34,13 @@
           {
             "type": "command",
             "if": "Bash(git push:*)",
-            "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/safe-launch.sh \"$CLAUDE_PROJECT_DIR\"/.claude/hooks/pre-push-check.sh",
+            "command": "bash -n \"$CLAUDE_PROJECT_DIR\"/.claude/hooks/safe-launch.sh 2>/dev/null && exec bash \"$CLAUDE_PROJECT_DIR\"/.claude/hooks/safe-launch.sh \"$CLAUDE_PROJECT_DIR\"/.claude/hooks/pre-push-check.sh; echo 'safe-launch bootstrap: safe-launch.sh is missing or failed to parse - degrading to ask' >&2; printf '%s\\n' '{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"ask\",\"permissionDecisionReason\":\"safe-launch.sh itself is missing or corrupt; repair .claude/hooks/safe-launch.sh (approve its edits manually).\"}}'",
             "timeout": 1800
           },
           {
             "type": "command",
             "if": "Bash(gh pr create:*)",
-            "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/safe-launch.sh \"$CLAUDE_PROJECT_DIR\"/.claude/hooks/pre-push-check.sh",
+            "command": "bash -n \"$CLAUDE_PROJECT_DIR\"/.claude/hooks/safe-launch.sh 2>/dev/null && exec bash \"$CLAUDE_PROJECT_DIR\"/.claude/hooks/safe-launch.sh \"$CLAUDE_PROJECT_DIR\"/.claude/hooks/pre-push-check.sh; echo 'safe-launch bootstrap: safe-launch.sh is missing or failed to parse - degrading to ask' >&2; printf '%s\\n' '{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"ask\",\"permissionDecisionReason\":\"safe-launch.sh itself is missing or corrupt; repair .claude/hooks/safe-launch.sh (approve its edits manually).\"}}'",
             "timeout": 1800
           }
         ]
