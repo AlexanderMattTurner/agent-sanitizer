@@ -8,6 +8,13 @@ adhere to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+## [2.17.1] - 2026-08-07
+
+### Fixed
+
+- Plugin manifest no longer advertises a fail-closed default behavior.
+- Removed incorrect fail-closed claim from the marketplace entry.
+
 ## [2.17.0] - 2026-08-07
 
 ### Added
