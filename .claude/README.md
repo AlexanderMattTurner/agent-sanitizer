@@ -89,12 +89,12 @@ Create new skill directories in `skills/` following the pattern in `pr-creation/
 
 Modify `settings.json` to add more hooks. See the [Claude Code documentation](https://docs.anthropic.com/en/docs/claude-code) for available hook types.
 
-**Always wrap PreToolUse hooks with `safe-launch.sh`.** A PreToolUse hook that fails to parse (e.g. unresolved merge conflict markers) exits non-zero, which Claude Code treats as a block—locking the session out of repairing the very file that’s broken. `safe-launch.sh` detects the parse failure and degrades open: edits under `.claude/hooks/` and `.hooks/` are allowed for self-repair; all other tools get `permissionDecision: "ask"`.
+**Always wrap PreToolUse hooks with `safe-launch.sh`, invoked through the self-checking bootstrap below.** A PreToolUse hook that fails to parse (e.g. unresolved merge conflict markers) exits 2, which Claude Code treats as a block—locking the session out of repairing the very file that’s broken. `safe-launch.sh` detects the parse failure and degrades open: edits under `.claude/hooks/` and `.hooks/` are allowed for self-repair; all other tools get `permissionDecision: "ask"`. It also converts a runtime exit 2 from the wrapped hook into an "ask" verdict—wrapped hooks signal denial via JSON, never exit 2. The inline bootstrap covers the one file the shim can’t guard: itself. Keep the trailing `printf` fallback `;`-separated (never `&&`-joined, which would print nothing—and thus allow the tool—when the syntax check fails); `validate-config.sh` enforces this shape.
 
 ```json
 {
   "type": "command",
-  "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/safe-launch.sh \"$CLAUDE_PROJECT_DIR\"/.claude/hooks/your-new-hook.sh"
+  "command": "bash -n \"$CLAUDE_PROJECT_DIR\"/.claude/hooks/safe-launch.sh 2>/dev/null && exec bash \"$CLAUDE_PROJECT_DIR\"/.claude/hooks/safe-launch.sh \"$CLAUDE_PROJECT_DIR\"/.claude/hooks/your-new-hook.sh; printf '%s\\n' '{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"ask\",\"permissionDecisionReason\":\"safe-launch.sh itself is missing or corrupt; repair .claude/hooks/safe-launch.sh (approve its edits manually).\"}}'"
 }
 ```
 

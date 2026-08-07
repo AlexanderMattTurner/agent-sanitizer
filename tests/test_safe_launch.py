@@ -39,14 +39,21 @@ def write_target(sandbox: Path, body: str, name: str = "target.sh") -> Path:
 
 
 def run_safe_launch(
-    sandbox: Path, target: Path, payload: str = BASH_PAYLOAD
+    sandbox: Path,
+    target: Path,
+    payload: str = BASH_PAYLOAD,
+    extra_env: dict[str, str] | None = None,
 ) -> subprocess.CompletedProcess:
     return subprocess.run(
         ["bash", str(sandbox / ".claude" / "hooks" / "safe-launch.sh"), str(target)],
         input=payload,
         capture_output=True,
         text=True,
-        env={"PATH": "/usr/bin:/bin", "CLAUDE_PROJECT_DIR": str(sandbox)},
+        env={
+            "PATH": "/usr/bin:/bin",
+            "CLAUDE_PROJECT_DIR": str(sandbox),
+            **(extra_env or {}),
+        },
         cwd=sandbox,
     )
 
@@ -69,6 +76,17 @@ def test_healthy_target_stdout_and_exit_code_pass_through(tmp_path: Path) -> Non
     result = run_safe_launch(sandbox, target)
     assert result.returncode == 0, result.stderr
     assert result.stdout == deny + "\n"
+
+
+def test_healthy_target_stdout_is_byte_identical(tmp_path: Path) -> None:
+    """Multi-line stdout with NO trailing newline must survive untouched — a
+    command-substitution-based pass-through would strip/normalize trailing
+    newlines, silently rewriting a hook's verdict bytes."""
+    sandbox = make_sandbox(tmp_path)
+    target = write_target(sandbox, "printf 'line1\\nline2'")
+    result = run_safe_launch(sandbox, target)
+    assert result.returncode == 0, result.stderr
+    assert result.stdout == "line1\nline2"
 
 
 def test_healthy_target_exit_1_stays_non_blocking(tmp_path: Path) -> None:
@@ -95,6 +113,34 @@ def test_runtime_exit_2_degrades_to_ask(tmp_path: Path) -> None:
     out = ask_verdict(result.stdout)  # single JSON object => partial was dropped
     assert "boom: usage error" in out["permissionDecisionReason"]
     assert "exited 2" in result.stderr
+
+
+def test_exit_2_stderr_with_json_metachars_still_yields_valid_json(
+    tmp_path: Path,
+) -> None:
+    """The ask verdict embeds the target's stderr; quotes and backslashes in it
+    must be escaped so the verdict stays parseable — invalid JSON would read as
+    no verdict at all (allow), a silent fail-open."""
+    sandbox = make_sandbox(tmp_path)
+    target = write_target(sandbox, "echo 'he said \"x\" \\ y' >&2; exit 2")
+    result = run_safe_launch(sandbox, target)
+    assert result.returncode == 0, result.stderr
+    out = ask_verdict(result.stdout)
+    assert 'he said "x"' in out["permissionDecisionReason"]
+
+
+def test_exit_2_converts_even_when_mktemp_is_broken(tmp_path: Path) -> None:
+    """With TMPDIR pointing nowhere, mktemp fails and the fallback branch must
+    still convert exit 2 to ask (without a stderr snippet)."""
+    sandbox = make_sandbox(tmp_path)
+    target = write_target(sandbox, 'echo "boom" >&2; exit 2')
+    result = run_safe_launch(
+        sandbox, target, extra_env={"TMPDIR": str(sandbox / "does-not-exist")}
+    )
+    assert result.returncode == 0, result.stderr
+    out = ask_verdict(result.stdout)
+    assert "no stderr" in out["permissionDecisionReason"]
+    assert "boom" in result.stderr  # stderr still streams through directly
 
 
 def test_parse_error_degrades_to_ask_for_non_edit_tools(tmp_path: Path) -> None:

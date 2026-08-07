@@ -102,9 +102,12 @@ if [[ -f .claude/settings.json ]]; then
   fi
   while IFS= read -r cmd; do
     [[ -z "$cmd" ]] && continue
+    # The ask fallback must be `;`-separated (`; printf`), not `&&`-joined: an
+    # `&&`-chained printf never runs when `bash -n` fails, printing nothing —
+    # and empty stdout with exit 0 is Claude Code's ALLOW, a silent fail-open.
     case "$cmd" in
-    'bash -n '*'/safe-launch.sh 2>/dev/null && exec bash '*'/safe-launch.sh '*'"permissionDecision":"ask"'*) ;;
-    *) error "PreToolUse hook must use the safe-launch bootstrap (bash -n .../safe-launch.sh 2>/dev/null && exec bash .../safe-launch.sh <target>; printf '<ask verdict>') so a corrupt safe-launch.sh degrades to ask instead of hard-blocking the session: $cmd" ;;
+    'bash -n '*'/safe-launch.sh 2>/dev/null && exec bash '*'/safe-launch.sh '*'; printf '*'"permissionDecision":"ask"'*) ;;
+    *) error "PreToolUse hook must use the safe-launch bootstrap (bash -n .../safe-launch.sh 2>/dev/null && exec bash .../safe-launch.sh <target>; printf '<ask verdict>' — the printf fallback ;-separated, never &&-joined) so a corrupt safe-launch.sh degrades to ask instead of hard-blocking the session: $cmd" ;;
     esac
   done <<<"$pretooluse_cmds"
 fi

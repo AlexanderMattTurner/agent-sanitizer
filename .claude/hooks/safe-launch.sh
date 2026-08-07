@@ -82,25 +82,33 @@ esac
 # exec: an exec'd target that later dies with status 2 (bash abort, argparse/
 # grep/jq usage error, `set -e` propagating an inner exit 2) becomes the hook's
 # own exit code, which Claude Code treats as a HARD BLOCK — the lockout this
-# shim exists to prevent. Stdout is buffered and replayed verbatim on any exit
-# other than 2, so JSON verdicts (including a deliberate "deny") pass through
-# untouched; stderr is captured for the ask reason and replayed to our stderr.
+# shim exists to prevent. Stdout/stderr go through temp files (not command
+# substitution, which would strip trailing newlines) and are replayed with
+# `cat` on any exit other than 2, so JSON verdicts — including a deliberate
+# "deny" — pass through byte-identical. On exit 2, partial stdout is dropped
+# and the captured stderr feeds the ask reason. `${@+"$@"}` instead of a bare
+# "$@": zero positional params under `set -u` abort bash 3.2 (macOS) with
+# exit 1, a NON-blocking error that would let the guarded tool run unchecked.
 if "${syntax_check[@]}" 2>/dev/null; then
   err_snippet=""
-  if stderr_file=$(mktemp 2>/dev/null) && [[ -n "$stderr_file" ]]; then
-    out=$("$interp" "$target" "$@" 2>"$stderr_file")
-    rc=$?
+  stdout_file=""
+  stderr_file=""
+  trap '[[ -n "$stdout_file" ]] && rm -f "$stdout_file"; [[ -n "$stderr_file" ]] && rm -f "$stderr_file"' EXIT
+  if stdout_file=$(mktemp 2>/dev/null) && stderr_file=$(mktemp 2>/dev/null) && [[ -n "$stdout_file" ]] && [[ -n "$stderr_file" ]]; then
+    rc=0
+    "$interp" "$target" ${@+"$@"} >"$stdout_file" 2>"$stderr_file" || rc=$?
     cat "$stderr_file" >&2
     # JSON strings cannot carry raw control characters, and a byte-truncated
     # multibyte sequence would make the verdict invalid UTF-8 — keep printable
     # ASCII only, replaced in a single pass so nothing re-touches an escape.
     err_snippet=$(head -c 300 "$stderr_file" | tr -c '\40-\176' ' ' | tr -s ' ')
-    rm -f "$stderr_file"
   else
-    # mktemp unavailable: still guard the exit code, just without a captured
-    # stderr snippet (the target's stderr streams through directly).
-    out=$("$interp" "$target" "$@")
-    rc=$?
+    # mktemp unavailable (e.g. broken TMPDIR): still guard the exit code, at
+    # the cost of trailing-newline normalization and no stderr snippet (the
+    # target's stderr streams through directly).
+    stdout_file=""
+    rc=0
+    out=$("$interp" "$target" ${@+"$@"}) || rc=$?
   fi
   if [[ "$rc" -eq 2 ]]; then
     # Partial stdout from a crashed hook is not a trustworthy verdict — drop
@@ -109,7 +117,11 @@ if "${syntax_check[@]}" 2>/dev/null; then
     emit_ask "safe-launch: hook '$(basename "$target")' failed with exit 2 (${err_snippet:-no stderr}); manual override required."
     exit 0
   fi
-  [[ -n "$out" ]] && printf '%s\n' "$out"
+  if [[ -n "$stdout_file" ]]; then
+    cat "$stdout_file"
+  elif [[ -n "${out:-}" ]]; then
+    printf '%s\n' "$out"
+  fi
   exit "$rc"
 fi
 
