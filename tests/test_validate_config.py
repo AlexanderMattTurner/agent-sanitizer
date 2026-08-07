@@ -181,17 +181,35 @@ def _pretooluse_settings(cmd: str) -> dict:
     }
 
 
-# A syntactically-valid bootstrap whose ask fallback is `&&`-joined instead of
-# `;`-separated: when `bash -n` fails, the whole && chain short-circuits and
-# NOTHING is printed — empty stdout with exit 0 is Claude Code's allow, so the
-# guarded tool would run unchecked. Check 3 must reject it.
-AND_JOINED_FALLBACK_CMD = (
+_BOOTSTRAP_PREFIX = (
     'bash -n "$CLAUDE_PROJECT_DIR"/.claude/hooks/safe-launch.sh 2>/dev/null'
     ' && exec bash "$CLAUDE_PROJECT_DIR"/.claude/hooks/safe-launch.sh'
     ' "$CLAUDE_PROJECT_DIR"/.claude/hooks/pre-push-check.sh'
-    " && printf '%s\\n'"
-    ' \'{"hookSpecificOutput":{"hookEventName":"PreToolUse",'
+)
+_ASK_ARM = (
+    'printf \'%s\\n\' \'{"hookSpecificOutput":{"hookEventName":"PreToolUse",'
     '"permissionDecision":"ask","permissionDecisionReason":"corrupt"}}\''
+)
+_OPEN_ARM = (
+    'printf \'%s\\n\' \'{"hookSpecificOutput":{"hookEventName":"PreToolUse",'
+    '"additionalContext":"corrupt, ran UNCHECKED"}}\''
+)
+
+
+def _posture_case(fail_open_arm: str, closed_arm: str) -> str:
+    return (
+        f'{_BOOTSTRAP_PREFIX}; case "${{AGENT_SANITIZER_FAIL_OPEN:-}}" in '
+        f"0 | false) {closed_arm} ;; *) {fail_open_arm} ;; esac"
+    )
+
+
+# A syntactically-valid bootstrap whose fallback is `&&`-joined instead of
+# `;`-separated: when `bash -n` fails, the whole && chain short-circuits and
+# NOTHING is printed — empty stdout with exit 0 is Claude Code's allow, so the
+# guarded tool runs with no record that the guard was skipped.
+AND_JOINED_FALLBACK_CMD = (
+    f'{_BOOTSTRAP_PREFIX} && case "${{AGENT_SANITIZER_FAIL_OPEN:-}}" in '
+    f"0 | false) {_ASK_ARM} ;; *) {_OPEN_ARM} ;; esac"
 )
 
 
@@ -207,19 +225,29 @@ AND_JOINED_FALLBACK_CMD = (
             "first-token safe-launch without the self-checking bootstrap",
         ),
         (
-            'bash -n "$CLAUDE_PROJECT_DIR"/.claude/hooks/safe-launch.sh 2>/dev/null && exec bash "$CLAUDE_PROJECT_DIR"/.claude/hooks/safe-launch.sh "$CLAUDE_PROJECT_DIR"/.claude/hooks/pre-push-check.sh',
-            "bootstrap prefix without the ask-verdict fallback",
+            _BOOTSTRAP_PREFIX,
+            "bootstrap prefix with no degraded-response fallback at all",
         ),
         (
             AND_JOINED_FALLBACK_CMD,
-            "&&-joined ask fallback prints nothing when the syntax check fails",
+            "&&-joined fallback prints nothing when the syntax check fails",
+        ),
+        (
+            f"{_BOOTSTRAP_PREFIX}; {_OPEN_ARM}",
+            "open-only fallback strands a host that pinned FAIL_OPEN=0",
+        ),
+        (
+            f"{_BOOTSTRAP_PREFIX}; {_ASK_ARM}",
+            "closed-only fallback reintroduces the unconditional prompt stall",
         ),
     ],
     ids=[
         "bare-hook",
         "unguarded-safe-launch",
-        "no-ask-fallback",
+        "no-fallback",
         "and-joined-fallback",
+        "open-only-fallback",
+        "closed-only-fallback",
     ],
 )
 def test_pretooluse_without_bootstrap_fails(
@@ -248,3 +276,14 @@ def test_pretooluse_with_shipped_bootstrap_passes(tmp_path: Path, copy_script) -
     result = run_validator(tmp_path, copy_script)
     assert result.returncode == 0, result.stdout + result.stderr
     assert "All checks passed" in result.stdout
+
+
+def test_both_posture_arms_pass(tmp_path: Path, copy_script) -> None:
+    """A bootstrap carrying both posture arms is what check 3 accepts — pairs
+    the negative open-only/closed-only cases above so their rejection is
+    attributable to the missing arm, not to the shape in general."""
+    write_settings(tmp_path, _pretooluse_settings(_posture_case(_OPEN_ARM, _ASK_ARM)))
+    make_hook(tmp_path, ".claude/hooks/safe-launch.sh")
+    make_hook(tmp_path, ".claude/hooks/pre-push-check.sh")
+    result = run_validator(tmp_path, copy_script)
+    assert result.returncode == 0, result.stdout + result.stderr

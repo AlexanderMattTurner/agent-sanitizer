@@ -89,12 +89,21 @@ Create new skill directories in `skills/` following the pattern in `pr-creation/
 
 Modify `settings.json` to add more hooks. See the [Claude Code documentation](https://docs.anthropic.com/en/docs/claude-code) for available hook types.
 
-**Always wrap PreToolUse hooks with `safe-launch.sh`, invoked through the self-checking bootstrap below.** A PreToolUse hook that fails to parse (e.g. unresolved merge conflict markers) exits 2, which Claude Code treats as a block—locking the session out of repairing the very file that’s broken. `safe-launch.sh` detects the parse failure and degrades open: edits under `.claude/hooks/` and `.hooks/` are allowed for self-repair; all other tools get `permissionDecision: "ask"`. It also converts a runtime exit 2 from the wrapped hook into an "ask" verdict—wrapped hooks signal denial via JSON, never exit 2. The inline bootstrap covers the one file the shim can’t guard: itself. Keep the trailing `printf` fallback `;`-separated (never `&&`-joined, which would print nothing—and thus allow the tool—when the syntax check fails); `validate-config.sh` enforces this shape.
+**Always wrap PreToolUse hooks with `safe-launch.sh`, invoked through the self-checking bootstrap below.** A PreToolUse hook that fails to parse (e.g. unresolved merge conflict markers) exits 2, which Claude Code treats as a block—locking the session out of repairing the very file that’s broken. `safe-launch.sh` detects the parse failure and never propagates it: edits under `.claude/hooks/` and `.hooks/` are allowed for self-repair, and every other tool gets the degraded response below. It also refuses to honor a runtime exit 2 from the wrapped hook—wrapped hooks signal denial via JSON, never exit 2. The inline bootstrap covers the one file the shim can’t guard: itself.
+
+Which degraded response you get is the `AGENT_SANITIZER_FAIL_OPEN` knob, the same one [`plugin/scripts/safe-launch.sh`](../plugin/scripts/safe-launch.sh) and `failOpenEnabled()` in `claude-hooks/lib/hook-io.mjs` read:
+
+| `AGENT_SANITIZER_FAIL_OPEN`         | Posture on a hook’s own failure                                                                                                          |
+| ----------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
+| unset (default), or any other value | **Open**—the tool runs; a non-empty `additionalContext` warning records that it ran unguarded, plus a stderr line. Nothing prompts.      |
+| `0` or `false`                      | **Closed**—`permissionDecision: "ask"`, so an unguarded tool call is never silent. Pin this when a session must not run unchecked tools. |
+
+Keep the fallback `;`-separated (never `&&`-joined, which would print nothing at all when the syntax check fails, leaving no record that the guard was skipped) and keep **both** posture arms—`validate-config.sh` enforces both properties.
 
 ```json
 {
   "type": "command",
-  "command": "bash -n \"$CLAUDE_PROJECT_DIR\"/.claude/hooks/safe-launch.sh 2>/dev/null && exec bash \"$CLAUDE_PROJECT_DIR\"/.claude/hooks/safe-launch.sh \"$CLAUDE_PROJECT_DIR\"/.claude/hooks/your-new-hook.sh; printf '%s\\n' '{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"ask\",\"permissionDecisionReason\":\"safe-launch.sh itself is missing or corrupt; repair .claude/hooks/safe-launch.sh (approve its edits manually).\"}}'"
+  "command": "bash -n \"$CLAUDE_PROJECT_DIR\"/.claude/hooks/safe-launch.sh 2>/dev/null && exec bash \"$CLAUDE_PROJECT_DIR\"/.claude/hooks/safe-launch.sh \"$CLAUDE_PROJECT_DIR\"/.claude/hooks/your-new-hook.sh; echo 'safe-launch bootstrap: safe-launch.sh is missing or failed to parse - degrading' >&2; case \"${AGENT_SANITIZER_FAIL_OPEN:-}\" in 0 | false) printf '%s\\n' '{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"ask\",\"permissionDecisionReason\":\"safe-launch.sh itself is missing or corrupt; repair .claude/hooks/safe-launch.sh (approve this tool call manually).\"}}' ;; *) printf '%s\\n' '{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"additionalContext\":\"safe-launch.sh itself is missing or corrupt; repair .claude/hooks/safe-launch.sh. The PreToolUse guard is failing open, so this tool call ran UNCHECKED. Set AGENT_SANITIZER_FAIL_OPEN=0 to fail closed on hook failures.\"}}' ;; esac"
 }
 ```
 

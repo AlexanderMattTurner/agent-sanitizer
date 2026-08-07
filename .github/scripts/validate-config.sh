@@ -86,14 +86,17 @@ for f in .hooks/* .claude/hooks/*; do
 done
 
 # 3. Every PreToolUse hook must be invoked through the safe-launch BOOTSTRAP:
-#   bash -n .../safe-launch.sh 2>/dev/null && exec bash .../safe-launch.sh <target>; ... printf '<"ask" verdict JSON>'
+#   bash -n .../safe-launch.sh 2>/dev/null && exec bash .../safe-launch.sh <target>;
+#   case "$AGENT_SANITIZER_FAIL_OPEN" in 0|false) printf '<ask verdict>' ;; *) printf '<additionalContext warning>' ;; esac
 # safe-launch.sh guards its targets against parse/runtime faults, but nothing
 # else guards safe-launch.sh itself: a merge-conflict marker in the shim is a
 # bash parse error, exit 2, and a hard block on every guarded tool call. The
-# inline bootstrap syntax-checks the shim first and degrades to a
-# permissionDecision="ask" verdict when it is corrupt or missing, so the worst
-# case is a manual-approval prompt, never a lockout. A bare first-token
-# safe-launch.sh invocation is rejected too: it leaves the shim unguarded.
+# inline bootstrap syntax-checks the shim first and degrades per the posture
+# knob when it is corrupt or missing, so a broken shim never hard-blocks. A
+# bare first-token safe-launch.sh invocation is rejected: it leaves the shim
+# unguarded. BOTH posture arms are required — an open-only bootstrap silently
+# strands a host that pinned AGENT_SANITIZER_FAIL_OPEN=0 (agent-glovebox) with
+# the loose posture, and a closed-only one reintroduces the prompt stall.
 echo "Checking PreToolUse hooks use the safe-launch bootstrap..."
 if [[ -f .claude/settings.json ]]; then
   if ! pretooluse_cmds=$(jq -r '.hooks.PreToolUse // [] | .[] | .hooks[] | select(.type == "command") | .command' .claude/settings.json 2>/dev/null); then
@@ -102,12 +105,13 @@ if [[ -f .claude/settings.json ]]; then
   fi
   while IFS= read -r cmd; do
     [[ -z "$cmd" ]] && continue
-    # The ask fallback must be `;`-separated (`; printf`), not `&&`-joined: an
-    # `&&`-chained printf never runs when `bash -n` fails, printing nothing —
-    # and empty stdout with exit 0 is Claude Code's ALLOW, a silent fail-open.
+    # The fallback must be `;`-separated (`; case`), not `&&`-joined: an
+    # `&&`-chained fallback never runs when `bash -n` fails, printing nothing —
+    # and empty stdout with exit 0 is Claude Code's ALLOW, so the transcript
+    # would carry no record that the guard was skipped.
     case "$cmd" in
-    'bash -n '*'/safe-launch.sh 2>/dev/null && exec bash '*'/safe-launch.sh '*'; printf '*'"permissionDecision":"ask"'*) ;;
-    *) error "PreToolUse hook must use the safe-launch bootstrap (bash -n .../safe-launch.sh 2>/dev/null && exec bash .../safe-launch.sh <target>; printf '<ask verdict>' — the printf fallback ;-separated, never &&-joined) so a corrupt safe-launch.sh degrades to ask instead of hard-blocking the session: $cmd" ;;
+    'bash -n '*'/safe-launch.sh 2>/dev/null && exec bash '*'/safe-launch.sh '*'; case '*'AGENT_SANITIZER_FAIL_OPEN'*'"permissionDecision":"ask"'*'"additionalContext"'*) ;;
+    *) error "PreToolUse hook must use the safe-launch bootstrap (bash -n .../safe-launch.sh 2>/dev/null && exec bash .../safe-launch.sh <target>; case \"\$AGENT_SANITIZER_FAIL_OPEN\" with BOTH a fail-closed ask arm and a fail-open additionalContext arm, ;-separated and never &&-joined) so a corrupt safe-launch.sh degrades per the posture knob instead of hard-blocking the session: $cmd" ;;
     esac
   done <<<"$pretooluse_cmds"
 fi
