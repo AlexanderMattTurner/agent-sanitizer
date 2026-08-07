@@ -22,8 +22,15 @@ npm install agent-sanitizer
 
 Then turn auto-update on — **third-party marketplaces have it off by default**,
 so an install left alone keeps running the release it was installed from, and
-never picks up a fix to a layer. `/plugin` → **Marketplaces** → this one →
-**Enable auto-update**, or declare it once in `~/.claude/settings.json`:
+never picks up a fix to a layer. The plugin ships a command that does it:
+
+```
+/agent-sanitizer:enable-auto-update
+```
+
+It merges the entry below into your `~/.claude/settings.json`, leaving your
+other settings alone. `/plugin` → **Marketplaces** → **Enable auto-update** is
+the equivalent by hand, and so is writing it yourself:
 
 ```json
 {

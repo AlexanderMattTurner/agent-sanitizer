@@ -234,35 +234,60 @@ test("both READMEs advertise the marketplace and plugin these manifests define",
   assert.equal(manifest.homepage, `https://github.com/${SLUG}#readme`);
 });
 
+/**
+ * Parse the single fenced `json` block that carries the auto-update settings out
+ * of a markdown file, and assert it names this marketplace and plugin. Every
+ * copy of this block is an instruction someone (or Claude) follows literally, so
+ * it is compared as parsed JSON rather than grepped for.
+ * @param {string} doc repo-relative markdown path
+ */
+function assertAutoUpdateBlock(doc) {
+  const entry = marketplace.plugins.find((p) => p.source === "./plugin");
+  const text = readFileSync(join(ROOT, doc), "utf-8");
+  const blocks = [...text.matchAll(/```json\n([\s\S]*?)```/g)]
+    .map((m) => m[1])
+    .filter((b) => b.includes("extraKnownMarketplaces"))
+    .map((b) => JSON.parse(b));
+  assert.equal(
+    blocks.length,
+    1,
+    `${doc}: expected exactly one extraKnownMarketplaces block, got ${blocks.length}`,
+  );
+  const [block] = blocks;
+  assert.deepEqual(block.extraKnownMarketplaces[marketplace.name], {
+    source: { source: "github", repo: SLUG },
+    autoUpdate: true,
+  });
+  assert.equal(block.enabledPlugins[`${entry.name}@${marketplace.name}`], true);
+}
+
 test("both READMEs document an install that keeps itself updated", () => {
   // Claude Code defaults `autoUpdate` to ON only for official Anthropic
   // marketplaces; a third-party one like this defaults to OFF, so an install
   // that follows the two slash commands alone stays pinned to whatever release
   // it was added from and never receives a fix to a layer. The settings block
   // is what closes that, which makes it load-bearing documentation rather than
-  // a nicety — parsed and compared here, not grepped for.
-  const entry = marketplace.plugins.find((p) => p.source === "./plugin");
-  for (const doc of ["README.md", join("plugin", "README.md")]) {
-    const text = readFileSync(join(ROOT, doc), "utf-8");
-    const blocks = [...text.matchAll(/```json\n([\s\S]*?)```/g)]
-      .map((m) => m[1])
-      .filter((b) => b.includes("extraKnownMarketplaces"))
-      .map((b) => JSON.parse(b));
-    assert.equal(
-      blocks.length,
-      1,
-      `${doc}: expected exactly one extraKnownMarketplaces block, got ${blocks.length}`,
-    );
-    const [block] = blocks;
-    assert.deepEqual(block.extraKnownMarketplaces[marketplace.name], {
-      source: { source: "github", repo: SLUG },
-      autoUpdate: true,
-    });
-    assert.equal(
-      block.enabledPlugins[`${entry.name}@${marketplace.name}`],
-      true,
-    );
-  }
+  // a nicety.
+  for (const doc of ["README.md", join("plugin", "README.md")])
+    assertAutoUpdateBlock(doc);
+});
+
+test("the shipped skill writes the same settings the READMEs document", () => {
+  // `/agent-sanitizer:enable-auto-update` is the one-command form of that block,
+  // and its body IS the spec Claude follows — a stale repo or plugin id here
+  // would have it write an entry pointing somewhere nobody publishes, into the
+  // user's global settings.
+  const rel = join("plugin", "skills", "enable-auto-update", "SKILL.md");
+  assertAutoUpdateBlock(rel);
+
+  const body = readFileSync(join(ROOT, rel), "utf-8");
+  const frontmatter = /^---\n([\s\S]*?)\n---\n/.exec(body)?.[1];
+  assert.ok(frontmatter, "SKILL.md has no YAML frontmatter");
+  assert.match(frontmatter, /^name: enable-auto-update$/m);
+  // The skill edits ~/.claude/settings.json. Model-invocable, Claude could
+  // decide to rewrite a user's global settings unprompted; this keeps it to an
+  // explicit `/agent-sanitizer:enable-auto-update`.
+  assert.match(frontmatter, /^disable-model-invocation: true$/m);
 });
 
 // ─── this repo's own sessions ────────────────────────────────────────────────

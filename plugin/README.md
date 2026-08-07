@@ -14,10 +14,18 @@ warning by default; `AGENT_SANITIZER_FAIL_OPEN=0` makes them block instead.
 **Turn auto-update on after installing.** Claude Code enables it by default only
 for official Anthropic marketplaces; a third-party one like this defaults to
 off, so the install stays pinned to the release you added and never picks up a
-fix to a layer. Either `/plugin` → **Marketplaces** → **Enable auto-update**, or
-declare the marketplace in `~/.claude/settings.json` (user-wide) or a repo's
-`.claude/settings.json` (everyone who trusts that folder), which installs it and
-sets the flag in one place:
+fix to a layer. The plugin ships a command for it:
+
+```
+/agent-sanitizer:enable-auto-update
+```
+
+It merges the entry below into `~/.claude/settings.json` and reports what it
+changed; an existing entry pointing at a different repo stops it rather than
+being overwritten. `/plugin` → **Marketplaces** → **Enable auto-update** does
+the same by hand, and so does writing it into `~/.claude/settings.json`
+(user-wide) or a repo's `.claude/settings.json` (everyone who trusts that
+folder):
 
 ```json
 {
@@ -110,6 +118,7 @@ listens on a private Unix socket.
 ```
 .claude-plugin/plugin.json   plugin manifest
 hooks/hooks.json             the four hook registrations
+skills/enable-auto-update/   the /agent-sanitizer:enable-auto-update command
 scripts/safe-launch.sh       launcher (prints a response even when node is missing)
 scripts/provision-redactor.sh  SessionStart provisioning of the Python redactor
 scripts/build-plugin.mjs     builds dist/ from claude-hooks/ against the pinned engine
