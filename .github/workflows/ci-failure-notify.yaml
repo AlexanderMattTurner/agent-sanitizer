@@ -30,6 +30,7 @@ on: # zizmor: ignore[dangerous-triggers]
       - Gitleaks Secret Scanning
       - Hook lifecycle
       - Lint
+      - Main branch health
       - Node tests
       - PR meta (privileged)
       - pre-commit

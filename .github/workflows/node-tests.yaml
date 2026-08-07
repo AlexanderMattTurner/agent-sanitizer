@@ -83,6 +83,13 @@ jobs:
       - name: Run workflow step-reference guard
         run: node --test .github/scripts/workflow-step-refs.test.mjs
 
+      # Same dot-directory blind spot. This suite pins the main-branch health
+      # sweep: which run conclusions count as red, and the self-exclusion that
+      # stops the checker latching on its own first failure. Both are the kind
+      # of predicate that reads as obviously-correct and silently inverts.
+      - name: Run main-branch health sweep tests
+        run: node --test .github/scripts/main-health.test.mjs
+
       # Named explicitly rather than left to `pnpm test`'s discovery. This suite
       # gates the shipped plugin artifact — the reproducibility byte-compare and
       # every hook's fail-closed verdict — so which invocation reaches it must be
