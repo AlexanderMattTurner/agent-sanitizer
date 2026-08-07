@@ -250,16 +250,38 @@ export function sanitizerUnavailable(err, failedPackages = failedLazyPackages) {
  * `additionalContext` so the transcript still carries the failure: the posture
  * gives up ENFORCEMENT, not visibility, and stdout is never left empty (which
  * Claude Code would record as a clean run rather than a degraded one).
+ *
+ * The remedy rides along on the unloaded-binding branch. {@link sanitizerUnavailable}
+ * opens on two shapes: a `DEP_UNAVAILABLE` error already carries the remedy in
+ * its message, but the bare TypeError names neither the package nor the fix —
+ * and under this posture there is no permissionDecisionReason carrying it
+ * either, so the one message telling a reader how to un-break the install would
+ * be the one that went missing. `failedPackages`/`packageMessage` are injectable
+ * for the same reason `depLoadHint`'s are: the recorded-failure set is
+ * process-wide and untestable otherwise.
  * @param {string} hookName
  * @param {string} guarded  what passed through, e.g. "tool output"
  * @param {unknown} err
+ * @param {() => string[]} [failedPackages]
+ * @param {(pkg: string) => string} [packageMessage]
  * @returns {string}
  */
-export function failOpenContext(hookName, guarded, err) {
+export function failOpenContext(
+  hookName,
+  guarded,
+  err,
+  failedPackages = failedLazyPackages,
+  packageMessage = missingPackageMessage,
+) {
+  // Same inference depLoadHint makes, and confined the same way: only a
+  // TypeError, only while the loader holds a recorded failure. Naming a package
+  // on any other throw would send the reader to a reinstall that fixes nothing.
+  const [pkg] = err instanceof TypeError ? failedPackages() : [];
+  const hint = pkg === undefined ? "" : ` ${packageMessage(pkg)}`;
   return (
     `WARNING: the ${hookName} hook failed (${safeErrMessage(err)}) and ` +
     `${FAIL_OPEN_ENV}=1 is set — this ${guarded} passed through UNSANITIZED. ` +
-    `Treat its contents as untrusted.`
+    `Treat its contents as untrusted.${hint}`
   );
 }
 

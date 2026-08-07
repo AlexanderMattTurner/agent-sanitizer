@@ -614,14 +614,23 @@ test("launcher fails CLOSED when node is absent from PATH", (t) => {
   assert.equal(out.permissionDecision, "ask");
 });
 
-test("launcher fails CLOSED per event shape on a corrupt bundle", (t) => {
-  const plugin = stagePlugin(t);
-  // Truncated mid-expression: parses as a syntax error, which `node --check`
-  // catches before any hook code runs.
+/**
+ * Corrupt the staged bundle so `node --check` rejects it before any hook code
+ * runs. Truncated mid-expression: a syntax error is what the launcher's probe
+ * catches. One recipe, shared by both posture tests — two copies of the
+ * truncation string and the bundle path would let one test's premise be fixed
+ * while the other silently kept testing nothing.
+ */
+function corruptBundle(plugin) {
   writeFileSync(
     join(plugin, "dist", "hooks", "plugin-hooks.bundle.mjs"),
     "const x = (",
   );
+}
+
+test("launcher fails CLOSED per event shape on a corrupt bundle", (t) => {
+  const plugin = stagePlugin(t);
+  corruptBundle(plugin);
 
   const pre = launch(plugin, "PreToolUse", "pretooluse-sanitize", {});
   assert.equal(
@@ -651,14 +660,6 @@ test("launcher fails CLOSED per event shape on a corrupt bundle", (t) => {
 // above gets a mirror here proving it passes through, and the negative pins at
 // the end prove the knob widens nothing else: parse failures, wiring errors and
 // detection verdicts are unmoved by it.
-
-/** Corrupt the staged bundle so `node --check` rejects it before any hook runs. */
-function corruptBundle(plugin) {
-  writeFileSync(
-    join(plugin, "dist", "hooks", "plugin-hooks.bundle.mjs"),
-    "const x = (",
-  );
-}
 
 test("launcher fails OPEN under the knob when node is absent from PATH", (t) => {
   const res = launchWithoutNode(t, stagePlugin(t), FAIL_OPEN);
@@ -717,8 +718,10 @@ test("launcher fails OPEN per event shape under the knob on a corrupt bundle", (
   assert.equal(postOut.updatedToolOutput, undefined);
   assert.match(postOut.additionalContext, /UNSANITIZED/);
 
-  // SessionStart has no verdict channel, so it is already advisory: the knob
-  // must not perturb its shape.
+  // SessionStart has no verdict channel, so it is already advisory — the knob
+  // must not hand it one. Its WORDING does change, and is the launcher's one
+  // per-event arm, so pin that too: this event guards no action, so a warning
+  // claiming something "passed through UNSANITIZED" would be false.
   const start = launch(
     plugin,
     "SessionStart",
@@ -728,10 +731,15 @@ test("launcher fails OPEN per event shape under the knob on a corrupt bundle", (
       env: FAIL_OPEN,
     },
   );
-  assert.equal(
-    JSON.parse(start.stdout).hookSpecificOutput.hookEventName,
-    "SessionStart",
-  );
+  const startOut = JSON.parse(start.stdout).hookSpecificOutput;
+  assert.equal(startOut.hookEventName, "SessionStart");
+  assert.match(startOut.additionalContext, /UNSCANNED/);
+  assert.doesNotMatch(startOut.additionalContext, /passed through/);
+  // Exactly the two advisory keys — no verdict field appeared alongside them.
+  assert.deepEqual(Object.keys(startOut).sort(), [
+    "additionalContext",
+    "hookEventName",
+  ]);
 });
 
 test("output hook still fails CLOSED under the knob when the redactor is unreachable", (t) => {

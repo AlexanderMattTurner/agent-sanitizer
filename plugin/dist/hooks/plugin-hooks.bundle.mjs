@@ -79,8 +79,10 @@ function sanitizerUnavailable(err, failedPackages = failedLazyPackages) {
     return true;
   return err instanceof TypeError && failedPackages().length > 0;
 }
-function failOpenContext(hookName, guarded, err) {
-  return `WARNING: the ${hookName} hook failed (${safeErrMessage(err)}) and ${FAIL_OPEN_ENV}=1 is set \u2014 this ${guarded} passed through UNSANITIZED. Treat its contents as untrusted.`;
+function failOpenContext(hookName, guarded, err, failedPackages = failedLazyPackages, packageMessage = missingPackageMessage) {
+  const [pkg] = err instanceof TypeError ? failedPackages() : [];
+  const hint = pkg === void 0 ? "" : ` ${packageMessage(pkg)}`;
+  return `WARNING: the ${hookName} hook failed (${safeErrMessage(err)}) and ${FAIL_OPEN_ENV}=1 is set \u2014 this ${guarded} passed through UNSANITIZED. Treat its contents as untrusted.${hint}`;
 }
 async function readAllBounded(stream, maxBytes = MAX_STDIN_BYTES) {
   const chunks = [];

@@ -69,6 +69,37 @@ describe("the fail-open knob itself", () => {
     assert.match(context, /UNSANITIZED/);
     assert.match(context, new RegExp(`${FAIL_OPEN_ENV}=1`));
   });
+
+  it("carries the remedy on the unloaded-binding branch", () => {
+    // The DEP_UNAVAILABLE message above already embeds the remedy. A bare
+    // TypeError names neither package nor fix, and this posture emits no
+    // permissionDecisionReason to carry one — so the hint must ride here or the
+    // operator is told the install broke and nothing about un-breaking it.
+    const typeErr = new TypeError("sanitizeText is not a function");
+    const context = failOpenContext(
+      "pretooluse-sanitize",
+      "tool input",
+      typeErr,
+      () => ["agent-sanitizer"],
+      (pkg) => `${pkg} is unavailable: REMEDY-HERE`,
+    );
+    assert.match(context, /sanitizeText is not a function/);
+    assert.match(context, /REMEDY-HERE/);
+  });
+
+  it("names no package on a throw that is not an unloaded binding", () => {
+    // The recorded-failure set is process-wide and carries no link to THIS
+    // error; claiming a package on an unrelated throw sends the reader to a
+    // reinstall that fixes nothing.
+    const context = failOpenContext(
+      "pretooluse-sanitize",
+      "tool input",
+      LAYER_THREW,
+      () => ["agent-sanitizer"],
+      (pkg) => `${pkg} is unavailable: REMEDY-HERE`,
+    );
+    assert.doesNotMatch(context, /REMEDY-HERE/);
+  });
 });
 
 describe("sanitizerUnavailable", () => {
