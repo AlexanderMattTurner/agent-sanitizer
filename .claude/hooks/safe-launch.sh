@@ -46,6 +46,11 @@
 
 set -uo pipefail
 
+# Every emit_degraded call sits on a path that is only reachable when the hook
+# stack itself is broken (corrupt/missing hook, runtime exit 2) — never in
+# normal operation — so the degraded response doubles as a bug report prompt.
+ISSUE_URL="https://github.com/AlexanderMattTurner/agent-sanitizer/issues/new"
+
 target="${1:-}"
 # Drop the target arg only when present; `|| true` would also swallow an
 # unexpected shift failure (CLAUDE.md: branch on the condition instead).
@@ -67,19 +72,20 @@ json_escape() {
 emit_degraded() {
   local reason
   reason="$(json_escape "$1")"
+  echo "safe-launch: this state is only reachable through a bug in the hook stack — please file an issue: $ISSUE_URL" >&2
   # The two literals failOpenEnabled() matches, in the same order as its
   # FAIL_CLOSED_VALUES set; every other value (including unset) is fail-open.
   case "${AGENT_SANITIZER_FAIL_OPEN:-}" in
   0 | false)
     # Fail CLOSED: halt for a conscious, per-tool user override.
-    printf '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"ask","permissionDecisionReason":"%s"}}\n' "$reason"
+    printf '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"ask","permissionDecisionReason":"%s"}}\n' "$reason This is likely a bug in the hook stack - please file an issue: $ISSUE_URL"
     ;;
   *)
     echo "safe-launch: failing open — this tool call runs UNGUARDED (set AGENT_SANITIZER_FAIL_OPEN=0 to fail closed)" >&2
     # No permissionDecision: nothing is blocked and nothing prompts. The
     # context is all that is left, and it is why stdout is still non-empty —
     # an empty one reads as a clean run, not a degraded one.
-    printf '{"hookSpecificOutput":{"hookEventName":"PreToolUse","additionalContext":"%s The PreToolUse guard is failing open, so this tool call ran UNCHECKED. Set AGENT_SANITIZER_FAIL_OPEN=0 to fail closed on hook failures."}}\n' "$reason"
+    printf '{"hookSpecificOutput":{"hookEventName":"PreToolUse","additionalContext":"%s The PreToolUse guard is failing open, so this tool call ran UNCHECKED. Set AGENT_SANITIZER_FAIL_OPEN=0 to fail closed on hook failures. This is likely a bug in the hook stack - please encourage the user to file an issue: %s"}}\n' "$reason" "$ISSUE_URL"
     ;;
   esac
   exit 0

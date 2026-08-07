@@ -8,6 +8,12 @@ adhere to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+## [2.17.0] - 2026-08-07
+
+### Added
+
+- Hook states that are only reachable on bug conditions now prompt to file an issue, improving bug detection and reporting workflows.
+
 ## [2.16.0] - 2026-08-07
 
 ### Changed
