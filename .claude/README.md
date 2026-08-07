@@ -26,6 +26,27 @@ This directory contains configuration and skills for Claude Code.
 
 ## How It Works
 
+### The sanitizer plugin, in this repo's own sessions
+
+`settings.json` registers this repo as a plugin marketplace (`extraKnownMarketplaces`,
+with `autoUpdate: true`) and enables `agent-sanitizer@agent-sanitizer`
+(`enabledPlugins`). Trusting the project folder prompts the install; after that
+Claude Code refreshes the marketplace clone on startup and picks up whatever
+`version` the latest release stamped
+into `plugin/.claude-plugin/plugin.json`, so sessions here track the SHIPPED
+hooks rather than the working tree. That is deliberate: it is the same artifact
+users install, so a broken release is felt here first.
+
+Two consequences worth knowing. The first session after an update runs the
+plugin's SessionStart provisioning (a `uv`/`python3` install of the redaction
+engine into the plugin data dir), so a cold start is slower. And the hooks under
+`hooks/` below are unrelated dev-workflow hooks — the sanitization layers come
+from the plugin, not from this directory.
+
+`plugin/test/plugin-manifest.test.mjs` pins the marketplace name, repo slug and
+plugin id here against the two manifests, so a rename cannot leave this file
+pointing at a marketplace nobody publishes.
+
 ### Session Start Hook
 
 When Claude Code starts a session, it automatically runs `session-setup.sh` which:

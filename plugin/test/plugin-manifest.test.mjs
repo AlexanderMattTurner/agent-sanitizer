@@ -78,6 +78,19 @@ const ENTRY_KEYS = new Set([
 const KEBAB = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 const SEMVER = /^[0-9]+\.[0-9]+\.[0-9]+$/;
 
+/**
+ * The owner/repo this package is published from — the single source for every
+ * self-referential GitHub reference the plugin surfaces carry. Deriving them
+ * rather than hardcoding is what makes a fork or a rename fail loudly here
+ * instead of silently pointing installers at the upstream.
+ */
+const SLUG = (() => {
+  const { url } = readJson(join(ROOT, "package.json")).repository;
+  const slug = /github\.com\/(?<slug>[^/]+\/[^/.]+)/.exec(url)?.groups.slug;
+  assert.ok(slug, `could not read an owner/repo slug from ${url}`);
+  return slug;
+})();
+
 // ─── marketplace.json ────────────────────────────────────────────────────────
 
 test("marketplace.json carries the required fields and only documented keys", () => {
@@ -211,15 +224,36 @@ test("both READMEs advertise the marketplace and plugin these manifests define",
   // name the repo this marketplace is actually served from. A fork or a rename
   // leaves it pointing at the upstream, and every reader installs someone else's
   // plugin.
-  const { url } = readJson(join(ROOT, "package.json")).repository;
-  const slug = /github\.com\/(?<slug>[^/]+\/[^/.]+)/.exec(url)?.groups.slug;
-  assert.ok(slug, `could not read an owner/repo slug from ${url}`);
-  const add = `/plugin marketplace add ${slug}`;
+  const add = `/plugin marketplace add ${SLUG}`;
   for (const doc of ["README.md", join("plugin", "README.md")]) {
     const text = readFileSync(join(ROOT, doc), "utf-8");
     assert.ok(text.includes(install), `${doc} is missing: ${install}`);
     assert.ok(text.includes(add), `${doc} is missing: ${add}`);
   }
-  assert.equal(manifest.repository, `https://github.com/${slug}`);
-  assert.equal(manifest.homepage, `https://github.com/${slug}#readme`);
+  assert.equal(manifest.repository, `https://github.com/${SLUG}`);
+  assert.equal(manifest.homepage, `https://github.com/${SLUG}#readme`);
+});
+
+// ─── this repo's own sessions ────────────────────────────────────────────────
+
+test("the project settings install and auto-update this marketplace's plugin", () => {
+  // `.claude/settings.json` is what makes a session in this repo run the
+  // SHIPPED hooks: trusting the folder prompts the install, and from then on
+  // Claude Code background-refreshes the marketplace clone and picks up each
+  // release's `version` bump. Every identifier here is a name from the two
+  // manifests, so a rename that missed this file leaves the entry pointing at a
+  // marketplace nobody publishes — which fails silently, as a plugin that never
+  // installs rather than an error.
+  const settings = readJson(join(ROOT, ".claude", "settings.json"));
+  const known = settings.extraKnownMarketplaces?.[marketplace.name];
+  assert.deepEqual(known?.source, { source: "github", repo: SLUG });
+  // Without this the marketplace clone is refreshed only when someone runs
+  // `/plugin marketplace update` by hand, and sessions here silently keep
+  // running whatever release was current the day they first trusted the folder.
+  assert.equal(known?.autoUpdate, true);
+  const entry = marketplace.plugins.find((p) => p.source === "./plugin");
+  assert.equal(
+    settings.enabledPlugins?.[`${entry.name}@${marketplace.name}`],
+    true,
+  );
 });
