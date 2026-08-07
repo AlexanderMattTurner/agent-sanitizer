@@ -305,7 +305,13 @@ if (
       },
     });
     if (response !== null) process.stdout.write(JSON.stringify(response));
-  } catch {
-    process.exit(0); // Advisory only: never block the agent on a hook fault.
+  } catch (err) {
+    // Advisory only: never block the agent on a hook fault — but a fault here
+    // is itself a bug, and silence is how it stays unfixed.
+    process.stderr.write(
+      `parallelism-nudge hook fault (advisory, tool call unaffected): ${err instanceof Error ? err.message : String(err)} — ` +
+        "likely a bug; please file an issue: https://github.com/AlexanderMattTurner/agent-sanitizer/issues/new\n",
+    );
+    process.exit(0);
   }
 }

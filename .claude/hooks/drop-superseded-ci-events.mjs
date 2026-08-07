@@ -293,7 +293,8 @@ export async function main(read, write, listHeads = defaultListHeads) {
       // (no stdout = no verdict); it is never blocked blind.
       onError: (err) =>
         process.stderr.write(
-          `drop-superseded-ci-events passing event through: ${errMessage(err)}\n`,
+          `drop-superseded-ci-events passing event through: ${errMessage(err)} — ` +
+            "if this recurs it is likely a bug; please file an issue: https://github.com/AlexanderMattTurner/agent-sanitizer/issues/new\n",
         ),
     },
   );
