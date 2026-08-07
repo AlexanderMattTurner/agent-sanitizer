@@ -17,6 +17,39 @@ The first session after install provisions the Python secret-redaction engine
 reaches the model **unredacted** — set `AGENT_SANITIZER_FAIL_OPEN=0` to have it
 suppressed instead.
 
+### Staying current
+
+Claude Code auto-updates Anthropic's own marketplaces by default and nobody
+else's, so an install of this one pins you to the release you added and later
+detector fixes never arrive. There is no slash command for the toggle: run
+`/plugin`, open the **Marketplaces** tab, select `agent-sanitizer`, and choose
+**Enable auto-update**. Updates are fetched in the background shortly after a
+session starts and load on `/reload-plugins` or at the next launch.
+
+To pull a release by hand instead:
+
+```
+/plugin marketplace update agent-sanitizer
+/plugin update agent-sanitizer@agent-sanitizer
+```
+
+Fleet-wide, an administrator can enable it from managed settings rather than
+per user:
+
+```json
+{
+  "extraKnownMarketplaces": {
+    "agent-sanitizer": {
+      "source": {
+        "source": "github",
+        "repo": "AlexanderMattTurner/agent-sanitizer"
+      },
+      "autoUpdate": true
+    }
+  }
+}
+```
+
 ## What it does
 
 | Hook                   | Event            | Protection                                                                                                                                                                                    |

@@ -215,11 +215,22 @@ test("both READMEs advertise the marketplace and plugin these manifests define",
   const slug = /github\.com\/(?<slug>[^/]+\/[^/.]+)/.exec(url)?.groups.slug;
   assert.ok(slug, `could not read an owner/repo slug from ${url}`);
   const add = `/plugin marketplace add ${slug}`;
+  // Auto-update is off by default for a third-party marketplace, so both READMEs
+  // also advertise the manual refresh. Same rename hazard as the install pair.
+  const refresh = `/plugin marketplace update ${marketplace.name}`;
+  const update = `/plugin update ${entry.name}@${marketplace.name}`;
   for (const doc of ["README.md", join("plugin", "README.md")]) {
     const text = readFileSync(join(ROOT, doc), "utf-8");
-    assert.ok(text.includes(install), `${doc} is missing: ${install}`);
-    assert.ok(text.includes(add), `${doc} is missing: ${add}`);
+    for (const command of [install, add, refresh, update])
+      assert.ok(text.includes(command), `${doc} is missing: ${command}`);
   }
+  // The managed-settings snippet re-states the repo as JSON, out of reach of the
+  // `add` shorthand check above.
+  const pluginReadme = readFileSync(join(ROOT, "plugin", "README.md"), "utf-8");
+  assert.ok(
+    pluginReadme.includes(`"repo": "${slug}"`),
+    `plugin/README.md's extraKnownMarketplaces entry does not name ${slug}`,
+  );
   assert.equal(manifest.repository, `https://github.com/${slug}`);
   assert.equal(manifest.homepage, `https://github.com/${slug}#readme`);
 });
