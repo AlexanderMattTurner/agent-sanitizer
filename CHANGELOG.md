@@ -8,6 +8,16 @@ adhere to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+## [2.16.0] - 2026-08-07
+
+### Changed
+- PreToolUse hook degradation is now gated on the `AGENT_SANITIZER_FAIL_OPEN` environment variable for safer fail-open behavior.
+- Hook stdout is now preserved byte-identical and fail-open ask fallbacks are rejected for more predictable hook execution.
+
+### Fixed
+- PreToolUse hook faults are now degraded to ask verdicts instead of hard blocks for improved resilience.
+- Shell posture handling in exit scenarios now correctly survives backslashes and properly handles fail-open configurations.
+
 ## [2.15.0] - 2026-08-07
 
 ### Changed
