@@ -8,6 +8,18 @@ adhere to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+## [2.15.0] - 2026-08-07
+
+### Changed
+- Claude Code hooks now fail open by default when they cannot run, rather than preventing execution.
+
+### Fixed
+- Fixed incorrect claim that output was suppressed when it was not suppressed.
+- Reinstall remedy guidance is now included in fail-open warnings.
+
+### Added
+- New opt-in `AGENT_SANITIZER_FAIL_OPEN` posture knob for customizing hook failure behavior.
+
 ## [2.14.13] - 2026-08-05
 
 ### Fixed
