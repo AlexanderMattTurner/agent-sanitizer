@@ -124,6 +124,33 @@ def test_posture_values_are_disjoint_and_populated() -> None:
     assert len(CLOSED_VALUES) >= 2 and len(OPEN_VALUES) >= 2
 
 
+@pytest.mark.parametrize("fail_open", ALL_POSTURES)
+def test_posture_split_matches_fail_open_enabled(fail_open: str | None) -> None:
+    """The shell shim's 0|false case must decide exactly as failOpenEnabled()
+    in claude-hooks/lib/hook-io.mjs — the launcher cannot import it, so the two
+    state the same literals independently and this is the drift guard. Runs the
+    REAL mjs function on every knob value the shell tests use."""
+    script = (
+        "import(process.argv[1]).then(m => "
+        "process.stdout.write(String(m.failOpenEnabled(JSON.parse(process.argv[2])))))"
+    )
+    result = subprocess.run(
+        [
+            "node",
+            "-e",
+            script,
+            str(REPO_ROOT / "claude-hooks" / "lib" / "hook-io.mjs"),
+            json.dumps(posture_env(fail_open)),
+        ],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stderr
+    expected_open = fail_open not in CLOSED_VALUES
+    assert result.stdout == str(expected_open).lower()
+
+
 def test_healthy_target_stdout_and_exit_code_pass_through(tmp_path: Path) -> None:
     """A deliberate JSON verdict (here: deny) from a healthy target reaches
     Claude Code byte-identical, and exit 0 is preserved."""
@@ -160,12 +187,15 @@ def test_healthy_target_stdout_is_byte_identical(tmp_path: Path) -> None:
     assert result.stdout == "line1\nline2"
 
 
-def test_healthy_target_exit_1_stays_non_blocking(tmp_path: Path) -> None:
-    """Exit 1 (Claude Code's non-blocking error) passes through unchanged —
-    no verdict is fabricated for an advisory failure."""
+@pytest.mark.parametrize("fail_open", ALL_POSTURES)
+def test_healthy_target_exit_1_stays_non_blocking(
+    tmp_path: Path, fail_open: str | None
+) -> None:
+    """Exit 1 (Claude Code's non-blocking error) passes through unchanged under
+    every posture — no verdict is fabricated for an advisory failure."""
     sandbox = make_sandbox(tmp_path)
     target = write_target(sandbox, 'echo "checks failed" >&2; exit 1')
-    result = run_safe_launch(sandbox, target)
+    result = run_safe_launch(sandbox, target, extra_env=posture_env(fail_open))
     assert result.returncode == 1
     assert result.stdout == ""
     assert "checks failed" in result.stderr
