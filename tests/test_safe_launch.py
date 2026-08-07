@@ -125,8 +125,8 @@ def test_exit_2_stderr_with_json_metachars_still_yields_valid_json(
     target = write_target(sandbox, "echo 'he said \"x\" \\ y' >&2; exit 2")
     result = run_safe_launch(sandbox, target)
     assert result.returncode == 0, result.stderr
-    out = ask_verdict(result.stdout)
-    assert 'he said "x"' in out["permissionDecisionReason"]
+    out = ask_verdict(result.stdout)  # json.loads => the escaping held
+    assert 'he said "x" \\ y' in out["permissionDecisionReason"]
 
 
 def test_exit_2_converts_even_when_mktemp_is_broken(tmp_path: Path) -> None:
