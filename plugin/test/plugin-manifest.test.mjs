@@ -78,6 +78,19 @@ const ENTRY_KEYS = new Set([
 const KEBAB = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 const SEMVER = /^[0-9]+\.[0-9]+\.[0-9]+$/;
 
+/**
+ * The owner/repo this package is published from — the single source for every
+ * self-referential GitHub reference the plugin surfaces carry. Deriving them
+ * rather than hardcoding is what makes a fork or a rename fail loudly here
+ * instead of silently pointing installers at the upstream.
+ */
+const SLUG = (() => {
+  const { url } = readJson(join(ROOT, "package.json")).repository;
+  const slug = /github\.com\/(?<slug>[^/]+\/[^/.]+)/.exec(url)?.groups.slug;
+  assert.ok(slug, `could not read an owner/repo slug from ${url}`);
+  return slug;
+})();
+
 // ─── marketplace.json ────────────────────────────────────────────────────────
 
 test("marketplace.json carries the required fields and only documented keys", () => {
@@ -211,15 +224,92 @@ test("both READMEs advertise the marketplace and plugin these manifests define",
   // name the repo this marketplace is actually served from. A fork or a rename
   // leaves it pointing at the upstream, and every reader installs someone else's
   // plugin.
-  const { url } = readJson(join(ROOT, "package.json")).repository;
-  const slug = /github\.com\/(?<slug>[^/]+\/[^/.]+)/.exec(url)?.groups.slug;
-  assert.ok(slug, `could not read an owner/repo slug from ${url}`);
-  const add = `/plugin marketplace add ${slug}`;
+  const add = `/plugin marketplace add ${SLUG}`;
   for (const doc of ["README.md", join("plugin", "README.md")]) {
     const text = readFileSync(join(ROOT, doc), "utf-8");
     assert.ok(text.includes(install), `${doc} is missing: ${install}`);
     assert.ok(text.includes(add), `${doc} is missing: ${add}`);
   }
-  assert.equal(manifest.repository, `https://github.com/${slug}`);
-  assert.equal(manifest.homepage, `https://github.com/${slug}#readme`);
+  assert.equal(manifest.repository, `https://github.com/${SLUG}`);
+  assert.equal(manifest.homepage, `https://github.com/${SLUG}#readme`);
+});
+
+/**
+ * Parse the single fenced `json` block that carries the auto-update settings out
+ * of a markdown file, and assert it names this marketplace and plugin. Every
+ * copy of this block is an instruction someone (or Claude) follows literally, so
+ * it is compared as parsed JSON rather than grepped for.
+ * @param {string} doc repo-relative markdown path
+ */
+function assertAutoUpdateBlock(doc) {
+  const entry = marketplace.plugins.find((p) => p.source === "./plugin");
+  const text = readFileSync(join(ROOT, doc), "utf-8");
+  const blocks = [...text.matchAll(/```json\n([\s\S]*?)```/g)]
+    .map((m) => m[1])
+    .filter((b) => b.includes("extraKnownMarketplaces"))
+    .map((b) => JSON.parse(b));
+  assert.equal(
+    blocks.length,
+    1,
+    `${doc}: expected exactly one extraKnownMarketplaces block, got ${blocks.length}`,
+  );
+  const [block] = blocks;
+  assert.deepEqual(block.extraKnownMarketplaces[marketplace.name], {
+    source: { source: "github", repo: SLUG },
+    autoUpdate: true,
+  });
+  assert.equal(block.enabledPlugins[`${entry.name}@${marketplace.name}`], true);
+}
+
+test("both READMEs document an install that keeps itself updated", () => {
+  // Claude Code defaults `autoUpdate` to ON only for official Anthropic
+  // marketplaces; a third-party one like this defaults to OFF, so an install
+  // that follows the two slash commands alone stays pinned to whatever release
+  // it was added from and never receives a fix to a layer. The settings block
+  // is what closes that, which makes it load-bearing documentation rather than
+  // a nicety.
+  for (const doc of ["README.md", join("plugin", "README.md")])
+    assertAutoUpdateBlock(doc);
+});
+
+test("the shipped skill writes the same settings the READMEs document", () => {
+  // `/agent-sanitizer:enable-auto-update` is the one-command form of that block,
+  // and its body IS the spec Claude follows — a stale repo or plugin id here
+  // would have it write an entry pointing somewhere nobody publishes, into the
+  // user's global settings.
+  const rel = join("plugin", "skills", "enable-auto-update", "SKILL.md");
+  assertAutoUpdateBlock(rel);
+
+  const body = readFileSync(join(ROOT, rel), "utf-8");
+  const frontmatter = /^---\n([\s\S]*?)\n---\n/.exec(body)?.[1];
+  assert.ok(frontmatter, "SKILL.md has no YAML frontmatter");
+  assert.match(frontmatter, /^name: enable-auto-update$/m);
+  // The skill edits ~/.claude/settings.json. Model-invocable, Claude could
+  // decide to rewrite a user's global settings unprompted; this keeps it to an
+  // explicit `/agent-sanitizer:enable-auto-update`.
+  assert.match(frontmatter, /^disable-model-invocation: true$/m);
+});
+
+// ─── this repo's own sessions ────────────────────────────────────────────────
+
+test("the project settings install and auto-update this marketplace's plugin", () => {
+  // `.claude/settings.json` is what makes a session in this repo run the
+  // SHIPPED hooks: trusting the folder prompts the install, and from then on
+  // Claude Code background-refreshes the marketplace clone and picks up each
+  // release's `version` bump. Every identifier here is a name from the two
+  // manifests, so a rename that missed this file leaves the entry pointing at a
+  // marketplace nobody publishes — which fails silently, as a plugin that never
+  // installs rather than an error.
+  const settings = readJson(join(ROOT, ".claude", "settings.json"));
+  const known = settings.extraKnownMarketplaces?.[marketplace.name];
+  assert.deepEqual(known?.source, { source: "github", repo: SLUG });
+  // Without this the marketplace clone is refreshed only when someone runs
+  // `/plugin marketplace update` by hand, and sessions here silently keep
+  // running whatever release was current the day they first trusted the folder.
+  assert.equal(known?.autoUpdate, true);
+  const entry = marketplace.plugins.find((p) => p.source === "./plugin");
+  assert.equal(
+    settings.enabledPlugins?.[`${entry.name}@${marketplace.name}`],
+    true,
+  );
 });

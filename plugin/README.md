@@ -11,6 +11,40 @@ warning by default; `AGENT_SANITIZER_FAIL_OPEN=0` makes them block instead.
 /plugin install agent-sanitizer@agent-sanitizer
 ```
 
+**Turn auto-update on after installing.** Claude Code enables it by default only
+for official Anthropic marketplaces; a third-party one like this defaults to
+off, so the install stays pinned to the release you added and never picks up a
+fix to a layer. The plugin ships a command for it:
+
+```
+/agent-sanitizer:enable-auto-update
+```
+
+It merges the entry below into `~/.claude/settings.json` and reports what it
+changed; an existing entry pointing at a different repo stops it rather than
+being overwritten. `/plugin` → **Marketplaces** → **Enable auto-update** does
+the same by hand, and so does writing it into `~/.claude/settings.json`
+(user-wide) or a repo's `.claude/settings.json` (everyone who trusts that
+folder):
+
+```json
+{
+  "extraKnownMarketplaces": {
+    "agent-sanitizer": {
+      "source": {
+        "source": "github",
+        "repo": "AlexanderMattTurner/agent-sanitizer"
+      },
+      "autoUpdate": true
+    }
+  },
+  "enabledPlugins": { "agent-sanitizer@agent-sanitizer": true }
+}
+```
+
+Updates are fetched in the background after startup, so the running session
+keeps the version it launched with until you `/reload-plugins`.
+
 The first session after install provisions the Python secret-redaction engine
 (`agent-sanitizer[secrets]`) into the plugin's data directory. That needs `uv` or
 `python3` on PATH; without either, provisioning fails loudly and tool output
@@ -84,6 +118,7 @@ listens on a private Unix socket.
 ```
 .claude-plugin/plugin.json   plugin manifest
 hooks/hooks.json             the four hook registrations
+skills/enable-auto-update/   the /agent-sanitizer:enable-auto-update command
 scripts/safe-launch.sh       launcher (prints a response even when node is missing)
 scripts/provision-redactor.sh  SessionStart provisioning of the Python redactor
 scripts/build-plugin.mjs     builds dist/ from claude-hooks/ against the pinned engine
