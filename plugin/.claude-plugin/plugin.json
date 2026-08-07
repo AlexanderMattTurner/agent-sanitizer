@@ -1,7 +1,7 @@
 {
   "name": "agent-sanitizer",
   "displayName": "Agent Sanitizer",
-  "version": "2.15.0",
+  "version": "2.16.0",
   "description": "The agent-sanitizer defense pipeline as a Claude Code plugin: invisible-Unicode and ANSI stripping, hidden-HTML splicing, exfil-URL detection, confusable normalization, and detect-secrets-backed secret redaction over tool inputs, tool outputs, and user prompts. Every layer fails closed.",
   "author": {
     "name": "Alexander Matt Turner",
