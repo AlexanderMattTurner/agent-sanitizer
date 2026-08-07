@@ -234,6 +234,37 @@ test("both READMEs advertise the marketplace and plugin these manifests define",
   assert.equal(manifest.homepage, `https://github.com/${SLUG}#readme`);
 });
 
+test("both READMEs document an install that keeps itself updated", () => {
+  // Claude Code defaults `autoUpdate` to ON only for official Anthropic
+  // marketplaces; a third-party one like this defaults to OFF, so an install
+  // that follows the two slash commands alone stays pinned to whatever release
+  // it was added from and never receives a fix to a layer. The settings block
+  // is what closes that, which makes it load-bearing documentation rather than
+  // a nicety — parsed and compared here, not grepped for.
+  const entry = marketplace.plugins.find((p) => p.source === "./plugin");
+  for (const doc of ["README.md", join("plugin", "README.md")]) {
+    const text = readFileSync(join(ROOT, doc), "utf-8");
+    const blocks = [...text.matchAll(/```json\n([\s\S]*?)```/g)]
+      .map((m) => m[1])
+      .filter((b) => b.includes("extraKnownMarketplaces"))
+      .map((b) => JSON.parse(b));
+    assert.equal(
+      blocks.length,
+      1,
+      `${doc}: expected exactly one extraKnownMarketplaces block, got ${blocks.length}`,
+    );
+    const [block] = blocks;
+    assert.deepEqual(block.extraKnownMarketplaces[marketplace.name], {
+      source: { source: "github", repo: SLUG },
+      autoUpdate: true,
+    });
+    assert.equal(
+      block.enabledPlugins[`${entry.name}@${marketplace.name}`],
+      true,
+    );
+  }
+});
+
 // ─── this repo's own sessions ────────────────────────────────────────────────
 
 test("the project settings install and auto-update this marketplace's plugin", () => {

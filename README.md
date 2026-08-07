@@ -20,6 +20,29 @@ npm install agent-sanitizer
 /plugin install agent-sanitizer@agent-sanitizer
 ```
 
+Then turn auto-update on — **third-party marketplaces have it off by default**,
+so an install left alone keeps running the release it was installed from, and
+never picks up a fix to a layer. `/plugin` → **Marketplaces** → this one →
+**Enable auto-update**, or declare it once in `~/.claude/settings.json`:
+
+```json
+{
+  "extraKnownMarketplaces": {
+    "agent-sanitizer": {
+      "source": {
+        "source": "github",
+        "repo": "AlexanderMattTurner/agent-sanitizer"
+      },
+      "autoUpdate": true
+    }
+  },
+  "enabledPlugins": { "agent-sanitizer@agent-sanitizer": true }
+}
+```
+
+That form is the whole install — no slash commands — and the same block in a
+repo's `.claude/settings.json` installs it for everyone who trusts that folder.
+
 [What installing entails](#what-installing-entails) covers the footprint of each
 path and how a failure looks; [Using it with Claude
 Code](#using-it-with-claude-code) covers each hook and hand-wiring.
@@ -137,6 +160,11 @@ needs only `python3` on PATH, for Layer 4 — the plugin ships the engine itself
 /plugin marketplace add AlexanderMattTurner/agent-sanitizer
 /plugin install agent-sanitizer@agent-sanitizer
 ```
+
+Auto-update is off by default for a marketplace like this one; the settings
+block at the [top of this README](#agent-sanitizer) turns it on, and updates
+then land in the background after startup (a notice asks you to
+`/reload-plugins`, or the new version loads next launch).
 
 To wire them yourself instead, one entry dispatches all four modes on `--hook=`:
 

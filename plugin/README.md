@@ -11,6 +11,32 @@ warning by default; `AGENT_SANITIZER_FAIL_OPEN=0` makes them block instead.
 /plugin install agent-sanitizer@agent-sanitizer
 ```
 
+**Turn auto-update on after installing.** Claude Code enables it by default only
+for official Anthropic marketplaces; a third-party one like this defaults to
+off, so the install stays pinned to the release you added and never picks up a
+fix to a layer. Either `/plugin` → **Marketplaces** → **Enable auto-update**, or
+declare the marketplace in `~/.claude/settings.json` (user-wide) or a repo's
+`.claude/settings.json` (everyone who trusts that folder), which installs it and
+sets the flag in one place:
+
+```json
+{
+  "extraKnownMarketplaces": {
+    "agent-sanitizer": {
+      "source": {
+        "source": "github",
+        "repo": "AlexanderMattTurner/agent-sanitizer"
+      },
+      "autoUpdate": true
+    }
+  },
+  "enabledPlugins": { "agent-sanitizer@agent-sanitizer": true }
+}
+```
+
+Updates are fetched in the background after startup, so the running session
+keeps the version it launched with until you `/reload-plugins`.
+
 The first session after install provisions the Python secret-redaction engine
 (`agent-sanitizer[secrets]`) into the plugin's data directory. That needs `uv` or
 `python3` on PATH; without either, provisioning fails loudly and tool output
