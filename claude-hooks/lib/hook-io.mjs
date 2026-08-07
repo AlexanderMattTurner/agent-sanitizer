@@ -195,54 +195,42 @@ export const PermissionDecision = Object.freeze({
 });
 
 /**
- * The public opt-in knob that flips the hooks' INFRASTRUCTURE failure posture
- * from closed (block/ask/suppress) to open (pass the guarded action through,
- * unsanitized). Off by default: a sanitizer that cannot run must not silently
- * stop guarding.
+ * The public knob over the hooks' INFRASTRUCTURE failure posture. Installed as
+ * Claude Code hooks these fail OPEN by default — a hook that could not run lets
+ * the guarded action through with a loud warning rather than blocking the
+ * session on its own breakage. Setting it to `"0"` restores the fail-CLOSED
+ * posture (block/ask/suppress).
+ *
+ * The knob covers the hooks' own failures ONLY. What a working sanitizer
+ * DECIDED is untouched by it, and so is the {@link failClosedFields}-style
+ * wiring a downstream host does directly — a host that wants strictness gets it
+ * by construction, not by remembering to set an env var.
  */
 export const FAIL_OPEN_ENV = "AGENT_SANITIZER_FAIL_OPEN";
 
 /**
- * Whether the caller opted into the fail-OPEN posture. Exact `"1"`, matching
- * the AGENT_SANITIZER_*_DISABLED knobs — anything else (including "true") leaves
- * the secure default in place, so a typo cannot quietly disarm the sanitizer.
+ * Values that turn the default posture back to fail-closed. Matched exactly,
+ * so the launcher's shell `case` can state the same two literals — a
+ * case-insensitive match here would need `tr`, which the launcher cannot reach
+ * (it runs its no-node arm on shell builtins alone) and the two would drift.
+ */
+const FAIL_CLOSED_VALUES = new Set(["0", "false"]);
+
+/**
+ * Whether hook failures pass the guarded action through. True unless the caller
+ * explicitly asked for the closed posture.
  *
- * Never sufficient on its own: pair it with {@link sanitizerUnavailable}, which
- * is what confines the open posture to failures no payload can induce.
+ * The accepted opt-out spellings are a SET rather than the single exact `"1"`
+ * the AGENT_SANITIZER_*_DISABLED knobs use, because the direction of the
+ * mistake is reversed: those default to the safe side, so an unrecognized value
+ * there costs nothing, while here it leaves an operator who asked for
+ * strictness without it. `"false"` is the one spelling reached for by reflex,
+ * so it is honored; everything else (`""`, `"no"`, `"off"`) is the open posture.
  * @param {NodeJS.ProcessEnv | Record<string, string | undefined>} [env]
  * @returns {boolean}
  */
 export function failOpenEnabled(env = process.env) {
-  return env[FAIL_OPEN_ENV] === "1";
-}
-
-/**
- * Whether `err` says the sanitizer never RAN — the only failure class the
- * fail-open knob may act on.
- *
- * The distinction is the knob's whole safety argument, so it is drawn on the
- * error rather than on "did stdin parse". A hook that threw somewhere in a
- * layer has, by definition, been reached by the payload: the output hook's
- * key-collision guard, a recursion overflow on a deeply nested tool_response,
- * and an exhausted redaction budget are all throws an attacker composes at
- * will — and each guards content (secrets, stego, colliding field names) that
- * a pass-through would hand straight to the model. Those stay CLOSED in both
- * postures. What the knob opens is an install that is simply not there: the
- * package was never loaded, so no layer ever looked at the payload and none of
- * its bytes influenced the outcome.
- *
- * Two shapes say that: {@link missingPackageError}'s `DEP_UNAVAILABLE` tag, and
- * the bare TypeError V8 raises when an unloaded binding is called — recognized
- * only while the loader holds a recorded failure, the same inference (and the
- * same guard against over-claiming) that `depLoadHint` makes.
- * @param {unknown} err
- * @param {() => string[]} [failedPackages]
- * @returns {boolean}
- */
-export function sanitizerUnavailable(err, failedPackages = failedLazyPackages) {
-  if (/** @type {{code?: unknown}} */ (err)?.code === "DEP_UNAVAILABLE")
-    return true;
-  return err instanceof TypeError && failedPackages().length > 0;
+  return !FAIL_CLOSED_VALUES.has(env[FAIL_OPEN_ENV] ?? "");
 }
 
 /**
@@ -251,14 +239,15 @@ export function sanitizerUnavailable(err, failedPackages = failedLazyPackages) {
  * gives up ENFORCEMENT, not visibility, and stdout is never left empty (which
  * Claude Code would record as a clean run rather than a degraded one).
  *
- * The remedy rides along on the unloaded-binding branch. {@link sanitizerUnavailable}
- * opens on two shapes: a `DEP_UNAVAILABLE` error already carries the remedy in
- * its message, but the bare TypeError names neither the package nor the fix —
- * and under this posture there is no permissionDecisionReason carrying it
- * either, so the one message telling a reader how to un-break the install would
- * be the one that went missing. `failedPackages`/`packageMessage` are injectable
- * for the same reason `depLoadHint`'s are: the recorded-failure set is
- * process-wide and untestable otherwise.
+ * The reinstall remedy rides along when the failure looks like an unloaded
+ * binding. A `DEP_UNAVAILABLE` error already carries its remedy in the message
+ * `safeErrMessage` splices in below, but the bare TypeError V8 raises for an
+ * undefined binding names neither the package nor the fix — and under this
+ * posture there is no permissionDecisionReason carrying one either, so the only
+ * message telling a reader how to un-break the install would be the one that
+ * went missing. `failedPackages`/`packageMessage` are injectable for the same
+ * reason `depLoadHint`'s are: the recorded-failure set is process-wide and
+ * untestable otherwise.
  * @param {string} hookName
  * @param {string} guarded  what passed through, e.g. "tool output"
  * @param {unknown} err
@@ -279,9 +268,9 @@ export function failOpenContext(
   const [pkg] = err instanceof TypeError ? failedPackages() : [];
   const hint = pkg === undefined ? "" : ` ${packageMessage(pkg)}`;
   return (
-    `WARNING: the ${hookName} hook failed (${safeErrMessage(err)}) and ` +
-    `${FAIL_OPEN_ENV}=1 is set — this ${guarded} passed through UNSANITIZED. ` +
-    `Treat its contents as untrusted.${hint}`
+    `WARNING: the ${hookName} hook failed (${safeErrMessage(err)}) — this ` +
+    `${guarded} passed through UNSANITIZED. Treat its contents as ` +
+    `untrusted.${hint} Set ${FAIL_OPEN_ENV}=0 to fail closed on hook failures.`
   );
 }
 

@@ -1,15 +1,17 @@
 #!/usr/bin/env bash
-# Fail-closed launcher for the plugin's bundled hooks.
+# Launcher for the plugin's bundled hooks: whatever the posture, the failure is
+# never SILENT.
 #
 # Usage:  safe-launch.sh <HookEvent> [--hook=... args]
 #
 # Claude Code treats a non-zero exit OR empty stdout from a hook as a
-# NON-blocking hook error and lets the guarded action through UNGUARDED, so a
-# hook that cannot start at all (node absent from PATH, a missing or truncated
-# bundle) would silently disable the whole sanitization pipeline. This shim is
-# what prevents that: when the bundle cannot run it still PRINTS the
-# event-appropriate fail-closed verdict and exits 0. A caller that prefers
-# availability opts out with AGENT_SANITIZER_FAIL_OPEN=1 (see emit_degraded).
+# NON-blocking hook error and lets the guarded action through with no trace at
+# all, so a hook that cannot start (node absent from PATH, a missing or
+# truncated bundle) would silently disable the whole sanitization pipeline.
+# This shim is what prevents that: when the bundle cannot run it still PRINTS
+# an event-appropriate response and exits 0 — by default a warning the
+# transcript carries, or the fail-closed verdict under
+# AGENT_SANITIZER_FAIL_OPEN=0 (see emit_degraded).
 #
 # The event comes from an explicit leading argument (each hooks.json call site
 # knows its event statically), never from the payload: Claude Code keys
@@ -52,26 +54,29 @@ json_escape() {
   printf '%s' "${esc//\"/\\\"}"
 }
 
-# Emit the degraded verdict for the guarded event. $1 = reason.
+# Emit the degraded response for the guarded event. $1 = reason.
 #
-# AGENT_SANITIZER_FAIL_OPEN=1 (exact "1", matching the AGENT_SANITIZER_*_DISABLED
-# knobs) flips the posture: the guarded action passes through UNSANITIZED and the
-# reason rides along as additionalContext instead of a block/ask/suppression.
-# Only launcher-level failures reach here — no node, unreadable or corrupt bundle
-# — none of which any payload can induce, so the knob cannot be triggered by
-# attacker-authored content.
+# Default posture is fail-OPEN: the guarded action passes through UNSANITIZED
+# and the reason rides along as additionalContext. AGENT_SANITIZER_FAIL_OPEN=0
+# (or "false") asks for the fail-CLOSED block/ask/suppression instead — see
+# failOpenEnabled in claude-hooks/lib/hook-io.mjs, which this arm mirrors.
 emit_degraded() {
   local reason
   reason="$(json_escape "$1")"
-  if [[ "${AGENT_SANITIZER_FAIL_OPEN:-}" == "1" ]]; then
-    echo "agent-sanitizer: AGENT_SANITIZER_FAIL_OPEN=1 — $event_name unguarded" >&2
+  # The two literals failOpenEnabled() matches, kept in the same order as its
+  # FAIL_CLOSED_VALUES set; every other value (including unset) is fail-open.
+  case "${AGENT_SANITIZER_FAIL_OPEN:-}" in
+  0 | false) ;;
+  *)
+    echo "agent-sanitizer: failing open — $event_name unguarded (set AGENT_SANITIZER_FAIL_OPEN=0 to fail closed)" >&2
     # No permissionDecision, no decision, no updatedToolOutput: nothing is
     # blocked or replaced. The context is all that is left, and it is why stdout
     # is still non-empty — an empty one reads as a clean run, not a degraded one.
     printf '{"hookSpecificOutput":{"hookEventName":"%s","additionalContext":"%s"}}\n' \
-      "$event_name" "$reason AGENT_SANITIZER_FAIL_OPEN=1 is set, so $unguarded_note"
+      "$event_name" "$reason The sanitizer is failing open, so $unguarded_note Set AGENT_SANITIZER_FAIL_OPEN=0 to fail closed on hook failures."
     return 0
-  fi
+    ;;
+  esac
   case "$hook_event" in
   UserPromptSubmit)
     # Block the prompt: unsanitized (possibly injected) prompt content must

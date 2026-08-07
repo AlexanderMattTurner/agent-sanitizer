@@ -27,7 +27,8 @@ elif command -v python3 >/dev/null 2>&1; then
   "$venv/bin/pip" install --quiet -r "$req"
 else
   echo "agent-sanitizer: python3 not found — the secret-redaction engine (Layer 4)" \
-    "cannot be provisioned. Secret-shaped tool output will be suppressed (fail-closed)" \
+    "cannot be provisioned. Tool output will reach the model UNREDACTED (the hooks" \
+    "fail open; set AGENT_SANITIZER_FAIL_OPEN=0 to have it suppressed instead)" \
     "until Python 3.11+ or uv is installed and a new session starts." >&2
   exit 1
 fi

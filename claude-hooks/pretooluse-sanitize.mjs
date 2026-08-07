@@ -36,7 +36,6 @@ import {
   safeErrMessage,
   failOpenEnabled,
   failOpenContext,
-  sanitizerUnavailable,
   HookEvent,
   PermissionDecision,
 } from "./lib/hook-io.mjs";
@@ -403,8 +402,10 @@ export function depLoadHint(
  * so it ASKS to keep a human in the loop rather than hard-block on infrastructure.
  *
  * Deliberately knob-blind: this is the fail-CLOSED posture itself, so it ignores
- * AGENT_SANITIZER_FAIL_OPEN. A host wiring its own onError wants
- * {@link hookFailureFields}, which honors the caller's posture and delegates here.
+ * AGENT_SANITIZER_FAIL_OPEN — a host that wires it directly keeps strictness by
+ * construction, with no env var to remember. A host that instead wants the
+ * caller's posture (fail-open by default) wires {@link hookFailureFields},
+ * which delegates here when the posture is closed.
  * @param {boolean} parsedOk whether the input parsed before the failure
  * @param {unknown} err
  * @param {{ messages?: Partial<typeof PRE_TOOL_USE_MESSAGES>, hint?: string }} [opts]
@@ -428,14 +429,14 @@ export function failClosedFields(parsedOk, err, opts = {}) {
 
 /**
  * The hookSpecificOutput fields for a hook-level failure under the CALLER's
- * chosen posture: fail-closed (the default, {@link failClosedFields}) or the
- * opt-in fail-OPEN of AGENT_SANITIZER_FAIL_OPEN=1, which returns a warning
- * context and no permissionDecision so the tool call proceeds unsanitized.
+ * chosen posture: fail-OPEN by default — a warning context and no
+ * permissionDecision, so the tool call proceeds unsanitized — or the
+ * fail-CLOSED verdict of {@link failClosedFields} when the caller set
+ * AGENT_SANITIZER_FAIL_OPEN=0.
  *
- * The knob reaches only the failures {@link sanitizerUnavailable} recognizes —
- * the package never loaded, so no layer ever read the payload. Every other
- * throw, including one a hostile payload provoked out of a layer, keeps its
- * fail-closed verdict in both postures.
+ * The posture covers this hook's own failures, whatever their cause. What it
+ * does NOT cover is the verdict of a sanitizer that ran: a payload
+ * judgePreToolUseSanitize denied is denied in both postures.
  * @param {boolean} parsedOk whether the input parsed before the failure
  * @param {unknown} err
  * @param {{
@@ -446,7 +447,7 @@ export function failClosedFields(parsedOk, err, opts = {}) {
  * @returns {Record<string, unknown>}
  */
 export function hookFailureFields(parsedOk, err, opts = {}) {
-  if (parsedOk && failOpenEnabled(opts.env) && sanitizerUnavailable(err))
+  if (failOpenEnabled(opts.env))
     return { additionalContext: failOpenContext(HOOK_NAME, "tool input", err) };
   return failClosedFields(parsedOk, err, opts);
 }
@@ -456,7 +457,7 @@ export function hookFailureFields(parsedOk, err, opts = {}) {
 // The exported judgePreToolUseSanitize and failClosedFields above carry the
 // real, mutation-tested logic.
 /**
- * The hook's CLI: parse → judge → render, with this hook's fail-closed posture.
+ * The hook's CLI: parse → judge → render, under the caller's failure posture.
  * Exported so a bundle entry (which must claim the CLI slot before this module
  * loads) can run the exact same wiring instead of duplicating the onError
  * posture.
@@ -479,12 +480,12 @@ export async function cliMain(opts = {}) {
         trace: emitTrace,
       }),
     {
-      // Fail closed WITHOUT the package: unparsable INPUT (`input` undefined)
-      // hard-denies (adversary-inducible, no benefit to failing); any throw
-      // after a clean parse — a layer engine down or the control-plane package
-      // unavailable — asks to keep a human in the loop, or passes through with a
-      // warning when the caller set AGENT_SANITIZER_FAIL_OPEN=1. emitHookResponse
-      // renders natively, so this posture holds even when the adapter never loaded.
+      // The caller's posture, WITHOUT the package: pass through with a warning
+      // by default, or — under AGENT_SANITIZER_FAIL_OPEN=0 — hard-deny an
+      // unparsable INPUT (`input` undefined; adversary-inducible, no benefit to
+      // failing) and ASK on any throw after a clean parse, keeping a human in
+      // the loop. emitHookResponse renders natively, so either posture holds
+      // even when the adapter never loaded.
       onError: (err, input) =>
         emitHookResponse(
           HookEvent.PRE_TOOL_USE,

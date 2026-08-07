@@ -218,43 +218,45 @@ of its own and bundles no secret engine.
 
 ## Failure posture (`AGENT_SANITIZER_FAIL_OPEN`)
 
-The hooks fail **closed** by default: a sanitizer that cannot run blocks, asks,
-or suppresses rather than passing content through unchecked. `AGENT_SANITIZER_FAIL_OPEN=1`
-is the caller's opt-out, and it is scoped to one failure class — the sanitizer
-never RAN. Concretely: the launcher could not start (no `node`, missing or
-corrupt bundle), or the package never loaded (`DEP_UNAVAILABLE`, or the bare
-`TypeError` an unloaded binding raises while the loader holds a recorded failure
-— `sanitizerUnavailable` in `claude-hooks/lib/hook-io.mjs`). Those pass the
-guarded action through with a warning in `additionalContext` instead of a verdict.
+Installed as Claude Code hooks, these fail **open**: a hook that could not
+complete lets the guarded action through with a warning in `additionalContext`
+rather than blocking the session. `AGENT_SANITIZER_FAIL_OPEN=0` (or `false`)
+restores the fail-closed verdicts — block, ask, suppress. The posture covers
+every way a hook can fail: the launcher not starting (no `node`, missing or
+corrupt bundle), the package never loading, a payload that never parsed, and a
+layer that ran and threw.
 
-Everything else keeps its fail-closed verdict in **both** postures, and the
-boundary is drawn on the error rather than on "did stdin parse" for a reason: a
-layer that threw has, by definition, been reached by the payload. Three such
-throws in the output hook alone are composable by whoever authored the content —
-the key-collision guard (two field names that collapse to one after Layer 1), a
-nesting depth that overflows the sanitize walk, and a redaction budget exhausted
-by many secret-shaped leaves. Each guards content (secrets, stego, a
-shape-reduced object the harness would answer with the raw response) that a
-pass-through would hand to the model verbatim. So:
+**The open default is not enforceable against content.** Several of those
+failures are composable by whoever authored the payload — in the output hook
+alone, the key-collision guard (two field names that collapse to one after
+Layer 1), a nesting depth that overflows the sanitize walk, and a redaction
+budget exhausted by many secret-shaped leaves. Under the open posture a tool
+response crafted to provoke one is shown to the model verbatim, secrets
+included. So an attacker who controls tool output has a route past these layers
+whenever the default is left in place, and the mitigation is the knob, not a
+narrower failure classification: `=0` closes all of it.
 
-- **Layer throws stay closed under the knob**, as do unparsable and oversized
-  payloads — otherwise a hostile tool response could disarm the sanitizer by
-  provoking one.
-- **Detection verdicts are untouched.** The knob speaks only to the sanitizer
-  being _unavailable_; a working sanitizer that found an injection still blocks.
+That trade is deliberate, and it is scoped to the Claude Code plugin. The
+library's own fail-closed entry points are unchanged and knob-blind —
+`failClosedFields` in `claude-hooks/pretooluse-sanitize.mjs` and `emitFailClosed`
+in `claude-hooks/sanitize-output.mjs` — so a host that wires those directly (as
+`test/downstream-parity.test.mjs` shows) keeps strict failure semantics by
+construction, with no env var to remember and none an agent could set for it.
 
-What the knob does trade away is bounded to attackers who can break the
-**environment**: someone who can delete `node_modules` or corrupt the plugin can,
-with the knob set, get unsanitized content in front of the model.
+Two things the posture does NOT reach, in either direction:
 
-That includes an agent that can write the environment itself. The knob is
-operator configuration, read from the process environment, so anything that can
-set it for a session — `.claude/settings.json`'s `env` block, a shell rc file,
-`direnv` — can turn the posture off, and a prompt-injected agent with edit access
-to those files is such a thing. The hooks do not (and cannot, from where they
-sit) gate writes to them. Treat the knob with the same care as the settings that
-carry it: if those files are attacker-writable, the posture is not the first
-thing you have lost.
+- **Detection verdicts.** It speaks only to the hook FAILING; a working
+  sanitizer that found an injection blocks under both settings.
+- **An unknown `--hook=` mode**, which still exits 2. That is static wiring
+  corruption, and passing it through would mean no hook ever runs — silently,
+  for the life of the install.
+
+The knob is operator configuration read from the process environment, so
+anything that can set it for a session — `.claude/settings.json`'s `env` block,
+a shell rc file, `direnv` — can also set it the other way, and a prompt-injected
+agent with edit access to those files is such a thing. That is not a regression
+under an open default (there is nothing for it to disarm), but it does mean `=0`
+is only as durable as the files carrying it.
 
 The knob adds no layer and changes no layer's semantics. Ambiguous input still
 fails open at the detection level (precision over recall), as it always has —

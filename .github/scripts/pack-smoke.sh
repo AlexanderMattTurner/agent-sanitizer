@@ -132,9 +132,8 @@ node --input-type=module -e '
 '
 
 # Each wired mode reaches its verdict. Run from / so nothing resolves relatively.
-# The fail-open opt-out is cleared first: the assertions below are about the
-# SHIPPED default posture, and a runner that exported the knob would be asserting
-# something else entirely.
+# The posture is pinned rather than inherited: a runner that exported the knob
+# either way would be asserting something other than what this file states.
 unset AGENT_SANITIZER_FAIL_OPEN
 cd /
 prompt_payload='{"hook_event_name":"UserPromptSubmit","prompt":"plain text"}'
@@ -146,11 +145,14 @@ printf '%s' "$pre_payload" | node "$hook_entry" --hook=pretooluse-sanitize >/dev
 scan_payload='{"hook_event_name":"SessionStart","source":"startup"}'
 printf '%s' "$scan_payload" | node "$hook_entry" --hook=scan-invisible-chars >/dev/null
 
-# Layer 4 with the redactor unreachable must SUPPRESS the secret, not pass it
-# through — the fail-closed posture is the whole point of shipping these hooks.
+# Layer 4 with the redactor unreachable, under the fail-closed opt-out, must
+# SUPPRESS the secret rather than pass it through: that posture is what a
+# deployment gets by setting AGENT_SANITIZER_FAIL_OPEN=0, so a published package
+# whose opt-out stopped working would be shipping a knob that does nothing.
 secret_payload='{"hook_event_name":"PostToolUse","tool_name":"Bash","tool_input":{},"tool_response":{"stdout":"key=AKIAIOSFODNN7EXAMPLE"}}'
 closed_out="$(printf '%s' "$secret_payload" |
-  _AGENT_SANITIZER_REDACTOR_SOCKET=/nonexistent/redactor.sock \
+  AGENT_SANITIZER_FAIL_OPEN=0 \
+    _AGENT_SANITIZER_REDACTOR_SOCKET=/nonexistent/redactor.sock \
     _AGENT_SANITIZER_REDACTOR_DAEMON=/nonexistent/agent-secret-redactor-daemon \
     _AGENT_SANITIZER_REDACTOR_WAIT_MS=300 \
     _AGENT_SANITIZER_REDACTOR_REQUEST_MS=300 \

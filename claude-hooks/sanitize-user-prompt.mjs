@@ -23,7 +23,6 @@ import {
   safeErrMessage,
   failOpenEnabled,
   failOpenContext,
-  sanitizerUnavailable,
   HookEvent,
   isMain,
   lazyImport,
@@ -197,11 +196,11 @@ export async function main(read, write, opts = {}) {
   // runJudgeCli so this hook doesn't re-implement the control-plane boundary:
   // runJudgeCli reads stdin BEFORE loading the control-plane package, so a
   // load failure fails to this hook's posture (the onError block) instead of
-  // leaving stdin unread. onError writes its envelope by hand — block, or the
-  // warning-only pass-through a caller opted into with AGENT_SANITIZER_FAIL_OPEN=1
-  // — because the adapter that would render it is exactly what may have failed to
-  // load. The knob is honored only for the failures sanitizerUnavailable
-  // recognizes — a stripper that threw on a hostile prompt still blocks.
+  // leaving stdin unread. onError writes its envelope by hand — the default
+  // warning-only pass-through, or the block a caller asked for with
+  // AGENT_SANITIZER_FAIL_OPEN=0 — because the adapter that would render it is
+  // exactly what may have failed to load. Either way this is the HOOK failing;
+  // a prompt the working stripper flagged is still blocked in both postures.
   await runJudgeCli(
     "sanitize-user-prompt",
     (event) => {
@@ -222,12 +221,10 @@ export async function main(read, write, opts = {}) {
     {
       readInput: read,
       write,
-      onError: (err, input) =>
+      onError: (err) =>
         write(
           JSON.stringify(
-            input !== undefined &&
-              failOpenEnabled(env) &&
-              sanitizerUnavailable(err)
+            failOpenEnabled(env)
               ? {
                   hookSpecificOutput: {
                     hookEventName: HookEvent.USER_PROMPT_SUBMIT,

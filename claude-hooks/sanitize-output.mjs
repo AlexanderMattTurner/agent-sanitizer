@@ -29,7 +29,6 @@ import {
   safeErrMessage,
   failOpenEnabled,
   failOpenContext,
-  sanitizerUnavailable,
   makeDeadline,
   lazyImportErrorFor,
   missingPackageMessage,
@@ -569,17 +568,18 @@ export function emitFailClosed(
 
 /**
  * Emit the PostToolUse failure response under the CALLER's chosen posture:
- * fail-closed suppression by default ({@link emitFailClosed}), or — with the
- * opt-in AGENT_SANITIZER_FAIL_OPEN=1 — a warning context and NO
- * `updatedToolOutput`, leaving the original tool output in the model's view.
+ * fail-OPEN by default — a warning context and NO `updatedToolOutput`, leaving
+ * the original tool output in the model's view — or the fail-closed
+ * suppression of {@link emitFailClosed} when the caller set
+ * AGENT_SANITIZER_FAIL_OPEN=0.
  *
- * The knob is honored only for the failures {@link sanitizerUnavailable}
- * recognizes. That matters most on THIS hook: its layers throw on exactly the
- * inputs an attacker composes — colliding field names, a nesting depth that
- * overflows the walk, a redaction budget spent on a thousand secret-shaped
- * leaves — and each of those throws is guarding content a pass-through would
- * hand to the model verbatim, secrets included. They keep their suppression in
- * both postures; only a sanitizer that never loaded opens.
+ * This is the hook where the two postures diverge the most, so state the open
+ * one plainly: several of these layers throw on inputs an attacker composes
+ * (colliding field names, a nesting depth that overflows the walk, a redaction
+ * budget spent on a thousand secret-shaped leaves), and each of those throws is
+ * guarding content the open posture hands to the model verbatim, secrets
+ * included. An operator who cares more about withholding a secret than about
+ * keeping the session moving sets the knob to `0`.
  * @param {any} input  parsed hook input, or undefined if parsing threw
  * @param {unknown} err
  * @param {(fields: Record<string, unknown>) => void} [emit]
@@ -594,11 +594,7 @@ export function emitHookFailure(
   remedy = DEFAULT_MISSING_PACKAGE_REMEDY,
   env = process.env,
 ) {
-  if (
-    input !== undefined &&
-    failOpenEnabled(env) &&
-    sanitizerUnavailable(err)
-  ) {
+  if (failOpenEnabled(env)) {
     emit({
       additionalContext: failOpenContext("sanitize-output", "tool output", err),
     });
@@ -819,7 +815,7 @@ export function withPostToolUseDefault(input) {
 // failClosedReplacement) is exercised in-process by the unit suite; the
 // end-to-end wire contract is pinned by the subprocess tests.
 /**
- * The hook's CLI: parse → judge → render, with this hook's fail-closed posture.
+ * The hook's CLI: parse → judge → render, under the caller's failure posture.
  * Exported so a bundle entry (which must claim the CLI slot before this module
  * loads) can run the exact same wiring instead of duplicating the onError
  * posture. That entry is also the only place a host's {@link SanitizeExtensions}
