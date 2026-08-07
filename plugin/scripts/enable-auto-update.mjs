@@ -1,4 +1,3 @@
-#!/usr/bin/env node
 /**
  * Turn Claude Code's background auto-update on (or, with `--disable`, off) for
  * the marketplace this plugin ships from.

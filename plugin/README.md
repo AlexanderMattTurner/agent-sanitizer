@@ -9,6 +9,7 @@ warning by default; `AGENT_SANITIZER_FAIL_OPEN=0` makes them block instead.
 ```
 /plugin marketplace add AlexanderMattTurner/agent-sanitizer
 /plugin install agent-sanitizer@agent-sanitizer
+/agent-sanitizer:enable-auto-update
 ```
 
 The first session after install provisions the Python secret-redaction engine
@@ -22,11 +23,7 @@ suppressed instead.
 Claude Code auto-updates Anthropic's own marketplaces by default and nobody
 else's, so an install of this one pins you to the release you added and later
 detector fixes never arrive. Claude Code ships no slash command for the toggle,
-so the plugin ships one:
-
-```
-/agent-sanitizer:enable-auto-update
-```
+so the plugin ships one — the third line of the install block above.
 
 It flips `autoUpdate` on this marketplace's existing entry in Claude Code's
 registry — the same bit the picker's **Enable auto-update** writes — and prints

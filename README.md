@@ -18,6 +18,7 @@ npm install agent-sanitizer
 ```
 /plugin marketplace add AlexanderMattTurner/agent-sanitizer
 /plugin install agent-sanitizer@agent-sanitizer
+/agent-sanitizer:enable-auto-update
 ```
 
 [What installing entails](#what-installing-entails) covers the footprint of each
@@ -136,6 +137,7 @@ needs only `python3` on PATH, for Layer 4 — the plugin ships the engine itself
 ```
 /plugin marketplace add AlexanderMattTurner/agent-sanitizer
 /plugin install agent-sanitizer@agent-sanitizer
+/agent-sanitizer:enable-auto-update
 ```
 
 Claude Code auto-updates Anthropic's own marketplaces by default and nobody
