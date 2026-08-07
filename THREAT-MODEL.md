@@ -215,3 +215,47 @@ are load-bearing and **fail closed**:
 
 File access and the redactor are injected via `io`; the package performs no I/O
 of its own and bundles no secret engine.
+
+## Failure posture (`AGENT_SANITIZER_FAIL_OPEN`)
+
+The hooks fail **closed** by default: a sanitizer that cannot run blocks, asks,
+or suppresses rather than passing content through unchecked. `AGENT_SANITIZER_FAIL_OPEN=1`
+is the caller's opt-out, and it is scoped to one failure class — the sanitizer
+never RAN. Concretely: the launcher could not start (no `node`, missing or
+corrupt bundle), or the package never loaded (`DEP_UNAVAILABLE`, or the bare
+`TypeError` an unloaded binding raises while the loader holds a recorded failure
+— `sanitizerUnavailable` in `claude-hooks/lib/hook-io.mjs`). Those pass the
+guarded action through with a warning in `additionalContext` instead of a verdict.
+
+Everything else keeps its fail-closed verdict in **both** postures, and the
+boundary is drawn on the error rather than on "did stdin parse" for a reason: a
+layer that threw has, by definition, been reached by the payload. Three such
+throws in the output hook alone are composable by whoever authored the content —
+the key-collision guard (two field names that collapse to one after Layer 1), a
+nesting depth that overflows the sanitize walk, and a redaction budget exhausted
+by many secret-shaped leaves. Each guards content (secrets, stego, a
+shape-reduced object the harness would answer with the raw response) that a
+pass-through would hand to the model verbatim. So:
+
+- **Layer throws stay closed under the knob**, as do unparsable and oversized
+  payloads — otherwise a hostile tool response could disarm the sanitizer by
+  provoking one.
+- **Detection verdicts are untouched.** The knob speaks only to the sanitizer
+  being _unavailable_; a working sanitizer that found an injection still blocks.
+
+What the knob does trade away is bounded to attackers who can break the
+**environment**: someone who can delete `node_modules` or corrupt the plugin can,
+with the knob set, get unsanitized content in front of the model.
+
+That includes an agent that can write the environment itself. The knob is
+operator configuration, read from the process environment, so anything that can
+set it for a session — `.claude/settings.json`'s `env` block, a shell rc file,
+`direnv` — can turn the posture off, and a prompt-injected agent with edit access
+to those files is such a thing. The hooks do not (and cannot, from where they
+sit) gate writes to them. Treat the knob with the same care as the settings that
+carry it: if those files are attacker-writable, the posture is not the first
+thing you have lost.
+
+The knob adds no layer and changes no layer's semantics. Ambiguous input still
+fails open at the detection level (precision over recall), as it always has —
+that is a separate, and unrelated, sense of the phrase.

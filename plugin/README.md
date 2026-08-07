@@ -24,10 +24,12 @@ tool output is **suppressed** rather than shown unvetted.
 | `pretooluse-sanitize`  | PreToolUse       | Normalizes confusable/homoglyph paths and commands, strips stego and terminal-control sequences from model-authored content, and re-anchors redacted Edit/Write inputs onto the on-disk bytes |
 | `sanitize-output`      | PostToolUse      | Strips invisibles and ANSI, splices hidden HTML out of web/MCP ingress, flags exfil-shaped URLs, and redacts secrets via detect-secrets                                                       |
 
-Every layer fails **closed**: when a check cannot run, the guarded action is
-blocked, asked about, or its output suppressed — never passed through unchecked.
-The launcher (`scripts/safe-launch.sh`) holds that line even when the hook cannot
-start at all, because Claude Code treats a crashed hook as "no objection".
+Every layer fails **closed** by default: when a check cannot run, the guarded
+action is blocked, asked about, or its output suppressed — never passed through
+unchecked. The launcher (`scripts/safe-launch.sh`) holds that line even when the
+hook cannot start at all, because Claude Code treats a crashed hook as "no
+objection". A deployment that would rather keep working than keep guarding flips
+that posture with `AGENT_SANITIZER_FAIL_OPEN=1` (below).
 
 ## Configuration
 
@@ -38,6 +40,26 @@ Three opt-outs, for content the sanitizer would otherwise rewrite:
 | `AGENT_SANITIZER_INVISIBLE_DISABLED=1` | Keep invisible characters in model-authored content (i18n joiners) |
 | `AGENT_SANITIZER_TERMINAL_DISABLED=1`  | Keep raw escape sequences (fixtures that must contain them)        |
 | `AGENT_SANITIZER_OUTPUT_DISABLED=1`    | Both of the above                                                  |
+
+And one posture knob, for when the sanitizer cannot run at all:
+
+| Variable                      | Effect                                                                                                      |
+| ----------------------------- | ----------------------------------------------------------------------------------------------------------- |
+| `AGENT_SANITIZER_FAIL_OPEN=1` | A sanitizer that never RAN passes the guarded action through unsanitized instead of blocking (default: off) |
+
+Set it and a missing `node`, a corrupt bundle or an uninstalled package stops
+halting your session — the action proceeds and the model is told, in
+`additionalContext`, that what it is reading was never sanitized.
+
+The knob is deliberately narrow. It covers the sanitizer failing to **start**;
+it does not cover a layer that ran and **threw**, because those throws are
+composable by whoever authored the content: colliding field names, a tool
+response nested deeply enough to overflow the walk, or enough secret-shaped
+leaves to exhaust the redaction budget. Each of those is guarding something a
+pass-through would hand the model verbatim, so they suppress in both postures —
+as does an unparsable payload, and as do detection verdicts (a working sanitizer
+that found an injection still blocks). The value must be exactly `1`;
+`true`/`yes` leave the secure default in place.
 
 Variables prefixed `_AGENT_SANITIZER_` are internal plumbing (the redactor socket
 and its deadlines, the sanitization budget, the trace channel). `hooks.json` sets

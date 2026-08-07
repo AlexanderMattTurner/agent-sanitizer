@@ -27,6 +27,9 @@ import {
   emitHookResponse,
   errMessage,
   safeErrMessage,
+  failOpenEnabled,
+  failOpenContext,
+  sanitizerUnavailable,
   makeDeadline,
   lazyImportErrorFor,
   missingPackageMessage,
@@ -565,6 +568,51 @@ export function emitFailClosed(
 }
 
 /**
+ * Emit the PostToolUse failure response under the CALLER's chosen posture:
+ * fail-closed suppression by default ({@link emitFailClosed}), or — with the
+ * opt-in AGENT_SANITIZER_FAIL_OPEN=1 — a warning context and NO
+ * `updatedToolOutput`, leaving the original tool output in the model's view.
+ *
+ * The knob is honored only for the failures {@link sanitizerUnavailable}
+ * recognizes. That matters most on THIS hook: its layers throw on exactly the
+ * inputs an attacker composes — colliding field names, a nesting depth that
+ * overflows the walk, a redaction budget spent on a thousand secret-shaped
+ * leaves — and each of those throws is guarding content a pass-through would
+ * hand to the model verbatim, secrets included. They keep their suppression in
+ * both postures; only a sanitizer that never loaded opens.
+ * @param {any} input  parsed hook input, or undefined if parsing threw
+ * @param {unknown} err
+ * @param {(fields: Record<string, unknown>) => void} [emit]
+ * @param {string} [remedy]  what a reader should run; hosts pass their own
+ * @param {NodeJS.ProcessEnv | Record<string, string | undefined>} [env]
+ * @returns {void}
+ */
+export function emitHookFailure(
+  input,
+  err,
+  emit = (fields) => emitHookResponse(HookEvent.POST_TOOL_USE, fields),
+  remedy = DEFAULT_MISSING_PACKAGE_REMEDY,
+  env = process.env,
+) {
+  if (
+    input !== undefined &&
+    failOpenEnabled(env) &&
+    sanitizerUnavailable(err)
+  ) {
+    emit({
+      additionalContext: failOpenContext("sanitize-output", "tool output", err),
+    });
+    return;
+  }
+  emitFailClosed(
+    input,
+    `[SANITIZATION FAILED — original output suppressed for safety. Hook error: ${safeErrMessage(err)}]`,
+    emit,
+    remedy,
+  );
+}
+
+/**
  * Run the sanitization pipeline over a tool output and return the contract-
  * shaped verdict fields — `mutated_output` (the shape-matching sanitized value)
  * and/or `additional_context` (the model-facing note) — or null when there is
@@ -792,16 +840,11 @@ export async function cliMain(ext = {}) {
       // back the parsed `input` even when the control-plane load failed, so the
       // suppression shape-matches the real tool_response). emitFailClosed itself
       // falls back to a bare string if that shape-matching replacement or its
-      // serialization throws, so even a pathological input fails closed.
+      // serialization throws, so even a pathological input fails closed. A caller
+      // that set AGENT_SANITIZER_FAIL_OPEN=1 gets the warning-only pass-through
+      // instead — see emitHookFailure.
       onError: (err, input) =>
-        emitFailClosed(
-          input,
-          "[SANITIZATION FAILED — original output suppressed for safety. Hook error: " +
-            safeErrMessage(err) +
-            "]",
-          undefined,
-          ext.remedy,
-        ),
+        emitHookFailure(input, err, undefined, ext.remedy),
     },
   );
 }

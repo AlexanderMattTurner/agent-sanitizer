@@ -132,6 +132,10 @@ node --input-type=module -e '
 '
 
 # Each wired mode reaches its verdict. Run from / so nothing resolves relatively.
+# The fail-open opt-out is cleared first: the assertions below are about the
+# SHIPPED default posture, and a runner that exported the knob would be asserting
+# something else entirely.
+unset AGENT_SANITIZER_FAIL_OPEN
 cd /
 prompt_payload='{"hook_event_name":"UserPromptSubmit","prompt":"plain text"}'
 printf '%s' "$prompt_payload" | node "$hook_entry" --hook=sanitize-user-prompt >/dev/null

@@ -194,6 +194,75 @@ export const PermissionDecision = Object.freeze({
   ASK: "ask",
 });
 
+/**
+ * The public opt-in knob that flips the hooks' INFRASTRUCTURE failure posture
+ * from closed (block/ask/suppress) to open (pass the guarded action through,
+ * unsanitized). Off by default: a sanitizer that cannot run must not silently
+ * stop guarding.
+ */
+export const FAIL_OPEN_ENV = "AGENT_SANITIZER_FAIL_OPEN";
+
+/**
+ * Whether the caller opted into the fail-OPEN posture. Exact `"1"`, matching
+ * the AGENT_SANITIZER_*_DISABLED knobs — anything else (including "true") leaves
+ * the secure default in place, so a typo cannot quietly disarm the sanitizer.
+ *
+ * Never sufficient on its own: pair it with {@link sanitizerUnavailable}, which
+ * is what confines the open posture to failures no payload can induce.
+ * @param {NodeJS.ProcessEnv | Record<string, string | undefined>} [env]
+ * @returns {boolean}
+ */
+export function failOpenEnabled(env = process.env) {
+  return env[FAIL_OPEN_ENV] === "1";
+}
+
+/**
+ * Whether `err` says the sanitizer never RAN — the only failure class the
+ * fail-open knob may act on.
+ *
+ * The distinction is the knob's whole safety argument, so it is drawn on the
+ * error rather than on "did stdin parse". A hook that threw somewhere in a
+ * layer has, by definition, been reached by the payload: the output hook's
+ * key-collision guard, a recursion overflow on a deeply nested tool_response,
+ * and an exhausted redaction budget are all throws an attacker composes at
+ * will — and each guards content (secrets, stego, colliding field names) that
+ * a pass-through would hand straight to the model. Those stay CLOSED in both
+ * postures. What the knob opens is an install that is simply not there: the
+ * package was never loaded, so no layer ever looked at the payload and none of
+ * its bytes influenced the outcome.
+ *
+ * Two shapes say that: {@link missingPackageError}'s `DEP_UNAVAILABLE` tag, and
+ * the bare TypeError V8 raises when an unloaded binding is called — recognized
+ * only while the loader holds a recorded failure, the same inference (and the
+ * same guard against over-claiming) that `depLoadHint` makes.
+ * @param {unknown} err
+ * @param {() => string[]} [failedPackages]
+ * @returns {boolean}
+ */
+export function sanitizerUnavailable(err, failedPackages = failedLazyPackages) {
+  if (/** @type {{code?: unknown}} */ (err)?.code === "DEP_UNAVAILABLE")
+    return true;
+  return err instanceof TypeError && failedPackages().length > 0;
+}
+
+/**
+ * The model-facing warning accompanying a fail-open pass-through. Emitted as
+ * `additionalContext` so the transcript still carries the failure: the posture
+ * gives up ENFORCEMENT, not visibility, and stdout is never left empty (which
+ * Claude Code would record as a clean run rather than a degraded one).
+ * @param {string} hookName
+ * @param {string} guarded  what passed through, e.g. "tool output"
+ * @param {unknown} err
+ * @returns {string}
+ */
+export function failOpenContext(hookName, guarded, err) {
+  return (
+    `WARNING: the ${hookName} hook failed (${safeErrMessage(err)}) and ` +
+    `${FAIL_OPEN_ENV}=1 is set — this ${guarded} passed through UNSANITIZED. ` +
+    `Treat its contents as untrusted.`
+  );
+}
+
 // Unpaired UTF-16 surrogates: a high half with no low follower, or a low half
 // with no high lead. Hook text spliced into the model's context must be
 // well-formed UTF-16 there, so the sanitizers normalize these out before

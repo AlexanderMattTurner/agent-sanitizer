@@ -34,6 +34,9 @@ import {
   registeredLazyModule,
   emitHookResponse,
   safeErrMessage,
+  failOpenEnabled,
+  failOpenContext,
+  sanitizerUnavailable,
   HookEvent,
   PermissionDecision,
 } from "./lib/hook-io.mjs";
@@ -398,6 +401,10 @@ export function depLoadHint(
  * fatigue, no latency. A LAYER/engine throw after a clean parse (`parsedOk` true
  * — redactor daemon down, package not loaded) is the sanitizer being UNAVAILABLE,
  * so it ASKS to keep a human in the loop rather than hard-block on infrastructure.
+ *
+ * Deliberately knob-blind: this is the fail-CLOSED posture itself, so it ignores
+ * AGENT_SANITIZER_FAIL_OPEN. A host wiring its own onError wants
+ * {@link hookFailureFields}, which honors the caller's posture and delegates here.
  * @param {boolean} parsedOk whether the input parsed before the failure
  * @param {unknown} err
  * @param {{ messages?: Partial<typeof PRE_TOOL_USE_MESSAGES>, hint?: string }} [opts]
@@ -417,6 +424,31 @@ export function failClosedFields(parsedOk, err, opts = {}) {
       ? messages.failed(cause)
       : messages.unparsable(cause),
   };
+}
+
+/**
+ * The hookSpecificOutput fields for a hook-level failure under the CALLER's
+ * chosen posture: fail-closed (the default, {@link failClosedFields}) or the
+ * opt-in fail-OPEN of AGENT_SANITIZER_FAIL_OPEN=1, which returns a warning
+ * context and no permissionDecision so the tool call proceeds unsanitized.
+ *
+ * The knob reaches only the failures {@link sanitizerUnavailable} recognizes —
+ * the package never loaded, so no layer ever read the payload. Every other
+ * throw, including one a hostile payload provoked out of a layer, keeps its
+ * fail-closed verdict in both postures.
+ * @param {boolean} parsedOk whether the input parsed before the failure
+ * @param {unknown} err
+ * @param {{
+ *   messages?: Partial<typeof PRE_TOOL_USE_MESSAGES>,
+ *   hint?: string,
+ *   env?: NodeJS.ProcessEnv | Record<string, string | undefined>,
+ * }} [opts]
+ * @returns {Record<string, unknown>}
+ */
+export function hookFailureFields(parsedOk, err, opts = {}) {
+  if (parsedOk && failOpenEnabled(opts.env) && sanitizerUnavailable(err))
+    return { additionalContext: failOpenContext(HOOK_NAME, "tool input", err) };
+  return failClosedFields(parsedOk, err, opts);
 }
 
 // Stryker disable all: CLI wiring — it runs only in the spawned hook
@@ -450,12 +482,13 @@ export async function cliMain(opts = {}) {
       // Fail closed WITHOUT the package: unparsable INPUT (`input` undefined)
       // hard-denies (adversary-inducible, no benefit to failing); any throw
       // after a clean parse — a layer engine down or the control-plane package
-      // unavailable — asks to keep a human in the loop. emitHookResponse renders
-      // natively, so this posture holds even when the adapter never loaded.
+      // unavailable — asks to keep a human in the loop, or passes through with a
+      // warning when the caller set AGENT_SANITIZER_FAIL_OPEN=1. emitHookResponse
+      // renders natively, so this posture holds even when the adapter never loaded.
       onError: (err, input) =>
         emitHookResponse(
           HookEvent.PRE_TOOL_USE,
-          failClosedFields(input !== undefined, err, {
+          hookFailureFields(input !== undefined, err, {
             messages,
             hint: depLoadHint(err, messages.remedy),
           }),

@@ -119,7 +119,11 @@ output (`[output sanitizer unavailable — original output suppressed]`), blocke
 prompts, or permission asks whose reason names the cause. The exception is a
 plugin that never loaded at all — Claude Code reads a crashed hook as "no
 objection", so confirm with `/plugin` rather than reading a quiet session as a
-working one.
+working one. Callers who prefer availability to enforcement can flip the posture
+with `AGENT_SANITIZER_FAIL_OPEN=1`, which lets a sanitizer that never started —
+missing `node`, corrupt bundle, uninstalled package — pass content through with a
+warning attached instead of halting. A layer that ran and threw still fails
+closed either way (see `plugin/README.md`).
 
 ## Using it with Claude Code
 

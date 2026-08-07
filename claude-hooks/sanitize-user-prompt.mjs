@@ -21,6 +21,10 @@
 import {
   readStdinJson,
   safeErrMessage,
+  failOpenEnabled,
+  failOpenContext,
+  sanitizerUnavailable,
+  HookEvent,
   isMain,
   lazyImport,
   missingPackageError,
@@ -168,12 +172,14 @@ export function judgeSanitizeUserPrompt(
  *   strip?: ((s: string) => string) | null,
  *   overrides?: Partial<typeof USER_PROMPT_MESSAGES>,
  *   trace?: import("./lib/trace.mjs").TraceFn,
+ *   env?: NodeJS.ProcessEnv | Record<string, string | undefined>,
  * }} [opts]
  *   `strip` is the ANSI stripper (defaults to the package's stripAnsiFully;
  *   injectable so the fail-closed path is testable); `overrides` are reason
  *   overrides, merged over the defaults so a partial table can never leave a field
  *   unset; `trace` is where engagement is announced, for a host with its own trace
- *   channel (see lib/trace.mjs).
+ *   channel (see lib/trace.mjs); `env` is the failure-posture source (see
+ *   failOpenEnabled), injectable so both postures are testable in-process.
  * @returns {Promise<void>}
  */
 export async function main(read, write, opts = {}) {
@@ -181,6 +187,7 @@ export async function main(read, write, opts = {}) {
     strip = stripAnsiFully,
     overrides = USER_PROMPT_MESSAGES,
     trace: sink = trace,
+    env = process.env,
   } = opts;
   const emitTrace = bestEffortTrace(sink);
   // Merged, not substituted — see judgeSanitizeUserPrompt. onError below is the
@@ -190,9 +197,11 @@ export async function main(read, write, opts = {}) {
   // runJudgeCli so this hook doesn't re-implement the control-plane boundary:
   // runJudgeCli reads stdin BEFORE loading the control-plane package, so a
   // load failure fails to this hook's posture (the onError block) instead of
-  // leaving stdin unread. The fail-closed onError writes the UserPromptSubmit
-  // `decision:"block"` envelope by hand because the adapter that would render it
-  // is exactly what may have failed to load.
+  // leaving stdin unread. onError writes its envelope by hand — block, or the
+  // warning-only pass-through a caller opted into with AGENT_SANITIZER_FAIL_OPEN=1
+  // — because the adapter that would render it is exactly what may have failed to
+  // load. The knob is honored only for the failures sanitizerUnavailable
+  // recognizes — a stripper that threw on a hostile prompt still blocks.
   await runJudgeCli(
     "sanitize-user-prompt",
     (event) => {
@@ -213,12 +222,27 @@ export async function main(read, write, opts = {}) {
     {
       readInput: read,
       write,
-      onError: (err) =>
+      onError: (err, input) =>
         write(
-          JSON.stringify({
-            decision: "block",
-            reason: messages.hookFailed(safeErrMessage(err)),
-          }),
+          JSON.stringify(
+            input !== undefined &&
+              failOpenEnabled(env) &&
+              sanitizerUnavailable(err)
+              ? {
+                  hookSpecificOutput: {
+                    hookEventName: HookEvent.USER_PROMPT_SUBMIT,
+                    additionalContext: failOpenContext(
+                      "sanitize-user-prompt",
+                      "prompt",
+                      err,
+                    ),
+                  },
+                }
+              : {
+                  decision: "block",
+                  reason: messages.hookFailed(safeErrMessage(err)),
+                },
+          ),
         ),
     },
   );
