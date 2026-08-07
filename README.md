@@ -18,37 +18,8 @@ npm install agent-sanitizer
 ```
 /plugin marketplace add AlexanderMattTurner/agent-sanitizer
 /plugin install agent-sanitizer@agent-sanitizer
-```
-
-Then turn auto-update on — **third-party marketplaces have it off by default**,
-so an install left alone keeps running the release it was installed from, and
-never picks up a fix to a layer. The plugin ships a command that does it:
-
-```
 /agent-sanitizer:enable-auto-update
 ```
-
-It merges the entry below into your `~/.claude/settings.json`, leaving your
-other settings alone. `/plugin` → **Marketplaces** → **Enable auto-update** is
-the equivalent by hand, and so is writing it yourself:
-
-```json
-{
-  "extraKnownMarketplaces": {
-    "agent-sanitizer": {
-      "source": {
-        "source": "github",
-        "repo": "AlexanderMattTurner/agent-sanitizer"
-      },
-      "autoUpdate": true
-    }
-  },
-  "enabledPlugins": { "agent-sanitizer@agent-sanitizer": true }
-}
-```
-
-That form is the whole install — no slash commands — and the same block in a
-repo's `.claude/settings.json` installs it for everyone who trusts that folder.
 
 [What installing entails](#what-installing-entails) covers the footprint of each
 path and how a failure looks; [Using it with Claude
