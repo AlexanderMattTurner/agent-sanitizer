@@ -8,6 +8,16 @@ adhere to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+## [2.18.0] - 2026-08-07
+
+### Added
+
+- Re-alert every two hours while the default branch is red.
+
+### Fixed
+
+- Fix CI page-only workflow on ci-failure-notify pages.
+
 ## [2.17.1] - 2026-08-07
 
 ### Fixed
