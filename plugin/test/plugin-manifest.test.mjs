@@ -224,12 +224,17 @@ test("both READMEs advertise the marketplace and plugin these manifests define",
     for (const command of [install, add, refresh, update])
       assert.ok(text.includes(command), `${doc} is missing: ${command}`);
   }
-  // The managed-settings snippet re-states the repo as JSON, out of reach of the
-  // `add` shorthand check above.
+  // The managed-settings snippet re-states both rename-sensitive values as JSON,
+  // out of reach of the command checks above: the repo, and the object key —
+  // which is the marketplace name `/plugin update ...@<name>` resolves against.
   const pluginReadme = readFileSync(join(ROOT, "plugin", "README.md"), "utf-8");
   assert.ok(
     pluginReadme.includes(`"repo": "${slug}"`),
     `plugin/README.md's extraKnownMarketplaces entry does not name ${slug}`,
+  );
+  assert.ok(
+    pluginReadme.includes(`"${marketplace.name}": {`),
+    `plugin/README.md's extraKnownMarketplaces entry is not keyed ${marketplace.name}`,
   );
   assert.equal(manifest.repository, `https://github.com/${slug}`);
   assert.equal(manifest.homepage, `https://github.com/${slug}#readme`);
