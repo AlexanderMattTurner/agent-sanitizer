@@ -26,6 +26,9 @@
     ".github/workflows/main-health.yaml": [
       ".github/scripts/main-health.test.mjs"
     ],
+    ".github/workflows/ci-failure-notify.yaml": [
+      ".github/scripts/main-health.test.mjs"
+    ],
     "src/invisible.mjs": [
       "test/invisible-charset.test.mjs",
       "test/instructions.test.mjs"

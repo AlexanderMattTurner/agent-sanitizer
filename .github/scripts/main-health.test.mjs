@@ -1,10 +1,16 @@
 import { strict as assert } from "node:assert";
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 
-import { redWorkflows, report, SELF_WORKFLOW_PATH } from "./main-health.mjs";
+import {
+  NOTIFIER_WORKFLOW_PATH,
+  pagedWorkflowNames,
+  redWorkflows,
+  report,
+  SELF_WORKFLOW_PATH,
+} from "./main-health.mjs";
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
 
@@ -52,11 +58,25 @@ const run = (conclusion, extra = {}) => ({
   ...extra,
 });
 
-test("reports a workflow whose newest push run failed", async () => {
-  const { request } = stubRequest([wf(1, "Node tests")], {
-    1: [run("failure")],
+/**
+ * Sweep a fixture. `pagedNames` defaults to every name the fixture defines, so
+ * the scope gate never silently masks a test about the run predicate; tests that
+ * are ABOUT the scope gate pass their own.
+ */
+async function sweep(workflows, runsById, opts = {}) {
+  const { request, seen } = stubRequest(workflows, runsById, opts);
+  const pagedNames =
+    opts.pagedNames ?? new Set(workflows.map((each) => each.name));
+  const red = await redWorkflows({
+    request,
+    branch: opts.branch ?? "main",
+    pagedNames,
   });
-  const red = await redWorkflows({ request, branch: "main" });
+  return { red, seen };
+}
+
+test("reports a workflow whose newest push run failed", async () => {
+  const { red } = await sweep([wf(1, "Node tests")], { 1: [run("failure")] });
   assert.deepEqual(
     red.map((r) => r.workflow),
     ["Node tests"],
@@ -66,50 +86,57 @@ test("reports a workflow whose newest push run failed", async () => {
 });
 
 test("reports a failed scheduled run too — a nightly is branch health", async () => {
-  const { request } = stubRequest([wf(1, "Nightly unseeded fuzz")], {
+  const { red } = await sweep([wf(1, "Release canary")], {
     1: [run("failure", { event: "schedule" })],
   });
-  const red = await redWorkflows({ request, branch: "main" });
   assert.equal(red.length, 1);
   assert.equal(red[0].event, "schedule");
 });
 
 test("an older red run under a newer green one is already fixed, not red", async () => {
-  const { request } = stubRequest([wf(1, "Node tests")], {
+  const { red } = await sweep([wf(1, "Node tests")], {
     1: [run("success"), run("failure")],
   });
-  assert.deepEqual(await redWorkflows({ request, branch: "main" }), []);
+  assert.deepEqual(red, []);
 });
 
 test("cancelled is not failure — a superseded run must not raise the alarm", async () => {
-  const { request } = stubRequest([wf(1, "Node tests")], {
+  const { red } = await sweep([wf(1, "Node tests")], {
     1: [run("cancelled"), run("success")],
   });
-  assert.deepEqual(await redWorkflows({ request, branch: "main" }), []);
+  assert.deepEqual(red, []);
 });
 
 test("skips pull_request and workflow_run conclusions, judging the next branch run", async () => {
-  const { request } = stubRequest([wf(1, "Node tests")], {
+  const { red } = await sweep([wf(1, "Node tests")], {
     1: [
       run("failure", { event: "pull_request" }),
       run("failure", { event: "workflow_run" }),
       run("success"),
     ],
   });
-  assert.deepEqual(await redWorkflows({ request, branch: "main" }), []);
+  assert.deepEqual(red, []);
 });
 
 test("a workflow with no branch run at all is not red", async () => {
-  const { request } = stubRequest([wf(1, "CI failure notify")], {
+  const { red } = await sweep([wf(1, "CI failure notify")], {
     1: [run("failure", { event: "workflow_run" })],
   });
-  assert.deepEqual(await redWorkflows({ request, branch: "main" }), []);
+  assert.deepEqual(red, []);
+});
+
+test("asks for a 100-run window, so `find` has room to skip non-branch runs", async () => {
+  const { seen } = await sweep([wf(1, "Node tests")], { 1: [] });
+  assert.ok(
+    seen.some((p) => p.includes("per_page=100") && p.includes("/runs")),
+    `run window was not 100: ${seen.join(" ")}`,
+  );
 });
 
 test("excludes itself — otherwise its own first red run latches the check on forever", async () => {
   const self = wf(1, "Main branch health", { path: SELF_WORKFLOW_PATH });
-  const { request, seen } = stubRequest([self], { 1: [run("failure")] });
-  assert.deepEqual(await redWorkflows({ request, branch: "main" }), []);
+  const { red, seen } = await sweep([self], { 1: [run("failure")] });
+  assert.deepEqual(red, []);
   assert.ok(
     !seen.some((p) => p.includes("/runs")),
     "self workflow must not even be queried",
@@ -130,12 +157,12 @@ test("the self-exclusion is load-bearing: the same run IS red under any other pa
   const notSelf = wf(1, "Main branch health", {
     path: ".github/workflows/some-other-name.yaml",
   });
-  const { request } = stubRequest([notSelf], { 1: [run("failure")] });
-  assert.equal((await redWorkflows({ request, branch: "main" })).length, 1);
+  const { red } = await sweep([notSelf], { 1: [run("failure")] });
+  assert.equal(red.length, 1);
 });
 
 test("skips inactive workflows and GitHub's synthesized ones", async () => {
-  const { request } = stubRequest(
+  const { red } = await sweep(
     [
       wf(1, "Disabled thing", { state: "disabled_manually" }),
       wf(2, "Dependency Graph", { path: "dynamic/dependabot/update-graph" }),
@@ -143,7 +170,6 @@ test("skips inactive workflows and GitHub's synthesized ones", async () => {
     ],
     { 1: [run("failure")], 2: [run("failure")], 3: [run("failure")] },
   );
-  const red = await redWorkflows({ request, branch: "main" });
   assert.deepEqual(
     red.map((r) => r.workflow),
     ["Node tests"],
@@ -152,12 +178,7 @@ test("skips inactive workflows and GitHub's synthesized ones", async () => {
 
 test("pages the workflow listing to completion", async () => {
   const many = Array.from({ length: 7 }, (_, i) => wf(i + 1, `W${i + 1}`));
-  const { request } = stubRequest(
-    many,
-    { 7: [run("failure")] },
-    { pageSize: 3 },
-  );
-  const red = await redWorkflows({ request, branch: "main" });
+  const { red } = await sweep(many, { 7: [run("failure")] }, { pageSize: 3 });
   assert.deepEqual(
     red.map((r) => r.workflow),
     ["W7"],
@@ -171,17 +192,101 @@ test("throws rather than under-reporting when the listing is short", async () =>
       ? { total_count: 5, workflows: [] }
       : { workflow_runs: [] };
   await assert.rejects(
-    () => redWorkflows({ request, branch: "main" }),
+    () => redWorkflows({ request, branch: "main", pagedNames: new Set() }),
     /stopped at 0 of 5/,
   );
 });
 
 test("the branch is passed through to the API, not hardcoded", async () => {
-  const { request, seen } = stubRequest([wf(1, "Node tests")], { 1: [] });
-  await redWorkflows({ request, branch: "release/2.x" });
+  const { seen } = await sweep(
+    [wf(1, "Node tests")],
+    { 1: [] },
+    {
+      branch: "release/2.x",
+    },
+  );
   assert.ok(
     seen.some((p) => p.includes("branch=release%2F2.x")),
     `branch never reached the API: ${seen.join(" ")}`,
+  );
+});
+
+// --- scope gate: the sweep pages on exactly what ci-failure-notify pages on ---
+
+test("a red workflow absent from the notifier list is not paged on", async () => {
+  const { red, seen } = await sweep(
+    [wf(1, "Nightly unseeded fuzz"), wf(2, "Node tests")],
+    { 1: [run("failure", { event: "schedule" })], 2: [run("failure")] },
+    { pagedNames: new Set(["Node tests"]) },
+  );
+  assert.deepEqual(
+    red.map((r) => r.workflow),
+    ["Node tests"],
+    "an unlisted workflow must not reach the paging channel",
+  );
+  assert.ok(
+    !seen.some((p) => p.startsWith("/actions/workflows/1/runs")),
+    "an unlisted workflow must not even be queried",
+  );
+});
+
+test("the scope gate is load-bearing: the same fixture IS red once listed", async () => {
+  const { red } = await sweep(
+    [wf(1, "Nightly unseeded fuzz")],
+    { 1: [run("failure", { event: "schedule" })] },
+    { pagedNames: new Set(["Nightly unseeded fuzz"]) },
+  );
+  assert.equal(red.length, 1);
+});
+
+test("parses the real ci-failure-notify list", () => {
+  const names = pagedWorkflowNames(
+    readFileSync(join(REPO_ROOT, NOTIFIER_WORKFLOW_PATH), "utf8"),
+  );
+  // Non-vacuity: a parser that silently returned a near-empty set would make
+  // the sweep report every branch green forever.
+  assert.ok(
+    names.size >= 10,
+    `parsed only ${names.size} names from ${NOTIFIER_WORKFLOW_PATH}`,
+  );
+  for (const expected of ["Node tests", "Lint", "Main branch health"])
+    assert.ok(names.has(expected), `${expected} missing from the parsed list`);
+  // The block ends where the block ends: `concurrency`/`permissions` are sibling
+  // keys, not workflow names.
+  for (const stray of ["concurrency", "permissions", "jobs"])
+    assert.ok(!names.has(stray), `parser ran past the block and took ${stray}`);
+});
+
+test("the parser stops at the end of the block and unquotes items", () => {
+  const names = pagedWorkflowNames(
+    [
+      "on:",
+      "  workflow_run:",
+      "    types: [completed]",
+      "    workflows:",
+      "      - Node tests",
+      '      - "Quoted name"',
+      "      - PR meta (privileged)",
+      "",
+      "concurrency:",
+      "  group: x",
+      "      - not a workflow",
+    ].join("\n"),
+  );
+  assert.deepEqual(
+    [...names],
+    ["Node tests", "Quoted name", "PR meta (privileged)"],
+  );
+});
+
+test("the parser throws rather than returning an empty scope", () => {
+  assert.throws(
+    () => pagedWorkflowNames("on:\n  push:\n    branches: [main]\n"),
+    /no `workflows:` block/,
+  );
+  assert.throws(
+    () => pagedWorkflowNames("    workflows:\nconcurrency:\n  group: x\n"),
+    /`workflows:` block is empty/,
   );
 });
 
