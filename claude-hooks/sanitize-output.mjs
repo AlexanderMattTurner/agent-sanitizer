@@ -2,8 +2,9 @@
  * PostToolUse: sanitize tool output before the model sees it.
  *
  * Layer 1: Strip payload-capable invisible chars + ANSI escapes.
- * Layer 2: Splice out hidden HTML (comments, hidden-styled elements) from web
- *          ingress; report preserved scripting/resource tags. The pre-splice
+ * Layer 2: Splice out hidden-styled/hidden-attribute elements from web ingress
+ *          (HTML comments pass through verbatim); report preserved
+ *          scripting/resource tags. The pre-splice
  *          text is stashed in an ephemeral sidecar file the model may Read back
  *          (behind an untrusted-content envelope) — see lib/reveal.mjs.
  * Layer 3: Report data-exfil-shaped URLs in web ingress (detection only).
@@ -111,7 +112,7 @@ const SGR_OUTPUT_NOTE =
 
 // Web-ingress tools always get the Layer 2 HTML rewrite; local tools — Read,
 // Bash, Grep, gh — never do. A local HTML/markdown pass either rewrites bytes the
-// model is about to edit or deletes content (comments, diffs, PR bodies, page
+// model is about to edit or deletes content (diffs, PR bodies, page
 // source fetched with curl) the task legitimately needs. (MCP output gets Layer 2
 // only when HTML-shaped — see the `html` gate in sanitizeText.) Layers 1
 // (invisible chars) and 4 (secret redaction) still run on every tool.
@@ -745,20 +746,21 @@ export async function evaluateToolOutput(input, ext = {}) {
   // Persist each leaf's pre-Layer-2 text (deduped by content) so the model can
   // Read back what the HTML splice removed; a successful write appends a hint
   // naming the file. Redact BEFORE writing — never put an unredacted secret on
-  // disk, including one hidden inside the spliced comment itself. Reveals only
-  // arise when Layer 2 modified the output, so this never resurrects the `clean`
-  // early-return below.
+  // disk, including one carried inside the spliced hidden element itself.
+  // Reveals only arise when Layer 2 modified the output, so this never
+  // resurrects the `clean` early-return below.
   for (const original of reveals) {
     let stored;
     try {
       const secrets = await redactSecrets(original, true, deadline);
       stored = secrets ? secrets.text : original;
     } catch {
-      // The pre-splice text carries the spliced comment bodies, so a secret
-      // hidden only inside a comment reaches the redactor here for the first
-      // time (the post-splice scan never saw it). If the daemon is unreachable
-      // we must neither write that unvetted text nor suppress the already-safe
-      // primary output — drop this one convenience reveal and move on.
+      // The pre-splice text carries the spliced hidden-element content, so a
+      // secret hidden only inside such an element reaches the redactor here
+      // for the first time (the post-splice scan never saw it). If the daemon
+      // is unreachable we must neither write that unvetted text nor suppress
+      // the already-safe primary output — drop this one convenience reveal and
+      // move on.
       continue;
     }
     const hint = persistReveal(stored);

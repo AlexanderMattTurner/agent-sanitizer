@@ -27,11 +27,12 @@ import { LONE_SURROGATE_WARNING } from "../src/warnings.mjs";
 
 const BLOB = "A".repeat(44);
 
-// Inputs chosen to reach every Layer-2/3 warning branch: a comment splice, a
-// hidden-element splice, both together, a preserved scripting tag, a preserved
-// data: URI, one exfil reason, two distinct exfil reasons, and a benign case.
+// Inputs chosen to reach every Layer-2/3 warning branch: a hidden-element
+// splice, a preserved comment (no warning — parity on the silent path), a
+// preserved scripting tag, a preserved data: URI, one exfil reason, two
+// distinct exfil reasons, and a benign case.
 const CASES = [
-  ["comment only", "a <!-- hi --> b"],
+  ["comment only (preserved, warning-free)", "a <!-- hi --> b"],
   ["hidden element", "a <span hidden>S</span> b"],
   ["comment + hidden", "a <!-- one --> b <span hidden>S</span> c"],
   ["preserved script", "see <script>x</script> source"],
@@ -79,10 +80,11 @@ describe("warning parity between sanitize() and sanitizeText()", () => {
       );
       if (root.warnings.length > 0) withWarnings++;
     }
-    // Non-vacuity: an empty-vs-empty comparison proves nothing, so most cases
-    // must actually have produced warnings.
+    // Non-vacuity: an empty-vs-empty comparison proves nothing, so every case
+    // except the two deliberately silent ones ("comment only" — comments are
+    // preserved without a warning — and "benign html") must have warned.
     assert.ok(
-      withWarnings >= CASES.length - 1,
+      withWarnings >= CASES.length - 2,
       `only ${withWarnings}/${CASES.length} cases produced any warning`,
     );
   });
@@ -121,7 +123,7 @@ describe("warning parity between sanitize() and sanitizeText()", () => {
     assert.deepEqual(root.found, []);
 
     // And the gate is not vacuously false: a tagged input still reaches Layer 2.
-    const gateTrue = "a <!-- hi --> b";
+    const gateTrue = "a <span hidden>S</span> b";
     assert.equal(needsMarkdownPipeline(gateTrue), true);
     const reached = await sanitize(gateTrue, { html: true });
     assert.ok(reached.warnings.some((w) => w.startsWith("HTML sanitized:")));

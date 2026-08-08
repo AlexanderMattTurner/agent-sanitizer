@@ -86,10 +86,9 @@ survives to carry a payload.
 
 ## Layer 2—hidden HTML (remark/rehype)
 
-For web/HTML ingress, splice out exactly what a human viewing the rendered page
-cannot see:
+For web/HTML ingress, splice out hidden **elements** — markup a human viewing
+the rendered page cannot see:
 
-- `<!-- HTML comments -->`
 - elements hidden by inline style: `display:none`, `visibility:hidden`,
   `content-visibility:hidden`, `opacity:0`, `filter:opacity(0)`, off-screen
   positioning, zero/negative sizes, `text-indent` off-screen, collapsing
@@ -104,6 +103,17 @@ extends to the end of the fragment—fail-closed for truncated input.
 Scripting/resource tags (`script`, `style`, `object`, `embed`, `iframe`, `svg`,
 `math`) and `data:` URI resources are **reported, not removed**: their bodies are
 page source the model may legitimately need to inspect.
+
+HTML comments (`<!--…-->`, and the bogus `<!…>`/`<?…?>` forms) are deliberately
+**preserved byte-identical** — no splice, no placeholder, no warning. Comments
+are ubiquitous in legitimate markdown/HTML (PR templates, tooling marker
+comments), so splicing them corrupts real content: an agent that reads a
+spliced body and writes it back persists the loss. And the splice was a weak
+defense — a payload does not need comment syntax to hide from a human skimming
+rendered output. Precision over recall: a comment-borne injection is instead
+covered by Layer 3, which scans the **original** text (comments included) for
+exfil-shaped URLs, and by the semantic Layer-5 filter, the right tool for
+payloads carried in visible-in-source text.
 
 ## Layer 3—exfil URLs (detection only)
 

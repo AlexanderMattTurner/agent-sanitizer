@@ -37,6 +37,8 @@ const CASES = [
   ["ansi", `${ESC}[31mred${ESC}[0m`],
   ["long invisible run", `x${ZW.repeat(12)}y`],
   ["lone surrogate", `a${String.fromCharCode(0xd800)}b`],
+  // Comments are preserved (no finding), kept as a convergence control: both
+  // entry points must agree on the byte-identical pass-through too.
   ["html comment", "a <!-- secret --> b"],
   ["hidden element", "a <span hidden>SECRET</span> b"],
   ["comment + hidden", "a <!-- one --> b <span hidden>S</span> c"],
@@ -82,7 +84,6 @@ const COVERAGE = [
   ["layer 1 strip", (r) => r.found.includes(CATEGORY.CF)],
   ["layer 1 ansi", (r) => r.found.includes(CATEGORY.ANSI)],
   ["layer 1 surrogates", (r) => r.found.includes(CATEGORY.LONE_SURROGATES)],
-  ["layer 2 comments", (r) => r.found.includes(CATEGORY.HTML_COMMENTS)],
   ["layer 2 hidden", (r) => r.found.includes(CATEGORY.HIDDEN_HTML)],
   [
     "layer 2 preserved",

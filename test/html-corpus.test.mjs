@@ -6,8 +6,9 @@
  * fixed verdict becomes an append-only seed and can never silently regress.
  *
  * Contract pinned here:
- *  - `hidden` vectors: content invisible on a rendered page (hidden styles,
- *    `hidden` attr, comments) is REMOVED — the canary never survives.
+ *  - `hidden` vectors: elements invisible on a rendered page (hidden styles,
+ *    `hidden` attr) are REMOVED — the canary never survives. HTML comments are
+ *    NOT hidden content: they are preserved (see `visible` vectors).
  *  - `reported` vectors: scripting/resource tags and data: URIs are PRESERVED
  *    but flagged in `warned`, so the model can inspect page source while being
  *    told to distrust it.
@@ -111,11 +112,6 @@ const CORPUS = {
     {
       name: "white-on-white-hsl",
       input: hidden("color:hsl(0 0% 100%);background-color:white"),
-    },
-    {
-      name: "html-comment",
-      input: `text<!-- ${CANARY} -->OK`,
-      keep: ["text", "OK"],
     },
     {
       name: "bare-hidden-attr",
@@ -475,6 +471,13 @@ const CORPUS = {
   // false positive here DELETES legitimate text the model needed, so each row
   // pins that the canary SURVIVES — the precision counterpart to `hidden`.
   visible: [
+    // Comments are preserved — invisible on a rendered page, but ubiquitous in
+    // legitimate documents (PR templates, tooling markers); splicing them
+    // corrupted real content, so every comment form must survive.
+    { name: "html-comment", input: `text<!-- ${CANARY} -->OK` },
+    { name: "bogus-comment", input: `text <!${CANARY}> OK` },
+    { name: "cdata-comment", input: `text <![CDATA[${CANARY}]]> OK` },
+    { name: "processing-instruction", input: `text <?php ${CANARY} ?> OK` },
     {
       name: "small-negative-left",
       input: hidden("position:absolute;left:-5px"),

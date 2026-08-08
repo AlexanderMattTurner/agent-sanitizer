@@ -66,8 +66,9 @@ export {
  *
  * Always runs Layer 1 (invisible-char + ANSI stripping, lone-surrogate
  * normalization). When `html` is true, also lazy-loads the HTML layer to splice
- * out human-invisible HTML (comments, hidden elements — Layer 2) and detect
- * data-exfil-shaped URLs (Layer 3); the heavy remark/rehype dependency is only
+ * out human-invisible HTML (hidden elements — Layer 2; comments pass through
+ * verbatim) and detect data-exfil-shaped URLs (Layer 3); the heavy
+ * remark/rehype dependency is only
  * imported on that path. The exfil scan runs on the pre-splice text so a beacon
  * URL hidden inside a `display:none` element is still reported, not buried by
  * its own removal.

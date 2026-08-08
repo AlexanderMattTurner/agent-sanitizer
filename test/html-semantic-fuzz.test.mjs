@@ -52,6 +52,11 @@ const KEEP_TOKENS = [
   // A nonzero unitless offset is invalid CSS; a browser drops the whole
   // declaration and the element keeps its normal on-screen position.
   '<div style="position: absolute; left: -9999">KEEPUNITLESS</div>',
+  // HTML comments are PRESERVED (not hidden content): splicing them corrupted
+  // legitimate documents, so every comment form must survive byte-for-byte.
+  "<!-- KEEPCOMMENT -->",
+  "<!KEEPBOGUS>",
+  "<![CDATA[KEEPCDATA]]>",
 ];
 
 // Each STRIP token is a genuinely hidden construct; its MARKER (the payload a
@@ -63,7 +68,6 @@ const STRIP_TOKENS = [
     marker: "STRIPVISHID",
   },
   { t: "<div hidden>STRIPATTR</div>", marker: "STRIPATTR" },
-  { t: "<!-- STRIPCOMMENT -->", marker: "STRIPCOMMENT" },
   {
     t: '<div style="position:absolute; left:-9999px">STRIPOFFSCREEN</div>',
     marker: "STRIPOFFSCREEN",

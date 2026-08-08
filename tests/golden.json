@@ -391,14 +391,13 @@
       },
       "html": {
         "cleaned": [
-          97, 32, 91, 72, 84, 77, 76, 32, 99, 111, 109, 109, 101, 110, 116, 32,
-          114, 101, 109, 111, 118, 101, 100, 93, 32, 98, 32, 91, 104, 105, 100,
-          100, 101, 110, 32, 72, 84, 77, 76, 32, 114, 101, 109, 111, 118, 101,
-          100, 93, 32, 99
+          97, 32, 60, 33, 45, 45, 32, 111, 110, 101, 32, 45, 45, 62, 32, 98, 32,
+          91, 104, 105, 100, 100, 101, 110, 32, 72, 84, 77, 76, 32, 114, 101,
+          109, 111, 118, 101, 100, 93, 32, 99
         ],
-        "found": ["html-comments", "hidden-html"],
+        "found": ["hidden-html"],
         "warnings": [
-          "HTML sanitized: 1 HTML comment(s), 1 hidden element(s) replaced with placeholders"
+          "HTML sanitized: 1 hidden element(s) replaced with placeholders"
         ]
       }
     },

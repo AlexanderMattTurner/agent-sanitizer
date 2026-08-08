@@ -13,7 +13,6 @@ import {
   isHiddenStyle,
   isHiddenElement,
   checkExfilUrl,
-  COMMENT_PLACEHOLDER,
   HIDDEN_PLACEHOLDER,
 } from "../src/html.mjs";
 import { fcRunOptions } from "./test-helpers.mjs";
@@ -23,12 +22,13 @@ const applyHtml = (text) => sanitizeHtml(text)?.text ?? text;
 const checkProperty = (arbitrary, predicate) =>
   fc.assert(fc.property(arbitrary, predicate), runOptions);
 
-// "Forbidden" = invisible on a rendered page: comments and hidden elements.
+// "Forbidden" = a hidden ELEMENT. Comments are deliberately NOT forbidden:
+// Layer 2 preserves them (see the module doc in ../src/html.mjs).
 function containsForbiddenNode(htmlText) {
   const tree = unified().use(rehypeParse, { fragment: true }).parse(htmlText);
   let forbidden = false;
   visit(tree, (node) => {
-    if (node.type !== "comment" && !isHiddenElement(node)) return undefined;
+    if (!isHiddenElement(node)) return undefined;
     forbidden = true;
     return EXIT;
   });
@@ -489,16 +489,18 @@ const adversarialStyle = fc.constantFrom(
   "font-size:0",
 );
 const adversarialNode = fc.oneof(
-  fc.constant("<!-- secret -->"),
   fc.constant("<div hidden>x</div>"),
   adversarialStyle.map((style) => `<div style="${style}">h</div>`),
   adversarialStyle.map((style) => `<span style='${style}'>x</span>`),
 );
+// Comments sit in the benign pool: they are preserved now, so they must mix
+// with adversarial nodes without either surviving-hidden or being spliced.
 const benignNode = fc.constantFrom(
   "hello",
   "<p>v</p>",
   "<b>b</b>",
   "<script>alert(1)</script>",
+  "<!-- marker -->",
   "",
   "\n",
 );
@@ -507,7 +509,7 @@ const arbitraryAdversarialDoc = fc
   .map((parts) => parts.join("\n"));
 
 describe("property: sanitizeHtml round-trip drops all forbidden nodes", () => {
-  it("comment/hidden never survives (script is preserved by design)", () =>
+  it("a hidden element never survives (script/comments preserved by design)", () =>
     checkProperty(arbitraryAdversarialDoc, (input) => {
       const sanitized = applyHtml(input);
       assert.equal(
@@ -526,13 +528,11 @@ const prosePrefix = fc.stringMatching(
 );
 
 describe("property: splice fidelity", () => {
-  it("a stripped comment leaves surrounding bytes byte-identical", () =>
-    checkProperty(fc.tuple(prosePrefix, proseChunk), ([prefix, suffix]) =>
-      assert.equal(
-        applyHtml(`${prefix}<!-- secret -->${suffix}`),
-        `${prefix}${COMMENT_PLACEHOLDER}${suffix}`,
-      ),
-    ));
+  it("a comment passes through byte-identical (comments are preserved)", () =>
+    checkProperty(fc.tuple(prosePrefix, proseChunk), ([prefix, suffix]) => {
+      const input = `${prefix}<!-- secret -->${suffix}`;
+      assert.equal(applyHtml(input), input);
+    }));
   it("a stripped hidden span leaves surrounding bytes byte-identical", () =>
     checkProperty(fc.tuple(prosePrefix, proseChunk), ([prefix, suffix]) =>
       assert.equal(

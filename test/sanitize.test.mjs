@@ -194,8 +194,10 @@ describe("sanitize: options robustness and text-type validation", () => {
   });
 
   it("still honors options when a real options object is passed alongside null-safety", async () => {
-    const out = await sanitize("before <!-- hidden --> after", { html: true });
-    assert.doesNotMatch(out.cleaned, /hidden/);
+    const out = await sanitize("before <b hidden>secret</b> after", {
+      html: true,
+    });
+    assert.doesNotMatch(out.cleaned, /secret/);
   });
 
   it("throws a clear, named TypeError when text is not a string (regression: was an internal TypeError from deep inside applyLayer1)", async () => {
@@ -221,12 +223,13 @@ describe("sanitize: options robustness and text-type validation", () => {
 });
 
 describe("sanitize: html=true runs Layers 2 & 3", () => {
-  it("splices a hidden element and an HTML comment, reporting both", async () => {
+  it("splices a hidden element while preserving an HTML comment beside it", async () => {
     const out = await sanitize("x <!-- c --> y <span hidden>SECRET</span> z", {
       html: true,
     });
     assert.doesNotMatch(out.cleaned, /SECRET/);
-    assert.ok(out.found.includes(CATEGORY.HTML_COMMENTS));
+    // The comment survives byte-identical — comments are preserved by design.
+    assert.match(out.cleaned, /<!-- c -->/);
     assert.ok(out.found.includes(CATEGORY.HIDDEN_HTML));
     assert.match(out.warnings.join(" "), /HTML sanitized/);
   });

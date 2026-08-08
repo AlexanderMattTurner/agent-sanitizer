@@ -343,7 +343,7 @@ function processLayer1(text, sgrCarveOut) {
  * Layers 2+3: HTML sanitisation (`html`) and exfil-URL detection (`exfilScan`),
  * folded into `state`. Returns the pre-splice text when Layer 2 removed bytes so
  * the caller can hand it back for later inspection of what the splice hid (the
- * model cannot otherwise tell a benign `<!-- TODO -->` from an injection
+ * model cannot otherwise tell a benign hidden element from an injection
  * payload), and `undefined` otherwise. That text is a STAGE VALUE, not a result:
  * it has not been through Layer 4, so {@link sanitizeText} must vet it before it
  * leaves. The transform itself stays pure — the caller owns any persistence.
@@ -374,16 +374,14 @@ async function applyMarkdownPipeline(state, { html, exfilScan }) {
     );
   }
   /* c8 ignore stop */
-  // Layer 2 — strips what a rendered page would not show (comments, hidden
-  // elements); scripting/resource tags preserved+reported.
+  // Layer 2 — strips hidden elements a rendered page would not show;
+  // scripting/resource tags preserved+reported, comments preserved untouched.
   if (html) {
     const layer2 = sanitizeHtml(state.text);
     if (layer2) {
       if (layer2.text !== state.text) {
         reveal = state.text;
         applyMutation(state, layer2.text);
-        if (layer2.removed.comments > 0)
-          state.found.push(CATEGORY.HTML_COMMENTS);
         if (layer2.removed.hidden > 0) state.found.push(CATEGORY.HIDDEN_HTML);
         state.warnings.push(describeHtmlSanitized(layer2.removed));
       }
@@ -393,8 +391,9 @@ async function applyMarkdownPipeline(state, { html, exfilScan }) {
   }
   // Layer 3 — detection only: the URLs stay intact, the model is told not to
   // use them. Scan the ORIGINAL text, not the Layer-2 splice output: a beacon
-  // URL hidden inside a display:none element or an HTML comment is MORE
-  // suspicious, not less, yet Layer 2 has already removed it from `cleaned`.
+  // URL hidden inside a display:none element is MORE suspicious, not less, yet
+  // Layer 2 has already removed it from `cleaned`. (This scan is also what
+  // still covers a beacon URL inside an HTML comment, which Layer 2 preserves.)
   if (exfilScan) {
     const threats = detectExfil(inputText);
     if (threats) {
@@ -412,7 +411,7 @@ async function applyMarkdownPipeline(state, { html, exfilScan }) {
  * carries whatever the layers after it would have removed. `reveal` in
  * particular is the PRE-splice text, so it holds exactly the bytes Layer 2 hid —
  * and Layer 4 only ever saw the POST-splice text, meaning a secret inside a
- * spliced-out HTML comment has never been redacted. The documented use of the
+ * spliced-out hidden element has never been redacted. The documented use of the
  * field is to persist it, i.e. to write that secret to a log or sidecar.
  *
  * Fails CLOSED by WITHHOLDING rather than throwing: a redactor failure here must

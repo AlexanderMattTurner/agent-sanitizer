@@ -22,11 +22,7 @@ import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import fc from "fast-check";
 
-import {
-  spliceRanges,
-  COMMENT_PLACEHOLDER,
-  HIDDEN_PLACEHOLDER,
-} from "../src/html.mjs";
+import { spliceRanges, HIDDEN_PLACEHOLDER } from "../src/html.mjs";
 import {
   occurrences,
   orderedMatches,
@@ -39,8 +35,8 @@ import { fcRunOptions, keptOutsideNeedles } from "./test-helpers.mjs";
 
 const runOptions = fcRunOptions({ numRuns: 500 });
 
-// Text drawn from chars that can never form a placeholder. Both placeholders
-// begin with "[", which this alphabet excludes, so any "[" in the output is an
+// Text drawn from chars that can never form a placeholder. The placeholder
+// begins with "[", which this alphabet excludes, so any "[" in the output is an
 // inserted placeholder — letting us strip placeholders unambiguously and
 // compare what remains against the kept bytes computed independently.
 const safeChar = fc.constantFrom(
@@ -50,27 +46,24 @@ const safeText = fc
   .array(safeChar, { minLength: 0, maxLength: 60 })
   .map((chars) => chars.join(""));
 
-// A range generator with indices in [0, maxIndex]: start = min, end = max, kind
-// comment|hidden. Overlaps/nesting/adjacency/duplicates arise naturally. Callers
-// pass `len` for in-bounds ranges or `len + n` to probe out-of-bounds handling.
+// A range generator with indices in [0, maxIndex]: start = min, end = max.
+// Overlaps/nesting/adjacency/duplicates arise naturally. Callers pass `len`
+// for in-bounds ranges or `len + n` to probe out-of-bounds handling.
 const rangesUpTo = (maxIndex) =>
   fc.array(
     fc
       .tuple(
         fc.integer({ min: 0, max: maxIndex }),
         fc.integer({ min: 0, max: maxIndex }),
-        fc.constantFrom(/** @type {const} */ ("comment"), "hidden"),
       )
-      .map(([a, b, kind]) => ({
+      .map(([a, b]) => ({
         start: Math.min(a, b),
         end: Math.max(a, b),
-        kind,
       })),
     { maxLength: 6 },
   );
 
-const stripPlaceholders = (text) =>
-  text.split(COMMENT_PLACEHOLDER).join("").split(HIDDEN_PLACEHOLDER).join("");
+const stripPlaceholders = (text) => text.split(HIDDEN_PLACEHOLDER).join("");
 
 // Independent (set-union, not the merge algorithm) computation of the bytes
 // that must survive: every index not covered by any range, in order.

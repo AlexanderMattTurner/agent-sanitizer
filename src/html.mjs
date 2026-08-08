@@ -2,13 +2,23 @@
  * Hidden-HTML splicing (Layer 2) and exfil-URL detection (Layer 3) for
  * web/HTML ingress.
  *
- * Layer 2 strips exactly what a human viewing the rendered page cannot see —
- * HTML comments and hidden elements (hiding inline styles, `hidden` attr) —
- * by splicing those byte ranges out of the original text and leaving a
- * placeholder; every byte outside a spliced range is preserved verbatim (no
- * re-serialization). Scripting/resource tags (script, style, svg, iframe, …)
- * and `data:` URI resources are REPORTED in the result's `warned` counts but
- * never removed, so fetched page source stays inspectable.
+ * Layer 2 strips hidden ELEMENTS — elements a human viewing the rendered page
+ * cannot see (hiding inline styles, `hidden` attr) — by splicing those byte
+ * ranges out of the original text and leaving a placeholder; every byte
+ * outside a spliced range is preserved verbatim (no re-serialization).
+ * Scripting/resource tags (script, style, svg, iframe, …) and `data:` URI
+ * resources are REPORTED in the result's `warned` counts but never removed, so
+ * fetched page source stays inspectable.
+ *
+ * HTML comments are deliberately NOT touched. They are ubiquitous in
+ * legitimate markdown/HTML (PR templates, marker comments tooling round-trips,
+ * documentation), so splicing them corrupts real content the model needed —
+ * an agent that reads a spliced body and writes it back persists the loss.
+ * And as a defense the splice bought little: a payload does not need comment
+ * syntax to hide from a human skimming rendered output. Precision over recall
+ * (see CLAUDE.md): comments stay byte-identical; Layer 3 still scans them for
+ * exfil-shaped URLs, and a semantic Layer-5 filter is the tool for payloads
+ * carried in visible-in-source text.
  *
  * Layer 3 reports data-exfil-shaped URLs (suspicious query params, oversized
  * payloads, embedded credentials) without modifying them; the caller surfaces
@@ -1169,10 +1179,10 @@ function isSelfClosedForeign(tagName, value) {
 }
 
 // Elements whose content is RAW TEXT / RCDATA / script data: parse5 recognizes
-// NO markup inside them (a `<!…` is not a comment, a `<b>` is not a tag) until
-// the matching end tag. The per-tag balance walk must model this or it would
-// splice a `<!…>` inside `<style>`/`<script>` as a bogus comment — mangling
-// source these tags are meant to preserve verbatim (and diverging from the
+// NO markup inside them (a `<b hidden>` is not a tag) until the matching end
+// tag. The per-tag balance walk must model this or it would read a hidden-tag
+// LITERAL inside `<style>`/`<script>` as a real hidden element and splice
+// source these tags are meant to preserve verbatim (diverging from the
 // flow/source branch, which parse5 handles correctly). `noscript` is omitted:
 // under fragment parsing (scripting disabled) parse5 parses its content as
 // normal markup, so scanning it is correct. Once `plaintext` opens it runs to
@@ -1284,7 +1294,6 @@ export function closingTagName(htmlValue) {
 
 // ─── Layer 2: splice engine ──────────────────────────────────────────────────
 
-export const COMMENT_PLACEHOLDER = "[HTML comment removed]";
 export const HIDDEN_PLACEHOLDER = "[hidden HTML removed]";
 // Shown when the remark/rehype parse itself fails (e.g. pathologically nested
 // markup overflows the recursive tree walk with a RangeError). The top-level
@@ -1297,11 +1306,11 @@ export const HIDDEN_PLACEHOLDER = "[hidden HTML removed]";
 export const UNPARSEABLE_PLACEHOLDER = "[HTML unparseable — withheld]";
 
 /**
- * Replace each range of `text` with its kind's placeholder, preserving every
- * byte outside the ranges verbatim. Overlapping/nested ranges are merged
+ * Replace each range of `text` with the hidden-content placeholder, preserving
+ * every byte outside the ranges verbatim. Overlapping/nested ranges are merged
  * (defense-in-depth — the scanners emit disjoint ranges).
  * @param {string} text
- * @param {Array<{start: number, end: number, kind: "comment" | "hidden"}>} ranges
+ * @param {Array<{start: number, end: number}>} ranges
  * @returns {string}
  */
 export function spliceRanges(text, ranges) {
@@ -1314,11 +1323,6 @@ export function spliceRanges(text, ranges) {
     const last = merged[merged.length - 1];
     if (last && range.start < last.end) {
       if (range.end > last.end) last.end = range.end;
-      // A hidden range absorbed into a comment range (the comment sorts first
-      // on a tie) must keep the hidden label — hidden content placeholdered as
-      // "[HTML comment removed]" would understate what was stripped. Hidden
-      // dominates: if either side is hidden, the union is hidden.
-      if (range.kind === "hidden") last.kind = "hidden";
     } else {
       merged.push({ ...range });
     }
@@ -1326,9 +1330,7 @@ export function spliceRanges(text, ranges) {
   let out = "";
   let cursor = 0;
   for (const range of merged) {
-    out +=
-      text.slice(cursor, range.start) +
-      (range.kind === "comment" ? COMMENT_PLACEHOLDER : HIDDEN_PLACEHOLDER);
+    out += text.slice(cursor, range.start) + HIDDEN_PLACEHOLDER;
     cursor = range.end;
   }
   return out + text.slice(cursor);
@@ -1363,13 +1365,14 @@ function hasWarned(warned) {
 }
 
 /**
- * Scan raw HTML for hidden content to strip and preserved tags to report.
- * Returned ranges are offsets into `html`; comments and hidden elements span
- * the whole element including its content (rehype positions cover open tag
- * through matching close, and parse5 extends an unclosed element to the end
- * of the fragment — fail-closed for truncated markup).
+ * Scan raw HTML for hidden elements to strip and preserved tags to report.
+ * Returned ranges are offsets into `html`; hidden elements span the whole
+ * element including its content (rehype positions cover open tag through
+ * matching close, and parse5 extends an unclosed element to the end of the
+ * fragment — fail-closed for truncated markup). Comments are NOT collected:
+ * they pass through verbatim (see the module doc).
  * @param {string} html
- * @returns {{ ranges: Array<{start: number, end: number, kind: "comment" | "hidden"}>, warned: ReturnType<typeof newWarned> }}
+ * @returns {{ ranges: Array<{start: number, end: number}>, warned: ReturnType<typeof newWarned> }}
  */
 export function scanHtmlFragment(html) {
   return scanFragmentTree(html, parseFragment(html));
@@ -1382,31 +1385,29 @@ export function scanHtmlFragment(html) {
  * the ranges are offsets into `html`, read from that tree's positions.
  * @param {string} html
  * @param {any} tree
- * @returns {{ ranges: Array<{start: number, end: number, kind: "comment" | "hidden"}>, warned: ReturnType<typeof newWarned> }}
+ * @returns {{ ranges: Array<{start: number, end: number}>, warned: ReturnType<typeof newWarned> }}
  */
 function scanFragmentTree(html, tree) {
-  /** @type {Array<{start: number, end: number, kind: "comment" | "hidden"}>} */
+  /** @type {Array<{start: number, end: number}>} */
   const ranges = [];
   const warned = newWarned();
   // @ts-ignore -- visit callback returns EXIT/SKIP only on matches; implicit undefined return is intentional
   // eslint-disable-next-line consistent-return
   visit(tree, (/** @type {any} */ node) => {
-    const isComment = node.type === "comment";
-    if (isComment || isHiddenElement(node)) {
+    if (isHiddenElement(node)) {
       /* c8 ignore start -- parse5 omits positions only on recovery-synthesized
          elements (tbody and friends), which carry no attributes and so can
          never be hidden; fail closed on the whole fragment if that assumption
          ever breaks. */
       if (!node.position) {
         ranges.length = 0;
-        ranges.push({ start: 0, end: html.length, kind: "hidden" });
+        ranges.push({ start: 0, end: html.length });
         return EXIT;
       }
       /* c8 ignore stop */
       ranges.push({
         start: node.position.start.offset,
         end: node.position.end.offset,
-        kind: isComment ? "comment" : "hidden",
       });
       return SKIP; // children are inside the spliced range
     }
@@ -1418,14 +1419,6 @@ function scanFragmentTree(html, tree) {
 }
 
 const mdParser = unified().use(remarkParse).use(remarkGfm);
-
-// A markup-declaration-open (`<!`) or processing-instruction-ish (`<?`) start.
-// Inside an inline html node these begin a *bogus comment* unless they open a
-// proper `<!--…-->` comment (handled on the fast path) — `<!bogus>`, `<?php?>`,
-// `<![CDATA[…]]>` all tokenize to comments the HTML-source branch already
-// strips. The prose branch matched only literal `<!--`, so the bogus forms
-// leaked through; this finds the candidates to validate.
-const BOGUS_COMMENT_OPEN_RE = /<[!?]/g;
 
 // Raw source ending in UNTERMINATED markup — a `<` that opens a construct with
 // no closing `>` yet: an open tag (`<span`), an end tag (`</A`), or a bogus
@@ -1458,81 +1451,6 @@ function foldAbsorb(absorbing, raw) {
 }
 
 /**
- * Map of comment start-offset -> end-offset (exclusive) for EVERY comment the
- * HTML tokenizer finds in `value`, from a SINGLE rehype parse. Validated against
- * the real tokenizer (parse5) rather than a hand-rolled bogus-comment state
- * machine, so a bogus comment (`<!bogus>`, `<?php?>`, `<![CDATA[…]]>`) is spliced
- * to exactly the span a browser hides and a `<Foo>` element, a `<!doctype>`, or
- * visible prose never is. Replaces a per-candidate parse: the whole value is
- * tokenized once and every span read from that tree.
- * @param {string} value
- * @returns {Map<number, number>}
- */
-function commentSpans(value) {
-  const tree = parseFragment(value);
-  /** @type {Map<number, number>} */
-  const spans = new Map();
-  visit(tree, "comment", (/** @type {any} */ node) => {
-    if (node.position)
-      spans.set(node.position.start.offset, node.position.end.offset);
-  });
-  return spans;
-}
-
-/**
- * Append comment ranges found in `value` to `ranges`.
- *
- * Proper `<!--…-->` comments are located with linear indexOf scanning (a lazy
- * `<!--[\s\S]*?-->` regex backtracks polynomially on crafted input); the close
- * search starts 2 chars in so spec-abrupt closes (`<!-->`, `<!--->`) terminate
- * their own comment. Other `<!`/`<?` starts are bogus comments, spliced to the
- * exact span the HTML tokenizer assigns them so the prose branch reaches parity
- * with the HTML-source branch (which strips them via parse5).
- * @param {string} value
- * @param {number} base absolute offset of the start of `value`
- * @param {number} nodeEnd absolute offset of the end of the containing node
- * @param {Array<{start: number, end: number, kind: "comment" | "hidden"}>} ranges
- */
-function collectCommentRanges(value, base, nodeEnd, ranges) {
-  BOGUS_COMMENT_OPEN_RE.lastIndex = 0;
-  // Tokenized bogus-comment spans, parsed once on first need (many values carry
-  // a proper `<!--` handled below without ever touching the tree).
-  /** @type {Map<number, number> | null} */
-  let spans = null;
-  for (let match; (match = BOGUS_COMMENT_OPEN_RE.exec(value));) {
-    const open = match.index;
-    if (value.startsWith("<!--", open)) {
-      const close = value.indexOf("-->", open + 2);
-      /* c8 ignore start -- micromark only tokenizes inline comments WITH a
-         terminator (an unterminated `<!--` in phrasing context stays literal
-         text, visible to a human reader), so this is fail-closed
-         defense-in-depth against a future tokenizer change. Unterminated
-         comments in flow blocks are covered — parse5 handles them in
-         scanHtmlFragment. */
-      if (close === -1) {
-        ranges.push({ start: base + open, end: nodeEnd, kind: "comment" });
-        break;
-      }
-      /* c8 ignore stop */
-      ranges.push({
-        start: base + open,
-        end: base + close + 3,
-        kind: "comment",
-      });
-      BOGUS_COMMENT_OPEN_RE.lastIndex = close + 3;
-      continue;
-    }
-    if (!spans) spans = commentSpans(value);
-    const end = spans.get(open);
-    // Not a comment (a `<Foo>` element, a `<!doctype>`, visible prose): leave
-    // it untouched and resume scanning just past this `<`.
-    if (end === undefined) continue;
-    ranges.push({ start: base + open, end: base + end, kind: "comment" });
-    BOGUS_COMMENT_OPEN_RE.lastIndex = end;
-  }
-}
-
-/**
  * Update hidden-region state for one html node while inside a tracked region.
  *
  * Mutates `state` in place. A closing tag for the tracked element decrements
@@ -1541,14 +1459,14 @@ function collectCommentRanges(value, base, nodeEnd, ranges) {
  * @param {{ tag: string | null, depth: number, regionStart: number }} state
  * @param {string} value
  * @param {number} nodeEnd absolute end offset of this node
- * @param {Array<{start: number, end: number, kind: "comment" | "hidden"}>} ranges
+ * @param {Array<{start: number, end: number}>} ranges
  */
 function updateHiddenState(state, value, nodeEnd, ranges) {
   if (value.startsWith("</")) {
     if (closingTagName(value) !== state.tag) return;
     state.depth--;
     if (state.depth === 0) {
-      ranges.push({ start: state.regionStart, end: nodeEnd, kind: "hidden" });
+      ranges.push({ start: state.regionStart, end: nodeEnd });
       state.tag = null;
     }
     return;
@@ -1590,10 +1508,10 @@ function hasHtmlLeaf(node) {
 /**
  * Balance-walk a markdown phrasing root's html leaves in document order: a
  * hidden open tag starts a removal region that runs to its matching close (or
- * the container's end when unbalanced — fail-closed), comments become
- * single-node ranges, and preserved tags are counted. Inline html is tokenized
- * per TAG (an element's content sits in sibling text nodes), which is why this
- * walk exists instead of handing the value to rehype.
+ * the container's end when unbalanced — fail-closed), and preserved tags are
+ * counted. Inline html is tokenized per TAG (an element's content sits in
+ * sibling text nodes), which is why this walk exists instead of handing the
+ * value to rehype.
  *
  * The absorb state is folded from the RAW source between html nodes (not from
  * mdast node values), so markdown constructs that reshuffle the character
@@ -1603,7 +1521,7 @@ function hasHtmlLeaf(node) {
  * sibling/nested node the way it does in the flat token stream.
  * @param {any} node
  * @param {string} text the full document source, for raw-slice absorb folding
- * @param {Array<{start: number, end: number, kind: "comment" | "hidden"}>} ranges
+ * @param {Array<{start: number, end: number}>} ranges
  * @param {ReturnType<typeof newWarned>} warned
  */
 function scanInlineChildren(node, text, ranges, warned) {
@@ -1638,11 +1556,6 @@ function scanInlineChildren(node, text, ranges, warned) {
       updateHiddenState(state, value, end, ranges);
     } else if (!absorbing) {
       // Not absorbed into a preceding unterminated tag — scan normally.
-      // Comments can share an inline html node with neighboring constructs
-      // (e.g. in a list item, `<!-- c -->!` is ONE node), so comment spans are
-      // located within the value and spliced individually rather than assuming
-      // the node IS the comment.
-      collectCommentRanges(value, base, end, ranges);
       const tagName = isHiddenOpen(value);
       if (tagName) {
         // A void element never emits a matching close, so a balance region
@@ -1652,7 +1565,7 @@ function scanInlineChildren(node, text, ranges, warned) {
         // content the HTML spec honours the `/>` flag, so the element closes
         // immediately and everything after it renders.
         if (VOID_ELEMENTS.has(tagName) || isSelfClosedForeign(tagName, value))
-          ranges.push({ start: base, end, kind: "hidden" });
+          ranges.push({ start: base, end });
         else {
           state.tag = tagName;
           state.depth = 1;
@@ -1679,7 +1592,6 @@ function scanInlineChildren(node, text, ranges, warned) {
     ranges.push({
       start: state.regionStart,
       end: node.position.end.offset,
-      kind: "hidden",
     });
   }
 }
@@ -1697,17 +1609,17 @@ const FLOW_HTML_PARENTS = new Set([
 
 /**
  * @param {string} text
- * @returns {{ ranges: Array<{start: number, end: number, kind: "comment" | "hidden"}>, warned: ReturnType<typeof newWarned> }}
+ * @returns {{ ranges: Array<{start: number, end: number}>, warned: ReturnType<typeof newWarned> }}
  */
 function scanMarkdown(text) {
   const tree = mdParser.parse(text);
-  /** @type {Array<{start: number, end: number, kind: "comment" | "hidden"}>} */
+  /** @type {Array<{start: number, end: number}>} */
   const ranges = [];
   const warned = newWarned();
 
-  // Flow html blocks carry complete markup, so rehype locates comments/hidden
-  // elements precisely within them; block-local offsets are shifted to
-  // document coordinates.
+  // Flow html blocks carry complete markup, so rehype locates hidden elements
+  // precisely within them; block-local offsets are shifted to document
+  // coordinates.
   visit(tree, "html", (/** @type {any} */ node, _index, parent) => {
     if (!FLOW_HTML_PARENTS.has(parent?.type)) return;
     const base = node.position.start.offset;
@@ -1716,7 +1628,6 @@ function scanMarkdown(text) {
       ranges.push({
         start: base + range.start,
         end: base + range.end,
-        kind: range.kind,
       });
     }
     mergeWarned(warned, sub.warned);
@@ -1811,16 +1722,16 @@ export function looksLikeHtmlSource(text) {
 }
 
 /**
- * Layer 2 over web-ingress text: splice out HTML comments and hidden elements
- * (placeholders mark the cuts; all other bytes are preserved verbatim) and
- * count preserved scripting/resource tags for the caller's warning. Returns
- * null when there is nothing to strip and nothing to report.
+ * Layer 2 over web-ingress text: splice out hidden elements (placeholders mark
+ * the cuts; all other bytes — HTML comments included — are preserved verbatim)
+ * and count preserved scripting/resource tags for the caller's warning.
+ * Returns null when there is nothing to strip and nothing to report.
  * @param {string} text
- * @returns {{ text: string, removed: { comments: number, hidden: number }, warned: { tags: Record<string, number>, dataSrc: number } } | null}
+ * @returns {{ text: string, removed: { hidden: number }, warned: { tags: Record<string, number>, dataSrc: number } } | null}
  */
 export function sanitizeHtml(text) {
   if (!HTML_TAG_PRESENT.test(text)) return null;
-  /** @type {{ ranges: Array<{start: number, end: number, kind: "comment" | "hidden"}>, warned: ReturnType<typeof newWarned> }} */
+  /** @type {{ ranges: Array<{start: number, end: number}>, warned: ReturnType<typeof newWarned> }} */
   let scan;
   try {
     // One parse decides the branch AND feeds it, so the source branch does not
@@ -1834,18 +1745,15 @@ export function sanitizeHtml(text) {
     // behind a placeholder and report it as hidden content removed.
     return {
       text: UNPARSEABLE_PLACEHOLDER,
-      removed: { comments: 0, hidden: 1 },
+      removed: { hidden: 1 },
       warned: newWarned(),
     };
   }
   const { ranges, warned } = scan;
   if (ranges.length === 0 && !hasWarned(warned)) return null;
-  const removed = { comments: 0, hidden: 0 };
-  for (const range of ranges)
-    removed[range.kind === "comment" ? "comments" : "hidden"]++;
   return {
     text: ranges.length > 0 ? spliceRanges(text, ranges) : text,
-    removed,
+    removed: { hidden: ranges.length },
     warned,
   };
 }
