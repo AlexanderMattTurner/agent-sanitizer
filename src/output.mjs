@@ -179,9 +179,17 @@ function applyMutation(state, nextText) {
 
 /**
  * Run Layer 4 (`redact`) over the state's current text and fold any finding
- * back in. THE single Layer-4 invocation site: the first pass and the re-scan
- * after a Layer-5 span deletion are the same call, so their fail-closed
- * handling, warning prose and post-redaction invariants cannot drift apart.
+ * back in. The single Layer-4 invocation site FOR THE PIPELINE STATE: the first
+ * pass and the re-scan after a Layer-5 span deletion are the same call, so their
+ * fail-closed handling, warning prose and post-redaction invariants cannot drift
+ * apart.
+ *
+ * One other site runs Layer 4 deliberately: {@link vetStageValue}, which vets a
+ * stage value on its way out and has no `PipelineState` to fold a finding into.
+ * It shares the post-redaction invariant (normalize what the redactor's own
+ * output may have stranded) but NOT the fail-closed policy — it withholds the
+ * one field rather than suppressing the whole output. Adding a third site means
+ * re-deciding both halves, so route through one of these two instead.
  *
  * Fails CLOSED: a redactor we could not run might have let a secret through, so
  * the throw is rethrown wrapped and the caller suppresses the output rather than
@@ -399,6 +407,15 @@ async function applyMarkdownPipeline(state, { html, exfilScan }) {
  * prose (no error text) — it reaches the model-facing context, and the redactor
  * runs on attacker-influenced content. `label` names the withheld field in that
  * warning and comes from the call site below, never from a seam.
+ *
+ * Normalizes the redactor's output for the same reason {@link applyMutation}
+ * does — a redaction that cuts between the halves of an astral pair strands a
+ * code unit, and this string is persisted and read back. It cannot USE
+ * `applyMutation`: that folds into the `PipelineState`, and a stage value is not
+ * the pipeline text — setting `modified`/`sgrNote` from a sidecar's redaction
+ * would describe `cleaned`, which this call never touches. Only the
+ * normalization is shared. `text` arrives post-Layer-1, so the no-redactor and
+ * no-finding paths are already well-formed.
  * @param {string} text
  * @param {SanitizeTextOptions["redact"]} redact
  * @param {string[]} warnings
@@ -409,7 +426,7 @@ async function vetStageValue(text, redact, warnings, label) {
   if (!redact) return text;
   try {
     const secrets = await redact(text);
-    return secrets ? secrets.text : text;
+    return secrets ? normalizeLoneSurrogates(secrets.text) : text;
   } catch {
     warnings.push(`Withheld the ${label}: it could not be vetted for secrets`);
     return undefined;

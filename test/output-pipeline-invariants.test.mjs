@@ -193,6 +193,26 @@ describe("invariant: a byte mutation always restores the stage invariants", () =
     assert.deepEqual(r.warnings, ["API keys/secrets redacted: k"]);
   });
 
+  it("normalizes a lone surrogate the redactor strands in the REVEAL", async () => {
+    // The reveal is vetted at its own Layer-4 site (it has no PipelineState to
+    // fold into), so the repair `cleaned` gets is not automatically its. It is
+    // the string that matters most: the hook persists it to a sidecar the model
+    // reads back, so a broken code unit lands on disk.
+    const redact = (/** @type {string} */ text) => ({
+      text: text.replace("\uDE00", ""),
+      found: ["k"],
+    });
+    const r = await sanitizeText("a\u{1F600}b<!-- c -->", {
+      html: true,
+      redact,
+    });
+    // Positive marker: the reveal exists and still shows what Layer 2 hid, so
+    // the surrogate assertion below cannot pass by the field being absent.
+    assert.equal(r.reveal, `a${REPLACEMENT_CHAR}b<!-- c -->`);
+    assert.ok(!HAS_LONE_SURROGATE.test(r.reveal));
+    assert.equal(r.cleaned, `a${REPLACEMENT_CHAR}b[HTML comment removed]`);
+  });
+
   // `sgrNote` downgrades the caller's banner to "display-only color stripped",
   // so it may only survive when that strip was the SOLE change.
   const SGR_INPUT = `${ESC}[31mred${ESC}[0m`;
