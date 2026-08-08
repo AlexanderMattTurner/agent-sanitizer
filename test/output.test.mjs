@@ -140,6 +140,31 @@ describe("deleteVerbatimSpans", () => {
       text: "Y",
       removed: 1,
     }));
+  // The filter is untrusted JS: nothing type-checks `removeSpans` before this
+  // runs. A non-string entry must be IGNORED, not coerced — `indexOf(123)`
+  // would match the literal text "123" the filter never named, and stepping by
+  // `(123).length` (undefined) makes the scan restart at the same index
+  // forever, hanging the pipeline. Each case below returns the text untouched;
+  // a regression here shows up as a hung test, not a silent pass.
+  for (const [label, span] of [
+    ["a number", 123],
+    ["an object", {}],
+    ["an array", []],
+    ["null", null],
+    ["undefined", undefined],
+    ["false", false],
+    ["zero", 0],
+  ])
+    it(`ignores ${label} span instead of coercing it to text`, () =>
+      assert.deepEqual(deleteVerbatimSpans("a123b", [span]), {
+        text: "a123b",
+        removed: 0,
+      }));
+  it("still deletes the string spans alongside an ignored non-string one", () =>
+    assert.deepEqual(deleteVerbatimSpans("a123b", [123, "123"]), {
+      text: "ab",
+      removed: 1,
+    }));
 });
 
 // ─── Layer 1 (via sanitizeText) ──────────────────────────────────────────────

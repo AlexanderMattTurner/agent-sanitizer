@@ -25,7 +25,7 @@ import {
 } from "../src/output.mjs";
 import { SGR_RE } from "../src/invisible.mjs";
 import { occurrences } from "../src/view-map.mjs";
-import { fcRunOptions, cp } from "./test-helpers.mjs";
+import { fcRunOptions, cp, keptOutsideNeedles } from "./test-helpers.mjs";
 
 const runOptions = fcRunOptions({ numRuns: 300 });
 
@@ -289,32 +289,17 @@ describe("property: deleteVerbatimSpans only deletes", () => {
         const { text: out, removed } = deleteVerbatimSpans(text, spans);
         // A length-only invariant can't catch an INJECTION: a buggy deleter that
         // both removed bytes and spliced new ones in could still shrink the text.
-        // Compute the expected residue INDEPENDENTLY of the deletion algorithm —
-        // a set-union of the spans' occurrences in the ORIGINAL text, keeping
-        // every index no span covered. It only ever keeps bytes already present
-        // in `text`, so any byte in `out` that did not come from `text` (or any
-        // byte deleted that no span matched in the INPUT) fails this
-        // exact-equality check. Deleting span-by-span would not satisfy it: an
-        // earlier deletion can create a later span's match (see
-        // test/splice-property.test.mjs for that regression in full).
-        const covered = new Array(text.length).fill(false);
-        for (const span of new Set(spans)) {
-          if (!span) continue;
-          for (
-            let i = text.indexOf(span);
-            i !== -1;
-            i = text.indexOf(span, i + span.length)
-          )
-            for (let k = i; k < i + span.length; k++) covered[k] = true;
-        }
-        let expected = "";
-        for (let i = 0; i < text.length; i++)
-          if (!covered[i]) expected += text[i];
+        // The expected residue comes from the shared set-union oracle (the same
+        // one test/splice-property.test.mjs asserts against, so the two suites
+        // cannot drift): every index of the ORIGINAL text no span covered. It
+        // only ever keeps bytes already present in `text`, so any byte in `out`
+        // that did not come from `text` — or any byte deleted that no span
+        // matched in the INPUT — fails this exact-equality check.
+        const expected = keptOutsideNeedles(text, spans);
         assert.equal(out, expected);
-        // Every span here is a single character, so each covered index is
-        // exactly one removed occurrence (a span repeated in the list names the
-        // same occurrences and is counted once — hence the Set above).
-        assert.equal(removed, covered.filter(Boolean).length);
+        // Every span here is a single character, so no two matches overlap and
+        // each removed byte is one removed occurrence.
+        assert.equal(removed, text.length - expected.length);
         assert.ok(out.length <= text.length, "output grew");
       }),
       runOptions,

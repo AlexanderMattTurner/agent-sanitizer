@@ -227,16 +227,17 @@ export function describeWarned(warned) {
  * @returns {{ text: string, removed: number }}
  */
 export function deleteVerbatimSpans(text, spans) {
-  // Drop falsy entries before matching. An empty span is meaningless, and a
-  // filter that returns `null`/`undefined` in the array (it is untrusted JS, not
-  // a type-checked caller) must not be read as the literal text "null" —
-  // `indexOf` would coerce it and delete real content. Fail open on the
-  // malformed entry rather than mangle bytes.
-  const spliced = spliceOrdered(
-    text,
-    orderedMatches(text, spans.filter(Boolean)),
-    () => "",
+  // Keep only non-empty STRING spans. The filter is untrusted JS, not a
+  // type-checked caller, so the array can hold anything: `indexOf(123)` would
+  // silently match the literal text "123" (deleting content the filter never
+  // named), and `occurrences` steps by `needle.length` — `undefined` for a
+  // number — making `indexOf(needle, NaN)` clamp back to the same index and
+  // loop forever. Fail open on a malformed entry rather than mangle bytes or
+  // hang the pipeline.
+  const usable = spans.filter(
+    (span) => typeof span === "string" && span !== "",
   );
+  const spliced = spliceOrdered(text, orderedMatches(text, usable), () => "");
   return { text: spliced.text, removed: spliced.spans.length };
 }
 

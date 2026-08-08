@@ -35,7 +35,7 @@ import {
 } from "../src/view-map.mjs";
 import { deleteVerbatimSpans } from "../src/output.mjs";
 import { rehydrateRedacted } from "../src/rehydrate.mjs";
-import { fcRunOptions } from "./test-helpers.mjs";
+import { fcRunOptions, keptOutsideNeedles } from "./test-helpers.mjs";
 
 const runOptions = fcRunOptions({ numRuns: 500 });
 
@@ -149,19 +149,6 @@ const overlappingNeedles = fc.array(
 const disjointNeedles = fc.array(fc.constantFrom("X", "Y", "Z", "Q", ""), {
   maxLength: 4,
 });
-
-// Independent (set-union, not the splice algorithm) computation of the bytes a
-// needle splice may NOT touch: every index of the ORIGINAL text not covered by
-// an occurrence of any needle, in order.
-const keptOutsideNeedles = (text, needles) => {
-  const covered = new Array(text.length).fill(false);
-  for (const needle of needles)
-    for (const index of occurrences(text, needle))
-      for (let i = index; i < index + needle.length; i++) covered[i] = true;
-  let out = "";
-  for (let i = 0; i < text.length; i++) if (!covered[i]) out += text[i];
-  return out;
-};
 
 // The pre-fix implementation of deleteVerbatimSpans, kept as a reference for the
 // non-vacuity test: it deletes span-by-span, so an earlier deletion joins the
