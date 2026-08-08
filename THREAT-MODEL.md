@@ -269,14 +269,18 @@ positive costs a sentence of context, never a mangled input):
   point every write path (including other agents) eventually crosses; reveal
   sidecars are excluded, since their bytes are redacted before persisting.
 - **Clobber-by-omission confirm (`lib/secret-drop-guard.mjs`).** A Write to an
-  existing, **git-untracked** file (no recovery path — `.env` and its kin)
-  whose redacted secrets vanish from the final, post-rehydration content is
-  denied once with the reason; re-issuing the identical Write confirms and
-  passes. The confirmation is the model's deliberate retry — never a human
-  permission prompt — held as a consumed-on-use sentinel via the same
-  squat-resistant `$TMPDIR` helpers as the invisible-char gate. Tracked files,
-  secret-free files, failed git probes and unmappable views all skip the guard
-  (fail open).
+  existing, **git-untracked** file (no git recovery path — `.env` and its kin,
+  or a file outside any repository) whose redacted secrets vanish from the
+  final, post-rehydration content is denied once with the reason; re-issuing
+  the identical Write confirms and passes. The confirmation is the model's
+  deliberate retry — never a human permission prompt — held as a
+  consumed-on-use, TTL-bounded sentinel (keyed to path + content + the dropped
+  values) via the same squat-resistant `$TMPDIR` helpers as the invisible-char
+  gate. Tracked files, secret-free files, failed git probes and unmappable
+  views all skip the guard (fail open). "Tracked" approximates "recoverable":
+  an uncommitted secret line on a tracked file is an accepted gap — the
+  committed content survives, and probing index-vs-worktree state would trade
+  precision for recall.
 
 ## Failure posture (`AGENT_SANITIZER_FAIL_OPEN`)
 

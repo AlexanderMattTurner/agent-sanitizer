@@ -487,6 +487,25 @@ async function rehydrateWrite(ti, view, io, hint) {
 }
 
 /**
+ * The single MultiEdit refusal: covers both a sanitized view that diverges
+ * from disk (redacted secrets, stripped invisible characters, a lone
+ * surrogate) and edits that carry placeholder text over a pristine file —
+ * either way the sequential edits cannot be re-anchored, so route the model
+ * to the per-call verified path.
+ * @param {string} filePath
+ */
+function multiEditDeny(filePath) {
+  return {
+    deny:
+      `the sanitized view of ${filePath} differs from its on-disk bytes ` +
+      `(redacted secrets or stripped invisible characters), or the edits carry ` +
+      `[REDACTED…] placeholder text; MultiEdit's sequential edits cannot be ` +
+      `re-anchored onto the real bytes. Use single Edit calls — each is ` +
+      `rehydrated individually — or ask the user to make this change`,
+  };
+}
+
+/**
  * True when this tool call could need re-anchoring against the target file's
  * sanitized view: any well-formed Edit (the view may differ from disk even
  * without placeholders, via stripped invisible characters), or a Write whose
@@ -642,6 +661,11 @@ export async function rehydrateRedacted(
   const deletions = alignDeletions(content, layer1Cleaned);
   const view = await io.redactMap(cleaned);
   if ("unmappable" in view) {
+    // MultiEdit has no resolver to vet it against an unresolvable map — a
+    // hint-free pass-through here would splice bytes inside spans nothing can
+    // account for, so it gets the MultiEdit deny where a hint-free Edit still
+    // reaches its own resolver-backed pass-through.
+    if (tool === "MultiEdit") return multiEditDeny(toolInput.file_path);
     if (!hinted) return null;
     return {
       deny: `cannot resolve redaction placeholders in ${toolInput.file_path}: ${view.unmappable}`,
@@ -655,32 +679,27 @@ export async function rehydrateRedacted(
   // literal text, so there is nothing to re-anchor. `cleaned === content` also
   // rules out a lone-surrogate-only divergence (view.pairs/deletions alone
   // would miss that, since the normalization is neither a redaction pair nor a
-  // Layer-1 deletion). A Write is the exception: its content still carries the
-  // hint prefix (isCandidate guaranteed it), and with no own placeholder to
+  // Layer-1 deletion). HINTED Write and MultiEdit are the exceptions: their
+  // content still carries the hint prefix, and with no own placeholder to
   // resolve that hint is a FOREIGN [REDACTED…] placeholder that would be
-  // persisted verbatim over pristine bytes. Fall through to rehydrateWrite so
-  // it denies with the cross-file guidance — the same verdict a Write onto a
-  // secret-bearing or absent target already gets.
+  // persisted verbatim over pristine bytes. A Write falls through to
+  // rehydrateWrite's cross-file deny; a MultiEdit to the MultiEdit deny below
+  // — without this a hinted MultiEdit on a pristine file silently persists
+  // the foreign placeholder the byte-identical Write is denied for.
   if (
     view.pairs.length === 0 &&
     deletions.length === 0 &&
     cleaned === content &&
-    !(tool === "Write" && toolInput.content.includes(hint))
+    (tool === "Edit" || !hinted)
   )
     return null;
 
-  // MultiEdit reaches here only when the view genuinely diverges from disk
-  // (redacted secrets, stripped runs, or a lone surrogate): its sequential
-  // edits cannot be re-anchored one-by-one against a static view, so fail
-  // closed with the escape hatch that lands in the fully-verified path.
-  if (tool === "MultiEdit")
-    return {
-      deny:
-        `the sanitized view of ${toolInput.file_path} differs from its on-disk bytes ` +
-        `(redacted secrets or stripped invisible characters), and MultiEdit's ` +
-        `sequential edits cannot be re-anchored onto them; use single Edit calls — ` +
-        `each is rehydrated individually — or ask the user to make this change`,
-    };
+  // MultiEdit reaches here when the view diverges from disk (redacted
+  // secrets, stripped runs, a lone surrogate) or when its edits carry
+  // placeholder text: its sequential edits cannot be re-anchored one-by-one
+  // against a static view, so fail closed with the escape hatch that lands in
+  // the fully-verified path.
+  if (tool === "MultiEdit") return multiEditDeny(toolInput.file_path);
   return tool === "Edit"
     ? rehydrateEdit(
         toolInput,

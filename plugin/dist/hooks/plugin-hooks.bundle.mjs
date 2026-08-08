@@ -67592,15 +67592,18 @@ var init_redactor_client = __esm({
 
 // claude-hooks/lib/secret-drop-guard.mjs
 import { createHash as createHash3 } from "node:crypto";
-import { unlinkSync as unlinkSync2 } from "node:fs";
+import { lstatSync as lstatSync3, unlinkSync as unlinkSync2 } from "node:fs";
 import { join as join4, dirname as dirname3 } from "node:path";
 import { tmpdir as tmpdir3 } from "node:os";
 import { spawnSync } from "node:child_process";
-function dropFingerprint(filePath, content3) {
-  return createHash3("sha256").update(filePath).update("\0").update(content3).digest("hex").slice(0, 32);
+function dropFingerprint(filePath, content3, dropped = []) {
+  const digest = createHash3("sha256").update(filePath).update("\0");
+  digest.update(content3);
+  for (const secret of dropped) digest.update("\0").update(secret);
+  return digest.digest("hex").slice(0, 32);
 }
 function confirmMarkerPath(fingerprint) {
-  return join4(tmpdir3(), `.claude-secret-drop-${PROJECT_HASH2}-${fingerprint}`);
+  return join4(tmpdir3(), `.claude-secret-drop-${PROJECT_HASH}-${fingerprint}`);
 }
 function gitTracked(filePath, spawn2 = spawnSync) {
   const res = spawn2("git", ["ls-files", "--error-unmatch", "--", filePath], {
@@ -67610,15 +67613,14 @@ function gitTracked(filePath, spawn2 = spawnSync) {
   if (res.error) return true;
   return res.status === 0;
 }
-function dropDeny(count, filePath, hint) {
-  return `this Write removes ${count} redacted secret value(s) from ${filePath}, and the file is not tracked by git, so the secrets may be unrecoverable. If removing them is intended, re-issue this exact Write to confirm; otherwise keep each ${hint}\u2026] placeholder (or its secret's line) in the new content`;
+function dropDeny(count, filePath) {
+  return `this Write removes ${count} redacted secret value(s) from ${filePath}, and the file is not tracked by git, so the secrets may be unrecoverable. If removing them is intended, re-issue this exact Write to confirm; otherwise keep each [REDACTED\u2026] placeholder (or its secret's line) in the new content`;
 }
 async function secretDropGuard(toolInput, io, opts = {}) {
   const {
     isTracked = gitTracked,
     confirmSeen = consumeConfirm,
-    recordConfirm = (fingerprint2) => writeSentinelFile(confirmMarkerPath(fingerprint2)),
-    hint = "[REDACTED"
+    recordConfirm = (fingerprint2) => writeSentinelFile(confirmMarkerPath(fingerprint2))
   } = opts;
   const { file_path: filePath, content: content3 } = toolInput ?? {};
   if (typeof filePath !== "string" || typeof content3 !== "string") return null;
@@ -67645,21 +67647,37 @@ async function secretDropGuard(toolInput, io, opts = {}) {
     (secret) => !content3.includes(secret)
   );
   if (dropped.length === 0) return null;
-  const fingerprint = dropFingerprint(filePath, content3);
+  const fingerprint = dropFingerprint(filePath, content3, dropped);
   if (confirmSeen(fingerprint)) return null;
   recordConfirm(fingerprint);
-  return { deny: dropDeny(dropped.length, filePath, hint) };
+  return { deny: dropDeny(dropped.length, filePath) };
+}
+function withSecretDropGuard(rehydrate, io, guard = secretDropGuard) {
+  return async (tool, toolInput) => {
+    const rehydrated = await rehydrate(tool, toolInput);
+    if (tool !== "Write" || rehydrated !== null && "deny" in rehydrated)
+      return rehydrated;
+    const finalInput = rehydrated === null ? toolInput : rehydrated.updatedInput;
+    const drop = await guard(finalInput, io);
+    return drop ?? rehydrated;
+  };
 }
 function consumeConfirm(fingerprint) {
   const marker2 = confirmMarkerPath(fingerprint);
   if (!markerIsTrusted(marker2)) return false;
+  let fresh;
+  try {
+    fresh = Date.now() - lstatSync3(marker2).mtimeMs <= CONFIRM_TTL_MS;
+  } catch {
+    return false;
+  }
   try {
     unlinkSync2(marker2);
   } catch {
   }
-  return true;
+  return fresh;
 }
-var applyLayer13, LONE_SURROGATE_RE3, PROJECT_HASH2;
+var applyLayer13, LONE_SURROGATE_RE3, CONFIRM_TTL_MS;
 var init_secret_drop_guard = __esm({
   async "claude-hooks/lib/secret-drop-guard.mjs"() {
     "use strict";
@@ -67667,7 +67685,7 @@ var init_secret_drop_guard = __esm({
     await init_invisible_alert();
     ({ applyLayer1: applyLayer13, LONE_SURROGATE_RE: LONE_SURROGATE_RE3 } = /** @type {typeof import("agent-sanitizer")} */
     await lazyImport("agent-sanitizer"));
-    PROJECT_HASH2 = createHash3("sha256").update(PROJECT_DIR).digest("hex").slice(0, 8);
+    CONFIRM_TTL_MS = 10 * 6e4;
   }
 });
 
@@ -68011,14 +68029,10 @@ var init_pretooluse_sanitize = __esm({
         ) : null;
       }
     };
-    defaultRehydrate = async (tool, toolInput) => {
-      const rehydrated = await rehydrateRedacted2(tool, toolInput, redactorIo);
-      if (tool !== "Write" || rehydrated !== null && "deny" in rehydrated)
-        return rehydrated;
-      const finalInput = rehydrated === null ? toolInput : rehydrated.updatedInput;
-      const drop = await secretDropGuard(finalInput, redactorIo);
-      return drop ?? rehydrated;
-    };
+    defaultRehydrate = withSecretDropGuard(
+      (tool, toolInput) => rehydrateRedacted2(tool, toolInput, redactorIo),
+      redactorIo
+    );
     registerFaultPolicy(HOOK_NAME, {
       event: HookEvent.PRE_TOOL_USE,
       guarded: "tool input",
@@ -68059,7 +68073,7 @@ var init_secret_annotate = __esm({
 
 // claude-hooks/lib/reveal.mjs
 import { createHash as createHash4 } from "node:crypto";
-import { mkdirSync, lstatSync as lstatSync3 } from "node:fs";
+import { mkdirSync, lstatSync as lstatSync4 } from "node:fs";
 import { tmpdir as tmpdir4, userInfo as userInfo3 } from "node:os";
 import { join as join5, resolve, sep } from "node:path";
 function revealDir() {
@@ -68077,7 +68091,7 @@ function revealDirIsSafe(dir) {
   }
   let st;
   try {
-    st = lstatSync3(dir);
+    st = lstatSync4(dir);
   } catch {
     return false;
   }
@@ -68122,6 +68136,7 @@ var init_reveal = __esm({
 // claude-hooks/sanitize-output.mjs
 var sanitize_output_exports = {};
 __export(sanitize_output_exports, {
+  ON_DISK_PLACEHOLDER_WARNING: () => ON_DISK_PLACEHOLDER_WARNING,
   SECRET_HINT: () => SECRET_HINT2,
   SECRET_HINT_EXT: () => SECRET_HINT_EXT2,
   applyLayer1: () => applyLayer14,

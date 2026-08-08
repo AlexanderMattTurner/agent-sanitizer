@@ -463,7 +463,9 @@ async function sanitizeObject(
 // legitimate fixture or document ABOUT redaction, so this is a warning the
 // model relays, never a verdict — detection rides the read, which is the one
 // choke point every write path eventually passes through.
-const ON_DISK_PLACEHOLDER_WARNING =
+// Exported so tests assert the surfaced warning by reference instead of
+// re-typing the prose.
+export const ON_DISK_PLACEHOLDER_WARNING =
   "this file's raw on-disk bytes already contain literal [REDACTED…] " +
   "placeholder text (not inserted by this sanitizer). If an earlier write " +
   "copied a placeholder from a sanitized view, the secret it stood for has " +

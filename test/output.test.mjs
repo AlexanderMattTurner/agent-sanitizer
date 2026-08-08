@@ -269,6 +269,10 @@ describe("sanitizeText: sgrNote is honest across Layers 2/4/5", () => {
     assert.deepEqual(r.warnings, [
       `API keys/secrets redacted: api-key${REDACTION_DOCTRINE}`,
     ]);
+    // Pin the doctrine's substance, not just its splice point: the warning must
+    // actually name the Edit/Write-only rehydration rule (a by-reference
+    // assertion alone would pass with the constant emptied).
+    assert.match(REDACTION_DOCTRINE, /rehydrate only via Edit\/Write/);
   });
 
   it("clears sgrNote when Layer 5 deletes a span", async () => {

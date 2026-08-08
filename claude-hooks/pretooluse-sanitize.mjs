@@ -54,7 +54,7 @@ import {
   authoredContext,
 } from "./lib/authored-content.mjs";
 import { redactViaDaemon } from "./lib/redactor-client.mjs";
-import { secretDropGuard } from "./lib/secret-drop-guard.mjs";
+import { withSecretDropGuard } from "./lib/secret-drop-guard.mjs";
 import { placeholderNotice } from "./lib/placeholder-grammar.mjs";
 import { bestEffortTrace, trace, TraceEvent } from "./lib/trace.mjs";
 
@@ -142,23 +142,15 @@ const redactorIo = {
 
 /**
  * Default Layer-4 rehydrator: the package's rehydrateRedacted bound to the
- * redactor-daemon io, followed — for Writes it did not deny — by the
- * clobber-by-omission guard (lib/secret-drop-guard.mjs). The guard runs on the
- * FINAL content (post-substitution), so a rehydrated secret counts as
- * preserved and only a genuinely dropped one can trip it. Hoisted (not an
- * inline default-param arrow) so tests can still inject a fake as the second
- * argument to buildPreToolUseResponse.
- * @param {string} tool
- * @param {any} toolInput
+ * redactor-daemon io, composed (via withSecretDropGuard, where the ordering
+ * logic lives and is unit-tested) with the clobber-by-omission guard. Hoisted
+ * (not an inline default-param arrow) so tests can still inject a fake as the
+ * second argument to buildPreToolUseResponse.
  */
-const defaultRehydrate = async (tool, toolInput) => {
-  const rehydrated = await rehydrateRedacted(tool, toolInput, redactorIo);
-  if (tool !== "Write" || (rehydrated !== null && "deny" in rehydrated))
-    return rehydrated;
-  const finalInput = rehydrated === null ? toolInput : rehydrated.updatedInput;
-  const drop = await secretDropGuard(finalInput, redactorIo);
-  return drop ?? rehydrated;
-};
+const defaultRehydrate = withSecretDropGuard(
+  (tool, toolInput) => rehydrateRedacted(tool, toolInput, redactorIo),
+  redactorIo,
+);
 
 /**
  * Trace the response on the way out — "noop" (clean pass-through), "deny",

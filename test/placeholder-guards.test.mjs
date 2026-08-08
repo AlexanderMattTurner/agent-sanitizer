@@ -244,14 +244,33 @@ describe("rehydrate: MultiEdit", () => {
     assert.match(res.deny, /single Edit calls/);
   });
 
-  it("passes through a hinted MultiEdit when the view equals disk (literal text)", async () => {
-    const content = "notes about [REDACTED] as prose\n";
+  it("denies a hinted MultiEdit even when the view equals disk (foreign placeholder)", async () => {
+    // A pristine file has no own placeholder to resolve, so hint-bearing edits
+    // would persist a foreign [REDACTED…] verbatim — same deny as the
+    // byte-identical Write's cross-file rule.
+    const content = "notes\n";
     const res = await rehydrateRedacted(
       "MultiEdit",
-      { file_path: "/f", edits: edits(["[REDACTED] as prose", "reworded"]) },
+      { file_path: "/f", edits: edits(["notes", "KEY=[REDACTED]"]) },
       fakeIo(content, { text: content, pairs: [] }),
     );
-    assert.equal(res, null);
+    assert.ok(res !== null && "deny" in res);
+    assert.match(res.deny, /single Edit calls/);
+  });
+
+  it("denies a hint-free MultiEdit on an unmappable view", async () => {
+    const content = `password=${SECRET_A}\n`;
+    const res = await rehydrateRedacted(
+      "MultiEdit",
+      { file_path: "/f", edits: edits(["a", "b"]) },
+      {
+        readFile: () => content,
+        redactMap: () => ({ unmappable: "because" }),
+        redact: () => "probe says secrets",
+      },
+    );
+    assert.ok(res !== null && "deny" in res);
+    assert.match(res.deny, /single Edit calls/);
   });
 
   it("ENOENT: hint-free passes through, hinted denies (file creation)", async () => {

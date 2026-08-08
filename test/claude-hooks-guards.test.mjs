@@ -12,7 +12,7 @@
  */
 import { describe, it, after } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync, unlinkSync } from "node:fs";
+import { mkdtempSync, rmSync, unlinkSync, utimesSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -22,12 +22,18 @@ const projectDir = mkdtempSync(join(tmpdir(), "sanitizer-guards-"));
 process.env.CLAUDE_PROJECT_DIR = projectDir;
 after(() => rmSync(projectDir, { recursive: true, force: true }));
 
-const { evaluateToolOutput } =
+const { evaluateToolOutput, ON_DISK_PLACEHOLDER_WARNING } =
   await import("../claude-hooks/sanitize-output.mjs");
 const { buildPreToolUseResponse } =
   await import("../claude-hooks/pretooluse-sanitize.mjs");
-const { secretDropGuard, gitTracked, dropFingerprint, confirmMarkerPath } =
-  await import("../claude-hooks/lib/secret-drop-guard.mjs");
+const {
+  secretDropGuard,
+  withSecretDropGuard,
+  gitTracked,
+  dropFingerprint,
+  confirmMarkerPath,
+  CONFIRM_TTL_MS,
+} = await import("../claude-hooks/lib/secret-drop-guard.mjs");
 
 // Secret assembled at runtime so no complete token literal trips push
 // protection / gitleaks. The label avoids every SECRET_HINT keyword so the
@@ -45,7 +51,11 @@ describe("sanitize-output: on-disk placeholder tripwire", () => {
       tool_response: `config was ${PH} on disk\n`,
     });
     assert.ok(fields !== null);
-    assert.match(fields.additional_context ?? "", /raw on-disk bytes/);
+    // Containment, not equality: composeContext wraps the warning in its
+    // envelope. The constant is the single source of truth for the prose.
+    assert.ok(
+      String(fields.additional_context).includes(ON_DISK_PLACEHOLDER_WARNING),
+    );
     // Warning only — the bytes are untouched.
     assert.equal("mutated_output" in fields, false);
   });
@@ -56,7 +66,9 @@ describe("sanitize-output: on-disk placeholder tripwire", () => {
       tool_input: { file_path: "/tmp/notes.md" },
       tool_response: { file: { content: `x ${PH} y`, numLines: 1 } },
     });
-    assert.match(fields?.additional_context ?? "", /raw on-disk bytes/);
+    assert.ok(
+      String(fields?.additional_context).includes(ON_DISK_PLACEHOLDER_WARNING),
+    );
   });
 
   it("stays silent on the bare hint prefix and the ellipsis prose form", async () => {
@@ -200,13 +212,49 @@ describe("secret-drop-guard", () => {
     assert.equal(probed, 0);
   });
 
-  it("skips secret-free files after one cheap probe", async () => {
+  it("skips secret-free files after one cheap probe (no map call)", async () => {
+    let mapped = 0;
     const res = await secretDropGuard(
       { file_path: "/w/notes.md", content: "anything\n" },
-      dropIo("no secrets here\n"),
+      {
+        ...dropIo("no secrets here\n"),
+        redactMap: () => {
+          mapped++;
+          throw new Error("must not map a secret-free file");
+        },
+      },
       untracked,
     );
     assert.equal(res, null);
+    assert.equal(mapped, 0);
+  });
+
+  it("re-denies a retry when the drop set changed between deny and retry", async () => {
+    const ti = { file_path: "/w/.env", content: "value=<fill>\n" };
+    const seen = new Set();
+    const seams = {
+      ...untracked,
+      confirmSeen: (fp) => seen.delete(fp),
+      recordConfirm: (fp) => seen.add(fp),
+    };
+    const first = await secretDropGuard(ti, dropIo(DISK), seams);
+    assert.ok(first !== null && "deny" in first);
+    // The file's secret changed on disk: the recorded confirmation no longer
+    // covers what THIS retry would drop.
+    const OTHER = ["hunter2hunter2", "hunter2xB"].join("");
+    const otherIo = {
+      readFile: () => `value=${OTHER}\n`,
+      redact: (text) =>
+        text.includes(OTHER) ? text.split(OTHER).join(PH) : null,
+      redactMap: (text) => ({
+        text: text.split(OTHER).join(PH),
+        pairs: [
+          { placeholder: PH, original: OTHER, start: text.indexOf(OTHER) },
+        ],
+      }),
+    };
+    const retry = await secretDropGuard(ti, otherIo, seams);
+    assert.ok(retry !== null && "deny" in retry);
   });
 
   it("skips an unmappable view (cannot know the drop set)", async () => {
@@ -260,7 +308,9 @@ describe("secret-drop-guard", () => {
 
   it("round-trips the default sentinel state (deny once, retry passes)", async () => {
     const ti = { file_path: "/w/.env", content: "sentinel-roundtrip\n" };
-    const marker = confirmMarkerPath(dropFingerprint(ti.file_path, ti.content));
+    const marker = confirmMarkerPath(
+      dropFingerprint(ti.file_path, ti.content, [SECRET_A]),
+    );
     try {
       const first = await secretDropGuard(ti, dropIo(DISK), untracked);
       assert.ok(first !== null && "deny" in first);
@@ -271,6 +321,32 @@ describe("secret-drop-guard", () => {
         unlinkSync(marker);
       } catch {
         // Already consumed — the retry unlinks it.
+      }
+    }
+  });
+
+  it("expires a stale sentinel instead of honoring it (no standing approval)", async () => {
+    const ti = { file_path: "/w/.env", content: "sentinel-ttl\n" };
+    const marker = confirmMarkerPath(
+      dropFingerprint(ti.file_path, ti.content, [SECRET_A]),
+    );
+    try {
+      const first = await secretDropGuard(ti, dropIo(DISK), untracked);
+      assert.ok(first !== null && "deny" in first);
+      // Backdate the sentinel past the TTL: the retry must re-deny, and the
+      // stale marker is consumed rather than left behind.
+      const stale = new Date(Date.now() - CONFIRM_TTL_MS - 60_000);
+      utimesSync(marker, stale, stale);
+      const retry = await secretDropGuard(ti, dropIo(DISK), untracked);
+      assert.ok(retry !== null && "deny" in retry);
+      // The re-deny re-armed a fresh sentinel, so the next retry passes.
+      const third = await secretDropGuard(ti, dropIo(DISK), untracked);
+      assert.equal(third, null);
+    } finally {
+      try {
+        unlinkSync(marker);
+      } catch {
+        // Already consumed.
       }
     }
   });
@@ -286,9 +362,99 @@ describe("secret-drop-guard", () => {
     );
   });
 
-  it("fingerprints distinguish path and content", () => {
+  it("fingerprints distinguish path, content, and the dropped values", () => {
     assert.notEqual(dropFingerprint("/a", "x"), dropFingerprint("/a", "y"));
     assert.notEqual(dropFingerprint("/a", "x"), dropFingerprint("/b", "x"));
-    assert.equal(dropFingerprint("/a", "x"), dropFingerprint("/a", "x"));
+    assert.notEqual(
+      dropFingerprint("/a", "x", ["s1"]),
+      dropFingerprint("/a", "x", ["s2"]),
+    );
+    assert.notEqual(
+      dropFingerprint("/a", "x", ["s1"]),
+      dropFingerprint("/a", "x", ["s1", "s2"]),
+    );
+    assert.equal(
+      dropFingerprint("/a", "x", ["s1"]),
+      dropFingerprint("/a", "x", ["s1"]),
+    );
+  });
+});
+
+// ─── withSecretDropGuard (the production composition) ────────────────────────
+
+describe("withSecretDropGuard", () => {
+  const guardDeny = { deny: "guard says no" };
+
+  it("runs the guard on the POST-substitution content for a rehydrated Write", async () => {
+    /** @type {any[]} */
+    const guardCalls = [];
+    const rehydrated = {
+      updatedInput: { file_path: "/w/.env", content: `k=${SECRET_A}\n` },
+      context: "substituted",
+    };
+    const composed = withSecretDropGuard(
+      async () => rehydrated,
+      dropIo(DISK),
+      async (finalInput) => {
+        guardCalls.push(finalInput);
+        return null;
+      },
+    );
+    const res = await composed("Write", {
+      file_path: "/w/.env",
+      content: "k=[REDACTED]\n",
+    });
+    assert.equal(res, rehydrated);
+    assert.deepEqual(guardCalls, [rehydrated.updatedInput]);
+  });
+
+  it("propagates a guard deny over a null rehydration (hint-free Write fallback)", async () => {
+    const ti = { file_path: "/w/.env", content: "gone\n" };
+    /** @type {any[]} */
+    const guardCalls = [];
+    const composed = withSecretDropGuard(
+      async () => null,
+      dropIo(DISK),
+      async (finalInput) => {
+        guardCalls.push(finalInput);
+        return guardDeny;
+      },
+    );
+    assert.equal(await composed("Write", ti), guardDeny);
+    // The guard saw the ORIGINAL toolInput — nothing was substituted.
+    assert.deepEqual(guardCalls, [ti]);
+  });
+
+  it("skips the guard for non-Write tools", async () => {
+    let guarded = 0;
+    const composed = withSecretDropGuard(
+      async () => null,
+      dropIo(DISK),
+      async () => {
+        guarded++;
+        return guardDeny;
+      },
+    );
+    for (const tool of ["Edit", "MultiEdit", "Bash", "Read"])
+      assert.equal(await composed(tool, { file_path: "/f" }), null);
+    assert.equal(guarded, 0);
+  });
+
+  it("short-circuits on a rehydration deny (guard never runs)", async () => {
+    let guarded = 0;
+    const rehydrateDeny = { deny: "rehydrate says no" };
+    const composed = withSecretDropGuard(
+      async () => rehydrateDeny,
+      dropIo(DISK),
+      async () => {
+        guarded++;
+        return null;
+      },
+    );
+    assert.equal(
+      await composed("Write", { file_path: "/w/.env", content: "x" }),
+      rehydrateDeny,
+    );
+    assert.equal(guarded, 0);
   });
 });
