@@ -51,10 +51,11 @@ import {
   occurrences,
   overlapAwareCount,
   orderedMatches,
+  spliceOrdered,
   alignDeletions,
   resolveSpan,
   rehydrateNewString,
-  pairsToUtf16,
+  makeFileView,
   pairDiskSpans,
 } from "./view-map.mjs";
 
@@ -140,7 +141,7 @@ function exposureDeny(count) {
  * @param {{file_path: string, old_string: string, new_string: string, replace_all?: boolean}} ti
  * @param {string} content disk bytes
  * @param {string} cleaned Layer-1 view of `content`
- * @param {{text: string, pairs: {placeholder: string, original: string, start: number}[]}} view
+ * @param {import("./view-map.mjs").FileView} view
  * @param {{start: number, deleted: string}[]} deletions
  * @param {RehydrateIo} io
  * @param {boolean} hinted the input itself carries placeholders
@@ -390,7 +391,7 @@ function foreignPlaceholders(out, hint, viewText, secretSpans) {
 
 /**
  * @param {{file_path: string, content: string}} ti
- * @param {{text: string, pairs: {placeholder: string, original: string, start: number}[]}} view
+ * @param {import("./view-map.mjs").FileView} view
  * @param {RehydrateIo} io
  * @param {string} hint placeholder prefix
  */
@@ -415,9 +416,9 @@ async function rehydrateWrite(ti, view, io, hint) {
     };
 
   // Resolve each of this file's placeholder texts to its single secret first,
-  // then splice in ONE ordered pass (R6). A chained `out.split(ph).join(secret)`
-  // per placeholder is unsound: an inserted secret whose bytes contain a later
-  // placeholder text would be re-matched and corrupted by the next split.
+  // then splice in ONE ordered pass (R6) via the shared `spliceOrdered` — see
+  // its doc for why a chained `out.split(ph).join(secret)` per placeholder is
+  // unsound.
   const valueByPh = new Map();
   for (const phText of texts) {
     const produced = view.pairs.filter((pair) => pair.placeholder === phText);
@@ -438,23 +439,15 @@ async function rehydrateWrite(ti, view, io, hint) {
       };
     valueByPh.set(phText, values[0]);
   }
-  const matches = orderedMatches(ti.content, texts);
-  let out = "";
-  let last = 0;
-  // Byte ranges in `out` occupied by the substituted secret values. A hint
-  // occurrence inside one of these is a pathological secret whose bytes contain
-  // the hint prefix, NOT a placeholder the model pasted — so it is excluded from
-  // the foreign-placeholder scan below.
-  const secretSpans = [];
-  for (const match of matches) {
-    const secret = valueByPh.get(match.text);
-    out += ti.content.slice(last, match.index);
-    const secretStart = out.length;
-    out += secret;
-    secretSpans.push({ start: secretStart, end: out.length });
-    last = match.index + match.text.length;
-  }
-  out += ti.content.slice(last);
+  // `secretSpans`: byte ranges in `out` occupied by the substituted secret
+  // values. A hint occurrence inside one of these is a pathological secret whose
+  // bytes contain the hint prefix, NOT a placeholder the model pasted — so it is
+  // excluded from the foreign-placeholder scan below.
+  const { text: out, spans: secretSpans } = spliceOrdered(
+    ti.content,
+    orderedMatches(ti.content, texts),
+    (match) => valueByPh.get(match.text),
+  );
   const secrets = [...valueByPh.values()];
 
   // R3: the new content may mix a valid same-file placeholder (substituted
@@ -612,17 +605,20 @@ export async function rehydrateRedacted(
   // text. The substitution is same-length, so the resulting offsets remain
   // valid against `cleaned` throughout the rest of this module.
   const deletions = alignDeletions(content, layer1Cleaned);
-  const view = await io.redactMap(cleaned);
-  if ("unmappable" in view) {
+  const mapped = await io.redactMap(cleaned);
+  if ("unmappable" in mapped) {
     if (!hinted) return null;
     return {
-      deny: `cannot resolve redaction placeholders in ${toolInput.file_path}: ${view.unmappable}`,
+      deny: `cannot resolve redaction placeholders in ${toolInput.file_path}: ${mapped.unmappable}`,
     };
   }
   // The redactor emits code-point offsets; the offset machinery below works in
-  // UTF-16. Normalize once here so an astral char before a placeholder can't
-  // mis-anchor the edit (identical to a no-op for BMP-only files).
-  view.pairs = pairsToUtf16(view.text, view.pairs);
+  // UTF-16. makeFileView normalizes once, into a fresh frozen carrier, so an
+  // astral char before a placeholder can't mis-anchor the edit (a no-op for
+  // BMP-only files) AND the redactor's own object is never written through —
+  // a redactor that memoizes its map result would otherwise hand back an
+  // already-converted object and get converted twice. See makeFileView.
+  const view = makeFileView(mapped.text, mapped.pairs);
   // View identical to disk: any placeholders in an Edit's old_string are
   // literal text, so there is nothing to re-anchor. `cleaned === content` also
   // rules out a lone-surrogate-only divergence (view.pairs/deletions alone

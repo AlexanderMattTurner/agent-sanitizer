@@ -20,15 +20,17 @@
  */
 import {
   readStdinJson,
-  safeErrMessage,
-  failOpenEnabled,
-  failOpenContext,
   HookEvent,
   isMain,
   lazyImport,
   missingPackageError,
   DEFAULT_MISSING_PACKAGE_REMEDY,
 } from "./lib/hook-io.mjs";
+import {
+  registerFaultPolicy,
+  hookFaultOutcome,
+  writeFaultOutcome,
+} from "./lib/hook-fault.mjs";
 import { controlPlane, runJudgeCli } from "./lib/control-plane.mjs";
 import { bestEffortTrace, trace, TraceEvent } from "./lib/trace.mjs";
 // classifyPrompt (the user-prompt verdict) and stripAnsiFully (its ANSI stripper)
@@ -71,6 +73,27 @@ export const USER_PROMPT_MESSAGES = Object.freeze({
   // exactly like the reasons above, and one channel means a host cannot supply
   // its wording in one place and forget it in the other.
   remedy: DEFAULT_MISSING_PACKAGE_REMEDY,
+});
+
+const HOOK_NAME = "sanitize-user-prompt";
+
+// This hook's entry in the one posture table (lib/hook-fault.mjs). OPEN is the
+// shared default (a warning context alongside the prompt); CLOSED is a
+// top-level `decision: "block"`, NOT a hookSpecificOutput verdict —
+// UserPromptSubmit has no permissionDecision channel, so this envelope shape is
+// the gate's own and the table records it rather than a reader inferring it.
+registerFaultPolicy(HOOK_NAME, {
+  event: HookEvent.USER_PROMPT_SUBMIT,
+  guarded: "prompt",
+  closed: (ctx) => ({
+    envelope: {
+      decision: "block",
+      reason: {
+        ...USER_PROMPT_MESSAGES,
+        ...ctx.messages,
+      }.hookFailed(ctx.message),
+    },
+  }),
 });
 
 /* c8 ignore start — module-load boundary: the imports resolve in every real
@@ -202,13 +225,13 @@ export async function main(read, write, opts = {}) {
   // exactly what may have failed to load. Either way this is the HOOK failing;
   // a prompt the working stripper flagged is still blocked in both postures.
   await runJudgeCli(
-    "sanitize-user-prompt",
+    HOOK_NAME,
     (event) => {
       const verdict = judgeSanitizeUserPrompt(event, strip, messages);
       // Announce engagement on the trace channel like the other stdin hooks —
       // a prompt gate that silently stopped running is otherwise invisible.
       emitTrace(TraceEvent.HOOK_RAN, {
-        hook: "sanitize-user-prompt",
+        hook: HOOK_NAME,
         outcome:
           verdict.decision === controlPlane().Decision.DENY
             ? "deny"
@@ -222,24 +245,9 @@ export async function main(read, write, opts = {}) {
       readInput: read,
       write,
       onError: (err) =>
-        write(
-          JSON.stringify(
-            failOpenEnabled(env)
-              ? {
-                  hookSpecificOutput: {
-                    hookEventName: HookEvent.USER_PROMPT_SUBMIT,
-                    additionalContext: failOpenContext(
-                      "sanitize-user-prompt",
-                      "prompt",
-                      err,
-                    ),
-                  },
-                }
-              : {
-                  decision: "block",
-                  reason: messages.hookFailed(safeErrMessage(err)),
-                },
-          ),
+        writeFaultOutcome(
+          hookFaultOutcome(HOOK_NAME, err, { messages, env }),
+          write,
         ),
     },
   );

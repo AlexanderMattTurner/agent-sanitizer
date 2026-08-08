@@ -57,6 +57,13 @@ export {
 // hand-rolled parser kept re-introducing simply cannot arise. Ambiguity still
 // fails OPEN (treated as visible): an unresolved unit, `calc()`, or `var()`
 // never counts as hidden.
+//
+// Every ident in a value — keyword, function name, dimension unit — is
+// escape-decoded and lowercased ONCE at the parse boundary (see
+// {@link canonicalizeValue}), so the detectors below compare canonical tokens
+// against literals. Doing it per-site is what let `left:-9999PX` through: CSS
+// units are ASCII case-insensitive, and every site that forgot `.toLowerCase()`
+// was a one-keystroke bypass of the whole layer.
 
 // A length/opacity/size is "near zero" when its magnitude is below this — a
 // browser renders 0.0001px text or 0.001 opacity as effectively invisible, so
@@ -206,7 +213,9 @@ function isHidingTransform(node) {
   if (!node) return false;
   for (const fn of valueTokens(node)) {
     if (fn.type !== "Function") continue;
-    const name = fn.name.toLowerCase();
+    // Function names, units and idents arrive lowercased and escape-decoded
+    // from parseDeclarations, so a literal compare is correct by construction.
+    const name = fn.name;
     const args = valueTokens(fn);
     if (/^(?:scale|scale3d|scalex|scaley|matrix|matrix3d)$/.test(name)) {
       // scale/matrix collapse to nothing when EITHER axis factor is (near-)zero —
@@ -240,12 +249,8 @@ function isHidingTransform(node) {
       // normalizes deg/grad/rad/turn to [0,360), and a near-90/270 band absorbs
       // the float drift of rad→deg.
       const a = args[0];
-      if (
-        a &&
-        a.type === "Dimension" &&
-        ANGLE_UNITS.has(a.unit.toLowerCase())
-      ) {
-        const degrees = hueDegrees(`${a.value}${a.unit}`.toLowerCase());
+      if (a && a.type === "Dimension" && ANGLE_UNITS.has(a.unit)) {
+        const degrees = hueDegrees(`${a.value}${a.unit}`);
         if (
           degrees !== null &&
           (Math.abs(degrees - 90) < NEAR_ZERO_EPSILON ||
@@ -279,7 +284,7 @@ function isHidingTransform(node) {
 function isHidingFilter(node) {
   if (!node) return false;
   for (const fn of valueTokens(node)) {
-    if (fn.type !== "Function" || fn.name.toLowerCase() !== "opacity") continue;
+    if (fn.type !== "Function" || fn.name !== "opacity") continue;
     const amount = valueTokens(fn)[0];
     if (!amount) continue;
     if (
@@ -321,7 +326,7 @@ function clipEdge(token) {
 function isClipRectHidden(node) {
   if (!node) return false;
   const rect = valueTokens(node).find(
-    (t) => t.type === "Function" && t.name.toLowerCase() === "rect",
+    (t) => t.type === "Function" && t.name === "rect",
   );
   if (!rect) return false;
   const edges = valueTokens(rect).map(clipEdge);
@@ -686,18 +691,50 @@ function canonicalizeColor(raw) {
   return canonicalizeColorFunction(value) ?? value;
 }
 
+// True when a value node paints — or cannot be proven NOT to paint — a
+// background IMAGE layer: a `url()`, a `*-gradient()` or an `image-set()`
+// anywhere in the value. The value AST is walked rather than a re-serialized
+// string regexed: an escaped function name (`\49 mage-set(…)`, which a browser
+// reads as `image-set(…)`) survives serialization escaped and slipped past the
+// regex, so the image layer went unseen and same-colored text painted over an
+// image was spliced as hidden. A `Raw` node — a value css-tree could not parse,
+// which is also what an escaped `url(` degrades to — is unresolvable and so
+// counts as an image layer (fail OPEN: no same-color hide).
+/** @param {any} node value node, or null @returns {boolean} */
+function paintsImageLayer(node) {
+  if (!node) return false;
+  let found = false;
+  csstree.walk(node, {
+    enter(/** @type {any} */ child) {
+      if (child.type === "Url" || child.type === "Raw") found = true;
+      // Names are canonicalized at the parse boundary, so a suffix test covers
+      // every gradient (`linear-`/`radial-`/`conic-`/`repeating-`/`-webkit-`)
+      // and both `image-set` spellings. `url` appears as a Function (not a Url)
+      // node when its name carried an escape — the very case the old regex on
+      // the re-serialized text missed.
+      if (
+        child.type === "Function" &&
+        (child.name === "url" ||
+          child.name.endsWith("gradient") ||
+          child.name.endsWith("image-set"))
+      )
+        found = true;
+    },
+  });
+  return found;
+}
+
 // The leading color token of a `background` shorthand (the first token that
 // canonicalizes to a real color), so `background:#fff` still compares. Returns
-// "" (fail open, no same-color hide) when the shorthand carries an IMAGE layer
-// — `url(...)`, a gradient, or `image-set(...)`: the painted image can make
-// same-colored text perfectly readable over it (and if it fails to load the
-// element's own background shows through), so the flat color token is not
-// provably the rendered backdrop.
-/** @param {string} shorthand @returns {string} */
-function backgroundColor(shorthand) {
-  if (/\burl\(|gradient\(|image-set\(/i.test(shorthand)) return "";
-  for (const token of shorthand.split(/\s+/)) {
-    const color = canonicalizeColor(token);
+// "" (fail open, no same-color hide) when the shorthand carries an IMAGE layer:
+// the painted image can make same-colored text perfectly readable over it (and
+// if it fails to load the element's own background shows through), so the flat
+// color token is not provably the rendered backdrop.
+/** @param {any} node value node for `background`, or null @returns {string} */
+function backgroundColor(node) {
+  if (!node || paintsImageLayer(node)) return "";
+  for (const token of valueTokens(node)) {
+    const color = canonicalizeColor(tokenText(token));
     if (color && (color.startsWith("#") || color === "transparent"))
       return color;
   }
@@ -727,8 +764,7 @@ function insetEdges(fn) {
   /** @type {any[]} */
   const edges = [];
   for (const token of valueTokens(fn)) {
-    if (token.type === "Identifier" && token.name.toLowerCase() === "round")
-      break;
+    if (token.type === "Identifier" && token.name === "round") break;
     edges.push(token);
   }
   return edges;
@@ -748,7 +784,7 @@ function isClipPathHidden(node) {
   if (!node) return false;
   for (const fn of valueTokens(node)) {
     if (fn.type !== "Function") continue;
-    const name = fn.name.toLowerCase();
+    const name = fn.name;
     if (name === "circle") {
       const radius = valueTokens(fn)[0];
       if (
@@ -808,6 +844,13 @@ function isTextPaintedVisible(val) {
   return isConcreteColor(stroke) && stroke !== "transparent";
 }
 
+/** True when a value is exactly the keyword `none`.
+ * @param {any} node @returns {boolean} */
+function isNoneKeyword(node) {
+  const token = soleToken(node);
+  return Boolean(token && token.type === "Identifier" && token.name === "none");
+}
+
 // True when the element paints a background IMAGE layer — a `background-image`
 // longhand set to anything but `none`, or a `background` shorthand carrying
 // `url(...)`, a gradient, or `image-set(...)`. A same-color text/background hide
@@ -819,11 +862,13 @@ function isTextPaintedVisible(val) {
 // only the flat color and missed a co-declared `background-image`, splicing
 // visible text. `background-clip:text` is NOT an image layer here — it paints
 // the background THROUGH the glyphs and is handled by {@link isTextPaintedVisible}.
-/** @param {(key: string) => string} textOf @returns {boolean} */
-function hasImageLayer(textOf) {
-  const img = textOf("background-image");
-  if (img && img !== "none") return true;
-  return /\burl\(|gradient\(|image-set\(/i.test(textOf("background"));
+/** @param {(key: string) => any} nodeOf @returns {boolean} */
+function hasImageLayer(nodeOf) {
+  const img = nodeOf("background-image");
+  // Only the single keyword `none` proves the longhand paints nothing; any
+  // other value (an unresolvable `var()` included) counts as a layer.
+  if (img && !isNoneKeyword(img)) return true;
+  return paintsImageLayer(nodeOf("background"));
 }
 
 /**
@@ -871,12 +916,23 @@ function isFontShorthandHidden(node) {
 const CSS_PROPERTY_IDENT_RE = /^-{0,2}[A-Za-z_][A-Za-z0-9_-]*$/;
 
 /**
- * Reconstruct a declaration's decoded value as a string for keyword/color
- * comparisons. Identifier tokens are escape-decoded through css-tree's ident
- * decoder (so `no\6e e`/`hi\64 den` read as `none`/`hidden`, with FF/CR/CRLF
- * terminators and invalid codepoints handled per the CSS spec); every other
- * token is re-serialized. A whole-value `Raw` (an unparsed value) is returned
- * verbatim — it never matches a hiding keyword, so it fails open.
+ * One value token as text. An Identifier's `name` is already the decoded,
+ * lowercased ident (see {@link canonicalizeValue}), so it is used verbatim
+ * rather than round-tripped through the serializer; every other token is
+ * re-serialized from its (canonicalized) node fields.
+ * @param {any} token
+ * @returns {string}
+ */
+function tokenText(token) {
+  return token.type === "Identifier" ? token.name : csstree.generate(token);
+}
+
+/**
+ * Reconstruct a declaration's canonicalized value as a string for keyword/color
+ * comparisons. Escapes and letter case were resolved at the parse boundary, so
+ * `no\6e e`, `NONE` and `none` all render as `none` here. A whole-value `Raw`
+ * (an unparsed value) is returned verbatim — it never matches a hiding keyword,
+ * so it fails open.
  * @param {any} valueNode
  * @returns {string}
  */
@@ -887,25 +943,50 @@ function declText(valueNode) {
   const parts = [];
   if (valueNode.children)
     valueNode.children.forEach((/** @type {any} */ child) =>
-      parts.push(
-        child.type === "Identifier"
-          ? csstree.ident.decode(child.name)
-          : csstree.generate(child),
-      ),
+      parts.push(tokenText(child)),
     );
   return parts.join(" ");
 }
 
 /**
+ * Canonicalize a parsed value subtree IN PLACE so every downstream comparison
+ * against a literal (`ABSOLUTE_UNITS`, `"rect"`, `"none"`) is correct by
+ * construction instead of depending on each call site remembering to decode and
+ * lowercase. CSS idents — keywords, function names and dimension units — are
+ * escape-decodable and ASCII case-insensitive for every keyword this module
+ * matches, so a browser reads `left:-9999PX`, `left:-9999p\78` and
+ * `left:-9999px` identically; the ad-hoc per-site `.toLowerCase()` did not, and
+ * a single uppercased unit walked straight past the detector.
+ *
+ * `Url.value` is deliberately NOT touched: css-tree already decodes url escapes,
+ * and a second decode would eat a legitimately backslash-bearing path.
+ * @param {any} valueNode
+ * @returns {void}
+ */
+function canonicalizeValue(valueNode) {
+  csstree.walk(valueNode, {
+    enter(/** @type {any} */ node) {
+      // ident.decode is pure string iteration and cannot throw on a token the
+      // tokenizer already produced.
+      if (node.type === "Identifier" || node.type === "Function")
+        node.name = csstree.ident.decode(node.name).toLowerCase();
+      else if (node.type === "Dimension")
+        node.unit = csstree.ident.decode(node.unit).toLowerCase();
+    },
+  });
+}
+
+/**
  * Parse a style string into a map of decoded lowercase property name -> parsed
- * value node, via css-tree's tolerant declaration-list parser. This replaces the
- * hand-rolled declaration splitter, per-declaration salvage, escape decoder, and
- * `!important` stripper in one pass: css-tree recovers per-declaration exactly
- * as a browser does (a bogus declaration is dropped, the rest kept), keeps a `;`
- * inside a string/`url()`/paren as part of the value, and exposes `!important`
- * as `node.important` (so an escaped spelling `none!\69mportant` is stripped for
- * free). Property names are escape-decoded and gated to real CSS idents;
- * anything else is dropped (fail open). Later declarations win, per the cascade.
+ * and canonicalized value node, via css-tree's tolerant declaration-list
+ * parser. This replaces the hand-rolled declaration splitter, per-declaration
+ * salvage, escape decoder, and `!important` stripper in one pass: css-tree
+ * recovers per-declaration exactly as a browser does (a bogus declaration is
+ * dropped, the rest kept), keeps a `;` inside a string/`url()`/paren as part of
+ * the value, and exposes `!important` as `node.important` (so an escaped
+ * spelling `none!\69mportant` is stripped for free). Property names are
+ * escape-decoded and gated to real CSS idents; anything else is dropped (fail
+ * open). Later declarations win, per the cascade.
  * @param {string} styleStr
  * @returns {Map<string, any>}
  */
@@ -934,6 +1015,7 @@ function parseDeclarations(styleStr) {
       // token; property is escape-decoded then gated to a clean CSS ident.
       const property = csstree.ident.decode(node.property).trim().toLowerCase();
       if (!CSS_PROPERTY_IDENT_RE.test(property)) return;
+      canonicalizeValue(node.value);
       decls.set(property, node.value);
     },
   });
@@ -1015,7 +1097,7 @@ export function isHiddenStyle(styleStr) {
     return true;
   const background =
     canonicalizeColor(textOf("background-color")) ||
-    backgroundColor(textOf("background"));
+    backgroundColor(nodeOf("background"));
   // Only flag same-color when BOTH sides resolve to a concrete color (`#rrggbb`
   // or `transparent`), AND no background IMAGE layer is present (an image can
   // make same-colored text readable). `var(--x)`, `inherit`, and `currentColor`
@@ -1027,7 +1109,7 @@ export function isHiddenStyle(styleStr) {
     effectiveColor &&
     effectiveColor === background &&
     isConcreteColor(effectiveColor) &&
-    !hasImageLayer(textOf)
+    !hasImageLayer(nodeOf)
   )
     return true;
 
@@ -1137,12 +1219,26 @@ function hasDataSrc(el) {
   );
 }
 
+// One shared fragment parser for every HTML parse in this module (mirroring
+// `mdParser` below): all of them must agree on the tokenizer's verdict, so
+// there is exactly one parser configuration to reason about.
+const htmlParser = unified().use(rehypeParse, { fragment: true });
+
+/**
+ * Parse `html` as an HTML fragment with the real tokenizer (parse5, via rehype).
+ * @param {string} html
+ * @returns {any}
+ */
+function parseFragment(html) {
+  return htmlParser.parse(html);
+}
+
 /**
  * @param {string} htmlValue
  * @returns {any}
  */
 function parseHtmlTag(htmlValue) {
-  const tree = unified().use(rehypeParse, { fragment: true }).parse(htmlValue);
+  const tree = parseFragment(htmlValue);
   /** @type {any} */
   let firstElement = null;
   visit(tree, "element", (node) => {
@@ -1276,7 +1372,19 @@ function hasWarned(warned) {
  * @returns {{ ranges: Array<{start: number, end: number, kind: "comment" | "hidden"}>, warned: ReturnType<typeof newWarned> }}
  */
 export function scanHtmlFragment(html) {
-  const tree = unified().use(rehypeParse, { fragment: true }).parse(html);
+  return scanFragmentTree(html, parseFragment(html));
+}
+
+/**
+ * `scanHtmlFragment` for a caller that already has the fragment tree — the
+ * dispatch in `sanitizeHtml` parses to decide the branch, so re-parsing there
+ * would tokenize the same input twice. `tree` MUST be the parse of `html`;
+ * the ranges are offsets into `html`, read from that tree's positions.
+ * @param {string} html
+ * @param {any} tree
+ * @returns {{ ranges: Array<{start: number, end: number, kind: "comment" | "hidden"}>, warned: ReturnType<typeof newWarned> }}
+ */
+function scanFragmentTree(html, tree) {
   /** @type {Array<{start: number, end: number, kind: "comment" | "hidden"}>} */
   const ranges = [];
   const warned = newWarned();
@@ -1361,7 +1469,7 @@ function foldAbsorb(absorbing, raw) {
  * @returns {Map<number, number>}
  */
 function commentSpans(value) {
-  const tree = unified().use(rehypeParse, { fragment: true }).parse(value);
+  const tree = parseFragment(value);
   /** @type {Map<number, number>} */
   const spans = new Map();
   visit(tree, "comment", (/** @type {any} */ node) => {
@@ -1629,20 +1737,77 @@ function scanMarkdown(text) {
   return { ranges, warned };
 }
 
-// 30%-of-lines heuristic: HTML *source* gets scanned as one rehype fragment;
-// inline tags scattered in prose go through the markdown branch instead.
 /**
+ * True when remark finds a code block — fenced or indented — in `text`.
+ *
+ * Asked before the HTML tokenizer because "no character data outside the
+ * markup" cannot see an INDENTED code block: its four leading spaces are
+ * whitespace, so a document that is nothing but one indented block
+ * (`"    <div hidden>x</div>\n"`) satisfies the rule and takes the source
+ * branch, and the hidden element gets spliced out of a block the renderer
+ * displays as literal text. A fence escapes only incidentally, because the
+ * backticks are non-whitespace character data. Code blocks are markdown-ONLY
+ * syntax, so their presence settles the question the same way the tokenizer
+ * does — by parsing, not by counting.
+ * @param {string} text
+ * @returns {boolean}
+ */
+function hasMarkdownCode(text) {
+  let found = false;
+  visit(mdParser.parse(text), "code", () => {
+    found = true;
+    return EXIT;
+  });
+  return found;
+}
+
+/**
+ * The parsed fragment tree for `text` when `text` is HTML *source*, else null.
+ *
+ * "HTML source" means the markup accounts for the WHOLE document: the real
+ * tokenizer (parse5, via rehype) places every element there is, and the only
+ * character data it leaves OUTSIDE all of them is whitespace. That is exactly
+ * the property the source branch needs — it hands the whole input to
+ * `scanHtmlFragment` as one fragment, which is faithful only when there is no
+ * non-HTML syntax around the markup for that parse to misread.
+ *
+ * Everything else fails OPEN to the markdown branch, which parses with remark
+ * and scans only the spans remark itself calls HTML. That is the conservative
+ * direction: markdown-only constructs (fenced/indented code, tables, lists)
+ * keep their meaning, so an HTML sample inside a code fence is displayed
+ * rather than spliced. The dispatch this replaces counted tag-shaped LINES and
+ * took the source branch above 30% of them, which got that case wrong — it
+ * spliced hidden-element examples out of documentation code blocks.
+ *
+ * Character data is judged by its DECODED value, as a renderer sees it: the
+ * ignored `<html>`/`<head>`/`<body>` tags of a full page leave their
+ * surrounding newlines merged into one text node, and `&nbsp;` between two
+ * elements is whitespace on the page.
+ * @param {string} text
+ * @returns {any}
+ */
+function htmlSourceTree(text) {
+  if (hasMarkdownCode(text)) return null;
+  const tree = parseFragment(text);
+  let sawElement = false;
+  // Only ROOT children can hold character data outside an element; everything
+  // deeper is by construction inside one.
+  for (const node of tree.children) {
+    if (node.type === "element") sawElement = true;
+    // Comments and the doctype are markup, not character data.
+    else if (node.type === "text" && node.value.trim() !== "") return null;
+  }
+  return sawElement ? tree : null;
+}
+
+/**
+ * True when `text` is HTML source rather than markdown that merely contains
+ * tags — see `htmlSourceTree` for the definition and the fail-open rationale.
  * @param {string} text
  * @returns {boolean}
  */
 export function looksLikeHtmlSource(text) {
-  const lines = text.split("\n");
-  if (lines.length < 5) return false;
-  let htmlLines = 0;
-  for (const line of lines) {
-    if (/<\/?[a-zA-Z][^<>]*>/.test(line)) htmlLines++;
-  }
-  return htmlLines / lines.length > 0.3;
+  return htmlSourceTree(text) !== null;
 }
 
 /**
@@ -1658,9 +1823,10 @@ export function sanitizeHtml(text) {
   /** @type {{ ranges: Array<{start: number, end: number, kind: "comment" | "hidden"}>, warned: ReturnType<typeof newWarned> }} */
   let scan;
   try {
-    scan = looksLikeHtmlSource(text)
-      ? scanHtmlFragment(text)
-      : scanMarkdown(text);
+    // One parse decides the branch AND feeds it, so the source branch does not
+    // tokenize the input twice.
+    const sourceTree = htmlSourceTree(text);
+    scan = sourceTree ? scanFragmentTree(text, sourceTree) : scanMarkdown(text);
   } catch {
     // The parse/visit blew up (stack overflow on pathological nesting, or any
     // other parser error). Fail CLOSED at this boundary so `sanitize`/
@@ -2151,7 +2317,7 @@ function multiUrlAttr(value) {
  * @returns {Array<{ url: string, isImage: boolean, context: "resource" | "form" | "refresh" }>}
  */
 function extractHtmlUrls(text) {
-  const tree = unified().use(rehypeParse, { fragment: true }).parse(text);
+  const tree = parseFragment(text);
   /** @type {Array<{ url: string, isImage: boolean, context: "resource" | "form" | "refresh" }>} */
   const urls = [];
   visit(tree, "element", (/** @type {any} */ node) => {

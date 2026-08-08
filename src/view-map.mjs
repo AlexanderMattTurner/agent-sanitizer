@@ -10,7 +10,85 @@
  *             them; a run at `start` sits immediately before cleaned[start])
  *   view    — cleaned with each secret replaced by its [REDACTED…]
  *             placeholder (`pairs` from the injected redactor’s map mode)
+ *
+ * The view is carried by {@link makeFileView}, the ONLY constructor the
+ * consumers of this module may use: it owns the code-point → UTF-16 offset
+ * conversion and brands the result, so the conversion happens exactly once per
+ * view and every function below can assert it happened.
  */
+
+/**
+ * Brand stamped by {@link makeFileView} and asserted by every function that
+ * consumes a view. A Symbol, not a string key: it cannot be spelled by a plain
+ * object literal built elsewhere (in this module's tests or in a consumer), so
+ * the assertion below proves the carrier came through the constructor rather
+ * than merely resembling one.
+ */
+const FILE_VIEW = Symbol("agent-sanitizer:file-view");
+
+/**
+ * @typedef {{ placeholder: string, original: string, start: number }} RedactionPair
+ * @typedef {{ text: string, pairs: readonly RedactionPair[] }} FileView
+ *   A branded, frozen carrier from {@link makeFileView}. `pairs` are in UTF-16
+ *   offsets, sorted and non-overlapping — both enforced at construction.
+ */
+
+/**
+ * Build the branded file view from a redactor's map-mode result.
+ *
+ * The redactor's own object is never touched. It used to be: the caller did
+ * `view.pairs = pairsToUtf16(view.text, view.pairs)`, an in-place mutation of a
+ * value returned from an INJECTED seam. A redactor that memoizes its map result
+ * (a reasonable thing for a caller to build) hands back the same object on the
+ * second identical call, which then gets converted a SECOND time — every
+ * placeholder preceded by an astral character shifts again and the same input
+ * yields a different verdict. Converting into a fresh frozen carrier removes
+ * that: the conversion is part of construction, the redactor's value is left
+ * alone, and every consumer asserts the brand rather than accepting a
+ * hand-assembled `{text, pairs}` whose offsets may or may not be converted.
+ *
+ * It does NOT make double conversion impossible — `makeFileView(v.text,
+ * v.pairs)` on an existing view would convert again. Nothing does that, and a
+ * guard would have to reject legitimately-frozen caller input to catch it, so
+ * the defence here is that there is exactly one construction site and it takes
+ * the redactor's result directly.
+ *
+ * The frozen `pairs` array is likewise a copy — `pairsToUtf16` returns its
+ * argument unchanged for the empty case, and freezing the redactor's array
+ * would reach back into the seam's memoized value.
+ * @param {string} text redacted view text
+ * @param {RedactionPair[]} pairs redactor pairs, in CODE-POINT offsets
+ * @returns {FileView}
+ */
+export function makeFileView(text, pairs) {
+  return Object.freeze({
+    [FILE_VIEW]: true,
+    text,
+    pairs: Object.freeze([...pairsToUtf16(text, pairs)]),
+  });
+}
+
+/**
+ * Throw unless `view` came from {@link makeFileView}. Every offset function
+ * here reads `view.pairs` as UTF-16 offsets; a hand-rolled `{text, pairs}` whose
+ * pairs are still in code-point space mis-anchors an edit onto the wrong bytes
+ * whenever an astral character precedes a placeholder — silently, and only for
+ * emoji-bearing files. Fail loudly at the boundary instead.
+ * @param {unknown} view
+ * @param {string} fn name of the calling function, for the error
+ * @returns {void}
+ */
+function assertFileView(view, fn) {
+  if (
+    view === null ||
+    typeof view !== "object" ||
+    /** @type {any} */ (view)[FILE_VIEW] !== true
+  )
+    throw new Error(
+      `${fn} requires a view built by makeFileView(); got a raw object whose ` +
+        `pair offsets have not been normalized to UTF-16`,
+    );
+}
 
 /**
  * Non-overlapping occurrence indices of `needle` in `haystack`.
@@ -115,6 +193,13 @@ function diskOffset(deletions, cleanedOffset, isEnd) {
  * astral char. `pair.start` is compared against UTF-16 view offsets throughout,
  * so this conversion MUST run once at ingestion or an astral-preceded
  * placeholder mis-anchors the edit onto the wrong bytes.
+ *
+ * Exactly once, though: applying it to its own output shifts every
+ * astral-preceded placeholder a second time. Prefer {@link makeFileView}, which
+ * runs it as part of construction and hands back a branded carrier the rest of
+ * this module accepts; this stays exported (it is public API on the
+ * `./view-map` subpath) for callers doing their own offset bookkeeping, who own
+ * the once-only discipline themselves.
  * @param {string} text the redacted view text the offsets index into
  * @param {{placeholder: string, original: string, start: number}[]} pairs
  * @returns {{placeholder: string, original: string, start: number}[]}
@@ -162,7 +247,7 @@ export function pairsToUtf16(text, pairs) {
 /**
  * Map a redacted-view offset to its Layer-1-cleaned offset, or null when the
  * offset falls strictly inside a placeholder (no cleaned position corresponds).
- * @param {{placeholder: string, original: string, start: number}[]} pairs
+ * @param {readonly RedactionPair[]} pairs
  * @param {number} offset view offset
  * @returns {number | null}
  */
@@ -190,7 +275,7 @@ function mapViewOffset(pairs, offset) {
  * and a mis-attributed run would mis-anchor the edit.
  * @param {string} content disk file content
  * @param {string} cleaned Layer-1 view of `content`
- * @param {{text: string, pairs: {placeholder: string, original: string, start: number}[]}} view
+ * @param {FileView} view
  * @param {{start: number, deleted: string}[]} deletions
  * @param {number} viewStart
  * @param {number} viewEnd
@@ -203,6 +288,7 @@ export function resolveSpan(
   viewStart,
   viewEnd,
 ) {
+  assertFileView(view, "resolveSpan");
   const cleanedStart = mapViewOffset(view.pairs, viewStart);
   const cleanedEnd = mapViewOffset(view.pairs, viewEnd);
   if (cleanedStart === null || cleanedEnd === null) return null;
@@ -223,9 +309,15 @@ export function resolveSpan(
 }
 
 /**
- * All occurrences of any needle in `text`, ordered by position. Placeholder
- * texts never substring-overlap one another (each ends in "]" right after its
- * distinguishing label), so the sorted matches are non-overlapping.
+ * All occurrences of any needle in `text`, ordered by position. Every index is
+ * computed against the ORIGINAL `text`, so the caller can splice them in one
+ * pass ({@link spliceOrdered}). Redaction placeholder texts never
+ * substring-overlap one another (each ends in "]" right after its
+ * distinguishing label), so for that caller the sorted matches are also
+ * non-overlapping; needles from an untrusted source (a Layer-5 filter's
+ * removeSpans) can overlap, which spliceOrdered resolves first-match-wins.
+ * Distinct needles matching at the SAME index keep `needles` order (Array#sort
+ * is stable), so first-match-wins is deterministic.
  * @param {string} text
  * @param {string[]} needles
  * @returns {{text: string, index: number}[]}
@@ -239,23 +331,78 @@ export function orderedMatches(text, needles) {
 }
 
 /**
+ * Replace every match in `matches` with `replacementFor(match, i)` in a SINGLE
+ * ordered pass over `text`. THE splice primitive for this codebase — the sole
+ * sound way to substitute several needles at once.
+ *
+ * A chained `text.split(needle).join(value)` per needle is unsound in both
+ * directions, which is why no caller may hand-roll one:
+ *   - substitution: an inserted value whose bytes contain a LATER needle is
+ *     re-matched by the next split and corrupted (or partially exposed);
+ *   - deletion: an earlier deletion joins the bytes on either side of it and
+ *     can CREATE a later needle's match, deleting text that needle never
+ *     matched in the input ("PRE-XX-POST" minus "-XX-" yields "PREPOST").
+ * Because every index in `matches` is measured against the original `text`,
+ * this pass only ever touches bytes the caller actually matched.
+ *
+ * Overlapping matches are resolved first-match-wins: a match starting before
+ * the previous one ended is skipped, never spliced at a shifted offset.
+ * `i` is the match's index in `matches` (stable across skips) so a caller
+ * pairing matches positionally with its own array stays aligned.
+ * @param {string} text
+ * @param {{text: string, index: number}[]} matches ordered by index, indices into `text`
+ * @param {(match: {text: string, index: number}, i: number) => string} replacementFor
+ * @returns {{text: string, spans: {start: number, end: number}[]}} spliced text
+ *   and the [start, end) range each replacement occupies in it
+ */
+export function spliceOrdered(text, matches, replacementFor) {
+  let out = "";
+  let last = 0;
+  /** @type {{start: number, end: number}[]} */
+  const spans = [];
+  matches.forEach((match, i) => {
+    if (match.index < last) return;
+    out += text.slice(last, match.index);
+    const start = out.length;
+    out += replacementFor(match, i);
+    spans.push({ start, end: out.length });
+    last = match.index + match.text.length;
+  });
+  return { text: out + text.slice(last), spans };
+}
+
+/**
  * On-disk [start, end) span of every redaction pair, mapped from its view
  * offset through placeholder expansion (view → cleaned) and stripped invisible
  * runs (cleaned → disk). A run abutting the secret stays outside its span (it
  * was never part of the secret); interior runs are included. Callers use these
  * to detect an edit whose on-disk footprint intrudes into bytes the model was
  * never shown.
- * @param {{pairs: {placeholder: string, original: string, start: number}[]}} view
+ * @param {FileView} view
  * @param {{start: number, deleted: string}[]} deletions
  * @returns {{start: number, end: number}[]}
  */
 export function pairDiskSpans(view, deletions) {
+  assertFileView(view, "pairDiskSpans");
   return view.pairs.map((pair) => {
-    // pair.start is a placeholder boundary; placeholders never overlap, so it is
-    // never strictly interior to another placeholder and mapViewOffset resolves.
+    // pair.start is a placeholder boundary, and makeFileView rejected any pair
+    // set that is out of order or overlapping (see pairsToUtf16), so it is never
+    // strictly interior to another placeholder: mapViewOffset always resolves.
+    // The throw is kept anyway, and is NOT dead weight — it is the difference
+    // between crashing and corrupting. `null + pair.original.length` is a
+    // NUMBER in JS (null coerces to 0), so dropping this check would turn a
+    // violated invariant into a silently wrong disk span anchored at offset 0,
+    // i.e. an edit footprint pointing at the wrong bytes.
     const cleanedStart = mapViewOffset(view.pairs, pair.start);
+    /* c8 ignore start -- unreachable through makeFileView, which rejects the
+       overlapping pair set that is the only way to produce null here (see the
+       constructor test in test/view-map.test.mjs); kept as a fail-loud guard
+       against a future regression in that ordering check. `ignore next N` does
+       NOT suppress the branch here — only the statement — so the range form is
+       required to keep the src branch floor at 100%. */
     if (cleanedStart === null)
       throw new Error("redaction pair start maps inside another placeholder");
+    /* c8 ignore stop */
     const cleanedEnd = cleanedStart + pair.original.length;
     return {
       start: diskOffset(deletions, cleanedStart, false),
@@ -273,8 +420,8 @@ export function pairDiskSpans(view, deletions) {
  * appears literally in the matched file text, is unresolvable → deny.
  * @param {string} oldS matched old_string (≡ the view span text)
  * @param {string} newS model-authored replacement
- * @param {{placeholder: string, original: string, start: number}[]} spanPairs
- * @param {{placeholder: string, original: string, start: number}[]} filePairs
+ * @param {readonly RedactionPair[]} spanPairs
+ * @param {readonly RedactionPair[]} filePairs
  * @returns {{text: string, secrets: string[]} | {deny: string}}
  */
 export function rehydrateNewString(oldS, newS, spanPairs, filePairs) {
@@ -308,24 +455,16 @@ export function rehydrateNewString(oldS, newS, spanPairs, filePairs) {
     newSeq.length === spanPairs.length &&
     newSeq.every((match, i) => match.text === spanPairs[i].placeholder)
   ) {
-    let out = "";
-    let last = 0;
-    newSeq.forEach((match, i) => {
-      out += newS.slice(last, match.index) + spanPairs[i].original;
-      last = match.index + match.text.length;
-    });
     return {
-      text: out + newS.slice(last),
+      text: spliceOrdered(newS, newSeq, (_match, i) => spanPairs[i].original)
+        .text,
       secrets: spanPairs.map((pair) => pair.original),
     };
   }
 
   // Each placeholder text must name exactly one secret; resolve that mapping
-  // first, then splice in a SINGLE ordered pass. A chained
-  // `out.split(ph).join(secret)` per placeholder is unsound: an inserted secret
-  // whose bytes happen to contain a later placeholder text would be re-matched
-  // and corrupted (or partially exposed) by the next split. One pass over the
-  // ordered match positions only ever touches the original new_string bytes.
+  // first, then splice in a SINGLE ordered pass (see spliceOrdered for why a
+  // chained `out.split(ph).join(secret)` per placeholder is unsound).
   const valueByPh = new Map();
   for (const phText of new Set(newSeq.map((match) => match.text))) {
     const values = [
@@ -344,11 +483,9 @@ export function rehydrateNewString(oldS, newS, spanPairs, filePairs) {
       };
     valueByPh.set(phText, values[0]);
   }
-  let out = "";
-  let last = 0;
-  for (const match of newSeq) {
-    out += newS.slice(last, match.index) + valueByPh.get(match.text);
-    last = match.index + match.text.length;
-  }
-  return { text: out + newS.slice(last), secrets: [...valueByPh.values()] };
+  return {
+    text: spliceOrdered(newS, newSeq, (match) => valueByPh.get(match.text))
+      .text,
+    secrets: [...valueByPh.values()],
+  };
 }

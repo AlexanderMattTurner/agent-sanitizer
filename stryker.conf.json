@@ -7,7 +7,6 @@
     "testFiles": ["test/**/*.test.mjs"],
     "nodeArgs": ["--test-reporter=tap"]
   },
-  "mutate": ["src/*.mjs"],
   "coverageAnalysis": "perTest",
   "incremental": true,
   "incrementalFile": "reports/stryker-incremental.json",

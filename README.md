@@ -94,6 +94,11 @@ owns each message, and any value outside the enum makes `sanitizeText` **throw**
 | `filter-flagged`      | The filter flagged the output as a possible injection without deleting (content intact) |
 | `filter-error`        | The filter reported a non-fatal internal error while scanning (a fatal filter throws)   |
 
+Every span is matched against the **original** text and the deletions applied in
+a single ordered pass, so the bytes a filter can remove are exactly the bytes its
+spans matched in the input — an earlier deletion can never manufacture a match
+for a later span (overlapping spans resolve first-match-wins).
+
 ## What installing entails
 
 Installing the plugin puts four hooks on every session, and this is what they
