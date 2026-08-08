@@ -57,6 +57,13 @@ export {
 // hand-rolled parser kept re-introducing simply cannot arise. Ambiguity still
 // fails OPEN (treated as visible): an unresolved unit, `calc()`, or `var()`
 // never counts as hidden.
+//
+// Every ident in a value — keyword, function name, dimension unit — is
+// escape-decoded and lowercased ONCE at the parse boundary (see
+// {@link canonicalizeValue}), so the detectors below compare canonical tokens
+// against literals. Doing it per-site is what let `left:-9999PX` through: CSS
+// units are ASCII case-insensitive, and every site that forgot `.toLowerCase()`
+// was a one-keystroke bypass of the whole layer.
 
 // A length/opacity/size is "near zero" when its magnitude is below this — a
 // browser renders 0.0001px text or 0.001 opacity as effectively invisible, so
@@ -206,7 +213,9 @@ function isHidingTransform(node) {
   if (!node) return false;
   for (const fn of valueTokens(node)) {
     if (fn.type !== "Function") continue;
-    const name = fn.name.toLowerCase();
+    // Function names, units and idents arrive lowercased and escape-decoded
+    // from parseDeclarations, so a literal compare is correct by construction.
+    const name = fn.name;
     const args = valueTokens(fn);
     if (/^(?:scale|scale3d|scalex|scaley|matrix|matrix3d)$/.test(name)) {
       // scale/matrix collapse to nothing when EITHER axis factor is (near-)zero —
@@ -240,12 +249,8 @@ function isHidingTransform(node) {
       // normalizes deg/grad/rad/turn to [0,360), and a near-90/270 band absorbs
       // the float drift of rad→deg.
       const a = args[0];
-      if (
-        a &&
-        a.type === "Dimension" &&
-        ANGLE_UNITS.has(a.unit.toLowerCase())
-      ) {
-        const degrees = hueDegrees(`${a.value}${a.unit}`.toLowerCase());
+      if (a && a.type === "Dimension" && ANGLE_UNITS.has(a.unit)) {
+        const degrees = hueDegrees(`${a.value}${a.unit}`);
         if (
           degrees !== null &&
           (Math.abs(degrees - 90) < NEAR_ZERO_EPSILON ||
@@ -279,7 +284,7 @@ function isHidingTransform(node) {
 function isHidingFilter(node) {
   if (!node) return false;
   for (const fn of valueTokens(node)) {
-    if (fn.type !== "Function" || fn.name.toLowerCase() !== "opacity") continue;
+    if (fn.type !== "Function" || fn.name !== "opacity") continue;
     const amount = valueTokens(fn)[0];
     if (!amount) continue;
     if (
@@ -321,7 +326,7 @@ function clipEdge(token) {
 function isClipRectHidden(node) {
   if (!node) return false;
   const rect = valueTokens(node).find(
-    (t) => t.type === "Function" && t.name.toLowerCase() === "rect",
+    (t) => t.type === "Function" && t.name === "rect",
   );
   if (!rect) return false;
   const edges = valueTokens(rect).map(clipEdge);
@@ -686,18 +691,50 @@ function canonicalizeColor(raw) {
   return canonicalizeColorFunction(value) ?? value;
 }
 
+// True when a value node paints — or cannot be proven NOT to paint — a
+// background IMAGE layer: a `url()`, a `*-gradient()` or an `image-set()`
+// anywhere in the value. The value AST is walked rather than a re-serialized
+// string regexed: an escaped function name (`\49 mage-set(…)`, which a browser
+// reads as `image-set(…)`) survives serialization escaped and slipped past the
+// regex, so the image layer went unseen and same-colored text painted over an
+// image was spliced as hidden. A `Raw` node — a value css-tree could not parse,
+// which is also what an escaped `url(` degrades to — is unresolvable and so
+// counts as an image layer (fail OPEN: no same-color hide).
+/** @param {any} node value node, or null @returns {boolean} */
+function paintsImageLayer(node) {
+  if (!node) return false;
+  let found = false;
+  csstree.walk(node, {
+    enter(/** @type {any} */ child) {
+      if (child.type === "Url" || child.type === "Raw") found = true;
+      // Names are canonicalized at the parse boundary, so a suffix test covers
+      // every gradient (`linear-`/`radial-`/`conic-`/`repeating-`/`-webkit-`)
+      // and both `image-set` spellings. `url` appears as a Function (not a Url)
+      // node when its name carried an escape — the very case the old regex on
+      // the re-serialized text missed.
+      if (
+        child.type === "Function" &&
+        (child.name === "url" ||
+          child.name.endsWith("gradient") ||
+          child.name.endsWith("image-set"))
+      )
+        found = true;
+    },
+  });
+  return found;
+}
+
 // The leading color token of a `background` shorthand (the first token that
 // canonicalizes to a real color), so `background:#fff` still compares. Returns
-// "" (fail open, no same-color hide) when the shorthand carries an IMAGE layer
-// — `url(...)`, a gradient, or `image-set(...)`: the painted image can make
-// same-colored text perfectly readable over it (and if it fails to load the
-// element's own background shows through), so the flat color token is not
-// provably the rendered backdrop.
-/** @param {string} shorthand @returns {string} */
-function backgroundColor(shorthand) {
-  if (/\burl\(|gradient\(|image-set\(/i.test(shorthand)) return "";
-  for (const token of shorthand.split(/\s+/)) {
-    const color = canonicalizeColor(token);
+// "" (fail open, no same-color hide) when the shorthand carries an IMAGE layer:
+// the painted image can make same-colored text perfectly readable over it (and
+// if it fails to load the element's own background shows through), so the flat
+// color token is not provably the rendered backdrop.
+/** @param {any} node value node for `background`, or null @returns {string} */
+function backgroundColor(node) {
+  if (!node || paintsImageLayer(node)) return "";
+  for (const token of valueTokens(node)) {
+    const color = canonicalizeColor(tokenText(token));
     if (color && (color.startsWith("#") || color === "transparent"))
       return color;
   }
@@ -727,8 +764,7 @@ function insetEdges(fn) {
   /** @type {any[]} */
   const edges = [];
   for (const token of valueTokens(fn)) {
-    if (token.type === "Identifier" && token.name.toLowerCase() === "round")
-      break;
+    if (token.type === "Identifier" && token.name === "round") break;
     edges.push(token);
   }
   return edges;
@@ -748,7 +784,7 @@ function isClipPathHidden(node) {
   if (!node) return false;
   for (const fn of valueTokens(node)) {
     if (fn.type !== "Function") continue;
-    const name = fn.name.toLowerCase();
+    const name = fn.name;
     if (name === "circle") {
       const radius = valueTokens(fn)[0];
       if (
@@ -808,6 +844,13 @@ function isTextPaintedVisible(val) {
   return isConcreteColor(stroke) && stroke !== "transparent";
 }
 
+/** True when a value is exactly the keyword `none`.
+ * @param {any} node @returns {boolean} */
+function isNoneKeyword(node) {
+  const token = soleToken(node);
+  return Boolean(token && token.type === "Identifier" && token.name === "none");
+}
+
 // True when the element paints a background IMAGE layer — a `background-image`
 // longhand set to anything but `none`, or a `background` shorthand carrying
 // `url(...)`, a gradient, or `image-set(...)`. A same-color text/background hide
@@ -819,11 +862,13 @@ function isTextPaintedVisible(val) {
 // only the flat color and missed a co-declared `background-image`, splicing
 // visible text. `background-clip:text` is NOT an image layer here — it paints
 // the background THROUGH the glyphs and is handled by {@link isTextPaintedVisible}.
-/** @param {(key: string) => string} textOf @returns {boolean} */
-function hasImageLayer(textOf) {
-  const img = textOf("background-image");
-  if (img && img !== "none") return true;
-  return /\burl\(|gradient\(|image-set\(/i.test(textOf("background"));
+/** @param {(key: string) => any} nodeOf @returns {boolean} */
+function hasImageLayer(nodeOf) {
+  const img = nodeOf("background-image");
+  // Only the single keyword `none` proves the longhand paints nothing; any
+  // other value (an unresolvable `var()` included) counts as a layer.
+  if (img && !isNoneKeyword(img)) return true;
+  return paintsImageLayer(nodeOf("background"));
 }
 
 /**
@@ -871,12 +916,23 @@ function isFontShorthandHidden(node) {
 const CSS_PROPERTY_IDENT_RE = /^-{0,2}[A-Za-z_][A-Za-z0-9_-]*$/;
 
 /**
- * Reconstruct a declaration's decoded value as a string for keyword/color
- * comparisons. Identifier tokens are escape-decoded through css-tree's ident
- * decoder (so `no\6e e`/`hi\64 den` read as `none`/`hidden`, with FF/CR/CRLF
- * terminators and invalid codepoints handled per the CSS spec); every other
- * token is re-serialized. A whole-value `Raw` (an unparsed value) is returned
- * verbatim — it never matches a hiding keyword, so it fails open.
+ * One value token as text. An Identifier's `name` is already the decoded,
+ * lowercased ident (see {@link canonicalizeValue}), so it is used verbatim
+ * rather than round-tripped through the serializer; every other token is
+ * re-serialized from its (canonicalized) node fields.
+ * @param {any} token
+ * @returns {string}
+ */
+function tokenText(token) {
+  return token.type === "Identifier" ? token.name : csstree.generate(token);
+}
+
+/**
+ * Reconstruct a declaration's canonicalized value as a string for keyword/color
+ * comparisons. Escapes and letter case were resolved at the parse boundary, so
+ * `no\6e e`, `NONE` and `none` all render as `none` here. A whole-value `Raw`
+ * (an unparsed value) is returned verbatim — it never matches a hiding keyword,
+ * so it fails open.
  * @param {any} valueNode
  * @returns {string}
  */
@@ -887,20 +943,44 @@ function declText(valueNode) {
   const parts = [];
   if (valueNode.children)
     valueNode.children.forEach((/** @type {any} */ child) =>
-      parts.push(
-        child.type === "Identifier"
-          ? csstree.ident.decode(child.name)
-          : csstree.generate(child),
-      ),
+      parts.push(tokenText(child)),
     );
   return parts.join(" ");
 }
 
 /**
+ * Canonicalize a parsed value subtree IN PLACE so every downstream comparison
+ * against a literal (`ABSOLUTE_UNITS`, `"rect"`, `"none"`) is correct by
+ * construction instead of depending on each call site remembering to decode and
+ * lowercase. CSS idents — keywords, function names and dimension units — are
+ * escape-decodable and ASCII case-insensitive for every keyword this module
+ * matches, so a browser reads `left:-9999PX`, `left:-9999p\78` and
+ * `left:-9999px` identically; the ad-hoc per-site `.toLowerCase()` did not, and
+ * a single uppercased unit walked straight past the detector.
+ *
+ * `Url.value` is deliberately NOT touched: css-tree already decodes url escapes,
+ * and a second decode would eat a legitimately backslash-bearing path.
+ * @param {any} valueNode
+ * @returns {void}
+ */
+function canonicalizeValue(valueNode) {
+  csstree.walk(valueNode, {
+    enter(/** @type {any} */ node) {
+      // ident.decode is pure string iteration and cannot throw on a token the
+      // tokenizer already produced.
+      if (node.type === "Identifier" || node.type === "Function")
+        node.name = csstree.ident.decode(node.name).toLowerCase();
+      else if (node.type === "Dimension")
+        node.unit = csstree.ident.decode(node.unit).toLowerCase();
+    },
+  });
+}
+
+/**
  * Parse a style string into a map of decoded lowercase property name -> parsed
- * value node, via css-tree's tolerant declaration-list parser. This replaces the
- * hand-rolled declaration splitter, per-declaration salvage, escape decoder, and
- * `!important` stripper in one pass: css-tree recovers per-declaration exactly
+ * and canonicalized value node, via css-tree's tolerant declaration-list
+ * parser. This replaces the hand-rolled declaration splitter, per-declaration
+ * salvage, escape decoder, and `!important` stripper in one pass: css-tree recovers per-declaration exactly
  * as a browser does (a bogus declaration is dropped, the rest kept), keeps a `;`
  * inside a string/`url()`/paren as part of the value, and exposes `!important`
  * as `node.important` (so an escaped spelling `none!\69mportant` is stripped for
@@ -934,6 +1014,7 @@ function parseDeclarations(styleStr) {
       // token; property is escape-decoded then gated to a clean CSS ident.
       const property = csstree.ident.decode(node.property).trim().toLowerCase();
       if (!CSS_PROPERTY_IDENT_RE.test(property)) return;
+      canonicalizeValue(node.value);
       decls.set(property, node.value);
     },
   });
@@ -1015,7 +1096,7 @@ export function isHiddenStyle(styleStr) {
     return true;
   const background =
     canonicalizeColor(textOf("background-color")) ||
-    backgroundColor(textOf("background"));
+    backgroundColor(nodeOf("background"));
   // Only flag same-color when BOTH sides resolve to a concrete color (`#rrggbb`
   // or `transparent`), AND no background IMAGE layer is present (an image can
   // make same-colored text readable). `var(--x)`, `inherit`, and `currentColor`
@@ -1027,7 +1108,7 @@ export function isHiddenStyle(styleStr) {
     effectiveColor &&
     effectiveColor === background &&
     isConcreteColor(effectiveColor) &&
-    !hasImageLayer(textOf)
+    !hasImageLayer(nodeOf)
   )
     return true;
 

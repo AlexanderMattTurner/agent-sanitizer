@@ -6,6 +6,7 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import fc from "fast-check";
+import * as csstree from "css-tree";
 
 import { fcRunOptions } from "./test-helpers.mjs";
 import {
@@ -384,6 +385,41 @@ const HIDDEN_STYLE_CASES = [
   ["display:\\0", false], // codepoint 0 is invalid
   ["display:\\d800", false], // a surrogate half is invalid
   ["display:\\ffffff", false], // past the Unicode maximum (0x10FFFF)
+  // ── CSS units and function names are ASCII case-insensitive (bug: compared
+  //    un-normalized, so ONE uppercased keystroke bypassed the whole layer) ──
+  ["position:absolute;left:-9999PX", true],
+  ["position:absolute;left:-100VW", true],
+  ["text-indent:-9999PX", true],
+  ["font:0PX/1 serif", true],
+  ["position:ABSOLUTE;clip:RECT(0,0,0,0)", true],
+  ["transform:TRANSLATEX(-9999px)", true],
+  ["transform:rotateX(100GRAD)", true], // 100grad === 90deg, edge-on
+  ["filter:OPACITY(0)", true],
+  ["clip-path:INSET(50%)", true],
+  ["overflow:HIDDEN;height:0PX", true],
+  ["position:absolute;left:-5PX", false], // uppercase unit, but not offscreen
+  // ── a unit is an ident, so it is escape-decodable too ──
+  ["position:absolute;left:-9999p\\78", true], // `\78` -> 'x' -> px
+  ["text-indent:-9999P\\58", true], // uppercase escape spelling of px
+  ["position:absolute;left:-9999\\70 x", true], // `\70` -> 'p' -> px
+  // ── an escaped IMAGE-layer function is still an image layer: reading the
+  //    re-serialized (still-escaped) text missed it and spliced visible text
+  //    painted over the image ──
+  ['color:#fff;background-color:#fff;background:IMAGE-SET("a.png" 1x)', false],
+  [
+    'color:#fff;background-color:#fff;background:\\49 mage-set("a.png" 1x)',
+    false,
+  ],
+  ["color:#fff;background-color:#fff;background:\\75 rl(x.png)", false], // escaped url()
+  [
+    "color:#fff;background-color:#fff;background:\\6c inear-gradient(#000,#111)",
+    false,
+  ],
+  [
+    'color:#fff;background-color:#fff;background-image:IMAGE-SET("a.png" 1x)',
+    false,
+  ],
+  ["color:#fff;background-color:#fff;background-image:NONE", true], // explicit none is still not a layer
 ];
 
 // Negative corpus for the raw-declaration fallback: realistic legitimate
@@ -405,6 +441,26 @@ const LEGIT_STYLE_CORPUS = [
   "a{color:red}",
   "{}; color: green",
   "12px:display",
+  // Legitimate declarations that only differ from a hiding one by a unit, a
+  // case, or an escape — canonicalizing tokens must not widen the detector
+  // into any of these (precision doctrine).
+  "POSITION: ABSOLUTE; LEFT: -5PX; COLOR: #222",
+  "position:absolute;left:calc(-100VW + 100%)",
+  "TEXT-INDENT: -0.5EM",
+  "FONT: 14PX/1.4 Georgia, serif",
+  "TRANSFORM: SCALE(0.8) ROTATE(90DEG)",
+  "FILTER: OPACITY(0.6) BLUR(2PX)",
+  "CLIP-PATH: INSET(10%)",
+  "OVERFLOW: HIDDEN; HEIGHT: 40PX",
+  "COLOR: WHITE; BACKGROUND: #FEFEFE",
+  "color:#fff;background:#fff URL(hero.png) no-repeat",
+  'color:#fff;background:#fff \\49 mage-set("hero.png" 1x)',
+  // An escaped `url` inside a multi-token shorthand parses as a Function node
+  // (not a Url node) — still an image layer, so the same-color hide fails open.
+  "color:#fff;background:#fff \\75 rl(hero.png)",
+  "color:#fff;background:#fff u\\72 l(hero.png) no-repeat",
+  "color:#fff;background-color:#fff;background-image:\\75 rl(hero.png)",
+  "displa\\79 : block; colo\\72 : #444",
 ];
 
 describe("unit: isHiddenStyle exact verdicts", () => {
@@ -427,6 +483,165 @@ describe("unit: isHiddenStyle exact verdicts", () => {
   ])
     it(`returns false (not a poisoned non-boolean) for color:${proto}`, () =>
       assert.equal(isHiddenStyle(`background:${proto}`), false));
+});
+
+// ─── metamorphic: ident spelling never changes the verdict ───────────────────
+//
+// A browser reads a CSS ident — a keyword, a function name, a dimension's unit,
+// a property name — ASCII case-insensitively and with its escapes decoded. So
+// re-spelling any ident in a style string leaves the RENDERED result identical,
+// and `isHiddenStyle` must return the identical verdict. Asserting that
+// invariant over the whole corpus, rather than one symptom per bug, fails the
+// moment ANY comparison site — today's or a future detector's — compares a
+// token that was not canonicalized at the parse boundary.
+
+const { Ident, Function: FunctionToken, Dimension, Url } = csstree.tokenTypes;
+
+/**
+ * The `[start, end)` offsets of every stretch of `style` a browser tokenizes as
+ * ident text. Derived from css-tree's TOKENIZER (the ground truth for what is
+ * an ident) rather than a hand-rolled scan, so the mutations below stay
+ * spec-faithful as the corpus grows.
+ * @param {string} style
+ * @returns {[number, number][]}
+ */
+function identSpans(style) {
+  /** @type {[number, number][]} */
+  const spans = [];
+  csstree.tokenize(style, (type, start, end) => {
+    // A Function token spans its trailing "("; a Url token spans the whole
+    // `url(…)`, of which only the 3-char function name is ident text (the
+    // payload is a URL, where case and backslashes are significant).
+    if (type === Ident) spans.push([start, end]);
+    else if (type === FunctionToken) spans.push([start, end - 1]);
+    else if (type === Url && /^url/i.test(style.slice(start, start + 3)))
+      spans.push([start, start + 3]);
+    else if (type === Dimension) {
+      // The unit is the trailing letter run: `1e3px` -> `px`, never the `e` of
+      // an exponent (which is part of the number, not an ident).
+      const unit = /[A-Za-z]+$/.exec(style.slice(start, end));
+      if (unit) spans.push([start + unit.index, end]);
+    }
+  });
+  return spans;
+}
+
+/**
+ * Offsets already inside a CSS escape sequence. Re-spelling one of those bytes
+ * would rewrite the escape itself (turning `\6e ` into something else) rather
+ * than re-spelling the ident, so they are excluded from both mutations.
+ * @param {string} style
+ * @returns {Set<number>}
+ */
+function escapedOffsets(style) {
+  /** @type {Set<number>} */
+  const covered = new Set();
+  for (const match of style.matchAll(/\\(?:[0-9a-fA-F]{1,6}[ \t\n]?|[^\n])/g))
+    for (let i = 0; i < match[0].length; i++)
+      covered.add(/** @type {number} */ (match.index) + i);
+  return covered;
+}
+
+/** Mutation (a): uppercase every ident — units and function names included.
+ * @param {string} style @returns {string} */
+function uppercaseIdents(style) {
+  const chars = style.split("");
+  const escaped = escapedOffsets(style);
+  for (const [start, end] of identSpans(style))
+    for (let i = start; i < end; i++)
+      if (!escaped.has(i)) chars[i] = chars[i].toUpperCase();
+  return chars.join("");
+}
+
+/** Every offset mutation (b) may re-spell: an unescaped ASCII letter of an ident.
+ * @param {string} style @returns {number[]} */
+function escapableOffsets(style) {
+  const escaped = escapedOffsets(style);
+  /** @type {number[]} */
+  const offsets = [];
+  for (const [start, end] of identSpans(style))
+    for (let i = start; i < end; i++)
+      if (/[A-Za-z]/.test(style[i]) && !escaped.has(i)) offsets.push(i);
+  return offsets;
+}
+
+/** Mutation (b): rewrite the character at `offset` as a `\XX ` hex escape.
+ * @param {string} style @param {number} offset @returns {string} */
+function escapeIdentChar(style, offset) {
+  const hex = style.charCodeAt(offset).toString(16);
+  return `${style.slice(0, offset)}\\${hex} ${style.slice(offset + 1)}`;
+}
+
+const METAMORPHIC_CORPUS = [
+  ...HIDDEN_STYLE_CASES.map(([style]) => style),
+  ...LEGIT_STYLE_CORPUS,
+];
+
+describe("metamorphic: isHiddenStyle is blind to ident spelling", () => {
+  // Pin the mutators themselves: a silently no-op mutation would make every
+  // assertion below pass vacuously.
+  it("uppercases units and function names, not url payloads or escapes", () => {
+    assert.equal(
+      uppercaseIdents("position:absolute;left:-9999px"),
+      "POSITION:ABSOLUTE;LEFT:-9999PX",
+    );
+    assert.equal(
+      uppercaseIdents("background:#fff url(Img/a.png) no-repeat"),
+      "BACKGROUND:#fff URL(Img/a.png) NO-REPEAT",
+    );
+    assert.equal(uppercaseIdents("display:no\\6e e"), "DISPLAY:NO\\6e E");
+  });
+
+  it("rewrites one ident character as a hex escape", () => {
+    assert.equal(escapeIdentChar("display:none", 0), "\\64 isplay:none");
+    assert.equal(escapeIdentChar("left:-9999px", 10), "left:-9999\\70 x");
+    // Escape-internal bytes and the url payload are never offered as targets:
+    // `display` (0-6) and the `one` tail of `\6e one` (12-14), but not the
+    // escape's own bytes (8-11).
+    assert.deepEqual(
+      escapableOffsets("display:\\6e one"),
+      [0, 1, 2, 3, 4, 5, 6, 12, 13, 14],
+    );
+    // `background` (0-9) and the `url` function name (11-13) — never the
+    // `ab.png` payload.
+    assert.deepEqual(
+      escapableOffsets("background:url(ab.png)"),
+      [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 11, 12, 13],
+    );
+  });
+
+  it("every corpus style keeps its verdict when its idents are uppercased", () => {
+    /** @type {string[]} */
+    const mismatches = [];
+    for (const style of METAMORPHIC_CORPUS) {
+      const mutant = uppercaseIdents(style);
+      if (isHiddenStyle(mutant) !== isHiddenStyle(style))
+        mismatches.push(
+          `${JSON.stringify(style)} -> ${JSON.stringify(mutant)}`,
+        );
+    }
+    assert.deepEqual(mismatches, []);
+  });
+
+  it("every corpus style keeps its verdict when one ident char is escaped", () => {
+    /** @type {string[]} */
+    const mismatches = [];
+    let mutants = 0;
+    for (const style of METAMORPHIC_CORPUS) {
+      const expected = isHiddenStyle(style);
+      for (const offset of escapableOffsets(style)) {
+        const mutant = escapeIdentChar(style, offset);
+        mutants += 1;
+        if (isHiddenStyle(mutant) !== expected)
+          mismatches.push(
+            `${JSON.stringify(style)} -> ${JSON.stringify(mutant)}`,
+          );
+      }
+    }
+    assert.deepEqual(mismatches, []);
+    // Non-vacuity: the corpus must actually produce a large mutant set.
+    assert.ok(mutants > 1000, `only ${mutants} mutants generated`);
+  });
 });
 
 describe("unit: isHiddenElement exact verdicts", () => {
