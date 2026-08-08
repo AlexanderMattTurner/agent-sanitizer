@@ -31,6 +31,7 @@ import {
   LINGUISTIC_SCRIPTS,
   describeStripped,
   payloadInvisibleView,
+  countPayloadInvisible,
 } from "../src/invisible.mjs";
 import { applyLayer1, stripAnsiFully } from "../src/layer1.mjs";
 import { fcRunOptions, cp } from "./test-helpers.mjs";
@@ -1393,6 +1394,158 @@ describe("stripInvisible: blank-filler carve-out", () => {
   });
 });
 
+// ─── Every Hangul filler, in and out of Hangul context ───────────────────────
+// The carve-out above was only pinned for U+3164, so the other three fillers'
+// Hangul-context behaviour was asserted nowhere deterministic — it rode on
+// whether a fast-check seed happened to place one next to a Hangul char. That
+// is exactly how CI job 93129079581 went red on main (seed -1494323434,
+// counterexample "ᅟ가"). All four are Script=Hangul blank fillers and
+// MUST behave identically, so the table below pins each one in every context.
+const HANGUL_FILLER_CODES = [0x115f, 0x1160, 0x3164, 0xffa0];
+const HANGUL_SYLLABLE = cp(0xac00); // 가 — a precomposed modern syllable
+const HANGUL_JAMO = cp(0x1100); // ᄀ — a conjoining choseong (archaic context)
+
+describe("stripInvisible: every Hangul filler, in and out of Hangul context", () => {
+  for (const code of HANGUL_FILLER_CODES) {
+    const filler = cp(code);
+    const hex = code.toString(16).toUpperCase().padStart(4, "0");
+
+    // PRESERVED: anchored by a real Hangul neighbour on either side. Stripping
+    // these mangles archaic-Korean / isolated-jamo text, which is the whole
+    // reason the carve-out exists.
+    for (const [label, input] of [
+      ["before a Hangul syllable", filler + HANGUL_SYLLABLE],
+      ["after a Hangul syllable", HANGUL_SYLLABLE + filler],
+      ["between Hangul syllables", HANGUL_SYLLABLE + filler + HANGUL_SYLLABLE],
+      ["after a conjoining jamo", HANGUL_JAMO + filler],
+      ["before a conjoining jamo", filler + HANGUL_JAMO],
+    ])
+      it(`U+${hex} is preserved ${label}`, () => {
+        const { cleaned, found } = stripInvisibleWithReport(input);
+        assert.equal(cleaned, input);
+        assert.deepEqual(found, []);
+      });
+
+    // STRIPPED: no Hangul anchor. The Script=Hangul (not Script_Extensions)
+    // gate is what makes the CJK-punctuation cases strip — U+3001 IDEOGRAPHIC
+    // COMMA and U+30FB KATAKANA MIDDLE DOT are Script_Extensions=Hangul, so a
+    // Japanese sentence would otherwise anchor a filler with no Korean in it.
+    // The first three isolate the ANCHOR from the POSITION: they hold the edge
+    // fixed and swap only the neighbour's script, so a bug of the form
+    // "preserve any filler at a string edge" — which the preserved cases above
+    // would happily pass — reds here instead.
+    for (const [label, input, expected] of [
+      ["alone", filler, ""],
+      ["at the start, before Latin", `${filler}a`, "a"],
+      ["at the end, after Latin", `a${filler}`, "a"],
+      ["between Latin letters", `a${filler}b`, "ab"],
+      ["as a run between Latin letters", `a${filler.repeat(3)}b`, "ab"],
+      ["next to a CJK ideograph", `漢${filler}`, "漢"],
+      ["next to an ideographic comma", `、${filler}`, "、"],
+      ["next to a katakana middle dot", `・${filler}`, "・"],
+    ])
+      it(`U+${hex} is stripped ${label}`, () => {
+        const { cleaned, found } = stripInvisibleWithReport(input);
+        assert.equal(cleaned, expected);
+        assert.deepEqual(found, [CATEGORY.BLANK_FILLERS]);
+      });
+  }
+
+  it("a filler never anchors another filler, whichever two are paired", () => {
+    // Cross-filler self-anchoring: U+115F beside U+1160 with no real Hangul in
+    // reach is a run, not archaic text, so both go. Pinned for every ordered
+    // pair so a future `isHangul` that forgets one filler can't slip through.
+    for (const a of HANGUL_FILLER_CODES)
+      for (const b of HANGUL_FILLER_CODES) {
+        const input = `x${cp(a)}${cp(b)}y`;
+        const { cleaned, found } = stripInvisibleWithReport(input);
+        assert.equal(cleaned, "xy", JSON.stringify(input));
+        assert.deepEqual(found, [CATEGORY.BLANK_FILLERS]);
+      }
+  });
+});
+
+// ─── The same table for Braille, whose edges were equally unpinned ────────────
+// `isPreservedBlankFiller` is symmetric across the two scripts: one branch for
+// U+2800 beside a real cell, one for the Hangul fillers beside real Hangul. The
+// edge shape the CI counterexample exposed for Hangul was therefore just as
+// untested for Braille — every fixed U+2800 case anchored the blank on BOTH
+// sides. Pinned here in the same preserved/stripped shape so the two halves of
+// one predicate cannot drift apart in coverage.
+const BRAILLE_CELL = cp(0x2803); // ⠃ — a real (non-blank) Braille cell
+const BRAILLE_BLANK = cp(0x2800);
+
+describe("stripInvisible: the Braille blank, in and out of Braille context", () => {
+  for (const [label, input] of [
+    ["before a cell", BRAILLE_BLANK + BRAILLE_CELL],
+    ["after a cell", BRAILLE_CELL + BRAILLE_BLANK],
+    ["between cells", BRAILLE_CELL + BRAILLE_BLANK + cp(0x2801)],
+  ])
+    it(`U+2800 is preserved ${label}`, () => {
+      const { cleaned, found } = stripInvisibleWithReport(input);
+      assert.equal(cleaned, input);
+      assert.deepEqual(found, []);
+    });
+
+  // Same anchor-vs-position isolation as the Hangul table: the edge is held
+  // fixed and only the neighbour's script changes.
+  for (const [label, input, expected] of [
+    ["alone", BRAILLE_BLANK, ""],
+    ["at the start, before Latin", `${BRAILLE_BLANK}a`, "a"],
+    ["at the end, after Latin", `a${BRAILLE_BLANK}`, "a"],
+    ["between Latin letters", `a${BRAILLE_BLANK}b`, "ab"],
+    ["next to a Hangul syllable", HANGUL_SYLLABLE + BRAILLE_BLANK, "가"],
+  ])
+    it(`U+2800 is stripped ${label}`, () => {
+      const { cleaned, found } = stripInvisibleWithReport(input);
+      assert.equal(cleaned, expected);
+      assert.deepEqual(found, [CATEGORY.BLANK_FILLERS]);
+    });
+
+  it("a blank never anchors another blank, so a bare pair is stripped whole", () => {
+    const input = `x${BRAILLE_BLANK.repeat(2)}y`;
+    const { cleaned, found } = stripInvisibleWithReport(input);
+    assert.equal(cleaned, "xy");
+    assert.deepEqual(found, [CATEGORY.BLANK_FILLERS]);
+  });
+});
+
+// ─── Negative corpus: legitimate Korean text yields zero findings ─────────────
+// Precision guard for the blank-filler detector (CLAUDE.md: a false positive
+// here mangles real content). Real Korean prose contains no fillers at all, so
+// the stripper must be a no-op AND the payload counter must read zero — a
+// counter that charged ordinary Hangul would push honest Korean documents over
+// the scattered-invisibles block threshold in prompt.mjs.
+describe("stripInvisible: legitimate Korean text is untouched", () => {
+  const KOREAN_CORPUS = [
+    "안녕하세요, 세계!", // modern precomposed syllables + ASCII punctuation
+    "한국어 text with English mixed in", // mixed Hangul/Latin
+    "훈민정음 해례본", // multi-word prose
+    "가격은 1,000원입니다.", // digits and a currency word
+    "ㄱㄴㄷ ㅏㅑㅓ", // compatibility jamo — U+3164 HANGUL FILLER's own block
+    cp(0x1100) + cp(0x1161) + cp(0x11a8), // conjoining-jamo spelling of 각
+  ];
+
+  for (const text of KOREAN_CORPUS)
+    it(`no finding for ${JSON.stringify(text)}`, () => {
+      const { cleaned, found } = stripInvisibleWithReport(text);
+      assert.equal(cleaned, text);
+      assert.deepEqual(found, []);
+      assert.equal(countPayloadInvisible(text), 0);
+    });
+
+  it("an anchored filler in Korean prose is preserved and reported as nothing", () => {
+    // 한국어 with an isolated jamo completed by a jungseong filler (U+1160) —
+    // the legitimate use the carve-out protects. It must survive AND not count
+    // toward the payload/scatter thresholds.
+    const text = `한국어: ${HANGUL_JAMO}${cp(0x1160)}`;
+    const { cleaned, found } = stripInvisibleWithReport(text);
+    assert.equal(cleaned, text);
+    assert.deepEqual(found, []);
+    assert.equal(countPayloadInvisible(text), 0);
+  });
+});
+
 // ─── Interior BOM after an ANSI strip (applyLayer1, L4) ───────────────────────
 describe("applyLayer1: leading-BOM is decided from the original text", () => {
   it("strips a BOM that was interior before the ANSI strip", () => {
@@ -1733,19 +1886,59 @@ const adversarialText = fc
   .array(adversarialChar, { maxLength: 80 })
   .map((parts) => parts.join(""));
 
-// The two anchored blank fillers the strip carve-out can leave behind (see
-// isPreservedBlankFiller in src/invisible.mjs). Restated rather than imported —
-// they are module-private there — so the membership assertion below ties them
-// back to the exported BLANK_NON_CF set and fails loudly if src drops one.
-const BRAILLE_BLANK = 0x2800;
-const HANGUL_FILLERS = new Set([0x115f, 0x1160, 0x3164, 0xffa0]);
-it("the anchored blank fillers are all still blank-class in src", () => {
-  for (const code of [BRAILLE_BLANK, ...HANGUL_FILLERS])
-    assert.ok(
-      BLANK_NON_CF.includes(cp(code)),
-      `U+${code.toString(16)} is no longer in BLANK_NON_CF`,
-    );
-});
+// The blank-filler half of the carve-out, restated from the Unicode script
+// properties (NOT imported from src/invisible.mjs, so the property checks the
+// spec rather than the implementation's own predicate): U+2800 and the Hangul
+// fillers survive only beside a real, script-appropriate visible neighbour — a
+// non-blank Braille cell, or a Hangul jamo/syllable that is not itself a filler.
+const BRAILLE_BLANK_CODE = 0x2800;
+const isBrailleCellChar = (ch) =>
+  ch !== undefined &&
+  ch.codePointAt(0) !== BRAILLE_BLANK_CODE &&
+  /\p{Script=Braille}/u.test(ch);
+const isHangulChar = (ch) =>
+  ch !== undefined &&
+  !HANGUL_FILLER_CODES.includes(ch.codePointAt(0)) &&
+  /\p{Script=Hangul}/u.test(ch);
+
+/**
+ * True when `text[i]` is a blank filler sitting next to its script's anchor —
+ * the one residue the blank-filler carve-out is allowed to leave behind.
+ * Stripping only ever DELETES, so a preserved filler is still adjacent in the
+ * output to the anchor that saved it: the cleaned text's own neighbours are a
+ * sound basis for the check. Every filler and anchor is BMP, so a lone
+ * surrogate read as a neighbour simply fails the script test.
+ * @param {string} text @param {number} i @returns {boolean}
+ */
+function isAnchoredBlankFiller(text, i) {
+  const code = text.codePointAt(i);
+  const prev = text[i - 1];
+  const next = text[i + 1];
+  if (code === BRAILLE_BLANK_CODE)
+    return isBrailleCellChar(prev) || isBrailleCellChar(next);
+  if (!HANGUL_FILLER_CODES.includes(/** @type {number} */ (code))) return false;
+  return isHangulChar(prev) || isHangulChar(next);
+}
+
+// Fixed corpus for the residue property below: an anchored filler is a 2-code-
+// point needle, so a random 80-char haystack hits one only occasionally. Both
+// the preserved and the stripped side of every filler are pinned so the case
+// runs on EVERY invocation instead of on a lucky seed.
+const ANCHORED_BLANK_FILLER_EXAMPLES = [
+  ...HANGUL_FILLER_CODES.flatMap((code) => [
+    [cp(code) + HANGUL_SYLLABLE], // U+115F here is the CI counterexample
+    [HANGUL_SYLLABLE + cp(code)],
+    [HANGUL_JAMO + cp(code)],
+    [cp(code)],
+    [`a${cp(code)}b`],
+    [`a${cp(code).repeat(3)}b`],
+  ]),
+  [cp(0x2803) + cp(BRAILLE_BLANK_CODE)],
+  [cp(BRAILLE_BLANK_CODE) + cp(0x2803)],
+  [cp(0x2803) + cp(BRAILLE_BLANK_CODE).repeat(4) + cp(0x2801)],
+  [cp(BRAILLE_BLANK_CODE)],
+  [`a${cp(BRAILLE_BLANK_CODE)}b`],
+];
 
 describe("property: stripInvisible invariants", () => {
   it("never throws on lone surrogates / astral input", () => {
@@ -1797,7 +1990,9 @@ describe("property: stripInvisible invariants", () => {
         // joiner leaves text === cleaned AND found empty.
         assert.equal(found.length > 0, cleaned !== text);
       }),
-      fcRunOptions(),
+      // Same fixed corpus: a preserved blank filler must leave `found` EMPTY
+      // (nothing was stripped), while the unanchored/run cases must report.
+      fcRunOptions({ examples: ANCHORED_BLANK_FILLER_EXAMPLES }),
     );
   });
 
@@ -1823,20 +2018,9 @@ describe("property: stripInvisible invariants", () => {
         // After stripping, the only STRIP-class chars left must be ZWNJ/ZWJ
         // (carve-out), a presentation selector kept on a pictograph/modifier
         // base (the carve-out preserves VS15/VS16 directly after one — 🏻︎ is
-        // a visible glyph, not a hidden selector run), a blank filler anchored
-        // by a script-appropriate visible neighbour (an empty Braille cell, an
-        // archaic-Hangul filler), or a single leading BOM.
+        // a visible glyph, not a hidden selector run), an ANCHORED blank filler
+        // (see isAnchoredBlankFiller), or a single leading BOM.
         const selectorBase = /^[\p{Extended_Pictographic}\p{Emoji_Modifier}]$/u;
-        // Both filler classes and both anchor scripts are entirely BMP, so a
-        // single UTF-16 unit either side is the whole neighbouring code point.
-        const brailleAnchor = (unit) =>
-          Boolean(unit) &&
-          unit.codePointAt(0) !== BRAILLE_BLANK &&
-          /\p{Script=Braille}/u.test(unit);
-        const hangulAnchor = (unit) =>
-          Boolean(unit) &&
-          !HANGUL_FILLERS.has(/** @type {number} */ (unit.codePointAt(0))) &&
-          /\p{Script=Hangul}/u.test(unit);
         for (let i = 0; i < cleaned.length; i++) {
           const ch = cleaned[i];
           STRIP.lastIndex = 0;
@@ -1850,21 +2034,20 @@ describe("property: stripInvisible invariants", () => {
             (code === 0xfe0e || code === 0xfe0f) &&
             i > 0 &&
             selectorBase.test(cleaned.slice(baseStart, i));
-          const keptFiller =
-            code === BRAILLE_BLANK
-              ? brailleAnchor(cleaned[i - 1]) || brailleAnchor(cleaned[i + 1])
-              : HANGUL_FILLERS.has(code) &&
-                (hangulAnchor(cleaned[i - 1]) || hangulAnchor(cleaned[i + 1]));
           const ok =
             code === 0x200c ||
             code === 0x200d ||
             keptSelector ||
-            keptFiller ||
+            isAnchoredBlankFiller(cleaned, i) ||
             (code === 0xfeff && i === 0);
           assert.ok(ok, `unexpected residual invisible U+${code.toString(16)}`);
         }
       }),
-      fcRunOptions(),
+      // The blank-filler cases are pinned as fixed examples: they are a
+      // 2-code-point needle in an 80-char haystack, so unseeded fast-check only
+      // stumbles on one occasionally — which is precisely how the Hangul case
+      // (["ᅟ가"]) escaped review and went red on main days later.
+      fcRunOptions({ examples: ANCHORED_BLANK_FILLER_EXAMPLES }),
     );
   });
 });
