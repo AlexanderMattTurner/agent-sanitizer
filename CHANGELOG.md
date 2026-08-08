@@ -8,6 +8,17 @@ adhere to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+## [2.27.0] - 2026-08-08
+
+### Changed
+
+- Secret redaction layer is now opt-in; enable via environment configuration to activate hooks-based secret filtering.
+- MultiEdit operations are now gated and require verification of redactor maps; placeholder writes are held until hook processing completes successfully.
+
+### Added
+
+- New threat model documentation outlining security considerations for the secret redaction system.
+
 ## [2.26.3] - 2026-08-08
 
 ### Added
