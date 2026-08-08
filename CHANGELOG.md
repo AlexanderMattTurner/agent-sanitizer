@@ -8,6 +8,12 @@ adhere to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+## [2.21.0] - 2026-08-08
+
+### Changed
+
+- Refactored layer implementation: Layers 1-3 are now implemented once internally, with sanitize operating as a facade over the unified implementation.
+
 ## [2.20.2] - 2026-08-08
 
 ### Changed

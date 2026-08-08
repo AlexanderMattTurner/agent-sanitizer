@@ -1,11 +1,14 @@
 {
-  "$comment": "Guard pairs: source file -> the cheap guard test(s) that cover it. When a listed source is staged, .hooks/run-guard-pairs.mjs runs the paired `node --test` files and blocks the commit on failure — so a guard test can never silently break on main because the data it reads changed without it (this bit twice: the release-token guard on auto-version.yaml, and the instructions guard tests). These are GUARDS, not an SSOT: a pair says \"run this check when that file changes\", and naming it otherwise would launder the very smell a drift guard should expose. A guard test is either a `node --test` file (*.test.mjs) or a pytest module (test_*.py); the runner dispatches on the extension, so data whose only contract test is Python is pairable too. Keep every paired test fast (~1s); test/guard-pairs.test.mjs asserts all paths here exist.",
+  "$comment": "Guard pairs: source file -> the cheap guard test(s) that cover it. When a listed source is staged, .hooks/run-guard-pairs.mjs runs the paired guard tests and blocks the commit on failure — so a guard test can never silently break on main because the data it reads changed without it (this bit twice: the release-token guard on auto-version.yaml, and the instructions guard tests). These are GUARDS, not an SSOT: a pair says \"run this check when that file changes\", and naming it otherwise would launder the very smell a drift guard should expose. A guard test is either a `node --test` file (*.test.mjs) or a pytest module (test_*.py); the runner dispatches on the extension, so data whose only contract test is Python is pairable too. Keep every paired test fast (~1s). test/guard-pairs.test.mjs asserts all paths here exist AND, in the other direction, scans every node --test file (plus the repo modules those tests import) for the repo data files they read: each one must appear here, mapped to a test that actually reads it, or in that test's NOT_GUARDED allowlist with a reason. So this map is a checked projection of the tests, not a hand-maintained list that silently misses the next contract test. The scan covers node --test files only, so a Python-only pairing is legitimate but must be added by hand.",
   "pairs": {
     ".github/workflows/auto-version.yaml": [
       "scripts/version-bump.test.mjs",
       ".github/scripts/workflow-step-refs.test.mjs"
     ],
     ".github/actions/claude-run/action.yaml": [
+      ".github/scripts/workflow-step-refs.test.mjs"
+    ],
+    ".github/workflows/claude.yaml": [
       ".github/scripts/workflow-step-refs.test.mjs"
     ],
     ".github/scripts/version-bump.sh": [
@@ -49,7 +52,9 @@
       "tests/secrets/test_secrets_detectors.py"
     ],
     "python/agent_sanitizer/secrets/data/credential-names.json": [
-      "test/credential-names-export.test.mjs"
+      "test/credential-names-export.test.mjs",
+      "test/credential-name-matcher.test.mjs",
+      "test/credential-vocabulary.test.mjs"
     ],
     "config/review-severities.json": [
       ".github/scripts/post-pr-review.test.mjs"
@@ -60,9 +65,39 @@
       "tests/test_minimum_release_age.py"
     ],
     "pnpm-workspace.yaml": ["tests/test_minimum_release_age.py"],
+    ".hooks/guard-pairs.json": ["test/guard-pairs.test.mjs"],
+    "CHANGELOG.md": ["scripts/set-plugin-version.test.mjs"],
+    "claude-hooks/config/inference-key-vars.json": [
+      "test/credential-vocabulary.test.mjs"
+    ],
+    "claude-hooks/config/scrubbed-env-vars.json": [
+      "test/credential-vocabulary.test.mjs"
+    ],
+    "plugin/README.md": ["plugin/test/plugin-manifest.test.mjs"],
+    "plugin/skills/enable-auto-update/SKILL.md": [
+      "plugin/test/enable-auto-update.test.mjs"
+    ],
+    "python/agent_sanitizer/data/invisible-charset.json": [
+      "test/invisible-charset.test.mjs"
+    ],
+    "python/agent_sanitizer/secrets/data/secret-detectors.json": [
+      "test/secret-detectors-portability.test.mjs"
+    ],
+    "scripts/data/StandardizedVariants.txt": [
+      "test/invisible-charset.test.mjs"
+    ],
+    "scripts/data/DerivedJoiningType.json": ["test/joining-type.test.mjs"],
+    "scripts/data/IndicSyllabicCategory.Virama.json": [
+      "test/joining-type.test.mjs"
+    ],
+    "stryker.conf.json": [
+      "test/aggregate-mutation.test.mjs",
+      "test/shipped-gates.test.mjs"
+    ],
+    "tests/golden-corpus.json": ["test/golden-corpus.test.mjs"],
+    "tests/golden.json": ["test/golden-corpus.test.mjs"],
     "scripts/shipped-sources.mjs": ["test/shipped-gates.test.mjs"],
     "scripts/coverage.mjs": ["test/shipped-gates.test.mjs"],
-    "scripts/mutate.mjs": ["test/shipped-gates.test.mjs"],
-    "stryker.conf.json": ["test/shipped-gates.test.mjs"]
+    "scripts/mutate.mjs": ["test/shipped-gates.test.mjs"]
   }
 }
