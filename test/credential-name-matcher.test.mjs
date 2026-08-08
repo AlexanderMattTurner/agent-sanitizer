@@ -260,13 +260,14 @@ describe("the shared conformance corpus: the rule, checked across the language b
   // tests/secrets/test_credential_names.py, so a divergence reds in whichever
   // language broke instead of shipping to one ecosystem only. Read by relative
   // path, not through the package exports map — a test fixture has no business
-  // in the published surface.
+  // in the published surface. It lives under tests/data/ rather than beside the
+  // vocabulary it exercises for exactly that reason: hatchling's wheel target
+  // takes every tracked file under agent_sanitizer/, so colocating it would put
+  // 60 KB of test cases into every `pip install` next to the runtime data it is
+  // easily mistaken for.
   const CASES = JSON.parse(
     readFileSync(
-      new URL(
-        "../python/agent_sanitizer/secrets/data/credential-names.cases.json",
-        import.meta.url,
-      ),
+      new URL("../tests/data/credential-names.cases.json", import.meta.url),
       "utf8",
     ),
   ).cases;

@@ -68848,10 +68848,15 @@ var init_invisible_charset = __esm({
 
 // claude-hooks/lib/secret-annotate.mjs
 function envValueRegex(value) {
-  return new RegExp(
-    [...value].map((ch) => ch.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join(ENV_INVIS_RUN),
-    "u"
-  );
+  let re = ENV_VALUE_REGEX_CACHE.get(value);
+  if (re === void 0) {
+    re = new RegExp(
+      [...value].map((ch) => ch.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join(ENV_INVIS_RUN),
+      "u"
+    );
+    ENV_VALUE_REGEX_CACHE.set(value, re);
+  }
+  return re;
 }
 function hasEnvBoundSecret(text5, env = process.env) {
   const minLen = minEnvSecretLen();
@@ -68860,13 +68865,14 @@ function hasEnvBoundSecret(text5, env = process.env) {
     return value && [...value].length >= minLen && envValueRegex(value).test(text5);
   });
 }
-var ENV_INVIS_RUN;
+var ENV_INVIS_RUN, ENV_VALUE_REGEX_CACHE;
 var init_secret_annotate = __esm({
   "claude-hooks/lib/secret-annotate.mjs"() {
     "use strict";
     init_env_config();
     init_invisible_charset();
     ENV_INVIS_RUN = "[" + [.../* @__PURE__ */ new Set([...invisible_charset_default.cf_codepoints, ...invisible_charset_default.extra_codepoints])].sort((a, b) => a - b).map((cp) => `\\u{${cp.toString(16)}}`).join("") + "]*";
+    ENV_VALUE_REGEX_CACHE = /* @__PURE__ */ new Map();
   }
 });
 

@@ -19,13 +19,15 @@ must raise rather than build a pattern.
 
 # covers: python/agent_sanitizer/secrets/credential_names.py
 # covers: python/agent_sanitizer/secrets/data/credential-names.json
-# covers: python/agent_sanitizer/secrets/data/credential-names.cases.json
+# covers: tests/data/credential-names.cases.json
 """
 
 import json
 import re
 
 import pytest
+
+from tests._helpers import REPO_ROOT
 from agent_sanitizer.secrets import (
     CREDENTIAL_NAMES_FILE,
     credential_field_name_patterns,
@@ -406,8 +408,13 @@ def test_a_hostile_variable_name_cannot_stall_the_matcher(
 # test/credential-name-matcher.test.mjs, so a divergence in segmentation, case
 # folding, run length, scope or the non-secret decline reds in whichever
 # language broke instead of shipping to one ecosystem only.
+#
+# It lives under tests/data/, NOT beside the vocabulary it exercises: hatchling's
+# wheel target takes every tracked file under agent_sanitizer/, so colocating it
+# would ship 60 KB of test cases in every `pip install` next to the runtime data
+# it is easily mistaken for.
 
-CONFORMANCE_FILE = CREDENTIAL_NAMES_FILE.with_name("credential-names.cases.json")
+CONFORMANCE_FILE = REPO_ROOT / "tests" / "data" / "credential-names.cases.json"
 CONFORMANCE_CASES = json.loads(CONFORMANCE_FILE.read_text(encoding="utf-8"))["cases"]
 _CONSUMED: set[str] = set()
 

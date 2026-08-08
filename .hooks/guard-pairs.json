@@ -53,7 +53,7 @@
       "test/credential-name-matcher.test.mjs",
       "tests/secrets/test_credential_names.py"
     ],
-    "python/agent_sanitizer/secrets/data/credential-names.cases.json": [
+    "tests/data/credential-names.cases.json": [
       "test/credential-name-matcher.test.mjs",
       "tests/secrets/test_credential_names.py"
     ],

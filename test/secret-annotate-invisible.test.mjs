@@ -62,3 +62,24 @@ describe("envValueRegex tolerates the full generated invisible charset", () => {
     assert.equal(envValueRegex(VALUE).test("out sk-abc999 put"), false);
   });
 });
+
+describe("envValueRegex is memoized", () => {
+  // The class the fix above installs is ~4 KB of source joined at EVERY interior
+  // gap, so a 20-char value compiles a ~75 KB pattern — once per configured var,
+  // on every PostToolUse output. Identity, not timing: a cache that silently
+  // stopped caching would still pass a wall-clock assertion on a fast machine.
+  it("returns the same instance for the same value", () => {
+    assert.equal(envValueRegex(VALUE), envValueRegex(VALUE));
+  });
+
+  it("does not confuse distinct values", () => {
+    const other = `${VALUE}-other`;
+    assert.notEqual(envValueRegex(VALUE), envValueRegex(other));
+    assert.ok(envValueRegex(other).test(`out ${other} put`));
+    // The cached instance must still be usable twice — a `g`/`y` flag would
+    // carry `lastIndex` between calls and make the second test() miss.
+    const re = envValueRegex(VALUE);
+    assert.ok(re.test(`out ${VALUE} put`));
+    assert.ok(re.test(`out ${VALUE} put`), "shared instance carried state");
+  });
+});

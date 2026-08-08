@@ -23,9 +23,11 @@ import charset from "../../python/agent_sanitizer/data/invisible-charset.json" w
 // not already stripped (the module is exported and callable on its own), and a
 // value spliced with a code point in the gap then never reaches the daemon at
 // all. A run of zero-or-more is allowed at each interior gap, so the plain
-// value still matches (a superset of `includes`). Single-code-point class
-// members with required literals between every gap keep the pattern linear —
-// no ReDoS.
+// value still matches (a superset of `includes`). The required literals between
+// every gap are what bound the match — a `*` gap is never adjacent to another
+// gap, so there is no ambiguity to backtrack over and no ReDoS. (The class size
+// is irrelevant to that: a character class matches in O(1) whether it holds one
+// member or all 435.)
 const ENV_INVIS_RUN =
   "[" +
   [...new Set([...charset.cf_codepoints, ...charset.extra_codepoints])]
@@ -40,17 +42,32 @@ const ENV_INVIS_RUN =
  * an astral character is escaped whole, not as two surrogate halves — and the
  * `u` flag, which the astral `\u{…}` class members in {@link ENV_INVIS_RUN}
  * require.
+ * Memoized per distinct value: {@link ENV_INVIS_RUN} renders ~435 code points
+ * as ~4 KB of source and is joined at EVERY interior gap, so a 20-char secret
+ * compiles a ~75 KB pattern — and `hasEnvBoundSecret` builds one per configured
+ * var on every PostToolUse output. Env values are stable for the process's
+ * lifetime, so the cache is bounded by the number of distinct values. Sharing an
+ * instance is safe because the regex carries no `g`/`y` flag, hence no
+ * `lastIndex` state to leak between calls.
  * @param {string} value
  * @returns {RegExp}
  */
 export function envValueRegex(value) {
-  return new RegExp(
-    [...value]
-      .map((ch) => ch.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))
-      .join(ENV_INVIS_RUN),
-    "u",
-  );
+  let re = ENV_VALUE_REGEX_CACHE.get(value);
+  if (re === undefined) {
+    re = new RegExp(
+      [...value]
+        .map((ch) => ch.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))
+        .join(ENV_INVIS_RUN),
+      "u",
+    );
+    ENV_VALUE_REGEX_CACHE.set(value, re);
+  }
+  return re;
 }
+
+/** value → compiled matcher; see {@link envValueRegex}. */
+const ENV_VALUE_REGEX_CACHE = new Map();
 
 /**
  * True when tool output contains the literal value of a configured env-bound
