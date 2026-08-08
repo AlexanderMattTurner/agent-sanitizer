@@ -16,6 +16,7 @@ import {
   resolveSpan,
   rehydrateNewString,
   pairsToUtf16,
+  toUtf16View,
   pairDiskSpans,
   makeFileView,
 } from "../src/view-map.mjs";
@@ -161,7 +162,9 @@ describe("alignDeletions", () => {
 // ─── resolveSpan ─────────────────────────────────────────────────────────────
 
 // view with no secrets ⇒ view.text === cleaned and pairs empty.
-const plainView = (cleaned) => makeFileView(cleaned, []);
+// No pairs at all, so the space tag is a formality — but it is still declared,
+// because `resolveSpan` now demands one.
+const plainView = (cleaned) => makeFileView(cleaned, [], "utf16");
 
 describe("resolveSpan", () => {
   it("maps a span across an interior stripped run, counting it in invisibleBytes", () => {
@@ -200,9 +203,13 @@ describe("resolveSpan", () => {
   it("maps view offsets across a placeholder expansion and returns contained pairs", () => {
     // cleaned: "x" + SECRET_A + "y"; view replaces SECRET_A with PH.
     const cleaned = `x${SECRET_A}y`;
-    const view = makeFileView(`x${PH}y`, [
-      { placeholder: PH, original: SECRET_A, start: 1 },
-    ]);
+    // ASCII throughout, so code-point and UTF-16 offsets coincide and the view
+    // is declared in the space `resolveSpan` requires.
+    const view = makeFileView(
+      `x${PH}y`,
+      [{ placeholder: PH, original: SECRET_A, start: 1 }],
+      "utf16",
+    );
     const res = resolveSpan(cleaned, cleaned, view, [], 0, view.text.length);
     assert.equal(res.cleanedText, cleaned);
     assert.equal(res.diskText, cleaned);
@@ -212,9 +219,11 @@ describe("resolveSpan", () => {
 
   it("returns null when the span START cuts strictly inside a placeholder", () => {
     const cleaned = `x${SECRET_A}y`;
-    const view = makeFileView(`x${PH}y`, [
-      { placeholder: PH, original: SECRET_A, start: 1 },
-    ]);
+    const view = makeFileView(
+      `x${PH}y`,
+      [{ placeholder: PH, original: SECRET_A, start: 1 }],
+      "utf16",
+    );
     // Offset 2 is strictly inside the placeholder [1, 1+PH.length).
     const res = resolveSpan(cleaned, cleaned, view, [], 2, view.text.length);
     assert.equal(res, null);
@@ -222,9 +231,11 @@ describe("resolveSpan", () => {
 
   it("returns null when the span END cuts strictly inside a placeholder", () => {
     const cleaned = `x${SECRET_A}y`;
-    const view = makeFileView(`x${PH}y`, [
-      { placeholder: PH, original: SECRET_A, start: 1 },
-    ]);
+    const view = makeFileView(
+      `x${PH}y`,
+      [{ placeholder: PH, original: SECRET_A, start: 1 }],
+      "utf16",
+    );
     const res = resolveSpan(cleaned, cleaned, view, [], 0, 2);
     assert.equal(res, null);
   });
@@ -233,10 +244,14 @@ describe("resolveSpan", () => {
     // Two placeholders; span covers only the first. The filter keeps pairs
     // wholly inside [viewStart, viewEnd).
     const cleaned = `${SECRET_A} ${SECRET_B}`;
-    const view = makeFileView(`${PH} ${PH_KEY}`, [
-      { placeholder: PH, original: SECRET_A, start: 0 },
-      { placeholder: PH_KEY, original: SECRET_B, start: PH.length + 1 },
-    ]);
+    const view = makeFileView(
+      `${PH} ${PH_KEY}`,
+      [
+        { placeholder: PH, original: SECRET_A, start: 0 },
+        { placeholder: PH_KEY, original: SECRET_B, start: PH.length + 1 },
+      ],
+      "utf16",
+    );
     const res = resolveSpan(cleaned, cleaned, view, [], 0, PH.length);
     assert.deepEqual(res.pairs, [view.pairs[0]]);
   });
@@ -482,9 +497,11 @@ describe("pairDiskSpans", () => {
     // Happy path: one placeholder, no deletions, so the disk span is the
     // pair's own [start, start+original.length).
     const spans = pairDiskSpans(
-      makeFileView("[REDACTED]", [
-        { placeholder: "[REDACTED]", original: "secret", start: 0 },
-      ]),
+      makeFileView(
+        "[REDACTED]",
+        [{ placeholder: "[REDACTED]", original: "secret", start: 0 }],
+        "utf16",
+      ),
       [],
     );
     assert.deepEqual(spans, [{ start: 0, end: "secret".length }]);
@@ -499,10 +516,14 @@ describe("pairDiskSpans", () => {
     // reached it.
     assert.throws(
       () =>
-        makeFileView("[REDACTED]", [
-          { placeholder: "[REDACTED]", original: "secret", start: 0 },
-          { placeholder: "[X]", original: "y", start: 3 },
-        ]),
+        makeFileView(
+          "[REDACTED]",
+          [
+            { placeholder: "[REDACTED]", original: "secret", start: 0 },
+            { placeholder: "[X]", original: "y", start: 3 },
+          ],
+          "utf16",
+        ),
       /sorted and non-overlapping/,
     );
   });
@@ -531,16 +552,65 @@ describe("pairDiskSpans", () => {
       },
     ];
     const snapshot = structuredClone(redactorPairs);
-    const view = makeFileView(text, redactorPairs);
+    const view = toUtf16View(makeFileView(text, redactorPairs, "codePoint"));
     assert.deepEqual(redactorPairs, snapshot, "redactor pairs were mutated");
     assert.equal(Object.isFrozen(view), true);
     assert.equal(Object.isFrozen(view.pairs), true);
+    // Each pair is frozen too, not just the array holding them — an unfrozen
+    // element is still a write-through to whatever the redactor handed over.
+    assert.equal(Object.isFrozen(view.pairs[0]), true);
     // Converted once: the UTF-16 start really points at the placeholder.
     assert.equal(
       view.text.slice(view.pairs[0].start, view.pairs[0].start + PH.length),
       PH,
     );
-    // And building a second view from the SAME redactor object is idempotent.
-    assert.deepEqual(makeFileView(text, redactorPairs).pairs, view.pairs);
+    // And converting the SAME redactor object a second time is idempotent.
+    assert.deepEqual(
+      toUtf16View(makeFileView(text, redactorPairs, "codePoint")).pairs,
+      view.pairs,
+    );
+  });
+
+  it("refuses to convert a view that is already in UTF-16 space", () => {
+    // The double-conversion this whole brand exists to make impossible: the
+    // second pass would re-count the astral char and shift every start again.
+    const text = `\u{1F511} ${PH}`;
+    const once = toUtf16View(
+      makeFileView(
+        text,
+        [
+          {
+            placeholder: PH,
+            original: SECRET_A,
+            start: Array.from(text).indexOf("["),
+          },
+        ],
+        "codePoint",
+      ),
+    );
+    assert.throws(() => toUtf16View(once), /codePoint/);
+  });
+
+  it("refuses a code-point view where a UTF-16 one is required", () => {
+    // A view built straight off the redactor's output is branded, so the old
+    // brand check would have waved it through — and mis-anchored every edit on
+    // an astral-bearing file by exactly the surrogate count before the secret.
+    const text = `\u{1F511} ${PH}`;
+    const raw = makeFileView(
+      text,
+      [
+        {
+          placeholder: PH,
+          original: SECRET_A,
+          start: Array.from(text).indexOf("["),
+        },
+      ],
+      "codePoint",
+    );
+    assert.throws(() => pairDiskSpans(raw, []), /utf16/);
+    assert.throws(
+      () => resolveSpan(text, text, raw, [], 0, text.length),
+      /utf16/,
+    );
   });
 });
