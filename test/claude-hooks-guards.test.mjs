@@ -22,6 +22,26 @@ const projectDir = mkdtempSync(join(tmpdir(), "sanitizer-guards-"));
 process.env.CLAUDE_PROJECT_DIR = projectDir;
 after(() => rmSync(projectDir, { recursive: true, force: true }));
 
+// Every guard under test lives inside the secret layer, which is opt-in
+// (AGENT_SANITIZER_SECRETS_ENABLED, read per call). Enable it for this file;
+// the knob-off arms are asserted explicitly below.
+process.env.AGENT_SANITIZER_SECRETS_ENABLED = "1";
+after(() => delete process.env.AGENT_SANITIZER_SECRETS_ENABLED);
+
+/**
+ * Run `fn` with the secret opt-in cleared, restoring it afterwards — the
+ * knob-off negative arm of each guard.
+ * @param {() => Promise<void>} fn
+ */
+async function withSecretsOff(fn) {
+  delete process.env.AGENT_SANITIZER_SECRETS_ENABLED;
+  try {
+    await fn();
+  } finally {
+    process.env.AGENT_SANITIZER_SECRETS_ENABLED = "1";
+  }
+}
+
 const { evaluateToolOutput, ON_DISK_PLACEHOLDER_WARNING } =
   await import("../claude-hooks/sanitize-output.mjs");
 const { buildPreToolUseResponse } =
@@ -90,6 +110,16 @@ describe("sanitize-output: on-disk placeholder tripwire", () => {
     });
     assert.equal(fields, null);
   });
+
+  it("stays silent without the secret opt-in (placeholders are plain text)", async () =>
+    withSecretsOff(async () => {
+      const fields = await evaluateToolOutput({
+        tool_name: "Read",
+        tool_input: { file_path: "/tmp/notes.md" },
+        tool_response: `config was ${PH} on disk\n`,
+      });
+      assert.equal(fields, null);
+    }));
 });
 
 // ─── placeholder advisory through buildPreToolUseResponse ────────────────────
@@ -114,6 +144,18 @@ describe("pretooluse: placeholder advisory for non-rehydrated tools", () => {
     assert.equal("permissionDecision" in fields, false);
     assert.equal("updatedInput" in fields, false);
   });
+
+  it("stays a clean no-op without the secret opt-in", async () =>
+    withSecretsOff(async () => {
+      const fields = await buildPreToolUseResponse(
+        {
+          tool_name: "Bash",
+          tool_input: { command: `printf 'K=${PH}\\n' > /tmp/.env` },
+        },
+        noopRehydrate,
+      );
+      assert.equal(fields, null);
+    }));
 
   it("stays a clean no-op for a Bash command without a full placeholder", async () => {
     const fields = await buildPreToolUseResponse(
