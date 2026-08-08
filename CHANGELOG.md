@@ -8,6 +8,22 @@ adhere to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+## [2.19.4] - 2026-08-08
+
+### Fixed
+- Fixed invisible character processing to judge each cluster's preserve caps on the run its own leading gap resets, and to derive Unicode script gates and charge the preserve budget per grapheme cluster.
+- Fixed output layer to ignore non-string Layer-5 spans instead of hanging, and prevent Layer-5 span deletion from creating later span matches.
+- Fixed hooks to report unreadable instruction files instead of discarding the scan, and close the confusable-fold ordering gap with unified failure posture.
+- Fixed layer 1 ANSI/invisible strip iteration to a fixed point.
+- Fixed HTML styling to read uppercase and escaped CSS units so hidden styles cannot be spelled past Layer 2.
+
+### Changed
+- Collapsed needle-splice implementations in view-map into one primitive.
+- Dropped unused ANSI tokenizer re-export from layer1.
+
+### Added
+- Added comprehensive test coverage for layer pipeline, posture handling, scan coverage, HTML styling, layer 1 ANSI processing, and Unicode invisible character tables.
+
 ## [2.19.2] - 2026-08-08
 
 ### Fixed
