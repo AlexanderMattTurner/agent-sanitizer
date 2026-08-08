@@ -12,11 +12,13 @@ warning by default; `AGENT_SANITIZER_FAIL_OPEN=0` makes them block instead.
 /agent-sanitizer:enable-auto-update
 ```
 
-The first session after install provisions the Python secret-redaction engine
-(`agent-sanitizer[secrets]`) into the plugin's data directory. That needs `uv` or
-`python3` on PATH; without either, provisioning fails loudly and tool output
-reaches the model **unredacted** — set `AGENT_SANITIZER_FAIL_OPEN=0` to have it
-suppressed instead.
+With `AGENT_SANITIZER_SECRETS_ENABLED=1` set (the secret layer is off by
+default — see [Configuration](#configuration)), the first session after install
+provisions the Python secret-redaction engine (`agent-sanitizer[secrets]`) into
+the plugin's data directory. That needs `uv` or `python3` on PATH; without
+either, provisioning fails loudly and tool output reaches the model
+**unredacted** — set `AGENT_SANITIZER_FAIL_OPEN=0` to have it suppressed
+instead.
 
 ### Staying current
 
@@ -88,7 +90,13 @@ A healthy run says nothing.
 
 When a hook cannot run, it fails **open** by default: the guarded action
 proceeds and the model is told, in `additionalContext`, that what it is reading
-was never sanitized. What it never does is fail SILENTLY — Claude Code treats a
+was never sanitized. One exception, with secrets enabled, when the hook process
+starts but its machinery fails: a write-shaped call (Write/Edit/MultiEdit/NotebookEdit) whose
+input carries `[REDACTED` placeholder text **asks** even under the open
+default — with the sanitizer down, rehydration cannot run, and passing it
+through would persist the placeholder over the real secret on disk. (A missing
+`node` or a corrupt bundle is caught earlier by the launcher, which cannot
+inspect the payload and always warns.) What it never does is fail SILENTLY — Claude Code treats a
 crashed hook as "no objection" and says nothing, so the launcher
 (`scripts/safe-launch.sh`) speaks even when node is missing or the bundle is
 corrupt. A deployment that would rather keep guarding than keep working sets
@@ -105,6 +113,13 @@ Three opt-outs, for content the sanitizer would otherwise rewrite:
 | `AGENT_SANITIZER_TERMINAL_DISABLED=1`  | Keep raw escape sequences (fixtures that must contain them)        |
 | `AGENT_SANITIZER_OUTPUT_DISABLED=1`    | Both of the above                                                  |
 
+One opt-in, for the secret layer — its denies and asks are friction, so it
+engages only when an operator asked for it:
+
+| Variable                            | Effect                                                                                                                                                                                                                        |
+| ----------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `AGENT_SANITIZER_SECRETS_ENABLED=1` | Enable the secret-redaction layer: Layer-4 redaction of tool output, placeholder rehydration on Edit/Write, the placeholder-write hold on hook failure, and SessionStart provisioning of the Python engine (default: **off**) |
+
 And one posture knob, for what happens when a hook itself fails:
 
 | Variable                      | Effect                                                                                        |
@@ -113,7 +128,11 @@ And one posture knob, for what happens when a hook itself fails:
 
 Unset, a missing `node`, a corrupt bundle, an uninstalled package, an
 unreachable redaction daemon or a layer that threw all let the guarded action
-proceed with the warning attached. Set to `0` (or `false`; every other value,
+proceed with the warning attached. One exception, with secrets enabled, when the
+hook process does run at all: a placeholder-bearing write asks instead — see
+above. (A missing
+`node` or a corrupt bundle is handled by the launcher, which cannot inspect
+the payload and always warns.) Set to `0` (or `false`; every other value,
 including `1`, is the open default) they halt instead.
 
 Worth knowing before you leave it open: some of those failures are reachable by
