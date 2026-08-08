@@ -4,18 +4,24 @@
  * directions, so this file asserts both:
  *
  *   - the exported entries resolve and load (a consumer can compose them);
- *   - every other module stays REFUSED (ERR_PACKAGE_PATH_NOT_EXPORTED).
+ *   - every other module stays REFUSED (ERR_PACKAGE_PATH_NOT_EXPORTED);
+ *   - the README's table of the surface is exactly that set.
  *
- * The closed half is the load-bearing one. A wildcard would publish all fourteen
- * modules, turning internals like the redactor client and the reveal store into
- * a compatibility surface this package would then owe forever. The four hook
- * modules plus lib/hook-io and lib/control-plane are what a consumer needs to
- * compose the hooks; hook-io in particular MUST be shared rather than copied,
- * because it owns the lazy-module registry and the CLI-slot singleton — two
- * inlined copies would double-fire the inlined CLIs. A host that cannot share it
- * because its own hook-io module is not a copy — it exports names this one does
- * not have — reconciles the two through `adoptHookIoSharedState` instead, which
- * puts both instances on one state object.
+ * The closed half is the load-bearing one. A wildcard would publish every module
+ * by construction, including any added later, turning each into a compatibility
+ * surface this package would then owe forever; the curated map publishes only
+ * what a composer was actually meant to reach. hook-io in particular MUST be
+ * shared rather than copied, because it owns the lazy-module registry and the
+ * CLI-slot singleton — two inlined copies would double-fire the inlined CLIs. A
+ * host that cannot share it because its own hook-io module is not a copy — it
+ * exports names this one does not have — reconciles the two through
+ * `adoptHookIoSharedState` instead, which puts both instances on one state object.
+ *
+ * The documented half closes the third way this rots. The map widened to thirteen
+ * subpaths while the README still advertised six, so a consumer reading the docs
+ * could not see most of what shipped and a maintainer reading them could not see
+ * what the package now owes. The README table is asserted to be exactly this map,
+ * in both directions, so neither can move without the other.
  *
  * These drive Node's real exports resolution via `import.meta.resolve` against
  * the package's own name — the same resolution a consumer's bare import
@@ -62,6 +68,33 @@ const EXPORTED = Object.keys(pkg.exports)
   .map((k) => k.slice("./claude-hooks/".length))
   .sort();
 
+/**
+ * The subpaths the README's exports table advertises, as `claude-hooks/<name>`
+ * (and the bare `claude-hooks`). Anchored on an HTML comment rather than a
+ * heading so reformatting the prose around it cannot silently empty the parse —
+ * and an empty parse is asserted against below.
+ */
+function documentedSubpaths() {
+  const readme = readFileSync(new URL("../README.md", import.meta.url), "utf8");
+  const lines = readme.split("\n");
+  const start = lines.findIndex((line) =>
+    line.startsWith("<!-- exports-table:"),
+  );
+  assert.notEqual(start, -1, "README lost the <!-- exports-table: --> marker");
+  const rows = [];
+  for (const line of lines.slice(start + 1)) {
+    if (!line.startsWith("|")) {
+      if (rows.length > 0) break;
+      continue;
+    }
+    rows.push(line);
+  }
+  return rows
+    .map((row) => /^\|\s*`(?<subpath>[^`]+)`/u.exec(row)?.groups.subpath)
+    .filter((subpath) => subpath !== undefined)
+    .sort();
+}
+
 // A named export each module must carry, so the test asserts a usable surface
 // rather than "the import didn't throw". These are the entry points a consumer
 // composes with; a module that resolves but exports nothing is a fail-open this
@@ -102,6 +135,19 @@ describe("claude-hooks composition surface resolves through the exports map", ()
       EXPORTED.filter((e) => !modules.includes(e)),
       [],
       "exports name claude-hooks modules that are not on disk",
+    );
+  });
+
+  it("is documented in the README, exactly", () => {
+    // Both directions in one equality: an export added without a row, and a row
+    // left behind by an export that was renamed or dropped, are the same failure.
+    assert.deepEqual(
+      documentedSubpaths(),
+      [
+        "claude-hooks",
+        ...EXPORTED.map((name) => `claude-hooks/${name}`),
+      ].sort(),
+      "the README exports table and package.json's ./claude-hooks* exports disagree",
     );
   });
 
