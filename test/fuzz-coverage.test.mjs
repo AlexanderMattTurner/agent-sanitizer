@@ -39,9 +39,13 @@ import {
 
 // Functions that ingest untrusted text/URLs/ranges and so owe a fuzz target.
 // Intentionally excluded (documented so the omission is a choice, not a miss):
-//   - isSgrOnly, looksLikeHtmlSource, isHiddenOpen, closingTagName: pure
-//     short-string predicates with no transform/parse step, covered by example
-//     tests and indirectly through their callers.
+//   - isSgrOnly, isHiddenOpen, closingTagName: pure short-string predicates
+//     with no transform/parse step, covered by example tests and indirectly
+//     through their callers.
+//   - looksLikeHtmlSource: parses, but returns a verdict rather than a
+//     transform, so it has no fuzzable invariant of its own; the verdict is
+//     pinned by the exact-verdict corpus in html.test.mjs and both branches it
+//     selects are fuzzed through sanitizeHtml.
 //   - scanHtmlFragment: has no invariant of its own beyond what the
 //     sanitizeHtml round-trip / splice-fidelity properties already assert on
 //     its output.
@@ -72,6 +76,11 @@ const FUZZ_REQUIRED = [
   "sanitizeText",
   "sanitizeValue",
   "deleteVerbatimSpans",
+  // The needle-splice primitive behind deleteVerbatimSpans, rehydrateNewString
+  // and the whole-file Write substitution: it decides which bytes of untrusted
+  // text are removed or replaced, so it owes the "only verbatim matches of the
+  // ORIGINAL text are touched" property directly, not just via its callers.
+  "spliceOrdered",
 ];
 
 // Entry points that owe SEMANTIC-CORRECTNESS fuzzing, not just structural

@@ -8,7 +8,9 @@ env-bound values.
 """
 
 import json
+import socket
 import sys
+import time
 from pathlib import Path
 
 from tests._helpers import REPO_ROOT
@@ -55,3 +57,32 @@ def reconstruct(view: dict) -> str:
         last = p["start"] + len(p["placeholder"])
     out.append(view["text"][last:])
     return "".join(out)
+
+
+def wait_for_listener(socket_path: str, timeout: float = 10.0) -> None:
+    """Block until a daemon is ACCEPTING on ``socket_path``, or raise.
+
+    Waiting for the socket *file* to appear is not the same thing and is a real
+    race: ``serve()`` binds, then listens, and ``bind()`` is what creates the
+    file. A probe landing in that window connects to a bound-but-not-listening
+    path, gets ECONNREFUSED, and correctly concludes the path is reclaimable —
+    which is exactly the verdict a caller may be asserting is ``False``. Probing
+    with a real connect() removes the window, because connect() succeeds only
+    once listen() has run.
+    """
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        probe = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        try:
+            probe.connect(socket_path)
+            return
+        except (FileNotFoundError, ConnectionRefusedError):
+            time.sleep(0.02)
+        finally:
+            # Closed either way: on success the daemon reads EOF and drops the
+            # connection, so the probe leaves no state behind.
+            probe.close()
+    raise AssertionError(
+        f"no daemon accepting on {socket_path} after {timeout}s "
+        "(socket file may exist without a listener)"
+    )

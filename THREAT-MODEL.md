@@ -36,12 +36,24 @@ table](./README.md#entry-points) maps each to its import.
   neighbors clearly belong to the context, and it is disabled once the total
   invisible count crosses a scatter floor—over-stripping beats under-stripping.
 
-**Reassembly hardening.** Stripping an invisible char can reconstitute an ANSI
-escape its split had hidden, and removing one ANSI sequence can reconstitute
-another. Layer 1 strips ANSI to a fixed point and then sweeps any residual raw
-control introducer—7-bit ESC (U+001B) or 8-bit C1 CSI (U+009B)—outright, so the
-result carries no raw ANSI introducer for _any_ input and the operation is
-idempotent. OSC strings (titles, clickable-hyperlink URLs) are consumed as a
+**Reassembly hardening.** The two passes feed each other in _both_ directions:
+stripping an invisible char can reconstitute an ANSI escape its split had
+hidden, removing one ANSI sequence can reconstitute another, and removing an
+ANSI sequence can make two invisibles adjacent that were not—a joiner run the
+invisible pass treats as a payload channel rather than as linguistic. So Layer 1
+does not run a fixed sequence of passes; it iterates the whole
+{ANSI, invisible} composition to a fixed point (bounded, since each round
+deletes at least one character), and only once that is stable does it sweep any
+residual raw control introducer—7-bit ESC (U+001B) or any 8-bit C1 control
+(U+0080–U+009F)—outright. Sweeping earlier would strand a hidden control as
+visible text; a final unconditional sweep after the loop keeps the
+no-raw-introducer guarantee independent of the iteration bound. The result
+carries no raw ANSI introducer for _any_ input, and re-cleaning it reproduces
+it exactly—the idempotence the Edit-repair rehydrator's soundness gate assumes.
+One tokenizer answers every ANSI question (what to splice, and whether the only
+escape content is display-only SGR colour), so the stripper and the operator
+warning cannot disagree about what a sequence is. OSC strings (titles,
+clickable-hyperlink URLs) are consumed as a
 whole, for every terminator form—ST (`ESC\` or 8-bit C1 ST U+009C) and the
 legacy BEL—and for the 8-bit C1 OSC introducer (U+009D); an _unterminated_ OSC
 introducer is dropped through end-of-string (fail-closed), so no OSC body
@@ -169,8 +181,12 @@ fail-closed path: a redactor that throws makes the pipeline rethrow, so the
 caller suppresses the output rather than emit an unvetted value. Layer 5 is a
 deliberately thin, safe slot: the injected filter returns **verbatim spans to
 delete** (never replacement text), so even a compromised filter can only remove
-legitimate content—it can never inject bytes into the model’s view. A live
-second-LLM injection filter is the caller’s to wire behind that contract.
+legitimate content—it can never inject bytes into the model’s view. That removal
+is bounded to the spans the filter actually named: every span is matched against
+the **original** text and the deletions applied in a single ordered pass, so an
+earlier deletion cannot join two kept regions into a match for a later span and
+erase text neither span occurred in. A live second-LLM injection filter is the
+caller’s to wire behind that contract.
 
 The same "never inject" property governs the filter’s `warning`: it is a
 **closed enum code** (`FILTER_WARNING`: `spans-removed` / `filter-flagged` /

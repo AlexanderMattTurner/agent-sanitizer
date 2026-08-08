@@ -418,7 +418,7 @@ const scanned = scanGuardedData();
 // floor: a path that drops out of the scan drops out of the partition and
 // direction assertions with it, so a resolver regression would quietly narrow
 // all of them at once while staying green.
-const RESOLVED_PATH_COUNT = 25;
+const RESOLVED_PATH_COUNT = 26;
 
 describe("SSOT guard-pair map", () => {
   it("is non-empty and every mapped path exists in the repo", () => {
@@ -440,8 +440,10 @@ describe("SSOT guard-pair map", () => {
         );
         assert.match(
           test,
-          /\.test\.mjs$/,
-          `guard test for ${source} must be a node --test file: ${test}`,
+          /(?:\.test\.mjs|\/test_[^/]+\.py)$/,
+          `guard test for ${source} must be a node --test file (*.test.mjs) or a ` +
+            `pytest module (test_*.py) — .hooks/run-guard-pairs.mjs dispatches on ` +
+            `the extension and would silently run neither: ${test}`,
         );
       }
     }
@@ -462,6 +464,32 @@ describe("SSOT guard-pair map", () => {
     assert.ok(
       pairs["src/invisible.mjs"].includes("test/invisible-charset.test.mjs"),
       "invisible.mjs must pair with its charset drift guard",
+    );
+  });
+
+  it("covers data whose only guard is a pytest module", () => {
+    // secret-format-samples.json is mirrored by test_secrets_detectors.py and by
+    // nothing on the JS side, so while the map's value domain was `.test.mjs` it
+    // could not be paired at all: its guard ran in full CI and never at commit
+    // time — the gap the map exists to close. Pinned by name so a revert to a
+    // JS-only value domain fails here rather than silently dropping the pair.
+    assert.deepEqual(pairs["tests/secrets/secret-format-samples.json"], [
+      "tests/secrets/test_secrets_detectors.py",
+    ]);
+  });
+
+  it("uses BOTH runners the hook dispatches on, so neither arm goes dead", () => {
+    // Non-vacuity for the value-domain assertion above: it accepts two idioms,
+    // and would keep passing if the map drifted back to only ever using one
+    // while run-guard-pairs.mjs still carried the other runner.
+    const values = Object.values(pairs).flat();
+    assert.ok(
+      values.some((test) => test.endsWith(".test.mjs")),
+      "no node --test guard is paired",
+    );
+    assert.ok(
+      values.some((test) => test.endsWith(".py")),
+      "no pytest guard is paired — the hook's pytest runner is dead code",
     );
   });
 });

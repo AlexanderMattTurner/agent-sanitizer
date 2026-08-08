@@ -123,6 +123,48 @@ describe("deleteVerbatimSpans", () => {
       text: "abc",
       removed: 0,
     }));
+  it("never deletes a span an earlier deletion created", () =>
+    // Deleting "-XX-" joins "PRE" to "POST"; "PREPOST" never occurred in the
+    // input, so it must NOT be deleted. Matching span-by-span would erase the
+    // whole document and report 2 removals — widening the Layer-5 seam from
+    // "a filter can at most remove the content it named" to "it can remove
+    // content it never named".
+    assert.deepEqual(deleteVerbatimSpans("PRE-XX-POST", ["-XX-", "PREPOST"]), {
+      text: "PREPOST",
+      removed: 1,
+    }));
+  it("resolves overlapping spans first-match-wins, counting each region once", () =>
+    // "abX" and "bXY" both match "abXY" from index 0 and 1. Only the first is
+    // removed; the second's bytes are not re-deleted at a shifted offset.
+    assert.deepEqual(deleteVerbatimSpans("abXY", ["abX", "bXY"]), {
+      text: "Y",
+      removed: 1,
+    }));
+  // The filter is untrusted JS: nothing type-checks `removeSpans` before this
+  // runs. A non-string entry must be IGNORED, not coerced — `indexOf(123)`
+  // would match the literal text "123" the filter never named, and stepping by
+  // `(123).length` (undefined) makes the scan restart at the same index
+  // forever, hanging the pipeline. Each case below returns the text untouched;
+  // a regression here shows up as a hung test, not a silent pass.
+  for (const [label, span] of [
+    ["a number", 123],
+    ["an object", {}],
+    ["an array", []],
+    ["null", null],
+    ["undefined", undefined],
+    ["false", false],
+    ["zero", 0],
+  ])
+    it(`ignores ${label} span instead of coercing it to text`, () =>
+      assert.deepEqual(deleteVerbatimSpans("a123b", [span]), {
+        text: "a123b",
+        removed: 0,
+      }));
+  it("still deletes the string spans alongside an ignored non-string one", () =>
+    assert.deepEqual(deleteVerbatimSpans("a123b", [123, "123"]), {
+      text: "ab",
+      removed: 1,
+    }));
 });
 
 // ─── Layer 1 (via sanitizeText) ──────────────────────────────────────────────

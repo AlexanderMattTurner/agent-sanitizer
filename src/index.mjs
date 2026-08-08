@@ -11,7 +11,14 @@
  * the convenience wrapper.
  */
 import { CATEGORY, describeStripped } from "./invisible.mjs";
+import { needsMarkdownPipeline } from "./gates.mjs";
 import { applyLayer1, LONE_SURROGATE_RE } from "./layer1.mjs";
+import {
+  describeExfil,
+  describeHtmlSanitized,
+  describeWarned,
+  LONE_SURROGATE_WARNING,
+} from "./warnings.mjs";
 
 // Layer 1 lives in the zero-dependency `./layer1.mjs`, shared verbatim with the
 // tool-output pipeline (`./output`) and the Edit-repair rehydrator
@@ -47,25 +54,6 @@ export {
   SECRET_HINT_EXT,
   matchesSecretHint,
 } from "./gates.mjs";
-
-/** @param {{ comments: number, hidden: number }} removed */
-function describeRemoved(removed) {
-  const parts = [];
-  if (removed.comments > 0) parts.push(`${removed.comments} HTML comment(s)`);
-  if (removed.hidden > 0) parts.push(`${removed.hidden} hidden element(s)`);
-  return parts.join(", ");
-}
-
-/** @param {{ tags: Record<string, number>, dataSrc: number }} warned */
-function describeWarned(warned) {
-  const parts = Object.entries(warned.tags).map(
-    ([tag, count]) => `${tag}×${count}`,
-  );
-  if (warned.dataSrc > 0) parts.push(`data: URI×${warned.dataSrc}`);
-  return parts.length > 0
-    ? `Preserved but reported (page source kept inspectable): ${parts.join(", ")}`
-    : "";
-}
 
 /**
  * Sanitize untrusted text before any LLM sees it.
@@ -108,10 +96,16 @@ export async function sanitize(text, options) {
   if (wellFormed !== cleaned) {
     cleaned = wellFormed;
     found.push(CATEGORY.LONE_SURROGATES);
-    warnings.push("Normalized lone UTF-16 surrogates");
+    warnings.push(LONE_SURROGATE_WARNING);
   }
 
-  if (!html) return { cleaned, found, warnings };
+  // Layers 2 and 3 can only find something in text carrying an HTML tag or a
+  // markdown link, so the shared pre-gate decides whether the heavy
+  // remark/rehype graph is imported at all — the same gate `sanitizeText()`
+  // applies, so both entry points pay for (and skip) the import on exactly the
+  // same inputs.
+  if (!html || !needsMarkdownPipeline(cleaned))
+    return { cleaned, found, warnings };
 
   let sanitizeHtml, detectExfil;
   /* c8 ignore start -- a rejected dynamic import of a module that ships in
@@ -140,9 +134,7 @@ export async function sanitize(text, options) {
       cleaned = layer2.text;
       if (layer2.removed.comments > 0) found.push(CATEGORY.HTML_COMMENTS);
       if (layer2.removed.hidden > 0) found.push(CATEGORY.HIDDEN_HTML);
-      warnings.push(
-        `HTML sanitized: ${describeRemoved(layer2.removed)} replaced with placeholders`,
-      );
+      warnings.push(describeHtmlSanitized(layer2.removed));
     }
     const preserved = describeWarned(layer2.warned);
     if (preserved) warnings.push(preserved);
@@ -151,15 +143,7 @@ export async function sanitize(text, options) {
   const threats = detectExfil(preSplice);
   if (threats) {
     found.push(CATEGORY.EXFIL_URLS);
-    const reasons = [
-      ...new Set(
-        threats.map(
-          (threat) =>
-            `${threat.isImage ? "image" : "link"} to ${threat.target}: ${threat.reason}`,
-        ),
-      ),
-    ];
-    warnings.push(`Exfil-shaped URLs detected: ${reasons.join("; ")}`);
+    warnings.push(describeExfil(threats));
   }
 
   return { cleaned, found, warnings };
