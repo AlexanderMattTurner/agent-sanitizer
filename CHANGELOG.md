@@ -8,6 +8,14 @@ adhere to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+## [2.24.2] - 2026-08-08
+
+### Fixed
+- Fixed credential guard execution in CI workflows and pinned security vulnerability scan configuration.
+
+### Changed
+- Removed metered API-key credential from the Claude authentication ladder in CI.
+
 ## [2.24.1] - 2026-08-08
 
 ### Changed
