@@ -18,10 +18,12 @@ name: Main branch health
 on:
   schedule:
     # Daily, off-the-hour to dodge GitHub's peak-minute queueing, and late enough
-    # to sit AFTER the other scheduled jobs it reports on (fuzz-nightly and
-    # release-canary at 06:17, template-sync at 09:00) — a sweep that ran before
-    # them would judge yesterday's conclusions and report a stale verdict.
-    - cron: "41 10 * * *"
+    # to sit AFTER every scheduled job in the paging set: fuzz-nightly and
+    # release-canary at 06:17, template-sync at 09:00, plus the Monday-only
+    # weekly security scan (09:00, 30m timeout) and CI failure-rate report
+    # (10:00) — a sweep that ran before them would judge yesterday's conclusions
+    # and report a stale verdict. The extra hour is slack for cron start-delay.
+    - cron: "41 11 * * *"
   workflow_dispatch:
 
 permissions:
