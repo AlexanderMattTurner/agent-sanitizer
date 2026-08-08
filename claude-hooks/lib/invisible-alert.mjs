@@ -31,7 +31,8 @@ const { applyLayer1 } = /** @type {typeof import("agent-sanitizer")} */ (
 /** The project the hooks are guarding; the alert paths are keyed to it. */
 export const PROJECT_DIR = process.env.CLAUDE_PROJECT_DIR || process.cwd();
 
-const PROJECT_HASH = createHash("sha256")
+/** Short project digest keying this project's $TMPDIR marker names. */
+export const PROJECT_HASH = createHash("sha256")
   .update(PROJECT_DIR)
   .digest("hex")
   .slice(0, 8);

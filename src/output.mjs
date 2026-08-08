@@ -157,11 +157,13 @@ function normalizeLoneSurrogates(text) {
 }
 
 /**
- * @typedef {{ text: string, findings: import("./severity.mjs").Finding[], modified: boolean, unreportedChange: boolean }} PipelineState
+ * @typedef {{ text: string, found: string[], findings: import("./severity.mjs").Finding[], modified: boolean, unreportedChange: boolean }} PipelineState
  *   The running state of one {@link sanitizeText} call. Layers read `text` and
  *   mutate it ONLY through {@link applyMutation}. Findings carry their own
  *   severity (see ./severity.mjs) and are split into `warnings`/`notes` at the
- *   single exit, so no layer can push into the wrong list.
+ *   single exit, so no layer can push into the wrong list. `found` is the
+ *   machine-readable twin, unaffected by the split: the {@link CATEGORY} codes
+ *   for whatever Layers 1-3 neutralized or flagged.
  */
 
 /**
@@ -242,10 +244,23 @@ async function runRedact(state, redact) {
   // `note` (which credential, from where) is the part an operator acts on.
   state.findings.push(
     warning(
-      `API keys/secrets redacted: ${secrets.found.join(", ")}${secrets.note ?? ""}`,
+      `API keys/secrets redacted: ${secrets.found.join(", ")}${secrets.note ?? ""}${REDACTION_DOCTRINE}`,
     ),
   );
 }
+
+/**
+ * The doctrine clause riding every redaction warning — the one moment
+ * placeholders enter the model's view. Without it the model has no way to know
+ * that a placeholder written back through any path but Edit/Write (a heredoc,
+ * sed/tee, an MCP file tool) is persisted literally, destroying the secret —
+ * making that route-around an honest mistake rather than a warned one.
+ * Exported so tests assert the composed warning by reference instead of
+ * re-typing the prose.
+ */
+export const REDACTION_DOCTRINE =
+  " (placeholders rehydrate only via Edit/Write on the owning file; other " +
+  "write paths persist the placeholder text and lose the secret)";
 
 // Layer 2/3 pre-gate and warning prose are shared with the root entry
 // (./index.mjs), which runs the same layers; re-exported here because both were
@@ -330,11 +345,13 @@ function layer1Finding(invisFound, ansiKinds, deAnsi, sgrCarveOut) {
  * redactor is evaded.
  * @param {string} text
  * @param {boolean} sgrCarveOut
- * @returns {{ cleaned: string, findings: import("./severity.mjs").Finding[], modified: boolean }}
+ * @returns {{ cleaned: string, found: string[], findings: import("./severity.mjs").Finding[], modified: boolean }}
  */
 function processLayer1(text, sgrCarveOut) {
   /** @type {import("./severity.mjs").Finding[]} */
   const findings = [];
+  /** @type {string[]} */
+  const found = [];
   let modified = false;
   const {
     cleaned: layer1,
@@ -344,6 +361,7 @@ function processLayer1(text, sgrCarveOut) {
   } = applyLayer1(text);
   let cleaned = layer1;
   if (invisFound.length > 0) {
+    found.push(...invisFound);
     modified = true;
     findings.push(layer1Finding(invisFound, ansiKinds, deAnsi, sgrCarveOut));
   }
@@ -356,9 +374,10 @@ function processLayer1(text, sgrCarveOut) {
   if (wellFormed !== cleaned) {
     cleaned = wellFormed;
     modified = true;
+    found.push(CATEGORY.LONE_SURROGATES);
     findings.push(warning(LONE_SURROGATE_WARNING));
   }
-  return { cleaned, findings, modified };
+  return { cleaned, found, findings, modified };
 }
 
 /**
@@ -379,7 +398,23 @@ async function applyMarkdownPipeline(state, { html, exfilScan }) {
   let reveal;
   if ((!html && !exfilScan) || !needsMarkdownPipeline(inputText))
     return undefined;
-  const { sanitizeHtml, detectExfil } = await import("./html.mjs");
+  let sanitizeHtml, detectExfil;
+  /* c8 ignore start -- a rejected dynamic import of a module that ships in
+     this very package (not an optional peer dep) requires corrupting
+     node_modules or the filesystem to trigger; there's no clean way to force
+     this from a test without fragile module-loader mocking (Node's
+     mock.module needs --experimental-test-module-mocks, which isn't wired
+     into this repo's test script). Fail loudly with context if it ever fires. */
+  try {
+    ({ sanitizeHtml, detectExfil } = await import("./html.mjs"));
+  } catch (importErr) {
+    throw new Error(
+      "agent-sanitizer: failed to load ./html.mjs, so Layers 2/3 could not run " +
+        "(are the package's remark/rehype dependencies installed?)",
+      { cause: importErr },
+    );
+  }
+  /* c8 ignore stop */
   // Layer 2 — strips what a rendered page would not show (comments, hidden
   // elements); scripting/resource tags preserved+reported.
   if (html) {
@@ -388,6 +423,9 @@ async function applyMarkdownPipeline(state, { html, exfilScan }) {
       if (layer2.text !== state.text) {
         reveal = state.text;
         applyMutation(state, layer2.text);
+        if (layer2.removed.comments > 0)
+          state.found.push(CATEGORY.HTML_COMMENTS);
+        if (layer2.removed.hidden > 0) state.found.push(CATEGORY.HIDDEN_HTML);
         // A WARNING: these bytes were invisible to a human reading the rendered
         // page and are now gone from the model's view too — the exact shape of
         // a hidden-instruction payload, and the model cannot check what it was
@@ -415,13 +453,15 @@ async function applyMarkdownPipeline(state, { html, exfilScan }) {
     // it is reported in is precisely the instruction not to, so it is a NOTE.
     // One auto-fetched threat raises the whole finding — the loudest member
     // wins, since they share one line.
-    if (threats)
+    if (threats) {
+      state.found.push(CATEGORY.EXFIL_URLS);
       state.findings.push(
         finding(
           threats.some((threat) => threat.autoFetched),
           describeExfil(threats),
         ),
       );
+    }
   }
   return reveal;
 }
@@ -505,16 +545,26 @@ async function vetStageValue(text, redact, findings, label) {
  * holds what happened but is not alarming. `warnings` therefore keeps exactly
  * the meaning it always had, and a caller that ignores `notes` is no louder
  * than before, just quieter about incidental bytes.
+ *
+ * `found` is the machine-readable twin, and the severity split does NOT reach
+ * it — the {@link CATEGORY} codes for what Layers 1-3 neutralized or flagged,
+ * in the order the layers ran, whichever tier described them. Layers 4 and 5
+ * have no category codes (their findings are the injected seam's own
+ * vocabulary), so they contribute findings only.
  * @param {string} text
  * @param {SanitizeTextOptions} [options]
- * @returns {Promise<{ cleaned: string, warnings: string[], notes: string[], modified: boolean, sgrNote: boolean, reveal?: string }>}
+ * @returns {Promise<{ cleaned: string, found: string[], warnings: string[], notes: string[], modified: boolean, sgrNote: boolean, reveal?: string }>}
  */
 export async function sanitizeText(text, options = {}) {
   const { redact, filterInjection, sgrCarveOut = false } = options;
-  const { findings, cleaned, modified } = processLayer1(text, sgrCarveOut);
+  const { findings, found, cleaned, modified } = processLayer1(
+    text,
+    sgrCarveOut,
+  );
   /** @type {PipelineState} */
   const state = {
     text: cleaned,
+    found,
     findings,
     modified,
     unreportedChange: false,
@@ -571,6 +621,7 @@ export async function sanitizeText(text, options = {}) {
   const notes = noteMessages(state.findings);
   return {
     cleaned: state.text,
+    found: state.found,
     warnings,
     notes,
     modified: state.modified,

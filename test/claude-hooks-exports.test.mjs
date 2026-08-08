@@ -82,7 +82,9 @@ const REQUIRED_EXPORT = {
   "lib/invisible-alert": "invisibleCharAlert",
   "lib/redactor-client": "redactViaDaemon",
   "lib/reveal": "persistReveal",
+  "lib/placeholder-grammar": "placeholderNotice",
   "lib/secret-annotate": "hasEnvBoundSecret",
+  "lib/secret-drop-guard": "secretDropGuard",
   "lib/trace": "trace",
 };
 
