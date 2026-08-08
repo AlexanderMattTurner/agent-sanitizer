@@ -8,6 +8,13 @@ adhere to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+## [2.23.2] - 2026-08-08
+
+### Fixed
+
+- Budget preserved blank fillers per script, not pooled
+- Stop clipping word spaces out of long Braille and Korean text
+
 ## [2.23.1] - 2026-08-08
 
 ### Security
