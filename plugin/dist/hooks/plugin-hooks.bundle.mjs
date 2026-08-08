@@ -45,6 +45,9 @@ var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__ge
 ));
 
 // claude-hooks/lib/hook-timing.mjs
+function formatSeconds(ms) {
+  return (Math.round(ms / 100) / 10).toFixed(1);
+}
 async function excludeProvisioning(work, now = Date.now) {
   const started = now();
   try {
@@ -60,21 +63,25 @@ function startHookTimer(now = Date.now) {
 }
 function slowHookNotice(hookName, elapsedMs, thresholdMs = SLOW_HOOK_THRESHOLD_MS) {
   if (elapsedMs <= thresholdMs) return null;
-  return `agent-sanitizer PERFORMANCE: the ${hookName} hook took ${(elapsedMs / 1e3).toFixed(1)}s, over its ${(thresholdMs / 1e3).toFixed(1)}s budget \u2014 this delay is the sanitizer's, not the model's, and every affected call pays it. Tell the user, and suggest they report it at ${ISSUE_URL} with the hook name and timing.`;
+  return `agent-sanitizer PERFORMANCE: the ${hookName} hook took ${formatSeconds(elapsedMs)}s, over its ${formatSeconds(thresholdMs)}s budget \u2014 this delay is the sanitizer's, not the model's, and every affected call pays it. Tell the user, and suggest they report it at ${ISSUE_URL} with the hook name and timing.`;
+}
+function writeSlowHookNotice(hookName, elapsedMs, writeErr = (chunk) => process.stderr.write(chunk)) {
+  const notice = slowHookNotice(hookName, elapsedMs);
+  if (notice === null) return null;
+  writeErr(notice + "\n");
+  return notice;
 }
 function withSlowHookNotice(hookName, elapsedMs, verdict, writeErr = (chunk) => process.stderr.write(chunk)) {
-  const notice = slowHookNotice(hookName, elapsedMs);
+  const notice = writeSlowHookNotice(hookName, elapsedMs, writeErr);
   if (notice === null) return verdict;
-  writeErr(notice + "\n");
   return {
     ...verdict,
     additional_context: verdict.additional_context ? `${verdict.additional_context} ${notice}` : notice
   };
 }
 function reportSlowHook(hookName, elapsedMs, hookEventName, emit, writeErr = (chunk) => process.stderr.write(chunk)) {
-  const notice = slowHookNotice(hookName, elapsedMs);
+  const notice = writeSlowHookNotice(hookName, elapsedMs, writeErr);
   if (notice === null) return false;
-  writeErr(notice + "\n");
   emit(hookEventName, { additionalContext: notice });
   return true;
 }
@@ -66963,9 +66970,10 @@ async function runJudgeCli(hookName, judge, {
   write = (chunk) => process.stdout.write(chunk)
 }) {
   let input;
+  let elapsed = null;
   try {
     input = await readInput();
-    const elapsed = startHookTimer();
+    elapsed = startHookTimer();
     const { claudeAdapter: adapter } = controlPlane();
     const event = adapter.parse(transformInput(input));
     const judged = await judge(event);
@@ -66976,6 +66984,7 @@ async function runJudgeCli(hookName, judge, {
   } catch (err) {
     process.stderr.write(`${hookName} hook error: ${errMessage(err)}
 `);
+    if (elapsed !== null) writeSlowHookNotice(hookName, elapsed());
     onError(err, input);
   }
 }
@@ -68139,10 +68148,11 @@ async function sanitizeText2(text5, toolName, deadline = makeDeadline(SANITIZE_B
       return note ? { text: secrets.text, found: secrets.found, note } : { text: secrets.text, found: secrets.found };
     }
   };
-  const result = (
-    /** @type {{ cleaned: string, warnings: string[], modified: boolean, sgrNote: boolean, reveal?: string }} */
+  const seamResult = (
+    /** @type {{ cleaned: string, warnings: string[], notes?: string[], modified: boolean, sgrNote: boolean, reveal?: string }} */
     await sanitizeTextSeam(text5, seamOptions)
   );
+  const result = { ...seamResult, notes: seamResult.notes ?? [] };
   return ext.postText ? applyPostText(
     result,
     await ext.postText(result.cleaned, {
@@ -68164,10 +68174,11 @@ function applyPostText(result, post) {
     sgrNote: result.sgrNote && !rewrote
   };
 }
-async function sanitizeValue2(value, toolName, warnings, reveals = [], deadline = makeDeadline(SANITIZE_BUDGET_MS), ext = {}) {
+async function sanitizeValue2(value, toolName, warnings, reveals = [], deadline = makeDeadline(SANITIZE_BUDGET_MS), ext = {}, notes = []) {
   if (typeof value === "string") {
     const result = await sanitizeText2(value, toolName, deadline, ext);
     warnings.push(...result.warnings);
+    notes.push(...result.notes);
     if (result.reveal !== void 0) reveals.push(result.reveal);
     return {
       value: result.cleaned,
@@ -68186,7 +68197,8 @@ async function sanitizeValue2(value, toolName, warnings, reveals = [], deadline 
         warnings,
         reveals,
         deadline,
-        ext
+        ext,
+        notes
       );
       out.push(result.value);
       if (result.modified) modified = true;
@@ -68195,16 +68207,25 @@ async function sanitizeValue2(value, toolName, warnings, reveals = [], deadline 
     return { value: out, modified, sgrNote };
   }
   if (value !== null && typeof value === "object")
-    return sanitizeObject(value, toolName, warnings, reveals, deadline, ext);
+    return sanitizeObject(
+      value,
+      toolName,
+      warnings,
+      reveals,
+      deadline,
+      ext,
+      notes
+    );
   return { value, modified: false, sgrNote: false };
 }
-async function sanitizeObject(value, toolName, warnings, reveals, deadline, ext) {
+async function sanitizeObject(value, toolName, warnings, reveals, deadline, ext, notes) {
   const out = {};
   let modified = false;
   let sgrNote = false;
   for (const [key, item] of Object.entries(value)) {
     const keyResult = await sanitizeText2(key, toolName, deadline);
     warnings.push(...keyResult.warnings);
+    notes.push(...keyResult.notes);
     if (keyResult.reveal !== void 0) reveals.push(keyResult.reveal);
     if (keyResult.modified) modified = true;
     if (keyResult.sgrNote) sgrNote = true;
@@ -68214,7 +68235,8 @@ async function sanitizeObject(value, toolName, warnings, reveals, deadline, ext)
       warnings,
       reveals,
       deadline,
-      ext
+      ext,
+      notes
     );
     if (Object.hasOwn(out, keyResult.cleaned))
       throw new Error(
@@ -68295,6 +68317,7 @@ async function evaluateToolOutput(input, ext = {}) {
     return emit("noop", null);
   const revealRead = isRevealRead(input.tool_name, input.tool_input);
   const warnings = [];
+  const notes = [];
   const reveals = [];
   const deadline = makeDeadline(SANITIZE_BUDGET_MS);
   const {
@@ -68307,7 +68330,8 @@ async function evaluateToolOutput(input, ext = {}) {
     warnings,
     reveals,
     deadline,
-    ext
+    ext,
+    notes
   );
   for (const original of reveals) {
     let stored;
@@ -68322,11 +68346,14 @@ async function evaluateToolOutput(input, ext = {}) {
   }
   if (!modified && warnings.length === 0)
     return revealRead ? emit("flagged", { additional_context: REVEAL_READ_ENVELOPE }) : emit("clean", null);
-  const baseContext = sgrNote && warnings.length === 0 ? SGR_OUTPUT_NOTE : composeContext2(modified, warnings, input.tool_name);
+  const baseContext = sgrNote && warnings.length === 0 ? noteContext(notes) : composeContext2(modified, warnings, input.tool_name);
   const additionalContext = revealRead ? `${REVEAL_READ_ENVELOPE} ${baseContext}` : baseContext;
   const fields = { additional_context: additionalContext };
   if (modified) fields.mutated_output = sanitized;
   return emit(modified ? "modified" : "flagged", fields);
+}
+function noteContext(notes) {
+  return notes.length === 0 ? SGR_OUTPUT_NOTE : [...new Set(notes)].join(" ");
 }
 async function judgeSanitizeOutput(event, ext = {}) {
   const { Decision: Decision3, EventKind: EventKind3 } = controlPlane();
@@ -68531,12 +68558,51 @@ var init_sanitize_user_prompt = __esm({
   }
 });
 
+// src/claude-context.mjs
+function claudeDirPatterns(prefix) {
+  return [
+    `${prefix}.claude/*.md`,
+    ...CLAUDE_CONTEXT_SUBDIRS.map((sub) => `${prefix}.claude/${sub}/**/*.md`)
+  ];
+}
+function excludeNodeModules(entry) {
+  return entry === "node_modules";
+}
+function excludeFromContextScan(entry) {
+  if (excludeNodeModules(entry)) return true;
+  const parts2 = entry.split(/[/\\]/);
+  const claudeIndex = parts2.indexOf(".claude");
+  const tail = parts2.slice(claudeIndex + 1);
+  if (claudeIndex === -1 || tail.length === 0) return false;
+  if (tail.length === 1 && tail[0].endsWith(".md")) return false;
+  return !CLAUDE_CONTEXT_SUBDIRS.includes(tail[0]);
+}
+var CLAUDE_CONTEXT_SUBDIRS, CLAUDE_INSTRUCTION_GLOBS;
+var init_claude_context = __esm({
+  "src/claude-context.mjs"() {
+    "use strict";
+    CLAUDE_CONTEXT_SUBDIRS = Object.freeze([
+      "agents",
+      "commands",
+      "output-styles",
+      "skills"
+    ]);
+    CLAUDE_INSTRUCTION_GLOBS = Object.freeze([
+      "**/CLAUDE.md",
+      "**/CLAUDE.local.md",
+      "**/AGENTS.md",
+      ...claudeDirPatterns("**/")
+    ]);
+  }
+});
+
 // claude-hooks/scan-invisible-chars.mjs
 var scan_invisible_chars_exports = {};
 __export(scan_invisible_chars_exports, {
   ALERT_ACK_FILE: () => ALERT_ACK_FILE,
   ALERT_FILE: () => ALERT_FILE,
   CLAUDE_CONTEXT_SUBDIRS: () => CLAUDE_CONTEXT_SUBDIRS,
+  CLAUDE_INSTRUCTION_GLOBS: () => CLAUDE_INSTRUCTION_GLOBS,
   LONG_RUN_RE: () => LONG_RUN_RE3,
   LONG_RUN_THRESHOLD: () => LONG_RUN_THRESHOLD2,
   TOTAL_INVISIBLE_THRESHOLD: () => TOTAL_INVISIBLE_THRESHOLD,
@@ -68613,31 +68679,11 @@ function decodeRun(run) {
     decoded: cps.map((cp) => `U+${cp.toString(16).toUpperCase().padStart(4, "0")}`).join(" ")
   };
 }
-function claudeDirPatterns(prefix) {
-  return [
-    `${prefix}.claude/*.md`,
-    ...CLAUDE_CONTEXT_SUBDIRS.map((sub) => `${prefix}.claude/${sub}/**/*.md`)
-  ];
-}
-function excludeFromScan(entry) {
-  if (entry === "node_modules") return true;
-  const parts2 = entry.split(/[/\\]/);
-  const claudeIndex = parts2.indexOf(".claude");
-  const tail = parts2.slice(claudeIndex + 1);
-  if (claudeIndex === -1 || tail.length === 0) return false;
-  if (tail.length === 1 && tail[0].endsWith(".md")) return false;
-  return !CLAUDE_CONTEXT_SUBDIRS.includes(tail[0]);
-}
 function findInstructionFiles(dir) {
-  return globSync(
-    [
-      "**/CLAUDE.md",
-      "**/CLAUDE.local.md",
-      "**/AGENTS.md",
-      ...claudeDirPatterns("**/")
-    ],
-    { cwd: dir, exclude: excludeFromScan }
-  ).map((name50) => join5(dir, name50));
+  return globSync([...CLAUDE_INSTRUCTION_GLOBS], {
+    cwd: dir,
+    exclude: excludeFromContextScan
+  }).map((name50) => join5(dir, name50));
 }
 function scanFile(filePath) {
   const content3 = readFileSync5(filePath, "utf-8");
@@ -68828,7 +68874,7 @@ All ${cleaned} file(s) cleaned on disk automatically. NOTE: these files load as 
   process.stderr.write(report + "\n");
   return [report];
 }
-var LONG_RUN_RE3, LONG_RUN_THRESHOLD2, TOTAL_INVISIBLE_THRESHOLD, STRIP3, stripInvisible3, HOOK_NAME4, CLAUDE_CONTEXT_SUBDIRS;
+var LONG_RUN_RE3, LONG_RUN_THRESHOLD2, TOTAL_INVISIBLE_THRESHOLD, STRIP3, stripInvisible3, HOOK_NAME4;
 var init_scan_invisible_chars = __esm({
   async "claude-hooks/scan-invisible-chars.mjs"() {
     "use strict";
@@ -68837,6 +68883,7 @@ var init_scan_invisible_chars = __esm({
     await init_invisible_alert();
     init_trace2();
     init_hook_timing();
+    init_claude_context();
     ({
       LONG_RUN_RE: LONG_RUN_RE3,
       LONG_RUN_THRESHOLD: LONG_RUN_THRESHOLD2,
@@ -68861,12 +68908,6 @@ var init_scan_invisible_chars = __esm({
         armAlert: true
       })
     });
-    CLAUDE_CONTEXT_SUBDIRS = Object.freeze([
-      "agents",
-      "commands",
-      "output-styles",
-      "skills"
-    ]);
     if (isMain(import.meta.url)) {
       await cliMain3();
     }
