@@ -288,19 +288,32 @@ describe("property: deleteVerbatimSpans only deletes", () => {
         const { text: out, removed } = deleteVerbatimSpans(text, spans);
         // A length-only invariant can't catch an INJECTION: a buggy deleter that
         // both removed bytes and spliced new ones in could still shrink the text.
-        // Compute the expected residue INDEPENDENTLY (replaceAll, a different code
-        // path than deleteVerbatimSpans's split/join) — it only ever removes bytes
-        // already present in `text`, so any byte in `out` that did not come from
-        // `text` fails this exact-equality check.
-        let expected = text;
-        let expectedRemoved = 0;
-        for (const span of spans) {
+        // Compute the expected residue INDEPENDENTLY of the deletion algorithm —
+        // a set-union of the spans' occurrences in the ORIGINAL text, keeping
+        // every index no span covered. It only ever keeps bytes already present
+        // in `text`, so any byte in `out` that did not come from `text` (or any
+        // byte deleted that no span matched in the INPUT) fails this
+        // exact-equality check. Deleting span-by-span would not satisfy it: an
+        // earlier deletion can create a later span's match (see
+        // test/splice-property.test.mjs for that regression in full).
+        const covered = new Array(text.length).fill(false);
+        for (const span of new Set(spans)) {
           if (!span) continue;
-          expectedRemoved += expected.split(span).length - 1;
-          expected = expected.replaceAll(span, "");
+          for (
+            let i = text.indexOf(span);
+            i !== -1;
+            i = text.indexOf(span, i + span.length)
+          )
+            for (let k = i; k < i + span.length; k++) covered[k] = true;
         }
+        let expected = "";
+        for (let i = 0; i < text.length; i++)
+          if (!covered[i]) expected += text[i];
         assert.equal(out, expected);
-        assert.equal(removed, expectedRemoved);
+        // Every span here is a single character, so each covered index is
+        // exactly one removed occurrence (a span repeated in the list names the
+        // same occurrences and is counted once — hence the Set above).
+        assert.equal(removed, covered.filter(Boolean).length);
         assert.ok(out.length <= text.length, "output grew");
       }),
       runOptions,

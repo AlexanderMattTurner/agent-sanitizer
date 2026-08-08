@@ -169,8 +169,12 @@ fail-closed path: a redactor that throws makes the pipeline rethrow, so the
 caller suppresses the output rather than emit an unvetted value. Layer 5 is a
 deliberately thin, safe slot: the injected filter returns **verbatim spans to
 delete** (never replacement text), so even a compromised filter can only remove
-legitimate content—it can never inject bytes into the model’s view. A live
-second-LLM injection filter is the caller’s to wire behind that contract.
+legitimate content—it can never inject bytes into the model’s view. That removal
+is bounded to the spans the filter actually named: every span is matched against
+the **original** text and the deletions applied in a single ordered pass, so an
+earlier deletion cannot join two kept regions into a match for a later span and
+erase text neither span occurred in. A live second-LLM injection filter is the
+caller’s to wire behind that contract.
 
 The same "never inject" property governs the filter’s `warning`: it is a
 **closed enum code** (`FILTER_WARNING`: `spans-removed` / `filter-flagged` /

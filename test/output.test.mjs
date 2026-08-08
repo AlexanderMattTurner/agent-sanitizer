@@ -123,6 +123,23 @@ describe("deleteVerbatimSpans", () => {
       text: "abc",
       removed: 0,
     }));
+  it("never deletes a span an earlier deletion created", () =>
+    // Deleting "-XX-" joins "PRE" to "POST"; "PREPOST" never occurred in the
+    // input, so it must NOT be deleted. Matching span-by-span would erase the
+    // whole document and report 2 removals — widening the Layer-5 seam from
+    // "a filter can at most remove the content it named" to "it can remove
+    // content it never named".
+    assert.deepEqual(deleteVerbatimSpans("PRE-XX-POST", ["-XX-", "PREPOST"]), {
+      text: "PREPOST",
+      removed: 1,
+    }));
+  it("resolves overlapping spans first-match-wins, counting each region once", () =>
+    // "abX" and "bXY" both match "abXY" from index 0 and 1. Only the first is
+    // removed; the second's bytes are not re-deleted at a shifted offset.
+    assert.deepEqual(deleteVerbatimSpans("abXY", ["abX", "bXY"]), {
+      text: "Y",
+      removed: 1,
+    }));
 });
 
 // ─── Layer 1 (via sanitizeText) ──────────────────────────────────────────────
