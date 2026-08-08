@@ -205,7 +205,14 @@ RECONSTITUTES during stripping is judged as the sequence it becomes.
 (a harness that gets a shape-mismatched value silently shows the raw output).
 Layer 4 (secret redaction) is an **injected** redactor and is the one
 fail-closed path: a redactor that throws makes the pipeline rethrow, so the
-caller suppresses the output rather than emit an unvetted value. Layer 5 is a
+caller suppresses the output rather than emit an unvetted value. In the Claude
+Code hooks the entire secret layer is **opt-in**: `secretsEnabled()`
+(`claude-hooks/lib/env-config.mjs`) reads `AGENT_SANITIZER_SECRETS_ENABLED=1`,
+and every secret-layer guarantee below — Layer-4 redaction, rehydration, the
+placeholder guards, the placeholder-write carve-out, SessionStart engine
+provisioning — is conditional on that knob being set; unset, no redactor is
+spawned and no placeholders enter the model's view, because the layer's denies
+and asks are friction an operator must ask for. Layer 5 is a
 deliberately thin, safe slot: the injected filter returns **verbatim spans to
 delete** (never replacement text), so even a compromised filter can only remove
 legitimate content—it can never inject bytes into the model’s view. That removal

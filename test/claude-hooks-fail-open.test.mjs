@@ -24,6 +24,8 @@ const {
   REDACTION_HINT,
 } = await import("../claude-hooks/pretooluse-sanitize.mjs");
 const { DEFAULT_HINT } = await import("../src/rehydrate.mjs");
+const { SECRETS_ENABLED_ENV, secretsEnabled } =
+  await import("../claude-hooks/lib/env-config.mjs");
 const { emitFailClosed, emitHookFailure } =
   await import("../claude-hooks/sanitize-output.mjs");
 const { main, USER_PROMPT_MESSAGES } =
@@ -232,7 +234,26 @@ describe("UserPromptSubmit failure posture", () => {
   });
 });
 
+describe("the secret layer's opt-in knob", () => {
+  it(`only the exact value "1" enables it`, () => {
+    assert.equal(secretsEnabled({ [SECRETS_ENABLED_ENV]: "1" }), true);
+    // Any other value — unset, truthy-looking, or a typo — stays off, so a
+    // misconfiguration can only fail toward "no secret machinery".
+    for (const value of [undefined, "", "0", "true", "yes", " 1"])
+      assert.equal(
+        secretsEnabled(
+          value === undefined ? {} : { [SECRETS_ENABLED_ENV]: value },
+        ),
+        false,
+        `${JSON.stringify(value)} must not enable the layer`,
+      );
+  });
+});
+
 describe("the open posture's placeholder-write carve-out", () => {
+  // The carve-out only exists inside the secret opt-in: placeholders reach a
+  // write only after the output hook redacted something, which the knob gates.
+  const OPEN_SECRETS = { ...OPEN, [SECRETS_ENABLED_ENV]: "1" };
   const HINTED_WRITE = {
     tool_name: "Write",
     tool_input: {
@@ -283,7 +304,7 @@ describe("the open posture's placeholder-write carve-out", () => {
 
   it("asks under the OPEN posture instead of passing the write through", () => {
     const fields = hookFailureFields(true, ABSENT, {
-      env: OPEN,
+      env: OPEN_SECRETS,
       input: HINTED_WRITE,
     });
     assert.equal(fields.permissionDecision, "ask");
@@ -298,15 +319,33 @@ describe("the open posture's placeholder-write carve-out", () => {
       { tool_name: "Bash", tool_input: { command: `echo ${DEFAULT_HINT}]` } },
       { tool_name: "Write", tool_input: { file_path: "/f", content: "plain" } },
     ]) {
-      const fields = hookFailureFields(true, ABSENT, { env: OPEN, input });
+      const fields = hookFailureFields(true, ABSENT, {
+        env: OPEN_SECRETS,
+        input,
+      });
       assert.equal(fields.permissionDecision, undefined);
       assert.match(String(fields.additionalContext), /UNSANITIZED/);
     }
   });
 
+  it("does not hold a hinted write when secrets were never opted into", () => {
+    // Without the knob no sanitized view ever handed the model a placeholder,
+    // so hint-shaped text in a write is literal prose — holding it would be
+    // exactly the false positive the opt-in exists to avoid.
+    const fields = hookFailureFields(true, ABSENT, {
+      env: OPEN,
+      input: HINTED_WRITE,
+    });
+    assert.equal(fields.permissionDecision, undefined);
+    assert.match(String(fields.additionalContext), /UNSANITIZED/);
+  });
+
   it("is invisible under the CLOSED posture (already strict)", () => {
     assert.deepEqual(
-      hookFailureFields(true, ABSENT, { env: CLOSED, input: HINTED_WRITE }),
+      hookFailureFields(true, ABSENT, {
+        env: { ...CLOSED, [SECRETS_ENABLED_ENV]: "1" },
+        input: HINTED_WRITE,
+      }),
       failClosedFields(true, ABSENT),
     );
   });

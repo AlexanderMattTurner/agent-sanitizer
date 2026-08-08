@@ -31,6 +31,8 @@ import { join } from "node:path";
 const socketDir = mkdtempSync(join(tmpdir(), "sanitizer-ext-"));
 const socketPath = join(socketDir, "redactor.sock");
 process.env._AGENT_SANITIZER_REDACTOR_SOCKET = socketPath;
+// The Layer-4 seams under test only exist inside the secret opt-in.
+process.env.AGENT_SANITIZER_SECRETS_ENABLED = "1";
 
 const { sanitizeText, sanitizeValue, evaluateToolOutput, judgeSanitizeOutput } =
   await import("../claude-hooks/sanitize-output.mjs");

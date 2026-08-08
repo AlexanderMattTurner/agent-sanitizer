@@ -58,6 +58,7 @@ import {
   authoredContext,
 } from "./lib/authored-content.mjs";
 import { redactViaDaemon } from "./lib/redactor-client.mjs";
+import { secretsEnabled } from "./lib/env-config.mjs";
 import { withSecretDropGuard } from "./lib/secret-drop-guard.mjs";
 import { placeholderNotice } from "./lib/placeholder-grammar.mjs";
 import { bestEffortTrace, trace, TraceEvent } from "./lib/trace.mjs";
@@ -151,10 +152,23 @@ const redactorIo = {
  * (not an inline default-param arrow) so tests can still inject a fake as the
  * second argument to buildPreToolUseResponse.
  */
-const defaultRehydrate = withSecretDropGuard(
+const guardedRehydrate = withSecretDropGuard(
   (tool, toolInput) => rehydrateRedacted(tool, toolInput, redactorIo),
   redactorIo,
 );
+
+/**
+ * The wired default gates the whole rehydration layer on the secret opt-in:
+ * with secrets off the output hook never inserts placeholders, so there is
+ * nothing to re-anchor — and skipping here (rather than inside the layer)
+ * means an Edit on a plain file never touches the file system twice or spawns
+ * the daemon. Consulted per call, not at module load, so a knob set after the
+ * bundle loads still governs the next tool call.
+ * @param {string} tool
+ * @param {any} toolInput
+ */
+const defaultRehydrate = async (tool, toolInput) =>
+  secretsEnabled() ? guardedRehydrate(tool, toolInput) : null;
 
 /**
  * Trace the response on the way out — "noop" (clean pass-through), "deny",
@@ -316,7 +330,9 @@ export async function buildPreToolUseResponse(
   // cannot tell a write from a read, so it is context-only — never a verdict
   // (see placeholderNotice). Evaluated on the pipeline's FINAL input, matching
   // what the tool will actually receive.
-  const notice = placeholderNotice(tool, current);
+  // Gated on the secret opt-in like the layer itself: with secrets off,
+  // placeholder-shaped text is ordinary prose and the advisory is noise.
+  const notice = secretsEnabled() ? placeholderNotice(tool, current) : null;
   if (notice !== null) contexts.push(notice);
 
   return emitTraced(
@@ -595,7 +611,11 @@ registerFaultPolicy(HOOK_NAME, {
   open: (ctx) => {
     // Non-carve-out faults take the SHARED open rendering, not a copy of it —
     // hook-fault.mjs owns that body, and a restated one would silently drift.
-    if (!hintedWriteFault(ctx.input)) return defaultOpen(ctx);
+    // The carve-out itself rides the secret opt-in: with secrets off no
+    // sanitized view ever handed the model a placeholder, so hint-shaped text
+    // in a write is literal prose and holding it would be a false positive.
+    if (!secretsEnabled(ctx.env) || !hintedWriteFault(ctx.input))
+      return defaultOpen(ctx);
     // parsedOk is hardcoded true (the ASK arm): hintedWriteFault(undefined)
     // is false, so an unparsed input can never reach this line — reaching it
     // proves the payload parsed.

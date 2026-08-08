@@ -112,7 +112,10 @@ input only, never into the model's view. Anything ambiguous is denied rather
 than guessed, the redactor's own map is verified against the file before any
 splice, and a write that would persist placeholder text over a real secret
 asks instead of passing through even when the hook's own machinery fails
-mid-session.
+mid-session. The whole layer is opt-in — its denies and asks are friction, so it
+engages only when asked for: set `AGENT_SANITIZER_SECRETS_ENABLED=1` in the
+environment Claude Code runs the hooks with; unset, no redactor runs and no
+placeholders exist.
 Per-vector detail in [`THREAT-MODEL.md`](./THREAT-MODEL.md).
 
 ## What installing entails
@@ -131,8 +134,9 @@ buy you:
    walk a command past a deny rule.
 4. Tool output has invisible characters and terminal escapes stripped, hidden
    HTML spliced out with a placeholder, and exfil-shaped URLs flagged.
-5. Secrets in tool output are redacted locally by `detect-secrets` — the engine
-   ships with the plugin and provisions itself on first run, no setup from you.
+5. With `AGENT_SANITIZER_SECRETS_ENABLED=1` set, secrets in tool output are
+   redacted locally by `detect-secrets` — the engine ships with the plugin and
+   provisions itself on first run, no further setup from you.
 6. Edits the model composes against the redacted view are re-anchored onto the
    real bytes on disk, and anything ambiguous is denied rather than guessed.
 7. The costs are a few seconds on the first secret-shaped output, ~200 ms on the
@@ -146,7 +150,7 @@ the transcript both carry. Set `AGENT_SANITIZER_FAIL_OPEN=0` and the same
 failures block instead: suppressed tool output
 (`[output sanitizer unavailable — original output suppressed]`), blocked
 prompts, permission asks whose reason names the cause. One carve-out to the
-open default: a write-shaped call carrying `[REDACTED…]` placeholder text asks
+open default, with secrets enabled: a write-shaped call carrying `[REDACTED…]` placeholder text asks
 instead of passing through when the hook itself is broken, since letting it
 through would overwrite the real secret with the placeholder. Either way, a plugin that
 never loaded at all is invisible — Claude Code reads a crashed hook as "no
