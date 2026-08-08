@@ -1,7 +1,8 @@
 name: "Claude Code with credential fallback"
 description: >-
   Run anthropics/claude-code-action with an ordered credential ladder: a primary
-  OAuth token, then up to five fallbacks. A rung is attempted when NO earlier rung
+  OAuth token, then up to six fallbacks — one input per credential in the ladder
+  SSOT, .github/scripts/lib/claude-oauth-ladder.bash. A rung is attempted when NO earlier rung
   has produced a non-errored run and that rung's own token is non-empty, so an
   unset middle tier is stepped over instead of ending the ladder (claude-code-action
   exits 0 even on a failure, so the execution log is the only signal). Each retry
@@ -14,8 +15,11 @@ description: >-
   retry-on-credential-failure ladder lives; callers pass the tokens + the per-use
   action config and read one execution_file / errored back, instead of hand-rolling
   the primary/fallback steps in every job. To add a tier, add one input plus one
-  backoff/attempt/check/state group here, chaining its state step off the last one
-  — no caller changes; the free same-credential retry is deliberately not repeated
+  backoff/attempt/check/state group here, chaining its state step off the last one,
+  AND pass the new input at every call site — a composite input a caller misspells
+  is dropped with only a warning, which is how the whole fallback ladder once
+  collapsed to a single rung; workflow-step-refs.test.mjs now fails on that typo.
+  The free same-credential retry is deliberately not repeated
   per tier, since a blip that survives it is not transient. Detection is delegated
   to the shared claude-run-errored.sh (workspace-relative), so this action REQUIRES
   the caller to have checked out a TRUSTED tree (base ref) — never run it off an
@@ -24,24 +28,35 @@ inputs:
   oauth_token:
     description: "Primary Claude subscription OAuth token."
     required: true
+  # One input per rung of the ladder SSOT
+  # (.github/scripts/lib/claude-oauth-ladder.bash), each named after the SECRET
+  # it carries rather than its position — the suffixes are the secret's, so
+  # `oauth_token_fallback` is CLAUDE_CODE_OAUTH_TOKEN_FALLBACK and
+  # `oauth_token_fallback_2` is ..._FALLBACK_2 even though that is the third
+  # credential tried. `_2` was missing here entirely: the bash resolver honoured
+  # that credential and this action stepped straight over it.
   oauth_token_fallback:
-    description: "Second-tier token; empty skips the second attempt."
+    description: "CLAUDE_CODE_OAUTH_TOKEN_FALLBACK; empty skips its attempt."
+    required: false
+    default: ""
+  oauth_token_fallback_2:
+    description: "CLAUDE_CODE_OAUTH_TOKEN_FALLBACK_2; empty skips its attempt."
     required: false
     default: ""
   oauth_token_fallback_3:
-    description: "Third-tier token; empty skips the third attempt."
+    description: "CLAUDE_CODE_OAUTH_TOKEN_FALLBACK_3; empty skips its attempt."
     required: false
     default: ""
   oauth_token_fallback_4:
-    description: "Fourth-tier token (the CLAUDE_CODE_OAUTH_TOKEN_FALLBACK_4 secret); empty skips the fourth attempt."
+    description: "CLAUDE_CODE_OAUTH_TOKEN_FALLBACK_4; empty skips its attempt."
     required: false
     default: ""
   oauth_token_fallback_5:
-    description: "Fifth-tier token (the CLAUDE_CODE_OAUTH_TOKEN_FALLBACK_5 secret); empty skips the fifth attempt."
+    description: "CLAUDE_CODE_OAUTH_TOKEN_FALLBACK_5; empty skips its attempt."
     required: false
     default: ""
   oauth_token_fallback_6:
-    description: "Sixth-tier token (the CLAUDE_CODE_OAUTH_TOKEN_FALLBACK_6 secret); empty skips the sixth attempt."
+    description: "CLAUDE_CODE_OAUTH_TOKEN_FALLBACK_6; empty skips its attempt."
     required: false
     default: ""
   github_token:
@@ -117,21 +132,21 @@ outputs:
       then walks every remaining credential. Some of those failures are
       credential-independent — the action's actor gate (allowed_bots /
       allowed_non_write_users) throws before it ever validates the Anthropic
-      token, so a bot-authored PR burns all six rungs — plus the free
+      token, so a bot-authored PR burns all seven rungs — plus the free
       same-credential retry, since a run that writes no log billed nothing and so
       reads as zero_cost — on one unchangeable verdict. The ladder cannot tell
       that case from a genuinely empty token, which fails the same way:
       claude-code-action exports no reason/conclusion output, so the only signal
       separating them lives in the job log. Reading it would mean log scraping,
       and re-deriving the actor verdict here would fork the gate; both are worse
-      than seven wasted attempts.
-    value: ${{ steps.c6.outputs.errored || steps.c5.outputs.errored || steps.c4.outputs.errored || steps.c3.outputs.errored || steps.c2.outputs.errored || steps.c1r.outputs.errored || steps.c1.outputs.errored }}
+      than eight wasted attempts.
+    value: ${{ steps.c6.outputs.errored || steps.c5.outputs.errored || steps.c4.outputs.errored || steps.c3.outputs.errored || steps.c2b.outputs.errored || steps.c2.outputs.errored || steps.c1r.outputs.errored || steps.c1.outputs.errored }}
 runs:
   using: "composite"
   steps:
     # An empty `model` renders `--model` with no value, and claude-code-action
     # then runs on ITS default (Opus, ~5x Sonnet). Refusing here is the choke
-    # point: every caller reaches the action through these six rungs, so no
+    # point: every caller reaches the action through these seven rungs, so no
     # present or future one can spend an unpinned model.
     - name: Refuse an unpinned model
       shell: bash
@@ -145,6 +160,25 @@ runs:
           echo "::error::model input is empty — claude-code-action would run on its own default." >&2
           exit 1
         }
+
+    # `untrusted_files` was a declared input that NOTHING read: every rung passed
+    # `inputs.prompt` straight through, so a caller that declared its untrusted
+    # inputs got the guard silently dropped. Composing here — once, ahead of the
+    # ladder — is what makes the input mean what it says, and keeps every rung on
+    # the identical prompt.
+    - name: Compose the prompt (prepend the untrusted-data guard when declared)
+      id: compose_prompt
+      shell: bash
+      env:
+        PROMPT: ${{ inputs.prompt }}
+        UNTRUSTED_FILES: ${{ inputs.untrusted_files }}
+      # Both paths come off $GITHUB_ACTION_PATH rather than the workspace: this
+      # action is documented as safe to run with an UNTRUSTED tree checked out,
+      # so the guard text and the composer must come from the action's own
+      # (base-ref) copy and never from whatever the PR head put at that path.
+      run: |
+        PREAMBLE="${GITHUB_ACTION_PATH}/../../prompts/untrusted-data-preamble.md" \
+          bash "${GITHUB_ACTION_PATH}/../../scripts/compose-claude-prompt.sh"
 
     - name: Attempt with the primary credential
       id: a1
@@ -160,7 +194,7 @@ runs:
         claude_args: >-
           --model ${{ inputs.model }}
           ${{ inputs.claude_args }}
-        prompt: ${{ inputs.prompt }}
+        prompt: ${{ steps.compose_prompt.outputs.prompt }}
 
     - name: Did the primary credential run?
       id: c1
@@ -227,7 +261,7 @@ runs:
         claude_args: >-
           --model ${{ inputs.model }}
           ${{ inputs.claude_args }}
-        prompt: ${{ inputs.prompt }}
+        prompt: ${{ steps.compose_prompt.outputs.prompt }}
 
     - name: Did the same-credential retry run?
       id: c1r
@@ -258,10 +292,10 @@ runs:
 
     # A dead/expired credential is rejected in roughly half a second without ever
     # reaching inference, so back-to-back rungs spend the whole ladder inside a few
-    # seconds — long enough for one provider-side blip to take out all six tokens
+    # seconds — long enough for one provider-side blip to take out all seven tokens
     # on a request the same config serves fine a minute later. The waits escalate
-    # 10/20/30/45/60s, so the last rung lands ~165s after the first and the ladder
-    # straddles a blip, while the added wall clock stays under three minutes.
+    # 10/15/20/30/45/60s, so the last rung lands ~180s after the first and the ladder
+    # straddles a blip, while the added wall clock stays around three minutes.
     - name: Back off before the second-tier attempt
       if: steps.s1r.outputs.still_needs_attempt == 'true' && inputs.oauth_token_fallback != ''
       shell: bash
@@ -284,7 +318,7 @@ runs:
         claude_args: >-
           --model ${{ inputs.model }}
           ${{ inputs.claude_args }}
-        prompt: ${{ inputs.prompt }}
+        prompt: ${{ steps.compose_prompt.outputs.prompt }}
 
     - name: Did the second-tier credential run?
       id: c2
@@ -310,8 +344,58 @@ runs:
         fi
         echo "still_needs_attempt=${still}" >>"$GITHUB_OUTPUT"
 
+    # The CLAUDE_CODE_OAUTH_TOKEN_FALLBACK_2 rung. Ids stay a2b/c2b/s2b rather
+    # than renumbering a3..a6: the ladder's step ids appear in the outputs above
+    # and in the propagate gate below, so inserting a rung by shifting names is
+    # how one of those expressions goes stale.
+    - name: Back off before the FALLBACK_2 attempt
+      if: steps.s2.outputs.still_needs_attempt == 'true' && inputs.oauth_token_fallback_2 != ''
+      shell: bash
+      env:
+        BACKOFF_SECONDS: "15"
+      run: sleep "$BACKOFF_SECONDS"
+
+    - name: Retry with the FALLBACK_2 credential
+      id: a2b
+      if: steps.s2.outputs.still_needs_attempt == 'true' && inputs.oauth_token_fallback_2 != ''
+      continue-on-error: true
+      uses: anthropics/claude-code-action@428971d2ecd6e3a7cb0ee0da2a3a8b33fdb3678d # v1.0.157
+      env:
+        GH_TOKEN: ${{ inputs.gh_token || inputs.github_token }}
+      with:
+        claude_code_oauth_token: ${{ inputs.oauth_token_fallback_2 }}
+        github_token: ${{ inputs.github_token }}
+        allowed_non_write_users: ${{ inputs.allowed_non_write_users }}
+        allowed_bots: ${{ inputs.allowed_bots }}
+        claude_args: >-
+          --model ${{ inputs.model }}
+          ${{ inputs.claude_args }}
+        prompt: ${{ steps.compose_prompt.outputs.prompt }}
+
+    - name: Did the FALLBACK_2 credential run?
+      id: c2b
+      if: steps.s2.outputs.still_needs_attempt == 'true' && inputs.oauth_token_fallback_2 != ''
+      shell: bash
+      env:
+        EXECUTION_FILE: ${{ steps.a2b.outputs.execution_file }}
+      run: bash .github/scripts/claude-run-errored.sh
+
+    - name: Ladder state after the FALLBACK_2 attempt
+      id: s2b
+      shell: bash
+      env:
+        PRIOR: ${{ steps.s2.outputs.still_needs_attempt }}
+        ERRORED: ${{ steps.c2b.outputs.errored }}
+      run: |
+        set -euo pipefail
+        still="false"
+        if [[ "$PRIOR" == "true" && "$ERRORED" != "false" ]]; then
+          still="true"
+        fi
+        echo "still_needs_attempt=${still}" >>"$GITHUB_OUTPUT"
+
     - name: Back off before the third-tier attempt
-      if: steps.s2.outputs.still_needs_attempt == 'true' && inputs.oauth_token_fallback_3 != ''
+      if: steps.s2b.outputs.still_needs_attempt == 'true' && inputs.oauth_token_fallback_3 != ''
       shell: bash
       env:
         BACKOFF_SECONDS: "20"
@@ -319,7 +403,7 @@ runs:
 
     - name: Retry with the third-tier credential
       id: a3
-      if: steps.s2.outputs.still_needs_attempt == 'true' && inputs.oauth_token_fallback_3 != ''
+      if: steps.s2b.outputs.still_needs_attempt == 'true' && inputs.oauth_token_fallback_3 != ''
       continue-on-error: true
       uses: anthropics/claude-code-action@428971d2ecd6e3a7cb0ee0da2a3a8b33fdb3678d # v1.0.157
       env:
@@ -332,11 +416,11 @@ runs:
         claude_args: >-
           --model ${{ inputs.model }}
           ${{ inputs.claude_args }}
-        prompt: ${{ inputs.prompt }}
+        prompt: ${{ steps.compose_prompt.outputs.prompt }}
 
     - name: Did the third-tier credential run?
       id: c3
-      if: steps.s2.outputs.still_needs_attempt == 'true' && inputs.oauth_token_fallback_3 != ''
+      if: steps.s2b.outputs.still_needs_attempt == 'true' && inputs.oauth_token_fallback_3 != ''
       shell: bash
       env:
         EXECUTION_FILE: ${{ steps.a3.outputs.execution_file }}
@@ -346,7 +430,7 @@ runs:
       id: s3
       shell: bash
       env:
-        PRIOR: ${{ steps.s2.outputs.still_needs_attempt }}
+        PRIOR: ${{ steps.s2b.outputs.still_needs_attempt }}
         ERRORED: ${{ steps.c3.outputs.errored }}
       run: |
         set -euo pipefail
@@ -378,7 +462,7 @@ runs:
         claude_args: >-
           --model ${{ inputs.model }}
           ${{ inputs.claude_args }}
-        prompt: ${{ inputs.prompt }}
+        prompt: ${{ steps.compose_prompt.outputs.prompt }}
 
     - name: Did the fourth-tier credential run?
       id: c4
@@ -424,7 +508,7 @@ runs:
         claude_args: >-
           --model ${{ inputs.model }}
           ${{ inputs.claude_args }}
-        prompt: ${{ inputs.prompt }}
+        prompt: ${{ steps.compose_prompt.outputs.prompt }}
 
     - name: Did the fifth-tier credential run?
       id: c5
@@ -470,7 +554,7 @@ runs:
         claude_args: >-
           --model ${{ inputs.model }}
           ${{ inputs.claude_args }}
-        prompt: ${{ inputs.prompt }}
+        prompt: ${{ steps.compose_prompt.outputs.prompt }}
 
     - name: Did the sixth-tier credential run?
       id: c6
@@ -487,11 +571,11 @@ runs:
     - name: Propagate the ladder result
       if: >-
         (steps.c6.outputs.errored || steps.c5.outputs.errored || steps.c4.outputs.errored ||
-         steps.c3.outputs.errored || steps.c2.outputs.errored || steps.c1r.outputs.errored ||
-         steps.c1.outputs.errored) == 'true'
+         steps.c3.outputs.errored || steps.c2b.outputs.errored || steps.c2.outputs.errored ||
+         steps.c1r.outputs.errored || steps.c1.outputs.errored) == 'true'
       shell: bash
       run: |
-        echo "::error::claude-run: every configured Claude credential failed (set CLAUDE_CODE_OAUTH_TOKEN and CLAUDE_CODE_OAUTH_TOKEN_FALLBACK[_3..6])." >&2
+        echo "::error::claude-run: every configured Claude credential failed (set CLAUDE_CODE_OAUTH_TOKEN and CLAUDE_CODE_OAUTH_TOKEN_FALLBACK[_2..6])." >&2
         exit 1
     # The gate and this composite's own `execution_file` output both need the log
     # of whichever rung actually ran. Resolve it ONCE here, newest-first, so the
@@ -504,7 +588,7 @@ runs:
       id: resolve_log
       shell: bash
       env:
-        EXECUTION_FILE: ${{ steps.a6.outputs.execution_file || steps.a5.outputs.execution_file || steps.a4.outputs.execution_file || steps.a3.outputs.execution_file || steps.a2.outputs.execution_file || steps.a1r.outputs.execution_file || steps.a1.outputs.execution_file }}
+        EXECUTION_FILE: ${{ steps.a6.outputs.execution_file || steps.a5.outputs.execution_file || steps.a4.outputs.execution_file || steps.a3.outputs.execution_file || steps.a2b.outputs.execution_file || steps.a2.outputs.execution_file || steps.a1r.outputs.execution_file || steps.a1.outputs.execution_file }}
       run: echo "execution_file=${EXECUTION_FILE}" >>"$GITHUB_OUTPUT"
 
     # A rung exiting 0 is NOT proof Claude ran: an auth failure, a crash before
