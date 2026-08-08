@@ -221,9 +221,22 @@ async function runRedact(state, redact) {
   if (!secrets) return;
   applyMutation(state, secrets.text);
   state.warnings.push(
-    `API keys/secrets redacted: ${secrets.found.join(", ")}${secrets.note ?? ""}`,
+    `API keys/secrets redacted: ${secrets.found.join(", ")}${secrets.note ?? ""}${REDACTION_DOCTRINE}`,
   );
 }
+
+/**
+ * The doctrine clause riding every redaction warning — the one moment
+ * placeholders enter the model's view. Without it the model has no way to know
+ * that a placeholder written back through any path but Edit/Write (a heredoc,
+ * sed/tee, an MCP file tool) is persisted literally, destroying the secret —
+ * making that route-around an honest mistake rather than a warned one.
+ * Exported so tests assert the composed warning by reference instead of
+ * re-typing the prose.
+ */
+export const REDACTION_DOCTRINE =
+  " (placeholders rehydrate only via Edit/Write on the owning file; other " +
+  "write paths persist the placeholder text and lose the secret)";
 
 // Layer 2/3 pre-gate and warning prose are shared with the root entry
 // (./index.mjs), which runs the same layers; re-exported here because both were
