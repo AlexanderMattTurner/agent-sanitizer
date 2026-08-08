@@ -8,33 +8,26 @@
 // injection vectors — while leaving the visible bytes untouched, so the diff
 // stays byte-faithful and reviewable. Running the HTML layer would splice out
 // legitimate HTML/markdown in the changed files and corrupt the review, so the
-// exfil-URL scan is run separately and NON-destructively: suspicious URLs are
-// reported, never removed.
+// exfil-URL scan runs via `exfilScan` instead: Layer 3's non-destructive
+// detection, which reports suspicious URLs in `warnings` without removing
+// them. The warning prose is the sanitizer's own (src/warnings.mjs) — this
+// script no longer carries a copy.
 //
 // Usage: node sanitize-pr-input.mjs < raw.txt > cleaned.txt 2> report.txt
 import { sanitize } from "agent-sanitizer";
-import { detectExfil } from "agent-sanitizer/html";
 
 const chunks = [];
 for await (const chunk of process.stdin) chunks.push(chunk);
 const input = Buffer.concat(chunks).toString("utf8");
 
-const { cleaned, found, warnings } = await sanitize(input, { html: false });
-
-const exfilReasons = [
-  ...new Set(
-    (detectExfil(input) || []).map(
-      (threat) =>
-        `${threat.isImage ? "image" : "link"} to ${threat.target}: ${threat.reason}`,
-    ),
-  ),
-];
+const { cleaned, found, warnings } = await sanitize(input, {
+  html: false,
+  exfilScan: true,
+});
 
 process.stdout.write(cleaned);
 
 const report = [...warnings];
 if (found.length > 0)
   report.unshift(`Neutralized categories: ${found.join(", ")}`);
-if (exfilReasons.length > 0)
-  report.push(`Exfil-shaped URLs detected: ${exfilReasons.join("; ")}`);
 if (report.length > 0) process.stderr.write(report.join("\n") + "\n");

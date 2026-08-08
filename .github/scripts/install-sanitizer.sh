@@ -12,6 +12,21 @@ set -euo pipefail
 # exists under this name, so a lower pin can never resolve.
 SANITIZER_VERSION="2.0.0"
 
-npm install --prefix .github/scripts --no-save --no-package-lock \
-  --ignore-scripts --no-audit --no-fund \
-  "agent-sanitizer@${SANITIZER_VERSION}"
+# In the agent-sanitizer repo itself, install the LOCAL checkout instead of
+# the npm pin, so the scripts exercise the sanitizer that lives on the trusted
+# base branch they were checked out from. The published pin would silently
+# ignore options the scripts have since moved to (`sanitize()` drops unknown
+# options), turning every option added after the pin into a fail-open no-op.
+# --install-links copies the package (npm 9+ symlinks file: deps by default,
+# and a symlink resolves module lookups from the repo root, where the heavy
+# HTML dependencies are not installed). Downstream template-synced repos have
+# no sanitizer src/ and keep the published pin.
+local_pkg_name="$(node -p "try { require('./package.json').name } catch { '' }")"
+if [ "${local_pkg_name}" = "agent-sanitizer" ]; then
+  npm install --prefix .github/scripts --no-save --no-package-lock \
+    --ignore-scripts --no-audit --no-fund --install-links "file:${PWD}"
+else
+  npm install --prefix .github/scripts --no-save --no-package-lock \
+    --ignore-scripts --no-audit --no-fund \
+    "agent-sanitizer@${SANITIZER_VERSION}"
+fi
