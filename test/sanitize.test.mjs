@@ -188,20 +188,33 @@ describe("sanitize: exfilScan detects without splicing", () => {
     const out = await sanitize(input, { exfilScan: true });
     assert.equal(out.cleaned, input);
     assert.deepEqual(out.found, [CATEGORY.EXFIL_URLS]);
-    assert.equal(out.warnings.length, 1);
-    assert.match(out.warnings[0], /URLs shaped like data exfiltration/);
+    // A note, not a warning: Layer 3 is detective — it reports the URL and
+    // leaves the bytes in place, so it belongs in the lower severity tier.
+    assert.deepEqual(out.warnings, []);
+    assert.equal(out.notes.length, 1);
+    assert.match(out.notes[0], /URLs shaped like data exfiltration/);
   });
 
   it("does not run Layer 3 unless requested (html=false default)", async () => {
     const input = `text ${EXFIL_LINK} more`;
     const out = await sanitize(input);
-    assert.deepEqual(out, { cleaned: input, found: [], warnings: [] });
+    assert.deepEqual(out, {
+      cleaned: input,
+      found: [],
+      warnings: [],
+      notes: [],
+    });
   });
 
   it("does not flag an ordinary link (precision: no finding on benign input)", async () => {
     const input = "see [the docs](https://example.com/guide) for details";
     const out = await sanitize(input, { exfilScan: true });
-    assert.deepEqual(out, { cleaned: input, found: [], warnings: [] });
+    assert.deepEqual(out, {
+      cleaned: input,
+      found: [],
+      warnings: [],
+      notes: [],
+    });
   });
 
   it("html: true still implies the scan (exfilScan defaults to html)", async () => {
