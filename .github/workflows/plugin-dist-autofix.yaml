@@ -17,6 +17,9 @@ on:
       - pnpm-lock.yaml
       - claude-hooks/**
       - plugin/scripts/**
+      # The shared, hardened esbuild config the plugin build calls — a change
+      # here moves the artifact just as surely as a change to plugin/scripts/.
+      - scripts/lib/**
       - plugin/requirements.in
       - plugin/requirements.txt
 

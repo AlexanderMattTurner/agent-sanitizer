@@ -17,6 +17,7 @@ import {
   rehydrateNewString,
   pairsToUtf16,
   pairDiskSpans,
+  makeFileView,
 } from "../src/view-map.mjs";
 
 // Secrets assembled at runtime so no complete token literal trips push
@@ -160,7 +161,7 @@ describe("alignDeletions", () => {
 // ─── resolveSpan ─────────────────────────────────────────────────────────────
 
 // view with no secrets ⇒ view.text === cleaned and pairs empty.
-const plainView = (cleaned) => ({ text: cleaned, pairs: [] });
+const plainView = (cleaned) => makeFileView(cleaned, []);
 
 describe("resolveSpan", () => {
   it("maps a span across an interior stripped run, counting it in invisibleBytes", () => {
@@ -199,10 +200,9 @@ describe("resolveSpan", () => {
   it("maps view offsets across a placeholder expansion and returns contained pairs", () => {
     // cleaned: "x" + SECRET_A + "y"; view replaces SECRET_A with PH.
     const cleaned = `x${SECRET_A}y`;
-    const view = {
-      text: `x${PH}y`,
-      pairs: [{ placeholder: PH, original: SECRET_A, start: 1 }],
-    };
+    const view = makeFileView(`x${PH}y`, [
+      { placeholder: PH, original: SECRET_A, start: 1 },
+    ]);
     const res = resolveSpan(cleaned, cleaned, view, [], 0, view.text.length);
     assert.equal(res.cleanedText, cleaned);
     assert.equal(res.diskText, cleaned);
@@ -212,10 +212,9 @@ describe("resolveSpan", () => {
 
   it("returns null when the span START cuts strictly inside a placeholder", () => {
     const cleaned = `x${SECRET_A}y`;
-    const view = {
-      text: `x${PH}y`,
-      pairs: [{ placeholder: PH, original: SECRET_A, start: 1 }],
-    };
+    const view = makeFileView(`x${PH}y`, [
+      { placeholder: PH, original: SECRET_A, start: 1 },
+    ]);
     // Offset 2 is strictly inside the placeholder [1, 1+PH.length).
     const res = resolveSpan(cleaned, cleaned, view, [], 2, view.text.length);
     assert.equal(res, null);
@@ -223,10 +222,9 @@ describe("resolveSpan", () => {
 
   it("returns null when the span END cuts strictly inside a placeholder", () => {
     const cleaned = `x${SECRET_A}y`;
-    const view = {
-      text: `x${PH}y`,
-      pairs: [{ placeholder: PH, original: SECRET_A, start: 1 }],
-    };
+    const view = makeFileView(`x${PH}y`, [
+      { placeholder: PH, original: SECRET_A, start: 1 },
+    ]);
     const res = resolveSpan(cleaned, cleaned, view, [], 0, 2);
     assert.equal(res, null);
   });
@@ -235,13 +233,10 @@ describe("resolveSpan", () => {
     // Two placeholders; span covers only the first. The filter keeps pairs
     // wholly inside [viewStart, viewEnd).
     const cleaned = `${SECRET_A} ${SECRET_B}`;
-    const view = {
-      text: `${PH} ${PH_KEY}`,
-      pairs: [
-        { placeholder: PH, original: SECRET_A, start: 0 },
-        { placeholder: PH_KEY, original: SECRET_B, start: PH.length + 1 },
-      ],
-    };
+    const view = makeFileView(`${PH} ${PH_KEY}`, [
+      { placeholder: PH, original: SECRET_A, start: 0 },
+      { placeholder: PH_KEY, original: SECRET_B, start: PH.length + 1 },
+    ]);
     const res = resolveSpan(cleaned, cleaned, view, [], 0, PH.length);
     assert.deepEqual(res.pairs, [view.pairs[0]]);
   });
@@ -487,28 +482,65 @@ describe("pairDiskSpans", () => {
     // Happy path: one placeholder, no deletions, so the disk span is the
     // pair's own [start, start+original.length).
     const spans = pairDiskSpans(
-      { pairs: [{ placeholder: "[REDACTED]", original: "secret", start: 0 }] },
+      makeFileView("[REDACTED]", [
+        { placeholder: "[REDACTED]", original: "secret", start: 0 },
+      ]),
       [],
     );
     assert.deepEqual(spans, [{ start: 0, end: "secret".length }]);
   });
 
-  it("throws when a pair start maps inside another placeholder", () => {
-    // Defensive guard: placeholders never overlap in real views, but pass an
-    // overlapping pair set directly to prove the guard throws rather than
-    // silently emitting a garbage span (which would misplace a secret's disk
-    // footprint). The second pair's start (3) is strictly interior to the
-    // first placeholder "[REDACTED]" (offsets [0,10)), so mapViewOffset returns
-    // null.
-    const view = {
-      pairs: [
-        { placeholder: "[REDACTED]", original: "secret", start: 0 },
-        { placeholder: "[X]", original: "y", start: 3 },
-      ],
-    };
+  it("rejects the overlapping pair set at CONSTRUCTION, not inside the mapper", () => {
+    // pairDiskSpans used to carry its own "maps inside another placeholder"
+    // throw for this input. makeFileView now refuses to build a view from it at
+    // all, which is why that interior guard is gone rather than merely
+    // untested: the second pair's start (3) is strictly interior to the first
+    // placeholder "[REDACTED]" (offsets [0,10)), the one shape that could have
+    // reached it.
     assert.throws(
-      () => pairDiskSpans(view, []),
-      /maps inside another placeholder/,
+      () =>
+        makeFileView("[REDACTED]", [
+          { placeholder: "[REDACTED]", original: "secret", start: 0 },
+          { placeholder: "[X]", original: "y", start: 3 },
+        ]),
+      /sorted and non-overlapping/,
     );
+  });
+
+  it("refuses a raw {text, pairs} object that never went through makeFileView", () => {
+    // The brand is the whole point: a raw object's pair offsets may still be in
+    // code-point space, which mis-anchors an edit on any astral-bearing file.
+    const raw = {
+      text: "[REDACTED]",
+      pairs: [{ placeholder: "[REDACTED]", original: "secret", start: 0 }],
+    };
+    assert.throws(() => pairDiskSpans(raw, []), /makeFileView/);
+    assert.throws(() => resolveSpan("s", "s", raw, [], 0, 1), /makeFileView/);
+  });
+
+  it("freezes the carrier and does not write through to the redactor's pairs", () => {
+    // The bug this replaces: `view.pairs = pairsToUtf16(view.text, view.pairs)`
+    // mutated the object the injected redactor returned, so a redactor that
+    // memoizes its map result got its pairs converted twice.
+    const text = `\u{1F511} ${PH}`;
+    const redactorPairs = [
+      {
+        placeholder: PH,
+        original: SECRET_A,
+        start: Array.from(text).indexOf("["),
+      },
+    ];
+    const snapshot = structuredClone(redactorPairs);
+    const view = makeFileView(text, redactorPairs);
+    assert.deepEqual(redactorPairs, snapshot, "redactor pairs were mutated");
+    assert.equal(Object.isFrozen(view), true);
+    assert.equal(Object.isFrozen(view.pairs), true);
+    // Converted once: the UTF-16 start really points at the placeholder.
+    assert.equal(
+      view.text.slice(view.pairs[0].start, view.pairs[0].start + PH.length),
+      PH,
+    );
+    // And building a second view from the SAME redactor object is idempotent.
+    assert.deepEqual(makeFileView(text, redactorPairs).pairs, view.pairs);
   });
 });

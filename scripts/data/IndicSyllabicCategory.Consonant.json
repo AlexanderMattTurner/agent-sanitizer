@@ -1,0 +1,648 @@
+{
+  "IndicSyllabicCategory": [
+    {
+      "range": ["0915", "0939"],
+      "syllabicCategory": "Consonant"
+    },
+    {
+      "range": ["0958", "095F"],
+      "syllabicCategory": "Consonant"
+    },
+    {
+      "range": ["0978", "097F"],
+      "syllabicCategory": "Consonant"
+    },
+    {
+      "range": ["0995", "09A8"],
+      "syllabicCategory": "Consonant"
+    },
+    {
+      "range": ["09AA", "09B0"],
+      "syllabicCategory": "Consonant"
+    },
+    {
+      "range": ["09B2"],
+      "syllabicCategory": "Consonant"
+    },
+    {
+      "range": ["09B6", "09B9"],
+      "syllabicCategory": "Consonant"
+    },
+    {
+      "range": ["09DC", "09DD"],
+      "syllabicCategory": "Consonant"
+    },
+    {
+      "range": ["09DF"],
+      "syllabicCategory": "Consonant"
+    },
+    {
+      "range": ["09F0", "09F1"],
+      "syllabicCategory": "Consonant"
+    },
+    {
+      "range": ["0A15", "0A28"],
+      "syllabicCategory": "Consonant"
+    },
+    {
+      "range": ["0A2A", "0A30"],
+      "syllabicCategory": "Consonant"
+    },
+    {
+      "range": ["0A32", "0A33"],
+      "syllabicCategory": "Consonant"
+    },
+    {
+      "range": ["0A35", "0A36"],
+      "syllabicCategory": "Consonant"
+    },
+    {
+      "range": ["0A38", "0A39"],
+      "syllabicCategory": "Consonant"
+    },
+    {
+      "range": ["0A59", "0A5C"],
+      "syllabicCategory": "Consonant"
+    },
+    {
+      "range": ["0A5E"],
+      "syllabicCategory": "Consonant"
+    },
+    {
+      "range": ["0A95", "0AA8"],
+      "syllabicCategory": "Consonant"
+    },
+    {
+      "range": ["0AAA", "0AB0"],
+      "syllabicCategory": "Consonant"
+    },
+    {
+      "range": ["0AB2", "0AB3"],
+      "syllabicCategory": "Consonant"
+    },
+    {
+      "range": ["0AB5", "0AB9"],
+      "syllabicCategory": "Consonant"
+    },
+    {
+      "range": ["0AF9"],
+      "syllabicCategory": "Consonant"
+    },
+    {
+      "range": ["0B15", "0B28"],
+      "syllabicCategory": "Consonant"
+    },
+    {
+      "range": ["0B2A", "0B30"],
+      "syllabicCategory": "Consonant"
+    },
+    {
+      "range": ["0B32", "0B33"],
+      "syllabicCategory": "Consonant"
+    },
+    {
+      "range": ["0B35", "0B39"],
+      "syllabicCategory": "Consonant"
+    },
+    {
+      "range": ["0B5C", "0B5D"],
+      "syllabicCategory": "Consonant"
+    },
+    {
+      "range": ["0B5F"],
+      "syllabicCategory": "Consonant"
+    },
+    {
+      "range": ["0B71"],
+      "syllabicCategory": "Consonant"
+    },
+    {
+      "range": ["0B95"],
+      "syllabicCategory": "Consonant"
+    },
+    {
+      "range": ["0B99", "0B9A"],
+      "syllabicCategory": "Consonant"
+    },
+    {
+      "range": ["0B9C"],
+      "syllabicCategory": "Consonant"
+    },
+    {
+      "range": ["0B9E", "0B9F"],
+      "syllabicCategory": "Consonant"
+    },
+    {
+      "range": ["0BA3", "0BA4"],
+      "syllabicCategory": "Consonant"
+    },
+    {
+      "range": ["0BA8", "0BAA"],
+      "syllabicCategory": "Consonant"
+    },
+    {
+      "range": ["0BAE", "0BB9"],
+      "syllabicCategory": "Consonant"
+    },
+    {
+      "range": ["0C15", "0C28"],
+      "syllabicCategory": "Consonant"
+    },
+    {
+      "range": ["0C2A", "0C39"],
+      "syllabicCategory": "Consonant"
+    },
+    {
+      "range": ["0C58", "0C5A"],
+      "syllabicCategory": "Consonant"
+    },
+    {
+      "range": ["0C95", "0CA8"],
+      "syllabicCategory": "Consonant"
+    },
+    {
+      "range": ["0CAA", "0CB3"],
+      "syllabicCategory": "Consonant"
+    },
+    {
+      "range": ["0CB5", "0CB9"],
+      "syllabicCategory": "Consonant"
+    },
+    {
+      "range": ["0CDE"],
+      "syllabicCategory": "Consonant"
+    },
+    {
+      "range": ["0D15", "0D3A"],
+      "syllabicCategory": "Consonant"
+    },
+    {
+      "range": ["0D9A", "0DB1"],
+      "syllabicCategory": "Consonant"
+    },
+    {
+      "range": ["0DB3", "0DBB"],
+      "syllabicCategory": "Consonant"
+    },
+    {
+      "range": ["0DBD"],
+      "syllabicCategory": "Consonant"
+    },
+    {
+      "range": ["0DC0", "0DC6"],
+      "syllabicCategory": "Consonant"
+    },
+    {
+      "range": ["0E01", "0E2E"],
+      "syllabicCategory": "Consonant"
+    },
+    {
+      "range": ["0E81", "0E82"],
+      "syllabicCategory": "Consonant"
+    },
+    {
+      "range": ["0E84"],
+      "syllabicCategory": "Consonant"
+    },
+    {
+      "range": ["0E86", "0E8A"],
+      "syllabicCategory": "Consonant"
+    },
+    {
+      "range": ["0E8C", "0EA3"],
+      "syllabicCategory": "Consonant"
+    },
+    {
+      "range": ["0EA5"],
+      "syllabicCategory": "Consonant"
+    },
+    {
+      "range": ["0EA7", "0EAE"],
+      "syllabicCategory": "Consonant"
+    },
+    {
+      "range": ["0EDC", "0EDF"],
+      "syllabicCategory": "Consonant"
+    },
+    {
+      "range": ["0F40", "0F47"],
+      "syllabicCategory": "Consonant"
+    },
+    {
+      "range": ["0F49", "0F6C"],
+      "syllabicCategory": "Consonant"
+    },
+    {
+      "range": ["1000", "1020"],
+      "syllabicCategory": "Consonant"
+    },
+    {
+      "range": ["103F"],
+      "syllabicCategory": "Consonant"
+    },
+    {
+      "range": ["1050", "1051"],
+      "syllabicCategory": "Consonant"
+    },
+    {
+      "range": ["105A", "105D"],
+      "syllabicCategory": "Consonant"
+    },
+    {
+      "range": ["1061"],
+      "syllabicCategory": "Consonant"
+    },
+    {
+      "range": ["1065", "1066"],
+      "syllabicCategory": "Consonant"
+    },
+    {
+      "range": ["106E", "1070"],
+      "syllabicCategory": "Consonant"
+    },
+    {
+      "range": ["1075", "1081"],
+      "syllabicCategory": "Consonant"
+    },
+    {
+      "range": ["108E"],
+      "syllabicCategory": "Consonant"
+    },
+    {
+      "range": ["1703", "1711"],
+      "syllabicCategory": "Consonant"
+    },
+    {
+      "range": ["171F"],
+      "syllabicCategory": "Consonant"
+    },
+    {
+      "range": ["1723", "1731"],
+      "syllabicCategory": "Consonant"
+    },
+    {
+      "range": ["1743", "1751"],
+      "syllabicCategory": "Consonant"
+    },
+    {
+      "range": ["1763", "176C"],
+      "syllabicCategory": "Consonant"
+    },
+    {
+      "range": ["176E", "1770"],
+      "syllabicCategory": "Consonant"
+    },
+    {
+      "range": ["1780", "17A2"],
+      "syllabicCategory": "Consonant"
+    },
+    {
+      "range": ["1901", "191E"],
+      "syllabicCategory": "Consonant"
+    },
+    {
+      "range": ["1950", "1962"],
+      "syllabicCategory": "Consonant"
+    },
+    {
+      "range": ["1980", "19AB"],
+      "syllabicCategory": "Consonant"
+    },
+    {
+      "range": ["1A00", "1A16"],
+      "syllabicCategory": "Consonant"
+    },
+    {
+      "range": ["1A20", "1A4C"],
+      "syllabicCategory": "Consonant"
+    },
+    {
+      "range": ["1A53", "1A54"],
+      "syllabicCategory": "Consonant"
+    },
+    {
+      "range": ["1B13", "1B33"],
+      "syllabicCategory": "Consonant"
+    },
+    {
+      "range": ["1B45", "1B4C"],
+      "syllabicCategory": "Consonant"
+    },
+    {
+      "range": ["1B8A", "1BA0"],
+      "syllabicCategory": "Consonant"
+    },
+    {
+      "range": ["1BAE", "1BAF"],
+      "syllabicCategory": "Consonant"
+    },
+    {
+      "range": ["1BBB", "1BBD"],
+      "syllabicCategory": "Consonant"
+    },
+    {
+      "range": ["1BC0", "1BE3"],
+      "syllabicCategory": "Consonant"
+    },
+    {
+      "range": ["1C00", "1C23"],
+      "syllabicCategory": "Consonant"
+    },
+    {
+      "range": ["1C4D", "1C4F"],
+      "syllabicCategory": "Consonant"
+    },
+    {
+      "range": ["A807", "A80A"],
+      "syllabicCategory": "Consonant"
+    },
+    {
+      "range": ["A80C", "A822"],
+      "syllabicCategory": "Consonant"
+    },
+    {
+      "range": ["A840", "A85D"],
+      "syllabicCategory": "Consonant"
+    },
+    {
+      "range": ["A862", "A865"],
+      "syllabicCategory": "Consonant"
+    },
+    {
+      "range": ["A869", "A870"],
+      "syllabicCategory": "Consonant"
+    },
+    {
+      "range": ["A872"],
+      "syllabicCategory": "Consonant"
+    },
+    {
+      "range": ["A892", "A8B3"],
+      "syllabicCategory": "Consonant"
+    },
+    {
+      "range": ["A90A", "A921"],
+      "syllabicCategory": "Consonant"
+    },
+    {
+      "range": ["A930", "A946"],
+      "syllabicCategory": "Consonant"
+    },
+    {
+      "range": ["A989", "A98B"],
+      "syllabicCategory": "Consonant"
+    },
+    {
+      "range": ["A98F", "A9B2"],
+      "syllabicCategory": "Consonant"
+    },
+    {
+      "range": ["A9E0", "A9E4"],
+      "syllabicCategory": "Consonant"
+    },
+    {
+      "range": ["A9E7", "A9EF"],
+      "syllabicCategory": "Consonant"
+    },
+    {
+      "range": ["A9FA", "A9FE"],
+      "syllabicCategory": "Consonant"
+    },
+    {
+      "range": ["AA06", "AA28"],
+      "syllabicCategory": "Consonant"
+    },
+    {
+      "range": ["AA60", "AA6F"],
+      "syllabicCategory": "Consonant"
+    },
+    {
+      "range": ["AA71", "AA73"],
+      "syllabicCategory": "Consonant"
+    },
+    {
+      "range": ["AA7A"],
+      "syllabicCategory": "Consonant"
+    },
+    {
+      "range": ["AA7E", "AA7F"],
+      "syllabicCategory": "Consonant"
+    },
+    {
+      "range": ["AA80", "AAAF"],
+      "syllabicCategory": "Consonant"
+    },
+    {
+      "range": ["AAE2", "AAEA"],
+      "syllabicCategory": "Consonant"
+    },
+    {
+      "range": ["ABC0", "ABCD"],
+      "syllabicCategory": "Consonant"
+    },
+    {
+      "range": ["ABD0"],
+      "syllabicCategory": "Consonant"
+    },
+    {
+      "range": ["ABD2", "ABDA"],
+      "syllabicCategory": "Consonant"
+    },
+    {
+      "range": ["10A00"],
+      "syllabicCategory": "Consonant"
+    },
+    {
+      "range": ["10A10", "10A13"],
+      "syllabicCategory": "Consonant"
+    },
+    {
+      "range": ["10A15", "10A17"],
+      "syllabicCategory": "Consonant"
+    },
+    {
+      "range": ["10A19", "10A35"],
+      "syllabicCategory": "Consonant"
+    },
+    {
+      "range": ["11013", "11037"],
+      "syllabicCategory": "Consonant"
+    },
+    {
+      "range": ["11075"],
+      "syllabicCategory": "Consonant"
+    },
+    {
+      "range": ["1108D", "110AF"],
+      "syllabicCategory": "Consonant"
+    },
+    {
+      "range": ["11107", "11126"],
+      "syllabicCategory": "Consonant"
+    },
+    {
+      "range": ["11144"],
+      "syllabicCategory": "Consonant"
+    },
+    {
+      "range": ["11147"],
+      "syllabicCategory": "Consonant"
+    },
+    {
+      "range": ["11155", "11172"],
+      "syllabicCategory": "Consonant"
+    },
+    {
+      "range": ["11191", "111B2"],
+      "syllabicCategory": "Consonant"
+    },
+    {
+      "range": ["11208", "11211"],
+      "syllabicCategory": "Consonant"
+    },
+    {
+      "range": ["11213", "1122B"],
+      "syllabicCategory": "Consonant"
+    },
+    {
+      "range": ["1123F"],
+      "syllabicCategory": "Consonant"
+    },
+    {
+      "range": ["11284", "11286"],
+      "syllabicCategory": "Consonant"
+    },
+    {
+      "range": ["11288"],
+      "syllabicCategory": "Consonant"
+    },
+    {
+      "range": ["1128A", "1128D"],
+      "syllabicCategory": "Consonant"
+    },
+    {
+      "range": ["1128F", "1129D"],
+      "syllabicCategory": "Consonant"
+    },
+    {
+      "range": ["1129F", "112A8"],
+      "syllabicCategory": "Consonant"
+    },
+    {
+      "range": ["112BA", "112DE"],
+      "syllabicCategory": "Consonant"
+    },
+    {
+      "range": ["11315", "11328"],
+      "syllabicCategory": "Consonant"
+    },
+    {
+      "range": ["1132A", "11330"],
+      "syllabicCategory": "Consonant"
+    },
+    {
+      "range": ["11332", "11333"],
+      "syllabicCategory": "Consonant"
+    },
+    {
+      "range": ["11335", "11339"],
+      "syllabicCategory": "Consonant"
+    },
+    {
+      "range": ["11392", "113B5"],
+      "syllabicCategory": "Consonant"
+    },
+    {
+      "range": ["1140E", "11434"],
+      "syllabicCategory": "Consonant"
+    },
+    {
+      "range": ["1148F", "114AF"],
+      "syllabicCategory": "Consonant"
+    },
+    {
+      "range": ["1158E", "115AE"],
+      "syllabicCategory": "Consonant"
+    },
+    {
+      "range": ["1160E", "1162F"],
+      "syllabicCategory": "Consonant"
+    },
+    {
+      "range": ["1168A", "116AA"],
+      "syllabicCategory": "Consonant"
+    },
+    {
+      "range": ["116B8"],
+      "syllabicCategory": "Consonant"
+    },
+    {
+      "range": ["11700", "1171A"],
+      "syllabicCategory": "Consonant"
+    },
+    {
+      "range": ["11740", "11746"],
+      "syllabicCategory": "Consonant"
+    },
+    {
+      "range": ["1180A", "1182B"],
+      "syllabicCategory": "Consonant"
+    },
+    {
+      "range": ["1190C", "11913"],
+      "syllabicCategory": "Consonant"
+    },
+    {
+      "range": ["11915", "11916"],
+      "syllabicCategory": "Consonant"
+    },
+    {
+      "range": ["11918", "1192F"],
+      "syllabicCategory": "Consonant"
+    },
+    {
+      "range": ["119AE", "119D0"],
+      "syllabicCategory": "Consonant"
+    },
+    {
+      "range": ["11A0B", "11A32"],
+      "syllabicCategory": "Consonant"
+    },
+    {
+      "range": ["11A5C", "11A83"],
+      "syllabicCategory": "Consonant"
+    },
+    {
+      "range": ["11C0E", "11C2E"],
+      "syllabicCategory": "Consonant"
+    },
+    {
+      "range": ["11C72", "11C8F"],
+      "syllabicCategory": "Consonant"
+    },
+    {
+      "range": ["11D0C", "11D30"],
+      "syllabicCategory": "Consonant"
+    },
+    {
+      "range": ["11D6C", "11D89"],
+      "syllabicCategory": "Consonant"
+    },
+    {
+      "range": ["11EE0", "11EF1"],
+      "syllabicCategory": "Consonant"
+    },
+    {
+      "range": ["11F12", "11F33"],
+      "syllabicCategory": "Consonant"
+    },
+    {
+      "range": ["16101", "1611D"],
+      "syllabicCategory": "Consonant"
+    },
+    {
+      "range": ["16D43", "16D62"],
+      "syllabicCategory": "Consonant"
+    }
+  ]
+}
