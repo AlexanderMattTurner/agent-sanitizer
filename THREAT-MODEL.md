@@ -107,16 +107,20 @@ Scripting/resource tags (`script`, `style`, `object`, `embed`, `iframe`, `svg`,
 `math`) and `data:` URI resources are **reported, not removed**: their bodies are
 page source the model may legitimately need to inspect.
 
-HTML comments (`<!--…-->`, and the bogus `<!…>`/`<?…?>` forms) are deliberately
-**preserved byte-identical** — no splice, no placeholder, no warning. Comments
-are ubiquitous in legitimate markdown/HTML (PR templates, tooling marker
-comments), so splicing them corrupts real content: an agent that reads a
-spliced body and writes it back persists the loss. And the splice was a weak
-defense — a payload does not need comment syntax to hide from a human skimming
-rendered output. Precision over recall: a comment-borne injection is instead
-covered by Layer 3, which scans the **original** text (comments included) for
-exfil-shaped URLs, and by the semantic Layer-5 filter, the right tool for
-payloads carried in visible-in-source text.
+HTML comments (`<!--…-->`, and the bogus `<!…>`/`<?…?>` forms) are spliced
+like hidden elements — a human viewing the rendered page never sees them. But
+comments are also ubiquitous in _legitimate_ markdown/HTML (PR templates,
+tooling marker comments), so a destructive splice corrupts real content: an
+agent that reads a spliced body and writes it back persists the loss. Every
+Layer-2 splice is therefore **round-trippable**: the placeholder carries a
+content-addressed key (`[HTML comment removed #<key>]`, `[hidden HTML removed
+#<key>]`, key = first 12 hex chars of the original bytes' SHA-256), the result
+exposes the vetted originals in `splices`, and the hook layer persists each
+original beside the reveal sidecar and restores it when the model writes the
+placeholder back through Edit/Write. The model never sees the hidden content;
+the bytes are never lost. A comment-borne injection is additionally covered by
+Layer 3, which scans the **original** text (comments included) for
+exfil-shaped URLs.
 
 ## Layer 3—exfil URLs (detection only)
 

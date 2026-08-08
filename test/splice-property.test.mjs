@@ -22,7 +22,7 @@ import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import fc from "fast-check";
 
-import { spliceRanges, HIDDEN_PLACEHOLDER } from "../src/html.mjs";
+import { spliceRanges, LAYER2_PLACEHOLDER_RE } from "../src/html.mjs";
 import {
   occurrences,
   orderedMatches,
@@ -46,24 +46,27 @@ const safeText = fc
   .array(safeChar, { minLength: 0, maxLength: 60 })
   .map((chars) => chars.join(""));
 
-// A range generator with indices in [0, maxIndex]: start = min, end = max.
-// Overlaps/nesting/adjacency/duplicates arise naturally. Callers pass `len`
-// for in-bounds ranges or `len + n` to probe out-of-bounds handling.
+// A range generator with indices in [0, maxIndex]: start = min, end = max,
+// kind drawn from both placeholder kinds. Overlaps/nesting/adjacency/
+// duplicates arise naturally. Callers pass `len` for in-bounds ranges or
+// `len + n` to probe out-of-bounds handling.
 const rangesUpTo = (maxIndex) =>
   fc.array(
     fc
       .tuple(
         fc.integer({ min: 0, max: maxIndex }),
         fc.integer({ min: 0, max: maxIndex }),
+        fc.constantFrom("hidden", "comment"),
       )
-      .map(([a, b]) => ({
+      .map(([a, b, kind]) => ({
         start: Math.min(a, b),
         end: Math.max(a, b),
+        kind,
       })),
     { maxLength: 6 },
   );
 
-const stripPlaceholders = (text) => text.split(HIDDEN_PLACEHOLDER).join("");
+const stripPlaceholders = (text) => text.replace(LAYER2_PLACEHOLDER_RE, "");
 
 // Independent (set-union, not the merge algorithm) computation of the bytes
 // that must survive: every index not covered by any range, in order.
@@ -85,7 +88,27 @@ describe("property: spliceRanges preserves bytes outside the ranges", () => {
         ),
         ([text, ranges]) => {
           const out = spliceRanges(text, ranges);
-          assert.equal(stripPlaceholders(out), keptBytes(text, ranges));
+          assert.equal(stripPlaceholders(out.text), keptBytes(text, ranges));
+          // Each reported pair locates a well-formed keyed placeholder in the
+          // output; substituting every original back (right to left) must
+          // reproduce the input byte for byte.
+          let rebuilt = out.text;
+          for (let i = out.pairs.length - 1; i >= 0; i--) {
+            const { placeholder, original, start } = out.pairs[i];
+            assert.match(
+              placeholder,
+              new RegExp(`^(?:${LAYER2_PLACEHOLDER_RE.source})$`),
+            );
+            assert.equal(
+              rebuilt.slice(start, start + placeholder.length),
+              placeholder,
+            );
+            rebuilt =
+              rebuilt.slice(0, start) +
+              original +
+              rebuilt.slice(start + placeholder.length);
+          }
+          assert.equal(rebuilt, text);
         },
       ),
       runOptions,
@@ -95,7 +118,7 @@ describe("property: spliceRanges preserves bytes outside the ranges", () => {
   it("is a no-op when given no ranges", () => {
     fc.assert(
       fc.property(safeText, (text) => {
-        assert.equal(spliceRanges(text, []), text);
+        assert.deepEqual(spliceRanges(text, []), { text, pairs: [] });
       }),
       runOptions,
     );
@@ -108,7 +131,7 @@ describe("property: spliceRanges preserves bytes outside the ranges", () => {
           fc.tuple(fc.constant(text), rangesUpTo(text.length + 10)),
         ),
         ([text, ranges]) => {
-          assert.equal(typeof spliceRanges(text, ranges), "string");
+          assert.equal(typeof spliceRanges(text, ranges).text, "string");
         },
       ),
       runOptions,

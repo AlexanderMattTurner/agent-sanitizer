@@ -298,7 +298,7 @@ describe("the shipped layer table declares the hazard it has to handle", () => {
     const layers = preToolUseLayers(() => null, {});
     assert.deepEqual(
       layers.map((l) => l.name),
-      ["confusables", "authored-content", "rehydrate"],
+      ["confusables", "authored-content", "rehydrate", "layer2-rehydrate"],
     );
     assert.equal(
       needsFixedPoint(layers.filter((l) => l.terminal !== true)),
@@ -312,7 +312,7 @@ describe("the shipped layer table declares the hazard it has to handle", () => {
     });
     assert.deepEqual(
       layers.map((l) => l.name),
-      ["confusables", "rehydrate"],
+      ["confusables", "rehydrate", "layer2-rehydrate"],
     );
     assert.equal(
       needsFixedPoint(layers.filter((l) => l.terminal !== true)),

@@ -87,6 +87,7 @@ export const CATEGORY = Object.freeze({
   BLANK_FILLERS: "blank-fillers",
   ANSI: "ansi",
   LONE_SURROGATES: "lone-surrogates",
+  HTML_COMMENTS: "html-comments",
   HIDDEN_HTML: "hidden-html",
   EXFIL_URLS: "exfil-urls",
 });
@@ -100,6 +101,7 @@ export const CATEGORY_LABELS = Object.freeze({
   [CATEGORY.BLANK_FILLERS]: "Blank-rendering fillers",
   [CATEGORY.ANSI]: "ANSI escapes",
   [CATEGORY.LONE_SURROGATES]: "Lone UTF-16 surrogates",
+  [CATEGORY.HTML_COMMENTS]: "HTML comments",
   [CATEGORY.HIDDEN_HTML]: "hidden HTML",
   [CATEGORY.EXFIL_URLS]: "exfil URLs",
 });

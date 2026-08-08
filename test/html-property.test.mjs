@@ -13,7 +13,8 @@ import {
   isHiddenStyle,
   isHiddenElement,
   checkExfilUrl,
-  HIDDEN_PLACEHOLDER,
+  layer2Placeholder,
+  LAYER2_PLACEHOLDER_RE,
 } from "../src/html.mjs";
 import { fcRunOptions } from "./test-helpers.mjs";
 
@@ -21,14 +22,18 @@ const runOptions = fcRunOptions({ numRuns: 500 });
 const applyHtml = (text) => sanitizeHtml(text)?.text ?? text;
 const checkProperty = (arbitrary, predicate) =>
   fc.assert(fc.property(arbitrary, predicate), runOptions);
+const hid = (original) => layer2Placeholder("hidden", original);
+const com = (original) => layer2Placeholder("comment", original);
+// Stateless copy of the shared /g grammar regex (`.test` on a /g regex advances
+// lastIndex between calls, silently skipping matches).
+const PLACEHOLDER_RE = new RegExp(LAYER2_PLACEHOLDER_RE.source);
 
-// "Forbidden" = a hidden ELEMENT. Comments are deliberately NOT forbidden:
-// Layer 2 preserves them (see the module doc in ../src/html.mjs).
+// "Forbidden" = invisible on a rendered page: comments and hidden elements.
 function containsForbiddenNode(htmlText) {
   const tree = unified().use(rehypeParse, { fragment: true }).parse(htmlText);
   let forbidden = false;
   visit(tree, (node) => {
-    if (!isHiddenElement(node)) return undefined;
+    if (node.type !== "comment" && !isHiddenElement(node)) return undefined;
     forbidden = true;
     return EXIT;
   });
@@ -129,9 +134,91 @@ describe("property: sanitizeHtml is idempotent", () => {
       const passOne = applyHtml(planted);
       assert.ok(passOne.includes("VISIBLE_MARK"));
       assert.ok(!passOne.includes("SECRET_PAYLOAD"));
-      assert.ok(passOne.includes(HIDDEN_PLACEHOLDER));
+      assert.ok(PLACEHOLDER_RE.test(passOne));
+      // Keyed placeholders already in the text pass through byte-identically:
+      // a re-run neither re-splices them nor mangles their keys.
       assert.equal(applyHtml(passOne), passOne);
     }));
+});
+
+// ─── 1b. Round-trip: splices restore the input byte-identically ──────────────
+//
+// The point of the keyed-placeholder feature: nothing is LOST, only hidden
+// behind an identity-carrying placeholder. For any generated document carrying
+// comments and hidden elements, substituting each splice's original back at its
+// recorded start offset must reproduce the input byte for byte — and every
+// emitted placeholder must obey the shared grammar with a content-addressed key.
+const roundTripPiece = fc.oneof(
+  { weight: 3, arbitrary: fc.stringMatching(/^[a-zA-Z0-9 .,'!?_-]{0,30}$/) },
+  {
+    weight: 2,
+    arbitrary: fc
+      .stringMatching(/^[a-zA-Z0-9 .,_-]{0,20}$/)
+      .filter((body) => !body.includes("--"))
+      .map((body) => `<!-- ${body} -->`),
+  },
+  {
+    weight: 2,
+    arbitrary: fc
+      .stringMatching(/^[a-zA-Z0-9 .,_-]{0,20}$/)
+      .map((body) => `<div hidden>${body}</div>`),
+  },
+  {
+    weight: 1,
+    arbitrary: fc
+      .stringMatching(/^[a-zA-Z0-9 ]{0,16}$/)
+      .map((body) => `<span style="display:none">${body}</span>`),
+  },
+  { weight: 1, arbitrary: fc.constant("<p>visible</p>") },
+);
+const roundTripDoc = fc
+  .array(roundTripPiece, { minLength: 1, maxLength: 8 })
+  .map((parts) => parts.join(" "));
+
+describe("property: every splice is round-trippable (keyed placeholders)", () => {
+  it("substituting originals back at their offsets reproduces the input byte-identically", () => {
+    let sawSplice = 0;
+    fc.assert(
+      fc.property(roundTripDoc, (input) => {
+        const result = sanitizeHtml(input);
+        if (result === null || result.text === input) return;
+        sawSplice += 1;
+        // Grammar: every placeholder in the output is the exact string
+        // layer2Placeholder derives from its original — content-addressed, so
+        // identical originals yield identical placeholders.
+        for (const { placeholder, original, start } of result.splices) {
+          assert.ok(
+            placeholder === hid(original) || placeholder === com(original),
+            `off-grammar placeholder: ${placeholder} for ${JSON.stringify(original)}`,
+          );
+          assert.equal(
+            result.text.slice(start, start + placeholder.length),
+            placeholder,
+          );
+        }
+        // The number of grammar matches in the output equals the number of
+        // splices plus any placeholder-shaped text the INPUT already carried
+        // (the generators above emit none, so it is exactly the splice count).
+        assert.equal(
+          [...result.text.matchAll(LAYER2_PLACEHOLDER_RE)].length,
+          result.splices.length,
+        );
+        // The headline: undo every splice (in reverse so offsets stay valid)
+        // and get the input back, byte for byte.
+        let restored = result.text;
+        for (let i = result.splices.length - 1; i >= 0; i--) {
+          const { placeholder, original, start } = result.splices[i];
+          restored =
+            restored.slice(0, start) +
+            original +
+            restored.slice(start + placeholder.length);
+        }
+        assert.equal(restored, input);
+      }),
+      runOptions,
+    );
+    assert.ok(sawSplice > 100, `only ${sawSplice} runs spliced — vacuous`);
+  });
 });
 
 // ─── 2. Hidden-style fuzz ────────────────────────────────────────────────────
@@ -491,18 +578,16 @@ const adversarialStyle = fc.constantFrom(
   "font-size:0",
 );
 const adversarialNode = fc.oneof(
+  fc.constant("<!-- secret -->"),
   fc.constant("<div hidden>x</div>"),
   adversarialStyle.map((style) => `<div style="${style}">h</div>`),
   adversarialStyle.map((style) => `<span style='${style}'>x</span>`),
 );
-// Comments sit in the benign pool: they are preserved now, so they must mix
-// with adversarial nodes without either surviving-hidden or being spliced.
 const benignNode = fc.constantFrom(
   "hello",
   "<p>v</p>",
   "<b>b</b>",
   "<script>alert(1)</script>",
-  "<!-- marker -->",
   "",
   "\n",
 );
@@ -511,7 +596,7 @@ const arbitraryAdversarialDoc = fc
   .map((parts) => parts.join("\n"));
 
 describe("property: sanitizeHtml round-trip drops all forbidden nodes", () => {
-  it("a hidden element never survives (script/comments preserved by design)", () =>
+  it("comment/hidden never survives (script is preserved by design)", () =>
     checkProperty(arbitraryAdversarialDoc, (input) => {
       const sanitized = applyHtml(input);
       assert.equal(
@@ -530,16 +615,18 @@ const prosePrefix = fc.stringMatching(
 );
 
 describe("property: splice fidelity", () => {
-  it("a comment passes through byte-identical (comments are preserved)", () =>
-    checkProperty(fc.tuple(prosePrefix, proseChunk), ([prefix, suffix]) => {
-      const input = `${prefix}<!-- secret -->${suffix}`;
-      assert.equal(applyHtml(input), input);
-    }));
+  it("a stripped comment leaves surrounding bytes byte-identical", () =>
+    checkProperty(fc.tuple(prosePrefix, proseChunk), ([prefix, suffix]) =>
+      assert.equal(
+        applyHtml(`${prefix}<!-- secret -->${suffix}`),
+        `${prefix}${com("<!-- secret -->")}${suffix}`,
+      ),
+    ));
   it("a stripped hidden span leaves surrounding bytes byte-identical", () =>
     checkProperty(fc.tuple(prosePrefix, proseChunk), ([prefix, suffix]) =>
       assert.equal(
         applyHtml(`${prefix}<span style="display:none">x</span>${suffix}`),
-        `${prefix}${HIDDEN_PLACEHOLDER}${suffix}`,
+        `${prefix}${hid('<span style="display:none">x</span>')}${suffix}`,
       ),
     ));
   it("a reported script does not modify the text at all", () =>

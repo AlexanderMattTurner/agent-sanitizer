@@ -29,13 +29,32 @@ import {
   scanHtmlFragment,
   urlHost,
   REPORTED_TAGS,
+  layer2Placeholder,
+  LAYER2_PLACEHOLDER_RE,
   HIDDEN_PLACEHOLDER,
+  COMMENT_PLACEHOLDER,
   UNPARSEABLE_PLACEHOLDER,
   DATA_URI_LENGTH_THRESHOLD,
 } from "../src/html.mjs";
 import { sanitize } from "../src/index.mjs";
 
 const applyHtml = (text) => sanitizeHtml(text)?.text ?? text;
+// The keyed placeholder for one splice, computed from the exact original bytes
+// — never a hardcoded hash (the grammar's SSOT is layer2Placeholder itself).
+const hid = (original) => layer2Placeholder("hidden", original);
+const com = (original) => layer2Placeholder("comment", original);
+// Undo every splice of a sanitizeHtml result: substitute each placeholder's
+// original back at its recorded start offset (in reverse so offsets stay valid).
+const restoreSplices = (result) => {
+  let text = result.text;
+  for (let i = result.splices.length - 1; i >= 0; i--) {
+    const { placeholder, original, start } = result.splices[i];
+    assert.equal(text.slice(start, start + placeholder.length), placeholder);
+    text =
+      text.slice(0, start) + original + text.slice(start + placeholder.length);
+  }
+  return text;
+};
 
 // SSOT for the hidden-style unit cases: one row per hiding technique (and per
 // near-boundary visible counter-example). Driving the loop from this array
@@ -1217,13 +1236,24 @@ describe("negative corpus: the repo's own markdown is never HTML source", () => 
       const out = result?.text ?? text;
       it("is classified as markdown, not HTML source", () =>
         assert.equal(looksLikeHtmlSource(text), false));
-      // Comments are preserved and none of the repo's own docs hide elements,
-      // so Layer 2 may not remove ANYTHING from hand-written markdown — a
-      // warned-only result (a script/style tag in prose) leaves text intact.
+      // Comments in legitimate docs ARE spliced now (behind keyed, recoverable
+      // placeholders) — but none of the repo's own docs hide elements, so a
+      // hidden-content splice here would mean the dispatch handed real prose to
+      // the source branch (or a hide heuristic false-fired).
       it("loses no element to a hidden-content splice", () =>
         assert.equal(result?.removed.hidden ?? 0, 0));
-      it("is never modified at all (comments preserved)", () =>
-        assert.equal(out, text));
+      // The ONLY permitted mutation is the comment splice, and it must be fully
+      // recoverable: substituting each splice's original back at its recorded
+      // offset reproduces the document byte-identically. A doc with no comments
+      // is untouched outright.
+      it("is unchanged except for round-trippable comment splices", () => {
+        if (result === null || result.text === text) {
+          assert.equal(out, text);
+          return;
+        }
+        assert.equal((result.removed.comments ?? 0) > 0, true);
+        assert.equal(restoreSplices(result), text);
+      });
       // Compared as re-parsed blocks, not as substrings: remark normalizes
       // indented-code indentation, so a block's value need not appear verbatim
       // in its own source.
@@ -1251,78 +1281,204 @@ describe("unit: closingTagName / isHiddenOpen exact verdicts", () => {
 
 describe("unit: spliceRanges exact behavior", () => {
   const text = "0123456789";
-  it("replaces a range with the hidden placeholder", () =>
-    assert.equal(
-      spliceRanges(text, [{ start: 0, end: 3 }]),
-      `${HIDDEN_PLACEHOLDER}3456789`,
+  it("replaces a comment range with the keyed comment placeholder", () =>
+    assert.deepEqual(
+      spliceRanges(text, [{ start: 2, end: 5, kind: "comment" }]),
+      {
+        text: `01${com("234")}56789`,
+        pairs: [{ placeholder: com("234"), original: "234", start: 2 }],
+      },
     ));
-  it("applies multiple ranges in order regardless of input order", () =>
-    assert.equal(
+  it("replaces a hidden range with the keyed hidden placeholder", () =>
+    assert.deepEqual(
+      spliceRanges(text, [{ start: 0, end: 3, kind: "hidden" }]),
+      {
+        text: `${hid("012")}3456789`,
+        pairs: [{ placeholder: hid("012"), original: "012", start: 0 }],
+      },
+    ));
+  it("applies multiple ranges in order regardless of input order, reporting each pair's start in the RETURNED text", () =>
+    assert.deepEqual(
       spliceRanges(text, [
-        { start: 6, end: 8 },
-        { start: 1, end: 3 },
+        { start: 6, end: 8, kind: "hidden" },
+        { start: 1, end: 3, kind: "comment" },
       ]),
-      `0${HIDDEN_PLACEHOLDER}345${HIDDEN_PLACEHOLDER}89`,
+      {
+        text: `0${com("12")}345${hid("67")}89`,
+        pairs: [
+          { placeholder: com("12"), original: "12", start: 1 },
+          {
+            placeholder: hid("67"),
+            original: "67",
+            start: 1 + com("12").length + 3,
+          },
+        ],
+      },
     ));
   it("merges overlapping ranges into one cut (defense-in-depth)", () =>
-    assert.equal(
+    assert.deepEqual(
       spliceRanges(text, [
-        { start: 2, end: 6 },
-        { start: 4, end: 8 },
+        { start: 2, end: 6, kind: "hidden" },
+        { start: 4, end: 8, kind: "hidden" },
       ]),
-      `01${HIDDEN_PLACEHOLDER}89`,
+      {
+        text: `01${hid("234567")}89`,
+        pairs: [{ placeholder: hid("234567"), original: "234567", start: 2 }],
+      },
     ));
   it("orders equal-start ranges by end and merges them", () =>
     assert.equal(
       spliceRanges(text, [
-        { start: 2, end: 7 },
-        { start: 2, end: 4 },
-      ]),
-      `01${HIDDEN_PLACEHOLDER}789`,
+        { start: 2, end: 7, kind: "hidden" },
+        { start: 2, end: 4, kind: "hidden" },
+      ]).text,
+      `01${hid("23456")}789`,
     ));
   it("a nested range does not extend its container", () =>
     assert.equal(
       spliceRanges(text, [
-        { start: 2, end: 8 },
-        { start: 4, end: 6 },
-      ]),
-      `01${HIDDEN_PLACEHOLDER}89`,
+        { start: 2, end: 8, kind: "hidden" },
+        { start: 4, end: 6, kind: "hidden" },
+      ]).text,
+      `01${hid("234567")}89`,
     ));
   it("keeps adjacent (touching) ranges as separate placeholders", () =>
     assert.equal(
       spliceRanges(text, [
-        { start: 2, end: 5 },
-        { start: 5, end: 8 },
-      ]),
-      `01${HIDDEN_PLACEHOLDER}${HIDDEN_PLACEHOLDER}89`,
+        { start: 2, end: 5, kind: "comment" },
+        { start: 5, end: 8, kind: "comment" },
+      ]).text,
+      `01${com("234")}${com("567")}89`,
     ));
-  it("returns the text unchanged for no ranges", () =>
-    assert.equal(spliceRanges(text, []), text));
-  it("an equal-start pair where the short range sorts first still merges to the long end", () =>
-    // Equal starts sort by end ascending, so the SHORT range becomes `last`
-    // and the longer range must extend it rather than be swallowed.
+  it("returns the text unchanged (and no pairs) for no ranges", () =>
+    assert.deepEqual(spliceRanges(text, []), { text, pairs: [] }));
+  it("a hidden range merged into a comment range keeps the hidden label (#21)", () =>
+    // The comment sorts first on the start tie, so a naive merge would keep its
+    // kind and label the union "[HTML comment removed …]" — understating that
+    // actively-hidden content was stripped. Hidden must dominate the union.
     assert.equal(
       spliceRanges(text, [
-        { start: 2, end: 4 },
-        { start: 2, end: 7 },
-      ]),
-      `01${HIDDEN_PLACEHOLDER}789`,
+        { start: 2, end: 5, kind: "comment" },
+        { start: 4, end: 8, kind: "hidden" },
+      ]).text,
+      `01${hid("234567")}89`,
+    ));
+  it("hidden dominates an equal-start comment that sorts first (#21)", () =>
+    // Equal starts sort by end ascending, so the SHORT comment range becomes
+    // `last` and the longer hidden range is absorbed into it — the kind must
+    // still flip to hidden.
+    assert.equal(
+      spliceRanges(text, [
+        { start: 2, end: 4, kind: "comment" },
+        { start: 2, end: 7, kind: "hidden" },
+      ]).text,
+      `01${hid("23456")}789`,
     ));
 });
 
+// ─── keyed Layer-2 placeholder grammar and key derivation ────────────────────
+
+describe("unit: layer2Placeholder / LAYER2_PLACEHOLDER_RE grammar", () => {
+  // The ONE golden pin of the key derivation: first 12 lowercase-hex chars of
+  // sha256 over the UTF-8 bytes of the original. `printf '%s' '<!-- x -->' |
+  // sha256sum` starts 92d35ea3e583…, so a changed hash function, slice length,
+  // or input encoding fails here. Every other test derives placeholders via
+  // layer2Placeholder — this literal exists only to prove what that derives.
+  it("golden pin: the key is the first 12 lowercase-hex chars of sha256(utf8(original))", () => {
+    assert.equal(
+      layer2Placeholder("comment", "<!-- x -->"),
+      "[HTML comment removed #92d35ea3e583]",
+    );
+    assert.equal(
+      layer2Placeholder("hidden", "<!-- x -->"),
+      "[hidden HTML removed #92d35ea3e583]",
+    );
+  });
+
+  it("is content-addressed: same content ⇒ same key, different content ⇒ different key", () => {
+    const a = layer2Placeholder("comment", "<!-- one -->");
+    assert.equal(a, layer2Placeholder("comment", "<!-- one -->"));
+    assert.notEqual(a, layer2Placeholder("comment", "<!-- two -->"));
+    // The kind changes the label, never the key.
+    const keyOf = (ph) => ph.match(/#([0-9a-f]{12})\]$/)[1];
+    assert.equal(keyOf(layer2Placeholder("hidden", "<!-- one -->")), keyOf(a));
+  });
+
+  it("every emitted placeholder matches LAYER2_PLACEHOLDER_RE exactly once, capturing the key", () => {
+    for (const [kind, original] of [
+      ["comment", "<!-- c -->"],
+      ["hidden", "<span hidden>s</span>"],
+      ["comment", ""],
+      ["hidden", "日本語 🎌 bytes"],
+    ]) {
+      const placeholder = layer2Placeholder(kind, original);
+      const matches = [...placeholder.matchAll(LAYER2_PLACEHOLDER_RE)];
+      assert.equal(matches.length, 1, placeholder);
+      assert.equal(matches[0][0], placeholder);
+      assert.match(matches[0][1], /^[0-9a-f]{12}$/);
+    }
+  });
+
+  it("does not match near-miss prose (wrong key length, uppercase hex, no key, wrong label)", () => {
+    for (const nearMiss of [
+      "[hidden HTML removed #0123456789a]", // 11 hex — too short
+      "[HTML comment removed #0123456789abc]", // 13 hex — too long
+      "[hidden HTML removed #0123456789AB]", // uppercase hex
+      "[hidden HTML removed #0123456789ag]", // non-hex char
+      "[hidden HTML removed]", // the old un-keyed form
+      "[HTML comment removed]",
+      "[HTML comments removed #0123456789ab]", // wrong label
+      "hidden HTML removed #0123456789ab]", // missing opening bracket
+    ]) {
+      LAYER2_PLACEHOLDER_RE.lastIndex = 0;
+      assert.equal(
+        LAYER2_PLACEHOLDER_RE.test(nearMiss),
+        false,
+        `false match: ${nearMiss}`,
+      );
+    }
+  });
+
+  it("the deprecated prefix constants are exactly the keyed placeholders' prefixes", () => {
+    assert.ok(hid("x").startsWith(HIDDEN_PLACEHOLDER));
+    assert.ok(com("x").startsWith(COMMENT_PLACEHOLDER));
+    assert.equal(HIDDEN_PLACEHOLDER, "[hidden HTML removed");
+    assert.equal(COMMENT_PLACEHOLDER, "[HTML comment removed");
+  });
+
+  it("re-sanitizing spliced output (keyed placeholders present) is a byte-identical no-op", () => {
+    const input =
+      "a <!-- one --> b <span hidden>SECRET</span> c <script>s()</script>";
+    const first = sanitizeHtml(input);
+    assert.notEqual(first.text, input);
+    // A placeholder-bearing text with remaining markup re-enters the scanner:
+    // nothing may be re-spliced (the placeholder carries no `<`).
+    const second = sanitizeHtml(first.text);
+    assert.equal(second?.text ?? first.text, first.text);
+    assert.deepEqual(second?.removed ?? { comments: 0, hidden: 0 }, {
+      comments: 0,
+      hidden: 0,
+    });
+    // A placeholder-only text (no tag left at all) does not even gate.
+    const placeholderOnly = `${com("<!-- c -->")} and ${hid("<i hidden>x</i>")}`;
+    assert.equal(sanitizeHtml(placeholderOnly), null);
+  });
+});
+
 describe("unit: scanHtmlFragment exact verdicts", () => {
-  it("ranges only the hidden element beside a comment, counts a script", () => {
-    // The comment contributes NO range: comments are preserved (see the
-    // module doc in ../src/html.mjs) — only the hidden element is spliced.
+  it("ranges a comment and a hidden element with their kinds, counts a script", () => {
     const html = `<!-- c --><script>x</script><div hidden>y</div>`;
     const { ranges, warned } = scanHtmlFragment(html);
-    assert.deepEqual(ranges, [{ start: 28, end: 47 }]);
+    assert.deepEqual(ranges, [
+      { start: 0, end: 10, kind: "comment" },
+      { start: 28, end: 47, kind: "hidden" },
+    ]);
     assert.deepEqual(warned, { tags: { script: 1 }, dataSrc: 0 });
   });
   it("an unclosed hidden element extends to the end of the fragment", () => {
     const html = `<div hidden>tail text`;
     const { ranges } = scanHtmlFragment(html);
-    assert.deepEqual(ranges, [{ start: 0, end: html.length }]);
+    assert.deepEqual(ranges, [{ start: 0, end: html.length, kind: "hidden" }]);
   });
   it("counts a data: URI src", () => {
     const { warned } = scanHtmlFragment(`<img src="data:text/html,x">`);
@@ -1353,10 +1509,26 @@ describe("unit: sanitizeHtml exact result shapes", () => {
     assert.equal(result.text, input);
     assert.deepEqual(result.warned, { tags: {}, dataSrc: 1 });
   });
-  it("counts only the hidden element and keeps the comment byte-identical", () => {
+  it("counts removed comments and hidden elements separately, pairing each splice", () => {
     const result = sanitizeHtml("x <!-- c --> y <span hidden>s</span> z");
-    assert.deepEqual(result.removed, { hidden: 1 });
-    assert.equal(result.text, `x <!-- c --> y ${HIDDEN_PLACEHOLDER} z`);
+    assert.deepEqual(result.removed, { comments: 1, hidden: 1 });
+    assert.equal(
+      result.text,
+      `x ${com("<!-- c -->")} y ${hid("<span hidden>s</span>")} z`,
+    );
+    assert.deepEqual(result.splices, [
+      { placeholder: com("<!-- c -->"), original: "<!-- c -->", start: 2 },
+      {
+        placeholder: hid("<span hidden>s</span>"),
+        original: "<span hidden>s</span>",
+        start: 2 + com("<!-- c -->").length + 3,
+      },
+    ]);
+    // Substituting each original back at its offset reproduces the input.
+    assert.equal(
+      restoreSplices(result),
+      "x <!-- c --> y <span hidden>s</span> z",
+    );
   });
   it("accumulates warned counts across separate html blocks (mergeWarned)", () => {
     const result = sanitizeHtml("<script>a</script>\n\n<script>b</script>");
@@ -1365,12 +1537,12 @@ describe("unit: sanitizeHtml exact result shapes", () => {
   it("region balancing: a different inner tag neither extends nor closes the region", () =>
     assert.equal(
       applyHtml("a <span hidden>x <b>y</b> z</span> tail"),
-      `a ${HIDDEN_PLACEHOLDER} tail`,
+      `a ${hid("<span hidden>x <b>y</b> z</span>")} tail`,
     ));
   it("region balancing: a nested same-tag element stays inside the region", () =>
     assert.equal(
       applyHtml("a <span hidden>x <span>y</span> z</span> tail"),
-      `a ${HIDDEN_PLACEHOLDER} tail`,
+      `a ${hid("<span hidden>x <span>y</span> z</span>")} tail`,
     ));
   it("returns null when there is no HTML tag at all (gate)", () =>
     assert.equal(sanitizeHtml("plain prose, nothing to do"), null));
@@ -1388,8 +1560,11 @@ describe("R1: parser stack overflow fails closed (never throws)", () => {
   it("sanitizeHtml withholds the input behind a placeholder instead of throwing", () => {
     const result = sanitizeHtml(OVERFLOW);
     assert.equal(result.text, UNPARSEABLE_PLACEHOLDER);
-    assert.deepEqual(result.removed, { hidden: 1 });
+    assert.deepEqual(result.removed, { comments: 0, hidden: 1 });
     assert.deepEqual(result.warned, { tags: {}, dataSrc: 0 });
+    // Nothing is recoverable per-splice on the fail-closed path: the parser
+    // blew up before any span could be located.
+    assert.deepEqual(result.splices, []);
   });
 
   it("detectExfil returns one sentinel threat instead of throwing", () => {
@@ -1591,24 +1766,30 @@ describe("unit: detectExfil HTML-attr + node types", () => {
 // ─── Splice fidelity / regression cases ──────────────────────────────────────
 
 describe("splice fidelity and regressions", () => {
-  it("a comment passes through byte-identical (comments are preserved)", () =>
+  it("a stripped comment leaves surrounding bytes byte-identical", () =>
     assert.equal(
       applyHtml("prefix<!-- secret -->suffix"),
-      "prefix<!-- secret -->suffix",
+      `prefix${com("<!-- secret -->")}suffix`,
     ));
   it("a stripped hidden span leaves surrounding bytes byte-identical", () =>
     assert.equal(
       applyHtml(`prefix<span style="display:none">x</span>suffix`),
-      `prefix${HIDDEN_PLACEHOLDER}suffix`,
+      `prefix${hid('<span style="display:none">x</span>')}suffix`,
     ));
-  it("a comment sharing its inline node with trailing text is preserved (list item)", () =>
-    assert.equal(applyHtml("- <!-- secret -->!"), "- <!-- secret -->!"));
-  it("an unterminated trailing comment is preserved to the block end", () =>
-    assert.equal(applyHtml("- <!-- a --> x <!-- b"), "- <!-- a --> x <!-- b"));
+  it("regression: a comment sharing its inline node with trailing text (list item)", () =>
+    assert.equal(
+      applyHtml("- <!-- secret -->!"),
+      `- ${com("<!-- secret -->")}!`,
+    ));
+  it("regression: an unterminated trailing comment is removed to the block end", () =>
+    assert.equal(
+      applyHtml("- <!-- a --> x <!-- b"),
+      `- ${com("<!-- a -->")} x ${com("<!-- b")}`,
+    ));
   it("regression: flow html in a blockquote is spliced precisely", () =>
     assert.equal(
       applyHtml("> <div hidden>x</div>\n> visible"),
-      `> ${HIDDEN_PLACEHOLDER}\n> visible`,
+      `> ${hid("<div hidden>x</div>")}\n> visible`,
     ));
   it("regression: idempotent when a bogus end tag precedes a hidden element", () => {
     // parse5 (flow branch) models `</A` as a bogus comment that absorbs the
@@ -1616,7 +1797,10 @@ describe("splice fidelity and regressions", () => {
     // agree or pass two would splice it — breaking idempotency.
     const input = `<div hidden=""></div> </A <div hidden=""></div>`;
     const passOne = applyHtml(input);
-    assert.equal(passOne, `${HIDDEN_PLACEHOLDER} </A <div hidden=""></div>`);
+    assert.equal(
+      passOne,
+      `${hid('<div hidden=""></div>')} </A <div hidden=""></div>`,
+    );
     assert.equal(applyHtml(passOne), passOne);
   });
   it("regression: a bogus end tag absorbs up to the next `>`, not beyond", () => {
@@ -1625,16 +1809,16 @@ describe("splice fidelity and regressions", () => {
     // is back in normal content and is still spliced.
     assert.equal(
       applyHtml(`</A <span hidden>keep</span> <span hidden>gone</span> tail`),
-      `</A <span hidden>keep</span> ${HIDDEN_PLACEHOLDER} tail`,
+      `</A <span hidden>keep</span> ${hid("<span hidden>gone</span>")} tail`,
     );
   });
-  it("bogus comments pass through byte-identical, idempotently", () => {
-    // `<!bogus x>` is a bogus comment (preserved now) and `<span` (no `>`)
-    // keeps consuming as bogus attributes per parse5 — nothing here is hidden,
-    // so the whole line survives untouched on every pass.
+  it("regression: an unterminated OPEN tag absorbs the following inline html", () => {
+    // `<!bogus x>` is a bogus comment (spliced), then `<span` (no `>`) keeps
+    // consuming as bogus attributes per parse5, so the second bogus comment is
+    // absorbed, not spliced — and the pass is idempotent.
     const input = `<!bogus x> <span <!bogus y>`;
     const passOne = applyHtml(input);
-    assert.equal(passOne, input);
+    assert.equal(passOne, `${com("<!bogus x>")} <span <!bogus y>`);
     assert.equal(applyHtml(passOne), passOne);
   });
   it("regression: absorb state crosses markdown emphasis and code-span boundaries", () => {
@@ -1705,7 +1889,7 @@ describe("splice fidelity and regressions", () => {
     ]) {
       assert.equal(
         applyHtml(`a ${voidTag} keep me`),
-        `a ${HIDDEN_PLACEHOLDER} keep me`,
+        `a ${hid(voidTag)} keep me`,
         voidTag,
       );
     }
@@ -1758,37 +1942,66 @@ describe("splice fidelity and regressions", () => {
     assert.equal(checkExfilUrl("https://ok.example/page#section-2"), null));
 });
 
-// ─── Comment preservation (comments are no longer spliced) ───────────────────
+// ─── Bogus-comment parity (finding: prose branch matched only `<!--`) ─────────
 //
-// Layer 2 used to strip proper comments and the HTML tokenizer's *bogus
-// comments* (`<!…>` that is not a comment/doctype, `<?…>`, `<![CDATA[…]]>`).
-// That splice corrupted legitimate documents (PR templates and tooling marker
-// comments are everywhere), so comments now pass through byte-identical on
-// every branch — see the module doc in ../src/html.mjs. These cases pin the
-// preservation for every comment form the old splice used to remove, AND prove
-// ordinary prose stays BYTE-FOR-BYTE untouched.
-describe("comment preservation in the prose branch", () => {
-  const PRESERVED = [
-    { name: "bogus <!declaration>", input: "text <!bogus secret> OK" },
-    { name: "CDATA section", input: "note <![CDATA[ secret ]]> end" },
+// The HTML-source branch (parse5/rehype) strips not just proper comments but the
+// HTML tokenizer's *bogus comments* (`<!…>` that is not a comment/doctype,
+// `<?…>`, `<![CDATA[…]]>`). The prose/markdown branch used to scan literal
+// `<!--` only, so the bogus forms survived. These cases pin the parity — every
+// form spliced to exactly the span parse5 assigns it, behind its keyed,
+// round-trippable placeholder — AND, more importantly, prove ordinary prose
+// stays BYTE-FOR-BYTE untouched (the false-positive risk a hand-rolled
+// bogus-comment scanner would carry).
+describe("bogus-comment parity in the prose branch", () => {
+  // `<!`, `<?`, and `<![CDATA[` forms each clear the HTML_TAG_PRESENT gate on
+  // their own; sanitizeHtml then assigns each the exact span the tokenizer
+  // hides — the placeholder is keyed on those exact original bytes.
+  const SPLICED = [
+    {
+      name: "bogus <!declaration>",
+      input: "text <!bogus secret> OK",
+      want: `text ${com("<!bogus secret>")} OK`,
+    },
+    {
+      name: "CDATA section",
+      input: "note <![CDATA[ secret ]]> end",
+      want: `note ${com("<![CDATA[ secret ]]>")} end`,
+    },
     {
       name: "processing instruction beside a bogus declaration",
       input: "x <!a> and <?php evil ?> y",
+      want: `x ${com("<!a>")} and ${com("<?php evil ?>")} y`,
     },
-    { name: "PI-only document", input: "before <?php evil ?> after" },
+    {
+      name: "PI-only document (cleared by the <? gate arm)",
+      input: "before <?php evil ?> after",
+      want: `before ${com("<?php evil ?>")} after`,
+    },
     {
       name: "a proper comment beside a bogus one",
       input: "x <!bogus> y <!-- c --> z",
+      want: `x ${com("<!bogus>")} y ${com("<!-- c -->")} z`,
     },
     {
-      name: "a marker comment beside a hidden element",
+      name: "a marker comment beside a hidden element (kind-correct labels)",
       input: `keep <!-- remerge-diff-report --> ${"<em hidden>gone</em>"} tail`,
-      want: `keep <!-- remerge-diff-report --> ${HIDDEN_PLACEHOLDER} tail`,
+      want: `keep ${com("<!-- remerge-diff-report -->")} ${hid("<em hidden>gone</em>")} tail`,
     },
   ];
-  for (const { name, input, want } of PRESERVED)
-    it(`preserves ${name}`, () =>
-      assert.equal(applyHtml(input), want ?? input));
+  for (const { name, input, want } of SPLICED)
+    it(`splices ${name}`, () => assert.equal(applyHtml(input), want));
+
+  it("every spliced form round-trips: originals restore the input byte-identically", () => {
+    for (const { input } of SPLICED) {
+      const result = sanitizeHtml(input);
+      assert.equal(restoreSplices(result), input);
+      // Grammar: each emitted placeholder is matched by the shared regex.
+      for (const { placeholder } of result.splices) {
+        LAYER2_PLACEHOLDER_RE.lastIndex = 0;
+        assert.ok(LAYER2_PLACEHOLDER_RE.test(placeholder), placeholder);
+      }
+    }
+  });
 
   // The precision counter-examples. Every one of these is visible text a browser
   // renders; not a single byte may be touched. (Several never produce an inline
@@ -1822,15 +2035,22 @@ describe("comment preservation in the prose branch", () => {
 // embeds one construct (carrying a canary) in BOTH a tag-dense doc (forces the
 // source branch) and a prose doc (forces the markdown branch) and asserts the
 // canary dies in both while a visible marker survives in both. Comment forms
-// carry their own parity property below: preserved verbatim on both branches.
-describe("property: hidden content is stripped on either branch (#2)", () => {
+// are constructs the SAME parity holds for: a comment hides its content from a
+// rendered page on either branch, so each form must be spliced on both.
+describe("property: hidden/comment content is stripped on either branch (#2)", () => {
   const CANARY = "CANARY_PARITY";
   const MARKER = "VISIBLE_MARKER";
 
-  // Each builds a fragment that hides CANARY from a rendered page.
+  // Each builds a fragment that hides CANARY from a rendered page — hidden
+  // elements AND every comment form the tokenizer hides (proper, bogus, CDATA,
+  // processing instruction).
   const hiddenConstruct = fc.constantFrom(
     `<span style="display:none">${CANARY}</span>`,
     `<div hidden>${CANARY}</div>`,
+    `<!-- ${CANARY} -->`,
+    `<!bogus ${CANARY}>`,
+    `<![CDATA[${CANARY}]]>`,
+    `<?php ${CANARY} ?>`,
   );
 
   it("the canary never survives, the visible marker always does", () => {
@@ -1900,10 +2120,11 @@ describe("property: hidden content is stripped on either branch (#2)", () => {
     }
   });
 
-  // Preservation counterpart: every comment form the old splice removed must
-  // now survive BYTE-IDENTICALLY on both branches — an attacker shaping the
-  // surrounding text to pick a branch must not find one that still splices.
-  it("every comment form survives byte-identically on either branch", () => {
+  // Round-trip counterpart: on BOTH branches, every comment splice must be
+  // fully recoverable — substituting each splice's original back at its
+  // recorded offset reproduces the document byte-identically, so an agent that
+  // must write the text back (a PR body with template comments) loses nothing.
+  it("every comment form's splice round-trips byte-identically on either branch", () => {
     for (const construct of [
       `<!-- ${CANARY} -->`,
       `<!bogus ${CANARY}>`,
@@ -1920,8 +2141,15 @@ describe("property: hidden content is stripped on either branch (#2)", () => {
       const proseDoc = `Here is ${MARKER} then ${construct} and more prose.`;
       assert.equal(looksLikeHtmlSource(sourceDoc), true);
       assert.equal(looksLikeHtmlSource(proseDoc), false);
-      for (const doc of [sourceDoc, proseDoc])
-        assert.equal(applyHtml(doc), doc, `comment mangled in: ${doc}`);
+      for (const doc of [sourceDoc, proseDoc]) {
+        const result = sanitizeHtml(doc);
+        assert.ok(
+          (result.removed.comments ?? 0) > 0,
+          `comment not spliced in: ${doc}`,
+        );
+        assert.equal(result.text.includes(CANARY), false);
+        assert.equal(restoreSplices(result), doc, `round-trip broke: ${doc}`);
+      }
     }
   });
 });

@@ -7,8 +7,10 @@
  *
  * Contract pinned here:
  *  - `hidden` vectors: elements invisible on a rendered page (hidden styles,
- *    `hidden` attr) are REMOVED — the canary never survives. HTML comments are
- *    NOT hidden content: they are preserved (see `visible` vectors).
+ *    `hidden` attr) are REMOVED — the canary never survives.
+ *  - `comments` vectors: every comment form (proper, bogus `<!…>`, CDATA,
+ *    `<?…?>`) is spliced behind a keyed placeholder AND fully recoverable —
+ *    substituting each splice's original back reproduces the input.
  *  - `reported` vectors: scripting/resource tags and data: URIs are PRESERVED
  *    but flagged in `warned`, so the model can inspect page source while being
  *    told to distrust it.
@@ -476,17 +478,19 @@ const CORPUS = {
       input: `https://x.com/p?utm_content=${B64URL_BLOB}`,
     },
   ],
-  // Visible content that earlier over-eager hiding heuristics could splice. A
-  // false positive here DELETES legitimate text the model needed, so each row
-  // pins that the canary SURVIVES — the precision counterpart to `hidden`.
-  visible: [
-    // Comments are preserved — invisible on a rendered page, but ubiquitous in
-    // legitimate documents (PR templates, tooling markers); splicing them
-    // corrupted real content, so every comment form must survive.
+  // Every comment form is invisible on a rendered page, so each is spliced —
+  // but recoverably: comments are ubiquitous legitimate content (PR templates,
+  // tooling markers), so the splice must round-trip via its keyed placeholder.
+  comments: [
     { name: "html-comment", input: `text<!-- ${CANARY} -->OK` },
     { name: "bogus-comment", input: `text <!${CANARY}> OK` },
     { name: "cdata-comment", input: `text <![CDATA[${CANARY}]]> OK` },
     { name: "processing-instruction", input: `text <?php ${CANARY} ?> OK` },
+  ],
+  // Visible content that earlier over-eager hiding heuristics could splice. A
+  // false positive here DELETES legitimate text the model needed, so each row
+  // pins that the canary SURVIVES — the precision counterpart to `hidden`.
+  visible: [
     {
       name: "small-negative-left",
       input: hidden("position:absolute;left:-5px"),
@@ -604,6 +608,31 @@ describe("corpus: hidden content never survives sanitizeHtml", () => {
       assert.ok(framing.length > 0, `no framing asserted for ${name}`);
       for (const marker of framing)
         assert.ok(out.includes(marker), `framing "${marker}" lost in ${name}`);
+    });
+  }
+});
+
+describe("corpus: comment forms are spliced AND fully recoverable", () => {
+  for (const { name, input } of CORPUS.comments) {
+    it(`splices and round-trips ${name}`, () => {
+      const result = sanitizeHtml(input);
+      assert.notEqual(result, null, `not spliced: ${name}`);
+      assert.equal(result.text.includes(CANARY), false, `survived: ${name}`);
+      assert.ok((result.removed.comments ?? 0) > 0, `not counted: ${name}`);
+      assert.equal(result.removed.hidden, 0, `miscounted as hidden: ${name}`);
+      // The framing prose survives byte-for-byte around the placeholder.
+      assert.ok(result.text.startsWith("text") && result.text.endsWith("OK"));
+      // Round-trip: substituting each original back at its offset restores the
+      // input — nothing is lost, only hidden behind the keyed placeholder.
+      let restored = result.text;
+      for (let i = result.splices.length - 1; i >= 0; i--) {
+        const { placeholder, original, start } = result.splices[i];
+        restored =
+          restored.slice(0, start) +
+          original +
+          restored.slice(start + placeholder.length);
+      }
+      assert.equal(restored, input, `round-trip broke: ${name}`);
     });
   }
 });

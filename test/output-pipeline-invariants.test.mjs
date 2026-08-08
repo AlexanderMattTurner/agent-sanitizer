@@ -27,6 +27,9 @@ import {
   REDACTION_DOCTRINE,
 } from "../src/output.mjs";
 import { LONE_SURROGATE_RE } from "../src/layer1.mjs";
+import { layer2Placeholder } from "../src/html.mjs";
+
+const hid = (original) => layer2Placeholder("hidden", original);
 
 // LONE_SURROGATE_RE is /g, so `.test` advances lastIndex between calls. Derive a
 // stateless copy from the SAME source rather than hand-copying the pattern.
@@ -55,6 +58,8 @@ const redactor = (/** @type {string} */ text) =>
 function reachableStrings(result) {
   const out = [result.cleaned, ...result.warnings];
   if (result.reveal !== undefined) out.push(result.reveal);
+  for (const { placeholder, original } of result.splices ?? [])
+    out.push(placeholder, original);
   return out;
 }
 
@@ -121,13 +126,35 @@ describe("invariant: no string leaves sanitizeText unvetted by Layer 4", () => {
       html: true,
       redact,
     });
-    assert.equal(r.cleaned, "visible[hidden HTML removed]");
+    assert.equal(r.cleaned, `visible${hid(`<em hidden>token=${SECRET}</em>`)}`);
     assert.ok(!("reveal" in r));
     assert.ok(
       r.warnings.includes(
         "Withheld the pre-splice copy of the removed HTML: it could not be vetted for secrets",
       ),
     );
+    // The splice's `original` is the same unvettable text, so it is withheld
+    // too (dropped from the array; an empty array is omitted entirely).
+    assert.ok(!("splices" in r));
+    assert.ok(
+      r.warnings.includes(
+        "Withheld the original text of a removed-HTML splice: it could not be vetted for secrets",
+      ),
+    );
+  });
+
+  it("vets each splice `original` through Layer 4 before returning it", async () => {
+    const input = `visible<em hidden>token=${SECRET}</em>`;
+    const r = await sanitizeText(input, { html: true, redact: redactor });
+    // The splice survives, its placeholder keyed to the RAW original bytes,
+    // while the returned `original` carries the masked text — the secret never
+    // leaves through the sidecar.
+    assert.deepEqual(r.splices, [
+      {
+        placeholder: hid(`<em hidden>token=${SECRET}</em>`),
+        original: maskSecrets(`<em hidden>token=${SECRET}</em>`),
+      },
+    ]);
   });
 
   it("leaves a legitimate reveal byte-identical when the redactor finds nothing", async () => {
@@ -216,7 +243,7 @@ describe("invariant: a byte mutation always restores the stage invariants", () =
     // the surrogate assertion below cannot pass by the field being absent.
     assert.equal(r.reveal, `a${REPLACEMENT_CHAR}b<i hidden>c</i>`);
     assert.ok(!HAS_LONE_SURROGATE.test(r.reveal));
-    assert.equal(r.cleaned, `a${REPLACEMENT_CHAR}b[hidden HTML removed]`);
+    assert.equal(r.cleaned, `a${REPLACEMENT_CHAR}b${hid("<i hidden>c</i>")}`);
   });
 
   // `sgrNote` downgrades the caller's banner to "display-only color stripped",
@@ -230,7 +257,7 @@ describe("invariant: a byte mutation always restores the stage invariants", () =
       "Layer 2 splice",
       { html: true },
       `${SGR_INPUT}<i hidden>x</i>`,
-      "red[hidden HTML removed]",
+      `red${hid("<i hidden>x</i>")}`,
     ],
     [
       "Layer 4 redaction",

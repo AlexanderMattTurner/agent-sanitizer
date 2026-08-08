@@ -52,7 +52,7 @@ the callback you inject for the agent-specific concern; `—` is a pure transfor
 | #   | Import          | Purpose                                                                                                                                                                     | Seam                        |
 | --- | --------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------- |
 | 1   | `/invisible`    | Strip zero-width, bidi, variation-selector and tag chars + ANSI/SGR escapes. Preserves ZWNJ/ZWJ for Arabic/Indic/emoji. Zero deps.                                          | —                           |
-| 2   | `/html`         | Splice out elements hidden via `display:none`, off-screen, white-on-white, `hidden`. Leaves a placeholder. HTML comments pass through verbatim.                             | —                           |
+| 2   | `/html`         | Splice out HTML comments and elements hidden via `display:none`, off-screen, white-on-white, `hidden`. Each splice leaves a keyed, round-trippable placeholder.             | —                           |
 | 3   | `/html`         | Detect exfil-shaped URLs (payloads in query/path, embedded creds, `data:`/`javascript:`, off-origin redirects). Reports only.                                               | —                           |
 | 4   | `/confusables`  | Fold look-alike glyphs in tool-call input (paths, commands) to ASCII, closing a cross-script deny-rule bypass. Gated per token, so non-Latin prose passes through unfolded. | `scan`                      |
 | 5   | `/instructions` | Scan/auto-clean `CLAUDE.md`, `AGENTS.md`, `SKILL.md`, etc., decoding Unicode-tag + zero-width-binary payloads.                                                              | `fs` (direct)               |
@@ -76,6 +76,7 @@ without notice.
 | `blank-fillers`       | Blank-rendering fillers not covered by `Cf` (Hangul fillers, Braille blank, zero-width combining marks) |
 | `ansi`                | ANSI/SGR escapes and other terminal control sequences                                                   |
 | `lone-surrogates`     | Unpaired UTF-16 surrogates                                                                              |
+| `html-comments`       | HTML comments (incl. bogus `<!…>`/`<?…?>` forms) spliced out by Layer 2, recoverable via `splices`      |
 | `hidden-html`         | Elements hidden via CSS/attribute (`display:none`, `hidden`, etc.) spliced out by Layer 2               |
 | `exfil-urls`          | Exfil-shaped URLs detected by Layer 3 (reported, not removed)                                           |
 

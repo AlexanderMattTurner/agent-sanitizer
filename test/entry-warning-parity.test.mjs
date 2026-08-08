@@ -31,12 +31,11 @@ import { LONE_SURROGATE_WARNING } from "../src/warnings.mjs";
 
 const BLOB = "A".repeat(44);
 
-// Inputs chosen to reach every Layer-2/3 warning branch: a hidden-element
-// splice, a preserved comment (no warning — parity on the silent path), a
-// preserved scripting tag, a preserved data: URI, one exfil reason, two
-// distinct exfil reasons, and a benign case.
+// Inputs chosen to reach every Layer-2/3 warning branch: a comment-only
+// splice, a hidden-element splice, a preserved scripting tag, a preserved
+// data: URI, one exfil reason, two distinct exfil reasons, and a benign case.
 const CASES = [
-  ["comment only (preserved, warning-free)", "a <!-- hi --> b"],
+  ["comment only (spliced, comment-count warning)", "a <!-- hi --> b"],
   ["hidden element", "a <span hidden>S</span> b"],
   ["comment + hidden", "a <!-- one --> b <span hidden>S</span> c"],
   ["preserved script", "see <script>x</script> source"],
@@ -93,10 +92,10 @@ describe("warning parity between sanitize() and sanitizeText()", () => {
       if (root.warnings.length + root.notes.length > 0) withWarnings++;
     }
     // Non-vacuity: an empty-vs-empty comparison proves nothing, so every case
-    // except the two deliberately silent ones ("comment only" — comments are
-    // preserved without a warning — and "benign html") must have warned.
+    // except the one deliberately silent one ("benign html") must have warned —
+    // a comments-only input warns again now that comments are spliced.
     assert.ok(
-      withWarnings >= CASES.length - 2,
+      withWarnings >= CASES.length - 1,
       `only ${withWarnings}/${CASES.length} cases produced any finding`,
     );
   });

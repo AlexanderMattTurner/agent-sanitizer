@@ -66,9 +66,8 @@ export {
  *
  * Always runs Layer 1 (invisible-char + ANSI stripping, lone-surrogate
  * normalization). When `html` is true, also lazy-loads the HTML layer to splice
- * out human-invisible HTML (hidden elements — Layer 2; comments pass through
- * verbatim) and detect data-exfil-shaped URLs (Layer 3); the heavy
- * remark/rehype dependency is only
+ * out human-invisible HTML (comments, hidden elements — Layer 2) and detect
+ * data-exfil-shaped URLs (Layer 3); the heavy remark/rehype dependency is only
  * imported on that path. The exfil scan runs on the pre-splice text so a beacon
  * URL hidden inside a `display:none` element is still reported, not buried by
  * its own removal.
@@ -85,23 +84,33 @@ export {
  *
  * The layer bodies live in `./output.mjs`; this is a facade over them, not a
  * second implementation (see the module doc). It narrows `sanitizeText`'s result
- * to the four fields this entry promises — `modified`/`sgrNote`
- * describe the tool-output pipeline's banner, and `reveal` is produced only by
- * options this facade does not expose. `html` selects Layers 2 AND 3 together
- * here, which is the surface this entry has always had; `sanitizeText` takes
- * them as separate flags for the tool-output pipeline, which needs Layer 3's
- * detection without Layer 2's splice.
+ * to the fields this entry promises — `modified`/`sgrNote` describe the
+ * tool-output pipeline's banner, and `reveal` is produced only by options this
+ * facade does not expose. `splices` IS passed through (present only when Layer 2
+ * spliced): the placeholder→original pairs a caller needs to rehydrate keyed
+ * Layer-2 placeholders — same field, same shape as `sanitizeText`'s, since this
+ * facade wraps the same layers (grammar in `./html.mjs`: `layer2Placeholder` /
+ * `LAYER2_PLACEHOLDER_RE`). `html` selects Layers 2 AND 3 together here, which
+ * is the surface this entry has always had; `sanitizeText` takes them as
+ * separate flags for the tool-output pipeline, which needs Layer 3's detection
+ * without Layer 2's splice.
  * @param {string} text
  * @param {{ html?: boolean } | null} [options]
- * @returns {Promise<{ cleaned: string, found: string[], warnings: string[], notes: string[] }>}
+ * @returns {Promise<{ cleaned: string, found: string[], warnings: string[], notes: string[], splices?: Array<{ placeholder: string, original: string }> }>}
  */
 export async function sanitize(text, options) {
   if (typeof text !== "string")
     throw new TypeError("sanitize(text, options): text must be a string");
   const { html = false } = options ?? {};
-  const { cleaned, found, warnings, notes } = await sanitizeText(text, {
-    html,
-    exfilScan: html,
-  });
-  return { cleaned, found, warnings, notes };
+  const { cleaned, found, warnings, notes, splices } = await sanitizeText(
+    text,
+    { html, exfilScan: html },
+  );
+  return {
+    cleaned,
+    found,
+    warnings,
+    notes,
+    ...(splices !== undefined && { splices }),
+  };
 }

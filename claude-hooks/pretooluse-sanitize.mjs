@@ -1,5 +1,5 @@
 /**
- * PreToolUse content-protection orchestrator. Runs four layers in ONE process:
+ * PreToolUse content-protection orchestrator. Runs five layers in ONE process:
  *
  *   1. Invisible-char injection gate (lib/invisible-alert.mjs)
  *   2. Confusable/homoglyph normalization of paths & commands
@@ -8,6 +8,9 @@
  *      (lib/authored-content.mjs)
  *   4. Rehydration of secret-redaction placeholders in Edit/Write inputs
  *      (agent-sanitizer/rehydrate, redactor-daemon io injected)
+ *   5. Rehydration of keyed Layer-2 splice placeholders in Edit/Write inputs
+ *      ({@link rehydrateLayer2}, span store in lib/reveal.mjs) — disjoint
+ *      grammar from step 4, run after it
  *
  * WHY ONE PROCESS: Claude Code runs PreToolUse hooks in parallel and does NOT
  * chain their `updatedInput` — each hook sees the original input and the last to
@@ -55,7 +58,13 @@ import {
 } from "./lib/authored-content.mjs";
 import { redactViaDaemon } from "./lib/redactor-client.mjs";
 import { withSecretDropGuard } from "./lib/secret-drop-guard.mjs";
-import { placeholderNotice } from "./lib/placeholder-grammar.mjs";
+import {
+  placeholderNotice,
+  layer2PlaceholderNotice,
+  layer2Keys,
+  LAYER2_PLACEHOLDER_RE,
+} from "./lib/placeholder-grammar.mjs";
+import { readSpan, spanPath } from "./lib/reveal.mjs";
 import { bestEffortTrace, trace, TraceEvent } from "./lib/trace.mjs";
 
 const HOOK_NAME = "pretooluse-sanitize";
@@ -105,6 +114,14 @@ const { rehydrateRedacted } =
   /** @type {typeof import("agent-sanitizer/rehydrate")} */ (
     await lazyImport("agent-sanitizer/rehydrate")
   );
+// The one sound multi-needle splice primitive (see its doc in the engine): the
+// Layer-2 rehydrator below substitutes every keyed placeholder in one ordered
+// pass, so a stored original whose bytes happen to contain another placeholder
+// is never re-matched and re-expanded.
+const { spliceOrdered } =
+  /** @type {typeof import("agent-sanitizer/view-map")} */ (
+    await lazyImport("agent-sanitizer/view-map")
+  );
 
 // Injection seams binding the peer dependencies into the provider-agnostic
 // package functions. namespace-guard (the confusable vision map) and the
@@ -151,6 +168,130 @@ const defaultRehydrate = withSecretDropGuard(
   (tool, toolInput) => rehydrateRedacted(tool, toolInput, redactorIo),
   redactorIo,
 );
+
+/**
+ * Substitute every keyed Layer-2 placeholder in `text` with the stored original
+ * from the reveal store's span files, in ONE ordered pass (spliceOrdered).
+ * A key with NO stored span fails CLOSED — the placeholder stands for real
+ * content this store cannot produce, so writing it through literally would
+ * silently persist the loss the keyed grammar exists to prevent.
+ * @param {string} text
+ * @param {string} field the tool-input field being rehydrated, for the deny prose
+ * @returns {{ text: string, restored: number } | { deny: string } | null}
+ */
+function substituteLayer2(text, field) {
+  const matches = [...text.matchAll(LAYER2_PLACEHOLDER_RE)].map((match) => ({
+    text: match[0],
+    index: /** @type {number} */ (match.index),
+    key: match[1],
+  }));
+  if (matches.length === 0) return null;
+  /** @type {Map<string, string>} */
+  const byKey = new Map();
+  /** @type {string[]} */
+  const missing = [];
+  for (const key of new Set(matches.map((match) => match.key))) {
+    const stored = readSpan(key);
+    if (stored === null) missing.push(key);
+    else byKey.set(key, stored);
+  }
+  if (missing.length > 0)
+    return {
+      deny:
+        `${field} contains Layer-2 removed-content placeholder(s) whose original is not ` +
+        `in the span store (missing key(s): ${missing.join(", ")}; expected file(s): ` +
+        `${missing.map((key) => spanPath(key)).join(", ")}), so the removed content ` +
+        `cannot be restored automatically. Reconstruct that content yourself, ` +
+        `deliberately drop the placeholder(s) if the removed content should stay ` +
+        `removed, or ask the user to make this change`,
+    };
+  // `i` is the match's index in `matches` (stable across spliceOrdered's
+  // overlap skips — impossible here, distinct non-overlapping literals), so the
+  // key rides positionally.
+  const spliced = spliceOrdered(
+    text,
+    matches,
+    (_match, i) => /** @type {string} */ (byKey.get(matches[i].key)),
+  );
+  return { text: spliced.text, restored: matches.length };
+}
+
+/**
+ * Layer-2 placeholder rehydration on the write path: an Edit `new_string` or a
+ * Write `content` carrying `[hidden HTML removed #<key>]` / `[HTML comment
+ * removed #<key>]` placeholders (copied from sanitized tool output) has each
+ * one restored to the stored original bytes from the reveal store's span files.
+ *
+ * SECURITY invariant: the stored span content was REDACTED before persistence
+ * (sanitize-output runs strict web-ingress redaction on each splice original
+ * before persistSpan), so this rehydration can never write a raw secret — the
+ * worst it can restore is `[REDACTED…]` placeholder text standing where the
+ * secret was, which the on-disk tripwire then flags on later Reads.
+ *
+ * Composition with the secret rehydrator: this runs AFTER it (a later terminal
+ * layer), and the two grammars are disjoint — a Layer-2 placeholder never
+ * matches the `[REDACTED…]` grammar and vice versa — so neither can touch the
+ * other's tokens. Running second also means a restored original that contains
+ * `[REDACTED…]` text is never re-fed to the secret resolver (which would deny
+ * it as a foreign placeholder).
+ *
+ * `old_string` is deliberately NOT rehydrated: a Layer-2 placeholder there
+ * exists in the model's view of PRIOR TOOL OUTPUT, not on disk, so unless the
+ * file literally contains the placeholder text, Edit's ordinary no-match
+ * failure is the right outcome — no re-anchoring. MultiEdit/NotebookEdit with a
+ * Layer-2 placeholder are denied (parity with the secret path: sequential
+ * edits / notebook JSON cannot be rehydrated).
+ * @param {string} tool
+ * @param {any} toolInput
+ * @returns {{ updatedInput: any, context: string } | { deny: string } | null}
+ */
+export function rehydrateLayer2(tool, toolInput) {
+  const hasL2 = (/** @type {unknown} */ text) =>
+    typeof text === "string" && layer2Keys(text).length > 0;
+  if (
+    tool === "MultiEdit" &&
+    Array.isArray(toolInput?.edits) &&
+    toolInput.edits.some(
+      (/** @type {any} */ edit) =>
+        hasL2(edit?.old_string) || hasL2(edit?.new_string),
+    )
+  )
+    return {
+      deny:
+        `the edits carry [hidden HTML removed #…]/[HTML comment removed #…] ` +
+        `placeholders, which stand for content spliced out of earlier tool output; ` +
+        `MultiEdit's sequential edits cannot be rehydrated. Use single Edit calls — ` +
+        `each restores the stored original individually — or ask the user to make ` +
+        `this change`,
+    };
+  if (tool === "NotebookEdit" && hasL2(toolInput?.new_source))
+    return {
+      deny:
+        `new_source contains a [hidden HTML removed #…]/[HTML comment removed #…] ` +
+        `placeholder, which stands for content spliced out of earlier tool output; ` +
+        `rehydration is not supported for notebooks. Reconstruct the content, ` +
+        `deliberately drop the placeholder if the removed content should stay ` +
+        `removed, or ask the user to edit the cell`,
+    };
+  /** @type {"new_string" | "content" | null} */
+  const field =
+    tool === "Edit" && typeof toolInput?.new_string === "string"
+      ? "new_string"
+      : tool === "Write" && typeof toolInput?.content === "string"
+        ? "content"
+        : null;
+  if (field === null) return null;
+  const result = substituteLayer2(toolInput[field], field);
+  if (result === null) return null;
+  if ("deny" in result) return result;
+  return {
+    updatedInput: { ...toolInput, [field]: result.text },
+    context:
+      `${result.restored} Layer-2 removed-content placeholder(s) in ${field} ` +
+      `were restored to the stored original content (secrets inside were ` +
+      `redacted before storage, so no raw secret is written).`,
+  };
+}
 
 /**
  * Trace the response on the way out — "noop" (clean pass-through), "deny",
@@ -245,6 +386,17 @@ export function preToolUseLayers(rehydrate, env = process.env) {
         };
       },
     },
+    {
+      name: "layer2-rehydrate",
+      erases: true,
+      skipBased: false,
+      // Terminal, AFTER the secret rehydrator: the grammars are disjoint (see
+      // rehydrateLayer2's doc), and the stored bytes it restores — which may
+      // legitimately contain [REDACTED…] text — must not be re-fed to the
+      // secret resolver or re-stripped by an earlier layer.
+      terminal: true,
+      run: (tool, toolInput) => rehydrateLayer2(tool, toolInput),
+    },
   ];
   return env.AGENT_SANITIZER_OUTPUT_DISABLED === "1"
     ? layers.filter((layer) => layer.name !== "authored-content")
@@ -314,6 +466,11 @@ export async function buildPreToolUseResponse(
   // what the tool will actually receive.
   const notice = placeholderNotice(tool, current);
   if (notice !== null) contexts.push(notice);
+  // Same advisory for keyed Layer-2 splice placeholders (disjoint grammar, own
+  // store): a Bash/MCP write path would persist them literally too, and the
+  // note names the span file(s) where the original bytes live.
+  const layer2Notice = layer2PlaceholderNotice(tool, current);
+  if (layer2Notice !== null) contexts.push(layer2Notice);
 
   return emitTraced(
     emitTrace,
