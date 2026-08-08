@@ -22,31 +22,67 @@
  * unbalanced quotes, template segments, shadowed bindings — and each gap it
  * develops silently narrows the partition assertions that depend on it.
  */
-import { execFileSync } from "node:child_process";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { dirname, extname, join, normalize, relative, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { parse } from "acorn";
 
-const repoRoot = execFileSync("git", ["rev-parse", "--show-toplevel"], {
-  encoding: "utf8",
-}).trim();
+const repoRoot = dirname(dirname(fileURLToPath(import.meta.url)));
 
 const { pairs } = JSON.parse(
   readFileSync(join(repoRoot, ".hooks", "guard-pairs.json"), "utf8"),
 );
 
-const tracked = new Set(
-  execFileSync("git", ["ls-files"], {
-    cwd: repoRoot,
-    encoding: "utf8",
-    maxBuffer: 64 * 1024 * 1024,
-  })
-    .split("\n")
-    .filter(Boolean),
-);
+/**
+ * Directories the file walk below never descends into: dependency trees, build
+ * output, and the sandbox/worktree copies of the repo that would otherwise be
+ * enumerated a second time. Every entry is `.gitignore`d, so the walk lists the
+ * same files `git ls-files` does for the extensions this scan cares about.
+ */
+const SKIP_DIRS = new Set([
+  ".git",
+  ".idea",
+  ".local",
+  ".pnpm-store",
+  ".stryker-tmp",
+  ".uv",
+  ".venv",
+  ".vscode",
+  ".worktrees",
+  "__pycache__",
+  "_bundled",
+  "coverage",
+  "node_modules",
+  "reports",
+  "types",
+  "worktrees",
+]);
+
+/**
+ * Every file in the checkout, repo-relative.
+ *
+ * Deliberately NOT `git ls-files`: Stryker's sandbox is a copy of the repo with
+ * no `.git`, so a test that shells out to git there fails during the dry run and
+ * takes every mutation shard down with it. Enumerating the tree keeps this test
+ * runnable wherever its own files are.
+ */
+function listFiles(dir = "", out = []) {
+  const entries = readdirSync(join(repoRoot, dir), { withFileTypes: true });
+  for (const entry of entries.sort((a, b) => a.name.localeCompare(b.name))) {
+    const path = dir ? `${dir}/${entry.name}` : entry.name;
+    // Checked before the type test: in a linked worktree `.git` is a FILE.
+    if (SKIP_DIRS.has(entry.name)) continue;
+    if (entry.isDirectory()) listFiles(path, out);
+    // Symlinks are neither followed nor listed: nothing this scan resolves is
+    // one, and following them risks walking back into a skipped tree.
+    else if (entry.isFile()) out.push(path);
+  }
+  return out;
+}
+
+const tracked = new Set(listFiles());
 
 /**
  * Scanned data paths deliberately kept OUT of the pair map, with the reason.
