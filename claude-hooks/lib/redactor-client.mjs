@@ -18,6 +18,7 @@
  * daemon could not vet input.
  */
 import { spawn } from "node:child_process";
+import { excludeProvisioning } from "./hook-timing.mjs";
 import { existsSync, lstatSync } from "node:fs";
 import { createConnection } from "node:net";
 import { tmpdir, userInfo } from "node:os";
@@ -422,7 +423,7 @@ function canConnect(socketPath) {
  * @param {{map?: boolean, webIngress?: boolean, socketPath?: string,
  *   deadline?: {remainingMs: () => number},
  *   connect?: typeof connectAndRequest, spawn?: typeof spawnDaemon,
- *   waitForSocket?: typeof waitForSocket}} [opts]
+ *   waitForSocket?: typeof waitForSocket, now?: () => number}} [opts]
  * @returns {Promise<RedactResponse|null>}
  */
 export async function redactViaDaemon(text, opts = {}) {
@@ -434,6 +435,10 @@ export async function redactViaDaemon(text, opts = {}) {
     connect = connectAndRequest,
     spawn: spawnFn = spawnDaemon,
     waitForSocket: waitFn = waitForSocket,
+    // The clock the provisioning charge is measured on; injectable alongside the
+    // waitForSocket seam it brackets, since a stubbed wait advances a test clock
+    // rather than real time.
+    now = Date.now,
   } = opts;
   // Remaining shared budget in ms, or undefined when no budget was threaded (the
   // standalone default). Re-read per step so the respawn path cannot overshoot.
@@ -502,7 +507,11 @@ export async function redactViaDaemon(text, opts = {}) {
       budgetMs === undefined
         ? undefined
         : { deadlineMs: Math.min(WAIT_DEADLINE_MS, budgetMs) };
-    if (!(await waitFn(socketPath, waitOpts)))
+    // The cold-start wait is PROVISIONING — a one-time detect-secrets import and
+    // plugin prime (~1-3s, see WAIT_DEADLINE_MS), paid by whichever tool call
+    // happens to be first and by no other. Charging it to this hook would make
+    // the slow-hook notice fire once per session on a healthy install.
+    if (!(await excludeProvisioning(() => waitFn(socketPath, waitOpts), now)))
       throw failClosed(
         new Error(`redactor daemon did not start within ${WAIT_DEADLINE_MS}ms`),
       );

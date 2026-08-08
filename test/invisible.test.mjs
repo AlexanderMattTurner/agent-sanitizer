@@ -1733,6 +1733,20 @@ const adversarialText = fc
   .array(adversarialChar, { maxLength: 80 })
   .map((parts) => parts.join(""));
 
+// The two anchored blank fillers the strip carve-out can leave behind (see
+// isPreservedBlankFiller in src/invisible.mjs). Restated rather than imported —
+// they are module-private there — so the membership assertion below ties them
+// back to the exported BLANK_NON_CF set and fails loudly if src drops one.
+const BRAILLE_BLANK = 0x2800;
+const HANGUL_FILLERS = new Set([0x115f, 0x1160, 0x3164, 0xffa0]);
+it("the anchored blank fillers are all still blank-class in src", () => {
+  for (const code of [BRAILLE_BLANK, ...HANGUL_FILLERS])
+    assert.ok(
+      BLANK_NON_CF.includes(cp(code)),
+      `U+${code.toString(16)} is no longer in BLANK_NON_CF`,
+    );
+});
+
 describe("property: stripInvisible invariants", () => {
   it("never throws on lone surrogates / astral input", () => {
     fc.assert(
@@ -1809,8 +1823,20 @@ describe("property: stripInvisible invariants", () => {
         // After stripping, the only STRIP-class chars left must be ZWNJ/ZWJ
         // (carve-out), a presentation selector kept on a pictograph/modifier
         // base (the carve-out preserves VS15/VS16 directly after one — 🏻︎ is
-        // a visible glyph, not a hidden selector run), or a single leading BOM.
+        // a visible glyph, not a hidden selector run), a blank filler anchored
+        // by a script-appropriate visible neighbour (an empty Braille cell, an
+        // archaic-Hangul filler), or a single leading BOM.
         const selectorBase = /^[\p{Extended_Pictographic}\p{Emoji_Modifier}]$/u;
+        // Both filler classes and both anchor scripts are entirely BMP, so a
+        // single UTF-16 unit either side is the whole neighbouring code point.
+        const brailleAnchor = (unit) =>
+          Boolean(unit) &&
+          unit.codePointAt(0) !== BRAILLE_BLANK &&
+          /\p{Script=Braille}/u.test(unit);
+        const hangulAnchor = (unit) =>
+          Boolean(unit) &&
+          !HANGUL_FILLERS.has(/** @type {number} */ (unit.codePointAt(0))) &&
+          /\p{Script=Hangul}/u.test(unit);
         for (let i = 0; i < cleaned.length; i++) {
           const ch = cleaned[i];
           STRIP.lastIndex = 0;
@@ -1824,10 +1850,16 @@ describe("property: stripInvisible invariants", () => {
             (code === 0xfe0e || code === 0xfe0f) &&
             i > 0 &&
             selectorBase.test(cleaned.slice(baseStart, i));
+          const keptFiller =
+            code === BRAILLE_BLANK
+              ? brailleAnchor(cleaned[i - 1]) || brailleAnchor(cleaned[i + 1])
+              : HANGUL_FILLERS.has(code) &&
+                (hangulAnchor(cleaned[i - 1]) || hangulAnchor(cleaned[i + 1]));
           const ok =
             code === 0x200c ||
             code === 0x200d ||
             keptSelector ||
+            keptFiller ||
             (code === 0xfeff && i === 0);
           assert.ok(ok, `unexpected residual invisible U+${code.toString(16)}`);
         }

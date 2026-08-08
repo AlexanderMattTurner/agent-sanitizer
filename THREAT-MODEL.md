@@ -50,9 +50,18 @@ visible text; a final unconditional sweep after the loop keeps the
 no-raw-introducer guarantee independent of the iteration bound. The result
 carries no raw ANSI introducer for _any_ input, and re-cleaning it reproduces
 it exactly—the idempotence the Edit-repair rehydrator's soundness gate assumes.
-One tokenizer answers every ANSI question (what to splice, and whether the only
-escape content is display-only SGR colour), so the stripper and the operator
-warning cannot disagree about what a sequence is. OSC strings (titles,
+One tokenizer answers every ANSI question (what to splice, and whether what was
+removed was INERT—display-only SGR colour, or a lone 7-bit `ESC` that opened
+nothing at all), so the stripper and the operator warning cannot disagree about
+what a sequence is. That inert/injection-shaped split is what keeps the warning
+worth reading: a stray `ESC` sitting in a file is reported as a terse note, while
+a cursor move, an erase, an OSC string, or a raw C1 introducer (which no
+legitimate UTF-8 text carries, and which includes the DCS/SOS/PM/APC string
+introducers) keeps the WARNING. An `ESC` that _opened_ a CSI it never completed
+stays loud too: a terminal's CSI parser is stateful and keeps consuming what
+follows until a final byte arrives, so `ESC[12 world` shows the human `orld`
+while the model reads every word—the same model-sees/human-sees divergence a
+complete sequence buys. OSC strings (titles,
 clickable-hyperlink URLs) are consumed as a
 whole, for every terminator form—ST (`ESC\` or 8-bit C1 ST U+009C) and the
 legacy BEL—and for the 8-bit C1 OSC introducer (U+009D); an _unterminated_ OSC
@@ -164,13 +173,15 @@ if a contaminated file cannot be rewritten.
 `./prompt` classifies a submitted prompt as **pass / pass-with-note / block** on
 payload-capable invisible Unicode and ANSI. A prompt-submission channel usually
 cannot rewrite the prompt in place, so the only neutralization is to block.
-One carve-out: a prompt whose only escape content is display-only SGR color
-passes with a note (pasting colored terminal output is the common case, and SGR
-cannot move the cursor, erase, or carry an OSC payload). The SGR-only test
-gates on both the 7-bit ESC (`U+001B`) introducer and the whole 8-bit C1
-control block (U+0080–U+009F)—not just the CSI byte (`U+009B`)—so a
-C1-introduced cursor-move, erase, or OSC/DCS/SOS/PM/APC string is never
-mistaken for benign color.
+One carve-out: a prompt whose only escape content is INERT passes with a note —
+display-only SGR color, and/or a 7-bit `ESC` that completes no sequence (a log
+line cut mid-escape). Pasting colored terminal output is the common case, and
+neither form can move the cursor, erase, or carry an OSC payload. The test gates
+on both the 7-bit ESC (`U+001B`) introducer and the whole 8-bit C1 control block
+(U+0080–U+009F)—not just the CSI byte (`U+009B`)—so a C1-introduced cursor-move,
+erase, or OSC/DCS/SOS/PM/APC string is never mistaken for benign color; and it
+judges from what the Layer-1 strip actually removed, so a sequence that only
+RECONSTITUTES during stripping is judged as the sequence it becomes.
 
 ## Tool-output pipeline & Layer 5
 

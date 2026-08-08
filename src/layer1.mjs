@@ -13,7 +13,13 @@
  * point where a lone surrogate would otherwise corrupt a match or a parse.
  */
 import { stripInvisibleWithReport, CATEGORY } from "./invisible.mjs";
-import { CONTROL_INTRODUCER_SOURCE, scanAnsi, TOKEN_KIND } from "./ansi.mjs";
+import {
+  CONTROL_INTRODUCER_SOURCE,
+  isOrphanKind,
+  orphanKindFor,
+  scanAnsi,
+  TOKEN_KIND,
+} from "./ansi.mjs";
 
 // The ANSI grammar and the introducer charset live in ./ansi.mjs so this module
 // and invisible.mjs (which owns the public isSgrOnly / SGR_RE and cannot import
@@ -23,6 +29,23 @@ import { CONTROL_INTRODUCER_SOURCE, scanAnsi, TOKEN_KIND } from "./ansi.mjs";
 // it. This — not the sequence matching — is the guarantee that no introducer
 // survives Layer 1.
 const CONTROL_INTRODUCER_RE = new RegExp(CONTROL_INTRODUCER_SOURCE, "g");
+
+/**
+ * Run the residual sweep, recording the orphan kind of every introducer it
+ * removes. The sweep sees bare characters rather than tokens, so the kind comes
+ * from {@link orphanKindFor} — the same decision the tokenizer makes, not a
+ * second spelling of it — fed the following character from the text being
+ * swept, which is the context a terminal reading this introducer would have.
+ * @param {string} text
+ * @param {Set<string>} kinds
+ * @returns {string}
+ */
+function sweepIntroducers(text, kinds) {
+  return text.replace(CONTROL_INTRODUCER_RE, (ch, offset) => {
+    kinds.add(orphanKindFor(ch, text[offset + 1]));
+    return "";
+  });
+}
 
 // Unpaired UTF-16 surrogates (high not followed by low, or low not preceded by
 // high). Normalized before any HTML parser, which throws on a stray byte —
@@ -41,13 +64,18 @@ const MAX_ANSI_PASSES = 3;
  * view. Orphans are removed by applyLayer1's residual sweep, once no
  * reconstitution is possible.
  * @param {string} text
+ * @param {Set<string>} [kinds]  collects the {@link TOKEN_KIND} of every
+ *   sequence this pass actually removed, so a caller can tell a display-only
+ *   colour strip from a cursor/erase/OSC one without re-scanning (see
+ *   {@link isBenignAnsiKinds}).
  * @returns {string}
  */
-function stripAnsiOnce(text) {
+function stripAnsiOnce(text, kinds) {
   let out = "";
   let last = 0;
   for (const token of scanAnsi(text)) {
-    if (token.kind === TOKEN_KIND.ORPHAN) continue;
+    if (isOrphanKind(token.kind)) continue;
+    kinds?.add(token.kind);
     out += text.slice(last, token.start);
     last = token.end;
   }
@@ -68,16 +96,69 @@ function stripAnsiOnce(text) {
  * survives here. Past the bound a reconstituted sequence therefore degrades to
  * VISIBLE text rather than a hidden control, which is the fail-open direction.
  * @param {string} input
+ * @param {Set<string>} [kinds]  see {@link stripAnsiOnce}; accumulates across passes
  * @returns {string}
  */
-export function stripAnsiFully(input) {
+export function stripAnsiFully(input, kinds) {
   let prev = input;
-  let out = stripAnsiOnce(prev);
+  let out = stripAnsiOnce(prev, kinds);
   for (let pass = 1; pass < MAX_ANSI_PASSES && out !== prev; pass++) {
     prev = out;
-    out = stripAnsiOnce(prev);
+    out = stripAnsiOnce(prev, kinds);
   }
   return out;
+}
+
+/**
+ * True when the ANSI a Layer-1 strip removed was INERT: every removed sequence
+ * was either a display-only SGR colour token or a LONE 7-bit `ESC` that opened
+ * nothing at all (a stray byte in a file, a truncated write, a log fragment cut
+ * mid-escape).
+ *
+ * The two other orphan kinds are deliberately NOT inert. A raw C1 orphan
+ * (TOKEN_KIND.ORPHAN_C1): legit UTF-8 text does not carry raw C1 bytes, and the
+ * block holds the DCS/SOS/PM/APC string introducers this grammar does not
+ * consume — so an unrecognized one means a terminal would have eaten the
+ * following text as a control payload. An incomplete CSI (TOKEN_KIND.ORPHAN_CSI)
+ * for the same reason at 7 bits: the CSI parser keeps consuming until a final
+ * byte, so `hello ESC[12 world` hides ` w` from the human while the model reads
+ * the whole prompt.
+ *
+ * This draws a severity line, not a presence line: the bytes are stripped
+ * either way, so all that rides on the answer is whether the operator sees a
+ * WARNING or a terse note. An orphan introducer cannot move the cursor, erase
+ * the screen, relabel a window, or open an OSC string — every one of those needs
+ * a COMPLETE token, which {@link scanAnsi} classifies as CSI or OSC and this
+ * rejects. Warning on a lone `ESC` is the false positive that costs the most: one
+ * pre-existing `ESC` in a markdown file, echoed back in an Edit result, raises
+ * the same alarm as a cursor-spoofing payload, and an alarm that fires on inert
+ * bytes is the one operators learn to scroll past.
+ *
+ * It takes the kinds the STRIP recorded, never a fresh scan of the raw text,
+ * and that is the whole point: a scan of the raw text answers about sequences
+ * that have not been reconstituted yet, so `ESC` + `ESC[m` + `[2J` (a bare ESC,
+ * an SGR, then plain text) reads as orphan-only there while the strip's second
+ * pass actually removes a CSI erase. Recording what each pass removed reports
+ * the sequences that really existed at Layer 1's fixed point.
+ * @param {readonly string[] | Set<string>} kinds  {@link TOKEN_KIND} values removed
+ * @returns {boolean}
+ */
+export function isBenignAnsiKinds(kinds) {
+  return [...kinds].every(
+    (kind) => kind === TOKEN_KIND.SGR || kind === TOKEN_KIND.ORPHAN,
+  );
+}
+
+/**
+ * {@link isBenignAnsiKinds} for callers that hold only the text — it runs the
+ * full Layer-1 composition to get the fixed-point view. Callers that already
+ * ran {@link applyLayer1} must read its `ansiKinds` instead of paying for a
+ * second strip.
+ * @param {string} text
+ * @returns {boolean}
+ */
+export function isBenignAnsi(text) {
+  return isBenignAnsiKinds(applyLayer1(text).ansiKinds);
 }
 
 // How many times the {ANSI strip, invisible strip} composition may re-run before
@@ -119,19 +200,25 @@ const MAX_LAYER1_PASSES = 4;
  *
  * `deAnsi` is the ANSI strip of the ORIGINAL text (invisible runs intact), the
  * scope a LONG_RUN payload check needs — not an intermediate of the loop.
+ *
+ * `ansiKinds` is the {@link TOKEN_KIND} of every ANSI sequence the composition
+ * removed, deduped — the severity detail `found`'s single ANSI category cannot
+ * carry (see {@link isBenignAnsiKinds}). It is also what DERIVES that category:
+ * a kind is recorded exactly when bytes were removed, so "we reported ANSI" and
+ * "here is what the ANSI was" can no longer disagree.
  * @param {string} text
- * @returns {{ cleaned: string, deAnsi: string, found: string[] }}
+ * @returns {{ cleaned: string, deAnsi: string, found: string[], ansiKinds: string[] }}
  */
 export function applyLayer1(text) {
-  const deAnsi = stripAnsiFully(text);
+  /** @type {Set<string>} TOKEN_KINDs removed by every ANSI pass below. */
+  const ansiKinds = new Set();
+  const deAnsi = stripAnsiFully(text, ansiKinds);
   /** @type {Set<string>} Union of the categories every iteration reported. */
   const found = new Set();
   let cleaned = text;
-  let ansiFound = false;
 
   for (let pass = 0; pass < MAX_LAYER1_PASSES; pass++) {
-    const afterAnsi = pass === 0 ? deAnsi : stripAnsiFully(cleaned);
-    if (afterAnsi !== cleaned) ansiFound = true;
+    const afterAnsi = pass === 0 ? deAnsi : stripAnsiFully(cleaned, ansiKinds);
     // stripInvisibleWithReport returns `found` for exactly the categories it
     // removed — so a ZWNJ/ZWJ the carve-out PRESERVES never registers as a
     // strip. The second argument stays the ORIGINAL `text` on every iteration:
@@ -152,18 +239,16 @@ export function applyLayer1(text) {
     // pass. A sweep that changes the text feeds one more round (removing an
     // introducer can make invisibles adjacent, exactly as removing a sequence
     // can); one that changes nothing means the whole composition has converged.
-    const swept = cleaned.replace(CONTROL_INTRODUCER_RE, "");
+    const swept = sweepIntroducers(cleaned, ansiKinds);
     if (swept === cleaned) break;
     cleaned = swept;
-    ansiFound = true;
   }
 
-  const swept = cleaned.replace(CONTROL_INTRODUCER_RE, "");
-  if (swept !== cleaned) {
-    cleaned = swept;
-    ansiFound = true;
-  }
+  cleaned = sweepIntroducers(cleaned, ansiKinds);
 
-  if (ansiFound) found.add(CATEGORY.ANSI);
-  return { cleaned, deAnsi, found: [...found] };
+  // Derived, not tracked in parallel: a kind is recorded exactly when an ANSI
+  // pass or the sweep removed bytes, so the category and the severity detail
+  // are two readings of one fact.
+  if (ansiKinds.size > 0) found.add(CATEGORY.ANSI);
+  return { cleaned, deAnsi, found: [...found], ansiKinds: [...ansiKinds] };
 }
