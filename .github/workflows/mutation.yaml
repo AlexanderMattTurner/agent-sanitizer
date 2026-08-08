@@ -5,7 +5,11 @@ on:
     branches: ["main"]
     paths:
       - "src/**/*.mjs"
+      - "claude-hooks/**/*.mjs"
+      - "bin/**/*.mjs"
       - "test/**/*.mjs"
+      - "scripts/shipped-sources.mjs"
+      - "scripts/mutate.mjs"
       - "stryker.conf.json"
       - "package.json"
       - "pnpm-lock.yaml"
@@ -68,11 +72,11 @@ jobs:
         # aggregate gate calls the same expander so their shard counts match.
         run: echo "shards=$(node .github/scripts/expand-shards.mjs)" >> "$GITHUB_OUTPUT"
 
-  # The ~2473 mutants are split into disjoint slices (line ranges for the big
-  # files, whole files for the rest) so the slices run in parallel across
-  # runners. Each shard runs Stryker incrementally with the break threshold
-  # disabled and uploads its JSON report; the aggregate job sums them into the
-  # real, project-wide score and applies the gate.
+  # Every SHIPPED .mjs — src/, claude-hooks/ and bin/ alike — is split into
+  # disjoint slices (line ranges for the big files, whole files for the rest) so
+  # the slices run in parallel across runners. Each shard runs Stryker
+  # incrementally with the break threshold disabled and uploads its JSON report;
+  # the aggregate job scores each gated scope and applies its threshold.
   mutation:
     needs: changes
     if: needs.changes.outputs.run == 'true'
