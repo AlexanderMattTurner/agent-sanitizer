@@ -8,6 +8,20 @@ adhere to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+## [2.26.3] - 2026-08-08
+
+### Added
+- Added threat model documentation with dedicated Layer 4 section detailing security boundaries.
+- Added comprehensive Python floor provisioning tests and reporting for operator clarity.
+- Added partition guards for self-referential GitHub URLs across the codebase.
+
+### Changed
+- Updated README.md to reflect the real claude-hooks exports surface and maintain consistency with package mapping.
+- Made release-age exclusion version-less in pnpm configuration to prevent staleness.
+
+### Fixed
+- Fixed plugin provisioning to report the accurate Python floor version to operators when provisioning fails.
+
 ## [2.26.2] - 2026-08-08
 
 ### Fixed
