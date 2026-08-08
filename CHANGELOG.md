@@ -8,6 +8,167 @@ adhere to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+## [2.24.0] - 2026-08-08
+
+### Added
+
+- Hook timing budget warnings: hooks that exceed their one-second budget now trigger a warning to help identify performance issues.
+- Hook scan scope optimization: scanning now focuses only on `.claude` subdirectories loaded as context, improving performance.
+
+### Fixed
+
+- Incomplete CSI sequences in ANSI processing are now logged as notices instead of warnings, reducing spurious alerts.
+- One-time provisioning is excluded from slow-hook timer measurements to avoid skewing performance metrics.
+- Anchored blank fillers in invisible character carve-outs are now correctly handled during testing and validation.
+
+## [2.23.2] - 2026-08-08
+
+### Fixed
+
+- Budget preserved blank fillers per script, not pooled
+- Stop clipping word spaces out of long Braille and Korean text
+
+## [2.23.1] - 2026-08-08
+
+### Security
+- Enforce a 3-day minimum release age on dependencies to reduce supply-chain risks.
+
+## [2.23.0] - 2026-08-08
+
+### Added
+- Guard redaction placeholders against clobbering outside the Edit/Write path in the rehydrate module.
+- Automated daily engine pin bumping via CI workflow.
+
+### Fixed
+- Hardened placeholder-clobber guards from review findings.
+
+## [2.21.1] - 2026-08-08
+
+### Fixed
+
+- **guard-pairs**: Enumerate the syntax tree directly instead of shelling out to git, improving performance and reliability.
+
+### Changed
+
+- **guard-pairs**: Resolve guarded data using acorn parser instead of regex parsing for more accurate analysis.
+- **guard-pairs**: Drop the ambiguity-ban pass cap to prevent stale bindings.
+- **guard-pairs**: Remove the unreachable import-cycle stack guard and simplify the guard detection logic.
+
+## [2.21.0] - 2026-08-08
+
+### Changed
+
+- Refactored layer implementation: Layers 1-3 are now implemented once internally, with sanitize operating as a facade over the unified implementation.
+
+## [2.20.2] - 2026-08-08
+
+### Changed
+
+- Bumped pinned sanitizer engine to 2.20.0
+
+## [2.20.0] - 2026-08-08
+
+### Changed
+- CI now enforces reachability of all `.github/scripts` files, surfacing abandoned scripts and clearing the backlog.
+- Node dependencies are installed before pre-commit checks to enable proto-pollution linting.
+
+### Fixed
+- CI now discovers `.github/scripts` test suites automatically instead of requiring manual listing.
+- Restored and structurally guarded the `claude-run` action's credential ladder.
+
+## [2.19.8] - 2026-08-08
+
+### Fixed
+
+- Fixed code coverage annotations in view-map to properly exclude guard branches.
+- Restored safety guard assertions in view-map that were previously replaced with unsafe casts.
+- Consolidated duplicated warning prose in HTML output generation.
+- Corrected Brahmic consonant detection by deriving tables directly from Unicode Character Database.
+- Fixed guard-pair naming to support both pytest and Node.js test frameworks.
+- Corrected file view construction in rehydrate module through branded carrier type.
+- Fixed lone surrogate handling in output redactor and sanitizer to normalize surrogates consistently across all code paths.
+- Ensured comprehensive string vetting in sanitizer return values and cached subtree reuse.
+- Aligned warning messages across both Layer-2 and Layer-3 entry points.
+
+### Changed
+
+- Improved test daemon lifecycle to wait for active listening rather than just socket file existence.
+
+## [2.19.6] - 2026-08-08
+
+### Fixed
+- HTML parser now correctly routes bare indented code blocks to the markdown branch.
+- HTML-vs-markdown detection now uses the real tokenizer instead of a heuristic tag-line ratio for more accurate parsing.
+- Python wheel CLI bundle is now self-contained.
+- Secrets redaction no longer targets public endpoints; placeholder language support has been closed.
+
+### Changed
+- Test corpus enumeration for HTML now walks the tree instead of using git ls-files.
+
+## [2.19.4] - 2026-08-08
+
+### Fixed
+- Fixed invisible character processing to judge each cluster's preserve caps on the run its own leading gap resets, and to derive Unicode script gates and charge the preserve budget per grapheme cluster.
+- Fixed output layer to ignore non-string Layer-5 spans instead of hanging, and prevent Layer-5 span deletion from creating later span matches.
+- Fixed hooks to report unreadable instruction files instead of discarding the scan, and close the confusable-fold ordering gap with unified failure posture.
+- Fixed layer 1 ANSI/invisible strip iteration to a fixed point.
+- Fixed HTML styling to read uppercase and escaped CSS units so hidden styles cannot be spelled past Layer 2.
+
+### Changed
+- Collapsed needle-splice implementations in view-map into one primitive.
+- Dropped unused ANSI tokenizer re-export from layer1.
+
+### Added
+- Added comprehensive test coverage for layer pipeline, posture handling, scan coverage, HTML styling, layer 1 ANSI processing, and Unicode invisible character tables.
+
+## [2.19.2] - 2026-08-08
+
+### Fixed
+
+- Fixed reading of pristine hook sources in the lazyImport registry contract.
+- Fixed c8's `--src` roots derivation to use the include set and pin the gate floors correctly.
+
+### Changed
+
+- Scoped coverage, mutation and type gates to only what the package ships, reducing unnecessary test overhead.
+
+## [2.19.1] - 2026-08-08
+
+### Changed
+
+- **Skills documentation**: Updated parallel-audit skill documentation to clarify read-only rule behavior with execute-to-confirm and make parallel-audit hunt eliminators by default.
+
+## [2.19.0] - 2026-08-08
+
+### Added
+
+- Add `/agent-sanitizer:enable-auto-update` skill to enable marketplace auto-update functionality for the plugin.
+- Document marketplace auto-update and manual refresh commands in plugin documentation.
+
+### Changed
+
+- Type-annotate the auto-update script for `tsc --noEmit` compatibility.
+- Update plugin documentation to include the auto-update command in the install block.
+
+## [2.18.1] - 2026-08-08
+
+### Fixed
+
+- Fixed release canary incorrectly reporting its own crash as a release finding.
+- Fixed version pin synchronization in install scripts.
+- Fixed health sweep timing to run after each scheduled job it reports on.
+- Sweep the default branch nightly instead of every two hours for more efficient monitoring.
+
+## [2.18.0] - 2026-08-07
+
+### Added
+
+- Re-alert every two hours while the default branch is red.
+
+### Fixed
+
+- Fix CI page-only workflow on ci-failure-notify pages.
+
 ## [2.17.1] - 2026-08-07
 
 ### Fixed

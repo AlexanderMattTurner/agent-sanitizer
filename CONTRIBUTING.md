@@ -15,11 +15,19 @@ pnpm install   # installs deps and configures git hooks (core.hooksPath .hooks)
 ## Workflow
 
 ```bash
-pnpm test      # c8 node --test (the JS test suite, with coverage)
+pnpm test      # the JS test suite under c8, then the per-scope coverage floors
 pnpm lint      # eslint .
 pnpm check     # tsc --noEmit (type-check)
 pnpm format    # prettier --write .
 ```
+
+The coverage and mutation gates are scoped to what the package **ships**:
+`scripts/shipped-sources.mjs` resolves `package.json`'s `files` + `exports` +
+`bin` into the checked `.mjs` set, and `scripts/coverage.mjs`,
+`scripts/mutate.mjs` and `.github/mutation-shards.json` all consume it. Publish
+a new module and `test/shipped-gates.test.mjs` fails until it is in both gates.
+`src/` is held at 100%; `claude-hooks/` and `bin/` carry a separate, lower
+ratchet that should only ever move up.
 
 Run the tests, lint, type-check, and formatter before pushing. The git hooks
 under `.hooks/` also enforce formatting and commit conventions on commit.

@@ -13,98 +13,39 @@
  * point where a lone surrogate would otherwise corrupt a match or a parse.
  */
 import { stripInvisibleWithReport, CATEGORY } from "./invisible.mjs";
+import {
+  CONTROL_INTRODUCER_SOURCE,
+  isOrphanKind,
+  orphanKindFor,
+  scanAnsi,
+  TOKEN_KIND,
+} from "./ansi.mjs";
 
-// Raw control introducers that must not survive: 7-bit ESC (U+001B) and the
-// entire 8-bit C1 control block (U+0080–U+009F) — which includes CSI (U+009B),
-// the string introducers DCS/SOS/OSC/PM/APC (U+0090/0098/009D/009E/009F), and ST
-// (U+009C). All are category Cc, so the invisible-char pass (which targets Cf /
-// variation / blank fillers) never removes them; this residual sweep is the
-// guarantee that none survives. Sweeping the whole C1 block — not just the
-// introducers the ANSI grammar above names — fails closed: a DCS/SOS/PM/APC
-// string the grammar does not consume still loses its introducer and terminator
-// here, so no terminal can hide-render its body as a control payload.
-// eslint-disable-next-line no-control-regex -- matching the raw introducers is the point
-const CONTROL_INTRODUCER_RE = /[\u001b\u0080-\u009f]/g;
+// The ANSI grammar and the introducer charset live in ./ansi.mjs so this module
+// and invisible.mjs (which owns the public isSgrOnly / SGR_RE and cannot import
+// this one) scan with the SAME tokenizer.
 
-// An OSC (Operating System Command) string is `<introducer> … <terminator>`.
-// Introducer: 7-bit `ESC]` or 8-bit C1 OSC (U+009D). Terminator: ST (`ESC\` or
-// 8-bit C1 ST U+009C) OR the legacy BEL (U+0007). The body is everything up to
-// the terminator — a title, a clickable-hyperlink URL, a clipboard write — i.e.
-// attacker-controlled PAYLOAD TEXT. Matching the introducer alone (leaving the
-// body) would let that payload survive into the model's view, so the OSC branch
-// consumes the introducer, the whole body, AND the terminator as one unit.
-//
-// Three alternatives, tried in order:
-//   1. a properly TERMINATED string — a body of bytes that no terminator can
-//      start with (the negated class makes that run unambiguous and
-//      backtrack-free), then a terminator (ST or BEL).
-//   2. an ABORTED string — the body runs up to (but does NOT consume) an
-//      interior bare ESC or a nested C1-OSC introducer (U+009D) that is not
-//      itself part of a valid terminator. Per ECMA-48/xterm, a bare ESC (one
-//      not immediately followed by `\` to form ST) aborts the OSC string in
-//      progress — the terminal drops back to processing that ESC as the start
-//      of a NEW sequence, and everything after it is normal text/escapes, not
-//      part of this OSC's payload. Consuming only up to the lookahead (not
-//      the ESC/U+009D itself) leaves it for the next position in this same
-//      `.replace(ANSI_RE, ...)` scan to match as its own sequence (or, if it
-//      doesn't complete one, for the residual C1 sweep in applyLayer1 to
-//      remove just that one introducer byte) — so an interior ESC can no
-//      longer delete the rest of the document (it used to fall through to
-//      alternative 3 below and consume everything to EOS).
-//   3. anything else from the introducer to END-OF-STRING (`[\s\S]*$`) — the
-//      fail-closed catch-all for a GENUINELY unterminated string: no ST, BEL,
-//      interior ESC, or nested OSC intro anywhere in the remainder, so there
-//      is truly nothing left to hand to a later position. Reached only when
-//      alternatives 1 and 2 both fail to find their respective triggers.
-// All three are linear (bounded lookahead / no nested quantifiers), so the
-// branch stays linear.
-const OSC_INTRO = "(?:\\u001b\\]|\\u009d)";
-const OSC_TERM = "(?:\\u001b\\\\|\\u009c|\\u0007)";
-const OSC_BODY = "[^\\u0007\\u001b\\u009c\\u009d]";
-const OSC_BRANCH = `${OSC_INTRO}(?:${OSC_BODY}*${OSC_TERM}|${OSC_BODY}*(?=[\\u001b\\u009d])|${OSC_BODY}*$)`;
+// The residual sweep: every raw control introducer, whatever the grammar made of
+// it. This — not the sequence matching — is the guarantee that no introducer
+// survives Layer 1.
+const CONTROL_INTRODUCER_RE = new RegExp(CONTROL_INTRODUCER_SOURCE, "g");
 
-// CSI / two-byte ESC sequences (cursor moves, erase, SGR color, charset/DEC
-// selectors): an introducer, a bounded private-intro run, optional numeric
-// params, and a single final byte. Not an enforcement boundary on its own — any
-// introducer this declines to match is still removed by the residual sweep in
-// applyLayer1 — but matching the whole sequence keeps the common case one clean
-// deletion (and avoids a lone-ESC residual on every styled line).
-//
-// The private-intro class is BOUNDED ({0,12}, not *) on purpose: ; and # live
-// in both this class and the parameter group that follows, so an unbounded *
-// here lets a ;#;#... run be split between the two quantifiers — O(n^2)
-// backtracking on an ESC;#;#... string that never completes a sequence
-// (CodeQL js/polynomial-redos). A constant bound makes the intro a constant
-// factor, so the whole match is linear; a real sequence never carries more than
-// a couple of intro bytes.
-//
-// Params allow BOTH `;` (standard parameter separator) and `:` (ITU T.416
-// colon-separated SGR sub-parameters, e.g. truecolor `ESC[38:2:255:0:0m` as
-// emitted by tmux/kitty/mintty) — legitimate, display-only ANSI that must not
-// leave a colon-parameter residue behind.
-//
-// The final-byte class deliberately excludes `\d`: per ECMA-48, CSI final
-// bytes occupy 0x40–0x7E (letters and a handful of punctuation) while digits
-// are PARAMETER bytes and can never terminate a sequence — an unterminated
-// `ESC[` therefore must not be allowed to eat trailing visible digits (e.g.
-// `ESC[2024 report` is NOT `ESC[` + final-byte `2` + literal `024 report`; it
-// is an incomplete CSI intro that the residual sweep in applyLayer1 cleans up,
-// leaving "2024 report" intact). `=`, `<`, `>` are excluded for the same
-// reason: 0x3C–0x3F (`<=>?`) are private PARAMETER-prefix bytes, not final
-// bytes, per ECMA-48 § 5.4 — `?` already lives in the private-intro class
-// above; `<=>` were never valid finals and including them let a private-marker
-// sequence terminate one byte too early. `~` (0x7E) IS a real final byte (vt220
-// function-key sequences, e.g. `ESC[3~` for Delete) and is kept.
-const CSI_BRANCH =
-  "[\\u001b\\u009b][[()#;?]{0,12}(?:(?:\\d{1,4}(?:[;:]\\d{0,4})*)?[A-PR-TZcf-ntqry~])";
-
-// Full ANSI escape grammar (OSC first so `ESC]` / C1-OSC is consumed as a whole
-// string, not split by the CSI branch), not just SGR: the Layer-1 guarantee is
-// that no control introducer and no OSC payload survives, and a cursor-move or
-// erase sequence is as much a display-spoofing hazard as a color one. Built from
-// `\uXXXX`-escaped string parts via `new RegExp`, so no raw control byte sits in
-// the source (no no-control-regex disable needed).
-const ANSI_RE = new RegExp(`(?:${OSC_BRANCH}|${CSI_BRANCH})`, "gu");
+/**
+ * Run the residual sweep, recording the orphan kind of every introducer it
+ * removes. The sweep sees bare characters rather than tokens, so the kind comes
+ * from {@link orphanKindFor} — the same decision the tokenizer makes, not a
+ * second spelling of it — fed the following character from the text being
+ * swept, which is the context a terminal reading this introducer would have.
+ * @param {string} text
+ * @param {Set<string>} kinds
+ * @returns {string}
+ */
+function sweepIntroducers(text, kinds) {
+  return text.replace(CONTROL_INTRODUCER_RE, (ch, offset) => {
+    kinds.add(orphanKindFor(ch, text[offset + 1]));
+    return "";
+  });
+}
 
 // Unpaired UTF-16 surrogates (high not followed by low, or low not preceded by
 // high). Normalized before any HTML parser, which throws on a stray byte —
@@ -113,6 +54,34 @@ export const LONE_SURROGATE_RE =
   /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g;
 
 const MAX_ANSI_PASSES = 3;
+
+/**
+ * Splice out every complete ANSI sequence {@link scanAnsi} finds — SGR, other
+ * CSI/two-byte escapes, and whole OSC strings. An ORPHAN introducer (one that
+ * starts no sequence) is deliberately LEFT: deleting it here would drop the
+ * `ESC` out of `ESC`<ZWSP>`[32m` before the invisible pass could reconstitute
+ * the sequence, turning a hidden control into visible `[32m` in the model's
+ * view. Orphans are removed by applyLayer1's residual sweep, once no
+ * reconstitution is possible.
+ * @param {string} text
+ * @param {Set<string>} [kinds]  collects the {@link TOKEN_KIND} of every
+ *   sequence this pass actually removed, so a caller can tell a display-only
+ *   colour strip from a cursor/erase/OSC one without re-scanning (see
+ *   {@link isBenignAnsiKinds}).
+ * @returns {string}
+ */
+function stripAnsiOnce(text, kinds) {
+  let out = "";
+  let last = 0;
+  for (const token of scanAnsi(text)) {
+    if (isOrphanKind(token.kind)) continue;
+    kinds?.add(token.kind);
+    out += text.slice(last, token.start);
+    last = token.end;
+  }
+  if (last === 0) return text;
+  return out + text.slice(last);
+}
 
 /**
  * Strip ANSI escape sequences to a fixed point. Removing one sequence can
@@ -127,58 +96,159 @@ const MAX_ANSI_PASSES = 3;
  * survives here. Past the bound a reconstituted sequence therefore degrades to
  * VISIBLE text rather than a hidden control, which is the fail-open direction.
  * @param {string} input
+ * @param {Set<string>} [kinds]  see {@link stripAnsiOnce}; accumulates across passes
  * @returns {string}
  */
-export function stripAnsiFully(input) {
+export function stripAnsiFully(input, kinds) {
   let prev = input;
-  let out = prev.replace(ANSI_RE, "");
+  let out = stripAnsiOnce(prev, kinds);
   for (let pass = 1; pass < MAX_ANSI_PASSES && out !== prev; pass++) {
     prev = out;
-    out = prev.replace(ANSI_RE, "");
+    out = stripAnsiOnce(prev, kinds);
   }
   return out;
 }
+
+/**
+ * True when the ANSI a Layer-1 strip removed was INERT: every removed sequence
+ * was either a display-only SGR colour token or a LONE 7-bit `ESC` that opened
+ * nothing at all (a stray byte in a file, a truncated write, a log fragment cut
+ * mid-escape).
+ *
+ * The two other orphan kinds are deliberately NOT inert. A raw C1 orphan
+ * (TOKEN_KIND.ORPHAN_C1): legit UTF-8 text does not carry raw C1 bytes, and the
+ * block holds the DCS/SOS/PM/APC string introducers this grammar does not
+ * consume — so an unrecognized one means a terminal would have eaten the
+ * following text as a control payload. An incomplete CSI (TOKEN_KIND.ORPHAN_CSI)
+ * for the same reason at 7 bits: the CSI parser keeps consuming until a final
+ * byte, so `hello ESC[12 world` hides ` w` from the human while the model reads
+ * the whole prompt.
+ *
+ * This draws a severity line, not a presence line: the bytes are stripped
+ * either way, so all that rides on the answer is whether the operator sees a
+ * WARNING or a terse note. An orphan introducer cannot move the cursor, erase
+ * the screen, relabel a window, or open an OSC string — every one of those needs
+ * a COMPLETE token, which {@link scanAnsi} classifies as CSI or OSC and this
+ * rejects. Warning on a lone `ESC` is the false positive that costs the most: one
+ * pre-existing `ESC` in a markdown file, echoed back in an Edit result, raises
+ * the same alarm as a cursor-spoofing payload, and an alarm that fires on inert
+ * bytes is the one operators learn to scroll past.
+ *
+ * It takes the kinds the STRIP recorded, never a fresh scan of the raw text,
+ * and that is the whole point: a scan of the raw text answers about sequences
+ * that have not been reconstituted yet, so `ESC` + `ESC[m` + `[2J` (a bare ESC,
+ * an SGR, then plain text) reads as orphan-only there while the strip's second
+ * pass actually removes a CSI erase. Recording what each pass removed reports
+ * the sequences that really existed at Layer 1's fixed point.
+ * @param {readonly string[] | Set<string>} kinds  {@link TOKEN_KIND} values removed
+ * @returns {boolean}
+ */
+export function isBenignAnsiKinds(kinds) {
+  return [...kinds].every(
+    (kind) => kind === TOKEN_KIND.SGR || kind === TOKEN_KIND.ORPHAN,
+  );
+}
+
+/**
+ * {@link isBenignAnsiKinds} for callers that hold only the text — it runs the
+ * full Layer-1 composition to get the fixed-point view. Callers that already
+ * ran {@link applyLayer1} must read its `ansiKinds` instead of paying for a
+ * second strip.
+ * @param {string} text
+ * @returns {boolean}
+ */
+export function isBenignAnsi(text) {
+  return isBenignAnsiKinds(applyLayer1(text).ansiKinds);
+}
+
+// How many times the {ANSI strip, invisible strip} composition may re-run before
+// the sweep is forced. Each iteration deletes at least one character, so the
+// loop terminates on its own; the bound is a DoS guard on the same quadratic
+// argument as MAX_ANSI_PASSES (n rounds of O(n) scans on adversarial input).
+// Three rounds is what the deepest REAL reconstitution needs — strip
+// invisibles, remove the ANSI they hid, strip the joiners that ANSI removal
+// made adjacent, confirm — so four leaves a round of margin. Deeper nesting is
+// not reachable through the carve-out: preserving a joiner requires cursive or
+// emoji neighbours on BOTH sides, so a preserved joiner can never sit inside an
+// escape sequence, and every joiner that hides one is therefore stripped by the
+// FIRST invisible pass. Past the bound the composition simply stops early — the
+// final sweep still holds the no-introducer guarantee, and what is left degrades
+// to visible text (the fail-open direction), exactly as with MAX_ANSI_PASSES.
+const MAX_LAYER1_PASSES = 4;
 
 /**
  * Layer 1: ANSI + invisible-char strip with a result guaranteed free of every
  * raw ANSI control introducer (7-bit ESC U+001B and the whole 8-bit C1 control
  * block U+0080–U+009F: CSI, the DCS/SOS/OSC/PM/APC string introducers, and ST).
  *
- * Removing an invisible character can reconstitute an escape its split hid from
- * the ANSI pass (`ESC`<ZWSP>`[32m` → `ESC[32m`), so strip ANSI again after the
- * invisible pass — but only when stripInvisible changed something, since
- * reconstitution is impossible otherwise and the re-strip is a wasted pass on
- * the hot clean path. The ANSI strip still cannot match an *incomplete*
- * reconstituted sequence (a lone `ESC[` left when an inner complete sequence is
- * removed from a nested split), so a final sweep removes every residual raw
- * introducer outright — that sweep, not the regex matching, is the guarantee
- * that no control introducer survives. `deAnsi` is the ANSI strip of the
- * original (invisible runs intact), the scope a LONG_RUN payload check needs.
+ * The two passes FEED each other in both directions, so neither ordering is
+ * enough on its own and the composition is iterated to a fixed point instead:
+ * removing an invisible char reconstitutes an escape its split hid
+ * (`ESC`<ZWSP>`[32m` → `ESC[32m`), and removing an escape makes two invisibles
+ * ADJACENT that were not (`م ZWJ ESC[m ZWJ م` → a joiner run the invisible pass
+ * classifies as a payload channel rather than linguistic). A pipeline with a
+ * fixed number of alternations always leaves one of those unanswered — this used
+ * to re-strip ANSI after the invisible pass and stop, so `applyLayer1` was not
+ * idempotent and the rehydrator's "re-cleaning reproduces the view" assumption
+ * did not hold.
+ *
+ * The residual sweep runs only once the composition is STABLE, because sweeping
+ * an introducer early destroys the sequence a later ANSI pass would have removed
+ * whole, promoting a hidden control to visible text. A final UNCONDITIONAL sweep
+ * follows the loop so the no-raw-introducer guarantee does not depend on the
+ * pass bound.
+ *
+ * `deAnsi` is the ANSI strip of the ORIGINAL text (invisible runs intact), the
+ * scope a LONG_RUN payload check needs — not an intermediate of the loop.
+ *
+ * `ansiKinds` is the {@link TOKEN_KIND} of every ANSI sequence the composition
+ * removed, deduped — the severity detail `found`'s single ANSI category cannot
+ * carry (see {@link isBenignAnsiKinds}). It is also what DERIVES that category:
+ * a kind is recorded exactly when bytes were removed, so "we reported ANSI" and
+ * "here is what the ANSI was" can no longer disagree.
  * @param {string} text
- * @returns {{ cleaned: string, deAnsi: string, found: string[] }}
+ * @returns {{ cleaned: string, deAnsi: string, found: string[], ansiKinds: string[] }}
  */
 export function applyLayer1(text) {
-  const deAnsi = stripAnsiFully(text);
-  // stripInvisibleWithReport returns `found` for exactly the categories it
-  // removed — so a ZWNJ/ZWJ the carve-out PRESERVES never registers as a strip,
-  // and the leading-BOM exception is already handled inside it. Pass the ORIGINAL
-  // `text` so a BOM that was interior before the ANSI strip (`ESC[m + interior U+FEFF`, now at
-  // index 0 of `deAnsi`) is treated as interior and stripped, not preserved.
-  const { cleaned: afterInvis, found } = stripInvisibleWithReport(deAnsi, text);
-  let ansiFound = deAnsi.length !== text.length;
+  /** @type {Set<string>} TOKEN_KINDs removed by every ANSI pass below. */
+  const ansiKinds = new Set();
+  const deAnsi = stripAnsiFully(text, ansiKinds);
+  /** @type {Set<string>} Union of the categories every iteration reported. */
+  const found = new Set();
+  let cleaned = text;
 
-  let cleaned = afterInvis;
-  if (afterInvis !== deAnsi) {
-    const reStripped = stripAnsiFully(afterInvis);
-    if (reStripped.length !== afterInvis.length) ansiFound = true;
-    cleaned = reStripped;
-  }
-  const swept = cleaned.replace(CONTROL_INTRODUCER_RE, "");
-  if (swept !== cleaned) {
+  for (let pass = 0; pass < MAX_LAYER1_PASSES; pass++) {
+    const afterAnsi = pass === 0 ? deAnsi : stripAnsiFully(cleaned, ansiKinds);
+    // stripInvisibleWithReport returns `found` for exactly the categories it
+    // removed — so a ZWNJ/ZWJ the carve-out PRESERVES never registers as a
+    // strip. The second argument stays the ORIGINAL `text` on every iteration:
+    // the leading-BOM exception is defined against what the user actually sent,
+    // so a BOM that was interior before an ANSI strip shifted it to index 0 is
+    // treated as interior and stripped, not preserved.
+    const { cleaned: afterInvis, found: passFound } = stripInvisibleWithReport(
+      afterAnsi,
+      text,
+    );
+    for (const category of passFound) found.add(category);
+    if (afterInvis !== cleaned) {
+      cleaned = afterInvis;
+      continue;
+    }
+    // {ANSI, invisible} is stable: nothing left can reconstitute, so the
+    // residual introducers can be swept without hiding a sequence from a later
+    // pass. A sweep that changes the text feeds one more round (removing an
+    // introducer can make invisibles adjacent, exactly as removing a sequence
+    // can); one that changes nothing means the whole composition has converged.
+    const swept = sweepIntroducers(cleaned, ansiKinds);
+    if (swept === cleaned) break;
     cleaned = swept;
-    ansiFound = true;
   }
 
-  if (ansiFound) found.push(CATEGORY.ANSI);
-  return { cleaned, deAnsi, found };
+  cleaned = sweepIntroducers(cleaned, ansiKinds);
+
+  // Derived, not tracked in parallel: a kind is recorded exactly when an ANSI
+  // pass or the sweep removed bytes, so the category and the severity detail
+  // are two readings of one fact.
+  if (ansiKinds.size > 0) found.add(CATEGORY.ANSI);
+  return { cleaned, deAnsi, found: [...found], ansiKinds: [...ansiKinds] };
 }

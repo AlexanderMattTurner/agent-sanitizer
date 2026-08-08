@@ -1,0 +1,159 @@
+/**
+ * The SessionStart scan accounts for every file it was asked to look at.
+ *
+ * The scan is the only thing between a poisoned `CLAUDE.md` and a session that
+ * loads it as instructions, and it announces `outcome: "clean"` on the trace
+ * channel — the channel whose whole purpose is that a MISSING announcement is
+ * loud. A per-file read error swallowed into an empty findings list turned "we
+ * could not read this file" into "this file is fine", and the announcement said
+ * clean. Every target the finder returned is therefore either SCANNED or listed
+ * as SKIPPED, and a skip is never reported as cleanliness.
+ */
+import { describe, it, before, after } from "node:test";
+import assert from "node:assert/strict";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
+// Set before the hook imports: the scanner walks CLAUDE_PROJECT_DIR and
+// REWRITES the contaminated instruction files it finds, so pointing it at this
+// repo would let the test edit the tree.
+const projectDir = mkdtempSync(join(tmpdir(), "sanitizer-coverage-proj-"));
+process.env.CLAUDE_PROJECT_DIR = projectDir;
+
+const scanInvisible = await import("../claude-hooks/scan-invisible-chars.mjs");
+const { scanProject, findInstructionFiles, ALERT_FILE, cliMain } =
+  scanInvisible;
+
+// Same reason as in claude-hooks-posture.test.mjs: an unreadable fixture left
+// under $TMPDIR is an unscannable instruction file for every suite whose
+// project dir is $TMPDIR.
+after(() => {
+  rmSync(projectDir, { recursive: true, force: true });
+  rmSync(ALERT_FILE, { force: true });
+});
+
+/** A target the finder lists but nothing can read: a dangling symlink. */
+function dangling(dir, name) {
+  symlinkSync(join(dir, "no-such-target"), join(dir, name));
+}
+
+/** The trace lines a run emitted, in order. */
+function collector() {
+  const lines = [];
+  return {
+    lines,
+    sink: (event, fields) => lines.push({ event, ...fields }),
+  };
+}
+
+describe("scanProject accounts for every target the finder returned", () => {
+  it("reports on found + skipped == the finder's list", () => {
+    const dir = mkdtempSync(join(tmpdir(), "sanitizer-coverage-"));
+    writeFileSync(join(dir, "AGENTS.md"), "plain, clean prose\n");
+    dangling(dir, "CLAUDE.md");
+    mkdirSync(join(dir, ".claude"));
+    writeFileSync(join(dir, ".claude", "notes.md"), "also clean\n");
+
+    const { targets, scanned, findings, skipped } = scanProject(dir);
+    const expectedTargets = new Set(findInstructionFiles(dir));
+    assert.equal(targets.length, expectedTargets.size);
+    assert.ok(targets.length > 0, "the finder returned nothing to account for");
+    // The invariant: nothing falls off the list.
+    assert.equal(scanned + skipped.length, targets.length);
+    assert.deepEqual(
+      skipped.map((s) => s.file),
+      ["CLAUDE.md"],
+    );
+    assert.deepEqual(findings, []);
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("holds when EVERY target is unreadable", () => {
+    const dir = mkdtempSync(join(tmpdir(), "sanitizer-coverage-none-"));
+    dangling(dir, "CLAUDE.md");
+    dangling(dir, "AGENTS.md");
+
+    const { targets, scanned, findings, skipped } = scanProject(dir);
+    assert.equal(targets.length, 2);
+    assert.equal(scanned, 0);
+    assert.deepEqual(findings, []);
+    assert.equal(skipped.length, targets.length);
+    rmSync(dir, { recursive: true, force: true });
+  });
+});
+
+describe("a scan that could not read a target never announces clean", () => {
+  before(() => {
+    dangling(projectDir, "CLAUDE.md");
+    rmSync(ALERT_FILE, { force: true });
+  });
+  after(() => rmSync(ALERT_FILE, { force: true }));
+
+  it("announces partial, names the skipped files, and arms the gate", async () => {
+    const { lines, sink } = collector();
+    await cliMain({ trace: sink });
+
+    const announced = lines.filter(
+      (l) => l.event === "scan_invisible_chars_ran",
+    );
+    assert.equal(announced.length, 1);
+    assert.equal(
+      announced[0].outcome,
+      "partial",
+      "an unread instruction file was reported as absence of findings",
+    );
+    assert.equal(announced[0].skipped, 1);
+    assert.equal(announced[0].scanned, 0);
+
+    // The gate is the enforcement: it asks once on the next tool call, so an
+    // unvetted instruction file reaches the operator instead of nobody.
+    assert.ok(existsSync(ALERT_FILE), "the PreToolUse gate was not armed");
+    assert.match(readFileSync(ALERT_FILE, "utf8"), /CLAUDE\.md/u);
+  });
+});
+
+describe("a fully readable project still announces clean", () => {
+  // The control for the describe above. It must drive cliMain and inspect the
+  // same two observables — the announced outcome and ALERT_FILE — or "never
+  // announces clean" would pass just as happily against a scan that never says
+  // clean at all, or one that arms the gate unconditionally.
+  before(() => {
+    // PROJECT_DIR resolved at module load, so the control has to repair the
+    // project the previous describe sabotaged rather than point somewhere else.
+    rmSync(join(projectDir, "CLAUDE.md"), { force: true });
+    writeFileSync(join(projectDir, "CLAUDE.md"), "nothing hidden here\n");
+    rmSync(ALERT_FILE, { force: true });
+  });
+  after(() => rmSync(ALERT_FILE, { force: true }));
+
+  it("announces clean and does not arm the gate", async () => {
+    const { lines, sink } = collector();
+    await cliMain({ trace: sink });
+
+    assert.deepEqual(
+      lines
+        .filter((l) => l.event === "scan_invisible_chars_ran")
+        .map((l) => l.outcome),
+      ["clean"],
+    );
+    assert.equal(
+      existsSync(ALERT_FILE),
+      false,
+      "the gate was armed on a project with nothing to report",
+    );
+    // And the accounting agrees: every target read, nothing skipped.
+    const { targets, scanned, skipped, findings } = scanProject(projectDir);
+    assert.equal(scanned, targets.length);
+    assert.deepEqual(skipped, []);
+    assert.deepEqual(findings, []);
+  });
+});

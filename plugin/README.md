@@ -9,23 +9,41 @@ warning by default; `AGENT_SANITIZER_FAIL_OPEN=0` makes them block instead.
 ```
 /plugin marketplace add AlexanderMattTurner/agent-sanitizer
 /plugin install agent-sanitizer@agent-sanitizer
-```
-
-**Turn auto-update on after installing.** Claude Code enables it by default only
-for official Anthropic marketplaces; a third-party one like this defaults to
-off, so the install stays pinned to the release you added and never picks up a
-fix to a layer. The plugin ships a command for it:
-
-```
 /agent-sanitizer:enable-auto-update
 ```
 
-It merges the entry below into `~/.claude/settings.json` and reports what it
-changed; an existing entry pointing at a different repo stops it rather than
-being overwritten. `/plugin` → **Marketplaces** → **Enable auto-update** does
-the same by hand, and so does writing it into `~/.claude/settings.json`
-(user-wide) or a repo's `.claude/settings.json` (everyone who trusts that
-folder):
+The first session after install provisions the Python secret-redaction engine
+(`agent-sanitizer[secrets]`) into the plugin's data directory. That needs `uv` or
+`python3` on PATH; without either, provisioning fails loudly and tool output
+reaches the model **unredacted** — set `AGENT_SANITIZER_FAIL_OPEN=0` to have it
+suppressed instead.
+
+### Staying current
+
+Claude Code auto-updates Anthropic's own marketplaces by default and nobody
+else's, so an install of this one pins you to the release you added and later
+detector fixes never arrive. Claude Code ships no slash command for the toggle,
+so the plugin ships one — the third line of the install block above.
+
+It flips `autoUpdate` on this marketplace's existing entry in Claude Code's
+registry — the same bit the picker's **Enable auto-update** writes — and prints
+the file it touched. It never creates the entry: with the marketplace not yet
+added it says so and exits non-zero, as it does if a Claude Code release changes
+the registry's shape. `--disable` puts it back. The picker route
+(`/plugin` → **Marketplaces** → `agent-sanitizer` → **Enable auto-update**)
+stays available and is the fallback the skill points you to.
+
+Either way, updates are fetched in the background shortly after a session starts
+and load on `/reload-plugins` or at the next launch. To pull a release by hand
+instead:
+
+```
+/plugin marketplace update agent-sanitizer
+/plugin update agent-sanitizer@agent-sanitizer
+```
+
+Fleet-wide, an administrator can enable it from managed settings rather than
+per user:
 
 ```json
 {
@@ -37,28 +55,23 @@ folder):
       },
       "autoUpdate": true
     }
-  },
-  "enabledPlugins": { "agent-sanitizer@agent-sanitizer": true }
+  }
 }
 ```
 
-Updates are fetched in the background after startup, so the running session
-keeps the version it launched with until you `/reload-plugins`.
-
-The first session after install provisions the Python secret-redaction engine
-(`agent-sanitizer[secrets]`) into the plugin's data directory. That needs `uv` or
-`python3` on PATH; without either, provisioning fails loudly and tool output
-reaches the model **unredacted** — set `AGENT_SANITIZER_FAIL_OPEN=0` to have it
-suppressed instead.
-
 ## What it does
 
-| Hook                   | Event            | Protection                                                                                                                                                                                    |
-| ---------------------- | ---------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `scan-invisible-chars` | SessionStart     | Scans `CLAUDE.md`, `AGENTS.md` and `.claude/` markdown for hidden-Unicode payloads; auto-cleans what it can                                                                                   |
-| `sanitize-user-prompt` | UserPromptSubmit | Blocks prompts carrying payload-capable invisible Unicode or ANSI escapes (pasted SGR colour passes with a note)                                                                              |
-| `pretooluse-sanitize`  | PreToolUse       | Normalizes confusable/homoglyph paths and commands, strips stego and terminal-control sequences from model-authored content, and re-anchors redacted Edit/Write inputs onto the on-disk bytes |
-| `sanitize-output`      | PostToolUse      | Strips invisibles and ANSI, splices hidden HTML out of web/MCP ingress, flags exfil-shaped URLs, and redacts secrets via detect-secrets                                                       |
+| Hook                   | Event            | Protection                                                                                                                                                                                                                                                                                                                                                               |
+| ---------------------- | ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `scan-invisible-chars` | SessionStart     | Scans `CLAUDE.md`, `AGENTS.md` and the context markdown under `.claude/` (skills, agents and the other context subdirectories — never bulk data like `worktrees/`) for hidden-Unicode payloads; auto-cleans what it can                                                                                                                                                  |
+| `sanitize-user-prompt` | UserPromptSubmit | Blocks prompts carrying payload-capable invisible Unicode or ANSI escapes (inert escapes — pasted SGR colour, a stray `ESC` — pass with a note)                                                                                                                                                                                                                          |
+| `pretooluse-sanitize`  | PreToolUse       | Normalizes confusable/homoglyph paths and commands, strips stego and terminal-control sequences from model-authored content, re-anchors redacted Edit/Write inputs onto the on-disk bytes, notes `[REDACTED…]` placeholders in tool calls rehydration cannot re-anchor, and requires a confirming retry before a Write drops a redacted secret from a git-untracked file |
+| `sanitize-output`      | PostToolUse      | Strips invisibles and ANSI, splices hidden HTML out of web/MCP ingress, flags exfil-shaped URLs, redacts secrets via detect-secrets, and warns when a Read's raw bytes already carry literal `[REDACTED…]` placeholder text (a possibly clobbered secret)                                                                                                                |
+
+Every hook also times itself. A run that overruns its one-second budget says so
+in the model's context and on stderr — naming the hook and the timing, and asking
+you to report it — because a slow hook is otherwise indistinguishable from a slow
+agent. A healthy run says nothing.
 
 When a hook cannot run, it fails **open** by default: the guarded action
 proceeds and the model is told, in `additionalContext`, that what it is reading
@@ -118,8 +131,9 @@ listens on a private Unix socket.
 ```
 .claude-plugin/plugin.json   plugin manifest
 hooks/hooks.json             the four hook registrations
-skills/enable-auto-update/   the /agent-sanitizer:enable-auto-update command
+skills/enable-auto-update/   /agent-sanitizer:enable-auto-update
 scripts/safe-launch.sh       launcher (prints a response even when node is missing)
+scripts/enable-auto-update.mjs  flips autoUpdate on this marketplace's registry entry
 scripts/provision-redactor.sh  SessionStart provisioning of the Python redactor
 scripts/build-plugin.mjs     builds dist/ from claude-hooks/ against the pinned engine
 scripts/lock-redactor-deps.mjs  compiles requirements.in into the hash-pinned requirements.txt

@@ -6,10 +6,25 @@
  * Each shard runs Stryker over a disjoint slice of the codebase (line ranges of
  * the big files, whole files for the rest) with `thresholds.break` nulled, so no
  * single shard knows the project-wide score. This script deduplicates the
- * per-mutant verdicts across every shard's `mutation.json`, computes the same
- * mutation score Stryker would, and fails the build if it falls under the break
- * threshold read from `stryker.conf.json` (single source of truth — the shards
- * derive their config from the same file, so the gate can never drift from it).
+ * per-mutant verdicts across every shard's `mutation.json` and computes the same
+ * mutation score Stryker would — once per gated SCOPE.
+ *
+ * There are two scopes because the shipped surface is two populations with very
+ * different histories: `src/` has been mutated (and hardened) for months and
+ * keeps `stryker.conf.json`'s `thresholds.break`, while the Claude-hook layer
+ * and the CLI were outside the gate entirely until they were added to the shard
+ * matrix and carry their own ratchet (`hookScopeBreak` in
+ * `.github/mutation-shards.json`). Scoring them as one blended number would let
+ * the newly-added files quietly pull the library's long-standing floor down.
+ * Each scope's threshold is applied independently; either one failing fails the
+ * build.
+ *
+ * `hookScopeBreak` is a RATCHET set below the first measurement (a local
+ * unsharded run over `claude-hooks/lib/*.mjs` + `bin/sanitize-cli.mjs` scored
+ * 41.68%), deliberately with room under it because the rest of the hook layer
+ * had never been mutated when it was chosen. Raise it as the real number lands
+ * in the job summary; never lower it, and never lower `thresholds.break`
+ * because the hook scope is behind.
  *
  * Usage: node aggregate-mutation.mjs <reports-dir>
  * Exits non-zero when the score is under threshold or when no reports are found
@@ -53,6 +68,31 @@ const STATUS_STRENGTH = [
 const strength = (status) => STATUS_STRENGTH.indexOf(status);
 
 /**
+ * Report file keys as repo-relative POSIX paths.
+ *
+ * Stryker keys `files` relative to `projectRoot`, but the field is optional and
+ * a runner is free to emit absolute keys. Normalizing here means both the dedup
+ * identity and the scope split below key off the same shape no matter which the
+ * shard produced — an absolute key would otherwise dedup against nothing and
+ * land in the wrong scope.
+ *
+ * @param {{projectRoot?: string}} report
+ * @param {string} path
+ */
+const relativize = (report, path) => {
+  const root = (report.projectRoot ?? "")
+    .replace(/\\/g, "/")
+    .replace(/\/$/, "");
+  const posixPath = path.replace(/\\/g, "/");
+  return root && posixPath.startsWith(`${root}/`)
+    ? posixPath.slice(root.length + 1)
+    : posixPath;
+};
+
+/** Path prefix that separates the two gated scopes (see the file header). */
+const SRC_PREFIX = "src/";
+
+/**
  * Deduplicate mutants across shard reports by identity and tally the score.
  *
  * The big files are sharded by LINE RANGE, and a mutant whose span straddles a
@@ -67,14 +107,18 @@ const strength = (status) => STATUS_STRENGTH.indexOf(status);
  *
  * @param {Array<{files: Record<string, {mutants: Array<object>}>}>} reports
  *   parsed `mutation.json` objects, one per shard
+ * @param {(file: string) => boolean} [inScope]  keep only mutants whose file
+ *   passes this predicate (repo-relative path); defaults to every file
  * @returns {{counts: Record<string, number>, total: number, detected: number,
  *   undetected: number, score: number}}
  */
-export function tallyMutants(reports) {
+export function tallyMutants(reports, inScope = () => true) {
   const verdicts = new Map();
   for (const report of reports) {
-    for (const path of Object.keys(report.files)) {
-      for (const mutant of report.files[path].mutants) {
+    for (const rawPath of Object.keys(report.files)) {
+      const path = relativize(report, rawPath);
+      if (!inScope(path)) continue;
+      for (const mutant of report.files[rawPath].mutants) {
         const loc = mutant.location;
         const id = [
           path,
@@ -93,7 +137,10 @@ export function tallyMutants(reports) {
     }
   }
 
-  const counts = {};
+  // Prototype-less: `status` comes out of a Stryker JSON report, so a report
+  // naming a mutant status `__proto__` would otherwise route the write through
+  // Object.prototype instead of becoming an own property.
+  const counts = Object.create(null);
   for (const status of verdicts.values()) {
     counts[status] = (counts[status] || 0) + 1;
   }
@@ -101,7 +148,17 @@ export function tallyMutants(reports) {
   const undetected = [...UNDETECTED].reduce((n, s) => n + (counts[s] || 0), 0);
   const scored = detected + undetected;
   const score = scored === 0 ? 0 : (detected / scored) * 100;
-  return { counts, total: verdicts.size, detected, undetected, score };
+  // Spread back to an ordinary object at the boundary: the accumulation needed
+  // the null prototype, the RESULT is compared and JSON-stringified by callers.
+  // Spreading copies own properties with CreateDataProperty, so a `__proto__`
+  // status stays an own key here instead of reaching Object.prototype.
+  return {
+    counts: { ...counts },
+    total: verdicts.size,
+    detected,
+    undetected,
+    score,
+  };
 }
 
 function main(reportsDir) {
@@ -115,6 +172,28 @@ function main(reportsDir) {
       `stryker.conf.json thresholds.break must be a number, got ${JSON.stringify(breakThreshold)}`,
     );
   }
+  const shardConf = JSON.parse(
+    readFileSync(join(repoRoot, ".github", "mutation-shards.json"), "utf8"),
+  );
+  const hookScopeBreak = shardConf.hookScopeBreak;
+  if (typeof hookScopeBreak !== "number" || hookScopeBreak <= 0) {
+    throw new Error(
+      `.github/mutation-shards.json hookScopeBreak must be a positive number, got ${JSON.stringify(hookScopeBreak)}`,
+    );
+  }
+
+  const scopes = [
+    {
+      name: "src (library)",
+      inScope: (/** @type {string} */ f) => f.startsWith(SRC_PREFIX),
+      threshold: breakThreshold,
+    },
+    {
+      name: "claude-hooks + bin",
+      inScope: (/** @type {string} */ f) => !f.startsWith(SRC_PREFIX),
+      threshold: hookScopeBreak,
+    },
+  ];
 
   const reportFiles = readdirSync(reportsDir, { recursive: true })
     .map((entry) => join(reportsDir, entry.toString()))
@@ -132,13 +211,33 @@ function main(reportsDir) {
   }
 
   const reports = reportFiles.map((f) => JSON.parse(readFileSync(f, "utf8")));
-  const { counts, total, score } = tallyMutants(reports);
 
-  const lines = [
-    `Aggregated ${reportFiles.length} shard report(s): ${total} mutants total.`,
-    `Status breakdown: ${JSON.stringify(counts)}`,
-    `Mutation score: ${score.toFixed(2)}% (break threshold ${breakThreshold}%).`,
-  ];
+  const lines = [`Aggregated ${reportFiles.length} shard report(s).`];
+  const failures = [];
+  for (const scope of scopes) {
+    const { counts, total, detected, undetected, score } = tallyMutants(
+      reports,
+      scope.inScope,
+    );
+    // A scope that scored nothing is a broken matrix, not a pass: it means no
+    // shard mutated those files, so the floor would be applied to an empty set
+    // and wave the whole scope through.
+    if (detected + undetected === 0) {
+      throw new Error(
+        `Scope "${scope.name}" produced no scored mutants across ${reportFiles.length} report(s); refusing to gate vacuously.`,
+      );
+    }
+    lines.push(
+      `${scope.name}: ${total} mutants, ${JSON.stringify(counts)}`,
+      `${scope.name}: mutation score ${score.toFixed(2)}% (break threshold ${scope.threshold}%).`,
+    );
+    if (score < scope.threshold) {
+      failures.push(
+        `${scope.name}: mutation score ${score.toFixed(2)} under breaking threshold ${scope.threshold}.`,
+      );
+    }
+  }
+
   process.stdout.write(`${lines.join("\n")}\n`);
   if (process.env.GITHUB_STEP_SUMMARY) {
     appendFileSync(
@@ -147,10 +246,8 @@ function main(reportsDir) {
     );
   }
 
-  if (score < breakThreshold) {
-    process.stderr.write(
-      `Final mutation score ${score.toFixed(2)} under breaking threshold ${breakThreshold}.\n`,
-    );
+  if (failures.length > 0) {
+    process.stderr.write(`${failures.join("\n")}\n`);
     process.exit(1);
   }
 }

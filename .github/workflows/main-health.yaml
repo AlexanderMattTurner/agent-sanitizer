@@ -1,0 +1,63 @@
+name: Main branch health
+
+# Level-triggered counterpart to `CI failure notify`.
+#
+# That workflow is edge-triggered: it fires once, on the `workflow_run` event
+# that flipped a workflow to `failure`. Miss that one edge and `main` stays red
+# with no further signal until some later push happens to re-run the same
+# workflow. #169 merged with nine red tests and `main` stayed red for ~30 hours
+# on exactly that gap.
+#
+# This job re-asks "is main red?" once a night and fails while the answer is
+# yes. Its own failure is a push/schedule failure on the default branch, so
+# `CI failure notify` picks it up and sends the ntfy push — the alert path is the
+# vetted one, not a second copy. It clears itself the moment the branch recovers.
+#
+# Not a required check (no pull_request trigger) and it changes nothing: the
+# whole output is a list of red workflows and their run URLs.
+on:
+  schedule:
+    # Daily, off-the-hour to dodge GitHub's peak-minute queueing, and late enough
+    # to sit AFTER every scheduled job in the paging set: fuzz-nightly and
+    # release-canary at 06:17, template-sync at 09:00, plus the Monday-only
+    # weekly security scan (09:00, 30m timeout) and CI failure-rate report
+    # (10:00) — a sweep that ran before them would judge yesterday's conclusions
+    # and report a stale verdict. The extra hour is slack for cron start-delay.
+    - cron: "41 11 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  # Serialize; never cancel — a dropped run is a dropped alert. The static group
+  # is intentional and safe: no pull_request trigger, so this never backs a
+  # required check that a cancelled run could hang.
+  group: main-health
+  cancel-in-progress: false
+  # static-concurrency-ok: not a required check (schedule/dispatch only)
+
+jobs:
+  health:
+    name: Default branch has no failing workflow
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      actions: read # read workflow + workflow-run conclusions via the REST API
+      contents: read # job-level permissions replace the workflow default
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          # ci-failure-notify.yaml is an INPUT, not just a sibling: the sweep
+          # reads its `workflows:` list to decide what it may page on.
+          sparse-checkout: |
+            .github/scripts
+            .github/workflows
+          persist-credentials: false
+
+      - name: Sweep the default branch for red workflows
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: node .github/scripts/main-health.mjs

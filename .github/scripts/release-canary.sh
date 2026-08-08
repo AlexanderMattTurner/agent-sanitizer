@@ -61,7 +61,7 @@ esac
 # yields an array normally, but a bare string for a single-release package, and
 # an `{ "error": { "code": "E404" } }` object (still on stdout) when the package
 # was never published. The max is computed by npm-max-stable.mjs, which orders
-# versions with the `semver` package (exit 3 when nothing stable is published).
+# bare X.Y.Z versions numerically (exit 3 when nothing stable is published).
 npm_rc=0
 VERSIONS_JSON=$(npm view "$PACKAGE_NAME" versions --json 2>/dev/null) || npm_rc=$?
 
@@ -86,8 +86,19 @@ if [[ "$npm_rc" -ne 0 ]] || [[ -z "$VERSIONS_JSON" ]]; then
   log "Error: could not read published versions for '$PACKAGE_NAME' from npm (exit $npm_rc)."
   exit 1
 fi
-if ! NPM_MAX=$(NPM_VERSIONS="$VERSIONS_JSON" node "$SCRIPT_DIR/npm-max-stable.mjs"); then
+# Exit 3 is the helper's ONE declared verdict; anything else is the helper
+# itself breaking. Collapsing the two (`if ! NPM_MAX=$(…)`) dressed a crash up
+# as a release-state finding: an unresolvable `import` reported for weeks as
+# "no stable X.Y.Z version published", pointing every reader at the release
+# pipeline instead of at the script.
+max_rc=0
+NPM_MAX=$(NPM_VERSIONS="$VERSIONS_JSON" node "$SCRIPT_DIR/npm-max-stable.mjs") || max_rc=$?
+if [[ "$max_rc" -eq 3 ]]; then
   log "Error: no stable X.Y.Z version published for '$PACKAGE_NAME'."
+  exit 1
+fi
+if [[ "$max_rc" -ne 0 ]]; then
+  log "Error: npm-max-stable.mjs failed (exit $max_rc) — the canary could not determine npm's max published version. This is a bug in the canary, not a release-state finding."
   exit 1
 fi
 

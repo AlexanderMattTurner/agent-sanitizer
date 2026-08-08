@@ -1,5 +1,6 @@
 /**
- * SSOT contract for the generated Unicode Joining_Type / virama tables.
+ * SSOT contract for the generated Unicode Joining_Type / virama / Brahmic
+ * consonant tables.
  *
  * src/joining-type.mjs is generated from the vendored UCD slices by
  * scripts/gen-joining-type.mjs. This test re-derives the tables from the SAME
@@ -21,12 +22,18 @@ import assert from "node:assert/strict";
 import {
   joiningType,
   isVirama,
+  isBrahmicConsonant,
+  BRAHMIC_CONSONANT_RANGES,
   UNICODE_VERSION,
 } from "../src/joining-type.mjs";
 import { deriveTables, loadUcd } from "../scripts/gen-joining-type.mjs";
 
-const { joiningJson, indicJson, version } = loadUcd();
-const { joining, virama } = deriveTables(joiningJson, indicJson);
+const { joiningJson, indicJson, consonantJson, version } = loadUcd();
+const { joining, virama, brahmic } = deriveTables(
+  joiningJson,
+  indicJson,
+  consonantJson,
+);
 
 const MAX_CP = 0x10ffff;
 
@@ -87,6 +94,47 @@ describe("joining-type generated module", () => {
       }
     }
   });
+
+  it("BRAHMIC_CONSONANT_RANGES is exactly the derived script-tagged table", () => {
+    // Both the spans AND their script tags: the tag is what
+    // test/invisible-unicode-tables.test.mjs checks each span against, so a
+    // mislabeled span would quietly weaken that test rather than fail it.
+    assert.deepEqual(
+      BRAHMIC_CONSONANT_RANGES.map(([script, start, end]) => [
+        start,
+        end,
+        script,
+      ]),
+      brahmic,
+    );
+  });
+
+  it("isBrahmicConsonant matches the derived set on every covered point and range boundary", () => {
+    const set = new Set();
+    for (const [start, end] of brahmic)
+      for (let cp = start; cp <= end; cp++) set.add(cp);
+    for (const cp of probePoints(brahmic)) {
+      const got = isBrahmicConsonant(cp);
+      if (got !== set.has(cp))
+        assert.fail(
+          `U+${cp.toString(16)}: isBrahmicConsonant=${got} expected ${set.has(cp)}`,
+        );
+    }
+  });
+
+  // Hand-checked anchors for the Brahmic table specifically: a consonant, an
+  // independent vowel (Script=Devanagari but never a conjunct base — the reason
+  // the table cannot just be \p{Script=…}), and a hole INSIDE the old
+  // hand-typed KA–HA span that the UCD-derived table correctly excludes.
+  for (const [cp, expected, why] of [
+    [0x915, true, "DEVANAGARI LETTER KA"],
+    [0x905, false, "DEVANAGARI LETTER A (independent vowel)"],
+    [0x9b1, false, "Bengali hole inside the old 0995–09B9 span"],
+    [0x978, true, "DEVANAGARI LETTER MARWARI DDA (absent from the old table)"],
+  ]) {
+    it(`isBrahmicConsonant(U+${cp.toString(16)}) === ${expected} — ${why}`, () =>
+      assert.equal(isBrahmicConsonant(cp), expected));
+  }
 
   // A few hand-checked anchors so the contract is legible even if the derivation
   // above were somehow tautological: real letters, the joiners themselves, a

@@ -16,7 +16,9 @@
  * BOTH a confusable AND a stego payload had one fix non-deterministically
  * clobbered by the other. Composing them here makes the rewrite deterministic
  * (normalize, then strip the normalized text) and pays a single Node start
- * instead of three on the hottest path.
+ * instead of three on the hottest path. Layers 2-4 run through the declared
+ * pipeline in lib/layer-pipeline.mjs, which is what keeps the confusable fold's
+ * skip decisions sound once the erasing strip follows it.
  *
  * Layers 2 and 4 are the provider-agnostic transforms in the agent-sanitizer
  * package; this file binds its peers (namespace-guard, the redactor daemon, the
@@ -34,11 +36,11 @@ import {
   registeredLazyModule,
   emitHookResponse,
   safeErrMessage,
-  failOpenEnabled,
-  failOpenContext,
   HookEvent,
   PermissionDecision,
 } from "./lib/hook-io.mjs";
+import { registerFaultPolicy, hookFaultOutcome } from "./lib/hook-fault.mjs";
+import { runLayerPipeline } from "./lib/layer-pipeline.mjs";
 import { controlPlane, runJudgeCli } from "./lib/control-plane.mjs";
 import {
   invisibleCharAlert,
@@ -52,6 +54,8 @@ import {
   authoredContext,
 } from "./lib/authored-content.mjs";
 import { redactViaDaemon } from "./lib/redactor-client.mjs";
+import { withSecretDropGuard } from "./lib/secret-drop-guard.mjs";
+import { placeholderNotice } from "./lib/placeholder-grammar.mjs";
 import { bestEffortTrace, trace, TraceEvent } from "./lib/trace.mjs";
 
 const HOOK_NAME = "pretooluse-sanitize";
@@ -138,13 +142,15 @@ const redactorIo = {
 
 /**
  * Default Layer-4 rehydrator: the package's rehydrateRedacted bound to the
- * redactor-daemon io. Hoisted (not an inline default-param arrow) so tests can
- * still inject a fake as the second argument to buildPreToolUseResponse.
- * @param {string} tool
- * @param {any} toolInput
+ * redactor-daemon io, composed (via withSecretDropGuard, where the ordering
+ * logic lives and is unit-tested) with the clobber-by-omission guard. Hoisted
+ * (not an inline default-param arrow) so tests can still inject a fake as the
+ * second argument to buildPreToolUseResponse.
  */
-const defaultRehydrate = (tool, toolInput) =>
-  rehydrateRedacted(tool, toolInput, redactorIo);
+const defaultRehydrate = withSecretDropGuard(
+  (tool, toolInput) => rehydrateRedacted(tool, toolInput, redactorIo),
+  redactorIo,
+);
 
 /**
  * Trace the response on the way out — "noop" (clean pass-through), "deny",
@@ -166,6 +172,83 @@ function emitTraced(emitTrace, toolName, fields) {
     outcome = "ask";
   emitTrace(TraceEvent.HOOK_RAN, { hook: HOOK_NAME, tool: toolName, outcome });
   return fields;
+}
+
+/**
+ * The declared layer chain, layers 2-4. Every entry states the two properties
+ * the driver reasons about — whether it ERASES code points another layer reads,
+ * and whether its own decision is SKIP-BASED and therefore invalidated by such
+ * an erasure — so the confusable fold's ordering precondition is enforced by the
+ * table instead of restated as a comment.
+ *
+ * Layer 3 is dropped from the table (not merely skipped at run time) when
+ * AGENT_SANITIZER_OUTPUT_DISABLED=1, so the driver sees the chain that will
+ * actually run: with no erasing layer left after the fold there is no fixed
+ * point to reach and no extra pass to pay for.
+ * @param {(tool: string, toolInput: any) => ReturnType<typeof rehydrateRedacted>} rehydrate
+ * @param {NodeJS.ProcessEnv | Record<string, string | undefined>} [env]
+ * @returns {import("./lib/layer-pipeline.mjs").Layer[]}
+ */
+export function preToolUseLayers(rehydrate, env = process.env) {
+  /** @type {import("./lib/layer-pipeline.mjs").Layer[]} */
+  const layers = [
+    {
+      name: "confusables",
+      // Folding SUBSTITUTES a glyph for its ASCII canon, which drops the
+      // original code point; and it SKIPS any token still holding an unmapped
+      // glyph, which is the decision an erasure can invalidate.
+      erases: true,
+      skipBased: true,
+      run: (tool, toolInput) => {
+        const norm = normalizeConfusables(tool, toolInput, {
+          scan: confusableScan,
+        });
+        return norm === null
+          ? null
+          : {
+              updatedInput: norm.updatedInput,
+              context: normalizeContext(norm.normalized),
+            };
+      },
+    },
+    {
+      name: "authored-content",
+      // Erases payload-capable invisible characters, and skips below the
+      // payload-capable floor — the erasure that broke the fold's precondition.
+      erases: true,
+      skipBased: true,
+      run: (tool, toolInput) => {
+        const authored = sanitizeAuthoredContent(tool, toolInput);
+        return authored === null
+          ? null
+          : {
+              updatedInput: authored.updatedInput,
+              context: authoredContext(authored.changed),
+            };
+      },
+    },
+    {
+      name: "rehydrate",
+      erases: true,
+      skipBased: false,
+      // Terminal by contract, not by luck: it re-anchors Edit/Write inputs onto
+      // the on-disk bytes, and the secrets it restores must NOT be re-stripped
+      // by layer 3 or re-folded by layer 2 on a later pass.
+      terminal: true,
+      run: async (tool, toolInput) => {
+        const rehydrated = await rehydrate(tool, toolInput);
+        if (!rehydrated) return null;
+        if ("deny" in rehydrated) return { deny: rehydrated.deny };
+        return {
+          updatedInput: rehydrated.updatedInput,
+          context: rehydrated.context,
+        };
+      },
+    },
+  ];
+  return env.AGENT_SANITIZER_OUTPUT_DISABLED === "1"
+    ? layers.filter((layer) => layer.name !== "authored-content")
+    : layers;
 }
 
 /**
@@ -207,44 +290,30 @@ export async function buildPreToolUseResponse(
 
   const { tool_name: tool, tool_input: toolInput } = input;
 
-  // Layers 2 then 3, chained: normalize confusables first, then strip authored
-  // stego/terminal-control from the normalized text.
-  let current = toolInput;
-  let changed = false;
-
-  const norm = normalizeConfusables(tool, current, { scan: confusableScan });
-  if (norm) {
-    current = norm.updatedInput;
-    changed = true;
-    contexts.push(normalizeContext(norm.normalized));
-  }
-
-  if (process.env.AGENT_SANITIZER_OUTPUT_DISABLED !== "1") {
-    const authored = sanitizeAuthoredContent(tool, current);
-    if (authored) {
-      current = authored.updatedInput;
-      changed = true;
-      contexts.push(authoredContext(authored.changed));
-    }
-  }
-
-  // Layer 4: re-anchor Edit/Write inputs composed from a sanitized file view
-  // ([REDACTED…] placeholders, stripped invisible characters) back onto the
-  // on-disk bytes. Runs last so it sees the final authored text and its
-  // rehydrated secrets are not re-stripped by layer 3. An unresolvable or
-  // secret-exposing call is denied outright — that verdict outranks any ask
-  // above, so it returns immediately.
-  const rehydrated = await rehydrate(tool, current);
-  if (rehydrated && "deny" in rehydrated)
+  // Layers 2-4, run by the declared pipeline: the driver — not this call order —
+  // is what keeps the confusable fold's soundness precondition true once an
+  // erasing layer follows it (see lib/layer-pipeline.mjs).
+  const {
+    updatedInput: current,
+    changed,
+    contexts: layerContexts,
+    deny,
+  } = await runLayerPipeline(tool, toolInput, preToolUseLayers(rehydrate));
+  if (deny !== undefined)
     return emitTraced(emitTrace, input.tool_name, {
       permissionDecision: PermissionDecision.DENY,
-      permissionDecisionReason: rehydrated.deny,
+      permissionDecisionReason: deny,
     });
-  if (rehydrated) {
-    current = rehydrated.updatedInput;
-    changed = true;
-    contexts.push(rehydrated.context);
-  }
+  contexts.push(...layerContexts);
+
+  // Placeholder advisory for tools OUTSIDE the rehydrated set (Bash, MCP,
+  // anything unknown): rehydration cannot re-anchor these, so a placeholder in
+  // their input would be persisted literally by any write they perform. It
+  // cannot tell a write from a read, so it is context-only — never a verdict
+  // (see placeholderNotice). Evaluated on the pipeline's FINAL input, matching
+  // what the tool will actually receive.
+  const notice = placeholderNotice(tool, current);
+  if (notice !== null) contexts.push(notice);
 
   return emitTraced(
     emitTrace,
@@ -447,10 +516,29 @@ export function failClosedFields(parsedOk, err, opts = {}) {
  * @returns {Record<string, unknown>}
  */
 export function hookFailureFields(parsedOk, err, opts = {}) {
-  if (failOpenEnabled(opts.env))
-    return { additionalContext: failOpenContext(HOOK_NAME, "tool input", err) };
-  return failClosedFields(parsedOk, err, opts);
+  return /** @type {Record<string, unknown>} */ (
+    hookFaultOutcome(HOOK_NAME, err, {
+      parsedOk,
+      env: opts.env,
+      messages: opts.messages,
+      hint: opts.hint,
+    }).fields
+  );
 }
+
+// This hook's entry in the one posture table (lib/hook-fault.mjs). The OPEN arm
+// is the shared default — a warning context and no verdict — so only the CLOSED
+// verdict, which is this hook's own ask/deny split, is stated here.
+registerFaultPolicy(HOOK_NAME, {
+  event: HookEvent.PRE_TOOL_USE,
+  guarded: "tool input",
+  closed: (ctx) => ({
+    fields: failClosedFields(ctx.parsedOk, ctx.err, {
+      messages: ctx.messages,
+      hint: ctx.hint,
+    }),
+  }),
+});
 
 // Stryker disable all: CLI wiring — it runs only in the spawned hook
 // subprocess, never in-process, so every mutant from here down is NoCoverage.

@@ -41,47 +41,27 @@ jobs:
         if: steps.check.outputs.configured == 'true'
         run: pnpm test
 
-      # `node --test`'s default discovery skips dot-directories, so nothing
-      # under .github/scripts runs via `pnpm test`. Run the auto-resolve suites
-      # explicitly: they gate a workflow that pushes merge commits to PR
-      # branches with a workflow-scoped PAT, so they must not be decorative.
-      # Scoped to auto-resolve-* rather than the whole directory — the other
-      # suites there have unmet dependencies and would fail this required check.
-      - name: Run auto-resolve workflow-script tests
-        run: node --test .github/scripts/auto-resolve-*.test.mjs
-
-      # Same reason, same dot-directory blind spot: this suite pins that an agent
-      # run which reported `is_error` fails the job instead of reporting a clean
-      # review. claude-code-action exits 0 on a dead session, so that check is the
-      # only thing standing between a broken credential and a green reviewer that
-      # read nothing — a decorative test file here would restore exactly the
-      # silent pass it exists to prevent.
       # post-pr-review.mjs imports agent-sanitizer by name, and
       # .github/scripts/package.json ends the package scope there, so the
       # self-reference never resolves — the import needs the same
-      # .github/scripts/node_modules install the review workflow does.
+      # .github/scripts/node_modules install the review workflow does. It has to
+      # precede the discovered run below, which includes that suite.
       - name: Install the input sanitizer
         run: bash .github/scripts/install-sanitizer.sh
 
-      - name: Run PR-review script tests
-        run: node --test .github/scripts/post-pr-review.test.mjs
-
-      # Same dot-directory blind spot. This suite pins what the nightly-fuzz
-      # issue actually says: it must quote the FAILING tests (not the run's
-      # coverage-table tail) and must not dress an ordinary red suite up as a
-      # fast-check counterexample. Both regressions shipped in #211, and the
-      # only reader of that issue is a human deciding whether to go look — a
-      # decorative test here restores exactly the unactionable report it exists
-      # to prevent. No extra deps: the suite is node builtins only.
-      - name: Run nightly-fuzz reporter tests
-        run: node --test .github/scripts/nightly-fuzz-issue.test.mjs
-
-      # Same blind spot again. This one guards every workflow and composite
-      # action against a `steps.<id>` reference no step defines — Actions renders
-      # an unknown id as the empty string rather than erroring, so the bug is
-      # invisible until a gate silently no-ops or fails for the wrong reason.
-      - name: Run workflow step-reference guard
-        run: node --test .github/scripts/workflow-step-refs.test.mjs
+      # `node --test`'s default discovery skips dot-directories, so nothing
+      # under .github/scripts runs via `pnpm test`. This DISCOVERS every suite
+      # there (git ls-files) rather than naming them. The hand-written list it
+      # replaces had rotted in both directions at once: its `auto-resolve-*`
+      # glob needs a literal hyphen and does not cross `/`, so it matched only
+      # the four FLAT suites — whose scripts nothing invoked any more — while
+      # the nine live suites under auto-resolve/ ran in no job at all, and seven
+      # more (check-claude-execution, sanitize-pr-input, select-resolvable-
+      # threads, pr-review-advisory, resolve-generated, compute-haiku-cost-
+      # footer, phone-home-extract) had never been listed. The script fails loud
+      # on an empty discovery, so this step cannot go decorative again.
+      - name: Run the .github/scripts test suites
+        run: bash .github/scripts/run-script-tests.sh
 
       # Named explicitly rather than left to `pnpm test`'s discovery. This suite
       # gates the shipped plugin artifact — the reproducibility byte-compare and
@@ -91,13 +71,14 @@ jobs:
       - name: Run plugin tests
         run: node --test plugin/test/*.test.mjs
 
-      # claude-hooks/ carries no coverage floor. The suite drives these hooks the
-      # way Claude Code does — as subprocesses running the BUNDLE — so c8
-      # attributes only scattered import-time lines back to the sources, and
-      # `plugin-hooks.mjs` itself measures 0% while three tests spawn it. A ratio
-      # over that is both unable to notice those tests disappearing and prone to
-      # falling below its own floor whenever a source file grows. The behavioural
-      # gates hold this code instead: the degraded-verdict matrix, the env-var
+      # claude-hooks/ and bin/ DO carry a coverage floor now — a separate, lower
+      # ratchet from src/'s 100% (see `SCOPES` in scripts/coverage.mjs), applied
+      # by `pnpm test` above. It is deliberately below the measured value: part
+      # of this code is driven the way Claude Code drives it, as subprocesses
+      # running the committed BUNDLE, and those lines are attributed to the
+      # bundle rather than back to the source, so the ratio moves when a file
+      # merely grows. The ratio is a backstop, not the real gate; the behavioural
+      # gates still hold this code — the degraded-verdict matrix, the env-var
       # coverage enumeration, the egress pin, the fail-closed peer test and the
       # live-engine job.
 

@@ -50,7 +50,16 @@ env:
   # added to the template auto-sync without anyone having to edit this list.
   # Downstream-added files in these directories are left alone (sync only
   # copies files that exist in the template).
-  SYNC_PATHS: ".claude .hooks .github/actions .github/scripts .github/workflows .github/prompts"
+  #
+  # The trailing entries are single FILES, not directories: data that a synced
+  # script READS. `.github/tool-versions.sh` and `.github/claude-cli-version`
+  # are pins that install-mergiraf.sh and install-claude-cli.sh source by path,
+  # so a script synced without its pin dies at `source`/`tr` under
+  # `set -euo pipefail`. That is not hypothetical — it is why every sync run
+  # failed until this line grew: the widening that would have delivered the pins
+  # shipped INSIDE a sync PR, and the sync workflow died before it could open
+  # one. tests/test_script_data_deps.py pins the invariant.
+  SYNC_PATHS: ".claude .hooks .github/actions .github/scripts .github/workflows .github/prompts .github/tool-versions.sh .github/claude-cli-version config/javascript/commitlint.config.js"
   # Paths to exclude from syncing. Supports both whole directories (matching
   # entries in SYNC_PATHS) and individual files within synced directories.
   #
