@@ -27,6 +27,7 @@
 import { CATEGORY, describeStripped, isSgrOnly } from "./invisible.mjs";
 import { HTML_TAG_PRESENT, MD_LINK_HINT } from "./gates.mjs";
 import { applyLayer1, LONE_SURROGATE_RE } from "./layer1.mjs";
+import { orderedMatches, spliceOrdered } from "./view-map.mjs";
 
 /**
  * Closed enum of LIBRARY-OWNED Layer-5 warning codes — the ONLY warning values
@@ -206,22 +207,38 @@ export function describeWarned(warned) {
 /**
  * Delete each verbatim span in `spans` from `text`. The secure Layer-5
  * primitive: a filter can only ask for deletions, so this can never inject
- * bytes. Returns the new text and how many distinct span-occurrences were
- * removed (0 when no span was present).
+ * bytes. Returns the new text and how many span occurrences were removed (0
+ * when no span was present).
+ *
+ * Every occurrence is located in the ORIGINAL `text` and the deletions applied
+ * in one ordered pass ({@link spliceOrdered}), so every removed byte lies inside
+ * a match some span had in the INPUT. Deleting span-by-span with a
+ * chained `split`/`join` would not hold that line: an earlier deletion joins the
+ * bytes on either side of it and can CREATE a match for a later span that never
+ * occurred in the input — `deleteVerbatimSpans("PRE-XX-POST", ["-XX-", "PREPOST"])`
+ * then deletes the whole document. That would widen the Layer-5 seam's blast
+ * radius (see the module doc) from "a compromised filter can at most remove the
+ * content it named" to "it can remove content it never named".
+ *
+ * Overlapping spans are resolved first-match-wins, so `removed` counts the
+ * occurrences actually spliced out, never a double-count of the same bytes.
  * @param {string} text
  * @param {string[]} spans
  * @returns {{ text: string, removed: number }}
  */
 export function deleteVerbatimSpans(text, spans) {
-  let out = text;
-  let removed = 0;
-  for (const span of spans) {
-    if (!span) continue;
-    const parts = out.split(span);
-    removed += parts.length - 1;
-    out = parts.join("");
-  }
-  return { text: out, removed };
+  // Keep only non-empty STRING spans. The filter is untrusted JS, not a
+  // type-checked caller, so the array can hold anything: `indexOf(123)` would
+  // silently match the literal text "123" (deleting content the filter never
+  // named), and `occurrences` steps by `needle.length` — `undefined` for a
+  // number — making `indexOf(needle, NaN)` clamp back to the same index and
+  // loop forever. Fail open on a malformed entry rather than mangle bytes or
+  // hang the pipeline.
+  const usable = spans.filter(
+    (span) => typeof span === "string" && span !== "",
+  );
+  const spliced = spliceOrdered(text, orderedMatches(text, usable), () => "");
+  return { text: spliced.text, removed: spliced.spans.length };
 }
 
 /**

@@ -10,6 +10,8 @@ import assert from "node:assert/strict";
 import {
   occurrences,
   overlapAwareCount,
+  orderedMatches,
+  spliceOrdered,
   alignDeletions,
   resolveSpan,
   rehydrateNewString,
@@ -67,6 +69,53 @@ describe("overlapAwareCount", () => {
 
   it("returns 0 for an empty needle (no infinite loop)", () => {
     assert.equal(overlapAwareCount("anything", ""), 0);
+  });
+});
+
+// ─── orderedMatches / spliceOrdered ──────────────────────────────────────────
+
+describe("spliceOrdered", () => {
+  const splice = (text, needles, replacementFor) =>
+    spliceOrdered(text, orderedMatches(text, needles), replacementFor);
+
+  it("substitutes every match in one pass over the original text", () => {
+    assert.deepEqual(
+      splice("a-X-b-Y-", ["X", "Y"], (match) => `<${match.text}>`),
+      {
+        text: "a-<X>-b-<Y>-",
+        spans: [
+          { start: 2, end: 5 },
+          { start: 8, end: 11 },
+        ],
+      },
+    );
+  });
+
+  it("never re-matches a needle its own replacement introduced", () => {
+    // Substituting "A" -> "B" and "B" -> "A" must SWAP them, not run the second
+    // needle over the first's output (which would leave both as "A").
+    assert.equal(
+      splice("AB", ["A", "B"], (match) => (match.text === "A" ? "B" : "A"))
+        .text,
+      "BA",
+    );
+  });
+
+  it("skips a match overlapping the previous one (first-match-wins)", () => {
+    // "abX" (index 0) and "bXY" (index 1) overlap; only the first is spliced,
+    // and the second is dropped rather than applied at a shifted offset.
+    const result = splice("abXY", ["abX", "bXY"], () => "#");
+    assert.deepEqual(result, { text: "#Y", spans: [{ start: 0, end: 1 }] });
+  });
+
+  it("is a no-op with no matches", () => {
+    assert.deepEqual(
+      splice("abc", ["z", ""], () => "#"),
+      {
+        text: "abc",
+        spans: [],
+      },
+    );
   });
 });
 

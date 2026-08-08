@@ -72,6 +72,11 @@ const FUZZ_REQUIRED = [
   "sanitizeText",
   "sanitizeValue",
   "deleteVerbatimSpans",
+  // The needle-splice primitive behind deleteVerbatimSpans, rehydrateNewString
+  // and the whole-file Write substitution: it decides which bytes of untrusted
+  // text are removed or replaced, so it owes the "only verbatim matches of the
+  // ORIGINAL text are touched" property directly, not just via its callers.
+  "spliceOrdered",
 ];
 
 // Entry points that owe SEMANTIC-CORRECTNESS fuzzing, not just structural
