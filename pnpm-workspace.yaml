@@ -1,4 +1,32 @@
 allowBuilds:
   esbuild: true
+
+# Supply-chain cooling-off window: refuse to RESOLVE a dependency version
+# published less than 3 days ago (4320 minutes). npm account takeovers are
+# caught and the malicious version unpublished on a scale of hours to a couple
+# of days, so the window converts "installed the compromised version minutes
+# after it landed" into "never saw it" — without pinning us to stale deps.
+#
+# This was already half-configured: `minimumReleaseAgeExclude` below was
+# committed WITHOUT this key, and an exclude list with no window to be excluded
+# from enforces nothing. tests/test_minimum_release_age.py now fails if the key
+# goes missing again.
+#
+# Cost is near zero: the setting gates RESOLUTION only. `pnpm install
+# --frozen-lockfile` — every CI job and the pre-commit path — installs versions
+# the lockfile already names and is untouched. It bites `pnpm add` and
+# `pnpm update`, which is exactly where a poisoned release would enter.
+minimumReleaseAge: 4320
+
+# Exempt this repo's OWN published package. The `sanitizer-engine` alias in
+# package.json pins a published `agent-sanitizer` so the plugin is built and
+# tested against the artifact that actually shipped; applying the window to our
+# own release would stall every engine-pin bump by three days for no security
+# gain, since that release is built and published from this repository with npm
+# provenance rather than fetched from a third party.
+#
+# Every entry must name a version package.json actually depends on — an
+# exemption that outlives its pin is a permanent hole in the window above, and
+# tests/test_minimum_release_age.py fails on one.
 minimumReleaseAgeExclude:
-  - agent-sanitizer@2.12.0
+  - agent-sanitizer@2.20.0

@@ -9,7 +9,7 @@
  * sibling data module, not a package), so it decides preservation from the
  * actual cursive-join semantics rather than a hand-rolled script guess.
  */
-import { joiningType, isVirama } from "./joining-type.mjs";
+import { joiningType, isVirama, isBrahmicConsonant } from "./joining-type.mjs";
 import { isStandardizedVariant } from "./standardized-variants.mjs";
 import { CF_CODEPOINTS } from "./cf-charset.mjs";
 import { scanAnsi, TOKEN_KIND } from "./ansi.mjs";
@@ -228,9 +228,10 @@ export const CONSECUTIVE_JOINER_CAP = 8;
 // visible characters in a row), exactly like CONSECUTIVE_JOINER_CAP.
 export const CONSECUTIVE_SELECTOR_CAP = 8;
 
-// Floor on the document-wide preserve budget, shared by both preserve kinds
-// (see `kind` in analyzeCarve: joiners AND presentation selectors draw from
-// the same counter). The Joining_Type gate strips joiners that do no
+// Floor on the document-wide preserve budget for joiners, selectors and tag
+// sequences (see `kind` in analyzeCarve — blank fillers are NOT charged here;
+// they have their own allowance, see TOTAL_PRESERVED_BLANK_BUDGET). The
+// Joining_Type gate strips joiners that do no
 // rendering work regardless of count, so the bulk covert channel (ZWNJ
 // scattered through Latin/ASCII/mixed text) is closed by shape, not by
 // counting. What remains is the residual channel of MEANINGFUL joiners/
@@ -259,6 +260,31 @@ export const PRESERVED_JOINER_PER_VISIBLE = 8;
 // nothing else bounds it. This caps the whole channel at a fixed width no cover
 // text can widen.
 export const PRESERVE_HARD_CAP = 64;
+
+// Floor on the document-wide allowance for PRESERVED blank fillers (the
+// Braille blank and the Hangul fillers — see the blank-filler carve-out). Kept
+// separate from the joiner/selector budget because the two have completely
+// different legitimate densities, and short blank-dense strings (a one-line
+// Braille phrase, a lone archaic syllable) must stay un-clipped.
+export const TOTAL_PRESERVED_BLANK_BUDGET = 16;
+
+// Visible ANCHOR-script code points (a non-blank Braille cell, a non-filler
+// Hangul jamo/syllable) required per preserved blank filler above the floor. A
+// blank is only ever preservable next to one of these, so this ratio is what
+// separates real text from the degenerate channel: U+2800 separates WORDS and a
+// filler completes a syllable, so genuine text spends several anchor characters
+// per blank and stays under one blank per two anchors, while the alternation an
+// attacker needs to stuff a bit per character (`가ᅟ가ᅟ…`, `⠃⠀⠃⠀…`) is exactly
+// 1:1 and fails.
+//
+// Deliberately NOT capped by PRESERVE_HARD_CAP: an absolute ceiling is what
+// truncated long Braille documents, and unlike the joiner channel this one
+// cannot scale on invisible cover text — every additional bit costs the
+// attacker two VISIBLE anchor-script characters, and the blanks themselves
+// render as spacing a reader can see. Over the ratio, NO blank in the document
+// is preserved (all-or-nothing, so a document never comes out half-spaced) and
+// every one of them becomes payload — which then also feeds the scatter floor.
+export const PRESERVED_BLANK_PER_ANCHOR = 2;
 
 // Scripts whose orthography uses ZWNJ/ZWJ between letters as a rendering
 // control. The runtime gate is now script-agnostic (it reads Joining_Type, so it
@@ -364,52 +390,32 @@ function isCjkIdeograph(ch) {
   return CJK_IDEOGRAPH_RE.test(ch);
 }
 
-// Consonant (KA..HA and script-specific additional-consonant) ranges of the
-// Brahmic scripts the joiner carve-out serves. A virama does half-form/conjunct
-// work ONLY on a consonant base; a bare or base-less halant + ZWJ carries no
-// rendering and is a smuggling channel, so the Indic joiner is preserved only
-// when its virama sits on one of these. Broad per-block spans — precision here
-// only needs "a real Brahmic letter of this script", not an exact consonant set.
+// Brahmic consonants: the only base a virama does half-form/conjunct work on.
+// A bare or base-less halant + ZWJ carries no rendering and is a smuggling
+// channel, so the Indic joiner is preserved only over one of these.
 //
-// UNLIKE the CJK and Hangul gates these CANNOT be derived from a property
-// escape: the UCD property that names them is Indic_Syllabic_Category=Consonant,
-// and JS RegExp exposes only General_Category, Script, Script_Extensions and the
-// binary properties. \p{Script=Devanagari} is the wrong shape — it also holds the
-// independent vowels (U+0904–U+0914), which a virama never attaches to, so
-// switching to it would preserve joiners after a bare vowel + halant. The table
-// therefore stays literal, and
-// test/invisible-unicode-tables.test.mjs pins the strongest contract that IS
-// derivable: every assigned code point in each span is a letter of the script
-// the span names, and each span holds at least one such letter. Drift (a future Unicode
-// filling a hole with a non-letter, or a typo'd span crossing into a neighbouring
-// script's block) then fails CI instead of shipping.
-// Keyed by script name so the contract test can check each span against the
-// script it claims; exported for exactly that test.
-/** @type {ReadonlyArray<readonly [string, number, number]>} */
-export const BRAHMIC_CONSONANT_RANGES = [
-  ["Devanagari", 0x0915, 0x0939], // KA–HA
-  ["Devanagari", 0x0958, 0x095f], // additional consonants
-  ["Bengali", 0x0995, 0x09b9],
-  ["Bengali", 0x09dc, 0x09df], // additional consonants
-  ["Gurmukhi", 0x0a15, 0x0a39],
-  ["Gurmukhi", 0x0a59, 0x0a5e], // additional consonants
-  ["Gujarati", 0x0a95, 0x0ab9],
-  ["Oriya", 0x0b15, 0x0b39],
-  ["Oriya", 0x0b5c, 0x0b5f], // additional consonants
-  ["Tamil", 0x0b95, 0x0bb9],
-  ["Telugu", 0x0c15, 0x0c39],
-  ["Telugu", 0x0c58, 0x0c5a], // additional consonants
-  ["Kannada", 0x0c95, 0x0cb9],
-  ["Malayalam", 0x0d15, 0x0d3a],
-  ["Sinhala", 0x0d9a, 0x0dc6],
-];
+// The spans are GENERATED from the UCD (Indic_Syllabic_Category=Consonant,
+// restricted by Script) and live in ./joining-type.mjs alongside the virama
+// table they are read against — see scripts/gen-joining-type.mjs. They used to
+// be hand-typed per-block KA–HA approximations here, which swept up the holes
+// between the real consonants; ECMAScript exposes no
+// \p{Indic_Syllabic_Category=…} escape, and \p{Script=Devanagari} is the wrong
+// shape on its own (it also holds the independent vowels U+0904–U+0914, which a
+// virama never attaches to), so a generated table is the only drift-proof
+// answer. Re-exported here because it was part of this module's surface before
+// it moved, and because test/invisible-unicode-tables.test.mjs checks each span
+// against the script it claims.
+export { BRAHMIC_CONSONANT_RANGES } from "./joining-type.mjs";
 
-/** True when `cp` is a Brahmic consonant — the only base a virama attaches to.
- * @param {number} cp @returns {boolean} */
-function isBrahmicConsonant(cp) {
-  for (const [, start, end] of BRAHMIC_CONSONANT_RANGES)
-    if (cp >= start && cp <= end) return true;
-  return false;
+/** True when `ch` is a Brahmic consonant. Takes a CHARACTER, like its sibling
+ * predicates here (`isCjkIdeograph`, `isJoinControl`), over the code-point
+ * `isBrahmicConsonant` it wraps in ./joining-type.mjs, where every predicate
+ * takes a code point.
+ * @param {string} ch @returns {boolean} */
+function isBrahmicConsonantChar(ch) {
+  return (
+    ch !== "" && isBrahmicConsonant(/** @type {number} */ (ch.codePointAt(0)))
+  );
 }
 
 // ─── Blank-filler carve-out (Braille / archaic Hangul) ───────────────────────
@@ -422,6 +428,17 @@ function isBrahmicConsonant(cp) {
 // the anchor and is stripped — the run-length gate falls out of the anchor. The
 // zero-width Mn marks in BLANK_NON_CF (U+034F/17B4/17B5) have no such benign
 // standalone use, so they are never preserved.
+//
+// Blank fillers are NOT charged against the joiner/selector preserve budget:
+// that budget's density model is "~1 preserved invisible per 8 visible chars"
+// (PRESERVED_JOINER_PER_VISIBLE), measured on Persian ZWNJ prose, with a fixed
+// PRESERVE_HARD_CAP ceiling. Blanks are an order of magnitude denser in genuine
+// text — U+2800 IS the word space of Unicode Braille, and a Hangul filler
+// completes a defective syllable — so charging them there mangled real content:
+// a 40-word Braille passage lost 14 of its 39 word spaces (words run together)
+// and a 200-word one kept 64 of 199, with `found` reporting a strip on a
+// perfectly legitimate document. They draw on the anchor-proportional allowance
+// below instead (see TOTAL_PRESERVED_BLANK_BUDGET).
 const BRAILLE_BLANK = 0x2800;
 const HANGUL_FILLERS = new Set([0x115f, 0x1160, 0x3164, 0xffa0]);
 // Code points that trigger the carve-out path for blank fillers (see
@@ -532,11 +549,7 @@ function followsBrahmicConjunct(cps, i) {
   while (j >= 0 && !isJoinControl(cps[j]) && classify(cps[j]) !== null) j--;
   if (j < 0 || !isVirama(/** @type {number} */ (cps[j].codePointAt(0))))
     return false;
-  const base = effectiveNeighbor(cps, j, -1);
-  return (
-    base !== "" &&
-    isBrahmicConsonant(/** @type {number} */ (base.codePointAt(0)))
-  );
+  return isBrahmicConsonantChar(effectiveNeighbor(cps, j, -1));
 }
 
 /**
@@ -624,6 +637,44 @@ function analyzeCarve(cps) {
     if (isPreservedBlankFiller(cps, i)) return "blank";
     return null;
   });
+  // Blank fillers are budgeted here, document-wide and all-or-nothing, against
+  // the visible anchor-script text rather than against the joiner/selector
+  // counter in carveStrip (see PRESERVED_BLANK_PER_ANCHOR for why the two
+  // cannot share a density model). Deciding it in analyzeCarve rather than in
+  // the emit loop keeps countPayloadInvisible and payloadInvisibleView honest:
+  // a blank the stripper will remove is payload to every consumer, so the
+  // prompt layer's scatter gate sees it without re-deriving the budget.
+  //
+  // Budgeted PER SCRIPT, because a blank never anchors cross-script: pooling the
+  // two anchor counts would let one script's cover text fund the other's
+  // channel, so 400 chars of ordinary Korean prose would buy an unreported
+  // `⠃⠀⠃⠀…` alternation of 200 Braille blanks. The anchor scan is skipped below
+  // the floor: it costs a script regex per visible character, and analyzeCarve
+  // runs on every prompt and tool output.
+  const blankScript = kind.map((k, i) =>
+    k !== "blank"
+      ? null
+      : cps[i].codePointAt(0) === BRAILLE_BLANK
+        ? "braille"
+        : "hangul",
+  );
+  for (const [
+    script,
+    isAnchor,
+  ] of /** @type {[string, (ch: string) => boolean][]} */ ([
+    ["braille", isBrailleCell],
+    ["hangul", isHangul],
+  ])) {
+    const blanks = blankScript.filter((s) => s === script).length;
+    if (blanks <= TOTAL_PRESERVED_BLANK_BUDGET) continue;
+    const anchors = cps.reduce(
+      (n, ch, i) => n + (codes[i] === null && isAnchor(ch) ? 1 : 0),
+      0,
+    );
+    if (blanks > Math.floor(anchors / PRESERVED_BLANK_PER_ANCHOR))
+      for (let i = 0; i < kind.length; i++)
+        if (blankScript[i] === script) kind[i] = null;
+  }
   let payloadInvis = 0;
   let visibleLen = 0;
   for (let i = 0; i < cps.length; i++) {
@@ -814,12 +865,15 @@ function clusterEnds(body) {
 
 /**
  * Carve-out strip (an invisible the carve-out might preserve is present): walk
- * GRAPHEME CLUSTERS, preserving a cluster's joiners/selectors/tags/blank-fillers
- * only where each has its `kind` set AND the text stays under the scatter floor
- * AND the whole cluster fits inside the remaining per-run
- * (CONSECUTIVE_JOINER_CAP / CONSECUTIVE_SELECTOR_CAP) and document-wide
- * (TOTAL_PRESERVED_JOINER_BUDGET) preserve allowance — otherwise every
- * preservable char in that cluster is stripped like any other payload byte.
+ * GRAPHEME CLUSTERS, preserving a cluster's joiners/selectors/tags only where
+ * each has its `kind` set AND the text stays under the scatter floor AND the
+ * whole cluster fits inside the remaining per-run (CONSECUTIVE_JOINER_CAP /
+ * CONSECUTIVE_SELECTOR_CAP) and document-wide (TOTAL_PRESERVED_JOINER_BUDGET)
+ * preserve allowance — otherwise every preservable char in that cluster is
+ * stripped like any other payload byte. Blank fillers are the exception: their
+ * allowance is anchor-proportional and already spent document-wide in
+ * analyzeCarve (see PRESERVED_BLANK_PER_ANCHOR), so here they answer only to
+ * the scatter floor and do not draw on the joiner/selector budget.
  *
  * The budget is charged against the CLUSTER, not the code point, because the
  * cluster is the indivisible unit: charging per code point let a limit fall due
@@ -886,7 +940,10 @@ function carveStrip(body) {
     let joiners = 0;
     let selectors = 0;
     for (let k = start; k < end; k++) {
-      if (kind[k] === null) continue;
+      // "blank" is exempt: analyzeCarve already decided it against the
+      // anchor-proportional allowance, so it neither draws on this budget nor
+      // is stripped by it (only by the scatter floor, via allowCarveOut).
+      if (kind[k] === null || kind[k] === "blank") continue;
       need++;
       if (kind[k] === "joiner") joiners++;
       if (kind[k] === "ivs" || kind[k] === "stdvs") selectors++;
@@ -928,11 +985,13 @@ function carveStrip(body) {
         out += cps[k]; // ordinary visible character
         continue;
       }
-      if (fits && kind[k] !== null) {
+      // A blank filler rides on allowCarveOut alone (its own allowance is
+      // already spent in analyzeCarve); everything else rides on `fits`.
+      if (kind[k] === "blank" ? allowCarveOut : fits && kind[k] !== null) {
         if (kind[k] === "joiner") joinerRun++;
         if (kind[k] === "ivs" || kind[k] === "stdvs") selectorRun++;
-        preservedTotal++;
-        prevVisible = false; // a joiner/selector/tag keeps the cluster open
+        if (kind[k] !== "blank") preservedTotal++;
+        prevVisible = false; // a joiner/selector/tag/blank keeps the cluster open
         out += cps[k];
         continue;
       }

@@ -65,7 +65,7 @@ export const USER_PROMPT_MESSAGES = Object.freeze({
   blockContext:
     "User prompt blocked: payload-capable invisible/ANSI characters detected.",
   sgrNote:
-    "The prompt contains ANSI SGR color codes (pasted terminal output). They are display-only formatting noise; read through them.",
+    "The prompt contains inert ANSI escapes (pasted terminal output): display-only SGR colour codes and/or a stray escape byte that forms no control sequence. They are formatting noise; read through them.",
   hookFailed: (cause) =>
     `sanitize-user-prompt hook failed (fail-closed): ${cause}`,
   // What a reader should run when the package itself is what is missing. It

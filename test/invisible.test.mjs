@@ -28,9 +28,12 @@ import {
   TOTAL_PRESERVED_JOINER_BUDGET,
   PRESERVED_JOINER_PER_VISIBLE,
   PRESERVE_HARD_CAP,
+  TOTAL_PRESERVED_BLANK_BUDGET,
+  PRESERVED_BLANK_PER_ANCHOR,
   LINGUISTIC_SCRIPTS,
   describeStripped,
   payloadInvisibleView,
+  countPayloadInvisible,
 } from "../src/invisible.mjs";
 import { applyLayer1, stripAnsiFully } from "../src/layer1.mjs";
 import { fcRunOptions, cp } from "./test-helpers.mjs";
@@ -781,8 +784,9 @@ describe("document-wide preserved-joiner budget", () => {
   });
 
   it("standalone presentation selectors (no joiner in the document) share the same budget", () => {
-    // The budget counts every preserved item — joiners AND presentation
-    // selectors — across the whole document, not per-kind. N gap-separated
+    // The budget counts joiners AND presentation selectors across the whole
+    // document, not per-kind (blank fillers are the one exception — they draw
+    // on the anchor-proportional allowance instead, see below). N gap-separated
     // pictograph+VS16 pairs with NO ZWNJ/ZWJ anywhere still hit the same cap:
     // over-strip beats under-strip even for a purely selector-dense document.
     const pictographPlusSelector = cp(0x2764) + cp(0xfe0f) + " ";
@@ -1393,6 +1397,335 @@ describe("stripInvisible: blank-filler carve-out", () => {
   });
 });
 
+// ─── Every Hangul filler, in and out of Hangul context ───────────────────────
+// The carve-out above was only pinned for U+3164, so the other three fillers'
+// Hangul-context behaviour was asserted nowhere deterministic — it rode on
+// whether a fast-check seed happened to place one next to a Hangul char. That
+// is exactly how CI job 93129079581 went red on main (seed -1494323434,
+// counterexample "ᅟ가"). All four are Script=Hangul blank fillers and
+// MUST behave identically, so the table below pins each one in every context.
+const HANGUL_FILLER_CODES = [0x115f, 0x1160, 0x3164, 0xffa0];
+const HANGUL_SYLLABLE = cp(0xac00); // 가 — a precomposed modern syllable
+const HANGUL_JAMO = cp(0x1100); // ᄀ — a conjoining choseong (archaic context)
+
+describe("stripInvisible: every Hangul filler, in and out of Hangul context", () => {
+  for (const code of HANGUL_FILLER_CODES) {
+    const filler = cp(code);
+    const hex = code.toString(16).toUpperCase().padStart(4, "0");
+
+    // PRESERVED: anchored by a real Hangul neighbour on either side. Stripping
+    // these mangles archaic-Korean / isolated-jamo text, which is the whole
+    // reason the carve-out exists.
+    for (const [label, input] of [
+      ["before a Hangul syllable", filler + HANGUL_SYLLABLE],
+      ["after a Hangul syllable", HANGUL_SYLLABLE + filler],
+      ["between Hangul syllables", HANGUL_SYLLABLE + filler + HANGUL_SYLLABLE],
+      ["after a conjoining jamo", HANGUL_JAMO + filler],
+      ["before a conjoining jamo", filler + HANGUL_JAMO],
+    ])
+      it(`U+${hex} is preserved ${label}`, () => {
+        const { cleaned, found } = stripInvisibleWithReport(input);
+        assert.equal(cleaned, input);
+        assert.deepEqual(found, []);
+      });
+
+    // STRIPPED: no Hangul anchor. The Script=Hangul (not Script_Extensions)
+    // gate is what makes the CJK-punctuation cases strip — U+3001 IDEOGRAPHIC
+    // COMMA and U+30FB KATAKANA MIDDLE DOT are Script_Extensions=Hangul, so a
+    // Japanese sentence would otherwise anchor a filler with no Korean in it.
+    // The first three isolate the ANCHOR from the POSITION: they hold the edge
+    // fixed and swap only the neighbour's script, so a bug of the form
+    // "preserve any filler at a string edge" — which the preserved cases above
+    // would happily pass — reds here instead.
+    for (const [label, input, expected] of [
+      ["alone", filler, ""],
+      ["at the start, before Latin", `${filler}a`, "a"],
+      ["at the end, after Latin", `a${filler}`, "a"],
+      ["between Latin letters", `a${filler}b`, "ab"],
+      ["as a run between Latin letters", `a${filler.repeat(3)}b`, "ab"],
+      ["next to a CJK ideograph", `漢${filler}`, "漢"],
+      ["next to an ideographic comma", `、${filler}`, "、"],
+      ["next to a katakana middle dot", `・${filler}`, "・"],
+    ])
+      it(`U+${hex} is stripped ${label}`, () => {
+        const { cleaned, found } = stripInvisibleWithReport(input);
+        assert.equal(cleaned, expected);
+        assert.deepEqual(found, [CATEGORY.BLANK_FILLERS]);
+      });
+  }
+
+  it("a filler never anchors another filler, whichever two are paired", () => {
+    // Cross-filler self-anchoring: U+115F beside U+1160 with no real Hangul in
+    // reach is a run, not archaic text, so both go. Pinned for every ordered
+    // pair so a future `isHangul` that forgets one filler can't slip through.
+    for (const a of HANGUL_FILLER_CODES)
+      for (const b of HANGUL_FILLER_CODES) {
+        const input = `x${cp(a)}${cp(b)}y`;
+        const { cleaned, found } = stripInvisibleWithReport(input);
+        assert.equal(cleaned, "xy", JSON.stringify(input));
+        assert.deepEqual(found, [CATEGORY.BLANK_FILLERS]);
+      }
+  });
+});
+
+// ─── The same table for Braille, whose edges were equally unpinned ────────────
+// `isPreservedBlankFiller` is symmetric across the two scripts: one branch for
+// U+2800 beside a real cell, one for the Hangul fillers beside real Hangul. The
+// edge shape the CI counterexample exposed for Hangul was therefore just as
+// untested for Braille — every fixed U+2800 case anchored the blank on BOTH
+// sides. Pinned here in the same preserved/stripped shape so the two halves of
+// one predicate cannot drift apart in coverage.
+const BRAILLE_CELL = cp(0x2803); // ⠃ — a real (non-blank) Braille cell
+const BRAILLE_BLANK = cp(0x2800);
+
+describe("stripInvisible: the Braille blank, in and out of Braille context", () => {
+  for (const [label, input] of [
+    ["before a cell", BRAILLE_BLANK + BRAILLE_CELL],
+    ["after a cell", BRAILLE_CELL + BRAILLE_BLANK],
+    ["between cells", BRAILLE_CELL + BRAILLE_BLANK + cp(0x2801)],
+  ])
+    it(`U+2800 is preserved ${label}`, () => {
+      const { cleaned, found } = stripInvisibleWithReport(input);
+      assert.equal(cleaned, input);
+      assert.deepEqual(found, []);
+    });
+
+  // Same anchor-vs-position isolation as the Hangul table: the edge is held
+  // fixed and only the neighbour's script changes.
+  for (const [label, input, expected] of [
+    ["alone", BRAILLE_BLANK, ""],
+    ["at the start, before Latin", `${BRAILLE_BLANK}a`, "a"],
+    ["at the end, after Latin", `a${BRAILLE_BLANK}`, "a"],
+    ["between Latin letters", `a${BRAILLE_BLANK}b`, "ab"],
+    ["next to a Hangul syllable", HANGUL_SYLLABLE + BRAILLE_BLANK, "가"],
+  ])
+    it(`U+2800 is stripped ${label}`, () => {
+      const { cleaned, found } = stripInvisibleWithReport(input);
+      assert.equal(cleaned, expected);
+      assert.deepEqual(found, [CATEGORY.BLANK_FILLERS]);
+    });
+
+  it("a blank never anchors another blank, so a bare pair is stripped whole", () => {
+    const input = `x${BRAILLE_BLANK.repeat(2)}y`;
+    const { cleaned, found } = stripInvisibleWithReport(input);
+    assert.equal(cleaned, "xy");
+    assert.deepEqual(found, [CATEGORY.BLANK_FILLERS]);
+  });
+});
+
+// ─── Negative corpus: legitimate Korean text yields zero findings ─────────────
+// Precision guard for the blank-filler detector (CLAUDE.md: a false positive
+// here mangles real content). Real Korean prose contains no fillers at all, so
+// the stripper must be a no-op AND the payload counter must read zero — a
+// counter that charged ordinary Hangul would push honest Korean documents over
+// the scattered-invisibles block threshold in prompt.mjs.
+describe("stripInvisible: legitimate Korean text is untouched", () => {
+  const KOREAN_CORPUS = [
+    "안녕하세요, 세계!", // modern precomposed syllables + ASCII punctuation
+    "한국어 text with English mixed in", // mixed Hangul/Latin
+    "훈민정음 해례본", // multi-word prose
+    "가격은 1,000원입니다.", // digits and a currency word
+    "ㄱㄴㄷ ㅏㅑㅓ", // compatibility jamo — U+3164 HANGUL FILLER's own block
+    cp(0x1100) + cp(0x1161) + cp(0x11a8), // conjoining-jamo spelling of 각
+  ];
+
+  for (const text of KOREAN_CORPUS)
+    it(`no finding for ${JSON.stringify(text)}`, () => {
+      const { cleaned, found } = stripInvisibleWithReport(text);
+      assert.equal(cleaned, text);
+      assert.deepEqual(found, []);
+      assert.equal(countPayloadInvisible(text), 0);
+    });
+
+  it("an anchored filler in Korean prose is preserved and reported as nothing", () => {
+    // 한국어 with an isolated jamo completed by a jungseong filler (U+1160) —
+    // the legitimate use the carve-out protects. It must survive AND not count
+    // toward the payload/scatter thresholds.
+    const text = `한국어: ${HANGUL_JAMO}${cp(0x1160)}`;
+    const { cleaned, found } = stripInvisibleWithReport(text);
+    assert.equal(cleaned, text);
+    assert.deepEqual(found, []);
+    assert.equal(countPayloadInvisible(text), 0);
+  });
+});
+
+// ─── The blank fillers' own document-wide allowance ──────────────────────────
+// U+2800 is the WORD SPACE of Unicode Braille and a Hangul filler completes a
+// defective syllable, so genuine text carries roughly one blank per word — an
+// order of magnitude denser than the joiner budget's ~1-per-8-visible model.
+// While blanks were charged against that budget, a 40-word Braille passage came
+// out having lost 14 of its 39 word spaces (words running together) and a
+// 200-word one kept 64 of 199, `found` reporting a strip on a legitimate
+// document. They are now budgeted against the visible ANCHOR-script text.
+const BRAILLE_WORD = "⠃⠁⠇⠇⠕"; // a five-cell word
+/** A Braille passage of `words` five-cell words separated by the U+2800 space.
+ * @param {number} words @returns {string} */
+const braillePassage = (words) =>
+  Array.from({ length: words }, () => BRAILLE_WORD).join(BRAILLE_BLANK);
+
+describe("stripInvisible: blank fillers have their own anchor-proportional allowance", () => {
+  // Word counts chosen to straddle every bound of the OLD shared budget: 40
+  // exceeds ceil(visible/PRESERVED_JOINER_PER_VISIBLE) for a five-cell word,
+  // and 200 exceeds PRESERVE_HARD_CAP outright. Both must now round-trip.
+  for (const words of [10, 40, PRESERVE_HARD_CAP + 16, 200])
+    it(`a ${words}-word Braille passage keeps every word space`, () => {
+      const text = braillePassage(words);
+      const { cleaned, found } = stripInvisibleWithReport(text);
+      assert.equal(countOf(text, BRAILLE_BLANK), words - 1); // the input really has them
+      assert.equal(cleaned, text);
+      assert.deepEqual(found, []);
+      assert.equal(countPayloadInvisible(text), 0);
+    });
+
+  it("a long Braille passage is idempotent under a second strip", () => {
+    const text = braillePassage(200);
+    assert.equal(stripInvisible(stripInvisible(text)), text);
+  });
+
+  it("preserved blanks do not draw on the joiner budget", () => {
+    // The regression the split exists to prevent: a Braille passage's blanks
+    // used to consume the shared allowance, so joiners LATER in the same
+    // document were stripped as surplus. Exactly TOTAL_PRESERVED_JOINER_BUDGET
+    // gap-separated Persian joiners must still all survive next to it.
+    const joined = (cp(0x645) + ZWNJ + cp(0x62e) + cp(0x62e)).repeat(
+      TOTAL_PRESERVED_JOINER_BUDGET,
+    );
+    const text = `${braillePassage(200)} ${joined}`;
+    const { cleaned, found } = stripInvisibleWithReport(text);
+    assert.equal(countOf(cleaned, ZWNJ), TOTAL_PRESERVED_JOINER_BUDGET);
+    assert.equal(cleaned, text);
+    assert.deepEqual(found, []);
+  });
+
+  // ─── The ratio boundary, isolated to ONE variable ──────────────────────────
+  // Both documents hold BLANKS fixed at the same count and each blank anchored
+  // by a real cell; they differ only in how many ANCHOR characters accompany
+  // them. So the pair can only fail for the ratio itself — not for length, not
+  // for blank count, not for "long documents are exempt".
+  const BLANKS = TOTAL_PRESERVED_BLANK_BUDGET + 24; // above the floor: the ratio decides
+  // One unit = one blank anchored on its left, plus exactly
+  // PRESERVED_BLANK_PER_ANCHOR anchor cells, plus a non-anchor separator.
+  const unit =
+    BRAILLE_CELL +
+    BRAILLE_BLANK +
+    BRAILLE_CELL.repeat(PRESERVED_BLANK_PER_ANCHOR - 1) +
+    "x";
+  const atRatio = unit.repeat(BLANKS);
+  // Same blanks, ONE fewer anchor: drops the allowance below the blank count.
+  const overRatio = atRatio.slice(0, -2) + "x";
+
+  it("exactly at the ratio, every blank is preserved", () => {
+    assert.ok(
+      BLANKS > TOTAL_PRESERVED_BLANK_BUDGET,
+      "the floor must not decide",
+    );
+    const { cleaned, found } = stripInvisibleWithReport(atRatio);
+    assert.equal(countOf(atRatio, BRAILLE_BLANK), BLANKS);
+    assert.equal(cleaned, atRatio);
+    assert.deepEqual(found, []);
+    assert.equal(countPayloadInvisible(atRatio), 0);
+  });
+
+  it("one anchor short of the ratio, EVERY blank is stripped and reported", () => {
+    // All-or-nothing by design: a document that trips the ratio must not come
+    // out half-spaced, and the blanks it loses must count as payload so the
+    // prompt layer's scatter gate sees them without re-deriving the budget.
+    assert.equal(countOf(overRatio, BRAILLE_BLANK), BLANKS); // same blanks…
+    assert.ok(
+      countOf(overRatio, BRAILLE_CELL) < countOf(atRatio, BRAILLE_CELL),
+    );
+    const { cleaned, found } = stripInvisibleWithReport(overRatio);
+    assert.equal(countOf(cleaned, BRAILLE_BLANK), 0);
+    assert.deepEqual(found, [CATEGORY.BLANK_FILLERS]);
+    assert.equal(countPayloadInvisible(overRatio), BLANKS);
+    assert.equal(stripInvisible(cleaned), cleaned); // idempotent
+  });
+
+  it("the 1:1 alternation channel is stripped whole, on both scripts", () => {
+    // The channel the allowance exists to close: one blank per anchor character
+    // stuffs a bit into every position while each blank stays individually
+    // anchored, so only a density rule can catch it.
+    for (const [anchor, blank] of [
+      [HANGUL_SYLLABLE, cp(0x1160)],
+      [BRAILLE_CELL, BRAILLE_BLANK],
+    ]) {
+      const text = (anchor + blank).repeat(TOTAL_PRESERVED_BLANK_BUDGET * 8);
+      const { cleaned, found } = stripInvisibleWithReport(text);
+      assert.equal(cleaned, anchor.repeat(TOTAL_PRESERVED_BLANK_BUDGET * 8));
+      assert.deepEqual(found, [CATEGORY.BLANK_FILLERS]);
+    }
+  });
+
+  it("one script's cover text cannot fund the other script's channel", () => {
+    // The allowance is per script because a blank never anchors cross-script.
+    // Pooling the anchor counts would let ordinary Korean prose pay for a
+    // Braille alternation (and vice versa) — the channel would be preserved,
+    // unreported, and countPayloadInvisible would read zero.
+    const N = TOTAL_PRESERVED_BLANK_BUDGET * 8;
+    for (const [cover, anchor, blank] of [
+      ["한국어 문서입니다. ".repeat(20), BRAILLE_CELL, BRAILLE_BLANK],
+      [braillePassage(60), HANGUL_SYLLABLE, cp(0x1160)],
+    ]) {
+      const channel = (anchor + blank).repeat(N);
+      const { cleaned, found } = stripInvisibleWithReport(cover + channel);
+      assert.equal(countOf(cleaned, blank), 0, "the channel must not survive");
+      assert.deepEqual(found, [CATEGORY.BLANK_FILLERS]);
+      assert.equal(countPayloadInvisible(cover + channel), N);
+    }
+  });
+
+  it("a tripping script does not take the other script's blanks with it", () => {
+    // The verdict is per script, so a Hangul channel small enough to stay under
+    // the scatter floor (which would otherwise disable the carve-out wholesale)
+    // is stripped while the Braille passage beside it keeps every word space.
+    const fillers = TOTAL_PRESERVED_BLANK_BUDGET + 4;
+    assert.ok(
+      fillers < SCATTERED_THRESHOLD,
+      "the scatter floor must not decide",
+    );
+    const passage = braillePassage(60);
+    const text = `${passage} ${(HANGUL_SYLLABLE + cp(0x1160)).repeat(fillers)}`;
+    const { cleaned, found } = stripInvisibleWithReport(text);
+    assert.equal(countOf(cleaned, cp(0x1160)), 0);
+    assert.equal(
+      countOf(cleaned, BRAILLE_BLANK),
+      countOf(passage, BRAILLE_BLANK),
+    );
+    assert.deepEqual(found, [CATEGORY.BLANK_FILLERS]);
+  });
+
+  it("contracted Braille near the ratio is stripped — an accepted residual", () => {
+    // Documented limitation, pinned rather than left implicit in the five-cell
+    // fixtures above: grade-2 Braille contracts common words to a single
+    // alphabet wordsign (⠮ the, ⠯ and, ⠉ can), so a passage of mostly one-cell
+    // words approaches 1:1 and is indistinguishable BY DENSITY from the
+    // channel. The collision is inherent to a density rule; it is named in
+    // THREAT-MODEL.md rather than papered over by widening the ratio, which
+    // would re-open the channel.
+    const contracted = ["⠮", "⠯", "⠉", "⠙"].join(BRAILLE_BLANK);
+    const text = Array.from(
+      { length: TOTAL_PRESERVED_BLANK_BUDGET * 4 },
+      () => contracted,
+    ).join(BRAILLE_BLANK);
+    const { cleaned, found } = stripInvisibleWithReport(text);
+    assert.equal(countOf(cleaned, BRAILLE_BLANK), 0);
+    assert.deepEqual(found, [CATEGORY.BLANK_FILLERS]);
+  });
+
+  it("the floor keeps short blank-dense text intact", () => {
+    // Below TOTAL_PRESERVED_BLANK_BUDGET the ratio never binds, so a one-line
+    // Braille phrase (or a couple of archaic syllables) is untouched even at
+    // 1:1 — the same role the joiner budget's floor plays for a lone emoji ZWJ
+    // sequence.
+    const text = (BRAILLE_CELL + BRAILLE_BLANK).repeat(
+      TOTAL_PRESERVED_BLANK_BUDGET,
+    );
+    const { cleaned, found } = stripInvisibleWithReport(text);
+    assert.equal(cleaned, text);
+    assert.deepEqual(found, []);
+  });
+});
+
 // ─── Interior BOM after an ANSI strip (applyLayer1, L4) ───────────────────────
 describe("applyLayer1: leading-BOM is decided from the original text", () => {
   it("strips a BOM that was interior before the ANSI strip", () => {
@@ -1733,6 +2066,60 @@ const adversarialText = fc
   .array(adversarialChar, { maxLength: 80 })
   .map((parts) => parts.join(""));
 
+// The blank-filler half of the carve-out, restated from the Unicode script
+// properties (NOT imported from src/invisible.mjs, so the property checks the
+// spec rather than the implementation's own predicate): U+2800 and the Hangul
+// fillers survive only beside a real, script-appropriate visible neighbour — a
+// non-blank Braille cell, or a Hangul jamo/syllable that is not itself a filler.
+const BRAILLE_BLANK_CODE = 0x2800;
+const isBrailleCellChar = (ch) =>
+  ch !== undefined &&
+  ch.codePointAt(0) !== BRAILLE_BLANK_CODE &&
+  /\p{Script=Braille}/u.test(ch);
+const isHangulChar = (ch) =>
+  ch !== undefined &&
+  !HANGUL_FILLER_CODES.includes(ch.codePointAt(0)) &&
+  /\p{Script=Hangul}/u.test(ch);
+
+/**
+ * True when `text[i]` is a blank filler sitting next to its script's anchor —
+ * the one residue the blank-filler carve-out is allowed to leave behind.
+ * Stripping only ever DELETES, so a preserved filler is still adjacent in the
+ * output to the anchor that saved it: the cleaned text's own neighbours are a
+ * sound basis for the check. Every filler and anchor is BMP, so a lone
+ * surrogate read as a neighbour simply fails the script test.
+ * @param {string} text @param {number} i @returns {boolean}
+ */
+function isAnchoredBlankFiller(text, i) {
+  const code = text.codePointAt(i);
+  const prev = text[i - 1];
+  const next = text[i + 1];
+  if (code === BRAILLE_BLANK_CODE)
+    return isBrailleCellChar(prev) || isBrailleCellChar(next);
+  if (!HANGUL_FILLER_CODES.includes(/** @type {number} */ (code))) return false;
+  return isHangulChar(prev) || isHangulChar(next);
+}
+
+// Fixed corpus for the residue property below: an anchored filler is a 2-code-
+// point needle, so a random 80-char haystack hits one only occasionally. Both
+// the preserved and the stripped side of every filler are pinned so the case
+// runs on EVERY invocation instead of on a lucky seed.
+const ANCHORED_BLANK_FILLER_EXAMPLES = [
+  ...HANGUL_FILLER_CODES.flatMap((code) => [
+    [cp(code) + HANGUL_SYLLABLE], // U+115F here is the CI counterexample
+    [HANGUL_SYLLABLE + cp(code)],
+    [HANGUL_JAMO + cp(code)],
+    [cp(code)],
+    [`a${cp(code)}b`],
+    [`a${cp(code).repeat(3)}b`],
+  ]),
+  [cp(0x2803) + cp(BRAILLE_BLANK_CODE)],
+  [cp(BRAILLE_BLANK_CODE) + cp(0x2803)],
+  [cp(0x2803) + cp(BRAILLE_BLANK_CODE).repeat(4) + cp(0x2801)],
+  [cp(BRAILLE_BLANK_CODE)],
+  [`a${cp(BRAILLE_BLANK_CODE)}b`],
+];
+
 describe("property: stripInvisible invariants", () => {
   it("never throws on lone surrogates / astral input", () => {
     fc.assert(
@@ -1783,7 +2170,9 @@ describe("property: stripInvisible invariants", () => {
         // joiner leaves text === cleaned AND found empty.
         assert.equal(found.length > 0, cleaned !== text);
       }),
-      fcRunOptions(),
+      // Same fixed corpus: a preserved blank filler must leave `found` EMPTY
+      // (nothing was stripped), while the unanchored/run cases must report.
+      fcRunOptions({ examples: ANCHORED_BLANK_FILLER_EXAMPLES }),
     );
   });
 
@@ -1809,7 +2198,8 @@ describe("property: stripInvisible invariants", () => {
         // After stripping, the only STRIP-class chars left must be ZWNJ/ZWJ
         // (carve-out), a presentation selector kept on a pictograph/modifier
         // base (the carve-out preserves VS15/VS16 directly after one — 🏻︎ is
-        // a visible glyph, not a hidden selector run), or a single leading BOM.
+        // a visible glyph, not a hidden selector run), an ANCHORED blank filler
+        // (see isAnchoredBlankFiller), or a single leading BOM.
         const selectorBase = /^[\p{Extended_Pictographic}\p{Emoji_Modifier}]$/u;
         for (let i = 0; i < cleaned.length; i++) {
           const ch = cleaned[i];
@@ -1828,11 +2218,16 @@ describe("property: stripInvisible invariants", () => {
             code === 0x200c ||
             code === 0x200d ||
             keptSelector ||
+            isAnchoredBlankFiller(cleaned, i) ||
             (code === 0xfeff && i === 0);
           assert.ok(ok, `unexpected residual invisible U+${code.toString(16)}`);
         }
       }),
-      fcRunOptions(),
+      // The blank-filler cases are pinned as fixed examples: they are a
+      // 2-code-point needle in an 80-char haystack, so unseeded fast-check only
+      // stumbles on one occasionally — which is precisely how the Hangul case
+      // (["ᅟ가"]) escaped review and went red on main days later.
+      fcRunOptions({ examples: ANCHORED_BLANK_FILLER_EXAMPLES }),
     );
   });
 });

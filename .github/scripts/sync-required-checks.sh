@@ -8,6 +8,11 @@
 # source — so this apply step and the check-required-reporter lint can never run
 # different parser versions (the drift that would let the gate and the lint read
 # the same YAML two ways).
+#
+# The module path below is tied to that rev: ci-truth-serum's package was
+# `hooks` at the pinned revision and was later renamed to `ci_truth_serum`, so
+# bumping the rev in .pre-commit-config.yaml past that rename means changing
+# this line in the same commit. Nothing else here needs touching.
 set -euo pipefail
 
 ref="$(awk '/repo:.*ci-truth-serum$/{f=1; next} f && /^[[:space:]]*rev:/{print $2; exit}' .pre-commit-config.yaml)"

@@ -28,6 +28,20 @@ export const HTML_TAG_PRESENT = /<[a-zA-Z/!?][^<>]*>/;
  */
 export const MD_LINK_HINT = /\]\(|!\[|^[ \t]*\[[^[\]\n]+\]:\s/m;
 
+/**
+ * True when `text` is worth handing to the heavy remark/rehype graph at all:
+ * Layers 2 and 3 can only find something in text that carries an HTML tag or a
+ * markdown link. THE pre-gate for both entry points that run those layers
+ * (`sanitize()` in ./index.mjs, `sanitizeText()` in ./output.mjs) — it lives
+ * here, next to the two regexes it composes, so the two cannot gate on
+ * different conditions and pay (or skip) the ~200ms import for different inputs.
+ * @param {string} text
+ * @returns {boolean}
+ */
+export function needsMarkdownPipeline(text) {
+  return HTML_TAG_PRESENT.test(text) || MD_LINK_HINT.test(text);
+}
+
 // ─── Secret-shape pre-gate (Layer 3 URL-param reuse) ─────────────────────────
 // Cheap shape match that decides whether a URL parameter value carries a
 // credential (Layer 3). This hand-duplicates credential-shape knowledge that
