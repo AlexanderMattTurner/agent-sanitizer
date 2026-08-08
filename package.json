@@ -61,6 +61,7 @@
     ]
   },
   "devDependencies": {
+    "sanitizer-engine": "npm:agent-sanitizer@2.20.0",
     "@commitlint/cli": "^21.0.1",
     "@commitlint/config-conventional": "^21.0.1",
     "@eslint/js": "10.0.1",
@@ -75,7 +76,6 @@
     "globals": "17.6.0",
     "lint-staged": "^17.0.5",
     "prettier": "^3.0.0",
-    "sanitizer-engine": "npm:agent-sanitizer@2.12.0",
     "typescript": "6.0.3",
     "typescript-eslint": "8.61.0"
   },

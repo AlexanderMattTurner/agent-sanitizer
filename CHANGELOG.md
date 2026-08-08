@@ -8,6 +8,22 @@ adhere to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+## [2.20.2] - 2026-08-08
+
+### Changed
+
+- Bumped pinned sanitizer engine to 2.20.0
+
+## [2.20.0] - 2026-08-08
+
+### Changed
+- CI now enforces reachability of all `.github/scripts` files, surfacing abandoned scripts and clearing the backlog.
+- Node dependencies are installed before pre-commit checks to enable proto-pollution linting.
+
+### Fixed
+- CI now discovers `.github/scripts` test suites automatically instead of requiring manual listing.
+- Restored and structurally guarded the `claude-run` action's credential ladder.
+
 ## [2.19.8] - 2026-08-08
 
 ### Fixed
