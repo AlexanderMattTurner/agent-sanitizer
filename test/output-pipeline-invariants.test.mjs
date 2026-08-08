@@ -178,6 +178,21 @@ describe("invariant: a byte mutation always restores the stage invariants", () =
       assert.ok(r.cleaned.includes(REPLACEMENT_CHAR));
     });
 
+  it("normalizes a lone surrogate the REDACTOR's own output strands", async () => {
+    // Layer 4 mutates bytes like every other layer, so the same repair is owed
+    // to ITS output. Nothing else in this file covers that: every option-matrix
+    // redactor returns null, and the mutating one below only appends. Without
+    // this case, routing Layer 4 around the mutation chokepoint stays green.
+    const redact = (/** @type {string} */ text) => ({
+      text: text.replace("\uDE00", ""),
+      found: ["k"],
+    });
+    const r = await sanitizeText("hi \u{1F600} there", { redact });
+    assert.equal(r.cleaned, `hi ${REPLACEMENT_CHAR} there`);
+    assert.equal(r.modified, true);
+    assert.deepEqual(r.warnings, ["API keys/secrets redacted: k"]);
+  });
+
   // `sgrNote` downgrades the caller's banner to "display-only color stripped",
   // so it may only survive when that strip was the SOLE change.
   const SGR_INPUT = `${ESC}[31mred${ESC}[0m`;
