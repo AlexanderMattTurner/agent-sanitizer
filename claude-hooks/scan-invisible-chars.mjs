@@ -18,6 +18,7 @@ import { readFileSync, globSync, unlinkSync } from "node:fs";
 import { join, relative } from "node:path";
 import {
   awaitLazyDependency,
+  emitHookResponse,
   safeErrMessage,
   hookgateMarkerPath,
   HookEvent,
@@ -38,6 +39,19 @@ import {
   PROJECT_DIR,
 } from "./lib/invisible-alert.mjs";
 import { bestEffortTrace, trace, TraceEvent } from "./lib/trace.mjs";
+import { reportSlowHook, startHookTimer } from "./lib/hook-timing.mjs";
+// Relative, not the `agent-sanitizer` specifier every other engine import uses:
+// this is the scan's SCOPE, which is hook policy and must move with the hook.
+// Routing it through the specifier would resolve it, in the shipped plugin
+// bundle, against a PINNED older engine that does not export it — leaving the
+// walk with undefined globs while believing it had scanned everything. The
+// module is dependency-free data (see src/claude-context.mjs), so importing it
+// statically carries none of the fail-open hazard lazyImport exists to cover.
+import {
+  CLAUDE_CONTEXT_SUBDIRS,
+  CLAUDE_INSTRUCTION_GLOBS,
+  excludeFromContextScan,
+} from "../src/claude-context.mjs";
 
 // Layer-1 primitives + the instruction-scanner SSOT, bound via lazyImport (see
 // its doc for the fail-OPEN hazard of a bare static npm import — here the
@@ -199,43 +213,26 @@ function decodeRun(run) {
 // own O_NOFOLLOW open.
 
 /**
- * @param {string} dir
- * @returns {string[]}
- */
-function findMdFiles(dir) {
-  return globSync("**/*.md", {
-    cwd: dir,
-    exclude: (name) => name === "node_modules",
-  }).map((name) => join(dir, name));
-}
-
-/**
- * Every subdirectory instruction file (CLAUDE.md, CLAUDE.local.md, AGENTS.md)
- * under `dir`. Claude Code loads these as project instructions on entry to their
- * containing directory — a load path that bypasses the PostToolUse sanitizer — so
- * a payload planted in e.g. `packages/foo/CLAUDE.md` reaches the model uncleaned
- * unless it is scanned here. Skips node_modules.
+ * Every file under `dir` that Claude Code loads as model context: the
+ * per-directory instruction files (CLAUDE.md, CLAUDE.local.md, AGENTS.md) and
+ * the whitelisted `.claude/` markdown. Claude Code loads these on entry to their
+ * containing directory — a load path that bypasses the PostToolUse sanitizer —
+ * so a payload planted in e.g. `packages/foo/CLAUDE.md` reaches the model
+ * uncleaned unless it is scanned here.
  *
- * `**` does not descend into dot directories, so NESTED `.claude/` trees need
- * their own pattern: the caller scans only the project-root `.claude`, which
- * would leave a directory-scoped skill at `packages/foo/.claude/skills/x/SKILL.md`
- * — model context by the same load path — never scanned.
+ * The scope itself — which globs, and which directories the walk must prune —
+ * is the library's {@link CLAUDE_INSTRUCTION_GLOBS} /
+ * {@link excludeFromContextScan}, so this hook and every other consumer read one
+ * list (see src/claude-context.mjs for why it is imported relatively rather than
+ * through the `agent-sanitizer` specifier the plugin bundle pins).
  * @param {string} dir
  * @returns {string[]}
  */
 function findInstructionFiles(dir) {
-  return globSync(
-    [
-      "**/CLAUDE.md",
-      "**/CLAUDE.local.md",
-      "**/AGENTS.md",
-      "**/.claude/**/*.md",
-    ],
-    {
-      cwd: dir,
-      exclude: (name) => name === "node_modules",
-    },
-  ).map((name) => join(dir, name));
+  return globSync([...CLAUDE_INSTRUCTION_GLOBS], {
+    cwd: dir,
+    exclude: excludeFromContextScan,
+  }).map((name) => join(dir, name));
 }
 
 // Scanner
@@ -255,8 +252,12 @@ function scanFile(filePath) {
 }
 
 export {
+  // Re-exported, never redefined: the scope this hook walks is the library's
+  // (src/claude-context.mjs), and a consumer that reads it off this hook must
+  // get that same list rather than a second copy that can drift.
+  CLAUDE_CONTEXT_SUBDIRS,
+  CLAUDE_INSTRUCTION_GLOBS,
   decodeRun,
-  findMdFiles,
   findInstructionFiles,
   scanFile,
   ALERT_FILE,
@@ -342,12 +343,7 @@ export { formatReport };
  * }}
  */
 export function scanProject(dir = PROJECT_DIR) {
-  const targets = [
-    ...new Set([
-      ...findInstructionFiles(dir),
-      ...findMdFiles(join(dir, ".claude")),
-    ]),
-  ];
+  const targets = [...new Set(findInstructionFiles(dir))];
   const findings = [];
   const skipped = [];
   let scanned = 0;
@@ -412,7 +408,35 @@ export function formatSkipped(skipped) {
  *   untested fault path is how a posture goes missing in the first place.
  * @returns {Promise<void>}
  */
-export async function cliMain({ trace: sink = trace, scan: runScan } = {}) {
+export async function cliMain(opts = {}) {
+  // The scan blocks session startup, and a slow one is invisible from the
+  // inside — it reads as "Claude is slow to start". Timing the whole body and
+  // reporting an overrun in band is what turned a 30-second scan from a rumor
+  // into a bug report (see lib/hook-timing.mjs).
+  const elapsed = startHookTimer();
+  try {
+    await runScanCli(opts);
+  } finally {
+    reportSlowHook(
+      HOOK_NAME,
+      elapsed(),
+      HookEvent.SESSION_START,
+      emitHookResponse,
+    );
+  }
+}
+
+/**
+ * The scan itself. Split from {@link cliMain} only so the timing wrapper above
+ * has a single call to bracket — every early return here is an exit the wrapper
+ * must still measure.
+ * @param {{
+ *   trace?: import("./lib/trace.mjs").TraceFn,
+ *   scan?: () => ReturnType<typeof scanProject>,
+ * }} opts  see {@link cliMain}
+ * @returns {Promise<void>}
+ */
+async function runScanCli({ trace: sink = trace, scan: runScan }) {
   // Bound best-effort: the announcements below run BEFORE the auto-clean and
   // the alert write, with no catch above them, so a throwing host sink would
   // abort the scan silently (see bestEffortTrace).

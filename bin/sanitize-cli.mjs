@@ -14,8 +14,8 @@
  * Protocol — a request is a JSON object with an `op` (default `"sanitize"` so a
  * bare `{ text, html }` keeps working). Per op:
  *
- *   sanitize           { text, html? }            -> { cleaned, found, warnings }
- *   sanitizeText       { text, html?, exfilScan? } -> { cleaned, warnings, modified, sgrNote }
+ *   sanitize           { text, html? }            -> { cleaned, found, warnings, notes }
+ *   sanitizeText       { text, html?, exfilScan? } -> { cleaned, warnings, notes, modified, sgrNote }
  *   classifyPrompt     { text }                    -> { action, reason? }
  *   scanInstructionFiles { globs, cwd? }           -> { findings: [{ file, findings }] }
  *   cleanFile          { path }                    -> { changed }
@@ -114,10 +114,10 @@ export const OPS = {
   /** @param {Record<string, unknown>} req */
   async sanitize(req) {
     const text = requireString(req, "text");
-    const { cleaned, found, warnings } = await sanitize(text, {
+    const { cleaned, found, warnings, notes } = await sanitize(text, {
       html: Boolean(req.html),
     });
-    return { cleaned, found, warnings };
+    return { cleaned, found, warnings, notes };
   },
 
   /** @param {Record<string, unknown>} req */
@@ -126,11 +126,14 @@ export const OPS = {
     // Layers 1–3 only: redact (Layer 4) and filterInjection (Layer 5) are
     // injected JS callbacks with no wire form, so they're never set here.
     const { sanitizeText } = await import("../src/output.mjs");
-    const { cleaned, warnings, modified, sgrNote } = await sanitizeText(text, {
-      html: Boolean(req.html),
-      exfilScan: Boolean(req.exfilScan),
-    });
-    return { cleaned, warnings, modified, sgrNote };
+    const { cleaned, warnings, notes, modified, sgrNote } = await sanitizeText(
+      text,
+      {
+        html: Boolean(req.html),
+        exfilScan: Boolean(req.exfilScan),
+      },
+    );
+    return { cleaned, warnings, notes, modified, sgrNote };
   },
 
   /** @param {Record<string, unknown>} req */

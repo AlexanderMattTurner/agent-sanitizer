@@ -24,15 +24,17 @@
 # shell options. Requires .github/scripts/lib-ci-retry.sh to be sourced first.
 
 # The ladder, in attempt order: the same subscription tokens the Claude
-# workflows use, then the metered API key as the last resort — a run that
-# reaches it spends real credits, so it must never be preferred over a
-# subscription token that works.
+# workflows use, and ONLY those. A metered ANTHROPIC_API_KEY rung used to sit at
+# the bottom; it was removed deliberately, so no CI path can fall through to
+# spending real credits. Exhausting the subscription rungs now degrades — the
+# changelog prose falls back to a plain commit list — rather than billing.
 # shellcheck source=.github/scripts/lib/claude-oauth-ladder.bash
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/claude-oauth-ladder.bash"
 
-# The subscription rungs, then this caller's own metered one: a direct /v1/messages
-# call can authenticate with an API key, which the CLI-driven callers cannot use.
-_ANTHROPIC_LADDER_VARS=("${CLAUDE_OAUTH_LADDER_VARS[@]}" ANTHROPIC_API_KEY)
+# The ladder IS the OAuth ladder. Kept as a named alias rather than reading
+# CLAUDE_OAUTH_LADDER_VARS directly at each use, so the "no credential is
+# configured" error below can name this caller's own list.
+_ANTHROPIC_LADDER_VARS=("${CLAUDE_OAUTH_LADDER_VARS[@]}")
 
 # anthropic_ladder — the configured credentials on stdout, one per line, in
 # attempt order. Empty rungs are dropped and duplicates collapse, so an unset
@@ -51,20 +53,32 @@ anthropic_ladder() {
 
 # anthropic_auth_headers CRED — the header set for ONE credential, into
 # AUTH_HEADERS; AUTH_MODE names the scheme so a failure is diagnosable from the
-# log. Anthropic API keys (sk-ant-api…) authenticate via x-api-key; Claude
-# subscription OAuth tokens (sk-ant-oat…) via Bearer + the oauth beta header.
+# log. Only Claude subscription OAuth tokens (sk-ant-oat…) are accepted: Bearer
+# plus the oauth beta header.
+#
+# An unrecognized shape does NOT fall back to the x-api-key scheme this ladder
+# used to support: that fallback is exactly how a metered key would creep back
+# in — a secret renamed into an OAuth slot would silently authenticate and bill.
+#
+# Returns 1 rather than exiting, so the caller treats a wrong-shaped rung the
+# way it treats a rejected one: log it and step to the next credential. Exiting
+# here would let one pasted-in-the-wrong-slot key strand every working rung
+# below it, breaking this file's own contract that walking the ladder "only
+# changes WHO answers, never WHAT the answer is". Exhausting every rung still
+# fails loud, at the end of anthropic_messages.
 anthropic_auth_headers() {
   local cred="$1"
-  AUTH_MODE="x-api-key (sk-ant-api)"
-  AUTH_HEADERS=(-H "x-api-key: $cred" -H "anthropic-version: 2023-06-01")
-  if [[ "$cred" == sk-ant-oat* ]]; then
-    AUTH_MODE="Bearer + oauth beta (sk-ant-oat)"
-    AUTH_HEADERS=(
-      -H "authorization: Bearer $cred"
-      -H "anthropic-beta: oauth-2025-04-20"
-      -H "anthropic-version: 2023-06-01"
-    )
+  if [[ "$cred" != sk-ant-oat* ]]; then
+    AUTH_MODE="unusable (not an sk-ant-oat… token)"
+    AUTH_HEADERS=()
+    return 1
   fi
+  AUTH_MODE="Bearer + oauth beta (sk-ant-oat)"
+  AUTH_HEADERS=(
+    -H "authorization: Bearer $cred"
+    -H "anthropic-beta: oauth-2025-04-20"
+    -H "anthropic-version: 2023-06-01"
+  )
 }
 
 # Surface the reason for a non-200 (the auth mode plus the API's own error
@@ -156,7 +170,10 @@ anthropic_messages() {
   local cred rung=0
   for cred in "${ladder[@]}"; do
     rung=$((rung + 1))
-    anthropic_auth_headers "$cred"
+    if ! anthropic_auth_headers "$cred"; then
+      echo "Credential ${rung}/${#ladder[@]} is not a Claude subscription OAuth token (expected sk-ant-oat…); trying the next one." >&2
+      continue
+    fi
     _ANTHROPIC_CRED_REJECTED=false
     _ANTHROPIC_RATE_LIMITED=false
     _ANTHROPIC_HTTP_CODE=""
@@ -172,6 +189,6 @@ anthropic_messages() {
     echo "Error: Claude API unreachable after 3 transient-failure attempts; see the reasons above." >&2
     exit 1
   done
-  echo "Error: every configured Anthropic credential (${#ladder[@]}) was rejected or rate-limited; see the reasons above." >&2
+  echo "Error: every configured Anthropic credential (${#ladder[@]}) was unusable, rejected, or rate-limited; see the reasons above." >&2
   exit 1
 }

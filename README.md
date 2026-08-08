@@ -31,16 +31,17 @@ Code](#using-it-with-claude-code) covers each hook and hand-wiring.
 import { sanitize } from "agent-sanitizer";
 
 // Layer 1 (invisible chars + ANSI), zero heavy deps:
-const { cleaned, found, warnings } = await sanitize(untrustedText);
+const { cleaned, found, warnings, notes } = await sanitize(untrustedText);
 
 // Opt into the HTML layers for web ingress (lazy-loads ~200 ms of deps):
 const result = await sanitize(pageSource, { html: true });
 ```
 
 `sanitize` never throws and never silently drops content—any change comes with
-at least one `warnings` entry. `found` names the neutralized category codes
-(e.g. `["cf-format", "hidden-html"]`); `cleaned` is the safe text, with
-placeholders where hidden HTML was spliced out.
+at least one `warnings` or `notes` entry. `found` names the neutralized category
+codes (e.g. `["cf-format", "hidden-html"]`); `cleaned` is the safe text, with
+placeholders where hidden HTML was spliced out. See [warnings vs
+notes](#warnings-vs-notes) for which findings land where.
 
 ## Entry points
 
@@ -55,7 +56,7 @@ the callback you inject for the agent-specific concern; `—` is a pure transfor
 | 3   | `/html`         | Detect exfil-shaped URLs (payloads in query/path, embedded creds, `data:`/`javascript:`, off-origin redirects). Reports only.                                               | —                           |
 | 4   | `/confusables`  | Fold look-alike glyphs in tool-call input (paths, commands) to ASCII, closing a cross-script deny-rule bypass. Gated per token, so non-Latin prose passes through unfolded. | `scan`                      |
 | 5   | `/instructions` | Scan/auto-clean `CLAUDE.md`, `AGENTS.md`, `SKILL.md`, etc., decoding Unicode-tag + zero-width-binary payloads.                                                              | `fs` (direct)               |
-| 6   | `/prompt`       | Classify a prompt pass / SGR-note / block on payload-capable invisible/ANSI content.                                                                                        | —                           |
+| 6   | `/prompt`       | Classify a prompt pass / note / block on payload-capable invisible/ANSI content (inert escapes get the note).                                                               | —                           |
 | 7   | `/output`       | Run Layers 1–4 over structured tool output, preserving shape. The Layer-5 slot takes a delete-only filter.                                                                  | `redact`, `filterInjection` |
 | 8   | `/rehydrate`    | Re-anchor a model Edit composed from the _sanitized_ view back onto real bytes; deny anything ambiguous or secret-exposing.                                                 | `io`                        |
 | —   | `/view-map`     | Pure offset/text machinery mapping a file's on-disk bytes ↔ the sanitized view (Layer-1 deletions, Layer-4 redactions). No I/O — consumed by `/rehydrate`.                  | —                           |
@@ -78,6 +79,26 @@ without notice.
 | `html-comments`       | HTML comments spliced out by Layer 2                                                                    |
 | `hidden-html`         | Elements hidden via CSS/attribute (`display:none`, `hidden`, etc.) spliced out by Layer 2               |
 | `exfil-urls`          | Exfil-shaped URLs detected by Layer 3 (reported, not removed)                                           |
+
+### warnings vs notes
+
+Findings come back at two volumes, on `sanitize` and on `/output` alike:
+
+- **`warnings`** — injection-shaped. Something was hidden from a human reader,
+  something a payload would have used was removed, or a secret was redacted.
+  This is the set to surface.
+- **`notes`** — it happened, and here is how to look at it, but nothing about it
+  is attack-shaped: a preserved `<script>` on a fetched page, a plain link whose
+  URL merely looks exfil-shaped, or (in `/output`, under `sgrCarveOut`) an
+  incidental strip of pasted terminal colour or a stray soft hyphen.
+
+The tier changes nothing about what is removed—the same bytes are stripped,
+spliced and redacted either way, and a note is still reported. It exists so the
+banner keeps meaning something. A caller that ignores `notes` is exactly as loud
+as before the split. `/output` also returns `sgrNote: true` when a result is
+note-only, so a caller can pick the quiet line without inspecting the arrays.
+[`THREAT-MODEL.md`](./THREAT-MODEL.md#severity-warnings-vs-notes) lists which
+finding lands at which tier and why.
 
 ### `FILTER_WARNING` codes (Layer 5)
 
@@ -104,8 +125,11 @@ for a later span (overlapping spans resolve first-match-wins).
 Installing the plugin puts four hooks on every session, and this is what they
 buy you:
 
-1. Your `CLAUDE.md`, `AGENTS.md` and `.claude/` markdown are scanned at session
-   start for hidden-Unicode payloads and auto-cleaned where possible.
+1. Your `CLAUDE.md`, `AGENTS.md` and the context markdown under `.claude/` are
+   scanned at session start for hidden-Unicode payloads and auto-cleaned where
+   possible. Only the subdirectories Claude Code loads as context are walked, so
+   bulk data parked under `.claude/` (`worktrees/`, caches, transcripts) does not
+   slow startup.
 2. Prompts carrying payload-capable invisible or ANSI characters are blocked
    before they reach the model; pasted terminal color passes with a note.
 3. Look-alike glyphs in tool inputs are folded to ASCII, so a Cyrillic `а` can't
@@ -425,8 +449,9 @@ field selects the entry point (default `sanitize`); the self-contained ones —
 `sanitizeText`, `classifyPrompt`, `scanInstructionFiles`, `cleanFile` — are
 bridged, while entry points taking a JS callback have no wire form. Bridged
 `sanitizeText` runs Layers 1–3 only: no secret redaction (Layer 4), no injection
-filtering (Layer 5), and `sgrNote` is always `false` since the bridge never
-wires `sgrCarveOut`.
+filtering (Layer 5), and—since the bridge never wires `sgrCarveOut`—Layer 1's
+findings are never downgraded, so `notes` carries only the Layer-2/3 tiers and
+`sgrNote` is `true` only when those were the whole story.
 
 ```sh
 echo '{"text":"a​b"}' | npx sanitize-cli           # default op: sanitize

@@ -35,6 +35,22 @@ table](./README.md#entry-points) maps each to its import.
   Sinhala) or inside an emoji ZWJ sequence. The carve-out fires only when **both**
   neighbors clearly belong to the context, and it is disabled once the total
   invisible count crosses a scatter floor—over-stripping beats under-stripping.
+- **Blank fillers doing real work in their own script**: the Braille blank
+  (U+2800) beside a real cell, a Hangul filler beside a real jamo/syllable. A
+  _run_ of fillers has only fillers for neighbors, so it fails the anchor and is
+  stripped. Because U+2800 _is_ the word space of Unicode Braille and a Hangul
+  filler completes a defective syllable, these are far denser in genuine text
+  than joiners are, so they carry their own document-wide allowance—one
+  preserved blank per two visible anchor-script characters, above a floor—rather
+  than drawing on the joiner/selector preserve budget. The allowance is counted
+  per script (a blank never anchors cross-script, so Korean prose must not fund
+  a Braille channel). Past that ratio no blank of that script is preserved
+  (never half-spaced) and all of them count as payload, which is the density an
+  alternating `syllable filler …` channel needs. Contracted (grade-2) Braille
+  sits closest to the boundary: alphabet wordsigns are single cells, so a
+  passage of mostly one-cell words approaches 1:1 and is stripped like the
+  channel—an accepted residual false positive inherent to a density rule, not a
+  gap, and not worth widening the ratio to reach.
 
 **Reassembly hardening.** The two passes feed each other in _both_ directions:
 stripping an invisible char can reconstitute an ANSI escape its split had
@@ -50,9 +66,19 @@ visible text; a final unconditional sweep after the loop keeps the
 no-raw-introducer guarantee independent of the iteration bound. The result
 carries no raw ANSI introducer for _any_ input, and re-cleaning it reproduces
 it exactly—the idempotence the Edit-repair rehydrator's soundness gate assumes.
-One tokenizer answers every ANSI question (what to splice, and whether the only
-escape content is display-only SGR colour), so the stripper and the operator
-warning cannot disagree about what a sequence is. OSC strings (titles,
+One tokenizer answers every ANSI question (what to splice, and whether what was
+removed was INERT—display-only SGR colour, or a lone 7-bit `ESC` that opened
+nothing at all), so the stripper and the operator warning cannot disagree about
+what a sequence is. That inert/injection-shaped split is one input to the
+[severity tier](#severity-warnings-vs-notes) that keeps the warning worth
+reading: a stray `ESC` sitting in a file is reported as a terse note, while
+a cursor move, an erase, an OSC string, or a raw C1 introducer (which no
+legitimate UTF-8 text carries, and which includes the DCS/SOS/PM/APC string
+introducers) keeps the WARNING. An `ESC` that _opened_ a CSI it never completed
+stays loud too: a terminal's CSI parser is stateful and keeps consuming what
+follows until a final byte arrives, so `ESC[12 world` shows the human `orld`
+while the model reads every word—the same model-sees/human-sees divergence a
+complete sequence buys. OSC strings (titles,
 clickable-hyperlink URLs) are consumed as a
 whole, for every terminator form—ST (`ESC\` or 8-bit C1 ST U+009C) and the
 legacy BEL—and for the 8-bit C1 OSC introducer (U+009D); an _unterminated_ OSC
@@ -97,7 +123,17 @@ attributes (`src`/`href`/`background`/`srcset`/`ping`, form `action`/`formaction
 - `javascript:` / `vbscript:` targets
 
 Each threat carries a `reason` and the destination `target` (never the
-payload-bearing query/fragment), suitable for a warning shown to the operator.
+payload-bearing query/fragment) — the finding is shown to the operator with the
+target named and the payload withheld, since re-presenting the exfil payload in
+the model's context would hand the model the very bytes the finding is about.
+
+It also carries `autoFetched`, which is what its [severity](#severity-warnings-vs-notes)
+turns on: an `<img src>`, a stylesheet `<link>`, a `srcset`, a `ping`, a form
+`action` or a `meta refresh` exfiltrates the moment the content renders, with
+nobody deciding anything, while an `<a href>` or a markdown link cannot until
+the model chooses to follow it — and the sentence reporting it is precisely the
+instruction not to. A target whose kind cannot be resolved is treated as
+auto-fetched (fail closed).
 
 ## Confusable folding (tool input)
 
@@ -164,13 +200,15 @@ if a contaminated file cannot be rewritten.
 `./prompt` classifies a submitted prompt as **pass / pass-with-note / block** on
 payload-capable invisible Unicode and ANSI. A prompt-submission channel usually
 cannot rewrite the prompt in place, so the only neutralization is to block.
-One carve-out: a prompt whose only escape content is display-only SGR color
-passes with a note (pasting colored terminal output is the common case, and SGR
-cannot move the cursor, erase, or carry an OSC payload). The SGR-only test
-gates on both the 7-bit ESC (`U+001B`) introducer and the whole 8-bit C1
-control block (U+0080–U+009F)—not just the CSI byte (`U+009B`)—so a
-C1-introduced cursor-move, erase, or OSC/DCS/SOS/PM/APC string is never
-mistaken for benign color.
+One carve-out: a prompt whose only escape content is INERT passes with a note —
+display-only SGR color, and/or a 7-bit `ESC` that completes no sequence (a log
+line cut mid-escape). Pasting colored terminal output is the common case, and
+neither form can move the cursor, erase, or carry an OSC payload. The test gates
+on both the 7-bit ESC (`U+001B`) introducer and the whole 8-bit C1 control block
+(U+0080–U+009F)—not just the CSI byte (`U+009B`)—so a C1-introduced cursor-move,
+erase, or OSC/DCS/SOS/PM/APC string is never mistaken for benign color; and it
+judges from what the Layer-1 strip actually removed, so a sequence that only
+RECONSTITUTES during stripping is judged as the sequence it becomes.
 
 ## Tool-output pipeline & Layer 5
 
@@ -231,6 +269,97 @@ are load-bearing and **fail closed**:
 
 File access and the redactor are injected via `io`; the package performs no I/O
 of its own and bundles no secret engine.
+
+`MultiEdit` is a rehydration candidate but never re-anchored: its edits apply
+sequentially, each against the result of the previous, which the span machinery
+(one `old_string` against one static view) cannot model. A MultiEdit against a
+file whose view equals disk passes through untouched (the common case); one
+against a divergent file is **denied** with use-single-Edit guidance — an
+unguarded pass-through there would be both a silent clobber and the same
+extraction oracle the Edit path's hidden-span rule closes.
+
+## Placeholder-clobber guards (hooks layer)
+
+Rehydration re-anchors only Edit/Write, so every other write path — a shell
+heredoc, `sed -i`/`tee`, an MCP file tool — persists a copied `[REDACTED…]`
+placeholder literally, destroying the secret it stands for; and a Write that
+simply **drops** a secret line never carries a placeholder at all. The Claude
+hooks close these around the package's core, favoring precision (a false
+positive costs a sentence of context, never a mangled input):
+
+- **Grammar, not prefix.** Detection matches the exact placeholder language
+  (`claude-hooks/lib/placeholder-grammar.mjs`, mirrored from the Python
+  producer `placeholders.py` and pinned to it by a contract test), never the
+  bare `[REDACTED` prefix — `grep "\[REDACTED"` and `[REDACTED…]` prose are
+  not placeholders. It lives in the hooks layer, not the engine, so the
+  plugin's pinned-engine bundle ships it immediately.
+- **Doctrine at redaction time.** The Layer-4 warning that introduces
+  placeholders into the model's view now states that they rehydrate only via
+  Edit/Write — removing the information asymmetry that made the shell
+  route-around an honest mistake.
+- **Advisory on non-rehydrated tools (context-only, never a verdict).** A
+  Bash/MCP/unknown-tool input carrying a placeholder gets one PreToolUse
+  context line explaining the hazard. It cannot tell a write from a read, so
+  it never blocks.
+- **On-disk tripwire (warning-only).** A `Read` whose RAW bytes — before this
+  session's redaction — already contain placeholder text warns that an earlier
+  write may have clobbered a secret. Detection rides the read, the one choke
+  point every write path (including other agents) eventually crosses; reveal
+  sidecars are excluded, since their bytes are redacted before persisting.
+- **Clobber-by-omission confirm (`lib/secret-drop-guard.mjs`).** A Write to an
+  existing, **git-untracked** file (no git recovery path — `.env` and its kin,
+  or a file outside any repository) whose redacted secrets vanish from the
+  final, post-rehydration content is denied once with the reason; re-issuing
+  the identical Write confirms and passes. The confirmation is the model's
+  deliberate retry — never a human permission prompt — held as a
+  consumed-on-use, TTL-bounded sentinel (keyed to path + content + the dropped
+  values) via the same squat-resistant `$TMPDIR` helpers as the invisible-char
+  gate. Tracked files, secret-free files, failed git probes and unmappable
+  views all skip the guard (fail open). "Tracked" approximates "recoverable":
+  an uncommitted secret line on a tracked file is an accepted gap — the
+  committed content survives, and probing index-vs-worktree state would trade
+  precision for recall.
+
+## Severity: warnings vs notes
+
+Findings come back split into two tiers, and the split is a security property in
+its own right — a detector whose banner fires on every ordinary page teaches its
+reader to skip the banner, and then the one that mattered scrolls past with it.
+
+| Tier        | Means                                                                                                                                                      |
+| ----------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **WARNING** | This text is injection-shaped: something was hidden from a human reader, something a payload would have used was removed, or a secret was redacted.        |
+| **NOTE**    | This happened, and here is how to look at it, but nothing about it is attack-shaped: incidental bytes, or content that was PRESERVED and merely described. |
+
+The tier never changes what the pipeline **does**. The same bytes are stripped,
+spliced and redacted either way, and a note is still reported — all that rides on
+it is which banner the operator sees. That asymmetry is why a note is the right
+answer whenever the evidence is thin: an under-loud true finding is still
+delivered, while an over-loud false one costs the channel its credibility.
+
+Four decisions currently land at NOTE:
+
+- **An incidental Layer-1 strip** — inert ANSI (display-only SGR colour, or a
+  lone `ESC` that opened nothing) together with too few invisible characters to
+  spell anything. Both axes must be incidental; a cursor move, an erase, an OSC,
+  a raw C1 introducer or a payload-length run of invisibles keeps the WARNING.
+- **A preserved scripting/resource tag** (Layer 2) — nothing was removed and
+  nothing was hidden, and a `<script>` is on essentially every page ever fetched.
+  The Layer-2 **splice** stays a WARNING: those bytes were invisible to a human
+  reading the rendered page.
+- **An exfil-shaped URL that is not auto-fetched** (Layer 3) — see above.
+- **The prompt gate's inert-escape carve-out**, which predates the tier and is
+  the same judgement (see [User-prompt verdict](#user-prompt-verdict)).
+
+Layer 4 (a redacted secret) and Layer 5 (a filter finding) are always WARNINGs.
+
+The Layer-1 downgrade is gated on the caller asserting first-party ingress
+(`sgrCarveOut` in `./output`, set for local tool output). Without it — the
+`./sanitize` door, a fetched page, an MCP connector — Layer 1 stays loud however
+few the bytes, because that is the channel where a hidden character was _put_
+there. The `sgrNote` flag on a `./output` result means "nothing here rose above a
+note", so a caller can show the quiet line instead of the banner; one warning
+anywhere in the walk clears it.
 
 ## Failure posture (`AGENT_SANITIZER_FAIL_OPEN`)
 

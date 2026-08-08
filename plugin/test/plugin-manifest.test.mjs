@@ -239,3 +239,30 @@ test("both READMEs advertise the marketplace and plugin these manifests define",
   assert.equal(manifest.repository, `https://github.com/${slug}`);
   assert.equal(manifest.homepage, `https://github.com/${slug}#readme`);
 });
+
+// ─── this repo's own sessions ────────────────────────────────────────────────
+
+test("the project settings install and auto-update this marketplace's plugin", () => {
+  // `.claude/settings.json` is what makes a session in this repo run the
+  // SHIPPED hooks: trusting the folder prompts the install, and from then on
+  // Claude Code background-refreshes the marketplace clone and picks up each
+  // release's `version` bump. Every identifier here is a name from the two
+  // manifests, so a rename that missed this file leaves the entry pointing at a
+  // marketplace nobody publishes — which fails silently, as a plugin that never
+  // installs rather than an error.
+  const { url } = readJson(join(ROOT, "package.json")).repository;
+  const slug = /github\.com\/(?<slug>[^/]+\/[^/.]+)/.exec(url)?.groups.slug;
+  assert.ok(slug, `could not read an owner/repo slug from ${url}`);
+  const settings = readJson(join(ROOT, ".claude", "settings.json"));
+  const known = settings.extraKnownMarketplaces?.[marketplace.name];
+  assert.deepEqual(known?.source, { source: "github", repo: slug });
+  // Without this the marketplace clone is refreshed only when someone runs
+  // `/plugin marketplace update` by hand, and sessions here silently keep
+  // running whatever release was current the day they first trusted the folder.
+  assert.equal(known?.autoUpdate, true);
+  const entry = marketplace.plugins.find((p) => p.source === "./plugin");
+  assert.equal(
+    settings.enabledPlugins?.[`${entry.name}@${marketplace.name}`],
+    true,
+  );
+});

@@ -5,6 +5,18 @@
     "CLAUDE_CODE_AUTO_BACKGROUND_TASKS": "1",
     "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1"
   },
+  "extraKnownMarketplaces": {
+    "agent-sanitizer": {
+      "source": {
+        "source": "github",
+        "repo": "AlexanderMattTurner/agent-sanitizer"
+      },
+      "autoUpdate": true
+    }
+  },
+  "enabledPlugins": {
+    "agent-sanitizer@agent-sanitizer": true
+  },
   "permissions": {
     "deny": [
       "Read(**/.env)",

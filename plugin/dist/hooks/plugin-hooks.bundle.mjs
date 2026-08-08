@@ -44,6 +44,57 @@ var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__ge
   mod
 ));
 
+// claude-hooks/lib/hook-timing.mjs
+function formatSeconds(ms) {
+  return (Math.round(ms / 100) / 10).toFixed(1);
+}
+async function excludeProvisioning(work, now = Date.now) {
+  const started = now();
+  try {
+    return await work();
+  } finally {
+    provisioningMs += Math.max(0, now() - started);
+  }
+}
+function startHookTimer(now = Date.now) {
+  const started = now();
+  const provisionedBefore = provisioningMs;
+  return () => Math.max(0, now() - started - (provisioningMs - provisionedBefore));
+}
+function slowHookNotice(hookName, elapsedMs, thresholdMs = SLOW_HOOK_THRESHOLD_MS) {
+  if (elapsedMs <= thresholdMs) return null;
+  return `agent-sanitizer PERFORMANCE: the ${hookName} hook took ${formatSeconds(elapsedMs)}s, over its ${formatSeconds(thresholdMs)}s budget \u2014 this delay is the sanitizer's, not the model's, and every affected call pays it. Tell the user, and suggest they report it at ${ISSUE_URL} with the hook name and timing.`;
+}
+function writeSlowHookNotice(hookName, elapsedMs, writeErr = (chunk) => process.stderr.write(chunk)) {
+  const notice = slowHookNotice(hookName, elapsedMs);
+  if (notice === null) return null;
+  writeErr(notice + "\n");
+  return notice;
+}
+function withSlowHookNotice(hookName, elapsedMs, verdict, writeErr = (chunk) => process.stderr.write(chunk)) {
+  const notice = writeSlowHookNotice(hookName, elapsedMs, writeErr);
+  if (notice === null) return verdict;
+  return {
+    ...verdict,
+    additional_context: verdict.additional_context ? `${verdict.additional_context} ${notice}` : notice
+  };
+}
+function reportSlowHook(hookName, elapsedMs, hookEventName, emit, writeErr = (chunk) => process.stderr.write(chunk)) {
+  const notice = writeSlowHookNotice(hookName, elapsedMs, writeErr);
+  if (notice === null) return false;
+  emit(hookEventName, { additionalContext: notice });
+  return true;
+}
+var SLOW_HOOK_THRESHOLD_MS, ISSUE_URL, provisioningMs;
+var init_hook_timing = __esm({
+  "claude-hooks/lib/hook-timing.mjs"() {
+    "use strict";
+    SLOW_HOOK_THRESHOLD_MS = 1e3;
+    ISSUE_URL = "https://github.com/AlexanderMattTurner/agent-sanitizer/issues/new";
+    provisioningMs = 0;
+  }
+});
+
 // claude-hooks/lib/hook-io.mjs
 import {
   openSync,
@@ -212,6 +263,32 @@ async function awaitLazyDependency({
   ceilingMs = 9e5,
   intervalMs = 250
 }) {
+  return excludeProvisioning(
+    () => pollForDependency({
+      tryImport,
+      markerPresent,
+      setupAlive,
+      now,
+      sleep: sleep2,
+      graceMs,
+      settleMs,
+      ceilingMs,
+      intervalMs
+    }),
+    now
+  );
+}
+async function pollForDependency({
+  tryImport,
+  markerPresent,
+  setupAlive,
+  now,
+  sleep: sleep2,
+  graceMs,
+  settleMs,
+  ceilingMs,
+  intervalMs
+}) {
   const start = now();
   let sawInstalling = false;
   let enteredDone = false;
@@ -280,6 +357,7 @@ var defaultSharedState, shared, HookEvent, PermissionDecision, FAIL_OPEN_ENV, FA
 var init_hook_io = __esm({
   "claude-hooks/lib/hook-io.mjs"() {
     "use strict";
+    init_hook_timing();
     defaultSharedState = () => ({
       lazyModules: /* @__PURE__ */ Object.create(null),
       cliEntryClaimed: false,
@@ -8043,7 +8121,7 @@ var require_util = __commonJS({
       return path2;
     });
     exports.normalize = normalize3;
-    function join7(aRoot, aPath) {
+    function join8(aRoot, aPath) {
       if (aRoot === "") {
         aRoot = ".";
       }
@@ -8075,7 +8153,7 @@ var require_util = __commonJS({
       }
       return joined;
     }
-    exports.join = join7;
+    exports.join = join8;
     exports.isAbsolute = function(aPath) {
       return aPath.charAt(0) === "/" || urlRegexp.test(aPath);
     };
@@ -8289,7 +8367,7 @@ var require_util = __commonJS({
             parsed.path = parsed.path.substring(0, index2 + 1);
           }
         }
-        sourceURL = join7(urlGenerate(parsed), sourceURL);
+        sourceURL = join8(urlGenerate(parsed), sourceURL);
       }
       return normalize3(sourceURL);
     }
@@ -31960,9 +32038,9 @@ var init_lib5 = __esm({
        * @returns {undefined}
        *   Nothing.
        */
-      set dirname(dirname4) {
+      set dirname(dirname5) {
         assertPath(this.basename, "dirname");
-        this.path = default2.join(dirname4 || "", this.basename);
+        this.path = default2.join(dirname5 || "", this.basename);
       }
       /**
        * Get the extname (including dot) (example: `'.js'`).
@@ -67331,15 +67409,21 @@ async function runJudgeCli(hookName, judge, {
   write = (chunk) => process.stdout.write(chunk)
 }) {
   let input;
+  let elapsed = null;
   try {
     input = await readInput();
+    elapsed = startHookTimer();
     const { claudeAdapter: adapter } = controlPlane();
     const event = adapter.parse(transformInput(input));
-    const out = nativeStdout(adapter.render(await judge(event), event));
+    const judged = await judge(event);
+    const out = nativeStdout(
+      adapter.render(withSlowHookNotice(hookName, elapsed(), judged), event)
+    );
     if (out !== null) write(out);
   } catch (err) {
     process.stderr.write(`${hookName} hook error: ${errMessage(err)}
 `);
+    if (elapsed !== null) writeSlowHookNotice(hookName, elapsed());
     onError(err, input);
   }
 }
@@ -67348,6 +67432,7 @@ var init_control_plane2 = __esm({
   async "claude-hooks/lib/control-plane.mjs"() {
     "use strict";
     init_hook_io();
+    init_hook_timing();
     marker = hookgateMarkerPath();
     loaded = await awaitLazyDependency({
       tryImport: async () => {
@@ -67969,7 +68054,11 @@ async function redactViaDaemon(text5, opts = {}) {
     deadline,
     connect = connectAndRequest,
     spawn: spawnFn = spawnDaemon,
-    waitForSocket: waitFn = waitForSocket
+    waitForSocket: waitFn = waitForSocket,
+    // The clock the provisioning charge is measured on; injectable alongside the
+    // waitForSocket seam it brackets, since a stubbed wait advances a test clock
+    // rather than real time.
+    now = Date.now
   } = opts;
   const remainingMs = () => deadline ? deadline.remainingMs() : void 0;
   const budgetSpent = () => {
@@ -68011,7 +68100,7 @@ async function redactViaDaemon(text5, opts = {}) {
     spawnFn(socketPath);
     const budgetMs = remainingMs();
     const waitOpts = budgetMs === void 0 ? void 0 : { deadlineMs: Math.min(WAIT_DEADLINE_MS, budgetMs) };
-    if (!await waitFn(socketPath, waitOpts))
+    if (!await excludeProvisioning(() => waitFn(socketPath, waitOpts), now))
       throw failClosed(
         new Error(`redactor daemon did not start within ${WAIT_DEADLINE_MS}ms`)
       );
@@ -68027,6 +68116,7 @@ var FRAME_CAP, DEFAULT_SOCKET_PATH, WAIT_DEADLINE_MS, sleep;
 var init_redactor_client = __esm({
   "claude-hooks/lib/redactor-client.mjs"() {
     "use strict";
+    init_hook_timing();
     init_env_config();
     FRAME_CAP = 16 * 1024 * 1024;
     DEFAULT_SOCKET_PATH = process.env._AGENT_SANITIZER_REDACTOR_SOCKET || join4(tmpdir2(), "agent-sanitizer-redactor", "redactor.sock");
@@ -68037,6 +68127,140 @@ var init_redactor_client = __esm({
     sleep = (ms) => new Promise((resolve3) => {
       setTimeout(resolve3, ms);
     });
+  }
+});
+
+// claude-hooks/lib/secret-drop-guard.mjs
+import { createHash as createHash3 } from "node:crypto";
+import { lstatSync as lstatSync4, unlinkSync as unlinkSync3 } from "node:fs";
+import { join as join5, dirname as dirname4 } from "node:path";
+import { tmpdir as tmpdir3 } from "node:os";
+import { spawnSync } from "node:child_process";
+function dropFingerprint(filePath, content3, dropped = []) {
+  const digest = createHash3("sha256").update(filePath).update("\0");
+  digest.update(content3);
+  for (const secret of dropped) digest.update("\0").update(secret);
+  return digest.digest("hex").slice(0, 32);
+}
+function confirmMarkerPath(fingerprint) {
+  return join5(tmpdir3(), `.claude-secret-drop-${PROJECT_HASH}-${fingerprint}`);
+}
+function gitTracked(filePath, spawn2 = spawnSync) {
+  const res = spawn2("git", ["ls-files", "--error-unmatch", "--", filePath], {
+    cwd: dirname4(filePath),
+    stdio: "ignore"
+  });
+  if (res.error) return true;
+  return res.status === 0;
+}
+function dropDeny(count, filePath) {
+  return `this Write removes ${count} redacted secret value(s) from ${filePath}, and the file is not tracked by git, so the secrets may be unrecoverable. If removing them is intended, re-issue this exact Write to confirm; otherwise keep each [REDACTED\u2026] placeholder (or its secret's line) in the new content`;
+}
+async function secretDropGuard(toolInput, io, opts = {}) {
+  const {
+    isTracked = gitTracked,
+    confirmSeen = consumeConfirm,
+    recordConfirm = (fingerprint2) => writeSentinelFile(confirmMarkerPath(fingerprint2))
+  } = opts;
+  const { file_path: filePath, content: content3 } = toolInput ?? {};
+  if (typeof filePath !== "string" || typeof content3 !== "string") return null;
+  let disk;
+  try {
+    disk = io.readFile(filePath);
+  } catch (err) {
+    if (
+      /** @type {NodeJS.ErrnoException} */
+      err?.code === "ENOENT"
+    )
+      return null;
+    throw err;
+  }
+  if (isTracked(filePath)) return null;
+  const cleaned = applyLayer13(disk).cleaned.replace(
+    LONE_SURROGATE_RE3,
+    "\uFFFD"
+  );
+  if (await io.redact(cleaned) === null) return null;
+  const view = await io.redactMap(cleaned);
+  if ("unmappable" in view) return null;
+  const dropped = [...new Set(view.pairs.map((pair) => pair.original))].filter(
+    (secret) => !content3.includes(secret)
+  );
+  if (dropped.length === 0) return null;
+  const fingerprint = dropFingerprint(filePath, content3, dropped);
+  if (confirmSeen(fingerprint)) return null;
+  recordConfirm(fingerprint);
+  return { deny: dropDeny(dropped.length, filePath) };
+}
+function withSecretDropGuard(rehydrate, io, guard = secretDropGuard) {
+  return async (tool, toolInput) => {
+    const rehydrated = await rehydrate(tool, toolInput);
+    if (tool !== "Write" || rehydrated !== null && "deny" in rehydrated)
+      return rehydrated;
+    const finalInput = rehydrated === null ? toolInput : rehydrated.updatedInput;
+    const drop = await guard(finalInput, io);
+    return drop ?? rehydrated;
+  };
+}
+function consumeConfirm(fingerprint) {
+  const marker2 = confirmMarkerPath(fingerprint);
+  if (!markerIsTrusted(marker2)) return false;
+  let fresh;
+  try {
+    fresh = Date.now() - lstatSync4(marker2).mtimeMs <= CONFIRM_TTL_MS;
+  } catch {
+    return false;
+  }
+  try {
+    unlinkSync3(marker2);
+  } catch {
+  }
+  return fresh;
+}
+var applyLayer13, LONE_SURROGATE_RE3, CONFIRM_TTL_MS;
+var init_secret_drop_guard = __esm({
+  async "claude-hooks/lib/secret-drop-guard.mjs"() {
+    "use strict";
+    init_hook_io();
+    await init_invisible_alert();
+    ({ applyLayer1: applyLayer13, LONE_SURROGATE_RE: LONE_SURROGATE_RE3 } = /** @type {typeof import("agent-sanitizer")} */
+    await lazyImport("agent-sanitizer"));
+    CONFIRM_TTL_MS = 10 * 6e4;
+  }
+});
+
+// claude-hooks/lib/placeholder-grammar.mjs
+function containsPlaceholder(value, depth = 0) {
+  if (depth > 32) return false;
+  if (typeof value === "string") return PLACEHOLDER_RE.test(value);
+  if (Array.isArray(value))
+    return value.some((item) => containsPlaceholder(item, depth + 1));
+  if (value !== null && typeof value === "object")
+    return Object.values(value).some(
+      (item) => containsPlaceholder(item, depth + 1)
+    );
+  return false;
+}
+function placeholderNotice(tool, toolInput) {
+  if (REHYDRATED_TOOLS.has(tool)) return null;
+  if (!containsPlaceholder(toolInput)) return null;
+  return "This tool call carries [REDACTED\u2026] placeholder text, which stands for a secret hidden from your view. Placeholders are rehydrated to the real secret only for Edit/Write on the file that owns them; any other write path (shell redirection, sed/tee, MCP file tools) persists the literal placeholder and destroys the secret. Use Edit or Write for changes to that file, or ask the user.";
+}
+var PLACEHOLDER_LABEL_CHARS, PLACEHOLDER_LABEL_MAX_LEN, PLACEHOLDER_RE, REHYDRATED_TOOLS;
+var init_placeholder_grammar = __esm({
+  "claude-hooks/lib/placeholder-grammar.mjs"() {
+    "use strict";
+    PLACEHOLDER_LABEL_CHARS = "A-Za-z0-9 ()._-";
+    PLACEHOLDER_LABEL_MAX_LEN = 64;
+    PLACEHOLDER_RE = new RegExp(
+      `\\[REDACTED(?:: [${PLACEHOLDER_LABEL_CHARS}]{1,${PLACEHOLDER_LABEL_MAX_LEN}})?\\]`
+    );
+    REHYDRATED_TOOLS = /* @__PURE__ */ new Set([
+      "Edit",
+      "Write",
+      "MultiEdit",
+      "NotebookEdit"
+    ]);
   }
 });
 
@@ -68184,6 +68408,8 @@ async function buildPreToolUseResponse(input, rehydrate = defaultRehydrate, sink
       permissionDecisionReason: deny
     });
   contexts.push(...layerContexts);
+  const notice = placeholderNotice(tool, current);
+  if (notice !== null) contexts.push(notice);
   return emitTraced(
     emitTrace,
     input.tool_name,
@@ -68307,6 +68533,8 @@ var init_pretooluse_sanitize = __esm({
     await init_invisible_alert();
     await init_authored_content();
     init_redactor_client();
+    await init_secret_drop_guard();
+    init_placeholder_grammar();
     init_trace2();
     HOOK_NAME = "pretooluse-sanitize";
     PRE_TOOL_USE_MESSAGES = Object.freeze({
@@ -68341,7 +68569,10 @@ var init_pretooluse_sanitize = __esm({
         ) : null;
       }
     };
-    defaultRehydrate = (tool, toolInput) => rehydrateRedacted2(tool, toolInput, redactorIo);
+    defaultRehydrate = withSecretDropGuard(
+      (tool, toolInput) => rehydrateRedacted2(tool, toolInput, redactorIo),
+      redactorIo
+    );
     registerFaultPolicy(HOOK_NAME, {
       event: HookEvent.PRE_TOOL_USE,
       guarded: "tool input",
@@ -68877,16 +69108,16 @@ var init_secret_annotate = __esm({
 });
 
 // claude-hooks/lib/reveal.mjs
-import { createHash as createHash3 } from "node:crypto";
-import { mkdirSync, lstatSync as lstatSync4 } from "node:fs";
-import { tmpdir as tmpdir3, userInfo as userInfo3 } from "node:os";
-import { join as join5, resolve as resolve2, sep as sep2 } from "node:path";
+import { createHash as createHash4 } from "node:crypto";
+import { mkdirSync, lstatSync as lstatSync5 } from "node:fs";
+import { tmpdir as tmpdir4, userInfo as userInfo3 } from "node:os";
+import { join as join6, resolve as resolve2, sep as sep2 } from "node:path";
 function revealDir() {
-  return process.env._AGENT_SANITIZER_REVEAL_DIR || join5(tmpdir3(), "agent-sanitizer-layer2-reveal");
+  return process.env._AGENT_SANITIZER_REVEAL_DIR || join6(tmpdir4(), "agent-sanitizer-layer2-reveal");
 }
 function revealPathFor(content3) {
-  const digest = createHash3("sha256").update(content3, "utf8").digest("hex");
-  return join5(revealDir(), `${digest}.txt`);
+  const digest = createHash4("sha256").update(content3, "utf8").digest("hex");
+  return join6(revealDir(), `${digest}.txt`);
 }
 function revealDirIsSafe(dir) {
   try {
@@ -68896,7 +69127,7 @@ function revealDirIsSafe(dir) {
   }
   let st;
   try {
-    st = lstatSync4(dir);
+    st = lstatSync5(dir);
   } catch {
     return false;
   }
@@ -68941,9 +69172,10 @@ var init_reveal = __esm({
 // claude-hooks/sanitize-output.mjs
 var sanitize_output_exports = {};
 __export(sanitize_output_exports, {
+  ON_DISK_PLACEHOLDER_WARNING: () => ON_DISK_PLACEHOLDER_WARNING,
   SECRET_HINT: () => SECRET_HINT2,
   SECRET_HINT_EXT: () => SECRET_HINT_EXT2,
-  applyLayer1: () => applyLayer13,
+  applyLayer1: () => applyLayer14,
   cliMain: () => cliMain2,
   composeContext: () => composeContext2,
   describeRemoved: () => describeRemoved2,
@@ -69004,10 +69236,11 @@ async function sanitizeText2(text5, toolName, deadline = makeDeadline(SANITIZE_B
       return note ? { text: secrets.text, found: secrets.found, note } : { text: secrets.text, found: secrets.found };
     }
   };
-  const result = (
-    /** @type {{ cleaned: string, warnings: string[], modified: boolean, sgrNote: boolean, reveal?: string }} */
+  const seamResult = (
+    /** @type {{ cleaned: string, warnings: string[], notes?: string[], modified: boolean, sgrNote: boolean, reveal?: string }} */
     await sanitizeTextSeam(text5, seamOptions)
   );
+  const result = { ...seamResult, notes: seamResult.notes ?? [] };
   return ext.postText ? applyPostText(
     result,
     await ext.postText(result.cleaned, {
@@ -69029,10 +69262,11 @@ function applyPostText(result, post) {
     sgrNote: result.sgrNote && !rewrote
   };
 }
-async function sanitizeValue2(value, toolName, warnings, reveals = [], deadline = makeDeadline(SANITIZE_BUDGET_MS), ext = {}) {
+async function sanitizeValue2(value, toolName, warnings, reveals = [], deadline = makeDeadline(SANITIZE_BUDGET_MS), ext = {}, notes = []) {
   if (typeof value === "string") {
     const result = await sanitizeText2(value, toolName, deadline, ext);
     warnings.push(...result.warnings);
+    notes.push(...result.notes);
     if (result.reveal !== void 0) reveals.push(result.reveal);
     return {
       value: result.cleaned,
@@ -69051,7 +69285,8 @@ async function sanitizeValue2(value, toolName, warnings, reveals = [], deadline 
         warnings,
         reveals,
         deadline,
-        ext
+        ext,
+        notes
       );
       out.push(result.value);
       if (result.modified) modified = true;
@@ -69060,16 +69295,25 @@ async function sanitizeValue2(value, toolName, warnings, reveals = [], deadline 
     return { value: out, modified, sgrNote };
   }
   if (value !== null && typeof value === "object")
-    return sanitizeObject(value, toolName, warnings, reveals, deadline, ext);
+    return sanitizeObject(
+      value,
+      toolName,
+      warnings,
+      reveals,
+      deadline,
+      ext,
+      notes
+    );
   return { value, modified: false, sgrNote: false };
 }
-async function sanitizeObject(value, toolName, warnings, reveals, deadline, ext) {
+async function sanitizeObject(value, toolName, warnings, reveals, deadline, ext, notes) {
   const out = {};
   let modified = false;
   let sgrNote = false;
   for (const [key, item] of Object.entries(value)) {
     const keyResult = await sanitizeText2(key, toolName, deadline);
     warnings.push(...keyResult.warnings);
+    notes.push(...keyResult.notes);
     if (keyResult.reveal !== void 0) reveals.push(keyResult.reveal);
     if (keyResult.modified) modified = true;
     if (keyResult.sgrNote) sgrNote = true;
@@ -69079,7 +69323,8 @@ async function sanitizeObject(value, toolName, warnings, reveals, deadline, ext)
       warnings,
       reveals,
       deadline,
-      ext
+      ext,
+      notes
     );
     if (Object.hasOwn(out, keyResult.cleaned))
       throw new Error(
@@ -69160,6 +69405,7 @@ async function evaluateToolOutput(input, ext = {}) {
     return emit("noop", null);
   const revealRead = isRevealRead(input.tool_name, input.tool_input);
   const warnings = [];
+  const notes = [];
   const reveals = [];
   const deadline = makeDeadline(SANITIZE_BUDGET_MS);
   const {
@@ -69172,7 +69418,8 @@ async function evaluateToolOutput(input, ext = {}) {
     warnings,
     reveals,
     deadline,
-    ext
+    ext,
+    notes
   );
   for (const original of reveals) {
     let stored;
@@ -69185,13 +69432,18 @@ async function evaluateToolOutput(input, ext = {}) {
     const hint = persistReveal(stored);
     if (hint) warnings.push(hint);
   }
-  if (!modified && warnings.length === 0)
+  if (input.tool_name === "Read" && !revealRead && containsPlaceholder(toolOutput))
+    warnings.push(ON_DISK_PLACEHOLDER_WARNING);
+  if (!modified && warnings.length === 0 && notes.length === 0)
     return revealRead ? emit("flagged", { additional_context: REVEAL_READ_ENVELOPE }) : emit("clean", null);
-  const baseContext = sgrNote && warnings.length === 0 ? SGR_OUTPUT_NOTE : composeContext2(modified, warnings, input.tool_name);
+  const baseContext = sgrNote && warnings.length === 0 ? noteContext(notes) : composeContext2(modified, warnings, input.tool_name);
   const additionalContext = revealRead ? `${REVEAL_READ_ENVELOPE} ${baseContext}` : baseContext;
   const fields = { additional_context: additionalContext };
   if (modified) fields.mutated_output = sanitized;
   return emit(modified ? "modified" : "flagged", fields);
+}
+function noteContext(notes) {
+  return notes.length === 0 ? SGR_OUTPUT_NOTE : [...new Set(notes)].join(" ");
 }
 async function judgeSanitizeOutput(event, ext = {}) {
   const { Decision: Decision3, EventKind: EventKind3 } = controlPlane();
@@ -69248,7 +69500,7 @@ async function cliMain2(ext = {}) {
     }
   );
 }
-var _sanitizer, HTML_TAG_PRESENT2, applyLayer13, matchesSecretHint2, SECRET_HINT2, SECRET_HINT_EXT2, _output, sanitizeTextSeam, composeContextSeam, describeRemoved2, describeWarned2, suppressToolOutput2, HOOK_NAME2, SANITIZE_BUDGET_MS, SGR_OUTPUT_NOTE, WEB_INGRESS_TOOLS, FAIL_CLOSED_CONTEXT;
+var _sanitizer, HTML_TAG_PRESENT2, applyLayer14, matchesSecretHint2, SECRET_HINT2, SECRET_HINT_EXT2, _output, sanitizeTextSeam, composeContextSeam, describeRemoved2, describeWarned2, suppressToolOutput2, HOOK_NAME2, SANITIZE_BUDGET_MS, SGR_OUTPUT_NOTE, WEB_INGRESS_TOOLS, ON_DISK_PLACEHOLDER_WARNING, FAIL_CLOSED_CONTEXT;
 var init_sanitize_output = __esm({
   async "claude-hooks/sanitize-output.mjs"() {
     "use strict";
@@ -69259,10 +69511,11 @@ var init_sanitize_output = __esm({
     init_trace2();
     init_secret_annotate();
     init_reveal();
+    init_placeholder_grammar();
     _sanitizer = /** @type {typeof import("agent-sanitizer")} */
     await lazyImport("agent-sanitizer");
     ({ HTML_TAG_PRESENT: HTML_TAG_PRESENT2 } = _sanitizer);
-    ({ applyLayer1: applyLayer13, matchesSecretHint: matchesSecretHint2, SECRET_HINT: SECRET_HINT2, SECRET_HINT_EXT: SECRET_HINT_EXT2 } = _sanitizer);
+    ({ applyLayer1: applyLayer14, matchesSecretHint: matchesSecretHint2, SECRET_HINT: SECRET_HINT2, SECRET_HINT_EXT: SECRET_HINT_EXT2 } = _sanitizer);
     _output = /** @type {typeof import("agent-sanitizer/output")} */
     await lazyImport("agent-sanitizer/output");
     ({ sanitizeText: sanitizeTextSeam, composeContext: composeContextSeam } = _output);
@@ -69272,8 +69525,9 @@ var init_sanitize_output = __esm({
       process.env._AGENT_SANITIZER_SANITIZE_BUDGET_MS,
       12e4
     );
-    SGR_OUTPUT_NOTE = "Display-only ANSI color stripped; pipe through cat -v to inspect raw escapes.";
+    SGR_OUTPUT_NOTE = "Inert ANSI stripped (display-only colour and/or a stray escape byte that formed no control sequence); pipe through cat -v to inspect raw escapes.";
     WEB_INGRESS_TOOLS = /* @__PURE__ */ new Set(["WebFetch", "WebSearch"]);
+    ON_DISK_PLACEHOLDER_WARNING = "this file's raw on-disk bytes already contain literal [REDACTED\u2026] placeholder text (not inserted by this sanitizer). If an earlier write copied a placeholder from a sanitized view, the secret it stood for has been destroyed; verify with the user before trusting or propagating this file";
     FAIL_CLOSED_CONTEXT = "CRITICAL: sanitize-output hook failed; this tool's output was suppressed (replaced with a placeholder) to fail closed -- the unsanitized output was not shown. Investigate the hook error before relying on this tool.";
     registerFaultPolicy(HOOK_NAME2, {
       event: HookEvent.POST_TOOL_USE,
@@ -69364,7 +69618,7 @@ var init_sanitize_user_prompt = __esm({
     USER_PROMPT_MESSAGES = Object.freeze({
       unknownEvent: "User prompt blocked (fail-closed): unrecognized hook payload.",
       blockContext: "User prompt blocked: payload-capable invisible/ANSI characters detected.",
-      sgrNote: "The prompt contains ANSI SGR color codes (pasted terminal output). They are display-only formatting noise; read through them.",
+      sgrNote: "The prompt contains inert ANSI escapes (pasted terminal output): display-only SGR colour codes and/or a stray escape byte that forms no control sequence. They are formatting noise; read through them.",
       hookFailed: (cause) => `sanitize-user-prompt hook failed (fail-closed): ${cause}`,
       // What a reader should run when the package itself is what is missing. It
       // rides in this table rather than a separate argument because it is host text
@@ -69396,25 +69650,64 @@ var init_sanitize_user_prompt = __esm({
   }
 });
 
+// src/claude-context.mjs
+function claudeDirPatterns(prefix) {
+  return [
+    `${prefix}.claude/*.md`,
+    ...CLAUDE_CONTEXT_SUBDIRS.map((sub) => `${prefix}.claude/${sub}/**/*.md`)
+  ];
+}
+function excludeNodeModules(entry) {
+  return entry === "node_modules";
+}
+function excludeFromContextScan(entry) {
+  if (excludeNodeModules(entry)) return true;
+  const parts2 = entry.split(/[/\\]/);
+  const claudeIndex = parts2.indexOf(".claude");
+  const tail = parts2.slice(claudeIndex + 1);
+  if (claudeIndex === -1 || tail.length === 0) return false;
+  if (tail.length === 1 && tail[0].endsWith(".md")) return false;
+  return !CLAUDE_CONTEXT_SUBDIRS.includes(tail[0]);
+}
+var CLAUDE_CONTEXT_SUBDIRS, CLAUDE_INSTRUCTION_GLOBS;
+var init_claude_context = __esm({
+  "src/claude-context.mjs"() {
+    "use strict";
+    CLAUDE_CONTEXT_SUBDIRS = Object.freeze([
+      "agents",
+      "commands",
+      "output-styles",
+      "skills"
+    ]);
+    CLAUDE_INSTRUCTION_GLOBS = Object.freeze([
+      "**/CLAUDE.md",
+      "**/CLAUDE.local.md",
+      "**/AGENTS.md",
+      ...claudeDirPatterns("**/")
+    ]);
+  }
+});
+
 // claude-hooks/scan-invisible-chars.mjs
 var scan_invisible_chars_exports = {};
 __export(scan_invisible_chars_exports, {
   ALERT_ACK_FILE: () => ALERT_ACK_FILE,
   ALERT_FILE: () => ALERT_FILE,
+  CLAUDE_CONTEXT_SUBDIRS: () => CLAUDE_CONTEXT_SUBDIRS,
+  CLAUDE_INSTRUCTION_GLOBS: () => CLAUDE_INSTRUCTION_GLOBS,
   LONG_RUN_RE: () => LONG_RUN_RE3,
   LONG_RUN_THRESHOLD: () => LONG_RUN_THRESHOLD2,
   TOTAL_INVISIBLE_THRESHOLD: () => TOTAL_INVISIBLE_THRESHOLD,
   cliMain: () => cliMain3,
   decodeRun: () => decodeRun2,
   findInstructionFiles: () => findInstructionFiles2,
-  findMdFiles: () => findMdFiles,
   formatReport: () => formatReport,
   formatSkipped: () => formatSkipped,
   scanFile: () => scanFile,
   scanProject: () => scanProject
 });
-import { readFileSync as readFileSync6, globSync as globSync2, unlinkSync as unlinkSync3 } from "node:fs";
-import { join as join6, relative as relative2 } from "node:path";
+import { readFileSync as readFileSync6, globSync as globSync2, unlinkSync as unlinkSync4 } from "node:fs";
+import { join as join7, relative as relative2 } from "node:path";
 async function ensureSanitizerLoaded() {
   if (typeof scanText2 === "function" && typeof cleanFile2 === "function")
     return true;
@@ -69462,25 +69755,11 @@ function persistAlert(parts2) {
 function decodeRun2(run) {
   return instrDecodeRun(run);
 }
-function findMdFiles(dir) {
-  return globSync2("**/*.md", {
-    cwd: dir,
-    exclude: (name50) => name50 === "node_modules"
-  }).map((name50) => join6(dir, name50));
-}
 function findInstructionFiles2(dir) {
-  return globSync2(
-    [
-      "**/CLAUDE.md",
-      "**/CLAUDE.local.md",
-      "**/AGENTS.md",
-      "**/.claude/**/*.md"
-    ],
-    {
-      cwd: dir,
-      exclude: (name50) => name50 === "node_modules"
-    }
-  ).map((name50) => join6(dir, name50));
+  return globSync2([...CLAUDE_INSTRUCTION_GLOBS], {
+    cwd: dir,
+    exclude: excludeFromContextScan
+  }).map((name50) => join7(dir, name50));
 }
 function scanFile(filePath) {
   return scanText2(readFileSync6(filePath, "utf-8"));
@@ -69514,12 +69793,7 @@ function formatReport(allFindings) {
   return lines.join("\n");
 }
 function scanProject(dir = PROJECT_DIR) {
-  const targets = [
-    .../* @__PURE__ */ new Set([
-      ...findInstructionFiles2(dir),
-      ...findMdFiles(join6(dir, ".claude"))
-    ])
-  ];
+  const targets = [...new Set(findInstructionFiles2(dir))];
   const findings = [];
   const skipped = [];
   let scanned = 0;
@@ -69554,7 +69828,20 @@ function formatSkipped(skipped) {
     ""
   ].join("\n");
 }
-async function cliMain3({ trace: sink = trace, scan: runScan } = {}) {
+async function cliMain3(opts = {}) {
+  const elapsed = startHookTimer();
+  try {
+    await runScanCli(opts);
+  } finally {
+    reportSlowHook(
+      HOOK_NAME4,
+      elapsed(),
+      HookEvent.SESSION_START,
+      emitHookResponse
+    );
+  }
+}
+async function runScanCli({ trace: sink = trace, scan: runScan }) {
   const emitTrace = bestEffortTrace(sink);
   const alertParts = [];
   if (!await ensureSanitizerLoaded()) {
@@ -69571,7 +69858,7 @@ async function cliMain3({ trace: sink = trace, scan: runScan } = {}) {
   }
   for (const stale of [ALERT_FILE, ALERT_ACK_FILE]) {
     try {
-      unlinkSync3(stale);
+      unlinkSync4(stale);
     } catch {
     }
   }
@@ -69611,7 +69898,7 @@ async function cliMain3({ trace: sink = trace, scan: runScan } = {}) {
 function autoCleanFindings(allFindings, dir) {
   let cleaned = 0;
   for (const { file } of allFindings) {
-    const absPath = join6(dir, file);
+    const absPath = join7(dir, file);
     try {
       if (cleanFile2(absPath)) cleaned++;
     } catch (err) {
@@ -69642,6 +69929,8 @@ var init_scan_invisible_chars = __esm({
     init_hook_fault();
     await init_invisible_alert();
     init_trace2();
+    init_hook_timing();
+    init_claude_context();
     ({
       LONG_RUN_RE: LONG_RUN_RE3,
       LONG_RUN_THRESHOLD: LONG_RUN_THRESHOLD2,

@@ -2313,26 +2313,45 @@ function multiUrlAttr(value) {
  * `context` selects the per-URL check the caller applies: resource URLs get the
  * exfil-shape test; form-submission and meta-refresh targets additionally flag
  * any absolute off-origin destination.
+ *
+ * `autoFetched` says whether reaching this URL takes a deliberate act. Exactly
+ * one attribute here does: `href` on an `<a>`, which somebody has to follow.
+ * Every other one is fetched by the renderer on sight (`src`, `srcset`,
+ * `background`, and `href` on a `<link>`), fires on a click aimed at something
+ * else (`ping`), or navigates on its own (a form action, a meta refresh). The
+ * distinction is the caller's severity line, not a detection line — the URL is
+ * reported either way (see the exfil tier in ../src/output.mjs).
  * @param {string} text
- * @returns {Array<{ url: string, isImage: boolean, context: "resource" | "form" | "refresh" }>}
+ * @returns {Array<{ url: string, isImage: boolean, autoFetched: boolean, context: "resource" | "form" | "refresh" }>}
  */
 function extractHtmlUrls(text) {
   const tree = parseFragment(text);
-  /** @type {Array<{ url: string, isImage: boolean, context: "resource" | "form" | "refresh" }>} */
+  /** @type {Array<{ url: string, isImage: boolean, autoFetched: boolean, context: "resource" | "form" | "refresh" }>} */
   const urls = [];
   visit(tree, "element", (/** @type {any} */ node) => {
     // hast element nodes always carry a `properties` object (parse5 sets it).
     const props = node.properties;
     const isImage = node.tagName === "img";
+    const isAnchor = node.tagName === "a";
     for (const key of ["src", "href", "background"])
       if (typeof props[key] === "string")
-        urls.push({ url: props[key], isImage, context: "resource" });
+        urls.push({
+          url: props[key],
+          isImage,
+          autoFetched: !(key === "href" && isAnchor),
+          context: "resource",
+        });
     for (const key of ["srcSet", "ping"])
       for (const url of multiUrlAttr(props[key]))
-        urls.push({ url, isImage, context: "resource" });
+        urls.push({ url, isImage, autoFetched: true, context: "resource" });
     for (const key of ["action", "formAction"])
       if (typeof props[key] === "string")
-        urls.push({ url: props[key], isImage: false, context: "form" });
+        urls.push({
+          url: props[key],
+          isImage: false,
+          autoFetched: true,
+          context: "form",
+        });
     // rehype delivers `http-equiv` as an array (comma-separated); join it back
     // so a `refresh` directive is matched regardless of how it was tokenized.
     const httpEquiv = Array.isArray(props.httpEquiv)
@@ -2344,7 +2363,13 @@ function extractHtmlUrls(text) {
       typeof props.content === "string"
     ) {
       const url = metaRefreshUrl(props.content);
-      if (url) urls.push({ url, isImage: false, context: "refresh" });
+      if (url)
+        urls.push({
+          url,
+          isImage: false,
+          autoFetched: true,
+          context: "refresh",
+        });
     }
   });
   return urls;
@@ -2362,13 +2387,18 @@ const OFF_ORIGIN_REASON = {
  * and HTML attributes (src/href/background/srcset/ping, form action/formaction,
  * meta-refresh). Detection only — the text is never modified; the caller
  * surfaces the threats as a warning.
+ *
+ * `autoFetched` marks a threat that needs no deliberate act to fire — a
+ * rendered image, a stylesheet, a form target, a meta refresh — as opposed to a
+ * link somebody has to follow. Both are reported; the caller uses it to decide
+ * how loudly (see the exfil tier in ./output.mjs).
  * @param {string} text
- * @returns {Array<{ isImage: boolean, reason: string, target: string }> | null}
+ * @returns {Array<{ isImage: boolean, autoFetched: boolean, reason: string, target: string }> | null}
  */
 export function detectExfil(text) {
   if (!MD_LINK_HINT.test(text) && !HTML_TAG_PRESENT.test(text)) return null;
 
-  /** @type {Array<{ isImage: boolean, reason: string, target: string }>} */
+  /** @type {Array<{ isImage: boolean, autoFetched: boolean, reason: string, target: string }>} */
   const threats = [];
 
   try {
@@ -2386,20 +2416,25 @@ export function detectExfil(text) {
       if (!reason) return;
       threats.push({
         isImage: node.type === "image",
+        // A markdown image is fetched the moment the document renders; a link
+        // (or a definition, which only names one) is not.
+        autoFetched: node.type === "image",
         reason,
         target: urlHost(node.url),
       });
     });
 
     // HTML attributes (not AST nodes in remark).
-    for (const { url, isImage, context } of extractHtmlUrls(text)) {
+    for (const { url, isImage, autoFetched, context } of extractHtmlUrls(
+      text,
+    )) {
       const reason =
         checkExfilUrl(url) ||
         (context !== "resource" && isOffOrigin(url)
           ? OFF_ORIGIN_REASON[context]
           : null);
       if (!reason) continue;
-      threats.push({ isImage, reason, target: urlHost(url) });
+      threats.push({ isImage, autoFetched, reason, target: urlHost(url) });
     }
   } catch {
     // The parse/visit blew up (stack overflow on pathological nesting). Fail
@@ -2409,6 +2444,9 @@ export function detectExfil(text) {
     return [
       {
         isImage: false,
+        // Fail closed on the severity tier too: an input the scanner could not
+        // read is not evidence that what it hides is harmless.
+        autoFetched: true,
         reason: "input too deeply nested to scan for exfil URLs",
         target: "(unparseable HTML)",
       },

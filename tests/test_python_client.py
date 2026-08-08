@@ -661,3 +661,6 @@ def test_python_client_matches_js_golden(case: dict, html: bool) -> None:
     assert _to_units(result.cleaned) == recorded["cleaned"], case["name"]
     assert result.found == recorded["found"], case["name"]
     assert result.warnings == recorded["warnings"], case["name"]
+    # Both tiers: a finding the JS layer reports quietly must arrive quietly on
+    # the Python side too, not vanish or come back loud.
+    assert result.notes == recorded["notes"], case["name"]

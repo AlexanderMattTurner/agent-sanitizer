@@ -42,10 +42,11 @@ const run = (args, input) =>
   execFileSync("node", [CLI, ...args], { input, encoding: "utf8" });
 
 /** The wire response shape, for comparing CLI output against the sanitize oracle. */
-const envelope = ({ cleaned, found, warnings }) => ({
+const envelope = ({ cleaned, found, warnings, notes }) => ({
   cleaned,
   found,
   warnings,
+  notes,
 });
 
 // Inputs spanning every layer: a Cf char (Layer 1), clean passthrough, a hidden
@@ -81,6 +82,7 @@ describe("CLI: invoked through a symlinked bin (published-package shape)", () =>
       warnings: [
         "Stripped: Format chars (Cf) — inspect the removed bytes with a hex dump (xxd / od -c), which survives sanitization",
       ],
+      notes: [],
     });
   });
 });
@@ -118,6 +120,7 @@ describe("CLI: worker mode", () => {
       cleaned: "ok",
       found: [],
       warnings: [],
+      notes: [],
     });
   });
 
@@ -142,6 +145,7 @@ describe("CLI: worker mode", () => {
       cleaned: "ok",
       found: [],
       warnings: [],
+      notes: [],
     });
   });
 });
@@ -180,6 +184,7 @@ describe("CLI: input-size cap (DoS guard)", () => {
       cleaned: "ok",
       found: [],
       warnings: [],
+      notes: [],
     });
   });
 
@@ -197,6 +202,7 @@ describe("CLI: input-size cap (DoS guard)", () => {
         cleaned: "ok",
         found: [],
         warnings: [],
+        notes: [],
       });
     }
   });
@@ -343,15 +349,11 @@ describe("CLI: op dispatch mirrors the in-process entry point", () => {
       { text: "hello", html: false },
       { text: HIDDEN_HTML, html: true },
     ]) {
-      const { cleaned, warnings, modified, sgrNote } = await sanitizeText(
-        text,
-        {
-          html,
-        },
-      );
+      const { cleaned, warnings, notes, modified, sgrNote } =
+        await sanitizeText(text, { html });
       assertOpMirrors(
         { op: "sanitizeText", text, html },
-        { cleaned, warnings, modified, sgrNote },
+        { cleaned, warnings, notes, modified, sgrNote },
       );
     }
   });
@@ -419,6 +421,7 @@ describe("CLI: unknown op fails loudly", () => {
       cleaned: "ok",
       found: [],
       warnings: [],
+      notes: [],
     });
   });
 });
@@ -516,6 +519,7 @@ describe("CLI: worker bounds per-line buffering to the input cap", () => {
       cleaned: "a",
       found: [],
       warnings: [],
+      notes: [],
     });
     assert.match(JSON.parse(lines[1]).error, /request too large/);
     assert.match(JSON.parse(lines[1]).error, /AGENT_SANITIZER_MAX_INPUT_BYTES/);
@@ -524,6 +528,7 @@ describe("CLI: worker bounds per-line buffering to the input cap", () => {
       cleaned: "b",
       found: [],
       warnings: [],
+      notes: [],
     });
 
     // Memory proof: peak RSS over baseline must stay a small fraction of the

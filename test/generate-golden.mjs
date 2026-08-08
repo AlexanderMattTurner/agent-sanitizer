@@ -58,6 +58,11 @@ async function buildGolden() {
         cleaned: toUnits(result.cleaned),
         found: result.found,
         warnings: result.warnings,
+        // Both tiers are recorded. The severity split moves some findings from
+        // `warnings` to `notes` (src/severity.mjs); recording only the loud list
+        // would silently DELETE those cases from the cross-language recording
+        // rather than re-tier them, and the Python client asserts both.
+        notes: result.notes,
       };
     }
     cases.push({ name, ...record });
