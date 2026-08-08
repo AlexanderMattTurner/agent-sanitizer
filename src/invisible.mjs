@@ -333,31 +333,35 @@ const MAX_TAG_SPEC_CHARS = 6;
 // An ideographic variation sequence is a CJK ideograph followed by a selector in
 // U+E0100–U+E01EF. Preserved ONLY when the immediately preceding code point is a
 // CJK ideograph — the registry-faithful structural gate (IVS apply to ideographs
-// and nothing else). The ranges are the Unicode ideograph blocks: Unified,
-// Extensions A–I, and the two Compatibility Ideograph blocks.
+// and nothing else).
+//
+// Derived from Unicode's own data rather than hand-transcribed block spans: the
+// Unified_Ideograph property IS the set of unified ideographs (URO + every
+// extension), versioned with the runtime's ICU, so a new extension arrives with
+// the Node upgrade instead of waiting for someone to notice. A hand-written
+// table went stale exactly this way — it stopped at Extension H and so denied
+// the 4,298 Extension J ideographs (U+323B0–U+33479) a legitimate IVS base.
+//
+// Script=Han is deliberately NOT used: it also covers radicals (U+2E80–U+2EF3),
+// Kangxi radicals, U+3005/U+3007 and the ideographic-description characters,
+// none of which is an IVS base. Script_Extensions=Han is wider still (it reaches
+// U+00B7 MIDDLE DOT and the CJK punctuation shared with Kana), so it would let a
+// full stop anchor a variation selector.
+//
+// The two Compatibility Ideograph BLOCKS stay literal: they are not
+// Unified_Ideograph, and JS RegExp exposes no \p{Block=…}. Block boundaries are
+// immutable by Unicode's stability policy, so a literal span cannot drift; the
+// contract test in test/invisible-unicode-tables.test.mjs pins that every
+// ASSIGNED code point inside them is a Script=Han letter.
 const IVS_MIN = 0xe0100;
 const IVS_MAX = 0xe01ef;
-const CJK_IDEOGRAPH_RANGES = [
-  [0x3400, 0x4dbf], // CJK Unified Ideographs Extension A
-  [0x4e00, 0x9fff], // CJK Unified Ideographs
-  [0xf900, 0xfaff], // CJK Compatibility Ideographs
-  [0x20000, 0x2a6df], // Extension B
-  [0x2a700, 0x2b73f], // Extension C
-  [0x2b740, 0x2b81f], // Extension D
-  [0x2b820, 0x2ceaf], // Extension E
-  [0x2ceb0, 0x2ebef], // Extension F
-  [0x2ebf0, 0x2ee5f], // Extension I
-  [0x2f800, 0x2fa1f], // CJK Compatibility Ideographs Supplement
-  [0x30000, 0x3134f], // Extension G
-  [0x31350, 0x323af], // Extension H
-];
+const CJK_IDEOGRAPH_RE =
+  /[\p{Unified_Ideograph}\u{F900}-\u{FAFF}\u{2F800}-\u{2FA1F}]/u;
 
-/** True when `cp` is a CJK ideograph (the only base an ideographic variation
- * selector legitimately follows). @param {number} cp @returns {boolean} */
-function isCjkIdeograph(cp) {
-  for (const [start, end] of CJK_IDEOGRAPH_RANGES)
-    if (cp >= start && cp <= end) return true;
-  return false;
+/** True when `ch` is a CJK ideograph (the only base an ideographic variation
+ * selector legitimately follows). @param {string} ch @returns {boolean} */
+function isCjkIdeograph(ch) {
+  return CJK_IDEOGRAPH_RE.test(ch);
 }
 
 // Consonant (KA..HA and script-specific additional-consonant) ranges of the
@@ -366,28 +370,44 @@ function isCjkIdeograph(cp) {
 // rendering and is a smuggling channel, so the Indic joiner is preserved only
 // when its virama sits on one of these. Broad per-block spans — precision here
 // only needs "a real Brahmic letter of this script", not an exact consonant set.
-const BRAHMIC_CONSONANT_RANGES = [
-  [0x0915, 0x0939], // Devanagari KA–HA
-  [0x0958, 0x095f], // Devanagari additional consonants
-  [0x0995, 0x09b9], // Bengali
-  [0x09dc, 0x09df], // Bengali additional consonants
-  [0x0a15, 0x0a39], // Gurmukhi
-  [0x0a59, 0x0a5e], // Gurmukhi additional consonants
-  [0x0a95, 0x0ab9], // Gujarati
-  [0x0b15, 0x0b39], // Oriya
-  [0x0b5c, 0x0b5f], // Oriya additional consonants
-  [0x0b95, 0x0bb9], // Tamil
-  [0x0c15, 0x0c39], // Telugu
-  [0x0c58, 0x0c5a], // Telugu additional consonants
-  [0x0c95, 0x0cb9], // Kannada
-  [0x0d15, 0x0d3a], // Malayalam
-  [0x0d9a, 0x0dc6], // Sinhala
+//
+// UNLIKE the CJK and Hangul gates these CANNOT be derived from a property
+// escape: the UCD property that names them is Indic_Syllabic_Category=Consonant,
+// and JS RegExp exposes only General_Category, Script, Script_Extensions and the
+// binary properties. \p{Script=Devanagari} is the wrong shape — it also holds the
+// independent vowels (U+0904–U+0914), which a virama never attaches to, so
+// switching to it would preserve joiners after a bare vowel + halant. The table
+// therefore stays literal, and
+// test/invisible-unicode-tables.test.mjs pins the strongest contract that IS
+// derivable: every assigned code point in each span is a letter of the script
+// the span names, and each span holds at least one such letter. Drift (a future Unicode
+// filling a hole with a non-letter, or a typo'd span crossing into a neighbouring
+// script's block) then fails CI instead of shipping.
+// Keyed by script name so the contract test can check each span against the
+// script it claims; exported for exactly that test.
+/** @type {ReadonlyArray<readonly [string, number, number]>} */
+export const BRAHMIC_CONSONANT_RANGES = [
+  ["Devanagari", 0x0915, 0x0939], // KA–HA
+  ["Devanagari", 0x0958, 0x095f], // additional consonants
+  ["Bengali", 0x0995, 0x09b9],
+  ["Bengali", 0x09dc, 0x09df], // additional consonants
+  ["Gurmukhi", 0x0a15, 0x0a39],
+  ["Gurmukhi", 0x0a59, 0x0a5e], // additional consonants
+  ["Gujarati", 0x0a95, 0x0ab9],
+  ["Oriya", 0x0b15, 0x0b39],
+  ["Oriya", 0x0b5c, 0x0b5f], // additional consonants
+  ["Tamil", 0x0b95, 0x0bb9],
+  ["Telugu", 0x0c15, 0x0c39],
+  ["Telugu", 0x0c58, 0x0c5a], // additional consonants
+  ["Kannada", 0x0c95, 0x0cb9],
+  ["Malayalam", 0x0d15, 0x0d3a],
+  ["Sinhala", 0x0d9a, 0x0dc6],
 ];
 
 /** True when `cp` is a Brahmic consonant — the only base a virama attaches to.
  * @param {number} cp @returns {boolean} */
 function isBrahmicConsonant(cp) {
-  for (const [start, end] of BRAHMIC_CONSONANT_RANGES)
+  for (const [, start, end] of BRAHMIC_CONSONANT_RANGES)
     if (cp >= start && cp <= end) return true;
   return false;
 }
@@ -409,26 +429,30 @@ const HANGUL_FILLERS = new Set([0x115f, 0x1160, 0x3164, 0xffa0]);
 // literal is invisible to the eye and a correctness landmine for the next editor.
 const GATED_BLANK_RE = new RegExp("[\\u115F\\u1160\\u2800\\u3164\\uFFA0]", "u");
 
+// Script=Braille, from the runtime's Unicode data (identical to
+// Script_Extensions=Braille — no character is shared with another script).
+const BRAILLE_RE = /\p{Script=Braille}/u;
+
 /** A real (non-blank) Braille cell — the anchoring neighbour for a U+2800 blank.
  * @param {string} ch @returns {boolean} */
 function isBrailleCell(ch) {
-  const cp = ch ? /** @type {number} */ (ch.codePointAt(0)) : -1;
-  return cp >= 0x2801 && cp <= 0x28ff;
+  const cp = ch ? ch.codePointAt(0) : -1;
+  return cp !== BRAILLE_BLANK && BRAILLE_RE.test(ch);
 }
+
+// Script=Hangul, straight from the runtime's Unicode data. NOT
+// Script_Extensions=Hangul: that set also holds the CJK punctuation Korean text
+// shares with Chinese and Japanese (U+3001 IDEOGRAPHIC COMMA, U+30FB KATAKANA
+// MIDDLE DOT, U+FF61–U+FF65 …), so a Japanese middle dot would anchor — and
+// thereby preserve — a Hangul filler in text with no Hangul in it at all.
+const HANGUL_RE = /\p{Script=Hangul}/u;
 
 /** A Hangul jamo/syllable (NOT itself one of the fillers) — the anchoring
  * neighbour for a Hangul filler. @param {string} ch @returns {boolean} */
 function isHangul(ch) {
   const cp = ch ? /** @type {number} */ (ch.codePointAt(0)) : -1;
   if (HANGUL_FILLERS.has(cp)) return false; // a filler cannot anchor another filler
-  return (
-    (cp >= 0x1100 && cp <= 0x11ff) || // Hangul Jamo
-    (cp >= 0x3130 && cp <= 0x318f) || // Hangul Compatibility Jamo
-    (cp >= 0xa960 && cp <= 0xa97f) || // Jamo Extended-A
-    (cp >= 0xac00 && cp <= 0xd7a3) || // Hangul Syllables
-    (cp >= 0xd7b0 && cp <= 0xd7ff) || // Jamo Extended-B
-    (cp >= 0xffa1 && cp <= 0xffdc) // Halfwidth Jamo (FFA0 is the filler itself)
-  );
+  return HANGUL_RE.test(ch);
 }
 
 // Non-global single-char classifiers (CHECKS carry `g`, whose lastIndex is
@@ -583,12 +607,9 @@ function isEmojiPresentationSelector(cps, i) {
  * visible) and its preserve `kind` ("joiner" | "emojivs" | "tag" | "stdvs" |
  * "ivs" | "blank" | null). Everything invisible that is NOT preserve-eligible is
  * payload; the scatter floor counts only that, so meaningful joiners/selectors
- * never push honest prose over the threshold. `tagSpanLen[i]` is the length of a
- * tag sequence starting at `i` (0 elsewhere) so carveStrip can preserve-or-strip
- * each flag as an atomic unit (a budget cut mid-sequence would leave a malformed
- * partial run the next pass would strip — breaking idempotence).
+ * never push honest prose over the threshold.
  * @param {string[]} cps
- * @returns {{ codes: (string|null)[], kind: (string|null)[], tagSpanLen: number[], payloadInvis: number, visibleLen: number }}
+ * @returns {{ codes: (string|null)[], kind: (string|null)[], payloadInvis: number, visibleLen: number }}
  */
 function analyzeCarve(cps) {
   const codes = cps.map(classify);
@@ -603,24 +624,13 @@ function analyzeCarve(cps) {
     if (isPreservedBlankFiller(cps, i)) return "blank";
     return null;
   });
-  const tagSpanLen = new Array(cps.length).fill(0);
-  for (let i = 0; i < cps.length;) {
-    if (kind[i] !== "tag") {
-      i++;
-      continue;
-    }
-    let j = i;
-    while (j < cps.length && kind[j] === "tag") j++;
-    tagSpanLen[i] = j - i;
-    i = j;
-  }
   let payloadInvis = 0;
   let visibleLen = 0;
   for (let i = 0; i < cps.length; i++) {
     if (codes[i] === null) visibleLen++;
     else if (kind[i] === null) payloadInvis++;
   }
-  return { codes, kind, tagSpanLen, payloadInvis, visibleLen };
+  return { codes, kind, payloadInvis, visibleLen };
 }
 
 /**
@@ -754,10 +764,7 @@ function isStandardizedVariationSelector(cps, i) {
 function isIdeographicVariationSelector(cps, i) {
   const cp = /** @type {number} */ (cps[i].codePointAt(0));
   if (cp < IVS_MIN || cp > IVS_MAX) return false;
-  const prev = cps[i - 1];
-  return prev
-    ? isCjkIdeograph(/** @type {number} */ (prev.codePointAt(0)))
-    : false;
+  return isCjkIdeograph(cps[i - 1] ?? "");
 }
 
 /**
@@ -777,18 +784,55 @@ function isPreservedBlankFiller(cps, i) {
   return false;
 }
 
+// The grapheme segmenter: the real UAX #29 implementation shipped with the
+// runtime's ICU, not a hand-rolled approximation of cluster boundaries. It
+// defines the unit the preserve budget is charged against (see carveStrip).
+// Grapheme segmentation is locale-independent, so the locale is pinned to "en"
+// only for determinism across hosts.
+const GRAPHEME_SEGMENTER = new Intl.Segmenter("en", {
+  granularity: "grapheme",
+});
+
+/**
+ * The code-point index one past the end of each grapheme cluster of `body`, in
+ * order — the segmenter's UTF-16 boundaries restated in code-point space, which
+ * is the space `carveStrip`'s per-code-point arrays live in. ECMA-402 guarantees
+ * the segments partition the input, so the last entry is always the code-point
+ * length of `body`.
+ * @param {string} body
+ * @returns {number[]}
+ */
+function clusterEnds(body) {
+  const ends = [];
+  let end = 0;
+  for (const { segment } of GRAPHEME_SEGMENTER.segment(body)) {
+    end += Array.from(segment).length;
+    ends.push(end);
+  }
+  return ends;
+}
+
 /**
  * Carve-out strip (an invisible the carve-out might preserve is present): walk
- * code points, preserving a joiner/selector/tag/blank-filler only where its
- * `kind` is set AND the text stays under the scatter floor AND neither the
- * per-cluster (CONSECUTIVE_JOINER_CAP) nor the document-wide
- * (TOTAL_PRESERVED_JOINER_BUDGET) preserve limit is hit — otherwise it is
- * stripped like any other payload byte. A tag (subregional-flag) sequence is
- * preserved-or-stripped ATOMICALLY: preserving only part of it would leave a
- * malformed run the next pass strips, breaking idempotence. `found` reports only
- * categories actually removed, so a preserved char never makes the caller claim
- * a strip that did not happen, and a stuffed channel surfaces as its category
- * once it overruns the budget.
+ * GRAPHEME CLUSTERS, preserving a cluster's joiners/selectors/tags/blank-fillers
+ * only where each has its `kind` set AND the text stays under the scatter floor
+ * AND the whole cluster fits inside the remaining per-run
+ * (CONSECUTIVE_JOINER_CAP / CONSECUTIVE_SELECTOR_CAP) and document-wide
+ * (TOTAL_PRESERVED_JOINER_BUDGET) preserve allowance — otherwise every
+ * preservable char in that cluster is stripped like any other payload byte.
+ *
+ * The budget is charged against the CLUSTER, not the code point, because the
+ * cluster is the indivisible unit: charging per code point let a limit fall due
+ * mid-cluster and carve one grapheme in half (👨‍👩‍👧‍👦 with the budget exhausted
+ * after its first ZWJ came out as 👨‍👩👧👦 — three glyphs where the author wrote
+ * one). All-or-nothing per cluster makes that impossible by construction rather
+ * than merely unlikely, and it subsumes the tag (subregional-flag) sequence's
+ * hand-rolled atomicity: a flag's tag chars are Grapheme_Cluster_Break=Extend,
+ * so they are already inside their base pictograph's cluster.
+ *
+ * `found` reports only categories actually removed, so a preserved char never
+ * makes the caller claim a strip that did not happen, and a stuffed channel
+ * surfaces as its category once it overruns the budget.
  * @param {string} body
  * @returns {{ cleaned: string, found: string[] }}
  */
@@ -797,8 +841,7 @@ function carveStrip(body) {
   // Pass 1: classify + evaluate the gate once (see analyzeCarve). Only PAYLOAD
   // invisibles count toward the scatter floor, so a meaningful-joiner-dense text
   // (formal Persian, a long Devanagari conjunct run) stays under it.
-  const { codes, kind, tagSpanLen, payloadInvis, visibleLen } =
-    analyzeCarve(cps);
+  const { codes, kind, payloadInvis, visibleLen } = analyzeCarve(cps);
   // SCATTERED_THRESHOLD is the floor on payload invisibles: past it the document
   // is drowning in hidden bytes, so the carve-out is off and even a meaningful
   // joiner is stripped (threshold-evasion catch — over-strip beats under).
@@ -833,55 +876,51 @@ function carveStrip(body) {
   // char is stripped and its category reported.
   let preservedTotal = 0;
   let prevVisible = false;
-  let i = 0;
-  while (i < cps.length) {
-    const code = codes[i];
-    if (code === null) {
-      // A visible char following another visible char is a real word/segment
-      // boundary, not a join — the joined cluster (if any) ended here.
-      if (prevVisible) {
-        joinerRun = 0;
-        selectorRun = 0;
-      }
-      prevVisible = true;
-      out += cps[i]; // ordinary visible character
-      i++;
-      continue;
+  let start = 0;
+  for (const end of clusterEnds(body)) {
+    // Charge the WHOLE cluster's preservables against every limit at once: if
+    // any one of them would fall due part-way through, none of the cluster is
+    // preserved. `need === 0` (the common case: a cluster with no preservable
+    // invisible) leaves every counter untouched.
+    let need = 0;
+    let joiners = 0;
+    let selectors = 0;
+    for (let k = start; k < end; k++) {
+      if (kind[k] === null) continue;
+      need++;
+      if (kind[k] === "joiner") joiners++;
+      if (kind[k] === "ivs" || kind[k] === "stdvs") selectors++;
     }
-    // A tag (subregional-flag) sequence: atomic preserve-or-strip on the whole
-    // run so a budget cut can't leave a malformed partial run (idempotence).
-    if (kind[i] === "tag") {
-      const len = tagSpanLen[i];
-      const fits = allowCarveOut && preservedTotal + len <= maxPreserved;
-      for (let k = 0; k < len; k++) {
-        if (fits) out += cps[i + k];
-        else foundCodes.add(codes[i + k]);
-      }
-      if (fits) preservedTotal += len;
-      prevVisible = false; // the sequence keeps the cluster open
-      i += len;
-      continue;
-    }
-    const joiner = kind[i] === "joiner";
-    const selector = kind[i] === "ivs" || kind[i] === "stdvs";
-    if (
+    const fits =
       allowCarveOut &&
-      kind[i] !== null &&
-      preservedTotal < maxPreserved &&
-      (!joiner || joinerRun < CONSECUTIVE_JOINER_CAP) &&
-      (!selector || selectorRun < CONSECUTIVE_SELECTOR_CAP)
-    ) {
-      if (joiner) joinerRun++;
-      if (selector) selectorRun++;
-      preservedTotal++;
-      prevVisible = false; // a joiner/selector keeps the cluster open
-      out += cps[i];
-      i++;
-      continue;
+      preservedTotal + need <= maxPreserved &&
+      joinerRun + joiners <= CONSECUTIVE_JOINER_CAP &&
+      selectorRun + selectors <= CONSECUTIVE_SELECTOR_CAP;
+    for (let k = start; k < end; k++) {
+      const code = codes[k];
+      if (code === null) {
+        // A visible char following another visible char is a real word/segment
+        // boundary, not a join — the joined cluster (if any) ended here.
+        if (prevVisible) {
+          joinerRun = 0;
+          selectorRun = 0;
+        }
+        prevVisible = true;
+        out += cps[k]; // ordinary visible character
+        continue;
+      }
+      if (fits && kind[k] !== null) {
+        if (kind[k] === "joiner") joinerRun++;
+        if (kind[k] === "ivs" || kind[k] === "stdvs") selectorRun++;
+        preservedTotal++;
+        prevVisible = false; // a joiner/selector/tag keeps the cluster open
+        out += cps[k];
+        continue;
+      }
+      foundCodes.add(code);
+      prevVisible = false; // a stripped invisible neither opens nor closes a gap
     }
-    foundCodes.add(code);
-    prevVisible = false; // a stripped invisible neither opens nor closes a gap
-    i++;
+    start = end;
   }
   const found = CHECKS.filter(([code]) => foundCodes.has(code)).map(
     ([code]) => code,

@@ -20,20 +20,29 @@ const ZWNJ = cp(0x200c);
 const ZWJ = cp(0x200d);
 const HANGUL_FILLER = cp(0x115f); // a Hangul filler; needs a Hangul anchor to survive
 
-// ─── isCjkIdeograph END boundary (line 364: `cp <= end` → `cp < end`) ──────────
+// ─── isCjkIdeograph (\p{Unified_Ideograph} ∪ the compatibility blocks) ─────────
 // An ideographic variation selector (U+E0100) is preserved only after a CJK
-// ideograph. Base U+9FFF is the LAST code point of the CJK Unified block, so a
-// `cp <= end` → `cp < end` mutant stops recognizing it and strips the selector.
-describe("mutation-kill: isCjkIdeograph end boundary", () => {
-  it("preserves an ideographic selector after U+9FFF (Unified block end)", () => {
-    const input = cp(0x9fff) + cp(0xe0100);
-    const { cleaned, found } = stripInvisibleWithReport(input);
-    assert.equal(cleaned, input);
-    assert.deepEqual(found, []);
-  });
+// ideograph. The property escape leaves no range boundaries to mutate, but the
+// two literal compatibility spans still have ends, and a ConditionalExpression
+// `false` on the regex test kills the gate outright — so pin one base from each
+// source of the union. (The exhaustive set contract lives in
+// test/invisible-unicode-tables.test.mjs.)
+describe("mutation-kill: isCjkIdeograph union members", () => {
+  for (const [label, base] of [
+    ["U+9FFF (Unified block end)", 0x9fff],
+    ["U+FA6D (compatibility block, near end)", 0xfa6d],
+    ["U+2FA1D (compatibility supplement end)", 0x2fa1d],
+  ]) {
+    it(`preserves an ideographic selector after ${label}`, () => {
+      const input = cp(base) + cp(0xe0100);
+      const { cleaned, found } = stripInvisibleWithReport(input);
+      assert.equal(cleaned, input);
+      assert.deepEqual(found, []);
+    });
+  }
 });
 
-// ─── isBrahmicConsonant END boundary (line 396: `cp <= end` → `cp < end`) ──────
+// ─── isBrahmicConsonant END boundary (`cp <= end` → `cp < end`) ───────────────
 // A ZWJ after a virama is preserved only when the virama sits on a real Brahmic
 // consonant. U+0939 (HA) is the LAST of the Devanagari KA–HA span, so the end
 // mutant strips the conjunct joiner.
@@ -46,11 +55,12 @@ describe("mutation-kill: isBrahmicConsonant end boundary", () => {
   });
 });
 
-// ─── isBrailleCell range (line 421: `cp <= 0x28ff`/`cp >= 0x2801`) ─────────────
+// ─── isBrailleCell (\p{Script=Braille} minus the blank itself) ────────────────
 // A U+2800 BRAILLE PATTERN BLANK is preserved only next to a real (non-blank)
-// Braille cell. Pin both ends of the anchor range so `cp <= 0x28ff` → `cp <
-// 0x28ff` (end) and `cp >= 0x2801` → `cp > 0x2801` (start) both strip the blank.
-describe("mutation-kill: isBrailleCell anchor range", () => {
+// Braille cell. Pin both ends of the block so a ConditionalExpression `false`
+// on the property test, or a `cp !== BRAILLE_BLANK` → `cp === BRAILLE_BLANK`
+// mutant, strips the blank.
+describe("mutation-kill: isBrailleCell anchors", () => {
   for (const [label, anchor] of [
     ["first cell U+2801", 0x2801],
     ["last cell U+28FF", 0x28ff],
@@ -64,37 +74,57 @@ describe("mutation-kill: isBrailleCell anchor range", () => {
   }
 });
 
-// ─── isHangul range boundaries (lines 430-435) ────────────────────────────────
-// A Hangul filler is preserved only next to a real Hangul jamo/syllable. Each
-// entry pins the FIRST and LAST code point of one isHangul range, killing the
-// per-range EqualityOperator mutants (`cp >= start`→`cp > start`, `cp <=
-// end`→`cp < end`), the ConditionalExpression `false` mutants (a whole range
-// forced false), and the LogicalOperator `||`→`&&` mutants across ranges (an
-// anchor in exactly one range would fail an AND-joined chain). The filler is
-// placed BEFORE the anchor (prev=""), so this also kills line 781's `isHangul(prev)
-// || isHangul(next)` → `&&`.
-describe("mutation-kill: isHangul range boundaries", () => {
-  const ranges = [
-    ["Hangul Jamo", 0x1100, 0x11ff], // line 430
-    ["Hangul Compatibility Jamo", 0x3130, 0x318f], // line 431
-    ["Jamo Extended-A", 0xa960, 0xa97f], // line 432
-    ["Hangul Syllables", 0xac00, 0xd7a3], // line 433
-    ["Jamo Extended-B", 0xd7b0, 0xd7ff], // line 434
-    ["Halfwidth Jamo", 0xffa1, 0xffdc], // line 435
+// ─── isHangul anchors (\p{Script=Hangul}) ─────────────────────────────────────
+// A Hangul filler is preserved only next to a real Hangul jamo/syllable. The
+// anchor set is Unicode's own Script=Hangul, so there are no hand-written range
+// boundaries left to mutate; what remains worth pinning is that every ASSIGNED
+// Hangul block still anchors (a ConditionalExpression `false` mutant on the
+// regex test, or a swap to a narrower property, drops them all) and that the
+// filler is found on BOTH sides — the anchor sits AFTER the filler here, killing
+// `isHangul(prev) || isHangul(next)` → `&&`.
+describe("mutation-kill: isHangul anchors across the Hangul blocks", () => {
+  const anchors = [
+    ["Hangul Jamo start U+1100", 0x1100],
+    ["Hangul Jamo end U+11FF", 0x11ff],
+    ["Compatibility Jamo start U+3131", 0x3131],
+    ["Compatibility Jamo end U+318E", 0x318e],
+    ["Jamo Extended-A start U+A960", 0xa960],
+    ["Jamo Extended-A end U+A97C", 0xa97c],
+    ["Hangul Syllables start U+AC00", 0xac00],
+    ["Hangul Syllables end U+D7A3", 0xd7a3],
+    ["Jamo Extended-B start U+D7B0", 0xd7b0],
+    ["Jamo Extended-B end U+D7FB", 0xd7fb],
+    ["Halfwidth Jamo start U+FFA1", 0xffa1],
+    ["Halfwidth Jamo end U+FFDC", 0xffdc],
+    // Only \p{Script=Hangul} reaches these: the hand-written block table missed
+    // the tone marks and the enclosed-Hangul forms entirely.
+    ["Hangul tone mark U+302E", 0x302e],
+    ["parenthesized Hangul U+3200", 0x3200],
+    ["circled Hangul U+326E", 0x326e],
   ];
-  for (const [name, start, end] of ranges) {
-    for (const [where, anchor] of [
-      ["start", start],
-      ["end", end],
-    ]) {
-      const hex = anchor.toString(16).toUpperCase();
-      it(`preserves a Hangul filler anchored by ${name} ${where} U+${hex}`, () => {
-        const input = HANGUL_FILLER + cp(anchor);
-        const { cleaned, found } = stripInvisibleWithReport(input);
-        assert.equal(cleaned, input);
-        assert.deepEqual(found, []);
-      });
-    }
+  for (const [name, anchor] of anchors) {
+    it(`preserves a Hangul filler anchored by ${name}`, () => {
+      const input = HANGUL_FILLER + cp(anchor);
+      const { cleaned, found } = stripInvisibleWithReport(input);
+      assert.equal(cleaned, input);
+      assert.deepEqual(found, []);
+    });
+  }
+
+  // Script_Extensions=Hangul is the WRONG property here: it also contains the
+  // CJK punctuation Korean shares with Chinese and Japanese, which is not a
+  // jamo and must not anchor a filler in otherwise Hangul-free text.
+  for (const [name, notAnchor] of [
+    ["U+3001 IDEOGRAPHIC COMMA", 0x3001],
+    ["U+30FB KATAKANA MIDDLE DOT", 0x30fb],
+    ["U+FF61 HALFWIDTH IDEOGRAPHIC FULL STOP", 0xff61],
+  ]) {
+    it(`strips a Hangul filler next to ${name} (Script_Extensions only)`, () => {
+      const { cleaned } = stripInvisibleWithReport(
+        HANGUL_FILLER + cp(notAnchor),
+      );
+      assert.equal(cleaned, cp(notAnchor));
+    });
   }
 });
 
