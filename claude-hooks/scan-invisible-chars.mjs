@@ -9,13 +9,20 @@ import { readFileSync, globSync, writeFileSync, unlinkSync } from "node:fs";
 import { join, relative } from "node:path";
 import {
   awaitLazyDependency,
+  errMessage,
   hookgateMarkerPath,
+  HookEvent,
   isMain,
   lazyImport,
   markerIsTrusted,
   probeSetupAlive,
   writeFileNoFollow,
 } from "./lib/hook-io.mjs";
+import {
+  registerFaultPolicy,
+  hookFaultOutcome,
+  writeFaultOutcome,
+} from "./lib/hook-fault.mjs";
 import {
   ALERT_FILE,
   ALERT_ACK_FILE,
@@ -75,6 +82,69 @@ async function ensureSanitizerLoaded() {
   } = /** @type {typeof import("agent-sanitizer/invisible")} */ (reloaded));
   return true;
   /* c8 ignore stop */
+}
+
+const HOOK_NAME = "scan-invisible-chars";
+
+/**
+ * The stderr line both posture arms share: what broke, and what it cost.
+ * @param {{ message: string }} ctx
+ * @returns {string}
+ */
+function faultLine(ctx) {
+  return (
+    `${HOOK_NAME}: ${ctx.message}. Instruction files were NOT fully scanned ` +
+    "for hidden Unicode, so any payload in them reaches the model unvetted."
+  );
+}
+
+// This hook's entry in the one posture table (lib/hook-fault.mjs). It has no
+// stdout verdict channel — SessionStart cannot deny — so BOTH arms are stated
+// explicitly rather than taking the shared additionalContext default: the only
+// enforcement a SessionStart hook can reach is the cross-hook alert, which makes
+// the PreToolUse gate ask once on the next tool call.
+registerFaultPolicy(HOOK_NAME, {
+  event: HookEvent.SESSION_START,
+  guarded: "instruction files",
+  open: (ctx) => ({
+    stderr: `${faultLine(ctx)} Passing through unguarded; set AGENT_SANITIZER_FAIL_OPEN=0 to arm the tool-call gate instead.\n`,
+    exitCode: 1,
+  }),
+  closed: (ctx) => ({
+    stderr: `${faultLine(ctx)} Arming the tool-call gate (AGENT_SANITIZER_FAIL_OPEN=0).\n`,
+    exitCode: 1,
+    armAlert: true,
+  }),
+});
+
+/**
+ * Render this hook's fault under the declared posture, and return the text (if
+ * any) that must ride in the cross-hook alert so a later gate carries the
+ * posture this hook cannot express itself.
+ * @param {unknown} err
+ * @returns {string[]}
+ */
+function reportFault(err) {
+  const outcome = hookFaultOutcome(HOOK_NAME, err);
+  process.exitCode = writeFaultOutcome(outcome);
+  return outcome.armAlert ? [/** @type {string} */ (outcome.stderr)] : [];
+}
+
+/**
+ * Persist the accumulated alert text for the PreToolUse gate, or leave the alert
+ * absent when there is nothing to surface.
+ *
+ * ALERT_FILE sits at a predictable, world-visible $TMPDIR path, so a plain
+ * writeFileSync would follow a co-tenant-planted symlink and overwrite an
+ * arbitrary file this uid owns. Create it symlink-refusingly (see
+ * writeFileNoFollow); the gate treats an absent alert as "nothing to surface",
+ * so a lost race degrades safely rather than to a hijacked write.
+ * @param {string[]} parts
+ * @returns {void}
+ */
+function persistAlert(parts) {
+  if (parts.length === 0) return;
+  writeFileNoFollow(ALERT_FILE, parts.join("\n") + "\n");
 }
 
 // Decoder
@@ -249,35 +319,82 @@ export { formatReport };
 
 // Main (skip when imported for testing)
 
+/**
+ * Scan every instruction file under the project, ACCOUNTING for every target
+ * the finder returned: `scanned + skipped.length === targets.length`, always.
+ *
+ * The accounting is the point. This scan is the only thing standing between a
+ * poisoned `CLAUDE.md` and a session that loads it as instructions, and its
+ * caller announces "clean" on the trace channel — the channel that exists so a
+ * MISSING announcement is loud. A per-file failure swallowed into an empty
+ * findings list turns "we could not read this file" into "this file is fine",
+ * which is the one lie this hook must never tell. So a file that cannot be read
+ * is REPORTED as unscanned, not dropped.
+ *
+ * Only ENOENT is caught: the finder walks the tree and the read happens after,
+ * so a file deleted (or a symlink left dangling) in between is a genuine race
+ * with no bug behind it. Every other errno — EACCES, EISDIR, ELOOP — and every
+ * non-filesystem throw is a real fault and propagates to the caller's declared
+ * failure posture.
+ * @param {string} [dir]  project root to scan (injectable for tests)
+ * @returns {{
+ *   targets: string[],
+ *   scanned: number,
+ *   findings: Array<{file: string, findings: ReturnType<typeof scanFile>}>,
+ *   skipped: Array<{file: string, reason: string}>,
+ * }}
+ */
+export function scanProject(dir = PROJECT_DIR) {
+  const targets = [
+    ...new Set([
+      ...findInstructionFiles(dir),
+      ...findMdFiles(join(dir, ".claude")),
+    ]),
+  ];
+  const findings = [];
+  const skipped = [];
+  let scanned = 0;
+  for (const file of targets) {
+    let fileFindings;
+    try {
+      fileFindings = scanFile(file);
+    } catch (err) {
+      if (/** @type {NodeJS.ErrnoException} */ (err).code !== "ENOENT")
+        throw err;
+      skipped.push({ file: relative(dir, file), reason: errMessage(err) });
+      continue;
+    }
+    scanned++;
+    if (fileFindings.length > 0)
+      findings.push({ file: relative(dir, file), findings: fileFindings });
+  }
+  return { targets, scanned, findings, skipped };
+}
+
+/**
+ * The report for targets the scan could not read. Rendered into the alert the
+ * PreToolUse gate surfaces, so an incomplete scan reaches the operator as a
+ * checkpoint rather than as silence.
+ * @param {Array<{file: string, reason: string}>} skipped
+ * @returns {string}
+ */
+export function formatSkipped(skipped) {
+  return [
+    "",
+    "━━━ INSTRUCTION FILES NOT SCANNED ━━━",
+    "",
+    "These files load as project instructions but could NOT be read, so they",
+    "were never checked for hidden Unicode. Treat their content as unvetted.",
+    "",
+    ...skipped.map(({ file, reason }) => `  ${file}: ${reason}`),
+    "",
+  ].join("\n");
+}
+
 // Stryker disable all: CLI-entry body. It runs only as a spawned subprocess,
 // which in-process tests can't observe, so every mutant here is unkillable by
 // construction (same boundary as the c8-ignored regions below). The exported
-// scanFile/decodeRun above carry the real, mutation-tested logic.
-/**
- * Scan every instruction file under the project for invisible-char findings.
- * @returns {Array<{file: string, findings: ReturnType<typeof scanFile>}>}
- */
-function scanProject() {
-  const targets = [
-    ...new Set([
-      ...findInstructionFiles(PROJECT_DIR),
-      ...findMdFiles(join(PROJECT_DIR, ".claude")),
-    ]),
-  ];
-  const allFindings = [];
-  for (const file of targets) {
-    try {
-      const findings = scanFile(file);
-      if (findings.length > 0) {
-        allFindings.push({ file: relative(PROJECT_DIR, file), findings });
-      }
-    } catch {
-      // File doesn't exist or unreadable
-    }
-  }
-  return allFindings;
-}
-
+// scanFile / decodeRun / scanProject above carry the real, tested logic.
 /**
  * The hook's CLI: scan the instruction files, auto-clean what it can, persist
  * the alert for the PreToolUse gate otherwise. Exported so a bundle entry
@@ -293,6 +410,12 @@ export async function cliMain({ trace: sink = trace } = {}) {
   // the alert write, with no catch above them, so a throwing host sink would
   // abort the scan silently (see bestEffortTrace).
   const emitTrace = bestEffortTrace(sink);
+  // Everything the PreToolUse gate must surface this session, written once at
+  // the end: an incomplete scan and an uncleanable file are independent reasons
+  // to arm the gate, and two separate writes would have the second clobber the
+  // first.
+  /** @type {string[]} */
+  const alertParts = [];
   /* c8 ignore start -- fail-closed module-load guard: only reachable when the
      agent-sanitizer import above failed, which can't be simulated in the
      spawned-subprocess CLI run the tests observe. */
@@ -301,11 +424,21 @@ export async function cliMain({ trace: sink = trace } = {}) {
     // the trace channel — a scan that never ran is otherwise invisible, and the
     // downstream PreToolUse sanitize gate then passes cleanly all session.
     emitTrace(TraceEvent.SCAN_INVISIBLE_CHARS_RAN, { outcome: "skipped" });
-    process.stderr.write(
-      "scan-invisible-chars: agent-sanitizer failed to load (node deps not " +
-        "installed and session-setup did not finish in time); instruction " +
-        "files were NOT scanned for hidden Unicode. Run `pnpm install`.\n",
+    // Through the shared posture table, NOT a bare exit(1): this hook took an
+    // advisory posture unconditionally, so an operator who pinned
+    // AGENT_SANITIZER_FAIL_OPEN=0 got only a warning on the one hook guarding
+    // session-start ingress, and the PreToolUse gate then passed cleanly for
+    // the rest of the session. The closed arm arms the cross-hook alert, which
+    // is the only channel a SessionStart hook has to make a later gate ask.
+    alertParts.push(
+      ...reportFault(
+        new Error(
+          "agent-sanitizer failed to load (node deps not installed and " +
+            "session-setup did not finish in time); run `pnpm install`",
+        ),
+      ),
     );
+    persistAlert(alertParts);
     process.exit(1);
   }
   /* c8 ignore stop */
@@ -320,22 +453,60 @@ export async function cliMain({ trace: sink = trace } = {}) {
     }
   }
 
-  const allFindings = scanProject();
-
-  if (allFindings.length === 0) {
-    emitTrace(TraceEvent.SCAN_INVISIBLE_CHARS_RAN, { outcome: "clean" });
+  // A non-ENOENT read failure propagates out of scanProject: it is a fault of
+  // THIS hook, so it renders through the same posture table as every other
+  // hook's fault instead of aborting with no announcement at all.
+  let scan;
+  try {
+    scan = scanProject();
+  } catch (err) {
+    emitTrace(TraceEvent.SCAN_INVISIBLE_CHARS_RAN, { outcome: "skipped" });
+    alertParts.push(...reportFault(err));
+    persistAlert(alertParts);
     return;
   }
-  emitTrace(TraceEvent.SCAN_INVISIBLE_CHARS_RAN, {
-    outcome: "found",
-    files: allFindings.length,
-  });
+  const { findings: allFindings, skipped, scanned } = scan;
 
-  // Auto-clean contaminated files so the session proceeds without blocking
-  // every tool call; the gate hook is the fallback when cleaning fails.
+  // "clean" is a claim about EVERY target, so it may only be made when every
+  // target was read. A scan that could not read one says "partial" and arms the
+  // gate: an unread instruction file is UNVETTED context, not absent findings.
+  if (skipped.length > 0) {
+    emitTrace(TraceEvent.SCAN_INVISIBLE_CHARS_RAN, {
+      outcome: "partial",
+      scanned,
+      skipped: skipped.length,
+      files: allFindings.length,
+    });
+    const notice = formatSkipped(skipped);
+    process.stderr.write(notice + "\n");
+    alertParts.push(notice);
+  } else if (allFindings.length === 0) {
+    emitTrace(TraceEvent.SCAN_INVISIBLE_CHARS_RAN, { outcome: "clean" });
+    return;
+  } else {
+    emitTrace(TraceEvent.SCAN_INVISIBLE_CHARS_RAN, {
+      outcome: "found",
+      files: allFindings.length,
+    });
+  }
+
+  if (allFindings.length > 0)
+    alertParts.push(...autoCleanFindings(allFindings, PROJECT_DIR));
+  persistAlert(alertParts);
+}
+
+/**
+ * Auto-clean the contaminated files so the session proceeds without blocking
+ * every tool call, and return the alert text for whatever could not be cleaned
+ * (empty when everything was). The gate hook is the fallback for the rest.
+ * @param {Array<{file: string, findings: ReturnType<typeof scanFile>}>} allFindings
+ * @param {string} dir  the root the finding paths are relative to
+ * @returns {string[]}
+ */
+function autoCleanFindings(allFindings, dir) {
   let cleaned = 0;
   for (const { file } of allFindings) {
-    const absPath = join(PROJECT_DIR, file);
+    const absPath = join(dir, file);
     try {
       const original = readFileSync(absPath, "utf-8");
       const stripped = stripInvisible(original);
@@ -344,15 +515,21 @@ export async function cliMain({ trace: sink = trace } = {}) {
         cleaned++;
       }
       /* c8 ignore start -- only fires on a file this uid cannot rewrite, which the test run cannot create */
-    } catch {
-      // Unreadable or unwritable: the file stays contaminated and falls into the
-      // alert path below, which hands it to the PreToolUse gate.
+    } catch (err) {
+      // Narrowed to filesystem errnos, and the reason is REPORTED rather than
+      // swallowed: an unwritable file legitimately falls through to the alert
+      // path below, but a throw from stripInvisible is a bug in the sanitizer
+      // and must not be laundered into "this file resisted cleaning".
+      if (/** @type {NodeJS.ErrnoException} */ (err).code === undefined)
+        throw err;
+      process.stderr.write(
+        `scan-invisible-chars: could not clean ${file}: ${errMessage(err)}\n`,
+      );
     }
     /* c8 ignore stop */
   }
 
   const report = formatReport(allFindings);
-
   if (cleaned === allFindings.length) {
     process.stderr.write(
       report +
@@ -363,16 +540,11 @@ export async function cliMain({ trace: sink = trace } = {}) {
         "suspicion, and restart the session if in doubt. Future sessions load " +
         "the cleaned files.\n",
     );
-    /* c8 ignore start -- only reachable when the write catch above fires */
-  } else {
-    process.stderr.write(report + "\n");
-    // ALERT_FILE sits at a predictable, world-visible $TMPDIR path, so a plain
-    // writeFileSync would follow a co-tenant-planted symlink and overwrite an
-    // arbitrary file this uid owns. Create it symlink-refusingly (see
-    // writeFileNoFollow); the PreToolUse gate treats an absent alert as "nothing
-    // to surface", so a lost race degrades safely rather than to a hijacked write.
-    writeFileNoFollow(ALERT_FILE, report + "\n");
+    return [];
   }
+  /* c8 ignore start -- only reachable when the write catch above fires */
+  process.stderr.write(report + "\n");
+  return [report];
   /* c8 ignore stop */
 }
 
