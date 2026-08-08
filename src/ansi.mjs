@@ -80,7 +80,7 @@ const ST_C1 = 0x9c;
 const OSC_C1 = 0x9d;
 const BEL = 0x07;
 
-/** The five things an introducer can turn out to be. */
+/** The six things an introducer can turn out to be. */
 export const TOKEN_KIND = Object.freeze({
   /** A display-only `ESC[…m` / `U+009B…m` colour sequence. */
   SGR: "sgr",
@@ -93,6 +93,17 @@ export const TOKEN_KIND = Object.freeze({
    * write, a log fragment cut mid-escape, a stray byte living in a file.
    */
   ORPHAN: "orphan-introducer",
+  /**
+   * A 7-bit `ESC` that OPENS a CSI (`ESC [`) it never completes. Split from
+   * {@link TOKEN_KIND.ORPHAN} because a terminal's CSI parser is STATEFUL: it
+   * keeps consuming what follows as parameters and intermediates until a final
+   * byte (0x40-0x7E) arrives, so `hello ESC[12 world` renders as `hello orld`
+   * — the ` w` is eaten as the sequence's intermediate and final. That is the
+   * model-sees/human-sees divergence the gate exists for, so consumers that
+   * downgrade an inert strip to a note must keep warning on this one; only a
+   * lone `ESC` that opens nothing is inert.
+   */
+  ORPHAN_CSI: "orphan-csi-introducer",
   /**
    * A RAW C1 byte (U+0080-U+009F) that starts no sequence the grammar
    * recognizes. Split from {@link TOKEN_KIND.ORPHAN} because the two carry very
@@ -115,18 +126,30 @@ export const TOKEN_KIND = Object.freeze({
  * @returns {boolean}
  */
 export function isOrphanKind(kind) {
-  return kind === TOKEN_KIND.ORPHAN || kind === TOKEN_KIND.ORPHAN_C1;
+  return (
+    kind === TOKEN_KIND.ORPHAN ||
+    kind === TOKEN_KIND.ORPHAN_CSI ||
+    kind === TOKEN_KIND.ORPHAN_C1
+  );
 }
 
 /**
- * The orphan kind for the introducer character `ch` — the 7-bit `ESC`, or any
- * raw C1 byte. The one place that split is decided, shared by the tokenizer and
+ * The orphan kind for the introducer character `ch`, given the character `next`
+ * that follows it: a raw C1 byte, an `ESC` that opened an incomplete CSI, or a
+ * lone `ESC`. The one place that split is decided, shared by the tokenizer and
  * by Layer 1's residual sweep (which sees bare characters, not tokens).
+ *
+ * `[` is the only lookahead that matters. `ESC ]` is an OSC, which the scanner
+ * consumes to the end of input if unterminated (so it never reaches here), and
+ * every other second byte — `ESC (`, `ESC #`, `ESC P` — bounds what a terminal
+ * swallows to a byte or two rather than running until a final byte arrives.
  * @param {string} ch
+ * @param {string} [next]  the following character, or undefined at end of input
  * @returns {string}
  */
-export function orphanKindFor(ch) {
-  return ch.charCodeAt(0) === ESC ? TOKEN_KIND.ORPHAN : TOKEN_KIND.ORPHAN_C1;
+export function orphanKindFor(ch, next) {
+  if (ch.charCodeAt(0) !== ESC) return TOKEN_KIND.ORPHAN_C1;
+  return next === "[" ? TOKEN_KIND.ORPHAN_CSI : TOKEN_KIND.ORPHAN;
 }
 
 /**
@@ -205,9 +228,9 @@ const INTRODUCER_SCAN_RE = new RegExp(CONTROL_INTRODUCER_SOURCE, "g");
 /**
  * Tokenize every raw control introducer in `text`.
  *
- * Every introducer yields exactly one token — an orphan kind (ORPHAN for a
- * 7-bit `ESC`, ORPHAN_C1 for a raw C1 byte) when it starts nothing the grammar
- * recognizes — so "which introducers are in this text" and "which
+ * Every introducer yields exactly one token — an orphan kind (see
+ * {@link orphanKindFor}) when it starts nothing the grammar recognizes — so
+ * "which introducers are in this text" and "which
  * sequences are in this text" are answered by the same scan. That is what lets
  * the stripper (splice every non-orphan token, then sweep) and the SGR-only
  * predicate (every token is SGR) agree by construction.
@@ -228,7 +251,7 @@ export function scanAnsi(text) {
     const csiEnd = oscEnd < 0 ? scanCsi(text, start) : -1;
     let end = start + 1;
     /** @type {string} */
-    let kind = orphanKindFor(text[start]);
+    let kind = orphanKindFor(text[start], text[start + 1]);
     if (oscEnd >= 0) {
       end = oscEnd;
       kind = TOKEN_KIND.OSC;

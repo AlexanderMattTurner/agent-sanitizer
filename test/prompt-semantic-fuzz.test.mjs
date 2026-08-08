@@ -67,7 +67,6 @@ const INERT_ANSI_TOKENS = [
   `${ESC}[1;4;38;5;196mloud${ESC}[0m`,
   `${C1_CSI}31mred${C1_CSI}0m`,
   ESC, // lone partial escape: a log line cut mid-sequence
-  `${ESC}[12`, // truncated CSI: parameters, no final byte
 ];
 
 // Genuine payload carriers per the module's rules: COMPLETE non-SGR escapes
@@ -78,6 +77,7 @@ const PAYLOAD_TOKENS = [
   `${ESC}[2J`,
   `${ESC}]0;owned${BEL}`,
   `${ESC}[31im`, // SGR-lookalike with a letter param: not SGR
+  `${ESC}[12`, // truncated CSI: a stateful parser eats what follows
   `${C1_CSI}2J`,
   `${C1_OSC}0;owned${BEL}`,
   `${C1_DCS}qpayload${C1_ST}`,

@@ -36,7 +36,7 @@ export const SLOW_HOOK_THRESHOLD_MS = 1000;
 
 /** Where a reader is asked to send the timing. */
 const ISSUE_URL =
-  "https://github.com/AlexanderMattTurner/agent-sanitizer/issues";
+  "https://github.com/AlexanderMattTurner/agent-sanitizer/issues/new";
 
 // Process-wide total of milliseconds spent in one-time provisioning. A running
 // total rather than a flag because a single hook run can pay more than one (a

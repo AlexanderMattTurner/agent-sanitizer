@@ -66,7 +66,6 @@ describe("classifyPrompt: inert ANSI passes with a note", () => {
     // open an OSC string — Layer 1 sweeps it and the prompt is usable, so a
     // BLOCK here is a pure false positive (see isBenignAnsiKinds).
     ["lone ESC byte (partial sequence)", `hello ${ESC} world`],
-    ["truncated CSI (no final byte)", `hello ${ESC}[12 world`],
     ["lone ESC between SGR color codes", `${ESC}[31mred${ESC}${ESC}[0m plain`],
   ]) {
     it(`note: ${name}`, () => {
@@ -164,6 +163,13 @@ describe("classifyPrompt: non-SGR ANSI blocks", () => {
     ["OSC title-set", `${ESC}]0;owned${BEL}`],
     ["DCS string", `${ESC}Pq#payload${ESC}\\`],
     ["SGR-lookalike with letter param", `${ESC}[31im`],
+    // An ESC that OPENS a CSI and never finishes it is not inert debris: the
+    // terminal's CSI parser keeps consuming until a final byte arrives, so
+    // `ESC[12 world` renders as `orld` (the ` w` is eaten as intermediate +
+    // final) while the model reads every word — the exact divergence this gate
+    // exists for. Only a lone ESC that opens nothing gets the note.
+    ["truncated CSI (parameters, no final byte)", `${ESC}[12`],
+    ["bare CSI introducer (nothing after it)", `${ESC}[`],
     // 8-bit C1 introducers: no 7-bit ESC anywhere, so the old ESC-only gate
     // read these as clean and returned {action:"pass"}.
     ["C1 erase display (U+009B 2J)", `${C1_CSI}2J`],

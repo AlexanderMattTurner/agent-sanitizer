@@ -83,7 +83,7 @@ var init_hook_timing = __esm({
   "claude-hooks/lib/hook-timing.mjs"() {
     "use strict";
     SLOW_HOOK_THRESHOLD_MS = 1e3;
-    ISSUE_URL = "https://github.com/AlexanderMattTurner/agent-sanitizer/issues";
+    ISSUE_URL = "https://github.com/AlexanderMattTurner/agent-sanitizer/issues/new";
     provisioningMs = 0;
   }
 });

@@ -51,13 +51,17 @@ no-raw-introducer guarantee independent of the iteration bound. The result
 carries no raw ANSI introducer for _any_ input, and re-cleaning it reproduces
 it exactly—the idempotence the Edit-repair rehydrator's soundness gate assumes.
 One tokenizer answers every ANSI question (what to splice, and whether what was
-removed was INERT—display-only SGR colour, or a 7-bit `ESC` that completed no
-sequence at all), so the stripper and the operator warning cannot disagree about
+removed was INERT—display-only SGR colour, or a lone 7-bit `ESC` that opened
+nothing at all), so the stripper and the operator warning cannot disagree about
 what a sequence is. That inert/injection-shaped split is what keeps the warning
 worth reading: a stray `ESC` sitting in a file is reported as a terse note, while
 a cursor move, an erase, an OSC string, or a raw C1 introducer (which no
 legitimate UTF-8 text carries, and which includes the DCS/SOS/PM/APC string
-introducers) keeps the WARNING. OSC strings (titles,
+introducers) keeps the WARNING. An `ESC` that _opened_ a CSI it never completed
+stays loud too: a terminal's CSI parser is stateful and keeps consuming what
+follows until a final byte arrives, so `ESC[12 world` shows the human `orld`
+while the model reads every word—the same model-sees/human-sees divergence a
+complete sequence buys. OSC strings (titles,
 clickable-hyperlink URLs) are consumed as a
 whole, for every terminator form—ST (`ESC\` or 8-bit C1 ST U+009C) and the
 legacy BEL—and for the 8-bit C1 OSC introducer (U+009D); an _unterminated_ OSC

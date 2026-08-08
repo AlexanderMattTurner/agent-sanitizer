@@ -32,16 +32,17 @@ const CONTROL_INTRODUCER_RE = new RegExp(CONTROL_INTRODUCER_SOURCE, "g");
 
 /**
  * Run the residual sweep, recording the orphan kind of every introducer it
- * removes. The sweep sees bare characters rather than tokens, so the ESC-vs-C1
- * split comes from {@link orphanKindFor} — the same decision the tokenizer
- * makes, not a second spelling of it.
+ * removes. The sweep sees bare characters rather than tokens, so the kind comes
+ * from {@link orphanKindFor} — the same decision the tokenizer makes, not a
+ * second spelling of it — fed the following character from the text being
+ * swept, which is the context a terminal reading this introducer would have.
  * @param {string} text
  * @param {Set<string>} kinds
  * @returns {string}
  */
 function sweepIntroducers(text, kinds) {
-  return text.replace(CONTROL_INTRODUCER_RE, (ch) => {
-    kinds.add(orphanKindFor(ch));
+  return text.replace(CONTROL_INTRODUCER_RE, (ch, offset) => {
+    kinds.add(orphanKindFor(ch, text[offset + 1]));
     return "";
   });
 }
@@ -110,21 +111,25 @@ export function stripAnsiFully(input, kinds) {
 
 /**
  * True when the ANSI a Layer-1 strip removed was INERT: every removed sequence
- * was either a display-only SGR colour token or a 7-bit `ESC` that completed no
- * sequence the grammar recognizes (a stray byte in a file, a truncated write, a
- * log fragment cut mid-escape).
+ * was either a display-only SGR colour token or a LONE 7-bit `ESC` that opened
+ * nothing at all (a stray byte in a file, a truncated write, a log fragment cut
+ * mid-escape).
  *
- * A raw C1 orphan (TOKEN_KIND.ORPHAN_C1) is deliberately NOT inert here: legit
- * UTF-8 text does not carry raw C1 bytes, and the block holds the DCS/SOS/PM/APC
- * string introducers this grammar does not consume — so an unrecognized one
- * means a terminal would have eaten the following text as a control payload.
+ * The two other orphan kinds are deliberately NOT inert. A raw C1 orphan
+ * (TOKEN_KIND.ORPHAN_C1): legit UTF-8 text does not carry raw C1 bytes, and the
+ * block holds the DCS/SOS/PM/APC string introducers this grammar does not
+ * consume — so an unrecognized one means a terminal would have eaten the
+ * following text as a control payload. An incomplete CSI (TOKEN_KIND.ORPHAN_CSI)
+ * for the same reason at 7 bits: the CSI parser keeps consuming until a final
+ * byte, so `hello ESC[12 world` hides ` w` from the human while the model reads
+ * the whole prompt.
  *
  * This draws a severity line, not a presence line: the bytes are stripped
  * either way, so all that rides on the answer is whether the operator sees a
  * WARNING or a terse note. An orphan introducer cannot move the cursor, erase
  * the screen, relabel a window, or open an OSC string — every one of those needs
  * a COMPLETE token, which {@link scanAnsi} classifies as CSI or OSC and this
- * rejects. Warning on an orphan is the false positive that costs the most: one
+ * rejects. Warning on a lone `ESC` is the false positive that costs the most: one
  * pre-existing `ESC` in a markdown file, echoed back in an Edit result, raises
  * the same alarm as a cursor-spoofing payload, and an alarm that fires on inert
  * bytes is the one operators learn to scroll past.
