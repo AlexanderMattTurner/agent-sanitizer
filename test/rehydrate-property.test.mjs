@@ -87,7 +87,7 @@ const lineArb = fc.constantFrom(
   `API_KEY=${SECRET_B}`,
   `TOKEN=${SECRET_A}`,
   // Astral chars before a secret make the placeholder's code-point offset
-  // diverge from its UTF-16 offset, exercising rehydrate's pairsToUtf16
+  // diverge from its UTF-16 offset, exercising rehydrate's toUtf16View
   // normalization (a BMP-only corpus never reaches that shift).
   `${KEY} PASSWORD=${SECRET_A}`,
   `${KEY}${KEY} TOKEN=${SECRET_B}`,
@@ -207,10 +207,10 @@ describe("rehydrate: properties", () => {
     );
   });
 
-  it("re-anchors across an astral char before the secret (pairsToUtf16 integration)", async () => {
+  it("re-anchors across an astral char before the secret (toUtf16View integration)", async () => {
     // Deterministic companion to the fuzz corpus: the placeholder sits after an
     // astral char, so its code-point offset (what the redactor emits) is one
-    // less than its UTF-16 offset. A missing pairsToUtf16 normalization would
+    // less than its UTF-16 offset. A missing toUtf16View normalization would
     // mis-anchor the rewrite onto the wrong disk bytes. Proves the integration
     // path the property test only reaches stochastically.
     const content = `${KEY} PASSWORD=${SECRET_A}\nDEBUG=1\n`;
@@ -232,7 +232,7 @@ describe("rehydrate: properties", () => {
     assert.ok(content.includes(updatedOld), "rewritten old_string not on disk");
     assert.ok(
       updatedOld.startsWith(KEY),
-      "rewrite anchored past the astral char — pairsToUtf16 shift was dropped",
+      "rewrite anchored past the astral char — toUtf16View shift was dropped",
     );
     assert.equal(
       await modelView(updatedOld),

@@ -1596,6 +1596,36 @@ describe("rehydrate: astral chars before a placeholder", () => {
     assert.equal(out.updatedInput.old_string, `${SECRET_A}\nDEBUG=1`);
     assert.equal(out.updatedInput.new_string, `${SECRET_A}\nDEBUG=0`);
   });
+
+  it("a redactor that hands back the SAME map object twice gets the same verdict both times", async () => {
+    // The code-point → UTF-16 conversion used to write its result back into the
+    // object the INJECTED redactor returned. A redactor that memoizes its map
+    // (a plausible cache) hands the same object back on the next call, so the
+    // second call re-converted already-converted offsets: the placeholder start
+    // shifted one unit further per preceding astral char and the identical
+    // input flipped from a clean rewrite to a false deny.
+    const memoized = mkViewCodePoints(content, [
+      { value: SECRET_A, placeholder: PH },
+    ]);
+    const startBefore = memoized.pairs[0].start;
+    const io = fakeIo(content, memoized, reRedact);
+    // old_string ENDS on the placeholder's closing bracket: once the start has
+    // been shifted a second time, that boundary lands strictly inside the
+    // placeholder and the call is denied instead of rewritten.
+    const ti = {
+      file_path: "/f",
+      old_string: `KEY=🔑${PH}`,
+      new_string: `KEY2=🔑${PH}`,
+    };
+    const first = await rehydrateRedacted("Edit", { ...ti }, io);
+    const second = await rehydrateRedacted("Edit", { ...ti }, io);
+    // Positive marker: the first call really did rehydrate (not a deny/null),
+    // so "identical" below is comparing real work, not two no-ops.
+    assert.equal(first.updatedInput.old_string, `KEY=🔑${SECRET_A}`);
+    assert.deepEqual(second, first);
+    // The redactor's own object is left exactly as it handed it over.
+    assert.equal(memoized.pairs[0].start, startBefore);
+  });
 });
 
 // ─── Lone-surrogate normalization matches the model's real view ──────────────

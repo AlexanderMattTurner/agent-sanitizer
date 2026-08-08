@@ -54,9 +54,16 @@ import {
   alignDeletions,
   resolveSpan,
   rehydrateNewString,
-  pairsToUtf16,
+  makeFileView,
+  toUtf16View,
   pairDiskSpans,
 } from "./view-map.mjs";
+
+/**
+ * The file's redacted view with its offsets already normalized to UTF-16 — the
+ * only shape this module's internals accept (see `./view-map.mjs`).
+ * @typedef {import("./view-map.mjs").FileView<"utf16">} Utf16FileView
+ */
 
 // Cheap gate: every redaction placeholder the canonical redactor emits starts
 // with this. A caller whose placeholders differ overrides it via the `hint`
@@ -140,7 +147,7 @@ function exposureDeny(count) {
  * @param {{file_path: string, old_string: string, new_string: string, replace_all?: boolean}} ti
  * @param {string} content disk bytes
  * @param {string} cleaned Layer-1 view of `content`
- * @param {{text: string, pairs: {placeholder: string, original: string, start: number}[]}} view
+ * @param {Utf16FileView} view
  * @param {{start: number, deleted: string}[]} deletions
  * @param {RehydrateIo} io
  * @param {boolean} hinted the input itself carries placeholders
@@ -390,7 +397,7 @@ function foreignPlaceholders(out, hint, viewText, secretSpans) {
 
 /**
  * @param {{file_path: string, content: string}} ti
- * @param {{text: string, pairs: {placeholder: string, original: string, start: number}[]}} view
+ * @param {Utf16FileView} view
  * @param {RehydrateIo} io
  * @param {string} hint placeholder prefix
  */
@@ -612,17 +619,23 @@ export async function rehydrateRedacted(
   // text. The substitution is same-length, so the resulting offsets remain
   // valid against `cleaned` throughout the rest of this module.
   const deletions = alignDeletions(content, layer1Cleaned);
-  const view = await io.redactMap(cleaned);
-  if ("unmappable" in view) {
+  const mapped = await io.redactMap(cleaned);
+  if ("unmappable" in mapped) {
     if (!hinted) return null;
     return {
-      deny: `cannot resolve redaction placeholders in ${toolInput.file_path}: ${view.unmappable}`,
+      deny: `cannot resolve redaction placeholders in ${toolInput.file_path}: ${mapped.unmappable}`,
     };
   }
   // The redactor emits code-point offsets; the offset machinery below works in
-  // UTF-16. Normalize once here so an astral char before a placeholder can't
-  // mis-anchor the edit (identical to a no-op for BMP-only files).
-  view.pairs = pairsToUtf16(view.text, view.pairs);
+  // UTF-16. Convert once, here, into a frozen UTF-16-space view so an astral
+  // char before a placeholder can't mis-anchor the edit (a no-op for BMP-only
+  // files). `mapped` came back from the INJECTED redactor and is left
+  // untouched: a redactor that memoizes its map hands the same object back on
+  // the next call, and converting it in place would shift those offsets a
+  // second time — an identical input yielding a different verdict.
+  const view = toUtf16View(
+    makeFileView(mapped.text, mapped.pairs, "codePoint"),
+  );
   // View identical to disk: any placeholders in an Edit's old_string are
   // literal text, so there is nothing to re-anchor. `cleaned === content` also
   // rules out a lone-surrogate-only divergence (view.pairs/deletions alone

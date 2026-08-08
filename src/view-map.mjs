@@ -10,7 +10,89 @@
  *             them; a run at `start` sits immediately before cleaned[start])
  *   view    — cleaned with each secret replaced by its [REDACTED…]
  *             placeholder (`pairs` from the injected redactor’s map mode)
+ *
+ * The redacted view travels as a {@link FileView}: a FROZEN, BRANDED carrier
+ * whose `space` names the units its pair offsets are in ("codePoint", as the
+ * injected redactor emits, or "utf16", which every function here indexes by).
+ * The brand exists because the two spaces are otherwise indistinguishable —
+ * bare numbers in a bare object — so a second conversion of an
+ * already-converted view would be silently accepted and would shift every
+ * astral-preceded offset again. Converting builds a NEW view ({@link
+ * toUtf16View});
+ * the frozen carrier means no consumer can convert one in place, and each
+ * consumer asserts the space it needs so a wrongly-spaced (or unbranded) view
+ * throws at the boundary instead of resolving onto the wrong bytes.
  */
+
+/**
+ * One redaction the injected redactor's map mode reported: the placeholder text
+ * standing in the view for `original`, starting at offset `start`.
+ * @typedef {{placeholder: string, original: string, start: number}} RedactionPair
+ */
+
+/**
+ * Units a {@link FileView}'s pair offsets are expressed in. `codePoint` is what
+ * the redactor's map mode emits (Python indexes strings by code point);
+ * `utf16` is what every function in this module indexes by (JS
+ * `indexOf`/`slice`/`.length` count UTF-16 code units).
+ * @typedef {"codePoint" | "utf16"} OffsetSpace
+ */
+
+// Runtime brand. A plain `{text, pairs, space}` object is structurally a
+// FileView but carries no guarantee that its offsets were ever validated or
+// converted, so the assertions below demand this key — which only
+// `makeFileView` sets.
+const FILE_VIEW = Symbol("agent-sanitizer/FileView");
+
+/**
+ * The redacted view of a file: its text plus the redaction pairs, tagged with
+ * the coordinate space the pair offsets live in.
+ * @template {OffsetSpace} S
+ * @typedef {{readonly space: S, readonly text: string,
+ *   readonly pairs: readonly RedactionPair[]}} FileView
+ */
+
+/**
+ * Wrap `text`/`pairs` in a frozen, branded {@link FileView} in `space`. Pairs are
+ * COPIED before freezing, so neither the caller's array nor its pair objects
+ * are frozen out from under it, and a later mutation by the caller (an injected
+ * redactor reusing a memoized map, say) cannot reach into this view.
+ * @template {OffsetSpace} S
+ * @param {string} text
+ * @param {readonly RedactionPair[]} pairs offsets expressed in `space`
+ * @param {S} space
+ * @returns {FileView<S>}
+ */
+export function makeFileView(text, pairs, space) {
+  return Object.freeze({
+    [FILE_VIEW]: true,
+    space,
+    text,
+    pairs: Object.freeze(pairs.map((pair) => Object.freeze({ ...pair }))),
+  });
+}
+
+/**
+ * Throw unless `view` is a {@link makeFileView} product in `space`. Callers of
+ * this module hand it a value that came back from the INJECTED redactor, so the
+ * shape and the coordinate space are both unverified inputs; resolving an
+ * unbranded or wrongly-spaced view would compute a confidently wrong answer
+ * (an offset shifted once per preceding astral char) instead of failing.
+ * @param {unknown} view
+ * @param {OffsetSpace} space
+ * @returns {void}
+ */
+function assertFileView(view, space) {
+  if (!view || !(/** @type {any} */ (view)[FILE_VIEW]))
+    throw new TypeError(
+      "expected a branded file view from makeFileView(); got a raw object",
+    );
+  const actual = /** @type {FileView<OffsetSpace>} */ (view).space;
+  if (actual !== space)
+    throw new TypeError(
+      `expected a file view with ${space} offsets, got ${actual}`,
+    );
+}
 
 /**
  * Non-overlapping occurrence indices of `needle` in `haystack`.
@@ -114,13 +196,15 @@ function diskOffset(deletions, cleanedOffset, isEnd) {
  * precedes a placeholder, where the code-point offset undercounts by one per
  * astral char. `pair.start` is compared against UTF-16 view offsets throughout,
  * so this conversion MUST run once at ingestion or an astral-preceded
- * placeholder mis-anchors the edit onto the wrong bytes.
+ * placeholder mis-anchors the edit onto the wrong bytes — and it must run
+ * EXACTLY once, which is why it is reachable only through
+ * {@link toUtf16View}'s space-checked, view-to-new-view door.
  * @param {string} text the redacted view text the offsets index into
- * @param {{placeholder: string, original: string, start: number}[]} pairs
- * @returns {{placeholder: string, original: string, start: number}[]}
+ * @param {readonly RedactionPair[]} pairs
+ * @returns {RedactionPair[]}
  */
-export function pairsToUtf16(text, pairs) {
-  if (pairs.length === 0) return pairs;
+function pairsToUtf16(text, pairs) {
+  if (pairs.length === 0) return [];
   const codePoints = Array.from(text);
   // prefix[i] = UTF-16 length of the first i code points of `text`.
   const prefix = new Array(codePoints.length + 1);
@@ -160,9 +244,23 @@ export function pairsToUtf16(text, pairs) {
 }
 
 /**
+ * The same view with its pair offsets re-expressed in UTF-16 code units — a
+ * NEW frozen carrier; `view` is untouched. Only a `codePoint`-space view is
+ * accepted, so converting an already-converted view throws instead of shifting
+ * every astral-preceded offset a second time (which mis-anchors the edit, or
+ * rejects it as cutting a placeholder).
+ * @param {FileView<"codePoint">} view
+ * @returns {FileView<"utf16">}
+ */
+export function toUtf16View(view) {
+  assertFileView(view, "codePoint");
+  return makeFileView(view.text, pairsToUtf16(view.text, view.pairs), "utf16");
+}
+
+/**
  * Map a redacted-view offset to its Layer-1-cleaned offset, or null when the
  * offset falls strictly inside a placeholder (no cleaned position corresponds).
- * @param {{placeholder: string, original: string, start: number}[]} pairs
+ * @param {readonly RedactionPair[]} pairs
  * @param {number} offset view offset
  * @returns {number | null}
  */
@@ -190,7 +288,7 @@ function mapViewOffset(pairs, offset) {
  * and a mis-attributed run would mis-anchor the edit.
  * @param {string} content disk file content
  * @param {string} cleaned Layer-1 view of `content`
- * @param {{text: string, pairs: {placeholder: string, original: string, start: number}[]}} view
+ * @param {FileView<"utf16">} view
  * @param {{start: number, deleted: string}[]} deletions
  * @param {number} viewStart
  * @param {number} viewEnd
@@ -203,6 +301,7 @@ export function resolveSpan(
   viewStart,
   viewEnd,
 ) {
+  assertFileView(view, "utf16");
   const cleanedStart = mapViewOffset(view.pairs, viewStart);
   const cleanedEnd = mapViewOffset(view.pairs, viewEnd);
   if (cleanedStart === null || cleanedEnd === null) return null;
@@ -245,11 +344,12 @@ export function orderedMatches(text, needles) {
  * was never part of the secret); interior runs are included. Callers use these
  * to detect an edit whose on-disk footprint intrudes into bytes the model was
  * never shown.
- * @param {{pairs: {placeholder: string, original: string, start: number}[]}} view
+ * @param {FileView<"utf16">} view
  * @param {{start: number, deleted: string}[]} deletions
  * @returns {{start: number, end: number}[]}
  */
 export function pairDiskSpans(view, deletions) {
+  assertFileView(view, "utf16");
   return view.pairs.map((pair) => {
     // pair.start is a placeholder boundary; placeholders never overlap, so it is
     // never strictly interior to another placeholder and mapViewOffset resolves.
@@ -273,8 +373,8 @@ export function pairDiskSpans(view, deletions) {
  * appears literally in the matched file text, is unresolvable → deny.
  * @param {string} oldS matched old_string (≡ the view span text)
  * @param {string} newS model-authored replacement
- * @param {{placeholder: string, original: string, start: number}[]} spanPairs
- * @param {{placeholder: string, original: string, start: number}[]} filePairs
+ * @param {readonly RedactionPair[]} spanPairs
+ * @param {readonly RedactionPair[]} filePairs
  * @returns {{text: string, secrets: string[]} | {deny: string}}
  */
 export function rehydrateNewString(oldS, newS, spanPairs, filePairs) {
