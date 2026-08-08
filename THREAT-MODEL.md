@@ -87,6 +87,74 @@ attributes (`src`/`href`/`background`/`srcset`/`ping`, form `action`/`formaction
 Each threat carries a `reason` and the destination `target` (never the
 payload-bearing query/fragment), suitable for a warning shown to the operator.
 
+## Layer 4—secret redaction (injected engine)
+
+The threat is the reverse of the other layers: not attacker text reaching the
+model, but a credential in tool output (a `.env` cat, a failing curl, a CI log)
+reaching a model that will paste it into the next tool call, a commit, or a
+bug report.
+
+**The package bundles no detector.** Layer 4 is an injected
+`redact(text) => {text, found, note?} | null` callback on `./output`, so the npm
+package ships no secret engine and a host may supply its own. The Claude Code
+plugin injects the Python engine from `agent-sanitizer[secrets]`
+(`python/agent_sanitizer/secrets/engine.py`) over a local daemon;
+`plugin/scripts/provision-redactor.sh` installs it at SessionStart.
+
+**It is the one fail-closed layer.** A redactor that throws — unreachable
+daemon, engine error — is rethrown from `sanitizeValue` as `CRITICAL: secret
+redaction failed …` (`src/output.mjs`), so the caller suppresses the output
+rather than emit a value nothing vetted. That is distinct from an engine that
+was never provisioned: there the hooks' posture applies, passing the output
+through with a loud warning by default and suppressing it under
+`AGENT_SANITIZER_FAIL_OPEN=0`. Either way the gap is announced, never silent.
+
+**Lone surrogates are normalized to U+FFFD before the redactor sees the text.**
+A secret split by an interposed lone surrogate renders as contiguous to the
+model but arrives broken at the redactor, so without normalization a
+reconstituted secret survives redaction. Both redact-input paths share one
+normalizer so they cannot drift.
+
+**Detection.** detect-secrets is the single oracle — its bundled plugins plus
+gitleaks-sourced ones for formats it lacks — extended with a regex
+for the unquoted `key=value` shapes `KeywordDetector` misses, PEM block
+collapse, cross-line reassembly of a secret split across lines, and exact-match
+redaction of caller-supplied env-var **values**. Each hit becomes
+`[REDACTED: <label>]` and its label joins `found`.
+
+**The engine discovers nothing about its environment.** Every
+environment-specific input — which env-var values to redact, the invisible
+charset, whether the text is web ingress — arrives through `RedactorConfig`; the
+engine never reads `os.environ`. Passing values rather than names is
+load-bearing for the daemon, which serves many sessions and must redact the
+_requester's_ keys. The invisible charset is sourced from the same SSOT Layer 1
+uses (and raises if that dependency is missing rather than silently using a
+partial set): a key spliced with a code point one layer omits would otherwise
+escape both.
+
+**Precision over recall, deliberately.** Redacting a UUID, a content digest, a
+timestamp, a version, a filesystem path, a public endpoint URL, a `$VAR`
+reference, a documentation placeholder or a markdown code span would delete text
+the model needed, so each is filtered out before redaction, and an env value
+shorter than `min_secret_len` (16) is treated as a test stub rather than a key.
+Two config switches move the trade-off where the context justifies it:
+`web_ingress` disables the name-based benign skips for attacker-controlled text,
+and `high_confidence` drops the fuzzy keyword/field-value detectors for source
+scans, where secret-shaped names appear legitimately.
+
+**Redaction stays reversible for editing, never for the model.**
+`redact_map` returns placeholder ↔ original pairs with offsets, which
+`./rehydrate` uses to re-anchor a model `Edit` composed from the redacted view
+back onto the real bytes. If the input already contains the private-use
+sentinels the map machinery reserves, it returns `{"unmappable": …}` rather than
+risk mis-pairing a placeholder with the wrong secret.
+
+**Ordering.** Layer 4 runs after Layers 1–2 have removed bytes, and is re-run on
+the post-deletion text whenever Layer 5 deletes a span — a deletion can
+reconstitute a secret the first pass never saw intact. On `Bash.command` it runs
+before `sanitizeAuthoredContent`, which is the assumption the confusable-folding
+soundness argument below relies on.
+
 ## Confusable folding (tool input)
 
 `./confusables` folds look-alike glyphs in tool-call **input** fields (paths,
