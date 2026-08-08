@@ -24,6 +24,7 @@ import {
   FILTER_WARNING,
 } from "../src/output.mjs";
 import { SGR_RE } from "../src/invisible.mjs";
+import { occurrences } from "../src/view-map.mjs";
 import { fcRunOptions, cp } from "./test-helpers.mjs";
 
 const runOptions = fcRunOptions({ numRuns: 300 });
@@ -334,6 +335,15 @@ describe("property: no filterInjection-supplied byte reaches the model-facing co
   });
   // The filter may return a valid enum code or no warning at all.
   const codeArb = fc.constantFrom(undefined, ...Object.values(FILTER_WARNING));
+  // Counterexamples this property has caught, pinned so they replay on EVERY
+  // run rather than waiting for the generator to rediscover them:
+  //   ["aZb", ["Z", "ab"]] — deleting "Z" joins "a" to "b", so a span-by-span
+  //   deleter finds an "ab" the INPUT never contained and erases the rest of
+  //   the output. Only the two spans' matches in the original text may go.
+  const deletionRunOptions = fcRunOptions({
+    numRuns: 300,
+    examples: [["aZb", ["Z", "ab"], undefined]],
+  });
 
   it("cleaned is the input with spans DELETED (never injected) and warnings are library-owned only", async () => {
     await fc.assert(
@@ -345,8 +355,28 @@ describe("property: no filterInjection-supplied byte reaches the model-facing co
         const r = await sanitizeText(text, { filterInjection });
         // Deletion-only: cleaned equals the input with those spans removed by
         // an INDEPENDENT oracle — any filter-injected byte would break this.
-        let expected = text;
-        for (const s of spans) if (s) expected = expected.replaceAll(s, "");
+        // The oracle is a left-to-right scan of the ORIGINAL text (not the
+        // collect-sort-splice the implementation uses): at each position the
+        // first span, in the order the filter listed them, whose occurrence
+        // starts there is deleted. Spans here can overlap ("X" inside "XYZ"),
+        // so the union of occurrences is NOT the answer — the second of two
+        // overlapping matches is dropped, not applied at a shifted offset. A
+        // chained per-span `replaceAll` is not the answer either: it deletes
+        // matches that only exist because an earlier deletion joined the bytes
+        // around it (deleting "Z" from "aZb" would then delete the "ab" the
+        // input never contained).
+        let expected = "";
+        for (let i = 0; i < text.length;) {
+          const hit = spans.find(
+            (span) => span && occurrences(text, span).includes(i),
+          );
+          if (hit === undefined) {
+            expected += text[i];
+            i++;
+            continue;
+          }
+          i += hit.length;
+        }
         assert.equal(r.cleaned, expected);
         // Benign input yields no Layer-1 finding, so the ONLY possible warning
         // is the filter's — and it must be a LIBRARY-owned message (the mapped
@@ -358,7 +388,7 @@ describe("property: no filterInjection-supplied byte reaches the model-facing co
         }
         assert.ok(r.warnings.length <= 1);
       }),
-      runOptions,
+      deletionRunOptions,
     );
   });
 
