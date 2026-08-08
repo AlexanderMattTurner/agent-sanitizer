@@ -689,11 +689,19 @@ describe("consecutive-joiner cap", () => {
     assert.deepEqual(found, [CATEGORY.CF]);
   });
 
-  it(`caps preserved ZWJ in an alternating emoji run at ${CONSECUTIVE_JOINER_CAP}`, () => {
+  it(`strips EVERY ZWJ of an over-cap emoji run (one cluster, atomic)`, () => {
+    // An emoji ZWJ run is a SINGLE grapheme cluster, and the preserve budget is
+    // charged per cluster: over the cap, the whole cluster's joiners go, rather
+    // than the first CONSECUTIVE_JOINER_CAP surviving and carving one grapheme
+    // in half. The visible pictographs are untouched either way.
     const input =
       cp(0x1f468) + (ZWJ + cp(0x1f469)).repeat(CONSECUTIVE_JOINER_CAP + 12);
     const { cleaned, found } = stripInvisibleWithReport(input);
-    assert.equal(countOf(cleaned, ZWJ), CONSECUTIVE_JOINER_CAP);
+    assert.equal(countOf(cleaned, ZWJ), 0);
+    assert.equal(
+      cleaned,
+      cp(0x1f468) + cp(0x1f469).repeat(CONSECUTIVE_JOINER_CAP + 12),
+    );
     assert.deepEqual(found, [CATEGORY.CF]);
   });
 
@@ -817,6 +825,122 @@ describe("document-wide preserved-joiner budget", () => {
     assert.ok(joiners > TOTAL_PRESERVED_JOINER_BUDGET);
     assert.equal(countOf(cleaned, ZWNJ), joiners); // all preserved, none clipped
     assert.deepEqual(found, []);
+  });
+});
+
+// ─── The preserve budget is charged per GRAPHEME CLUSTER, never per code point ─
+// A budget accounted per code point can fall due part-way through one cluster
+// and carve a single grapheme in half: with the document budget exhausted after
+// the 6th family emoji's first ZWJ, 👨‍👩‍👧‍👦 came out as 👨‍👩👧👦 — three glyphs where
+// the author wrote one, and a "budget" whose own invariant did not hold for the
+// thing it protects. Charging the whole cluster at once makes that impossible by
+// construction.
+describe("preserve budget: grapheme clusters are indivisible", () => {
+  const FAMILY_CLUSTER =
+    cp(0x1f468) + ZWJ + cp(0x1f469) + ZWJ + cp(0x1f467) + ZWJ + cp(0x1f466);
+  const FAMILY_BARE = cp(0x1f468) + cp(0x1f469) + cp(0x1f467) + cp(0x1f466);
+  // 3 ZWJ per family against the 16-unit document budget: 5 families fit (15),
+  // the 6th needs 3 more and does not.
+  const FAMILIES_THAT_FIT = 5;
+
+  const clustersOf = (text) =>
+    Array.from(
+      new Intl.Segmenter("en", { granularity: "grapheme" }).segment(text),
+      (s) => s.segment,
+    );
+
+  /**
+   * Assert no grapheme cluster of `input` survives half-carved: each must appear
+   * in the output either byte-identical or with EVERY tracked invisible removed.
+   * Only valid for inputs whose invisibles are all carve-PRESERVABLE (a payload
+   * invisible is unconditionally stripped, which is a legitimate third outcome).
+   */
+  const assertNoPartialCarve = (input) => {
+    let rest = stripInvisible(input);
+    for (const cluster of clustersOf(input)) {
+      const bare = cluster.replace(STRIP, "");
+      if (rest.startsWith(cluster)) rest = rest.slice(cluster.length);
+      else if (rest.startsWith(bare)) rest = rest.slice(bare.length);
+      else
+        assert.fail(
+          `cluster ${JSON.stringify(cluster)} was partially carved; output continues ${JSON.stringify(rest.slice(0, 16))}`,
+        );
+    }
+    assert.equal(
+      rest,
+      "",
+      "output has trailing text no input cluster explains",
+    );
+  };
+
+  for (const n of [FAMILIES_THAT_FIT, FAMILIES_THAT_FIT + 1, 8, 12]) {
+    it(`carves ${n} family emoji all-or-nothing per cluster`, () => {
+      const input = FAMILY_CLUSTER.repeat(n);
+      const kept = Math.min(n, FAMILIES_THAT_FIT);
+      assert.equal(
+        stripInvisible(input),
+        FAMILY_CLUSTER.repeat(kept) + FAMILY_BARE.repeat(n - kept),
+      );
+      assertNoPartialCarve(input);
+    });
+  }
+
+  it("reports the strip once the budget cuts a whole cluster", () => {
+    const { found } = stripInvisibleWithReport(
+      FAMILY_CLUSTER.repeat(FAMILIES_THAT_FIT + 1),
+    );
+    assert.deepEqual(found, [CATEGORY.CF]);
+  });
+
+  it("is idempotent across the budget cut (no malformed remnant to re-strip)", () => {
+    const once = stripInvisible(FAMILY_CLUSTER.repeat(FAMILIES_THAT_FIT + 1));
+    assert.equal(stripInvisible(once), once);
+  });
+
+  it("keeps multi-preservable clusters whole under the CONSECUTIVE caps too", () => {
+    // 🏳️‍🌈 is VS16 + ZWJ inside ONE cluster: two preservables that must rise and
+    // fall together no matter which limit bites.
+    const rainbow = cp(0x1f3f3) + cp(0xfe0f) + ZWJ + cp(0x1f308);
+    for (const n of [1, 6, 9, 20]) assertNoPartialCarve(rainbow.repeat(n));
+  });
+
+  it("judges each cluster on the run its own leading gap resets", () => {
+    // Two adjacent 6-pictograph ZWJ sequences, 5 joiners each. The second
+    // cluster opens with a pictograph directly after the first cluster's — a
+    // genuine gap, which resets the consecutive-joiner run. Judging cluster 2
+    // on the STALE count (5 + 5 > 8) would strip all five of its joiners even
+    // though 10 preserved chars sit well inside the document budget (16): a
+    // false positive on legitimate joined text.
+    const cluster = cp(0x1f468) + (ZWJ + cp(0x1f469)).repeat(5);
+    const input = cluster + cluster;
+    const { cleaned, found } = stripInvisibleWithReport(input);
+    assert.equal(cleaned, input);
+    assert.deepEqual(found, []);
+    assert.equal(countOf(cleaned, ZWJ), 10);
+    assert.ok(10 <= TOTAL_PRESERVED_JOINER_BUDGET, "must fit the budget");
+    assert.ok(5 < CONSECUTIVE_JOINER_CAP, "each cluster must fit the run cap");
+  });
+
+  it("does not clip vocalised Arabic: a harakat still opens a fresh run", () => {
+    // Regression on the cluster rewrite: `beh + fatha + ZWNJ` is ONE cluster,
+    // and the harakat closes a genuine gap inside it. Charging per cluster must
+    // not lose that reset, or 12 ordinary words would be clipped to the
+    // consecutive-joiner cap (8) — legitimate text mangled by an accounting
+    // change. The document-wide budget (16) is the only limit in play here.
+    const unit = cp(0x628) + cp(0x64e) + ZWNJ;
+    const input = unit.repeat(12) + cp(0x628);
+    const { cleaned, found } = stripInvisibleWithReport(input);
+    assert.equal(cleaned, input);
+    assert.deepEqual(found, []);
+    assert.ok(12 > CONSECUTIVE_JOINER_CAP, "case must exceed the run cap");
+  });
+
+  it("keeps a subregional flag's tag run whole (tags are cluster-internal)", () => {
+    const flag =
+      cp(0x1f3f4) +
+      [..."gbsct"].map((c) => cp(0xe0000 + c.charCodeAt(0))).join("") +
+      CANCEL_TAG;
+    for (const n of [1, 2, 3, 5]) assertNoPartialCarve(flag.repeat(n));
   });
 });
 
