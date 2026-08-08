@@ -14,7 +14,7 @@
  * postures, with the emission compared against the table's own entry. Nothing
  * greps a source file; every case runs the hook's actual error path.
  */
-import { describe, it } from "node:test";
+import { describe, it, after } from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import {
@@ -24,6 +24,7 @@ import {
   readdirSync,
   readFileSync,
   rmSync,
+  writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -37,10 +38,13 @@ const hooksDir = fileURLToPath(new URL("../claude-hooks", import.meta.url));
 // project dir and the alert path at module load.
 const projectDir = mkdtempSync(join(tmpdir(), "sanitizer-posture-proj-"));
 process.env.CLAUDE_PROJECT_DIR = projectDir;
-// The SessionStart hook's forced fault: a DIRECTORY where an instruction file is
-// expected. The finder lists it, the read fails EISDIR — not the ENOENT glob
-// race — so it is a genuine fault of the hook rather than a benign skip.
+// An instruction file the scan cannot read: a DIRECTORY where a file is
+// expected. The finder lists it, the read fails EISDIR. That is a COVERAGE GAP,
+// not a hook fault — the hook worked and is telling you what it could not check.
 mkdirSync(join(projectDir, "CLAUDE.md"));
+// A second, perfectly readable target, so "did the rest of the project still get
+// scanned?" is observable rather than assumed.
+writeFileSync(join(projectDir, "AGENTS.md"), "ordinary, clean prose\n");
 
 const { FAIL_OPEN_ENV, missingPackageError } =
   await import("../claude-hooks/lib/hook-io.mjs");
@@ -54,6 +58,15 @@ const userPrompt = await import("../claude-hooks/sanitize-user-prompt.mjs");
 const scanInvisible = await import("../claude-hooks/scan-invisible-chars.mjs");
 await import("../claude-hooks/plugin-hooks.mjs");
 const { ALERT_FILE } = scanInvisible;
+
+// Litter is not free: the SessionStart scanner globs **/CLAUDE.md under its
+// project dir, and other suites point that at $TMPDIR — so an unreadable
+// fixture left behind here becomes an unscannable instruction file for THEM,
+// arming their gate and breaking assertions nowhere near this file.
+after(() => {
+  rmSync(projectDir, { recursive: true, force: true });
+  rmSync(ALERT_FILE, { force: true });
+});
 
 /** The two postures, as the environments a hook actually reads. */
 const POSTURES = [
@@ -151,58 +164,103 @@ describe("UserPromptSubmit emits exactly its table entry", () => {
     });
 });
 
-describe("SessionStart emits exactly its table entry", () => {
+/**
+ * Run the SessionStart scan with `env` pinned and stdout/stderr captured.
+ * @param {Record<string, string>} env
+ * @param {{ scan?: () => any }} [opts]
+ */
+async function runScanUnder(env, opts = {}) {
+  rmSync(ALERT_FILE, { force: true });
+  const stderr = [];
+  const realWrite = process.stderr.write;
+  const realExitCode = process.exitCode;
+  const previous = process.env[FAIL_OPEN_ENV];
+  Object.assign(process.env, env);
+  if (env[FAIL_OPEN_ENV] === undefined) delete process.env[FAIL_OPEN_ENV];
+  process.stderr.write = (chunk) => {
+    stderr.push(String(chunk));
+    return true;
+  };
+  const announced = [];
+  try {
+    await scanInvisible.cliMain({
+      trace: (event, fields) => announced.push({ event, ...fields }),
+      ...opts,
+    });
+  } finally {
+    process.stderr.write = realWrite;
+    process.exitCode = realExitCode;
+    if (previous === undefined) delete process.env[FAIL_OPEN_ENV];
+    else process.env[FAIL_OPEN_ENV] = previous;
+  }
+  return { stderr, announced, alertArmed: existsSync(ALERT_FILE) };
+}
+
+describe("SessionStart emits exactly its table entry on a hook FAULT", () => {
+  // The fault is a scanner that throws something that is NOT an errno — i.e. a
+  // bug, the only condition left that reaches this hook's posture. An
+  // unreadable FILE is deliberately not one (see the coverage describe below).
+  const BUG = new TypeError("stripInvisible is not a function");
+
   for (const [label, env] of POSTURES)
     it(`under ${label}`, async () => {
-      // Same read the hook performs, so the expected message is the real
-      // errno text rather than this test's guess at it.
-      let fault;
-      try {
-        readFileSync(join(projectDir, "CLAUDE.md"), "utf-8");
-      } catch (err) {
-        fault = err;
-      }
-      assert.ok(fault, "the forced fault did not fire");
-
-      rmSync(ALERT_FILE, { force: true });
-      const stderr = [];
-      const realWrite = process.stderr.write;
-      const realExitCode = process.exitCode;
-      const previous = process.env[FAIL_OPEN_ENV];
-      Object.assign(process.env, env);
-      if (env[FAIL_OPEN_ENV] === undefined) delete process.env[FAIL_OPEN_ENV];
-      process.stderr.write = (chunk) => {
-        stderr.push(String(chunk));
-        return true;
-      };
-      try {
-        await scanInvisible.cliMain({ trace: () => {} });
-      } finally {
-        process.stderr.write = realWrite;
-        process.exitCode = realExitCode;
-        if (previous === undefined) delete process.env[FAIL_OPEN_ENV];
-        else process.env[FAIL_OPEN_ENV] = previous;
-      }
-
-      const expected = hookFaultOutcome("scan-invisible-chars", fault, { env });
+      const { stderr, announced, alertArmed } = await runScanUnder(env, {
+        scan: () => {
+          throw BUG;
+        },
+      });
+      const expected = hookFaultOutcome("scan-invisible-chars", BUG, { env });
       assert.deepEqual(stderr, [expected.stderr]);
+      assert.deepEqual(
+        announced.map((a) => a.outcome),
+        ["skipped"],
+      );
       // The alert is the only enforcement a SessionStart hook can reach: it
       // makes the PreToolUse gate ask once on the next tool call. Under the
       // open posture there must be none — an advisory that also armed the gate
       // would be the closed posture wearing an open label.
       assert.equal(
-        existsSync(ALERT_FILE),
+        alertArmed,
         expected.armAlert,
         `alert presence disagrees with the table under ${label}`,
       );
     });
+});
 
-  it("faults on an unreadable target rather than reporting it clean", () => {
-    // Independent of the posture: an EISDIR target is not the ENOENT glob race,
-    // so it must reach the fault path at all.
-    assert.throws(() => scanInvisible.scanProject(projectDir), {
-      code: "EISDIR",
+describe("an unreadable instruction file is a COVERAGE GAP, not a hook fault", () => {
+  // Re-pinned deliberately. This case used to assert that an EISDIR target
+  // propagated out of scanProject and rendered the hook's fault posture — which
+  // meant that under the shipped OPEN default it armed nothing, discarded the
+  // result for every OTHER instruction file, and left them unscanned and
+  // un-auto-cleaned. A benign ENOENT glob race, meanwhile, reached `partial` and
+  // armed the gate under both postures: the suspicious failure got WEAKER
+  // enforcement than the benign one.
+  //
+  // Any errno is now a skip. The assertions below are strictly louder than the
+  // old open arm — `partial` plus an armed gate in BOTH postures — and the rest
+  // of the project still gets scanned.
+  for (const [label, env] of POSTURES)
+    it(`announces partial and arms the gate under ${label}`, async () => {
+      const { stderr, announced, alertArmed } = await runScanUnder(env);
+      assert.deepEqual(
+        announced.map((a) => a.outcome),
+        ["partial"],
+      );
+      assert.equal(announced[0].skipped, 1);
+      assert.ok(alertArmed, "the gate was not armed for an unscanned file");
+      assert.match(stderr.join(""), /INSTRUCTION FILES NOT SCANNED/u);
+      // The errno text is scrubbed on its way to the operator's terminal and to
+      // the alert: it embeds a path globbed out of a possibly-hostile repo.
+      assert.match(readFileSync(ALERT_FILE, "utf8"), /CLAUDE\.md: EISDIR/u);
     });
+
+  it("keeps scanning the rest of the project", () => {
+    // The regression the old ENOENT-only catch caused: one unreadable target
+    // discarded every other file's result.
+    const { targets, scanned, skipped } = scanInvisible.scanProject(projectDir);
+    assert.equal(skipped.length, 1);
+    assert.equal(scanned, targets.length - 1);
+    assert.ok(scanned > 0, "no other target was left to prove the point");
   });
 });
 

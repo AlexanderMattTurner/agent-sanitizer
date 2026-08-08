@@ -66813,8 +66813,7 @@ function needsFixedPoint(layers) {
   }
   return false;
 }
-async function runLayerPipeline(tool, toolInput, layers, opts = {}) {
-  const { maxPasses = MAX_PIPELINE_PASSES } = opts;
+async function runLayerPipeline(tool, toolInput, layers) {
   const firstTerminal = layers.findIndex((layer) => layer.terminal === true);
   const body = firstTerminal === -1 ? layers : layers.slice(0, firstTerminal);
   const terminal = firstTerminal === -1 ? [] : layers.slice(firstTerminal);
@@ -66829,7 +66828,7 @@ async function runLayerPipeline(tool, toolInput, layers, opts = {}) {
     if (!contexts.includes(result.context)) contexts.push(result.context);
   };
   const requireFixedPoint = needsFixedPoint(body);
-  const passes = requireFixedPoint ? maxPasses : 1;
+  const passes = requireFixedPoint ? MAX_PIPELINE_PASSES : 1;
   let settled = false;
   for (let pass = 0; pass < passes && !settled; pass++) {
     settled = true;
@@ -68621,10 +68620,10 @@ function scanProject(dir = PROJECT_DIR) {
     } catch (err) {
       if (
         /** @type {NodeJS.ErrnoException} */
-        err.code !== "ENOENT"
+        err.code === void 0
       )
         throw err;
-      skipped.push({ file: relative(dir, file), reason: errMessage(err) });
+      skipped.push({ file: relative(dir, file), reason: safeErrMessage(err) });
       continue;
     }
     scanned++;
@@ -68645,7 +68644,7 @@ function formatSkipped(skipped) {
     ""
   ].join("\n");
 }
-async function cliMain3({ trace: sink = trace } = {}) {
+async function cliMain3({ trace: sink = trace, scan: runScan } = {}) {
   const emitTrace = bestEffortTrace(sink);
   const alertParts = [];
   if (!await ensureSanitizerLoaded()) {
@@ -68668,7 +68667,7 @@ async function cliMain3({ trace: sink = trace } = {}) {
   }
   let scan2;
   try {
-    scan2 = scanProject();
+    scan2 = (runScan ?? scanProject)();
   } catch (err) {
     emitTrace(TraceEvent.SCAN_INVISIBLE_CHARS_RAN, { outcome: "skipped" });
     alertParts.push(...reportFault(err));
@@ -68717,7 +68716,7 @@ function autoCleanFindings(allFindings, dir) {
       )
         throw err;
       process.stderr.write(
-        `scan-invisible-chars: could not clean ${file}: ${errMessage(err)}
+        `scan-invisible-chars: could not clean ${file}: ${safeErrMessage(err)}
 `
       );
     }

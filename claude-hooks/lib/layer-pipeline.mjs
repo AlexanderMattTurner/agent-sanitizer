@@ -90,11 +90,9 @@ export function needsFixedPoint(layers) {
  * @param {string} tool
  * @param {any} toolInput
  * @param {Layer[]} layers
- * @param {{ maxPasses?: number }} [opts]
  * @returns {Promise<{ updatedInput: any, changed: boolean, contexts: string[], deny?: string }>}
  */
-export async function runLayerPipeline(tool, toolInput, layers, opts = {}) {
-  const { maxPasses = MAX_PIPELINE_PASSES } = opts;
+export async function runLayerPipeline(tool, toolInput, layers) {
   const firstTerminal = layers.findIndex((layer) => layer.terminal === true);
   const body = firstTerminal === -1 ? layers : layers.slice(0, firstTerminal);
   const terminal = firstTerminal === -1 ? [] : layers.slice(firstTerminal);
@@ -119,7 +117,7 @@ export async function runLayerPipeline(tool, toolInput, layers, opts = {}) {
   // layer after a skip-based one runs its single pass and is done, changes or
   // not — there is no decision left to invalidate.
   const requireFixedPoint = needsFixedPoint(body);
-  const passes = requireFixedPoint ? maxPasses : 1;
+  const passes = requireFixedPoint ? MAX_PIPELINE_PASSES : 1;
   let settled = false;
   for (let pass = 0; pass < passes && !settled; pass++) {
     settled = true;

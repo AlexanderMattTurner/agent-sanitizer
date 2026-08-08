@@ -162,7 +162,9 @@ function defaultOpen(ctx) {
  * @param {Record<string, any> & {
  *   env?: NodeJS.ProcessEnv | Record<string, string | undefined>,
  * }} [ctx]  hook-specific inputs threaded to the builders (a message table, the
- *   parsed input, a remedy); `env` selects the posture and is not passed on
+ *   parsed input, a remedy). `env` selects the posture; it is threaded to the
+ *   builders along with the rest, though none reads it — the posture is resolved
+ *   here precisely so a builder never has to.
  * @returns {FaultOutcome}
  */
 export function hookFaultOutcome(hook, err, ctx = {}) {

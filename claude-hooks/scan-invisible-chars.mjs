@@ -9,7 +9,7 @@ import { readFileSync, globSync, writeFileSync, unlinkSync } from "node:fs";
 import { join, relative } from "node:path";
 import {
   awaitLazyDependency,
-  errMessage,
+  safeErrMessage,
   hookgateMarkerPath,
   HookEvent,
   isMain,
@@ -331,11 +331,16 @@ export { formatReport };
  * which is the one lie this hook must never tell. So a file that cannot be read
  * is REPORTED as unscanned, not dropped.
  *
- * Only ENOENT is caught: the finder walks the tree and the read happens after,
- * so a file deleted (or a symlink left dangling) in between is a genuine race
- * with no bug behind it. Every other errno — EACCES, EISDIR, ELOOP — and every
- * non-filesystem throw is a real fault and propagates to the caller's declared
- * failure posture.
+ * ANY errno is a skip; only a non-filesystem throw propagates. The split is
+ * between "this file could not be read" (report it and keep scanning) and "this
+ * code is broken" (a TypeError from an unloaded binding — nothing here can be
+ * trusted, so it goes to the caller's declared failure posture). Catching only
+ * ENOENT would invert the enforcement: one EACCES target would discard the
+ * result for EVERY other instruction file, leaving them unscanned and
+ * un-auto-cleaned, and under the shipped OPEN posture the hook fault arms
+ * nothing — so the SUSPICIOUS failure would get weaker enforcement than the
+ * benign glob race, which reaches `partial` and arms the gate. Same errno-vs-bug
+ * split {@link autoCleanFindings} uses.
  * @param {string} [dir]  project root to scan (injectable for tests)
  * @returns {{
  *   targets: string[],
@@ -359,9 +364,13 @@ export function scanProject(dir = PROJECT_DIR) {
     try {
       fileFindings = scanFile(file);
     } catch (err) {
-      if (/** @type {NodeJS.ErrnoException} */ (err).code !== "ENOENT")
+      if (/** @type {NodeJS.ErrnoException} */ (err).code === undefined)
         throw err;
-      skipped.push({ file: relative(dir, file), reason: errMessage(err) });
+      // safeErrMessage, not errMessage: this reason is rendered into stderr and
+      // into ALERT_FILE, and an errno message embeds the absolute path globbed
+      // out of a possibly-hostile repo — a filename carrying ANSI or invisible
+      // bytes would otherwise reach the operator's terminal raw.
+      skipped.push({ file: relative(dir, file), reason: safeErrMessage(err) });
       continue;
     }
     scanned++;
@@ -400,12 +409,18 @@ export function formatSkipped(skipped) {
  * the alert for the PreToolUse gate otherwise. Exported so a bundle entry
  * (which must claim the CLI slot before this module loads) can run the exact
  * same scan instead of duplicating it.
- * @param {{ trace?: import("./lib/trace.mjs").TraceFn }} [opts]  `trace` is where
- *   this scan announces engagement; a host with its own trace channel passes its
- *   sink so the announcement lands where its detector reads (see lib/trace.mjs).
+ * @param {{
+ *   trace?: import("./lib/trace.mjs").TraceFn,
+ *   scan?: () => ReturnType<typeof scanProject>,
+ * }} [opts]  `trace` is where this scan announces engagement; a host with its
+ *   own trace channel passes its sink so the announcement lands where its
+ *   detector reads (see lib/trace.mjs). `scan` is the scanner, injectable so the
+ *   FAULT path below — a scanner that throws something other than an errno, i.e.
+ *   a bug — is drivable end to end; no filesystem state can force it, and an
+ *   untested fault path is how a posture goes missing in the first place.
  * @returns {Promise<void>}
  */
-export async function cliMain({ trace: sink = trace } = {}) {
+export async function cliMain({ trace: sink = trace, scan: runScan } = {}) {
   // Bound best-effort: the announcements below run BEFORE the auto-clean and
   // the alert write, with no catch above them, so a throwing host sink would
   // abort the scan silently (see bestEffortTrace).
@@ -453,12 +468,13 @@ export async function cliMain({ trace: sink = trace } = {}) {
     }
   }
 
-  // A non-ENOENT read failure propagates out of scanProject: it is a fault of
-  // THIS hook, so it renders through the same posture table as every other
-  // hook's fault instead of aborting with no announcement at all.
+  // Only a non-errno throw reaches here — a bug in the scanner, not a file it
+  // could not read (those are accounted for in `skipped`). It is a fault of THIS
+  // hook, so it renders through the same posture table as every other hook's
+  // fault instead of aborting with no announcement at all.
   let scan;
   try {
-    scan = scanProject();
+    scan = (runScan ?? scanProject)();
   } catch (err) {
     emitTrace(TraceEvent.SCAN_INVISIBLE_CHARS_RAN, { outcome: "skipped" });
     alertParts.push(...reportFault(err));
@@ -523,7 +539,7 @@ function autoCleanFindings(allFindings, dir) {
       if (/** @type {NodeJS.ErrnoException} */ (err).code === undefined)
         throw err;
       process.stderr.write(
-        `scan-invisible-chars: could not clean ${file}: ${errMessage(err)}\n`,
+        `scan-invisible-chars: could not clean ${file}: ${safeErrMessage(err)}\n`,
       );
     }
     /* c8 ignore stop */

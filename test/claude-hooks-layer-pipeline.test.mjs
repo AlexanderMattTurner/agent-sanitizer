@@ -16,9 +16,9 @@
  * output must report nothing left to fold; likewise the strip. A pipeline that
  * leaves either with work to do has taken a decision on text it did not emit.
  */
-import { describe, it } from "node:test";
+import { describe, it, after } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createRequire } from "node:module";
@@ -28,9 +28,11 @@ import fc from "fast-check";
 // its cross-hook alert from a path keyed to CLAUDE_PROJECT_DIR (resolved at
 // module load), and a stray alert from another suite would add an ask to every
 // response here.
-process.env.CLAUDE_PROJECT_DIR = mkdtempSync(
-  join(tmpdir(), "sanitizer-pipeline-proj-"),
-);
+const projectDir = mkdtempSync(join(tmpdir(), "sanitizer-pipeline-proj-"));
+process.env.CLAUDE_PROJECT_DIR = projectDir;
+// Other suites point the SessionStart scanner's project dir at $TMPDIR, where it
+// globs **/CLAUDE.md — so a fixture dir left behind here becomes their problem.
+after(() => rmSync(projectDir, { recursive: true, force: true }));
 
 const { buildPreToolUseResponse, preToolUseLayers } =
   await import("../claude-hooks/pretooluse-sanitize.mjs");

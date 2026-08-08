@@ -33,6 +33,14 @@ const scanInvisible = await import("../claude-hooks/scan-invisible-chars.mjs");
 const { scanProject, findInstructionFiles, findMdFiles, ALERT_FILE, cliMain } =
   scanInvisible;
 
+// Same reason as in claude-hooks-posture.test.mjs: an unreadable fixture left
+// under $TMPDIR is an unscannable instruction file for every suite whose
+// project dir is $TMPDIR.
+after(() => {
+  rmSync(projectDir, { recursive: true, force: true });
+  rmSync(ALERT_FILE, { force: true });
+});
+
 /** A target the finder lists but nothing can read: a dangling symlink. */
 function dangling(dir, name) {
   symlinkSync(join(dir, "no-such-target"), join(dir, name));
@@ -117,15 +125,38 @@ describe("a scan that could not read a target never announces clean", () => {
 });
 
 describe("a fully readable project still announces clean", () => {
-  it("does not arm the gate when nothing was missed", async () => {
-    // The positive marker: without it, a test asserting "not clean" would pass
-    // just as happily against a scan that never says clean at all.
-    const dir = mkdtempSync(join(tmpdir(), "sanitizer-coverage-ok-"));
-    writeFileSync(join(dir, "CLAUDE.md"), "nothing hidden here\n");
-    const { scanned, skipped, findings } = scanProject(dir);
-    assert.equal(skipped.length, 0);
-    assert.equal(scanned, 1);
+  // The control for the describe above. It must drive cliMain and inspect the
+  // same two observables — the announced outcome and ALERT_FILE — or "never
+  // announces clean" would pass just as happily against a scan that never says
+  // clean at all, or one that arms the gate unconditionally.
+  before(() => {
+    // PROJECT_DIR resolved at module load, so the control has to repair the
+    // project the previous describe sabotaged rather than point somewhere else.
+    rmSync(join(projectDir, "CLAUDE.md"), { force: true });
+    writeFileSync(join(projectDir, "CLAUDE.md"), "nothing hidden here\n");
+    rmSync(ALERT_FILE, { force: true });
+  });
+  after(() => rmSync(ALERT_FILE, { force: true }));
+
+  it("announces clean and does not arm the gate", async () => {
+    const { lines, sink } = collector();
+    await cliMain({ trace: sink });
+
+    assert.deepEqual(
+      lines
+        .filter((l) => l.event === "scan_invisible_chars_ran")
+        .map((l) => l.outcome),
+      ["clean"],
+    );
+    assert.equal(
+      existsSync(ALERT_FILE),
+      false,
+      "the gate was armed on a project with nothing to report",
+    );
+    // And the accounting agrees: every target read, nothing skipped.
+    const { targets, scanned, skipped, findings } = scanProject(projectDir);
+    assert.equal(scanned, targets.length);
+    assert.deepEqual(skipped, []);
     assert.deepEqual(findings, []);
-    rmSync(dir, { recursive: true, force: true });
   });
 });
