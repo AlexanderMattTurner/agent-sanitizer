@@ -56,8 +56,10 @@
     ],
     "package.json": [
       "test/claude-hooks-exports.test.mjs",
-      "test/shipped-gates.test.mjs"
+      "test/shipped-gates.test.mjs",
+      "tests/test_minimum_release_age.py"
     ],
+    "pnpm-workspace.yaml": ["tests/test_minimum_release_age.py"],
     "scripts/shipped-sources.mjs": ["test/shipped-gates.test.mjs"],
     "scripts/coverage.mjs": ["test/shipped-gates.test.mjs"],
     "scripts/mutate.mjs": ["test/shipped-gates.test.mjs"],
