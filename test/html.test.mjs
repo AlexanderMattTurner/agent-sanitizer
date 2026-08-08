@@ -5,8 +5,15 @@
  */
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync, readdirSync } from "node:fs";
+import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import fc from "fast-check";
 import * as csstree from "css-tree";
+import { unified } from "unified";
+import remarkParse from "remark-parse";
+import remarkGfm from "remark-gfm";
+import { visit } from "unist-util-visit";
 
 import { fcRunOptions } from "./test-helpers.mjs";
 import {
@@ -973,25 +980,255 @@ describe("unit: urlHost exact verdicts", () => {
     assert.equal(urlHost("http://relative.invalid/x"), "relative.invalid"));
 });
 
+// ─── looksLikeHtmlSource: source-vs-markdown dispatch ────────────────────────
+//
+// The dispatch decides which scanner sees the document, so a wrong verdict is
+// either a miss (HTML routed to the prose branch) or mangled content (markdown
+// routed to the source branch). It is now grounded in the real tokenizer: a
+// document is HTML source when parse5 leaves no non-whitespace character data
+// outside every element it finds.
+//
+// SSOT corpus: one row per shape the dispatch must separate, with the EXACT
+// verdict. `previous` records what the replaced 30%-of-tag-shaped-lines
+// heuristic answered, so a row that used to disagree stays visible as a
+// deliberate flip rather than drifting back silently.
+const DISPATCH_CORPUS = [
+  // ── HTML source: markup accounts for the whole document ──
+  {
+    name: "minified single-line page",
+    text: '<html><body><p>hi</p><div style="display:none">S</div></body></html>',
+    expected: true,
+    previous: false, // <5 lines
+  },
+  {
+    name: "four-line fragment (under the old line floor)",
+    text: "<div>\n<p>hi</p>\n<span hidden>S</span>\n</div>",
+    expected: true,
+    previous: false, // <5 lines
+  },
+  {
+    name: "tag-per-line document",
+    text: "<section>\n<p>a</p>\n<p>b</p>\n<!-- S -->\n<p>c</p>\n</section>",
+    expected: true,
+    previous: true,
+  },
+  {
+    name: "full page with doctype and ignored html/head/body tags",
+    text: "<!doctype html>\n<html>\n<head><title>t</title></head>\n<body><p>hi</p></body>\n</html>",
+    expected: true,
+    previous: true,
+  },
+  {
+    name: "element spanning a blank line",
+    text: "<div hidden>\nS one\n\nS two\n</div>\n",
+    expected: true,
+    previous: true,
+  },
+  {
+    name: "leading &nbsp; decodes to whitespace, so it is still all markup",
+    text: "&nbsp;<div>x</div>",
+    expected: true,
+    previous: false, // <5 lines
+  },
+  // ── markdown: character data lives outside the markup ──
+  {
+    name: "prose with one inline hidden span",
+    text: "Here is <span hidden>S</span> in prose.",
+    expected: false,
+    previous: false,
+  },
+  {
+    name: "plain prose, no tags",
+    text: ["plain", "lines", "no", "tags", "here"].join("\n"),
+    expected: false,
+    previous: false,
+  },
+  {
+    name: "fenced code block of HTML",
+    text: "# Doc\n```html\n<div hidden>EXAMPLE</div>\n<span>ok</span>\n<p>text</p>\n```",
+    expected: false,
+    previous: true, // 4/6 lines are tag-shaped, so the ratio cleared 30%
+  },
+  {
+    name: "indented code block of HTML",
+    text: "Example:\n\n    <div hidden>EXAMPLE</div>\n    <p>x</p>\n    <p>y</p>\n\nEnd.",
+    expected: false,
+    previous: true,
+  },
+  {
+    // The whole document is one indented block, so the four-space indent is
+    // the ONLY character data outside the markup — and it is whitespace. The
+    // tokenizer rule alone cannot tell this from HTML source; the remark
+    // code-node check is what settles it.
+    name: "indented code block with no surrounding prose",
+    text: "    <div hidden>EXAMPLE</div>\n",
+    expected: false,
+    previous: false, // <5 lines
+  },
+  {
+    name: "markdown list naming tags in code spans",
+    text: [
+      "Tags to avoid:",
+      "- `<script>` runs code",
+      "- `<iframe>` embeds",
+      "- `<object>` embeds",
+      "- `<embed>` embeds",
+      "- plain text line",
+    ].join("\n"),
+    expected: false,
+    previous: true,
+  },
+  {
+    name: "markdown table with inline HTML in cells",
+    text: [
+      "| a | b |",
+      "| - | - |",
+      "| <b>x</b> | y |",
+      "| <b>z</b> | w |",
+      "| <b>q</b> | r |",
+    ].join("\n"),
+    expected: false,
+    previous: true,
+  },
+  {
+    name: "comparison operators that tokenize as tags",
+    text: [
+      "if a <b and b> c then",
+      "if x <y and y> z then",
+      "if p <q and q> r then",
+      "plain line",
+      "plain line",
+    ].join("\n"),
+    expected: false,
+    previous: true,
+  },
+  {
+    name: "text foster-parented out of a table",
+    text: "<table>oops<tr><td>a</td></tr></table>",
+    expected: false,
+    previous: false, // <5 lines
+  },
+  {
+    name: "comments only — no element structure at all",
+    text: "<!-- one -->\n<!-- two -->\n<!-- three -->\n<!-- four -->\n<!-- five -->",
+    expected: false,
+    previous: false, // `<!` is not tag-shaped to the old regex either
+  },
+];
+
 describe("unit: looksLikeHtmlSource exact verdicts", () => {
-  const lines = (htmlCount, total) =>
-    [
-      ...Array(htmlCount).fill("<a>x</a>"),
-      ...Array(total - htmlCount).fill("plain text"),
-    ].join("\n");
-  it("needs at least 5 lines", () => {
-    assert.equal(looksLikeHtmlSource(lines(4, 4)), false);
-    assert.equal(looksLikeHtmlSource(lines(5, 5)), true);
+  for (const { name, text, expected } of DISPATCH_CORPUS)
+    it(`${expected ? "HTML source" : "markdown"}: ${name}`, () =>
+      assert.equal(looksLikeHtmlSource(text), expected));
+
+  // Non-vacuity: the corpus must actually exercise both verdicts and must
+  // actually disagree with the heuristic it replaced, or it would keep passing
+  // against a reverted dispatch.
+  it("covers both verdicts and pins the flips away from the old heuristic", () => {
+    const verdicts = DISPATCH_CORPUS.map((row) => row.expected);
+    assert.ok(verdicts.includes(true) && verdicts.includes(false));
+    const flipped = DISPATCH_CORPUS.filter(
+      (row) => row.expected !== row.previous,
+    );
+    assert.equal(flipped.length, 8);
   });
-  it("needs strictly more than 30% HTML lines", () => {
-    assert.equal(looksLikeHtmlSource(lines(3, 10)), false);
-    assert.equal(looksLikeHtmlSource(lines(4, 10)), true);
+});
+
+// Precision counterpart to the corpus: the markdown rows the old dispatch sent
+// down the source branch must survive byte-for-byte now. A verdict test alone
+// would not catch a splice, since the prose branch can still fire.
+describe("precision: markdown the old dispatch routed to the source branch", () => {
+  const WAS_SOURCE_BRANCH = DISPATCH_CORPUS.filter(
+    (row) => !row.expected && row.previous,
+  );
+  it("has rows to check", () => assert.equal(WAS_SOURCE_BRANCH.length, 5));
+  for (const { name, text } of WAS_SOURCE_BRANCH)
+    it(`leaves ${name} byte-for-byte`, () =>
+      assert.equal(applyHtml(text), text));
+});
+
+// ─── negative corpus: this repo's own markdown ───────────────────────────────
+//
+// Legitimate documents, not fixtures: every tracked `.md` file here, several of
+// which are dense with HTML tags inside code fences (the exact shape the old
+// ratio dispatch misread as HTML source). None of them may be classified as
+// HTML source, none may lose an element to a hidden-content splice, and every
+// code block must survive verbatim. Code blocks are located with remark — the
+// real markdown parser — rather than by scanning for fence characters.
+describe("negative corpus: the repo's own markdown is never HTML source", () => {
+  const repoRoot = fileURLToPath(new URL("../", import.meta.url));
+  // Enumerated by walking the tree rather than by shelling out to
+  // `git ls-files`: Stryker's mutation sandbox is a gitignored directory INSIDE
+  // the repo (`.stryker-tmp/sandbox-*`), so nothing under it is tracked and
+  // `git ls-files` there returns an empty set with exit 0 — the corpus empties
+  // silently rather than failing loudly, which is how one broken enumeration
+  // took every mutation shard down at once. The `docs.length` floor below is
+  // what turns that silence back into a failure. The skip list is the subset of
+  // `.gitignore` that can contain markdown; without it the walk descends into
+  // `node_modules` or a sibling worktree under `.claude/worktrees` and the
+  // corpus becomes whatever happens to be on disk.
+  const SKIP_DIRS = new Set([
+    ".git",
+    ".stryker-tmp",
+    ".venv",
+    "_bundled",
+    "coverage",
+    "node_modules",
+    "worktrees",
+  ]);
+  /** @returns {string[]} repo-relative paths, depth-first and sorted */
+  const walk = (/** @type {string} */ dir) =>
+    readdirSync(join(repoRoot, dir), { withFileTypes: true })
+      .sort((a, b) => (a.name < b.name ? -1 : 1))
+      .flatMap((entry) => {
+        const rel = dir ? `${dir}/${entry.name}` : entry.name;
+        // Symlinks report isDirectory() false, so the walk cannot cycle.
+        if (entry.isDirectory())
+          return SKIP_DIRS.has(entry.name) ? [] : walk(rel);
+        return entry.name.endsWith(".md") ? [rel] : [];
+      });
+  const docs = walk("").map((rel) => ({
+    rel,
+    text: readFileSync(join(repoRoot, rel), "utf8"),
+  }));
+  const codeBlocks = (/** @type {string} */ text) => {
+    /** @type {string[]} */
+    const values = [];
+    visit(
+      unified().use(remarkParse).use(remarkGfm).parse(text),
+      "code",
+      (/** @type {any} */ node) => values.push(node.value),
+    );
+    return values;
+  };
+
+  // Non-vacuity: an empty corpus, or one with no tag-bearing code blocks, would
+  // make every assertion below pass without exercising anything.
+  it("found markdown with HTML inside code blocks", () => {
+    assert.ok(docs.length >= 20, `only ${docs.length} markdown files`);
+    const tagBearing = docs.filter((doc) =>
+      codeBlocks(doc.text).some((value) => value.includes("<")),
+    );
+    assert.ok(tagBearing.length >= 3, `only ${tagBearing.length} tag-bearing`);
   });
-  it("only counts real tag-shaped lines", () =>
-    assert.equal(
-      looksLikeHtmlSource(["plain", "lines", "no", "tags", "here"].join("\n")),
-      false,
-    ));
+
+  for (const { rel, text } of docs)
+    describe(rel, () => {
+      const result = sanitizeHtml(text);
+      const out = result?.text ?? text;
+      it("is classified as markdown, not HTML source", () =>
+        assert.equal(looksLikeHtmlSource(text), false));
+      // Stripping an HTML comment out of markdown is Layer 2 working as
+      // designed; removing a hidden ELEMENT from hand-written docs would mean
+      // the dispatch handed real prose to the source branch.
+      it("loses no element to a hidden-content splice", () =>
+        assert.equal(result?.removed.hidden ?? 0, 0));
+      // Compared as re-parsed blocks, not as substrings: remark normalizes
+      // indented-code indentation, so a block's value need not appear verbatim
+      // in its own source.
+      it("keeps every code block byte-for-byte", () =>
+        assert.deepEqual(codeBlocks(out), codeBlocks(text)));
+    });
 });
 
 describe("unit: closingTagName / isHiddenOpen exact verdicts", () => {
@@ -1590,10 +1827,10 @@ describe("bogus-comment parity in the prose branch", () => {
 //
 // `sanitizeHtml` routes through one of two scanners — `scanHtmlFragment`
 // (parse5, when `looksLikeHtmlSource` is true) or `scanMarkdown` (remark, the
-// prose branch) — based on a coarse 30%-of-lines heuristic. After the
-// bogus-comment parity fix, the SAME hidden/bogus construct must be stripped no
-// matter which branch the heuristic happens to pick; otherwise an attacker tunes
-// the surrounding line-shape to dodge whichever branch is weaker. This property
+// prose branch) — on whether the markup accounts for the whole document. After
+// the bogus-comment parity fix, the SAME hidden/bogus construct must be
+// stripped no matter which branch the dispatch picks; otherwise an attacker
+// shapes the surrounding text to dodge whichever branch is weaker. This property
 // embeds one construct (carrying a canary) in BOTH a tag-dense doc (forces the
 // source branch) and a prose doc (forces the markdown branch) and asserts the
 // canary dies in both while a visible marker survives in both.
@@ -1616,7 +1853,7 @@ describe("property: hidden/bogus content is stripped on either branch (#2)", () 
     let sawProseBranch = 0;
     fc.assert(
       fc.property(hiddenConstruct, (construct) => {
-        // Tag-dense doc: ≥5 lines, >30% tag-shaped → source branch.
+        // All-markup doc: no character data outside it → source branch.
         const sourceDoc = [
           "<section>",
           "<p>intro</p>",

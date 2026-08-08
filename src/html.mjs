@@ -1219,12 +1219,26 @@ function hasDataSrc(el) {
   );
 }
 
+// One shared fragment parser for every HTML parse in this module (mirroring
+// `mdParser` below): all of them must agree on the tokenizer's verdict, so
+// there is exactly one parser configuration to reason about.
+const htmlParser = unified().use(rehypeParse, { fragment: true });
+
+/**
+ * Parse `html` as an HTML fragment with the real tokenizer (parse5, via rehype).
+ * @param {string} html
+ * @returns {any}
+ */
+function parseFragment(html) {
+  return htmlParser.parse(html);
+}
+
 /**
  * @param {string} htmlValue
  * @returns {any}
  */
 function parseHtmlTag(htmlValue) {
-  const tree = unified().use(rehypeParse, { fragment: true }).parse(htmlValue);
+  const tree = parseFragment(htmlValue);
   /** @type {any} */
   let firstElement = null;
   visit(tree, "element", (node) => {
@@ -1358,7 +1372,19 @@ function hasWarned(warned) {
  * @returns {{ ranges: Array<{start: number, end: number, kind: "comment" | "hidden"}>, warned: ReturnType<typeof newWarned> }}
  */
 export function scanHtmlFragment(html) {
-  const tree = unified().use(rehypeParse, { fragment: true }).parse(html);
+  return scanFragmentTree(html, parseFragment(html));
+}
+
+/**
+ * `scanHtmlFragment` for a caller that already has the fragment tree — the
+ * dispatch in `sanitizeHtml` parses to decide the branch, so re-parsing there
+ * would tokenize the same input twice. `tree` MUST be the parse of `html`;
+ * the ranges are offsets into `html`, read from that tree's positions.
+ * @param {string} html
+ * @param {any} tree
+ * @returns {{ ranges: Array<{start: number, end: number, kind: "comment" | "hidden"}>, warned: ReturnType<typeof newWarned> }}
+ */
+function scanFragmentTree(html, tree) {
   /** @type {Array<{start: number, end: number, kind: "comment" | "hidden"}>} */
   const ranges = [];
   const warned = newWarned();
@@ -1443,7 +1469,7 @@ function foldAbsorb(absorbing, raw) {
  * @returns {Map<number, number>}
  */
 function commentSpans(value) {
-  const tree = unified().use(rehypeParse, { fragment: true }).parse(value);
+  const tree = parseFragment(value);
   /** @type {Map<number, number>} */
   const spans = new Map();
   visit(tree, "comment", (/** @type {any} */ node) => {
@@ -1711,20 +1737,77 @@ function scanMarkdown(text) {
   return { ranges, warned };
 }
 
-// 30%-of-lines heuristic: HTML *source* gets scanned as one rehype fragment;
-// inline tags scattered in prose go through the markdown branch instead.
 /**
+ * True when remark finds a code block — fenced or indented — in `text`.
+ *
+ * Asked before the HTML tokenizer because "no character data outside the
+ * markup" cannot see an INDENTED code block: its four leading spaces are
+ * whitespace, so a document that is nothing but one indented block
+ * (`"    <div hidden>x</div>\n"`) satisfies the rule and takes the source
+ * branch, and the hidden element gets spliced out of a block the renderer
+ * displays as literal text. A fence escapes only incidentally, because the
+ * backticks are non-whitespace character data. Code blocks are markdown-ONLY
+ * syntax, so their presence settles the question the same way the tokenizer
+ * does — by parsing, not by counting.
+ * @param {string} text
+ * @returns {boolean}
+ */
+function hasMarkdownCode(text) {
+  let found = false;
+  visit(mdParser.parse(text), "code", () => {
+    found = true;
+    return EXIT;
+  });
+  return found;
+}
+
+/**
+ * The parsed fragment tree for `text` when `text` is HTML *source*, else null.
+ *
+ * "HTML source" means the markup accounts for the WHOLE document: the real
+ * tokenizer (parse5, via rehype) places every element there is, and the only
+ * character data it leaves OUTSIDE all of them is whitespace. That is exactly
+ * the property the source branch needs — it hands the whole input to
+ * `scanHtmlFragment` as one fragment, which is faithful only when there is no
+ * non-HTML syntax around the markup for that parse to misread.
+ *
+ * Everything else fails OPEN to the markdown branch, which parses with remark
+ * and scans only the spans remark itself calls HTML. That is the conservative
+ * direction: markdown-only constructs (fenced/indented code, tables, lists)
+ * keep their meaning, so an HTML sample inside a code fence is displayed
+ * rather than spliced. The dispatch this replaces counted tag-shaped LINES and
+ * took the source branch above 30% of them, which got that case wrong — it
+ * spliced hidden-element examples out of documentation code blocks.
+ *
+ * Character data is judged by its DECODED value, as a renderer sees it: the
+ * ignored `<html>`/`<head>`/`<body>` tags of a full page leave their
+ * surrounding newlines merged into one text node, and `&nbsp;` between two
+ * elements is whitespace on the page.
+ * @param {string} text
+ * @returns {any}
+ */
+function htmlSourceTree(text) {
+  if (hasMarkdownCode(text)) return null;
+  const tree = parseFragment(text);
+  let sawElement = false;
+  // Only ROOT children can hold character data outside an element; everything
+  // deeper is by construction inside one.
+  for (const node of tree.children) {
+    if (node.type === "element") sawElement = true;
+    // Comments and the doctype are markup, not character data.
+    else if (node.type === "text" && node.value.trim() !== "") return null;
+  }
+  return sawElement ? tree : null;
+}
+
+/**
+ * True when `text` is HTML source rather than markdown that merely contains
+ * tags — see `htmlSourceTree` for the definition and the fail-open rationale.
  * @param {string} text
  * @returns {boolean}
  */
 export function looksLikeHtmlSource(text) {
-  const lines = text.split("\n");
-  if (lines.length < 5) return false;
-  let htmlLines = 0;
-  for (const line of lines) {
-    if (/<\/?[a-zA-Z][^<>]*>/.test(line)) htmlLines++;
-  }
-  return htmlLines / lines.length > 0.3;
+  return htmlSourceTree(text) !== null;
 }
 
 /**
@@ -1740,9 +1823,10 @@ export function sanitizeHtml(text) {
   /** @type {{ ranges: Array<{start: number, end: number, kind: "comment" | "hidden"}>, warned: ReturnType<typeof newWarned> }} */
   let scan;
   try {
-    scan = looksLikeHtmlSource(text)
-      ? scanHtmlFragment(text)
-      : scanMarkdown(text);
+    // One parse decides the branch AND feeds it, so the source branch does not
+    // tokenize the input twice.
+    const sourceTree = htmlSourceTree(text);
+    scan = sourceTree ? scanFragmentTree(text, sourceTree) : scanMarkdown(text);
   } catch {
     // The parse/visit blew up (stack overflow on pathological nesting, or any
     // other parser error). Fail CLOSED at this boundary so `sanitize`/
@@ -2233,7 +2317,7 @@ function multiUrlAttr(value) {
  * @returns {Array<{ url: string, isImage: boolean, context: "resource" | "form" | "refresh" }>}
  */
 function extractHtmlUrls(text) {
-  const tree = unified().use(rehypeParse, { fragment: true }).parse(text);
+  const tree = parseFragment(text);
   /** @type {Array<{ url: string, isImage: boolean, context: "resource" | "form" | "refresh" }>} */
   const urls = [];
   visit(tree, "element", (/** @type {any} */ node) => {
