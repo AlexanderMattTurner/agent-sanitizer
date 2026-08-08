@@ -8,6 +8,15 @@ adhere to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+## [2.18.1] - 2026-08-08
+
+### Fixed
+
+- Fixed release canary incorrectly reporting its own crash as a release finding.
+- Fixed version pin synchronization in install scripts.
+- Fixed health sweep timing to run after each scheduled job it reports on.
+- Sweep the default branch nightly instead of every two hours for more efficient monitoring.
+
 ## [2.18.0] - 2026-08-07
 
 ### Added
