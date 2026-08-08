@@ -35,6 +35,22 @@ table](./README.md#entry-points) maps each to its import.
   Sinhala) or inside an emoji ZWJ sequence. The carve-out fires only when **both**
   neighbors clearly belong to the context, and it is disabled once the total
   invisible count crosses a scatter floor—over-stripping beats under-stripping.
+- **Blank fillers doing real work in their own script**: the Braille blank
+  (U+2800) beside a real cell, a Hangul filler beside a real jamo/syllable. A
+  _run_ of fillers has only fillers for neighbors, so it fails the anchor and is
+  stripped. Because U+2800 _is_ the word space of Unicode Braille and a Hangul
+  filler completes a defective syllable, these are far denser in genuine text
+  than joiners are, so they carry their own document-wide allowance—one
+  preserved blank per two visible anchor-script characters, above a floor—rather
+  than drawing on the joiner/selector preserve budget. The allowance is counted
+  per script (a blank never anchors cross-script, so Korean prose must not fund
+  a Braille channel). Past that ratio no blank of that script is preserved
+  (never half-spaced) and all of them count as payload, which is the density an
+  alternating `syllable filler …` channel needs. Contracted (grade-2) Braille
+  sits closest to the boundary: alphabet wordsigns are single cells, so a
+  passage of mostly one-cell words approaches 1:1 and is stripped like the
+  channel—an accepted residual false positive inherent to a density rule, not a
+  gap, and not worth widening the ratio to reach.
 
 **Reassembly hardening.** The two passes feed each other in _both_ directions:
 stripping an invisible char can reconstitute an ANSI escape its split had
@@ -231,6 +247,56 @@ are load-bearing and **fail closed**:
 
 File access and the redactor are injected via `io`; the package performs no I/O
 of its own and bundles no secret engine.
+
+`MultiEdit` is a rehydration candidate but never re-anchored: its edits apply
+sequentially, each against the result of the previous, which the span machinery
+(one `old_string` against one static view) cannot model. A MultiEdit against a
+file whose view equals disk passes through untouched (the common case); one
+against a divergent file is **denied** with use-single-Edit guidance — an
+unguarded pass-through there would be both a silent clobber and the same
+extraction oracle the Edit path's hidden-span rule closes.
+
+## Placeholder-clobber guards (hooks layer)
+
+Rehydration re-anchors only Edit/Write, so every other write path — a shell
+heredoc, `sed -i`/`tee`, an MCP file tool — persists a copied `[REDACTED…]`
+placeholder literally, destroying the secret it stands for; and a Write that
+simply **drops** a secret line never carries a placeholder at all. The Claude
+hooks close these around the package's core, favoring precision (a false
+positive costs a sentence of context, never a mangled input):
+
+- **Grammar, not prefix.** Detection matches the exact placeholder language
+  (`claude-hooks/lib/placeholder-grammar.mjs`, mirrored from the Python
+  producer `placeholders.py` and pinned to it by a contract test), never the
+  bare `[REDACTED` prefix — `grep "\[REDACTED"` and `[REDACTED…]` prose are
+  not placeholders. It lives in the hooks layer, not the engine, so the
+  plugin's pinned-engine bundle ships it immediately.
+- **Doctrine at redaction time.** The Layer-4 warning that introduces
+  placeholders into the model's view now states that they rehydrate only via
+  Edit/Write — removing the information asymmetry that made the shell
+  route-around an honest mistake.
+- **Advisory on non-rehydrated tools (context-only, never a verdict).** A
+  Bash/MCP/unknown-tool input carrying a placeholder gets one PreToolUse
+  context line explaining the hazard. It cannot tell a write from a read, so
+  it never blocks.
+- **On-disk tripwire (warning-only).** A `Read` whose RAW bytes — before this
+  session's redaction — already contain placeholder text warns that an earlier
+  write may have clobbered a secret. Detection rides the read, the one choke
+  point every write path (including other agents) eventually crosses; reveal
+  sidecars are excluded, since their bytes are redacted before persisting.
+- **Clobber-by-omission confirm (`lib/secret-drop-guard.mjs`).** A Write to an
+  existing, **git-untracked** file (no git recovery path — `.env` and its kin,
+  or a file outside any repository) whose redacted secrets vanish from the
+  final, post-rehydration content is denied once with the reason; re-issuing
+  the identical Write confirms and passes. The confirmation is the model's
+  deliberate retry — never a human permission prompt — held as a
+  consumed-on-use, TTL-bounded sentinel (keyed to path + content + the dropped
+  values) via the same squat-resistant `$TMPDIR` helpers as the invisible-char
+  gate. Tracked files, secret-free files, failed git probes and unmappable
+  views all skip the guard (fail open). "Tracked" approximates "recoverable":
+  an uncommitted secret line on a tracked file is an accepted gap — the
+  committed content survives, and probing index-vs-worktree state would trade
+  precision for recall.
 
 ## Failure posture (`AGENT_SANITIZER_FAIL_OPEN`)
 

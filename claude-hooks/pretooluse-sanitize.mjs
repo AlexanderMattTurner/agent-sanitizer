@@ -54,6 +54,8 @@ import {
   authoredContext,
 } from "./lib/authored-content.mjs";
 import { redactViaDaemon } from "./lib/redactor-client.mjs";
+import { withSecretDropGuard } from "./lib/secret-drop-guard.mjs";
+import { placeholderNotice } from "./lib/placeholder-grammar.mjs";
 import { bestEffortTrace, trace, TraceEvent } from "./lib/trace.mjs";
 
 const HOOK_NAME = "pretooluse-sanitize";
@@ -140,13 +142,15 @@ const redactorIo = {
 
 /**
  * Default Layer-4 rehydrator: the package's rehydrateRedacted bound to the
- * redactor-daemon io. Hoisted (not an inline default-param arrow) so tests can
- * still inject a fake as the second argument to buildPreToolUseResponse.
- * @param {string} tool
- * @param {any} toolInput
+ * redactor-daemon io, composed (via withSecretDropGuard, where the ordering
+ * logic lives and is unit-tested) with the clobber-by-omission guard. Hoisted
+ * (not an inline default-param arrow) so tests can still inject a fake as the
+ * second argument to buildPreToolUseResponse.
  */
-const defaultRehydrate = (tool, toolInput) =>
-  rehydrateRedacted(tool, toolInput, redactorIo);
+const defaultRehydrate = withSecretDropGuard(
+  (tool, toolInput) => rehydrateRedacted(tool, toolInput, redactorIo),
+  redactorIo,
+);
 
 /**
  * Trace the response on the way out — "noop" (clean pass-through), "deny",
@@ -301,6 +305,15 @@ export async function buildPreToolUseResponse(
       permissionDecisionReason: deny,
     });
   contexts.push(...layerContexts);
+
+  // Placeholder advisory for tools OUTSIDE the rehydrated set (Bash, MCP,
+  // anything unknown): rehydration cannot re-anchor these, so a placeholder in
+  // their input would be persisted literally by any write they perform. It
+  // cannot tell a write from a read, so it is context-only — never a verdict
+  // (see placeholderNotice). Evaluated on the pipeline's FINAL input, matching
+  // what the tool will actually receive.
+  const notice = placeholderNotice(tool, current);
+  if (notice !== null) contexts.push(notice);
 
   return emitTraced(
     emitTrace,
