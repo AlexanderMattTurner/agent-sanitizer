@@ -1378,6 +1378,44 @@ describe("stripInvisible: blank-filler carve-out", () => {
     assert.deepEqual(found, [CATEGORY.BLANK_FILLERS]);
   });
 
+  it("preserves a filler anchored on ONE side only, at either edge", () => {
+    // The counterexample a property run found (seed -1494323434): every fixed
+    // case above anchors the filler on BOTH sides, so a filler at the very start
+    // or end of the text — one neighbour, and it is the string edge — went
+    // untested. Pinned here so the coverage no longer depends on a lucky seed.
+    for (const filler of [0x115f, 0x1160, 0x3164, 0xffa0]) {
+      for (const input of [cp(filler) + cp(0xac00), cp(0xac00) + cp(filler)]) {
+        const { cleaned, found } = stripInvisibleWithReport(input);
+        assert.equal(cleaned, input, JSON.stringify(input));
+        assert.deepEqual(found, [], JSON.stringify(input));
+      }
+      // Positive marker: the SAME filler with no Hangul anywhere is stripped, so
+      // the assertions above pin the anchor rule and not a blanket exemption.
+      const orphan = `a${cp(filler)}b`;
+      const { cleaned, found } = stripInvisibleWithReport(orphan);
+      assert.equal(cleaned, "ab", JSON.stringify(orphan));
+      assert.deepEqual(found, [CATEGORY.BLANK_FILLERS], JSON.stringify(orphan));
+    }
+  });
+
+  it("leaves ordinary Korean prose completely untouched", () => {
+    // The negative corpus CLAUDE.md asks every detector to carry: real text in
+    // the script this carve-out serves must produce ZERO findings, so the
+    // carve-out cannot be tightened into mangling legitimate content.
+    const corpus = [
+      "안녕하세요, 반갑습니다.",
+      "한국어 텍스트를 처리합니다",
+      "서울특별시 강남구",
+      "훈민정음(訓民正音)은 1443년에 창제되었다.",
+      "김치찌개 2인분 주세요!",
+    ];
+    for (const text of corpus) {
+      const { cleaned, found } = stripInvisibleWithReport(text);
+      assert.equal(cleaned, text, JSON.stringify(text));
+      assert.deepEqual(found, [], JSON.stringify(text));
+    }
+  });
+
   it("a blank filler between two joiners does not hide the joiner run (idempotent)", () => {
     // م ZWJ <blank> ZWJ م — the blank is payload; stripping it makes the two
     // joiners adjacent. The joiner-run must be detected in a SINGLE pass (both
@@ -1809,8 +1847,24 @@ describe("property: stripInvisible invariants", () => {
         // After stripping, the only STRIP-class chars left must be ZWNJ/ZWJ
         // (carve-out), a presentation selector kept on a pictograph/modifier
         // base (the carve-out preserves VS15/VS16 directly after one — 🏻︎ is
-        // a visible glyph, not a hidden selector run), or a single leading BOM.
+        // a visible glyph, not a hidden selector run), a blank filler anchored
+        // to a script-appropriate visible neighbour, or a single leading BOM.
         const selectorBase = /^[\p{Extended_Pictographic}\p{Emoji_Modifier}]$/u;
+        // The blank-filler carve-out, stated as the SPEC rather than copied
+        // from the implementation: U+2800 survives beside a real Braille cell
+        // and a Hangul filler beside a real jamo/syllable — one anchor on
+        // EITHER side is enough, which is the case the fixed-corpus tests above
+        // (both of which anchor on both sides) never covered. A filler cannot
+        // anchor another filler, so a run still fails.
+        const blankFillers = new Set([0x115f, 0x1160, 0x3164, 0xffa0]);
+        const anchorsHangul = (ch) =>
+          !!ch &&
+          !blankFillers.has(/** @type {number} */ (ch.codePointAt(0))) &&
+          /\p{Script=Hangul}/u.test(ch);
+        const anchorsBraille = (ch) =>
+          !!ch &&
+          ch.codePointAt(0) !== 0x2800 &&
+          /\p{Script=Braille}/u.test(ch);
         for (let i = 0; i < cleaned.length; i++) {
           const ch = cleaned[i];
           STRIP.lastIndex = 0;
@@ -1824,10 +1878,18 @@ describe("property: stripInvisible invariants", () => {
             (code === 0xfe0e || code === 0xfe0f) &&
             i > 0 &&
             selectorBase.test(cleaned.slice(baseStart, i));
+          const prev = cleaned[i - 1] ?? "";
+          const next = cleaned[i + 1] ?? "";
+          const keptFiller =
+            (code === 0x2800 &&
+              (anchorsBraille(prev) || anchorsBraille(next))) ||
+            (blankFillers.has(/** @type {number} */ (code)) &&
+              (anchorsHangul(prev) || anchorsHangul(next)));
           const ok =
             code === 0x200c ||
             code === 0x200d ||
             keptSelector ||
+            keptFiller ||
             (code === 0xfeff && i === 0);
           assert.ok(ok, `unexpected residual invisible U+${code.toString(16)}`);
         }
