@@ -7,19 +7,28 @@
  * main are pinned by name (non-vacuity: an emptied map cannot pass).
  *
  * The map is also checked in the OTHER direction, which is what keeps it from
- * rotting: `scanGuardedData()` below reads every `node --test` file (and the
+ * rotting: `scanGuardedData()` below parses every `node --test` file (and the
  * repo modules those tests import) and resolves the repo data files they open.
  * Every data file so found must be either registered in `pairs` or listed in
  * NOT_GUARDED with a reason — a partition. Without that the map is a
  * hand-maintained list one new contract test away from its next gap, and a data
  * file whose guard test exists but is unpaired breaks only in full CI, after
  * the commit the hook was supposed to block.
+ *
+ * The resolution below runs on acorn's AST and Node's own module resolver, not
+ * on regexes over source text: "validate against the actual tokenizer/parser,
+ * not a hand-rolled approximation" (CLAUDE.md, Code Style). A bracket-matching
+ * approximation has to keep tracking the language — regex literals holding
+ * unbalanced quotes, template segments, shadowed bindings — and each gap it
+ * develops silently narrows the partition assertions that depend on it.
  */
 import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
-import { dirname, extname, join, normalize } from "node:path";
+import { dirname, extname, join, normalize, relative, sep } from "node:path";
+import { fileURLToPath } from "node:url";
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
+import { parse } from "acorn";
 
 const repoRoot = execFileSync("git", ["rev-parse", "--show-toplevel"], {
   encoding: "utf8",
@@ -73,205 +82,278 @@ const DATA_EXTENSIONS = new Set([
 ]);
 const MODULE_EXTENSIONS = new Set([".cjs", ".js", ".mjs"]);
 
-/** Slice from the bracket at `start` to its match, skipping string literals. */
-function balanced(text, start) {
-  const open = text[start];
-  const close = { "(": ")", "[": "]", "{": "}" }[open];
-  let depth = 0;
-  for (let i = start; i < text.length; i++) {
-    const c = text[i];
-    if (c === '"' || c === "'" || c === "`") {
-      i++;
-      while (i < text.length && text[i] !== c) i += text[i] === "\\" ? 2 : 1;
-      continue;
-    }
-    if (c === open) depth++;
-    else if (c === close && --depth === 0)
-      return { inner: text.slice(start + 1, i), end: i };
-  }
+// Node types that open a lexical scope. Shadowing has to be honoured or a
+// per-test `const plugin = stagePlugin(t)` temp dir reads as the repo's
+// `plugin/` directory — the false positive that would register a temp path as
+// though it were committed data.
+const SCOPE_NODES = new Set([
+  "ArrowFunctionExpression",
+  "BlockStatement",
+  "CatchClause",
+  "ForInStatement",
+  "ForOfStatement",
+  "ForStatement",
+  "FunctionDeclaration",
+  "FunctionExpression",
+]);
+
+/**
+ * Nearest binding for `name` in `kind` ("vars" for paths, "strings" for string
+ * constants); null both when unresolvable and when unbound, since a shadowing
+ * binding whose value is unknown must not fall through to an outer one.
+ */
+function lookup(scope, kind, name) {
+  for (let s = scope; s; s = s.parent)
+    if (s[kind].has(name)) return s[kind].get(name);
   return null;
 }
 
-/** Split a call's argument list on top-level commas. */
-function splitArgs(inner) {
-  const args = [];
-  let depth = 0;
-  let cur = "";
-  for (let i = 0; i < inner.length; i++) {
-    const c = inner[i];
-    if (c === '"' || c === "'" || c === "`") {
-      let j = i + 1;
-      while (j < inner.length && inner[j] !== c) j += inner[j] === "\\" ? 2 : 1;
-      cur += inner.slice(i, j + 1);
-      i = j;
-      continue;
-    }
-    if ("([{".includes(c)) depth++;
-    if (")]}".includes(c)) depth--;
-    if (c === "," && depth === 0) {
-      args.push(cur.trim());
-      cur = "";
-      continue;
-    }
-    cur += c;
-  }
-  if (cur.trim()) args.push(cur.trim());
-  return args;
+/** The string a node denotes, or null if it is not a static string. */
+function staticString(node, scope) {
+  if (node.type === "Identifier") return lookup(scope, "strings", node.name);
+  if (node.type === "Literal")
+    return typeof node.value === "string" ? node.value : null;
+  if (node.type !== "TemplateLiteral" || node.expressions.length > 0)
+    return null;
+  return node.quasis[0].value.cooked;
 }
 
-const STRING_LITERAL = /^(?:"([^"\\]*)"|'([^'\\]*)')$/;
-const IDENTIFIER = /^[A-Za-z_$][\w$]*$/;
-const GIT_ROOT_CALL =
-  /^execFileSync\(\s*"git"\s*,\s*\[\s*"rev-parse"\s*,\s*"--show-toplevel"\s*,?\s*\][\s\S]*\)(?:\.trim\(\))?$/;
-const IMPORT_META_URL =
-  /^(?:fileURLToPath\(\s*)?new URL\(\s*(?:"([^"\\]*)"|'([^'\\]*)')\s*,\s*import\.meta\.url\s*\)\s*\)?$/;
+/** `import.meta` itself. */
+const isImportMeta = (node) =>
+  node.type === "MetaProperty" &&
+  node.meta.name === "import" &&
+  node.property.name === "meta";
+
+/** Dotted name of a callee (`join`, `path.join`, `import.meta.resolve`). */
+function calleeName(node) {
+  if (node.type === "Identifier") return node.name;
+  if (node.type !== "MemberExpression" || node.computed) return null;
+  if (isImportMeta(node.object)) return `import.meta.${node.property.name}`;
+  if (node.object.type !== "Identifier") return null;
+  return `${node.object.name}.${node.property.name}`;
+}
+
+/** `execFileSync("git", ["rev-parse", "--show-toplevel"], …)`. */
+function isGitRootCall(node, scope) {
+  const [command, args] = node.arguments;
+  return (
+    calleeName(node.callee) === "execFileSync" &&
+    command !== undefined &&
+    staticString(command, scope) === "git" &&
+    args?.type === "ArrayExpression" &&
+    staticString(args.elements[0] ?? {}, scope) === "rev-parse" &&
+    staticString(args.elements[1] ?? {}, scope) === "--show-toplevel"
+  );
+}
 
 /**
- * Resolve a path expression to a repo-relative path, or null when it cannot be
- * resolved statically. Null is the safe answer and the common one: a template
- * literal, a computed segment or an unknown base yields no registry entry
- * rather than a guessed one (precision over recall — a wrong entry pairs a data
- * file with a test that never reads it, which is worse than no entry at all).
+ * Resolve a bare specifier through Node's REAL resolver — the package's own
+ * `exports` map, which is what a consumer's import performs — and return it
+ * repo-relative, or null when it lands outside the repo.
+ */
+function resolveBareSpecifier(specifier) {
+  let url;
+  try {
+    url = import.meta.resolve(specifier);
+  } catch {
+    // A specifier that does not resolve (tests assert on those too) is exactly
+    // the "no path" case every other unresolvable form returns null for.
+    return null;
+  }
+  if (!url.startsWith("file:")) return null;
+  const absolute = fileURLToPath(url);
+  return absolute.startsWith(repoRoot + sep)
+    ? relative(repoRoot, absolute)
+    : null;
+}
+
+/**
+ * Resolve an expression to a repo-relative path, or null when it is not a
+ * statically-known repo path.
  *
- * @param {string} expr source text of the expression
+ * Null is the safe answer and the common one: a computed segment, an unknown
+ * base or a shadowed binding yields no registry entry rather than a guessed one
+ * (precision over recall — a wrong entry pairs a data file with a test that
+ * never reads it, which is worse than no entry at all).
+ *
+ * @param {object} node acorn AST node
  * @param {string} file repo-relative path of the module it appears in
- * @param {Map<string, string>} scope identifiers already resolved to paths
+ * @param {object} scope lexical scope chain of resolved bindings
  * @returns {string|null} repo-relative path ("" is the repo root)
  */
-function resolvePathExpression(expr, file, scope) {
-  const e = expr.trim().replace(/\s+/g, " ");
-  if (IDENTIFIER.test(e)) return scope.get(e) ?? null;
-  if (e === "fileURLToPath(import.meta.url)") return file;
-  if (GIT_ROOT_CALL.test(e)) return "";
-  const url = e.match(IMPORT_META_URL);
-  if (url) return normalize(join(dirname(file), url[1] ?? url[2]));
-  if (!/^(?:path\.)?(?:dirname|join|resolve)\(/.test(e)) return null;
-  const bracket = balanced(e, e.indexOf("("));
-  // A trailing `.slice(…)`, `+ suffix`, … means the value is more than this call.
-  if (!bracket || bracket.end !== e.length - 1) return null;
-  const args = splitArgs(bracket.inner);
-  if (args.length === 0) return null;
-  const base = resolvePathExpression(args[0], file, scope);
+function resolvePath(node, file, scope) {
+  if (node.type === "Identifier") return lookup(scope, "vars", node.name);
+  if (node.type === "MemberExpression" && isImportMeta(node.object)) {
+    if (node.property.name === "url" || node.property.name === "filename")
+      return file;
+    return node.property.name === "dirname" ? dirname(file) : null;
+  }
+  if (node.type === "NewExpression") {
+    const [specifier, base] = node.arguments;
+    const literal =
+      specifier === undefined ? null : staticString(specifier, scope);
+    const relativeToThisFile =
+      base?.type === "MemberExpression" &&
+      isImportMeta(base.object) &&
+      base.property.name === "url";
+    if (calleeName(node.callee) !== "URL" || literal === null) return null;
+    return relativeToThisFile ? normalize(join(dirname(file), literal)) : null;
+  }
+  if (node.type !== "CallExpression") return null;
+  if (isGitRootCall(node, scope)) return "";
+  // `execFileSync(…).trim()`: the trimmed value is the same path. Checked
+  // before calleeName(), which only names simple `a.b()` callees.
+  if (
+    node.callee.type === "MemberExpression" &&
+    !node.callee.computed &&
+    node.callee.property.name === "trim" &&
+    node.arguments.length === 0
+  )
+    return resolvePath(node.callee.object, file, scope);
+  const name = calleeName(node.callee);
+  if (name === "import.meta.resolve") {
+    const specifier =
+      node.arguments[0] && staticString(node.arguments[0], scope);
+    // A relative specifier would resolve against THIS file, not the module the
+    // AST came from, so only bare specifiers are answered.
+    return specifier === null ||
+      specifier === undefined ||
+      /^[./]/.test(specifier)
+      ? null
+      : resolveBareSpecifier(specifier);
+  }
+  if (name === "fileURLToPath")
+    return node.arguments.length === 1
+      ? resolvePath(node.arguments[0], file, scope)
+      : null;
+  const bare = name?.replace(/^path\./, "");
+  if (bare === "dirname")
+    return node.arguments.length === 1
+      ? mapPath(resolvePath(node.arguments[0], file, scope), dirname)
+      : null;
+  if (bare !== "join" && bare !== "resolve") return null;
+  const base = resolvePath(node.arguments[0] ?? {}, file, scope);
   if (base === null) return null;
-  if (/^(?:path\.)?dirname\(/.test(e))
-    return args.length === 1 ? dirname(base) : null;
   const segments = [];
-  for (const arg of args.slice(1)) {
-    const literal = arg.match(STRING_LITERAL);
-    if (!literal) return null;
-    segments.push(literal[1] ?? literal[2]);
+  for (const argument of node.arguments.slice(1)) {
+    const literal = staticString(argument, scope);
+    if (literal === null) return null;
+    segments.push(literal);
   }
   return normalize(join(base, ...segments));
 }
 
+const mapPath = (path, fn) => (path === null ? null : fn(path));
+
+/** Every identifier a binding pattern introduces. */
+function patternNames(node, out = []) {
+  if (node.type === "Identifier") out.push(node.name);
+  if (node.type === "ObjectPattern")
+    for (const p of node.properties)
+      patternNames(p.type === "RestElement" ? p.argument : p.value, out);
+  if (node.type === "ArrayPattern")
+    for (const e of node.elements) if (e) patternNames(e, out);
+  if (node.type === "AssignmentPattern") patternNames(node.left, out);
+  if (node.type === "RestElement") patternNames(node.argument, out);
+  return out;
+}
+
 /**
- * Map every `const` in `file` that names a path to that path.
- *
- * Bindings are collected flat, so a name declared twice — the classic case is a
- * module-level `const plugin = join(ROOT, "plugin")` beside a per-test
- * `const plugin = stagePlugin(t)` pointing at a temp dir — is AMBIGUOUS. Those
- * names are banned and the pass repeats, because anything derived from a banned
- * name is unsound too. Banning rather than guessing is what stops a temp-dir
- * path from being registered as though it were repo data.
+ * Walk `node`, recording every repo path it names and binding the `const`s that
+ * hold one. Paths are collected from variable initialisers and call arguments:
+ * that is where a test names the data it opens, whether it opens it directly or
+ * hands the path to a helper.
  */
-function collectPathBindings(file, text, imported) {
-  // Terminates: every repeat adds at least one name to `banned`, which is
-  // bounded by the file's distinct `const` names.
-  const banned = new Set();
-  for (;;) {
-    const scope = new Map(imported);
-    const resolutions = new Map();
-    for (const m of text.matchAll(/\bconst\s+([A-Za-z_$][\w$]*)\s*=\s*/g)) {
-      const rest = text.slice(m.index + m[0].length);
-      const end = rest.indexOf(";");
-      const resolved =
-        banned.has(m[1]) || end === -1
-          ? null
-          : resolvePathExpression(rest.slice(0, end), file, scope);
-      if (!resolutions.has(m[1])) resolutions.set(m[1], new Set());
-      resolutions.get(m[1]).add(resolved);
-      if (resolved !== null) scope.set(m[1], resolved);
+function visit(node, scope, ctx) {
+  if (node.type === "VariableDeclarator") {
+    const names = patternNames(node.id);
+    // A destructuring pattern binds names whose values this resolver does not
+    // track, so they bind to null and shadow anything of the same name outside.
+    const single = names.length === 1 && node.init;
+    const path = single ? resolvePath(node.init, ctx.file, scope) : null;
+    if (node.init) {
+      if (path !== null) ctx.refs.add(path);
+      visit(node.init, scope, ctx);
     }
-    const ambiguous = [...resolutions]
-      .filter(
-        ([name, values]) =>
-          !banned.has(name) && (values.size > 1 || values.has(null)),
-      )
-      .map(([name]) => name);
-    for (const name of ambiguous) {
-      banned.add(name);
-      scope.delete(name);
+    for (const name of names) {
+      scope.vars.set(name, path);
+      scope.strings.set(name, single ? staticString(node.init, scope) : null);
     }
-    // A name derived from one banned this round still holds its stale value,
-    // so re-resolve until a whole pass finds nothing new to ban.
-    if (ambiguous.length === 0) return scope;
+    return;
   }
-}
+  if (node.type === "CallExpression" || node.type === "NewExpression")
+    for (const argument of node.arguments) {
+      const path = resolvePath(argument, ctx.file, scope);
+      if (path !== null) ctx.refs.add(path);
+    }
+  if (node.type === "FunctionDeclaration" && node.id)
+    scope.vars.set(node.id.name, null);
 
-/** Repo-relative paths this module names: path bindings plus call arguments. */
-function collectPathReferences(file, text, scope) {
-  const found = new Set(scope.values());
-  for (const m of text.matchAll(/\b[A-Za-z_$][\w$.]*\s*\(/g)) {
-    const bracket = balanced(text, m.index + m[0].length - 1);
-    if (!bracket) continue;
-    for (const arg of splitArgs(bracket.inner)) {
-      const resolved = resolvePathExpression(arg, file, scope);
-      if (resolved !== null) found.add(resolved);
-    }
-  }
-  for (const m of text.matchAll(/from\s*"(\.[^"]+\.json)"/g))
-    found.add(normalize(join(dirname(file), m[1])));
-  return found;
-}
+  const inner = SCOPE_NODES.has(node.type)
+    ? { vars: new Map(), strings: new Map(), parent: scope }
+    : scope;
+  if (node.params)
+    for (const param of node.params)
+      for (const name of patternNames(param)) {
+        inner.vars.set(name, null);
+        inner.strings.set(name, null);
+      }
 
-/** Repo-local module imports of `file`, with the binding names they pull in. */
-function collectImports(file, text) {
-  const imports = [];
-  for (const m of text.matchAll(
-    /import\s+([\s\S]*?)\s+from\s*"(\.[^"]+)"|import\s*"(\.[^"]+)"/g,
-  )) {
-    const target = normalize(join(dirname(file), m[2] ?? m[3]));
-    if (!MODULE_EXTENSIONS.has(extname(target)) || !tracked.has(target))
-      continue;
-    const names = [];
-    const braces = (m[1] ?? "").match(/\{([\s\S]*)\}/);
-    if (braces)
-      for (const part of braces[1].split(","))
-        if (part.trim())
-          names.push(
-            part
-              .trim()
-              .split(/\s+as\s+/)
-              .map((s) => s.trim()),
-          );
-    imports.push({ target, names });
+  for (const value of Object.values(node)) {
+    const children = Array.isArray(value) ? value : [value];
+    for (const child of children)
+      if (child && typeof child.type === "string") visit(child, inner, ctx);
   }
-  return imports;
 }
 
 const analyzed = new Map();
-/** Resolve a module's path bindings, path references and repo-local imports. */
+/** Resolve a module's path bindings, the repo paths it names, and its imports. */
 function analyzeModule(file, stack = new Set()) {
   const cached = analyzed.get(file);
   if (cached) return cached;
   // Seeded before recursion so an import cycle terminates with an empty scope
   // (a false negative) instead of recursing forever.
-  const result = { scope: new Map(), references: new Set(), deps: [] };
+  const result = {
+    vars: new Map(),
+    strings: new Map(),
+    refs: new Set(),
+    deps: [],
+  };
   analyzed.set(file, result);
   if (stack.has(file)) return result;
   stack.add(file);
-  const text = readFileSync(join(repoRoot, file), "utf8");
-  const imported = new Map();
-  for (const { target, names } of collectImports(file, text)) {
+
+  const ast = parse(readFileSync(join(repoRoot, file), "utf8"), {
+    ecmaVersion: "latest",
+    sourceType: "module",
+    allowHashBang: true,
+    allowReturnOutsideFunction: true,
+  });
+  const scope = { vars: result.vars, strings: result.strings, parent: null };
+
+  // Imports first, so a binding is resolved wherever the body uses it.
+  for (const node of ast.body) {
+    if (node.type !== "ImportDeclaration") continue;
+    const specifier = node.source.value;
+    if (!specifier.startsWith(".")) continue;
+    const target = normalize(join(dirname(file), specifier));
+    if (!tracked.has(target)) continue;
+    if (DATA_EXTENSIONS.has(extname(target))) result.refs.add(target);
+    if (!MODULE_EXTENSIONS.has(extname(target))) continue;
     const dep = analyzeModule(target, stack);
     result.deps.push(target);
-    for (const [name, alias] of names) {
-      const value = dep.scope.get(name);
-      if (value !== undefined) imported.set(alias ?? name, value);
+    for (const imported of node.specifiers) {
+      if (imported.type !== "ImportSpecifier") continue;
+      // A generator exports the path it writes (`OUTPUT_PATH`) and a config
+      // module exports the directory names its readers join — both are how a
+      // contract test names data it never spells out itself.
+      const path = dep.vars.get(imported.imported.name);
+      const text = dep.strings.get(imported.imported.name);
+      if (path) scope.vars.set(imported.local.name, path);
+      if (text) scope.strings.set(imported.local.name, text);
     }
   }
-  result.scope = collectPathBindings(file, text, imported);
-  result.references = collectPathReferences(file, text, result.scope);
+  visit(ast, scope, { file, refs: result.refs });
   stack.delete(file);
   return result;
 }
@@ -284,8 +366,8 @@ function scanGuardedData() {
     const walk = (file) => {
       if (seen.has(file)) return;
       seen.add(file);
-      const { references, deps } = analyzeModule(file);
-      for (const path of references) {
+      const { refs, deps } = analyzeModule(file);
+      for (const path of refs) {
         if (!DATA_EXTENSIONS.has(extname(path)) || !tracked.has(path)) continue;
         if (!readers.has(path)) readers.set(path, new Set());
         readers.get(path).add(test);
@@ -298,6 +380,12 @@ function scanGuardedData() {
 }
 
 const scanned = scanGuardedData();
+
+// Every path the AST walk resolves today. Pinned exactly rather than as a loose
+// floor: a path that drops out of the scan drops out of the partition and
+// direction assertions with it, so a resolver regression would quietly narrow
+// all of them at once while staying green.
+const RESOLVED_PATH_COUNT = 25;
 
 describe("SSOT guard-pair map", () => {
   it("is non-empty and every mapped path exists in the repo", () => {
@@ -347,14 +435,15 @@ describe("SSOT guard-pair map", () => {
 
 describe("guarded-data scan (the map is a checked projection of the tests)", () => {
   it("still resolves the reads it was written for", () => {
-    // Non-vacuity: the resolver is regex-driven, so a repo-wide switch to some
-    // other path idiom would silently empty the scan and let every assertion
-    // below pass over nothing. These four cover the idioms that matter — a
-    // `join(gitRoot, …)`, a module-relative `join(dirname(fileURLToPath(…)), …)`,
-    // a path exported by an imported generator, and this test's own read.
-    assert.ok(
-      scanned.size >= 15,
-      `scan found only ${scanned.size} guarded data files — the resolver stopped matching`,
+    // Non-vacuity: nothing else notices if the walk stops resolving. These five
+    // cover the idioms that matter — `join(gitRoot, …)`, a module-relative
+    // `join(dirname(fileURLToPath(…)), …)`, a path exported by an imported
+    // generator, a subpath resolved through the package's `exports` map, and
+    // this test's own read.
+    assert.equal(
+      scanned.size,
+      RESOLVED_PATH_COUNT,
+      `scan resolved ${scanned.size} data files, expected ${RESOLVED_PATH_COUNT} — a resolver regression narrows every assertion below, and a genuinely new read means bumping this count in the same commit`,
     );
     for (const [path, reader] of [
       [
@@ -365,6 +454,10 @@ describe("guarded-data scan (the map is a checked projection of the tests)", () 
       [
         "python/agent_sanitizer/data/invisible-charset.json",
         "test/invisible-charset.test.mjs",
+      ],
+      [
+        "python/agent_sanitizer/secrets/data/credential-names.json",
+        "test/credential-names-export.test.mjs",
       ],
       [".hooks/guard-pairs.json", "test/guard-pairs.test.mjs"],
     ]) {
