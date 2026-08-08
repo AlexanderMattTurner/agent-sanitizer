@@ -236,7 +236,7 @@ describe("sanitize: html=true runs Layers 2 & 3", () => {
     assert.match(out.cleaned, /<script>x<\/script>/);
     assert.match(
       out.warnings.join(" "),
-      /Scripting\/resource content present and preserved/,
+      /Scripting\/resource content present and preserved \(1 <script>\)/,
     );
   });
 

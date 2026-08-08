@@ -8,27 +8,31 @@
  * `agent-sanitizer` specifiers onto it. That is what keeps the committed bundle
  * stable across ordinary source changes — it only moves when the pin moves.
  */
-import { build } from "esbuild";
 import { existsSync, readFileSync, mkdirSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+
+import {
+  bundleHardened,
+  bundleTarget,
+} from "../../scripts/lib/bundle-esbuild.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
 /** Repo root (this script lives at plugin/scripts/). */
 const ROOT = resolve(__dirname, "..", "..");
 
+/**
+ * This artifact's entry in the repo-wide bundle list, which owns the esbuild
+ * configuration and the runtime-require hardening.
+ */
+const TARGET = bundleTarget("plugin-hooks");
+
 /** The hook sources the bundle is built from. */
-export const PLUGIN_ENTRY = join(ROOT, "claude-hooks", "plugin-hooks.mjs");
+export const PLUGIN_ENTRY = TARGET.entry;
 
 /** Committed artifact path. */
-export const BUNDLE_PATH = join(
-  ROOT,
-  "plugin",
-  "dist",
-  "hooks",
-  "plugin-hooks.bundle.mjs",
-);
+export const BUNDLE_PATH = TARGET.outfile;
 
 /**
  * Direct requirement the lock is compiled FROM: the PyPI half of the engine
@@ -116,113 +120,20 @@ export function lockedEngineVersion(lockText) {
 }
 
 /**
- * Inline the JSON data files that dependencies pull in through
- * `createRequire(import.meta.url)("…json")`.
- *
- * esbuild inlines the surrounding JS but leaves such a require intact, and it
- * then resolves relative to the BUNDLE — `plugin/dist/…`, which an installed
- * plugin does not have. css-tree reaches for its CSS syntax tables this way, so
- * the hook threw `Cannot find module '../data/patch.json'` on the first HTML
- * tool output: Layer 2 failed closed and every WebFetch result was suppressed
- * rather than sanitized.
- *
- * Rewriting each such require into a static import hands the table to esbuild,
- * which inlines it like any other dependency. Written against the PATTERN, not
- * against the two css-tree files that exhibit it today, so a dependency bump
- * that moves the tables is covered — and assertNoRuntimeRequires below fails the
- * build if any survive regardless.
- */
-const inlineRuntimeJsonRequires = {
-  name: "inline-runtime-json-requires",
-  /** @param {import("esbuild").PluginBuild} build */
-  setup(build) {
-    build.onLoad({ filter: /\.m?js$/, namespace: "file" }, (args) => {
-      if (!args.path.includes("node_modules")) return null;
-      const source = readFileSync(args.path, "utf8");
-      if (!source.includes("createRequire")) return null;
-      const calls = [...source.matchAll(/require\((['"])([^'"]+\.json)\1\)/g)];
-      if (calls.length === 0) return null;
-
-      /** @type {string[]} */
-      const imports = [];
-      let contents = source;
-      calls.forEach(([call, , specifier], index) => {
-        const binding = `__inlinedJson${index}`;
-        imports.push(`import ${binding} from ${JSON.stringify(specifier)};`);
-        contents = contents.replace(call, binding);
-      });
-      return {
-        contents: `${imports.join("\n")}\n${contents}`,
-        loader: "js",
-        resolveDir: dirname(args.path),
-      };
-    });
-  },
-};
-
-// The one runtime require the artifact may keep: confusableScan resolves
-// namespace-guard from the lazy-module registry first and only falls back to
-// require() on the host, where a node_modules exists. Every other survivor
-// means a file the installed plugin does not ship.
-const ALLOWED_RUNTIME_REQUIRES = new Set(["namespace-guard"]);
-
-/**
- * Fail the build on any runtime require the installed plugin could not resolve.
- * This is the general guard: the rewrite above handles the shape we know, and
- * this refuses to ship the shape we do not.
- * @param {string} text
- */
-function assertNoRuntimeRequires(text) {
-  const survivors = [
-    ...new Set(
-      [...text.matchAll(/\brequire\d*\((['"])([^'"]+)\1\)/g)].map((m) => m[2]),
-    ),
-  ].filter((spec) => !ALLOWED_RUNTIME_REQUIRES.has(spec));
-  if (survivors.length > 0)
-    throw new Error(
-      `bundle keeps runtime require() of: ${survivors.join(", ")}. ` +
-        "An installed plugin has no node_modules and no sibling data files, so " +
-        "these throw on first use. Inline them at build time.",
-    );
-}
-
-/**
- * Bundle the plugin entry into a self-contained ESM string. Deterministic: no
- * minify (the shipped bytes stay auditable), `node:` builtins left external
- * (present in every target runtime), store paths normalized. esbuild's output
- * for a given version + inputs is byte-stable, which is what lets the
- * reproducibility test compare committed vs freshly built.
+ * Bundle the plugin entry into a self-contained ESM string, then normalize the
+ * pnpm store paths in esbuild's module labels so the reproducibility test
+ * compares actual code. The esbuild configuration itself — including the
+ * runtime-`require()` inlining and the build-time assertion that none survive —
+ * lives in `scripts/lib/bundle-esbuild.mjs`, shared with the wheel's CLI bundle.
  * @returns {Promise<string>}
  */
 export async function bundlePluginHook() {
   const version = enginePin();
-  const result = await build({
-    entryPoints: [PLUGIN_ENTRY],
-    bundle: true,
-    platform: "node",
-    format: "esm",
-    target: "node22",
-    // The hooks import the engine by its canonical name so the same sources are
-    // publishable as `agent-sanitizer/claude-hooks`; only the bundle resolves
-    // that name to the pinned registry copy.
-    alias: { "agent-sanitizer": "sanitizer-engine" },
-    // Only Node's own builtins may remain as imports in the artifact; everything
-    // else is inlined. A bare (non-node:) import surviving here would mean the
-    // installed plugin needs a node_modules — the exact thing this bundle exists
-    // to avoid — so keep the external set to builtins only.
-    external: ["node:*"],
-    minify: false,
-    legalComments: "none",
-    write: false,
-    logLevel: "silent",
-    plugins: [inlineRuntimeJsonRequires],
-  });
-  const [file] = result.outputFiles;
-  assertNoRuntimeRequires(file.text);
+  const text = await bundleHardened(TARGET);
   return (
     `/**\n * GENERATED by plugin/scripts/build-plugin.mjs — do not edit by hand.\n` +
     ` * Built against agent-sanitizer@${version} from the npm registry.\n */\n` +
-    normalizeModulePaths(file.text)
+    normalizeModulePaths(text)
   );
 }
 

@@ -22,6 +22,14 @@ jobs:
           persist-credentials: false
       - name: Set up uv
         uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39 # v8.2.0
+
+      # check-proto-pollution parses with the real TypeScript compiler API, so
+      # the hook needs the repo's own `typescript` — a `language: system` hook
+      # resolves from node_modules, which a Python-only job does not have. This
+      # keeps package.json the single source of the TS version, rather than
+      # pinning a second copy in additional_dependencies that nothing syncs.
+      - name: Setup base environment
+        uses: ./.github/actions/setup-base-env
       - name: Restore pre-commit cache
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:

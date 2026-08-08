@@ -29,6 +29,7 @@ import {
   alignDeletions,
   resolveSpan,
   rehydrateNewString,
+  makeFileView,
 } from "../src/view-map.mjs";
 import { fcRunOptions } from "./test-helpers.mjs";
 
@@ -60,12 +61,14 @@ function mkView(content, secrets) {
     pairs.push({
       placeholder: hit.placeholder,
       original: hit.value,
-      start: text.length,
+      // CODE-POINT offset, which is what a real `--map` run emits (Python
+      // indexes strings by code point); makeFileView converts it to UTF-16.
+      start: Array.from(text).length,
     });
     text += hit.placeholder;
     last = hit.i + hit.value.length;
   }
-  return { text: text + content.slice(last), pairs };
+  return makeFileView(text + content.slice(last), pairs);
 }
 
 const runOptions = fcRunOptions({ numRuns: 500 });

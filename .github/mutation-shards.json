@@ -8,20 +8,55 @@
     { "id": "joining-type", "file": "src/joining-type.mjs" },
     { "id": "rehydrate", "file": "src/rehydrate.mjs" },
     { "id": "instructions", "file": "src/instructions.mjs" },
-    { "id": "view-map", "file": "src/view-map.mjs" }
+    { "id": "view-map", "file": "src/view-map.mjs" },
+    { "id": "hook-io", "file": "claude-hooks/lib/hook-io.mjs" },
+    {
+      "id": "hook-sanitize-output",
+      "file": "claude-hooks/sanitize-output.mjs"
+    },
+    {
+      "id": "hook-redactor-client",
+      "file": "claude-hooks/lib/redactor-client.mjs"
+    },
+    {
+      "id": "hook-pretooluse",
+      "file": "claude-hooks/pretooluse-sanitize.mjs"
+    },
+    {
+      "id": "hook-scan-invisible",
+      "file": "claude-hooks/scan-invisible-chars.mjs"
+    },
+    { "id": "cli", "file": "bin/sanitize-cli.mjs" }
   ],
   "groups": [
     {
       "id": "confusables-layer1",
-      "mutate": "src/confusables.mjs,src/layer1.mjs"
+      "mutate": "src/confusables.mjs,src/layer1.mjs,src/ansi.mjs"
     },
     {
       "id": "index-prompt-gates",
-      "mutate": "src/index.mjs,src/prompt.mjs,src/gates.mjs,src/cf-charset.mjs"
+      "mutate": "src/index.mjs,src/prompt.mjs,src/gates.mjs,src/cf-charset.mjs,src/warnings.mjs"
     },
     {
       "id": "credential-names",
       "mutate": "src/credential-names.mjs"
+    },
+    {
+      "id": "hook-entrypoints",
+      "mutate": "claude-hooks/sanitize-user-prompt.mjs,claude-hooks/plugin-hooks.mjs"
+    },
+    {
+      "id": "hook-lib-posture",
+      "mutate": "claude-hooks/lib/hook-fault.mjs,claude-hooks/lib/layer-pipeline.mjs"
+    },
+    {
+      "id": "hook-lib-config",
+      "mutate": "claude-hooks/lib/authored-content.mjs,claude-hooks/lib/control-plane.mjs,claude-hooks/lib/env-config.mjs"
+    },
+    {
+      "id": "hook-lib-report",
+      "mutate": "claude-hooks/lib/invisible-alert.mjs,claude-hooks/lib/reveal.mjs,claude-hooks/lib/secret-annotate.mjs,claude-hooks/lib/trace.mjs"
     }
-  ]
+  ],
+  "hookScopeBreak": 30
 }

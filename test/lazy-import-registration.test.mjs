@@ -23,7 +23,27 @@ import { readdirSync, readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
 
-const hooksDir = fileURLToPath(new URL("../claude-hooks", import.meta.url));
+/**
+ * The repo's REAL `claude-hooks/`, even when this test runs inside Stryker's
+ * sandbox.
+ *
+ * Stryker copies the project to `<repoRoot>/.stryker-tmp/sandbox-XXXXXX/` and
+ * rewrites every file in the `--mutate` set there, so `const LAZY_LOADERS = {`
+ * becomes `const LAZY_LOADERS = stryMutAct_9fa48("0") ? {} : (…`. This scan's
+ * `indexOf` then finds nothing, the non-vacuity assertion below fires, and the
+ * whole mutation shard dies in its dry run. The subject of this test is the
+ * source that SHIPS, not the instrumented copy it happens to run beside, so it
+ * climbs back out of the sandbox. `git rev-parse` is not the way to do it —
+ * the sandbox is a plain directory copy, and resolving the root through git
+ * would make this test's meaning depend on the checkout layout instead of on
+ * its own location. Outside a sandbox the path is unchanged.
+ */
+const SANDBOX_MARKER = `${path.sep}.stryker-tmp${path.sep}sandbox-`;
+const sandboxRoot = fileURLToPath(new URL("..", import.meta.url));
+const sandboxAt = sandboxRoot.indexOf(SANDBOX_MARKER);
+const repoRoot =
+  sandboxAt === -1 ? sandboxRoot : sandboxRoot.slice(0, sandboxAt);
+const hooksDir = path.join(repoRoot, "claude-hooks");
 
 /** Every `.mjs` under claude-hooks/, read from disk so a new module is covered. */
 function hookSources() {

@@ -4,17 +4,20 @@
  * `.github/mutation-shards.json` declares which files to mutate: big files under
  * `split` are chunked into `splitEvery`-line slices, the rest are hand-balanced
  * whole-file `groups`. `.github/scripts/expand-shards.mjs` turns that into the
- * concrete matrix at CI time from each file's real length. Stryker's config
- * mutates `src/*.mjs`, but the sharded workflow enumerates files explicitly — so
- * a new source file, or a hole in a split file's slices, would be mutated by
- * nobody and the gate would silently fail open over uncovered code.
+ * concrete matrix at CI time from each file's real length. The sharded workflow
+ * enumerates files explicitly — so a newly shipped file, or a hole in a split
+ * file's slices, would be mutated by nobody and the gate would silently fail
+ * open over uncovered code.
  *
  * This guards both holes against the EXPANDED matrix (what CI actually runs):
- * every `src/*.mjs` file is covered exactly once, and each split file's slices
- * tile [1, EOF) with no gap or overlap, ending open.
+ * every shipped `.mjs` is covered exactly once, and each split file's slices
+ * tile [1, EOF) with no gap or overlap, ending open. The shipped set comes from
+ * `scripts/shipped-sources.mjs` (the package manifest), not from a `readdir` of
+ * `src/` — reading only `src/` is what let the whole `claude-hooks/` layer sit
+ * outside the gate while this test stayed green.
  */
 import { execFileSync } from "node:child_process";
-import { readdirSync, readFileSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
@@ -23,6 +26,7 @@ import {
   expandShards,
   EOF_SENTINEL,
 } from "../.github/scripts/expand-shards.mjs";
+import { shippedSources } from "../scripts/shipped-sources.mjs";
 
 const repoRoot = execFileSync("git", ["rev-parse", "--show-toplevel"], {
   encoding: "utf8",
@@ -57,11 +61,8 @@ describe("mutation shard matrix", () => {
     );
   });
 
-  it("covers exactly the src/*.mjs files Stryker mutates", () => {
-    const onDisk = readdirSync(join(repoRoot, "src"))
-      .filter((f) => f.endsWith(".mjs"))
-      .map((f) => `src/${f}`)
-      .sort();
+  it("covers exactly the .mjs files the package ships", () => {
+    const onDisk = shippedSources(repoRoot);
 
     const inShards = [
       ...new Set(
@@ -72,7 +73,7 @@ describe("mutation shard matrix", () => {
     assert.deepEqual(
       inShards,
       onDisk,
-      "shard file set must equal src/*.mjs (add a `split` entry or `group` when a source file is added/removed)",
+      "shard file set must equal the shipped .mjs set (add a `split` entry or `group` when a published file is added/removed)",
     );
   });
 
