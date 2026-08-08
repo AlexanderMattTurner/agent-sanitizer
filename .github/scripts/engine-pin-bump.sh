@@ -26,7 +26,13 @@ MIN_AGE_HOURS="${MIN_AGE_HOURS:-24}"
 BRANCH_PREFIX="bot/engine-pin-bump"
 
 current="$(node -e 'import("./plugin/scripts/build-plugin.mjs").then((m) => process.stdout.write(m.enginePin()))')"
-latest="$(npm view agent-sanitizer version)"
+# Max stable X.Y.Z from the full version list, NOT `npm view … version`: that
+# reads the `latest` dist-tag, which lags or leads the real max after a partial
+# or aborted publish (the same rule release-canary.sh states). A lagging tag
+# would make this bump silently never fire — the exact failure this exists to
+# fix. npm-max-stable.mjs exits 3 when nothing stable is published, which
+# `set -e` turns into a loud failure.
+latest="$(NPM_VERSIONS="$(npm view agent-sanitizer versions --json)" node .github/scripts/npm-max-stable.mjs)"
 echo "pinned: ${current}; latest published: ${latest}"
 if [ "$current" = "$latest" ]; then
   echo "pin already current"
@@ -62,6 +68,16 @@ if [ -n "$existing" ]; then
   exit 0
 fi
 
+# The branch can outlive its PR: a human closed the PR (GitHub deletes the head
+# branch on merge, not on close), or a run died between the push and
+# `gh pr create`. A fresh commit onto it would be a non-fast-forward rejection,
+# and force-pushing is deliberately not an option here, so fail with the remedy
+# named rather than dying on a raw git error every day.
+if git ls-remote --exit-code --heads origin "$BRANCH" >/dev/null; then
+  echo "branch ${BRANCH} exists on the remote with no open PR; delete it to let the bump re-run" >&2
+  exit 1
+fi
+
 npm pkg set "devDependencies.sanitizer-engine=npm:agent-sanitizer@${latest}"
 # Lockfile only: node_modules stays on the old resolution; the PR's own CI
 # installs fresh. --no-frozen-lockfile because pnpm defaults to frozen in CI,
@@ -83,13 +99,16 @@ git push \
   "HEAD:refs/heads/${BRANCH}"
 
 # A still-open bump PR for an older version is now superseded: close it (with
-# its branch) so exactly one bump PR is ever pending.
+# its branch) so exactly one bump PR is ever pending. --limit 100 because the
+# startswith filter runs in --jq, i.e. AFTER gh truncates to its default page of
+# 30 — an older bump PR could otherwise fall off the page and silently break
+# that invariant.
 while IFS=$'\t' read -r number head; do
   if [ "$head" = "$BRANCH" ]; then continue; fi
   echo "closing superseded bump PR #${number} (${head})"
   gh pr close "$number" --delete-branch \
     --comment "Superseded by the ${latest} bump."
-done < <(gh pr list --state open --json number,headRefName \
+done < <(gh pr list --state open --limit 100 --json number,headRefName \
   --jq ".[] | select(.headRefName | startswith(\"${BRANCH_PREFIX}-\")) | [.number, .headRefName] | @tsv")
 
 gh pr create --head "$BRANCH" \
@@ -101,5 +120,8 @@ gh pr create --head "$BRANCH" \
 Automated bump of the \`sanitizer-engine\` npm alias from ${current} to ${latest} (published ≥ ${MIN_AGE_HOURS}h ago on both npm and PyPI), opened by \`.github/workflows/engine-pin-bump.yaml\`. Only the alias and the lockfile move here; \`plugin-dist-autofix.yaml\` pushes the regenerated \`requirements.in\`/\`requirements.txt\` and dist artifacts onto this branch, and the committed-bundle reproducibility tests gate the merge.
 EOF
   )"
-gh pr merge --auto --merge "$BRANCH"
+# --squash matches every other automated merge here (dependabot-auto-merge,
+# template-sync-automerge); a --merge would also fail outright if merge commits
+# are disabled, leaving an open PR that never lands.
+gh pr merge --auto --squash "$BRANCH"
 echo "bump PR opened and set to auto-merge"
