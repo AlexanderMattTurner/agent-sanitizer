@@ -8,6 +8,17 @@ adhere to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+## [2.19.6] - 2026-08-08
+
+### Fixed
+- HTML parser now correctly routes bare indented code blocks to the markdown branch.
+- HTML-vs-markdown detection now uses the real tokenizer instead of a heuristic tag-line ratio for more accurate parsing.
+- Python wheel CLI bundle is now self-contained.
+- Secrets redaction no longer targets public endpoints; placeholder language support has been closed.
+
+### Changed
+- Test corpus enumeration for HTML now walks the tree instead of using git ls-files.
+
 ## [2.19.4] - 2026-08-08
 
 ### Fixed
