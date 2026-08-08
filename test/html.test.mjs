@@ -1137,13 +1137,15 @@ describe("precision: markdown the old dispatch routed to the source branch", () 
 describe("negative corpus: the repo's own markdown is never HTML source", () => {
   const repoRoot = fileURLToPath(new URL("../", import.meta.url));
   // Enumerated by walking the tree rather than by shelling out to
-  // `git ls-files`: Stryker's mutation sandbox is a COPY of the repo with no
-  // `.git`, so the git call exits non-zero there and the corpus silently
-  // empties — which is how one broken enumeration took every mutation shard
-  // down at once. The skip list is the subset of `.gitignore` that can contain
-  // markdown; without it the walk descends into `node_modules` or a sibling
-  // worktree under `.claude/worktrees` and the corpus becomes whatever happens
-  // to be on disk.
+  // `git ls-files`: Stryker's mutation sandbox is a gitignored directory INSIDE
+  // the repo (`.stryker-tmp/sandbox-*`), so nothing under it is tracked and
+  // `git ls-files` there returns an empty set with exit 0 — the corpus empties
+  // silently rather than failing loudly, which is how one broken enumeration
+  // took every mutation shard down at once. The `docs.length` floor below is
+  // what turns that silence back into a failure. The skip list is the subset of
+  // `.gitignore` that can contain markdown; without it the walk descends into
+  // `node_modules` or a sibling worktree under `.claude/worktrees` and the
+  // corpus becomes whatever happens to be on disk.
   const SKIP_DIRS = new Set([
     ".git",
     ".stryker-tmp",
