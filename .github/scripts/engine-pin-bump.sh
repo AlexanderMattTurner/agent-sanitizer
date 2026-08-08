@@ -58,11 +58,18 @@ fi
 
 # The same both-registries check the reproducibility gate runs, pointed at the
 # candidate instead of the committed pin — one SSOT for "this version is live
-# on npm AND PyPI". Its failure is a defer here, not an error: npm and PyPI
-# land minutes apart.
-if ! .github/scripts/verify-engine-pin.sh "$latest"; then
+# on npm AND PyPI". Only its "absent from a registry" exit (2) is a defer:
+# npm and PyPI land minutes apart. Every other failure (registry 5xx, curl
+# transport error, missing exec bit) propagates loud — swallowing it would
+# make this scheduled job green-and-never-bumping forever, the exact silent
+# failure it exists to fix.
+rc=0
+.github/scripts/verify-engine-pin.sh "$latest" || rc=$?
+if [ "$rc" -eq 2 ]; then
   echo "agent-sanitizer@${latest} is not yet on both registries; deferring to a later run"
   exit 0
+elif [ "$rc" -ne 0 ]; then
+  exit "$rc"
 fi
 
 BRANCH="${BRANCH_PREFIX}-${latest}"
@@ -82,26 +89,32 @@ if git ls-remote --exit-code --heads origin "$BRANCH" >/dev/null; then
   exit 1
 fi
 
-npm pkg set "devDependencies.sanitizer-engine=npm:agent-sanitizer@${latest}"
 # Rotate the workspace's own-package minimumReleaseAge exemption with the pin.
 # pnpm-workspace.yaml deliberately exempts the pinned agent-sanitizer release
 # from the 3-day third-party window (it is built and published from this repo),
 # and tests/test_minimum_release_age.py fails any exclude entry package.json no
 # longer pins — so the entry must move in the same commit as the alias, or the
 # bump PR is either rejected at resolution (release younger than 3 days) or
-# red on that contract test (stale entry). Exact-string edit to preserve the
-# file's comments; fail loud if the expected entry is missing.
-# shellcheck disable=SC2016  # the ${} below is a JS template literal, not shell
+# red on that contract test (stale entry). The edit anchors on the exact YAML
+# list-item line — a bare substring would also rewrite comments or a
+# prerelease entry sharing the pin as a prefix — and requires exactly one
+# occurrence, failing loud otherwise. String surgery rather than a YAML
+# round-trip so the file's comments survive. Runs before `npm pkg set` so a
+# rotation failure leaves the working tree untouched.
+# shellcheck disable=SC2016  # the ${} below are JS template literals, not shell
 node -e '
   const { readFileSync, writeFileSync } = require("node:fs");
   const [file, from, to] = process.argv.slice(1);
+  const entry = (v) => `\n  - agent-sanitizer@${v}\n`;
   const text = readFileSync(file, "utf8");
-  if (!text.includes(from)) {
-    console.error(`${file}: no "${from}" minimumReleaseAgeExclude entry to rotate`);
+  const count = text.split(entry(from)).length - 1;
+  if (count !== 1) {
+    console.error(`${file}: expected exactly one "- agent-sanitizer@${from}" list entry, found ${count}`);
     process.exit(1);
   }
-  writeFileSync(file, text.replaceAll(from, to));
-' pnpm-workspace.yaml "agent-sanitizer@${current}" "agent-sanitizer@${latest}"
+  writeFileSync(file, text.replace(entry(from), entry(to)));
+' pnpm-workspace.yaml "$current" "$latest"
+npm pkg set "devDependencies.sanitizer-engine=npm:agent-sanitizer@${latest}"
 # Lockfile only: node_modules stays on the old resolution; the PR's own CI
 # installs fresh. --no-frozen-lockfile because pnpm defaults to frozen in CI,
 # and updating the lockfile is the whole point here. The rotated exemption
