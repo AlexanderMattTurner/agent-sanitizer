@@ -9,6 +9,9 @@
     { "id": "rehydrate", "file": "src/rehydrate.mjs" },
     { "id": "instructions", "file": "src/instructions.mjs" },
     { "id": "view-map", "file": "src/view-map.mjs" },
+    { "id": "confusables", "file": "src/confusables.mjs" },
+    { "id": "layer1", "file": "src/layer1.mjs" },
+    { "id": "ansi", "file": "src/ansi.mjs" },
     { "id": "hook-io", "file": "claude-hooks/lib/hook-io.mjs" },
     {
       "id": "hook-sanitize-output",
@@ -29,10 +32,6 @@
     { "id": "cli", "file": "bin/sanitize-cli.mjs" }
   ],
   "groups": [
-    {
-      "id": "confusables-layer1",
-      "mutate": "src/confusables.mjs,src/layer1.mjs,src/ansi.mjs"
-    },
     {
       "id": "index-prompt-gates",
       "mutate": "src/index.mjs,src/prompt.mjs,src/gates.mjs,src/cf-charset.mjs"
