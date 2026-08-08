@@ -12,6 +12,7 @@
 import { joiningType, isVirama } from "./joining-type.mjs";
 import { isStandardizedVariant } from "./standardized-variants.mjs";
 import { CF_CODEPOINTS } from "./cf-charset.mjs";
+import { scanAnsi, TOKEN_KIND } from "./ansi.mjs";
 
 // Unicode's Variation_Selector property, whole: the FE00 run, the Mongolian
 // free variation selectors, and the astral E0100 supplement. The Mongolian four
@@ -122,48 +123,32 @@ export const STRIP = new RegExp(
   REGEX_FLAGS,
 );
 
-// SGR (Select Graphic Rendition): colors, bold, reset. The grammar is closed:
-// params are [0-9;:]* and the final byte is `m`, so a match can only restyle
-// text, never reposition the cursor, erase, or smuggle an OSC string. `:` is
-// included alongside `;` because ITU T.416 colon-separated SGR sub-parameters
-// (truecolor `ESC[38:2:255:0:0m`, as emitted by tmux/kitty/mintty) are pure
-// display-only SGR too — excluding them left a benign colon-form sequence
-// misread as non-SGR. A SGR sequence has TWO encodings: the 7-bit `ESC [ … m`
-// and the 8-bit C1 form where a single U+009B (CSI) replaces `ESC [` — spelled
-// here as the `\x9b` escape (never a raw literal byte in source: an
-// undetectable-by-eye invisible byte in a regex literal is a correctness
-// landmine for the next person who touches this line without a hex dump).
-// Both encodings must be recognized — otherwise a C1-introduced
-// `U+009B 31m … 0m` is pure color yet is misread as a non-SGR payload (or,
-// worse, mistaken for SGR-only when its introducer was a C1 CSI that
-// isSgrOnly's ESC-only test never saw). Text is "SGR-only" when removing
-// these leaves no ANSI control introducer at all — a lone or partial escape is
-// therefore not SGR-only.
-// eslint-disable-next-line no-control-regex -- matching ESC-led sequences is the point
-export const SGR_RE = /(?:\x1b\[|\x9b)[0-9;:]*m/g;
-
-// The raw ANSI control introducers isSgrOnly must treat as NON-SGR after SGR
-// removal: 7-bit ESC (U+001B) and the entire 8-bit C1 control block
-// (U+0080–U+009F) — CSI (U+009B), the DCS/SOS/OSC/PM/APC string introducers, and
-// ST. isSgrOnly is honest only if it tests for ALL of them — a C1 cursor-move or
-// erase (`U+009B 2J`) leaves a U+009B, a C1-OSC string (`U+009D … BEL`) leaves a
-// U+009D, and a C1-DCS/APC payload (`U+0090 … ST`) leaves its introducer, after
-// SGR removal; each must read as NOT SGR-only, exactly as their 7-bit `ESC[2J` /
-// `ESC]…` / `ESC P…` twins do. Omitting any would let a residual C1 introducer
-// be misread as SGR-only.
-// eslint-disable-next-line no-control-regex -- the raw introducers are what we test for
-const CONTROL_INTRODUCER_RE = /[\x1b\u0080-\u009f]/;
+// SGR (Select Graphic Rendition) colour matching. Re-exported from ./ansi.mjs —
+// the ONE ANSI grammar, shared with the Layer-1 stripper, which cannot import
+// this module (layer1.mjs imports invisible.mjs, not the other way round). The
+// two used to be separate regexes with DIFFERENT parameter rules, and the looser
+// copy lived here: `ESC[12345m` read as SGR-only (so the operator got a
+// "display-only colour" note) while the stripper could not match it and spliced
+// a visible `[12345m` into the model's view.
+export { SGR_RE } from "./ansi.mjs";
 
 /**
  * True when every ANSI control introducer in `text` belongs to a display-only
- * SGR color sequence (so stripping the ANSI removed only cosmetic styling,
+ * SGR color sequence (so stripping the ANSI removes only cosmetic styling,
  * nothing that could move the cursor, erase, or carry a payload). Recognizes
  * both the 7-bit `ESC[…m` and 8-bit C1 (`U+009B…m`) SGR encodings.
+ *
+ * Answered by the STRIPPER'S OWN tokenizer: scanAnsi emits one token per raw
+ * introducer — 7-bit ESC and the whole C1 block, so a C1 cursor-move
+ * (`U+009B 2J`), a C1-OSC string (`U+009D … BEL`), a C1-DCS/APC payload and a
+ * lone or partial escape each yield a non-SGR token — and the predicate is
+ * "every token is SGR". Because the same scan decides what Layer 1 splices,
+ * this can no longer report "colour only" for bytes the stripper leaves behind.
  * @param {string} text
  * @returns {boolean}
  */
 export function isSgrOnly(text) {
-  return !CONTROL_INTRODUCER_RE.test(text.replace(SGR_RE, ""));
+  return scanAnsi(text).every((token) => token.kind === TOKEN_KIND.SGR);
 }
 
 export const LONG_RUN_THRESHOLD = 10;
