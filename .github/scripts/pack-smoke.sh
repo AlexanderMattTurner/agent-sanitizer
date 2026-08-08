@@ -150,8 +150,12 @@ printf '%s' "$scan_payload" | node "$hook_entry" --hook=scan-invisible-chars >/d
 # deployment gets by setting AGENT_SANITIZER_FAIL_OPEN=0, so a published package
 # whose opt-out stopped working would be shipping a knob that does nothing.
 secret_payload='{"hook_event_name":"PostToolUse","tool_name":"Bash","tool_input":{},"tool_response":{"stdout":"key=AKIAIOSFODNN7EXAMPLE"}}'
+# The secret opt-in is pinned ON here: Layer 4 only exists inside it, and
+# without the knob this check would assert a clean no-op instead of the
+# fail-closed suppression it names.
 closed_out="$(printf '%s' "$secret_payload" |
   AGENT_SANITIZER_FAIL_OPEN=0 \
+    AGENT_SANITIZER_SECRETS_ENABLED=1 \
     _AGENT_SANITIZER_REDACTOR_SOCKET=/nonexistent/redactor.sock \
     _AGENT_SANITIZER_REDACTOR_DAEMON=/nonexistent/agent-secret-redactor-daemon \
     _AGENT_SANITIZER_REDACTOR_WAIT_MS=300 \

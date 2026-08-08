@@ -30,9 +30,12 @@ process.on("exit", () => rmSync(dataDir, { recursive: true, force: true }));
 function hook(event, mode, payload, env = {}) {
   // The posture knob is stripped from the inherited environment, never
   // inherited: a runner that exported it either way would silently turn the
-  // checks below into assertions about the other posture.
+  // checks below into assertions about the other posture. The secret layer's
+  // opt-in is pinned ON for the same reason — this gate exists to exercise the
+  // live engine, and without the knob every check would assert a no-op.
   const inherited = { ...process.env };
   delete inherited.AGENT_SANITIZER_FAIL_OPEN;
+  inherited.AGENT_SANITIZER_SECRETS_ENABLED = "1";
   const res = spawnSync("bash", [LAUNCHER, event, `--hook=${mode}`], {
     input: typeof payload === "string" ? payload : JSON.stringify(payload),
     encoding: "utf8",
@@ -53,10 +56,12 @@ function check(name, condition, detail) {
 }
 
 // ── Provision the pinned engine exactly as SessionStart does ────────────────
-const provision = spawnSync("bash", [
-  join(PLUGIN, "scripts", "provision-redactor.sh"),
-  dataDir,
-]);
+const provision = spawnSync(
+  "bash",
+  [join(PLUGIN, "scripts", "provision-redactor.sh"), dataDir],
+  // The opt-in must be set or the script exits 0 without installing anything.
+  { env: { ...process.env, AGENT_SANITIZER_SECRETS_ENABLED: "1" } },
+);
 if (provision.status !== 0) {
   console.error(
     `provisioning failed (exit ${provision.status}):\n${provision.stderr}`,
