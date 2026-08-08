@@ -48,7 +48,7 @@ describe("classifyPrompt: clean prompts pass", () => {
 
 // ─── note: SGR-only ──────────────────────────────────────────────────────────
 
-describe("classifyPrompt: SGR-only colored text passes with a note", () => {
+describe("classifyPrompt: inert ANSI passes with a note", () => {
   for (const [name, prompt] of [
     ["simple color span", `hello ${ESC}[31mworld${ESC}[0m`],
     ["empty-param reset (CSI m)", `before ${ESC}[m after`],
@@ -61,6 +61,12 @@ describe("classifyPrompt: SGR-only colored text passes with a note", () => {
     // 8-bit C1 CSI SGR (U+009B 31m … U+009B 0m): pure display-only color, just
     // like its 7-bit `ESC[31m` twin, so isSgrOnly classifies it SGR-only → note.
     ["C1 CSI SGR color span", `${C1_CSI}31mhello${C1_CSI}0m`],
+    // A 7-bit ESC that completes no sequence: a log line cut mid-escape, a
+    // stray byte pasted out of a file. It cannot move the cursor, erase, or
+    // open an OSC string — Layer 1 sweeps it and the prompt is usable, so a
+    // BLOCK here is a pure false positive (see isBenignAnsiKinds).
+    ["lone ESC byte (partial sequence)", `hello ${ESC} world`],
+    ["lone ESC between SGR color codes", `${ESC}[31mred${ESC}${ESC}[0m plain`],
   ]) {
     it(`note: ${name}`, () => {
       assert.deepEqual(classifyPrompt(prompt), { action: "note" });
@@ -178,8 +184,14 @@ describe("classifyPrompt: non-SGR ANSI blocks", () => {
     ["cursor up (CSI A)", `${ESC}[3A`],
     ["OSC title-set", `${ESC}]0;owned${BEL}`],
     ["DCS string", `${ESC}Pq#payload${ESC}\\`],
-    ["lone ESC byte (partial sequence)", ESC],
     ["SGR-lookalike with letter param", `${ESC}[31im`],
+    // An ESC that OPENS a CSI and never finishes it is not inert debris: the
+    // terminal's CSI parser keeps consuming until a final byte arrives, so
+    // `ESC[12 world` renders as `orld` (the ` w` is eaten as intermediate +
+    // final) while the model reads every word — the exact divergence this gate
+    // exists for. Only a lone ESC that opens nothing gets the note.
+    ["truncated CSI (parameters, no final byte)", `${ESC}[12`],
+    ["bare CSI introducer (nothing after it)", `${ESC}[`],
     // 8-bit C1 introducers: no 7-bit ESC anywhere, so the old ESC-only gate
     // read these as clean and returned {action:"pass"}.
     ["C1 erase display (U+009B 2J)", `${C1_CSI}2J`],
