@@ -30,7 +30,7 @@ const projectDir = mkdtempSync(join(tmpdir(), "sanitizer-coverage-proj-"));
 process.env.CLAUDE_PROJECT_DIR = projectDir;
 
 const scanInvisible = await import("../claude-hooks/scan-invisible-chars.mjs");
-const { scanProject, findInstructionFiles, findMdFiles, ALERT_FILE, cliMain } =
+const { scanProject, findInstructionFiles, ALERT_FILE, cliMain } =
   scanInvisible;
 
 // Same reason as in claude-hooks-posture.test.mjs: an unreadable fixture left
@@ -64,10 +64,7 @@ describe("scanProject accounts for every target the finder returned", () => {
     writeFileSync(join(dir, ".claude", "notes.md"), "also clean\n");
 
     const { targets, scanned, findings, skipped } = scanProject(dir);
-    const expectedTargets = new Set([
-      ...findInstructionFiles(dir),
-      ...findMdFiles(join(dir, ".claude")),
-    ]);
+    const expectedTargets = new Set(findInstructionFiles(dir));
     assert.equal(targets.length, expectedTargets.size);
     assert.ok(targets.length > 0, "the finder returned nothing to account for");
     // The invariant: nothing falls off the list.
