@@ -135,6 +135,19 @@ def test_every_gate_has_positive_fixtures():
     assert not (_gate_names(E.SHAPE_GATES) & _gate_names(E.NAME_TRUST_GATES)), (
         "a gate sits in both tuples, so its trust level is ambiguous"
     )
+    # The key-set checks above are satisfied by an empty fixture tuple, which
+    # exercises nothing — so the opt-out is an explicit allow-list rather than a
+    # spelling the next gate can be copy-pasted into. Only the two gates that
+    # decide ON the field name may take it.
+    unexercised = {
+        name
+        for name, values in (*_SHAPE_FIXTURES.items(), *_NAME_TRUST_FIXTURES.items())
+        if not values
+    }
+    assert unexercised == {"_is_benign_cursor", "_is_metadata_field"}, (
+        f"{sorted(unexercised)} register no fixtures, so the independence and "
+        "non-vacuity matrices skip them entirely"
+    )
 
 
 _SHAPE_CASES = [
