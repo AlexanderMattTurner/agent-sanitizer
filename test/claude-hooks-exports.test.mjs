@@ -77,6 +77,7 @@ const REQUIRED_EXPORT = {
   "lib/env-config": "looksLikeCredentialVar",
   "lib/hook-fault": "hookFaultOutcome",
   "lib/hook-io": "lazyImport",
+  "lib/hook-timing": "slowHookNotice",
   "lib/layer-pipeline": "runLayerPipeline",
   "lib/invisible-alert": "invisibleCharAlert",
   "lib/redactor-client": "redactViaDaemon",

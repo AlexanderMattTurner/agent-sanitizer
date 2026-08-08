@@ -9,13 +9,14 @@
  *
  * This suite fuzzes PRECISION directly: build random prompts that interleave
  * KNOWN-BENIGN constructs (real prose traps that merely LOOK escape-adjacent),
- * KNOWN-SGR constructs (display-only color, both 7-bit and C1 encodings), and
- * KNOWN-PAYLOAD constructs (non-SGR escapes, C1 string introducers, long
- * invisible runs), then assert the EXACT verdict the module's documented rules
+ * KNOWN-INERT constructs (display-only color in both the 7-bit and C1
+ * encodings, and 7-bit introducers that complete no sequence), and
+ * KNOWN-PAYLOAD constructs (complete non-SGR escapes, C1 string introducers,
+ * long invisible runs), then assert the EXACT verdict the module's rules
  * demand for that specific mix:
  *
  *   any payload piece present            -> block
- *   otherwise any SGR piece present      -> note
+ *   otherwise any inert-ANSI piece present -> note
  *   otherwise (benign-only)              -> pass
  *
  * Pieces are joined with a visible space so invisible runs in adjacent pieces
@@ -56,23 +57,27 @@ const BENIGN_TOKENS = [
   cp(0x2764) + cp(0xfe0f), // heart + emoji presentation selector
 ];
 
-// Display-only SGR color in both documented encodings: alone in a prompt these
-// must yield exactly "note" (the pasted-colored-logs carve-out), never block.
-const SGR_TOKENS = [
+// INERT escape content: display-only SGR color in both documented encodings,
+// plus 7-bit introducers that complete no sequence at all. Alone in a prompt
+// each must yield exactly "note" (the pasted-terminal-output carve-out), never
+// block — none of them can move the cursor, erase, or open a string.
+const INERT_ANSI_TOKENS = [
   `${ESC}[31mred${ESC}[0m`,
   `${ESC}[m`,
   `${ESC}[1;4;38;5;196mloud${ESC}[0m`,
   `${C1_CSI}31mred${C1_CSI}0m`,
+  ESC, // lone partial escape: a log line cut mid-sequence
 ];
 
-// Genuine payload carriers per the module's rules: non-SGR escapes (7-bit and
-// C1, including the string introducers Layer 1 strips to nothing) and
-// long-run invisible channels. Each one, anywhere in a prompt, must block.
+// Genuine payload carriers per the module's rules: COMPLETE non-SGR escapes
+// (7-bit and C1, including the string introducers Layer 1 strips to nothing),
+// raw C1 orphans, and long-run invisible channels. Each one, anywhere in a
+// prompt, must block.
 const PAYLOAD_TOKENS = [
   `${ESC}[2J`,
   `${ESC}]0;owned${BEL}`,
   `${ESC}[31im`, // SGR-lookalike with a letter param: not SGR
-  ESC, // lone partial escape
+  `${ESC}[12`, // truncated CSI: a stateful parser eats what follows
   `${C1_CSI}2J`,
   `${C1_OSC}0;owned${BEL}`,
   `${C1_DCS}qpayload${C1_ST}`,
@@ -83,7 +88,7 @@ const PAYLOAD_TOKENS = [
 
 const pieceGen = fc.oneof(
   fc.constantFrom(...BENIGN_TOKENS).map((t) => ({ kind: "benign", t })),
-  fc.constantFrom(...SGR_TOKENS).map((t) => ({ kind: "sgr", t })),
+  fc.constantFrom(...INERT_ANSI_TOKENS).map((t) => ({ kind: "inert", t })),
   fc.constantFrom(...PAYLOAD_TOKENS).map((t) => ({ kind: "payload", t })),
   fc
     .array(fc.constantFrom(..."abc XYZ 0123 .,-_/".split("")), {
@@ -98,7 +103,7 @@ const docGen = fc.array(pieceGen, { minLength: 1, maxLength: 8 });
 /** The verdict the module's documented rules demand for this exact mix. */
 function expectedAction(pieces) {
   if (pieces.some((p) => p.kind === "payload")) return "block";
-  if (pieces.some((p) => p.kind === "sgr")) return "note";
+  if (pieces.some((p) => p.kind === "inert")) return "note";
   return "pass";
 }
 
@@ -127,14 +132,14 @@ describe("semantic-correctness fuzz: classifyPrompt precision on mixed prompts",
       );
   });
 
-  it("each payload token blocks even when drowned in benign and SGR content", () => {
+  it("each payload token blocks even when drowned in benign and inert content", () => {
     fc.assert(
       fc.property(
         fc.constantFrom(...PAYLOAD_TOKENS),
         fc.constantFrom(...BENIGN_TOKENS),
-        fc.constantFrom(...SGR_TOKENS),
-        (bad, benign, sgr) => {
-          const verdict = classifyPrompt(`${benign} ${sgr} ${bad} ${benign}`);
+        fc.constantFrom(...INERT_ANSI_TOKENS),
+        (bad, benign, inert) => {
+          const verdict = classifyPrompt(`${benign} ${inert} ${bad} ${benign}`);
           assert.equal(verdict.action, "block");
           assert.match(verdict.reason, /Resubmit the prompt/);
         },

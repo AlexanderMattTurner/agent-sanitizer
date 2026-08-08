@@ -8,6 +8,19 @@ adhere to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+## [2.24.0] - 2026-08-08
+
+### Added
+
+- Hook timing budget warnings: hooks that exceed their one-second budget now trigger a warning to help identify performance issues.
+- Hook scan scope optimization: scanning now focuses only on `.claude` subdirectories loaded as context, improving performance.
+
+### Fixed
+
+- Incomplete CSI sequences in ANSI processing are now logged as notices instead of warnings, reducing spurious alerts.
+- One-time provisioning is excluded from slow-hook timer measurements to avoid skewing performance metrics.
+- Anchored blank fillers in invisible character carve-outs are now correctly handled during testing and validation.
+
 ## [2.23.2] - 2026-08-08
 
 ### Fixed

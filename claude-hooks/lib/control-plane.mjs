@@ -17,6 +17,7 @@ import {
   probeSetupAlive,
   readStdinJson,
 } from "./hook-io.mjs";
+import { startHookTimer, withSlowHookNotice } from "./hook-timing.mjs";
 
 // Loaded via a *caught* dynamic import — never a bare static `import … from`.
 // A static npm import resolves before any try/catch, so a missing node_modules
@@ -128,7 +129,12 @@ export function nativeStdout(response) {
  * unparsable stdin, missing package, a judge error — is reported on stderr and
  * routed to `onError(err, input)` (`input` undefined when stdin never parsed),
  * where the hook applies its declared fail posture.
- * @param {string} hookName  prefix for the stderr diagnostic
+ *
+ * It is also where every judge hook is TIMED: the verdict picks up a
+ * performance note when the judge overran the hook budget (see
+ * lib/hook-timing.mjs), so no hook has to remember to measure itself.
+ * @param {string} hookName  prefix for the stderr diagnostic, and the hook name
+ *   a slow-run notice reports
  * @param {(event: import("agent-control-plane-core").ToolCallEvent) =>
  *   import("agent-control-plane-core").Verdict |
  *   Promise<import("agent-control-plane-core").Verdict>} judge
@@ -152,9 +158,18 @@ export async function runJudgeCli(
   let input;
   try {
     input = await readInput();
+    // Timed from HERE, not from process start: the wait for the harness to hand
+    // over stdin is not this hook's cost, and blaming it for one would send
+    // operators chasing a bug report that is not theirs to fix.
+    const elapsed = startHookTimer();
     const { claudeAdapter: adapter } = controlPlane();
     const event = adapter.parse(transformInput(input));
-    const out = nativeStdout(adapter.render(await judge(event), event));
+    // Awaited into its own binding first: as an inline argument, `elapsed()`
+    // would be evaluated BEFORE the judge it is supposed to be timing.
+    const judged = await judge(event);
+    const out = nativeStdout(
+      adapter.render(withSlowHookNotice(hookName, elapsed(), judged), event),
+    );
     if (out !== null) write(out);
   } catch (err) {
     process.stderr.write(`${hookName} hook error: ${errMessage(err)}\n`);
