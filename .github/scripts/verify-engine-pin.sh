@@ -9,33 +9,15 @@
 # every user.
 set -euo pipefail
 
-# An argument overrides the committed pin so engine-pin-bump.sh can point the
-# same both-registries check at its candidate version before bumping. Exit
-# codes are part of the contract: 2 means the version is confirmed absent from
-# PyPI — the retryable npm→PyPI publish lag a caller may defer on. Anything
-# else non-zero is a real error (npm failure, registry 5xx, curl transport),
-# never to be conflated with lag.
-if [ "$#" -ge 1 ]; then
-  version="$1"
-  if [ -z "$version" ]; then
-    echo "empty version argument; refusing to fall back to the committed pin" >&2
-    exit 1
-  fi
-else
-  version="$(node -e 'import("./plugin/scripts/build-plugin.mjs").then((m) => process.stdout.write(m.enginePin()))')"
-fi
-echo "checking agent-sanitizer@${version} on npm and PyPI"
+version="$(node -e 'import("./plugin/scripts/build-plugin.mjs").then((m) => process.stdout.write(m.enginePin()))')"
+echo "engine pin: $version"
 
 npm view "agent-sanitizer@${version}" version >/dev/null
 echo "npm: agent-sanitizer@${version} present"
 
 status="$(curl -sS -o /dev/null -w '%{http_code}' "https://pypi.org/pypi/agent-sanitizer/${version}/json")"
-if [ "$status" = "404" ]; then
-  echo "PyPI has no agent-sanitizer ${version} (HTTP 404); the plugin would ship a requirements.txt pip cannot resolve" >&2
-  exit 2
-fi
 if [ "$status" != "200" ]; then
-  echo "PyPI returned HTTP ${status} for agent-sanitizer ${version}; cannot tell whether the release exists" >&2
+  echo "PyPI has no agent-sanitizer ${version} (HTTP ${status}); the plugin would ship a requirements.txt pip cannot resolve" >&2
   exit 1
 fi
 echo "PyPI: agent-sanitizer ${version} present"
