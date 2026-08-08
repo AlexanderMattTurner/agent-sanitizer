@@ -44,6 +44,9 @@
     ".github/workflows/ci-failure-notify.yaml": [
       ".github/scripts/main-health.test.mjs"
     ],
+    ".github/workflows/template-sync.yaml": [
+      ".github/scripts/synced-deps.test.mjs"
+    ],
     "src/invisible.mjs": [
       "test/invisible-charset.test.mjs",
       "test/instructions.test.mjs"

@@ -403,6 +403,19 @@ if npm view "$PACKAGE_NAME@$NEW_VERSION" version &>/dev/null; then
   exit 0
 fi
 
+# A second publisher — a release workflow the repo owns alongside this one —
+# reaches the same version from the same commits and pushes v$NEW_VERSION when it
+# wins. The npm probe above can still say "unpublished" in that window, so also
+# ask the remote whether the tag is already taken: whoever tagged it is releasing
+# this version, and a second `pnpm publish` of it can only fail. Fails open — an
+# ls-remote that errors reads as "no tag" and the release proceeds, because a
+# false positive here would skip a legitimate release outright.
+if [[ -n "$(git ls-remote --tags origin "refs/tags/v$NEW_VERSION" 2>/dev/null)" ]]; then
+  log "Tag v$NEW_VERSION already exists on the remote — another release workflow is publishing this version. Skipping."
+  log "       Two workflows releasing one repo is a misconfiguration: keep exactly one publisher on the default branch."
+  exit 0
+fi
+
 # Update package.json in working directory only (not committed to git)
 NEW_VERSION="$NEW_VERSION" node -e '
 const fs = require("fs");
@@ -428,6 +441,13 @@ if [[ "$PUBLISH_RC" -ne 0 ]]; then
   if grep -qE 'E(409|PUBLISHCONFLICT)' <<<"$PUBLISH_OUTPUT" &&
     npm view "$PACKAGE_NAME@$NEW_VERSION" version &>/dev/null; then
     log "Version $NEW_VERSION already published (publish conflict on the same version). Skipping."
+    exit 0
+  fi
+  if [[ "$PUBLISH_OUTPUT" == *"E404"* ]] &&
+    npm view "$PACKAGE_NAME@$NEW_VERSION" version &>/dev/null; then
+    log "$PUBLISH_OUTPUT"
+    log "Publish 404'd but $PACKAGE_NAME@$NEW_VERSION is on the registry: another release workflow published it first. Skipping."
+    log "       Two workflows releasing one repo is a misconfiguration: keep exactly one publisher on the default branch."
     exit 0
   fi
   log "$PUBLISH_OUTPUT"
