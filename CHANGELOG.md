@@ -8,6 +8,11 @@ adhere to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+## [2.23.1] - 2026-08-08
+
+### Security
+- Enforce a 3-day minimum release age on dependencies to reduce supply-chain risks.
+
 ## [2.23.0] - 2026-08-08
 
 ### Added
