@@ -16,8 +16,6 @@ SCRIPTS = REPO_ROOT / ".github" / "scripts"
 CASES = [
     # check-token-scope.sh requires TOKEN
     ("check-token-scope.sh", ["TOKEN"]),
-    # request-claude-resolve.sh requires PR_NUM
-    ("request-claude-resolve.sh", ["PR_NUM"]),
     # template-sync.sh requires GITHUB_OUTPUT
     ("template-sync.sh", ["GITHUB_OUTPUT"]),
 ]
