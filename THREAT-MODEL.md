@@ -228,6 +228,27 @@ are load-bearing and **fail closed**:
   edit would re-run redaction on every `Edit` call and risk false denials on a
   legitimate relabel in a large file. The secret flows disk → tool input only;
   the model’s next view is sanitized again.
+- **Never trust the redactor’s map unverified.** The redactor’s map-mode output
+  is validated before any splice: every pair’s placeholder must occupy the view
+  text at its stated offset, and splicing the originals back must reconstruct
+  the file’s cleaned bytes exactly — out-of-range and overlapping pairs are
+  caught too. A map that fails either proof is treated as **unmappable** (denied
+  for MultiEdit and for placeholder-bearing input, passed through without any
+  splice otherwise), never spliced and never thrown into the host’s fail-open
+  posture — so a buggy redactor cannot anchor an edit onto the wrong bytes and
+  corrupt the file.
+
+MultiEdit is gated, not rehydrated. MultiEdit applies its edits sequentially,
+each against the file state the previous edit produced, so the span-exact
+view↔disk mapping done for a single Edit has no sound equivalent. It passes
+through only when the file’s sanitized view provably equals disk AND no edit
+carries a `[REDACTED…]` placeholder; every other case — a view that diverges via
+redacted secrets or stripped invisible characters, an unmappable or defective
+redactor map, or placeholder text aimed at a pristine file (the
+foreign-placeholder rule) — is **denied**, with guidance to re-issue the changes
+as single Edit calls, which _are_ rehydrated. The previous full pass-through was
+both a silent clobber (the placeholder persisted over the secret) and a
+character-extraction oracle.
 
 File access and the redactor are injected via `io`; the package performs no I/O
 of its own and bundles no secret engine.
@@ -241,6 +262,19 @@ restores the fail-closed verdicts — block, ask, suppress. The posture covers
 every way a hook can fail: the launcher not starting (no `node`, missing or
 corrupt bundle), the package never loading, a payload that never parsed, and a
 layer that ran and threw.
+
+One carve-out: when the PreToolUse hook itself fails (redactor daemon down,
+package failed to load, a layer threw) and the call is a **write-shaped tool**
+(Write/Edit/MultiEdit/NotebookEdit) whose input carries the `[REDACTED`
+placeholder prefix, the hook **asks** — fail-closed, human in the loop — instead
+of passing through. With the sanitizer down, rehydration cannot run, so the
+placeholder text would be persisted literally over the real secret on disk: a
+destructive clobber, not a missed scan. Holding these calls is safe because a
+placeholder-bearing write is never the benign availability case the open default
+protects — the model can retry once the sanitizer recovers, or ask the user. The
+check is package-free (a literal-string test on the already-parsed payload), so
+it holds even when the failure IS the missing package. All other faults keep the
+open default, and `AGENT_SANITIZER_FAIL_OPEN=0` behavior is unchanged.
 
 **The open default is not enforceable against content.** Several of those
 failures are composable by whoever authored the payload — in the output hook

@@ -1682,3 +1682,273 @@ describe("rehydrate: lone-surrogate normalization", () => {
     assert.equal(out.updatedInput.new_string, "X");
   });
 });
+
+// ─── MultiEdit gating ────────────────────────────────────────────────────────
+
+describe("rehydrate: MultiEdit gating", () => {
+  const EDITS = [
+    { old_string: "alpha", new_string: "beta" },
+    { old_string: "gamma", new_string: "delta" },
+  ];
+  const HINTED_EDITS = [{ old_string: "alpha", new_string: `x=${PH}` }];
+
+  it("passes through when the view equals disk and no edit carries a placeholder", async () => {
+    const content = "alpha\ngamma\n";
+    assert.equal(
+      await rehydrateRedacted(
+        "MultiEdit",
+        { file_path: "/f", edits: EDITS },
+        fakeIo(content, { text: content, pairs: [] }),
+      ),
+      null,
+    );
+  });
+
+  it("ignores malformed inputs (missing, empty, or non-string edits)", async () => {
+    const unreachable = {
+      readFile: () => {
+        throw new Error("must not read");
+      },
+      redactMap: () => {
+        throw new Error("must not map");
+      },
+      redact: () => null,
+    };
+    for (const ti of [
+      { file_path: "/f" },
+      { file_path: "/f", edits: [] },
+      { file_path: "/f", edits: [{ old_string: "a" }] },
+      { file_path: "/f", edits: "nope" },
+      { edits: EDITS },
+    ])
+      assert.equal(await rehydrateRedacted("MultiEdit", ti, unreachable), null);
+  });
+
+  it("denies when the file holds a redacted secret, hinted or not", async () => {
+    const content = `alpha\nkey=${SECRET_A}\n`;
+    const io = fakeIo(
+      content,
+      mkView(content, [{ value: SECRET_A, placeholder: PH }]),
+      (text) => text.split(SECRET_A).join(PH),
+    );
+    for (const edits of [EDITS, HINTED_EDITS]) {
+      const out = await rehydrateRedacted(
+        "MultiEdit",
+        { file_path: "/f", edits },
+        io,
+      );
+      assert.match(out.deny, /differs from its on-disk bytes/);
+      assert.match(out.deny, /separate Edit call/);
+    }
+  });
+
+  it("denies when the view diverges only via stripped invisible characters", async () => {
+    const content = `alpha${ZW}\ngamma\n`;
+    const out = await rehydrateRedacted(
+      "MultiEdit",
+      { file_path: "/f", edits: EDITS },
+      liveIo(content),
+    );
+    assert.match(out.deny, /differs from its on-disk bytes/);
+  });
+
+  it("denies when the map is unmappable, hinted or not", async () => {
+    const content = `key=${SECRET_A}\n`;
+    const io = fakeIo(content, { unmappable: "two keys collide" }, (text) =>
+      text.split(SECRET_A).join(PH),
+    );
+    for (const edits of [EDITS, HINTED_EDITS]) {
+      const out = await rehydrateRedacted(
+        "MultiEdit",
+        { file_path: "/f", edits },
+        io,
+      );
+      assert.match(out.deny, /cannot be verified/);
+      assert.match(out.deny, /two keys collide/);
+    }
+  });
+
+  it("denies placeholder text over a pristine file (foreign placeholder)", async () => {
+    const content = "alpha\ngamma\n";
+    const out = await rehydrateRedacted(
+      "MultiEdit",
+      { file_path: "/f", edits: HINTED_EDITS },
+      fakeIo(content, { text: content, pairs: [] }),
+    );
+    assert.match(out.deny, /no redacted secret/);
+    assert.match(out.deny, /another file or context/);
+  });
+
+  it("ENOENT: denies a hinted create, passes an unhinted one through", async () => {
+    const missingIo = {
+      readFile: () => {
+        throw fsError("ENOENT");
+      },
+      redactMap: () => {
+        throw new Error("must not map");
+      },
+      redact: () => null,
+    };
+    const denied = await rehydrateRedacted(
+      "MultiEdit",
+      { file_path: "/new", edits: HINTED_EDITS },
+      missingIo,
+    );
+    assert.match(denied.deny, /does not exist/);
+    assert.equal(
+      await rehydrateRedacted(
+        "MultiEdit",
+        { file_path: "/new", edits: EDITS },
+        missingIo,
+      ),
+      null,
+    );
+  });
+
+  it("EACCES: denies hinted, propagates unhinted", async () => {
+    const brokenIo = {
+      readFile: () => {
+        throw fsError("EACCES");
+      },
+      redactMap: () => {
+        throw new Error("must not map");
+      },
+      redact: () => null,
+    };
+    const denied = await rehydrateRedacted(
+      "MultiEdit",
+      { file_path: "/f", edits: HINTED_EDITS },
+      brokenIo,
+    );
+    assert.match(denied.deny, /could not read/);
+    await assert.rejects(
+      rehydrateRedacted(
+        "MultiEdit",
+        { file_path: "/f", edits: EDITS },
+        brokenIo,
+      ),
+      /EACCES/,
+    );
+  });
+});
+
+describe("rehydrate: Edit-create onto a missing file", () => {
+  const missingIo = {
+    readFile: () => {
+      throw fsError("ENOENT");
+    },
+    redactMap: () => {
+      throw new Error("must not map");
+    },
+    redact: () => null,
+  };
+
+  it("denies a hinted create (empty old_string, placeholder in new_string)", async () => {
+    // The Edit create form writes new_string verbatim into a NEW file — the
+    // same R4 cross-file/stale-placeholder mistake a Write onto a missing
+    // path is denied for.
+    const out = await rehydrateRedacted(
+      "Edit",
+      { file_path: "/new", old_string: "", new_string: `key=${PH}\n` },
+      missingIo,
+    );
+    assert.match(out.deny, /does not exist/);
+  });
+
+  it("still passes a hinted NON-create Edit through (Edit reports not-found itself)", async () => {
+    assert.equal(
+      await rehydrateRedacted(
+        "Edit",
+        { file_path: "/new", old_string: `key=${PH}`, new_string: "x" },
+        missingIo,
+      ),
+      null,
+    );
+  });
+});
+
+// ─── Redactor-map validation ─────────────────────────────────────────────────
+
+describe("rehydrate: a defective redactor map is never spliced", () => {
+  const content = `key=${SECRET_A}\n`;
+  const viewText = `key=${PH}\n`;
+  const hintedEdit = {
+    file_path: "/f",
+    old_string: `key=${PH}`,
+    new_string: `token=${PH}`,
+  };
+  const probe = (text) => text.split(SECRET_A).join(PH);
+  /** io returning a hand-built (possibly defective) map for `content`. */
+  const mapIo = (pairs) => fakeIo(content, { text: viewText, pairs }, probe);
+
+  it("non-vacuity: the same fixture with a SOUND map rehydrates", async () => {
+    const out = await rehydrateRedacted(
+      "Edit",
+      hintedEdit,
+      mapIo([{ placeholder: PH, original: SECRET_A, start: 4 }]),
+    );
+    assert.equal(out.updatedInput.old_string, `key=${SECRET_A}`);
+  });
+
+  it("denies a placeholder that is not at its stated offset", async () => {
+    const out = await rehydrateRedacted(
+      "Edit",
+      hintedEdit,
+      mapIo([{ placeholder: PH, original: SECRET_A, start: 2 }]),
+    );
+    assert.match(out.deny, /map is inconsistent/);
+    assert.match(out.deny, /offset 2/);
+  });
+
+  it("denies originals that do not splice back to the file's bytes", async () => {
+    const out = await rehydrateRedacted(
+      "Edit",
+      hintedEdit,
+      mapIo([{ placeholder: PH, original: SECRET_B, start: 4 }]),
+    );
+    assert.match(out.deny, /does not reconstruct/);
+    // The deny reason must never carry a secret byte.
+    assert.ok(!out.deny.includes(SECRET_A) && !out.deny.includes(SECRET_B));
+  });
+
+  it("denies overlapping pairs (map-contract violation) instead of throwing", async () => {
+    const out = await rehydrateRedacted(
+      "Edit",
+      hintedEdit,
+      mapIo([
+        { placeholder: PH, original: SECRET_A, start: 4 },
+        { placeholder: PH, original: SECRET_B, start: 5 },
+      ]),
+    );
+    assert.match(out.deny, /violates its contract/);
+  });
+
+  it("denies an out-of-range pair start instead of throwing", async () => {
+    const out = await rehydrateRedacted(
+      "Edit",
+      hintedEdit,
+      mapIo([{ placeholder: PH, original: SECRET_A, start: 999 }]),
+    );
+    assert.match(out.deny, /violates its contract/);
+  });
+
+  it("passes an unhinted Edit through on a defective map (no splice attempted)", async () => {
+    assert.equal(
+      await rehydrateRedacted(
+        "Edit",
+        { file_path: "/f", old_string: "key=", new_string: "k=" },
+        mapIo([{ placeholder: PH, original: SECRET_A, start: 2 }]),
+      ),
+      null,
+    );
+  });
+
+  it("denies a MultiEdit on a defective map", async () => {
+    const out = await rehydrateRedacted(
+      "MultiEdit",
+      { file_path: "/f", edits: [{ old_string: "key=", new_string: "k=" }] },
+      mapIo([{ placeholder: PH, original: SECRET_A, start: 2 }]),
+    );
+    assert.match(out.deny, /cannot be verified/);
+  });
+});

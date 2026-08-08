@@ -70,7 +70,11 @@ per user:
 
 When a hook cannot run, it fails **open** by default: the guarded action
 proceeds and the model is told, in `additionalContext`, that what it is reading
-was never sanitized. What it never does is fail SILENTLY — Claude Code treats a
+was never sanitized. One exception: a write-shaped call
+(Write/Edit/MultiEdit/NotebookEdit) whose input carries `[REDACTED` placeholder
+text **asks** even under the open default — with the sanitizer down,
+rehydration cannot run, and passing it through would persist the placeholder
+over the real secret on disk. What it never does is fail SILENTLY — Claude Code treats a
 crashed hook as "no objection" and says nothing, so the launcher
 (`scripts/safe-launch.sh`) speaks even when node is missing or the bundle is
 corrupt. A deployment that would rather keep guarding than keep working sets
@@ -95,8 +99,9 @@ And one posture knob, for what happens when a hook itself fails:
 
 Unset, a missing `node`, a corrupt bundle, an uninstalled package, an
 unreachable redaction daemon or a layer that threw all let the guarded action
-proceed with the warning attached. Set to `0` (or `false`; every other value,
-including `1`, is the open default) they halt instead.
+proceed with the warning attached (except a placeholder-bearing write, which
+asks — see above). Set to `0` (or `false`; every other value, including `1`, is
+the open default) they halt instead.
 
 Worth knowing before you leave it open: some of those failures are reachable by
 whoever authored the content the hook is inspecting — colliding field names, a

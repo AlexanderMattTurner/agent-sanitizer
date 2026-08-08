@@ -67832,6 +67832,7 @@ __export(pretooluse_sanitize_exports, {
   cliMain: () => cliMain,
   depLoadHint: () => depLoadHint,
   failClosedFields: () => failClosedFields,
+  hintedWriteFault: () => hintedWriteFault,
   hookFailureFields: () => hookFailureFields,
   judgePreToolUseSanitize: () => judgePreToolUseSanitize,
   preToolUseLayers: () => preToolUseLayers
@@ -68003,6 +68004,18 @@ function failClosedFields(parsedOk, err, opts = {}) {
     permissionDecisionReason: parsedOk ? messages.failed(cause) : messages.unparsable(cause)
   };
 }
+function hintedWriteFault(input) {
+  const payload = (
+    /** @type {{tool_name?: unknown, tool_input?: unknown} | undefined} */
+    input
+  );
+  if (!WRITE_SHAPED_TOOLS.has(
+    /** @type {string} */
+    payload?.tool_name
+  ))
+    return false;
+  return JSON.stringify(payload?.tool_input ?? null).includes(REDACTION_HINT);
+}
 function hookFailureFields(parsedOk, err, opts = {}) {
   return (
     /** @type {Record<string, unknown>} */
@@ -68010,7 +68023,8 @@ function hookFailureFields(parsedOk, err, opts = {}) {
       parsedOk,
       env: opts.env,
       messages: opts.messages,
-      hint: opts.hint
+      hint: opts.hint,
+      input: opts.input
     }).fields
   );
 }
@@ -68035,13 +68049,14 @@ async function cliMain(opts = {}) {
         HookEvent.PRE_TOOL_USE,
         hookFailureFields(input !== void 0, err, {
           messages,
-          hint: depLoadHint(err, messages.remedy)
+          hint: depLoadHint(err, messages.remedy),
+          input
         })
       )
     }
   );
 }
-var HOOK_NAME, PRE_TOOL_USE_MESSAGES, normalizeConfusables2, normalizeContext2, rehydrateRedacted2, require5, confusableScan, redactorIo, defaultRehydrate;
+var HOOK_NAME, PRE_TOOL_USE_MESSAGES, normalizeConfusables2, normalizeContext2, rehydrateRedacted2, require5, confusableScan, redactorIo, defaultRehydrate, REDACTION_HINT, WRITE_SHAPED_TOOLS;
 var init_pretooluse_sanitize = __esm({
   async "claude-hooks/pretooluse-sanitize.mjs"() {
     "use strict";
@@ -68087,9 +68102,30 @@ var init_pretooluse_sanitize = __esm({
       }
     };
     defaultRehydrate = (tool, toolInput) => rehydrateRedacted2(tool, toolInput, redactorIo);
+    REDACTION_HINT = "[REDACTED";
+    WRITE_SHAPED_TOOLS = /* @__PURE__ */ new Set([
+      "Write",
+      "Edit",
+      "MultiEdit",
+      "NotebookEdit"
+    ]);
     registerFaultPolicy(HOOK_NAME, {
       event: HookEvent.PRE_TOOL_USE,
       guarded: "tool input",
+      open: (ctx) => {
+        if (!hintedWriteFault(ctx.input))
+          return { fields: { additionalContext: ctx.openContext } };
+        const closed = failClosedFields(true, ctx.err, {
+          messages: ctx.messages,
+          hint: ctx.hint
+        });
+        return {
+          fields: {
+            ...closed,
+            permissionDecisionReason: `${closed.permissionDecisionReason} This input would write ${REDACTION_HINT}\u2026] placeholder text, which stands for a redacted secret the unavailable sanitizer cannot translate back; proceeding would overwrite the real secret with the placeholder, so the call is held even under the fail-open posture. Retry once the sanitizer recovers, or ask the user to make this change.`
+          }
+        };
+      },
       closed: (ctx) => ({
         fields: failClosedFields(ctx.parsedOk, ctx.err, {
           messages: ctx.messages,
