@@ -52,6 +52,10 @@
     {
       "id": "hook-lib-report",
       "mutate": "claude-hooks/lib/invisible-alert.mjs,claude-hooks/lib/reveal.mjs,claude-hooks/lib/secret-annotate.mjs,claude-hooks/lib/trace.mjs"
+    },
+    {
+      "id": "hook-lib-fault-timing",
+      "mutate": "claude-hooks/lib/hook-fault.mjs,claude-hooks/lib/hook-timing.mjs,claude-hooks/lib/layer-pipeline.mjs"
     }
   ],
   "hookScopeBreak": 30
