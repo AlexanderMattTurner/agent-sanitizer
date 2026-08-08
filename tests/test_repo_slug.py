@@ -66,11 +66,6 @@ EXTERNAL_REPOS = {
 
 #: Deliberate stand-ins in docs, tests and error prose — never a real repo.
 PLACEHOLDER_SLUGS = {
-    "anthropics/agent-sanitizer": (
-        "a realistic-looking clone URL in the secrets negative corpus — no such "
-        "repo exists, and the fixture's point is that a public clone URL is not "
-        "a credential"
-    ),
     "o/r": "shortest slug a workflow-parsing test can use",
     "org/repo": "documentation stand-in",
     "owner/repo": "documentation stand-in",
