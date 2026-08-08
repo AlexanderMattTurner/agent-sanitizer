@@ -228,9 +228,10 @@ export const CONSECUTIVE_JOINER_CAP = 8;
 // visible characters in a row), exactly like CONSECUTIVE_JOINER_CAP.
 export const CONSECUTIVE_SELECTOR_CAP = 8;
 
-// Floor on the document-wide preserve budget, shared by both preserve kinds
-// (see `kind` in analyzeCarve: joiners AND presentation selectors draw from
-// the same counter). The Joining_Type gate strips joiners that do no
+// Floor on the document-wide preserve budget for joiners, selectors and tag
+// sequences (see `kind` in analyzeCarve — blank fillers are NOT charged here;
+// they have their own allowance, see TOTAL_PRESERVED_BLANK_BUDGET). The
+// Joining_Type gate strips joiners that do no
 // rendering work regardless of count, so the bulk covert channel (ZWNJ
 // scattered through Latin/ASCII/mixed text) is closed by shape, not by
 // counting. What remains is the residual channel of MEANINGFUL joiners/
@@ -259,6 +260,31 @@ export const PRESERVED_JOINER_PER_VISIBLE = 8;
 // nothing else bounds it. This caps the whole channel at a fixed width no cover
 // text can widen.
 export const PRESERVE_HARD_CAP = 64;
+
+// Floor on the document-wide allowance for PRESERVED blank fillers (the
+// Braille blank and the Hangul fillers — see the blank-filler carve-out). Kept
+// separate from the joiner/selector budget because the two have completely
+// different legitimate densities, and short blank-dense strings (a one-line
+// Braille phrase, a lone archaic syllable) must stay un-clipped.
+export const TOTAL_PRESERVED_BLANK_BUDGET = 16;
+
+// Visible ANCHOR-script code points (a non-blank Braille cell, a non-filler
+// Hangul jamo/syllable) required per preserved blank filler above the floor. A
+// blank is only ever preservable next to one of these, so this ratio is what
+// separates real text from the degenerate channel: U+2800 separates WORDS and a
+// filler completes a syllable, so genuine text spends several anchor characters
+// per blank and stays under one blank per two anchors, while the alternation an
+// attacker needs to stuff a bit per character (`가ᅟ가ᅟ…`, `⠃⠀⠃⠀…`) is exactly
+// 1:1 and fails.
+//
+// Deliberately NOT capped by PRESERVE_HARD_CAP: an absolute ceiling is what
+// truncated long Braille documents, and unlike the joiner channel this one
+// cannot scale on invisible cover text — every additional bit costs the
+// attacker two VISIBLE anchor-script characters, and the blanks themselves
+// render as spacing a reader can see. Over the ratio, NO blank in the document
+// is preserved (all-or-nothing, so a document never comes out half-spaced) and
+// every one of them becomes payload — which then also feeds the scatter floor.
+export const PRESERVED_BLANK_PER_ANCHOR = 2;
 
 // Scripts whose orthography uses ZWNJ/ZWJ between letters as a rendering
 // control. The runtime gate is now script-agnostic (it reads Joining_Type, so it
@@ -402,6 +428,17 @@ function isBrahmicConsonantChar(ch) {
 // the anchor and is stripped — the run-length gate falls out of the anchor. The
 // zero-width Mn marks in BLANK_NON_CF (U+034F/17B4/17B5) have no such benign
 // standalone use, so they are never preserved.
+//
+// Blank fillers are NOT charged against the joiner/selector preserve budget:
+// that budget's density model is "~1 preserved invisible per 8 visible chars"
+// (PRESERVED_JOINER_PER_VISIBLE), measured on Persian ZWNJ prose, with a fixed
+// PRESERVE_HARD_CAP ceiling. Blanks are an order of magnitude denser in genuine
+// text — U+2800 IS the word space of Unicode Braille, and a Hangul filler
+// completes a defective syllable — so charging them there mangled real content:
+// a 40-word Braille passage lost 14 of its 39 word spaces (words run together)
+// and a 200-word one kept 64 of 199, with `found` reporting a strip on a
+// perfectly legitimate document. They draw on the anchor-proportional allowance
+// below instead (see TOTAL_PRESERVED_BLANK_BUDGET).
 const BRAILLE_BLANK = 0x2800;
 const HANGUL_FILLERS = new Set([0x115f, 0x1160, 0x3164, 0xffa0]);
 // Code points that trigger the carve-out path for blank fillers (see
@@ -433,6 +470,16 @@ function isHangul(ch) {
   const cp = ch ? /** @type {number} */ (ch.codePointAt(0)) : -1;
   if (HANGUL_FILLERS.has(cp)) return false; // a filler cannot anchor another filler
   return HANGUL_RE.test(ch);
+}
+
+/** True when `ch` can anchor SOME blank filler — the union of the two branches
+ * of isPreservedBlankFiller, used to size the document-wide blank allowance
+ * (see PRESERVED_BLANK_PER_ANCHOR). Cross-script pairs never preserve, so this
+ * over-counts a document mixing Braille and Hangul; that direction only widens
+ * the allowance for a document already full of legitimate anchor text.
+ * @param {string} ch @returns {boolean} */
+function isBlankAnchor(ch) {
+  return isBrailleCell(ch) || isHangul(ch);
 }
 
 // Non-global single-char classifiers (CHECKS carry `g`, whose lastIndex is
@@ -600,6 +647,25 @@ function analyzeCarve(cps) {
     if (isPreservedBlankFiller(cps, i)) return "blank";
     return null;
   });
+  // Blank fillers are budgeted here, document-wide and all-or-nothing, against
+  // the visible anchor-script text rather than against the joiner/selector
+  // counter in carveStrip (see PRESERVED_BLANK_PER_ANCHOR for why the two
+  // cannot share a density model). Deciding it in analyzeCarve rather than in
+  // the emit loop keeps countPayloadInvisible and payloadInvisibleView honest:
+  // a blank the stripper will remove is payload to every consumer, so the
+  // prompt layer's scatter gate sees it without re-deriving the budget.
+  // The anchor scan is skipped below the floor: it costs two script regexes per
+  // visible character, and analyzeCarve runs on every prompt and tool output.
+  const blanks = kind.filter((k) => k === "blank").length;
+  if (blanks > TOTAL_PRESERVED_BLANK_BUDGET) {
+    const anchors = cps.reduce(
+      (n, ch, i) => n + (codes[i] === null && isBlankAnchor(ch) ? 1 : 0),
+      0,
+    );
+    if (blanks > Math.floor(anchors / PRESERVED_BLANK_PER_ANCHOR))
+      for (let i = 0; i < kind.length; i++)
+        if (kind[i] === "blank") kind[i] = null;
+  }
   let payloadInvis = 0;
   let visibleLen = 0;
   for (let i = 0; i < cps.length; i++) {
@@ -790,12 +856,15 @@ function clusterEnds(body) {
 
 /**
  * Carve-out strip (an invisible the carve-out might preserve is present): walk
- * GRAPHEME CLUSTERS, preserving a cluster's joiners/selectors/tags/blank-fillers
- * only where each has its `kind` set AND the text stays under the scatter floor
- * AND the whole cluster fits inside the remaining per-run
- * (CONSECUTIVE_JOINER_CAP / CONSECUTIVE_SELECTOR_CAP) and document-wide
- * (TOTAL_PRESERVED_JOINER_BUDGET) preserve allowance — otherwise every
- * preservable char in that cluster is stripped like any other payload byte.
+ * GRAPHEME CLUSTERS, preserving a cluster's joiners/selectors/tags only where
+ * each has its `kind` set AND the text stays under the scatter floor AND the
+ * whole cluster fits inside the remaining per-run (CONSECUTIVE_JOINER_CAP /
+ * CONSECUTIVE_SELECTOR_CAP) and document-wide (TOTAL_PRESERVED_JOINER_BUDGET)
+ * preserve allowance — otherwise every preservable char in that cluster is
+ * stripped like any other payload byte. Blank fillers are the exception: their
+ * allowance is anchor-proportional and already spent document-wide in
+ * analyzeCarve (see PRESERVED_BLANK_PER_ANCHOR), so here they answer only to
+ * the scatter floor and do not draw on the joiner/selector budget.
  *
  * The budget is charged against the CLUSTER, not the code point, because the
  * cluster is the indivisible unit: charging per code point let a limit fall due
@@ -862,7 +931,10 @@ function carveStrip(body) {
     let joiners = 0;
     let selectors = 0;
     for (let k = start; k < end; k++) {
-      if (kind[k] === null) continue;
+      // "blank" is exempt: analyzeCarve already decided it against the
+      // anchor-proportional allowance, so it neither draws on this budget nor
+      // is stripped by it (only by the scatter floor, via allowCarveOut).
+      if (kind[k] === null || kind[k] === "blank") continue;
       need++;
       if (kind[k] === "joiner") joiners++;
       if (kind[k] === "ivs" || kind[k] === "stdvs") selectors++;
@@ -904,11 +976,13 @@ function carveStrip(body) {
         out += cps[k]; // ordinary visible character
         continue;
       }
-      if (fits && kind[k] !== null) {
+      // A blank filler rides on allowCarveOut alone (its own allowance is
+      // already spent in analyzeCarve); everything else rides on `fits`.
+      if (kind[k] === "blank" ? allowCarveOut : fits && kind[k] !== null) {
         if (kind[k] === "joiner") joinerRun++;
         if (kind[k] === "ivs" || kind[k] === "stdvs") selectorRun++;
-        preservedTotal++;
-        prevVisible = false; // a joiner/selector/tag keeps the cluster open
+        if (kind[k] !== "blank") preservedTotal++;
+        prevVisible = false; // a joiner/selector/tag/blank keeps the cluster open
         out += cps[k];
         continue;
       }

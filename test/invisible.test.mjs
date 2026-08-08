@@ -28,6 +28,8 @@ import {
   TOTAL_PRESERVED_JOINER_BUDGET,
   PRESERVED_JOINER_PER_VISIBLE,
   PRESERVE_HARD_CAP,
+  TOTAL_PRESERVED_BLANK_BUDGET,
+  PRESERVED_BLANK_PER_ANCHOR,
   LINGUISTIC_SCRIPTS,
   describeStripped,
   payloadInvisibleView,
@@ -782,8 +784,9 @@ describe("document-wide preserved-joiner budget", () => {
   });
 
   it("standalone presentation selectors (no joiner in the document) share the same budget", () => {
-    // The budget counts every preserved item — joiners AND presentation
-    // selectors — across the whole document, not per-kind. N gap-separated
+    // The budget counts joiners AND presentation selectors across the whole
+    // document, not per-kind (blank fillers are the one exception — they draw
+    // on the anchor-proportional allowance instead, see below). N gap-separated
     // pictograph+VS16 pairs with NO ZWNJ/ZWJ anywhere still hit the same cap:
     // over-strip beats under-strip even for a purely selector-dense document.
     const pictographPlusSelector = cp(0x2764) + cp(0xfe0f) + " ";
@@ -1543,6 +1546,127 @@ describe("stripInvisible: legitimate Korean text is untouched", () => {
     assert.equal(cleaned, text);
     assert.deepEqual(found, []);
     assert.equal(countPayloadInvisible(text), 0);
+  });
+});
+
+// ─── The blank fillers' own document-wide allowance ──────────────────────────
+// U+2800 is the WORD SPACE of Unicode Braille and a Hangul filler completes a
+// defective syllable, so genuine text carries roughly one blank per word — an
+// order of magnitude denser than the joiner budget's ~1-per-8-visible model.
+// While blanks were charged against that budget, a 40-word Braille passage came
+// out having lost 14 of its 39 word spaces (words running together) and a
+// 200-word one kept 64 of 199, `found` reporting a strip on a legitimate
+// document. They are now budgeted against the visible ANCHOR-script text.
+const BRAILLE_WORD = "⠃⠁⠇⠇⠕"; // a five-cell word
+/** A Braille passage of `words` five-cell words separated by the U+2800 space.
+ * @param {number} words @returns {string} */
+const braillePassage = (words) =>
+  Array.from({ length: words }, () => BRAILLE_WORD).join(BRAILLE_BLANK);
+
+describe("stripInvisible: blank fillers have their own anchor-proportional allowance", () => {
+  // Word counts chosen to straddle every bound of the OLD shared budget: 40
+  // exceeds ceil(visible/PRESERVED_JOINER_PER_VISIBLE) for a five-cell word,
+  // and 200 exceeds PRESERVE_HARD_CAP outright. Both must now round-trip.
+  for (const words of [10, 40, PRESERVE_HARD_CAP + 16, 200])
+    it(`a ${words}-word Braille passage keeps every word space`, () => {
+      const text = braillePassage(words);
+      const { cleaned, found } = stripInvisibleWithReport(text);
+      assert.equal(countOf(text, BRAILLE_BLANK), words - 1); // the input really has them
+      assert.equal(cleaned, text);
+      assert.deepEqual(found, []);
+      assert.equal(countPayloadInvisible(text), 0);
+    });
+
+  it("a long Braille passage is idempotent under a second strip", () => {
+    const text = braillePassage(200);
+    assert.equal(stripInvisible(stripInvisible(text)), text);
+  });
+
+  it("preserved blanks do not draw on the joiner budget", () => {
+    // The regression the split exists to prevent: a Braille passage's blanks
+    // used to consume the shared allowance, so joiners LATER in the same
+    // document were stripped as surplus. Exactly TOTAL_PRESERVED_JOINER_BUDGET
+    // gap-separated Persian joiners must still all survive next to it.
+    const joined = (cp(0x645) + ZWNJ + cp(0x62e) + cp(0x62e)).repeat(
+      TOTAL_PRESERVED_JOINER_BUDGET,
+    );
+    const text = `${braillePassage(200)} ${joined}`;
+    const { cleaned, found } = stripInvisibleWithReport(text);
+    assert.equal(countOf(cleaned, ZWNJ), TOTAL_PRESERVED_JOINER_BUDGET);
+    assert.equal(cleaned, text);
+    assert.deepEqual(found, []);
+  });
+
+  // ─── The ratio boundary, isolated to ONE variable ──────────────────────────
+  // Both documents hold BLANKS fixed at the same count and each blank anchored
+  // by a real cell; they differ only in how many ANCHOR characters accompany
+  // them. So the pair can only fail for the ratio itself — not for length, not
+  // for blank count, not for "long documents are exempt".
+  const BLANKS = TOTAL_PRESERVED_BLANK_BUDGET + 24; // above the floor: the ratio decides
+  // One unit = one blank anchored on its left, plus exactly
+  // PRESERVED_BLANK_PER_ANCHOR anchor cells, plus a non-anchor separator.
+  const unit =
+    BRAILLE_CELL +
+    BRAILLE_BLANK +
+    BRAILLE_CELL.repeat(PRESERVED_BLANK_PER_ANCHOR - 1) +
+    "x";
+  const atRatio = unit.repeat(BLANKS);
+  // Same blanks, ONE fewer anchor: drops the allowance below the blank count.
+  const overRatio = atRatio.slice(0, -2) + "x";
+
+  it("exactly at the ratio, every blank is preserved", () => {
+    assert.ok(
+      BLANKS > TOTAL_PRESERVED_BLANK_BUDGET,
+      "the floor must not decide",
+    );
+    const { cleaned, found } = stripInvisibleWithReport(atRatio);
+    assert.equal(countOf(atRatio, BRAILLE_BLANK), BLANKS);
+    assert.equal(cleaned, atRatio);
+    assert.deepEqual(found, []);
+    assert.equal(countPayloadInvisible(atRatio), 0);
+  });
+
+  it("one anchor short of the ratio, EVERY blank is stripped and reported", () => {
+    // All-or-nothing by design: a document that trips the ratio must not come
+    // out half-spaced, and the blanks it loses must count as payload so the
+    // prompt layer's scatter gate sees them without re-deriving the budget.
+    assert.equal(countOf(overRatio, BRAILLE_BLANK), BLANKS); // same blanks…
+    assert.ok(
+      countOf(overRatio, BRAILLE_CELL) < countOf(atRatio, BRAILLE_CELL),
+    );
+    const { cleaned, found } = stripInvisibleWithReport(overRatio);
+    assert.equal(countOf(cleaned, BRAILLE_BLANK), 0);
+    assert.deepEqual(found, [CATEGORY.BLANK_FILLERS]);
+    assert.equal(countPayloadInvisible(overRatio), BLANKS);
+    assert.equal(stripInvisible(cleaned), cleaned); // idempotent
+  });
+
+  it("the 1:1 alternation channel is stripped whole, on both scripts", () => {
+    // The channel the allowance exists to close: one blank per anchor character
+    // stuffs a bit into every position while each blank stays individually
+    // anchored, so only a density rule can catch it.
+    for (const [anchor, blank] of [
+      [HANGUL_SYLLABLE, cp(0x1160)],
+      [BRAILLE_CELL, BRAILLE_BLANK],
+    ]) {
+      const text = (anchor + blank).repeat(TOTAL_PRESERVED_BLANK_BUDGET * 8);
+      const { cleaned, found } = stripInvisibleWithReport(text);
+      assert.equal(cleaned, anchor.repeat(TOTAL_PRESERVED_BLANK_BUDGET * 8));
+      assert.deepEqual(found, [CATEGORY.BLANK_FILLERS]);
+    }
+  });
+
+  it("the floor keeps short blank-dense text intact", () => {
+    // Below TOTAL_PRESERVED_BLANK_BUDGET the ratio never binds, so a one-line
+    // Braille phrase (or a couple of archaic syllables) is untouched even at
+    // 1:1 — the same role the joiner budget's floor plays for a lone emoji ZWJ
+    // sequence.
+    const text = (BRAILLE_CELL + BRAILLE_BLANK).repeat(
+      TOTAL_PRESERVED_BLANK_BUDGET,
+    );
+    const { cleaned, found } = stripInvisibleWithReport(text);
+    assert.equal(cleaned, text);
+    assert.deepEqual(found, []);
   });
 });
 

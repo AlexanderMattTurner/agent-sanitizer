@@ -35,6 +35,16 @@ table](./README.md#entry-points) maps each to its import.
   Sinhala) or inside an emoji ZWJ sequence. The carve-out fires only when **both**
   neighbors clearly belong to the context, and it is disabled once the total
   invisible count crosses a scatter floor—over-stripping beats under-stripping.
+- **Blank fillers doing real work in their own script**: the Braille blank
+  (U+2800) beside a real cell, a Hangul filler beside a real jamo/syllable. A
+  _run_ of fillers has only fillers for neighbors, so it fails the anchor and is
+  stripped. Because U+2800 _is_ the word space of Unicode Braille and a Hangul
+  filler completes a defective syllable, these are far denser in genuine text
+  than joiners are, so they carry their own document-wide allowance—one
+  preserved blank per two visible anchor-script characters, above a floor—rather
+  than drawing on the joiner/selector preserve budget. Past that ratio no blank
+  in the document is preserved (never half-spaced) and all of them count as
+  payload, which is the density an alternating `syllable filler …` channel needs.
 
 **Reassembly hardening.** The two passes feed each other in _both_ directions:
 stripping an invisible char can reconstitute an ANSI escape its split had
