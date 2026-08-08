@@ -175,8 +175,10 @@ function resolvePathExpression(expr, file, scope) {
  * path from being registered as though it were repo data.
  */
 function collectPathBindings(file, text, imported) {
+  // Terminates: every repeat adds at least one name to `banned`, which is
+  // bounded by the file's distinct `const` names.
   const banned = new Set();
-  for (let pass = 0; ; pass++) {
+  for (;;) {
     const scope = new Map(imported);
     const resolutions = new Map();
     for (const m of text.matchAll(/\bconst\s+([A-Za-z_$][\w$]*)\s*=\s*/g)) {
@@ -200,7 +202,9 @@ function collectPathBindings(file, text, imported) {
       banned.add(name);
       scope.delete(name);
     }
-    if (ambiguous.length === 0 || pass >= 5) return scope;
+    // A name derived from one banned this round still holds its stale value,
+    // so re-resolve until a whole pass finds nothing new to ban.
+    if (ambiguous.length === 0) return scope;
   }
 }
 
