@@ -965,6 +965,114 @@ test("provision fails loud when no Python toolchain exists", (t) => {
   assert.match(res.stderr, /UNREDACTED/);
 });
 
+// ─── Shell-side timing: the two entry points that never reach node ───────────
+
+// Threshold 0 rather than a real overrun: what is under test is that these
+// scripts MEASURE and REPORT at all, and the shared shell/node wording is
+// pinned byte-for-byte in test/hook-timing-shell-parity.test.mjs.
+const REPORT_EVERY_RUN = {
+  _AGENT_SANITIZER_SLOW_HOOK_MS: "0",
+  _AGENT_SANITIZER_SLOW_PROVISION_MS: "0",
+};
+
+test("the launcher reports its own preflight when it overruns", (t) => {
+  const plugin = stagePlugin(t);
+  const res = launch(
+    plugin,
+    "PostToolUse",
+    "sanitize-output",
+    { hook_event_name: "PostToolUse", tool_name: "Bash", tool_response: "ok" },
+    { env: REPORT_EVERY_RUN },
+  );
+  // The preflight is a PATH probe and a `node --check` of the whole bundle, on
+  // every hook call, and it is gone the instant the launcher execs — so if it
+  // ever gets slow, this line is the only place it can be said.
+  assert.match(
+    res.stderr,
+    /PERFORMANCE: the safe-launch PostToolUse hook took/,
+  );
+  // On stderr, never stdout: stdout is the verdict the harness parses, and an
+  // extra line there reads as a malformed verdict, i.e. a fail OPEN.
+  assert.equal(res.stdout.includes("PERFORMANCE"), false, res.stdout);
+  assert.doesNotThrow(() => JSON.parse(res.stdout.trim() || "{}"), res.stdout);
+});
+
+test("the launcher reports the preflight on the degraded path too", (t) => {
+  const plugin = stagePlugin(t);
+  // No node on PATH: the launcher never execs, so the timing has to be reported
+  // by the degraded arm or not at all.
+  const res = launchWithoutNode(t, plugin, REPORT_EVERY_RUN);
+  assert.equal(res.status, 0);
+  assert.match(res.stderr, /PERFORMANCE: the safe-launch PreToolUse hook took/);
+  // The degraded verdict itself is unchanged and still parses.
+  assert.doesNotThrow(() => JSON.parse(res.stdout), res.stdout);
+});
+
+test("a healthy launcher run says nothing about timing", (t) => {
+  const plugin = stagePlugin(t);
+  const res = launch(plugin, "PostToolUse", "sanitize-output", {
+    hook_event_name: "PostToolUse",
+    tool_name: "Bash",
+    tool_response: "ok",
+  });
+  // Non-vacuity for the two cases above: with the real threshold in force the
+  // same run is silent, so they are observing the report and not just any
+  // stderr the launcher happens to produce.
+  assert.equal(res.stderr.includes("PERFORMANCE"), false, res.stderr);
+});
+
+test("provisioning reports as one-time setup, not as a slow hook", (t) => {
+  const plugin = stagePlugin(t);
+  const data = join(scratch(t), "data");
+  const venvBin = join(data, "venv", "bin");
+  mkdirSync(venvBin, { recursive: true });
+  writeFileSync(join(venvBin, "agent-secret-redactor-daemon"), "#!/bin/sh\n", {
+    mode: 0o755,
+  });
+  cpSync(
+    join(plugin, "requirements.txt"),
+    join(data, "venv", ".requirements-installed"),
+  );
+  const res = spawnSync(
+    "bash",
+    [join(plugin, "scripts", "provision-redactor.sh"), data],
+    {
+      encoding: "utf8",
+      env: {
+        PATH: stubBin(t, ["python3", "uv", "pip"]),
+        ...REPORT_EVERY_RUN,
+      },
+    },
+  );
+  assert.equal(res.status, 0, res.stderr);
+  // The install budget, not the per-call one: charging a dependency install to
+  // a 1s hook budget would report every cold session and name the wrong cost.
+  assert.match(res.stderr, /PERFORMANCE: one-time setup/);
+  assert.match(res.stderr, /paid once per install/);
+  assert.equal(res.stderr.includes("hook took"), false, res.stderr);
+});
+
+test("a fast provisioning run says nothing about timing", (t) => {
+  const plugin = stagePlugin(t);
+  const data = join(scratch(t), "data");
+  const venvBin = join(data, "venv", "bin");
+  mkdirSync(venvBin, { recursive: true });
+  writeFileSync(join(venvBin, "agent-secret-redactor-daemon"), "#!/bin/sh\n", {
+    mode: 0o755,
+  });
+  cpSync(
+    join(plugin, "requirements.txt"),
+    join(data, "venv", ".requirements-installed"),
+  );
+  const res = spawnSync(
+    "bash",
+    [join(plugin, "scripts", "provision-redactor.sh"), data],
+    { encoding: "utf8", env: { PATH: stubBin(t, ["python3", "uv", "pip"]) } },
+  );
+  assert.equal(res.status, 0, res.stderr);
+  assert.equal(res.stderr.includes("PERFORMANCE"), false, res.stderr);
+});
+
 // ─── The un-bundled sources (what PR 2 publishes) ────────────────────────────
 
 test("hook sources run un-bundled against the installed packages", (t) => {

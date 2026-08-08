@@ -11,6 +11,7 @@ import {
 import { userInfo } from "node:os";
 import { createHash } from "node:crypto";
 import { pathToFileURL } from "node:url";
+import { excludeProvisioning } from "./hook-timing.mjs";
 
 /**
  * EVERY process-wide slot these helpers keep — the four a host can observe or
@@ -742,6 +743,44 @@ export async function awaitLazyDependency({
   settleMs = 1000,
   ceilingMs = 900000,
   intervalMs = 250,
+}) {
+  // The whole wait is PROVISIONING, not this hook's own cost: it is time the
+  // container spends installing dependencies, and on a cold start it can run to
+  // minutes. Charging it to the hook would make the slow-hook notice fire on
+  // every cold session with a number that names the wrong culprit.
+  return excludeProvisioning(
+    () =>
+      pollForDependency({
+        tryImport,
+        markerPresent,
+        setupAlive,
+        now,
+        sleep,
+        graceMs,
+        settleMs,
+        ceilingMs,
+        intervalMs,
+      }),
+    now,
+  );
+}
+
+/**
+ * The poll loop {@link awaitLazyDependency} wraps. Split out so the
+ * provisioning charge brackets every exit — including the give-up arms.
+ * @param {Required<Parameters<typeof awaitLazyDependency>[0]>} opts
+ * @returns {Promise<Record<string, any> | null>}
+ */
+async function pollForDependency({
+  tryImport,
+  markerPresent,
+  setupAlive,
+  now,
+  sleep,
+  graceMs,
+  settleMs,
+  ceilingMs,
+  intervalMs,
 }) {
   const start = now();
   let sawInstalling = false;

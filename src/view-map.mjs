@@ -12,9 +12,19 @@
  *             placeholder (`pairs` from the injected redactor’s map mode)
  *
  * The view is carried by {@link makeFileView}, the ONLY constructor the
- * consumers of this module may use: it owns the code-point → UTF-16 offset
- * conversion and brands the result, so the conversion happens exactly once per
- * view and every function below can assert it happened.
+ * consumers of this module may use: it brands the result, and the brand carries
+ * the coordinate SPACE the pair offsets live in — `"codePoint"` as the injected
+ * redactor emits them, `"utf16"` as every function below indexes by. Conversion
+ * is a separate, one-way door ({@link toUtf16View}) that accepts only a
+ * `"codePoint"` view and returns a new `"utf16"` one, so converting twice throws
+ * instead of shifting every astral-preceded offset a second time. Each consumer
+ * asserts the space it needs, so a wrongly-spaced view fails at the boundary
+ * rather than resolving onto the wrong bytes.
+ *
+ * The space is part of the value rather than a convention in a comment because
+ * the two spaces are otherwise indistinguishable — bare numbers in a bare
+ * object — which is exactly why the original double-conversion bug was silently
+ * accepted.
  */
 
 /**
@@ -28,57 +38,123 @@ const FILE_VIEW = Symbol("agent-sanitizer:file-view");
 
 /**
  * @typedef {{ placeholder: string, original: string, start: number }} RedactionPair
- * @typedef {{ text: string, pairs: readonly RedactionPair[] }} FileView
- *   A branded, frozen carrier from {@link makeFileView}. `pairs` are in UTF-16
- *   offsets, sorted and non-overlapping — both enforced at construction.
+ * @typedef {"codePoint" | "utf16"} OffsetSpace
+ *   Units a {@link FileView}'s pair offsets are expressed in. `codePoint` is
+ *   what the redactor's map mode emits (Python indexes strings by code point);
+ *   `utf16` is what every function in this module indexes by (JS
+ *   `indexOf`/`slice`/`.length` count UTF-16 code units).
  */
 
 /**
- * Build the branded file view from a redactor's map-mode result.
+ * A branded, frozen carrier from {@link makeFileView}, tagged with the space its
+ * `pairs` offsets live in. Its own JSDoc block: a `@template` applies to every
+ * typedef in the comment it sits in, so sharing one with the two above would
+ * make `RedactionPair` and `OffsetSpace` generic too.
+ * @template {OffsetSpace} S
+ * @typedef {{ readonly space: S, readonly text: string,
+ *   readonly pairs: readonly RedactionPair[] }} FileView
+ */
+
+/**
+ * Wrap a redactor's map-mode result in a frozen, branded view tagged with the
+ * space its offsets are in.
  *
  * The redactor's own object is never touched. It used to be: the caller did
  * `view.pairs = pairsToUtf16(view.text, view.pairs)`, an in-place mutation of a
  * value returned from an INJECTED seam. A redactor that memoizes its map result
  * (a reasonable thing for a caller to build) hands back the same object on the
- * second identical call, which then gets converted a SECOND time — every
+ * second identical call, which then got converted a SECOND time — every
  * placeholder preceded by an astral character shifts again and the same input
- * yields a different verdict. Converting into a fresh frozen carrier removes
- * that: the conversion is part of construction, the redactor's value is left
- * alone, and every consumer asserts the brand rather than accepting a
- * hand-assembled `{text, pairs}` whose offsets may or may not be converted.
+ * yields a different verdict.
  *
- * It does NOT make double conversion impossible — `makeFileView(v.text,
- * v.pairs)` on an existing view would convert again. Nothing does that, and a
- * guard would have to reject legitimately-frozen caller input to catch it, so
- * the defence here is that there is exactly one construction site and it takes
- * the redactor's result directly.
+ * Construction no longer converts. It brands and records the space, and
+ * {@link toUtf16View} does the conversion behind a check that the input is
+ * still in code-point space — so `toUtf16View(alreadyConverted)` throws where
+ * `makeFileView(v.text, v.pairs)` on an existing view used to silently convert
+ * a second time. That was the one door this carrier left open.
  *
- * The frozen `pairs` array is likewise a copy — `pairsToUtf16` returns its
- * argument unchanged for the empty case, and freezing the redactor's array
- * would reach back into the seam's memoized value.
+ * Both the array AND each pair object are copied before freezing, so nothing
+ * here reaches back into the seam's (possibly memoized) value, and a caller that
+ * later mutates its own pairs cannot change what this view resolves.
+ * @template {OffsetSpace} S
  * @param {string} text redacted view text
- * @param {RedactionPair[]} pairs redactor pairs, in CODE-POINT offsets
- * @returns {FileView}
+ * @param {readonly RedactionPair[]} pairs redactor pairs, offsets in `space`
+ * @param {S} space
+ * @returns {FileView<S>}
  */
-export function makeFileView(text, pairs) {
+export function makeFileView(text, pairs, space) {
+  assertPairsOrdered(text, pairs, space);
   return Object.freeze({
     [FILE_VIEW]: true,
+    space,
     text,
-    pairs: Object.freeze([...pairsToUtf16(text, pairs)]),
+    pairs: Object.freeze(pairs.map((pair) => Object.freeze({ ...pair }))),
   });
 }
 
 /**
- * Throw unless `view` came from {@link makeFileView}. Every offset function
- * here reads `view.pairs` as UTF-16 offsets; a hand-rolled `{text, pairs}` whose
- * pairs are still in code-point space mis-anchors an edit onto the wrong bytes
- * whenever an astral character precedes a placeholder — silently, and only for
+ * Offsets counted the way `space` counts them: UTF-16 code units, or code
+ * points as the Python redactor emits them.
+ * @param {string} text
+ * @param {OffsetSpace} space
+ * @returns {number}
+ */
+function unitLength(text, space) {
+  return space === "utf16" ? text.length : Array.from(text).length;
+}
+
+/**
+ * Throw unless `pairs` is in range, sorted by `start` and non-overlapping, with
+ * every offset read in `space`.
+ *
+ * Every consumer here — `mapViewOffset`'s `else break`, `pairDiskSpans`'s
+ * sequential walk — assumes exactly this. An out-of-range start indexes past
+ * the text and silently yields `undefined`, which then poisons every downstream
+ * offset comparison (`undefined < n` is always false); an out-of-order or
+ * overlapping pair stops the scan early and mis-maps an offset onto the wrong
+ * bytes. Enforced at CONSTRUCTION so no view can exist in that state, rather
+ * than at each read.
+ * @param {string} text the view text the offsets index into
+ * @param {readonly RedactionPair[]} pairs
+ * @param {OffsetSpace} space
+ * @returns {void}
+ */
+function assertPairsOrdered(text, pairs, space) {
+  // The no-secrets rehydration is the common case, and the loop below has
+  // nothing to check there. Return before `unitLength`, which for "codePoint"
+  // materializes a code-point array over the whole file on every Edit/Write.
+  if (pairs.length === 0) return;
+  const total = unitLength(text, space);
+  // The previous pair's placeholder end. `start < prevEnd` catches an
+  // out-of-order start and an overlap in one comparison.
+  let prevEnd = 0;
+  for (const pair of pairs) {
+    if (!Number.isInteger(pair.start) || pair.start < 0 || pair.start > total)
+      throw new Error(
+        `redaction pair start ${pair.start} is out of range [0, ${total}]`,
+      );
+    if (pair.start < prevEnd)
+      throw new Error(
+        `redaction pairs must be sorted and non-overlapping: pair start ${pair.start} precedes previous pair end ${prevEnd}`,
+      );
+    prevEnd = pair.start + unitLength(pair.placeholder, space);
+  }
+}
+
+/**
+ * Throw unless `view` came from {@link makeFileView} AND carries `space`.
+ *
+ * Two failures, one gate. A hand-rolled `{text, pairs}` has offsets that may or
+ * may not have been converted; a real view in the WRONG space has offsets that
+ * definitely have not. Either mis-anchors an edit onto the wrong bytes whenever
+ * an astral character precedes a placeholder — silently, and only for
  * emoji-bearing files. Fail loudly at the boundary instead.
  * @param {unknown} view
+ * @param {OffsetSpace} space  the space the calling function indexes by
  * @param {string} fn name of the calling function, for the error
  * @returns {void}
  */
-function assertFileView(view, fn) {
+function assertFileView(view, space, fn) {
   if (
     view === null ||
     typeof view !== "object" ||
@@ -87,6 +163,11 @@ function assertFileView(view, fn) {
     throw new Error(
       `${fn} requires a view built by makeFileView(); got a raw object whose ` +
         `pair offsets have not been normalized to UTF-16`,
+    );
+  const actual = /** @type {FileView<OffsetSpace>} */ (view).space;
+  if (actual !== space)
+    throw new Error(
+      `${fn} requires a view with ${space} pair offsets, got ${actual}`,
     );
 }
 
@@ -195,53 +276,52 @@ function diskOffset(deletions, cleanedOffset, isEnd) {
  * placeholder mis-anchors the edit onto the wrong bytes.
  *
  * Exactly once, though: applying it to its own output shifts every
- * astral-preceded placeholder a second time. Prefer {@link makeFileView}, which
- * runs it as part of construction and hands back a branded carrier the rest of
- * this module accepts; this stays exported (it is public API on the
- * `./view-map` subpath) for callers doing their own offset bookkeeping, who own
- * the once-only discipline themselves.
+ * astral-preceded placeholder a second time, and bare arrays of numbers give
+ * nothing to check that against. Prefer {@link toUtf16View}, which runs this
+ * behind a space check so the second application throws instead. This stays
+ * exported — it is public API on the `./view-map` subpath, and removing it
+ * would be a breaking change the release workflow cannot express (it caps
+ * automated bumps at minor) — for callers doing their own offset bookkeeping,
+ * who own the once-only discipline themselves.
  * @param {string} text the redacted view text the offsets index into
- * @param {{placeholder: string, original: string, start: number}[]} pairs
- * @returns {{placeholder: string, original: string, start: number}[]}
+ * @param {RedactionPair[]} pairs
+ * @returns {RedactionPair[]}
  */
 export function pairsToUtf16(text, pairs) {
   if (pairs.length === 0) return pairs;
+  assertPairsOrdered(text, pairs, "codePoint");
   const codePoints = Array.from(text);
   // prefix[i] = UTF-16 length of the first i code points of `text`.
   const prefix = new Array(codePoints.length + 1);
   prefix[0] = 0;
   for (let i = 0; i < codePoints.length; i++)
     prefix[i + 1] = prefix[i] + codePoints[i].length;
-  // Code-point end of the previous pair's placeholder span. mapViewOffset's
-  // `else break` (and pairDiskSpans) assume pairs are sorted by start and never
-  // overlap; an out-of-order or overlapping pair would make the scan stop early
-  // and mis-map an offset onto the wrong bytes. Enforce the contract here.
-  let prevEnd = 0;
-  return pairs.map((pair) => {
-    // A redactor offset outside [0, codePoints.length] indexes `prefix` out of
-    // range and would silently yield `start: undefined`, which then poisons
-    // every downstream offset comparison (undefined < n is always false) and
-    // mis-anchors or corrupts the edit. Fail loudly instead — an out-of-range
-    // pair means the injected redactor's map contract was violated.
-    if (
-      !Number.isInteger(pair.start) ||
-      pair.start < 0 ||
-      pair.start > codePoints.length
-    )
-      throw new Error(
-        `redaction pair start ${pair.start} is out of range [0, ${codePoints.length}]`,
-      );
-    // Sorted + non-overlapping: `start` must be monotonically non-decreasing and
-    // each pair's placeholder span must end at or before the next pair's start.
-    // `prevEnd` already encodes the previous end, so `start < prevEnd` catches
-    // both an out-of-order start and an overlap in one comparison. Fail closed.
-    if (pair.start < prevEnd)
-      throw new Error(
-        `redaction pairs must be sorted and non-overlapping: pair start ${pair.start} precedes previous pair end ${prevEnd}`,
-      );
-    prevEnd = pair.start + Array.from(pair.placeholder).length;
-    return { ...pair, start: prefix[pair.start] };
-  });
+  return pairs.map((pair) => ({ ...pair, start: prefix[pair.start] }));
+}
+
+/**
+ * The same view with its pair offsets re-expressed in UTF-16 code units — a NEW
+ * frozen carrier; `view` is untouched.
+ *
+ * The one-way door. Only a `"codePoint"` view is accepted, so converting an
+ * already-converted view throws rather than shifting every astral-preceded
+ * offset a second time — which either mis-anchors the edit or rejects it as
+ * cutting a placeholder, both from an input that was fine the first time it was
+ * seen. Offset range/sort/overlap validity is not this door's job — every
+ * carrier is checked at construction (see {@link assertPairsOrdered}), in
+ * whichever space it declares.
+ * @param {FileView<"codePoint">} view
+ * @returns {FileView<"utf16">}
+ */
+export function toUtf16View(view) {
+  assertFileView(view, "codePoint", "toUtf16View");
+  // Copied because `view.pairs` is readonly and `pairsToUtf16` keeps the
+  // published mutable signature; makeFileView copies again on the way in.
+  return makeFileView(
+    view.text,
+    pairsToUtf16(view.text, [...view.pairs]),
+    "utf16",
+  );
 }
 
 /**
@@ -275,7 +355,7 @@ function mapViewOffset(pairs, offset) {
  * and a mis-attributed run would mis-anchor the edit.
  * @param {string} content disk file content
  * @param {string} cleaned Layer-1 view of `content`
- * @param {FileView} view
+ * @param {FileView<"utf16">} view
  * @param {{start: number, deleted: string}[]} deletions
  * @param {number} viewStart
  * @param {number} viewEnd
@@ -288,7 +368,7 @@ export function resolveSpan(
   viewStart,
   viewEnd,
 ) {
-  assertFileView(view, "resolveSpan");
+  assertFileView(view, "utf16", "resolveSpan");
   const cleanedStart = mapViewOffset(view.pairs, viewStart);
   const cleanedEnd = mapViewOffset(view.pairs, viewEnd);
   if (cleanedStart === null || cleanedEnd === null) return null;
@@ -378,15 +458,15 @@ export function spliceOrdered(text, matches, replacementFor) {
  * was never part of the secret); interior runs are included. Callers use these
  * to detect an edit whose on-disk footprint intrudes into bytes the model was
  * never shown.
- * @param {FileView} view
+ * @param {FileView<"utf16">} view
  * @param {{start: number, deleted: string}[]} deletions
  * @returns {{start: number, end: number}[]}
  */
 export function pairDiskSpans(view, deletions) {
-  assertFileView(view, "pairDiskSpans");
+  assertFileView(view, "utf16", "pairDiskSpans");
   return view.pairs.map((pair) => {
     // pair.start is a placeholder boundary, and makeFileView rejected any pair
-    // set that is out of order or overlapping (see pairsToUtf16), so it is never
+    // set out of order or overlapping (see assertPairsOrdered), so it is never
     // strictly interior to another placeholder: mapViewOffset always resolves.
     // The throw is kept anyway, and is NOT dead weight — it is the difference
     // between crashing and corrupting. `null + pair.original.length` is a
@@ -395,9 +475,9 @@ export function pairDiskSpans(view, deletions) {
     // i.e. an edit footprint pointing at the wrong bytes.
     const cleanedStart = mapViewOffset(view.pairs, pair.start);
     /* c8 ignore start -- unreachable through makeFileView, which rejects the
-       overlapping pair set that is the only way to produce null here (see the
-       constructor test in test/view-map.test.mjs); kept as a fail-loud guard
-       against a future regression in that ordering check. `ignore next N` does
+       overlapping pair set that is the only way to produce null here (see
+       assertPairsOrdered and the constructor test in test/view-map.test.mjs);
+       kept as a fail-loud guard against a future regression in that check. `ignore next N` does
        NOT suppress the branch here — only the statement — so the range form is
        required to keep the src branch floor at 100%. */
     if (cleanedStart === null)

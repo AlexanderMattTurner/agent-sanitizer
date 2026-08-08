@@ -66,9 +66,19 @@ visible text; a final unconditional sweep after the loop keeps the
 no-raw-introducer guarantee independent of the iteration bound. The result
 carries no raw ANSI introducer for _any_ input, and re-cleaning it reproduces
 it exactly—the idempotence the Edit-repair rehydrator's soundness gate assumes.
-One tokenizer answers every ANSI question (what to splice, and whether the only
-escape content is display-only SGR colour), so the stripper and the operator
-warning cannot disagree about what a sequence is. OSC strings (titles,
+One tokenizer answers every ANSI question (what to splice, and whether what was
+removed was INERT—display-only SGR colour, or a lone 7-bit `ESC` that opened
+nothing at all), so the stripper and the operator warning cannot disagree about
+what a sequence is. That inert/injection-shaped split is one input to the
+[severity tier](#severity-warnings-vs-notes) that keeps the warning worth
+reading: a stray `ESC` sitting in a file is reported as a terse note, while
+a cursor move, an erase, an OSC string, or a raw C1 introducer (which no
+legitimate UTF-8 text carries, and which includes the DCS/SOS/PM/APC string
+introducers) keeps the WARNING. An `ESC` that _opened_ a CSI it never completed
+stays loud too: a terminal's CSI parser is stateful and keeps consuming what
+follows until a final byte arrives, so `ESC[12 world` shows the human `orld`
+while the model reads every word—the same model-sees/human-sees divergence a
+complete sequence buys. OSC strings (titles,
 clickable-hyperlink URLs) are consumed as a
 whole, for every terminator form—ST (`ESC\` or 8-bit C1 ST U+009C) and the
 legacy BEL—and for the 8-bit C1 OSC introducer (U+009D); an _unterminated_ OSC
@@ -113,7 +123,17 @@ attributes (`src`/`href`/`background`/`srcset`/`ping`, form `action`/`formaction
 - `javascript:` / `vbscript:` targets
 
 Each threat carries a `reason` and the destination `target` (never the
-payload-bearing query/fragment), suitable for a warning shown to the operator.
+payload-bearing query/fragment) — the finding is shown to the operator with the
+target named and the payload withheld, since re-presenting the exfil payload in
+the model's context would hand the model the very bytes the finding is about.
+
+It also carries `autoFetched`, which is what its [severity](#severity-warnings-vs-notes)
+turns on: an `<img src>`, a stylesheet `<link>`, a `srcset`, a `ping`, a form
+`action` or a `meta refresh` exfiltrates the moment the content renders, with
+nobody deciding anything, while an `<a href>` or a markdown link cannot until
+the model chooses to follow it — and the sentence reporting it is precisely the
+instruction not to. A target whose kind cannot be resolved is treated as
+auto-fetched (fail closed).
 
 ## Confusable folding (tool input)
 
@@ -180,13 +200,15 @@ if a contaminated file cannot be rewritten.
 `./prompt` classifies a submitted prompt as **pass / pass-with-note / block** on
 payload-capable invisible Unicode and ANSI. A prompt-submission channel usually
 cannot rewrite the prompt in place, so the only neutralization is to block.
-One carve-out: a prompt whose only escape content is display-only SGR color
-passes with a note (pasting colored terminal output is the common case, and SGR
-cannot move the cursor, erase, or carry an OSC payload). The SGR-only test
-gates on both the 7-bit ESC (`U+001B`) introducer and the whole 8-bit C1
-control block (U+0080–U+009F)—not just the CSI byte (`U+009B`)—so a
-C1-introduced cursor-move, erase, or OSC/DCS/SOS/PM/APC string is never
-mistaken for benign color.
+One carve-out: a prompt whose only escape content is INERT passes with a note —
+display-only SGR color, and/or a 7-bit `ESC` that completes no sequence (a log
+line cut mid-escape). Pasting colored terminal output is the common case, and
+neither form can move the cursor, erase, or carry an OSC payload. The test gates
+on both the 7-bit ESC (`U+001B`) introducer and the whole 8-bit C1 control block
+(U+0080–U+009F)—not just the CSI byte (`U+009B`)—so a C1-introduced cursor-move,
+erase, or OSC/DCS/SOS/PM/APC string is never mistaken for benign color; and it
+judges from what the Layer-1 strip actually removed, so a sequence that only
+RECONSTITUTES during stripping is judged as the sequence it becomes.
 
 ## Tool-output pipeline & Layer 5
 
@@ -297,6 +319,47 @@ positive costs a sentence of context, never a mangled input):
   an uncommitted secret line on a tracked file is an accepted gap — the
   committed content survives, and probing index-vs-worktree state would trade
   precision for recall.
+
+## Severity: warnings vs notes
+
+Findings come back split into two tiers, and the split is a security property in
+its own right — a detector whose banner fires on every ordinary page teaches its
+reader to skip the banner, and then the one that mattered scrolls past with it.
+
+| Tier        | Means                                                                                                                                                      |
+| ----------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **WARNING** | This text is injection-shaped: something was hidden from a human reader, something a payload would have used was removed, or a secret was redacted.        |
+| **NOTE**    | This happened, and here is how to look at it, but nothing about it is attack-shaped: incidental bytes, or content that was PRESERVED and merely described. |
+
+The tier never changes what the pipeline **does**. The same bytes are stripped,
+spliced and redacted either way, and a note is still reported — all that rides on
+it is which banner the operator sees. That asymmetry is why a note is the right
+answer whenever the evidence is thin: an under-loud true finding is still
+delivered, while an over-loud false one costs the channel its credibility.
+
+Four decisions currently land at NOTE:
+
+- **An incidental Layer-1 strip** — inert ANSI (display-only SGR colour, or a
+  lone `ESC` that opened nothing) together with too few invisible characters to
+  spell anything. Both axes must be incidental; a cursor move, an erase, an OSC,
+  a raw C1 introducer or a payload-length run of invisibles keeps the WARNING.
+- **A preserved scripting/resource tag** (Layer 2) — nothing was removed and
+  nothing was hidden, and a `<script>` is on essentially every page ever fetched.
+  The Layer-2 **splice** stays a WARNING: those bytes were invisible to a human
+  reading the rendered page.
+- **An exfil-shaped URL that is not auto-fetched** (Layer 3) — see above.
+- **The prompt gate's inert-escape carve-out**, which predates the tier and is
+  the same judgement (see [User-prompt verdict](#user-prompt-verdict)).
+
+Layer 4 (a redacted secret) and Layer 5 (a filter finding) are always WARNINGs.
+
+The Layer-1 downgrade is gated on the caller asserting first-party ingress
+(`sgrCarveOut` in `./output`, set for local tool output). Without it — the
+`./sanitize` door, a fetched page, an MCP connector — Layer 1 stays loud however
+few the bytes, because that is the channel where a hidden character was _put_
+there. The `sgrNote` flag on a `./output` result means "nothing here rose above a
+note", so a caller can show the quiet line instead of the banner; one warning
+anywhere in the walk clears it.
 
 ## Failure posture (`AGENT_SANITIZER_FAIL_OPEN`)
 

@@ -44,6 +44,57 @@ var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__ge
   mod
 ));
 
+// claude-hooks/lib/hook-timing.mjs
+function formatSeconds(ms) {
+  return (Math.round(ms / 100) / 10).toFixed(1);
+}
+async function excludeProvisioning(work, now = Date.now) {
+  const started = now();
+  try {
+    return await work();
+  } finally {
+    provisioningMs += Math.max(0, now() - started);
+  }
+}
+function startHookTimer(now = Date.now) {
+  const started = now();
+  const provisionedBefore = provisioningMs;
+  return () => Math.max(0, now() - started - (provisioningMs - provisionedBefore));
+}
+function slowHookNotice(hookName, elapsedMs, thresholdMs = SLOW_HOOK_THRESHOLD_MS) {
+  if (elapsedMs <= thresholdMs) return null;
+  return `agent-sanitizer PERFORMANCE: the ${hookName} hook took ${formatSeconds(elapsedMs)}s, over its ${formatSeconds(thresholdMs)}s budget \u2014 this delay is the sanitizer's, not the model's, and every affected call pays it. Tell the user, and suggest they report it at ${ISSUE_URL} with the hook name and timing.`;
+}
+function writeSlowHookNotice(hookName, elapsedMs, writeErr = (chunk) => process.stderr.write(chunk)) {
+  const notice = slowHookNotice(hookName, elapsedMs);
+  if (notice === null) return null;
+  writeErr(notice + "\n");
+  return notice;
+}
+function withSlowHookNotice(hookName, elapsedMs, verdict, writeErr = (chunk) => process.stderr.write(chunk)) {
+  const notice = writeSlowHookNotice(hookName, elapsedMs, writeErr);
+  if (notice === null) return verdict;
+  return {
+    ...verdict,
+    additional_context: verdict.additional_context ? `${verdict.additional_context} ${notice}` : notice
+  };
+}
+function reportSlowHook(hookName, elapsedMs, hookEventName, emit, writeErr = (chunk) => process.stderr.write(chunk)) {
+  const notice = writeSlowHookNotice(hookName, elapsedMs, writeErr);
+  if (notice === null) return false;
+  emit(hookEventName, { additionalContext: notice });
+  return true;
+}
+var SLOW_HOOK_THRESHOLD_MS, ISSUE_URL, provisioningMs;
+var init_hook_timing = __esm({
+  "claude-hooks/lib/hook-timing.mjs"() {
+    "use strict";
+    SLOW_HOOK_THRESHOLD_MS = 1e3;
+    ISSUE_URL = "https://github.com/AlexanderMattTurner/agent-sanitizer/issues/new";
+    provisioningMs = 0;
+  }
+});
+
 // claude-hooks/lib/hook-io.mjs
 import {
   openSync,
@@ -212,6 +263,32 @@ async function awaitLazyDependency({
   ceilingMs = 9e5,
   intervalMs = 250
 }) {
+  return excludeProvisioning(
+    () => pollForDependency({
+      tryImport,
+      markerPresent,
+      setupAlive,
+      now,
+      sleep: sleep2,
+      graceMs,
+      settleMs,
+      ceilingMs,
+      intervalMs
+    }),
+    now
+  );
+}
+async function pollForDependency({
+  tryImport,
+  markerPresent,
+  setupAlive,
+  now,
+  sleep: sleep2,
+  graceMs,
+  settleMs,
+  ceilingMs,
+  intervalMs
+}) {
   const start = now();
   let sawInstalling = false;
   let enteredDone = false;
@@ -280,6 +357,7 @@ var defaultSharedState, shared, HookEvent, PermissionDecision, FAIL_OPEN_ENV, FA
 var init_hook_io = __esm({
   "claude-hooks/lib/hook-io.mjs"() {
     "use strict";
+    init_hook_timing();
     defaultSharedState = () => ({
       lazyModules: /* @__PURE__ */ Object.create(null),
       cliEntryClaimed: false,
@@ -67087,15 +67165,21 @@ async function runJudgeCli(hookName, judge, {
   write = (chunk) => process.stdout.write(chunk)
 }) {
   let input;
+  let elapsed = null;
   try {
     input = await readInput();
+    elapsed = startHookTimer();
     const { claudeAdapter: adapter } = controlPlane();
     const event = adapter.parse(transformInput(input));
-    const out = nativeStdout(adapter.render(await judge(event), event));
+    const judged = await judge(event);
+    const out = nativeStdout(
+      adapter.render(withSlowHookNotice(hookName, elapsed(), judged), event)
+    );
     if (out !== null) write(out);
   } catch (err) {
     process.stderr.write(`${hookName} hook error: ${errMessage(err)}
 `);
+    if (elapsed !== null) writeSlowHookNotice(hookName, elapsed());
     onError(err, input);
   }
 }
@@ -67104,6 +67188,7 @@ var init_control_plane2 = __esm({
   async "claude-hooks/lib/control-plane.mjs"() {
     "use strict";
     init_hook_io();
+    init_hook_timing();
     marker = hookgateMarkerPath();
     loaded = await awaitLazyDependency({
       tryImport: async () => {
@@ -67714,7 +67799,11 @@ async function redactViaDaemon(text5, opts = {}) {
     deadline,
     connect = connectAndRequest,
     spawn: spawnFn = spawnDaemon,
-    waitForSocket: waitFn = waitForSocket
+    waitForSocket: waitFn = waitForSocket,
+    // The clock the provisioning charge is measured on; injectable alongside the
+    // waitForSocket seam it brackets, since a stubbed wait advances a test clock
+    // rather than real time.
+    now = Date.now
   } = opts;
   const remainingMs = () => deadline ? deadline.remainingMs() : void 0;
   const budgetSpent = () => {
@@ -67756,7 +67845,7 @@ async function redactViaDaemon(text5, opts = {}) {
     spawnFn(socketPath);
     const budgetMs = remainingMs();
     const waitOpts = budgetMs === void 0 ? void 0 : { deadlineMs: Math.min(WAIT_DEADLINE_MS, budgetMs) };
-    if (!await waitFn(socketPath, waitOpts))
+    if (!await excludeProvisioning(() => waitFn(socketPath, waitOpts), now))
       throw failClosed(
         new Error(`redactor daemon did not start within ${WAIT_DEADLINE_MS}ms`)
       );
@@ -67772,6 +67861,7 @@ var FRAME_CAP, DEFAULT_SOCKET_PATH, WAIT_DEADLINE_MS, sleep;
 var init_redactor_client = __esm({
   "claude-hooks/lib/redactor-client.mjs"() {
     "use strict";
+    init_hook_timing();
     init_env_config();
     FRAME_CAP = 16 * 1024 * 1024;
     DEFAULT_SOCKET_PATH = process.env._AGENT_SANITIZER_REDACTOR_SOCKET || join3(tmpdir2(), "agent-sanitizer-redactor", "redactor.sock");
@@ -68395,10 +68485,11 @@ async function sanitizeText2(text5, toolName, deadline = makeDeadline(SANITIZE_B
       return note ? { text: secrets.text, found: secrets.found, note } : { text: secrets.text, found: secrets.found };
     }
   };
-  const result = (
-    /** @type {{ cleaned: string, warnings: string[], modified: boolean, sgrNote: boolean, reveal?: string }} */
+  const seamResult = (
+    /** @type {{ cleaned: string, warnings: string[], notes?: string[], modified: boolean, sgrNote: boolean, reveal?: string }} */
     await sanitizeTextSeam(text5, seamOptions)
   );
+  const result = { ...seamResult, notes: seamResult.notes ?? [] };
   return ext.postText ? applyPostText(
     result,
     await ext.postText(result.cleaned, {
@@ -68420,10 +68511,11 @@ function applyPostText(result, post) {
     sgrNote: result.sgrNote && !rewrote
   };
 }
-async function sanitizeValue2(value, toolName, warnings, reveals = [], deadline = makeDeadline(SANITIZE_BUDGET_MS), ext = {}) {
+async function sanitizeValue2(value, toolName, warnings, reveals = [], deadline = makeDeadline(SANITIZE_BUDGET_MS), ext = {}, notes = []) {
   if (typeof value === "string") {
     const result = await sanitizeText2(value, toolName, deadline, ext);
     warnings.push(...result.warnings);
+    notes.push(...result.notes);
     if (result.reveal !== void 0) reveals.push(result.reveal);
     return {
       value: result.cleaned,
@@ -68442,7 +68534,8 @@ async function sanitizeValue2(value, toolName, warnings, reveals = [], deadline 
         warnings,
         reveals,
         deadline,
-        ext
+        ext,
+        notes
       );
       out.push(result.value);
       if (result.modified) modified = true;
@@ -68451,16 +68544,25 @@ async function sanitizeValue2(value, toolName, warnings, reveals = [], deadline 
     return { value: out, modified, sgrNote };
   }
   if (value !== null && typeof value === "object")
-    return sanitizeObject(value, toolName, warnings, reveals, deadline, ext);
+    return sanitizeObject(
+      value,
+      toolName,
+      warnings,
+      reveals,
+      deadline,
+      ext,
+      notes
+    );
   return { value, modified: false, sgrNote: false };
 }
-async function sanitizeObject(value, toolName, warnings, reveals, deadline, ext) {
+async function sanitizeObject(value, toolName, warnings, reveals, deadline, ext, notes) {
   const out = {};
   let modified = false;
   let sgrNote = false;
   for (const [key, item] of Object.entries(value)) {
     const keyResult = await sanitizeText2(key, toolName, deadline);
     warnings.push(...keyResult.warnings);
+    notes.push(...keyResult.notes);
     if (keyResult.reveal !== void 0) reveals.push(keyResult.reveal);
     if (keyResult.modified) modified = true;
     if (keyResult.sgrNote) sgrNote = true;
@@ -68470,7 +68572,8 @@ async function sanitizeObject(value, toolName, warnings, reveals, deadline, ext)
       warnings,
       reveals,
       deadline,
-      ext
+      ext,
+      notes
     );
     if (Object.hasOwn(out, keyResult.cleaned))
       throw new Error(
@@ -68551,6 +68654,7 @@ async function evaluateToolOutput(input, ext = {}) {
     return emit("noop", null);
   const revealRead = isRevealRead(input.tool_name, input.tool_input);
   const warnings = [];
+  const notes = [];
   const reveals = [];
   const deadline = makeDeadline(SANITIZE_BUDGET_MS);
   const {
@@ -68563,7 +68667,8 @@ async function evaluateToolOutput(input, ext = {}) {
     warnings,
     reveals,
     deadline,
-    ext
+    ext,
+    notes
   );
   for (const original of reveals) {
     let stored;
@@ -68578,13 +68683,16 @@ async function evaluateToolOutput(input, ext = {}) {
   }
   if (input.tool_name === "Read" && !revealRead && containsPlaceholder(toolOutput))
     warnings.push(ON_DISK_PLACEHOLDER_WARNING);
-  if (!modified && warnings.length === 0)
+  if (!modified && warnings.length === 0 && notes.length === 0)
     return revealRead ? emit("flagged", { additional_context: REVEAL_READ_ENVELOPE }) : emit("clean", null);
-  const baseContext = sgrNote && warnings.length === 0 ? SGR_OUTPUT_NOTE : composeContext2(modified, warnings, input.tool_name);
+  const baseContext = sgrNote && warnings.length === 0 ? noteContext(notes) : composeContext2(modified, warnings, input.tool_name);
   const additionalContext = revealRead ? `${REVEAL_READ_ENVELOPE} ${baseContext}` : baseContext;
   const fields = { additional_context: additionalContext };
   if (modified) fields.mutated_output = sanitized;
   return emit(modified ? "modified" : "flagged", fields);
+}
+function noteContext(notes) {
+  return notes.length === 0 ? SGR_OUTPUT_NOTE : [...new Set(notes)].join(" ");
 }
 async function judgeSanitizeOutput(event, ext = {}) {
   const { Decision: Decision3, EventKind: EventKind3 } = controlPlane();
@@ -68666,7 +68774,7 @@ var init_sanitize_output = __esm({
       process.env._AGENT_SANITIZER_SANITIZE_BUDGET_MS,
       12e4
     );
-    SGR_OUTPUT_NOTE = "Display-only ANSI color stripped; pipe through cat -v to inspect raw escapes.";
+    SGR_OUTPUT_NOTE = "Inert ANSI stripped (display-only colour and/or a stray escape byte that formed no control sequence); pipe through cat -v to inspect raw escapes.";
     WEB_INGRESS_TOOLS = /* @__PURE__ */ new Set(["WebFetch", "WebSearch"]);
     ON_DISK_PLACEHOLDER_WARNING = "this file's raw on-disk bytes already contain literal [REDACTED\u2026] placeholder text (not inserted by this sanitizer). If an earlier write copied a placeholder from a sanitized view, the secret it stood for has been destroyed; verify with the user before trusting or propagating this file";
     FAIL_CLOSED_CONTEXT = "CRITICAL: sanitize-output hook failed; this tool's output was suppressed (replaced with a placeholder) to fail closed -- the unsanitized output was not shown. Investigate the hook error before relying on this tool.";
@@ -68759,7 +68867,7 @@ var init_sanitize_user_prompt = __esm({
     USER_PROMPT_MESSAGES = Object.freeze({
       unknownEvent: "User prompt blocked (fail-closed): unrecognized hook payload.",
       blockContext: "User prompt blocked: payload-capable invisible/ANSI characters detected.",
-      sgrNote: "The prompt contains ANSI SGR color codes (pasted terminal output). They are display-only formatting noise; read through them.",
+      sgrNote: "The prompt contains inert ANSI escapes (pasted terminal output): display-only SGR colour codes and/or a stray escape byte that forms no control sequence. They are formatting noise; read through them.",
       hookFailed: (cause) => `sanitize-user-prompt hook failed (fail-closed): ${cause}`,
       // What a reader should run when the package itself is what is missing. It
       // rides in this table rather than a separate argument because it is host text
@@ -68791,18 +68899,57 @@ var init_sanitize_user_prompt = __esm({
   }
 });
 
+// src/claude-context.mjs
+function claudeDirPatterns(prefix) {
+  return [
+    `${prefix}.claude/*.md`,
+    ...CLAUDE_CONTEXT_SUBDIRS.map((sub) => `${prefix}.claude/${sub}/**/*.md`)
+  ];
+}
+function excludeNodeModules(entry) {
+  return entry === "node_modules";
+}
+function excludeFromContextScan(entry) {
+  if (excludeNodeModules(entry)) return true;
+  const parts2 = entry.split(/[/\\]/);
+  const claudeIndex = parts2.indexOf(".claude");
+  const tail = parts2.slice(claudeIndex + 1);
+  if (claudeIndex === -1 || tail.length === 0) return false;
+  if (tail.length === 1 && tail[0].endsWith(".md")) return false;
+  return !CLAUDE_CONTEXT_SUBDIRS.includes(tail[0]);
+}
+var CLAUDE_CONTEXT_SUBDIRS, CLAUDE_INSTRUCTION_GLOBS;
+var init_claude_context = __esm({
+  "src/claude-context.mjs"() {
+    "use strict";
+    CLAUDE_CONTEXT_SUBDIRS = Object.freeze([
+      "agents",
+      "commands",
+      "output-styles",
+      "skills"
+    ]);
+    CLAUDE_INSTRUCTION_GLOBS = Object.freeze([
+      "**/CLAUDE.md",
+      "**/CLAUDE.local.md",
+      "**/AGENTS.md",
+      ...claudeDirPatterns("**/")
+    ]);
+  }
+});
+
 // claude-hooks/scan-invisible-chars.mjs
 var scan_invisible_chars_exports = {};
 __export(scan_invisible_chars_exports, {
   ALERT_ACK_FILE: () => ALERT_ACK_FILE,
   ALERT_FILE: () => ALERT_FILE,
+  CLAUDE_CONTEXT_SUBDIRS: () => CLAUDE_CONTEXT_SUBDIRS,
+  CLAUDE_INSTRUCTION_GLOBS: () => CLAUDE_INSTRUCTION_GLOBS,
   LONG_RUN_RE: () => LONG_RUN_RE3,
   LONG_RUN_THRESHOLD: () => LONG_RUN_THRESHOLD2,
   TOTAL_INVISIBLE_THRESHOLD: () => TOTAL_INVISIBLE_THRESHOLD,
   cliMain: () => cliMain3,
   decodeRun: () => decodeRun,
   findInstructionFiles: () => findInstructionFiles,
-  findMdFiles: () => findMdFiles,
   formatReport: () => formatReport,
   formatSkipped: () => formatSkipped,
   scanFile: () => scanFile,
@@ -68873,25 +69020,11 @@ function decodeRun(run) {
     decoded: cps.map((cp) => `U+${cp.toString(16).toUpperCase().padStart(4, "0")}`).join(" ")
   };
 }
-function findMdFiles(dir) {
-  return globSync("**/*.md", {
-    cwd: dir,
-    exclude: (name50) => name50 === "node_modules"
-  }).map((name50) => join6(dir, name50));
-}
 function findInstructionFiles(dir) {
-  return globSync(
-    [
-      "**/CLAUDE.md",
-      "**/CLAUDE.local.md",
-      "**/AGENTS.md",
-      "**/.claude/**/*.md"
-    ],
-    {
-      cwd: dir,
-      exclude: (name50) => name50 === "node_modules"
-    }
-  ).map((name50) => join6(dir, name50));
+  return globSync([...CLAUDE_INSTRUCTION_GLOBS], {
+    cwd: dir,
+    exclude: excludeFromContextScan
+  }).map((name50) => join6(dir, name50));
 }
 function scanFile(filePath) {
   const content3 = readFileSync5(filePath, "utf-8");
@@ -68945,12 +69078,7 @@ function formatReport(allFindings) {
   return lines.join("\n");
 }
 function scanProject(dir = PROJECT_DIR) {
-  const targets = [
-    .../* @__PURE__ */ new Set([
-      ...findInstructionFiles(dir),
-      ...findMdFiles(join6(dir, ".claude"))
-    ])
-  ];
+  const targets = [...new Set(findInstructionFiles(dir))];
   const findings = [];
   const skipped = [];
   let scanned = 0;
@@ -68985,7 +69113,20 @@ function formatSkipped(skipped) {
     ""
   ].join("\n");
 }
-async function cliMain3({ trace: sink = trace, scan: runScan } = {}) {
+async function cliMain3(opts = {}) {
+  const elapsed = startHookTimer();
+  try {
+    await runScanCli(opts);
+  } finally {
+    reportSlowHook(
+      HOOK_NAME4,
+      elapsed(),
+      HookEvent.SESSION_START,
+      emitHookResponse
+    );
+  }
+}
+async function runScanCli({ trace: sink = trace, scan: runScan }) {
   const emitTrace = bestEffortTrace(sink);
   const alertParts = [];
   if (!await ensureSanitizerLoaded()) {
@@ -69082,6 +69223,8 @@ var init_scan_invisible_chars = __esm({
     init_hook_fault();
     await init_invisible_alert();
     init_trace2();
+    init_hook_timing();
+    init_claude_context();
     ({
       LONG_RUN_RE: LONG_RUN_RE3,
       LONG_RUN_THRESHOLD: LONG_RUN_THRESHOLD2,

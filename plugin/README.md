@@ -63,10 +63,28 @@ per user:
 
 | Hook                   | Event            | Protection                                                                                                                                                                                                                                                                                                                                                               |
 | ---------------------- | ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `scan-invisible-chars` | SessionStart     | Scans `CLAUDE.md`, `AGENTS.md` and `.claude/` markdown for hidden-Unicode payloads; auto-cleans what it can                                                                                                                                                                                                                                                              |
-| `sanitize-user-prompt` | UserPromptSubmit | Blocks prompts carrying payload-capable invisible Unicode or ANSI escapes (pasted SGR colour passes with a note)                                                                                                                                                                                                                                                         |
+| `scan-invisible-chars` | SessionStart     | Scans `CLAUDE.md`, `AGENTS.md` and the context markdown under `.claude/` (skills, agents and the other context subdirectories — never bulk data like `worktrees/`) for hidden-Unicode payloads; auto-cleans what it can                                                                                                                                                  |
+| `sanitize-user-prompt` | UserPromptSubmit | Blocks prompts carrying payload-capable invisible Unicode or ANSI escapes (inert escapes — pasted SGR colour, a stray `ESC` — pass with a note)                                                                                                                                                                                                                          |
 | `pretooluse-sanitize`  | PreToolUse       | Normalizes confusable/homoglyph paths and commands, strips stego and terminal-control sequences from model-authored content, re-anchors redacted Edit/Write inputs onto the on-disk bytes, notes `[REDACTED…]` placeholders in tool calls rehydration cannot re-anchor, and requires a confirming retry before a Write drops a redacted secret from a git-untracked file |
 | `sanitize-output`      | PostToolUse      | Strips invisibles and ANSI, splices hidden HTML out of web/MCP ingress, flags exfil-shaped URLs, redacts secrets via detect-secrets, and warns when a Read's raw bytes already carry literal `[REDACTED…]` placeholder text (a possibly clobbered secret)                                                                                                                |
+
+Findings come at two volumes. A **warning** means the text was
+injection-shaped: something was hidden from a human reader, something a payload
+would have used was removed, or a secret was redacted. A **note** means it
+happened and here is how to look at it — an inert pasted terminal colour, one
+soft hyphen in a paragraph, a `<script>` tag preserved on a fetched page, a
+plain link whose URL merely looks exfil-shaped. Nothing about the split changes
+what is stripped, spliced or redacted; a note is still reported. It exists so
+the banner keeps meaning something, because a banner that fires on every
+ordinary page is one you learn to skip — and then the one that mattered scrolls
+past too.
+
+Every hook also times itself, as do the two SessionStart shell entry points (the
+launcher's preflight and the redactor provisioning). A run that overruns its
+budget — one second for a hook, a minute for a one-time install — says so in the
+model's context and on stderr, naming the step and the timing and asking you to
+report it, because a slow hook is otherwise indistinguishable from a slow agent.
+A healthy run says nothing.
 
 When a hook cannot run, it fails **open** by default: the guarded action
 proceeds and the model is told, in `additionalContext`, that what it is reading
@@ -131,6 +149,7 @@ scripts/safe-launch.sh       launcher (prints a response even when node is missi
 scripts/enable-auto-update.mjs  flips autoUpdate on this marketplace's registry entry
 scripts/provision-redactor.sh  SessionStart provisioning of the Python redactor
 scripts/build-plugin.mjs     builds dist/ from claude-hooks/ against the pinned engine
+scripts/lib/hook-timing.sh   shell port of the hook timer, for the two SessionStart scripts
 scripts/lock-redactor-deps.mjs  compiles requirements.in into the hash-pinned requirements.txt
 dist/hooks/*.bundle.mjs      the committed, self-contained bundle (generated — do not edit)
 dist/redactor/daemon.pyz     the committed redaction engine zipapp (generated — do not edit)

@@ -24,15 +24,31 @@
  * actually removes something, so a secret that a deletion reconstitutes is
  * still caught before this function returns.
  */
-import { CATEGORY, describeStripped, isSgrOnly } from "./invisible.mjs";
+import {
+  CATEGORY,
+  describeStripped,
+  isIncidentalInvisible,
+} from "./invisible.mjs";
 import { needsMarkdownPipeline } from "./gates.mjs";
-import { applyLayer1, LONE_SURROGATE_RE } from "./layer1.mjs";
+import {
+  applyLayer1,
+  INERT_ANSI_NOTE,
+  isBenignAnsiKinds,
+  LONE_SURROGATE_RE,
+} from "./layer1.mjs";
 import {
   describeExfil,
   describeHtmlSanitized,
   describeWarned,
   LONE_SURROGATE_WARNING,
 } from "./warnings.mjs";
+import {
+  finding,
+  note,
+  noteMessages,
+  warning,
+  warningMessages,
+} from "./severity.mjs";
 import { orderedMatches, spliceOrdered } from "./view-map.mjs";
 
 /**
@@ -141,11 +157,13 @@ function normalizeLoneSurrogates(text) {
 }
 
 /**
- * @typedef {{ text: string, found: string[], warnings: string[], modified: boolean, sgrNote: boolean }} PipelineState
+ * @typedef {{ text: string, found: string[], findings: import("./severity.mjs").Finding[], modified: boolean, unreportedChange: boolean }} PipelineState
  *   The running state of one {@link sanitizeText} call. Layers read `text` and
- *   mutate it ONLY through {@link applyMutation}. `found` is the machine-readable
- *   twin of `warnings`: the {@link CATEGORY} codes for whatever Layers 1-3
- *   neutralized or flagged.
+ *   mutate it ONLY through {@link applyMutation}. Findings carry their own
+ *   severity (see ./severity.mjs) and are split into `warnings`/`notes` at the
+ *   single exit, so no layer can push into the wrong list. `found` is the
+ *   machine-readable twin, unaffected by the split: the {@link CATEGORY} codes
+ *   for whatever Layers 1-3 neutralized or flagged.
  */
 
 /**
@@ -162,10 +180,12 @@ function normalizeLoneSurrogates(text) {
  *      configured) makes an invariant of Layer 1 conditional on an unrelated
  *      option.
  *   2. `modified` is set — the caller's "bytes changed" banner.
- *   3. `sgrNote` is cleared. It claims a display-only ANSI-color strip was the
- *      SOLE change, which any later mutation falsifies; a caller that downgrades
- *      the banner on `sgrNote` would otherwise suppress a redaction or splice
- *      warning.
+ *   3. `unreportedChange` is set. A mutation that pushed no finding — a Layer-5
+ *      span deletion whose filter returned no warning code — is a change the
+ *      caller was never told about, and the returned `sgrNote` ("nothing here
+ *      rose above a note") must not invite a quiet banner over one. A mutation
+ *      that DID report itself is covered by its own WARNING, so this flag only
+ *      ever costs a note that would have been misleading.
  *
  * Callers decide WHETHER a mutation happened (each layer already knows: a
  * changed splice output, a redactor finding, a removed span) and call this with
@@ -182,7 +202,7 @@ function normalizeLoneSurrogates(text) {
 function applyMutation(state, nextText) {
   state.text = normalizeLoneSurrogates(nextText);
   state.modified = true;
-  state.sgrNote = false;
+  state.unreportedChange = true;
 }
 
 /**
@@ -220,8 +240,12 @@ async function runRedact(state, redact) {
   }
   if (!secrets) return;
   applyMutation(state, secrets.text);
-  state.warnings.push(
-    `API keys/secrets redacted: ${secrets.found.join(", ")}${secrets.note ?? ""}${REDACTION_DOCTRINE}`,
+  // Always a WARNING: a secret reached this output, and the caller-supplied
+  // `note` (which credential, from where) is the part an operator acts on.
+  state.findings.push(
+    warning(
+      `API keys/secrets redacted: ${secrets.found.join(", ")}${secrets.note ?? ""}${REDACTION_DOCTRINE}`,
+    ),
   );
 }
 
@@ -242,7 +266,7 @@ export const REDACTION_DOCTRINE =
 // (./index.mjs), which runs the same layers; re-exported here because both were
 // part of this module's public surface before they moved.
 export { needsMarkdownPipeline };
-export { describeRemoved, describeWarned } from "./warnings.mjs";
+export { describeExfil, describeRemoved, describeWarned } from "./warnings.mjs";
 
 /**
  * Delete each verbatim span in `spans` from `text`. The secure Layer-5
@@ -282,35 +306,64 @@ export function deleteVerbatimSpans(text, spans) {
 }
 
 /**
+ * The tier for what Layer 1 removed.
+ *
+ * INCIDENTAL means both axes are: the ANSI was display-only (or a stray escape
+ * that opened nothing) AND there were too few invisible characters to spell
+ * anything. Either axis alone keeps the WARNING — a cursor move beside one soft
+ * hyphen is still a cursor move, and ten tag characters beside a colour code are
+ * still ten ASCII letters.
+ *
+ * The whole downgrade is gated on `sgrCarveOut`, the caller asserting local,
+ * first-party output. Without it — a fetched page, an MCP connector — a single
+ * hidden character is not incidental at all; that is the channel where one gets
+ * PUT there.
+ *
+ * When the strip was inert AND nothing but ANSI was found, the note says so in
+ * its own words ({@link INERT_ANSI_NOTE}) rather than reciting a stripped
+ * category, because "we removed some colour codes" is the whole finding.
+ * @param {string[]} invisFound
+ * @param {string[]} ansiKinds
+ * @param {string} deAnsi
+ * @param {boolean} sgrCarveOut
+ * @returns {import("./severity.mjs").Finding}
+ */
+function layer1Finding(invisFound, ansiKinds, deAnsi, sgrCarveOut) {
+  const incidental =
+    sgrCarveOut &&
+    isBenignAnsiKinds(ansiKinds) &&
+    isIncidentalInvisible(deAnsi);
+  const ansiOnly = invisFound.length === 1 && invisFound[0] === CATEGORY.ANSI;
+  if (incidental && ansiOnly) return note(INERT_ANSI_NOTE);
+  return finding(!incidental, describeStripped(invisFound, deAnsi));
+}
+
+/**
  * Layer 1 + surrogate normalisation: invisible chars, ANSI, lone surrogates.
- * `sgrNote` is true when the ONLY change was display-only SGR color AND the
- * caller opted into the carve-out (`sgrCarveOut`) — the caller reports that
- * with a terse note, not the WARNING prefix.
+ * Findings carry their own tier (see {@link layer1Finding}); a lone-surrogate
+ * normalisation is always loud, since splitting a secret across one is how a
+ * redactor is evaded.
  * @param {string} text
  * @param {boolean} sgrCarveOut
- * @returns {{ cleaned: string, found: string[], warnings: string[], modified: boolean, sgrNote: boolean }}
+ * @returns {{ cleaned: string, found: string[], findings: import("./severity.mjs").Finding[], modified: boolean }}
  */
 function processLayer1(text, sgrCarveOut) {
-  /** @type {string[]} */
-  const warnings = [];
+  /** @type {import("./severity.mjs").Finding[]} */
+  const findings = [];
   /** @type {string[]} */
   const found = [];
   let modified = false;
-  let sgrNote = false;
-  const { cleaned: layer1, deAnsi, found: invisFound } = applyLayer1(text);
+  const {
+    cleaned: layer1,
+    deAnsi,
+    found: invisFound,
+    ansiKinds,
+  } = applyLayer1(text);
   let cleaned = layer1;
   if (invisFound.length > 0) {
     found.push(...invisFound);
     modified = true;
-    // Display-only color with the carve-out enabled: the strip removed cosmetic
-    // styling and nothing else (found is exactly [ANSI], so zero invisible
-    // chars were present, making isSgrOnly exact). Report it as a note.
-    sgrNote =
-      invisFound.length === 1 &&
-      invisFound[0] === CATEGORY.ANSI &&
-      isSgrOnly(text) &&
-      sgrCarveOut;
-    if (!sgrNote) warnings.push(describeStripped(invisFound, deAnsi));
+    findings.push(layer1Finding(invisFound, ansiKinds, deAnsi, sgrCarveOut));
   }
   // Normalize lone UTF-16 surrogates for ALL output: a secret split by an
   // interposed lone surrogate reads as adjacent to a model rendering its own
@@ -321,11 +374,10 @@ function processLayer1(text, sgrCarveOut) {
   if (wellFormed !== cleaned) {
     cleaned = wellFormed;
     modified = true;
-    sgrNote = false;
     found.push(CATEGORY.LONE_SURROGATES);
-    warnings.push(LONE_SURROGATE_WARNING);
+    findings.push(warning(LONE_SURROGATE_WARNING));
   }
-  return { cleaned, found, warnings, modified, sgrNote };
+  return { cleaned, found, findings, modified };
 }
 
 /**
@@ -374,10 +426,18 @@ async function applyMarkdownPipeline(state, { html, exfilScan }) {
         if (layer2.removed.comments > 0)
           state.found.push(CATEGORY.HTML_COMMENTS);
         if (layer2.removed.hidden > 0) state.found.push(CATEGORY.HIDDEN_HTML);
-        state.warnings.push(describeHtmlSanitized(layer2.removed));
+        // A WARNING: these bytes were invisible to a human reading the rendered
+        // page and are now gone from the model's view too — the exact shape of
+        // a hidden-instruction payload, and the model cannot check what it was
+        // without the reveal sidecar.
+        state.findings.push(warning(describeHtmlSanitized(layer2.removed)));
       }
+      // A NOTE: nothing was removed and nothing was hidden. This line says "the
+      // page had scripts, treat their contents as data", which is true of nearly
+      // every page fetched — at WARNING volume it trained the reader to skip the
+      // banner Layer 2's actual splice needs.
       const preserved = describeWarned(layer2.warned);
-      if (preserved) state.warnings.push(preserved);
+      if (preserved) state.findings.push(note(preserved));
     }
   }
   // Layer 3 — detection only: the URLs stay intact, the model is told not to
@@ -386,9 +446,21 @@ async function applyMarkdownPipeline(state, { html, exfilScan }) {
   // suspicious, not less, yet Layer 2 has already removed it from `cleaned`.
   if (exfilScan) {
     const threats = detectExfil(inputText);
+    // Severity tracks who does the fetching. An auto-fetched target — an image,
+    // a stylesheet, a form action, a meta refresh — exfiltrates the moment the
+    // content renders, with nobody deciding anything: a WARNING. A plain LINK
+    // cannot exfiltrate unless the model chooses to follow it, and the sentence
+    // it is reported in is precisely the instruction not to, so it is a NOTE.
+    // One auto-fetched threat raises the whole finding — the loudest member
+    // wins, since they share one line.
     if (threats) {
       state.found.push(CATEGORY.EXFIL_URLS);
-      state.warnings.push(describeExfil(threats));
+      state.findings.push(
+        finding(
+          threats.some((threat) => threat.autoFetched),
+          describeExfil(threats),
+        ),
+      );
     }
   }
   return reveal;
@@ -421,17 +493,22 @@ async function applyMarkdownPipeline(state, { html, exfilScan }) {
  * no-finding paths are already well-formed.
  * @param {string} text
  * @param {SanitizeTextOptions["redact"]} redact
- * @param {string[]} warnings
+ * @param {import("./severity.mjs").Finding[]} findings
  * @param {string} label
  * @returns {Promise<string | undefined>} vetted text, or undefined if withheld
  */
-async function vetStageValue(text, redact, warnings, label) {
+async function vetStageValue(text, redact, findings, label) {
   if (!redact) return text;
   try {
     const secrets = await redact(text);
     return secrets ? normalizeLoneSurrogates(secrets.text) : text;
   } catch {
-    warnings.push(`Withheld the ${label}: it could not be vetted for secrets`);
+    // A WARNING: the caller asked for this field and is not getting it, and the
+    // reason is an unrunnable redactor — the same fault that fails `cleaned`
+    // closed, just with a survivable remedy here.
+    findings.push(
+      warning(`Withheld the ${label}: it could not be vetted for secrets`),
+    );
     return undefined;
   }
 }
@@ -463,22 +540,35 @@ async function vetStageValue(text, redact, warnings, label) {
  * post-mutation invariants and forget the rest, and every string in the returned
  * object has traversed Layer 4.
  *
- * `found` is the machine-readable twin of `warnings` — the {@link CATEGORY}
- * codes for what Layers 1-3 neutralized or flagged, in the order the layers ran.
- * Layers 4 and 5 have no category codes (their findings are the injected seam's
- * own vocabulary), so they contribute warnings only.
+ * Findings come back SPLIT BY SEVERITY (see ./severity.mjs): `warnings` holds
+ * everything injection-shaped — the banner a caller must show — and `notes`
+ * holds what happened but is not alarming. `warnings` therefore keeps exactly
+ * the meaning it always had, and a caller that ignores `notes` is no louder
+ * than before, just quieter about incidental bytes.
+ *
+ * `found` is the machine-readable twin, and the severity split does NOT reach
+ * it — the {@link CATEGORY} codes for what Layers 1-3 neutralized or flagged,
+ * in the order the layers ran, whichever tier described them. Layers 4 and 5
+ * have no category codes (their findings are the injected seam's own
+ * vocabulary), so they contribute findings only.
  * @param {string} text
  * @param {SanitizeTextOptions} [options]
- * @returns {Promise<{ cleaned: string, found: string[], warnings: string[], modified: boolean, sgrNote: boolean, reveal?: string }>}
+ * @returns {Promise<{ cleaned: string, found: string[], warnings: string[], notes: string[], modified: boolean, sgrNote: boolean, reveal?: string }>}
  */
 export async function sanitizeText(text, options = {}) {
   const { redact, filterInjection, sgrCarveOut = false } = options;
-  const { warnings, found, cleaned, modified, sgrNote } = processLayer1(
+  const { findings, found, cleaned, modified } = processLayer1(
     text,
     sgrCarveOut,
   );
   /** @type {PipelineState} */
-  const state = { text: cleaned, found, warnings, modified, sgrNote };
+  const state = {
+    text: cleaned,
+    found,
+    findings,
+    modified,
+    unreportedChange: false,
+  };
 
   const revealText = await applyMarkdownPipeline(state, options);
 
@@ -509,7 +599,7 @@ export async function sanitizeText(text, options = {}) {
       // message; free text is refused (throws) so no filter-supplied byte ever
       // reaches the model-facing context. `null`/`undefined` means no warning.
       if (res.warning != null)
-        state.warnings.push(mapFilterWarning(res.warning));
+        state.findings.push(warning(mapFilterWarning(res.warning)));
     }
   }
 
@@ -524,15 +614,24 @@ export async function sanitizeText(text, options = {}) {
       : await vetStageValue(
           revealText,
           redact,
-          state.warnings,
+          state.findings,
           "pre-splice copy of the removed HTML",
         );
+  const warnings = warningMessages(state.findings);
+  const notes = noteMessages(state.findings);
   return {
     cleaned: state.text,
     found: state.found,
-    warnings: state.warnings,
+    warnings,
+    notes,
     modified: state.modified,
-    sgrNote: state.sgrNote,
+    // Kept under its original name (it is a published field, and renaming a
+    // published field for a wording win is a breaking change) but now derived
+    // rather than tracked: "nothing here rose above a note". That is a strict
+    // generalization of what it used to mean — the inert-ANSI strip that set it
+    // before is now simply the most common way to end up note-only.
+    sgrNote:
+      notes.length > 0 && warnings.length === 0 && !state.unreportedChange,
     ...(reveal !== undefined && { reveal }),
   };
 }
@@ -626,8 +725,10 @@ function depthMemo() {
 /**
  * Sanitize every string leaf of a tool-output value, preserving its shape (a
  * structured tool output whose shape changes would be ignored by a harness,
- * leaking the raw value). Non-string leaves pass through; `warnings`
- * accumulates across leaves. `sgrNote` is the OR across leaves.
+ * leaking the raw value). Non-string leaves pass through; `warnings` and
+ * `notes` accumulate across leaves, split by severity (see ./severity.mjs).
+ * `sgrNote` is the OR across leaves — true when SOME leaf was note-only — so a
+ * caller can still pick the quiet banner when no leaf raised a warning.
  *
  * Fails CLOSED on two hostile shapes that would otherwise throw a `RangeError`
  * as an unhandled async rejection (a DoS that leaves the output un-sanitized):
@@ -643,13 +744,23 @@ function depthMemo() {
  * @param {SanitizeTextOptions} options
  * @param {string[]} warnings
  * @param {string[]} [reveals]
+ * @param {string[]} [notes]  the NOTE-severity counterpart of `warnings`;
+ *   appended last so an existing positional caller keeps working (it simply
+ *   discards the notes, which is exactly as loud as before the split)
  * @returns {Promise<{ value: any, modified: boolean, sgrNote: boolean }>}
  */
-export async function sanitizeValue(value, options, warnings, reveals = []) {
+export async function sanitizeValue(
+  value,
+  options,
+  warnings,
+  reveals = [],
+  notes = [],
+) {
   return sanitizeValueAt(
     value,
     options,
     warnings,
+    notes,
     reveals,
     0,
     new WeakSet(),
@@ -666,6 +777,7 @@ export async function sanitizeValue(value, options, warnings, reveals = []) {
  * @param {any} value
  * @param {SanitizeTextOptions} options
  * @param {string[]} warnings
+ * @param {string[]} notes  accumulates each string leaf's NOTE-severity findings
  * @param {string[]} reveals  accumulates each string leaf's pre-Layer-2 text
  * @param {number} depth
  * @param {WeakSet<object>} seen
@@ -685,6 +797,7 @@ async function sanitizeValueAt(
   value,
   options,
   warnings,
+  notes,
   reveals,
   depth,
   seen,
@@ -693,6 +806,7 @@ async function sanitizeValueAt(
   if (typeof value === "string") {
     const result = await sanitizeText(value, options);
     warnings.push(...result.warnings);
+    notes.push(...result.notes);
     if (result.reveal !== undefined) reveals.push(result.reveal);
     return {
       value: result.cleaned,
@@ -781,6 +895,7 @@ async function sanitizeValueAt(
           item,
           options,
           warnings,
+          notes,
           reveals,
           depth + 1,
           seen,
@@ -816,6 +931,7 @@ async function sanitizeValueAt(
         item,
         options,
         warnings,
+        notes,
         reveals,
         depth + 1,
         seen,

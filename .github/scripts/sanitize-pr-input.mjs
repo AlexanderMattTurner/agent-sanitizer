@@ -14,6 +14,12 @@
 // script no longer carries a copy.
 //
 // Usage: node sanitize-pr-input.mjs < raw.txt > cleaned.txt 2> report.txt
+// This script runs against the PUBLISHED package, pinned by
+// install-sanitizer.sh — not against src/ in this repo. So it may only use API
+// that version already ships: `describeExfil` is re-exported from
+// `agent-sanitizer/output` on this branch but not in the pin, and importing it
+// here fails the whole script at module load. Hence the reasons are still
+// assembled locally, and `notes` is defaulted below.
 import { sanitize } from "agent-sanitizer";
 
 const chunks = [];
@@ -25,15 +31,35 @@ const { cleaned, found, warnings } = await sanitize(input, {
   exfilScan: true,
 });
 
+// `notes` defaults to []: the severity split is not in the pinned version, so
+// the field is absent there and spreading it would throw. It starts carrying
+// findings the moment install-sanitizer.sh's pin catches up.
+const {
+  cleaned,
+  found,
+  warnings,
+  notes = [],
+} = await sanitize(input, {
+  html: false,
+});
+
+const exfilReasons = [
+  ...new Set(
+    (detectExfil(input) || []).map(
+      (threat) =>
+        `${threat.isImage ? "image" : "link"} to ${threat.target}: ${threat.reason}`,
+    ),
+  ),
+];
+
 process.stdout.write(cleaned);
 
-// "flagged", not "neutralized": `found` mixes destructive layers (Layer 1
-// strips the bytes) with the detective one (Layer 3 reports exfil-shaped URLs
-// and leaves them in place). Claiming every category was neutralized tells the
-// review agent bytes were removed when a benign-but-exfil-shaped URL merely
-// tripped the scan, and its prompt reads neutralized content as a supply-chain
-// signal. One accurate label for both kinds keeps this script from having to
-// know which layer produced which category.
-const report = [...warnings];
-if (found.length > 0) report.unshift(`Categories flagged: ${found.join(", ")}`);
+// A reviewer's report, not a model's banner, so both severity tiers are printed
+// — the warnings first, because that ordering is the only thing that survives a
+// skim.
+const report = [...warnings, ...notes];
+if (found.length > 0)
+  report.unshift(`Neutralized categories: ${found.join(", ")}`);
+if (exfilReasons.length > 0)
+  report.push(`Exfil-shaped URLs detected: ${exfilReasons.join("; ")}`);
 if (report.length > 0) process.stderr.write(report.join("\n") + "\n");

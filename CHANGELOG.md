@@ -8,6 +8,70 @@ adhere to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+## [2.26.2] - 2026-08-08
+
+### Fixed
+
+- Fixed propagation of real registry errors in automated engine-pin bump workflows.
+
+### Changed
+
+- Refactored view-map to brand file views with their offset space for improved type safety and consistency.
+
+## [2.26.0] - 2026-08-08
+
+### Added
+- Severity tiers (warnings and notes) for every scanning layer's findings
+- Timing instrumentation for SessionStart shell entry points and judge error path
+- Claude Code context whitelist exported from the library for external use
+
+### Fixed
+- CI: retry the review-thread resolver past PAT rate limits
+- CI: prevent pack-smoke from flagging types/src declarations as src/ leaks
+- CI: anchor pack-smoke src/ scan and keep sanitize-pr-input on published API
+- Hooks: preserve note-only tool results as flagged instead of cleaning them
+
+### Changed
+- Refactored scope handling to export Claude Code's context whitelist
+
+## [2.25.0] - 2026-08-08
+
+### Added
+
+- Ship `/agent-sanitizer:enable-auto-update` flag to turn on auto-update for the sanitizer plugin.
+- Install and auto-update the sanitizer plugin in this repository's sessions.
+
+### Changed
+
+- Auto-update for the sanitizer plugin is off by default; installers should enable it via the new flag.
+
+## [2.24.2] - 2026-08-08
+
+### Fixed
+- Fixed credential guard execution in CI workflows and pinned security vulnerability scan configuration.
+
+### Changed
+- Removed metered API-key credential from the Claude authentication ladder in CI.
+
+## [2.24.1] - 2026-08-08
+
+### Changed
+
+- Engine pin freshness is now managed by Renovate instead of custom CI scripts, with automated alerts when the pinned Node.js engine stops tracking the latest npm version.
+
+## [2.24.0] - 2026-08-08
+
+### Added
+
+- Hook timing budget warnings: hooks that exceed their one-second budget now trigger a warning to help identify performance issues.
+- Hook scan scope optimization: scanning now focuses only on `.claude` subdirectories loaded as context, improving performance.
+
+### Fixed
+
+- Incomplete CSI sequences in ANSI processing are now logged as notices instead of warnings, reducing spurious alerts.
+- One-time provisioning is excluded from slow-hook timer measurements to avoid skewing performance metrics.
+- Anchored blank fillers in invisible character carve-outs are now correctly handled during testing and validation.
+
 ## [2.23.2] - 2026-08-08
 
 ### Fixed
