@@ -1656,6 +1656,62 @@ describe("stripInvisible: blank fillers have their own anchor-proportional allow
     }
   });
 
+  it("one script's cover text cannot fund the other script's channel", () => {
+    // The allowance is per script because a blank never anchors cross-script.
+    // Pooling the anchor counts would let ordinary Korean prose pay for a
+    // Braille alternation (and vice versa) — the channel would be preserved,
+    // unreported, and countPayloadInvisible would read zero.
+    const N = TOTAL_PRESERVED_BLANK_BUDGET * 8;
+    for (const [cover, anchor, blank] of [
+      ["한국어 문서입니다. ".repeat(20), BRAILLE_CELL, BRAILLE_BLANK],
+      [braillePassage(60), HANGUL_SYLLABLE, cp(0x1160)],
+    ]) {
+      const channel = (anchor + blank).repeat(N);
+      const { cleaned, found } = stripInvisibleWithReport(cover + channel);
+      assert.equal(countOf(cleaned, blank), 0, "the channel must not survive");
+      assert.deepEqual(found, [CATEGORY.BLANK_FILLERS]);
+      assert.equal(countPayloadInvisible(cover + channel), N);
+    }
+  });
+
+  it("a tripping script does not take the other script's blanks with it", () => {
+    // The verdict is per script, so a Hangul channel small enough to stay under
+    // the scatter floor (which would otherwise disable the carve-out wholesale)
+    // is stripped while the Braille passage beside it keeps every word space.
+    const fillers = TOTAL_PRESERVED_BLANK_BUDGET + 4;
+    assert.ok(
+      fillers < SCATTERED_THRESHOLD,
+      "the scatter floor must not decide",
+    );
+    const passage = braillePassage(60);
+    const text = `${passage} ${(HANGUL_SYLLABLE + cp(0x1160)).repeat(fillers)}`;
+    const { cleaned, found } = stripInvisibleWithReport(text);
+    assert.equal(countOf(cleaned, cp(0x1160)), 0);
+    assert.equal(
+      countOf(cleaned, BRAILLE_BLANK),
+      countOf(passage, BRAILLE_BLANK),
+    );
+    assert.deepEqual(found, [CATEGORY.BLANK_FILLERS]);
+  });
+
+  it("contracted Braille near the ratio is stripped — an accepted residual", () => {
+    // Documented limitation, pinned rather than left implicit in the five-cell
+    // fixtures above: grade-2 Braille contracts common words to a single
+    // alphabet wordsign (⠮ the, ⠯ and, ⠉ can), so a passage of mostly one-cell
+    // words approaches 1:1 and is indistinguishable BY DENSITY from the
+    // channel. The collision is inherent to a density rule; it is named in
+    // THREAT-MODEL.md rather than papered over by widening the ratio, which
+    // would re-open the channel.
+    const contracted = ["⠮", "⠯", "⠉", "⠙"].join(BRAILLE_BLANK);
+    const text = Array.from(
+      { length: TOTAL_PRESERVED_BLANK_BUDGET * 4 },
+      () => contracted,
+    ).join(BRAILLE_BLANK);
+    const { cleaned, found } = stripInvisibleWithReport(text);
+    assert.equal(countOf(cleaned, BRAILLE_BLANK), 0);
+    assert.deepEqual(found, [CATEGORY.BLANK_FILLERS]);
+  });
+
   it("the floor keeps short blank-dense text intact", () => {
     // Below TOTAL_PRESERVED_BLANK_BUDGET the ratio never binds, so a one-line
     // Braille phrase (or a couple of archaic syllables) is untouched even at

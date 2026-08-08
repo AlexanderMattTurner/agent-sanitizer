@@ -42,9 +42,15 @@ table](./README.md#entry-points) maps each to its import.
   filler completes a defective syllable, these are far denser in genuine text
   than joiners are, so they carry their own document-wide allowance—one
   preserved blank per two visible anchor-script characters, above a floor—rather
-  than drawing on the joiner/selector preserve budget. Past that ratio no blank
-  in the document is preserved (never half-spaced) and all of them count as
-  payload, which is the density an alternating `syllable filler …` channel needs.
+  than drawing on the joiner/selector preserve budget. The allowance is counted
+  per script (a blank never anchors cross-script, so Korean prose must not fund
+  a Braille channel). Past that ratio no blank of that script is preserved
+  (never half-spaced) and all of them count as payload, which is the density an
+  alternating `syllable filler …` channel needs. Contracted (grade-2) Braille
+  sits closest to the boundary: alphabet wordsigns are single cells, so a
+  passage of mostly one-cell words approaches 1:1 and is stripped like the
+  channel—an accepted residual false positive inherent to a density rule, not a
+  gap, and not worth widening the ratio to reach.
 
 **Reassembly hardening.** The two passes feed each other in _both_ directions:
 stripping an invisible char can reconstitute an ANSI escape its split had

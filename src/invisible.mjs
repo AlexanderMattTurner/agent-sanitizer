@@ -472,16 +472,6 @@ function isHangul(ch) {
   return HANGUL_RE.test(ch);
 }
 
-/** True when `ch` can anchor SOME blank filler — the union of the two branches
- * of isPreservedBlankFiller, used to size the document-wide blank allowance
- * (see PRESERVED_BLANK_PER_ANCHOR). Cross-script pairs never preserve, so this
- * over-counts a document mixing Braille and Hangul; that direction only widens
- * the allowance for a document already full of legitimate anchor text.
- * @param {string} ch @returns {boolean} */
-function isBlankAnchor(ch) {
-  return isBrailleCell(ch) || isHangul(ch);
-}
-
 // Non-global single-char classifiers (CHECKS carry `g`, whose lastIndex is
 // stateful across `.test`). carveStrip uses these to attribute each removed
 // char to its CHECKS category so `found` names exactly what was stripped.
@@ -654,17 +644,36 @@ function analyzeCarve(cps) {
   // the emit loop keeps countPayloadInvisible and payloadInvisibleView honest:
   // a blank the stripper will remove is payload to every consumer, so the
   // prompt layer's scatter gate sees it without re-deriving the budget.
-  // The anchor scan is skipped below the floor: it costs two script regexes per
-  // visible character, and analyzeCarve runs on every prompt and tool output.
-  const blanks = kind.filter((k) => k === "blank").length;
-  if (blanks > TOTAL_PRESERVED_BLANK_BUDGET) {
+  //
+  // Budgeted PER SCRIPT, because a blank never anchors cross-script: pooling the
+  // two anchor counts would let one script's cover text fund the other's
+  // channel, so 400 chars of ordinary Korean prose would buy an unreported
+  // `⠃⠀⠃⠀…` alternation of 200 Braille blanks. The anchor scan is skipped below
+  // the floor: it costs a script regex per visible character, and analyzeCarve
+  // runs on every prompt and tool output.
+  const blankScript = kind.map((k, i) =>
+    k !== "blank"
+      ? null
+      : cps[i].codePointAt(0) === BRAILLE_BLANK
+        ? "braille"
+        : "hangul",
+  );
+  for (const [
+    script,
+    isAnchor,
+  ] of /** @type {[string, (ch: string) => boolean][]} */ ([
+    ["braille", isBrailleCell],
+    ["hangul", isHangul],
+  ])) {
+    const blanks = blankScript.filter((s) => s === script).length;
+    if (blanks <= TOTAL_PRESERVED_BLANK_BUDGET) continue;
     const anchors = cps.reduce(
-      (n, ch, i) => n + (codes[i] === null && isBlankAnchor(ch) ? 1 : 0),
+      (n, ch, i) => n + (codes[i] === null && isAnchor(ch) ? 1 : 0),
       0,
     );
     if (blanks > Math.floor(anchors / PRESERVED_BLANK_PER_ANCHOR))
       for (let i = 0; i < kind.length; i++)
-        if (kind[i] === "blank") kind[i] = null;
+        if (blankScript[i] === script) kind[i] = null;
   }
   let payloadInvis = 0;
   let visibleLen = 0;
