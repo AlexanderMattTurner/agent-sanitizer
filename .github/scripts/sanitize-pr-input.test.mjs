@@ -54,6 +54,12 @@ describe("sanitize-pr-input: exfil-URL scan is non-destructive", () => {
     assert.match(report, /URLs shaped like data exfiltration/);
     assert.match(report, /left intact/);
     assert.match(report, /evil\.example/);
+    // The whole header line, not a substring: `exfil-urls` is a DETECTIVE
+    // category, so the header may not claim those bytes were neutralized — the
+    // review agent's prompt reads neutralized content as a supply-chain signal.
+    // Pinning the exact line keeps the deliberately-accepted `exfil-urls`
+    // membership from drifting back into a "neutralized" claim.
+    assert.equal(report.split("\n")[0], "Categories flagged: exfil-urls");
   });
 
   it("does not flag an ordinary markdown link", () => {

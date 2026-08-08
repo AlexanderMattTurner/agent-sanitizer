@@ -18,7 +18,7 @@
 #   diff_lines=<n>             — the diff's line count (only when oversized)
 # Writes into $PR_INPUT_DIR (only when NOT oversized):
 #   diff.txt / meta.txt        — sanitized diff and PR metadata
-#   sanitizer-report.txt       — what was neutralized (never empty; says so)
+#   sanitizer-report.txt       — what was flagged (never empty; says so)
 # and, only when oversized:
 #   oversized-notice.txt       — the human-review notice body for the caller
 set -euo pipefail
@@ -86,7 +86,7 @@ report="${PR_INPUT_DIR}/sanitizer-report.txt"
 } >"$report"
 
 if [[ -s "$report" ]]; then
-  echo "sanitizer neutralized injection-shaped content; see ${report}" >&2
+  echo "sanitizer flagged injection-shaped content; see ${report}" >&2
 else
   echo "(sanitizer found no injection-shaped content in the diff or metadata)" >"$report"
 fi

@@ -21,12 +21,17 @@ SANITIZER_VERSION="2.0.0"
 # and a symlink resolves module lookups from the repo root, where the heavy
 # HTML dependencies are not installed). Downstream template-synced repos have
 # no sanitizer src/ and keep the published pin.
+#
+# Only the install SPEC differs between the two paths, so the branch produces
+# just that and one invocation carries the flags — a second flag list is a
+# second thing to keep in sync. `--install-links` is inert for a registry spec
+# (it only changes how `file:` deps are materialised), so it is safe on both.
 local_pkg_name="$(node -p "try { require('./package.json').name } catch { '' }")"
 if [ "${local_pkg_name}" = "agent-sanitizer" ]; then
-  npm install --prefix .github/scripts --no-save --no-package-lock \
-    --ignore-scripts --no-audit --no-fund --install-links "file:${PWD}"
+  install_spec="file:${PWD}"
 else
-  npm install --prefix .github/scripts --no-save --no-package-lock \
-    --ignore-scripts --no-audit --no-fund \
-    "agent-sanitizer@${SANITIZER_VERSION}"
+  install_spec="agent-sanitizer@${SANITIZER_VERSION}"
 fi
+
+npm install --prefix .github/scripts --no-save --no-package-lock \
+  --ignore-scripts --no-audit --no-fund --install-links "${install_spec}"

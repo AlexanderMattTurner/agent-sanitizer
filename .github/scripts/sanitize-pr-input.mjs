@@ -27,7 +27,13 @@ const { cleaned, found, warnings } = await sanitize(input, {
 
 process.stdout.write(cleaned);
 
+// "flagged", not "neutralized": `found` mixes destructive layers (Layer 1
+// strips the bytes) with the detective one (Layer 3 reports exfil-shaped URLs
+// and leaves them in place). Claiming every category was neutralized tells the
+// review agent bytes were removed when a benign-but-exfil-shaped URL merely
+// tripped the scan, and its prompt reads neutralized content as a supply-chain
+// signal. One accurate label for both kinds keeps this script from having to
+// know which layer produced which category.
 const report = [...warnings];
-if (found.length > 0)
-  report.unshift(`Neutralized categories: ${found.join(", ")}`);
+if (found.length > 0) report.unshift(`Categories flagged: ${found.join(", ")}`);
 if (report.length > 0) process.stderr.write(report.join("\n") + "\n");

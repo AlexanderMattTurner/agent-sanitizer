@@ -208,6 +208,29 @@ describe("sanitize: exfilScan detects without splicing", () => {
     const out = await sanitize(`x ${EXFIL_LINK}`, { html: true });
     assert.ok(out.found.includes(CATEGORY.EXFIL_URLS));
   });
+
+  it("html: true implies the scan even when exfilScan is explicitly false", async () => {
+    const out = await sanitize(`x ${EXFIL_LINK}`, {
+      html: true,
+      exfilScan: false,
+    });
+    assert.ok(out.found.includes(CATEGORY.EXFIL_URLS));
+  });
+
+  // The PR-review input script (.github/scripts/sanitize-pr-input.mjs) rests
+  // its byte-faithful-diff guarantee on this: `exfilScan` is the first way to
+  // enter the markdown pipeline with `html: false`, so Layer 2 running whenever
+  // the pipeline runs would silently corrupt every reviewed diff. The other
+  // cases here feed link-only input and would stay green through that mistake.
+  it("exfilScan alone never splices HTML (html: false keeps the bytes)", async () => {
+    // Separate blocks on purpose: a link trailing raw HTML on the SAME line is
+    // swallowed by the HTML block and never parsed as a link, which would make
+    // this case assert nothing about Layer 3.
+    const input = `<!-- note --><span hidden>SECRET</span>\n\n${EXFIL_LINK}`;
+    const out = await sanitize(input, { exfilScan: true });
+    assert.equal(out.cleaned, input);
+    assert.deepEqual(out.found, [CATEGORY.EXFIL_URLS]);
+  });
 });
 
 // ─── options robustness / text type validation (facade contract) ────────────
