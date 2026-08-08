@@ -9,6 +9,7 @@ import { readFileSync, globSync, writeFileSync, unlinkSync } from "node:fs";
 import { join, relative } from "node:path";
 import {
   awaitLazyDependency,
+  emitHookResponse,
   safeErrMessage,
   hookgateMarkerPath,
   HookEvent,
@@ -479,7 +480,12 @@ export async function cliMain(opts = {}) {
   try {
     await runScanCli(opts);
   } finally {
-    reportSlowHook(HOOK_NAME, elapsed(), HookEvent.SESSION_START);
+    reportSlowHook(
+      HOOK_NAME,
+      elapsed(),
+      HookEvent.SESSION_START,
+      emitHookResponse,
+    );
   }
 }
 

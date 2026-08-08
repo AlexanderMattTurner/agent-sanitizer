@@ -11,6 +11,7 @@ import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 
 import {
+  excludeProvisioning,
   reportSlowHook,
   slowHookNotice,
   startHookTimer,
@@ -18,6 +19,8 @@ import {
   SLOW_HOOK_THRESHOLD_MS,
 } from "../claude-hooks/lib/hook-timing.mjs";
 import { runJudgeCli } from "../claude-hooks/lib/control-plane.mjs";
+import { awaitLazyDependency } from "../claude-hooks/lib/hook-io.mjs";
+import { redactViaDaemon } from "../claude-hooks/lib/redactor-client.mjs";
 
 /** A clock that advances by exactly the deltas it is given. */
 function fakeClock(...deltas) {
@@ -34,6 +37,96 @@ describe("startHookTimer", () => {
     const elapsed = startHookTimer(fakeClock(250, 400));
     assert.equal(elapsed(), 250);
     assert.equal(elapsed(), 650);
+  });
+});
+
+describe("provisioning is not the hook's cost", () => {
+  // The false positive this closes: on a cold container the dependency wait and
+  // the first redactor spawn run INSIDE a hook invocation and take seconds. A
+  // notice charging those to the hook would fire on the first call of every
+  // session, name the wrong culprit, and teach the reader to ignore it.
+
+  it("subtracts a provisioning window that runs inside the timer", async () => {
+    let t = 0;
+    const clock = () => t;
+    const elapsed = startHookTimer(clock);
+    t += 50; // real hook work
+    await excludeProvisioning(async () => {
+      t += 30_000; // a dependency install we merely waited out
+    }, clock);
+    t += 20; // more real work
+    assert.equal(elapsed(), 70);
+    assert.equal(slowHookNotice("h", elapsed()), null);
+  });
+
+  it("charges provisioning that FAILED, so a failed wait is not reported as slow", async () => {
+    let t = 0;
+    const clock = () => t;
+    const elapsed = startHookTimer(clock);
+    await assert.rejects(
+      excludeProvisioning(async () => {
+        t += 5_000;
+        throw new Error("install died");
+      }, clock),
+      /install died/u,
+    );
+    assert.equal(elapsed(), 0);
+  });
+
+  it("never lets one run's provisioning pay down a later run's real cost", async () => {
+    let t = 0;
+    const clock = () => t;
+    await excludeProvisioning(async () => {
+      t += 30_000;
+    }, clock);
+    // A LATER timer sees none of that credit: its window starts clean.
+    const elapsed = startHookTimer(clock);
+    t += 2_000;
+    assert.equal(elapsed(), 2_000);
+    assert.match(slowHookNotice("h", elapsed()), /2\.0s/u);
+  });
+
+  it("excuses the cold-start dependency wait (awaitLazyDependency)", async () => {
+    let t = 0;
+    const clock = () => t;
+    const elapsed = startHookTimer(clock);
+    let polls = 0;
+    const loaded = await awaitLazyDependency({
+      // Resolves only after the install "finishes" — three polls of waiting.
+      tryImport: async () => (++polls < 4 ? null : { ok: true }),
+      markerPresent: () => true,
+      setupAlive: () => true,
+      now: clock,
+      sleep: async () => {
+        t += 10_000;
+      },
+      intervalMs: 10_000,
+    });
+    assert.deepEqual(loaded, { ok: true });
+    assert.equal(elapsed(), 0, "30s of install wait must not be charged");
+  });
+
+  it("excuses the cold redactor-daemon spawn", async () => {
+    let t = 0;
+    const clock = () => t;
+    const elapsed = startHookTimer(clock);
+    const dead = Object.assign(new Error("no socket"), { code: "ENOENT" });
+    let dialled = 0;
+    const result = await redactViaDaemon("some text", {
+      // First dial fails as if the daemon were absent; the retry succeeds.
+      connect: async () => {
+        if (++dialled === 1) throw dead;
+        return { text: "some text", found: [] };
+      },
+      spawn: () => {},
+      waitForSocket: async () => {
+        t += 3_000; // detect-secrets import + plugin prime
+        return true;
+      },
+      now: clock,
+    });
+    assert.deepEqual(result, { text: "some text", found: [] });
+    assert.equal(elapsed(), 0, "the daemon cold start must not be charged");
   });
 });
 
@@ -117,8 +210,8 @@ describe("reportSlowHook (no-verdict events)", () => {
       "scan-invisible-chars",
       5,
       "SessionStart",
-      (chunk) => errs.push(chunk),
       (event, fields) => emitted.push([event, fields]),
+      (chunk) => errs.push(chunk),
     );
     assert.equal(reported, false);
     assert.deepEqual(errs, []);
@@ -132,8 +225,8 @@ describe("reportSlowHook (no-verdict events)", () => {
       "scan-invisible-chars",
       SLOW_HOOK_THRESHOLD_MS + 1,
       "SessionStart",
-      (chunk) => errs.push(chunk),
       (event, fields) => emitted.push([event, fields]),
+      (chunk) => errs.push(chunk),
     );
     assert.equal(reported, true);
     assert.equal(errs.length, 1);

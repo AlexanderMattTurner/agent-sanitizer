@@ -44,6 +44,50 @@ var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__ge
   mod
 ));
 
+// claude-hooks/lib/hook-timing.mjs
+async function excludeProvisioning(work, now = Date.now) {
+  const started = now();
+  try {
+    return await work();
+  } finally {
+    provisioningMs += Math.max(0, now() - started);
+  }
+}
+function startHookTimer(now = Date.now) {
+  const started = now();
+  const provisionedBefore = provisioningMs;
+  return () => Math.max(0, now() - started - (provisioningMs - provisionedBefore));
+}
+function slowHookNotice(hookName, elapsedMs, thresholdMs = SLOW_HOOK_THRESHOLD_MS) {
+  if (elapsedMs <= thresholdMs) return null;
+  return `agent-sanitizer PERFORMANCE: the ${hookName} hook took ${(elapsedMs / 1e3).toFixed(1)}s, over its ${(thresholdMs / 1e3).toFixed(1)}s budget \u2014 this delay is the sanitizer's, not the model's, and every affected call pays it. Tell the user, and suggest they report it at ${ISSUE_URL} with the hook name and timing.`;
+}
+function withSlowHookNotice(hookName, elapsedMs, verdict, writeErr = (chunk) => process.stderr.write(chunk)) {
+  const notice = slowHookNotice(hookName, elapsedMs);
+  if (notice === null) return verdict;
+  writeErr(notice + "\n");
+  return {
+    ...verdict,
+    additional_context: verdict.additional_context ? `${verdict.additional_context} ${notice}` : notice
+  };
+}
+function reportSlowHook(hookName, elapsedMs, hookEventName, emit, writeErr = (chunk) => process.stderr.write(chunk)) {
+  const notice = slowHookNotice(hookName, elapsedMs);
+  if (notice === null) return false;
+  writeErr(notice + "\n");
+  emit(hookEventName, { additionalContext: notice });
+  return true;
+}
+var SLOW_HOOK_THRESHOLD_MS, ISSUE_URL, provisioningMs;
+var init_hook_timing = __esm({
+  "claude-hooks/lib/hook-timing.mjs"() {
+    "use strict";
+    SLOW_HOOK_THRESHOLD_MS = 1e3;
+    ISSUE_URL = "https://github.com/AlexanderMattTurner/agent-sanitizer/issues";
+    provisioningMs = 0;
+  }
+});
+
 // claude-hooks/lib/hook-io.mjs
 import {
   openSync,
@@ -212,6 +256,32 @@ async function awaitLazyDependency({
   ceilingMs = 9e5,
   intervalMs = 250
 }) {
+  return excludeProvisioning(
+    () => pollForDependency({
+      tryImport,
+      markerPresent,
+      setupAlive,
+      now,
+      sleep: sleep2,
+      graceMs,
+      settleMs,
+      ceilingMs,
+      intervalMs
+    }),
+    now
+  );
+}
+async function pollForDependency({
+  tryImport,
+  markerPresent,
+  setupAlive,
+  now,
+  sleep: sleep2,
+  graceMs,
+  settleMs,
+  ceilingMs,
+  intervalMs
+}) {
   const start = now();
   let sawInstalling = false;
   let enteredDone = false;
@@ -280,6 +350,7 @@ var defaultSharedState, shared, HookEvent, PermissionDecision, FAIL_OPEN_ENV, FA
 var init_hook_io = __esm({
   "claude-hooks/lib/hook-io.mjs"() {
     "use strict";
+    init_hook_timing();
     defaultSharedState = () => ({
       lazyModules: /* @__PURE__ */ Object.create(null),
       cliEntryClaimed: false,
@@ -66862,41 +66933,6 @@ var init_layer_pipeline = __esm({
   }
 });
 
-// claude-hooks/lib/hook-timing.mjs
-function startHookTimer(now = Date.now) {
-  const started = now();
-  return () => now() - started;
-}
-function slowHookNotice(hookName, elapsedMs, thresholdMs = SLOW_HOOK_THRESHOLD_MS) {
-  if (elapsedMs <= thresholdMs) return null;
-  return `agent-sanitizer PERFORMANCE: the ${hookName} hook took ${(elapsedMs / 1e3).toFixed(1)}s, over its ${(thresholdMs / 1e3).toFixed(1)}s budget \u2014 this delay is the sanitizer's, not the model's, and every affected call pays it. Tell the user, and suggest they report it at ${ISSUE_URL} with the hook name and timing.`;
-}
-function withSlowHookNotice(hookName, elapsedMs, verdict, writeErr = (chunk) => process.stderr.write(chunk)) {
-  const notice = slowHookNotice(hookName, elapsedMs);
-  if (notice === null) return verdict;
-  writeErr(notice + "\n");
-  return {
-    ...verdict,
-    additional_context: verdict.additional_context ? `${verdict.additional_context} ${notice}` : notice
-  };
-}
-function reportSlowHook(hookName, elapsedMs, hookEventName, writeErr = (chunk) => process.stderr.write(chunk), emit = emitHookResponse) {
-  const notice = slowHookNotice(hookName, elapsedMs);
-  if (notice === null) return false;
-  writeErr(notice + "\n");
-  emit(hookEventName, { additionalContext: notice });
-  return true;
-}
-var SLOW_HOOK_THRESHOLD_MS, ISSUE_URL;
-var init_hook_timing = __esm({
-  "claude-hooks/lib/hook-timing.mjs"() {
-    "use strict";
-    init_hook_io();
-    SLOW_HOOK_THRESHOLD_MS = 1e3;
-    ISSUE_URL = "https://github.com/AlexanderMattTurner/agent-sanitizer/issues";
-  }
-});
-
 // claude-hooks/lib/control-plane.mjs
 function controlPlane(overrides = {}) {
   const bindings = { claudeAdapter: claudeAdapter2, Decision: Decision2, EventKind: EventKind2, ...overrides };
@@ -67559,7 +67595,11 @@ async function redactViaDaemon(text5, opts = {}) {
     deadline,
     connect = connectAndRequest,
     spawn: spawnFn = spawnDaemon,
-    waitForSocket: waitFn = waitForSocket
+    waitForSocket: waitFn = waitForSocket,
+    // The clock the provisioning charge is measured on; injectable alongside the
+    // waitForSocket seam it brackets, since a stubbed wait advances a test clock
+    // rather than real time.
+    now = Date.now
   } = opts;
   const remainingMs = () => deadline ? deadline.remainingMs() : void 0;
   const budgetSpent = () => {
@@ -67601,7 +67641,7 @@ async function redactViaDaemon(text5, opts = {}) {
     spawnFn(socketPath);
     const budgetMs = remainingMs();
     const waitOpts = budgetMs === void 0 ? void 0 : { deadlineMs: Math.min(WAIT_DEADLINE_MS, budgetMs) };
-    if (!await waitFn(socketPath, waitOpts))
+    if (!await excludeProvisioning(() => waitFn(socketPath, waitOpts), now))
       throw failClosed(
         new Error(`redactor daemon did not start within ${WAIT_DEADLINE_MS}ms`)
       );
@@ -67617,6 +67657,7 @@ var FRAME_CAP, DEFAULT_SOCKET_PATH, WAIT_DEADLINE_MS, sleep;
 var init_redactor_client = __esm({
   "claude-hooks/lib/redactor-client.mjs"() {
     "use strict";
+    init_hook_timing();
     init_env_config();
     FRAME_CAP = 16 * 1024 * 1024;
     DEFAULT_SOCKET_PATH = process.env._AGENT_SANITIZER_REDACTOR_SOCKET || join3(tmpdir2(), "agent-sanitizer-redactor", "redactor.sock");
@@ -68690,7 +68731,12 @@ async function cliMain3(opts = {}) {
   try {
     await runScanCli(opts);
   } finally {
-    reportSlowHook(HOOK_NAME4, elapsed(), HookEvent.SESSION_START);
+    reportSlowHook(
+      HOOK_NAME4,
+      elapsed(),
+      HookEvent.SESSION_START,
+      emitHookResponse
+    );
   }
 }
 async function runScanCli({ trace: sink = trace, scan: runScan }) {
