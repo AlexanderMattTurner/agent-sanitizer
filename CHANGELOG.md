@@ -8,6 +8,17 @@ adhere to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+## [2.25.0] - 2026-08-08
+
+### Added
+
+- Ship `/agent-sanitizer:enable-auto-update` flag to turn on auto-update for the sanitizer plugin.
+- Install and auto-update the sanitizer plugin in this repository's sessions.
+
+### Changed
+
+- Auto-update for the sanitizer plugin is off by default; installers should enable it via the new flag.
+
 ## [2.24.2] - 2026-08-08
 
 ### Fixed
