@@ -217,14 +217,34 @@ import {
 } from "agent-sanitizer/claude-hooks/lib/hook-io";
 ```
 
-The exported set is deliberately small — the four hooks
-(`sanitize-output`, `pretooluse-sanitize`, `sanitize-user-prompt`,
-`scan-invisible-chars`) plus `lib/hook-io` and `lib/control-plane`. Everything
-else under `claude-hooks/` stays internal and is refused by the exports map, so
-it never becomes a surface this package owes compatibility on. `lib/hook-io` is
-exported because it must be _shared_ rather than copied: it owns the
-lazy-module registry and the CLI-slot singleton, and two copies in one bundle
-double-fire the inlined CLIs.
+The exported set is **curated, not a wildcard**: exactly the subpaths below and
+nothing else. Anything unlisted is refused by the exports map with
+`ERR_PACKAGE_PATH_NOT_EXPORTED`, so it never becomes a surface this package owes
+compatibility on. `lib/hook-io` in particular is exported because it must be
+_shared_ rather than copied: it owns the lazy-module registry and the CLI-slot
+singleton, and two copies in one bundle double-fire the inlined CLIs.
+
+<!-- exports-table: rows are asserted to equal package.json's ./claude-hooks* exports by test/claude-hooks-exports.test.mjs -->
+
+| Subpath                             | What it is                                                                                 |
+| ----------------------------------- | ------------------------------------------------------------------------------------------ |
+| `claude-hooks`                      | The `--hook=` CLI dispatcher all four hooks are spawned through                            |
+| `claude-hooks/pretooluse-sanitize`  | PreToolUse orchestrator: invisible-char gate, confusable folding, stego strip, rehydration |
+| `claude-hooks/sanitize-output`      | PostToolUse pipeline: Layers 1–4 over tool output, plus the host-extension bag             |
+| `claude-hooks/sanitize-user-prompt` | UserPromptSubmit verdict on payload-capable invisible/ANSI content                         |
+| `claude-hooks/scan-invisible-chars` | SessionStart scan of `CLAUDE.md` / `.claude/` markdown                                     |
+| `claude-hooks/lib/hook-io`          | Shared hook I/O: the lazy-module registry, the CLI slot, deadlines, the hookgate marker    |
+| `claude-hooks/lib/control-plane`    | Bridge to `agent-control-plane-core` and the shared judge-CLI transport                    |
+| `claude-hooks/lib/authored-content` | Stego + terminal-control stripping of the fields the MODEL authors                         |
+| `claude-hooks/lib/env-config`       | The env-bound secret vocabulary the Layer-4 pre-gate and the redactor client share         |
+| `claude-hooks/lib/invisible-alert`  | Cross-hook alert state for uncleanable invisible-char injection in instruction files       |
+| `claude-hooks/lib/redactor-client`  | Client for the long-lived `agent-secret-redactor-daemon` (Layer 4's transport)             |
+| `claude-hooks/lib/reveal`           | The Layer-2 sidecar that lets the model re-read what the HTML splice removed               |
+| `claude-hooks/lib/secret-annotate`  | The cheap deterministic Layer-4 pre-gate checks around the daemon call                     |
+| `claude-hooks/lib/trace`            | The opt-in structured trace channel every layer announces itself on                        |
+
+Only `plugin-hooks` itself is unexported under its own name — it is reachable as
+the bare `claude-hooks` entry above.
 
 Importing one runs no CLI and reads no stdin. Same stability posture as the
 `_AGENT_SANITIZER_*` variables below: reachable and typed, but the supported
