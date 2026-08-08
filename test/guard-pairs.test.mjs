@@ -308,7 +308,7 @@ function visit(node, scope, ctx) {
 
 const analyzed = new Map();
 /** Resolve a module's path bindings, the repo paths it names, and its imports. */
-function analyzeModule(file, stack = new Set()) {
+function analyzeModule(file) {
   const cached = analyzed.get(file);
   if (cached) return cached;
   // Seeded before recursion so an import cycle terminates with an empty scope
@@ -320,8 +320,6 @@ function analyzeModule(file, stack = new Set()) {
     deps: [],
   };
   analyzed.set(file, result);
-  if (stack.has(file)) return result;
-  stack.add(file);
 
   const ast = parse(readFileSync(join(repoRoot, file), "utf8"), {
     ecmaVersion: "latest",
@@ -340,7 +338,7 @@ function analyzeModule(file, stack = new Set()) {
     if (!tracked.has(target)) continue;
     if (DATA_EXTENSIONS.has(extname(target))) result.refs.add(target);
     if (!MODULE_EXTENSIONS.has(extname(target))) continue;
-    const dep = analyzeModule(target, stack);
+    const dep = analyzeModule(target);
     result.deps.push(target);
     for (const imported of node.specifiers) {
       if (imported.type !== "ImportSpecifier") continue;
@@ -354,7 +352,6 @@ function analyzeModule(file, stack = new Set()) {
     }
   }
   visit(ast, scope, { file, refs: result.refs });
-  stack.delete(file);
   return result;
 }
 
