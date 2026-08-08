@@ -30,6 +30,7 @@ import {
   resolveSpan,
   rehydrateNewString,
   makeFileView,
+  toUtf16View,
 } from "../src/view-map.mjs";
 import { fcRunOptions } from "./test-helpers.mjs";
 
@@ -62,13 +63,15 @@ function mkView(content, secrets) {
       placeholder: hit.placeholder,
       original: hit.value,
       // CODE-POINT offset, which is what a real `--map` run emits (Python
-      // indexes strings by code point); makeFileView converts it to UTF-16.
+      // indexes strings by code point); `toUtf16View` below converts it.
       start: Array.from(text).length,
     });
     text += hit.placeholder;
     last = hit.i + hit.value.length;
   }
-  return makeFileView(text + content.slice(last), pairs);
+  return toUtf16View(
+    makeFileView(text + content.slice(last), pairs, "codePoint"),
+  );
 }
 
 const runOptions = fcRunOptions({ numRuns: 500 });

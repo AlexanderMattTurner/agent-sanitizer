@@ -4,8 +4,8 @@
     "noEmit": false,
     "declaration": true,
     "emitDeclarationOnly": true,
-    "rootDir": "claude-hooks",
-    "outDir": "types/claude-hooks"
+    "rootDir": ".",
+    "outDir": "types"
   },
-  "include": ["claude-hooks/**/*.mjs"]
+  "include": ["claude-hooks/**/*.mjs", "src/claude-context.mjs"]
 }

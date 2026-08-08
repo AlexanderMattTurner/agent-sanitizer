@@ -73,7 +73,8 @@ export {
  * its own removal.
  *
  * `found` names the categories neutralized; `warnings` carries the
- * operator-facing notices. `cleaned` is always a string, and a change only
+ * operator-facing notices and `notes` the quiet tier (see `./severity.mjs`).
+ * `cleaned` is always a string, and a change only
  * ever carries a warning (no silent suppression). `options` is optional and
  * tolerates an explicit `null`/`undefined` (treated the same as omitted) —
  * only a genuinely malformed `text` (not a string) throws, deliberately: a
@@ -83,7 +84,7 @@ export {
  *
  * The layer bodies live in `./output.mjs`; this is a facade over them, not a
  * second implementation (see the module doc). It narrows `sanitizeText`'s result
- * to the three fields this entry has always promised — `modified`/`sgrNote`
+ * to the four fields this entry promises — `modified`/`sgrNote`
  * describe the tool-output pipeline's banner, and `reveal` is produced only by
  * options this facade does not expose. `html` selects Layers 2 AND 3 together
  * here, which is the surface this entry has always had; `sanitizeText` takes
@@ -91,15 +92,15 @@ export {
  * detection without Layer 2's splice.
  * @param {string} text
  * @param {{ html?: boolean } | null} [options]
- * @returns {Promise<{ cleaned: string, found: string[], warnings: string[] }>}
+ * @returns {Promise<{ cleaned: string, found: string[], warnings: string[], notes: string[] }>}
  */
 export async function sanitize(text, options) {
   if (typeof text !== "string")
     throw new TypeError("sanitize(text, options): text must be a string");
   const { html = false } = options ?? {};
-  const { cleaned, found, warnings } = await sanitizeText(text, {
+  const { cleaned, found, warnings, notes } = await sanitizeText(text, {
     html,
     exfilScan: html,
   });
-  return { cleaned, found, warnings };
+  return { cleaned, found, warnings, notes };
 }

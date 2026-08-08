@@ -21,11 +21,10 @@ import {
   CHECKS,
   CATEGORY,
   CATEGORY_LABELS,
-  LONG_RUN_RE,
   LONG_RUN_THRESHOLD,
   SCATTERED_THRESHOLD,
-  countPayloadInvisible,
-  stripInvisible,
+  countEffectiveInvisible,
+  payloadLongRunSample,
 } from "./invisible.mjs";
 import { isBenignAnsi, stripAnsiFully } from "./layer1.mjs";
 import { CONTROL_INTRODUCER_SOURCE } from "./ansi.mjs";
@@ -95,31 +94,15 @@ export function classifyPrompt(prompt, strip = stripAnsiFully) {
   const hasAnsi = ANSI_INTRODUCER.test(prompt);
   const deAnsi = strip(prompt);
 
-  const longRunSample = deAnsi.match(LONG_RUN_RE)?.[0] ?? null;
-  // Count only PAYLOAD invisibles for the scatter gate: ZWNJ/ZWJ (and emoji
-  // VS16) that do real rendering work are excluded, so a legitimately
-  // joiner-dense multilingual prompt (formal Persian, an emoji ZWJ sequence) is
-  // not blocked by sheer joiner count. This mirrors carveStrip's own
-  // payloadInvis < SCATTERED_THRESHOLD gate so the block and strip layers agree.
-  const payloadInvisible = countPayloadInvisible(deAnsi);
-  // Preserved-joiner covert channel (O3). countPayloadInvisible EXCLUDES the
-  // ZWNJ/ZWJ (and emoji selectors) that do real rendering work, so a channel
-  // built entirely from MEANINGFUL joiners — an attacker alternates
-  // `letter joiner letter joiner …` so every joiner sits between two cursive
-  // letters — counts as ZERO here and would pass, even though the strip layer
-  // (carveStrip) only PRESERVES joiners up to a per-document budget
-  // (TOTAL_PRESERVED_JOINER_BUDGET / CONSECUTIVE_JOINER_CAP) and strips the
-  // surplus as payload. A prompt channel cannot strip, only block, so mirror
-  // that budget by counting the joiners the strip layer WOULD remove — delegated
-  // to stripInvisible (the SSOT) rather than re-deriving the budget here, which
-  // would risk drift — and fold that surplus into the count the scatter gate
-  // sees. A leading BOM is preserved by the strip but counted by
-  // countPayloadInvisible, so the difference can go slightly negative; clamp it.
-  const surplusPreservedJoiners = Math.max(
-    0,
-    [...deAnsi].length - [...stripInvisible(deAnsi)].length - payloadInvisible,
-  );
-  const invisibleCount = payloadInvisible + surplusPreservedJoiners;
+  // Both gates read the SHARED definitions in ./invisible.mjs rather than
+  // spelling their own: what counts as a hidden run, and how many invisibles a
+  // text really carries once the carve-out's preserved joiners and its
+  // over-budget surplus are accounted for. See payloadLongRunSample /
+  // countEffectiveInvisible — including why the run probe masks the invisibles
+  // the strip layer would PRESERVE, so a legitimate emoji sequence cannot block
+  // a prompt that the strip layer would not even have flagged.
+  const longRunSample = payloadLongRunSample(deAnsi);
+  const invisibleCount = countEffectiveInvisible(deAnsi);
   const invisiblesBelowThreshold =
     longRunSample === null && invisibleCount < SCATTERED_THRESHOLD;
 

@@ -14,9 +14,28 @@
   // version already matching and skips the re-lock that would repair it. The
   // engine bump is driven by the npm alias alone: build-plugin.mjs regenerates
   // requirements.in from it and --if-stale re-locks from there, hashes included.
+  //
+  // REQUIRES the hosted Renovate GitHub App to be installed on this repo —
+  // nothing in this repo runs Renovate itself, so with the app uninstalled the
+  // pins silently age and every rule below is inert. If the app is ever
+  // removed, the pin must be bumped by hand (`npm pkg set
+  // devDependencies.sanitizer-engine=npm:agent-sanitizer@<version>` plus a
+  // lockfile-only install) or a self-hosted runner added back.
   enabledManagers: ["npm"],
   schedule: ["* 0-6 * * *"],
   rangeStrategy: "pin",
+  // Two jobs at once. (1) Supply-chain cooldown before a freshly published
+  // version can enter the lockfile. (2) It absorbs the npm/PyPI publish race:
+  // the engine's npm and PyPI artifacts are published minutes apart, and the
+  // daemon the plugin provisions installs the PyPI half, so a same-minute bump
+  // could reference a version PyPI does not serve yet. A version that is on npm
+  // but still missing from PyPI a day later is a broken release, and it fails
+  // loudly on the bump PR: plugin-dist-autofix.yaml runs verify-engine-pin.sh
+  // before it regenerates anything, so the artifacts stay stale, the
+  // reproducibility test goes red and automerge withholds the merge. Renovate
+  // has no PyPI-presence precondition of its own; that red check IS the
+  // precondition.
+  minimumReleaseAge: "24 hours",
   // Default off, then opt each watched pin in below — a blanket enable would
   // open PRs for the whole dev toolchain, none of which affects the artifact.
   packageRules: [
@@ -56,4 +75,9 @@
   // workflow pushes the regenerated bundle onto the bump PR first, and the
   // reproducibility test is what proves it landed.
   platformAutomerge: true,
+  // Squash to match every other automated merge here (dependabot-auto-merge,
+  // template-sync-automerge). Renovate's default is the repo's own default
+  // merge method, which would produce a merge commit — and fails outright where
+  // merge commits are disabled, stranding the PR open forever.
+  automergeStrategy: "squash",
 }

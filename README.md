@@ -31,16 +31,17 @@ Code](#using-it-with-claude-code) covers each hook and hand-wiring.
 import { sanitize } from "agent-sanitizer";
 
 // Layer 1 (invisible chars + ANSI), zero heavy deps:
-const { cleaned, found, warnings } = await sanitize(untrustedText);
+const { cleaned, found, warnings, notes } = await sanitize(untrustedText);
 
 // Opt into the HTML layers for web ingress (lazy-loads ~200 ms of deps):
 const result = await sanitize(pageSource, { html: true });
 ```
 
 `sanitize` never throws and never silently drops content—any change comes with
-at least one `warnings` entry. `found` names the neutralized category codes
-(e.g. `["cf-format", "hidden-html"]`); `cleaned` is the safe text, with
-placeholders where hidden HTML was spliced out.
+at least one `warnings` or `notes` entry. `found` names the neutralized category
+codes (e.g. `["cf-format", "hidden-html"]`); `cleaned` is the safe text, with
+placeholders where hidden HTML was spliced out. See [warnings vs
+notes](#warnings-vs-notes) for which findings land where.
 
 ## Entry points
 
@@ -78,6 +79,26 @@ without notice.
 | `html-comments`       | HTML comments spliced out by Layer 2                                                                    |
 | `hidden-html`         | Elements hidden via CSS/attribute (`display:none`, `hidden`, etc.) spliced out by Layer 2               |
 | `exfil-urls`          | Exfil-shaped URLs detected by Layer 3 (reported, not removed)                                           |
+
+### warnings vs notes
+
+Findings come back at two volumes, on `sanitize` and on `/output` alike:
+
+- **`warnings`** — injection-shaped. Something was hidden from a human reader,
+  something a payload would have used was removed, or a secret was redacted.
+  This is the set to surface.
+- **`notes`** — it happened, and here is how to look at it, but nothing about it
+  is attack-shaped: a preserved `<script>` on a fetched page, a plain link whose
+  URL merely looks exfil-shaped, or (in `/output`, under `sgrCarveOut`) an
+  incidental strip of pasted terminal colour or a stray soft hyphen.
+
+The tier changes nothing about what is removed—the same bytes are stripped,
+spliced and redacted either way, and a note is still reported. It exists so the
+banner keeps meaning something. A caller that ignores `notes` is exactly as loud
+as before the split. `/output` also returns `sgrNote: true` when a result is
+note-only, so a caller can pick the quiet line without inspecting the arrays.
+[`THREAT-MODEL.md`](./THREAT-MODEL.md#severity-warnings-vs-notes) lists which
+finding lands at which tier and why.
 
 ### `FILTER_WARNING` codes (Layer 5)
 
@@ -428,8 +449,9 @@ field selects the entry point (default `sanitize`); the self-contained ones —
 `sanitizeText`, `classifyPrompt`, `scanInstructionFiles`, `cleanFile` — are
 bridged, while entry points taking a JS callback have no wire form. Bridged
 `sanitizeText` runs Layers 1–3 only: no secret redaction (Layer 4), no injection
-filtering (Layer 5), and `sgrNote` is always `false` since the bridge never
-wires `sgrCarveOut`.
+filtering (Layer 5), and—since the bridge never wires `sgrCarveOut`—Layer 1's
+findings are never downgraded, so `notes` carries only the Layer-2/3 tiers and
+`sgrNote` is `true` only when those were the whole story.
 
 ```sh
 echo '{"text":"a​b"}' | npx sanitize-cli           # default op: sanitize

@@ -26,6 +26,7 @@
       "plugin/test/enable-auto-update.test.mjs",
       "plugin/test/plugin-manifest.test.mjs"
     ],
+    ".claude/settings.json": ["plugin/test/plugin-manifest.test.mjs"],
     ".github/mutation-shards.json": [
       "test/mutation-shards.test.mjs",
       "test/shipped-gates.test.mjs"

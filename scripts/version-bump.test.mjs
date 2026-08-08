@@ -64,6 +64,36 @@ test("a hook's exported GIT_DIR cannot redirect a sandbox's git at this repo", (
     rmSync(dir, { recursive: true, force: true });
   }
 });
+/**
+ * Strip every Anthropic credential the release script would walk, so these
+ * sandboxes exercise the no-credential path (plain commit-list changelog)
+ * rather than making a real API call from whatever the runner has exported.
+ *
+ * The names are read out of the live ladder instead of hand-listed: a rung
+ * added to `claude-oauth-ladder.bash` and not mirrored here would leave the
+ * test silently authenticating.
+ *
+ * @param {Record<string, string | undefined>} env
+ */
+const scrubAnthropicCredentials = (env) => {
+  const lib = join(REPO_ROOT, ".github", "scripts", "lib");
+  const vars = execFileSync(
+    "bash",
+    [
+      "-c",
+      `set -euo pipefail
+       source "$1/claude-oauth-ladder.bash"
+       printf '%s\\n' "\${CLAUDE_OAUTH_LADDER_VARS[@]}"`,
+      "_",
+      lib,
+    ],
+    { encoding: "utf8" },
+  )
+    .split("\n")
+    .filter(Boolean);
+  assert.ok(vars.length > 0, "read no credential names from the live ladder");
+  for (const name of vars) delete env[name];
+};
 
 // --- Drift / single-source-of-truth contract ------------------------------
 // The release path is a two-copy hazard: a `scripts/` and a `.github/scripts/`
@@ -185,7 +215,7 @@ function makeSandbox(npmStubBody) {
 /** Run the live script in `dir`; return {status, stderr, stdout}. */
 function runScript(dir, binDir) {
   const env = { ...process.env, PATH: `${binDir}:${process.env.PATH}` };
-  delete env.ANTHROPIC_API_KEY;
+  scrubAnthropicCredentials(env);
   delete env.GITHUB_OUTPUT;
   const res = spawnSync("bash", [LIVE_SCRIPT], {
     cwd: dir,
@@ -435,7 +465,7 @@ fi`;
     gitW("commit", "-q", "--allow-empty", "-m", "feat: add a thing");
 
     const env = { ...process.env, PATH: `${binDir}:${process.env.PATH}` };
-    delete env.ANTHROPIC_API_KEY;
+    scrubAnthropicCredentials(env);
     delete env.GITHUB_OUTPUT;
     delete env.GITHUB_REF_NAME;
     delete env.GITHUB_REF;
@@ -539,7 +569,7 @@ fi`;
     gitO("push", "-q", "origin", "main");
 
     const env = { ...process.env, PATH: `${binDir}:${process.env.PATH}` };
-    delete env.ANTHROPIC_API_KEY;
+    scrubAnthropicCredentials(env);
     delete env.GITHUB_OUTPUT;
     // In CI these name the PR's merge ref (e.g. 167/merge), and the script reads
     // GITHUB_REF_NAME as the branch to push the release-docs commit to. Left set,

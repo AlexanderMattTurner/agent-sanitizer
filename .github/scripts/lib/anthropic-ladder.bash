@@ -23,36 +23,62 @@
 # Contract: sourced into strict-mode (set -euo pipefail) callers; do not re-set
 # shell options. Requires .github/scripts/lib/retry.bash to be sourced first.
 
-# The ladder, in attempt order: the subscription tokens the Claude workflows
-# use, and nothing else. Each draws on a flat-rate plan, so no run these
-# callers make can bill per-token credits. Exhausting the ladder fails loud,
-# and that is the intended end — a metered charge is not an acceptable
-# fallback.
+# The ladder, in attempt order: the same subscription tokens the Claude
+# workflows use, and ONLY those. A metered ANTHROPIC_API_KEY rung used to sit at
+# the bottom; it was removed deliberately, so no CI path can fall through to
+# spending real credits. Exhausting the subscription rungs now degrades — the
+# changelog prose falls back to a plain commit list — rather than billing.
 # shellcheck source=.github/scripts/lib/claude-oauth-ladder.bash
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/claude-oauth-ladder.bash"
 
+# The ladder IS the OAuth ladder. Kept as a named alias rather than reading
+# CLAUDE_OAUTH_LADDER_VARS directly at each use, so the "no credential is
+# configured" error below can name this caller's own list.
+_ANTHROPIC_LADDER_VARS=("${CLAUDE_OAUTH_LADDER_VARS[@]}")
+
+# anthropic_ladder — the configured credentials on stdout, one per line, in
+# attempt order. Empty rungs are dropped and duplicates collapse, so an unset
+# middle tier is stepped over rather than ending the ladder, and a credential
+# configured twice is not paid for twice.
+anthropic_ladder() {
+  local -A seen=()
+  local var cred
+  for var in "${_ANTHROPIC_LADDER_VARS[@]}"; do
+    cred="${!var:-}"
+    [[ -n "$cred" && -z "${seen["$cred"]:-}" ]] || continue
+    seen["$cred"]=1
+    printf '%s\n' "$cred"
+  done
+}
+
 # anthropic_auth_headers CRED — the header set for ONE credential, into
 # AUTH_HEADERS; AUTH_MODE names the scheme so a failure is diagnosable from the
-# log, and AUTH_METERED says whether the credential bills per token. Claude
-# subscription OAuth tokens (sk-ant-oat…) use Bearer + the oauth beta header and
-# draw on a flat-rate plan; anything else is treated as an Anthropic API key
-# (x-api-key) and therefore metered. This is the one place a credential's shape
-# decides either answer, so a caller reads AUTH_METERED rather than re-testing
-# the prefix.
+# log. Only Claude subscription OAuth tokens (sk-ant-oat…) are accepted: Bearer
+# plus the oauth beta header.
+#
+# An unrecognized shape does NOT fall back to the x-api-key scheme this ladder
+# used to support: that fallback is exactly how a metered key would creep back
+# in — a secret renamed into an OAuth slot would silently authenticate and bill.
+#
+# Returns 1 rather than exiting, so the caller treats a wrong-shaped rung the
+# way it treats a rejected one: log it and step to the next credential. Exiting
+# here would let one pasted-in-the-wrong-slot key strand every working rung
+# below it, breaking this file's own contract that walking the ladder "only
+# changes WHO answers, never WHAT the answer is". Exhausting every rung still
+# fails loud, at the end of anthropic_messages.
 anthropic_auth_headers() {
   local cred="$1"
-  AUTH_MODE="x-api-key (sk-ant-api)"
-  AUTH_METERED=true
-  AUTH_HEADERS=(-H "x-api-key: $cred" -H "anthropic-version: 2023-06-01")
-  if [[ "$cred" == sk-ant-oat* ]]; then
-    AUTH_MODE="Bearer + oauth beta (sk-ant-oat)"
-    AUTH_METERED=false
-    AUTH_HEADERS=(
-      -H "authorization: Bearer $cred"
-      -H "anthropic-beta: oauth-2025-04-20"
-      -H "anthropic-version: 2023-06-01"
-    )
+  if [[ "$cred" != sk-ant-oat* ]]; then
+    AUTH_MODE="unusable (not an sk-ant-oat… token)"
+    AUTH_HEADERS=()
+    return 1
   fi
+  AUTH_MODE="Bearer + oauth beta (sk-ant-oat)"
+  AUTH_HEADERS=(
+    -H "authorization: Bearer $cred"
+    -H "anthropic-beta: oauth-2025-04-20"
+    -H "anthropic-version: 2023-06-01"
+  )
 }
 
 # Surface the reason for a non-200 (the auth mode plus the API's own error
@@ -136,22 +162,17 @@ anthropic_messages() {
   _ANTHROPIC_REQUEST_BODY="$1"
   _ANTHROPIC_RESPONSE_FILE="$2"
   local -a ladder
-  mapfile -t ladder < <(claude_oauth_ladder)
+  mapfile -t ladder < <(anthropic_ladder)
   [[ ${#ladder[@]} -gt 0 ]] || {
-    echo "Error: no Anthropic credential is configured. Set one of: ${CLAUDE_OAUTH_LADDER_VARS[*]}." >&2
+    echo "Error: no Anthropic credential is configured. Set one of: ${_ANTHROPIC_LADDER_VARS[*]}." >&2
     exit 1
   }
   local cred rung=0
   for cred in "${ladder[@]}"; do
     rung=$((rung + 1))
-    anthropic_auth_headers "$cred"
-    # Every rung is a subscription slot, so this warning fires only when a
-    # metered API key was set under one of those names. The key still
-    # authenticates, so nothing else in the log would say the run started
-    # spending credits. This announcement is what ties a bill to the runs that
-    # caused it.
-    if [[ "$AUTH_METERED" == "true" ]]; then
-      echo "::warning::Credential ${rung}/${#ladder[@]} is a metered Anthropic API key, not a subscription token; this run bills real credits." >&2
+    if ! anthropic_auth_headers "$cred"; then
+      echo "Credential ${rung}/${#ladder[@]} is not a Claude subscription OAuth token (expected sk-ant-oat…); trying the next one." >&2
+      continue
     fi
     _ANTHROPIC_CRED_REJECTED=false
     _ANTHROPIC_RATE_LIMITED=false
@@ -168,6 +189,6 @@ anthropic_messages() {
     echo "Error: Claude API unreachable after 3 transient-failure attempts; see the reasons above." >&2
     exit 1
   done
-  echo "Error: every configured Anthropic credential (${#ladder[@]}) was rejected or rate-limited; see the reasons above." >&2
+  echo "Error: every configured Anthropic credential (${#ladder[@]}) was unusable, rejected, or rate-limited; see the reasons above." >&2
   exit 1
 }

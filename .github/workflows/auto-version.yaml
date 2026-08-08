@@ -14,12 +14,10 @@ name: Auto version bump and publish
 # "private": true, so the template repo never publishes itself. A downstream
 # repo opts in by dropping `private` and setting a real, publishable name.
 #
-# Versioned-app workflow: only adopt this in a repo that is published to npm and
-# has no publisher of its own. It is listed in the template-sync OPT_IN_PATHS, so
-# the sync never introduces it — a repo that does not have this file keeps not
-# having it, and deleting it is how you opt back out. Two publishers on one
-# default branch race the same semver bump and the loser fails with an
-# unrecognizable npm E404 on an already-published version.
+# Versioned-app workflow: only adopt this in a repo that is published to npm.
+# Repos that are not npm packages (e.g. a website like TurnTrout.com) should
+# exclude it via the template-sync EXCLUDE_PATHS list — see
+# .github/workflows/template-sync.yaml.
 
 on:
   push:
@@ -74,10 +72,10 @@ jobs:
         # the empty string rather than erroring — so without it the whole coupled
         # PyPI half of the release silently no-ops on every publish.
         id: release
-        # The changelog-prose call walks the claude-oauth-ladder.bash credential
-        # ladder — subscription tokens only. A metered ANTHROPIC_API_KEY is no
-        # longer a rung, so none is passed: with no subscription token set the
-        # prose degrades to a plain commit list rather than billing credits.
+        # The changelog-prose call walks the anthropic-ladder.bash credential
+        # ladder, which is subscription OAuth tokens ONLY — no metered API key
+        # rung. If every rung is unset or rejected, the release notes degrade to
+        # a plain commit list; the release itself still publishes.
         env:
           CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           CLAUDE_CODE_OAUTH_TOKEN_FALLBACK: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN_FALLBACK }}

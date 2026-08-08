@@ -31,6 +31,18 @@ import {
 } from "./lib/invisible-alert.mjs";
 import { bestEffortTrace, trace, TraceEvent } from "./lib/trace.mjs";
 import { reportSlowHook, startHookTimer } from "./lib/hook-timing.mjs";
+// Relative, not the `agent-sanitizer` specifier every other engine import uses:
+// this is the scan's SCOPE, which is hook policy and must move with the hook.
+// Routing it through the specifier would resolve it, in the shipped plugin
+// bundle, against a PINNED older engine that does not export it — leaving the
+// walk with undefined globs while believing it had scanned everything. The
+// module is dependency-free data (see src/claude-context.mjs), so importing it
+// statically carries none of the fail-open hazard lazyImport exists to cover.
+import {
+  CLAUDE_CONTEXT_SUBDIRS,
+  CLAUDE_INSTRUCTION_GLOBS,
+  excludeFromContextScan,
+} from "../src/claude-context.mjs";
 
 // Layer-1 primitives, bound via lazyImport (see its doc for the fail-OPEN
 // hazard of a bare static npm import — here the instruction files would load
@@ -193,98 +205,26 @@ function decodeRun(run) {
 }
 
 /**
- * The `.claude/` subdirectories whose markdown Claude Code loads as model
- * context. This is a WHITELIST, and that is the point: `.claude/` is also where
- * tooling parks bulk data that is never loaded as context — `worktrees/`
- * (entire checked-out copies of the repo), plus caches, transcripts and
- * snapshots — and globbing `.claude/**` swept all of it in. On a repo with a few
- * populated worktrees that is thousands of files READ at every session start:
- * one report put it at 30 seconds of blocked startup, paid for scanning files
- * that cannot reach the model.
- *
- * A whitelist, not a `worktrees` denylist, because the failure modes are not
- * symmetric: an unlisted context directory costs a scan this hook was never
- * asked for anyway (the PostToolUse sanitizer still cleans those bytes when a
- * tool reads them), while an unlisted BULK directory silently costs every future
- * session its startup. Add an entry here when Claude Code starts loading a new
- * `.claude/` subdirectory as context.
- */
-export const CLAUDE_CONTEXT_SUBDIRS = Object.freeze([
-  "agents",
-  "commands",
-  "output-styles",
-  "skills",
-]);
-
-// The glob patterns for one `.claude` tree at `prefix` (empty for the project
-// root, a doubled-star segment for nested ones): its top-level markdown, plus the
-// whitelisted context subdirectories. Built once, from the one list above.
-/** @param {string} prefix @returns {string[]} */
-function claudeDirPatterns(prefix) {
-  return [
-    `${prefix}.claude/*.md`,
-    ...CLAUDE_CONTEXT_SUBDIRS.map((sub) => `${prefix}.claude/${sub}/**/*.md`),
-  ];
-}
-
-/**
- * Entries the walk must not descend into or return: `node_modules`, and every
- * child of a `.claude` directory that is not whitelisted context.
- *
- * The patterns alone would already refuse to MATCH those files, but globSync
- * calls this on directories as it walks and prunes the ones it rejects — which
- * is where the cost actually is. Without the prune, a `.claude/worktrees/`
- * holding a few repo checkouts is walked in full on every session start (and,
- * because a doubled-star segment does cross into a dot directory when the
- * pattern names one, a `.claude` NESTED inside a worktree was matched and
- * scanned as if it were this session's context).
- *
- * globSync calls this with both bare names and repo-relative paths, so it must
- * answer for either; a bare name carries no `.claude` context and is judged only
- * against `node_modules`.
- * @param {string} entry  a bare entry name or a path relative to the scan root
- * @returns {boolean}
- */
-function excludeFromScan(entry) {
-  if (entry === "node_modules") return true;
-  const parts = entry.split(/[/\\]/);
-  const claudeIndex = parts.indexOf(".claude");
-  const tail = parts.slice(claudeIndex + 1);
-  if (claudeIndex === -1 || tail.length === 0) return false;
-  // `.claude/<file>.md` is context (a top-level note); anything else directly
-  // under `.claude` must be a whitelisted subdirectory to be walked at all.
-  if (tail.length === 1 && tail[0].endsWith(".md")) return false;
-  return !CLAUDE_CONTEXT_SUBDIRS.includes(tail[0]);
-}
-
-/**
  * Every file under `dir` that Claude Code loads as model context: the
- * subdirectory instruction files (CLAUDE.md, CLAUDE.local.md, AGENTS.md) and the
- * whitelisted `.claude/` markdown (see {@link CLAUDE_CONTEXT_SUBDIRS}). Claude
- * Code loads these on entry to their containing directory — a load path that
- * bypasses the PostToolUse sanitizer — so a payload planted in e.g.
- * `packages/foo/CLAUDE.md` reaches the model uncleaned unless it is scanned
- * here. Skips node_modules.
+ * per-directory instruction files (CLAUDE.md, CLAUDE.local.md, AGENTS.md) and
+ * the whitelisted `.claude/` markdown. Claude Code loads these on entry to their
+ * containing directory — a load path that bypasses the PostToolUse sanitizer —
+ * so a payload planted in e.g. `packages/foo/CLAUDE.md` reaches the model
+ * uncleaned unless it is scanned here.
  *
- * `**` does not descend into dot directories, so NESTED `.claude/` trees need
- * their own doubled-star-prefixed patterns: without them a directory-scoped skill at
- * `packages/foo/.claude/skills/x/SKILL.md` — model context by the same load
- * path — is never scanned. That same rule is why the root `.claude` needs no
- * separate walk: a leading doubled star matches zero segments, so the nested
- * patterns cover the root tree too.
+ * The scope itself — which globs, and which directories the walk must prune —
+ * is the library's {@link CLAUDE_INSTRUCTION_GLOBS} /
+ * {@link excludeFromContextScan}, so this hook and every other consumer read one
+ * list (see src/claude-context.mjs for why it is imported relatively rather than
+ * through the `agent-sanitizer` specifier the plugin bundle pins).
  * @param {string} dir
  * @returns {string[]}
  */
 function findInstructionFiles(dir) {
-  return globSync(
-    [
-      "**/CLAUDE.md",
-      "**/CLAUDE.local.md",
-      "**/AGENTS.md",
-      ...claudeDirPatterns("**/"),
-    ],
-    { cwd: dir, exclude: excludeFromScan },
-  ).map((name) => join(dir, name));
+  return globSync([...CLAUDE_INSTRUCTION_GLOBS], {
+    cwd: dir,
+    exclude: excludeFromContextScan,
+  }).map((name) => join(dir, name));
 }
 
 // Scanner
@@ -324,6 +264,11 @@ function scanFile(filePath) {
 }
 
 export {
+  // Re-exported, never redefined: the scope this hook walks is the library's
+  // (src/claude-context.mjs), and a consumer that reads it off this hook must
+  // get that same list rather than a second copy that can drift.
+  CLAUDE_CONTEXT_SUBDIRS,
+  CLAUDE_INSTRUCTION_GLOBS,
   decodeRun,
   findInstructionFiles,
   scanFile,
