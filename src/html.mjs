@@ -980,12 +980,13 @@ function canonicalizeValue(valueNode) {
  * Parse a style string into a map of decoded lowercase property name -> parsed
  * and canonicalized value node, via css-tree's tolerant declaration-list
  * parser. This replaces the hand-rolled declaration splitter, per-declaration
- * salvage, escape decoder, and `!important` stripper in one pass: css-tree recovers per-declaration exactly
- * as a browser does (a bogus declaration is dropped, the rest kept), keeps a `;`
- * inside a string/`url()`/paren as part of the value, and exposes `!important`
- * as `node.important` (so an escaped spelling `none!\69mportant` is stripped for
- * free). Property names are escape-decoded and gated to real CSS idents;
- * anything else is dropped (fail open). Later declarations win, per the cascade.
+ * salvage, escape decoder, and `!important` stripper in one pass: css-tree
+ * recovers per-declaration exactly as a browser does (a bogus declaration is
+ * dropped, the rest kept), keeps a `;` inside a string/`url()`/paren as part of
+ * the value, and exposes `!important` as `node.important` (so an escaped
+ * spelling `none!\69mportant` is stripped for free). Property names are
+ * escape-decoded and gated to real CSS idents; anything else is dropped (fail
+ * open). Later declarations win, per the cascade.
  * @param {string} styleStr
  * @returns {Map<string, any>}
  */

@@ -420,6 +420,18 @@ const HIDDEN_STYLE_CASES = [
     false,
   ],
   ["color:#fff;background-color:#fff;background-image:NONE", true], // explicit none is still not a layer
+  // ── WIDENING: a CSS Color 4 space-separated color in the `background`
+  //    SHORTHAND now resolves. Splitting the serialized shorthand on
+  //    whitespace tore `rgb(0 0 0)` into `rgb(0` / `0` / `0)`, none of which
+  //    canonicalized, so the shorthand read as "no color" and the same-color
+  //    hide never fired — while the comma form `rgb(0,0,0)` (one token) was
+  //    flagged. Reading the Function NODE closes that spelling bypass, so these
+  //    styles are spliced where they previously were not.
+  ["color:#000;background:rgb(0 0 0) no-repeat", true],
+  ["color:#fff;background:hsl(0 0% 100%) padding-box", true],
+  ["color:#000;background:rgb(0 0 0) border-box padding-box", true],
+  ["color:#000;background:rgb(255 0 0) no-repeat", false], // distinct color — visible
+  ["color:#000;background:rgb(0 0 0) url(x.png)", false], // image layer still fails open
 ];
 
 // Negative corpus for the raw-declaration fallback: realistic legitimate
@@ -626,12 +638,18 @@ describe("metamorphic: isHiddenStyle is blind to ident spelling", () => {
   it("every corpus style keeps its verdict when one ident char is escaped", () => {
     /** @type {string[]} */
     const mismatches = [];
-    let mutants = 0;
+    /** @type {string[]} */
+    const unmutated = [];
     for (const style of METAMORPHIC_CORPUS) {
       const expected = isHiddenStyle(style);
-      for (const offset of escapableOffsets(style)) {
+      const offsets = escapableOffsets(style);
+      // Per-style non-vacuity: a corpus-wide mutant count would keep passing
+      // while a NEW entry silently contributed nothing — `identSpans` yields no
+      // span for a `url` name or a dimension unit that is itself escaped, so
+      // "has idents" does not imply "has escapable idents".
+      if (offsets.length === 0) unmutated.push(JSON.stringify(style));
+      for (const offset of offsets) {
         const mutant = escapeIdentChar(style, offset);
-        mutants += 1;
         if (isHiddenStyle(mutant) !== expected)
           mismatches.push(
             `${JSON.stringify(style)} -> ${JSON.stringify(mutant)}`,
@@ -639,8 +657,11 @@ describe("metamorphic: isHiddenStyle is blind to ident spelling", () => {
       }
     }
     assert.deepEqual(mismatches, []);
-    // Non-vacuity: the corpus must actually produce a large mutant set.
-    assert.ok(mutants > 1000, `only ${mutants} mutants generated`);
+    // The only entries that legitimately carry no ident are the empty style and
+    // one whose every byte is swallowed by an unterminated comment. Pinning the
+    // exact set (not just its size) fails BOTH ways: a new entry that silently
+    // contributes nothing, and one of these two growing an ident.
+    assert.deepEqual(unmutated, ['""', '"/*x display:none"']);
   });
 });
 
