@@ -24,15 +24,17 @@
 # shell options. Requires .github/scripts/lib/retry.bash to be sourced first.
 
 # The ladder, in attempt order: the same subscription tokens the Claude
-# workflows use, then the metered API key as the last resort — a run that
-# reaches it spends real credits, so it must never be preferred over a
-# subscription token that works.
+# workflows use, and ONLY those. A metered ANTHROPIC_API_KEY rung used to sit at
+# the bottom; it was removed deliberately, so no CI path can fall through to
+# spending real credits. Exhausting the subscription rungs now degrades — the
+# changelog prose falls back to a plain commit list — rather than billing.
 # shellcheck source=.github/scripts/lib/claude-oauth-ladder.bash
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/claude-oauth-ladder.bash"
 
-# The subscription rungs, then this caller's own metered one: a direct /v1/messages
-# call can authenticate with an API key, which the CLI-driven callers cannot use.
-_ANTHROPIC_LADDER_VARS=("${CLAUDE_OAUTH_LADDER_VARS[@]}" ANTHROPIC_API_KEY)
+# The ladder IS the OAuth ladder. Kept as a named alias rather than reading
+# CLAUDE_OAUTH_LADDER_VARS directly at each use, so the "no credential is
+# configured" error below can name this caller's own list.
+_ANTHROPIC_LADDER_VARS=("${CLAUDE_OAUTH_LADDER_VARS[@]}")
 
 # anthropic_ladder — the configured credentials on stdout, one per line, in
 # attempt order. Empty rungs are dropped and duplicates collapse, so an unset
@@ -51,20 +53,25 @@ anthropic_ladder() {
 
 # anthropic_auth_headers CRED — the header set for ONE credential, into
 # AUTH_HEADERS; AUTH_MODE names the scheme so a failure is diagnosable from the
-# log. Anthropic API keys (sk-ant-api…) authenticate via x-api-key; Claude
-# subscription OAuth tokens (sk-ant-oat…) via Bearer + the oauth beta header.
+# log. Only Claude subscription OAuth tokens (sk-ant-oat…) are accepted: Bearer
+# plus the oauth beta header.
+#
+# An unrecognized shape is fatal rather than falling back to the x-api-key
+# scheme this ladder used to support. That fallback is exactly how a metered
+# key would creep back in — a secret renamed into an OAuth slot would silently
+# authenticate and bill — so the wrong shape fails loud instead.
 anthropic_auth_headers() {
   local cred="$1"
-  AUTH_MODE="x-api-key (sk-ant-api)"
-  AUTH_HEADERS=(-H "x-api-key: $cred" -H "anthropic-version: 2023-06-01")
-  if [[ "$cred" == sk-ant-oat* ]]; then
-    AUTH_MODE="Bearer + oauth beta (sk-ant-oat)"
-    AUTH_HEADERS=(
-      -H "authorization: Bearer $cred"
-      -H "anthropic-beta: oauth-2025-04-20"
-      -H "anthropic-version: 2023-06-01"
-    )
+  if [[ "$cred" != sk-ant-oat* ]]; then
+    echo "Error: Anthropic credential is not a Claude subscription OAuth token (expected an sk-ant-oat… value). Metered API keys are deliberately not accepted here." >&2
+    exit 1
   fi
+  AUTH_MODE="Bearer + oauth beta (sk-ant-oat)"
+  AUTH_HEADERS=(
+    -H "authorization: Bearer $cred"
+    -H "anthropic-beta: oauth-2025-04-20"
+    -H "anthropic-version: 2023-06-01"
+  )
 }
 
 # Surface the reason for a non-200 (the auth mode plus the API's own error

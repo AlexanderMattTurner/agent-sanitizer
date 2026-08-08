@@ -3,8 +3,9 @@
 # place (sourced, not run).
 #
 # Every caller that walks credentials — the conflict resolver's fan-out, the
-# pre-push self-review, and the direct-API ladder, which appends its own
-# ANTHROPIC_API_KEY rung — reads this list. A hand-typed copy is how a rung goes
+# pre-push self-review, and the direct-API ladder in anthropic-ladder.bash —
+# reads this list, and it is the WHOLE ladder for each of them: no metered
+# ANTHROPIC_API_KEY rung sits below it. A hand-typed copy is how a rung goes
 # missing: the omission is invisible until the one credential an adopter
 # actually provisioned is the one that got skipped, and a caller that decides
 # "is any credential configured?" from a short copy then fails OPEN.
