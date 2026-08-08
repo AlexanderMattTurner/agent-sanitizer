@@ -3,8 +3,8 @@
  *
  * `spliceRanges` (Layer 2) splices byte RANGES the HTML AST already resolved.
  * The AST path only ever feeds it disjoint, in-bounds ranges, so its documented
- * defense-in-depth behavior (merging overlapping/nested/adjacent/duplicate
- * ranges) is otherwise unexercised.
+ * defense-in-depth behavior (merging overlapping/nested/duplicate ranges;
+ * adjacent ranges are deliberately NOT merged) is otherwise unexercised.
  *
  * `spliceOrdered` (view-map) splices NEEDLE matches, and is the single
  * implementation behind all three needle-splicing call sites — Layer 5's

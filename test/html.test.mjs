@@ -1644,10 +1644,17 @@ describe("splice fidelity and regressions", () => {
     ["script", "<!--a-->"],
     ["textarea", "</b"],
     ["title", "<!--t-->"],
+    // Hidden-ELEMENT literals: these are the load-bearing cases for the kept
+    // rawText tracking — without it the balance walk would read the literal as
+    // a real hidden element and splice source these tags preserve verbatim.
+    ["style", '<div hidden="">payload</div>'],
+    ["textarea", "<span hidden>payload</span>"],
+    ["title", '<b style="display:none">payload</b>'],
   ]) {
-    it(`regression: raw-text <${tag}> content is preserved verbatim, not spliced as a comment`, () => {
+    it(`regression: raw-text <${tag}> content ${JSON.stringify(body)} is preserved verbatim, not spliced`, () => {
       // Inside RAWTEXT/RCDATA elements parse5 recognizes no markup, so a `<!…`
-      // is opaque text — splicing it would mangle source these tags preserve.
+      // or a hidden-tag literal is opaque text — splicing it would mangle
+      // source these tags preserve.
       const input = `x <${tag}>${body}</${tag}> y`;
       assert.equal(applyHtml(input), input);
     });

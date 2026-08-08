@@ -97,12 +97,14 @@ const malformedInlineToken = fc.constantFrom(
   // stray partial open
   "<div hidden",
   "<span",
-  // raw-text / RCDATA elements: `<!…`/`</…` inside is opaque content, not
-  // markup, and must survive verbatim
+  // raw-text / RCDATA elements: `<!…`/`</…` — and hidden-tag LITERALS — inside
+  // are opaque content, not markup, and must survive verbatim
   "<style><!x</style>",
   "<script><!--c--></script>",
   "<textarea></b</textarea>",
   "<title><!--t--></title>",
+  '<style><div hidden="">p</div></style>',
+  "<textarea><span hidden>p</span></textarea>",
 );
 const arbitraryHtmlFragment = fc
   .array(

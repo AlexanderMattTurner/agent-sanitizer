@@ -94,7 +94,9 @@ the rendered page cannot see:
   positioning, zero/negative sizes, `text-indent` off-screen, collapsing
   `clip`/`clip-path`/`transform:scale(0)`, white-on-white / transparent text,
   `overflow:hidden` with a zero dimension
-- elements hidden by attribute: `hidden`, `aria-hidden="true"`
+- elements hidden by attribute: `hidden` (`aria-hidden="true"` is **not**
+  spliced — it removes an element only from the accessibility tree; a sighted
+  human still sees it on the rendered page)
 
 Spliced ranges are replaced with a placeholder; **every byte outside a spliced
 range is preserved verbatim** (no re-serialization). Unclosed hidden markup
