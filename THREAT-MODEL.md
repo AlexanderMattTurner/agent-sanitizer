@@ -52,7 +52,8 @@ carries no raw ANSI introducer for _any_ input, and re-cleaning it reproduces
 it exactly—the idempotence the Edit-repair rehydrator's soundness gate assumes.
 One tokenizer answers every ANSI question (what to splice, and whether the only
 escape content is display-only SGR colour), so the stripper and the operator
-warning cannot disagree about what a sequence is. OSC strings (titles, clickable-hyperlink URLs) are consumed as a
+warning cannot disagree about what a sequence is. OSC strings (titles,
+clickable-hyperlink URLs) are consumed as a
 whole, for every terminator form—ST (`ESC\` or 8-bit C1 ST U+009C) and the
 legacy BEL—and for the 8-bit C1 OSC introducer (U+009D); an _unterminated_ OSC
 introducer is dropped through end-of-string (fail-closed), so no OSC body

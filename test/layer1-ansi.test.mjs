@@ -22,12 +22,10 @@ import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import fc from "fast-check";
 
-import {
-  applyLayer1,
-  stripAnsiFully,
-  scanAnsi,
-  TOKEN_KIND,
-} from "../src/layer1.mjs";
+import { applyLayer1, stripAnsiFully } from "../src/layer1.mjs";
+// The tokenizer assertions below are about src/ansi.mjs, so name it directly
+// rather than reaching it through a re-export layer1.mjs does not otherwise owe.
+import { scanAnsi, TOKEN_KIND } from "../src/ansi.mjs";
 import {
   isSgrOnly,
   SGR_RE,

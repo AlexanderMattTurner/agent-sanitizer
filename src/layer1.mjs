@@ -17,9 +17,7 @@ import { CONTROL_INTRODUCER_SOURCE, scanAnsi, TOKEN_KIND } from "./ansi.mjs";
 
 // The ANSI grammar and the introducer charset live in ./ansi.mjs so this module
 // and invisible.mjs (which owns the public isSgrOnly / SGR_RE and cannot import
-// this one) scan with the SAME tokenizer. Re-exported here because layer1 is the
-// ANSI entry point every other consumer already imports.
-export { scanAnsi, TOKEN_KIND } from "./ansi.mjs";
+// this one) scan with the SAME tokenizer.
 
 // The residual sweep: every raw control introducer, whatever the grammar made of
 // it. This — not the sequence matching — is the guarantee that no introducer
