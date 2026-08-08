@@ -26,6 +26,34 @@ This directory contains configuration and skills for Claude Code.
 
 ## How It Works
 
+### The sanitizer plugin, in this repo's own sessions
+
+`settings.json` registers this repo as a plugin marketplace (`extraKnownMarketplaces`,
+with `autoUpdate: true`) and enables `agent-sanitizer@agent-sanitizer`
+(`enabledPlugins`). Trusting the project folder prompts the install; after that
+Claude Code refreshes the marketplace clone on startup and picks up whatever
+`version` the latest release stamped
+into `plugin/.claude-plugin/plugin.json`, so sessions here track the SHIPPED
+hooks rather than the working tree. That is deliberate: it is the same artifact
+users install, so a broken release is felt here first.
+
+Three consequences worth knowing. The first session after an update runs the
+plugin's SessionStart provisioning (a `uv`/`python3` install of the redaction
+engine into the plugin data dir), so a cold start is slower. The hooks under
+`hooks/` below are unrelated dev-workflow hooks — the sanitization layers come
+from the plugin, not from this directory. And those layers now apply to this
+repo's own payload corpora: `src/invisible.mjs` and `tests/secrets/` hold raw
+invisible characters, so a `Read` of them returns the stripped text (silently —
+the alert is suppressed on local tools), and `Edit`/`Write` content the model
+authors is rewritten the same way. When editing a fixture that must keep its
+payload, run the session with `AGENT_SANITIZER_TERMINAL_DISABLED=1` (raw escapes)
+or `AGENT_SANITIZER_INVISIBLE_DISABLED=1` (invisible chars); see the knob table
+in `plugin/README.md`.
+
+`plugin/test/plugin-manifest.test.mjs` pins the marketplace name, repo slug and
+plugin id here against the two manifests, so a rename cannot leave this file
+pointing at a marketplace nobody publishes.
+
 ### Session Start Hook
 
 When Claude Code starts a session, it automatically runs `session-setup.sh` which:

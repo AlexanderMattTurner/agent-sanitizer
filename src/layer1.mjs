@@ -110,6 +110,21 @@ export function stripAnsiFully(input, kinds) {
 }
 
 /**
+ * What a reader is told when the ONLY thing a strip removed was inert ANSI (see
+ * {@link isBenignAnsiKinds}).
+ *
+ * It lives here, beside the predicate that decides it, because every entry point
+ * that can reach that verdict must say the same thing: the tool-output pipeline,
+ * the prompt gate's pass-with-note, and any host wiring its own. The wording is
+ * deliberately not `describeStripped`'s — "Stripped: ANSI escapes" names a
+ * category that reads like an attack, when the honest report is "these were
+ * colour codes, and here is how to look at the raw bytes".
+ */
+export const INERT_ANSI_NOTE =
+  "Inert ANSI stripped (display-only colour and/or a stray escape byte that " +
+  "formed no control sequence); pipe through cat -v to inspect raw escapes.";
+
+/**
  * True when the ANSI a Layer-1 strip removed was INERT: every removed sequence
  * was either a display-only SGR colour token or a LONE 7-bit `ESC` that opened
  * nothing at all (a stray byte in a file, a truncated write, a log fragment cut

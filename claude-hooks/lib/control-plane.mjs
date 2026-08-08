@@ -17,7 +17,11 @@ import {
   probeSetupAlive,
   readStdinJson,
 } from "./hook-io.mjs";
-import { startHookTimer, withSlowHookNotice } from "./hook-timing.mjs";
+import {
+  startHookTimer,
+  withSlowHookNotice,
+  writeSlowHookNotice,
+} from "./hook-timing.mjs";
 
 // Loaded via a *caught* dynamic import — never a bare static `import … from`.
 // A static npm import resolves before any try/catch, so a missing node_modules
@@ -156,12 +160,19 @@ export async function runJudgeCli(
   },
 ) {
   let input;
+  // Hoisted out of the try so the CATCH can read it: a judge that spent thirty
+  // seconds and THEN threw is the slow run most worth naming, and reporting only
+  // on the success path hides exactly the case where the hook is both slow and
+  // broken. Null until stdin arrives — a read that throws measured nothing, and
+  // an invented number is worse than none.
+  /** @type {(() => number) | null} */
+  let elapsed = null;
   try {
     input = await readInput();
     // Timed from HERE, not from process start: the wait for the harness to hand
     // over stdin is not this hook's cost, and blaming it for one would send
     // operators chasing a bug report that is not theirs to fix.
-    const elapsed = startHookTimer();
+    elapsed = startHookTimer();
     const { claudeAdapter: adapter } = controlPlane();
     const event = adapter.parse(transformInput(input));
     // Awaited into its own binding first: as an inline argument, `elapsed()`
@@ -173,6 +184,11 @@ export async function runJudgeCli(
     if (out !== null) write(out);
   } catch (err) {
     process.stderr.write(`${hookName} hook error: ${errMessage(err)}\n`);
+    // After the error line, before the posture: the fault is what the reader
+    // must act on first, and the timing is context for it. stderr only — the
+    // model-facing channel here belongs to onError's fail-closed message, and a
+    // performance aside must not dilute a "this output was never vetted".
+    if (elapsed !== null) writeSlowHookNotice(hookName, elapsed());
     onError(err, input);
   }
 }

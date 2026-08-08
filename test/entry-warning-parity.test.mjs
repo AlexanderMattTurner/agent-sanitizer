@@ -14,7 +14,11 @@
  *
  * This test is what keeps them converged: it compares the two entry points'
  * Layer-2/3 warnings on the same inputs, so re-inlining a string in either one
- * fails here rather than silently re-splitting the prose. It also pins the
+ * fails here rather than silently re-splitting the prose. Both TIERS are
+ * compared, not just `warnings`: the severity split (./src/severity.mjs) sends
+ * some of these same sentences to `notes`, and comparing only the loud list
+ * would let one entry point call a finding a warning while the other calls it a
+ * note — the same drift in a new coordinate. It also pins the
  * shared pre-gate, the other half of the divergence — the root entry used to
  * load and run the remark/rehype graph on any `html: true` call, including on
  * text with no tag and no link for it to find.
@@ -81,14 +85,19 @@ describe("warning parity between sanitize() and sanitizeText()", () => {
         pipeline.warnings,
         `${name}: the two entry points describe the same input differently`,
       );
-      if (root.warnings.length > 0) withWarnings++;
+      assert.deepEqual(
+        root.notes,
+        pipeline.notes,
+        `${name}: the two entry points disagree on which findings are quiet`,
+      );
+      if (root.warnings.length + root.notes.length > 0) withWarnings++;
     }
     // Non-vacuity: an empty-vs-empty comparison proves nothing, so every case
     // except the two deliberately silent ones ("comment only" — comments are
     // preserved without a warning — and "benign html") must have warned.
     assert.ok(
       withWarnings >= CASES.length - 2,
-      `only ${withWarnings}/${CASES.length} cases produced any warning`,
+      `only ${withWarnings}/${CASES.length} cases produced any finding`,
     );
   });
 
@@ -105,11 +114,13 @@ describe("warning parity between sanitize() and sanitizeText()", () => {
     return Promise.all(
       CASES.map(([, input]) => sanitize(input, { html: true })),
     ).then((results) => {
-      const seen = results.flatMap((r) => r.warnings);
+      // Both tiers: a note is still a shared string both entry points emit, so
+      // it needs the same drift guard a warning does.
+      const seen = results.flatMap((r) => [...r.warnings, ...r.notes]);
       for (const prefix of shared)
         assert.ok(
-          seen.some((warning) => warning.startsWith(prefix)),
-          `no corpus case produces a "${prefix}…" warning`,
+          seen.some((message) => message.startsWith(prefix)),
+          `no corpus case produces a "${prefix}…" finding`,
         );
     });
   });
@@ -123,6 +134,7 @@ describe("warning parity between sanitize() and sanitizeText()", () => {
     const root = await sanitize(gateFalse, { html: true });
     assert.equal(root.cleaned, gateFalse);
     assert.deepEqual(root.warnings, []);
+    assert.deepEqual(root.notes, []);
     assert.deepEqual(root.found, []);
 
     // And the gate is not vacuously false: a tagged input still reaches Layer 2.

@@ -34,7 +34,7 @@
   "groups": [
     {
       "id": "index-prompt-gates",
-      "mutate": "src/index.mjs,src/prompt.mjs,src/gates.mjs,src/cf-charset.mjs,src/warnings.mjs"
+      "mutate": "src/index.mjs,src/prompt.mjs,src/gates.mjs,src/cf-charset.mjs,src/warnings.mjs,src/severity.mjs,src/claude-context.mjs"
     },
     {
       "id": "credential-names",

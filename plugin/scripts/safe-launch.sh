@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# `source=` paths below are relative to this script, not to shellcheck's cwd.
+# shellcheck source-path=SCRIPTDIR
 # Launcher for the plugin's bundled hooks: whatever the posture, the failure is
 # never SILENT.
 #
@@ -19,8 +21,34 @@
 # ignored — fail open — and a malformed payload must not get to pick the shape.
 set -uo pipefail
 
+script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+
+# The launcher's own preflight — a PATH probe and a `node --check` of the whole
+# bundle — runs on EVERY hook invocation, ahead of the hook that could time it,
+# and is gone the moment this script `exec`s. So it times itself, against the
+# same budget and with the same wording as the node hooks (see
+# lib/hook-timing.sh). A missing timing lib disables the measurement and says so:
+# the launcher's job is to keep the sanitizer running, and losing a diagnostic is
+# not a reason to refuse to launch.
+launch_started_ms=0
+timing_lib="$script_dir/lib/hook-timing.sh"
+if [[ -r "$timing_lib" ]]; then
+  # shellcheck source=lib/hook-timing.sh
+  . "$timing_lib"
+  launch_started_ms="$(hook_timing_now_ms)"
+else
+  echo "agent-sanitizer: $timing_lib is missing — hook timing disabled (reinstall the plugin)" >&2
+  report_slow_hook() { :; }
+fi
+
 hook_event="${1:?usage: safe-launch.sh <HookEvent> [args...]}"
 shift
+
+# Every exit from this script passes through here or through emit_degraded, and
+# both report; `exec` leaves no chance for an EXIT trap to do it centrally.
+report_launch_timing() {
+  report_slow_hook "safe-launch $hook_event" "$launch_started_ms"
+}
 
 # The event name spliced into the fail-open envelope, and the clause its warning
 # ends with — per event, because SessionStart guards no action (it scans the
@@ -62,6 +90,7 @@ json_escape() {
 # failOpenEnabled in claude-hooks/lib/hook-io.mjs, which this arm mirrors.
 emit_degraded() {
   local reason
+  report_launch_timing
   reason="$(json_escape "$1")"
   # The two literals failOpenEnabled() matches, kept in the same order as its
   # FAIL_CLOSED_VALUES set; every other value (including unset) is fail-open.
@@ -108,7 +137,7 @@ if ! command -v node >/dev/null 2>&1; then
   exit 0
 fi
 
-plugin_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
+plugin_root="$(cd -- "$script_dir/.." && pwd)"
 bundle="$plugin_root/dist/hooks/plugin-hooks.bundle.mjs"
 
 # Daemon resolution order (matching the client's): an explicit
@@ -133,4 +162,5 @@ if ! node --check "$bundle" 2>/dev/null; then
   exit 0
 fi
 
+report_launch_timing
 exec node "$bundle" "$@"

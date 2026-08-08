@@ -295,4 +295,73 @@ describe("runJudgeCli times every judge hook", () => {
       "the timing must also reach stderr",
     );
   });
+
+  it("reports the timing of a judge that overran AND THEN THREW", async () => {
+    // The run most worth naming — slow and broken — used to report nothing at
+    // all, because the timer lived inside the try and only the success path
+    // read it. Again a real overrun, so the test fails if the catch stops
+    // measuring rather than merely stops printing.
+    const errs = [];
+    let onErrorCalled = false;
+    const realErr = process.stderr.write.bind(process.stderr);
+    process.stderr.write = (chunk) => {
+      errs.push(String(chunk));
+      return true;
+    };
+    try {
+      await runJudgeCli(
+        "sanitize-output",
+        async () => {
+          await new Promise((resolve) =>
+            setTimeout(resolve, SLOW_HOOK_THRESHOLD_MS + 100),
+          );
+          throw new Error("judge exploded");
+        },
+        {
+          onError: () => {
+            onErrorCalled = true;
+          },
+          readInput: async () => event,
+          write: () => assert.fail("a throwing judge writes no verdict"),
+        },
+      );
+    } finally {
+      process.stderr.write = realErr;
+    }
+    const stderr = errs.join("");
+    assert.match(stderr, /sanitize-output hook error: judge exploded/);
+    assert.match(stderr, /PERFORMANCE/);
+    assert.match(stderr, /sanitize-output hook took/);
+    // The posture still runs: the timing is an addition to the fault report,
+    // never a replacement for it.
+    assert.ok(onErrorCalled, "onError must still take the failure posture");
+  });
+
+  it("says nothing about timing when the INPUT read is what failed", async () => {
+    // Nothing was measured — the timer starts only once stdin has arrived — and
+    // inventing a number for the wait that preceded it would blame this hook
+    // for the harness's handover.
+    const errs = [];
+    const realErr = process.stderr.write.bind(process.stderr);
+    process.stderr.write = (chunk) => {
+      errs.push(String(chunk));
+      return true;
+    };
+    try {
+      await runJudgeCli("sanitize-output", () => assert.fail("unreachable"), {
+        onError: () => {},
+        readInput: async () => {
+          await new Promise((resolve) =>
+            setTimeout(resolve, SLOW_HOOK_THRESHOLD_MS + 100),
+          );
+          throw new Error("stdin closed");
+        },
+        write: () => assert.fail("no verdict"),
+      });
+    } finally {
+      process.stderr.write = realErr;
+    }
+    assert.match(errs.join(""), /stdin closed/);
+    assert.equal(errs.join("").includes("PERFORMANCE"), false);
+  });
 });

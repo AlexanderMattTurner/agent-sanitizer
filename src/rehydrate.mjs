@@ -63,6 +63,7 @@ import {
   resolveSpan,
   rehydrateNewString,
   makeFileView,
+  toUtf16View,
   pairDiskSpans,
 } from "./view-map.mjs";
 
@@ -148,7 +149,7 @@ function exposureDeny(count) {
  * @param {{file_path: string, old_string: string, new_string: string, replace_all?: boolean}} ti
  * @param {string} content disk bytes
  * @param {string} cleaned Layer-1 view of `content`
- * @param {import("./view-map.mjs").FileView} view
+ * @param {import("./view-map.mjs").FileView<"utf16">} view
  * @param {{start: number, deleted: string}[]} deletions
  * @param {RehydrateIo} io
  * @param {boolean} hinted the input itself carries placeholders
@@ -398,7 +399,7 @@ function foreignPlaceholders(out, hint, viewText, secretSpans) {
 
 /**
  * @param {{file_path: string, content: string}} ti
- * @param {import("./view-map.mjs").FileView} view
+ * @param {import("./view-map.mjs").FileView<"utf16">} view
  * @param {RehydrateIo} io
  * @param {string} hint placeholder prefix
  */
@@ -672,12 +673,16 @@ export async function rehydrateRedacted(
     };
   }
   // The redactor emits code-point offsets; the offset machinery below works in
-  // UTF-16. makeFileView normalizes once, into a fresh frozen carrier, so an
+  // UTF-16. Convert once, here, into a fresh frozen UTF-16-space carrier so an
   // astral char before a placeholder can't mis-anchor the edit (a no-op for
-  // BMP-only files) AND the redactor's own object is never written through —
-  // a redactor that memoizes its map result would otherwise hand back an
-  // already-converted object and get converted twice. See makeFileView.
-  const view = makeFileView(mapped.text, mapped.pairs);
+  // BMP-only files) AND the redactor's own object is never written through — a
+  // redactor that memoizes its map result would otherwise hand back an
+  // already-converted object and get converted twice, so the same input would
+  // yield a different verdict on the second call. The space brand is what makes
+  // that second conversion throw rather than silently shift; see toUtf16View.
+  const view = toUtf16View(
+    makeFileView(mapped.text, mapped.pairs, "codePoint"),
+  );
   // View identical to disk: any placeholders in an Edit's old_string are
   // literal text, so there is nothing to re-anchor. `cleaned === content` also
   // rules out a lone-surrogate-only divergence (view.pairs/deletions alone
