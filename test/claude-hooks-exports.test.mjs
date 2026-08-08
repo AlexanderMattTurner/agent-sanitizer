@@ -6,11 +6,11 @@
  *   - the exported entries resolve and load (a consumer can compose them);
  *   - every other module stays REFUSED (ERR_PACKAGE_PATH_NOT_EXPORTED).
  *
- * The closed half is the load-bearing one. A wildcard would publish all fourteen
- * modules, turning internals like the redactor client and the reveal store into
- * a compatibility surface this package would then owe forever. The four hook
- * modules plus lib/hook-io and lib/control-plane are what a consumer needs to
- * compose the hooks; hook-io in particular MUST be shared rather than copied,
+ * The closed half is the load-bearing one. A wildcard would publish every
+ * module on disk, turning internals into a compatibility surface this package
+ * would then owe forever. The hook entry points plus the curated lib modules
+ * are what a consumer needs to compose the hooks; hook-io in particular MUST
+ * be shared rather than copied,
  * because it owns the lazy-module registry and the CLI-slot singleton — two
  * inlined copies would double-fire the inlined CLIs. A host that cannot share it
  * because its own hook-io module is not a copy — it exports names this one does

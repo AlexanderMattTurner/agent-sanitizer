@@ -13,17 +13,17 @@ match the JS by inspection:
 """
 
 import json
-import sys
 import unicodedata
 
 import pytest
 
-from tests._helpers import REPO_ROOT
+from tests._helpers import REPO_ROOT, ensure_python_pkg_on_path
 
-sys.path.insert(0, str(REPO_ROOT / "python"))
+ensure_python_pkg_on_path()
 
 from agent_sanitizer.invisible import (  # noqa: E402
     cf_codepoints,
+    control_introducers,
     extra_codepoints,
     invisible_charset,
 )
@@ -49,6 +49,25 @@ _ANSI_CASES = [
     ("lone_esc_end", "ab\x1b", "ab"),
     ("esc_before_newline", "a\x1b\nb", "a\nb"),
     ("double_esc_swept", "a\x1b\x1b", "a"),  # neither ESC starts a sequence; both swept
+    # C1 (8-bit) encodings: a single U+009B/U+009D replaces ESC-[ / ESC-] and
+    # must be consumed as a whole sequence, not left for the terminal to render.
+    ("c1_csi_erase", "hi\x9b2Jbye", "hibye"),
+    ("c1_csi_sgr", "a\x9b31mred\x9b0mb", "aredb"),
+    ("c1_osc_c1_st", "a\x9d0;evil\x9cb", "ab"),
+    ("c1_osc_bel", "a\x9d0;evil\x07b", "ab"),
+    # An OSC body is attacker-controlled payload text, so an UNTERMINATED string
+    # fails closed: everything from the introducer on is dropped, matching
+    # scanOsc. (The port used to leave the body as visible text — an under-strip
+    # relative to the JS layer, which the parity guard could not see because the
+    # survivors were visible characters, not charset members.)
+    ("osc_unterminated_fails_closed", "a\x1b]0;evil-payload", "a"),
+    ("c1_osc_unterminated_fails_closed", "a\x9d0;evil-payload", "a"),
+    # A bare ESC / a nested C1 OSC ABORTS the string: the token ends before that
+    # byte, which is then re-read as its own sequence.
+    ("osc_aborted_by_esc", "a\x1b]0;ev\x1b[31mtail", "atail"),
+    ("osc_aborted_by_c1_osc", "a\x9d0;ev\x9d9;x\x07tail", "atail"),
+    ("c1_orphan_dcs_swept", "a\x90b", "ab"),
+    ("c1_orphan_apc_swept", "a\x9fb", "ab"),
 ]
 
 
@@ -193,7 +212,12 @@ def test_never_understrips_vs_js(input_text: str, js_cleaned: str) -> None:
     payload the JS layer caught."""
     py = strip_untrusted(input_text)
     in_cp, js_cp, py_cp = (set(map(ord, s)) for s in (input_text, js_cleaned, py))
-    removed_by_js = (in_cp - js_cp) & (_INVISIBLE | {0x1B})
+    # The mask includes the FULL control-introducer set (ESC + the C1 block),
+    # not `{0x1B}`: masking to ESC alone made this guard structurally blind to
+    # a C1 introducer the JS layer sweeps but the port leaves — the exact
+    # divergence it exists to catch (the port shipped that gap while this
+    # assertion stayed green).
+    removed_by_js = (in_cp - js_cp) & (_INVISIBLE | control_introducers())
     removed_by_py = in_cp - py_cp
     still_present = removed_by_js - removed_by_py
     assert not still_present, sorted(hex(c) for c in still_present)

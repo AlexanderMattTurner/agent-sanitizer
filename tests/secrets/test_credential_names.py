@@ -19,6 +19,7 @@ must raise rather than build a pattern.
 
 # covers: python/agent_sanitizer/secrets/credential_names.py
 # covers: python/agent_sanitizer/secrets/data/credential-names.json
+# covers: python/agent_sanitizer/secrets/data/credential-names.cases.json
 """
 
 import json
@@ -35,8 +36,10 @@ from agent_sanitizer.secrets import (
 )
 from agent_sanitizer.secrets import credential_names
 from agent_sanitizer.secrets.credential_names import (
+    ANY_SEGMENT_SCOPE,
     ENV_NAME_USE,
     FIELD_VALUE_USE,
+    TRAILING_SCOPE,
     parse_credential_names,
 )
 
@@ -393,3 +396,66 @@ def test_a_hostile_variable_name_cannot_stall_the_matcher(
     # over the true bound while still an order of magnitude under the quadratic
     # walk's ~2e8 for this input.
     assert len(counted) <= 4 * segments
+
+
+# ── the shared conformance corpus ────────────────────────────────────────────
+#
+# The vocabulary is one file, but the RULE built from it is two hand-written
+# twins and a wheel cannot import JavaScript. `credential-names.cases.json` is
+# the seam: the same cases with the same literal verdicts run here and in
+# test/credential-name-matcher.test.mjs, so a divergence in segmentation, case
+# folding, run length, scope or the non-secret decline reds in whichever
+# language broke instead of shipping to one ecosystem only.
+
+CONFORMANCE_FILE = CREDENTIAL_NAMES_FILE.with_name("credential-names.cases.json")
+CONFORMANCE_CASES = json.loads(CONFORMANCE_FILE.read_text(encoding="utf-8"))["cases"]
+_CONSUMED: set[str] = set()
+
+
+def test_the_conformance_corpus_is_loaded_and_well_formed() -> None:
+    """Non-vacuity: a corpus that failed to load would pass every parametrized
+    case below while asserting nothing — in both languages at once."""
+    assert len(CONFORMANCE_CASES) >= 100, len(CONFORMANCE_CASES)
+    for case in CONFORMANCE_CASES:
+        assert isinstance(case["name"], str), case
+        assert case["scope"] in {TRAILING_SCOPE, ANY_SEGMENT_SCOPE}, case
+        assert isinstance(case["declineNonSecret"], bool), case
+        assert isinstance(case["expected"], bool), case
+    ids = [case["id"] for case in CONFORMANCE_CASES]
+    assert len(set(ids)) == len(ids)
+
+
+def test_the_conformance_corpus_covers_every_rendering() -> None:
+    """The contract that keeps the corpus from falling behind the words: adding a
+    noun to credential-names.json without a case here fails, rather than leaving
+    the new noun's rule unchecked in one language."""
+    names = {case["name"] for case in CONFORMANCE_CASES}
+    for form in credential_name_segments() + non_secret_name_segments():
+        assert form in names, f"no conformance case for {form}"
+
+
+@pytest.mark.parametrize(
+    "case", CONFORMANCE_CASES, ids=[c["id"] for c in CONFORMANCE_CASES]
+)
+def test_the_matcher_agrees_with_the_conformance_corpus(case) -> None:
+    """This language's matcher must return the corpus's literal verdict. A failure
+    here is a divergence from the other implementation or from the vocabulary's
+    documented intent — diagnose it against ``why``, never re-baseline it."""
+    holds = credential_name_matcher(
+        scope=case["scope"], decline_non_secret=case["declineNonSecret"]
+    )
+    assert holds(case["name"]) is case["expected"], case["why"]
+    _CONSUMED.add(case["id"])
+
+
+def test_every_conformance_case_was_consumed() -> None:
+    """A case silently dropped — a filter, a skip, a malformed entry — is a hole in
+    exactly the coverage this corpus exists to provide, so the ids the run
+    actually asserted on are compared against the file.
+
+    Defined last because pytest runs a module in definition order; it therefore
+    only holds for a whole-module run, which is how this suite is invoked
+    (``uv run --extra dev pytest tests/``, no ``-k``, no xdist). Under a filtered
+    or distributed run it fails loudly rather than passing vacuously.
+    """
+    assert _CONSUMED == {case["id"] for case in CONFORMANCE_CASES}

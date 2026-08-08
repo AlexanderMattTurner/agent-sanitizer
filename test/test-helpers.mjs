@@ -1,6 +1,8 @@
 /**
  * Shared test helpers.
  */
+import fc from "fast-check";
+
 import { occurrences } from "../src/view-map.mjs";
 
 /**
@@ -45,3 +47,21 @@ export function fcRunOptions(overrides = {}) {
 
 /** String.fromCodePoint shorthand used throughout the Unicode tests. */
 export const cp = (codePoint) => String.fromCodePoint(codePoint);
+
+/**
+ * Any single code point except the surrogate range, astral included, so
+ * `fromCodePoint` never throws (fast-check v4 dropped `fc.fullUnicode`). Lone
+ * surrogates are injected separately via `loneSurrogate` as raw UTF-16 units.
+ * One canonical copy so the property suites can't drift onto subtly different
+ * input distributions.
+ */
+export const unicodeChar = fc
+  .integer({ min: 0, max: 0x10ffff })
+  .filter((code) => code < 0xd800 || code > 0xdfff)
+  .map((code) => String.fromCodePoint(code));
+
+/** A lone UTF-16 surrogate code unit (D800–DFFF), the ill-formed-string half
+ * of the fuzz alphabet `unicodeChar` deliberately excludes. */
+export const loneSurrogate = fc
+  .integer({ min: 0xd800, max: 0xdfff })
+  .map((code) => String.fromCharCode(code));

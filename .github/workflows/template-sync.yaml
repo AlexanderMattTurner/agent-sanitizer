@@ -80,7 +80,6 @@ env:
   #   .github/scripts/version-bump.sh
   #   .github/scripts/promote-changelog.mjs
   #   .github/scripts/set-plugin-version.mjs
-  #   .github/scripts/lib/retry.bash
   # (CHANGELOG.md lives outside SYNC_PATHS and never syncs, so a versioned
   # consumer must create it to bootstrap the flow.)
   # The security-vulnerability-scan workflow + prompt are intentionally NOT

@@ -49,7 +49,13 @@
       "tests/secrets/test_secrets_detectors.py"
     ],
     "python/agent_sanitizer/secrets/data/credential-names.json": [
-      "test/credential-names-export.test.mjs"
+      "test/credential-names-export.test.mjs",
+      "test/credential-name-matcher.test.mjs",
+      "tests/secrets/test_credential_names.py"
+    ],
+    "python/agent_sanitizer/secrets/data/credential-names.cases.json": [
+      "test/credential-name-matcher.test.mjs",
+      "tests/secrets/test_credential_names.py"
     ],
     "config/review-severities.json": [
       ".github/scripts/post-pr-review.test.mjs"
@@ -61,6 +67,22 @@
     "scripts/shipped-sources.mjs": ["test/shipped-gates.test.mjs"],
     "scripts/coverage.mjs": ["test/shipped-gates.test.mjs"],
     "scripts/mutate.mjs": ["test/shipped-gates.test.mjs"],
-    "stryker.conf.json": ["test/shipped-gates.test.mjs"]
+    "stryker.conf.json": ["test/shipped-gates.test.mjs"],
+    "src/ansi.mjs": ["test/invisible-charset.test.mjs"],
+    "python/agent_sanitizer/data/invisible-charset.json": [
+      "test/invisible-charset.test.mjs",
+      "test/secret-annotate-invisible.test.mjs",
+      "tests/test_textstrip.py"
+    ],
+    "python/agent_sanitizer/secrets/data/redaction-floor.json": [
+      "tests/secrets/test_secrets_config.py",
+      "test/claude-hooks-host-seams.test.mjs"
+    ],
+    ".github/workflows/mutation.yaml": ["tests/test_mutation_changed.py"],
+    ".github/scripts/mutation-changed.sh": ["tests/test_mutation_changed.py"],
+    ".github/scripts/lib/shared-names.json": ["tests/test_shared_names.py"],
+    "claude-hooks/scan-invisible-chars.mjs": [
+      "test/claude-hooks-scan-coverage.test.mjs"
+    ]
   }
 }

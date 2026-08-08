@@ -420,11 +420,15 @@ export function atomicReplaceFile(
 /**
  * Strip payload-capable invisible characters from `absPath` in place. Returns
  * `true` when the file's bytes actually changed (a payload {@link scanText}
- * flags was removed), `false` when {@link scanText} reports nothing, and `null`
- * when scan flagged a payload but {@link stripInvisible} removes nothing — a
- * fail-closed signal that the flagged run was PRESERVED (e.g. a well-formed
- * emoji-tag sequence the stripper keeps), so the caller must not treat it as
- * cleaned. `true` means and only means "bytes changed".
+ * flags was removed) and `false` when {@link scanText} reports nothing to
+ * strip. `true` means and only means "bytes changed", so a caller that flagged
+ * this file and gets `false` back must NOT record it as cleaned — the file
+ * changed under it, or the flagged run is one {@link stripInvisible}
+ * preserves (a well-formed emoji-tag sequence), and either way the payload it
+ * flagged is still there. There is no third return value: the `null` arm this
+ * doc once described was dropped as dead (`stripInvisible` cannot leave the
+ * bytes identical for anything `scanText` flags), and callers must branch on
+ * the boolean rather than testing against `null`, which is vacuously true.
  *
  * Contract (scan/clean coherence): clean strips exactly what scan flags. A
  * write happens ONLY when `scanText` reports a finding, so the "scan, then

@@ -456,6 +456,23 @@
           "URLs shaped like data exfiltration detected (left intact): link to evil.example: suspicious query parameter — do not fetch, relay, or embed these URLs"
         ]
       }
+    },
+    {
+      "name": "c1_controls",
+      "plain": {
+        "cleaned": [97, 98, 99, 100],
+        "found": ["ansi"],
+        "warnings": [
+          "Stripped: ANSI escapes — inspect the removed bytes with a hex dump (xxd / od -c), which survives sanitization"
+        ]
+      },
+      "html": {
+        "cleaned": [97, 98, 99, 100],
+        "found": ["ansi"],
+        "warnings": [
+          "Stripped: ANSI escapes — inspect the removed bytes with a hex dump (xxd / od -c), which survives sanitization"
+        ]
+      }
     }
   ]
 }

@@ -57,12 +57,20 @@ jobs:
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        # Exit contract: 0 = relevant changes, 1 = nothing relevant, >=2 = the
+        # script could not determine relevance (e.g. it failed to parse the
+        # on.push.paths SSOT out of this workflow) — fail the job rather than
+        # silently skipping a real gate.
         run: |
-          if bash .github/scripts/mutation-changed.sh; then
+          rc=0
+          bash .github/scripts/mutation-changed.sh || rc=$?
+          if [ "$rc" -eq 0 ]; then
             echo "run=true" >> "$GITHUB_OUTPUT"
-          else
+          elif [ "$rc" -eq 1 ]; then
             echo "run=false" >> "$GITHUB_OUTPUT"
             echo "::notice::No mutation-relevant files changed, skipping Stryker"
+          else
+            exit "$rc"
           fi
 
       - name: Load shard matrix
@@ -182,6 +190,24 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - name: Fail if any required job did not pass
-        if: contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled')
-        run: exit 1
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          sparse-checkout: |
+            .github/actions/report-job-result
+            .github/scripts
+          persist-credentials: false
+
+      - name: Report result
+        uses: ./.github/actions/report-job-result
+        with:
+          run: ${{ needs.changes.outputs.run }}
+          decide-result: ${{ needs.changes.result }}
+          # Worst-of the two work jobs. Reporting only `mutation` here would let
+          # a red aggregate (the real threshold gate) ride through green — the
+          # reporter takes one result, so the combining has to happen at the
+          # call site. Passing the failing job's own result (rather than a
+          # flattened 'failure') keeps the reporter's cancelled-vs-superseded
+          # adjudication intact.
+          result: >-
+            ${{ needs.mutation.result != 'success' && needs.mutation.result
+             || needs.aggregate.result }}

@@ -5,22 +5,41 @@
  */
 import { minEnvSecretLen, envBoundSecretVars } from "./env-config.mjs";
 
-// Zero-width / format (Cf) characters an attacker can splice between a value's
-// characters to break an exact-substring pre-gate while the daemon's redactor
-// still matches across them. This is a curated subset of the common bidi /
-// zero-width controls, NOT an exact copy of the daemon's full dynamic Cf set — it
-// is a defense-in-depth backstop, because Layer 1 (applyLayer1) strips every Cf
-// splice from the text BEFORE this pre-gate runs, so hasEnvBoundSecret already
-// sees the plain value. A run of zero-or-more is allowed at each interior gap, so
-// the plain value still matches (a superset of `includes`). Required literals
-// between every gap keep the pattern linear — no ReDoS.
+// The generated cross-language charset SSOT, imported as a module like
+// env-config.mjs's JSON configs: esbuild inlines it into the plugin bundle
+// (which ships with no data directory beside it) and Node resolves it from the
+// package when the hooks run from source. A DATA import, deliberately not a
+// static `agent-sanitizer/invisible` import — a top-level package import in a
+// hook lib aborts the process before the consuming hook's fail-closed catch
+// installs, which is a fail OPEN on the module that withholds secrets.
+import charset from "../../python/agent_sanitizer/data/invisible-charset.json" with { type: "json" };
+
+// Invisible characters an attacker can splice between a value's characters to
+// break an exact-substring pre-gate while the daemon's redactor still matches
+// across them. Built from the SAME pinned charset Layer 1 strips and the daemon
+// tolerates (`invisible_run_pattern` in agent_sanitizer.secrets.invisible
+// builds the same shape from the same set), not a hand-curated subset: a subset
+// pre-gate silently under-matches whenever this gate runs on text Layer 1 has
+// not already stripped (the module is exported and callable on its own), and a
+// value spliced with a code point in the gap then never reaches the daemon at
+// all. A run of zero-or-more is allowed at each interior gap, so the plain
+// value still matches (a superset of `includes`). Single-code-point class
+// members with required literals between every gap keep the pattern linear —
+// no ReDoS.
 const ENV_INVIS_RUN =
-  "[\\u200b\\u200c\\u200d\\u2060\\ufeff\\u00ad\\u180e\\u200e\\u200f\\u202a-\\u202e\\u2066-\\u2069]*";
+  "[" +
+  [...new Set([...charset.cf_codepoints, ...charset.extra_codepoints])]
+    .sort((a, b) => a - b)
+    .map((cp) => `\\u{${cp.toString(16)}}`)
+    .join("") +
+  "]*";
 
 /**
  * Regex matching `value` tolerating invisible chars spliced between its
  * characters (mirrors the engine's env-value regex). Code-point split so
- * an astral character is escaped whole, not as two surrogate halves.
+ * an astral character is escaped whole, not as two surrogate halves — and the
+ * `u` flag, which the astral `\u{…}` class members in {@link ENV_INVIS_RUN}
+ * require.
  * @param {string} value
  * @returns {RegExp}
  */
@@ -29,6 +48,7 @@ export function envValueRegex(value) {
     [...value]
       .map((ch) => ch.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))
       .join(ENV_INVIS_RUN),
+    "u",
   );
 }
 

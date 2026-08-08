@@ -34,7 +34,12 @@ import {
   countPayloadInvisible,
 } from "../src/invisible.mjs";
 import { applyLayer1, stripAnsiFully } from "../src/layer1.mjs";
-import { fcRunOptions, cp } from "./test-helpers.mjs";
+import {
+  fcRunOptions,
+  cp,
+  unicodeChar,
+  loneSurrogate,
+} from "./test-helpers.mjs";
 
 const ZWNJ = cp(0x200c);
 const ZWJ = cp(0x200d);
@@ -1844,15 +1849,6 @@ describe("SGR_RE / CSI param grammar: colon-form sub-parameters", () => {
 
 // ─── Property tests over the real input domain ───────────────────────────────
 
-// Any single code point except the surrogate range (so .map(fromCodePoint)
-// never throws); lone surrogates are injected separately.
-const unicodeChar = fc
-  .integer({ min: 0, max: 0x10ffff })
-  .filter((c) => c < 0xd800 || c > 0xdfff)
-  .map((c) => String.fromCodePoint(c));
-const loneSurrogate = fc
-  .integer({ min: 0xd800, max: 0xdfff })
-  .map((c) => String.fromCharCode(c));
 // Every invisible class, joiner-using script letters, emoji parts, ASCII.
 const invisibleChar = fc.constantFrom(
   ...Array.from(BLANK_NON_CF),

@@ -6,23 +6,18 @@ This directory contains configuration and skills for Claude Code.
 
 ```text
 .claude/
-├── settings.json              # Claude Code hooks configuration
-├── agents/
-│   └── code-reviewer.md       # Read-only reviewer subagent (Read/Grep/Glob)
-├── hooks/
-│   ├── session-setup.sh       # Runs on session start (installs tools, configures git)
-│   ├── pre-push-check.sh      # Runs before git push / gh pr (build, lint, typecheck)
-│   ├── lib-checks.sh          # Shared bash helpers (exists, has_script)
-│   ├── safe-launch.sh         # Wraps PreToolUse hooks so a parse error can't lock the session
-│   └── safe-launch-parse.py   # Helper: extracts tool_name/target path from the PreToolUse payload
-└── skills/
-    ├── pr-creation/           # PR creation workflow with self-critique
-    ├── update-pr/             # Update an existing PR with new changes
-    ├── peer-review/           # Drive the code-reviewer subagent, then triage/fix
-    ├── explore-plan/          # Explore → Plan → Critique → Review → Verify discipline
-    ├── conventional-commits/  # Conventional Commits helper (invoke with /commit)
-    └── markdown-block/        # Emit copyable raw markdown in a fenced block
+├── settings.json   # Claude Code hooks configuration
+├── agents/         # Subagents — currently code-reviewer, a read-only (Read/Grep/Glob) reviewer
+├── hooks/          # Session, pre-push, and PreToolUse hooks (see the directory for the full list)
+└── skills/         # Reusable workflows, one directory per skill (see the directory for the full list)
 ```
+
+The hooks the prose below explains are `session-setup.sh` (session start),
+`pre-push-check.sh` (guards `git push` / `gh pr`), and the `safe-launch.sh`
+wrapper (with its `safe-launch-parse.py` helper) that keeps a broken PreToolUse
+hook from locking the session. The remaining hooks and skills are
+self-describing—each skill's `SKILL.md` front matter states when it activates,
+so this README deliberately does not restate the directory listings.
 
 ## How It Works
 
@@ -40,23 +35,17 @@ When Claude Code starts a session, it automatically runs `session-setup.sh` whic
 
 Before `git push` or `gh pr` commands, `pre-push-check.sh` runs any configured checks:
 
-- **build** (`pnpm build`): Catches type errors in TypeScript projects
+- **build** (`pnpm build`): Catches type errors in TypeScript projects (this repo has no `build` script—types build via `build:types` at pack time—so this check is skipped here)
 - **lint** (`pnpm lint`): Catches code quality issues
 - **typecheck** (`pnpm check`): Additional type checking if configured
+- **tests** (`pnpm test`): Runs the test suite
 - **ruff**: Python linting if applicable
 
 Only runs scripts that are actually configured in `package.json`—skips placeholder scripts.
 
 ### Skills
 
-Skills in `skills/` are reusable workflows that guide Claude through complex tasks:
-
-- **pr-creation**: Creating pull requests with mandatory self-critique before submission (invoke with `/pr-creation`)
-- **update-pr**: Updating an existing PR with new changes and an optionally revised description (`/update-pr`)
-- **peer-review**: Running the read-only `code-reviewer` subagent on the diff, then triaging and fixing findings (`/peer-review`)
-- **explore-plan**: Enforcing the Explore → Plan → Critique → Review → Verify discipline for non-trivial work (`/explore-plan`)
-- **conventional-commits**: Guiding Conventional Commits with secret detection—invoke with `/commit` (the skill's `name` is `commit`)
-- **markdown-block**: Emitting copyable raw markdown in a fenced code block (`/markdown-block`)
+Skills in `skills/` are reusable workflows that guide Claude through complex tasks. Each skill is a directory whose `SKILL.md` front matter describes what it does and when it activates—list `skills/` for the current set rather than trusting any enumeration here. One naming quirk worth knowing: the `conventional-commits` skill is invoked as `/commit` (the skill's `name` is `commit`).
 
 The `agents/` directory holds subagents—currently `code-reviewer`, a read-only (Read/Grep/Glob) reviewer used by the `peer-review` skill for an unbiased second opinion on a diff.
 

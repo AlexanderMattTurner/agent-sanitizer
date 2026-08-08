@@ -30,8 +30,14 @@ const projectDir = mkdtempSync(join(tmpdir(), "sanitizer-coverage-proj-"));
 process.env.CLAUDE_PROJECT_DIR = projectDir;
 
 const scanInvisible = await import("../claude-hooks/scan-invisible-chars.mjs");
-const { scanProject, findInstructionFiles, findMdFiles, ALERT_FILE, cliMain } =
-  scanInvisible;
+const {
+  scanProject,
+  findInstructionFiles,
+  findMdFiles,
+  ALERT_FILE,
+  LONG_RUN_THRESHOLD,
+  cliMain,
+} = scanInvisible;
 
 // Same reason as in claude-hooks-posture.test.mjs: an unreadable fixture left
 // under $TMPDIR is an unscannable instruction file for every suite whose
@@ -158,5 +164,93 @@ describe("a fully readable project still announces clean", () => {
     assert.equal(scanned, targets.length);
     assert.deepEqual(skipped, []);
     assert.deepEqual(findings, []);
+  });
+});
+
+describe("a contaminated project is cleaned on disk and reported", () => {
+  // The `found` outcome — the third arm, and the only one that reaches the
+  // auto-clean path. It went untested, which is how a clean-counting condition
+  // that was vacuously TRUE for every file (`cleanFile(…) !== null`, on a
+  // function with no null return) shipped: it made "all N cleaned" unfalsifiable,
+  // so the alert arm below became unreachable and nothing noticed.
+  const payload = "\u{e0001}".repeat(LONG_RUN_THRESHOLD + 2);
+  const clean = "real prose the strip must keep\n";
+
+  before(() => {
+    writeFileSync(join(projectDir, "CLAUDE.md"), `${clean}hidden:${payload}\n`);
+    rmSync(ALERT_FILE, { force: true });
+  });
+  after(() => {
+    writeFileSync(join(projectDir, "CLAUDE.md"), "nothing hidden here\n");
+    rmSync(ALERT_FILE, { force: true });
+  });
+
+  it("announces found, strips the payload, and leaves the prose", async () => {
+    const { lines, sink } = collector();
+    await cliMain({ trace: sink });
+
+    const announced = lines.filter(
+      (l) => l.event === "scan_invisible_chars_ran",
+    );
+    assert.deepEqual(
+      announced.map((l) => l.outcome),
+      ["found"],
+    );
+    assert.equal(announced[0].files, 1);
+
+    // The clean actually happened, through cleanFile's atomic replace.
+    const after = readFileSync(join(projectDir, "CLAUDE.md"), "utf8");
+    assert.equal(after.includes("\u{e0001}"), false, "payload survived");
+    assert.ok(after.startsWith(clean), "legitimate prose was mangled");
+
+    // Everything was cleaned, so there is nothing for the gate to ask about.
+    // This is the assertion the tautology made unfalsifiable in the other
+    // direction — pair it with the re-scan below so "no alert" cannot mean
+    // "the scan quietly did nothing".
+    assert.equal(
+      existsSync(ALERT_FILE),
+      false,
+      "the gate was armed even though every file was cleaned",
+    );
+    assert.deepEqual(scanProject(projectDir).findings, []);
+  });
+
+  it("counts a file it did NOT clean as uncleaned, and arms the gate", async () => {
+    // Drive the alert arm directly: a findings entry naming a file that is
+    // already clean makes cleanFile return false (nothing to strip), which must
+    // leave `cleaned` short of the findings count and route to the alert. Under
+    // the `!== null` tautology this file counted as cleaned and the gate stayed
+    // silent about a payload nothing had removed.
+    writeFileSync(join(projectDir, "AGENTS.md"), clean);
+    rmSync(ALERT_FILE, { force: true });
+    const { sink } = collector();
+    await cliMain({
+      trace: sink,
+      scan: () => ({
+        targets: [join(projectDir, "AGENTS.md")],
+        scanned: 1,
+        skipped: [],
+        findings: [
+          {
+            file: "AGENTS.md",
+            findings: [
+              {
+                line: 1,
+                charCount: LONG_RUN_THRESHOLD,
+                method: "invisible Unicode sequence",
+                decoded: "U+E0001",
+              },
+            ],
+          },
+        ],
+      }),
+    });
+
+    assert.ok(
+      existsSync(ALERT_FILE),
+      "a file that could not be cleaned did not arm the gate",
+    );
+    assert.match(readFileSync(ALERT_FILE, "utf8"), /AGENTS\.md/u);
+    rmSync(join(projectDir, "AGENTS.md"), { force: true });
   });
 });
