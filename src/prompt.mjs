@@ -8,12 +8,14 @@
  * the only way to neutralize a payload is to block. This is the pure decision;
  * a host wraps it in whatever its agent's prompt-submission hook expects.
  *
- * One carve-out: a prompt whose only escape content is SGR color/style codes
- * (`ESC [ params m`) passes with a note instead of blocking. Pasting colored
- * terminal output (test runs, build logs) is the single most common debugging
- * action, and SGR is display-only by the ECMA-48 grammar — it cannot move the
- * cursor, erase the screen, or carry an OSC payload. Anything beyond SGR still
- * blocks, as do the invisible-char thresholds.
+ * One carve-out: a prompt whose only escape content is INERT — SGR color/style
+ * codes (`ESC [ params m`) and/or an orphan introducer that completes no
+ * sequence — passes with a note instead of blocking. Pasting colored terminal
+ * output (test runs, build logs) is the single most common debugging action,
+ * and SGR is display-only by the ECMA-48 grammar; an orphan `ESC` is not a
+ * sequence at all. Neither can move the cursor, erase the screen, or carry an
+ * OSC payload. Anything that IS a complete CSI/OSC token still blocks, as do
+ * the invisible-char thresholds.
  */
 import {
   CHECKS,
@@ -24,9 +26,8 @@ import {
   SCATTERED_THRESHOLD,
   countPayloadInvisible,
   stripInvisible,
-  isSgrOnly,
 } from "./invisible.mjs";
-import { stripAnsiFully } from "./layer1.mjs";
+import { isBenignAnsi, stripAnsiFully } from "./layer1.mjs";
 import { CONTROL_INTRODUCER_SOURCE } from "./ansi.mjs";
 
 // Every raw ANSI control a prompt can carry: 7-bit ESC (U+001B) and the entire
@@ -43,21 +44,6 @@ import { CONTROL_INTRODUCER_SOURCE } from "./ansi.mjs";
 // obligation recorded in this very comment, and two of the three spelled ESC
 // differently, so even a grep-based drift check would have missed a divergence.
 const ANSI_INTRODUCER = new RegExp(CONTROL_INTRODUCER_SOURCE);
-
-/**
- * True when every ANSI introducer in `prompt` belongs to a display-only SGR
- * color sequence -- the note carve-out's precondition. `isSgrOnly` already tests
- * the SGR-stripped prompt against the WHOLE C1 control block (U+0080-U+009F,
- * which includes the C1 OSC introducer U+009D and DCS/SOS/PM/APC) plus the 7-bit
- * ESC, so a residual C1-OSC or any non-SGR escape already denies it — no
- * separate re-check is needed (an earlier `&& !ANSI_INTRODUCER.test(...)` here
- * was an exact duplicate of that gate over the same stripped string).
- * @param {string} prompt
- * @returns {boolean}
- */
-function isSgrColorOnly(prompt) {
-  return isSgrOnly(prompt);
-}
 
 /**
  * Human-facing block reason: what was detected, the thresholds, a code-point
@@ -139,9 +125,13 @@ export function classifyPrompt(prompt, strip = stripAnsiFully) {
 
   if (!hasAnsi && invisiblesBelowThreshold) return { action: "pass" };
 
-  // Display-only color codes in an otherwise clean prompt: pass with a note
-  // instead of blocking, so pasted colored logs remain usable.
-  if (hasAnsi && invisiblesBelowThreshold && isSgrColorOnly(prompt))
+  // Inert escapes in an otherwise clean prompt — display-only colour and/or an
+  // orphan introducer that forms no sequence: pass with a note instead of
+  // blocking, so pasted colored logs and log fragments cut mid-escape remain
+  // usable. isBenignAnsi judges from what Layer 1's strip actually removed, so
+  // it covers the whole C1 block and any sequence that only reconstitutes
+  // during the strip; a complete CSI/OSC token falls through to the block.
+  if (hasAnsi && invisiblesBelowThreshold && isBenignAnsi(prompt))
     return { action: "note" };
 
   // CHECKS pairs a machine-readable category code with its detector; map each

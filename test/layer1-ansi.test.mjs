@@ -133,13 +133,17 @@ describe("scanAnsi", () => {
     assert.deepEqual(kinds(`${ESC}]0;title${ESC}\\`), ["osc"]);
     assert.deepEqual(kinds(`${ESC}]unterminated`), ["osc"]);
     assert.deepEqual(kinds(`${OSC}nested${OSC}x`), ["osc", "osc"]);
-    // Introducers that complete nothing: a lone ESC, a truncated CSI, and the
-    // C1 string introducers the sequence grammar never names.
+    // Introducers that complete nothing, split three ways: a lone ESC (inert),
+    // an ESC that OPENED a CSI it never finished (a terminal keeps eating the
+    // following text as parameters), and the C1 string introducers the sequence
+    // grammar never names. Only the first is quiet.
     assert.deepEqual(kinds(ESC), ["orphan-introducer"]);
-    assert.deepEqual(kinds(`${ESC}[12`), ["orphan-introducer"]);
+    assert.deepEqual(kinds(`${ESC} x`), ["orphan-introducer"]);
+    assert.deepEqual(kinds(`${ESC}[12`), ["orphan-csi-introducer"]);
+    assert.deepEqual(kinds(`${ESC}[`), ["orphan-csi-introducer"]);
     assert.deepEqual(kinds(cp(0x90) + cp(0x9e)), [
-      "orphan-introducer",
-      "orphan-introducer",
+      "orphan-c1-introducer",
+      "orphan-c1-introducer",
     ]);
   });
 

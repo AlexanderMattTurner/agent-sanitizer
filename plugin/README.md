@@ -61,20 +61,27 @@ per user:
 
 ## What it does
 
-| Hook                   | Event            | Protection                                                                                                                                                                                    |
-| ---------------------- | ---------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `scan-invisible-chars` | SessionStart     | Scans `CLAUDE.md`, `AGENTS.md` and `.claude/` markdown for hidden-Unicode payloads; auto-cleans what it can                                                                                   |
-| `sanitize-user-prompt` | UserPromptSubmit | Blocks prompts carrying payload-capable invisible Unicode or ANSI escapes (pasted SGR colour passes with a note)                                                                              |
-| `pretooluse-sanitize`  | PreToolUse       | Normalizes confusable/homoglyph paths and commands, strips stego and terminal-control sequences from model-authored content, and re-anchors redacted Edit/Write inputs onto the on-disk bytes |
-| `sanitize-output`      | PostToolUse      | Strips invisibles and ANSI, splices hidden HTML out of web/MCP ingress, flags exfil-shaped URLs, and redacts secrets via detect-secrets                                                       |
+| Hook                   | Event            | Protection                                                                                                                                                                                                                                                                                                                                                               |
+| ---------------------- | ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `scan-invisible-chars` | SessionStart     | Scans `CLAUDE.md`, `AGENTS.md` and the context markdown under `.claude/` (skills, agents and the other context subdirectories — never bulk data like `worktrees/`) for hidden-Unicode payloads; auto-cleans what it can                                                                                                                                                  |
+| `sanitize-user-prompt` | UserPromptSubmit | Blocks prompts carrying payload-capable invisible Unicode or ANSI escapes (inert escapes — pasted SGR colour, a stray `ESC` — pass with a note)                                                                                                                                                                                                                          |
+| `pretooluse-sanitize`  | PreToolUse       | Normalizes confusable/homoglyph paths and commands, strips stego and terminal-control sequences from model-authored content, re-anchors redacted Edit/Write inputs onto the on-disk bytes, notes `[REDACTED…]` placeholders in tool calls rehydration cannot re-anchor, and requires a confirming retry before a Write drops a redacted secret from a git-untracked file |
+| `sanitize-output`      | PostToolUse      | Strips invisibles and ANSI, splices hidden HTML out of web/MCP ingress, flags exfil-shaped URLs, redacts secrets via detect-secrets, and warns when a Read's raw bytes already carry literal `[REDACTED…]` placeholder text (a possibly clobbered secret)                                                                                                                |
+
+Every hook also times itself. A run that overruns its one-second budget says so
+in the model's context and on stderr — naming the hook and the timing, and asking
+you to report it — because a slow hook is otherwise indistinguishable from a slow
+agent. A healthy run says nothing.
 
 When a hook cannot run, it fails **open** by default: the guarded action
 proceeds and the model is told, in `additionalContext`, that what it is reading
-was never sanitized. One exception: a write-shaped call
-(Write/Edit/MultiEdit/NotebookEdit) whose input carries `[REDACTED` placeholder
-text **asks** even under the open default — with the sanitizer down,
-rehydration cannot run, and passing it through would persist the placeholder
-over the real secret on disk. What it never does is fail SILENTLY — Claude Code treats a
+was never sanitized. One exception, when the hook process starts but its
+machinery fails: a write-shaped call (Write/Edit/MultiEdit/NotebookEdit) whose
+input carries `[REDACTED` placeholder text **asks** even under the open
+default — with the sanitizer down, rehydration cannot run, and passing it
+through would persist the placeholder over the real secret on disk. (A missing
+`node` or a corrupt bundle is caught earlier by the launcher, which cannot
+inspect the payload and always warns.) What it never does is fail SILENTLY — Claude Code treats a
 crashed hook as "no objection" and says nothing, so the launcher
 (`scripts/safe-launch.sh`) speaks even when node is missing or the bundle is
 corrupt. A deployment that would rather keep guarding than keep working sets
@@ -99,9 +106,11 @@ And one posture knob, for what happens when a hook itself fails:
 
 Unset, a missing `node`, a corrupt bundle, an uninstalled package, an
 unreachable redaction daemon or a layer that threw all let the guarded action
-proceed with the warning attached (except a placeholder-bearing write, which
-asks — see above). Set to `0` (or `false`; every other value, including `1`, is
-the open default) they halt instead.
+proceed with the warning attached. One exception, when the hook process does
+run at all: a placeholder-bearing write asks instead — see above. (A missing
+`node` or a corrupt bundle is handled by the launcher, which cannot inspect
+the payload and always warns.) Set to `0` (or `false`; every other value,
+including `1`, is the open default) they halt instead.
 
 Worth knowing before you leave it open: some of those failures are reachable by
 whoever authored the content the hook is inspecting — colliding field names, a

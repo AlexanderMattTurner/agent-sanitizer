@@ -24,9 +24,13 @@
  * actually removes something, so a secret that a deletion reconstitutes is
  * still caught before this function returns.
  */
-import { CATEGORY, describeStripped, isSgrOnly } from "./invisible.mjs";
+import { CATEGORY, describeStripped } from "./invisible.mjs";
 import { needsMarkdownPipeline } from "./gates.mjs";
-import { applyLayer1, LONE_SURROGATE_RE } from "./layer1.mjs";
+import {
+  applyLayer1,
+  isBenignAnsiKinds,
+  LONE_SURROGATE_RE,
+} from "./layer1.mjs";
 import {
   describeExfil,
   describeHtmlSanitized,
@@ -221,9 +225,22 @@ async function runRedact(state, redact) {
   if (!secrets) return;
   applyMutation(state, secrets.text);
   state.warnings.push(
-    `API keys/secrets redacted: ${secrets.found.join(", ")}${secrets.note ?? ""}`,
+    `API keys/secrets redacted: ${secrets.found.join(", ")}${secrets.note ?? ""}${REDACTION_DOCTRINE}`,
   );
 }
+
+/**
+ * The doctrine clause riding every redaction warning — the one moment
+ * placeholders enter the model's view. Without it the model has no way to know
+ * that a placeholder written back through any path but Edit/Write (a heredoc,
+ * sed/tee, an MCP file tool) is persisted literally, destroying the secret —
+ * making that route-around an honest mistake rather than a warned one.
+ * Exported so tests assert the composed warning by reference instead of
+ * re-typing the prose.
+ */
+export const REDACTION_DOCTRINE =
+  " (placeholders rehydrate only via Edit/Write on the owning file; other " +
+  "write paths persist the placeholder text and lose the secret)";
 
 // Layer 2/3 pre-gate and warning prose are shared with the root entry
 // (./index.mjs), which runs the same layers; re-exported here because both were
@@ -270,9 +287,10 @@ export function deleteVerbatimSpans(text, spans) {
 
 /**
  * Layer 1 + surrogate normalisation: invisible chars, ANSI, lone surrogates.
- * `sgrNote` is true when the ONLY change was display-only SGR color AND the
- * caller opted into the carve-out (`sgrCarveOut`) — the caller reports that
- * with a terse note, not the WARNING prefix.
+ * `sgrNote` is true when the ONLY change was INERT ANSI — display-only SGR
+ * colour and/or a stray orphan introducer that formed no sequence — AND the
+ * caller opted into the carve-out (`sgrCarveOut`); the caller reports that with
+ * a terse note, not the WARNING prefix.
  * @param {string} text
  * @param {boolean} sgrCarveOut
  * @returns {{ cleaned: string, found: string[], warnings: string[], modified: boolean, sgrNote: boolean }}
@@ -284,18 +302,24 @@ function processLayer1(text, sgrCarveOut) {
   const found = [];
   let modified = false;
   let sgrNote = false;
-  const { cleaned: layer1, deAnsi, found: invisFound } = applyLayer1(text);
+  const {
+    cleaned: layer1,
+    deAnsi,
+    found: invisFound,
+    ansiKinds,
+  } = applyLayer1(text);
   let cleaned = layer1;
   if (invisFound.length > 0) {
     found.push(...invisFound);
     modified = true;
-    // Display-only color with the carve-out enabled: the strip removed cosmetic
-    // styling and nothing else (found is exactly [ANSI], so zero invisible
-    // chars were present, making isSgrOnly exact). Report it as a note.
+    // Inert ANSI with the carve-out enabled: the strip removed cosmetic styling
+    // and/or a stray escape byte, and nothing else (found is exactly [ANSI], so
+    // zero invisible chars were present). Report it as a note — a cursor-move,
+    // erase or OSC token lands in ansiKinds as CSI/OSC and keeps the WARNING.
     sgrNote =
       invisFound.length === 1 &&
       invisFound[0] === CATEGORY.ANSI &&
-      isSgrOnly(text) &&
+      isBenignAnsiKinds(ansiKinds) &&
       sgrCarveOut;
     if (!sgrNote) warnings.push(describeStripped(invisFound, deAnsi));
   }

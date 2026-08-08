@@ -1738,7 +1738,7 @@ describe("rehydrate: MultiEdit gating", () => {
         io,
       );
       assert.match(out.deny, /differs from its on-disk bytes/);
-      assert.match(out.deny, /separate Edit call/);
+      assert.match(out.deny, /single Edit calls/);
     }
   });
 
@@ -1763,8 +1763,9 @@ describe("rehydrate: MultiEdit gating", () => {
         { file_path: "/f", edits },
         io,
       );
-      assert.match(out.deny, /cannot be verified/);
-      assert.match(out.deny, /two keys collide/);
+      // The single MultiEdit refusal is deliberately generic: it names the
+      // resolution path, not the engine's internal reason.
+      assert.match(out.deny, /single Edit calls/);
     }
   });
 
@@ -1775,11 +1776,33 @@ describe("rehydrate: MultiEdit gating", () => {
       { file_path: "/f", edits: HINTED_EDITS },
       fakeIo(content, { text: content, pairs: [] }),
     );
-    assert.match(out.deny, /no redacted secret/);
-    assert.match(out.deny, /another file or context/);
+    assert.match(out.deny, /placeholder text/);
+    assert.match(out.deny, /single Edit calls/);
   });
 
-  it("ENOENT: denies a hinted create, passes an unhinted one through", async () => {
+  it("passes literal [REDACTED prose the pristine file itself contains", async () => {
+    // Precision over recall: this repo's own docs carry literal placeholder
+    // text. A hint token already present verbatim in a secret-free file is
+    // prose, not a placeholder — denying the edit would mangle documentation
+    // work (old_string may carry it too: a non-matching old_string persists
+    // nothing on its own).
+    const content = `alpha\nsee ${PH} in docs\n`;
+    assert.equal(
+      await rehydrateRedacted(
+        "MultiEdit",
+        {
+          file_path: "/f",
+          edits: [
+            { old_string: `see ${PH} in docs`, new_string: `see ${PH} above` },
+          ],
+        },
+        fakeIo(content, { text: content, pairs: [] }),
+      ),
+      null,
+    );
+  });
+
+  it("ENOENT: denies only the hinted CREATE form", async () => {
     const missingIo = {
       readFile: () => {
         throw fsError("ENOENT");
@@ -1789,20 +1812,28 @@ describe("rehydrate: MultiEdit gating", () => {
       },
       redact: () => null,
     };
+    // First edit's empty old_string is the create form: a placeholder in any
+    // edit would be persisted verbatim as the new file's content.
     const denied = await rehydrateRedacted(
       "MultiEdit",
-      { file_path: "/new", edits: HINTED_EDITS },
+      {
+        file_path: "/new",
+        edits: [{ old_string: "", new_string: `key=${PH}\n` }],
+      },
       missingIo,
     );
     assert.match(denied.deny, /does not exist/);
-    assert.equal(
-      await rehydrateRedacted(
-        "MultiEdit",
-        { file_path: "/new", edits: EDITS },
-        missingIo,
-      ),
-      null,
-    );
+    // A non-create MultiEdit errors not-found in the real tool and persists
+    // nothing, hinted or not; an unhinted create has no placeholder to write.
+    for (const edits of [HINTED_EDITS, EDITS])
+      assert.equal(
+        await rehydrateRedacted(
+          "MultiEdit",
+          { file_path: "/new", edits },
+          missingIo,
+        ),
+        null,
+      );
   });
 
   it("EACCES: denies hinted, propagates unhinted", async () => {
@@ -1932,15 +1963,17 @@ describe("rehydrate: a defective redactor map is never spliced", () => {
     assert.match(out.deny, /violates its contract/);
   });
 
-  it("passes an unhinted Edit through on a defective map (no splice attempted)", async () => {
-    assert.equal(
-      await rehydrateRedacted(
-        "Edit",
-        { file_path: "/f", old_string: "key=", new_string: "k=" },
-        mapIo([{ placeholder: PH, original: SECRET_A, start: 2 }]),
-      ),
-      null,
+  it("denies even an unhinted Edit on a defective map (stricter than unmappable)", async () => {
+    // Unmappable keeps the unhinted pass-through (an honest "cannot map");
+    // a map that FAILED VALIDATION is proof the engine is wrong about where
+    // this file's secrets sit, so a pass-through would hand the real Edit
+    // bytes inside spans nothing can vet — the R1 hidden-span oracle.
+    const out = await rehydrateRedacted(
+      "Edit",
+      { file_path: "/f", old_string: "key=", new_string: "k=" },
+      mapIo([{ placeholder: PH, original: SECRET_A, start: 2 }]),
     );
+    assert.match(out.deny, /cannot safely edit/);
   });
 
   it("denies a MultiEdit on a defective map", async () => {
@@ -1949,6 +1982,6 @@ describe("rehydrate: a defective redactor map is never spliced", () => {
       { file_path: "/f", edits: [{ old_string: "key=", new_string: "k=" }] },
       mapIo([{ placeholder: PH, original: SECRET_A, start: 2 }]),
     );
-    assert.match(out.deny, /cannot be verified/);
+    assert.match(out.deny, /single Edit calls/);
   });
 });

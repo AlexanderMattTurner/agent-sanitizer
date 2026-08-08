@@ -42,23 +42,16 @@
  * restructure the call; nothing this module rehydrates is ever silently
  * written with placeholder text standing in for a secret.
  *
- * MultiEdit is GATED, not rehydrated. Its edits apply sequentially, each
- * against the file state the previous edit produced, so the span-exact
- * view↔disk mapping performed for a single Edit has no sound equivalent —
- * after the first splice the disk no longer matches the view the remaining
- * old_strings were copied from. A MultiEdit passes through only when the view
- * provably equals disk and no edit names a placeholder (the common case);
- * every other case — a divergent view, an unmappable or defective map, or
- * placeholder text over a pristine file (the same foreign-placeholder rule a
- * byte-identical Write is denied under) — is denied via {@link multiEditDeny}
- * with guidance to re-issue the changes as single Edit calls, which ARE
- * re-anchored. The previous full pass-through was both a silent clobber
- * (placeholder persisted over a secret) and the same char-extraction oracle
- * the Edit path's hidden-span rule (R1) closes.
- *
  * I/O is INJECTED through `io`: the caller supplies file reads and the secret
  * redactor (its map/plain contract). The package never bundles a redactor —
  * detect-secrets, a daemon, or any other engine is the caller's to wire.
+ *
+ * MultiEdit is a candidate but never re-anchored: its edits apply
+ * sequentially, each against the result of the previous, which this module's
+ * one-old_string-against-one-static-view machinery cannot model. A MultiEdit
+ * on a file whose view equals disk passes through; on a divergent file it is
+ * denied with use-single-Edit guidance (see the dispatch in
+ * {@link rehydrateRedacted}).
  */
 import { applyLayer1, LONE_SURROGATE_RE } from "./layer1.mjs";
 import {
@@ -495,47 +488,23 @@ async function rehydrateWrite(ti, view, io, hint) {
 }
 
 /**
- * The one deny shape every unresolvable MultiEdit takes (see the module doc:
- * MultiEdit is gated, not rehydrated). Rather than splice at guessed anchors
- * (the silent clobber) or pass hidden-span probes through (the extraction
- * oracle R1 closes for Edit), every case that cannot be proven
- * view==disk-and-hint-free is denied with the same restructuring guidance:
- * single Edit calls, which ARE re-anchored.
+ * The single MultiEdit refusal: covers a sanitized view that diverges
+ * from disk (redacted secrets, stripped invisible characters, a lone
+ * surrogate), a redactor map that is unmappable or failed validation, and
+ * edits that carry foreign placeholder text over a pristine file — in every
+ * case the sequential edits cannot be re-anchored, so route the model to the
+ * per-call verified path.
  * @param {string} filePath
- * @param {string} why
- * @returns {{deny: string}}
  */
-function multiEditDeny(filePath, why) {
+function multiEditDeny(filePath) {
   return {
     deny:
-      `MultiEdit cannot be applied to ${filePath}: ${why}; apply each change as ` +
-      `a separate Edit call (single Edits are re-anchored onto the file's real ` +
-      `bytes), or ask the user to make this change`,
-  };
-}
-
-/**
- * Verdict when the redactor could not produce — or produced a provably
- * wrong — map of the file: MultiEdit is always denied (its pass-through
- * requires a VERIFIED view==disk), a hinted Edit/Write is denied (its
- * placeholder cannot be resolved), and an unhinted Edit/Write passes through
- * to the real tool's semantics (nothing placeholder-shaped to mis-persist,
- * and no splice is attempted — the module doctrine's fail-open arm).
- * @param {string} tool
- * @param {string} filePath
- * @param {string} reason
- * @param {boolean} hinted
- * @returns {{deny: string} | null}
- */
-function unresolvableVerdict(tool, filePath, reason, hinted) {
-  if (tool === "MultiEdit")
-    return multiEditDeny(
-      filePath,
-      `the sanitized view of the file cannot be verified (${reason})`,
-    );
-  if (!hinted) return null;
-  return {
-    deny: `cannot resolve redaction placeholders in ${filePath}: ${reason}`,
+      `the sanitized view of ${filePath} differs from its on-disk bytes ` +
+      `(redacted secrets, stripped invisible characters, or normalized lone ` +
+      `surrogates), or the edits carry [REDACTED…] placeholder text; ` +
+      `MultiEdit's sequential edits cannot be re-anchored onto the real ` +
+      `bytes. Use single Edit calls — each is rehydrated individually — or ` +
+      `ask the user to make this change`,
   };
 }
 
@@ -567,6 +536,24 @@ function isCandidate(tool, ti, hint) {
     );
   if (tool === "Write")
     return typeof ti.content === "string" && ti.content.includes(hint);
+  // MultiEdit applies its edits SEQUENTIALLY, each against the result of the
+  // previous, so the span machinery below (which maps one old_string against
+  // one static view) cannot re-anchor it. It is still a candidate: on a
+  // divergent file an unguarded pass-through is both a silent clobber (a
+  // placeholder in new_string persisted verbatim) and the same char-extraction
+  // oracle R1 closes for Edit (an old_string matching bytes inside a redacted
+  // span). The dispatch at the bottom pass-throughs the clean-file case and
+  // denies the divergent one with use-single-Edit guidance.
+  if (tool === "MultiEdit")
+    return (
+      Array.isArray(ti.edits) &&
+      ti.edits.length > 0 &&
+      ti.edits.every(
+        (/** @type {any} */ edit) =>
+          typeof edit?.old_string === "string" &&
+          typeof edit?.new_string === "string",
+      )
+    );
   return false;
 }
 
@@ -627,18 +614,25 @@ export async function rehydrateRedacted(
     // promises Node-shaped read failures (a real `readFile`'s throw), so
     // narrow once here rather than re-deriving the cast at every use below.
     const nodeErr = /** @type {NodeJS.ErrnoException} */ (err);
-    // ENOENT (missing target): a non-create Edit fails on its own (nothing to
-    // re-anchor), so pass through. But any call that would CREATE the file
-    // with hinted content — a Write (always hinted; isCandidate requires the
-    // prefix), a hinted MultiEdit (its first edit may create), or a hinted
-    // Edit whose empty old_string is the create form — persists its
-    // placeholder verbatim, standing for a secret that does NOT exist on this
-    // new path. R4: that is the same cross-file/stale-placeholder mistake a
-    // same-file Write is denied for; refuse with the same guidance rather
-    // than write the placeholder text as a real value.
+    // ENOENT (missing target): a call that cannot CREATE the file fails on
+    // its own (nothing to re-anchor), so pass through — a hint-free call, an
+    // Edit whose old_string is non-empty, or a MultiEdit whose FIRST edit's
+    // old_string is non-empty (only an empty first old_string is the create
+    // form; anything else errors not-found in the real tool). But any call
+    // that WOULD create the file with hinted content — a Write (always
+    // hinted; isCandidate requires the prefix), a hinted Edit-create, or a
+    // hinted MultiEdit-create — persists its placeholder verbatim, standing
+    // for a secret that does NOT exist on this new path. R4: that is the same
+    // cross-file/stale-placeholder mistake a same-file Write is denied for;
+    // refuse with the same guidance rather than write the placeholder text as
+    // a real value.
     if (nodeErr?.code === "ENOENT") {
-      if (!hinted || (tool === "Edit" && toolInput.old_string !== ""))
-        return null;
+      const creates =
+        tool === "Write" ||
+        (tool === "Edit"
+          ? toolInput.old_string === ""
+          : toolInput.edits[0].old_string === "");
+      if (!hinted || !creates) return null;
       return {
         deny:
           `${toolInput.file_path} does not exist, so the ${hint}…] placeholder in the ` +
@@ -686,13 +680,17 @@ export async function rehydrateRedacted(
   // valid against `cleaned` throughout the rest of this module.
   const deletions = alignDeletions(content, layer1Cleaned);
   const mapped = await io.redactMap(cleaned);
-  if ("unmappable" in mapped)
-    return unresolvableVerdict(
-      tool,
-      toolInput.file_path,
-      mapped.unmappable,
-      hinted,
-    );
+  if ("unmappable" in mapped) {
+    // MultiEdit has no resolver to vet it against an unresolvable map — a
+    // hint-free pass-through here would splice bytes inside spans nothing can
+    // account for, so it gets the MultiEdit deny where a hint-free Edit still
+    // reaches its own resolver-backed pass-through.
+    if (tool === "MultiEdit") return multiEditDeny(toolInput.file_path);
+    if (!hinted) return null;
+    return {
+      deny: `cannot resolve redaction placeholders in ${toolInput.file_path}: ${mapped.unmappable}`,
+    };
+  }
   // The redactor emits code-point offsets; the offset machinery below works in
   // UTF-16. makeFileView normalizes once, into a fresh frozen carrier, so an
   // astral char before a placeholder can't mis-anchor the edit (a no-op for
@@ -707,64 +705,79 @@ export async function rehydrateRedacted(
   // anchor an edit onto the WRONG disk bytes and corrupt the file. Verify it
   // before acting: construction re-checks range/ordering (the throws in
   // pairsToUtf16), viewMapDefect proves the view reconstructs `cleaned`
-  // exactly. A defective map is handled as unmappable — denied for MultiEdit
-  // and hinted input, passed through to real tool semantics otherwise — and
+  // exactly. A defective map DENIES for every tool and hint state, and is
   // deliberately NOT allowed to throw out of this module: a throw lands in
   // the host's failure posture, whose shipped default is fail OPEN, i.e. the
   // unsanitized placeholder write this module exists to prevent.
-  let view;
+  let view = null;
+  let mapDefect = null;
   try {
     view = makeFileView(mapped.text, mapped.pairs);
   } catch (err) {
-    return unresolvableVerdict(
-      tool,
-      toolInput.file_path,
-      `the redactor's map violates its contract (${/** @type {Error} */ (err).message})`,
-      hinted,
-    );
+    mapDefect = `the redactor's map violates its contract (${/** @type {Error} */ (err).message})`;
   }
-  const mapDefect = viewMapDefect(cleaned, view);
-  if (mapDefect !== null)
-    return unresolvableVerdict(
-      tool,
-      toolInput.file_path,
-      `the redactor's map is inconsistent with the file's bytes (${mapDefect})`,
-      hinted,
-    );
+  if (view !== null) {
+    const defect = viewMapDefect(cleaned, view);
+    if (defect !== null)
+      mapDefect = `the redactor's map is inconsistent with the file's bytes (${defect})`;
+  }
+  if (view === null || mapDefect !== null) {
+    // STRICTER than the unmappable arm above, on purpose: unmappable is an
+    // engine honestly reporting it cannot map, so an unhinted Edit keeps its
+    // resolver-free pass-through; a map that FAILED VALIDATION is affirmative
+    // evidence the engine is wrong about where this file's secrets sit.
+    // Reaching this line at all means the fast pass-through did not fire — the
+    // file provably holds redacted content or diverges from its view — so an
+    // unhinted pass-through here would hand the real Edit bytes inside spans
+    // nothing can vet (the R1 hidden-span oracle). Deny everything until the
+    // redactor is fixed.
+    if (tool === "MultiEdit") return multiEditDeny(toolInput.file_path);
+    return {
+      deny:
+        `cannot safely edit ${toolInput.file_path}: ${mapDefect}; the file holds ` +
+        `redacted content whose location cannot be trusted, so no edit can be ` +
+        `verified. Retry later, or ask the user to make this change`,
+    };
+  }
   // View identical to disk: any placeholders in an Edit's old_string are
   // literal text, so there is nothing to re-anchor. `cleaned === content` also
   // rules out a lone-surrogate-only divergence (view.pairs/deletions alone
   // would miss that, since the normalization is neither a redaction pair nor a
-  // Layer-1 deletion). Hinted Writes and MultiEdits are the exception: their
-  // input still carries the hint prefix, and with no own placeholder to
+  // Layer-1 deletion). HINTED Write and MultiEdit are the exceptions: their
+  // content still carries the hint prefix, and with no own placeholder to
   // resolve that hint is a FOREIGN [REDACTED…] placeholder that would be
-  // persisted verbatim over pristine bytes. Fall through so each denies with
-  // the cross-file guidance — the same verdict a Write onto a secret-bearing
-  // or absent target already gets.
+  // persisted verbatim over pristine bytes. A Write falls through to
+  // rehydrateWrite's cross-file deny; a MultiEdit to the MultiEdit deny below
+  // — without this a hinted MultiEdit on a pristine file silently persists
+  // the foreign placeholder the byte-identical Write is denied for.
   const viewEqualsDisk =
     view.pairs.length === 0 && deletions.length === 0 && cleaned === content;
-  if (
+  // Precision refinement for a hinted MultiEdit on that PRISTINE file: a
+  // hint token that already exists verbatim in the file is LITERAL prose
+  // (this repo's own docs carry "[REDACTED…" text), not a placeholder — the
+  // same whitelist foreignPlaceholders applies for a Write. Only new_string
+  // needs vetting: it is the sole field that persists bytes, while an
+  // old_string that is not literal file text simply fails the real tool's
+  // exact-match and persists nothing. The file holds no secrets here (the
+  // verified-empty map above proves it), so a fully-literal MultiEdit cannot
+  // clobber one; pass it through instead of false-denying documentation
+  // edits.
+  const multiEditLiteralHint =
+    tool === "MultiEdit" &&
     viewEqualsDisk &&
-    !(tool === "Write" && toolInput.content.includes(hint)) &&
-    !(tool === "MultiEdit" && hinted)
-  )
+    toolInput.edits.every(
+      (/** @type {{new_string: string}} */ edit) =>
+        foreignPlaceholders(edit.new_string, hint, view.text, []).length === 0,
+    );
+  if (viewEqualsDisk && (tool === "Edit" || !hinted || multiEditLiteralHint))
     return null;
 
-  if (tool === "MultiEdit")
-    return viewEqualsDisk
-      ? multiEditDeny(
-          toolInput.file_path,
-          `the edits carry a ${hint}…] placeholder but the file holds no ` +
-            `redacted secret, so the placeholder names a secret from another ` +
-            `file or context and would be persisted literally`,
-        )
-      : multiEditDeny(
-          toolInput.file_path,
-          `the sanitized view of the file differs from its on-disk bytes ` +
-            `(redacted secrets or stripped invisible characters), and ` +
-            `sequential edits cannot be re-anchored across that divergence`,
-        );
-
+  // MultiEdit reaches here when the view diverges from disk (redacted
+  // secrets, stripped runs, a lone surrogate) or when its edits carry
+  // foreign placeholder text: its sequential edits cannot be re-anchored
+  // one-by-one against a static view, so fail closed with the escape hatch
+  // that lands in the fully-verified path.
+  if (tool === "MultiEdit") return multiEditDeny(toolInput.file_path);
   return tool === "Edit"
     ? rehydrateEdit(
         toolInput,

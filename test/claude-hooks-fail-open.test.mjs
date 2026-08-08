@@ -17,8 +17,12 @@ import assert from "node:assert/strict";
 
 const { failOpenEnabled, failOpenContext, missingPackageError, FAIL_OPEN_ENV } =
   await import("../claude-hooks/lib/hook-io.mjs");
-const { failClosedFields, hookFailureFields, hintedWriteFault } =
-  await import("../claude-hooks/pretooluse-sanitize.mjs");
+const {
+  failClosedFields,
+  hookFailureFields,
+  hintedWriteFault,
+  REDACTION_HINT,
+} = await import("../claude-hooks/pretooluse-sanitize.mjs");
 const { DEFAULT_HINT } = await import("../src/rehydrate.mjs");
 const { emitFailClosed, emitHookFailure } =
   await import("../claude-hooks/sanitize-output.mjs");
@@ -236,6 +240,13 @@ describe("the open posture's placeholder-write carve-out", () => {
       content: `password=${DEFAULT_HINT}: Secret]\n`,
     },
   };
+
+  it("the hook's restated literal IS the package's DEFAULT_HINT", () => {
+    // Exact equality, both directions: a prefix-only behavioral check would
+    // keep passing if REDACTION_HINT drifted shorter (over-triggering the
+    // carve-out) or the package hint drifted (under-triggering it).
+    assert.equal(REDACTION_HINT, DEFAULT_HINT);
+  });
 
   it("recognizes write-shaped inputs carrying the package's hint prefix", () => {
     // DEFAULT_HINT comes from the package; the hook restates the prefix as a

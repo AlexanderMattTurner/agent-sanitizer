@@ -39,7 +39,11 @@ import {
   HookEvent,
   PermissionDecision,
 } from "./lib/hook-io.mjs";
-import { registerFaultPolicy, hookFaultOutcome } from "./lib/hook-fault.mjs";
+import {
+  registerFaultPolicy,
+  hookFaultOutcome,
+  defaultOpen,
+} from "./lib/hook-fault.mjs";
 import { runLayerPipeline } from "./lib/layer-pipeline.mjs";
 import { controlPlane, runJudgeCli } from "./lib/control-plane.mjs";
 import {
@@ -54,6 +58,8 @@ import {
   authoredContext,
 } from "./lib/authored-content.mjs";
 import { redactViaDaemon } from "./lib/redactor-client.mjs";
+import { withSecretDropGuard } from "./lib/secret-drop-guard.mjs";
+import { placeholderNotice } from "./lib/placeholder-grammar.mjs";
 import { bestEffortTrace, trace, TraceEvent } from "./lib/trace.mjs";
 
 const HOOK_NAME = "pretooluse-sanitize";
@@ -140,13 +146,15 @@ const redactorIo = {
 
 /**
  * Default Layer-4 rehydrator: the package's rehydrateRedacted bound to the
- * redactor-daemon io. Hoisted (not an inline default-param arrow) so tests can
- * still inject a fake as the second argument to buildPreToolUseResponse.
- * @param {string} tool
- * @param {any} toolInput
+ * redactor-daemon io, composed (via withSecretDropGuard, where the ordering
+ * logic lives and is unit-tested) with the clobber-by-omission guard. Hoisted
+ * (not an inline default-param arrow) so tests can still inject a fake as the
+ * second argument to buildPreToolUseResponse.
  */
-const defaultRehydrate = (tool, toolInput) =>
-  rehydrateRedacted(tool, toolInput, redactorIo);
+const defaultRehydrate = withSecretDropGuard(
+  (tool, toolInput) => rehydrateRedacted(tool, toolInput, redactorIo),
+  redactorIo,
+);
 
 /**
  * Trace the response on the way out — "noop" (clean pass-through), "deny",
@@ -301,6 +309,15 @@ export async function buildPreToolUseResponse(
       permissionDecisionReason: deny,
     });
   contexts.push(...layerContexts);
+
+  // Placeholder advisory for tools OUTSIDE the rehydrated set (Bash, MCP,
+  // anything unknown): rehydration cannot re-anchor these, so a placeholder in
+  // their input would be persisted literally by any write they perform. It
+  // cannot tell a write from a read, so it is context-only — never a verdict
+  // (see placeholderNotice). Evaluated on the pipeline's FINAL input, matching
+  // what the tool will actually receive.
+  const notice = placeholderNotice(tool, current);
+  if (notice !== null) contexts.push(notice);
 
   return emitTraced(
     emitTrace,
@@ -486,10 +503,16 @@ export function failClosedFields(parsedOk, err, opts = {}) {
 // The redaction-placeholder prefix, restated as a literal rather than imported:
 // this check belongs to the FAILURE posture and must work exactly when the
 // agent-sanitizer package (which exports it as DEFAULT_HINT) failed to load.
-// test/claude-hooks-fail-open.test.mjs pins the two spellings together.
-const REDACTION_HINT = "[REDACTED";
-// Tools whose input is persisted to disk — the calls through which a
-// placeholder can clobber a real secret.
+// Exported so test/claude-hooks-fail-open.test.mjs can pin the two spellings
+// together with exact equality — a prefix-only behavioral check would keep
+// passing if this literal drifted shorter and the carve-out over-triggered.
+export const REDACTION_HINT = "[REDACTED";
+// The file-editing tools whose input fields ARE the bytes persisted to disk.
+// Deliberately NOT exhaustive over every clobber path: Bash can also write a
+// placeholder to disk (`>`, `tee`, `sed -i`, a heredoc), but command strings
+// mention "[REDACTED" benignly far too often — grepping for it, discussing
+// it — for an ask to hold precision there. That is an accepted gap, named in
+// THREAT-MODEL.md's carve-out paragraph, not a completeness claim.
 const WRITE_SHAPED_TOOLS = new Set([
   "Write",
   "Edit",
@@ -570,8 +593,12 @@ registerFaultPolicy(HOOK_NAME, {
   event: HookEvent.PRE_TOOL_USE,
   guarded: "tool input",
   open: (ctx) => {
-    if (!hintedWriteFault(ctx.input))
-      return { fields: { additionalContext: ctx.openContext } };
+    // Non-carve-out faults take the SHARED open rendering, not a copy of it —
+    // hook-fault.mjs owns that body, and a restated one would silently drift.
+    if (!hintedWriteFault(ctx.input)) return defaultOpen(ctx);
+    // parsedOk is hardcoded true (the ASK arm): hintedWriteFault(undefined)
+    // is false, so an unparsed input can never reach this line — reaching it
+    // proves the payload parsed.
     const closed = failClosedFields(true, ctx.err, {
       messages: ctx.messages,
       hint: ctx.hint,
