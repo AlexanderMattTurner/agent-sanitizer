@@ -168,7 +168,7 @@ describe("Unicode contract: blank-filler anchors", () => {
   });
 });
 
-// ─── Brahmic consonants (kept literal — no property escape expresses them) ────
+// ─── Brahmic consonants (UCD-generated; see scripts/gen-joining-type.mjs) ─────
 describe("Unicode contract: Brahmic consonant spans", () => {
   const unassigned = /\p{General_Category=Unassigned}/u;
 
@@ -176,7 +176,10 @@ describe("Unicode contract: Brahmic consonant spans", () => {
     assert.ok(BRAHMIC_CONSONANT_RANGES.length > 0);
     for (const [script, start, end] of BRAHMIC_CONSONANT_RANGES) {
       assert.equal(typeof script, "string");
-      assert.ok(start < end, `${script} span is empty or inverted`);
+      // `<=`, not `<`: the UCD-derived spans are exact, so a script with a
+      // single isolated consonant (Kannada U+0CDE, Gujarati U+0AF9) is a
+      // one-code-point span, not an error.
+      assert.ok(start <= end, `${script} span is inverted`);
     }
   });
 

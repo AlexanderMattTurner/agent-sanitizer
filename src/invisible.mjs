@@ -9,7 +9,7 @@
  * sibling data module, not a package), so it decides preservation from the
  * actual cursive-join semantics rather than a hand-rolled script guess.
  */
-import { joiningType, isVirama } from "./joining-type.mjs";
+import { joiningType, isVirama, isBrahmicConsonant } from "./joining-type.mjs";
 import { isStandardizedVariant } from "./standardized-variants.mjs";
 import { CF_CODEPOINTS } from "./cf-charset.mjs";
 import { scanAnsi, TOKEN_KIND } from "./ansi.mjs";
@@ -364,52 +364,32 @@ function isCjkIdeograph(ch) {
   return CJK_IDEOGRAPH_RE.test(ch);
 }
 
-// Consonant (KA..HA and script-specific additional-consonant) ranges of the
-// Brahmic scripts the joiner carve-out serves. A virama does half-form/conjunct
-// work ONLY on a consonant base; a bare or base-less halant + ZWJ carries no
-// rendering and is a smuggling channel, so the Indic joiner is preserved only
-// when its virama sits on one of these. Broad per-block spans — precision here
-// only needs "a real Brahmic letter of this script", not an exact consonant set.
+// Brahmic consonants: the only base a virama does half-form/conjunct work on.
+// A bare or base-less halant + ZWJ carries no rendering and is a smuggling
+// channel, so the Indic joiner is preserved only over one of these.
 //
-// UNLIKE the CJK and Hangul gates these CANNOT be derived from a property
-// escape: the UCD property that names them is Indic_Syllabic_Category=Consonant,
-// and JS RegExp exposes only General_Category, Script, Script_Extensions and the
-// binary properties. \p{Script=Devanagari} is the wrong shape — it also holds the
-// independent vowels (U+0904–U+0914), which a virama never attaches to, so
-// switching to it would preserve joiners after a bare vowel + halant. The table
-// therefore stays literal, and
-// test/invisible-unicode-tables.test.mjs pins the strongest contract that IS
-// derivable: every assigned code point in each span is a letter of the script
-// the span names, and each span holds at least one such letter. Drift (a future Unicode
-// filling a hole with a non-letter, or a typo'd span crossing into a neighbouring
-// script's block) then fails CI instead of shipping.
-// Keyed by script name so the contract test can check each span against the
-// script it claims; exported for exactly that test.
-/** @type {ReadonlyArray<readonly [string, number, number]>} */
-export const BRAHMIC_CONSONANT_RANGES = [
-  ["Devanagari", 0x0915, 0x0939], // KA–HA
-  ["Devanagari", 0x0958, 0x095f], // additional consonants
-  ["Bengali", 0x0995, 0x09b9],
-  ["Bengali", 0x09dc, 0x09df], // additional consonants
-  ["Gurmukhi", 0x0a15, 0x0a39],
-  ["Gurmukhi", 0x0a59, 0x0a5e], // additional consonants
-  ["Gujarati", 0x0a95, 0x0ab9],
-  ["Oriya", 0x0b15, 0x0b39],
-  ["Oriya", 0x0b5c, 0x0b5f], // additional consonants
-  ["Tamil", 0x0b95, 0x0bb9],
-  ["Telugu", 0x0c15, 0x0c39],
-  ["Telugu", 0x0c58, 0x0c5a], // additional consonants
-  ["Kannada", 0x0c95, 0x0cb9],
-  ["Malayalam", 0x0d15, 0x0d3a],
-  ["Sinhala", 0x0d9a, 0x0dc6],
-];
+// The spans are GENERATED from the UCD (Indic_Syllabic_Category=Consonant,
+// restricted by Script) and live in ./joining-type.mjs alongside the virama
+// table they are read against — see scripts/gen-joining-type.mjs. They used to
+// be hand-typed per-block KA–HA approximations here, which swept up the holes
+// between the real consonants; ECMAScript exposes no
+// \p{Indic_Syllabic_Category=…} escape, and \p{Script=Devanagari} is the wrong
+// shape on its own (it also holds the independent vowels U+0904–U+0914, which a
+// virama never attaches to), so a generated table is the only drift-proof
+// answer. Re-exported here because it was part of this module's surface before
+// it moved, and because test/invisible-unicode-tables.test.mjs checks each span
+// against the script it claims.
+export { BRAHMIC_CONSONANT_RANGES } from "./joining-type.mjs";
 
-/** True when `cp` is a Brahmic consonant — the only base a virama attaches to.
- * @param {number} cp @returns {boolean} */
-function isBrahmicConsonant(cp) {
-  for (const [, start, end] of BRAHMIC_CONSONANT_RANGES)
-    if (cp >= start && cp <= end) return true;
-  return false;
+/** True when `ch` is a Brahmic consonant. Takes a CHARACTER, like its sibling
+ * predicates here (`isCjkIdeograph`, `isJoinControl`), over the code-point
+ * `isBrahmicConsonant` it wraps in ./joining-type.mjs, where every predicate
+ * takes a code point.
+ * @param {string} ch @returns {boolean} */
+function isBrahmicConsonantChar(ch) {
+  return (
+    ch !== "" && isBrahmicConsonant(/** @type {number} */ (ch.codePointAt(0)))
+  );
 }
 
 // ─── Blank-filler carve-out (Braille / archaic Hangul) ───────────────────────
@@ -532,11 +512,7 @@ function followsBrahmicConjunct(cps, i) {
   while (j >= 0 && !isJoinControl(cps[j]) && classify(cps[j]) !== null) j--;
   if (j < 0 || !isVirama(/** @type {number} */ (cps[j].codePointAt(0))))
     return false;
-  const base = effectiveNeighbor(cps, j, -1);
-  return (
-    base !== "" &&
-    isBrahmicConsonant(/** @type {number} */ (base.codePointAt(0)))
-  );
+  return isBrahmicConsonantChar(effectiveNeighbor(cps, j, -1));
 }
 
 /**
