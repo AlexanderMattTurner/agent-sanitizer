@@ -9,7 +9,9 @@
 # every user.
 set -euo pipefail
 
-version="$(node -e 'import("./plugin/scripts/build-plugin.mjs").then((m) => process.stdout.write(m.enginePin()))')"
+# An argument overrides the committed pin so engine-pin-bump.sh can point the
+# same both-registries check at its candidate version before bumping.
+version="${1:-$(node -e 'import("./plugin/scripts/build-plugin.mjs").then((m) => process.stdout.write(m.enginePin()))')}"
 echo "engine pin: $version"
 
 npm view "agent-sanitizer@${version}" version >/dev/null

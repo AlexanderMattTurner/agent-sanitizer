@@ -11,9 +11,10 @@
 #
 # Skip conditions, each deferring to a later scheduled run:
 #   - newest npm release equals the pin (nothing to do)
-#   - release younger than MIN_AGE_HOURS: pnpm's default minimumReleaseAge
-#     policy would reject the lockfile entry, and the window doubles as the
-#     supply-chain cooldown renovate.json5 relied on
+#   - release younger than MIN_AGE_HOURS: our own release is exempt from the
+#     workspace's 3-day third-party minimumReleaseAge window (it is built and
+#     published from this repo with provenance, per pnpm-workspace.yaml), so
+#     this shorter floor is the deliberate own-package cooldown
 #   - release absent from PyPI: npm and PyPI land minutes apart, and the
 #     daemon the plugin provisions installs from PyPI
 #
@@ -55,9 +56,12 @@ if [ "$age_check" != "ok" ]; then
   exit 0
 fi
 
-pypi_status="$(curl -sS -o /dev/null -w '%{http_code}' "https://pypi.org/pypi/agent-sanitizer/${latest}/json")"
-if [ "$pypi_status" != "200" ]; then
-  echo "PyPI has no agent-sanitizer ${latest} yet (HTTP ${pypi_status}); deferring to a later run"
+# The same both-registries check the reproducibility gate runs, pointed at the
+# candidate instead of the committed pin — one SSOT for "this version is live
+# on npm AND PyPI". Its failure is a defer here, not an error: npm and PyPI
+# land minutes apart.
+if ! .github/scripts/verify-engine-pin.sh "$latest"; then
+  echo "agent-sanitizer@${latest} is not yet on both registries; deferring to a later run"
   exit 0
 fi
 
@@ -79,10 +83,29 @@ if git ls-remote --exit-code --heads origin "$BRANCH" >/dev/null; then
 fi
 
 npm pkg set "devDependencies.sanitizer-engine=npm:agent-sanitizer@${latest}"
+# Rotate the workspace's own-package minimumReleaseAge exemption with the pin.
+# pnpm-workspace.yaml deliberately exempts the pinned agent-sanitizer release
+# from the 3-day third-party window (it is built and published from this repo),
+# and tests/test_minimum_release_age.py fails any exclude entry package.json no
+# longer pins — so the entry must move in the same commit as the alias, or the
+# bump PR is either rejected at resolution (release younger than 3 days) or
+# red on that contract test (stale entry). Exact-string edit to preserve the
+# file's comments; fail loud if the expected entry is missing.
+# shellcheck disable=SC2016  # the ${} below is a JS template literal, not shell
+node -e '
+  const { readFileSync, writeFileSync } = require("node:fs");
+  const [file, from, to] = process.argv.slice(1);
+  const text = readFileSync(file, "utf8");
+  if (!text.includes(from)) {
+    console.error(`${file}: no "${from}" minimumReleaseAgeExclude entry to rotate`);
+    process.exit(1);
+  }
+  writeFileSync(file, text.replaceAll(from, to));
+' pnpm-workspace.yaml "agent-sanitizer@${current}" "agent-sanitizer@${latest}"
 # Lockfile only: node_modules stays on the old resolution; the PR's own CI
 # installs fresh. --no-frozen-lockfile because pnpm defaults to frozen in CI,
-# and updating the lockfile is the whole point here. The release is past the
-# minimumReleaseAge floor, so this resolution needs no policy exclusions.
+# and updating the lockfile is the whole point here. The rotated exemption
+# above is what lets a release younger than the third-party window resolve.
 pnpm install --lockfile-only --no-frozen-lockfile
 if git diff --quiet; then
   echo "working tree unchanged after the bump; nothing to push"
@@ -117,7 +140,7 @@ gh pr create --head "$BRANCH" \
     cat <<EOF
 ## What & why
 
-Automated bump of the \`sanitizer-engine\` npm alias from ${current} to ${latest} (published ≥ ${MIN_AGE_HOURS}h ago on both npm and PyPI), opened by \`.github/workflows/engine-pin-bump.yaml\`. Only the alias and the lockfile move here; \`plugin-dist-autofix.yaml\` pushes the regenerated \`requirements.in\`/\`requirements.txt\` and dist artifacts onto this branch, and the committed-bundle reproducibility tests gate the merge.
+Automated bump of the \`sanitizer-engine\` npm alias from ${current} to ${latest} (published ≥ ${MIN_AGE_HOURS}h ago on both npm and PyPI), opened by \`.github/workflows/engine-pin-bump.yaml\`. Only the alias, the lockfile, and the rotated own-package \`minimumReleaseAgeExclude\` entry move here; \`plugin-dist-autofix.yaml\` pushes the regenerated \`requirements.in\`/\`requirements.txt\` and dist artifacts onto this branch, and the committed-bundle reproducibility tests gate the merge.
 EOF
   )"
 # --squash matches every other automated merge here (dependabot-auto-merge,
