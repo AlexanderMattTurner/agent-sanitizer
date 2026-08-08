@@ -8,6 +8,12 @@ adhere to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+## [2.20.2] - 2026-08-08
+
+### Changed
+
+- Bumped pinned sanitizer engine to 2.20.0
+
 ## [2.20.0] - 2026-08-08
 
 ### Changed
