@@ -11,6 +11,7 @@ on:
       - "tsconfig*.json"
       - ".github/actions/setup-base-env/action.yaml"
       - ".github/scripts/pack-smoke.sh"
+      - ".github/scripts/check-pack-listing.sh"
       - ".github/workflows/pack-smoke.yaml"
   # No paths filter on pull_request: this is a Required check, and a workflow-level
   # path filter would skip the whole workflow (including the pack-smoke-passed

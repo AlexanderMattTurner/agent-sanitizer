@@ -12,46 +12,19 @@ set -euo pipefail
 REPO_ROOT="$(git rev-parse --show-toplevel)"
 cd "$REPO_ROOT"
 
-# 1. The published tarball must not carry Python build artifacts or any
-#    non-.mjs source under src/. `npm pack --dry-run` lists the file set without
-#    writing the tarball, so we can assert on it before building for real.
+# 1. Assert the published file set before building for real: no Python build
+#    artifacts, no non-.mjs source under src/, no plugin tree. `npm pack
+#    --dry-run` lists the files without writing the tarball; the assertions live
+#    in check-pack-listing.sh, which reads that listing on stdin and is
+#    unit-tested against fixtures (a wrong pattern there is a false RED on every
+#    PR, or a silent green while the `files` allowlist ships something it should
+#    not).
 echo "::group::npm pack --dry-run file listing"
 pack_listing="$(npm pack --dry-run 2>&1)"
 echo "$pack_listing"
 echo "::endgroup::"
 
-if grep -q 'egg-info' <<<"$pack_listing"; then
-  echo "ERROR: tarball ships Python egg-info build artifacts" >&2
-  exit 1
-fi
-# Every file shipped under src/ must be an .mjs module — a stray .py/.d.ts/.map
-# under src/ means the `files` allowlist widened by accident. Pull the src/ path
-# tokens out of the listing and assert each ends in .mjs.
-# `grep` exits 1 when there is simply nothing to report (no non-.mjs file — the
-# healthy case), which must not abort the job; but exit >=2 is a real grep
-# failure that `|| true` would silently swallow (masking a broken scan as "all
-# clean"). Branch on the code: tolerate <=1, propagate anything higher.
-src_nonmjs=""
-rc=0
-src_nonmjs="$(grep -oE 'src/[^[:space:]]+' <<<"$pack_listing" | grep -vE '\.mjs$')" || rc=$?
-if [ "$rc" -gt 1 ]; then
-  echo "ERROR: pack-listing scan failed (grep exit $rc)" >&2
-  exit "$rc"
-fi
-if [ -n "$src_nonmjs" ]; then
-  echo "ERROR: tarball ships a non-.mjs file under src/:" >&2
-  echo "$src_nonmjs" >&2
-  exit 1
-fi
-
-# The Claude Code plugin is distributed from the repo (a marketplace source), not
-# from the npm package: its committed bundle is ~1.8 MB of inlined dependencies,
-# which every consumer of the library would otherwise download. Assert the
-# `files` allowlist keeps it out.
-if grep -qE '(^|[[:space:]])plugin/' <<<"$pack_listing"; then
-  echo "ERROR: tarball ships the plugin tree (bundle + packaging); it is distributed from the repo, not npm" >&2
-  exit 1
-fi
+bash "$REPO_ROOT/.github/scripts/check-pack-listing.sh" <<<"$pack_listing"
 
 # 2. Build the real tarball.
 echo "::group::npm pack"

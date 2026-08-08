@@ -12,6 +12,10 @@
  * The target file set is CALLER-SUPPLIED: pass the globs your agent's
  * instruction files live under (e.g. `["CLAUDE.md", "AGENTS.md",
  * ".claude/**\/*.md", "**\/SKILL.md"]`), so no agent's convention is baked in.
+ * Claude Code's own convention is re-exported below
+ * ({@link CLAUDE_INSTRUCTION_GLOBS} / {@link excludeFromContextScan}) so a
+ * caller that wants it takes the SessionStart hook's exact scope rather than
+ * approximating it — see ./claude-context.mjs.
  */
 import {
   readFileSync,
@@ -36,6 +40,18 @@ import {
   countPayloadInvisible,
   stripInvisible,
 } from "./invisible.mjs";
+import { excludeNodeModules } from "./claude-context.mjs";
+
+// The library's public door onto Claude Code's context scope. The definitions
+// live in a dependency-free data module because the SessionStart hook imports
+// them relatively (see ./claude-context.mjs); re-exporting them here is what
+// makes `agent-sanitizer/instructions` the single place a CLI, a port or a fork
+// reads that scope from instead of re-spelling it.
+export {
+  CLAUDE_CONTEXT_SUBDIRS,
+  CLAUDE_INSTRUCTION_GLOBS,
+  excludeFromContextScan,
+} from "./claude-context.mjs";
 
 // Prefix on any decoded tag-character payload. The decoded text is
 // attacker-controlled and flows into the scan report, which itself reaches model
@@ -296,18 +312,28 @@ function keepContained(absPath, realRoot, literalRoot, pattern) {
  * cannot be resolved (a dangling symlink or unreadable entry inside the
  * tree), is SKIPPED, so one bad symlink never aborts scanning the rest of the
  * project.
+ *
+ * `exclude` prunes the WALK, which is where a wide glob's cost actually is —
+ * a pattern that merely fails to match a bulk directory still pays to read it.
+ * It is composed with, never replaces, the unconditional `node_modules` prune:
+ * a caller narrowing the scan must not be able to widen it into a dependency
+ * tree. Pass {@link excludeFromContextScan} to take Claude Code's own scope.
  * @param {string[]} globs
- * @param {{ cwd?: string }} [options]
+ * @param {{ cwd?: string, exclude?: (entry: string) => boolean }} [options]
  * @returns {string[]}
  */
-export function findInstructionFiles(globs, { cwd = process.cwd() } = {}) {
+export function findInstructionFiles(
+  globs,
+  { cwd = process.cwd(), exclude } = {},
+) {
   const literalRoot = resolve(cwd);
   const realRoot = realpathSync(literalRoot);
   const seen = new Set();
   for (const pattern of globs)
     for (const name of globSync(pattern, {
       cwd,
-      exclude: (entry) => entry === "node_modules",
+      exclude: (entry) =>
+        excludeNodeModules(entry) || (exclude?.(entry) ?? false),
     })) {
       // globSync returns absolute paths verbatim for an absolute pattern and
       // cwd-relative names otherwise; joining an already-absolute name would
@@ -324,12 +350,16 @@ export function findInstructionFiles(globs, { cwd = process.cwd() } = {}) {
  * findings, each path reported relative to `cwd`. Unreadable/missing files are
  * skipped. Pure scan — no mutation; pair with {@link cleanFile} to strip.
  * @param {string[]} globs
- * @param {{ cwd?: string }} [options]
+ * @param {{ cwd?: string, exclude?: (entry: string) => boolean }} [options]
+ *   `exclude` is forwarded to {@link findInstructionFiles}
  * @returns {Array<{ file: string, findings: ReturnType<typeof scanText> }>}
  */
-export function scanInstructionFiles(globs, { cwd = process.cwd() } = {}) {
+export function scanInstructionFiles(
+  globs,
+  { cwd = process.cwd(), exclude } = {},
+) {
   const out = [];
-  for (const file of findInstructionFiles(globs, { cwd })) {
+  for (const file of findInstructionFiles(globs, { cwd, exclude })) {
     let content;
     try {
       content = readFileSync(file, "utf-8");

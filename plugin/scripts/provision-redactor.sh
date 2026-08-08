@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# `source=` paths below are relative to this script, not to shellcheck's cwd.
+# shellcheck source-path=SCRIPTDIR
 # SessionStart: provision the Layer-4 secret-redaction engine (the Python
 # agent-secret-redactor-daemon from agent-sanitizer[secrets]) into the
 # plugin's persistent data dir. Idempotent: a venv already carrying the shipped
@@ -15,7 +17,25 @@ if [[ "${AGENT_SANITIZER_SECRETS_ENABLED:-}" != "1" ]]; then
 fi
 
 data_dir="${1:?usage: provision-redactor.sh <plugin-data-dir>}"
-plugin_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
+script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+plugin_root="$(cd -- "$script_dir/.." && pwd)"
+
+# This install blocks session start with a 1800s harness timeout above it, and
+# nothing downstream can attribute the wait to it: the hooks it provisions FOR
+# deliberately exclude one-time provisioning from their own budgets, so a
+# pathological install was, until now, wall-clock nobody reported. Budgeted as
+# provisioning, not as a hook — see lib/hook-timing.sh for why that is a
+# different threshold and a different message. The trap covers every exit,
+# including the idempotent early return (which is fast, so it prints nothing)
+# and the failure arms.
+if [[ -r "$script_dir/lib/hook-timing.sh" ]]; then
+  # shellcheck source=lib/hook-timing.sh
+  . "$script_dir/lib/hook-timing.sh"
+  provision_started_ms="$(hook_timing_now_ms)"
+  trap 'report_slow_provision "secret-redaction engine install" "$provision_started_ms"' EXIT
+else
+  echo "agent-sanitizer: $script_dir/lib/hook-timing.sh is missing — provisioning timing disabled (reinstall the plugin)" >&2
+fi
 req="$plugin_root/requirements.txt"
 venv="$data_dir/venv"
 stamp="$venv/.requirements-installed"

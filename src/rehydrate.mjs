@@ -63,6 +63,7 @@ import {
   resolveSpan,
   rehydrateNewString,
   makeFileView,
+  toUtf16View,
   pairDiskSpans,
   viewMapDefect,
 } from "./view-map.mjs";
@@ -149,7 +150,7 @@ function exposureDeny(count) {
  * @param {{file_path: string, old_string: string, new_string: string, replace_all?: boolean}} ti
  * @param {string} content disk bytes
  * @param {string} cleaned Layer-1 view of `content`
- * @param {import("./view-map.mjs").FileView} view
+ * @param {import("./view-map.mjs").FileView<"utf16">} view
  * @param {{start: number, deleted: string}[]} deletions
  * @param {RehydrateIo} io
  * @param {boolean} hinted the input itself carries placeholders
@@ -399,7 +400,7 @@ function foreignPlaceholders(out, hint, viewText, secretSpans) {
 
 /**
  * @param {{file_path: string, content: string}} ti
- * @param {import("./view-map.mjs").FileView} view
+ * @param {import("./view-map.mjs").FileView<"utf16">} view
  * @param {RehydrateIo} io
  * @param {string} hint placeholder prefix
  */
@@ -682,11 +683,13 @@ export async function rehydrateRedacted(
     };
   }
   // The redactor emits code-point offsets; the offset machinery below works in
-  // UTF-16. makeFileView normalizes once, into a fresh frozen carrier, so an
+  // UTF-16. Convert once, here, into a fresh frozen UTF-16-space carrier so an
   // astral char before a placeholder can't mis-anchor the edit (a no-op for
-  // BMP-only files) AND the redactor's own object is never written through —
-  // a redactor that memoizes its map result would otherwise hand back an
-  // already-converted object and get converted twice. See makeFileView.
+  // BMP-only files) AND the redactor's own object is never written through — a
+  // redactor that memoizes its map result would otherwise hand back an
+  // already-converted object and get converted twice, so the same input would
+  // yield a different verdict on the second call. The space brand is what makes
+  // that second conversion throw rather than silently shift; see toUtf16View.
   //
   // The map is TRUSTED by every splice below, and it came from the injected
   // redactor — the one component with a real defect rate. A wrong map
@@ -694,15 +697,15 @@ export async function rehydrateRedacted(
   // offset, originals that do not splice back to the file's bytes) would
   // anchor an edit onto the WRONG disk bytes and corrupt the file. Verify it
   // before acting: construction re-checks range/ordering (the throws in
-  // pairsToUtf16), viewMapDefect proves the view reconstructs `cleaned`
-  // exactly. A defective map DENIES for every tool and hint state, and is
-  // deliberately NOT allowed to throw out of this module: a throw lands in
-  // the host's failure posture, whose shipped default is fail OPEN, i.e. the
-  // unsanitized placeholder write this module exists to prevent.
+  // assertPairsOrdered and pairsToUtf16), viewMapDefect proves the view
+  // reconstructs `cleaned` exactly. A defective map DENIES for every tool and
+  // hint state, and is deliberately NOT allowed to throw out of this module: a
+  // throw lands in the host's failure posture, whose shipped default is fail
+  // OPEN, i.e. the unsanitized placeholder write this module exists to prevent.
   let view = null;
   let mapDefect = null;
   try {
-    view = makeFileView(mapped.text, mapped.pairs);
+    view = toUtf16View(makeFileView(mapped.text, mapped.pairs, "codePoint"));
   } catch (err) {
     mapDefect = `the redactor's map violates its contract (${/** @type {Error} */ (err).message})`;
   }

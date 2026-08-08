@@ -73,7 +73,9 @@ jobs:
         # PyPI half of the release silently no-ops on every publish.
         id: release
         # The changelog-prose call walks the anthropic-ladder.bash credential
-        # ladder: subscription tokens first, the metered ANTHROPIC_API_KEY last.
+        # ladder, which is subscription OAuth tokens ONLY — no metered API key
+        # rung. If every rung is unset or rejected, the release notes degrade to
+        # a plain commit list; the release itself still publishes.
         env:
           CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           CLAUDE_CODE_OAUTH_TOKEN_FALLBACK: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN_FALLBACK }}
@@ -82,7 +84,6 @@ jobs:
           CLAUDE_CODE_OAUTH_TOKEN_FALLBACK_4: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN_FALLBACK_4 }}
           CLAUDE_CODE_OAUTH_TOKEN_FALLBACK_5: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN_FALLBACK_5 }}
           CLAUDE_CODE_OAUTH_TOKEN_FALLBACK_6: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN_FALLBACK_6 }}
-          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
         run: bash .github/scripts/version-bump.sh
 
       # Coupled PyPI release (PRIMARY path). When version-bump.sh actually
