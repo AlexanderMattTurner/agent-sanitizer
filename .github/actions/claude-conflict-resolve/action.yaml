@@ -12,24 +12,30 @@ inputs:
   oauth_token:
     description: "Primary Claude Code OAuth token this resolve is billed against."
     required: true
+  # Mirrors claude-run's ladder inputs one-for-one; each is named after the
+  # secret it carries, not its position in the ladder.
   oauth_token_fallback:
-    description: "Second-tier token; empty skips the second attempt."
+    description: "CLAUDE_CODE_OAUTH_TOKEN_FALLBACK; empty skips its attempt."
+    required: false
+    default: ""
+  oauth_token_fallback_2:
+    description: "CLAUDE_CODE_OAUTH_TOKEN_FALLBACK_2; empty skips its attempt."
     required: false
     default: ""
   oauth_token_fallback_3:
-    description: "Third-tier token; empty skips the third attempt."
+    description: "CLAUDE_CODE_OAUTH_TOKEN_FALLBACK_3; empty skips its attempt."
     required: false
     default: ""
   oauth_token_fallback_4:
-    description: "Fourth-tier token; empty skips the fourth attempt."
+    description: "CLAUDE_CODE_OAUTH_TOKEN_FALLBACK_4; empty skips its attempt."
     required: false
     default: ""
   oauth_token_fallback_5:
-    description: "Fifth-tier token; empty skips the fifth attempt."
+    description: "CLAUDE_CODE_OAUTH_TOKEN_FALLBACK_5; empty skips its attempt."
     required: false
     default: ""
   oauth_token_fallback_6:
-    description: "Sixth-tier token; empty skips the sixth attempt."
+    description: "CLAUDE_CODE_OAUTH_TOKEN_FALLBACK_6; empty skips its attempt."
     required: false
     default: ""
   github_token:
@@ -61,6 +67,7 @@ runs:
         # turns an exhausted ladder into a loud failure.
         oauth_token: ${{ inputs.oauth_token }}
         oauth_token_fallback: ${{ inputs.oauth_token_fallback }}
+        oauth_token_fallback_2: ${{ inputs.oauth_token_fallback_2 }}
         oauth_token_fallback_3: ${{ inputs.oauth_token_fallback_3 }}
         oauth_token_fallback_4: ${{ inputs.oauth_token_fallback_4 }}
         oauth_token_fallback_5: ${{ inputs.oauth_token_fallback_5 }}
