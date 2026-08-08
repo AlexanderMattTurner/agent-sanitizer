@@ -24,6 +24,23 @@ that exposes a secret, or a crash on adversarial input are all in scope. Please
 don't include real credentials in a report—a credential-shaped placeholder is
 enough.
 
+## Dependency supply chain
+
+Dependency versions must age before this repo will resolve them:
+`pnpm-workspace.yaml` sets `minimumReleaseAge` to 4320 minutes (3 days), so a
+package published minutes ago cannot enter the lockfile. The npm compromises
+this defends against are typically detected and unpublished within hours to a
+couple of days, and the window is where that detection happens.
+
+The setting gates resolution only — `pnpm install --frozen-lockfile` installs
+what the lockfile already names — so it constrains `pnpm add` and `pnpm update`,
+which is where a poisoned release would enter.
+
+`minimumReleaseAgeExclude` exempts only `agent-sanitizer` itself, which this
+repository builds and publishes with npm provenance. `tests/test_minimum_release_age.py`
+fails if the window is removed or shortened, if an exemption names a version
+nothing pins, or if a third-party package is exempted.
+
 ## What to expect
 
 The maintainer will acknowledge your report and work with you on a fix and a
