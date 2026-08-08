@@ -138,6 +138,28 @@ describe("classifyPrompt: preserved-joiner covert channel", () => {
     assert.deepEqual(classifyPrompt(prompt), { action: "pass" });
   });
 
+  it("still PASSES a long Braille prompt (U+2800 is its word space)", () => {
+    // The blank-filler counterpart of the two cases above, and the false
+    // positive that motivated giving blanks their own allowance: every U+2800
+    // here is a legitimate word space, so the strip layer must preserve all of
+    // them — surplus 0 — instead of clipping the surplus into a block reason on
+    // a document a Braille reader wrote. 200 words is well past the joiner
+    // budget's absolute ceiling, which is what used to decide this.
+    const prompt = Array.from({ length: 200 }, () => "⠃⠁⠇⠇⠕").join("⠀");
+    assert.deepEqual(classifyPrompt(prompt), { action: "pass" });
+  });
+
+  it("blocks a blank-filler channel alternating with its own anchors", () => {
+    // The channel the blank allowance closes: one U+1160 per Hangul syllable,
+    // each individually anchored (so payload-invisible is ZERO), at a 1:1
+    // density no genuine Korean text reaches. The strip layer strips them all,
+    // and that surplus is what the scatter gate sees.
+    const channel = (cp(0xac00) + cp(0x1160)).repeat(200);
+    const verdict = classifyPrompt(channel);
+    assert.equal(verdict.action, "block");
+    assert.match(verdict.reason, /Blank-rendering fillers/);
+  });
+
   it("still PASSES a formal-Persian ZWNJ prompt of ordinary density", () => {
     // A dozen Persian words each carrying one linguistic ZWNJ: 12 preserved
     // joiners, under budget, so it must not be mistaken for a covert channel.
