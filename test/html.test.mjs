@@ -1035,6 +1035,16 @@ const DISPATCH_CORPUS = [
     previous: true,
   },
   {
+    // The whole document is one indented block, so the four-space indent is
+    // the ONLY character data outside the markup — and it is whitespace. The
+    // tokenizer rule alone cannot tell this from HTML source; the remark
+    // code-node check is what settles it.
+    name: "indented code block with no surrounding prose",
+    text: "    <div hidden>EXAMPLE</div>\n",
+    expected: false,
+    previous: false, // <5 lines
+  },
+  {
     name: "markdown list naming tags in code spans",
     text: [
       "Tags to avoid:",
@@ -1794,10 +1804,10 @@ describe("bogus-comment parity in the prose branch", () => {
 //
 // `sanitizeHtml` routes through one of two scanners — `scanHtmlFragment`
 // (parse5, when `looksLikeHtmlSource` is true) or `scanMarkdown` (remark, the
-// prose branch) — based on a coarse 30%-of-lines heuristic. After the
-// bogus-comment parity fix, the SAME hidden/bogus construct must be stripped no
-// matter which branch the heuristic happens to pick; otherwise an attacker tunes
-// the surrounding line-shape to dodge whichever branch is weaker. This property
+// prose branch) — on whether the markup accounts for the whole document. After
+// the bogus-comment parity fix, the SAME hidden/bogus construct must be
+// stripped no matter which branch the dispatch picks; otherwise an attacker
+// shapes the surrounding text to dodge whichever branch is weaker. This property
 // embeds one construct (carrying a canary) in BOTH a tag-dense doc (forces the
 // source branch) and a prose doc (forces the markdown branch) and asserts the
 // canary dies in both while a visible marker survives in both.
@@ -1820,7 +1830,7 @@ describe("property: hidden/bogus content is stripped on either branch (#2)", () 
     let sawProseBranch = 0;
     fc.assert(
       fc.property(hiddenConstruct, (construct) => {
-        // Tag-dense doc: ≥5 lines, >30% tag-shaped → source branch.
+        // All-markup doc: no character data outside it → source branch.
         const sourceDoc = [
           "<section>",
           "<p>intro</p>",

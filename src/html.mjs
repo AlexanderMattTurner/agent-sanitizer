@@ -1737,6 +1737,30 @@ function scanMarkdown(text) {
 }
 
 /**
+ * True when remark finds a code block — fenced or indented — in `text`.
+ *
+ * Asked before the HTML tokenizer because "no character data outside the
+ * markup" cannot see an INDENTED code block: its four leading spaces are
+ * whitespace, so a document that is nothing but one indented block
+ * (`"    <div hidden>x</div>\n"`) satisfies the rule and takes the source
+ * branch, and the hidden element gets spliced out of a block the renderer
+ * displays as literal text. A fence escapes only incidentally, because the
+ * backticks are non-whitespace character data. Code blocks are markdown-ONLY
+ * syntax, so their presence settles the question the same way the tokenizer
+ * does — by parsing, not by counting.
+ * @param {string} text
+ * @returns {boolean}
+ */
+function hasMarkdownCode(text) {
+  let found = false;
+  visit(mdParser.parse(text), "code", () => {
+    found = true;
+    return EXIT;
+  });
+  return found;
+}
+
+/**
  * The parsed fragment tree for `text` when `text` is HTML *source*, else null.
  *
  * "HTML source" means the markup accounts for the WHOLE document: the real
@@ -1762,6 +1786,7 @@ function scanMarkdown(text) {
  * @returns {any}
  */
 function htmlSourceTree(text) {
+  if (hasMarkdownCode(text)) return null;
   const tree = parseFragment(text);
   let sawElement = false;
   // Only ROOT children can hold character data outside an element; everything
