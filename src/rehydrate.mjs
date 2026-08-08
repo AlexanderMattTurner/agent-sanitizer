@@ -524,18 +524,6 @@ function isCandidate(tool, ti, hint) {
     return (
       typeof ti.old_string === "string" && typeof ti.new_string === "string"
     );
-  if (tool === "MultiEdit")
-    return (
-      Array.isArray(ti.edits) &&
-      ti.edits.length > 0 &&
-      ti.edits.every(
-        (/** @type {any} */ edit) =>
-          typeof edit?.old_string === "string" &&
-          typeof edit?.new_string === "string",
-      )
-    );
-  if (tool === "Write")
-    return typeof ti.content === "string" && ti.content.includes(hint);
   // MultiEdit applies its edits SEQUENTIALLY, each against the result of the
   // previous, so the span machinery below (which maps one old_string against
   // one static view) cannot re-anchor it. It is still a candidate: on a
@@ -554,6 +542,8 @@ function isCandidate(tool, ti, hint) {
           typeof edit?.new_string === "string",
       )
     );
+  if (tool === "Write")
+    return typeof ti.content === "string" && ti.content.includes(hint);
   return false;
 }
 
