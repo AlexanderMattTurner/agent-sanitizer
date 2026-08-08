@@ -250,12 +250,14 @@ describe("sanitizeText Layer 2/3 branch gating", () => {
       `see [c](https://evil.com/p?exfil=${b64}) end`,
       { exfilScan: true },
     );
+    // A markdown link is note-severity (see the exfil tier in output.mjs); the
+    // templates being pinned here are the same either way.
     assert.ok(
-      r.warnings.some((w) =>
-        /URLs shaped like data exfiltration detected/.test(w),
+      r.notes.some((n) =>
+        /URLs shaped like data exfiltration detected/.test(n),
       ),
     );
-    assert.ok(r.warnings.some((w) => /link to evil\.com/.test(w)));
+    assert.ok(r.notes.some((n) => /link to evil\.com/.test(n)));
   });
 });
 

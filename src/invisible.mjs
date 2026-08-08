@@ -175,11 +175,7 @@ export const LONG_RUN_RE = new RegExp(
  */
 export function describeStripped(invisFound, deAnsi) {
   let msg = `Stripped: ${invisFound.map((code) => CATEGORY_LABELS[code]).join(", ")}`;
-  LONG_RUN_RE.lastIndex = 0;
-  // Probe only the PAYLOAD invisibles: a legitimate emoji/flag/variation
-  // sequence is carve-out-preserved and masked out here, so it never trips the
-  // injection marker (alert fatigue) while a genuine hidden run still surfaces.
-  if (LONG_RUN_RE.test(payloadInvisibleView(deAnsi)))
+  if (payloadLongRunSample(deAnsi) !== null)
     msg += " [LONG RUN — possible injection payload]";
   return (
     msg +
@@ -987,6 +983,90 @@ export function payloadInvisibleView(text) {
   for (let i = 0; i < cps.length; i++)
     out += codes[i] !== null && kind[i] === null ? cps[i] : " ";
   return out;
+}
+
+/**
+ * The first payload-invisible LONG RUN in `text`, or null when there is none.
+ *
+ * THE definition of "this text carries a hidden run", shared by every consumer
+ * that has an opinion about one: the strip's `[LONG RUN — possible injection
+ * payload]` marker, the prompt gate's block decision, and the tool-output
+ * severity tier. They used to spell it twice, and differently — the marker
+ * probed the PAYLOAD view while the prompt gate probed the raw text, so a
+ * legitimate ten-emoji flag sequence (carve-out-preserved, never stripped) was
+ * quietly enough to BLOCK a prompt while the strip that saw the same text
+ * declined to even flag it. Masking the preserved invisibles is the right half
+ * of that disagreement: a run the carve-out keeps is rendering work, not a
+ * channel, and the joiners it does NOT keep are counted as payload anyway (see
+ * {@link countEffectiveInvisible}).
+ *
+ * Because the view replaces only PRESERVED invisibles (and visible characters)
+ * with spaces, a match consists solely of payload code points and is therefore
+ * byte-identical to the corresponding span of `text` — so a caller may report
+ * the sample verbatim.
+ * @param {string} text
+ * @returns {string | null}
+ */
+export function payloadLongRunSample(text) {
+  LONG_RUN_RE.lastIndex = 0;
+  return payloadInvisibleView(text).match(LONG_RUN_RE)?.[0] ?? null;
+}
+
+/**
+ * How many invisible code points in `text` the strip layer treats as PAYLOAD:
+ * the ones {@link countPayloadInvisible} counts, plus the joiners that sit in a
+ * genuine linguistic context but exceed the carve-out's preservation budget.
+ *
+ * The surplus term closes the preserved-joiner covert channel (O3):
+ * `countPayloadInvisible` excludes every ZWNJ/ZWJ doing real rendering work, so
+ * an attacker who alternates `letter joiner letter joiner …` — every joiner
+ * legitimately between two cursive letters — counts as ZERO there. The strip
+ * layer already refuses that (it preserves joiners only up to
+ * TOTAL_PRESERVED_JOINER_BUDGET / CONSECUTIVE_JOINER_CAP and strips the rest),
+ * so the surplus is read back OFF the strip — the SSOT — rather than by
+ * re-deriving the budget here, which is what would drift.
+ *
+ * A leading BOM is preserved by the strip but counted by
+ * {@link countPayloadInvisible}, so the difference can go slightly negative;
+ * hence the clamp.
+ * @param {string} text  ANSI-stripped text (an escape sequence can hide invisibles)
+ * @returns {number}
+ */
+export function countEffectiveInvisible(text) {
+  const payload = countPayloadInvisible(text);
+  const surplusPreservedJoiners = Math.max(
+    0,
+    [...text].length - [...stripInvisible(text)].length - payload,
+  );
+  return payload + surplusPreservedJoiners;
+}
+
+/**
+ * True when the invisible characters in `text` are INCIDENTAL: no hidden run,
+ * and too few of them in total to carry an instruction.
+ *
+ * This is a severity line, not a strip line — the bytes are removed either way
+ * (see ../src/severity.mjs). It exists because a single soft hyphen in a
+ * pasted paragraph, or one variation selector a font demanded, raised the exact
+ * `WARNING: Tool output sanitized` an encoded payload does, and a warning that
+ * fires on a stray character in ordinary prose is one operators learn to skip.
+ *
+ * The bar is {@link LONG_RUN_THRESHOLD} — the count this module already calls
+ * "payload length" — applied to the WHOLE text rather than to one run, so it is
+ * strictly stronger than the run probe: fewer than ten payload-invisible code
+ * points, however they are distributed, cannot spell a smuggled instruction (ten
+ * tag characters are ten ASCII letters). Deliberately NOT the far looser
+ * {@link SCATTERED_THRESHOLD} of 30, which is the prompt gate's BLOCK bar: 29
+ * tag characters is a short sentence, and staying quiet about a short sentence
+ * hidden in a tool result is not a trade worth making.
+ * @param {string} text  ANSI-stripped text, invisible runs intact
+ * @returns {boolean}
+ */
+export function isIncidentalInvisible(text) {
+  return (
+    payloadLongRunSample(text) === null &&
+    countEffectiveInvisible(text) < LONG_RUN_THRESHOLD
+  );
 }
 
 /**

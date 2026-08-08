@@ -14,27 +14,26 @@
 // Usage: node sanitize-pr-input.mjs < raw.txt > cleaned.txt 2> report.txt
 import { sanitize } from "agent-sanitizer";
 import { detectExfil } from "agent-sanitizer/html";
+// The library's own sentence for a Layer-3 finding, so this report and the
+// pipeline's cannot describe the same URL in two different ways.
+import { describeExfil } from "agent-sanitizer/output";
 
 const chunks = [];
 for await (const chunk of process.stdin) chunks.push(chunk);
 const input = Buffer.concat(chunks).toString("utf8");
 
-const { cleaned, found, warnings } = await sanitize(input, { html: false });
-
-const exfilReasons = [
-  ...new Set(
-    (detectExfil(input) || []).map(
-      (threat) =>
-        `${threat.isImage ? "image" : "link"} to ${threat.target}: ${threat.reason}`,
-    ),
-  ),
-];
+const { cleaned, found, warnings, notes } = await sanitize(input, {
+  html: false,
+});
+const threats = detectExfil(input);
 
 process.stdout.write(cleaned);
 
-const report = [...warnings];
+// A reviewer's report, not a model's banner, so both severity tiers are printed
+// — the warnings first, because that ordering is the only thing that survives a
+// skim.
+const report = [...warnings, ...notes];
 if (found.length > 0)
   report.unshift(`Neutralized categories: ${found.join(", ")}`);
-if (exfilReasons.length > 0)
-  report.push(`Exfil-shaped URLs detected: ${exfilReasons.join("; ")}`);
+if (threats) report.push(describeExfil(threats));
 if (report.length > 0) process.stderr.write(report.join("\n") + "\n");

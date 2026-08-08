@@ -234,13 +234,16 @@ describe("sanitize: html=true runs Layers 2 & 3", () => {
   it("reports a preserved script tag without removing it", async () => {
     const out = await sanitize("see <script>x</script> source", { html: true });
     assert.match(out.cleaned, /<script>x<\/script>/);
-    assert.match(out.warnings.join(" "), /Preserved but reported/);
+    // A NOTE, not a warning: nothing was removed and nothing was hidden, and a
+    // <script> is on essentially every page ever fetched.
+    assert.deepEqual(out.warnings, []);
+    assert.match(out.notes.join(" "), /Scripting\/resource content present/);
   });
 
   it("reports a preserved data: URI resource (dataSrc count)", async () => {
     const out = await sanitize('<img src="data:text/html,x">', { html: true });
     assert.equal(out.cleaned, '<img src="data:text/html,x">');
-    assert.match(out.warnings.join(" "), /data: URI×1/);
+    assert.match(out.notes.join(" "), /1 data: URI resource\(s\)/);
   });
 
   it("detects an exfil URL hidden inside a stripped element (pre-splice scan)", async () => {
@@ -253,6 +256,7 @@ describe("sanitize: html=true runs Layers 2 & 3", () => {
     assert.doesNotMatch(out.cleaned, /evil\.example/);
     // ...but still reported, because the exfil scan runs on the pre-splice text.
     assert.ok(out.found.includes(CATEGORY.EXFIL_URLS));
+    // An <img src>: the renderer fetches it, so it is a warning.
     assert.match(out.warnings.join(" "), /evil\.example/);
   });
 
@@ -262,13 +266,18 @@ describe("sanitize: html=true runs Layers 2 & 3", () => {
       { html: true },
     );
     assert.ok(out.found.includes(CATEGORY.EXFIL_URLS));
-    assert.match(out.warnings.join(" "), /Exfil-shaped URLs detected/);
+    // A plain link exfiltrates nothing until someone follows it, and the line
+    // reporting it says not to — so it is reported at NOTE volume. `found`
+    // still carries the machine-readable code either way.
+    assert.deepEqual(out.warnings, []);
+    assert.match(out.notes.join(" "), /URLs shaped like data exfiltration/);
   });
 
   it("returns benign HTML unchanged with no warnings on the html path", async () => {
     const out = await sanitize("hello <b>world</b>", { html: true });
     assert.equal(out.cleaned, "hello <b>world</b>");
     assert.deepEqual(out.warnings, []);
+    assert.deepEqual(out.notes, []);
     assert.deepEqual(out.found, []);
   });
 
