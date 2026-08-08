@@ -148,6 +148,38 @@ test("the live release script carries the hardened npm-view logic", () => {
 // Run the REAL script in a throwaway git repo with `npm` stubbed on PATH. Both
 // scenarios exit before any publish/push, so nothing leaves the sandbox.
 
+/**
+ * Git's repo-location variables, which OVERRIDE a child process's `cwd`.
+ *
+ * git exports these to the hooks it runs, so when pre-commit invokes this file
+ * as a paired guard test they reach every `git` these sandboxes spawn — the
+ * helpers' and the release script's own — and each one operates on THIS
+ * repository instead of the throwaway one. The suite then passes when run by
+ * hand and fails under `git commit` (`git tag v0.0.0` → "already exists"),
+ * which is how this was found; the worse outcome is a sandbox mutating the
+ * real repo. Scrubbed from the test process itself, so no call site — present
+ * or future — has to remember to pass a cleaned env.
+ *
+ * The list is git's own (`rev-parse --local-env-vars`, which only prints the
+ * compiled-in names and needs no repository), not a hand-copy that would rot
+ * the day git adds one.
+ */
+const GIT_LOCATION_VARS = execFileSync(
+  "git",
+  ["rev-parse", "--local-env-vars"],
+  { encoding: "utf8" },
+)
+  .split("\n")
+  .filter(Boolean);
+
+assert.ok(
+  GIT_LOCATION_VARS.includes("GIT_DIR"),
+  "git rev-parse --local-env-vars returned no GIT_DIR; the scrub below would " +
+    "be a no-op and these sandboxes would run against the real repository",
+);
+
+for (const name of GIT_LOCATION_VARS) delete process.env[name];
+
 /** Build a throwaway git repo tagged v0.0.0 at HEAD, plus a stubbed `npm`. */
 function makeSandbox(npmStubBody) {
   const dir = mkdtempSync(join(tmpdir(), "vbump-"));
@@ -561,6 +593,120 @@ fi`;
       /chore: concurrent merge/,
       "the concurrent commit must survive — the push must rebase, never force",
     );
+    const remoteTags = execFileSync("git", ["-C", remote, "tag"], {
+      encoding: "utf8",
+    });
+    assert.match(remoteTags, /^v1\.1\.0$/m, "the release tag must be pushed");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("a concurrent plugin-manifest version stamp is re-stamped, not abandoned", () => {
+  // The failure this pins actually happened: two releases raced, the replayed
+  // release-docs commit conflicted with the other one's `version` line in the
+  // plugin manifest, push_with_rebase refused to force-push, and 2.26.1 sat on
+  // npm with no git tag and a manifest still advertising 2.26.0.
+  const dir = mkdtempSync(join(tmpdir(), "vbump-manifest-race-"));
+  const remote = join(dir, "remote.git");
+  const work = join(dir, "work");
+  const other = join(dir, "other");
+
+  const npmStub = `if [[ "$2" == *@* ]]; then
+  if [[ "$3" == "version" ]]; then exit 1; fi
+  exit 0
+else
+  echo '["1.0.0"]'
+fi`;
+  const changelog = "# Changelog\n\n## Unreleased\n\n### Added\n\n- A thing.\n";
+  const MANIFEST = join("plugin", ".claude-plugin", "plugin.json");
+
+  const gitW = (...args) =>
+    execFileSync("git", args, { cwd: work, stdio: "ignore" });
+  const gitO = (...args) =>
+    execFileSync("git", args, { cwd: other, stdio: "ignore" });
+
+  try {
+    execFileSync("git", ["init", "-q", "--bare", "-b", "main", remote]);
+
+    mkdirSync(work);
+    gitW("init", "-q", "-b", "main");
+    gitW("config", "user.email", "t@t.test");
+    gitW("config", "user.name", "t");
+    writeFileSync(
+      join(work, "package.json"),
+      JSON.stringify({ name: "sandbox-pkg", version: "1.0.0" }) + "\n",
+    );
+    writeFileSync(join(work, "CHANGELOG.md"), changelog);
+    mkdirSync(join(work, "plugin", ".claude-plugin"), { recursive: true });
+    writeFileSync(
+      join(work, MANIFEST),
+      JSON.stringify({ name: "sandbox", version: "1.0.0" }, null, 2) + "\n",
+    );
+    const binDir = join(work, "stub-bin");
+    mkdirSync(binDir);
+    writeFileSync(join(binDir, "npm"), `#!/usr/bin/env bash\n${npmStub}\n`);
+    chmodSync(join(binDir, "npm"), 0o755);
+    writeFileSync(
+      join(binDir, "pnpm"),
+      "#!/usr/bin/env bash\necho 'stub publish ok'\nexit 0\n",
+    );
+    chmodSync(join(binDir, "pnpm"), 0o755);
+    gitW("add", "-A");
+    gitW("commit", "-q", "-m", "chore: seed");
+    gitW("tag", "v1.0.0");
+    gitW("remote", "add", "origin", remote);
+    gitW("push", "-q", "origin", "main");
+    gitW("push", "-q", "origin", "v1.0.0");
+    gitW("commit", "-q", "--allow-empty", "-m", "feat: add a thing");
+
+    // The racing commit stamps the SAME line this run will stamp, and edits a
+    // second field so the resolution can be shown to keep concurrent work
+    // rather than reverting the manifest to ours wholesale.
+    execFileSync("git", ["clone", "-q", remote, other], { stdio: "ignore" });
+    gitO("config", "user.email", "o@o.test");
+    gitO("config", "user.name", "o");
+    writeFileSync(
+      join(other, MANIFEST),
+      JSON.stringify(
+        { name: "sandbox", version: "1.0.5", description: "kept" },
+        null,
+        2,
+      ) + "\n",
+    );
+    gitO("add", "-A");
+    gitO("commit", "-q", "-m", "docs: release 1.0.5 [skip ci]");
+    gitO("push", "-q", "origin", "main");
+
+    const env = { ...process.env, PATH: `${binDir}:${process.env.PATH}` };
+    scrubAnthropicCredentials(env);
+    delete env.GITHUB_OUTPUT;
+    delete env.GITHUB_REF_NAME;
+    delete env.GITHUB_REF;
+    const res = spawnSync("bash", [LIVE_SCRIPT], {
+      cwd: work,
+      env,
+      encoding: "utf8",
+    });
+    assert.equal(res.error, undefined, "failed to spawn the release script");
+    assert.equal(res.status, 0, res.stderr);
+
+    // Non-vacuity: prove we reached the conflict, not a clean replay.
+    assert.match(res.stderr, /rejected \(attempt \d+\/\d+\); rebasing/);
+    assert.match(res.stderr, /Re-stamped .*plugin\.json to 1\.1\.0/);
+
+    const landed = JSON.parse(
+      execFileSync("git", ["-C", remote, "show", `main:${MANIFEST}`], {
+        encoding: "utf8",
+      }),
+    );
+    assert.equal(landed.version, "1.1.0", "the published version must win");
+    assert.equal(
+      landed.description,
+      "kept",
+      "the concurrent commit's other fields must survive the resolution",
+    );
+
     const remoteTags = execFileSync("git", ["-C", remote, "tag"], {
       encoding: "utf8",
     });
