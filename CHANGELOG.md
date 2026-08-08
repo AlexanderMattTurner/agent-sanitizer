@@ -8,6 +8,12 @@ adhere to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+## [2.24.1] - 2026-08-08
+
+### Changed
+
+- Engine pin freshness is now managed by Renovate instead of custom CI scripts, with automated alerts when the pinned Node.js engine stops tracking the latest npm version.
+
 ## [2.24.0] - 2026-08-08
 
 ### Added
