@@ -27,13 +27,18 @@ fi
 # Every file shipped under src/ must be an .mjs module — a stray .py/.d.ts/.map
 # under src/ means the `files` allowlist widened by accident. Pull the src/ path
 # tokens out of the listing and assert each ends in .mjs.
+# Anchored at a path START (same idiom as the plugin/ check below), because the
+# listing also carries generated declarations that MIRROR the source tree —
+# `types/src/claude-context.d.mts` is the declaration for a src/ module a hook
+# imports relatively, and an unanchored `src/` match reads it as a stray file
+# shipped under src/ and fails a healthy pack.
 # `grep` exits 1 when there is simply nothing to report (no non-.mjs file — the
 # healthy case), which must not abort the job; but exit >=2 is a real grep
 # failure that `|| true` would silently swallow (masking a broken scan as "all
 # clean"). Branch on the code: tolerate <=1, propagate anything higher.
 src_nonmjs=""
 rc=0
-src_nonmjs="$(grep -oE 'src/[^[:space:]]+' <<<"$pack_listing" | grep -vE '\.mjs$')" || rc=$?
+src_nonmjs="$(grep -oE '(^|[[:space:]])src/[^[:space:]]+' <<<"$pack_listing" | grep -vE '\.mjs$')" || rc=$?
 if [ "$rc" -gt 1 ]; then
   echo "ERROR: pack-listing scan failed (grep exit $rc)" >&2
   exit "$rc"

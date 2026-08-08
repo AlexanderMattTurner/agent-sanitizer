@@ -12,20 +12,39 @@
 // reported, never removed.
 //
 // Usage: node sanitize-pr-input.mjs < raw.txt > cleaned.txt 2> report.txt
+// This script runs against the PUBLISHED package, pinned by
+// install-sanitizer.sh — not against src/ in this repo. So it may only use API
+// that version already ships: `describeExfil` is re-exported from
+// `agent-sanitizer/output` on this branch but not in the pin, and importing it
+// here fails the whole script at module load. Hence the reasons are still
+// assembled locally, and `notes` is defaulted below.
 import { sanitize } from "agent-sanitizer";
 import { detectExfil } from "agent-sanitizer/html";
-// The library's own sentence for a Layer-3 finding, so this report and the
-// pipeline's cannot describe the same URL in two different ways.
-import { describeExfil } from "agent-sanitizer/output";
 
 const chunks = [];
 for await (const chunk of process.stdin) chunks.push(chunk);
 const input = Buffer.concat(chunks).toString("utf8");
 
-const { cleaned, found, warnings, notes } = await sanitize(input, {
+// `notes` defaults to []: the severity split is not in the pinned version, so
+// the field is absent there and spreading it would throw. It starts carrying
+// findings the moment install-sanitizer.sh's pin catches up.
+const {
+  cleaned,
+  found,
+  warnings,
+  notes = [],
+} = await sanitize(input, {
   html: false,
 });
-const threats = detectExfil(input);
+
+const exfilReasons = [
+  ...new Set(
+    (detectExfil(input) || []).map(
+      (threat) =>
+        `${threat.isImage ? "image" : "link"} to ${threat.target}: ${threat.reason}`,
+    ),
+  ),
+];
 
 process.stdout.write(cleaned);
 
@@ -35,5 +54,6 @@ process.stdout.write(cleaned);
 const report = [...warnings, ...notes];
 if (found.length > 0)
   report.unshift(`Neutralized categories: ${found.join(", ")}`);
-if (threats) report.push(describeExfil(threats));
+if (exfilReasons.length > 0)
+  report.push(`Exfil-shaped URLs detected: ${exfilReasons.join("; ")}`);
 if (report.length > 0) process.stderr.write(report.join("\n") + "\n");
