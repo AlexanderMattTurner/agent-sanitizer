@@ -45,6 +45,13 @@
  * I/O is INJECTED through `io`: the caller supplies file reads and the secret
  * redactor (its map/plain contract). The package never bundles a redactor —
  * detect-secrets, a daemon, or any other engine is the caller's to wire.
+ *
+ * MultiEdit is a candidate but never re-anchored: its edits apply
+ * sequentially, each against the result of the previous, which this module's
+ * one-old_string-against-one-static-view machinery cannot model. A MultiEdit
+ * on a file whose view equals disk passes through; on a divergent file it is
+ * denied with use-single-Edit guidance (see the dispatch in
+ * {@link rehydrateRedacted}).
  */
 import { applyLayer1, LONE_SURROGATE_RE } from "./layer1.mjs";
 import {
@@ -496,6 +503,24 @@ function isCandidate(tool, ti, hint) {
     );
   if (tool === "Write")
     return typeof ti.content === "string" && ti.content.includes(hint);
+  // MultiEdit applies its edits SEQUENTIALLY, each against the result of the
+  // previous, so the span machinery below (which maps one old_string against
+  // one static view) cannot re-anchor it. It is still a candidate: on a
+  // divergent file an unguarded pass-through is both a silent clobber (a
+  // placeholder in new_string persisted verbatim) and the same char-extraction
+  // oracle R1 closes for Edit (an old_string matching bytes inside a redacted
+  // span). The dispatch at the bottom pass-throughs the clean-file case and
+  // denies the divergent one with use-single-Edit guidance.
+  if (tool === "MultiEdit")
+    return (
+      Array.isArray(ti.edits) &&
+      ti.edits.length > 0 &&
+      ti.edits.every(
+        (/** @type {any} */ edit) =>
+          typeof edit?.old_string === "string" &&
+          typeof edit?.new_string === "string",
+      )
+    );
   return false;
 }
 
@@ -538,8 +563,13 @@ export async function rehydrateRedacted(
   if (!isCandidate(tool, toolInput, hint)) return null;
   const hinted =
     tool === "Write" ||
-    toolInput.old_string.includes(hint) ||
-    toolInput.new_string.includes(hint);
+    (tool === "MultiEdit"
+      ? toolInput.edits.some(
+          (/** @type {{old_string: string, new_string: string}} */ edit) =>
+            edit.old_string.includes(hint) || edit.new_string.includes(hint),
+        )
+      : toolInput.old_string.includes(hint) ||
+        toolInput.new_string.includes(hint));
 
   let content;
   try {
@@ -557,8 +587,13 @@ export async function rehydrateRedacted(
     // there is the same cross-file/stale-placeholder mistake a same-file Write
     // is denied for; refuse with the same guidance rather than write the
     // placeholder text as a real value.
+    // A hinted MultiEdit on a missing path is the same mistake: its first edit
+    // (empty old_string) CREATES the file, so a placeholder in any edit would
+    // be persisted verbatim as the new file's content — deny like the Write.
+    // A hint-free MultiEdit fails on its own (nothing to create placeholder
+    // text from), so it passes through like an Edit.
     if (nodeErr?.code === "ENOENT") {
-      if (tool !== "Write") return null;
+      if (tool === "Edit" || (tool === "MultiEdit" && !hinted)) return null;
       return {
         deny:
           `${toolInput.file_path} does not exist, so the ${hint}…] placeholder in the ` +
@@ -634,6 +669,18 @@ export async function rehydrateRedacted(
   )
     return null;
 
+  // MultiEdit reaches here only when the view genuinely diverges from disk
+  // (redacted secrets, stripped runs, or a lone surrogate): its sequential
+  // edits cannot be re-anchored one-by-one against a static view, so fail
+  // closed with the escape hatch that lands in the fully-verified path.
+  if (tool === "MultiEdit")
+    return {
+      deny:
+        `the sanitized view of ${toolInput.file_path} differs from its on-disk bytes ` +
+        `(redacted secrets or stripped invisible characters), and MultiEdit's ` +
+        `sequential edits cannot be re-anchored onto them; use single Edit calls — ` +
+        `each is rehydrated individually — or ask the user to make this change`,
+    };
   return tool === "Edit"
     ? rehydrateEdit(
         toolInput,

@@ -24,6 +24,7 @@ import {
   sanitizeValue,
   suppressToolOutput,
   MAX_DEPTH,
+  REDACTION_DOCTRINE,
 } from "../src/output.mjs";
 import { LONE_SURROGATE_RE } from "../src/layer1.mjs";
 
@@ -190,7 +191,9 @@ describe("invariant: a byte mutation always restores the stage invariants", () =
     const r = await sanitizeText("hi \u{1F600} there", { redact });
     assert.equal(r.cleaned, `hi ${REPLACEMENT_CHAR} there`);
     assert.equal(r.modified, true);
-    assert.deepEqual(r.warnings, ["API keys/secrets redacted: k"]);
+    assert.deepEqual(r.warnings, [
+      `API keys/secrets redacted: k${REDACTION_DOCTRINE}`,
+    ]);
   });
 
   it("normalizes a lone surrogate the redactor strands in the REVEAL", async () => {

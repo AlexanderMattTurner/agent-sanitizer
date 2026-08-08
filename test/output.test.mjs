@@ -23,6 +23,7 @@ import {
   deleteVerbatimSpans,
   MAX_DEPTH,
   FILTER_WARNING,
+  REDACTION_DOCTRINE,
 } from "../src/output.mjs";
 import { cp } from "./test-helpers.mjs";
 
@@ -265,7 +266,9 @@ describe("sanitizeText: sgrNote is honest across Layers 2/4/5", () => {
     assert.equal(r.cleaned, "REDACTED");
     assert.equal(r.modified, true);
     assert.equal(r.sgrNote, false);
-    assert.deepEqual(r.warnings, ["API keys/secrets redacted: api-key"]);
+    assert.deepEqual(r.warnings, [
+      `API keys/secrets redacted: api-key${REDACTION_DOCTRINE}`,
+    ]);
   });
 
   it("clears sgrNote when Layer 5 deletes a span", async () => {
@@ -458,7 +461,9 @@ describe("sanitizeText: Layer 4 redact", () => {
     const r = await sanitizeText("dirty", { redact });
     assert.equal(r.cleaned, "clean");
     assert.equal(r.modified, true);
-    assert.deepEqual(r.warnings, ["API keys/secrets redacted: api-key"]);
+    assert.deepEqual(r.warnings, [
+      `API keys/secrets redacted: api-key${REDACTION_DOCTRINE}`,
+    ]);
   });
 
   it("appends the optional note to the redaction warning", async () => {
@@ -469,7 +474,7 @@ describe("sanitizeText: Layer 4 redact", () => {
     });
     const r = await sanitizeText("dirty", { redact });
     assert.deepEqual(r.warnings, [
-      "API keys/secrets redacted: api-key (env-bound)",
+      `API keys/secrets redacted: api-key (env-bound)${REDACTION_DOCTRINE}`,
     ]);
   });
 
@@ -752,7 +757,9 @@ describe("sanitizeText: Layer 5 span deletion is re-vetted by Layer 4 (reconstit
     });
     assert.equal(calls.length, 2); // pre- and post-deletion passes
     assert.equal(r.cleaned, "sk-live-[REDACTED]");
-    assert.deepEqual(r.warnings, ["API keys/secrets redacted: api-key"]);
+    assert.deepEqual(r.warnings, [
+      `API keys/secrets redacted: api-key${REDACTION_DOCTRINE}`,
+    ]);
   });
 });
 
