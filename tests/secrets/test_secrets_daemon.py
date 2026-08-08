@@ -5,11 +5,11 @@ import socket
 import struct
 import threading
 import time
-from pathlib import Path
 
 import pytest
 
 from agent_sanitizer.secrets import daemon as S
+from tests.secrets.redactor_helpers import wait_for_listener
 
 
 # ─── Framing (_read_frame) over a fake connection ────────────────────────────
@@ -122,10 +122,7 @@ def daemon(sock_dir):
     stop = threading.Event()
     thread = threading.Thread(target=S.serve, args=(socket_path, stop), daemon=True)
     thread.start()
-    deadline = time.time() + 10
-    while not Path(socket_path).exists() and time.time() < deadline:
-        time.sleep(0.02)
-    assert Path(socket_path).exists(), "daemon did not bind its socket"
+    wait_for_listener(socket_path)
     yield socket_path
     stop.set()
     thread.join(timeout=5)

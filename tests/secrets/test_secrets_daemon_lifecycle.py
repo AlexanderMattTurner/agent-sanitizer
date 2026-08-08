@@ -11,6 +11,7 @@ from pathlib import Path
 import pytest
 
 from agent_sanitizer.secrets import daemon as S
+from tests.secrets.redactor_helpers import wait_for_listener
 
 
 def _drain(sock: socket.socket) -> object:
@@ -106,6 +107,24 @@ def test_serve_one_malformed_json_body_closes():
         a.close()
 
 
+# ─── the wait helper itself ──────────────────────────────────────────────────
+
+
+def test_wait_for_listener_rejects_a_socket_file_with_no_listener(sock_dir):
+    # Non-vacuity for every `wait_for_listener` call below: the helper replaced
+    # a loop that waited only for the socket FILE, which is created by bind()
+    # and therefore exists in the window before listen() runs. Prove the helper
+    # tells the two apart by handing it exactly that shape — a bound-then-closed
+    # path, file present, nobody accepting — and asserting it does NOT return.
+    socket_path = str(sock_dir / "s.sock")
+    dead = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    dead.bind(socket_path)
+    dead.close()
+    assert Path(socket_path).exists()
+    with pytest.raises(AssertionError, match="no daemon accepting"):
+        wait_for_listener(socket_path, timeout=0.2)
+
+
 # ─── _bind_or_exit / _reclaim_stale_socket ───────────────────────────────────
 
 
@@ -128,10 +147,7 @@ def test_bind_or_exit_returns_false_when_live_daemon_owns_path(sock_dir):
     stop = threading.Event()
     thread = threading.Thread(target=S.serve, args=(socket_path, stop), daemon=True)
     thread.start()
-    deadline = time.time() + 10
-    while not Path(socket_path).exists() and time.time() < deadline:
-        time.sleep(0.02)
-    assert Path(socket_path).exists()
+    wait_for_listener(socket_path)
     try:
         # A second daemon trying the same live path must exit quietly (False).
         second = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
@@ -212,11 +228,8 @@ def test_serve_creates_socket_dir_with_mode(sock_dir):
     stop = threading.Event()
     thread = threading.Thread(target=S.serve, args=(socket_path, stop), daemon=True)
     thread.start()
-    deadline = time.time() + 10
-    while not Path(socket_path).exists() and time.time() < deadline:
-        time.sleep(0.02)
+    wait_for_listener(socket_path)
     try:
-        assert Path(socket_path).exists()
         assert oct(os.stat(nested).st_mode)[-3:] == "700"
     finally:
         stop.set()
@@ -235,11 +248,8 @@ def test_serve_tightens_preexisting_loose_socket_dir(sock_dir):
     stop = threading.Event()
     thread = threading.Thread(target=S.serve, args=(socket_path, stop), daemon=True)
     thread.start()
-    deadline = time.time() + 10
-    while not Path(socket_path).exists() and time.time() < deadline:
-        time.sleep(0.02)
+    wait_for_listener(socket_path)
     try:
-        assert Path(socket_path).exists()
         assert oct(os.stat(sock_dir).st_mode)[-3:] == "700"
     finally:
         stop.set()
@@ -259,10 +269,7 @@ def test_stalled_connection_does_not_block_the_daemon(sock_dir, monkeypatch):
     stop = threading.Event()
     thread = threading.Thread(target=S.serve, args=(socket_path, stop), daemon=True)
     thread.start()
-    deadline = time.time() + 10
-    while not Path(socket_path).exists() and time.time() < deadline:
-        time.sleep(0.02)
-    assert Path(socket_path).exists()
+    wait_for_listener(socket_path)
     stalled = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
     fresh = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
     try:
