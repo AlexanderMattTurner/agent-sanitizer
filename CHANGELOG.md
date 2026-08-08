@@ -8,6 +8,18 @@ adhere to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+## [2.21.1] - 2026-08-08
+
+### Fixed
+
+- **guard-pairs**: Enumerate the syntax tree directly instead of shelling out to git, improving performance and reliability.
+
+### Changed
+
+- **guard-pairs**: Resolve guarded data using acorn parser instead of regex parsing for more accurate analysis.
+- **guard-pairs**: Drop the ambiguity-ban pass cap to prevent stale bindings.
+- **guard-pairs**: Remove the unreachable import-cycle stack guard and simplify the guard detection logic.
+
 ## [2.21.0] - 2026-08-08
 
 ### Changed
