@@ -22,6 +22,19 @@ from agent_sanitizer.secrets import (
 )
 from redactor_helpers import SAMPLES, cfg, reconstruct, run_map, run_plain
 
+
+def val_cand(value: str, line: str | None = None) -> E.Candidate:
+    """A `Candidate` in the KEYWORD path's shape: a value, no match offsets."""
+    return E.Candidate(value=value, line=value if line is None else line)
+
+
+def field_cand(text: str) -> E.Candidate:
+    """The `Candidate` for `FIELD_VALUE_RE`'s match in ``text``."""
+    m = E.FIELD_VALUE_RE.search(text)
+    assert m is not None, f"FIELD_VALUE_RE did not match {text!r}"
+    return E.Candidate.from_field_match(m)
+
+
 # Secrets assembled at runtime so no complete token literal triggers push protection.
 STRIPE_LIVE = "sk_live" + "_4eC39HqLyjWDarjtT1zdp7dc"
 AWS_KEY = "AKIA" + "ZYXWVUT123456789"
@@ -517,9 +530,7 @@ def test_unbalanced_quote_value_still_redacted(label, text, expected):
     ],
 )
 def test_is_benign_cursor(label, text, expected):
-    m = E.FIELD_VALUE_RE.search(text)
-    assert m is not None, label
-    assert E._is_benign_cursor(m) is expected, label
+    assert E._is_benign_cursor(field_cand(text)) is expected, label
 
 
 @pytest.mark.parametrize(
@@ -603,7 +614,7 @@ def test_credential_token_still_redacted(label, text, expected):
     ],
 )
 def test_is_placeholder_value(label, value, expected):
-    assert E._is_placeholder_value(value) is expected, label
+    assert E._is_placeholder_value(val_cand(value)) is expected, label
 
 
 @pytest.mark.parametrize(
@@ -687,7 +698,7 @@ def test_placeholder_values_not_redacted(label, text):
     ],
 )
 def test_is_metadata_field(label, line, value, expected):
-    assert E._is_metadata_field(line, value) is expected, label
+    assert E._is_metadata_field(val_cand(value, line)) is expected, label
 
 
 def test_is_metadata_field_uses_explicit_offset():
@@ -697,9 +708,10 @@ def test_is_metadata_field_uses_explicit_offset():
     value = "AnthropicAPIKeyValue"
     line = f"note {value} then token_name = {value}"
     # No offset -> first occurrence (after "note ") has no operator -> not metadata.
-    assert E._is_metadata_field(line, value) is False
+    assert E._is_metadata_field(val_cand(value, line)) is False
     # Real offset -> the SECOND occurrence, assigned to token_name -> metadata.
-    assert E._is_metadata_field(line, value, line.rindex(value)) is True
+    offset = E.Candidate(value=value, line=line, value_start=line.rindex(value))
+    assert E._is_metadata_field(offset) is True
 
 
 @pytest.mark.parametrize(
@@ -783,7 +795,7 @@ def test_passphrase_is_redacted_though_credential_is_not():
     ],
 )
 def test_is_markdown_code_prose(label, value, expected):
-    assert E._is_markdown_code_prose(value) is expected, label
+    assert E._is_markdown_code_prose(val_cand(value)) is expected, label
 
 
 # ─── Lowercase metavariables / timestamps / versions not redacted ────────────
@@ -828,7 +840,7 @@ def test_is_lowercase_metavariable(label, value, expected):
     ],
 )
 def test_is_timestamp(label, value, expected):
-    assert E._is_timestamp(value) is expected, label
+    assert E._is_timestamp(val_cand(value)) is expected, label
 
 
 @pytest.mark.parametrize(
@@ -844,7 +856,7 @@ def test_is_timestamp(label, value, expected):
     ],
 )
 def test_is_version(label, value, expected):
-    assert E._is_version(value) is expected, label
+    assert E._is_version(val_cand(value)) is expected, label
 
 
 @pytest.mark.parametrize(
@@ -1003,7 +1015,15 @@ def test_placeholder_skip_does_not_suppress_other_detections_on_line():
     ],
 )
 def test_is_env_reference(label, value, expected):
-    assert E._is_env_reference(value) is expected, label
+    # The two roots are separate gates now (unforgeable code idiom vs forgeable
+    # bare word); locally BOTH are trusted, so their union is the old predicate.
+    c = val_cand(value)
+    assert (
+        E._is_code_env_reference(c) or E._is_config_attr_reference(c)
+    ) is expected, label
+    assert not (E._is_code_env_reference(c) and E._is_config_attr_reference(c)), (
+        f"{label}: the two env-reference gates must partition, not overlap"
+    )
 
 
 @pytest.mark.parametrize(
@@ -1036,8 +1056,11 @@ _ENV_REF_NEEDLE = "q9X2mN7pK4rT8wY1cV5bZ3dF6gH0jL2e"
 @pytest.mark.parametrize("root", ["settings", "config", "environ", "self"])
 def test_forgeable_env_root_redacts_on_web_ingress(root):
     value = f"{root}.{_ENV_REF_NEEDLE}"
-    assert E._is_env_reference(value, web_ingress=False) is True
-    assert E._is_env_reference(value, web_ingress=True) is False
+    c = val_cand(value)
+    assert E._is_config_attr_reference(c) is True
+    assert E._is_code_env_reference(c) is False
+    assert E.is_benign(c, web_ingress=False) is True
+    assert E.is_benign(c, web_ingress=True) is False
     text = f"api_key: {value}"
     local, _ = redact(text, cfg(web_ingress=False))
     web, _ = redact(text, cfg(web_ingress=True))
@@ -1058,7 +1081,8 @@ def test_forgeable_env_root_redacts_on_web_ingress(root):
     ],
 )
 def test_unforgeable_env_root_trusted_on_web_ingress(value):
-    assert E._is_env_reference(value, web_ingress=True) is True
+    assert E._is_code_env_reference(val_cand(value)) is True
+    assert E.is_benign(val_cand(value), web_ingress=True) is True
 
 
 @pytest.mark.parametrize(
@@ -1194,9 +1218,7 @@ def test_crypt_hash_still_redacted(label, value):
     ],
 )
 def test_is_filesystem_path(label, value, expected):
-    m = E.FIELD_VALUE_RE.search(f"secret={value}")
-    assert m is not None, label
-    assert E._is_filesystem_path(m) is expected, label
+    assert E._is_filesystem_path(field_cand(f"secret={value}")) is expected, label
 
 
 # ─── Content digests, UUIDs ──────────────────────────────────────────────────
@@ -1223,7 +1245,7 @@ _REDACTED = "[" + "REDACTED]"
     ],
 )
 def test_is_content_digest(label, value, expected):
-    assert E._is_content_digest(value) is expected, label
+    assert E._is_content_digest(val_cand(value)) is expected, label
 
 
 @pytest.mark.parametrize(
@@ -1237,7 +1259,7 @@ def test_is_content_digest(label, value, expected):
     ],
 )
 def test_is_uuid(label, value, expected):
-    assert E._is_uuid(value) is expected, label
+    assert E._is_uuid(val_cand(value)) is expected, label
 
 
 @pytest.mark.parametrize(
@@ -1330,7 +1352,7 @@ _SLACK_WEBHOOK = (
     ],
 )
 def test_is_public_endpoint_url(label, value, expected):
-    assert E._is_public_endpoint_url(value) is expected, label
+    assert E._is_public_endpoint_url(val_cand(value)) is expected, label
 
 
 @pytest.mark.parametrize(
@@ -1375,7 +1397,7 @@ def test_public_endpoint_url_skipped_after_keyword(field):
     ],
 )
 def test_secret_bearing_url_still_redacted(label, text, needle):
-    assert E._is_public_endpoint_url(text.split(" = ", 1)[1]) is False, label
+    assert E._is_public_endpoint_url(val_cand(text.split(" = ", 1)[1])) is False, label
     for web in (False, True):
         out, found = redact(text, cfg(web_ingress=web))
         assert needle not in out, (label, web)
@@ -1500,7 +1522,7 @@ def test_fixture_bodies_are_credential_shaped(sample):
 )
 def test_fixture_token_is_redaction_eligible(sample):
     token = "".join(sample["parts"])
-    assert E._is_placeholder_value(token) is False, sample
+    assert E._is_placeholder_value(val_cand(token)) is False, sample
     result = run_plain(f"key: {token}")
     assert result is not None, sample
     assert sample["name"] in result["found"], sample
@@ -1541,7 +1563,7 @@ _CANONICAL_NEEDLE = "".join(_CANONICAL_NEEDLE_HALVES)
 
 @pytest.mark.parametrize("value", [_CANONICAL_NEEDLE, *_CANONICAL_NEEDLE_HALVES])
 def test_canonical_needle_is_credential_shaped(value):
-    assert not E._is_placeholder_value(value), (
+    assert not E._is_placeholder_value(val_cand(value)), (
         f"redaction-test needle {value!r} is treated as a documentation placeholder"
     )
 
