@@ -42,8 +42,10 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
-      # Sets up Node and runs `pnpm install`, so npm-max-stable.mjs can resolve
-      # the `semver` package it uses to order published versions.
+      # Sets up Node. npm-max-stable.mjs deliberately has no bare-specifier
+      # imports, so it does not depend on this step having installed anything —
+      # it used to, on a `semver` that was never a declared dependency, and the
+      # canary died on ERR_MODULE_NOT_FOUND every run.
       - name: Setup base environment
         uses: ./.github/actions/setup-base-env
         with:
