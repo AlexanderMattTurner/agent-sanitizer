@@ -223,9 +223,15 @@ export function resolveSpan(
 }
 
 /**
- * All occurrences of any needle in `text`, ordered by position. Placeholder
- * texts never substring-overlap one another (each ends in "]" right after its
- * distinguishing label), so the sorted matches are non-overlapping.
+ * All occurrences of any needle in `text`, ordered by position. Every index is
+ * computed against the ORIGINAL `text`, so the caller can splice them in one
+ * pass ({@link spliceOrdered}). Redaction placeholder texts never
+ * substring-overlap one another (each ends in "]" right after its
+ * distinguishing label), so for that caller the sorted matches are also
+ * non-overlapping; needles from an untrusted source (a Layer-5 filter's
+ * removeSpans) can overlap, which spliceOrdered resolves first-match-wins.
+ * Distinct needles matching at the SAME index keep `needles` order (Array#sort
+ * is stable), so first-match-wins is deterministic.
  * @param {string} text
  * @param {string[]} needles
  * @returns {{text: string, index: number}[]}
@@ -236,6 +242,47 @@ export function orderedMatches(text, needles) {
     for (const index of occurrences(text, needle))
       out.push({ text: needle, index });
   return out.sort((left, right) => left.index - right.index);
+}
+
+/**
+ * Replace every match in `matches` with `replacementFor(match, i)` in a SINGLE
+ * ordered pass over `text`. THE splice primitive for this codebase — the sole
+ * sound way to substitute several needles at once.
+ *
+ * A chained `text.split(needle).join(value)` per needle is unsound in both
+ * directions, which is why no caller may hand-roll one:
+ *   - substitution: an inserted value whose bytes contain a LATER needle is
+ *     re-matched by the next split and corrupted (or partially exposed);
+ *   - deletion: an earlier deletion joins the bytes on either side of it and
+ *     can CREATE a later needle's match, deleting text that needle never
+ *     matched in the input ("PRE-XX-POST" minus "-XX-" yields "PREPOST").
+ * Because every index in `matches` is measured against the original `text`,
+ * this pass only ever touches bytes the caller actually matched.
+ *
+ * Overlapping matches are resolved first-match-wins: a match starting before
+ * the previous one ended is skipped, never spliced at a shifted offset.
+ * `i` is the match's index in `matches` (stable across skips) so a caller
+ * pairing matches positionally with its own array stays aligned.
+ * @param {string} text
+ * @param {{text: string, index: number}[]} matches ordered by index, indices into `text`
+ * @param {(match: {text: string, index: number}, i: number) => string} replacementFor
+ * @returns {{text: string, spans: {start: number, end: number}[]}} spliced text
+ *   and the [start, end) range each replacement occupies in it
+ */
+export function spliceOrdered(text, matches, replacementFor) {
+  let out = "";
+  let last = 0;
+  /** @type {{start: number, end: number}[]} */
+  const spans = [];
+  matches.forEach((match, i) => {
+    if (match.index < last) return;
+    out += text.slice(last, match.index);
+    const start = out.length;
+    out += replacementFor(match, i);
+    spans.push({ start, end: out.length });
+    last = match.index + match.text.length;
+  });
+  return { text: out + text.slice(last), spans };
 }
 
 /**
@@ -308,24 +355,16 @@ export function rehydrateNewString(oldS, newS, spanPairs, filePairs) {
     newSeq.length === spanPairs.length &&
     newSeq.every((match, i) => match.text === spanPairs[i].placeholder)
   ) {
-    let out = "";
-    let last = 0;
-    newSeq.forEach((match, i) => {
-      out += newS.slice(last, match.index) + spanPairs[i].original;
-      last = match.index + match.text.length;
-    });
     return {
-      text: out + newS.slice(last),
+      text: spliceOrdered(newS, newSeq, (_match, i) => spanPairs[i].original)
+        .text,
       secrets: spanPairs.map((pair) => pair.original),
     };
   }
 
   // Each placeholder text must name exactly one secret; resolve that mapping
-  // first, then splice in a SINGLE ordered pass. A chained
-  // `out.split(ph).join(secret)` per placeholder is unsound: an inserted secret
-  // whose bytes happen to contain a later placeholder text would be re-matched
-  // and corrupted (or partially exposed) by the next split. One pass over the
-  // ordered match positions only ever touches the original new_string bytes.
+  // first, then splice in a SINGLE ordered pass (see spliceOrdered for why a
+  // chained `out.split(ph).join(secret)` per placeholder is unsound).
   const valueByPh = new Map();
   for (const phText of new Set(newSeq.map((match) => match.text))) {
     const values = [
@@ -344,11 +383,9 @@ export function rehydrateNewString(oldS, newS, spanPairs, filePairs) {
       };
     valueByPh.set(phText, values[0]);
   }
-  let out = "";
-  let last = 0;
-  for (const match of newSeq) {
-    out += newS.slice(last, match.index) + valueByPh.get(match.text);
-    last = match.index + match.text.length;
-  }
-  return { text: out + newS.slice(last), secrets: [...valueByPh.values()] };
+  return {
+    text: spliceOrdered(newS, newSeq, (match) => valueByPh.get(match.text))
+      .text,
+    secrets: [...valueByPh.values()],
+  };
 }
