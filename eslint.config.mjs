@@ -54,6 +54,29 @@ export default tseslint.config(
     },
     rules: {
       "consistent-return": "error",
+      // Both shipped bundles broke the same way — a dependency's runtime
+      // `require()` survived into the artifact — because each build script made
+      // its own bare esbuild call and only one of them carried the mitigation.
+      // Routing every build through `scripts/lib/bundle-esbuild.mjs` (which
+      // inlines those requires and throws on any survivor) is only an invariant
+      // if a new script cannot quietly reach for esbuild itself.
+      "no-restricted-imports": [
+        "error",
+        {
+          paths: [
+            {
+              name: "esbuild",
+              message:
+                "Import bundleHardened from scripts/lib/bundle-esbuild.mjs instead: a bare esbuild build skips the runtime-require inlining and the build-time guard, which is how the wheel's CLI shipped broken. Add the entry to BUNDLE_TARGETS.",
+            },
+          ],
+        },
+      ],
     },
+  },
+  {
+    // The one module allowed to call esbuild directly — it *is* the guard.
+    files: ["scripts/lib/**/*.mjs"],
+    rules: { "no-restricted-imports": "off" },
   },
 );

@@ -9,8 +9,14 @@
  * again because its build script had its own bare esbuild call. So this file
  * enumerates the entries from `BUNDLE_TARGETS` — the one list both build scripts
  * read — rather than restating them, and covers each one two ways: the surviving
- * runtime-require set must be within the entry's declared allowlist, and the
+ * runtime-require set must equal the entry's declared allowlist, and the
  * artifact must actually splice hidden HTML when asked to.
+ *
+ * Colocated with the module it tests rather than living in `test/`, because
+ * `stryker.conf.json` runs `test/**\/*.test.mjs` on every mutation dry run.
+ * These cases build real bundles and execute them in a spawned child, which
+ * reports no coverage back and so can never kill a `src/` mutant — in `test/`
+ * they would be pure cost. `node --test` discovers this path either way.
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -26,7 +32,7 @@ import {
   bundleHardened,
   bundleTarget,
   runtimeRequires,
-} from "../scripts/lib/bundle-esbuild.mjs";
+} from "./bundle-esbuild.mjs";
 
 /** Hidden-HTML input and the Layer-2 splice it must produce. */
 const HIDDEN_HTML = '<p style="display:none">hi</p>ok';
@@ -40,13 +46,22 @@ function scratch(t) {
 }
 
 /**
- * Build `target` fresh and write it to a scratch dir — NOT beside the repo's
+ * One build per target for the whole file. `bundleHardened` is deterministic
+ * for a given target, and a full esbuild run costs seconds; each test still
+ * stages its own scratch copy below, so sharing the bytes costs no isolation.
+ * @type {Map<string, Promise<string>>}
+ */
+const builds = new Map();
+
+/**
+ * Build `target` and write it to a scratch dir — NOT beside the repo's
  * node_modules and NOT beside the data files a dependency might reach for, which
  * is the deployment the artifacts actually ship into.
  * @returns {Promise<{artifact: string, text: string}>}
  */
 async function stageArtifact(t, target) {
-  const text = await bundleHardened(target);
+  if (!builds.has(target.name)) builds.set(target.name, bundleHardened(target));
+  const text = await builds.get(target.name);
   const artifact = join(scratch(t), basename(target.outfile));
   writeFileSync(artifact, text);
   return { artifact, text };
@@ -137,15 +152,19 @@ test("every shipped bundle target is non-empty and covered", () => {
 });
 
 for (const target of BUNDLE_TARGETS) {
-  test(`${target.name}: no runtime require() outside its allowlist`, async (t) => {
+  test(`${target.name}: runtime require() set equals its allowlist`, async (t) => {
     const { text } = await stageArtifact(t, target);
-    const survivors = runtimeRequires(text).filter(
-      (spec) => !target.allowedRuntimeRequires.includes(spec),
-    );
+    // Exact equality, not a subset check. `bundleHardened` has already thrown on
+    // anything outside the allowlist, so a subset check is empty by construction
+    // and passes even when the allowlist was WIDENED to silence a real survivor
+    // — which would reship the css-tree defect with a green build. Requiring the
+    // sets to match means an unused allowlist entry is itself a failure, so
+    // nobody can quiet the guard without deleting a line this test reads.
+    const survivors = runtimeRequires(text);
     assert.deepEqual(
-      survivors,
-      [],
-      `${target.name} keeps unresolvable runtime require(): ${survivors.join(", ")}`,
+      survivors.sort(),
+      [...target.allowedRuntimeRequires].sort(),
+      `${target.name} runtime require() set must equal its declared allowlist; got: ${survivors.join(", ")}`,
     );
   });
 

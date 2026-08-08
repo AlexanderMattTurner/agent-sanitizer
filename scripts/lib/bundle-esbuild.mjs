@@ -156,7 +156,9 @@ export async function bundleHardened({
 /**
  * Every esbuild entry point this repo ships, as one list. The build scripts and
  * the hardening contract test all read it, so a new artifact cannot be added
- * with an unguarded esbuild call.
+ * with an unguarded esbuild call: the `no-restricted-imports` rule in
+ * `eslint.config.mjs` lets only this directory import esbuild, so a new build
+ * script has to come through `bundleHardened` and lands here.
  *
  * @typedef {{
  *   name: string,
