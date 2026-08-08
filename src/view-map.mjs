@@ -394,12 +394,15 @@ export function pairDiskSpans(view, deletions) {
     // violated invariant into a silently wrong disk span anchored at offset 0,
     // i.e. an edit footprint pointing at the wrong bytes.
     const cleanedStart = mapViewOffset(view.pairs, pair.start);
-    /* c8 ignore next 2 -- unreachable through makeFileView, which rejects the
+    /* c8 ignore start -- unreachable through makeFileView, which rejects the
        overlapping pair set that is the only way to produce null here (see the
        constructor test in test/view-map.test.mjs); kept as a fail-loud guard
-       against a future regression in that ordering check. */
+       against a future regression in that ordering check. `ignore next N` does
+       NOT suppress the branch here — only the statement — so the range form is
+       required to keep the src branch floor at 100%. */
     if (cleanedStart === null)
       throw new Error("redaction pair start maps inside another placeholder");
+    /* c8 ignore stop */
     const cleanedEnd = cleanedStart + pair.original.length;
     return {
       start: diskOffset(deletions, cleanedStart, false),
