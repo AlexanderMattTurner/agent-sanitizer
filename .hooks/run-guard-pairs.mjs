@@ -57,6 +57,23 @@ const RUNNERS = [
   },
 ];
 
+// The runners must PARTITION the guard tests. A path matching none of them
+// would otherwise fall through the loop below and the hook would exit 0 having
+// run nothing — a silent no-op for exactly the SSOT the pair was added to
+// protect. test/guard-pairs.test.mjs pins the value domain, but it only runs in
+// CI and when guard-pairs.json itself is staged, so the hook checks here too.
+const unclaimed = files.filter(
+  (file) => !RUNNERS.some((runner) => runner.match(file)),
+);
+if (unclaimed.length > 0) {
+  console.error(
+    `pre-commit: no runner knows how to execute ${unclaimed.join(", ")} — a guard ` +
+      `test in .hooks/guard-pairs.json must be a node --test file (*.test.mjs) or a ` +
+      `pytest module (test_*.py). Refusing to pass a commit whose guard never ran.`,
+  );
+  process.exit(1);
+}
+
 for (const runner of RUNNERS) {
   const forRunner = files.filter(runner.match);
   if (forRunner.length === 0) continue;

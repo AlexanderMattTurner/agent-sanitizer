@@ -42,9 +42,16 @@ const FILE_VIEW = Symbol("agent-sanitizer:file-view");
  * (a reasonable thing for a caller to build) hands back the same object on the
  * second identical call, which then gets converted a SECOND time — every
  * placeholder preceded by an astral character shifts again and the same input
- * yields a different verdict. Converting into a fresh frozen carrier makes that
- * unrepresentable: the conversion is part of construction, and construction
- * cannot be applied to its own output without going through the redactor again.
+ * yields a different verdict. Converting into a fresh frozen carrier removes
+ * that: the conversion is part of construction, the redactor's value is left
+ * alone, and every consumer asserts the brand rather than accepting a
+ * hand-assembled `{text, pairs}` whose offsets may or may not be converted.
+ *
+ * It does NOT make double conversion impossible — `makeFileView(v.text,
+ * v.pairs)` on an existing view would convert again. Nothing does that, and a
+ * guard would have to reject legitimately-frozen caller input to catch it, so
+ * the defence here is that there is exactly one construction site and it takes
+ * the redactor's result directly.
  *
  * The frozen `pairs` array is likewise a copy — `pairsToUtf16` returns its
  * argument unchanged for the empty case, and freezing the redactor's array
@@ -186,6 +193,13 @@ function diskOffset(deletions, cleanedOffset, isEnd) {
  * astral char. `pair.start` is compared against UTF-16 view offsets throughout,
  * so this conversion MUST run once at ingestion or an astral-preceded
  * placeholder mis-anchors the edit onto the wrong bytes.
+ *
+ * Exactly once, though: applying it to its own output shifts every
+ * astral-preceded placeholder a second time. Prefer {@link makeFileView}, which
+ * runs it as part of construction and hands back a branded carrier the rest of
+ * this module accepts; this stays exported (it is public API on the
+ * `./view-map` subpath) for callers doing their own offset bookkeeping, who own
+ * the once-only discipline themselves.
  * @param {string} text the redacted view text the offsets index into
  * @param {{placeholder: string, original: string, start: number}[]} pairs
  * @returns {{placeholder: string, original: string, start: number}[]}
@@ -374,12 +388,18 @@ export function pairDiskSpans(view, deletions) {
     // pair.start is a placeholder boundary, and makeFileView rejected any pair
     // set that is out of order or overlapping (see pairsToUtf16), so it is never
     // strictly interior to another placeholder: mapViewOffset always resolves.
-    // The brand assertion above is what makes that a guarantee rather than a
-    // hope, which is why there is no second null check here — the one input that
-    // could produce null cannot be constructed.
-    const cleanedStart = /** @type {number} */ (
-      mapViewOffset(view.pairs, pair.start)
-    );
+    // The throw is kept anyway, and is NOT dead weight — it is the difference
+    // between crashing and corrupting. `null + pair.original.length` is a
+    // NUMBER in JS (null coerces to 0), so dropping this check would turn a
+    // violated invariant into a silently wrong disk span anchored at offset 0,
+    // i.e. an edit footprint pointing at the wrong bytes.
+    const cleanedStart = mapViewOffset(view.pairs, pair.start);
+    /* c8 ignore next 2 -- unreachable through makeFileView, which rejects the
+       overlapping pair set that is the only way to produce null here (see the
+       constructor test in test/view-map.test.mjs); kept as a fail-loud guard
+       against a future regression in that ordering check. */
+    if (cleanedStart === null)
+      throw new Error("redaction pair start maps inside another placeholder");
     const cleanedEnd = cleanedStart + pair.original.length;
     return {
       start: diskOffset(deletions, cleanedStart, false),
