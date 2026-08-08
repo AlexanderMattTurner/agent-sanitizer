@@ -8,6 +8,22 @@ adhere to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+## [2.26.0] - 2026-08-08
+
+### Added
+- Severity tiers (warnings and notes) for every scanning layer's findings
+- Timing instrumentation for SessionStart shell entry points and judge error path
+- Claude Code context whitelist exported from the library for external use
+
+### Fixed
+- CI: retry the review-thread resolver past PAT rate limits
+- CI: prevent pack-smoke from flagging types/src declarations as src/ leaks
+- CI: anchor pack-smoke src/ scan and keep sanitize-pr-input on published API
+- Hooks: preserve note-only tool results as flagged instead of cleaning them
+
+### Changed
+- Refactored scope handling to export Claude Code's context whitelist
+
 ## [2.25.0] - 2026-08-08
 
 ### Added
