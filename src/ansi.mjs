@@ -80,7 +80,7 @@ const ST_C1 = 0x9c;
 const OSC_C1 = 0x9d;
 const BEL = 0x07;
 
-/** The four things an introducer can turn out to be. */
+/** The five things an introducer can turn out to be. */
 export const TOKEN_KIND = Object.freeze({
   /** A display-only `ESC[…m` / `U+009B…m` colour sequence. */
   SGR: "sgr",
@@ -88,9 +88,46 @@ export const TOKEN_KIND = Object.freeze({
   CSI: "csi",
   /** An OSC string: introducer, body and terminator as one unit. */
   OSC: "osc",
-  /** An introducer that starts no sequence the grammar recognizes. */
+  /**
+   * A 7-bit `ESC` that starts no sequence the grammar recognizes — a truncated
+   * write, a log fragment cut mid-escape, a stray byte living in a file.
+   */
   ORPHAN: "orphan-introducer",
+  /**
+   * A RAW C1 byte (U+0080-U+009F) that starts no sequence the grammar
+   * recognizes. Split from {@link TOKEN_KIND.ORPHAN} because the two carry very
+   * different weight: a lone `ESC` is ordinary debris in terminal output, while
+   * a raw C1 byte is not something legitimate UTF-8 text produces, and the
+   * block includes the string introducers DCS/SOS/PM/APC (U+0090/0098/009E/
+   * 009F) — which this grammar does not consume, so an unrecognized one here
+   * means a terminal WOULD have swallowed the following text as a control
+   * payload. Consumers that downgrade an inert strip to a note (see
+   * `isBenignAnsiKinds` in ./layer1.mjs) must keep warning on this one.
+   */
+  ORPHAN_C1: "orphan-c1-introducer",
 });
+
+/**
+ * True for either orphan kind — the tokens {@link scanAnsi} emits for an
+ * introducer that completes no sequence, which the stripper must leave in place
+ * for the residual sweep rather than splice (see stripAnsiOnce).
+ * @param {string} kind one of {@link TOKEN_KIND}
+ * @returns {boolean}
+ */
+export function isOrphanKind(kind) {
+  return kind === TOKEN_KIND.ORPHAN || kind === TOKEN_KIND.ORPHAN_C1;
+}
+
+/**
+ * The orphan kind for the introducer character `ch` — the 7-bit `ESC`, or any
+ * raw C1 byte. The one place that split is decided, shared by the tokenizer and
+ * by Layer 1's residual sweep (which sees bare characters, not tokens).
+ * @param {string} ch
+ * @returns {string}
+ */
+export function orphanKindFor(ch) {
+  return ch.charCodeAt(0) === ESC ? TOKEN_KIND.ORPHAN : TOKEN_KIND.ORPHAN_C1;
+}
 
 /**
  * @typedef {object} AnsiToken
@@ -168,8 +205,9 @@ const INTRODUCER_SCAN_RE = new RegExp(CONTROL_INTRODUCER_SOURCE, "g");
 /**
  * Tokenize every raw control introducer in `text`.
  *
- * Every introducer yields exactly one token — an ORPHAN when it starts nothing
- * the grammar recognizes — so "which introducers are in this text" and "which
+ * Every introducer yields exactly one token — an orphan kind (ORPHAN for a
+ * 7-bit `ESC`, ORPHAN_C1 for a raw C1 byte) when it starts nothing the grammar
+ * recognizes — so "which introducers are in this text" and "which
  * sequences are in this text" are answered by the same scan. That is what lets
  * the stripper (splice every non-orphan token, then sweep) and the SGR-only
  * predicate (every token is SGR) agree by construction.
@@ -190,7 +228,7 @@ export function scanAnsi(text) {
     const csiEnd = oscEnd < 0 ? scanCsi(text, start) : -1;
     let end = start + 1;
     /** @type {string} */
-    let kind = TOKEN_KIND.ORPHAN;
+    let kind = orphanKindFor(text[start]);
     if (oscEnd >= 0) {
       end = oscEnd;
       kind = TOKEN_KIND.OSC;

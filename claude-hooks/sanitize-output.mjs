@@ -95,13 +95,18 @@ const SANITIZE_BUDGET_MS = positiveMsOr(
   120000,
 );
 
-// Non-WARNING note for a strip whose only change was display-only SGR color on a
-// local tool: cosmetic styling git/pytest/npm/etc. emit by default. It keeps the
-// "color was here, and here is how to see it" signal without the WARNING prefix,
-// whose constant firing on benign color would desensitize the reader to the
-// strips that matter (invisible-char payloads, redacted secrets).
+// Non-WARNING note for a strip whose only change was INERT ANSI on a local tool:
+// the display-only colour git/pytest/npm/etc. emit by default, and/or a stray
+// escape byte that formed no sequence at all (a truncated write, a log fragment,
+// a raw ESC sitting in a file the tool echoed back). Neither can move the cursor,
+// erase the screen, or open an OSC string — those need a complete CSI/OSC token,
+// which keeps the WARNING. The note keeps the "escapes were here, and here is how
+// to see them" signal without the WARNING prefix, whose constant firing on inert
+// bytes would desensitize the reader to the strips that matter (invisible-char
+// payloads, redacted secrets).
 const SGR_OUTPUT_NOTE =
-  "Display-only ANSI color stripped; pipe through cat -v to inspect raw escapes.";
+  "Inert ANSI stripped (display-only colour and/or a stray escape byte that " +
+  "formed no control sequence); pipe through cat -v to inspect raw escapes.";
 
 // Web-ingress tools always get the Layer 2 HTML rewrite; local tools — Read,
 // Bash, Grep, gh — never do. A local HTML/markdown pass either rewrites bytes the

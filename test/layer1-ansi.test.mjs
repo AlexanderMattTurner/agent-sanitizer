@@ -133,13 +133,15 @@ describe("scanAnsi", () => {
     assert.deepEqual(kinds(`${ESC}]0;title${ESC}\\`), ["osc"]);
     assert.deepEqual(kinds(`${ESC}]unterminated`), ["osc"]);
     assert.deepEqual(kinds(`${OSC}nested${OSC}x`), ["osc", "osc"]);
-    // Introducers that complete nothing: a lone ESC, a truncated CSI, and the
-    // C1 string introducers the sequence grammar never names.
+    // Introducers that complete nothing: a lone ESC and a truncated CSI are
+    // 7-bit orphans, while the C1 string introducers the sequence grammar never
+    // names are orphans of the RAW C1 kind — the split that keeps a DCS/PM
+    // payload loud while a stray ESC stays a note.
     assert.deepEqual(kinds(ESC), ["orphan-introducer"]);
     assert.deepEqual(kinds(`${ESC}[12`), ["orphan-introducer"]);
     assert.deepEqual(kinds(cp(0x90) + cp(0x9e)), [
-      "orphan-introducer",
-      "orphan-introducer",
+      "orphan-c1-introducer",
+      "orphan-c1-introducer",
     ]);
   });
 

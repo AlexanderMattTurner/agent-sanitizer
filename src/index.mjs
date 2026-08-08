@@ -16,7 +16,13 @@ import { applyLayer1, LONE_SURROGATE_RE } from "./layer1.mjs";
 // Layer 1 lives in the zero-dependency `./layer1.mjs`, shared verbatim with the
 // tool-output pipeline (`./output`) and the Edit-repair rehydrator
 // (`./rehydrate`) so every consumer derives the identical model-facing view.
-export { applyLayer1, stripAnsiFully, LONE_SURROGATE_RE } from "./layer1.mjs";
+export {
+  applyLayer1,
+  isBenignAnsi,
+  isBenignAnsiKinds,
+  stripAnsiFully,
+  LONE_SURROGATE_RE,
+} from "./layer1.mjs";
 
 export {
   stripInvisible,

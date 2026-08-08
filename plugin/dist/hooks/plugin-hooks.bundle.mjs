@@ -66862,6 +66862,41 @@ var init_layer_pipeline = __esm({
   }
 });
 
+// claude-hooks/lib/hook-timing.mjs
+function startHookTimer(now = Date.now) {
+  const started = now();
+  return () => now() - started;
+}
+function slowHookNotice(hookName, elapsedMs, thresholdMs = SLOW_HOOK_THRESHOLD_MS) {
+  if (elapsedMs <= thresholdMs) return null;
+  return `agent-sanitizer PERFORMANCE: the ${hookName} hook took ${(elapsedMs / 1e3).toFixed(1)}s, over its ${(thresholdMs / 1e3).toFixed(1)}s budget \u2014 this delay is the sanitizer's, not the model's, and every affected call pays it. Tell the user, and suggest they report it at ${ISSUE_URL} with the hook name and timing.`;
+}
+function withSlowHookNotice(hookName, elapsedMs, verdict, writeErr = (chunk) => process.stderr.write(chunk)) {
+  const notice = slowHookNotice(hookName, elapsedMs);
+  if (notice === null) return verdict;
+  writeErr(notice + "\n");
+  return {
+    ...verdict,
+    additional_context: verdict.additional_context ? `${verdict.additional_context} ${notice}` : notice
+  };
+}
+function reportSlowHook(hookName, elapsedMs, hookEventName, writeErr = (chunk) => process.stderr.write(chunk), emit = emitHookResponse) {
+  const notice = slowHookNotice(hookName, elapsedMs);
+  if (notice === null) return false;
+  writeErr(notice + "\n");
+  emit(hookEventName, { additionalContext: notice });
+  return true;
+}
+var SLOW_HOOK_THRESHOLD_MS, ISSUE_URL;
+var init_hook_timing = __esm({
+  "claude-hooks/lib/hook-timing.mjs"() {
+    "use strict";
+    init_hook_io();
+    SLOW_HOOK_THRESHOLD_MS = 1e3;
+    ISSUE_URL = "https://github.com/AlexanderMattTurner/agent-sanitizer/issues";
+  }
+});
+
 // claude-hooks/lib/control-plane.mjs
 function controlPlane(overrides = {}) {
   const bindings = { claudeAdapter: claudeAdapter2, Decision: Decision2, EventKind: EventKind2, ...overrides };
@@ -66894,9 +66929,13 @@ async function runJudgeCli(hookName, judge, {
   let input;
   try {
     input = await readInput();
+    const elapsed = startHookTimer();
     const { claudeAdapter: adapter } = controlPlane();
     const event = adapter.parse(transformInput(input));
-    const out = nativeStdout(adapter.render(await judge(event), event));
+    const judged = await judge(event);
+    const out = nativeStdout(
+      adapter.render(withSlowHookNotice(hookName, elapsed(), judged), event)
+    );
     if (out !== null) write(out);
   } catch (err) {
     process.stderr.write(`${hookName} hook error: ${errMessage(err)}
@@ -66909,6 +66948,7 @@ var init_control_plane2 = __esm({
   async "claude-hooks/lib/control-plane.mjs"() {
     "use strict";
     init_hook_io();
+    init_hook_timing();
     marker = hookgateMarkerPath();
     loaded = await awaitLazyDependency({
       tryImport: async () => {
@@ -68326,7 +68366,7 @@ var init_sanitize_output = __esm({
       process.env._AGENT_SANITIZER_SANITIZE_BUDGET_MS,
       12e4
     );
-    SGR_OUTPUT_NOTE = "Display-only ANSI color stripped; pipe through cat -v to inspect raw escapes.";
+    SGR_OUTPUT_NOTE = "Inert ANSI stripped (display-only colour and/or a stray escape byte that formed no control sequence); pipe through cat -v to inspect raw escapes.";
     WEB_INGRESS_TOOLS = /* @__PURE__ */ new Set(["WebFetch", "WebSearch"]);
     FAIL_CLOSED_CONTEXT = "CRITICAL: sanitize-output hook failed; this tool's output was suppressed (replaced with a placeholder) to fail closed -- the unsanitized output was not shown. Investigate the hook error before relying on this tool.";
     registerFaultPolicy(HOOK_NAME2, {
@@ -68418,7 +68458,7 @@ var init_sanitize_user_prompt = __esm({
     USER_PROMPT_MESSAGES = Object.freeze({
       unknownEvent: "User prompt blocked (fail-closed): unrecognized hook payload.",
       blockContext: "User prompt blocked: payload-capable invisible/ANSI characters detected.",
-      sgrNote: "The prompt contains ANSI SGR color codes (pasted terminal output). They are display-only formatting noise; read through them.",
+      sgrNote: "The prompt contains inert ANSI escapes (pasted terminal output): display-only SGR colour codes and/or a stray escape byte that forms no control sequence. They are formatting noise; read through them.",
       hookFailed: (cause) => `sanitize-user-prompt hook failed (fail-closed): ${cause}`,
       // What a reader should run when the package itself is what is missing. It
       // rides in this table rather than a separate argument because it is host text
@@ -68455,13 +68495,13 @@ var scan_invisible_chars_exports = {};
 __export(scan_invisible_chars_exports, {
   ALERT_ACK_FILE: () => ALERT_ACK_FILE,
   ALERT_FILE: () => ALERT_FILE,
+  CLAUDE_CONTEXT_SUBDIRS: () => CLAUDE_CONTEXT_SUBDIRS,
   LONG_RUN_RE: () => LONG_RUN_RE3,
   LONG_RUN_THRESHOLD: () => LONG_RUN_THRESHOLD2,
   TOTAL_INVISIBLE_THRESHOLD: () => TOTAL_INVISIBLE_THRESHOLD,
   cliMain: () => cliMain3,
   decodeRun: () => decodeRun,
   findInstructionFiles: () => findInstructionFiles,
-  findMdFiles: () => findMdFiles,
   formatReport: () => formatReport,
   formatSkipped: () => formatSkipped,
   scanFile: () => scanFile,
@@ -68532,11 +68572,20 @@ function decodeRun(run) {
     decoded: cps.map((cp) => `U+${cp.toString(16).toUpperCase().padStart(4, "0")}`).join(" ")
   };
 }
-function findMdFiles(dir) {
-  return globSync("**/*.md", {
-    cwd: dir,
-    exclude: (name50) => name50 === "node_modules"
-  }).map((name50) => join5(dir, name50));
+function claudeDirPatterns(prefix) {
+  return [
+    `${prefix}.claude/*.md`,
+    ...CLAUDE_CONTEXT_SUBDIRS.map((sub) => `${prefix}.claude/${sub}/**/*.md`)
+  ];
+}
+function excludeFromScan(entry) {
+  if (entry === "node_modules") return true;
+  const parts2 = entry.split(/[/\\]/);
+  const claudeIndex = parts2.indexOf(".claude");
+  const tail = parts2.slice(claudeIndex + 1);
+  if (claudeIndex === -1 || tail.length === 0) return false;
+  if (tail.length === 1 && tail[0].endsWith(".md")) return false;
+  return !CLAUDE_CONTEXT_SUBDIRS.includes(tail[0]);
 }
 function findInstructionFiles(dir) {
   return globSync(
@@ -68544,12 +68593,9 @@ function findInstructionFiles(dir) {
       "**/CLAUDE.md",
       "**/CLAUDE.local.md",
       "**/AGENTS.md",
-      "**/.claude/**/*.md"
+      ...claudeDirPatterns("**/")
     ],
-    {
-      cwd: dir,
-      exclude: (name50) => name50 === "node_modules"
-    }
+    { cwd: dir, exclude: excludeFromScan }
   ).map((name50) => join5(dir, name50));
 }
 function scanFile(filePath) {
@@ -68604,12 +68650,7 @@ function formatReport(allFindings) {
   return lines.join("\n");
 }
 function scanProject(dir = PROJECT_DIR) {
-  const targets = [
-    .../* @__PURE__ */ new Set([
-      ...findInstructionFiles(dir),
-      ...findMdFiles(join5(dir, ".claude"))
-    ])
-  ];
+  const targets = [...new Set(findInstructionFiles(dir))];
   const findings = [];
   const skipped = [];
   let scanned = 0;
@@ -68644,7 +68685,15 @@ function formatSkipped(skipped) {
     ""
   ].join("\n");
 }
-async function cliMain3({ trace: sink = trace, scan: runScan } = {}) {
+async function cliMain3(opts = {}) {
+  const elapsed = startHookTimer();
+  try {
+    await runScanCli(opts);
+  } finally {
+    reportSlowHook(HOOK_NAME4, elapsed(), HookEvent.SESSION_START);
+  }
+}
+async function runScanCli({ trace: sink = trace, scan: runScan }) {
   const emitTrace = bestEffortTrace(sink);
   const alertParts = [];
   if (!await ensureSanitizerLoaded()) {
@@ -68733,7 +68782,7 @@ All ${cleaned} file(s) cleaned on disk automatically. NOTE: these files load as 
   process.stderr.write(report + "\n");
   return [report];
 }
-var LONG_RUN_RE3, LONG_RUN_THRESHOLD2, TOTAL_INVISIBLE_THRESHOLD, STRIP3, stripInvisible3, HOOK_NAME4;
+var LONG_RUN_RE3, LONG_RUN_THRESHOLD2, TOTAL_INVISIBLE_THRESHOLD, STRIP3, stripInvisible3, HOOK_NAME4, CLAUDE_CONTEXT_SUBDIRS;
 var init_scan_invisible_chars = __esm({
   async "claude-hooks/scan-invisible-chars.mjs"() {
     "use strict";
@@ -68741,6 +68790,7 @@ var init_scan_invisible_chars = __esm({
     init_hook_fault();
     await init_invisible_alert();
     init_trace2();
+    init_hook_timing();
     ({
       LONG_RUN_RE: LONG_RUN_RE3,
       LONG_RUN_THRESHOLD: LONG_RUN_THRESHOLD2,
@@ -68765,6 +68815,12 @@ var init_scan_invisible_chars = __esm({
         armAlert: true
       })
     });
+    CLAUDE_CONTEXT_SUBDIRS = Object.freeze([
+      "agents",
+      "commands",
+      "output-styles",
+      "skills"
+    ]);
     if (isMain(import.meta.url)) {
       await cliMain3();
     }
