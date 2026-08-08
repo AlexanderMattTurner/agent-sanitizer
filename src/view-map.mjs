@@ -120,6 +120,10 @@ function unitLength(text, space) {
  * @returns {void}
  */
 function assertPairsOrdered(text, pairs, space) {
+  // The no-secrets rehydration is the common case, and the loop below has
+  // nothing to check there. Return before `unitLength`, which for "codePoint"
+  // materializes a code-point array over the whole file on every Edit/Write.
+  if (pairs.length === 0) return;
   const total = unitLength(text, space);
   // The previous pair's placeholder end. `start < prevEnd` catches an
   // out-of-order start and an overlap in one comparison.
@@ -462,7 +466,7 @@ export function pairDiskSpans(view, deletions) {
   assertFileView(view, "utf16", "pairDiskSpans");
   return view.pairs.map((pair) => {
     // pair.start is a placeholder boundary, and makeFileView rejected any pair
-    // set that is out of order or overlapping (see pairsToUtf16), so it is never
+    // set out of order or overlapping (see assertPairsOrdered), so it is never
     // strictly interior to another placeholder: mapViewOffset always resolves.
     // The throw is kept anyway, and is NOT dead weight — it is the difference
     // between crashing and corrupting. `null + pair.original.length` is a
@@ -471,9 +475,9 @@ export function pairDiskSpans(view, deletions) {
     // i.e. an edit footprint pointing at the wrong bytes.
     const cleanedStart = mapViewOffset(view.pairs, pair.start);
     /* c8 ignore start -- unreachable through makeFileView, which rejects the
-       overlapping pair set that is the only way to produce null here (see the
-       constructor test in test/view-map.test.mjs); kept as a fail-loud guard
-       against a future regression in that ordering check. `ignore next N` does
+       overlapping pair set that is the only way to produce null here (see
+       assertPairsOrdered and the constructor test in test/view-map.test.mjs);
+       kept as a fail-loud guard against a future regression in that check. `ignore next N` does
        NOT suppress the branch here — only the statement — so the range form is
        required to keep the src branch floor at 100%. */
     if (cleanedStart === null)

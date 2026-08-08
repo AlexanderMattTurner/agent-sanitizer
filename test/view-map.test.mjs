@@ -613,4 +613,19 @@ describe("pairDiskSpans", () => {
       /utf16/,
     );
   });
+
+  it("reads pair offsets in the space the view declares", () => {
+    // U+1F511 is one code point but two UTF-16 units, so start 2 is in range
+    // for a utf16 view and past the end for a codePoint one. Nothing else here
+    // pins that the range check counts units in the declared space: every other
+    // view in this suite has starts valid in BOTH spaces, so collapsing
+    // unitLength to `text.length` would survive the rest of the file.
+    const text = "\u{1F511}";
+    const pair = { placeholder: PH, original: SECRET_A, start: 2 };
+    assert.doesNotThrow(() => makeFileView(text, [pair], "utf16"));
+    assert.throws(
+      () => makeFileView(text, [pair], "codePoint"),
+      /out of range \[0, 1\]/,
+    );
+  });
 });
