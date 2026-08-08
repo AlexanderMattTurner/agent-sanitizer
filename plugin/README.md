@@ -9,6 +9,7 @@ warning by default; `AGENT_SANITIZER_FAIL_OPEN=0` makes them block instead.
 ```
 /plugin marketplace add AlexanderMattTurner/agent-sanitizer
 /plugin install agent-sanitizer@agent-sanitizer
+/agent-sanitizer:enable-auto-update
 ```
 
 The first session after install provisions the Python secret-redaction engine
@@ -16,6 +17,47 @@ The first session after install provisions the Python secret-redaction engine
 `python3` on PATH; without either, provisioning fails loudly and tool output
 reaches the model **unredacted** — set `AGENT_SANITIZER_FAIL_OPEN=0` to have it
 suppressed instead.
+
+### Staying current
+
+Claude Code auto-updates Anthropic's own marketplaces by default and nobody
+else's, so an install of this one pins you to the release you added and later
+detector fixes never arrive. Claude Code ships no slash command for the toggle,
+so the plugin ships one — the third line of the install block above.
+
+It flips `autoUpdate` on this marketplace's existing entry in Claude Code's
+registry — the same bit the picker's **Enable auto-update** writes — and prints
+the file it touched. It never creates the entry: with the marketplace not yet
+added it says so and exits non-zero, as it does if a Claude Code release changes
+the registry's shape. `--disable` puts it back. The picker route
+(`/plugin` → **Marketplaces** → `agent-sanitizer` → **Enable auto-update**)
+stays available and is the fallback the skill points you to.
+
+Either way, updates are fetched in the background shortly after a session starts
+and load on `/reload-plugins` or at the next launch. To pull a release by hand
+instead:
+
+```
+/plugin marketplace update agent-sanitizer
+/plugin update agent-sanitizer@agent-sanitizer
+```
+
+Fleet-wide, an administrator can enable it from managed settings rather than
+per user:
+
+```json
+{
+  "extraKnownMarketplaces": {
+    "agent-sanitizer": {
+      "source": {
+        "source": "github",
+        "repo": "AlexanderMattTurner/agent-sanitizer"
+      },
+      "autoUpdate": true
+    }
+  }
+}
+```
 
 ## What it does
 
@@ -84,7 +126,9 @@ listens on a private Unix socket.
 ```
 .claude-plugin/plugin.json   plugin manifest
 hooks/hooks.json             the four hook registrations
+skills/enable-auto-update/   /agent-sanitizer:enable-auto-update
 scripts/safe-launch.sh       launcher (prints a response even when node is missing)
+scripts/enable-auto-update.mjs  flips autoUpdate on this marketplace's registry entry
 scripts/provision-redactor.sh  SessionStart provisioning of the Python redactor
 scripts/build-plugin.mjs     builds dist/ from claude-hooks/ against the pinned engine
 scripts/lock-redactor-deps.mjs  compiles requirements.in into the hash-pinned requirements.txt
