@@ -56,6 +56,10 @@
     {
       "id": "hook-lib-report",
       "mutate": "claude-hooks/lib/invisible-alert.mjs,claude-hooks/lib/reveal.mjs,claude-hooks/lib/secret-annotate.mjs,claude-hooks/lib/trace.mjs"
+    },
+    {
+      "id": "hook-lib-guards",
+      "mutate": "claude-hooks/lib/placeholder-grammar.mjs,claude-hooks/lib/secret-drop-guard.mjs"
     }
   ],
   "hookScopeBreak": 30

@@ -1,11 +1,39 @@
 allowBuilds:
   esbuild: true
-# `minimumReleaseAge` is not set in this repo, so this exclusion is inert here —
-# it is kept for an install running under an org-wide or user-level age floor,
-# where a just-published first-party release is below the floor by construction
-# and would otherwise block the plugin build on our own package. Deliberately
-# version-LESS: pnpm reads a bare name as "always excluded", so the entry cannot
-# go stale behind the `sanitizer-engine` pin the way `agent-sanitizer@2.1.0` did.
-# tests/test_pnpm_workspace.py holds that shape.
+
+# Supply-chain cooling-off window: refuse to RESOLVE a dependency version
+# published less than 3 days ago (4320 minutes). npm account takeovers are
+# caught and the malicious version unpublished on a scale of hours to a couple
+# of days, so the window converts "installed the compromised version minutes
+# after it landed" into "never saw it" — without pinning us to stale deps.
+#
+# This was once half-configured: `minimumReleaseAgeExclude` below was committed
+# WITHOUT this key, and an exclude list with no window to be excluded from
+# enforces nothing. tests/test_minimum_release_age.py now fails if the key goes
+# missing or drops below three days.
+#
+# Cost is near zero: the setting gates RESOLUTION only. `pnpm install
+# --frozen-lockfile` — every CI job and the pre-commit path — installs versions
+# the lockfile already names and is untouched. It bites `pnpm add` and
+# `pnpm update`, which is exactly where a poisoned release would enter.
+minimumReleaseAge: 4320
+
+# Exempt this repo's OWN published package, and only that one. The
+# `sanitizer-engine` alias in package.json pins a published `agent-sanitizer` so
+# the plugin is built and tested against the artifact that actually shipped;
+# applying the window to our own release would stall every engine-pin bump by
+# three days for no security gain, since that release is built and published
+# from this repository with npm provenance rather than fetched from a third
+# party. The same reasoning covers an install running under an org-wide or
+# user-level age floor, where a just-published first-party release is below the
+# floor by construction.
+#
+# Deliberately version-LESS: pnpm reads a bare name as "this package, always",
+# so the entry cannot go stale behind the `sanitizer-engine` pin the way
+# `agent-sanitizer@2.1.0` did — it waived nothing for every release after 2.1.0.
+# A bare name is safe here precisely BECAUSE the entry is our own package;
+# tests/test_minimum_release_age.py fails if a third party is ever added, and
+# tests/test_pnpm_workspace.py fails if an entry pins a version package.json
+# does not actually depend on.
 minimumReleaseAgeExclude:
   - agent-sanitizer
