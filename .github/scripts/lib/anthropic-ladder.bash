@@ -56,15 +56,22 @@ anthropic_ladder() {
 # log. Only Claude subscription OAuth tokens (sk-ant-oat…) are accepted: Bearer
 # plus the oauth beta header.
 #
-# An unrecognized shape is fatal rather than falling back to the x-api-key
-# scheme this ladder used to support. That fallback is exactly how a metered
-# key would creep back in — a secret renamed into an OAuth slot would silently
-# authenticate and bill — so the wrong shape fails loud instead.
+# An unrecognized shape does NOT fall back to the x-api-key scheme this ladder
+# used to support: that fallback is exactly how a metered key would creep back
+# in — a secret renamed into an OAuth slot would silently authenticate and bill.
+#
+# Returns 1 rather than exiting, so the caller treats a wrong-shaped rung the
+# way it treats a rejected one: log it and step to the next credential. Exiting
+# here would let one pasted-in-the-wrong-slot key strand every working rung
+# below it, breaking this file's own contract that walking the ladder "only
+# changes WHO answers, never WHAT the answer is". Exhausting every rung still
+# fails loud, at the end of anthropic_messages.
 anthropic_auth_headers() {
   local cred="$1"
   if [[ "$cred" != sk-ant-oat* ]]; then
-    echo "Error: Anthropic credential is not a Claude subscription OAuth token (expected an sk-ant-oat… value). Metered API keys are deliberately not accepted here." >&2
-    exit 1
+    AUTH_MODE="unusable (not an sk-ant-oat… token)"
+    AUTH_HEADERS=()
+    return 1
   fi
   AUTH_MODE="Bearer + oauth beta (sk-ant-oat)"
   AUTH_HEADERS=(
@@ -163,7 +170,10 @@ anthropic_messages() {
   local cred rung=0
   for cred in "${ladder[@]}"; do
     rung=$((rung + 1))
-    anthropic_auth_headers "$cred"
+    if ! anthropic_auth_headers "$cred"; then
+      echo "Credential ${rung}/${#ladder[@]} is not a Claude subscription OAuth token (expected sk-ant-oat…); trying the next one." >&2
+      continue
+    fi
     _ANTHROPIC_CRED_REJECTED=false
     _ANTHROPIC_RATE_LIMITED=false
     _ANTHROPIC_HTTP_CODE=""
@@ -179,6 +189,6 @@ anthropic_messages() {
     echo "Error: Claude API unreachable after 3 transient-failure attempts; see the reasons above." >&2
     exit 1
   done
-  echo "Error: every configured Anthropic credential (${#ladder[@]}) was rejected or rate-limited; see the reasons above." >&2
+  echo "Error: every configured Anthropic credential (${#ladder[@]}) was unusable, rejected, or rate-limited; see the reasons above." >&2
   exit 1
 }

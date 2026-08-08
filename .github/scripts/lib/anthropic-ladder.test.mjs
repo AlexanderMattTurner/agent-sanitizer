@@ -73,8 +73,10 @@ test("the direct-API ladder is exactly the OAuth ladder — no metered rung", ()
 });
 
 /** Run `anthropic_auth_headers CRED` and report how it exited. spawnSync, not
- * execFileSync: a refused credential exits non-zero BY DESIGN here, and
- * execFileSync would throw that away as a spawn error.
+ * execFileSync: a refused credential returns non-zero BY DESIGN here, and
+ * execFileSync would throw that away as a spawn error. The `|| exit 1` is what
+ * surfaces the refusal as the subprocess's status — without it the trailing
+ * printfs would mask it.
  * @param {string} cred */
 const authHeaders = (cred) =>
   spawnSync(
@@ -82,7 +84,7 @@ const authHeaders = (cred) =>
     [
       "-c",
       `source "$1/anthropic-ladder.bash"
-       anthropic_auth_headers "$2"
+       anthropic_auth_headers "$2" || exit 1
        printf 'MODE=%s\\n' "$AUTH_MODE"
        printf '%s\\n' "\${AUTH_HEADERS[@]}"`,
       "_",
@@ -92,7 +94,7 @@ const authHeaders = (cred) =>
     { encoding: "utf8" },
   );
 
-test("only subscription OAuth tokens authenticate; an API-key shape is fatal", () => {
+test("only subscription OAuth tokens authenticate; an API-key shape is refused", () => {
   // Positive marker: the accepted shape really does produce Bearer + oauth beta
   // headers, so the rejection below is about the SHAPE, not a broken function.
   const good = authHeaders("sk-ant-oat-example");
@@ -112,8 +114,38 @@ test("only subscription OAuth tokens authenticate; an API-key shape is fatal", (
     1,
     "a metered sk-ant-api… key must be refused, not silently sent as x-api-key",
   );
-  assert.match(keyed.stderr, /not a Claude subscription OAuth token/);
   assert.equal(keyed.stdout, "", "a refused credential must emit no headers");
+});
+
+test("a wrong-shaped rung is stepped over, not fatal to the whole walk", () => {
+  // The misconfiguration this PR exists to prevent is an operator pasting a
+  // metered key into CLAUDE_CODE_OAUTH_TOKEN while a later rung holds a good
+  // subscription token. Refusing the bad shape must not strand the good one —
+  // the ladder's contract is that walking it changes WHO answers, not WHETHER.
+  const res = spawnSync(
+    "bash",
+    [
+      "-c",
+      `set -uo pipefail
+       source "$1/claude-oauth-ladder.bash"
+       source "$1/anthropic-ladder.bash"
+       for cred in sk-ant-api-bad sk-ant-oat-good; do
+         if anthropic_auth_headers "$cred"; then
+           printf 'USED=%s\\n' "$cred"
+         else
+           printf 'SKIPPED=%s\\n' "$cred"
+         fi
+       done`,
+      "_",
+      LIB,
+    ],
+    { encoding: "utf8" },
+  );
+  assert.equal(res.status, 0, res.stderr);
+  // Positive marker: the good rung really was reached and used. Asserting only
+  // "did not exit" would pass if the loop never ran at all.
+  assert.match(res.stdout, /SKIPPED=sk-ant-api-bad/);
+  assert.match(res.stdout, /USED=sk-ant-oat-good/);
 });
 
 test("no workflow or composite action hands Claude an API key", () => {
