@@ -8,6 +8,12 @@ adhere to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+## [2.19.1] - 2026-08-08
+
+### Changed
+
+- **Skills documentation**: Updated parallel-audit skill documentation to clarify read-only rule behavior with execute-to-confirm and make parallel-audit hunt eliminators by default.
+
 ## [2.19.0] - 2026-08-08
 
 ### Added
