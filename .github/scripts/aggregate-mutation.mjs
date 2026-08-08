@@ -93,7 +93,10 @@ export function tallyMutants(reports) {
     }
   }
 
-  const counts = {};
+  // Prototype-less: `status` comes out of a Stryker JSON report, so a report
+  // naming a mutant status `__proto__` would otherwise route the write through
+  // Object.prototype instead of becoming an own property.
+  const counts = Object.create(null);
   for (const status of verdicts.values()) {
     counts[status] = (counts[status] || 0) + 1;
   }
@@ -101,7 +104,17 @@ export function tallyMutants(reports) {
   const undetected = [...UNDETECTED].reduce((n, s) => n + (counts[s] || 0), 0);
   const scored = detected + undetected;
   const score = scored === 0 ? 0 : (detected / scored) * 100;
-  return { counts, total: verdicts.size, detected, undetected, score };
+  // Spread back to an ordinary object at the boundary: the accumulation needed
+  // the null prototype, the RESULT is compared and JSON-stringified by callers.
+  // Spreading copies own properties with CreateDataProperty, so a `__proto__`
+  // status stays an own key here instead of reaching Object.prototype.
+  return {
+    counts: { ...counts },
+    total: verdicts.size,
+    detected,
+    undetected,
+    score,
+  };
 }
 
 function main(reportsDir) {
