@@ -10,6 +10,11 @@ pnpm reads an entry with no `@version` as "this package, always", so a
 version-less entry is the shape that CANNOT drift. This holds that shape: an
 entry may pin a version only if that exact version is what `package.json`
 actually depends on, so re-pinning it without moving the dependency fails here.
+
+Marked as a drift guard: the version-less shape removes the duplication for the
+entry we ship, but the check itself still exists only because pnpm's settings
+file cannot read `package.json` — a config-format boundary, not something a
+shared constant could bridge.
 """
 
 import json
@@ -19,6 +24,8 @@ import pytest
 import yaml
 
 from tests._helpers import REPO_ROOT
+
+pytestmark = pytest.mark.drift_guard
 
 WORKSPACE = REPO_ROOT / "pnpm-workspace.yaml"
 
@@ -55,7 +62,6 @@ def test_the_exclusion_exists_and_is_non_empty() -> None:
     assert entries, "pnpm-workspace.yaml no longer declares minimumReleaseAgeExclude"
 
 
-@pytest.mark.drift_guard
 @pytest.mark.parametrize("entry", _config().get("minimumReleaseAgeExclude") or [])
 def test_no_exclusion_entry_pins_a_version_that_is_not_depended_on(entry: str) -> None:
     parsed = ENTRY.match(entry)

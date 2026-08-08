@@ -15,6 +15,14 @@ is listed in :data:`NOT_THE_FLOOR` with a reason, so a NEW restatement fails her
 until it is classified. Statements about Python itself — "``re`` only learned
 possessive quantifiers in 3.11" — are the classified exceptions, not floor
 claims.
+
+This is a DRIFT GUARD, marked as one rather than dressed up as an SSOT: four
+hand-written copies of the floor still exist and this only asserts they agree.
+Killing the duplication is infeasible at the concrete boundary that matters —
+``provision-redactor.sh`` runs inside an installed Claude Code plugin, where
+``python/pyproject.toml`` is not on disk (and the whole point of the message is
+that no interpreter was found to read it with), so the floor it prints cannot be
+sourced at runtime.
 """
 
 import re
@@ -24,16 +32,27 @@ import pytest
 
 from tests._helpers import REPO_ROOT
 
+pytestmark = pytest.mark.drift_guard
+
 # A prose version claim, with an optional trailing `+`. The literal prefix is
 # required so bare version-ish numbers (hashes, ratios, dependency pins) are not
 # read as floor claims. Do not spell out an example here: this module is scanned
 # like every other tracked file, and an example would match itself.
-PYTHON_VERSION_PROSE = re.compile(r"Python (?P<version>3\.\d+)\+?")
+#
+# The separator class must include U+00A0: the repo's guides are written with
+# non-breaking spaces around short tokens, so an ASCII-space-only pattern read
+# right past `CLAUDE.md`'s version mention while catching the SAME sentence in
+# `.claude/skills/writing-tests/SKILL.md` — one file guarded, its twin invisible,
+# which is the coverage hole this module exists to close.
+PYTHON_VERSION_PROSE = re.compile(r"Python[ \u00a0](?P<version>3\.\d+)\+?")
 
 # (path, version) -> why this mention is NOT a statement of the package floor.
 # Keyed by version rather than line number so the entry survives an edit above
 # it. Every entry is asserted to still be found, so a stale one fails too.
 NOT_THE_FLOOR = {
+    ("CLAUDE.md", "3.9"): (
+        "the same builtin-generics language fact, from the root guide"
+    ),
     (".claude/skills/writing-tests/SKILL.md", "3.9"): (
         "a fact about the language (when builtin generics landed), not our floor"
     ),

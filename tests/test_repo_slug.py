@@ -22,6 +22,15 @@ bucket:
 
 An unguarded new copy lands in none of them and fails here. Each allowlist entry
 is also asserted to still occur, so the lists cannot silently rot into holes.
+
+This is a DRIFT GUARD, marked as one rather than dressed up as an SSOT: the slug
+is still hand-written in every one of those places and this only asserts they
+agree. Killing the duplication is infeasible at the concrete boundaries involved
+— the copies live in four ecosystems that cannot read each other's manifests
+(npm ``package.json``, a hatchling ``pyproject.toml``, Claude Code plugin JSON,
+GitHub Actions YAML) plus prose in Markdown and an operator message baked into a
+shell script, and npm's provenance check reads the ``package.json`` copy
+specifically.
 """
 
 import json
@@ -31,6 +40,8 @@ import subprocess
 import pytest
 
 from tests._helpers import REPO_ROOT
+
+pytestmark = pytest.mark.drift_guard
 
 # The committed plugin bundle inlines megabytes of third-party sources whose
 # comments cite unrelated repos; it is generated from the linted sources.
