@@ -27,6 +27,7 @@ import {
   isSgrOnly,
 } from "./invisible.mjs";
 import { stripAnsiFully } from "./layer1.mjs";
+import { CONTROL_INTRODUCER_SOURCE } from "./ansi.mjs";
 
 // Every raw ANSI control a prompt can carry: 7-bit ESC (U+001B) and the entire
 // 8-bit C1 block (U+0080-U+009F). Gating on ESC alone -- or on only CSI/OSC --
@@ -34,12 +35,14 @@ import { stripAnsiFully } from "./layer1.mjs";
 // (CSI erase), `U+009D 0;...BEL` (OSC), or the string introducers DCS (U+0090),
 // SOS (U+0098), PM (U+009E), APC (U+009F): Layer 1 strips it, dropping the
 // invisible count to zero, so the prompt reads clean and passes. This gate must
-// match Layer 1's residual sweep (CONTROL_INTRODUCER_RE) exactly -- no raw C1
-// control belongs in a legitimate prompt (the SGR color carve-out is applied
-// separately, after SGR removal), so the whole block is gated, not a hand-picked
-// subset that lets DCS/SOS/PM/APC through.
-// eslint-disable-next-line no-control-regex -- the raw control introducers are exactly what we detect
-const ANSI_INTRODUCER = /[\u001b\u0080-\u009f]/;
+// match Layer 1's residual sweep exactly -- no raw C1 control belongs in a
+// legitimate prompt (the SGR color carve-out is applied separately, after SGR
+// removal), so the whole block is gated, not a hand-picked subset that lets
+// DCS/SOS/PM/APC through. Built from the SHARED charset source instead of a
+// third hand-written copy: keeping the copies in step used to be a prose
+// obligation recorded in this very comment, and two of the three spelled ESC
+// differently, so even a grep-based drift check would have missed a divergence.
+const ANSI_INTRODUCER = new RegExp(CONTROL_INTRODUCER_SOURCE);
 
 /**
  * True when every ANSI introducer in `prompt` belongs to a display-only SGR

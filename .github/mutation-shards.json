@@ -13,7 +13,7 @@
   "groups": [
     {
       "id": "confusables-layer1",
-      "mutate": "src/confusables.mjs,src/layer1.mjs"
+      "mutate": "src/confusables.mjs,src/layer1.mjs,src/ansi.mjs"
     },
     {
       "id": "index-prompt-gates",
