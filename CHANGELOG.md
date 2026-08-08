@@ -8,6 +8,16 @@ adhere to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+## [2.26.2] - 2026-08-08
+
+### Fixed
+
+- Fixed propagation of real registry errors in automated engine-pin bump workflows.
+
+### Changed
+
+- Refactored view-map to brand file views with their offset space for improved type safety and consistency.
+
 ## [2.26.0] - 2026-08-08
 
 ### Added
