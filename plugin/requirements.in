@@ -4,4 +4,4 @@
 # This is the INPUT to the lock, not what gets installed. Compile it into
 # plugin/requirements.txt with `node plugin/scripts/lock-redactor-deps.mjs`
 # whenever this file changes.
-agent-sanitizer[secrets]==2.12.0
+agent-sanitizer[secrets]==2.20.0

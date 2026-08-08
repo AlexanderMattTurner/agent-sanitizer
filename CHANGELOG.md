@@ -8,6 +8,51 @@ adhere to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+## [2.20.2] - 2026-08-08
+
+### Changed
+
+- Bumped pinned sanitizer engine to 2.20.0
+
+## [2.20.0] - 2026-08-08
+
+### Changed
+- CI now enforces reachability of all `.github/scripts` files, surfacing abandoned scripts and clearing the backlog.
+- Node dependencies are installed before pre-commit checks to enable proto-pollution linting.
+
+### Fixed
+- CI now discovers `.github/scripts` test suites automatically instead of requiring manual listing.
+- Restored and structurally guarded the `claude-run` action's credential ladder.
+
+## [2.19.8] - 2026-08-08
+
+### Fixed
+
+- Fixed code coverage annotations in view-map to properly exclude guard branches.
+- Restored safety guard assertions in view-map that were previously replaced with unsafe casts.
+- Consolidated duplicated warning prose in HTML output generation.
+- Corrected Brahmic consonant detection by deriving tables directly from Unicode Character Database.
+- Fixed guard-pair naming to support both pytest and Node.js test frameworks.
+- Corrected file view construction in rehydrate module through branded carrier type.
+- Fixed lone surrogate handling in output redactor and sanitizer to normalize surrogates consistently across all code paths.
+- Ensured comprehensive string vetting in sanitizer return values and cached subtree reuse.
+- Aligned warning messages across both Layer-2 and Layer-3 entry points.
+
+### Changed
+
+- Improved test daemon lifecycle to wait for active listening rather than just socket file existence.
+
+## [2.19.6] - 2026-08-08
+
+### Fixed
+- HTML parser now correctly routes bare indented code blocks to the markdown branch.
+- HTML-vs-markdown detection now uses the real tokenizer instead of a heuristic tag-line ratio for more accurate parsing.
+- Python wheel CLI bundle is now self-contained.
+- Secrets redaction no longer targets public endpoints; placeholder language support has been closed.
+
+### Changed
+- Test corpus enumeration for HTML now walks the tree instead of using git ls-files.
+
 ## [2.19.4] - 2026-08-08
 
 ### Fixed

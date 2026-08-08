@@ -772,9 +772,13 @@ export async function evaluateToolOutput(input, ext = {}) {
     const hint = persistReveal(stored);
     if (hint) warnings.push(hint);
   }
-  // sgrNote implies modified (the carve-out lives inside the Layer-1 strip), so
-  // it never independently survives this guard — `modified` covers it.
-  if (!modified && warnings.length === 0)
+  // `notes` is part of the guard, not covered by `modified`. The Layer-1
+  // carve-out that used to be the only note DID imply a strip, but the detect-only
+  // tiers do not: a preserved `<script>` and a plain-link exfil URL change no
+  // bytes and raise no warning, so without this clause the walk would return
+  // `clean` and the note would not be quieter — it would be GONE, taking "do not
+  // fetch, relay, or embed these URLs" with it.
+  if (!modified && warnings.length === 0 && notes.length === 0)
     return revealRead
       ? emit("flagged", { additional_context: REVEAL_READ_ENVELOPE })
       : emit("clean", null);
@@ -787,7 +791,9 @@ export async function evaluateToolOutput(input, ext = {}) {
   // scripting tags, exfil-shaped URLs) carry warnings with no text change; they
   // emit additional_context alone, leaving the output as the tool produced it. A
   // note-only result (some leaf reported, none of it injection-shaped) gets the
-  // seam's own note text instead of the WARNING prefix; once any real warning
+  // seam's own note text instead of the WARNING prefix — including the
+  // detect-only ones above, which reach here with `modified === false` and land
+  // on the `flagged` verdict below; once any real warning
   // exists the WARNING path wins and the notes are dropped (warnings and notes
   // can co-occur across leaves of one tool output, and the reader who has a
   // hidden-HTML splice to read about does not also need the colour codes).

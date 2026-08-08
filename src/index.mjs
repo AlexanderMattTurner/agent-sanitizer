@@ -11,12 +11,14 @@
  * the convenience wrapper.
  */
 import { CATEGORY, describeStripped } from "./invisible.mjs";
+import { needsMarkdownPipeline } from "./gates.mjs";
 import { applyLayer1, LONE_SURROGATE_RE } from "./layer1.mjs";
 import {
   describeExfil,
-  describeRemoved,
+  describeHtmlSanitized,
   describeWarned,
-} from "./html-report.mjs";
+  LONE_SURROGATE_WARNING,
+} from "./warnings.mjs";
 import {
   finding,
   note,
@@ -125,10 +127,15 @@ export async function sanitize(text, options) {
   if (wellFormed !== cleaned) {
     cleaned = wellFormed;
     found.push(CATEGORY.LONE_SURROGATES);
-    findings.push(warning("Normalized lone UTF-16 surrogates"));
+    findings.push(warning(LONE_SURROGATE_WARNING));
   }
 
-  if (!html) return report();
+  // Layers 2 and 3 can only find something in text carrying an HTML tag or a
+  // markdown link, so the shared pre-gate decides whether the heavy
+  // remark/rehype graph is imported at all — the same gate `sanitizeText()`
+  // applies, so both entry points pay for (and skip) the import on exactly the
+  // same inputs.
+  if (!html || !needsMarkdownPipeline(cleaned)) return report();
 
   let sanitizeHtml, detectExfil;
   /* c8 ignore start -- a rejected dynamic import of a module that ships in
@@ -160,11 +167,7 @@ export async function sanitize(text, options) {
       // A WARNING: these bytes were invisible to a human reading the rendered
       // page and are gone from the model's view too — the shape of a
       // hidden-instruction payload.
-      findings.push(
-        warning(
-          `HTML sanitized: ${describeRemoved(layer2.removed)} replaced with placeholders`,
-        ),
-      );
+      findings.push(warning(describeHtmlSanitized(layer2.removed)));
     }
     // A NOTE: nothing was removed and nothing was hidden (see describeWarned).
     const preserved = describeWarned(layer2.warned);
