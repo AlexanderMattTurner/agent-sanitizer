@@ -891,11 +891,30 @@ function carveStrip(body) {
       if (kind[k] === "joiner") joiners++;
       if (kind[k] === "ivs" || kind[k] === "stdvs") selectors++;
     }
+    // The run counters as they stand at the cluster's FIRST preservable char.
+    // A cluster can OPEN with a genuine gap — two visible code points in a row,
+    // e.g. the second of two adjacent emoji ZWJ sequences, or a letter and its
+    // harakat — which the emit loop resets on a few lines below. Judging the
+    // caps on the stale pre-reset count would strip joiners the cap never meant
+    // to catch: a false positive on legitimate joined text. This mirrors the
+    // emit loop's gap rule exactly (only a visible char after another visible
+    // char closes a run; any invisible, payload included, does not) and stops at
+    // the first preservable, since resets past it are the emit loop's business.
+    let runJoiner = joinerRun;
+    let runSelector = selectorRun;
+    let seenVisible = prevVisible;
+    for (let k = start; k < end && kind[k] === null; k++) {
+      if (codes[k] === null && seenVisible) {
+        runJoiner = 0;
+        runSelector = 0;
+      }
+      seenVisible = codes[k] === null;
+    }
     const fits =
       allowCarveOut &&
       preservedTotal + need <= maxPreserved &&
-      joinerRun + joiners <= CONSECUTIVE_JOINER_CAP &&
-      selectorRun + selectors <= CONSECUTIVE_SELECTOR_CAP;
+      runJoiner + joiners <= CONSECUTIVE_JOINER_CAP &&
+      runSelector + selectors <= CONSECUTIVE_SELECTOR_CAP;
     for (let k = start; k < end; k++) {
       const code = codes[k];
       if (code === null) {

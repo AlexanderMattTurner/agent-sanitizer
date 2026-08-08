@@ -904,6 +904,23 @@ describe("preserve budget: grapheme clusters are indivisible", () => {
     for (const n of [1, 6, 9, 20]) assertNoPartialCarve(rainbow.repeat(n));
   });
 
+  it("judges each cluster on the run its own leading gap resets", () => {
+    // Two adjacent 6-pictograph ZWJ sequences, 5 joiners each. The second
+    // cluster opens with a pictograph directly after the first cluster's — a
+    // genuine gap, which resets the consecutive-joiner run. Judging cluster 2
+    // on the STALE count (5 + 5 > 8) would strip all five of its joiners even
+    // though 10 preserved chars sit well inside the document budget (16): a
+    // false positive on legitimate joined text.
+    const cluster = cp(0x1f468) + (ZWJ + cp(0x1f469)).repeat(5);
+    const input = cluster + cluster;
+    const { cleaned, found } = stripInvisibleWithReport(input);
+    assert.equal(cleaned, input);
+    assert.deepEqual(found, []);
+    assert.equal(countOf(cleaned, ZWJ), 10);
+    assert.ok(10 <= TOTAL_PRESERVED_JOINER_BUDGET, "must fit the budget");
+    assert.ok(5 < CONSECUTIVE_JOINER_CAP, "each cluster must fit the run cap");
+  });
+
   it("does not clip vocalised Arabic: a harakat still opens a fresh run", () => {
     // Regression on the cluster rewrite: `beh + fatha + ZWNJ` is ONE cluster,
     // and the harakat closes a genuine gap inside it. Charging per cluster must
