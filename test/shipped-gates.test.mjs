@@ -27,7 +27,7 @@ import { join } from "node:path";
 import { describe, it } from "node:test";
 
 import { expandShards } from "../.github/scripts/expand-shards.mjs";
-import { SCOPES } from "../scripts/coverage.mjs";
+import { SCOPES, srcRoots } from "../scripts/coverage.mjs";
 import { mutateSpec } from "../scripts/mutate.mjs";
 import {
   hookScope,
@@ -60,6 +60,27 @@ function manifestMjs() {
     ),
   ].sort();
 }
+
+/**
+ * The agreed coverage floors, copied from `scripts/coverage.mjs`.
+ *
+ * This is a second copy on purpose, and it is not a drift guard — the point is
+ * not to detect divergence but to make LOWERING a gate cost a second, obviously
+ * deliberate edit in the same commit (CLAUDE.md's SSOT-contract rule). A floor
+ * asserted only as `> 0` can be quietly dropped to 1 in a PR that is really
+ * about something else, which is precisely the silent weakening this whole
+ * change argues against. Raising a floor is equally deliberate: edit both.
+ */
+const SRC_FLOORS = {
+  lines: 100,
+  branches: 100,
+  functions: 100,
+  statements: 100,
+};
+const HOOK_FLOORS = { lines: 88, branches: 80, functions: 72, statements: 88 };
+
+/** The hook layer's mutation ratchet, same contract as the coverage floors. */
+const HOOK_SCOPE_BREAK = 30;
 
 /** Parse "src/a.mjs:1-50,src/b.mjs" into [{file, ranged}, ...]. */
 const parseMutate = (mutate) =>
@@ -142,7 +163,7 @@ describe("coverage gate covers the shipped set", () => {
     );
   });
 
-  it("keeps src/ at 100% and every other scope on a non-zero floor", () => {
+  it("pins both scopes' floors at their agreed values", () => {
     // Scopes are matched by the file set they RESOLVE to, not by which helper
     // they were built from, so inlining an equivalent predicate keeps working
     // while genuinely dropping src/ from its own 100% floor still fails.
@@ -153,21 +174,45 @@ describe("coverage gate covers the shipped set", () => {
       );
     };
 
-    const src = covering(srcScope);
-    assert.ok(src, "no coverage scope resolves to the src/ file set");
-    assert.deepEqual(src.thresholds, {
-      lines: 100,
-      branches: 100,
-      functions: 100,
-      statements: 100,
-    });
+    for (const [scopeName, resolves, floors] of [
+      ["src/", srcScope, SRC_FLOORS],
+      ["the hook layer", hookScope, HOOK_FLOORS],
+    ]) {
+      const scope = covering(resolves);
+      assert.ok(scope, `no coverage scope resolves to the ${scopeName} files`);
+      // Per-metric first, so a metric DELETED from `thresholds` (which a
+      // `> 0` loop over the live object cannot notice — it simply iterates one
+      // fewer entry) fails with the metric named…
+      for (const [metric, floor] of Object.entries(floors))
+        assert.equal(
+          scope.thresholds[metric],
+          floor,
+          `${scopeName} ${metric} floor changed; see the FLOORS note above`,
+        );
+      // …then whole-object, so an extra metric cannot sneak in unpinned.
+      assert.deepEqual(scope.thresholds, floors);
+    }
+  });
 
-    const hooks = covering(hookScope);
-    assert.ok(hooks, "no coverage scope resolves to the hook-layer file set");
-    for (const [metric, value] of Object.entries(hooks.thresholds))
+  it("walks a --src root for every directory the shipped set lives in", () => {
+    // c8 only DISCOVERS a zero-execution file underneath a `--src` root; one
+    // outside every root is absent from the report, and c8 then skips the
+    // threshold check rather than scoring it 0% (verified against c8 11: an
+    // include with no matching walked file exits 0 under --check-coverage).
+    // A shipped file in a new top-level directory would still be in a coverage
+    // scope and in the shard matrix, so every other assertion here stays green
+    // — this is the one that notices.
+    // Fixed inputs first, so a hardcoded return (the bug) or an empty one fails
+    // here rather than agreeing with whatever the live shipped set happens to be.
+    assert.deepEqual(srcRoots(["a/x.mjs", "a/y.mjs", "b/c/z.mjs"]), ["a", "b"]);
+    assert.deepEqual(srcRoots([]), []);
+
+    const roots = srcRoots(shipped);
+    assert.ok(roots.length > 0);
+    for (const file of shipped)
       assert.ok(
-        value > 0,
-        `hook-scope ${metric} floor must stay non-zero (got ${value})`,
+        roots.includes(file.split("/")[0]),
+        `${file} has no --src root, so c8 would never walk it`,
       );
   });
 
@@ -226,8 +271,8 @@ describe("mutation gate covers the shipped set", () => {
       readFileSync(join(repoRoot, "stryker.conf.json"), "utf8"),
     );
     assert.ok(
-      shardConf.hookScopeBreak > 0,
-      "hookScopeBreak must stay a positive ratchet",
+      shardConf.hookScopeBreak >= HOOK_SCOPE_BREAK,
+      `hookScopeBreak is a ratchet: it may rise above ${HOOK_SCOPE_BREAK} (raise HOOK_SCOPE_BREAK with it) but never fall, got ${shardConf.hookScopeBreak}`,
     );
     // src/ keeps its own long-standing floor; the hook ratchet must never be
     // used as an excuse to lower it.

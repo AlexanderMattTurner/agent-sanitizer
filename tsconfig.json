@@ -16,6 +16,7 @@
     "src/**/*.mjs",
     "bin/**/*.mjs",
     "scripts/shipped-sources.mjs",
-    "scripts/coverage.mjs"
+    "scripts/coverage.mjs",
+    "scripts/mutate.mjs"
   ]
 }

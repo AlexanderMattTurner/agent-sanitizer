@@ -25,8 +25,22 @@ import { fileURLToPath } from "node:url";
 
 import { findRepoRoot, hookScope, srcScope } from "./shipped-sources.mjs";
 
-/** Roots `--all` walks so a shipped file with ZERO executed lines still counts. */
-const SRC_ROOTS = ["src", "claude-hooks", "bin"];
+/**
+ * The roots `--all` walks, derived from the include list itself.
+ *
+ * c8 only discovers a file with ZERO executed lines if it lives under a `--src`
+ * root. A hardcoded root list would reintroduce this script's own bug one
+ * directory deeper: a shipped file in a new top-level directory would be passed
+ * as `--include`, land in a scope, and be present in the shard matrix (so
+ * `test/shipped-gates.test.mjs` stays green) — yet never be walked, so it would
+ * be ABSENT from the report rather than scored 0% against the floor, and c8
+ * skips the threshold check entirely for an empty report (verified: exit 0).
+ *
+ * @param {string[]} includes @returns {string[]}
+ */
+export const srcRoots = (includes) => [
+  ...new Set(includes.map((file) => file.split("/")[0])),
+];
 
 const EXCLUDES = ["test/**", "**/*.test.mjs", "**/*.fuzz.test.mjs"];
 
@@ -66,7 +80,7 @@ export const SCOPES = [
  * @param {string[]} includes */
 const commonArgs = (includes) => [
   "--all",
-  ...SRC_ROOTS.map((dir) => `--src=${dir}`),
+  ...srcRoots(includes).map((dir) => `--src=${dir}`),
   ...includes.map((file) => `--include=${file}`),
   ...EXCLUDES.map((pattern) => `--exclude=${pattern}`),
 ];
