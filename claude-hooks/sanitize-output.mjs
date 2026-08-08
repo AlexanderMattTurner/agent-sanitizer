@@ -26,15 +26,13 @@ import {
   lazyImport,
   emitHookResponse,
   errMessage,
-  safeErrMessage,
-  failOpenEnabled,
-  failOpenContext,
   makeDeadline,
   lazyImportErrorFor,
   missingPackageMessage,
   DEFAULT_MISSING_PACKAGE_REMEDY,
   HookEvent,
 } from "./lib/hook-io.mjs";
+import { registerFaultPolicy, hookFaultOutcome } from "./lib/hook-fault.mjs";
 import { controlPlane, runJudgeCli } from "./lib/control-plane.mjs";
 import { bestEffortTrace, trace, TraceEvent } from "./lib/trace.mjs";
 import { hasEnvBoundSecret } from "./lib/secret-annotate.mjs";
@@ -43,6 +41,7 @@ import {
   isRevealRead,
   REVEAL_READ_ENVELOPE,
 } from "./lib/reveal.mjs";
+import { containsPlaceholder } from "./lib/placeholder-grammar.mjs";
 
 // Layer-1 primitives and the cheap pre-gates, bound via lazyImport (see its
 // doc for the fail-OPEN hazard of a bare static npm import). A load failure
@@ -97,13 +96,18 @@ const SANITIZE_BUDGET_MS = positiveMsOr(
   120000,
 );
 
-// Non-WARNING note for a strip whose only change was display-only SGR color on a
-// local tool: cosmetic styling git/pytest/npm/etc. emit by default. It keeps the
-// "color was here, and here is how to see it" signal without the WARNING prefix,
-// whose constant firing on benign color would desensitize the reader to the
-// strips that matter (invisible-char payloads, redacted secrets).
+// Non-WARNING note for a strip whose only change was INERT ANSI on a local tool:
+// the display-only colour git/pytest/npm/etc. emit by default, and/or a stray
+// escape byte that formed no sequence at all (a truncated write, a log fragment,
+// a raw ESC sitting in a file the tool echoed back). Neither can move the cursor,
+// erase the screen, or open an OSC string — those need a complete CSI/OSC token,
+// which keeps the WARNING. The note keeps the "escapes were here, and here is how
+// to see them" signal without the WARNING prefix, whose constant firing on inert
+// bytes would desensitize the reader to the strips that matter (invisible-char
+// payloads, redacted secrets).
 const SGR_OUTPUT_NOTE =
-  "Display-only ANSI color stripped; pipe through cat -v to inspect raw escapes.";
+  "Inert ANSI stripped (display-only colour and/or a stray escape byte that " +
+  "formed no control sequence); pipe through cat -v to inspect raw escapes.";
 
 // Web-ingress tools always get the Layer 2 HTML rewrite; local tools — Read,
 // Bash, Grep, gh — never do. A local HTML/markdown pass either rewrites bytes the
@@ -456,6 +460,22 @@ async function sanitizeObject(
   return { value: out, modified, sgrNote };
 }
 
+// On-disk placeholder tripwire: warning for a Read whose RAW bytes — before
+// this hook's own redaction ran — already carry placeholder-shaped text. That
+// is the after-the-fact signature of a clobbered secret: some earlier write
+// (a heredoc, sed, an MCP file tool, another agent) copied a placeholder out
+// of a sanitized view and persisted it literally. It can equally be a
+// legitimate fixture or document ABOUT redaction, so this is a warning the
+// model relays, never a verdict — detection rides the read, which is the one
+// choke point every write path eventually passes through.
+// Exported so tests assert the surfaced warning by reference instead of
+// re-typing the prose.
+export const ON_DISK_PLACEHOLDER_WARNING =
+  "this file's raw on-disk bytes already contain literal [REDACTED…] " +
+  "placeholder text (not inserted by this sanitizer). If an earlier write " +
+  "copied a placeholder from a sanitized view, the secret it stood for has " +
+  "been destroyed; verify with the user before trusting or propagating this file";
+
 /**
  * Compose the model-facing additionalContext line for a sanitized/flagged tool
  * output. The seam (composeContextSeam) owns the prefix + warning join; this
@@ -553,18 +573,47 @@ export function emitFailClosed(
   emit = (fields) => emitHookResponse(HookEvent.POST_TOOL_USE, fields),
   remedy = DEFAULT_MISSING_PACKAGE_REMEDY,
 ) {
+  const { fields, fallbackFields } = failClosedParts(input, message, remedy);
+  try {
+    emit(fields);
+  } catch {
+    emit(fallbackFields);
+  }
+}
+
+/**
+ * The fail-closed response fields plus the shallow fallback to emit if
+ * serializing them throws. Split out from {@link emitFailClosed} so the posture
+ * table can state this hook's CLOSED verdict as a VALUE — the table is what
+ * `test/claude-hooks-posture.test.mjs` compares each hook's emission against, so
+ * a verdict reachable only by running the emitter could not be pinned there.
+ * @param {any} input  parsed hook input, or undefined if parsing threw
+ * @param {string} message
+ * @param {string} [remedy]  what a reader should run; hosts pass their own
+ * @returns {{ fields: Record<string, unknown>, fallbackFields: Record<string, unknown> }}
+ */
+function failClosedParts(
+  input,
+  message,
+  remedy = DEFAULT_MISSING_PACKAGE_REMEDY,
+) {
   // Threaded rather than defaulted here: this is the ONLY production caller of
   // failClosedContext, so a remedy it does not pass is a remedy no host can ever
   // reach — the parameter would be live only from tests.
   const additionalContext = failClosedContext(sanitizerDepsLoaded, remedy);
+  const fallbackFields = { updatedToolOutput: message, additionalContext };
+  let updatedToolOutput;
   try {
-    emit({
-      updatedToolOutput: failClosedReplacement(input, message),
-      additionalContext,
-    });
+    updatedToolOutput = failClosedReplacement(input, message);
   } catch {
-    emit({ updatedToolOutput: message, additionalContext });
+    // The shape-matching walk overflowed on a pathologically deep (but valid)
+    // tool_response. The bare string is shallow, always serializable, and still
+    // a valid string tool_response — so the hook stays CLOSED rather than
+    // throwing out of its own failure path, which would emit nothing and let
+    // the harness show the raw, unvetted output.
+    return { fields: fallbackFields, fallbackFields };
   }
+  return { fields: { updatedToolOutput, additionalContext }, fallbackFields };
 }
 
 /**
@@ -595,19 +644,39 @@ export function emitHookFailure(
   remedy = DEFAULT_MISSING_PACKAGE_REMEDY,
   env = process.env,
 ) {
-  if (failOpenEnabled(env)) {
-    emit({
-      additionalContext: failOpenContext("sanitize-output", "tool output", err),
-    });
-    return;
+  const outcome = hookFaultOutcome(HOOK_NAME, err, { input, remedy, env });
+  const fields = /** @type {Record<string, unknown>} */ (outcome.fields);
+  try {
+    emit(fields);
+  } catch (emitErr) {
+    // The open posture's fields are a lone string context — always
+    // serializable — so it declares no fallback, and a throw there is a real
+    // bug the caller must see rather than a suppression to retry.
+    if (outcome.fallbackFields === null) throw emitErr;
+    emit(outcome.fallbackFields);
   }
-  emitFailClosed(
-    input,
-    `[SANITIZATION FAILED — original output suppressed for safety. Hook error: ${safeErrMessage(err)}]`,
-    emit,
-    remedy,
-  );
 }
+
+/**
+ * The suppression placeholder that replaces the tool output under the closed
+ * posture. Named so the posture table and {@link emitFailClosed} cannot drift on
+ * the wording the model sees.
+ * @param {string} cause  the scrubbed hook error
+ * @returns {string}
+ */
+function suppressionMessage(cause) {
+  return `[SANITIZATION FAILED — original output suppressed for safety. Hook error: ${cause}]`;
+}
+
+// This hook's entry in the one posture table (lib/hook-fault.mjs). OPEN is the
+// shared default (a warning context, the original output left in the model's
+// view); CLOSED replaces every string leaf of the output with the placeholder.
+registerFaultPolicy(HOOK_NAME, {
+  event: HookEvent.POST_TOOL_USE,
+  guarded: "tool output",
+  closed: (ctx) =>
+    failClosedParts(ctx.input, suppressionMessage(ctx.message), ctx.remedy),
+});
 
 /**
  * Run the sanitization pipeline over a tool output and return the contract-
@@ -695,6 +764,18 @@ export async function evaluateToolOutput(input, ext = {}) {
     const hint = persistReveal(stored);
     if (hint) warnings.push(hint);
   }
+  // On-disk placeholder tripwire (see ON_DISK_PLACEHOLDER_WARNING). Tested on
+  // the RAW tool_response — post-sanitization text carries placeholders this
+  // hook itself just inserted. Reads only: file bytes are where a clobbered
+  // secret surfaces, while grep/Bash output quoting placeholders is routine.
+  // Reveal sidecars are excluded — their bytes are redacted BEFORE persisting,
+  // so placeholder text there is this sanitizer's own.
+  if (
+    input.tool_name === "Read" &&
+    !revealRead &&
+    containsPlaceholder(toolOutput)
+  )
+    warnings.push(ON_DISK_PLACEHOLDER_WARNING);
   // sgrNote implies modified (the carve-out lives inside the Layer-1 strip), so
   // it never independently survives this guard — `modified` covers it.
   if (!modified && warnings.length === 0)

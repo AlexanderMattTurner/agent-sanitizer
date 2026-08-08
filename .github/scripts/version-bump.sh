@@ -425,7 +425,6 @@ fs.writeFileSync("package.json", JSON.stringify(pkg, null, 2) + "\n");
 '
 log "Set package.json to $NEW_VERSION (working directory only)"
 
-<<<<<<< local
 # Build and publish to npm.
 # A publish conflict (the version already exists — possible when registry
 # caching let the earlier `npm view` safety check miss it) is benign and must
@@ -442,29 +441,6 @@ if [[ "$PUBLISH_RC" -ne 0 ]]; then
   if grep -qE 'E(409|PUBLISHCONFLICT)' <<<"$PUBLISH_OUTPUT" &&
     npm view "$PACKAGE_NAME@$NEW_VERSION" version &>/dev/null; then
     log "Version $NEW_VERSION already published (publish conflict on the same version). Skipping."
-||||||| base
-# Build and publish to npm. Treat "already published" (the registry's caching
-# can let the earlier safety check miss an existing version) as success.
-if ! PUBLISH_OUTPUT=$(pnpm publish --provenance --access public --no-git-checks 2>&1); then
-  if [[ "$PUBLISH_OUTPUT" == *"Cannot publish over previously published version"* ]]; then
-    log "Version $NEW_VERSION already published (detected at publish time). Skipping."
-=======
-# Build and publish to npm. Treat "already published" (the registry's caching
-# can let the earlier safety check miss an existing version) as success.
-#
-# The registry reports that condition two different ways. The plain message is
-# "Cannot publish over previously published version". Under provenance it can
-# instead answer the PUT with a bare E404 — "404 Not Found - PUT
-# .../<pkg>", "could not be found or you do not have permission to access it" —
-# which reads like a missing package or a broken credential and says nothing
-# about a duplicate. Re-probe the registry to tell the two apart rather than
-# guessing from the text: if the version is there now, someone published it
-# while this run was building, and there is nothing left for this run to do.
-# If it is not, the 404 is a real failure and must stay loud.
-if ! PUBLISH_OUTPUT=$(pnpm publish --provenance --access public --no-git-checks 2>&1); then
-  if [[ "$PUBLISH_OUTPUT" == *"Cannot publish over previously published version"* ]]; then
-    log "Version $NEW_VERSION already published (detected at publish time). Skipping."
->>>>>>> template
     exit 0
   fi
   if [[ "$PUBLISH_OUTPUT" == *"E404"* ]] &&

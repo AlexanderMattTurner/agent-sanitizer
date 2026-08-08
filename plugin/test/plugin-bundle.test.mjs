@@ -35,6 +35,10 @@ import {
   packageDirs,
   redactorRequirements,
 } from "../scripts/build-plugin.mjs";
+import {
+  bundleTarget,
+  runtimeRequires,
+} from "../../scripts/lib/bundle-esbuild.mjs";
 
 const ROOT = dirname(dirname(dirname(fileURLToPath(import.meta.url))));
 const PLUGIN_DIR = join(ROOT, "plugin");
@@ -299,17 +303,14 @@ test("bundle is self-contained: only builtin imports, no residue", () => {
   // tables in this way and took Layer 2 down on the first HTML tool output —
   // static import specifiers were all clean while the artifact was broken, which
   // is why this assertion exists beside them rather than trusting them.
-  const runtimeRequires = [
-    ...new Set(
-      [...text.matchAll(/\brequire\d*\((['"])([^'"]+)\1\)/g)].map((m) => m[2]),
-    ),
-  ];
+  const survivors = runtimeRequires(text);
   assert.deepEqual(
-    runtimeRequires,
-    // The registry-first namespace-guard fallback, which only runs on a host
-    // that has a node_modules; in the bundle the registry always answers first.
-    ["namespace-guard"],
-    `bundle keeps unresolvable runtime require(): ${runtimeRequires.join(", ")}`,
+    survivors,
+    // The declared allowlist, read from the shared bundle list rather than
+    // restated: today the registry-first namespace-guard fallback, which only
+    // runs on a host that has a node_modules.
+    [...bundleTarget("plugin-hooks").allowedRuntimeRequires],
+    `bundle keeps unresolvable runtime require(): ${survivors.join(", ")}`,
   );
   // Layer 5 (prompt armor) is deliberately not shipped: its subprocess helper
   // must not appear even as a string the hook could try to spawn.

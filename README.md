@@ -55,7 +55,7 @@ the callback you inject for the agent-specific concern; `—` is a pure transfor
 | 3   | `/html`         | Detect exfil-shaped URLs (payloads in query/path, embedded creds, `data:`/`javascript:`, off-origin redirects). Reports only.                                               | —                           |
 | 4   | `/confusables`  | Fold look-alike glyphs in tool-call input (paths, commands) to ASCII, closing a cross-script deny-rule bypass. Gated per token, so non-Latin prose passes through unfolded. | `scan`                      |
 | 5   | `/instructions` | Scan/auto-clean `CLAUDE.md`, `AGENTS.md`, `SKILL.md`, etc., decoding Unicode-tag + zero-width-binary payloads.                                                              | `fs` (direct)               |
-| 6   | `/prompt`       | Classify a prompt pass / SGR-note / block on payload-capable invisible/ANSI content.                                                                                        | —                           |
+| 6   | `/prompt`       | Classify a prompt pass / note / block on payload-capable invisible/ANSI content (inert escapes get the note).                                                               | —                           |
 | 7   | `/output`       | Run Layers 1–4 over structured tool output, preserving shape. The Layer-5 slot takes a delete-only filter.                                                                  | `redact`, `filterInjection` |
 | 8   | `/rehydrate`    | Re-anchor a model Edit composed from the _sanitized_ view back onto real bytes; deny anything ambiguous or secret-exposing.                                                 | `io`                        |
 | —   | `/view-map`     | Pure offset/text machinery mapping a file's on-disk bytes ↔ the sanitized view (Layer-1 deletions, Layer-4 redactions). No I/O — consumed by `/rehydrate`.                  | —                           |
@@ -94,13 +94,21 @@ owns each message, and any value outside the enum makes `sanitizeText` **throw**
 | `filter-flagged`      | The filter flagged the output as a possible injection without deleting (content intact) |
 | `filter-error`        | The filter reported a non-fatal internal error while scanning (a fatal filter throws)   |
 
+Every span is matched against the **original** text and the deletions applied in
+a single ordered pass, so the bytes a filter can remove are exactly the bytes its
+spans matched in the input — an earlier deletion can never manufacture a match
+for a later span (overlapping spans resolve first-match-wins).
+
 ## What installing entails
 
 Installing the plugin puts four hooks on every session, and this is what they
 buy you:
 
-1. Your `CLAUDE.md`, `AGENTS.md` and `.claude/` markdown are scanned at session
-   start for hidden-Unicode payloads and auto-cleaned where possible.
+1. Your `CLAUDE.md`, `AGENTS.md` and the context markdown under `.claude/` are
+   scanned at session start for hidden-Unicode payloads and auto-cleaned where
+   possible. Only the subdirectories Claude Code loads as context are walked, so
+   bulk data parked under `.claude/` (`worktrees/`, caches, transcripts) does not
+   slow startup.
 2. Prompts carrying payload-capable invisible or ANSI characters are blocked
    before they reach the model; pasted terminal color passes with a note.
 3. Look-alike glyphs in tool inputs are folded to ASCII, so a Cyrillic `а` can't

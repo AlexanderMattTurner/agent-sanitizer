@@ -38,8 +38,12 @@
  *
  * ORDERING: the soundness argument assumes no later layer erases code points
  * from the same field, which would let an unmapped glyph the gate relied on
- * disappear after the decision. Layer 4 runs before sanitizeAuthoredContent on
- * Bash.command; keep it there.
+ * disappear after the decision — a zero-width run padded into a token suppresses
+ * the fold, and the erasing layer then removes the very evidence for skipping it.
+ * This fold does NOT run last: on Bash.command the invisible-char strip follows
+ * it. A caller that composes the two is therefore responsible for re-running
+ * this fold on the post-erasure text until it reports nothing, which is what the
+ * hook driver in claude-hooks/lib/layer-pipeline.mjs does.
  *
  * Genuine non-confusable non-ASCII (accented Latin, CJK, emoji) is untouched
  * regardless, since a faithful scanner does not flag it.

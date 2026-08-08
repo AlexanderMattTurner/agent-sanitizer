@@ -55,25 +55,6 @@ env:
   # added to the template auto-sync without anyone having to edit this list.
   # Downstream-added files in these directories are left alone (sync only
   # copies files that exist in the template).
-<<<<<<< local
-  #
-  # The trailing entries are single FILES, not directories: data that a synced
-  # script READS. `.github/tool-versions.sh` and `.github/claude-cli-version`
-  # are pins that install-mergiraf.sh and install-claude-cli.sh source by path,
-  # so a script synced without its pin dies at `source`/`tr` under
-  # `set -euo pipefail`. That is not hypothetical — it is why every sync run
-  # failed until this line grew: the widening that would have delivered the pins
-  # shipped INSIDE a sync PR, and the sync workflow died before it could open
-  # one. tests/test_script_data_deps.py pins the invariant.
-  SYNC_PATHS: ".claude .hooks .github/actions .github/scripts .github/workflows .github/prompts .github/tool-versions.sh .github/claude-cli-version config/javascript/commitlint.config.js"
-  # Paths to exclude from syncing. Supports both whole directories (matching
-  # entries in SYNC_PATHS) and individual files within synced directories.
-||||||| base
-  SYNC_PATHS: ".claude .hooks .github/actions .github/scripts .github/workflows .github/prompts"
-  # Paths to exclude from syncing. Supports both whole directories (matching
-  # entries in SYNC_PATHS) and individual files within synced directories.
-=======
->>>>>>> template
   #
   # An entry may also be a single FILE, which is how a synced file's DATA
   # dependency travels when it lives outside every synced directory. A synced
@@ -95,43 +76,9 @@ env:
   # Common candidates: .github/workflows/node-tests.yaml,
   # .github/workflows/lint.yaml, .github/workflows/format-check.yaml
   #
-<<<<<<< local
-  # VERSIONED-APP-ONLY: the release flow below only makes sense for a repo that
-  # is published to npm. auto-version.yaml runs on EVERY push to the default
-  # branch and, for a real (non-private) package, decides a Conventional-Commits
-  # semver bump and runs `pnpm publish` (OIDC provenance — no NPM_TOKEN). The
-  # template's own package.json sets "private": true, so version-bump.sh skips
-  # publishing there; a downstream repo opts in by dropping `private` and setting
-  # a real, publishable name. A repo that is not an npm package at all (e.g. a
-  # website like TurnTrout.com) should list these here to opt out entirely:
-  #   .github/workflows/auto-version.yaml
-  #   .github/scripts/version-bump.sh
-  #   .github/scripts/promote-changelog.mjs
-  #   .github/scripts/set-plugin-version.mjs
-  #   .github/scripts/lib/retry.bash
-  # (CHANGELOG.md lives outside SYNC_PATHS and never syncs, so a versioned
-  # consumer must create it to bootstrap the flow.)
-||||||| base
-  # VERSIONED-APP-ONLY: the release flow below only makes sense for a repo that
-  # is published to npm. auto-version.yaml runs on EVERY push to the default
-  # branch and, for a real (non-private) package, decides a Conventional-Commits
-  # semver bump and runs `pnpm publish` (OIDC provenance — no NPM_TOKEN). The
-  # template's own package.json sets "private": true, so version-bump.sh skips
-  # publishing there; a downstream repo opts in by dropping `private` and setting
-  # a real, publishable name. A repo that is not an npm package at all (e.g. a
-  # website like TurnTrout.com) should list these here to opt out entirely:
-  #   .github/workflows/auto-version.yaml
-  #   .github/scripts/version-bump.sh
-  #   .github/scripts/promote-changelog.mjs
-  #   .github/scripts/lib/retry.bash
-  # (CHANGELOG.md lives outside SYNC_PATHS and never syncs, so a versioned
-  # consumer must create it to bootstrap the flow.)
-=======
->>>>>>> template
   # The security-vulnerability-scan workflow + prompt are intentionally NOT
   # propagated to downstream repos; each consumer owns its own security-scan
   # cadence and model pin, so the template stops overwriting them on sync.
-<<<<<<< local
   #
   # claude-review.yaml: this repo runs the reviewer as three split workflows
   # (claude-pr-review, claude-merge-delta-review, claude-review-thread-resolve)
@@ -141,10 +88,6 @@ env:
   # the sync's "new file in template" case copies it straight back on the next
   # run, because the sync only ever adds files, it never honours a local delete.
   EXCLUDE_PATHS: ".github/workflows/security-vulnerability-scan.yaml .github/prompts/security-vulnerability-scan.md .github/workflows/claude-review.yaml"
-||||||| base
-  EXCLUDE_PATHS: ".github/workflows/security-vulnerability-scan.yaml .github/prompts/security-vulnerability-scan.md"
-=======
-  EXCLUDE_PATHS: ".github/workflows/security-vulnerability-scan.yaml .github/prompts/security-vulnerability-scan.md"
   # Files the sync UPDATES but never INTRODUCES. Absent from the child repo they
   # are skipped; present, they sync like anything else. This is the opt-in half
   # of EXCLUDE_PATHS: opting in is creating the file once, opting out is deleting
@@ -169,7 +112,6 @@ env:
   # build-publish-notify.yaml, which bind by name, not filename. Otherwise its
   # release failures notify nobody.
   OPT_IN_PATHS: ".github/workflows/auto-version.yaml"
->>>>>>> template
 
 concurrency:
   group: template-sync

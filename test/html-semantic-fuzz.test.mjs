@@ -109,8 +109,9 @@ const pieceGen = fc.oneof(
 );
 
 // Blocks are joined with blank lines so each construct is its own markdown
-// block; documents dense enough in tags also exercise the HTML-source branch
-// (looksLikeHtmlSource), so both scanners get precision coverage.
+// block; a draw made entirely of markup constructs (no filler prose) is HTML
+// source under `looksLikeHtmlSource` and exercises that branch instead, so both
+// scanners get precision coverage.
 const docGen = fc.array(pieceGen, { minLength: 1, maxLength: 10 });
 
 describe("semantic-correctness fuzz: hidden-splice precision on mixed documents", () => {

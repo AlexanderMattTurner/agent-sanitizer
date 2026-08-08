@@ -18,6 +18,7 @@ import {
   isWalkableContainer,
   MAX_DEPTH,
   FILTER_WARNING,
+  REDACTION_DOCTRINE,
 } from "../src/output.mjs";
 import { cp } from "./test-helpers.mjs";
 
@@ -119,7 +120,9 @@ describe("sanitizeText Layer 4 exact warning/error text", () => {
     const r = await sanitizeText("dirty", {
       redact: () => ({ text: "clean", found: ["api-key"] }),
     });
-    assert.deepEqual(r.warnings, ["API keys/secrets redacted: api-key"]);
+    assert.deepEqual(r.warnings, [
+      `API keys/secrets redacted: api-key${REDACTION_DOCTRINE}`,
+    ]);
   });
 
   it("fail-closed error carries 'Failing closed' text AND the original cause", async () => {
@@ -152,7 +155,9 @@ describe("sanitizeText Layer 5 re-vet exact warning/error text", () => {
       filterInjection: () => ({ removeSpans: ["XXX"] }),
     });
     assert.equal(r.cleaned, "key: sk-live-[REDACTED] end");
-    assert.deepEqual(r.warnings, ["API keys/secrets redacted: api-key"]);
+    assert.deepEqual(r.warnings, [
+      `API keys/secrets redacted: api-key${REDACTION_DOCTRINE}`,
+    ]);
   });
 
   it("re-vet fail-closed error carries 'Failing closed' text AND the re-scan cause", async () => {

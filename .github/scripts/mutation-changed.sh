@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Exit 0 iff the diff between $BASE_SHA and $HEAD_SHA touches a file mutation
-# testing depends on (the mutated sources, the tests that kill mutants, the
-# Stryker config, package.json, or this workflow). Exit 1 means "nothing
+# testing depends on (the mutated sources — every SHIPPED .mjs, not just src/ —
+# the tests that kill mutants, the Stryker config and the scripts that compute
+# the mutate spec, package.json, or this workflow). Exit 1 means "nothing
 # mutation-relevant changed, skip the expensive run".
 #
 # On a push to main (or any event without a usable base) we cannot cheaply diff,
@@ -28,4 +29,4 @@ fi
 changed=$(git diff --name-only "$base" "$head" --)
 
 printf '%s\n' "$changed" | grep -qE \
-  '^(src/.*\.mjs|test/.*\.mjs|stryker\.conf\.json|package\.json|pnpm-lock\.yaml|\.github/mutation-shards\.json|\.github/workflows/mutation\.yaml|\.github/scripts/(mutation-changed|run-mutation-shard)\.sh|\.github/scripts/(aggregate-mutation|expand-shards)\.mjs)$'
+  '^(src/.*\.mjs|claude-hooks/.*\.mjs|bin/.*\.mjs|test/.*\.mjs|scripts/(shipped-sources|mutate)\.mjs|stryker\.conf\.json|package\.json|pnpm-lock\.yaml|\.github/mutation-shards\.json|\.github/workflows/mutation\.yaml|\.github/scripts/(mutation-changed|run-mutation-shard)\.sh|\.github/scripts/(aggregate-mutation|expand-shards)\.mjs)$'

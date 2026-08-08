@@ -37,6 +37,14 @@ const mutant = (status, loc) => {
 /** One shard report: { files: { path: { mutants: [...] } } }. */
 const report = (...mutants) => ({ files: { "src/a.mjs": { mutants } } });
 
+/** A report spanning several files, optionally keyed by absolute path. */
+const multiFileReport = (byFile, projectRoot) => ({
+  ...(projectRoot === undefined ? {} : { projectRoot }),
+  files: Object.fromEntries(
+    Object.entries(byFile).map(([file, mutants]) => [file, { mutants }]),
+  ),
+});
+
 describe("tallyMutants", () => {
   it("scores a single report exactly as Stryker would (detected / covered)", () => {
     const r = report(
@@ -116,6 +124,46 @@ describe("tallyMutants", () => {
       report(mutant("Survived", 10), mutant("Survived", 20)),
     ]);
     assert.equal(total, 2);
+  });
+
+  it("scores each gated scope independently", () => {
+    // The library and the newly-gated hook layer are two populations with very
+    // different mutation histories. A blended score would let the weaker one
+    // drag src/'s long-standing floor down, so the aggregator tallies per scope.
+    const reports = [
+      multiFileReport({
+        "src/a.mjs": [mutant("Killed", 1), mutant("Killed", 2)],
+        "claude-hooks/lib/hook-io.mjs": [
+          mutant("Killed", 3),
+          mutant("Survived", 4),
+        ],
+      }),
+    ];
+    const isSrc = (/** @type {string} */ f) => f.startsWith("src/");
+    assert.equal(tallyMutants(reports, isSrc).score, 100);
+    assert.equal(tallyMutants(reports, (f) => !isSrc(f)).score, 50);
+    // Unfiltered, the hook layer's miss would show up as a 75% library score.
+    assert.equal(tallyMutants(reports).score, 75);
+  });
+
+  it("scopes absolute report paths by relativizing against projectRoot", () => {
+    // Stryker keys `files` relative to projectRoot, but the field is optional
+    // and an absolute key must not silently land in the wrong scope (or dedup
+    // against nothing when a sibling shard emitted the relative form).
+    const relative = multiFileReport({ "src/a.mjs": [mutant("Killed", 5)] });
+    const absolute = multiFileReport(
+      { "/build/repo/src/a.mjs": [mutant("Survived", 5)] },
+      "/build/repo",
+    );
+    const isSrc = (/** @type {string} */ f) => f.startsWith("src/");
+    const scoped = tallyMutants([relative, absolute], isSrc);
+    assert.equal(scoped.total, 1, "both keys name the same mutant");
+    assert.equal(scoped.score, 100);
+    assert.equal(
+      tallyMutants([absolute], (f) => !isSrc(f)).total,
+      0,
+      "an absolute src/ path must not fall into the hook scope",
+    );
   });
 
   it("scores 0 when no mutant produced a scorable verdict", () => {
