@@ -23,6 +23,7 @@ import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { sanitize } from "../src/index.mjs";
 import { sanitizeText, needsMarkdownPipeline } from "../src/output.mjs";
+import { LONE_SURROGATE_WARNING } from "../src/warnings.mjs";
 
 const BLOB = "A".repeat(44);
 
@@ -49,20 +50,21 @@ const CASES = [
   ],
   ["benign html", "hello <b>world</b>"],
   // Layer 1 AND Layer 2 in one input, so the "every unfiltered warning is a
-  // Layer-1 line" check below is exercised rather than vacuous.
+  // Layer 1 alongside Layer 2, so the Layer-1 lines are compared too rather
+  // than the corpus only ever exercising Layers 2/3.
   ["zero-width char inside spliced html", "a\u200b<!-- hi --> b"],
+  ["lone surrogate inside spliced html", "a\ud800<!-- hi --> b"],
+  ["ansi escape inside spliced html", "a\u001b[31mred\u001b[0m <!-- hi --> b"],
 ];
 
-// Warnings owned by Layers 2 and 3 — the ones both entry points produce. Layer
-// 1's own line is shared verbatim already (describeStripped), and the pipeline
-// adds Layer-4/5 lines the root entry has no equivalent for.
-const isLayer23 = (warning) =>
-  warning.startsWith("HTML sanitized:") ||
-  warning.startsWith("Scripting/resource content present") ||
-  warning.startsWith("URLs shaped like data exfiltration");
-
-describe("Layer 2/3 warning parity between sanitize() and sanitizeText()", () => {
-  it("both entry points emit identical Layer-2/3 warnings for every case", async () => {
+describe("warning parity between sanitize() and sanitizeText()", () => {
+  it("both entry points emit the identical warning list for every case", async () => {
+    // Compared WHOLE, not filtered to Layers 2/3: with no `redact` and no
+    // `filterInjection` the pipeline runs exactly the layers the root entry
+    // does, so every warning either side emits must match, in order. A filtered
+    // comparison is what let the drift this test exists for survive — it is
+    // easy to write one whose predicate stops matching and silently degrades to
+    // [] === [] on every case.
     let withWarnings = 0;
     for (const [name, input] of CASES) {
       const root = await sanitize(input, { html: true });
@@ -70,29 +72,41 @@ describe("Layer 2/3 warning parity between sanitize() and sanitizeText()", () =>
         html: true,
         exfilScan: true,
       });
-      const rootWarnings = root.warnings.filter(isLayer23);
-      const pipelineWarnings = pipeline.warnings.filter(isLayer23);
       assert.deepEqual(
-        rootWarnings,
-        pipelineWarnings,
-        `${name}: the two entry points describe the same finding differently`,
+        root.warnings,
+        pipeline.warnings,
+        `${name}: the two entry points describe the same input differently`,
       );
-      // Non-vacuity per case: a filter that stopped matching would make every
-      // comparison [] === [] and the whole test pass while the prose diverged.
-      assert.deepEqual(
-        root.warnings.filter(
-          (w) => !isLayer23(w) && !w.startsWith("Stripped:"),
-        ),
-        [],
-        `${name}: a root warning is neither a Layer-1 nor a recognized Layer-2/3 line — extend isLayer23`,
-      );
-      if (rootWarnings.length > 0) withWarnings++;
+      if (root.warnings.length > 0) withWarnings++;
     }
-    // Non-vacuity overall: most cases must actually produce a warning.
+    // Non-vacuity: an empty-vs-empty comparison proves nothing, so most cases
+    // must actually have produced warnings.
     assert.ok(
       withWarnings >= CASES.length - 1,
-      `only ${withWarnings}/${CASES.length} cases produced a Layer-2/3 warning`,
+      `only ${withWarnings}/${CASES.length} cases produced any warning`,
     );
+  });
+
+  it("covers each shared warning at least once, so none drifts unwatched", () => {
+    // Ties the corpus to the strings: a warning that no case triggers is one
+    // both entry points could reword apart while this file stays green.
+    const shared = [
+      "Stripped:",
+      LONE_SURROGATE_WARNING,
+      "HTML sanitized:",
+      "Scripting/resource content present",
+      "URLs shaped like data exfiltration",
+    ];
+    return Promise.all(
+      CASES.map(([, input]) => sanitize(input, { html: true })),
+    ).then((results) => {
+      const seen = results.flatMap((r) => r.warnings);
+      for (const prefix of shared)
+        assert.ok(
+          seen.some((warning) => warning.startsWith(prefix)),
+          `no corpus case produces a "${prefix}…" warning`,
+        );
+    });
   });
 
   it("both entry points skip the HTML graph on exactly the same inputs", async () => {

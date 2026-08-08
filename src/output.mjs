@@ -27,7 +27,12 @@
 import { CATEGORY, describeStripped, isSgrOnly } from "./invisible.mjs";
 import { needsMarkdownPipeline } from "./gates.mjs";
 import { applyLayer1, LONE_SURROGATE_RE } from "./layer1.mjs";
-import { describeExfil, describeRemoved, describeWarned } from "./warnings.mjs";
+import {
+  describeExfil,
+  describeHtmlSanitized,
+  describeWarned,
+  LONE_SURROGATE_WARNING,
+} from "./warnings.mjs";
 import { orderedMatches, spliceOrdered } from "./view-map.mjs";
 
 /**
@@ -299,7 +304,7 @@ function processLayer1(text, sgrCarveOut) {
     cleaned = wellFormed;
     modified = true;
     sgrNote = false;
-    warnings.push("Normalized lone UTF-16 surrogates");
+    warnings.push(LONE_SURROGATE_WARNING);
   }
   return { cleaned, warnings, modified, sgrNote };
 }
@@ -331,9 +336,7 @@ async function applyMarkdownPipeline(state, { html, exfilScan }) {
       if (layer2.text !== state.text) {
         reveal = state.text;
         applyMutation(state, layer2.text);
-        state.warnings.push(
-          `HTML sanitized: ${describeRemoved(layer2.removed)} replaced with placeholders`,
-        );
+        state.warnings.push(describeHtmlSanitized(layer2.removed));
       }
       const preserved = describeWarned(layer2.warned);
       if (preserved) state.warnings.push(preserved);

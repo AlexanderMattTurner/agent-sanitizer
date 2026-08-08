@@ -18,7 +18,16 @@
  */
 
 /**
- * Warning fragment for Layer 2's stripped content — counts only.
+ * Layer 1's lone-surrogate warning. A bare constant rather than a literal at
+ * each site for the same reason the functions here exist: it is emitted by both
+ * entry points, and two typed copies is one typo away from two warnings.
+ */
+export const LONE_SURROGATE_WARNING = "Normalized lone UTF-16 surrogates";
+
+/**
+ * Warning fragment for Layer 2's stripped content — counts only. Exported for
+ * the callers that want just the counts; the full sentence both entry points
+ * emit is {@link describeHtmlSanitized}.
  * @param {{ comments: number, hidden: number }} removed
  * @returns {string}
  */
@@ -27,6 +36,19 @@ export function describeRemoved(removed) {
   if (removed.comments > 0) parts.push(`${removed.comments} HTML comment(s)`);
   if (removed.hidden > 0) parts.push(`${removed.hidden} hidden element(s)`);
   return parts.join(", ");
+}
+
+/**
+ * The full Layer-2 splice warning. Both entry points used to build this
+ * sentence themselves from `describeRemoved`, which left the wrapper prose
+ * ("HTML sanitized: …", "replaced with placeholders") duplicated — the same
+ * drift shape as the strings this module was created to collapse, just one
+ * level up.
+ * @param {{ comments: number, hidden: number }} removed
+ * @returns {string}
+ */
+export function describeHtmlSanitized(removed) {
+  return `HTML sanitized: ${describeRemoved(removed)} replaced with placeholders`;
 }
 
 /**

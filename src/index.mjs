@@ -13,7 +13,12 @@
 import { CATEGORY, describeStripped } from "./invisible.mjs";
 import { needsMarkdownPipeline } from "./gates.mjs";
 import { applyLayer1, LONE_SURROGATE_RE } from "./layer1.mjs";
-import { describeExfil, describeRemoved, describeWarned } from "./warnings.mjs";
+import {
+  describeExfil,
+  describeHtmlSanitized,
+  describeWarned,
+  LONE_SURROGATE_WARNING,
+} from "./warnings.mjs";
 
 // Layer 1 lives in the zero-dependency `./layer1.mjs`, shared verbatim with the
 // tool-output pipeline (`./output`) and the Edit-repair rehydrator
@@ -91,7 +96,7 @@ export async function sanitize(text, options) {
   if (wellFormed !== cleaned) {
     cleaned = wellFormed;
     found.push(CATEGORY.LONE_SURROGATES);
-    warnings.push("Normalized lone UTF-16 surrogates");
+    warnings.push(LONE_SURROGATE_WARNING);
   }
 
   // Layers 2 and 3 can only find something in text carrying an HTML tag or a
@@ -129,9 +134,7 @@ export async function sanitize(text, options) {
       cleaned = layer2.text;
       if (layer2.removed.comments > 0) found.push(CATEGORY.HTML_COMMENTS);
       if (layer2.removed.hidden > 0) found.push(CATEGORY.HIDDEN_HTML);
-      warnings.push(
-        `HTML sanitized: ${describeRemoved(layer2.removed)} replaced with placeholders`,
-      );
+      warnings.push(describeHtmlSanitized(layer2.removed));
     }
     const preserved = describeWarned(layer2.warned);
     if (preserved) warnings.push(preserved);
