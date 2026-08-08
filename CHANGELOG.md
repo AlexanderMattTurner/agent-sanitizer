@@ -8,6 +8,27 @@ adhere to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+## [2.23.2] - 2026-08-08
+
+### Fixed
+
+- Budget preserved blank fillers per script, not pooled
+- Stop clipping word spaces out of long Braille and Korean text
+
+## [2.23.1] - 2026-08-08
+
+### Security
+- Enforce a 3-day minimum release age on dependencies to reduce supply-chain risks.
+
+## [2.23.0] - 2026-08-08
+
+### Added
+- Guard redaction placeholders against clobbering outside the Edit/Write path in the rehydrate module.
+- Automated daily engine pin bumping via CI workflow.
+
+### Fixed
+- Hardened placeholder-clobber guards from review findings.
+
 ## [2.21.1] - 2026-08-08
 
 ### Fixed
