@@ -1,4 +1,11 @@
 allowBuilds:
   esbuild: true
+# `minimumReleaseAge` is not set in this repo, so this exclusion is inert here —
+# it is kept for an install running under an org-wide or user-level age floor,
+# where a just-published first-party release is below the floor by construction
+# and would otherwise block the plugin build on our own package. Deliberately
+# version-LESS: pnpm reads a bare name as "always excluded", so the entry cannot
+# go stale behind the `sanitizer-engine` pin the way `agent-sanitizer@2.1.0` did.
+# tests/test_pnpm_workspace.py holds that shape.
 minimumReleaseAgeExclude:
-  - agent-sanitizer@2.12.0
+  - agent-sanitizer
