@@ -39,6 +39,12 @@ explicitly asks for a list of individual bugs.
 - Reviewing a pending diff before a PR → `peer-review` / `code-review`.
 - A single-pass security look at the current branch → `security-review`.
 - Trivial / single-file questions — just read the file.
+- **Overlaps `audit-and-parallelize`**, which advertises nearly the same activation surface. They are
+  redundant and should be reconciled (disambiguated in both `description` blocks, or folded into one)
+  — a cross-skill decision out of scope here. Until then: this skill is the **eliminator-posture**
+  default (hunt bug _classes_); reach for `audit-and-parallelize` only when a caller explicitly wants
+  the plain "list individual issues" pass. Same-request routing is otherwise a coin-flip between the
+  two, so name which posture you want.
 
 ## Eliminators, not spot fixes
 
@@ -93,7 +99,10 @@ violations of it; a generic audit re-discovers lint.
 Pick axes from the request (typical: **security**, **robustness/error-handling**, **e2e-test
 realness**, **UX/DX**, **supply-chain**, **config-SSOT/CI**). Give each agent a **non-overlapping
 file list** so they don't collide or duplicate. Launch them **concurrently** (multiple Agent calls in
-a single response). Use `general-purpose` (full read tools); they must be **read-only — forbid edits**.
+a single response). Use `general-purpose` (full read tools); they are **read-only on the repo — no
+edits to files under audit**. They MAY execute code to verify a finding (run existing modules,
+`node -e`, a throwaway `/tmp` script — see the run-the-code bullet below); "read-only" bars mutating
+the tree, not running it.
 
 Each agent prompt MUST demand, per finding, the eliminator contract from
 [Eliminators, not spot fixes](#eliminators-not-spot-fixes). (In plain spot-fix mode, the reduced
@@ -102,9 +111,11 @@ shape is `TITLE` · `FILE:LINE` · `SEVERITY` · `EVIDENCE` · `WHY IT'S A DEFEC
 And MUST instruct:
 
 - **Ground every finding in real lines you read — do NOT speculate.** Skip anything you can't quote.
-- **Run the code where you can.** An agent that executes the repro and pastes real output is worth
-  five that reason from a read. Findings verified by execution survive the confirmation pass almost
-  always; findings reasoned from a read are where the drops come from.
+- **Run the code where you can — execute, but stay read-only on the tree.** An agent that runs the
+  repro and pastes real output is worth five that reason from a read. Write repro scripts to a
+  scratch dir outside the repo (e.g. `/tmp`); never edit a file under audit. Findings verified by
+  execution survive the confirmation pass almost always; findings reasoned from a read are where the
+  drops come from.
 - **Hand each agent the project's own doctrine** (`CLAUDE.md`, `THREAT-MODEL.md`, `.claude/rules/*`)
   and ask "where does the code break its own stated rules?" A repo's written invariants are the
   richest eliminator seam — a comment saying "these must stay in sync" or "keep it in this order"
@@ -146,8 +157,8 @@ reporting a crash as a finding, and correct yourself plainly if you already did.
 
 Harness note: `Bash` rejects a command string containing a literal control character (e.g. a raw
 ESC byte) — `InputValidationError`. That is the Claude Code input validator, not the code under
-audit. Write the repro to a file with a heredoc and build the byte in-language
-(`String.fromCodePoint(0x1b)`), rather than concluding the case is untestable.
+audit. Write the repro to a scratch file outside the repo (e.g. `/tmp`) with a heredoc and build the
+byte in-language (`String.fromCodePoint(0x1b)`), rather than concluding the case is untestable.
 
 For _very_ large audits, this confirmation pass can itself be a second fan-out of `code-reviewer`
 agents, each adversarially trying to **refute** one finding — keep only those that survive.
