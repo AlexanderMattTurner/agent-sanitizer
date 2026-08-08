@@ -90,6 +90,11 @@ jobs:
         id: build
         if: steps.guard.outputs.enabled == 'true'
         run: |
+          # A Renovate engine-pin bump moves the npm alias but not the workspace's
+          # own-package minimumReleaseAgeExclude entry, and the release-age
+          # contract test fails any entry package.json no longer pins — rotate it
+          # here so it lands in the same regeneration commit.
+          node .github/scripts/rotate-release-age-exemption.mjs
           node plugin/scripts/build-plugin.mjs
           # --if-stale: re-resolve the Python tree ONLY when the engine pin moved.
           # An unconditional re-lock here would pull in new transitives on every
