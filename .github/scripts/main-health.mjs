@@ -20,9 +20,10 @@
 // fuzz`, `Mutation tests` and `Pack smoke test` are deliberately absent from it.
 // A red nightly fuzz means "go look" and is already routed to a deduped issue by
 // nightly-fuzz-issue.js precisely because nobody should be paged for it — and
-// this sweep re-fires every two hours, so paging on it would mean ~12 pushes a
-// day until the next nightly. Widening the paging set is a decision to make by
-// editing that list, never a side effect of a second scope drifting past it.
+// this sweep re-reports for as long as the branch stays red, so paging on it
+// would turn one counterexample into a recurring push until the next nightly
+// clears it. Widening the paging set is a decision to make by editing that
+// list, never a side effect of a second scope drifting past it.
 //
 // It is deliberately NOT a required check and takes no fixing action: its whole
 // output is "these workflows are red on this branch, go look".

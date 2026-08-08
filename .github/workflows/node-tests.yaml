@@ -90,6 +90,13 @@ jobs:
       - name: Run main-branch health sweep tests
         run: node --test .github/scripts/main-health.test.mjs
 
+      # Same blind spot, and this suite is the proof of what it costs: ten tests
+      # covering the release canary's version-ordering helper sat here unrun
+      # while the helper itself was DEAD — a bare `import semver` that could
+      # never resolve. Every one of these would have caught it on the first run.
+      - name: Run npm max-stable version tests
+        run: node --test .github/scripts/npm-max-stable.test.mjs
+
       # Named explicitly rather than left to `pnpm test`'s discovery. This suite
       # gates the shipped plugin artifact — the reproducibility byte-compare and
       # every hook's fail-closed verdict — so which invocation reaches it must be

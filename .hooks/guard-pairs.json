@@ -23,6 +23,9 @@
       ".github/scripts/nightly-fuzz-issue.test.mjs"
     ],
     ".github/scripts/main-health.mjs": [".github/scripts/main-health.test.mjs"],
+    ".github/scripts/npm-max-stable.mjs": [
+      ".github/scripts/npm-max-stable.test.mjs"
+    ],
     ".github/workflows/main-health.yaml": [
       ".github/scripts/main-health.test.mjs"
     ],

@@ -8,7 +8,7 @@ name: Main branch health
 # workflow. #169 merged with nine red tests and `main` stayed red for ~30 hours
 # on exactly that gap.
 #
-# This job re-asks "is main red?" every two hours and fails while the answer is
+# This job re-asks "is main red?" once a night and fails while the answer is
 # yes. Its own failure is a push/schedule failure on the default branch, so
 # `CI failure notify` picks it up and sends the ntfy push — the alert path is the
 # vetted one, not a second copy. It clears itself the moment the branch recovers.
@@ -17,9 +17,13 @@ name: Main branch health
 # whole output is a list of red workflows and their run URLs.
 on:
   schedule:
-    # Offset from the top of the hour so this doesn't queue behind the runner
-    # stampede that lands on :00.
-    - cron: "23 */2 * * *"
+    # Daily, off-the-hour to dodge GitHub's peak-minute queueing, and late enough
+    # to sit AFTER every scheduled job in the paging set: fuzz-nightly and
+    # release-canary at 06:17, template-sync at 09:00, plus the Monday-only
+    # weekly security scan (09:00, 30m timeout) and CI failure-rate report
+    # (10:00) — a sweep that ran before them would judge yesterday's conclusions
+    # and report a stale verdict. The extra hour is slack for cron start-delay.
+    - cron: "41 11 * * *"
   workflow_dispatch:
 
 permissions:
