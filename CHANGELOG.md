@@ -8,6 +8,17 @@ adhere to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+## [2.19.2] - 2026-08-08
+
+### Fixed
+
+- Fixed reading of pristine hook sources in the lazyImport registry contract.
+- Fixed c8's `--src` roots derivation to use the include set and pin the gate floors correctly.
+
+### Changed
+
+- Scoped coverage, mutation and type gates to only what the package ships, reducing unnecessary test overhead.
+
 ## [2.19.1] - 2026-08-08
 
 ### Changed
