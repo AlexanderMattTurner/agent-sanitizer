@@ -39,6 +39,12 @@ UNANALYZABLE_JS_ONLY = {
     ("src/invisible.mjs", r"[\p{Extended_Pictographic}\p{Emoji_Modifier}]"),
     ("src/invisible.mjs", r"\p{Extended_Pictographic}"),
     ("src/invisible.mjs", r"[\u{E0000}-\u{E007F}]"),
+    (
+        "src/invisible.mjs",
+        r"[\p{Unified_Ideograph}\u{F900}-\u{FAFF}\u{2F800}-\u{2FA1F}]",
+    ),
+    ("src/invisible.mjs", r"\p{Script=Braille}"),
+    ("src/invisible.mjs", r"\p{Script=Hangul}"),
 }
 
 # JS `(?<name>` -> Python `(?P<name>`, leaving lookbehinds `(?<=` / `(?<!`

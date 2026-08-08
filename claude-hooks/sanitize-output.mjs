@@ -26,15 +26,13 @@ import {
   lazyImport,
   emitHookResponse,
   errMessage,
-  safeErrMessage,
-  failOpenEnabled,
-  failOpenContext,
   makeDeadline,
   lazyImportErrorFor,
   missingPackageMessage,
   DEFAULT_MISSING_PACKAGE_REMEDY,
   HookEvent,
 } from "./lib/hook-io.mjs";
+import { registerFaultPolicy, hookFaultOutcome } from "./lib/hook-fault.mjs";
 import { controlPlane, runJudgeCli } from "./lib/control-plane.mjs";
 import { bestEffortTrace, trace, TraceEvent } from "./lib/trace.mjs";
 import { hasEnvBoundSecret } from "./lib/secret-annotate.mjs";
@@ -553,18 +551,47 @@ export function emitFailClosed(
   emit = (fields) => emitHookResponse(HookEvent.POST_TOOL_USE, fields),
   remedy = DEFAULT_MISSING_PACKAGE_REMEDY,
 ) {
+  const { fields, fallbackFields } = failClosedParts(input, message, remedy);
+  try {
+    emit(fields);
+  } catch {
+    emit(fallbackFields);
+  }
+}
+
+/**
+ * The fail-closed response fields plus the shallow fallback to emit if
+ * serializing them throws. Split out from {@link emitFailClosed} so the posture
+ * table can state this hook's CLOSED verdict as a VALUE — the table is what
+ * `test/claude-hooks-posture.test.mjs` compares each hook's emission against, so
+ * a verdict reachable only by running the emitter could not be pinned there.
+ * @param {any} input  parsed hook input, or undefined if parsing threw
+ * @param {string} message
+ * @param {string} [remedy]  what a reader should run; hosts pass their own
+ * @returns {{ fields: Record<string, unknown>, fallbackFields: Record<string, unknown> }}
+ */
+function failClosedParts(
+  input,
+  message,
+  remedy = DEFAULT_MISSING_PACKAGE_REMEDY,
+) {
   // Threaded rather than defaulted here: this is the ONLY production caller of
   // failClosedContext, so a remedy it does not pass is a remedy no host can ever
   // reach — the parameter would be live only from tests.
   const additionalContext = failClosedContext(sanitizerDepsLoaded, remedy);
+  const fallbackFields = { updatedToolOutput: message, additionalContext };
+  let updatedToolOutput;
   try {
-    emit({
-      updatedToolOutput: failClosedReplacement(input, message),
-      additionalContext,
-    });
+    updatedToolOutput = failClosedReplacement(input, message);
   } catch {
-    emit({ updatedToolOutput: message, additionalContext });
+    // The shape-matching walk overflowed on a pathologically deep (but valid)
+    // tool_response. The bare string is shallow, always serializable, and still
+    // a valid string tool_response — so the hook stays CLOSED rather than
+    // throwing out of its own failure path, which would emit nothing and let
+    // the harness show the raw, unvetted output.
+    return { fields: fallbackFields, fallbackFields };
   }
+  return { fields: { updatedToolOutput, additionalContext }, fallbackFields };
 }
 
 /**
@@ -595,19 +622,39 @@ export function emitHookFailure(
   remedy = DEFAULT_MISSING_PACKAGE_REMEDY,
   env = process.env,
 ) {
-  if (failOpenEnabled(env)) {
-    emit({
-      additionalContext: failOpenContext("sanitize-output", "tool output", err),
-    });
-    return;
+  const outcome = hookFaultOutcome(HOOK_NAME, err, { input, remedy, env });
+  const fields = /** @type {Record<string, unknown>} */ (outcome.fields);
+  try {
+    emit(fields);
+  } catch (emitErr) {
+    // The open posture's fields are a lone string context — always
+    // serializable — so it declares no fallback, and a throw there is a real
+    // bug the caller must see rather than a suppression to retry.
+    if (outcome.fallbackFields === null) throw emitErr;
+    emit(outcome.fallbackFields);
   }
-  emitFailClosed(
-    input,
-    `[SANITIZATION FAILED — original output suppressed for safety. Hook error: ${safeErrMessage(err)}]`,
-    emit,
-    remedy,
-  );
 }
+
+/**
+ * The suppression placeholder that replaces the tool output under the closed
+ * posture. Named so the posture table and {@link emitFailClosed} cannot drift on
+ * the wording the model sees.
+ * @param {string} cause  the scrubbed hook error
+ * @returns {string}
+ */
+function suppressionMessage(cause) {
+  return `[SANITIZATION FAILED — original output suppressed for safety. Hook error: ${cause}]`;
+}
+
+// This hook's entry in the one posture table (lib/hook-fault.mjs). OPEN is the
+// shared default (a warning context, the original output left in the model's
+// view); CLOSED replaces every string leaf of the output with the placeholder.
+registerFaultPolicy(HOOK_NAME, {
+  event: HookEvent.POST_TOOL_USE,
+  guarded: "tool output",
+  closed: (ctx) =>
+    failClosedParts(ctx.input, suppressionMessage(ctx.message), ctx.remedy),
+});
 
 /**
  * Run the sanitization pipeline over a tool output and return the contract-

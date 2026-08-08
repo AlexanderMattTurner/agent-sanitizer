@@ -20,6 +20,39 @@ import {
   readFlag,
   readStdinJson,
 } from "./lib/hook-io.mjs";
+import {
+  registerFaultPolicy,
+  hookFaultOutcome,
+  writeFaultOutcome,
+} from "./lib/hook-fault.mjs";
+
+const HOOK_NAME = "plugin-hooks";
+
+// The dispatcher's entry in the one posture table (lib/hook-fault.mjs). It
+// answers no single event — it is the binder in front of all four — so it
+// carries no stdout envelope and both arms are process-level.
+//
+// BOTH ARMS BLOCK, and that is the declaration, not an oversight. The
+// AGENT_SANITIZER_FAIL_OPEN knob covers a hook that RAN and broke; an unknown
+// mode is static wiring corruption, which means no hook runs at all, silently,
+// for the life of the install — there is no run to degrade. Stating it here (and
+// pinning it in plugin/test/plugin-bundle.test.mjs) is the point of the table:
+// the arm that ignores the knob does so on the record, next to the four that
+// honor it, instead of by hard-exiting past the question.
+//
+// Exit 2 is the one non-zero code Claude Code treats as BLOCKING: it blocks
+// PreToolUse and UserPromptSubmit, surfaces stderr for PostToolUse, and is
+// harmless for SessionStart.
+const unknownMode = (/** @type {{ message: string }} */ ctx) => ({
+  stderr: `${HOOK_NAME}: ${ctx.message}\n`,
+  exitCode: 2,
+});
+registerFaultPolicy(HOOK_NAME, {
+  event: null,
+  guarded: "hook payload",
+  open: unknownMode,
+  closed: unknownMode,
+});
 
 // The packages the hooks lazy-load, each behind a thunk whose import specifier
 // is a LITERAL — esbuild only inlines `import("…")` it can read statically, so
@@ -114,16 +147,19 @@ export async function main() {
       break;
     }
     default:
-      // An unknown mode means broken hooks.json wiring — fail CLOSED, never fall
-      // through to some default hook and vet the wrong payload class. Exit 2 is
-      // the one non-zero code Claude Code treats as blocking (a plain exit 1 is
-      // a non-blocking hook error that lets the guarded action through
-      // unsanitized); it blocks PreToolUse and UserPromptSubmit, surfaces
-      // stderr for PostToolUse, and is harmless for SessionStart.
-      process.stderr.write(
-        `plugin-hooks: unknown hook mode ${JSON.stringify(mode)}\n`,
+      // An unknown mode means broken hooks.json wiring — never fall through to
+      // some default hook and vet the wrong payload class. WHICH way it fails is
+      // the operator's call, taken through the one posture table like every
+      // other hook fault (this arm used to hard-exit 2 unconditionally, so the
+      // knob an operator set was silently overruled here alone).
+      process.exit(
+        writeFaultOutcome(
+          hookFaultOutcome(
+            HOOK_NAME,
+            new Error(`unknown hook mode ${JSON.stringify(mode)}`),
+          ),
+        ),
       );
-      process.exit(2);
   }
 }
 

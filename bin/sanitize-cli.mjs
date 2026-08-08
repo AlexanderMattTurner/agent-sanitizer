@@ -70,8 +70,16 @@ function maxInputBytes() {
   return Math.floor(parsed);
 }
 
+/** The one-line reason reported for a caught throw. A thrown non-Error that
+ * still carries a `message` keeps reporting it (the historical behaviour);
+ * anything else stringifies.
+ * @param {unknown} err */
+const errorMessage = (err) =>
+  /** @type {{ message?: string }} */ (err)?.message ?? String(err);
+
 /** Throw if `text` exceeds the configured byte cap. The message names the limit
- * and the env var so a caller can act on it. */
+ * and the env var so a caller can act on it.
+ * @param {string} text */
 function enforceSizeLimit(text) {
   const limit = maxInputBytes();
   const size = Buffer.byteLength(text, "utf8");
@@ -82,43 +90,49 @@ function enforceSizeLimit(text) {
     );
 }
 
-/** @param {Record<string, unknown>} req @param {string} key */
+/** Read a required string field, throwing when it is absent or the wrong type.
+ * Returns the value (rather than only asserting) so the caller carries the
+ * narrowed `string` forward instead of re-reading an untyped bag.
+ * @param {Record<string, unknown>} req @param {string} key
+ * @returns {string} */
 function requireString(req, key) {
-  if (typeof req[key] !== "string")
+  const value = req[key];
+  if (typeof value !== "string")
     throw new Error(`request.${key} must be a string`);
+  return value;
 }
 
 /** Operations the CLI exposes. Each takes the parsed request, returns the JSON
  * payload object. Non-`sanitize` modules are imported lazily so a caller that
  * only ever sanitizes never loads prompt/output/instructions code. */
 const OPS = {
+  /** @param {Record<string, unknown>} req */
   async sanitize(req) {
-    requireString(req, "text");
-    const { cleaned, found, warnings } = await sanitize(req.text, {
+    const text = requireString(req, "text");
+    const { cleaned, found, warnings } = await sanitize(text, {
       html: Boolean(req.html),
     });
     return { cleaned, found, warnings };
   },
 
+  /** @param {Record<string, unknown>} req */
   async sanitizeText(req) {
-    requireString(req, "text");
+    const text = requireString(req, "text");
     // Layers 1–3 only: redact (Layer 4) and filterInjection (Layer 5) are
     // injected JS callbacks with no wire form, so they're never set here.
     const { sanitizeText } = await import("../src/output.mjs");
-    const { cleaned, warnings, modified, sgrNote } = await sanitizeText(
-      req.text,
-      {
-        html: Boolean(req.html),
-        exfilScan: Boolean(req.exfilScan),
-      },
-    );
+    const { cleaned, warnings, modified, sgrNote } = await sanitizeText(text, {
+      html: Boolean(req.html),
+      exfilScan: Boolean(req.exfilScan),
+    });
     return { cleaned, warnings, modified, sgrNote };
   },
 
+  /** @param {Record<string, unknown>} req */
   async classifyPrompt(req) {
-    requireString(req, "text");
+    const text = requireString(req, "text");
     const { classifyPrompt } = await import("../src/prompt.mjs");
-    return classifyPrompt(req.text);
+    return classifyPrompt(text);
   },
 
   // SECURITY (R8): `scanInstructionFiles` and `cleanFile` take filesystem
@@ -130,10 +144,12 @@ const OPS = {
   // this CLI's stdin to untrusted/model-controlled input for these ops. If you
   // must accept untrusted callers, add opt-in root confinement (reject paths
   // that resolve outside an allow-listed root) before exposing them.
+  /** @param {Record<string, unknown>} req */
   async scanInstructionFiles(req) {
+    const globs = req.globs;
     if (
-      !Array.isArray(req.globs) ||
-      req.globs.some((g) => typeof g !== "string")
+      !Array.isArray(globs) ||
+      globs.some((/** @type {unknown} */ g) => typeof g !== "string")
     )
       throw new Error("request.globs must be an array of strings");
     // Fail loud on a present-but-non-string cwd rather than silently dropping it
@@ -143,13 +159,14 @@ const OPS = {
       throw new Error("request.cwd must be a string");
     const { scanInstructionFiles } = await import("../src/instructions.mjs");
     const opts = typeof req.cwd === "string" ? { cwd: req.cwd } : {};
-    return { findings: scanInstructionFiles(req.globs, opts) };
+    return { findings: scanInstructionFiles(globs, opts) };
   },
 
+  /** @param {Record<string, unknown>} req */
   async cleanFile(req) {
-    requireString(req, "path");
+    const path = requireString(req, "path");
     const { cleanFile } = await import("../src/instructions.mjs");
-    return { changed: cleanFile(req.path) };
+    return { changed: cleanFile(path) };
   },
 };
 
@@ -162,9 +179,13 @@ const OPS = {
  */
 async function handle(payload) {
   enforceSizeLimit(payload);
-  const request = JSON.parse(payload);
-  const op = request.op ?? "sanitize";
-  const run = Object.prototype.hasOwnProperty.call(OPS, op) ? OPS[op] : null;
+  const request = /** @type {Record<string, unknown>} */ (JSON.parse(payload));
+  // Stringified so a non-string `op` (a number, an object) still reaches the
+  // hasOwnProperty guard and the same "unknown op" error it always did.
+  const op = String(request.op ?? "sanitize");
+  const run = Object.prototype.hasOwnProperty.call(OPS, op)
+    ? OPS[/** @type {keyof typeof OPS} */ (op)]
+    : null;
   if (!run) throw new Error(`unknown op: ${op}`);
   return JSON.stringify(await run(request));
 }
@@ -190,6 +211,11 @@ async function readAll(stream) {
 }
 
 /**
+ * One unit of the worker's one-response-per-input-line framing.
+ * @typedef {{ kind: "line", text: string } | { kind: "oversize" }} SplitEvent
+ */
+
+/**
  * Streaming newline-splitter that never buffers a line past the byte `limit`.
  *
  * Fed raw stdin chunks one at a time, it yields a sequence of events the worker
@@ -211,6 +237,7 @@ async function readAll(stream) {
  * the one-response-per-input-line framing holds even for a dropped line.
  *
  * @param {number} limit  per-line byte cap (`maxInputBytes()`)
+ * @returns {((chunk: Buffer) => SplitEvent[]) & { end: () => SplitEvent[] }}
  */
 function createLineSplitter(limit) {
   // The bytes of the current line are held as a LIST of chunk slices plus their
@@ -240,7 +267,8 @@ function createLineSplitter(limit) {
     return buf;
   };
 
-  /** Strip one trailing `\r` so CRLF input frames identically to LF. */
+  /** Strip one trailing `\r` so CRLF input frames identically to LF.
+   * @param {Buffer} buf */
   const toLine = (buf) => {
     const stripCr = buf.length > 0 && buf[buf.length - 1] === 0x0d;
     return buf.toString("utf8", 0, stripCr ? buf.length - 1 : buf.length);
@@ -250,6 +278,7 @@ function createLineSplitter(limit) {
   // into the pending list, flipping to `discarding` if it would breach the cap.
   // Applies identically to a newline-terminated segment and to the unterminated
   // tail, so an oversize line is caught WITHIN a chunk, not only at its edge.
+  /** @param {Buffer} segment */
   const accumulate = (segment) => {
     if (discarding) return;
     if (pendingLen + segment.length > limit) {
@@ -263,8 +292,11 @@ function createLineSplitter(limit) {
     }
   };
 
-  /** Feed one chunk, returning the events it completes (newline-terminated). */
+  /** Feed one chunk, returning the events it completes (newline-terminated).
+   * @param {Buffer} chunk
+   * @returns {SplitEvent[]} */
   const push = (chunk) => {
+    /** @type {SplitEvent[]} */
     const events = [];
     let start = 0;
     for (let i = 0; i < chunk.length; i++) {
@@ -287,6 +319,7 @@ function createLineSplitter(limit) {
    * Flush at EOF. A final line with no trailing `\n` is still a request, so it
    * gets a response — matching `readline`, which emits its last line on `close`.
    * An empty tail (stream ended on a `\n`, or was empty) yields nothing.
+   * @returns {SplitEvent[]}
    */
   push.end = () => {
     if (discarding) {
@@ -301,6 +334,7 @@ function createLineSplitter(limit) {
   return push;
 }
 
+/** @param {number} limit */
 const OVERSIZE_ERROR = (limit) =>
   JSON.stringify({
     error:
@@ -323,6 +357,7 @@ async function runWorker() {
   // "request too large" error a one-shot caller sees. `response` never holds a
   // newline: `JSON.stringify` of the result or of a one-key error object is
   // single-line, so the one-line-per-request framing holds.
+  /** @param {SplitEvent} event */
   const respond = async (event) => {
     if (event.kind === "oversize") {
       process.stdout.write(`${OVERSIZE_ERROR(limit)}\n`);
@@ -332,7 +367,7 @@ async function runWorker() {
     try {
       response = await handle(event.text);
     } catch (err) {
-      response = JSON.stringify({ error: err?.message ?? String(err) });
+      response = JSON.stringify({ error: errorMessage(err) });
     }
     process.stdout.write(`${response}\n`);
   };
@@ -353,7 +388,7 @@ async function runOneShot() {
   try {
     response = await handle(await readAll(process.stdin));
   } catch (err) {
-    process.stderr.write(`sanitize CLI: ${err?.message ?? String(err)}\n`);
+    process.stderr.write(`sanitize CLI: ${errorMessage(err)}\n`);
     process.exitCode = 1;
     return;
   }

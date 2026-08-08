@@ -6,5 +6,6 @@
     "emitDeclarationOnly": true,
     "rootDir": "src",
     "outDir": "types"
-  }
+  },
+  "include": ["src/**/*.mjs"]
 }

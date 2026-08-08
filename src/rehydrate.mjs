@@ -51,6 +51,7 @@ import {
   occurrences,
   overlapAwareCount,
   orderedMatches,
+  spliceOrdered,
   alignDeletions,
   resolveSpan,
   rehydrateNewString,
@@ -422,9 +423,9 @@ async function rehydrateWrite(ti, view, io, hint) {
     };
 
   // Resolve each of this file's placeholder texts to its single secret first,
-  // then splice in ONE ordered pass (R6). A chained `out.split(ph).join(secret)`
-  // per placeholder is unsound: an inserted secret whose bytes contain a later
-  // placeholder text would be re-matched and corrupted by the next split.
+  // then splice in ONE ordered pass (R6) via the shared `spliceOrdered` — see
+  // its doc for why a chained `out.split(ph).join(secret)` per placeholder is
+  // unsound.
   const valueByPh = new Map();
   for (const phText of texts) {
     const produced = view.pairs.filter((pair) => pair.placeholder === phText);
@@ -445,23 +446,15 @@ async function rehydrateWrite(ti, view, io, hint) {
       };
     valueByPh.set(phText, values[0]);
   }
-  const matches = orderedMatches(ti.content, texts);
-  let out = "";
-  let last = 0;
-  // Byte ranges in `out` occupied by the substituted secret values. A hint
-  // occurrence inside one of these is a pathological secret whose bytes contain
-  // the hint prefix, NOT a placeholder the model pasted — so it is excluded from
-  // the foreign-placeholder scan below.
-  const secretSpans = [];
-  for (const match of matches) {
-    const secret = valueByPh.get(match.text);
-    out += ti.content.slice(last, match.index);
-    const secretStart = out.length;
-    out += secret;
-    secretSpans.push({ start: secretStart, end: out.length });
-    last = match.index + match.text.length;
-  }
-  out += ti.content.slice(last);
+  // `secretSpans`: byte ranges in `out` occupied by the substituted secret
+  // values. A hint occurrence inside one of these is a pathological secret whose
+  // bytes contain the hint prefix, NOT a placeholder the model pasted — so it is
+  // excluded from the foreign-placeholder scan below.
+  const { text: out, spans: secretSpans } = spliceOrdered(
+    ti.content,
+    orderedMatches(ti.content, texts),
+    (match) => valueByPh.get(match.text),
+  );
   const secrets = [...valueByPh.values()];
 
   // R3: the new content may mix a valid same-file placeholder (substituted

@@ -310,6 +310,72 @@ var init_hook_io = __esm({
   }
 });
 
+// claude-hooks/lib/hook-fault.mjs
+function registerFaultPolicy(hook, policy) {
+  if (!FAULT_POLICY_HOOKS.includes(hook))
+    throw new Error(
+      `unknown hook ${JSON.stringify(hook)}: add it to FAULT_POLICY_HOOKS in claude-hooks/lib/hook-fault.mjs before registering a posture for it`
+    );
+  policies.set(hook, policy);
+}
+function faultPolicy(hook) {
+  const policy = policies.get(hook);
+  if (policy === void 0)
+    throw new Error(
+      `no fault policy registered for hook ${JSON.stringify(hook)}; call registerFaultPolicy at the hook module's scope`
+    );
+  return policy;
+}
+function defaultOpen(ctx) {
+  return { fields: { additionalContext: ctx.openContext } };
+}
+function hookFaultOutcome(hook, err, ctx = {}) {
+  const policy = faultPolicy(hook);
+  const open = failOpenEnabled(ctx.env);
+  const full = {
+    ...ctx,
+    hook,
+    err,
+    message: safeErrMessage(err),
+    openContext: failOpenContext(hook, policy.guarded, err)
+  };
+  const parts2 = (open ? policy.open ?? defaultOpen : policy.closed)(full);
+  const fields = parts2.fields ?? null;
+  if (fields !== null && parts2.envelope === void 0 && policy.event === null)
+    throw new Error(
+      `fault policy for ${JSON.stringify(hook)} returns hookSpecificOutput fields but declares no event to wrap them in`
+    );
+  return Object.freeze({
+    posture: open ? "open" : "closed",
+    fields,
+    fallbackFields: parts2.fallbackFields ?? null,
+    envelope: parts2.envelope ?? (fields === null ? null : { hookSpecificOutput: { hookEventName: policy.event, ...fields } }),
+    stderr: parts2.stderr ?? null,
+    exitCode: parts2.exitCode ?? 0,
+    armAlert: parts2.armAlert ?? false
+  });
+}
+function writeFaultOutcome(outcome, write = (chunk) => process.stdout.write(chunk), writeErr = (chunk) => process.stderr.write(chunk)) {
+  if (outcome.envelope !== null) write(JSON.stringify(outcome.envelope));
+  if (outcome.stderr !== null) writeErr(outcome.stderr);
+  return outcome.exitCode;
+}
+var FAULT_POLICY_HOOKS, policies;
+var init_hook_fault = __esm({
+  "claude-hooks/lib/hook-fault.mjs"() {
+    "use strict";
+    init_hook_io();
+    FAULT_POLICY_HOOKS = Object.freeze([
+      "plugin-hooks",
+      "pretooluse-sanitize",
+      "sanitize-output",
+      "sanitize-user-prompt",
+      "scan-invisible-chars"
+    ]);
+    policies = /* @__PURE__ */ new Map();
+  }
+});
+
 // agent-control-plane-core/src/control-plane.mjs
 function assertAliasTargetsModeled(aliases) {
   for (const canonical of Object.values(aliases)) {
@@ -66738,6 +66804,64 @@ var init_dist2 = __esm({
   }
 });
 
+// claude-hooks/lib/layer-pipeline.mjs
+function needsFixedPoint(layers) {
+  let sawSkipBased = false;
+  for (const layer of layers) {
+    if (layer.erases && sawSkipBased) return true;
+    if (layer.skipBased) sawSkipBased = true;
+  }
+  return false;
+}
+async function runLayerPipeline(tool, toolInput, layers) {
+  const firstTerminal = layers.findIndex((layer) => layer.terminal === true);
+  const body = firstTerminal === -1 ? layers : layers.slice(0, firstTerminal);
+  const terminal = firstTerminal === -1 ? [] : layers.slice(firstTerminal);
+  if (terminal.some((layer) => layer.terminal !== true))
+    throw new Error("terminal layers must come last in the pipeline table");
+  let current = toolInput;
+  let changed = false;
+  const contexts = [];
+  const accept = (result) => {
+    current = result.updatedInput;
+    changed = true;
+    if (!contexts.includes(result.context)) contexts.push(result.context);
+  };
+  const requireFixedPoint = needsFixedPoint(body);
+  const passes = requireFixedPoint ? MAX_PIPELINE_PASSES : 1;
+  let settled = false;
+  for (let pass = 0; pass < passes && !settled; pass++) {
+    settled = true;
+    for (const layer of body) {
+      const result = await layer.run(tool, current);
+      if (result === null) continue;
+      if ("deny" in result)
+        return { updatedInput: current, changed, contexts, deny: result.deny };
+      accept(result);
+      settled = false;
+    }
+  }
+  if (requireFixedPoint && !settled)
+    throw new Error(
+      `layer pipeline did not reach a fixed point in ${passes} passes; a layer is undoing another layer's rewrite`
+    );
+  for (const layer of terminal) {
+    const result = await layer.run(tool, current);
+    if (result === null) continue;
+    if ("deny" in result)
+      return { updatedInput: current, changed, contexts, deny: result.deny };
+    accept(result);
+  }
+  return { updatedInput: current, changed, contexts };
+}
+var MAX_PIPELINE_PASSES;
+var init_layer_pipeline = __esm({
+  "claude-hooks/lib/layer-pipeline.mjs"() {
+    "use strict";
+    MAX_PIPELINE_PASSES = 8;
+  }
+});
+
 // claude-hooks/lib/control-plane.mjs
 function controlPlane(overrides = {}) {
   const bindings = { claudeAdapter: claudeAdapter2, Decision: Decision2, EventKind: EventKind2, ...overrides };
@@ -67514,7 +67638,8 @@ __export(pretooluse_sanitize_exports, {
   depLoadHint: () => depLoadHint,
   failClosedFields: () => failClosedFields,
   hookFailureFields: () => hookFailureFields,
-  judgePreToolUseSanitize: () => judgePreToolUseSanitize
+  judgePreToolUseSanitize: () => judgePreToolUseSanitize,
+  preToolUseLayers: () => preToolUseLayers
 });
 import { createRequire as createRequire4 } from "node:module";
 import { readFileSync as readFileSync4 } from "node:fs";
@@ -67527,6 +67652,60 @@ function emitTraced(emitTrace, toolName, fields) {
     outcome = "ask";
   emitTrace(TraceEvent.HOOK_RAN, { hook: HOOK_NAME, tool: toolName, outcome });
   return fields;
+}
+function preToolUseLayers(rehydrate, env = process.env) {
+  const layers = [
+    {
+      name: "confusables",
+      // Folding SUBSTITUTES a glyph for its ASCII canon, which drops the
+      // original code point; and it SKIPS any token still holding an unmapped
+      // glyph, which is the decision an erasure can invalidate.
+      erases: true,
+      skipBased: true,
+      run: (tool, toolInput) => {
+        const norm = normalizeConfusables2(tool, toolInput, {
+          scan: confusableScan
+        });
+        return norm === null ? null : {
+          updatedInput: norm.updatedInput,
+          context: normalizeContext2(norm.normalized)
+        };
+      }
+    },
+    {
+      name: "authored-content",
+      // Erases payload-capable invisible characters, and skips below the
+      // payload-capable floor — the erasure that broke the fold's precondition.
+      erases: true,
+      skipBased: true,
+      run: (tool, toolInput) => {
+        const authored = sanitizeAuthoredContent(tool, toolInput);
+        return authored === null ? null : {
+          updatedInput: authored.updatedInput,
+          context: authoredContext(authored.changed)
+        };
+      }
+    },
+    {
+      name: "rehydrate",
+      erases: true,
+      skipBased: false,
+      // Terminal by contract, not by luck: it re-anchors Edit/Write inputs onto
+      // the on-disk bytes, and the secrets it restores must NOT be re-stripped
+      // by layer 3 or re-folded by layer 2 on a later pass.
+      terminal: true,
+      run: async (tool, toolInput) => {
+        const rehydrated = await rehydrate(tool, toolInput);
+        if (!rehydrated) return null;
+        if ("deny" in rehydrated) return { deny: rehydrated.deny };
+        return {
+          updatedInput: rehydrated.updatedInput,
+          context: rehydrated.context
+        };
+      }
+    }
+  ];
+  return env.AGENT_SANITIZER_OUTPUT_DISABLED === "1" ? layers.filter((layer) => layer.name !== "authored-content") : layers;
 }
 async function buildPreToolUseResponse(input, rehydrate = defaultRehydrate, sink = trace) {
   const emitTrace = bestEffortTrace(sink);
@@ -67543,33 +67722,18 @@ async function buildPreToolUseResponse(input, rehydrate = defaultRehydrate, sink
     }
   }
   const { tool_name: tool, tool_input: toolInput } = input;
-  let current = toolInput;
-  let changed = false;
-  const norm = normalizeConfusables2(tool, current, { scan: confusableScan });
-  if (norm) {
-    current = norm.updatedInput;
-    changed = true;
-    contexts.push(normalizeContext2(norm.normalized));
-  }
-  if (process.env.AGENT_SANITIZER_OUTPUT_DISABLED !== "1") {
-    const authored = sanitizeAuthoredContent(tool, current);
-    if (authored) {
-      current = authored.updatedInput;
-      changed = true;
-      contexts.push(authoredContext(authored.changed));
-    }
-  }
-  const rehydrated = await rehydrate(tool, current);
-  if (rehydrated && "deny" in rehydrated)
+  const {
+    updatedInput: current,
+    changed,
+    contexts: layerContexts,
+    deny
+  } = await runLayerPipeline(tool, toolInput, preToolUseLayers(rehydrate));
+  if (deny !== void 0)
     return emitTraced(emitTrace, input.tool_name, {
       permissionDecision: PermissionDecision.DENY,
-      permissionDecisionReason: rehydrated.deny
+      permissionDecisionReason: deny
     });
-  if (rehydrated) {
-    current = rehydrated.updatedInput;
-    changed = true;
-    contexts.push(rehydrated.context);
-  }
+  contexts.push(...layerContexts);
   return emitTraced(
     emitTrace,
     input.tool_name,
@@ -67645,9 +67809,15 @@ function failClosedFields(parsedOk, err, opts = {}) {
   };
 }
 function hookFailureFields(parsedOk, err, opts = {}) {
-  if (failOpenEnabled(opts.env))
-    return { additionalContext: failOpenContext(HOOK_NAME, "tool input", err) };
-  return failClosedFields(parsedOk, err, opts);
+  return (
+    /** @type {Record<string, unknown>} */
+    hookFaultOutcome(HOOK_NAME, err, {
+      parsedOk,
+      env: opts.env,
+      messages: opts.messages,
+      hint: opts.hint
+    }).fields
+  );
 }
 async function cliMain(opts = {}) {
   const { gates = [], trace: emitTrace = trace } = opts;
@@ -67681,6 +67851,8 @@ var init_pretooluse_sanitize = __esm({
   async "claude-hooks/pretooluse-sanitize.mjs"() {
     "use strict";
     init_hook_io();
+    init_hook_fault();
+    init_layer_pipeline();
     await init_control_plane2();
     await init_invisible_alert();
     await init_authored_content();
@@ -67720,6 +67892,16 @@ var init_pretooluse_sanitize = __esm({
       }
     };
     defaultRehydrate = (tool, toolInput) => rehydrateRedacted2(tool, toolInput, redactorIo);
+    registerFaultPolicy(HOOK_NAME, {
+      event: HookEvent.PRE_TOOL_USE,
+      guarded: "tool input",
+      closed: (ctx) => ({
+        fields: failClosedFields(ctx.parsedOk, ctx.err, {
+          messages: ctx.messages,
+          hint: ctx.hint
+        })
+      })
+    });
     if (isMain(import.meta.url)) {
       await cliMain();
     }
@@ -67983,29 +68165,39 @@ function failClosedContext(depsLoaded = sanitizerDepsLoaded, remedy = DEFAULT_MI
   return `${FAIL_CLOSED_CONTEXT} ${missingPackageMessage("agent-sanitizer", lazyImportErrorFor("agent-sanitizer"), remedy)}`;
 }
 function emitFailClosed(input, message, emit = (fields) => emitHookResponse(HookEvent.POST_TOOL_USE, fields), remedy = DEFAULT_MISSING_PACKAGE_REMEDY) {
-  const additionalContext = failClosedContext(sanitizerDepsLoaded, remedy);
+  const { fields, fallbackFields } = failClosedParts(input, message, remedy);
   try {
-    emit({
-      updatedToolOutput: failClosedReplacement(input, message),
-      additionalContext
-    });
+    emit(fields);
   } catch {
-    emit({ updatedToolOutput: message, additionalContext });
+    emit(fallbackFields);
   }
 }
-function emitHookFailure(input, err, emit = (fields) => emitHookResponse(HookEvent.POST_TOOL_USE, fields), remedy = DEFAULT_MISSING_PACKAGE_REMEDY, env = process.env) {
-  if (failOpenEnabled(env)) {
-    emit({
-      additionalContext: failOpenContext("sanitize-output", "tool output", err)
-    });
-    return;
+function failClosedParts(input, message, remedy = DEFAULT_MISSING_PACKAGE_REMEDY) {
+  const additionalContext = failClosedContext(sanitizerDepsLoaded, remedy);
+  const fallbackFields = { updatedToolOutput: message, additionalContext };
+  let updatedToolOutput;
+  try {
+    updatedToolOutput = failClosedReplacement(input, message);
+  } catch {
+    return { fields: fallbackFields, fallbackFields };
   }
-  emitFailClosed(
-    input,
-    `[SANITIZATION FAILED \u2014 original output suppressed for safety. Hook error: ${safeErrMessage(err)}]`,
-    emit,
-    remedy
+  return { fields: { updatedToolOutput, additionalContext }, fallbackFields };
+}
+function emitHookFailure(input, err, emit = (fields) => emitHookResponse(HookEvent.POST_TOOL_USE, fields), remedy = DEFAULT_MISSING_PACKAGE_REMEDY, env = process.env) {
+  const outcome = hookFaultOutcome(HOOK_NAME2, err, { input, remedy, env });
+  const fields = (
+    /** @type {Record<string, unknown>} */
+    outcome.fields
   );
+  try {
+    emit(fields);
+  } catch (emitErr) {
+    if (outcome.fallbackFields === null) throw emitErr;
+    emit(outcome.fallbackFields);
+  }
+}
+function suppressionMessage(cause) {
+  return `[SANITIZATION FAILED \u2014 original output suppressed for safety. Hook error: ${cause}]`;
 }
 async function evaluateToolOutput(input, ext = {}) {
   const emitTrace = bestEffortTrace(ext.trace ?? trace);
@@ -68116,6 +68308,7 @@ var init_sanitize_output = __esm({
     "use strict";
     init_redactor_client();
     init_hook_io();
+    init_hook_fault();
     await init_control_plane2();
     init_trace2();
     init_secret_annotate();
@@ -68136,6 +68329,11 @@ var init_sanitize_output = __esm({
     SGR_OUTPUT_NOTE = "Display-only ANSI color stripped; pipe through cat -v to inspect raw escapes.";
     WEB_INGRESS_TOOLS = /* @__PURE__ */ new Set(["WebFetch", "WebSearch"]);
     FAIL_CLOSED_CONTEXT = "CRITICAL: sanitize-output hook failed; this tool's output was suppressed (replaced with a placeholder) to fail closed -- the unsanitized output was not shown. Investigate the hook error before relying on this tool.";
+    registerFaultPolicy(HOOK_NAME2, {
+      event: HookEvent.POST_TOOL_USE,
+      guarded: "tool output",
+      closed: (ctx) => failClosedParts(ctx.input, suppressionMessage(ctx.message), ctx.remedy)
+    });
     if (isMain(import.meta.url)) {
       await cliMain2();
     }
@@ -68190,11 +68388,11 @@ async function main(read, write, opts = {}) {
   const emitTrace = bestEffortTrace(sink);
   const messages = { ...USER_PROMPT_MESSAGES, ...overrides };
   await runJudgeCli(
-    "sanitize-user-prompt",
+    HOOK_NAME3,
     (event) => {
       const verdict = judgeSanitizeUserPrompt(event, strip, messages);
       emitTrace(TraceEvent.HOOK_RAN, {
-        hook: "sanitize-user-prompt",
+        hook: HOOK_NAME3,
         outcome: verdict.decision === controlPlane().Decision.DENY ? "deny" : verdict.additional_context ? "note" : "allow"
       });
       return verdict;
@@ -68202,31 +68400,19 @@ async function main(read, write, opts = {}) {
     {
       readInput: read,
       write,
-      onError: (err) => write(
-        JSON.stringify(
-          failOpenEnabled(env) ? {
-            hookSpecificOutput: {
-              hookEventName: HookEvent.USER_PROMPT_SUBMIT,
-              additionalContext: failOpenContext(
-                "sanitize-user-prompt",
-                "prompt",
-                err
-              )
-            }
-          } : {
-            decision: "block",
-            reason: messages.hookFailed(safeErrMessage(err))
-          }
-        )
+      onError: (err) => writeFaultOutcome(
+        hookFaultOutcome(HOOK_NAME3, err, { messages, env }),
+        write
       )
     }
   );
 }
-var classifyPrompt2, stripAnsiFully3, USER_PROMPT_MESSAGES;
+var classifyPrompt2, stripAnsiFully3, USER_PROMPT_MESSAGES, HOOK_NAME3;
 var init_sanitize_user_prompt = __esm({
   async "claude-hooks/sanitize-user-prompt.mjs"() {
     "use strict";
     init_hook_io();
+    init_hook_fault();
     await init_control_plane2();
     init_trace2();
     USER_PROMPT_MESSAGES = Object.freeze({
@@ -68239,6 +68425,20 @@ var init_sanitize_user_prompt = __esm({
       // exactly like the reasons above, and one channel means a host cannot supply
       // its wording in one place and forget it in the other.
       remedy: DEFAULT_MISSING_PACKAGE_REMEDY
+    });
+    HOOK_NAME3 = "sanitize-user-prompt";
+    registerFaultPolicy(HOOK_NAME3, {
+      event: HookEvent.USER_PROMPT_SUBMIT,
+      guarded: "prompt",
+      closed: (ctx) => ({
+        envelope: {
+          decision: "block",
+          reason: {
+            ...USER_PROMPT_MESSAGES,
+            ...ctx.messages
+          }.hookFailed(ctx.message)
+        }
+      })
     });
     ({ classifyPrompt: classifyPrompt2 } = /** @type {typeof import("agent-sanitizer/prompt")} */
     await lazyImport("agent-sanitizer/prompt"));
@@ -68263,7 +68463,9 @@ __export(scan_invisible_chars_exports, {
   findInstructionFiles: () => findInstructionFiles,
   findMdFiles: () => findMdFiles,
   formatReport: () => formatReport,
-  scanFile: () => scanFile
+  formatSkipped: () => formatSkipped,
+  scanFile: () => scanFile,
+  scanProject: () => scanProject
 });
 import { readFileSync as readFileSync5, globSync, writeFileSync as writeFileSync2, unlinkSync as unlinkSync2 } from "node:fs";
 import { join as join5, relative } from "node:path";
@@ -68288,6 +68490,21 @@ async function ensureSanitizerLoaded() {
   } = /** @type {typeof import("agent-sanitizer/invisible")} */
   reloaded);
   return true;
+}
+function faultLine(ctx) {
+  return `${HOOK_NAME4}: ${ctx.message}. Instruction files were NOT fully scanned for hidden Unicode, so any payload in them reaches the model unvetted.`;
+}
+function reportFault(err) {
+  const outcome = hookFaultOutcome(HOOK_NAME4, err);
+  process.exitCode = writeFaultOutcome(outcome);
+  return outcome.armAlert ? [
+    /** @type {string} */
+    outcome.stderr
+  ] : [];
+}
+function persistAlert(parts2) {
+  if (parts2.length === 0) return;
+  writeFileNoFollow(ALERT_FILE, parts2.join("\n") + "\n");
 }
 function decodeRun(run) {
   const cps = [...run].map((ch) => (
@@ -68386,32 +68603,60 @@ function formatReport(allFindings) {
   lines.push(BAR);
   return lines.join("\n");
 }
-function scanProject() {
+function scanProject(dir = PROJECT_DIR) {
   const targets = [
     .../* @__PURE__ */ new Set([
-      ...findInstructionFiles(PROJECT_DIR),
-      ...findMdFiles(join5(PROJECT_DIR, ".claude"))
+      ...findInstructionFiles(dir),
+      ...findMdFiles(join5(dir, ".claude"))
     ])
   ];
-  const allFindings = [];
+  const findings = [];
+  const skipped = [];
+  let scanned = 0;
   for (const file of targets) {
+    let fileFindings;
     try {
-      const findings = scanFile(file);
-      if (findings.length > 0) {
-        allFindings.push({ file: relative(PROJECT_DIR, file), findings });
-      }
-    } catch {
+      fileFindings = scanFile(file);
+    } catch (err) {
+      if (
+        /** @type {NodeJS.ErrnoException} */
+        err.code === void 0
+      )
+        throw err;
+      skipped.push({ file: relative(dir, file), reason: safeErrMessage(err) });
+      continue;
     }
+    scanned++;
+    if (fileFindings.length > 0)
+      findings.push({ file: relative(dir, file), findings: fileFindings });
   }
-  return allFindings;
+  return { targets, scanned, findings, skipped };
 }
-async function cliMain3({ trace: sink = trace } = {}) {
+function formatSkipped(skipped) {
+  return [
+    "",
+    "\u2501\u2501\u2501 INSTRUCTION FILES NOT SCANNED \u2501\u2501\u2501",
+    "",
+    "These files load as project instructions but could NOT be read, so they",
+    "were never checked for hidden Unicode. Treat their content as unvetted.",
+    "",
+    ...skipped.map(({ file, reason }) => `  ${file}: ${reason}`),
+    ""
+  ].join("\n");
+}
+async function cliMain3({ trace: sink = trace, scan: runScan } = {}) {
   const emitTrace = bestEffortTrace(sink);
+  const alertParts = [];
   if (!await ensureSanitizerLoaded()) {
     emitTrace(TraceEvent.SCAN_INVISIBLE_CHARS_RAN, { outcome: "skipped" });
-    process.stderr.write(
-      "scan-invisible-chars: agent-sanitizer failed to load (node deps not installed and session-setup did not finish in time); instruction files were NOT scanned for hidden Unicode. Run `pnpm install`.\n"
+    alertParts.push(
+      ...reportFault(
+        new Error(
+          "agent-sanitizer failed to load (node deps not installed and session-setup did not finish in time); run `pnpm install`"
+        )
+      )
     );
+    persistAlert(alertParts);
     process.exit(1);
   }
   for (const stale of [ALERT_FILE, ALERT_ACK_FILE]) {
@@ -68420,18 +68665,43 @@ async function cliMain3({ trace: sink = trace } = {}) {
     } catch {
     }
   }
-  const allFindings = scanProject();
-  if (allFindings.length === 0) {
-    emitTrace(TraceEvent.SCAN_INVISIBLE_CHARS_RAN, { outcome: "clean" });
+  let scan2;
+  try {
+    scan2 = (runScan ?? scanProject)();
+  } catch (err) {
+    emitTrace(TraceEvent.SCAN_INVISIBLE_CHARS_RAN, { outcome: "skipped" });
+    alertParts.push(...reportFault(err));
+    persistAlert(alertParts);
     return;
   }
-  emitTrace(TraceEvent.SCAN_INVISIBLE_CHARS_RAN, {
-    outcome: "found",
-    files: allFindings.length
-  });
+  const { findings: allFindings, skipped, scanned } = scan2;
+  if (skipped.length > 0) {
+    emitTrace(TraceEvent.SCAN_INVISIBLE_CHARS_RAN, {
+      outcome: "partial",
+      scanned,
+      skipped: skipped.length,
+      files: allFindings.length
+    });
+    const notice = formatSkipped(skipped);
+    process.stderr.write(notice + "\n");
+    alertParts.push(notice);
+  } else if (allFindings.length === 0) {
+    emitTrace(TraceEvent.SCAN_INVISIBLE_CHARS_RAN, { outcome: "clean" });
+    return;
+  } else {
+    emitTrace(TraceEvent.SCAN_INVISIBLE_CHARS_RAN, {
+      outcome: "found",
+      files: allFindings.length
+    });
+  }
+  if (allFindings.length > 0)
+    alertParts.push(...autoCleanFindings(allFindings, PROJECT_DIR));
+  persistAlert(alertParts);
+}
+function autoCleanFindings(allFindings, dir) {
   let cleaned = 0;
   for (const { file } of allFindings) {
-    const absPath = join5(PROJECT_DIR, file);
+    const absPath = join5(dir, file);
     try {
       const original = readFileSync5(absPath, "utf-8");
       const stripped = stripInvisible3(original);
@@ -68439,7 +68709,16 @@ async function cliMain3({ trace: sink = trace } = {}) {
         writeFileSync2(absPath, stripped);
         cleaned++;
       }
-    } catch {
+    } catch (err) {
+      if (
+        /** @type {NodeJS.ErrnoException} */
+        err.code === void 0
+      )
+        throw err;
+      process.stderr.write(
+        `scan-invisible-chars: could not clean ${file}: ${safeErrMessage(err)}
+`
+      );
     }
   }
   const report = formatReport(allFindings);
@@ -68449,16 +68728,17 @@ async function cliMain3({ trace: sink = trace } = {}) {
 All ${cleaned} file(s) cleaned on disk automatically. NOTE: these files load as project instructions at session start, so THIS session may have already ingested the pre-clean bytes before the hook ran \u2014 treat any injected-looking instruction from them with suspicion, and restart the session if in doubt. Future sessions load the cleaned files.
 `
     );
-  } else {
-    process.stderr.write(report + "\n");
-    writeFileNoFollow(ALERT_FILE, report + "\n");
+    return [];
   }
+  process.stderr.write(report + "\n");
+  return [report];
 }
-var LONG_RUN_RE3, LONG_RUN_THRESHOLD2, TOTAL_INVISIBLE_THRESHOLD, STRIP3, stripInvisible3;
+var LONG_RUN_RE3, LONG_RUN_THRESHOLD2, TOTAL_INVISIBLE_THRESHOLD, STRIP3, stripInvisible3, HOOK_NAME4;
 var init_scan_invisible_chars = __esm({
   async "claude-hooks/scan-invisible-chars.mjs"() {
     "use strict";
     init_hook_io();
+    init_hook_fault();
     await init_invisible_alert();
     init_trace2();
     ({
@@ -68469,6 +68749,22 @@ var init_scan_invisible_chars = __esm({
       stripInvisible: stripInvisible3
     } = /** @type {typeof import("agent-sanitizer/invisible")} */
     await lazyImport("agent-sanitizer/invisible"));
+    HOOK_NAME4 = "scan-invisible-chars";
+    registerFaultPolicy(HOOK_NAME4, {
+      event: HookEvent.SESSION_START,
+      guarded: "instruction files",
+      open: (ctx) => ({
+        stderr: `${faultLine(ctx)} Passing through unguarded; set AGENT_SANITIZER_FAIL_OPEN=0 to arm the tool-call gate instead.
+`,
+        exitCode: 1
+      }),
+      closed: (ctx) => ({
+        stderr: `${faultLine(ctx)} Arming the tool-call gate (AGENT_SANITIZER_FAIL_OPEN=0).
+`,
+        exitCode: 1,
+        armAlert: true
+      })
+    });
     if (isMain(import.meta.url)) {
       await cliMain3();
     }
@@ -68477,6 +68773,19 @@ var init_scan_invisible_chars = __esm({
 
 // claude-hooks/plugin-hooks.mjs
 init_hook_io();
+init_hook_fault();
+var HOOK_NAME5 = "plugin-hooks";
+var unknownMode = (ctx) => ({
+  stderr: `${HOOK_NAME5}: ${ctx.message}
+`,
+  exitCode: 2
+});
+registerFaultPolicy(HOOK_NAME5, {
+  event: null,
+  guarded: "hook payload",
+  open: unknownMode,
+  closed: unknownMode
+});
 var LAZY_LOADERS = {
   "agent-control-plane-core": () => Promise.resolve().then(() => (init_src(), src_exports)),
   "agent-control-plane-core/claude": () => Promise.resolve().then(() => (init_claude(), claude_exports)),
@@ -68538,11 +68847,14 @@ async function main2() {
       break;
     }
     default:
-      process.stderr.write(
-        `plugin-hooks: unknown hook mode ${JSON.stringify(mode)}
-`
+      process.exit(
+        writeFaultOutcome(
+          hookFaultOutcome(
+            HOOK_NAME5,
+            new Error(`unknown hook mode ${JSON.stringify(mode)}`)
+          )
+        )
       );
-      process.exit(2);
   }
 }
 if (isMain(import.meta.url)) {

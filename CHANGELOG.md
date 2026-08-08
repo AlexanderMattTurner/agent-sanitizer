@@ -8,6 +8,50 @@ adhere to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+## [2.19.6] - 2026-08-08
+
+### Fixed
+- HTML parser now correctly routes bare indented code blocks to the markdown branch.
+- HTML-vs-markdown detection now uses the real tokenizer instead of a heuristic tag-line ratio for more accurate parsing.
+- Python wheel CLI bundle is now self-contained.
+- Secrets redaction no longer targets public endpoints; placeholder language support has been closed.
+
+### Changed
+- Test corpus enumeration for HTML now walks the tree instead of using git ls-files.
+
+## [2.19.4] - 2026-08-08
+
+### Fixed
+- Fixed invisible character processing to judge each cluster's preserve caps on the run its own leading gap resets, and to derive Unicode script gates and charge the preserve budget per grapheme cluster.
+- Fixed output layer to ignore non-string Layer-5 spans instead of hanging, and prevent Layer-5 span deletion from creating later span matches.
+- Fixed hooks to report unreadable instruction files instead of discarding the scan, and close the confusable-fold ordering gap with unified failure posture.
+- Fixed layer 1 ANSI/invisible strip iteration to a fixed point.
+- Fixed HTML styling to read uppercase and escaped CSS units so hidden styles cannot be spelled past Layer 2.
+
+### Changed
+- Collapsed needle-splice implementations in view-map into one primitive.
+- Dropped unused ANSI tokenizer re-export from layer1.
+
+### Added
+- Added comprehensive test coverage for layer pipeline, posture handling, scan coverage, HTML styling, layer 1 ANSI processing, and Unicode invisible character tables.
+
+## [2.19.2] - 2026-08-08
+
+### Fixed
+
+- Fixed reading of pristine hook sources in the lazyImport registry contract.
+- Fixed c8's `--src` roots derivation to use the include set and pin the gate floors correctly.
+
+### Changed
+
+- Scoped coverage, mutation and type gates to only what the package ships, reducing unnecessary test overhead.
+
+## [2.19.1] - 2026-08-08
+
+### Changed
+
+- **Skills documentation**: Updated parallel-audit skill documentation to clarify read-only rule behavior with execute-to-confirm and make parallel-audit hunt eliminators by default.
+
 ## [2.19.0] - 2026-08-08
 
 ### Added
