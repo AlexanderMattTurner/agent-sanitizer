@@ -16,6 +16,12 @@ __pycache__/
 .uv/
 uv.lock
 
+# Tool caches. These stay out of git only because each tool writes its own
+# .gitignore inside the directory. Prettier does not read those, so a working
+# copy that has run the Python suite fails `format:check` on .pytest_cache/README.md.
+.pytest_cache/
+.ruff_cache/
+
 # Generated: the self-contained CLI bundled into the Python wheel at build time.
 python/agent_sanitizer/_bundled/
 
