@@ -41,6 +41,7 @@ import {
   isRevealRead,
   REVEAL_READ_ENVELOPE,
 } from "./lib/reveal.mjs";
+import { containsPlaceholder } from "./lib/placeholder-grammar.mjs";
 
 // Layer-1 primitives and the cheap pre-gates, bound via lazyImport (see its
 // doc for the fail-OPEN hazard of a bare static npm import). A load failure
@@ -459,6 +460,22 @@ async function sanitizeObject(
   return { value: out, modified, sgrNote };
 }
 
+// On-disk placeholder tripwire: warning for a Read whose RAW bytes — before
+// this hook's own redaction ran — already carry placeholder-shaped text. That
+// is the after-the-fact signature of a clobbered secret: some earlier write
+// (a heredoc, sed, an MCP file tool, another agent) copied a placeholder out
+// of a sanitized view and persisted it literally. It can equally be a
+// legitimate fixture or document ABOUT redaction, so this is a warning the
+// model relays, never a verdict — detection rides the read, which is the one
+// choke point every write path eventually passes through.
+// Exported so tests assert the surfaced warning by reference instead of
+// re-typing the prose.
+export const ON_DISK_PLACEHOLDER_WARNING =
+  "this file's raw on-disk bytes already contain literal [REDACTED…] " +
+  "placeholder text (not inserted by this sanitizer). If an earlier write " +
+  "copied a placeholder from a sanitized view, the secret it stood for has " +
+  "been destroyed; verify with the user before trusting or propagating this file";
+
 /**
  * Compose the model-facing additionalContext line for a sanitized/flagged tool
  * output. The seam (composeContextSeam) owns the prefix + warning join; this
@@ -747,6 +764,18 @@ export async function evaluateToolOutput(input, ext = {}) {
     const hint = persistReveal(stored);
     if (hint) warnings.push(hint);
   }
+  // On-disk placeholder tripwire (see ON_DISK_PLACEHOLDER_WARNING). Tested on
+  // the RAW tool_response — post-sanitization text carries placeholders this
+  // hook itself just inserted. Reads only: file bytes are where a clobbered
+  // secret surfaces, while grep/Bash output quoting placeholders is routine.
+  // Reveal sidecars are excluded — their bytes are redacted BEFORE persisting,
+  // so placeholder text there is this sanitizer's own.
+  if (
+    input.tool_name === "Read" &&
+    !revealRead &&
+    containsPlaceholder(toolOutput)
+  )
+    warnings.push(ON_DISK_PLACEHOLDER_WARNING);
   // sgrNote implies modified (the carve-out lives inside the Layer-1 strip), so
   // it never independently survives this guard — `modified` covers it.
   if (!modified && warnings.length === 0)

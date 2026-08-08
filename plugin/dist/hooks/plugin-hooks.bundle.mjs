@@ -8114,7 +8114,7 @@ var require_util = __commonJS({
       return path2;
     });
     exports.normalize = normalize3;
-    function join6(aRoot, aPath) {
+    function join7(aRoot, aPath) {
       if (aRoot === "") {
         aRoot = ".";
       }
@@ -8146,7 +8146,7 @@ var require_util = __commonJS({
       }
       return joined;
     }
-    exports.join = join6;
+    exports.join = join7;
     exports.isAbsolute = function(aPath) {
       return aPath.charAt(0) === "/" || urlRegexp.test(aPath);
     };
@@ -8360,7 +8360,7 @@ var require_util = __commonJS({
             parsed.path = parsed.path.substring(0, index2 + 1);
           }
         }
-        sourceURL = join6(urlGenerate(parsed), sourceURL);
+        sourceURL = join7(urlGenerate(parsed), sourceURL);
       }
       return normalize3(sourceURL);
     }
@@ -32031,9 +32031,9 @@ var init_lib5 = __esm({
        * @returns {undefined}
        *   Nothing.
        */
-      set dirname(dirname3) {
+      set dirname(dirname4) {
         assertPath(this.basename, "dirname");
-        this.path = default2.join(dirname3 || "", this.basename);
+        this.path = default2.join(dirname4 || "", this.basename);
       }
       /**
        * Get the extname (including dot) (example: `'.js'`).
@@ -67866,6 +67866,140 @@ var init_redactor_client = __esm({
   }
 });
 
+// claude-hooks/lib/secret-drop-guard.mjs
+import { createHash as createHash3 } from "node:crypto";
+import { lstatSync as lstatSync3, unlinkSync as unlinkSync2 } from "node:fs";
+import { join as join4, dirname as dirname3 } from "node:path";
+import { tmpdir as tmpdir3 } from "node:os";
+import { spawnSync } from "node:child_process";
+function dropFingerprint(filePath, content3, dropped = []) {
+  const digest = createHash3("sha256").update(filePath).update("\0");
+  digest.update(content3);
+  for (const secret of dropped) digest.update("\0").update(secret);
+  return digest.digest("hex").slice(0, 32);
+}
+function confirmMarkerPath(fingerprint) {
+  return join4(tmpdir3(), `.claude-secret-drop-${PROJECT_HASH}-${fingerprint}`);
+}
+function gitTracked(filePath, spawn2 = spawnSync) {
+  const res = spawn2("git", ["ls-files", "--error-unmatch", "--", filePath], {
+    cwd: dirname3(filePath),
+    stdio: "ignore"
+  });
+  if (res.error) return true;
+  return res.status === 0;
+}
+function dropDeny(count, filePath) {
+  return `this Write removes ${count} redacted secret value(s) from ${filePath}, and the file is not tracked by git, so the secrets may be unrecoverable. If removing them is intended, re-issue this exact Write to confirm; otherwise keep each [REDACTED\u2026] placeholder (or its secret's line) in the new content`;
+}
+async function secretDropGuard(toolInput, io, opts = {}) {
+  const {
+    isTracked = gitTracked,
+    confirmSeen = consumeConfirm,
+    recordConfirm = (fingerprint2) => writeSentinelFile(confirmMarkerPath(fingerprint2))
+  } = opts;
+  const { file_path: filePath, content: content3 } = toolInput ?? {};
+  if (typeof filePath !== "string" || typeof content3 !== "string") return null;
+  let disk;
+  try {
+    disk = io.readFile(filePath);
+  } catch (err) {
+    if (
+      /** @type {NodeJS.ErrnoException} */
+      err?.code === "ENOENT"
+    )
+      return null;
+    throw err;
+  }
+  if (isTracked(filePath)) return null;
+  const cleaned = applyLayer13(disk).cleaned.replace(
+    LONE_SURROGATE_RE3,
+    "\uFFFD"
+  );
+  if (await io.redact(cleaned) === null) return null;
+  const view = await io.redactMap(cleaned);
+  if ("unmappable" in view) return null;
+  const dropped = [...new Set(view.pairs.map((pair) => pair.original))].filter(
+    (secret) => !content3.includes(secret)
+  );
+  if (dropped.length === 0) return null;
+  const fingerprint = dropFingerprint(filePath, content3, dropped);
+  if (confirmSeen(fingerprint)) return null;
+  recordConfirm(fingerprint);
+  return { deny: dropDeny(dropped.length, filePath) };
+}
+function withSecretDropGuard(rehydrate, io, guard = secretDropGuard) {
+  return async (tool, toolInput) => {
+    const rehydrated = await rehydrate(tool, toolInput);
+    if (tool !== "Write" || rehydrated !== null && "deny" in rehydrated)
+      return rehydrated;
+    const finalInput = rehydrated === null ? toolInput : rehydrated.updatedInput;
+    const drop = await guard(finalInput, io);
+    return drop ?? rehydrated;
+  };
+}
+function consumeConfirm(fingerprint) {
+  const marker2 = confirmMarkerPath(fingerprint);
+  if (!markerIsTrusted(marker2)) return false;
+  let fresh;
+  try {
+    fresh = Date.now() - lstatSync3(marker2).mtimeMs <= CONFIRM_TTL_MS;
+  } catch {
+    return false;
+  }
+  try {
+    unlinkSync2(marker2);
+  } catch {
+  }
+  return fresh;
+}
+var applyLayer13, LONE_SURROGATE_RE3, CONFIRM_TTL_MS;
+var init_secret_drop_guard = __esm({
+  async "claude-hooks/lib/secret-drop-guard.mjs"() {
+    "use strict";
+    init_hook_io();
+    await init_invisible_alert();
+    ({ applyLayer1: applyLayer13, LONE_SURROGATE_RE: LONE_SURROGATE_RE3 } = /** @type {typeof import("agent-sanitizer")} */
+    await lazyImport("agent-sanitizer"));
+    CONFIRM_TTL_MS = 10 * 6e4;
+  }
+});
+
+// claude-hooks/lib/placeholder-grammar.mjs
+function containsPlaceholder(value, depth = 0) {
+  if (depth > 32) return false;
+  if (typeof value === "string") return PLACEHOLDER_RE.test(value);
+  if (Array.isArray(value))
+    return value.some((item) => containsPlaceholder(item, depth + 1));
+  if (value !== null && typeof value === "object")
+    return Object.values(value).some(
+      (item) => containsPlaceholder(item, depth + 1)
+    );
+  return false;
+}
+function placeholderNotice(tool, toolInput) {
+  if (REHYDRATED_TOOLS.has(tool)) return null;
+  if (!containsPlaceholder(toolInput)) return null;
+  return "This tool call carries [REDACTED\u2026] placeholder text, which stands for a secret hidden from your view. Placeholders are rehydrated to the real secret only for Edit/Write on the file that owns them; any other write path (shell redirection, sed/tee, MCP file tools) persists the literal placeholder and destroys the secret. Use Edit or Write for changes to that file, or ask the user.";
+}
+var PLACEHOLDER_LABEL_CHARS, PLACEHOLDER_LABEL_MAX_LEN, PLACEHOLDER_RE, REHYDRATED_TOOLS;
+var init_placeholder_grammar = __esm({
+  "claude-hooks/lib/placeholder-grammar.mjs"() {
+    "use strict";
+    PLACEHOLDER_LABEL_CHARS = "A-Za-z0-9 ()._-";
+    PLACEHOLDER_LABEL_MAX_LEN = 64;
+    PLACEHOLDER_RE = new RegExp(
+      `\\[REDACTED(?:: [${PLACEHOLDER_LABEL_CHARS}]{1,${PLACEHOLDER_LABEL_MAX_LEN}})?\\]`
+    );
+    REHYDRATED_TOOLS = /* @__PURE__ */ new Set([
+      "Edit",
+      "Write",
+      "MultiEdit",
+      "NotebookEdit"
+    ]);
+  }
+});
+
 // claude-hooks/lib/trace.mjs
 import { appendFileSync } from "node:fs";
 function traceThreshold(env = process.env) {
@@ -68010,6 +68144,8 @@ async function buildPreToolUseResponse(input, rehydrate = defaultRehydrate, sink
       permissionDecisionReason: deny
     });
   contexts.push(...layerContexts);
+  const notice = placeholderNotice(tool, current);
+  if (notice !== null) contexts.push(notice);
   return emitTraced(
     emitTrace,
     input.tool_name,
@@ -68133,6 +68269,8 @@ var init_pretooluse_sanitize = __esm({
     await init_invisible_alert();
     await init_authored_content();
     init_redactor_client();
+    await init_secret_drop_guard();
+    init_placeholder_grammar();
     init_trace2();
     HOOK_NAME = "pretooluse-sanitize";
     PRE_TOOL_USE_MESSAGES = Object.freeze({
@@ -68167,7 +68305,10 @@ var init_pretooluse_sanitize = __esm({
         ) : null;
       }
     };
-    defaultRehydrate = (tool, toolInput) => rehydrateRedacted2(tool, toolInput, redactorIo);
+    defaultRehydrate = withSecretDropGuard(
+      (tool, toolInput) => rehydrateRedacted2(tool, toolInput, redactorIo),
+      redactorIo
+    );
     registerFaultPolicy(HOOK_NAME, {
       event: HookEvent.PRE_TOOL_USE,
       guarded: "tool input",
@@ -68207,16 +68348,16 @@ var init_secret_annotate = __esm({
 });
 
 // claude-hooks/lib/reveal.mjs
-import { createHash as createHash3 } from "node:crypto";
-import { mkdirSync, lstatSync as lstatSync3 } from "node:fs";
-import { tmpdir as tmpdir3, userInfo as userInfo3 } from "node:os";
-import { join as join4, resolve, sep } from "node:path";
+import { createHash as createHash4 } from "node:crypto";
+import { mkdirSync, lstatSync as lstatSync4 } from "node:fs";
+import { tmpdir as tmpdir4, userInfo as userInfo3 } from "node:os";
+import { join as join5, resolve, sep } from "node:path";
 function revealDir() {
-  return process.env._AGENT_SANITIZER_REVEAL_DIR || join4(tmpdir3(), "agent-sanitizer-layer2-reveal");
+  return process.env._AGENT_SANITIZER_REVEAL_DIR || join5(tmpdir4(), "agent-sanitizer-layer2-reveal");
 }
 function revealPathFor(content3) {
-  const digest = createHash3("sha256").update(content3, "utf8").digest("hex");
-  return join4(revealDir(), `${digest}.txt`);
+  const digest = createHash4("sha256").update(content3, "utf8").digest("hex");
+  return join5(revealDir(), `${digest}.txt`);
 }
 function revealDirIsSafe(dir) {
   try {
@@ -68226,7 +68367,7 @@ function revealDirIsSafe(dir) {
   }
   let st;
   try {
-    st = lstatSync3(dir);
+    st = lstatSync4(dir);
   } catch {
     return false;
   }
@@ -68271,9 +68412,10 @@ var init_reveal = __esm({
 // claude-hooks/sanitize-output.mjs
 var sanitize_output_exports = {};
 __export(sanitize_output_exports, {
+  ON_DISK_PLACEHOLDER_WARNING: () => ON_DISK_PLACEHOLDER_WARNING,
   SECRET_HINT: () => SECRET_HINT2,
   SECRET_HINT_EXT: () => SECRET_HINT_EXT2,
-  applyLayer1: () => applyLayer13,
+  applyLayer1: () => applyLayer14,
   cliMain: () => cliMain2,
   composeContext: () => composeContext2,
   describeRemoved: () => describeRemoved2,
@@ -68515,6 +68657,8 @@ async function evaluateToolOutput(input, ext = {}) {
     const hint = persistReveal(stored);
     if (hint) warnings.push(hint);
   }
+  if (input.tool_name === "Read" && !revealRead && containsPlaceholder(toolOutput))
+    warnings.push(ON_DISK_PLACEHOLDER_WARNING);
   if (!modified && warnings.length === 0)
     return revealRead ? emit("flagged", { additional_context: REVEAL_READ_ENVELOPE }) : emit("clean", null);
   const baseContext = sgrNote && warnings.length === 0 ? SGR_OUTPUT_NOTE : composeContext2(modified, warnings, input.tool_name);
@@ -68578,7 +68722,7 @@ async function cliMain2(ext = {}) {
     }
   );
 }
-var _sanitizer, HTML_TAG_PRESENT2, applyLayer13, matchesSecretHint2, SECRET_HINT2, SECRET_HINT_EXT2, _output, sanitizeTextSeam, composeContextSeam, describeRemoved2, describeWarned2, suppressToolOutput2, HOOK_NAME2, SANITIZE_BUDGET_MS, SGR_OUTPUT_NOTE, WEB_INGRESS_TOOLS, FAIL_CLOSED_CONTEXT;
+var _sanitizer, HTML_TAG_PRESENT2, applyLayer14, matchesSecretHint2, SECRET_HINT2, SECRET_HINT_EXT2, _output, sanitizeTextSeam, composeContextSeam, describeRemoved2, describeWarned2, suppressToolOutput2, HOOK_NAME2, SANITIZE_BUDGET_MS, SGR_OUTPUT_NOTE, WEB_INGRESS_TOOLS, ON_DISK_PLACEHOLDER_WARNING, FAIL_CLOSED_CONTEXT;
 var init_sanitize_output = __esm({
   async "claude-hooks/sanitize-output.mjs"() {
     "use strict";
@@ -68589,10 +68733,11 @@ var init_sanitize_output = __esm({
     init_trace2();
     init_secret_annotate();
     init_reveal();
+    init_placeholder_grammar();
     _sanitizer = /** @type {typeof import("agent-sanitizer")} */
     await lazyImport("agent-sanitizer");
     ({ HTML_TAG_PRESENT: HTML_TAG_PRESENT2 } = _sanitizer);
-    ({ applyLayer1: applyLayer13, matchesSecretHint: matchesSecretHint2, SECRET_HINT: SECRET_HINT2, SECRET_HINT_EXT: SECRET_HINT_EXT2 } = _sanitizer);
+    ({ applyLayer1: applyLayer14, matchesSecretHint: matchesSecretHint2, SECRET_HINT: SECRET_HINT2, SECRET_HINT_EXT: SECRET_HINT_EXT2 } = _sanitizer);
     _output = /** @type {typeof import("agent-sanitizer/output")} */
     await lazyImport("agent-sanitizer/output");
     ({ sanitizeText: sanitizeTextSeam, composeContext: composeContextSeam } = _output);
@@ -68604,6 +68749,7 @@ var init_sanitize_output = __esm({
     );
     SGR_OUTPUT_NOTE = "Inert ANSI stripped (display-only colour and/or a stray escape byte that formed no control sequence); pipe through cat -v to inspect raw escapes.";
     WEB_INGRESS_TOOLS = /* @__PURE__ */ new Set(["WebFetch", "WebSearch"]);
+    ON_DISK_PLACEHOLDER_WARNING = "this file's raw on-disk bytes already contain literal [REDACTED\u2026] placeholder text (not inserted by this sanitizer). If an earlier write copied a placeholder from a sanitized view, the secret it stood for has been destroyed; verify with the user before trusting or propagating this file";
     FAIL_CLOSED_CONTEXT = "CRITICAL: sanitize-output hook failed; this tool's output was suppressed (replaced with a placeholder) to fail closed -- the unsanitized output was not shown. Investigate the hook error before relying on this tool.";
     registerFaultPolicy(HOOK_NAME2, {
       event: HookEvent.POST_TOOL_USE,
@@ -68743,8 +68889,8 @@ __export(scan_invisible_chars_exports, {
   scanFile: () => scanFile,
   scanProject: () => scanProject
 });
-import { readFileSync as readFileSync5, globSync, writeFileSync as writeFileSync2, unlinkSync as unlinkSync2 } from "node:fs";
-import { join as join5, relative } from "node:path";
+import { readFileSync as readFileSync5, globSync, writeFileSync as writeFileSync2, unlinkSync as unlinkSync3 } from "node:fs";
+import { join as join6, relative } from "node:path";
 async function ensureSanitizerLoaded() {
   if (typeof stripInvisible3 === "function") return true;
   const marker2 = hookgateMarkerPath();
@@ -68832,7 +68978,7 @@ function findInstructionFiles(dir) {
       ...claudeDirPatterns("**/")
     ],
     { cwd: dir, exclude: excludeFromScan }
-  ).map((name50) => join5(dir, name50));
+  ).map((name50) => join6(dir, name50));
 }
 function scanFile(filePath) {
   const content3 = readFileSync5(filePath, "utf-8");
@@ -68951,7 +69097,7 @@ async function runScanCli({ trace: sink = trace, scan: runScan }) {
   }
   for (const stale of [ALERT_FILE, ALERT_ACK_FILE]) {
     try {
-      unlinkSync2(stale);
+      unlinkSync3(stale);
     } catch {
     }
   }
@@ -68991,7 +69137,7 @@ async function runScanCli({ trace: sink = trace, scan: runScan }) {
 function autoCleanFindings(allFindings, dir) {
   let cleaned = 0;
   for (const { file } of allFindings) {
-    const absPath = join5(dir, file);
+    const absPath = join6(dir, file);
     try {
       const original = readFileSync5(absPath, "utf-8");
       const stripped = stripInvisible3(original);

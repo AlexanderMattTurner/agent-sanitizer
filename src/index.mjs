@@ -6,19 +6,19 @@
  * lazy-loads the heavier HTML layer (Layers 2 & 3) so the remark/rehype graph
  * is only paid for by callers that ask for it.
  *
+ * Layers 1-3 are NOT implemented here: this module is a facade over the single
+ * implementation in `./output.mjs` (`sanitizeText`). The two used to be
+ * hand-synced copies and had already drifted apart in their warning prose, so
+ * the layer bodies live in exactly one place and this file only translates the
+ * facade's option/result shape. Importing `./output.mjs` costs nothing at module
+ * scope — its graph is dependency-free and it lazy-loads `./html.mjs` on the
+ * same terms this facade used to.
+ *
  * The low-level building blocks stay public via the `./invisible` and `./html`
  * subpath entries; import those directly when you want a single layer without
  * the convenience wrapper.
  */
-import { CATEGORY, describeStripped } from "./invisible.mjs";
-import { needsMarkdownPipeline } from "./gates.mjs";
-import { applyLayer1, LONE_SURROGATE_RE } from "./layer1.mjs";
-import {
-  describeExfil,
-  describeHtmlSanitized,
-  describeWarned,
-  LONE_SURROGATE_WARNING,
-} from "./warnings.mjs";
+import { sanitizeText } from "./output.mjs";
 
 // Layer 1 lives in the zero-dependency `./layer1.mjs`, shared verbatim with the
 // tool-output pipeline (`./output`) and the Edit-repair rehydrator
@@ -80,6 +80,15 @@ export {
  * caller passing the wrong TYPE for `text` gets a clear, named error instead
  * of an internal TypeError leaking implementation details (or a silent, wrong
  * coercion of e.g. a number to a string).
+ *
+ * The layer bodies live in `./output.mjs`; this is a facade over them, not a
+ * second implementation (see the module doc). It narrows `sanitizeText`'s result
+ * to the three fields this entry has always promised — `modified`/`sgrNote`
+ * describe the tool-output pipeline's banner, and `reveal` is produced only by
+ * options this facade does not expose. `html` selects Layers 2 AND 3 together
+ * here, which is the surface this entry has always had; `sanitizeText` takes
+ * them as separate flags for the tool-output pipeline, which needs Layer 3's
+ * detection without Layer 2's splice.
  * @param {string} text
  * @param {{ html?: boolean } | null} [options]
  * @returns {Promise<{ cleaned: string, found: string[], warnings: string[] }>}
@@ -88,69 +97,9 @@ export async function sanitize(text, options) {
   if (typeof text !== "string")
     throw new TypeError("sanitize(text, options): text must be a string");
   const { html = false } = options ?? {};
-  /** @type {string[]} */ const found = [];
-  /** @type {string[]} */ const warnings = [];
-
-  const { cleaned: layer1, deAnsi, found: invisFound } = applyLayer1(text);
-  let cleaned = layer1;
-  if (invisFound.length > 0) {
-    found.push(...invisFound);
-    warnings.push(describeStripped(invisFound, deAnsi));
-  }
-
-  const wellFormed = cleaned.replace(LONE_SURROGATE_RE, "\uFFFD");
-  if (wellFormed !== cleaned) {
-    cleaned = wellFormed;
-    found.push(CATEGORY.LONE_SURROGATES);
-    warnings.push(LONE_SURROGATE_WARNING);
-  }
-
-  // Layers 2 and 3 can only find something in text carrying an HTML tag or a
-  // markdown link, so the shared pre-gate decides whether the heavy
-  // remark/rehype graph is imported at all — the same gate `sanitizeText()`
-  // applies, so both entry points pay for (and skip) the import on exactly the
-  // same inputs.
-  if (!html || !needsMarkdownPipeline(cleaned))
-    return { cleaned, found, warnings };
-
-  let sanitizeHtml, detectExfil;
-  /* c8 ignore start -- a rejected dynamic import of a module that ships in
-     this very package (not an optional peer dep) requires corrupting
-     node_modules or the filesystem to trigger; there's no clean way to force
-     this from a test without fragile module-loader mocking (Node's
-     mock.module needs --experimental-test-module-mocks, which isn't wired
-     into this repo's test script). Fail loudly with context if it ever fires. */
-  try {
-    ({ sanitizeHtml, detectExfil } = await import("./html.mjs"));
-  } catch (importErr) {
-    throw new Error(
-      "sanitize: failed to load HTML module (is the optional HTML dependency installed?)",
-      { cause: importErr },
-    );
-  }
-  /* c8 ignore stop */
-  // Scan for exfil URLs on the text BEFORE Layer 2 splices anything out — a
-  // beacon URL hidden in a comment or hidden element is more suspicious, not
-  // less, yet Layer 2 would otherwise remove it from view before the scan.
-  const preSplice = cleaned;
-
-  const layer2 = sanitizeHtml(cleaned);
-  if (layer2) {
-    if (layer2.text !== cleaned) {
-      cleaned = layer2.text;
-      if (layer2.removed.comments > 0) found.push(CATEGORY.HTML_COMMENTS);
-      if (layer2.removed.hidden > 0) found.push(CATEGORY.HIDDEN_HTML);
-      warnings.push(describeHtmlSanitized(layer2.removed));
-    }
-    const preserved = describeWarned(layer2.warned);
-    if (preserved) warnings.push(preserved);
-  }
-
-  const threats = detectExfil(preSplice);
-  if (threats) {
-    found.push(CATEGORY.EXFIL_URLS);
-    warnings.push(describeExfil(threats));
-  }
-
+  const { cleaned, found, warnings } = await sanitizeText(text, {
+    html,
+    exfilScan: html,
+  });
   return { cleaned, found, warnings };
 }
