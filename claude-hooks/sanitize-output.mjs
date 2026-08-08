@@ -98,13 +98,12 @@ const SANITIZE_BUDGET_MS = positiveMsOr(
 
 // Non-WARNING note for a strip whose only change was INERT ANSI on a local tool:
 // the display-only colour git/pytest/npm/etc. emit by default, and/or a stray
-// escape byte that formed no sequence at all (a truncated write, a log fragment,
-// a raw ESC sitting in a file the tool echoed back). Neither can move the cursor,
-// erase the screen, or open an OSC string — those need a complete CSI/OSC token,
-// which keeps the WARNING. The note keeps the "escapes were here, and here is how
-// to see them" signal without the WARNING prefix, whose constant firing on inert
-// bytes would desensitize the reader to the strips that matter (invisible-char
-// payloads, redacted secrets).
+// escape byte that formed no sequence at all. The engine now returns this text
+// itself, as a NOTE-severity finding alongside the warnings, so this copy is the
+// FALLBACK for exactly one case: a bundle built against a pinned engine older
+// than that severity split, whose result carries `sgrNote` but no `notes`. Same
+// sentence, so a plugin on the old pin keeps today's wording instead of falling
+// back to a bare "output sanitized".
 const SGR_OUTPUT_NOTE =
   "Inert ANSI stripped (display-only colour and/or a stray escape byte that " +
   "formed no control sequence); pipe through cat -v to inspect raw escapes.";
@@ -228,7 +227,7 @@ async function redactSecrets(text, webIngress = false, deadline) {
  * @param {{remainingMs: () => number}} [deadline] shared wall-clock budget across
  *   all leaves of one hook run; a direct caller gets a fresh full budget
  * @param {SanitizeExtensions} [ext]
- * @returns {Promise<{ cleaned: string, warnings: string[], modified: boolean, sgrNote: boolean, reveal?: string }>}
+ * @returns {Promise<{ cleaned: string, warnings: string[], notes: string[], modified: boolean, sgrNote: boolean, reveal?: string }>}
  */
 export async function sanitizeText(
   text,
@@ -280,10 +279,15 @@ export async function sanitizeText(
         : { text: secrets.text, found: secrets.found };
     },
   };
-  const result =
-    /** @type {{ cleaned: string, warnings: string[], modified: boolean, sgrNote: boolean, reveal?: string }} */ (
+  const seamResult =
+    /** @type {{ cleaned: string, warnings: string[], notes?: string[], modified: boolean, sgrNote: boolean, reveal?: string }} */ (
       await sanitizeTextSeam(text, seamOptions)
     );
+  // The one place the seam's shape is normalized: `notes` is absent when the
+  // engine predates the severity split, which is the shipped plugin's pinned
+  // case (see SGR_OUTPUT_NOTE). Defaulting here means nothing downstream has to
+  // know that, and the banner composer sees one shape either way.
+  const result = { ...seamResult, notes: seamResult.notes ?? [] };
   return ext.postText
     ? applyPostText(
         result,
@@ -300,12 +304,13 @@ export async function sanitizeText(
  * Fold a `postText` callback's result into the seam's, leaving the seam's result
  * untouched when the callback declined (null/undefined) or returned no `cleaned`.
  * `modified` widens to cover the callback's rewrite, and `sgrNote` is dropped
- * when it does: that flag downgrades the model-facing banner to "display-only
- * ANSI color stripped", which would be a false statement about bytes a callback
- * has since rewritten for its own reasons.
- * @param {{ cleaned: string, warnings: string[], modified: boolean, sgrNote: boolean, reveal?: string }} result
+ * when it does: that flag downgrades the model-facing banner to the seam's
+ * notes, which would be a false account of bytes a callback has since rewritten
+ * for its own reasons. A callback's `warning` is taken at face value as a
+ * WARNING — the composer that linked it owns its wording and its volume alike.
+ * @param {{ cleaned: string, warnings: string[], notes: string[], modified: boolean, sgrNote: boolean, reveal?: string }} result
  * @param {{ cleaned?: string, warning?: string } | null | undefined} post
- * @returns {{ cleaned: string, warnings: string[], modified: boolean, sgrNote: boolean, reveal?: string }}
+ * @returns {{ cleaned: string, warnings: string[], notes: string[], modified: boolean, sgrNote: boolean, reveal?: string }}
  */
 function applyPostText(result, post) {
   if (post === null || post === undefined) return result;
@@ -332,10 +337,10 @@ function applyPostText(result, post) {
  * too (a connector can hide a secret in a field name); non-string leaves
  * (booleans, numbers, null) pass through untouched, and `warnings` accumulates
  * across leaves.
- * `sgrNote` is the OR across leaves: true when some leaf was an SGR-only strip.
+ * `sgrNote` is the OR across leaves: true when some leaf came back note-only.
  * `reveals` accumulates each leaf's pre-Layer-2 text (when the HTML splice
- * removed something) for the orchestrator to persist — same mutated-accumulator
- * shape as `warnings`.
+ * removed something) for the orchestrator to persist, and `notes` the leaves'
+ * NOTE-severity findings — same mutated-accumulator shape as `warnings`.
  * @param {any} value
  * @param {string} toolName
  * @param {string[]} warnings
@@ -343,6 +348,8 @@ function applyPostText(result, post) {
  * @param {{remainingMs: () => number}} [deadline] shared wall-clock budget across
  *   every leaf of this value (created once by the top-level caller)
  * @param {SanitizeExtensions} [ext]
+ * @param {string[]} [notes]  appended last so an existing caller's positional
+ *   arguments keep their meaning
  * @returns {Promise<{ value: any, modified: boolean, sgrNote: boolean }>}
  */
 export async function sanitizeValue(
@@ -352,10 +359,12 @@ export async function sanitizeValue(
   reveals = [],
   deadline = makeDeadline(SANITIZE_BUDGET_MS),
   ext = {},
+  notes = [],
 ) {
   if (typeof value === "string") {
     const result = await sanitizeText(value, toolName, deadline, ext);
     warnings.push(...result.warnings);
+    notes.push(...result.notes);
     if (result.reveal !== undefined) reveals.push(result.reveal);
     return {
       value: result.cleaned,
@@ -375,6 +384,7 @@ export async function sanitizeValue(
         reveals,
         deadline,
         ext,
+        notes,
       );
       out.push(result.value);
       if (result.modified) modified = true;
@@ -383,7 +393,15 @@ export async function sanitizeValue(
     return { value: out, modified, sgrNote };
   }
   if (value !== null && typeof value === "object")
-    return sanitizeObject(value, toolName, warnings, reveals, deadline, ext);
+    return sanitizeObject(
+      value,
+      toolName,
+      warnings,
+      reveals,
+      deadline,
+      ext,
+      notes,
+    );
   return { value, modified: false, sgrNote: false };
 }
 
@@ -398,6 +416,7 @@ export async function sanitizeValue(
  * @param {string[]} reveals
  * @param {{remainingMs: () => number}} deadline shared wall-clock budget
  * @param {SanitizeExtensions} ext
+ * @param {string[]} notes  accumulates the leaves' NOTE-severity findings
  * @returns {Promise<{ value: Record<string, any>, modified: boolean, sgrNote: boolean }>}
  */
 async function sanitizeObject(
@@ -407,6 +426,7 @@ async function sanitizeObject(
   reveals,
   deadline,
   ext,
+  notes,
 ) {
   /** @type {Record<string, any>} */
   const out = {};
@@ -420,6 +440,7 @@ async function sanitizeObject(
     // value leaves.
     const keyResult = await sanitizeText(key, toolName, deadline);
     warnings.push(...keyResult.warnings);
+    notes.push(...keyResult.notes);
     if (keyResult.reveal !== undefined) reveals.push(keyResult.reveal);
     if (keyResult.modified) modified = true;
     if (keyResult.sgrNote) sgrNote = true;
@@ -430,6 +451,7 @@ async function sanitizeObject(
       reveals,
       deadline,
       ext,
+      notes,
     );
     // Two distinct raw keys can sanitize to the same name (e.g. `token` and a
     // `token` carrying a zero-width space stripped by Layer 1). Overwriting would
@@ -725,6 +747,8 @@ export async function evaluateToolOutput(input, ext = {}) {
   /** @type {string[]} */
   const warnings = [];
   /** @type {string[]} */
+  const notes = [];
+  /** @type {string[]} */
   const reveals = [];
   // One shared wall-clock budget for every blocking daemon call this hook makes —
   // across all leaves of the walk AND the reveal-redaction loop below — so their
@@ -741,6 +765,7 @@ export async function evaluateToolOutput(input, ext = {}) {
     reveals,
     deadline,
     ext,
+    notes,
   );
   // Persist each leaf's pre-Layer-2 text (deduped by content) so the model can
   // Read back what the HTML splice removed; a successful write appends a hint
@@ -776,9 +801,13 @@ export async function evaluateToolOutput(input, ext = {}) {
     containsPlaceholder(toolOutput)
   )
     warnings.push(ON_DISK_PLACEHOLDER_WARNING);
-  // sgrNote implies modified (the carve-out lives inside the Layer-1 strip), so
-  // it never independently survives this guard — `modified` covers it.
-  if (!modified && warnings.length === 0)
+  // `notes` is part of the guard, not covered by `modified`. The Layer-1
+  // carve-out that used to be the only note DID imply a strip, but the
+  // detect-only tiers do not: a preserved `<script>` and a plain-link exfil URL
+  // change no bytes and raise no warning, so without this clause the walk would
+  // return `clean` and the note would not be quieter — it would be GONE, taking
+  // "do not fetch, relay, or embed these URLs" with it.
+  if (!modified && warnings.length === 0 && notes.length === 0)
     return revealRead
       ? emit("flagged", { additional_context: REVEAL_READ_ENVELOPE })
       : emit("clean", null);
@@ -790,13 +819,16 @@ export async function evaluateToolOutput(input, ext = {}) {
   // the model's view, not the side effects. Detect-only findings (preserved
   // scripting tags, exfil-shaped URLs) carry warnings with no text change; they
   // emit additional_context alone, leaving the output as the tool produced it. A
-  // pure display-only-SGR strip (sgrNote, no warning) gets the terse note instead
-  // of the WARNING prefix; once any real warning exists the WARNING path wins and
-  // the color note is dropped (warnings and sgrNote can co-occur across leaves of
-  // one tool output).
+  // note-only result (some leaf reported, none of it injection-shaped) gets the
+  // seam's own note text instead of the WARNING prefix — including the
+  // detect-only ones above, which reach here with `modified === false` and land
+  // on the `flagged` verdict below; once any real warning
+  // exists the WARNING path wins and the notes are dropped (warnings and notes
+  // can co-occur across leaves of one tool output, and the reader who has a
+  // hidden-HTML splice to read about does not also need the colour codes).
   const baseContext =
     sgrNote && warnings.length === 0
-      ? SGR_OUTPUT_NOTE
+      ? noteContext(notes)
       : composeContext(modified, warnings, input.tool_name);
   const additionalContext = revealRead
     ? `${REVEAL_READ_ENVELOPE} ${baseContext}`
@@ -805,6 +837,20 @@ export async function evaluateToolOutput(input, ext = {}) {
   const fields = { additional_context: additionalContext };
   if (modified) fields.mutated_output = sanitized;
   return emit(modified ? "modified" : "flagged", fields);
+}
+
+/**
+ * The model-facing line for a note-only result: the seam's own note text,
+ * deduped and joined, with no WARNING prefix.
+ *
+ * Empty only against a pinned engine that predates the severity split (see
+ * SGR_OUTPUT_NOTE): there `sgrNote` still arrives true with no `notes` to go
+ * with it, and printing nothing would drop the one thing that run had to say.
+ * @param {string[]} notes
+ * @returns {string}
+ */
+function noteContext(notes) {
+  return notes.length === 0 ? SGR_OUTPUT_NOTE : [...new Set(notes)].join(" ");
 }
 
 /**

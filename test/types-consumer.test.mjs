@@ -54,13 +54,13 @@ function runTsc(args, cwd) {
 }
 
 // Both declaration builds prepack runs, each with its outDir redirected into the
-// temp package. `types/claude-hooks` must land under the same `types/` root the
-// exports map names, so the hooks build's outDir is the subdirectory rather than
-// a second root.
-const BUILDS = [
-  { config: "tsconfig.build.json", outSubdir: "" },
-  { config: "tsconfig.build-hooks.json", outSubdir: "claude-hooks" },
-];
+// temp package. Both emit into the SAME `types/` root the exports map names:
+// each config carries the rootDir that puts its own files under the right
+// subdirectory (the hooks build's rootDir is the repo root, because it also
+// emits the one `src/` module claude-hooks imports directly), so redirecting
+// either one any deeper would nest the tree an extra level and make every
+// `agent-sanitizer/claude-hooks/*` subpath unresolvable.
+const BUILDS = ["tsconfig.build.json", "tsconfig.build-hooks.json"];
 
 // Fixtures type-checked together in one tsc run: the library subpaths and the
 // claude-hooks composition surface. tsc names the offending file in its
@@ -85,13 +85,13 @@ describe("public types: downstream consumer typecheck", () => {
 
     // Emit declarations into the temp package, never the repo's types/ — that
     // would race the concurrent npm pack in package-exports.test.mjs.
-    for (const { config, outSubdir } of BUILDS) {
+    for (const config of BUILDS) {
       const build = runTsc(
         [
           "-p",
           path.join(repoRoot, config),
           "--outDir",
-          path.join(pkgDir, "types", outSubdir),
+          path.join(pkgDir, "types"),
         ],
         repoRoot,
       );

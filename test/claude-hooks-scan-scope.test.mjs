@@ -91,4 +91,19 @@ describe("SessionStart scan scope", () => {
   it("has a non-empty whitelist driving those cases", () => {
     assert.ok(CLAUDE_CONTEXT_SUBDIRS.length > 0);
   });
+
+  it("scans the library's whitelist, not a copy of it", async () => {
+    // Identity, not deep equality: a second list that happens to agree today is
+    // exactly the drift this module was extracted to end. The hook re-exports
+    // what it imports, so `===` here proves the walk above ran on the library's
+    // own arrays.
+    const lib = await import("../src/claude-context.mjs");
+    const hook = await import("../claude-hooks/scan-invisible-chars.mjs");
+    assert.equal(hook.CLAUDE_CONTEXT_SUBDIRS, lib.CLAUDE_CONTEXT_SUBDIRS);
+    assert.equal(hook.CLAUDE_INSTRUCTION_GLOBS, lib.CLAUDE_INSTRUCTION_GLOBS);
+    const pub = await import("../src/instructions.mjs");
+    assert.equal(pub.CLAUDE_CONTEXT_SUBDIRS, lib.CLAUDE_CONTEXT_SUBDIRS);
+    assert.equal(pub.CLAUDE_INSTRUCTION_GLOBS, lib.CLAUDE_INSTRUCTION_GLOBS);
+    assert.equal(pub.excludeFromContextScan, lib.excludeFromContextScan);
+  });
 });

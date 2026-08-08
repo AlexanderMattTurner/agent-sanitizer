@@ -5,7 +5,7 @@
  * carry their own copy of Layers 1-3, and the copies had already drifted: three
  * disagreements in warning prose plus a missing pre-gate. `sanitize` is now a
  * facade over `sanitizeText`, so the two MUST agree byte-for-byte on `cleaned`,
- * `found` and `warnings` for the same input and layer selection.
+ * `found`, `warnings` and `notes` for the same input and layer selection.
  *
  * This is behavioural, not a source grep: re-forking the layer bodies back into
  * index.mjs passes a grep the moment the copy is a faithful one, but the copies
@@ -76,7 +76,7 @@ const MODES = [
 /**
  * Layer markers the corpus must actually produce, so an equality that holds
  * because nothing was ever found cannot pass for convergence. Each predicate
- * takes the `{ found, warnings }` of one facade result.
+ * takes the `{ found, warnings, notes }` of one facade result.
  */
 const COVERAGE = [
   ["layer 1 strip", (r) => r.found.includes(CATEGORY.CF)],
@@ -86,16 +86,19 @@ const COVERAGE = [
   ["layer 2 hidden", (r) => r.found.includes(CATEGORY.HIDDEN_HTML)],
   [
     "layer 2 preserved",
+    // Both tiers: the severity split (src/severity.mjs) reports a PRESERVED tag
+    // as a note, and a marker pinned to one list stops proving the layer ran the
+    // moment its tier changes.
     (r) =>
-      r.warnings.some((w) =>
-        w.startsWith("Scripting/resource content present"),
+      [...r.warnings, ...r.notes].some((message) =>
+        message.startsWith("Scripting/resource content present"),
       ),
   ],
   ["layer 3 exfil", (r) => r.found.includes(CATEGORY.EXFIL_URLS)],
 ];
 
 describe("Layers 1-3 are implemented once: sanitize == sanitizeText", () => {
-  /** @type {Array<{ found: string[], warnings: string[] }>} */
+  /** @type {Array<{ found: string[], warnings: string[], notes: string[] }>} */
   const seen = [];
 
   for (const [caseName, input] of CASES)
@@ -107,6 +110,7 @@ describe("Layers 1-3 are implemented once: sanitize == sanitizeText", () => {
         assert.equal(viaFacade.cleaned, viaPipeline.cleaned, "cleaned");
         assert.deepEqual(viaFacade.found, viaPipeline.found, "found");
         assert.deepEqual(viaFacade.warnings, viaPipeline.warnings, "warnings");
+        assert.deepEqual(viaFacade.notes, viaPipeline.notes, "notes");
       });
 
   // Runs after the cases above (node:test executes a describe's tests in order),
@@ -119,10 +123,15 @@ describe("Layers 1-3 are implemented once: sanitize == sanitizeText", () => {
       );
     });
 
-  it("the facade returns exactly the three documented fields", async () => {
+  it("the facade returns exactly the four documented fields", async () => {
     // A wider narrowing bug (leaking `modified`/`sgrNote`/`reveal` through the
     // root entry) changes the public result shape, which callers deep-equal.
     const out = await sanitize("a <!-- c --> b", { html: true });
-    assert.deepEqual(Object.keys(out).sort(), ["cleaned", "found", "warnings"]);
+    assert.deepEqual(Object.keys(out).sort(), [
+      "cleaned",
+      "found",
+      "notes",
+      "warnings",
+    ]);
   });
 });

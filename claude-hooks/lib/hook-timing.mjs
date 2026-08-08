@@ -34,9 +34,40 @@
  */
 export const SLOW_HOOK_THRESHOLD_MS = 1000;
 
+/**
+ * Wall-clock a ONE-TIME provisioning step may spend before it is reported.
+ *
+ * Two orders of magnitude above {@link SLOW_HOOK_THRESHOLD_MS}, because it
+ * measures something categorically different: a dependency install that a
+ * session pays once, not a cost every tool call repeats. A cold `uv` install of
+ * the redactor engine is seconds and a cold `pip` one can be tens of them, so a
+ * budget anywhere near a second would report every first session — the alert
+ * fatigue this whole module exists to avoid. Past a minute, something is
+ * actually wrong (a serial pip resolve, a wedged mirror, or an idempotence bug
+ * re-provisioning every session), which is worth saying out loud.
+ */
+export const SLOW_PROVISION_THRESHOLD_MS = 60000;
+
 /** Where a reader is asked to send the timing. */
 const ISSUE_URL =
   "https://github.com/AlexanderMattTurner/agent-sanitizer/issues/new";
+
+/**
+ * Milliseconds as the seconds string every notice below prints.
+ *
+ * Rounds tenths half-UP from an exact integer count of hundredths, rather than
+ * `(ms / 1000).toFixed(1)`: the shell port of this module
+ * (plugin/scripts/lib/hook-timing.sh) has to produce the byte-identical string
+ * with integer arithmetic, and `toFixed` rounds the underlying double — so 1150
+ * would print "1.1" here (1.15 is below its decimal value as a double) and "1.2"
+ * there. `ms / 100` lands exactly on a half only when `ms` ends in 50, and every
+ * such quotient is dyadic, so this rounding is exact for every input.
+ * @param {number} ms
+ * @returns {string}
+ */
+export function formatSeconds(ms) {
+  return (Math.round(ms / 100) / 10).toFixed(1);
+}
 
 // Process-wide total of milliseconds spent in one-time provisioning. A running
 // total rather than a flag because a single hook run can pay more than one (a
@@ -103,10 +134,70 @@ export function slowHookNotice(
   if (elapsedMs <= thresholdMs) return null;
   return (
     `agent-sanitizer PERFORMANCE: the ${hookName} hook took ` +
-    `${(elapsedMs / 1000).toFixed(1)}s, over its ${(thresholdMs / 1000).toFixed(1)}s budget — ` +
+    `${formatSeconds(elapsedMs)}s, over its ${formatSeconds(thresholdMs)}s budget — ` +
     "this delay is the sanitizer's, not the model's, and every affected call pays it. " +
     `Tell the user, and suggest they report it at ${ISSUE_URL} with the hook name and timing.`
   );
+}
+
+/**
+ * The line for a ONE-TIME provisioning step that overran
+ * {@link SLOW_PROVISION_THRESHOLD_MS}, or null when it did not.
+ *
+ * Deliberately NOT {@link slowHookNotice} with a bigger threshold: that message
+ * says "every affected call pays it", which is false here and would send the
+ * reader hunting a per-call cost that does not exist. What is actionable about a
+ * slow install is the installer (uv resolves in a fraction of pip's time) and
+ * the fact that a repeat means the idempotence check is broken — so this asks
+ * for a report only on the repeat, which is the version of this that is a bug.
+ *
+ * The one caller is the shell provisioner, whose port of this module
+ * (plugin/scripts/lib/hook-timing.sh) must emit this exact string; that port and
+ * this definition are pinned to each other by a contract test rather than left
+ * as two independently-worded copies.
+ * @param {string} stepName
+ * @param {number} elapsedMs
+ * @param {number} [thresholdMs]
+ * @returns {string | null}
+ */
+export function slowProvisionNotice(
+  stepName,
+  elapsedMs,
+  thresholdMs = SLOW_PROVISION_THRESHOLD_MS,
+) {
+  if (elapsedMs <= thresholdMs) return null;
+  return (
+    `agent-sanitizer PERFORMANCE: one-time setup (${stepName}) took ` +
+    `${formatSeconds(elapsedMs)}s, over its ${formatSeconds(thresholdMs)}s budget — ` +
+    "this is paid once per install, not per tool call, so the session is not slow from here on. " +
+    `Installing uv makes it faster; if it happens on EVERY new session, report it at ${ISSUE_URL}.`
+  );
+}
+
+/**
+ * Write the slow-hook notice to stderr and return it, or return null when the
+ * run was within budget (writing nothing, so the quiet path stays quiet).
+ *
+ * The one place the notice reaches stderr: every reporter below needs the
+ * transcript copy, and a hook whose run ENDED IN AN ERROR has nothing but this —
+ * its verdict is the fail-closed one its `onError` composed, and diluting that
+ * message with a performance aside would bury the fault. A judge that spent
+ * thirty seconds and then threw is exactly the case the timing exists to name,
+ * so the error path measures and reports; it just reports on the human channel.
+ * @param {string} hookName
+ * @param {number} elapsedMs
+ * @param {(chunk: string) => void} [writeErr]  injectable stderr sink, for tests
+ * @returns {string | null}
+ */
+export function writeSlowHookNotice(
+  hookName,
+  elapsedMs,
+  writeErr = (chunk) => process.stderr.write(chunk),
+) {
+  const notice = slowHookNotice(hookName, elapsedMs);
+  if (notice === null) return null;
+  writeErr(notice + "\n");
+  return notice;
 }
 
 /**
@@ -130,9 +221,8 @@ export function withSlowHookNotice(
   verdict,
   writeErr = (chunk) => process.stderr.write(chunk),
 ) {
-  const notice = slowHookNotice(hookName, elapsedMs);
+  const notice = writeSlowHookNotice(hookName, elapsedMs, writeErr);
   if (notice === null) return verdict;
-  writeErr(notice + "\n");
   return {
     ...verdict,
     additional_context: verdict.additional_context
@@ -162,9 +252,8 @@ export function reportSlowHook(
   emit,
   writeErr = (chunk) => process.stderr.write(chunk),
 ) {
-  const notice = slowHookNotice(hookName, elapsedMs);
+  const notice = writeSlowHookNotice(hookName, elapsedMs, writeErr);
   if (notice === null) return false;
-  writeErr(notice + "\n");
   emit(hookEventName, { additionalContext: notice });
   return true;
 }
