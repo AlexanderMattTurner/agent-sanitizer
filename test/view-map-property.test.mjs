@@ -29,6 +29,7 @@ import {
   alignDeletions,
   resolveSpan,
   rehydrateNewString,
+  makeFileView,
 } from "../src/view-map.mjs";
 import { fcRunOptions } from "./test-helpers.mjs";
 
@@ -235,7 +236,11 @@ const reclean = (disk) => disk.split(ZW).join("");
 // Build a consistent (content, cleaned, view, deletions) tuple from a clean
 // base + ZW inserts + secrets placed in the clean text.
 function buildFixture(clean, content, secrets) {
-  const view = mkView(clean, secrets);
+  const mapped = mkView(clean, secrets);
+  // mkView emits UTF-16 offsets (it slices with .length), so the fixture is
+  // branded in that space directly - the code-point conversion has its own
+  // tests and would be a no-op on these BMP-only fixtures anyway.
+  const view = makeFileView(mapped.text, mapped.pairs, "utf16");
   const deletions = alignDeletions(content, clean);
   return { cleaned: clean, content, view, deletions };
 }

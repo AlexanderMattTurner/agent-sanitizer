@@ -15,7 +15,8 @@ import {
   alignDeletions,
   resolveSpan,
   rehydrateNewString,
-  pairsToUtf16,
+  makeFileView,
+  toUtf16View,
   pairDiskSpans,
 } from "../src/view-map.mjs";
 
@@ -160,7 +161,10 @@ describe("alignDeletions", () => {
 // ─── resolveSpan ─────────────────────────────────────────────────────────────
 
 // view with no secrets ⇒ view.text === cleaned and pairs empty.
-const plainView = (cleaned) => ({ text: cleaned, pairs: [] });
+const plainView = (cleaned) => makeFileView(cleaned, [], "utf16");
+
+/** A UTF-16-space view carrying hand-built pairs (offsets already in units). */
+const utf16View = (text, pairs) => makeFileView(text, pairs, "utf16");
 
 describe("resolveSpan", () => {
   it("maps a span across an interior stripped run, counting it in invisibleBytes", () => {
@@ -199,10 +203,9 @@ describe("resolveSpan", () => {
   it("maps view offsets across a placeholder expansion and returns contained pairs", () => {
     // cleaned: "x" + SECRET_A + "y"; view replaces SECRET_A with PH.
     const cleaned = `x${SECRET_A}y`;
-    const view = {
-      text: `x${PH}y`,
-      pairs: [{ placeholder: PH, original: SECRET_A, start: 1 }],
-    };
+    const view = utf16View(`x${PH}y`, [
+      { placeholder: PH, original: SECRET_A, start: 1 },
+    ]);
     const res = resolveSpan(cleaned, cleaned, view, [], 0, view.text.length);
     assert.equal(res.cleanedText, cleaned);
     assert.equal(res.diskText, cleaned);
@@ -212,10 +215,9 @@ describe("resolveSpan", () => {
 
   it("returns null when the span START cuts strictly inside a placeholder", () => {
     const cleaned = `x${SECRET_A}y`;
-    const view = {
-      text: `x${PH}y`,
-      pairs: [{ placeholder: PH, original: SECRET_A, start: 1 }],
-    };
+    const view = utf16View(`x${PH}y`, [
+      { placeholder: PH, original: SECRET_A, start: 1 },
+    ]);
     // Offset 2 is strictly inside the placeholder [1, 1+PH.length).
     const res = resolveSpan(cleaned, cleaned, view, [], 2, view.text.length);
     assert.equal(res, null);
@@ -223,10 +225,9 @@ describe("resolveSpan", () => {
 
   it("returns null when the span END cuts strictly inside a placeholder", () => {
     const cleaned = `x${SECRET_A}y`;
-    const view = {
-      text: `x${PH}y`,
-      pairs: [{ placeholder: PH, original: SECRET_A, start: 1 }],
-    };
+    const view = utf16View(`x${PH}y`, [
+      { placeholder: PH, original: SECRET_A, start: 1 },
+    ]);
     const res = resolveSpan(cleaned, cleaned, view, [], 0, 2);
     assert.equal(res, null);
   });
@@ -235,13 +236,10 @@ describe("resolveSpan", () => {
     // Two placeholders; span covers only the first. The filter keeps pairs
     // wholly inside [viewStart, viewEnd).
     const cleaned = `${SECRET_A} ${SECRET_B}`;
-    const view = {
-      text: `${PH} ${PH_KEY}`,
-      pairs: [
-        { placeholder: PH, original: SECRET_A, start: 0 },
-        { placeholder: PH_KEY, original: SECRET_B, start: PH.length + 1 },
-      ],
-    };
+    const view = utf16View(`${PH} ${PH_KEY}`, [
+      { placeholder: PH, original: SECRET_A, start: 0 },
+      { placeholder: PH_KEY, original: SECRET_B, start: PH.length + 1 },
+    ]);
     const res = resolveSpan(cleaned, cleaned, view, [], 0, PH.length);
     assert.deepEqual(res.pairs, [view.pairs[0]]);
   });
@@ -371,14 +369,19 @@ describe("rehydrateNewString", () => {
   });
 });
 
-// ─── pairsToUtf16 (code-point → UTF-16 start normalization) ──────────────────
+// ─── toUtf16View (code-point → UTF-16 start normalization) ──────────────────
 
-describe("pairsToUtf16", () => {
+// The conversion under test, driven through the branded door: build a
+// code-point-space view and read back the converted view's pairs.
+const convert = (text, pairs) =>
+  toUtf16View(makeFileView(text, pairs, "codePoint")).pairs;
+
+describe("toUtf16View", () => {
   it("is the identity for BMP-only text (code point == UTF-16 unit)", () => {
     // No astral chars: every start already equals its UTF-16 offset.
     const text = `key: ${PH_KEY} tail`;
     const pairs = [{ placeholder: PH_KEY, original: "AKIA1234", start: 5 }];
-    assert.deepEqual(pairsToUtf16(text, pairs), pairs);
+    assert.deepEqual(convert(text, pairs), pairs);
   });
 
   it("shifts a start right by one unit per astral char before it", () => {
@@ -389,7 +392,7 @@ describe("pairsToUtf16", () => {
     assert.equal(cpStart, 3);
     const utf16Start = text.indexOf("["); // 5 UTF-16 units in
     assert.equal(utf16Start, 5);
-    const out = pairsToUtf16(text, [
+    const out = convert(text, [
       { placeholder: PH_KEY, original: "AKIA1234", start: cpStart },
     ]);
     assert.equal(out[0].start, utf16Start);
@@ -399,9 +402,14 @@ describe("pairsToUtf16", () => {
     );
   });
 
-  it("returns the empty pairs array unchanged", () => {
+  it("carries an empty pair list through as its own (frozen) array", () => {
+    // The no-pairs short-circuit skips building the prefix table; the result is
+    // still a fresh frozen array, never the caller's own.
     const empty = [];
-    assert.equal(pairsToUtf16("🔑 no pairs", empty), empty);
+    const out = convert("🔑 no pairs", empty);
+    assert.deepEqual(out, []);
+    assert.notEqual(out, empty);
+    assert.ok(Object.isFrozen(out));
   });
 
   it("throws on an out-of-range start instead of yielding an undefined offset (R7)", () => {
@@ -410,21 +418,20 @@ describe("pairsToUtf16", () => {
     // comparison. Fail loudly on high, negative, and non-integer offsets.
     const text = "abc"; // 3 code points → valid starts are 0..3
     assert.throws(
-      () => pairsToUtf16(text, [{ placeholder: PH, original: "x", start: 4 }]),
+      () => convert(text, [{ placeholder: PH, original: "x", start: 4 }]),
       /out of range \[0, 3\]/,
     );
     assert.throws(
-      () => pairsToUtf16(text, [{ placeholder: PH, original: "x", start: -1 }]),
+      () => convert(text, [{ placeholder: PH, original: "x", start: -1 }]),
       /out of range/,
     );
     assert.throws(
-      () =>
-        pairsToUtf16(text, [{ placeholder: PH, original: "x", start: 1.5 }]),
+      () => convert(text, [{ placeholder: PH, original: "x", start: 1.5 }]),
       /out of range/,
     );
     // Boundary: start === codePoints.length (points at the very end) is valid.
     assert.deepEqual(
-      pairsToUtf16(text, [{ placeholder: PH, original: "x", start: 3 }]),
+      convert(text, [{ placeholder: PH, original: "x", start: 3 }]),
       [{ placeholder: PH, original: "x", start: 3 }],
     );
   });
@@ -438,7 +445,7 @@ describe("pairsToUtf16", () => {
     // Out of order: the second pair's start precedes the first pair's.
     assert.throws(
       () =>
-        pairsToUtf16(text, [
+        convert(text, [
           { placeholder: PH, original: "a", start: s2 },
           { placeholder: PH, original: "b", start: 0 },
         ]),
@@ -448,7 +455,7 @@ describe("pairsToUtf16", () => {
     // offset 1, where the second pair claims to start.
     assert.throws(
       () =>
-        pairsToUtf16(text, [
+        convert(text, [
           { placeholder: PH, original: "a", start: 0 },
           { placeholder: PH, original: "b", start: 1 },
         ]),
@@ -457,7 +464,7 @@ describe("pairsToUtf16", () => {
     // Adjacent (previous end === next start) is the tight boundary and is valid.
     const adj = `${PH}${PH}`;
     assert.deepEqual(
-      pairsToUtf16(adj, [
+      convert(adj, [
         { placeholder: PH, original: "a", start: 0 },
         { placeholder: PH, original: "b", start: PH.length },
       ]).map((pair) => pair.start),
@@ -470,7 +477,7 @@ describe("pairsToUtf16", () => {
     const cp = Array.from(text);
     const s1 = cp.indexOf("["); // first placeholder, code-point offset
     const s2 = cp.indexOf("[", s1 + 1); // second placeholder, code-point offset
-    const out = pairsToUtf16(text, [
+    const out = convert(text, [
       { placeholder: PH_KEY, original: "AKIA1", start: s1 },
       { placeholder: PH, original: "AKIA2", start: s2 },
     ]);
@@ -487,7 +494,7 @@ describe("pairDiskSpans", () => {
     // Happy path: one placeholder, no deletions, so the disk span is the
     // pair's own [start, start+original.length).
     const spans = pairDiskSpans(
-      { pairs: [{ placeholder: "[REDACTED]", original: "secret", start: 0 }] },
+      utf16View(PH, [{ placeholder: PH, original: "secret", start: 0 }]),
       [],
     );
     assert.deepEqual(spans, [{ start: 0, end: "secret".length }]);
@@ -500,15 +507,167 @@ describe("pairDiskSpans", () => {
     // footprint). The second pair's start (3) is strictly interior to the
     // first placeholder "[REDACTED]" (offsets [0,10)), so mapViewOffset returns
     // null.
-    const view = {
-      pairs: [
-        { placeholder: "[REDACTED]", original: "secret", start: 0 },
-        { placeholder: "[X]", original: "y", start: 3 },
-      ],
-    };
+    const view = utf16View(PH, [
+      { placeholder: PH, original: "secret", start: 0 },
+      { placeholder: "[X]", original: "y", start: 3 },
+    ]);
     assert.throws(
       () => pairDiskSpans(view, []),
       /maps inside another placeholder/,
+    );
+  });
+});
+
+// ─── FileView: the branded, frozen coordinate-space carrier ──────────────────
+
+// The engine's two offset spaces (the redactor's code points, the module's
+// UTF-16 units) are otherwise indistinguishable — bare numbers in a bare
+// object — so nothing stops a caller converting an already-converted view a
+// second time, or handing a raw redactor result straight to a consumer that
+// expects converted offsets. Both are silent wrong answers: every offset
+// preceded by an astral char shifts once more. The brand makes the space part
+// of the value, and the freeze removes the in-place-conversion door entirely.
+describe("makeFileView", () => {
+  const pairs = [{ placeholder: PH, original: SECRET_A, start: 1 }];
+
+  it("returns a frozen carrier: neither the view nor its pairs can be mutated in place", () => {
+    const view = makeFileView(`x${PH}y`, pairs, "utf16");
+    assert.ok(Object.isFrozen(view));
+    assert.ok(Object.isFrozen(view.pairs));
+    assert.ok(Object.isFrozen(view.pairs[0]));
+    // Strict mode (every ES module is strict) makes each of these throw rather
+    // than silently no-op — the in-place conversion this design eliminates.
+    assert.throws(() => {
+      view.pairs = [];
+    }, TypeError);
+    assert.throws(() => {
+      view.space = "codePoint";
+    }, TypeError);
+    assert.throws(() => {
+      view.pairs[0].start = 99;
+    }, TypeError);
+    // Untouched by the attempts above.
+    assert.equal(view.space, "utf16");
+    assert.deepEqual(view.pairs, pairs);
+  });
+
+  it("copies the caller's pairs so neither side can reach into the other", () => {
+    const mutable = [{ placeholder: PH, original: SECRET_A, start: 1 }];
+    const view = makeFileView(`x${PH}y`, mutable, "utf16");
+    // The caller's own array/objects are left writable (we froze copies)…
+    mutable[0].start = 42;
+    mutable.push({ placeholder: PH, original: SECRET_B, start: 99 });
+    // …and the view is unaffected by that later mutation.
+    assert.deepEqual(view.pairs, [
+      { placeholder: PH, original: SECRET_A, start: 1 },
+    ]);
+  });
+});
+
+describe("toUtf16View: one conversion, on a new value", () => {
+  const codePointView = () =>
+    makeFileView(
+      `🔑${PH}`,
+      [{ placeholder: PH, original: SECRET_A, start: 1 }],
+      "codePoint",
+    );
+
+  it("produces a NEW utf16-space view and leaves the source view untouched", () => {
+    const source = codePointView();
+    const out = toUtf16View(source);
+    assert.equal(out.space, "utf16");
+    assert.notEqual(out, source);
+    // The astral char shifts the start by exactly one unit — proof the
+    // conversion ran on this fixture rather than passing offsets through.
+    assert.equal(out.pairs[0].start, 2);
+    assert.equal(source.space, "codePoint");
+    assert.equal(source.pairs[0].start, 1);
+  });
+
+  it("refuses to convert an already-converted view (no double shift)", () => {
+    const once = toUtf16View(codePointView());
+    assert.throws(
+      () => toUtf16View(once),
+      /expected a file view with codePoint offsets, got utf16/,
+    );
+  });
+
+  it("refuses an unbranded object that merely looks like a view", () => {
+    assert.throws(
+      () =>
+        toUtf16View({
+          space: "codePoint",
+          text: `🔑${PH}`,
+          pairs: [{ placeholder: PH, original: SECRET_A, start: 1 }],
+        }),
+      /branded file view from makeFileView/,
+    );
+  });
+});
+
+describe("consumers assert the view's coordinate space", () => {
+  const cleaned = `x${SECRET_A}y`;
+  const raw = {
+    space: "utf16",
+    text: `x${PH}y`,
+    pairs: [{ placeholder: PH, original: SECRET_A, start: 1 }],
+  };
+
+  it("resolveSpan throws on an unbranded view", () => {
+    // Positive marker: the SAME text/pairs resolve fine once branded, so the
+    // throw is about the brand, not a malformed fixture.
+    const ok = resolveSpan(
+      cleaned,
+      cleaned,
+      utf16View(raw.text, raw.pairs),
+      [],
+      0,
+      raw.text.length,
+    );
+    assert.equal(ok.diskText, cleaned);
+    assert.throws(
+      () => resolveSpan(cleaned, cleaned, raw, [], 0, raw.text.length),
+      /branded file view from makeFileView/,
+    );
+  });
+
+  it("resolveSpan throws on a code-point-space view", () => {
+    assert.throws(
+      () =>
+        resolveSpan(
+          cleaned,
+          cleaned,
+          makeFileView(raw.text, raw.pairs, "codePoint"),
+          [],
+          0,
+          raw.text.length,
+        ),
+      /expected a file view with utf16 offsets, got codePoint/,
+    );
+  });
+
+  it("pairDiskSpans throws on an unbranded or code-point-space view", () => {
+    assert.deepEqual(pairDiskSpans(utf16View(raw.text, raw.pairs), []), [
+      { start: 1, end: 1 + SECRET_A.length },
+    ]);
+    assert.throws(
+      () => pairDiskSpans(raw, []),
+      /branded file view from makeFileView/,
+    );
+    assert.throws(
+      () => pairDiskSpans(makeFileView(raw.text, raw.pairs, "codePoint"), []),
+      /expected a file view with utf16 offsets, got codePoint/,
+    );
+  });
+
+  it("both consumers reject a null view rather than reading through it", () => {
+    assert.throws(
+      () => resolveSpan(cleaned, cleaned, null, [], 0, 1),
+      /branded file view from makeFileView/,
+    );
+    assert.throws(
+      () => pairDiskSpans(null, []),
+      /branded file view from makeFileView/,
     );
   });
 });
