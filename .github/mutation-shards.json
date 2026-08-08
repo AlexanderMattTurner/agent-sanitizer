@@ -35,7 +35,7 @@
     },
     {
       "id": "index-prompt-gates",
-      "mutate": "src/index.mjs,src/prompt.mjs,src/gates.mjs,src/cf-charset.mjs"
+      "mutate": "src/index.mjs,src/prompt.mjs,src/gates.mjs,src/cf-charset.mjs,src/warnings.mjs"
     },
     {
       "id": "credential-names",
@@ -44,6 +44,10 @@
     {
       "id": "hook-entrypoints",
       "mutate": "claude-hooks/sanitize-user-prompt.mjs,claude-hooks/plugin-hooks.mjs"
+    },
+    {
+      "id": "hook-lib-posture",
+      "mutate": "claude-hooks/lib/hook-fault.mjs,claude-hooks/lib/layer-pipeline.mjs"
     },
     {
       "id": "hook-lib-config",
