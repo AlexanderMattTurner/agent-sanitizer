@@ -10,7 +10,78 @@
  *             them; a run at `start` sits immediately before cleaned[start])
  *   view    — cleaned with each secret replaced by its [REDACTED…]
  *             placeholder (`pairs` from the injected redactor’s map mode)
+ *
+ * The view is carried by {@link makeFileView}, the ONLY constructor the
+ * consumers of this module may use: it owns the code-point → UTF-16 offset
+ * conversion and brands the result, so the conversion happens exactly once per
+ * view and every function below can assert it happened.
  */
+
+/**
+ * Brand stamped by {@link makeFileView} and asserted by every function that
+ * consumes a view. A Symbol, not a string key: it cannot be spelled by a plain
+ * object literal built elsewhere (in this module's tests or in a consumer), so
+ * the assertion below proves the carrier came through the constructor rather
+ * than merely resembling one.
+ */
+const FILE_VIEW = Symbol("agent-sanitizer:file-view");
+
+/**
+ * @typedef {{ placeholder: string, original: string, start: number }} RedactionPair
+ * @typedef {{ text: string, pairs: readonly RedactionPair[] }} FileView
+ *   A branded, frozen carrier from {@link makeFileView}. `pairs` are in UTF-16
+ *   offsets, sorted and non-overlapping — both enforced at construction.
+ */
+
+/**
+ * Build the branded file view from a redactor's map-mode result.
+ *
+ * The redactor's own object is never touched. It used to be: the caller did
+ * `view.pairs = pairsToUtf16(view.text, view.pairs)`, an in-place mutation of a
+ * value returned from an INJECTED seam. A redactor that memoizes its map result
+ * (a reasonable thing for a caller to build) hands back the same object on the
+ * second identical call, which then gets converted a SECOND time — every
+ * placeholder preceded by an astral character shifts again and the same input
+ * yields a different verdict. Converting into a fresh frozen carrier makes that
+ * unrepresentable: the conversion is part of construction, and construction
+ * cannot be applied to its own output without going through the redactor again.
+ *
+ * The frozen `pairs` array is likewise a copy — `pairsToUtf16` returns its
+ * argument unchanged for the empty case, and freezing the redactor's array
+ * would reach back into the seam's memoized value.
+ * @param {string} text redacted view text
+ * @param {RedactionPair[]} pairs redactor pairs, in CODE-POINT offsets
+ * @returns {FileView}
+ */
+export function makeFileView(text, pairs) {
+  return Object.freeze({
+    [FILE_VIEW]: true,
+    text,
+    pairs: Object.freeze([...pairsToUtf16(text, pairs)]),
+  });
+}
+
+/**
+ * Throw unless `view` came from {@link makeFileView}. Every offset function
+ * here reads `view.pairs` as UTF-16 offsets; a hand-rolled `{text, pairs}` whose
+ * pairs are still in code-point space mis-anchors an edit onto the wrong bytes
+ * whenever an astral character precedes a placeholder — silently, and only for
+ * emoji-bearing files. Fail loudly at the boundary instead.
+ * @param {unknown} view
+ * @param {string} fn name of the calling function, for the error
+ * @returns {void}
+ */
+function assertFileView(view, fn) {
+  if (
+    view === null ||
+    typeof view !== "object" ||
+    /** @type {any} */ (view)[FILE_VIEW] !== true
+  )
+    throw new Error(
+      `${fn} requires a view built by makeFileView(); got a raw object whose ` +
+        `pair offsets have not been normalized to UTF-16`,
+    );
+}
 
 /**
  * Non-overlapping occurrence indices of `needle` in `haystack`.
@@ -162,7 +233,7 @@ export function pairsToUtf16(text, pairs) {
 /**
  * Map a redacted-view offset to its Layer-1-cleaned offset, or null when the
  * offset falls strictly inside a placeholder (no cleaned position corresponds).
- * @param {{placeholder: string, original: string, start: number}[]} pairs
+ * @param {readonly RedactionPair[]} pairs
  * @param {number} offset view offset
  * @returns {number | null}
  */
@@ -190,7 +261,7 @@ function mapViewOffset(pairs, offset) {
  * and a mis-attributed run would mis-anchor the edit.
  * @param {string} content disk file content
  * @param {string} cleaned Layer-1 view of `content`
- * @param {{text: string, pairs: {placeholder: string, original: string, start: number}[]}} view
+ * @param {FileView} view
  * @param {{start: number, deleted: string}[]} deletions
  * @param {number} viewStart
  * @param {number} viewEnd
@@ -203,6 +274,7 @@ export function resolveSpan(
   viewStart,
   viewEnd,
 ) {
+  assertFileView(view, "resolveSpan");
   const cleanedStart = mapViewOffset(view.pairs, viewStart);
   const cleanedEnd = mapViewOffset(view.pairs, viewEnd);
   if (cleanedStart === null || cleanedEnd === null) return null;
@@ -292,17 +364,22 @@ export function spliceOrdered(text, matches, replacementFor) {
  * was never part of the secret); interior runs are included. Callers use these
  * to detect an edit whose on-disk footprint intrudes into bytes the model was
  * never shown.
- * @param {{pairs: {placeholder: string, original: string, start: number}[]}} view
+ * @param {FileView} view
  * @param {{start: number, deleted: string}[]} deletions
  * @returns {{start: number, end: number}[]}
  */
 export function pairDiskSpans(view, deletions) {
+  assertFileView(view, "pairDiskSpans");
   return view.pairs.map((pair) => {
-    // pair.start is a placeholder boundary; placeholders never overlap, so it is
-    // never strictly interior to another placeholder and mapViewOffset resolves.
-    const cleanedStart = mapViewOffset(view.pairs, pair.start);
-    if (cleanedStart === null)
-      throw new Error("redaction pair start maps inside another placeholder");
+    // pair.start is a placeholder boundary, and makeFileView rejected any pair
+    // set that is out of order or overlapping (see pairsToUtf16), so it is never
+    // strictly interior to another placeholder: mapViewOffset always resolves.
+    // The brand assertion above is what makes that a guarantee rather than a
+    // hope, which is why there is no second null check here — the one input that
+    // could produce null cannot be constructed.
+    const cleanedStart = /** @type {number} */ (
+      mapViewOffset(view.pairs, pair.start)
+    );
     const cleanedEnd = cleanedStart + pair.original.length;
     return {
       start: diskOffset(deletions, cleanedStart, false),
@@ -320,8 +397,8 @@ export function pairDiskSpans(view, deletions) {
  * appears literally in the matched file text, is unresolvable → deny.
  * @param {string} oldS matched old_string (≡ the view span text)
  * @param {string} newS model-authored replacement
- * @param {{placeholder: string, original: string, start: number}[]} spanPairs
- * @param {{placeholder: string, original: string, start: number}[]} filePairs
+ * @param {readonly RedactionPair[]} spanPairs
+ * @param {readonly RedactionPair[]} filePairs
  * @returns {{text: string, secrets: string[]} | {deny: string}}
  */
 export function rehydrateNewString(oldS, newS, spanPairs, filePairs) {
