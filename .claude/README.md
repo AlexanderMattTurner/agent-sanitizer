@@ -37,11 +37,18 @@ into `plugin/.claude-plugin/plugin.json`, so sessions here track the SHIPPED
 hooks rather than the working tree. That is deliberate: it is the same artifact
 users install, so a broken release is felt here first.
 
-Two consequences worth knowing. The first session after an update runs the
+Three consequences worth knowing. The first session after an update runs the
 plugin's SessionStart provisioning (a `uv`/`python3` install of the redaction
-engine into the plugin data dir), so a cold start is slower. And the hooks under
+engine into the plugin data dir), so a cold start is slower. The hooks under
 `hooks/` below are unrelated dev-workflow hooks — the sanitization layers come
-from the plugin, not from this directory.
+from the plugin, not from this directory. And those layers now apply to this
+repo's own payload corpora: `src/invisible.mjs` and `tests/secrets/` hold raw
+invisible characters, so a `Read` of them returns the stripped text (silently —
+the alert is suppressed on local tools), and `Edit`/`Write` content the model
+authors is rewritten the same way. When editing a fixture that must keep its
+payload, run the session with `AGENT_SANITIZER_TERMINAL_DISABLED=1` (raw escapes)
+or `AGENT_SANITIZER_INVISIBLE_DISABLED=1` (invisible chars); see the knob table
+in `plugin/README.md`.
 
 `plugin/test/plugin-manifest.test.mjs` pins the marketplace name, repo slug and
 plugin id here against the two manifests, so a rename cannot leave this file
