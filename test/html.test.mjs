@@ -5,8 +5,7 @@
  */
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { execFileSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import fc from "fast-check";
@@ -1127,17 +1126,38 @@ describe("precision: markdown the old dispatch routed to the source branch", () 
 // real markdown parser — rather than by scanning for fence characters.
 describe("negative corpus: the repo's own markdown is never HTML source", () => {
   const repoRoot = fileURLToPath(new URL("../", import.meta.url));
-  // Tracked files only, via git: a directory walk would descend into ignored
-  // trees (`node_modules`, sibling worktrees under `.claude/worktrees`) and
-  // make the corpus depend on whatever happens to be on disk.
-  const docs = execFileSync("git", ["ls-files", "-z", "*.md"], {
-    cwd: repoRoot,
-    encoding: "utf8",
-  })
-    .split("\0")
-    .filter(Boolean)
-    .sort()
-    .map((rel) => ({ rel, text: readFileSync(join(repoRoot, rel), "utf8") }));
+  // Enumerated by walking the tree rather than by shelling out to
+  // `git ls-files`: Stryker's mutation sandbox is a COPY of the repo with no
+  // `.git`, so the git call exits non-zero there and the corpus silently
+  // empties — which is how one broken enumeration took every mutation shard
+  // down at once. The skip list is the subset of `.gitignore` that can contain
+  // markdown; without it the walk descends into `node_modules` or a sibling
+  // worktree under `.claude/worktrees` and the corpus becomes whatever happens
+  // to be on disk.
+  const SKIP_DIRS = new Set([
+    ".git",
+    ".stryker-tmp",
+    ".venv",
+    "_bundled",
+    "coverage",
+    "node_modules",
+    "worktrees",
+  ]);
+  /** @returns {string[]} repo-relative paths, depth-first and sorted */
+  const walk = (/** @type {string} */ dir) =>
+    readdirSync(join(repoRoot, dir), { withFileTypes: true })
+      .sort((a, b) => (a.name < b.name ? -1 : 1))
+      .flatMap((entry) => {
+        const rel = dir ? `${dir}/${entry.name}` : entry.name;
+        // Symlinks report isDirectory() false, so the walk cannot cycle.
+        if (entry.isDirectory())
+          return SKIP_DIRS.has(entry.name) ? [] : walk(rel);
+        return entry.name.endsWith(".md") ? [rel] : [];
+      });
+  const docs = walk("").map((rel) => ({
+    rel,
+    text: readFileSync(join(repoRoot, rel), "utf8"),
+  }));
   const codeBlocks = (/** @type {string} */ text) => {
     /** @type {string[]} */
     const values = [];
