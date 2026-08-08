@@ -8,6 +8,18 @@ adhere to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+## [2.19.0] - 2026-08-08
+
+### Added
+
+- Add `/agent-sanitizer:enable-auto-update` skill to enable marketplace auto-update functionality for the plugin.
+- Document marketplace auto-update and manual refresh commands in plugin documentation.
+
+### Changed
+
+- Type-annotate the auto-update script for `tsc --noEmit` compatibility.
+- Update plugin documentation to include the auto-update command in the install block.
+
 ## [2.18.1] - 2026-08-08
 
 ### Fixed
