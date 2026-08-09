@@ -29,7 +29,11 @@ repos:
     rev: 745eface02aef23e168a8afb6b5737818efbea95 # v0.11.0.1
     hooks:
       - id: shellcheck
-        args: [-x, -P, .claude/hooks]
+        # Both directories hold sourced libraries reached through a `$HERE`-style
+        # variable, which shellcheck cannot resolve on its own: without them on
+        # the source path a `# shellcheck source=…` directive resolves to nothing
+        # and the sourced file goes unchecked (SC1091).
+        args: [-x, -P, ".claude/hooks:.github/scripts"]
 
   - repo: https://github.com/scop/pre-commit-shfmt
     rev: 2a30809d16bc7a60d9b97353c797f42b510d3368 # v3.12.0-2
