@@ -42,7 +42,7 @@ import { describe, it } from "node:test";
 // that call appeared to work only because the sandbox sits inside the checkout,
 // so git walked up out of it silently. `git ls-files` below still asks git, but
 // for a different question — which paths are TRACKED — anchored to this root.
-import { repoRoot as REPO_ROOT } from "./helpers/repo-root.mjs";
+import { repoRoot as REPO_ROOT } from "../.hooks/lib/repo-root.mjs";
 
 const read = (relative) => readFileSync(join(REPO_ROOT, relative), "utf8");
 
