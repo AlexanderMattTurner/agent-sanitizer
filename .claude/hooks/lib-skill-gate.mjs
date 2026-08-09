@@ -46,7 +46,14 @@ export function markerPath(sessionId, skill) {
   if (typeof sessionId !== "string" || !SAFE_NAME_RE.test(sessionId))
     return null;
   if (!SAFE_NAME_RE.test(skill)) return null;
-  const dir = process.env.CLAUDE_SKILL_GATE_DIR || join(tmpdir(), "skill-gate");
+  // Namespaced by uid: a shared $TMPDIR means another account can own
+  // `skill-gate` first, and the 0700 dir it creates makes every marker write
+  // EACCES. The write is best-effort, but the marker is the ONLY evidence the
+  // skill ran, so that state denies every gated action for the rest of the
+  // session with no reachable remedy.
+  const dir =
+    process.env.CLAUDE_SKILL_GATE_DIR ||
+    join(tmpdir(), `skill-gate-${process.getuid?.() ?? "nouid"}`);
   // Per skill, not per session: one gate's invocation must not satisfy another's.
   return join(dir, `${sessionId}.${skill}.marker`);
 }
