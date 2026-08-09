@@ -67,18 +67,58 @@ describe("sanitize-output: key-collision recovery", () => {
     assert.match(collisions(warnings)[0], /at the top level/);
   });
 
-  it("withholds a colliding value's whole subtree, shape preserved", async () => {
+  it("withholds a colliding value's whole subtree, leaving no leaf behind", async () => {
     const { value } = await walk({
-      cfg: { deep: { leaf: "some text", flag: true } },
+      cfg: { deep: { leaf: "some text", flag: true, count: 7 } },
       [`cfg${ZW}`]: "planted",
     });
-    assert.deepEqual(value.cfg, {
-      deep: { leaf: COLLISION_WITHHELD_MESSAGE, flag: true },
-    });
+    // The WHOLE value goes, not a leaf-wise walk of it: a shape-preserving
+    // suppressor rewrites only string leaves, so `flag`/`count` would survive
+    // while the warning claimed the field was withheld.
+    assert.equal(value.cfg, COLLISION_WITHHELD_MESSAGE);
     assert.equal(
       value["cfg [withheld duplicate 2]"],
       COLLISION_WITHHELD_MESSAGE,
     );
+    assert.equal(JSON.stringify(value).includes("some text"), false);
+  });
+
+  it("withholds colliding NON-string values too", async () => {
+    // The misattribution this guard exists to prevent does not care about the
+    // value's type: an attacker-chosen number under a legitimate field name is
+    // exactly the substitution being refused.
+    const { value, warnings } = await walk({
+      n: 1,
+      [`n${ZW}`]: 999,
+      ok: true,
+      [`ok${ZW}`]: null,
+    });
+    assert.equal(value.n, COLLISION_WITHHELD_MESSAGE);
+    assert.equal(value["n [withheld duplicate 2]"], COLLISION_WITHHELD_MESSAGE);
+    assert.equal(value.ok, COLLISION_WITHHELD_MESSAGE);
+    assert.equal(
+      value["ok [withheld duplicate 2]"],
+      COLLISION_WITHHELD_MESSAGE,
+    );
+    assert.equal(JSON.stringify(value).includes("999"), false);
+    assert.equal(collisions(warnings).length, 2);
+  });
+
+  it("does not rescan from the first slot on each collision", async () => {
+    // Non-vacuity for the memo: 400 fields collapsing to one name is an
+    // attacker-composable input, and an O(N^2) probe is a stall onto the
+    // raw-output fail-open. Correctness first — every field still lands in its
+    // own slot — then the bound.
+    const many = { k: "0" };
+    for (let index = 1; index <= 400; index++)
+      many[`k${ZW.repeat(index)}`] = String(index);
+    const started = process.hrtime.bigint();
+    const { value, warnings } = await walk(many);
+    const elapsedMs = Number(process.hrtime.bigint() - started) / 1e6;
+    assert.equal(Object.keys(value).length, 401);
+    assert.equal(new Set(Object.values(value)).size, 1);
+    assert.equal(collisions(warnings).length, 1);
+    assert.ok(elapsedMs < 5000, `collision handling took ${elapsedMs}ms`);
   });
 
   it("handles three raw keys collapsing to one name, warning once", async () => {

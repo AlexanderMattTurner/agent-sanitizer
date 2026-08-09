@@ -36,6 +36,7 @@ import { registerFaultPolicy, hookFaultOutcome } from "./lib/hook-fault.mjs";
 import { controlPlane, runJudgeCli } from "./lib/control-plane.mjs";
 import { bestEffortTrace, trace, TraceEvent } from "./lib/trace.mjs";
 import { hasEnvBoundSecret } from "./lib/secret-annotate.mjs";
+import { secretsEnabled } from "./lib/env-config.mjs";
 import {
   persistReveal,
   isRevealRead,
@@ -252,32 +253,36 @@ export async function sanitizeText(
     exfilScan: webIngress,
     sgrCarveOut: !webIngress,
     deadline,
-    // Layer 4 — the seam rethrows a redactor throw wrapped, and the CLI applies
-    // the caller's posture to it. Surface the failure to the operator's
-    // terminal here first: whatever the CLI decides rides in additionalContext,
-    // which only the model sees, so a degraded redactor would otherwise be
-    // invisible to the human — and under the fail-open default this line is the
-    // ONLY signal the human gets.
-    redact: async (/** @type {string} */ content) => {
-      let secrets;
-      try {
-        secrets = await redactSecrets(content, webIngress, deadline);
-      } catch (l4err) {
-        process.stderr.write(
-          `sanitize-output: CRITICAL: secret redaction failed (${errMessage(l4err)}). ` +
-            "This output was never vetted for secrets. Fix the redactor installation.\n",
-        );
-        throw l4err;
-      }
-      if (!secrets) return null;
-      // The note is derived from the PRE-redaction text: the caller's reason for
-      // annotating (which variable, which provenance) is exactly what redaction
-      // is about to remove.
-      const note = ext.redactNote?.(content);
-      return note
-        ? { text: secrets.text, found: secrets.found, note }
-        : { text: secrets.text, found: secrets.found };
-    },
+    // Layer 4 — OPT-IN (secretsEnabled): with the knob unset the seam gets no
+    // redact callback at all, so plain output never spawns the daemon and no
+    // placeholder ever enters the model's view. When it runs, the seam rethrows
+    // a redactor throw wrapped, and the CLI applies the caller's posture to it.
+    // Surface the failure to the operator's terminal here first: whatever the
+    // CLI decides rides in additionalContext, which only the model sees, so a
+    // degraded redactor would otherwise be invisible to the human — and under
+    // the fail-open default this line is the ONLY signal the human gets.
+    redact: !secretsEnabled()
+      ? undefined
+      : async (/** @type {string} */ content) => {
+          let secrets;
+          try {
+            secrets = await redactSecrets(content, webIngress, deadline);
+          } catch (l4err) {
+            process.stderr.write(
+              `sanitize-output: CRITICAL: secret redaction failed (${errMessage(l4err)}). ` +
+                "This output was never vetted for secrets. Fix the redactor installation.\n",
+            );
+            throw l4err;
+          }
+          if (!secrets) return null;
+          // The note is derived from the PRE-redaction text: the caller's reason for
+          // annotating (which variable, which provenance) is exactly what redaction
+          // is about to remove.
+          const note = ext.redactNote?.(content);
+          return note
+            ? { text: secrets.text, found: secrets.found, note }
+            : { text: secrets.text, found: secrets.found };
+        },
   };
   const seamResult =
     /** @type {{ cleaned: string, warnings: string[], notes?: string[], modified: boolean, sgrNote: boolean, reveal?: string }} */ (
@@ -410,12 +415,28 @@ export async function sanitizeValue(
   return { value, modified: false, sgrNote: false };
 }
 
-// The value a colliding field is replaced with. Every string leaf of the
-// withheld value becomes this marker (suppressToolOutput preserves the shape),
-// so the model can see WHERE data was withheld instead of silently reading a
-// shorter object.
+// The value a colliding field is replaced with — the WHOLE value, not a
+// leaf-wise walk of it. A shape-preserving walk (suppressToolOutput) rewrites
+// only string leaves, so a colliding number, boolean or null would reach the
+// model verbatim while the warning claimed it was withheld — an attacker-chosen
+// scalar sitting under a legitimate field name, which is precisely the
+// misattribution this withholding exists to prevent. Replacing the value
+// outright changes that field's JSON type, and that is accepted here: the field
+// is off-schema by construction (a duplicate name is in no tool's schema), and
+// what the harness's shape check actually turns on — the object's key COUNT —
+// is preserved by the disambiguated slot below.
 export const COLLISION_WITHHELD_MESSAGE =
   "[WITHHELD — this field's name collided with another after sanitization]";
+
+/**
+ * Next free `[withheld duplicate N]` index, per output object and collided
+ * name. Memoized because restarting the probe at 2 on every collision is
+ * O(N²) in the number of colliding fields — and that count is the tool
+ * response author's to choose, so the quadratic scan is an attacker-composable
+ * stall onto the very raw-output fail-open this guard exists to prevent.
+ * @type {WeakMap<object, Map<string, number>>}
+ */
+const nextWithheldIndex = new WeakMap();
 
 /**
  * The warning for a post-sanitization key collision, naming where it sits.
@@ -445,9 +466,16 @@ export function collisionWarning(name, path) {
  * @returns {string}
  */
 function withheldKeyFor(out, cleaned) {
-  for (let n = 2; ; n++) {
+  let taken = nextWithheldIndex.get(out);
+  if (taken === undefined) nextWithheldIndex.set(out, (taken = new Map()));
+  // The probe loop stays even with the memo: a raw field already NAMED
+  // `<cleaned> [withheld duplicate 2]` must not be clobbered.
+  for (let n = taken.get(cleaned) ?? 2; ; n++) {
     const candidate = `${cleaned} [withheld duplicate ${n}]`;
-    if (!Object.hasOwn(out, candidate)) return candidate;
+    if (!Object.hasOwn(out, candidate)) {
+      taken.set(cleaned, n + 1);
+      return candidate;
+    }
   }
 }
 
@@ -521,23 +549,14 @@ async function sanitizeObject(
       if (!collided.has(keyResult.cleaned)) {
         collided.add(keyResult.cleaned);
         warnings.push(collisionWarning(keyResult.cleaned, path));
-        defineOwn(
-          out,
-          keyResult.cleaned,
-          suppressToolOutput(
-            /** @type {any} */ (out)[keyResult.cleaned],
-            COLLISION_WITHHELD_MESSAGE,
-          ),
-        );
+        defineOwn(out, keyResult.cleaned, COLLISION_WITHHELD_MESSAGE);
       }
       modified = true;
     }
     defineOwn(
       out,
       collision ? withheldKeyFor(out, keyResult.cleaned) : keyResult.cleaned,
-      collision
-        ? suppressToolOutput(result.value, COLLISION_WITHHELD_MESSAGE)
-        : result.value,
+      collision ? COLLISION_WITHHELD_MESSAGE : result.value,
     );
     if (result.modified) modified = true;
     if (result.sgrNote) sgrNote = true;
@@ -858,7 +877,11 @@ export async function evaluateToolOutput(input, ext = {}) {
   for (const original of reveals) {
     let stored;
     try {
-      const secrets = await redactSecrets(original, true, deadline);
+      // Same opt-in as the main pass: with secrets off nothing was redacted
+      // out of the primary output either, so the sidecar persists verbatim.
+      const secrets = secretsEnabled()
+        ? await redactSecrets(original, true, deadline)
+        : null;
       stored = secrets ? secrets.text : original;
     } catch {
       // The pre-splice text carries the spliced comment bodies, so a secret
@@ -877,7 +900,11 @@ export async function evaluateToolOutput(input, ext = {}) {
   // secret surfaces, while grep/Bash output quoting placeholders is routine.
   // Reveal sidecars are excluded — their bytes are redacted BEFORE persisting,
   // so placeholder text there is this sanitizer's own.
+  // Gated on the secret opt-in: with the layer off this sanitizer never
+  // inserts placeholders, so placeholder-shaped bytes are ordinary text and
+  // the warning would be pure noise on every doc ABOUT redaction.
   if (
+    secretsEnabled() &&
     input.tool_name === "Read" &&
     !revealRead &&
     containsPlaceholder(toolOutput)
