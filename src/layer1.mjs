@@ -131,10 +131,9 @@ export const INERT_ANSI_NOTE =
  * mid-escape).
  *
  * The two other orphan kinds are deliberately NOT inert. A raw C1 orphan
- * (TOKEN_KIND.ORPHAN_C1): legit UTF-8 text does not carry raw C1 bytes, and the
- * block holds the DCS/SOS/PM/APC string introducers this grammar does not
- * consume — so an unrecognized one means a terminal would have eaten the
- * following text as a control payload. An incomplete CSI (TOKEN_KIND.ORPHAN_CSI)
+ * (TOKEN_KIND.ORPHAN_C1): legit UTF-8 text does not carry raw C1 bytes, so an
+ * unrecognized one means a terminal may still act on what follows it. An
+ * incomplete CSI (TOKEN_KIND.ORPHAN_CSI)
  * for the same reason at 7 bits: the CSI parser keeps consuming until a final
  * byte, so `hello ESC[12 world` hides ` w` from the human while the model reads
  * the whole prompt.

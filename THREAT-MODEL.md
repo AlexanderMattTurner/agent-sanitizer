@@ -78,12 +78,14 @@ introducers) keeps the WARNING. An `ESC` that _opened_ a CSI it never completed
 stays loud too: a terminal's CSI parser is stateful and keeps consuming what
 follows until a final byte arrives, so `ESC[12 world` shows the human `orld`
 while the model reads every word—the same model-sees/human-sees divergence a
-complete sequence buys. OSC strings (titles,
-clickable-hyperlink URLs) are consumed as a
+complete sequence buys. All five ECMA-48 control strings—OSC (titles,
+clickable-hyperlink URLs), DCS, SOS, PM and APC—are consumed as a
 whole, for every terminator form—ST (`ESC\` or 8-bit C1 ST U+009C) and the
-legacy BEL—and for the 8-bit C1 OSC introducer (U+009D); an _unterminated_ OSC
-introducer is dropped through end-of-string (fail-closed), so no OSC body
-survives to carry a payload.
+legacy BEL—and for the 8-bit C1 introducers (U+0090/0098/009D/009E/009F); an
+_unterminated_ introducer is dropped through end-of-string (fail-closed), so no
+string body survives to carry a payload. Every one of those bodies is
+attacker-controlled text, which is why the introducer alone is not enough to
+remove.
 
 ## Layer 2—hidden HTML (remark/rehype)
 

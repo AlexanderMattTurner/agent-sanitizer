@@ -8,6 +8,17 @@ adhere to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+## [2.31.6] - 2026-08-09
+
+### Fixed
+- Consume all five ECMA-48 control strings (SOS, PM, APC, DM, ST), not OSC alone, to properly handle a broader range of ANSI sequences.
+
+## [2.31.5] - 2026-08-09
+
+### Fixed
+
+- Registration of the generated fail-open shell library now completes successfully so main health checks pass.
+
 ## [2.31.4] - 2026-08-09
 
 ### Fixed
