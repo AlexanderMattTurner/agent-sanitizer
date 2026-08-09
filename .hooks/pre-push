@@ -18,10 +18,13 @@ git_root=$(git rev-parse --show-toplevel)
 
 # Git hooks run in a bare shell and don't inherit session PATH edits; surface
 # the venv's tools plus uv/uvx and cargo installs.
-if [[ -d "$git_root/.venv/bin" ]]; then
-  export PATH="$git_root/.venv/bin:$PATH"
-fi
-export PATH="$HOME/.local/bin:$HOME/.cargo/bin:$PATH"
+# Located by THIS script's own path, not the repo root: the hook and its library
+# ship together, `core.hooksPath` may point outside the checkout, and pre-push is
+# driven against throwaway repositories by its own test.
+hook_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=.hooks/lib-gate.sh
+source "$hook_dir/lib-gate.sh"
+gate_tool_path "$git_root"
 
 # Mirror CI's invocation: pre-commit.yaml runs `uvx pre-commit==<pin>`, and that
 # workflow line is the one authoritative pin — read it from there so this hook

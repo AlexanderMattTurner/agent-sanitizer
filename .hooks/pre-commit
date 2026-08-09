@@ -6,8 +6,12 @@
 set -euo pipefail
 
 git_root=$(git rev-parse --show-toplevel)
+# Located by THIS script's own path, not the repo root: the hook and its library
+# ship together, `core.hooksPath` may point outside the checkout, and pre-push is
+# driven against throwaway repositories by its own test.
+hook_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=.hooks/lib-gate.sh
-source "$git_root/.hooks/lib-gate.sh"
+source "$hook_dir/lib-gate.sh"
 
 # Reject unresolved merge conflict markers (and whitespace errors) in staged
 # content. A hook file left with <<<<<<< markers is a bash syntax error that
@@ -17,9 +21,7 @@ if ! git diff --cached --check; then
   exit 1
 fi
 
-if [[ -d "$git_root/.venv/bin" ]]; then
-  export PATH="$git_root/.venv/bin:$PATH"
-fi
+gate_tool_path "$git_root"
 
 # Durable recovery snapshot before the destructive part. lint-staged (and the
 # pre-commit auto-fixers it drives) hide your UNSTAGED tracked edits in an internal
