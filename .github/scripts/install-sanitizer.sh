@@ -37,6 +37,14 @@ SANITIZER_VERSION="2.0.0"
 # just that and one invocation carries the flags — a second flag list is a
 # second thing to keep in sync. `--install-links` is inert for a registry spec
 # (it only changes how `file:` deps are materialised), so it is safe on both.
+#
+# `--ignore-scripts` does NOT make the local path hermetic: npm materialises a
+# `file:` dep by PACKING the directory, and packing runs that package's
+# `prepare` regardless (setting npm_config_ignore_scripts does not suppress it
+# either — verified). `prepare` here is `pnpm build:types`, so every caller of
+# this script needs pnpm and the root node_modules on hand, which in CI means
+# a `.github/actions/setup-base-env` step ahead of it. Callers that skipped one
+# exited 127 on every PR the moment the local path landed.
 staged=""
 cleanup() {
   if [ -n "${staged}" ]; then rm -rf "${staged}"; fi

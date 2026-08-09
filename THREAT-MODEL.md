@@ -383,6 +383,25 @@ character-extraction oracle.
 File access and the redactor are injected via `io`; the package performs no I/O
 of its own and bundles no secret engine.
 
+**Whole-file Writes are re-anchored too.** A model that reads a file whose
+legitimate content includes stripped characters (ANSI-colored logs, zero-width
+runs, a lone surrogate) and writes it back would otherwise silently persist the
+stripped version. Every well-formed `Write` to an existing file is diffed
+against the sanitized view by position (longest common prefix/suffix, snapped
+off placeholder and surrogate boundaries): the unchanged regions are restored
+to their exact on-disk bytes — stripped runs and redacted secrets included —
+while the genuinely-changed middle keeps the model's bytes (Layer-1 strips of
+_new_ text stay stripped; that is the sanitizer working). Each restored region
+passes the same re-clean soundness gate as an Edit span. On gate failure the
+outcome follows the precision doctrine: a placeholder-free region falls back to
+the model's bytes (**fail open** — the write merely loses stripped characters,
+exactly the pre-restoration behavior), while a placeholder-bearing region is
+**denied** (restoring at a misattributed anchor could graft secret bytes
+wrongly; not restoring persists placeholder text over the secret — neither open
+option is safe). An empty view (an all-invisible file, the archetypal
+hidden-payload artifact) is never restored: a Write there is the model
+replacing content it was told is suspicious, not echoing it back.
+
 `MultiEdit` is a rehydration candidate but never re-anchored: its edits apply
 sequentially, each against the result of the previous, which the span machinery
 (one `old_string` against one static view) cannot model. A MultiEdit against a
@@ -411,9 +430,35 @@ positive costs a sentence of context, never a mangled input):
   Edit/Write — removing the information asymmetry that made the shell
   route-around an honest mistake.
 - **Advisory on non-rehydrated tools (context-only, never a verdict).** A
-  Bash/MCP/unknown-tool input carrying a placeholder gets one PreToolUse
-  context line explaining the hazard. It cannot tell a write from a read, so
-  it never blocks.
+  Bash/MCP/unknown-tool input carrying a placeholder gets PreToolUse context
+  explaining the hazard. It cannot tell a write from a read, so it never
+  blocks. The advisory **names what it found**: each distinct placeholder
+  token and the dotted input field carrying it (capped, with an "and N more"
+  tail). The two grammars have their own advisory each, so that the secret
+  layer's env opt-in cannot also silence the Layer-2 one: the keyed splice
+  placeholders (`[HTML comment removed #<key>]`, `[hidden HTML removed
+#<key>]`) and the un-keyed `[HTML unparseable — withheld]` marker are
+  mirrored from `src/html.mjs` into the hooks layer for the same bundle-pin
+  reason as the redaction grammar. Each grammar carries its own recovery route:
+  for a secret, use Edit/Write on the file that owns it, or have a shell
+  command read the value from that file — and for content bound for an external
+  service (a PR body, a comment) do **not** reconstruct the secret, since that
+  publishes it. For a keyed splice placeholder, the advisory names the
+  `span-<key>.txt` file holding the original bytes (Edit/Write restores it
+  automatically); for the un-keyed unparseable marker there is no per-splice
+  original, so it points at the reveal sidecar the sanitize-time warning named.
+  Read either (untrusted), reconstruct the content, and re-issue the call
+  without the marker.
+- **No direct substitution, and no per-tool substitution allowlist.**
+  Rehydrating placeholders into a non-Edit/Write input was evaluated and
+  rejected in both grammars, so the advisory is the whole mechanism. Splicing a
+  secret into an MCP body field would publish it to an external service —
+  exfiltration by construction — and PreToolUse has no placeholder→secret map
+  without a named owning file. Layer-2 placeholders ARE keyed, so
+  marker→original is recoverable — but only Edit/Write substitutes it:
+  splicing the stored bytes into a shell command or an arbitrary MCP payload
+  risks quoting/injection breakage, and for the un-keyed unparseable marker
+  there is no per-splice original to substitute at all.
 - **On-disk tripwire (warning-only).** A `Read` whose RAW bytes — before this
   session's redaction — already contain placeholder text warns that an earlier
   write may have clobbered a secret. Detection rides the read, the one choke
@@ -504,9 +549,20 @@ precision. All other faults keep the open default, and
 
 **The open default is not enforceable against content.** Several of those
 failures are composable by whoever authored the payload — in the output hook
-alone, the key-collision guard (two field names that collapse to one after
-Layer 1), a nesting depth that overflows the sanitize walk, and a redaction
-budget exhausted by many secret-shaped leaves. Under the open posture a tool
+alone, a nesting depth that overflows the sanitize walk and a redaction budget
+exhausted by many secret-shaped leaves. (A **key collision** — two field names
+that collapse to one after Layer 1 — used to be on that list. It no longer
+fails the hook at all: only the colliding fields are withheld, and every sibling
+field survives. Both colliding values are replaced **whole** by a marker string,
+not walked leaf-wise: a shape-preserving walk rewrites only string leaves, so a
+colliding number or boolean would reach the model verbatim under a legitimate
+field name while the warning claimed it was withheld. That changes the field's
+JSON type, which is accepted because a duplicate name is off-schema by
+construction; what the harness's shape check turns on — the object's field
+COUNT — is kept by giving the second field a disambiguated name. A hostile connector can
+therefore cost the model the colliding fields, never the whole tool output, and
+the withholding is posture-independent — it is a per-field fail-closed, not a
+hook failure.) Under the open posture a tool
 response crafted to provoke one is shown to the model verbatim, secrets
 included. So an attacker who controls tool output has a route past these layers
 whenever the default is left in place, and the mitigation is the knob, not a

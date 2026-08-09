@@ -106,13 +106,16 @@ export async function sanitize(text, options) {
   if (typeof text !== "string")
     throw new TypeError("sanitize(text, options): text must be a string");
   const { html = false, exfilScan = false } = options ?? {};
-  const { cleaned, found, warnings, notes, splices } = await sanitizeText(text, {
-    html,
-    // `html` implies the scan unconditionally, and `exfilScan` can only ADD it:
-    // an opt-OUT would make `{ html: true, exfilScan: false }` splice Layer 2
-    // while silently dropping Layer 3's report — a fail-open the docs deny.
-    exfilScan: exfilScan || html,
-  });
+  const { cleaned, found, warnings, notes, splices } = await sanitizeText(
+    text,
+    {
+      html,
+      // `html` implies the scan unconditionally, and `exfilScan` can only ADD it:
+      // an opt-OUT would make `{ html: true, exfilScan: false }` splice Layer 2
+      // while silently dropping Layer 3's report — a fail-open the docs deny.
+      exfilScan: exfilScan || html,
+    },
+  );
   return {
     cleaned,
     found,

@@ -266,7 +266,7 @@ describe("through buildPreToolUseResponse (secret rehydrator stubbed to a no-op)
       assert.ok(fields.additionalContext.includes(spanPath(SPAN_ID)));
       assert.match(
         fields.additionalContext,
-        /restored to the stored original content only for Edit\/Write/,
+        /Keyed markers are restored to the stored original automatically for Edit\/Write/,
       );
     });
   }

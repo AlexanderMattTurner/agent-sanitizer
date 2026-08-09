@@ -41,6 +41,7 @@ const { runLayerPipeline, needsFixedPoint } =
 const { normalizeConfusables } = await import("../src/confusables.mjs");
 const { sanitizeAuthoredContent } =
   await import("../claude-hooks/lib/authored-content.mjs");
+const { rehydrateRedacted } = await import("../src/rehydrate.mjs");
 
 // The REAL vision map the hook injects, not a stub: the gate this test is about
 // is decided by which glyphs that engine flags, so a hand-rolled scanner would
@@ -290,6 +291,63 @@ describe("the pipeline driver enforces the ordering precondition", () => {
     const out = await runLayerPipeline("Bash", {}, [deny, after]);
     assert.equal(out.deny, "nope");
     assert.equal(ran, false);
+  });
+});
+
+describe("Layer-3 strips vs terminal Layer-4 restoration on an unchanged Write", () => {
+  // Built via fromCharCode so no raw invisible byte sits in this source. 12
+  // consecutive ZWSPs crosses both floors at once: Layer 1's read-view strip
+  // and authored-content's payload-capable gate (LONG_RUN_THRESHOLD = 10).
+  const ZW = String.fromCharCode(0x200b);
+  const FILE = "/proj/payload.txt";
+  const DISK = `alpha${ZW.repeat(12)}omega\n`;
+  const VIEW = "alphaomega\n";
+  // The REAL rehydrateRedacted, with only the fs/redactor seams faked: the
+  // file holds no secrets, so the map view is the cleaned text itself.
+  const io = {
+    readFile: (path) => {
+      assert.equal(path, FILE);
+      return DISK;
+    },
+    redact: () => null,
+    redactMap: (text) => ({ text, pairs: [] }),
+  };
+
+  it("restores the disk bytes Layer 3 stripped from a faithful echo", async () => {
+    // Positive marker first: the fixture really crosses Layer 3's floor on its
+    // own — without this, a raised threshold would make the pipeline assertion
+    // below pass vacuously (nothing stripped, nothing to restore).
+    const stripped = sanitizeAuthoredContent("Write", {
+      file_path: FILE,
+      content: DISK,
+    });
+    assert.ok(
+      stripped !== null,
+      "fixture no longer crosses the authored strip's payload-capable floor",
+    );
+    assert.equal(stripped.updatedInput.content, VIEW);
+
+    const fields = await buildPreToolUseResponse(
+      { tool_name: "Write", tool_input: { file_path: FILE, content: DISK } },
+      (tool, toolInput) => rehydrateRedacted(tool, toolInput, io),
+      () => {},
+    );
+    assert.ok(fields !== null);
+    // Layer 3 stripped the run (content became the sanitized view), then the
+    // terminal Layer 4 saw a faithful whole-file echo of that view and
+    // restored the exact on-disk bytes — and, being terminal, its restored
+    // invisibles were NOT re-stripped by another Layer-3 pass.
+    assert.equal(fields.updatedInput.content, DISK);
+    assert.equal(fields.updatedInput.file_path, FILE);
+    assert.equal("permissionDecision" in fields, false);
+    // Both layers really fired, in that order: the authored strip announced
+    // itself AND the rehydrator reported the restored count.
+    const context = String(fields.additionalContext);
+    assert.match(context, /Sanitized model-authored content in: content/u);
+    assert.match(
+      context,
+      /12 invisible\/control character\(s\) stripped from your view .* restored from disk/u,
+    );
   });
 });
 

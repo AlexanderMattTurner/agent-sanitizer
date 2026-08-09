@@ -32,8 +32,13 @@ import { tmpdir, userInfo } from "node:os";
 import { join, resolve, sep } from "node:path";
 import { writeFileNoFollow } from "./hook-io.mjs";
 
-/** @returns {string} */
-function revealDir() {
+/**
+ * Where reveal sidecars are stored. Exported so the PreToolUse placeholder
+ * advisory can name the directory a spliced original was saved under without
+ * re-deriving the env override.
+ * @returns {string}
+ */
+export function revealDir() {
   return (
     process.env._AGENT_SANITIZER_REVEAL_DIR ||
     join(tmpdir(), "agent-sanitizer-layer2-reveal")

@@ -7,8 +7,9 @@
  * characters, and secret redaction replaces secrets with [REDACTED…]
  * placeholders. An Edit whose old_string was copied from that view then fails
  * exact-match against the real file, and a whole-file Write would persist
- * placeholder text over the real secret. This module closes the loop without
- * ever showing the model a secret: it re-derives the sanitized view of the
+ * placeholder text over the real secret — or silently drop the stripped
+ * characters from every region it faithfully echoed back. This module closes
+ * the loop without ever showing the model a secret: it re-derives the sanitized view of the
  * target file (the shared {@link applyLayer1}, then the injected redactor's
  * map mode), locates the model's old_string in that view, and maps it
  * span-exact back to the on-disk bytes — across both placeholder expansion and
@@ -65,6 +66,7 @@ import {
   makeFileView,
   toUtf16View,
   pairDiskSpans,
+  anchorSpans,
   viewMapDefect,
 } from "./view-map.mjs";
 
@@ -307,12 +309,11 @@ async function rehydrateEdit(
     layer1View(span.diskText).cleaned !== span.cleanedText ||
     (span.diskText !== oldS && content.includes(oldS));
   if (anchorAmbiguous)
-    return {
-      deny:
-        `the matched region sits next to stripped control sequences that cannot be ` +
-        `re-anchored unambiguously in ${ti.file_path}; edit a smaller region away ` +
-        `from them, or ask the user to make this change`,
-    };
+    return anchorAmbiguityDeny(
+      "the matched region",
+      ti.file_path,
+      "edit a smaller region away from them",
+    );
   const newRes = rehydrateNewString(
     oldS,
     ti.new_string,
@@ -363,6 +364,25 @@ async function rehydrateEdit(
 }
 
 /**
+ * The shared anchor-ambiguity refusal: a stripped run abuts kept text it
+ * resembles, so greedy deletion alignment cannot prove which bytes the region
+ * owns. Edit's searched spans and Write's position-anchored regions hit the
+ * same soundness gate and must speak the same language — one builder so the
+ * two deny sentences cannot drift apart.
+ * @param {string} lead what could not be anchored ("the matched region", …)
+ * @param {string} filePath
+ * @param {string} guidance the caller-specific way out, without trailing punctuation
+ */
+function anchorAmbiguityDeny(lead, filePath, guidance) {
+  return {
+    deny:
+      `${lead} sits next to stripped control sequences that cannot be ` +
+      `re-anchored unambiguously in ${filePath}; ${guidance}, or ask the user ` +
+      `to make this change`,
+  };
+}
+
+/**
  * Foreign redaction placeholders surviving in post-substitution content `out`:
  * hint-prefixed, placeholder-shaped tokens that are neither introduced by a
  * substituted secret (they fall inside `secretSpans`) nor already present
@@ -399,39 +419,171 @@ function foreignPlaceholders(out, hint, viewText, secretSpans) {
 }
 
 /**
+ * Restore one position-anchored view region of a Write — the common prefix or
+ * suffix `anchorSpans` proved unchanged — to its on-disk bytes. Unlike Edit's
+ * searched spans, the region is position-fixed, so the only residual hazard is
+ * greedy-alignment run misattribution, caught by the same re-clean soundness
+ * gate Edit uses (Edit's clause (b), the verbatim-collision check, cannot
+ * apply to a span that was never searched for). On gate failure the outcome
+ * depends on what the region holds: a placeholder-free region falls back to
+ * the model's own bytes (fail open — the write merely loses stripped
+ * characters, exactly today's behavior), while a placeholder-bearing region is
+ * denied (restoring at a misattributed anchor could graft secret bytes
+ * wrongly; not restoring persists placeholder text over the secret — neither
+ * open option is safe).
+ *
+ * `resolveSpan`'s boundary semantics deliberately drop a stripped run sitting
+ * exactly at the region's interior edge (it may belong to the changed middle),
+ * but a run at the very start or end OF THE FILE is unambiguous when the
+ * region reaches that edge — re-attach those explicitly, since `diskOffset`
+ * keeps boundary runs outside the span in both directions.
+ *
+ * `restoredChars` counts UTF-16 code units, matching the "character(s)" prose
+ * in {@link writeContext}.
+ * @param {WriteRestoreContext} ctx per-Write invariants shared by both regions
+ * @param {number} viewStart
+ * @param {number} viewEnd
+ * @param {string} fallback the model's own bytes for this region
+ * @returns {{text: string, pairs: readonly {placeholder: string, original: string, start: number}[], restoredChars: number} | {deny: string}}
+ */
+function restoreWriteRegion(ctx, viewStart, viewEnd, fallback) {
+  const { content, cleaned, view, deletions } = ctx;
+  if (viewStart >= viewEnd) return { text: "", pairs: [], restoredChars: 0 };
+  const span = resolveSpan(
+    content,
+    cleaned,
+    view,
+    deletions,
+    viewStart,
+    viewEnd,
+  );
+  /* c8 ignore start -- anchorSpans snapped both boundaries out of placeholder
+     interiors, the only way resolveSpan returns null; kept as a fail-loud
+     guard against a future regression in that snapping. */
+  if (span === null)
+    throw new Error("write anchor cut a placeholder despite boundary snapping");
+  /* c8 ignore stop */
+  const first = deletions[0];
+  const atStart = viewStart === 0 && first?.start === 0 ? first.deleted : "";
+  const last = deletions[deletions.length - 1];
+  const atEnd =
+    viewEnd === view.text.length && last?.start === cleaned.length
+      ? last.deleted
+      : "";
+  const diskText = atStart + span.diskText + atEnd;
+  if (layer1View(diskText).cleaned !== span.cleanedText) {
+    if (span.pairs.length > 0)
+      return anchorAmbiguityDeny(
+        `the unchanged region around a ${ctx.hint}…] placeholder`,
+        ctx.filePath,
+        "use Edit for the changed region",
+      );
+    return { text: fallback, pairs: [], restoredChars: 0 };
+  }
+  return {
+    text: diskText,
+    pairs: span.pairs,
+    restoredChars: diskText.length - span.cleanedText.length,
+  };
+}
+
+/**
+ * The per-Write invariants `restoreWriteRegion` needs for both regions,
+ * bundled once in {@link rehydrateWrite} instead of threaded as positional
+ * parameters.
+ * @typedef {{
+ *   filePath: string,
+ *   content: string,
+ *   cleaned: string,
+ *   view: import("./view-map.mjs").FileView<"utf16">,
+ *   deletions: {start: number, deleted: string}[],
+ *   hint: string,
+ * }} WriteRestoreContext
+ */
+
+/**
+ * Re-anchor a whole-file Write against the target's sanitized view. The
+ * regions `anchorSpans` proves unchanged (common prefix/suffix, in view space)
+ * are restored to their on-disk bytes — redacted secrets AND Layer-1-stripped
+ * runs come back position-exact — while the genuinely-changed middle keeps the
+ * model's bytes, with this file's placeholders substituted for their secrets
+ * (Layer-1 strips of NEW text stay stripped: that is the sanitizer working).
  * @param {{file_path: string, content: string}} ti
+ * @param {string} content disk bytes
+ * @param {string} cleaned Layer-1 view of `content`
  * @param {import("./view-map.mjs").FileView<"utf16">} view
+ * @param {{start: number, deleted: string}[]} deletions
  * @param {RehydrateIo} io
  * @param {string} hint placeholder prefix
  */
-async function rehydrateWrite(ti, view, io, hint) {
-  const texts = [...new Set(view.pairs.map((pair) => pair.placeholder))].filter(
-    (phText) => ti.content.includes(phText),
-  );
-  // None of THIS file's redaction placeholders appear in the new content.
-  // isCandidate already guaranteed ti.content contains the hint prefix (e.g.
-  // "[REDACTED"), so an empty `texts` here means the content carries a
-  // placeholder-shaped string that names a secret from a DIFFERENT file or
-  // context (or a stale/mistyped one) — not literal prose. Persisting it
-  // verbatim would silently write "[REDACTED:…]" into the file where the
-  // model likely intended an actual secret value; deny instead.
-  if (texts.length === 0)
+async function rehydrateWrite(ti, content, cleaned, view, deletions, io, hint) {
+  const viewText = view.text;
+  // An EMPTY view means the model can see nothing of the file — an
+  // all-invisible file, the archetypal hidden-payload artifact. A Write there
+  // (of "" or of anything else) is the model replacing content it was told is
+  // suspicious, not echoing content back; restoring the hidden bytes would
+  // actively defeat that cleanup. Keep the model's bytes (fail open).
+  if (ti.content === viewText && viewText !== "") {
+    // A hinted Write of a PRISTINE file's view (the hint is literal prose the
+    // file already had) — nothing diverges, nothing to do.
+    if (content === ti.content) return null;
+    // Faithful whole-file round-trip: the incoming content IS the sanitized
+    // view, so the write becomes the disk bytes themselves — placeholders
+    // resolve to their secrets and every stripped run comes back. Provably
+    // sound with no gate: the view was derived from exactly these bytes, so
+    // re-sanitizing reproduces it, nothing new can be exposed, and no foreign
+    // placeholder can appear.
     return {
-      deny:
-        `the ${hint}…] placeholder in the new content does not match any secret in ` +
-        `${ti.file_path}, so a whole-file Write cannot copy a placeholder from another ` +
-        `file or context; request the source file's content and rehydrate a same-file ` +
-        `Edit instead, or write the secret's real value directly`,
+      updatedInput: { ...ti, content },
+      context: writeContext(
+        ti.file_path,
+        content.length - cleaned.length,
+        view.pairs.length,
+        hint,
+      ),
     };
+  }
+  const { prefixEnd, suffixStart } = anchorSpans(ti.content, view);
+  const suffixLen = viewText.length - suffixStart;
+  const ctx = {
+    filePath: ti.file_path,
+    content,
+    cleaned,
+    view,
+    deletions,
+    hint,
+  };
+  const prefix = restoreWriteRegion(
+    ctx,
+    0,
+    prefixEnd,
+    ti.content.slice(0, prefixEnd),
+  );
+  if ("deny" in prefix) return prefix;
+  const suffix = restoreWriteRegion(
+    ctx,
+    suffixStart,
+    viewText.length,
+    suffixLen === 0 ? "" : ti.content.slice(-suffixLen),
+  );
+  if ("deny" in suffix) return suffix;
 
-  // Resolve each of this file's placeholder texts to its single secret first,
-  // then splice in ONE ordered pass (R6) via the shared `spliceOrdered` — see
-  // its doc for why a chained `out.split(ph).join(secret)` per placeholder is
-  // unsound.
+  // The changed middle, in content space (prefix/suffix are common substrings,
+  // so their view-space lengths index ti.content directly). Only this file's
+  // OWN placeholder texts occurring here are substituted; placeholders wholly
+  // inside the restored prefix/suffix need no substitution — resolveSpan
+  // already brought back the real disk secrets byte-exact.
+  const middle = ti.content.slice(prefixEnd, ti.content.length - suffixLen);
+  const texts = [...new Set(view.pairs.map((pair) => pair.placeholder))].filter(
+    (phText) => middle.includes(phText),
+  );
+  // Resolve each placeholder text to its single secret first, then splice in
+  // ONE ordered pass (R6) via the shared `spliceOrdered` — see its doc for why
+  // a chained `out.split(ph).join(secret)` per placeholder is unsound.
   const valueByPh = new Map();
   for (const phText of texts) {
     const produced = view.pairs.filter((pair) => pair.placeholder === phText);
-    if (occurrences(view.text, phText).length > produced.length)
+    if (occurrences(viewText, phText).length > produced.length)
       return {
         deny:
           `${ti.file_path} mixes literal "${phText}" text with a redacted secret sharing ` +
@@ -448,44 +600,110 @@ async function rehydrateWrite(ti, view, io, hint) {
       };
     valueByPh.set(phText, values[0]);
   }
-  // `secretSpans`: byte ranges in `out` occupied by the substituted secret
-  // values. A hint occurrence inside one of these is a pathological secret whose
-  // bytes contain the hint prefix, NOT a placeholder the model pasted — so it is
-  // excluded from the foreign-placeholder scan below.
-  const { text: out, spans: secretSpans } = spliceOrdered(
-    ti.content,
-    orderedMatches(ti.content, texts),
+  const { text: middleOut, spans: middleSpans } = spliceOrdered(
+    middle,
+    orderedMatches(middle, texts),
     (match) => valueByPh.get(match.text),
   );
-  const secrets = [...valueByPh.values()];
+  const out = prefix.text + middleOut + suffix.text;
 
-  // R3: the new content may mix a valid same-file placeholder (substituted
-  // above) with a FOREIGN one — a placeholder pasted from another file/context
-  // that shares the hint prefix but is not one of this file's own. Those were
-  // left untouched and would be persisted verbatim over a real secret. Compare
-  // the ACTUAL placeholder STRINGS, not scalar hint counts: a scalar comparison
-  // is defeated by an edit that drops one literal hint and adds one foreign
-  // placeholder (the counts net to zero), which would then persist the foreign
-  // placeholder. Deny when any genuinely-foreign placeholder survives.
-  if (foreignPlaceholders(out, hint, view.text, secretSpans).length > 0)
-    return {
-      deny:
-        `the new content still carries a ${hint}…] placeholder that does not match any ` +
-        `secret in ${ti.file_path}, so a whole-file Write cannot copy a placeholder from ` +
-        `another file or context; request the source file's content and rehydrate a ` +
-        `same-file Edit instead, or write the secret's real value directly`,
-    };
+  // R3: the content may still carry a FOREIGN placeholder — one pasted from
+  // another file/context that shares the hint prefix but is not one of this
+  // file's own. It would be persisted verbatim over a real secret. Compare the
+  // ACTUAL placeholder STRINGS, not scalar hint counts: a scalar comparison is
+  // defeated by an edit that drops one literal hint and adds one foreign
+  // placeholder (the counts net to zero). `secretSpans` are the byte ranges in
+  // `out` occupied by secret VALUES (substituted in the middle, or restored
+  // with the prefix/suffix) — a hint occurrence inside one is a pathological
+  // secret whose bytes contain the hint prefix, NOT a pasted placeholder, so
+  // it is excluded from the scan.
+  if (out.includes(hint)) {
+    const diskSpans = pairDiskSpans(view, deletions);
+    const secretSpans = [];
+    // A restored prefix starts at disk offset 0, so disk offsets ARE out
+    // offsets there; a restored suffix is the file's tail, shifted by however
+    // much the content ahead of it grew or shrank.
+    for (const pair of prefix.pairs)
+      secretSpans.push(diskSpans[view.pairs.indexOf(pair)]);
+    const suffixShift = out.length - content.length;
+    for (const pair of suffix.pairs) {
+      const diskSpan = diskSpans[view.pairs.indexOf(pair)];
+      secretSpans.push({
+        start: diskSpan.start + suffixShift,
+        end: diskSpan.end + suffixShift,
+      });
+    }
+    for (const span of middleSpans)
+      secretSpans.push({
+        start: span.start + prefix.text.length,
+        end: span.end + prefix.text.length,
+      });
+    if (foreignPlaceholders(out, hint, viewText, secretSpans).length > 0)
+      return {
+        deny:
+          `the new content still carries a ${hint}…] placeholder that does not match any ` +
+          `secret in ${ti.file_path}, so a whole-file Write cannot copy a placeholder from ` +
+          `another file or context; request the source file's content and rehydrate a ` +
+          `same-file Edit instead, or write the secret's real value directly`,
+      };
+  }
 
-  const exposed = await exposedSecrets(secrets, view.text, out, io);
-  if (exposed > 0) return { deny: exposureDeny(exposed) };
+  // Nothing restored, nothing substituted: the write proceeds with the
+  // model's own bytes exactly as it would have without this layer.
+  if (out === ti.content) return null;
+
+  const secrets = [
+    ...valueByPh.values(),
+    ...prefix.pairs.map((pair) => pair.original),
+    ...suffix.pairs.map((pair) => pair.original),
+  ];
+  // Writing back the file's exact disk bytes cannot expose anything: the next
+  // sanitized view is byte-identical to the prior one. Skip the redactor
+  // round-trip on that (common) faithful-round-trip case.
+  if (out !== content) {
+    const exposed = await exposedSecrets(secrets, viewText, out, io);
+    if (exposed > 0) return { deny: exposureDeny(exposed) };
+  }
 
   return {
     updatedInput: { ...ti, content: out },
-    context:
-      `Write content contained ${hint}…] placeholders; they were resolved to the ` +
-      `file's real secret values on disk (still hidden from you), so the secrets ` +
-      `are preserved in the written file.`,
+    context: writeContext(
+      ti.file_path,
+      prefix.restoredChars + suffix.restoredChars,
+      middleSpans.length + prefix.pairs.length + suffix.pairs.length,
+      hint,
+    ),
   };
+}
+
+/**
+ * Model-facing context line for a rewritten Write input.
+ * @param {string} filePath
+ * @param {number} restoredChars UTF-16 code units of stripped characters restored with the unchanged regions
+ * @param {number} secretCount placeholders resolved (spliced or restored)
+ * @param {string} hint placeholder prefix
+ */
+function writeContext(filePath, restoredChars, secretCount, hint) {
+  const parts = [];
+  if (restoredChars > 0)
+    parts.push(
+      `${restoredChars} invisible/control character(s) stripped from your view of ` +
+        `${filePath} were restored from disk in the regions your Write left unchanged.`,
+    );
+  if (secretCount > 0)
+    parts.push(
+      `Write content contained ${hint}…] placeholders; they were resolved to the ` +
+        `file's real secret values on disk (still hidden from you), so the secrets ` +
+        `are preserved in the written file.`,
+    );
+  // Reachable with both counts zero: a lone surrogate the view normalized to
+  // U+FFFD restores same-length, changing bytes but neither counter.
+  if (parts.length === 0)
+    parts.push(
+      `unchanged regions of your Write were restored to the exact on-disk bytes of ` +
+        `${filePath} (differing only by characters hidden from your view).`,
+    );
+  return parts.join(" ");
 }
 
 /**
@@ -511,20 +729,21 @@ function multiEditDeny(filePath) {
 
 /**
  * True when this tool call could need re-anchoring against the target file's
- * sanitized view: any well-formed Edit (the view may differ from disk even
- * without placeholders, via stripped invisible characters), any well-formed
- * MultiEdit (gated on the same grounds), or a Write whose content carries a
- * placeholder.
+ * sanitized view: any well-formed Edit or Write (the view may differ from
+ * disk even without placeholders, via stripped invisible characters — a
+ * hint-free whole-file Write of such a file would silently persist the
+ * stripped bytes), and any well-formed MultiEdit (gated on the same
+ * grounds).
  * @param {string} tool
  * @param {any} ti
- * @param {string} hint
  */
-function isCandidate(tool, ti, hint) {
+function isCandidate(tool, ti) {
   if (typeof ti?.file_path !== "string") return false;
   if (tool === "Edit")
     return (
       typeof ti.old_string === "string" && typeof ti.new_string === "string"
     );
+  if (tool === "Write") return typeof ti.content === "string";
   // MultiEdit applies its edits SEQUENTIALLY, each against the result of the
   // previous, so the span machinery below (which maps one old_string against
   // one static view) cannot re-anchor it. It is still a candidate: on a
@@ -543,8 +762,6 @@ function isCandidate(tool, ti, hint) {
           typeof edit?.new_string === "string",
       )
     );
-  if (tool === "Write")
-    return typeof ti.content === "string" && ti.content.includes(hint);
   return false;
 }
 
@@ -586,16 +803,17 @@ export async function rehydrateRedacted(
         `hidden from your view; rehydration is not supported for notebooks. Keep ` +
         `the secret-bearing cell unchanged, or ask the user to edit it.`,
     };
-  if (!isCandidate(tool, toolInput, hint)) return null;
+  if (!isCandidate(tool, toolInput)) return null;
   const hinted =
-    tool === "Write" ||
-    (tool === "MultiEdit"
-      ? toolInput.edits.some(
-          (/** @type {{old_string: string, new_string: string}} */ edit) =>
-            edit.old_string.includes(hint) || edit.new_string.includes(hint),
-        )
-      : toolInput.old_string.includes(hint) ||
-        toolInput.new_string.includes(hint));
+    tool === "Write"
+      ? toolInput.content.includes(hint)
+      : tool === "MultiEdit"
+        ? toolInput.edits.some(
+            (/** @type {{old_string: string, new_string: string}} */ edit) =>
+              edit.old_string.includes(hint) || edit.new_string.includes(hint),
+          )
+        : toolInput.old_string.includes(hint) ||
+          toolInput.new_string.includes(hint);
 
   let content;
   try {
@@ -609,14 +827,15 @@ export async function rehydrateRedacted(
     // its own (nothing to re-anchor), so pass through — a hint-free call, an
     // Edit whose old_string is non-empty, or a MultiEdit whose FIRST edit's
     // old_string is non-empty (only an empty first old_string is the create
-    // form; anything else errors not-found in the real tool). But any call
-    // that WOULD create the file with hinted content — a Write (always
-    // hinted; isCandidate requires the prefix), a hinted Edit-create, or a
-    // hinted MultiEdit-create — persists its placeholder verbatim, standing
-    // for a secret that does NOT exist on this new path. R4: that is the same
-    // cross-file/stale-placeholder mistake a same-file Write is denied for;
-    // refuse with the same guidance rather than write the placeholder text as
-    // a real value.
+    // form; anything else errors not-found in the real tool). A hint-free
+    // Write is file CREATION too — there is no prior view and nothing to
+    // restore, so it passes through on the `!hinted` arm. But any call that
+    // WOULD create the file with hinted content — a hinted Write, a hinted
+    // Edit-create, or a hinted MultiEdit-create — persists its placeholder
+    // verbatim, standing for a secret that does NOT exist on this new path.
+    // R4: that is the same cross-file/stale-placeholder mistake a same-file
+    // Write is denied for; refuse with the same guidance rather than write
+    // the placeholder text as a real value.
     if (nodeErr?.code === "ENOENT") {
       const creates =
         tool === "Write" ||
@@ -637,11 +856,19 @@ export async function rehydrateRedacted(
     // failed, the file didn't vanish. A hinted call's content may carry
     // placeholder text that must never be persisted literally over whatever
     // secret is actually there, so fail closed with a deny instead of the
-    // silent pass-through above. A non-hinted call was never going to write a
-    // secret-shaped placeholder either way, and the underlying tool call will
-    // hit this exact same read error itself, so let it propagate rather than
-    // swallow an unexpected failure.
-    if (!hinted) throw err;
+    // silent pass-through above. A non-hinted Edit/MultiEdit was never going
+    // to write a secret-shaped placeholder, and the underlying tool call
+    // reads the file itself, so it will hit this exact same error — let it
+    // propagate rather than swallow an unexpected failure. A non-hinted
+    // WRITE never reads its target: pre-restoration it would simply proceed,
+    // so blocking it on a read error this layer alone performed would fail
+    // closed on a placeholder-free ambiguity. Pass it through (fail open —
+    // restoration is best-effort; the write merely loses stripped
+    // characters, exactly the pre-restoration behavior).
+    if (!hinted) {
+      if (tool !== "Write") throw err;
+      return null;
+    }
     return {
       deny:
         `could not read ${toolInput.file_path} to rehydrate its secrets ` +
@@ -655,9 +882,11 @@ export async function rehydrateRedacted(
   // R1: if nothing is redacted, a hint-free old_string cannot touch a hidden
   // span, so keep the fast pass-through (a verbatim match needs no translation;
   // a mismatch is an ordinary stale old_string Edit reports itself) and never
-  // invoke the redactor's map mode. But if the file DOES hold secrets, a
-  // hint-free old_string can still match disk bytes INSIDE a redacted span the
-  // model never saw — the char-by-char extraction oracle. Fall through to the
+  // invoke the redactor's map mode. The same holds for a hint-free Write:
+  // with no stripped run and no secret, the view IS the disk bytes and there
+  // is nothing to restore. But if the file DOES hold secrets, a hint-free
+  // old_string can still match disk bytes INSIDE a redacted span the model
+  // never saw — the char-by-char extraction oracle. Fall through to the
   // resolver so its overlap/exposure guards run before any such byte is spliced
   // raw. `io.redact` (plain mode) is the cheap secrets-present probe; it returns
   // null exactly when the file has no secrets.
@@ -733,16 +962,19 @@ export async function rehydrateRedacted(
     };
   }
   // View identical to disk: any placeholders in an Edit's old_string are
-  // literal text, so there is nothing to re-anchor. `cleaned === content` also
-  // rules out a lone-surrogate-only divergence (view.pairs/deletions alone
-  // would miss that, since the normalization is neither a redaction pair nor a
+  // literal text, so there is nothing to re-anchor — and a hint-free Write of
+  // a pristine file has nothing to restore. `cleaned === content` also rules
+  // out a lone-surrogate-only divergence (view.pairs/deletions alone would
+  // miss that, since the normalization is neither a redaction pair nor a
   // Layer-1 deletion). HINTED Write and MultiEdit are the exceptions: their
   // content still carries the hint prefix, and with no own placeholder to
-  // resolve that hint is a FOREIGN [REDACTED…] placeholder that would be
+  // resolve that hint may be a FOREIGN [REDACTED…] placeholder that would be
   // persisted verbatim over pristine bytes. A Write falls through to
-  // rehydrateWrite's cross-file deny; a MultiEdit to the MultiEdit deny below
-  // — without this a hinted MultiEdit on a pristine file silently persists
-  // the foreign placeholder the byte-identical Write is denied for.
+  // rehydrateWrite's foreign-placeholder scan (which denies a genuinely
+  // foreign token and passes literal prose the file already had); a MultiEdit
+  // to the MultiEdit deny below — without this a hinted MultiEdit on a
+  // pristine file silently persists the foreign placeholder a byte-identical
+  // Write is denied for.
   const viewEqualsDisk =
     view.pairs.length === 0 && deletions.length === 0 && cleaned === content;
   // Precision refinement for a hinted MultiEdit on that PRISTINE file: a
@@ -782,5 +1014,5 @@ export async function rehydrateRedacted(
         hinted,
         hint,
       )
-    : rehydrateWrite(toolInput, view, io, hint);
+    : rehydrateWrite(toolInput, content, cleaned, view, deletions, io, hint);
 }

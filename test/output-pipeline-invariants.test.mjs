@@ -27,7 +27,7 @@ import {
   REDACTION_DOCTRINE,
 } from "../src/output.mjs";
 import { LONE_SURROGATE_RE } from "../src/layer1.mjs";
-import { layer2Placeholder } from "../src/html.mjs";
+import { layer2Placeholder, UNPARSEABLE_PLACEHOLDER } from "../src/html.mjs";
 
 const hid = (original) => layer2Placeholder("hidden", original);
 
@@ -155,6 +155,49 @@ describe("invariant: no string leaves sanitizeText unvetted by Layer 4", () => {
         original: maskSecrets(`<em hidden>token=${SECRET}</em>`),
       },
     ]);
+  });
+
+  // The UNPARSEABLE fail-closed path replaces the WHOLE output with a
+  // placeholder rather than splicing spans, so the pre-splice text is the ONLY
+  // copy of everything the input held — including a secret in plain sight, not
+  // just one inside a spliced comment. It must ride the same reveal-and-vet
+  // path as an ordinary splice.
+  const UNPARSEABLE_INPUT =
+    "<div>".repeat(3000) + SECRET + "</div>".repeat(3000);
+
+  it("captures and vets the reveal when the HTML parse fails", async () => {
+    const r = await sanitizeText(UNPARSEABLE_INPUT, {
+      html: true,
+      redact: redactor,
+    });
+    assert.equal(r.cleaned, UNPARSEABLE_PLACEHOLDER);
+    // Positive marker: the withhold really did hand back a reveal, so the
+    // closure assertions below inspect the risky path.
+    assert.equal(typeof r.reveal, "string");
+    assert.equal(r.reveal, maskSecrets(UNPARSEABLE_INPUT));
+    for (const text of reachableStrings(r))
+      assert.ok(
+        !text.includes(SECRET),
+        `unredacted secret in a returned string: ${JSON.stringify(text.slice(0, 80))}`,
+      );
+  });
+
+  it("withholds the unparseable reveal and warns when it cannot be vetted", async () => {
+    // Throws only on the ORIGINAL (tag-bearing) text, so Layer 4's pass over
+    // the placeholder `cleaned` succeeds and only the side channel is
+    // unvettable.
+    const redact = (/** @type {string} */ text) => {
+      if (text.includes("<div>")) throw new Error("redactor unreachable");
+      return null;
+    };
+    const r = await sanitizeText(UNPARSEABLE_INPUT, { html: true, redact });
+    assert.equal(r.cleaned, UNPARSEABLE_PLACEHOLDER);
+    assert.ok(!("reveal" in r));
+    assert.ok(
+      r.warnings.includes(
+        "Withheld the pre-splice copy of the removed HTML: it could not be vetted for secrets",
+      ),
+    );
   });
 
   it("leaves a legitimate reveal byte-identical when the redactor finds nothing", async () => {

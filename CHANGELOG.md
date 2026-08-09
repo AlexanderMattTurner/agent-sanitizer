@@ -8,6 +8,45 @@ adhere to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+## [2.30.0] - 2026-08-09
+
+### Added
+- New warning when a reveal sidecar is dropped unvetted in claude-hooks.
+- Distinct warning category for unparseable-HTML withholding in output.
+- Layer-1 restoration capability for whole-file Writes of existing files, recovering stripped bytes from the rehydration layer.
+
+### Changed
+- The unparseable-HTML warning no longer promises a reveal sidecar will be provided.
+- Improved hint handling in rehydrate when processing unreadable targets.
+
+### Fixed
+- Fixed hint-free Write propagation through rehydrate on unreadable targets.
+- Corrected Write restoration through the claude-hooks layer pipeline and drop guard logic.
+
+## [2.29.1] - 2026-08-09
+
+### Fixed
+
+- CI: Preserve PR-input report wording for flagged-not-neutralized status.
+- CI: Prevent GitHub stderr from interfering with fork-of-self slug comparison.
+- CI: Ensure review-findings gate clears even when auto-approval fails.
+
+## [2.29.0] - 2026-08-09
+
+### Added
+- Named every placeholder and splice marker in the non-rehydrated-tool advisory for improved clarity and debugging.
+
+### Fixed
+- Fixed CI workflows to set up pnpm before installing the local sanitizer, ensuring proper dependency resolution.
+- Fixed hooks to withhold only colliding fields when sanitized key names collapse, preventing unintended data loss.
+
+## [2.28.3] - 2026-08-09
+
+### Fixed
+
+- Fixed manifest re-stamping during release to ensure the version is correctly updated and published.
+- Fixed CI conflict resolver to properly handle fallback credentials.
+
 ## [2.28.2] - 2026-08-09
 
 ### Fixed

@@ -1895,16 +1895,20 @@ export function looksLikeHtmlSource(text) {
  *
  * `splices` pairs every emitted placeholder with the original bytes it
  * replaced (see {@link spliceRanges}), so a caller can rehydrate the text —
- * nothing is lost, only hidden behind an identity-carrying placeholder. On the
- * fail-closed UNPARSEABLE path `splices` is `[]`: the parser blew up before
- * any span could be located, so nothing is recoverable per-splice (the caller's
- * pre-splice `reveal` is the only copy).
+ * nothing is lost, only hidden behind an identity-carrying placeholder.
+ *
+ * `unparseable` is set (true) only on the fail-closed path below, where the
+ * whole input was withheld behind {@link UNPARSEABLE_PLACEHOLDER} rather than
+ * spliced — the caller's warning must describe a whole-output withhold, not a
+ * splice. There `splices` is `[]`: the parser blew up before any span could be
+ * located, so nothing is recoverable per-splice (the caller's pre-splice
+ * `reveal` is the only copy).
  *
  * Idempotent over its own output: a keyed placeholder contains no `<`, so a
  * re-run neither gates on it (HTML_TAG_PRESENT needs a tag) nor reads it as
  * markup — placeholders already in the text pass through byte-identical.
  * @param {string} text
- * @returns {{ text: string, removed: { comments: number, hidden: number }, warned: { tags: Record<string, number>, dataSrc: number }, splices: SplicePair[] } | null}
+ * @returns {{ text: string, removed: { comments: number, hidden: number }, warned: { tags: Record<string, number>, dataSrc: number }, splices: SplicePair[], unparseable?: true } | null}
  */
 export function sanitizeHtml(text) {
   if (!HTML_TAG_PRESENT.test(text)) return null;
@@ -1925,6 +1929,7 @@ export function sanitizeHtml(text) {
       removed: { comments: 0, hidden: 1 },
       warned: newWarned(),
       splices: [],
+      unparseable: true,
     };
   }
   const { ranges, warned } = scan;
