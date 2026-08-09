@@ -15,6 +15,10 @@
  */
 import {
   claimCliEntry,
+  disabledHooks,
+  DISABLED_HOOKS_ENV,
+  emitHookResponse,
+  HookEvent,
   isMain,
   registerLazyModules,
   readFlag,
@@ -102,6 +106,66 @@ async function registerAvailableModules() {
 }
 
 /**
+ * Every dispatchable hook: its Claude Code event, and the loader that runs it.
+ *
+ * A table rather than a switch because the mode NAMES are read three ways — the
+ * dispatch, the {@link DISABLED_HOOKS_ENV} validation, and the tests that check
+ * hooks.json wires exactly these — and each hand-written copy is one that can
+ * drift into naming a hook nothing dispatches. The event is here because a
+ * disabled hook still has to answer in its own event's envelope.
+ *
+ * Each module is loaded through a LITERAL dynamic import: esbuild inlines only
+ * what it can read statically, so a computed specifier would survive into the
+ * bundle as a runtime dial against a node_modules the plugin does not ship.
+ * @type {Record<string, { event: string, run: () => Promise<void> }>}
+ */
+const HOOKS = {
+  "pretooluse-sanitize": {
+    event: HookEvent.PRE_TOOL_USE,
+    run: async () => {
+      const { cliMain } =
+        /** @type {typeof import("./pretooluse-sanitize.mjs")} */ (
+          await import("./pretooluse-sanitize.mjs")
+        );
+      await cliMain();
+    },
+  },
+  "sanitize-output": {
+    event: HookEvent.POST_TOOL_USE,
+    run: async () => {
+      const { cliMain } =
+        /** @type {typeof import("./sanitize-output.mjs")} */ (
+          await import("./sanitize-output.mjs")
+        );
+      await cliMain();
+    },
+  },
+  "sanitize-user-prompt": {
+    event: HookEvent.USER_PROMPT_SUBMIT,
+    run: async () => {
+      const { main: promptMain } =
+        /** @type {typeof import("./sanitize-user-prompt.mjs")} */ (
+          await import("./sanitize-user-prompt.mjs")
+        );
+      await promptMain(readStdinJson, (chunk) => process.stdout.write(chunk));
+    },
+  },
+  "scan-invisible-chars": {
+    event: HookEvent.SESSION_START,
+    run: async () => {
+      const { cliMain } =
+        /** @type {typeof import("./scan-invisible-chars.mjs")} */ (
+          await import("./scan-invisible-chars.mjs")
+        );
+      await cliMain();
+    },
+  },
+};
+
+/** The dispatchable hook names, in hooks.json's spelling. */
+export const HOOK_MODES = Object.freeze(Object.keys(HOOKS));
+
+/**
  * Dispatch to the hook named by `--hook=<name>` in argv. Exported and guarded by
  * isMain below so importing this module (the published entry point) is a no-op:
  * only a direct `node plugin-hooks.mjs --hook=…` run consumes stdin and exits.
@@ -115,54 +179,42 @@ export async function main() {
   await registerAvailableModules();
 
   const mode = readFlag(process.argv, "hook");
-  switch (mode) {
-    case "pretooluse-sanitize": {
-      const { cliMain } =
-        /** @type {typeof import("./pretooluse-sanitize.mjs")} */ (
-          await import("./pretooluse-sanitize.mjs")
-        );
-      await cliMain();
-      break;
-    }
-    case "sanitize-output": {
-      const { cliMain } =
-        /** @type {typeof import("./sanitize-output.mjs")} */ (
-          await import("./sanitize-output.mjs")
-        );
-      await cliMain();
-      break;
-    }
-    case "sanitize-user-prompt": {
-      const { main: promptMain } =
-        /** @type {typeof import("./sanitize-user-prompt.mjs")} */ (
-          await import("./sanitize-user-prompt.mjs")
-        );
-      await promptMain(readStdinJson, (chunk) => process.stdout.write(chunk));
-      break;
-    }
-    case "scan-invisible-chars": {
-      const { cliMain } =
-        /** @type {typeof import("./scan-invisible-chars.mjs")} */ (
-          await import("./scan-invisible-chars.mjs")
-        );
-      await cliMain();
-      break;
-    }
-    default:
-      // An unknown mode means broken hooks.json wiring — never fall through to
-      // some default hook and vet the wrong payload class. WHICH way it fails is
-      // the operator's call, taken through the one posture table like every
-      // other hook fault (this arm used to hard-exit 2 unconditionally, so the
-      // knob an operator set was silently overruled here alone).
-      process.exit(
-        writeFaultOutcome(
-          hookFaultOutcome(
-            HOOK_NAME,
-            new Error(`unknown hook mode ${JSON.stringify(mode)}`),
-          ),
+  const hook = mode === undefined ? undefined : HOOKS[mode];
+  if (mode === undefined || hook === undefined) {
+    // An unknown mode means broken hooks.json wiring — never fall through to
+    // some default hook and vet the wrong payload class. WHICH way it fails is
+    // the operator's call, taken through the one posture table like every other
+    // hook fault.
+    process.exit(
+      writeFaultOutcome(
+        hookFaultOutcome(
+          HOOK_NAME,
+          new Error(`unknown hook mode ${JSON.stringify(mode)}`),
         ),
-      );
+      ),
+    );
   }
+
+  // An empty envelope is a verdict, not a crash: stdout stays non-empty, so the
+  // launcher's post-condition sees an answer and Claude Code records a clean
+  // run rather than a hook error. The operator asked for this hook not to
+  // guard, so there is nothing to warn the MODEL about — the stderr line is
+  // where an operator finds out which hooks are off.
+  if (disabledHooks(HOOK_MODES).has(mode)) {
+    process.stderr.write(
+      `agent-sanitizer: ${mode} is off via ${DISABLED_HOOKS_ENV}; this ` +
+        `${hook.event} event is UNGUARDED.\n`,
+    );
+    emitHookResponse(hook.event, {});
+    // Every other hook reads the payload to EOF. Exiting without doing so
+    // leaves Claude Code writing into a closed pipe — an EPIPE on the harness
+    // side for any payload past the pipe buffer, which is most of them.
+    // `resume()` with no data listener consumes and discards.
+    process.stdin.resume();
+    return;
+  }
+
+  await hook.run();
 }
 
 // isMain is read BEFORE main() claims the CLI slot (the claim makes every later

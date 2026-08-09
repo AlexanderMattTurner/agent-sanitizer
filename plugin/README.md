@@ -2,7 +2,8 @@
 
 Sanitization for everything flowing into and out of a Claude Code session: tool
 inputs, tool outputs, and user prompts. Hook failures pass through with a loud
-warning by default; `AGENT_SANITIZER_FAIL_OPEN=0` makes them block instead.
+warning by default; `AGENT_SANITIZER_FAIL_OPEN=0` makes them block instead, and
+`AGENT_SANITIZER_DISABLED_HOOKS` stands individual hooks down.
 
 ## Install
 
@@ -119,6 +120,15 @@ engages only when an operator asked for it:
 | Variable                            | Effect                                                                                                                                                                                                                        |
 | ----------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `AGENT_SANITIZER_SECRETS_ENABLED=1` | Enable the secret-redaction layer: Layer-4 redaction of tool output, placeholder rehydration on Edit/Write, the placeholder-write hold on hook failure, and SessionStart provisioning of the Python engine (default: **off**) |
+
+One per-hook opt-out, for a deployment that wants a whole event left alone —
+prompts that legitimately carry escape sequences, or instruction files already
+vetted upstream. Editing the shipped `hooks.json` is the alternative, and the
+next plugin update overwrites it:
+
+| Variable                          | Effect                                                                                                                                                                                                                                                                                                                                                                                           |
+| --------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `AGENT_SANITIZER_DISABLED_HOOKS=` | Comma-separated hook names to stand down: `scan-invisible-chars`, `sanitize-user-prompt`, `pretooluse-sanitize`, `sanitize-output`. Each still answers, with an empty verdict, so nothing degrades — the event is simply unguarded. A name that is not a hook is reported on stderr and its hook keeps guarding: the variable is set outside the session, so a typo must not be able to halt it. |
 
 And one posture knob, for what happens when a hook itself fails:
 
