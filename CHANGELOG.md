@@ -8,6 +8,23 @@ adhere to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+## [2.31.3] - 2026-08-09
+
+### Fixed
+
+- The launcher now correctly gates on the hook verdict's shape rather than relying on stdout being non-empty.
+- The generated fail-open posture library no longer includes a shebang line.
+- The launcher now gates on the bundle's post-condition check instead of using `node --check` as a proxy.
+- Layer 3's tool scope is now correctly declared as a partition instead of a silent fallthrough.
+
+### Changed
+
+- The fail-open shell posture is now generated from its JavaScript source of truth, ensuring parity between implementations.
+
+### Removed
+
+- Dropped stale `node --check` preflight references from plugin documentation.
+
 ## [2.31.2] - 2026-08-09
 
 ### Fixed
