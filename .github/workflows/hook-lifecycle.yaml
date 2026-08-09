@@ -23,43 +23,6 @@ jobs:
       actions: read # its memo shadow lists this workflow's past runs (needed in a private fork)
     uses: ./.github/workflows/decide-reusable.yaml
     with:
-<<<<<<< local
-      filters: |
-        run:
-          - '.claude/hooks/**'
-          - '.hooks/**'
-          - 'setup.sh'
-          - 'package.json'
-          - 'pnpm-lock.yaml'
-          - 'pyproject.toml'
-          - 'uv.lock'
-          - '.pre-commit-config.yaml'
-          - '.github/scripts/run-hook-lifecycle.sh'
-          - '.github/scripts/check-symlinks.sh'
-          - '.github/actions/setup-base-env/**'
-          - '.github/workflows/hook-lifecycle.yaml'
-          # This job's setup runs through the composite action and the reusable
-          # decide workflow; a change to either can break the lifecycle, so the
-          # gate must open when they change (otherwise it fails open — skipping
-          # the job exactly when the dependency it relies on changed).
-          - '.github/actions/setup-base-env/action.yaml'
-          - '.github/workflows/decide-reusable.yaml'
-||||||| base
-      filters: |
-        run:
-          - '.claude/hooks/**'
-          - '.hooks/**'
-          - 'setup.sh'
-          - 'package.json'
-          - 'pnpm-lock.yaml'
-          - 'pyproject.toml'
-          - 'uv.lock'
-          - '.pre-commit-config.yaml'
-          - '.github/scripts/run-hook-lifecycle.sh'
-          - '.github/scripts/check-symlinks.sh'
-          - '.github/actions/setup-base-env/**'
-          - '.github/workflows/hook-lifecycle.yaml'
-=======
       # Most of this gate's watched set is DERIVED from the entry point below, so
       # it cannot drift out of date. The regex carries only what the derivation
       # cannot see: a path this job's tooling reads without any script naming it,
@@ -76,7 +39,6 @@ jobs:
       # concludes success on a skip, so it would read an inherited green as a
       # verified tree.
       memoize-anchor-jobs: "^hook-lifecycle$"
->>>>>>> template
 
   hook-lifecycle:
     needs: decide
