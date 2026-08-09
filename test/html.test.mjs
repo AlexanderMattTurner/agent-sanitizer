@@ -35,7 +35,7 @@ import {
   DATA_URI_LENGTH_THRESHOLD,
 } from "../src/html.mjs";
 import { sanitize } from "../src/index.mjs";
-import { describeHtmlUnparseable } from "../src/warnings.mjs";
+import { HTML_UNPARSEABLE_WARNING } from "../src/warnings.mjs";
 
 const applyHtml = (text) => sanitizeHtml(text)?.text ?? text;
 
@@ -1432,7 +1432,7 @@ describe("R1: parser stack overflow fails closed (never throws)", () => {
     assert.ok(found.includes("hidden-html"));
     assert.ok(found.includes("exfil-urls"));
     // The warning names the whole-output withhold, not a routine splice.
-    assert.ok(warnings.includes(describeHtmlUnparseable()));
+    assert.ok(warnings.includes(HTML_UNPARSEABLE_WARNING));
     assert.ok(!warnings.some((w) => w.includes("hidden element(s)")));
   });
 

@@ -39,7 +39,7 @@ import {
 import {
   describeExfil,
   describeHtmlSanitized,
-  describeHtmlUnparseable,
+  HTML_UNPARSEABLE_WARNING,
   describeWarned,
   LONE_SURROGATE_WARNING,
 } from "./warnings.mjs";
@@ -436,7 +436,7 @@ async function applyMarkdownPipeline(state, { html, exfilScan }) {
         state.findings.push(
           warning(
             layer2.unparseable
-              ? describeHtmlUnparseable()
+              ? HTML_UNPARSEABLE_WARNING
               : describeHtmlSanitized(layer2.removed),
           ),
         );

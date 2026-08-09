@@ -56,11 +56,14 @@ export function describeHtmlSanitized(removed) {
  * blew up, so nothing was spliced — the ENTIRE output was withheld behind one
  * placeholder. {@link describeHtmlSanitized}'s "N hidden element(s) replaced"
  * would misstate that as a routine splice, so this path gets its own sentence.
- * @returns {string}
+ * A bare constant like {@link LONE_SURROGATE_WARNING} (no counts to
+ * interpolate). The sentence deliberately promises nothing about a reveal
+ * sidecar: the library facade drops `reveal`, and the hook can withhold the
+ * sidecar when it fails vetting — either way a persistence promise here would
+ * be false.
  */
-export function describeHtmlUnparseable() {
-  return "HTML unparseable — the entire output was withheld behind a placeholder; the original text was preserved for the reveal sidecar";
-}
+export const HTML_UNPARSEABLE_WARNING =
+  "HTML unparseable — the entire output was withheld behind a placeholder; nothing was spliced";
 
 /**
  * Full warning for Layer 2's preserved-but-reported content (scripting and
