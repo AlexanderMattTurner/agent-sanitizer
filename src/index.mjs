@@ -91,21 +91,28 @@ export {
  * Layer-2 placeholders — same field, same shape as `sanitizeText`'s, since this
  * facade wraps the same layers (grammar in `./html.mjs`: `layer2Placeholder` /
  * `LAYER2_PLACEHOLDER_RE`). `html` selects Layers 2 AND 3 together here, which
- * is the surface this entry has always had; `sanitizeText` takes them as
- * separate flags for the tool-output pipeline, which needs Layer 3's detection
- * without Layer 2's splice.
+ * is the surface this entry has always had; `exfilScan` exposes Layer 3's
+ * non-destructive detection on its own (unconditionally implied by `html`,
+ * which it can add to but never switch off) for callers that must keep the
+ * visible bytes intact — e.g. a PR diff where the Layer-2 splice would corrupt
+ * legitimate markup — matching the separate flags `sanitizeText` takes for the
+ * tool-output pipeline, which needs Layer 3's detection without Layer 2's
+ * splice.
  * @param {string} text
- * @param {{ html?: boolean } | null} [options]
+ * @param {{ html?: boolean, exfilScan?: boolean } | null} [options]
  * @returns {Promise<{ cleaned: string, found: string[], warnings: string[], notes: string[], splices?: Array<{ placeholder: string, original: string }> }>}
  */
 export async function sanitize(text, options) {
   if (typeof text !== "string")
     throw new TypeError("sanitize(text, options): text must be a string");
-  const { html = false } = options ?? {};
-  const { cleaned, found, warnings, notes, splices } = await sanitizeText(
-    text,
-    { html, exfilScan: html },
-  );
+  const { html = false, exfilScan = false } = options ?? {};
+  const { cleaned, found, warnings, notes, splices } = await sanitizeText(text, {
+    html,
+    // `html` implies the scan unconditionally, and `exfilScan` can only ADD it:
+    // an opt-OUT would make `{ html: true, exfilScan: false }` splice Layer 2
+    // while silently dropping Layer 3's report — a fail-open the docs deny.
+    exfilScan: exfilScan || html,
+  });
   return {
     cleaned,
     found,

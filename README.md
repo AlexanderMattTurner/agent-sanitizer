@@ -35,6 +35,10 @@ const { cleaned, found, warnings, notes } = await sanitize(untrustedText);
 
 // Opt into the HTML layers for web ingress (lazy-loads ~200 ms of deps):
 const result = await sanitize(pageSource, { html: true });
+
+// Layer 3 alone: flag exfil-shaped URLs without splicing anything (for text
+// that must stay byte-faithful, e.g. a PR diff). Implied by `html: true`.
+const scanned = await sanitize(diffText, { exfilScan: true });
 ```
 
 `sanitize` never throws and never silently drops content—any change comes with

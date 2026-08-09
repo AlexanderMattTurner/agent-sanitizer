@@ -25,20 +25,18 @@ import {
 } from "../src/output.mjs";
 import { SGR_RE } from "../src/invisible.mjs";
 import { occurrences } from "../src/view-map.mjs";
-import { fcRunOptions, cp, keptOutsideNeedles } from "./test-helpers.mjs";
+import {
+  fcRunOptions,
+  cp,
+  keptOutsideNeedles,
+  unicodeChar,
+  loneSurrogate,
+} from "./test-helpers.mjs";
 
 const runOptions = fcRunOptions({ numRuns: 300 });
 
 const ESC = cp(0x1b);
 
-// A lone surrogate is injected separately (fast-check v4 dropped fc.fullUnicode).
-const loneSurrogate = fc
-  .integer({ min: 0xd800, max: 0xdfff })
-  .map((code) => String.fromCharCode(code));
-const unicodeChar = fc
-  .integer({ min: 0, max: 0x10ffff })
-  .filter((code) => code < 0xd800 || code > 0xdfff)
-  .map((code) => String.fromCodePoint(code));
 // ESC + invisible/format chars + ANSI fragments + ordinary unicode/surrogates.
 // Built from code points so no literal control byte sits in this source file.
 const adversarialChar = fc.oneof(

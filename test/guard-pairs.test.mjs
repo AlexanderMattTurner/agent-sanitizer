@@ -301,6 +301,23 @@ function patternNames(node, out = []) {
  * hands the path to a helper.
  */
 function visit(node, scope, ctx) {
+  // A DYNAMIC `await import("./x.mjs")` with a literal specifier reaches the
+  // module exactly as a static import does. Following only the static form made
+  // the scan under-attribute: the hook suites load their subjects dynamically
+  // (so a module-load failure lands inside the test rather than at parse time),
+  // so a test that genuinely guards a data file read through one of those
+  // modules looked like a non-reader, and "pairs each scanned data file with a
+  // test that actually reads it" rejected the correct pair.
+  if (node.type === "ImportExpression" && node.source.type === "Literal") {
+    const specifier = node.source.value;
+    if (typeof specifier === "string" && specifier.startsWith(".")) {
+      const target = normalize(join(dirname(ctx.file), specifier));
+      if (tracked.has(target)) {
+        if (DATA_EXTENSIONS.has(extname(target))) ctx.refs.add(target);
+        if (MODULE_EXTENSIONS.has(extname(target))) ctx.deps.push(target);
+      }
+    }
+  }
   if (node.type === "VariableDeclarator") {
     const names = patternNames(node.id);
     // A destructuring pattern binds names whose values this resolver does not
@@ -387,7 +404,7 @@ function analyzeModule(file) {
       if (text) scope.strings.set(imported.local.name, text);
     }
   }
-  visit(ast, scope, { file, refs: result.refs });
+  visit(ast, scope, { file, refs: result.refs, deps: result.deps });
   return result;
 }
 
@@ -418,7 +435,7 @@ const scanned = scanGuardedData();
 // floor: a path that drops out of the scan drops out of the partition and
 // direction assertions with it, so a resolver regression would quietly narrow
 // all of them at once while staying green.
-const RESOLVED_PATH_COUNT = 28;
+const RESOLVED_PATH_COUNT = 30;
 
 describe("SSOT guard-pair map", () => {
   it("is non-empty and every mapped path exists in the repo", () => {
@@ -521,6 +538,14 @@ describe("guarded-data scan (the map is a checked projection of the tests)", () 
         "test/credential-names-export.test.mjs",
       ],
       [".hooks/guard-pairs.json", "test/guard-pairs.test.mjs"],
+      // Reached ONLY through a dynamic `await import("./…")` chain: the hook
+      // suites load their subjects that way, so this anchors the
+      // ImportExpression arm of the walk. Without it that arm could regress to a
+      // no-op with only the count above noticing.
+      [
+        "python/agent_sanitizer/secrets/data/redaction-floor.json",
+        "test/claude-hooks-host-seams.test.mjs",
+      ],
     ]) {
       assert.ok(scanned.has(path), `scan no longer finds ${path}`);
       assert.ok(

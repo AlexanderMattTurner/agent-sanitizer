@@ -303,12 +303,112 @@ const extractFcCallSpans = (code) => {
   return included.map(([s, e]) => code.slice(s, e)).join("\n");
 };
 
+// The shared arbitraries in test-helpers.mjs (unicodeChar / loneSurrogate)
+// carry their seed literals — the surrogate bounds 0xd800/0xdfff — in the
+// helper, not in each importing suite. A suite that imports one still seeds
+// that code point, so its effective source for the domain-coverage grep below
+// must include the arbitrary's code; without this, extracting the shared
+// arbitrary reads as every importer "never seeding" the surrogate class.
+//
+// Only the DECLARATION SPAN of each arbitrary a suite actually references is
+// appended, never the whole helper: the helper also exports keptOutsideNeedles
+// (whose body calls `occurrences`, a FUZZ_REQUIRED *and*
+// SEMANTIC_FUZZ_REQUIRED name), so appending it wholesale let any importer
+// satisfy that obligation transitively without ever fuzzing it.
+const SHARED_ARBITRARIES = ["unicodeChar", "loneSurrogate"];
+
+const helperSource = stripImportsAndComments(
+  readFileSync(path.join(testDir, "test-helpers.mjs"), "utf8"),
+);
+
+/**
+ * The source span of a single `export … <name> …` declaration in `code`: from
+ * the `export` keyword to just before the next top-level `export ` (or EOF).
+ * @param {string} code
+ * @param {string} name
+ * @returns {string|null} null when no such declaration exists
+ */
+const extractExportSpan = (code, name) => {
+  const decl = new RegExp(
+    `^export\\s+(?:async\\s+)?(?:const|let|var|function)\\s+${escapeRegExp(name)}\\b`,
+    "m",
+  );
+  const match = decl.exec(code);
+  if (!match) return null;
+  const bodyStart = match.index + match[0].length;
+  const next = code.slice(bodyStart).search(/^export\s/m);
+  return next === -1
+    ? code.slice(match.index)
+    : code.slice(match.index, bodyStart + next);
+};
+
+/**
+ * `.filter(...)` clauses removed. A filter can only REMOVE values from an
+ * arbitrary's domain, so a code point named inside one is evidence of an
+ * EXCLUSION, never of seeding: `unicodeChar` spells the surrogate bounds
+ * 0xd800/0xdfff precisely because it cannot generate them, and crediting its
+ * importers for the lone-surrogate class was the false negative this guard
+ * exists to prevent. Dropping a narrowing filter can only lose credit (a false
+ * negative), which is the direction CLAUDE.md asks these heuristics to fail.
+ * @param {string} span
+ * @returns {string}
+ */
+const stripFilterClauses = (span) => {
+  let out = span;
+  for (;;) {
+    const idx = out.indexOf(".filter(");
+    if (idx === -1) return out;
+    const close = findMatchingParen(out, idx + ".filter".length);
+    if (close === -1)
+      throw new Error(`unbalanced .filter( in shared-arbitrary span: ${out}`);
+    out = out.slice(0, idx) + out.slice(close + 1);
+  }
+};
+
+/** Shared arbitrary name → the source that evidences what it SEEDS. */
+const seedingSpans = new Map(
+  SHARED_ARBITRARIES.map((name) => {
+    const span = extractExportSpan(helperSource, name);
+    if (span === null)
+      throw new Error(
+        `test-helpers.mjs has no 'export … ${name}' declaration — the ` +
+          `shared-arbitrary extraction is stale. Fix it (or drop the name from ` +
+          `SHARED_ARBITRARIES): silently appending nothing would re-create the ` +
+          `false negative this credit exists to prevent.`,
+      );
+    const seeding = stripFilterClauses(span).trim();
+    if (seeding === "")
+      throw new Error(
+        `the extracted span for ${name} is empty after removing .filter(…) clauses`,
+      );
+    return [name, seeding];
+  }),
+);
+
 const fuzzFiles = readdirSync(testDir)
   .filter((name) => name.endsWith(".test.mjs") && name !== selfName)
   .map((name) => {
     const source = readFileSync(path.join(testDir, name), "utf8");
-    const code = stripImportsAndComments(source);
-    return { name, source, code, fcCode: extractFcCallSpans(code) };
+    const stripped = stripImportsAndComments(source);
+    // The import line itself is stripped, so a name surviving in `stripped` is
+    // a real use; requiring the helper import too keeps a same-named local
+    // arbitrary from claiming the shared one's credit.
+    const referencedArbitraries = source.includes('from "./test-helpers.mjs"')
+      ? SHARED_ARBITRARIES.filter((arb) =>
+          new RegExp(`\\b${escapeRegExp(arb)}\\b`).test(stripped),
+        )
+      : [];
+    const code = [
+      stripped,
+      ...referencedArbitraries.map((arb) => seedingSpans.get(arb)),
+    ].join("\n");
+    return {
+      name,
+      source,
+      code,
+      referencedArbitraries,
+      fcCode: extractFcCallSpans(code),
+    };
   })
   .filter((file) => file.source.includes("fc.assert("));
 
@@ -434,6 +534,80 @@ describe("semantic-fuzz obligation gate", () => {
 // owes (by any hex/escape spelling), the trap the U+009B bug fell through.
 
 const fuzzFileByName = new Map(fuzzFiles.map((file) => [file.name, file]));
+
+describe("shared-arbitrary seeding credit", () => {
+  it("extracts a non-empty span for every shared arbitrary", () => {
+    // The Map construction throws on a missing span, so reaching here already
+    // proves each one resolved; pin the shape so an extractor that started
+    // returning a stray fragment (a lone `export` keyword) is caught too.
+    for (const name of SHARED_ARBITRARIES) {
+      const span = seedingSpans.get(name);
+      assert.ok(span.length > 0, `${name}: empty seeding span`);
+      assert.match(
+        span,
+        new RegExp(`^export const ${name} = fc\\b`),
+        `${name}: span does not start at its own declaration`,
+      );
+      assert.ok(span.includes(".map("), `${name}: span is cut short`);
+    }
+  });
+
+  it("unicodeChar's span does NOT carry the surrogate bounds it excludes", () => {
+    const span = seedingSpans.get("unicodeChar").toLowerCase();
+    // Positive markers first: this really is the unicodeChar declaration, so
+    // the two negatives below cannot pass by looking at the wrong text.
+    assert.ok(span.includes("0x10ffff"), "not the unicodeChar draw");
+    assert.equal(
+      spellingMatches(0xd800, span),
+      false,
+      "unicodeChar excludes surrogates, so its importers must not be credited " +
+        "for seeding the lone-surrogate threat class",
+    );
+    assert.ok(!span.includes("0xdfff"));
+  });
+
+  it("loneSurrogate's span DOES carry the surrogate bounds it seeds", () => {
+    const span = seedingSpans.get("loneSurrogate").toLowerCase();
+    assert.ok(spellingMatches(0xd800, span));
+    assert.ok(span.includes("0xdfff"));
+  });
+
+  it("credits a suite for exactly the shared arbitraries it references", () => {
+    assert.ok(
+      fuzzFiles.some((file) => file.referencedArbitraries.length > 0),
+      "no discovered suite references a shared arbitrary — the credit path is " +
+        "never taken, so these assertions would pass vacuously",
+    );
+    for (const file of fuzzFiles)
+      for (const arb of SHARED_ARBITRARIES)
+        assert.equal(
+          file.code.includes(seedingSpans.get(arb)),
+          file.referencedArbitraries.includes(arb),
+          `${file.name}: ${arb}'s span is appended iff the suite references it`,
+        );
+  });
+
+  it("no suite inherits an unreferenced helper export", () => {
+    // keptOutsideNeedles' body calls `occurrences` — a name in both
+    // FUZZ_REQUIRED and SEMANTIC_FUZZ_REQUIRED — so appending the whole helper
+    // let any importer satisfy that obligation without fuzzing it.
+    assert.match(
+      helperSource,
+      /export function keptOutsideNeedles\b[\s\S]*\boccurrences\(/,
+      "the helper no longer exports keptOutsideNeedles calling occurrences — " +
+        "this guard is now aimed at nothing; re-point it at the current " +
+        "non-arbitrary export or delete it",
+    );
+    for (const file of fuzzFiles) {
+      if (stripImportsAndComments(file.source).includes("keptOutsideNeedles"))
+        continue;
+      assert.ok(
+        !file.code.includes("keptOutsideNeedles"),
+        `${file.name} inherited keptOutsideNeedles' body from test-helpers.mjs`,
+      );
+    }
+  });
+});
 
 describe("threat-alphabet domain coverage", () => {
   it("every invisible-detector category (CHECKS) has a representative cp", () => {

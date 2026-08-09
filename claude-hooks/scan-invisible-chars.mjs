@@ -4,8 +4,17 @@
  * invisible sequences (tag chars, zero-width encodings) that hijack the model's
  * behavior — invisible in an editor but read by the LLM. These files load as
  * project instructions at session start, bypassing the PostToolUse sanitizer.
+ *
+ * The scan/decode/clean LOGIC lives in `agent-sanitizer/instructions` — this
+ * hook is glue (target discovery, accounting, alert persistence, fault
+ * posture) over that SSOT. A hand-written twin used to live here and drifted
+ * three ways at once: its report re-emitted the decoded payload with no
+ * `untrusted data` framing or escaping (re-injecting the very instruction the
+ * scan exists to catch), its scattered counter re-grew the linguistic-joiner
+ * false positive the SSOT had already fixed, and its clean path was a bare
+ * `writeFileSync` with none of cleanFile's symlink/UTF-8/TOCTOU guards.
  */
-import { readFileSync, globSync, writeFileSync, unlinkSync } from "node:fs";
+import { readFileSync, globSync, unlinkSync } from "node:fs";
 import { join, relative } from "node:path";
 import {
   awaitLazyDependency,
@@ -44,35 +53,43 @@ import {
   excludeFromContextScan,
 } from "../src/claude-context.mjs";
 
-// Layer-1 primitives, bound via lazyImport (see its doc for the fail-OPEN
-// hazard of a bare static npm import — here the instruction files would load
-// UNSCANNED). A failed load leaves the bindings undefined; on a cold container
-// (node deps not yet installed) cliMain's guard below waits out session-setup
-// before giving up, and fails loud rather than silently passing.
+// Layer-1 primitives + the instruction-scanner SSOT, bound via lazyImport (see
+// its doc for the fail-OPEN hazard of a bare static npm import — here the
+// instruction files would load UNSCANNED). A failed load leaves the bindings
+// undefined; on a cold container (node deps not yet installed) cliMain's guard
+// below waits out session-setup before giving up, and fails loud rather than
+// silently passing.
 // `let`, not `const`: the cold-start poll re-binds these once the package loads.
 let {
   LONG_RUN_RE,
   LONG_RUN_THRESHOLD,
   SCATTERED_THRESHOLD: TOTAL_INVISIBLE_THRESHOLD,
-  STRIP,
-  stripInvisible,
 } = /** @type {typeof import("agent-sanitizer/invisible")} */ (
   await lazyImport("agent-sanitizer/invisible")
 );
+let {
+  decodeRun: instrDecodeRun,
+  scanText,
+  cleanFile,
+} = /** @type {typeof import("agent-sanitizer/instructions")} */ (
+  await lazyImport("agent-sanitizer/instructions")
+);
 
 /**
- * Re-attempt the sanitizer import, waiting out an in-flight session-setup before
- * giving up. On a cold container the node deps this hook needs are still being
- * installed when SessionStart fires; without this wait `stripInvisible` is
- * undefined, the scan is skipped, and the instruction files load UNSCANNED for the
- * whole session (fail open) — silently. Reuses the control-plane poll (marker +
- * PID liveness) so the wait bound matches every other cold-start-aware gate.
+ * Re-attempt the sanitizer imports, waiting out an in-flight session-setup
+ * before giving up. On a cold container the node deps this hook needs are still
+ * being installed when SessionStart fires; without this wait `scanText` is
+ * undefined, the scan is skipped, and the instruction files load UNSCANNED for
+ * the whole session (fail open) — silently. Reuses the control-plane poll
+ * (marker + PID liveness) so the wait bound matches every other
+ * cold-start-aware gate.
  * @returns {Promise<boolean>} whether the sanitizer is now bound
  */
 async function ensureSanitizerLoaded() {
-  if (typeof stripInvisible === "function") return true;
+  if (typeof scanText === "function" && typeof cleanFile === "function")
+    return true;
   /* c8 ignore start -- cold-start reload: only runs when the top-level
-     agent-sanitizer import above failed (node deps not yet installed), which
+     agent-sanitizer imports above failed (node deps not yet installed), which
      can't be simulated in-process or in the spawned-subprocess CLI run the tests
      observe (the test env always has the deps, so the guard above early-returns).
      The reload reuses awaitLazyDependency / markerIsTrusted /
@@ -80,20 +97,28 @@ async function ensureSanitizerLoaded() {
   const marker = hookgateMarkerPath();
   const reloaded = await awaitLazyDependency({
     tryImport: async () => {
-      const mod = await lazyImport("agent-sanitizer/invisible");
-      return typeof mod.stripInvisible === "function" ? mod : null;
+      const invisible = await lazyImport("agent-sanitizer/invisible");
+      const instructions = await lazyImport("agent-sanitizer/instructions");
+      return typeof instructions.scanText === "function" &&
+        typeof instructions.cleanFile === "function" &&
+        invisible.LONG_RUN_RE !== undefined
+        ? { invisible, instructions }
+        : null;
     },
     markerPresent: () => markerIsTrusted(marker),
     setupAlive: () => probeSetupAlive(marker),
   });
   if (!reloaded) return false;
+  const bound = /** @type {{
+    invisible: typeof import("agent-sanitizer/invisible"),
+    instructions: typeof import("agent-sanitizer/instructions"),
+  }} */ (reloaded);
   ({
     LONG_RUN_RE,
     LONG_RUN_THRESHOLD,
     SCATTERED_THRESHOLD: TOTAL_INVISIBLE_THRESHOLD,
-    STRIP,
-    stripInvisible,
-  } = /** @type {typeof import("agent-sanitizer/invisible")} */ (reloaded));
+  } = bound.invisible);
+  ({ decodeRun: instrDecodeRun, scanText, cleanFile } = bound.instructions);
   return true;
   /* c8 ignore stop */
 }
@@ -164,45 +189,28 @@ function persistAlert(parts) {
 // Decoder
 
 /**
+ * The SSOT decoder, re-exported through a lazy-bound wrapper (the binding is
+ * `let` and may be re-bound by the cold-start reload, so the export must read
+ * it at call time). A hand-written twin used to live here; it decoded tag
+ * characters to RAW bytes — including actual C0 controls for U+E0001–U+E001F —
+ * with no `untrusted data, not instructions:` framing or escaping, so the
+ * hook's own report re-injected the hidden payload it had just caught.
  * @param {string} run
  * @returns {{ method: string, decoded: string }}
  */
 function decodeRun(run) {
-  const cps = [...run].map((ch) => /** @type {number} */ (ch.codePointAt(0)));
-
-  // Tag characters U+E0001-U+E007F map directly to ASCII
-  const tagAscii = cps
-    .filter((cp) => cp >= 0xe0001 && cp <= 0xe007f)
-    // Stryker disable next-line ArithmeticOperator: cp - 0xe0000 → cp + 0xe0000 is equivalent — 0xe0000 is a multiple of 2^16 and String.fromCharCode truncates to 16 bits, so both yield the same character.
-    .map((cp) => String.fromCharCode(cp - 0xe0000))
-    .join("");
-
-  if (tagAscii.length > 0) {
-    return { method: "Unicode tag characters → ASCII", decoded: tagAscii };
-  }
-
-  // Zero-width binary encoding: ZWSP=0, ZWNJ=1, ZWJ=group separator.
-  const ZW_BIT = new Map([
-    [0x200b, "0"],
-    [0x200c, "1"],
-    [0x200d, "|"],
-  ]);
-  if (cps.every((cp) => ZW_BIT.has(cp))) {
-    const bits = cps.map((cp) => ZW_BIT.get(cp)).join("");
-    return {
-      method: "zero-width binary encoding",
-      decoded: `[${cps.length} zero-width chars: ${bits.slice(0, 80)}]`,
-    };
-  }
-
-  // Mixed/unknown
-  return {
-    method: "invisible Unicode sequence",
-    decoded: cps
-      .map((cp) => `U+${cp.toString(16).toUpperCase().padStart(4, "0")}`)
-      .join(" "),
-  };
+  return instrDecodeRun(run);
 }
+
+// Target discovery stays hook-local glue, NOT a copy of the SSOT's
+// containment-checked `findInstructionFiles`: the two have different contracts.
+// The SSOT finder silently DROPS a target it cannot resolve (dangling symlink,
+// out-of-tree symlink), which is right for a pure scan API — but this hook's
+// accounting invariant (scanned + skipped === targets, see scanProject)
+// requires unreadable targets to stay LISTED so they are reported as unvetted
+// rather than vanishing into an "all clean" announcement. The write-side
+// symlink hazard the SSOT finder guards against is covered here by cleanFile's
+// own O_NOFOLLOW open.
 
 /**
  * Every file under `dir` that Claude Code loads as model context: the
@@ -230,37 +238,17 @@ function findInstructionFiles(dir) {
 // Scanner
 
 /**
+ * Read one file and run the SSOT scan over it. The scan logic itself (long-run
+ * decode + scattered threshold-evasion counting) is `scanText`'s — a local
+ * mirror used to re-count scatter from the raw STRIP match count, silently
+ * re-growing the linguistic-joiner/VS15 false positive `scanText`'s carve-out
+ * counter had already fixed.
  * @param {string} filePath
- * @returns {Array<{ line: number, charCount: number, method: string, decoded: string }>}
+ * @returns {ReturnType<typeof import("agent-sanitizer/instructions").scanText>}
+ *   `line` is 1-based, or `null` for the whole-file scattered-chars finding.
  */
 function scanFile(filePath) {
-  const content = readFileSync(filePath, "utf-8");
-  const findings = [];
-  LONG_RUN_RE.lastIndex = 0;
-  let match;
-  let runChars = 0;
-  while ((match = LONG_RUN_RE.exec(content)) !== null) {
-    const lineNum = content.slice(0, match.index).split("\n").length;
-    const charCount = [...match[0]].length;
-    runChars += charCount;
-    findings.push({ line: lineNum, charCount, ...decodeRun(match[0]) });
-  }
-
-  // Threshold-evasion: scattered invisible chars not in a long run can still be
-  // a payload. Always evaluated; chars already in a run are excluded so they
-  // aren't double-counted.
-  const allInvisible = content.match(STRIP);
-  const scattered = (allInvisible ? allInvisible.length : 0) - runChars;
-  if (scattered >= TOTAL_INVISIBLE_THRESHOLD) {
-    findings.push({
-      line: 0,
-      charCount: scattered,
-      method: "scattered invisible chars (possible threshold evasion)",
-      decoded: `[${scattered} invisible chars distributed across file]`,
-    });
-  }
-
-  return findings;
+  return scanText(readFileSync(filePath, "utf-8"));
 }
 
 export {
@@ -282,7 +270,7 @@ export {
 /**
  * @param {Array<{
  *   file: string,
- *   findings: Array<{ line: number, charCount: number, method: string, decoded: string }>,
+ *   findings: Array<{ line: number | null, charCount: number, method: string, decoded: string }>,
  * }>} allFindings
  * @returns {string}
  */
@@ -304,8 +292,12 @@ function formatReport(allFindings) {
   for (const { file, findings } of allFindings) {
     lines.push(`  ${file}:`);
     for (const finding of findings) {
+      // `line` is null for the whole-file scattered-chars finding, which is
+      // not tied to any single line.
+      const where =
+        finding.line === null ? "Whole file" : `Line ${finding.line}`;
       lines.push(
-        `    Line ${finding.line}: ${finding.charCount} invisible chars (${finding.method})`,
+        `    ${where}: ${finding.charCount} invisible chars (${finding.method})`,
       );
       lines.push(`    Decodes to: ${JSON.stringify(finding.decoded)}`);
     }
@@ -548,20 +540,29 @@ function autoCleanFindings(allFindings, dir) {
   for (const { file } of allFindings) {
     const absPath = join(dir, file);
     try {
-      const original = readFileSync(absPath, "utf-8");
-      const stripped = stripInvisible(original);
-      if (stripped !== original) {
-        writeFileSync(absPath, stripped);
-        cleaned++;
-      }
-      /* c8 ignore start -- only fires on a file this uid cannot rewrite, which the test run cannot create */
+      // The SSOT clean: O_NOFOLLOW open, UTF-8 round-trip check, TOCTOU
+      // recheck, atomic rename + fsync, mode preservation. The bare
+      // readFileSync/writeFileSync pair that lived here had none of those
+      // guards — on the one hook that REWRITES instruction files.
+      //
+      // Counted ONLY on `true` (bytes changed), matching the old
+      // `stripped !== original` gate. `false` means cleanFile re-scanned and
+      // found nothing to strip in a file this run flagged — the file was
+      // changed under us, or the flagged run is one the stripper PRESERVES —
+      // so it is not a file we cleaned, and leaving `cleaned` short is what
+      // routes it to the alert below instead of an "all clean" report.
+      if (cleanFile(absPath)) cleaned++;
+      /* c8 ignore start -- only fires on a file cleanFile refuses (symlink,
+         non-UTF-8, concurrent write) or cannot rewrite, which the test run
+         does not create */
     } catch (err) {
-      // Narrowed to filesystem errnos, and the reason is REPORTED rather than
-      // swallowed: an unwritable file legitimately falls through to the alert
-      // path below, but a throw from stripInvisible is a bug in the sanitizer
-      // and must not be laundered into "this file resisted cleaning".
-      if (/** @type {NodeJS.ErrnoException} */ (err).code === undefined)
-        throw err;
+      // The reason is REPORTED rather than swallowed: a refusal or an
+      // unwritable file legitimately falls through to the alert path below. A
+      // TypeError is the one throw that still propagates — an unbound lazy
+      // import, i.e. a bug in THIS hook, which must not be laundered into
+      // "this file resisted cleaning". (The scan phase has already exercised
+      // the same bindings, so this is a belt-and-braces rethrow.)
+      if (err instanceof TypeError) throw err;
       process.stderr.write(
         `scan-invisible-chars: could not clean ${file}: ${safeErrMessage(err)}\n`,
       );
