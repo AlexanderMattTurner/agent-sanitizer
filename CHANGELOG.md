@@ -8,6 +8,16 @@ adhere to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+## [2.31.2] - 2026-08-09
+
+### Fixed
+
+- HTML processing now correctly resolves hex colors and logical box properties during extent checks.
+- Fixed border box validation to verify empty state before splicing zero-size elements.
+- Secrets redactor no longer rewrites a security codebase's own source files.
+- CLI sanitize command now forwards the complete sanitize result pinned against the Python client.
+- Secrets engine now peels value terminators at the mint point instead of per gate, improving correctness.
+
 ## [2.31.1] - 2026-08-09
 
 ### Changed
