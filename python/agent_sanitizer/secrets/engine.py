@@ -273,7 +273,21 @@ FIELD_VALUE_RE = re.compile(
     r"(?:(?:Bearer|Token|Basic)\s+)?)"
     r"(?P<openbracket>[(\[{]?)"
     r"(?P<quote>[\"']?)"
-    r"(?P<secret_value>[^\s\"'`{}()\[\]]{20,})"
+    # A trailing statement/list terminator is punctuation of the ENCLOSING
+    # syntax, never of the value, but the class above would swallow it and leave
+    # the stray byte on `secret_value` — the same false positive the operator
+    # lookahead above exists to prevent, arriving from the other end. Nine of the
+    # twelve benign-shape gates judge the value with an anchored `fullmatch`, so
+    # one un-peeled `;` disarms all of them at once and rewrites
+    # `const token = process.env.GH_TOKEN;` into `const token = [REDACTED];`.
+    # Peeling it HERE, in the one expression that decides the value's extent,
+    # means no gate can be written that forgets the normalization: no gate ever
+    # sees an un-peeled value. Precision-safe in the redacting direction too —
+    # no issuer's token alphabet contains `;` or `,`, so the peel can only ever
+    # shorten a non-credential. `.` is deliberately NOT peeled: it is a JWT's
+    # own segment separator.
+    r"(?P<secret_value>[^\s\"'`{}()\[\]]{19,}[^\s\"'`{}()\[\];,])"
+    r"(?P<terminator>[;,]*)"
     r"(?P<closequote>(?P=quote)?)"
     r"(?P<closebracket>[)\]}]?)",
     re.IGNORECASE | re.MULTILINE,
@@ -1117,6 +1131,9 @@ def _redact_core(
             + m.group("openbracket")
             + m.group("quote")
             + _mark(entries, placeholder(), candidate.value)
+            # Re-emitted in source order (value, terminator, closequote) so the
+            # bytes outside the placeholder are preserved exactly, quoted or not.
+            + m.group("terminator")
             + m.group("closequote")
             + m.group("closebracket")
         )
