@@ -8,6 +8,14 @@ adhere to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+## [2.31.4] - 2026-08-09
+
+### Fixed
+
+- Fixed CI routing to properly handle post-merge failures that were not being reported.
+- Fixed coverage hook-scope ratchet to work bidirectionally instead of one-directionally.
+- Fixed automation layer linting so that it is no longer ignored.
+
 ## [2.31.3] - 2026-08-09
 
 ### Fixed
