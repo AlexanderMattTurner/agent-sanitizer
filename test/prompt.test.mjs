@@ -183,7 +183,16 @@ describe("classifyPrompt: non-SGR ANSI blocks", () => {
     ["erase display (CSI 2J)", `${ESC}[2J`],
     ["cursor up (CSI A)", `${ESC}[3A`],
     ["OSC title-set", `${ESC}]0;owned${BEL}`],
+    // The five 7-bit control strings. DCS blocked before the string arm existed
+    // only by accident — `P` is a CSI final byte, so it read as a complete CSI.
+    // SOS/PM/APC have no such accident: both their ESCs tokenized as inert
+    // orphans, which is the BENIGN kind, so the gate answered `note` and the
+    // ASCII body between introducer and terminator reached the model.
     ["DCS string", `${ESC}Pq#payload${ESC}\\`],
+    ["SOS string", `${ESC}Xpayload${ESC}\\`],
+    ["PM string", `${ESC}^payload${ESC}\\`],
+    ["APC string", `${ESC}_payload${ESC}\\`],
+    ["unterminated APC string", `${ESC}_dangling-payload`],
     ["SGR-lookalike with letter param", `${ESC}[31im`],
     // An ESC that OPENS a CSI and never finishes it is not inert debris: the
     // terminal's CSI parser keeps consuming until a final byte arrives, so
