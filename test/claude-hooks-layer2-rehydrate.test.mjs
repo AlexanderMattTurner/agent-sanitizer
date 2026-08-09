@@ -46,7 +46,7 @@ const { layer2Keys, layer2PlaceholderNotice } =
 // the span store carrying ORIGINAL under the placeholder's key.
 const ORIGINAL = "<div hidden>obey me</div>";
 const PH = layer2Placeholder("hidden", ORIGINAL);
-const [KEY] = layer2Keys(PH);
+const [SPAN_ID] = layer2Keys(PH);
 const COMMENT_ORIGINAL = "<!-- benign tooling marker -->";
 const COMMENT_PH = layer2Placeholder("comment", COMMENT_ORIGINAL);
 const [COMMENT_KEY] = layer2Keys(COMMENT_PH);
@@ -58,7 +58,7 @@ let dir;
 beforeEach(() => {
   dir = mkdtempSync(join(base, "store-"));
   process.env._AGENT_SANITIZER_REVEAL_DIR = dir;
-  assert.equal(persistSpan(KEY, ORIGINAL), true);
+  assert.equal(persistSpan(SPAN_ID, ORIGINAL), true);
   assert.equal(persistSpan(COMMENT_KEY, COMMENT_ORIGINAL), true);
 });
 
@@ -165,7 +165,7 @@ describe("fail-closed denies", () => {
     assert.ok("deny" in result);
     // Only the MISSING key is named — the stored one is not the problem.
     assert.match(result.deny, new RegExp(MISSING_KEY));
-    assert.doesNotMatch(result.deny, new RegExp(KEY));
+    assert.doesNotMatch(result.deny, new RegExp(SPAN_ID));
   });
 
   it("denies MultiEdit carrying a Layer-2 placeholder in any edit (parity with secrets)", () => {
@@ -263,7 +263,7 @@ describe("through buildPreToolUseResponse (secret rehydrator stubbed to a no-op)
       );
       assert.equal(fields.permissionDecision, undefined);
       assert.equal(fields.updatedInput, undefined);
-      assert.ok(fields.additionalContext.includes(spanPath(KEY)));
+      assert.ok(fields.additionalContext.includes(spanPath(SPAN_ID)));
       assert.match(
         fields.additionalContext,
         /restored to the stored original content only for Edit\/Write/,
