@@ -34,6 +34,7 @@ const {
   confirmMarkerPath,
   CONFIRM_TTL_MS,
 } = await import("../claude-hooks/lib/secret-drop-guard.mjs");
+const { rehydrateRedacted } = await import("../src/rehydrate.mjs");
 
 // Secret assembled at runtime so no complete token literal trips push
 // protection / gitleaks. The label avoids every SECRET_HINT keyword so the
@@ -438,6 +439,90 @@ describe("withSecretDropGuard", () => {
     for (const tool of ["Edit", "MultiEdit", "Bash", "Read"])
       assert.equal(await composed(tool, { file_path: "/f" }), null);
     assert.equal(guarded, 0);
+  });
+
+  it("does not deny a faithfully-restored secret through the hook pipeline (real rehydrate + real guard)", async () => {
+    // Production Layer-4 shape — the REAL rehydrateRedacted composed with the
+    // REAL secretDropGuard via withSecretDropGuard — driven end-to-end through
+    // buildPreToolUseResponse. Only the fs/daemon/git/sentinel seams are
+    // injected (no fake rehydrate, no fake guard).
+    const layer4 = (io) =>
+      withSecretDropGuard(
+        (tool, toolInput) => rehydrateRedacted(tool, toolInput, io),
+        io,
+        (finalInput, guardIo) =>
+          secretDropGuard(finalInput, guardIo, {
+            isTracked: () => false,
+            confirmSeen: () => false,
+            recordConfirm: () => {},
+          }),
+      );
+
+    // Placeholder-carrying faithful echo: Layer 4 rehydrates the view back to
+    // the disk bytes, and the guard — running on the POST-substitution
+    // content — sees the secret preserved, not dropped.
+    const view = `host=1.2.3.4\nvalue=${PH}\n`;
+    const fields = await buildPreToolUseResponse(
+      {
+        tool_name: "Write",
+        tool_input: { file_path: "/w/.env", content: view },
+      },
+      layer4(dropIo(DISK)),
+    );
+    assert.ok(fields !== null);
+    assert.equal(fields.updatedInput.content, DISK);
+    assert.ok(fields.updatedInput.content.includes(SECRET_A));
+    assert.equal("permissionDecision" in fields, false);
+    assert.match(
+      String(fields.additionalContext),
+      /resolved to the file's real secret values/u,
+    );
+
+    // Hint-free restoration (the new every-well-formed-Write path): no
+    // placeholder anywhere in the content, yet Layer 4 restores the stripped
+    // invisible run from disk, and the restored content carries the file's
+    // secret bytes. The guard must count that secret as preserved.
+    const ZW = String.fromCharCode(0x200b);
+    const diskInvis = `${ZW.repeat(12)}\nvalue=${SECRET_A}\n`;
+    const hintFree = `\nvalue=${SECRET_A}\n`;
+    assert.equal(hintFree.includes("[REDACTED"), false);
+    const restored = await buildPreToolUseResponse(
+      {
+        tool_name: "Write",
+        tool_input: { file_path: "/w/.env", content: hintFree },
+      },
+      layer4(dropIo(diskInvis)),
+    );
+    assert.ok(restored !== null);
+    // Restoration really happened (the invisible run is back)...
+    assert.equal(restored.updatedInput.content, diskInvis);
+    assert.ok(restored.updatedInput.content.includes(SECRET_A));
+    // ...and the guard did not read it as a drop.
+    assert.equal("permissionDecision" in restored, false);
+    assert.match(
+      String(restored.additionalContext),
+      /12 invisible\/control character\(s\) .* restored from disk/u,
+    );
+
+    // Non-vacuity control: the same composition DOES deny when the Write
+    // genuinely drops the secret — proving the guard is live on this path
+    // and the two passes above were its verdicts, not its absence.
+    const dropping = await buildPreToolUseResponse(
+      {
+        tool_name: "Write",
+        tool_input: { file_path: "/w/.env", content: "\nvalue=<rotated>\n" },
+      },
+      layer4(dropIo(diskInvis)),
+    );
+    assert.equal(dropping?.permissionDecision, "deny");
+    assert.match(
+      String(dropping?.permissionDecisionReason),
+      /removes 1 redacted secret value\(s\)/u,
+    );
+    assert.match(
+      String(dropping?.permissionDecisionReason),
+      /re-issue this exact Write to confirm/u,
+    );
   });
 
   it("short-circuits on a rehydration deny (guard never runs)", async () => {
