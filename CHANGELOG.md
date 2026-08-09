@@ -8,6 +8,14 @@ adhere to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+## [2.32.2] - 2026-08-09
+
+### Fixed
+
+- CI: Fixed guard-pair suite to use correct repository root instead of module root.
+- CI: Fixed sanitizer installation order to run before GitHub script suites.
+- CI: Fixed mutation.yaml path parsing to preserve comments in the paths list.
+
 ## [2.32.1] - 2026-08-09
 
 ### Added
