@@ -9,22 +9,13 @@ JavaScript. That is the harm ``CLAUDE.md``'s precision-over-recall rule names:
 splicing or rewriting legitimate content removes text the model needed.
 """
 
-from pathlib import Path
 import subprocess
 
 import pytest
 
 import agent_sanitizer.secrets.engine as E
 from agent_sanitizer.secrets import RedactorConfig
-
-REPO_ROOT = Path(
-    subprocess.run(
-        ["git", "rev-parse", "--show-toplevel"],
-        capture_output=True,
-        text=True,
-        check=True,
-    ).stdout.strip()
-)
+from tests._helpers import REPO_ROOT
 
 # Regex literals assigned to credential-named constants. Each is >=20 bytes and
 # sits in exactly the `keyword = value` position the field detector targets.
