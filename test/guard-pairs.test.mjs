@@ -64,10 +64,13 @@ const SKIP_DIRS = new Set([
 /**
  * Every file in the checkout, repo-relative.
  *
- * Deliberately NOT `git ls-files`: Stryker's sandbox is a copy of the repo with
- * no `.git`, so a test that shells out to git there fails during the dry run and
- * takes every mutation shard down with it. Enumerating the tree keeps this test
- * runnable wherever its own files are.
+ * Deliberately NOT `git ls-files`, but not for the reason first written here.
+ * Git does not FAIL in Stryker's sandbox: the sandbox is a plain directory copy
+ * at `<repoRoot>/.stryker-tmp/sandbox-XXXXXX/`, so git walks up out of it and
+ * answers about the real checkout. That is worse than failing, because this
+ * suite's subject is the copy it is actually running in — the instrumented one
+ * — and git would silently hand it a different tree. Enumerating from this
+ * file's own location keeps the answer anchored wherever the suite lives.
  */
 function listFiles(dir = "", out = []) {
   const entries = readdirSync(join(repoRoot, dir), { withFileTypes: true });
@@ -296,6 +299,17 @@ function resolvePath(node, file, scope) {
   }
   if (node.type !== "CallExpression") return null;
   if (isGitRootCall(node, scope)) return "";
+  // `climbOutOfSandbox(p)` from test/helpers/repo-root.mjs is the identity on a
+  // repo-RELATIVE path: outside a sandbox it returns its argument, and inside one
+  // it strips the `.stryker-tmp/sandbox-XXXXXX` segment, which repo-relative is
+  // the same place. Named rather than inferred, exactly like the git arm above —
+  // a resolver that guessed at unknown calls would resolve paths that are not
+  // paths. The helper is the blessed replacement for that git call, so without
+  // this arm every suite that adopts it drops out of the scan silently.
+  if (calleeName(node.callee) === "climbOutOfSandbox")
+    return node.arguments.length === 1
+      ? resolvePath(node.arguments[0], file, scope)
+      : null;
   // `execFileSync(…).trim()`: the trimmed value is the same path. Checked
   // before calleeName(), which only names simple `a.b()` callees.
   if (

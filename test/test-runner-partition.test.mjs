@@ -37,9 +37,12 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { describe, it } from "node:test";
 
-const REPO_ROOT = execFileSync("git", ["rev-parse", "--show-toplevel"], {
-  encoding: "utf8",
-}).trim();
+// The shipped tree, not the instrumented copy Stryker runs this beside. Resolved
+// from the helper's own location rather than `git rev-parse --show-toplevel`:
+// that call appeared to work only because the sandbox sits inside the checkout,
+// so git walked up out of it silently. `git ls-files` below still asks git, but
+// for a different question — which paths are TRACKED — anchored to this root.
+import { repoRoot as REPO_ROOT } from "./helpers/repo-root.mjs";
 
 const read = (relative) => readFileSync(join(REPO_ROOT, relative), "utf8");
 

@@ -17,9 +17,12 @@ import { join } from "node:path";
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
-const repoRoot = execFileSync("git", ["rev-parse", "--show-toplevel"], {
-  encoding: "utf8",
-}).trim();
+// The shipped tree, not the instrumented copy Stryker runs this beside: the
+// subject is what the code SAYS to an operator, which mutation does not change.
+// `git rev-parse --show-toplevel` used to resolve this and appeared to work,
+// because the sandbox sits inside the checkout and git walks up out of it — a
+// silent escape that held only while `tempDirName` stayed at its default.
+import { repoRoot } from "./helpers/repo-root.mjs";
 
 const read = (relative) => readFileSync(join(repoRoot, relative), "utf8");
 
