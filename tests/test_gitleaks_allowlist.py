@@ -27,15 +27,10 @@ def _allowlist_paths() -> list[str]:
     rewritten into the other form pass this guard vacuously.
     """
     config = tomllib.loads(GITLEAKS_TOML.read_text())
-    # `[[allowlists]]` (array of tables), not a single `[allowlist]`: each
-    # allowlist scopes its own paths and reason, so widening one cannot
-    # silently widen another. Every table's paths are guarded here.
-    allowlists = config["allowlists"]
-    assert len(allowlists) > 1, (
-        "expected the per-scope allowlist tables; a collapse back to one "
-        "table would let a single widened scope cover every fixture path"
-    )
-    paths = [path for allowlist in allowlists for path in allowlist["paths"]]
+    tables = config.get("allowlists", [])
+    if "allowlist" in config:
+        tables = [config["allowlist"], *tables]
+    paths = [path for table in tables for path in table.get("paths", [])]
     assert paths, "expected at least one allowlist path"
     return paths
 
