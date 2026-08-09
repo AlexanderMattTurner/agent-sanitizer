@@ -38,8 +38,20 @@ function syncPaths() {
 function consumerTree() {
   const root = mkdtempSync(join(tmpdir(), "consumer-"));
   for (const path of syncPaths()) {
-    mkdirSync(join(root, dirname(path)), { recursive: true });
-    cpSync(join(REPO_ROOT, path), join(root, path), { recursive: true });
+    // Only TRACKED files: the sync copies from a git checkout of the template,
+    // so an untracked or ignored file (node_modules, build output) present here
+    // is never delivered downstream and must not satisfy these tests.
+    const listed = spawnSync("git", ["ls-files", "-z", "--", path], {
+      cwd: REPO_ROOT,
+      encoding: "utf8",
+    });
+    assert.equal(listed.status, 0, `git ls-files failed for ${path}`);
+    const files = listed.stdout.split("\0").filter(Boolean);
+    assert.ok(files.length > 0, `SYNC_PATHS entry delivers nothing: ${path}`);
+    for (const file of files) {
+      mkdirSync(join(root, dirname(file)), { recursive: true });
+      cpSync(join(REPO_ROOT, file), join(root, file));
+    }
   }
   return root;
 }

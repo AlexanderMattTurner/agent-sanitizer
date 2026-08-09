@@ -44,10 +44,16 @@ const REPO_GIT_DIR = execFileSync("git", ["rev-parse", "--absolute-git-dir"], {
 }).trim();
 
 test("a hook's exported GIT_DIR cannot redirect a sandbox's git at this repo", () => {
-  // The incident, reproduced: pre-commit exports GIT_DIR, so an unscrubbed
-  // sandbox commits its fixture history onto the real branch.
-  process.env.GIT_DIR = REPO_GIT_DIR;
-  scrubGitEnv();
+  // The incident: .hooks/pre-commit exports GIT_DIR into this process, so the
+  // module-level scrubGitEnv() above — not anything this test does — is what
+  // keeps the sandboxes below off the real branch. Assert on the state it left,
+  // before any sandbox exists, so deleting that call turns this red under the
+  // hook instead of leaving the guard silently gone.
+  assert.deepEqual(
+    Object.keys(process.env).filter((key) => key.startsWith("GIT_")),
+    [],
+    "scrubGitEnv() must run at import, before any sandbox is created",
+  );
   const { dir } = makeSandbox("exit 0");
   try {
     const seen = execFileSync("git", ["rev-parse", "--absolute-git-dir"], {
