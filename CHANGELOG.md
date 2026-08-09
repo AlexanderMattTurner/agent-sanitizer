@@ -8,6 +8,27 @@ adhere to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+## [2.33.0] - 2026-08-09
+
+### Added
+- Git hooks now reject pushes that only re-land already-merged history
+- Git hooks refuse to tear down a worktree that still holds uncommitted work
+- Repository now declares generated artifacts for auto-resolution
+- Dry-run-only oracle for detecting instrumentation failures in mutation testing
+
+### Fixed
+- Fixed sandbox helper escaping mutation scope in CI
+- Git hooks now properly resolve the hook library with builtins and let fixtures follow the data
+- Git hooks now find tools that session-setup installs for them
+- Stale worktree registration is now contained to the worktree that caused it
+- Test comparison now uses the SHIPPED generated module instead of the instrumented copy
+- Sandboxed module paths are now correctly mapped back onto the real checkout
+- Generated fail-open library is now paired correctly and scan count is re-pinned
+- Invisible charset generation now emits byte-stable output that Prettier will not repack
+
+### Changed
+- Repository root resolution now uses a single sandbox-aware helper
+
 ## [2.32.3] - 2026-08-09
 
 ### Changed
