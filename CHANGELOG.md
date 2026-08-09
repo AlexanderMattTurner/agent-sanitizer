@@ -8,6 +8,22 @@ adhere to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+## [2.32.1] - 2026-08-09
+
+### Added
+- New skill-gates system for Claude hooks with dedicated gate types for plan, PR, and tests validations
+- Support for safe-launch bootstrap wrapper around skill-gates hook
+- New CI review gate with GitHub token authorization and status posting
+- Review thread resolver for CI workflows
+- Multiple library modules for hook I/O, skill gate logic, and path matching in CI scripts
+
+### Fixed
+- Fix skill-gate marker directory to be namespaced by UID to avoid conflicts
+- Fix merge-queue review gate to include required statuses scope
+- Fix derived-closure path gate misinterpreting grep failures as no-match verdicts
+- Fix decide gate to be included in hook-lifecycle watched paths
+- Fix review-thread resolver to properly resolve onto the token ladder
+
 ## [2.32.0] - 2026-08-09
 
 ### Added

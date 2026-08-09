@@ -201,8 +201,16 @@ describe("judgeTeardown", () => {
 describe("against a real repository", () => {
   it("sees work that git diff does not: staged changes in a live worktree", () => {
     const root = mkdtempSync(join(tmpdir(), "worktree-teardown-"));
+    // Git's own environment must not leak in from whatever invoked this suite.
+    // Under the pre-commit hook `GIT_INDEX_FILE` names the OUTER repo's
+    // temporary index, so `git worktree add` in this throwaway repo dies with
+    // `.git/index: index file open failed: Not a directory` — green standalone,
+    // red from a hook, which is where it actually has to run.
+    const cleanEnv = Object.fromEntries(
+      Object.entries(process.env).filter(([key]) => !key.startsWith("GIT_")),
+    );
     const git = (args, cwd) =>
-      execFileSync("git", args, { cwd, encoding: "utf8" });
+      execFileSync("git", args, { cwd, encoding: "utf8", env: cleanEnv });
     try {
       git(["init", "-q", "-b", "main", "."], root);
       git(["config", "user.email", "t@example.invalid"], root);

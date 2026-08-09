@@ -116,6 +116,34 @@ def test_every_push_path_glob_matches_itself(tmp_path: Path) -> None:
         )
 
 
+def test_a_comment_inside_the_paths_block_does_not_truncate_it(
+    tmp_path: Path,
+) -> None:
+    """A comment between entries must not end the parse.
+
+    The parser used to treat any non-entry line as the end of the block, so a
+    comment silently dropped every path below it — and the failure mode is a
+    clean exit 1, which the workflow reads as "nothing relevant, skip". Pinned
+    on a synthetic workflow rather than on the live one having a comment, so
+    removing that comment cannot quietly retire this case.
+    """
+    workflow = (
+        "name: Mutation tests\n"
+        "on:\n"
+        "  push:\n"
+        "    paths:\n"
+        '      - "src/**/*.mjs"\n'
+        "      # a comment, and a blank line, in the middle of the list\n"
+        "\n"
+        '      - "below-the-comment.mjs"\n'
+        "  pull_request:\n"
+        "jobs: {}\n"
+    )
+    repo = make_sandbox(tmp_path, workflow)
+    result = run_script(repo, "below-the-comment.mjs")
+    assert result.returncode == 0, (result.returncode, result.stderr)
+
+
 def test_zero_parsed_paths_fails_loudly(tmp_path: Path) -> None:
     """A workflow whose paths block the parser cannot find is exit >= 2 (fail
     the job), never exit 1 (which the workflow reads as a clean skip)."""

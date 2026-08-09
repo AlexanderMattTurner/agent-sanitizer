@@ -32,18 +32,10 @@ import { dirname, extname, join, normalize, relative, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parse } from "acorn";
 
-import { unsandbox } from "./repo-root.mjs";
-
-// Climbed out of Stryker's sandbox. The subject of this scan is which repo files
-// each suite READS, and a path constant it reads out of a module —
-// `export const OUTPUT_PATH = join("plugin", …)` — is unreadable in an
-// instrumented copy, where the literal has become
-// `stryMutAct_9fa48("7") ? "" : "plugin"`. Pointed at the sandbox the scan
-// therefore resolves fewer paths than it was written to resolve, its own
-// idiom-anchoring assertions fail, and every mutation shard dies in its dry run.
-// Outside a sandbox this is the identity, so the commit-time hook is unaffected.
-export const repoRoot = unsandbox(
-  join(dirname(fileURLToPath(import.meta.url)), "..", ".."),
+export const repoRoot = join(
+  dirname(fileURLToPath(import.meta.url)),
+  "..",
+  "..",
 );
 
 /**
@@ -253,11 +245,7 @@ function resolveBareSpecifier(specifier) {
     return null;
   }
   if (!url.startsWith("file:")) return null;
-  // Node resolves relative to THIS module, which under Stryker lives in the
-  // sandbox — so the answer comes back as `.stryker-tmp/sandbox-XXXXXX/src/x.mjs`,
-  // a path the tracked-file set has never heard of, and every bare specifier
-  // silently stops resolving. Map it back onto the real checkout.
-  const absolute = unsandbox(fileURLToPath(url));
+  const absolute = fileURLToPath(url);
   return absolute.startsWith(repoRoot + sep)
     ? relative(repoRoot, absolute)
     : null;

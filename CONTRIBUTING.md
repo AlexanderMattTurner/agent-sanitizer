@@ -29,6 +29,13 @@ a new module and `test/shipped-gates.test.mjs` fails until it is in both gates.
 `src/` is held at 100%; `claude-hooks/` and `bin/` carry a separate, lower
 ratchet that should only ever move up.
 
+The mutation gate additionally covers `.hooks/lib/`, which ships to nobody but
+derives the pre-commit guard-pair map — a resolver arm that quietly stops
+resolving there means guard tests stop running with nothing red. That scope is
+derived from the directory, so a new module in it joins the gate on commit and
+`test/shipped-gates.test.mjs` fails until `.github/mutation-shards.json` names
+it. It carries its own ratchet (`toolingScopeBreak`), same move-up-only rule.
+
 Run the tests, lint, type-check, and formatter before pushing. The git hooks
 under `.hooks/` also enforce formatting and commit conventions on commit.
 

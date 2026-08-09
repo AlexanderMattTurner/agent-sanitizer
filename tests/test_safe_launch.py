@@ -66,14 +66,6 @@ def write_target(sandbox: Path, body: str, name: str = "target.sh") -> Path:
     return path
 
 
-def write_node_target(sandbox: Path, body: str, name: str) -> Path:
-    """A `.mjs` hook target — safe-launch runs it through `node`, not bash."""
-    path = sandbox / ".claude" / "hooks" / name
-    path.write_text(f"#!/usr/bin/env node\n{body}\n")
-    path.chmod(0o755)
-    return path
-
-
 def run_safe_launch(
     sandbox: Path,
     target: Path,
@@ -527,23 +519,47 @@ def pretooluse_commands() -> list[str]:
     ]
 
 
-# The target each bootstrap command wraps: the SECOND `.claude/hooks/…` path in
-# it, the first being safe-launch.sh itself.
-_WRAPPED_TARGET_RE = re.compile(r"\.claude/hooks/(?P<name>[\w.-]+)")
+# The hook the bootstrap execs — matched on the `exec bash …/safe-launch.sh
+# <target>` argv itself, not on any `.claude/hooks/…` mention in the command. The
+# degraded arms name the wrapper in prose ("repair .claude/hooks/safe-launch.sh."),
+# so a looser match picks up sentence punctuation as part of a filename.
+_EXEC_TARGET = re.compile(r"exec bash \S*safe-launch\.sh\s+(?P<target>\S+?);")
+
+# A whole TARGET-RAN hook in each language safe-launch.sh dispatches, keyed by
+# the target's extension: it syntax-checks and execs through the interpreter the
+# extension selects, so a bash body under an .mjs name would fail `node --check`
+# and degrade instead of proving the target was reached.
+TARGET_SOURCES = {
+    ".sh": '#!/bin/bash\necho "TARGET-RAN"\n',
+    ".mjs": '#!/usr/bin/env node\nconsole.log("TARGET-RAN");\n',
+}
+
+# safe-launch.sh execs `node` for a JS target, and the sandbox PATH is minimal on
+# purpose (a hook must not inherit the caller's environment), so the interpreter's
+# own directory is the one addition.
+_NODE = shutil.which("node")
+assert _NODE is not None, "node is required to exercise the .mjs hook targets"
+SANDBOX_PATH = f"/usr/bin:/bin:{Path(_NODE).parent}"
 
 
-def wrapped_target(cmd: str) -> str:
-    """The hook filename a bootstrap command hands to safe-launch.
+def bootstrap_target(cmd: str) -> str:
+    """The hook filename a settings.json PreToolUse command wraps."""
+    targets = _EXEC_TARGET.findall(cmd)
+    assert len(targets) == 1, f"expected exactly one wrapped target in: {cmd}"
+    return targets[0].strip('"').rsplit("/", 1)[-1]
 
-    Derived rather than hard-coded. These tests iterate every command shipped in
-    settings.json but used to write one fixed target name, so the first handler
-    wrapping a different script made the sandbox miss the file the command
-    actually invokes — and the assertion failed on a missing hook rather than on
-    the behaviour under test.
+
+def write_bootstrap_target(sandbox: Path, cmd: str) -> Path:
+    """Install a TARGET-RAN stub under the name `cmd`'s bootstrap will exec.
+
+    Writes the whole file rather than going through write_target, which fixes a
+    bash shebang and so cannot produce a target in every dispatched language.
     """
-    names = _WRAPPED_TARGET_RE.findall(cmd)
-    assert len(names) >= 2, f"no wrapped target in: {cmd[:80]}"
-    return names[1]
+    name = bootstrap_target(cmd)
+    path = sandbox / ".claude" / "hooks" / name
+    path.write_text(TARGET_SOURCES[Path(name).suffix])
+    path.chmod(0o755)
+    return path
 
 
 def run_bootstrap(
@@ -555,7 +571,7 @@ def run_bootstrap(
         capture_output=True,
         text=True,
         env={
-            "PATH": "/usr/bin:/bin",
+            "PATH": SANDBOX_PATH,
             "CLAUDE_PROJECT_DIR": str(sandbox),
             **(extra_env or {}),
         },
@@ -569,18 +585,23 @@ def test_settings_has_pretooluse_commands() -> None:
     assert len(pretooluse_commands()) >= 1
 
 
+def test_every_bootstrap_target_is_a_shipped_hook() -> None:
+    """Positive marker for the target derivation: every name it extracts must be
+    a hook that actually ships, in a language safe-launch.sh dispatches — a
+    derivation that silently returned the wrapper would make the healthy-path
+    test assert nothing about the wrapped hook."""
+    for cmd in pretooluse_commands():
+        name = bootstrap_target(cmd)
+        assert (REPO_ROOT / ".claude" / "hooks" / name).is_file()
+        assert Path(name).suffix in TARGET_SOURCES
+
+
 def test_bootstrap_runs_target_when_wrapper_is_healthy(tmp_path: Path) -> None:
     """The commands actually configured in settings.json, run verbatim against
     a healthy sandbox, reach the wrapped target."""
     for cmd in pretooluse_commands():
         sandbox = make_sandbox(tmp_path / "healthy")
-        name = wrapped_target(cmd)
-        # safe-launch picks the interpreter from the suffix, so the target has
-        # to be written in the language its own name promises.
-        if name.endswith((".mjs", ".cjs", ".js")):
-            write_node_target(sandbox, 'console.log("TARGET-RAN");', name=name)
-        else:
-            write_target(sandbox, 'echo "TARGET-RAN"', name=name)
+        write_bootstrap_target(sandbox, cmd)
         result = run_bootstrap(cmd, sandbox)
         assert result.returncode == 0, result.stderr
         assert result.stdout == "TARGET-RAN\n"
@@ -596,7 +617,7 @@ def test_bootstrap_degrades_per_posture_when_wrapper_is_corrupt(
     applies the same posture knob as the shim it replaces."""
     for cmd in pretooluse_commands():
         sandbox = make_sandbox(tmp_path / "corrupt")
-        write_target(sandbox, 'echo "TARGET-RAN"', name="pre-push-check.sh")
+        write_bootstrap_target(sandbox, cmd)
         wrapper = sandbox / ".claude" / "hooks" / "safe-launch.sh"
         wrapper.write_text("#!/bin/bash\n<<<<<<< HEAD\n")
         result = run_bootstrap(cmd, sandbox, extra_env=posture_env(fail_open))

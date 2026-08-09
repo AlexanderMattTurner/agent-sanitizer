@@ -36,8 +36,11 @@ import {
 import { mutateSpec } from "../scripts/mutate.mjs";
 import {
   hookScope,
+  mutatedSources,
   shippedSources,
   srcScope,
+  TOOLING_SCOPE,
+  toolingSources,
 } from "../scripts/shipped-sources.mjs";
 
 const repoRoot = execFileSync("git", ["rev-parse", "--show-toplevel"], {
@@ -45,6 +48,7 @@ const repoRoot = execFileSync("git", ["rev-parse", "--show-toplevel"], {
 }).trim();
 
 const shipped = shippedSources(repoRoot);
+const mutated = mutatedSources(repoRoot);
 const pkg = JSON.parse(readFileSync(join(repoRoot, "package.json"), "utf8"));
 
 /** Every `.mjs` the manifest names, read straight off `package.json` rather
@@ -92,6 +96,17 @@ const HOOK_FLOORS = { lines: 93, branches: 88, functions: 87, statements: 93 };
 
 /** The hook layer's mutation ratchet, same contract as the coverage floors. */
 const HOOK_SCOPE_BREAK = 30;
+
+/**
+ * The `.hooks/lib` tooling's mutation ratchet.
+ *
+ * 1 is a LIVENESS bar, not a quality one: the scope has never been measured (it
+ * joins the gate in the same change that adds this), and the aggregator refuses
+ * a scope that scored no mutants, so a threshold of 1 still fails a matrix that
+ * stopped mutating it. Raise this and `toolingScopeBreak` together once the
+ * first CI run reports the real score.
+ */
+const TOOLING_SCOPE_BREAK = 1;
 
 /** Parse "src/a.mjs:1-50,src/b.mjs" into [{file, ranged}, ...]. */
 const parseMutate = (mutate) =>
@@ -274,15 +289,15 @@ describe("coverage gate covers the shipped set", () => {
   });
 });
 
-describe("mutation gate covers the shipped set", () => {
+describe("mutation gate covers the mutated set", () => {
   const shards = expandShards(repoRoot);
   const entries = shards.flatMap((shard) => parseMutate(shard.mutate));
 
-  it("puts every shipped file in the shard matrix, whole files exactly once", () => {
+  it("puts every mutated file in the shard matrix, whole files exactly once", () => {
     assert.deepEqual(
       [...new Set(entries.map((e) => e.file))].sort(),
-      shipped,
-      "shard file set must equal the shipped set (add a `split` entry or `group` in .github/mutation-shards.json)",
+      mutated,
+      "shard file set must equal the mutated set (add a `split` entry or `group` in .github/mutation-shards.json)",
     );
 
     // A split file is deliberately spread over several line-ranged shards (the
@@ -297,8 +312,31 @@ describe("mutation gate covers the shipped set", () => {
       assert.equal(count, 1, `${file} appears in ${count} whole-file shards`);
   });
 
-  it("passes the whole shipped set to an unsharded run", () => {
-    assert.deepEqual(mutateSpec(repoRoot).split(","), shipped);
+  it("passes the whole mutated set to an unsharded run", () => {
+    assert.deepEqual(mutateSpec(repoRoot).split(","), mutated);
+  });
+
+  it("mutates the .hooks/lib tooling, derived from the directory", () => {
+    // The tooling half is not in the manifest, so nothing else in this file
+    // would notice it vanishing from the gate. Both halves are asserted
+    // non-empty: an empty `toolingSources` would make the equality above hold
+    // against a shard matrix that had also dropped it.
+    const tooling = toolingSources(repoRoot);
+    assert.ok(
+      tooling.includes(`${TOOLING_SCOPE}guarded-data-scan.mjs`),
+      `expected the guard-pair scanner in the tooling scope, got ${tooling.join(", ") || "nothing"}`,
+    );
+    for (const file of tooling)
+      assert.ok(
+        mutated.includes(file),
+        `${file} is in the tooling scope but not in the mutated set`,
+      );
+    // Disjoint by construction; an overlap would double-count in the aggregate,
+    // whose scopes partition on the same two prefixes.
+    assert.deepEqual(
+      shipped.filter((file) => file.startsWith(TOOLING_SCOPE)),
+      [],
+    );
   });
 
   it("keeps `mutate` out of stryker.conf.json so it cannot go stale", () => {
@@ -312,7 +350,7 @@ describe("mutation gate covers the shipped set", () => {
     assert.equal(conf.mutate, undefined);
   });
 
-  it("gates the hook scope on its own explicit, non-zero break threshold", () => {
+  it("gates the hook and tooling scopes on their own explicit, non-zero break thresholds", () => {
     const shardConf = JSON.parse(
       readFileSync(join(repoRoot, ".github", "mutation-shards.json"), "utf8"),
     );
@@ -322,6 +360,10 @@ describe("mutation gate covers the shipped set", () => {
     assert.ok(
       shardConf.hookScopeBreak >= HOOK_SCOPE_BREAK,
       `hookScopeBreak is a ratchet: it may rise above ${HOOK_SCOPE_BREAK} (raise HOOK_SCOPE_BREAK with it) but never fall, got ${shardConf.hookScopeBreak}`,
+    );
+    assert.ok(
+      shardConf.toolingScopeBreak >= TOOLING_SCOPE_BREAK,
+      `toolingScopeBreak is a ratchet: it may rise above ${TOOLING_SCOPE_BREAK} (raise TOOLING_SCOPE_BREAK with it) but never fall, got ${shardConf.toolingScopeBreak}`,
     );
     // src/ keeps its own long-standing floor; the hook ratchet must never be
     // used as an excuse to lower it.

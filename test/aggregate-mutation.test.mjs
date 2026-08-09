@@ -14,9 +14,14 @@
  * over the real 28 shard reports is exercised by running the script in CI.
  */
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import { describe, it } from "node:test";
 
-import { tallyMutants } from "../.github/scripts/aggregate-mutation.mjs";
+import {
+  gatedScopes,
+  tallyMutants,
+} from "../.github/scripts/aggregate-mutation.mjs";
+import { mutatedSources } from "../scripts/shipped-sources.mjs";
 
 /** Build a mutant with a distinct-by-default location so tests opt IN to
  * collisions by passing the same `loc`, rather than colliding by accident. */
@@ -174,5 +179,42 @@ describe("tallyMutants", () => {
     assert.equal(detected, 0);
     assert.equal(undetected, 0);
     assert.equal(score, 0);
+  });
+});
+
+describe("gatedScopes", () => {
+  it("partitions every mutated file into exactly one gated scope", () => {
+    // Each scope applies its own break threshold to whatever it claims. A file
+    // claimed twice is gated twice — the library's floor applied to tooling it
+    // was never measured against — and a file claimed by nothing is scored by
+    // no threshold at all, which is the silent ungating the split exists to
+    // prevent. Run over the LIVE mutated set, so a new directory that fits none
+    // of the prefixes fails here rather than at the next aggregate run.
+    const scopes = gatedScopes({
+      breakThreshold: 83,
+      hookScopeBreak: 30,
+      toolingScopeBreak: 1,
+    });
+    const files = mutatedSources(
+      execFileSync("git", ["rev-parse", "--show-toplevel"], {
+        encoding: "utf8",
+      }).trim(),
+    );
+    assert.ok(files.length > 0, "the mutated set must not be empty");
+    for (const file of files) {
+      const claimed = scopes.filter((scope) => scope.inScope(file));
+      assert.equal(
+        claimed.length,
+        1,
+        `${file} is claimed by ${claimed.length} scope(s): ${claimed.map((s) => s.name).join(", ") || "none"}`,
+      );
+    }
+    // Every scope must claim something, or its threshold gates an empty set —
+    // the vacuous pass the aggregator's own empty-scope check also refuses.
+    for (const scope of scopes)
+      assert.ok(
+        files.some((file) => scope.inScope(file)),
+        `scope "${scope.name}" claims no mutated file`,
+      );
   });
 });

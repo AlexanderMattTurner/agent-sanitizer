@@ -28,8 +28,15 @@ let scratch;
 let origin;
 let clone;
 
+// Git's own environment must not leak in from whatever invoked this suite:
+// under the pre-commit hook `GIT_INDEX_FILE` names the OUTER repo's temporary
+// index, and every git call in this throwaway repo would use it.
+const cleanEnv = Object.fromEntries(
+  Object.entries(process.env).filter(([key]) => !key.startsWith("GIT_")),
+);
+
 const git = (args, cwd) =>
-  execFileSync("git", args, { cwd, encoding: "utf8" }).trim();
+  execFileSync("git", args, { cwd, encoding: "utf8", env: cleanEnv }).trim();
 
 /**
  * Run the hook against `clone` with one ref line on stdin.
