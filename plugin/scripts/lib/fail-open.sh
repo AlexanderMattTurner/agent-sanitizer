@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+# shellcheck shell=bash
 # GENERATED from FAIL_CLOSED_VALUES in claude-hooks/lib/hook-io.mjs — do not
 # edit by hand. Regenerate with:
 #
@@ -12,7 +12,8 @@
 # asserts every remaining hand-written implementation agrees with it.
 #
 # Returns 0 to fail OPEN (the default: the guarded action runs, loudly), 1 to
-# fail CLOSED (block/ask/suppress). Sourced, never executed.
+# fail CLOSED (block/ask/suppress). Sourced, never executed — hence no shebang
+# and no +x bit (the repo's shebang/executable pre-commit hook pairs the two).
 agent_sanitizer_fail_open() {
   case "${AGENT_SANITIZER_FAIL_OPEN:-}" in
   0 | false) return 1 ;;

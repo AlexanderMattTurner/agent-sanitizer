@@ -285,7 +285,7 @@ IMPLEMENTATION_IDIOMS = (
 )
 
 # Tests assert ABOUT the literals; they are not implementations of the posture.
-_TEST_PATH = re.compile(r"(^|/)tests?/|\.test\.(mjs|py)$")
+_TEST_PATH = re.compile(r"(?:^|/)tests?/|\.test\.(?:mjs|py)$")
 
 
 def posture_implementation_files() -> list[str]:
