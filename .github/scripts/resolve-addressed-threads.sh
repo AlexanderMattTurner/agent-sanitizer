@@ -30,11 +30,12 @@
 set -euo pipefail
 
 : "${PR_INPUT_DIR:?PR_INPUT_DIR required}"
-<<<<<<< local
-: "${GH_RESOLVE_TOKEN:?GH_RESOLVE_TOKEN required — the Actions GITHUB_TOKEN cannot resolve review threads (only reply); set a PAT (TEMPLATE_SYNC_TOKEN_ORG) with pull-request write}"
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=lib/github-token-ladder.bash disable=SC1091
+source "$SCRIPT_DIR/lib/github-token-ladder.bash"
 # shellcheck source=.github/scripts/lib-ci-retry.sh
-source "$(dirname "${BASH_SOURCE[0]}")/lib-ci-retry.sh"
+source "$SCRIPT_DIR/lib-ci-retry.sh"
 
 # The resolve PAT is a USER credential, so its API budget is shared with every
 # other job and session acting as that user — an exhausted budget answers this
@@ -46,14 +47,6 @@ source "$(dirname "${BASH_SOURCE[0]}")/lib-ci-retry.sh"
 # broken credential config, and it has to go red either way.
 RETRY_MAX=5
 RETRY_BASE_DELAY=5
-||||||| base
-: "${GH_RESOLVE_TOKEN:?GH_RESOLVE_TOKEN required — the Actions GITHUB_TOKEN cannot resolve review threads (only reply); set a PAT (TEMPLATE_SYNC_TOKEN) with pull-request write}"
-=======
-
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-# shellcheck source=lib/github-token-ladder.bash disable=SC1091
-source "$SCRIPT_DIR/lib/github-token-ladder.bash"
->>>>>>> template
 
 die() {
   echo "$*" >&2

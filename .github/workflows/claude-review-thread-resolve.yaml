@@ -156,9 +156,16 @@ jobs:
           # claude.yaml/template-sync.yaml) is scoped to THIS step only, never the
           # Haiku step, so it is out of reach of a model injection. The ambient
           # GH_TOKEN (GITHUB_TOKEN) still posts the audit reply, keeping the
-          # github-actions[bot] identity. Falls back to GITHUB_TOKEN — which then
-          # fails loud on the resolve — if the PAT is unset.
-          GH_RESOLVE_TOKEN: ${{ secrets.TEMPLATE_SYNC_TOKEN_ORG || secrets.GITHUB_TOKEN }}
+          # github-actions[bot] identity.
+          #
+          # The rungs, not a `||` chain: resolve-addressed-threads.sh picks the
+          # first credential with API quota left, so a configured-but-spent PAT
+          # is stepped over instead of taking the resolve down at its first call.
+          # The Actions token is the last rung and cannot resolve — reaching it
+          # means every PAT is spent, and the resolve fails loud there.
+          GH_TOKEN_ORG_PAT: ${{ secrets.TEMPLATE_SYNC_TOKEN_ORG }}
+          GH_TOKEN_REPO_PAT: ${{ secrets.TEMPLATE_SYNC_TOKEN }}
+          GH_TOKEN_ACTIONS: ${{ secrets.GITHUB_TOKEN }}
         run: bash .github/scripts/resolve-addressed-threads.sh
 
       # Re-post the merge gate's verdict, because resolving a thread fires NO
