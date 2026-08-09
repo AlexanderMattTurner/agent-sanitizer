@@ -13,6 +13,8 @@ import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 
+import { unsandbox } from "./helpers/repo-root.mjs";
+
 import {
   extraCodepoints,
   cfCodepoints,
@@ -144,6 +146,14 @@ describe("standardized-variants SSOT", () => {
 });
 
 describe("generated modules are byte-identical to a fresh generation", () => {
+  // Read the SHIPPED file, not the copy this suite is running beside. Both paths
+  // come from the generator module and are absolute, so under Stryker they point
+  // INTO the sandbox — where src/cf-charset.mjs is instrumented, because it is a
+  // mutated source. A byte comparison against clean generator output then fails
+  // for a reason that has nothing to do with drift, and takes every shard's dry
+  // run with it. This is the #279 class, and this very test walked into it.
+  const shipped = (absolute) => readFileSync(unsandbox(absolute), "utf8");
+
   // The SEMANTIC round-trips above compare code points, which is exactly why
   // src/cf-charset.mjs was able to drift from its own generator by whitespace
   // alone and stay green: Prettier repacked the flat number array the generator
@@ -152,7 +162,7 @@ describe("generated modules are byte-identical to a fresh generation", () => {
   // generator's template with no regeneration, re-lands the same divergence.
   it("src/cf-charset.mjs matches cfCharsetModule() byte for byte", () => {
     assert.equal(
-      readFileSync(CF_MODULE_PATH, "utf8"),
+      shipped(CF_MODULE_PATH),
       cfCharsetModule(),
       "src/cf-charset.mjs is stale — run `node scripts/gen-invisible-charset.mjs`",
     );
@@ -160,7 +170,7 @@ describe("generated modules are byte-identical to a fresh generation", () => {
 
   it("the charset JSON matches charsetDoc() byte for byte", () => {
     assert.equal(
-      readFileSync(OUTPUT_PATH, "utf8"),
+      shipped(OUTPUT_PATH),
       JSON.stringify(charsetDoc(), null, 2) + "\n",
       "the charset JSON is stale — run `node scripts/gen-invisible-charset.mjs`",
     );
