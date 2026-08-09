@@ -8,16 +8,24 @@ consumer) supplies its own provider/host-credential lists rather than the core
 reading a monitor-providers.json or scanning ``os.environ``.
 """
 
+import json
 from collections.abc import Mapping
 from dataclasses import dataclass, field
+from pathlib import Path
 
 from .invisible import default_charset
 from .placeholders import validate_placeholder_label
 
 # Floor below which a configured env value is treated as a placeholder, not a
 # real key — a var set to a short test stub ("fake", "sk-test") must not blank
-# out unrelated output. Real inference/host keys are far longer.
-DEFAULT_MIN_SECRET_LEN = 16
+# out unrelated output. Real inference/host keys are far longer. Read from the
+# shared data file (like credential-names.json beside it) because the JS
+# Layer-4 pre-gate applies the same floor: a hand-copied "mirrors" pair let the
+# two gates drift, and a lower Python floor with a stale JS copy means a short
+# credential never trips the pre-gate, so the daemon is never even called.
+DEFAULT_MIN_SECRET_LEN: int = json.loads(
+    (Path(__file__).resolve().parent / "data" / "redaction-floor.json").read_text()
+)["min_secret_len"]
 
 
 @dataclass(frozen=True)

@@ -32,7 +32,7 @@ Keep recurring personal nitpicks and review-feedback patterns in `CLAUDE.local.m
 
 ## Git Workflow
 
-Commits MUST use [Conventional Commits](https://www.conventionalcommits.org/) (`<type>(<scope>): <desc>`). The `commit-msg` hook enforces this. Types: feat, fix, refactor, docs, test, chore, ci, style, perf, build. Use `!` for breaking changes.
+Commits MUST use [Conventional Commits](https://www.conventionalcommits.org/) (`<type>(<scope>): <desc>`). The `commit-msg` hook enforces this. Types: feat, fix, refactor, docs, test, chore, ci, style, perf, build, revert. Use `!` for breaking changes.
 
 ## Pull Requests
 

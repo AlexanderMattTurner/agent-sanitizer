@@ -26,7 +26,13 @@ jobs:
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
-          sparse-checkout: .github/scripts
+          # Cone-mode sparse checkout of .github/scripts also materializes
+          # .github/tool-versions.sh (an immediate file of an ancestor dir),
+          # which install-gitleaks.sh sources for its pin; list it anyway so the
+          # dependency is explicit.
+          sparse-checkout: |
+            .github/scripts
+            .github/tool-versions.sh
           persist-credentials: false
 
       - name: Extract lessons from PR body
@@ -37,30 +43,15 @@ jobs:
             const run = require('./.github/scripts/phone-home-extract.js')
             await run({github, context, core})
 
+      # Version + SHA-256 pin live in .github/tool-versions.sh (one pin, shared
+      # with gitleaks.yaml); the script sha256-verifies the tarball before
+      # extracting, so a tampered release asset can't inject a malicious binary
+      # next to the TEMPLATE_SYNC_TOKEN step below.
       - name: Scan lessons for leaked secrets
         if: steps.extract.outputs.has_lessons == 'true'
-        env:
-          GITLEAKS_VERSION: "8.30.1"
-          # Published SHA-256 of gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz.
-          # Verify before extracting so a tampered release asset can't inject a
-          # malicious binary next to the TEMPLATE_SYNC_TOKEN_ORG step. MUST match
-          # GITLEAKS_VERSION and stay in lockstep with gitleaks.yaml's pin.
-          GITLEAKS_SHA256: "551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb"
         run: |
           set -euo pipefail
-          tarball="/tmp/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
-          # Download to a file (not a pipe) so the digest is verified before extract.
-          # Retry/timeout flags harden against transient release-CDN failures.
-          curl --proto '=https' -fsSL --retry 6 --retry-all-errors --retry-delay 15 --connect-timeout 30 \
-            "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz" \
-            -o "$tarball"
-          case "$GITLEAKS_SHA256" in
-            PLACEHOLDER_*)
-              echo "::error::GITLEAKS_SHA256 is still the placeholder. Set the real published SHA-256 for gitleaks ${GITLEAKS_VERSION} before this scan can run." >&2
-              exit 1 ;;
-          esac
-          echo "${GITLEAKS_SHA256}  ${tarball}" | sha256sum -c -
-          tar xz -C /usr/local/bin -f "$tarball" gitleaks
+          bash .github/scripts/install-gitleaks.sh
           gitleaks detect --no-git -s /tmp/phone-home -v
 
       - name: Submit to template repo

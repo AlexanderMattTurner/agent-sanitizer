@@ -8,6 +8,36 @@ adhere to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+## [2.28.2] - 2026-08-09
+
+### Fixed
+
+- CI sanitizer installation no longer runs the checkout's pnpm build.
+
+## [2.28.1] - 2026-08-09
+
+### Fixed
+- CI: corrected repo-root lint behavior in the helper's post-merge shape.
+
+### Changed
+- Performance: memoized the env-value pre-gate regex to improve efficiency.
+- Build: updated prettier configuration to ignore tool cache directories.
+
+### Removed
+- Removed the conformance corpus from shipping, streamlining the codebase.
+
+## [2.28.0] - 2026-08-09
+
+### Added
+- Expose `exfilScan` on the facade for direct access to exfiltration scanning functionality.
+
+### Changed
+- HTML sanitization now implies the exfiltration scan unconditionally.
+- Converge the PR-input script onto the unified `exfilScan` interface.
+
+### Fixed
+- Repair the sanitize-pr-input merge resolution and tier exfiltration findings as notes.
+
 ## [2.27.0] - 2026-08-08
 
 ### Changed

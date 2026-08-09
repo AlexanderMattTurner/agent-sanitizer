@@ -8,18 +8,12 @@ from pathlib import Path
 
 import pytest
 
+from tests._helpers import REPO_ROOT
+
 pytestmark = pytest.mark.skipif(
     shutil.which("node") is None, reason="node not available"
 )
 
-REPO_ROOT = Path(
-    subprocess.run(
-        ["git", "rev-parse", "--show-toplevel"],
-        capture_output=True,
-        text=True,
-        check=True,
-    ).stdout.strip()
-)
 SCRIPT = REPO_ROOT / ".github" / "scripts" / "phone-home-extract.js"
 # The script hardcodes this output dir, so these tests must run serially
 # (no pytest-xdist); the autouse fixture clears it before/after each test.

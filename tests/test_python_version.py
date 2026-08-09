@@ -18,16 +18,7 @@ import re
 import subprocess
 from pathlib import Path
 
-# Resolve the repo root via git rather than parent-walking from __file__, so the
-# test keeps working if it is moved (per the project test conventions).
-REPO_ROOT = Path(
-    subprocess.run(
-        ["git", "rev-parse", "--show-toplevel"],
-        capture_output=True,
-        text=True,
-        check=True,
-    ).stdout.strip()
-)
+from tests._helpers import REPO_ROOT
 
 # The frozen placeholder committed to python/pyproject.toml. The release workflow
 # overwrites this in the working tree with the real version before building; the

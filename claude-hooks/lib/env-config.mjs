@@ -22,6 +22,7 @@
 import { credentialNameMatcher } from "agent-sanitizer/credential-names-matcher";
 
 import credentialNames from "../../python/agent_sanitizer/secrets/data/credential-names.json" with { type: "json" };
+import redactionFloor from "../../python/agent_sanitizer/secrets/data/redaction-floor.json" with { type: "json" };
 import inferenceKeys from "../config/inference-key-vars.json" with { type: "json" };
 import scrubbed from "../config/scrubbed-env-vars.json" with { type: "json" };
 
@@ -102,7 +103,10 @@ function hostSource() {
  */
 export function minEnvSecretLen() {
   const hostLen = hostSource()?.minSecretLen;
-  if (hostLen === undefined) return inferenceKeys.min_secret_len;
+  // The package floor comes from the same physical file
+  // agent_sanitizer.secrets.config reads (DEFAULT_MIN_SECRET_LEN), so the JS
+  // pre-gate and the Python daemon cannot drift apart on it.
+  if (hostLen === undefined) return redactionFloor.min_secret_len;
   if (!Number.isInteger(hostLen) || hostLen <= 0)
     throw new Error(
       `${HOST_SOURCE_LABEL}: minSecretLen must be a positive integer, got ${JSON.stringify(hostLen)}`,

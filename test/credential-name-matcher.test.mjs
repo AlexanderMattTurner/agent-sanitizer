@@ -15,6 +15,7 @@
  */
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 
 import {
   credentialNameMatcher,
@@ -249,5 +250,73 @@ describe("a hostile variable NAME cannot stall the matcher", () => {
       lookups <= 4 * segments,
       `${lookups} membership tests for ${segments} segments is not linear`,
     );
+  });
+});
+
+describe("the shared conformance corpus: the rule, checked across the language boundary", () => {
+  // The vocabulary is one file; the RULE built from it is two hand-written twins,
+  // and npm cannot import the Python one. `credential-names.cases.json` is the
+  // seam: the same cases with the same literal verdicts run here and in
+  // tests/secrets/test_credential_names.py, so a divergence reds in whichever
+  // language broke instead of shipping to one ecosystem only. Read by relative
+  // path, not through the package exports map — a test fixture has no business
+  // in the published surface. It lives under tests/data/ rather than beside the
+  // vocabulary it exercises for exactly that reason: hatchling's wheel target
+  // takes every tracked file under agent_sanitizer/, so colocating it would put
+  // 60 KB of test cases into every `pip install` next to the runtime data it is
+  // easily mistaken for.
+  const CASES = JSON.parse(
+    readFileSync(
+      new URL("../tests/data/credential-names.cases.json", import.meta.url),
+      "utf8",
+    ),
+  ).cases;
+
+  it("is not empty, and every case is well-formed", () => {
+    // Non-vacuity: a corpus that failed to load would pass every loop below
+    // while asserting nothing, in both languages at once.
+    assert.ok(CASES.length >= 100, `only ${CASES.length} conformance cases`);
+    for (const c of CASES) {
+      assert.equal(typeof c.name, "string", c.id);
+      assert.ok(["trailing", "any-segment"].includes(c.scope), c.id);
+      assert.equal(typeof c.declineNonSecret, "boolean", c.id);
+      assert.equal(typeof c.expected, "boolean", c.id);
+    }
+    assert.equal(new Set(CASES.map((c) => c.id)).size, CASES.length);
+  });
+
+  it("covers every rendering the packaged vocabulary produces", () => {
+    // The contract that keeps the corpus from falling behind the words: add a
+    // noun to credential-names.json without a case here and this reds, rather
+    // than leaving the new noun's rule unchecked in one language.
+    const names = new Set(CASES.map((c) => c.name));
+    const { segments, nonSecretSegments } = credentialNames();
+    for (const form of [...segments, ...nonSecretSegments])
+      assert.ok(names.has(form), `no conformance case for ${form}`);
+  });
+
+  const matchers = new Map();
+  const matcherFor = ({ scope, declineNonSecret }) => {
+    const key = `${scope}/${declineNonSecret}`;
+    if (!matchers.has(key))
+      matchers.set(key, credentialNameMatcher({ scope, declineNonSecret }));
+    return matchers.get(key);
+  };
+
+  let consumed = 0;
+  for (const c of CASES)
+    it(`${c.id}`, () => {
+      assert.equal(
+        matcherFor(c)(c.name),
+        c.expected,
+        `${JSON.stringify(c.name)} under scope=${c.scope} declineNonSecret=${c.declineNonSecret}: ${c.why}`,
+      );
+      consumed += 1;
+    });
+
+  it("ran every case", () => {
+    // A case silently dropped (a filter, a `continue`, a malformed entry) is a
+    // hole in exactly the coverage this corpus exists to provide.
+    assert.equal(consumed, CASES.length);
   });
 });

@@ -20,6 +20,12 @@ GITLEAKS_TOML = REPO_ROOT / ".gitleaks.toml"
 
 
 def _allowlist_paths() -> list[str]:
+    """Every allowlisted path, across both spellings gitleaks accepts.
+
+    A single `[allowlist]` table and an array of `[[allowlists]]` tables are
+    equivalent to gitleaks, so reading only one spelling would let a config
+    rewritten into the other form pass this guard vacuously.
+    """
     config = tomllib.loads(GITLEAKS_TOML.read_text())
     # `[[allowlists]]` (array of tables), not a single `[allowlist]`: each
     # allowlist scopes its own paths and reason, so widening one cannot
@@ -49,10 +55,16 @@ def test_nested_lookalike_is_not_allowlisted() -> None:
         c.search("evil/python/agent_sanitizer/secrets/data/secret-detectors.json")
         for c in compiled
     )
+    assert not any(
+        c.search("evil/test/claude-hooks-layer2-spans.test.mjs") for c in compiled
+    )
     # Positive markers: the real fixture paths still match, so we know the
-    # patterns are live and the negatives above aren't passing vacuously.
+    # patterns are live and the negatives above aren't passing vacuously. One
+    # per allowlist entry, so an entry that stops matching is caught here rather
+    # than silently widening nothing.
     assert any(c.search("tests/secrets/aws.txt") for c in compiled)
     assert any(
         c.search("python/agent_sanitizer/secrets/data/secret-detectors.json")
         for c in compiled
     )
+    assert any(c.search("test/claude-hooks-layer2-spans.test.mjs") for c in compiled)

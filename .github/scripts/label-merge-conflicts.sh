@@ -21,7 +21,13 @@ set -euo pipefail
 
 : "${GH_TOKEN:?}" "${REPO:?}"
 
-export LABEL="merge-conflict"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=lib/shared-names.bash disable=SC1091
+source "$SCRIPT_DIR/lib/shared-names.bash"
+
+# The label name comes from the cross-language SSOT (lib/shared-names.json):
+# this script WRITES the label that discover.py and workflow gates read.
+export LABEL="$_LABEL_MERGE_CONFLICT"
 
 gh label create "$LABEL" --repo "$REPO" --color d93f0b --force \
   --description "This PR has merge conflicts with its base branch"
