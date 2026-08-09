@@ -62,6 +62,7 @@ EXTERNAL_REPOS = {
     "pre-commit/pre-commit-hooks": "pinned pre-commit hook source",
     "scop/pre-commit-shfmt": "pinned pre-commit hook source",
     "shellcheck-py/shellcheck-py": "pinned pre-commit hook source",
+    "Yelp/detect-secrets": "the secret-detection engine the redaction layer runs",
 }
 
 #: Deliberate stand-ins in docs, tests and error prose — never a real repo.
