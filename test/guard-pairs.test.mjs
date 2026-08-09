@@ -30,7 +30,15 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { parse } from "acorn";
 
-const repoRoot = dirname(dirname(fileURLToPath(import.meta.url)));
+// The SHIPPED tree, climbed out of Stryker's sandbox. What this suite resolves
+// is which repo files each test opens, and a path constant it reads out of a
+// module — `export const OUTPUT_PATH = join("plugin", …)` — is not readable in
+// an instrumented copy, where the literal has become
+// `stryMutAct_9fa48("7") ? "" : "plugin"`. Analysed against the sandbox the scan
+// therefore resolves FEWER paths than the count pinned below and fails, taking
+// every mutation shard with it. Analysed against the shipped sources it answers
+// the question it is actually asking. Outside a sandbox the two are identical.
+import { repoRoot, unsandbox } from "./helpers/repo-root.mjs";
 
 const { pairs } = JSON.parse(
   readFileSync(join(repoRoot, ".hooks", "guard-pairs.json"), "utf8"),
@@ -259,7 +267,11 @@ function resolveBareSpecifier(specifier) {
     return null;
   }
   if (!url.startsWith("file:")) return null;
-  const absolute = fileURLToPath(url);
+  // Node resolves relative to THIS module, which under Stryker lives in the
+  // sandbox — so the answer comes back as `.stryker-tmp/sandbox-XXXXXX/src/x.mjs`,
+  // a path the tracked-file set below has never heard of, and every bare
+  // specifier silently stops resolving. Map it back onto the real checkout.
+  const absolute = unsandbox(fileURLToPath(url));
   return absolute.startsWith(repoRoot + sep)
     ? relative(repoRoot, absolute)
     : null;
@@ -299,14 +311,14 @@ function resolvePath(node, file, scope) {
   }
   if (node.type !== "CallExpression") return null;
   if (isGitRootCall(node, scope)) return "";
-  // `climbOutOfSandbox(p)` from test/helpers/repo-root.mjs is the identity on a
+  // `unsandbox(p)` from test/helpers/repo-root.mjs is the identity on a
   // repo-RELATIVE path: outside a sandbox it returns its argument, and inside one
   // it strips the `.stryker-tmp/sandbox-XXXXXX` segment, which repo-relative is
   // the same place. Named rather than inferred, exactly like the git arm above —
   // a resolver that guessed at unknown calls would resolve paths that are not
   // paths. The helper is the blessed replacement for that git call, so without
   // this arm every suite that adopts it drops out of the scan silently.
-  if (calleeName(node.callee) === "climbOutOfSandbox")
+  if (calleeName(node.callee) === "unsandbox")
     return node.arguments.length === 1
       ? resolvePath(node.arguments[0], file, scope)
       : null;

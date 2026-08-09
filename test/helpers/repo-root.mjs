@@ -26,18 +26,31 @@ import { fileURLToPath } from "node:url";
 export const SANDBOX_MARKER = `${sep}.stryker-tmp${sep}sandbox-`;
 
 /**
- * Strip a sandbox suffix from an absolute path, returning the real repo root.
- * Exported for the unit test; callers want `repoRoot`.
- * @param {string} somePathInside an absolute path inside the checkout or a copy
+ * The same path in the real checkout: the `.stryker-tmp/sandbox-XXXXXX`
+ * segment removed, everything below it kept.
+ *
+ * Removing the segment rather than truncating at it is what makes this work for
+ * a FILE as well as for a root. `…/sandbox-abc123` becomes the repo root, and
+ * `…/sandbox-abc123/src/index.mjs` becomes `<repoRoot>/src/index.mjs` — which is
+ * what a caller comparing a resolved module path against the root needs. A path
+ * outside a sandbox is returned unchanged.
+ *
+ * @param {string} somePath an absolute path inside the checkout or a copy
  * @returns {string}
  */
-export function climbOutOfSandbox(somePathInside) {
-  const at = somePathInside.indexOf(SANDBOX_MARKER);
-  return at === -1 ? somePathInside : somePathInside.slice(0, at);
+export function unsandbox(somePath) {
+  const at = somePath.indexOf(SANDBOX_MARKER);
+  if (at === -1) return somePath;
+  const root = somePath.slice(0, at);
+  // What follows the marker is `<id>` or `<id>/<rest>`; only `<rest>` survives.
+  const afterId = somePath.slice(at + SANDBOX_MARKER.length).indexOf(sep);
+  return afterId === -1
+    ? root
+    : root + somePath.slice(at + SANDBOX_MARKER.length + afterId);
 }
 
 /** Absolute path to the real repo root, sandbox or not. No trailing separator. */
-export const repoRoot = climbOutOfSandbox(
+export const repoRoot = unsandbox(
   // A directory URL carries a trailing separator; `resolve` drops it so callers
   // can join, compare and print this value without a doubled separator.
   resolve(fileURLToPath(new URL("../..", import.meta.url))),
