@@ -801,12 +801,17 @@ describe("whole-pipeline Layer-2 round-trip fuzz", () => {
           const context = response?.additionalContext ?? "";
           assert.equal(response?.permissionDecision, undefined);
           assert.equal(response?.updatedInput, undefined);
-          // Each advisory fires exactly when its own grammar is present.
+          // Each advisory fires exactly when its own grammar is present. The
+          // opening clause is the stable handle on each: the token list after
+          // it is input-derived, so matching on that would test the fixture.
           assert.equal(
-            context.includes("[hidden HTML removed #…]"),
+            context.includes("hidden-content splice markers:"),
             keys.length > 0,
           );
-          assert.equal(context.includes("[REDACTED…]"), hasSecretLookalike);
+          assert.equal(
+            context.includes("secret-redaction placeholder text:"),
+            hasSecretLookalike,
+          );
           for (const key of keys)
             assert.ok(context.includes(`span-${key}.txt`));
           if (keys.length > 0) bag.layer2Advisories++;
