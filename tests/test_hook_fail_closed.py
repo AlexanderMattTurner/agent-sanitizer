@@ -47,6 +47,11 @@ def init_repo(tmp_path: Path) -> Path:
     repo = tmp_path / "repo"
     repo.mkdir()
     subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+    # A CI runner has no global git identity, so a sandbox that commits (the
+    # staged-deletion cases seed a commit first) dies with "empty ident name"
+    # there while passing on any developer machine.
+    for key, value in (("user.email", "test@example.com"), ("user.name", "Test")):
+        subprocess.run(["git", "config", key, value], cwd=repo, check=True)
     # Every .hooks/ hook sources lib-gate.sh relative to the sandbox's own git
     # root, not to the hook's own path, so the helper has to exist here even
     # when the hook under test is invoked from REPO_ROOT.
