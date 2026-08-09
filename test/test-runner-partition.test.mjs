@@ -230,6 +230,26 @@ describe("test-runner discovery partition", () => {
       assert.ok(!DOT_HOOK_FILES.test(unwanted), `${unwanted} matched the hook`);
   });
 
+  it("checks each derived runner is actually invoked by something", () => {
+    // A claim read from the runner's OWN configuration stays true after nothing
+    // invokes that runner any more: delete the workflow step and
+    // run-script-tests.sh, its pathspec and therefore its claim are all still
+    // there, so its suites run in no job while the partition above stays green.
+    // That is the one-direction gate this file exists to close, one level up.
+    assert.match(
+      WORKFLOWS.map(read).join("\n"),
+      /run-script-tests\.sh/u,
+      "no workflow invokes run-script-tests.sh, so its claim runs nothing",
+    );
+    // `discoveredByDefault` stands in for `pnpm test` reaching `node --test`;
+    // repointing that script would retire the largest claim silently.
+    assert.match(
+      JSON.parse(read("package.json")).scripts.test,
+      /^node scripts\/coverage\.mjs$/u,
+      "`pnpm test` no longer reaches `node --test`, so default discovery claims nothing",
+    );
+  });
+
   it("runs the dot-directory suites rather than merely linting them", () => {
     // `entry: node --test` with pre-commit's default pass_filenames means the
     // matched paths ARE the arguments. Turning that off would hand `node --test`

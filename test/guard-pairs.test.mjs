@@ -153,6 +153,26 @@ const DATA_EXTENSIONS = new Set([
  */
 const MIRROR_EXTENSIONS = new Set([".py", ".sh"]);
 
+/**
+ * True for a tracked file that is a script with no extension to key on.
+ *
+ * Keying the scan on `extname` alone made MIRROR_EXTENSIONS an allowlist, and
+ * the repo's shell scripts with the strongest claim to it — `.hooks/commit-msg`,
+ * `.hooks/pre-commit`, `.hooks/pre-push` — have no extension at all. One of them
+ * is already mirrored by path (`.github/scripts/synced-deps.test.mjs` parses
+ * `commit-msg`'s `config="…"` line), so the same gap the hook-timing.sh case
+ * motivated survived one filename convention over. The shebang is what makes it
+ * a script, so that is what the scan asks.
+ * @param {string} path
+ * @returns {boolean}
+ */
+function isExtensionlessScript(path) {
+  return (
+    extname(path) === "" &&
+    readFileSync(join(repoRoot, path), "utf8").startsWith("#!")
+  );
+}
+
 /** Everything the scan is responsible for accounting for. */
 const SCANNED_EXTENSIONS = new Set([...DATA_EXTENSIONS, ...MIRROR_EXTENSIONS]);
 const MODULE_EXTENSIONS = new Set([".cjs", ".js", ".mjs"]);
@@ -539,7 +559,11 @@ function scanGuardedData() {
       seen.add(file);
       const { refs, deps } = analyzeModule(file);
       for (const path of refs) {
-        if (!SCANNED_EXTENSIONS.has(extname(path)) || !tracked.has(path))
+        if (!tracked.has(path)) continue;
+        if (
+          !SCANNED_EXTENSIONS.has(extname(path)) &&
+          !isExtensionlessScript(path)
+        )
           continue;
         if (!readers.has(path)) readers.set(path, new Set());
         readers.get(path).add(test);
@@ -557,7 +581,7 @@ const scanned = scanGuardedData();
 // floor: a path that drops out of the scan drops out of the partition and
 // direction assertions with it, so a resolver regression would quietly narrow
 // all of them at once while staying green.
-const RESOLVED_PATH_COUNT = 51;
+const RESOLVED_PATH_COUNT = 52;
 
 describe("SSOT guard-pair map", () => {
   it("is non-empty and every mapped path exists in the repo", () => {
