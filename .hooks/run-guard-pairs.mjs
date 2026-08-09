@@ -40,11 +40,11 @@ if (testsToRun.size === 0) process.exit(0);
 
 const files = [...testsToRun].sort();
 console.error(
-  `pre-commit: staged SSOT source(s) — running paired guard test(s): ${files.join(", ")}`,
+  `pre-commit: staged guarded source(s) — running paired guard test(s): ${files.join(", ")}`,
 );
 
 // One runner invocation per language, each over all of its files, so a commit
-// touching both a JS-guarded and a Python-guarded SSOT pays two process starts
+// touching both a JS-guarded and a Python-guarded source pays two process starts
 // rather than one per test.
 const RUNNERS = [
   {
@@ -64,7 +64,7 @@ const RUNNERS = [
 
 // The runners must PARTITION the guard tests. A path matching none of them
 // would otherwise fall through the loop below and the hook would exit 0 having
-// run nothing — a silent no-op for exactly the SSOT the pair was added to
+// run nothing — a silent no-op for exactly the source the pair was added to
 // protect. test/guard-pairs.test.mjs pins the value domain, but it only runs in
 // CI and when guard-pairs.json itself is staged, so the hook checks here too.
 const unclaimed = files.filter(
@@ -98,7 +98,7 @@ for (const runner of RUNNERS) {
   if (result.error) throw result.error;
   if (result.status !== 0) {
     console.error(
-      "pre-commit: a paired SSOT guard test failed — update the guard test in the SAME commit as its data (see CLAUDE.md, Testing).",
+      "pre-commit: a paired guard test failed — update the guard test in the SAME commit as its data (see CLAUDE.md, Testing).",
     );
     process.exit(result.status ?? 1);
   }

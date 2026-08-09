@@ -221,12 +221,12 @@ def test_pre_commit_passes_without_package_json(tmp_path: Path) -> None:
 
 
 # --------------------------------------------------------------------------- #
-# pre-commit: staged SSOT source runs its paired guard test and blocks the
+# pre-commit: a staged guarded source runs its paired guard test and blocks the
 # commit when the guard fails (map: .hooks/guard-pairs.json).
 # --------------------------------------------------------------------------- #
 
 
-def _sandbox_ssot_repo(tmp_path: Path, guard_body: str) -> Path:
+def _sandbox_guarded_repo(tmp_path: Path, guard_body: str) -> Path:
     repo = init_repo(tmp_path)
     binp = repo / "node_modules" / ".bin"
     binp.mkdir(parents=True)
@@ -244,9 +244,9 @@ def _sandbox_ssot_repo(tmp_path: Path, guard_body: str) -> Path:
     return repo
 
 
-def _run_pre_commit_ssot(repo: Path, tmp_path: Path) -> subprocess.CompletedProcess:
+def _run_pre_commit_guarded(repo: Path, tmp_path: Path) -> subprocess.CompletedProcess:
     # node for the guard runner; no pnpm/npm so lint-staged (a stub) runs via
-    # the direct-binary branch, keeping the test about the SSOT guard wiring.
+    # the direct-binary branch, keeping the test about the guard-pair wiring.
     path = curated_path(tmp_path, BASE_TOOLS + ["node"])
     return subprocess.run(
         ["bash", str(REPO_ROOT / ".hooks" / "pre-commit")],
@@ -257,27 +257,27 @@ def _run_pre_commit_ssot(repo: Path, tmp_path: Path) -> subprocess.CompletedProc
     )
 
 
-def test_pre_commit_blocks_when_paired_ssot_guard_fails(tmp_path: Path) -> None:
-    repo = _sandbox_ssot_repo(
+def test_pre_commit_blocks_when_paired_guard_fails(tmp_path: Path) -> None:
+    repo = _sandbox_guarded_repo(
         tmp_path,
         'import { test } from "node:test";\n'
         'import assert from "node:assert";\n'
         'test("guard", () => assert.fail("contract broken"));\n',
     )
-    result = _run_pre_commit_ssot(repo, tmp_path)
+    result = _run_pre_commit_guarded(repo, tmp_path)
     assert result.returncode != 0, (
         "a failing paired guard test must block the commit\n" + result.stderr
     )
-    assert "SSOT guard test failed" in result.stderr
+    assert "paired guard test failed" in result.stderr
 
 
-def test_pre_commit_passes_when_paired_ssot_guard_passes(tmp_path: Path) -> None:
+def test_pre_commit_passes_when_paired_guard_passes(tmp_path: Path) -> None:
     # Positive control: same wiring, green guard — proves the block above comes
     # from the guard's verdict, not from broken plumbing.
-    repo = _sandbox_ssot_repo(
+    repo = _sandbox_guarded_repo(
         tmp_path,
         'import { test } from "node:test";\ntest("guard", () => {});\n',
     )
-    result = _run_pre_commit_ssot(repo, tmp_path)
+    result = _run_pre_commit_guarded(repo, tmp_path)
     assert result.returncode == 0, result.stderr
     assert "running paired guard test" in result.stderr

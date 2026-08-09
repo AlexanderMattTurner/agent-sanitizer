@@ -1,8 +1,8 @@
 /**
- * Contract test for the SSOT guard-pair map (.hooks/guard-pairs.json)
+ * Contract test for the guard-pair map (.hooks/guard-pairs.json)
  * that the pre-commit hook uses to run a source's paired contract test in the
  * same commit as the source. A pair pointing at a moved/renamed file would
- * make the hook a silent no-op for exactly the SSOT it was added to protect,
+ * make the hook a silent no-op for exactly the source it was added to protect,
  * so every path is asserted to exist, and the two pairings that actually broke
  * main are pinned by name (non-vacuity: an emptied map cannot pass).
  *
@@ -93,7 +93,7 @@ const tracked = new Set(listFiles());
 const NOT_GUARDED = {
   // plugin/test/plugin-bundle.test.mjs is the only test that reads these three,
   // and it stages the whole plugin and provisions a Python venv — ~55s on a warm
-  // checkout, against the hook's ~1s-per-touched-SSOT budget. Pairing it would
+  // checkout, against the hook's ~1s-per-touched-source budget. Pairing it would
   // make every plugin edit unbearable at commit time; CI runs it instead.
   "plugin/hooks/hooks.json": "only reader is the ~55s plugin-bundle test",
   "plugin/requirements.in": "only reader is the ~55s plugin-bundle test",
@@ -583,14 +583,14 @@ const scanned = scanGuardedData();
 // all of them at once while staying green.
 const RESOLVED_PATH_COUNT = 53;
 
-describe("SSOT guard-pair map", () => {
+describe("guard-pair map", () => {
   it("is non-empty and every mapped path exists in the repo", () => {
     const entries = Object.entries(pairs);
     assert.ok(entries.length > 0, "pair map must not be empty");
     for (const [source, tests] of entries) {
       assert.ok(
         existsSync(join(repoRoot, source)),
-        `mapped SSOT source does not exist: ${source}`,
+        `mapped source does not exist: ${source}`,
       );
       assert.ok(
         Array.isArray(tests) && tests.length > 0,
