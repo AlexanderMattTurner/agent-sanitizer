@@ -1509,6 +1509,20 @@ describe("rehydrate: Write-path Layer-1 restoration", () => {
     assert.equal(out.updatedInput, undefined);
   });
 
+  it("denies when the soundness gate fails on a placeholder-bearing SUFFIX region", async () => {
+    // Mirror of the prefix deny: the unchanged suffix covers the secret and
+    // STARTS between "\x1b[32m"'s final byte and a kept "m" — greedy
+    // alignment misattributes the cut, the suffix slice re-cleans one "m"
+    // long, and a placeholder is at stake: deny.
+    const content = `m${GREEN}mm ${SECRET_A}\n`;
+    const out = await write(
+      `Xmm ${PH}\n`,
+      liveIo(content, [{ value: SECRET_A, placeholder: PH }], reRedact),
+    );
+    assert.match(out.deny, /cannot be re-anchored unambiguously/);
+    assert.equal(out.updatedInput, undefined);
+  });
+
   it("denies when a middle edit would expose a restored suffix secret", async () => {
     const content = `A=1\nPASSWORD=${SECRET_A}\n`;
     const view = mkView(`A=1\nPASSWORD=${SECRET_A}\n`, [
@@ -1552,6 +1566,40 @@ describe("rehydrate: Write-path Layer-1 restoration", () => {
     const content = `${ZW}${ZW}${ZW}`;
     assert.equal(await write("", liveIo(content)), null);
     assert.equal(await write("replacement\n", liveIo(content)), null);
+  });
+
+  it("restores the prefix when the tail changed with no common suffix at all", async () => {
+    const content = `${ZW}head\ntail\n`;
+    const view = modelView(content); // "head\ntail\n"
+    const out = await write(`${view.slice(0, -1)}X`, liveIo(content));
+    assert.equal(out.updatedInput.content, `${ZW}head\ntailX`);
+  });
+
+  it("keeps literal hint-prefixed prose the view already had through a middle edit", async () => {
+    // The file documents "[REDACTEDXYZ]" prose; a Write that changes another
+    // line keeps the prose verbatim — same-view text is not a foreign
+    // placeholder, so no deny.
+    const prose = "[REDACTEDXYZ]";
+    const content = `see ${prose} docs\nPW=${SECRET_A}\nEND\n`;
+    const view = mkView(content, [{ value: SECRET_A, placeholder: PH }]);
+    const out = await rehydrateRedacted(
+      "Write",
+      { file_path: "/f", content: `see ${prose} docs\nPW=${PH}\nFIN\n` },
+      fakeIo(content, view, reRedact),
+    );
+    assert.equal(
+      out.updatedInput.content,
+      `see ${prose} docs\nPW=${SECRET_A}\nFIN\n`,
+    );
+  });
+
+  it("returns null for a hinted identical Write of a pristine file (hint is the file's own prose)", async () => {
+    const content = "docs about [REDACTEDXYZ] markers\n";
+    const io = fakeIo(content, mkView(content, []));
+    assert.equal(
+      await rehydrateRedacted("Write", { file_path: "/f", content }, io),
+      null,
+    );
   });
 
   it("returns null when nothing was restored and nothing substituted", async () => {

@@ -509,12 +509,10 @@ async function rehydrateWrite(ti, content, cleaned, view, deletions, io, hint) {
     if (content === ti.content) return null;
     // Faithful whole-file round-trip: the incoming content IS the sanitized
     // view, so the write becomes the disk bytes themselves — placeholders
-    // resolve to their secrets and every stripped run comes back, including
-    // one at the file's very start or end and the all-invisible file whose
-    // view is empty (cases the prefix/suffix machinery below cannot reach).
-    // Provably sound with no gate: the view was derived from exactly these
-    // bytes, so re-sanitizing reproduces it, nothing new can be exposed, and
-    // no foreign placeholder can appear.
+    // resolve to their secrets and every stripped run comes back. Provably
+    // sound with no gate: the view was derived from exactly these bytes, so
+    // re-sanitizing reproduces it, nothing new can be exposed, and no foreign
+    // placeholder can appear.
     return {
       updatedInput: { ...ti, content },
       context: writeContext(
