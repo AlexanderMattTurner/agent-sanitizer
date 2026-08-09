@@ -21,9 +21,9 @@ from pathlib import Path
 
 import pytest
 
-from tests._helpers import REPO_ROOT
+from tests._helpers import REPO_ROOT, ensure_python_pkg_on_path
 
-sys.path.insert(0, str(REPO_ROOT / "python"))
+ensure_python_pkg_on_path()
 
 import agent_sanitizer as ais  # noqa: E402
 from agent_sanitizer import (  # noqa: E402

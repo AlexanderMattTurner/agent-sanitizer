@@ -9,17 +9,14 @@ env-bound values.
 
 import json
 import socket
-import sys
 import time
 from pathlib import Path
 
-from tests._helpers import REPO_ROOT
+from tests._helpers import ensure_python_pkg_on_path
 
-# The distribution package lives under python/; put it on the path so
-# `import agent_sanitizer.secrets` resolves to the working tree.
-_PKG = REPO_ROOT / "python"
-if str(_PKG) not in sys.path:
-    sys.path.insert(0, str(_PKG))
+# Put python/ on the path so `import agent_sanitizer.secrets` resolves to the
+# working tree.
+ensure_python_pkg_on_path()
 
 from agent_sanitizer.secrets import (  # noqa: E402
     RedactorConfig,

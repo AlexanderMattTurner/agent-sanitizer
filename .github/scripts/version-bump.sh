@@ -15,8 +15,8 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-# shellcheck source=lib/retry.bash disable=SC1091
-source "$SCRIPT_DIR/lib/retry.bash"
+# shellcheck source=lib-ci-retry.sh disable=SC1091
+source "$SCRIPT_DIR/lib-ci-retry.sh"
 # shellcheck source=lib/anthropic-ladder.bash disable=SC1091
 source "$SCRIPT_DIR/lib/anthropic-ladder.bash"
 
@@ -474,7 +474,7 @@ fi
 # The auto-version concurrency group serializes THIS workflow, but $branch can
 # still move mid-run via an ordinary PR merge from another actor — so the run
 # checked out a now-stale tip and a plain `git push` is rejected non-fast-forward.
-# Retrying the identical push (what retry_cmd does) can never win: the remote
+# Retrying the identical push (what `retry` does) can never win: the remote
 # never rewinds. Instead, on rejection, fetch the new tip and REBASE our commits
 # onto it, then retry. The release-docs commit only touches CHANGELOG.md and the
 # plugin manifest's `version`; concurrent merges practically never hand-edit the
@@ -590,7 +590,7 @@ fi
 # Fail loudly if the tag never lands: the tag is what stops the next run from
 # re-analyzing these commits (re-drafting the changelog, re-pushing release
 # docs), so a silent failure here would quietly corrupt the next release.
-if ! retry_cmd 4 2 git push origin "v$NEW_VERSION"; then
+if ! RETRY_MAX=4 RETRY_BASE_DELAY=2 retry git push origin "v$NEW_VERSION"; then
   log "Error: failed to push tag v$NEW_VERSION after retries. The release is published;"
   log "       push the tag manually so the next run does not re-analyze these commits."
   exit 1

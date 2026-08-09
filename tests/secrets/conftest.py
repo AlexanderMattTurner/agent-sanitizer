@@ -1,20 +1,17 @@
 """Path setup and shared fixtures for the secrets test suite."""
 
 import shutil
-import sys
 import tempfile
 from pathlib import Path
 
 import pytest
 
-from tests._helpers import REPO_ROOT
+from tests._helpers import ensure_python_pkg_on_path
 
-# The distribution package lives under python/; put it on the path so
-# `import agent_sanitizer.secrets` resolves to the working tree. The
-# engine import in the fixture below (and in redactor_helpers) depends on this.
-_PKG = REPO_ROOT / "python"
-if str(_PKG) not in sys.path:
-    sys.path.insert(0, str(_PKG))
+# Put python/ on the path so `import agent_sanitizer.secrets` resolves to the
+# working tree. The engine import in the fixture below (and in
+# redactor_helpers) depends on this.
+ensure_python_pkg_on_path()
 
 
 @pytest.fixture
