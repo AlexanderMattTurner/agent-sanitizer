@@ -16,6 +16,7 @@ npm install agent-sanitizer
 **As a Claude Code plugin:**
 
 Enter one at a time:
+
 ```
 /plugin marketplace add AlexanderMattTurner/agent-sanitizer
 ```
@@ -23,6 +24,7 @@ Enter one at a time:
 ```
 /plugin install agent-sanitizer@agent-sanitizer
 ```
+
 ```
 /agent-sanitizer:enable-auto-update
 ```

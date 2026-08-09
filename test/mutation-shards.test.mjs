@@ -27,7 +27,7 @@ import {
   expandShards,
   EOF_SENTINEL,
 } from "../.github/scripts/expand-shards.mjs";
-import { mutatedSources } from "../scripts/shipped-sources.mjs";
+import { mutatedSources, shippedSources } from "../scripts/shipped-sources.mjs";
 
 const repoRoot = execFileSync("git", ["rev-parse", "--show-toplevel"], {
   encoding: "utf8",
@@ -140,5 +140,47 @@ describe("mutation shard matrix", () => {
         );
       }
     }
+  });
+});
+
+describe("the dry-run oracle's scope", () => {
+  /** @param {string[]} argv @returns {string[]} the CLI's printed list */
+  const cli = (argv) =>
+    execFileSync(
+      process.execPath,
+      [join(repoRoot, "scripts", "shipped-sources.mjs"), ...argv],
+      { encoding: "utf8" },
+    )
+      .trim()
+      .split("\n");
+
+  it("prints the shipped surface bare, and the mutated set under --mutated", () => {
+    assert.deepEqual(cli([]), shippedSources(repoRoot));
+    assert.deepEqual(cli(["--mutated"]), mutatedSources(repoRoot));
+    // The two must actually differ, or this suite and the wiring pin below both
+    // hold with the oracle still instrumenting a subset of the matrix.
+    assert.ok(
+      mutatedSources(repoRoot).length > shippedSources(repoRoot).length,
+      "the tooling half of the mutated set is empty — --mutated proves nothing",
+    );
+  });
+
+  it("refuses a scope it does not know instead of printing a narrower one", () => {
+    // Falling back to the shipped list would gate LESS than the caller asked
+    // for, silently: the failure this whole job exists to catch.
+    assert.throws(() => cli(["--everything"]), /unrecognised arguments/u);
+  });
+
+  it("asks for the scope the shards mutate", () => {
+    // A wiring pin: the oracle runs the suite once over everything the matrix
+    // instruments, and it is the shell script that chooses which. Instrumenting
+    // a subset is invisible — the job passes and a shard then dies on a dry-run
+    // failure the oracle was supposed to name first, which is how the
+    // `.hooks/lib/` half went unwatched.
+    const script = readFileSync(
+      join(repoRoot, ".github", "scripts", "run-mutation-dry-run.sh"),
+      "utf8",
+    );
+    assert.match(script, /shipped-sources\.mjs --mutated\)/u);
   });
 });
