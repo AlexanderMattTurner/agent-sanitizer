@@ -84,7 +84,7 @@ function runLand(landDir, bundleDir, env = {}) {
   const runnerTemp = join(root, "runner-temp");
   mkdirSync(runnerTemp, { recursive: true });
   let error = null;
-  let stdout = "";
+  let stdout;
   try {
     stdout = execFileSync("bash", [SCRIPT], {
       cwd: landDir,

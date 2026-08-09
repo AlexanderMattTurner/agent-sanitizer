@@ -193,6 +193,7 @@ function loadSeverities() {
     throw new Error(
       `config/review-severities.json is unparsable (${err.message}); refusing to ` +
         "review with a severity model somebody meant to set and got wrong.",
+      { cause: err },
     );
   }
   const bad = (why) => new Error(`config/review-severities.json: ${why}`);
