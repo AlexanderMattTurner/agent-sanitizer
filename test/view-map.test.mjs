@@ -19,6 +19,7 @@ import {
   toUtf16View,
   pairDiskSpans,
   makeFileView,
+  anchorSpans,
 } from "../src/view-map.mjs";
 
 // Secrets assembled at runtime so no complete token literal trips push
@@ -626,6 +627,99 @@ describe("pairDiskSpans", () => {
     assert.throws(
       () => makeFileView(text, [pair], "codePoint"),
       /out of range \[0, 1\]/,
+    );
+  });
+});
+
+// ─── anchorSpans (Write-path position anchoring) ─────────────────────────────
+
+describe("anchorSpans", () => {
+  const utf16 = (text, pairs) =>
+    toUtf16View(makeFileView(text, pairs, "codePoint"));
+
+  it("finds a plain common prefix and suffix", () => {
+    const view = utf16("head MIDDLE tail", []);
+    assert.deepEqual(anchorSpans("head CHANGED tail", view), {
+      prefixEnd: 5,
+      suffixStart: 11,
+    });
+  });
+
+  it("prefix wins when prefix and suffix would overlap", () => {
+    // content "aaXaa" vs view "aaaa": raw prefix 2 and raw suffix 2 would
+    // together cover more than the shorter string allows; the suffix is capped
+    // after the prefix is fixed.
+    const view = utf16("aaaa", []);
+    const { prefixEnd, suffixStart } = anchorSpans("aaXaa", view);
+    assert.equal(prefixEnd, 2);
+    assert.ok(suffixStart >= prefixEnd, "regions overlap");
+    assert.equal(suffixStart, 4 - 2);
+  });
+
+  it("returns the full range for identical strings and zero for disjoint ones", () => {
+    const view = utf16("same text", []);
+    assert.deepEqual(anchorSpans("same text", view), {
+      prefixEnd: 9,
+      suffixStart: 9,
+    });
+    const other = utf16("abc", []);
+    assert.deepEqual(anchorSpans("xyz", other), {
+      prefixEnd: 0,
+      suffixStart: 3,
+    });
+  });
+
+  it("snaps a prefix boundary out of a placeholder interior", () => {
+    // Common prefix extends INTO the placeholder text ("K=[REDACTED" shared,
+    // then the strings diverge inside it); the boundary snaps back to the
+    // placeholder's start so resolveSpan never sees a cut placeholder.
+    const view = utf16(`K=${PH}\n`, [
+      { placeholder: PH, original: SECRET_A, start: 2 },
+    ]);
+    const { prefixEnd } = anchorSpans(`K=${PH.slice(0, -1)}X\n`, view);
+    assert.equal(prefixEnd, 2);
+  });
+
+  it("keeps a suffix boundary landing exactly at a placeholder start (whole placeholder in the suffix)", () => {
+    const view = utf16(`K=${PH}\n`, [
+      { placeholder: PH, original: SECRET_A, start: 2 },
+    ]);
+    const { suffixStart } = anchorSpans(`X${PH}\n`, view);
+    assert.equal(suffixStart, 2);
+  });
+
+  it("snaps a suffix boundary out of a placeholder interior", () => {
+    // Common suffix reaches back INTO the placeholder ("REDACTED]\n" shared,
+    // missing the opening "["); the boundary snaps forward to the
+    // placeholder's end so the cut placeholder stays out of the suffix.
+    const view = utf16(`K=${PH}\n`, [
+      { placeholder: PH, original: SECRET_A, start: 2 },
+    ]);
+    const { suffixStart } = anchorSpans(`X${PH.slice(1)}\n`, view);
+    assert.equal(suffixStart, 2 + PH.length);
+  });
+
+  it("snaps boundaries off a split surrogate pair", () => {
+    const EMOJI = String.fromCodePoint(0x1f511); // 2 UTF-16 units
+    // Prefix: content shares the high surrogate then diverges on the low one.
+    const view = utf16(`a${EMOJI}b`, []);
+    const highOnly = `a${EMOJI[0]}${String.fromCharCode(0xdc00)}b`;
+    const { prefixEnd } = anchorSpans(highOnly, view);
+    assert.equal(prefixEnd, 1, "prefix boundary split a surrogate pair");
+    // Suffix: content shares the low surrogate backwards then diverges.
+    const lowOnly = `x${String.fromCharCode(0xd800)}${EMOJI[1]}b`;
+    const { suffixStart } = anchorSpans(lowOnly, view);
+    assert.equal(suffixStart, 3, "suffix boundary split a surrogate pair");
+  });
+
+  it("requires a UTF-16-space view built by makeFileView", () => {
+    assert.throws(
+      () => anchorSpans("x", { text: "x", pairs: [] }),
+      /requires a view built by makeFileView/,
+    );
+    assert.throws(
+      () => anchorSpans("x", makeFileView("x", [], "codePoint")),
+      /requires a view with utf16 pair offsets/,
     );
   });
 });

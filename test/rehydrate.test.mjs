@@ -2,6 +2,7 @@ import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { rehydrateRedacted, DEFAULT_HINT } from "../src/rehydrate.mjs";
 import { alignDeletions, occurrences } from "../src/view-map.mjs";
+import { applyLayer1, LONE_SURROGATE_RE } from "../src/layer1.mjs";
 
 // Secrets assembled at runtime so no complete token literal trips push
 // protection / gitleaks.
@@ -133,7 +134,10 @@ describe("rehydrate: gating", () => {
     );
   });
 
-  it("ignores Write content without placeholder text", async () => {
+  it("passes a hint-free Write through on a missing target (file creation)", async () => {
+    // Every well-formed Write is a candidate now (Layer-1 restoration), so
+    // this exercises the ENOENT arm: no prior view exists, nothing to
+    // restore, and no placeholder is at stake — pass through.
     assert.equal(
       await rehydrateRedacted(
         "Write",
@@ -370,12 +374,22 @@ describe("rehydrate: gating", () => {
     );
   });
 
-  it("rejects a hint-free Write before touching the redactor", async () => {
+  it("passes a hint-free Write on a Layer-1-clean, secret-free file without the redactor's map mode", async () => {
+    // The cheap io.redact probe (null = no secrets) short-circuits the
+    // hint-free Write exactly like a hint-free Edit; redactMap (which throws
+    // here) is never reached.
+    const cleanIo = {
+      readFile: () => "plain file\n",
+      redactMap: () => {
+        throw new Error("redactMap must not be reached");
+      },
+      redact: () => null,
+    };
     assert.equal(
       await rehydrateRedacted(
         "Write",
         { file_path: "/f", content: "plain content" },
-        mapThrowsIo,
+        cleanIo,
       ),
       null,
     );
@@ -976,11 +990,12 @@ describe("rehydrate: Write", () => {
     // view only produced PH ("[REDACTED]") — PH_PEM names a secret from
     // elsewhere (or a stale/mistyped placeholder), not literal prose. Writing
     // it verbatim would silently persist "[REDACTED: Private Key]" into a file
-    // where the model likely intended a real secret value.
+    // where the model likely intended a real secret value. The foreign scan
+    // catches it whether or not any same-file placeholder was substituted.
     const out = await write(`docs about ${PH_PEM} markers\n`);
     assert.match(
       out.deny,
-      /\[REDACTED…\] placeholder in the new content does not match any secret/,
+      /still carries a \[REDACTED…\] placeholder that does not match any secret/,
     );
     assert.match(
       out.deny,
@@ -995,7 +1010,10 @@ describe("rehydrate: Write", () => {
       { value: SECRET_A, placeholder: PH },
       { value: SECRET_B, placeholder: PH },
     ]);
-    const out = await write(`PASSWORD=${PH}\n`, fakeIo(src, vw, reRedact));
+    // The placeholder must sit in the CHANGED middle: a placeholder inside an
+    // unchanged common prefix/suffix is position-anchored to its own secret
+    // and needs no disambiguation.
+    const out = await write(`X=${PH}\nY=2\n`, fakeIo(src, vw, reRedact));
     assert.match(out.deny, /use Edit with unique\s+surrounding context/);
     assert.match(
       out.deny,
@@ -1006,7 +1024,9 @@ describe("rehydrate: Write", () => {
   it("denies when the file mixes literal and redacted occurrences", async () => {
     const src = `say ${PH}\nPASSWORD=${SECRET_A}\n`;
     const vw = mkView(src, [{ value: SECRET_A, placeholder: PH }]);
-    const out = await write(`PASSWORD=${PH}\n`, fakeIo(src, vw, reRedact));
+    // PH sits in the changed middle, so it must be resolved by TEXT — and the
+    // view's literal "say [REDACTED]" makes that ambiguous.
+    const out = await write(`X=${PH}\nend\n`, fakeIo(src, vw, reRedact));
     assert.match(out.deny, /mixes literal/);
   });
 
@@ -1017,7 +1037,9 @@ describe("rehydrate: Write", () => {
       { value: SECRET_B, placeholder: PH_PEM },
     ]);
     const out = await write(
-      `say ${PH}\nPASSWORD=${PH}\ncert ${PH_PEM}\n`,
+      // Both placeholder texts land in the changed middle; PH_PEM resolves
+      // cleanly (one secret produced it) while PH trips the literal mix.
+      `A ${PH}\ncert ${PH_PEM}\nB\n`,
       fakeIo(src, vw, reRedact),
     );
     assert.match(out.deny, /mixes literal/);
@@ -1385,6 +1407,204 @@ describe("rehydrate: Write cross-file and re-substitution safety", () => {
     // The PH_PEM text survives verbatim inside the inserted secret (not clobbered).
     assert.ok(out.updatedInput.content.includes(SECRET_WITH_PH));
   });
+});
+
+// ─── Write-path Layer-1 restoration ──────────────────────────────────────────
+//
+// A Write composed from the sanitized view must not silently persist the
+// stripped version of regions the model left unchanged: the common
+// prefix/suffix are position-anchored back to the on-disk bytes (stripped
+// runs, secrets and lone surrogates included), while the genuinely-changed
+// middle keeps the model's bytes.
+
+describe("rehydrate: Write-path Layer-1 restoration", () => {
+  /** The model's view of `content`: Layer 1 plus lone-surrogate normalization. */
+  const modelView = (content) =>
+    applyLayer1(content).cleaned.replace(LONE_SURROGATE_RE, "�");
+  const write = (content, io) =>
+    rehydrateRedacted("Write", { file_path: "/f", content }, io);
+
+  it("round-trips an unchanged Write of an ANSI/ZW-bearing file byte-identically", async () => {
+    const content = `${GREEN}ok${RESET} done${ZW}\nplain tail\n`;
+    const view = modelView(content);
+    assert.notEqual(view, content); // non-vacuous: Layer 1 really stripped
+    const out = await write(view, liveIo(content));
+    assert.equal(out.updatedInput.content, content);
+    assert.match(out.context, /invisible\/control character\(s\)/);
+    assert.match(out.context, /regions your Write left unchanged/);
+  });
+
+  it("restores the disk prefix (including a leading stripped run) when only the tail changed", async () => {
+    const content = `${ZW}head\nmiddle\ntail\n`;
+    const view = modelView(content); // "head\nmiddle\ntail\n"
+    const out = await write(view.replace("tail", "TAIL"), liveIo(content));
+    assert.equal(out.updatedInput.content, `${ZW}head\nmiddle\nTAIL\n`);
+  });
+
+  it("restores the disk suffix (including an EOF stripped run) when only the head changed", async () => {
+    const content = `head\nmiddle\ntail${ZW}`;
+    const view = modelView(content);
+    const out = await write(view.replace("head", "HEAD"), liveIo(content));
+    assert.equal(out.updatedInput.content, `HEAD\nmiddle\ntail${ZW}`);
+  });
+
+  it("restores both sides around a middle edit; the new text's own strips stay stripped", async () => {
+    const content = `${GREEN}a${RESET}\nOLD\nz${ZW}\n`;
+    const view = modelView(content); // "a\nOLD\nz\n"
+    // The model's NEW middle text arrives already sanitized (Layer 3 strips
+    // authored invisibles before this layer runs); it stays as written.
+    const out = await write(view.replace("OLD", "NEW"), liveIo(content));
+    assert.equal(out.updatedInput.content, `${GREEN}a${RESET}\nNEW\nz${ZW}\n`);
+  });
+
+  it("restores a lone surrogate in an unchanged region (same-length, generic context)", async () => {
+    const HIGH = String.fromCharCode(0xd83d); // unpaired high surrogate
+    const content = `a${HIGH}b\n`;
+    const view = modelView(content); // "a�b\n"
+    const out = await write(`${view.slice(0, 3)}!\n`, liveIo(content));
+    assert.equal(out.updatedInput.content, `a${HIGH}b!\n`);
+    assert.match(out.context, /exact on-disk bytes/);
+  });
+
+  it("skips restoration (pass-through, not deny) when the cut is ambiguous and no placeholder is involved", async () => {
+    // The prefix cut lands between "\x1b[32m"'s final byte and a kept "m":
+    // greedy alignment attributed the kept "m" to the sequence, so the prefix
+    // slice re-cleans to "x m" instead of the view's "x mm" — the soundness
+    // gate fails. Placeholder-free, so fail open: keep the model's bytes
+    // exactly as a Write does today (a cut at a file edge or covering the
+    // whole view self-heals, hence the interior cut here).
+    const content = `x m${GREEN}mm\n`;
+    const out = await write("x mmX\n", liveIo(content));
+    assert.equal(out, null);
+  });
+
+  it("restores a placeholder-bearing unchanged prefix to the real secret plus its interior run", async () => {
+    const content = `KEY=${SECRET_A.slice(0, 5)}${ZW}${SECRET_A.slice(5)}\nDEBUG=1\n`;
+    // The interior ZW splits the secret on disk; the redactor (fed the
+    // CLEANED text) still sees one contiguous secret.
+    const out = await write(
+      `KEY=${PH}\nDEBUG=0\n`,
+      liveIo(content, [{ value: SECRET_A, placeholder: PH }], reRedact),
+    );
+    assert.equal(
+      out.updatedInput.content,
+      `KEY=${SECRET_A.slice(0, 5)}${ZW}${SECRET_A.slice(5)}\nDEBUG=0\n`,
+    );
+    assert.match(out.context, /1 invisible\/control character\(s\)/);
+    assert.match(out.context, /resolved to the\s+file's real secret values/);
+  });
+
+  it("denies when the soundness gate fails on a placeholder-bearing region", async () => {
+    // The unchanged prefix covers the secret AND ends between "\x1b[32m"'s
+    // final byte and a kept "m" — greedy alignment steals the kept byte, the
+    // re-clean check fails, and a placeholder is at stake: deny.
+    const content = `${SECRET_A} m${GREEN}mm\n`;
+    const out = await write(
+      `${PH} mmX\n`,
+      liveIo(content, [{ value: SECRET_A, placeholder: PH }], reRedact),
+    );
+    assert.match(out.deny, /cannot be re-anchored unambiguously/);
+    assert.match(out.deny, /use Edit for the changed region/);
+    assert.match(out.deny, /ask the user to make this change/);
+    assert.equal(out.updatedInput, undefined);
+  });
+
+  it("denies when a middle edit would expose a restored suffix secret", async () => {
+    const content = `A=1\nPASSWORD=${SECRET_A}\n`;
+    const view = mkView(`A=1\nPASSWORD=${SECRET_A}\n`, [
+      { value: SECRET_A, placeholder: PH },
+    ]);
+    // redact = identity: the re-scan no longer recognizes the secret.
+    const out = await write(
+      `B=2\nPASSWORD=${PH}\n`,
+      fakeIo(content, view, (text) => text),
+    );
+    assert.match(out.deny, /would reveal them/);
+  });
+
+  it("passes a hint-free Write through on a missing path (file creation)", async () => {
+    const enoentIo = {
+      readFile: () => {
+        throw fsError("ENOENT");
+      },
+      redactMap: () => {
+        throw new Error("redactMap must not be reached");
+      },
+      redact: () => null,
+    };
+    assert.equal(await write("brand new file\n", enoentIo), null);
+  });
+
+  it("returns null for a pristine file (view identical to disk) without invoking the map", async () => {
+    const io = {
+      readFile: () => "plain\n",
+      redactMap: () => {
+        throw new Error("redactMap must not be reached");
+      },
+      redact: () => null,
+    };
+    assert.equal(await write("anything else\n", io), null);
+  });
+
+  it("does not resurrect the bytes of an all-invisible file (empty view)", async () => {
+    // An empty view means the model can see nothing — restoring the hidden
+    // bytes would defeat an intentional overwrite of a suspicious file.
+    const content = `${ZW}${ZW}${ZW}`;
+    assert.equal(await write("", liveIo(content)), null);
+    assert.equal(await write("replacement\n", liveIo(content)), null);
+  });
+
+  it("returns null when nothing was restored and nothing substituted", async () => {
+    // Totally different content: no common prefix/suffix, no placeholders —
+    // the write proceeds untouched (stripped bytes lost, as today).
+    const content = `${ZW}old text\n`;
+    assert.equal(await write("completely different\n", liveIo(content)), null);
+  });
+
+  it("empty incoming content on a visible file passes through (truncation intent)", async () => {
+    const content = `${ZW}text\n`;
+    assert.equal(await write("", liveIo(content)), null);
+  });
+});
+
+describe("rehydrate: Write restoration negative corpus (legit invisibles)", () => {
+  // Layer 1 PRESERVES these (linguistic/emoji carve-outs): the view equals
+  // disk, the Write is a non-event, and the bytes survive untouched.
+  const PRESERVED = [
+    ["Persian ZWNJ", "کتاب‌های خوب"],
+    ["emoji ZWJ family", "\u{1F468}‍\u{1F469}‍\u{1F467}‍\u{1F466}"],
+    ["Braille with blank cells", "⠓⠑⠇⠇⠕⠀⠑⠇"],
+    ["Devanagari conjuncts", "क्षत्रिय"],
+  ];
+  for (const [label, text] of PRESERVED)
+    it(`round-trips ${label} byte-identically (view == disk, pass-through)`, async () => {
+      const content = `${text}\n`;
+      assert.equal(applyLayer1(content).cleaned, content); // positive marker: preserved by Layer 1
+      const out = await rehydrateRedacted(
+        "Write",
+        { file_path: "/f", content },
+        liveIo(content),
+      );
+      assert.equal(out, null); // pass-through: the Write persists the bytes verbatim
+    });
+
+  // Layer 1 STRIPS these shapes; a faithful write-back must restore them.
+  const STRIPPED = [
+    ["ANSI-colored log", `${GREEN}INFO${RESET} started\n`],
+    ["zero-width run", `before${ZW}${ZW}${ZW}after\n`],
+    ["text with interior escape", `progress${ESC}[2K${ESC}[1Gdone\n`],
+  ];
+  for (const [label, content] of STRIPPED)
+    it(`restores a stripped ${label} on faithful write-back`, async () => {
+      const view = applyLayer1(content).cleaned;
+      assert.notEqual(view, content); // positive marker: Layer 1 really stripped
+      const out = await rehydrateRedacted(
+        "Write",
+        { file_path: "/f", content: view },
+        liveIo(content),
+      );
+      assert.equal(out.updatedInput.content, content);
+    });
 });
 
 // ─── Placeholder-boundary and multi-secret resolution edge cases ─────────────
