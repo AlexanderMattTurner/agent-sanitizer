@@ -802,8 +802,9 @@ describe("whole-pipeline Layer-2 round-trip fuzz", () => {
           assert.equal(response?.permissionDecision, undefined);
           assert.equal(response?.updatedInput, undefined);
           // Each advisory fires exactly when its own grammar is present. The
-          // opening clause is the stable handle on each: the token list after
-          // it is input-derived, so matching on that would test the fixture.
+          // opening clause is the stable handle on each: the per-key token list
+          // after it is input-derived, and the span paths below already pin
+          // that half.
           assert.equal(
             context.includes("hidden-content splice markers:"),
             keys.length > 0,
@@ -811,6 +812,17 @@ describe("whole-pipeline Layer-2 round-trip fuzz", () => {
           assert.equal(
             context.includes("secret-redaction placeholder text:"),
             hasSecretLookalike,
+          );
+          // Naming the CONCRETE token is the advisory's contract, not
+          // incidental wording — one that fired with an empty token list would
+          // satisfy the opening-clause check above and still tell the model
+          // nothing about WHICH placeholder it is carrying. SECRET_LOOKALIKE is
+          // a fixed constant, so pinning it couples this to the behavior rather
+          // than to a generated fixture.
+          assert.equal(
+            context.includes(SECRET_LOOKALIKE),
+            hasSecretLookalike,
+            context,
           );
           for (const key of keys)
             assert.ok(context.includes(`span-${key}.txt`));
