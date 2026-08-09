@@ -52,6 +52,20 @@ export function describeHtmlSanitized(removed) {
 }
 
 /**
+ * The Layer-2 warning for the fail-closed unparseable path: the parse itself
+ * blew up, so nothing was spliced — the ENTIRE output was withheld behind one
+ * placeholder. {@link describeHtmlSanitized}'s "N hidden element(s) replaced"
+ * would misstate that as a routine splice, so this path gets its own sentence.
+ * A bare constant like {@link LONE_SURROGATE_WARNING} (no counts to
+ * interpolate). The sentence deliberately promises nothing about a reveal
+ * sidecar: the library facade drops `reveal`, and the hook can withhold the
+ * sidecar when it fails vetting — either way a persistence promise here would
+ * be false.
+ */
+export const HTML_UNPARSEABLE_WARNING =
+  "HTML unparseable — the entire output was withheld behind a placeholder; nothing was spliced";
+
+/**
  * Full warning for Layer 2's preserved-but-reported content (scripting and
  * resource tags, data: URIs), or "" when there is nothing to report. Callers
  * must not push the empty string as a warning.

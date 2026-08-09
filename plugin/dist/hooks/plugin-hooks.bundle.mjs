@@ -69267,6 +69267,7 @@ var sanitize_output_exports = {};
 __export(sanitize_output_exports, {
   COLLISION_WITHHELD_MESSAGE: () => COLLISION_WITHHELD_MESSAGE,
   ON_DISK_PLACEHOLDER_WARNING: () => ON_DISK_PLACEHOLDER_WARNING,
+  REVEAL_WITHHELD_WARNING: () => REVEAL_WITHHELD_WARNING,
   SECRET_HINT: () => SECRET_HINT2,
   SECRET_HINT_EXT: () => SECRET_HINT_EXT2,
   applyLayer1: () => applyLayer14,
@@ -69554,6 +69555,7 @@ async function evaluateToolOutput(input, ext = {}) {
       const secrets = secretsEnabled() ? await redactSecrets(original, true, deadline) : null;
       stored = secrets ? secrets.text : original;
     } catch {
+      warnings.push(REVEAL_WITHHELD_WARNING);
       continue;
     }
     const hint = persistReveal(stored);
@@ -69627,7 +69629,7 @@ async function cliMain2(ext = {}) {
     }
   );
 }
-var _sanitizer, HTML_TAG_PRESENT2, applyLayer14, matchesSecretHint2, SECRET_HINT2, SECRET_HINT_EXT2, _output, sanitizeTextSeam, composeContextSeam, describeRemoved2, describeWarned2, suppressToolOutput2, HOOK_NAME2, SANITIZE_BUDGET_MS, SGR_OUTPUT_NOTE, WEB_INGRESS_TOOLS, COLLISION_WITHHELD_MESSAGE, nextWithheldIndex, ON_DISK_PLACEHOLDER_WARNING, FAIL_CLOSED_CONTEXT;
+var _sanitizer, HTML_TAG_PRESENT2, applyLayer14, matchesSecretHint2, SECRET_HINT2, SECRET_HINT_EXT2, _output, sanitizeTextSeam, composeContextSeam, describeRemoved2, describeWarned2, suppressToolOutput2, HOOK_NAME2, REVEAL_WITHHELD_WARNING, SANITIZE_BUDGET_MS, SGR_OUTPUT_NOTE, WEB_INGRESS_TOOLS, COLLISION_WITHHELD_MESSAGE, nextWithheldIndex, ON_DISK_PLACEHOLDER_WARNING, FAIL_CLOSED_CONTEXT;
 var init_sanitize_output = __esm({
   async "claude-hooks/sanitize-output.mjs"() {
     "use strict";
@@ -69649,6 +69651,7 @@ var init_sanitize_output = __esm({
     ({ sanitizeText: sanitizeTextSeam, composeContext: composeContextSeam } = _output);
     ({ describeRemoved: describeRemoved2, describeWarned: describeWarned2, suppressToolOutput: suppressToolOutput2 } = _output);
     HOOK_NAME2 = "sanitize-output";
+    REVEAL_WITHHELD_WARNING = "Withheld the reveal sidecar: it could not be vetted for secrets";
     SANITIZE_BUDGET_MS = positiveMsOr(
       process.env._AGENT_SANITIZER_SANITIZE_BUDGET_MS,
       12e4

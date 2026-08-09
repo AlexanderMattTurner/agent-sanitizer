@@ -1814,9 +1814,12 @@ export function looksLikeHtmlSource(text) {
  * Layer 2 over web-ingress text: splice out HTML comments and hidden elements
  * (placeholders mark the cuts; all other bytes are preserved verbatim) and
  * count preserved scripting/resource tags for the caller's warning. Returns
- * null when there is nothing to strip and nothing to report.
+ * null when there is nothing to strip and nothing to report. `unparseable` is
+ * set (true) only on the fail-closed path below, where the whole input was
+ * withheld behind {@link UNPARSEABLE_PLACEHOLDER} rather than spliced — the
+ * caller's warning must describe a whole-output withhold, not a splice.
  * @param {string} text
- * @returns {{ text: string, removed: { comments: number, hidden: number }, warned: { tags: Record<string, number>, dataSrc: number } } | null}
+ * @returns {{ text: string, removed: { comments: number, hidden: number }, warned: { tags: Record<string, number>, dataSrc: number }, unparseable?: true } | null}
  */
 export function sanitizeHtml(text) {
   if (!HTML_TAG_PRESENT.test(text)) return null;
@@ -1836,6 +1839,7 @@ export function sanitizeHtml(text) {
       text: UNPARSEABLE_PLACEHOLDER,
       removed: { comments: 0, hidden: 1 },
       warned: newWarned(),
+      unparseable: true,
     };
   }
   const { ranges, warned } = scan;

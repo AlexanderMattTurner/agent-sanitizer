@@ -15,6 +15,12 @@
  *   5. NO EXPOSURE: a successful rewrite never puts a candidate secret into a
  *      form the next view would reveal.
  *   6. A deny always carries a non-empty reason and no updatedInput.
+ *   7. WRITE ROUND-TRIP: a Write of exactly the model's view of a file
+ *      restores the on-disk bytes byte-identically (or passes through when
+ *      the view IS the disk bytes).
+ *   8. WRITE SOUNDNESS: when a Write of a mutated view is rewritten, the
+ *      persisted bytes re-sanitize to exactly the view the model intended,
+ *      and no secret becomes newly visible.
  *
  * The redactor is NOT re-implemented here. `io.redactMap`/`io.redact` are driven
  * by the REAL Python engine (`agent_sanitizer.secrets.redact_map`) over a
@@ -239,6 +245,91 @@ describe("rehydrate: properties", () => {
       oldS,
       "rewritten old_string does not sanitize back to the model's input",
     );
+  });
+
+  it("round-trips a faithful whole-file Write byte-identically (invariant 7)", async () => {
+    let sawRestore = 0;
+    await fc.assert(
+      fc.asyncProperty(contentArb, async (content) => {
+        const view = await modelView(content);
+        const result = await rehydrateRedacted(
+          "Write",
+          { file_path: "/f", content: view },
+          realIo(content),
+        );
+        if (result === null) {
+          // Pass-through is legal only when there was nothing to restore.
+          assert.equal(
+            view,
+            content,
+            "null pass-through dropped a divergent file's stripped bytes",
+          );
+          return;
+        }
+        assert.ok(
+          !("deny" in result),
+          `faithful round-trip denied: ${result.deny}`,
+        );
+        sawRestore++;
+        assert.equal(
+          result.updatedInput.content,
+          content,
+          "faithful write-back is not byte-identical to disk",
+        );
+      }),
+      runOptions,
+    );
+    assert.ok(sawRestore > 0, "no restore ever exercised — invariant vacuous");
+  });
+
+  it("a rewritten Write of a mutated view persists exactly the intended view (invariant 8)", async () => {
+    let sawRewrite = 0;
+    await fc.assert(
+      fc.asyncProperty(
+        contentArb,
+        fc.nat(),
+        fc.constantFrom("delete", "replace", "append"),
+        async (content, lineSeed, mode) => {
+          const view = await modelView(content);
+          const lines = view.split("\n");
+          const at = lineSeed % lines.length;
+          const mutated = [...lines];
+          if (mode === "delete") mutated.splice(at, 1);
+          else if (mode === "replace") mutated[at] = "REPLACED LINE";
+          else mutated.splice(at, 0, "INSERTED LINE");
+          const intended = mutated.join("\n");
+          if (intended === view) return; // degenerate mutation
+
+          const result = await rehydrateRedacted(
+            "Write",
+            { file_path: "/f", content: intended },
+            realIo(content),
+          );
+          if (result === null) return; // pass-through: model bytes win, as today
+          if ("deny" in result) {
+            assert.equal(typeof result.deny, "string");
+            assert.ok(result.deny.length > 0, "empty deny reason");
+            assert.equal(result.updatedInput, undefined);
+            return;
+          }
+          sawRewrite++;
+          const written = result.updatedInput.content;
+          // The next read of the persisted bytes shows exactly the view the
+          // model intended to write.
+          assert.equal(
+            await modelView(written),
+            intended,
+            "persisted bytes do not re-sanitize to the intended view",
+          );
+          // No secret newly revealed by the rewrite.
+          const before = new Set(await exposedInView(content));
+          for (const v of await exposedInView(written))
+            assert.ok(before.has(v), "a secret became visible after the Write");
+        },
+      ),
+      runOptions,
+    );
+    assert.ok(sawRewrite > 0, "no rewrite ever exercised — invariant vacuous");
   });
 
   it("never throws for arbitrary string inputs given a well-formed io", async () => {

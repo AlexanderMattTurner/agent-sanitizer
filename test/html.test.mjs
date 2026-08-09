@@ -35,6 +35,7 @@ import {
   DATA_URI_LENGTH_THRESHOLD,
 } from "../src/html.mjs";
 import { sanitize } from "../src/index.mjs";
+import { HTML_UNPARSEABLE_WARNING } from "../src/warnings.mjs";
 
 const applyHtml = (text) => sanitizeHtml(text)?.text ?? text;
 
@@ -1406,6 +1407,13 @@ describe("R1: parser stack overflow fails closed (never throws)", () => {
     assert.equal(result.text, UNPARSEABLE_PLACEHOLDER);
     assert.deepEqual(result.removed, { comments: 0, hidden: 1 });
     assert.deepEqual(result.warned, { tags: {}, dataSrc: 0 });
+    // The whole-output withhold announces itself, so callers can warn about a
+    // withhold rather than a routine splice. The splice path never sets it.
+    assert.equal(result.unparseable, true);
+    assert.equal(
+      sanitizeHtml("a <span hidden>x</span> b").unparseable,
+      undefined,
+    );
   });
 
   it("detectExfil returns one sentinel threat instead of throwing", () => {
@@ -1423,7 +1431,9 @@ describe("R1: parser stack overflow fails closed (never throws)", () => {
     assert.equal(cleaned, UNPARSEABLE_PLACEHOLDER);
     assert.ok(found.includes("hidden-html"));
     assert.ok(found.includes("exfil-urls"));
-    assert.ok(warnings.length > 0);
+    // The warning names the whole-output withhold, not a routine splice.
+    assert.ok(warnings.includes(HTML_UNPARSEABLE_WARNING));
+    assert.ok(!warnings.some((w) => w.includes("hidden element(s)")));
   });
 
   it("property: random deeply-nested fragments never throw", () => {

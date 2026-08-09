@@ -367,6 +367,25 @@ character-extraction oracle.
 File access and the redactor are injected via `io`; the package performs no I/O
 of its own and bundles no secret engine.
 
+**Whole-file Writes are re-anchored too.** A model that reads a file whose
+legitimate content includes stripped characters (ANSI-colored logs, zero-width
+runs, a lone surrogate) and writes it back would otherwise silently persist the
+stripped version. Every well-formed `Write` to an existing file is diffed
+against the sanitized view by position (longest common prefix/suffix, snapped
+off placeholder and surrogate boundaries): the unchanged regions are restored
+to their exact on-disk bytes — stripped runs and redacted secrets included —
+while the genuinely-changed middle keeps the model's bytes (Layer-1 strips of
+_new_ text stay stripped; that is the sanitizer working). Each restored region
+passes the same re-clean soundness gate as an Edit span. On gate failure the
+outcome follows the precision doctrine: a placeholder-free region falls back to
+the model's bytes (**fail open** — the write merely loses stripped characters,
+exactly the pre-restoration behavior), while a placeholder-bearing region is
+**denied** (restoring at a misattributed anchor could graft secret bytes
+wrongly; not restoring persists placeholder text over the secret — neither open
+option is safe). An empty view (an all-invisible file, the archetypal
+hidden-payload artifact) is never restored: a Write there is the model
+replacing content it was told is suspicious, not echoing it back.
+
 `MultiEdit` is a rehydration candidate but never re-anchored: its edits apply
 sequentially, each against the result of the previous, which the span machinery
 (one `old_string` against one static view) cannot model. A MultiEdit against a

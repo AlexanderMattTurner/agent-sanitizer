@@ -82,6 +82,19 @@ export const { describeRemoved, describeWarned, suppressToolOutput } = _output;
 
 const HOOK_NAME = "sanitize-output";
 
+// Model-facing warning for a reveal the persistence loop had to drop: the
+// pre-splice text could not be re-vetted (redactor unreachable mid-run), so no
+// sidecar was written and the "preserved for later inspection" promise the
+// splice/withhold warnings make is NOT kept for this output. Fixed prose, no
+// error text — the redactor runs on attacker-influenced content and this line
+// reaches the model-facing context. Exported so tests assert it by reference.
+// Deliberately a LOCAL constant rather than a shared engine builder alongside
+// output.mjs's "Withheld the ${label}" template: the plugin bundle resolves
+// the engine to the pinned registry release, so hook code cannot use a new
+// engine export until the pin advances past it.
+export const REVEAL_WITHHELD_WARNING =
+  "Withheld the reveal sidecar: it could not be vetted for secrets";
+
 // Total wall-clock budget for one hook invocation's blocking daemon calls — the
 // Layer-4 redactor — SHARED across every string leaf of the tool output. Each
 // call is handed the budget remaining at that moment; once it is spent, a further
@@ -888,7 +901,10 @@ export async function evaluateToolOutput(input, ext = {}) {
       // hidden only inside a comment reaches the redactor here for the first
       // time (the post-splice scan never saw it). If the daemon is unreachable
       // we must neither write that unvetted text nor suppress the already-safe
-      // primary output — drop this one convenience reveal and move on.
+      // primary output — drop this one convenience reveal, but SAY so: the
+      // splice warning has just promised the model a reveal it can Read back,
+      // and a silent drop leaves that promise dangling.
+      warnings.push(REVEAL_WITHHELD_WARNING);
       continue;
     }
     const hint = persistReveal(stored);

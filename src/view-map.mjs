@@ -452,6 +452,76 @@ export function spliceOrdered(text, matches, replacementFor) {
 }
 
 /**
+ * Anchor a whole-file Write's content against the sanitized view it was
+ * composed from: the longest common prefix and suffix are the regions the
+ * model left unchanged, so their on-disk bytes (stripped runs, redacted
+ * secrets, lone surrogates included) can be restored position-exact — no
+ * search, no anchor ambiguity. Returns view-space `{prefixEnd, suffixStart}`;
+ * because the prefix and suffix are common substrings, the same lengths index
+ * `content` (prefix `[0, prefixEnd)`, suffix `[content.length - (view.text.length
+ * - suffixStart))`).
+ *
+ * Both boundaries are snapped OUT of hazards, always shrinking the restored
+ * region (the fail-open direction — a smaller restore only loses stripped
+ * characters, never corrupts):
+ *   - a boundary strictly inside a placeholder moves to the placeholder's
+ *     edge, so `resolveSpan` (which returns null on a placeholder-cutting
+ *     boundary) always resolves;
+ *   - a boundary splitting a surrogate pair moves off it. The view never
+ *     carries lone surrogates (they were normalized to U+FFFD), so a high
+ *     surrogate at `prefixEnd - 1` is always a genuine pair's first half; and
+ *     since the prefix/suffix are common substrings, checking the view covers
+ *     the content side too.
+ * The prefix is computed first and the suffix capped so they never overlap
+ * (prefix wins — deterministic).
+ * @param {string} content incoming Write content (view space)
+ * @param {FileView<"utf16">} view sanitized view of the target file
+ * @returns {{prefixEnd: number, suffixStart: number}}
+ */
+export function anchorSpans(content, view) {
+  assertFileView(view, "utf16", "anchorSpans");
+  const viewText = view.text;
+  const maxPrefix = Math.min(content.length, viewText.length);
+  let p = 0;
+  while (p < maxPrefix && content[p] === viewText[p]) p++;
+  const interior = (/** @type {number} */ offset) =>
+    view.pairs.find(
+      (pair) =>
+        pair.start < offset && offset < pair.start + pair.placeholder.length,
+    );
+  const cut = interior(p);
+  if (cut) p = cut.start;
+  if (p > 0 && isHighSurrogate(viewText.charCodeAt(p - 1))) p--;
+
+  const maxSuffix = maxPrefix - p;
+  let s = 0;
+  while (
+    s < maxSuffix &&
+    content[content.length - 1 - s] === viewText[viewText.length - 1 - s]
+  )
+    s++;
+  let suffixStart = viewText.length - s;
+  const cutEnd = interior(suffixStart);
+  if (cutEnd) suffixStart = cutEnd.start + cutEnd.placeholder.length;
+  if (
+    suffixStart < viewText.length &&
+    isLowSurrogate(viewText.charCodeAt(suffixStart))
+  )
+    suffixStart++;
+  return { prefixEnd: p, suffixStart };
+}
+
+/** @param {number} code */
+function isHighSurrogate(code) {
+  return code >= 0xd800 && code <= 0xdbff;
+}
+
+/** @param {number} code */
+function isLowSurrogate(code) {
+  return code >= 0xdc00 && code <= 0xdfff;
+}
+
+/**
  * On-disk [start, end) span of every redaction pair, mapped from its view
  * offset through placeholder expansion (view → cleaned) and stripped invisible
  * runs (cleaned → disk). A run abutting the secret stays outside its span (it
