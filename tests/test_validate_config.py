@@ -8,6 +8,7 @@ from typing import Callable
 import pytest
 
 from tests._helpers import REPO_ROOT
+from tests.test_safe_launch import bootstrap_target, pretooluse_commands
 
 
 def write_settings(sandbox: Path, settings: dict) -> None:
@@ -272,7 +273,13 @@ def test_pretooluse_with_shipped_bootstrap_passes(tmp_path: Path, copy_script) -
     shipped = json.loads((REPO_ROOT / ".claude" / "settings.json").read_text())
     write_settings(tmp_path, {"hooks": {"PreToolUse": shipped["hooks"]["PreToolUse"]}})
     make_hook(tmp_path, ".claude/hooks/safe-launch.sh")
-    make_hook(tmp_path, ".claude/hooks/pre-push-check.sh")
+    # Derived, not listed: a hook added to settings.json must not need a second
+    # edit here, or the check-1 path scan this test exercises silently reports
+    # the fixture's gap instead of the validator's verdict.
+    targets = {bootstrap_target(cmd) for cmd in pretooluse_commands()}
+    assert targets, "shipped PreToolUse block wraps no hooks; check 1 untested"
+    for name in targets:
+        make_hook(tmp_path, f".claude/hooks/{name}")
     result = run_validator(tmp_path, copy_script)
     assert result.returncode == 0, result.stdout + result.stderr
     assert "All checks passed" in result.stdout

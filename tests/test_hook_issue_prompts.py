@@ -24,6 +24,7 @@ from tests.test_safe_launch import (
     pretooluse_commands,
     run_bootstrap,
     run_safe_launch,
+    write_bootstrap_target,
     write_target,
 )
 
@@ -86,7 +87,7 @@ def test_bootstrap_degradation_prompts_issue_filing(
     shipped settings.json."""
     for cmd in pretooluse_commands():
         sandbox = make_sandbox(tmp_path / "corrupt")
-        write_target(sandbox, 'echo "TARGET-RAN"', name="pre-push-check.sh")
+        write_bootstrap_target(sandbox, cmd)
         wrapper = sandbox / ".claude" / "hooks" / "safe-launch.sh"
         wrapper.write_text("#!/bin/bash\n<<<<<<< HEAD\n")
         result = run_bootstrap(cmd, sandbox, extra_env=posture_env(fail_open))
