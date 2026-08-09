@@ -27,6 +27,10 @@ import * as prompt from "../src/prompt.mjs";
 import * as viewMap from "../src/view-map.mjs";
 import * as rehydrate from "../src/rehydrate.mjs";
 import * as output from "../src/output.mjs";
+// Hook-layer entry points: the whole-process compositions that eat untrusted
+// tool output / tool input owe fuzz targets exactly like the engine parsers.
+import * as sanitizeOutputHook from "../claude-hooks/sanitize-output.mjs";
+import * as pretooluseHook from "../claude-hooks/pretooluse-sanitize.mjs";
 
 import { CHECKS } from "../src/invisible.mjs";
 import {
@@ -81,6 +85,12 @@ const FUZZ_REQUIRED = [
   // text are removed or replaced, so it owes the "only verbatim matches of the
   // ORIGINAL text are touched" property directly, not just via its callers.
   "spliceOrdered",
+  // Whole-pipeline hook entry points (PostToolUse sanitize, PreToolUse
+  // rehydration): fuzzed end-to-end — sanitize → adversarial model edits →
+  // rehydrate, over multiple rounds — by claude-hooks-roundtrip.fuzz.test.mjs.
+  "evaluateToolOutput",
+  "buildPreToolUseResponse",
+  "rehydrateLayer2",
 ];
 
 // Entry points that owe SEMANTIC-CORRECTNESS fuzzing, not just structural
@@ -439,6 +449,24 @@ const exportedFunctions = new Map(
     .flatMap((mod) => Object.entries(mod))
     .filter(([, value]) => typeof value === "function"),
 );
+
+// The hook entry points are added BY NAME rather than by spreading the hook
+// modules' exports: both hook modules define their own `sanitizeText` /
+// `sanitizeValue` wrappers, and a bulk spread would silently retarget the
+// existing engine obligations for those names at the wrappers (`new Map`
+// lets the last entry win). Collisions are rejected outright so a future
+// same-named hook export fails loud instead of shadowing an engine parser.
+for (const [name, mod] of [
+  ["evaluateToolOutput", sanitizeOutputHook],
+  ["buildPreToolUseResponse", pretooluseHook],
+  ["rehydrateLayer2", pretooluseHook],
+]) {
+  assert.ok(
+    !exportedFunctions.has(name),
+    `${name} collides with an engine export — adding it would retarget that obligation`,
+  );
+  exportedFunctions.set(name, mod[name]);
+}
 
 describe("fuzz-coverage obligation gate", () => {
   it("discovers at least one fast-check suite (gate is not vacuous)", () => {
