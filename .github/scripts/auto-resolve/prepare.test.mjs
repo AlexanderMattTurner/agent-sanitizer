@@ -160,7 +160,7 @@ function runPrepare(work, extraEnv = {}, { mergiraf = "cannot-solve" } = {}) {
     chmodSync(mergirafPath, 0o755);
   }
   let error = null;
-  let stdout = "";
+  let stdout;
   try {
     stdout = execFileSync("bash", [SCRIPT], {
       cwd: work,

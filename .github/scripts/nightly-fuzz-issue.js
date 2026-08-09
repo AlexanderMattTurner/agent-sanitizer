@@ -173,7 +173,7 @@ module.exports = async ({ github, context, core }) => {
   const { owner, repo } = context.repo;
   const runUrl = `${context.serverUrl}/${owner}/${repo}/actions/runs/${context.runId}`;
 
-  let log = "";
+  let log;
   try {
     log = fs.readFileSync(LOG_FILE, "utf8");
   } catch {
