@@ -23,3 +23,13 @@
 # the release being the one we reviewed.
 MERGIRAF_VERSION=v0.18.0
 MERGIRAF_SHA256_linux_amd64=4de0986ff9155411dd105958b94362056d0055025db75369eddd3ecd25334cd2
+
+# gitleaks backs the Required secret scan (gitleaks.yaml) and phone-home.yaml's
+# scan of extracted lessons before they leave the repo. install-gitleaks.sh
+# downloads the pinned release tarball from GitHub and sha256-verifies it before
+# extracting; as with mergiraf, the digest HERE is the anchor — it is the
+# published SHA-256 of gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz, reviewed
+# when the pin was bumped, so a tampered or re-tagged release asset fails the
+# install instead of injecting a malicious binary.
+GITLEAKS_VERSION=8.30.1
+GITLEAKS_SHA256_linux_x64=551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb

@@ -21,7 +21,7 @@
 # Walking it therefore only changes WHO answers, never WHAT the answer is.
 #
 # Contract: sourced into strict-mode (set -euo pipefail) callers; do not re-set
-# shell options. Requires .github/scripts/lib/retry.bash to be sourced first.
+# shell options. Requires .github/scripts/lib-ci-retry.sh to be sourced first.
 
 # The ladder, in attempt order: the same subscription tokens the Claude
 # workflows use, and ONLY those. A metered ANTHROPIC_API_KEY rung used to sit at
@@ -100,11 +100,11 @@ _anthropic_report_failure() {
 # One POST on the currently-selected credential. Sets _ANTHROPIC_CRED_REJECTED
 # when the API rejected the CREDENTIAL, which is what tells the caller to step to
 # the next rung instead of retrying this one.
-# invoked via retry_cmd's "$@" dispatch
+# invoked via `retry`'s "$@" dispatch
 _anthropic_post() {
   # A rung that has already been rejected is not attempted again: 401/403 is
   # deterministic for a given credential, and the answer to it is the NEXT
-  # credential, not another try at this one. retry_cmd owns the attempt loop, so
+  # credential, not another try at this one. `retry` owns the attempt loop, so
   # this guard is how a rejection leaves it early.
   [[ "$_ANTHROPIC_CRED_REJECTED" == "true" ]] && return 1
   local code
@@ -142,7 +142,7 @@ _anthropic_post() {
   # Any other deterministic client error is about the REQUEST (a malformed
   # body, an unknown model). Every rung would reject it identically, so walking
   # the ladder only wastes the run's time before failing with the same reason.
-  # retry_cmd runs us in the caller's shell, so exit ends the run.
+  # `retry` runs us in the caller's shell, so exit ends the run.
   4??)
     echo "Error: Claude API rejected the request (HTTP $code); not retrying — see the reason above." >&2
     exit 1
@@ -177,7 +177,7 @@ anthropic_messages() {
     _ANTHROPIC_CRED_REJECTED=false
     _ANTHROPIC_RATE_LIMITED=false
     _ANTHROPIC_HTTP_CODE=""
-    retry_cmd 3 2 _anthropic_post && return 0
+    RETRY_MAX=3 RETRY_BASE_DELAY=2 retry _anthropic_post && return 0
     if [[ "$_ANTHROPIC_CRED_REJECTED" == "true" ]]; then
       echo "Credential ${rung}/${#ladder[@]} was rejected (HTTP ${_ANTHROPIC_HTTP_CODE}); trying the next one." >&2
       continue

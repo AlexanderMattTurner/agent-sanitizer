@@ -22,6 +22,7 @@
 import { credentialNameMatcher } from "agent-sanitizer/credential-names-matcher";
 
 import credentialNames from "../../python/agent_sanitizer/secrets/data/credential-names.json" with { type: "json" };
+import redactionFloor from "../../python/agent_sanitizer/secrets/data/redaction-floor.json" with { type: "json" };
 import inferenceKeys from "../config/inference-key-vars.json" with { type: "json" };
 import scrubbed from "../config/scrubbed-env-vars.json" with { type: "json" };
 
@@ -102,7 +103,10 @@ function hostSource() {
  */
 export function minEnvSecretLen() {
   const hostLen = hostSource()?.minSecretLen;
-  if (hostLen === undefined) return inferenceKeys.min_secret_len;
+  // The package floor comes from the same physical file
+  // agent_sanitizer.secrets.config reads (DEFAULT_MIN_SECRET_LEN), so the JS
+  // pre-gate and the Python daemon cannot drift apart on it.
+  if (hostLen === undefined) return redactionFloor.min_secret_len;
   if (!Number.isInteger(hostLen) || hostLen <= 0)
     throw new Error(
       `${HOST_SOURCE_LABEL}: minSecretLen must be a positive integer, got ${JSON.stringify(hostLen)}`,
@@ -211,6 +215,27 @@ export function extraSecretVars(env = process.env) {
           "(expected comma-separated [A-Z0-9_] names)",
       );
   return tokens;
+}
+
+// The one switch for the whole secret layer (Layer 4). Secret redaction is
+// OPT-IN: it spawns a Python daemon, rewrites the model's view of tool output,
+// and gates the write path (rehydration denies, the placeholder-write
+// carve-out) — machinery whose false positives cost real work, so it engages
+// only when an operator asked for it. Every secret-layer call site consults
+// THIS predicate; a second reading of the variable is the drift channel that
+// would let one hook redact while another passes placeholders through.
+export const SECRETS_ENABLED_ENV = "AGENT_SANITIZER_SECRETS_ENABLED";
+
+/**
+ * True when the operator opted into the secret-redaction layer. `=== "1"`
+ * matches the other public knobs (`AGENT_SANITIZER_*_DISABLED`): any other
+ * value — unset, "true", "yes" — keeps the layer off, so a typo can only fail
+ * toward the default (no secret machinery), never silently enable it.
+ * @param {NodeJS.ProcessEnv | Record<string, string | undefined>} [env]
+ * @returns {boolean}
+ */
+export function secretsEnabled(env = process.env) {
+  return env[SECRETS_ENABLED_ENV] === "1";
 }
 
 /**

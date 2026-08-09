@@ -20,6 +20,7 @@ import {
   pairDiskSpans,
   makeFileView,
   anchorSpans,
+  viewMapDefect,
 } from "../src/view-map.mjs";
 
 // Secrets assembled at runtime so no complete token literal trips push
@@ -720,6 +721,72 @@ describe("anchorSpans", () => {
     assert.throws(
       () => anchorSpans("x", makeFileView("x", [], "codePoint")),
       /requires a view with utf16 pair offsets/,
+    );
+  });
+});
+
+// ─── viewMapDefect ───────────────────────────────────────────────────────────
+
+describe("viewMapDefect", () => {
+  const cleaned = `key=${SECRET_A} tail`;
+  // The production path: a code-point-space redactor map, converted once into
+  // the UTF-16 carrier viewMapDefect (and every splice) consumes.
+  const u16 = (text, pairs) =>
+    toUtf16View(makeFileView(text, pairs, "codePoint"));
+
+  it("accepts a sound map, including the empty one", () => {
+    const sound = u16(`key=${PH} tail`, [
+      { placeholder: PH, original: SECRET_A, start: 4 },
+    ]);
+    assert.equal(viewMapDefect(cleaned, sound), null);
+    assert.equal(viewMapDefect("abc", u16("abc", [])), null);
+  });
+
+  it("flags a placeholder that is not at its stated offset", () => {
+    const view = u16(`key=${PH} tail`, [
+      { placeholder: PH, original: SECRET_A, start: 3 },
+    ]);
+    assert.match(viewMapDefect(cleaned, view), /offset 3/);
+  });
+
+  it("flags originals that do not reconstruct the cleaned text", () => {
+    const view = u16(`key=${PH} tail`, [
+      { placeholder: PH, original: SECRET_B, start: 4 },
+    ]);
+    const defect = viewMapDefect(cleaned, view);
+    assert.match(defect, /does not reconstruct/);
+    // Defect messages must never carry a secret byte.
+    assert.ok(!defect.includes(SECRET_A) && !defect.includes(SECRET_B));
+  });
+
+  it("flags a no-pair view whose text silently differs from the file", () => {
+    assert.match(viewMapDefect("abc", u16("abx", [])), /does not reconstruct/);
+  });
+
+  it("converts offsets once: a sound map behind an astral char stays sound", () => {
+    // "😀" is one code point but two UTF-16 units; the redactor's code-point
+    // offset 5 lands at UTF-16 offset 6 via toUtf16View's conversion, and the
+    // validation must judge the CONVERTED pair.
+    const astralCleaned = `😀key=${SECRET_A}`;
+    const view = u16(`😀key=${PH}`, [
+      { placeholder: PH, original: SECRET_A, start: 5 },
+    ]);
+    assert.equal(viewMapDefect(astralCleaned, view), null);
+  });
+
+  it("refuses the un-converted code-point carrier", () => {
+    // Guards the call-site contract: viewMapDefect indexes by UTF-16 offset,
+    // so handing it the pre-conversion view must throw, not mis-judge.
+    assert.throws(
+      () => viewMapDefect("abc", makeFileView("abc", [], "codePoint")),
+      /utf16/,
+    );
+  });
+
+  it("rejects a hand-rolled view object", () => {
+    assert.throws(
+      () => viewMapDefect("abc", { text: "abc", pairs: [] }),
+      /makeFileView/,
     );
   });
 });

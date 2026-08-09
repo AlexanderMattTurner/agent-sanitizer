@@ -1,5 +1,5 @@
 // Consumer-perspective type fixture for the CURATED `claude-hooks` composition
-// surface — the six subpaths the exports map publishes, and only those. A module
+// surface — the subpaths the exports map publishes, and only those. A module
 // this file cannot import is the point, not an omission: the de-exports are
 // asserted in test/claude-hooks-exports.test.mjs. Companion to consumer.mts (which covers the library subpaths); this
 // file imports each hook module BY NAME through the published `exports` map, so

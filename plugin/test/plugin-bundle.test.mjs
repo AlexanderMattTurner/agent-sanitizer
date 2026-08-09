@@ -43,10 +43,37 @@ import {
 const ROOT = dirname(dirname(dirname(fileURLToPath(import.meta.url))));
 const PLUGIN_DIR = join(ROOT, "plugin");
 const HOOKS_DIR = join(ROOT, "claude-hooks");
-// The published credential-noun vocabulary, at the package-relative path the hook
-// libs import it from.
-const VOCAB_REL = join("python", "agent_sanitizer", "secrets", "data");
-const VOCAB_FILE = "credential-names.json";
+// The package-relative data files the hook libs statically import (the
+// credential-noun vocabulary, the invisible charset, the redaction floor).
+// DERIVED from package.json's `files` rather than listed here: a hand-kept list
+// goes stale the moment a lib imports a new data file, and the symptom is this
+// suite's omit-a-package tests failing as though the hook fails OPEN — the
+// module-load throw looks identical. Every shipped `python/**.json` is staged,
+// so a new import is covered the day it lands.
+// Every matching entry must be a LITERAL path: the staging below copies each
+// one with cpSync, so a glob (`python/**/*.json`) would fail with an ENOENT on
+// a path that never existed rather than staging the files it names — and the
+// non-empty assertion in stageSources would still pass. Rejected loudly rather
+// than expanded with globSync: the `files` list is literal today, and a glob
+// landing here is a packaging decision worth a human look, not something this
+// suite should quietly paper over.
+const GLOB_META = /[*?[\]{}!]/;
+const PACKAGE_DATA_FILES = JSON.parse(
+  readFileSync(join(ROOT, "package.json"), "utf8"),
+)
+  .files.filter(
+    (entry) => entry.startsWith("python/") && entry.endsWith(".json"),
+  )
+  .map((entry) => {
+    if (GLOB_META.test(entry))
+      throw new Error(
+        `package.json files entry ${JSON.stringify(entry)} is a glob, but the ` +
+          `plugin-bundle staging copies each entry as a literal path. Either ` +
+          `list the literal paths in package.json, or expand this derivation ` +
+          `with globSync({ cwd: ROOT }) before staging.`,
+      );
+    return entry;
+  });
 const ESC = "";
 
 /** Tag-character encoding of `s` — the ASCII-smuggling payload class. */
@@ -68,16 +95,22 @@ function stagePlugin(t) {
 }
 
 /**
- * This process's environment with the posture knob stripped. Every hook spawn
- * inherits it, so a developer who exported AGENT_SANITIZER_FAIL_OPEN in their
- * own shell cannot silently flip either set of assertions below into the other
- * posture; a spawn that wants the closed posture states FAIL_CLOSED via `env`.
+ * This process's environment with the posture knob stripped and the secret
+ * opt-in pinned ON. Every hook spawn inherits it, so a developer's own shell
+ * exports cannot silently flip the assertions below: FAIL_OPEN is deleted (a
+ * spawn that wants the closed posture states FAIL_CLOSED via `env`), and
+ * SECRETS_ENABLED is set because the daemon/redaction paths under test only
+ * exist inside the opt-in — the knob-off default has its own explicit test.
  */
 function baseEnv() {
   const env = { ...process.env };
   delete env.AGENT_SANITIZER_FAIL_OPEN;
+  env.AGENT_SANITIZER_SECRETS_ENABLED = "1";
   return env;
 }
+
+/** The secret layer's default (opt-in absent), as an `env` override. */
+const SECRETS_OFF = { AGENT_SANITIZER_SECRETS_ENABLED: "" };
 
 /** The opt-out, as an `env` override for the fail-closed tests. */
 const FAIL_CLOSED = { AGENT_SANITIZER_FAIL_OPEN: "0" };
@@ -131,14 +164,20 @@ function stageSources(t, { omit = [] } = {}) {
   const dir = scratch(t);
   const hooks = join(dir, "claude-hooks");
   cpSync(HOOKS_DIR, hooks, { recursive: true });
-  // The hook libs reach the published credential-noun vocabulary at its
-  // package-relative path (`../../python/…`), so staging claude-hooks/ alone
-  // would model a layout npm never installs — every `files` entry lands under
-  // one root. Without this the env-config import throws at module load, which
-  // looks exactly like the fail-OPEN the omit-a-package test exists to detect.
-  const vocabDir = join(dir, VOCAB_REL);
-  mkdirSync(vocabDir, { recursive: true });
-  cpSync(join(ROOT, VOCAB_REL, VOCAB_FILE), join(vocabDir, VOCAB_FILE));
+  // The hook libs reach the published data files at their package-relative
+  // paths (`../../python/…`), so staging claude-hooks/ alone would model a
+  // layout npm never installs — every `files` entry lands under one root.
+  // Without these the imports throw at module load, which looks exactly like
+  // the fail-OPEN the omit-a-package test exists to detect.
+  assert.ok(
+    PACKAGE_DATA_FILES.length > 0,
+    "no python/**.json in package.json files — the staging derivation broke",
+  );
+  for (const rel of PACKAGE_DATA_FILES) {
+    const dest = join(dir, rel);
+    mkdirSync(dirname(dest), { recursive: true });
+    cpSync(join(ROOT, rel), dest);
+  }
   const modules = join(dir, "node_modules");
   mkdirSync(modules, { recursive: true });
   for (const [name, target] of Object.entries(packageDirs()))
@@ -568,6 +607,28 @@ test("output hook redacts through the daemon wire protocol", async (t) => {
   assert.equal(out.updatedToolOutput.stdout, "aws_key=STUB-SCRUBBED");
 });
 
+test("without the secret opt-in the output hook leaves secret-shaped text alone", (t) => {
+  // The shipped default: SECRETS_ENABLED unset means Layer 4 never engages —
+  // no daemon is contacted (none is running here: an unreachable daemon under
+  // the opt-in fails the call CLOSED, so a pass-through PROVES the layer was
+  // off, not down) and the bytes reach the model verbatim.
+  const plugin = stagePlugin(t);
+  const res = launch(
+    plugin,
+    "PostToolUse",
+    "sanitize-output",
+    {
+      hook_event_name: "PostToolUse",
+      tool_name: "Bash",
+      tool_input: {},
+      tool_response: { stdout: "aws_key=AKIAIOSFODNN7EXAMPLE" },
+    },
+    { env: SECRETS_OFF },
+  );
+  assert.equal(res.status, 0, res.stderr);
+  assert.equal(res.stdout, "");
+});
+
 test("scan hook auto-cleans an injected instruction file", (t) => {
   const plugin = stagePlugin(t);
   const project = mkdtempSync(join(tmpdir(), "agent-sanitizer-project-"));
@@ -943,7 +1004,14 @@ test("provision fast-paths on a matching stamp without any toolchain", (t) => {
     "bash",
     [join(plugin, "scripts", "provision-redactor.sh"), data],
     // No python3, no uv, no pip on PATH: the fast path must not need them.
-    { encoding: "utf8", env: { PATH: stubBin(t, ["python3", "uv", "pip"]) } },
+    // The opt-in is set so the exit 0 proves the STAMP path, not the skip.
+    {
+      encoding: "utf8",
+      env: {
+        PATH: stubBin(t, ["python3", "uv", "pip"]),
+        AGENT_SANITIZER_SECRETS_ENABLED: "1",
+      },
+    },
   );
   assert.equal(res.status, 0, res.stderr);
 });
@@ -956,13 +1024,36 @@ test("provision fails loud when no Python toolchain exists", (t) => {
       join(plugin, "scripts", "provision-redactor.sh"),
       join(scratch(t), "data"),
     ],
-    { encoding: "utf8", env: { PATH: stubBin(t, ["python3", "uv", "pip"]) } },
+    {
+      encoding: "utf8",
+      // The secret opt-in must be set: without it the script's whole job is
+      // skipped (asserted separately below), Python present or not.
+      env: {
+        PATH: stubBin(t, ["python3", "uv", "pip"]),
+        AGENT_SANITIZER_SECRETS_ENABLED: "1",
+      },
+    },
   );
   assert.equal(res.status, 1);
   assert.match(res.stderr, /python3 not found/);
   // Names the consequence, not just the missing tool: without it a reader has
   // no way to tell a cosmetic warning from "secrets now reach the model".
   assert.match(res.stderr, /UNREDACTED/);
+});
+
+test("provision is a silent no-op without the secret opt-in", (t) => {
+  const plugin = stagePlugin(t);
+  const res = spawnSync(
+    "bash",
+    [
+      join(plugin, "scripts", "provision-redactor.sh"),
+      join(scratch(t), "data"),
+    ],
+    // No toolchain at all: the opt-out path must not even look for one.
+    { encoding: "utf8", env: { PATH: stubBin(t, ["python3", "uv", "pip"]) } },
+  );
+  assert.equal(res.status, 0, res.stderr);
+  assert.equal(res.stderr, "");
 });
 
 // ─── Shell-side timing: the two entry points that never reach node ───────────
@@ -1040,6 +1131,9 @@ test("provisioning reports as one-time setup, not as a slow hook", (t) => {
       encoding: "utf8",
       env: {
         PATH: stubBin(t, ["python3", "uv", "pip"]),
+        // Without the secret opt-in the script exits before ever measuring,
+        // and this test would fail on a silent early return.
+        AGENT_SANITIZER_SECRETS_ENABLED: "1",
         ...REPORT_EVERY_RUN,
       },
     },
@@ -1067,7 +1161,14 @@ test("a fast provisioning run says nothing about timing", (t) => {
   const res = spawnSync(
     "bash",
     [join(plugin, "scripts", "provision-redactor.sh"), data],
-    { encoding: "utf8", env: { PATH: stubBin(t, ["python3", "uv", "pip"]) } },
+    {
+      encoding: "utf8",
+      env: {
+        PATH: stubBin(t, ["python3", "uv", "pip"]),
+        // Opted in so silence comes from the fast path, not the opt-in skip.
+        AGENT_SANITIZER_SECRETS_ENABLED: "1",
+      },
+    },
   );
   assert.equal(res.status, 0, res.stderr);
   assert.equal(res.stderr.includes("PERFORMANCE"), false, res.stderr);

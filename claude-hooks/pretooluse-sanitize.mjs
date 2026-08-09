@@ -39,7 +39,11 @@ import {
   HookEvent,
   PermissionDecision,
 } from "./lib/hook-io.mjs";
-import { registerFaultPolicy, hookFaultOutcome } from "./lib/hook-fault.mjs";
+import {
+  registerFaultPolicy,
+  hookFaultOutcome,
+  defaultOpen,
+} from "./lib/hook-fault.mjs";
 import { runLayerPipeline } from "./lib/layer-pipeline.mjs";
 import { controlPlane, runJudgeCli } from "./lib/control-plane.mjs";
 import {
@@ -54,6 +58,7 @@ import {
   authoredContext,
 } from "./lib/authored-content.mjs";
 import { redactViaDaemon } from "./lib/redactor-client.mjs";
+import { secretsEnabled } from "./lib/env-config.mjs";
 import { withSecretDropGuard } from "./lib/secret-drop-guard.mjs";
 import { placeholderNotice } from "./lib/placeholder-grammar.mjs";
 import { bestEffortTrace, trace, TraceEvent } from "./lib/trace.mjs";
@@ -147,10 +152,23 @@ const redactorIo = {
  * (not an inline default-param arrow) so tests can still inject a fake as the
  * second argument to buildPreToolUseResponse.
  */
-const defaultRehydrate = withSecretDropGuard(
+const guardedRehydrate = withSecretDropGuard(
   (tool, toolInput) => rehydrateRedacted(tool, toolInput, redactorIo),
   redactorIo,
 );
+
+/**
+ * The wired default gates the whole rehydration layer on the secret opt-in:
+ * with secrets off the output hook never inserts placeholders, so there is
+ * nothing to re-anchor — and skipping here (rather than inside the layer)
+ * means an Edit on a plain file never touches the file system twice or spawns
+ * the daemon. Consulted per call, not at module load, so a knob set after the
+ * bundle loads still governs the next tool call.
+ * @param {string} tool
+ * @param {any} toolInput
+ */
+const defaultRehydrate = async (tool, toolInput) =>
+  secretsEnabled() ? guardedRehydrate(tool, toolInput) : null;
 
 /**
  * Trace the response on the way out — "noop" (clean pass-through), "deny",
@@ -312,7 +330,9 @@ export async function buildPreToolUseResponse(
   // cannot tell a write from a read, so it is context-only — never a verdict
   // (see placeholderNotice). Evaluated on the pipeline's FINAL input, matching
   // what the tool will actually receive.
-  const notice = placeholderNotice(tool, current);
+  // Gated on the secret opt-in like the layer itself: with secrets off,
+  // placeholder-shaped text is ordinary prose and the advisory is noise.
+  const notice = secretsEnabled() ? placeholderNotice(tool, current) : null;
   if (notice !== null) contexts.push(notice);
 
   return emitTraced(
@@ -496,12 +516,60 @@ export function failClosedFields(parsedOk, err, opts = {}) {
   };
 }
 
+// The redaction-placeholder prefix, restated as a literal rather than imported:
+// this check belongs to the FAILURE posture and must work exactly when the
+// agent-sanitizer package (which exports it as DEFAULT_HINT) failed to load.
+// Exported so test/claude-hooks-fail-open.test.mjs can pin the two spellings
+// together with exact equality — a prefix-only behavioral check would keep
+// passing if this literal drifted shorter and the carve-out over-triggered.
+export const REDACTION_HINT = "[REDACTED";
+// The file-editing tools whose input fields ARE the bytes persisted to disk.
+// Deliberately NOT exhaustive over every clobber path: Bash can also write a
+// placeholder to disk (`>`, `tee`, `sed -i`, a heredoc), but command strings
+// mention "[REDACTED" benignly far too often — grepping for it, discussing
+// it — for an ask to hold precision there. That is an accepted gap, named in
+// THREAT-MODEL.md's carve-out paragraph, not a completeness claim.
+const WRITE_SHAPED_TOOLS = new Set([
+  "Write",
+  "Edit",
+  "MultiEdit",
+  "NotebookEdit",
+]);
+
+/**
+ * True when a faulting PreToolUse call is the one case the OPEN posture must
+ * still not pass: a write-shaped tool whose input carries the
+ * redaction-placeholder prefix. Such a placeholder stands for a secret the
+ * sanitizer redacted out of the model's view; with the sanitizer down,
+ * rehydration cannot translate it back, so letting the call through would
+ * persist the literal placeholder text over the real secret on disk — a
+ * destructive clobber, not a missed scan. Package-free by construction (a Set
+ * lookup and a substring test on the already-parsed payload), so it holds when
+ * the failure IS the missing package.
+ * @param {unknown} input raw parsed PreToolUse payload (undefined if unparsed)
+ * @returns {boolean}
+ */
+export function hintedWriteFault(input) {
+  const payload =
+    /** @type {{tool_name?: unknown, tool_input?: unknown} | undefined} */ (
+      input
+    );
+  if (!WRITE_SHAPED_TOOLS.has(/** @type {string} */ (payload?.tool_name)))
+    return false;
+  // A parsed-JSON payload can hold no circular reference, so stringify cannot
+  // throw; `?? null` keeps a missing tool_input from stringifying to undefined.
+  return JSON.stringify(payload?.tool_input ?? null).includes(REDACTION_HINT);
+}
+
 /**
  * The hookSpecificOutput fields for a hook-level failure under the CALLER's
  * chosen posture: fail-OPEN by default — a warning context and no
  * permissionDecision, so the tool call proceeds unsanitized — or the
  * fail-CLOSED verdict of {@link failClosedFields} when the caller set
- * AGENT_SANITIZER_FAIL_OPEN=0.
+ * AGENT_SANITIZER_FAIL_OPEN=0. The open default has ONE carve-out, declared in
+ * this hook's fault policy below: a write-shaped call whose input carries a
+ * `[REDACTED…]` placeholder asks instead of passing (see
+ * {@link hintedWriteFault}) — pass `input` so the policy can see it.
  *
  * The posture covers this hook's own failures, whatever their cause. What it
  * does NOT cover is the verdict of a sanitizer that ran: a payload
@@ -512,6 +580,7 @@ export function failClosedFields(parsedOk, err, opts = {}) {
  *   messages?: Partial<typeof PRE_TOOL_USE_MESSAGES>,
  *   hint?: string,
  *   env?: NodeJS.ProcessEnv | Record<string, string | undefined>,
+ *   input?: unknown,
  * }} [opts]
  * @returns {Record<string, unknown>}
  */
@@ -522,16 +591,51 @@ export function hookFailureFields(parsedOk, err, opts = {}) {
       env: opts.env,
       messages: opts.messages,
       hint: opts.hint,
+      input: opts.input,
     }).fields
   );
 }
 
 // This hook's entry in the one posture table (lib/hook-fault.mjs). The OPEN arm
-// is the shared default — a warning context and no verdict — so only the CLOSED
-// verdict, which is this hook's own ask/deny split, is stated here.
+// keeps the shared default — a warning context and no verdict — with ONE
+// carve-out: a write-shaped input carrying a [REDACTED… placeholder asks
+// instead. The open posture trades enforcement for availability on the
+// sanitizer's own breakage, and that trade is sound for a missed SCAN; a
+// placeholder-bearing write is not a scan but a guaranteed clobber — the
+// placeholder would be persisted literally over the secret it stands for (see
+// hintedWriteFault). The ask keeps a human in the loop exactly as the closed
+// posture's clean-parse arm does.
 registerFaultPolicy(HOOK_NAME, {
   event: HookEvent.PRE_TOOL_USE,
   guarded: "tool input",
+  open: (ctx) => {
+    // Non-carve-out faults take the SHARED open rendering, not a copy of it —
+    // hook-fault.mjs owns that body, and a restated one would silently drift.
+    // The carve-out itself rides the secret opt-in: with secrets off no
+    // sanitized view ever handed the model a placeholder, so hint-shaped text
+    // in a write is literal prose and holding it would be a false positive.
+    if (!secretsEnabled(ctx.env) || !hintedWriteFault(ctx.input))
+      return defaultOpen(ctx);
+    // parsedOk is hardcoded true (the ASK arm): hintedWriteFault(undefined)
+    // is false, so an unparsed input can never reach this line — reaching it
+    // proves the payload parsed.
+    const closed = failClosedFields(true, ctx.err, {
+      messages: ctx.messages,
+      hint: ctx.hint,
+    });
+    return {
+      fields: {
+        ...closed,
+        permissionDecisionReason:
+          `${closed.permissionDecisionReason} This input would write ` +
+          `${REDACTION_HINT}…] placeholder text, which stands for a redacted ` +
+          `secret the unavailable sanitizer cannot translate back; proceeding ` +
+          `would overwrite the real secret with the placeholder, so the call ` +
+          `is held even under the fail-open posture. Retry once the sanitizer ` +
+          `recovers, or ask the user to make this change.`,
+      },
+    };
+  },
   closed: (ctx) => ({
     fields: failClosedFields(ctx.parsedOk, ctx.err, {
       messages: ctx.messages,
@@ -580,6 +684,7 @@ export async function cliMain(opts = {}) {
           hookFailureFields(input !== undefined, err, {
             messages,
             hint: depLoadHint(err, messages.remedy),
+            input,
           }),
         ),
     },

@@ -338,7 +338,11 @@ _LEGITIMATE = {
     "log line": "2025-11-04 10:30:00 INFO  auth: token refreshed for user 42",
     "sql schema": "  api_key_hash CHAR(64) NOT NULL,  -- sha256 of the key",
     "diff header": "--- a/python/agent_sanitizer/secrets/engine.py",
-    "public repo url": "git clone https://github.com/anthropics/agent-sanitizer.git",
+    # Deliberately a documented stand-in slug, not a real owner: this corpus is
+    # scanned by tests/test_repo_slug.py, which requires every github.com URL in
+    # the tree to name this repo or a classified one. The detector under test
+    # cares about the URL's shape, not whose repo it names.
+    "public repo url": "git clone https://github.com/owner/repo.git",
 }
 
 

@@ -22,22 +22,11 @@ and that each exemption still names a version this repo genuinely pins.
 """
 
 import json
-import subprocess
-from pathlib import Path
 
 import pytest
 import yaml
 
-# Resolve the repo root via git rather than parent-walking from __file__, so the
-# test keeps working if it is moved (per the project test conventions).
-REPO_ROOT = Path(
-    subprocess.run(
-        ["git", "rev-parse", "--show-toplevel"],
-        capture_output=True,
-        text=True,
-        check=True,
-    ).stdout.strip()
-)
+from tests._helpers import REPO_ROOT
 
 # 3 days, in minutes — pnpm reads `minimumReleaseAge` in minutes. The floor is a
 # minimum, not an equality: raising the window is always safe, lowering it needs

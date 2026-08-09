@@ -255,8 +255,8 @@ async function awaitLazyDependency({
   markerPresent,
   setupAlive,
   now = () => Date.now(),
-  sleep: sleep2 = (ms) => new Promise((resolve2) => {
-    setTimeout(resolve2, ms);
+  sleep: sleep2 = (ms) => new Promise((resolve3) => {
+    setTimeout(resolve3, ms);
   }),
   graceMs = 5e3,
   settleMs = 1e3,
@@ -1687,10 +1687,10 @@ var require_truncate = __commonJS({
   "node_modules/.pnpm/semver@7.8.5/node_modules/semver/functions/truncate.js"(exports, module) {
     "use strict";
     var parse60 = require_parse();
-    var constants = require_constants();
+    var constants2 = require_constants();
     var SemVer = require_semver();
     var truncate = (version2, truncation, options) => {
-      if (!constants.RELEASE_TYPES.includes(truncation)) {
+      if (!constants2.RELEASE_TYPES.includes(truncation)) {
         return null;
       }
       const clonedVersion = cloneInputVersion(version2, options);
@@ -2739,7 +2739,7 @@ var require_semver2 = __commonJS({
   "node_modules/.pnpm/semver@7.8.5/node_modules/semver/index.js"(exports, module) {
     "use strict";
     var internalRe = require_re();
-    var constants = require_constants();
+    var constants2 = require_constants();
     var SemVer = require_semver();
     var identifiers = require_identifiers();
     var parse60 = require_parse();
@@ -2823,8 +2823,8 @@ var require_semver2 = __commonJS({
       re: internalRe.re,
       src: internalRe.src,
       tokens: internalRe.t,
-      SEMVER_SPEC_VERSION: constants.SEMVER_SPEC_VERSION,
-      RELEASE_TYPES: constants.RELEASE_TYPES,
+      SEMVER_SPEC_VERSION: constants2.SEMVER_SPEC_VERSION,
+      RELEASE_TYPES: constants2.RELEASE_TYPES,
       compareIdentifiers: identifiers.compareIdentifiers,
       rcompareIdentifiers: identifiers.rcompareIdentifiers
     };
@@ -8077,7 +8077,7 @@ var require_util = __commonJS({
         }
         path2 = url.path;
       }
-      var isAbsolute = exports.isAbsolute(path2);
+      var isAbsolute2 = exports.isAbsolute(path2);
       var parts2 = [];
       var start = 0;
       var i = 0;
@@ -8112,7 +8112,7 @@ var require_util = __commonJS({
       }
       path2 = parts2.join("/");
       if (path2 === "") {
-        path2 = isAbsolute ? "/" : ".";
+        path2 = isAbsolute2 ? "/" : ".";
       }
       if (url) {
         url.path = path2;
@@ -8121,7 +8121,7 @@ var require_util = __commonJS({
       return path2;
     });
     exports.normalize = normalize3;
-    function join7(aRoot, aPath) {
+    function join8(aRoot, aPath) {
       if (aRoot === "") {
         aRoot = ".";
       }
@@ -8153,11 +8153,11 @@ var require_util = __commonJS({
       }
       return joined;
     }
-    exports.join = join7;
+    exports.join = join8;
     exports.isAbsolute = function(aPath) {
       return aPath.charAt(0) === "/" || urlRegexp.test(aPath);
     };
-    function relative2(aRoot, aPath) {
+    function relative3(aRoot, aPath) {
       if (aRoot === "") {
         aRoot = ".";
       }
@@ -8176,7 +8176,7 @@ var require_util = __commonJS({
       }
       return Array(level + 1).join("../") + aPath.substr(aRoot.length + 1);
     }
-    exports.relative = relative2;
+    exports.relative = relative3;
     var supportsNullProto = (function() {
       var obj = /* @__PURE__ */ Object.create(null);
       return !("__proto__" in obj);
@@ -8367,7 +8367,7 @@ var require_util = __commonJS({
             parsed.path = parsed.path.substring(0, index2 + 1);
           }
         }
-        sourceURL = join7(urlGenerate(parsed), sourceURL);
+        sourceURL = join8(urlGenerate(parsed), sourceURL);
       }
       return normalize3(sourceURL);
     }
@@ -32038,9 +32038,9 @@ var init_lib5 = __esm({
        * @returns {undefined}
        *   Nothing.
        */
-      set dirname(dirname4) {
+      set dirname(dirname5) {
         assertPath(this.basename, "dirname");
-        this.path = default2.join(dirname4 || "", this.basename);
+        this.path = default2.join(dirname5 || "", this.basename);
       }
       /**
        * Get the extname (including dot) (example: `'.js'`).
@@ -32684,7 +32684,7 @@ var init_lib6 = __esm({
         assertParser("process", this.parser || this.Parser);
         assertCompiler("process", this.compiler || this.Compiler);
         return done ? executor(void 0, done) : new Promise(executor);
-        function executor(resolve2, reject) {
+        function executor(resolve3, reject) {
           const realFile = vfile(file);
           const parseTree = (
             /** @type {HeadTree extends undefined ? Node : HeadTree} */
@@ -32715,8 +32715,8 @@ var init_lib6 = __esm({
           function realDone(error, file2) {
             if (error || !file2) {
               reject(error);
-            } else if (resolve2) {
-              resolve2(file2);
+            } else if (resolve3) {
+              resolve3(file2);
             } else {
               ok(done, "`done` is defined if `resolve` is not");
               done(void 0, file2);
@@ -32818,7 +32818,7 @@ var init_lib6 = __esm({
           file = void 0;
         }
         return done ? executor(void 0, done) : new Promise(executor);
-        function executor(resolve2, reject) {
+        function executor(resolve3, reject) {
           ok(
             typeof file !== "function",
             "`file` can\u2019t be a `done` anymore, we checked"
@@ -32832,8 +32832,8 @@ var init_lib6 = __esm({
             );
             if (error) {
               reject(error);
-            } else if (resolve2) {
-              resolve2(resultingTree);
+            } else if (resolve3) {
+              resolve3(resultingTree);
             } else {
               ok(done, "`done` is defined if `resolve` is not");
               done(void 0, resultingTree, file2);
@@ -35696,10 +35696,10 @@ function resolveAll(constructs2, events, context) {
   const called = [];
   let index2 = -1;
   while (++index2 < constructs2.length) {
-    const resolve2 = constructs2[index2].resolveAll;
-    if (resolve2 && !called.includes(resolve2)) {
-      events = resolve2(events, context);
-      called.push(resolve2);
+    const resolve3 = constructs2[index2].resolveAll;
+    if (resolve3 && !called.includes(resolve3)) {
+      events = resolve3(events, context);
+      called.push(resolve3);
     }
   }
   return events;
@@ -55867,6 +55867,250 @@ var init_confusables = __esm({
   }
 });
 
+// agent-sanitizer/src/instructions.mjs
+var instructions_exports = {};
+__export(instructions_exports, {
+  atomicReplaceFile: () => atomicReplaceFile,
+  cleanFile: () => cleanFile,
+  decodeRun: () => decodeRun,
+  findInstructionFiles: () => findInstructionFiles,
+  scanInstructionFiles: () => scanInstructionFiles,
+  scanText: () => scanText
+});
+import {
+  readFileSync as readFileSync2,
+  writeFileSync as writeFileSync2,
+  globSync,
+  renameSync,
+  lstatSync as lstatSync2,
+  fstatSync,
+  realpathSync,
+  openSync as openSync2,
+  fsyncSync,
+  fchmodSync,
+  closeSync as closeSync2,
+  unlinkSync as unlinkSync2,
+  constants
+} from "node:fs";
+import { randomBytes } from "node:crypto";
+import { join, relative, resolve, isAbsolute, dirname, sep } from "node:path";
+function neutralizeTagBytes(asciiCodes) {
+  let out = "";
+  for (const code4 of asciiCodes) {
+    if (code4 === 92) out += "\\\\";
+    else if (code4 === 34) out += '\\"';
+    else if (code4 >= 32 && code4 <= 126) out += String.fromCharCode(code4);
+    else out += `\\x${code4.toString(16).toUpperCase().padStart(2, "0")}`;
+  }
+  return out;
+}
+function decodeRun(run) {
+  const cps = [...run].map((ch) => (
+    /** @type {number} */
+    ch.codePointAt(0)
+  ));
+  const tagBytes = cps.filter((cp) => cp >= 917505 && cp <= 917631).map((cp) => cp - 917504);
+  const ZW_BIT = /* @__PURE__ */ new Map([
+    [8203, "0"],
+    [8204, "1"],
+    [8205, "|"]
+  ]);
+  const zwCount = cps.filter((cp) => ZW_BIT.has(cp)).length;
+  if (tagBytes.length > 0 && tagBytes.length > cps.length / 2) {
+    const note = zwCount > 0 ? ` + ${zwCount} zero-width char(s)` : "";
+    return {
+      method: "Unicode tag characters \u2192 ASCII",
+      decoded: `${UNTRUSTED_PREFIX}"${neutralizeTagBytes(tagBytes)}"${note}`
+    };
+  }
+  if (zwCount > 0 && zwCount > cps.length / 2) {
+    const bits = cps.filter((cp) => ZW_BIT.has(cp)).map((cp) => ZW_BIT.get(cp)).join("");
+    const otherCount = cps.length - zwCount;
+    const note = otherCount > 0 ? ` + ${otherCount} other char(s)` : "";
+    return {
+      method: "zero-width binary encoding",
+      decoded: `[${zwCount} zero-width chars: ${bits.slice(0, 80)}]${note}`
+    };
+  }
+  if (tagBytes.length > 0 || zwCount > 0) {
+    const parts2 = [];
+    if (tagBytes.length > 0)
+      parts2.push(`${UNTRUSTED_PREFIX}"${neutralizeTagBytes(tagBytes)}"`);
+    if (zwCount > 0) {
+      const bits = cps.filter((cp) => ZW_BIT.has(cp)).map((cp) => ZW_BIT.get(cp)).join("");
+      parts2.push(`[${zwCount} zero-width chars: ${bits.slice(0, 80)}]`);
+    }
+    const otherCount = cps.length - tagBytes.length - zwCount;
+    const note = otherCount > 0 ? ` + ${otherCount} other char(s)` : "";
+    return {
+      method: "mixed tag + zero-width encodings",
+      decoded: parts2.join(" ") + note
+    };
+  }
+  return {
+    method: "invisible Unicode sequence",
+    decoded: cps.map((cp) => `U+${cp.toString(16).toUpperCase().padStart(4, "0")}`).join(" ")
+  };
+}
+function scanText(content3) {
+  const findings = [];
+  LONG_RUN_RE.lastIndex = 0;
+  let match;
+  let runChars = 0;
+  while ((match = LONG_RUN_RE.exec(content3)) !== null) {
+    const lineNum = content3.slice(0, match.index).split("\n").length;
+    const charCount = [...match[0]].length;
+    runChars += charCount;
+    findings.push({ line: lineNum, charCount, ...decodeRun(match[0]) });
+  }
+  const scattered = countPayloadInvisible(content3) - runChars;
+  if (scattered >= SCATTERED_THRESHOLD) {
+    findings.push({
+      line: null,
+      // whole-file finding: scattered chars aren't tied to one line
+      charCount: scattered,
+      method: "scattered invisible chars (possible threshold evasion)",
+      decoded: `[${scattered} invisible chars distributed across file]`
+    });
+  }
+  return findings;
+}
+function isContained(realRoot, realChild) {
+  const rel = relative(realRoot, realChild);
+  return rel === "" || !rel.startsWith(`..${sep}`) && rel !== ".." && !isAbsolute(rel);
+}
+function keepContained(absPath, realRoot, literalRoot, pattern) {
+  let real;
+  try {
+    real = realpathSync(absPath);
+  } catch {
+    return false;
+  }
+  if (isContained(realRoot, real)) return true;
+  if (isContained(literalRoot, absPath)) return false;
+  throw new Error(
+    `instruction-file path escapes scan root: pattern ${JSON.stringify(
+      pattern
+    )} matched ${JSON.stringify(absPath)} which resolves to ${JSON.stringify(
+      real
+    )} outside ${JSON.stringify(realRoot)}`
+  );
+}
+function findInstructionFiles(globs, { cwd = process.cwd() } = {}) {
+  const literalRoot = resolve(cwd);
+  const realRoot = realpathSync(literalRoot);
+  const seen = /* @__PURE__ */ new Set();
+  for (const pattern of globs)
+    for (const name50 of globSync(pattern, {
+      cwd,
+      exclude: (entry) => entry === "node_modules"
+    })) {
+      const absPath = isAbsolute(name50) ? name50 : join(cwd, name50);
+      if (keepContained(absPath, realRoot, literalRoot, pattern))
+        seen.add(absPath);
+    }
+  return [...seen];
+}
+function scanInstructionFiles(globs, { cwd = process.cwd() } = {}) {
+  const out = [];
+  for (const file of findInstructionFiles(globs, { cwd })) {
+    let content3;
+    try {
+      content3 = readFileSync2(file, "utf-8");
+    } catch {
+      continue;
+    }
+    const findings = scanText(content3);
+    if (findings.length > 0) out.push({ file: relative(cwd, file), findings });
+  }
+  return out;
+}
+function atomicReplaceFile(absPath, data, mode, tmpName = () => `.${randomBytes(12).toString("hex")}.tmp`, remove = unlinkSync2) {
+  const dir = dirname(absPath);
+  const tmp = join(dir, tmpName());
+  const fd = openSync2(
+    tmp,
+    constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL,
+    mode
+  );
+  try {
+    writeFileSync2(fd, data);
+    fchmodSync(fd, mode);
+    fsyncSync(fd);
+  } catch (err) {
+    closeSync2(fd);
+    try {
+      remove(tmp);
+    } catch {
+    }
+    throw err;
+  }
+  closeSync2(fd);
+  renameSync(tmp, absPath);
+  const dirFd = openSync2(dir, constants.O_RDONLY);
+  try {
+    fsyncSync(dirFd);
+  } finally {
+    closeSync2(dirFd);
+  }
+}
+function cleanFile(absPath, lstat = lstatSync2) {
+  let fd;
+  try {
+    fd = openSync2(absPath, constants.O_RDONLY | constants.O_NOFOLLOW);
+  } catch (err) {
+    const code4 = (
+      /** @type {NodeJS.ErrnoException} */
+      err.code
+    );
+    if (code4 === "ELOOP" || code4 === "EMLINK")
+      throw new Error(
+        `refusing to clean through a symlink (instruction files must be regular files): ${JSON.stringify(
+          absPath
+        )}`,
+        { cause: err }
+      );
+    throw err;
+  }
+  try {
+    const before = fstatSync(fd);
+    if (!before.isFile())
+      throw new Error(
+        `refusing to clean a non-regular file (instruction files must be regular files): ${JSON.stringify(
+          absPath
+        )}`
+      );
+    const raw = readFileSync2(fd);
+    const original = raw.toString("utf-8");
+    if (!Buffer.from(original, "utf-8").equals(raw))
+      throw new Error(
+        `refusing to clean a file that is not valid UTF-8 (round-trip mismatch would corrupt it): ${JSON.stringify(
+          absPath
+        )}`
+      );
+    if (scanText(original).length === 0) return false;
+    const stripped = stripInvisible(original);
+    const after = lstat(absPath);
+    if (after.isSymbolicLink() || after.ino !== before.ino || after.size !== before.size || after.mtimeMs !== before.mtimeMs)
+      throw new Error(
+        `instruction file changed between read and write, refusing to clobber (possible concurrent write or symlink swap): ${JSON.stringify(
+          absPath
+        )}`
+      );
+    atomicReplaceFile(absPath, stripped, before.mode);
+    return true;
+  } finally {
+    closeSync2(fd);
+  }
+}
+var UNTRUSTED_PREFIX;
+var init_instructions = __esm({
+  "node_modules/.pnpm/agent-sanitizer@2.20.0/node_modules/agent-sanitizer/src/instructions.mjs"() {
+    init_invisible();
+    UNTRUSTED_PREFIX = "untrusted data, not instructions: ";
+  }
+});
+
 // agent-sanitizer/src/view-map.mjs
 function makeFileView(text5, pairs) {
   return Object.freeze({
@@ -67219,13 +67463,13 @@ var init_control_plane2 = __esm({
 });
 
 // claude-hooks/lib/invisible-alert.mjs
-import { readFileSync as readFileSync2 } from "node:fs";
+import { readFileSync as readFileSync3 } from "node:fs";
 import { createHash as createHash2 } from "node:crypto";
-import { join } from "node:path";
+import { join as join2 } from "node:path";
 import { tmpdir } from "node:os";
 function invisibleCharAlert() {
   if (!markerIsTrusted(ALERT_FILE)) return null;
-  const raw = readFileSync2(ALERT_FILE, "utf-8").trim();
+  const raw = readFileSync3(ALERT_FILE, "utf-8").trim();
   return scrubUntrustedText(raw, applyLayer12);
 }
 function alertAcknowledged() {
@@ -67249,7 +67493,7 @@ var init_invisible_alert = __esm({
     await lazyImport("agent-sanitizer"));
     PROJECT_DIR = process.env.CLAUDE_PROJECT_DIR || process.cwd();
     PROJECT_HASH = createHash2("sha256").update(PROJECT_DIR).digest("hex").slice(0, 8);
-    ALERT_FILE = join(
+    ALERT_FILE = join2(
       tmpdir(),
       `.claude-invisible-char-alert-${PROJECT_HASH}`
     );
@@ -67336,8 +67580,8 @@ var init_authored_content = __esm({
 });
 
 // agent-sanitizer/src/credential-names.mjs
-import { readFileSync as readFileSync3 } from "node:fs";
-import { dirname, join as join2 } from "node:path";
+import { readFileSync as readFileSync4 } from "node:fs";
+import { dirname as dirname2, join as join3 } from "node:path";
 import { fileURLToPath as fileURLToPath2 } from "node:url";
 function dedupe(values) {
   return [...new Set(values)];
@@ -67400,7 +67644,7 @@ function parseCredentialNames(spec2) {
 }
 function credentialNames() {
   return _packaged ??= parseCredentialNames(
-    JSON.parse(readFileSync3(DATA_FILE, "utf8"))
+    JSON.parse(readFileSync4(DATA_FILE, "utf8"))
   );
 }
 function credentialNameMatcher(options = {}) {
@@ -67434,8 +67678,8 @@ function credentialNameMatcher(options = {}) {
 var DATA_FILE, FILE_LABEL, ENV_NAME_USE, FIELD_VALUE_USE, KNOWN_USES, PART_RE, _packaged;
 var init_credential_names = __esm({
   "node_modules/.pnpm/agent-sanitizer@2.20.0/node_modules/agent-sanitizer/src/credential-names.mjs"() {
-    DATA_FILE = join2(
-      dirname(fileURLToPath2(import.meta.url)),
+    DATA_FILE = join3(
+      dirname2(fileURLToPath2(import.meta.url)),
       "..",
       "python",
       "agent_sanitizer",
@@ -67487,13 +67731,23 @@ var init_credential_names2 = __esm({
   }
 });
 
+// python/agent_sanitizer/secrets/data/redaction-floor.json
+var redaction_floor_default;
+var init_redaction_floor = __esm({
+  "python/agent_sanitizer/secrets/data/redaction-floor.json"() {
+    redaction_floor_default = {
+      _comment: "Floor below which a configured env value is treated as a doc stub / placeholder rather than a real key, so a var set to a short test value ('fake', 'sk-test') never blanks unrelated output. ONE physical file backs both ecosystems, exactly like credential-names.json beside it: agent_sanitizer.secrets.config reads DEFAULT_MIN_SECRET_LEN from here, and claude-hooks/lib/env-config.mjs imports it for the Layer-4 pre-gate \u2014 there is no second copy to drift.",
+      min_secret_len: 16
+    };
+  }
+});
+
 // claude-hooks/config/inference-key-vars.json
 var inference_key_vars_default;
 var init_inference_key_vars = __esm({
   "claude-hooks/config/inference-key-vars.json"() {
     inference_key_vars_default = {
-      description: "Inference-provider API-key env vars whose VALUES the redactor masks by exact match, plus the placeholder floor below which a configured value is treated as a doc stub rather than a real key. Mirrors agent_sanitizer.secrets.config.DEFAULT_MIN_SECRET_LEN; the hooks send these names' current values to the redactor daemon per request (see lib/redactor-client.mjs).",
-      min_secret_len: 16,
+      description: "Inference-provider API-key env vars whose VALUES the redactor masks by exact match; the hooks send these names' current values to the redactor daemon per request (see lib/redactor-client.mjs). The placeholder floor lives in python/agent_sanitizer/secrets/data/redaction-floor.json \u2014 the one physical file both ecosystems read \u2014 not here.",
       vars: [
         "ANTHROPIC_API_KEY",
         "ANTHROPIC_AUTH_TOKEN",
@@ -67553,7 +67807,7 @@ function hostSource() {
 }
 function minEnvSecretLen() {
   const hostLen = hostSource()?.minSecretLen;
-  if (hostLen === void 0) return inference_key_vars_default.min_secret_len;
+  if (hostLen === void 0) return redaction_floor_default.min_secret_len;
   if (!Number.isInteger(hostLen) || hostLen <= 0)
     throw new Error(
       `${HOST_SOURCE_LABEL}: minSecretLen must be a positive integer, got ${JSON.stringify(hostLen)}`
@@ -67600,6 +67854,9 @@ function extraSecretVars(env = process.env) {
       );
   return tokens;
 }
+function secretsEnabled(env = process.env) {
+  return env[SECRETS_ENABLED_ENV] === "1";
+}
 function envBoundSecretVars(env = process.env) {
   return [
     .../* @__PURE__ */ new Set([
@@ -67611,12 +67868,13 @@ function envBoundSecretVars(env = process.env) {
     ])
   ];
 }
-var hostEnvConfigSource, HOST_SOURCE_LABEL, HOST_SOURCE_KEYS, _credentialRule, EXTRA_SECRET_VARS_ENV, EXTRA_TOKEN_RE;
+var hostEnvConfigSource, HOST_SOURCE_LABEL, HOST_SOURCE_KEYS, _credentialRule, EXTRA_SECRET_VARS_ENV, EXTRA_TOKEN_RE, SECRETS_ENABLED_ENV;
 var init_env_config = __esm({
   "claude-hooks/lib/env-config.mjs"() {
     "use strict";
     init_credential_names();
     init_credential_names2();
+    init_redaction_floor();
     init_inference_key_vars();
     init_scrubbed_env_vars();
     hostEnvConfigSource = null;
@@ -67624,15 +67882,16 @@ var init_env_config = __esm({
     HOST_SOURCE_KEYS = ["minSecretLen", "extraVars"];
     EXTRA_SECRET_VARS_ENV = "_AGENT_SANITIZER_EXTRA_SECRET_VARS";
     EXTRA_TOKEN_RE = /^[A-Z0-9_]+$/;
+    SECRETS_ENABLED_ENV = "AGENT_SANITIZER_SECRETS_ENABLED";
   }
 });
 
 // claude-hooks/lib/redactor-client.mjs
 import { spawn } from "node:child_process";
-import { existsSync, lstatSync as lstatSync2 } from "node:fs";
+import { existsSync, lstatSync as lstatSync3 } from "node:fs";
 import { createConnection } from "node:net";
 import { tmpdir as tmpdir2, userInfo as userInfo2 } from "node:os";
-import { dirname as dirname2, join as join3 } from "node:path";
+import { dirname as dirname3, join as join4 } from "node:path";
 import { fileURLToPath as fileURLToPath3 } from "node:url";
 function positiveMsOr(raw, fallback) {
   const ms = Number(raw);
@@ -67673,7 +67932,7 @@ function failClosed(cause) {
   );
 }
 function classifySocket(socketPath, deps = {}) {
-  const { lstat = lstatSync2, uid = userInfo2().uid } = deps;
+  const { lstat = lstatSync3, uid = userInfo2().uid } = deps;
   let st;
   try {
     st = lstat(socketPath);
@@ -67683,7 +67942,7 @@ function classifySocket(socketPath, deps = {}) {
   if (!st.isSocket() || st.uid !== uid) return "untrusted";
   let dir;
   try {
-    dir = lstat(dirname2(socketPath));
+    dir = lstat(dirname3(socketPath));
   } catch {
     return "untrusted";
   }
@@ -67694,7 +67953,7 @@ function isTrustedSocketDir(dir, uid) {
   return dir.isDirectory() && (dir.uid === uid || dir.uid === 0) && (dir.mode & 18) === 0;
 }
 function connectAndRequest(socketPath, request, deadlineMs = requestDeadlineMs()) {
-  return new Promise((resolve2, reject) => {
+  return new Promise((resolve3, reject) => {
     if (classifySocket(socketPath) === "untrusted") {
       reject(
         new Error(
@@ -67752,7 +68011,7 @@ function connectAndRequest(socketPath, request, deadlineMs = requestDeadlineMs()
         finish(reject, new Error("daemon reported redaction failure"));
         return;
       }
-      finish(resolve2, parsed);
+      finish(resolve3, parsed);
     });
     sock.on(
       "end",
@@ -67779,15 +68038,15 @@ async function waitForSocket(socketPath, { deadlineMs = WAIT_DEADLINE_MS, stepMs
   return false;
 }
 function canConnect(socketPath) {
-  return new Promise((resolve2) => {
+  return new Promise((resolve3) => {
     const sock = createConnection(socketPath);
     sock.on("connect", () => {
       sock.destroy();
-      resolve2(true);
+      resolve3(true);
     });
     sock.on("error", () => {
       sock.destroy();
-      resolve2(false);
+      resolve3(false);
     });
   });
 }
@@ -67864,21 +68123,21 @@ var init_redactor_client = __esm({
     init_hook_timing();
     init_env_config();
     FRAME_CAP = 16 * 1024 * 1024;
-    DEFAULT_SOCKET_PATH = process.env._AGENT_SANITIZER_REDACTOR_SOCKET || join3(tmpdir2(), "agent-sanitizer-redactor", "redactor.sock");
+    DEFAULT_SOCKET_PATH = process.env._AGENT_SANITIZER_REDACTOR_SOCKET || join4(tmpdir2(), "agent-sanitizer-redactor", "redactor.sock");
     WAIT_DEADLINE_MS = positiveMsOr(
       process.env._AGENT_SANITIZER_REDACTOR_WAIT_MS,
       8e3
     );
-    sleep = (ms) => new Promise((resolve2) => {
-      setTimeout(resolve2, ms);
+    sleep = (ms) => new Promise((resolve3) => {
+      setTimeout(resolve3, ms);
     });
   }
 });
 
 // claude-hooks/lib/secret-drop-guard.mjs
 import { createHash as createHash3 } from "node:crypto";
-import { lstatSync as lstatSync3, unlinkSync as unlinkSync2 } from "node:fs";
-import { join as join4, dirname as dirname3 } from "node:path";
+import { lstatSync as lstatSync4, unlinkSync as unlinkSync3 } from "node:fs";
+import { join as join5, dirname as dirname4 } from "node:path";
 import { tmpdir as tmpdir3 } from "node:os";
 import { spawnSync } from "node:child_process";
 function dropFingerprint(filePath, content3, dropped = []) {
@@ -67888,11 +68147,11 @@ function dropFingerprint(filePath, content3, dropped = []) {
   return digest.digest("hex").slice(0, 32);
 }
 function confirmMarkerPath(fingerprint) {
-  return join4(tmpdir3(), `.claude-secret-drop-${PROJECT_HASH}-${fingerprint}`);
+  return join5(tmpdir3(), `.claude-secret-drop-${PROJECT_HASH}-${fingerprint}`);
 }
 function gitTracked(filePath, spawn2 = spawnSync) {
   const res = spawn2("git", ["ls-files", "--error-unmatch", "--", filePath], {
-    cwd: dirname3(filePath),
+    cwd: dirname4(filePath),
     stdio: "ignore"
   });
   if (res.error) return true;
@@ -67952,12 +68211,12 @@ function consumeConfirm(fingerprint) {
   if (!markerIsTrusted(marker2)) return false;
   let fresh;
   try {
-    fresh = Date.now() - lstatSync3(marker2).mtimeMs <= CONFIRM_TTL_MS;
+    fresh = Date.now() - lstatSync4(marker2).mtimeMs <= CONFIRM_TTL_MS;
   } catch {
     return false;
   }
   try {
-    unlinkSync2(marker2);
+    unlinkSync3(marker2);
   } catch {
   }
   return fresh;
@@ -68052,16 +68311,18 @@ var init_trace2 = __esm({
 var pretooluse_sanitize_exports = {};
 __export(pretooluse_sanitize_exports, {
   PRE_TOOL_USE_MESSAGES: () => PRE_TOOL_USE_MESSAGES,
+  REDACTION_HINT: () => REDACTION_HINT,
   buildPreToolUseResponse: () => buildPreToolUseResponse,
   cliMain: () => cliMain,
   depLoadHint: () => depLoadHint,
   failClosedFields: () => failClosedFields,
+  hintedWriteFault: () => hintedWriteFault,
   hookFailureFields: () => hookFailureFields,
   judgePreToolUseSanitize: () => judgePreToolUseSanitize,
   preToolUseLayers: () => preToolUseLayers
 });
 import { createRequire as createRequire4 } from "node:module";
-import { readFileSync as readFileSync4 } from "node:fs";
+import { readFileSync as readFileSync5 } from "node:fs";
 function emitTraced(emitTrace, toolName, fields) {
   let outcome = "modified";
   if (fields === null) outcome = "noop";
@@ -68153,7 +68414,7 @@ async function buildPreToolUseResponse(input, rehydrate = defaultRehydrate, sink
       permissionDecisionReason: deny
     });
   contexts.push(...layerContexts);
-  const notice = placeholderNotice(tool, current);
+  const notice = secretsEnabled() ? placeholderNotice(tool, current) : null;
   if (notice !== null) contexts.push(notice);
   return emitTraced(
     emitTrace,
@@ -68229,6 +68490,18 @@ function failClosedFields(parsedOk, err, opts = {}) {
     permissionDecisionReason: parsedOk ? messages.failed(cause) : messages.unparsable(cause)
   };
 }
+function hintedWriteFault(input) {
+  const payload = (
+    /** @type {{tool_name?: unknown, tool_input?: unknown} | undefined} */
+    input
+  );
+  if (!WRITE_SHAPED_TOOLS.has(
+    /** @type {string} */
+    payload?.tool_name
+  ))
+    return false;
+  return JSON.stringify(payload?.tool_input ?? null).includes(REDACTION_HINT);
+}
 function hookFailureFields(parsedOk, err, opts = {}) {
   return (
     /** @type {Record<string, unknown>} */
@@ -68236,7 +68509,8 @@ function hookFailureFields(parsedOk, err, opts = {}) {
       parsedOk,
       env: opts.env,
       messages: opts.messages,
-      hint: opts.hint
+      hint: opts.hint,
+      input: opts.input
     }).fields
   );
 }
@@ -68261,13 +68535,14 @@ async function cliMain(opts = {}) {
         HookEvent.PRE_TOOL_USE,
         hookFailureFields(input !== void 0, err, {
           messages,
-          hint: depLoadHint(err, messages.remedy)
+          hint: depLoadHint(err, messages.remedy),
+          input
         })
       )
     }
   );
 }
-var HOOK_NAME, PRE_TOOL_USE_MESSAGES, normalizeConfusables2, normalizeContext2, rehydrateRedacted2, require5, confusableScan, redactorIo, defaultRehydrate;
+var HOOK_NAME, PRE_TOOL_USE_MESSAGES, normalizeConfusables2, normalizeContext2, rehydrateRedacted2, require5, confusableScan, redactorIo, guardedRehydrate, defaultRehydrate, REDACTION_HINT, WRITE_SHAPED_TOOLS;
 var init_pretooluse_sanitize = __esm({
   async "claude-hooks/pretooluse-sanitize.mjs"() {
     "use strict";
@@ -68278,6 +68553,7 @@ var init_pretooluse_sanitize = __esm({
     await init_invisible_alert();
     await init_authored_content();
     init_redactor_client();
+    init_env_config();
     await init_secret_drop_guard();
     init_placeholder_grammar();
     init_trace2();
@@ -68301,7 +68577,7 @@ var init_pretooluse_sanitize = __esm({
       text5
     );
     redactorIo = {
-      readFile: (path2) => readFileSync4(path2, "utf8"),
+      readFile: (path2) => readFileSync5(path2, "utf8"),
       redactMap: async (text5) => (
         /** @type {any} */
         await redactViaDaemon(text5, { map: true })
@@ -68314,13 +68590,35 @@ var init_pretooluse_sanitize = __esm({
         ) : null;
       }
     };
-    defaultRehydrate = withSecretDropGuard(
+    guardedRehydrate = withSecretDropGuard(
       (tool, toolInput) => rehydrateRedacted2(tool, toolInput, redactorIo),
       redactorIo
     );
+    defaultRehydrate = async (tool, toolInput) => secretsEnabled() ? guardedRehydrate(tool, toolInput) : null;
+    REDACTION_HINT = "[REDACTED";
+    WRITE_SHAPED_TOOLS = /* @__PURE__ */ new Set([
+      "Write",
+      "Edit",
+      "MultiEdit",
+      "NotebookEdit"
+    ]);
     registerFaultPolicy(HOOK_NAME, {
       event: HookEvent.PRE_TOOL_USE,
       guarded: "tool input",
+      open: (ctx) => {
+        if (!secretsEnabled(ctx.env) || !hintedWriteFault(ctx.input))
+          return defaultOpen(ctx);
+        const closed = failClosedFields(true, ctx.err, {
+          messages: ctx.messages,
+          hint: ctx.hint
+        });
+        return {
+          fields: {
+            ...closed,
+            permissionDecisionReason: `${closed.permissionDecisionReason} This input would write ${REDACTION_HINT}\u2026] placeholder text, which stands for a redacted secret the unavailable sanitizer cannot translate back; proceeding would overwrite the real secret with the placeholder, so the call is held even under the fail-open posture. Retry once the sanitizer recovers, or ask the user to make this change.`
+          }
+        };
+      },
       closed: (ctx) => ({
         fields: failClosedFields(ctx.parsedOk, ctx.err, {
           messages: ctx.messages,
@@ -68334,11 +68632,505 @@ var init_pretooluse_sanitize = __esm({
   }
 });
 
+// python/agent_sanitizer/data/invisible-charset.json
+var invisible_charset_default;
+var init_invisible_charset = __esm({
+  "python/agent_sanitizer/data/invisible-charset.json"() {
+    invisible_charset_default = {
+      _comment: "SSOT for the payload-capable invisible code points, generated by scripts/gen-invisible-charset.mjs. `extra_codepoints` are the non-Cf extras (variation selectors, blank-rendering fillers, zero-width combining marks) from src/invisible.mjs (VS + BLANK_NON_CF). `cf_codepoints` is the general-category Cf set PINNED from Node's Unicode data at generation time (see `unicode_version`) \u2014 NOT resolved live per consumer, because Node and CPython ship different Unicode versions and a live-Cf split let a code point in the version delta escape one layer. The deletion set is the UNION of the two lists. `control_introducers` is the raw ANSI control-introducer set (ESC + the C1 block) from src/ansi.mjs, which Layer 1 sweeps and the Python textstrip port must sweep identically. Consumers in other languages read this file instead of forking the lists \u2014 a fork is a silent security regression.",
+      unicode_version: "17.0",
+      extra_codepoints: [
+        847,
+        4447,
+        4448,
+        6068,
+        6069,
+        6155,
+        6156,
+        6157,
+        6159,
+        10240,
+        12644,
+        65024,
+        65025,
+        65026,
+        65027,
+        65028,
+        65029,
+        65030,
+        65031,
+        65032,
+        65033,
+        65034,
+        65035,
+        65036,
+        65037,
+        65038,
+        65039,
+        65440,
+        917760,
+        917761,
+        917762,
+        917763,
+        917764,
+        917765,
+        917766,
+        917767,
+        917768,
+        917769,
+        917770,
+        917771,
+        917772,
+        917773,
+        917774,
+        917775,
+        917776,
+        917777,
+        917778,
+        917779,
+        917780,
+        917781,
+        917782,
+        917783,
+        917784,
+        917785,
+        917786,
+        917787,
+        917788,
+        917789,
+        917790,
+        917791,
+        917792,
+        917793,
+        917794,
+        917795,
+        917796,
+        917797,
+        917798,
+        917799,
+        917800,
+        917801,
+        917802,
+        917803,
+        917804,
+        917805,
+        917806,
+        917807,
+        917808,
+        917809,
+        917810,
+        917811,
+        917812,
+        917813,
+        917814,
+        917815,
+        917816,
+        917817,
+        917818,
+        917819,
+        917820,
+        917821,
+        917822,
+        917823,
+        917824,
+        917825,
+        917826,
+        917827,
+        917828,
+        917829,
+        917830,
+        917831,
+        917832,
+        917833,
+        917834,
+        917835,
+        917836,
+        917837,
+        917838,
+        917839,
+        917840,
+        917841,
+        917842,
+        917843,
+        917844,
+        917845,
+        917846,
+        917847,
+        917848,
+        917849,
+        917850,
+        917851,
+        917852,
+        917853,
+        917854,
+        917855,
+        917856,
+        917857,
+        917858,
+        917859,
+        917860,
+        917861,
+        917862,
+        917863,
+        917864,
+        917865,
+        917866,
+        917867,
+        917868,
+        917869,
+        917870,
+        917871,
+        917872,
+        917873,
+        917874,
+        917875,
+        917876,
+        917877,
+        917878,
+        917879,
+        917880,
+        917881,
+        917882,
+        917883,
+        917884,
+        917885,
+        917886,
+        917887,
+        917888,
+        917889,
+        917890,
+        917891,
+        917892,
+        917893,
+        917894,
+        917895,
+        917896,
+        917897,
+        917898,
+        917899,
+        917900,
+        917901,
+        917902,
+        917903,
+        917904,
+        917905,
+        917906,
+        917907,
+        917908,
+        917909,
+        917910,
+        917911,
+        917912,
+        917913,
+        917914,
+        917915,
+        917916,
+        917917,
+        917918,
+        917919,
+        917920,
+        917921,
+        917922,
+        917923,
+        917924,
+        917925,
+        917926,
+        917927,
+        917928,
+        917929,
+        917930,
+        917931,
+        917932,
+        917933,
+        917934,
+        917935,
+        917936,
+        917937,
+        917938,
+        917939,
+        917940,
+        917941,
+        917942,
+        917943,
+        917944,
+        917945,
+        917946,
+        917947,
+        917948,
+        917949,
+        917950,
+        917951,
+        917952,
+        917953,
+        917954,
+        917955,
+        917956,
+        917957,
+        917958,
+        917959,
+        917960,
+        917961,
+        917962,
+        917963,
+        917964,
+        917965,
+        917966,
+        917967,
+        917968,
+        917969,
+        917970,
+        917971,
+        917972,
+        917973,
+        917974,
+        917975,
+        917976,
+        917977,
+        917978,
+        917979,
+        917980,
+        917981,
+        917982,
+        917983,
+        917984,
+        917985,
+        917986,
+        917987,
+        917988,
+        917989,
+        917990,
+        917991,
+        917992,
+        917993,
+        917994,
+        917995,
+        917996,
+        917997,
+        917998,
+        917999
+      ],
+      cf_codepoints: [
+        173,
+        1536,
+        1537,
+        1538,
+        1539,
+        1540,
+        1541,
+        1564,
+        1757,
+        1807,
+        2192,
+        2193,
+        2274,
+        6158,
+        8203,
+        8204,
+        8205,
+        8206,
+        8207,
+        8234,
+        8235,
+        8236,
+        8237,
+        8238,
+        8288,
+        8289,
+        8290,
+        8291,
+        8292,
+        8294,
+        8295,
+        8296,
+        8297,
+        8298,
+        8299,
+        8300,
+        8301,
+        8302,
+        8303,
+        65279,
+        65529,
+        65530,
+        65531,
+        69821,
+        69837,
+        78896,
+        78897,
+        78898,
+        78899,
+        78900,
+        78901,
+        78902,
+        78903,
+        78904,
+        78905,
+        78906,
+        78907,
+        78908,
+        78909,
+        78910,
+        78911,
+        113824,
+        113825,
+        113826,
+        113827,
+        119155,
+        119156,
+        119157,
+        119158,
+        119159,
+        119160,
+        119161,
+        119162,
+        917505,
+        917536,
+        917537,
+        917538,
+        917539,
+        917540,
+        917541,
+        917542,
+        917543,
+        917544,
+        917545,
+        917546,
+        917547,
+        917548,
+        917549,
+        917550,
+        917551,
+        917552,
+        917553,
+        917554,
+        917555,
+        917556,
+        917557,
+        917558,
+        917559,
+        917560,
+        917561,
+        917562,
+        917563,
+        917564,
+        917565,
+        917566,
+        917567,
+        917568,
+        917569,
+        917570,
+        917571,
+        917572,
+        917573,
+        917574,
+        917575,
+        917576,
+        917577,
+        917578,
+        917579,
+        917580,
+        917581,
+        917582,
+        917583,
+        917584,
+        917585,
+        917586,
+        917587,
+        917588,
+        917589,
+        917590,
+        917591,
+        917592,
+        917593,
+        917594,
+        917595,
+        917596,
+        917597,
+        917598,
+        917599,
+        917600,
+        917601,
+        917602,
+        917603,
+        917604,
+        917605,
+        917606,
+        917607,
+        917608,
+        917609,
+        917610,
+        917611,
+        917612,
+        917613,
+        917614,
+        917615,
+        917616,
+        917617,
+        917618,
+        917619,
+        917620,
+        917621,
+        917622,
+        917623,
+        917624,
+        917625,
+        917626,
+        917627,
+        917628,
+        917629,
+        917630,
+        917631
+      ],
+      control_introducers: [
+        27,
+        128,
+        129,
+        130,
+        131,
+        132,
+        133,
+        134,
+        135,
+        136,
+        137,
+        138,
+        139,
+        140,
+        141,
+        142,
+        143,
+        144,
+        145,
+        146,
+        147,
+        148,
+        149,
+        150,
+        151,
+        152,
+        153,
+        154,
+        155,
+        156,
+        157,
+        158,
+        159
+      ]
+    };
+  }
+});
+
 // claude-hooks/lib/secret-annotate.mjs
 function envValueRegex(value) {
-  return new RegExp(
-    [...value].map((ch) => ch.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join(ENV_INVIS_RUN)
-  );
+  let re = ENV_VALUE_REGEX_CACHE.get(value);
+  if (re === void 0) {
+    re = new RegExp(
+      [...value].map((ch) => ch.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join(ENV_INVIS_RUN),
+      "u"
+    );
+    ENV_VALUE_REGEX_CACHE.set(value, re);
+  }
+  return re;
 }
 function hasEnvBoundSecret(text5, env = process.env) {
   const minLen = minEnvSecretLen();
@@ -68347,26 +69139,28 @@ function hasEnvBoundSecret(text5, env = process.env) {
     return value && [...value].length >= minLen && envValueRegex(value).test(text5);
   });
 }
-var ENV_INVIS_RUN;
+var ENV_INVIS_RUN, ENV_VALUE_REGEX_CACHE;
 var init_secret_annotate = __esm({
   "claude-hooks/lib/secret-annotate.mjs"() {
     "use strict";
     init_env_config();
-    ENV_INVIS_RUN = "[\\u200b\\u200c\\u200d\\u2060\\ufeff\\u00ad\\u180e\\u200e\\u200f\\u202a-\\u202e\\u2066-\\u2069]*";
+    init_invisible_charset();
+    ENV_INVIS_RUN = "[" + [.../* @__PURE__ */ new Set([...invisible_charset_default.cf_codepoints, ...invisible_charset_default.extra_codepoints])].sort((a, b) => a - b).map((cp) => `\\u{${cp.toString(16)}}`).join("") + "]*";
+    ENV_VALUE_REGEX_CACHE = /* @__PURE__ */ new Map();
   }
 });
 
 // claude-hooks/lib/reveal.mjs
 import { createHash as createHash4 } from "node:crypto";
-import { mkdirSync, lstatSync as lstatSync4 } from "node:fs";
+import { mkdirSync, lstatSync as lstatSync5 } from "node:fs";
 import { tmpdir as tmpdir4, userInfo as userInfo3 } from "node:os";
-import { join as join5, resolve, sep } from "node:path";
+import { join as join6, resolve as resolve2, sep as sep2 } from "node:path";
 function revealDir() {
-  return process.env._AGENT_SANITIZER_REVEAL_DIR || join5(tmpdir4(), "agent-sanitizer-layer2-reveal");
+  return process.env._AGENT_SANITIZER_REVEAL_DIR || join6(tmpdir4(), "agent-sanitizer-layer2-reveal");
 }
 function revealPathFor(content3) {
   const digest = createHash4("sha256").update(content3, "utf8").digest("hex");
-  return join5(revealDir(), `${digest}.txt`);
+  return join6(revealDir(), `${digest}.txt`);
 }
 function revealDirIsSafe(dir) {
   try {
@@ -68376,7 +69170,7 @@ function revealDirIsSafe(dir) {
   }
   let st;
   try {
-    st = lstatSync4(dir);
+    st = lstatSync5(dir);
   } catch {
     return false;
   }
@@ -68405,9 +69199,9 @@ function persistReveal(content3) {
 function isRevealRead(toolName, toolInput) {
   if (toolName !== "Read" || typeof toolInput?.file_path !== "string")
     return false;
-  const dir = resolve(revealDir());
-  const target = resolve(toolInput.file_path);
-  return target === dir || target.startsWith(dir + sep);
+  const dir = resolve2(revealDir());
+  const target = resolve2(toolInput.file_path);
+  return target === dir || target.startsWith(dir + sep2);
 }
 var REVEAL_READ_ENVELOPE;
 var init_reveal = __esm({
@@ -68464,13 +69258,15 @@ async function sanitizeText2(text5, toolName, deadline = makeDeadline(SANITIZE_B
     exfilScan: webIngress,
     sgrCarveOut: !webIngress,
     deadline,
-    // Layer 4 — the seam rethrows a redactor throw wrapped, and the CLI applies
-    // the caller's posture to it. Surface the failure to the operator's
-    // terminal here first: whatever the CLI decides rides in additionalContext,
-    // which only the model sees, so a degraded redactor would otherwise be
-    // invisible to the human — and under the fail-open default this line is the
-    // ONLY signal the human gets.
-    redact: async (content3) => {
+    // Layer 4 — OPT-IN (secretsEnabled): with the knob unset the seam gets no
+    // redact callback at all, so plain output never spawns the daemon and no
+    // placeholder ever enters the model's view. When it runs, the seam rethrows
+    // a redactor throw wrapped, and the CLI applies the caller's posture to it.
+    // Surface the failure to the operator's terminal here first: whatever the
+    // CLI decides rides in additionalContext, which only the model sees, so a
+    // degraded redactor would otherwise be invisible to the human — and under
+    // the fail-open default this line is the ONLY signal the human gets.
+    redact: !secretsEnabled() ? void 0 : async (content3) => {
       let secrets;
       try {
         secrets = await redactSecrets(content3, webIngress, deadline);
@@ -68674,7 +69470,7 @@ async function evaluateToolOutput(input, ext = {}) {
   for (const original of reveals) {
     let stored;
     try {
-      const secrets = await redactSecrets(original, true, deadline);
+      const secrets = secretsEnabled() ? await redactSecrets(original, true, deadline) : null;
       stored = secrets ? secrets.text : original;
     } catch {
       warnings.push(REVEAL_WITHHELD_WARNING);
@@ -68683,7 +69479,7 @@ async function evaluateToolOutput(input, ext = {}) {
     const hint = persistReveal(stored);
     if (hint) warnings.push(hint);
   }
-  if (input.tool_name === "Read" && !revealRead && containsPlaceholder(toolOutput))
+  if (secretsEnabled() && input.tool_name === "Read" && !revealRead && containsPlaceholder(toolOutput))
     warnings.push(ON_DISK_PLACEHOLDER_WARNING);
   if (!modified && warnings.length === 0 && notes.length === 0)
     return revealRead ? emit("flagged", { additional_context: REVEAL_READ_ENVELOPE }) : emit("clean", null);
@@ -68761,6 +69557,7 @@ var init_sanitize_output = __esm({
     await init_control_plane2();
     init_trace2();
     init_secret_annotate();
+    init_env_config();
     init_reveal();
     init_placeholder_grammar();
     _sanitizer = /** @type {typeof import("agent-sanitizer")} */
@@ -68951,35 +69748,42 @@ __export(scan_invisible_chars_exports, {
   LONG_RUN_THRESHOLD: () => LONG_RUN_THRESHOLD2,
   TOTAL_INVISIBLE_THRESHOLD: () => TOTAL_INVISIBLE_THRESHOLD,
   cliMain: () => cliMain3,
-  decodeRun: () => decodeRun,
-  findInstructionFiles: () => findInstructionFiles,
+  decodeRun: () => decodeRun2,
+  findInstructionFiles: () => findInstructionFiles2,
   formatReport: () => formatReport,
   formatSkipped: () => formatSkipped,
   scanFile: () => scanFile,
   scanProject: () => scanProject
 });
-import { readFileSync as readFileSync5, globSync, writeFileSync as writeFileSync2, unlinkSync as unlinkSync3 } from "node:fs";
-import { join as join6, relative } from "node:path";
+import { readFileSync as readFileSync6, globSync as globSync2, unlinkSync as unlinkSync4 } from "node:fs";
+import { join as join7, relative as relative2 } from "node:path";
 async function ensureSanitizerLoaded() {
-  if (typeof stripInvisible3 === "function") return true;
+  if (typeof scanText2 === "function" && typeof cleanFile2 === "function")
+    return true;
   const marker2 = hookgateMarkerPath();
   const reloaded = await awaitLazyDependency({
     tryImport: async () => {
-      const mod = await lazyImport("agent-sanitizer/invisible");
-      return typeof mod.stripInvisible === "function" ? mod : null;
+      const invisible = await lazyImport("agent-sanitizer/invisible");
+      const instructions = await lazyImport("agent-sanitizer/instructions");
+      return typeof instructions.scanText === "function" && typeof instructions.cleanFile === "function" && invisible.LONG_RUN_RE !== void 0 ? { invisible, instructions } : null;
     },
     markerPresent: () => markerIsTrusted(marker2),
     setupAlive: () => probeSetupAlive(marker2)
   });
   if (!reloaded) return false;
+  const bound = (
+    /** @type {{
+      invisible: typeof import("agent-sanitizer/invisible"),
+      instructions: typeof import("agent-sanitizer/instructions"),
+    }} */
+    reloaded
+  );
   ({
     LONG_RUN_RE: LONG_RUN_RE3,
     LONG_RUN_THRESHOLD: LONG_RUN_THRESHOLD2,
-    SCATTERED_THRESHOLD: TOTAL_INVISIBLE_THRESHOLD,
-    STRIP: STRIP3,
-    stripInvisible: stripInvisible3
-  } = /** @type {typeof import("agent-sanitizer/invisible")} */
-  reloaded);
+    SCATTERED_THRESHOLD: TOTAL_INVISIBLE_THRESHOLD
+  } = bound.invisible);
+  ({ decodeRun: instrDecodeRun, scanText: scanText2, cleanFile: cleanFile2 } = bound.instructions);
   return true;
 }
 function faultLine(ctx) {
@@ -68997,61 +69801,17 @@ function persistAlert(parts2) {
   if (parts2.length === 0) return;
   writeFileNoFollow(ALERT_FILE, parts2.join("\n") + "\n");
 }
-function decodeRun(run) {
-  const cps = [...run].map((ch) => (
-    /** @type {number} */
-    ch.codePointAt(0)
-  ));
-  const tagAscii = cps.filter((cp) => cp >= 917505 && cp <= 917631).map((cp) => String.fromCharCode(cp - 917504)).join("");
-  if (tagAscii.length > 0) {
-    return { method: "Unicode tag characters \u2192 ASCII", decoded: tagAscii };
-  }
-  const ZW_BIT = /* @__PURE__ */ new Map([
-    [8203, "0"],
-    [8204, "1"],
-    [8205, "|"]
-  ]);
-  if (cps.every((cp) => ZW_BIT.has(cp))) {
-    const bits = cps.map((cp) => ZW_BIT.get(cp)).join("");
-    return {
-      method: "zero-width binary encoding",
-      decoded: `[${cps.length} zero-width chars: ${bits.slice(0, 80)}]`
-    };
-  }
-  return {
-    method: "invisible Unicode sequence",
-    decoded: cps.map((cp) => `U+${cp.toString(16).toUpperCase().padStart(4, "0")}`).join(" ")
-  };
+function decodeRun2(run) {
+  return instrDecodeRun(run);
 }
-function findInstructionFiles(dir) {
-  return globSync([...CLAUDE_INSTRUCTION_GLOBS], {
+function findInstructionFiles2(dir) {
+  return globSync2([...CLAUDE_INSTRUCTION_GLOBS], {
     cwd: dir,
     exclude: excludeFromContextScan
-  }).map((name50) => join6(dir, name50));
+  }).map((name50) => join7(dir, name50));
 }
 function scanFile(filePath) {
-  const content3 = readFileSync5(filePath, "utf-8");
-  const findings = [];
-  LONG_RUN_RE3.lastIndex = 0;
-  let match;
-  let runChars = 0;
-  while ((match = LONG_RUN_RE3.exec(content3)) !== null) {
-    const lineNum = content3.slice(0, match.index).split("\n").length;
-    const charCount = [...match[0]].length;
-    runChars += charCount;
-    findings.push({ line: lineNum, charCount, ...decodeRun(match[0]) });
-  }
-  const allInvisible = content3.match(STRIP3);
-  const scattered = (allInvisible ? allInvisible.length : 0) - runChars;
-  if (scattered >= TOTAL_INVISIBLE_THRESHOLD) {
-    findings.push({
-      line: 0,
-      charCount: scattered,
-      method: "scattered invisible chars (possible threshold evasion)",
-      decoded: `[${scattered} invisible chars distributed across file]`
-    });
-  }
-  return findings;
+  return scanText2(readFileSync6(filePath, "utf-8"));
 }
 function formatReport(allFindings) {
   const BAR = "\u2501".repeat(52);
@@ -69070,8 +69830,9 @@ function formatReport(allFindings) {
   for (const { file, findings } of allFindings) {
     lines.push(`  ${file}:`);
     for (const finding of findings) {
+      const where = finding.line === null ? "Whole file" : `Line ${finding.line}`;
       lines.push(
-        `    Line ${finding.line}: ${finding.charCount} invisible chars (${finding.method})`
+        `    ${where}: ${finding.charCount} invisible chars (${finding.method})`
       );
       lines.push(`    Decodes to: ${JSON.stringify(finding.decoded)}`);
     }
@@ -69081,7 +69842,7 @@ function formatReport(allFindings) {
   return lines.join("\n");
 }
 function scanProject(dir = PROJECT_DIR) {
-  const targets = [...new Set(findInstructionFiles(dir))];
+  const targets = [...new Set(findInstructionFiles2(dir))];
   const findings = [];
   const skipped = [];
   let scanned = 0;
@@ -69095,12 +69856,12 @@ function scanProject(dir = PROJECT_DIR) {
         err.code === void 0
       )
         throw err;
-      skipped.push({ file: relative(dir, file), reason: safeErrMessage(err) });
+      skipped.push({ file: relative2(dir, file), reason: safeErrMessage(err) });
       continue;
     }
     scanned++;
     if (fileFindings.length > 0)
-      findings.push({ file: relative(dir, file), findings: fileFindings });
+      findings.push({ file: relative2(dir, file), findings: fileFindings });
   }
   return { targets, scanned, findings, skipped };
 }
@@ -69146,7 +69907,7 @@ async function runScanCli({ trace: sink = trace, scan: runScan }) {
   }
   for (const stale of [ALERT_FILE, ALERT_ACK_FILE]) {
     try {
-      unlinkSync3(stale);
+      unlinkSync4(stale);
     } catch {
     }
   }
@@ -69186,20 +69947,11 @@ async function runScanCli({ trace: sink = trace, scan: runScan }) {
 function autoCleanFindings(allFindings, dir) {
   let cleaned = 0;
   for (const { file } of allFindings) {
-    const absPath = join6(dir, file);
+    const absPath = join7(dir, file);
     try {
-      const original = readFileSync5(absPath, "utf-8");
-      const stripped = stripInvisible3(original);
-      if (stripped !== original) {
-        writeFileSync2(absPath, stripped);
-        cleaned++;
-      }
+      if (cleanFile2(absPath)) cleaned++;
     } catch (err) {
-      if (
-        /** @type {NodeJS.ErrnoException} */
-        err.code === void 0
-      )
-        throw err;
+      if (err instanceof TypeError) throw err;
       process.stderr.write(
         `scan-invisible-chars: could not clean ${file}: ${safeErrMessage(err)}
 `
@@ -69218,7 +69970,7 @@ All ${cleaned} file(s) cleaned on disk automatically. NOTE: these files load as 
   process.stderr.write(report + "\n");
   return [report];
 }
-var LONG_RUN_RE3, LONG_RUN_THRESHOLD2, TOTAL_INVISIBLE_THRESHOLD, STRIP3, stripInvisible3, HOOK_NAME4;
+var LONG_RUN_RE3, LONG_RUN_THRESHOLD2, TOTAL_INVISIBLE_THRESHOLD, instrDecodeRun, scanText2, cleanFile2, HOOK_NAME4;
 var init_scan_invisible_chars = __esm({
   async "claude-hooks/scan-invisible-chars.mjs"() {
     "use strict";
@@ -69231,11 +69983,15 @@ var init_scan_invisible_chars = __esm({
     ({
       LONG_RUN_RE: LONG_RUN_RE3,
       LONG_RUN_THRESHOLD: LONG_RUN_THRESHOLD2,
-      SCATTERED_THRESHOLD: TOTAL_INVISIBLE_THRESHOLD,
-      STRIP: STRIP3,
-      stripInvisible: stripInvisible3
+      SCATTERED_THRESHOLD: TOTAL_INVISIBLE_THRESHOLD
     } = /** @type {typeof import("agent-sanitizer/invisible")} */
     await lazyImport("agent-sanitizer/invisible"));
+    ({
+      decodeRun: instrDecodeRun,
+      scanText: scanText2,
+      cleanFile: cleanFile2
+    } = /** @type {typeof import("agent-sanitizer/instructions")} */
+    await lazyImport("agent-sanitizer/instructions"));
     HOOK_NAME4 = "scan-invisible-chars";
     registerFaultPolicy(HOOK_NAME4, {
       event: HookEvent.SESSION_START,
@@ -69278,6 +70034,7 @@ var LAZY_LOADERS = {
   "agent-control-plane-core/claude": () => Promise.resolve().then(() => (init_claude(), claude_exports)),
   "agent-sanitizer": () => Promise.resolve().then(() => (init_src2(), src_exports2)),
   "agent-sanitizer/confusables": () => Promise.resolve().then(() => (init_confusables(), confusables_exports)),
+  "agent-sanitizer/instructions": () => Promise.resolve().then(() => (init_instructions(), instructions_exports)),
   "agent-sanitizer/invisible": () => Promise.resolve().then(() => (init_invisible(), invisible_exports)),
   "agent-sanitizer/output": () => Promise.resolve().then(() => (init_output(), output_exports)),
   "agent-sanitizer/prompt": () => Promise.resolve().then(() => (init_prompt(), prompt_exports)),
