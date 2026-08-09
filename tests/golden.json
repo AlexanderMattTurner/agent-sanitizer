@@ -548,7 +548,7 @@
     {
       "name": "c1_controls",
       "plain": {
-        "cleaned": [97, 98, 99, 100],
+        "cleaned": [97, 98, 99],
         "found": ["ansi"],
         "warnings": [
           "Stripped: ANSI escapes — inspect the removed bytes with a hex dump (xxd / od -c), which survives sanitization"
@@ -556,7 +556,45 @@
         "notes": []
       },
       "html": {
-        "cleaned": [97, 98, 99, 100],
+        "cleaned": [97, 98, 99],
+        "found": ["ansi"],
+        "warnings": [
+          "Stripped: ANSI escapes — inspect the removed bytes with a hex dump (xxd / od -c), which survives sanitization"
+        ],
+        "notes": []
+      }
+    },
+    {
+      "name": "ansi_apc_string",
+      "plain": {
+        "cleaned": [98, 101, 102, 111, 114, 101, 97, 102, 116, 101, 114],
+        "found": ["ansi"],
+        "warnings": [
+          "Stripped: ANSI escapes — inspect the removed bytes with a hex dump (xxd / od -c), which survives sanitization"
+        ],
+        "notes": []
+      },
+      "html": {
+        "cleaned": [98, 101, 102, 111, 114, 101, 97, 102, 116, 101, 114],
+        "found": ["ansi"],
+        "warnings": [
+          "Stripped: ANSI escapes — inspect the removed bytes with a hex dump (xxd / od -c), which survives sanitization"
+        ],
+        "notes": []
+      }
+    },
+    {
+      "name": "ansi_c1_dcs_string",
+      "plain": {
+        "cleaned": [98, 101, 102, 111, 114, 101, 97, 102, 116, 101, 114],
+        "found": ["ansi"],
+        "warnings": [
+          "Stripped: ANSI escapes — inspect the removed bytes with a hex dump (xxd / od -c), which survives sanitization"
+        ],
+        "notes": []
+      },
+      "html": {
+        "cleaned": [98, 101, 102, 111, 114, 101, 97, 102, 116, 101, 114],
         "found": ["ansi"],
         "warnings": [
           "Stripped: ANSI escapes — inspect the removed bytes with a hex dump (xxd / od -c), which survives sanitization"

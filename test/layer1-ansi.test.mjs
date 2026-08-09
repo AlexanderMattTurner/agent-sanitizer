@@ -37,6 +37,8 @@ import { fcRunOptions, cp } from "./test-helpers.mjs";
 const ESC = cp(0x1b);
 const CSI = cp(0x9b);
 const OSC = cp(0x9d);
+const DCS = cp(0x90);
+const APC = cp(0x9f);
 const ST = cp(0x9c);
 const BEL = cp(0x07);
 const ZWJ = cp(0x200d);
@@ -133,18 +135,58 @@ describe("scanAnsi", () => {
     assert.deepEqual(kinds(`${ESC}]0;title${ESC}\\`), ["osc"]);
     assert.deepEqual(kinds(`${ESC}]unterminated`), ["osc"]);
     assert.deepEqual(kinds(`${OSC}nested${OSC}x`), ["osc", "osc"]);
+    // The other four ECMA-48 control strings, both encodings. `ESC P` is the
+    // one that regressed silently: `P` is also a CSI final byte, so before the
+    // string arm ran first this read as a complete two-byte CSI and the DCS
+    // body stayed visible.
+    assert.deepEqual(kinds(`${ESC}Pq#payload${ESC}\\`), ["control-string"]);
+    assert.deepEqual(kinds(`${ESC}Xpayload${ST}`), ["control-string"]);
+    assert.deepEqual(kinds(`${ESC}^payload${BEL}`), ["control-string"]);
+    assert.deepEqual(kinds(`${ESC}_unterminated`), ["control-string"]);
+    assert.deepEqual(kinds(`${DCS}payload${ST}`), ["control-string"]);
+    assert.deepEqual(kinds(`${APC}payload${ST}`), ["control-string"]);
     // Introducers that complete nothing, split three ways: a lone ESC (inert),
     // an ESC that OPENED a CSI it never finished (a terminal keeps eating the
-    // following text as parameters), and the C1 string introducers the sequence
-    // grammar never names. Only the first is quiet.
+    // following text as parameters), and a raw C1 byte that opens nothing.
+    // Only the first is quiet.
     assert.deepEqual(kinds(ESC), ["orphan-introducer"]);
     assert.deepEqual(kinds(`${ESC} x`), ["orphan-introducer"]);
     assert.deepEqual(kinds(`${ESC}[12`), ["orphan-csi-introducer"]);
     assert.deepEqual(kinds(`${ESC}[`), ["orphan-csi-introducer"]);
-    assert.deepEqual(kinds(cp(0x90) + cp(0x9e)), [
+    // A lone C1 ST and a C1 byte outside the introducer grammar. The string
+    // introducers no longer land here — they open a string that is consumed
+    // whole, which is the point of the control-string arm above.
+    assert.deepEqual(kinds(ST + cp(0x99)), [
       "orphan-c1-introducer",
       "orphan-c1-introducer",
     ]);
+  });
+
+  it("consumes each control string's body, so no payload text survives", () => {
+    // Every one of these bodies is attacker-controlled payload. Taking the
+    // introducer alone left it as visible text in the model's view, which is
+    // the divergence Layer 1 exists to close.
+    for (const [name, input, expected] of [
+      ["DCS", `x${ESC}Pq#PAYLOAD${ESC}\\y`, "xy"],
+      ["SOS", `x${ESC}Xpayload${ST}y`, "xy"],
+      ["PM", `x${ESC}^secret${ST}y`, "xy"],
+      ["APC", `x${ESC}_hidden-cmd${ESC}\\y`, "xy"],
+      // All four C1 string introducers, so dropping any one from
+      // STRING_INTRO_C1 goes red here. The 8-bit cases in
+      // test/invisible.test.mjs assert only that no C1 byte survives, which the
+      // residual sweep satisfies alone — they pass vacuously for the body.
+      ["C1 DCS", `x${DCS}payload${ST}y`, "xy"],
+      ["C1 SOS", `x${cp(0x98)}payload${ST}y`, "xy"],
+      ["C1 PM", `x${cp(0x9e)}payload${ST}y`, "xy"],
+      ["C1 APC", `x${APC}payload${BEL}y`, "xy"],
+      // Fail closed: an unterminated string drops everything after it.
+      ["unterminated APC", `x${ESC}_dangling-payload`, "x"],
+      // The abort arm holds for these strings too: the interior ESC starts a
+      // new sequence rather than eating the document tail.
+      ["DCS aborted by ESC", `x${ESC}Pbody${ESC}[0mtail`, "xtail"],
+    ]) {
+      assert.equal(stripAnsiFully(input), expected, name);
+    }
   });
 
   it("ends an OSC string before an interior ESC so the text after it survives", () => {

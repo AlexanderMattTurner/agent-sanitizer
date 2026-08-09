@@ -1841,10 +1841,11 @@ describe("applyLayer1: OSC strings and C1 sequences", () => {
     });
   }
 
-  // DCS/SOS/PM/APC are the other ECMA-48 string controls. The OSC/CSI grammar
-  // does not consume them, so the residual C1 sweep is what guarantees their
-  // introducer and terminator never survive into the model's view (the body
-  // text remains — it is now equally visible to a human, the point of the fix).
+  // DCS/SOS/PM/APC are the other ECMA-48 string controls, and the grammar now
+  // consumes each one whole, body included (see scanControlString) — the body is
+  // attacker-controlled payload exactly as an OSC body is. The residual C1 sweep
+  // still backstops the introducer and terminator, which is what these cases
+  // assert; the body assertions live in test/layer1-ansi.test.mjs.
   const C1_DCS = cp(0x90);
   const C1_SOS = cp(0x98);
   const C1_PM = cp(0x9e);

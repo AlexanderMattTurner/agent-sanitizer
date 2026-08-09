@@ -39,30 +39,38 @@ from .invisible import control_introducers, invisible_charset
 # class; the Python port once handled only ``\x1b`` and the whole C1 block
 # survived).
 #   * CSI      — (ESC [ | U+009B) params intermediates final  (removed whole)
-#   * OSC      — (ESC ] | U+009D) body BEL|ST                 (body + terminator
-#                removed). An OSC body is attacker-controlled PAYLOAD TEXT (a
-#                title, a hyperlink URL, a clipboard write), so the three ways it
-#                can end all mirror ``scanOsc``: a real terminator (BEL, 7-bit
+#   * string   — the FIVE ECMA-48 control strings: OSC (ESC ] | U+009D), DCS
+#                (ESC P | U+0090), SOS (ESC X | U+0098), PM (ESC ^ | U+009E) and
+#                APC (ESC _ | U+009F), each ``introducer body terminator`` and each
+#                removed whole. Every one of those bodies is attacker-controlled
+#                PAYLOAD TEXT (an OSC title or hyperlink URL, a DCS device payload,
+#                an APC application command), so the three ways one can end all
+#                mirror ``scanControlString``: a real terminator (BEL, 7-bit
 #                ``ESC \`` or the 8-bit C1 ST U+009C) is consumed with the body; a
-#                bare ESC or a nested C1 OSC ABORTS the string, so the token ends
-#                just BEFORE that byte (zero-width lookahead) and the scan re-reads
-#                it as its own sequence; and an UNTERMINATED string ends at
+#                bare ESC or a nested C1 string introducer ABORTS the string, so the
+#                token ends just BEFORE that byte (zero-width lookahead) and the scan
+#                re-reads it as its own sequence; and an UNTERMINATED string ends at
 #                end-of-input, dropping everything from the introducer on. That last
 #                arm fails CLOSED, and it is the reason ``\Z`` is in the alternation:
-#                without it the OSC arm simply failed to match, the general arm ate
-#                only ``ESC ]``, and the body survived as visible text — an
-#                under-strip relative to the JS layer, which deletes it.
+#                without it the arm simply failed to match, the general arm ate only
+#                ``ESC ]``, and the body survived as visible text — an under-strip
+#                relative to the JS layer, which deletes it.
 #   * general  — ESC + zero-or-more intermediate bytes (0x20-0x2f) + one final
 #                byte (0x30-0x7e): the nF/Fp/Fs/Fe escape grammar, so it removes a
 #                charset-select (``ESC ( B``), a RIS reset (``ESC c``), a cursor
 #                save/restore (``ESC 7`` / ``ESC 8``), and every bare two-char Fe
-#                escape (``ESC M``). A TRUNCATED CSI/OSC (``ESC [`` / ``ESC ]``
-#                with no final/terminator) also lands here — its bracket is itself
-#                a final byte, so only ``ESC + bracket`` is taken and the inert
-#                body is left, rather than eaten to end-of-string.
+#                escape (``ESC M``). A TRUNCATED CSI (``ESC [`` with no final byte)
+#                also lands here — its bracket is itself a final byte, so only
+#                ``ESC [`` is taken and the inert body is left, rather than eaten to
+#                end-of-string. A truncated string does NOT reach here: the ``\Z``
+#                arm above claims it first. The string arm must also stay AHEAD of
+#                this one for ``ESC P``, whose ``P`` is itself a final byte, so the
+#                general arm would take the DCS introducer alone and leave the body.
 ANSI_RE = re.compile(
     r"(?:\x1b\[|\x9b)[0-?]*[ -/]*[@-~]"
-    r"|(?:\x1b\]|\x9d)[^\x07\x1b\x9c\x9d]*(?:\x07|\x1b\\|\x9c|(?=[\x1b\x9d])|\Z)"
+    r"|(?:\x1b[\]PX^_]|[\x90\x98\x9d\x9e\x9f])"
+    r"[^\x07\x1b\x9c\x90\x98\x9d\x9e\x9f]*"
+    r"(?:\x07|\x1b\\|\x9c|(?=[\x1b\x90\x98\x9d\x9e\x9f])|\Z)"
     r"|\x1b[ -/]*[0-~]"
 )
 # A residual raw introducer the arms above cannot consume — a lone ESC at end of

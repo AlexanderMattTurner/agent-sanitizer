@@ -66,8 +66,27 @@ _ANSI_CASES = [
     # byte, which is then re-read as its own sequence.
     ("osc_aborted_by_esc", "a\x1b]0;ev\x1b[31mtail", "atail"),
     ("osc_aborted_by_c1_osc", "a\x9d0;ev\x9d9;x\x07tail", "atail"),
-    ("c1_orphan_dcs_swept", "a\x90b", "ab"),
-    ("c1_orphan_apc_swept", "a\x9fb", "ab"),
+    # The other four ECMA-48 control strings — DCS, SOS, PM, APC — carry the
+    # same attacker-controlled payload an OSC body does, so the same arm
+    # consumes each whole. `ESC P` is the one that hid: `P` is also a CSI final
+    # byte, so the general arm took the introducer and left `q#payload` visible.
+    ("dcs_st", "a\x1bPq#payload\x1b\\b", "ab"),
+    ("sos_st", "a\x1bXpayload\x1b\\b", "ab"),
+    ("pm_st", "a\x1b^payload\x1b\\b", "ab"),
+    ("apc_st", "a\x1b_payload\x1b\\b", "ab"),
+    # All four C1 string introducers, so dropping any one from the arm's
+    # introducer class goes red here.
+    ("c1_dcs_c1_st", "a\x90payload\x9cb", "ab"),
+    ("c1_sos_c1_st", "a\x98payload\x9cb", "ab"),
+    ("c1_pm_c1_st", "a\x9epayload\x9cb", "ab"),
+    ("c1_apc_c1_st", "a\x9fpayload\x9cb", "ab"),
+    ("dcs_aborted_by_esc", "a\x1bPbody\x1b[31mtail", "atail"),
+    # Unterminated, so the fail-closed arm drops the tail — the same answer the
+    # OSC rows above give, and the reason a lone C1 introducer no longer leaves
+    # the text after it in place.
+    ("apc_unterminated_fails_closed", "a\x1b_evil-payload", "a"),
+    ("c1_dcs_unterminated_fails_closed", "a\x90b", "a"),
+    ("c1_apc_unterminated_fails_closed", "a\x9fb", "a"),
 ]
 
 
