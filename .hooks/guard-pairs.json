@@ -123,6 +123,9 @@
       "plugin/test/enable-auto-update.test.mjs"
     ],
     "plugin/README.md": ["plugin/test/plugin-manifest.test.mjs"],
+    "plugin/scripts/lib/fail-open.sh": [
+      "plugin/test/fail-open-parity.test.mjs"
+    ],
     "plugin/scripts/lib/hook-timing.sh": [
       "test/hook-timing-shell-parity.test.mjs"
     ],
