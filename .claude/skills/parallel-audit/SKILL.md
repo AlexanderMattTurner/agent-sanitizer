@@ -86,13 +86,31 @@ actionable; "several scripts are inconsistent" is not.
 
 ## Workflow
 
-### 1. Map the territory (main session, fast)
+### 1. Map the territory (main session) — this is an `explore-plan` gate
 
-Before spawning anything, get a lay of the land so agent scopes are _disjoint_: directory tree,
-file-type counts, the key subsystems. Skim any `CLAUDE.md` / `CONTRIBUTING.md` / `SECURITY.md` —
-their stated invariants ("fail closed", "post-condition not exit code", "host code runs on BSD too")
-become the _lenses_ you hand each agent. An audit that knows the project's own doctrine finds
-violations of it; a generic audit re-discovers lint.
+The fan-out is expensive and its scopes are load-bearing, so step 1 follows the `explore-plan`
+skill's loop, not an ad-hoc skim. Before spawning any audit agent:
+
+- **Explore.** Get a lay of the land so agent scopes are _disjoint_: directory tree, file-type
+  counts, the key subsystems. When the repo spans several subsystems, fan out `Explore` agents for
+  this too — one to validate the scope partition against `git ls-files` (gaps, double-claims,
+  generated files nobody should hand-read, oversized scopes), one to extract doctrine. Skim any
+  `CLAUDE.md` / `CONTRIBUTING.md` / `SECURITY.md` — their stated invariants ("fail closed",
+  "post-condition not exit code", "host code runs on BSD too") become the _lenses_ you hand each
+  agent. An audit that knows the project's own doctrine finds violations of it; a generic audit
+  re-discovers lint. Check open PRs here too — a scope another branch already owns changes the
+  partition, not just the later clustering.
+- **Write the plan.** Record the partition (every tracked file owned by exactly one agent), the
+  doctrine lens packet per scope, pre-seeded seams from exploration, and the open-PR overlaps, as a
+  written plan — in plan mode when the harness offers it.
+- **Critique it to a fixed point, then get fresh eyes.** Self-critique the plan as a hostile
+  reviewer (double-claimed files, orphaned file classes, agents pointed at generated bundles,
+  unverified premises like "this lint gate covers these files"), fix, re-critique; then have a
+  read-only `Plan`/`code-reviewer` agent attack it before the fan-out launches. A defective
+  partition multiplies across every agent it spawns — this is the cheapest moment to catch it.
+
+Only after the plan survives review does step 2 run. (Steps 4 and 6 below are the same loop's
+Verify and Review phases applied to the audit's _output_.)
 
 ### 2. Fan out — one agent per (dimension x area), all in ONE message
 
@@ -231,7 +249,15 @@ queue and tick each off as it opens, so progress is supervisable at a glance.
   sync", "keep this layer before that one", "documented so the omission is a choice" — each names a
   contract that only a test can actually hold. Grep the tree for that phrasing early.
 - **Check open PRs before planning.** A fix may already be in flight; overlapping a sibling branch
-  wastes the work and creates a conflict the disjoint-file rule was supposed to prevent.
+  wastes the work and creates a conflict the disjoint-file rule was supposed to prevent. Check what
+  the working branch already _contains_, too: a designated branch cut from a sibling's head carries
+  that sibling's unmerged diff, so a PR opened against the default branch would ship it. Diff the
+  branch against the default branch before choosing a PR base.
+- **Have the partition reviewed before the fan-out, not after.** A gap or a double-claim in the
+  scope list multiplies across every agent it spawns, and the wasted reads are unrecoverable. One
+  `Explore` pass over `git ls-files` reliably finds unowned dirs, tests hiding under a non-test
+  scope, generated bundles an agent would have burned its context on, and scopes several times the
+  median size.
 - **Don't stop the queue to ask.** Mid-run design choices get a sensible default plus a
   `## Decisions made` entry. The one moment for questions is the plan delivery.
 
@@ -240,7 +266,9 @@ queue and tick each off as it opens, so progress is supervisable at a glance.
 **User says:** "Find dozens of security, robustness, testing, and UX issues. Use subagents and confirm
 their findings. Then plan parallel PRs to fix them, and critique the plan."
 
-1. Map the repo; pull the invariants out of `CLAUDE.md`.
+1. Map the repo under the `explore-plan` gate: parallel `Explore` agents validate the scope
+   partition against `git ls-files` and pull the invariants out of `CLAUDE.md`; write the partition
+   down, self-critique it, and have a `Plan` agent attack it before spawning anything.
 2. Launch 8 read-only `general-purpose` agents in one message — firewall, redaction, monitor,
    lifecycle, e2e-realness, UX, supply-chain, config/CI — each with a disjoint file list and the
    structured-finding contract.

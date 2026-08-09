@@ -68,6 +68,8 @@ Commits MUST use [Conventional Commits](https://www.conventionalcommits.org/) (`
 
 ## Self-Critique Loop
 
+Start non-trivial multi-file work with the `explore-plan` skill: explore first, write the plan down, critique it to a fixed point, and only then edit. This binds hardest before a **multi-agent fan-out**—the scope partition handed to N subagents is the one decision that multiplies across all of them, and a gap or double-claim costs reads you cannot recover.
+
 Before declaring any non-trivial coding task done, **iteratively critique and fix your own work until you reach a fixed point.** Read what you actually wrote (not what you intended to write) as if it came from a developer you cannot stand—assume it is wrong until proven otherwise.
 
 Each pass, hunt for: bugs, broken or missed edge cases, weakened/skipped/deleted tests, swallowed errors, dead code, unjustified abstractions, premature returns, broken invariants, sloppy naming, fragile assumptions, hidden coupling, scope creep beyond the request, comments that explain _what_ instead of _why_, anything that smells off. State each issue bluntly in one line, then fix it. Then re-review the fix—fixes introduce their own bugs.
