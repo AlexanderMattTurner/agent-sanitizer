@@ -40,6 +40,7 @@ import { registerFaultPolicy, hookFaultOutcome } from "./lib/hook-fault.mjs";
 import { controlPlane, runJudgeCli } from "./lib/control-plane.mjs";
 import { bestEffortTrace, trace, TraceEvent } from "./lib/trace.mjs";
 import { hasEnvBoundSecret } from "./lib/secret-annotate.mjs";
+import { secretsEnabled } from "./lib/env-config.mjs";
 import {
   persistReveal,
   persistSpan,
@@ -260,32 +261,36 @@ export async function sanitizeText(
     exfilScan: webIngress,
     sgrCarveOut: !webIngress,
     deadline,
-    // Layer 4 — the seam rethrows a redactor throw wrapped, and the CLI applies
-    // the caller's posture to it. Surface the failure to the operator's
-    // terminal here first: whatever the CLI decides rides in additionalContext,
-    // which only the model sees, so a degraded redactor would otherwise be
-    // invisible to the human — and under the fail-open default this line is the
-    // ONLY signal the human gets.
-    redact: async (/** @type {string} */ content) => {
-      let secrets;
-      try {
-        secrets = await redactSecrets(content, webIngress, deadline);
-      } catch (l4err) {
-        process.stderr.write(
-          `sanitize-output: CRITICAL: secret redaction failed (${errMessage(l4err)}). ` +
-            "This output was never vetted for secrets. Fix the redactor installation.\n",
-        );
-        throw l4err;
-      }
-      if (!secrets) return null;
-      // The note is derived from the PRE-redaction text: the caller's reason for
-      // annotating (which variable, which provenance) is exactly what redaction
-      // is about to remove.
-      const note = ext.redactNote?.(content);
-      return note
-        ? { text: secrets.text, found: secrets.found, note }
-        : { text: secrets.text, found: secrets.found };
-    },
+    // Layer 4 — OPT-IN (secretsEnabled): with the knob unset the seam gets no
+    // redact callback at all, so plain output never spawns the daemon and no
+    // placeholder ever enters the model's view. When it runs, the seam rethrows
+    // a redactor throw wrapped, and the CLI applies the caller's posture to it.
+    // Surface the failure to the operator's terminal here first: whatever the
+    // CLI decides rides in additionalContext, which only the model sees, so a
+    // degraded redactor would otherwise be invisible to the human — and under
+    // the fail-open default this line is the ONLY signal the human gets.
+    redact: !secretsEnabled()
+      ? undefined
+      : async (/** @type {string} */ content) => {
+          let secrets;
+          try {
+            secrets = await redactSecrets(content, webIngress, deadline);
+          } catch (l4err) {
+            process.stderr.write(
+              `sanitize-output: CRITICAL: secret redaction failed (${errMessage(l4err)}). ` +
+                "This output was never vetted for secrets. Fix the redactor installation.\n",
+            );
+            throw l4err;
+          }
+          if (!secrets) return null;
+          // The note is derived from the PRE-redaction text: the caller's reason for
+          // annotating (which variable, which provenance) is exactly what redaction
+          // is about to remove.
+          const note = ext.redactNote?.(content);
+          return note
+            ? { text: secrets.text, found: secrets.found, note }
+            : { text: secrets.text, found: secrets.found };
+        },
   };
   const seamResult =
     /** @type {{ cleaned: string, warnings: string[], notes?: string[], modified: boolean, sgrNote: boolean, reveal?: string, splices?: Array<{ placeholder: string, original: string }> }} */ (
@@ -801,7 +806,11 @@ export async function evaluateToolOutput(input, ext = {}) {
   for (const original of reveals) {
     let stored;
     try {
-      const secrets = await redactSecrets(original, true, deadline);
+      // Same opt-in as the main pass: with secrets off nothing was redacted
+      // out of the primary output either, so the sidecar persists verbatim.
+      const secrets = secretsEnabled()
+        ? await redactSecrets(original, true, deadline)
+        : null;
       stored = secrets ? secrets.text : original;
     } catch {
       // The pre-splice text carries the spliced hidden-element content, so a
@@ -849,7 +858,11 @@ export async function evaluateToolOutput(input, ext = {}) {
   // secret surfaces, while grep/Bash output quoting placeholders is routine.
   // Reveal sidecars are excluded — their bytes are redacted BEFORE persisting,
   // so placeholder text there is this sanitizer's own.
+  // Gated on the secret opt-in: with the layer off this sanitizer never
+  // inserts placeholders, so placeholder-shaped bytes are ordinary text and
+  // the warning would be pure noise on every doc ABOUT redaction.
   if (
+    secretsEnabled() &&
     input.tool_name === "Read" &&
     !revealRead &&
     containsPlaceholder(toolOutput)

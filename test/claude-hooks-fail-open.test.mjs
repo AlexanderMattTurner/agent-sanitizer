@@ -17,8 +17,15 @@ import assert from "node:assert/strict";
 
 const { failOpenEnabled, failOpenContext, missingPackageError, FAIL_OPEN_ENV } =
   await import("../claude-hooks/lib/hook-io.mjs");
-const { failClosedFields, hookFailureFields } =
-  await import("../claude-hooks/pretooluse-sanitize.mjs");
+const {
+  failClosedFields,
+  hookFailureFields,
+  hintedWriteFault,
+  REDACTION_HINT,
+} = await import("../claude-hooks/pretooluse-sanitize.mjs");
+const { DEFAULT_HINT } = await import("../src/rehydrate.mjs");
+const { SECRETS_ENABLED_ENV, secretsEnabled } =
+  await import("../claude-hooks/lib/env-config.mjs");
 const { emitFailClosed, emitHookFailure } =
   await import("../claude-hooks/sanitize-output.mjs");
 const { main, USER_PROMPT_MESSAGES } =
@@ -224,5 +231,122 @@ describe("UserPromptSubmit failure posture", () => {
   it("blocks an unparsable payload under the opt-out", async () => {
     const out = await run(unparsable, { env: CLOSED });
     assert.equal(out.decision, "block");
+  });
+});
+
+describe("the secret layer's opt-in knob", () => {
+  it(`only the exact value "1" enables it`, () => {
+    assert.equal(secretsEnabled({ [SECRETS_ENABLED_ENV]: "1" }), true);
+    // Any other value — unset, truthy-looking, or a typo — stays off, so a
+    // misconfiguration can only fail toward "no secret machinery".
+    for (const value of [undefined, "", "0", "true", "yes", " 1"])
+      assert.equal(
+        secretsEnabled(
+          value === undefined ? {} : { [SECRETS_ENABLED_ENV]: value },
+        ),
+        false,
+        `${JSON.stringify(value)} must not enable the layer`,
+      );
+  });
+});
+
+describe("the open posture's placeholder-write carve-out", () => {
+  // The carve-out only exists inside the secret opt-in: placeholders reach a
+  // write only after the output hook redacted something, which the knob gates.
+  const OPEN_SECRETS = { ...OPEN, [SECRETS_ENABLED_ENV]: "1" };
+  const HINTED_WRITE = {
+    tool_name: "Write",
+    tool_input: {
+      file_path: "/f",
+      content: `password=${DEFAULT_HINT}: Secret]\n`,
+    },
+  };
+
+  it("the hook's restated literal IS the package's DEFAULT_HINT", () => {
+    // Exact equality, both directions: a prefix-only behavioral check would
+    // keep passing if REDACTION_HINT drifted shorter (over-triggering the
+    // carve-out) or the package hint drifted (under-triggering it).
+    assert.equal(REDACTION_HINT, DEFAULT_HINT);
+  });
+
+  it("recognizes write-shaped inputs carrying the package's hint prefix", () => {
+    // DEFAULT_HINT comes from the package; the hook restates the prefix as a
+    // literal so the check survives the package failing to load. Driving the
+    // package's spelling through the hook's literal pins the two together.
+    for (const tool of ["Write", "Edit", "NotebookEdit"])
+      assert.equal(
+        hintedWriteFault({ tool_name: tool, tool_input: { x: DEFAULT_HINT } }),
+        true,
+        `${tool} carrying the hint must be held`,
+      );
+    // The hint can sit arbitrarily deep (MultiEdit nests it in edits[]).
+    assert.equal(
+      hintedWriteFault({
+        tool_name: "MultiEdit",
+        tool_input: {
+          file_path: "/f",
+          edits: [{ old_string: "a", new_string: `${DEFAULT_HINT}]` }],
+        },
+      }),
+      true,
+    );
+  });
+
+  it("leaves everything else to the open default", () => {
+    for (const input of [
+      undefined,
+      { tool_name: "Bash", tool_input: { command: `echo ${DEFAULT_HINT}]` } },
+      { tool_name: "Write", tool_input: { file_path: "/f", content: "plain" } },
+      { tool_name: "Write" },
+    ])
+      assert.equal(hintedWriteFault(input), false);
+  });
+
+  it("asks under the OPEN posture instead of passing the write through", () => {
+    const fields = hookFailureFields(true, ABSENT, {
+      env: OPEN_SECRETS,
+      input: HINTED_WRITE,
+    });
+    assert.equal(fields.permissionDecision, "ask");
+    assert.match(String(fields.permissionDecisionReason), /placeholder/);
+    assert.match(String(fields.permissionDecisionReason), /fail-open posture/);
+    assert.equal(fields.additionalContext, undefined);
+  });
+
+  it("keeps the open default for every non-carve-out fault", () => {
+    for (const input of [
+      undefined,
+      { tool_name: "Bash", tool_input: { command: `echo ${DEFAULT_HINT}]` } },
+      { tool_name: "Write", tool_input: { file_path: "/f", content: "plain" } },
+    ]) {
+      const fields = hookFailureFields(true, ABSENT, {
+        env: OPEN_SECRETS,
+        input,
+      });
+      assert.equal(fields.permissionDecision, undefined);
+      assert.match(String(fields.additionalContext), /UNSANITIZED/);
+    }
+  });
+
+  it("does not hold a hinted write when secrets were never opted into", () => {
+    // Without the knob no sanitized view ever handed the model a placeholder,
+    // so hint-shaped text in a write is literal prose — holding it would be
+    // exactly the false positive the opt-in exists to avoid.
+    const fields = hookFailureFields(true, ABSENT, {
+      env: OPEN,
+      input: HINTED_WRITE,
+    });
+    assert.equal(fields.permissionDecision, undefined);
+    assert.match(String(fields.additionalContext), /UNSANITIZED/);
+  });
+
+  it("is invisible under the CLOSED posture (already strict)", () => {
+    assert.deepEqual(
+      hookFailureFields(true, ABSENT, {
+        env: { ...CLOSED, [SECRETS_ENABLED_ENV]: "1" },
+        input: HINTED_WRITE,
+      }),
+      failClosedFields(true, ABSENT),
+    );
   });
 });

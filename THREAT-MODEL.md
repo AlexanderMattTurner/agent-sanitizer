@@ -151,6 +151,74 @@ the model chooses to follow it — and the sentence reporting it is precisely th
 instruction not to. A target whose kind cannot be resolved is treated as
 auto-fetched (fail closed).
 
+## Layer 4—secret redaction (injected engine)
+
+The threat is the reverse of the other layers: not attacker text reaching the
+model, but a credential in tool output (a `.env` cat, a failing curl, a CI log)
+reaching a model that will paste it into the next tool call, a commit, or a
+bug report.
+
+**The package bundles no detector.** Layer 4 is an injected
+`redact(text) => {text, found, note?} | null` callback on `./output`, so the npm
+package ships no secret engine and a host may supply its own. The Claude Code
+plugin injects the Python engine from `agent-sanitizer[secrets]`
+(`python/agent_sanitizer/secrets/engine.py`) over a local daemon;
+`plugin/scripts/provision-redactor.sh` installs it at SessionStart.
+
+**It is the one fail-closed layer.** A redactor that throws — unreachable
+daemon, engine error — is rethrown from `sanitizeValue` as `CRITICAL: secret
+redaction failed …` (`src/output.mjs`), so the caller suppresses the output
+rather than emit a value nothing vetted. That is distinct from an engine that
+was never provisioned: there the hooks' posture applies, passing the output
+through with a loud warning by default and suppressing it under
+`AGENT_SANITIZER_FAIL_OPEN=0`. Either way the gap is announced, never silent.
+
+**Lone surrogates are normalized to U+FFFD before the redactor sees the text.**
+A secret split by an interposed lone surrogate renders as contiguous to the
+model but arrives broken at the redactor, so without normalization a
+reconstituted secret survives redaction. Both redact-input paths share one
+normalizer so they cannot drift.
+
+**Detection.** detect-secrets is the single oracle — its bundled plugins plus
+gitleaks-sourced ones for formats it lacks — extended with a regex
+for the unquoted `key=value` shapes `KeywordDetector` misses, PEM block
+collapse, cross-line reassembly of a secret split across lines, and exact-match
+redaction of caller-supplied env-var **values**. Each hit becomes
+`[REDACTED: <label>]` and its label joins `found`.
+
+**The engine discovers nothing about its environment.** Every
+environment-specific input — which env-var values to redact, the invisible
+charset, whether the text is web ingress — arrives through `RedactorConfig`; the
+engine never reads `os.environ`. Passing values rather than names is
+load-bearing for the daemon, which serves many sessions and must redact the
+_requester's_ keys. The invisible charset is sourced from the same SSOT Layer 1
+uses (and raises if that dependency is missing rather than silently using a
+partial set): a key spliced with a code point one layer omits would otherwise
+escape both.
+
+**Precision over recall, deliberately.** Redacting a UUID, a content digest, a
+timestamp, a version, a filesystem path, a public endpoint URL, a `$VAR`
+reference, a documentation placeholder or a markdown code span would delete text
+the model needed, so each is filtered out before redaction, and an env value
+shorter than `min_secret_len` (16) is treated as a test stub rather than a key.
+Two config switches move the trade-off where the context justifies it:
+`web_ingress` disables the name-based benign skips for attacker-controlled text,
+and `high_confidence` drops the fuzzy keyword/field-value detectors for source
+scans, where secret-shaped names appear legitimately.
+
+**Redaction stays reversible for editing, never for the model.**
+`redact_map` returns placeholder ↔ original pairs with offsets, which
+`./rehydrate` uses to re-anchor a model `Edit` composed from the redacted view
+back onto the real bytes. If the input already contains the private-use
+sentinels the map machinery reserves, it returns `{"unmappable": …}` rather than
+risk mis-pairing a placeholder with the wrong secret.
+
+**Ordering.** Layer 4 runs after Layers 1–2 have removed bytes, and is re-run on
+the post-deletion text whenever Layer 5 deletes a span — a deletion can
+reconstitute a secret the first pass never saw intact. On `Bash.command` it runs
+before `sanitizeAuthoredContent`, which is the assumption the confusable-folding
+soundness argument below relies on.
+
 ## Confusable folding (tool input)
 
 `./confusables` folds look-alike glyphs in tool-call **input** fields (paths,
@@ -232,7 +300,14 @@ RECONSTITUTES during stripping is judged as the sequence it becomes.
 (a harness that gets a shape-mismatched value silently shows the raw output).
 Layer 4 (secret redaction) is an **injected** redactor and is the one
 fail-closed path: a redactor that throws makes the pipeline rethrow, so the
-caller suppresses the output rather than emit an unvetted value. Layer 5 is a
+caller suppresses the output rather than emit an unvetted value. In the Claude
+Code hooks the entire secret layer is **opt-in**: `secretsEnabled()`
+(`claude-hooks/lib/env-config.mjs`) reads `AGENT_SANITIZER_SECRETS_ENABLED=1`,
+and every secret-layer guarantee below — Layer-4 redaction, rehydration, the
+placeholder guards, the placeholder-write carve-out, SessionStart engine
+provisioning — is conditional on that knob being set; unset, no redactor is
+spawned and no placeholders enter the model's view, because the layer's denies
+and asks are friction an operator must ask for. Layer 5 is a
 deliberately thin, safe slot: the injected filter returns **verbatim spans to
 delete** (never replacement text), so even a compromised filter can only remove
 legitimate content—it can never inject bytes into the model’s view. That removal
@@ -282,6 +357,28 @@ are load-bearing and **fail closed**:
   edit would re-run redaction on every `Edit` call and risk false denials on a
   legitimate relabel in a large file. The secret flows disk → tool input only;
   the model’s next view is sanitized again.
+- **Never trust the redactor’s map unverified.** The redactor’s map-mode output
+  is validated before any splice: every pair’s placeholder must occupy the view
+  text at its stated offset, and splicing the originals back must reconstruct
+  the file’s cleaned bytes exactly — out-of-range and overlapping pairs are
+  caught too. A map that fails either proof is **denied outright** — for every
+  tool and hint state, stricter than the honest-unmappable arm — and never
+  thrown into the host’s fail-open posture: unlike an engine reporting it
+  cannot map, a validated-wrong map is affirmative evidence the engine is wrong
+  about where this file’s secrets sit, so neither a splice nor a raw
+  pass-through (the R1 hidden-span oracle) can be vetted against it.
+
+MultiEdit is gated, not rehydrated. MultiEdit applies its edits sequentially,
+each against the file state the previous edit produced, so the span-exact
+view↔disk mapping done for a single Edit has no sound equivalent. It passes
+through only when the file’s sanitized view provably equals disk AND no edit
+carries a `[REDACTED…]` placeholder; every other case — a view that diverges via
+redacted secrets or stripped invisible characters, an unmappable or defective
+redactor map, or placeholder text aimed at a pristine file (the
+foreign-placeholder rule) — is **denied**, with guidance to re-issue the changes
+as single Edit calls, which _are_ rehydrated. The previous full pass-through was
+both a silent clobber (the placeholder persisted over the secret) and a
+character-extraction oracle.
 
 File access and the redactor are injected via `io`; the package performs no I/O
 of its own and bundles no secret engine.
@@ -386,6 +483,24 @@ restores the fail-closed verdicts — block, ask, suppress. The posture covers
 every way a hook can fail: the launcher not starting (no `node`, missing or
 corrupt bundle), the package never loading, a payload that never parsed, and a
 layer that ran and threw.
+
+One carve-out: when the PreToolUse hook itself fails (redactor daemon down,
+package failed to load, a layer threw) and the call is a **write-shaped tool**
+(Write/Edit/MultiEdit/NotebookEdit) whose input carries the `[REDACTED`
+placeholder prefix, the hook **asks** — fail-closed, human in the loop — instead
+of passing through. With the sanitizer down, rehydration cannot run, so the
+placeholder text would be persisted literally over the real secret on disk: a
+destructive clobber, not a missed scan. Holding these calls is safe because a
+placeholder-bearing write is never the benign availability case the open default
+protects — the model can retry once the sanitizer recovers, or ask the user. The
+check is package-free (a literal-string test on the already-parsed payload), so
+it holds even when the failure IS the missing package. Two accepted gaps: a
+launcher-level failure (no `node`, corrupt bundle) never reaches the check — the
+launcher cannot inspect the payload and always warns — and `Bash` is excluded
+even though shell redirection can also persist placeholder text, because command
+strings mention `[REDACTED` benignly far too often for the ask to hold
+precision. All other faults keep the open default, and
+`AGENT_SANITIZER_FAIL_OPEN=0` behavior is unchanged.
 
 **The open default is not enforceable against content.** Several of those
 failures are composable by whoever authored the payload — in the output hook
