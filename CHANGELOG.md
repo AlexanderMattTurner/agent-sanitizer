@@ -8,6 +8,12 @@ adhere to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+## [2.31.5] - 2026-08-09
+
+### Fixed
+
+- Registration of the generated fail-open shell library now completes successfully so main health checks pass.
+
 ## [2.31.4] - 2026-08-09
 
 ### Fixed
