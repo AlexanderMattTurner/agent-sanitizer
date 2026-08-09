@@ -88,6 +88,10 @@ const HOOK_NAME = "sanitize-output";
 // splice/withhold warnings make is NOT kept for this output. Fixed prose, no
 // error text — the redactor runs on attacker-influenced content and this line
 // reaches the model-facing context. Exported so tests assert it by reference.
+// Deliberately a LOCAL constant rather than a shared engine builder alongside
+// output.mjs's "Withheld the ${label}" template: the plugin bundle resolves
+// the engine to the pinned registry release, so hook code cannot use a new
+// engine export until the pin advances past it.
 export const REVEAL_WITHHELD_WARNING =
   "Withheld the reveal sidecar: it could not be vetted for secrets";
 

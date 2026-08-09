@@ -31,6 +31,10 @@ const socketPath = join(socketDir, "redactor.sock");
 process.env._AGENT_SANITIZER_REDACTOR_SOCKET = socketPath;
 const revealDir = mkdtempSync(join(tmpdir(), "sanitizer-reveal-store-"));
 process.env._AGENT_SANITIZER_REVEAL_DIR = revealDir;
+// Secret redaction is an env opt-in; without it the seam's vet AND the loop's
+// re-vet both skip the daemon and the reveal persists verbatim — the exact
+// code path under test never runs.
+process.env.AGENT_SANITIZER_SECRETS_ENABLED = "1";
 
 const { evaluateToolOutput, REVEAL_WITHHELD_WARNING } =
   await import("../claude-hooks/sanitize-output.mjs");
