@@ -50,8 +50,10 @@ export function linkedWorktrees(cwd, run) {
   );
   const paths = [];
   // The first record is always the main worktree; `bare` marks a bare repo's.
+  // `prunable` marks one whose directory is already gone — it holds no work to
+  // lose, and asking git for its status would only spawn into a missing cwd.
   for (const record of records.slice(1)) {
-    if (/^bare$/m.test(record)) continue;
+    if (/^bare$/m.test(record) || /^prunable\b/m.test(record)) continue;
     const line = record.split("\n").find((l) => l.startsWith("worktree "));
     if (line) paths.push(line.slice("worktree ".length));
   }
@@ -67,14 +69,35 @@ export function linkedWorktrees(cwd, run) {
  * @param {(file: string, args: string[], cwd: string) => string} run
  * @returns {Array<{path: string, entries: number}>}
  */
-export function dirtyWorktrees(paths, run) {
+export function dirtyWorktrees(paths, run, warn = defaultWarn) {
   const dirty = [];
   for (const path of paths) {
-    const status = run("git", ["status", "--porcelain"], path).trim();
+    let status;
+    try {
+      status = run("git", ["status", "--porcelain"], path).trim();
+    } catch (err) {
+      // The one recovery this hook needs. `path` is the child's cwd, so a
+      // worktree whose directory was deleted by hand — git still lists it, as
+      // `prunable` — makes the spawn throw ENOENT. Letting that escape reaches
+      // the entrypoint's catch and fails the WHOLE guard open, so a genuinely
+      // dirty worktree LATER in the list is never reported and the removal
+      // proceeds unguarded: precisely the loss this hook exists to prevent,
+      // through a state that worktree-using sessions reach routinely. Contain
+      // it to the one worktree, and say so — a stale registration holds no work
+      // to lose, but a silent skip is how a real fault here stays invisible.
+      warn(
+        `worktree-teardown-check: cannot read ${path} (${errMessage(err)}); ` +
+          "skipping just this worktree — `git worktree prune` clears a stale one.\n",
+      );
+      continue;
+    }
     if (status !== "") dirty.push({ path, entries: status.split("\n").length });
   }
   return dirty;
 }
+
+/** @param {string} text */
+const defaultWarn = (text) => process.stderr.write(text);
 
 /**
  * The PreToolUse response for a payload, or null to stay silent.

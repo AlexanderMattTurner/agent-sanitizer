@@ -14,6 +14,9 @@
       "test/shipped-gates.test.mjs"
     ],
     ".hooks/pre-push": [".hooks/pre-push.test.mjs"],
+    "config/auto-resolve-regen-rules.json": [
+      "test/auto-resolve-regen-rules.test.mjs"
+    ],
     ".github/scripts/auto-resolve/bundle.sh": [
       ".github/scripts/auto-resolve/bundle.test.mjs"
     ],

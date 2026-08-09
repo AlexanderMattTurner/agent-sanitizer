@@ -75,10 +75,10 @@ const SKIP_DIRS = new Set([
  * Deliberately NOT `git ls-files`, but not for the reason first written here.
  * Git does not FAIL in Stryker's sandbox: the sandbox is a plain directory copy
  * at `<repoRoot>/.stryker-tmp/sandbox-XXXXXX/`, so git walks up out of it and
- * answers about the real checkout. That is worse than failing, because this
- * suite's subject is the copy it is actually running in — the instrumented one
- * — and git would silently hand it a different tree. Enumerating from this
- * file's own location keeps the answer anchored wherever the suite lives.
+ * answers about the real checkout — which, now that `repoRoot` is unsandboxed,
+ * is the same tree this scan wants. So git is not WRONG here, merely an
+ * unnecessary dependency: enumerating from this file's own location keeps the
+ * suite runnable in any copy of the repo, including one with no `.git` at all.
  */
 function listFiles(dir = "", out = []) {
   const entries = readdirSync(join(repoRoot, dir), { withFileTypes: true });
@@ -607,7 +607,7 @@ const scanned = scanGuardedData();
 // floor: a path that drops out of the scan drops out of the partition and
 // direction assertions with it, so a resolver regression would quietly narrow
 // all of them at once while staying green.
-const RESOLVED_PATH_COUNT = 54;
+const RESOLVED_PATH_COUNT = 55;
 
 describe("SSOT guard-pair map", () => {
   it("is non-empty and every mapped path exists in the repo", () => {

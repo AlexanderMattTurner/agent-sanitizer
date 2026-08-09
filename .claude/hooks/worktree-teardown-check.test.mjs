@@ -54,6 +54,17 @@ describe("linkedWorktrees", () => {
     ]);
   });
 
+  it("excludes a worktree git already reports as prunable", () => {
+    // Its directory is gone, so it holds no work to lose, and asking git for its
+    // status would only spawn into a missing cwd.
+    const { run } = fakeGit({
+      "worktree list":
+        "worktree /repo\nHEAD abc\nbranch refs/heads/main\n\n" +
+        "worktree /repo/.worktrees/gone\nHEAD def\nprunable gitdir file points to non-existent location\n",
+    });
+    assert.deepEqual(linkedWorktrees("/repo", run), []);
+  });
+
   it("excludes a bare repo's record", () => {
     const { run } = fakeGit({
       "worktree list": "worktree /repo\nbare\n\nworktree /repo/wt\nbare\n",
@@ -71,6 +82,31 @@ describe("dirtyWorktrees", () => {
     assert.deepEqual(dirtyWorktrees(["/a", "/b"], run), [
       { path: "/a", entries: 2 },
     ]);
+  });
+});
+
+describe("dirtyWorktrees under a stale registration", () => {
+  it("skips only the unreadable worktree, and still reports a dirty one", () => {
+    // The regression: `path` is the child's cwd, so a worktree whose directory
+    // was deleted by hand makes the spawn throw ENOENT. Letting that escape
+    // reaches the entrypoint's catch and fails the WHOLE guard open — losing
+    // the dirty worktree AFTER it, which is the exact loss this hook prevents.
+    const warnings = [];
+    const run = (_file, _args, cwd) => {
+      if (cwd === "/gone") {
+        const err = new Error("ENOENT: no such file or directory");
+        err.code = "ENOENT";
+        throw err;
+      }
+      return "A  staged.mjs\n";
+    };
+    assert.deepEqual(
+      dirtyWorktrees(["/gone", "/live"], run, (t) => warnings.push(t)),
+      [{ path: "/live", entries: 1 }],
+    );
+    assert.equal(warnings.length, 1, "a skipped worktree must not be silent");
+    assert.match(warnings[0], /\/gone/);
+    assert.match(warnings[0], /git worktree prune/);
   });
 });
 

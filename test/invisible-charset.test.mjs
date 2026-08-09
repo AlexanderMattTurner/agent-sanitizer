@@ -17,6 +17,8 @@ import {
   extraCodepoints,
   cfCodepoints,
   charsetDoc,
+  cfCharsetModule,
+  CF_MODULE_PATH,
   OUTPUT_PATH,
 } from "../scripts/gen-invisible-charset.mjs";
 import { VS, BLANK_NON_CF, stripInvisible } from "../src/invisible.mjs";
@@ -137,6 +139,30 @@ describe("standardized-variants SSOT", () => {
     assert.ok(
       !isStandardizedVariant(0x30, 0xfe0f),
       "VS16 is an emoji presentation selector, never a standardized variant",
+    );
+  });
+});
+
+describe("generated modules are byte-identical to a fresh generation", () => {
+  // The SEMANTIC round-trips above compare code points, which is exactly why
+  // src/cf-charset.mjs was able to drift from its own generator by whitespace
+  // alone and stay green: Prettier repacked the flat number array the generator
+  // emitted, and nothing compared bytes. Removing Prettier from the file removed
+  // one cause of that drift, not the class — a hand edit, or a change to the
+  // generator's template with no regeneration, re-lands the same divergence.
+  it("src/cf-charset.mjs matches cfCharsetModule() byte for byte", () => {
+    assert.equal(
+      readFileSync(CF_MODULE_PATH, "utf8"),
+      cfCharsetModule(),
+      "src/cf-charset.mjs is stale — run `node scripts/gen-invisible-charset.mjs`",
+    );
+  });
+
+  it("the charset JSON matches charsetDoc() byte for byte", () => {
+    assert.equal(
+      readFileSync(OUTPUT_PATH, "utf8"),
+      JSON.stringify(charsetDoc(), null, 2) + "\n",
+      "the charset JSON is stale — run `node scripts/gen-invisible-charset.mjs`",
     );
   });
 });
