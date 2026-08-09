@@ -1,9 +1,51 @@
 /**
  * Shared test helpers.
  */
+import { createServer } from "node:net";
 import fc from "fast-check";
 
 import { occurrences } from "../src/view-map.mjs";
+
+/**
+ * A SUBSTITUTING stub redactor daemon over the real socket protocol (4-byte BE
+ * length prefix + JSON): it redacts exactly `secret` wherever it appears and
+ * reports nothing to redact (null) otherwise, so redaction is observable
+ * per-text instead of a fixed canned reply. Lives here because the hook suites
+ * that need one all need the identical wire handling; the per-suite copies
+ * predate this helper.
+ * @param {string} socketPath
+ * @param {{ secret: string, mark: string }} substitution
+ * @returns {Promise<import("node:net").Server>}
+ */
+export function startStubRedactorDaemon(socketPath, { secret, mark }) {
+  const server = createServer((sock) => {
+    // Thousands of short-lived connections run through this in a fuzz suite;
+    // without a handler a socket 'error' is re-thrown and takes down the test
+    // runner with an unattributable stack.
+    sock.on("error", () => {});
+    const chunks = [];
+    sock.on("data", (chunk) => {
+      chunks.push(chunk);
+      const buf = Buffer.concat(chunks);
+      if (buf.length < 4) return;
+      const expected = buf.readUInt32BE(0);
+      if (buf.length < 4 + expected) return;
+      const request = JSON.parse(
+        buf.subarray(4, 4 + expected).toString("utf8"),
+      );
+      const reply = request.text.includes(secret)
+        ? { text: request.text.replaceAll(secret, mark), found: ["StubSecret"] }
+        : null;
+      const body = Buffer.from(JSON.stringify(reply), "utf8");
+      const header = Buffer.allocUnsafe(4);
+      header.writeUInt32BE(body.length, 0);
+      sock.end(Buffer.concat([header, body]));
+    });
+  });
+  return new Promise((resolve) =>
+    server.listen(socketPath, () => resolve(server)),
+  );
+}
 
 /**
  * The bytes a needle splice may NOT touch: every index of the ORIGINAL `text`
@@ -29,8 +71,8 @@ export function keptOutsideNeedles(text, needles) {
 
 /**
  * fast-check run options. A fixed seed is replayed when FC_REPRODUCIBLE=1, which
- * the seed-pinned CI jobs set (mutation.yaml pins it; the PR/push test run is
- * meant to as well) so a green run stays green and any failure is reproducible
+ * the seed-pinned CI jobs set (mutation.yaml and node-tests.yaml both pin it)
+ * so a green run stays green and any failure is reproducible
  * from the logged seed. Only the nightly unseeded fuzz job (fuzz-nightly.yaml)
  * leaves the flag unset — there fast-check randomizes and keeps surfacing new
  * counterexamples across a broader slice of the input space.
