@@ -187,10 +187,7 @@ export function tallyMutants(reports, inScope = () => true) {
  *
  * The prefixes come from `scripts/shipped-sources.mjs`, which builds the
  * coverage scopes from the same constants, so the two splits are one definition
- * and neither can drift from the other. None of them is "everything else": a
- * directory that later joins the mutated set is therefore claimed by nobody and
- * fails `test/aggregate-mutation.test.mjs` rather than silently inheriting a
- * ratchet it was never measured against.
+ * and neither can drift from the other.
  *
  * @param {{breakThreshold: number, hookScopeBreak: number, toolingScopeBreak: number}} thresholds
  * @returns {{name: string, inScope: (f: string) => boolean, threshold: number}[]}
