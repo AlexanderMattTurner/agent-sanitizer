@@ -8,18 +8,20 @@
 // injection vectors — while leaving the visible bytes untouched, so the diff
 // stays byte-faithful and reviewable. Running the HTML layer would splice out
 // legitimate HTML/markdown in the changed files and corrupt the review, so the
-// exfil-URL scan is run separately and NON-destructively: suspicious URLs are
-// reported, never removed.
+// exfil-URL scan runs via `exfilScan` instead: Layer 3's non-destructive
+// detection, which reports suspicious URLs in `warnings` without removing
+// them. The warning prose is the sanitizer's own (src/warnings.mjs) — this
+// script no longer carries a copy.
 //
 // Usage: node sanitize-pr-input.mjs < raw.txt > cleaned.txt 2> report.txt
 // This script runs against the PUBLISHED package, pinned by
-// install-sanitizer.sh — not against src/ in this repo. So it may only use API
-// that version already ships: `describeExfil` is re-exported from
-// `agent-sanitizer/output` on this branch but not in the pin, and importing it
-// here fails the whole script at module load. Hence the reasons are still
-// assembled locally, and `notes` is defaulted below.
+// install-sanitizer.sh — not against src/ in this repo, except inside this repo
+// itself, where the installer points the pin at the working tree. So it may
+// only use API the pinned version already ships: subpath imports such as
+// `agent-sanitizer/html` fail the whole script at module load when the pin
+// predates them, which is why the exfil scan goes through the `sanitize()`
+// facade and `notes` is defaulted below.
 import { sanitize } from "agent-sanitizer";
-import { detectExfil } from "agent-sanitizer/html";
 
 const chunks = [];
 for await (const chunk of process.stdin) chunks.push(chunk);
@@ -35,22 +37,22 @@ const {
   notes = [],
 } = await sanitize(input, {
   html: false,
+  exfilScan: true,
 });
-
-const exfilReasons = [
-  ...new Set(
-    (detectExfil(input) || []).map(
-      (threat) =>
-        `${threat.isImage ? "image" : "link"} to ${threat.target}: ${threat.reason}`,
-    ),
-  ),
-];
 
 process.stdout.write(cleaned);
 
 // A reviewer's report, not a model's banner, so both severity tiers are printed
 // — the warnings first, because that ordering is the only thing that survives a
 // skim.
+//
+// "flagged", not "neutralized": `found` mixes destructive layers (Layer 1
+// strips the bytes) with the detective one (Layer 3 reports exfil-shaped URLs
+// and leaves them in place). Claiming every category was neutralized tells the
+// review agent bytes were removed when a benign-but-exfil-shaped URL merely
+// tripped the scan, and its prompt reads neutralized content as a supply-chain
+// signal. One accurate label for both kinds keeps this script from having to
+// know which layer produced which category.
 const report = [...warnings, ...notes];
 if (found.length > 0)
   report.unshift(`Neutralized categories: ${found.join(", ")}`);
