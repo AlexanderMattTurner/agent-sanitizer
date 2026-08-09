@@ -8,6 +8,12 @@ adhere to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+## [2.28.2] - 2026-08-09
+
+### Fixed
+
+- CI sanitizer installation no longer runs the checkout's pnpm build.
+
 ## [2.28.1] - 2026-08-09
 
 ### Fixed
