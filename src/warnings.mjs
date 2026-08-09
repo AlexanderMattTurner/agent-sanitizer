@@ -52,6 +52,17 @@ export function describeHtmlSanitized(removed) {
 }
 
 /**
+ * The Layer-2 warning for the fail-closed unparseable path: the parse itself
+ * blew up, so nothing was spliced — the ENTIRE output was withheld behind one
+ * placeholder. {@link describeHtmlSanitized}'s "N hidden element(s) replaced"
+ * would misstate that as a routine splice, so this path gets its own sentence.
+ * @returns {string}
+ */
+export function describeHtmlUnparseable() {
+  return "HTML unparseable — the entire output was withheld behind a placeholder; the original text was preserved for the reveal sidecar";
+}
+
+/**
  * Full warning for Layer 2's preserved-but-reported content (scripting and
  * resource tags, data: URIs), or "" when there is nothing to report. Callers
  * must not push the empty string as a warning.

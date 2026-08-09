@@ -39,6 +39,7 @@ import {
 import {
   describeExfil,
   describeHtmlSanitized,
+  describeHtmlUnparseable,
   describeWarned,
   LONE_SURROGATE_WARNING,
 } from "./warnings.mjs";
@@ -429,8 +430,16 @@ async function applyMarkdownPipeline(state, { html, exfilScan }) {
         // A WARNING: these bytes were invisible to a human reading the rendered
         // page and are now gone from the model's view too — the exact shape of
         // a hidden-instruction payload, and the model cannot check what it was
-        // without the reveal sidecar.
-        state.findings.push(warning(describeHtmlSanitized(layer2.removed)));
+        // without the reveal sidecar. The unparseable fail-closed path withheld
+        // the WHOLE output, not a spliced span, so it gets its own sentence
+        // rather than a misleading "1 hidden element(s) replaced".
+        state.findings.push(
+          warning(
+            layer2.unparseable
+              ? describeHtmlUnparseable()
+              : describeHtmlSanitized(layer2.removed),
+          ),
+        );
       }
       // A NOTE: nothing was removed and nothing was hidden. This line says "the
       // page had scripts, treat their contents as data", which is true of nearly
