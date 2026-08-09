@@ -1,0 +1,64 @@
+{
+  "comment": "Derived-file rules for the auto-resolver's deterministic pre-pass. A file listed in a rule's `owns` is GENERATED, so a merge conflict in it is never a question for a human or a model — the answer is to merge the sources and re-run the generator. .github/scripts/resolve-generated.mjs reads this file; auto-resolve/prepare.sh uses it to route generated conflicts away from the LLM, and to defer the ones whose sources also conflicted until after those sources are resolved. The template ships this file with an empty `rules` array; a repo that DELETES it rather than emptying it loses the pre-pass silently, because an absent config and an empty one mean the same thing to the oracle.",
+
+  "schema": {
+    "command": "argv array to run, from the repo root. Exactly one of `command` or `generator`.",
+    "generator": "path to a script to run. `interpreter` (argv array) defaults to [\"node\"].",
+    "sources": "exact paths whose change requires re-running this rule.",
+    "sourcesPattern": "optional regex (string) matched against changed paths, in addition to `sources`.",
+    "owns": "exact paths this rule GENERATES. A conflict in one of these is resolved by regenerating, never by editing.",
+    "ownsPrefix": "optional path prefix, ending in '/', whose whole subtree this rule generates."
+  },
+
+  "notOwned": {
+    "comment": "Generated artifacts deliberately left OUT of `rules`, so the next reader does not read their absence as an oversight. A rule that cannot resolve the conflict it claims is worse than no rule: prepare.sh routes the path away from the model on the strength of the claim.",
+    "python/agent_sanitizer/_bundled/": "git-ignored (see .gitignore), so it can never carry a conflict.",
+    "types/": "git-ignored build output of `pnpm build:types`.",
+    "plugin/requirements.txt": "compiled by plugin/scripts/lock-redactor-deps.mjs, which resolves the dependency tree over the NETWORK and is invoked with --if-stale. Under --if-stale it declines to rewrite the lock when the engine pin has not moved, which is exactly the case where a conflict in it needs rewriting — so the rule would claim the path and then leave the markers in place. .github/workflows/plugin-dist-autofix.yaml owns this file instead."
+  },
+
+  "rules": [
+    {
+      "generator": "scripts/gen-invisible-charset.mjs",
+      "sources": ["src/invisible.mjs", "src/ansi.mjs"],
+      "owns": [
+        "python/agent_sanitizer/data/invisible-charset.json",
+        "src/cf-charset.mjs"
+      ]
+    },
+    {
+      "generator": "scripts/gen-joining-type.mjs",
+      "sourcesPattern": "^scripts/data/.*\\.json$",
+      "owns": ["src/joining-type.mjs"]
+    },
+    {
+      "generator": "scripts/gen-standardized-variants.mjs",
+      "sources": ["scripts/data/StandardizedVariants.txt"],
+      "owns": ["src/standardized-variants.mjs"]
+    },
+    {
+      "generator": "scripts/gen-fail-open-lib.mjs",
+      "sources": ["claude-hooks/lib/hook-io.mjs"],
+      "owns": ["plugin/scripts/lib/fail-open.sh"]
+    },
+    {
+      "generator": "plugin/scripts/build-plugin.mjs",
+      "sources": ["package.json", "scripts/lib/bundle-esbuild.mjs"],
+      "sourcesPattern": "^(claude-hooks|src)/.*\\.mjs$",
+      "owns": [
+        "plugin/dist/hooks/plugin-hooks.bundle.mjs",
+        "plugin/requirements.in"
+      ]
+    },
+    {
+      "generator": "plugin/scripts/build-redactor-pyz.mjs",
+      "sources": ["plugin/requirements.txt"],
+      "owns": ["plugin/dist/redactor/daemon.pyz"]
+    },
+    {
+      "command": ["pnpm", "install", "--lockfile-only"],
+      "sources": ["package.json"],
+      "owns": ["pnpm-lock.yaml"]
+    }
+  ]
+}
