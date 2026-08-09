@@ -86,7 +86,7 @@ actionable; "several scripts are inconsistent" is not.
 
 ## Workflow
 
-### 1. Map the territory (main session, fast) — this is an `explore-plan` gate
+### 1. Map the territory (main session) — this is an `explore-plan` gate
 
 The fan-out is expensive and its scopes are load-bearing, so step 1 follows the `explore-plan`
 skill's loop, not an ad-hoc skim. Before spawning any audit agent:
