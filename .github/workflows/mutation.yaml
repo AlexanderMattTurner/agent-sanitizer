@@ -7,6 +7,10 @@ on:
       - "src/**/*.mjs"
       - "claude-hooks/**/*.mjs"
       - "bin/**/*.mjs"
+      # Repo tooling that is mutation-gated as its own scope (see
+      # aggregate-mutation.mjs); derived by scripts/shipped-sources.mjs from the
+      # directory, so a new module here joins the gate and must join this gate too.
+      - ".hooks/lib/**/*.mjs"
       - "test/**/*.mjs"
       - "scripts/shipped-sources.mjs"
       - "scripts/mutate.mjs"

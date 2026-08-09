@@ -26,6 +26,62 @@ import { fileURLToPath } from "node:url";
 export const SRC_SCOPE = "src/";
 
 /**
+ * Repo TOOLING that is mutation-gated despite shipping to nobody.
+ *
+ * `.hooks/lib/` holds the modules the pre-commit hook derives its guard-pair
+ * map with. Nothing there is published, so `shippedSources` — which reads the
+ * package manifest — cannot see it, and it was outside every gate: a resolver
+ * arm could stop resolving and the only signal would be guards quietly not
+ * running. It has a node suite that exercises it (`test/guard-pairs.test.mjs`),
+ * which is the whole precondition for mutating something.
+ *
+ * DIRECTORY-scoped, not repo-wide, and deliberately: `.hooks/run-guard-pairs.mjs`
+ * one level up is covered only by `tests/test_hook_fail_closed.py`, and Stryker
+ * runs the tap runner over `test/**` — pytest never executes, so every mutant
+ * there would survive by construction and the score would measure the runner
+ * rather than the tests.
+ */
+export const TOOLING_SCOPE = ".hooks/lib/";
+
+/**
+ * Every `.mjs` under `TOOLING_SCOPE`, derived from the directory.
+ *
+ * Derived rather than listed for the same reason the shipped set is: a new
+ * module here joins the mutation gate the moment it is committed, and
+ * `test/shipped-gates.test.mjs` fails the build if the shard matrix has not
+ * been taught about it.
+ *
+ * @param {string} repoRoot absolute path to the repository root
+ * @returns {string[]} repo-relative POSIX paths, sorted
+ */
+export const toolingSources = (repoRoot) =>
+  // RECURSIVE, matching both the docstring and `mutation.yaml`'s
+  // `.hooks/lib/**/*.mjs` trigger. A shallow read would leave a module at
+  // `.hooks/lib/sub/x.mjs` out of the mutated set — so no shard would name it,
+  // the contract test (tooling ⊆ mutated) would stay green, and the gate would
+  // run over a file it never mutates. That is the silent ungating this scope
+  // exists to close. `replace(/\\/g, "/")` keeps the entries POSIX on Windows.
+  readdirSync(join(repoRoot, TOOLING_SCOPE), { recursive: true })
+    .map((entry) => entry.toString().replace(/\\/g, "/"))
+    .filter((name) => name.endsWith(".mjs"))
+    .map((name) => posix.join(TOOLING_SCOPE, name))
+    .sort();
+
+/**
+ * Everything the mutation gate mutates: the shipped surface plus the tooling.
+ *
+ * De-duplicated because the two halves are only disjoint by convention — a
+ * `.hooks/lib/*.mjs` added to the manifest would otherwise appear twice and the
+ * shard contract test would fail on a set-vs-list mismatch instead of on the
+ * real problem, which `test/shipped-gates.test.mjs` asserts directly.
+ *
+ * @param {string} repoRoot @returns {string[]} */
+export const mutatedSources = (repoRoot) =>
+  [
+    ...new Set([...shippedSources(repoRoot), ...toolingSources(repoRoot)]),
+  ].sort();
+
+/**
  * Resolve one `files` entry into the `.mjs` paths it publishes.
  *
  * Only the two shapes the manifest actually uses are understood — a literal

@@ -9,15 +9,21 @@
  * per-mutant verdicts across every shard's `mutation.json` and computes the same
  * mutation score Stryker would — once per gated SCOPE.
  *
- * There are two scopes because the shipped surface is two populations with very
+ * There are three scopes because the mutated set is three populations with very
  * different histories: `src/` has been mutated (and hardened) for months and
  * keeps `stryker.conf.json`'s `thresholds.break`, while the Claude-hook layer
  * and the CLI were outside the gate entirely until they were added to the shard
  * matrix and carry their own ratchet (`hookScopeBreak` in
  * `.github/mutation-shards.json`). Scoring them as one blended number would let
  * the newly-added files quietly pull the library's long-standing floor down.
- * Each scope's threshold is applied independently; either one failing fails the
+ * Each scope's threshold is applied independently; any one failing fails the
  * build.
+ *
+ * The third scope is `.hooks/lib/`: repo tooling that ships to nobody, so the
+ * manifest-derived shipped set cannot see it, but that has a node suite
+ * (`test/guard-pairs.test.mjs`) exercising it and real consequences when it
+ * silently stops resolving — the pre-commit guard-pair map is derived there, and
+ * a resolver arm that quietly breaks means guards stop running with no red.
  *
  * `hookScopeBreak` is a RATCHET set below the first measurement (a local
  * unsharded run over `claude-hooks/lib/*.mjs` + `bin/sanitize-cli.mjs` scored
@@ -25,6 +31,12 @@
  * had never been mutated when it was chosen. Raise it as the real number lands
  * in the job summary; never lower it, and never lower `thresholds.break`
  * because the hook scope is behind.
+ *
+ * `toolingScopeBreak` is the same kind of ratchet with NO measurement behind it
+ * yet — it starts at 1, which is not a quality bar but a liveness one: the
+ * empty-scope check below still fails the build if no shard mutates the scope.
+ * The first CI run prints the real score in the job summary; raise it to just
+ * under that number then.
  *
  * Usage: node aggregate-mutation.mjs <reports-dir>
  * Exits non-zero when the score is under threshold or when no reports are found
@@ -89,8 +101,19 @@ const relativize = (report, path) => {
     : posixPath;
 };
 
-/** Path prefix that separates the two gated scopes (see the file header). */
+/**
+ * Path prefixes that separate the three gated scopes (see the file header).
+ *
+ * Every scope NAMES what it claims — none of them is "everything else". A
+ * catch-all would partition every possible string by construction, so a
+ * directory that later joins the mutated set would silently inherit whichever
+ * ratchet the negation covered, scored against a floor it was never measured
+ * against. Named prefixes make such a path claimed by nobody, which
+ * `test/aggregate-mutation.test.mjs` fails on at test time.
+ */
 const SRC_PREFIX = "src/";
+const TOOLING_PREFIX = ".hooks/lib/";
+const HOOK_PREFIXES = ["claude-hooks/", "bin/"];
 
 /**
  * Deduplicate mutants across shard reports by identity and tally the score.
@@ -161,6 +184,41 @@ export function tallyMutants(reports, inScope = () => true) {
   };
 }
 
+/**
+ * The gated scopes, in report order.
+ *
+ * Exported so the partition itself is testable: the three predicates must
+ * assign every mutated path to exactly one scope. A path claimed twice is
+ * double-gated (and the stricter floor applied to files it was never meant
+ * for); a path claimed by none is silently ungated, which is the failure the
+ * whole per-scope split exists to prevent.
+ *
+ * @param {{breakThreshold: number, hookScopeBreak: number, toolingScopeBreak: number}} thresholds
+ * @returns {{name: string, inScope: (f: string) => boolean, threshold: number}[]}
+ */
+export const gatedScopes = ({
+  breakThreshold,
+  hookScopeBreak,
+  toolingScopeBreak,
+}) => [
+  {
+    name: "src (library)",
+    inScope: (/** @type {string} */ f) => f.startsWith(SRC_PREFIX),
+    threshold: breakThreshold,
+  },
+  {
+    name: "claude-hooks + bin",
+    inScope: (/** @type {string} */ f) =>
+      HOOK_PREFIXES.some((prefix) => f.startsWith(prefix)),
+    threshold: hookScopeBreak,
+  },
+  {
+    name: ".hooks/lib (repo tooling)",
+    inScope: (/** @type {string} */ f) => f.startsWith(TOOLING_PREFIX),
+    threshold: toolingScopeBreak,
+  },
+];
+
 function main(reportsDir) {
   const repoRoot = fileURLToPath(new URL("../..", import.meta.url));
   const strykerConf = JSON.parse(
@@ -181,19 +239,18 @@ function main(reportsDir) {
       `.github/mutation-shards.json hookScopeBreak must be a positive number, got ${JSON.stringify(hookScopeBreak)}`,
     );
   }
+  const toolingScopeBreak = shardConf.toolingScopeBreak;
+  if (typeof toolingScopeBreak !== "number" || toolingScopeBreak <= 0) {
+    throw new Error(
+      `.github/mutation-shards.json toolingScopeBreak must be a positive number, got ${JSON.stringify(toolingScopeBreak)}`,
+    );
+  }
 
-  const scopes = [
-    {
-      name: "src (library)",
-      inScope: (/** @type {string} */ f) => f.startsWith(SRC_PREFIX),
-      threshold: breakThreshold,
-    },
-    {
-      name: "claude-hooks + bin",
-      inScope: (/** @type {string} */ f) => !f.startsWith(SRC_PREFIX),
-      threshold: hookScopeBreak,
-    },
-  ];
+  const scopes = gatedScopes({
+    breakThreshold,
+    hookScopeBreak,
+    toolingScopeBreak,
+  });
 
   const reportFiles = readdirSync(reportsDir, { recursive: true })
     .map((entry) => join(reportsDir, entry.toString()))

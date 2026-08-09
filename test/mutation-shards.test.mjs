@@ -10,10 +10,11 @@
  * open over uncovered code.
  *
  * This guards both holes against the EXPANDED matrix (what CI actually runs):
- * every shipped `.mjs` is covered exactly once, and each split file's slices
- * tile [1, EOF) with no gap or overlap, ending open. The shipped set comes from
- * `scripts/shipped-sources.mjs` (the package manifest), not from a `readdir` of
- * `src/` — reading only `src/` is what let the whole `claude-hooks/` layer sit
+ * every mutated `.mjs` is covered exactly once, and each split file's slices
+ * tile [1, EOF) with no gap or overlap, ending open. The mutated set comes from
+ * `scripts/shipped-sources.mjs` — the package manifest for the shipped half and
+ * the `.hooks/lib/` directory for the tooling half — not from a `readdir` of
+ * `src/`; reading only `src/` is what let the whole `claude-hooks/` layer sit
  * outside the gate while this test stayed green.
  */
 import { execFileSync } from "node:child_process";
@@ -26,7 +27,7 @@ import {
   expandShards,
   EOF_SENTINEL,
 } from "../.github/scripts/expand-shards.mjs";
-import { shippedSources } from "../scripts/shipped-sources.mjs";
+import { mutatedSources } from "../scripts/shipped-sources.mjs";
 
 const repoRoot = execFileSync("git", ["rev-parse", "--show-toplevel"], {
   encoding: "utf8",
@@ -61,8 +62,8 @@ describe("mutation shard matrix", () => {
     );
   });
 
-  it("covers exactly the .mjs files the package ships", () => {
-    const onDisk = shippedSources(repoRoot);
+  it("covers exactly the .mjs files the gate mutates", () => {
+    const onDisk = mutatedSources(repoRoot);
 
     const inShards = [
       ...new Set(
@@ -73,7 +74,7 @@ describe("mutation shard matrix", () => {
     assert.deepEqual(
       inShards,
       onDisk,
-      "shard file set must equal the shipped .mjs set (add a `split` entry or `group` when a published file is added/removed)",
+      "shard file set must equal the mutated .mjs set (add a `split` entry or `group` when a published file or a .hooks/lib module is added/removed)",
     );
   });
 

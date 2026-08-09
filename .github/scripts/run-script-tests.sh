@@ -16,6 +16,20 @@ set -euo pipefail
 
 cd "$(git rev-parse --show-toplevel)"
 
+# Three of the discovered suites load scripts that `import … from
+# "agent-sanitizer"`, and `.github/scripts/package.json` ends the package scope
+# there, so Node's self-reference never resolves the name — the import needs
+# .github/scripts/node_modules, which install-sanitizer.sh provisions. The
+# workflow runs that script in its own step; a developer running this one from a
+# fresh clone does not, and got 75 failures whose only message was a raw
+# ERR_MODULE_NOT_FOUND stack. Provisioning here when it is missing makes the
+# documented entry point work anywhere, and is a no-op in CI (the step already
+# ran, so the package is present).
+if [[ ! -d .github/scripts/node_modules/agent-sanitizer ]]; then
+  echo "run-script-tests: installing the input sanitizer the review scripts import" >&2
+  bash .github/scripts/install-sanitizer.sh
+fi
+
 suites=()
 while IFS= read -r suite; do
   suites+=("$suite")

@@ -28,12 +28,25 @@ import { describe, it } from "node:test";
 import {
   MODULE_EXTENSIONS,
   expandPathspec,
-  repoRoot,
   scanGuardedData,
   scanJsGuards,
   scanPythonGuards,
   tracked,
 } from "../.hooks/lib/guarded-data-scan.mjs";
+
+/**
+ * The repo root, resolved HERE rather than imported from the module under test.
+ *
+ * Two reasons, and the second is why it is not the scanner's `repoRoot` export.
+ * A test should not take its ground truth from the thing it is testing. And the
+ * self-read pin below asserts that the scan resolves THIS file's
+ * `join(repoRoot, ".hooks", "guard-pairs.json")` — with `repoRoot` imported,
+ * that resolution runs through the scanner's own source, so Stryker's
+ * instrumentation of the scanner (which turns its `".."` literals into
+ * conditional expressions the resolver correctly declines) broke the pin and
+ * failed the mutation run's dry run before a single mutant was applied.
+ */
+const repoRoot = join(import.meta.dirname, "..");
 
 const { pairs, tooSlowForCommit } = JSON.parse(
   readFileSync(join(repoRoot, ".hooks", "guard-pairs.json"), "utf8"),

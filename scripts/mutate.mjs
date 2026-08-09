@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 /**
- * Run Stryker over every shipped `.mjs`, unsharded (the local `pnpm
- * test:mutation` entry point).
+ * Run Stryker over every mutated `.mjs` — the shipped surface plus the
+ * `.hooks/lib/` tooling — unsharded (the local `pnpm test:mutation` entry
+ * point).
  *
  * `stryker.conf.json` deliberately carries NO `mutate` key. It used to say
  * `src/*.mjs`, which silently excluded the entire Claude-hook layer and the
@@ -19,11 +20,11 @@ import { realpathSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { findRepoRoot, shippedSources } from "./shipped-sources.mjs";
+import { findRepoRoot, mutatedSources } from "./shipped-sources.mjs";
 
-/** The Stryker `--mutate` spec covering the whole shipped surface.
+/** The Stryker `--mutate` spec covering the whole mutated surface.
  * @param {string} repoRoot @returns {string} */
-export const mutateSpec = (repoRoot) => shippedSources(repoRoot).join(",");
+export const mutateSpec = (repoRoot) => mutatedSources(repoRoot).join(",");
 
 // Importable without side effects: the contract test asserts what this wrapper
 // would pass, and must not launch a multi-hour mutation run to do it.
