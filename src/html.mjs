@@ -882,6 +882,95 @@ function hasImageLayer(nodeOf) {
   return paintsImageLayer(nodeOf("background"));
 }
 
+// The declarations that add to an axis's BORDER box beyond its content-box
+// length, per axis. Shorthands are listed alongside the longhands they can set,
+// because a shorthand this checker cannot resolve must fail OPEN rather than be
+// ignored — ignoring it is what let `height:0; padding-bottom:56.25%` read as
+// invisible.
+const BLOCK_AXIS_EXTENT_PROPS = [
+  "padding",
+  "padding-top",
+  "padding-bottom",
+  "border",
+  "border-width",
+  "border-top",
+  "border-bottom",
+  "border-top-width",
+  "border-bottom-width",
+];
+const INLINE_AXIS_EXTENT_PROPS = [
+  "padding",
+  "padding-left",
+  "padding-right",
+  "border",
+  "border-width",
+  "border-left",
+  "border-right",
+  "border-left-width",
+  "border-right-width",
+];
+
+// `border-width`'s keyword values. They are LENGTHS, so a border shorthand that
+// names one (or names none at all, defaulting to `medium`) has real extent.
+const BORDER_WIDTH_KEYWORDS = new Set(["thin", "medium", "thick"]);
+
+/**
+ * True when a declared axis-additive property provably contributes NO extent.
+ *
+ * Deliberately conservative: every numeric token must be near zero, no
+ * border-width keyword may appear, and a `border*` shorthand must carry an
+ * explicit numeric width (an omitted width computes to `medium`, i.e. 3px). A
+ * `calc()`, a `var()`, or any unit this cannot resolve leaves a non-numeric
+ * token behind and returns false — the fail-open the module's own policy
+ * requires, since an unresolvable value may well paint a visible box.
+ * @param {string} prop @param {any} node @returns {boolean}
+ */
+function contributesNoExtent(prop, node) {
+  const tokens = valueTokens(node);
+  if (tokens.length === 0) return false;
+  const isBorderShorthand =
+    prop === "border" ||
+    prop === "border-top" ||
+    prop === "border-bottom" ||
+    prop === "border-left" ||
+    prop === "border-right";
+  let sawNumeric = false;
+  for (const token of tokens) {
+    if (
+      token.type === "Number" ||
+      token.type === "Dimension" ||
+      token.type === "Percentage"
+    ) {
+      if (Math.abs(parseFloat(token.value)) >= NEAR_ZERO_EPSILON) return false;
+      sawNumeric = true;
+      continue;
+    }
+    // A style/color identifier (`solid`, `red`) adds no length, but a
+    // width keyword does — and anything else (a function node, `var()`) is
+    // unresolvable and must fail open.
+    if (token.type !== "Identifier") return false;
+    if (BORDER_WIDTH_KEYWORDS.has(String(token.name).toLowerCase()))
+      return false;
+  }
+  return isBorderShorthand ? sawNumeric : true;
+}
+
+/**
+ * True when every declaration that could add to `axisProps`' axis is either
+ * absent or provably zero, so a near-zero content-box length really does mean
+ * the rendered border box is empty.
+ * @param {(key: string) => any} nodeOf @param {string[]} axisProps
+ * @returns {boolean}
+ */
+function axisExtentProvablyZero(nodeOf, axisProps) {
+  for (const prop of axisProps) {
+    const node = nodeOf(prop);
+    if (!node) continue; // undeclared: contributes its initial value, 0
+    if (!contributesNoExtent(prop, node)) return false;
+  }
+  return true;
+}
+
 /**
  * @param {(key: string) => any} nodeOf value node for a property, or null
  * @param {(key: string) => string} textOf decoded/lowercased text for a property
@@ -889,10 +978,24 @@ function hasImageLayer(nodeOf) {
  */
 function isOverflowHidden(nodeOf, textOf) {
   if (textOf("overflow") !== "hidden") return false;
-  for (const dim of ["height", "width", "max-height", "max-width"])
+  for (const [dim, axisProps] of /** @type {[string, string[]][]} */ ([
+    ["height", BLOCK_AXIS_EXTENT_PROPS],
+    ["width", INLINE_AXIS_EXTENT_PROPS],
+    ["max-height", BLOCK_AXIS_EXTENT_PROPS],
+    ["max-width", INLINE_AXIS_EXTENT_PROPS],
+  ]))
     // Near-zero (epsilon band), not exact 0, so `height:0.0001px` still counts —
     // matching the standalone size checks a browser renders as invisible.
-    if (isNearZeroLength(nodeOf(dim))) return true;
+    // The content box being empty is necessary but NOT sufficient: the universal
+    // aspect-ratio wrapper (`height:0; padding-bottom:56.25%; overflow:hidden` —
+    // Bootstrap's `.ratio`, and every hand-pasted padding-bottom hack) renders
+    // at 56.25% of its container with everything inside it on screen. Reading
+    // the content-box length alone spliced that visible content out.
+    if (
+      isNearZeroLength(nodeOf(dim)) &&
+      axisExtentProvablyZero(nodeOf, axisProps)
+    )
+      return true;
   return false;
 }
 
