@@ -185,12 +185,12 @@ export function tallyMutants(reports, inScope = () => true) {
  * for); a path claimed by none is silently ungated, which is the failure the
  * whole per-scope split exists to prevent.
  *
- * The prefixes come from `scripts/shipped-sources.mjs`, which derives the
- * coverage scopes from the same three constants: the mutation split and the
- * coverage split are one definition, so neither can drift from the other.
- * Every scope NAMES what it claims — none is "everything else", so a directory
- * that later joins the mutated set is claimed by nobody and fails the partition
- * test rather than inheriting a ratchet it was never measured against.
+ * The prefixes come from `scripts/shipped-sources.mjs`, which builds the
+ * coverage scopes from the same constants, so the two splits are one definition
+ * and neither can drift from the other. None of them is "everything else": a
+ * directory that later joins the mutated set is therefore claimed by nobody and
+ * fails `test/aggregate-mutation.test.mjs` rather than silently inheriting a
+ * ratchet it was never measured against.
  *
  * @param {{breakThreshold: number, hookScopeBreak: number, toolingScopeBreak: number}} thresholds
  * @returns {{name: string, inScope: (f: string) => boolean, threshold: number}[]}

@@ -177,13 +177,13 @@ export const srcScope = (repoRoot) =>
 /**
  * The shipped prefixes outside `src/`: the Claude-hook layer and the CLI.
  *
- * NAMED rather than expressed as "not `src/`", so that this module and
- * `.github/scripts/aggregate-mutation.mjs`'s mutation scopes share one
- * definition of the split instead of two that must be kept agreeing. A negation
- * would also claim every future top-level shipped directory by construction,
- * silently applying floors and a mutation ratchet measured on other files;
- * naming the prefixes leaves such a path claimed by nobody, which `hookScope`
- * throws on below.
+ * The scope NAMES what it claims, and `.github/scripts/aggregate-mutation.mjs`
+ * builds its mutation scopes from this same constant, so the coverage split and
+ * the mutation split cannot disagree. A `!startsWith(SRC_SCOPE)` catch-all would
+ * claim every future top-level shipped directory by construction, applying
+ * coverage floors and a mutation ratchet measured on files it has nothing to do
+ * with; naming the prefixes leaves such a path claimed by nobody, which
+ * `hookScope` refuses to return silently.
  */
 export const HOOK_SCOPE_PREFIXES = ["claude-hooks/", "bin/"];
 
