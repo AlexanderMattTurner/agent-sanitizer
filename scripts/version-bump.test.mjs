@@ -15,7 +15,8 @@ import { dirname, join } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 
-const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
+const THIS_FILE = fileURLToPath(import.meta.url);
+const REPO_ROOT = join(dirname(THIS_FILE), "..");
 const LIVE_SCRIPT = join(REPO_ROOT, ".github", "scripts", "version-bump.sh");
 const AUTO_VERSION_YAML = join(
   REPO_ROOT,
@@ -43,11 +44,16 @@ const REPO_GIT_DIR = execFileSync("git", ["rev-parse", "--absolute-git-dir"], {
   encoding: "utf8",
 }).trim();
 
-test("a hook's exported GIT_DIR cannot redirect a sandbox's git at this repo", () => {
-  // The incident, reproduced: pre-commit exports GIT_DIR, so an unscrubbed
-  // sandbox commits its fixture history onto the real branch.
-  process.env.GIT_DIR = REPO_GIT_DIR;
-  scrubGitEnv();
+// The leak only exists across a process START: once this module has run, its own
+// environment is already clean, so a test that sets GIT_DIR in-process and then
+// calls scrubGitEnv() itself would keep passing with line 39's call deleted. The
+// assertion therefore lives in a plain test that scrubs NOTHING, and the guard
+// below re-runs just that test in a child spawned with GIT_DIR already exported —
+// which is the only shape the hook can produce, and the only shape line 39 fixes.
+const ISOLATION_TEST = "a sandbox git resolves to its own sandbox repository";
+const ISOLATION_CHILD = "VERSION_BUMP_TEST_GIT_DIR_CHILD";
+
+test(ISOLATION_TEST, () => {
   const { dir } = makeSandbox("exit 0");
   try {
     const seen = execFileSync("git", ["rev-parse", "--absolute-git-dir"], {
@@ -64,6 +70,51 @@ test("a hook's exported GIT_DIR cannot redirect a sandbox's git at this repo", (
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+// Guarded so the child does not re-spawn itself; the child runs only the test above.
+if (!process.env[ISOLATION_CHILD]) {
+  test("the module-level git-env scrub is what makes that isolation hold", () => {
+    // The incident, reproduced: pre-commit exports GIT_DIR, so an unscrubbed
+    // sandbox commits its fixture history onto the real branch. GIT_DIR points at
+    // a throwaway decoy, never REPO_GIT_DIR — a child that failed to scrub would
+    // otherwise write the fixture commits and the v0.0.0 tag into this repository,
+    // performing the very damage the test exists to prove impossible.
+    const decoy = mkdtempSync(join(tmpdir(), "vbump-decoy-"));
+    try {
+      execFileSync("git", ["init", "-q", decoy], { stdio: "ignore" });
+      const childEnv = {
+        ...process.env,
+        [ISOLATION_CHILD]: "1",
+        GIT_DIR: join(decoy, ".git"),
+      };
+      // The runner exports NODE_TEST_CONTEXT into every test file; inherited, it
+      // makes the child refuse to run files ("called recursively") and exit 0
+      // having tested nothing.
+      delete childEnv.NODE_TEST_CONTEXT;
+      const res = spawnSync(
+        process.execPath,
+        ["--test", "--test-name-pattern", ISOLATION_TEST, THIS_FILE],
+        { cwd: REPO_ROOT, env: childEnv, encoding: "utf8" },
+      );
+      assert.equal(res.error, undefined, "failed to spawn the child runner");
+      // Non-vacuity: `--test-name-pattern` exits 0 when it matches nothing, so a
+      // renamed test would turn this guard into a no-op without the pass count.
+      assert.match(
+        res.stdout,
+        /^# pass 1$/m,
+        `child ran no matching test:\n${res.stdout}\n${res.stderr}`,
+      );
+      assert.equal(
+        res.status,
+        0,
+        `a child started with GIT_DIR exported escaped its sandbox — the ` +
+          `module-level scrubGitEnv() call is load-bearing:\n${res.stdout}\n${res.stderr}`,
+      );
+    } finally {
+      rmSync(decoy, { recursive: true, force: true });
+    }
+  });
+}
 /**
  * Strip every Anthropic credential the release script would walk, so these
  * sandboxes exercise the no-credential path (plain commit-list changelog)

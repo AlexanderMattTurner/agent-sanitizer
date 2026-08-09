@@ -32,12 +32,22 @@ if [[ "${TEMPLATE_REPO,,}" == "${GITHUB_REPOSITORY,,}" ]]; then
   exit 0
 fi
 
+# stderr goes to a file rather than into the capture: `2>&1` would fold `gh`'s
+# deprecation notices and auth chatter into $parent on the SUCCESS path too, and
+# the slug comparison below would then stop matching — disabling the fork-of-self
+# guard silently, exactly where it is supposed to fire.
+gh_stderr=$(mktemp)
+trap 'rm -f "$gh_stderr"' EXIT
+
 if ! parent=$(gh repo view "$TEMPLATE_REPO" --json parent \
-  --jq '.parent.nameWithOwner // ""' 2>&1); then
+  --jq '.parent.nameWithOwner // ""' 2>"$gh_stderr"); then
   # A private template with no PAT lands here. The slug comparison above still
   # holds, and refusing the sync outright would silently strand every downstream
   # repo that legitimately syncs from a template it cannot introspect.
-  echo "::warning::Could not read $TEMPLATE_REPO's fork parent, so a fork-of-self sync cannot be ruled out: $parent"
+  #
+  # Flattened to one line: a workflow-command annotation stops at the first
+  # newline, so a multi-line `gh` error would drop everything after it.
+  echo "::warning::Could not read $TEMPLATE_REPO's fork parent, so a fork-of-self sync cannot be ruled out: $(tr '\n' ' ' <"$gh_stderr")"
   emit false
   exit 0
 fi

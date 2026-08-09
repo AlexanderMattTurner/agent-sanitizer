@@ -84,9 +84,10 @@ env:
   # (claude-pr-review, claude-merge-delta-review, claude-review-thread-resolve)
   # that between them produce every job the template's single file does — same
   # job names, same job-level concurrency groups, so the two copies cancelled
-  # each other on every push. It was deleted here in #218; without this entry
-  # the sync's "new file in template" case copies it straight back on the next
-  # run, because the sync only ever adds files, it never honours a local delete.
+  # each other on every push. It was deleted here in #218, and the sync's "new
+  # file in template" case would copy it straight back. The declined-files check
+  # (was_deleted_here) now honours that delete on its own, so this entry is the
+  # explicit, belt-and-braces record of it rather than the only thing stopping it.
   EXCLUDE_PATHS: ".github/workflows/security-vulnerability-scan.yaml .github/prompts/security-vulnerability-scan.md .github/workflows/claude-review.yaml"
   # Files the sync UPDATES but never INTRODUCES. Absent from the child repo they
   # are skipped; present, they sync like anything else. This is the opt-in half
