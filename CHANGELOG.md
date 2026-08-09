@@ -8,6 +8,18 @@ adhere to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+## [2.28.1] - 2026-08-09
+
+### Fixed
+- CI: corrected repo-root lint behavior in the helper's post-merge shape.
+
+### Changed
+- Performance: memoized the env-value pre-gate regex to improve efficiency.
+- Build: updated prettier configuration to ignore tool cache directories.
+
+### Removed
+- Removed the conformance corpus from shipping, streamlining the codebase.
+
 ## [2.28.0] - 2026-08-09
 
 ### Added
