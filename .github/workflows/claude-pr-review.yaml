@@ -346,8 +346,19 @@ jobs:
       # The name must stay byte-identical to the CHECK_NAME in
       # review-findings-gate.sh and the merge_gate job's `name:`: one required
       # context, and a rename here would leave this class blocked again.
-      # No `if:` — every head of a skipped PR needs its own clearing check run.
+      #
+      # `always()` — every head of a skipped PR needs its own clearing check run,
+      # INCLUDING when the approve step above failed. Approval and gate-clearing
+      # are independent: the approval satisfies a review-required ruleset, the
+      # check run satisfies the required context. A bare step (no `if:`) reads as
+      # unconditional but is not — a failed predecessor skips it — so with
+      # "Allow GitHub Actions to create and approve pull requests" disabled, the
+      # approve step's `GitHub Actions is not permitted to approve pull requests`
+      # took the gate down with it and left every chore/style/release and bot PR
+      # stranded on a permanently red required check. The approve failure stays
+      # loud (this job still goes red) rather than being swallowed here.
       - name: Clear the review-findings gate for the skipped class
+        if: always()
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GH_REPO: ${{ github.repository }}

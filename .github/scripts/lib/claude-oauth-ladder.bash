@@ -10,14 +10,24 @@
 # actually provisioned is the one that got skipped, and a caller that decides
 # "is any credential configured?" from a short copy then fails OPEN.
 
+# CLAUDE_CODE_OAUTH_TOKEN is LAST, not first. It is the account an operator
+# already has, so it is the one credential a minimal setup configures — and
+# spending it first means unattended CI draws on that plan before it touches any
+# credential provisioned for CI. Last means every dedicated token is spent first,
+# and a setup that configures only this one still reaches it: a rung whose token
+# is empty is skipped, so the ladder costs nothing for the tiers you left unset.
+# This orders the callers listed above only. The claude-run composite action
+# walks its own rungs in its own step order and still tries CLAUDE_CODE_OAUTH_TOKEN
+# first; reordering it means renumbering step ids its outputs name, so that is a
+# deliberate change of its own, not a side effect of this list.
 CLAUDE_OAUTH_LADDER_VARS=(
-  CLAUDE_CODE_OAUTH_TOKEN
   CLAUDE_CODE_OAUTH_TOKEN_FALLBACK
   CLAUDE_CODE_OAUTH_TOKEN_FALLBACK_2
   CLAUDE_CODE_OAUTH_TOKEN_FALLBACK_3
   CLAUDE_CODE_OAUTH_TOKEN_FALLBACK_4
   CLAUDE_CODE_OAUTH_TOKEN_FALLBACK_5
   CLAUDE_CODE_OAUTH_TOKEN_FALLBACK_6
+  CLAUDE_CODE_OAUTH_TOKEN
 )
 
 # claude_oauth_ladder — the configured OAuth credentials on stdout, one per
