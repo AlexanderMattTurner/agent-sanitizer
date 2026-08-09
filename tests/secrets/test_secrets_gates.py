@@ -56,6 +56,10 @@ def test_field_names_materialise_to_literals():
 _SHAPE_FIXTURES = {
     "_is_placeholder_value": (
         "YOUR_API_KEY_GOES_HERE",
+        # The same spelling with a leading underscore: a private-by-convention
+        # identifier is still an identifier, and this byte used to defeat the
+        # gate entirely (see _CAPS_WORDS in engine.py).
+        "_AGENT_SANITIZER_EXTRA_SECRET_VARS",
         "<paste-your-token-here>",
         "xxxxxxxxxxxxxxxxxxxxxxxx",
         "your-api-key-here",
@@ -101,6 +105,10 @@ _NAME_TRUST_FIXTURES = {
         "/var/lib/secret-store/data/current",
     ),
     "_is_markdown_code_prose": ("run `--api-key` with your own credentials",),
+    "_is_regex_literal": (
+        "/secret|token|password/i",
+        "/secretsecretsecretsecret/i",
+    ),
     # The two gates below decide ON the field name, so "the verdict is
     # independent of the field name" is not a property they can have — the field
     # name IS their input. They are exercised by their own tests in

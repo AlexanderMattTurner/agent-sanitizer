@@ -14,7 +14,7 @@
  * Protocol — a request is a JSON object with an `op` (default `"sanitize"` so a
  * bare `{ text, html }` keeps working). Per op:
  *
- *   sanitize           { text, html? }            -> { cleaned, found, warnings, notes }
+ *   sanitize           { text, html? }            -> { cleaned, found, warnings, notes, splices? }
  *   sanitizeText       { text, html?, exfilScan? } -> { cleaned, warnings, notes, modified, sgrNote }
  *   classifyPrompt     { text }                    -> { action, reason? }
  *   scanInstructionFiles { globs, cwd? }           -> { findings: [{ file, findings }] }
@@ -114,10 +114,14 @@ export const OPS = {
   /** @param {Record<string, unknown>} req */
   async sanitize(req) {
     const text = requireString(req, "text");
-    const { cleaned, found, warnings, notes } = await sanitize(text, {
-      html: Boolean(req.html),
-    });
-    return { cleaned, found, warnings, notes };
+    // Forwarded whole rather than re-listed field by field. A hand-picked
+    // projection is a second copy of the return shape that nothing keeps in
+    // sync: `splices` was part of `sanitize()`'s result and silently never
+    // reached the wire, so every non-JS caller was blind to Layer 2's spliced
+    // ranges. `test/cli-response-contract.test.mjs` pins this set against the
+    // Python client's field list, so growing the result stays a two-file edit
+    // that CI notices instead of a silent drop.
+    return await sanitize(text, { html: Boolean(req.html) });
   },
 
   /** @param {Record<string, unknown>} req */
