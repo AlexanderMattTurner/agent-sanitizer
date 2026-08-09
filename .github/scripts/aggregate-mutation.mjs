@@ -51,6 +51,12 @@ import {
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import {
+  HOOK_SCOPE_PREFIXES,
+  SRC_SCOPE,
+  TOOLING_SCOPE,
+} from "../../scripts/shipped-sources.mjs";
+
 import { expandShards } from "./expand-shards.mjs";
 
 // Detected mutants are caught by the suite; undetected slip through. Mutants
@@ -100,20 +106,6 @@ const relativize = (report, path) => {
     ? posixPath.slice(root.length + 1)
     : posixPath;
 };
-
-/**
- * Path prefixes that separate the three gated scopes (see the file header).
- *
- * Every scope NAMES what it claims — none of them is "everything else". A
- * catch-all would partition every possible string by construction, so a
- * directory that later joins the mutated set would silently inherit whichever
- * ratchet the negation covered, scored against a floor it was never measured
- * against. Named prefixes make such a path claimed by nobody, which
- * `test/aggregate-mutation.test.mjs` fails on at test time.
- */
-const SRC_PREFIX = "src/";
-const TOOLING_PREFIX = ".hooks/lib/";
-const HOOK_PREFIXES = ["claude-hooks/", "bin/"];
 
 /**
  * Deduplicate mutants across shard reports by identity and tally the score.
@@ -193,6 +185,13 @@ export function tallyMutants(reports, inScope = () => true) {
  * for); a path claimed by none is silently ungated, which is the failure the
  * whole per-scope split exists to prevent.
  *
+ * The prefixes come from `scripts/shipped-sources.mjs`, which derives the
+ * coverage scopes from the same three constants: the mutation split and the
+ * coverage split are one definition, so neither can drift from the other.
+ * Every scope NAMES what it claims — none is "everything else", so a directory
+ * that later joins the mutated set is claimed by nobody and fails the partition
+ * test rather than inheriting a ratchet it was never measured against.
+ *
  * @param {{breakThreshold: number, hookScopeBreak: number, toolingScopeBreak: number}} thresholds
  * @returns {{name: string, inScope: (f: string) => boolean, threshold: number}[]}
  */
@@ -203,18 +202,18 @@ export const gatedScopes = ({
 }) => [
   {
     name: "src (library)",
-    inScope: (/** @type {string} */ f) => f.startsWith(SRC_PREFIX),
+    inScope: (/** @type {string} */ f) => f.startsWith(SRC_SCOPE),
     threshold: breakThreshold,
   },
   {
     name: "claude-hooks + bin",
     inScope: (/** @type {string} */ f) =>
-      HOOK_PREFIXES.some((prefix) => f.startsWith(prefix)),
+      HOOK_SCOPE_PREFIXES.some((prefix) => f.startsWith(prefix)),
     threshold: hookScopeBreak,
   },
   {
     name: ".hooks/lib (repo tooling)",
-    inScope: (/** @type {string} */ f) => f.startsWith(TOOLING_PREFIX),
+    inScope: (/** @type {string} */ f) => f.startsWith(TOOLING_SCOPE),
     threshold: toolingScopeBreak,
   },
 ];
