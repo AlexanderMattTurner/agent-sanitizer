@@ -66,11 +66,13 @@ const SKIP_DIRS = new Set([
 /**
  * Every file in the checkout, repo-relative.
  *
- * Deliberately NOT `git ls-files`: Stryker's sandbox is a copy of the repo with
- * no `.git`, so a scan that shells out to git there fails during the dry run and
- * takes every mutation shard down with it. Enumerating the tree keeps this scan
- * runnable wherever its own files are — which now includes the pre-commit hook,
- * whose whole job is to run before git has a commit to look at.
+ * Deliberately NOT `git ls-files`, but not for the reason first written here.
+ * Git does not FAIL in Stryker's sandbox: the sandbox is a plain directory copy
+ * at `<repoRoot>/.stryker-tmp/sandbox-XXXXXX/`, so git walks up out of it and
+ * answers about the real checkout. The real reasons are that this scan now runs
+ * from the pre-commit hook, whose whole job is to act before git has a commit to
+ * look at, and that enumerating from this module's own location keeps it
+ * runnable in any copy of the repo, including one with no `.git` at all.
  */
 function listFiles(dir = "", out = []) {
   const entries = readdirSync(join(repoRoot, dir), { withFileTypes: true });
@@ -283,6 +285,19 @@ function resolvePath(node, file, scope) {
   }
   if (node.type !== "CallExpression") return null;
   if (isGitRootCall(node, scope)) return "";
+  // `unsandbox(p)` from test/helpers/repo-root.mjs is the identity on a
+  // repo-RELATIVE path:
+  // outside a mutation sandbox it returns its argument, and inside one it strips
+  // the `.stryker-tmp/sandbox-XXXXXX` segment, which repo-relative is the same
+  // place. Named rather than inferred, exactly like the git arm above — a
+  // resolver that guessed at unknown calls would resolve things that are not
+  // paths. Without this arm every suite that computes its root through the
+  // helper drops out of the derivation, and the hook silently stops scheduling
+  // its guard: measured, THREE did, including THREAT-MODEL.md.
+  if (calleeName(node.callee) === "unsandbox")
+    return node.arguments.length === 1
+      ? resolvePath(node.arguments[0], file, scope)
+      : null;
   // `execFileSync(…).trim()`: the trimmed value is the same path. Checked
   // before calleeName(), which only names simple `a.b()` callees.
   if (

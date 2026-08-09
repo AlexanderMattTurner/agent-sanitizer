@@ -235,7 +235,21 @@ const visibleFillerArb = fc.oneof(
 
 // ASCII-only filler for the full-pipeline property, where the confusables and
 // authored-content layers must be provable no-ops on the edit material.
-const asciiFillerArb = fc.stringMatching(/^[a-zA-Z0-9 .,'!?_-]{1,30}$/);
+//
+// At most THREE leading spaces, and a non-space before any more of them. Filler
+// is meant to be inert prose surrounding the construct under test, but leading
+// whitespace is STRUCTURAL in markdown: four spaces at the start of a line open
+// an indented code block, and inside one `<div hidden>` is literal text a reader
+// sees, not hidden HTML. The sanitizer correctly leaves it alone — stripping
+// visible code would be exactly the false positive CLAUDE.md's precision rule
+// forbids — but the property asserts the construct WAS replaced, so filler that
+// opens a code block breaks the property's own premise rather than the engine.
+// Found by the unseeded nightly-style run: `["<div hidden>…</div>", "    ?", ","]`.
+// Three spaces stay in range on purpose; that is still a paragraph, and it is
+// the boundary the engine must keep stripping.
+const asciiFillerArb = fc.stringMatching(
+  /^ {0,3}[a-zA-Z0-9.,'!?_-][a-zA-Z0-9 .,'!?_-]{0,29}$/,
+);
 
 // Near-miss literals that must NEVER be treated as Layer-2 placeholders. The
 // `[REDACTED: token]` entry is the one that also trips the SECRET advisory —

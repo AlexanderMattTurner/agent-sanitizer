@@ -266,6 +266,37 @@ if [ -f "$PROJECT_DIR/uv.lock" ] && command -v uv &>/dev/null; then
   fi
 fi
 
+#######################################
+# Verify the END STATE, through the consumer's own resolution
+#######################################
+
+# Every install above warns when the INSTALL fails, and nothing checked whether
+# the tool ended up reachable by the thing that needs it. Those are different
+# questions, and the gap between them is silent: `shfmt` installed fine into the
+# Go bin directory, which git hooks — a bare shell, no CLAUDE_ENV_FILE — could
+# not see, so the first symptom was `Task failed to spawn: shfmt … ENOENT` from
+# lint-staged in the middle of a commit. Resolve exactly as .hooks/lib-gate.sh
+# does rather than testing this shell's PATH, so what is verified is what the
+# hooks will actually find.
+if [ -f "$PROJECT_DIR/.hooks/lib-gate.sh" ]; then
+  (
+    # shellcheck source=.hooks/lib-gate.sh
+    source "$PROJECT_DIR/.hooks/lib-gate.sh"
+    gate_tool_path "$PROJECT_DIR"
+    missing=""
+    for tool in shfmt shellcheck pytest node; do
+      command -v "$tool" >/dev/null 2>&1 || missing="$missing $tool"
+    done
+    if [ -n "$missing" ]; then
+      echo "WARNING: the git hooks will not find:$missing" >&2
+      echo "  A commit that needs one fails with a bare ENOENT from the tool that ran it," >&2
+      echo "  which names the symptom and not the cause. Re-run this script, or install the" >&2
+      echo "  tool by hand — see the install helpers at the top of .claude/hooks/session-setup.sh." >&2
+      exit 1
+    fi
+  ) || SETUP_WARNINGS=$((SETUP_WARNINGS + 1))
+fi
+
 if [ "$SETUP_WARNINGS" -gt 0 ]; then
   echo "Setup done with $SETUP_WARNINGS warning(s) — see above" >&2
 fi

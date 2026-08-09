@@ -18,10 +18,20 @@ git_root=$(git rev-parse --show-toplevel)
 
 # Git hooks run in a bare shell and don't inherit session PATH edits; surface
 # the venv's tools plus uv/uvx and cargo installs.
-if [[ -d "$git_root/.venv/bin" ]]; then
-  export PATH="$git_root/.venv/bin:$PATH"
-fi
-export PATH="$HOME/.local/bin:$HOME/.cargo/bin:$PATH"
+# Located by THIS script's own path, not the repo root: the hook and its library
+# ship together, `core.hooksPath` may point outside the checkout, and pre-push is
+# driven against throwaway repositories by its own test.
+# Parameter expansion, not `dirname`: this hook must resolve its own library
+# with shell builtins alone. `dirname` is an external binary, and a hook can run
+# with a PATH that does not carry it — which is exactly the environment the
+# missing-pre-commit test sets up. With `dirname` absent the substitution is
+# empty, the source path collapses to the repo root, and the hook dies before
+# running any of the checks it is being tested for.
+hook_dir="${BASH_SOURCE[0]%/*}"
+[[ "$hook_dir" == "${BASH_SOURCE[0]}" ]] && hook_dir="."
+# shellcheck source=.hooks/lib-gate.sh
+source "$hook_dir/lib-gate.sh"
+gate_tool_path "$git_root"
 
 # Mirror CI's invocation: pre-commit.yaml runs `uvx pre-commit==<pin>`, and that
 # workflow line is the one authoritative pin — read it from there so this hook
@@ -78,6 +88,31 @@ while read -r -u 3 _local_ref local_sha remote_ref remote_sha; do
   # re-lint history that is already on main. Skipping before the tool gate keeps
   # a tag push working on a machine without pre-commit, since it checks nothing.
   [[ "$remote_ref" == refs/tags/* ]] && continue
+
+  # Reject a push that introduces NOTHING the default branch does not already
+  # contain. The rule it enforces is otherwise only prose: once a branch's pull
+  # request has merged, that branch is finished, and follow-up work belongs on a
+  # branch restarted from the current default. Pushing merged history again —
+  # which is what a stale local ref produces — either re-opens a settled
+  # discussion or, force-pushed, rewrites the remote to a state nobody asked
+  # for. The check has no heuristic in it: "every commit here is already in
+  # $default_branch" is exactly `rev-list --count` returning 0, so a branch
+  # carrying one new commit passes and there is no false positive to tune.
+  # Deliberately BEFORE the pre-commit tool gate below, so it still runs on a
+  # machine that has no pre-commit. `git push --no-verify` remains the override.
+  if git rev-parse --verify --quiet "${default_branch}^{commit}" >/dev/null; then
+    ahead=$(git rev-list --count "${default_branch}..${local_sha}")
+    if [[ "$ahead" -eq 0 ]]; then
+      echo "pre-push: refusing to push ${remote_ref} — every commit in it is already contained in ${default_branch}, so this push introduces nothing." >&2
+      echo "pre-push: this is what a stale local ref looks like after its pull request merged. Restart the branch from the current default and put the follow-up work there:" >&2
+      echo "pre-push:   git fetch origin && git checkout -B \"\${branch}\" ${default_branch}" >&2
+      echo "pre-push: if the branch really does carry unmerged commits, fetch first — the local view of ${default_branch} may be behind. Override with 'git push --no-verify'." >&2
+      exit 1
+    fi
+  else
+    echo "pre-push: ${default_branch} is not present locally — SKIPPING the merged-history check. Run 'git fetch origin' to enable it." >&2
+  fi
+
   # No pre-commit anywhere: already announced above, so skip quietly here.
   [[ ${#precommit_cmd[@]} -eq 0 ]] && continue
   from_ref="$remote_sha"

@@ -13,10 +13,14 @@ import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 
+import { unsandbox } from "./helpers/repo-root.mjs";
+
 import {
   extraCodepoints,
   cfCodepoints,
   charsetDoc,
+  cfCharsetModule,
+  CF_MODULE_PATH,
   OUTPUT_PATH,
 } from "../scripts/gen-invisible-charset.mjs";
 import { VS, BLANK_NON_CF, stripInvisible } from "../src/invisible.mjs";
@@ -137,6 +141,38 @@ describe("standardized-variants SSOT", () => {
     assert.ok(
       !isStandardizedVariant(0x30, 0xfe0f),
       "VS16 is an emoji presentation selector, never a standardized variant",
+    );
+  });
+});
+
+describe("generated modules are byte-identical to a fresh generation", () => {
+  // Read the SHIPPED file, not the copy this suite is running beside. Both paths
+  // come from the generator module and are absolute, so under Stryker they point
+  // INTO the sandbox — where src/cf-charset.mjs is instrumented, because it is a
+  // mutated source. A byte comparison against clean generator output then fails
+  // for a reason that has nothing to do with drift, and takes every shard's dry
+  // run with it. This is the #279 class, and this very test walked into it.
+  const shipped = (absolute) => readFileSync(unsandbox(absolute), "utf8");
+
+  // The SEMANTIC round-trips above compare code points, which is exactly why
+  // src/cf-charset.mjs was able to drift from its own generator by whitespace
+  // alone and stay green: Prettier repacked the flat number array the generator
+  // emitted, and nothing compared bytes. Removing Prettier from the file removed
+  // one cause of that drift, not the class — a hand edit, or a change to the
+  // generator's template with no regeneration, re-lands the same divergence.
+  it("src/cf-charset.mjs matches cfCharsetModule() byte for byte", () => {
+    assert.equal(
+      shipped(CF_MODULE_PATH),
+      cfCharsetModule(),
+      "src/cf-charset.mjs is stale — run `node scripts/gen-invisible-charset.mjs`",
+    );
+  });
+
+  it("the charset JSON matches charsetDoc() byte for byte", () => {
+    assert.equal(
+      shipped(OUTPUT_PATH),
+      JSON.stringify(charsetDoc(), null, 2) + "\n",
+      "the charset JSON is stale — run `node scripts/gen-invisible-charset.mjs`",
     );
   });
 });

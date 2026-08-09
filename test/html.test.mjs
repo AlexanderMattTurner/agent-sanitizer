@@ -2163,3 +2163,45 @@ describe("property: hidden/comment content is stripped on either branch (#2)", (
     }
   });
 });
+
+describe("indented code blocks are content, not hiding places", () => {
+  // Four spaces at the start of a line open a CommonMark indented code block,
+  // and inside one `<div hidden>` is not hidden at all: the reader sees the tag
+  // as literal text. Stripping it would delete visible content the model was
+  // meant to read — the false positive CLAUDE.md's precision rule forbids —
+  // while stripping it one space earlier is mandatory, because three spaces is
+  // still a paragraph and the div really does hide its contents there.
+  //
+  // Nothing pinned this boundary. It surfaced as a fast-check counterexample
+  // (`["<div hidden>STRIP0 payload</div>", "    ?", ","]`) whose filler happened
+  // to open a code block, so the property blamed the engine for being right.
+  const CANARY = "INDENT_BOUNDARY_CANARY";
+  const construct = `<div hidden>${CANARY}</div>`;
+
+  for (const [indent, label] of [
+    ["", "no indent"],
+    ["   ", "three spaces"],
+  ])
+    it(`strips a hidden div after ${label} — still a paragraph`, async () => {
+      const { cleaned } = await sanitize(`${indent}x ${construct}`, {
+        html: true,
+      });
+      assert.ok(
+        !cleaned.includes(CANARY),
+        `hidden content survived after ${label}: ${JSON.stringify(cleaned)}`,
+      );
+      assert.match(cleaned, /hidden HTML removed/u);
+    });
+
+  for (const [indent, label] of [
+    ["    ", "four spaces"],
+    ["\t", "a tab"],
+  ])
+    it(`leaves a hidden div alone after ${label} — an indented code block`, async () => {
+      const source = `${indent}x ${construct}`;
+      const { cleaned } = await sanitize(source, { html: true });
+      // Byte-identical: the tag is visible code, so there is nothing to hide and
+      // nothing to rewrite.
+      assert.equal(cleaned, source);
+    });
+});

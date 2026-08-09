@@ -63,7 +63,11 @@ export const toolingSources = (repoRoot) =>
   // exists to close. `replace(/\\/g, "/")` keeps the entries POSIX on Windows.
   readdirSync(join(repoRoot, TOOLING_SCOPE), { recursive: true })
     .map((entry) => entry.toString().replace(/\\/g, "/"))
-    .filter((name) => name.endsWith(".mjs"))
+    // A suite is not a mutation target: Stryker judges a mutant by whether the
+    // tests kill it, so mutating a test measures nothing and its mutants survive
+    // by construction. The directory is read recursively, so a suite committed
+    // beside a module here would otherwise join the mutated set.
+    .filter((name) => name.endsWith(".mjs") && !name.endsWith(".test.mjs"))
     .map((name) => posix.join(TOOLING_SCOPE, name))
     .sort();
 

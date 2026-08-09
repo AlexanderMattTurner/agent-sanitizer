@@ -98,6 +98,10 @@ if is_root; then
 fi
 ```
 
+### Adding MCP Servers
+
+[`.mcp.json.example`](../.mcp.json.example) at the repo root is a starting point for team-shared MCP servers — GitHub over HTTP, plus `context7` and `playwright` over stdio. Copy it to `.mcp.json`, set the env vars it references (`GITHUB_PAT`), and run `/mcp` to verify the connections. Personal, non-shared servers belong in `~/.claude.json` instead, and the example's own comment is worth heeding: every server you add expands the tool surface Claude has to reason over, so add the second one only when you have wanted it twice.
+
 ### Adding Skills
 
 Create new skill directories in `skills/` following the pattern in `pr-creation/SKILL.md`. Each skill should be a directory with a `SKILL.md` entrypoint and optional supporting files.
