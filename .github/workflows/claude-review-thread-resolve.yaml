@@ -79,6 +79,15 @@ jobs:
           PR_INPUT_DIR: ${{ runner.temp }}/pr-input
         run: bash .github/scripts/fetch-unresolved-review-threads.sh
 
+      # In THIS repo install-sanitizer.sh installs the local checkout as a
+      # `file:` dependency, which npm materialises by packing the directory —
+      # and packing runs the package's `prepare` (`pnpm build:types`) whatever
+      # `--ignore-scripts` says. Without pnpm on PATH that exits 127 and takes
+      # the whole job with it.
+      - name: Set up Node and pnpm
+        if: steps.threads.outputs.has_threads == 'true'
+        uses: ./.github/actions/setup-base-env
+
       - name: Install the input sanitizer
         if: steps.threads.outputs.has_threads == 'true'
         # Self-contained install (into .github/scripts/node_modules) so the diff

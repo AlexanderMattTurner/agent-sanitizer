@@ -836,11 +836,12 @@ test("output hook fails OPEN when the redactor is unreachable", (t) => {
   assert.match(res.stderr, /hook error/);
 });
 
-test("a layer throw the payload provoked opens too, and closes under the opt-out", (t) => {
+test("a key collision withholds only the colliding fields, in either posture", (t) => {
   // Two field names that collapse to one after Layer 1 strips the zero-width
-  // space. The hook throws rather than emit a shape-reduced object — and that
-  // throw is composable by whoever authored the tool response, so it is the
-  // sharpest edge of the open default and the clearest case for the opt-out.
+  // space. Whoever authored the tool response composes this, so it must not
+  // cost the model the WHOLE output: the colliding values are withheld, the
+  // sibling keeps its data, and the field count is preserved so the harness
+  // still honors the sanitized object instead of falling back to the raw one.
   const payload = {
     hook_event_name: "PostToolUse",
     tool_name: "Bash",
@@ -849,37 +850,34 @@ test("a layer throw the payload provoked opens too, and closes under the opt-out
     tool_response: {
       token: "aws_key=AKIAIOSFODNN7EXAMPLE",
       ["token\u200b"]: "second",
+      sibling: "kept",
     },
   };
 
-  const open = launch(
-    stagePlugin(t),
-    "PostToolUse",
-    "sanitize-output",
-    payload,
-  );
-  assert.equal(open.status, 0);
-  const openOut = JSON.parse(open.stdout).hookSpecificOutput;
-  assert.equal(openOut.updatedToolOutput, undefined);
-  assert.match(openOut.additionalContext, /UNSANITIZED/);
-  // Non-vacuity: the collision guard is what fired, not some earlier refusal.
-  assert.match(open.stderr, /collapsed to one name/);
-
-  const closed = launch(
-    stagePlugin(t),
-    "PostToolUse",
-    "sanitize-output",
-    payload,
-    { env: FAIL_CLOSED },
-  );
-  const closedOut = JSON.parse(closed.stdout).hookSpecificOutput;
-  // Shape-preserving: every string leaf becomes the placeholder, so the
-  // replacement is an object here rather than a bare string.
-  assert.match(
-    JSON.stringify(closedOut.updatedToolOutput),
-    /SANITIZATION FAILED/,
-  );
-  assert.ok(!JSON.stringify(closedOut).includes("AKIAIOSFODNN7EXAMPLE"));
+  // The posture knob is irrelevant here: the collision no longer throws, so
+  // neither arm reaches the hook-failure path.
+  for (const env of [{}, FAIL_CLOSED]) {
+    const res = launch(
+      stagePlugin(t),
+      "PostToolUse",
+      "sanitize-output",
+      payload,
+      { env },
+    );
+    assert.equal(res.status, 0);
+    const out = JSON.parse(res.stdout).hookSpecificOutput;
+    const withheld = out.updatedToolOutput;
+    assert.equal(withheld.sibling, "kept");
+    assert.match(withheld.token, /WITHHELD/);
+    assert.match(withheld["token [withheld duplicate 2]"], /WITHHELD/);
+    // Field count preserved \u2014 a shape-reduced object is what the harness
+    // rejects, falling back to the raw, unvetted output.
+    assert.equal(Object.keys(withheld).length, 3);
+    assert.match(out.additionalContext, /collapsed to the name "token"/);
+    assert.ok(!JSON.stringify(out).includes("AKIAIOSFODNN7EXAMPLE"));
+    // Non-vacuity: no hook failure fired in either posture.
+    assert.equal(/UNSANITIZED|SANITIZATION FAILED/.test(res.stdout), false);
+  }
 });
 
 test("a missing peer package fails the output hook OPEN", (t) => {

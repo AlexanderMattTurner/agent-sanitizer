@@ -395,9 +395,30 @@ positive costs a sentence of context, never a mangled input):
   Edit/Write — removing the information asymmetry that made the shell
   route-around an honest mistake.
 - **Advisory on non-rehydrated tools (context-only, never a verdict).** A
-  Bash/MCP/unknown-tool input carrying a placeholder gets one PreToolUse
-  context line explaining the hazard. It cannot tell a write from a read, so
-  it never blocks.
+  Bash/MCP/unknown-tool input carrying a placeholder gets PreToolUse context
+  explaining the hazard. It cannot tell a write from a read, so it never
+  blocks. The advisory **names what it found**: each distinct placeholder
+  token and the dotted input field carrying it (capped, with an "and N more"
+  tail), split by grammar — the secret-redaction placeholders, and the Layer-2
+  splice markers (`[HTML comment removed]`, `[hidden HTML removed]`,
+  `[HTML unparseable — withheld]`, mirrored from `src/html.mjs` into the hooks
+  layer for the same bundle-pin reason as the redaction grammar). Each grammar
+  carries its own recovery route: for a secret, use Edit/Write on the file that
+  owns it, or have a shell command read the value from that file — and for
+  content bound for an external service (a PR body, a comment) do **not**
+  reconstruct the secret, since that publishes it. For a splice marker, the
+  removed text is in the reveal sidecar the sanitize-time warning named; Read
+  it (untrusted), reconstruct the content, and re-issue the call without the
+  marker.
+- **No direct substitution, and no per-tool substitution allowlist.**
+  Rehydrating placeholders into a non-Edit/Write input was evaluated and
+  rejected in both grammars, so the advisory is the whole mechanism. Splicing a
+  secret into an MCP body field would publish it to an external service —
+  exfiltration by construction — and PreToolUse has no placeholder→secret map
+  without a named owning file. The Layer-2 markers are un-keyed, so
+  marker→original is unrecoverable at this layer (the reveal store is addressed
+  by the hash of the full pre-splice text, not by marker), and blind
+  re-insertion would re-publish hidden untrusted content verbatim.
 - **On-disk tripwire (warning-only).** A `Read` whose RAW bytes — before this
   session's redaction — already contain placeholder text warns that an earlier
   write may have clobbered a secret. Detection rides the read, the one choke
@@ -488,9 +509,20 @@ precision. All other faults keep the open default, and
 
 **The open default is not enforceable against content.** Several of those
 failures are composable by whoever authored the payload — in the output hook
-alone, the key-collision guard (two field names that collapse to one after
-Layer 1), a nesting depth that overflows the sanitize walk, and a redaction
-budget exhausted by many secret-shaped leaves. Under the open posture a tool
+alone, a nesting depth that overflows the sanitize walk and a redaction budget
+exhausted by many secret-shaped leaves. (A **key collision** — two field names
+that collapse to one after Layer 1 — used to be on that list. It no longer
+fails the hook at all: only the colliding fields are withheld, and every sibling
+field survives. Both colliding values are replaced **whole** by a marker string,
+not walked leaf-wise: a shape-preserving walk rewrites only string leaves, so a
+colliding number or boolean would reach the model verbatim under a legitimate
+field name while the warning claimed it was withheld. That changes the field's
+JSON type, which is accepted because a duplicate name is off-schema by
+construction; what the harness's shape check turns on — the object's field
+COUNT — is kept by giving the second field a disambiguated name. A hostile connector can
+therefore cost the model the colliding fields, never the whole tool output, and
+the withholding is posture-independent — it is a per-field fail-closed, not a
+hook failure.) Under the open posture a tool
 response crafted to provoke one is shown to the model verbatim, secrets
 included. So an attacker who controls tool output has a route past these layers
 whenever the default is left in place, and the mitigation is the knob, not a

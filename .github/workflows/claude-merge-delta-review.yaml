@@ -64,10 +64,18 @@ jobs:
           persist-credentials: false
           fetch-depth: 0
 
+      # In THIS repo install-sanitizer.sh installs the local checkout as a
+      # `file:` dependency, which npm materialises by packing the directory —
+      # and packing runs the package's `prepare` (`pnpm build:types`) whatever
+      # `--ignore-scripts` says. Without pnpm on PATH that exits 127 and takes
+      # the whole job with it.
+      - name: Set up Node and pnpm
+        uses: ./.github/actions/setup-base-env
+
       - name: Install the input sanitizer
         # Self-contained install (into .github/scripts/node_modules) so repos
         # synced from the template need no sanitizer entry in their own
-        # package.json. --ignore-scripts keeps the install hermetic.
+        # package.json.
         run: bash .github/scripts/install-sanitizer.sh
 
       - name: Render and sanitize the merge-resolution deltas
