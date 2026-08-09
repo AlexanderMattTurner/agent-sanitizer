@@ -1613,6 +1613,80 @@ describe("rehydrate: Write-path Layer-1 restoration", () => {
     const content = `${ZW}text\n`;
     assert.equal(await write("", liveIo(content)), null);
   });
+
+  it("passes a hint-free Write through when the read fails with a non-ENOENT error", async () => {
+    // A Write never reads its target, so a read failure this layer alone
+    // performed must not block it: restoration is best-effort (fail open).
+    const eaccesIo = {
+      readFile: () => {
+        throw fsError("EACCES");
+      },
+      redactMap: () => {
+        throw new Error("redactMap must not be reached");
+      },
+      redact: () => null,
+    };
+    assert.equal(await write("plain content\n", eaccesIo), null);
+  });
+
+  it("restores the suffix while the prefix falls back to model bytes on its own gate failure", async () => {
+    // Prefix cut is the ambiguous interior shape (gate fails, placeholder-free
+    // -> model bytes kept); the suffix's interior ZW is unambiguous and comes
+    // back. One call, both outcomes — the fallback is per-region, not global.
+    const content = `x m${GREEN}mm mid tail${ZW}\n`;
+    const out = await write("x mmX mid tail\n", liveIo(content));
+    assert.equal(out.updatedInput.content, `x mmX mid tail${ZW}\n`);
+    assert.equal(
+      out.context,
+      `1 invisible/control character(s) stripped from your view of /f were ` +
+        `restored from disk in the regions your Write left unchanged.`,
+    );
+  });
+
+  it("restores the prefix while the suffix falls back to model bytes on its own gate failure", async () => {
+    // Mirror: greedy alignment attributed a kept "m" to the escape sequence
+    // and recorded the real "m" as deleted INSIDE the suffix region, so the
+    // region re-cleans one "m" long (gate fails, placeholder-free -> the
+    // model's own suffix bytes, sliced by the SUFFIX length, not the whole
+    // content) while the leading ZW restores.
+    const content = `${ZW}Q mm${GREEN}m x\n`;
+    const out = await write("Q ZZZm x\n", liveIo(content));
+    assert.equal(out.updatedInput.content, `${ZW}Q ZZZm x\n`);
+    assert.equal(
+      out.context,
+      `1 invisible/control character(s) stripped from your view of /f were ` +
+        `restored from disk in the regions your Write left unchanged.`,
+    );
+  });
+
+  it("emits the placeholder-resolution sentence for a suffix-only restored secret", async () => {
+    const content = `A=1\nPASSWORD=${SECRET_A}\n`;
+    const view = mkView(content, [{ value: SECRET_A, placeholder: PH }]);
+    const out = await rehydrateRedacted(
+      "Write",
+      { file_path: "/f", content: `B=2\nPASSWORD=${PH}\n` },
+      fakeIo(content, view, reRedact),
+    );
+    assert.equal(out.updatedInput.content, `B=2\nPASSWORD=${SECRET_A}\n`);
+    assert.match(out.context, /resolved to the\s+file's real secret values/);
+  });
+
+  it("excludes a hint occurrence inside a restored SUFFIX secret from the foreign scan", async () => {
+    // Pathological secret whose VALUE contains the hint prefix, restored in
+    // the suffix while a length-changing head edit shifts every suffix byte
+    // — the foreign scan must translate the pair's disk span by that shift
+    // (a wrong shift would misread the secret's own bytes as a foreign
+    // placeholder and deny a sound Write).
+    const SECRET_H = ["hunter2[REDACTEDQQ]", "hunter2xH"].join("");
+    const content = `head\nK=${SECRET_H}\n`;
+    const view = mkView(content, [{ value: SECRET_H, placeholder: PH }]);
+    const out = await rehydrateRedacted(
+      "Write",
+      { file_path: "/f", content: `HEAD!\nK=${PH}\n` },
+      fakeIo(content, view, (text) => text.split(SECRET_H).join(PH)),
+    );
+    assert.equal(out.updatedInput.content, `HEAD!\nK=${SECRET_H}\n`);
+  });
 });
 
 describe("rehydrate: Write restoration negative corpus (legit invisibles)", () => {

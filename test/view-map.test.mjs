@@ -653,7 +653,6 @@ describe("anchorSpans", () => {
     const view = utf16("aaaa", []);
     const { prefixEnd, suffixStart } = anchorSpans("aaXaa", view);
     assert.equal(prefixEnd, 2);
-    assert.ok(suffixStart >= prefixEnd, "regions overlap");
     assert.equal(suffixStart, 4 - 2);
   });
 
@@ -687,6 +686,17 @@ describe("anchorSpans", () => {
     ]);
     const { suffixStart } = anchorSpans(`X${PH}\n`, view);
     assert.equal(suffixStart, 2);
+  });
+
+  it("keeps a prefix boundary landing exactly at a placeholder end (whole placeholder in the prefix)", () => {
+    // The boundary sits at pair.start + placeholder.length — the first offset
+    // OUTSIDE the placeholder. An off-by-one in the interior check would snap
+    // the whole placeholder back out of the prefix.
+    const view = utf16(`K=${PH}\nrest\n`, [
+      { placeholder: PH, original: SECRET_A, start: 2 },
+    ]);
+    const { prefixEnd } = anchorSpans(`K=${PH}!rest\n`, view);
+    assert.equal(prefixEnd, 2 + PH.length);
   });
 
   it("snaps a suffix boundary out of a placeholder interior", () => {

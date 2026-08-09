@@ -309,12 +309,11 @@ async function rehydrateEdit(
     layer1View(span.diskText).cleaned !== span.cleanedText ||
     (span.diskText !== oldS && content.includes(oldS));
   if (anchorAmbiguous)
-    return {
-      deny:
-        `the matched region sits next to stripped control sequences that cannot be ` +
-        `re-anchored unambiguously in ${ti.file_path}; edit a smaller region away ` +
-        `from them, or ask the user to make this change`,
-    };
+    return anchorAmbiguityDeny(
+      "the matched region",
+      ti.file_path,
+      "edit a smaller region away from them",
+    );
   const newRes = rehydrateNewString(
     oldS,
     ti.new_string,
@@ -361,6 +360,25 @@ async function rehydrateEdit(
   return {
     updatedInput: { ...ti, old_string: span.diskText, new_string: newRes.text },
     context: `Edit input was translated to the file's actual on-disk bytes: ${notes.join("; ")}.`,
+  };
+}
+
+/**
+ * The shared anchor-ambiguity refusal: a stripped run abuts kept text it
+ * resembles, so greedy deletion alignment cannot prove which bytes the region
+ * owns. Edit's searched spans and Write's position-anchored regions hit the
+ * same soundness gate and must speak the same language — one builder so the
+ * two deny sentences cannot drift apart.
+ * @param {string} lead what could not be anchored ("the matched region", …)
+ * @param {string} filePath
+ * @param {string} guidance the caller-specific way out, without trailing punctuation
+ */
+function anchorAmbiguityDeny(lead, filePath, guidance) {
+  return {
+    deny:
+      `${lead} sits next to stripped control sequences that cannot be ` +
+      `re-anchored unambiguously in ${filePath}; ${guidance}, or ask the user ` +
+      `to make this change`,
   };
 }
 
@@ -419,29 +437,18 @@ function foreignPlaceholders(out, hint, viewText, secretSpans) {
  * but a run at the very start or end OF THE FILE is unambiguous when the
  * region reaches that edge — re-attach those explicitly, since `diskOffset`
  * keeps boundary runs outside the span in both directions.
- * @param {{file_path: string, content: string}} ti
- * @param {string} content disk bytes
- * @param {string} cleaned Layer-1 view of `content`
- * @param {import("./view-map.mjs").FileView<"utf16">} view
- * @param {{start: number, deleted: string}[]} deletions
+ *
+ * `restoredChars` counts UTF-16 code units, matching the "character(s)" prose
+ * in {@link writeContext}.
+ * @param {WriteRestoreContext} ctx per-Write invariants shared by both regions
  * @param {number} viewStart
  * @param {number} viewEnd
- * @param {string} hint placeholder prefix
  * @param {string} fallback the model's own bytes for this region
- * @returns {{text: string, pairs: readonly {placeholder: string, original: string, start: number}[], restoredBytes: number} | {deny: string}}
+ * @returns {{text: string, pairs: readonly {placeholder: string, original: string, start: number}[], restoredChars: number} | {deny: string}}
  */
-function restoreWriteRegion(
-  ti,
-  content,
-  cleaned,
-  view,
-  deletions,
-  viewStart,
-  viewEnd,
-  hint,
-  fallback,
-) {
-  if (viewStart >= viewEnd) return { text: "", pairs: [], restoredBytes: 0 };
+function restoreWriteRegion(ctx, viewStart, viewEnd, fallback) {
+  const { content, cleaned, view, deletions } = ctx;
+  if (viewStart >= viewEnd) return { text: "", pairs: [], restoredChars: 0 };
   const span = resolveSpan(
     content,
     cleaned,
@@ -466,21 +473,33 @@ function restoreWriteRegion(
   const diskText = atStart + span.diskText + atEnd;
   if (layer1View(diskText).cleaned !== span.cleanedText) {
     if (span.pairs.length > 0)
-      return {
-        deny:
-          `the unchanged region around a ${hint}…] placeholder sits next to stripped ` +
-          `control sequences that cannot be re-anchored unambiguously in ` +
-          `${ti.file_path}; use Edit for the changed region, or ask the user to ` +
-          `make this change`,
-      };
-    return { text: fallback, pairs: [], restoredBytes: 0 };
+      return anchorAmbiguityDeny(
+        `the unchanged region around a ${ctx.hint}…] placeholder`,
+        ctx.filePath,
+        "use Edit for the changed region",
+      );
+    return { text: fallback, pairs: [], restoredChars: 0 };
   }
   return {
     text: diskText,
     pairs: span.pairs,
-    restoredBytes: diskText.length - span.cleanedText.length,
+    restoredChars: diskText.length - span.cleanedText.length,
   };
 }
+
+/**
+ * The per-Write invariants `restoreWriteRegion` needs for both regions,
+ * bundled once in {@link rehydrateWrite} instead of threaded as positional
+ * parameters.
+ * @typedef {{
+ *   filePath: string,
+ *   content: string,
+ *   cleaned: string,
+ *   view: import("./view-map.mjs").FileView<"utf16">,
+ *   deletions: {start: number, deleted: string}[],
+ *   hint: string,
+ * }} WriteRestoreContext
+ */
 
 /**
  * Re-anchor a whole-file Write against the target's sanitized view. The
@@ -526,27 +545,25 @@ async function rehydrateWrite(ti, content, cleaned, view, deletions, io, hint) {
   }
   const { prefixEnd, suffixStart } = anchorSpans(ti.content, view);
   const suffixLen = viewText.length - suffixStart;
-  const prefix = restoreWriteRegion(
-    ti,
+  const ctx = {
+    filePath: ti.file_path,
     content,
     cleaned,
     view,
     deletions,
+    hint,
+  };
+  const prefix = restoreWriteRegion(
+    ctx,
     0,
     prefixEnd,
-    hint,
     ti.content.slice(0, prefixEnd),
   );
   if ("deny" in prefix) return prefix;
   const suffix = restoreWriteRegion(
-    ti,
-    content,
-    cleaned,
-    view,
-    deletions,
+    ctx,
     suffixStart,
     viewText.length,
-    hint,
     suffixLen === 0 ? "" : ti.content.slice(-suffixLen),
   );
   if ("deny" in suffix) return suffix;
@@ -652,7 +669,7 @@ async function rehydrateWrite(ti, content, cleaned, view, deletions, io, hint) {
     updatedInput: { ...ti, content: out },
     context: writeContext(
       ti.file_path,
-      prefix.restoredBytes + suffix.restoredBytes,
+      prefix.restoredChars + suffix.restoredChars,
       middleSpans.length + prefix.pairs.length + suffix.pairs.length,
       hint,
     ),
@@ -662,15 +679,15 @@ async function rehydrateWrite(ti, content, cleaned, view, deletions, io, hint) {
 /**
  * Model-facing context line for a rewritten Write input.
  * @param {string} filePath
- * @param {number} restoredBytes stripped characters restored with the unchanged regions
+ * @param {number} restoredChars UTF-16 code units of stripped characters restored with the unchanged regions
  * @param {number} secretCount placeholders resolved (spliced or restored)
  * @param {string} hint placeholder prefix
  */
-function writeContext(filePath, restoredBytes, secretCount, hint) {
+function writeContext(filePath, restoredChars, secretCount, hint) {
   const parts = [];
-  if (restoredBytes > 0)
+  if (restoredChars > 0)
     parts.push(
-      `${restoredBytes} invisible/control character(s) stripped from your view of ` +
+      `${restoredChars} invisible/control character(s) stripped from your view of ` +
         `${filePath} were restored from disk in the regions your Write left unchanged.`,
     );
   if (secretCount > 0)
@@ -839,11 +856,19 @@ export async function rehydrateRedacted(
     // failed, the file didn't vanish. A hinted call's content may carry
     // placeholder text that must never be persisted literally over whatever
     // secret is actually there, so fail closed with a deny instead of the
-    // silent pass-through above. A non-hinted call was never going to write a
-    // secret-shaped placeholder either way, and the underlying tool call will
-    // hit this exact same read error itself, so let it propagate rather than
-    // swallow an unexpected failure.
-    if (!hinted) throw err;
+    // silent pass-through above. A non-hinted Edit/MultiEdit was never going
+    // to write a secret-shaped placeholder, and the underlying tool call
+    // reads the file itself, so it will hit this exact same error — let it
+    // propagate rather than swallow an unexpected failure. A non-hinted
+    // WRITE never reads its target: pre-restoration it would simply proceed,
+    // so blocking it on a read error this layer alone performed would fail
+    // closed on a placeholder-free ambiguity. Pass it through (fail open —
+    // restoration is best-effort; the write merely loses stripped
+    // characters, exactly the pre-restoration behavior).
+    if (!hinted) {
+      if (tool !== "Write") throw err;
+      return null;
+    }
     return {
       deny:
         `could not read ${toolInput.file_path} to rehydrate its secrets ` +
