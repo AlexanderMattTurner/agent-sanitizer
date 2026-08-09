@@ -8,12 +8,18 @@
 #
 # Claude Code treats a non-zero exit OR empty stdout from a hook as a
 # NON-blocking hook error and lets the guarded action through with no trace at
-# all, so a hook that cannot start (node absent from PATH, a missing or
-# truncated bundle) would silently disable the whole sanitization pipeline.
-# This shim is what prevents that: when the bundle cannot run it still PRINTS
-# an event-appropriate response and exits 0 — by default a warning the
-# transcript carries, or the fail-closed verdict under
-# AGENT_SANITIZER_FAIL_OPEN=0 (see emit_degraded).
+# all, so a hook that cannot start (node absent from PATH) or cannot finish (a
+# missing, truncated, or throwing bundle) would silently disable the whole
+# sanitization pipeline. This shim is what prevents that: whenever the bundle
+# fails to reach a verdict it still PRINTS an event-appropriate response and
+# exits 0 — by default a warning the transcript carries, or the fail-closed
+# verdict under AGENT_SANITIZER_FAIL_OPEN=0 (see emit_degraded).
+#
+# The gate is the POST-CONDITION, checked once after the bundle has run: a
+# non-zero exit with nothing on stdout means no verdict came back, whatever the
+# cause. It is not a preflight probe of one failure mode (see the block above
+# the run for what that missed, and for the one case the post-condition cannot
+# distinguish from a healthy silent pass).
 #
 # The event comes from an explicit leading argument (each hooks.json call site
 # knows its event statically), never from the payload: Claude Code keys
@@ -23,13 +29,12 @@ set -uo pipefail
 
 script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 
-# The launcher's own preflight — a PATH probe and a `node --check` of the whole
-# bundle — runs on EVERY hook invocation, ahead of the hook that could time it,
-# and is gone the moment this script `exec`s. So it times itself, against the
-# same budget and with the same wording as the node hooks (see
-# lib/hook-timing.sh). A missing timing lib disables the measurement and says so:
-# the launcher's job is to keep the sanitizer running, and losing a diagnostic is
-# not a reason to refuse to launch.
+# The launcher's own preflight — a PATH probe and the daemon resolution below —
+# runs on EVERY hook invocation, ahead of the hook that could time it. So it
+# times itself, against the same budget and with the same wording as the node
+# hooks (see lib/hook-timing.sh). A missing timing lib disables the measurement
+# and says so: the launcher's job is to keep the sanitizer running, and losing a
+# diagnostic is not a reason to refuse to launch.
 launch_started_ms=0
 timing_lib="$script_dir/lib/hook-timing.sh"
 if [[ -r "$timing_lib" ]]; then
@@ -44,9 +49,14 @@ fi
 hook_event="${1:?usage: safe-launch.sh <HookEvent> [args...]}"
 shift
 
-# Every exit from this script passes through here or through emit_degraded, and
-# both report; `exec` leaves no chance for an EXIT trap to do it centrally.
+# Every exit from this script passes through here or through emit_degraded.
+# Idempotent because the two now compose: the preflight reports before handing
+# off to the bundle, and emit_degraded reports again if the bundle then fails to
+# answer — a second timing line for one invocation would double-count.
+launch_timing_reported=0
 report_launch_timing() {
+  [[ "$launch_timing_reported" -eq 1 ]] && return 0
+  launch_timing_reported=1
   report_slow_hook "safe-launch $hook_event" "$launch_started_ms"
 }
 
@@ -152,15 +162,77 @@ if [[ -z "${_AGENT_SANITIZER_REDACTOR_DAEMON:-}" && -x "$venv_daemon" ]]; then
   export _AGENT_SANITIZER_REDACTOR_DAEMON="$venv_daemon"
 fi
 
-# `node --check` catches a missing, unreadable, or truncated bundle in one
-# probe; a bundle that parses but fails later is covered by the in-process
-# fail-closed onError wiring the hooks themselves carry.
-if ! node --check "$bundle" 2>/dev/null; then
-  node --check "$bundle" 2>&1 | head -5 >&2
-  echo "agent-sanitizer: bundle failed to parse: $bundle" >&2
-  emit_degraded "sanitizer plugin: hook bundle is missing or corrupt; reinstall the plugin."
+# The bundle runs as a CHILD, not an `exec`, so this shim keeps control long
+# enough to check its POST-CONDITION — did a verdict come back? — instead of
+# probing a proxy for it. The proxy was `node --check "$bundle"`: it caught a
+# missing or truncated bundle and NOTHING else, so a bundle that parsed and then
+# threw at import, or exited before writing, left empty stdout and a non-zero
+# exit. Claude Code reads that as a non-blocking hook error and runs the guarded
+# tool with no trace at all, under BOTH postures — a silent fail-open on exactly
+# the path this shim exists to make loud. It also cost a second node startup
+# (~100ms) on every single tool call.
+#
+# The one case the post-condition cannot see: a bundle that writes nothing and
+# exits 0. That is byte-identical to a healthy hook with nothing to say, which
+# all four of them are on a clean payload, so gating on empty stdout would fire
+# a degraded warning on ordinary traffic. Accepted false negative — precision
+# over recall — pinned from the other side in plugin/test/plugin-bundle.test.mjs.
+#
+# Stdout goes to a temp file rather than a command substitution, which would
+# strip trailing newlines and so rewrite a verdict's bytes; it is replayed
+# verbatim once the exit code has been read. Stderr is never captured, so the
+# child's diagnostics stream to the operator in real time exactly as they did
+# under `exec`.
+report_launch_timing
+
+stdout_file="$(mktemp 2>/dev/null)"
+bundle_out=""
+if [[ -n "$stdout_file" ]]; then
+  trap 'rm -f "$stdout_file"' EXIT
+  node "$bundle" "$@" >"$stdout_file"
+  bundle_rc=$?
+else
+  # mktemp unavailable (a broken TMPDIR): still gate on the post-condition, at
+  # the cost of trailing-newline fidelity in the replayed verdict.
+  bundle_out="$(node "$bundle" "$@")"
+  bundle_rc=$?
+fi
+
+# Replay whatever the bundle wrote, byte-for-byte where a temp file was
+# available. Called on every path that forwards, so there is one copy of it.
+forward_bundle_stdout() {
+  if [[ -n "$stdout_file" ]]; then
+    cat "$stdout_file"
+    return 0
+  fi
+  [[ -n "$bundle_out" ]] && printf '%s\n' "$bundle_out"
+  return 0
+}
+
+# Exit 2 is a DECISION, not a fault: it is the dispatcher's declared block for
+# static wiring corruption (plugin-hooks.mjs states both posture arms block on
+# it). Degrading it into a pass would overrule the one arm that deliberately
+# ignores the posture knob, so it goes through with whatever it wrote.
+if [[ "$bundle_rc" -eq 2 ]]; then
+  forward_bundle_stdout
+  exit 2
+fi
+
+# The post-condition failed: the bundle exited non-zero having said nothing.
+bundle_said_nothing=1
+if [[ -n "$stdout_file" ]]; then
+  [[ -s "$stdout_file" ]] && bundle_said_nothing=0
+else
+  [[ -n "$bundle_out" ]] && bundle_said_nothing=0
+fi
+if [[ "$bundle_rc" -ne 0 && "$bundle_said_nothing" -eq 1 ]]; then
+  echo "agent-sanitizer: hook bundle exited $bundle_rc without reaching a verdict: $bundle" >&2
+  emit_degraded "sanitizer plugin: the hook bundle exited $bundle_rc without producing a verdict; reinstall the plugin."
   exit 0
 fi
 
-report_launch_timing
-exec node "$bundle" "$@"
+# It answered. Forward it and exit 0 — a hook that WROTE a verdict and then
+# exited non-zero (an advisory exit 1) had that verdict discarded by the harness
+# under `exec`; honoring it is what the shim is for.
+forward_bundle_stdout
+exit 0
