@@ -25,13 +25,27 @@
 // DCS/SOS/PM/APC string the grammar does not consume still loses its introducer
 // and terminator, so no terminal can hide-render its body as a control payload.
 //
+// The introducer set as DATA, so a non-JS consumer can share it: the generator
+// (scripts/gen-invisible-charset.mjs) pins these code points into
+// data/invisible-charset.json's `control_introducers`, which the Python port
+// (python/agent_sanitizer/textstrip.py) sweeps. Before that, the Python side
+// hand-wrote `\x1b` alone and the whole C1 block survived its strip — the exact
+// fork this module's header says must not recur, one language over.
+export const CONTROL_INTRODUCER_CODEPOINTS = Object.freeze([
+  0x1b,
+  ...Array.from({ length: 0x9f - 0x80 + 1 }, (_, i) => 0x80 + i),
+]);
+
 // A SOURCE STRING, not a literal: three call sites need it with different flags
 // (`g` for the Layer-1 sweep, unflagged for the prompt gate, `g` again to drive
 // the scan below), and spelling the class out at each site is how the three
 // copies came to spell the same byte two different ways — which defeats a
-// grep-based drift check as well. Building from `\uXXXX` escapes keeps every
-// raw control byte out of the source (no `no-control-regex` disable needed).
-export const CONTROL_INTRODUCER_SOURCE = "[\\u001b\\u0080-\\u009f]";
+// grep-based drift check as well. Derived from the code-point list above so the
+// regex and the exported data cannot disagree; `\uXXXX` escapes keep every raw
+// control byte out of the source (no `no-control-regex` disable needed).
+export const CONTROL_INTRODUCER_SOURCE = `[${CONTROL_INTRODUCER_CODEPOINTS.map(
+  (cp) => `\\u${cp.toString(16).padStart(4, "0")}`,
+).join("")}]`;
 
 // SGR (Select Graphic Rendition): colors, bold, reset. The grammar is closed:
 // params are [0-9;:]* and the final byte is `m`, so a match can only restyle

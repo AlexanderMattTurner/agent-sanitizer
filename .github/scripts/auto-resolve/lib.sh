@@ -1,6 +1,12 @@
 # shellcheck shell=bash
 # Shared by the auto-resolve PREPARE, BUNDLE and LAND steps (sourced, not run).
 
+# Label names come from the cross-language SSOT lib/shared-names.json (via its
+# bash reader), so the label this file WRITES cannot drift from the one
+# discover.py excludes on. shared-names.bash guards against double-source.
+# shellcheck source=.github/scripts/lib/shared-names.bash disable=SC1091
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")/../lib" && pwd)/shared-names.bash"
+
 # One spelling of "this line marks an unresolved hunk", so the bundling job and
 # the landing job cannot disagree about what a leftover conflict looks like.
 # shellcheck disable=SC2034  # read by the scripts that source this file, which shellcheck lints separately
@@ -50,12 +56,12 @@ git_auth_header() {
 apply_blocked_label() {
   local pr="${1:?PR required}"
   # echo-fallback-ok: the label may already exist from a concurrent run; the add below is the operative step
-  gh label create auto-resolve-blocked --color e4e669 --force \
+  gh label create "$_LABEL_AUTO_RESOLVE_BLOCKED" --color e4e669 --force \
     --description "Auto-resolve cannot push to this PR; remove the label to let it retry" ||
     echo "[auto-resolve] gh label create failed" >&2
   # echo-fallback-ok: best-effort label add; the caller still exits red with the remedy
-  gh pr edit "$pr" --add-label auto-resolve-blocked ||
-    echo "[auto-resolve] failed to add auto-resolve-blocked label to PR #${pr}" >&2
+  gh pr edit "$pr" --add-label "$_LABEL_AUTO_RESOLVE_BLOCKED" ||
+    echo "[auto-resolve] failed to add ${_LABEL_AUTO_RESOLVE_BLOCKED} label to PR #${pr}" >&2
 }
 
 # True when git cannot merge the conflicted path textually: `-merge`-attributed

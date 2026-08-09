@@ -17,7 +17,12 @@ import fc from "fast-check";
 import { classifyPrompt } from "../src/prompt.mjs";
 import { stripAnsiFully } from "../src/layer1.mjs";
 import { SCATTERED_THRESHOLD } from "../src/invisible.mjs";
-import { fcRunOptions, cp } from "./test-helpers.mjs";
+import {
+  fcRunOptions,
+  cp,
+  unicodeChar,
+  loneSurrogate,
+} from "./test-helpers.mjs";
 
 const runOptions = fcRunOptions({ numRuns: 500 });
 const check = (arbitrary, predicate) =>
@@ -25,15 +30,6 @@ const check = (arbitrary, predicate) =>
 
 const ACTIONS = new Set(["pass", "note", "block"]);
 
-// Any single code point except the surrogate range (so .map(fromCodePoint)
-// never throws); lone surrogates are injected separately as raw code units.
-const unicodeChar = fc
-  .integer({ min: 0, max: 0x10ffff })
-  .filter((c) => c < 0xd800 || c > 0xdfff)
-  .map((c) => String.fromCodePoint(c));
-const loneSurrogate = fc
-  .integer({ min: 0xd800, max: 0xdfff })
-  .map((c) => String.fromCharCode(c));
 // Payload-capable invisibles across each CHECKS category (Cf zero-widths incl.
 // the ZWNJ/ZWJ carve-out boundary, variation selectors, the blank fillers incl.
 // the zero-width Mn combining mark and the braille blank, plus a Unicode TAG).

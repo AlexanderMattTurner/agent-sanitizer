@@ -16,32 +16,16 @@ jobs:
   gitleaks:
     runs-on: ubuntu-latest
     timeout-minutes: 10
-    env:
-      GITLEAKS_VERSION: "8.30.1"
-      # Published SHA-256 of gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz. The
-      # tarball is fetched over the network and executed; verify it against this
-      # digest before extracting so a tampered release asset can't inject a
-      # malicious binary. MUST be updated in lockstep with GITLEAKS_VERSION
-      # (phone-home.yaml pins the same pair).
-      GITLEAKS_SHA256: "551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb"
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           fetch-depth: 0
           persist-credentials: false
 
-      - name: Download and verify pinned gitleaks
-        run: |
-          tarball="gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
-          curl -fsSL --retry 6 --retry-all-errors --retry-delay 15 --connect-timeout 30 \
-            -O "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/${tarball}"
-          case "$GITLEAKS_SHA256" in
-            PLACEHOLDER_*)
-              echo "::error::GITLEAKS_SHA256 is still the placeholder. Set the real published SHA-256 for gitleaks ${GITLEAKS_VERSION} before this scan can run." >&2
-              exit 1 ;;
-          esac
-          echo "${GITLEAKS_SHA256}  ${tarball}" | sha256sum -c -
-          tar xzf "$tarball" gitleaks
+      # Version + SHA-256 pin live in .github/tool-versions.sh (one pin, shared
+      # with phone-home.yaml); the script sha256-verifies before extracting.
+      - name: Install pinned gitleaks
+        run: bash .github/scripts/install-gitleaks.sh
 
       - name: Run gitleaks
         env:

@@ -24,7 +24,7 @@ Stage by name rather than reaching for `git add -A`/`git add .` reflexively — 
 
 Format: `<type>(<optional scope>): <imperative lowercase description>`
 
-- Allowed types: `feat`, `fix`, `refactor`, `docs`, `test`, `chore`, `ci`, `style`, `perf`, `build`
+- Allowed types: `feat`, `fix`, `refactor`, `docs`, `test`, `chore`, `ci`, `style`, `perf`, `build`, `revert`
 - Under 72 chars, no trailing period
 - Add `!` for breaking changes: `feat!: remove legacy API`
 - Optional body (blank line after subject) for the **why**

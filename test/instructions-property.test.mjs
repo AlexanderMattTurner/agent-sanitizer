@@ -9,17 +9,13 @@ import assert from "node:assert/strict";
 import fc from "fast-check";
 
 import { scanText, decodeRun } from "../src/instructions.mjs";
-import { fcRunOptions, cp } from "./test-helpers.mjs";
+import {
+  fcRunOptions,
+  cp,
+  unicodeChar,
+  loneSurrogate,
+} from "./test-helpers.mjs";
 
-// Any code point except the surrogate range (so fromCodePoint never throws);
-// lone surrogates are injected separately as raw UTF-16 units.
-const unicodeChar = fc
-  .integer({ min: 0, max: 0x10ffff })
-  .filter((c) => c < 0xd800 || c > 0xdfff)
-  .map((c) => String.fromCodePoint(c));
-const loneSurrogate = fc
-  .integer({ min: 0xd800, max: 0xdfff })
-  .map((c) => String.fromCharCode(c));
 // Invisible classes + tag chars (decodeRun's tag branch) + ASCII + newlines.
 const invisibleChar = fc.constantFrom(
   cp(0x200b),

@@ -43,10 +43,37 @@ import {
 const ROOT = dirname(dirname(dirname(fileURLToPath(import.meta.url))));
 const PLUGIN_DIR = join(ROOT, "plugin");
 const HOOKS_DIR = join(ROOT, "claude-hooks");
-// The published credential-noun vocabulary, at the package-relative path the hook
-// libs import it from.
-const VOCAB_REL = join("python", "agent_sanitizer", "secrets", "data");
-const VOCAB_FILE = "credential-names.json";
+// The package-relative data files the hook libs statically import (the
+// credential-noun vocabulary, the invisible charset, the redaction floor).
+// DERIVED from package.json's `files` rather than listed here: a hand-kept list
+// goes stale the moment a lib imports a new data file, and the symptom is this
+// suite's omit-a-package tests failing as though the hook fails OPEN — the
+// module-load throw looks identical. Every shipped `python/**.json` is staged,
+// so a new import is covered the day it lands.
+// Every matching entry must be a LITERAL path: the staging below copies each
+// one with cpSync, so a glob (`python/**/*.json`) would fail with an ENOENT on
+// a path that never existed rather than staging the files it names — and the
+// non-empty assertion in stageSources would still pass. Rejected loudly rather
+// than expanded with globSync: the `files` list is literal today, and a glob
+// landing here is a packaging decision worth a human look, not something this
+// suite should quietly paper over.
+const GLOB_META = /[*?[\]{}!]/;
+const PACKAGE_DATA_FILES = JSON.parse(
+  readFileSync(join(ROOT, "package.json"), "utf8"),
+)
+  .files.filter(
+    (entry) => entry.startsWith("python/") && entry.endsWith(".json"),
+  )
+  .map((entry) => {
+    if (GLOB_META.test(entry))
+      throw new Error(
+        `package.json files entry ${JSON.stringify(entry)} is a glob, but the ` +
+          `plugin-bundle staging copies each entry as a literal path. Either ` +
+          `list the literal paths in package.json, or expand this derivation ` +
+          `with globSync({ cwd: ROOT }) before staging.`,
+      );
+    return entry;
+  });
 const ESC = "";
 
 /** Tag-character encoding of `s` — the ASCII-smuggling payload class. */
@@ -137,14 +164,20 @@ function stageSources(t, { omit = [] } = {}) {
   const dir = scratch(t);
   const hooks = join(dir, "claude-hooks");
   cpSync(HOOKS_DIR, hooks, { recursive: true });
-  // The hook libs reach the published credential-noun vocabulary at its
-  // package-relative path (`../../python/…`), so staging claude-hooks/ alone
-  // would model a layout npm never installs — every `files` entry lands under
-  // one root. Without this the env-config import throws at module load, which
-  // looks exactly like the fail-OPEN the omit-a-package test exists to detect.
-  const vocabDir = join(dir, VOCAB_REL);
-  mkdirSync(vocabDir, { recursive: true });
-  cpSync(join(ROOT, VOCAB_REL, VOCAB_FILE), join(vocabDir, VOCAB_FILE));
+  // The hook libs reach the published data files at their package-relative
+  // paths (`../../python/…`), so staging claude-hooks/ alone would model a
+  // layout npm never installs — every `files` entry lands under one root.
+  // Without these the imports throw at module load, which looks exactly like
+  // the fail-OPEN the omit-a-package test exists to detect.
+  assert.ok(
+    PACKAGE_DATA_FILES.length > 0,
+    "no python/**.json in package.json files — the staging derivation broke",
+  );
+  for (const rel of PACKAGE_DATA_FILES) {
+    const dest = join(dir, rel);
+    mkdirSync(dirname(dest), { recursive: true });
+    cpSync(join(ROOT, rel), dest);
+  }
   const modules = join(dir, "node_modules");
   mkdirSync(modules, { recursive: true });
   for (const [name, target] of Object.entries(packageDirs()))
