@@ -226,7 +226,15 @@ def test_pre_commit_passes_without_package_json(tmp_path: Path) -> None:
 # --------------------------------------------------------------------------- #
 
 
-def _sandbox_guarded_repo(tmp_path: Path, guard_body: str) -> Path:
+def _sandbox_guarded_repo(
+    tmp_path: Path,
+    guard_body: str,
+    *,
+    pairs: str = '{"data.json": ["guard.test.mjs"]}',
+    too_slow: str = "{}",
+    stage: tuple[str, ...] = ("data.json",),
+    with_acorn: bool = True,
+) -> Path:
     repo = init_repo(tmp_path)
     binp = repo / "node_modules" / ".bin"
     binp.mkdir(parents=True)
@@ -241,13 +249,23 @@ def _sandbox_guarded_repo(tmp_path: Path, guard_body: str) -> Path:
     # pass for the wrong reason — which is why the sandbox mirrors the real
     # dependency instead of stubbing the scan out.
     shutil.copytree(REPO_ROOT / ".hooks" / "lib", hooks / "lib")
-    (repo / "node_modules" / "acorn").symlink_to(REPO_ROOT / "node_modules" / "acorn")
+    if with_acorn:
+        (repo / "node_modules" / "acorn").symlink_to(
+            REPO_ROOT / "node_modules" / "acorn"
+        )
     (hooks / "guard-pairs.json").write_text(
-        '{"pairs": {"data.json": ["guard.test.mjs"]}, "tooSlowForCommit": {}}'
+        f'{{"pairs": {pairs}, "tooSlowForCommit": {too_slow}}}'
     )
     (repo / "guard.test.mjs").write_text(guard_body)
     (repo / "data.json").write_text("{}\n")
-    subprocess.run(["git", "add", "-A"], cwd=repo, check=True)
+    # Stage ONLY the guarded source by default, never `git add -A`. Staging the
+    # suite too would schedule it through the runner's "a staged suite is its
+    # own guard" rule before `pairs` is consulted at all, and both the failing
+    # case and its positive control would pass with `pairs` emptied — the
+    # pairing path, which is the only thing these two tests cover, would be
+    # asserting nothing. The suite does not need to be tracked: the runner
+    # executes it by path.
+    subprocess.run(["git", "add", "--", *stage], cwd=repo, check=True)
     return repo
 
 
@@ -293,3 +311,138 @@ def test_pre_commit_passes_when_paired_guard_passes(tmp_path: Path) -> None:
     # decodes stderr with the locale codec, so matching the em dash is fragile.
     assert "staged guarded source(s)" in result.stderr
     assert "running paired guard test" in result.stderr
+
+
+FAILING_GUARD = (
+    'import { test } from "node:test";\n'
+    'import assert from "node:assert";\n'
+    'test("guard", () => assert.fail("contract broken"));\n'
+)
+PASSING_GUARD = 'import { test } from "node:test";\ntest("guard", () => {});\n'
+
+# A failing guard that NAMES data.json in a form the scan resolves, so it is
+# paired by derivation rather than by the map. The path is only bound, never
+# read: the case that uses this deletes the file.
+DERIVED_FAILING_GUARD = (
+    'import { test } from "node:test";\n'
+    'import assert from "node:assert";\n'
+    'import { join } from "node:path";\n'
+    'const DATA = join(import.meta.dirname, "data.json");\n'
+    'test("guard", () => assert.fail(`contract broken: ${DATA}`));\n'
+)
+
+
+def test_pre_commit_runs_a_staged_suite_as_its_own_guard(tmp_path: Path) -> None:
+    """A staged test file is scheduled even when nothing pairs it.
+
+    Nothing else covers an edit to a suite, so the runner treats one as its own
+    guard. `pairs` is emptied here so the schedule can only have come from that
+    rule — with the map consulted, this would pass either way.
+    """
+    repo = _sandbox_guarded_repo(
+        tmp_path, FAILING_GUARD, pairs="{}", stage=("guard.test.mjs",)
+    )
+    result = _run_pre_commit_guarded(repo, tmp_path)
+    assert result.returncode != 0, (
+        "a staged suite must run itself\n" + result.stderr + result.stdout
+    )
+    assert "paired guard test failed" in result.stderr
+
+
+def test_pre_commit_does_not_schedule_a_deleted_suite(tmp_path: Path) -> None:
+    """Removing a test must not be un-committable.
+
+    `git rm` stages a path that is gone from the working tree; scheduling it
+    would run `node --test` on a missing file and fail the very commit that
+    removes it. Positive control above proves the staged-suite rule is live, so
+    this cannot pass by the rule being dead.
+    """
+    repo = _sandbox_guarded_repo(
+        tmp_path, PASSING_GUARD, pairs="{}", stage=("guard.test.mjs",)
+    )
+    subprocess.run(
+        ["git", "commit", "-q", "-m", "seed", "--no-verify"], cwd=repo, check=True
+    )
+    subprocess.run(["git", "rm", "-q", "--", "guard.test.mjs"], cwd=repo, check=True)
+    result = _run_pre_commit_guarded(repo, tmp_path)
+    assert result.returncode == 0, (
+        "deleting a suite must not block the commit\n" + result.stderr
+    )
+    assert "guard.test.mjs" not in result.stderr
+
+
+def test_pre_commit_guards_a_staged_deletion_of_a_guarded_source(
+    tmp_path: Path,
+) -> None:
+    """Deleting guarded data still runs its guard.
+
+    The derivation reads the working tree, where a staged deletion no longer
+    exists — so without the runner seeding the staged paths back into the scan,
+    `git rm data.json` would resolve to no suites and pass having run nothing.
+    That is the silent no-op the mechanism exists to close, and the map this
+    replaced did not have it. The guard fails here, so a scheduled run is
+    visible as a blocked commit.
+
+    `pairs` is emptied and the guard NAMES the file, so the only route to a
+    scheduled run is the derivation seeing the seeded path — with a curated
+    pair present this would pass without the scan running at all.
+    """
+    repo = _sandbox_guarded_repo(tmp_path, DERIVED_FAILING_GUARD, pairs="{}")
+    subprocess.run(
+        ["git", "commit", "-q", "-m", "seed", "--no-verify"], cwd=repo, check=True
+    )
+    subprocess.run(["git", "rm", "-q", "--", "data.json"], cwd=repo, check=True)
+    result = _run_pre_commit_guarded(repo, tmp_path)
+    assert result.returncode != 0, (
+        "deleting a guarded source must still run its guard\n" + result.stderr
+    )
+    assert "paired guard test failed" in result.stderr
+
+
+def test_pre_commit_refuses_when_the_scan_cannot_be_derived(tmp_path: Path) -> None:
+    """No acorn, no derivation, no commit.
+
+    The pairs are computed by parsing the suites, so an absent parser means the
+    runner cannot know what to schedule. Passing would be a fail-OPEN on a gate:
+    it must refuse, and say which install fixes it.
+    """
+    repo = _sandbox_guarded_repo(tmp_path, PASSING_GUARD, with_acorn=False)
+    result = _run_pre_commit_guarded(repo, tmp_path)
+    assert result.returncode != 0, (
+        "an underivable map must block the commit\n" + result.stderr
+    )
+    assert "cannot derive the guard-pair map" in result.stderr
+    assert "pnpm install" in result.stderr
+
+
+def test_pre_commit_skips_a_guard_excluded_as_too_slow(tmp_path: Path) -> None:
+    """`tooSlowForCommit` drops a suite from the schedule, loudly.
+
+    The guard would FAIL if it ran, so a passing commit proves the exclusion is
+    what took it out of the schedule and not something else — and the operator
+    is told, since a silent skip is indistinguishable from a broken map.
+    """
+    repo = _sandbox_guarded_repo(
+        tmp_path,
+        FAILING_GUARD,
+        too_slow='{"guard.test.mjs": "excluded so this case can observe the skip"}',
+    )
+    result = _run_pre_commit_guarded(repo, tmp_path)
+    assert result.returncode == 0, (
+        "an excluded guard must not run\n" + result.stderr + result.stdout
+    )
+    assert "not running guard.test.mjs at commit time" in result.stderr
+
+
+def test_pre_commit_refuses_a_pair_naming_a_missing_guard(tmp_path: Path) -> None:
+    """A curated pair pointing at a file that is not there is a broken map.
+
+    Running it would fail with a path error that blames the test rather than the
+    map, so the runner names the pair instead.
+    """
+    repo = _sandbox_guarded_repo(
+        tmp_path, PASSING_GUARD, pairs='{"data.json": ["gone.test.mjs"]}'
+    )
+    result = _run_pre_commit_guarded(repo, tmp_path)
+    assert result.returncode != 0, result.stderr
+    assert "gone.test.mjs, which does not exist" in result.stderr

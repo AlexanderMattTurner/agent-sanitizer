@@ -27,7 +27,7 @@
  * never reads the file, which is worse than scheduling nothing.
  */
 import { execFileSync } from "node:child_process";
-import { readFileSync, readdirSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { dirname, extname, join, normalize, relative, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parse } from "acorn";
@@ -72,7 +72,7 @@ const SKIP_DIRS = new Set([
  * runnable wherever its own files are — which now includes the pre-commit hook,
  * whose whole job is to run before git has a commit to look at.
  */
-export function listFiles(dir = "", out = []) {
+function listFiles(dir = "", out = []) {
   const entries = readdirSync(join(repoRoot, dir), { withFileTypes: true });
   for (const entry of entries.sort((a, b) => a.name.localeCompare(b.name))) {
     const path = dir ? `${dir}/${entry.name}` : entry.name;
@@ -88,25 +88,27 @@ export function listFiles(dir = "", out = []) {
 
 export const tracked = new Set(listFiles());
 
-export const MODULE_EXTENSIONS = new Set([".cjs", ".js", ".mjs"]);
-
 /**
- * True for a tracked file that is a script with no extension to key on.
+ * Add paths the walk cannot see, so the scan still attributes them.
  *
- * The repo's shell scripts with the strongest claim to being guarded —
- * `.hooks/commit-msg`, `.hooks/pre-commit`, `.hooks/pre-push` — have no
- * extension at all, and one of them is mirrored by path already
- * (`.github/scripts/synced-deps.test.mjs` parses `commit-msg`'s `config="…"`
- * line). The shebang is what makes it a script, so that is what the scan asks.
- * @param {string} path
- * @returns {boolean}
+ * The one caller is the pre-commit hook, and the one case is a staged DELETION:
+ * `git rm python/…/redaction-floor.json` is gone from the working tree, so the
+ * walk misses it, `derived.get(path)` is undefined and the commit passes having
+ * run nothing — the silent no-op this whole mechanism exists to close, and a
+ * regression against the hand-written map, which keyed on the path alone. The
+ * suites still NAME the deleted path; only the `tracked` filter drops it.
+ *
+ * Must be called BEFORE the first scan: `analyzeModule` memoizes.
+ * @param {Iterable<string>} paths
  */
-export function isExtensionlessScript(path) {
-  return (
-    extname(path) === "" &&
-    readFileSync(join(repoRoot, path), "utf8").startsWith("#!")
-  );
+export function includePaths(paths) {
+  for (const path of paths) tracked.add(path);
 }
+
+/** True when a tracked path is a file this scan can actually parse. */
+const readable = (file) => existsSync(join(repoRoot, file));
+
+export const MODULE_EXTENSIONS = new Set([".cjs", ".js", ".mjs"]);
 
 // Node types that open a lexical scope. Shadowing has to be honoured or a
 // per-test `const plugin = stagePlugin(t)` temp dir reads as the repo's
@@ -611,6 +613,10 @@ export function analyzeModule(file) {
   // reaches the suite that never spells the path out.
   const result = { ...newScope(), refs: new Set(), deps: [] };
   analyzed.set(file, result);
+  // A path seeded by `includePaths` may be a staged DELETION, with nothing left
+  // on disk to parse. It still belongs in `tracked` — the suites that name it
+  // must still be scheduled — but it contributes no reads of its own.
+  if (!readable(file)) return result;
 
   const ast = parse(readFileSync(join(repoRoot, file), "utf8"), {
     ecmaVersion: "latest",
@@ -665,7 +671,10 @@ export function scanJsGuards() {
     if (!readers.has(path)) readers.set(path, new Set());
     readers.get(path).add(test);
   };
-  for (const test of [...tracked].filter((p) => p.endsWith(".test.mjs"))) {
+  const suites = [...tracked].filter(
+    (path) => path.endsWith(".test.mjs") && readable(path),
+  );
+  for (const test of suites) {
     const seen = new Set();
     const walk = (file) => {
       if (seen.has(file)) return;
@@ -682,6 +691,37 @@ export function scanJsGuards() {
 }
 
 /**
+ * Error code for "the scan needs a tool this machine does not have", carried so
+ * a caller can print an operator message instead of a spawn stack. The hook is
+ * a gate: it must refuse the commit either way, but the two failures it can
+ * actually hit — no acorn, no python3 — are both one install away, and telling
+ * an operator which one is the difference between a fixable commit and a wedge.
+ */
+export const MISSING_TOOL = "GUARD_SCAN_TOOL_MISSING";
+
+/** Run the Python half, translating an absent interpreter into a fixable error. */
+function runPythonScan(input) {
+  try {
+    return execFileSync(
+      "python3",
+      [join(repoRoot, ".hooks", "lib", "guarded-python-scan.py"), repoRoot],
+      { input, encoding: "utf8", maxBuffer: 64 * 1024 * 1024 },
+    );
+  } catch (error) {
+    // ONLY the missing interpreter is translated. A scan that ran and failed is
+    // a bug in this code, and its stack is what a maintainer needs to see.
+    if (error?.code !== "ENOENT") throw error;
+    const wrapped = new Error(
+      "`python3` is not on PATH, so the pytest half of the guard-pair map " +
+        "cannot be derived. Install Python 3.10+ (or activate .venv), then " +
+        "retry the commit.",
+    );
+    wrapped.code = MISSING_TOOL;
+    throw wrapped;
+  }
+}
+
+/**
  * Every repo file each pytest module names through `REPO_ROOT / "…" / "…"`.
  *
  * Delegated to `guarded-python-scan.py` because the rule everywhere else in
@@ -693,22 +733,19 @@ export function scanJsGuards() {
  * @returns {Map<string, Set<string>>} repo path → the pytest modules reaching it
  */
 export function scanPythonGuards() {
-  const tests = [...tracked].filter((p) => /(?:^|\/)test_[^/]+\.py$/.test(p));
-  const readers = new Map();
-  if (tests.length === 0) return readers;
-  // No try/catch: a python3 that is missing or a scan that dies must take the
-  // caller down loudly. Silently returning an empty map would drop every pytest
-  // guard from the derivation — the hook running nothing is the failure this
-  // whole mechanism exists to prevent.
-  const raw = execFileSync(
-    "python3",
-    [join(repoRoot, ".hooks", "lib", "guarded-python-scan.py"), repoRoot],
-    {
-      input: JSON.stringify({ tests, tracked: [...tracked] }),
-      encoding: "utf8",
-      maxBuffer: 64 * 1024 * 1024,
-    },
+  const tests = [...tracked].filter(
+    (path) => /(?:^|\/)test_[^/]+\.py$/.test(path) && readable(path),
   );
+  const readers = new Map();
+  // A repo with no pytest module needs no interpreter: `python3` is a hard
+  // commit-path dependency only where there is Python to parse.
+  if (tests.length === 0) return readers;
+  // The scan dying must take the caller down loudly — an empty map would drop
+  // every pytest guard from the derivation, which is the silent no-op this
+  // mechanism exists to prevent. The one thing translated is a missing
+  // interpreter, so it reads like the sibling acorn failure instead of a raw
+  // spawn stack.
+  const raw = runPythonScan(JSON.stringify({ tests, tracked: [...tracked] }));
   for (const [test, paths] of Object.entries(JSON.parse(raw)))
     for (const path of paths) {
       if (!tracked.has(path)) continue;

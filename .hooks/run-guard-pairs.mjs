@@ -27,7 +27,7 @@
  * guards data of any language, and this repo's data is not all read from JS.
  */
 import { spawnSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -53,18 +53,55 @@ const staged = new Set(process.argv.slice(2));
 const isGuardTest = (path) =>
   path.endsWith(".test.mjs") || /(?:^|\/)test_[^/]+\.py$/.test(path);
 
-const testsToRun = new Set();
-// A staged suite is its own guard: nothing else covers an edit to it, and it is
-// by definition the cheap check for that file.
-for (const path of staged) if (isGuardTest(path)) testsToRun.add(path);
+// A staged DELETION is still a staged path, and the scan sees the working
+// tree — so a deleted file is absent from the walk, resolves to no suites, and
+// the commit that removes it runs nothing. That is the silent no-op this
+// mechanism exists to close, and the hand-written map it replaces did not have
+// it: keying on the path alone, a deletion scheduled its guard. Seeding the
+// staged set back into the scan restores that, because the suites still NAME
+// the path — only the tracked-file filter was dropping it.
+scan.includePaths(staged);
 
 // The derivation runs once per commit regardless of how many files are staged
 // (~1.3s), which is cheaper than the per-source model it replaces as soon as a
 // commit touches more than one guarded file.
-const derived = scan.scanGuardedData();
+let derived;
+try {
+  derived = scan.scanGuardedData();
+} catch (error) {
+  if (error?.code !== scan.MISSING_TOOL) throw error;
+  console.error(
+    `pre-commit: cannot derive the guard-pair map — ${error.message}\n` +
+      `Refusing to pass a commit whose guard tests were never selected.`,
+  );
+  process.exit(1);
+}
+
+const testsToRun = new Set();
+// A staged suite is its own guard: nothing else covers an edit to it, and it is
+// by definition the cheap check for that file. A DELETED suite is skipped —
+// `node --test` on a file that no longer exists would fail the very commit that
+// removes it.
+for (const path of staged)
+  if (isGuardTest(path) && existsSync(join(repoRoot, path)))
+    testsToRun.add(path);
+
 for (const path of staged) {
   for (const test of derived.get(path) ?? []) testsToRun.add(test);
-  for (const test of pairs[path] ?? []) testsToRun.add(test);
+  for (const test of pairs[path] ?? []) {
+    // A curated pair naming a test that is not there cannot guard anything, and
+    // `node --test` on it would fail with a path error that blames the wrong
+    // thing. Say what is actually wrong. (The derived side cannot hit this: it
+    // only ever names suites the scan just parsed.)
+    if (!existsSync(join(repoRoot, test))) {
+      console.error(
+        `pre-commit: .hooks/guard-pairs.json pairs ${path} with ${test}, which does ` +
+          `not exist — repair the pair (or drop it) in this commit.`,
+      );
+      process.exit(1);
+    }
+    testsToRun.add(test);
+  }
 }
 
 // Excluded LAST, so a test cannot sneak in through a second source that reaches
