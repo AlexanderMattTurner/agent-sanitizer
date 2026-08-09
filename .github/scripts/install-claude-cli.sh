@@ -14,8 +14,8 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-# shellcheck source=lib/retry.bash disable=SC1091
-source "$SCRIPT_DIR/lib/retry.bash"
+# shellcheck source=lib-ci-retry.sh disable=SC1091
+source "$SCRIPT_DIR/lib-ci-retry.sh"
 
 pin_file="${SCRIPT_DIR}/../claude-cli-version"
 version="$(tr -d '[:space:]' <"$pin_file")"
@@ -26,7 +26,7 @@ fi
 echo "Installing @anthropic-ai/claude-code@${version}"
 # Bound + retry: a bare `npm install -g` has no timeout, so a hung registry
 # connection (intermittent on GitHub egress) would stall here until the whole
-# job's timeout cancels it. `timeout` caps a stuck attempt; retry_cmd rides out a
+# job's timeout cancels it. `timeout` caps a stuck attempt; `retry` rides out a
 # transient blip rather than failing the run.
-retry_cmd 3 10 timeout 180 npm install -g "@anthropic-ai/claude-code@${version}"
+RETRY_MAX=3 RETRY_BASE_DELAY=10 retry timeout 180 npm install -g "@anthropic-ai/claude-code@${version}"
 claude --version

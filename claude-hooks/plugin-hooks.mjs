@@ -65,6 +65,7 @@ const LAZY_LOADERS = {
     import("agent-control-plane-core/claude"),
   "agent-sanitizer": () => import("agent-sanitizer"),
   "agent-sanitizer/confusables": () => import("agent-sanitizer/confusables"),
+  "agent-sanitizer/instructions": () => import("agent-sanitizer/instructions"),
   "agent-sanitizer/invisible": () => import("agent-sanitizer/invisible"),
   "agent-sanitizer/output": () => import("agent-sanitizer/output"),
   "agent-sanitizer/prompt": () => import("agent-sanitizer/prompt"),

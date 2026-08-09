@@ -33,6 +33,7 @@ import { writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { CONTROL_INTRODUCER_CODEPOINTS } from "../src/ansi.mjs";
 import { VS, BLANK_NON_CF } from "../src/invisible.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -73,11 +74,15 @@ export function charsetDoc() {
       "`unicode_version`) — NOT resolved live per consumer, because Node and CPython " +
       "ship different Unicode versions and a live-Cf split let a code point in the " +
       "version delta escape one layer. The deletion set is the UNION of the two " +
-      "lists. Consumers in other languages read this file instead of forking the " +
-      "list — a fork is a silent security regression.",
+      "lists. `control_introducers` is the raw ANSI control-introducer set " +
+      "(ESC + the C1 block) from src/ansi.mjs, which Layer 1 sweeps and the " +
+      "Python textstrip port must sweep identically. Consumers in other " +
+      "languages read this file instead of forking the lists — a fork is a " +
+      "silent security regression.",
     unicode_version: unicodeVersion(),
     extra_codepoints: extraCodepoints(),
     cf_codepoints: cfCodepoints(),
+    control_introducers: [...CONTROL_INTRODUCER_CODEPOINTS],
   };
 }
 

@@ -12,14 +12,7 @@ import shutil
 import subprocess
 from pathlib import Path
 
-REPO_ROOT = Path(
-    subprocess.run(
-        ["git", "rev-parse", "--show-toplevel"],
-        capture_output=True,
-        text=True,
-        check=True,
-    ).stdout.strip()
-)
+from tests._helpers import REPO_ROOT
 
 # Coreutils the hooks legitimately need; everything else is "absent" unless a
 # test opts it back in. printf/pwd/cd/command/[[ are bash builtins (always

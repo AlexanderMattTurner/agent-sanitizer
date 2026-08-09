@@ -15,19 +15,16 @@ import assert from "node:assert/strict";
 import fc from "fast-check";
 
 import { sanitizeText } from "../src/output.mjs";
-import { fcRunOptions, cp } from "./test-helpers.mjs";
+import {
+  fcRunOptions,
+  cp,
+  unicodeChar,
+  loneSurrogate,
+} from "./test-helpers.mjs";
 
 const runOptions = fcRunOptions({ numRuns: 250 });
 const ESC = cp(0x1b);
 
-const loneSurrogate = fc
-  .integer({ min: 0xd800, max: 0xdfff })
-  .map((code) => String.fromCharCode(code));
-// Any code point except the surrogate range (astral included).
-const anyCodePoint = fc
-  .integer({ min: 0, max: 0x10ffff })
-  .filter((code) => code < 0xd800 || code > 0xdfff)
-  .map((code) => String.fromCodePoint(code));
 // ANSI fragments and one representative of every STRIP invisible class, built
 // from code points so no literal control byte sits in this file.
 const structuralToken = fc.constantFrom(
@@ -50,7 +47,7 @@ const structuralToken = fc.constantFrom(
   cp(0xe0041), // Unicode TAG (deniable-encoding channel)
   cp(0x1f600), // astral (parser totality)
 );
-const adversarialChar = fc.oneof(anyCodePoint, loneSurrogate, structuralToken);
+const adversarialChar = fc.oneof(unicodeChar, loneSurrogate, structuralToken);
 const adversarialInput = fc
   .array(adversarialChar, { maxLength: 300 })
   .map((parts) => parts.join(""));

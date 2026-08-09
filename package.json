@@ -201,7 +201,9 @@
   },
   "files": [
     "src/*.mjs",
+    "python/agent_sanitizer/data/invisible-charset.json",
     "python/agent_sanitizer/secrets/data/credential-names.json",
+    "python/agent_sanitizer/secrets/data/redaction-floor.json",
     "claude-hooks/*.mjs",
     "claude-hooks/lib/*.mjs",
     "claude-hooks/config/*.json",

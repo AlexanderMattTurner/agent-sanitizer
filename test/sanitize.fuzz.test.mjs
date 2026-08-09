@@ -9,7 +9,12 @@ import fc from "fast-check";
 
 import { sanitize } from "../src/index.mjs";
 import { HIDDEN_PLACEHOLDER } from "../src/html.mjs";
-import { fcRunOptions, cp } from "./test-helpers.mjs";
+import {
+  fcRunOptions,
+  cp,
+  unicodeChar,
+  loneSurrogate,
+} from "./test-helpers.mjs";
 
 const INVISIBLE_VALUES = [
   cp(0x200b),
@@ -59,13 +64,6 @@ const STRUCTURAL_TOKENS = [
   "<!-- c -->",
 ];
 
-const unicodeChar = fc
-  .integer({ min: 0, max: 0x10ffff })
-  .filter((c) => c < 0xd800 || c > 0xdfff)
-  .map((c) => String.fromCodePoint(c));
-const loneSurrogate = fc
-  .integer({ min: 0xd800, max: 0xdfff })
-  .map((c) => String.fromCharCode(c));
 const adversarialChar = fc.oneof(
   unicodeChar,
   loneSurrogate,

@@ -77,17 +77,22 @@ function maxInputBytes() {
 const errorMessage = (err) =>
   /** @type {{ message?: string }} */ (err)?.message ?? String(err);
 
-/** Throw if `text` exceeds the configured byte cap. The message names the limit
- * and the env var so a caller can act on it.
+/** The one oversize-rejection message, for every path that enforces the cap.
+ * Names the limit and the env var so a caller can act on it; `size` is included
+ * when the rejecting path knows it (the streaming paths discard the input
+ * unbuffered, so they only know the cap was crossed).
+ * @param {number} limit @param {number} [size] */
+const oversizeMessage = (limit, size) =>
+  `request too large: ${size === undefined ? "input" : `${size} bytes`} ` +
+  `exceeds the ${limit}-byte limit ` +
+  "(raise AGENT_SANITIZER_MAX_INPUT_BYTES to accept it)";
+
+/** Throw if `text` exceeds the configured byte cap.
  * @param {string} text */
 function enforceSizeLimit(text) {
   const limit = maxInputBytes();
   const size = Buffer.byteLength(text, "utf8");
-  if (size > limit)
-    throw new Error(
-      `request too large: ${size} bytes exceeds the ${limit}-byte limit ` +
-        "(raise AGENT_SANITIZER_MAX_INPUT_BYTES to accept it)",
-    );
+  if (size > limit) throw new Error(oversizeMessage(limit, size));
 }
 
 /** Read a required string field, throwing when it is absent or the wrong type.
@@ -105,7 +110,7 @@ function requireString(req, key) {
 /** Operations the CLI exposes. Each takes the parsed request, returns the JSON
  * payload object. Non-`sanitize` modules are imported lazily so a caller that
  * only ever sanitizes never loads prompt/output/instructions code. */
-const OPS = {
+export const OPS = {
   /** @param {Record<string, unknown>} req */
   async sanitize(req) {
     const text = requireString(req, "text");
@@ -203,11 +208,7 @@ async function readAll(stream) {
   let bytes = 0;
   for await (const chunk of stream) {
     bytes += Buffer.byteLength(chunk, "utf8");
-    if (bytes > limit)
-      throw new Error(
-        `request too large: input exceeds the ${limit}-byte limit ` +
-          "(raise AGENT_SANITIZER_MAX_INPUT_BYTES to accept it)",
-      );
+    if (bytes > limit) throw new Error(oversizeMessage(limit));
     text += chunk;
   }
   return text;
@@ -339,11 +340,7 @@ function createLineSplitter(limit) {
 
 /** @param {number} limit */
 const OVERSIZE_ERROR = (limit) =>
-  JSON.stringify({
-    error:
-      `request too large: input exceeds the ${limit}-byte limit ` +
-      "(raise AGENT_SANITIZER_MAX_INPUT_BYTES to accept it)",
-  });
+  JSON.stringify({ error: oversizeMessage(limit) });
 
 async function runWorker() {
   // Stream raw bytes (no encoding) so the splitter tracks UTF-8 byte length, not
@@ -417,6 +414,11 @@ function invokedAsScript() {
     return false;
   }
 }
+// Derived from OPS (the dispatch table is the SSOT) so adding or renaming an
+// op can never leave the help text advertising a stale set.
+const OPS_SENTENCE = Object.keys(OPS)
+  .map((op) => (op === "sanitize" ? "sanitize (default)" : op))
+  .join(", ");
 export const USAGE = `sanitize-cli — sanitize untrusted text before an LLM sees it.
 
 Reads JSON on stdin, writes one JSON response line on stdout.
@@ -426,8 +428,8 @@ Usage:
   sanitize-cli --worker   worker: read newline-delimited requests until EOF, one response per line
   sanitize-cli --help     show this help
 
-Request: { "op"?: string, ...fields }. Ops: sanitize (default), sanitizeText,
-classifyPrompt, scanInstructionFiles, cleanFile. A failure response is { "error": string }.
+Request: { "op"?: string, ...fields }. Ops: ${OPS_SENTENCE}.
+A failure response is { "error": string }.
 `;
 
 /**
