@@ -112,6 +112,23 @@ repos:
         pass_filenames: false
         files: ^\.claude/settings\.json$
 
+      # `node --test`'s default discovery skips dot-directories, so a *.test.mjs
+      # under .claude/hooks/ or .hooks/ runs in NO job — verified by planting
+      # always-failing suites there and watching the default run stay green.
+      # This config already anticipated such suites (`exclude: \.test\.mjs$` on
+      # the .claude/hooks lints below) while nothing executed them, leaving the
+      # hook stack's own trust-boundary controls untested by construction.
+      # pre-commit passes the MATCHED paths, so `node --test` runs exactly those
+      # and nothing else; when none match the hook is skipped rather than
+      # degrading to an argument-less (default-discovery) run.
+      # test/test-runner-partition.test.mjs is what makes this the registered
+      # claim for those paths: a suite no runner claims fails there.
+      - id: dot-directory-test-suites
+        name: run the *.test.mjs suites under .claude/hooks and .hooks
+        entry: node --test
+        language: system
+        files: ^(\.claude/hooks/|\.hooks/).*\.test\.mjs$
+
       - id: check-hook-stdin-guarded
         name: require readStdinJson() in a hook's isMain block to sit in a try
         entry: python3 .github/scripts/check-hook-stdin-guarded.py
