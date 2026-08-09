@@ -14,7 +14,7 @@
  * Protocol — a request is a JSON object with an `op` (default `"sanitize"` so a
  * bare `{ text, html }` keeps working). Per op:
  *
- *   sanitize           { text, html? }            -> { cleaned, found, warnings, notes }
+ *   sanitize           { text, html? }            -> { cleaned, found, warnings, notes, splices? }
  *   sanitizeText       { text, html?, exfilScan? } -> { cleaned, warnings, notes, modified, sgrNote }
  *   classifyPrompt     { text }                    -> { action, reason? }
  *   scanInstructionFiles { globs, cwd? }           -> { findings: [{ file, findings }] }

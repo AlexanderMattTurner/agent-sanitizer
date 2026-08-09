@@ -41,15 +41,6 @@ const CLI = fileURLToPath(new URL("../bin/sanitize-cli.mjs", import.meta.url));
 const run = (args, input) =>
   execFileSync("node", [CLI, ...args], { input, encoding: "utf8" });
 
-/** The wire response shape, for comparing CLI output against the sanitize oracle. */
-// The identity, deliberately. This used to re-project `sanitize()`'s result
-// down to a hand-written four-field list, which meant these "mirrors
-// sanitize()" assertions could not see a field the CLI failed to forward — and
-// one had already gone missing (`splices`). Comparing the whole object is what
-// makes the oracle a real oracle. Kept as a named function so the intent is
-// legible at the call sites rather than looking like a forgotten refactor.
-const envelope = (result) => result;
-
 // Inputs spanning every layer: a Cf char (Layer 1), clean passthrough, a hidden
 // element + an exfil-shaped URL (Layers 2/3, html mode). Each carries the html
 // flag it needs so the oracle comparison covers both code paths.
@@ -93,7 +84,7 @@ describe("CLI: one-shot mode mirrors sanitize()", () => {
     it(name, async () => {
       const expected = await sanitize(text, { html });
       const got = JSON.parse(run([], JSON.stringify({ text, html })));
-      assert.deepEqual(got, envelope(expected));
+      assert.deepEqual(got, expected);
     });
   }
 });
@@ -106,10 +97,7 @@ describe("CLI: worker mode", () => {
     const lines = run(["--worker"], `${input}\n`).trim().split("\n");
     assert.equal(lines.length, CASES.length);
     for (const [i, { text, html }] of CASES.entries()) {
-      assert.deepEqual(
-        JSON.parse(lines[i]),
-        envelope(await sanitize(text, { html })),
-      );
+      assert.deepEqual(JSON.parse(lines[i]), await sanitize(text, { html }));
     }
   });
 
@@ -129,7 +117,7 @@ describe("CLI: worker mode", () => {
     const text = "line1\nline2​";
     const out = run(["--worker"], `${JSON.stringify({ text })}\n`).trim();
     assert.equal(out.split("\n").length, 1);
-    assert.deepEqual(JSON.parse(out), envelope(await sanitize(text)));
+    assert.deepEqual(JSON.parse(out), await sanitize(text));
   });
 
   it("emits exactly one error line for a blank line, keeping framing", () => {
@@ -273,7 +261,7 @@ describe("CLI: transport faithfulness (fuzz)", () => {
     await fc.assert(
       fc.asyncProperty(fuzzText, fc.boolean(), async (text, html) => {
         const got = JSON.parse(run([], JSON.stringify({ text, html })));
-        assert.deepEqual(got, envelope(await sanitize(text, { html })));
+        assert.deepEqual(got, await sanitize(text, { html }));
       }),
       fcRunOptions({ numRuns: 60 }),
     );
@@ -293,10 +281,7 @@ describe("CLI: transport faithfulness (fuzz)", () => {
           const lines = run(["--worker"], `${input}\n`).trim().split("\n");
           assert.equal(lines.length, texts.length);
           for (const [i, text] of texts.entries()) {
-            assert.deepEqual(
-              JSON.parse(lines[i]),
-              envelope(await sanitize(text)),
-            );
+            assert.deepEqual(JSON.parse(lines[i]), await sanitize(text));
           }
         },
       ),
@@ -308,7 +293,7 @@ describe("CLI: transport faithfulness (fuzz)", () => {
 describe("CLI: large input", () => {
   it("transports a payload larger than the OS pipe buffer in both modes", async () => {
     const text = `${"A".repeat(200_000)}\u200b${"B".repeat(200_000)}`;
-    const expected = envelope(await sanitize(text));
+    const expected = await sanitize(text);
     assert.deepEqual(JSON.parse(run([], JSON.stringify({ text }))), expected);
     const out = run(["--worker"], `${JSON.stringify({ text })}\n`).trim();
     assert.equal(out.split("\n").length, 1);

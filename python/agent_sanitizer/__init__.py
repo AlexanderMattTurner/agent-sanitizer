@@ -112,7 +112,7 @@ class SanitizeResult:
     #: constructs this shape.
     notes: list[str] = field(default_factory=list)
     #: Layer 2's spliced ranges. Defaulted for the same reason as ``notes``.
-    splices: list = field(default_factory=list)
+    splices: list[dict] = field(default_factory=list)
 
     @classmethod
     def from_response(cls, resp: dict) -> "SanitizeResult":

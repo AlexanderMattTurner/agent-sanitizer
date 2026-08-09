@@ -39,23 +39,41 @@ const BLOCK_AXIS_ADDITIVE = [
   "padding",
   "padding-top",
   "padding-bottom",
+  "padding-block",
+  "padding-block-start",
+  "padding-block-end",
   "border",
   "border-width",
   "border-top",
   "border-bottom",
   "border-top-width",
   "border-bottom-width",
+  "border-block",
+  "border-block-width",
+  "border-block-start",
+  "border-block-end",
+  "border-block-start-width",
+  "border-block-end-width",
 ];
 const INLINE_AXIS_ADDITIVE = [
   "padding",
   "padding-left",
   "padding-right",
+  "padding-inline",
+  "padding-inline-start",
+  "padding-inline-end",
   "border",
   "border-width",
   "border-left",
   "border-right",
   "border-left-width",
   "border-right-width",
+  "border-inline",
+  "border-inline-width",
+  "border-inline-start",
+  "border-inline-end",
+  "border-inline-start-width",
+  "border-inline-end-width",
 ];
 
 const AXIS_OF = {
@@ -98,6 +116,24 @@ describe("zero-dimension hiding respects the border box", () => {
       true,
     );
     assert.equal(isHiddenStyle("width:0;padding-left:0;overflow:hidden"), true);
+    // A hex color parses as a `Hash`, not an `Identifier`. Pinned separately
+    // from the `red` case above so the two spellings cannot both rest on the
+    // identifier branch — a hex color is never a length, and treating it as
+    // unresolvable would silently give up the hide.
+    assert.equal(
+      isHiddenStyle("height:0;border:0 solid #ccc;overflow:hidden"),
+      true,
+    );
+    assert.equal(
+      isHiddenStyle("height:0;border:0 solid #cccccc;overflow:hidden"),
+      true,
+    );
+  });
+
+  it("an additive property declared with an empty value fails OPEN", () => {
+    // A declaration the parser hands back with no value tokens is not evidence
+    // of zero extent — it is evidence of nothing, so it must read as visible.
+    assert.equal(isHiddenStyle("height:0;padding-top:;overflow:hidden"), false);
   });
 
   it("a border shorthand with no explicit width computes to `medium`", () => {
@@ -132,6 +168,10 @@ describe("zero-dimension hiding respects the border box", () => {
       "max-height:0;padding-top:40px;overflow:hidden",
       "width:0;padding-left:2em;overflow:hidden",
       "height:0;border-bottom:1px solid #ccc;overflow:hidden",
+      // The logical spelling of the same aspect-ratio idiom.
+      "height:0;padding-block-end:56.25%;overflow:hidden",
+      "width:0;padding-inline-start:2em;overflow:hidden",
+      "height:0;border-block-end:1px solid #ccc;overflow:hidden",
     ];
     for (const style of legitimate)
       assert.equal(

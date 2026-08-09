@@ -887,28 +887,66 @@ function hasImageLayer(nodeOf) {
 // because a shorthand this checker cannot resolve must fail OPEN rather than be
 // ignored — ignoring it is what let `height:0; padding-bottom:56.25%` read as
 // invisible.
+// Logical spellings are listed beside their physical twins: `padding-block-end`
+// IS the aspect-ratio idiom in a logical stylesheet, so omitting it would leave
+// the exact false positive this checker exists to close.
 const BLOCK_AXIS_EXTENT_PROPS = [
   "padding",
   "padding-top",
   "padding-bottom",
+  "padding-block",
+  "padding-block-start",
+  "padding-block-end",
   "border",
   "border-width",
   "border-top",
   "border-bottom",
   "border-top-width",
   "border-bottom-width",
+  "border-block",
+  "border-block-width",
+  "border-block-start",
+  "border-block-end",
+  "border-block-start-width",
+  "border-block-end-width",
 ];
 const INLINE_AXIS_EXTENT_PROPS = [
   "padding",
   "padding-left",
   "padding-right",
+  "padding-inline",
+  "padding-inline-start",
+  "padding-inline-end",
   "border",
   "border-width",
   "border-left",
   "border-right",
   "border-left-width",
   "border-right-width",
+  "border-inline",
+  "border-inline-width",
+  "border-inline-start",
+  "border-inline-end",
+  "border-inline-start-width",
+  "border-inline-end-width",
 ];
+
+// The shorthands that can set a width alongside a style and a color. An omitted
+// width computes to `medium`, so these need an explicit numeric width before
+// the declaration can be called zero-extent.
+const BORDER_SHORTHANDS = new Set([
+  "border",
+  "border-top",
+  "border-bottom",
+  "border-left",
+  "border-right",
+  "border-block",
+  "border-inline",
+  "border-block-start",
+  "border-block-end",
+  "border-inline-start",
+  "border-inline-end",
+]);
 
 // `border-width`'s keyword values. They are LENGTHS, so a border shorthand that
 // names one (or names none at all, defaulting to `medium`) has real extent.
@@ -928,12 +966,7 @@ const BORDER_WIDTH_KEYWORDS = new Set(["thin", "medium", "thick"]);
 function contributesNoExtent(prop, node) {
   const tokens = valueTokens(node);
   if (tokens.length === 0) return false;
-  const isBorderShorthand =
-    prop === "border" ||
-    prop === "border-top" ||
-    prop === "border-bottom" ||
-    prop === "border-left" ||
-    prop === "border-right";
+  const isBorderShorthand = BORDER_SHORTHANDS.has(prop);
   let sawNumeric = false;
   for (const token of tokens) {
     if (
@@ -945,6 +978,9 @@ function contributesNoExtent(prop, node) {
       sawNumeric = true;
       continue;
     }
+    // A hex color is a `Hash` node, never a length — accepting it keeps
+    // `border:0 solid #ccc` resolvable without weakening the fail-open below.
+    if (token.type === "Hash") continue;
     // A style/color identifier (`solid`, `red`) adds no length, but a
     // width keyword does — and anything else (a function node, `var()`) is
     // unresolvable and must fail open.

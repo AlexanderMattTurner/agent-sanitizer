@@ -18,9 +18,15 @@ import agent_sanitizer.secrets.engine as E
 
 # One canonical benign `field = value` per gate. Keyed by gate function name so
 # the partition assertion below can prove the cross product covers every gate
-# rather than whichever ones someone remembered — an SSOT contract test over
-# the live gate tuples (CLAUDE.md: "SSOT contract tests must change in the same
-# commit as their data").
+# rather than whichever ones someone remembered.
+#
+# This is a DRIFT GUARD, not an SSOT contract test, and the distinction matters:
+# nothing derives this table from the gate tuples, because a gate function
+# cannot yield a canonical benign value for itself — the value has to be
+# hand-chosen. So the table is a genuine second copy of the gate list, and the
+# partition assertion is what keeps the two from drifting apart. The honest
+# framing is "a second list exists and is guarded", not "there is one source of
+# truth here".
 CASES: dict[str, tuple[str, str]] = {
     "_is_placeholder_value": ("api_key", "YOUR_API_KEY_GOES_HERE"),
     "_is_code_env_reference": ("token", "process.env.GH_TOKEN"),
