@@ -1,6 +1,15 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
+import {
+  copyFileSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  writeFileSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -122,4 +131,71 @@ test("a credential configured twice is only paid for once", () => {
 
 test("no credential configured is an empty ladder, not an error", () => {
   assert.deepEqual(ladder({}), []);
+});
+
+// The resolver entrypoint's own admission check. It used to demand rung 1 by
+// name, so a repo that had rotated CLAUDE_CODE_OAUTH_TOKEN out and provisioned
+// only the fallbacks failed EVERY conflict resolution before reaching the
+// model — reported downstream as "no execution log", which names the wrong
+// cause. These run the real script in a sandbox whose install and fan-out are
+// stubbed, so what is under test is the admission decision alone.
+const RESOLVE_ENTRYPOINT = join(HERE, "..", "claude-conflict-resolve.sh");
+
+function runResolver(env) {
+  const sandbox = mkdtempSync(join(tmpdir(), "conflict-resolve-"));
+  mkdirSync(join(sandbox, "lib"));
+  mkdirSync(join(sandbox, "auto-resolve"));
+  copyFileSync(RESOLVE_ENTRYPOINT, join(sandbox, "claude-conflict-resolve.sh"));
+  copyFileSync(LADDER, join(sandbox, "lib", "claude-oauth-ladder.bash"));
+  // Stubs: the CLI install is a network op, and the fan-out is the paid model
+  // call. Both record that they ran so a test can assert the script got past
+  // the guard rather than merely exiting 0.
+  writeFileSync(
+    join(sandbox, "install-claude-cli.sh"),
+    `#!/usr/bin/env bash\ntouch "${join(sandbox, "installed")}"\n`,
+  );
+  writeFileSync(
+    join(sandbox, "auto-resolve", "fanout.sh"),
+    `#!/usr/bin/env bash
+mkdir -p "$FANOUT_DIR"
+printf '%s' "$CLAUDE_CODE_OAUTH_TOKEN" >>"${join(sandbox, "rungs-tried")}"
+printf '{"is_error":false}' >"$FANOUT_DIR/execution.json"
+`,
+  );
+  const res = spawnSync("bash", [join(sandbox, "claude-conflict-resolve.sh")], {
+    encoding: "utf8",
+    cwd: sandbox,
+    env: {
+      PATH: process.env.PATH ?? "",
+      FANOUT_DIR: join(sandbox, "fanout"),
+      ...env,
+    },
+  });
+  return {
+    status: res.status,
+    stderr: res.stderr,
+    installed: existsSync(join(sandbox, "installed")),
+    rungsTried: existsSync(join(sandbox, "rungs-tried"))
+      ? readFileSync(join(sandbox, "rungs-tried"), "utf8")
+      : "",
+  };
+}
+
+test("the resolver runs on a fallback rung when rung 1 is unset", () => {
+  const res = runResolver({ CLAUDE_CODE_OAUTH_TOKEN_FALLBACK_3: "fb3" });
+  assert.equal(res.status, 0, res.stderr);
+  assert.ok(res.installed, "the CLI install must be reached");
+  assert.equal(res.rungsTried, "fb3", "the fallback rung must be handed down");
+});
+
+test("the resolver refuses only when the WHOLE ladder is empty, and says which vars to set", () => {
+  const res = runResolver({});
+  assert.equal(res.status, 1);
+  assert.match(res.stderr, /no Claude credential configured/);
+  assert.match(res.stderr, /CLAUDE_CODE_OAUTH_TOKEN_FALLBACK_6/);
+  assert.equal(
+    res.installed,
+    false,
+    "the refusal must land before the CLI install is paid for",
+  );
 });

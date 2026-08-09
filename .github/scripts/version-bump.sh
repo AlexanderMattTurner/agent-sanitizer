@@ -479,8 +479,10 @@ fi
 # onto it, then retry. The release-docs commit only touches CHANGELOG.md and the
 # plugin manifest's `version`; concurrent merges practically never hand-edit the
 # `## Unreleased` block or that field, so the replay applies cleanly. A merge
-# that DOES hand-edit either (correcting a drifted manifest version, say)
-# conflicts here and aborts loudly rather than force-pushing over that commit.
+# that DOES hand-edit the `## Unreleased` block conflicts here and aborts
+# loudly rather than force-pushing over that commit; a hand-edit to the
+# manifest's `version` alone is re-stamped instead, but only forward — see
+# restamp_manifest_conflict below.
 # A transient network failure degrades to the same
 # fetch-then-retry path (the fetch also fails, we back off and retry the push).
 # $1: branch, $2: max attempts, $3: initial backoff seconds (doubles each retry).
@@ -489,6 +491,52 @@ fi
 # invoking job (auto-version.yaml) checks out with `fetch-depth: 0`, which is the
 # invariant the externalized-marker guard exists to protect — a full history is
 # present, so replaying the release-docs commit onto the advanced tip is sound.
+# The one rebase conflict with a deterministic answer: the plugin manifest's
+# `version`. Our replayed commit stamps it to the version npm just published,
+# a concurrent change to that same line is expected to be an OLDER release's
+# stamp (auto-version is the only writer, and it only ever moves the version
+# forward), so the published version wins — and the resolver CHECKS that
+# ordering rather than trusting it. That is not a preference — refusing here
+# stranded 2.26.1 on npm with no tag and a manifest still reading 2.26.0, which
+# is the exact drift the stamping step exists to prevent.
+#
+# Deliberately narrow. It resolves ONLY when the manifest is the sole conflicted
+# path, and it resolves by taking the UPSTREAM file (`--ours` is the rebase
+# base) and re-running the stamper over it, so a concurrent edit to any other
+# field of that manifest survives and only `version` is overwritten. Any other
+# conflicted path is a real disagreement and still aborts.
+#
+# Returns non-zero without touching the rebase when it does not apply, so the
+# caller's abort-and-fail path runs unchanged.
+restamp_manifest_conflict() {
+  local conflicted upstream_version
+  conflicted="$(git diff --name-only --diff-filter=U)"
+  [[ "$conflicted" == "$PLUGIN_MANIFEST" ]] || return 1
+
+  git checkout --ours -- "$PLUGIN_MANIFEST" || return 1
+  # Verify the "the published version wins" premise instead of asserting it. If
+  # the upstream manifest is AHEAD of what we just published, the concurrent
+  # write is not an older release's stamp, and re-stamping would move the
+  # manifest BACKWARDS — the same drift this function exists to prevent, only
+  # silent. Refuse and let the caller abort loudly. An unreadable or empty
+  # version is equally unresolvable: refuse rather than guess.
+  upstream_version="$(node -p \
+    "JSON.parse(require('fs').readFileSync(process.argv[1], 'utf8')).version ?? ''" \
+    "$PLUGIN_MANIFEST")" || return 1
+  if [[ -z "$upstream_version" ]]; then
+    log "Refusing to re-stamp $PLUGIN_MANIFEST: it carries no readable version upstream."
+    return 1
+  fi
+  if [[ "$(max_version "$upstream_version" "$NEW_VERSION")" != "$NEW_VERSION" ]]; then
+    log "Refusing to re-stamp $PLUGIN_MANIFEST: it reads $upstream_version upstream, ahead of the $NEW_VERSION just published."
+    return 1
+  fi
+  NEW_VERSION="$NEW_VERSION" node "$SCRIPT_DIR/set-plugin-version.mjs" || return 1
+  git add -- "$PLUGIN_MANIFEST" || return 1
+  GIT_EDITOR=true git rebase --continue || return 1
+  log "Re-stamped $PLUGIN_MANIFEST to $NEW_VERSION over a concurrent release's version during the rebase."
+}
+
 push_with_rebase() {
   local branch="$1" max="$2" delay="$3" attempt=1
   while [[ "$attempt" -le "$max" ]]; do
@@ -505,11 +553,13 @@ push_with_rebase() {
     # working-tree edit before the replay and restores it after — the concurrent
     # commit never touches package.json, so the restore can't conflict.
     elif ! git rebase --autostash "origin/$branch"; then
-      if ! git rebase --abort >/dev/null 2>&1; then
-        log "Warning: 'git rebase --abort' failed during conflict cleanup; the working tree may need inspection."
+      if ! restamp_manifest_conflict; then
+        if ! git rebase --abort >/dev/null 2>&1; then
+          log "Warning: 'git rebase --abort' failed during conflict cleanup; the working tree may need inspection."
+        fi
+        log "Error: release-docs commit conflicts with a concurrent change to $branch; refusing to force-push."
+        return 1
       fi
-      log "Error: release-docs commit conflicts with a concurrent change to $branch; refusing to force-push."
-      return 1
     fi
     sleep "$delay"
     delay=$((delay * 2))
