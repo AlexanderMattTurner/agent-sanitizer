@@ -206,7 +206,7 @@ export function cliSources(argv, repoRoot) {
   const [scope, ...rest] = argv;
   if (rest.length > 0 || (scope !== undefined && scope !== "--mutated")) {
     throw new Error(
-      `shipped-sources: unrecognised arguments ${argv.join(" ")}. Pass no ` +
+      `shipped-sources: unrecognized arguments ${argv.join(" ")}. Pass no ` +
         `argument for the shipped sources, or --mutated for the full ` +
         `mutation scope.`,
     );

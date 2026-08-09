@@ -168,19 +168,23 @@ describe("the dry-run oracle's scope", () => {
   it("refuses a scope it does not know instead of printing a narrower one", () => {
     // Falling back to the shipped list would gate LESS than the caller asked
     // for, silently: the failure this whole job exists to catch.
-    assert.throws(() => cli(["--everything"]), /unrecognised arguments/u);
+    assert.throws(() => cli(["--everything"]), /unrecognized arguments/u);
   });
 
   it("asks for the scope the shards mutate", () => {
     // A wiring pin: the oracle runs the suite once over everything the matrix
     // instruments, and it is the shell script that chooses which. Instrumenting
     // a subset is invisible — the job passes and a shard then dies on a dry-run
-    // failure the oracle was supposed to name first, which is how the
-    // `.hooks/lib/` half went unwatched.
+    // failure the oracle was supposed to name first. Anchored on the whole
+    // command line, not on the flag: the script's own comments name `--mutated`
+    // too, and a mention must not read as the invocation.
     const script = readFileSync(
       join(repoRoot, ".github", "scripts", "run-mutation-dry-run.sh"),
       "utf8",
     );
-    assert.match(script, /shipped-sources\.mjs --mutated\)/u);
+    assert.match(
+      script,
+      /^done < <\(node scripts\/shipped-sources\.mjs --mutated\)$/mu,
+    );
   });
 });
