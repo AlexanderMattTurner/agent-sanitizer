@@ -23,6 +23,16 @@ The non-negotiable rule: **every finding is false until the code proves it true.
 
 ## Workflow
 
+### 0. Plan the partition before spawning anything (`explore-plan` gate)
+
+The surfaces you hand the agents are load-bearing: a gap means a whole area goes unaudited, a
+double-claim wastes two agents on the same files, and either defect multiplies across the fan-out.
+Run the `explore-plan` loop first — explore the tree (`git ls-files`, open PRs, the project's own
+invariants), write the partition and doctrine lenses down, self-critique it as a hostile reviewer,
+and fix what that finds. For a repo large enough to need more than ~3 agents, have a read-only
+`Plan` agent attack the partition too: it catches unowned dirs, generated bundles an agent would
+burn its context reading, and surfaces several times the median size.
+
 ### 1. Fan out over disjoint surfaces
 
 Launch 2–4 **read-only** subagents (`Explore`, or `general-purpose` for deeper traces) in a single
@@ -98,6 +108,8 @@ positives and why.
 
 ## Anti-patterns
 
+- **Fanning out before the partition is reviewed.** The reads an agent wastes on someone else's
+  surface — or the area nobody was given — are unrecoverable. Plan it, critique it, then spawn.
 - **Trusting a subagent's "CRITICAL" label.** It is a hypothesis, not a result. Read the code.
 - **Padding to a number.** If only five issues are real, plan five. The over-report is the finding.
 - **One giant PR.** Disjoint PRs parallelize and review cleanly; a mega-PR serializes everything.

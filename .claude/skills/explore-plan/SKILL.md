@@ -5,7 +5,9 @@ description: >
   Drives the Explore -> Plan -> Critique -> Review -> Verify discipline for non-trivial, multi-file work before
   any code is written. Activate when the user asks to "plan this", "scope this out", "figure out how
   to do X", "explore the codebase first", or is starting a change that touches several files or an
-  unfamiliar area. Enforces a self-critiqued written plan and real verification instead of trusting a success claim.
+  unfamiliar area. Also activate before launching any multi-agent fan-out — an audit, a parallel PR
+  run, a subagent sweep — where the partition handed to the agents is itself the load-bearing
+  decision. Enforces a self-critiqued written plan and real verification instead of trusting a success claim.
 ---
 
 # Explore / Plan Skill
