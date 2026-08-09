@@ -8,14 +8,17 @@ Tests must import ``REPO_ROOT`` from ``tests/_helpers.py`` (which asks git via
 ``rev-parse --show-toplevel``) instead. A single ``.parent`` (anchoring a
 subprocess cwd at the file's own directory) is fine and not flagged.
 
-Also flags a module-level subprocess call whose argv contains both
+Also flags an import-time subprocess call whose argv contains both
 ``rev-parse`` and ``--show-toplevel`` — a re-inlined copy of the
 ``tests/_helpers.py`` block (the copies historically also dropped its ``cwd=``
 argument, a live divergence). ``tests/_helpers.py`` itself is the one allowed
-home for that call and is exempt. Calls inside function/class bodies are not
-flagged: only the module-level constant duplicates the helper.
+home for that call and is exempt. "Import time" means the module body plus any
+module-level function the body actually CALLS — the helper's own block lives in
+a ``_repo_root()`` behind a ``REPO_ROOT = _repo_root()`` constant, and a copy of
+that shape is still a copy. A function merely defined (a test body shelling out
+to git to exercise behavior) is not followed and not flagged.
 
-Also flags a module-level ``sys.path`` mutation — the second half of the same
+Also flags an import-time ``sys.path`` mutation — the second half of the same
 bootstrap. Tests must call ``ensure_python_pkg_on_path()`` from
 ``tests/_helpers.py`` rather than hand-inserting ``python/``: the hand-copied
 inserts drift on ordering and on whether they resolve the root via git, and one
@@ -108,19 +111,50 @@ def _calls_show_toplevel(node: ast.AST) -> bool:
     )
 
 
-def rev_parse_violations(source: str) -> list[int]:
-    """Line numbers of module-level ``rev-parse --show-toplevel`` calls.
+def _import_time_nodes(source: str) -> list[ast.AST]:
+    """Every AST node that runs at IMPORT time: statements directly in the
+    module body, plus the bodies of module-level functions those statements
+    actually call (transitively).
 
-    Only statements directly in the module body are scanned (a call inside a
-    function/class exercises git behavior; only the module-level constant is a
-    re-inlined copy of the helper).
+    Following the calls is what keeps the lint on the shape the helper itself
+    now uses — the git call lives in ``_repo_root()`` and the module body is
+    just ``REPO_ROOT = _repo_root()``. A copy of that is still a re-inlined
+    copy. Functions that are merely DEFINED are not followed: a test body
+    shelling out to git is exercising behavior, not duplicating the bootstrap,
+    and flagging it would be a false positive.
     """
-    return sorted(
-        node.lineno
-        for stmt in ast.parse(source).body
+    tree = ast.parse(source)
+    defs = {
+        stmt.name: stmt
+        for stmt in tree.body
+        if isinstance(stmt, (ast.FunctionDef, ast.AsyncFunctionDef))
+    }
+    roots = [
+        stmt
+        for stmt in tree.body
         if not isinstance(stmt, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))
-        for node in ast.walk(stmt)
-        if _calls_show_toplevel(node)
+    ]
+    nodes: list[ast.AST] = []
+    seen: set[str] = set()
+    while roots:
+        pending = []
+        for root in roots:
+            for node in ast.walk(root):
+                nodes.append(node)
+                if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Name)):
+                    continue
+                called = node.func.id
+                if called in defs and called not in seen:
+                    seen.add(called)
+                    pending.append(defs[called])
+        roots = pending
+    return nodes
+
+
+def rev_parse_violations(source: str) -> list[int]:
+    """Line numbers of import-time ``rev-parse --show-toplevel`` calls."""
+    return sorted(
+        node.lineno for node in _import_time_nodes(source) if _calls_show_toplevel(node)
     )
 
 
@@ -144,13 +178,9 @@ def _mutates_sys_path(node: ast.AST) -> bool:
 
 
 def sys_path_violations(source: str) -> list[int]:
-    """Line numbers of module-level ``sys.path`` mutations in *source*."""
+    """Line numbers of import-time ``sys.path`` mutations in *source*."""
     return sorted(
-        node.lineno
-        for stmt in ast.parse(source).body
-        if not isinstance(stmt, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))
-        for node in ast.walk(stmt)
-        if _mutates_sys_path(node)
+        node.lineno for node in _import_time_nodes(source) if _mutates_sys_path(node)
     )
 
 
