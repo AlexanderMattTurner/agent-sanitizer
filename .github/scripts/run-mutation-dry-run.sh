@@ -18,15 +18,14 @@
 set -euo pipefail
 
 # The mutate scope is derived, never spelled out here: scripts/shipped-sources.mjs
-# is the same SSOT the coverage floor and the shard list read, so a new module is
-# instrumented by this oracle with no config to remember. `--mutated` is what
-# makes it the shards' scope rather than a subset of it: the matrix mutates the
-# `.hooks/lib/` tooling as well as the shipped surface, and an oracle that
+# prints the same set the shard matrix mutates — the shipped surface plus the
+# `.hooks/lib/` tooling — so a new module is instrumented by this oracle with no
+# config to remember, and no scope for this script to pick. An oracle that
 # instruments less than the matrix cannot see a dry-run failure the matrix will.
 sources=()
 while IFS= read -r line; do
   sources+=("$line")
-done < <(node scripts/shipped-sources.mjs --mutated)
+done < <(node scripts/shipped-sources.mjs)
 
 if [[ ${#sources[@]} -eq 0 ]]; then
   echo "run-mutation-dry-run: shipped-sources.mjs listed no files. The dry run" >&2

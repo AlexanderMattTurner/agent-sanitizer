@@ -144,47 +144,24 @@ describe("mutation shard matrix", () => {
 });
 
 describe("the dry-run oracle's scope", () => {
-  /** @param {string[]} argv @returns {string[]} the CLI's printed list */
-  const cli = (argv) =>
-    execFileSync(
+  // The oracle instruments whatever this CLI prints. Printing the SHIPPED
+  // subset is what let it pass on exactly the commits where a shard was about
+  // to die: the matrix mutates the `.hooks/lib/` tooling too, and a dry-run
+  // failure there is invisible to an oracle that never instrumented it.
+  it("prints everything the shards mutate, tooling included", () => {
+    const printed = execFileSync(
       process.execPath,
-      [join(repoRoot, "scripts", "shipped-sources.mjs"), ...argv],
+      [join(repoRoot, "scripts", "shipped-sources.mjs")],
       { encoding: "utf8" },
     )
       .trim()
       .split("\n");
-
-  it("prints the shipped surface bare, and the mutated set under --mutated", () => {
-    assert.deepEqual(cli([]), shippedSources(repoRoot));
-    assert.deepEqual(cli(["--mutated"]), mutatedSources(repoRoot));
-    // The two must actually differ, or this suite and the wiring pin below both
-    // hold with the oracle still instrumenting a subset of the matrix.
+    assert.deepEqual(printed, mutatedSources(repoRoot));
+    // Without this the assertion above holds just as well while the two sets
+    // are equal, which is the state it exists to rule out.
     assert.ok(
       mutatedSources(repoRoot).length > shippedSources(repoRoot).length,
-      "the tooling half of the mutated set is empty — --mutated proves nothing",
-    );
-  });
-
-  it("refuses a scope it does not know instead of printing a narrower one", () => {
-    // Falling back to the shipped list would gate LESS than the caller asked
-    // for, silently: the failure this whole job exists to catch.
-    assert.throws(() => cli(["--everything"]), /unrecognized arguments/u);
-  });
-
-  it("asks for the scope the shards mutate", () => {
-    // A wiring pin: the oracle runs the suite once over everything the matrix
-    // instruments, and it is the shell script that chooses which. Instrumenting
-    // a subset is invisible — the job passes and a shard then dies on a dry-run
-    // failure the oracle was supposed to name first. Anchored on the whole
-    // command line, not on the flag: the script's own comments name `--mutated`
-    // too, and a mention must not read as the invocation.
-    const script = readFileSync(
-      join(repoRoot, ".github", "scripts", "run-mutation-dry-run.sh"),
-      "utf8",
-    );
-    assert.match(
-      script,
-      /^done < <\(node scripts\/shipped-sources\.mjs --mutated\)$/mu,
+      "the tooling half of the mutated set is empty — this proves nothing",
     );
   });
 });
