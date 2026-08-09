@@ -1,1 +1,1 @@
-Template updates available for: .claude/skills/writing-tests/SKILL.md .github/actions/claude-run/action.yaml .github/scripts/version-bump.sh .github/workflows/template-sync.yaml .github/workflows/claude.yaml .github/workflows/auto-version.yaml
+Template updates available for: .github/scripts/resolve-addressed-threads.sh .github/workflows/hook-lifecycle.yaml
