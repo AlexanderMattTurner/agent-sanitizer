@@ -17,6 +17,7 @@ on:
       - ".github/mutation-shards.json"
       - ".github/workflows/mutation.yaml"
       - ".github/scripts/mutation-changed.sh"
+      - ".github/scripts/run-mutation-dry-run.sh"
       - ".github/scripts/run-mutation-shard.sh"
       - ".github/scripts/aggregate-mutation.mjs"
       - ".github/scripts/expand-shards.mjs"
@@ -79,6 +80,39 @@ jobs:
         # file's current length (see .github/scripts/expand-shards.mjs); the
         # aggregate gate calls the same expander so their shard counts match.
         run: echo "shards=$(node .github/scripts/expand-shards.mjs)" >> "$GITHUB_OUTPUT"
+
+  # The fast oracle for "does the suite survive instrumentation at all?". Stryker
+  # aborts a shard whose initial dry run is red, so ONE test that asserts on the
+  # syntactic form of an instrumented file fails every shard in the matrix — 25
+  # minutes each, all with the same cause. This runs that dry run alone, over the
+  # whole shipped-source set, and reports in a few minutes.
+  #
+  # Deliberately NOT a `needs:` of the mutation matrix. Gating the shards on it
+  # would save the failure path but add its latency to every green run, and the
+  # shards' own dry runs remain the backstop either way.
+  dry-run: # required-check: false  # rolled up by mutation-passed (which needs: dry-run)
+    needs: changes
+    if: needs.changes.outputs.run == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    # Same fixed fast-check seed the shards pin: a property test that rolled a
+    # counterexample here would read as an instrumentation failure it is not.
+    env:
+      FC_REPRODUCIBLE: "1"
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          persist-credentials: false
+
+      - name: Setup base environment
+        uses: ./.github/actions/setup-base-env
+        # The dry run executes the WHOLE suite, including the rehydrate property
+        # test that drives the real Python redactor, so it needs uv + Python.
+        with:
+          setup-python: "true"
+
+      - name: Stryker dry run over every shipped source
+        run: bash .github/scripts/run-mutation-dry-run.sh
 
   # Every SHIPPED .mjs — src/, claude-hooks/ and bin/ alike — is split into
   # disjoint slices (line ranges for the big files, whole files for the rest) so
@@ -186,7 +220,7 @@ jobs:
   # a protected branch never gets stuck on a check that never reports.
   mutation-passed: # required-check: true
     if: always()
-    needs: [changes, mutation, aggregate]
+    needs: [changes, dry-run, mutation, aggregate]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -202,12 +236,14 @@ jobs:
         with:
           run: ${{ needs.changes.outputs.run }}
           decide-result: ${{ needs.changes.result }}
-          # Worst-of the two work jobs. Reporting only `mutation` here would let
-          # a red aggregate (the real threshold gate) ride through green — the
-          # reporter takes one result, so the combining has to happen at the
+          # Worst-of the three work jobs. Reporting only `mutation` here would
+          # let a red aggregate (the real threshold gate) ride through green —
+          # the reporter takes one result, so the combining has to happen at the
           # call site. Passing the failing job's own result (rather than a
           # flattened 'failure') keeps the reporter's cancelled-vs-superseded
-          # adjudication intact.
+          # adjudication intact. dry-run comes first: when it fails the shards
+          # fail with it, and its result is the one that names the cause.
           result: >-
-            ${{ needs.mutation.result != 'success' && needs.mutation.result
+            ${{ needs.dry-run.result != 'success' && needs.dry-run.result
+             || needs.mutation.result != 'success' && needs.mutation.result
              || needs.aggregate.result }}
