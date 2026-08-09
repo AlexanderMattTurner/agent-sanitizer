@@ -36,6 +36,7 @@ jobs:
     permissions:
       contents: read # sparse-checkout the trusted gate script
       pull-requests: read # read the PR's reviews
+      statuses: write # review-gate.sh posts the verdict on the queue head
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
