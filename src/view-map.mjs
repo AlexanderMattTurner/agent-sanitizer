@@ -492,6 +492,41 @@ export function pairDiskSpans(view, deletions) {
 }
 
 /**
+ * Defect in a redactor map relative to the Layer-1-cleaned text it claims to
+ * describe, or null when the map is sound. Two proofs, both required before
+ * any splice may trust the map: every pair's placeholder must actually occupy
+ * `view.text` at its stated offset, and splicing each pair's original back
+ * over its placeholder must reproduce `cleaned` byte-for-byte. The redactor is
+ * an INJECTED engine with a real defect rate, and the offsets it emits anchor
+ * edits onto disk bytes — a map failing either proof would splice at the wrong
+ * position and corrupt the file, so the caller must treat it as unmappable
+ * rather than act on it. Defect messages name placeholders and offsets only,
+ * never an original (secret) byte.
+ * Indexes `view.text` by `pair.start` directly, so it requires the UTF-16
+ * carrier — the same one every splice consumes.
+ * @param {string} cleaned Layer-1-cleaned file text the map was derived from
+ * @param {FileView<"utf16">} view
+ * @returns {string | null}
+ */
+export function viewMapDefect(cleaned, view) {
+  assertFileView(view, "utf16", "viewMapDefect");
+  for (const pair of view.pairs)
+    if (!view.text.startsWith(pair.placeholder, pair.start))
+      return (
+        `the map places placeholder ${JSON.stringify(pair.placeholder)} at view ` +
+        `offset ${pair.start}, but the view text there differs`
+      );
+  const rebuilt = spliceOrdered(
+    view.text,
+    view.pairs.map((pair) => ({ text: pair.placeholder, index: pair.start })),
+    (_match, i) => view.pairs[i].original,
+  ).text;
+  return rebuilt === cleaned
+    ? null
+    : "substituting the mapped secrets back over their placeholders does not reconstruct the file";
+}
+
+/**
  * Substitute the placeholders in a model-authored new_string with the secrets
  * they stand for. Resolution, strictest first: if the new placeholder
  * sequence equals the matched span's, map 1:1 by position; otherwise each
