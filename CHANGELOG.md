@@ -8,6 +8,18 @@ adhere to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+## [2.28.0] - 2026-08-09
+
+### Added
+- Expose `exfilScan` on the facade for direct access to exfiltration scanning functionality.
+
+### Changed
+- HTML sanitization now implies the exfiltration scan unconditionally.
+- Converge the PR-input script onto the unified `exfilScan` interface.
+
+### Fixed
+- Repair the sanitize-pr-input merge resolution and tier exfiltration findings as notes.
+
 ## [2.27.0] - 2026-08-08
 
 ### Changed
