@@ -13,6 +13,7 @@
       "test/mutation-shards.test.mjs",
       "test/shipped-gates.test.mjs"
     ],
+    ".hooks/pre-push": [".hooks/pre-push.test.mjs"],
     ".github/scripts/auto-resolve/bundle.sh": [
       ".github/scripts/auto-resolve/bundle.test.mjs"
     ],
