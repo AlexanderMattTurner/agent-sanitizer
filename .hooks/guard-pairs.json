@@ -1,5 +1,5 @@
 {
-  "$comment": "Guard pairs: source file -> the cheap guard test(s) that cover it. When a listed source is staged, .hooks/run-guard-pairs.mjs runs the paired guard tests and blocks the commit on failure \u2014 so a guard test can never silently break on main because the data it reads changed without it (this bit twice: the release-token guard on auto-version.yaml, and the instructions guard tests). These are GUARDS, not an SSOT: a pair says \"run this check when that file changes\", and naming it otherwise would launder the very smell a drift guard should expose. A guard test is either a `node --test` file (*.test.mjs) or a pytest module (test_*.py); the runner dispatches on the extension, so data whose only contract test is Python is pairable too. Keep every paired test fast (~1s). test/guard-pairs.test.mjs asserts all paths here exist AND, in the other direction, scans every node --test file (plus the repo modules those tests import) for the repo data files they read: each one must appear here, mapped to a test that actually reads it, or in that test's NOT_GUARDED allowlist with a reason. So this map is a checked projection of the tests, not a hand-maintained list that silently misses the next contract test. The scan covers node --test files only, so a Python-only pairing is legitimate but must be added by hand.",
+  "$comment": "Guard pairs: source file -> the cheap guard test(s) that cover it. When a listed source is staged, .hooks/run-guard-pairs.mjs runs the paired guard tests and blocks the commit on failure \u2014 so a guard test can never silently break on main because the data it reads changed without it (this bit twice: the release-token guard on auto-version.yaml, and the instructions guard tests). These are GUARDS, not an SSOT: a pair says \"run this check when that file changes\", and naming it otherwise would launder the very smell a drift guard should expose. A guard test is either a `node --test` file (*.test.mjs) or a pytest module (test_*.py); the runner dispatches on the extension, so data whose only contract test is Python is pairable too. Keep every paired test fast (~1s). test/guard-pairs.test.mjs asserts all paths here exist AND, in the other direction, scans every node --test file (plus the repo modules those tests import) for the repo data files AND the .sh/.py sources they open BY PATH: each one must appear here, mapped to a test that actually reads it, or in that test's NOT_GUARDED / NOT_MIRRORED allowlist with a reason. JS modules stay out of the scan on purpose — a moved .mjs already fails loudly at import resolution — but a shell script or Python module driven through execFileSync gets no such safety net, which is why those are in. So this map is a checked projection of the tests, not a hand-maintained list that silently misses the next contract test. The scan covers node --test files only, so a Python-only pairing is legitimate but must be added by hand.",
   "pairs": {
     ".github/workflows/auto-version.yaml": [
       "scripts/version-bump.test.mjs",
@@ -42,7 +42,11 @@
       ".github/scripts/main-health.test.mjs"
     ],
     ".github/workflows/ci-failure-notify.yaml": [
-      ".github/scripts/main-health.test.mjs"
+      ".github/scripts/main-health.test.mjs",
+      "test/failure-notify-roster.test.mjs"
+    ],
+    ".github/workflows/fuzz-nightly.yaml": [
+      "test/failure-notify-roster.test.mjs"
     ],
     ".github/workflows/template-sync.yaml": [
       ".github/scripts/synced-deps.test.mjs"
@@ -121,6 +125,59 @@
     ".github/scripts/lib/shared-names.json": ["tests/test_shared_names.py"],
     "claude-hooks/scan-invisible-chars.mjs": [
       "test/claude-hooks-scan-coverage.test.mjs"
+    ],
+    "THREAT-MODEL.md": ["test/threat-model-layers.test.mjs"],
+    ".pre-commit-config.yaml": ["test/test-runner-partition.test.mjs"],
+    ".github/scripts/run-script-tests.sh": [
+      "test/test-runner-partition.test.mjs"
+    ],
+    "plugin/scripts/lib/hook-timing.sh": [
+      "test/hook-timing-shell-parity.test.mjs"
+    ],
+    "python/agent_sanitizer/secrets/placeholders.py": [
+      "test/placeholder-guards.test.mjs"
+    ],
+    ".github/scripts/check-claude-execution.sh": [
+      ".github/scripts/check-claude-execution.test.mjs"
+    ],
+    ".github/scripts/check-pack-listing.sh": [
+      ".github/scripts/check-pack-listing.test.mjs"
+    ],
+    ".github/scripts/install-sanitizer.sh": [
+      ".github/scripts/install-sanitizer.test.mjs"
+    ],
+    ".github/scripts/claude-conflict-resolve.sh": [
+      ".github/scripts/auto-resolve/lib.test.mjs"
+    ],
+    ".github/scripts/remerge-diff-report.py": [
+      ".github/scripts/auto-resolve/self-review.test.mjs"
+    ],
+    ".github/scripts/auto-resolve/bundle.sh": [
+      ".github/scripts/auto-resolve/bundle.test.mjs"
+    ],
+    ".github/scripts/auto-resolve/discover.py": [
+      ".github/scripts/auto-resolve/discover.test.mjs"
+    ],
+    ".github/scripts/auto-resolve/fanout.sh": [
+      ".github/scripts/auto-resolve/fanout.test.mjs"
+    ],
+    ".github/scripts/auto-resolve/land.sh": [
+      ".github/scripts/auto-resolve/land.test.mjs"
+    ],
+    ".github/scripts/auto-resolve/lib.sh": [
+      ".github/scripts/auto-resolve/lib.test.mjs"
+    ],
+    ".github/scripts/auto-resolve/mark-attempt.sh": [
+      ".github/scripts/auto-resolve/mark-attempt.test.mjs"
+    ],
+    ".github/scripts/auto-resolve/prepare.sh": [
+      ".github/scripts/auto-resolve/prepare.test.mjs"
+    ],
+    ".github/scripts/auto-resolve/release-attempt.sh": [
+      ".github/scripts/auto-resolve/release-attempt.test.mjs"
+    ],
+    ".github/scripts/auto-resolve/self-review.sh": [
+      ".github/scripts/auto-resolve/self-review.test.mjs"
     ]
   }
 }

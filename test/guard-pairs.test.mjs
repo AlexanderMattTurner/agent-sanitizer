@@ -8,12 +8,13 @@
  *
  * The map is also checked in the OTHER direction, which is what keeps it from
  * rotting: `scanGuardedData()` below parses every `node --test` file (and the
- * repo modules those tests import) and resolves the repo data files they open.
- * Every data file so found must be either registered in `pairs` or listed in
- * NOT_GUARDED with a reason — a partition. Without that the map is a
- * hand-maintained list one new contract test away from its next gap, and a data
- * file whose guard test exists but is unpaired breaks only in full CI, after
- * the commit the hook was supposed to block.
+ * repo modules those tests import) and resolves the repo files they open by
+ * path — data files (DATA_EXTENSIONS) and the `.sh`/`.py` sources a suite
+ * DRIVES (MIRROR_EXTENSIONS). Every one so found must be either registered in
+ * `pairs` or listed in NOT_GUARDED / NOT_MIRRORED with a reason — a partition.
+ * Without that the map is a hand-maintained list one new contract test away
+ * from its next gap, and a file whose guard test exists but is unpaired breaks
+ * only in full CI, after the commit the hook was supposed to block.
  *
  * The resolution below runs on acorn's AST and Node's own module resolver, not
  * on regexes over source text: "validate against the actual tokenizer/parser,
@@ -99,8 +100,23 @@ const NOT_GUARDED = {
   "plugin/requirements.txt": "only reader is the ~55s plugin-bundle test",
 };
 
+/**
+ * Scanned SOURCE mirrors (`.sh`/`.py` opened by path) deliberately kept out of
+ * the pair map, with the reason — the MIRROR_EXTENSIONS counterpart of
+ * NOT_GUARDED, held separate so the two kinds of excuse cannot be confused.
+ *
+ * Empty today: every script a suite drives by path is cheap enough to run at
+ * commit time (the slowest, `.github/scripts/auto-resolve/prepare.test.mjs`, is
+ * ~8s — well inside the tolerance the already-paired ~13s
+ * `scripts/version-bump.test.mjs` sets). It exists so the partition assertion
+ * below has something to tell a contributor to do when one is not.
+ *
+ * @type {Record<string, string>}
+ */
+const NOT_MIRRORED = {};
+
 // Extensions of the files the map is FOR: data a test mirrors or validates.
-// Source modules are excluded on purpose — every test imports the module it
+// JS modules are excluded on purpose — every test imports the module it
 // exercises, so pairing those would run most of the suite on every commit, and
 // a module that moves already fails loudly at import resolution.
 const DATA_EXTENSIONS = new Set([
@@ -116,6 +132,29 @@ const DATA_EXTENSIONS = new Set([
   ".yaml",
   ".yml",
 ]);
+
+/**
+ * Extensions of SOURCE files a test reaches BY PATH rather than by import.
+ *
+ * The "source modules need no pair" rationale above is about import resolution:
+ * a `.mjs` that moves or is renamed takes its own suite down at load time, so
+ * the pair would be redundant. A `.sh` or `.py` driven through `execFileSync`
+ * gets none of that. It is read as a string path, and a test that mirrors its
+ * behaviour (`test/hook-timing-shell-parity.test.mjs` runs the shell port of the
+ * hook timer and byte-compares it against the node one) is exactly the cheap
+ * guard the map exists to schedule — but while the scan was keyed on
+ * DATA_EXTENSIONS alone the pair could not even be proposed, and editing
+ * `plugin/scripts/lib/hook-timing.sh` left the hook exiting 0 having run
+ * nothing while full CI went 25 tests red.
+ *
+ * So these join the partition. They keep a SEPARATE exemption map (NOT_MIRRORED)
+ * from the data one: "no test mirrors this script" and "no test validates this
+ * data file" are different excuses and should not share a list.
+ */
+const MIRROR_EXTENSIONS = new Set([".py", ".sh"]);
+
+/** Everything the scan is responsible for accounting for. */
+const SCANNED_EXTENSIONS = new Set([...DATA_EXTENSIONS, ...MIRROR_EXTENSIONS]);
 const MODULE_EXTENSIONS = new Set([".cjs", ".js", ".mjs"]);
 
 // Node types that open a lexical scope. Shadowing has to be honoured or a
@@ -281,6 +320,58 @@ function resolvePath(node, file, scope) {
 
 const mapPath = (path, fn) => (path === null ? null : fn(path));
 
+/**
+ * The repo-root read helper: `const read = (p) => readFileSync(join(root, p))`.
+ *
+ * A test that defines one names its data as a BARE relative string at every call
+ * site (`read("THREAT-MODEL.md")`), which every other arm of `resolvePath`
+ * correctly declines — a literal is not a path expression. So the file dropped
+ * out of the scan and out of the partition with it, and
+ * `test/threat-model-layers.test.mjs` guarded a doc the hook would never
+ * schedule it for.
+ *
+ * Returns the base the single parameter is joined onto, or null. Deliberately
+ * narrow: exactly one parameter, and somewhere in the body a two-argument
+ * `join`/`resolve` whose SECOND argument is that parameter and whose first
+ * resolves to a repo path. A helper that decorates its argument, or joins more
+ * than the one segment, is not recognised and its reads stay unresolved —
+ * precision over recall, as everywhere else in this resolver.
+ *
+ * @param {object} fn arrow/function node
+ * @param {string} file repo-relative path of the module it appears in
+ * @param {object} scope scope the helper is DEFINED in (its parameter is not in it)
+ * @returns {string|null}
+ */
+function rootHelperBase(fn, file, scope) {
+  if (fn.params?.length !== 1 || fn.params[0].type !== "Identifier")
+    return null;
+  const parameter = fn.params[0].name;
+  const search = (node) => {
+    if (node.type === "CallExpression") {
+      const bare = calleeName(node.callee)?.replace(/^path\./, "");
+      const [first, second] = node.arguments;
+      if (
+        (bare === "join" || bare === "resolve") &&
+        node.arguments.length === 2 &&
+        second.type === "Identifier" &&
+        second.name === parameter
+      ) {
+        const base = resolvePath(first, file, scope);
+        if (base !== null) return base;
+      }
+    }
+    for (const value of Object.values(node)) {
+      for (const child of Array.isArray(value) ? value : [value]) {
+        if (!child || typeof child.type !== "string") continue;
+        const found = search(child);
+        if (found !== null) return found;
+      }
+    }
+    return null;
+  };
+  return search(fn.body);
+}
+
 /** Every identifier a binding pattern introduces. */
 function patternNames(node, out = []) {
   if (node.type === "Identifier") out.push(node.name);
@@ -328,9 +419,19 @@ function visit(node, scope, ctx) {
       if (path !== null) ctx.refs.add(path);
       visit(node.init, scope, ctx);
     }
+    // A rebinding always writes all three maps, null included: a name that used
+    // to hold a helper and now holds something else must stop resolving, not
+    // fall through to the stale outer entry.
+    const helper =
+      single &&
+      (node.init.type === "ArrowFunctionExpression" ||
+        node.init.type === "FunctionExpression")
+        ? rootHelperBase(node.init, ctx.file, scope)
+        : null;
     for (const name of names) {
       scope.vars.set(name, path);
       scope.strings.set(name, single ? staticString(node.init, scope) : null);
+      scope.helpers.set(name, helper);
     }
     return;
   }
@@ -339,17 +440,31 @@ function visit(node, scope, ctx) {
       const path = resolvePath(argument, ctx.file, scope);
       if (path !== null) ctx.refs.add(path);
     }
-  if (node.type === "FunctionDeclaration" && node.id)
+  if (node.type === "CallExpression" && node.arguments.length === 1) {
+    const base = lookup(scope, "helpers", calleeName(node.callee) ?? "");
+    const literal = staticString(node.arguments[0], scope);
+    if (base !== null && literal !== null)
+      ctx.refs.add(normalize(join(base, literal)));
+  }
+  if (node.type === "FunctionDeclaration" && node.id) {
     scope.vars.set(node.id.name, null);
+    scope.helpers.set(node.id.name, rootHelperBase(node, ctx.file, scope));
+  }
 
   const inner = SCOPE_NODES.has(node.type)
-    ? { vars: new Map(), strings: new Map(), parent: scope }
+    ? {
+        vars: new Map(),
+        strings: new Map(),
+        helpers: new Map(),
+        parent: scope,
+      }
     : scope;
   if (node.params)
     for (const param of node.params)
       for (const name of patternNames(param)) {
         inner.vars.set(name, null);
         inner.strings.set(name, null);
+        inner.helpers.set(name, null);
       }
 
   for (const value of Object.values(node)) {
@@ -369,6 +484,7 @@ function analyzeModule(file) {
   const result = {
     vars: new Map(),
     strings: new Map(),
+    helpers: new Map(),
     refs: new Set(),
     deps: [],
   };
@@ -380,7 +496,12 @@ function analyzeModule(file) {
     allowHashBang: true,
     allowReturnOutsideFunction: true,
   });
-  const scope = { vars: result.vars, strings: result.strings, parent: null };
+  const scope = {
+    vars: result.vars,
+    strings: result.strings,
+    helpers: result.helpers,
+    parent: null,
+  };
 
   // Imports first, so a binding is resolved wherever the body uses it.
   for (const node of ast.body) {
@@ -418,7 +539,8 @@ function scanGuardedData() {
       seen.add(file);
       const { refs, deps } = analyzeModule(file);
       for (const path of refs) {
-        if (!DATA_EXTENSIONS.has(extname(path)) || !tracked.has(path)) continue;
+        if (!SCANNED_EXTENSIONS.has(extname(path)) || !tracked.has(path))
+          continue;
         if (!readers.has(path)) readers.set(path, new Set());
         readers.get(path).add(test);
       }
@@ -435,7 +557,7 @@ const scanned = scanGuardedData();
 // floor: a path that drops out of the scan drops out of the partition and
 // direction assertions with it, so a resolver regression would quietly narrow
 // all of them at once while staying green.
-const RESOLVED_PATH_COUNT = 31;
+const RESOLVED_PATH_COUNT = 51;
 
 describe("SSOT guard-pair map", () => {
   it("is non-empty and every mapped path exists in the repo", () => {
@@ -555,20 +677,59 @@ describe("guarded-data scan (the map is a checked projection of the tests)", () 
     }
   });
 
-  it("accounts for every scanned data file: pairs and NOT_GUARDED partition it", () => {
+  it("reaches the sources a test drives BY PATH, not only the data it parses", () => {
+    // Non-vacuity for MIRROR_EXTENSIONS and for the repo-root-helper arm of
+    // `resolvePath`. Both were added because a real edit slipped the hook:
+    // touching hook-timing.sh ran no guard while full CI went 25 tests red, and
+    // THREAT-MODEL.md is named only as a bare string handed to a one-argument
+    // `read()` helper, which every other arm correctly declines to resolve.
+    for (const [path, reader] of [
+      [
+        "plugin/scripts/lib/hook-timing.sh",
+        "test/hook-timing-shell-parity.test.mjs",
+      ],
+      [
+        ".github/scripts/auto-resolve/discover.py",
+        ".github/scripts/auto-resolve/discover.test.mjs",
+      ],
+      ["THREAT-MODEL.md", "test/threat-model-layers.test.mjs"],
+    ]) {
+      assert.ok(scanned.has(path), `scan no longer finds ${path}`);
+      assert.ok(
+        scanned.get(path).has(reader),
+        `scan no longer attributes ${path} to ${reader}`,
+      );
+    }
+    // Every mirror extension must still contribute something: a set that
+    // silently stopped matching one of them would narrow the partition below
+    // without changing which named anchors above pass.
+    for (const extension of MIRROR_EXTENSIONS)
+      assert.ok(
+        [...scanned.keys()].some((path) => path.endsWith(extension)),
+        `no ${extension} source is reached any more — MIRROR_EXTENSIONS is decorative`,
+      );
+  });
+
+  it("accounts for every scanned file: pairs, NOT_GUARDED and NOT_MIRRORED partition it", () => {
+    const excused = (path) =>
+      path in pairs || path in NOT_GUARDED || path in NOT_MIRRORED;
     const unaccounted = [...scanned.keys()]
-      .filter((path) => !(path in pairs) && !(path in NOT_GUARDED))
+      .filter((path) => !excused(path))
       .map((path) => `${path} (read by ${[...scanned.get(path)].join(", ")})`);
     assert.deepEqual(
       unaccounted,
       [],
-      "a test reads these data files but nothing pairs them: add each to .hooks/guard-pairs.json (mapped to the test that reads it) or to NOT_GUARDED with a reason",
+      "a test reads these files but nothing pairs them: add each to .hooks/guard-pairs.json (mapped to the test that reads it), or to NOT_GUARDED (data) / NOT_MIRRORED (a .sh/.py source) with a reason",
     );
-    assert.deepEqual(
-      Object.keys(NOT_GUARDED).filter((path) => path in pairs),
-      [],
-      "paths are both paired and NOT_GUARDED",
-    );
+    for (const [name, excuses] of [
+      ["NOT_GUARDED", NOT_GUARDED],
+      ["NOT_MIRRORED", NOT_MIRRORED],
+    ])
+      assert.deepEqual(
+        Object.keys(excuses).filter((path) => path in pairs),
+        [],
+        `paths are both paired and ${name}`,
+      );
   });
 
   it("pairs each scanned data file with a test that actually reads it", () => {
@@ -586,13 +747,18 @@ describe("guarded-data scan (the map is a checked projection of the tests)", () 
     );
   });
 
-  it("has no stale NOT_GUARDED entries", () => {
-    assert.deepEqual(
-      Object.keys(NOT_GUARDED).filter((path) => !scanned.has(path)),
-      [],
-      "NOT_GUARDED lists paths no test reads any more — delete them",
-    );
-    for (const [path, reason] of Object.entries(NOT_GUARDED))
-      assert.ok(reason.length > 10, `NOT_GUARDED[${path}] needs a real reason`);
+  it("has no stale NOT_GUARDED / NOT_MIRRORED entries", () => {
+    for (const [name, excuses] of [
+      ["NOT_GUARDED", NOT_GUARDED],
+      ["NOT_MIRRORED", NOT_MIRRORED],
+    ]) {
+      assert.deepEqual(
+        Object.keys(excuses).filter((path) => !scanned.has(path)),
+        [],
+        `${name} lists paths no test reads any more — delete them`,
+      );
+      for (const [path, reason] of Object.entries(excuses))
+        assert.ok(reason.length > 10, `${name}[${path}] needs a real reason`);
+    }
   });
 });
