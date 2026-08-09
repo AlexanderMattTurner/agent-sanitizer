@@ -74,7 +74,11 @@ _ANSI_CASES = [
     ("sos_st", "a\x1bXpayload\x1b\\b", "ab"),
     ("pm_st", "a\x1b^payload\x1b\\b", "ab"),
     ("apc_st", "a\x1b_payload\x1b\\b", "ab"),
+    # All four C1 string introducers, so dropping any one from the arm's
+    # introducer class goes red here.
     ("c1_dcs_c1_st", "a\x90payload\x9cb", "ab"),
+    ("c1_sos_c1_st", "a\x98payload\x9cb", "ab"),
+    ("c1_pm_c1_st", "a\x9epayload\x9cb", "ab"),
     ("c1_apc_c1_st", "a\x9fpayload\x9cb", "ab"),
     ("dcs_aborted_by_esc", "a\x1bPbody\x1b[31mtail", "atail"),
     # Unterminated, so the fail-closed arm drops the tail — the same answer the

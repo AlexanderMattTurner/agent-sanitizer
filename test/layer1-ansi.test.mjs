@@ -171,7 +171,13 @@ describe("scanAnsi", () => {
       ["SOS", `x${ESC}Xpayload${ST}y`, "xy"],
       ["PM", `x${ESC}^secret${ST}y`, "xy"],
       ["APC", `x${ESC}_hidden-cmd${ESC}\\y`, "xy"],
+      // All four C1 string introducers, so dropping any one from
+      // STRING_INTRO_C1 goes red here. The 8-bit cases in
+      // test/invisible.test.mjs assert only that no C1 byte survives, which the
+      // residual sweep satisfies alone — they pass vacuously for the body.
       ["C1 DCS", `x${DCS}payload${ST}y`, "xy"],
+      ["C1 SOS", `x${cp(0x98)}payload${ST}y`, "xy"],
+      ["C1 PM", `x${cp(0x9e)}payload${ST}y`, "xy"],
       ["C1 APC", `x${APC}payload${BEL}y`, "xy"],
       // Fail closed: an unterminated string drops everything after it.
       ["unterminated APC", `x${ESC}_dangling-payload`, "x"],

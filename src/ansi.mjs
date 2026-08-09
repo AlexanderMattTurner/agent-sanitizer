@@ -113,7 +113,7 @@ const OSC_C1 = 0x9d;
 // set: opening a string is exactly what ends the one already open.
 const STRING_INTRO_C1 = new Set([0x90, 0x98, OSC_C1, 0x9e, 0x9f]);
 
-/** The six things an introducer can turn out to be. */
+/** The seven things an introducer can turn out to be. */
 export const TOKEN_KIND = Object.freeze({
   /** A display-only `ESC[…m` / `U+009B…m` colour sequence. */
   SGR: "sgr",
