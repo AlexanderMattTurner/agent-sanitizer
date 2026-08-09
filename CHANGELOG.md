@@ -8,6 +8,12 @@ adhere to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+## [2.31.1] - 2026-08-09
+
+### Changed
+
+- Skills workflow now requires an explore-plan gate before audit fan-outs.
+
 ## [2.31.0] - 2026-08-09
 
 ### Added
