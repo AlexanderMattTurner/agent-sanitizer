@@ -7,6 +7,7 @@ without manipulating `sys.path` or relying on the conftest plugin loader.
 import os
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 
 #: Git's own repository-location overrides. A git hook exports GIT_DIR (and
@@ -42,6 +43,21 @@ def _repo_root() -> Path:
 
 
 REPO_ROOT = _repo_root()
+
+
+def ensure_python_pkg_on_path() -> None:
+    """Put the distribution package dir (`python/`) on `sys.path`, once.
+
+    The `agent_sanitizer` package lives under `python/`, not the repo root, so
+    tests must extend `sys.path` before importing it. This is the ONE copy of
+    that bootstrap: hand-copied insert blocks drift (and can disagree on
+    ordering), so every test module calls this instead. Idempotent — any number
+    of callers add at most one entry.
+    """
+    pkg = str(REPO_ROOT / "python")
+    if pkg not in sys.path:
+        sys.path.insert(0, pkg)
+
 
 GIT_IDENTITY_ENV = {
     "GIT_AUTHOR_NAME": "t",

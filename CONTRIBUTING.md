@@ -37,7 +37,7 @@ under `.hooks/` also enforce formatting and commit conventions on commit.
 Commits **must** follow [Conventional Commits](https://www.conventionalcommits.org/):
 `<type>(<scope>): <description>`. The `commit-msg` hook rejects anything else.
 Types: `feat`, `fix`, `refactor`, `docs`, `test`, `ci`, `chore`, `style`,
-`perf`, `build`. Use `!` (e.g. `feat!:`) for breaking changes.
+`perf`, `build`, `revert`. Use `!` (e.g. `feat!:`) for breaking changes.
 
 Write each subject as a **user-facing release note**: the commit subjects since
 the last release are the single source of truth for the version bump and the
