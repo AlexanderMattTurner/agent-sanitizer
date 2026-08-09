@@ -8,6 +8,19 @@ adhere to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+## [2.28.3] - 2026-08-09
+
+### Fixed
+
+- Fixed manifest re-stamping during release to ensure the version is correctly updated and published.
+- Fixed CI conflict resolver to properly handle fallback credentials.
+
+## [2.28.2] - 2026-08-09
+
+### Fixed
+
+- CI sanitizer installation no longer runs the checkout's pnpm build.
+
 ## [2.28.1] - 2026-08-09
 
 ### Fixed

@@ -148,6 +148,38 @@ test("the live release script carries the hardened npm-view logic", () => {
 // Run the REAL script in a throwaway git repo with `npm` stubbed on PATH. Both
 // scenarios exit before any publish/push, so nothing leaves the sandbox.
 
+/**
+ * Git's repo-location variables, which OVERRIDE a child process's `cwd`.
+ *
+ * git exports these to the hooks it runs, so when pre-commit invokes this file
+ * as a paired guard test they reach every `git` these sandboxes spawn — the
+ * helpers' and the release script's own — and each one operates on THIS
+ * repository instead of the throwaway one. The suite then passes when run by
+ * hand and fails under `git commit` (`git tag v0.0.0` → "already exists"),
+ * which is how this was found; the worse outcome is a sandbox mutating the
+ * real repo. Scrubbed from the test process itself, so no call site — present
+ * or future — has to remember to pass a cleaned env.
+ *
+ * The list is git's own (`rev-parse --local-env-vars`, which only prints the
+ * compiled-in names and needs no repository), not a hand-copy that would rot
+ * the day git adds one.
+ */
+const GIT_LOCATION_VARS = execFileSync(
+  "git",
+  ["rev-parse", "--local-env-vars"],
+  { encoding: "utf8" },
+)
+  .split("\n")
+  .filter(Boolean);
+
+assert.ok(
+  GIT_LOCATION_VARS.includes("GIT_DIR"),
+  "git rev-parse --local-env-vars returned no GIT_DIR; the scrub below would " +
+    "be a no-op and these sandboxes would run against the real repository",
+);
+
+for (const name of GIT_LOCATION_VARS) delete process.env[name];
+
 /** Build a throwaway git repo tagged v0.0.0 at HEAD, plus a stubbed `npm`. */
 function makeSandbox(npmStubBody) {
   const dir = mkdtempSync(join(tmpdir(), "vbump-"));
@@ -169,6 +201,122 @@ function makeSandbox(npmStubBody) {
   git("commit", "-q", "--allow-empty", "-m", "chore: seed");
   git("tag", "v0.0.0");
   return { dir, binDir };
+}
+
+const RELEASE_MANIFEST = join("plugin", ".claude-plugin", "plugin.json");
+
+/**
+ * Build the preconditions the real release job runs against: a bare remote, a
+ * work clone seeded and tagged at v1.0.0 with a `## Unreleased` CHANGELOG and a
+ * release-worthy commit on top, `npm`/`pnpm` stubs on PATH, and an env with the
+ * Actions variables that would steer the run out of the sandbox removed.
+ *
+ * The npm stub reports 1.0.0 as the only published version (so the run computes
+ * 1.1.0 and proceeds to publish) and answers every deprecation probe with
+ * "live". `manifest`, when given, seeds the plugin manifest with that text.
+ *
+ * One helper, not one copy per test: the release script's preconditions change
+ * as it grows (a new file it reads, a new binary it shells out to), and three
+ * near-identical bootstraps mean the odd one out fails opaquely.
+ */
+function makeReleaseSandbox({ manifest } = {}) {
+  const dir = mkdtempSync(join(tmpdir(), "vbump-release-"));
+  const remote = join(dir, "remote.git");
+  const work = join(dir, "work");
+  const gitW = (...args) =>
+    execFileSync("git", args, { cwd: work, stdio: "ignore" });
+
+  execFileSync("git", ["init", "-q", "--bare", "-b", "main", remote]);
+  mkdirSync(work);
+  gitW("init", "-q", "-b", "main");
+  gitW("config", "user.email", "t@t.test");
+  gitW("config", "user.name", "t");
+  writeFileSync(
+    join(work, "package.json"),
+    JSON.stringify({ name: "sandbox-pkg", version: "1.0.0" }) + "\n",
+  );
+  writeFileSync(
+    join(work, "CHANGELOG.md"),
+    "# Changelog\n\n## Unreleased\n\n### Added\n\n- A thing.\n",
+  );
+  if (manifest !== undefined) {
+    mkdirSync(join(work, "plugin", ".claude-plugin"), { recursive: true });
+    writeFileSync(join(work, RELEASE_MANIFEST), manifest);
+  }
+
+  const binDir = join(work, "stub-bin");
+  mkdirSync(binDir);
+  writeFileSync(
+    join(binDir, "npm"),
+    `#!/usr/bin/env bash
+if [[ "$2" == *@* ]]; then
+  if [[ "$3" == "version" ]]; then exit 1; fi
+  exit 0
+else
+  echo '["1.0.0"]'
+fi
+`,
+  );
+  chmodSync(join(binDir, "npm"), 0o755);
+  // pnpm publish must succeed without leaving the sandbox.
+  writeFileSync(
+    join(binDir, "pnpm"),
+    "#!/usr/bin/env bash\necho 'stub publish ok'\nexit 0\n",
+  );
+  chmodSync(join(binDir, "pnpm"), 0o755);
+
+  gitW("add", "-A");
+  gitW("commit", "-q", "-m", "chore: seed");
+  gitW("tag", "v1.0.0");
+  gitW("remote", "add", "origin", remote);
+  gitW("push", "-q", "origin", "main");
+  gitW("push", "-q", "origin", "v1.0.0");
+  // A release-worthy commit the run will publish.
+  gitW("commit", "-q", "--allow-empty", "-m", "feat: add a thing");
+
+  const env = { ...process.env, PATH: `${binDir}:${process.env.PATH}` };
+  scrubAnthropicCredentials(env);
+  delete env.GITHUB_OUTPUT;
+  // In CI these name the PR's merge ref (e.g. 167/merge), and the script reads
+  // GITHUB_REF_NAME as the branch to push the release-docs commit to. Left set,
+  // the run would target that ref instead of the sandbox repo's `main`, so the
+  // rebase-on-reject path never fires and the test fails only under Actions.
+  delete env.GITHUB_REF_NAME;
+  delete env.GITHUB_REF;
+
+  return { dir, remote, work, env, gitW };
+}
+
+/**
+ * Clone `remote` into `<dir>/other` and let the caller push a commit that
+ * advances origin/main out from under the run. Returns a git runner for it.
+ */
+function makeRacingClone(dir, remote) {
+  const other = join(dir, "other");
+  execFileSync("git", ["clone", "-q", remote, other], { stdio: "ignore" });
+  const gitO = (...args) =>
+    execFileSync("git", args, { cwd: other, stdio: "ignore" });
+  gitO("config", "user.email", "o@o.test");
+  gitO("config", "user.name", "o");
+  return { other, gitO };
+}
+
+/** Run the live release script against a sandbox built by makeReleaseSandbox. */
+function runRelease({ work, env }) {
+  const res = spawnSync("bash", [LIVE_SCRIPT], {
+    cwd: work,
+    env,
+    encoding: "utf8",
+  });
+  assert.equal(res.error, undefined, "failed to spawn the release script");
+  return res;
+}
+
+/** Read a path out of the bare remote's `main`. */
+function showOnRemote(remote, path) {
+  return execFileSync("git", ["-C", remote, "show", `main:${path}`], {
+    encoding: "utf8",
+  });
 }
 
 /** Run the live script in `dir`; return {status, stderr, stdout}. */
@@ -374,174 +522,50 @@ test("a release stamps the plugin manifest and commits it with the release docs"
   // The Claude Code plugin manifest is read out of the git checkout, so its
   // version must be COMMITTED at release time — left unstamped it froze at
   // 0.1.0 while npm climbed to 2.x, and the installed plugin reported 0.1.
-  const dir = mkdtempSync(join(tmpdir(), "vbump-plugin-"));
-  const remote = join(dir, "remote.git");
-  const work = join(dir, "work");
-  const manifestRel = "plugin/.claude-plugin/plugin.json";
-  const npmStub = `if [[ "$2" == *@* ]]; then
-  if [[ "$3" == "version" ]]; then exit 1; fi
-  exit 0
-else
-  echo '["1.0.0"]'
-fi`;
-  const gitW = (...args) =>
-    execFileSync("git", args, { cwd: work, stdio: "ignore" });
+  const sandbox = makeReleaseSandbox({
+    manifest: '{\n  "name": "sandbox-plugin",\n  "version": "0.1.0"\n}\n',
+  });
 
   try {
-    execFileSync("git", ["init", "-q", "--bare", "-b", "main", remote]);
-    mkdirSync(work);
-    gitW("init", "-q", "-b", "main");
-    gitW("config", "user.email", "t@t.test");
-    gitW("config", "user.name", "t");
-    writeFileSync(
-      join(work, "package.json"),
-      JSON.stringify({ name: "sandbox-pkg", version: "1.0.0" }) + "\n",
-    );
-    writeFileSync(
-      join(work, "CHANGELOG.md"),
-      "# Changelog\n\n## Unreleased\n\n### Added\n\n- A thing.\n",
-    );
-    mkdirSync(join(work, "plugin", ".claude-plugin"), { recursive: true });
-    writeFileSync(
-      join(work, manifestRel),
-      '{\n  "name": "sandbox-plugin",\n  "version": "0.1.0"\n}\n',
-    );
-    const binDir = join(work, "stub-bin");
-    mkdirSync(binDir);
-    writeFileSync(join(binDir, "npm"), `#!/usr/bin/env bash\n${npmStub}\n`);
-    chmodSync(join(binDir, "npm"), 0o755);
-    writeFileSync(
-      join(binDir, "pnpm"),
-      "#!/usr/bin/env bash\necho 'stub publish ok'\nexit 0\n",
-    );
-    chmodSync(join(binDir, "pnpm"), 0o755);
-    gitW("add", "-A");
-    gitW("commit", "-q", "-m", "chore: seed");
-    gitW("tag", "v1.0.0");
-    gitW("remote", "add", "origin", remote);
-    gitW("push", "-q", "origin", "main");
-    gitW("push", "-q", "origin", "v1.0.0");
-    gitW("commit", "-q", "--allow-empty", "-m", "feat: add a thing");
-
-    const env = { ...process.env, PATH: `${binDir}:${process.env.PATH}` };
-    scrubAnthropicCredentials(env);
-    delete env.GITHUB_OUTPUT;
-    delete env.GITHUB_REF_NAME;
-    delete env.GITHUB_REF;
-    const res = spawnSync("bash", [LIVE_SCRIPT], {
-      cwd: work,
-      env,
-      encoding: "utf8",
-    });
-    assert.equal(res.error, undefined, "failed to spawn the release script");
+    const res = runRelease(sandbox);
     assert.equal(res.status, 0, res.stderr);
 
     // The stamped manifest must reach the remote inside the release-docs commit
     // — a working-tree-only bump (the package.json pattern) is exactly the bug.
-    const pushedManifest = execFileSync(
-      "git",
-      ["-C", remote, "show", `main:${manifestRel}`],
-      { encoding: "utf8" },
+    assert.equal(
+      JSON.parse(showOnRemote(sandbox.remote, RELEASE_MANIFEST)).version,
+      "1.1.0",
     );
-    assert.equal(JSON.parse(pushedManifest).version, "1.1.0");
     const touched = execFileSync(
       "git",
-      ["-C", remote, "show", "--name-only", "--pretty=", "main"],
+      ["-C", sandbox.remote, "show", "--name-only", "--pretty=", "main"],
       { encoding: "utf8" },
     );
     assert.match(touched, /CHANGELOG\.md/);
     assert.match(touched, /plugin\/\.claude-plugin\/plugin\.json/);
     // package.json must stay at its committed placeholder: npm owns that one.
     assert.equal(
-      JSON.parse(
-        execFileSync("git", ["-C", remote, "show", "main:package.json"], {
-          encoding: "utf8",
-        }),
-      ).version,
+      JSON.parse(showOnRemote(sandbox.remote, "package.json")).version,
       "1.0.0",
     );
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    rmSync(sandbox.dir, { recursive: true, force: true });
   }
 });
 
 test("release-docs push rebases onto a branch that advanced mid-run", () => {
-  const dir = mkdtempSync(join(tmpdir(), "vbump-race-"));
-  const remote = join(dir, "remote.git");
-  const work = join(dir, "work");
-  const other = join(dir, "other");
-
-  // npm stub: base is 1.0.0 (live), the target 1.1.0 is not yet published (so
-  // the run proceeds to publish), every deprecation probe reports "live".
-  const npmStub = `if [[ "$2" == *@* ]]; then
-  if [[ "$3" == "version" ]]; then exit 1; fi
-  exit 0
-else
-  echo '["1.0.0"]'
-fi`;
-  const changelog = "# Changelog\n\n## Unreleased\n\n### Added\n\n- A thing.\n";
-
-  const gitW = (...args) =>
-    execFileSync("git", args, { cwd: work, stdio: "ignore" });
-  const gitO = (...args) =>
-    execFileSync("git", args, { cwd: other, stdio: "ignore" });
+  const sandbox = makeReleaseSandbox();
 
   try {
-    execFileSync("git", ["init", "-q", "--bare", "-b", "main", remote]);
-
-    mkdirSync(work);
-    gitW("init", "-q", "-b", "main");
-    gitW("config", "user.email", "t@t.test");
-    gitW("config", "user.name", "t");
-    writeFileSync(
-      join(work, "package.json"),
-      JSON.stringify({ name: "sandbox-pkg", version: "1.0.0" }) + "\n",
-    );
-    writeFileSync(join(work, "CHANGELOG.md"), changelog);
-    const binDir = join(work, "stub-bin");
-    mkdirSync(binDir);
-    writeFileSync(join(binDir, "npm"), `#!/usr/bin/env bash\n${npmStub}\n`);
-    chmodSync(join(binDir, "npm"), 0o755);
-    // pnpm publish must succeed without leaving the sandbox.
-    writeFileSync(
-      join(binDir, "pnpm"),
-      "#!/usr/bin/env bash\necho 'stub publish ok'\nexit 0\n",
-    );
-    chmodSync(join(binDir, "pnpm"), 0o755);
-    gitW("add", "-A");
-    gitW("commit", "-q", "-m", "chore: seed");
-    gitW("tag", "v1.0.0");
-    gitW("remote", "add", "origin", remote);
-    gitW("push", "-q", "origin", "main");
-    gitW("push", "-q", "origin", "v1.0.0");
-    // A release-worthy commit the run will publish.
-    gitW("commit", "-q", "--allow-empty", "-m", "feat: add a thing");
-
     // Simulate a concurrent PR merge advancing origin/main out from under the
     // run: a second clone pushes a commit that does NOT touch CHANGELOG.md.
-    execFileSync("git", ["clone", "-q", remote, other], { stdio: "ignore" });
-    gitO("config", "user.email", "o@o.test");
-    gitO("config", "user.name", "o");
+    const { other, gitO } = makeRacingClone(sandbox.dir, sandbox.remote);
     writeFileSync(join(other, "OTHER.txt"), "concurrent work\n");
     gitO("add", "-A");
     gitO("commit", "-q", "-m", "chore: concurrent merge");
     gitO("push", "-q", "origin", "main");
 
-    const env = { ...process.env, PATH: `${binDir}:${process.env.PATH}` };
-    scrubAnthropicCredentials(env);
-    delete env.GITHUB_OUTPUT;
-    // In CI these name the PR's merge ref (e.g. 167/merge), and the script reads
-    // GITHUB_REF_NAME as the branch to push the release-docs commit to. Left set,
-    // the run would target that ref instead of the sandbox repo's `main`, so the
-    // rebase-on-reject path never fires and the test fails only under Actions.
-    delete env.GITHUB_REF_NAME;
-    delete env.GITHUB_REF;
-    const res = spawnSync("bash", [LIVE_SCRIPT], {
-      cwd: work,
-      env,
-      encoding: "utf8",
-    });
-    assert.equal(res.error, undefined, "failed to spawn the release script");
+    const res = runRelease(sandbox);
     assert.equal(res.status, 0, res.stderr);
 
     // Proves we went through the rebase-on-reject path, not a lucky
@@ -552,7 +576,7 @@ fi`;
     // racing commit (a force-push would have erased it).
     const remoteSubjects = execFileSync(
       "git",
-      ["-C", remote, "log", "main", "--pretty=%s"],
+      ["-C", sandbox.remote, "log", "main", "--pretty=%s"],
       { encoding: "utf8" },
     );
     assert.match(remoteSubjects, /docs: release 1\.1\.0/);
@@ -561,11 +585,109 @@ fi`;
       /chore: concurrent merge/,
       "the concurrent commit must survive — the push must rebase, never force",
     );
-    const remoteTags = execFileSync("git", ["-C", remote, "tag"], {
+    const remoteTags = execFileSync("git", ["-C", sandbox.remote, "tag"], {
       encoding: "utf8",
     });
     assert.match(remoteTags, /^v1\.1\.0$/m, "the release tag must be pushed");
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    rmSync(sandbox.dir, { recursive: true, force: true });
+  }
+});
+
+test("a concurrent plugin-manifest version stamp is re-stamped, not abandoned", () => {
+  // The failure this pins actually happened: two releases raced, the replayed
+  // release-docs commit conflicted with the other one's `version` line in the
+  // plugin manifest, push_with_rebase refused to force-push, and 2.26.1 sat on
+  // npm with no git tag and a manifest still advertising 2.26.0.
+  const sandbox = makeReleaseSandbox({
+    manifest:
+      JSON.stringify({ name: "sandbox", version: "1.0.0" }, null, 2) + "\n",
+  });
+
+  try {
+    // The racing commit stamps the SAME line this run will stamp, and edits a
+    // second field so the resolution can be shown to keep concurrent work
+    // rather than reverting the manifest to ours wholesale.
+    const { other, gitO } = makeRacingClone(sandbox.dir, sandbox.remote);
+    writeFileSync(
+      join(other, RELEASE_MANIFEST),
+      JSON.stringify(
+        { name: "sandbox", version: "1.0.5", description: "kept" },
+        null,
+        2,
+      ) + "\n",
+    );
+    gitO("add", "-A");
+    gitO("commit", "-q", "-m", "docs: release 1.0.5 [skip ci]");
+    gitO("push", "-q", "origin", "main");
+
+    const res = runRelease(sandbox);
+    assert.equal(res.status, 0, res.stderr);
+
+    // Non-vacuity: prove we reached the conflict, not a clean replay.
+    assert.match(res.stderr, /rejected \(attempt \d+\/\d+\); rebasing/);
+    assert.match(res.stderr, /Re-stamped .*plugin\.json to 1\.1\.0/);
+
+    const landed = JSON.parse(showOnRemote(sandbox.remote, RELEASE_MANIFEST));
+    assert.equal(landed.version, "1.1.0", "the published version must win");
+    assert.equal(
+      landed.description,
+      "kept",
+      "the concurrent commit's other fields must survive the resolution",
+    );
+
+    const remoteTags = execFileSync("git", ["-C", sandbox.remote, "tag"], {
+      encoding: "utf8",
+    });
+    assert.match(remoteTags, /^v1\.1\.0$/m, "the release tag must be pushed");
+  } finally {
+    rmSync(sandbox.dir, { recursive: true, force: true });
+  }
+});
+
+test("a manifest stamped AHEAD of the published version is never re-stamped backwards", () => {
+  // The mirror image of the case above, and the reason the resolver checks the
+  // ordering instead of assuming it: with the two runs' push order reversed,
+  // upstream holds the NEWER stamp. Re-stamping it to the version we just
+  // published would walk the manifest backwards and push that — recreating the
+  // npm/git drift the stamping step exists to prevent, silently. Refuse
+  // instead, and let the caller's abort-and-fail path run.
+  const sandbox = makeReleaseSandbox({
+    manifest:
+      JSON.stringify({ name: "sandbox", version: "1.0.0" }, null, 2) + "\n",
+  });
+
+  try {
+    const { other, gitO } = makeRacingClone(sandbox.dir, sandbox.remote);
+    writeFileSync(
+      join(other, RELEASE_MANIFEST),
+      JSON.stringify({ name: "sandbox", version: "1.2.0" }, null, 2) + "\n",
+    );
+    gitO("add", "-A");
+    gitO("commit", "-q", "-m", "docs: release 1.2.0 [skip ci]");
+    gitO("push", "-q", "origin", "main");
+
+    const res = runRelease(sandbox);
+    assert.notEqual(res.status, 0, "the run must fail loudly, not push");
+    assert.match(
+      res.stderr,
+      /Refusing to re-stamp .*plugin\.json: it reads 1\.2\.0/,
+    );
+
+    assert.equal(
+      JSON.parse(showOnRemote(sandbox.remote, RELEASE_MANIFEST)).version,
+      "1.2.0",
+      "the newer upstream stamp must survive untouched",
+    );
+    const remoteTags = execFileSync("git", ["-C", sandbox.remote, "tag"], {
+      encoding: "utf8",
+    });
+    assert.doesNotMatch(
+      remoteTags,
+      /^v1\.1\.0$/m,
+      "no tag may be pushed for a release whose docs never landed",
+    );
+  } finally {
+    rmSync(sandbox.dir, { recursive: true, force: true });
   }
 });
