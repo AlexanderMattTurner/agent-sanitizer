@@ -130,7 +130,7 @@ describe("post-merge failure-notification roster", () => {
       ["Nightly unseeded fuzz", true], // schedule only, and exempt below
       ["PR meta", false], // pull_request only
       ["Claude PR review", false], // pull_request_target only
-      ["decide", false], // workflow_call only
+      ["Decide (reusable)", false], // workflow_call only
       ["CI failure notify", false], // workflow_run only — it IS the listener
     ]) {
       assert.ok(byName.has(name), `no workflow named ${name}`);

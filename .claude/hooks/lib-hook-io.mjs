@@ -1,6 +1,42 @@
 /** Shared I/O helpers for Claude Code hook scripts. */
 
+import { closeSync, openSync, unlinkSync, writeFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
+
+/**
+ * Write `content` to `path` without ever following a symlink there.
+ *
+ * PROBLEM CLASS — a hook writing to a PREDICTABLE path in a world-writable
+ * directory. Anything that can create files there can pre-place a symlink at the
+ * name the hook is about to use, and an ordinary write then lands on the link's
+ * target instead. Unlinking first and creating exclusively (`wx`) means the write
+ * either gets a fresh file or gets nothing.
+ *
+ * Returns false rather than throwing, so a caller for whom the write is
+ * best-effort keeps its own control flow.
+ * @param {string} path @param {string} content @param {number} [mode]
+ * @returns {boolean}
+ */
+export function writeFileNoFollow(path, content, mode = 0o600) {
+  try {
+    unlinkSync(path);
+  } catch {
+    // No existing entry (the common case), or an unremovable one — either way the
+    // exclusive create below is the real guard, and its own failure is returned.
+  }
+  let fd;
+  try {
+    fd = openSync(path, "wx", mode);
+  } catch {
+    return false;
+  }
+  try {
+    writeFileSync(fd, content);
+    return true;
+  } finally {
+    closeSync(fd);
+  }
+}
 
 /**
  * True when this module is the process entry point (run directly as a CLI, not

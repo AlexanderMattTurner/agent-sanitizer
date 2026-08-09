@@ -22,17 +22,20 @@
 #     keeps the github-actions[bot] identity the rest of the reviewer machinery
 #     keys on.
 #
-# Env: GH_TOKEN (reply, GITHUB_TOKEN), GH_RESOLVE_TOKEN (resolve, a PAT with
-# pull-request write), PR_INPUT_DIR. (select-resolvable-threads.mjs reads the
-# threads/verdicts under PR_INPUT_DIR; the reply+resolve mutations act on thread
-# ids alone, so no owner/name/PR number is needed here.)
+# Env: GH_TOKEN (reply, GITHUB_TOKEN), the GH_TOKEN_* ladder rungs the resolve
+# credential is picked from (see lib/github-token-ladder.bash), PR_INPUT_DIR.
+# (select-resolvable-threads.mjs reads the threads/verdicts under PR_INPUT_DIR;
+# the reply+resolve mutations act on thread ids alone, so no owner/name/PR number
+# is needed here.)
 set -euo pipefail
 
 : "${PR_INPUT_DIR:?PR_INPUT_DIR required}"
-: "${GH_RESOLVE_TOKEN:?GH_RESOLVE_TOKEN required — the Actions GITHUB_TOKEN cannot resolve review threads (only reply); set a PAT (TEMPLATE_SYNC_TOKEN_ORG) with pull-request write}"
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=lib/github-token-ladder.bash disable=SC1091
+source "$SCRIPT_DIR/lib/github-token-ladder.bash"
 # shellcheck source=.github/scripts/lib-ci-retry.sh
-source "$(dirname "${BASH_SOURCE[0]}")/lib-ci-retry.sh"
+source "$SCRIPT_DIR/lib-ci-retry.sh"
 
 # The resolve PAT is a USER credential, so its API budget is shared with every
 # other job and session acting as that user — an exhausted budget answers this
@@ -49,6 +52,9 @@ die() {
   echo "$*" >&2
   exit 1
 }
+
+GH_RESOLVE_TOKEN="$(github_token_with_quota)" ||
+  die "every configured GitHub credential is out of API quota; cannot resolve threads. Re-run once quota resets, or provision another TEMPLATE_SYNC_TOKEN."
 
 count="$(node .github/scripts/select-resolvable-threads.mjs)"
 if [[ "$count" -eq 0 ]]; then

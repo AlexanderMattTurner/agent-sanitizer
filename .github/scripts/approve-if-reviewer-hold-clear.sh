@@ -31,11 +31,27 @@
 #      sweep does not, so it never clears a body hold blindly — same trust the
 #      thread path already places in the model's verdicts.json.
 #
-# Env: GH_TOKEN, GH_REPO (owner/name), PR; REVIEWER_LOGIN, BODY_VERDICT_FILE optional.
+# Env: the GH_TOKEN_* ladder rungs (see lib/github-token-ladder.bash), GH_REPO
+# (owner/name), PR; REVIEWER_LOGIN, BODY_VERDICT_FILE optional.
 set -euo pipefail
 
 : "${GH_REPO:?GH_REPO required}"
 : "${PR:?PR number required}"
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=lib/github-token-ladder.bash disable=SC1091
+source "$SCRIPT_DIR/lib/github-token-ladder.bash"
+
+# Every call below spends API quota, so pick a credential that has some before
+# the first one rather than discovering it mid-flight. Reddening only once EVERY
+# rung is spent is the point: a spent top rung is not a reason to fail a step
+# whose posture is to degrade, but nothing left to spend anywhere is a real
+# blocker a human has to clear, so it is not swallowed either.
+GH_TOKEN="$(github_token_with_quota)" || {
+  echo "every configured GitHub credential is out of API quota; cannot read this PR's review state, so the reviewer's hold is left in place. Re-run once quota resets, or provision another TEMPLATE_SYNC_TOKEN." >&2
+  exit 1
+}
+export GH_TOKEN
 REVIEWER_LOGIN="${REVIEWER_LOGIN:-github-actions[bot]}"
 # GitHub's GraphQL API returns an app bot's `login` WITHOUT the `[bot]` suffix the
 # REST API appends (REST `github-actions[bot]` ↔ GraphQL `github-actions`). Both
