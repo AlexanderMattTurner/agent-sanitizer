@@ -1,11 +1,16 @@
 #!/usr/bin/env node
 /**
- * SSOT guard-test pairing: run the cheap contract test(s) paired with each
- * staged SSOT source (pairs live in .hooks/guard-pairs.json) and exit
- * non-zero if any fails — so "edited the data, forgot its guard test" is
- * caught at commit time instead of as a red main. Invoked by .hooks/pre-commit
- * with the staged paths as argv; only tests whose paired source is staged run,
- * keeping the added latency to ~1s per touched SSOT.
+ * Guard-test pairing: run the cheap contract test(s) paired with each staged
+ * source (pairs live in .hooks/guard-pairs.json) and exit non-zero if any
+ * fails — so "edited the data, forgot its guard test" is caught at commit time
+ * instead of as a red main. Invoked by .hooks/pre-commit with the staged paths
+ * as argv; only tests whose paired source is staged run, keeping the added
+ * latency to ~1s per touched source.
+ *
+ * A pair is a GUARD, not an SSOT — guard-pairs.json's own header says so, and
+ * the distinction is the point: the map does not derive anything, it says "run
+ * this check when that file changes". Calling it an SSOT would launder the very
+ * smell a drift guard exists to expose.
  *
  * A guard test is either a `node --test` file (`*.test.mjs`) or a pytest module
  * (`test_*.py`), dispatched by extension. Both are supported because the map

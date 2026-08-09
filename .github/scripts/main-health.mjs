@@ -38,10 +38,14 @@ import { fileURLToPath } from "node:url";
 // misses this constant fails the guard instead of silently disabling it.
 export const SELF_WORKFLOW_PATH = ".github/workflows/main-health.yaml";
 
-// The SSOT for which workflows are worth paging a human about. Read at runtime
-// so the two alerts cannot drift; a ci-truth-serum pre-commit hook
-// (check-failure-notifier-coverage) already keeps this list honest against the
-// tree, so intersecting against it inherits that maintenance for free.
+// The SSOT for which workflows are worth paging a human about — genuinely one
+// source, read at runtime rather than restated here, so the two alerts cannot
+// drift. This used to credit a ci-truth-serum pre-commit hook
+// (check-failure-notifier-coverage) with keeping the roster honest against the
+// tree; no such hook exists. What actually holds the roster to the tree is
+// test/failure-notify-roster.test.mjs, whose partition assertion requires every
+// push-to-main/`schedule:` workflow to be rostered or exempt in its own yaml —
+// so intersecting against it inherits THAT maintenance, not a phantom hook's.
 export const NOTIFIER_WORKFLOW_PATH =
   ".github/workflows/ci-failure-notify.yaml";
 
