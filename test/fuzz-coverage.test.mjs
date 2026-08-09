@@ -27,6 +27,10 @@ import * as prompt from "../src/prompt.mjs";
 import * as viewMap from "../src/view-map.mjs";
 import * as rehydrate from "../src/rehydrate.mjs";
 import * as output from "../src/output.mjs";
+// Hook-layer entry points: the whole-process compositions that eat untrusted
+// tool output / tool input owe fuzz targets exactly like the engine parsers.
+import * as sanitizeOutputHook from "../claude-hooks/sanitize-output.mjs";
+import * as pretooluseHook from "../claude-hooks/pretooluse-sanitize.mjs";
 
 import { CHECKS } from "../src/invisible.mjs";
 import {
@@ -81,6 +85,12 @@ const FUZZ_REQUIRED = [
   // text are removed or replaced, so it owes the "only verbatim matches of the
   // ORIGINAL text are touched" property directly, not just via its callers.
   "spliceOrdered",
+  // Whole-pipeline hook entry points (PostToolUse sanitize, PreToolUse
+  // rehydration): fuzzed end-to-end — sanitize → adversarial model edits →
+  // rehydrate, over multiple rounds — by claude-hooks-roundtrip.fuzz.test.mjs.
+  "evaluateToolOutput",
+  "buildPreToolUseResponse",
+  "rehydrateLayer2",
 ];
 
 // Entry points that owe SEMANTIC-CORRECTNESS fuzzing, not just structural
@@ -335,6 +345,8 @@ const exportedFunctions = new Map(
     viewMap,
     rehydrate,
     output,
+    sanitizeOutputHook,
+    pretooluseHook,
   ]
     .flatMap((mod) => Object.entries(mod))
     .filter(([, value]) => typeof value === "function"),
