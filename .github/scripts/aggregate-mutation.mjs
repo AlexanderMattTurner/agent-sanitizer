@@ -101,9 +101,19 @@ const relativize = (report, path) => {
     : posixPath;
 };
 
-/** Path prefixes that separate the three gated scopes (see the file header). */
+/**
+ * Path prefixes that separate the three gated scopes (see the file header).
+ *
+ * Every scope NAMES what it claims — none of them is "everything else". A
+ * catch-all would partition every possible string by construction, so a
+ * directory that later joins the mutated set would silently inherit whichever
+ * ratchet the negation covered, scored against a floor it was never measured
+ * against. Named prefixes make such a path claimed by nobody, which
+ * `test/aggregate-mutation.test.mjs` fails on at test time.
+ */
 const SRC_PREFIX = "src/";
 const TOOLING_PREFIX = ".hooks/lib/";
+const HOOK_PREFIXES = ["claude-hooks/", "bin/"];
 
 /**
  * Deduplicate mutants across shard reports by identity and tally the score.
@@ -199,7 +209,7 @@ export const gatedScopes = ({
   {
     name: "claude-hooks + bin",
     inScope: (/** @type {string} */ f) =>
-      !f.startsWith(SRC_PREFIX) && !f.startsWith(TOOLING_PREFIX),
+      HOOK_PREFIXES.some((prefix) => f.startsWith(prefix)),
     threshold: hookScopeBreak,
   },
   {

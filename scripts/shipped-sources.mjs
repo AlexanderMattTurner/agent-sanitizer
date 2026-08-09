@@ -55,7 +55,14 @@ export const TOOLING_SCOPE = ".hooks/lib/";
  * @returns {string[]} repo-relative POSIX paths, sorted
  */
 export const toolingSources = (repoRoot) =>
-  readdirSync(join(repoRoot, TOOLING_SCOPE))
+  // RECURSIVE, matching both the docstring and `mutation.yaml`'s
+  // `.hooks/lib/**/*.mjs` trigger. A shallow read would leave a module at
+  // `.hooks/lib/sub/x.mjs` out of the mutated set — so no shard would name it,
+  // the contract test (tooling ⊆ mutated) would stay green, and the gate would
+  // run over a file it never mutates. That is the silent ungating this scope
+  // exists to close. `replace(/\\/g, "/")` keeps the entries POSIX on Windows.
+  readdirSync(join(repoRoot, TOOLING_SCOPE), { recursive: true })
+    .map((entry) => entry.toString().replace(/\\/g, "/"))
     .filter((name) => name.endsWith(".mjs"))
     .map((name) => posix.join(TOOLING_SCOPE, name))
     .sort();

@@ -151,6 +151,38 @@ describe("tallyMutants", () => {
     assert.equal(tallyMutants(reports).score, 75);
   });
 
+  it("scopes absolute report paths by relativizing against projectRoot", () => {
+    // Stryker keys `files` relative to projectRoot, but the field is optional
+    // and an absolute key must not silently land in the wrong scope (or dedup
+    // against nothing when a sibling shard emitted the relative form).
+    const relative = multiFileReport({ "src/a.mjs": [mutant("Killed", 5)] });
+    const absolute = multiFileReport(
+      { "/build/repo/src/a.mjs": [mutant("Survived", 5)] },
+      "/build/repo",
+    );
+    const isSrc = (/** @type {string} */ f) => f.startsWith("src/");
+    const scoped = tallyMutants([relative, absolute], isSrc);
+    assert.equal(scoped.total, 1, "both keys name the same mutant");
+    assert.equal(scoped.score, 100);
+    assert.equal(
+      tallyMutants([absolute], (f) => !isSrc(f)).total,
+      0,
+      "an absolute src/ path must not fall into the hook scope",
+    );
+  });
+
+  it("scores 0 when no mutant produced a scorable verdict", () => {
+    // Only errored/ignored mutants: scored denominator is 0, guard the div.
+    const { score, detected, undetected } = tallyMutants([
+      report(mutant("RuntimeError"), mutant("Ignored")),
+    ]);
+    assert.equal(detected, 0);
+    assert.equal(undetected, 0);
+    assert.equal(score, 0);
+  });
+});
+
+describe("gatedScopes", () => {
   it("partitions every mutated file into exactly one gated scope", () => {
     // Each scope applies its own break threshold to whatever it claims. A file
     // claimed twice is gated twice — the library's floor applied to tooling it
@@ -184,35 +216,5 @@ describe("tallyMutants", () => {
         files.some((file) => scope.inScope(file)),
         `scope "${scope.name}" claims no mutated file`,
       );
-  });
-
-  it("scopes absolute report paths by relativizing against projectRoot", () => {
-    // Stryker keys `files` relative to projectRoot, but the field is optional
-    // and an absolute key must not silently land in the wrong scope (or dedup
-    // against nothing when a sibling shard emitted the relative form).
-    const relative = multiFileReport({ "src/a.mjs": [mutant("Killed", 5)] });
-    const absolute = multiFileReport(
-      { "/build/repo/src/a.mjs": [mutant("Survived", 5)] },
-      "/build/repo",
-    );
-    const isSrc = (/** @type {string} */ f) => f.startsWith("src/");
-    const scoped = tallyMutants([relative, absolute], isSrc);
-    assert.equal(scoped.total, 1, "both keys name the same mutant");
-    assert.equal(scoped.score, 100);
-    assert.equal(
-      tallyMutants([absolute], (f) => !isSrc(f)).total,
-      0,
-      "an absolute src/ path must not fall into the hook scope",
-    );
-  });
-
-  it("scores 0 when no mutant produced a scorable verdict", () => {
-    // Only errored/ignored mutants: scored denominator is 0, guard the div.
-    const { score, detected, undetected } = tallyMutants([
-      report(mutant("RuntimeError"), mutant("Ignored")),
-    ]);
-    assert.equal(detected, 0);
-    assert.equal(undetected, 0);
-    assert.equal(score, 0);
   });
 });
