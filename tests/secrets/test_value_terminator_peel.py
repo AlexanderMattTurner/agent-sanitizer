@@ -35,6 +35,7 @@ CASES: dict[str, tuple[str, str]] = {
     "_is_benign_cursor": ("next_token", "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"),
     "_is_filesystem_path": ("token", "/etc/vault/agent/current-token"),
     "_is_metadata_field": ("secret_name", "prod-database-primary-credential"),
+    "_is_regex_literal": ("SECRET_HINT", "/secret|token|password/i"),
 }
 
 # Gates that CANNOT fire on the field-value path, so there is no terminator case
