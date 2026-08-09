@@ -1,21 +1,34 @@
 # gitleaks configuration.
 #
 # Extends the built-in default ruleset (so every default detector stays active)
-# and adds one allowlist: the secret-redaction engine's test fixtures and
-# packaged detector data legitimately contain credential-shaped SAMPLE values —
-# fake AWS keys, a throwaway PEM, provider tokens — because the engine's whole
-# job is to detect and redact them. These are not real secrets; scanning them as
-# if they were would make the redactor untestable. The allowlist is scoped to
-# those fixture paths only, so real secrets committed anywhere else still fail.
+# and adds path allowlists for the two places this repo legitimately commits
+# credential-SHAPED strings that are not credentials. Each allowlist is scoped
+# to its own paths and carries its own reason, so widening one does not silently
+# widen the other, and real secrets committed anywhere else still fail.
+#
+# Every `paths` regex is anchored with ^. gitleaks matches path regexes
+# unanchored, so `x/tests/secrets/foo` (or any nested directory an attacker
+# adds) would otherwise bypass the Required scan.
 [extend]
 useDefault = true
 
-[allowlist]
+[[allowlists]]
 description = "Secret-redaction engine sample fixtures (not real secrets)"
-# Anchored with ^ so only these exact top-level paths are allowlisted. gitleaks
-# matches path regexes unanchored, so `x/tests/secrets/foo` (or any nested
-# directory an attacker adds) would otherwise bypass the Required scan.
+# The engine's test fixtures and packaged detector data contain SAMPLE values —
+# fake AWS keys, a throwaway PEM, provider tokens — because the engine's whole
+# job is to detect and redact them. Scanning them as if they were real would
+# make the redactor untestable.
 paths = [
   '''^tests/secrets/.*''',
   '''^python/agent_sanitizer/secrets/data/secret-detectors\.json$''',
 ]
+
+[[allowlists]]
+description = "Layer-2 span-store identifiers (not credentials)"
+# These tests exercise the Layer-2 span store, whose keys are the first 12
+# lowercase hex chars of a SHA-256 over the spliced HTML — a content address,
+# not a credential. `generic-api-key` scores them as secrets because they are
+# opaque hex sitting next to an assignment; there is nothing to rotate and
+# nothing to leak. Scoped to the Layer-2 span/rehydrate test files, which exist
+# only to drive that store.
+paths = ['''^test/claude-hooks-layer2-[a-z]+\.test\.mjs$''']
