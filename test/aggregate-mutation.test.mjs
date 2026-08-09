@@ -190,10 +190,14 @@ describe("gatedScopes", () => {
     // no threshold at all, which is the silent ungating the split exists to
     // prevent. Run over the LIVE mutated set, so a new directory that fits none
     // of the prefixes fails here rather than at the next aggregate run.
+    // Distinct sentinels, not the live ratchet values: the partition depends on
+    // the prefixes alone, so real numbers here would read as a second pin of
+    // floors that `test/shipped-gates.test.mjs` already owns, and raising a
+    // ratchet would look like drift against a test that never cared.
     const scopes = gatedScopes({
-      breakThreshold: 83,
-      hookScopeBreak: 30,
-      toolingScopeBreak: 1,
+      breakThreshold: 11,
+      hookScopeBreak: 22,
+      toolingScopeBreak: 33,
     });
     const files = mutatedSources(
       execFileSync("git", ["rev-parse", "--show-toplevel"], {

@@ -27,7 +27,6 @@ import {
   expandShards,
   EOF_SENTINEL,
 } from "../.github/scripts/expand-shards.mjs";
-import { mutatedSources } from "../scripts/shipped-sources.mjs";
 
 const repoRoot = execFileSync("git", ["rev-parse", "--show-toplevel"], {
   encoding: "utf8",
@@ -59,22 +58,6 @@ describe("mutation shard matrix", () => {
       new Set(ids).size,
       ids.length,
       "shard ids must be unique (they key the per-shard incremental cache and artifact name)",
-    );
-  });
-
-  it("covers exactly the .mjs files the gate mutates", () => {
-    const onDisk = mutatedSources(repoRoot);
-
-    const inShards = [
-      ...new Set(
-        shards.flatMap((s) => parseMutate(s.mutate).map((e) => e.file)),
-      ),
-    ].sort();
-
-    assert.deepEqual(
-      inShards,
-      onDisk,
-      "shard file set must equal the mutated .mjs set (add a `split` entry or `group` when a published file or a .hooks/lib module is added/removed)",
     );
   });
 

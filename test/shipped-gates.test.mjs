@@ -170,6 +170,35 @@ describe("shipped sources", () => {
       rmSync(scratch, { recursive: true, force: true });
     }
   });
+
+  it("throws on a shipped file that falls in no gated scope", () => {
+    // `hookScope` names its prefixes so an unclaimed path is refused rather
+    // than swept under the hook layer's floors and mutation ratchet. At this
+    // head every shipped file is claimed, so only a synthetic manifest can
+    // reach the branch — without this the guard could be deleted green.
+    const scratch = mkdtempSync(join(tmpdir(), "shipped-scope-"));
+    try {
+      mkdirSync(join(scratch, "lib"));
+      writeFileSync(join(scratch, "lib", "a.mjs"), "");
+      writeFileSync(
+        join(scratch, "package.json"),
+        JSON.stringify({ files: ["lib/*.mjs"] }),
+      );
+      // The offending path must be NAMED: an error that only says "some file"
+      // leaves the reader diffing the shipped set by hand.
+      assert.throws(() => hookScope(scratch), /in no gated scope: lib\/a\.mjs/);
+
+      mkdirSync(join(scratch, "bin"));
+      writeFileSync(join(scratch, "bin", "cli.mjs"), "");
+      writeFileSync(
+        join(scratch, "package.json"),
+        JSON.stringify({ files: ["bin/*.mjs"] }),
+      );
+      assert.deepEqual(hookScope(scratch), ["bin/cli.mjs"]);
+    } finally {
+      rmSync(scratch, { recursive: true, force: true });
+    }
+  });
 });
 
 describe("coverage gate covers the shipped set", () => {
