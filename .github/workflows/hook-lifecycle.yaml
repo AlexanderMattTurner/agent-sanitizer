@@ -26,9 +26,13 @@ jobs:
       # Most of this gate's watched set is DERIVED from the entry point below, so
       # it cannot drift out of date. The regex carries only what the derivation
       # cannot see: a path this job's tooling reads without any script naming it,
-      # and the composite action, which is YAML rather than shell.
+      # and the composite action and the decide gate, which are YAML rather than
+      # shell. The decide gate is what decides whether this job runs at all, so a
+      # change to it can silently skip the lifecycle — the exact fail-open the
+      # derivation exists to prevent, and one the closure cannot see because no
+      # script names the reusable workflow.
       # POSIX ERE, read by `grep -E` — no PCRE escapes (\d, \w, (?:…)).
-      paths-regex: '^(\.claude/hooks/|\.hooks/|setup\.sh$|pnpm-lock\.yaml$|\.github/actions/setup-base-env/)'
+      paths-regex: '^(\.claude/hooks/|\.hooks/|setup\.sh$|pnpm-lock\.yaml$|\.github/actions/setup-base-env/|\.github/workflows/decide-reusable\.yaml$)'
       # path-gate-ok: .github/scripts/run-hook-lifecycle.sh it is the shell-targets entry point below, so the decide job derives it and everything it reaches
       shell-targets: .github/scripts/run-hook-lifecycle.sh
       # The lifecycle run is a behavior test, so a comment-only touch of a watched
