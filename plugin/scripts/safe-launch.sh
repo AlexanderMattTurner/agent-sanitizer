@@ -46,6 +46,24 @@ else
   report_slow_hook() { :; }
 fi
 
+# The posture knob's closed set, GENERATED from FAIL_CLOSED_VALUES in
+# claude-hooks/lib/hook-io.mjs — so this shim and the JS cannot disagree about
+# which spellings mean "fail closed" by each restating the literals.
+#
+# A missing lib means a broken install, and this shim's contract is that its own
+# breakage never stalls the session, so the fallback is the DEFAULT posture with
+# a loud line rather than a second copy of the closed set (a copy is the drift
+# the generated lib exists to remove). An operator who pinned closed and lost it
+# this way learns from stderr, and reinstalling restores it.
+fail_open_lib="$script_dir/lib/fail-open.sh"
+if [[ -r "$fail_open_lib" ]]; then
+  # shellcheck source=lib/fail-open.sh
+  . "$fail_open_lib"
+else
+  echo "agent-sanitizer: $fail_open_lib is missing — AGENT_SANITIZER_FAIL_OPEN cannot be honored, defaulting to fail OPEN (reinstall the plugin)" >&2
+  agent_sanitizer_fail_open() { return 0; }
+fi
+
 hook_event="${1:?usage: safe-launch.sh <HookEvent> [args...]}"
 shift
 
@@ -96,17 +114,16 @@ json_escape() {
 #
 # Default posture is fail-OPEN: the guarded action passes through UNSANITIZED
 # and the reason rides along as additionalContext. AGENT_SANITIZER_FAIL_OPEN=0
-# (or "false") asks for the fail-CLOSED block/ask/suppression instead — see
-# failOpenEnabled in claude-hooks/lib/hook-io.mjs, which this arm mirrors.
+# (or "false") asks for the fail-CLOSED block/ask/suppression instead. Which
+# spellings mean closed is decided by lib/fail-open.sh, generated from
+# failOpenEnabled's FAIL_CLOSED_VALUES — this shim no longer mirrors it.
 emit_degraded() {
   local reason
   report_launch_timing
   reason="$(json_escape "$1")"
-  # The two literals failOpenEnabled() matches, kept in the same order as its
-  # FAIL_CLOSED_VALUES set; every other value (including unset) is fail-open.
-  case "${AGENT_SANITIZER_FAIL_OPEN:-}" in
-  0 | false) ;;
-  *)
+  # The closed set lives in lib/fail-open.sh, generated from failOpenEnabled()'s
+  # FAIL_CLOSED_VALUES — this shim no longer restates the literals.
+  if agent_sanitizer_fail_open; then
     echo "agent-sanitizer: failing open — $event_name unguarded (set AGENT_SANITIZER_FAIL_OPEN=0 to fail closed)" >&2
     # No permissionDecision, no decision, no updatedToolOutput: nothing is
     # blocked or replaced. The context is all that is left, and it is why stdout
@@ -114,8 +131,7 @@ emit_degraded() {
     printf '{"hookSpecificOutput":{"hookEventName":"%s","additionalContext":"%s"}}\n' \
       "$event_name" "$reason The sanitizer is failing open, so $unguarded_note Set AGENT_SANITIZER_FAIL_OPEN=0 to fail closed on hook failures."
     return 0
-    ;;
-  esac
+  fi
   case "$hook_event" in
   UserPromptSubmit)
     # Block the prompt: unsanitized (possibly injected) prompt content must

@@ -120,7 +120,7 @@ function readFlag(argv, name50) {
   return match === void 0 ? void 0 : match.slice(prefix.length);
 }
 function failOpenEnabled(env = process.env) {
-  return !FAIL_CLOSED_VALUES.has(env[FAIL_OPEN_ENV] ?? "");
+  return !FAIL_CLOSED_SET.has(env[FAIL_OPEN_ENV] ?? "");
 }
 function failOpenContext(hookName, guarded, err, failedPackages = failedLazyPackages, packageMessage = missingPackageMessage) {
   const [pkg] = err instanceof TypeError ? failedPackages() : [];
@@ -353,7 +353,7 @@ function writeFileNoFollow(path2, content3, mode = 384) {
     closeSync(fd);
   }
 }
-var defaultSharedState, shared, HookEvent, PermissionDecision, FAIL_OPEN_ENV, FAIL_CLOSED_VALUES, LONE_SURROGATE_RE, MAX_STDIN_BYTES, lazyImportErrors, DEFAULT_MISSING_PACKAGE_REMEDY, UNTRUSTED_TEXT_CAP, HOOKGATE_MARKER_STEM;
+var defaultSharedState, shared, HookEvent, PermissionDecision, FAIL_OPEN_ENV, FAIL_CLOSED_VALUES, FAIL_CLOSED_SET, LONE_SURROGATE_RE, MAX_STDIN_BYTES, lazyImportErrors, DEFAULT_MISSING_PACKAGE_REMEDY, UNTRUSTED_TEXT_CAP, HOOKGATE_MARKER_STEM;
 var init_hook_io = __esm({
   "claude-hooks/lib/hook-io.mjs"() {
     "use strict";
@@ -378,7 +378,8 @@ var init_hook_io = __esm({
       ASK: "ask"
     });
     FAIL_OPEN_ENV = "AGENT_SANITIZER_FAIL_OPEN";
-    FAIL_CLOSED_VALUES = /* @__PURE__ */ new Set(["0", "false"]);
+    FAIL_CLOSED_VALUES = Object.freeze(["0", "false"]);
+    FAIL_CLOSED_SET = new Set(FAIL_CLOSED_VALUES);
     LONE_SURROGATE_RE = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g;
     MAX_STDIN_BYTES = 64 * 1024 * 1024;
     lazyImportErrors = /* @__PURE__ */ new Map();
