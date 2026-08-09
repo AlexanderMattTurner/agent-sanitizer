@@ -217,7 +217,7 @@ function runSelfReview({
 
   const headBefore = git(work, "rev-parse", "HEAD").trim();
   let status = 0;
-  let stdout = "";
+  let stdout;
   try {
     stdout = execFileSync("bash", [SCRIPT], {
       cwd: work,

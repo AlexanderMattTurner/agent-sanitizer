@@ -2,7 +2,7 @@
   "$schema": "https://json.schemastore.org/claude-code-plugin-manifest.json",
   "name": "agent-sanitizer",
   "displayName": "Agent Sanitizer",
-  "version": "2.31.0",
+  "version": "2.31.5",
   "description": "The agent-sanitizer defense pipeline as a Claude Code plugin: invisible-Unicode and ANSI stripping, hidden-HTML splicing, exfil-URL detection, confusable normalization, and detect-secrets-backed secret redaction over tool inputs, tool outputs, and user prompts. A hook that cannot run says so instead of failing silently.",
   "author": {
     "name": "Alexander Matt Turner",

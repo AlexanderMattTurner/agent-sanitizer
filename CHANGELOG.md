@@ -8,6 +8,53 @@ adhere to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+## [2.31.5] - 2026-08-09
+
+### Fixed
+
+- Registration of the generated fail-open shell library now completes successfully so main health checks pass.
+
+## [2.31.4] - 2026-08-09
+
+### Fixed
+
+- Fixed CI routing to properly handle post-merge failures that were not being reported.
+- Fixed coverage hook-scope ratchet to work bidirectionally instead of one-directionally.
+- Fixed automation layer linting so that it is no longer ignored.
+
+## [2.31.3] - 2026-08-09
+
+### Fixed
+
+- The launcher now correctly gates on the hook verdict's shape rather than relying on stdout being non-empty.
+- The generated fail-open posture library no longer includes a shebang line.
+- The launcher now gates on the bundle's post-condition check instead of using `node --check` as a proxy.
+- Layer 3's tool scope is now correctly declared as a partition instead of a silent fallthrough.
+
+### Changed
+
+- The fail-open shell posture is now generated from its JavaScript source of truth, ensuring parity between implementations.
+
+### Removed
+
+- Dropped stale `node --check` preflight references from plugin documentation.
+
+## [2.31.2] - 2026-08-09
+
+### Fixed
+
+- HTML processing now correctly resolves hex colors and logical box properties during extent checks.
+- Fixed border box validation to verify empty state before splicing zero-size elements.
+- Secrets redactor no longer rewrites a security codebase's own source files.
+- CLI sanitize command now forwards the complete sanitize result pinned against the Python client.
+- Secrets engine now peels value terminators at the mint point instead of per gate, improving correctness.
+
+## [2.31.1] - 2026-08-09
+
+### Changed
+
+- Skills workflow now requires an explore-plan gate before audit fan-outs.
+
 ## [2.31.0] - 2026-08-09
 
 ### Added

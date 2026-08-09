@@ -210,12 +210,20 @@ export const PermissionDecision = Object.freeze({
 export const FAIL_OPEN_ENV = "AGENT_SANITIZER_FAIL_OPEN";
 
 /**
- * Values that turn the default posture back to fail-closed. Matched exactly,
- * so the launcher's shell `case` can state the same two literals — a
- * case-insensitive match here would need `tr`, which the launcher cannot reach
- * (it runs its no-node arm on shell builtins alone) and the two would drift.
+ * Values that turn the default posture back to fail-closed. Matched exactly:
+ * a case-insensitive match would need `tr`, which the launcher cannot reach
+ * (it runs its no-node arm on shell builtins alone).
+ *
+ * THE SINGLE SOURCE OF TRUTH for the closed set. The shell shims cannot import
+ * it, so `plugin/scripts/lib/fail-open.sh` is GENERATED from it by
+ * `scripts/gen-fail-open-lib.mjs` and committed; the round trip is asserted in
+ * plugin/test/fail-open-parity.test.mjs. Everything else that spells the set
+ * out by hand is an implementation that must appear in the parity table in
+ * tests/test_safe_launch.py.
  */
-const FAIL_CLOSED_VALUES = new Set(["0", "false"]);
+export const FAIL_CLOSED_VALUES = Object.freeze(["0", "false"]);
+
+const FAIL_CLOSED_SET = new Set(FAIL_CLOSED_VALUES);
 
 /**
  * Whether hook failures pass the guarded action through. True unless the caller
@@ -231,7 +239,7 @@ const FAIL_CLOSED_VALUES = new Set(["0", "false"]);
  * @returns {boolean}
  */
 export function failOpenEnabled(env = process.env) {
-  return !FAIL_CLOSED_VALUES.has(env[FAIL_OPEN_ENV] ?? "");
+  return !FAIL_CLOSED_SET.has(env[FAIL_OPEN_ENV] ?? "");
 }
 
 /**

@@ -27,7 +27,12 @@ import { join } from "node:path";
 import { describe, it } from "node:test";
 
 import { expandShards } from "../.github/scripts/expand-shards.mjs";
-import { SCOPES, srcRoots } from "../scripts/coverage.mjs";
+import {
+  assertRatcheted,
+  RATCHET_SLACK,
+  SCOPES,
+  srcRoots,
+} from "../scripts/coverage.mjs";
 import { mutateSpec } from "../scripts/mutate.mjs";
 import {
   hookScope,
@@ -70,6 +75,12 @@ function manifestMjs() {
  * asserted only as `> 0` can be quietly dropped to 1 in a PR that is really
  * about something else, which is precisely the silent weakening this whole
  * change argues against. Raising a floor is equally deliberate: edit both.
+ *
+ * This pins the floor DOWNWARD only. The upward half — a floor left so far
+ * behind the measurement that whole modules could go untested with CI green,
+ * which is exactly what happened while `functions` sat at 72% against a measured
+ * 90% — is enforced at run time by `assertRatcheted` in scripts/coverage.mjs,
+ * because only the coverage run knows the measurement.
  */
 const SRC_FLOORS = {
   lines: 100,
@@ -77,7 +88,7 @@ const SRC_FLOORS = {
   functions: 100,
   statements: 100,
 };
-const HOOK_FLOORS = { lines: 88, branches: 80, functions: 72, statements: 88 };
+const HOOK_FLOORS = { lines: 93, branches: 88, functions: 87, statements: 93 };
 
 /** The hook layer's mutation ratchet, same contract as the coverage floors. */
 const HOOK_SCOPE_BREAK = 30;
@@ -192,6 +203,44 @@ describe("coverage gate covers the shipped set", () => {
       // …then whole-object, so an extra metric cannot sneak in unpinned.
       assert.deepEqual(scope.thresholds, floors);
     }
+  });
+
+  it("fails a floor that has fallen too far behind its measurement", () => {
+    // The ratchet's upward half. Pinned like the floors themselves: widening
+    // the slack retires the check as surely as lowering a floor does, so it
+    // costs a second deliberate edit.
+    assert.equal(RATCHET_SLACK, 6);
+
+    const scope = { name: "probe", thresholds: { lines: 90, functions: 70 } };
+    // Exactly at the limit is still fine; one hundredth past it is not — the
+    // boundary is where an off-by-one would hide.
+    assert.doesNotThrow(() =>
+      assertRatcheted(scope, { lines: 96, functions: 76 }),
+    );
+    assert.throws(
+      () => assertRatcheted(scope, { lines: 96, functions: 76.01 }),
+      /stopped ratcheting[\s\S]*functions: measured 76\.01%, floor 70%/,
+    );
+    // Metrics the summary reports but no floor names (c8 emits `branchesTrue`)
+    // must not be compared against a floor that does not exist.
+    assert.doesNotThrow(() =>
+      assertRatcheted(scope, { lines: 90, functions: 70, branchesTrue: 100 }),
+    );
+    // A floor whose metric the report does not carry gates nothing, so it fails
+    // rather than being skipped — the fail-open this whole script exists to close.
+    assert.throws(
+      () => assertRatcheted(scope, { lines: 100 }),
+      /has a functions floor, but the coverage summary reports no functions/,
+    );
+    // The message has to name BOTH files, or the fix is a scavenger hunt.
+    assert.throws(
+      () => assertRatcheted(scope, { lines: 100, functions: 70 }),
+      (error) => {
+        assert.match(error.message, /scripts\/coverage\.mjs/);
+        assert.match(error.message, /test\/shipped-gates\.test\.mjs/);
+        return true;
+      },
+    );
   });
 
   it("walks a --src root for every directory the shipped set lives in", () => {

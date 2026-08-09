@@ -22,9 +22,15 @@
 #         .hooks/ are allowed so the broken hook can be repaired in-session.
 #       - Everything else goes through emit_degraded (below).
 #
-# Failure posture (AGENT_SANITIZER_FAIL_OPEN), mirroring
-# plugin/scripts/safe-launch.sh and failOpenEnabled() in
-# claude-hooks/lib/hook-io.mjs so the three cannot drift:
+# Failure posture (AGENT_SANITIZER_FAIL_OPEN). The closed set is stated here by
+# hand rather than sourced from the generated plugin/scripts/lib/fail-open.sh:
+# this file ships to repos that have no plugin/ tree, and a shim that silently
+# lost the operator's posture to a missing sibling would be the failure it
+# exists to prevent. What keeps it from drifting is not this comment — it is
+# tests/test_safe_launch.py's parity table, which RUNS every implementation
+# (this shim, the generated lib, the plugin launcher, the settings.json
+# bootstrap, and failOpenEnabled() in claude-hooks/lib/hook-io.mjs) over every
+# posture value, and refuses to let a new copy appear unclaimed.
 #   * Default (unset, or anything other than the two literals below) — fail
 #     OPEN. The guarded tool runs; the shim prints a non-empty
 #     `additionalContext` warning so the transcript records that the call went
@@ -73,8 +79,9 @@ emit_degraded() {
   local reason
   reason="$(json_escape "$1")"
   echo "safe-launch: this state is only reachable through a bug in the hook stack — please file an issue: $ISSUE_URL" >&2
-  # The two literals failOpenEnabled() matches, in the same order as its
-  # FAIL_CLOSED_VALUES set; every other value (including unset) is fail-open.
+  # The two literals FAIL_CLOSED_VALUES holds, in the same order; every other
+  # value (including unset) is fail-open. Pinned by the parity table in
+  # tests/test_safe_launch.py, not by the header's promise.
   case "${AGENT_SANITIZER_FAIL_OPEN:-}" in
   0 | false)
     # Fail CLOSED: halt for a conscious, per-tool user override.

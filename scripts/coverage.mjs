@@ -19,7 +19,7 @@
  * Usage: node scripts/coverage.mjs [extra node --test args]
  */
 import { spawnSync } from "node:child_process";
-import { realpathSync } from "node:fs";
+import { readFileSync, realpathSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -72,9 +72,30 @@ export const SCOPES = [
   {
     name: "claude-hooks + bin (ratchet)",
     files: hookScope,
-    thresholds: { lines: 88, branches: 80, functions: 72, statements: 88 },
+    // Measured 96.34 / 91.19 / 90.15 / 96.34 — each floor sits ~3 points under.
+    thresholds: { lines: 93, branches: 88, functions: 87, statements: 93 },
   },
 ];
+
+/**
+ * How far a measurement may run ahead of its floor before the build says so.
+ *
+ * CONTRIBUTING.md says the ratchet "should only ever move up", and nothing
+ * enforced that half: c8 fails when the measurement drops BELOW the floor and is
+ * silent however far above it climbs. The hook floor had drifted to 72%
+ * functions against a measured 90% — room for 47 shipped functions to become
+ * entirely untested with CI still green. A ratchet that only ever catches
+ * regressions relative to a stale number is not a ratchet.
+ *
+ * 6 points, not the ~1 an exactly-pinned floor would allow, because the headroom
+ * noted above is real: the hooks that Claude Code drives as subprocesses run the
+ * committed `plugin/dist` BUNDLE, and those lines are attributed to the bundle
+ * rather than back to the source here, so the ratio moves when a file merely
+ * grows. 6 absorbs that drift while still being far smaller than the 18-point
+ * gap that accumulated unnoticed — and the failure it raises is "raise the
+ * floor, in both files", which is a two-line edit, not a debugging session.
+ */
+export const RATCHET_SLACK = 6;
 
 /** c8 flags shared by the collecting run and every report pass.
  * @param {string[]} includes */
@@ -129,17 +150,68 @@ function main() {
         `coverage: scope "${scope.name}" matched no shipped files`,
       );
     process.stdout.write(`\nCoverage floor — ${scope.name}\n`);
+    // json-summary rides along with the text table so the same numbers c8 just
+    // gated on are the ones the ratchet check below reads — a second report pass
+    // would be a second measurement to disagree with. It lands in the default
+    // report dir on purpose: `--report-dir` also relocates where `c8 report`
+    // LOOKS for the raw V8 output (`<report-dir>/tmp`), so pointing it at a
+    // scratch directory makes the pass report zero coverage.
+    const summaryPath = join(repoRoot, "coverage", "coverage-summary.json");
+    // Removed first so a reporter that failed to write cannot be read as the
+    // previous scope's numbers.
+    rmSync(summaryPath, { force: true });
     run(
       [
         "report",
         ...commonArgs(files),
         "--reporter=text",
+        "--reporter=json-summary",
         "--check-coverage",
         ...Object.entries(scope.thresholds).map(([k, v]) => `--${k}=${v}`),
       ],
       `coverage floor for ${scope.name}`,
     );
+    assertRatcheted(scope, readSummary(summaryPath));
   }
+}
+
+/** @param {string} path @returns {Record<string, number>} metric -> percentage */
+function readSummary(path) {
+  const { total } = JSON.parse(readFileSync(path, "utf8"));
+  return Object.fromEntries(
+    Object.entries(total).map(([metric, { pct }]) => [metric, pct]),
+  );
+}
+
+/**
+ * The other half of the ratchet: fail when a floor has fallen too far BEHIND
+ * what the suite actually covers, naming both files that have to move.
+ *
+ * @param {{ name: string, thresholds: Record<string, number> }} scope
+ * @param {Record<string, number>} measured
+ */
+export function assertRatcheted(scope, measured) {
+  // A floor naming a metric the report does not carry is gating on nothing;
+  // skipping it quietly would retire that floor without anyone editing it.
+  for (const metric of Object.keys(scope.thresholds))
+    if (typeof measured[metric] !== "number")
+      throw new Error(
+        `coverage: scope "${scope.name}" has a ${metric} floor, but the coverage summary reports no ${metric}`,
+      );
+  const stale = Object.entries(scope.thresholds)
+    .filter(([metric, floor]) => measured[metric] - floor > RATCHET_SLACK)
+    .map(
+      ([metric, floor]) =>
+        `  ${metric}: measured ${measured[metric]}%, floor ${floor}% ` +
+        `(${(measured[metric] - floor).toFixed(2)} points of slack, max ${RATCHET_SLACK})`,
+    );
+  if (stale.length === 0) return;
+  throw new Error(
+    `coverage: the "${scope.name}" floor has stopped ratcheting —\n` +
+      `${stale.join("\n")}\n` +
+      "Raise these floors to just under the measured values in BOTH " +
+      "scripts/coverage.mjs (SCOPES) and test/shipped-gates.test.mjs (HOOK_FLOORS/SRC_FLOORS).",
+  );
 }
 
 // Importable without side effects: the contract test reads SCOPES and must not

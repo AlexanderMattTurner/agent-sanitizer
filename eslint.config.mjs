@@ -3,16 +3,15 @@ import globals from "globals";
 import tseslint from "typescript-eslint";
 
 export default tseslint.config(
-  // Lint only the library sources; the template's automation scripts
-  // (.github, .hooks, config) carry their own conventions.
   {
     ignores: [
       "coverage/**",
       "types/**",
       "node_modules/**",
-      ".github/**",
-      ".claude/**",
-      ".hooks/**",
+      // Worktree scaffolding: a second, gitignored copy of the whole repo, so
+      // linting it would double every finding and report them at paths that do
+      // not exist on the branch.
+      ".claude/worktrees/**",
       "config/**",
       "tests/**",
       // The committed plugin bundle is generated (~1.8 MB of inlined
@@ -34,6 +33,12 @@ export default tseslint.config(
   },
   js.configs.recommended,
   {
+    // The automation layer used to be ignored wholesale ("carries its own
+    // conventions"), which meant `pnpm lint` linted 0 of the ~48 JS files under
+    // .github/, .hooks/ and .claude/hooks/ — including four hook modules that
+    // run inside a Claude session and three CommonJS scripts that run in CI
+    // with a token. Same rules as the library: an unused binding or a
+    // typo'd global is not more acceptable in a workflow script.
     files: [
       "src/**/*.mjs",
       "test/**/*.mjs",
@@ -41,6 +46,9 @@ export default tseslint.config(
       "claude-hooks/**/*.mjs",
       "plugin/scripts/**/*.mjs",
       "plugin/test/**/*.mjs",
+      ".github/**/*.mjs",
+      ".hooks/**/*.mjs",
+      ".claude/hooks/**/*.mjs",
     ],
     languageOptions: {
       // "latest" rather than a pinned year: the hook config modules are loaded
@@ -73,6 +81,17 @@ export default tseslint.config(
         },
       ],
     },
+  },
+  {
+    // `.github/scripts/package.json` declares `"type": "commonjs"`, so the `.js`
+    // scripts there are CJS: `require`/`module` are globals, not undefined names.
+    files: [".github/**/*.js"],
+    languageOptions: {
+      ecmaVersion: "latest",
+      sourceType: "commonjs",
+      globals: { ...globals.node },
+    },
+    rules: { "consistent-return": "error" },
   },
   {
     // The one module allowed to call esbuild directly — it *is* the guard.

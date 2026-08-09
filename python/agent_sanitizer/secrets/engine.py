@@ -273,7 +273,21 @@ FIELD_VALUE_RE = re.compile(
     r"(?:(?:Bearer|Token|Basic)\s+)?)"
     r"(?P<openbracket>[(\[{]?)"
     r"(?P<quote>[\"']?)"
-    r"(?P<secret_value>[^\s\"'`{}()\[\]]{20,})"
+    # A trailing statement/list terminator is punctuation of the ENCLOSING
+    # syntax, never of the value, but the class above would swallow it and leave
+    # the stray byte on `secret_value` — the same false positive the operator
+    # lookahead above exists to prevent, arriving from the other end. Nine of the
+    # twelve benign-shape gates judge the value with an anchored `fullmatch`, so
+    # one un-peeled `;` disarms all of them at once and rewrites
+    # `const token = process.env.GH_TOKEN;` into `const token = [REDACTED];`.
+    # Peeling it HERE, in the one expression that decides the value's extent,
+    # means no gate can be written that forgets the normalization: no gate ever
+    # sees an un-peeled value. Precision-safe in the redacting direction too —
+    # no issuer's token alphabet contains `;` or `,`, so the peel can only ever
+    # shorten a non-credential. `.` is deliberately NOT peeled: it is a JWT's
+    # own segment separator.
+    r"(?P<secret_value>[^\s\"'`{}()\[\]]{19,}[^\s\"'`{}()\[\];,])"
+    r"(?P<terminator>[;,]*)"
     r"(?P<closequote>(?P=quote)?)"
     r"(?P<closebracket>[)\]}]?)",
     re.IGNORECASE | re.MULTILINE,
@@ -433,7 +447,15 @@ _KEYWORD_NOUN_LITERALS = frozenset(
 # polynomial backtracking. The lookbehind is always satisfied at the fullmatch
 # start position (no preceding char) and after each \s+ separator (space is not
 # in [A-Z_]), so the actual .fullmatch() semantics are unchanged.
-_CAPS_WORDS = r"(?<![A-Z_])[A-Z]+(?:_[A-Z]+)+"
+# The optional leading underscore sits INSIDE the lookbehind's protection (the
+# guard is evaluated before it, at the fullmatch start or after a \s+ separator,
+# so its semantics are unchanged). Without it a private-by-convention name was
+# not recognised as a name at all: this repo's own
+# `const EXTRA_SECRET_VARS_ENV = "_AGENT_SANITIZER_EXTRA_SECRET_VARS"` was
+# rewritten to "[REDACTED: Secret Keyword]", silently changing which environment
+# variable the program reads. The unprefixed spelling was already covered, so
+# the whole gap was that one byte.
+_CAPS_WORDS = r"(?<![A-Z_])_?[A-Z]+(?:_[A-Z]+)+"
 _PLACEHOLDER_RE = re.compile(
     rf"<[^<>]{{1,80}}>"  # <paste-token-here>
     rf"|\{{\{{[^{{}}]{{1,80}}\}}\}}"  # {{ secrets.GH_TOKEN }} (CI templates)
@@ -773,6 +795,49 @@ def _is_version(c: Candidate) -> bool:
     return _VERSION_RE.fullmatch(c.value) is not None and not _has_opaque_run(c.value)
 
 
+# The flag letters a JS/TS regular-expression literal may carry after its
+# closing delimiter.
+_REGEX_LITERAL_FLAGS = frozenset("dgimsuvy")
+
+
+def _is_regex_literal(c: Candidate) -> bool:
+    """True when the value is a regular-expression literal — code that NAMES
+    credential patterns rather than holding one.
+
+    A credential-named constant assigned a regex is the single most common way
+    a security codebase talks about secrets, and it was being rewritten into
+    invalid source: this repo's own ``src/gates.mjs`` had
+    ``export const SECRET_HINT = /secret|token|password|.../i`` turned into
+    ``export const SECRET_HINT = [REDACTED][n]a|...``. The field NAME trips the
+    keyword and the value class then cuts the literal wherever it first meets a
+    character it excludes (a ``[`` in a character class), so the value is often
+    a TRUNCATED literal rather than a well-formed one — which is why a
+    complete-literal shape alone is not enough to recognise it.
+
+    Two arms, both requiring a leading ``/``:
+
+    * a complete literal (``/…/`` plus optional flags), or
+    * a body carrying an alternation ``|`` — a byte no issuer's token alphabet
+      contains, which is what makes a truncated literal still recognisable.
+
+    Precision floor: a literal carrying an opaque credential-shaped run is NOT
+    skipped, so wrapping a real token as ``/ghp_…/i`` cannot launder it.
+
+    Implemented with string operations rather than a pattern: the obvious
+    ``/.*/[flags]*`` regex backtracks quadratically on a long value, and this
+    gate runs on every field match.
+    """
+    value = c.value
+    if not value.startswith("/") or len(value) < 2:
+        return False
+    if _has_opaque_run(value):
+        return False
+    if "|" in value:
+        return True
+    close = value.rfind("/")
+    return close > 0 and all(ch in _REGEX_LITERAL_FLAGS for ch in value[close + 1 :])
+
+
 # detect-secrets' PrivateKeyDetector only matches the "-----BEGIN-----" header
 # line, so a per-line scan leaves the base64 body unredacted. Match and collapse
 # the whole PEM block. The keyword is "PRIVATE KEY" only, so public material
@@ -976,6 +1041,12 @@ NAME_TRUST_GATES = (
     _is_filesystem_path,
     _is_metadata_field,
     _is_markdown_code_prose,
+    # A SHAPE, but a forgeable one: text arriving from the web is free to wrap a
+    # credential as `/ghp_…/i` to relabel it as a pattern. Trusted for local tool
+    # output only — the same reasoning `_is_config_attr_reference` gives for its
+    # bare-word roots. The structural prefix detectors run before this pass and
+    # remain the floor either way.
+    _is_regex_literal,
 )
 
 
@@ -1117,6 +1188,9 @@ def _redact_core(
             + m.group("openbracket")
             + m.group("quote")
             + _mark(entries, placeholder(), candidate.value)
+            # Re-emitted in source order (value, terminator, closequote) so the
+            # bytes outside the placeholder are preserved exactly, quoted or not.
+            + m.group("terminator")
             + m.group("closequote")
             + m.group("closebracket")
         )

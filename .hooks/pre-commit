@@ -37,14 +37,14 @@ if ! git diff --quiet; then
   fi
 fi
 
-# SSOT guard-test pairing: when a mapped SSOT source is staged, run its cheap
+# Guard-test pairing: when a mapped source is staged, run its cheap
 # paired contract test(s) (map: .hooks/guard-pairs.json) so the data and its
 # guard can only change together — this repo has twice broken main by editing a
 # guarded source without its test. Ahead of the Node-project gate below: the map
 # guards data of any language, so a repo without a package.json still wants it.
 if [[ -f "$git_root/.hooks/guard-pairs.json" ]]; then
   if ! command -v node >/dev/null 2>&1; then
-    gate_die_missing_tool pre-commit node "install Node so the paired SSOT guard tests can run, then retry the commit."
+    gate_die_missing_tool pre-commit node "install Node so the paired guard tests can run, then retry the commit."
   fi
   staged_files=()
   while IFS= read -r line; do staged_files+=("$line"); done < <(git diff --cached --name-only --diff-filter=ACMRD)

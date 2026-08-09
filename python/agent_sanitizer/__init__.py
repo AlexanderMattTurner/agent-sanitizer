@@ -59,7 +59,7 @@ import signal
 import subprocess
 import tempfile
 import threading
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, fields
 from pathlib import Path
 
 # Env var to override the CLI path (e.g. pin at a specific JS checkout); takes
@@ -111,6 +111,24 @@ class SanitizeResult:
     #: Defaulted, so an older CLI that predates the severity split still
     #: constructs this shape.
     notes: list[str] = field(default_factory=list)
+    #: Layer 2's spliced ranges. Defaulted for the same reason as ``notes``.
+    splices: list[dict] = field(default_factory=list)
+
+    @classmethod
+    def from_response(cls, resp: dict) -> "SanitizeResult":
+        """Build from a CLI response, tolerating a CLI that is NEWER than this
+        client.
+
+        ``cls(**resp)`` made version skew fatal in one direction only: a field
+        this client predates raised ``TypeError`` and took down the caller,
+        while a field it postdates was covered by the defaults above. Both
+        directions are ordinary skew for a wire protocol, so both degrade the
+        same way. This is not silent drift-tolerance in the repo itself —
+        ``test/cli-response-contract.test.mjs`` asserts the CLI's live field set
+        equals this dataclass's, so a drift introduced HERE fails CI.
+        """
+        known = {f.name for f in fields(cls)}
+        return cls(**{k: v for k, v in resp.items() if k in known})
 
 
 @dataclass(frozen=True)
@@ -267,7 +285,7 @@ def sanitize(
     if persist is None:
         persist = html
     resp = _dispatch({"text": text, "html": html}, persist=persist, node=node)
-    return SanitizeResult(**resp)
+    return SanitizeResult.from_response(resp)
 
 
 def sanitize_text(
@@ -460,7 +478,7 @@ class Sanitizer:
         return result[0]
 
     def sanitize(self, text: str, *, html: bool = False) -> SanitizeResult:
-        return SanitizeResult(**self.request({"text": text, "html": html}))
+        return SanitizeResult.from_response(self.request({"text": text, "html": html}))
 
     def _drain_stderr(self) -> str:
         if self._stderr is None:

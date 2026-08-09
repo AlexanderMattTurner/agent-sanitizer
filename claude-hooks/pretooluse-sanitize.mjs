@@ -686,7 +686,7 @@ export const REDACTION_HINT = "[REDACTED";
 // mention "[REDACTED" benignly far too often — grepping for it, discussing
 // it — for an ask to hold precision there. That is an accepted gap, named in
 // THREAT-MODEL.md's carve-out paragraph, not a completeness claim.
-const WRITE_SHAPED_TOOLS = new Set([
+export const WRITE_SHAPED_TOOLS = new Set([
   "Write",
   "Edit",
   "MultiEdit",

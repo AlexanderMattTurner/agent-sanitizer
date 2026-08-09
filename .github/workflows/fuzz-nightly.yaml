@@ -8,6 +8,13 @@ name: Nightly unseeded fuzz
 # seed so a broader slice of the input space gets tried over time. It is
 # intentionally NOT wired into branch protection — a failure here means "go
 # look", not "block the PR".
+#
+# failure-notify-exempt: exploratory, and already routed. A failure here is a
+# newly-explored counterexample, not a broken branch, and nightly-fuzz-issue.js
+# files it as a deduplicated issue precisely so nobody is paged for it. Paging
+# would also LATCH: main-health.mjs re-reports for as long as the newest run is
+# red, so one counterexample would push every sweep until the next nightly
+# happens to clear it. test/failure-notify-roster.test.mjs reads this marker.
 on:
   schedule:
     - cron: "17 6 * * *" # daily, off-the-hour to avoid GitHub's peak-minute queueing
