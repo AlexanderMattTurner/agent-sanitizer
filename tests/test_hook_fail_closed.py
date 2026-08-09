@@ -280,4 +280,9 @@ def test_pre_commit_passes_when_paired_guard_passes(tmp_path: Path) -> None:
     )
     result = _run_pre_commit_guarded(repo, tmp_path)
     assert result.returncode == 0, result.stderr
+    # Both operator-facing strings are pinned, not just the one this rename left
+    # alone: matching only "running paired guard test" would stay green through a
+    # revert of "staged guarded source(s)". ASCII-only on purpose — `text=True`
+    # decodes stderr with the locale codec, so matching the em dash is fragile.
+    assert "staged guarded source(s)" in result.stderr
     assert "running paired guard test" in result.stderr
