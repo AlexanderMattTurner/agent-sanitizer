@@ -8,6 +8,17 @@ adhere to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+## [2.32.0] - 2026-08-09
+
+### Added
+- New guard-pair scanner implementations for data and Python files to improve guard verification.
+
+### Changed
+- Guard-pair map is now derived from tests instead of being manually maintained in configuration.
+
+### Fixed
+- Scheduled deletion's guard and missing tool naming issues in hooks.
+
 ## [2.31.6] - 2026-08-09
 
 ### Fixed
