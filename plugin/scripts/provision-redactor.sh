@@ -9,6 +9,13 @@
 # missing Python degrades loudly, never silently open.
 set -euo pipefail
 
+# The secret layer is opt-in (see AGENT_SANITIZER_SECRETS_ENABLED in
+# plugin/README.md): without the knob no hook ever calls the daemon, so
+# provisioning a Python venv for it would be pure session-start cost.
+if [[ "${AGENT_SANITIZER_SECRETS_ENABLED:-}" != "1" ]]; then
+  exit 0
+fi
+
 data_dir="${1:?usage: provision-redactor.sh <plugin-data-dir>}"
 script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 plugin_root="$(cd -- "$script_dir/.." && pwd)"

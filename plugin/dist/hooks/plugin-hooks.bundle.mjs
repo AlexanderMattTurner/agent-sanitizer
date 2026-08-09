@@ -67600,6 +67600,9 @@ function extraSecretVars(env = process.env) {
       );
   return tokens;
 }
+function secretsEnabled(env = process.env) {
+  return env[SECRETS_ENABLED_ENV] === "1";
+}
 function envBoundSecretVars(env = process.env) {
   return [
     .../* @__PURE__ */ new Set([
@@ -67611,7 +67614,7 @@ function envBoundSecretVars(env = process.env) {
     ])
   ];
 }
-var hostEnvConfigSource, HOST_SOURCE_LABEL, HOST_SOURCE_KEYS, _credentialRule, EXTRA_SECRET_VARS_ENV, EXTRA_TOKEN_RE;
+var hostEnvConfigSource, HOST_SOURCE_LABEL, HOST_SOURCE_KEYS, _credentialRule, EXTRA_SECRET_VARS_ENV, EXTRA_TOKEN_RE, SECRETS_ENABLED_ENV;
 var init_env_config = __esm({
   "claude-hooks/lib/env-config.mjs"() {
     "use strict";
@@ -67624,6 +67627,7 @@ var init_env_config = __esm({
     HOST_SOURCE_KEYS = ["minSecretLen", "extraVars"];
     EXTRA_SECRET_VARS_ENV = "_AGENT_SANITIZER_EXTRA_SECRET_VARS";
     EXTRA_TOKEN_RE = /^[A-Z0-9_]+$/;
+    SECRETS_ENABLED_ENV = "AGENT_SANITIZER_SECRETS_ENABLED";
   }
 });
 
@@ -68052,10 +68056,12 @@ var init_trace2 = __esm({
 var pretooluse_sanitize_exports = {};
 __export(pretooluse_sanitize_exports, {
   PRE_TOOL_USE_MESSAGES: () => PRE_TOOL_USE_MESSAGES,
+  REDACTION_HINT: () => REDACTION_HINT,
   buildPreToolUseResponse: () => buildPreToolUseResponse,
   cliMain: () => cliMain,
   depLoadHint: () => depLoadHint,
   failClosedFields: () => failClosedFields,
+  hintedWriteFault: () => hintedWriteFault,
   hookFailureFields: () => hookFailureFields,
   judgePreToolUseSanitize: () => judgePreToolUseSanitize,
   preToolUseLayers: () => preToolUseLayers
@@ -68153,7 +68159,7 @@ async function buildPreToolUseResponse(input, rehydrate = defaultRehydrate, sink
       permissionDecisionReason: deny
     });
   contexts.push(...layerContexts);
-  const notice = placeholderNotice(tool, current);
+  const notice = secretsEnabled() ? placeholderNotice(tool, current) : null;
   if (notice !== null) contexts.push(notice);
   return emitTraced(
     emitTrace,
@@ -68229,6 +68235,18 @@ function failClosedFields(parsedOk, err, opts = {}) {
     permissionDecisionReason: parsedOk ? messages.failed(cause) : messages.unparsable(cause)
   };
 }
+function hintedWriteFault(input) {
+  const payload = (
+    /** @type {{tool_name?: unknown, tool_input?: unknown} | undefined} */
+    input
+  );
+  if (!WRITE_SHAPED_TOOLS.has(
+    /** @type {string} */
+    payload?.tool_name
+  ))
+    return false;
+  return JSON.stringify(payload?.tool_input ?? null).includes(REDACTION_HINT);
+}
 function hookFailureFields(parsedOk, err, opts = {}) {
   return (
     /** @type {Record<string, unknown>} */
@@ -68236,7 +68254,8 @@ function hookFailureFields(parsedOk, err, opts = {}) {
       parsedOk,
       env: opts.env,
       messages: opts.messages,
-      hint: opts.hint
+      hint: opts.hint,
+      input: opts.input
     }).fields
   );
 }
@@ -68261,13 +68280,14 @@ async function cliMain(opts = {}) {
         HookEvent.PRE_TOOL_USE,
         hookFailureFields(input !== void 0, err, {
           messages,
-          hint: depLoadHint(err, messages.remedy)
+          hint: depLoadHint(err, messages.remedy),
+          input
         })
       )
     }
   );
 }
-var HOOK_NAME, PRE_TOOL_USE_MESSAGES, normalizeConfusables2, normalizeContext2, rehydrateRedacted2, require5, confusableScan, redactorIo, defaultRehydrate;
+var HOOK_NAME, PRE_TOOL_USE_MESSAGES, normalizeConfusables2, normalizeContext2, rehydrateRedacted2, require5, confusableScan, redactorIo, guardedRehydrate, defaultRehydrate, REDACTION_HINT, WRITE_SHAPED_TOOLS;
 var init_pretooluse_sanitize = __esm({
   async "claude-hooks/pretooluse-sanitize.mjs"() {
     "use strict";
@@ -68278,6 +68298,7 @@ var init_pretooluse_sanitize = __esm({
     await init_invisible_alert();
     await init_authored_content();
     init_redactor_client();
+    init_env_config();
     await init_secret_drop_guard();
     init_placeholder_grammar();
     init_trace2();
@@ -68314,13 +68335,35 @@ var init_pretooluse_sanitize = __esm({
         ) : null;
       }
     };
-    defaultRehydrate = withSecretDropGuard(
+    guardedRehydrate = withSecretDropGuard(
       (tool, toolInput) => rehydrateRedacted2(tool, toolInput, redactorIo),
       redactorIo
     );
+    defaultRehydrate = async (tool, toolInput) => secretsEnabled() ? guardedRehydrate(tool, toolInput) : null;
+    REDACTION_HINT = "[REDACTED";
+    WRITE_SHAPED_TOOLS = /* @__PURE__ */ new Set([
+      "Write",
+      "Edit",
+      "MultiEdit",
+      "NotebookEdit"
+    ]);
     registerFaultPolicy(HOOK_NAME, {
       event: HookEvent.PRE_TOOL_USE,
       guarded: "tool input",
+      open: (ctx) => {
+        if (!secretsEnabled(ctx.env) || !hintedWriteFault(ctx.input))
+          return defaultOpen(ctx);
+        const closed = failClosedFields(true, ctx.err, {
+          messages: ctx.messages,
+          hint: ctx.hint
+        });
+        return {
+          fields: {
+            ...closed,
+            permissionDecisionReason: `${closed.permissionDecisionReason} This input would write ${REDACTION_HINT}\u2026] placeholder text, which stands for a redacted secret the unavailable sanitizer cannot translate back; proceeding would overwrite the real secret with the placeholder, so the call is held even under the fail-open posture. Retry once the sanitizer recovers, or ask the user to make this change.`
+          }
+        };
+      },
       closed: (ctx) => ({
         fields: failClosedFields(ctx.parsedOk, ctx.err, {
           messages: ctx.messages,
@@ -68463,13 +68506,15 @@ async function sanitizeText2(text5, toolName, deadline = makeDeadline(SANITIZE_B
     exfilScan: webIngress,
     sgrCarveOut: !webIngress,
     deadline,
-    // Layer 4 — the seam rethrows a redactor throw wrapped, and the CLI applies
-    // the caller's posture to it. Surface the failure to the operator's
-    // terminal here first: whatever the CLI decides rides in additionalContext,
-    // which only the model sees, so a degraded redactor would otherwise be
-    // invisible to the human — and under the fail-open default this line is the
-    // ONLY signal the human gets.
-    redact: async (content3) => {
+    // Layer 4 — OPT-IN (secretsEnabled): with the knob unset the seam gets no
+    // redact callback at all, so plain output never spawns the daemon and no
+    // placeholder ever enters the model's view. When it runs, the seam rethrows
+    // a redactor throw wrapped, and the CLI applies the caller's posture to it.
+    // Surface the failure to the operator's terminal here first: whatever the
+    // CLI decides rides in additionalContext, which only the model sees, so a
+    // degraded redactor would otherwise be invisible to the human — and under
+    // the fail-open default this line is the ONLY signal the human gets.
+    redact: !secretsEnabled() ? void 0 : async (content3) => {
       let secrets;
       try {
         secrets = await redactSecrets(content3, webIngress, deadline);
@@ -68673,7 +68718,7 @@ async function evaluateToolOutput(input, ext = {}) {
   for (const original of reveals) {
     let stored;
     try {
-      const secrets = await redactSecrets(original, true, deadline);
+      const secrets = secretsEnabled() ? await redactSecrets(original, true, deadline) : null;
       stored = secrets ? secrets.text : original;
     } catch {
       continue;
@@ -68681,7 +68726,7 @@ async function evaluateToolOutput(input, ext = {}) {
     const hint = persistReveal(stored);
     if (hint) warnings.push(hint);
   }
-  if (input.tool_name === "Read" && !revealRead && containsPlaceholder(toolOutput))
+  if (secretsEnabled() && input.tool_name === "Read" && !revealRead && containsPlaceholder(toolOutput))
     warnings.push(ON_DISK_PLACEHOLDER_WARNING);
   if (!modified && warnings.length === 0 && notes.length === 0)
     return revealRead ? emit("flagged", { additional_context: REVEAL_READ_ENVELOPE }) : emit("clean", null);
@@ -68759,6 +68804,7 @@ var init_sanitize_output = __esm({
     await init_control_plane2();
     init_trace2();
     init_secret_annotate();
+    init_env_config();
     init_reveal();
     init_placeholder_grammar();
     _sanitizer = /** @type {typeof import("agent-sanitizer")} */

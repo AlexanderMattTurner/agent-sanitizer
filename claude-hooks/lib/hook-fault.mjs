@@ -145,11 +145,15 @@ export function faultPolicy(hook) {
  * recording that the guarded content passed through unsanitized. Non-empty
  * matters — an empty stdout is recorded by Claude Code as a CLEAN run rather
  * than a degraded one, so the posture would give up visibility as well as
- * enforcement.
+ * enforcement. Exported so a policy that declares its own `open` arm for a
+ * carve-out can still route its non-carve-out path through THIS rendering
+ * instead of restating it — a hand-copied body would silently drift the day
+ * this one changes, which is the per-hook re-derivation this module exists to
+ * end.
  * @param {FaultContext} ctx
  * @returns {FaultParts}
  */
-function defaultOpen(ctx) {
+export function defaultOpen(ctx) {
   return { fields: { additionalContext: ctx.openContext } };
 }
 

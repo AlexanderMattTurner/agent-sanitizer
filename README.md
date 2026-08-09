@@ -58,7 +58,7 @@ the callback you inject for the agent-specific concern; `—` is a pure transfor
 | 5   | `/instructions` | Scan/auto-clean `CLAUDE.md`, `AGENTS.md`, `SKILL.md`, etc., decoding Unicode-tag + zero-width-binary payloads.                                                              | `fs` (direct)               |
 | 6   | `/prompt`       | Classify a prompt pass / note / block on payload-capable invisible/ANSI content (inert escapes get the note).                                                               | —                           |
 | 7   | `/output`       | Run Layers 1–4 over structured tool output, preserving shape. The Layer-5 slot takes a delete-only filter.                                                                  | `redact`, `filterInjection` |
-| 8   | `/rehydrate`    | Re-anchor a model Edit composed from the _sanitized_ view back onto real bytes; deny anything ambiguous or secret-exposing.                                                 | `io`                        |
+| 8   | `/rehydrate`    | Re-anchor a model Edit/Write composed from the _sanitized_ view back onto real bytes; gate MultiEdit on a verified view==disk; deny anything ambiguous or secret-exposing.  | `io`                        |
 | —   | `/view-map`     | Pure offset/text machinery mapping a file's on-disk bytes ↔ the sanitized view (Layer-1 deletions, Layer-4 redactions). No I/O — consumed by `/rehydrate`.                  | —                           |
 
 See [`THREAT-MODEL.md`](./THREAT-MODEL.md) for per-vector detail.
@@ -120,6 +120,25 @@ a single ordered pass, so the bytes a filter can remove are exactly the bytes it
 spans matched in the input — an earlier deletion can never manufacture a match
 for a later span (overlapping spans resolve first-match-wins).
 
+## Secret redaction
+
+Secrets in tool output are redacted **locally**, before the model ever sees
+them. The engine is an injected seam — the plugin wires
+[`detect-secrets`](https://github.com/Yelp/detect-secrets), running entirely
+on-machine; the library bundles no engine. The model reads stable `[REDACTED…]`
+placeholders instead of the values. The write path closes the loop: Edits
+composed against the redacted view are re-anchored onto the real bytes, and
+placeholders in new content resolve back to the real secrets — disk → tool
+input only, never into the model's view. Anything ambiguous is denied rather
+than guessed, the redactor's own map is verified against the file before any
+splice, and a write that would persist placeholder text over a real secret
+asks instead of passing through even when the hook's own machinery fails
+mid-session. The whole layer is opt-in — its denies and asks are friction, so it
+engages only when asked for: set `AGENT_SANITIZER_SECRETS_ENABLED=1` in the
+environment Claude Code runs the hooks with; unset, no redactor runs and no
+placeholders exist.
+Per-vector detail in [`THREAT-MODEL.md`](./THREAT-MODEL.md).
+
 ## What installing entails
 
 Installing the plugin puts four hooks on every session, and this is what they
@@ -136,8 +155,9 @@ buy you:
    walk a command past a deny rule.
 4. Tool output has invisible characters and terminal escapes stripped, hidden
    HTML spliced out with a placeholder, and exfil-shaped URLs flagged.
-5. Secrets in tool output are redacted locally by `detect-secrets` — the engine
-   ships with the plugin and provisions itself on first run, no setup from you.
+5. With `AGENT_SANITIZER_SECRETS_ENABLED=1` set, secrets in tool output are
+   redacted locally by `detect-secrets` — the engine ships with the plugin and
+   provisions itself on first run, no further setup from you.
 6. Edits the model composes against the redacted view are re-anchored onto the
    real bytes on disk, and anything ambiguous is denied rather than guessed.
 7. The costs are a few seconds on the first secret-shaped output, ~200 ms on the
@@ -150,7 +170,10 @@ your session on its own breakage — but it says so, in a warning the model and
 the transcript both carry. Set `AGENT_SANITIZER_FAIL_OPEN=0` and the same
 failures block instead: suppressed tool output
 (`[output sanitizer unavailable — original output suppressed]`), blocked
-prompts, permission asks whose reason names the cause. Either way, a plugin that
+prompts, permission asks whose reason names the cause. One carve-out to the
+open default, with secrets enabled: a write-shaped call carrying `[REDACTED…]` placeholder text asks
+instead of passing through when the hook itself is broken, since letting it
+through would overwrite the real secret with the placeholder. Either way, a plugin that
 never loaded at all is invisible — Claude Code reads a crashed hook as "no
 objection" — so confirm with `/plugin` rather than reading a quiet session as a
 working one. Neither posture touches what a sanitizer that RAN decided (see
