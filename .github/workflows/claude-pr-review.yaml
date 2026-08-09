@@ -146,10 +146,18 @@ jobs:
           persist-credentials: false
           fetch-depth: 1
 
+      # In THIS repo install-sanitizer.sh installs the local checkout as a
+      # `file:` dependency, which npm materialises by packing the directory —
+      # and packing runs the package's `prepare` (`pnpm build:types`) whatever
+      # `--ignore-scripts` says. Without pnpm on PATH that exits 127 and takes
+      # the whole job with it.
+      - name: Set up Node and pnpm
+        uses: ./.github/actions/setup-base-env
+
       - name: Install the input sanitizer
         # Self-contained install (into .github/scripts/node_modules) so repos
         # synced from the template need no sanitizer entry in their own
-        # package.json. --ignore-scripts keeps the install hermetic.
+        # package.json.
         run: bash .github/scripts/install-sanitizer.sh
 
       - name: Fetch and sanitize the untrusted PR input
@@ -338,8 +346,19 @@ jobs:
       # The name must stay byte-identical to the CHECK_NAME in
       # review-findings-gate.sh and the merge_gate job's `name:`: one required
       # context, and a rename here would leave this class blocked again.
-      # No `if:` — every head of a skipped PR needs its own clearing check run.
+      #
+      # `always()` — every head of a skipped PR needs its own clearing check run,
+      # INCLUDING when the approve step above failed. Approval and gate-clearing
+      # are independent: the approval satisfies a review-required ruleset, the
+      # check run satisfies the required context. A bare step (no `if:`) reads as
+      # unconditional but is not — a failed predecessor skips it — so with
+      # "Allow GitHub Actions to create and approve pull requests" disabled, the
+      # approve step's `GitHub Actions is not permitted to approve pull requests`
+      # took the gate down with it and left every chore/style/release and bot PR
+      # stranded on a permanently red required check. The approve failure stays
+      # loud (this job still goes red) rather than being swallowed here.
       - name: Clear the review-findings gate for the skipped class
+        if: always()
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GH_REPO: ${{ github.repository }}

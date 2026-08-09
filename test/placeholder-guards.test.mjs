@@ -14,9 +14,16 @@ import { fileURLToPath } from "node:url";
 import { execFileSync } from "node:child_process";
 import { rehydrateRedacted } from "../src/rehydrate.mjs";
 import {
+  COMMENT_PLACEHOLDER,
+  HIDDEN_PLACEHOLDER,
+  UNPARSEABLE_PLACEHOLDER,
+} from "../src/html.mjs";
+import {
   placeholderNotice,
+  collectPlaceholders,
   PLACEHOLDER_RE,
   PLACEHOLDER_LABEL_CHARS,
+  LAYER2_PLACEHOLDERS,
 } from "../claude-hooks/lib/placeholder-grammar.mjs";
 
 // Secrets assembled at runtime so no complete token literal trips push
@@ -152,6 +159,46 @@ describe("PLACEHOLDER_RE: contract with placeholders.py", () => {
   });
 });
 
+// ─── LAYER2_PLACEHOLDERS: SSOT contract with the splicer ─────────────────────
+
+describe("LAYER2_PLACEHOLDERS: contract with src/html.mjs", () => {
+  it("mirrors the splicer's markers exactly", () => {
+    // The hooks copy exists because the shipped plugin bundle resolves the
+    // engine from a pinned release; this pins the copy to the producer so a
+    // reworded marker cannot silently stop being detected.
+    assert.deepEqual(
+      [...LAYER2_PLACEHOLDERS],
+      [COMMENT_PLACEHOLDER, HIDDEN_PLACEHOLDER, UNPARSEABLE_PLACEHOLDER],
+    );
+  });
+});
+
+// ─── collectPlaceholders ─────────────────────────────────────────────────────
+
+describe("collectPlaceholders", () => {
+  it("names each distinct token once, with the field path it sits in", () => {
+    const found = collectPlaceholders({
+      title: "ok",
+      body: `see [REDACTED: SOME_VAR] and ${HIDDEN_PLACEHOLDER}`,
+      notes: ["[REDACTED: SOME_VAR]", "[REDACTED]"],
+    });
+    assert.deepEqual(found.secret, [
+      { token: "[REDACTED: SOME_VAR]", path: "body" },
+      { token: "[REDACTED]", path: "notes[1]" },
+    ]);
+    assert.deepEqual(found.layer2, [
+      { token: HIDDEN_PLACEHOLDER, path: "body" },
+    ]);
+  });
+
+  it("finds nothing in clean input", () => {
+    assert.deepEqual(collectPlaceholders({ command: "ls -la" }), {
+      secret: [],
+      layer2: [],
+    });
+  });
+});
+
 // ─── placeholderNotice ───────────────────────────────────────────────────────
 
 describe("placeholderNotice", () => {
@@ -161,6 +208,67 @@ describe("placeholderNotice", () => {
     const notice = placeholderNotice("Bash", { command: cmd });
     assert.ok(notice !== null && notice.includes("Edit or Write"));
   });
+
+  it("names the exact token and the field carrying it", () => {
+    const notice = placeholderNotice("mcp__github__update_pull_request", {
+      pullNumber: 244,
+      body: `Fixes the thing. KEY=[REDACTED: SOME_VAR]`,
+    });
+    assert.ok(notice !== null);
+    assert.match(notice, /"\[REDACTED: SOME_VAR\]" \(in body\)/);
+    // The outbound-content rule: never reconstruct the secret into a call that
+    // publishes it.
+    assert.match(notice, /do NOT reconstruct the real secret/);
+  });
+
+  it("names a Layer-2 splice marker and the reveal store to recover it from", () => {
+    const notice = placeholderNotice("mcp__github__update_pull_request", {
+      body: `## Summary\n\n${COMMENT_PLACEHOLDER}\n`,
+    });
+    assert.ok(notice !== null);
+    assert.match(notice, /"\[HTML comment removed\]" \(in body\)/);
+    assert.match(notice, /reveal file under .*layer2-reveal/);
+    assert.match(notice, /reconstruct the true content/);
+    // Layer-2-only input says nothing about secrets.
+    assert.equal(/secret-redaction placeholder/.test(notice), false);
+  });
+
+  it("reports both grammars when one input carries both", () => {
+    const notice = placeholderNotice("Bash", {
+      command: `echo "[REDACTED] ${HIDDEN_PLACEHOLDER}" >> out.md`,
+    });
+    assert.ok(notice !== null);
+    assert.match(notice, /secret-redaction placeholder text: "\[REDACTED\]"/);
+    assert.match(notice, /splice markers: "\[hidden HTML removed\]"/);
+  });
+
+  it("caps the spelled-out token list", () => {
+    const command = Array.from(
+      { length: 8 },
+      (_, index) => `[REDACTED: VAR ${index}]`,
+    ).join(" ");
+    const notice = placeholderNotice("Bash", { command });
+    assert.ok(notice !== null);
+    assert.match(notice, /"\[REDACTED: VAR 4\]"/);
+    assert.equal(notice.includes("[REDACTED: VAR 5]"), false);
+    assert.match(notice, /and 3 more/);
+  });
+
+  it("ignores a truncated splice marker", () => {
+    assert.equal(
+      placeholderNotice("Bash", { command: "echo '[hidden HTML remove'" }),
+      null,
+    );
+  });
+
+  for (const tool of ["Edit", "Write", "MultiEdit", "NotebookEdit"]) {
+    it(`stays silent on ${tool} for splice markers too`, () => {
+      assert.equal(
+        placeholderNotice(tool, { content: HIDDEN_PLACEHOLDER }),
+        null,
+      );
+    });
+  }
 
   it("notes a placeholder in nested MCP-tool input", () => {
     const notice = placeholderNotice("mcp__fs__write_file", {

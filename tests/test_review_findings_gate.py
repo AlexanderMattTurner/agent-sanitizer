@@ -660,7 +660,17 @@ def test_the_skipped_class_is_cleared_under_the_same_check_name() -> None:
     # clearing step must fire on EVERY event the job sees, including
     # `synchronize` — gate it to the first-look events and a skipped PR merges on
     # its first head and is blocked forever after its second.
-    assert "if" not in clearing[0]
+    #
+    # `always()` is REQUIRED, not merely permitted. A bare step reads as
+    # unconditional but is not: a failed predecessor skips it. The approval step
+    # above fails outright wherever "Allow GitHub Actions to create and approve
+    # pull requests" is disabled for the repo, and with no condition here that
+    # failure took the gate down with it — leaving every chore/style/release and
+    # bot PR stranded on a permanently red required check.
+    assert clearing[0].get("if") == "always()", (
+        "the clearing step must be `if: always()` so neither an event filter nor "
+        "a failed approval step can skip it"
+    )
     approval = [
         s for s in job["steps"] if "auto-approve-skipped-pr.sh" in (s.get("run") or "")
     ]

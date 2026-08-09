@@ -6,6 +6,7 @@ import {
   mkdtempSync,
   mkdirSync,
   readFileSync,
+  realpathSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
@@ -14,7 +15,8 @@ import { dirname, join } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 
-const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
+const THIS_FILE = fileURLToPath(import.meta.url);
+const REPO_ROOT = join(dirname(THIS_FILE), "..");
 const LIVE_SCRIPT = join(REPO_ROOT, ".github", "scripts", "version-bump.sh");
 const AUTO_VERSION_YAML = join(
   REPO_ROOT,
@@ -23,6 +25,96 @@ const AUTO_VERSION_YAML = join(
   "auto-version.yaml",
 );
 
+// Git exports GIT_DIR / GIT_INDEX_FILE / GIT_WORK_TREE into every hook process,
+// and .hooks/pre-commit runs this suite as the guard paired with version-bump.sh.
+// Inherited, those variables outrank `cwd` and `-C`: every `git` below — and every
+// `git` inside the release script under test — then operates on THIS repository
+// instead of its sandbox, so the seed commits, the v0.0.0 tag and the version bump
+// land on the real branch and move it. Clearing them here, before any child is
+// spawned, is what keeps a sandbox a sandbox; the test below reproduces the leak.
+function scrubGitEnv() {
+  for (const key of Object.keys(process.env)) {
+    if (key.startsWith("GIT_")) delete process.env[key];
+  }
+}
+scrubGitEnv();
+
+const REPO_GIT_DIR = execFileSync("git", ["rev-parse", "--absolute-git-dir"], {
+  cwd: REPO_ROOT,
+  encoding: "utf8",
+}).trim();
+
+// The leak only exists across a process START: once this module has run, its own
+// environment is already clean, so a test that sets GIT_DIR in-process and then
+// calls scrubGitEnv() itself would keep passing with line 39's call deleted. The
+// assertion therefore lives in a plain test that scrubs NOTHING, and the guard
+// below re-runs just that test in a child spawned with GIT_DIR already exported —
+// which is the only shape the hook can produce, and the only shape line 39 fixes.
+const ISOLATION_TEST = "a sandbox git resolves to its own sandbox repository";
+const ISOLATION_CHILD = "VERSION_BUMP_TEST_GIT_DIR_CHILD";
+
+test(ISOLATION_TEST, () => {
+  const { dir } = makeSandbox("exit 0");
+  try {
+    const seen = execFileSync("git", ["rev-parse", "--absolute-git-dir"], {
+      cwd: dir,
+      encoding: "utf8",
+    }).trim();
+    assert.notEqual(
+      seen,
+      REPO_GIT_DIR,
+      "sandbox git resolved to THIS repository",
+    );
+    assert.equal(seen, join(realpathSync(dir), ".git"));
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// Guarded so the child does not re-spawn itself; the child runs only the test above.
+if (!process.env[ISOLATION_CHILD]) {
+  test("the module-level git-env scrub is what makes that isolation hold", () => {
+    // The incident, reproduced: pre-commit exports GIT_DIR, so an unscrubbed
+    // sandbox commits its fixture history onto the real branch. GIT_DIR points at
+    // a throwaway decoy, never REPO_GIT_DIR — a child that failed to scrub would
+    // otherwise write the fixture commits and the v0.0.0 tag into this repository,
+    // performing the very damage the test exists to prove impossible.
+    const decoy = mkdtempSync(join(tmpdir(), "vbump-decoy-"));
+    try {
+      execFileSync("git", ["init", "-q", decoy], { stdio: "ignore" });
+      const childEnv = {
+        ...process.env,
+        [ISOLATION_CHILD]: "1",
+        GIT_DIR: join(decoy, ".git"),
+      };
+      // The runner exports NODE_TEST_CONTEXT into every test file; inherited, it
+      // makes the child refuse to run files ("called recursively") and exit 0
+      // having tested nothing.
+      delete childEnv.NODE_TEST_CONTEXT;
+      const res = spawnSync(
+        process.execPath,
+        ["--test", "--test-name-pattern", ISOLATION_TEST, THIS_FILE],
+        { cwd: REPO_ROOT, env: childEnv, encoding: "utf8" },
+      );
+      assert.equal(res.error, undefined, "failed to spawn the child runner");
+      // Non-vacuity: `--test-name-pattern` exits 0 when it matches nothing, so a
+      // renamed test would turn this guard into a no-op without the pass count.
+      assert.match(
+        res.stdout,
+        /^# pass 1$/m,
+        `child ran no matching test:\n${res.stdout}\n${res.stderr}`,
+      );
+      assert.equal(
+        res.status,
+        0,
+        `a child started with GIT_DIR exported escaped its sandbox — the ` +
+          `module-level scrubGitEnv() call is load-bearing:\n${res.stdout}\n${res.stderr}`,
+      );
+    } finally {
+      rmSync(decoy, { recursive: true, force: true });
+    }
+  });
+}
 /**
  * Strip every Anthropic credential the release script would walk, so these
  * sandboxes exercise the no-credential path (plain commit-list changelog)
@@ -689,5 +781,111 @@ test("a manifest stamped AHEAD of the published version is never re-stamped back
     );
   } finally {
     rmSync(sandbox.dir, { recursive: true, force: true });
+  }
+});
+
+// --- A second publisher on the same repo -----------------------------------
+// Two release workflows on one default branch reach the SAME version from the
+// same commits. The loser must step aside quietly instead of dying on an
+// unrecognizable npm error: the remote tag is the pre-publish signal, and an
+// E404 whose version IS on the registry is the post-publish one. An E404 whose
+// version is NOT on the registry stays a hard failure — that is a real publish
+// error wearing the same code.
+
+/** Write a `pnpm` stub into an existing sandbox's stub-bin. */
+function stubPnpm(binDir, body) {
+  const stub = join(binDir, "pnpm");
+  writeFileSync(stub, `#!/usr/bin/env bash\n${body}\n`);
+  chmodSync(stub, 0o755);
+}
+
+test("a version already tagged on the remote is left to its publisher", () => {
+  // npm says 1.0.0 is the highest live version and 1.1.0 is unpublished, so an
+  // unguarded run publishes 1.1.0 — but the other publisher has already pushed
+  // v1.1.0. The pnpm stub fails loudly so a regressed guard cannot publish.
+  const { dir, binDir } = makeSandbox(`if [[ "$2" == *@* ]]; then
+  [[ "$3" == "deprecated" ]] && exit 0
+  echo "npm error code E404" >&2
+  exit 1
+else
+  echo '["1.0.0"]'
+fi`);
+  try {
+    stubPnpm(binDir, 'echo "pnpm publish must not run" >&2\nexit 1');
+    const remote = join(dir, "remote.git");
+    execFileSync("git", ["init", "-q", "--bare", remote], { stdio: "ignore" });
+    const git = (...args) =>
+      execFileSync("git", args, { cwd: dir, stdio: "ignore" });
+    git("commit", "-q", "--allow-empty", "-m", "feat: the racing feature");
+    git("remote", "add", "origin", remote);
+    git("push", "-q", "origin", "HEAD:refs/heads/main");
+    git("push", "-q", "origin", "HEAD:refs/tags/v1.1.0");
+
+    const { status, stderr } = runScript(dir, binDir);
+    assert.equal(status, 0, stderr);
+    assert.match(stderr, /New version: 1\.1\.0/); // reached the guard, not short-circuited earlier
+    assert.match(
+      stderr,
+      /Tag v1\.1\.0 already exists on the remote/,
+      "the remote tag must stop the run before it publishes",
+    );
+    assert.doesNotMatch(stderr, /pnpm publish must not run/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("a publish E404 on a version that IS on the registry is a lost race", () => {
+  // The pre-publish probe says 1.1.0 is unpublished; by the time `pnpm publish`
+  // 404s, the other publisher has landed it. The probe counter is what makes the
+  // two answers differ — a single static answer could not tell the cases apart.
+  const { dir, binDir } = makeSandbox(`if [[ "$2" == *@* ]]; then
+  [[ "$3" == "deprecated" ]] && exit 0
+  probes="$(dirname "$0")/version-probes"
+  [[ -f "$probes" ]] && exit 0
+  : >"$probes"
+  echo "npm error code E404" >&2
+  exit 1
+else
+  echo '["1.0.0"]'
+fi`);
+  try {
+    stubPnpm(binDir, 'echo "npm error code E404 Not Found" >&2\nexit 1');
+    const git = (...args) =>
+      execFileSync("git", args, { cwd: dir, stdio: "ignore" });
+    git("commit", "-q", "--allow-empty", "-m", "feat: the racing feature");
+
+    const { status, stderr } = runScript(dir, binDir);
+    assert.equal(status, 0, stderr);
+    assert.match(stderr, /is on the registry: another release workflow/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("a publish E404 on a version that is NOT on the registry still fails loud", () => {
+  // Same E404, opposite registry answer: nothing published it, so this is a real
+  // failure and must not be swallowed by the lost-race branch above.
+  const { dir, binDir } = makeSandbox(`if [[ "$2" == *@* ]]; then
+  [[ "$3" == "deprecated" ]] && exit 0
+  echo "npm error code E404" >&2
+  exit 1
+else
+  echo '["1.0.0"]'
+fi`);
+  try {
+    stubPnpm(binDir, 'echo "npm error code E404 Not Found" >&2\nexit 1');
+    const git = (...args) =>
+      execFileSync("git", args, { cwd: dir, stdio: "ignore" });
+    git("commit", "-q", "--allow-empty", "-m", "feat: the racing feature");
+
+    const { status, stderr } = runScript(dir, binDir);
+    assert.notEqual(status, 0, "an unexplained publish E404 must fail the run");
+    // Positive marker: the run really reached `pnpm publish` and failed THERE,
+    // rather than dying earlier and passing this test for the wrong reason.
+    assert.match(stderr, /npm error code E404 Not Found/);
+    assert.doesNotMatch(stderr, /another release workflow/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
   }
 });

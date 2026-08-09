@@ -8,6 +8,30 @@ adhere to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+## [2.29.1] - 2026-08-09
+
+### Fixed
+
+- CI: Preserve PR-input report wording for flagged-not-neutralized status.
+- CI: Prevent GitHub stderr from interfering with fork-of-self slug comparison.
+- CI: Ensure review-findings gate clears even when auto-approval fails.
+
+## [2.29.0] - 2026-08-09
+
+### Added
+- Named every placeholder and splice marker in the non-rehydrated-tool advisory for improved clarity and debugging.
+
+### Fixed
+- Fixed CI workflows to set up pnpm before installing the local sanitizer, ensuring proper dependency resolution.
+- Fixed hooks to withhold only colliding fields when sanitized key names collapse, preventing unintended data loss.
+
+## [2.28.3] - 2026-08-09
+
+### Fixed
+
+- Fixed manifest re-stamping during release to ensure the version is correctly updated and published.
+- Fixed CI conflict resolver to properly handle fallback credentials.
+
 ## [2.28.2] - 2026-08-09
 
 ### Fixed
