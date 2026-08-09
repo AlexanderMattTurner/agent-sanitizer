@@ -35,7 +35,13 @@
 import { after, before, describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  unlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import fc from "fast-check";
@@ -146,6 +152,7 @@ const counters = {
     "rehydrations",
     "denies",
     "unknownKeyDenies",
+    "missingSpanDenies",
     "cleanNoops",
   ]),
   p3: newBag([
@@ -281,6 +288,13 @@ const opArb = fc.oneof(
     how: fc.constantFrom("upcaseHex", "truncHex", "breakBracket", "wrongWord"),
   }),
   fc.record({ op: fc.constant("fabricate"), hex: hex12Arb, at: fc.nat(1000) }),
+  // Not a model edit — a store edit. The span dir is an ordinary tmp directory
+  // with no TTL or GC, so the only thing standing between a live placeholder
+  // and a vanished span is nobody having deleted the file yet. Drawing the
+  // deletion makes the "span gone, key never fabricated" deny an exercised
+  // path rather than one that only appears when the stub daemon happens to
+  // drop a connection mid-run.
+  fc.record({ op: fc.constant("dropSpan"), pick: fc.nat(50) }),
 );
 
 const roundArb = fc.record({
@@ -373,9 +387,10 @@ function ledgerUpdate(ledger, storeDir, text, bag) {
 /**
  * Apply the round's model-edit operators. Returns the edited text plus the
  * mangled tokens (expected to write through literally) and the fabricated
- * unknown-key tokens (expected to deny).
+ * unknown-key tokens (expected to deny). `dropSpan` also mutates the store and
+ * the ledger together, so the oracle keeps predicting the engine's view.
  */
-function applyOps(text, ops, ledger) {
+function applyOps(text, ops, ledger, storeDir) {
   const mangled = [];
   const fabricated = [];
   for (const op of ops) {
@@ -417,6 +432,15 @@ function applyOps(text, ops, ledger) {
       const at = op.at % (text.length + 1);
       text = text.slice(0, at) + token + text.slice(at);
       fabricated.push(token);
+    } else if (op.op === "dropSpan") {
+      const ledgered = matches.filter(({ key }) => ledger.has(key));
+      if (ledgered.length === 0) continue;
+      const { key } = ledgered[op.pick % ledgered.length];
+      // The file must exist: it is in the ledger only because ledgerUpdate
+      // read it, and nothing else removes spans. An ENOENT here would mean the
+      // store moved under us, which is a harness bug, not a documented outcome.
+      unlinkSync(join(storeDir, `span-${key}.txt`));
+      ledger.delete(key);
     }
   }
   return { text, mangled, fabricated };
@@ -583,7 +607,7 @@ describe("whole-pipeline Layer-2 round-trip fuzz", () => {
             const sanitized = await sanitizeRound(shape.tool, shape.shape, doc);
             countSplices(sanitized, shape.tool, shape.shape, bag);
             ledgerUpdate(ledger, storeDir, sanitized, bag);
-            const edited = applyOps(sanitized, round.ops, ledger);
+            const edited = applyOps(sanitized, round.ops, ledger, storeDir);
             const expected = expectedVerdict(edited.text, ledger);
             const { field, input } = composeInput(round, edited.text);
             const result = rehydrateLayer2(round.tool, input);
@@ -645,7 +669,7 @@ describe("whole-pipeline Layer-2 round-trip fuzz", () => {
             const sanitized = await sanitizeRound(shape.tool, shape.shape, doc);
             countSplices(sanitized, shape.tool, shape.shape, bag);
             ledgerUpdate(ledger, storeDir, sanitized, bag);
-            const edited = applyOps(sanitized, round.ops, ledger);
+            const edited = applyOps(sanitized, round.ops, ledger, storeDir);
             const expected = expectedVerdict(edited.text, ledger);
             const { field, input } = composeInput(round, edited.text);
             const response = await buildPreToolUseResponse(
