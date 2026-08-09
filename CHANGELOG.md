@@ -8,6 +8,21 @@ adhere to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+## [2.31.0] - 2026-08-09
+
+### Added
+- New Layer-2 round-trip fuzz harness for whole-pipeline testing with keyed span identifiers.
+- Fuzz coverage requirements for hook entry points.
+
+### Changed
+- HTML comment and hidden element splicing now uses round-trippable keyed placeholders instead of anonymous ones.
+- Placeholder grammar and rehydration logic updated to support keyed Layer-2 placeholders.
+
+### Fixed
+- Gitleaks allowlist now reads both spelling variants to maintain compatibility.
+- Test suite corrected to handle per-scope gitleaks allowlist tables.
+- HTML_TAG_PRESENT documentation note corrected to reflect comment splicing behavior.
+
 ## [2.30.0] - 2026-08-09
 
 ### Added
