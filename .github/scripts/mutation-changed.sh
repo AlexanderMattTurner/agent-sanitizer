@@ -53,6 +53,11 @@ extract_push_paths() {
       print line
       next
     }
+    # A comment or blank line inside the block is not the end of it. Ending on
+    # one silently DROPPED every entry below it, so a PR touching only those
+    # files was classified irrelevant and skipped the whole mutation gate — a
+    # fail-open a reviewer would never see, triggered by adding a comment.
+    in_paths && /^[[:space:]]*(#|$)/ { next }
     in_paths { in_paths = 0 }
   ' "$workflow"
 }
