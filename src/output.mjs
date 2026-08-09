@@ -386,19 +386,25 @@ function processLayer1(text, sgrCarveOut) {
  * folded into `state`. Returns the pre-splice text when Layer 2 removed bytes so
  * the caller can hand it back for later inspection of what the splice hid (the
  * model cannot otherwise tell a benign `<!-- TODO -->` from an injection
- * payload), and `undefined` otherwise. That text is a STAGE VALUE, not a result:
- * it has not been through Layer 4, so {@link sanitizeText} must vet it before it
- * leaves. The transform itself stays pure — the caller owns any persistence.
+ * payload), and `undefined` otherwise — plus Layer 2's `splices`, the
+ * placeholder→original pairs a rehydrator needs (in document order; the
+ * per-splice offsets are dropped here because later layers may mutate the text,
+ * making offsets into this stage's text meaningless). Both are STAGE VALUES,
+ * not results: neither has been through Layer 4, so {@link sanitizeText} must
+ * vet them before they leave. The transform itself stays pure — the caller owns
+ * any persistence.
  * @param {PipelineState} state
  * @param {{ html?: boolean, exfilScan?: boolean }} options
- * @returns {Promise<string | undefined>} pre-splice text, when Layer 2 spliced
+ * @returns {Promise<{ reveal: string | undefined, splices: Array<{ placeholder: string, original: string }> }>}
  */
 async function applyMarkdownPipeline(state, { html, exfilScan }) {
   const inputText = state.text;
   /** @type {string | undefined} */
   let reveal;
+  /** @type {Array<{ placeholder: string, original: string }>} */
+  const splices = [];
   if ((!html && !exfilScan) || !needsMarkdownPipeline(inputText))
-    return undefined;
+    return { reveal: undefined, splices };
   let sanitizeHtml, detectExfil;
   /* c8 ignore start -- a rejected dynamic import of a module that ships in
      this very package (not an optional peer dep) requires corrupting
@@ -417,12 +423,17 @@ async function applyMarkdownPipeline(state, { html, exfilScan }) {
   }
   /* c8 ignore stop */
   // Layer 2 — strips what a rendered page would not show (comments, hidden
-  // elements); scripting/resource tags preserved+reported.
+  // elements); scripting/resource tags preserved+reported. Each cut leaves a
+  // keyed placeholder whose original bytes ride out in `splices`.
   if (html) {
     const layer2 = sanitizeHtml(state.text);
     if (layer2) {
       if (layer2.text !== state.text) {
         reveal = state.text;
+        // Keep only {placeholder, original}: the offsets sanitizeHtml returns
+        // point into THIS stage's text, which Layers 4/5 may still mutate.
+        for (const { placeholder, original } of layer2.splices)
+          splices.push({ placeholder, original });
         applyMutation(state, layer2.text);
         if (layer2.removed.comments > 0)
           state.found.push(CATEGORY.HTML_COMMENTS);
@@ -472,18 +483,19 @@ async function applyMarkdownPipeline(state, { html, exfilScan }) {
       );
     }
   }
-  return reveal;
+  return { reveal, splices };
 }
 
 /**
  * Vet a pipeline STAGE value on its way out of {@link sanitizeText}. Only
  * `cleaned` traverses every layer; anything else a caller is handed (today the
  * Layer-2 `reveal`) is a snapshot from the middle of the pipeline and still
- * carries whatever the layers after it would have removed. `reveal` in
- * particular is the PRE-splice text, so it holds exactly the bytes Layer 2 hid —
- * and Layer 4 only ever saw the POST-splice text, meaning a secret inside a
- * spliced-out HTML comment has never been redacted. The documented use of the
- * field is to persist it, i.e. to write that secret to a log or sidecar.
+ * carries whatever the layers after it would have removed. `reveal` and each
+ * splice's `original` are PRE-splice text, so they hold exactly the bytes
+ * Layer 2 hid — and Layer 4 only ever saw the POST-splice text, meaning a
+ * secret inside a spliced-out HTML comment has never been redacted. The
+ * documented use of these fields is to persist them, i.e. to write that secret
+ * to a log, sidecar, or rehydrated file.
  *
  * Fails CLOSED by WITHHOLDING rather than throwing: a redactor failure here must
  * not discard the already-vetted `cleaned` the caller needs, and dropping the
@@ -542,7 +554,13 @@ async function vetStageValue(text, redact, findings, label) {
  * `reveal` is the pre-Layer-2 text, present only when the HTML splice removed
  * bytes, so a caller can persist what was hidden for later inspection (see
  * {@link applyMarkdownPipeline}); the field is omitted otherwise, and also when
- * it could not be vetted (see {@link vetStageValue}).
+ * it could not be vetted (see {@link vetStageValue}). `splices` is its
+ * per-placeholder twin — Layer 2's placeholder→original pairs, in document
+ * order, so a hook can rehydrate individual splices (the keyed-placeholder
+ * grammar lives in ./html.mjs: `layer2Placeholder`/`LAYER2_PLACEHOLDER_RE`).
+ * Present only when Layer 2 spliced; each `original` is vetted like `reveal`,
+ * and one that cannot be vetted is WITHHELD (dropped from the array) under the
+ * same doctrine — Layer 4 never saw pre-splice text.
  *
  * Every byte mutation goes through {@link applyMutation} and every Layer-4 call
  * through {@link runRedact}, so a layer cannot re-establish some of the
@@ -562,7 +580,7 @@ async function vetStageValue(text, redact, findings, label) {
  * vocabulary), so they contribute findings only.
  * @param {string} text
  * @param {SanitizeTextOptions} [options]
- * @returns {Promise<{ cleaned: string, found: string[], warnings: string[], notes: string[], modified: boolean, sgrNote: boolean, reveal?: string }>}
+ * @returns {Promise<{ cleaned: string, found: string[], warnings: string[], notes: string[], modified: boolean, sgrNote: boolean, reveal?: string, splices?: Array<{ placeholder: string, original: string }> }>}
  */
 export async function sanitizeText(text, options = {}) {
   const { redact, filterInjection, sgrCarveOut = false } = options;
@@ -579,7 +597,8 @@ export async function sanitizeText(text, options = {}) {
     unreportedChange: false,
   };
 
-  const revealText = await applyMarkdownPipeline(state, options);
+  const { reveal: revealText, splices: stageSplices } =
+    await applyMarkdownPipeline(state, options);
 
   // Layer 4 — fail closed (see runRedact).
   if (redact) await runRedact(state, redact);
@@ -626,6 +645,22 @@ export async function sanitizeText(text, options = {}) {
           state.findings,
           "pre-splice copy of the removed HTML",
         );
+  // Each splice `original` skipped Layer 4 the same way `reveal` did, so it
+  // gets the same exit vetting. A splice whose original cannot be vetted is
+  // WITHHELD — dropped from the array — mirroring the reveal doctrine: better
+  // an unrecoverable splice than an unvetted secret handed out for persistence.
+  /** @type {Array<{ placeholder: string, original: string }>} */
+  const splices = [];
+  for (const splice of stageSplices) {
+    const vetted = await vetStageValue(
+      splice.original,
+      redact,
+      state.findings,
+      "original text of a removed-HTML splice",
+    );
+    if (vetted !== undefined)
+      splices.push({ placeholder: splice.placeholder, original: vetted });
+  }
   const warnings = warningMessages(state.findings);
   const notes = noteMessages(state.findings);
   return {
@@ -642,6 +677,10 @@ export async function sanitizeText(text, options = {}) {
     sgrNote:
       notes.length > 0 && warnings.length === 0 && !state.unreportedChange,
     ...(reveal !== undefined && { reveal }),
+    // Presence-gated like `reveal`: the field exists only when Layer 2 spliced
+    // and at least one original survived vetting, so the common-case result
+    // shape stays minimal.
+    ...(splices.length > 0 && { splices }),
   };
 }
 
@@ -749,6 +788,12 @@ function depthMemo() {
  * the HTML splice removed bytes) so a caller can persist what was hidden — the
  * structured-output analogue of {@link sanitizeText}'s `reveal`. Same
  * mutated-accumulator contract as `warnings`.
+ *
+ * `splices` accumulates each string leaf's Layer-2 placeholder→original pairs
+ * (each `original` already vetted, withheld entries dropped — see
+ * {@link sanitizeText}) — the per-placeholder twin of `reveals`, so a hook
+ * caller gets them for object-shaped tool output too. Same mutated-accumulator
+ * contract as `reveals`.
  * @param {any} value
  * @param {SanitizeTextOptions} options
  * @param {string[]} warnings
@@ -756,6 +801,8 @@ function depthMemo() {
  * @param {string[]} [notes]  the NOTE-severity counterpart of `warnings`;
  *   appended last so an existing positional caller keeps working (it simply
  *   discards the notes, which is exactly as loud as before the split)
+ * @param {Array<{ placeholder: string, original: string }>} [splices]  appended
+ *   after `notes` for the same positional-compatibility reason
  * @returns {Promise<{ value: any, modified: boolean, sgrNote: boolean }>}
  */
 export async function sanitizeValue(
@@ -764,6 +811,7 @@ export async function sanitizeValue(
   warnings,
   reveals = [],
   notes = [],
+  splices = [],
 ) {
   return sanitizeValueAt(
     value,
@@ -771,6 +819,7 @@ export async function sanitizeValue(
     warnings,
     notes,
     reveals,
+    splices,
     0,
     new WeakSet(),
     depthMemo(),
@@ -788,6 +837,8 @@ export async function sanitizeValue(
  * @param {string[]} warnings
  * @param {string[]} notes  accumulates each string leaf's NOTE-severity findings
  * @param {string[]} reveals  accumulates each string leaf's pre-Layer-2 text
+ * @param {Array<{ placeholder: string, original: string }>} splices  accumulates
+ *   each string leaf's Layer-2 placeholder→original pairs (already vetted)
  * @param {number} depth
  * @param {WeakSet<object>} seen
  * @param {ReturnType<typeof depthMemo<{ value: any, modified: boolean, sgrNote: boolean }>>} memo
@@ -798,8 +849,9 @@ export async function sanitizeValue(
  *   ~25-object diamond measured at 68 s, far under MAX_DEPTH) — since the path-
  *   scoped `seen` set only guards cycles, not repeated work. Because warnings
  *   dedup in composeContext, skipping a cached node's duplicate warnings is
- *   harmless. A cached node's `reveals` are likewise not re-emitted, harmless
- *   for the same reason (the caller dedups reveals by content).
+ *   harmless. A cached node's `reveals` and `splices` are likewise not
+ *   re-emitted, harmless for the same reason (the caller dedups reveals by
+ *   content and splices by their content-addressed key).
  * @returns {Promise<{ value: any, modified: boolean, sgrNote: boolean }>}
  */
 async function sanitizeValueAt(
@@ -808,6 +860,7 @@ async function sanitizeValueAt(
   warnings,
   notes,
   reveals,
+  splices,
   depth,
   seen,
   memo,
@@ -817,6 +870,7 @@ async function sanitizeValueAt(
     warnings.push(...result.warnings);
     notes.push(...result.notes);
     if (result.reveal !== undefined) reveals.push(result.reveal);
+    if (result.splices !== undefined) splices.push(...result.splices);
     return {
       value: result.cleaned,
       modified: result.modified,
@@ -906,6 +960,7 @@ async function sanitizeValueAt(
           warnings,
           notes,
           reveals,
+          splices,
           depth + 1,
           seen,
           memo,
@@ -942,6 +997,7 @@ async function sanitizeValueAt(
         warnings,
         notes,
         reveals,
+        splices,
         depth + 1,
         seen,
         memo,

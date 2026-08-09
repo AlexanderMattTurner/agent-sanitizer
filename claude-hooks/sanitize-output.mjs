@@ -2,10 +2,14 @@
  * PostToolUse: sanitize tool output before the model sees it.
  *
  * Layer 1: Strip payload-capable invisible chars + ANSI escapes.
- * Layer 2: Splice out hidden HTML (comments, hidden-styled elements) from web
- *          ingress; report preserved scripting/resource tags. The pre-splice
- *          text is stashed in an ephemeral sidecar file the model may Read back
- *          (behind an untrusted-content envelope) — see lib/reveal.mjs.
+ * Layer 2: Splice out hidden-styled/hidden-attribute elements and HTML
+ *          comments from web ingress, each replaced by a keyed,
+ *          content-addressed placeholder; report preserved scripting/resource
+ *          tags. The pre-splice text is stashed in an ephemeral sidecar file
+ *          the model may Read back (behind an untrusted-content envelope), and
+ *          each splice's original is persisted beside it under the
+ *          placeholder's key so Edit/Write can round-trip the placeholder back
+ *          to the original bytes — see lib/reveal.mjs.
  * Layer 3: Report data-exfil-shaped URLs in web ingress (detection only).
  * Layer 4: Redact API keys/secrets via detect-secrets, served by the long-lived
  *          redactor daemon — see lib/redactor-client.mjs.
@@ -39,10 +43,12 @@ import { hasEnvBoundSecret } from "./lib/secret-annotate.mjs";
 import { secretsEnabled } from "./lib/env-config.mjs";
 import {
   persistReveal,
+  persistSpan,
+  SPAN_ROUNDTRIP_NOTICE,
   isRevealRead,
   REVEAL_READ_ENVELOPE,
 } from "./lib/reveal.mjs";
-import { containsPlaceholder } from "./lib/placeholder-grammar.mjs";
+import { containsPlaceholder, layer2Keys } from "./lib/placeholder-grammar.mjs";
 
 // Layer-1 primitives and the cheap pre-gates, bound via lazyImport (see its
 // doc for the fail-OPEN hazard of a bare static npm import). A load failure
@@ -124,7 +130,7 @@ const SGR_OUTPUT_NOTE =
 
 // Web-ingress tools always get the Layer 2 HTML rewrite; local tools — Read,
 // Bash, Grep, gh — never do. A local HTML/markdown pass either rewrites bytes the
-// model is about to edit or deletes content (comments, diffs, PR bodies, page
+// model is about to edit or deletes content (diffs, PR bodies, page
 // source fetched with curl) the task legitimately needs. (MCP output gets Layer 2
 // only when HTML-shaped — see the `html` gate in sanitizeText.) Layers 1
 // (invisible chars) and 4 (secret redaction) still run on every tool.
@@ -235,13 +241,15 @@ async function redactSecrets(text, webIngress = false, deadline) {
  * the HTML rewrite (Layer 2) and the exfil-URL scan (Layer 3), the injected
  * secret redactor (Layer 4), and the display-only-SGR carve-out. `reveal` carries
  * the seam's pre-Layer-2 text when the HTML splice removed anything, for the
- * orchestrator to persist.
+ * orchestrator to persist; `splices` is its per-placeholder twin (each
+ * `original` already vetted by the seam's exit redaction, withheld entries
+ * dropped there), for the orchestrator's per-key span persistence.
  * @param {string} text
  * @param {string} toolName  gates the SGR carve-out and the untrusted-ingress passes
  * @param {{remainingMs: () => number}} [deadline] shared wall-clock budget across
  *   all leaves of one hook run; a direct caller gets a fresh full budget
  * @param {SanitizeExtensions} [ext]
- * @returns {Promise<{ cleaned: string, warnings: string[], notes: string[], modified: boolean, sgrNote: boolean, reveal?: string }>}
+ * @returns {Promise<{ cleaned: string, warnings: string[], notes: string[], modified: boolean, sgrNote: boolean, reveal?: string, splices?: Array<{ placeholder: string, original: string }> }>}
  */
 export async function sanitizeText(
   text,
@@ -298,7 +306,7 @@ export async function sanitizeText(
         },
   };
   const seamResult =
-    /** @type {{ cleaned: string, warnings: string[], notes?: string[], modified: boolean, sgrNote: boolean, reveal?: string }} */ (
+    /** @type {{ cleaned: string, warnings: string[], notes?: string[], modified: boolean, sgrNote: boolean, reveal?: string, splices?: Array<{ placeholder: string, original: string }> }} */ (
       await sanitizeTextSeam(text, seamOptions)
     );
   // The one place the seam's shape is normalized: `notes` is absent when the
@@ -326,9 +334,9 @@ export async function sanitizeText(
  * notes, which would be a false account of bytes a callback has since rewritten
  * for its own reasons. A callback's `warning` is taken at face value as a
  * WARNING — the composer that linked it owns its wording and its volume alike.
- * @param {{ cleaned: string, warnings: string[], notes: string[], modified: boolean, sgrNote: boolean, reveal?: string }} result
+ * @param {{ cleaned: string, warnings: string[], notes: string[], modified: boolean, sgrNote: boolean, reveal?: string, splices?: Array<{ placeholder: string, original: string }> }} result
  * @param {{ cleaned?: string, warning?: string } | null | undefined} post
- * @returns {{ cleaned: string, warnings: string[], notes: string[], modified: boolean, sgrNote: boolean, reveal?: string }}
+ * @returns {{ cleaned: string, warnings: string[], notes: string[], modified: boolean, sgrNote: boolean, reveal?: string, splices?: Array<{ placeholder: string, original: string }> }}
  */
 function applyPostText(result, post) {
   if (post === null || post === undefined) return result;
@@ -359,6 +367,9 @@ function applyPostText(result, post) {
  * `reveals` accumulates each leaf's pre-Layer-2 text (when the HTML splice
  * removed something) for the orchestrator to persist, and `notes` the leaves'
  * NOTE-severity findings — same mutated-accumulator shape as `warnings`.
+ * `splices` accumulates each leaf's Layer-2 placeholder→original pairs (the
+ * per-key twin of `reveals`, already vetted by the seam) for the orchestrator's
+ * span persistence — same mutated-accumulator shape again.
  * @param {any} value
  * @param {string} toolName
  * @param {string[]} warnings
@@ -368,6 +379,8 @@ function applyPostText(result, post) {
  * @param {SanitizeExtensions} [ext]
  * @param {string[]} [notes]  appended last so an existing caller's positional
  *   arguments keep their meaning
+ * @param {Array<{ placeholder: string, original: string }>} [splices]  appended
+ *   after `notes` for the same positional-compatibility reason
  * @param {string} [path]  dotted location of `value` within the tool output,
  *   used only to name a key collision's location in its warning
  * @returns {Promise<{ value: any, modified: boolean, sgrNote: boolean }>}
@@ -380,6 +393,7 @@ export async function sanitizeValue(
   deadline = makeDeadline(SANITIZE_BUDGET_MS),
   ext = {},
   notes = [],
+  splices = [],
   path = "",
 ) {
   if (typeof value === "string") {
@@ -387,6 +401,7 @@ export async function sanitizeValue(
     warnings.push(...result.warnings);
     notes.push(...result.notes);
     if (result.reveal !== undefined) reveals.push(result.reveal);
+    if (result.splices !== undefined) splices.push(...result.splices);
     return {
       value: result.cleaned,
       modified: result.modified,
@@ -406,6 +421,7 @@ export async function sanitizeValue(
         deadline,
         ext,
         notes,
+        splices,
         `${path}[${index}]`,
       );
       out.push(result.value);
@@ -423,6 +439,7 @@ export async function sanitizeValue(
       deadline,
       ext,
       notes,
+      splices,
       path,
     );
   return { value, modified: false, sgrNote: false };
@@ -504,6 +521,8 @@ function withheldKeyFor(out, cleaned) {
  * @param {{remainingMs: () => number}} deadline shared wall-clock budget
  * @param {SanitizeExtensions} ext
  * @param {string[]} notes  accumulates the leaves' NOTE-severity findings
+ * @param {Array<{ placeholder: string, original: string }>} splices  accumulates
+ *   the leaves' Layer-2 placeholder→original pairs
  * @param {string} [path]  dotted location of this object in the tool output
  * @returns {Promise<{ value: Record<string, any>, modified: boolean, sgrNote: boolean }>}
  */
@@ -515,6 +534,7 @@ async function sanitizeObject(
   deadline,
   ext,
   notes,
+  splices,
   path = "",
 ) {
   /** @type {Record<string, any>} */
@@ -534,6 +554,7 @@ async function sanitizeObject(
     warnings.push(...keyResult.warnings);
     notes.push(...keyResult.notes);
     if (keyResult.reveal !== undefined) reveals.push(keyResult.reveal);
+    if (keyResult.splices !== undefined) splices.push(...keyResult.splices);
     if (keyResult.modified) modified = true;
     if (keyResult.sgrNote) sgrNote = true;
     const result = await sanitizeValue(
@@ -544,6 +565,7 @@ async function sanitizeObject(
       deadline,
       ext,
       notes,
+      splices,
       path === "" ? keyResult.cleaned : `${path}.${keyResult.cleaned}`,
     );
     // Two distinct raw keys can sanitize to the same name (e.g. `token` and a
@@ -864,9 +886,11 @@ export async function evaluateToolOutput(input, ext = {}) {
   const notes = [];
   /** @type {string[]} */
   const reveals = [];
+  /** @type {Array<{ placeholder: string, original: string }>} */
+  const splices = [];
   // One shared wall-clock budget for every blocking daemon call this hook makes —
-  // across all leaves of the walk AND the reveal-redaction loop below — so their
-  // SUM cannot pile up past the hook kill (see SANITIZE_BUDGET_MS).
+  // across all leaves of the walk AND the reveal/span-redaction loops below — so
+  // their SUM cannot pile up past the hook kill (see SANITIZE_BUDGET_MS).
   const deadline = makeDeadline(SANITIZE_BUDGET_MS);
   const {
     value: sanitized,
@@ -880,13 +904,14 @@ export async function evaluateToolOutput(input, ext = {}) {
     deadline,
     ext,
     notes,
+    splices,
   );
   // Persist each leaf's pre-Layer-2 text (deduped by content) so the model can
   // Read back what the HTML splice removed; a successful write appends a hint
   // naming the file. Redact BEFORE writing — never put an unredacted secret on
-  // disk, including one hidden inside the spliced comment itself. Reveals only
-  // arise when Layer 2 modified the output, so this never resurrects the `clean`
-  // early-return below.
+  // disk, including one carried inside the spliced hidden element itself.
+  // Reveals only arise when Layer 2 modified the output, so this never
+  // resurrects the `clean` early-return below.
   for (const original of reveals) {
     let stored;
     try {
@@ -897,19 +922,47 @@ export async function evaluateToolOutput(input, ext = {}) {
         : null;
       stored = secrets ? secrets.text : original;
     } catch {
-      // The pre-splice text carries the spliced comment bodies, so a secret
-      // hidden only inside a comment reaches the redactor here for the first
-      // time (the post-splice scan never saw it). If the daemon is unreachable
-      // we must neither write that unvetted text nor suppress the already-safe
-      // primary output — drop this one convenience reveal, but SAY so: the
-      // splice warning has just promised the model a reveal it can Read back,
-      // and a silent drop leaves that promise dangling.
+      // The pre-splice text carries the spliced hidden-element content, so a
+      // secret hidden only inside such an element reaches the redactor here
+      // for the first time (the post-splice scan never saw it). If the daemon
+      // is unreachable we must neither write that unvetted text nor suppress
+      // the already-safe primary output — drop this one convenience reveal,
+      // but SAY so: the splice warning has just promised the model a reveal it
+      // can Read back, and a silent drop leaves that promise dangling.
       warnings.push(REVEAL_WITHHELD_WARNING);
       continue;
     }
     const hint = persistReveal(stored);
     if (hint) warnings.push(hint);
   }
+  // Persist each splice's original beside the reveal, keyed by the placeholder's
+  // content-addressed key, so the PreToolUse rehydrator can restore a keyed
+  // placeholder the model writes back (Edit/Write) to the original bytes. Same
+  // re-redaction treatment as the reveals above — the seam already vetted each
+  // `original` on its way out, but this loop re-runs strict web-ingress
+  // redaction so NOTHING lands on disk that did not pass the same bar as the
+  // reveal sidecar. The key is EXTRACTED from the placeholder, never recomputed
+  // from the redacted original: it was minted from the RAW original's sha256,
+  // so it is a name, not an integrity check — hashing the redacted bytes would
+  // mint a key no placeholder carries. Persistence failure is non-fatal (the
+  // splice already protected the output); a missing span later fails the
+  // rehydration CLOSED with a deny naming the key.
+  let spanStored = false;
+  for (const { placeholder, original } of splices) {
+    const [key] = layer2Keys(placeholder);
+    if (key === undefined) continue;
+    let stored;
+    try {
+      const secrets = await redactSecrets(original, true, deadline);
+      stored = secrets ? secrets.text : original;
+    } catch {
+      // Same doctrine as the reveal loop: never write unvetted text, never
+      // fail the already-safe primary output over a convenience sidecar.
+      continue;
+    }
+    if (persistSpan(key, stored)) spanStored = true;
+  }
+  if (spanStored) warnings.push(SPAN_ROUNDTRIP_NOTICE);
   // On-disk placeholder tripwire (see ON_DISK_PLACEHOLDER_WARNING). Tested on
   // the RAW tool_response — post-sanitization text carries placeholders this
   // hook itself just inserted. Reads only: file bytes are where a clobbered

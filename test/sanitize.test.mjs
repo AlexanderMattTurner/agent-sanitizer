@@ -263,8 +263,10 @@ describe("sanitize: options robustness and text-type validation", () => {
   });
 
   it("still honors options when a real options object is passed alongside null-safety", async () => {
-    const out = await sanitize("before <!-- hidden --> after", { html: true });
-    assert.doesNotMatch(out.cleaned, /hidden/);
+    const out = await sanitize("before <b hidden>secret</b> after", {
+      html: true,
+    });
+    assert.doesNotMatch(out.cleaned, /secret/);
   });
 
   it("throws a clear, named TypeError when text is not a string (regression: was an internal TypeError from deep inside applyLayer1)", async () => {
@@ -290,14 +292,22 @@ describe("sanitize: options robustness and text-type validation", () => {
 });
 
 describe("sanitize: html=true runs Layers 2 & 3", () => {
-  it("splices a hidden element and an HTML comment, reporting both", async () => {
+  it("splices a hidden element and a comment beside it, each to its own kind's placeholder", async () => {
     const out = await sanitize("x <!-- c --> y <span hidden>SECRET</span> z", {
       html: true,
     });
     assert.doesNotMatch(out.cleaned, /SECRET/);
+    // The comment is spliced too — recoverably, behind a keyed placeholder.
+    assert.match(out.cleaned, /\[HTML comment removed #[0-9a-f]{12}\]/);
+    assert.match(out.cleaned, /\[hidden HTML removed #[0-9a-f]{12}\]/);
     assert.ok(out.found.includes(CATEGORY.HTML_COMMENTS));
     assert.ok(out.found.includes(CATEGORY.HIDDEN_HTML));
     assert.match(out.warnings.join(" "), /HTML sanitized/);
+    // Both originals ride out in `splices` for rehydration.
+    assert.deepEqual(
+      out.splices.map((s) => s.original),
+      ["<!-- c -->", "<span hidden>SECRET</span>"],
+    );
   });
 
   it("reports a preserved script tag without removing it", async () => {

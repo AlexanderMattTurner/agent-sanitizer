@@ -70,6 +70,7 @@ const LAZY_LOADERS = {
   "agent-sanitizer/output": () => import("agent-sanitizer/output"),
   "agent-sanitizer/prompt": () => import("agent-sanitizer/prompt"),
   "agent-sanitizer/rehydrate": () => import("agent-sanitizer/rehydrate"),
+  "agent-sanitizer/view-map": () => import("agent-sanitizer/view-map"),
   "namespace-guard": () => import("namespace-guard"),
 };
 

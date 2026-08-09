@@ -3,8 +3,8 @@
  *
  * `spliceRanges` (Layer 2) splices byte RANGES the HTML AST already resolved.
  * The AST path only ever feeds it disjoint, in-bounds ranges, so its documented
- * defense-in-depth behavior (merging overlapping/nested/adjacent/duplicate
- * ranges) is otherwise unexercised.
+ * defense-in-depth behavior (merging overlapping/nested/duplicate ranges;
+ * adjacent ranges are deliberately NOT merged) is otherwise unexercised.
  *
  * `spliceOrdered` (view-map) splices NEEDLE matches, and is the single
  * implementation behind all three needle-splicing call sites — Layer 5's
@@ -22,11 +22,7 @@ import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import fc from "fast-check";
 
-import {
-  spliceRanges,
-  COMMENT_PLACEHOLDER,
-  HIDDEN_PLACEHOLDER,
-} from "../src/html.mjs";
+import { spliceRanges, LAYER2_PLACEHOLDER_RE } from "../src/html.mjs";
 import {
   occurrences,
   orderedMatches,
@@ -39,8 +35,8 @@ import { fcRunOptions, keptOutsideNeedles } from "./test-helpers.mjs";
 
 const runOptions = fcRunOptions({ numRuns: 500 });
 
-// Text drawn from chars that can never form a placeholder. Both placeholders
-// begin with "[", which this alphabet excludes, so any "[" in the output is an
+// Text drawn from chars that can never form a placeholder. The placeholder
+// begins with "[", which this alphabet excludes, so any "[" in the output is an
 // inserted placeholder — letting us strip placeholders unambiguously and
 // compare what remains against the kept bytes computed independently.
 const safeChar = fc.constantFrom(
@@ -50,16 +46,17 @@ const safeText = fc
   .array(safeChar, { minLength: 0, maxLength: 60 })
   .map((chars) => chars.join(""));
 
-// A range generator with indices in [0, maxIndex]: start = min, end = max, kind
-// comment|hidden. Overlaps/nesting/adjacency/duplicates arise naturally. Callers
-// pass `len` for in-bounds ranges or `len + n` to probe out-of-bounds handling.
+// A range generator with indices in [0, maxIndex]: start = min, end = max,
+// kind drawn from both placeholder kinds. Overlaps/nesting/adjacency/
+// duplicates arise naturally. Callers pass `len` for in-bounds ranges or
+// `len + n` to probe out-of-bounds handling.
 const rangesUpTo = (maxIndex) =>
   fc.array(
     fc
       .tuple(
         fc.integer({ min: 0, max: maxIndex }),
         fc.integer({ min: 0, max: maxIndex }),
-        fc.constantFrom(/** @type {const} */ ("comment"), "hidden"),
+        fc.constantFrom("hidden", "comment"),
       )
       .map(([a, b, kind]) => ({
         start: Math.min(a, b),
@@ -69,8 +66,7 @@ const rangesUpTo = (maxIndex) =>
     { maxLength: 6 },
   );
 
-const stripPlaceholders = (text) =>
-  text.split(COMMENT_PLACEHOLDER).join("").split(HIDDEN_PLACEHOLDER).join("");
+const stripPlaceholders = (text) => text.replace(LAYER2_PLACEHOLDER_RE, "");
 
 // Independent (set-union, not the merge algorithm) computation of the bytes
 // that must survive: every index not covered by any range, in order.
@@ -92,7 +88,27 @@ describe("property: spliceRanges preserves bytes outside the ranges", () => {
         ),
         ([text, ranges]) => {
           const out = spliceRanges(text, ranges);
-          assert.equal(stripPlaceholders(out), keptBytes(text, ranges));
+          assert.equal(stripPlaceholders(out.text), keptBytes(text, ranges));
+          // Each reported pair locates a well-formed keyed placeholder in the
+          // output; substituting every original back (right to left) must
+          // reproduce the input byte for byte.
+          let rebuilt = out.text;
+          for (let i = out.pairs.length - 1; i >= 0; i--) {
+            const { placeholder, original, start } = out.pairs[i];
+            assert.match(
+              placeholder,
+              new RegExp(`^(?:${LAYER2_PLACEHOLDER_RE.source})$`),
+            );
+            assert.equal(
+              rebuilt.slice(start, start + placeholder.length),
+              placeholder,
+            );
+            rebuilt =
+              rebuilt.slice(0, start) +
+              original +
+              rebuilt.slice(start + placeholder.length);
+          }
+          assert.equal(rebuilt, text);
         },
       ),
       runOptions,
@@ -102,7 +118,7 @@ describe("property: spliceRanges preserves bytes outside the ranges", () => {
   it("is a no-op when given no ranges", () => {
     fc.assert(
       fc.property(safeText, (text) => {
-        assert.equal(spliceRanges(text, []), text);
+        assert.deepEqual(spliceRanges(text, []), { text, pairs: [] });
       }),
       runOptions,
     );
@@ -115,7 +131,7 @@ describe("property: spliceRanges preserves bytes outside the ranges", () => {
           fc.tuple(fc.constant(text), rangesUpTo(text.length + 10)),
         ),
         ([text, ranges]) => {
-          assert.equal(typeof spliceRanges(text, ranges), "string");
+          assert.equal(typeof spliceRanges(text, ranges).text, "string");
         },
       ),
       runOptions,

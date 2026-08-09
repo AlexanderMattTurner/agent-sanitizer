@@ -87,16 +87,17 @@ survives to carry a payload.
 
 ## Layer 2—hidden HTML (remark/rehype)
 
-For web/HTML ingress, splice out exactly what a human viewing the rendered page
-cannot see:
+For web/HTML ingress, splice out hidden **elements** — markup a human viewing
+the rendered page cannot see:
 
-- `<!-- HTML comments -->`
 - elements hidden by inline style: `display:none`, `visibility:hidden`,
   `content-visibility:hidden`, `opacity:0`, `filter:opacity(0)`, off-screen
   positioning, zero/negative sizes, `text-indent` off-screen, collapsing
   `clip`/`clip-path`/`transform:scale(0)`, white-on-white / transparent text,
   `overflow:hidden` with a zero dimension
-- elements hidden by attribute: `hidden`, `aria-hidden="true"`
+- elements hidden by attribute: `hidden` (`aria-hidden="true"` is **not**
+  spliced — it removes an element only from the accessibility tree; a sighted
+  human still sees it on the rendered page)
 
 Spliced ranges are replaced with a placeholder; **every byte outside a spliced
 range is preserved verbatim** (no re-serialization). Unclosed hidden markup
@@ -105,6 +106,21 @@ extends to the end of the fragment—fail-closed for truncated input.
 Scripting/resource tags (`script`, `style`, `object`, `embed`, `iframe`, `svg`,
 `math`) and `data:` URI resources are **reported, not removed**: their bodies are
 page source the model may legitimately need to inspect.
+
+HTML comments (`<!--…-->`, and the bogus `<!…>`/`<?…?>` forms) are spliced
+like hidden elements — a human viewing the rendered page never sees them. But
+comments are also ubiquitous in _legitimate_ markdown/HTML (PR templates,
+tooling marker comments), so a destructive splice corrupts real content: an
+agent that reads a spliced body and writes it back persists the loss. Every
+Layer-2 splice is therefore **round-trippable**: the placeholder carries a
+content-addressed key (`[HTML comment removed #<key>]`, `[hidden HTML removed
+#<key>]`, key = first 12 hex chars of the original bytes' SHA-256), the result
+exposes the vetted originals in `splices`, and the hook layer persists each
+original beside the reveal sidecar and restores it when the model writes the
+placeholder back through Edit/Write. The model never sees the hidden content;
+the bytes are never lost. A comment-borne injection is additionally covered by
+Layer 3, which scans the **original** text (comments included) for
+exfil-shaped URLs.
 
 ## Layer 3—exfil URLs (detection only)
 
@@ -418,26 +434,31 @@ positive costs a sentence of context, never a mangled input):
   explaining the hazard. It cannot tell a write from a read, so it never
   blocks. The advisory **names what it found**: each distinct placeholder
   token and the dotted input field carrying it (capped, with an "and N more"
-  tail), split by grammar — the secret-redaction placeholders, and the Layer-2
-  splice markers (`[HTML comment removed]`, `[hidden HTML removed]`,
-  `[HTML unparseable — withheld]`, mirrored from `src/html.mjs` into the hooks
-  layer for the same bundle-pin reason as the redaction grammar). Each grammar
-  carries its own recovery route: for a secret, use Edit/Write on the file that
-  owns it, or have a shell command read the value from that file — and for
-  content bound for an external service (a PR body, a comment) do **not**
-  reconstruct the secret, since that publishes it. For a splice marker, the
-  removed text is in the reveal sidecar the sanitize-time warning named; Read
-  it (untrusted), reconstruct the content, and re-issue the call without the
-  marker.
+  tail). The two grammars have their own advisory each, so that the secret
+  layer's env opt-in cannot also silence the Layer-2 one: the keyed splice
+  placeholders (`[HTML comment removed #<key>]`, `[hidden HTML removed
+#<key>]`) and the un-keyed `[HTML unparseable — withheld]` marker are
+  mirrored from `src/html.mjs` into the hooks layer for the same bundle-pin
+  reason as the redaction grammar. Each grammar carries its own recovery route:
+  for a secret, use Edit/Write on the file that owns it, or have a shell
+  command read the value from that file — and for content bound for an external
+  service (a PR body, a comment) do **not** reconstruct the secret, since that
+  publishes it. For a keyed splice placeholder, the advisory names the
+  `span-<key>.txt` file holding the original bytes (Edit/Write restores it
+  automatically); for the un-keyed unparseable marker there is no per-splice
+  original, so it points at the reveal sidecar the sanitize-time warning named.
+  Read either (untrusted), reconstruct the content, and re-issue the call
+  without the marker.
 - **No direct substitution, and no per-tool substitution allowlist.**
   Rehydrating placeholders into a non-Edit/Write input was evaluated and
   rejected in both grammars, so the advisory is the whole mechanism. Splicing a
   secret into an MCP body field would publish it to an external service —
   exfiltration by construction — and PreToolUse has no placeholder→secret map
-  without a named owning file. The Layer-2 markers are un-keyed, so
-  marker→original is unrecoverable at this layer (the reveal store is addressed
-  by the hash of the full pre-splice text, not by marker), and blind
-  re-insertion would re-publish hidden untrusted content verbatim.
+  without a named owning file. Layer-2 placeholders ARE keyed, so
+  marker→original is recoverable — but only Edit/Write substitutes it:
+  splicing the stored bytes into a shell command or an arbitrary MCP payload
+  risks quoting/injection breakage, and for the un-keyed unparseable marker
+  there is no per-splice original to substitute at all.
 - **On-disk tripwire (warning-only).** A `Read` whose RAW bytes — before this
   session's redaction — already contain placeholder text warns that an earlier
   write may have clobbered a secret. Detection rides the read, the one choke

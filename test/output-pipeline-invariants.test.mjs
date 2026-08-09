@@ -27,7 +27,9 @@ import {
   REDACTION_DOCTRINE,
 } from "../src/output.mjs";
 import { LONE_SURROGATE_RE } from "../src/layer1.mjs";
-import { UNPARSEABLE_PLACEHOLDER } from "../src/html.mjs";
+import { layer2Placeholder, UNPARSEABLE_PLACEHOLDER } from "../src/html.mjs";
+
+const hid = (original) => layer2Placeholder("hidden", original);
 
 // LONE_SURROGATE_RE is /g, so `.test` advances lastIndex between calls. Derive a
 // stateless copy from the SAME source rather than hand-copying the pattern.
@@ -56,6 +58,8 @@ const redactor = (/** @type {string} */ text) =>
 function reachableStrings(result) {
   const out = [result.cleaned, ...result.warnings];
   if (result.reveal !== undefined) out.push(result.reveal);
+  for (const { placeholder, original } of result.splices ?? [])
+    out.push(placeholder, original);
   return out;
 }
 
@@ -65,12 +69,15 @@ function reachableStrings(result) {
 // stage value (`reveal`) is the only place it survives — which is exactly the
 // value a caller is invited to persist to a log or sidecar file.
 const HIDDEN_SECRET_CASES = [
-  ["HTML comment", `visible<!-- token=${SECRET} -->`],
+  ["hidden-attr element", `visible<em hidden>token=${SECRET}</em>`],
   [
     "display:none element",
     `visible<div style="display:none">token=${SECRET}</div>`,
   ],
-  ["comment inside a paragraph", `<p>intro<!-- ${SECRET} -->tail</p>`],
+  [
+    "hidden span inside a paragraph",
+    `<p>intro<span hidden>${SECRET}</span>tail</p>`,
+  ],
 ];
 
 describe("invariant: no string leaves sanitizeText unvetted by Layer 4", () => {
@@ -99,7 +106,7 @@ describe("invariant: no string leaves sanitizeText unvetted by Layer 4", () => {
     /** @type {string[]} */
     const reveals = [];
     await sanitizeValue(
-      { body: `visible<!-- token=${SECRET} -->` },
+      { body: `visible<em hidden>token=${SECRET}</em>` },
       { html: true, redact: redactor },
       [],
       reveals,
@@ -112,20 +119,42 @@ describe("invariant: no string leaves sanitizeText unvetted by Layer 4", () => {
     // Throws only on the PRE-splice text, so Layer 4's pass over `cleaned`
     // succeeds and only the side channel is unvettable.
     const redact = (/** @type {string} */ text) => {
-      if (text.includes("<!--")) throw new Error("redactor unreachable");
+      if (text.includes("<em hidden>")) throw new Error("redactor unreachable");
       return null;
     };
-    const r = await sanitizeText(`visible<!-- token=${SECRET} -->`, {
+    const r = await sanitizeText(`visible<em hidden>token=${SECRET}</em>`, {
       html: true,
       redact,
     });
-    assert.equal(r.cleaned, "visible[HTML comment removed]");
+    assert.equal(r.cleaned, `visible${hid(`<em hidden>token=${SECRET}</em>`)}`);
     assert.ok(!("reveal" in r));
     assert.ok(
       r.warnings.includes(
         "Withheld the pre-splice copy of the removed HTML: it could not be vetted for secrets",
       ),
     );
+    // The splice's `original` is the same unvettable text, so it is withheld
+    // too (dropped from the array; an empty array is omitted entirely).
+    assert.ok(!("splices" in r));
+    assert.ok(
+      r.warnings.includes(
+        "Withheld the original text of a removed-HTML splice: it could not be vetted for secrets",
+      ),
+    );
+  });
+
+  it("vets each splice `original` through Layer 4 before returning it", async () => {
+    const input = `visible<em hidden>token=${SECRET}</em>`;
+    const r = await sanitizeText(input, { html: true, redact: redactor });
+    // The splice survives, its placeholder keyed to the RAW original bytes,
+    // while the returned `original` carries the masked text — the secret never
+    // leaves through the sidecar.
+    assert.deepEqual(r.splices, [
+      {
+        placeholder: hid(`<em hidden>token=${SECRET}</em>`),
+        original: maskSecrets(`<em hidden>token=${SECRET}</em>`),
+      },
+    ]);
   });
 
   // The UNPARSEABLE fail-closed path replaces the WHOLE output with a
@@ -173,13 +202,13 @@ describe("invariant: no string leaves sanitizeText unvetted by Layer 4", () => {
 
   it("leaves a legitimate reveal byte-identical when the redactor finds nothing", async () => {
     // Precision: vetting must not rewrite content that holds no secret.
-    const input = "docs <!-- TODO: rewrite this paragraph --> end";
+    const input = "docs <em hidden>rewrite this paragraph</em> end";
     const r = await sanitizeText(input, { html: true, redact: redactor });
     assert.equal(r.reveal, input);
   });
 
   it("returns the raw reveal when no redactor is configured (nothing to vet with)", async () => {
-    const input = "intro <!-- secret --> tail";
+    const input = "intro <em hidden>secret</em> tail";
     const r = await sanitizeText(input, { html: true });
     assert.equal(r.reveal, input);
   });
@@ -249,15 +278,15 @@ describe("invariant: a byte mutation always restores the stage invariants", () =
       text: text.replace("\uDE00", ""),
       found: ["k"],
     });
-    const r = await sanitizeText("a\u{1F600}b<!-- c -->", {
+    const r = await sanitizeText("a\u{1F600}b<i hidden>c</i>", {
       html: true,
       redact,
     });
     // Positive marker: the reveal exists and still shows what Layer 2 hid, so
     // the surrogate assertion below cannot pass by the field being absent.
-    assert.equal(r.reveal, `a${REPLACEMENT_CHAR}b<!-- c -->`);
+    assert.equal(r.reveal, `a${REPLACEMENT_CHAR}b<i hidden>c</i>`);
     assert.ok(!HAS_LONE_SURROGATE.test(r.reveal));
-    assert.equal(r.cleaned, `a${REPLACEMENT_CHAR}b[HTML comment removed]`);
+    assert.equal(r.cleaned, `a${REPLACEMENT_CHAR}b${hid("<i hidden>c</i>")}`);
   });
 
   // `sgrNote` downgrades the caller's banner to "display-only color stripped",
@@ -270,8 +299,8 @@ describe("invariant: a byte mutation always restores the stage invariants", () =
     [
       "Layer 2 splice",
       { html: true },
-      `${SGR_INPUT}<!-- x -->`,
-      "red[HTML comment removed]",
+      `${SGR_INPUT}<i hidden>x</i>`,
+      `red${hid("<i hidden>x</i>")}`,
     ],
     [
       "Layer 4 redaction",

@@ -26,6 +26,8 @@ import { isBuiltin } from "node:module";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 
+import { layer2Placeholder } from "../../src/html.mjs";
+
 import {
   BUNDLE_TARGETS,
   assertNoRuntimeRequires,
@@ -36,7 +38,18 @@ import {
 
 /** Hidden-HTML input and the Layer-2 splice it must produce. */
 const HIDDEN_HTML = '<p style="display:none">hi</p>ok';
-const SPLICED = "[hidden HTML removed]ok";
+// Per target, because the two artifacts run DIFFERENT engines. python-cli
+// bundles the in-tree port, so it emits the keyed placeholder derived from the
+// engine's own producer — pinning the hex key here would be a second definition
+// of a content-addressed grammar. plugin-hooks resolves the engine from the
+// PINNED release, which predates keying and still emits the bare label; it
+// starts emitting keys on its own when the pin catches up, and this expectation
+// moves with it.
+const SPLICED = {
+  "python-cli":
+    layer2Placeholder("hidden", '<p style="display:none">hi</p>') + "ok",
+  "plugin-hooks": "[hidden HTML removed]ok",
+};
 
 /** A scratch dir removed when the test finishes. */
 function scratch(t) {
@@ -194,7 +207,12 @@ for (const target of BUNDLE_TARGETS) {
 
   test(`${target.name}: splices hidden HTML when run standalone`, async (t) => {
     const { artifact } = await stageArtifact(t, target);
-    assert.equal(SMOKE_DRIVERS[target.name](t, artifact), SPLICED);
+    const expected = SPLICED[target.name];
+    assert.ok(
+      expected,
+      `bundle target ${target.name} has no splice expectation`,
+    );
+    assert.equal(SMOKE_DRIVERS[target.name](t, artifact), expected);
   });
 }
 

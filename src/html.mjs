@@ -10,6 +10,16 @@
  * and `data:` URI resources are REPORTED in the result's `warned` counts but
  * never removed, so fetched page source stays inspectable.
  *
+ * Every splice is ROUND-TRIPPABLE: the placeholder carries a content-addressed
+ * key (see {@link layer2Placeholder}) and `sanitizeHtml` returns a `splices`
+ * array pairing each placeholder with the original bytes it replaced, so a
+ * caller that must write the text back (an agent editing a PR body whose
+ * comments were spliced) can rehydrate instead of persisting the loss —
+ * comments are ubiquitous legitimate content (PR templates, tooling markers),
+ * and an earlier lossy splice corrupted real documents (#244). The splice
+ * itself stays: comments hide content from a human reading the rendered page,
+ * which is the exact channel this layer exists to close.
+ *
  * Layer 3 reports data-exfil-shaped URLs (suspicious query params, oversized
  * payloads, embedded credentials) without modifying them; the caller surfaces
  * the report as a warning.
@@ -18,6 +28,7 @@
  * remark/rehype/unified graph costs ~200ms of module-load time, so the main
  * entry `await import()`s this module only when its cheap regex gates match.
  */
+import { createHash } from "node:crypto";
 // @ts-ignore -- css-tree ships no bundled types and @types/css-tree lags the 3.x
 // API (e.g. `ident.decode`); the value AST is walked with local `any` types.
 import * as csstree from "css-tree";
@@ -1284,8 +1295,65 @@ export function closingTagName(htmlValue) {
 
 // ─── Layer 2: splice engine ──────────────────────────────────────────────────
 
-export const COMMENT_PLACEHOLDER = "[HTML comment removed]";
-export const HIDDEN_PLACEHOLDER = "[hidden HTML removed]";
+/**
+ * @typedef {"comment" | "hidden"} SpliceKind
+ * @typedef {{ start: number, end: number, kind: SpliceKind }} SpliceRange
+ * @typedef {{ placeholder: string, original: string, start: number }} SplicePair
+ *   One splice: the keyed placeholder now in the output text, the ORIGINAL
+ *   bytes it replaced, and the placeholder's start offset in the RETURNED text.
+ *   All offsets in this module — unist positions and these — are plain JS
+ *   string indices, i.e. UTF-16 code units.
+ */
+
+// The kind-specific prose of a Layer-2 placeholder. The full placeholder is
+// built by {@link layer2Placeholder} and matched by {@link LAYER2_PLACEHOLDER_RE};
+// keep all three in sync — they are ONE grammar shared with the rehydrating
+// hooks and the tests.
+const PLACEHOLDER_LABEL = Object.freeze({
+  hidden: "hidden HTML",
+  comment: "HTML comment",
+});
+
+// How many lowercase-hex chars of the sha256 make the placeholder key. 48 bits
+// is far past accidental-collision range for the handful of splices one
+// document carries, while keeping the placeholder short enough to read.
+const PLACEHOLDER_KEY_LEN = 12;
+
+/**
+ * The keyed, content-addressed placeholder for one Layer-2 splice:
+ * `[hidden HTML removed #<key>]` / `[HTML comment removed #<key>]`, where
+ * `<key>` is the first 12 lowercase-hex chars of sha256 over the UTF-8
+ * encoding of the ORIGINAL spliced text. Content-addressed on purpose:
+ * identical spliced content yields the identical placeholder, so a rehydrator
+ * can match placeholder → original by key alone, and duplicated content never
+ * produces conflicting keys.
+ * @param {SpliceKind} kind
+ * @param {string} original the exact text the splice removed
+ * @returns {string}
+ */
+export function layer2Placeholder(kind, original) {
+  const key = createHash("sha256")
+    .update(original, "utf8")
+    .digest("hex")
+    .slice(0, PLACEHOLDER_KEY_LEN);
+  return `[${PLACEHOLDER_LABEL[kind]} removed #${key}]`;
+}
+
+/**
+ * The single grammar definition for keyed Layer-2 placeholders — the exact
+ * output of {@link layer2Placeholder}, capture group 1 = the key. Global so
+ * callers can scan a document for every placeholder; reset `lastIndex` (or
+ * use `matchAll`) between uses.
+ */
+export const LAYER2_PLACEHOLDER_RE =
+  /\[(?:hidden HTML|HTML comment) removed #([0-9a-f]{12})\]/g;
+
+// DEPRECATED un-keyed placeholder PREFIXES, kept exported for callers that
+// match "some Layer-2 placeholder of this kind" without knowing the key. The
+// full placeholder is keyed — build it with {@link layer2Placeholder}, match it
+// with {@link LAYER2_PLACEHOLDER_RE}.
+export const HIDDEN_PLACEHOLDER = "[hidden HTML removed";
+export const COMMENT_PLACEHOLDER = "[HTML comment removed";
 // Shown when the remark/rehype parse itself fails (e.g. pathologically nested
 // markup overflows the recursive tree walk with a RangeError). The top-level
 // `sanitize`/`sanitizeText` contract is "never throws, `cleaned` is always a
@@ -1297,18 +1365,23 @@ export const HIDDEN_PLACEHOLDER = "[hidden HTML removed]";
 export const UNPARSEABLE_PLACEHOLDER = "[HTML unparseable — withheld]";
 
 /**
- * Replace each range of `text` with its kind's placeholder, preserving every
- * byte outside the ranges verbatim. Overlapping/nested ranges are merged
+ * Replace each range of `text` with its kind's keyed placeholder, preserving
+ * every byte outside the ranges verbatim. Overlapping/nested ranges are merged
  * (defense-in-depth — the scanners emit disjoint ranges).
+ *
+ * Returns the spliced text plus `pairs`, one per emitted placeholder in output
+ * order, each pairing the placeholder with the ORIGINAL bytes it replaced and
+ * its start offset in the RETURNED text (UTF-16 code-unit string indices, the
+ * same space as `ranges`) — everything a rehydrator needs to undo the splice.
  * @param {string} text
- * @param {Array<{start: number, end: number, kind: "comment" | "hidden"}>} ranges
- * @returns {string}
+ * @param {SpliceRange[]} ranges
+ * @returns {{ text: string, pairs: SplicePair[] }}
  */
 export function spliceRanges(text, ranges) {
   const sorted = [...ranges].sort(
     (left, right) => left.start - right.start || left.end - right.end,
   );
-  /** @type {typeof ranges} */
+  /** @type {SpliceRange[]} */
   const merged = [];
   for (const range of sorted) {
     const last = merged[merged.length - 1];
@@ -1316,8 +1389,8 @@ export function spliceRanges(text, ranges) {
       if (range.end > last.end) last.end = range.end;
       // A hidden range absorbed into a comment range (the comment sorts first
       // on a tie) must keep the hidden label — hidden content placeholdered as
-      // "[HTML comment removed]" would understate what was stripped. Hidden
-      // dominates: if either side is hidden, the union is hidden.
+      // an "[HTML comment removed …]" would understate what was stripped.
+      // Hidden dominates: if either side is hidden, the union is hidden.
       if (range.kind === "hidden") last.kind = "hidden";
     } else {
       merged.push({ ...range });
@@ -1325,13 +1398,17 @@ export function spliceRanges(text, ranges) {
   }
   let out = "";
   let cursor = 0;
+  /** @type {SplicePair[]} */
+  const pairs = [];
   for (const range of merged) {
-    out +=
-      text.slice(cursor, range.start) +
-      (range.kind === "comment" ? COMMENT_PLACEHOLDER : HIDDEN_PLACEHOLDER);
+    out += text.slice(cursor, range.start);
+    const original = text.slice(range.start, range.end);
+    const placeholder = layer2Placeholder(range.kind, original);
+    pairs.push({ placeholder, original, start: out.length });
+    out += placeholder;
     cursor = range.end;
   }
-  return out + text.slice(cursor);
+  return { text: out + text.slice(cursor), pairs };
 }
 
 /** @returns {{ tags: Record<string, number>, dataSrc: number }} */
@@ -1369,7 +1446,7 @@ function hasWarned(warned) {
  * through matching close, and parse5 extends an unclosed element to the end
  * of the fragment — fail-closed for truncated markup).
  * @param {string} html
- * @returns {{ ranges: Array<{start: number, end: number, kind: "comment" | "hidden"}>, warned: ReturnType<typeof newWarned> }}
+ * @returns {{ ranges: SpliceRange[], warned: ReturnType<typeof newWarned> }}
  */
 export function scanHtmlFragment(html) {
   return scanFragmentTree(html, parseFragment(html));
@@ -1382,10 +1459,10 @@ export function scanHtmlFragment(html) {
  * the ranges are offsets into `html`, read from that tree's positions.
  * @param {string} html
  * @param {any} tree
- * @returns {{ ranges: Array<{start: number, end: number, kind: "comment" | "hidden"}>, warned: ReturnType<typeof newWarned> }}
+ * @returns {{ ranges: SpliceRange[], warned: ReturnType<typeof newWarned> }}
  */
 function scanFragmentTree(html, tree) {
-  /** @type {Array<{start: number, end: number, kind: "comment" | "hidden"}>} */
+  /** @type {SpliceRange[]} */
   const ranges = [];
   const warned = newWarned();
   // @ts-ignore -- visit callback returns EXIT/SKIP only on matches; implicit undefined return is intentional
@@ -1491,7 +1568,7 @@ function commentSpans(value) {
  * @param {string} value
  * @param {number} base absolute offset of the start of `value`
  * @param {number} nodeEnd absolute offset of the end of the containing node
- * @param {Array<{start: number, end: number, kind: "comment" | "hidden"}>} ranges
+ * @param {SpliceRange[]} ranges
  */
 function collectCommentRanges(value, base, nodeEnd, ranges) {
   BOGUS_COMMENT_OPEN_RE.lastIndex = 0;
@@ -1541,7 +1618,7 @@ function collectCommentRanges(value, base, nodeEnd, ranges) {
  * @param {{ tag: string | null, depth: number, regionStart: number }} state
  * @param {string} value
  * @param {number} nodeEnd absolute end offset of this node
- * @param {Array<{start: number, end: number, kind: "comment" | "hidden"}>} ranges
+ * @param {SpliceRange[]} ranges
  */
 function updateHiddenState(state, value, nodeEnd, ranges) {
   if (value.startsWith("</")) {
@@ -1603,7 +1680,7 @@ function hasHtmlLeaf(node) {
  * sibling/nested node the way it does in the flat token stream.
  * @param {any} node
  * @param {string} text the full document source, for raw-slice absorb folding
- * @param {Array<{start: number, end: number, kind: "comment" | "hidden"}>} ranges
+ * @param {SpliceRange[]} ranges
  * @param {ReturnType<typeof newWarned>} warned
  */
 function scanInlineChildren(node, text, ranges, warned) {
@@ -1697,11 +1774,11 @@ const FLOW_HTML_PARENTS = new Set([
 
 /**
  * @param {string} text
- * @returns {{ ranges: Array<{start: number, end: number, kind: "comment" | "hidden"}>, warned: ReturnType<typeof newWarned> }}
+ * @returns {{ ranges: SpliceRange[], warned: ReturnType<typeof newWarned> }}
  */
 function scanMarkdown(text) {
   const tree = mdParser.parse(text);
-  /** @type {Array<{start: number, end: number, kind: "comment" | "hidden"}>} */
+  /** @type {SpliceRange[]} */
   const ranges = [];
   const warned = newWarned();
 
@@ -1812,18 +1889,30 @@ export function looksLikeHtmlSource(text) {
 
 /**
  * Layer 2 over web-ingress text: splice out HTML comments and hidden elements
- * (placeholders mark the cuts; all other bytes are preserved verbatim) and
- * count preserved scripting/resource tags for the caller's warning. Returns
- * null when there is nothing to strip and nothing to report. `unparseable` is
- * set (true) only on the fail-closed path below, where the whole input was
- * withheld behind {@link UNPARSEABLE_PLACEHOLDER} rather than spliced — the
- * caller's warning must describe a whole-output withhold, not a splice.
+ * (keyed placeholders mark the cuts; all other bytes are preserved verbatim)
+ * and count preserved scripting/resource tags for the caller's warning. Returns
+ * null when there is nothing to strip and nothing to report.
+ *
+ * `splices` pairs every emitted placeholder with the original bytes it
+ * replaced (see {@link spliceRanges}), so a caller can rehydrate the text —
+ * nothing is lost, only hidden behind an identity-carrying placeholder.
+ *
+ * `unparseable` is set (true) only on the fail-closed path below, where the
+ * whole input was withheld behind {@link UNPARSEABLE_PLACEHOLDER} rather than
+ * spliced — the caller's warning must describe a whole-output withhold, not a
+ * splice. There `splices` is `[]`: the parser blew up before any span could be
+ * located, so nothing is recoverable per-splice (the caller's pre-splice
+ * `reveal` is the only copy).
+ *
+ * Idempotent over its own output: a keyed placeholder contains no `<`, so a
+ * re-run neither gates on it (HTML_TAG_PRESENT needs a tag) nor reads it as
+ * markup — placeholders already in the text pass through byte-identical.
  * @param {string} text
- * @returns {{ text: string, removed: { comments: number, hidden: number }, warned: { tags: Record<string, number>, dataSrc: number }, unparseable?: true } | null}
+ * @returns {{ text: string, removed: { comments: number, hidden: number }, warned: { tags: Record<string, number>, dataSrc: number }, splices: SplicePair[], unparseable?: true } | null}
  */
 export function sanitizeHtml(text) {
   if (!HTML_TAG_PRESENT.test(text)) return null;
-  /** @type {{ ranges: Array<{start: number, end: number, kind: "comment" | "hidden"}>, warned: ReturnType<typeof newWarned> }} */
+  /** @type {{ ranges: SpliceRange[], warned: ReturnType<typeof newWarned> }} */
   let scan;
   try {
     // One parse decides the branch AND feeds it, so the source branch does not
@@ -1839,6 +1928,7 @@ export function sanitizeHtml(text) {
       text: UNPARSEABLE_PLACEHOLDER,
       removed: { comments: 0, hidden: 1 },
       warned: newWarned(),
+      splices: [],
       unparseable: true,
     };
   }
@@ -1847,10 +1937,13 @@ export function sanitizeHtml(text) {
   const removed = { comments: 0, hidden: 0 };
   for (const range of ranges)
     removed[range.kind === "comment" ? "comments" : "hidden"]++;
+  const spliced =
+    ranges.length > 0 ? spliceRanges(text, ranges) : { text, pairs: [] };
   return {
-    text: ranges.length > 0 ? spliceRanges(text, ranges) : text,
+    text: spliced.text,
     removed,
     warned,
+    splices: spliced.pairs,
   };
 }
 

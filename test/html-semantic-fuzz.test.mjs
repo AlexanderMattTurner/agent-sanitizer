@@ -52,18 +52,28 @@ const KEEP_TOKENS = [
   // A nonzero unitless offset is invalid CSS; a browser drops the whole
   // declaration and the element keeps its normal on-screen position.
   '<div style="position: absolute; left: -9999">KEEPUNITLESS</div>',
+  // Raw-text elements: a hidden-tag LITERAL (or `<!…`) inside <style>/<script>
+  // is opaque content, not markup — splicing it would mangle source these tags
+  // preserve verbatim, so the whole construct must survive byte-for-byte.
+  '<style><div hidden="">KEEPRAWSTYLE</div></style>',
+  "<script><!-- KEEPRAWSCRIPT --></script>",
 ];
 
 // Each STRIP token is a genuinely hidden construct; its MARKER (the payload a
 // model would read but a human never sees) must be absent from the output.
 const STRIP_TOKENS = [
   { t: '<div style="display:none">STRIPNONE</div>', marker: "STRIPNONE" },
+  // Comment forms are back to being spliced (recoverably, behind keyed
+  // placeholders): they hide their payload from a rendered page just like a
+  // hidden element does.
+  { t: "<!-- STRIPCOMMENT -->", marker: "STRIPCOMMENT" },
+  { t: "<!STRIPBOGUS>", marker: "STRIPBOGUS" },
+  { t: "<![CDATA[STRIPCDATA]]>", marker: "STRIPCDATA" },
   {
     t: '<div style="visibility: hidden">STRIPVISHID</div>',
     marker: "STRIPVISHID",
   },
   { t: "<div hidden>STRIPATTR</div>", marker: "STRIPATTR" },
-  { t: "<!-- STRIPCOMMENT -->", marker: "STRIPCOMMENT" },
   {
     t: '<div style="position:absolute; left:-9999px">STRIPOFFSCREEN</div>',
     marker: "STRIPOFFSCREEN",

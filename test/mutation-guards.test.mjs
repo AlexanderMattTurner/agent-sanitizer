@@ -23,40 +23,43 @@ import {
   sanitizeHtml,
   detectExfil,
   checkExfilUrl,
-  COMMENT_PLACEHOLDER,
-  HIDDEN_PLACEHOLDER,
+  layer2Placeholder,
+  LAYER2_PLACEHOLDER_RE,
 } from "../src/html.mjs";
+
+const hid = (original) => layer2Placeholder("hidden", original);
+const com = (original) => layer2Placeholder("comment", original);
 
 // ─── output.mjs: describeRemoved / describeWarned exact warning text ──────────
 // Driven through the `sanitize` facade (index.mjs), which is where these
 // warnings surface to a root-entry caller; the strings themselves come from the
 // single Layers 1-3 implementation in output.mjs. The existing html-path tests
-// only `assert.match(/HTML sanitized/)`, so blanking the per-count clauses
-// (`${removed.comments} HTML comment(s)`) survived. Pin the whole warning string.
+// only `assert.match(/HTML sanitized/)`, so blanking the per-count clause
+// (`${removed.hidden} hidden element(s)`) survived. Pin the whole warning string.
 
 describe("guard: sanitize warning text is exact, not just present", () => {
-  it("names both removed counts in the HTML-sanitized warning", async () => {
+  it("names both the comment and hidden-element counts in the HTML-sanitized warning", async () => {
     const out = await sanitize(
-      "a <!-- one --> b <!-- two --> c <span hidden>S</span> d",
+      "a <!-- one --> b <span hidden>S</span> c <em hidden>T</em> d",
       { html: true },
     );
     const warn = out.warnings.find((w) => w.startsWith("HTML sanitized:"));
     assert.equal(
       warn,
-      "HTML sanitized: 2 HTML comment(s), 1 hidden element(s) replaced with placeholders",
+      "HTML sanitized: 1 HTML comment(s), 2 hidden element(s) replaced with placeholders",
     );
   });
 
-  it("omits the hidden clause when only comments were removed", async () => {
+  it("names exactly the comment count for a comments-only input", async () => {
     const out = await sanitize("a <!-- c --> b", { html: true });
-    const warn = out.warnings.find((w) => w.startsWith("HTML sanitized:"));
+    assert.equal(out.cleaned, `a ${com("<!-- c -->")} b`);
     assert.equal(
-      warn,
+      out.warnings.find((w) => w.startsWith("HTML sanitized:")),
       "HTML sanitized: 1 HTML comment(s) replaced with placeholders",
     );
   });
 
-  it("omits the comment clause when only a hidden element was removed", async () => {
+  it("names exactly the hidden count when one hidden element was removed", async () => {
     const out = await sanitize("a <span hidden>S</span> b", { html: true });
     const warn = out.warnings.find((w) => w.startsWith("HTML sanitized:"));
     assert.equal(
@@ -104,19 +107,14 @@ describe("guard: sanitize warning text is exact, not just present", () => {
     );
   });
 
-  it("records HTML_COMMENTS in found only when a comment was removed", async () => {
-    // Only a hidden element is removed: HIDDEN_HTML must be in found, but
-    // HTML_COMMENTS must NOT — pins the `removed.comments > 0` guard (a `>= 0`
-    // mutant would push HTML_COMMENTS with a zero comment count).
+  it("records HIDDEN_HTML in found when a hidden element was removed", async () => {
     const out = await sanitize("a <span hidden>x</span> b", { html: true });
     assert.equal(out.found.includes(CATEGORY.HIDDEN_HTML), true);
-    assert.equal(out.found.includes(CATEGORY.HTML_COMMENTS), false);
   });
 
-  it("records HTML_COMMENTS but not HIDDEN_HTML when only a comment was removed", async () => {
+  it("records exactly HTML_COMMENTS in found for a comments-only input", async () => {
     const out = await sanitize("a <!-- c --> b", { html: true });
-    assert.equal(out.found.includes(CATEGORY.HTML_COMMENTS), true);
-    assert.equal(out.found.includes(CATEGORY.HIDDEN_HTML), false);
+    assert.deepEqual(out.found, [CATEGORY.HTML_COMMENTS]);
   });
 
   it("never emits an empty warning string when nothing was preserved", async () => {
@@ -132,12 +130,11 @@ describe("guard: sanitize warning text is exact, not just present", () => {
     assert.equal(out.notes.includes(""), false);
   });
 
-  it("does not push comment/hidden found when only a tag is preserved (text unchanged)", async () => {
-    // A preserved <script> warns but splices nothing, so neither HTML_COMMENTS
-    // nor HIDDEN_HTML may appear in found — pins the `layer2.text !== cleaned`
-    // guard against a `true` mutant.
+  it("does not push hidden found when only a tag is preserved (text unchanged)", async () => {
+    // A preserved <script> warns but splices nothing, so HIDDEN_HTML may not
+    // appear in found — pins the `layer2.text !== cleaned` guard against a
+    // `true` mutant.
     const out = await sanitize("see <script>x</script> here", { html: true });
-    assert.equal(out.found.includes(CATEGORY.HTML_COMMENTS), false);
     assert.equal(out.found.includes(CATEGORY.HIDDEN_HTML), false);
   });
 
@@ -181,13 +178,13 @@ describe("guard: CATEGORY codes are the documented literals", () => {
 describe("guard: spliceRanges merge keeps the wider end, drops the narrower", () => {
   it("a nested range does not shrink the enclosing placeholder", () => {
     const text = "0123456789";
-    // Outer [1,8) hidden, inner [3,5) hidden fully contained: merge to one
-    // [1,8) hidden range; the inner end (5) must not replace the outer end (8).
+    // Outer [1,8), inner [3,5) fully contained: merge to one [1,8) range; the
+    // inner end (5) must not replace the outer end (8).
     const out = spliceRanges(text, [
       { start: 1, end: 8, kind: "hidden" },
       { start: 3, end: 5, kind: "hidden" },
     ]);
-    assert.equal(out, "0" + HIDDEN_PLACEHOLDER + "89");
+    assert.equal(out.text, "0" + hid("1234567") + "89");
   });
 
   it("an overlapping range that extends past the first widens the merge", () => {
@@ -196,7 +193,7 @@ describe("guard: spliceRanges merge keeps the wider end, drops the narrower", ()
       { start: 1, end: 5, kind: "hidden" },
       { start: 4, end: 8, kind: "hidden" },
     ]);
-    assert.equal(out, "0" + HIDDEN_PLACEHOLDER + "89");
+    assert.equal(out.text, "0" + hid("1234567") + "89");
   });
 
   it("sorts by start then end so placeholders land in document order", () => {
@@ -205,22 +202,25 @@ describe("guard: spliceRanges merge keeps the wider end, drops the narrower", ()
       { start: 5, end: 7, kind: "hidden" },
       { start: 1, end: 3, kind: "comment" },
     ]);
-    assert.equal(
-      out,
-      "a" + COMMENT_PLACEHOLDER + "de" + HIDDEN_PLACEHOLDER + "h",
-    );
+    assert.equal(out.text, "a" + com("bc") + "de" + hid("fg") + "h");
   });
 });
 
-// ─── html.mjs: sanitizeHtml removed counting keys off range.kind ──────────────
-// `range.kind === "comment"` chooses the bucket; flipping it miscounts.
+// ─── html.mjs: sanitizeHtml counts comment and hidden removals separately ─────
+// A mutant that swaps the buckets, merges them, or counts ranges instead of
+// removals must redden here: two comments and one hidden element yield exactly
+// {comments: 2, hidden: 1}, each spliced to its own kind's keyed placeholder.
 
-describe("guard: sanitizeHtml counts comments and hidden into the right buckets", () => {
-  it("reports exactly the comment and hidden removal counts", () => {
+describe("guard: sanitizeHtml counts comment and hidden removals in their own buckets", () => {
+  it("reports exact per-kind removal counts with per-kind placeholders", () => {
     const result = sanitizeHtml(
       "a <!-- c1 --> b <!-- c2 --> c <span hidden>x</span> d",
     );
     assert.deepEqual(result.removed, { comments: 2, hidden: 1 });
+    assert.equal(
+      result.text,
+      `a ${com("<!-- c1 -->")} b ${com("<!-- c2 -->")} c ${hid("<span hidden>x</span>")} d`,
+    );
   });
 });
 
@@ -228,7 +228,8 @@ describe("guard: sanitizeHtml counts comments and hidden into the right buckets"
 // The isHiddenStyle unit suite pins the predicate; these drive the FULL splice
 // path so a mutant that keeps the verdict but drops the removal is caught. Each
 // style is a genuine browser-honored hide that older code missed; the secret
-// must be gone, replaced by exactly HIDDEN_PLACEHOLDER, marker text intact.
+// must be gone, replaced by exactly its keyed hidden placeholder, marker text
+// intact.
 
 describe("guard: browser-honored hides are spliced end-to-end", () => {
   const BROWSER_HONORED_HIDES = [
@@ -241,10 +242,9 @@ describe("guard: browser-honored hides are spliced end-to-end", () => {
   ];
   for (const [label, style] of BROWSER_HONORED_HIDES)
     it(`splices ${label} to exactly the placeholder`, () => {
-      const result = sanitizeHtml(
-        `MARK <div style="${style}">SECRET</div> END`,
-      );
-      assert.equal(result.text, `MARK ${HIDDEN_PLACEHOLDER} END`);
+      const construct = `<div style="${style}">SECRET</div>`;
+      const result = sanitizeHtml(`MARK ${construct} END`);
+      assert.equal(result.text, `MARK ${hid(construct)} END`);
       assert.deepEqual(result.removed, { comments: 0, hidden: 1 });
     });
 
@@ -270,7 +270,7 @@ describe("guard: browser-honored hides are spliced end-to-end", () => {
       // sanitizeHtml returns null when nothing was removed/warned.
       if (result !== null) {
         assert.ok(result.text.includes("VISIBLE"));
-        assert.ok(!result.text.includes(HIDDEN_PLACEHOLDER));
+        assert.equal(result.text.match(LAYER2_PLACEHOLDER_RE), null);
       }
     });
 });

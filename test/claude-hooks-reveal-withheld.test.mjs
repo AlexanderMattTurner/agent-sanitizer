@@ -38,6 +38,14 @@ process.env.AGENT_SANITIZER_SECRETS_ENABLED = "1";
 
 const { evaluateToolOutput, REVEAL_WITHHELD_WARNING } =
   await import("../claude-hooks/sanitize-output.mjs");
+const { layer2Placeholder } = await import("../src/html.mjs");
+
+/** Reveal-sidecar files only — the per-splice `span-<key>.txt` files are a
+ * separate store written by a separate loop, asserted on separately. */
+const revealFiles = () =>
+  readdirSync(revealDir).filter((name) => !name.startsWith("span-"));
+const spanFiles = () =>
+  readdirSync(revealDir).filter((name) => name.startsWith("span-"));
 
 // `token` trips the SECRET_HINT pre-gate on every call, so both the vet and the
 // loop reach the daemon. `poison` is the failure marker the withheld case
@@ -102,7 +110,11 @@ describe("sanitize-output: reveal-persistence loop failure is not silent", () =>
     });
     assert.ok(fields !== null);
     // The primary output is untouched by the side channel's failure.
-    assert.equal(fields.mutated_output, "visible[HTML comment removed]");
+    assert.equal(
+      fields.mutated_output,
+      // The key is minted from the RAW spliced bytes, before any redaction.
+      `visible${layer2Placeholder("comment", `<!-- token ${FAIL_MARKER} -->`)}`,
+    );
     const context = String(fields.additional_context);
     assert.ok(
       context.includes(REVEAL_WITHHELD_WARNING),
@@ -111,7 +123,10 @@ describe("sanitize-output: reveal-persistence loop failure is not silent", () =>
     // The warning REPLACES the sidecar hint — advertising a file that was
     // never written would be worse than the silent drop this test closes.
     assert.ok(!context.includes("was saved to"));
-    assert.deepEqual(readdirSync(revealDir), []);
+    assert.deepEqual(revealFiles(), []);
+    // The span loop re-vets the same unvettable bytes, so it drops too — a
+    // rehydratable span of content nothing could redact must never land.
+    assert.deepEqual(spanFiles(), []);
   });
 
   it("non-vacuity: a vettable reveal is persisted with a hint and no withheld warning", async () => {
@@ -123,6 +138,7 @@ describe("sanitize-output: reveal-persistence loop failure is not silent", () =>
     const context = String(fields.additional_context);
     assert.ok(context.includes("was saved to"));
     assert.ok(!context.includes(REVEAL_WITHHELD_WARNING));
-    assert.equal(readdirSync(revealDir).length, 1);
+    assert.equal(revealFiles().length, 1);
+    assert.equal(spanFiles().length, 1);
   });
 });
