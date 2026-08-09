@@ -19,7 +19,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, before, describe, it } from "node:test";
 
-import { repoRoot } from "./lib/repo-root.mjs";
+import { repoRoot } from "../test/helpers/repo-root.mjs";
 
 const HOOK = join(repoRoot, ".hooks", "pre-push");
 const ZERO = "0".repeat(40);

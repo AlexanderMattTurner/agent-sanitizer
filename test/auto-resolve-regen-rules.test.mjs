@@ -25,7 +25,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, it } from "node:test";
 
-import { repoRoot } from "../.hooks/lib/repo-root.mjs";
+import { repoRoot } from "./helpers/repo-root.mjs";
 
 // A plain literal, not `join("config", …)`: guard-pairs resolves a string it
 // can read, so spelling the path whole is what puts this file into the scan

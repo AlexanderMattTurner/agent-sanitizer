@@ -285,7 +285,8 @@ function resolvePath(node, file, scope) {
   }
   if (node.type !== "CallExpression") return null;
   if (isGitRootCall(node, scope)) return "";
-  // `unsandbox(p)` from ./repo-root.mjs is the identity on a repo-RELATIVE path:
+  // `unsandbox(p)` from test/helpers/repo-root.mjs is the identity on a
+  // repo-RELATIVE path:
   // outside a mutation sandbox it returns its argument, and inside one it strips
   // the `.stryker-tmp/sandbox-XXXXXX` segment, which repo-relative is the same
   // place. Named rather than inferred, exactly like the git arm above — a

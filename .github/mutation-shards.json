@@ -30,8 +30,7 @@
       "file": "claude-hooks/scan-invisible-chars.mjs"
     },
     { "id": "cli", "file": "bin/sanitize-cli.mjs" },
-    { "id": "guarded-data-scan", "file": ".hooks/lib/guarded-data-scan.mjs" },
-    { "id": "repo-root", "file": ".hooks/lib/repo-root.mjs" }
+    { "id": "guarded-data-scan", "file": ".hooks/lib/guarded-data-scan.mjs" }
   ],
   "groups": [
     {

@@ -65,8 +65,8 @@ export const toolingSources = (repoRoot) =>
     .map((entry) => entry.toString().replace(/\\/g, "/"))
     // A suite is not a mutation target: Stryker judges a mutant by whether the
     // tests kill it, so mutating a test measures nothing and its mutants survive
-    // by construction. This scope holds its own suites now, and the first one to
-    // land here put a `.test.mjs` into the mutated set.
+    // by construction. The directory is read recursively, so a suite committed
+    // beside a module here would otherwise join the mutated set.
     .filter((name) => name.endsWith(".mjs") && !name.endsWith(".test.mjs"))
     .map((name) => posix.join(TOOLING_SCOPE, name))
     .sort();

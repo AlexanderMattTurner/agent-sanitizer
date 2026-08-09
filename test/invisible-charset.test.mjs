@@ -13,7 +13,7 @@ import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 
-import { unsandbox } from "../.hooks/lib/repo-root.mjs";
+import { unsandbox } from "./helpers/repo-root.mjs";
 
 import {
   extraCodepoints,

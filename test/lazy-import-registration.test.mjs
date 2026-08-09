@@ -22,7 +22,7 @@ import assert from "node:assert/strict";
 import { readdirSync, readFileSync } from "node:fs";
 import path from "node:path";
 
-import { repoRoot } from "../.hooks/lib/repo-root.mjs";
+import { repoRoot } from "./helpers/repo-root.mjs";
 
 /**
  * The repo's REAL `claude-hooks/`, even inside Stryker's sandbox — see the
