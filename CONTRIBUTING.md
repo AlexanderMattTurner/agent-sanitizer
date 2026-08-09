@@ -24,17 +24,20 @@ pnpm format    # prettier --write .
 The coverage and mutation gates are scoped to what the package **ships**:
 `scripts/shipped-sources.mjs` resolves `package.json`'s `files` + `exports` +
 `bin` into the checked `.mjs` set, and `scripts/coverage.mjs`,
-`scripts/mutate.mjs` and `.github/mutation-shards.json` all consume it. Publish
-a new module and `test/shipped-gates.test.mjs` fails until it is in both gates.
-`src/` is held at 100%; `claude-hooks/` and `bin/` carry a separate, lower
-ratchet that should only ever move up.
+`scripts/mutate.mjs` and `.github/scripts/expand-shards.mjs` all consume it.
+Publish a new module and it joins both gates on commit — the shard matrix is
+derived, not listed, so there is nothing to add to `.github/mutation-shards.json`
+(which declares only which big files to chunk and how many whole-file shards to
+spread the rest over). A module published outside every named scope prefix fails
+`test/shipped-gates.test.mjs` instead of silently inheriting another scope's
+floors. `src/` is held at 100%; `claude-hooks/` and `bin/` carry a separate,
+lower ratchet that should only ever move up.
 
 The mutation gate additionally covers `.hooks/lib/`, which ships to nobody but
 derives the pre-commit guard-pair map — a resolver arm that quietly stops
 resolving there means guard tests stop running with nothing red. That scope is
-derived from the directory, so a new module in it joins the gate on commit and
-`test/shipped-gates.test.mjs` fails until `.github/mutation-shards.json` names
-it. It carries its own ratchet (`toolingScopeBreak`), same move-up-only rule.
+derived from the directory, so a new module in it joins the gate on commit. It
+carries its own ratchet (`toolingScopeBreak`), same move-up-only rule.
 
 Run the tests, lint, type-check, and formatter before pushing. The git hooks
 under `.hooks/` also enforce formatting and commit conventions on commit.

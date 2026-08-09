@@ -326,7 +326,7 @@ describe("mutation gate covers the mutated set", () => {
     assert.deepEqual(
       [...new Set(entries.map((e) => e.file))].sort(),
       mutated,
-      "shard file set must equal the mutated set (add a `split` entry or `group` in .github/mutation-shards.json)",
+      "the expanded shard matrix must cover exactly the mutated set — expand-shards.mjs derives it, so a mismatch is a bug in that derivation, not a missing config entry",
     );
 
     // A split file is deliberately spread over several line-ranged shards (the
