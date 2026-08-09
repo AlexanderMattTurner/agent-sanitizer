@@ -32,11 +32,20 @@ import { dirname, extname, join, normalize, relative, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parse } from "acorn";
 
-export const repoRoot = join(
-  dirname(fileURLToPath(import.meta.url)),
-  "..",
-  "..",
-);
+import { repoRoot, unsandbox } from "./repo-root.mjs";
+
+/**
+ * The tree this scan answers about: the real checkout, never a copy of it.
+ *
+ * Every answer here is derived from SOURCE TEXT, so the tree it reads decides
+ * what resolves. Inside Stryker's sandbox the mutated files carry instrumented
+ * initializers — `export const repoRoot = stryMutAct_9fa48("0") ? … : …` — and
+ * a path expression wrapped in a conditional is one this resolver correctly
+ * declines, so every suite rooted through that binding silently drops out of
+ * the map. Climbing back out means the shipped bytes are what is parsed
+ * whichever copy this module is loaded from.
+ */
+export { repoRoot };
 
 /**
  * Directories the file walk below never descends into: dependency trees, build
@@ -245,7 +254,10 @@ function resolveBareSpecifier(specifier) {
     return null;
   }
   if (!url.startsWith("file:")) return null;
-  const absolute = fileURLToPath(url);
+  // Node resolves against THIS module's location, so inside a sandbox the
+  // answer names the copy; the real tree is the only place a repo-relative path
+  // means anything to a caller.
+  const absolute = unsandbox(fileURLToPath(url));
   return absolute.startsWith(repoRoot + sep)
     ? relative(repoRoot, absolute)
     : null;

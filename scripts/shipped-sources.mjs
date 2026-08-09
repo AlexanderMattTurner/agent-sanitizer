@@ -190,9 +190,37 @@ export const findRepoRoot = () =>
     cwd: dirname(fileURLToPath(import.meta.url)),
   }).trim();
 
+/**
+ * The list a CLI invocation prints: the shipped surface, or with `--mutated`
+ * everything the mutation gate instruments (that surface plus the tooling).
+ *
+ * An unknown argument throws rather than falling back to the shipped list: a
+ * caller asking for a scope this module does not know about would otherwise
+ * gate a NARROWER set than it believes, silently.
+ *
+ * @param {string[]} argv arguments after the script path
+ * @param {string} repoRoot absolute path to the repository root
+ * @returns {string[]} repo-relative POSIX paths, sorted
+ */
+export function cliSources(argv, repoRoot) {
+  const [scope, ...rest] = argv;
+  if (rest.length > 0 || (scope !== undefined && scope !== "--mutated")) {
+    throw new Error(
+      `shipped-sources: unrecognised arguments ${argv.join(" ")}. Pass no ` +
+        `argument for the shipped sources, or --mutated for the full ` +
+        `mutation scope.`,
+    );
+  }
+  return scope === "--mutated"
+    ? mutatedSources(repoRoot)
+    : shippedSources(repoRoot);
+}
+
 if (
   process.argv[1] &&
   realpathSync(process.argv[1]) === fileURLToPath(import.meta.url)
 ) {
-  process.stdout.write(`${shippedSources(findRepoRoot()).join("\n")}\n`);
+  process.stdout.write(
+    `${cliSources(process.argv.slice(2), findRepoRoot()).join("\n")}\n`,
+  );
 }

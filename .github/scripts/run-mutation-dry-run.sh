@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Stryker DRY RUN only, over every shipped source: instrument the tree, run the
-# suite once, exit. No mutants are executed.
+# Stryker DRY RUN only, over everything the shards mutate: instrument the tree,
+# run the suite once, exit. No mutants are executed.
 #
 # WHY THIS EXISTS. Stryker does not run the suite against the checkout — it
 # copies the project to .stryker-tmp/sandbox-XXXXXX/ and rewrites every file in
@@ -18,12 +18,15 @@
 set -euo pipefail
 
 # The mutate scope is derived, never spelled out here: scripts/shipped-sources.mjs
-# is the same SSOT the coverage floor and the shard list read, so a new shipped
-# module is instrumented by this oracle with no config to remember.
+# is the same SSOT the coverage floor and the shard list read, so a new module is
+# instrumented by this oracle with no config to remember. `--mutated` is what
+# makes it the shards' scope rather than a subset of it: the shards mutate the
+# `.hooks/lib/` tooling as well as the shipped surface, and an oracle that
+# instruments less than the matrix cannot see a dry-run failure the matrix will.
 sources=()
 while IFS= read -r line; do
   sources+=("$line")
-done < <(node scripts/shipped-sources.mjs)
+done < <(node scripts/shipped-sources.mjs --mutated)
 
 if [[ ${#sources[@]} -eq 0 ]]; then
   echo "run-mutation-dry-run: shipped-sources.mjs listed no files. The dry run" >&2

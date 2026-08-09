@@ -20,8 +20,17 @@
  * `ast` — not on regexes over source text: "validate against the actual
  * tokenizer/parser, not a hand-rolled approximation" (CLAUDE.md, Code Style).
  */
-import { existsSync, readFileSync } from "node:fs";
-import { extname, join } from "node:path";
+import {
+  cpSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
+import { dirname, extname, join, sep } from "node:path";
+import { pathToFileURL } from "node:url";
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
@@ -53,6 +62,9 @@ const { pairs, tooSlowForCommit } = JSON.parse(
 );
 
 const derived = scanGuardedData();
+
+/** True when this suite is itself running from a Stryker sandbox copy. */
+const IN_SANDBOX = repoRoot.includes(`${sep}.stryker-tmp${sep}sandbox-`);
 
 /** Assert `path` is guarded by `reader`, naming the mechanism that finds it. */
 function assertGuardedBy(map, path, reader, mechanism) {
@@ -333,6 +345,70 @@ describe("guarded-data scan (the map is derived from the tests)", () => {
       "no pytest module guards anything — the hook's pytest runner is dead code",
     );
   });
+
+  it(
+    "answers about the real checkout when loaded from a mutation sandbox",
+    {
+      skip:
+        IN_SANDBOX &&
+        "nesting a sandbox inside a sandbox strips to a path that never existed; the shard itself is the live case",
+    },
+    async () => {
+      // Every answer this scan gives is derived from source TEXT, so the copy it
+      // reads decides what resolves. Stryker rewrites the files in its --mutate
+      // set inside the sandbox, and `new URL("../..", import.meta.url)` arrives
+      // as a guarded conditional the resolver declines — which drops
+      // THREAT-MODEL.md and the other helper-rooted guards out of the map and
+      // fails the shard's dry run before a mutant is applied.
+      //
+      // Simulated rather than observed: the sandbox holds only `.hooks/lib`, with
+      // repo-root.mjs in the shape Stryker emits (its guard returns false, so the
+      // runtime value is unchanged and only the SOURCE differs).
+      mkdirSync(join(repoRoot, ".stryker-tmp"), { recursive: true });
+      const sandbox = mkdtempSync(join(repoRoot, ".stryker-tmp", "sandbox-"));
+      try {
+        const lib = join(sandbox, ".hooks", "lib");
+        mkdirSync(dirname(lib), { recursive: true });
+        cpSync(join(repoRoot, ".hooks", "lib"), lib, { recursive: true });
+        const rootModule = join(lib, "repo-root.mjs");
+        const original = readFileSync(rootModule, "utf8");
+        // Run FROM a shard and the copy is already instrumented, by Stryker
+        // itself; run from a healthy tree and the fixture supplies the shape.
+        // Keyed on the emitted GUARD FUNCTION, not on the name: repo-root.mjs's
+        // own header quotes an instrumented line, and a mention would read as the
+        // real thing and skip the rewrite.
+        if (!/^function stryMutAct_/mu.test(original))
+          writeFileSync(
+            rootModule,
+            `function stryMutAct_9fa48() {\n  return false;\n}\n${original.replace(
+              'new URL("../..", import.meta.url)',
+              'new URL(stryMutAct_9fa48("0") ? "" : "../..", import.meta.url)',
+            )}`,
+          );
+        const rewritten = readFileSync(rootModule, "utf8");
+        assert.ok(
+          rewritten
+            .slice(rewritten.indexOf("export const repoRoot ="))
+            .includes("stryMutAct_"),
+          "repo-root.mjs no longer spells the initializer this fixture instruments — " +
+            "re-derive the fixture, it proves nothing as written",
+        );
+
+        const sandboxed = await import(
+          pathToFileURL(join(lib, "guarded-data-scan.mjs")).href
+        );
+        assert.equal(sandboxed.repoRoot, repoRoot);
+        assertGuardedBy(
+          sandboxed.scanJsGuards(),
+          "THREAT-MODEL.md",
+          "test/threat-model-layers.test.mjs",
+          "root read helper, scanned from a sandbox",
+        );
+      } finally {
+        rmSync(sandbox, { recursive: true, force: true });
+      }
+    },
+  );
 
   it("attributes every derived pair to a suite that exists and can run", () => {
     const bad = [];
