@@ -468,13 +468,38 @@ function isHangul(ch) {
   return HANGUL_RE.test(ch);
 }
 
-// Non-global single-char classifiers (CHECKS carry `g`, whose lastIndex is
-// stateful across `.test`). carveStrip uses these to attribute each removed
-// char to its CHECKS category so `found` names exactly what was stripped.
-const CHECK_ONE = CHECKS.map(
-  ([code, re]) =>
-    /** @type {[string, RegExp]} */ ([code, new RegExp(re.source, "u")]),
-);
+// code point -> CHECKS category, projected from the SAME three code-point sets
+// the CHECKS regexes are built from, in CHECKS order so a code point in two sets
+// gets the category the regexes would report first. Every CHECKS class holds
+// single code points under the `u` flag, so a lookup and a `.test` answer
+// identically; test/invisible-fast-path.test.mjs pins that over the whole
+// code-point space, because a code point dropped here is one the scatter gate
+// stops counting. A lookup rather than the regexes because this runs once per
+// code point of every prompt and tool output.
+/** @type {Map<number, string>} */
+const TRACKED_INVISIBLE = new Map();
+for (const [code, codepoints] of /** @type {[string, Iterable<number>][]} */ ([
+  [CATEGORY.CF, CF_CODEPOINTS],
+  [CATEGORY.VARIATION_SELECTORS, [...VS].map((ch) => ch.codePointAt(0))],
+  [CATEGORY.BLANK_FILLERS, [...BLANK_NON_CF].map((ch) => ch.codePointAt(0))],
+]))
+  for (const cp of codepoints)
+    if (!TRACKED_INVISIBLE.has(cp)) TRACKED_INVISIBLE.set(cp, code);
+
+// No tracked code point sits below this, so ASCII and Latin-1 text answers the
+// classifier without touching the map at all.
+const MIN_TRACKED_CP = Math.min(...TRACKED_INVISIBLE.keys());
+
+/**
+ * The CHECKS category code (a CATEGORY value) a code point belongs to, or null
+ * when it is not payload-capable (an ordinary visible character).
+ * @param {number} cp
+ * @returns {string | null}
+ */
+function classifyCp(cp) {
+  if (cp < MIN_TRACKED_CP) return null;
+  return TRACKED_INVISIBLE.get(cp) ?? null;
+}
 
 /**
  * The CHECKS category code (a CATEGORY value) a single code point belongs to,
@@ -483,8 +508,44 @@ const CHECK_ONE = CHECKS.map(
  * @returns {string | null}
  */
 function classify(ch) {
-  for (const [code, re] of CHECK_ONE) if (re.test(ch)) return code;
-  return null;
+  return classifyCp(/** @type {number} */ (ch.codePointAt(0)));
+}
+
+/**
+ * True when `text` holds at least one code point {@link classify} calls
+ * invisible. Walks UTF-16 units directly rather than iterating code-point
+ * strings, so a clean multi-MB paste is answered without allocating one string
+ * per character; surrogates are paired exactly as the String iterator pairs
+ * them, an unpaired one classifying as the lone surrogate it is.
+ * @param {string} text
+ * @returns {boolean}
+ */
+function hasInvisibleCodePoint(text) {
+  for (let i = 0; i < text.length; i++) {
+    let cp = text.charCodeAt(i);
+    if (cp >= 0xd800 && cp <= 0xdbff && i + 1 < text.length) {
+      const low = text.charCodeAt(i + 1);
+      if (low >= 0xdc00 && low <= 0xdfff) {
+        cp = (cp - 0xd800) * 0x400 + (low - 0xdc00) + 0x10000;
+        i++;
+      }
+    }
+    if (classifyCp(cp) !== null) return true;
+  }
+  return false;
+}
+
+/**
+ * The number of code points in `text`, counted by the String iterator itself —
+ * the same unit `Array.from(text).length` measures, without the array.
+ * @param {string} text
+ * @returns {number}
+ */
+function codePointLength(text) {
+  let n = 0;
+  const iterator = text[Symbol.iterator]();
+  while (!iterator.next().done) n++;
+  return n;
 }
 
 /** A cursive-joining letter: Joining_Type dual, right, or left. (C is a join
@@ -621,18 +682,36 @@ function isEmojiPresentationSelector(cps, i) {
  * @returns {{ codes: (string|null)[], kind: (string|null)[], payloadInvis: number, visibleLen: number }}
  */
 function analyzeCarve(cps) {
-  const codes = cps.map(classify);
-  const tagKeep = markTagSequences(cps);
-  const kind = cps.map((_, i) => {
-    if (codes[i] === null) return null;
-    if (tagKeep[i]) return "tag";
-    if (isPreservedJoiner(cps, i)) return "joiner";
-    if (isEmojiPresentationSelector(cps, i)) return "emojivs";
-    if (isStandardizedVariationSelector(cps, i)) return "stdvs";
-    if (isIdeographicVariationSelector(cps, i)) return "ivs";
-    if (isPreservedBlankFiller(cps, i)) return "blank";
-    return null;
-  });
+  const codes = new Array(cps.length);
+  // Indices of the invisibles, so every pass below is O(invisibles) rather than
+  // O(length): in ordinary text they are a vanishing fraction of a paste, and a
+  // full-length pass per preserve rule is what made the analysis linear in the
+  // WHOLE prompt several times over.
+  const invisible = [];
+  let visibleLen = 0;
+  let hasTagBase = false;
+  for (let i = 0; i < cps.length; i++) {
+    const code = classify(cps[i]);
+    codes[i] = code;
+    if (code !== null) {
+      invisible.push(i);
+      continue;
+    }
+    visibleLen++;
+    hasTagBase ||= cps[i].codePointAt(0) === TAG_BASE;
+  }
+  // A tag sequence is preservable only when it opens on a TAG_BASE pictograph,
+  // so with no base in the text markTagSequences returns all-false.
+  const tagKeep = hasTagBase ? markTagSequences(cps) : null;
+  const kind = new Array(cps.length).fill(null);
+  for (const i of invisible) {
+    if (tagKeep !== null && tagKeep[i]) kind[i] = "tag";
+    else if (isPreservedJoiner(cps, i)) kind[i] = "joiner";
+    else if (isEmojiPresentationSelector(cps, i)) kind[i] = "emojivs";
+    else if (isStandardizedVariationSelector(cps, i)) kind[i] = "stdvs";
+    else if (isIdeographicVariationSelector(cps, i)) kind[i] = "ivs";
+    else if (isPreservedBlankFiller(cps, i)) kind[i] = "blank";
+  }
   // Blank fillers are budgeted here, document-wide and all-or-nothing, against
   // the visible anchor-script text rather than against the joiner/selector
   // counter in carveStrip (see PRESERVED_BLANK_PER_ANCHOR for why the two
@@ -647,13 +726,13 @@ function analyzeCarve(cps) {
   // `⠃⠀⠃⠀…` alternation of 200 Braille blanks. The anchor scan is skipped below
   // the floor: it costs a script regex per visible character, and analyzeCarve
   // runs on every prompt and tool output.
-  const blankScript = kind.map((k, i) =>
-    k !== "blank"
-      ? null
-      : cps[i].codePointAt(0) === BRAILLE_BLANK
-        ? "braille"
-        : "hangul",
-  );
+  /** @type {Record<string, number[]>} */
+  const blankIndices = { braille: [], hangul: [] };
+  for (const i of invisible)
+    if (kind[i] === "blank")
+      blankIndices[
+        cps[i].codePointAt(0) === BRAILLE_BLANK ? "braille" : "hangul"
+      ].push(i);
   for (const [
     script,
     isAnchor,
@@ -661,22 +740,17 @@ function analyzeCarve(cps) {
     ["braille", isBrailleCell],
     ["hangul", isHangul],
   ])) {
-    const blanks = blankScript.filter((s) => s === script).length;
-    if (blanks <= TOTAL_PRESERVED_BLANK_BUDGET) continue;
+    const indices = blankIndices[script];
+    if (indices.length <= TOTAL_PRESERVED_BLANK_BUDGET) continue;
     const anchors = cps.reduce(
       (n, ch, i) => n + (codes[i] === null && isAnchor(ch) ? 1 : 0),
       0,
     );
-    if (blanks > Math.floor(anchors / PRESERVED_BLANK_PER_ANCHOR))
-      for (let i = 0; i < kind.length; i++)
-        if (blankScript[i] === script) kind[i] = null;
+    if (indices.length > Math.floor(anchors / PRESERVED_BLANK_PER_ANCHOR))
+      for (const i of indices) kind[i] = null;
   }
   let payloadInvis = 0;
-  let visibleLen = 0;
-  for (let i = 0; i < cps.length; i++) {
-    if (codes[i] === null) visibleLen++;
-    else if (kind[i] === null) payloadInvis++;
-  }
+  for (const i of invisible) if (kind[i] === null) payloadInvis++;
   return { codes, kind, payloadInvis, visibleLen };
 }
 
@@ -690,6 +764,12 @@ function analyzeCarve(cps) {
  * @returns {number}
  */
 export function countPayloadInvisible(text) {
+  // Payload is a SUBSET of the invisibles (analyzeCarve counts only positions
+  // classify marks invisible), so a text with none has a payload count of zero
+  // and needs neither the code-point array nor the carve analysis. This reads
+  // every code point — it is a necessary condition checked in full, not a scan
+  // bound an attacker could paste past.
+  if (!hasInvisibleCodePoint(text)) return 0;
   return analyzeCarve(Array.from(text)).payloadInvis;
 }
 
@@ -853,7 +933,7 @@ function clusterEnds(body) {
   const ends = [];
   let end = 0;
   for (const { segment } of GRAPHEME_SEGMENTER.segment(body)) {
-    end += Array.from(segment).length;
+    end += codePointLength(segment);
     ends.push(end);
   }
   return ends;
@@ -1067,6 +1147,13 @@ export function payloadInvisibleView(text) {
  * @returns {string | null}
  */
 export function payloadLongRunSample(text) {
+  // The view is code-point-for-code-point with `text` and only ever REPLACES an
+  // invisible with a space, so a run in the view is a run in `text`: no long run
+  // in the raw text means none in the view. This hides no payload — the bulk
+  // regex reads the whole text, and a run it finds still goes through the full
+  // carve analysis below to decide what of it is really payload.
+  LONG_RUN_RE.lastIndex = 0;
+  if (!LONG_RUN_RE.test(text)) return null;
   LONG_RUN_RE.lastIndex = 0;
   return payloadInvisibleView(text).match(LONG_RUN_RE)?.[0] ?? null;
 }
@@ -1093,11 +1180,13 @@ export function payloadLongRunSample(text) {
  */
 export function countEffectiveInvisible(text) {
   const payload = countPayloadInvisible(text);
-  const surplusPreservedJoiners = Math.max(
-    0,
-    [...text].length - [...stripInvisible(text)].length - payload,
-  );
-  return payload + surplusPreservedJoiners;
+  const stripped = stripInvisible(text);
+  // Two identical strings differ by zero code points, so the common clean paste
+  // skips both counting passes; codePointLength is the String iterator's count,
+  // the same unit `[...text].length` measures, without the array.
+  const removed =
+    stripped === text ? 0 : codePointLength(text) - codePointLength(stripped);
+  return payload + Math.max(0, removed - payload);
 }
 
 /**
