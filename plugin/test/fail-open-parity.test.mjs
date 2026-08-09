@@ -29,8 +29,8 @@ import {
   FAIL_CLOSED_VALUES,
   FAIL_OPEN_ENV,
   failOpenEnabled,
-  failOpenShellLib,
 } from "../../claude-hooks/lib/hook-io.mjs";
+import { failOpenShellLib } from "../../scripts/gen-fail-open-lib.mjs";
 
 const ROOT = dirname(dirname(dirname(fileURLToPath(import.meta.url))));
 const LIB_PATH = join(ROOT, "plugin", "scripts", "lib", "fail-open.sh");

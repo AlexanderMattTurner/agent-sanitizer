@@ -216,7 +216,7 @@ export const FAIL_OPEN_ENV = "AGENT_SANITIZER_FAIL_OPEN";
  *
  * THE SINGLE SOURCE OF TRUTH for the closed set. The shell shims cannot import
  * it, so `plugin/scripts/lib/fail-open.sh` is GENERATED from it by
- * {@link failOpenShellLib} and committed; the round trip is asserted in
+ * `scripts/gen-fail-open-lib.mjs` and committed; the round trip is asserted in
  * plugin/test/fail-open-parity.test.mjs. Everything else that spells the set
  * out by hand is an implementation that must appear in the parity table in
  * tests/test_safe_launch.py.
@@ -224,42 +224,6 @@ export const FAIL_OPEN_ENV = "AGENT_SANITIZER_FAIL_OPEN";
 export const FAIL_CLOSED_VALUES = Object.freeze(["0", "false"]);
 
 const FAIL_CLOSED_SET = new Set(FAIL_CLOSED_VALUES);
-
-/**
- * The committed bytes of `plugin/scripts/lib/fail-open.sh`: a shell function
- * deciding the posture exactly as {@link failOpenEnabled} does, rendered from
- * {@link FAIL_CLOSED_VALUES} so the shell and JS spellings cannot drift.
- *
- * Emitted already Prettier-clean (two-space indent, trailing newline) because a
- * generator whose output a formatter then rewrites makes the round-trip test
- * fail on a freshly regenerated file.
- * @returns {string}
- */
-export function failOpenShellLib() {
-  return `# shellcheck shell=bash
-# GENERATED from FAIL_CLOSED_VALUES in claude-hooks/lib/hook-io.mjs — do not
-# edit by hand. Regenerate with:
-#
-#   node -e 'import("./claude-hooks/lib/hook-io.mjs").then((m) => process.stdout.write(m.failOpenShellLib()))' \\
-#     > plugin/scripts/lib/fail-open.sh
-#
-# The posture knob (${FAIL_OPEN_ENV}) has to be read by shell shims that
-# cannot import the JS. Rather than restate the closed set in each of them, they
-# source this one function. plugin/test/fail-open-parity.test.mjs asserts these
-# bytes are what the generator still produces, and tests/test_safe_launch.py
-# asserts every remaining hand-written implementation agrees with it.
-#
-# Returns 0 to fail OPEN (the default: the guarded action runs, loudly), 1 to
-# fail CLOSED (block/ask/suppress). Sourced, never executed — hence no shebang
-# and no +x bit (the repo's shebang/executable pre-commit hook pairs the two).
-agent_sanitizer_fail_open() {
-  case "\${${FAIL_OPEN_ENV}:-}" in
-  ${FAIL_CLOSED_VALUES.join(" | ")}) return 1 ;;
-  *) return 0 ;;
-  esac
-}
-`;
-}
 
 /**
  * Whether hook failures pass the guarded action through. True unless the caller

@@ -68546,6 +68546,7 @@ var pretooluse_sanitize_exports = {};
 __export(pretooluse_sanitize_exports, {
   PRE_TOOL_USE_MESSAGES: () => PRE_TOOL_USE_MESSAGES,
   REDACTION_HINT: () => REDACTION_HINT,
+  WRITE_SHAPED_TOOLS: () => WRITE_SHAPED_TOOLS,
   buildPreToolUseResponse: () => buildPreToolUseResponse,
   cliMain: () => cliMain,
   depLoadHint: () => depLoadHint,

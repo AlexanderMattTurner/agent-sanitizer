@@ -1,9 +1,8 @@
 # shellcheck shell=bash
-# GENERATED from FAIL_CLOSED_VALUES in claude-hooks/lib/hook-io.mjs — do not
-# edit by hand. Regenerate with:
+# GENERATED from FAIL_CLOSED_VALUES in claude-hooks/lib/hook-io.mjs by
+# scripts/gen-fail-open-lib.mjs — do not edit by hand. Regenerate with:
 #
-#   node -e 'import("./claude-hooks/lib/hook-io.mjs").then((m) => process.stdout.write(m.failOpenShellLib()))' \
-#     > plugin/scripts/lib/fail-open.sh
+#   pnpm gen:fail-open-lib
 #
 # The posture knob (AGENT_SANITIZER_FAIL_OPEN) has to be read by shell shims that
 # cannot import the JS. Rather than restate the closed set in each of them, they

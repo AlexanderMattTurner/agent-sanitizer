@@ -690,6 +690,13 @@ const BUNDLE_BREAKAGES = Object.freeze({
   unparsable: "const x = (",
   "throws at import": 'throw new Error("bundle exploded");',
   "exits non-zero before writing": "process.exit(1);",
+  // Content, not emptiness: a dependency's deprecation notice on stdout, and a
+  // verdict truncated mid-write. Both leave bytes Claude Code cannot parse, so
+  // "something was written" is not evidence a verdict came back.
+  "noise on stdout, then non-zero":
+    'process.stdout.write("(node:1) DeprecationWarning: x\\n"); process.exit(1);',
+  "verdict truncated mid-write":
+    'process.stdout.write(\'{"hookSpecificOutput":{"hookEve\'); process.exit(1);',
 });
 
 /**
@@ -699,11 +706,6 @@ const BUNDLE_BREAKAGES = Object.freeze({
  */
 function breakBundle(plugin, body = BUNDLE_BREAKAGES.unparsable) {
   writeFileSync(join(plugin, "dist", "hooks", "plugin-hooks.bundle.mjs"), body);
-}
-
-/** Back-compat alias for the two posture tests that pin the syntax-error member. */
-function corruptBundle(plugin) {
-  breakBundle(plugin);
 }
 
 test("every way the bundle can fail to answer still yields an event-keyed verdict", (t) => {
@@ -751,6 +753,22 @@ test("a healthy clean run is still silent — the accepted false negative, from 
   }
 });
 
+test("a well-formed object on a non-zero exit still forwards — the second accepted false negative", (t) => {
+  // The gate checks the SHAPE of what came back, not its meaning: telling a
+  // verdict from any other JSON object needs a real parse, which needs a second
+  // node startup — the cost this gate was written to remove. Pinned so the
+  // blind spot stays deliberate and documented rather than discovered.
+  const plugin = stagePlugin(t);
+  breakBundle(
+    plugin,
+    "process.stdout.write('{\"unrelated\":true}'); process.exit(1);",
+  );
+  const [event, hook] = wiredHooks()[0];
+  const res = launch(plugin, event, hook, {});
+  assert.equal(res.status, 0, res.stderr);
+  assert.equal(res.stdout, '{"unrelated":true}');
+});
+
 test("a deliberate blocking exit survives the launcher's fault gate", (t) => {
   // Exit 2 is the dispatcher's declared block for static wiring corruption
   // (plugin-hooks.mjs: BOTH arms block). The gate must not mistake a decision
@@ -788,7 +806,7 @@ test("launcher fails OPEN when node is absent from PATH", (t) => {
 
 test("launcher fails OPEN per event shape on a corrupt bundle", (t) => {
   const plugin = stagePlugin(t);
-  corruptBundle(plugin);
+  breakBundle(plugin);
 
   const pre = launch(plugin, "PreToolUse", "pretooluse-sanitize", {});
   const preOut = JSON.parse(pre.stdout).hookSpecificOutput;
@@ -840,7 +858,7 @@ test("launcher fails CLOSED under the opt-out when node is absent from PATH", (t
 
 test("launcher fails CLOSED per event shape under the opt-out on a corrupt bundle", (t) => {
   const plugin = stagePlugin(t);
-  corruptBundle(plugin);
+  breakBundle(plugin);
 
   const pre = launch(
     plugin,

@@ -21,10 +21,6 @@
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
-import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
-
 import {
   AUTHORED_FIELDS,
   EXEMPT_TOOLS,
@@ -32,9 +28,9 @@ import {
   authoredScopeDecision,
   sanitizeAuthoredContent,
 } from "../claude-hooks/lib/authored-content.mjs";
+import { REHYDRATED_TOOLS } from "../claude-hooks/lib/placeholder-grammar.mjs";
+import { WRITE_SHAPED_TOOLS } from "../claude-hooks/pretooluse-sanitize.mjs";
 import { DEFAULT_FIELDS } from "../src/confusables.mjs";
-
-const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 
 // A raw ESC built in-language: a literal one in a shell string trips this repo's
 // own PreToolUse guard, which is the layer under test.
@@ -42,48 +38,26 @@ const ESC = "";
 const ANSI_PAYLOAD = `before${ESC}[2Jafter`;
 
 /**
- * The tool names in a `const <name> = new Set([...])` literal.
- *
- * Source-read rather than imported because both sets are module-private, and
- * rather than hand-copied because a copy is exactly the drift this file exists
- * to catch. Throws — loudly — when the literal moves or empties, so the
- * extractor can never silently contribute zero names to the partition.
- * @param {string} file
- * @param {string} name
- * @returns {string[]}
- */
-function toolSetLiteral(file, name) {
-  const source = readFileSync(join(ROOT, file), "utf8");
-  const literal = new RegExp(
-    String.raw`const ${name} = new Set\(\[(?<body>[^\]]*)\]\)`,
-    "u",
-  ).exec(source);
-  assert.ok(
-    literal,
-    `${name} is no longer a \`new Set([...])\` literal in ${file} — update this extractor`,
-  );
-  const names = [...literal.groups.body.matchAll(/"(?<tool>[^"]+)"/gu)].map(
-    (m) => m.groups.tool,
-  );
-  assert.ok(names.length > 0, `${name} in ${file} parsed to zero tool names`);
-  return names;
-}
-
-/**
  * Every tool name the package elsewhere claims to know, plus a representative
  * `mcp__*` sample. Layer 3 must have taken a position on each one.
+ *
+ * The two hook-side sets are IMPORTED, not source-read: an earlier draft parsed
+ * their `new Set([...])` literals out of the files, which broke under Stryker —
+ * the mutation runner instruments exactly those files, so the regex saw
+ * rewritten source and the partition assertion fired on a healthy tree. A
+ * hand-copied list would be the drift this file exists to catch, so importing
+ * the live objects is the only spelling that is neither a copy nor a parser
+ * approximation.
  */
 function liveToolSurface() {
+  // Non-vacuity: an emptied set would silently shrink the surface and make the
+  // partition assertion pass over almost nothing.
+  assert.ok(REHYDRATED_TOOLS.size > 0, "REHYDRATED_TOOLS is empty");
+  assert.ok(WRITE_SHAPED_TOOLS.size > 0, "WRITE_SHAPED_TOOLS is empty");
   return new Set([
     ...Object.keys(DEFAULT_FIELDS),
-    ...toolSetLiteral(
-      "claude-hooks/lib/placeholder-grammar.mjs",
-      "REHYDRATED_TOOLS",
-    ),
-    ...toolSetLiteral(
-      "claude-hooks/pretooluse-sanitize.mjs",
-      "WRITE_SHAPED_TOOLS",
-    ),
+    ...REHYDRATED_TOOLS,
+    ...WRITE_SHAPED_TOOLS,
     // MCP tool names are server-defined, so no list can enumerate them; a
     // sample is enough to pin which SIDE of the partition they land on.
     "mcp__github__create_issue",

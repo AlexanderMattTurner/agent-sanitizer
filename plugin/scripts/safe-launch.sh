@@ -188,11 +188,17 @@ fi
 # the path this shim exists to make loud. It also cost a second node startup
 # (~100ms) on every single tool call.
 #
-# The one case the post-condition cannot see: a bundle that writes nothing and
-# exits 0. That is byte-identical to a healthy hook with nothing to say, which
-# all four of them are on a clean payload, so gating on empty stdout would fire
-# a degraded warning on ordinary traffic. Accepted false negative — precision
-# over recall — pinned from the other side in plugin/test/plugin-bundle.test.mjs.
+# Two accepted false negatives, both pinned from the other side in
+# plugin/test/plugin-bundle.test.mjs:
+#
+#   1. A bundle that writes nothing and exits 0. That is byte-identical to a
+#      healthy hook with nothing to say, which all four of them are on a clean
+#      payload, so gating on it would fire a degraded warning on ordinary
+#      traffic.
+#   2. A bundle that exits non-zero after writing a well-formed JSON object that
+#      is not a verdict. The gate checks the SHAPE of what came back (a single
+#      `{...}`), not its meaning: parsing it properly needs a second node
+#      startup, which is the cost this gate was written to remove.
 #
 # Stdout goes to a temp file rather than a command substitution, which would
 # strip trailing newlines and so rewrite a verdict's bytes; it is replayed
@@ -238,14 +244,25 @@ if [[ "$bundle_rc" -eq 2 ]]; then
   exit 2
 fi
 
-# The post-condition failed: the bundle exited non-zero having said nothing.
-bundle_said_nothing=1
+# The post-condition: did a VERDICT come back? "Something was written" is not
+# the same question — a bundle that exits non-zero after a dependency printed a
+# deprecation notice on stdout, or after a write was interrupted mid-JSON, left
+# bytes Claude Code cannot parse, so it reads a non-blocking hook error and runs
+# the guarded tool with no trace. That is the same silent fail-open this gate
+# exists to close, reached through content instead of emptiness. A verdict is a
+# single JSON object, so the shape check is `{`…`}` over the trimmed bytes,
+# done with shell builtins alone.
+verdict_bytes=""
 if [[ -n "$stdout_file" ]]; then
-  [[ -s "$stdout_file" ]] && bundle_said_nothing=0
+  verdict_bytes="$(cat "$stdout_file")"
 else
-  [[ -n "$bundle_out" ]] && bundle_said_nothing=0
+  verdict_bytes="$bundle_out"
 fi
-if [[ "$bundle_rc" -ne 0 && "$bundle_said_nothing" -eq 1 ]]; then
+verdict_bytes="${verdict_bytes#"${verdict_bytes%%[![:space:]]*}"}"
+verdict_bytes="${verdict_bytes%"${verdict_bytes##*[![:space:]]}"}"
+bundle_reached_a_verdict=0
+[[ "$verdict_bytes" == "{"*"}" ]] && bundle_reached_a_verdict=1
+if [[ "$bundle_rc" -ne 0 && "$bundle_reached_a_verdict" -eq 0 ]]; then
   echo "agent-sanitizer: hook bundle exited $bundle_rc without reaching a verdict: $bundle" >&2
   emit_degraded "sanitizer plugin: the hook bundle exited $bundle_rc without producing a verdict; reinstall the plugin."
   exit 0
