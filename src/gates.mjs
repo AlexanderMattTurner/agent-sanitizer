@@ -15,9 +15,9 @@
  * Matches any HTML tag-like construct: opening tags, closing tags (`</`),
  * comments and bogus declarations (`<!`), and processing instructions / bogus
  * comments (`<?…?>`, which the HTML tokenizer hides exactly like a comment).
- * Comments are preserved by Layer 2, but the `<!`/`<?` arms still matter: they
- * let a comment-only document reach Layer 3's exfil scan over comment
- * interiors; without them such a document would skip the pipeline entirely.
+ * The `<!`/`<?` arms carry a comment-only document into the pipeline at all:
+ * without them it would skip both Layer 2's splice of the comment and Layer 3's
+ * exfil scan over the comment interior.
  * Gate for Layer 2 (HTML sanitization) and the HTML img/a exfil path in
  * Layer 3.
  */
