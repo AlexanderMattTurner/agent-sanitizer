@@ -7,10 +7,12 @@
  * isolation; this file pins the COMPOSITION — the loop an agent session
  * actually runs, where round n+1's tool output is round n's rehydrated write.
  *
- * The oracle is an independent re-derivation, never a call back into the code
- * under test: placeholders are located with the shared grammar regex, span
- * bytes are read with raw readFileSync (not readSpan), and the expected
- * rehydrated text is spliced by hand. Invariants:
+ * The oracle re-derives every expectation instead of calling back into the
+ * code under test: the placeholder grammar is restated as a LITERAL here (and
+ * pinned against the hooks' copy, so a widened grammar fails rather than
+ * silently moving the oracle with it), span bytes are read with raw
+ * readFileSync rather than readSpan, the key rule is recomputed from sha256,
+ * and the expected rehydrated text is spliced by hand. Invariants:
  *
  *   (a) every well-formed placeholder whose span persisted rehydrates to the
  *       stored bytes, byte-exact, at every round;
@@ -20,28 +22,32 @@
  *       any span file, any round;
  *   (d/f) the verdict trichotomy (updatedInput / deny / null) is total and
  *       predicted from key presence alone; a deny never carries updatedInput;
- *   (e) placeholder text is a fixed point of re-sanitization, and re-spliced
- *       secret-free content reproduces the identical content-addressed key.
+ *   (e) placeholder text is a fixed point of re-sanitization, and a secret-free
+ *       splice round-trips to a byte-identical document under the SAME
+ *       content-addressed key (recomputed here from sha256, independently).
  *
  * Known-lossy-by-design behavior is asserted POSITIVELY, never flagged:
  * mangled placeholders write through as literal text, fabricated well-formed
  * unknown keys deny naming the key, MultiEdit/NotebookEdit carrying keys deny,
- * and lookalike prose is never treated as a placeholder.
+ * Edit's old_string is never rehydrated, and lookalike prose is never treated
+ * as a placeholder.
  */
 import { after, before, describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { createServer } from "node:net";
+import { createHash } from "node:crypto";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import fc from "fast-check";
-import { fcRunOptions } from "./test-helpers.mjs";
+import { fcRunOptions, startStubRedactorDaemon } from "./test-helpers.mjs";
 
 // Stub redactor socket + project dir BEFORE the hook imports (the redactor
 // client resolves its socket path at module load; the invisible-char gate
-// hashes CLAUDE_PROJECT_DIR at load). The sanitize budget is pinned high: one
-// wall-clock deadline spans every leaf of every round, and an expiry
-// mid-property would nondeterministically drop spans.
+// hashes CLAUDE_PROJECT_DIR at load). Never restored: node --test forks one
+// process per test file, so these writes cannot reach another suite. The
+// sanitize budget is pinned high because one wall-clock deadline spans every
+// leaf of every round, and an expiry mid-property would nondeterministically
+// drop spans.
 const socketDir = mkdtempSync(join(tmpdir(), "sanitizer-rt-fuzz-sock-"));
 const socketPath = join(socketDir, "redactor.sock");
 process.env._AGENT_SANITIZER_REDACTOR_SOCKET = socketPath;
@@ -59,50 +65,31 @@ const { LAYER2_PLACEHOLDER_RE } =
   await import("../claude-hooks/lib/placeholder-grammar.mjs");
 const { PermissionDecision } = await import("../claude-hooks/lib/hook-io.mjs");
 
-// SUBSTITUTING stub daemon over the real socket protocol (4-byte BE length +
-// JSON), copied from claude-hooks-layer2-roundtrip.test.mjs: redaction is
-// observable per-text, not a canned reply. Secrets are always planted WITH a
-// hint word ("password") so the hint pre-gate provably routes the text to the
-// daemon — a hintless secret legitimately bypasses redaction by design and
-// asserting on it would flag documented behavior.
+// The grammar as the ORACLE understands it. Restated as a literal rather than
+// reused from the hooks so the two can disagree: were the shipped grammar
+// widened (uppercase hex, a longer key, a new label), this suite would fail on
+// the pin below instead of silently adopting the change and continuing to
+// "pass".
+const ORACLE_PLACEHOLDER_RE =
+  /\[(?:hidden HTML|HTML comment) removed #([0-9a-f]{12})\]/g;
+
+// Secrets are always planted WITH a hint word ("password") so the hint
+// pre-gate provably routes the text to the daemon — a hintless secret
+// legitimately bypasses redaction by design, and asserting on it would flag
+// documented behavior.
 const SECRET_VALUE = "hunter2hunter2hunter2";
 const REDACTED_MARK = "[REDACTED: password]";
-function startStubDaemon() {
-  const server = createServer((sock) => {
-    const chunks = [];
-    sock.on("data", (chunk) => {
-      chunks.push(chunk);
-      const buf = Buffer.concat(chunks);
-      if (buf.length < 4) return;
-      const expected = buf.readUInt32BE(0);
-      if (buf.length < 4 + expected) return;
-      const request = JSON.parse(
-        buf.subarray(4, 4 + expected).toString("utf8"),
-      );
-      const reply = request.text.includes(SECRET_VALUE)
-        ? {
-            text: request.text.replaceAll(SECRET_VALUE, REDACTED_MARK),
-            found: ["StubPassword"],
-          }
-        : null;
-      const body = Buffer.from(JSON.stringify(reply), "utf8");
-      const header = Buffer.allocUnsafe(4);
-      header.writeUInt32BE(body.length, 0);
-      sock.end(Buffer.concat([header, body]));
-    });
-  });
-  return new Promise((resolve) => {
-    server.listen(socketPath, () => resolve(server));
-  });
-}
 
 /** @type {import("node:net").Server} */
 let daemon;
 before(async () => {
-  daemon = await startStubDaemon();
+  daemon = await startStubRedactorDaemon(socketPath, {
+    secret: SECRET_VALUE,
+    mark: REDACTED_MARK,
+  });
 });
-after(() => {
-  daemon.close();
+after(async () => {
+  await new Promise((resolve) => daemon.close(resolve));
   for (const dir of [socketDir, projectDir, revealBase])
     rmSync(dir, { recursive: true, force: true });
 });
@@ -112,51 +99,101 @@ after(() => {
 // first-write-wins dedupe are exactly the content-addressed design under
 // test, but a store shared across ITERATIONS would let an earlier draw's span
 // satisfy a later draw's key and make shrunk counterexamples irreproducible.
+// The previous iteration's store is removed as the next one is made, so the
+// run holds one store at a time instead of ~2k of them.
+let currentStore = null;
 function freshStore() {
-  const dir = mkdtempSync(join(revealBase, "store-"));
-  process.env._AGENT_SANITIZER_REVEAL_DIR = dir;
-  return dir;
+  if (currentStore !== null)
+    rmSync(currentStore, { recursive: true, force: true });
+  currentStore = mkdtempSync(join(revealBase, "store-"));
+  process.env._AGENT_SANITIZER_REVEAL_DIR = currentStore;
+  return currentStore;
 }
 
+/** The documented key rule, recomputed independently of the engine. */
+const keyOf = (original) =>
+  createHash("sha256").update(original, "utf8").digest("hex").slice(0, 12);
+
+/** The exact context the Layer-2 rehydrator attaches on a successful restore. */
+const restoredContext = (count, field) =>
+  `${count} Layer-2 removed-content placeholder(s) in ${field} were restored ` +
+  `to the stored original content (secrets inside were redacted before ` +
+  `storage, so no raw secret is written).`;
+
 // ---------------------------------------------------------------------------
-// Non-vacuity counters (repo doctrine: every interesting path must be PROVEN
-// to have executed; if one is flaky under the unseeded nightly, bias the
-// generator — never lower the bar).
+// Non-vacuity counters, namespaced PER PROPERTY: one shared bag would let a
+// whole property be deleted while its counters stayed green off another
+// property's increments.
+const newBag = (names) => Object.fromEntries(names.map((name) => [name, 0]));
 const counters = {
-  hiddenSplices: 0,
-  commentSplices: 0,
-  rehydrations: 0,
-  denies: 0,
-  unknownKeyDenies: 0,
-  mangledWrittenThrough: 0,
-  roundsAtDepth3Plus: 0,
-  mcpStructuredSplices: 0,
-  secretSpansRedacted: 0,
-  dedupeHits: 0,
-  lookalikesPreserved: 0,
+  p1: newBag([
+    "hiddenSplices",
+    "commentSplices",
+    "rehydrations",
+    "denies",
+    "unknownKeyDenies",
+    "missingSpanDenies",
+    "mangledWrittenThrough",
+    "deepRehydrations",
+    "keysReobservedAcrossRounds",
+    "secretSpansRedacted",
+    "mcpStructuredSplices",
+    "oldStringPreserved",
+  ]),
+  p2: newBag([
+    "hiddenSplices",
+    "commentSplices",
+    "rehydrations",
+    "denies",
+    "unknownKeyDenies",
+    "cleanNoops",
+  ]),
+  p3: newBag([
+    "multiEditDenies",
+    "notebookDenies",
+    "layer2Advisories",
+    "secretAdvisories",
+    "passThroughShapes",
+    "unrehydratableShapes",
+  ]),
+  p4: newBag([
+    "lookalikesPreserved",
+    "mintedRehydrations",
+    "nestedTokenLeftLiteral",
+  ]),
+  p5: newBag(["stableKeys"]),
 };
 
 // ---------------------------------------------------------------------------
 // Corpus. Curated subsets duplicated module-local from the existing suites'
-// module-local corpora (html-semantic-fuzz STRIP/KEEP tokens,
-// html-property's round-trip pieces, rehydrate-property's astral filler) —
-// deliberately NOT lifted into test-helpers.mjs, which would churn suites
-// this change doesn't own.
+// module-local corpora (html-semantic-fuzz STRIP/KEEP tokens, html-property's
+// round-trip pieces, rehydrate-property's astral filler) — deliberately NOT
+// lifted into test-helpers.mjs, which would churn suites this change doesn't
+// own.
 
-// Hiding constructs Layer 2 splices, each wrapping a marker payload.
+// Flat hiding constructs: the splice covers the WHOLE construct, so a test can
+// predict the exact placeholder from the construct's bytes.
+const flatHiddenWraps = [
+  (inner) => `<div hidden>${inner}</div>`,
+  (inner) => `<span style="display:none">${inner}</span>`,
+  (inner) => `<p style="visibility: hidden">${inner}</p>`,
+  (inner) => `<div style="position:absolute;left:-9999px">${inner}</div>`,
+  (inner) => `<span style="opacity: 0">${inner}</span>`,
+];
+
+const benignHiddenArb = fc
+  .tuple(fc.constantFrom(...flatHiddenWraps), fc.nat(999))
+  .map(([wrap, n]) => wrap(`STRIP${n} payload`));
+
 const hiddenConstructArb = fc
   .tuple(
     fc.constantFrom(
-      (inner) => `<div hidden>${inner}</div>`,
-      (inner) => `<span style="display:none">${inner}</span>`,
-      (inner) => `<p style="visibility: hidden">${inner}</p>`,
-      (inner) => `<div style="position:absolute;left:-9999px">${inner}</div>`,
-      (inner) => `<span style="opacity: 0">${inner}</span>`,
+      ...flatHiddenWraps,
       (inner) => `<div><div hidden>${inner}</div></div>`,
     ),
     fc.nat(999),
-    // Some hidden payloads carry the planted (hinted) secret so the span-persist
-    // redaction path runs; the rest are benign markers.
+    // Some hidden payloads carry the planted (hinted) secret so the
+    // span-persist redaction path runs; the rest are benign markers.
     fc.boolean(),
   )
   .map(([wrap, n, withSecret]) =>
@@ -184,7 +221,7 @@ const visibleFillerArb = fc.oneof(
     "<b>kept</b> text",
     "\u{1F511} key \u{1F510}",
     "日本語のテキスト",
-    "café naïve",
+    "café naïve",
     "\u{10348}\u{10349} hwair",
   ),
 );
@@ -193,14 +230,17 @@ const visibleFillerArb = fc.oneof(
 // authored-content layers must be provable no-ops on the edit material.
 const asciiFillerArb = fc.stringMatching(/^[a-zA-Z0-9 .,'!?_-]{1,30}$/);
 
-// Near-miss literals that must NEVER be treated as placeholders.
+// Near-miss literals that must NEVER be treated as Layer-2 placeholders. The
+// `[REDACTED: token]` entry is the one that also trips the SECRET advisory —
+// tracked separately so property 3 can pin which advisory fired.
+const SECRET_LOOKALIKE = "[REDACTED: token]";
 const lookalikeArb = fc.constantFrom(
   "[hidden HTML removed]",
   "[hidden HTML removed #ABCDEF123456]",
   "[HTML comment removed #abc]",
   "[hidden HTML removed #0123456789abc]",
   "[hidden html removed #0123456789ab]",
-  "[REDACTED: token]",
+  SECRET_LOOKALIKE,
   "see #a1b2c3d4e5f6 for details",
 );
 
@@ -246,14 +286,17 @@ const opArb = fc.oneof(
 const roundArb = fc.record({
   tool: fc.constantFrom("Write", "Edit"),
   ops: fc.array(opArb, { minLength: 1, maxLength: 3 }),
+  // Edit only: whether old_string also carries the (placeholder-bearing) text,
+  // which must come back untouched — old_string is never rehydrated.
+  keysInOldString: fc.boolean(),
 });
 
 // ---------------------------------------------------------------------------
-// Oracle helpers — grammar-only re-derivations, independent of the hooks.
+// Oracle helpers — grammar-literal re-derivations, independent of the hooks.
 
 /** @param {string} text */
 function placeholderMatches(text) {
-  return [...text.matchAll(LAYER2_PLACEHOLDER_RE)].map((match) => ({
+  return [...text.matchAll(ORACLE_PLACEHOLDER_RE)].map((match) => ({
     token: match[0],
     index: /** @type {number} */ (match.index),
     key: match[1],
@@ -301,25 +344,29 @@ async function sanitizeRound(toolName, shape, doc) {
  * placeholder whose span never persisted stays OUT of the ledger — the oracle
  * then expects a deny for it, which is the documented fail-closed outcome.
  */
-function ledgerUpdate(ledger, storeDir, text) {
+function ledgerUpdate(ledger, storeDir, text, bag) {
   for (const { key } of placeholderMatches(text)) {
     let bytes;
     try {
       bytes = readFileSync(join(storeDir, `span-${key}.txt`), "utf8");
-    } catch {
+    } catch (err) {
+      // Only "this span was never persisted" is a documented outcome; any
+      // other I/O failure is a broken store and must not read as one.
+      if (err.code !== "ENOENT") throw err;
       continue;
     }
     if (ledger.has(key)) {
-      // First write wins: dedupe must never rewrite an existing span file.
+      // Content addressing plus first-write-wins: a key seen in a later round
+      // must still name byte-identical stored content.
       assert.equal(bytes, ledger.get(key));
-      counters.dedupeHits++;
+      bag.keysReobservedAcrossRounds++;
     } else {
       ledger.set(key, bytes);
     }
     // (g) plus the redaction proof: a span that carried the planted secret
     // must hold the daemon's redaction mark instead.
     assert.ok(!bytes.includes(SECRET_VALUE));
-    if (bytes.includes(REDACTED_MARK)) counters.secretSpansRedacted++;
+    if (bytes.includes(REDACTED_MARK)) bag.secretSpansRedacted++;
   }
 }
 
@@ -377,7 +424,7 @@ function applyOps(text, ops, ledger) {
 
 /**
  * The verdict the rehydrator MUST return for `fieldText` given the ledger —
- * re-derived from the grammar and the ledger alone.
+ * re-derived from the grammar literal and the ledger alone.
  */
 function expectedVerdict(fieldText, ledger) {
   const matches = placeholderMatches(fieldText);
@@ -394,7 +441,7 @@ function expectedVerdict(fieldText, ledger) {
     out += fieldText.slice(last, match.index) + ledger.get(match.key);
     last = match.index + match.token.length;
   }
-  return { kind: "rehydrate", text: out + fieldText.slice(last) };
+  return { kind: "rehydrate", text: out + fieldText.slice(last), matches };
 }
 
 /**
@@ -402,7 +449,7 @@ function expectedVerdict(fieldText, ledger) {
  * grammar match. A mangled token can also occur as a SUBSTRING of a live
  * placeholder (breakBracket damage is a strict prefix of the valid token), and
  * a later op can re-damage the mangled occurrence itself — so only a
- * match-disjoint occurrence proves the literal must survive rehydration.
+ * match-disjoint occurrence proves the literal survived as literal text.
  */
 function occursOutsideMatches(text, token) {
   const spans = placeholderMatches(text).map((match) => [
@@ -421,80 +468,108 @@ function occursOutsideMatches(text, token) {
  * { updatedField, deny } | null by the callers so the same checks cover
  * rehydrateLayer2 and buildPreToolUseResponse.
  */
-function assertVerdict(actual, expect, edited) {
-  if (expect.kind === "null") {
+function assertVerdict(actual, expected, edited, bag) {
+  if (expected.kind === "null") {
     assert.equal(actual, null);
-  } else if (expect.kind === "deny") {
+    return;
+  }
+  if (expected.kind === "deny") {
     assert.ok(actual !== null && actual.deny !== undefined);
     // (f): a deny never carries a rewritten input.
     assert.equal(actual.updatedField, undefined);
-    for (const key of expect.missing) assert.ok(actual.deny.includes(key));
+    for (const key of expected.missing) assert.ok(actual.deny.includes(key));
     assert.ok(!actual.deny.includes(SECRET_VALUE));
-    counters.denies++;
-    if (edited.fabricated.length > 0) counters.unknownKeyDenies++;
-  } else {
-    assert.ok(actual !== null && actual.deny === undefined);
-    // (a) + (b): byte-exact — every ledgered placeholder becomes exactly the
-    // stored bytes, every other byte survives untouched.
-    assert.equal(actual.updatedField, expect.text);
-    assert.ok(!actual.updatedField.includes(SECRET_VALUE));
-    counters.rehydrations++;
-    // Mangled tokens are not grammar matches, so they must write through as
-    // literal text — the documented lossy case, asserted positively. Only a
-    // match-disjoint occurrence counts: breakBracket damage is a prefix of a
-    // live placeholder, so bare .includes() would match the live token.
-    for (const token of edited.mangled)
-      if (occursOutsideMatches(edited.text, token)) {
-        assert.ok(actual.updatedField.includes(token));
-        counters.mangledWrittenThrough++;
-      }
+    bag.denies++;
+    const fabricatedKeys = new Set(
+      edited.fabricated.flatMap((token) =>
+        placeholderMatches(token).map((match) => match.key),
+      ),
+    );
+    if (expected.missing.some((key) => fabricatedKeys.has(key)))
+      bag.unknownKeyDenies++;
+    // A key that was never fabricated but is still missing is a REAL
+    // persistence gap (an unvettable or unpersistable splice) reaching the
+    // documented fail-closed path.
+    if (expected.missing.some((key) => !fabricatedKeys.has(key)))
+      bag.missingSpanDenies++;
+    return;
   }
+  assert.ok(actual !== null && actual.deny === undefined);
+  // (a) + (b): byte-exact — every ledgered placeholder becomes exactly the
+  // stored bytes, every other byte survives untouched. This equality is what
+  // pins the mangled tokens' literal write-through too; the loop below only
+  // records that the case was exercised.
+  assert.equal(actual.updatedField, expected.text);
+  assert.ok(!actual.updatedField.includes(SECRET_VALUE));
+  bag.rehydrations++;
+  for (const token of edited.mangled)
+    if (occursOutsideMatches(edited.text, token)) bag.mangledWrittenThrough++;
 }
 
 /** Compose the round's Write/Edit tool_input around the edited field text. */
-function composeInput(tool, fieldText) {
-  return tool === "Write"
-    ? {
-        field: "content",
-        input: { file_path: "/tmp/rt.md", content: fieldText },
-      }
-    : {
-        field: "new_string",
-        input: {
-          file_path: "/tmp/rt.md",
-          old_string: "anchor text",
-          new_string: fieldText,
-        },
-      };
+function composeInput(round, fieldText) {
+  if (round.tool === "Write")
+    return {
+      field: "content",
+      input: { file_path: "/tmp/rt.md", content: fieldText },
+    };
+  return {
+    field: "new_string",
+    input: {
+      file_path: "/tmp/rt.md",
+      // old_string is deliberately never rehydrated, so it is drawn with and
+      // without live keys and asserted unchanged either way.
+      old_string: round.keysInOldString ? fieldText : "anchor text",
+      new_string: fieldText,
+    },
+  };
 }
 
 /**
  * The next round's document: on a successful rehydration the write's content
- * (the loop a real session runs); otherwise the edited text with the
- * fabricated unknown-key tokens stripped, so a deny round doesn't pin every
- * later round to the same deny.
+ * (the loop a real session runs); otherwise the edited text with every
+ * unresolvable placeholder stripped, so one deny doesn't pin every later round
+ * to the identical denied input.
  */
-function nextDoc(expect, edited) {
-  if (expect.kind === "rehydrate") return expect.text;
+function nextDoc(expected, edited, ledger) {
+  if (expected.kind === "rehydrate") return expected.text;
   let doc = edited.text;
-  for (const token of edited.fabricated) doc = doc.replaceAll(token, "");
+  for (const { token, key } of placeholderMatches(doc))
+    if (!ledger.has(key)) doc = doc.replaceAll(token, "");
   return doc;
 }
 
 /** Count splice kinds (and the mcp+structured combination) for non-vacuity. */
-function countSplices(text, toolName, shape) {
+function countSplices(text, toolName, shape, bag) {
   const hidden = (text.match(/\[hidden HTML removed #/g) ?? []).length;
   const comments = (text.match(/\[HTML comment removed #/g) ?? []).length;
-  counters.hiddenSplices += hidden;
-  counters.commentSplices += comments;
-  if (toolName.startsWith("mcp__") && shape === "structured")
-    counters.mcpStructuredSplices += hidden + comments;
+  bag.hiddenSplices += hidden;
+  bag.commentSplices += comments;
+  if (
+    bag.mcpStructuredSplices !== undefined &&
+    toolName.startsWith("mcp__") &&
+    shape === "structured"
+  )
+    bag.mcpStructuredSplices += hidden + comments;
 }
 
 // ---------------------------------------------------------------------------
 
 describe("whole-pipeline Layer-2 round-trip fuzz", () => {
+  it("the oracle's grammar literal still matches the shipped grammar", () => {
+    // The pin that makes the oracle independent: if the hooks' grammar is
+    // widened or relabelled, this fails instead of the oracle silently moving
+    // with it.
+    assert.equal(
+      LAYER2_PLACEHOLDER_RE.source,
+      ORACLE_PLACEHOLDER_RE.source,
+      "hooks grammar drifted from the oracle's literal",
+    );
+    assert.equal(LAYER2_PLACEHOLDER_RE.flags, ORACLE_PLACEHOLDER_RE.flags);
+  });
+
   it("sanitize → edit → rehydrateLayer2 over 2–4 rounds matches the byte-exact oracle", async () => {
+    const bag = counters.p1;
     await fc.assert(
       fc.asyncProperty(
         docPiecesArb(visibleFillerArb),
@@ -504,14 +579,13 @@ describe("whole-pipeline Layer-2 round-trip fuzz", () => {
           const storeDir = freshStore();
           const ledger = new Map();
           let doc = pieces.join("\n");
-          if (rounds.length >= 3) counters.roundsAtDepth3Plus++;
-          for (const round of rounds) {
+          for (const [index, round] of rounds.entries()) {
             const sanitized = await sanitizeRound(shape.tool, shape.shape, doc);
-            countSplices(sanitized, shape.tool, shape.shape);
-            ledgerUpdate(ledger, storeDir, sanitized);
+            countSplices(sanitized, shape.tool, shape.shape, bag);
+            ledgerUpdate(ledger, storeDir, sanitized, bag);
             const edited = applyOps(sanitized, round.ops, ledger);
-            const expect = expectedVerdict(edited.text, ledger);
-            const { field, input } = composeInput(round.tool, edited.text);
+            const expected = expectedVerdict(edited.text, ledger);
+            const { field, input } = composeInput(round, edited.text);
             const result = rehydrateLayer2(round.tool, input);
             assertVerdict(
               result === null
@@ -522,17 +596,28 @@ describe("whole-pipeline Layer-2 round-trip fuzz", () => {
                       deny: undefined,
                       updatedField: result.updatedInput[field],
                     },
-              expect,
+              expected,
               edited,
+              bag,
             );
-            // A rewrite must not disturb the input's other fields.
             if (result !== null && "updatedInput" in result) {
+              // A rewrite must not disturb the input's other fields — and
+              // old_string keeps its placeholders even when it has them.
               assert.equal(result.updatedInput.file_path, input.file_path);
-              if (field === "new_string")
-                assert.equal(result.updatedInput.old_string, "anchor text");
-              assert.ok(result.context.length > 0);
+              if (field === "new_string") {
+                assert.equal(result.updatedInput.old_string, input.old_string);
+                if (round.keysInOldString && expected.matches.length > 0)
+                  bag.oldStringPreserved++;
+              }
+              assert.equal(
+                result.context,
+                restoredContext(expected.matches.length, field),
+              );
+              // Composition depth: a rehydration that succeeded on a document
+              // that is itself the product of an earlier restored round.
+              if (index >= 1) bag.deepRehydrations++;
             }
-            doc = nextDoc(expect, edited);
+            doc = nextDoc(expected, edited, ledger);
           }
         },
       ),
@@ -541,6 +626,7 @@ describe("whole-pipeline Layer-2 round-trip fuzz", () => {
   });
 
   it("the same loop through buildPreToolUseResponse (real layer pipeline) matches the oracle", async () => {
+    const bag = counters.p2;
     await fc.assert(
       fc.asyncProperty(
         // ASCII-only filler and edit prose: the confusables and
@@ -557,17 +643,17 @@ describe("whole-pipeline Layer-2 round-trip fuzz", () => {
           let doc = pieces.join("\n");
           for (const round of rounds) {
             const sanitized = await sanitizeRound(shape.tool, shape.shape, doc);
-            countSplices(sanitized, shape.tool, shape.shape);
-            ledgerUpdate(ledger, storeDir, sanitized);
+            countSplices(sanitized, shape.tool, shape.shape, bag);
+            ledgerUpdate(ledger, storeDir, sanitized, bag);
             const edited = applyOps(sanitized, round.ops, ledger);
-            const expect = expectedVerdict(edited.text, ledger);
-            const { field, input } = composeInput(round.tool, edited.text);
+            const expected = expectedVerdict(edited.text, ledger);
+            const { field, input } = composeInput(round, edited.text);
             const response = await buildPreToolUseResponse(
               { tool_name: round.tool, tool_input: input },
               async () => null,
               () => {},
             );
-            if (expect.kind === "deny") {
+            if (expected.kind === "deny") {
               assert.equal(
                 response.permissionDecision,
                 PermissionDecision.DENY,
@@ -577,28 +663,33 @@ describe("whole-pipeline Layer-2 round-trip fuzz", () => {
                   deny: response.permissionDecisionReason,
                   updatedField: response.updatedInput?.[field],
                 },
-                expect,
+                expected,
                 edited,
+                bag,
               );
-            } else if (expect.kind === "rehydrate") {
+            } else if (expected.kind === "rehydrate") {
               assert.equal(response.permissionDecision, undefined);
               assertVerdict(
-                {
-                  deny: undefined,
-                  updatedField: response.updatedInput[field],
-                },
-                expect,
+                { deny: undefined, updatedField: response.updatedInput[field] },
+                expected,
                 edited,
+                bag,
               );
-              assert.ok(response.additionalContext.includes("restored"));
+              // Edit/Write are inside the rehydrated set, so the Layer-2
+              // restore context is the ONLY context the pipeline attaches.
+              assert.equal(
+                response.additionalContext,
+                restoredContext(expected.matches.length, field),
+              );
             } else {
               // No placeholders and ASCII-safe material: the whole pipeline
               // must be a clean no-op.
               assert.equal(response, null);
+              bag.cleanNoops++;
             }
             for (const text of flattenStrings(response ?? {}))
               assert.ok(!text.includes(SECRET_VALUE));
-            doc = nextDoc(expect, edited);
+            doc = nextDoc(expected, edited, ledger);
           }
         },
       ),
@@ -607,18 +698,17 @@ describe("whole-pipeline Layer-2 round-trip fuzz", () => {
   });
 
   it("MultiEdit/NotebookEdit deny on any key; Bash/MCP get a context-only advisory naming the span files", async () => {
+    const bag = counters.p3;
     const tokenArb = fc.oneof(
       hex12Arb.map((hex) => ({
         token: `[hidden HTML removed #${hex}]`,
-        keyed: true,
         key: hex,
       })),
       hex12Arb.map((hex) => ({
         token: `[HTML comment removed #${hex}]`,
-        keyed: true,
         key: hex,
       })),
-      lookalikeArb.map((token) => ({ token, keyed: false, key: null })),
+      lookalikeArb.map((token) => ({ token, key: null })),
     );
     await fc.assert(
       fc.asyncProperty(
@@ -627,68 +717,76 @@ describe("whole-pipeline Layer-2 round-trip fuzz", () => {
           maxLength: 4,
         }),
         fc.constantFrom("MultiEdit", "NotebookEdit", "Bash", "mcp__fs__write"),
-        fc.nat(3),
-        async (parts, tool, slot) => {
+        fc.boolean(),
+        async (parts, tool, keyInOldString) => {
           freshStore();
           const text = parts
             .map(([prose, entry]) => `${prose} ${entry.token}`)
             .join("\n");
-          const keys = parts
-            .filter(([, entry]) => entry.keyed)
-            .map(([, entry]) => entry.key);
+          const keys = [
+            ...new Set(
+              parts.filter(([, e]) => e.key !== null).map(([, e]) => e.key),
+            ),
+          ];
+          const hasSecretLookalike = parts.some(
+            ([, entry]) => entry.token === SECRET_LOOKALIKE,
+          );
           if (tool === "MultiEdit") {
-            // The keyed token rides in old_string or new_string of one edit —
-            // either position must trip the deny.
             const edits = [
               { old_string: "a", new_string: "b" },
-              slot % 2 === 0
+              keyInOldString
                 ? { old_string: text, new_string: "clean" }
                 : { old_string: "clean", new_string: text },
             ];
             const result = rehydrateLayer2(tool, { file_path: "/f", edits });
-            if (keys.length > 0) {
-              assert.ok(result !== null && "deny" in result);
-              assert.ok(!("updatedInput" in result));
-              assert.ok(result.deny.includes("MultiEdit"));
-              counters.denies++;
-            } else {
+            if (keys.length === 0) {
               assert.equal(result, null);
+              bag.passThroughShapes++;
+              return;
             }
-          } else if (tool === "NotebookEdit") {
+            assert.ok(result !== null && "deny" in result);
+            assert.ok(result.deny.includes("MultiEdit"));
+            assert.ok(result.deny.includes("single Edit"));
+            bag.multiEditDenies++;
+            return;
+          }
+          if (tool === "NotebookEdit") {
             const result = rehydrateLayer2(tool, {
               notebook_path: "/n.ipynb",
               new_source: text,
             });
-            if (keys.length > 0) {
-              assert.ok(result !== null && "deny" in result);
-              assert.ok(!("updatedInput" in result));
-              counters.denies++;
-            } else {
+            if (keys.length === 0) {
               assert.equal(result, null);
+              bag.passThroughShapes++;
+              return;
             }
-          } else {
-            // Bash / MCP tools: never a verdict, only the advisory naming the
-            // span file for each key (rehydrateLayer2 itself must pass).
-            assert.equal(rehydrateLayer2(tool, { command: text }), null);
-            const response = await buildPreToolUseResponse(
-              { tool_name: tool, tool_input: { command: text } },
-              async () => null,
-              () => {},
-            );
-            if (keys.length > 0) {
-              assert.equal(response.permissionDecision, undefined);
-              assert.equal(response.updatedInput, undefined);
-              for (const key of keys)
-                assert.ok(
-                  response.additionalContext.includes(`span-${key}.txt`),
-                );
-            } else if (response !== null) {
-              assert.equal(
-                response.additionalContext?.includes("span-"),
-                false,
-              );
-            }
+            assert.ok(result !== null && "deny" in result);
+            assert.ok(result.deny.includes("new_source"));
+            bag.notebookDenies++;
+            return;
           }
+          // Bash / MCP: never a verdict, only advisories. rehydrateLayer2
+          // itself must pass these shapes straight through.
+          assert.equal(rehydrateLayer2(tool, { command: text }), null);
+          bag.unrehydratableShapes++;
+          const response = await buildPreToolUseResponse(
+            { tool_name: tool, tool_input: { command: text } },
+            async () => null,
+            () => {},
+          );
+          const context = response?.additionalContext ?? "";
+          assert.equal(response?.permissionDecision, undefined);
+          assert.equal(response?.updatedInput, undefined);
+          // Each advisory fires exactly when its own grammar is present.
+          assert.equal(
+            context.includes("[hidden HTML removed #…]"),
+            keys.length > 0,
+          );
+          assert.equal(context.includes("[REDACTED…]"), hasSecretLookalike);
+          for (const key of keys)
+            assert.ok(context.includes(`span-${key}.txt`));
+          if (keys.length > 0) bag.layer2Advisories++;
+          if (hasSecretLookalike) bag.secretAdvisories++;
         },
       ),
       fcRunOptions({ numRuns: 500 }),
@@ -696,75 +794,130 @@ describe("whole-pipeline Layer-2 round-trip fuzz", () => {
   });
 
   it("placeholder text is a fixed point of re-sanitization, and lookalikes are never rehydrated", async () => {
-    const mintedArb = fc.oneof(
+    const bag = counters.p4;
+    const partArb = fc.oneof(
       hex12Arb.map((hex) => ({ kind: "minted", hex })),
       lookalikeArb.map((token) => ({ kind: "lookalike", token })),
       asciiFillerArb.map((token) => ({ kind: "prose", token })),
     );
     await fc.assert(
       fc.asyncProperty(
-        fc.array(mintedArb, { minLength: 1, maxLength: 6 }),
-        async (parts) => {
+        fc.array(partArb, { minLength: 1, maxLength: 6 }),
+        // Whether one planted span's stored bytes themselves contain another
+        // well-formed placeholder token: restored bytes are never rescanned,
+        // so that inner token must survive LITERALLY (one ordered pass).
+        fc.boolean(),
+        async (parts, nestToken) => {
           const storeDir = freshStore();
           const ledger = new Map();
+          const minted = parts.filter((part) => part.kind === "minted");
+          // Distinct keys only — two identical draws would make "plant then
+          // overwrite" ambiguous.
+          const seen = new Set();
           const pieces = [];
+          let nestedInner = null;
           for (const part of parts) {
-            if (part.kind === "minted") {
-              const token = `[hidden HTML removed #${part.hex}]`;
-              // Plant the span file directly (0700 mkdtemp dir, plain file) so
-              // every minted key is ledgered without a sanitize pass.
-              writeFileSync(
-                join(storeDir, `span-${part.hex}.txt`),
-                `<div hidden>orig ${part.hex}</div>`,
-                { mode: 0o600 },
-              );
-              ledger.set(part.hex, `<div hidden>orig ${part.hex}</div>`);
-              pieces.push(token);
-            } else {
+            if (part.kind !== "minted") {
               pieces.push(part.token);
+              continue;
             }
+            if (seen.has(part.hex)) continue;
+            seen.add(part.hex);
+            const isNestHost =
+              nestToken && minted.length >= 2 && part === minted[0];
+            const inner = `[hidden HTML removed #${minted[1]?.hex}]`;
+            const content = isNestHost
+              ? `pre ${inner} post`
+              : `<div hidden>orig ${part.hex}</div>`;
+            if (isNestHost) nestedInner = inner;
+            writeFileSync(join(storeDir, `span-${part.hex}.txt`), content, {
+              mode: 0o600,
+            });
+            ledger.set(part.hex, content);
+            pieces.push(`[hidden HTML removed #${part.hex}]`);
           }
           const doc = pieces.join(" and ");
-          // Fixed point: placeholders carry no `<`, so re-sanitizing the
-          // model's view must leave every token (real or lookalike) intact.
-          const resanitized = await sanitizeRound("WebFetch", "string", doc);
-          for (const piece of pieces) assert.ok(resanitized.includes(piece));
-          assert.deepEqual(
-            placeholderMatches(resanitized).map((match) => match.token),
-            placeholderMatches(doc).map((match) => match.token),
-          );
-          // Rehydration touches exactly the well-formed ledgered tokens;
-          // lookalike bytes survive verbatim.
-          const expect = expectedVerdict(doc, ledger);
+          // Fixed point: placeholders and lookalikes carry no `<`, so the
+          // model's next view of this document is byte-identical.
+          assert.equal(await sanitizeRound("WebFetch", "string", doc), doc);
+          // Rehydration touches exactly the well-formed ledgered tokens.
+          const expected = expectedVerdict(doc, ledger);
           const result = rehydrateLayer2("Write", {
             file_path: "/tmp/rt.md",
             content: doc,
           });
-          if (expect.kind === "null") {
+          if (expected.kind === "null") {
             assert.equal(result, null);
           } else {
-            assert.equal(expect.kind, "rehydrate");
-            assert.equal(result.updatedInput.content, expect.text);
+            assert.equal(expected.kind, "rehydrate");
+            assert.equal(result.updatedInput.content, expected.text);
+            bag.mintedRehydrations++;
           }
+          const surface =
+            expected.kind === "rehydrate" ? result.updatedInput.content : doc;
           for (const part of parts)
             if (part.kind === "lookalike") {
-              const surface =
-                expect.kind === "null" ? doc : result.updatedInput.content;
               assert.ok(surface.includes(part.token));
-              counters.lookalikesPreserved++;
+              bag.lookalikesPreserved++;
             }
+          // The restored span's own placeholder text was NOT re-expanded.
+          if (nestedInner !== null && expected.kind === "rehydrate") {
+            assert.ok(surface.includes(nestedInner));
+            bag.nestedTokenLeftLiteral++;
+          }
         },
       ),
       fcRunOptions({ numRuns: 500 }),
     );
   });
 
-  // Non-vacuity: the interesting paths must have actually executed. These run
-  // after the properties above (node:test executes `it`s in order).
+  it("a secret-free splice round-trips to a byte-identical document under a stable content-addressed key", async () => {
+    const bag = counters.p5;
+    await fc.assert(
+      fc.asyncProperty(
+        benignHiddenArb,
+        asciiFillerArb,
+        asciiFillerArb,
+        async (construct, before_, after_) => {
+          freshStore();
+          const doc = `${before_} ${construct} ${after_}`;
+          // The key rule, recomputed here from sha256 rather than taken from
+          // the engine: the placeholder is fully predictable from the bytes.
+          const token = `[hidden HTML removed #${keyOf(construct)}]`;
+          const sanitized = await sanitizeRound("WebFetch", "string", doc);
+          assert.equal(sanitized, `${before_} ${token} ${after_}`);
+          // Secret-free, so the stored span is the RAW original and the write
+          // restores the document byte-for-byte.
+          const result = rehydrateLayer2("Write", {
+            file_path: "/tmp/rt.md",
+            content: sanitized,
+          });
+          assert.equal(result.updatedInput.content, doc);
+          // Content addressing: re-sanitizing the restored document mints the
+          // very same key, which is what makes the round trip idempotent.
+          assert.equal(
+            await sanitizeRound(
+              "WebFetch",
+              "string",
+              result.updatedInput.content,
+            ),
+            sanitized,
+          );
+          bag.stableKeys++;
+        },
+      ),
+      fcRunOptions({ numRuns: 200 }),
+    );
+  });
+
+  // Non-vacuity: every interesting path must be PROVEN to have executed, per
+  // property — a shared counter bag would let one property be deleted while
+  // another property's increments kept its checks green.
   describe("non-vacuity", () => {
-    for (const name of Object.keys(counters))
-      it(`exercised ${name}`, () => {
-        assert.ok(counters[name] > 0, `${name} never incremented`);
-      });
+    for (const [property, bag] of Object.entries(counters))
+      for (const name of Object.keys(bag))
+        it(`${property} exercised ${name}`, () => {
+          assert.ok(bag[name] > 0, `${property}.${name} never incremented`);
+        });
   });
 });

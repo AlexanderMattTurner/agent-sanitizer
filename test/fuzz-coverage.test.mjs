@@ -445,12 +445,28 @@ const exportedFunctions = new Map(
     viewMap,
     rehydrate,
     output,
-    sanitizeOutputHook,
-    pretooluseHook,
   ]
     .flatMap((mod) => Object.entries(mod))
     .filter(([, value]) => typeof value === "function"),
 );
+
+// The hook entry points are added BY NAME rather than by spreading the hook
+// modules' exports: both hook modules define their own `sanitizeText` /
+// `sanitizeValue` wrappers, and a bulk spread would silently retarget the
+// existing engine obligations for those names at the wrappers (`new Map`
+// lets the last entry win). Collisions are rejected outright so a future
+// same-named hook export fails loud instead of shadowing an engine parser.
+for (const [name, mod] of [
+  ["evaluateToolOutput", sanitizeOutputHook],
+  ["buildPreToolUseResponse", pretooluseHook],
+  ["rehydrateLayer2", pretooluseHook],
+]) {
+  assert.ok(
+    !exportedFunctions.has(name),
+    `${name} collides with an engine export — adding it would retarget that obligation`,
+  );
+  exportedFunctions.set(name, mod[name]);
+}
 
 describe("fuzz-coverage obligation gate", () => {
   it("discovers at least one fast-check suite (gate is not vacuous)", () => {
