@@ -29,8 +29,12 @@ const OPEN = {};
 const CLOSED = { [FAIL_OPEN_ENV]: "0" };
 /** The sanitizer was never installed — the archetypal environmental failure. */
 const ABSENT = missingPackageError("agent-sanitizer", new Error("not found"));
-/** A layer threw on the payload it was handed — opens too, by design. */
-const LAYER_THREW = new Error("two output fields collapsed to one name");
+/**
+ * A layer threw on the payload it was handed — opens too, by design. The
+ * message is a fabricated stand-in, deliberately not any real layer's prose, so
+ * this fixture cannot rot into a claim about a specific guard's wording.
+ */
+const LAYER_THREW = new Error("a layer engine threw on this payload");
 
 /** Collect the fields an emit-style callee writes, instead of touching stdout. */
 function collect() {

@@ -350,6 +350,8 @@ function applyPostText(result, post) {
  * @param {SanitizeExtensions} [ext]
  * @param {string[]} [notes]  appended last so an existing caller's positional
  *   arguments keep their meaning
+ * @param {string} [path]  dotted location of `value` within the tool output,
+ *   used only to name a key collision's location in its warning
  * @returns {Promise<{ value: any, modified: boolean, sgrNote: boolean }>}
  */
 export async function sanitizeValue(
@@ -360,6 +362,7 @@ export async function sanitizeValue(
   deadline = makeDeadline(SANITIZE_BUDGET_MS),
   ext = {},
   notes = [],
+  path = "",
 ) {
   if (typeof value === "string") {
     const result = await sanitizeText(value, toolName, deadline, ext);
@@ -376,7 +379,7 @@ export async function sanitizeValue(
     const out = [];
     let modified = false;
     let sgrNote = false;
-    for (const item of value) {
+    for (const [index, item] of value.entries()) {
       const result = await sanitizeValue(
         item,
         toolName,
@@ -385,6 +388,7 @@ export async function sanitizeValue(
         deadline,
         ext,
         notes,
+        `${path}[${index}]`,
       );
       out.push(result.value);
       if (result.modified) modified = true;
@@ -401,8 +405,50 @@ export async function sanitizeValue(
       deadline,
       ext,
       notes,
+      path,
     );
   return { value, modified: false, sgrNote: false };
+}
+
+// The value a colliding field is replaced with. Every string leaf of the
+// withheld value becomes this marker (suppressToolOutput preserves the shape),
+// so the model can see WHERE data was withheld instead of silently reading a
+// shorter object.
+export const COLLISION_WITHHELD_MESSAGE =
+  "[WITHHELD — this field's name collided with another after sanitization]";
+
+/**
+ * The warning for a post-sanitization key collision, naming where it sits.
+ * Exported so tests assert by reference rather than re-typing the prose.
+ * @param {string} name  the collapsed-to name
+ * @param {string} path  dotted location of the owning object ("" = top level)
+ * @returns {string}
+ */
+export function collisionWarning(name, path) {
+  return (
+    `two or more fields in the tool output collapsed to the name "${name}" after ` +
+    `sanitization (at ${path === "" ? "the top level" : path}); their values were ` +
+    `WITHHELD (fail closed) because there is no way to tell which field was ` +
+    `legitimate. Sibling fields are unaffected — do not treat the withheld values ` +
+    `as empty or absent; re-request them by a means that does not depend on this ` +
+    `field name, or ask the user`
+  );
+}
+
+/**
+ * A key not already present in `out`, derived from the collided name, so the
+ * sanitized object keeps the same field COUNT as the raw response. A shape
+ * REDUCTION is what the harness rejects (it then shows the raw, unvetted
+ * output — a fail-open), so the withheld entry must still occupy a slot.
+ * @param {Record<string, any>} out
+ * @param {string} cleaned
+ * @returns {string}
+ */
+function withheldKeyFor(out, cleaned) {
+  for (let n = 2; ; n++) {
+    const candidate = `${cleaned} [withheld duplicate ${n}]`;
+    if (!Object.hasOwn(out, candidate)) return candidate;
+  }
 }
 
 /**
@@ -417,6 +463,7 @@ export async function sanitizeValue(
  * @param {{remainingMs: () => number}} deadline shared wall-clock budget
  * @param {SanitizeExtensions} ext
  * @param {string[]} notes  accumulates the leaves' NOTE-severity findings
+ * @param {string} [path]  dotted location of this object in the tool output
  * @returns {Promise<{ value: Record<string, any>, modified: boolean, sgrNote: boolean }>}
  */
 async function sanitizeObject(
@@ -427,17 +474,21 @@ async function sanitizeObject(
   deadline,
   ext,
   notes,
+  path = "",
 ) {
   /** @type {Record<string, any>} */
   const out = {};
   let modified = false;
   let sgrNote = false;
+  // Names already withheld, so a THIRD field colliding onto the same name does
+  // not re-suppress (and re-warn about) the first occupant a second time.
+  /** @type {Set<string>} */
+  const collided = new Set();
   for (const [key, item] of Object.entries(value)) {
     // Layers 1-4 only — `ext` is deliberately NOT passed for a field NAME. A
     // callback sees just the string and the tool, so it cannot tell a schema key
     // from content; a rewrite here can collapse two fields into one name, which
-    // the guard below turns into whole-output suppression. Extensions run on
-    // value leaves.
+    // costs both of them their values below. Extensions run on value leaves.
     const keyResult = await sanitizeText(key, toolName, deadline);
     warnings.push(...keyResult.warnings);
     notes.push(...keyResult.notes);
@@ -452,34 +503,65 @@ async function sanitizeObject(
       deadline,
       ext,
       notes,
+      path === "" ? keyResult.cleaned : `${path}.${keyResult.cleaned}`,
     );
     // Two distinct raw keys can sanitize to the same name (e.g. `token` and a
-    // `token` carrying a zero-width space stripped by Layer 1). Overwriting would
-    // hand back an object with FEWER keys than the raw response; the harness
-    // rejects an updatedToolOutput whose shape doesn't match the tool's schema and
-    // shows the RAW, unsanitized output instead (fail OPEN). Throw so the CLI catch
-    // suppresses the whole output (fail CLOSED) rather than emit a shape-reduced
-    // object — a hostile connector must not be able to force the raw-output path by
-    // returning colliding field names.
-    if (Object.hasOwn(out, keyResult.cleaned))
-      throw new Error(
-        "sanitize-output: two output fields collapsed to one name after " +
-          "sanitization; suppressing output to avoid a shape-reduced fail-open",
-      );
-    // Own data property, not out[key] = value: a "__proto__" key assigned with
-    // = hits Object.prototype's setter, dropping the field from JSON output and
-    // letting the value hijack out's prototype. defineProperty writes it as own
-    // data and leaves the prototype untouched.
-    Object.defineProperty(out, keyResult.cleaned, {
-      value: result.value,
-      writable: true,
-      enumerable: true,
-      configurable: true,
-    });
+    // `token` carrying a zero-width space stripped by Layer 1). Overwriting
+    // would hand back an object with FEWER keys than the raw response; the
+    // harness rejects an updatedToolOutput whose shape doesn't match the tool's
+    // schema and shows the RAW, unsanitized output instead (fail OPEN). So the
+    // colliding fields — and ONLY they — fail closed: both values are withheld
+    // (there is no way to tell the legitimate field from the planted one, and
+    // insertion order is the attacker's to choose), the second one takes a
+    // distinct name so the field count is preserved, and every sibling keeps
+    // its sanitized value. A hostile connector can therefore cost the model the
+    // colliding subtree, never the whole tool output.
+    const collision = Object.hasOwn(out, keyResult.cleaned);
+    if (collision) {
+      if (!collided.has(keyResult.cleaned)) {
+        collided.add(keyResult.cleaned);
+        warnings.push(collisionWarning(keyResult.cleaned, path));
+        defineOwn(
+          out,
+          keyResult.cleaned,
+          suppressToolOutput(
+            /** @type {any} */ (out)[keyResult.cleaned],
+            COLLISION_WITHHELD_MESSAGE,
+          ),
+        );
+      }
+      modified = true;
+    }
+    defineOwn(
+      out,
+      collision ? withheldKeyFor(out, keyResult.cleaned) : keyResult.cleaned,
+      collision
+        ? suppressToolOutput(result.value, COLLISION_WITHHELD_MESSAGE)
+        : result.value,
+    );
     if (result.modified) modified = true;
     if (result.sgrNote) sgrNote = true;
   }
   return { value: out, modified, sgrNote };
+}
+
+/**
+ * Write `key` as an own data property. Not `out[key] = value`: a "__proto__"
+ * key assigned with = hits Object.prototype's setter, dropping the field from
+ * JSON output and letting the value hijack `out`'s prototype. defineProperty
+ * writes it as own data and leaves the prototype untouched.
+ * @param {Record<string, any>} out
+ * @param {string} key
+ * @param {unknown} value
+ * @returns {void}
+ */
+function defineOwn(out, key, value) {
+  Object.defineProperty(out, key, {
+    value,
+    writable: true,
+    enumerable: true,
+    configurable: true,
+  });
 }
 
 // On-disk placeholder tripwire: warning for a Read whose RAW bytes — before
@@ -646,9 +728,9 @@ function failClosedParts(
  * AGENT_SANITIZER_FAIL_OPEN=0.
  *
  * This is the hook where the two postures diverge the most, so state the open
- * one plainly: several of these layers throw on inputs an attacker composes
- * (colliding field names, a nesting depth that overflows the walk, a redaction
- * budget spent on a thousand secret-shaped leaves), and each of those throws is
+ * one plainly: several of these layers throw on inputs an attacker composes (a
+ * nesting depth that overflows the walk, a redaction budget spent on a thousand
+ * secret-shaped leaves), and each of those throws is
  * guarding content the open posture hands to the model verbatim, secrets
  * included. An operator who cares more about withholding a secret than about
  * keeping the session moving sets the knob to `0`.
