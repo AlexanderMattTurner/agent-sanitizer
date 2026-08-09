@@ -98,7 +98,7 @@ export function layer2KeysIn(value, depth = 0) {
 // Tools whose inputs the rehydration layer itself resolves (or, for
 // MultiEdit/NotebookEdit, refuses with guidance). Both advisories stay silent
 // on these: their placeholder handling is a verdict, not a note.
-const REHYDRATED_TOOLS = new Set([
+export const REHYDRATED_TOOLS = new Set([
   "Edit",
   "Write",
   "MultiEdit",

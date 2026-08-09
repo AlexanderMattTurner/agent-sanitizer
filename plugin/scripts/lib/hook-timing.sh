@@ -1,8 +1,8 @@
 # shellcheck shell=bash
 # The shell port of claude-hooks/lib/hook-timing.mjs, for the two SessionStart
 # entry points that never reach node: scripts/safe-launch.sh (whose preflight —
-# a PATH probe and a `node --check` of the bundle — runs before the hook it
-# launches can time anything, and is gone the moment it `exec`s) and
+# a PATH probe and the redactor-daemon resolution — runs before the hook it
+# launches can time anything) and
 # scripts/provision-redactor.sh (which is a python install, not a node process).
 #
 # Sourced by both, so the shell answer is written once rather than twice; that

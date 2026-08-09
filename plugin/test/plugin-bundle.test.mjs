@@ -672,18 +672,124 @@ function launchWithoutNode(t, plugin, env = {}) {
 }
 
 /**
- * Corrupt the staged bundle so `node --check` rejects it before any hook code
- * runs. Truncated mid-expression: a syntax error is what the launcher's probe
- * catches. One recipe, shared by both posture tests — two copies of the
- * truncation string and the bundle path would let one test's premise be fixed
+ * The ways a bundle can fail to ANSWER, as bundle bodies. A syntax error was
+ * the only member the launcher used to look for (it ran `node --check`), and
+ * checking for it proved nothing about the others: a bundle that parses and
+ * then throws at import, or exits non-zero before writing, produced empty
+ * stdout and a non-zero exit — which Claude Code reads as a NON-blocking hook
+ * error, so the guarded tool ran with no trace at all, under BOTH postures.
+ * The gate is the post-condition (did a verdict come back?), so every member
+ * degrades identically and the set can grow without a new code path.
+ *
+ * Not a member: a bundle that writes nothing and exits 0. That is
+ * indistinguishable from a healthy hook with nothing to say — which all four
+ * of them are on a clean payload — so it is an accepted false negative, pinned
+ * from the other side by "a clean run stays silent" below.
+ */
+const BUNDLE_BREAKAGES = Object.freeze({
+  unparsable: "const x = (",
+  "throws at import": 'throw new Error("bundle exploded");',
+  "exits non-zero before writing": "process.exit(1);",
+  // Content, not emptiness: a dependency's deprecation notice on stdout, and a
+  // verdict truncated mid-write. Both leave bytes Claude Code cannot parse, so
+  // "something was written" is not evidence a verdict came back.
+  "noise on stdout, then non-zero":
+    'process.stdout.write("(node:1) DeprecationWarning: x\\n"); process.exit(1);',
+  "verdict truncated mid-write":
+    'process.stdout.write(\'{"hookSpecificOutput":{"hookEve\'); process.exit(1);',
+});
+
+/**
+ * Overwrite the staged bundle with `body`. One recipe, shared by every posture
+ * test — two copies of the bundle path would let one test's premise be fixed
  * while the other silently kept testing nothing.
  */
-function corruptBundle(plugin) {
+function breakBundle(plugin, body = BUNDLE_BREAKAGES.unparsable) {
+  writeFileSync(join(plugin, "dist", "hooks", "plugin-hooks.bundle.mjs"), body);
+}
+
+test("every way the bundle can fail to answer still yields an event-keyed verdict", (t) => {
+  // The POST-CONDITION, over the whole set × every wired (event, mode) × both
+  // postures: a verdict came back. Probing a proxy for it (`node --check`)
+  // covered exactly one member and left the rest failing open silently.
+  for (const [name, body] of Object.entries(BUNDLE_BREAKAGES))
+    for (const [event, hook] of wiredHooks())
+      for (const env of [{}, FAIL_CLOSED]) {
+        const plugin = stagePlugin(t);
+        breakBundle(plugin, body);
+        const where = `${name} / ${event}:${hook} / ${JSON.stringify(env)}`;
+        const res = launch(plugin, event, hook, {}, { env });
+        assert.equal(res.status, 0, `${where}: ${res.stderr}`);
+        assert.ok(
+          res.stdout.trim().length > 0,
+          `${where}: empty stdout is a silent fail-OPEN`,
+        );
+        const parsed = JSON.parse(res.stdout);
+        const shape = parsed.hookSpecificOutput ?? parsed;
+        assert.ok(
+          shape.hookEventName === event || typeof parsed.decision === "string",
+          `${where}: verdict not keyed on the event: ${res.stdout}`,
+        );
+      }
+});
+
+test("a healthy clean run is still silent — the accepted false negative, from the other side", (t) => {
+  // Why "blank stdout" cannot itself be the fault signal: every wired hook
+  // answers a clean payload with NOTHING, so gating on emptiness would fire a
+  // degraded warning on ordinary traffic. Pinned so a later attempt to tighten
+  // the gate that way fails here instead of in a user's transcript.
+  const plugin = stagePlugin(t);
+  for (const [event, hook] of wiredHooks()) {
+    if (hook === "scan-invisible-chars") continue; // walks the project, not stdin
+    const res = launch(plugin, event, hook, {
+      hook_event_name: event,
+      tool_name: "Bash",
+      tool_input: { command: "ls" },
+      tool_response: { stdout: "ok" },
+      prompt: "hello",
+    });
+    assert.equal(res.status, 0, `${hook}: ${res.stderr}`);
+    assert.equal(res.stdout, "", `${hook} spoke on a clean payload`);
+  }
+});
+
+test("a well-formed object on a non-zero exit still forwards — the second accepted false negative", (t) => {
+  // The gate checks the SHAPE of what came back, not its meaning: telling a
+  // verdict from any other JSON object needs a real parse, which needs a second
+  // node startup — the cost this gate was written to remove. Pinned so the
+  // blind spot stays deliberate and documented rather than discovered.
+  const plugin = stagePlugin(t);
+  breakBundle(
+    plugin,
+    "process.stdout.write('{\"unrelated\":true}'); process.exit(1);",
+  );
+  const [event, hook] = wiredHooks()[0];
+  const res = launch(plugin, event, hook, {});
+  assert.equal(res.status, 0, res.stderr);
+  assert.equal(res.stdout, '{"unrelated":true}');
+});
+
+test("a deliberate blocking exit survives the launcher's fault gate", (t) => {
+  // Exit 2 is the dispatcher's declared block for static wiring corruption
+  // (plugin-hooks.mjs: BOTH arms block). The gate must not mistake a decision
+  // for a fault and degrade it into a pass.
+  const plugin = stagePlugin(t);
   writeFileSync(
     join(plugin, "dist", "hooks", "plugin-hooks.bundle.mjs"),
-    "const x = (",
+    'process.stderr.write("deliberate block\\n"); process.exit(2);',
   );
-}
+  for (const env of [{}, FAIL_CLOSED]) {
+    const res = launch(
+      plugin,
+      "PreToolUse",
+      "pretooluse-sanitize",
+      {},
+      { env },
+    );
+    assert.equal(res.status, 2, JSON.stringify(env));
+    assert.match(res.stderr, /deliberate block/);
+  }
+});
 
 test("launcher fails OPEN when node is absent from PATH", (t) => {
   const res = launchWithoutNode(t, stagePlugin(t));
@@ -700,7 +806,7 @@ test("launcher fails OPEN when node is absent from PATH", (t) => {
 
 test("launcher fails OPEN per event shape on a corrupt bundle", (t) => {
   const plugin = stagePlugin(t);
-  corruptBundle(plugin);
+  breakBundle(plugin);
 
   const pre = launch(plugin, "PreToolUse", "pretooluse-sanitize", {});
   const preOut = JSON.parse(pre.stdout).hookSpecificOutput;
@@ -752,7 +858,7 @@ test("launcher fails CLOSED under the opt-out when node is absent from PATH", (t
 
 test("launcher fails CLOSED per event shape under the opt-out on a corrupt bundle", (t) => {
   const plugin = stagePlugin(t);
-  corruptBundle(plugin);
+  breakBundle(plugin);
 
   const pre = launch(
     plugin,
@@ -1073,9 +1179,9 @@ test("the launcher reports its own preflight when it overruns", (t) => {
     { hook_event_name: "PostToolUse", tool_name: "Bash", tool_response: "ok" },
     { env: REPORT_EVERY_RUN },
   );
-  // The preflight is a PATH probe and a `node --check` of the whole bundle, on
-  // every hook call, and it is gone the instant the launcher execs — so if it
-  // ever gets slow, this line is the only place it can be said.
+  // The preflight — a PATH probe and the daemon resolution — runs on every hook
+  // call, ahead of the hook that could time it, so if it ever gets slow this
+  // line is the only place it can be said.
   assert.match(
     res.stderr,
     /PERFORMANCE: the safe-launch PostToolUse hook took/,

@@ -19,6 +19,7 @@ closed hosts, and a closed-only shim reintroduces the prompt stall.
 """
 
 import json
+import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -124,12 +125,24 @@ def test_posture_values_are_disjoint_and_populated() -> None:
     assert len(CLOSED_VALUES) >= 2 and len(OPEN_VALUES) >= 2
 
 
-@pytest.mark.parametrize("fail_open", ALL_POSTURES)
-def test_posture_split_matches_fail_open_enabled(fail_open: str | None) -> None:
-    """The shell shim's 0|false case must decide exactly as failOpenEnabled()
-    in claude-hooks/lib/hook-io.mjs — the launcher cannot import it, so the two
-    state the same literals independently and this is the drift guard. Runs the
-    REAL mjs function on every knob value the shell tests use."""
+# ── The posture parity table ────────────────────────────────────────────────
+#
+# `AGENT_SANITIZER_FAIL_OPEN` is decided in more than one language, so the
+# closed set gets spelled out more than once. `plugin/scripts/lib/fail-open.sh`
+# is GENERATED from `FAIL_CLOSED_VALUES` in `claude-hooks/lib/hook-io.mjs` and
+# sourced by the plugin launcher (that round trip is asserted in
+# plugin/test/fail-open-parity.test.mjs), but two implementations cannot reach
+# it: the repo's own `.claude/hooks/safe-launch.sh`, which ships to downstream
+# repos that have no `plugin/` tree, and the inline bootstrap in
+# `.claude/settings.json`, which guards the wrapper itself.
+#
+# So every implementation is RUN here, for real, over every posture value —
+# and the partition test below refuses to let a new one appear without landing
+# in this table.
+
+
+def _hook_io_says_open(fail_open: str | None, tmp_path: Path) -> bool:
+    """The JS source of truth, run for real."""
     script = (
         "import(process.argv[1]).then(m => "
         "process.stdout.write(String(m.failOpenEnabled(JSON.parse(process.argv[2])))))"
@@ -147,8 +160,181 @@ def test_posture_split_matches_fail_open_enabled(fail_open: str | None) -> None:
         text=True,
     )
     assert result.returncode == 0, result.stderr
-    expected_open = fail_open not in CLOSED_VALUES
-    assert result.stdout == str(expected_open).lower()
+    return result.stdout == "true"
+
+
+def _fail_open_lib_says_open(fail_open: str | None, tmp_path: Path) -> bool:
+    """The generated shell function, sourced and called."""
+    lib = REPO_ROOT / "plugin" / "scripts" / "lib" / "fail-open.sh"
+    result = subprocess.run(
+        ["bash", "-c", f'. "{lib}"; agent_sanitizer_fail_open'],
+        capture_output=True,
+        text=True,
+        env={"PATH": "/usr/bin:/bin", **posture_env(fail_open)},
+    )
+    assert result.returncode in (0, 1), result.stderr
+    return result.returncode == 0
+
+
+def _repo_shim_says_open(fail_open: str | None, tmp_path: Path) -> bool:
+    """The repo's own PreToolUse shim, driven onto its missing-target fault."""
+    sandbox = make_sandbox(tmp_path / "repo-shim")
+    result = run_safe_launch(
+        sandbox,
+        sandbox / ".claude" / "hooks" / "gone.sh",
+        extra_env=posture_env(fail_open),
+    )
+    assert result.returncode == 0, result.stderr
+    return "permissionDecision" not in json.loads(result.stdout)["hookSpecificOutput"]
+
+
+def _plugin_shim_says_open(fail_open: str | None, tmp_path: Path) -> bool:
+    """The shipped plugin launcher, driven onto its no-bundle fault."""
+    sandbox = tmp_path / "plugin-shim"
+    shutil.copytree(REPO_ROOT / "plugin" / "scripts", sandbox / "plugin" / "scripts")
+    result = subprocess.run(
+        [
+            "bash",
+            str(sandbox / "plugin" / "scripts" / "safe-launch.sh"),
+            "PreToolUse",
+            "--hook=pretooluse-sanitize",
+        ],
+        input=BASH_PAYLOAD,
+        capture_output=True,
+        text=True,
+        # node must be findable: the launcher's no-node arm is a DIFFERENT fault
+        # path, and taking it here would test the wrong branch.
+        env={"PATH": _path_with_node(), **posture_env(fail_open)},
+    )
+    assert result.returncode == 0, result.stderr
+    return "permissionDecision" not in json.loads(result.stdout)["hookSpecificOutput"]
+
+
+def _bootstrap_says_open(fail_open: str | None, tmp_path: Path) -> bool:
+    """The settings.json inline bootstrap, driven onto its corrupt-wrapper fault."""
+    commands = pretooluse_commands()
+    assert commands, "settings.json declares no PreToolUse command to exercise"
+    sandbox = make_sandbox(tmp_path / "bootstrap")
+    (sandbox / ".claude" / "hooks" / "safe-launch.sh").write_text(
+        "#!/bin/bash\n<<<<<<< HEAD\n"
+    )
+    result = run_bootstrap(commands[0], sandbox, extra_env=posture_env(fail_open))
+    assert result.returncode == 0, result.stderr
+    return "permissionDecision" not in json.loads(result.stdout)["hookSpecificOutput"]
+
+
+def _path_with_node() -> str:
+    node = shutil.which("node")
+    assert node, "node is required to exercise the plugin launcher"
+    return f"{Path(node).parent}:/usr/bin:/bin"
+
+
+PARITY_IMPLEMENTATIONS = {
+    "claude-hooks/lib/hook-io.mjs": _hook_io_says_open,
+    "plugin/scripts/lib/fail-open.sh": _fail_open_lib_says_open,
+    "plugin/scripts/safe-launch.sh": _plugin_shim_says_open,
+    ".claude/hooks/safe-launch.sh": _repo_shim_says_open,
+    ".claude/settings.json": _bootstrap_says_open,
+}
+
+# Files that spell the closed set out but are deliberately NOT in the table,
+# each with the reason. Empty is the healthy state.
+PARITY_ALLOWLIST: dict[str, str] = {
+    ".claude/README.md": (
+        "prose: quotes the settings.json bootstrap as the shape to copy when adding "
+        "a hook. It decides nothing at runtime; the bootstrap it quotes is a table row."
+    ),
+    ".claude/rules/hooks.md": (
+        "prose: quotes the bootstrap's posture arms while explaining the contract."
+    ),
+    ".github/scripts/validate-config.sh": (
+        "validator, not an implementation: check 3 asserts settings.json's PreToolUse "
+        "command HAS both posture arms. The literals appear only in the comment "
+        "documenting the shape and in a glob, never in a decision on the value."
+    ),
+}
+
+# Table rows that state no literals of their own — they are exercised end to end
+# because delegation is exactly what can break, but they must not be expected to
+# match the implementation idioms.
+PARITY_DELEGATES = {
+    "plugin/scripts/safe-launch.sh": "sources the generated plugin/scripts/lib/fail-open.sh",
+}
+
+
+@pytest.mark.parametrize("impl", sorted(PARITY_IMPLEMENTATIONS))
+@pytest.mark.parametrize("fail_open", ALL_POSTURES)
+def test_every_posture_implementation_agrees(
+    impl: str, fail_open: str | None, tmp_path: Path
+) -> None:
+    """Every implementation of the posture knob, run for real, over every value.
+    A prose comment saying "mirroring X so the three cannot drift" is not a
+    guard; this is."""
+    assert PARITY_IMPLEMENTATIONS[impl](fail_open, tmp_path) is (
+        fail_open not in CLOSED_VALUES
+    ), f"{impl} disagrees on {fail_open!r}"
+
+
+# A file DECIDES the posture (rather than merely setting or documenting it) when
+# it states the closed set itself: a shell `case` arm over the two literals, or
+# the JS set they are generated from. Anything else that merely mentions the
+# variable is a consumer or a doc.
+IMPLEMENTATION_IDIOMS = (
+    re.compile(r"0\s*\|\s*false\)"),
+    re.compile(r"FAIL_CLOSED_VALUES\s*="),
+)
+
+# Tests assert ABOUT the literals; they are not implementations of the posture.
+_TEST_PATH = re.compile(r"(?:^|/)tests?/|\.test\.(?:mjs|py)$")
+
+
+def posture_implementation_files() -> list[str]:
+    """Tracked files that decide the posture, from the whole repo."""
+    listed = subprocess.run(
+        ["git", "grep", "-l", "AGENT_SANITIZER_FAIL_OPEN"],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout.split()
+    return sorted(
+        path
+        for path in listed
+        # dist/ is a generated bundle of the sources already covered here.
+        if not path.startswith("plugin/dist/")
+        and not _TEST_PATH.search(path)
+        and any(
+            idiom.search((REPO_ROOT / path).read_text())
+            for idiom in IMPLEMENTATION_IDIOMS
+        )
+    )
+
+
+def test_posture_implementations_are_all_in_the_parity_table() -> None:
+    """The partition: every file that decides the posture is either exercised by
+    the table above or allowlisted with a stated reason. A fourth copy of
+    `0 | false)` landing anywhere in the repo fails here."""
+    found = posture_implementation_files()
+    # Positive marker: the idioms still match something, so a refactor that
+    # renamed them cannot leave this test passing over an empty set.
+    assert len(found) >= 3, f"the implementation idioms matched almost nothing: {found}"
+    unclaimed = [
+        path
+        for path in found
+        if path not in PARITY_IMPLEMENTATIONS and path not in PARITY_ALLOWLIST
+    ]
+    assert not unclaimed, (
+        "these files decide AGENT_SANITIZER_FAIL_OPEN but nothing proves they agree — "
+        f"add them to PARITY_IMPLEMENTATIONS or PARITY_ALLOWLIST with a reason: {unclaimed}"
+    )
+    # And the table cannot name a file that no longer decides anything: a stale
+    # row would keep passing while covering a path that moved.
+    stale = [
+        path
+        for path in PARITY_IMPLEMENTATIONS
+        if path not in found and path not in PARITY_DELEGATES
+    ]
+    assert not stale, f"parity table rows that no longer decide the posture: {stale}"
 
 
 def test_healthy_target_stdout_and_exit_code_pass_through(tmp_path: Path) -> None:

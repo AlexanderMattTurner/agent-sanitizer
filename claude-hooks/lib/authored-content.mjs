@@ -21,6 +21,15 @@
  *      *literals* (`\033`, `\x1b`, `\e`) — a *raw* ESC byte in authored content
  *      is anomalous.
  *
+ * SCOPE IS DECLARED, NOT INFERRED. Which tools this layer touches is a
+ * partition — {@link AUTHORED_FIELDS} (covered, with the field list) and
+ * {@link EXEMPT_TOOLS}/{@link EXEMPT_TOOL_PATTERNS} (looked at, with the reason
+ * nothing is sanitized) — resolved through the single
+ * {@link authoredScopeDecision} helper. Notably `mcp__*` server tools are
+ * exempt, so a PR body written via `gh pr create` IS stripped while the same
+ * body sent through a GitHub MCP tool is NOT; that asymmetry is a stated
+ * position with a rationale, not an oversight.
+ *
  * Distinct from sanitize-output.mjs, which scrubs tool *responses* flowing
  * toward the model (data the model reads). This scrubs what the model emits
  * (data the model writes out). In pretooluse-sanitize.mjs it runs *after*
@@ -55,14 +64,76 @@ const { STRIP, LONG_RUN_RE, SCATTERED_THRESHOLD, stripInvisible } =
 // A "key[].sub" entry addresses `sub` on every element of the array at `key`
 // (MultiEdit batches its writes as edits[].new_string), so the nested authored
 // content is sanitized too — not just the top-level fields.
+//
+// Null-prototype: `tool` comes from the payload, and on a plain object literal
+// `FIELDS["constructor"]` answers a truthy inherited value that the field loop
+// below would then try to iterate.
 /** @type {Record<string, string[]>} */
-const FIELDS = {
-  Write: ["content"],
-  Edit: ["new_string"],
-  MultiEdit: ["edits[].new_string"],
-  NotebookEdit: ["new_source"],
-  Bash: ["command"],
-};
+export const AUTHORED_FIELDS = Object.freeze(
+  Object.assign(Object.create(null), {
+    Write: ["content"],
+    Edit: ["new_string"],
+    MultiEdit: ["edits[].new_string"],
+    NotebookEdit: ["new_source"],
+    Bash: ["command"],
+  }),
+);
+
+// The other half of the partition: tools this layer has LOOKED AT and decided
+// carry no model-authored free text, each with the reason. Together with
+// AUTHORED_FIELDS this is a declared scope rather than a fallthrough — an
+// omission becomes a reviewable line instead of the absence of one, and
+// test/claude-hooks-authored-scope.test.mjs fails when a tool the package
+// elsewhere claims to know lands in neither side.
+/** @type {Record<string, string>} */
+export const EXEMPT_TOOLS = Object.freeze(
+  Object.assign(Object.create(null), {
+    Read: "inputs are a path plus offsets — nothing the model authored is persisted or displayed",
+    Grep: "inputs are a search pattern and a path; rewriting a pattern would change what the search matches",
+    Glob: "inputs are a glob pattern and a path; rewriting a pattern would change what it matches",
+    LS: "input is a path — the confusable layer's domain, not authored free text",
+  }),
+);
+
+// Prefix-shaped exemptions, for tool families no fixed list can enumerate.
+/** @type {ReadonlyArray<{ pattern: RegExp, reason: string }>} */
+export const EXEMPT_TOOL_PATTERNS = Object.freeze([
+  Object.freeze({
+    pattern: /^mcp__/u,
+    reason:
+      "MCP tool inputs follow a server-declared schema this package cannot see, " +
+      "so there is no field it can name as authored free text. A blanket walk over " +
+      "every string in the input would buy recall at a real precision cost — it " +
+      "would rewrite opaque IDs, base64 blobs and protocol fields the server parses " +
+      "— so the gap is DECLARED rather than closed. A deployment that wants a " +
+      "specific server's body field covered adds it to AUTHORED_FIELDS by its full " +
+      'tool name (e.g. mcp__github__create_issue: ["body"]).',
+  }),
+]);
+
+/**
+ * The single place an unlisted tool's fate is decided: covered by a field list,
+ * exempt with a stated reason, or undeclared — nobody has classified it.
+ *
+ * `undeclared` is NOT a runtime alarm. Every arm returns the same
+ * pass-through behaviour, because a stderr line on each of the many tools no
+ * one has had a reason to classify (Task, TodoWrite, WebFetch, …) is alert
+ * fatigue, and the doctrine here is precision over recall. The signal is the
+ * partition test, which reads this function.
+ * @param {string} tool
+ * @returns {{ kind: "covered", fields: string[] } | { kind: "exempt", reason: string } | { kind: "undeclared" }}
+ */
+export function authoredScopeDecision(tool) {
+  const fields = AUTHORED_FIELDS[tool];
+  if (fields) return { kind: "covered", fields };
+  const exempt = EXEMPT_TOOLS[tool];
+  if (exempt) return { kind: "exempt", reason: exempt };
+  const matched = EXEMPT_TOOL_PATTERNS.find((entry) =>
+    entry.pattern.test(tool),
+  );
+  if (matched) return { kind: "exempt", reason: matched.reason };
+  return { kind: "undeclared" };
+}
 
 // Payload-capable: a long contiguous run, or enough scattered invisibles to
 // carry a message. Mirrors sanitize-user-prompt so the model→world and
@@ -123,8 +194,10 @@ export function authoredContext(changed) {
  * @returns {{ updatedInput: any, changed: string[] } | null}
  */
 export function sanitizeAuthoredContent(tool, toolInput) {
-  const keys = FIELDS[tool];
-  if (!keys || toolInput === null || toolInput === undefined) return null;
+  const scope = authoredScopeDecision(tool);
+  if (scope.kind !== "covered" || toolInput === null || toolInput === undefined)
+    return null;
+  const keys = scope.fields;
 
   const changed = [];
   // Null-prototype copy: toolInput is untrusted parsed JSON where a `__proto__`

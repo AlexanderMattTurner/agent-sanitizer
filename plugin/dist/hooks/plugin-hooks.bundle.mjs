@@ -120,7 +120,7 @@ function readFlag(argv, name50) {
   return match === void 0 ? void 0 : match.slice(prefix.length);
 }
 function failOpenEnabled(env = process.env) {
-  return !FAIL_CLOSED_VALUES.has(env[FAIL_OPEN_ENV] ?? "");
+  return !FAIL_CLOSED_SET.has(env[FAIL_OPEN_ENV] ?? "");
 }
 function failOpenContext(hookName, guarded, err, failedPackages = failedLazyPackages, packageMessage = missingPackageMessage) {
   const [pkg] = err instanceof TypeError ? failedPackages() : [];
@@ -353,7 +353,7 @@ function writeFileNoFollow(path2, content3, mode = 384) {
     closeSync(fd);
   }
 }
-var defaultSharedState, shared, HookEvent, PermissionDecision, FAIL_OPEN_ENV, FAIL_CLOSED_VALUES, LONE_SURROGATE_RE, MAX_STDIN_BYTES, lazyImportErrors, DEFAULT_MISSING_PACKAGE_REMEDY, UNTRUSTED_TEXT_CAP, HOOKGATE_MARKER_STEM;
+var defaultSharedState, shared, HookEvent, PermissionDecision, FAIL_OPEN_ENV, FAIL_CLOSED_VALUES, FAIL_CLOSED_SET, LONE_SURROGATE_RE, MAX_STDIN_BYTES, lazyImportErrors, DEFAULT_MISSING_PACKAGE_REMEDY, UNTRUSTED_TEXT_CAP, HOOKGATE_MARKER_STEM;
 var init_hook_io = __esm({
   "claude-hooks/lib/hook-io.mjs"() {
     "use strict";
@@ -378,7 +378,8 @@ var init_hook_io = __esm({
       ASK: "ask"
     });
     FAIL_OPEN_ENV = "AGENT_SANITIZER_FAIL_OPEN";
-    FAIL_CLOSED_VALUES = /* @__PURE__ */ new Set(["0", "false"]);
+    FAIL_CLOSED_VALUES = Object.freeze(["0", "false"]);
+    FAIL_CLOSED_SET = new Set(FAIL_CLOSED_VALUES);
     LONE_SURROGATE_RE = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g;
     MAX_STDIN_BYTES = 64 * 1024 * 1024;
     lazyImportErrors = /* @__PURE__ */ new Map();
@@ -67515,6 +67516,17 @@ var init_invisible_alert = __esm({
 });
 
 // claude-hooks/lib/authored-content.mjs
+function authoredScopeDecision(tool) {
+  const fields = AUTHORED_FIELDS[tool];
+  if (fields) return { kind: "covered", fields };
+  const exempt = EXEMPT_TOOLS[tool];
+  if (exempt) return { kind: "exempt", reason: exempt };
+  const matched = EXEMPT_TOOL_PATTERNS.find(
+    (entry) => entry.pattern.test(tool)
+  );
+  if (matched) return { kind: "exempt", reason: matched.reason };
+  return { kind: "undeclared" };
+}
 function isPayloadCapable(text5) {
   LONG_RUN_RE2.lastIndex = 0;
   if (LONG_RUN_RE2.test(text5)) return true;
@@ -67540,8 +67552,10 @@ function authoredContext(changed) {
   return `Sanitized model-authored content in: ${changed.join("; ")}. This removes a covert channel to other AIs and prevents authored content from rewriting the user's terminal. Opt out granularly with AGENT_SANITIZER_INVISIBLE_DISABLED=1 (i18n joiners) or AGENT_SANITIZER_TERMINAL_DISABLED=1 (raw-escape fixtures), or fully with AGENT_SANITIZER_OUTPUT_DISABLED=1.`;
 }
 function sanitizeAuthoredContent(tool, toolInput) {
-  const keys = FIELDS[tool];
-  if (!keys || toolInput === null || toolInput === void 0) return null;
+  const scope = authoredScopeDecision(tool);
+  if (scope.kind !== "covered" || toolInput === null || toolInput === void 0)
+    return null;
+  const keys = scope.fields;
   const changed = [];
   const updatedInput = Object.assign(/* @__PURE__ */ Object.create(null), toolInput);
   for (const k of keys) {
@@ -67573,7 +67587,7 @@ function sanitizeAuthoredContent(tool, toolInput) {
   if (changed.length === 0) return null;
   return { updatedInput, changed };
 }
-var stripAnsiFully2, STRIP2, LONG_RUN_RE2, SCATTERED_THRESHOLD2, stripInvisible2, FIELDS;
+var stripAnsiFully2, STRIP2, LONG_RUN_RE2, SCATTERED_THRESHOLD2, stripInvisible2, AUTHORED_FIELDS, EXEMPT_TOOLS, EXEMPT_TOOL_PATTERNS;
 var init_authored_content = __esm({
   async "claude-hooks/lib/authored-content.mjs"() {
     "use strict";
@@ -67582,13 +67596,29 @@ var init_authored_content = __esm({
     await lazyImport("agent-sanitizer"));
     ({ STRIP: STRIP2, LONG_RUN_RE: LONG_RUN_RE2, SCATTERED_THRESHOLD: SCATTERED_THRESHOLD2, stripInvisible: stripInvisible2 } = /** @type {typeof import("agent-sanitizer/invisible")} */
     await lazyImport("agent-sanitizer/invisible"));
-    FIELDS = {
-      Write: ["content"],
-      Edit: ["new_string"],
-      MultiEdit: ["edits[].new_string"],
-      NotebookEdit: ["new_source"],
-      Bash: ["command"]
-    };
+    AUTHORED_FIELDS = Object.freeze(
+      Object.assign(/* @__PURE__ */ Object.create(null), {
+        Write: ["content"],
+        Edit: ["new_string"],
+        MultiEdit: ["edits[].new_string"],
+        NotebookEdit: ["new_source"],
+        Bash: ["command"]
+      })
+    );
+    EXEMPT_TOOLS = Object.freeze(
+      Object.assign(/* @__PURE__ */ Object.create(null), {
+        Read: "inputs are a path plus offsets \u2014 nothing the model authored is persisted or displayed",
+        Grep: "inputs are a search pattern and a path; rewriting a pattern would change what the search matches",
+        Glob: "inputs are a glob pattern and a path; rewriting a pattern would change what it matches",
+        LS: "input is a path \u2014 the confusable layer's domain, not authored free text"
+      })
+    );
+    EXEMPT_TOOL_PATTERNS = Object.freeze([
+      Object.freeze({
+        pattern: /^mcp__/u,
+        reason: `MCP tool inputs follow a server-declared schema this package cannot see, so there is no field it can name as authored free text. A blanket walk over every string in the input would buy recall at a real precision cost \u2014 it would rewrite opaque IDs, base64 blobs and protocol fields the server parses \u2014 so the gap is DECLARED rather than closed. A deployment that wants a specific server's body field covered adds it to AUTHORED_FIELDS by its full tool name (e.g. mcp__github__create_issue: ["body"]).`
+      })
+    ]);
   }
 });
 
@@ -68516,6 +68546,7 @@ var pretooluse_sanitize_exports = {};
 __export(pretooluse_sanitize_exports, {
   PRE_TOOL_USE_MESSAGES: () => PRE_TOOL_USE_MESSAGES,
   REDACTION_HINT: () => REDACTION_HINT,
+  WRITE_SHAPED_TOOLS: () => WRITE_SHAPED_TOOLS,
   buildPreToolUseResponse: () => buildPreToolUseResponse,
   cliMain: () => cliMain,
   depLoadHint: () => depLoadHint,
