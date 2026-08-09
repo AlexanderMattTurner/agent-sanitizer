@@ -672,7 +672,6 @@ function launchWithoutNode(t, plugin, env = {}) {
 }
 
 /**
- * Corrupt the staged bundle so `node --check` rejects it before any hook code
  * The ways a bundle can fail to ANSWER, as bundle bodies. A syntax error was
  * the only member the launcher used to look for (it ran `node --check`), and
  * checking for it proved nothing about the others: a bundle that parses and
@@ -1162,9 +1161,9 @@ test("the launcher reports its own preflight when it overruns", (t) => {
     { hook_event_name: "PostToolUse", tool_name: "Bash", tool_response: "ok" },
     { env: REPORT_EVERY_RUN },
   );
-  // The preflight is a PATH probe and a `node --check` of the whole bundle, on
-  // every hook call, and it is gone the instant the launcher execs — so if it
-  // ever gets slow, this line is the only place it can be said.
+  // The preflight — a PATH probe and the daemon resolution — runs on every hook
+  // call, ahead of the hook that could time it, so if it ever gets slow this
+  // line is the only place it can be said.
   assert.match(
     res.stderr,
     /PERFORMANCE: the safe-launch PostToolUse hook took/,

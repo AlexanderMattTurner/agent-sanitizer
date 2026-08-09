@@ -199,18 +199,22 @@ fi
 # verbatim once the exit code has been read. Stderr is never captured, so the
 # child's diagnostics stream to the operator in real time exactly as they did
 # under `exec`.
+#
+# `${@+"$@"}` rather than a bare `"$@"`: with zero positional params left after
+# the event shift, `set -u` aborts bash 3.2 (macOS) with exit 1 — a NON-blocking
+# hook error, i.e. the same silent pass this gate exists to close.
 report_launch_timing
 
 stdout_file="$(mktemp 2>/dev/null)"
 bundle_out=""
 if [[ -n "$stdout_file" ]]; then
   trap 'rm -f "$stdout_file"' EXIT
-  node "$bundle" "$@" >"$stdout_file"
+  node "$bundle" ${@+"$@"} >"$stdout_file"
   bundle_rc=$?
 else
   # mktemp unavailable (a broken TMPDIR): still gate on the post-condition, at
   # the cost of trailing-newline fidelity in the replayed verdict.
-  bundle_out="$(node "$bundle" "$@")"
+  bundle_out="$(node "$bundle" ${@+"$@"})"
   bundle_rc=$?
 fi
 
