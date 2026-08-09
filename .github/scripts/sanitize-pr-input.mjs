@@ -54,8 +54,5 @@ process.stdout.write(cleaned);
 // signal. One accurate label for both kinds keeps this script from having to
 // know which layer produced which category.
 const report = [...warnings, ...notes];
-if (found.length > 0)
-  report.unshift(`Neutralized categories: ${found.join(", ")}`);
-if (exfilReasons.length > 0)
-  report.push(`Exfil-shaped URLs detected: ${exfilReasons.join("; ")}`);
-if (report.length > 0) process.stderr.write(`${report.join("\n")}\n`);
+if (found.length > 0) report.unshift(`Categories flagged: ${found.join(", ")}`);
+if (report.length > 0) process.stderr.write(report.join("\n") + "\n");
