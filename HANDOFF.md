@@ -11,17 +11,17 @@ Base commit for every measurement: `main` at `02e5ab8`, plus PR #281.
 
 ## 1. Status snapshot
 
-| PR                         | Branch                          | State                                                                                   |
-| -------------------------- | ------------------------------- | --------------------------------------------------------------------------------------- |
-| #278 detection layer       | `…-z04lfn-a-detection`          | **merged**                                                                              |
-| #279 fail-open posture     | `…-z04lfn-b-failopen`           | **merged**                                                                              |
-| #280 partition assertions  | `…-z04lfn-c-partitions`         | **merged**                                                                              |
-| #281 red-main fix + naming | `…-z04lfn-d-guard-pairs`        | **open**, 3 commits, reviewer said `looks_good`, its one nit is fixed and auto-resolved |
-| (this work)                | `…-z04lfn-e-derive-guard-pairs` | branched off #281, carries only this file so far                                        |
+| PR                         | Branch                          | State                                              |
+| -------------------------- | ------------------------------- | -------------------------------------------------- |
+| #278 detection layer       | `…-z04lfn-a-detection`          | **merged**                                         |
+| #279 fail-open posture     | `…-z04lfn-b-failopen`           | **merged**                                         |
+| #280 partition assertions  | `…-z04lfn-c-partitions`         | **merged**                                         |
+| #281 red-main fix + naming | `…-z04lfn-d-guard-pairs`        | **merged**                                         |
+| (this work)                | `…-z04lfn-e-derive-guard-pairs` | rebased onto `main`, carries only this file so far |
 
-`…-e-derive-guard-pairs` is stacked on #281 because both rewrite
-`test/guard-pairs.test.mjs` and `.hooks/run-guard-pairs.mjs`. Do not rebase it
-onto `main` until #281 merges.
+`…-e-derive-guard-pairs` was stacked on #281 (both rewrite
+`test/guard-pairs.test.mjs` and `.hooks/run-guard-pairs.mjs`); #281 has merged
+and the branch is rebased onto `main`, so it now stands alone.
 
 ### Incident this run is a reaction to
 
@@ -62,9 +62,10 @@ script — the technique is reproducible and how everything here was derived).
 | Import-only modules                                                  | 4                       | **no — keep curated**                                                              |
 | UCD generator inputs                                                 | 2                       | **no — keep curated**                                                              |
 
-**62 of 69 become derived. 7 stay hand-written.**
+**63 of 69 become derived. 6 stay hand-written.** (Globs are in — see 2.5 — so
+`fuzz-nightly.yaml` derives; before that decision it was 62/7.)
 
-### 2.3 The 7 that stay, with the real reason
+### 2.3 The 6 that stay, with the real reason
 
 | Path                                             | Tests reaching it by import | Why it cannot be derived                                                                                                          |
 | ------------------------------------------------ | --------------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
@@ -74,10 +75,9 @@ script — the technique is reproducible and how everything here was derived).
 | `.github/scripts/nightly-fuzz-issue.js`          | 1                           | import-only; a second importer would silently change its pair                                                                     |
 | `scripts/data/DerivedJoiningType.json`           | —                           | generator input; only chain to a test is data → generator → generated module → importers, which lands back in the 42-test fan-out |
 | `scripts/data/IndicSyllabicCategory.Virama.json` | —                           | same                                                                                                                              |
-| —                                                |                             |                                                                                                                                   |
 
 For these, "which test is the cheap guard" is a judgment, not a fact. That is
-the same category as `NOT_GUARDED`, and it is fine — a 7-entry curated list with
+the same category as `NOT_GUARDED`, and it is fine — a 6-entry curated list with
 reasons is a different animal from a 69-entry list pretending to be complete.
 
 ### 2.4 The defect behind the 7 path-driven modules
@@ -146,7 +146,7 @@ of it.
   excuse. Today a broken resolver silently runs nothing; that must become an
   error, not a shrug. This is the single most important behavioural change here.
 
-**`.hooks/guard-pairs.json`:** shrinks from 69 pairs to 7, and absorbs
+**`.hooks/guard-pairs.json`:** shrinks from 69 pairs to 6, and absorbs
 `NOT_GUARDED` / `NOT_MIRRORED` (moved out of the test) so the hook and the test
 read one copy of the exclusions.
 
