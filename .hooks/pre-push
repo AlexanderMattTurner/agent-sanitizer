@@ -21,7 +21,14 @@ git_root=$(git rev-parse --show-toplevel)
 # Located by THIS script's own path, not the repo root: the hook and its library
 # ship together, `core.hooksPath` may point outside the checkout, and pre-push is
 # driven against throwaway repositories by its own test.
-hook_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# Parameter expansion, not `dirname`: this hook must resolve its own library
+# with shell builtins alone. `dirname` is an external binary, and a hook can run
+# with a PATH that does not carry it — which is exactly the environment the
+# missing-pre-commit test sets up. With `dirname` absent the substitution is
+# empty, the source path collapses to the repo root, and the hook dies before
+# running any of the checks it is being tested for.
+hook_dir="${BASH_SOURCE[0]%/*}"
+[[ "$hook_dir" == "${BASH_SOURCE[0]}" ]] && hook_dir="."
 # shellcheck source=.hooks/lib-gate.sh
 source "$hook_dir/lib-gate.sh"
 gate_tool_path "$git_root"

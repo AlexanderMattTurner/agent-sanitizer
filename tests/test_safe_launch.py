@@ -66,6 +66,14 @@ def write_target(sandbox: Path, body: str, name: str = "target.sh") -> Path:
     return path
 
 
+def write_node_target(sandbox: Path, body: str, name: str) -> Path:
+    """A `.mjs` hook target — safe-launch runs it through `node`, not bash."""
+    path = sandbox / ".claude" / "hooks" / name
+    path.write_text(f"#!/usr/bin/env node\n{body}\n")
+    path.chmod(0o755)
+    return path
+
+
 def run_safe_launch(
     sandbox: Path,
     target: Path,
@@ -519,6 +527,25 @@ def pretooluse_commands() -> list[str]:
     ]
 
 
+# The target each bootstrap command wraps: the SECOND `.claude/hooks/…` path in
+# it, the first being safe-launch.sh itself.
+_WRAPPED_TARGET_RE = re.compile(r"\.claude/hooks/(?P<name>[\w.-]+)")
+
+
+def wrapped_target(cmd: str) -> str:
+    """The hook filename a bootstrap command hands to safe-launch.
+
+    Derived rather than hard-coded. These tests iterate every command shipped in
+    settings.json but used to write one fixed target name, so the first handler
+    wrapping a different script made the sandbox miss the file the command
+    actually invokes — and the assertion failed on a missing hook rather than on
+    the behaviour under test.
+    """
+    names = _WRAPPED_TARGET_RE.findall(cmd)
+    assert len(names) >= 2, f"no wrapped target in: {cmd[:80]}"
+    return names[1]
+
+
 def run_bootstrap(
     cmd: str, sandbox: Path, extra_env: dict[str, str] | None = None
 ) -> subprocess.CompletedProcess:
@@ -547,7 +574,13 @@ def test_bootstrap_runs_target_when_wrapper_is_healthy(tmp_path: Path) -> None:
     a healthy sandbox, reach the wrapped target."""
     for cmd in pretooluse_commands():
         sandbox = make_sandbox(tmp_path / "healthy")
-        write_target(sandbox, 'echo "TARGET-RAN"', name="pre-push-check.sh")
+        name = wrapped_target(cmd)
+        # safe-launch picks the interpreter from the suffix, so the target has
+        # to be written in the language its own name promises.
+        if name.endswith((".mjs", ".cjs", ".js")):
+            write_node_target(sandbox, 'console.log("TARGET-RAN");', name=name)
+        else:
+            write_target(sandbox, 'echo "TARGET-RAN"', name=name)
         result = run_bootstrap(cmd, sandbox)
         assert result.returncode == 0, result.stderr
         assert result.stdout == "TARGET-RAN\n"

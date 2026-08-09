@@ -46,7 +46,11 @@ def sandbox(tmp_path: Path) -> Path:
 
     hooks = repo / ".hooks"
     hooks.mkdir()
-    shutil.copy2(REPO_ROOT / ".hooks" / "pre-push", hooks / "pre-push")
+    # The hook and the library it sources ship together: pre-push resolves
+    # lib-gate.sh by its OWN path, so a sandbox holding only pre-push makes it
+    # die at the `source` line before running anything it is being tested for.
+    for name in ("pre-push", "lib-gate.sh"):
+        shutil.copy2(REPO_ROOT / ".hooks" / name, hooks / name)
     (hooks / "pre-push").chmod(0o755)
 
     workflow = repo / WORKFLOW

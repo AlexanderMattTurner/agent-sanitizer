@@ -1,6 +1,7 @@
 """Tests for .github/scripts/validate-config.sh."""
 
 import json
+import re
 import subprocess
 from pathlib import Path
 from typing import Callable
@@ -264,15 +265,41 @@ def test_pretooluse_without_bootstrap_fails(
     assert "must use the safe-launch bootstrap" in result.stdout + result.stderr
 
 
+# Every `$CLAUDE_PROJECT_DIR`-rooted hook path a settings.json command names.
+_HOOK_PATH_RE = re.compile(r"\$CLAUDE_PROJECT_DIR\"?/(?P<path>\.claude/hooks/[\w.-]+)")
+
+
+def _hook_paths_named_by(block: list) -> set[str]:
+    """The hook files the shipped PreToolUse BLOCK invokes.
+
+    Derived, not listed. A hand-kept list of two filenames is what broke when a
+    third PreToolUse handler shipped: the fixture stopped mirroring the settings
+    it copies verbatim, and check 1 failed on a file the test simply never
+    created. Reading the paths out of the block keeps the fixture in step with
+    the data it is a projection of.
+    """
+    return {
+        match.group("path")
+        for handler in block
+        for entry in handler.get("hooks", [])
+        for match in _HOOK_PATH_RE.finditer(entry.get("command", ""))
+    }
+
+
 def test_pretooluse_with_shipped_bootstrap_passes(tmp_path: Path, copy_script) -> None:
     """The PreToolUse block actually shipped in this repo's settings.json —
     copied verbatim, not a hand-written approximation — must pass, including
     check 1's path scan, which must strip the `;` that word-splitting glues
     onto the target path in a compound command."""
     shipped = json.loads((REPO_ROOT / ".claude" / "settings.json").read_text())
-    write_settings(tmp_path, {"hooks": {"PreToolUse": shipped["hooks"]["PreToolUse"]}})
-    make_hook(tmp_path, ".claude/hooks/safe-launch.sh")
-    make_hook(tmp_path, ".claude/hooks/pre-push-check.sh")
+    block = shipped["hooks"]["PreToolUse"]
+    write_settings(tmp_path, {"hooks": {"PreToolUse": block}})
+    named = _hook_paths_named_by(block)
+    # Non-vacuity: an extractor that matched nothing would create no files and
+    # leave check 1 asserting over an empty set, passing for the wrong reason.
+    assert ".claude/hooks/safe-launch.sh" in named, named
+    for rel_path in named:
+        make_hook(tmp_path, rel_path)
     result = run_validator(tmp_path, copy_script)
     assert result.returncode == 0, result.stdout + result.stderr
     assert "All checks passed" in result.stdout
