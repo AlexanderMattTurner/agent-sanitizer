@@ -42,12 +42,13 @@ const run = (args, input) =>
   execFileSync("node", [CLI, ...args], { input, encoding: "utf8" });
 
 /** The wire response shape, for comparing CLI output against the sanitize oracle. */
-const envelope = ({ cleaned, found, warnings, notes }) => ({
-  cleaned,
-  found,
-  warnings,
-  notes,
-});
+// The identity, deliberately. This used to re-project `sanitize()`'s result
+// down to a hand-written four-field list, which meant these "mirrors
+// sanitize()" assertions could not see a field the CLI failed to forward — and
+// one had already gone missing (`splices`). Comparing the whole object is what
+// makes the oracle a real oracle. Kept as a named function so the intent is
+// legible at the call sites rather than looking like a forgotten refactor.
+const envelope = (result) => result;
 
 // Inputs spanning every layer: a Cf char (Layer 1), clean passthrough, a hidden
 // element + an exfil-shaped URL (Layers 2/3, html mode). Each carries the html
