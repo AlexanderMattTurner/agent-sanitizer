@@ -217,6 +217,27 @@ export function extraSecretVars(env = process.env) {
   return tokens;
 }
 
+// The one switch for the whole secret layer (Layer 4). Secret redaction is
+// OPT-IN: it spawns a Python daemon, rewrites the model's view of tool output,
+// and gates the write path (rehydration denies, the placeholder-write
+// carve-out) — machinery whose false positives cost real work, so it engages
+// only when an operator asked for it. Every secret-layer call site consults
+// THIS predicate; a second reading of the variable is the drift channel that
+// would let one hook redact while another passes placeholders through.
+export const SECRETS_ENABLED_ENV = "AGENT_SANITIZER_SECRETS_ENABLED";
+
+/**
+ * True when the operator opted into the secret-redaction layer. `=== "1"`
+ * matches the other public knobs (`AGENT_SANITIZER_*_DISABLED`): any other
+ * value — unset, "true", "yes" — keeps the layer off, so a typo can only fail
+ * toward the default (no secret machinery), never silently enable it.
+ * @param {NodeJS.ProcessEnv | Record<string, string | undefined>} [env]
+ * @returns {boolean}
+ */
+export function secretsEnabled(env = process.env) {
+  return env[SECRETS_ENABLED_ENV] === "1";
+}
+
 /**
  * The env-bound redaction set: the UNION of the inference keys, the curated host
  * credentials, any credential-shaped var present in the environment, the

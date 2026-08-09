@@ -75,6 +75,7 @@
     "claude-hooks/config/scrubbed-env-vars.json": [
       "test/credential-vocabulary.test.mjs"
     ],
+    "README.md": ["test/claude-hooks-exports.test.mjs"],
     "plugin/README.md": ["plugin/test/plugin-manifest.test.mjs"],
     "plugin/skills/enable-auto-update/SKILL.md": [
       "plugin/test/enable-auto-update.test.mjs"

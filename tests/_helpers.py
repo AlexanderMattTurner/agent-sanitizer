@@ -10,15 +10,39 @@ import subprocess
 import sys
 from pathlib import Path
 
-REPO_ROOT = Path(
-    subprocess.run(
-        ["git", "rev-parse", "--show-toplevel"],
-        cwd=Path(__file__).resolve().parent,
-        capture_output=True,
-        text=True,
-        check=True,
-    ).stdout.strip()
+#: Git's own repository-location overrides. A git hook exports GIT_DIR (and
+#: friends) into every child process, and with GIT_DIR set but no GIT_WORK_TREE
+#: git treats the CURRENT DIRECTORY as the work tree — so `rev-parse
+#: --show-toplevel` run from `tests/` answers `<repo>/tests`, not `<repo>`.
+#: Under the pre-commit guard-pair runner that made REPO_ROOT wrong by one
+#: directory for every pytest guard, and each one died on a FileNotFoundError
+#: for a repo file it was reading. Stripping the overrides makes the lookup mean
+#: "the repo this file lives in", which is what every caller wants.
+_GIT_LOCATION_VARS = (
+    "GIT_DIR",
+    "GIT_WORK_TREE",
+    "GIT_COMMON_DIR",
+    "GIT_INDEX_FILE",
+    "GIT_OBJECT_DIRECTORY",
+    "GIT_PREFIX",
 )
+
+
+def _repo_root() -> Path:
+    env = {k: v for k, v in os.environ.items() if k not in _GIT_LOCATION_VARS}
+    return Path(
+        subprocess.run(
+            ["git", "rev-parse", "--show-toplevel"],
+            cwd=Path(__file__).resolve().parent,
+            capture_output=True,
+            text=True,
+            check=True,
+            env=env,
+        ).stdout.strip()
+    )
+
+
+REPO_ROOT = _repo_root()
 
 
 def ensure_python_pkg_on_path() -> None:
