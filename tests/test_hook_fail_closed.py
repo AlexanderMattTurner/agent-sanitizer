@@ -235,8 +235,15 @@ def _sandbox_guarded_repo(tmp_path: Path, guard_body: str) -> Path:
     fake.chmod(0o755)
     hooks = repo / ".hooks"
     shutil.copy(REPO_ROOT / ".hooks" / "run-guard-pairs.mjs", hooks)
+    # The runner DERIVES its pairs by parsing the repo's suites, so the scan and
+    # the acorn it parses with have to come along. Without them the hook would
+    # refuse every commit here for a missing dependency and these tests would
+    # pass for the wrong reason — which is why the sandbox mirrors the real
+    # dependency instead of stubbing the scan out.
+    shutil.copytree(REPO_ROOT / ".hooks" / "lib", hooks / "lib")
+    (repo / "node_modules" / "acorn").symlink_to(REPO_ROOT / "node_modules" / "acorn")
     (hooks / "guard-pairs.json").write_text(
-        '{"pairs": {"data.json": ["guard.test.mjs"]}}'
+        '{"pairs": {"data.json": ["guard.test.mjs"]}, "tooSlowForCommit": {}}'
     )
     (repo / "guard.test.mjs").write_text(guard_body)
     (repo / "data.json").write_text("{}\n")
