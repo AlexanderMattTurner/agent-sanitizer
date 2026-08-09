@@ -8,6 +8,21 @@ adhere to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+## [2.30.0] - 2026-08-09
+
+### Added
+- New warning when a reveal sidecar is dropped unvetted in claude-hooks.
+- Distinct warning category for unparseable-HTML withholding in output.
+- Layer-1 restoration capability for whole-file Writes of existing files, recovering stripped bytes from the rehydration layer.
+
+### Changed
+- The unparseable-HTML warning no longer promises a reveal sidecar will be provided.
+- Improved hint handling in rehydrate when processing unreadable targets.
+
+### Fixed
+- Fixed hint-free Write propagation through rehydrate on unreadable targets.
+- Corrected Write restoration through the claude-hooks layer pipeline and drop guard logic.
+
 ## [2.29.1] - 2026-08-09
 
 ### Fixed
