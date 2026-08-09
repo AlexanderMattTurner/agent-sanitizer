@@ -8,6 +8,14 @@ adhere to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+## [2.29.1] - 2026-08-09
+
+### Fixed
+
+- CI: Preserve PR-input report wording for flagged-not-neutralized status.
+- CI: Prevent GitHub stderr from interfering with fork-of-self slug comparison.
+- CI: Ensure review-findings gate clears even when auto-approval fails.
+
 ## [2.29.0] - 2026-08-09
 
 ### Added
