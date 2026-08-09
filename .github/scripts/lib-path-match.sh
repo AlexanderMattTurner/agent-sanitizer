@@ -39,3 +39,19 @@ path_gate_matching_lines() {
   fi
   return 0
 }
+
+# path_gate_matching_fixed_lines PATTERNS TEXT — path_gate_matching_lines for a
+# newline-separated list of whole-line literals (a derived file closure) instead
+# of a regex. Same posture, and it is the reason this exists: the fixed-string
+# arm reads the same grep status and must not spell it `|| true`.
+path_gate_matching_fixed_lines() {
+  local rc=0 out=""
+  out=$(grep -Fxf <(printf '%s\n' "$1") <<<"$2") || rc=$?
+  if ((rc > 1)); then
+    out="$2"
+  fi
+  if [[ -n "$out" ]]; then
+    printf '%s\n' "$out"
+  fi
+  return 0
+}

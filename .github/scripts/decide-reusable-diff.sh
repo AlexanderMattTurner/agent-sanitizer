@@ -157,7 +157,7 @@ paths_trigger() {
   fi
   if [[ -n "$DERIVED_CLOSURE" ]]; then
     mapfile -t -O "${#_matched[@]}" _matched < <(
-      grep -Fxf <(printf '%s\n' "$DERIVED_CLOSURE") <<<"$_changed" || true
+      path_gate_matching_fixed_lines "$DERIVED_CLOSURE" "$_changed"
     )
   fi
   ((${#_matched[@]} > 0)) || return 0
