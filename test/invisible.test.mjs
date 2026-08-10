@@ -23,6 +23,8 @@ import {
   LONG_RUN_RE,
   LONG_RUN_THRESHOLD,
   SCATTERED_THRESHOLD,
+  findLongRuns,
+  hasLongRun,
   CONSECUTIVE_JOINER_CAP,
   CONSECUTIVE_SELECTOR_CAP,
   TOTAL_PRESERVED_JOINER_BUDGET,
@@ -647,6 +649,80 @@ describe("LONG_RUN_RE", () => {
     assert.equal(
       LONG_RUN_RE.test(cp(0x200b).repeat(LONG_RUN_THRESHOLD - 1)),
       false,
+    );
+  });
+});
+
+// ─── findLongRuns / hasLongRun ───────────────────────────────────────────────
+// The scan every consumer of "long run" uses. Its equivalence to the pattern is
+// differenced over a corpus and 2000 draws in invisible-fast-path.test.mjs;
+// these pin the edges by hand — the threshold, the UTF-16-vs-code-point units,
+// and the stitching of one match to the next.
+
+describe("findLongRuns", () => {
+  const ZWSP = cp(0x200b);
+  const TAG_A = cp(0xe0041); // astral: two UTF-16 units per code point
+
+  it("yields a run of exactly the threshold, with its offset and length", () =>
+    assert.deepEqual(
+      [...findLongRuns(`ab${ZWSP.repeat(10)}cd`)],
+      [{ index: 2, text: ZWSP.repeat(10), charCount: 10 }],
+    ));
+
+  it("yields nothing for a run one short of the threshold", () =>
+    assert.deepEqual([...findLongRuns(`ab${ZWSP.repeat(9)}cd`)], []));
+
+  it("counts an astral run in code points, and indexes it in UTF-16 units", () =>
+    assert.deepEqual(
+      [...findLongRuns(`ab${TAG_A.repeat(10)}`)],
+      [{ index: 2, text: TAG_A.repeat(10), charCount: 10 }],
+    ));
+
+  it("does not fuse two runs split by a visible character", () =>
+    assert.deepEqual(
+      [...findLongRuns(`${ZWSP.repeat(10)}x${ZWSP.repeat(12)}`)].map((run) => [
+        run.index,
+        run.charCount,
+      ]),
+      [
+        [0, 10],
+        [11, 12],
+      ],
+    ));
+
+  it("closes a run that reaches the end of the text", () =>
+    assert.deepEqual(
+      [...findLongRuns(ZWSP.repeat(11))],
+      [{ index: 0, text: ZWSP.repeat(11), charCount: 11 }],
+    ));
+
+  it("mixes categories inside one run", () => {
+    const mixed = ZWSP.repeat(5) + cp(0xfe00).repeat(3) + cp(0x2800).repeat(2);
+    assert.deepEqual(
+      [...findLongRuns(mixed)],
+      [{ index: 0, text: mixed, charCount: 10 }],
+    );
+  });
+
+  it("hasLongRun answers the same question", () => {
+    assert.equal(hasLongRun(`a${ZWSP.repeat(10)}b`), true);
+    assert.equal(hasLongRun(`a${ZWSP.repeat(9)}b`), false);
+    assert.equal(hasLongRun(""), false);
+  });
+
+  it("two scans interleave without stealing each other's position", () => {
+    const first = findLongRuns(`${ZWSP.repeat(10)}x${ZWSP.repeat(11)}`);
+    const second = findLongRuns(`y${ZWSP.repeat(12)}`);
+    const opening = first.next().value;
+    const other = second.next().value;
+    const resumed = first.next().value;
+    assert.deepEqual(
+      [opening, other, resumed].map((run) => [run.index, run.charCount]),
+      [
+        [0, 10],
+        [1, 12],
+        [11, 11],
+      ],
     );
   });
 });

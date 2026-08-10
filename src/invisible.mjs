@@ -157,10 +157,92 @@ export const LONG_RUN_THRESHOLD = 10;
  * payload-capable even without a long run (threshold-evasion catch). */
 export const SCATTERED_THRESHOLD = 30;
 
+/**
+ * The long-run pattern, declaratively: {@link LONG_RUN_THRESHOLD} or more
+ * consecutive {@link STRIP} code points.
+ *
+ * Scan a document with {@link findLongRuns}, not with this: `exec`/`test`
+ * throw `RangeError: Maximum call stack size exceeded` once a run passes
+ * ~8.4 M code points, because V8 pushes one backtrack entry per iteration of
+ * an unbounded quantifier onto a stack capped at 64 MB. This stays public as
+ * the pattern itself, and as the independent oracle the scan is differenced
+ * against (test/invisible-fast-path.test.mjs).
+ */
 export const LONG_RUN_RE = new RegExp(
   `(?:${STRIP.source}){${LONG_RUN_THRESHOLD},}`,
   REGEX_FLAGS,
 );
+
+// Iterations per `exec` below, which is what bounds the backtrack stack each
+// one needs: a match can push at most this many entries, ~8x under the ceiling
+// an unbounded quantifier walks into on an 8 MB payload. Runs longer than this
+// are stitched from consecutive matches, so the bound costs an extra `exec`
+// per megabyte of PAYLOAD and nothing at all on ordinary text.
+const RUN_CHUNK = 1 << 20;
+
+const LONG_RUN_CHUNK_RE = new RegExp(
+  `(?:${STRIP.source}){${LONG_RUN_THRESHOLD},${RUN_CHUNK}}`,
+  REGEX_FLAGS,
+);
+
+// The same class, sticky and from one repetition, to carry a run past the chunk
+// bound: anchored at the end of the previous match, it either extends the run
+// or fails immediately.
+const RUN_TAIL_RE = new RegExp(`(?:${STRIP.source}){1,${RUN_CHUNK}}`, "yu");
+
+/**
+ * Every maximal run of at least {@link LONG_RUN_THRESHOLD} consecutive
+ * payload-capable invisible code points in `text`, in order: `index` is the
+ * run's UTF-16 offset, `text` its verbatim slice, `charCount` its length in
+ * code points.
+ *
+ * What {@link LONG_RUN_RE} means, in the form every scanner in this package
+ * uses — because that regex cannot answer for a large document, and an 8 MB
+ * paste of zero-widths (the exact payload the scan exists to catch) is what
+ * took out the SessionStart scanner, the prompt gate and the tool-output tier
+ * alike. Bounding the quantifier bounds the backtrack stack per `exec`; a run
+ * that hits the bound is continued by {@link RUN_TAIL_RE} until it ends, so the
+ * runs reported are maximal at any length.
+ * @param {string} text
+ * @returns {Generator<{ index: number, text: string, charCount: number }>}
+ */
+export function* findLongRuns(text) {
+  // Both regexes are module-level and carry `lastIndex`, and a generator can be
+  // suspended anywhere — including inside another scan of another text. Every
+  // exec below therefore sets its own start position first, so no scan can
+  // inherit a position from one it interleaved with.
+  let pos = 0;
+  for (;;) {
+    LONG_RUN_CHUNK_RE.lastIndex = pos;
+    const match = LONG_RUN_CHUNK_RE.exec(text);
+    if (match === null) return;
+    let end = LONG_RUN_CHUNK_RE.lastIndex;
+    // A run shorter than the bound fails this on the first try, for the cost of
+    // one anchored no-match.
+    for (;;) {
+      RUN_TAIL_RE.lastIndex = end;
+      if (RUN_TAIL_RE.exec(text) === null) break;
+      end = RUN_TAIL_RE.lastIndex;
+    }
+    const run = text.slice(match.index, end);
+    yield { index: match.index, text: run, charCount: codePointLength(run) };
+    pos = end;
+  }
+}
+
+/**
+ * True when `text` carries at least one {@link findLongRuns} run.
+ *
+ * The bounded pattern answers this on its own: a run long enough to be reported
+ * is long enough to match, whether or not the match reaches the run's end — so
+ * the yes/no costs one anchored scan and never measures the run.
+ * @param {string} text
+ * @returns {boolean}
+ */
+export function hasLongRun(text) {
+  LONG_RUN_CHUNK_RE.lastIndex = 0;
+  return LONG_RUN_CHUNK_RE.test(text);
+}
 
 /**
  * The agent-facing "Stripped: …" note for a Layer-1 strip: the removed category
@@ -1150,12 +1232,10 @@ export function payloadLongRunSample(text) {
   // The view is code-point-for-code-point with `text` and only ever REPLACES an
   // invisible with a space, so a run in the view is a run in `text`: no long run
   // in the raw text means none in the view. This hides no payload — the bulk
-  // regex reads the whole text, and a run it finds still goes through the full
+  // scan reads the whole text, and a run it finds still goes through the full
   // carve analysis below to decide what of it is really payload.
-  LONG_RUN_RE.lastIndex = 0;
-  if (!LONG_RUN_RE.test(text)) return null;
-  LONG_RUN_RE.lastIndex = 0;
-  return payloadInvisibleView(text).match(LONG_RUN_RE)?.[0] ?? null;
+  if (!hasLongRun(text)) return null;
+  return findLongRuns(payloadInvisibleView(text)).next().value?.text ?? null;
 }
 
 /**

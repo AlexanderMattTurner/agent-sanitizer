@@ -46,6 +46,8 @@ export {
   LONG_RUN_RE,
   LONG_RUN_THRESHOLD,
   SCATTERED_THRESHOLD,
+  findLongRuns,
+  hasLongRun,
 } from "./invisible.mjs";
 
 // Layer 2/3 cheap pre-gates. Re-exported from the dependency-free `./gates.mjs`
