@@ -30,7 +30,6 @@ import {
   REQUIREMENTS_IN_PATH,
   REQUIREMENTS_LOCK_PATH,
   bundlePluginHook,
-  enginePin,
   lockedEngineVersion,
   packageDirs,
   redactorRequirements,
@@ -44,6 +43,8 @@ import { HOOK_MODES } from "../../claude-hooks/plugin-hooks.mjs";
 const ROOT = dirname(dirname(dirname(fileURLToPath(import.meta.url))));
 const PLUGIN_DIR = join(ROOT, "plugin");
 const HOOKS_DIR = join(ROOT, "claude-hooks");
+/** The engine wheel the plugin ships so the venv and the zipapp are one build. */
+const ENGINE_WHEEL = "agent_sanitizer-0.0.0-py3-none-any.whl";
 // The package-relative data files the hook libs statically import (the
 // credential-noun vocabulary, the invisible charset, the redaction floor).
 // DERIVED from package.json's `files` rather than listed here: a hand-kept list
@@ -158,8 +159,8 @@ function launchAsync(pluginRoot, event, hook, payload, { env = {} } = {}) {
 /**
  * Copy the hook SOURCES into a scratch dir beside a node_modules that maps each
  * canonical package name onto its installed directory — the resolution a
- * consumer of the published package gets, which the repo's npm alias otherwise
- * denies. Returns { dir, hooks }.
+ * consumer of the published package gets, isolated from this repo's own
+ * node_modules. Returns { dir, hooks }.
  */
 function stageSources(t, { omit = [] } = {}) {
   const dir = scratch(t);
@@ -231,6 +232,7 @@ test("the shipped artifacts are tracked by git, not just present on disk", () =>
   for (const required of [
     "plugin/dist/hooks/plugin-hooks.bundle.mjs",
     "plugin/dist/redactor/daemon.pyz",
+    `plugin/dist/redactor/${ENGINE_WHEEL}`,
     "plugin/requirements.in",
     "plugin/requirements.txt",
   ])
@@ -240,30 +242,31 @@ test("the shipped artifacts are tracked by git, not just present on disk", () =>
     );
 });
 
-test("committed bundle matches a fresh build from the pinned engine", async () => {
+test("committed bundle matches a fresh build from this tree", async () => {
   assert.equal(readFileSync(BUNDLE_PATH, "utf-8"), await bundlePluginHook());
 });
 
-test("committed requirements.in matches the engine pin", () => {
+test("committed requirements.in matches the secrets extra", () => {
   assert.equal(
     readFileSync(REQUIREMENTS_IN_PATH, "utf-8"),
     redactorRequirements(),
   );
-  assert.match(
-    readFileSync(REQUIREMENTS_IN_PATH, "utf-8"),
-    new RegExp(`^agent-sanitizer\\[secrets\\]==${enginePin()}$`, "m"),
-  );
+  assert.match(readFileSync(REQUIREMENTS_IN_PATH, "utf-8"), /^detect-secrets/m);
 });
 
 // Compiling the lock needs the network, so the offline suite cannot re-resolve
 // it. These three assertions are what it CAN check without one, and together
-// they catch every way the lock goes wrong in practice: an engine bump landed
-// without re-locking, a hand-edit, and a floating requirement sneaking back in.
-test("committed lock pins the same engine as package.json", () => {
+// they catch every way the lock goes wrong in practice: a published engine
+// sneaking back in beside the tree-built one, a hand-edit, and a floating
+// requirement.
+test("committed lock leaves the engine to this tree", () => {
+  const locked = lockedEngineVersion(
+    readFileSync(REQUIREMENTS_LOCK_PATH, "utf-8"),
+  );
   assert.equal(
-    lockedEngineVersion(readFileSync(REQUIREMENTS_LOCK_PATH, "utf-8")),
-    enginePin(),
-    "plugin/requirements.txt is stale — re-lock with `node plugin/scripts/lock-redactor-deps.mjs`",
+    locked,
+    null,
+    `plugin/requirements.txt pins agent-sanitizer==${locked}, which would ship a second, published engine inside the zipapp beside the one built from python/. Re-lock with \`node plugin/scripts/lock-redactor-deps.mjs\``,
   );
 });
 
@@ -301,20 +304,30 @@ test("every locked requirement is version- and hash-pinned", () => {
   }
 });
 
-test("enginePin fails loud when the alias is absent or malformed", () => {
-  for (const bad of [
-    "{}",
-    '{"devDependencies":{}}',
-    '{"devDependencies":{"sanitizer-engine":"^2.1.0"}}',
-    '{"devDependencies":{"sanitizer-engine":"npm:agent-sanitizer@latest"}}',
-    '{"devDependencies":{"sanitizer-engine":"npm:some-other-pkg@2.1.0"}}',
-  ])
-    assert.throws(() => enginePin(bad), /sanitizer-engine/);
+// Without this the assertion above ("leaves the engine to this tree") passes on
+// a lockedEngineVersion that can no longer see a pin at all — a detector that
+// always answers null would make the guard silently vacuous.
+test("lockedEngineVersion sees a pin when one is there", () => {
   assert.equal(
-    enginePin(
-      '{"devDependencies":{"sanitizer-engine":"npm:agent-sanitizer@9.8.7"}}',
+    lockedEngineVersion("agent-sanitizer==2.20.0 \\\n    --hash=sha256:abc"),
+    "2.20.0",
+  );
+  assert.equal(lockedEngineVersion("detect-secrets==1.5.0 \\"), null);
+  // A provenance comment names the package without pinning it.
+  assert.equal(lockedEngineVersion("    # via agent-sanitizer"), null);
+});
+
+test("redactorRequirements fails loud when the secrets extra is gone", () => {
+  for (const bad of [
+    "[project]\nname = 'agent-sanitizer'\n",
+    "[project.optional-dependencies]\nsecrets = []\n",
+  ])
+    assert.throws(() => redactorRequirements(bad), /secrets/);
+  assert.match(
+    redactorRequirements(
+      "[project.optional-dependencies]\nsecrets = ['detect-secrets>=9.9.9']\n",
     ),
-    "9.8.7",
+    /^detect-secrets>=9\.9\.9$/m,
   );
 });
 
@@ -564,15 +577,38 @@ test("output hook strips ANSI and invisibles, preserving the response shape", (t
     tool_name: "Bash",
     tool_input: {},
     tool_response: {
-      stdout: `${ESC}[32mok${ESC}[0m a\u200bb\u200bc done`,
+      stdout: `${ESC}[32mok${ESC}[0m a${"\u200b".repeat(40)}b done`,
     },
   });
   assert.equal(res.status, 0);
   const out = JSON.parse(res.stdout).hookSpecificOutput;
   // Shape-preserving: the harness drops an updatedToolOutput whose shape does
   // not match the tool's schema and shows the RAW output instead.
-  assert.deepEqual(out.updatedToolOutput, { stdout: "ok abc done" });
+  assert.deepEqual(out.updatedToolOutput, { stdout: "ok ab done" });
+  // A run this long is payload-shaped, so it earns the WARNING banner rather
+  // than the note the engine gives an incidental strip on a local tool.
   assert.match(out.additionalContext, /WARNING/);
+  assert.match(out.additionalContext, /LONG RUN/);
+});
+
+// The other side of that classification: an incidental strip on a local tool is
+// reported without the banner. Pinned here so a change that promoted every strip
+// back to a WARNING — the alert fatigue the severity split exists to avoid —
+// fails instead of passing quietly.
+test("output hook reports an incidental local strip without the banner", (t) => {
+  const res = launch(stagePlugin(t), "PostToolUse", "sanitize-output", {
+    hook_event_name: "PostToolUse",
+    tool_name: "Bash",
+    tool_input: {},
+    tool_response: {
+      stdout: `${ESC}[32mok${ESC}[0m a\u200bb\u200bc done`,
+    },
+  });
+  assert.equal(res.status, 0);
+  const out = JSON.parse(res.stdout).hookSpecificOutput;
+  assert.deepEqual(out.updatedToolOutput, { stdout: "ok abc done" });
+  assert.doesNotMatch(out.additionalContext, /WARNING/);
+  assert.match(out.additionalContext, /Stripped/);
 });
 
 test("output hook fails CLOSED under the opt-out when the redactor is unreachable", (t) => {
@@ -1143,6 +1179,24 @@ test("the open posture does NOT relax detection verdicts", (t) => {
 
 // ─── Provisioning ────────────────────────────────────────────────────────────
 
+/**
+ * Mark a staged venv as already provisioned from the plugin's current inputs.
+ * Both stamps, because the provisioner reprovisions when EITHER the third-party
+ * lock or the engine wheel moves.
+ * @param {string} plugin  staged plugin root
+ * @param {string} data  the plugin's data dir (holding `venv/`)
+ */
+function stampProvisionInputs(plugin, data) {
+  cpSync(
+    join(plugin, "requirements.txt"),
+    join(data, "venv", ".requirements-installed"),
+  );
+  cpSync(
+    join(plugin, "dist", "redactor", ENGINE_WHEEL),
+    join(data, "venv", ".engine-wheel-installed"),
+  );
+}
+
 test("provision fast-paths on a matching stamp without any toolchain", (t) => {
   const plugin = stagePlugin(t);
   const data = join(scratch(t), "data");
@@ -1151,10 +1205,7 @@ test("provision fast-paths on a matching stamp without any toolchain", (t) => {
   writeFileSync(join(venvBin, "agent-secret-redactor-daemon"), "#!/bin/sh\n", {
     mode: 0o755,
   });
-  cpSync(
-    join(plugin, "requirements.txt"),
-    join(data, "venv", ".requirements-installed"),
-  );
+  stampProvisionInputs(plugin, data);
 
   const res = spawnSync(
     "bash",
@@ -1276,10 +1327,7 @@ test("provisioning reports as one-time setup, not as a slow hook", (t) => {
   writeFileSync(join(venvBin, "agent-secret-redactor-daemon"), "#!/bin/sh\n", {
     mode: 0o755,
   });
-  cpSync(
-    join(plugin, "requirements.txt"),
-    join(data, "venv", ".requirements-installed"),
-  );
+  stampProvisionInputs(plugin, data);
   const res = spawnSync(
     "bash",
     [join(plugin, "scripts", "provision-redactor.sh"), data],
@@ -1310,10 +1358,7 @@ test("a fast provisioning run says nothing about timing", (t) => {
   writeFileSync(join(venvBin, "agent-secret-redactor-daemon"), "#!/bin/sh\n", {
     mode: 0o755,
   });
-  cpSync(
-    join(plugin, "requirements.txt"),
-    join(data, "venv", ".requirements-installed"),
-  );
+  stampProvisionInputs(plugin, data);
   const res = spawnSync(
     "bash",
     [join(plugin, "scripts", "provision-redactor.sh"), data],

@@ -54,6 +54,9 @@ importers:
       acorn:
         specifier: ^8.18.0
         version: 8.18.0
+      agent-sanitizer:
+        specifier: link:.
+        version: 'link:'
       c8:
         specifier: 11.0.0
         version: 11.0.0
@@ -75,9 +78,9 @@ importers:
       prettier:
         specifier: ^3.0.0
         version: 3.9.6
-      sanitizer-engine:
-        specifier: npm:agent-sanitizer@2.20.0
-        version: agent-sanitizer@2.20.0
+      smol-toml:
+        specifier: ^1.7.1
+        version: 1.7.1
       typescript:
         specifier: 6.0.3
         version: 6.0.3
@@ -840,11 +843,6 @@ packages:
   agent-control-plane-core@0.2.13:
     resolution: {integrity: sha512-oB+XY3kUbWln4T1y0PUM3ll2Y2wIGlA/wo/NxSZKKyZNVvsJFAjEOF25Tjr4Z0uE6OYNhgb24Bw4rSuH/qgjdA==}
     engines: {node: '>=20'}
-
-  agent-sanitizer@2.20.0:
-    resolution: {integrity: sha512-gzc065RTa1K1vttqZ2RfsOEe0iAa4fzpODlX0u5GUeH8ezAvMiW7BNFL2TmDkZ8KWwf6qYGlIazeg8BKsohweA==}
-    engines: {node: '>=22'}
-    hasBin: true
 
   ajv@6.15.0:
     resolution: {integrity: sha512-fgFx7Hfoq60ytK2c7DhnF8jIvzYgOMxfugjLOSMHjLIPgenqa7S7oaagATUq99mV6IYvN2tRmC0wnTYX6iPbMw==}
@@ -1789,6 +1787,10 @@ packages:
   signal-exit@4.1.0:
     resolution: {integrity: sha512-bzyZ1e88w9O1iNJbKnOlvYTrWPDl46O1bG0D3XInv+9tkPrxrN8jUUTiFlDkkmKWgn1M6CfIA13SuGqOa9Korw==}
     engines: {node: '>=14'}
+
+  smol-toml@1.7.1:
+    resolution: {integrity: sha512-PPlsspAZ4jbMBu5DMFhfUGDQLu/vrL4SyBROVS37x8ynnVmFIs1VPBz1Co8Xks3TvpIaZXmU85y4DrQ+UyVFoQ==}
+    engines: {node: '>= 18'}
 
   source-map-js@1.2.1:
     resolution: {integrity: sha512-UXWMKhLOwVKb728IUtQPXxfYU+usdybtUrK/8uGE8CQMvrhOpwvzDBwj0QhSL7MQc7vIsISBG8VQ8+IDQxpfQA==}
@@ -2828,28 +2830,6 @@ snapshots:
   agent-control-plane-core@0.2.13:
     dependencies:
       semver: 7.8.5
-
-  agent-sanitizer@2.20.0:
-    dependencies:
-      agent-control-plane-core: 0.2.13
-      css-tree: 3.2.1
-      namespace-guard: 0.20.0
-      rehype-parse: 9.0.1
-      remark-gfm: 4.0.1
-      remark-parse: 11.0.0
-      unified: 11.0.5
-      unist-util-visit: 5.1.0
-    transitivePeerDependencies:
-      - '@mikro-orm/core'
-      - '@prisma/client'
-      - drizzle-orm
-      - knex
-      - kysely
-      - mongoose
-      - pg
-      - sequelize
-      - supports-color
-      - typeorm
 
   ajv@6.15.0:
     dependencies:
@@ -3930,6 +3910,8 @@ snapshots:
       side-channel-weakmap: 1.0.2
 
   signal-exit@4.1.0: {}
+
+  smol-toml@1.7.1: {}
 
   source-map-js@1.2.1: {}
 

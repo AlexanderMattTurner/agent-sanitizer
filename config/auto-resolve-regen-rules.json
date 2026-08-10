@@ -14,7 +14,7 @@
     "comment": "Generated artifacts deliberately left OUT of `rules`, so the next reader does not read their absence as an oversight. A rule that cannot resolve the conflict it claims is worse than no rule: prepare.sh routes the path away from the model on the strength of the claim.",
     "python/agent_sanitizer/_bundled/": "git-ignored (see .gitignore), so it can never carry a conflict.",
     "types/": "git-ignored build output of `pnpm build:types`.",
-    "plugin/requirements.txt": "compiled by plugin/scripts/lock-redactor-deps.mjs, which resolves the dependency tree over the NETWORK and is invoked with --if-stale. Under --if-stale it declines to rewrite the lock when the engine pin has not moved, which is exactly the case where a conflict in it needs rewriting — so the rule would claim the path and then leave the markers in place. .github/workflows/plugin-dist-autofix.yaml owns this file instead."
+    "plugin/requirements.txt": "compiled by plugin/scripts/lock-redactor-deps.mjs, which resolves the dependency tree over the NETWORK and is invoked with --if-stale. Under --if-stale it declines to rewrite a lock that already names no published engine, which is exactly the case where a conflict in it needs rewriting — so the rule would claim the path and then leave the markers in place. .github/workflows/plugin-dist-autofix.yaml owns this file instead."
   },
 
   "rules": [
@@ -53,7 +53,11 @@
     {
       "generator": "plugin/scripts/build-redactor-pyz.mjs",
       "sources": ["plugin/requirements.txt"],
-      "owns": ["plugin/dist/redactor/daemon.pyz"]
+      "sourcesPattern": "^python/(pyproject\\.toml|.*\\.py)$",
+      "owns": [
+        "plugin/dist/redactor/daemon.pyz",
+        "plugin/dist/redactor/agent_sanitizer-0.0.0-py3-none-any.whl"
+      ]
     },
     {
       "command": ["pnpm", "install", "--lockfile-only"],

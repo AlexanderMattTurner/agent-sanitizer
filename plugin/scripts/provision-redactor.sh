@@ -37,21 +37,37 @@ else
   echo "agent-sanitizer: $script_dir/lib/hook-timing.sh is missing — provisioning timing disabled (reinstall the plugin)" >&2
 fi
 req="$plugin_root/requirements.txt"
+# The engine itself ships as a wheel beside the zipapp rather than being resolved
+# from PyPI: the venv and the committed daemon.pyz are then the SAME build, so
+# the fast path and the floor cannot be two different versions.
+wheel="$plugin_root/dist/redactor/agent_sanitizer-0.0.0-py3-none-any.whl"
 venv="$data_dir/venv"
 stamp="$venv/.requirements-installed"
+wheel_stamp="$venv/.engine-wheel-installed"
 
-# The stamp is a copy of the requirements file made after a successful install,
-# so a version bump in a plugin update (new requirements.txt) reprovisions.
-if [[ -x "$venv/bin/agent-secret-redactor-daemon" ]] && cmp -s "$req" "$stamp"; then
+if [[ ! -f "$wheel" ]]; then
+  echo "agent-sanitizer: $wheel is missing — the secret-redaction engine (Layer 4) cannot be provisioned (reinstall the plugin)" >&2
+  exit 1
+fi
+
+# Both inputs are stamped as copies compared with `cmp`, so a plugin update that
+# moves either the third-party lock or the engine wheel reprovisions. Copies
+# rather than digests because this fast path must clear with NOTHING on PATH —
+# no python, no uv, and no sha256sum/shasum either.
+if [[ -x "$venv/bin/agent-secret-redactor-daemon" ]] && cmp -s "$req" "$stamp" && cmp -s "$wheel" "$wheel_stamp"; then
   exit 0
 fi
 
 if command -v uv >/dev/null 2>&1; then
   uv venv --quiet "$venv"
   uv pip install --quiet --python "$venv/bin/python" -r "$req"
+  # --no-deps: the wheel's dependencies just came from the hashed lock, and
+  # letting it re-resolve them would pull unpinned versions in beside them.
+  uv pip install --quiet --python "$venv/bin/python" --no-deps -- "$wheel"
 elif command -v python3 >/dev/null 2>&1; then
   python3 -m venv "$venv"
   "$venv/bin/pip" install --quiet -r "$req"
+  "$venv/bin/pip" install --quiet --no-deps -- "$wheel"
 else
   echo "agent-sanitizer: python3 not found — the secret-redaction engine (Layer 4)" \
     "cannot be provisioned. Tool output will reach the model UNREDACTED (the hooks" \
@@ -65,4 +81,5 @@ fi
   exit 1
 }
 cp -- "$req" "$stamp"
+cp -- "$wheel" "$wheel_stamp"
 echo "agent-sanitizer: secret-redaction engine provisioned into $venv" >&2

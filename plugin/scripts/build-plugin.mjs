@@ -2,15 +2,19 @@
  * Build the Claude Code plugin's shipped artifact: one self-contained ESM bundle
  * with every package inlined, so an installed plugin needs no node_modules.
  *
- * The engine is resolved from the REGISTRY, never from this repo's own `src/`:
- * the `sanitizer-engine` devDependency is an npm alias pinning a published
- * agent-sanitizer version, and the esbuild alias below maps the hooks' canonical
- * `agent-sanitizer` specifiers onto it. That is what keeps the committed bundle
- * stable across ordinary source changes — it only moves when the pin moves.
+ * Both halves of the plugin are built from THIS tree: the hooks' canonical
+ * `agent-sanitizer` specifiers resolve to the repo itself (`link:.`), and the
+ * zipapp beside them installs `agent_sanitizer` from `python/`. Neither carries
+ * a published version, so the two cannot ship disagreeing engines and the
+ * committed bundle is always the code the suite ran against. The cost is that
+ * every `src/` change rewrites the artifact — `.hooks/rebuild-plugin-artifacts`
+ * regenerates and stages it so a stale bundle cannot be committed.
  */
 import { existsSync, readFileSync, mkdirSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+
+import { parse as parseToml } from "smol-toml";
 
 import {
   bundleHardened,
@@ -35,10 +39,10 @@ export const PLUGIN_ENTRY = TARGET.entry;
 export const BUNDLE_PATH = TARGET.outfile;
 
 /**
- * Direct requirement the lock is compiled FROM: the PyPI half of the engine
- * pin. Generated here (offline, from package.json) so the network-free build
- * still owns the pin; `plugin/scripts/lock-redactor-deps.mjs` resolves it into
- * the committed lock.
+ * Direct requirements the lock is compiled FROM: the redactor daemon's
+ * third-party dependencies. Generated here (offline, from python/pyproject.toml)
+ * so the network-free build owns them; `plugin/scripts/lock-redactor-deps.mjs`
+ * resolves them into the committed lock.
  */
 export const REQUIREMENTS_IN_PATH = join(ROOT, "plugin", "requirements.in");
 
@@ -53,62 +57,53 @@ export const REQUIREMENTS_LOCK_PATH = join(ROOT, "plugin", "requirements.txt");
 // content-addressed store hash, which varies with the store layout across
 // environments and would make a committed bundle differ from a CI rebuild for no
 // real reason.
-const INLINED_PACKAGES = [
-  "agent-control-plane-core",
-  "agent-sanitizer",
-  "namespace-guard",
-];
+const INLINED_PACKAGES = ["agent-control-plane-core", "namespace-guard"];
 
 /**
- * The published engine version the plugin is pinned to, read from the
- * `sanitizer-engine` npm alias in package.json. Throws when the alias is absent
- * or not in `npm:agent-sanitizer@<version>` form — a plugin built against an
- * unknown engine must fail the build, never ship an unpinned bundle.
- * @param {string} [packageJsonText]
+ * The third-party requirements the redactor daemon needs, read from the extra
+ * that declares them in `python/pyproject.toml`.
+ *
+ * `agent_sanitizer` itself is deliberately absent: the zipapp installs it from
+ * THIS tree, so the daemon and the JS bundle beside it are the same commit by
+ * construction. Naming a published version here is what would let the two
+ * halves drift, and there is no version that could name an unreleased HEAD.
+ * Everything that does come from PyPI stays hash-pinned through the lock.
+ * @param {string} [pyprojectText]
  * @returns {string}
  */
-export function enginePin(packageJsonText) {
-  const pkg = JSON.parse(
-    packageJsonText ?? readFileSync(join(ROOT, "package.json"), "utf-8"),
-  );
-  const spec = pkg.devDependencies?.["sanitizer-engine"];
-  const match = /^npm:agent-sanitizer@(?<version>\d+\.\d+\.\d+)$/.exec(
-    spec ?? "",
-  );
-  if (!match)
+export function redactorRequirements(pyprojectText) {
+  const text =
+    pyprojectText ??
+    readFileSync(join(ROOT, "python", "pyproject.toml"), "utf-8");
+  // Cast at the parse boundary: smol-toml types every value as TomlValue, so
+  // reading a known table path off it needs the shape stated once, here, rather
+  // than a non-null assertion at each hop.
+  const parsed = /** @type {any} */ (parseToml(text));
+  const extras = parsed.project?.["optional-dependencies"]?.secrets;
+  if (!Array.isArray(extras) || extras.length === 0)
     throw new Error(
-      `package.json: devDependencies.sanitizer-engine must be "npm:agent-sanitizer@<x.y.z>", got ${JSON.stringify(spec)}`,
+      "python/pyproject.toml: [project.optional-dependencies].secrets must " +
+        `list the daemon's dependencies, got ${JSON.stringify(extras)}`,
     );
-  // Read the numeric index, not `match.groups.version`: the named group keeps the
-  // pattern readable, but `groups` is optional in the type so only the indexed
-  // read is statically a string.
-  return match[1];
-}
-
-/**
- * The generated requirements.in body: the PyPI half of the same pin, so the
- * redactor daemon the plugin provisions matches the engine it bundled.
- * @param {string} [version]
- * @returns {string}
- */
-export function redactorRequirements(version = enginePin()) {
   return (
-    "# GENERATED by plugin/scripts/build-plugin.mjs from the sanitizer-engine\n" +
-    "# pin in package.json — do not edit by hand.\n" +
+    "# GENERATED by plugin/scripts/build-plugin.mjs from the `secrets` extra in\n" +
+    "# python/pyproject.toml — do not edit by hand.\n" +
     "#\n" +
     "# This is the INPUT to the lock, not what gets installed. Compile it into\n" +
     "# plugin/requirements.txt with `node plugin/scripts/lock-redactor-deps.mjs`\n" +
     "# whenever this file changes.\n" +
-    `agent-sanitizer[secrets]==${version}\n`
+    `${extras.join("\n")}\n`
   );
 }
 
 /**
- * The `agent-sanitizer` version a compiled lock pins, or null when the lock
- * does not pin it at all. Read with an anchored line match rather than a
- * substring scan so a `# via agent-sanitizer` provenance comment (or the
- * `agent-sanitizer[secrets]` extra spelling in the header's echoed command
- * line) cannot masquerade as the pin.
+ * The `agent-sanitizer` version a compiled lock pins, or null when it does not
+ * pin one — which is the only state the zipapp build accepts, since the engine
+ * comes from this tree rather than from PyPI.
+ *
+ * Read with an anchored line match rather than a substring scan so a `# via
+ * agent-sanitizer` provenance comment (or an `agent-sanitizer[secrets]` spelling
+ * echoed in the header's command line) cannot masquerade as a pin.
  * @param {string} lockText
  * @returns {string | null}
  */
@@ -128,11 +123,10 @@ export function lockedEngineVersion(lockText) {
  * @returns {Promise<string>}
  */
 export async function bundlePluginHook() {
-  const version = enginePin();
   const text = await bundleHardened(TARGET);
   return (
     `/**\n * GENERATED by plugin/scripts/build-plugin.mjs — do not edit by hand.\n` +
-    ` * Built against agent-sanitizer@${version} from the npm registry.\n */\n` +
+    ` * Built from this repo's own src/, the tree the test suite runs against.\n */\n` +
     normalizeModulePaths(text)
   );
 }
@@ -183,13 +177,12 @@ function packageRoot(specifier) {
 
 /**
  * The installed directory of each package the un-bundled hooks import by bare
- * specifier, so a test can stage a node_modules that resolves them (the repo
- * installs the engine under its alias, not its own name).
+ * specifier, so a test can stage a node_modules that resolves them.
  * @returns {Record<string, string>}
  */
 export function packageDirs() {
   return {
-    "agent-sanitizer": packageRoot("sanitizer-engine"),
+    "agent-sanitizer": packageRoot("agent-sanitizer"),
     "agent-control-plane-core": packageRoot("agent-control-plane-core"),
     "namespace-guard": packageRoot("namespace-guard"),
   };
@@ -227,8 +220,8 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
   const changed = await writeArtifacts();
   process.stdout.write(
     changed
-      ? `plugin artifacts regenerated (engine ${enginePin()})\n`
-      : `plugin artifacts already current (engine ${enginePin()})\n`,
+      ? "plugin artifacts regenerated from this tree\n"
+      : "plugin artifacts already current\n",
   );
 }
 

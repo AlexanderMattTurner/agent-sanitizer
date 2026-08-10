@@ -116,18 +116,6 @@ const SANITIZE_BUDGET_MS = positiveMsOr(
   120000,
 );
 
-// Non-WARNING note for a strip whose only change was INERT ANSI on a local tool:
-// the display-only colour git/pytest/npm/etc. emit by default, and/or a stray
-// escape byte that formed no sequence at all. The engine now returns this text
-// itself, as a NOTE-severity finding alongside the warnings, so this copy is the
-// FALLBACK for exactly one case: a bundle built against a pinned engine older
-// than that severity split, whose result carries `sgrNote` but no `notes`. Same
-// sentence, so a plugin on the old pin keeps today's wording instead of falling
-// back to a bare "output sanitized".
-const SGR_OUTPUT_NOTE =
-  "Inert ANSI stripped (display-only colour and/or a stray escape byte that " +
-  "formed no control sequence); pipe through cat -v to inspect raw escapes.";
-
 // Web-ingress tools always get the Layer 2 HTML rewrite; local tools — Read,
 // Bash, Grep, gh — never do. A local HTML/markdown pass either rewrites bytes the
 // model is about to edit or deletes content (diffs, PR bodies, page
@@ -309,10 +297,8 @@ export async function sanitizeText(
     /** @type {{ cleaned: string, warnings: string[], notes?: string[], modified: boolean, sgrNote: boolean, reveal?: string, splices?: Array<{ placeholder: string, original: string }> }} */ (
       await sanitizeTextSeam(text, seamOptions)
     );
-  // The one place the seam's shape is normalized: `notes` is absent when the
-  // engine predates the severity split, which is the shipped plugin's pinned
-  // case (see SGR_OUTPUT_NOTE). Defaulting here means nothing downstream has to
-  // know that, and the banner composer sees one shape either way.
+  // The one place the seam's shape is normalized, so nothing downstream has to
+  // branch on an absent `notes` and the banner composer sees one shape.
   const result = { ...seamResult, notes: seamResult.notes ?? [] };
   return ext.postText
     ? applyPostText(
@@ -1020,15 +1006,11 @@ export async function evaluateToolOutput(input, ext = {}) {
 /**
  * The model-facing line for a note-only result: the seam's own note text,
  * deduped and joined, with no WARNING prefix.
- *
- * Empty only against a pinned engine that predates the severity split (see
- * SGR_OUTPUT_NOTE): there `sgrNote` still arrives true with no `notes` to go
- * with it, and printing nothing would drop the one thing that run had to say.
  * @param {string[]} notes
  * @returns {string}
  */
 function noteContext(notes) {
-  return notes.length === 0 ? SGR_OUTPUT_NOTE : [...new Set(notes)].join(" ");
+  return [...new Set(notes)].join(" ");
 }
 
 /**

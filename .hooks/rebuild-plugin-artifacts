@@ -1,0 +1,43 @@
+#!/bin/bash
+# Regenerate the committed plugin bundle when a source it inlines is staged, and
+# stage the result with the same commit.
+#
+# The bundle inlines this repo's own `src/` and `claude-hooks/`, so any edit to
+# those makes the committed artifact stale. Left to a human, that shows up as a
+# CI red ("committed bundle matches a fresh build") on a change that was itself
+# correct — a failure about a forgotten build step, not about the code. Doing the
+# rebuild here makes a stale artifact unreachable: it cannot be committed, so the
+# reproducibility gate can only fire on a genuine reproducibility defect.
+#
+# Deliberately NOT the zipapp: that build installs from PyPI, and a hook must not
+# need the network. `plugin-dist-autofix.yaml` owns the zipapp.
+
+set -euo pipefail
+
+git_root=$(git rev-parse --show-toplevel)
+
+# The entry is claude-hooks/plugin-hooks.mjs and it pulls in the engine, so those
+# two trees are what change the bundle. The build script and the shared esbuild
+# configuration count too: they write the artifact's header and its module labels.
+# python/pyproject.toml is the source of requirements.in, the build's other output.
+staged=()
+while IFS= read -r line; do staged+=("$line"); done < <(
+  git diff --cached --name-only --diff-filter=ACMR -- \
+    "src/*.mjs" "claude-hooks/*.mjs" "python/pyproject.toml" \
+    "plugin/scripts/build-plugin.mjs" "scripts/lib/bundle-esbuild.mjs"
+)
+
+if [[ "${#staged[@]}" -eq 0 ]]; then
+  exit 0
+fi
+
+# Fail loud rather than skip: skipping here would commit the stale artifact this
+# hook exists to prevent, and the red would surface in CI instead.
+if [[ ! -d "$git_root/node_modules/esbuild" ]]; then
+  echo "pre-commit: the plugin bundle needs rebuilding (staged: ${staged[*]}) but esbuild is not installed. Run 'pnpm install', then retry the commit." >&2
+  exit 1
+fi
+
+node "$git_root/plugin/scripts/build-plugin.mjs" >&2
+git add -- "$git_root/plugin/dist/hooks/plugin-hooks.bundle.mjs" \
+  "$git_root/plugin/requirements.in"

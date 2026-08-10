@@ -177,20 +177,24 @@ skills/enable-auto-update/   /agent-sanitizer:enable-auto-update
 scripts/safe-launch.sh       launcher (prints a response even when node is missing)
 scripts/enable-auto-update.mjs  flips autoUpdate on this marketplace's registry entry
 scripts/provision-redactor.sh  SessionStart provisioning of the Python redactor
-scripts/build-plugin.mjs     builds dist/ from claude-hooks/ against the pinned engine
+scripts/build-plugin.mjs     builds dist/ from claude-hooks/ against this repo's src/
 scripts/lib/hook-timing.sh   shell port of the hook timer, for the two SessionStart scripts
 scripts/lock-redactor-deps.mjs  compiles requirements.in into the hash-pinned requirements.txt
 dist/hooks/*.bundle.mjs      the committed, self-contained bundle (generated — do not edit)
 dist/redactor/daemon.pyz     the committed redaction engine zipapp (generated — do not edit)
-requirements.in              the PyPI half of the engine pin (generated — do not edit)
+dist/redactor/*.whl          the committed engine wheel both the zipapp and the venv install
+requirements.in              the engine's third-party dependencies (generated — do not edit)
 requirements.txt             the compiled, hash-pinned dependency lock (generated — do not edit)
 ```
 
+Both halves of the engine are built from this repository's own sources — the JS
+from `src/`, the Python wheel from `python/` — so the shipped hooks, the zipapp
+and the provisioned venv are one commit and cannot be three versions.
 `dist/hooks/` and `requirements.in` are regenerated offline by
 `node plugin/scripts/build-plugin.mjs` and verified byte-for-byte in CI; they
-change only when the engine pin or the hook sources do.
+change only when the hook sources or the engine's dependencies do.
 
-`requirements.txt` is the fully resolved dependency tree, every version and
+`requirements.txt` is the fully resolved third-party tree, every version and
 artifact hash pinned. It is what both `dist/redactor/daemon.pyz` is built from
 and what `scripts/provision-redactor.sh` installs at SessionStart, so the
 committed zipapp floor and the provisioned venv carry the identical tree.
@@ -198,10 +202,10 @@ Compiling it reaches PyPI, so it is not part of the offline rebuild:
 
 ```bash
 node plugin/scripts/lock-redactor-deps.mjs   # refresh transitives (deliberate)
-node plugin/scripts/build-redactor-pyz.mjs   # rebuild the zipapp from the lock
+node plugin/scripts/build-redactor-pyz.mjs   # rebuild the wheel and zipapp
 ```
 
-Without the lock only the engine itself was pinned; a release of any transitive
-(certifi, charset-normalizer, idna, pyyaml, requests, urllib3) changed the
-zipapp's bytes with no diff anywhere in this repo, turning the reproducibility
-byte-compare red on unrelated PRs.
+The lock is what keeps the zipapp reproducible: without every transitive
+(certifi, charset-normalizer, idna, pyyaml, requests, urllib3) pinned by version
+and hash, any of their releases changes the zipapp's bytes with no diff anywhere
+in this repo, turning the reproducibility byte-compare red on unrelated PRs.

@@ -53,35 +53,10 @@ import { lazyImport } from "./hook-io.mjs";
 const { stripAnsiFully } = /** @type {typeof import("agent-sanitizer")} */ (
   await lazyImport("agent-sanitizer")
 );
-const { STRIP, LONG_RUN_THRESHOLD, SCATTERED_THRESHOLD, stripInvisible } =
+const { STRIP, SCATTERED_THRESHOLD, hasLongRun, stripInvisible } =
   /** @type {typeof import("agent-sanitizer/invisible")} */ (
     await lazyImport("agent-sanitizer/invisible")
   );
-
-/**
- * "A run of {@link LONG_RUN_THRESHOLD} or more invisibles", bounded per match.
- *
- * Built from the engine's own class and threshold rather than imported as a
- * ready-made pattern or scan function, because the bundle resolves
- * `agent-sanitizer` to the PINNED published engine, which trails this repo:
- * anything this hook imports has to exist in that pin, or the import binds
- * undefined and the hook fails closed on every payload. STRIP and
- * LONG_RUN_THRESHOLD are the primitives that define a long run, so deriving the
- * pattern here keeps the answer identical to the engine's across pins, with no
- * version-specific scan API to adopt when the pin moves.
- *
- * The upper bound is what makes it safe on a large payload: V8 pushes one
- * backtrack entry per iteration of a quantifier onto a stack capped at 64 MB,
- * so an UNBOUNDED run pattern throws `RangeError: Maximum call stack size
- * exceeded` once a single run passes ~8.4 M code points — an 8 MB paste of
- * zero-widths into a Write body is exactly that. A bound of 2^20 iterations
- * sits ~8x under the ceiling, and a longer run still answers yes: any run of at
- * least the threshold contains a prefix this matches.
- */
-const LONG_RUN_CHUNK_RE = new RegExp(
-  `(?:${STRIP.source}){${LONG_RUN_THRESHOLD},${1 << 20}}`,
-  "gu",
-);
 
 // Content fields the model authors, per tool. Paths and confusables are the
 // confusable layer's domain; here we target the free-text fields that carry
@@ -165,8 +140,10 @@ export function authoredScopeDecision(tool) {
 // user→model surfaces share one definition of "stego payload".
 /** @param {string} text */
 function isPayloadCapable(text) {
-  LONG_RUN_CHUNK_RE.lastIndex = 0;
-  if (LONG_RUN_CHUNK_RE.test(text)) return true;
+  // hasLongRun, not a pattern built here: the engine's scan is bounded per
+  // `exec`, which is what keeps an 8 MB run of zero-widths in a Write body from
+  // throwing `RangeError: Maximum call stack size exceeded` out of this hook.
+  if (hasLongRun(text)) return true;
   return (text.match(STRIP)?.length ?? 0) >= SCATTERED_THRESHOLD;
 }
 

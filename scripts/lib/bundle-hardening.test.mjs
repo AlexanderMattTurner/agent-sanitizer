@@ -38,17 +38,16 @@ import {
 
 /** Hidden-HTML input and the Layer-2 splice it must produce. */
 const HIDDEN_HTML = '<p style="display:none">hi</p>ok';
-// Per target, because the two artifacts run DIFFERENT engines. python-cli
-// bundles the in-tree port, so it emits the keyed placeholder derived from the
-// engine's own producer — pinning the hex key here would be a second definition
-// of a content-addressed grammar. plugin-hooks resolves the engine from the
-// PINNED release, which predates keying and still emits the bare label; it
-// starts emitting keys on its own when the pin catches up, and this expectation
-// moves with it.
+// Derived from the engine's own producer rather than written out: the
+// placeholder is a content-addressed grammar, so a literal here would be a
+// second definition of it. Both artifacts bundle that same in-tree engine, so
+// both splice identically; the map is per target so a new target must declare
+// its expectation rather than inherit one silently.
+const SPLICED_HTML =
+  layer2Placeholder("hidden", '<p style="display:none">hi</p>') + "ok";
 const SPLICED = {
-  "python-cli":
-    layer2Placeholder("hidden", '<p style="display:none">hi</p>') + "ok",
-  "plugin-hooks": "[hidden HTML removed]ok",
+  "python-cli": SPLICED_HTML,
+  "plugin-hooks": SPLICED_HTML,
 };
 
 /** A scratch dir removed when the test finishes. */

@@ -67,6 +67,20 @@ if [[ ! -f "$git_root/package.json" ]]; then
   exit 0
 fi
 
+# Keep the committed plugin artifact in step with the sources it inlines, so a
+# stale bundle cannot be committed and the reproducibility gate only ever fires
+# on a real defect. Before lint-staged, whose stash of unstaged edits must not be
+# open while another process writes to the tree.
+# Absent is fine (repos synced from the template that ship no plugin); present
+# but not executable is a broken install, not an opt-out.
+if [[ -e "$hook_dir/rebuild-plugin-artifacts" ]]; then
+  if [[ ! -x "$hook_dir/rebuild-plugin-artifacts" ]]; then
+    echo "pre-commit: $hook_dir/rebuild-plugin-artifacts is not executable — the committed plugin bundle would go stale. Run 'chmod +x' on it and retry." >&2
+    exit 1
+  fi
+  "$hook_dir/rebuild-plugin-artifacts"
+fi
+
 # A Node project with lint-staged absent means the gate CANNOT run — fail the
 # commit rather than let it through with zero lint/format enforcement.
 if [[ ! -f "$git_root/node_modules/.bin/lint-staged" ]]; then
