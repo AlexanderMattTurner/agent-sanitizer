@@ -179,6 +179,32 @@ test(
   },
 );
 
+test(
+  "a refused cleanup is reported, not thrown over the message",
+  // Staging exists because a run can be interrupted, so a leftover temp file is
+  // a state the next run meets. Rewriting that file needs no directory
+  // permission, so the write succeeds and the RENAME is what gets refused —
+  // then the unlink is refused too, on the same missing directory permission.
+  { skip: process.getuid?.() === 0 && "root writes through mode bits" },
+  () => {
+    const { dir, path } = registry(ENTRY);
+    const temp = `${path}.agent-sanitizer.tmp`;
+    writeFileSync(temp, "{half-written", "utf-8");
+    chmodSync(dir, 0o555);
+    try {
+      const { stderr } = runExpectingFailure(dir);
+      assert.match(stderr, /cannot write .* \(EACCES\)/);
+      assert.doesNotMatch(stderr, /\n\s+at /);
+      assert.ok(
+        stderr.includes(`The staged copy at ${temp} could not be cleaned up`),
+        `leftover temp file not reported in:\n${stderr}`,
+      );
+    } finally {
+      chmodSync(dir, 0o755);
+    }
+  },
+);
+
 for (const args of [[], ["--disable"]])
   test(
     `a refused ${args.join(" ") || "enable"} hands back a runnable command line`,

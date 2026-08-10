@@ -83,6 +83,27 @@ const rerunCommand = (disable) =>
   `node ${shellQuote(process.argv[1])}${disable ? " --disable" : ""}`;
 
 /**
+ * Removes the temp file this run staged, reporting whether it is gone.
+ *
+ * Unlinking needs write permission on the directory, which is exactly what a
+ * refused rename says we may not have — so a refusal here is reported in the
+ * message below rather than crashing over it with the trace this path exists to
+ * remove. Any other errno still propagates.
+ *
+ * @param {string} temp
+ */
+function removeStaged(temp) {
+  try {
+    rmSync(temp, { force: true });
+    return true;
+  } catch (error) {
+    const code = /** @type {NodeJS.ErrnoException} */ (error).code;
+    if (!REFUSED.has(code ?? "")) throw error;
+    return false;
+  }
+}
+
+/**
  * Replaces the registry, staged through a sibling temp file so an interrupted
  * write cannot leave the file Claude Code reads truncated.
  *
@@ -95,16 +116,17 @@ const rerunCommand = (disable) =>
  */
 function replaceRegistry(path, contents, disable) {
   const temp = `${path}.agent-sanitizer.tmp`;
+  let staged = false;
   try {
     writeFileSync(temp, contents, "utf-8");
+    staged = true;
     renameSync(temp, path);
   } catch (error) {
     const code = /** @type {NodeJS.ErrnoException} */ (error).code;
     if (!REFUSED.has(code ?? "")) throw error;
-    // A refused create leaves nothing behind, which `force` passes over; a
-    // refused rename leaves a temp file in a directory the write just proved
-    // writable, so this cannot be the thing that throws over the message below.
-    rmSync(temp, { force: true });
+    // Only a temp file this run wrote is ours to remove; one an interrupted
+    // earlier run left behind belongs to no one we can speak for.
+    const litter = staged && !removeStaged(temp) ? temp : null;
     fail(
       `cannot write ${path} (${code}) — the OS refused it. Claude Code's Bash ` +
         `sandbox confines writes to the workspace, so no session that runs ` +
@@ -114,7 +136,11 @@ function replaceRegistry(path, contents, disable) {
         `Or toggle it without a terminal: /plugin -> Marketplaces -> ` +
         `${MARKETPLACE} -> Enable auto-update.\n` +
         `If the terminal refuses it too, the file's owner or permissions need ` +
-        `fixing.`,
+        `fixing.` +
+        (litter
+          ? `\nThe staged copy at ${litter} could not be cleaned up either; ` +
+            `delete it once the permissions are fixed.`
+          : ""),
     );
   }
 }
