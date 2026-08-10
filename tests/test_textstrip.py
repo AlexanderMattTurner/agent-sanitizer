@@ -87,6 +87,25 @@ _ANSI_CASES = [
     ("apc_unterminated_fails_closed", "a\x1b_evil-payload", "a"),
     ("c1_dcs_unterminated_fails_closed", "a\x90b", "a"),
     ("c1_apc_unterminated_fails_closed", "a\x9fb", "a"),
+    # A line break BOUNDS an unterminated control string: only the rest of that
+    # ONE line is dropped, later lines survive. Without the bound a single stray
+    # `ESC ]` deleted every later line, so a consumer reading the strip as a
+    # RECORD (a model, not a terminal) was blinded to the whole tail behind a
+    # clean-looking prefix. The break stays visible; the same-line payload goes.
+    (
+        "osc_unterminated_bounded_by_newline",
+        "line1\n\x1b]stray\nline2 MUST SEE\nline3\n",
+        "line1\n\nline2 MUST SEE\nline3\n",
+    ),
+    (
+        "c1_apc_unterminated_bounded_by_newline",
+        "keep\n\x9fstray\ntail\n",
+        "keep\n\ntail\n",
+    ),
+    # CAN (U+0018) and SUB (U+001A) cancel a control string, consuming the cancel
+    # byte with the body — ECMA-48 and xterm behavior.
+    ("osc_cancelled_by_can", "x\x1b]t\x18rest", "xrest"),
+    ("osc_cancelled_by_sub", "x\x1b]t\x1arest", "xrest"),
 ]
 
 
