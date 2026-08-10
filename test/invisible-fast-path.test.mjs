@@ -7,6 +7,8 @@
  * slow definition it replaced, expressed in exported API:
  *
  *   countPayloadInvisible(t)   == payload code points in payloadInvisibleView(t)
+ *   findLongRuns(t)            == t.matchAll(LONG_RUN_RE)
+ *   hasLongRun(t)              == LONG_RUN_RE.test(t)
  *   payloadLongRunSample(t)    == payloadInvisibleView(t).match(LONG_RUN_RE)
  *   countEffectiveInvisible(t) == payload + max(0, cpLen(t) - cpLen(strip(t)) - payload)
  *
@@ -25,6 +27,8 @@ import {
   VS,
   countEffectiveInvisible,
   countPayloadInvisible,
+  findLongRuns,
+  hasLongRun,
   payloadInvisibleView,
   payloadLongRunSample,
   stripInvisible,
@@ -43,6 +47,16 @@ const STRIP_ONE = new RegExp(STRIP.source, "u");
 /** The slow-path payload count: what the carve analysis left unmasked. */
 const referencePayload = (text) =>
   [...payloadInvisibleView(text)].filter((ch) => STRIP_ONE.test(ch)).length;
+
+/** The runs the pattern itself matches — what findLongRuns must reproduce with
+ * a bounded quantifier (see its header for why the unbounded pattern cannot
+ * scan a large document). */
+const referenceRuns = (text) =>
+  [...text.matchAll(new RegExp(LONG_RUN_RE.source, "gu"))].map((match) => ({
+    index: match.index,
+    text: match[0],
+    charCount: [...match[0]].length,
+  }));
 
 /** The pre-short-circuit definitions of the two derived entry points. */
 const referenceLongRun = (text) =>
@@ -153,6 +167,10 @@ describe("counting fast paths agree exactly with the carve analysis", () => {
   for (const [name, text] of Object.entries(SHAPES)) {
     it(`${name}: countPayloadInvisible`, () =>
       assert.equal(countPayloadInvisible(text), referencePayload(text)));
+    it(`${name}: findLongRuns`, () =>
+      assert.deepEqual([...findLongRuns(text)], referenceRuns(text)));
+    it(`${name}: hasLongRun`, () =>
+      assert.equal(hasLongRun(text), referenceRuns(text).length > 0));
     it(`${name}: payloadLongRunSample`, () =>
       assert.equal(payloadLongRunSample(text), referenceLongRun(text)));
     it(`${name}: countEffectiveInvisible`, () =>
@@ -211,6 +229,31 @@ describe("property: no input separates a fast path from the analysis", () => {
     )
     .map((chars) => chars.join(""));
 
+  // Single-character draws practically never land ten invisibles in a row, so
+  // the long-run properties draw CHUNKS straddling the threshold instead:
+  // adjacent chunks merge into one run, and a visible draw between them cuts it.
+  const arbRunText = fc
+    .array(
+      fc.oneof(
+        { weight: 3, arbitrary: fc.constantFrom(...NOTABLE) },
+        {
+          weight: 2,
+          arbitrary: fc
+            .tuple(
+              fc.constantFrom(...NOTABLE.filter((ch) => STRIP_ONE.test(ch))),
+              fc.integer({ min: 4, max: 14 }),
+            )
+            .map(([ch, n]) => ch.repeat(n)),
+        },
+      ),
+      { maxLength: 12 },
+    )
+    .map((parts) => parts.join(""));
+  const arbAnyText = fc.oneof(
+    { weight: 1, arbitrary: arbText },
+    { weight: 3, arbitrary: arbRunText },
+  );
+
   it("countPayloadInvisible", () =>
     fc.assert(
       fc.property(arbText, (text) =>
@@ -219,9 +262,25 @@ describe("property: no input separates a fast path from the analysis", () => {
       { numRuns: 2000 },
     ));
 
+  it("findLongRuns", () => {
+    // Counted, not assumed: a draw distribution that never produced a run of
+    // ten would make every assertion below `[] === []`.
+    let withRun = 0;
+    fc.assert(
+      fc.property(arbAnyText, (text) => {
+        const runs = referenceRuns(text);
+        if (runs.length > 0) withRun++;
+        assert.deepEqual([...findLongRuns(text)], runs);
+        assert.equal(hasLongRun(text), runs.length > 0);
+      }),
+      { numRuns: 2000 },
+    );
+    assert.ok(withRun > 0, "no draw carried a long run");
+  });
+
   it("payloadLongRunSample", () =>
     fc.assert(
-      fc.property(arbText, (text) =>
+      fc.property(arbAnyText, (text) =>
         assert.equal(payloadLongRunSample(text), referenceLongRun(text)),
       ),
       { numRuns: 2000 },
