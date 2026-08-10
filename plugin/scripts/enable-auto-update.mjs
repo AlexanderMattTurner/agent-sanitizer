@@ -16,7 +16,7 @@
  * it does not recognize. A Claude Code release that moves or restructures the
  * file makes this exit non-zero with what it found — never silently no-op.
  */
-import { readFileSync, renameSync, writeFileSync } from "node:fs";
+import { readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -57,6 +57,92 @@ export function knownMarketplacesPath(env = process.env) {
 function fail(message) {
   process.stderr.write(`agent-sanitizer: ${message}\n`);
   process.exit(1);
+}
+
+/** Errno codes that mean the OS refused the write, not that the write is wrong. */
+const REFUSED = new Set(["EPERM", "EACCES", "EROFS"]);
+
+/**
+ * Wraps `word` so a POSIX shell sees it as one literal argument. Marketplace
+ * installs sit under a versioned directory below the user's home, so the path
+ * this quotes routinely contains a space and sometimes a quote.
+ *
+ * @param {string} word
+ */
+const shellQuote = (word) => `'${word.replaceAll("'", `'\\''`)}'`;
+
+/**
+ * The command line that reruns this invocation, for a human to paste into a
+ * terminal. The refusal below is the one failure the agent running the skill
+ * cannot act on itself — the sandbox denies it whatever it tries — so the
+ * message has to hand the work back ready to run, not describe it.
+ *
+ * @param {boolean} disable
+ */
+const rerunCommand = (disable) =>
+  `node ${shellQuote(process.argv[1])}${disable ? " --disable" : ""}`;
+
+/**
+ * Removes the temp file this run staged, reporting whether it is gone.
+ *
+ * Unlinking needs write permission on the directory, which is exactly what a
+ * refused rename says we may not have — so a refusal here is reported in the
+ * message below rather than crashing over it with the trace this path exists to
+ * remove. Any other errno still propagates.
+ *
+ * @param {string} temp
+ */
+function removeStaged(temp) {
+  try {
+    rmSync(temp, { force: true });
+    return true;
+  } catch (error) {
+    const code = /** @type {NodeJS.ErrnoException} */ (error).code;
+    if (!REFUSED.has(code ?? "")) throw error;
+    return false;
+  }
+}
+
+/**
+ * Replaces the registry, staged through a sibling temp file so an interrupted
+ * write cannot leave the file Claude Code reads truncated.
+ *
+ * A refused write is a state the user can act on, so it exits with the two
+ * routes that do work instead of a stack trace; every other errno propagates.
+ *
+ * @param {string} path
+ * @param {string} contents
+ * @param {boolean} disable  which invocation to hand back for a rerun
+ */
+function replaceRegistry(path, contents, disable) {
+  const temp = `${path}.agent-sanitizer.tmp`;
+  let staged = false;
+  try {
+    writeFileSync(temp, contents, "utf-8");
+    staged = true;
+    renameSync(temp, path);
+  } catch (error) {
+    const code = /** @type {NodeJS.ErrnoException} */ (error).code;
+    if (!REFUSED.has(code ?? "")) throw error;
+    // Only a temp file this run wrote is ours to remove; one an interrupted
+    // earlier run left behind belongs to no one we can speak for.
+    const litter = staged && !removeStaged(temp) ? temp : null;
+    fail(
+      `cannot write ${path} (${code}) — the OS refused it. Claude Code's Bash ` +
+        `sandbox confines writes to the workspace, so no session that runs ` +
+        `under it can reach the plugin cache; rerunning here cannot succeed.\n` +
+        `Run this yourself, in a terminal outside Claude Code:\n` +
+        `  ${rerunCommand(disable)}\n` +
+        `Or toggle it without a terminal: /plugin -> Marketplaces -> ` +
+        `${MARKETPLACE} -> Enable auto-update.\n` +
+        `If the terminal refuses it too, the file's owner or permissions need ` +
+        `fixing.` +
+        (litter
+          ? `\nThe staged copy at ${litter} could not be cleaned up either; ` +
+            `delete it once the permissions are fixed.`
+          : ""),
+    );
+  }
 }
 
 /**
@@ -115,11 +201,8 @@ export function main(argv = process.argv.slice(2), env = process.env) {
     ...config,
     [MARKETPLACE]: { ...entry, autoUpdate: desired },
   };
-  // Same 2-space encoding Claude Code writes, staged through a sibling temp file
-  // so an interrupted write cannot leave the registry truncated.
-  const temp = `${path}.agent-sanitizer.tmp`;
-  writeFileSync(temp, JSON.stringify(updated, null, 2), "utf-8");
-  renameSync(temp, path);
+  // Same 2-space encoding Claude Code writes.
+  replaceRegistry(path, JSON.stringify(updated, null, 2), disable);
 
   process.stdout.write(
     desired

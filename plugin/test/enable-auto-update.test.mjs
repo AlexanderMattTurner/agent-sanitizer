@@ -7,6 +7,7 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import {
+  chmodSync,
   copyFileSync,
   existsSync,
   mkdtempSync,
@@ -62,9 +63,9 @@ function run(dir, args = [], script = SCRIPT) {
   return result;
 }
 
-function runExpectingFailure(dir, args = []) {
+function runExpectingFailure(dir, args = [], script = SCRIPT) {
   try {
-    run(dir, args);
+    run(dir, args, script);
   } catch (error) {
     return error;
   }
@@ -150,6 +151,85 @@ test("a non-boolean autoUpdate refuses instead of overwriting it", () => {
   assert.match(stderr, /not a boolean/);
   assert.equal(readFileSync(path, "utf-8"), before);
 });
+
+test(
+  "a write the OS refuses names the routes that do work, not a stack trace",
+  // Claude Code's Bash sandbox denies writes under the plugin cache, which is
+  // how this arrives in the wild; a read-only directory is the portable stand-in.
+  { skip: process.getuid?.() === 0 && "root writes through mode bits" },
+  () => {
+    const { dir, path } = registry(ENTRY);
+    const before = readFileSync(path, "utf-8");
+    chmodSync(dir, 0o555);
+    try {
+      const { status, stderr } = runExpectingFailure(dir);
+      assert.equal(status, 1);
+      assert.match(
+        stderr,
+        /cannot write .*known_marketplaces\.json \(EACCES\)/,
+      );
+      assert.match(stderr, /\/plugin -> Marketplaces/);
+      // An uncaught errno exits 1 too — the absence of a trace is the fix.
+      assert.doesNotMatch(stderr, /\n\s+at /);
+      assert.equal(readFileSync(path, "utf-8"), before);
+      assert.equal(existsSync(`${path}.agent-sanitizer.tmp`), false);
+    } finally {
+      chmodSync(dir, 0o755);
+    }
+  },
+);
+
+test(
+  "a refused cleanup is reported, not thrown over the message",
+  // Staging exists because a run can be interrupted, so a leftover temp file is
+  // a state the next run meets. Rewriting that file needs no directory
+  // permission, so the write succeeds and the RENAME is what gets refused —
+  // then the unlink is refused too, on the same missing directory permission.
+  { skip: process.getuid?.() === 0 && "root writes through mode bits" },
+  () => {
+    const { dir, path } = registry(ENTRY);
+    const temp = `${path}.agent-sanitizer.tmp`;
+    writeFileSync(temp, "{half-written", "utf-8");
+    chmodSync(dir, 0o555);
+    try {
+      const { stderr } = runExpectingFailure(dir);
+      assert.match(stderr, /cannot write .* \(EACCES\)/);
+      assert.doesNotMatch(stderr, /\n\s+at /);
+      assert.ok(
+        stderr.includes(`The staged copy at ${temp} could not be cleaned up`),
+        `leftover temp file not reported in:\n${stderr}`,
+      );
+    } finally {
+      chmodSync(dir, 0o755);
+    }
+  },
+);
+
+for (const args of [[], ["--disable"]])
+  test(
+    `a refused ${args.join(" ") || "enable"} hands back a runnable command line`,
+    // The agent running the skill cannot get past this refusal by any route the
+    // sandbox allows, so the message's job is to be pasteable by the human.
+    { skip: process.getuid?.() === 0 && "root writes through mode bits" },
+    () => {
+      // An install path with a space in it is ordinary on macOS and Windows; an
+      // unquoted command line there pastes as two arguments and fails.
+      const scriptDir = mkdtempSync(join(tmpdir(), "agent sanitizer path-"));
+      const copied = join(scriptDir, "enable-auto-update.mjs");
+      copyFileSync(SCRIPT, copied);
+      // Each direction has to already be the opposite, or the script exits 0
+      // before it ever reaches a write.
+      const { dir } = registry({ ...ENTRY, autoUpdate: args.length > 0 });
+      chmodSync(dir, 0o555);
+      try {
+        const { stderr } = runExpectingFailure(dir, args, copied);
+        const line = `\n  node '${copied}'${args.map((a) => ` ${a}`).join("")}\n`;
+        assert.ok(stderr.includes(line), `no rerun line in:\n${stderr}`);
+      } finally {
+        chmodSync(dir, 0o755);
+      }
+    },
+  );
 
 test("a corrupt registry propagates rather than being rewritten over", () => {
   const dir = mkdtempSync(join(tmpdir(), "agent-sanitizer-corrupt-"));
