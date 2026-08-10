@@ -56,17 +56,23 @@ if [[ -f "$dir/verdict/$key" ]]; then
   [[ -n "$vpath" ]] && cat "$dir/verdict/$key" >"$vpath"
 fi
 naptime="\${STUB_SLEEP:-0}"
-printf 'START %s %s %s\\n' "$key" "$n" "$(date +%s%N)" >>"$dir/concurrency.log"
 # A shard can be held until the shared log carries COUNT markers of KIND. That
-# is what turns "N ran at once" into an observation rather than a bet on the
-# runner spawning N processes faster than the first one's sleep: a held shard
-# cannot leave before its peers arrive, so a slow runner changes nothing. A
-# barrier the fan-out's own shape can never satisfy times out and says so.
+# turns "N ran at once" into an observation rather than a bet on the runner
+# spawning N processes faster than the first one's sleep: a held shard cannot
+# leave before its peers arrive, so a slow runner changes nothing.
 barrier="\${STUB_BARRIER:-}"
 if [[ -f "$dir/barrier/$key" ]]; then barrier="$(cat "$dir/barrier/$key")"; fi
+bkind="\${barrier%% *}"
+bcount="\${barrier##* }"
+# Validated BEFORE the START marker, because a shard that dies after writing one
+# leaves an unmatched START and INFLATES the peak the reader computes. A
+# non-numeric count also reads as 0 in arithmetic, silently skipping the wait.
 if [[ -n "$barrier" ]]; then
-  bkind="\${barrier%% *}"
-  bcount="\${barrier##* }"
+  { [[ "$bkind" == START || "$bkind" == END ]] && [[ "$bcount" =~ ^[0-9]+$ ]]; } ||
+    { printf 'fanout stub: barrier must be "START|END <count>", got %s\\n' "$barrier" >&2; exit 64; }
+fi
+printf 'START %s %s %s\\n' "$key" "$n" "$(date +%s%N)" >>"$dir/concurrency.log"
+if [[ -n "$barrier" ]]; then
   bwait="\${STUB_BARRIER_TIMEOUT:-60}"
   deadline=$((SECONDS + bwait))
   seen() { awk -v k="$bkind" '$1==k' "$dir/concurrency.log" | wc -l; }
