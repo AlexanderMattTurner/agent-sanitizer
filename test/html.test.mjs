@@ -1575,6 +1575,27 @@ describe("R1: parser stack overflow fails closed (never throws)", () => {
     );
   });
 
+  it("a throwing parse is never remembered as this input's tree", () => {
+    // The parse memo keys on the text. Recording the key before the parse
+    // returns would leave an overflowing input mapped to whatever tree the
+    // PREVIOUS document produced, so the second look at the same text answers
+    // from the wrong document instead of failing closed. Sanitize a benign
+    // fragment first so there is a stale tree to be served.
+    assert.equal(
+      sanitizeHtml("a <span hidden>x</span> b").unparseable,
+      undefined,
+    );
+    for (const attempt of [1, 2]) {
+      const result = sanitizeHtml(OVERFLOW);
+      assert.equal(
+        result.text,
+        UNPARSEABLE_PLACEHOLDER,
+        `attempt ${attempt} did not withhold`,
+      );
+      assert.equal(result.unparseable, true);
+    }
+  });
+
   it("detectExfil returns one sentinel threat instead of throwing", () => {
     const threats = detectExfil(OVERFLOW);
     assert.equal(threats.length, 1);
@@ -2202,6 +2223,22 @@ describe("indented code blocks are content, not hiding places", () => {
       const { cleaned } = await sanitize(source, { html: true });
       // Byte-identical: the tag is visible code, so there is nothing to hide and
       // nothing to rewrite.
+      assert.equal(cleaned, source);
+    });
+
+  // CommonMark expands a tab to the next four-column tab stop, so fewer than
+  // four spaces followed by a tab opens the same block. The construct sits
+  // DIRECTLY after the indent here: with a word between them the line reaches
+  // the balance walk either way, so that arrangement cannot tell a correct
+  // indent test from one that only knows about four spaces and a bare tab.
+  for (const [indent, label] of [
+    [" \t", "one space then a tab"],
+    ["  \t", "two spaces then a tab"],
+    ["   \t", "three spaces then a tab"],
+  ])
+    it(`leaves a hidden div alone after ${label} — a tab-expanded indent`, async () => {
+      const source = `${indent}${construct}\n`;
+      const { cleaned } = await sanitize(source, { html: true });
       assert.equal(cleaned, source);
     });
 });

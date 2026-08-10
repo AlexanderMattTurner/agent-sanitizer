@@ -67,12 +67,23 @@ const grow = (unit, n) => unit.repeat(Math.ceil(n / unit.length)).slice(0, n);
  * order of magnitude slower in its fastest run too.
  */
 const SAMPLES = 4;
-async function measure(fn) {
-  await fn();
+/**
+ * Each call gets its own document from `input(attempt)`. Handing every call the
+ * same string measures a memo hit rather than the work: the HTML layer
+ * remembers its last parse, so the warm-up builds the tree the timed runs then
+ * reuse — 81 ms for a 256 KB fragment against the 160 ms a hook pays for a
+ * document it is seeing for the first time, which is the only case there is.
+ * The inputs differ in length by one code point, so the shape is unchanged.
+ * @param {(attempt: number) => string} input
+ * @param {(text: string) => unknown | Promise<unknown>} fn
+ */
+async function measure(input, fn) {
+  await fn(input(0));
   let best = Infinity;
-  for (let i = 0; i < SAMPLES; i++) {
+  for (let i = 1; i <= SAMPLES; i++) {
+    const text = input(i);
     const started = performance.now();
-    await fn();
+    await fn(text);
     best = Math.min(best, performance.now() - started);
   }
   return best;
@@ -81,6 +92,8 @@ async function measure(fn) {
 /** A timed block has to last at least this long to be a measurement rather than
  * timer noise. */
 const MIN_BLOCK_MS = 5;
+/** How many distinct documents a timed block cycles through. */
+const BLOCK_RING = 8;
 
 /**
  * The per-call cost of `fn`, timed over as many calls as it takes to be a
@@ -91,13 +104,24 @@ const MIN_BLOCK_MS = 5;
  * the small end meaningful at any machine speed, so the gate covers every case
  * instead of losing the cheap ones to the timer's resolution.
  */
-async function measurePerCall(fn) {
-  const single = await measure(fn);
+async function measurePerCall(input, fn) {
+  const single = await measure(input, fn);
   const repeats = Math.ceil(MIN_BLOCK_MS / Math.max(single, Number.EPSILON));
   if (repeats <= 1) return single;
-  const block = await measure(async () => {
-    for (let i = 0; i < repeats; i++) await fn();
-  });
+  // The block cycles a ring of distinct documents for the same reason `measure`
+  // varies its input, and a ring rather than one document per call because
+  // `repeats` runs to the hundreds on a fast machine and each document is
+  // SMALL bytes. Consecutive calls always differ, which is what a one-entry
+  // parse memo needs to miss.
+  const ring = [];
+  for (let i = 0; i < Math.min(repeats, BLOCK_RING); i++)
+    ring.push(input(SAMPLES + 1 + i));
+  const block = await measure(
+    () => "",
+    async () => {
+      for (let i = 0; i < repeats; i++) await fn(ring[i % ring.length]);
+    },
+  );
   return block / repeats;
 }
 
@@ -136,7 +160,7 @@ const SHAPES = {
 // because the entries read different things — a soft hyphen every other
 // character is real work for the prompt classifier's scatter count and almost
 // none for the strip the output path runs.
-const CHEAP_BUDGET = 10;
+const CHEAP_BUDGET = 9;
 
 /**
  * The blocking entry points, each with the shapes it must answer cheaply.
@@ -150,12 +174,12 @@ const ENTRIES = {
     // ANSI, and HTML-shaped text carries neither.
     cheap: ["ascii-prose", "cjk-prose", "emoji-prose", "html-prose"],
     budget: {
-      "joiner-dense": 115,
-      "vs-dense": 90,
-      "payload-run": 110,
-      "payload-scattered": 25,
-      "emoji-zwj": 78,
-      "run-dense": 44,
+      "joiner-dense": 37,
+      "vs-dense": 37,
+      "payload-run": 100,
+      "payload-scattered": 29,
+      "emoji-zwj": 36,
+      "run-dense": 53,
     },
   },
   sanitizeText: {
@@ -176,12 +200,12 @@ const ENTRIES = {
       // for: it is parse5 building a 256 KB fragment, so it moves with the
       // parser rather than with anything here. SUPERLINEAR below is what
       // actually holds this path.
-      "html-prose": 290,
-      "joiner-dense": 270,
-      "vs-dense": 113,
-      "payload-run": 56,
-      "emoji-zwj": 101,
-      "run-dense": 30,
+      "html-prose": 168,
+      "joiner-dense": 65,
+      "vs-dense": 45,
+      "payload-run": 58,
+      "emoji-zwj": 45,
+      "run-dense": 32,
     },
   },
   scanText: {
@@ -192,14 +216,14 @@ const ENTRIES = {
     cheap: ["ascii-prose", "cjk-prose", "emoji-prose", "html-prose"],
     budget: {
       "joiner-dense": 37,
-      "vs-dense": 18,
+      "vs-dense": 21,
       // One 256 KB run decodes as a single payload, so this case is dominated by
       // one large allocation and swings with the collector — the widest budget
       // here buys tolerance for that rather than for a slower machine.
-      "payload-run": 67,
-      "payload-scattered": 23,
-      "emoji-zwj": 22,
-      "run-dense": 24,
+      "payload-run": 55,
+      "payload-scattered": 25,
+      "emoji-zwj": 24,
+      "run-dense": 28,
     },
   },
 };
@@ -228,7 +252,7 @@ const SUPERLINEAR = {
   shape: "html-prose",
   from: 128 * KB,
   to: 512 * KB,
-  limit: 12,
+  limit: 9,
 };
 
 /**
@@ -264,7 +288,7 @@ const FOLD_BUDGET = 23;
  * latency gates uninstrumented") is what makes CI read it; without that step
  * this gate would be local-only.
  */
-const REALISTIC_MS = 100;
+const REALISTIC_MS = 40;
 const REALISTIC_SIZE = 256 * KB;
 const REALISTIC_TEXT = grow(
   "The quick brown fox jumps over the lazy dog. " +
@@ -293,7 +317,7 @@ function calibrationPass(text) {
   return seen;
 }
 
-const calibrate = () => measure(() => calibrationPass(CALIBRATION_TEXT));
+const calibrate = () => measure(() => CALIBRATION_TEXT, calibrationPass);
 
 /**
  * `fn`'s cost in calibration units, calibrating on BOTH sides of the
@@ -304,9 +328,9 @@ const calibrate = () => measure(() => calibrationPass(CALIBRATION_TEXT));
  * the larger unit resolves a drift in the direction that does not manufacture a
  * failure.
  */
-async function unitsFor(fn) {
+async function unitsFor(input, fn) {
   const opening = await calibrate();
-  const cost = await measure(fn);
+  const cost = await measure(input, fn);
   return { cost, units: cost / Math.max(opening, await calibrate()) };
 }
 
@@ -340,23 +364,30 @@ before(async () => {
   timing.unit = await calibrate();
   for (const { entry, shape, name } of CASES) {
     const { run } = ENTRIES[entry];
-    const large = SHAPES[shape](LARGE);
-    const small = SHAPES[shape](SMALL);
-    const measured = await unitsFor(() => run(large, shape));
+    const measured = await unitsFor(
+      (attempt) => SHAPES[shape](LARGE - attempt),
+      (text) => run(text, shape),
+    );
     timing.large[name] = measured.cost;
     timing.units[name] = measured.units;
-    timing.small[name] = await measurePerCall(() => run(small, shape));
+    timing.small[name] = await measurePerCall(
+      (attempt) => SHAPES[shape](SMALL - attempt),
+      (text) => run(text, shape),
+    );
   }
   for (const [entry, { run }] of Object.entries(ENTRIES))
     // Not "html-prose", so `sanitizeText` takes the Layer-1 path the majority of
     // tool results take rather than the markup path only web ingress reaches.
-    timing.realistic[entry] = await measure(() =>
-      run(REALISTIC_TEXT, "realistic-prose"),
+    timing.realistic[entry] = await measure(
+      (attempt) => REALISTIC_TEXT.slice(0, REALISTIC_TEXT.length - attempt),
+      (text) => run(text, "realistic-prose"),
     );
   const { run } = ENTRIES[SUPERLINEAR.entry];
   for (const end of ["from", "to"]) {
-    const text = SHAPES[SUPERLINEAR.shape](SUPERLINEAR[end]);
-    timing.superlinear[end] = await measure(() => run(text, SUPERLINEAR.shape));
+    timing.superlinear[end] = await measure(
+      (attempt) => SHAPES[SUPERLINEAR.shape](SUPERLINEAR[end] - attempt),
+      (text) => run(text, SUPERLINEAR.shape),
+    );
   }
   for (const [size, key] of [
     [SMALL, "small"],
@@ -368,7 +399,9 @@ before(async () => {
     const findings = foldFindings(text);
     const fold = () =>
       foldConfusables(text, selectFoldableFindings(text, findings));
-    const measured = await unitsFor(fold);
+    // The fold takes no parse and holds no memo, so every run may share one
+    // input; the offsets `findings` carries are only valid for this one.
+    const measured = await unitsFor(() => text, fold);
     timing.fold[key] = measured.cost;
     if (key === "large") {
       timing.foldUnits = measured.units;
@@ -417,7 +450,7 @@ describe("hook-path latency", () => {
       const growth = timing.large[name] / timing.small[name];
       assert.ok(
         growth <= SCALING_LIMIT,
-        `${name} cost ${growth.toFixed(1)}x for 8x the input, limit ${SCALING_LIMIT}x`,
+        `${name} cost ${growth.toFixed(1)}x for ${LARGE / SMALL}x the input, limit ${SCALING_LIMIT}x`,
       );
     });
 
@@ -471,8 +504,9 @@ describe("hook-path latency", () => {
         hook_event_name: "UserPromptSubmit",
         prompt,
       });
-      const { cost, units } = await unitsFor(() =>
-        judgeSanitizeUserPrompt(event),
+      const { cost, units } = await unitsFor(
+        () => prompt,
+        () => judgeSanitizeUserPrompt(event),
       );
       assert.ok(
         units <= CHEAP_BUDGET,
@@ -516,7 +550,7 @@ describe("hook-path latency", () => {
     const growth = timing.fold.large / timing.fold.small;
     assert.ok(
       growth <= SCALING_LIMIT,
-      `the fold cost ${growth.toFixed(1)}x for 8x the field, limit ${SCALING_LIMIT}x`,
+      `the fold cost ${growth.toFixed(1)}x for ${LARGE / SMALL}x the field, limit ${SCALING_LIMIT}x`,
     );
   });
 

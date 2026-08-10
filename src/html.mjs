@@ -36,7 +36,7 @@ import { unified } from "unified";
 import remarkParse from "remark-parse";
 import remarkGfm from "remark-gfm";
 import rehypeParse from "rehype-parse";
-import { visit, SKIP, EXIT } from "unist-util-visit";
+import { SKIP, EXIT } from "unist-util-visit";
 import {
   HTML_TAG_PRESENT,
   MD_LINK_HINT,
@@ -1375,13 +1375,92 @@ function hasDataSrc(el) {
 const htmlParser = unified().use(rehypeParse, { fragment: true });
 
 /**
+ * Preorder depth-first walk of a unist tree, calling `visitor(node, index,
+ * parent)` on every node whose `type` is `test` (or on every node when `test` is
+ * null). `EXIT` ends the walk, `SKIP` leaves the node's children unvisited —
+ * the `unist-util-visit` contract, which is what the call sites here are
+ * written against.
+ *
+ * Spelled out rather than imported because `unist-util-visit` allocates a fresh
+ * ancestors array and a closure per node, and on a document that is one long
+ * flat sibling list — 32k `<p>` elements per megabyte of ordinary HTML — that
+ * turns a linear walk super-linear: 3480 ms against this walk's 62 ms over the
+ * same 4 MB tree. The three parallel arrays are the stack, so the walk itself
+ * allocates nothing per node.
+ * @param {any} tree
+ * @param {string | null} test
+ * @param {(node: any, index: number | undefined, parent: any) => unknown} visitor
+ */
+function walk(tree, test, visitor) {
+  /** @type {any[]} */
+  const nodes = [tree];
+  /** @type {Array<number | undefined>} */
+  const indices = [undefined];
+  /** @type {any[]} */
+  const parents = [undefined];
+  while (nodes.length > 0) {
+    const node = nodes.pop();
+    const index = indices.pop();
+    const parent = parents.pop();
+    const result =
+      test === null || node.type === test
+        ? visitor(node, index, parent)
+        : undefined;
+    if (result === EXIT) return;
+    if (result === SKIP) continue;
+    const children = node.children;
+    if (children === undefined) continue;
+    for (let i = children.length - 1; i >= 0; i--) {
+      nodes.push(children[i]);
+      indices.push(i);
+      parents.push(node);
+    }
+  }
+}
+
+/**
+ * `parse` with its most recent (input, tree) pair remembered.
+ *
+ * Layers 2 and 3 each parse the SAME tool output: `sanitizeHtml` tokenizes it to
+ * decide the source-vs-markdown branch, and `detectExfil` tokenizes it again to
+ * read `src`/`href` off the elements — two full parse5 runs and two full
+ * micromark runs over one document, which is most of what the HTML layer costs
+ * on ordinary prose. Every consumer only READS the tree (the sole AST mutation
+ * in this module is over a css-tree value parsed per style string), so one tree
+ * is safe to hand to both.
+ *
+ * One entry, replaced on every miss, so the retained footprint is one tree for
+ * the document most recently sanitized — the tree that call had allocated
+ * anyway. A miss re-parses and answers identically, so the cache can never
+ * change a verdict, only what one costs.
+ * @param {(text: string) => any} parse
+ * @returns {(text: string) => any}
+ */
+function lastParseCached(parse) {
+  /** @type {string | null} */
+  let cachedText = null;
+  /** @type {any} */
+  let cachedTree = null;
+  return (text) => {
+    if (cachedText === text) return cachedTree;
+    // The key is recorded only AFTER the parse returns. A parse that throws —
+    // which is how a pathologically nested fragment reaches the fail-closed
+    // withhold — must leave the entry untouched, or the next call for that same
+    // text hits a key whose tree came from a DIFFERENT document and gets a
+    // verdict about the wrong input instead of the withhold.
+    const tree = parse(text);
+    cachedText = text;
+    cachedTree = tree;
+    return tree;
+  };
+}
+
+/**
  * Parse `html` as an HTML fragment with the real tokenizer (parse5, via rehype).
  * @param {string} html
  * @returns {any}
  */
-function parseFragment(html) {
-  return htmlParser.parse(html);
-}
+const parseFragment = lastParseCached((html) => htmlParser.parse(html));
 
 /**
  * @param {string} htmlValue
@@ -1391,7 +1470,7 @@ function parseHtmlTag(htmlValue) {
   const tree = parseFragment(htmlValue);
   /** @type {any} */
   let firstElement = null;
-  visit(tree, "element", (node) => {
+  walk(tree, "element", (node) => {
     firstElement = node;
     return EXIT;
   });
@@ -1606,7 +1685,7 @@ function scanFragmentTree(html, tree) {
   const warned = newWarned();
   // @ts-ignore -- visit callback returns EXIT/SKIP only on matches; implicit undefined return is intentional
   // eslint-disable-next-line consistent-return
-  visit(tree, (/** @type {any} */ node) => {
+  walk(tree, null, (/** @type {any} */ node) => {
     const isComment = node.type === "comment";
     if (isComment || isHiddenElement(node)) {
       /* c8 ignore start -- parse5 omits positions only on recovery-synthesized
@@ -1634,6 +1713,20 @@ function scanFragmentTree(html, tree) {
 }
 
 const mdParser = unified().use(remarkParse).use(remarkGfm);
+
+/** The markdown tree for `text`, cached the same way {@link parseFragment} is.
+ * @type {(text: string) => any} */
+const parseMarkdown = lastParseCached((text) => mdParser.parse(text));
+
+// A `code` node is a FENCED or INDENTED block and nothing else, so either a
+// three-run of backticks/tildes or a line opening on a four-column indent must
+// appear somewhere in the text for one to exist. CommonMark expands a tab to
+// the next four-column tab stop, so fewer than four spaces followed by a tab is
+// an indent too ("  \tfoo" is a code block) — hence ` *\t` rather than `\t`.
+// Read over the whole document and deliberately loose (a stray ``` anywhere is
+// enough to parse), because the only sound direction to be wrong in here is
+// towards parsing.
+const MARKDOWN_CODE_HINT = /```|~~~|^(?: {4}| *\t)/m;
 
 // A markup-declaration-open (`<!`) or processing-instruction-ish (`<?`) start.
 // Inside an inline html node these begin a *bogus comment* unless they open a
@@ -1688,7 +1781,7 @@ function commentSpans(value) {
   const tree = parseFragment(value);
   /** @type {Map<number, number>} */
   const spans = new Map();
-  visit(tree, "comment", (/** @type {any} */ node) => {
+  walk(tree, "comment", (/** @type {any} */ node) => {
     if (node.position)
       spans.set(node.position.start.offset, node.position.end.offset);
   });
@@ -1916,7 +2009,7 @@ const FLOW_HTML_PARENTS = new Set([
  * @returns {{ ranges: SpliceRange[], warned: ReturnType<typeof newWarned> }}
  */
 function scanMarkdown(text) {
-  const tree = mdParser.parse(text);
+  const tree = parseMarkdown(text);
   /** @type {SpliceRange[]} */
   const ranges = [];
   const warned = newWarned();
@@ -1924,7 +2017,7 @@ function scanMarkdown(text) {
   // Flow html blocks carry complete markup, so rehype locates comments/hidden
   // elements precisely within them; block-local offsets are shifted to
   // document coordinates.
-  visit(tree, "html", (/** @type {any} */ node, _index, parent) => {
+  walk(tree, "html", (/** @type {any} */ node, _index, parent) => {
     if (!FLOW_HTML_PARENTS.has(parent?.type)) return;
     const base = node.position.start.offset;
     const sub = scanHtmlFragment(text.slice(base, node.position.end.offset));
@@ -1944,7 +2037,7 @@ function scanMarkdown(text) {
   // are walked as part of their root in document order, so the walk is skipped
   // for them here to avoid double-scanning and to keep the absorb state flowing
   // across those boundaries.
-  visit(tree, (/** @type {any} */ node) => {
+  walk(tree, null, (/** @type {any} */ node) => {
     if (!PHRASING_ROOTS.has(node.type)) return;
     if (!hasHtmlLeaf(node)) return;
     scanInlineChildren(node, text, ranges, warned);
@@ -1969,8 +2062,9 @@ function scanMarkdown(text) {
  * @returns {boolean}
  */
 function hasMarkdownCode(text) {
+  if (!MARKDOWN_CODE_HINT.test(text)) return false;
   let found = false;
-  visit(mdParser.parse(text), "code", () => {
+  walk(parseMarkdown(text), "code", () => {
     found = true;
     return EXIT;
   });
@@ -2564,7 +2658,7 @@ function extractHtmlUrls(text) {
   const tree = parseFragment(text);
   /** @type {Array<{ url: string, isImage: boolean, autoFetched: boolean, context: "resource" | "form" | "refresh" }>} */
   const urls = [];
-  visit(tree, "element", (/** @type {any} */ node) => {
+  walk(tree, "element", (/** @type {any} */ node) => {
     // hast element nodes always carry a `properties` object (parse5 sets it).
     const props = node.properties;
     const isImage = node.tagName === "img";
@@ -2640,8 +2734,8 @@ export function detectExfil(text) {
   try {
     // Remark AST handles markdown links/images/definitions (balanced parens,
     // reference links) correctly, unlike a hand-rolled regex.
-    const tree = mdParser.parse(text);
-    visit(tree, (node) => {
+    const tree = parseMarkdown(text);
+    walk(tree, null, (node) => {
       if (
         node.type !== "link" &&
         node.type !== "image" &&
