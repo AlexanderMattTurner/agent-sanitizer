@@ -8,6 +8,15 @@ adhere to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+## [2.34.5] - 2026-08-10
+
+### Changed
+- Confusables are now folded in a single pass rather than processing each finding separately, improving performance.
+- Line counting for findings now proceeds forward from the current position instead of from the file start, reducing computation overhead.
+
+### Fixed
+- Test suite now properly gates latency checks for instruction scan and confusable fold operations.
+
 ## [2.34.4] - 2026-08-10
 
 ### Fixed

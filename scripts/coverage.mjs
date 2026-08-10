@@ -136,6 +136,13 @@ function main() {
       "--check-coverage=false",
       "node",
       "--test",
+      // The spec reporter repeats every failure, with its assertion message, in
+      // a block at the very END of the run. A CI log is read through a tail
+      // window, and TAP's six lines per passing test push a mid-run `not ok`
+      // clean out of it — a red build then names nothing it failed on. Node
+      // picks TAP for a non-TTY stdout, so the choice has to be stated here.
+      "--test-reporter=spec",
+      "--test-reporter-destination=stdout",
       ...process.argv.slice(2),
     ],
     "test suite",
