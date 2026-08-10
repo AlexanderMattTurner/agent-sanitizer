@@ -25,11 +25,12 @@ name: Claude reviewer-hold sweeper
 # SECURITY — schedule + workflow_dispatch run from the DEFAULT branch (trusted repo
 # content) with the base repo's GITHUB_TOKEN; the job checks out ONLY the trusted
 # approval scripts and executes no PR code — it reads thread/review state via the
-# API and can only post an approval or a commit status. Least privilege:
-# contents:read (checkout the scripts) + pull-requests:write (post the approval) +
-# statuses:write (post the gate verdict), nothing else, so even an unexpected PR
-# can only be approved or have its gate status corrected, never pushed to, merged,
-# or otherwise reached.
+# API and can only post an approval, a commit status or a check run. Least
+# privilege: contents:read (checkout the scripts) + pull-requests:write (post the
+# approval) + statuses:write (the `Automated review posted` verdict) +
+# checks:write (the `Review findings resolved` verdict), nothing else, so even an
+# unexpected PR can only be approved or have its gate verdicts corrected, never
+# pushed to, merged, or otherwise reached.
 
 on:
   schedule:
@@ -47,7 +48,8 @@ jobs:
     permissions:
       contents: read # sparse-checkout the trusted approval scripts
       pull-requests: write # submit the approving review
-      statuses: write # re-derive the "Automated review posted" gate; no other scope
+      statuses: write # re-derive the "Automated review posted" gate
+      checks: write # re-post the "Review findings resolved" check run; no other scope
     env:
       # The sweep's own PR listing runs on the Actions token.
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

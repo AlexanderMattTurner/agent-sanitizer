@@ -222,10 +222,18 @@ dismiss_stale_hold() {
 rederive_review_gates() {
   local head_sha
   head_sha="$(gh api "repos/${GH_REPO}/pulls/${PR}" --jq '.head.sha')"
-  # Both run in report mode, so each posts its verdict and exits 0 whatever that
-  # verdict is: a red finding here must not fail the sweep of the other PRs.
-  REPORT_SHA="$head_sha" bash "$SCRIPT_DIR/review-findings-gate.sh"
-  HEAD_SHA="$head_sha" bash "$SCRIPT_DIR/review-gate.sh"
+  # Independent predicates, so neither is allowed to abort the other: under
+  # `set -e` a sequenced pair would let the FIRST one's 403 or API fault leave
+  # the second unre-derived, and the fail-open gate is the one that must not be
+  # skipped. It therefore runs first AND each reports on its own, with the worst
+  # status returned so a real fault still reaches the caller loudly.
+  #
+  # Both run in report mode, so a red VERDICT is not a failure here — only an
+  # inability to post one is.
+  local rc=0
+  HEAD_SHA="$head_sha" bash "$SCRIPT_DIR/review-gate.sh" || rc=$?
+  REPORT_SHA="$head_sha" bash "$SCRIPT_DIR/review-findings-gate.sh" || rc=$?
+  return "$rc"
 }
 
 approve_err=""

@@ -198,7 +198,13 @@ describe("review-keyed gates are re-derived wherever review state changes", () =
       for (const job of jobsWithRunBodies(source)) {
         const body = job.runs.join("\n");
         const ran = job.runs.flatMap(scriptsIn);
-        if (!ran.some((script) => reviewMutatingScripts.includes(script)))
+        // A step can write a review INLINE — this tree already posts a check run
+        // that way — and such a job reaches no script at all, so testing only
+        // `ran` would let the very regression this file promises to catch pass.
+        if (
+          !MUTATES_REVIEW.test(body) &&
+          !ran.some((script) => reviewMutatingScripts.includes(script))
+        )
           continue;
         for (const gate of reviewKeyedGates) {
           if (gate.contexts.some((context) => exempt.has(context))) continue;
