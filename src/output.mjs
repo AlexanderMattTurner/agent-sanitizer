@@ -407,10 +407,10 @@ function processLayer1(text, sgrCarveOut) {
  * vet them before they leave. The transform itself stays pure — the caller owns
  * any persistence.
  * @param {PipelineState} state
- * @param {{ html?: boolean, exfilScan?: boolean }} options
+ * @param {{ html?: boolean, exfilScan?: boolean, deadline?: Deadline }} options
  * @returns {Promise<{ reveal: string | undefined, splices: Array<{ placeholder: string, original: string }> }>}
  */
-async function applyMarkdownPipeline(state, { html, exfilScan }) {
+async function applyMarkdownPipeline(state, { html, exfilScan, deadline }) {
   const inputText = state.text;
   /** @type {string | undefined} */
   let reveal;
@@ -418,6 +418,20 @@ async function applyMarkdownPipeline(state, { html, exfilScan }) {
   const splices = [];
   if ((!html && !exfilScan) || !needsMarkdownPipeline(inputText))
     return { reveal: undefined, splices };
+  // INVARIANT: this refusal stops a layer below from STARTING with no budget
+  // left. Each parses the whole document in ONE synchronous call, so nothing
+  // interrupts it, and a host that kills the overrun hook shows the RAW text.
+  // Called before EACH parse: Layer 2 spends the budget Layer 3 then runs on.
+  // After the pre-gate: a declined call costs no time. Fail closed, as Layer 4.
+  const refuseIfSpent = () => {
+    if (deadline && deadline.remainingMs() <= 0)
+      throw new Error(
+        "CRITICAL: the sanitization time budget ran out before the hidden-HTML " +
+          "and exfil-URL layers finished, so this text was not fully checked. " +
+          "Failing closed — tool output suppressed.",
+      );
+  };
+  refuseIfSpent();
   let sanitizeHtml, detectExfil;
   /* c8 ignore start -- a rejected dynamic import of a module that ships in
      this very package (not an optional peer dep) requires corrupting
@@ -478,6 +492,7 @@ async function applyMarkdownPipeline(state, { html, exfilScan }) {
   // URL hidden inside a display:none element or an HTML comment is MORE
   // suspicious, not less, yet Layer 2 has already removed it from `cleaned`.
   if (exfilScan) {
+    refuseIfSpent();
     const threats = detectExfil(inputText);
     // Severity tracks who does the fetching. An auto-fetched target — an image,
     // a stylesheet, a form action, a meta refresh — exfiltrates the moment the
@@ -552,7 +567,17 @@ async function vetStageValue(text, redact, findings, label) {
  *   redact?: (text: string) => Promise<RedactResult|null> | (RedactResult|null),
  *   filterInjection?: (text: string) => Promise<Layer5Result|null> | (Layer5Result|null),
  *   sgrCarveOut?: boolean,
+ *   deadline?: Deadline,
  * }} SanitizeTextOptions
+ */
+
+/**
+ * A caller's shared wall-clock budget across one run of this pipeline.
+ * `remainingMs()` returns the milliseconds left; at or below zero it is spent.
+ * Layer 4's injected redactor reads its own copy of the same budget, so this
+ * option is what lets the layers inside this module read it too. Omitted means
+ * no budget, which is the standalone default: every layer runs to completion.
+ * @typedef {{ remainingMs: () => number }} Deadline
  */
 
 /**
