@@ -129,6 +129,7 @@ jobs:
       contents: read # checkout the trusted base branch
       pull-requests: write # post the review
       checks: write # re-post the "Review findings resolved" verdict on the head
+      statuses: write # re-post the "Automated review posted" status on the head
     steps:
       - name: Checkout base (trusted) branch
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
@@ -274,6 +275,27 @@ jobs:
           PR: ${{ github.event.pull_request.number }}
           REPORT_SHA: ${{ github.event.pull_request.head.sha }}
         run: bash .github/scripts/review-findings-gate.sh
+
+      # The same GITHUB_TOKEN blind spot, on the OTHER gate. review-gate.yaml
+      # has two legs and neither can see this review: its `pull_request_review`
+      # leg never fires for one posted with GITHUB_TOKEN, and its `synchronize`
+      # leg already ran on this head BEFORE the review existed, leaving a
+      # `pending` status. Nothing else re-evaluates it — there is no cron and no
+      # workflow_dispatch — so the required "Automated review posted" context
+      # stays pending until somebody pushes again. A PR that is reviewed and has
+      # nothing left to push then waits forever on a review it already has
+      # (observed on #290, pending from 02:03:28Z with the review at 02:05Z).
+      #
+      # No `if:`, for the same reason as the step above: the predicate is
+      # stateless, so the oversized path posts the correct not-reviewed pending.
+      - name: Re-evaluate the automated-review gate on the head
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          PR: ${{ github.event.pull_request.number }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: bash .github/scripts/review-gate.sh
 
   # Auto-approve the PRs the reviewer deliberately SKIPS (see `decide` above:
   # low-risk chore/style by title, machine-cut `release:` PRs, and

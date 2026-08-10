@@ -30,9 +30,11 @@ const slug = (p) => p.replace(/[^A-Z0-9]/gi, "_");
 // A fake `claude` that records its full argv, brackets its run with timestamped
 // markers in a shared log (so a reader can reconstruct not just how many ran at
 // once but WHEN each started and ended), and replies with whatever result JSON /
-// exit status the test staged for its target file. Per-file sleeps let a test
-// give shards uneven durations, which is what distinguishes slot recycling from a
-// batch barrier — a uniform duration makes the two shapes indistinguishable.
+// exit status the test staged for its target file. A per-file BARRIER holds a
+// shard until its peers reach the log, which is what distinguishes slot
+// recycling from a batch barrier — and, unlike uneven sleeps, states that
+// difference as an ordering the run must satisfy rather than one it usually
+// wins on a fast machine.
 const FAKE_CLAUDE = `#!/usr/bin/env bash
 set -euo pipefail
 dir="$STUB_DIR"
@@ -54,8 +56,35 @@ if [[ -f "$dir/verdict/$key" ]]; then
   [[ -n "$vpath" ]] && cat "$dir/verdict/$key" >"$vpath"
 fi
 naptime="\${STUB_SLEEP:-0}"
-if [[ -f "$dir/sleep/$key" ]]; then naptime="$(cat "$dir/sleep/$key")"; fi
+# A shard can be held until the shared log carries COUNT markers of KIND. That
+# turns "N ran at once" into an observation rather than a bet on the runner
+# spawning N processes faster than the first one's sleep: a held shard cannot
+# leave before its peers arrive, so a slow runner changes nothing.
+barrier="\${STUB_BARRIER:-}"
+if [[ -f "$dir/barrier/$key" ]]; then barrier="$(cat "$dir/barrier/$key")"; fi
+bkind="\${barrier%% *}"
+bcount="\${barrier##* }"
+# Validated BEFORE the START marker, because a shard that dies after writing one
+# leaves an unmatched START and INFLATES the peak the reader computes. A
+# non-numeric count also reads as 0 in arithmetic, silently skipping the wait.
+if [[ -n "$barrier" ]]; then
+  { [[ "$bkind" == START || "$bkind" == END ]] && [[ "$bcount" =~ ^[0-9]+$ ]]; } ||
+    { printf 'fanout stub: barrier must be "START|END <count>", got %s\\n' "$barrier" >&2; exit 64; }
+fi
 printf 'START %s %s %s\\n' "$key" "$n" "$(date +%s%N)" >>"$dir/concurrency.log"
+if [[ -n "$barrier" ]]; then
+  bwait="\${STUB_BARRIER_TIMEOUT:-60}"
+  deadline=$((SECONDS + bwait))
+  seen() { awk -v k="$bkind" '$1==k' "$dir/concurrency.log" | wc -l; }
+  while (( $(seen) < bcount )); do
+    if (( SECONDS >= deadline )); then
+      printf 'fanout stub: %s waited %ss for %s %s markers, saw %s\\n' \\
+        "$key" "$bwait" "$bcount" "$bkind" "$(seen)" >&2
+      break
+    fi
+    sleep 0.02
+  done
+fi
 sleep "$naptime"
 printf 'END %s %s %s\\n' "$key" "$n" "$(date +%s%N)" >>"$dir/concurrency.log"
 if [[ -f "$dir/resp/$key" ]]; then cat "$dir/resp/$key"; else
@@ -109,7 +138,7 @@ function fixture() {
   const stub = join(root, "stub");
   const path = join(root, "bin");
   const work = join(root, "work");
-  for (const d of ["argv", "resp", "exit", "sleep", "verdict"])
+  for (const d of ["argv", "resp", "exit", "barrier", "verdict"])
     mkdirSync(join(stub, d), { recursive: true });
   for (const d of [path, work]) mkdirSync(d, { recursive: true });
   writeFileSync(join(stub, "concurrency.log"), "");
@@ -200,8 +229,9 @@ const stageResult = (fx, file, obj) =>
   writeFileSync(join(fx.stub, "resp", slug(file)), JSON.stringify(obj));
 const stageExit = (fx, file, code) =>
   writeFileSync(join(fx.stub, "exit", slug(file)), String(code));
-const stageSleep = (fx, file, seconds) =>
-  writeFileSync(join(fx.stub, "sleep", slug(file)), String(seconds));
+// Hold FILE's shard until COUNT markers of KIND are in the shared log.
+const stageBarrier = (fx, file, kind, count) =>
+  writeFileSync(join(fx.stub, "barrier", slug(file)), `${kind} ${count}`);
 // What the shard for FILE writes to the verdict path its prompt names.
 const stageVerdict = (fx, file, body) =>
   writeFileSync(join(fx.stub, "verdict", slug(file)), body);
@@ -301,20 +331,26 @@ test("a slot freed by a fast shard is refilled while a slow one still runs", () 
   // both peak at exactly MAX_PARALLEL. One long shard among fast ones does: under
   // recycling every later shard starts while the long one is still running, and
   // under a barrier the last batch cannot start until the long shard has ended.
+  // `long` is held until every fast shard has ENDED rather than for a fixed 2s,
+  // so the ordering below is one the run enforces and not one a sleep usually
+  // wins: under a batch barrier the held shard and its batch deadlock instead.
   const fx = fixture();
   const fast = ["s1", "s2", "s3", "s4"];
-  stageSleep(fx, "long", 2);
-  for (const f of fast) stageSleep(fx, f, 0.1);
+  stageBarrier(fx, "long", "END", fast.length);
 
-  const res = run(fx, { files: ["long", ...fast], env: { MAX_PARALLEL: "2" } });
+  const res = run(fx, {
+    files: ["long", ...fast],
+    env: { MAX_PARALLEL: "2", STUB_BARRIER_TIMEOUT: "20" },
+  });
   assert.equal(res.status, 0, res.stderr);
   assert.equal(invocations(fx).length, 5);
-  // Bounded: never more than the cap in flight, and it really does overlap.
+  // Bounded: never more than the cap in flight, and it really does overlap —
+  // `long` outlives every fast shard, so each one of them overlaps it.
   assert.equal(peakConcurrency(fx), 2);
 
-  // `long` and `s1` fill both slots at t0; each later shard can only have started
-  // by taking the slot `s1`/`s2`/`s3` freed — all of them strictly before `long`
-  // ends. The LAST one to start is the strictest form of that claim.
+  // Each later shard can only have started by taking the slot `s1`/`s2`/`s3`
+  // freed — all of them strictly before `long` ends. The LAST one to start is
+  // the strictest form of that claim.
   const longEnd = markerNs(fx, "END", "long");
   const lastStart = Math.max(
     ...fast.slice(1).map((f) => markerNs(fx, "START", f)),
@@ -336,11 +372,19 @@ test("MAX_PARALLEL=1 serializes, and a cap above the file count is not a floor",
   );
   assert.equal(peakConcurrency(serial), 1);
 
+  // Every shard is held until all three have STARTED, so all three are provably
+  // in flight at once. A per-shard sleep only makes that LIKELY: it asks the
+  // runner to spawn three processes faster than the first one's nap, which a
+  // loaded runner loses (observed: peak 2 on run 31345443966, `main` red).
   const wide = fixture();
   assert.equal(
     run(wide, {
       files: ["a1", "a2", "a3"],
-      env: { MAX_PARALLEL: "16", STUB_SLEEP: "0.3" },
+      env: {
+        MAX_PARALLEL: "16",
+        STUB_BARRIER: "START 3",
+        STUB_BARRIER_TIMEOUT: "20",
+      },
     }).status,
     0,
   );
