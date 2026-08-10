@@ -1,4 +1,3 @@
-#!/usr/bin/env node
 /**
  * Wall-clock cost of the three BLOCKING hook paths, by document shape and size.
  *
