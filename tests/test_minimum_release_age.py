@@ -122,31 +122,42 @@ def test_every_exemption_names_a_version_we_actually_pin(
         )
 
 
+# Packages published by a repository we control, each with npm provenance, from
+# a release workflow we can read. The window defends against a takeover of a
+# maintainer account we do not control, so for these it delays adopting a fix we
+# just shipped and buys nothing. Every other package stays behind the window.
+#
+# `agent-control-plane-core` is the guardrail contract the Claude hooks load on
+# every gated tool call; it ships from AlexanderMattTurner/agent-control-plane-core
+# via the same auto-version + provenance path this repo uses.
+FIRST_PARTY_PACKAGES = frozenset({"agent-control-plane-core"})
+
+
 @pytest.mark.drift_guard
-def test_only_this_repo_s_own_package_is_exempt(
+def test_only_first_party_packages_are_exempt(
     workspace: dict, package_json: dict
 ) -> None:
     """Exempting a third party is a decision, not a config tweak.
 
-    Our own release is built and published from this repository with npm
-    provenance, so waiting three days to depend on it buys nothing. A
+    A first-party release is built and published from a repository we control
+    with npm provenance, so waiting three days to depend on it buys nothing. A
     third-party exemption is the opposite: it reopens exactly the window this
     setting exists to close, so it must fail here and be argued for explicitly.
     """
-    own = package_json["name"]
+    exempt_by_policy = FIRST_PARTY_PACKAGES | {package_json["name"]}
     foreign = sorted(
         {
             _split_spec(entry)[0]
             for entry in workspace.get("minimumReleaseAgeExclude") or []
         }
-        - {own}
+        - exempt_by_policy
     )
     assert not foreign, (
         f"`minimumReleaseAgeExclude` exempts third-party package(s) {foreign} "
-        f"from the release-age window. Only {own!r} — published by this repo's "
-        f"own release workflow — is exempt by policy. If a third-party "
-        f"exemption is genuinely needed, change this test in the same commit "
-        f"and say why."
+        f"from the release-age window. Only {sorted(exempt_by_policy)} — each "
+        f"published by a repository we control — is exempt by policy. If a "
+        f"third-party exemption is genuinely needed, add it to "
+        f"FIRST_PARTY_PACKAGES in the same commit and say why."
     )
 
 

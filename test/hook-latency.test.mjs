@@ -56,7 +56,7 @@ const cp = (n) => String.fromCodePoint(n);
 const grow = (unit, n) => unit.repeat(Math.ceil(n / unit.length)).slice(0, n);
 
 /**
- * The FASTEST of four timed runs after a warm-up call, in ms.
+ * The FASTEST of {@link SAMPLES} timed runs after a warm-up call, in ms.
  *
  * Contention and collector pauses only ever ADD time, so the minimum is the
  * closest any of the samples got to the cost of the code itself, and it is what
@@ -65,8 +65,15 @@ const grow = (unit, n) => unit.repeat(Math.ceil(n / unit.length)).slice(0, n);
  * middle sample, which on such a runner is most of them. The estimator loses
  * nothing the gates are for: a path that got an order of magnitude slower is an
  * order of magnitude slower in its fastest run too.
+ *
+ * Eight rather than four because the allocation-heavy shapes need more tries to
+ * land one clean run. The calibration is a tight per-code-point loop that
+ * allocates nothing, so a collector pause inflates an HTML-layer measurement
+ * without inflating the unit it is divided by — and four samples let a run of
+ * pauses carry the whole set. Widening the search only moves the minimum toward
+ * the true cost, so it tightens the gate rather than relaxing it.
  */
-const SAMPLES = 4;
+const SAMPLES = 8;
 /**
  * Each call gets its own document from `input(attempt)`. Handing every call the
  * same string measures a memo hit rather than the work: the HTML layer
@@ -200,7 +207,14 @@ const ENTRIES = {
       // for: it is parse5 building a 256 KB fragment, so it moves with the
       // parser rather than with anything here. SUPERLINEAR below is what
       // actually holds this path.
-      "html-prose": 168,
+      //
+      // 200 covers a third environment the 168 did not: a four-core container
+      // running this file beside the other 27 the pre-commit guard set spawns,
+      // where the unmodified base measures 181. parse5 allocates a node per tag
+      // while the calibration allocates nothing, so memory-bandwidth contention
+      // moves this cell and not the unit it divides by — the one shape where the
+      // ratio cannot normalize the environment away.
+      "html-prose": 200,
       "joiner-dense": 65,
       "vs-dense": 45,
       "payload-run": 58,

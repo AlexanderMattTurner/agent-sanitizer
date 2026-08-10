@@ -32,9 +32,9 @@ import {
 // (deny/ask for gates, suppression for the output sanitizer) instead.
 /** @type {typeof import("agent-control-plane-core/claude").claudeAdapter | undefined} */
 let claudeAdapter;
-/** @type {typeof import("agent-control-plane-core").Decision | undefined} */
+/** @type {typeof import("agent-control-plane-core/contract").Decision | undefined} */
 let Decision;
-/** @type {typeof import("agent-control-plane-core").EventKind | undefined} */
+/** @type {typeof import("agent-control-plane-core/contract").EventKind | undefined} */
 let EventKind;
 
 /* c8 ignore start -- module-load boundary: the real import resolves in every
@@ -52,9 +52,13 @@ const loaded = await awaitLazyDependency({
       /** @type {Partial<typeof import("agent-control-plane-core/claude")>} */ (
         await lazyImport("agent-control-plane-core/claude")
       );
+    // The /contract subpath, not the package root: the root barrel also pulls
+    // all four adapters, the registry and the conformance harness, which costs
+    // ~22 ms of import work per process for two enums. A guardrail hook is one
+    // process per tool call, so that cost lands on every gated call.
     const { Decision: decision, EventKind: eventKind } =
-      /** @type {Partial<typeof import("agent-control-plane-core")>} */ (
-        await lazyImport("agent-control-plane-core")
+      /** @type {Partial<typeof import("agent-control-plane-core/contract")>} */ (
+        await lazyImport("agent-control-plane-core/contract")
       );
     if (!adapter || !decision || !eventKind) return null;
     return { claudeAdapter: adapter, Decision: decision, EventKind: eventKind };
@@ -81,8 +85,8 @@ if (loaded) {
  * @param {{ claudeAdapter?: unknown, Decision?: unknown, EventKind?: unknown }} [overrides]
  * @returns {{
  *   claudeAdapter: typeof import("agent-control-plane-core/claude").claudeAdapter,
- *   Decision: typeof import("agent-control-plane-core").Decision,
- *   EventKind: typeof import("agent-control-plane-core").EventKind,
+ *   Decision: typeof import("agent-control-plane-core/contract").Decision,
+ *   EventKind: typeof import("agent-control-plane-core/contract").EventKind,
  * }}
  */
 export function controlPlane(overrides = {}) {
