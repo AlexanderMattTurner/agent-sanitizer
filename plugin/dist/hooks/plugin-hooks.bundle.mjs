@@ -5525,9 +5525,11 @@ function scanControlString(text5, start) {
   let i = sevenBit ? start + 2 : start + 1;
   for (; i < text5.length; i++) {
     const byte = text5.charCodeAt(i);
-    if (byte === BEL || byte === ST_C1) return { end: i + 1, kind };
+    if (byte === BEL || byte === ST_C1 || byte === CAN || byte === SUB)
+      return { end: i + 1, kind };
     if (byte === ESC) return { end: text5[i + 1] === "\\" ? i + 2 : i, kind };
-    if (STRING_INTRO_C1.has(byte)) return { end: i, kind };
+    if (STRING_INTRO_C1.has(byte) || byte === LF || byte === CR)
+      return { end: i, kind };
   }
   return { end: text5.length, kind };
 }
@@ -5562,7 +5564,7 @@ function scanAnsi(text5) {
   }
   return tokens;
 }
-var CONTROL_INTRODUCER_CODEPOINTS, CONTROL_INTRODUCER_SOURCE, SGR_SOURCE, SGR_RE, SGR_ANCHORED_RE, CSI_INTRO_RE, CSI_PARAM_RE, CSI_FINAL_RE, ESC, CSI_C1, ST_C1, BEL, STRING_INTRO_7BIT, OSC_7BIT, OSC_C1, STRING_INTRO_C1, TOKEN_KIND, INTRODUCER_SCAN_RE;
+var CONTROL_INTRODUCER_CODEPOINTS, CONTROL_INTRODUCER_SOURCE, SGR_SOURCE, SGR_RE, SGR_ANCHORED_RE, CSI_INTRO_RE, CSI_PARAM_RE, CSI_FINAL_RE, ESC, CSI_C1, ST_C1, BEL, CAN, SUB, LF, CR, STRING_INTRO_7BIT, OSC_7BIT, OSC_C1, STRING_INTRO_C1, TOKEN_KIND, INTRODUCER_SCAN_RE;
 var init_ansi = __esm({
   "src/ansi.mjs"() {
     "use strict";
@@ -5583,6 +5585,10 @@ var init_ansi = __esm({
     CSI_C1 = 155;
     ST_C1 = 156;
     BEL = 7;
+    CAN = 24;
+    SUB = 26;
+    LF = 10;
+    CR = 13;
     STRING_INTRO_7BIT = "]PX^_";
     OSC_7BIT = "]";
     OSC_C1 = 157;
