@@ -8,6 +8,14 @@ adhere to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+## [2.34.2] - 2026-08-10
+
+### Changed
+- Stop scanning prompts with regex per code point for improved performance in the invisible module.
+
+### Fixed
+- Stand the latency gates down under the mutation run in tests.
+
 ## [2.34.1] - 2026-08-10
 
 ### Fixed
