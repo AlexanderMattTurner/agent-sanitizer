@@ -8,6 +8,15 @@ adhere to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+## [2.34.10] - 2026-08-10
+
+### Fixed
+
+- ANSI control string escaping at line breaks to prevent incomplete introducers from affecting output
+- Plugin wheel now builds reproducibly, independent of the builder's filesystem state
+- Plugin engine components now built from the current tree instead of pinned published versions
+- CI provenance gate now correctly includes `src/` and `python/` directories as build inputs
+
 ## [2.34.8] - 2026-08-10
 
 ### Changed
