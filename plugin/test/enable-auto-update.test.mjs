@@ -7,6 +7,7 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import {
+  chmodSync,
   copyFileSync,
   existsSync,
   mkdtempSync,
@@ -150,6 +151,33 @@ test("a non-boolean autoUpdate refuses instead of overwriting it", () => {
   assert.match(stderr, /not a boolean/);
   assert.equal(readFileSync(path, "utf-8"), before);
 });
+
+test(
+  "a write the OS refuses names the routes that do work, not a stack trace",
+  // Claude Code's Bash sandbox denies writes under the plugin cache, which is
+  // how this arrives in the wild; a read-only directory is the portable stand-in.
+  { skip: process.getuid?.() === 0 && "root writes through mode bits" },
+  () => {
+    const { dir, path } = registry(ENTRY);
+    const before = readFileSync(path, "utf-8");
+    chmodSync(dir, 0o555);
+    try {
+      const { status, stderr } = runExpectingFailure(dir);
+      assert.equal(status, 1);
+      assert.match(
+        stderr,
+        /cannot write .*known_marketplaces\.json \(EACCES\)/,
+      );
+      assert.match(stderr, /\/plugin -> Marketplaces/);
+      // An uncaught errno exits 1 too — the absence of a trace is the fix.
+      assert.doesNotMatch(stderr, /\n\s+at /);
+      assert.equal(readFileSync(path, "utf-8"), before);
+      assert.equal(existsSync(`${path}.agent-sanitizer.tmp`), false);
+    } finally {
+      chmodSync(dir, 0o755);
+    }
+  },
+);
 
 test("a corrupt registry propagates rather than being rewritten over", () => {
   const dir = mkdtempSync(join(tmpdir(), "agent-sanitizer-corrupt-"));

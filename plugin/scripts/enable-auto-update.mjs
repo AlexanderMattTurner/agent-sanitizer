@@ -16,7 +16,7 @@
  * it does not recognize. A Claude Code release that moves or restructures the
  * file makes this exit non-zero with what it found — never silently no-op.
  */
-import { readFileSync, renameSync, writeFileSync } from "node:fs";
+import { readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -57,6 +57,42 @@ export function knownMarketplacesPath(env = process.env) {
 function fail(message) {
   process.stderr.write(`agent-sanitizer: ${message}\n`);
   process.exit(1);
+}
+
+/** Errno codes that mean the OS refused the write, not that the write is wrong. */
+const REFUSED = new Set(["EPERM", "EACCES", "EROFS"]);
+
+/**
+ * Replaces the registry, staged through a sibling temp file so an interrupted
+ * write cannot leave the file Claude Code reads truncated.
+ *
+ * A refused write is a state the user can act on, so it exits with the two
+ * routes that do work instead of a stack trace; every other errno propagates.
+ *
+ * @param {string} path
+ * @param {string} contents
+ */
+function replaceRegistry(path, contents) {
+  const temp = `${path}.agent-sanitizer.tmp`;
+  try {
+    writeFileSync(temp, contents, "utf-8");
+    renameSync(temp, path);
+  } catch (error) {
+    const code = /** @type {NodeJS.ErrnoException} */ (error).code;
+    if (!REFUSED.has(code ?? "")) throw error;
+    // A refused create leaves nothing behind, which `force` passes over; a
+    // refused rename leaves a temp file in a directory the write just proved
+    // writable, so this cannot be the thing that throws over the message below.
+    rmSync(temp, { force: true });
+    fail(
+      `cannot write ${path} (${code}) — the OS refused it. Claude Code's Bash ` +
+        `sandbox confines writes to the workspace, so a sandboxed session ` +
+        `cannot reach the plugin cache at all: run this from a terminal ` +
+        `outside Claude Code. If it is refused there too, the file's owner or ` +
+        `permissions need fixing. Either way the toggle is reachable from ` +
+        `/plugin -> Marketplaces -> ${MARKETPLACE} -> Enable auto-update.`,
+    );
+  }
 }
 
 /**
@@ -115,11 +151,8 @@ export function main(argv = process.argv.slice(2), env = process.env) {
     ...config,
     [MARKETPLACE]: { ...entry, autoUpdate: desired },
   };
-  // Same 2-space encoding Claude Code writes, staged through a sibling temp file
-  // so an interrupted write cannot leave the registry truncated.
-  const temp = `${path}.agent-sanitizer.tmp`;
-  writeFileSync(temp, JSON.stringify(updated, null, 2), "utf-8");
-  renameSync(temp, path);
+  // Same 2-space encoding Claude Code writes.
+  replaceRegistry(path, JSON.stringify(updated, null, 2));
 
   process.stdout.write(
     desired
