@@ -7,12 +7,6 @@
  * the correctness suites are indifferent to it, which is how a per-code-point
  * RegExp scan sat in the carve analysis charging ~250 ms per megabyte.
  *
- * `stryker.conf.json` excludes this file from `tap.testFiles`: the mutation run
- * instruments every source file and runs four workers at once, which blows the
- * clean-prompt budget in Stryker's own dry run and aborts the whole gate — and a
- * suite that re-times four seconds of prompts per mutant would cost more than
- * every other suite combined while killing nothing a behavioural test does not.
- *
  * Every budget is a RATIO against a calibration measured in this same process:
  * one code-point-by-code-point pass over a fixed 256 KB prompt, which is the
  * cheapest full read of a prompt anything here can do. Machine speed, CPU
@@ -29,6 +23,24 @@ import { classifyPrompt } from "../src/prompt.mjs";
 const { claudeAdapter } = await import("agent-control-plane-core/claude");
 const { judgeSanitizeUserPrompt } =
   await import("../claude-hooks/sanitize-user-prompt.mjs");
+
+/**
+ * Why the ratios cannot be read under Stryker.
+ *
+ * A mutation run rewrites every source file so each expression sits behind a
+ * per-mutant branch, and it runs four workers at once — the code under test
+ * slows several-fold while this file's calibration, which Stryker does not
+ * instrument, does not. The clean-prompt budget is the tightest here, so it goes
+ * red first, and Stryker aborts every shard whose initial dry run is red. The
+ * gate says so and stands down rather than reporting a regression it cannot see.
+ *
+ * `STRYKER_NAMESPACE` is set on every test process the tap runner spawns (see
+ * `@stryker-mutator/tap-runner`'s `runFile`), in both the dry run and the mutant
+ * runs; nothing else in this repo sets it.
+ */
+const MUTATION_RUN = process.env.STRYKER_NAMESPACE
+  ? "Stryker instruments the code under test but not this file's calibration, so the ratios measure the instrumentation"
+  : null;
 
 const KB = 1024;
 const SMALL = 32 * KB;
@@ -133,6 +145,7 @@ function unitsFor(fn) {
 const timing = { unit: 0, large: {}, small: {}, units: {} };
 
 before(() => {
+  if (MUTATION_RUN) return;
   timing.unit = calibrate();
   for (const [name, generate] of Object.entries(SHAPES)) {
     const large = generate(LARGE);
@@ -144,8 +157,19 @@ before(() => {
   }
 });
 
+/** An `it` whose verdict rests on the timings, and so has none under Stryker.
+ * @param {string} name @param {(t: import("node:test").TestContext) => void} fn */
+const timed = (name, fn) =>
+  it(name, (t) => {
+    if (MUTATION_RUN) {
+      t.skip(MUTATION_RUN);
+      return;
+    }
+    fn(t);
+  });
+
 describe("prompt-submit latency", () => {
-  it("the calibration is a measurement, not timer noise", () => {
+  timed("the calibration is a measurement, not timer noise", () => {
     // Every ratio below divides by this. A machine that materializes 256 KB in
     // under a third of a millisecond is not one these gates can speak about, so
     // say so loudly rather than passing on a division by noise.
@@ -156,7 +180,7 @@ describe("prompt-submit latency", () => {
   });
 
   for (const name of Object.keys(SHAPES))
-    it(`${name}: a 256 KB prompt stays inside its budget`, () => {
+    timed(`${name}: a 256 KB prompt stays inside its budget`, () => {
       assert.ok(
         timing.units[name] <= BUDGET[name],
         `${name} classified in ${timing.units[name].toFixed(1)} units (${timing.large[name].toFixed(1)}ms), budget ${BUDGET[name]}`,
@@ -164,7 +188,7 @@ describe("prompt-submit latency", () => {
     });
 
   for (const name of Object.keys(SHAPES))
-    it(`${name}: cost grows with prompt length, not faster`, (t) => {
+    timed(`${name}: cost grows with prompt length, not faster`, (t) => {
       if (timing.small[name] < SCALABLE_FLOOR_MS) {
         t.skip(
           `${timing.small[name].toFixed(2)}ms at 32 KB is below the ${SCALABLE_FLOOR_MS}ms noise floor`,
@@ -178,19 +202,22 @@ describe("prompt-submit latency", () => {
       );
     });
 
-  it("enough shapes clear the noise floor for the scaling gate to mean something", () => {
-    // Without this the scaling gate could silently degrade to zero shapes on a
-    // fast machine and still report green.
-    const scalable = Object.keys(SHAPES).filter(
-      (name) => timing.small[name] >= SCALABLE_FLOOR_MS,
-    );
-    assert.ok(
-      scalable.length >= 4,
-      `only ${scalable.length} shapes were timeable at 32 KB: ${scalable.join(", ")}`,
-    );
-  });
+  timed(
+    "enough shapes clear the noise floor for the scaling gate to mean something",
+    () => {
+      // Without this the scaling gate could silently degrade to zero shapes on a
+      // fast machine and still report green.
+      const scalable = Object.keys(SHAPES).filter(
+        (name) => timing.small[name] >= SCALABLE_FLOOR_MS,
+      );
+      assert.ok(
+        scalable.length >= 4,
+        `only ${scalable.length} shapes were timeable at 32 KB: ${scalable.join(", ")}`,
+      );
+    },
+  );
 
-  it("the shapes really do split into cheap and carve-path prompts", () => {
+  timed("the shapes really do split into cheap and carve-path prompts", () => {
     // A positive control on the budget table: if every shape were answered by
     // the bulk regex passes, the carve-path budgets would be gating nothing and
     // could be tightened to CLEAN_BUDGET. This fails when a shape stops driving
@@ -204,20 +231,23 @@ describe("prompt-submit latency", () => {
       );
   });
 
-  it("the hook entry carries the same budget as the classifier it wraps", () => {
-    // The gate the user actually waits on is the hook, not the library
-    // function. Judging adds only constant work, so a clean paste through
-    // judgeSanitizeUserPrompt must stay inside the same clean budget — this is
-    // what fails if the cost ever moves into the hook's own wrapper.
-    const prompt = SHAPES["ascii-prose"](LARGE);
-    const event = claudeAdapter.parse({
-      hook_event_name: "UserPromptSubmit",
-      prompt,
-    });
-    const { cost, units } = unitsFor(() => judgeSanitizeUserPrompt(event));
-    assert.ok(
-      units <= CLEAN_BUDGET,
-      `the hook judged a clean 256 KB prompt in ${units.toFixed(1)} units (${cost.toFixed(1)}ms), budget ${CLEAN_BUDGET}`,
-    );
-  });
+  timed(
+    "the hook entry carries the same budget as the classifier it wraps",
+    () => {
+      // The gate the user actually waits on is the hook, not the library
+      // function. Judging adds only constant work, so a clean paste through
+      // judgeSanitizeUserPrompt must stay inside the same clean budget — this is
+      // what fails if the cost ever moves into the hook's own wrapper.
+      const prompt = SHAPES["ascii-prose"](LARGE);
+      const event = claudeAdapter.parse({
+        hook_event_name: "UserPromptSubmit",
+        prompt,
+      });
+      const { cost, units } = unitsFor(() => judgeSanitizeUserPrompt(event));
+      assert.ok(
+        units <= CLEAN_BUDGET,
+        `the hook judged a clean 256 KB prompt in ${units.toFixed(1)} units (${cost.toFixed(1)}ms), budget ${CLEAN_BUDGET}`,
+      );
+    },
+  );
 });

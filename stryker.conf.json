@@ -4,7 +4,7 @@
   "plugins": ["@stryker-mutator/tap-runner"],
   "testRunner": "tap",
   "tap": {
-    "testFiles": ["test/**/*.test.mjs", "!test/prompt-latency.test.mjs"],
+    "testFiles": ["test/**/*.test.mjs"],
     "nodeArgs": ["--test-reporter=tap"]
   },
   "coverageAnalysis": "perTest",
