@@ -28,6 +28,7 @@ import {
 import { scanText } from "../src/instructions.mjs";
 import { classifyPrompt } from "../src/prompt.mjs";
 import { sanitizeText } from "../src/output.mjs";
+import { sanitizeAuthoredContent } from "../claude-hooks/lib/authored-content.mjs";
 
 const MUTATION_RUN = process.env.STRYKER_NAMESPACE
   ? "an 8 MB fixture re-run per mutant costs hours; the differential suites cover these paths"
@@ -88,6 +89,18 @@ describe("a run past the regexp engine's limit", () => {
   huge("classifyPrompt blocks it", () =>
     assert.equal(classifyPrompt(RUN).action, "block"),
   );
+
+  // The hook layer reaches this through the PINNED engine, which has no bounded
+  // scan to import — its own bound is derived from the engine's STRIP class and
+  // threshold, so this holds at any pin.
+  huge("the authored-content hook strips it from a Write body", () => {
+    const result = sanitizeAuthoredContent("Write", {
+      file_path: "/tmp/x.md",
+      content: RUN,
+    });
+    assert.equal(result?.updatedInput.content, "");
+    assert.deepEqual(result?.changed, ["content (invisible characters)"]);
+  });
 
   huge("sanitizeText strips it", async () => {
     const { cleaned, found } = await sanitizeText(RUN);
