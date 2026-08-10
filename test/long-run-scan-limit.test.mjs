@@ -33,8 +33,12 @@ const MUTATION_RUN = process.env.STRYKER_NAMESPACE
   ? "an 8 MB fixture re-run per mutant costs hours; the differential suites cover these paths"
   : null;
 
-const ZWSP = "​";
-const RUN_LENGTH = 8 * 1024 * 1024;
+const ZWSP = "\u200B";
+// Deliberately NOT a multiple of the scan's chunk bound: an aligned length
+// lands every stitched match exactly on the end of the run, so a final tail
+// shorter than the bound — what RUN_TAIL_RE's lower bound is for — would never
+// be exercised by anything (the property draws top out at 14 code points).
+const RUN_LENGTH = 8 * 1024 * 1024 + 7;
 /** Built in `before` so a stood-down run allocates nothing. */
 let RUN = "";
 

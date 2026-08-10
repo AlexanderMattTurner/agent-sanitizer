@@ -48,8 +48,9 @@ const STRIP_ONE = new RegExp(STRIP.source, "u");
 const referencePayload = (text) =>
   [...payloadInvisibleView(text)].filter((ch) => STRIP_ONE.test(ch)).length;
 
-/** The runs the pattern itself matches — what findLongRuns must reproduce
- * without the regex engine (see its header for why it cannot use one). */
+/** The runs the pattern itself matches — what findLongRuns must reproduce with
+ * a bounded quantifier (see its header for why the unbounded pattern cannot
+ * scan a large document). */
 const referenceRuns = (text) =>
   [...text.matchAll(new RegExp(LONG_RUN_RE.source, "gu"))].map((match) => ({
     index: match.index,
