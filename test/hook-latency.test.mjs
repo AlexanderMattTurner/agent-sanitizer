@@ -73,44 +73,52 @@ const BUDGET = {
     "ascii-prose": 4,
     "cjk-prose": 6,
     "emoji-prose": 5,
-    "html-prose": 5,
+    "html-prose": 4,
     "joiner-dense": 25,
     "vs-dense": 15,
-    "emoji-zwj": 17,
-    "payload-run": 65,
-    "payload-scattered": 23,
+    "emoji-zwj": 16,
+    "payload-run": 73,
+    "payload-scattered": 28,
   },
   classifyPrompt: {
     "ascii-prose": 5,
-    "cjk-prose": 7,
+    "cjk-prose": 8,
     "emoji-prose": 6,
     "html-prose": 5,
-    "joiner-dense": 48,
-    "vs-dense": 37,
-    "emoji-zwj": 33,
-    "payload-run": 94,
-    "payload-scattered": 32,
+    "joiner-dense": 49,
+    "vs-dense": 32,
+    "emoji-zwj": 35,
+    "payload-run": 107,
+    "payload-scattered": 30,
   },
   sanitizeText: {
     "ascii-prose": 2,
-    "cjk-prose": 5,
-    "emoji-prose": 6,
-    "html-prose": 69,
-    "joiner-dense": 76,
-    "vs-dense": 40,
+    "cjk-prose": 7,
+    "emoji-prose": 7,
+    "html-prose": 187,
+    "joiner-dense": 75,
+    "vs-dense": 45,
     "emoji-zwj": 42,
     "payload-run": 52,
-    "payload-scattered": 7,
+    "payload-scattered": 8,
   },
 };
 
 // A hard wall-clock backstop on top of the ratios: a machine so slow that a
 // blocking hook takes this long over 256 KB is one the ratios would still call
-// healthy, and the user would still be waiting. The dearest cell measured is
-// 97 ms uninstrumented and 443 ms under the coverage run, so this sits BELOW
-// 1.6x the instrumented worst case, and well below the SLOW_HOOK_THRESHOLD_MS
-// notice the hook layer posts at.
+// healthy, and the user would still be waiting. The dearest cell is 160 ms
+// uninstrumented, so this leaves a factor of nearly four, and sits well below
+// the SLOW_HOOK_THRESHOLD_MS notice the hook layer posts at.
+//
+// Milliseconds are the one reading here that instrumentation does not cancel
+// out: the same cell costs 1019 ms under c8, which says nothing about the wait
+// a user pays. c8 exports NODE_V8_COVERAGE to every process it spawns, and that
+// is the signal to stand this gate down rather than raise it to a ceiling
+// nothing could ever hit.
 const WALL_CLOCK_CEILING_MS = 600;
+const INSTRUMENTED = process.env.NODE_V8_COVERAGE
+  ? "c8 instrumentation inflates wall clock several-fold; the ratio gates still apply"
+  : null;
 
 // LARGE is 8x SMALL, so linear scaling costs 8x. Anything past this is
 // super-linear in the document length — the shape of blow-up that turns a
@@ -136,20 +144,28 @@ function calibrationPass(text) {
  * Median of three timed runs after a warm-up call, in ms. Three is enough
  * because the gates below are ratios with room to spare, and a wider sample
  * would cost more wall clock than the regression it protects against.
- * @param {() => unknown | Promise<unknown>} fn
+ *
+ * Each run gets its own document from `document(attempt)`. Handing all four
+ * calls the same string measures a memo hit rather than the work — the HTML
+ * layer remembers its last parse, so the warm-up would build the tree the timed
+ * runs then reuse, and a hook sees every document exactly once. The documents
+ * differ in length by one code point, so the shape under test is unchanged.
+ * @param {(attempt: number) => string} document
+ * @param {(text: string) => unknown | Promise<unknown>} fn
  */
-async function measure(fn) {
-  await fn();
+async function measure(document, fn) {
+  await fn(document(0));
   const runs = [];
-  for (let i = 0; i < 3; i++) {
+  for (let i = 1; i <= 3; i++) {
+    const text = document(i);
     const started = performance.now();
-    await fn();
+    await fn(text);
     runs.push(performance.now() - started);
   }
   return runs.sort((a, b) => a - b)[1];
 }
 
-const calibrate = () => measure(() => calibrationPass(CALIBRATION_TEXT));
+const calibrate = () => measure(() => CALIBRATION_TEXT, calibrationPass);
 
 /**
  * `fn`'s cost in calibration units, calibrating on BOTH sides of the
@@ -159,11 +175,12 @@ const calibrate = () => measure(() => calibrationPass(CALIBRATION_TEXT));
  * contention. Bracketing the measurement keeps the two comparable, and taking
  * the larger unit resolves a drift in the direction that does not manufacture a
  * failure.
- * @param {() => unknown | Promise<unknown>} fn
+ * @param {(attempt: number) => string} document
+ * @param {(text: string) => unknown | Promise<unknown>} fn
  */
-async function unitsFor(fn) {
+async function unitsFor(document, fn) {
   const opening = await calibrate();
-  const cost = await measure(fn);
+  const cost = await measure(document, fn);
   return { cost, units: cost / Math.max(opening, await calibrate()) };
 }
 
@@ -178,12 +195,16 @@ before(async () => {
   timing.unit = await calibrate();
   for (const [entry, run] of Object.entries(ENTRIES))
     for (const [shape, generate] of Object.entries(SHAPES)) {
-      const large = generate(LARGE);
-      const small = generate(SMALL);
-      const measured = await unitsFor(() => run(large));
+      const measured = await unitsFor(
+        (attempt) => generate(LARGE - attempt),
+        run,
+      );
       timing.large[key(entry, shape)] = measured.cost;
       timing.units[key(entry, shape)] = measured.units;
-      timing.small[key(entry, shape)] = await measure(() => run(small));
+      timing.small[key(entry, shape)] = await measure(
+        (attempt) => generate(SMALL - attempt),
+        run,
+      );
     }
 });
 
@@ -240,7 +261,11 @@ describe("blocking-hook latency", () => {
       },
     );
 
-  timed("no blocking hook spends longer than the wall-clock ceiling", () => {
+  timed("no blocking hook spends longer than the wall-clock ceiling", (t) => {
+    if (INSTRUMENTED) {
+      t.skip(INSTRUMENTED);
+      return;
+    }
     for (const [entry, shape] of PAIRS) {
       const at = key(entry, shape);
       assert.ok(
@@ -324,8 +349,9 @@ describe("blocking-hook latency", () => {
       hook_event_name: "UserPromptSubmit",
       prompt,
     });
-    const { cost, units } = await unitsFor(() =>
-      judgeSanitizeUserPrompt(event),
+    const { cost, units } = await unitsFor(
+      () => prompt,
+      () => judgeSanitizeUserPrompt(event),
     );
     const budget = BUDGET.classifyPrompt["ascii-prose"];
     assert.ok(
