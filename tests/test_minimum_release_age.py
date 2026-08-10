@@ -75,15 +75,6 @@ def _pinned_exact_versions(pkg: dict) -> set[tuple[str, str]]:
     return pinned
 
 
-def package_json_spec(pkg: dict, name: str) -> str | None:
-    """The raw spec `pkg` declares for `name`, across every dependency field."""
-    for field in DEPENDENCY_FIELDS:
-        spec = (pkg.get(field) or {}).get(name)
-        if spec is not None:
-            return spec
-    return None
-
-
 def _split_spec(entry: str) -> tuple[str, str]:
     """Split `name@version` into its parts, tolerating a scoped `@scope/name`."""
     name, _, version = entry.rpartition("@")
@@ -160,18 +151,22 @@ def test_only_this_repo_s_own_package_is_exempt(
 
 
 @pytest.mark.drift_guard
-def test_pin_extraction_resolves_real_pins(package_json: dict) -> None:
+def test_pin_extraction_tells_a_pin_from_a_range(package_json: dict) -> None:
     """Non-vacuity for the two tests above.
 
-    Both walk `_pinned_exact_versions`. If it silently returned an empty set — a
-    renamed dependency field, a changed spec syntax — the exemption test would
-    still pass for an empty exclude list and start failing spuriously for a real
-    one, so pin that the extraction resolves something and that what it resolves
-    is a real dependency at a real version.
+    Both walk `_pinned_exact_versions`, and with `minimumReleaseAgeExclude`
+    empty they iterate zero entries — so this is the only thing standing between
+    them and silence. Asserted against a synthetic manifest, because comparing
+    the extraction's output back against the same manifest it read is a
+    tautology: it fails only if one name appears twice with different specs.
     """
-    pinned = _pinned_exact_versions(package_json)
-    assert pinned, "no exact version pins resolved out of package.json at all"
-    for name, version in pinned:
-        assert package_json_spec(package_json, name) == version, (
-            f"{name} resolved to {version}, which is not what package.json declares"
-        )
+    assert _pinned_exact_versions(
+        {"dependencies": {"a": "1.2.3", "b": "^1.2.3", "c": "link:."}}
+    ) == {("a", "1.2.3")}, (
+        "_pinned_exact_versions no longer tells an exact pin apart from a range "
+        "or a path spec, so the exemption guard cannot see the pins it checks"
+    )
+    assert _pinned_exact_versions(package_json), (
+        "no exact version pins resolved out of the real package.json — the "
+        "dependency fields it walks have been renamed or emptied"
+    )

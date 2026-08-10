@@ -56278,7 +56278,8 @@ __export(output_exports, {
   needsMarkdownPipeline: () => needsMarkdownPipeline,
   sanitizeText: () => sanitizeText,
   sanitizeValue: () => sanitizeValue,
-  suppressToolOutput: () => suppressToolOutput
+  suppressToolOutput: () => suppressToolOutput,
+  withheldWarning: () => withheldWarning
 });
 function mapFilterWarning(code4) {
   const label = typeof code4 === "string" && Object.hasOwn(FILTER_WARNING_LABELS, code4) ? FILTER_WARNING_LABELS[code4] : void 0;
@@ -56320,6 +56321,9 @@ async function runRedact(state, redact) {
       `API keys/secrets redacted: ${secrets.found.join(", ")}${secrets.note ?? ""}${REDACTION_DOCTRINE}`
     )
   );
+}
+function withheldWarning(label) {
+  return `Withheld the ${label}: it could not be vetted for secrets`;
 }
 function deleteVerbatimSpans(text5, spans) {
   const usable = spans.filter(
@@ -56415,9 +56419,7 @@ async function vetStageValue(text5, redact, findings, label) {
     const secrets = await redact(text5);
     return secrets ? normalizeLoneSurrogates(secrets.text) : text5;
   } catch {
-    findings.push(
-      warning(`Withheld the ${label}: it could not be vetted for secrets`)
-    );
+    findings.push(warning(withheldWarning(label)));
     return void 0;
   }
 }
@@ -70495,14 +70497,11 @@ async function evaluateToolOutput(input, ext = {}) {
     warnings.push(ON_DISK_PLACEHOLDER_WARNING);
   if (!modified && warnings.length === 0 && notes.length === 0)
     return revealRead ? emit("flagged", { additional_context: REVEAL_READ_ENVELOPE }) : emit("clean", null);
-  const baseContext = sgrNote && warnings.length === 0 ? noteContext(notes) : composeContext2(modified, warnings, input.tool_name);
+  const baseContext = sgrNote && warnings.length === 0 ? [...new Set(notes)].join(" ") : composeContext2(modified, warnings, input.tool_name);
   const additionalContext = revealRead ? `${REVEAL_READ_ENVELOPE} ${baseContext}` : baseContext;
   const fields = { additional_context: additionalContext };
   if (modified) fields.mutated_output = sanitized;
   return emit(modified ? "modified" : "flagged", fields);
-}
-function noteContext(notes) {
-  return [...new Set(notes)].join(" ");
 }
 async function judgeSanitizeOutput(event, ext = {}) {
   const { Decision: Decision3, EventKind: EventKind3 } = controlPlane();
@@ -70559,7 +70558,7 @@ async function cliMain2(ext = {}) {
     }
   );
 }
-var _sanitizer, HTML_TAG_PRESENT2, applyLayer14, matchesSecretHint2, SECRET_HINT2, SECRET_HINT_EXT2, _output, sanitizeTextSeam, composeContextSeam, describeRemoved2, describeWarned2, suppressToolOutput2, HOOK_NAME2, REVEAL_WITHHELD_WARNING, SANITIZE_BUDGET_MS, WEB_INGRESS_TOOLS, COLLISION_WITHHELD_MESSAGE, nextWithheldIndex, ON_DISK_PLACEHOLDER_WARNING, FAIL_CLOSED_CONTEXT;
+var _sanitizer, HTML_TAG_PRESENT2, applyLayer14, matchesSecretHint2, SECRET_HINT2, SECRET_HINT_EXT2, _output, sanitizeTextSeam, composeContextSeam, withheldWarning2, describeRemoved2, describeWarned2, suppressToolOutput2, HOOK_NAME2, REVEAL_WITHHELD_WARNING, SANITIZE_BUDGET_MS, WEB_INGRESS_TOOLS, COLLISION_WITHHELD_MESSAGE, nextWithheldIndex, ON_DISK_PLACEHOLDER_WARNING, FAIL_CLOSED_CONTEXT;
 var init_sanitize_output = __esm({
   async "claude-hooks/sanitize-output.mjs"() {
     "use strict";
@@ -70578,10 +70577,14 @@ var init_sanitize_output = __esm({
     ({ applyLayer1: applyLayer14, matchesSecretHint: matchesSecretHint2, SECRET_HINT: SECRET_HINT2, SECRET_HINT_EXT: SECRET_HINT_EXT2 } = _sanitizer);
     _output = /** @type {typeof import("agent-sanitizer/output")} */
     await lazyImport("agent-sanitizer/output");
-    ({ sanitizeText: sanitizeTextSeam, composeContext: composeContextSeam } = _output);
+    ({
+      sanitizeText: sanitizeTextSeam,
+      composeContext: composeContextSeam,
+      withheldWarning: withheldWarning2
+    } = _output);
     ({ describeRemoved: describeRemoved2, describeWarned: describeWarned2, suppressToolOutput: suppressToolOutput2 } = _output);
     HOOK_NAME2 = "sanitize-output";
-    REVEAL_WITHHELD_WARNING = "Withheld the reveal sidecar: it could not be vetted for secrets";
+    REVEAL_WITHHELD_WARNING = withheldWarning2("reveal sidecar");
     SANITIZE_BUDGET_MS = positiveMsOr(
       process.env._AGENT_SANITIZER_SANITIZE_BUDGET_MS,
       12e4

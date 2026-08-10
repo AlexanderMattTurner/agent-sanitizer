@@ -33,6 +33,7 @@ import {
   mkdirSync,
   readFileSync,
   copyFileSync,
+  cpSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
@@ -72,12 +73,28 @@ export const WHEEL_PATH = join(
  * @returns {string}
  */
 export function buildEngineWheel() {
+  // `python/` is staged without `_bundled/` first. pyproject force-includes the
+  // git-ignored `_bundled/sanitize-cli.mjs` WHEN IT EXISTS, so building straight
+  // off the checkout would let the builder's local state decide the bytes of a
+  // committed artifact — and a 1.7 MB Node bridge no consumer of this wheel
+  // reaches (the daemon is pure Python) would ride into every rebuild's diff.
+  const stage = mkdtempSync(join(tmpdir(), "agent-sanitizer-py-"));
   // Built into a scratch dir and copied in: `uv build --out-dir` drops a
   // `.gitignore` of `*` beside its output, which in a COMMITTED directory would
   // silently keep the wheel out of the commit that ships it.
   const out = mkdtempSync(join(tmpdir(), "agent-sanitizer-wheel-"));
   try {
-    run("uv", ["build", "--wheel", "--out-dir", out, join(ROOT, "python")], {
+    const source = join(stage, "python");
+    cpSync(join(ROOT, "python"), source, {
+      recursive: true,
+      filter: (from) => basename(from) !== "_bundled",
+    });
+    if (existsSync(join(source, "agent_sanitizer", "_bundled")))
+      throw new Error(
+        "the _bundled/ exclusion did not take, so the wheel's bytes would " +
+          "depend on whether this machine has run scripts/bundle-python-cli.mjs",
+      );
+    run("uv", ["build", "--wheel", "--out-dir", out, source], {
       SOURCE_DATE_EPOCH: "315532800",
     });
     const built = join(out, basename(WHEEL_PATH));
@@ -92,6 +109,7 @@ export function buildEngineWheel() {
     return WHEEL_PATH;
   } finally {
     rmSync(out, { recursive: true, force: true });
+    rmSync(stage, { recursive: true, force: true });
   }
 }
 
@@ -209,69 +227,47 @@ export function buildRedactorPyz() {
   const work = mkdtempSync(join(tmpdir(), "agent-sanitizer-pyz-"));
   try {
     const target = join(work, "site");
-    // uv when available (CI installs it; much faster sdist builds), pip
-    // otherwise. Both get the same determinism-bearing flags. `--require-hashes`
-    // is explicit rather than left to be inferred from the lock carrying
-    // hashes: an unhashed line slipping in must fail the build, not quietly
-    // disable hash checking for the whole file.
-    const uv = spawnSync("uv", ["--version"]).status === 0;
+    // uv is a hard requirement, not a preference: the engine wheel below is
+    // built with `uv build`, and lock-redactor-deps.mjs compiles the lock this
+    // reads with `uv pip compile`. A pip fallback for the install alone would
+    // never be reached.
+    if (spawnSync("uv", ["--version"]).status !== 0)
+      throw new Error(
+        "uv is required to build the redactor zipapp (https://docs.astral.sh/uv/). " +
+          "It builds the engine wheel and installs the hash-pinned lock.",
+      );
     const engineSource = buildEngineWheel();
-    if (uv) {
-      run("uv", [
-        "pip",
-        "install",
-        "--quiet",
-        "--target",
-        target,
-        "--no-binary",
-        ":all:",
-        "--no-compile-bytecode",
-        "--require-hashes",
-        "-r",
-        REQUIREMENTS_LOCK_PATH,
-      ]);
-      // Second pass, and `--no-deps`: the tree's own dependencies were just
-      // installed from the hashed lock, and a local path carries no hash, so
-      // resolving it here would turn hash checking off for the whole install.
-      // No `--no-binary` either: that flag exists to refuse PyPI's prebuilt
-      // wheels, and this one is the pure-Python artifact this build just made.
-      run("uv", [
-        "pip",
-        "install",
-        "--quiet",
-        "--target",
-        target,
-        "--no-compile-bytecode",
-        "--no-deps",
-        engineSource,
-      ]);
-    } else {
-      run("python3", [
-        "-m",
-        "pip",
-        "install",
-        "--quiet",
-        "--target",
-        target,
-        "--no-binary",
-        ":all:",
-        "--no-compile",
-        "--require-hashes",
-        "-r",
-        REQUIREMENTS_LOCK_PATH,
-      ]);
-      run("python3", [
-        "-m",
-        "pip",
-        "install",
-        "--quiet",
-        "--target",
-        target,
-        "--no-compile",
-        "--no-deps",
-        engineSource,
-      ]);
-    }
+    // `--require-hashes` is explicit rather than left to be inferred from the
+    // lock carrying hashes: an unhashed line slipping in must fail the build,
+    // not quietly disable hash checking for the whole file.
+    run("uv", [
+      "pip",
+      "install",
+      "--quiet",
+      "--target",
+      target,
+      "--no-binary",
+      ":all:",
+      "--no-compile-bytecode",
+      "--require-hashes",
+      "-r",
+      REQUIREMENTS_LOCK_PATH,
+    ]);
+    // Second pass, and `--no-deps`: the tree's own dependencies were just
+    // installed from the hashed lock, and a local path carries no hash, so
+    // resolving it here would turn hash checking off for the whole install.
+    // No `--no-binary` either: that flag exists to refuse PyPI's prebuilt
+    // wheels, and this one is the pure-Python artifact this build just made.
+    run("uv", [
+      "pip",
+      "install",
+      "--quiet",
+      "--target",
+      target,
+      "--no-compile-bytecode",
+      "--no-deps",
+      engineSource,
+    ]);
     mkdirSync(dirname(PYZ_PATH), { recursive: true });
     const out = run("python3", ["-c", WRITE_PYZ], {
       PYZ_TARGET_DIR: target,

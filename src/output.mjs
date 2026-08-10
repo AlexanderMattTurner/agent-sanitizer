@@ -263,6 +263,19 @@ export const REDACTION_DOCTRINE =
   " (placeholders rehydrate only via Edit/Write on the owning file; other " +
   "write paths persist the placeholder text and lose the secret)";
 
+/**
+ * The warning prose for a value the caller asked for and is not getting,
+ * because the redactor could not vet it for secrets.
+ *
+ * Exported so the hook layer composes the same sentence for the artifacts it
+ * withholds itself (the reveal sidecar) rather than restating the wording.
+ * @param {string} label what was withheld, as a noun phrase
+ * @returns {string}
+ */
+export function withheldWarning(label) {
+  return `Withheld the ${label}: it could not be vetted for secrets`;
+}
+
 // Layer 2/3 pre-gate and warning prose are shared with the root entry
 // (./index.mjs), which runs the same layers; re-exported here because both were
 // part of this module's public surface before they moved.
@@ -527,9 +540,7 @@ async function vetStageValue(text, redact, findings, label) {
     // A WARNING: the caller asked for this field and is not getting it, and the
     // reason is an unrunnable redactor — the same fault that fails `cleaned`
     // closed, just with a survivable remedy here.
-    findings.push(
-      warning(`Withheld the ${label}: it could not be vetted for secrets`),
-    );
+    findings.push(warning(withheldWarning(label)));
     return undefined;
   }
 }

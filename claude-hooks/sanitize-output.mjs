@@ -82,8 +82,11 @@ export const { applyLayer1, matchesSecretHint, SECRET_HINT, SECRET_HINT_EXT } =
 const _output = /** @type {typeof import("agent-sanitizer/output")} */ (
   await lazyImport("agent-sanitizer/output")
 );
-const { sanitizeText: sanitizeTextSeam, composeContext: composeContextSeam } =
-  _output;
+const {
+  sanitizeText: sanitizeTextSeam,
+  composeContext: composeContextSeam,
+  withheldWarning,
+} = _output;
 export const { describeRemoved, describeWarned, suppressToolOutput } = _output;
 
 const HOOK_NAME = "sanitize-output";
@@ -94,12 +97,7 @@ const HOOK_NAME = "sanitize-output";
 // splice/withhold warnings make is NOT kept for this output. Fixed prose, no
 // error text — the redactor runs on attacker-influenced content and this line
 // reaches the model-facing context. Exported so tests assert it by reference.
-// Deliberately a LOCAL constant rather than a shared engine builder alongside
-// output.mjs's "Withheld the ${label}" template: the plugin bundle resolves
-// the engine to the pinned registry release, so hook code cannot use a new
-// engine export until the pin advances past it.
-export const REVEAL_WITHHELD_WARNING =
-  "Withheld the reveal sidecar: it could not be vetted for secrets";
+export const REVEAL_WITHHELD_WARNING = withheldWarning("reveal sidecar");
 
 // Total wall-clock budget for one hook invocation's blocking daemon calls — the
 // Layer-4 redactor — SHARED across every string leaf of the tool output. Each
@@ -992,7 +990,7 @@ export async function evaluateToolOutput(input, ext = {}) {
   // hidden-HTML splice to read about does not also need the colour codes).
   const baseContext =
     sgrNote && warnings.length === 0
-      ? noteContext(notes)
+      ? [...new Set(notes)].join(" ")
       : composeContext(modified, warnings, input.tool_name);
   const additionalContext = revealRead
     ? `${REVEAL_READ_ENVELOPE} ${baseContext}`
@@ -1001,16 +999,6 @@ export async function evaluateToolOutput(input, ext = {}) {
   const fields = { additional_context: additionalContext };
   if (modified) fields.mutated_output = sanitized;
   return emit(modified ? "modified" : "flagged", fields);
-}
-
-/**
- * The model-facing line for a note-only result: the seam's own note text,
- * deduped and joined, with no WARNING prefix.
- * @param {string[]} notes
- * @returns {string}
- */
-function noteContext(notes) {
-  return [...new Set(notes)].join(" ");
 }
 
 /**
