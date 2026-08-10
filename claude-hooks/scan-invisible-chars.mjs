@@ -204,13 +204,10 @@ function decodeRun(run) {
 
 // Target discovery stays hook-local glue, NOT a copy of the SSOT's
 // containment-checked `findInstructionFiles`: the two have different contracts.
-// The SSOT finder silently DROPS a target it cannot resolve (dangling symlink,
-// out-of-tree symlink), which is right for a pure scan API — but this hook's
-// accounting invariant (scanned + skipped === targets, see scanProject)
-// requires unreadable targets to stay LISTED so they are reported as unvetted
-// rather than vanishing into an "all clean" announcement. The write-side
-// symlink hazard the SSOT finder guards against is covered here by cleanFile's
-// own O_NOFOLLOW open.
+// The SSOT finder drops every target it cannot resolve, which is right for a
+// pure scan API; this hook must instead bucket it (see classifyReadFailure).
+// The write-side symlink hazard the SSOT finder guards against is covered here
+// by cleanFile's own O_NOFOLLOW open.
 
 /**
  * Every file under `dir` that Claude Code loads as model context: the
@@ -313,35 +310,41 @@ export { formatReport };
 // Main (skip when imported for testing)
 
 /**
- * Scan every instruction file under the project, ACCOUNTING for every target
- * the finder returned: `scanned + skipped.length + absent.length ===
- * targets.length`, always.
+ * PROBLEM CLASS — how a failed instruction-file read is classified. Every
+ * consumer reads this one bucketing; nothing re-derives it from an errno.
  *
- * The accounting is the point. This scan is the only thing standing between a
- * poisoned `CLAUDE.md` and a session that loads it as instructions, and its
- * caller announces "clean" on the trace channel — the channel that exists so a
- * MISSING announcement is loud. A per-file failure swallowed into an empty
- * findings list turns "we could not read this file" into "this file is fine",
- * which is the one lie this hook must never tell. So a file that EXISTS and
- * cannot be read is REPORTED as unscanned, not dropped.
+ * The scan is the only thing between a poisoned `CLAUDE.md` and a session that
+ * loads it as instructions, and its caller announces "clean" on the trace
+ * channel, whose whole purpose is that a MISSING announcement is loud. So a
+ * read failure is never swallowed into an empty findings list — that turns "we
+ * could not read this file" into "this file is fine". Three buckets:
  *
- * ENOENT is the one errno that is not such a file, so it goes to `absent`
- * instead of `skipped`: the path resolves to nothing (a dangling symlink, or a
- * file removed between the glob and the read), and Claude Code loads
- * instruction files through the same open. An unresolvable path therefore
- * carries no bytes that can reach the model, so calling it unvetted context
- * names a risk that does not exist — and a gate that asks about a permanent
- * dangling symlink on every session teaches the operator to dismiss it.
- *
- * Every other errno is a skip; only a non-filesystem throw propagates. The
- * split is between "this file could not be read" (report it and keep scanning)
- * and "this code is broken" (a TypeError from an unloaded binding — nothing
- * here can be trusted, so it goes to the caller's declared failure posture).
- * Catching only ENOENT would invert the enforcement: one EACCES target would
- * discard the result for EVERY other instruction file, leaving them unscanned
- * and un-auto-cleaned, and under the shipped OPEN posture the hook fault arms
- * nothing — so the SUSPICIOUS failure would get weaker enforcement than the
- * benign glob race. Same errno-vs-bug split {@link autoCleanFindings} uses.
+ *   - SKIPPED — the file exists and this uid cannot read it (EACCES, EISDIR,
+ *     ELOOP…). Unvetted context: reported to the operator and it arms the gate.
+ *   - ABSENT — ENOENT. The path resolves to nothing, and Claude Code loads
+ *     instruction files through the same open, so no bytes can reach the model.
+ *     Announced on the trace channel only; naming a risk that does not exist
+ *     teaches the operator to dismiss the gate.
+ *   - THROWN — no errno at all, i.e. a bug (a TypeError from an unloaded
+ *     binding). Nothing here can be trusted, so it goes to the caller's
+ *     declared failure posture. Same errno-vs-bug split {@link
+ *     autoCleanFindings} uses.
+ * @param {unknown} err
+ * @returns {"absent" | "skipped"}  never returns for a non-errno throw
+ */
+function classifyReadFailure(err) {
+  const code = /** @type {NodeJS.ErrnoException} */ (err).code;
+  if (code === undefined) throw err;
+  return code === "ENOENT" ? "absent" : "skipped";
+}
+
+/**
+ * Scan every instruction file under the project, bucketing each unreadable
+ * target through {@link classifyReadFailure}. `scanned` is DERIVED from the two
+ * failure buckets, so the accounting invariant — every target is scanned,
+ * skipped or absent — holds by construction and needs no comment restating it.
+ * A target lost from that accounting is an instruction file that reaches the
+ * model while the caller announces "clean".
  * @param {string} [dir]  project root to scan (injectable for tests)
  * @returns {{
  *   targets: string[],
@@ -356,15 +359,12 @@ export function scanProject(dir = PROJECT_DIR) {
   const findings = [];
   const skipped = [];
   const absent = [];
-  let scanned = 0;
   for (const file of targets) {
     let fileFindings;
     try {
       fileFindings = scanFile(file);
     } catch (err) {
-      const code = /** @type {NodeJS.ErrnoException} */ (err).code;
-      if (code === undefined) throw err;
-      if (code === "ENOENT") {
+      if (classifyReadFailure(err) === "absent") {
         absent.push(relative(dir, file));
         continue;
       }
@@ -375,10 +375,10 @@ export function scanProject(dir = PROJECT_DIR) {
       skipped.push({ file: relative(dir, file), reason: safeErrMessage(err) });
       continue;
     }
-    scanned++;
     if (fileFindings.length > 0)
       findings.push({ file: relative(dir, file), findings: fileFindings });
   }
+  const scanned = targets.length - skipped.length - absent.length;
   return { targets, scanned, findings, skipped, absent };
 }
 
@@ -514,11 +514,8 @@ async function runScanCli({ trace: sink = trace, scan: runScan }) {
   }
   const { findings: allFindings, skipped, absent, scanned } = scan;
 
-  // "clean" is a claim about every target that HAS content, so it may only be
-  // made when every such target was read. A scan that could not read one says
-  // "partial" and arms the gate: an unread instruction file is UNVETTED
-  // context, not absent findings. An `absent` target has no content to vet, so
-  // it is announced for the record and never reaches the gate.
+  // The three buckets of classifyReadFailure, rendered: only `skipped` may
+  // withhold "clean" and arm the gate.
   if (skipped.length > 0) {
     emitTrace(TraceEvent.SCAN_INVISIBLE_CHARS_RAN, {
       outcome: "partial",

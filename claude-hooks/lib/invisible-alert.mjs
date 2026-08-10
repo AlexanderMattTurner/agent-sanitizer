@@ -2,8 +2,8 @@
  * The cross-hook alert state for a SessionStart scan that did not finish clean:
  * invisible-character injection it could not auto-clean (e.g. a root-owned
  * file), an instruction file it could not read at all, or a scanner fault. A
- * target that does not exist is none of these and never gets here — see
- * scanProject's `absent` bucket. The scanner writes the alert; the gate reads it
+ * target that does not exist is none of these and never gets here — the
+ * bucketing is classifyReadFailure's. The scanner writes the alert; the gate reads it
  * and asks ONCE this session (a hard checkpoint) then degrades to a passive
  * reminder — the per-call prompt-storm trains the user to rubber-stamp.
  *
@@ -91,12 +91,11 @@ export function acknowledgeAlert() {
   writeSentinelFile(ALERT_ACK_FILE);
 }
 
-// What the operator can actually DO, one bullet per kind of report. The gate is
-// the only surface that demands an action, so the remedy lives here and nowhere
-// else. "Clean the affected files" alone named no command and no cause, so the
-// gate blocked a tool call while telling the reader nothing they could act on.
-// The auto-clean has ALREADY run and failed on anything listed here, which is
-// why the remedy is the thing that blocked the rewrite, not a re-run.
+// What the operator can actually DO — one bullet per kind of report the alert
+// can carry, so no report leaves the reader without a next step. The gate is
+// the only surface that demands an action, so the remedy lives here alone. The
+// auto-clean has ALREADY run and failed on anything listed here, which is why
+// each remedy is the thing that blocked the rewrite, not a re-run.
 const REMEDY =
   "To clear this gate:\n" +
   "  - A file listed with invisible characters: the automatic clean already\n" +
@@ -105,6 +104,8 @@ const REMEDY =
   "    non-UTF-8 bytes).\n" +
   "  - A file listed as NOT SCANNED: make it readable to this user, or delete\n" +
   "    it if it is not meant to be instructions.\n" +
+  "  - No file listed, only a scan fault: the fault text above names its own\n" +
+  "    fix (e.g. `pnpm install`). Apply that.\n" +
   "Then start a new session. The scan re-runs and the gate clears.";
 
 /**
