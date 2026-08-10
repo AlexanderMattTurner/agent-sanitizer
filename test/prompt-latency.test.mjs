@@ -7,6 +7,12 @@
  * the correctness suites are indifferent to it, which is how a per-code-point
  * RegExp scan sat in the carve analysis charging ~250 ms per megabyte.
  *
+ * `stryker.conf.json` excludes this file from `tap.testFiles`: the mutation run
+ * instruments every source file and runs four workers at once, which blows the
+ * clean-prompt budget in Stryker's own dry run and aborts the whole gate — and a
+ * suite that re-times four seconds of prompts per mutant would cost more than
+ * every other suite combined while killing nothing a behavioural test does not.
+ *
  * Every budget is a RATIO against a calibration measured in this same process:
  * one code-point-by-code-point pass over a fixed 256 KB prompt, which is the
  * cheapest full read of a prompt anything here can do. Machine speed, CPU
