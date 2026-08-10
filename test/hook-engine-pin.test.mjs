@@ -160,8 +160,11 @@ describe("the hook layer against the pinned engine", () => {
       (target) => target.alias?.[ENGINE] === PIN,
     );
     assert.equal(aliased.length, 1);
+    // Compared as a tail, not against `repoRoot`: Stryker runs this from a
+    // sandbox copy, where the target's absolute entry is under the sandbox
+    // while `git rev-parse` still answers with the real checkout.
     assert.ok(
-      aliased[0].entry.startsWith(join(repoRoot, "claude-hooks")),
+      aliased[0].entry.endsWith(join("claude-hooks", "plugin-hooks.mjs")),
       `the aliased bundle entry moved to ${aliased[0].entry}`,
     );
   });
