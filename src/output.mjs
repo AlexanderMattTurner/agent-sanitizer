@@ -418,12 +418,11 @@ async function applyMarkdownPipeline(state, { html, exfilScan, deadline }) {
   const splices = [];
   if ((!html && !exfilScan) || !needsMarkdownPipeline(inputText))
     return { reveal: undefined, splices };
-  // INVARIANT: this refusal is what stops a layer below from STARTING with no
-  // budget left. Each parses the whole document in ONE synchronous call, so
-  // nothing interrupts it, and a host that kills the overrun hook reads the kill
-  // as non-blocking and shows the RAW text. Fail closed, the posture runRedact
-  // takes for Layer 4. Called before EACH parse: Layer 2 is what spends the
-  // budget Layer 3 then runs on. After the pre-gate: a declined call costs none.
+  // INVARIANT: this refusal stops a layer below from STARTING with no budget
+  // left. Each parses the whole document in ONE synchronous call, so nothing
+  // interrupts it, and a host that kills the overrun hook shows the RAW text.
+  // Called before EACH parse: Layer 2 spends the budget Layer 3 then runs on.
+  // After the pre-gate: a declined call costs no time. Fail closed, as Layer 4.
   const refuseIfSpent = () => {
     if (deadline && deadline.remainingMs() <= 0)
       throw new Error(
