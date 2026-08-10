@@ -67523,7 +67523,7 @@ var init_invisible_alert = __esm({
       `.claude-invisible-char-alert-${PROJECT_HASH}`
     );
     ALERT_ACK_FILE = `${ALERT_FILE}.acked`;
-    REMEDY = "To clear this gate:\n  - A file listed with invisible characters: the automatic clean already\n    failed on it. Remove the characters by hand, or fix what blocked the\n    rewrite (a symlink on the path, a read-only or foreign-owned file,\n    non-UTF-8 bytes).\n  - A file listed as NOT SCANNED: make it readable to this user, or delete\n    it if it is not meant to be instructions.\nThen start a new session. The scan re-runs and the gate clears.";
+    REMEDY = "To clear this gate:\n  - A file listed with invisible characters: the automatic clean already\n    failed on it. Remove the characters by hand, or fix what blocked the\n    rewrite (a symlink on the path, a read-only or foreign-owned file,\n    non-UTF-8 bytes).\n  - A file listed as NOT SCANNED: make it readable to this user, or delete\n    it if it is not meant to be instructions.\n  - No file listed, only a scan fault: the fault text above names its own\n    fix (e.g. `pnpm install`). Apply that.\nThen start a new session. The scan re-runs and the gate clears.";
   }
 });
 
@@ -70155,33 +70155,35 @@ function formatReport(allFindings) {
   lines.push(BAR);
   return lines.join("\n");
 }
+function classifyReadFailure(err) {
+  const code4 = (
+    /** @type {NodeJS.ErrnoException} */
+    err.code
+  );
+  if (code4 === void 0) throw err;
+  return code4 === "ENOENT" ? "absent" : "skipped";
+}
 function scanProject(dir = PROJECT_DIR) {
   const targets = [...new Set(findInstructionFiles2(dir))];
   const findings = [];
   const skipped = [];
   const absent = [];
-  let scanned = 0;
   for (const file of targets) {
     let fileFindings;
     try {
       fileFindings = scanFile(file);
     } catch (err) {
-      const code4 = (
-        /** @type {NodeJS.ErrnoException} */
-        err.code
-      );
-      if (code4 === void 0) throw err;
-      if (code4 === "ENOENT") {
+      if (classifyReadFailure(err) === "absent") {
         absent.push(relative2(dir, file));
         continue;
       }
       skipped.push({ file: relative2(dir, file), reason: safeErrMessage(err) });
       continue;
     }
-    scanned++;
     if (fileFindings.length > 0)
       findings.push({ file: relative2(dir, file), findings: fileFindings });
   }
+  const scanned = targets.length - skipped.length - absent.length;
   return { targets, scanned, findings, skipped, absent };
 }
 function formatSkipped(skipped) {
