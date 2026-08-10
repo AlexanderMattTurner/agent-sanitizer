@@ -17,6 +17,9 @@
  *   node scripts/bench-hooks.mjs --runs 1            # timed calls per cell
  *   node scripts/bench-hooks.mjs --json              # one JSON row per line
  */
+import { realpathSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+
 import { classifyPrompt } from "../src/prompt.mjs";
 import { scanText } from "../src/instructions.mjs";
 import { sanitizeText } from "../src/output.mjs";
@@ -52,16 +55,29 @@ export const ENTRIES = {
 const DEFAULT_SIZES = [4 * 1024, 256 * 1024, 8 * 1024 * 1024];
 const DEFAULT_RUNS = 4;
 
-/** The fastest of `runs` timed calls after a warm-up, in ms. The minimum rather
+/**
+ * The fastest of `runs` timed calls after a warm-up, in ms. The minimum rather
  * than the median: it is the measurement least polluted by whatever else the
  * machine was doing, which is what a before/after comparison wants.
- * @param {() => unknown | Promise<unknown>} fn @param {number} runs */
-async function fastest(fn, runs) {
-  await fn();
+ *
+ * Every call gets its OWN document, from `document(run)`. Handing the same
+ * string to each run measures a memo hit rather than the work: the HTML layer
+ * remembers its last parse, so a warm-up on the timed text hands every timed run
+ * a tree it did not build — 81 ms for a 256 KB fragment against the 149 ms a
+ * hook pays for a document it is seeing for the first time, which is the only
+ * case there is. The documents differ in length by one code point, so the shape
+ * under test is unchanged.
+ * @param {(run: number) => string} document
+ * @param {(text: string) => unknown | Promise<unknown>} fn
+ * @param {number} runs
+ */
+async function fastest(document, fn, runs) {
+  await fn(document(0));
   let best = Infinity;
-  for (let i = 0; i < runs; i++) {
+  for (let i = 1; i <= runs; i++) {
+    const text = document(i);
     const started = performance.now();
-    await fn();
+    await fn(text);
     best = Math.min(best, performance.now() - started);
   }
   return best;
@@ -86,9 +102,10 @@ export async function benchmark(sizes, runs, onRow = () => {}) {
   const rows = [];
   for (const size of sizes)
     for (const [shape, generate] of Object.entries(SHAPES)) {
-      const text = generate(size);
+      const document = (/** @type {number} */ attempt) =>
+        generate(size - attempt);
       for (const [entry, run] of Object.entries(ENTRIES)) {
-        const row = await fastest(() => run(text), runs).then(
+        const row = await fastest(document, run, runs).then(
           (ms) => ({ size, entry, shape, ms }),
           (err) => ({
             size,
@@ -105,43 +122,55 @@ export async function benchmark(sizes, runs, onRow = () => {}) {
   return rows;
 }
 
-const args = process.argv.slice(2);
-const sizesArg = args.indexOf("--sizes");
-const sizes =
-  sizesArg === -1
-    ? DEFAULT_SIZES
-    : args[sizesArg + 1].split(",").map((n) => Number(n));
-const runsArg = args.indexOf("--runs");
-const runs = runsArg === -1 ? DEFAULT_RUNS : Number(args[runsArg + 1]);
-const asJson = args.includes("--json");
-const rows = await benchmark(sizes, runs, (row) => {
-  if (asJson) console.log(JSON.stringify(row));
-});
+// Importable without side effects: `test/hook-latency.test.mjs` reads SHAPES and
+// ENTRIES so the gate and this harness measure the same nine documents through
+// the same three entry points, and importing them must not run a sweep.
+if (
+  process.argv[1] &&
+  realpathSync(process.argv[1]) === fileURLToPath(import.meta.url)
+) {
+  await main();
+}
 
-if (!asJson) {
-  const label = (n) => (n >= 1 << 20 ? `${n >> 20} MB` : `${n >> 10} KB`);
-  for (const size of sizes) {
-    console.log(`\n${label(size)}`);
-    console.log(
-      `  ${"shape".padEnd(18)}${Object.keys(ENTRIES)
-        .map((e) => e.padStart(16))
-        .join("")}`,
-    );
-    for (const shape of Object.keys(SHAPES))
+async function main() {
+  const args = process.argv.slice(2);
+  const sizesArg = args.indexOf("--sizes");
+  const sizes =
+    sizesArg === -1
+      ? DEFAULT_SIZES
+      : args[sizesArg + 1].split(",").map((n) => Number(n));
+  const runsArg = args.indexOf("--runs");
+  const runs = runsArg === -1 ? DEFAULT_RUNS : Number(args[runsArg + 1]);
+  const asJson = args.includes("--json");
+  const rows = await benchmark(sizes, runs, (row) => {
+    if (asJson) console.log(JSON.stringify(row));
+  });
+
+  if (!asJson) {
+    const label = (n) => (n >= 1 << 20 ? `${n >> 20} MB` : `${n >> 10} KB`);
+    for (const size of sizes) {
+      console.log(`\n${label(size)}`);
       console.log(
-        `  ${shape.padEnd(18)}${Object.keys(ENTRIES)
-          .map(
-            (entry) =>
-              /** @type {{ ms: number | null }} */ (
-                rows.find(
-                  (r) =>
-                    r.size === size && r.entry === entry && r.shape === shape,
-                )
-              ).ms
-                ?.toFixed(1)
-                .padStart(16) ?? "throws".padStart(16),
-          )
+        `  ${"shape".padEnd(18)}${Object.keys(ENTRIES)
+          .map((e) => e.padStart(16))
           .join("")}`,
       );
+      for (const shape of Object.keys(SHAPES))
+        console.log(
+          `  ${shape.padEnd(18)}${Object.keys(ENTRIES)
+            .map(
+              (entry) =>
+                /** @type {{ ms: number | null }} */ (
+                  rows.find(
+                    (r) =>
+                      r.size === size && r.entry === entry && r.shape === shape,
+                  )
+                ).ms
+                  ?.toFixed(1)
+                  .padStart(16) ?? "throws".padStart(16),
+            )
+            .join("")}`,
+        );
+    }
   }
 }

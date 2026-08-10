@@ -2225,4 +2225,20 @@ describe("indented code blocks are content, not hiding places", () => {
       // nothing to rewrite.
       assert.equal(cleaned, source);
     });
+
+  // CommonMark expands a tab to the next four-column tab stop, so fewer than
+  // four spaces followed by a tab opens the same block. The construct sits
+  // DIRECTLY after the indent here: with a word between them the line reaches
+  // the balance walk either way, so that arrangement cannot tell a correct
+  // indent test from one that only knows about four spaces and a bare tab.
+  for (const [indent, label] of [
+    [" \t", "one space then a tab"],
+    ["  \t", "two spaces then a tab"],
+    ["   \t", "three spaces then a tab"],
+  ])
+    it(`leaves a hidden div alone after ${label} — a tab-expanded indent`, async () => {
+      const source = `${indent}${construct}\n`;
+      const { cleaned } = await sanitize(source, { html: true });
+      assert.equal(cleaned, source);
+    });
 });

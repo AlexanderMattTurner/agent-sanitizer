@@ -21,9 +21,12 @@
 import { describe, it, before } from "node:test";
 import assert from "node:assert/strict";
 
-import { classifyPrompt } from "../src/prompt.mjs";
-import { scanText } from "../src/instructions.mjs";
-import { sanitizeText } from "../src/output.mjs";
+// The nine document shapes and the three blocking entry points are the
+// benchmark's, imported rather than restated: its milliseconds are only evidence
+// for the budgets below while both read the same table, and a copy kept in step
+// by convention is not a single source. `scripts/bench-hooks.mjs` sweeps only
+// when it is the process entry point, so importing it costs nothing.
+import { ENTRIES, SHAPES } from "../scripts/bench-hooks.mjs";
 
 const { claudeAdapter } = await import("agent-control-plane-core/claude");
 const { judgeSanitizeUserPrompt } =
@@ -50,45 +53,11 @@ const MUTATION_RUN = process.env.STRYKER_NAMESPACE
 const KB = 1024;
 const SMALL = 32 * KB;
 const LARGE = 256 * KB;
-const cp = (n) => String.fromCodePoint(n);
-const grow = (unit, n) => unit.repeat(Math.ceil(n / unit.length)).slice(0, n);
-
-// Document shapes with materially different cost profiles. The clean ones answer
-// from bulk regex passes; the rest each drive a different arm of the carve
-// analysis or of the HTML layer, which is per-code-point / per-node work no bulk
-// pass can do. A homogeneous "x".repeat(n) exercises only the first group, which
-// is exactly how a carve-path regression would slip through.
-const SHAPES = {
-  "ascii-prose": (n) =>
-    grow("The quick brown fox jumps over the lazy dog. ", n),
-  "cjk-prose": (n) => grow("速い茶色の狐が怠惰な犬を飛び越える。", n),
-  "emoji-prose": (n) => grow("🙂 ok 🚀 go 🎉 ", n),
-  "html-prose": (n) =>
-    grow(
-      "<p>The quick brown fox <b>jumps</b> over the <i>lazy</i> dog.</p>\n",
-      n,
-    ),
-  "joiner-dense": (n) => grow("می" + cp(0x200c) + "خواهم ", n),
-  "vs-dense": (n) => grow("漢" + cp(0xe0100), n),
-  "emoji-zwj": (n) => grow("\u{1F3F3}️‍\u{1F308}", n),
-  "payload-run": (n) => grow(cp(0x200b), n),
-  "payload-scattered": (n) => grow("a" + cp(0x00ad), n),
-};
-
 // Shapes carrying no invisible code point at all — the overwhelming majority of
 // real pastes, and the ones the counters answer without the code-point array.
 // `html-prose` is clean by that measure but not by cost: it is the one shape
 // that reaches the remark/rehype graph, so it carries its own budget.
 const CLEAN = ["ascii-prose", "cjk-prose", "emoji-prose"];
-
-// The three entry points that BLOCK. `sanitizeText` is asked for Layers 2 and 3
-// because that is how the tool-output hook calls it: web ingress is the channel
-// hidden HTML and exfil URLs arrive on.
-const ENTRIES = {
-  scanText: (text) => scanText(text),
-  classifyPrompt: (text) => classifyPrompt(text),
-  sanitizeText: (text) => sanitizeText(text, { html: true, exfilScan: true }),
-};
 
 /**
  * Ceiling per (entry, shape) at LARGE, in calibration units — 1.6x the dearest
@@ -235,6 +204,20 @@ const PAIRS = Object.keys(ENTRIES).flatMap((entry) =>
 );
 
 describe("blocking-hook latency", () => {
+  it("the budget table covers exactly the imported shapes and entries", () => {
+    // The shapes come from the benchmark; the ceilings are quoted here. A shape
+    // added there with no ceiling here would otherwise be compared against
+    // `undefined`, which reds — but names the timing, not the missing budget.
+    assert.deepEqual(
+      PAIRS.map(([entry, shape]) => key(entry, shape)).sort(),
+      Object.entries(BUDGET)
+        .flatMap(([entry, shapes]) =>
+          Object.keys(shapes).map((shape) => key(entry, shape)),
+        )
+        .sort(),
+    );
+  });
+
   timed("the calibration is a measurement, not timer noise", () => {
     // Every ratio below divides by this. A machine that materializes 256 KB in
     // under a third of a millisecond is not one these gates can speak about, so
