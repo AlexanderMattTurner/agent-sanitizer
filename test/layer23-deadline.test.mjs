@@ -24,7 +24,7 @@ const LINK_DOC = "see [report](https://drop.example/collect?d=secret)";
 /** Text the pre-gate declines: no tag, no link, so neither layer would run. */
 const PLAIN_DOC = "an ordinary line of tool output";
 
-const SPENT_MESSAGE = /time budget was spent before Layers 2\/3/;
+const SPENT_MESSAGE = /time budget ran out before the hidden-HTML/;
 
 describe("a spent deadline before Layers 2/3", () => {
   it("refuses the whole call rather than skipping the HTML splice", async () => {
@@ -56,6 +56,26 @@ describe("a spent deadline before Layers 2/3", () => {
       SPENT_MESSAGE,
     );
     assert.equal(redactCalls, 0);
+  });
+
+  it("re-checks between the layers, so Layer 3 cannot ride Layer 2's overrun", async () => {
+    // Layer 2 is the thing that SPENDS the budget Layer 3 would run on, so a
+    // call that arrives live can still reach Layer 3 with nothing left. A single
+    // check at the entry cannot see that; `SPENT` above cannot distinguish one
+    // check from two, since it reads 0 forever.
+    let reads = 0;
+    const spendsInLayer2 = { remainingMs: () => (reads++ === 0 ? 5_000 : 0) };
+
+    await assert.rejects(
+      () =>
+        sanitizeText(HTML_DOC, {
+          html: true,
+          exfilScan: true,
+          deadline: spendsInLayer2,
+        }),
+      SPENT_MESSAGE,
+    );
+    assert.ok(reads >= 2, `expected a re-check before Layer 3; reads=${reads}`);
   });
 
   it("still returns normally when the pre-gate runs neither layer", async () => {

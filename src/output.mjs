@@ -418,21 +418,21 @@ async function applyMarkdownPipeline(state, { html, exfilScan, deadline }) {
   const splices = [];
   if ((!html && !exfilScan) || !needsMarkdownPipeline(inputText))
     return { reveal: undefined, splices };
-  // INVARIANT: this refusal is what stops an already-spent budget from being
-  // overspent here. `sanitizeHtml` and `detectExfil` each parse the whole
-  // document in ONE synchronous call, so nothing can interrupt them once they
-  // start; beginning them with no budget left is what pushes a host's hook past
-  // its kill. A host reads a killed hook as a non-blocking error and shows the
-  // RAW text, which is the fail-open these layers exist to prevent. Fail closed
-  // instead, the posture runRedact already takes for Layer 4. Checked AFTER the
-  // pre-gate above, because a call that runs neither layer costs no time and so
-  // has nothing to refuse.
-  if (deadline && deadline.remainingMs() <= 0)
-    throw new Error(
-      "CRITICAL: the sanitization time budget was spent before Layers 2/3 ran, " +
-        "so this text was never checked for hidden HTML or exfil-shaped URLs. " +
-        "Failing closed — tool output suppressed.",
-    );
+  // INVARIANT: this refusal is what stops a layer below from STARTING with no
+  // budget left. Each parses the whole document in ONE synchronous call, so
+  // nothing interrupts it, and a host that kills the overrun hook reads the kill
+  // as non-blocking and shows the RAW text. Fail closed, the posture runRedact
+  // takes for Layer 4. Called before EACH parse: Layer 2 is what spends the
+  // budget Layer 3 then runs on. After the pre-gate: a declined call costs none.
+  const refuseIfSpent = () => {
+    if (deadline && deadline.remainingMs() <= 0)
+      throw new Error(
+        "CRITICAL: the sanitization time budget ran out before the hidden-HTML " +
+          "and exfil-URL layers finished, so this text was not fully checked. " +
+          "Failing closed — tool output suppressed.",
+      );
+  };
+  refuseIfSpent();
   let sanitizeHtml, detectExfil;
   /* c8 ignore start -- a rejected dynamic import of a module that ships in
      this very package (not an optional peer dep) requires corrupting
@@ -493,6 +493,7 @@ async function applyMarkdownPipeline(state, { html, exfilScan, deadline }) {
   // URL hidden inside a display:none element or an HTML comment is MORE
   // suspicious, not less, yet Layer 2 has already removed it from `cleaned`.
   if (exfilScan) {
+    refuseIfSpent();
     const threats = detectExfil(inputText);
     // Severity tracks who does the fetching. An auto-fetched target — an image,
     // a stylesheet, a form action, a meta refresh — exfiltrates the moment the

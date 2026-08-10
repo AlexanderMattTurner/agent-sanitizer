@@ -56523,10 +56523,13 @@ async function applyMarkdownPipeline(state, { html: html4, exfilScan, deadline }
   const splices = [];
   if (!html4 && !exfilScan || !needsMarkdownPipeline(inputText))
     return { reveal: void 0, splices };
-  if (deadline && deadline.remainingMs() <= 0)
-    throw new Error(
-      "CRITICAL: the sanitization time budget was spent before Layers 2/3 ran, so this text was never checked for hidden HTML or exfil-shaped URLs. Failing closed \u2014 tool output suppressed."
-    );
+  const refuseIfSpent = () => {
+    if (deadline && deadline.remainingMs() <= 0)
+      throw new Error(
+        "CRITICAL: the sanitization time budget ran out before the hidden-HTML and exfil-URL layers finished, so this text was not fully checked. Failing closed \u2014 tool output suppressed."
+      );
+  };
+  refuseIfSpent();
   let sanitizeHtml2, detectExfil2;
   try {
     ({ sanitizeHtml: sanitizeHtml2, detectExfil: detectExfil2 } = await Promise.resolve().then(() => (init_html4(), html_exports2)));
@@ -56558,6 +56561,7 @@ async function applyMarkdownPipeline(state, { html: html4, exfilScan, deadline }
     }
   }
   if (exfilScan) {
+    refuseIfSpent();
     const threats = detectExfil2(inputText);
     if (threats) {
       state.found.push(CATEGORY.EXFIL_URLS);
