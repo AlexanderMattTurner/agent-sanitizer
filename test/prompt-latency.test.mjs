@@ -118,10 +118,9 @@ const calibrate = () => measure(() => calibrationPass(CALIBRATION_TEXT));
  * failure.
  */
 function unitsFor(fn) {
-  const before_ = calibrate();
+  const opening = calibrate();
   const cost = measure(fn);
-  const unit = Math.max(before_, calibrate());
-  return { cost, unit, units: cost / unit };
+  return { cost, units: cost / Math.max(opening, calibrate()) };
 }
 
 /** @type {{unit: number, large: Record<string, number>, small: Record<string, number>, units: Record<string, number>}} */
