@@ -8,6 +8,13 @@ adhere to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+## [2.33.1] - 2026-08-10
+
+### Changed
+
+- Mutation shard membership and scopes are now derived automatically from shipped sources rather than manually listed, reducing maintenance overhead and improving consistency.
+- Gate scope rationale is now documented once at each scope's definition point in configuration.
+
 ## [2.33.0] - 2026-08-09
 
 ### Added
