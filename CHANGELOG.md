@@ -8,6 +8,14 @@ adhere to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+## [2.34.8] - 2026-08-10
+
+### Changed
+- HTML parse tree traversal now uses iterative walking instead of unist-util-visit for improved performance.
+
+### Fixed
+- Reduced blocking-hook latency on large documents in the invisible module.
+
 ## [2.34.7] - 2026-08-10
 
 ### Fixed
