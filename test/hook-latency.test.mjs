@@ -21,6 +21,11 @@ import { describe, it, before } from "node:test";
 import assert from "node:assert/strict";
 import { classifyPrompt } from "../src/prompt.mjs";
 import { sanitizeText } from "../src/output.mjs";
+import { scanText } from "../src/instructions.mjs";
+import {
+  foldConfusables,
+  selectFoldableFindings,
+} from "../src/confusables.mjs";
 
 const { claudeAdapter } = await import("agent-control-plane-core/claude");
 const { judgeSanitizeUserPrompt } =
@@ -80,15 +85,19 @@ const SHAPES = {
   "vs-dense": (n) => grow("漢" + cp(0xe0100), n),
   "payload-run": (n) => grow(cp(0x200b), n),
   "payload-scattered": (n) => grow("a" + cp(0x00ad), n),
-  "emoji-zwj": (n) => grow("\u{1F3F3}️‍\u{1F308}", n),
+  "emoji-zwj": (n) => grow("\u{1F3F3}\u{FE0F}\u{200D}\u{1F308}", n),
   "html-prose": (n) =>
     grow('<p class="x">hello <a href="https://e.com/a?q=1">link</a></p>\n', n),
+  "run-dense": (n) =>
+    grow("ordinary instruction text " + cp(0x200b).repeat(12) + "\n", n),
 };
 
-// Ceilings in calibration units — roughly 2.5x what each entry costs on each
-// shape today, measured both standalone and under the parallel coverage run,
-// which is the headroom a shared runner needs while still catching the
-// order-of-magnitude regressions this file exists for. CHEAP_BUDGET is an order
+// Ceilings in calibration units for the shapes an entry does real work on. Each
+// is sized off the DEARER of two measurements — standalone, and under the
+// parallel coverage run, where the ratios move because c8 instruments the code
+// under test harder than it instruments this file's calibration — with roughly
+// 2x on top, which is the headroom a shared runner needs while still catching
+// the order-of-magnitude regressions this file exists for. CHEAP_BUDGET is
 // tighter, and each entry's `cheap` list names the shapes that entry has no
 // per-code-point work to do on: past ten passes' worth of work, such an input is
 // being analyzed for something it does not contain. The lists differ per entry
@@ -109,15 +118,12 @@ const ENTRIES = {
     // ANSI, and HTML-shaped text carries neither.
     cheap: ["ascii-prose", "cjk-prose", "emoji-prose", "html-prose"],
     budget: {
-      "ascii-prose": CHEAP_BUDGET,
-      "cjk-prose": CHEAP_BUDGET,
-      "emoji-prose": CHEAP_BUDGET,
-      "html-prose": CHEAP_BUDGET,
       "joiner-dense": 180,
       "vs-dense": 90,
       "payload-run": 110,
       "payload-scattered": 36,
       "emoji-zwj": 80,
+      "run-dense": 40,
     },
   },
   sanitizeText: {
@@ -134,15 +140,30 @@ const ENTRIES = {
     // the carve analysis finds nothing to preserve and the strip is a bulk pass.
     cheap: ["ascii-prose", "cjk-prose", "emoji-prose", "payload-scattered"],
     budget: {
-      "ascii-prose": CHEAP_BUDGET,
-      "cjk-prose": CHEAP_BUDGET,
-      "emoji-prose": CHEAP_BUDGET,
-      "payload-scattered": CHEAP_BUDGET,
       "html-prose": 205,
       "joiner-dense": 240,
       "vs-dense": 105,
       "payload-run": 55,
       "emoji-zwj": 95,
+      "run-dense": 40,
+    },
+  },
+  scanText: {
+    // The SessionStart scan reads every instruction file before the session can
+    // start, so its cost is startup the user watches — the one hook path where
+    // a regression has already cost 30 seconds once.
+    run: (text) => scanText(text),
+    cheap: ["ascii-prose", "cjk-prose", "emoji-prose", "html-prose"],
+    budget: {
+      "joiner-dense": 45,
+      "vs-dense": 25,
+      // One 256 KB run decodes as a single payload, so this case is dominated by
+      // one large allocation and swings with the collector — the widest budget
+      // here buys tolerance for that rather than for a slower machine.
+      "payload-run": 110,
+      "payload-scattered": 28,
+      "emoji-zwj": 25,
+      "run-dense": 36,
     },
   },
 };
@@ -174,9 +195,31 @@ const SUPERLINEAR = {
   shape: "html-prose",
   from: 128 * KB,
   to: 512 * KB,
-  linear: 4,
   limit: 12,
 };
+
+/**
+ * The confusable fold, which the PreToolUse hook runs over a tool call's path and
+ * command fields.
+ *
+ * It gets its own case rather than a row in the matrix because its cost is
+ * driven by the number of FINDINGS, not by the text alone — and the findings are
+ * attacker-influenced, since the command being vetted is whatever the model was
+ * told to run. One Cyrillic small a (U+0430, which folds to "a") every fifteen
+ * characters is the dense end of that.
+ */
+const FOLD_GLYPH = "\u0430";
+const foldText = (n) => grow(FOLD_GLYPH + "bcdefghijklmn ", n);
+const FOLD_BUDGET = 28;
+
+/** Every offset of {@link FOLD_GLYPH}, as the scanner would report them. */
+function foldFindings(text) {
+  const findings = [];
+  for (let i = 0; i < text.length; i++)
+    if (text[i] === FOLD_GLYPH)
+      findings.push({ index: i, char: FOLD_GLYPH, latinEquivalent: "a" });
+  return findings;
+}
 
 const CALIBRATION_TEXT = SHAPES["ascii-prose"](LARGE);
 
@@ -216,13 +259,17 @@ const CASES = Object.keys(ENTRIES).flatMap((entry) =>
 );
 
 /** @type {{unit: number, large: Record<string, number>, small: Record<string, number>,
- *   units: Record<string, number>, superlinear: Record<string, number>}} */
+ *   units: Record<string, number>, superlinear: Record<string, number>,
+ *   fold: Record<string, number>, foldUnits: number, foldChanged: boolean}} */
 const timing = {
   unit: 0,
   large: {},
   small: {},
   units: {},
   superlinear: { from: 0, to: 0 },
+  fold: { small: 0, large: 0 },
+  foldUnits: 0,
+  foldChanged: false,
 };
 
 before(async () => {
@@ -241,6 +288,23 @@ before(async () => {
   for (const end of ["from", "to"]) {
     const text = SHAPES[SUPERLINEAR.shape](SUPERLINEAR[end]);
     timing.superlinear[end] = await measure(() => run(text, SUPERLINEAR.shape));
+  }
+  for (const [size, key] of [
+    [SMALL, "small"],
+    [LARGE, "large"],
+  ]) {
+    const text = foldText(size);
+    // Built once: enumerating the offsets is the scanner's job, not the fold's,
+    // and timing it here would charge this gate for the test's own loop.
+    const findings = foldFindings(text);
+    const fold = () =>
+      foldConfusables(text, selectFoldableFindings(text, findings));
+    const measured = await unitsFor(fold);
+    timing.fold[key] = measured.cost;
+    if (key === "large") {
+      timing.foldUnits = measured.units;
+      timing.foldChanged = fold() !== text;
+    }
   }
 });
 
@@ -269,7 +333,10 @@ describe("hook-path latency", () => {
 
   for (const { entry, shape, name } of CASES)
     timed(`${name}: 256 KB stays inside its budget`, () => {
-      const budget = ENTRIES[entry].budget[shape];
+      const { cheap, budget: heavy } = ENTRIES[entry];
+      // `cheap` is the only declaration of which shapes an entry answers
+      // cheaply; a shape in neither list yields undefined and fails loud.
+      const budget = cheap.includes(shape) ? CHEAP_BUDGET : heavy[shape];
       assert.ok(
         timing.units[name] <= budget,
         `${name} ran in ${timing.units[name].toFixed(1)} units (${timing.large[name].toFixed(1)}ms), budget ${budget}`,
@@ -295,14 +362,17 @@ describe("hook-path latency", () => {
     "enough cases clear the noise floor for the scaling gate to mean something",
     () => {
       // Without this the scaling gate could silently degrade to zero cases on a
-      // fast machine and still report green.
-      const scalable = CASES.filter(
-        ({ name }) => timing.small[name] >= SCALABLE_FLOOR_MS,
-      );
-      assert.ok(
-        scalable.length >= 8,
-        `only ${scalable.length} cases were timeable at 32 KB: ${scalable.map((c) => c.name).join(", ")}`,
-      );
+      // fast machine and still report green — and pooling the count across
+      // entries would hide one entry losing all of its coverage.
+      for (const entry of Object.keys(ENTRIES)) {
+        const scalable = CASES.filter(
+          (c) => c.entry === entry && timing.small[c.name] >= SCALABLE_FLOOR_MS,
+        );
+        assert.ok(
+          scalable.length >= 4,
+          `only ${scalable.length} ${entry} cases were timeable at 32 KB: ${scalable.map((c) => c.name).join(", ")}`,
+        );
+      }
     },
   );
 
@@ -360,13 +430,47 @@ describe("hook-path latency", () => {
     },
   );
 
-  timed(`${superlinearName}: the exception is still earning its place`, () => {
+  timed(
+    "foldConfusables: a glyph-stuffed field stays inside its budget",
+    () => {
+      // The positive control comes first: a fold that matched nothing would time
+      // an empty loop and pass this budget however slow the real fold got.
+      assert.ok(
+        timing.foldChanged,
+        "the fold changed nothing — the gate is timing a no-op, not the fold",
+      );
+      assert.ok(
+        timing.foldUnits <= FOLD_BUDGET,
+        `folding 256 KB of look-alikes took ${timing.foldUnits.toFixed(1)} units (${timing.fold.large.toFixed(1)}ms), budget ${FOLD_BUDGET}`,
+      );
+    },
+  );
+
+  timed("foldConfusables: cost grows with the field length, not faster", () => {
+    const growth = timing.fold.large / timing.fold.small;
+    assert.ok(
+      growth <= SCALING_LIMIT,
+      `the fold cost ${growth.toFixed(1)}x for 8x the field, limit ${SCALING_LIMIT}x`,
+    );
+  });
+
+  timed(`${superlinearName}: the exception is still earning its place`, (t) => {
+    // c8 charges every expression it instruments, which is a large cost LINEAR
+    // in the input — big enough at these sizes to swamp the super-linear term
+    // and make the path look linear. The ceiling above still holds under
+    // coverage; this half cannot be read there.
+    if (process.env.NODE_V8_COVERAGE) {
+      t.skip(
+        "c8's instrumentation adds a linear cost that hides the exponent at these sizes",
+      );
+      return;
+    }
     // The other half of the ratchet. A ceiling of 12x on a path that grew
     // linearly would gate nothing at all, so this fails the moment the HTML
     // layer stops being super-linear — and the fix is to delete SUPERLINEAR and
     // let the ordinary scaling gate own it.
     assert.ok(
-      superlinearGrowth() > SUPERLINEAR.linear,
+      superlinearGrowth() > sizeStep,
       `${superlinearName} grew ${superlinearGrowth().toFixed(1)}x for ${sizeStep}x the input — that is linear, so delete SUPERLINEAR and let the ${SCALING_LIMIT}x gate cover it`,
     );
   });
