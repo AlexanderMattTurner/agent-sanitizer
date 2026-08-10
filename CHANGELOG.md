@@ -8,6 +8,13 @@ adhere to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+## [2.34.1] - 2026-08-10
+
+### Fixed
+- `enable-auto-update`: gracefully handle refused temporary file cleanup instead of crashing
+- `enable-auto-update`: provide a pasteable command when registry write is refused
+- `enable-auto-update`: gracefully handle refused registry write instead of crashing
+
 ## [2.34.0] - 2026-08-10
 
 ### Added
