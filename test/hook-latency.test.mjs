@@ -78,6 +78,29 @@ async function measure(fn) {
   return best;
 }
 
+/** A timed block has to last at least this long to be a measurement rather than
+ * timer noise. */
+const MIN_BLOCK_MS = 5;
+
+/**
+ * The per-call cost of `fn`, timed over as many calls as it takes to be a
+ * measurement.
+ *
+ * One 32 KB pass costs a fraction of a millisecond on a fast machine, and that
+ * is the number the scaling gate divides by. Timing a batch and dividing keeps
+ * the small end meaningful at any machine speed, so the gate covers every case
+ * instead of losing the cheap ones to the timer's resolution.
+ */
+async function measurePerCall(fn) {
+  const single = await measure(fn);
+  const repeats = Math.ceil(MIN_BLOCK_MS / Math.max(single, Number.EPSILON));
+  if (repeats <= 1) return single;
+  const block = await measure(async () => {
+    for (let i = 0; i < repeats; i++) await fn();
+  });
+  return block / repeats;
+}
+
 // Text shapes with materially different cost profiles. The clean ones answer
 // from bulk regex passes; the rest each drive a different arm of the carve
 // analysis or the HTML layer, which is per-code-point (or per-node) work no bulk
@@ -186,9 +209,6 @@ const ENTRIES = {
 // paste into a hang — and it is measured on one machine in one process, so it
 // needs no headroom for machine speed, only for timer noise.
 const SCALING_LIMIT = 24;
-// Below this a SMALL measurement is timer noise, and its scaling ratio says
-// nothing. Cases that cheap are pinned by their LARGE budget instead.
-const SCALABLE_FLOOR_MS = 2;
 
 /**
  * The one path whose cost is known to grow faster than its input, pinned where
@@ -325,7 +345,7 @@ before(async () => {
     const measured = await unitsFor(() => run(large, shape));
     timing.large[name] = measured.cost;
     timing.units[name] = measured.units;
-    timing.small[name] = await measure(() => run(small, shape));
+    timing.small[name] = await measurePerCall(() => run(small, shape));
   }
   for (const [entry, { run }] of Object.entries(ENTRIES))
     // Not "html-prose", so `sanitizeText` takes the Layer-1 path the majority of
@@ -393,37 +413,13 @@ describe("hook-path latency", () => {
     });
 
   for (const { name } of CASES)
-    timed(`${name}: cost grows with input length, not faster`, (t) => {
-      if (timing.small[name] < SCALABLE_FLOOR_MS) {
-        t.skip(
-          `${timing.small[name].toFixed(2)}ms at 32 KB is below the ${SCALABLE_FLOOR_MS}ms noise floor`,
-        );
-        return;
-      }
+    timed(`${name}: cost grows with input length, not faster`, () => {
       const growth = timing.large[name] / timing.small[name];
       assert.ok(
         growth <= SCALING_LIMIT,
         `${name} cost ${growth.toFixed(1)}x for 8x the input, limit ${SCALING_LIMIT}x`,
       );
     });
-
-  timed(
-    "enough cases clear the noise floor for the scaling gate to mean something",
-    () => {
-      // Without this the scaling gate could silently degrade to zero cases on a
-      // fast machine and still report green — and pooling the count across
-      // entries would hide one entry losing all of its coverage.
-      for (const entry of Object.keys(ENTRIES)) {
-        const scalable = CASES.filter(
-          (c) => c.entry === entry && timing.small[c.name] >= SCALABLE_FLOOR_MS,
-        );
-        assert.ok(
-          scalable.length >= 4,
-          `only ${scalable.length} ${entry} cases were timeable at 32 KB: ${scalable.map((c) => c.name).join(", ")}`,
-        );
-      }
-    },
-  );
 
   for (const entry of Object.keys(ENTRIES))
     timed(`${entry}: the shapes really do split into cheap and heavy`, () => {
