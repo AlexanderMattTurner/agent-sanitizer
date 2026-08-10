@@ -8,6 +8,13 @@ adhere to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+## [2.34.7] - 2026-08-10
+
+### Fixed
+
+- Improved error reporting in hooks to clearly indicate what was cleaned up and provide guidance on verification.
+- Stopped erroneously reporting nonexistent instruction files as unscanned.
+
 ## [2.34.6] - 2026-08-10
 
 ### Fixed
