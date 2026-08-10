@@ -22,30 +22,23 @@ base_ref="${1:?usage: check-dist-provenance.sh <base-ref>}"
 
 changed="$(git diff --name-only "$base_ref"...HEAD)"
 
-# The set below names what CANNOT be a build input, never what can. An allowlist
-# of inputs is a second copy of what esbuild actually reads — the shape
-# `.hooks/rebuild-plugin-artifacts` refuses for that reason — and the copy that
-# omitted `src/` red-flagged every honest engine change, since the bundle inlines
-# this repo's own `src/` by design. Inverted, an entry this list forgets costs a
-# missed catch that the reproducibility byte-compare still holds, rather than a
-# block on a correct PR.
 dist_changed=false
 input_changed=false
 while IFS= read -r file; do
   [[ -n "$file" ]] || continue
   case "$file" in
   plugin/dist/*) dist_changed=true ;;
-  .github/* | docs/* | test/* | *.md) ;;
-  *) input_changed=true ;;
+  package.json | pnpm-lock.yaml | claude-hooks/* | plugin/scripts/* | plugin/requirements.in | plugin/requirements.txt)
+    input_changed=true
+    ;;
   esac
 done <<<"$changed"
 
 if [[ "$dist_changed" == true && "$input_changed" == false ]]; then
-  echo "::error::plugin/dist changed but nothing it is built from did." >&2
-  echo "The artifacts are generated from this tree — src/, claude-hooks/, python/," >&2
-  echo "scripts/, package.json, pnpm-lock.yaml, plugin/requirements.{in,txt}. A diff" >&2
-  echo "touching only dist plus docs/tests/CI means the artifact was edited by hand" >&2
-  echo "or carried over from another branch. Rebuild with:" >&2
+  echo "::error::plugin/dist changed but no build input did." >&2
+  echo "The artifacts are generated from package.json + pnpm-lock.yaml + claude-hooks/ +" >&2
+  echo "plugin/scripts/ + plugin/requirements.{in,txt}. A dist-only diff means the" >&2
+  echo "artifact was edited by hand or carried over from another branch. Rebuild with:" >&2
   echo "  node plugin/scripts/build-plugin.mjs        # JS bundle + requirements.in" >&2
   echo "  node plugin/scripts/build-redactor-pyz.mjs  # zipapp, from the committed lock" >&2
   git diff --stat "$base_ref"...HEAD -- plugin/dist >&2
