@@ -1,13 +1,13 @@
 /**
  * Contract test for the sharded mutation-testing matrix.
  *
- * `.github/mutation-shards.json` declares which files to mutate: big files under
- * `split` are chunked into `splitEvery`-line slices, the rest are hand-balanced
- * whole-file `groups`. `.github/scripts/expand-shards.mjs` turns that into the
- * concrete matrix at CI time from each file's real length. The sharded workflow
- * enumerates files explicitly — so a newly shipped file, or a hole in a split
- * file's slices, would be mutated by nobody and the gate would silently fail
- * open over uncovered code.
+ * `.github/mutation-shards.json` declares which big files to chunk into
+ * `splitEvery`-line slices and how many whole-file shards to spread the rest
+ * over; `.github/scripts/expand-shards.mjs` derives the membership from
+ * `scripts/shipped-sources.mjs` and the ranges from each file's real length.
+ * The sharded workflow enumerates files explicitly — so a newly shipped file,
+ * or a hole in a split file's slices, would be mutated by nobody and the gate
+ * would silently fail open over uncovered code.
  *
  * This guards both holes against the EXPANDED matrix (what CI actually runs):
  * every mutated `.mjs` is covered exactly once, and each split file's slices
@@ -18,7 +18,14 @@
  * outside the gate while this test stayed green.
  */
 import { execFileSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import {
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
@@ -37,6 +44,43 @@ const config = JSON.parse(
   readFileSync(join(repoRoot, ".github", "mutation-shards.json"), "utf8"),
 );
 const shards = expandShards(repoRoot);
+
+/**
+ * A throwaway repo the expander can be driven over end to end.
+ *
+ * `src/*.mjs` is what the scratch manifest packs and `.hooks/lib` is read
+ * straight off disk, so `mutatedSources` resolves for real — the derivation
+ * under test is the live one, not a stand-in.
+ *
+ * @param {{split?: {id: string, file: string}[], groupCount?: number,
+ *   src?: Record<string, number>, tooling?: Record<string, number>,
+ *   packs?: string[]}} spec file names mapped to their line counts
+ * @returns {string} the scratch repo root
+ */
+function scratchRepo({
+  split = [],
+  groupCount = 2,
+  src = {},
+  tooling = {},
+  packs = ["src/*.mjs"],
+}) {
+  const root = mkdtempSync(join(tmpdir(), "mutation-shards-"));
+  mkdirSync(join(root, ".github"));
+  mkdirSync(join(root, "src"));
+  mkdirSync(join(root, ".hooks", "lib"), { recursive: true });
+  const write = (dir, files) => {
+    for (const [name, lines] of Object.entries(files))
+      writeFileSync(join(root, dir, name), "const x = 1;\n".repeat(lines));
+  };
+  write("src", src);
+  write(join(".hooks", "lib"), tooling);
+  writeFileSync(join(root, "package.json"), JSON.stringify({ files: packs }));
+  writeFileSync(
+    join(root, ".github", "mutation-shards.json"),
+    JSON.stringify({ splitEvery: 300, split, groupCount }),
+  );
+  return root;
+}
 
 /** Parse "src/a.mjs:1-50,src/b.mjs" into [{file, start?, end?}, ...]. */
 const parseMutate = (mutate) =>
@@ -59,22 +103,6 @@ describe("mutation shard matrix", () => {
       new Set(ids).size,
       ids.length,
       "shard ids must be unique (they key the per-shard incremental cache and artifact name)",
-    );
-  });
-
-  it("covers exactly the .mjs files the gate mutates", () => {
-    const onDisk = mutatedSources(repoRoot);
-
-    const inShards = [
-      ...new Set(
-        shards.flatMap((s) => parseMutate(s.mutate).map((e) => e.file)),
-      ),
-    ].sort();
-
-    assert.deepEqual(
-      inShards,
-      onDisk,
-      "shard file set must equal the mutated .mjs set (add a `split` entry or `group` when a published file or a .hooks/lib module is added/removed)",
     );
   });
 
@@ -124,6 +152,110 @@ describe("mutation shard matrix", () => {
           range.start <= lineCount,
           `${file}: slice start ${range.start} is past the file's real line count (${lineCount})`,
         );
+      }
+    }
+  });
+
+  it("puts a newly mutated file in a shard with no config edit", () => {
+    // The whole point of deriving membership: adding a module used to mean
+    // hand-typing it into `groups`, and forgetting to left it mutated by
+    // nobody while every other check stayed green.
+    const root = scratchRepo({ src: { "a.mjs": 5, "b.mjs": 5 } });
+    try {
+      const configPath = join(root, ".github", "mutation-shards.json");
+      const before = readFileSync(configPath, "utf8");
+      assert.deepEqual(
+        expandShards(root)
+          .flatMap((s) => parseMutate(s.mutate))
+          .map((e) => e.file)
+          .sort(),
+        ["src/a.mjs", "src/b.mjs"],
+      );
+
+      writeFileSync(join(root, "src", "c.mjs"), "const x = 1;\n");
+      const files = expandShards(root)
+        .flatMap((s) => parseMutate(s.mutate))
+        .map((e) => e.file);
+      assert.deepEqual(files.sort(), ["src/a.mjs", "src/b.mjs", "src/c.mjs"]);
+      assert.equal(
+        files.filter((f) => f === "src/c.mjs").length,
+        1,
+        "the new file must land in exactly one shard",
+      );
+      assert.equal(readFileSync(configPath, "utf8"), before);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("balances the group shards by line count, not file count", () => {
+    // The heavy file is LAST in path order on purpose: assigning in path order
+    // hands it to a shard that already holds a small file, so one runner does
+    // ~900 lines plus change while the other does 3. Longest-first is what
+    // isolates it. A shard's runtime tracks the mutants in it, not the paths.
+    const root = scratchRepo({
+      groupCount: 2,
+      src: { "a1.mjs": 3, "a2.mjs": 3, "zbig.mjs": 900 },
+    });
+    try {
+      const groups = expandShards(root).map((s) => s.mutate);
+      assert.deepEqual(groups, ["src/zbig.mjs", "src/a1.mjs,src/a2.mjs"]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("refuses a split entry the mutated set does not contain", () => {
+    // A rename that updates the file but not the split entry: the stale shard
+    // mutates an unscored path while the real file falls into the groups.
+    const root = scratchRepo({
+      packs: ["src/a.mjs"],
+      src: { "a.mjs": 5, "unpacked.mjs": 5 },
+      split: [{ id: "stale", file: "src/unpacked.mjs" }],
+    });
+    try {
+      assert.throws(
+        () => expandShards(root),
+        /splits src\/unpacked\.mjs, which the mutated set does not contain/,
+      );
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("refuses a groupCount that would leave a shard mutating nothing", () => {
+    const root = scratchRepo({
+      groupCount: 3,
+      src: { "a.mjs": 5, "b.mjs": 5 },
+    });
+    try {
+      assert.throws(
+        () => expandShards(root),
+        /groupCount is 3 but only 2 mutated file\(s\) remain/,
+      );
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("refuses a groupCount that is not a positive integer", () => {
+    // The config is rewritten rather than passed through `scratchRepo`, so the
+    // MISSING-key case really is missing: a helper default would silently
+    // supply the very value under test.
+    for (const groupCount of [0, -1, 2.5, "7", null, undefined]) {
+      const root = scratchRepo({ src: { "a.mjs": 5, "b.mjs": 5 } });
+      try {
+        writeFileSync(
+          join(root, ".github", "mutation-shards.json"),
+          JSON.stringify({ splitEvery: 300, split: [], groupCount }),
+        );
+        assert.throws(
+          () => expandShards(root),
+          /groupCount must be a positive integer/,
+          `groupCount ${JSON.stringify(groupCount)} must be refused`,
+        );
+      } finally {
+        rmSync(root, { recursive: true, force: true });
       }
     }
   });

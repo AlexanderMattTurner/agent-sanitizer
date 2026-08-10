@@ -182,10 +182,37 @@ export function shippedSources(repoRoot) {
 export const srcScope = (repoRoot) =>
   shippedSources(repoRoot).filter((f) => f.startsWith(SRC_SCOPE));
 
-/** The shipped sources outside `src/`: the Claude-hook layer and the CLI.
+/**
+ * The shipped prefixes outside `src/`: the Claude-hook layer and the CLI.
+ *
+ * The scope NAMES what it claims, and `.github/scripts/aggregate-mutation.mjs`
+ * builds its mutation scopes from this same constant, so the coverage split and
+ * the mutation split cannot disagree. A `!startsWith(SRC_SCOPE)` catch-all would
+ * claim every future top-level shipped directory by construction, applying
+ * coverage floors and a mutation ratchet measured on files it has nothing to do
+ * with; naming the prefixes leaves such a path claimed by nobody, which
+ * `hookScope` refuses to return silently.
+ */
+export const HOOK_SCOPE_PREFIXES = ["claude-hooks/", "bin/"];
+
+/** The shipped sources under `HOOK_SCOPE_PREFIXES`.
  * @param {string} repoRoot @returns {string[]} */
-export const hookScope = (repoRoot) =>
-  shippedSources(repoRoot).filter((f) => !f.startsWith(SRC_SCOPE));
+export const hookScope = (repoRoot) => {
+  const shipped = shippedSources(repoRoot);
+  const claimed = (/** @type {string} */ f) =>
+    f.startsWith(SRC_SCOPE) || HOOK_SCOPE_PREFIXES.some((p) => f.startsWith(p));
+  const unclaimed = shipped.filter((f) => !claimed(f));
+  if (unclaimed.length > 0) {
+    throw new Error(
+      `shipped-sources: shipped but in no gated scope: ${unclaimed.join(", ")}. ` +
+        `Add the prefix to HOOK_SCOPE_PREFIXES so these files get a coverage ` +
+        `floor and a mutation ratchet rather than none.`,
+    );
+  }
+  return shipped.filter((f) =>
+    HOOK_SCOPE_PREFIXES.some((p) => f.startsWith(p)),
+  );
+};
 
 /** Repo root, resolved from git so this works from any cwd. */
 export const findRepoRoot = () =>
