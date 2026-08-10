@@ -8,6 +8,14 @@ adhere to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+## [2.34.4] - 2026-08-10
+
+### Fixed
+- Fixed CI sweep checks permissions and prevented review gates from aborting each other.
+
+### Changed
+- Review gates are now re-derived whenever review state changes and reconciled on a scheduled cron job.
+
 ## [2.34.2] - 2026-08-10
 
 ### Changed
