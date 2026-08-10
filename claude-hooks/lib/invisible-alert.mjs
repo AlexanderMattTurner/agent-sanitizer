@@ -3,9 +3,9 @@
  * invisible-character injection it could not auto-clean (e.g. a root-owned
  * file), an instruction file it could not read at all, or a scanner fault. A
  * target that does not exist is none of these and never gets here — the
- * bucketing is classifyReadFailure's. The scanner writes the alert; the gate reads it
- * and asks ONCE this session (a hard checkpoint) then degrades to a passive
- * reminder — the per-call prompt-storm trains the user to rubber-stamp.
+ * bucketing is classifyReadFailure's. The scanner writes the alert; the gate
+ * reads it and asks ONCE this session (a hard checkpoint) then degrades to a
+ * passive reminder — the per-call prompt-storm trains the user to rubber-stamp.
  *
  * Both hooks reach the state through this module so the paths and the trust rule
  * have one definition.
@@ -99,9 +99,9 @@ export function acknowledgeAlert() {
 const REMEDY =
   "To clear this gate:\n" +
   "  - A file listed with invisible characters: the automatic clean already\n" +
-  "    failed on it. Remove the characters by hand, or fix what blocked the\n" +
-  "    rewrite (a symlink on the path, a read-only or foreign-owned file,\n" +
-  "    non-UTF-8 bytes).\n" +
+  "    failed on it. Fix what blocked the rewrite (a symlink on the path, a\n" +
+  "    read-only or foreign-owned file, non-UTF-8 bytes), then retry it with\n" +
+  '      echo \'{"op":"cleanFile","path":"FILE"}\' | npx -p agent-sanitizer sanitize-cli\n' +
   "  - A file listed as NOT SCANNED: make it readable to this user, or delete\n" +
   "    it if it is not meant to be instructions.\n" +
   "  - No file listed, only a scan fault: the fault text above names its own\n" +
