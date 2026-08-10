@@ -339,6 +339,7 @@ jobs:
       contents: read # sparse-checkout the trusted approval script
       pull-requests: write # submit an approving review
       checks: write # clear the review-findings gate for the skipped class
+      statuses: write # re-post the "Automated review posted" status on the head
     steps:
       - name: Checkout base (trusted) approval script
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
@@ -347,7 +348,9 @@ jobs:
           # decide/review jobs: the script is trusted repo content, no PR code runs.
           ref: ${{ github.event.pull_request.base.ref }}
           persist-credentials: false
-          sparse-checkout: .github/scripts/auto-approve-skipped-pr.sh
+          sparse-checkout: |
+            .github/scripts/auto-approve-skipped-pr.sh
+            .github/scripts/review-gate.sh
           sparse-checkout-cone-mode: false
       - name: Approve so a review-required ruleset doesn't strand a skipped PR
         if: >-
@@ -393,3 +396,23 @@ jobs:
             -f "conclusion=success" \
             -f "output[title]=green: review deliberately skipped" \
             -f "output[summary]=This PR is in the class the reviewer skips (bot-authored, or a chore/style/release title), so no automated review was run and there are no findings to resolve. Add the needs-auto-review label to force a full review." >/dev/null
+
+      # The approval above is a REVIEW posted with GITHUB_TOKEN, so it fires no
+      # pull_request_review event, and review-gate.yaml's other leg already ran
+      # on this head — on `opened`, before the approval existed. Without this the
+      # whole skipped class sits on a pending required status until someone
+      # pushes, and that class (bot PRs, chore/style/release titles) is the one
+      # least likely to ever push again.
+      #
+      # `always()` for the same reason as the step above: the predicate is
+      # stateless, so a failed approve posts the honest `pending` rather than a
+      # green nothing earned, and the job still goes red on the approve itself.
+      - name: Re-evaluate the automated-review gate on the head
+        if: always()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          PR: ${{ github.event.pull_request.number }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: bash .github/scripts/review-gate.sh

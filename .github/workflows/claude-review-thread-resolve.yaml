@@ -57,6 +57,7 @@ jobs:
       contents: read # checkout the trusted base branch
       pull-requests: write # resolve threads and post the audit replies
       checks: write # re-post the "Review findings resolved" verdict on the head
+      statuses: write # re-derive the "Automated review posted" status on the head
     env:
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       GH_REPO: ${{ github.repository }}
@@ -183,3 +184,17 @@ jobs:
         env:
           REPORT_SHA: ${{ github.event.pull_request.head.sha }}
         run: bash .github/scripts/review-findings-gate.sh
+
+      # The approve/dismiss above is a REVIEW written with GITHUB_TOKEN, so it
+      # fires no pull_request_review event, and review-gate.yaml's push leg ran
+      # on this head before it. Without this the other required gate keeps a
+      # verdict that predates the review this job just filed — pending when it
+      # approved, or green when it dismissed the only standing review, which is
+      # the fail-open direction.
+      #
+      # No `if:`, for the same reason as the step above: stateless and idempotent.
+      - name: Re-derive the automated-review gate after resolving
+        env:
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: bash .github/scripts/review-gate.sh

@@ -12,12 +12,25 @@ name: Claude reviewer-hold sweeper
 # The approve itself is state-based and idempotent (approve-if-reviewer-hold-
 # clear.sh reads current thread + review state), so a sweep never double-approves.
 #
+# The same cron carries a SECOND reconciler, for the same reason in a different
+# shape: the `Automated review posted` status is a pure function of review state
+# that only recomputes on `pull_request_review` or a push, and this repo's own
+# automation changes that state with GITHUB_TOKEN, which fires neither.
+# reconcile-review-gate.sh re-derives it for every open PR, bounding a stale
+# verdict — pending on a reviewed PR, or green on one whose only review was
+# dismissed — to one sweep interval. Both duties are the same job because both
+# are state-based reconcilers over the open-PR list, and a second scheduled
+# workflow would pay a whole run to do one API read.
+#
 # SECURITY — schedule + workflow_dispatch run from the DEFAULT branch (trusted repo
 # content) with the base repo's GITHUB_TOKEN; the job checks out ONLY the trusted
 # approval scripts and executes no PR code — it reads thread/review state via the
-# API and can only post an approval. Least privilege: contents:read (checkout the
-# scripts) + pull-requests:write (post the approval), nothing else, so even an
-# unexpected PR can only be approved, never pushed to, merged, or otherwise reached.
+# API and can only post an approval, a commit status or a check run. Least
+# privilege: contents:read (checkout the scripts) + pull-requests:write (post the
+# approval) + statuses:write (the `Automated review posted` verdict) +
+# checks:write (the `Review findings resolved` verdict), nothing else, so even an
+# unexpected PR can only be approved or have its gate verdicts corrected, never
+# pushed to, merged, or otherwise reached.
 
 on:
   schedule:
@@ -34,7 +47,9 @@ jobs:
     timeout-minutes: 10
     permissions:
       contents: read # sparse-checkout the trusted approval scripts
-      pull-requests: write # submit the approving review; no other scope
+      pull-requests: write # submit the approving review
+      statuses: write # re-derive the "Automated review posted" gate
+      checks: write # re-post the "Review findings resolved" check run; no other scope
     env:
       # The sweep's own PR listing runs on the Actions token.
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -54,3 +69,12 @@ jobs:
           sparse-checkout-cone-mode: false
       - name: Sweep open PRs and clear any cleared reviewer hold
         run: bash .github/scripts/sweep-reviewer-holds.sh
+
+      # `always()`: the two reconcilers are independent, and a hold the sweep
+      # could not clear is no reason to leave every open PR's gate status stale.
+      - name: Reconcile the automated-review gate across open PRs
+        if: always()
+        env:
+          # GH_TOKEN and GH_REPO come from the job env above.
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: bash .github/scripts/reconcile-review-gate.sh
