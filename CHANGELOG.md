@@ -8,6 +8,14 @@ adhere to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+## [2.34.6] - 2026-08-10
+
+### Fixed
+
+- Hidden runs can now be scanned without hitting regexp stack limits, even at sizes up to 8 MB.
+- Run scan now correctly handles partial final chunks in invisible mode.
+- Bundle entry pinning now uses tail reference instead of repo root to avoid aliasing issues.
+
 ## [2.34.5] - 2026-08-10
 
 ### Changed

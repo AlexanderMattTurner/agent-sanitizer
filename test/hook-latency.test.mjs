@@ -50,11 +50,7 @@ const MUTATION_RUN = process.env.STRYKER_NAMESPACE
   : null;
 
 const KB = 1024;
-// SMALL is a quarter of LARGE because the paths these gates watch are fast
-// enough that an eighth of 256 KB does not clear SCALABLE_FLOOR_MS: at 32 KB
-// only one scanText case is timeable, which leaves the scaling gate saying
-// nothing about that entry.
-const SMALL = 64 * KB;
+const SMALL = 32 * KB;
 const LARGE = 256 * KB;
 const cp = (n) => String.fromCodePoint(n);
 const grow = (unit, n) => unit.repeat(Math.ceil(n / unit.length)).slice(0, n);
@@ -72,7 +68,7 @@ const grow = (unit, n) => unit.repeat(Math.ceil(n / unit.length)).slice(0, n);
  */
 const SAMPLES = 4;
 /**
- * Each call gets its own input from `input(attempt)`. Handing every call the
+ * Each call gets its own document from `input(attempt)`. Handing every call the
  * same string measures a memo hit rather than the work: the HTML layer
  * remembers its last parse, so the warm-up builds the tree the timed runs then
  * reuse — 81 ms for a 256 KB fragment against the 160 ms a hook pays for a
@@ -91,6 +87,42 @@ async function measure(input, fn) {
     best = Math.min(best, performance.now() - started);
   }
   return best;
+}
+
+/** A timed block has to last at least this long to be a measurement rather than
+ * timer noise. */
+const MIN_BLOCK_MS = 5;
+/** How many distinct documents a timed block cycles through. */
+const BLOCK_RING = 8;
+
+/**
+ * The per-call cost of `fn`, timed over as many calls as it takes to be a
+ * measurement.
+ *
+ * One 32 KB pass costs a fraction of a millisecond on a fast machine, and that
+ * is the number the scaling gate divides by. Timing a batch and dividing keeps
+ * the small end meaningful at any machine speed, so the gate covers every case
+ * instead of losing the cheap ones to the timer's resolution.
+ */
+async function measurePerCall(input, fn) {
+  const single = await measure(input, fn);
+  const repeats = Math.ceil(MIN_BLOCK_MS / Math.max(single, Number.EPSILON));
+  if (repeats <= 1) return single;
+  // The block cycles a ring of distinct documents for the same reason `measure`
+  // varies its input, and a ring rather than one document per call because
+  // `repeats` runs to the hundreds on a fast machine and each document is
+  // SMALL bytes. Consecutive calls always differ, which is what a one-entry
+  // parse memo needs to miss.
+  const ring = [];
+  for (let i = 0; i < Math.min(repeats, BLOCK_RING); i++)
+    ring.push(input(SAMPLES + 1 + i));
+  const block = await measure(
+    () => "",
+    async () => {
+      for (let i = 0; i < repeats; i++) await fn(ring[i % ring.length]);
+    },
+  );
+  return block / repeats;
 }
 
 // Text shapes with materially different cost profiles. The clean ones answer
@@ -164,6 +196,10 @@ const ENTRIES = {
     // the carve analysis finds nothing to preserve and the strip is a bulk pass.
     cheap: ["ascii-prose", "cjk-prose", "emoji-prose", "payload-scattered"],
     budget: {
+      // The dearest cell in the table, and the one the ratio is doing the least
+      // for: it is parse5 building a 256 KB fragment, so it moves with the
+      // parser rather than with anything here. SUPERLINEAR below is what
+      // actually holds this path.
       "html-prose": 168,
       "joiner-dense": 65,
       "vs-dense": 45,
@@ -181,6 +217,9 @@ const ENTRIES = {
     budget: {
       "joiner-dense": 37,
       "vs-dense": 21,
+      // One 256 KB run decodes as a single payload, so this case is dominated by
+      // one large allocation and swings with the collector — the widest budget
+      // here buys tolerance for that rather than for a slower machine.
       "payload-run": 55,
       "payload-scattered": 25,
       "emoji-zwj": 24,
@@ -189,14 +228,11 @@ const ENTRIES = {
   },
 };
 
-// LARGE is 4x SMALL, so linear scaling costs 4x. Anything past this is
+// LARGE is 8x SMALL, so linear scaling costs 8x. Anything past this is
 // super-linear in the input length — the shape of blow-up that turns a tolerable
 // paste into a hang — and it is measured on one machine in one process, so it
-// needs no headroom for machine speed, only for timer noise: 3x over linear.
-const SCALING_LIMIT = 12;
-// Below this a SMALL measurement is timer noise, and its scaling ratio says
-// nothing. Cases that cheap are pinned by their LARGE budget instead.
-const SCALABLE_FLOOR_MS = 2;
+// needs no headroom for machine speed, only for timer noise.
+const SCALING_LIMIT = 24;
 
 /**
  * The one path whose cost is known to grow faster than its input, pinned where
@@ -334,7 +370,7 @@ before(async () => {
     );
     timing.large[name] = measured.cost;
     timing.units[name] = measured.units;
-    timing.small[name] = await measure(
+    timing.small[name] = await measurePerCall(
       (attempt) => SHAPES[shape](SMALL - attempt),
       (text) => run(text, shape),
     );
@@ -410,37 +446,13 @@ describe("hook-path latency", () => {
     });
 
   for (const { name } of CASES)
-    timed(`${name}: cost grows with input length, not faster`, (t) => {
-      if (timing.small[name] < SCALABLE_FLOOR_MS) {
-        t.skip(
-          `${timing.small[name].toFixed(2)}ms at ${SMALL / KB} KB is below the ${SCALABLE_FLOOR_MS}ms noise floor`,
-        );
-        return;
-      }
+    timed(`${name}: cost grows with input length, not faster`, () => {
       const growth = timing.large[name] / timing.small[name];
       assert.ok(
         growth <= SCALING_LIMIT,
         `${name} cost ${growth.toFixed(1)}x for ${LARGE / SMALL}x the input, limit ${SCALING_LIMIT}x`,
       );
     });
-
-  timed(
-    "enough cases clear the noise floor for the scaling gate to mean something",
-    () => {
-      // Without this the scaling gate could silently degrade to zero cases on a
-      // fast machine and still report green — and pooling the count across
-      // entries would hide one entry losing all of its coverage.
-      for (const entry of Object.keys(ENTRIES)) {
-        const scalable = CASES.filter(
-          (c) => c.entry === entry && timing.small[c.name] >= SCALABLE_FLOOR_MS,
-        );
-        assert.ok(
-          scalable.length >= 4,
-          `only ${scalable.length} ${entry} cases were timeable at ${SMALL / KB} KB: ${scalable.map((c) => c.name).join(", ")}`,
-        );
-      }
-    },
-  );
 
   for (const entry of Object.keys(ENTRIES))
     timed(`${entry}: the shapes really do split into cheap and heavy`, () => {

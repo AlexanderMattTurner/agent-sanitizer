@@ -67539,8 +67539,8 @@ function authoredScopeDecision(tool) {
   return { kind: "undeclared" };
 }
 function isPayloadCapable(text5) {
-  LONG_RUN_RE2.lastIndex = 0;
-  if (LONG_RUN_RE2.test(text5)) return true;
+  LONG_RUN_CHUNK_RE.lastIndex = 0;
+  if (LONG_RUN_CHUNK_RE.test(text5)) return true;
   return (text5.match(STRIP2)?.length ?? 0) >= SCATTERED_THRESHOLD2;
 }
 function sanitizeField(value) {
@@ -67598,15 +67598,19 @@ function sanitizeAuthoredContent(tool, toolInput) {
   if (changed.length === 0) return null;
   return { updatedInput, changed };
 }
-var stripAnsiFully2, STRIP2, LONG_RUN_RE2, SCATTERED_THRESHOLD2, stripInvisible2, AUTHORED_FIELDS, EXEMPT_TOOLS, EXEMPT_TOOL_PATTERNS;
+var stripAnsiFully2, STRIP2, LONG_RUN_THRESHOLD2, SCATTERED_THRESHOLD2, stripInvisible2, LONG_RUN_CHUNK_RE, AUTHORED_FIELDS, EXEMPT_TOOLS, EXEMPT_TOOL_PATTERNS;
 var init_authored_content = __esm({
   async "claude-hooks/lib/authored-content.mjs"() {
     "use strict";
     init_hook_io();
     ({ stripAnsiFully: stripAnsiFully2 } = /** @type {typeof import("agent-sanitizer")} */
     await lazyImport("agent-sanitizer"));
-    ({ STRIP: STRIP2, LONG_RUN_RE: LONG_RUN_RE2, SCATTERED_THRESHOLD: SCATTERED_THRESHOLD2, stripInvisible: stripInvisible2 } = /** @type {typeof import("agent-sanitizer/invisible")} */
+    ({ STRIP: STRIP2, LONG_RUN_THRESHOLD: LONG_RUN_THRESHOLD2, SCATTERED_THRESHOLD: SCATTERED_THRESHOLD2, stripInvisible: stripInvisible2 } = /** @type {typeof import("agent-sanitizer/invisible")} */
     await lazyImport("agent-sanitizer/invisible"));
+    LONG_RUN_CHUNK_RE = new RegExp(
+      `(?:${STRIP2.source}){${LONG_RUN_THRESHOLD2},${1 << 20}}`,
+      "gu"
+    );
     AUTHORED_FIELDS = Object.freeze(
       Object.assign(/* @__PURE__ */ Object.create(null), {
         Write: ["content"],
@@ -70053,8 +70057,8 @@ __export(scan_invisible_chars_exports, {
   ALERT_FILE: () => ALERT_FILE,
   CLAUDE_CONTEXT_SUBDIRS: () => CLAUDE_CONTEXT_SUBDIRS,
   CLAUDE_INSTRUCTION_GLOBS: () => CLAUDE_INSTRUCTION_GLOBS,
-  LONG_RUN_RE: () => LONG_RUN_RE3,
-  LONG_RUN_THRESHOLD: () => LONG_RUN_THRESHOLD2,
+  LONG_RUN_RE: () => LONG_RUN_RE2,
+  LONG_RUN_THRESHOLD: () => LONG_RUN_THRESHOLD3,
   TOTAL_INVISIBLE_THRESHOLD: () => TOTAL_INVISIBLE_THRESHOLD,
   cliMain: () => cliMain3,
   decodeRun: () => decodeRun2,
@@ -70088,8 +70092,8 @@ async function ensureSanitizerLoaded() {
     reloaded
   );
   ({
-    LONG_RUN_RE: LONG_RUN_RE3,
-    LONG_RUN_THRESHOLD: LONG_RUN_THRESHOLD2,
+    LONG_RUN_RE: LONG_RUN_RE2,
+    LONG_RUN_THRESHOLD: LONG_RUN_THRESHOLD3,
     SCATTERED_THRESHOLD: TOTAL_INVISIBLE_THRESHOLD
   } = bound.invisible);
   ({ decodeRun: instrDecodeRun, scanText: scanText2, cleanFile: cleanFile2 } = bound.instructions);
@@ -70279,7 +70283,7 @@ All ${cleaned} file(s) cleaned on disk automatically. NOTE: these files load as 
   process.stderr.write(report + "\n");
   return [report];
 }
-var LONG_RUN_RE3, LONG_RUN_THRESHOLD2, TOTAL_INVISIBLE_THRESHOLD, instrDecodeRun, scanText2, cleanFile2, HOOK_NAME4;
+var LONG_RUN_RE2, LONG_RUN_THRESHOLD3, TOTAL_INVISIBLE_THRESHOLD, instrDecodeRun, scanText2, cleanFile2, HOOK_NAME4;
 var init_scan_invisible_chars = __esm({
   async "claude-hooks/scan-invisible-chars.mjs"() {
     "use strict";
@@ -70290,8 +70294,8 @@ var init_scan_invisible_chars = __esm({
     init_hook_timing();
     init_claude_context();
     ({
-      LONG_RUN_RE: LONG_RUN_RE3,
-      LONG_RUN_THRESHOLD: LONG_RUN_THRESHOLD2,
+      LONG_RUN_RE: LONG_RUN_RE2,
+      LONG_RUN_THRESHOLD: LONG_RUN_THRESHOLD3,
       SCATTERED_THRESHOLD: TOTAL_INVISIBLE_THRESHOLD
     } = /** @type {typeof import("agent-sanitizer/invisible")} */
     await lazyImport("agent-sanitizer/invisible"));

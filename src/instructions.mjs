@@ -35,7 +35,7 @@ import {
 import { randomBytes } from "node:crypto";
 import { join, relative, resolve, isAbsolute, dirname, sep } from "node:path";
 import {
-  LONG_RUN_RE,
+  findLongRuns,
   SCATTERED_THRESHOLD,
   countPayloadInvisible,
   stripInvisible,
@@ -202,23 +202,24 @@ export function decodeRun(run) {
  */
 export function scanText(content) {
   const findings = [];
-  LONG_RUN_RE.lastIndex = 0;
-  let match;
   let runChars = 0;
-  // The line number is carried forward across matches. Deriving it per match
-  // from the start of the file — `content.slice(0, match.index).split("\n")` —
-  // copies the whole prefix and materializes every line before the match, so a
-  // file carrying many runs pays that once per run: quadratic in the file
-  // length, on the SessionStart path the user waits for. `exec` yields matches
-  // in increasing index order, so this scan only ever moves forward.
+  // The line number is carried forward across runs. Deriving it per run from
+  // the start of the file — `content.slice(0, run.index).split("\n")` — copies
+  // the whole prefix and materializes every line before the run, so a file
+  // carrying many runs pays that once per run: quadratic in the file length, on
+  // the SessionStart path the user waits for. Runs arrive in increasing index
+  // order, so this scan only ever moves forward.
   let line = 1;
   let counted = 0;
-  while ((match = LONG_RUN_RE.exec(content)) !== null) {
-    for (; counted < match.index; counted++)
+  for (const run of findLongRuns(content)) {
+    for (; counted < run.index; counted++)
       if (content.charCodeAt(counted) === NEWLINE) line++;
-    const charCount = [...match[0]].length;
-    runChars += charCount;
-    findings.push({ line, charCount, ...decodeRun(match[0]) });
+    runChars += run.charCount;
+    findings.push({
+      line,
+      charCount: run.charCount,
+      ...decodeRun(run.text),
+    });
   }
 
   // Threshold-evasion: scattered invisible chars not in a long run can still be
