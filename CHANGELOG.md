@@ -8,6 +8,12 @@ adhere to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+## [2.34.11] - 2026-08-10
+
+### Fixed
+
+- Layer 2/3 sanitization now properly refuses to run when the time budget is already spent, and re-checks the budget before Layer 3.
+
 ## [2.34.10] - 2026-08-10
 
 ### Fixed
