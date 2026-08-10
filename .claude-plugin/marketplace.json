@@ -8,8 +8,7 @@
   "plugins": [
     {
       "name": "agent-sanitizer",
-      "source": "./plugin",
-      "description": "Sanitization for tool inputs, tool outputs, and user prompts: invisible-Unicode/ANSI stripping, hidden-HTML splicing, exfil-URL detection, confusable normalization, and detect-secrets-backed secret redaction."
+      "source": "./plugin"
     }
   ]
 }

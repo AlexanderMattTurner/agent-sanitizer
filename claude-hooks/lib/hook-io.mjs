@@ -243,6 +243,50 @@ export function failOpenEnabled(env = process.env) {
 }
 
 /**
+ * The public knob that turns individual hooks off: a comma-separated list of
+ * hook names (the `--hook=` modes). The layer opt-outs
+ * (`AGENT_SANITIZER_*_DISABLED`) narrow what a hook rewrites; this one is for
+ * the deployment that wants a whole event unguarded — a session whose prompts
+ * legitimately carry escape sequences, or one where the SessionStart context
+ * scan is redundant because the instruction files are already vetted upstream.
+ * Without it the only way to drop one hook is to edit the shipped hooks.json,
+ * which the next plugin update overwrites.
+ */
+export const DISABLED_HOOKS_ENV = "AGENT_SANITIZER_DISABLED_HOOKS";
+
+/**
+ * The hook names an operator switched off, restricted to `known`.
+ *
+ * An unrecognized name is REPORTED and dropped rather than thrown on, and the
+ * direction of that choice is the point: this variable is set outside the
+ * session, so a throw here — or a blocking verdict — would leave every tool
+ * call failing on a config value the session cannot edit. Dropping it keeps the
+ * named hook running, which is the safe side, and `report` is what stops it
+ * being silent.
+ * @param {readonly string[]} known  every dispatchable hook name
+ * @param {NodeJS.ProcessEnv | Record<string, string | undefined>} [env]
+ * @param {(message: string) => void} [report]
+ * @returns {Set<string>}
+ */
+export function disabledHooks(
+  known,
+  env = process.env,
+  report = (message) => process.stderr.write(`${message}\n`),
+) {
+  const named = (env[DISABLED_HOOKS_ENV] ?? "")
+    .split(",")
+    .map((name) => name.trim())
+    .filter((name) => name !== "");
+  const unknown = named.filter((name) => !known.includes(name));
+  if (unknown.length > 0)
+    report(
+      `agent-sanitizer: ${DISABLED_HOOKS_ENV} names ${unknown.join(", ")}, ` +
+        `which is not a hook — it stays ENABLED. Known hooks: ${known.join(", ")}.`,
+    );
+  return new Set(named.filter((name) => known.includes(name)));
+}
+
+/**
  * The model-facing warning accompanying a fail-open pass-through. Emitted as
  * `additionalContext` so the transcript still carries the failure: the posture
  * gives up ENFORCEMENT, not visibility, and stdout is never left empty (which

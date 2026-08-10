@@ -16,7 +16,13 @@ import assert from "node:assert/strict";
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { dirname, isAbsolute, join, normalize } from "node:path";
 import { fileURLToPath } from "node:url";
-import { failOpenEnabled } from "../../claude-hooks/lib/hook-io.mjs";
+import {
+  DISABLED_HOOKS_ENV,
+  FAIL_OPEN_ENV,
+  failOpenEnabled,
+  HookEvent,
+} from "../../claude-hooks/lib/hook-io.mjs";
+import { SECRETS_ENABLED_ENV } from "../../claude-hooks/lib/env-config.mjs";
 
 const ROOT = dirname(dirname(dirname(fileURLToPath(import.meta.url))));
 const MARKETPLACE_PATH = join(ROOT, ".claude-plugin", "marketplace.json");
@@ -136,12 +142,16 @@ test("every marketplace entry resolves to a real plugin inside the repo", () => 
 
     // The docs are explicit that plugin.json's version wins silently over the
     // entry's, so a version here would be a value nobody can observe — and a
-    // trap the moment the two drift.
-    assert.equal(
-      entry.version,
-      undefined,
-      `${entry.name}: pin the version in plugin.json, not the marketplace entry`,
-    );
+    // trap the moment the two drift. `description` resolves the same way, and
+    // it drifted for real: the entry's copy still advertised a posture the
+    // hooks had stopped taking, several releases after the manifest's was
+    // corrected. Neither field is restated here; plugin.json is the source.
+    for (const field of ["version", "description"])
+      assert.equal(
+        entry[field],
+        undefined,
+        `${entry.name}: set ${field} in plugin.json, not the marketplace entry`,
+      );
   }
 });
 
@@ -186,20 +196,32 @@ test("the hooks Claude Code loads are where it looks for them", () => {
   assert.ok(Object.keys(readJson(path).hooks).length > 0);
 });
 
-test("neither description advertises a posture the hooks do not take", () => {
-  // The default posture is fail-OPEN (a hook that cannot run warns and passes
-  // the action through). Both descriptions are pre-install surfaces — the
-  // marketplace entry is what `/plugin marketplace` lists, the manifest is what
-  // the picker shows — and both claimed fail-closed for several releases after
-  // the default flipped.
+test("the description does not advertise a posture the hooks do not take", () => {
+  // The description is the pre-install surface — what the picker and
+  // `/plugin marketplace` show — so it is the one place a reader decides what
+  // this plugin does before any of it runs. The default posture is fail-OPEN:
+  // a hook that cannot run warns and passes the action through.
   assert.equal(
     failOpenEnabled({}),
     true,
-    "default posture changed — revisit both descriptions",
+    "default posture changed — revisit the description",
   );
-  const entry = marketplace.plugins.find((p) => p.source === "./plugin");
-  for (const text of [manifest.description, entry.description])
-    assert.doesNotMatch(text, /fails?[- ]closed/i);
+  assert.doesNotMatch(manifest.description, /fails?[- ]closed/i);
+});
+
+test("the description names each hook's event and every public knob", () => {
+  // A description that lists capabilities without saying which event they run
+  // on, or that omits a knob, is the drift this test exists to catch: the
+  // picker is the only surface an operator reads before installing, and both
+  // halves went stale before (a posture claim that had flipped, and a layer
+  // that shipped opt-in with the description still implying it was always on).
+  for (const event of Object.values(HookEvent))
+    assert.match(manifest.description, new RegExp(event, "u"));
+  for (const knob of [FAIL_OPEN_ENV, DISABLED_HOOKS_ENV, SECRETS_ENABLED_ENV])
+    assert.ok(
+      manifest.description.includes(knob),
+      `description does not mention ${knob}`,
+    );
 });
 
 // ─── the install commands the docs advertise ─────────────────────────────────

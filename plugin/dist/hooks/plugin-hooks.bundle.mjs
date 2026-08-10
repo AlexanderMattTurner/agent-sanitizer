@@ -122,6 +122,16 @@ function readFlag(argv, name50) {
 function failOpenEnabled(env = process.env) {
   return !FAIL_CLOSED_SET.has(env[FAIL_OPEN_ENV] ?? "");
 }
+function disabledHooks(known, env = process.env, report = (message) => process.stderr.write(`${message}
+`)) {
+  const named = (env[DISABLED_HOOKS_ENV] ?? "").split(",").map((name50) => name50.trim()).filter((name50) => name50 !== "");
+  const unknown = named.filter((name50) => !known.includes(name50));
+  if (unknown.length > 0)
+    report(
+      `agent-sanitizer: ${DISABLED_HOOKS_ENV} names ${unknown.join(", ")}, which is not a hook \u2014 it stays ENABLED. Known hooks: ${known.join(", ")}.`
+    );
+  return new Set(named.filter((name50) => known.includes(name50)));
+}
 function failOpenContext(hookName, guarded, err, failedPackages = failedLazyPackages, packageMessage = missingPackageMessage) {
   const [pkg] = err instanceof TypeError ? failedPackages() : [];
   const hint = pkg === void 0 ? "" : ` ${packageMessage(pkg)}`;
@@ -353,7 +363,7 @@ function writeFileNoFollow(path2, content3, mode = 384) {
     closeSync(fd);
   }
 }
-var defaultSharedState, shared, HookEvent, PermissionDecision, FAIL_OPEN_ENV, FAIL_CLOSED_VALUES, FAIL_CLOSED_SET, LONE_SURROGATE_RE, MAX_STDIN_BYTES, lazyImportErrors, DEFAULT_MISSING_PACKAGE_REMEDY, UNTRUSTED_TEXT_CAP, HOOKGATE_MARKER_STEM;
+var defaultSharedState, shared, HookEvent, PermissionDecision, FAIL_OPEN_ENV, FAIL_CLOSED_VALUES, FAIL_CLOSED_SET, DISABLED_HOOKS_ENV, LONE_SURROGATE_RE, MAX_STDIN_BYTES, lazyImportErrors, DEFAULT_MISSING_PACKAGE_REMEDY, UNTRUSTED_TEXT_CAP, HOOKGATE_MARKER_STEM;
 var init_hook_io = __esm({
   "claude-hooks/lib/hook-io.mjs"() {
     "use strict";
@@ -380,6 +390,7 @@ var init_hook_io = __esm({
     FAIL_OPEN_ENV = "AGENT_SANITIZER_FAIL_OPEN";
     FAIL_CLOSED_VALUES = Object.freeze(["0", "false"]);
     FAIL_CLOSED_SET = new Set(FAIL_CLOSED_VALUES);
+    DISABLED_HOOKS_ENV = "AGENT_SANITIZER_DISABLED_HOOKS";
     LONE_SURROGATE_RE = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g;
     MAX_STDIN_BYTES = 64 * 1024 * 1024;
     lazyImportErrors = /* @__PURE__ */ new Map();
@@ -70352,57 +70363,79 @@ async function registerAvailableModules() {
   );
   registerLazyModules(loaded2);
 }
-async function main2() {
-  claimCliEntry();
-  await registerAvailableModules();
-  const mode = readFlag(process.argv, "hook");
-  switch (mode) {
-    case "pretooluse-sanitize": {
+var HOOKS = {
+  "pretooluse-sanitize": {
+    event: HookEvent.PRE_TOOL_USE,
+    run: async () => {
       const { cliMain: cliMain4 } = (
         /** @type {typeof import("./pretooluse-sanitize.mjs")} */
         await init_pretooluse_sanitize().then(() => pretooluse_sanitize_exports)
       );
       await cliMain4();
-      break;
     }
-    case "sanitize-output": {
+  },
+  "sanitize-output": {
+    event: HookEvent.POST_TOOL_USE,
+    run: async () => {
       const { cliMain: cliMain4 } = (
         /** @type {typeof import("./sanitize-output.mjs")} */
         await init_sanitize_output().then(() => sanitize_output_exports)
       );
       await cliMain4();
-      break;
     }
-    case "sanitize-user-prompt": {
+  },
+  "sanitize-user-prompt": {
+    event: HookEvent.USER_PROMPT_SUBMIT,
+    run: async () => {
       const { main: promptMain } = (
         /** @type {typeof import("./sanitize-user-prompt.mjs")} */
         await init_sanitize_user_prompt().then(() => sanitize_user_prompt_exports)
       );
       await promptMain(readStdinJson, (chunk) => process.stdout.write(chunk));
-      break;
     }
-    case "scan-invisible-chars": {
+  },
+  "scan-invisible-chars": {
+    event: HookEvent.SESSION_START,
+    run: async () => {
       const { cliMain: cliMain4 } = (
         /** @type {typeof import("./scan-invisible-chars.mjs")} */
         await init_scan_invisible_chars().then(() => scan_invisible_chars_exports)
       );
       await cliMain4();
-      break;
     }
-    default:
-      process.exit(
-        writeFaultOutcome(
-          hookFaultOutcome(
-            HOOK_NAME5,
-            new Error(`unknown hook mode ${JSON.stringify(mode)}`)
-          )
-        )
-      );
   }
+};
+var HOOK_MODES = Object.freeze(Object.keys(HOOKS));
+async function main2() {
+  claimCliEntry();
+  await registerAvailableModules();
+  const mode = readFlag(process.argv, "hook");
+  const hook = mode === void 0 ? void 0 : HOOKS[mode];
+  if (mode === void 0 || hook === void 0) {
+    process.exit(
+      writeFaultOutcome(
+        hookFaultOutcome(
+          HOOK_NAME5,
+          new Error(`unknown hook mode ${JSON.stringify(mode)}`)
+        )
+      )
+    );
+  }
+  if (disabledHooks(HOOK_MODES).has(mode)) {
+    process.stderr.write(
+      `agent-sanitizer: ${mode} is off via ${DISABLED_HOOKS_ENV}; this ${hook.event} event is UNGUARDED.
+`
+    );
+    emitHookResponse(hook.event, {});
+    process.stdin.resume();
+    return;
+  }
+  await hook.run();
 }
 if (isMain(import.meta.url)) {
   await main2();
 }
 export {
+  HOOK_MODES,
   main2 as main
 };

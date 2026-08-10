@@ -39,6 +39,7 @@ import {
   bundleTarget,
   runtimeRequires,
 } from "../../scripts/lib/bundle-esbuild.mjs";
+import { HOOK_MODES } from "../../claude-hooks/plugin-hooks.mjs";
 
 const ROOT = dirname(dirname(dirname(fileURLToPath(import.meta.url))));
 const PLUGIN_DIR = join(ROOT, "plugin");
@@ -387,12 +388,10 @@ test("hooks.json wires exactly the four modes, each through the launcher", () =>
     .map((c) => /--hook=(?<mode>[\w-]+)/.exec(c)?.groups.mode)
     .filter(Boolean)
     .sort();
-  assert.deepEqual(modes, [
-    "pretooluse-sanitize",
-    "sanitize-output",
-    "sanitize-user-prompt",
-    "scan-invisible-chars",
-  ]);
+  // Against the dispatcher's own table, not a third copy of the names: a hook
+  // wired here but absent there is the unknown-mode fail-closed, and one
+  // dispatchable but unwired is a layer that silently never runs.
+  assert.deepEqual(modes, [...HOOK_MODES].sort());
   // Every sanitize call goes through the launcher, never bare node: a bare
   // `node bundle` that cannot start prints nothing, which the harness reads as
   // "no objection" and passes the guarded action through SILENTLY — no warning
@@ -409,12 +408,7 @@ test("hooks.json wires exactly the four modes, each through the launcher", () =>
 
 test("every wired mode is dispatchable (no unknown-mode fail-closed)", (t) => {
   const plugin = stagePlugin(t);
-  for (const mode of [
-    "pretooluse-sanitize",
-    "sanitize-output",
-    "sanitize-user-prompt",
-    "scan-invisible-chars",
-  ]) {
+  for (const mode of HOOK_MODES) {
     const res = launch(plugin, "PreToolUse", mode, {
       hook_event_name: "PreToolUse",
       tool_name: "Bash",
@@ -504,6 +498,64 @@ test("pretooluse hook normalizes a confusable through the inlined scanner", (t) 
     tool_input: { command: "ls /tmp/path" },
   });
   assert.equal(clean.stdout, "");
+});
+
+test("a hook named in the disable list stands down for its event only", (t) => {
+  const plugin = stagePlugin(t);
+  const payload = {
+    hook_event_name: "PostToolUse",
+    tool_name: "Bash",
+    tool_input: {},
+    // Padded past a pipe buffer: a hook that answered without draining stdin
+    // would leave the harness writing into a closed pipe, and the EPIPE would
+    // only show on payloads this size.
+    tool_response: {
+      stdout: `${ESC}[32mok${ESC}[0m a\u200bb\u200bc done${"x".repeat(1 << 20)}`,
+    },
+  };
+  const res = launch(plugin, "PostToolUse", "sanitize-output", payload, {
+    env: { AGENT_SANITIZER_DISABLED_HOOKS: "sanitize-output" },
+  });
+  assert.equal(res.status, 0);
+  // A verdict, not a crash: an empty envelope keeps stdout non-empty, so the
+  // launcher's post-condition sees an answer and does not degrade.
+  assert.deepEqual(JSON.parse(res.stdout), {
+    hookSpecificOutput: { hookEventName: "PostToolUse" },
+  });
+  assert.match(res.stderr, /sanitize-output is off/);
+
+  // Scoped: disabling one hook must not stand the others down. Without this the
+  // list could match on anything (a prefix, a substring) and silently unguard
+  // events the operator never named.
+  const other = launch(plugin, "PreToolUse", "pretooluse-sanitize", {
+    hook_event_name: "PreToolUse",
+    tool_name: "Bash",
+    tool_input: { command: "ls /tmp/pаth" },
+  });
+  const out = JSON.parse(other.stdout);
+  assert.equal(out.hookSpecificOutput.updatedInput.command, "ls /tmp/path");
+});
+
+test("a mistyped disable entry warns and leaves the hook guarding", (t) => {
+  // The variable is set outside the session, so refusing to run — or blocking —
+  // would leave every tool call failing on a value the session cannot edit. The
+  // safe direction is to keep sanitizing; the stderr line is what keeps that
+  // from being silent.
+  const res = launch(
+    stagePlugin(t),
+    "PreToolUse",
+    "pretooluse-sanitize",
+    {
+      hook_event_name: "PreToolUse",
+      tool_name: "Bash",
+      tool_input: { command: "ls /tmp/pаth" },
+    },
+    { env: { AGENT_SANITIZER_DISABLED_HOOKS: "sanitize-ouput" } },
+  );
+  assert.equal(res.status, 0);
+  assert.match(res.stderr, /sanitize-ouput.*not a hook/su);
+  const out = JSON.parse(res.stdout);
+  assert.equal(out.hookSpecificOutput.updatedInput.command, "ls /tmp/path");
 });
 
 test("output hook strips ANSI and invisibles, preserving the response shape", (t) => {

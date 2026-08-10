@@ -34,6 +34,7 @@ import {
   expandShards,
   EOF_SENTINEL,
 } from "../.github/scripts/expand-shards.mjs";
+import { mutatedSources, shippedSources } from "../scripts/shipped-sources.mjs";
 
 const repoRoot = execFileSync("git", ["rev-parse", "--show-toplevel"], {
   encoding: "utf8",
@@ -271,5 +272,28 @@ describe("mutation shard matrix", () => {
         );
       }
     }
+  });
+});
+
+describe("the dry-run oracle's scope", () => {
+  // The oracle instruments whatever this CLI prints. Printing the SHIPPED
+  // subset is what let it pass on exactly the commits where a shard was about
+  // to die: the matrix mutates the `.hooks/lib/` tooling too, and a dry-run
+  // failure there is invisible to an oracle that never instrumented it.
+  it("prints everything the shards mutate, tooling included", () => {
+    const printed = execFileSync(
+      process.execPath,
+      [join(repoRoot, "scripts", "shipped-sources.mjs")],
+      { encoding: "utf8" },
+    )
+      .trim()
+      .split("\n");
+    assert.deepEqual(printed, mutatedSources(repoRoot));
+    // Without this the assertion above holds just as well while the two sets
+    // are equal, which is the state it exists to rule out.
+    assert.ok(
+      mutatedSources(repoRoot).length > shippedSources(repoRoot).length,
+      "the tooling half of the mutated set is empty — this proves nothing",
+    );
   });
 });

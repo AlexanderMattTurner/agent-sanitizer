@@ -15,7 +15,11 @@
  *
  * Usage:
  *   import { shippedSources } from "./shipped-sources.mjs";
- *   node scripts/shipped-sources.mjs   → one repo-relative path per line
+ *   node scripts/shipped-sources.mjs   → the MUTATED set, one path per line
+ *
+ * The CLI prints the mutation scope rather than the shipped subset the module
+ * is named for: see the block above it for why that is the shape with no scope
+ * decision in it.
  */
 import { execFileSync } from "node:child_process";
 import { readdirSync, readFileSync, realpathSync, statSync } from "node:fs";
@@ -217,9 +221,15 @@ export const findRepoRoot = () =>
     cwd: dirname(fileURLToPath(import.meta.url)),
   }).trim();
 
+// The CLI prints the MUTATED set, a superset of the shipped one the module is
+// named for. Its one consumer is the mutation dry-run oracle, which has to
+// instrument everything the shard matrix does or it passes on exactly the
+// commits where a shard is about to die; printing the superset makes that hold
+// by construction, with no scope for the shell to choose and none to police.
+// Every other consumer imports the export it wants.
 if (
   process.argv[1] &&
   realpathSync(process.argv[1]) === fileURLToPath(import.meta.url)
 ) {
-  process.stdout.write(`${shippedSources(findRepoRoot()).join("\n")}\n`);
+  process.stdout.write(`${mutatedSources(findRepoRoot()).join("\n")}\n`);
 }
