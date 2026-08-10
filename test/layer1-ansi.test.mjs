@@ -134,6 +134,9 @@ describe("scanAnsi", () => {
     assert.deepEqual(kinds(`${OSC}0;title${ST}`), ["osc"]);
     assert.deepEqual(kinds(`${ESC}]0;title${ESC}\\`), ["osc"]);
     assert.deepEqual(kinds(`${ESC}]unterminated`), ["osc"]);
+    // A line break bounds a control string: the OSC token ends before the LF, so
+    // the text after the break is not swallowed as body.
+    assert.deepEqual(kinds(`${ESC}]stray\nmore`), ["osc"]);
     assert.deepEqual(kinds(`${OSC}nested${OSC}x`), ["osc", "osc"]);
     // The other four ECMA-48 control strings, both encodings. `ESC P` is the
     // one that regressed silently: `P` is also a CSI final byte, so before the
@@ -179,8 +182,26 @@ describe("scanAnsi", () => {
       ["C1 SOS", `x${cp(0x98)}payload${ST}y`, "xy"],
       ["C1 PM", `x${cp(0x9e)}payload${ST}y`, "xy"],
       ["C1 APC", `x${APC}payload${BEL}y`, "xy"],
-      // Fail closed: an unterminated string drops everything after it.
+      // Fail closed: an unterminated string with no line break drops everything
+      // after it.
       ["unterminated APC", `x${ESC}_dangling-payload`, "x"],
+      // A line break BOUNDS an unterminated string, so only the rest of that one
+      // line is dropped and later lines survive — a fail-closed blast-radius
+      // limit (NOT terminal behavior). Without it a single ESC ] deleted every
+      // later line of a record a model reads as text, not renders as a terminal.
+      [
+        "unterminated OSC bounded by newline",
+        `line1\n${ESC}]stray\nline2 MUST SEE\nline3`,
+        "line1\n\nline2 MUST SEE\nline3",
+      ],
+      [
+        "unterminated C1 APC bounded by newline",
+        `keep\n${APC}stray\ntail`,
+        "keep\n\ntail",
+      ],
+      // CAN/SUB cancel a control string, consumed with the body (ECMA-48/xterm).
+      ["OSC cancelled by CAN", `x${ESC}]t${cp(0x18)}rest`, "xrest"],
+      ["OSC cancelled by SUB", `x${ESC}]t${cp(0x1a)}rest`, "xrest"],
       // The abort arm holds for these strings too: the interior ESC starts a
       // new sequence rather than eating the document tail.
       ["DCS aborted by ESC", `x${ESC}Pbody${ESC}[0mtail`, "xtail"],

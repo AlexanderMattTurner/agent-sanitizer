@@ -92,6 +92,13 @@ const ESC = 0x1b;
 const CSI_C1 = 0x9b;
 const ST_C1 = 0x9c;
 const BEL = 0x07;
+// CAN/SUB cancel a control string per ECMA-48 and the xterm parser; LF/CR do
+// not, but bound the body anyway as a fail-closed blast-radius limit (see
+// scanControlString).
+const CAN = 0x18;
+const SUB = 0x1a;
+const LF = 0x0a;
+const CR = 0x0d;
 
 // PROBLEM CLASS — a control string whose body the grammar leaves as visible
 // text. ECMA-48 opens FIVE strings, not one: OSC (`ESC ]` / U+009D), DCS
@@ -209,15 +216,24 @@ export function orphanKindFor(ch, next) {
  * application command — i.e. attacker-controlled PAYLOAD TEXT in every case.
  * Consuming the introducer alone would leave that payload in the model's view,
  * so the whole string is one token. Three ways it can end:
- *   1. a real terminator — ST (`ESC\` or the 8-bit C1 ST U+009C) or the legacy
- *      BEL — which is consumed with the body.
+ *   1. a real terminator — ST (`ESC\` or the 8-bit C1 ST U+009C), the legacy
+ *      BEL, or the CAN/SUB (U+0018/U+001A) that ECMA-48 and xterm cancel a
+ *      string on — which is consumed with the body.
  *   2. an ABORT: per ECMA-48/xterm a bare ESC (one not forming ST) drops the
  *      terminal out of the string, and a nested C1 string introducer likewise
  *      starts something new. The token ends BEFORE that byte so the scan
  *      re-reads it as its own sequence — without this, an interior ESC deleted
- *      the rest of the document via case 3.
- *   3. end of input, for a genuinely unterminated string: fail closed and drop
- *      everything from the introducer on, so no body survives.
+ *      the rest of the document via case 4.
+ *   3. a line break (LF/CR) BOUNDS the body, before the break. This is a fail-
+ *      closed blast-radius limit, NOT terminal behavior: a real terminal ignores
+ *      an interior LF and keeps collecting to a true terminator. Without the
+ *      bound one stray `ESC ]` deleted every later line to end of input, so on a
+ *      consumer that reads the strip as a RECORD (a model, not a display) one
+ *      introducer blinded the whole tail behind a clean-looking prefix. The
+ *      break survives; the payload after it on the same line is dropped.
+ *   4. end of input, for a genuinely unterminated string with no line break:
+ *      fail closed and drop everything from the introducer on, so no body
+ *      survives.
  *
  * BEL terminates every arm here, not just OSC. Only xterm's OSC parser accepts
  * it, so a DCS ending at BEL over-consumes by the width of one body — the
@@ -239,9 +255,11 @@ function scanControlString(text, start) {
   let i = sevenBit ? start + 2 : start + 1;
   for (; i < text.length; i++) {
     const byte = text.charCodeAt(i);
-    if (byte === BEL || byte === ST_C1) return { end: i + 1, kind };
+    if (byte === BEL || byte === ST_C1 || byte === CAN || byte === SUB)
+      return { end: i + 1, kind };
     if (byte === ESC) return { end: text[i + 1] === "\\" ? i + 2 : i, kind };
-    if (STRING_INTRO_C1.has(byte)) return { end: i, kind };
+    if (STRING_INTRO_C1.has(byte) || byte === LF || byte === CR)
+      return { end: i, kind };
   }
   return { end: text.length, kind };
 }
