@@ -1,5 +1,9 @@
 #!/usr/bin/env bash
 # The committed plugin bundle may only move when one of its BUILD INPUTS moves.
+# The first-party inputs are the source trees the artifacts compile from — src/
+# for the JS bundle, python/ for the wheel and zipapp — plus the locked
+# dependency inputs below. Omitting src/ or python/ makes the check fire on every
+# honest source-only change, which regenerates the artifact with no lockfile diff.
 #
 # The reproducibility test already refuses a bundle that differs from a fresh
 # build, which stops a hand-edited artifact. This closes the other direction: an
@@ -28,7 +32,7 @@ while IFS= read -r file; do
   [[ -n "$file" ]] || continue
   case "$file" in
   plugin/dist/*) dist_changed=true ;;
-  package.json | pnpm-lock.yaml | claude-hooks/* | plugin/scripts/* | plugin/requirements.in | plugin/requirements.txt)
+  src/* | python/* | package.json | pnpm-lock.yaml | claude-hooks/* | plugin/scripts/* | plugin/requirements.in | plugin/requirements.txt)
     input_changed=true
     ;;
   esac
@@ -36,9 +40,9 @@ done <<<"$changed"
 
 if [[ "$dist_changed" == true && "$input_changed" == false ]]; then
   echo "::error::plugin/dist changed but no build input did." >&2
-  echo "The artifacts are generated from package.json + pnpm-lock.yaml + claude-hooks/ +" >&2
-  echo "plugin/scripts/ + plugin/requirements.{in,txt}. A dist-only diff means the" >&2
-  echo "artifact was edited by hand or carried over from another branch. Rebuild with:" >&2
+  echo "The artifacts are generated from src/ + python/ + package.json + pnpm-lock.yaml +" >&2
+  echo "claude-hooks/ + plugin/scripts/ + plugin/requirements.{in,txt}. A dist-only diff" >&2
+  echo "means the artifact was edited by hand or carried over from another branch. Rebuild with:" >&2
   echo "  node plugin/scripts/build-plugin.mjs        # JS bundle + requirements.in" >&2
   echo "  node plugin/scripts/build-redactor-pyz.mjs  # zipapp, from the committed lock" >&2
   git diff --stat "$base_ref"...HEAD -- plugin/dist >&2
