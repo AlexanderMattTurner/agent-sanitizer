@@ -207,20 +207,44 @@ dismiss_stale_hold() {
 # it refuses any approval of a PR the token's own actor authored. Stand down
 # LOUDLY on both, naming the remedy. Any OTHER failure is real and exits
 # non-zero.
+# Every write below is a REVIEW made with GITHUB_TOKEN, and GitHub emits no
+# pull_request_review event for one — so both review-keyed gates would keep a
+# verdict that predates it: pending after an approve, or GREEN after a dismissal
+# that left nothing standing. The second is fail-open on a required merge gate,
+# so the re-derivation lives here beside the writes, covering the push-time
+# resolver and the periodic sweep alike instead of being re-implemented per
+# caller (the same reason the verdict itself lives in this one script).
+#
+# Safe for every PR this script ACTS on, and it acts on no others: it reaches a
+# write only when the reviewer's latest review is a live hold or comment, so the
+# deliberately-skipped class — never reviewed, its gate cleared by hand — is
+# never reached and never overwritten.
+rederive_review_gates() {
+  local head_sha
+  head_sha="$(gh api "repos/${GH_REPO}/pulls/${PR}" --jq '.head.sha')"
+  # Both run in report mode, so each posts its verdict and exits 0 whatever that
+  # verdict is: a red finding here must not fail the sweep of the other PRs.
+  REPORT_SHA="$head_sha" bash "$SCRIPT_DIR/review-findings-gate.sh"
+  HEAD_SHA="$head_sha" bash "$SCRIPT_DIR/review-gate.sh"
+}
+
 approve_err=""
 if ! approve_err="$(gh pr review "$PR" --repo "$GH_REPO" --approve --body \
   "Automated approval: ${cleared_by}, so this satisfies the review-required ruleset. Re-request review if a human should take a closer look." 2>&1)"; then
   if [[ "$approve_err" == *"not permitted to approve pull requests"* ]]; then
     echo "hold is clear, but this token cannot approve: GitHub blocks approvals from GitHub Actions." >&2
     dismiss_stale_hold "${cleared_by}, so this hold no longer reflects the pull request's state." || exit 1
+    rederive_review_gates
     exit 0
   fi
   if [[ "$approve_err" == *"Can not approve your own pull request"* ]]; then
     echo "hold is clear, but this token's actor authored PR #${PR}, and GitHub refuses a self-approval." >&2
     dismiss_stale_hold "${cleared_by}, so this hold no longer reflects the pull request's state." || exit 1
+    rederive_review_gates
     exit 0
   fi
   echo "failed to post the clearing approval: ${approve_err}" >&2
   exit 1
 fi
 echo "${cleared_by} and reviewer was holding (${latest_state}); approved to satisfy the review gate" >&2
+rederive_review_gates

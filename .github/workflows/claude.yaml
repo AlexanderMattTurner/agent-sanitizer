@@ -42,6 +42,9 @@ on:
     types: [created]
   pull_request_review_comment:
     types: [created]
+  # review-gate-exempt: this is the @claude mention responder, not a merge gate.
+  # It posts no required status or check run, so a review of its own that fires
+  # no webhook costs a missed reply, never a stale verdict on a PR's merge.
   pull_request_review:
     types: [submitted]
   issues:
