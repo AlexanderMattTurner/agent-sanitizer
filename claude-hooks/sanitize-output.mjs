@@ -82,8 +82,11 @@ export const { applyLayer1, matchesSecretHint, SECRET_HINT, SECRET_HINT_EXT } =
 const _output = /** @type {typeof import("agent-sanitizer/output")} */ (
   await lazyImport("agent-sanitizer/output")
 );
-const { sanitizeText: sanitizeTextSeam, composeContext: composeContextSeam } =
-  _output;
+const {
+  sanitizeText: sanitizeTextSeam,
+  composeContext: composeContextSeam,
+  withheldWarning,
+} = _output;
 export const { describeRemoved, describeWarned, suppressToolOutput } = _output;
 
 const HOOK_NAME = "sanitize-output";
@@ -94,12 +97,7 @@ const HOOK_NAME = "sanitize-output";
 // splice/withhold warnings make is NOT kept for this output. Fixed prose, no
 // error text — the redactor runs on attacker-influenced content and this line
 // reaches the model-facing context. Exported so tests assert it by reference.
-// Deliberately a LOCAL constant rather than a shared engine builder alongside
-// output.mjs's "Withheld the ${label}" template: the plugin bundle resolves
-// the engine to the pinned registry release, so hook code cannot use a new
-// engine export until the pin advances past it.
-export const REVEAL_WITHHELD_WARNING =
-  "Withheld the reveal sidecar: it could not be vetted for secrets";
+export const REVEAL_WITHHELD_WARNING = withheldWarning("reveal sidecar");
 
 // Total wall-clock budget for one hook invocation's blocking daemon calls — the
 // Layer-4 redactor — SHARED across every string leaf of the tool output. Each
@@ -115,18 +113,6 @@ const SANITIZE_BUDGET_MS = positiveMsOr(
   process.env._AGENT_SANITIZER_SANITIZE_BUDGET_MS,
   120000,
 );
-
-// Non-WARNING note for a strip whose only change was INERT ANSI on a local tool:
-// the display-only colour git/pytest/npm/etc. emit by default, and/or a stray
-// escape byte that formed no sequence at all. The engine now returns this text
-// itself, as a NOTE-severity finding alongside the warnings, so this copy is the
-// FALLBACK for exactly one case: a bundle built against a pinned engine older
-// than that severity split, whose result carries `sgrNote` but no `notes`. Same
-// sentence, so a plugin on the old pin keeps today's wording instead of falling
-// back to a bare "output sanitized".
-const SGR_OUTPUT_NOTE =
-  "Inert ANSI stripped (display-only colour and/or a stray escape byte that " +
-  "formed no control sequence); pipe through cat -v to inspect raw escapes.";
 
 // Web-ingress tools always get the Layer 2 HTML rewrite; local tools — Read,
 // Bash, Grep, gh — never do. A local HTML/markdown pass either rewrites bytes the
@@ -309,10 +295,8 @@ export async function sanitizeText(
     /** @type {{ cleaned: string, warnings: string[], notes?: string[], modified: boolean, sgrNote: boolean, reveal?: string, splices?: Array<{ placeholder: string, original: string }> }} */ (
       await sanitizeTextSeam(text, seamOptions)
     );
-  // The one place the seam's shape is normalized: `notes` is absent when the
-  // engine predates the severity split, which is the shipped plugin's pinned
-  // case (see SGR_OUTPUT_NOTE). Defaulting here means nothing downstream has to
-  // know that, and the banner composer sees one shape either way.
+  // The one place the seam's shape is normalized, so nothing downstream has to
+  // branch on an absent `notes` and the banner composer sees one shape.
   const result = { ...seamResult, notes: seamResult.notes ?? [] };
   return ext.postText
     ? applyPostText(
@@ -1006,7 +990,7 @@ export async function evaluateToolOutput(input, ext = {}) {
   // hidden-HTML splice to read about does not also need the colour codes).
   const baseContext =
     sgrNote && warnings.length === 0
-      ? noteContext(notes)
+      ? [...new Set(notes)].join(" ")
       : composeContext(modified, warnings, input.tool_name);
   const additionalContext = revealRead
     ? `${REVEAL_READ_ENVELOPE} ${baseContext}`
@@ -1015,20 +999,6 @@ export async function evaluateToolOutput(input, ext = {}) {
   const fields = { additional_context: additionalContext };
   if (modified) fields.mutated_output = sanitized;
   return emit(modified ? "modified" : "flagged", fields);
-}
-
-/**
- * The model-facing line for a note-only result: the seam's own note text,
- * deduped and joined, with no WARNING prefix.
- *
- * Empty only against a pinned engine that predates the severity split (see
- * SGR_OUTPUT_NOTE): there `sgrNote` still arrives true with no `notes` to go
- * with it, and printing nothing would drop the one thing that run had to say.
- * @param {string[]} notes
- * @returns {string}
- */
-function noteContext(notes) {
-  return notes.length === 0 ? SGR_OUTPUT_NOTE : [...new Set(notes)].join(" ");
 }
 
 /**

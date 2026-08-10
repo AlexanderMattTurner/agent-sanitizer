@@ -90,9 +90,6 @@ describe("a run past the regexp engine's limit", () => {
     assert.equal(classifyPrompt(RUN).action, "block"),
   );
 
-  // The hook layer reaches this through the PINNED engine, which has no bounded
-  // scan to import — its own bound is derived from the engine's STRIP class and
-  // threshold, so this holds at any pin.
   huge("the authored-content hook strips it from a Write body", () => {
     const result = sanitizeAuthoredContent("Write", {
       file_path: "/tmp/x.md",

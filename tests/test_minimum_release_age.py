@@ -61,24 +61,17 @@ def package_json() -> dict:
 def _pinned_exact_versions(pkg: dict) -> set[tuple[str, str]]:
     """Every `(name, version)` package.json pins to one exact published version.
 
-    Two idioms count, and both are exercised by the non-vacuity test below:
-
-    - a direct dependency on a bare version, `"acorn": "8.18.0"` (a range such
-      as `^8.18.0` does NOT pin one version and is deliberately excluded); and
-    - an npm alias, `"sanitizer-engine": "npm:agent-sanitizer@2.20.0"`, which is
-      how this repo depends on its own published release.
+    A pin is a direct dependency on a bare version, `"acorn": "8.18.0"`. A range
+    such as `^8.18.0` does not name one version and is deliberately excluded, as
+    is a `link:`/`file:` spec, which resolves to a path rather than to anything
+    the registry could serve inside the cooling-off window.
     """
     pinned: set[tuple[str, str]] = set()
     for field in DEPENDENCY_FIELDS:
-        for alias, spec in (pkg.get(field) or {}).items():
-            if spec.startswith("npm:"):
-                name, _, version = spec[len("npm:") :].rpartition("@")
-                if name and version:
-                    pinned.add((name, version))
-                continue
+        for name, spec in (pkg.get(field) or {}).items():
             # A bare, fully-qualified semver (no range operator) pins exactly.
             if spec and spec[0].isdigit():
-                pinned.add((alias, spec))
+                pinned.add((name, spec))
     return pinned
 
 
@@ -158,28 +151,22 @@ def test_only_this_repo_s_own_package_is_exempt(
 
 
 @pytest.mark.drift_guard
-def test_pin_extraction_sees_both_idioms(package_json: dict) -> None:
+def test_pin_extraction_tells_a_pin_from_a_range(package_json: dict) -> None:
     """Non-vacuity for the two tests above.
 
-    Both walk `_pinned_exact_versions`. If it silently returned an empty set —
-    a renamed dependency field, a changed alias syntax — the exemption test
-    would still pass for an empty exclude list and start failing spuriously for
-    a real one, so pin that each extraction arm resolves something.
+    Both walk `_pinned_exact_versions`, and with `minimumReleaseAgeExclude`
+    empty they iterate zero entries — so this is the only thing standing between
+    them and silence. Asserted against a synthetic manifest, because comparing
+    the extraction's output back against the same manifest it read is a
+    tautology: it fails only if one name appears twice with different specs.
     """
-    pinned = _pinned_exact_versions(package_json)
-    assert pinned, "no exact version pins resolved out of package.json at all"
-
-    aliases = {
-        spec
-        for field in DEPENDENCY_FIELDS
-        for spec in (package_json.get(field) or {}).values()
-        if spec.startswith("npm:")
-    }
-    assert aliases, (
-        "package.json declares no `npm:` alias; the alias arm of "
-        "_pinned_exact_versions is now dead code and the exemption guard "
-        "cannot see the pin it is meant to check"
+    assert _pinned_exact_versions(
+        {"dependencies": {"a": "1.2.3", "b": "^1.2.3", "c": "link:."}}
+    ) == {("a", "1.2.3")}, (
+        "_pinned_exact_versions no longer tells an exact pin apart from a range "
+        "or a path spec, so the exemption guard cannot see the pins it checks"
     )
-    for spec in aliases:
-        name, version = _split_spec(spec[len("npm:") :])
-        assert (name, version) in pinned, f"alias {spec} did not resolve to a pin"
+    assert _pinned_exact_versions(package_json), (
+        "no exact version pins resolved out of the real package.json — the "
+        "dependency fields it walks have been renamed or emptied"
+    )

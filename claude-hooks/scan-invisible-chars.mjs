@@ -41,12 +41,11 @@ import {
 import { bestEffortTrace, trace, TraceEvent } from "./lib/trace.mjs";
 import { reportSlowHook, startHookTimer } from "./lib/hook-timing.mjs";
 // Relative, not the `agent-sanitizer` specifier every other engine import uses:
-// this is the scan's SCOPE, which is hook policy and must move with the hook.
-// Routing it through the specifier would resolve it, in the shipped plugin
-// bundle, against a PINNED older engine that does not export it — leaving the
-// walk with undefined globs while believing it had scanned everything. The
-// module is dependency-free data (see src/claude-context.mjs), so importing it
-// statically carries none of the fail-open hazard lazyImport exists to cover.
+// this is the scan's SCOPE, which is hook policy, and package.json's exports map
+// deliberately does not publish it — routing it through the specifier would fail
+// to resolve. The module is dependency-free data (see src/claude-context.mjs),
+// so importing it statically carries none of the fail-open hazard lazyImport
+// exists to cover.
 import {
   CLAUDE_CONTEXT_SUBDIRS,
   CLAUDE_INSTRUCTION_GLOBS,

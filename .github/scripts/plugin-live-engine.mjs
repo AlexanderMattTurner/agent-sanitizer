@@ -3,15 +3,16 @@
  *
  * Every other plugin test stubs the redactor: they speak the wire protocol from
  * an in-process server, so they prove the hooks' plumbing and never once run the
- * Python engine the plugin actually installs. That gap is what lets a pinned-
- * engine bump automerge green while the shipped redactor is broken.
+ * Python engine the plugin actually installs. That gap is what lets a change to
+ * the engine automerge green while the shipped redactor is broken.
  *
- * This provisions the PINNED engine from PyPI exactly as SessionStart does, then
+ * This provisions the shipped engine wheel exactly as SessionStart does, then
  * drives all four hooks through the real launcher against a golden corpus. It is
  * the only place the shipped bytes and the shipped engine meet.
  *
  * Usage: node .github/scripts/plugin-live-engine.mjs
- * Requires network (PyPI) and uv or python3. Exits non-zero on the first failure.
+ * Requires network (PyPI, for the third-party lock) and uv or python3. Exits
+ * non-zero on the first failure.
  */
 import { spawnSync } from "node:child_process";
 import { mkdtempSync, rmSync } from "node:fs";
@@ -55,7 +56,7 @@ function check(name, condition, detail) {
   failures.push(name);
 }
 
-// ── Provision the pinned engine exactly as SessionStart does ────────────────
+// ── Provision the shipped engine exactly as SessionStart does ───────────────
 const provision = spawnSync(
   "bash",
   [join(PLUGIN, "scripts", "provision-redactor.sh"), dataDir],

@@ -176,9 +176,10 @@ export const BUNDLE_TARGETS = [
     entry: join(ROOT, "claude-hooks", "plugin-hooks.mjs"),
     outfile: join(ROOT, "plugin", "dist", "hooks", "plugin-hooks.bundle.mjs"),
     // The hooks import the engine by its canonical name so the same sources are
-    // publishable as `agent-sanitizer/claude-hooks`; only the bundle resolves
-    // that name to the pinned registry copy.
-    alias: { "agent-sanitizer": "sanitizer-engine" },
+    // publishable as `agent-sanitizer/claude-hooks`. That name resolves to THIS
+    // repo (package.json devDependencies carries `agent-sanitizer: link:.`), so
+    // the bundle inlines the same `src/` the suite runs against and the shipped
+    // hooks cannot lag the engine they are tested with.
     // The committed artifact is byte-compared against a fresh build, and it was
     // generated without license comments; keeping them out also keeps the
     // shipped bytes reviewable.

@@ -1,24 +1,22 @@
 /**
  * Build the committed Python half of the plugin: a self-contained, platform-
- * independent zipapp at plugin/dist/redactor/daemon.pyz carrying the pinned
- * agent-sanitizer[secrets] redaction engine.
+ * independent zipapp at plugin/dist/redactor/daemon.pyz carrying the redaction
+ * engine built from this tree's `python/`, plus its third-party dependencies.
  *
- * Without this the Python side had the cold-start hole the JS bundle closes:
- * provision-redactor.sh installs from PyPI at SessionStart, so until that
- * finishes (or forever, without network) sanitize-output failed closed on every
- * tool call. The committed .pyz is the guaranteed floor; the provisioned venv
- * remains a startup-latency optimization the launcher prefers when present.
+ * The .pyz is the guaranteed floor, so Layer 4 works with no network and no
+ * provisioning; the venv `provision-redactor.sh` builds is a startup-latency
+ * optimization the launcher prefers when present. Both install the SAME engine
+ * wheel this script writes, so the fast path and the floor are one build.
  *
- * NETWORK: this build installs from PyPI, so it is NOT part of the network-free
- * reproducibility rebuild in the default test suite. The live-engine CI job
- * rebuilds and byte-compares it; the default suite asserts the committed
- * artifact's properties (tracked, pure-Python, runnable) without rebuilding.
+ * NETWORK: this build resolves the third-party tree from PyPI, so it is NOT part
+ * of the network-free reproducibility rebuild in the default test suite. The
+ * live-engine CI job rebuilds and byte-compares it; the default suite asserts
+ * the committed artifact's properties (tracked, pure-Python, runnable).
  *
- * Determinism: the install comes from the fully resolved, hash-pinned
- * plugin/requirements.txt, so no transitive release can change these bytes —
- * pinning only the engine left certifi/charset-normalizer/idna/pyyaml/requests/
- * urllib3 to be re-resolved on every build, and each of their releases silently
- * invalidated the committed artifact. `--no-binary :all:` installs every
+ * Determinism: third-party packages come from the fully resolved, hash-pinned
+ * plugin/requirements.txt, so no transitive release can change these bytes, and
+ * the engine comes from the working tree, which git already content-addresses.
+ * `--no-binary :all:` installs every
  * package from its sdist (the pure-Python source files are copied verbatim, so
  * the tree does not vary by build platform); compiled speedups (PyYAML's _yaml,
  * charset_normalizer's mypyc) are stripped — both packages fall back to pure
@@ -34,13 +32,14 @@ import {
   existsSync,
   mkdirSync,
   readFileSync,
+  copyFileSync,
+  cpSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   REQUIREMENTS_LOCK_PATH,
-  enginePin,
   lockedEngineVersion,
 } from "./build-plugin.mjs";
 
@@ -48,6 +47,71 @@ const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
 
 /** Committed artifact path. */
 export const PYZ_PATH = join(ROOT, "plugin", "dist", "redactor", "daemon.pyz");
+
+/**
+ * The engine wheel, committed beside the zipapp.
+ *
+ * It ships because the plugin is distributed as `plugin/` alone — a user's
+ * machine has no `python/` tree — and `provision-redactor.sh` needs the same
+ * engine the zipapp carries. One artifact consumed by both is what keeps the
+ * provisioned venv and the committed floor from being two versions.
+ */
+export const WHEEL_PATH = join(
+  ROOT,
+  "plugin",
+  "dist",
+  "redactor",
+  "agent_sanitizer-0.0.0-py3-none-any.whl",
+);
+
+/**
+ * Build the engine wheel from `python/` into its committed path and return it.
+ *
+ * `SOURCE_DATE_EPOCH` is pinned for the same reason the zip below is written
+ * with fixed timestamps: a wheel whose bytes move with the clock would make the
+ * committed artifact differ from every rebuild.
+ * @returns {string}
+ */
+export function buildEngineWheel() {
+  // `python/` is staged without `_bundled/` first. pyproject force-includes the
+  // git-ignored `_bundled/sanitize-cli.mjs` WHEN IT EXISTS, so building straight
+  // off the checkout would let the builder's local state decide the bytes of a
+  // committed artifact — and a 1.7 MB Node bridge no consumer of this wheel
+  // reaches (the daemon is pure Python) would ride into every rebuild's diff.
+  const stage = mkdtempSync(join(tmpdir(), "agent-sanitizer-py-"));
+  // Built into a scratch dir and copied in: `uv build --out-dir` drops a
+  // `.gitignore` of `*` beside its output, which in a COMMITTED directory would
+  // silently keep the wheel out of the commit that ships it.
+  const out = mkdtempSync(join(tmpdir(), "agent-sanitizer-wheel-"));
+  try {
+    const source = join(stage, "python");
+    cpSync(join(ROOT, "python"), source, {
+      recursive: true,
+      filter: (from) => basename(from) !== "_bundled",
+    });
+    if (existsSync(join(source, "agent_sanitizer", "_bundled")))
+      throw new Error(
+        "the _bundled/ exclusion did not take, so the wheel's bytes would " +
+          "depend on whether this machine has run scripts/bundle-python-cli.mjs",
+      );
+    run("uv", ["build", "--wheel", "--out-dir", out, source], {
+      SOURCE_DATE_EPOCH: "315532800",
+    });
+    const built = join(out, basename(WHEEL_PATH));
+    if (!existsSync(built))
+      throw new Error(
+        `uv build did not produce ${basename(WHEEL_PATH)}. The version in ` +
+          "python/pyproject.toml must stay the 0.0.0 sentinel (the release " +
+          "workflow injects the real one at publish time).",
+      );
+    mkdirSync(dirname(WHEEL_PATH), { recursive: true });
+    copyFileSync(built, WHEEL_PATH);
+    return WHEEL_PATH;
+  } finally {
+    rmSync(out, { recursive: true, force: true });
+    rmSync(stage, { recursive: true, force: true });
+  }
+}
 
 /** Zip-writing helper, run under python3 (stdlib only; PYZ_* env carries args). */
 const WRITE_PYZ = `
@@ -145,58 +209,65 @@ function run(cmd, args, env = {}) {
 }
 
 export function buildRedactorPyz() {
-  const version = enginePin();
-  // The lock is what actually gets installed, so a lock that pins some other
-  // engine would silently ship a zipapp disagreeing with the JS bundle beside
-  // it. Refuse rather than build the mismatch.
+  // The lock covers the daemon's THIRD-PARTY dependencies only; `agent_sanitizer`
+  // is installed from `python/` in this same tree, which is what makes the zipapp
+  // and the JS bundle beside it the same commit rather than two versions that
+  // happen to agree. A published pin here could never name an unreleased HEAD,
+  // so the two would drift by construction.
   const locked = lockedEngineVersion(
     readFileSync(REQUIREMENTS_LOCK_PATH, "utf-8"),
   );
-  if (locked !== version)
+  if (locked !== null)
     throw new Error(
-      `${REQUIREMENTS_LOCK_PATH} pins agent-sanitizer==${locked}, but the ` +
-        `sanitizer-engine alias in package.json pins ${version}. Re-lock with ` +
-        "`node plugin/scripts/build-plugin.mjs && node plugin/scripts/lock-redactor-deps.mjs`.",
+      `${REQUIREMENTS_LOCK_PATH} pins agent-sanitizer==${locked}. The zipapp ` +
+        "installs the engine from python/ in this tree, so the lock must carry " +
+        "third-party dependencies only. Re-lock with `node " +
+        "plugin/scripts/build-plugin.mjs && node plugin/scripts/lock-redactor-deps.mjs`.",
     );
   const work = mkdtempSync(join(tmpdir(), "agent-sanitizer-pyz-"));
   try {
     const target = join(work, "site");
-    // uv when available (CI installs it; much faster sdist builds), pip
-    // otherwise. Both get the same determinism-bearing flags. `--require-hashes`
-    // is explicit rather than left to be inferred from the lock carrying
-    // hashes: an unhashed line slipping in must fail the build, not quietly
-    // disable hash checking for the whole file.
-    const uv = spawnSync("uv", ["--version"]).status === 0;
-    if (uv) {
-      run("uv", [
-        "pip",
-        "install",
-        "--quiet",
-        "--target",
-        target,
-        "--no-binary",
-        ":all:",
-        "--no-compile-bytecode",
-        "--require-hashes",
-        "-r",
-        REQUIREMENTS_LOCK_PATH,
-      ]);
-    } else {
-      run("python3", [
-        "-m",
-        "pip",
-        "install",
-        "--quiet",
-        "--target",
-        target,
-        "--no-binary",
-        ":all:",
-        "--no-compile",
-        "--require-hashes",
-        "-r",
-        REQUIREMENTS_LOCK_PATH,
-      ]);
-    }
+    // uv is a hard requirement, not a preference: the engine wheel below is
+    // built with `uv build`, and lock-redactor-deps.mjs compiles the lock this
+    // reads with `uv pip compile`. A pip fallback for the install alone would
+    // never be reached.
+    if (spawnSync("uv", ["--version"]).status !== 0)
+      throw new Error(
+        "uv is required to build the redactor zipapp (https://docs.astral.sh/uv/). " +
+          "It builds the engine wheel and installs the hash-pinned lock.",
+      );
+    const engineSource = buildEngineWheel();
+    // `--require-hashes` is explicit rather than left to be inferred from the
+    // lock carrying hashes: an unhashed line slipping in must fail the build,
+    // not quietly disable hash checking for the whole file.
+    run("uv", [
+      "pip",
+      "install",
+      "--quiet",
+      "--target",
+      target,
+      "--no-binary",
+      ":all:",
+      "--no-compile-bytecode",
+      "--require-hashes",
+      "-r",
+      REQUIREMENTS_LOCK_PATH,
+    ]);
+    // Second pass, and `--no-deps`: the tree's own dependencies were just
+    // installed from the hashed lock, and a local path carries no hash, so
+    // resolving it here would turn hash checking off for the whole install.
+    // No `--no-binary` either: that flag exists to refuse PyPI's prebuilt
+    // wheels, and this one is the pure-Python artifact this build just made.
+    run("uv", [
+      "pip",
+      "install",
+      "--quiet",
+      "--target",
+      target,
+      "--no-compile-bytecode",
+      "--no-deps",
+      engineSource,
+    ]);
     mkdirSync(dirname(PYZ_PATH), { recursive: true });
     const out = run("python3", ["-c", WRITE_PYZ], {
       PYZ_TARGET_DIR: target,

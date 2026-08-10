@@ -18,15 +18,12 @@ allowBuilds:
 # `pnpm update`, which is exactly where a poisoned release would enter.
 minimumReleaseAge: 4320
 
-# Exempt this repo's OWN published package. The `sanitizer-engine` alias in
-# package.json pins a published `agent-sanitizer` so the plugin is built and
-# tested against the artifact that actually shipped; applying the window to our
-# own release would stall every engine-pin bump by three days for no security
-# gain, since that release is built and published from this repository with npm
-# provenance rather than fetched from a third party.
+# Empty: nothing here depends on a published version of this repo's own package.
+# The plugin bundles `src/` directly and its zipapp installs `python/`, so no
+# release of ours is ever fetched from the registry and there is nothing to
+# exempt from the window above.
 #
 # Every entry must name a version package.json actually depends on — an
-# exemption that outlives its pin is a permanent hole in the window above, and
+# exemption that outlives its dependency is a permanent hole in the window, and
 # tests/test_minimum_release_age.py fails on one.
-minimumReleaseAgeExclude:
-  - agent-sanitizer@2.20.0
+minimumReleaseAgeExclude: []

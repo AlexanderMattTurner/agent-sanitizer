@@ -1,0 +1,55 @@
+#!/bin/bash
+# Regenerate the committed plugin bundle before every commit, and stage the
+# result with it.
+#
+# The bundle inlines this repo's own `src/`, `claude-hooks/` and five JSON data
+# files (the redaction floor, the credential vocabulary, the invisible charset,
+# both claude-hooks/config entries). Left to a human, a forgotten rebuild shows
+# up as a CI red ("committed bundle matches a fresh build") on a change that was
+# itself correct — a failure about a build step, not about the code. Doing the
+# rebuild here makes a stale artifact unreachable, so the reproducibility gate
+# can only fire on a genuine reproducibility defect.
+#
+# Unconditional, with no list of inputs to consult: any such list is a second
+# copy of what esbuild actually reads, and an input missing from it fails SILENT
+# — the hook exits 0 and the stale bundle is committed. The rebuild is ~1s and
+# writes nothing when the output is unchanged, which is cheaper than owning that
+# list.
+#
+# Deliberately NOT the zipapp: that build installs from PyPI, and a hook must not
+# need the network. `plugin-dist-autofix.yaml` owns the zipapp.
+
+set -euo pipefail
+
+git_root=$(git rev-parse --show-toplevel)
+bundle="$git_root/plugin/dist/hooks/plugin-hooks.bundle.mjs"
+requirements="$git_root/plugin/requirements.in"
+
+if [[ ! -f "$bundle" ]]; then
+  exit 0
+fi
+
+# Fail loud rather than skip: skipping would commit the stale artifact this hook
+# exists to prevent, and the red would surface in CI instead.
+if [[ ! -d "$git_root/node_modules/esbuild" ]]; then
+  echo "pre-commit: the plugin bundle must be rebuilt before committing, but esbuild is not installed. Run 'pnpm install', then retry the commit." >&2
+  exit 1
+fi
+
+# The build reads the WORKING TREE, so an artifact it rewrites while unstaged
+# edits exist would embed code that is not in this commit — the bundle would be
+# ahead of the sources beside it, and CI's byte-compare would red on the pushed
+# commit. Sampled BEFORE the build, which dirties the artifact itself.
+unstaged=()
+while IFS= read -r line; do unstaged+=("$line"); done < <(git diff --name-only)
+
+before=$(git hash-object -- "$bundle")
+node "$git_root/plugin/scripts/build-plugin.mjs" >&2
+after=$(git hash-object -- "$bundle")
+
+if [[ "$before" != "$after" && "${#unstaged[@]}" -gt 0 ]]; then
+  echo "pre-commit: rebuilding the plugin bundle changed it, but these edits are unstaged, so the artifact would carry code this commit does not. Stage or stash them, then retry: ${unstaged[*]}" >&2
+  exit 1
+fi
+
+git add -- "$bundle" "$requirements"

@@ -2,39 +2,25 @@
   $schema: "https://docs.renovatebot.com/renovate-schema.json",
   extends: ["config:recommended"],
   // Dependabot stays enabled for SECURITY updates only (see .github/dependabot.yml).
-  // Renovate's job here is narrower: keep the plugin's pinned engine and its
-  // build/runtime peers current, since the committed bundle is only rebuilt when
-  // one of these moves.
+  // Renovate's job here is narrower: keep the plugin's build/runtime peers
+  // current, since the committed bundle inlines them.
   // npm ONLY. The `pip_requirements` manager's default file match covers
-  // `requirements.txt` but not `requirements.in`, so with the Python tree locked
-  // it would edit plugin/requirements.txt — rewriting the `==` pin in place
-  // WITHOUT regenerating the `--hash=` lines beside it, producing a lock whose
-  // hashes belong to the old version. `build-redactor-pyz.mjs` then fails hash
-  // verification, and `lock-redactor-deps.mjs --if-stale` sees the engine
-  // version already matching and skips the re-lock that would repair it. The
-  // engine bump is driven by the npm alias alone: build-plugin.mjs regenerates
-  // requirements.in from it and --if-stale re-locks from there, hashes included.
+  // `requirements.txt` but not `requirements.in`, so it would edit
+  // plugin/requirements.txt — rewriting a `==` pin in place WITHOUT regenerating
+  // the `--hash=` lines beside it, producing a lock whose hashes belong to the
+  // old version, and `build-redactor-pyz.mjs` then fails hash verification.
+  // Refreshing the Python tree is a deliberate act: `node
+  // plugin/scripts/lock-redactor-deps.mjs`.
   //
   // REQUIRES the hosted Renovate GitHub App to be installed on this repo —
   // nothing in this repo runs Renovate itself, so with the app uninstalled the
-  // pins silently age and every rule below is inert. If the app is ever
-  // removed, the pin must be bumped by hand (`npm pkg set
-  // devDependencies.sanitizer-engine=npm:agent-sanitizer@<version>` plus a
-  // lockfile-only install) or a self-hosted runner added back.
+  // pins silently age and every rule below is inert. If the app is ever removed,
+  // the peers must be bumped by hand.
   enabledManagers: ["npm"],
   schedule: ["* 0-6 * * *"],
   rangeStrategy: "pin",
-  // Two jobs at once. (1) Supply-chain cooldown before a freshly published
-  // version can enter the lockfile. (2) It absorbs the npm/PyPI publish race:
-  // the engine's npm and PyPI artifacts are published minutes apart, and the
-  // daemon the plugin provisions installs the PyPI half, so a same-minute bump
-  // could reference a version PyPI does not serve yet. A version that is on npm
-  // but still missing from PyPI a day later is a broken release, and it fails
-  // loudly on the bump PR: plugin-dist-autofix.yaml runs verify-engine-pin.sh
-  // before it regenerates anything, so the artifacts stay stale, the
-  // reproducibility test goes red and automerge withholds the merge. Renovate
-  // has no PyPI-presence precondition of its own; that red check IS the
-  // precondition.
+  // Supply-chain cooldown before a freshly published version can enter the
+  // lockfile.
   minimumReleaseAge: "24 hours",
   // Default off, then opt each watched pin in below — a blanket enable would
   // open PRs for the whole dev toolchain, none of which affects the artifact.
@@ -42,18 +28,6 @@
     {
       matchPackageNames: ["*"],
       enabled: false,
-    },
-    {
-      // The npm alias is the ONE place the engine pin lives; the PyPI half is
-      // derived from it (build-plugin.mjs writes plugin/requirements.in, then
-      // lock-redactor-deps.mjs compiles the hashed lock). Both spellings are
-      // matched because an npm alias reports depName `sanitizer-engine` and
-      // packageName `agent-sanitizer`, and which one a rule sees has changed
-      // across Renovate versions.
-      groupName: "sanitizer-engine",
-      matchPackageNames: ["agent-sanitizer", "sanitizer-engine"],
-      enabled: true,
-      automerge: true,
     },
     {
       // Inlined into the bundle, so a bump changes the committed artifact.

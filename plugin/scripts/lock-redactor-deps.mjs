@@ -13,9 +13,9 @@
  * until someone deliberately re-locks.
  *
  * NETWORK: this resolves against PyPI, so it is NOT part of the offline
- * reproducibility rebuild. Run it when the engine pin moves (requirements.in
- * changed) or when you deliberately want newer transitives; both are reviewable
- * as a diff of the lock.
+ * reproducibility rebuild. Run it when the engine's own dependencies change
+ * (requirements.in moved) or when you deliberately want newer transitives; both
+ * are reviewable as a diff of the lock.
  *
  * Determinism: `--universal` resolves one tree valid on every platform, so the
  * lock does not depend on the machine that compiled it; `--python-version`
@@ -27,7 +27,6 @@ import { readFileSync, writeFileSync } from "node:fs";
 import {
   REQUIREMENTS_IN_PATH,
   REQUIREMENTS_LOCK_PATH,
-  enginePin,
   lockedEngineVersion,
 } from "./build-plugin.mjs";
 
@@ -86,32 +85,28 @@ export function lockRedactorDeps() {
   );
   writeFileSync(REQUIREMENTS_LOCK_PATH, text);
 
-  // The lock is only useful if it pins the engine this plugin is built against.
-  // A resolver that quietly picked a different version (a stale requirements.in,
-  // a hand-edited --output-file) must fail loudly, not ship a mismatched floor.
-  const version = enginePin();
+  // The engine ships from this tree, so a lock naming a PUBLISHED one would put
+  // a second, older copy in the zipapp beside it. A resolver that pulled it in
+  // (a stale requirements.in, a hand-edited --output-file) must fail loudly.
   const locked = lockedEngineVersion(text);
-  if (locked !== version)
+  if (locked !== null)
     throw new Error(
       `${REQUIREMENTS_LOCK_PATH} pins agent-sanitizer==${locked}, but the ` +
-        `sanitizer-engine alias in package.json pins ${version}. Regenerate ` +
-        `requirements.in with \`node plugin/scripts/build-plugin.mjs\` first.`,
+        "zipapp installs the engine from python/ in this tree. Regenerate " +
+        "requirements.in with `node plugin/scripts/build-plugin.mjs` first.",
     );
-  process.stderr.write(
-    `wrote ${REQUIREMENTS_LOCK_PATH} (agent-sanitizer==${version})\n`,
-  );
+  process.stderr.write(`wrote ${REQUIREMENTS_LOCK_PATH}\n`);
 }
 
 /**
- * True when the committed lock does not pin the engine package.json pins — the
- * only condition under which re-locking is MANDATORY (the build refuses a
- * mismatch). Everything else about the lock is deliberately frozen.
+ * True when the committed lock still pins the engine — the only condition under
+ * which re-locking is MANDATORY (the build refuses such a lock). Everything else
+ * about the lock is deliberately frozen.
  * @returns {boolean}
  */
 export function lockIsStale() {
   return (
-    lockedEngineVersion(readFileSync(REQUIREMENTS_LOCK_PATH, "utf-8")) !==
-    enginePin()
+    lockedEngineVersion(readFileSync(REQUIREMENTS_LOCK_PATH, "utf-8")) !== null
   );
 }
 
@@ -122,7 +117,7 @@ if (process.argv[1] === import.meta.filename) {
   // transitives stays a deliberate, reviewable act: run this with no flag.
   if (process.argv.includes("--if-stale") && !lockIsStale())
     process.stderr.write(
-      `${REQUIREMENTS_LOCK_PATH} already pins agent-sanitizer==${enginePin()}, skipping (--if-stale)\n`,
+      `${REQUIREMENTS_LOCK_PATH} already names no published engine, skipping (--if-stale)\n`,
     );
   else lockRedactorDeps();
 }
