@@ -63,9 +63,9 @@ function run(dir, args = [], script = SCRIPT) {
   return result;
 }
 
-function runExpectingFailure(dir, args = []) {
+function runExpectingFailure(dir, args = [], script = SCRIPT) {
   try {
-    run(dir, args);
+    run(dir, args, script);
   } catch (error) {
     return error;
   }
@@ -178,6 +178,32 @@ test(
     }
   },
 );
+
+for (const args of [[], ["--disable"]])
+  test(
+    `a refused ${args.join(" ") || "enable"} hands back a runnable command line`,
+    // The agent running the skill cannot get past this refusal by any route the
+    // sandbox allows, so the message's job is to be pasteable by the human.
+    { skip: process.getuid?.() === 0 && "root writes through mode bits" },
+    () => {
+      // An install path with a space in it is ordinary on macOS and Windows; an
+      // unquoted command line there pastes as two arguments and fails.
+      const scriptDir = mkdtempSync(join(tmpdir(), "agent sanitizer path-"));
+      const copied = join(scriptDir, "enable-auto-update.mjs");
+      copyFileSync(SCRIPT, copied);
+      // Each direction has to already be the opposite, or the script exits 0
+      // before it ever reaches a write.
+      const { dir } = registry({ ...ENTRY, autoUpdate: args.length > 0 });
+      chmodSync(dir, 0o555);
+      try {
+        const { stderr } = runExpectingFailure(dir, args, copied);
+        const line = `\n  node '${copied}'${args.map((a) => ` ${a}`).join("")}\n`;
+        assert.ok(stderr.includes(line), `no rerun line in:\n${stderr}`);
+      } finally {
+        chmodSync(dir, 0o755);
+      }
+    },
+  );
 
 test("a corrupt registry propagates rather than being rewritten over", () => {
   const dir = mkdtempSync(join(tmpdir(), "agent-sanitizer-corrupt-"));

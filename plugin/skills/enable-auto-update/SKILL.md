@@ -33,10 +33,12 @@ The script refuses rather than guessing, and each refusal has one fix:
   first, then re-run this skill.
 - **`cannot write … the OS refused it`** — most often Claude Code's Bash
   sandbox, which confines writes to the workspace: the script cannot reach the
-  plugin cache from a sandboxed session, however it is invoked. Tell the
-  user to run the command in a terminal outside Claude Code, or to use `/plugin`
-  → **Marketplaces** → `agent-sanitizer` → **Enable auto-update**. Do not retry
-  the script or edit the registry by hand.
+  plugin cache from a sandboxed session, however it is invoked — this is the one
+  refusal you cannot clear yourself. Show the user the `node '…'` command line
+  the error prints, verbatim, for them to paste into a terminal outside Claude
+  Code, and offer `/plugin` → **Marketplaces** → `agent-sanitizer` → **Enable
+  auto-update** as the no-terminal route. Do not retry the script, re-run it with
+  different permissions, or edit the registry by hand.
 - **Unrecognized entry shape** — a Claude Code release changed the registry
   format. Do not edit the file by hand: send the user to `/plugin` →
   **Marketplaces** → `agent-sanitizer` → **Enable auto-update**, and report that

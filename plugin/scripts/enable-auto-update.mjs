@@ -63,6 +63,26 @@ function fail(message) {
 const REFUSED = new Set(["EPERM", "EACCES", "EROFS"]);
 
 /**
+ * Wraps `word` so a POSIX shell sees it as one literal argument. Marketplace
+ * installs sit under a versioned directory below the user's home, so the path
+ * this quotes routinely contains a space and sometimes a quote.
+ *
+ * @param {string} word
+ */
+const shellQuote = (word) => `'${word.replaceAll("'", `'\\''`)}'`;
+
+/**
+ * The command line that reruns this invocation, for a human to paste into a
+ * terminal. The refusal below is the one failure the agent running the skill
+ * cannot act on itself — the sandbox denies it whatever it tries — so the
+ * message has to hand the work back ready to run, not describe it.
+ *
+ * @param {boolean} disable
+ */
+const rerunCommand = (disable) =>
+  `node ${shellQuote(process.argv[1])}${disable ? " --disable" : ""}`;
+
+/**
  * Replaces the registry, staged through a sibling temp file so an interrupted
  * write cannot leave the file Claude Code reads truncated.
  *
@@ -71,8 +91,9 @@ const REFUSED = new Set(["EPERM", "EACCES", "EROFS"]);
  *
  * @param {string} path
  * @param {string} contents
+ * @param {boolean} disable  which invocation to hand back for a rerun
  */
-function replaceRegistry(path, contents) {
+function replaceRegistry(path, contents, disable) {
   const temp = `${path}.agent-sanitizer.tmp`;
   try {
     writeFileSync(temp, contents, "utf-8");
@@ -86,11 +107,14 @@ function replaceRegistry(path, contents) {
     rmSync(temp, { force: true });
     fail(
       `cannot write ${path} (${code}) — the OS refused it. Claude Code's Bash ` +
-        `sandbox confines writes to the workspace, so a sandboxed session ` +
-        `cannot reach the plugin cache at all: run this from a terminal ` +
-        `outside Claude Code. If it is refused there too, the file's owner or ` +
-        `permissions need fixing. Either way the toggle is reachable from ` +
-        `/plugin -> Marketplaces -> ${MARKETPLACE} -> Enable auto-update.`,
+        `sandbox confines writes to the workspace, so no session that runs ` +
+        `under it can reach the plugin cache; rerunning here cannot succeed.\n` +
+        `Run this yourself, in a terminal outside Claude Code:\n` +
+        `  ${rerunCommand(disable)}\n` +
+        `Or toggle it without a terminal: /plugin -> Marketplaces -> ` +
+        `${MARKETPLACE} -> Enable auto-update.\n` +
+        `If the terminal refuses it too, the file's owner or permissions need ` +
+        `fixing.`,
     );
   }
 }
@@ -152,7 +176,7 @@ export function main(argv = process.argv.slice(2), env = process.env) {
     [MARKETPLACE]: { ...entry, autoUpdate: desired },
   };
   // Same 2-space encoding Claude Code writes.
-  replaceRegistry(path, JSON.stringify(updated, null, 2));
+  replaceRegistry(path, JSON.stringify(updated, null, 2), disable);
 
   process.stdout.write(
     desired
