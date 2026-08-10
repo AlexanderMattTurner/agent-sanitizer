@@ -400,10 +400,6 @@ export function formatSkipped(skipped) {
     "",
     ...skipped.map(({ file, reason }) => `  ${file}: ${reason}`),
     "",
-    "To clear this, make each file readable to this user (fix its permissions",
-    "or owner), or delete it if it is not meant to be instructions. Then start",
-    "a new session, which re-runs the scan.",
-    "",
   ].join("\n");
 }
 
@@ -516,7 +512,7 @@ async function runScanCli({ trace: sink = trace, scan: runScan }) {
     persistAlert(alertParts);
     return;
   }
-  const { findings: allFindings, skipped, absent = [], scanned } = scan;
+  const { findings: allFindings, skipped, absent, scanned } = scan;
 
   // "clean" is a claim about every target that HAS content, so it may only be
   // made when every such target was read. A scan that could not read one says

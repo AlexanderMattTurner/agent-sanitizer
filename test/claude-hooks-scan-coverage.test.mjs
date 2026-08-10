@@ -290,6 +290,7 @@ describe("a contaminated project is cleaned on disk and reported", () => {
         targets: [join(projectDir, "AGENTS.md")],
         scanned: 1,
         skipped: [],
+        absent: [],
         findings: [
           {
             file: "AGENTS.md",

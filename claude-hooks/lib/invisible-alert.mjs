@@ -91,11 +91,12 @@ export function acknowledgeAlert() {
   writeSentinelFile(ALERT_ACK_FILE);
 }
 
-// What the operator can actually DO, spelled out for each shape the report
-// takes. "Clean the affected files" alone named no command and no cause, so the
+// What the operator can actually DO, one bullet per kind of report. The gate is
+// the only surface that demands an action, so the remedy lives here and nowhere
+// else. "Clean the affected files" alone named no command and no cause, so the
 // gate blocked a tool call while telling the reader nothing they could act on.
-// The auto-clean has ALREADY run and failed on anything listed here, so the
-// remedy is the thing that blocked the rewrite, never a re-run of the cleaner.
+// The auto-clean has ALREADY run and failed on anything listed here, which is
+// why the remedy is the thing that blocked the rewrite, not a re-run.
 const REMEDY =
   "To clear this gate:\n" +
   "  - A file listed with invisible characters: the automatic clean already\n" +
@@ -104,7 +105,6 @@ const REMEDY =
   "    non-UTF-8 bytes).\n" +
   "  - A file listed as NOT SCANNED: make it readable to this user, or delete\n" +
   "    it if it is not meant to be instructions.\n" +
-  "  - A report naming a load failure: run `pnpm install` in the project.\n" +
   "Then start a new session. The scan re-runs and the gate clears.";
 
 /**
