@@ -204,13 +204,10 @@ function decodeRun(run) {
 
 // Target discovery stays hook-local glue, NOT a copy of the SSOT's
 // containment-checked `findInstructionFiles`: the two have different contracts.
-// The SSOT finder silently DROPS a target it cannot resolve (dangling symlink,
-// out-of-tree symlink), which is right for a pure scan API — but this hook's
-// accounting invariant (scanned + skipped === targets, see scanProject)
-// requires unreadable targets to stay LISTED so they are reported as unvetted
-// rather than vanishing into an "all clean" announcement. The write-side
-// symlink hazard the SSOT finder guards against is covered here by cleanFile's
-// own O_NOFOLLOW open.
+// The SSOT finder drops every target it cannot resolve, which is right for a
+// pure scan API; this hook must instead bucket it (see classifyReadFailure).
+// The write-side symlink hazard the SSOT finder guards against is covered here
+// by cleanFile's own O_NOFOLLOW open.
 
 /**
  * Every file under `dir` that Claude Code loads as model context: the
@@ -313,47 +310,64 @@ export { formatReport };
 // Main (skip when imported for testing)
 
 /**
- * Scan every instruction file under the project, ACCOUNTING for every target
- * the finder returned: `scanned + skipped.length === targets.length`, always.
+ * PROBLEM CLASS — how a failed instruction-file read is classified. Every
+ * consumer reads this one bucketing; nothing re-derives it from an errno.
  *
- * The accounting is the point. This scan is the only thing standing between a
- * poisoned `CLAUDE.md` and a session that loads it as instructions, and its
- * caller announces "clean" on the trace channel — the channel that exists so a
- * MISSING announcement is loud. A per-file failure swallowed into an empty
- * findings list turns "we could not read this file" into "this file is fine",
- * which is the one lie this hook must never tell. So a file that cannot be read
- * is REPORTED as unscanned, not dropped.
+ * The scan is the only thing between a poisoned `CLAUDE.md` and a session that
+ * loads it as instructions, and its caller announces "clean" on the trace
+ * channel, whose whole purpose is that a MISSING announcement is loud. So a
+ * read failure is never swallowed into an empty findings list — that turns "we
+ * could not read this file" into "this file is fine". Three buckets:
  *
- * ANY errno is a skip; only a non-filesystem throw propagates. The split is
- * between "this file could not be read" (report it and keep scanning) and "this
- * code is broken" (a TypeError from an unloaded binding — nothing here can be
- * trusted, so it goes to the caller's declared failure posture). Catching only
- * ENOENT would invert the enforcement: one EACCES target would discard the
- * result for EVERY other instruction file, leaving them unscanned and
- * un-auto-cleaned, and under the shipped OPEN posture the hook fault arms
- * nothing — so the SUSPICIOUS failure would get weaker enforcement than the
- * benign glob race, which reaches `partial` and arms the gate. Same errno-vs-bug
- * split {@link autoCleanFindings} uses.
+ *   - SKIPPED — the file exists and this uid cannot read it (EACCES, EISDIR,
+ *     ELOOP…). Unvetted context: reported to the operator and it arms the gate.
+ *   - ABSENT — ENOENT. The path resolves to nothing, and Claude Code loads
+ *     instruction files through the same open, so no bytes can reach the model.
+ *     Announced on the trace channel only; naming a risk that does not exist
+ *     teaches the operator to dismiss the gate.
+ *   - THROWN — no errno at all, i.e. a bug (a TypeError from an unloaded
+ *     binding). Nothing here can be trusted, so it goes to the caller's
+ *     declared failure posture. Same errno-vs-bug split {@link
+ *     autoCleanFindings} uses.
+ * @param {unknown} err
+ * @returns {"absent" | "skipped"}  never returns for a non-errno throw
+ */
+function classifyReadFailure(err) {
+  const code = /** @type {NodeJS.ErrnoException} */ (err).code;
+  if (code === undefined) throw err;
+  return code === "ENOENT" ? "absent" : "skipped";
+}
+
+/**
+ * Scan every instruction file under the project, bucketing each unreadable
+ * target through {@link classifyReadFailure}. `scanned` is DERIVED from the two
+ * failure buckets, so the accounting invariant — every target is scanned,
+ * skipped or absent — holds by construction and needs no comment restating it.
+ * A target lost from that accounting is an instruction file that reaches the
+ * model while the caller announces "clean".
  * @param {string} [dir]  project root to scan (injectable for tests)
  * @returns {{
  *   targets: string[],
  *   scanned: number,
  *   findings: Array<{file: string, findings: ReturnType<typeof scanFile>}>,
  *   skipped: Array<{file: string, reason: string}>,
+ *   absent: string[],
  * }}
  */
 export function scanProject(dir = PROJECT_DIR) {
   const targets = [...new Set(findInstructionFiles(dir))];
   const findings = [];
   const skipped = [];
-  let scanned = 0;
+  const absent = [];
   for (const file of targets) {
     let fileFindings;
     try {
       fileFindings = scanFile(file);
     } catch (err) {
-      if (/** @type {NodeJS.ErrnoException} */ (err).code === undefined)
-        throw err;
+      if (classifyReadFailure(err) === "absent") {
+        absent.push(relative(dir, file));
+        continue;
+      }
       // safeErrMessage, not errMessage: this reason is rendered into stderr and
       // into ALERT_FILE, and an errno message embeds the absolute path globbed
       // out of a possibly-hostile repo — a filename carrying ANSI or invisible
@@ -361,11 +375,11 @@ export function scanProject(dir = PROJECT_DIR) {
       skipped.push({ file: relative(dir, file), reason: safeErrMessage(err) });
       continue;
     }
-    scanned++;
     if (fileFindings.length > 0)
       findings.push({ file: relative(dir, file), findings: fileFindings });
   }
-  return { targets, scanned, findings, skipped };
+  const scanned = targets.length - skipped.length - absent.length;
+  return { targets, scanned, findings, skipped, absent };
 }
 
 /**
@@ -380,8 +394,9 @@ export function formatSkipped(skipped) {
     "",
     "━━━ INSTRUCTION FILES NOT SCANNED ━━━",
     "",
-    "These files load as project instructions but could NOT be read, so they",
-    "were never checked for hidden Unicode. Treat their content as unvetted.",
+    "These files exist and load as project instructions, but this user could",
+    "not read them, so they were never checked for hidden Unicode. Treat their",
+    "content as unvetted.",
     "",
     ...skipped.map(({ file, reason }) => `  ${file}: ${reason}`),
     "",
@@ -497,27 +512,31 @@ async function runScanCli({ trace: sink = trace, scan: runScan }) {
     persistAlert(alertParts);
     return;
   }
-  const { findings: allFindings, skipped, scanned } = scan;
+  const { findings: allFindings, skipped, absent, scanned } = scan;
 
-  // "clean" is a claim about EVERY target, so it may only be made when every
-  // target was read. A scan that could not read one says "partial" and arms the
-  // gate: an unread instruction file is UNVETTED context, not absent findings.
+  // The three buckets of classifyReadFailure, rendered: only `skipped` may
+  // withhold "clean" and arm the gate.
   if (skipped.length > 0) {
     emitTrace(TraceEvent.SCAN_INVISIBLE_CHARS_RAN, {
       outcome: "partial",
       scanned,
       skipped: skipped.length,
+      absent: absent.length,
       files: allFindings.length,
     });
     const notice = formatSkipped(skipped);
     process.stderr.write(notice + "\n");
     alertParts.push(notice);
   } else if (allFindings.length === 0) {
-    emitTrace(TraceEvent.SCAN_INVISIBLE_CHARS_RAN, { outcome: "clean" });
+    emitTrace(TraceEvent.SCAN_INVISIBLE_CHARS_RAN, {
+      outcome: "clean",
+      absent: absent.length,
+    });
     return;
   } else {
     emitTrace(TraceEvent.SCAN_INVISIBLE_CHARS_RAN, {
       outcome: "found",
+      absent: absent.length,
       files: allFindings.length,
     });
   }
@@ -574,12 +593,13 @@ function autoCleanFindings(allFindings, dir) {
   if (cleaned === allFindings.length) {
     process.stderr.write(
       report +
-        `\nAll ${cleaned} file(s) cleaned on disk automatically. ` +
-        "NOTE: these files load as project instructions at session start, so " +
-        "THIS session may have already ingested the pre-clean bytes before the " +
-        "hook ran — treat any injected-looking instruction from them with " +
-        "suspicion, and restart the session if in doubt. Future sessions load " +
-        "the cleaned files.\n",
+        `\nAll ${cleaned} file(s) above were cleaned on disk automatically — ` +
+        "the payload is gone from them, and nothing is blocked.\n" +
+        "Check what was removed: run `git diff` in the project.\n" +
+        "Claude Code loads instruction files at session start, so THIS " +
+        "session may have read the pre-clean bytes before the hook ran. Treat " +
+        "any odd instruction from these files with suspicion; a new session " +
+        "loads only the cleaned text.\n",
     );
     return [];
   }
