@@ -407,10 +407,10 @@ function processLayer1(text, sgrCarveOut) {
  * vet them before they leave. The transform itself stays pure — the caller owns
  * any persistence.
  * @param {PipelineState} state
- * @param {{ html?: boolean, exfilScan?: boolean }} options
+ * @param {{ html?: boolean, exfilScan?: boolean, deadline?: Deadline }} options
  * @returns {Promise<{ reveal: string | undefined, splices: Array<{ placeholder: string, original: string }> }>}
  */
-async function applyMarkdownPipeline(state, { html, exfilScan }) {
+async function applyMarkdownPipeline(state, { html, exfilScan, deadline }) {
   const inputText = state.text;
   /** @type {string | undefined} */
   let reveal;
@@ -418,6 +418,21 @@ async function applyMarkdownPipeline(state, { html, exfilScan }) {
   const splices = [];
   if ((!html && !exfilScan) || !needsMarkdownPipeline(inputText))
     return { reveal: undefined, splices };
+  // INVARIANT: this refusal is what stops an already-spent budget from being
+  // overspent here. `sanitizeHtml` and `detectExfil` each parse the whole
+  // document in ONE synchronous call, so nothing can interrupt them once they
+  // start; beginning them with no budget left is what pushes a host's hook past
+  // its kill. A host reads a killed hook as a non-blocking error and shows the
+  // RAW text, which is the fail-open these layers exist to prevent. Fail closed
+  // instead, the posture runRedact already takes for Layer 4. Checked AFTER the
+  // pre-gate above, because a call that runs neither layer costs no time and so
+  // has nothing to refuse.
+  if (deadline && deadline.remainingMs() <= 0)
+    throw new Error(
+      "CRITICAL: the sanitization time budget was spent before Layers 2/3 ran, " +
+        "so this text was never checked for hidden HTML or exfil-shaped URLs. " +
+        "Failing closed — tool output suppressed.",
+    );
   let sanitizeHtml, detectExfil;
   /* c8 ignore start -- a rejected dynamic import of a module that ships in
      this very package (not an optional peer dep) requires corrupting
@@ -552,7 +567,17 @@ async function vetStageValue(text, redact, findings, label) {
  *   redact?: (text: string) => Promise<RedactResult|null> | (RedactResult|null),
  *   filterInjection?: (text: string) => Promise<Layer5Result|null> | (Layer5Result|null),
  *   sgrCarveOut?: boolean,
+ *   deadline?: Deadline,
  * }} SanitizeTextOptions
+ */
+
+/**
+ * A caller's shared wall-clock budget across one run of this pipeline.
+ * `remainingMs()` returns the milliseconds left; at or below zero it is spent.
+ * Layer 4's injected redactor reads its own copy of the same budget, so this
+ * option is what lets the layers inside this module read it too. Omitted means
+ * no budget, which is the standalone default: every layer runs to completion.
+ * @typedef {{ remainingMs: () => number }} Deadline
  */
 
 /**

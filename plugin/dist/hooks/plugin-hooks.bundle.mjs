@@ -5711,36 +5711,47 @@ function describeStripped(invisFound, deAnsi) {
     msg += " [LONG RUN \u2014 possible injection payload]";
   return msg + " \u2014 inspect the removed bytes with a hex dump (xxd / od -c), which survives sanitization";
 }
-function isCjkIdeograph(ch) {
-  return CJK_IDEOGRAPH_RE.test(ch);
+function isBrahmicConsonantCp(cp) {
+  return cp >= 0 && isBrahmicConsonant(cp);
 }
-function isBrahmicConsonantChar(ch) {
-  return ch !== "" && isBrahmicConsonant(
-    /** @type {number} */
-    ch.codePointAt(0)
-  );
+function isBrailleCell(cp) {
+  return cp !== BRAILLE_BLANK && isBrailleScript(cp);
 }
-function isBrailleCell(ch) {
-  const cp = ch ? ch.codePointAt(0) : -1;
-  return cp !== BRAILLE_BLANK && BRAILLE_RE.test(ch);
-}
-function isHangul(ch) {
-  const cp = ch ? (
-    /** @type {number} */
-    ch.codePointAt(0)
-  ) : -1;
+function isHangul(cp) {
   if (HANGUL_FILLERS.has(cp)) return false;
-  return HANGUL_RE.test(ch);
+  return isHangulScript(cp);
 }
 function classifyCp(cp) {
-  if (cp < MIN_TRACKED_CP) return null;
-  return TRACKED_INVISIBLE.get(cp) ?? null;
+  if (cp < MIN_TRACKED_CP) return CODE_VISIBLE;
+  return TRACKED_INVISIBLE.get(cp) ?? CODE_VISIBLE;
 }
-function classify(ch) {
-  return classifyCp(
-    /** @type {number} */
-    ch.codePointAt(0)
-  );
+function memoizedCpPredicate(re) {
+  const memo = /* @__PURE__ */ new Map();
+  return (cp) => {
+    if (cp < 0) return false;
+    const hit = memo.get(cp);
+    if (hit !== void 0) return hit;
+    const answer = re.test(String.fromCodePoint(cp));
+    if (memo.size < CP_PREDICATE_MEMO_CAP) memo.set(cp, answer);
+    return answer;
+  };
+}
+function codePointArray(text5) {
+  const cps = new Int32Array(text5.length);
+  let n = 0;
+  for (let i = 0; i < text5.length; i++) {
+    const unit = text5.charCodeAt(i);
+    let cp = unit;
+    if (unit >= 55296 && unit <= 56319 && i + 1 < text5.length) {
+      const low = text5.charCodeAt(i + 1);
+      if (low >= 56320 && low <= 57343) {
+        cp = (unit - 55296) * 1024 + (low - 56320) + 65536;
+        i++;
+      }
+    }
+    cps[n++] = cp;
+  }
+  return n === cps.length ? cps : cps.subarray(0, n);
 }
 function hasInvisibleCodePoint(text5) {
   for (let i = 0; i < text5.length; i++) {
@@ -5752,7 +5763,7 @@ function hasInvisibleCodePoint(text5) {
         i++;
       }
     }
-    if (classifyCp(cp) !== null) return true;
+    if (classifyCp(cp) !== CODE_VISIBLE) return true;
   }
   return false;
 }
@@ -5762,36 +5773,29 @@ function codePointLength(text5) {
   while (!iterator.next().done) n++;
   return n;
 }
-function isJoinControl(ch) {
-  const cp = ch ? ch.codePointAt(0) : -1;
+function isJoinControl(cp) {
   return cp === ZWNJ || cp === ZWJ;
 }
 function effectiveNeighbor(cps, i, dir) {
   for (let j = i + dir; j >= 0 && j < cps.length; j += dir) {
-    const ch = cps[j];
-    if (jtOf(ch) === "T") continue;
-    if (!isJoinControl(ch) && classify(ch) !== null) continue;
-    return ch;
+    const cp = cps[j];
+    if (jtOf(cp) === "T") continue;
+    if (!isJoinControl(cp) && classifyCp(cp) !== CODE_VISIBLE) continue;
+    return cp;
   }
-  return "";
+  return -1;
 }
 function followsBrahmicConjunct(cps, i) {
   let j = i - 1;
-  while (j >= 0 && !isJoinControl(cps[j]) && classify(cps[j]) !== null) j--;
-  if (j < 0 || !isVirama(
-    /** @type {number} */
-    cps[j].codePointAt(0)
-  ))
-    return false;
-  return isBrahmicConsonantChar(effectiveNeighbor(cps, j, -1));
+  while (j >= 0 && !isJoinControl(cps[j]) && classifyCp(cps[j]) !== CODE_VISIBLE)
+    j--;
+  if (j < 0 || !isVirama(cps[j])) return false;
+  return isBrahmicConsonantCp(effectiveNeighbor(cps, j, -1));
 }
 function isPreservedJoiner(cps, i) {
-  const cp = (
-    /** @type {number} */
-    cps[i].codePointAt(0)
-  );
+  const cp = cps[i];
   if (cp !== ZWNJ && cp !== ZWJ) return false;
-  if (cp === ZWJ && EMOJI_LEFT.test(leftNonSelector(cps, i)) && EMOJI_BASE.test(rightNonSelector(cps, i)))
+  if (cp === ZWJ && isEmojiLeft(leftNonSelector(cps, i)) && isEmojiBase(rightNonSelector(cps, i)))
     return true;
   if (followsBrahmicConjunct(cps, i)) return true;
   const left = effectiveNeighbor(cps, i, -1);
@@ -5802,50 +5806,49 @@ function isPreservedJoiner(cps, i) {
   return cp === ZWNJ ? lc && rc : lc || rc;
 }
 function isEmojiPresentationSelector(cps, i) {
-  if (!PRESENTATION_SELECTORS.has(
-    /** @type {number} */
-    cps[i].codePointAt(0)
-  ))
-    return false;
-  const prev = cps[i - 1] ?? "";
-  if (EMOJI_LEFT.test(prev)) return true;
-  return KEYCAP_BASE.test(prev) && (cps[i + 1]?.codePointAt(0) ?? -1) === COMBINING_KEYCAP;
+  if (!PRESENTATION_SELECTORS.has(cps[i])) return false;
+  const prev = i > 0 ? cps[i - 1] : -1;
+  if (isEmojiLeft(prev)) return true;
+  return isKeycapBase(prev) && (i + 1 < cps.length ? cps[i + 1] : -1) === COMBINING_KEYCAP;
 }
 function analyzeCarve(cps) {
-  const codes = new Array(cps.length);
-  const invisible = [];
+  const codes = new Uint8Array(cps.length);
+  let invisCount = 0;
   let visibleLen = 0;
   let hasTagBase = false;
   for (let i = 0; i < cps.length; i++) {
-    const code4 = classify(cps[i]);
+    const code4 = classifyCp(cps[i]);
     codes[i] = code4;
-    if (code4 !== null) {
-      invisible.push(i);
+    if (code4 !== CODE_VISIBLE) {
+      invisCount++;
       continue;
     }
     visibleLen++;
-    hasTagBase ||= cps[i].codePointAt(0) === TAG_BASE;
+    hasTagBase ||= cps[i] === TAG_BASE;
   }
+  const invisible = new Int32Array(invisCount);
+  for (let i = 0, at = 0; at < invisCount; i++)
+    if (codes[i] !== CODE_VISIBLE) invisible[at++] = i;
   const tagKeep = hasTagBase ? markTagSequences(cps) : null;
-  const kind = new Array(cps.length).fill(null);
+  const kind = new Uint8Array(cps.length);
   for (const i of invisible) {
-    if (tagKeep !== null && tagKeep[i]) kind[i] = "tag";
-    else if (isPreservedJoiner(cps, i)) kind[i] = "joiner";
-    else if (isEmojiPresentationSelector(cps, i)) kind[i] = "emojivs";
-    else if (isStandardizedVariationSelector(cps, i)) kind[i] = "stdvs";
-    else if (isIdeographicVariationSelector(cps, i)) kind[i] = "ivs";
-    else if (isPreservedBlankFiller(cps, i)) kind[i] = "blank";
+    if (tagKeep !== null && tagKeep[i]) kind[i] = KIND_TAG;
+    else if (isPreservedJoiner(cps, i)) kind[i] = KIND_JOINER;
+    else if (isEmojiPresentationSelector(cps, i)) kind[i] = KIND_EMOJIVS;
+    else if (isStandardizedVariationSelector(cps, i)) kind[i] = KIND_STDVS;
+    else if (isIdeographicVariationSelector(cps, i)) kind[i] = KIND_IVS;
+    else if (isPreservedBlankFiller(cps, i)) kind[i] = KIND_BLANK;
   }
   const blankIndices = { braille: [], hangul: [] };
   for (const i of invisible)
-    if (kind[i] === "blank")
-      blankIndices[cps[i].codePointAt(0) === BRAILLE_BLANK ? "braille" : "hangul"].push(i);
+    if (kind[i] === KIND_BLANK)
+      blankIndices[cps[i] === BRAILLE_BLANK ? "braille" : "hangul"].push(i);
   for (
     const [
       script,
       isAnchor
     ] of
-    /** @type {[string, (ch: string) => boolean][]} */
+    /** @type {[string, (cp: number) => boolean][]} */
     [
       ["braille", isBrailleCell],
       ["hangul", isHangul]
@@ -5853,20 +5856,19 @@ function analyzeCarve(cps) {
   ) {
     const indices = blankIndices[script];
     if (indices.length <= TOTAL_PRESERVED_BLANK_BUDGET) continue;
-    const anchors = cps.reduce(
-      (n, ch, i) => n + (codes[i] === null && isAnchor(ch) ? 1 : 0),
-      0
-    );
+    let anchors = 0;
+    for (let i = 0; i < cps.length; i++)
+      if (codes[i] === CODE_VISIBLE && isAnchor(cps[i])) anchors++;
     if (indices.length > Math.floor(anchors / PRESERVED_BLANK_PER_ANCHOR))
-      for (const i of indices) kind[i] = null;
+      for (const i of indices) kind[i] = KIND_NONE;
   }
   let payloadInvis = 0;
-  for (const i of invisible) if (kind[i] === null) payloadInvis++;
+  for (const i of invisible) if (kind[i] === KIND_NONE) payloadInvis++;
   return { codes, kind, payloadInvis, visibleLen };
 }
 function countPayloadInvisible(text5) {
   if (!hasInvisibleCodePoint(text5)) return 0;
-  return analyzeCarve(Array.from(text5)).payloadInvis;
+  return analyzeCarve(codePointArray(text5)).payloadInvis;
 }
 function bulkStrip(body) {
   const found = CHECKS.filter(([, re]) => body.search(re) !== -1).map(
@@ -5876,80 +5878,102 @@ function bulkStrip(body) {
 }
 function leftNonSelector(cps, i) {
   let p = i - 1;
-  while (p >= 0 && VARIATION_SELECTOR.test(cps[p])) p--;
-  return cps[p] ?? "";
+  while (p >= 0 && isVariationSelectorCp(cps[p])) p--;
+  return p >= 0 ? cps[p] : -1;
 }
 function rightNonSelector(cps, i) {
   let p = i + 1;
-  while (p < cps.length && VARIATION_SELECTOR.test(cps[p])) p++;
-  return cps[p] ?? "";
+  while (p < cps.length && isVariationSelectorCp(cps[p])) p++;
+  return p < cps.length ? cps[p] : -1;
 }
 function markTagSequences(cps) {
-  const keep = new Array(cps.length).fill(false);
-  const cpAt = (k) => (
-    /** @type {number} */
-    cps[k].codePointAt(0)
-  );
+  const keep = new Uint8Array(cps.length);
   for (let i = 0; i < cps.length; i++) {
-    if (cpAt(i) !== TAG_BASE) continue;
+    if (cps[i] !== TAG_BASE) continue;
     let j = i + 1;
     let payload = "";
-    while (j < cps.length && cpAt(j) >= TAG_SPEC_MIN && cpAt(j) <= TAG_SPEC_MAX) {
-      payload += String.fromCharCode(cpAt(j) - 917504);
+    while (j < cps.length && cps[j] >= TAG_SPEC_MIN && cps[j] <= TAG_SPEC_MAX) {
+      payload += String.fromCharCode(cps[j] - 917504);
       j++;
     }
     const tagLen = j - (i + 1);
-    if (tagLen >= 1 && tagLen <= MAX_TAG_SPEC_CHARS && j < cps.length && cpAt(j) === TAG_CANCEL && REGISTERED_TAG_PAYLOADS.has(payload)) {
-      for (let k = i + 1; k <= j; k++) keep[k] = true;
+    if (tagLen >= 1 && tagLen <= MAX_TAG_SPEC_CHARS && j < cps.length && cps[j] === TAG_CANCEL && REGISTERED_TAG_PAYLOADS.has(payload)) {
+      for (let k = i + 1; k <= j; k++) keep[k] = 1;
       i = j;
     }
   }
   return keep;
 }
 function isStandardizedVariationSelector(cps, i) {
-  const cp = (
-    /** @type {number} */
-    cps[i].codePointAt(0)
-  );
+  const cp = cps[i];
   if (cp < 65024 || cp > 65037) return false;
-  const prev = cps[i - 1];
-  return prev ? isStandardizedVariant(
-    /** @type {number} */
-    prev.codePointAt(0),
-    cp
-  ) : false;
+  return i > 0 ? isStandardizedVariant(cps[i - 1], cp) : false;
 }
 function isIdeographicVariationSelector(cps, i) {
-  const cp = (
-    /** @type {number} */
-    cps[i].codePointAt(0)
-  );
+  const cp = cps[i];
   if (cp < IVS_MIN || cp > IVS_MAX) return false;
-  return isCjkIdeograph(cps[i - 1] ?? "");
+  return isCjkIdeograph(i > 0 ? cps[i - 1] : -1);
 }
 function isPreservedBlankFiller(cps, i) {
-  const cp = (
-    /** @type {number} */
-    cps[i].codePointAt(0)
-  );
-  const prev = cps[i - 1] ?? "";
-  const next2 = cps[i + 1] ?? "";
+  const cp = cps[i];
+  const prev = i > 0 ? cps[i - 1] : -1;
+  const next2 = i + 1 < cps.length ? cps[i + 1] : -1;
   if (cp === BRAILLE_BLANK) return isBrailleCell(prev) || isBrailleCell(next2);
   if (HANGUL_FILLERS.has(cp)) return isHangul(prev) || isHangul(next2);
   return false;
 }
-function clusterEnds(body) {
-  const ends = [];
-  let end = 0;
-  for (const { segment } of GRAPHEME_SEGMENTER.segment(body)) {
-    end += codePointLength(segment);
-    ends.push(end);
+function u16Offsets(cps) {
+  const offsets = new Int32Array(cps.length + 1);
+  let at = 0;
+  for (let i = 0; i < cps.length; i++) {
+    offsets[i] = at;
+    at += cps[i] > 65535 ? 2 : 1;
   }
-  return ends;
+  offsets[cps.length] = at;
+  return offsets;
 }
-function carveStrip(body) {
-  const cps = Array.from(body);
-  const { codes, kind, payloadInvis, visibleLen } = analyzeCarve(cps);
+function cpIndexOf(offsets, u16) {
+  let lo = 0;
+  let hi = offsets.length - 1;
+  while (lo < hi) {
+    const mid = lo + hi >> 1;
+    if (offsets[mid] < u16) lo = mid + 1;
+    else hi = mid;
+  }
+  return lo;
+}
+function clusterResolver(body, offsets, candidates) {
+  const cpCount = offsets.length - 1;
+  if (candidates * CONTAINING_CANDIDATE_SHARE < cpCount) {
+    const segments = GRAPHEME_SEGMENTER.segment(body);
+    return (cp) => {
+      const found = (
+        /** @type {{ index: number, segment: string }} */
+        segments.containing(offsets[cp])
+      );
+      return {
+        start: cpIndexOf(offsets, found.index),
+        end: cpIndexOf(offsets, found.index + found.segment.length)
+      };
+    };
+  }
+  const iterator = GRAPHEME_SEGMENTER.segment(body)[Symbol.iterator]();
+  let start = 0;
+  let end = 0;
+  return (cp) => {
+    while (end <= cp) {
+      const step = (
+        /** @type {{ value: { segment: string } }} */
+        iterator.next()
+      );
+      start = end;
+      end = cpIndexOf(offsets, offsets[start] + step.value.segment.length);
+    }
+    return { start, end };
+  };
+}
+function carveStrip(body, cps = codePointArray(body), analysis = analyzeCarve(cps)) {
+  const { codes, kind, payloadInvis, visibleLen } = analysis;
   const allowCarveOut = payloadInvis < SCATTERED_THRESHOLD;
   const maxPreserved = Math.min(
     PRESERVE_HARD_CAP,
@@ -5958,82 +5982,153 @@ function carveStrip(body) {
       Math.ceil(visibleLen / PRESERVED_JOINER_PER_VISIBLE)
     )
   );
+  const n = cps.length;
+  const candidates = [];
+  if (allowCarveOut) {
+    for (let k2 = 0; k2 < n; k2++)
+      if (kind[k2] !== KIND_NONE && kind[k2] !== KIND_BLANK) candidates.push(k2);
+  }
   const foundCodes = /* @__PURE__ */ new Set();
-  let out = "";
+  const kept = [];
+  const offsets = u16Offsets(cps);
+  let runStart = 0;
   let joinerRun = 0;
   let selectorRun = 0;
   let preservedTotal = 0;
   let prevVisible = false;
-  let start = 0;
-  for (const end of clusterEnds(body)) {
-    let need = 0;
-    let joiners = 0;
-    let selectors = 0;
-    for (let k = start; k < end; k++) {
-      if (kind[k] === null || kind[k] === "blank") continue;
-      need++;
-      if (kind[k] === "joiner") joiners++;
-      if (kind[k] === "ivs" || kind[k] === "stdvs") selectors++;
-    }
-    let runJoiner = joinerRun;
-    let runSelector = selectorRun;
-    let seenVisible = prevVisible;
-    for (let k = start; k < end && kind[k] === null; k++) {
-      if (codes[k] === null && seenVisible) {
-        runJoiner = 0;
-        runSelector = 0;
-      }
-      seenVisible = codes[k] === null;
-    }
-    const fits = allowCarveOut && preservedTotal + need <= maxPreserved && runJoiner + joiners <= CONSECUTIVE_JOINER_CAP && runSelector + selectors <= CONSECUTIVE_SELECTOR_CAP;
-    for (let k = start; k < end; k++) {
-      const code4 = codes[k];
-      if (code4 === null) {
+  const emit = (from, to, fits) => {
+    for (let k2 = from; k2 < to; k2++) {
+      const code4 = codes[k2];
+      if (code4 === CODE_VISIBLE) {
         if (prevVisible) {
           joinerRun = 0;
           selectorRun = 0;
         }
         prevVisible = true;
-        out += cps[k];
         continue;
       }
-      if (kind[k] === "blank" ? allowCarveOut : fits && kind[k] !== null) {
-        if (kind[k] === "joiner") joinerRun++;
-        if (kind[k] === "ivs" || kind[k] === "stdvs") selectorRun++;
-        if (kind[k] !== "blank") preservedTotal++;
+      if (kind[k2] === KIND_BLANK ? allowCarveOut : fits && kind[k2] !== KIND_NONE) {
+        if (kind[k2] === KIND_JOINER) joinerRun++;
+        if (kind[k2] === KIND_IVS || kind[k2] === KIND_STDVS) selectorRun++;
+        if (kind[k2] !== KIND_BLANK) preservedTotal++;
         prevVisible = false;
-        out += cps[k];
         continue;
       }
-      foundCodes.add(code4);
+      foundCodes.add(CODE_CATEGORY[code4]);
       prevVisible = false;
+      if (offsets[k2] > runStart) kept.push(body.slice(runStart, offsets[k2]));
+      runStart = offsets[k2 + 1];
     }
-    start = end;
+  };
+  const clusterOf = candidates.length > 0 ? clusterResolver(body, offsets, candidates.length) : null;
+  let lastGap = -1;
+  let leftJoiner = 0;
+  let leftSelector = 0;
+  let leftOther = 0;
+  if (clusterOf !== null) {
+    for (let i = n - 1; i > 0; i--)
+      if (codes[i] === CODE_VISIBLE && codes[i - 1] === CODE_VISIBLE) {
+        lastGap = i;
+        break;
+      }
+    for (const c of candidates) {
+      if (kind[c] === KIND_JOINER) leftJoiner++;
+      else if (kind[c] === KIND_IVS || kind[c] === KIND_STDVS) leftSelector++;
+      else leftOther++;
+    }
   }
+  const nothingLeftFits = (at) => {
+    if (preservedTotal >= maxPreserved) return true;
+    if (at <= lastGap) return false;
+    if (leftOther > 0) return false;
+    if (leftJoiner > 0 && joinerRun < CONSECUTIVE_JOINER_CAP) return false;
+    if (leftSelector > 0 && selectorRun < CONSECUTIVE_SELECTOR_CAP)
+      return false;
+    return true;
+  };
+  let k = 0;
+  let next2 = 0;
+  while (k < n) {
+    while (next2 < candidates.length && candidates[next2] < k) next2++;
+    if (clusterOf === null || next2 === candidates.length || nothingLeftFits(k)) {
+      emit(k, n, false);
+      break;
+    }
+    const { start, end } = clusterOf(candidates[next2]);
+    if (start > k) emit(k, start, false);
+    let need = 0;
+    let joiners = 0;
+    let selectors = 0;
+    for (let j = start; j < end; j++) {
+      if (kind[j] === KIND_NONE || kind[j] === KIND_BLANK) continue;
+      need++;
+      if (kind[j] === KIND_JOINER) joiners++;
+      if (kind[j] === KIND_IVS || kind[j] === KIND_STDVS) selectors++;
+    }
+    let runJoiner = joinerRun;
+    let runSelector = selectorRun;
+    let seenVisible = prevVisible;
+    for (let j = start; j < end && kind[j] === KIND_NONE; j++) {
+      if (codes[j] === CODE_VISIBLE && seenVisible) {
+        runJoiner = 0;
+        runSelector = 0;
+      }
+      seenVisible = codes[j] === CODE_VISIBLE;
+    }
+    for (let j = next2; j < candidates.length && candidates[j] < end; j++) {
+      if (kind[candidates[j]] === KIND_JOINER) leftJoiner--;
+      else if (kind[candidates[j]] === KIND_IVS || kind[candidates[j]] === KIND_STDVS)
+        leftSelector--;
+      else leftOther--;
+    }
+    emit(
+      start,
+      end,
+      preservedTotal + need <= maxPreserved && runJoiner + joiners <= CONSECUTIVE_JOINER_CAP && runSelector + selectors <= CONSECUTIVE_SELECTOR_CAP
+    );
+    k = end;
+  }
+  kept.push(body.slice(runStart));
   const found = CHECKS.filter(([code4]) => foundCodes.has(code4)).map(
     ([code4]) => code4
   );
-  return { cleaned: out, found };
+  return { cleaned: kept.join(""), found };
 }
 function needsCarveOut(body) {
   return body.includes(String.fromCodePoint(ZWNJ)) || body.includes(String.fromCodePoint(ZWJ)) || VARIATION_SELECTOR.test(body) || TAG_CHAR_RE.test(body) || GATED_BLANK_RE.test(body);
 }
 function payloadInvisibleView(text5) {
-  const cps = Array.from(text5);
+  const cps = codePointArray(text5);
   const { codes, kind } = analyzeCarve(cps);
-  let out = "";
-  for (let i = 0; i < cps.length; i++)
-    out += codes[i] !== null && kind[i] === null ? cps[i] : " ";
-  return out;
+  const offsets = u16Offsets(cps);
+  const isPayload = (i2) => codes[i2] !== CODE_VISIBLE && kind[i2] === KIND_NONE;
+  const parts2 = [];
+  let i = 0;
+  while (i < cps.length) {
+    const maskFrom = i;
+    while (i < cps.length && !isPayload(i)) i++;
+    if (i > maskFrom) parts2.push(" ".repeat(i - maskFrom));
+    const keepFrom = i;
+    while (i < cps.length && isPayload(i)) i++;
+    if (i > keepFrom) parts2.push(text5.slice(offsets[keepFrom], offsets[i]));
+  }
+  return parts2.join("");
 }
 function payloadLongRunSample(text5) {
   if (!hasLongRun(text5)) return null;
   return findLongRuns(payloadInvisibleView(text5)).next().value?.text ?? null;
 }
 function countEffectiveInvisible(text5) {
-  const payload = countPayloadInvisible(text5);
-  const stripped = stripInvisible(text5);
-  const removed = stripped === text5 ? 0 : codePointLength(text5) - codePointLength(stripped);
+  if (!hasInvisibleCodePoint(text5)) return 0;
+  if (text5.charCodeAt(0) === 65279)
+    return surplusOver(countPayloadInvisible(text5), text5, stripInvisible(text5));
+  const cps = codePointArray(text5);
+  const analysis = analyzeCarve(cps);
+  const { cleaned } = stripBody(text5, cps, analysis);
+  return surplusOver(analysis.payloadInvis, text5, cleaned, cps.length);
+}
+function surplusOver(payload, text5, stripped, cpLen) {
+  const removed = stripped === text5 ? 0 : (cpLen ?? codePointLength(text5)) - codePointLength(stripped);
   return payload + Math.max(0, removed - payload);
 }
 function isIncidentalInvisible(text5) {
@@ -6042,13 +6137,17 @@ function isIncidentalInvisible(text5) {
 function stripInvisibleWithReport(text5, originalText = text5) {
   const hasLeadingBom = originalText.charCodeAt(0) === 65279 && text5.charCodeAt(0) === 65279;
   const body = hasLeadingBom ? text5.slice(1) : text5;
-  const { cleaned, found } = needsCarveOut(body) ? carveStrip(body) : bulkStrip(body);
+  const { cleaned, found } = stripBody(body);
   return { cleaned: hasLeadingBom ? BOM + cleaned : cleaned, found };
+}
+function stripBody(body, cps, analysis) {
+  if (!needsCarveOut(body)) return bulkStrip(body);
+  return carveStrip(body, cps, analysis);
 }
 function stripInvisible(text5) {
   return stripInvisibleWithReport(text5).cleaned;
 }
-var VS, ZERO_WIDTH_MN, BLANK_NON_CF, REGEX_FLAGS, CF_CLASS_SOURCE, CATEGORY, CATEGORY_LABELS, CHECKS, STRIP, LONG_RUN_THRESHOLD, SCATTERED_THRESHOLD, LONG_RUN_RE, RUN_CHUNK, LONG_RUN_CHUNK_RE, RUN_TAIL_RE, BOM, ZWNJ, ZWJ, CONSECUTIVE_JOINER_CAP, CONSECUTIVE_SELECTOR_CAP, TOTAL_PRESERVED_JOINER_BUDGET, PRESERVED_JOINER_PER_VISIBLE, PRESERVE_HARD_CAP, TOTAL_PRESERVED_BLANK_BUDGET, PRESERVED_BLANK_PER_ANCHOR, LINGUISTIC_SCRIPTS, EMOJI_LEFT, KEYCAP_BASE, COMBINING_KEYCAP, EMOJI_BASE, VARIATION_SELECTOR, PRESENTATION_SELECTORS, TAG_BASE, TAG_CANCEL, TAG_SPEC_MIN, TAG_SPEC_MAX, REGISTERED_TAG_PAYLOADS, MAX_TAG_SPEC_CHARS, IVS_MIN, IVS_MAX, CJK_IDEOGRAPH_RE, BRAILLE_BLANK, HANGUL_FILLERS, GATED_BLANK_RE, BRAILLE_RE, HANGUL_RE, TRACKED_INVISIBLE, MIN_TRACKED_CP, isCursiveLetter, jtOf, GRAPHEME_SEGMENTER, TAG_CHAR_RE;
+var VS, ZERO_WIDTH_MN, BLANK_NON_CF, REGEX_FLAGS, CF_CLASS_SOURCE, CATEGORY, CATEGORY_LABELS, CHECKS, STRIP, LONG_RUN_THRESHOLD, SCATTERED_THRESHOLD, LONG_RUN_RE, RUN_CHUNK, LONG_RUN_CHUNK_RE, RUN_TAIL_RE, BOM, ZWNJ, ZWJ, CONSECUTIVE_JOINER_CAP, CONSECUTIVE_SELECTOR_CAP, TOTAL_PRESERVED_JOINER_BUDGET, PRESERVED_JOINER_PER_VISIBLE, PRESERVE_HARD_CAP, TOTAL_PRESERVED_BLANK_BUDGET, PRESERVED_BLANK_PER_ANCHOR, LINGUISTIC_SCRIPTS, EMOJI_LEFT, KEYCAP_BASE, COMBINING_KEYCAP, EMOJI_BASE, VARIATION_SELECTOR, isEmojiLeft, isEmojiBase, isKeycapBase, isVariationSelectorCp, PRESENTATION_SELECTORS, TAG_BASE, TAG_CANCEL, TAG_SPEC_MIN, TAG_SPEC_MAX, REGISTERED_TAG_PAYLOADS, MAX_TAG_SPEC_CHARS, IVS_MIN, IVS_MAX, CJK_IDEOGRAPH_RE, isCjkIdeograph, BRAILLE_BLANK, HANGUL_FILLERS, GATED_BLANK_RE, BRAILLE_RE, isBrailleScript, HANGUL_RE, isHangulScript, CODE_VISIBLE, CODE_CF, CODE_VS, CODE_BLANK, KIND_NONE, KIND_JOINER, KIND_EMOJIVS, KIND_TAG, KIND_STDVS, KIND_IVS, KIND_BLANK, CODE_CATEGORY, TRACKED_INVISIBLE, MIN_TRACKED_CP, CP_PREDICATE_MEMO_CAP, isCursiveLetter, jtOf, GRAPHEME_SEGMENTER, CONTAINING_CANDIDATE_SHARE, TAG_CHAR_RE;
 var init_invisible = __esm({
   "src/invisible.mjs"() {
     "use strict";
@@ -6144,6 +6243,10 @@ var init_invisible = __esm({
     COMBINING_KEYCAP = 8419;
     EMOJI_BASE = new RegExp("\\p{Extended_Pictographic}", "u");
     VARIATION_SELECTOR = new RegExp(`[${VS}]`, "u");
+    isEmojiLeft = memoizedCpPredicate(EMOJI_LEFT);
+    isEmojiBase = memoizedCpPredicate(EMOJI_BASE);
+    isKeycapBase = memoizedCpPredicate(KEYCAP_BASE);
+    isVariationSelectorCp = memoizedCpPredicate(VARIATION_SELECTOR);
     PRESENTATION_SELECTORS = /* @__PURE__ */ new Set([65038, 65039]);
     TAG_BASE = 127988;
     TAG_CANCEL = 917631;
@@ -6154,32 +6257,51 @@ var init_invisible = __esm({
     IVS_MIN = 917760;
     IVS_MAX = 917999;
     CJK_IDEOGRAPH_RE = /[\p{Unified_Ideograph}\u{F900}-\u{FAFF}\u{2F800}-\u{2FA1F}]/u;
+    isCjkIdeograph = memoizedCpPredicate(CJK_IDEOGRAPH_RE);
     BRAILLE_BLANK = 10240;
     HANGUL_FILLERS = /* @__PURE__ */ new Set([4447, 4448, 12644, 65440]);
     GATED_BLANK_RE = new RegExp("[\\u115F\\u1160\\u2800\\u3164\\uFFA0]", "u");
     BRAILLE_RE = new RegExp("\\p{Script=Braille}", "u");
+    isBrailleScript = memoizedCpPredicate(BRAILLE_RE);
     HANGUL_RE = new RegExp("\\p{Script=Hangul}", "u");
+    isHangulScript = memoizedCpPredicate(HANGUL_RE);
+    CODE_VISIBLE = 0;
+    CODE_CF = 1;
+    CODE_VS = 2;
+    CODE_BLANK = 3;
+    KIND_NONE = 0;
+    KIND_JOINER = 1;
+    KIND_EMOJIVS = 2;
+    KIND_TAG = 3;
+    KIND_STDVS = 4;
+    KIND_IVS = 5;
+    KIND_BLANK = 6;
+    CODE_CATEGORY = [
+      null,
+      CATEGORY.CF,
+      CATEGORY.VARIATION_SELECTORS,
+      CATEGORY.BLANK_FILLERS
+    ];
     TRACKED_INVISIBLE = /* @__PURE__ */ new Map();
     for (
       const [code4, codepoints] of
-      /** @type {[string, Iterable<number>][]} */
+      /** @type {[number, Iterable<number>][]} */
       [
-        [CATEGORY.CF, CF_CODEPOINTS],
-        [CATEGORY.VARIATION_SELECTORS, [...VS].map((ch) => ch.codePointAt(0))],
-        [CATEGORY.BLANK_FILLERS, [...BLANK_NON_CF].map((ch) => ch.codePointAt(0))]
+        [CODE_CF, CF_CODEPOINTS],
+        [CODE_VS, [...VS].map((ch) => ch.codePointAt(0))],
+        [CODE_BLANK, [...BLANK_NON_CF].map((ch) => ch.codePointAt(0))]
       ]
     )
       for (const cp of codepoints)
         if (!TRACKED_INVISIBLE.has(cp)) TRACKED_INVISIBLE.set(cp, code4);
     MIN_TRACKED_CP = Math.min(...TRACKED_INVISIBLE.keys());
+    CP_PREDICATE_MEMO_CAP = 4096;
     isCursiveLetter = (jt) => jt === "D" || jt === "R" || jt === "L";
-    jtOf = (ch) => ch ? joiningType(
-      /** @type {number} */
-      ch.codePointAt(0)
-    ) : "U";
+    jtOf = (cp) => cp < 0 ? "U" : joiningType(cp);
     GRAPHEME_SEGMENTER = new Intl.Segmenter("en", {
       granularity: "grapheme"
     });
+    CONTAINING_CANDIDATE_SHARE = 4;
     TAG_CHAR_RE = /[\u{E0000}-\u{E007F}]/u;
   }
 });
@@ -9594,10 +9716,10 @@ var init_create2 = __esm({
 });
 
 // node_modules/.pnpm/css-tree@3.2.1/node_modules/css-tree/lib/convertor/create.js
-function createConvertor(walk3) {
+function createConvertor(walk4) {
   return {
     fromPlainObject(ast) {
-      walk3(ast, {
+      walk4(ast, {
         enter(node2) {
           if (node2.children && node2.children instanceof List === false) {
             node2.children = new List().fromArray(node2.children);
@@ -9607,7 +9729,7 @@ function createConvertor(walk3) {
       return ast;
     },
     toPlainObject(ast) {
-      walk3(ast, {
+      walk4(ast, {
         leave(node2) {
           if (node2.children && node2.children instanceof List) {
             node2.children = node2.children.toArray();
@@ -9692,7 +9814,7 @@ function createTypeIterator(config, reverse) {
   if (reverse) {
     fields.reverse();
   }
-  return function(node2, context, walk3, walkReducer) {
+  return function(node2, context, walk4, walkReducer) {
     let prevContextValue;
     if (useContext) {
       prevContextValue = context[contextName];
@@ -9706,7 +9828,7 @@ function createTypeIterator(config, reverse) {
           if (breakWalk) {
             return true;
           }
-        } else if (walk3(ref)) {
+        } else if (walk4(ref)) {
           return true;
         }
       }
@@ -9759,7 +9881,7 @@ function createWalker(config) {
   }
   const fastTraversalIteratorsNatural = createFastTraveralMap(iteratorsNatural);
   const fastTraversalIteratorsReverse = createFastTraveralMap(iteratorsReverse);
-  const walk3 = function(root2, options) {
+  const walk4 = function(root2, options) {
     function walkNode(node2, item, list3) {
       const enterRet = enter.call(context, node2, item, list3);
       if (enterRet === breakWalk) {
@@ -9818,11 +9940,11 @@ function createWalker(config) {
     }
     walkNode(root2);
   };
-  walk3.break = breakWalk;
-  walk3.skip = skipNode;
-  walk3.find = function(ast, fn) {
+  walk4.break = breakWalk;
+  walk4.skip = skipNode;
+  walk4.find = function(ast, fn) {
     let found = null;
-    walk3(ast, function(node2, item, list3) {
+    walk4(ast, function(node2, item, list3) {
       if (fn.call(this, node2, item, list3)) {
         found = node2;
         return breakWalk;
@@ -9830,9 +9952,9 @@ function createWalker(config) {
     });
     return found;
   };
-  walk3.findLast = function(ast, fn) {
+  walk4.findLast = function(ast, fn) {
     let found = null;
-    walk3(ast, {
+    walk4(ast, {
       reverse: true,
       enter(node2, item, list3) {
         if (fn.call(this, node2, item, list3)) {
@@ -9843,16 +9965,16 @@ function createWalker(config) {
     });
     return found;
   };
-  walk3.findAll = function(ast, fn) {
+  walk4.findAll = function(ast, fn) {
     const found = [];
-    walk3(ast, function(node2, item, list3) {
+    walk4(ast, function(node2, item, list3) {
       if (fn.call(this, node2, item, list3)) {
         found.push(node2);
       }
     });
     return found;
   };
-  return walk3;
+  return walk4;
 }
 var hasOwnProperty2, noop;
 var init_create4 = __esm({
@@ -11540,15 +11662,15 @@ function ensureFunction2(value) {
   return typeof value === "function" ? value : noop3;
 }
 function walk(node2, options, context) {
-  function walk3(node3) {
+  function walk4(node3) {
     enter.call(context, node3);
     switch (node3.type) {
       case "Group":
-        node3.terms.forEach(walk3);
+        node3.terms.forEach(walk4);
         break;
       case "Multiplier":
       case "Boolean":
-        walk3(node3.term);
+        walk4(node3.term);
         break;
       case "Type":
       case "Property":
@@ -11575,7 +11697,7 @@ function walk(node2, options, context) {
   if (enter === noop3 && leave === noop3) {
     throw new Error("Neither `enter` nor `leave` walker handler is set or both aren't a function");
   }
-  walk3(node2, context);
+  walk4(node2, context);
 }
 var noop3;
 var init_walk = __esm({
@@ -13209,19 +13331,19 @@ var init_mix = __esm({
 // node_modules/.pnpm/css-tree@3.2.1/node_modules/css-tree/lib/syntax/create.js
 function createSyntax(config) {
   const parse60 = createParser(config);
-  const walk3 = createWalker(config);
+  const walk4 = createWalker(config);
   const generate52 = createGenerator(config);
-  const { fromPlainObject: fromPlainObject2, toPlainObject: toPlainObject2 } = createConvertor(walk3);
+  const { fromPlainObject: fromPlainObject2, toPlainObject: toPlainObject2 } = createConvertor(walk4);
   const syntax = {
     lexer: null,
     createLexer: (config2) => new Lexer(config2, syntax, syntax.lexer.structure),
     tokenize,
     parse: parse60,
     generate: generate52,
-    walk: walk3,
-    find: walk3.find,
-    findLast: walk3.findLast,
-    findAll: walk3.findAll,
+    walk: walk4,
+    find: walk4.find,
+    findLast: walk4.findLast,
+    findAll: walk4.findAll,
     fromPlainObject: fromPlainObject2,
     toPlainObject: toPlainObject2,
     fork(extension2) {
@@ -55418,13 +55540,41 @@ function isHiddenElement(node2) {
 function hasDataSrc(el) {
   return typeof el.properties?.src === "string" && el.properties.src.startsWith("data:");
 }
-function parseFragment2(html4) {
-  return htmlParser.parse(html4);
+function walk3(tree, test, visitor) {
+  const nodes = [tree];
+  const indices = [void 0];
+  const parents = [void 0];
+  while (nodes.length > 0) {
+    const node2 = nodes.pop();
+    const index2 = indices.pop();
+    const parent = parents.pop();
+    const result = test === null || node2.type === test ? visitor(node2, index2, parent) : void 0;
+    if (result === EXIT) return;
+    if (result === SKIP) continue;
+    const children = node2.children;
+    if (children === void 0) continue;
+    for (let i = children.length - 1; i >= 0; i--) {
+      nodes.push(children[i]);
+      indices.push(i);
+      parents.push(node2);
+    }
+  }
+}
+function lastParseCached(parse60) {
+  let cachedText = null;
+  let cachedTree = null;
+  return (text5) => {
+    if (cachedText === text5) return cachedTree;
+    const tree = parse60(text5);
+    cachedText = text5;
+    cachedTree = tree;
+    return tree;
+  };
 }
 function parseHtmlTag(htmlValue) {
   const tree = parseFragment2(htmlValue);
   let firstElement = null;
-  visit(tree, "element", (node2) => {
+  walk3(tree, "element", (node2) => {
     firstElement = node2;
     return EXIT;
   });
@@ -55493,7 +55643,7 @@ function scanHtmlFragment(html4) {
 function scanFragmentTree(html4, tree) {
   const ranges = [];
   const warned = newWarned();
-  visit(tree, (node2) => {
+  walk3(tree, null, (node2) => {
     const isComment = node2.type === "comment";
     if (isComment || isHiddenElement(node2)) {
       if (!node2.position) {
@@ -55521,7 +55671,7 @@ function foldAbsorb(absorbing, raw) {
 function commentSpans(value) {
   const tree = parseFragment2(value);
   const spans = /* @__PURE__ */ new Map();
-  visit(tree, "comment", (node2) => {
+  walk3(tree, "comment", (node2) => {
     if (node2.position)
       spans.set(node2.position.start.offset, node2.position.end.offset);
   });
@@ -55634,10 +55784,10 @@ function scanInlineChildren(node2, text5, ranges, warned) {
   }
 }
 function scanMarkdown(text5) {
-  const tree = mdParser.parse(text5);
+  const tree = parseMarkdown(text5);
   const ranges = [];
   const warned = newWarned();
-  visit(tree, "html", (node2, _index, parent) => {
+  walk3(tree, "html", (node2, _index, parent) => {
     if (!FLOW_HTML_PARENTS.has(parent?.type)) return;
     const base2 = node2.position.start.offset;
     const sub = scanHtmlFragment(text5.slice(base2, node2.position.end.offset));
@@ -55650,7 +55800,7 @@ function scanMarkdown(text5) {
     }
     mergeWarned(warned, sub.warned);
   });
-  visit(tree, (node2) => {
+  walk3(tree, null, (node2) => {
     if (!PHRASING_ROOTS.has(node2.type)) return;
     if (!hasHtmlLeaf(node2)) return;
     scanInlineChildren(node2, text5, ranges, warned);
@@ -55658,8 +55808,9 @@ function scanMarkdown(text5) {
   return { ranges, warned };
 }
 function hasMarkdownCode(text5) {
+  if (!MARKDOWN_CODE_HINT.test(text5)) return false;
   let found = false;
-  visit(mdParser.parse(text5), "code", () => {
+  walk3(parseMarkdown(text5), "code", () => {
     found = true;
     return EXIT;
   });
@@ -55870,7 +56021,7 @@ function multiUrlAttr(value) {
 function extractHtmlUrls(text5) {
   const tree = parseFragment2(text5);
   const urls = [];
-  visit(tree, "element", (node2) => {
+  walk3(tree, "element", (node2) => {
     const props = node2.properties;
     const isImage = node2.tagName === "img";
     const isAnchor = node2.tagName === "a";
@@ -55911,8 +56062,8 @@ function detectExfil(text5) {
   if (!MD_LINK_HINT.test(text5) && !HTML_TAG_PRESENT.test(text5)) return null;
   const threats = [];
   try {
-    const tree = mdParser.parse(text5);
-    visit(tree, (node2) => {
+    const tree = parseMarkdown(text5);
+    walk3(tree, null, (node2) => {
       if (node2.type !== "link" && node2.type !== "image" && node2.type !== "definition")
         return;
       const reason = checkExfilUrl(node2.url);
@@ -55947,7 +56098,7 @@ function detectExfil(text5) {
   }
   return threats.length > 0 ? threats : null;
 }
-var NEAR_ZERO_EPSILON, OFFSCREEN_ABSOLUTE_THRESHOLD, OFFSCREEN_VIEWPORT_THRESHOLD, ABSOLUTE_UNITS, VIEWPORT_UNITS, ANGLE_UNITS, NAMED_COLORS, BLOCK_AXIS_EXTENT_PROPS, INLINE_AXIS_EXTENT_PROPS, BORDER_SHORTHANDS, BORDER_WIDTH_KEYWORDS, FONT_SIZE_UNITS, CSS_PROPERTY_IDENT_RE, REPORTED_TAGS, VOID_ELEMENTS2, FOREIGN_ELEMENTS, RAW_TEXT_ELEMENTS, htmlParser, PLACEHOLDER_LABEL, PLACEHOLDER_KEY_LEN, LAYER2_PLACEHOLDER_RE, HIDDEN_PLACEHOLDER, COMMENT_PLACEHOLDER, UNPARSEABLE_PLACEHOLDER, mdParser, BOGUS_COMMENT_OPEN_RE, UNTERMINATED_MARKUP_TAIL_RE, PHRASING_ROOTS, FLOW_HTML_PARENTS, EXFIL_INDICATORS, KEYWORD_PARAM_NAME_RE, LONG_QUERY_THRESHOLD, DATA_URI_ACTIVE_RE, DATA_URI_LENGTH_THRESHOLD, SCRIPT_URI_RE, RELATIVE_URL_BASE, BENIGN_BLOB_PARAM_RE, OPAQUE_TOKEN_RE, VALUE_HAS_DIGIT_RE, BLOB_VALUE_B64_RE, BLOB_VALUE_HEX_RE, BLOB_VALUE_B64URL_RE, B64URL_MIXED_RE, PATH_BLOB_RE, PATH_BLOB_MIN_LEN, SRCSET_WS_RE, OFF_ORIGIN_REASON;
+var NEAR_ZERO_EPSILON, OFFSCREEN_ABSOLUTE_THRESHOLD, OFFSCREEN_VIEWPORT_THRESHOLD, ABSOLUTE_UNITS, VIEWPORT_UNITS, ANGLE_UNITS, NAMED_COLORS, BLOCK_AXIS_EXTENT_PROPS, INLINE_AXIS_EXTENT_PROPS, BORDER_SHORTHANDS, BORDER_WIDTH_KEYWORDS, FONT_SIZE_UNITS, CSS_PROPERTY_IDENT_RE, REPORTED_TAGS, VOID_ELEMENTS2, FOREIGN_ELEMENTS, RAW_TEXT_ELEMENTS, htmlParser, parseFragment2, PLACEHOLDER_LABEL, PLACEHOLDER_KEY_LEN, LAYER2_PLACEHOLDER_RE, HIDDEN_PLACEHOLDER, COMMENT_PLACEHOLDER, UNPARSEABLE_PLACEHOLDER, mdParser, parseMarkdown, MARKDOWN_CODE_HINT, BOGUS_COMMENT_OPEN_RE, UNTERMINATED_MARKUP_TAIL_RE, PHRASING_ROOTS, FLOW_HTML_PARENTS, EXFIL_INDICATORS, KEYWORD_PARAM_NAME_RE, LONG_QUERY_THRESHOLD, DATA_URI_ACTIVE_RE, DATA_URI_LENGTH_THRESHOLD, SCRIPT_URI_RE, RELATIVE_URL_BASE, BENIGN_BLOB_PARAM_RE, OPAQUE_TOKEN_RE, VALUE_HAS_DIGIT_RE, BLOB_VALUE_B64_RE, BLOB_VALUE_HEX_RE, BLOB_VALUE_B64URL_RE, B64URL_MIXED_RE, PATH_BLOB_RE, PATH_BLOB_MIN_LEN, SRCSET_WS_RE, OFF_ORIGIN_REASON;
 var init_html4 = __esm({
   "src/html.mjs"() {
     "use strict";
@@ -56220,6 +56371,7 @@ var init_html4 = __esm({
       "plaintext"
     ]);
     htmlParser = unified().use(rehypeParse, { fragment: true });
+    parseFragment2 = lastParseCached((html4) => htmlParser.parse(html4));
     PLACEHOLDER_LABEL = Object.freeze({
       hidden: "hidden HTML",
       comment: "HTML comment"
@@ -56230,6 +56382,8 @@ var init_html4 = __esm({
     COMMENT_PLACEHOLDER = "[HTML comment removed";
     UNPARSEABLE_PLACEHOLDER = "[HTML unparseable \u2014 withheld]";
     mdParser = unified().use(remarkParse).use(remarkGfm);
+    parseMarkdown = lastParseCached((text5) => mdParser.parse(text5));
+    MARKDOWN_CODE_HINT = /```|~~~|^(?: {4}| *\t)/m;
     BOGUS_COMMENT_OPEN_RE = /<[!?]/g;
     UNTERMINATED_MARKUP_TAIL_RE = /<(?:[!?]|\/?[a-zA-Z])[^>]*$/;
     PHRASING_ROOTS = /* @__PURE__ */ new Set(["paragraph", "heading", "tableCell"]);
@@ -56363,12 +56517,16 @@ function processLayer1(text5, sgrCarveOut) {
   }
   return { cleaned, found, findings, modified };
 }
-async function applyMarkdownPipeline(state, { html: html4, exfilScan }) {
+async function applyMarkdownPipeline(state, { html: html4, exfilScan, deadline }) {
   const inputText = state.text;
   let reveal;
   const splices = [];
   if (!html4 && !exfilScan || !needsMarkdownPipeline(inputText))
     return { reveal: void 0, splices };
+  if (deadline && deadline.remainingMs() <= 0)
+    throw new Error(
+      "CRITICAL: the sanitization time budget was spent before Layers 2/3 ran, so this text was never checked for hidden HTML or exfil-shaped URLs. Failing closed \u2014 tool output suppressed."
+    );
   let sanitizeHtml2, detectExfil2;
   try {
     ({ sanitizeHtml: sanitizeHtml2, detectExfil: detectExfil2 } = await Promise.resolve().then(() => (init_html4(), html_exports2)));
@@ -69144,7 +69302,7 @@ function containsPlaceholder(value, depth = 0) {
 function collectPlaceholders(value) {
   const secret = /* @__PURE__ */ new Map();
   const layer2 = /* @__PURE__ */ new Map();
-  const walk3 = (node2, path2, depth) => {
+  const walk4 = (node2, path2, depth) => {
     if (depth > 32) return;
     if (typeof node2 === "string") {
       for (const match of node2.matchAll(PLACEHOLDER_RE_G))
@@ -69156,14 +69314,14 @@ function collectPlaceholders(value) {
       return;
     }
     if (Array.isArray(node2)) {
-      node2.forEach((item, index2) => walk3(item, `${path2}[${index2}]`, depth + 1));
+      node2.forEach((item, index2) => walk4(item, `${path2}[${index2}]`, depth + 1));
       return;
     }
     if (node2 !== null && typeof node2 === "object")
       for (const [key, item] of Object.entries(node2))
-        walk3(item, path2 === "" ? key : `${path2}.${key}`, depth + 1);
+        walk4(item, path2 === "" ? key : `${path2}.${key}`, depth + 1);
   };
-  walk3(value, "", 0);
+  walk4(value, "", 0);
   const entries = (map3) => [...map3].map(([token, path2]) => ({ token, path: path2 }));
   return { secret: entries(secret), layer2: entries(layer2) };
 }
