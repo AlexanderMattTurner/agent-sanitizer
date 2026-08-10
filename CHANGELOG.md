@@ -8,6 +8,11 @@ adhere to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+## [2.34.12] - 2026-08-10
+
+### Changed
+- Revised agent-sanitizer auto-update instructions.
+
 ## [2.34.11] - 2026-08-10
 
 ### Fixed
