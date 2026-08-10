@@ -56,19 +56,26 @@ const cp = (n) => String.fromCodePoint(n);
 const grow = (unit, n) => unit.repeat(Math.ceil(n / unit.length)).slice(0, n);
 
 /**
- * Median of three timed runs after a warm-up call, in ms. Three is enough
- * because the gates below are ratios with room to spare, and a wider sample
- * would cost more wall clock than the regression it protects against.
+ * The FASTEST of four timed runs after a warm-up call, in ms.
+ *
+ * Contention and collector pauses only ever ADD time, so the minimum is the
+ * closest any of the samples got to the cost of the code itself, and it is what
+ * keeps these gates readable on a two-core shared runner that is also running
+ * the rest of the suite. A median still carries whatever noise landed on the
+ * middle sample, which on such a runner is most of them. The estimator loses
+ * nothing the gates are for: a path that got an order of magnitude slower is an
+ * order of magnitude slower in its fastest run too.
  */
+const SAMPLES = 4;
 async function measure(fn) {
   await fn();
-  const runs = [];
-  for (let i = 0; i < 3; i++) {
+  let best = Infinity;
+  for (let i = 0; i < SAMPLES; i++) {
     const started = performance.now();
     await fn();
-    runs.push(performance.now() - started);
+    best = Math.min(best, performance.now() - started);
   }
-  return runs.sort((a, b) => a - b)[1];
+  return best;
 }
 
 // Text shapes with materially different cost profiles. The clean ones answer
@@ -95,9 +102,11 @@ const SHAPES = {
 // Ceilings in calibration units for the shapes an entry does real work on. Each
 // is sized off the DEARER of two measurements — standalone, and under the
 // parallel coverage run, where the ratios move because c8 instruments the code
-// under test harder than it instruments this file's calibration — with roughly
-// 2x on top, which is the headroom a shared runner needs while still catching
-// the order-of-magnitude regressions this file exists for. CHEAP_BUDGET is
+// under test harder than it instruments this file's calibration — with 1.6x on
+// top. The two environments disagree by up to ~40% on the same case, so 1.6x is
+// what covers that disagreement and nothing more: enough that a green run means
+// the path is where it was left, tight enough that a doubling is red. Anything
+// with more slack than that is a ceiling nothing is under. CHEAP_BUDGET is
 // tighter, and each entry's `cheap` list names the shapes that entry has no
 // per-code-point work to do on: past ten passes' worth of work, such an input is
 // being analyzed for something it does not contain. The lists differ per entry
@@ -118,12 +127,12 @@ const ENTRIES = {
     // ANSI, and HTML-shaped text carries neither.
     cheap: ["ascii-prose", "cjk-prose", "emoji-prose", "html-prose"],
     budget: {
-      "joiner-dense": 180,
+      "joiner-dense": 115,
       "vs-dense": 90,
       "payload-run": 110,
-      "payload-scattered": 36,
-      "emoji-zwj": 80,
-      "run-dense": 40,
+      "payload-scattered": 25,
+      "emoji-zwj": 78,
+      "run-dense": 44,
     },
   },
   sanitizeText: {
@@ -140,12 +149,16 @@ const ENTRIES = {
     // the carve analysis finds nothing to preserve and the strip is a bulk pass.
     cheap: ["ascii-prose", "cjk-prose", "emoji-prose", "payload-scattered"],
     budget: {
-      "html-prose": 205,
-      "joiner-dense": 240,
-      "vs-dense": 105,
-      "payload-run": 55,
-      "emoji-zwj": 95,
-      "run-dense": 40,
+      // The dearest cell in the table, and the one the ratio is doing the least
+      // for: it is parse5 building a 256 KB fragment, so it moves with the
+      // parser rather than with anything here. SUPERLINEAR below is what
+      // actually holds this path.
+      "html-prose": 290,
+      "joiner-dense": 270,
+      "vs-dense": 113,
+      "payload-run": 56,
+      "emoji-zwj": 101,
+      "run-dense": 30,
     },
   },
   scanText: {
@@ -155,15 +168,15 @@ const ENTRIES = {
     run: (text) => scanText(text),
     cheap: ["ascii-prose", "cjk-prose", "emoji-prose", "html-prose"],
     budget: {
-      "joiner-dense": 45,
-      "vs-dense": 25,
+      "joiner-dense": 37,
+      "vs-dense": 18,
       // One 256 KB run decodes as a single payload, so this case is dominated by
       // one large allocation and swings with the collector — the widest budget
       // here buys tolerance for that rather than for a slower machine.
-      "payload-run": 110,
-      "payload-scattered": 28,
-      "emoji-zwj": 25,
-      "run-dense": 36,
+      "payload-run": 67,
+      "payload-scattered": 23,
+      "emoji-zwj": 22,
+      "run-dense": 24,
     },
   },
 };
@@ -210,7 +223,35 @@ const SUPERLINEAR = {
  */
 const FOLD_GLYPH = "\u0430";
 const foldText = (n) => grow(FOLD_GLYPH + "bcdefghijklmn ", n);
-const FOLD_BUDGET = 28;
+const FOLD_BUDGET = 23;
+
+/**
+ * The one gate that promises a NUMBER rather than a ratio.
+ *
+ * Every budget above is machine-relative on purpose, and a table of ratios can
+ * stay green while each hook takes a second, so the thing a user actually
+ * notices \u2014 the wait before a session starts, the wait before a prompt goes \u2014
+ * needs a ceiling in milliseconds. The input is ordinary text at 256 KB, which
+ * is several times any real instruction set and larger than most pastes; the
+ * adversarial shapes keep their ratio budgets, because a ceiling wide enough for
+ * 256 KB of nothing but zero-width space on a slow runner would not be a
+ * guarantee about anything.
+ *
+ * c8 multiplies wall clock by roughly seven here, which is a fact about the
+ * instrumentation and not about the hook, so this half stands down under
+ * coverage \u2014 and `pnpm test` runs the whole suite under coverage. The
+ * uninstrumented step in `.github/workflows/node-tests.yaml` ("Run the hook
+ * latency gates uninstrumented") is what makes CI read it; without that step
+ * this gate would be local-only.
+ */
+const REALISTIC_MS = 100;
+const REALISTIC_SIZE = 256 * KB;
+const REALISTIC_TEXT = grow(
+  "The quick brown fox jumps over the lazy dog. " +
+    "\u901f\u3044\u8336\u8272\u306e\u72d0\u304c\u6020\u60f0\u306a\u72ac\u3092\u98db\u3073\u8d8a\u3048\u308b\u3002" +
+    "\ud83d\ude42 ok \ud83d\ude80 go \ud83c\udf89 ",
+  REALISTIC_SIZE,
+);
 
 /** Every offset of {@link FOLD_GLYPH}, as the scanner would report them. */
 function foldFindings(text) {
@@ -260,12 +301,14 @@ const CASES = Object.keys(ENTRIES).flatMap((entry) =>
 
 /** @type {{unit: number, large: Record<string, number>, small: Record<string, number>,
  *   units: Record<string, number>, superlinear: Record<string, number>,
+ *   realistic: Record<string, number>,
  *   fold: Record<string, number>, foldUnits: number, foldChanged: boolean}} */
 const timing = {
   unit: 0,
   large: {},
   small: {},
   units: {},
+  realistic: {},
   superlinear: { from: 0, to: 0 },
   fold: { small: 0, large: 0 },
   foldUnits: 0,
@@ -284,6 +327,12 @@ before(async () => {
     timing.units[name] = measured.units;
     timing.small[name] = await measure(() => run(small, shape));
   }
+  for (const [entry, { run }] of Object.entries(ENTRIES))
+    // Not "html-prose", so `sanitizeText` takes the Layer-1 path the majority of
+    // tool results take rather than the markup path only web ingress reaches.
+    timing.realistic[entry] = await measure(() =>
+      run(REALISTIC_TEXT, "realistic-prose"),
+    );
   const { run } = ENTRIES[SUPERLINEAR.entry];
   for (const end of ["from", "to"]) {
     const text = SHAPES[SUPERLINEAR.shape](SUPERLINEAR[end]);
@@ -392,6 +441,27 @@ describe("hook-path latency", () => {
           `${entry}/${shape} (${timing.large[`${entry}/${shape}`].toFixed(1)}ms) no longer costs more than the dearest cheap shape (${dearest.toFixed(1)}ms) — it is not exercising the path it was written for`,
         );
     });
+
+  for (const entry of Object.keys(ENTRIES))
+    timed(
+      `${entry}: 256 KB of ordinary text is answered in under ${REALISTIC_MS}ms`,
+      (t) => {
+        if (process.env.NODE_V8_COVERAGE) {
+          t.skip(
+            "c8 multiplies wall clock several-fold; the uninstrumented CI step reads this gate",
+          );
+          return;
+        }
+        // Vacuity guard: a ceiling in milliseconds is trivially met by a shorter
+        // input, and REALISTIC_TEXT is built by slicing a repeated unit, so its
+        // length is worth asserting rather than assuming.
+        assert.equal(REALISTIC_TEXT.length, REALISTIC_SIZE);
+        assert.ok(
+          timing.realistic[entry] <= REALISTIC_MS,
+          `${entry} took ${timing.realistic[entry].toFixed(1)}ms on 256 KB of ordinary text, ceiling ${REALISTIC_MS}ms`,
+        );
+      },
+    );
 
   timed(
     "the hook entry carries the same budget as the classifier it wraps",
