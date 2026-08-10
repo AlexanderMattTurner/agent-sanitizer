@@ -1575,6 +1575,27 @@ describe("R1: parser stack overflow fails closed (never throws)", () => {
     );
   });
 
+  it("a throwing parse is never remembered as this input's tree", () => {
+    // The parse memo keys on the text. Recording the key before the parse
+    // returns would leave an overflowing input mapped to whatever tree the
+    // PREVIOUS document produced, so the second look at the same text answers
+    // from the wrong document instead of failing closed. Sanitize a benign
+    // fragment first so there is a stale tree to be served.
+    assert.equal(
+      sanitizeHtml("a <span hidden>x</span> b").unparseable,
+      undefined,
+    );
+    for (const attempt of [1, 2]) {
+      const result = sanitizeHtml(OVERFLOW);
+      assert.equal(
+        result.text,
+        UNPARSEABLE_PLACEHOLDER,
+        `attempt ${attempt} did not withhold`,
+      );
+      assert.equal(result.unparseable, true);
+    }
+  });
+
   it("detectExfil returns one sentinel threat instead of throwing", () => {
     const threats = detectExfil(OVERFLOW);
     assert.equal(threats.length, 1);

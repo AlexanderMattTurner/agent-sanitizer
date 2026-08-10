@@ -1375,13 +1375,48 @@ function hasDataSrc(el) {
 const htmlParser = unified().use(rehypeParse, { fragment: true });
 
 /**
+ * `parse` with its most recent (input, tree) pair remembered.
+ *
+ * Layers 2 and 3 each parse the SAME tool output: `sanitizeHtml` tokenizes it to
+ * decide the source-vs-markdown branch, and `detectExfil` tokenizes it again to
+ * read `src`/`href` off the elements — two full parse5 runs and two full
+ * micromark runs over one document, which is most of what the HTML layer costs
+ * on ordinary prose. Every consumer only READS the tree (the sole AST mutation
+ * in this module is over a css-tree value parsed per style string), so one tree
+ * is safe to hand to both.
+ *
+ * One entry, replaced on every miss, so the retained footprint is one tree for
+ * the document most recently sanitized — the tree that call had allocated
+ * anyway. A miss re-parses and answers identically, so the cache can never
+ * change a verdict, only what one costs.
+ * @param {(text: string) => any} parse
+ * @returns {(text: string) => any}
+ */
+function lastParseCached(parse) {
+  /** @type {string | null} */
+  let cachedText = null;
+  /** @type {any} */
+  let cachedTree = null;
+  return (text) => {
+    if (cachedText === text) return cachedTree;
+    // The key is recorded only AFTER the parse returns. A parse that throws —
+    // which is how a pathologically nested fragment reaches the fail-closed
+    // withhold — must leave the entry untouched, or the next call for that same
+    // text hits a key whose tree came from a DIFFERENT document and gets a
+    // verdict about the wrong input instead of the withhold.
+    const tree = parse(text);
+    cachedText = text;
+    cachedTree = tree;
+    return tree;
+  };
+}
+
+/**
  * Parse `html` as an HTML fragment with the real tokenizer (parse5, via rehype).
  * @param {string} html
  * @returns {any}
  */
-function parseFragment(html) {
-  return htmlParser.parse(html);
-}
+const parseFragment = lastParseCached((html) => htmlParser.parse(html));
 
 /**
  * @param {string} htmlValue
@@ -1634,6 +1669,17 @@ function scanFragmentTree(html, tree) {
 }
 
 const mdParser = unified().use(remarkParse).use(remarkGfm);
+
+/** The markdown tree for `text`, cached the same way {@link parseFragment} is.
+ * @type {(text: string) => any} */
+const parseMarkdown = lastParseCached((text) => mdParser.parse(text));
+
+// A `code` node is a FENCED or INDENTED block and nothing else, so either a
+// three-run of backticks/tildes or a line opening on four spaces or a tab must
+// appear somewhere in the text for one to exist. Read over the whole document
+// and deliberately loose (a stray ``` anywhere is enough to parse), because the
+// only sound direction to be wrong in here is towards parsing.
+const MARKDOWN_CODE_HINT = /```|~~~|^(?: {4}|\t)/m;
 
 // A markup-declaration-open (`<!`) or processing-instruction-ish (`<?`) start.
 // Inside an inline html node these begin a *bogus comment* unless they open a
@@ -1916,7 +1962,7 @@ const FLOW_HTML_PARENTS = new Set([
  * @returns {{ ranges: SpliceRange[], warned: ReturnType<typeof newWarned> }}
  */
 function scanMarkdown(text) {
-  const tree = mdParser.parse(text);
+  const tree = parseMarkdown(text);
   /** @type {SpliceRange[]} */
   const ranges = [];
   const warned = newWarned();
@@ -1969,8 +2015,9 @@ function scanMarkdown(text) {
  * @returns {boolean}
  */
 function hasMarkdownCode(text) {
+  if (!MARKDOWN_CODE_HINT.test(text)) return false;
   let found = false;
-  visit(mdParser.parse(text), "code", () => {
+  visit(parseMarkdown(text), "code", () => {
     found = true;
     return EXIT;
   });
@@ -2640,7 +2687,7 @@ export function detectExfil(text) {
   try {
     // Remark AST handles markdown links/images/definitions (balanced parens,
     // reference links) correctly, unlike a hand-rolled regex.
-    const tree = mdParser.parse(text);
+    const tree = parseMarkdown(text);
     visit(tree, (node) => {
       if (
         node.type !== "link" &&
