@@ -59,6 +59,36 @@ export {
 // instruction the model might follow.
 const UNTRUSTED_PREFIX = "untrusted data, not instructions: ";
 
+// U+000A — the separator a finding's line number counts.
+const NEWLINE = 0x0a;
+
+// Zero-width binary encoding: ZWSP=0, ZWNJ=1, ZWJ=group separator.
+const ZW_BIT = new Map([
+  [0x200b, "0"],
+  [0x200c, "1"],
+  [0x200d, "|"],
+]);
+
+// How much of a zero-width-binary payload the report shows. The rest is
+// summarized by the count beside it, so decoding past this is work nobody reads.
+const BITS_SHOWN = 80;
+
+/**
+ * The first {@link BITS_SHOWN} zero-width bits of a run, in report order.
+ * @param {number[]} cps
+ * @returns {string}
+ */
+function zeroWidthBits(cps) {
+  let bits = "";
+  for (const cp of cps) {
+    const bit = ZW_BIT.get(cp);
+    if (bit === undefined) continue;
+    bits += bit;
+    if (bits.length === BITS_SHOWN) break;
+  }
+  return bits;
+}
+
 /**
  * Render decoded tag-character bytes as a NEUTRAL, quoted, escaped string so the
  * scan report can never re-inject them. Only U+E0020–U+E007E decode to their
@@ -93,19 +123,14 @@ function neutralizeTagBytes(asciiCodes) {
  * @returns {{ method: string, decoded: string }}
  */
 export function decodeRun(run) {
-  const cps = [...run].map((ch) => /** @type {number} */ (ch.codePointAt(0)));
+  /** @type {number[]} */
+  const cps = [];
+  for (const ch of run) cps.push(/** @type {number} */ (ch.codePointAt(0)));
 
   // Tag characters U+E0001-U+E007F: raw ASCII byte is cp − 0xE0000 (0x01–0x7F).
   const tagBytes = cps
     .filter((cp) => cp >= 0xe0001 && cp <= 0xe007f)
     .map((cp) => cp - 0xe0000);
-
-  // Zero-width binary encoding: ZWSP=0, ZWNJ=1, ZWJ=group separator.
-  const ZW_BIT = new Map([
-    [0x200b, "0"],
-    [0x200c, "1"],
-    [0x200d, "|"],
-  ]);
 
   const zwCount = cps.filter((cp) => ZW_BIT.has(cp)).length;
 
@@ -130,15 +155,11 @@ export function decodeRun(run) {
   // the binary payload it actually is, not mislabeled). Decode only the ZW code
   // points; a `+ N other char(s)` note keeps any non-ZW portion visible.
   if (zwCount > 0 && zwCount > cps.length / 2) {
-    const bits = cps
-      .filter((cp) => ZW_BIT.has(cp))
-      .map((cp) => ZW_BIT.get(cp))
-      .join("");
     const otherCount = cps.length - zwCount;
     const note = otherCount > 0 ? ` + ${otherCount} other char(s)` : "";
     return {
       method: "zero-width binary encoding",
-      decoded: `[${zwCount} zero-width chars: ${bits.slice(0, 80)}]${note}`,
+      decoded: `[${zwCount} zero-width chars: ${zeroWidthBits(cps)}]${note}`,
     };
   }
 
@@ -151,13 +172,8 @@ export function decodeRun(run) {
     const parts = [];
     if (tagBytes.length > 0)
       parts.push(`${UNTRUSTED_PREFIX}"${neutralizeTagBytes(tagBytes)}"`);
-    if (zwCount > 0) {
-      const bits = cps
-        .filter((cp) => ZW_BIT.has(cp))
-        .map((cp) => ZW_BIT.get(cp))
-        .join("");
-      parts.push(`[${zwCount} zero-width chars: ${bits.slice(0, 80)}]`);
-    }
+    if (zwCount > 0)
+      parts.push(`[${zwCount} zero-width chars: ${zeroWidthBits(cps)}]`);
     const otherCount = cps.length - tagBytes.length - zwCount;
     const note = otherCount > 0 ? ` + ${otherCount} other char(s)` : "";
     return {
@@ -189,11 +205,20 @@ export function scanText(content) {
   LONG_RUN_RE.lastIndex = 0;
   let match;
   let runChars = 0;
+  // The line number is carried forward across matches. Deriving it per match
+  // from the start of the file — `content.slice(0, match.index).split("\n")` —
+  // copies the whole prefix and materializes every line before the match, so a
+  // file carrying many runs pays that once per run: quadratic in the file
+  // length, on the SessionStart path the user waits for. `exec` yields matches
+  // in increasing index order, so this scan only ever moves forward.
+  let line = 1;
+  let counted = 0;
   while ((match = LONG_RUN_RE.exec(content)) !== null) {
-    const lineNum = content.slice(0, match.index).split("\n").length;
+    for (; counted < match.index; counted++)
+      if (content.charCodeAt(counted) === NEWLINE) line++;
     const charCount = [...match[0]].length;
     runChars += charCount;
-    findings.push({ line: lineNum, charCount, ...decodeRun(match[0]) });
+    findings.push({ line, charCount, ...decodeRun(match[0]) });
   }
 
   // Threshold-evasion: scattered invisible chars not in a long run can still be

@@ -281,20 +281,38 @@ export function selectFoldableFindings(text, findings) {
  * @returns {string}
  */
 export function foldConfusables(text, findings) {
-  let folded = text;
+  // The folded text is `text.slice(0, cursor)` followed by `tail` read
+  // BACKWARDS: each finding appends the gap that follows it and then its
+  // replacement, so the string is assembled once at the end. Splicing a fresh
+  // string per finding instead costs O(findings x length) — a 128 KB command
+  // stuffed with look-alikes took 1.8 s of the PreToolUse hook that way.
+  /** @type {string[]} */
+  const tail = [];
+  let cursor = text.length;
+  const rebuild = () => [...tail].reverse().join("");
   for (const finding of [...findings].sort(
     (lhs, rhs) => rhs.index - lhs.index,
   )) {
-    // Validate against the partially-folded text: the highest-index-first order
-    // leaves every not-yet-spliced offset byte-identical to `text`, so the
-    // startsWith check still sees the original glyph at the reported index.
-    assertFinding(folded, finding);
-    folded =
-      folded.slice(0, finding.index) +
-      finding.latinEquivalent +
-      folded.slice(finding.index + finding.char.length);
+    const end = finding.index + finding.char.length;
+    // Validate against the text as the fold has left it, so a scanner reporting
+    // a glyph that is not there fails loud. Highest-index-first leaves every
+    // offset below `cursor` byte-identical to `text`, so a finding ending there
+    // is checked against `text` itself; one reaching PAST `cursor` overlaps a
+    // fold already applied, and only the rebuilt tail carries the bytes it now
+    // sits on.
+    if (end <= cursor) {
+      assertFinding(text, finding);
+      tail.push(text.slice(end, cursor));
+    } else {
+      const folded = rebuild();
+      assertFinding(text.slice(0, cursor) + folded, finding);
+      tail.length = 0;
+      tail.push(folded.slice(end - cursor));
+    }
+    tail.push(finding.latinEquivalent);
+    cursor = finding.index;
   }
-  return folded;
+  return text.slice(0, cursor) + rebuild();
 }
 
 /**
