@@ -314,46 +314,60 @@ export { formatReport };
 
 /**
  * Scan every instruction file under the project, ACCOUNTING for every target
- * the finder returned: `scanned + skipped.length === targets.length`, always.
+ * the finder returned: `scanned + skipped.length + absent.length ===
+ * targets.length`, always.
  *
  * The accounting is the point. This scan is the only thing standing between a
  * poisoned `CLAUDE.md` and a session that loads it as instructions, and its
  * caller announces "clean" on the trace channel — the channel that exists so a
  * MISSING announcement is loud. A per-file failure swallowed into an empty
  * findings list turns "we could not read this file" into "this file is fine",
- * which is the one lie this hook must never tell. So a file that cannot be read
- * is REPORTED as unscanned, not dropped.
+ * which is the one lie this hook must never tell. So a file that EXISTS and
+ * cannot be read is REPORTED as unscanned, not dropped.
  *
- * ANY errno is a skip; only a non-filesystem throw propagates. The split is
- * between "this file could not be read" (report it and keep scanning) and "this
- * code is broken" (a TypeError from an unloaded binding — nothing here can be
- * trusted, so it goes to the caller's declared failure posture). Catching only
- * ENOENT would invert the enforcement: one EACCES target would discard the
- * result for EVERY other instruction file, leaving them unscanned and
- * un-auto-cleaned, and under the shipped OPEN posture the hook fault arms
+ * ENOENT is the one errno that is not such a file, so it goes to `absent`
+ * instead of `skipped`: the path resolves to nothing (a dangling symlink, or a
+ * file removed between the glob and the read), and Claude Code loads
+ * instruction files through the same open. An unresolvable path therefore
+ * carries no bytes that can reach the model, so calling it unvetted context
+ * names a risk that does not exist — and a gate that asks about a permanent
+ * dangling symlink on every session teaches the operator to dismiss it.
+ *
+ * Every other errno is a skip; only a non-filesystem throw propagates. The
+ * split is between "this file could not be read" (report it and keep scanning)
+ * and "this code is broken" (a TypeError from an unloaded binding — nothing
+ * here can be trusted, so it goes to the caller's declared failure posture).
+ * Catching only ENOENT would invert the enforcement: one EACCES target would
+ * discard the result for EVERY other instruction file, leaving them unscanned
+ * and un-auto-cleaned, and under the shipped OPEN posture the hook fault arms
  * nothing — so the SUSPICIOUS failure would get weaker enforcement than the
- * benign glob race, which reaches `partial` and arms the gate. Same errno-vs-bug
- * split {@link autoCleanFindings} uses.
+ * benign glob race. Same errno-vs-bug split {@link autoCleanFindings} uses.
  * @param {string} [dir]  project root to scan (injectable for tests)
  * @returns {{
  *   targets: string[],
  *   scanned: number,
  *   findings: Array<{file: string, findings: ReturnType<typeof scanFile>}>,
  *   skipped: Array<{file: string, reason: string}>,
+ *   absent: string[],
  * }}
  */
 export function scanProject(dir = PROJECT_DIR) {
   const targets = [...new Set(findInstructionFiles(dir))];
   const findings = [];
   const skipped = [];
+  const absent = [];
   let scanned = 0;
   for (const file of targets) {
     let fileFindings;
     try {
       fileFindings = scanFile(file);
     } catch (err) {
-      if (/** @type {NodeJS.ErrnoException} */ (err).code === undefined)
-        throw err;
+      const code = /** @type {NodeJS.ErrnoException} */ (err).code;
+      if (code === undefined) throw err;
+      if (code === "ENOENT") {
+        absent.push(relative(dir, file));
+        continue;
+      }
       // safeErrMessage, not errMessage: this reason is rendered into stderr and
       // into ALERT_FILE, and an errno message embeds the absolute path globbed
       // out of a possibly-hostile repo — a filename carrying ANSI or invisible
@@ -365,7 +379,7 @@ export function scanProject(dir = PROJECT_DIR) {
     if (fileFindings.length > 0)
       findings.push({ file: relative(dir, file), findings: fileFindings });
   }
-  return { targets, scanned, findings, skipped };
+  return { targets, scanned, findings, skipped, absent };
 }
 
 /**
@@ -380,10 +394,15 @@ export function formatSkipped(skipped) {
     "",
     "━━━ INSTRUCTION FILES NOT SCANNED ━━━",
     "",
-    "These files load as project instructions but could NOT be read, so they",
-    "were never checked for hidden Unicode. Treat their content as unvetted.",
+    "These files exist and load as project instructions, but this user could",
+    "not read them, so they were never checked for hidden Unicode. Treat their",
+    "content as unvetted.",
     "",
     ...skipped.map(({ file, reason }) => `  ${file}: ${reason}`),
+    "",
+    "To clear this, make each file readable to this user (fix its permissions",
+    "or owner), or delete it if it is not meant to be instructions. Then start",
+    "a new session, which re-runs the scan.",
     "",
   ].join("\n");
 }
@@ -497,27 +516,34 @@ async function runScanCli({ trace: sink = trace, scan: runScan }) {
     persistAlert(alertParts);
     return;
   }
-  const { findings: allFindings, skipped, scanned } = scan;
+  const { findings: allFindings, skipped, absent = [], scanned } = scan;
 
-  // "clean" is a claim about EVERY target, so it may only be made when every
-  // target was read. A scan that could not read one says "partial" and arms the
-  // gate: an unread instruction file is UNVETTED context, not absent findings.
+  // "clean" is a claim about every target that HAS content, so it may only be
+  // made when every such target was read. A scan that could not read one says
+  // "partial" and arms the gate: an unread instruction file is UNVETTED
+  // context, not absent findings. An `absent` target has no content to vet, so
+  // it is announced for the record and never reaches the gate.
   if (skipped.length > 0) {
     emitTrace(TraceEvent.SCAN_INVISIBLE_CHARS_RAN, {
       outcome: "partial",
       scanned,
       skipped: skipped.length,
+      absent: absent.length,
       files: allFindings.length,
     });
     const notice = formatSkipped(skipped);
     process.stderr.write(notice + "\n");
     alertParts.push(notice);
   } else if (allFindings.length === 0) {
-    emitTrace(TraceEvent.SCAN_INVISIBLE_CHARS_RAN, { outcome: "clean" });
+    emitTrace(TraceEvent.SCAN_INVISIBLE_CHARS_RAN, {
+      outcome: "clean",
+      absent: absent.length,
+    });
     return;
   } else {
     emitTrace(TraceEvent.SCAN_INVISIBLE_CHARS_RAN, {
       outcome: "found",
+      absent: absent.length,
       files: allFindings.length,
     });
   }

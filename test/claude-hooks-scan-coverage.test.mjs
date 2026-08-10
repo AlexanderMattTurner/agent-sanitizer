@@ -6,8 +6,12 @@
  * channel — the channel whose whole purpose is that a MISSING announcement is
  * loud. A per-file read error swallowed into an empty findings list turned "we
  * could not read this file" into "this file is fine", and the announcement said
- * clean. Every target the finder returned is therefore either SCANNED or listed
- * as SKIPPED, and a skip is never reported as cleanliness.
+ * clean. Every target the finder returned is therefore SCANNED, listed as
+ * SKIPPED, or listed as ABSENT, and a skip is never reported as cleanliness.
+ *
+ * The three-way split matters in the other direction too: a path that resolves
+ * to nothing has no content to vet, so calling it a coverage gap blocks the
+ * operator over a risk that does not exist.
  */
 import { describe, it, before, after } from "node:test";
 import assert from "node:assert/strict";
@@ -46,9 +50,18 @@ after(() => {
   rmSync(ALERT_FILE, { force: true });
 });
 
-/** A target the finder lists but nothing can read: a dangling symlink. */
+/** A target the finder lists that resolves to nothing: a dangling symlink. */
 function dangling(dir, name) {
   symlinkSync(join(dir, "no-such-target"), join(dir, name));
+}
+
+/**
+ * A target that EXISTS and cannot be read: a directory where a file belongs, so
+ * the read fails EISDIR. Root-proof, unlike a chmod-000 fixture — CI runs as
+ * uid 0, which reads a mode-000 file happily.
+ */
+function unreadable(dir, name) {
+  mkdirSync(join(dir, name));
 }
 
 /** The trace lines a run emitted, in order. */
@@ -61,44 +74,95 @@ function collector() {
 }
 
 describe("scanProject accounts for every target the finder returned", () => {
-  it("reports on found + skipped == the finder's list", () => {
+  it("reports on found + skipped + absent == the finder's list", () => {
     const dir = mkdtempSync(join(tmpdir(), "sanitizer-coverage-"));
     writeFileSync(join(dir, "AGENTS.md"), "plain, clean prose\n");
-    dangling(dir, "CLAUDE.md");
+    unreadable(dir, "CLAUDE.md");
+    dangling(dir, "CLAUDE.local.md");
     mkdirSync(join(dir, ".claude"));
     writeFileSync(join(dir, ".claude", "notes.md"), "also clean\n");
 
-    const { targets, scanned, findings, skipped } = scanProject(dir);
+    const { targets, scanned, findings, skipped, absent } = scanProject(dir);
     const expectedTargets = new Set(findInstructionFiles(dir));
     assert.equal(targets.length, expectedTargets.size);
     assert.ok(targets.length > 0, "the finder returned nothing to account for");
     // The invariant: nothing falls off the list.
-    assert.equal(scanned + skipped.length, targets.length);
+    assert.equal(scanned + skipped.length + absent.length, targets.length);
     assert.deepEqual(
       skipped.map((s) => s.file),
       ["CLAUDE.md"],
     );
+    // The dangling link resolves to nothing, so it is not unvetted CONTENT —
+    // it is accounted for without being reported as a coverage gap.
+    assert.deepEqual(absent, ["CLAUDE.local.md"]);
     assert.deepEqual(findings, []);
     rmSync(dir, { recursive: true, force: true });
   });
 
   it("holds when EVERY target is unreadable", () => {
     const dir = mkdtempSync(join(tmpdir(), "sanitizer-coverage-none-"));
-    dangling(dir, "CLAUDE.md");
-    dangling(dir, "AGENTS.md");
+    unreadable(dir, "CLAUDE.md");
+    unreadable(dir, "AGENTS.md");
 
-    const { targets, scanned, findings, skipped } = scanProject(dir);
+    const { targets, scanned, findings, skipped, absent } = scanProject(dir);
     assert.equal(targets.length, 2);
     assert.equal(scanned, 0);
     assert.deepEqual(findings, []);
+    assert.deepEqual(absent, []);
     assert.equal(skipped.length, targets.length);
     rmSync(dir, { recursive: true, force: true });
   });
 });
 
+describe("a target that resolves to nothing is not a coverage gap", () => {
+  // The false positive this bucket exists to kill: a dangling `.claude/*.md`
+  // symlink — routine in a dotfiles checkout — used to be reported as an
+  // instruction file "loaded but never checked for hidden Unicode", and it armed
+  // the blocking gate on every session. There are no bytes behind the path, so
+  // Claude Code cannot load it either: nothing reaches the model, and nothing is
+  // unvetted.
+  before(() => {
+    rmSync(join(projectDir, "CLAUDE.md"), { recursive: true, force: true });
+    writeFileSync(join(projectDir, "CLAUDE.md"), "nothing hidden here\n");
+    mkdirSync(join(projectDir, ".claude"), { recursive: true });
+    dangling(join(projectDir, ".claude"), "README.md");
+    rmSync(ALERT_FILE, { force: true });
+  });
+  after(() => {
+    rmSync(join(projectDir, ".claude"), { recursive: true, force: true });
+    rmSync(ALERT_FILE, { force: true });
+  });
+
+  it("announces clean and leaves the gate unarmed", async () => {
+    const { targets, scanned, skipped, absent } = scanProject(projectDir);
+    assert.deepEqual(absent, [join(".claude", "README.md")]);
+    assert.deepEqual(skipped, []);
+    assert.equal(scanned, targets.length - 1);
+
+    const { lines, sink } = collector();
+    await cliMain({ trace: sink });
+    const announced = lines.filter(
+      (l) => l.event === "scan_invisible_chars_ran",
+    );
+    assert.deepEqual(
+      announced.map((l) => l.outcome),
+      ["clean"],
+    );
+    // Announced for the record, so a real disappearing-file race is still
+    // visible on the trace channel — just not as an operator-facing block.
+    assert.equal(announced[0].absent, 1);
+    assert.equal(
+      existsSync(ALERT_FILE),
+      false,
+      "a dangling symlink armed the blocking gate",
+    );
+  });
+});
+
 describe("a scan that could not read a target never announces clean", () => {
   before(() => {
-    dangling(projectDir, "CLAUDE.md");
+    rmSync(join(projectDir, "CLAUDE.md"), { recursive: true, force: true });
+    unreadable(projectDir, "CLAUDE.md");
     rmSync(ALERT_FILE, { force: true });
   });
   after(() => rmSync(ALERT_FILE, { force: true }));
@@ -134,7 +198,7 @@ describe("a fully readable project still announces clean", () => {
   before(() => {
     // PROJECT_DIR resolved at module load, so the control has to repair the
     // project the previous describe sabotaged rather than point somewhere else.
-    rmSync(join(projectDir, "CLAUDE.md"), { force: true });
+    rmSync(join(projectDir, "CLAUDE.md"), { recursive: true, force: true });
     writeFileSync(join(projectDir, "CLAUDE.md"), "nothing hidden here\n");
     rmSync(ALERT_FILE, { force: true });
   });
