@@ -8,6 +8,14 @@ adhere to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+## [2.34.0] - 2026-08-10
+
+### Added
+- New `AGENT_SANITIZER_DISABLED_HOOKS` environment variable to selectively disable individual sanitizer hooks.
+
+### Changed
+- Plugin description in README is now sourced directly from plugin.json for consistency.
+
 ## [2.33.1] - 2026-08-10
 
 ### Changed
