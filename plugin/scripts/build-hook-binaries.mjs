@@ -21,6 +21,7 @@
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
+  copyFileSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
@@ -192,16 +193,25 @@ export function manifestIsCurrent() {
   );
 }
 
+/** The name the compile input is given inside `outdir` — see compileBinaries. */
+const COMPILE_INPUT = "plugin-hooks.bundle.mjs";
+
 /**
  * Compile every platform's binary into `outdir` under its release-asset name
- * and return the per-platform digests. cwd is `outdir` and the outfile is the
- * bare asset name because bun embeds the outfile string as given — a path in
- * it would make the digest depend on where the build ran.
+ * and return the per-platform digests.
+ *
+ * cwd is `outdir`, and BOTH the input and the outfile are bare names, because
+ * bun embeds each path string exactly as given. An absolute input path is what
+ * makes a build reproduce only on the machine that ran it — this repo's
+ * checkout lives at a different absolute path than CI's, so the digests would
+ * never agree. Copying the bundle in and naming it relatively is what makes
+ * the committed manifest verifiable anywhere.
  * @param {string} outdir
  * @returns {Record<string, string>}
  */
 export function compileBinaries(outdir) {
   mkdirSync(outdir, { recursive: true });
+  copyFileSync(BUNDLE_PATH, join(outdir, COMPILE_INPUT));
   const digests = /** @type {Record<string, string>} */ ({});
   for (const [platform, target] of Object.entries(PLATFORMS)) {
     const asset = `${ASSET_PREFIX}${platform}`;
@@ -211,7 +221,7 @@ export function compileBinaries(outdir) {
         "build",
         "--compile",
         `--target=${target}`,
-        BUNDLE_PATH,
+        COMPILE_INPUT,
         "--outfile",
         asset,
       ],

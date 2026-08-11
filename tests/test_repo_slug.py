@@ -71,6 +71,10 @@ PLACEHOLDER_SLUGS = {
     "org/repo": "documentation stand-in",
     "owner/repo": "documentation stand-in",
     "owner/downstream-repo": "template-sync documentation stand-in",
+    "example-owner/example-repo": (
+        "the hook-binary provisioner test's fake release host — naming the real "
+        "slug there would let a stubbed download pass for the wrong reason"
+    ),
 }
 
 #: github.com paths whose first two segments are not an owner/repo pair.
