@@ -8,6 +8,12 @@ adhere to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+## [2.34.14] - 2026-08-11
+
+### Changed
+
+- Hooks now load Decision and EventKind from the /contract subpath, improving performance.
+
 ## [2.34.13] - 2026-08-11
 
 ### Added
