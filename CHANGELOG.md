@@ -8,6 +8,16 @@ adhere to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+## [2.35.0] - 2026-08-11
+
+### Added
+- Hook binaries can now run on a bun-compiled binary when the host environment has no Node.js available.
+
+### Fixed
+- Closed a time-of-check-time-of-use (TOCTOU) vulnerability in the hook-binary download process.
+- Hook binaries now compile reproducibly regardless of the checkout path.
+- Hardened the hook-binary provisioner and its release build process.
+
 ## [2.34.14] - 2026-08-11
 
 ### Changed

@@ -2,7 +2,7 @@
   "$schema": "https://json.schemastore.org/claude-code-plugin-manifest.json",
   "name": "agent-sanitizer",
   "displayName": "Agent Sanitizer",
-  "version": "2.34.15",
+  "version": "2.35.0",
   "description": "Four hooks over everything crossing a Claude Code session. SessionStart scans CLAUDE.md, AGENTS.md and the .claude/ context files for hidden-Unicode payloads and cleans what it can. UserPromptSubmit blocks prompts carrying payload-capable invisible Unicode or ANSI escapes. PreToolUse normalizes confusable paths and commands and strips stego and terminal-control sequences from model-authored content. PostToolUse strips invisibles and ANSI, splices hidden HTML out of web and MCP output, and flags exfil-shaped URLs. Secret redaction via detect-secrets is opt-in (AGENT_SANITIZER_SECRETS_ENABLED=1). A hook that cannot run passes the guarded action through with a loud warning by default; AGENT_SANITIZER_FAIL_OPEN=0 makes it block instead, and AGENT_SANITIZER_DISABLED_HOOKS turns individual hooks off. All local and deterministic: no inference key is read and no request leaves the machine.",
   "author": {
     "name": "Alexander Matt Turner",
