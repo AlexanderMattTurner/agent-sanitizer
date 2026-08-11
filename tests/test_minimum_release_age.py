@@ -127,37 +127,40 @@ def test_every_exemption_names_a_version_we_actually_pin(
 # maintainer account we do not control, so for these it delays adopting a fix we
 # just shipped and buys nothing. Every other package stays behind the window.
 #
+# Approved exemptions, one entry per VERSION. A bare package name here would
+# pre-approve every future release of it, which is the takeover the window
+# covers: bump the pin, add a config line, install a release minutes old. Naming
+# the version means each new one is a code edit a reviewer sees.
+#
 # `agent-control-plane-core` is the guardrail contract the Claude hooks load on
 # every gated tool call. Its own repo publishes it through the same auto-version
 # and provenance path this repo uses.
-FIRST_PARTY_PACKAGES = frozenset({"agent-control-plane-core"})
+FIRST_PARTY_EXEMPTIONS = frozenset({"agent-control-plane-core@0.3.0"})
 
 
 @pytest.mark.drift_guard
-def test_only_first_party_packages_are_exempt(
+def test_every_exemption_is_an_approved_first_party_version(
     workspace: dict, package_json: dict
 ) -> None:
-    """Exempting a third party is a decision, not a config tweak.
+    """Exempting a package is a decision, not a config tweak.
 
     A first-party release is built and published from a repository we control
-    with npm provenance, so waiting three days to depend on it buys nothing. A
-    third-party exemption is the opposite: it reopens exactly the window this
-    setting exists to close, so it must fail here and be argued for explicitly.
+    with npm provenance, so waiting three days to depend on it buys nothing.
+    Any other exemption reopens exactly the window this setting exists to close,
+    so it must fail here and be argued for explicitly.
     """
-    exempt_by_policy = FIRST_PARTY_PACKAGES | {package_json["name"]}
-    foreign = sorted(
-        {
-            _split_spec(entry)[0]
-            for entry in workspace.get("minimumReleaseAgeExclude") or []
-        }
-        - exempt_by_policy
+    own = package_json["name"]
+    unapproved = sorted(
+        entry
+        for entry in workspace.get("minimumReleaseAgeExclude") or []
+        if entry not in FIRST_PARTY_EXEMPTIONS and _split_spec(entry)[0] != own
     )
-    assert not foreign, (
-        f"`minimumReleaseAgeExclude` exempts third-party package(s) {foreign} "
-        f"from the release-age window. Only {sorted(exempt_by_policy)} — each "
-        f"published by a repository we control — is exempt by policy. If a "
-        f"third-party exemption is genuinely needed, add it to "
-        f"FIRST_PARTY_PACKAGES in the same commit and say why."
+    assert not unapproved, (
+        f"`minimumReleaseAgeExclude` carries unapproved exemption(s) "
+        f"{unapproved}. Only {sorted(FIRST_PARTY_EXEMPTIONS)} and this repo's "
+        f"own {own!r} are exempt by policy. A version bump needs its new "
+        f"`name@version` added to FIRST_PARTY_EXEMPTIONS in the same commit, "
+        f"with a reason."
     )
 
 
