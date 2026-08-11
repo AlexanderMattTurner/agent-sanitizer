@@ -30,8 +30,9 @@ set -uo pipefail
 
 script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 
-# The launcher's own preflight — the node search and the daemon resolution
-# below — runs on EVERY hook invocation, ahead of the hook that could time it. So it
+# The launcher's own preflight — the runtime resolution (provisioned binary or
+# node search) and the daemon resolution below — runs on EVERY hook
+# invocation, ahead of the hook that could time it. So it
 # times itself, against the same budget and with the same wording as the node
 # hooks (see lib/hook-timing.sh). A missing timing lib disables the measurement
 # and says so: the launcher's job is to keep the sanitizer running, and losing a
@@ -252,10 +253,88 @@ emit_degraded() {
   esac
 }
 
-# Checked before anything else, so a node-less host reaches the degraded verdict
-# rather than dying on a missing utility. Not a bare `command -v node`: see
-# lib/node-resolve.sh for the hosts that answers nothing for, every one of which
-# would otherwise run unguarded. AGENT_SANITIZER_NODE overrides the search.
+plugin_root="$(cd -- "$script_dir/.." && pwd)"
+bundle="$plugin_root/dist/hooks/plugin-hooks.bundle.mjs"
+
+# Daemon resolution order (matching the client's): an explicit
+# _AGENT_SANITIZER_REDACTOR_DAEMON wins (tests point it at dead paths to drive
+# the fail-closed arm — a fallback from an explicit setting would turn those
+# arms into silent passes); else prefer the venv the SessionStart provisioner
+# built, when it exists (faster cold start than the zipapp's self-extract);
+# else the client falls back to the committed dist/redactor/daemon.pyz, which
+# needs only python3 — so a session with no venv and no network still redacts.
+# Resolved ahead of BOTH runtimes: the compiled binary's hooks call the daemon
+# exactly as the bundle's do.
+venv_daemon="${CLAUDE_PLUGIN_DATA:-}/venv/bin/agent-secret-redactor-daemon"
+if [[ -z "${_AGENT_SANITIZER_REDACTOR_DAEMON:-}" && -x "$venv_daemon" ]]; then
+  export _AGENT_SANITIZER_REDACTOR_DAEMON="$venv_daemon"
+fi
+
+# The post-condition's shape check, shared by both runtimes below: a verdict is
+# a single JSON object, so the test is `{`…`}` over the trimmed bytes, done
+# with shell builtins alone. "Something was written" is not the same question —
+# a dependency's deprecation notice on stdout, or a verdict truncated
+# mid-write, leaves bytes Claude Code cannot parse, which it reads as a
+# non-blocking hook error and runs the guarded tool with no trace.
+reached_a_verdict() {
+  local bytes="$1"
+  bytes="${bytes#"${bytes%%[![:space:]]*}"}"
+  bytes="${bytes%"${bytes##*[![:space:]]}"}"
+  [[ "$bytes" == "{"*"}" ]]
+}
+
+payload_file=""
+bin_stdout_file=""
+stdout_file=""
+trap 'rm -f "$payload_file" "$bin_stdout_file" "$stdout_file"' EXIT
+
+# The provisioned self-contained binary carries its own runtime, so while it
+# answers, the node search below never runs — the hosts where that search finds
+# nothing are its whole point. It is preferred whenever present, which is what
+# makes the provisioner's refresh and its =1 knob mean anything.
+hook_binary="${CLAUDE_PLUGIN_DATA:-}/hook-binary/agent-sanitizer-hooks"
+if [[ "${AGENT_SANITIZER_HOOK_BINARY:-}" != "0" && -n "${CLAUDE_PLUGIN_DATA:-}" && -f "$hook_binary" && -x "$hook_binary" ]]; then
+  payload_file="$(mktemp 2>/dev/null)"
+  bin_stdout_file="$(mktemp 2>/dev/null)"
+fi
+# BOTH temp files or neither. A payload_file that outlives a failed
+# bin_stdout_file mktemp would later redirect the bundle's stdin from an EMPTY
+# capture, and the hook would judge "" instead of the real payload; with
+# neither, the binary is skipped so nothing consumes the stdin it cannot replay.
+if [[ -n "$payload_file" && -z "$bin_stdout_file" ]]; then
+  rm -f "$payload_file"
+  payload_file=""
+fi
+if [[ -n "$payload_file" && -n "$bin_stdout_file" ]]; then
+  cat >"$payload_file"
+  report_launch_timing
+  "$hook_binary" ${@+"$@"} <"$payload_file" >"$bin_stdout_file"
+  bin_rc=$?
+  # Exit 2 is a DECISION, not a fault — the dispatcher's declared block for
+  # static wiring corruption. It goes through with whatever it wrote, exactly
+  # as on the node arm below.
+  bin_stdout="$(cat "$bin_stdout_file")"
+  if [[ "$bin_rc" -eq 2 ]]; then
+    printf '%s' "$bin_stdout"
+    exit 2
+  fi
+  # A clean exit (silent or not), or a verdict despite a non-zero exit (the
+  # advisory-exit case the node arm honors), is an answer: forward it.
+  if [[ "$bin_rc" -eq 0 ]] || reached_a_verdict "$bin_stdout"; then
+    printf '%s' "$bin_stdout"
+    exit 0
+  fi
+  # No verdict came back. The binary is one provisioned artifact on one host,
+  # and a node that can still run the bundle keeps the session sanitized: fall
+  # through to the search below, replaying the captured payload.
+  echo "agent-sanitizer: hook binary exited $bin_rc without reaching a verdict: $hook_binary — trying the node runtime (delete that file and start a new session to re-provision it)" >&2
+fi
+
+# Checked before the bundle runs, so a node-less host reaches the degraded
+# verdict rather than dying on a missing utility. Not a bare `command -v node`:
+# see lib/node-resolve.sh for the hosts that answers nothing for, every one of
+# which would otherwise run unguarded. AGENT_SANITIZER_NODE overrides the
+# search.
 node_bin="$(agent_sanitizer_resolve_node)"
 if [[ -z "$node_bin" ]]; then
   echo "agent-sanitizer: no node found on PATH or in any known version-manager install — sanitization cannot run (set AGENT_SANITIZER_NODE to its path)" >&2
@@ -269,21 +348,6 @@ if [[ -n "${AGENT_SANITIZER_NODE:-}" && ! -x "$node_bin" ]]; then
   echo "agent-sanitizer: AGENT_SANITIZER_NODE=$node_bin is not an executable — sanitization cannot run" >&2
   emit_degraded "sanitizer plugin: AGENT_SANITIZER_NODE points at $node_bin, which is not an executable file; verdict unavailable."
   exit 0
-fi
-
-plugin_root="$(cd -- "$script_dir/.." && pwd)"
-bundle="$plugin_root/dist/hooks/plugin-hooks.bundle.mjs"
-
-# Daemon resolution order (matching the client's): an explicit
-# _AGENT_SANITIZER_REDACTOR_DAEMON wins (tests point it at dead paths to drive
-# the fail-closed arm — a fallback from an explicit setting would turn those
-# arms into silent passes); else prefer the venv the SessionStart provisioner
-# built, when it exists (faster cold start than the zipapp's self-extract);
-# else the client falls back to the committed dist/redactor/daemon.pyz, which
-# needs only python3 — so a session with no venv and no network still redacts.
-venv_daemon="${CLAUDE_PLUGIN_DATA:-}/venv/bin/agent-secret-redactor-daemon"
-if [[ -z "${_AGENT_SANITIZER_REDACTOR_DAEMON:-}" && -x "$venv_daemon" ]]; then
-  export _AGENT_SANITIZER_REDACTOR_DAEMON="$venv_daemon"
 fi
 
 # The bundle runs as a CHILD, not an `exec`, so this shim keeps control long
@@ -321,9 +385,16 @@ report_launch_timing
 
 stdout_file="$(mktemp 2>/dev/null)"
 bundle_out=""
-if [[ -n "$stdout_file" ]]; then
-  trap 'rm -f "$stdout_file"' EXIT
+# When the binary arm above consumed stdin, the bundle reads the captured
+# payload instead; otherwise stdin streams through untouched.
+if [[ -n "$stdout_file" && -n "$payload_file" ]]; then
+  "$node_bin" "$bundle" ${@+"$@"} <"$payload_file" >"$stdout_file"
+  bundle_rc=$?
+elif [[ -n "$stdout_file" ]]; then
   "$node_bin" "$bundle" ${@+"$@"} >"$stdout_file"
+  bundle_rc=$?
+elif [[ -n "$payload_file" ]]; then
+  bundle_out="$("$node_bin" "$bundle" ${@+"$@"} <"$payload_file")"
   bundle_rc=$?
 else
   # mktemp unavailable (a broken TMPDIR): still gate on the post-condition, at
@@ -352,24 +423,16 @@ if [[ "$bundle_rc" -eq 2 ]]; then
   exit 2
 fi
 
-# The post-condition: did a VERDICT come back? "Something was written" is not
-# the same question — a bundle that exits non-zero after a dependency printed a
-# deprecation notice on stdout, or after a write was interrupted mid-JSON, left
-# bytes Claude Code cannot parse, so it reads a non-blocking hook error and runs
-# the guarded tool with no trace. That is the same silent fail-open this gate
-# exists to close, reached through content instead of emptiness. A verdict is a
-# single JSON object, so the shape check is `{`…`}` over the trimmed bytes,
-# done with shell builtins alone.
+# The post-condition: did a VERDICT come back? See reached_a_verdict above for
+# why "something was written" is not the same question.
 verdict_bytes=""
 if [[ -n "$stdout_file" ]]; then
   verdict_bytes="$(cat "$stdout_file")"
 else
   verdict_bytes="$bundle_out"
 fi
-verdict_bytes="${verdict_bytes#"${verdict_bytes%%[![:space:]]*}"}"
-verdict_bytes="${verdict_bytes%"${verdict_bytes##*[![:space:]]}"}"
 bundle_reached_a_verdict=0
-[[ "$verdict_bytes" == "{"*"}" ]] && bundle_reached_a_verdict=1
+reached_a_verdict "$verdict_bytes" && bundle_reached_a_verdict=1
 if [[ "$bundle_rc" -ne 0 && "$bundle_reached_a_verdict" -eq 0 ]]; then
   echo "agent-sanitizer: hook bundle exited $bundle_rc without reaching a verdict: $bundle" >&2
   # A node below the floor the bundle is built for dies before it can answer, and

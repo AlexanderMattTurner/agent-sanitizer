@@ -70,11 +70,13 @@ slow_hook_notice() {
 
 # The line for a ONE-TIME provisioning step that overran its (much larger)
 # budget, or nothing when it did not. $1 step name, $2 elapsed ms, $3 threshold
-# ms (optional).
+# ms (optional), $4 step-specific speedup advice (optional — the default fits
+# the engine install, not a download).
 slow_provision_notice() {
   local name="$1" elapsed="$2" threshold="${3:-$SLOW_PROVISION_THRESHOLD_MS}"
+  local advice="${4:-Installing uv makes it faster}"
   ((elapsed > threshold)) || return 0
-  printf '%s' "agent-sanitizer PERFORMANCE: one-time setup (${name}) took $(hook_timing_format_seconds "$elapsed")s, over its $(hook_timing_format_seconds "$threshold")s budget — this is paid once per install, not per tool call, so the session is not slow from here on. Installing uv makes it faster; if it happens on EVERY new session, report it at ${HOOK_TIMING_ISSUE_URL}."
+  printf '%s' "agent-sanitizer PERFORMANCE: one-time setup (${name}) took $(hook_timing_format_seconds "$elapsed")s, over its $(hook_timing_format_seconds "$threshold")s budget — this is paid once per install, not per tool call, so the session is not slow from here on. ${advice}; if it happens on EVERY new session, report it at ${HOOK_TIMING_ISSUE_URL}."
 }
 
 # Report an overrun on stderr, or say nothing. stderr and not stdout: a hook's
@@ -88,10 +90,11 @@ report_slow_hook() {
   return 0
 }
 
-# report_slow_hook for a one-time provisioning step. $1 step name, $2 start.
+# report_slow_hook for a one-time provisioning step. $1 step name, $2 start,
+# $3 step-specific speedup advice (optional).
 report_slow_provision() {
   local notice
-  notice="$(slow_provision_notice "$1" "$(hook_timing_elapsed_ms "$2")")"
+  notice="$(slow_provision_notice "$1" "$(hook_timing_elapsed_ms "$2")" "" "${3:-}")"
   [[ -n "$notice" ]] && printf '%s\n' "$notice" >&2
   return 0
 }

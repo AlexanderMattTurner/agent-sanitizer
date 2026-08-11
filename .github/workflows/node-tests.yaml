@@ -110,7 +110,9 @@ jobs:
   # the engine itself never executed.
   live-engine:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    # Covers the four-target `bun build --compile` in the digest round-trip
+    # below, whose cross-target runtimes download on a cold cache.
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
@@ -135,6 +137,13 @@ jobs:
         run: |
           node plugin/scripts/build-redactor-pyz.mjs
           git diff --exit-code plugin/dist/redactor
+
+      # Same reasoning as the zipapp: the digest round-trip lives here rather
+      # than in the default suite because compiling needs the network (bun
+      # downloads its cross-target runtimes); the network-free suite checks the
+      # committed manifest's shape and freshness without compiling.
+      - name: Rebuild the hook binaries and compare digests
+        run: node plugin/scripts/build-hook-binaries.mjs --check
 
   # Ungated on purpose: a dist-only PR is exactly the case this catches, so it
   # must not sit behind a paths filter that such a PR would miss.

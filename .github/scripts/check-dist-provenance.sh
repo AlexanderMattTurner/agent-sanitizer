@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # The committed plugin bundle may only move when one of its BUILD INPUTS moves.
 # The first-party inputs are the source trees the artifacts compile from — src/
-# for the JS bundle, python/ for the wheel and zipapp — plus the locked
-# dependency inputs below. Omitting src/ or python/ makes the check fire on every
+# for the JS bundle, python/ for the wheel and zipapp, and for the hook-binary
+# digest manifest the bundle itself plus the bun pin in package.json — plus the
+# locked dependency inputs below. Omitting src/ or python/ makes the check fire on every
 # honest source-only change, which regenerates the artifact with no lockfile diff.
 #
 # The reproducibility test already refuses a bundle that differs from a fresh
@@ -45,6 +46,7 @@ if [[ "$dist_changed" == true && "$input_changed" == false ]]; then
   echo "means the artifact was edited by hand or carried over from another branch. Rebuild with:" >&2
   echo "  node plugin/scripts/build-plugin.mjs        # JS bundle + requirements.in" >&2
   echo "  node plugin/scripts/build-redactor-pyz.mjs  # zipapp, from the committed lock" >&2
+  echo "  node plugin/scripts/build-hook-binaries.mjs # hook-binary digest manifest" >&2
   git diff --stat "$base_ref"...HEAD -- plugin/dist >&2
   exit 1
 fi

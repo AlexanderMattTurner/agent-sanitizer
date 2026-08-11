@@ -22,6 +22,7 @@ import {
   symlinkSync,
   writeFileSync,
 } from "node:fs";
+import { createHash } from "node:crypto";
 import { isBuiltin } from "node:module";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -35,6 +36,13 @@ import {
   packageDirs,
   redactorRequirements,
 } from "../scripts/build-plugin.mjs";
+import {
+  MANIFEST_PATH,
+  PLATFORMS,
+  installedBunVersion,
+  parseManifest,
+  repositorySlug,
+} from "../scripts/build-hook-binaries.mjs";
 import {
   bundleTarget,
   runtimeRequires,
@@ -110,6 +118,12 @@ function baseEnv() {
   delete env.AGENT_SANITIZER_FAIL_OPEN;
   delete env.AGENT_SANITIZER_NODE;
   delete env.AGENT_SANITIZER_REPEAT_DEGRADED_CONTEXT;
+  // A developer running this suite inside a session that has provisioned the
+  // real hook binary would otherwise hand every staged launcher a live
+  // CLAUDE_PLUGIN_DATA — and the bundle-breakage tests would go vacuous, with
+  // the binary answering for the bundle each test just corrupted.
+  delete env.CLAUDE_PLUGIN_DATA;
+  delete env.AGENT_SANITIZER_HOOK_BINARY;
   // The launcher's node search reads a version manager's own env var in
   // preference to its default location under $HOME, so a runner that exports
   // one (GitHub's images export NVM_DIR) would send the search somewhere other
@@ -276,16 +290,20 @@ function stubBin(t, omit) {
   // mkdir/rmdir/find are here so a stripped PATH still models the real one for
   // the launcher's degraded-warning marker; without them that state is
   // unrecordable and every warning repeats, which would pass a dedupe test
-  // vacuously.
+  // vacuously. cat/mktemp/rm likewise: the binary arm captures stdin to temp
+  // files so it can replay the payload to the node path.
   for (const cmd of [
     "bash",
     "sh",
     "dirname",
+    "cat",
     "cmp",
     "cp",
     "head",
+    "mktemp",
     "pwd",
     "mkdir",
+    "rm",
     "rmdir",
     "find",
   ]) {
@@ -323,6 +341,7 @@ test("the shipped artifacts are tracked by git, not just present on disk", () =>
     .filter(Boolean);
   for (const required of [
     "plugin/dist/hooks/plugin-hooks.bundle.mjs",
+    "plugin/dist/hooks/hook-binaries.sha256",
     "plugin/dist/redactor/daemon.pyz",
     `plugin/dist/redactor/${ENGINE_WHEEL}`,
     "plugin/requirements.in",
@@ -336,6 +355,40 @@ test("the shipped artifacts are tracked by git, not just present on disk", () =>
 
 test("committed bundle matches a fresh build from this tree", async () => {
   assert.equal(readFileSync(BUNDLE_PATH, "utf-8"), await bundlePluginHook());
+});
+
+// The compiled hook binaries are release assets, not committed files (~100 MB
+// each), so what the offline suite CAN gate is the committed digest manifest:
+// it must describe THIS bundle and THIS bun pin, which is what makes the
+// deterministic rebuild elsewhere byte-comparable. The compile-and-compare
+// round trip itself (`build-hook-binaries.mjs --check`) runs in CI's
+// live-engine job, which has the network bun's cross-target runtimes need.
+test("committed hook-binary manifest is fresh for this tree", () => {
+  const manifest = parseManifest(readFileSync(MANIFEST_PATH, "utf-8"));
+  assert.equal(
+    manifest.bundle,
+    createHash("sha256").update(readFileSync(BUNDLE_PATH)).digest("hex"),
+    "hook-binaries.sha256 pins binaries compiled from a DIFFERENT bundle; regenerate with `pnpm gen:hook-binaries`",
+  );
+  assert.equal(
+    manifest.bun,
+    installedBunVersion(),
+    "hook-binaries.sha256 was compiled with a different bun than the pinned one; regenerate with `pnpm gen:hook-binaries`",
+  );
+  // The provisioner downloads from this slug's releases, so a fork that
+  // repoints package.json's repository.url must regenerate the manifest too —
+  // otherwise its users fetch (and reject, on digest) the upstream's binaries.
+  assert.equal(manifest.repository, repositorySlug());
+});
+
+test("hook-binary manifest carries a full digest for every supported platform", () => {
+  const manifest = parseManifest(readFileSync(MANIFEST_PATH, "utf-8"));
+  assert.deepEqual(
+    Object.keys(manifest.digests).sort(),
+    Object.keys(PLATFORMS).sort(),
+  );
+  for (const [platform, digest] of Object.entries(manifest.digests))
+    assert.match(digest, /^[0-9a-f]{64}$/, `bad digest for ${platform}`);
 });
 
 test("committed requirements.in matches the secrets extra", () => {
@@ -509,6 +562,15 @@ test("hooks.json wires exactly the four modes, each through the launcher", () =>
   // the no-venv cold-start hole the zipapp exists to close.
   for (const command of commands)
     assert.doesNotMatch(command, /_AGENT_SANITIZER_REDACTOR_DAEMON=/);
+  // The binary provisioner must be WIRED, not merely shipped: a SessionStart
+  // entry is the only thing that ever runs it, and without one the node
+  // dependency is quietly back in force on exactly the hosts it exists for.
+  assert.ok(
+    manifest.hooks.SessionStart.flatMap((entry) => entry.hooks).some((h) =>
+      h.command.includes("provision-hook-binary.sh"),
+    ),
+    "hooks.json has no SessionStart entry for provision-hook-binary.sh",
+  );
 });
 
 test("every wired mode is dispatchable (no unknown-mode fail-closed)", (t) => {
@@ -990,6 +1052,194 @@ test("launcher fails OPEN when node is absent from PATH", (t) => {
   // Giving up enforcement is not giving up visibility — that is the whole
   // difference between this and the harness's own silent non-blocking error.
   assert.match(res.stderr, /failing open/);
+});
+
+// ─── Launcher: the provisioned self-contained binary ─────────────────────────
+
+/**
+ * A provisioned hook binary in a scratch CLAUDE_PLUGIN_DATA. Any executable
+ * will do: the launcher's contract with the binary is the same post-condition
+ * it holds the bundle to, and a real `bun build --compile` would cost ~100 MB
+ * per staged test. Returns the dir to pass as CLAUDE_PLUGIN_DATA.
+ */
+function stageHookBinary(t, body, { mode = 0o755 } = {}) {
+  const data = scratch(t);
+  const dir = join(data, "hook-binary");
+  mkdirSync(dir, { recursive: true });
+  const bin = join(dir, "agent-sanitizer-hooks");
+  writeFileSync(bin, `#!/bin/sh\n${body}\n`);
+  chmodSync(bin, mode);
+  return data;
+}
+
+test("a provisioned binary answers with no node anywhere on the host", (t) => {
+  // The acceptance case of the whole binary path: a launchd/cron-shaped session
+  // (PATH without node, no version-manager installs) still gets a verdict, not
+  // a degraded warning.
+  const res = launchWithoutNode(t, stagePlugin(t), {
+    CLAUDE_PLUGIN_DATA: stageHookBinary(
+      t,
+      `printf '{"hookSpecificOutput":{"hookEventName":"PreToolUse"}}'`,
+    ),
+  });
+  assert.equal(res.status, 0, res.stderr);
+  assert.equal(
+    JSON.parse(res.stdout).hookSpecificOutput.hookEventName,
+    "PreToolUse",
+  );
+  assert.doesNotMatch(res.stderr, /failing open/);
+});
+
+test("a provisioned binary answers even when node IS available", (t) => {
+  // The launcher PREFERS the binary once it is present — which is the whole
+  // reason the provisioner refreshes it on hosts whose node search succeeds,
+  // and the reason AGENT_SANITIZER_HOOK_BINARY=1 does anything. Without a
+  // both-present case, gating the binary arm on "no node found" would pass
+  // every other launcher test in this file.
+  const nodeDir = join(scratch(t), "node-bin");
+  fakeNode(nodeDir, `cat >/dev/null; printf '{"fromNode":true}'`);
+  const res = spawnSync(
+    "bash",
+    [
+      join(stagePlugin(t), "scripts", "safe-launch.sh"),
+      "PreToolUse",
+      "--hook=pretooluse-sanitize",
+    ],
+    {
+      input: "{}",
+      encoding: "utf8",
+      cwd: tmpdir(),
+      env: {
+        ...baseEnv(),
+        ...sessionEnv(),
+        PATH: `${nodeDir}:${stubBin(t, ["node"])}`,
+        _AGENT_SANITIZER_NODE_SEARCH: "0",
+        CLAUDE_PLUGIN_DATA: stageHookBinary(
+          t,
+          `cat >/dev/null; printf '{"fromBinary":true}'`,
+        ),
+      },
+    },
+  );
+  assert.equal(res.status, 0, res.stderr);
+  assert.deepEqual(JSON.parse(res.stdout), { fromBinary: true });
+});
+
+test("the binary receives the same argv and payload the bundle would", (t) => {
+  const data = stageHookBinary(
+    t,
+    `printf '{"argv":"%s","payload":%s}' "$1" "$(cat)"`,
+  );
+  const res = launchWithoutNode(t, stagePlugin(t), {
+    CLAUDE_PLUGIN_DATA: data,
+  });
+  assert.equal(res.status, 0, res.stderr);
+  // launchWithoutNode pipes `{}` as the payload.
+  assert.deepEqual(JSON.parse(res.stdout), {
+    argv: "--hook=pretooluse-sanitize",
+    payload: {},
+  });
+});
+
+test("AGENT_SANITIZER_HOOK_BINARY=0 leaves the binary unused", (t) => {
+  const res = launchWithoutNode(t, stagePlugin(t), {
+    CLAUDE_PLUGIN_DATA: stageHookBinary(t, `printf '{"fromBinary":true}'`),
+    AGENT_SANITIZER_HOOK_BINARY: "0",
+  });
+  // With the knob off and no node, the launcher degrades exactly as if the
+  // binary were never provisioned — proving the opt-out really opts out.
+  assert.equal(res.status, 0);
+  assert.match(
+    JSON.parse(res.stdout).hookSpecificOutput.additionalContext,
+    /UNSANITIZED/,
+  );
+});
+
+test("a non-executable binary is skipped, not run", (t) => {
+  const res = launchWithoutNode(t, stagePlugin(t), {
+    CLAUDE_PLUGIN_DATA: stageHookBinary(t, `printf '{"fromBinary":true}'`, {
+      mode: 0o644,
+    }),
+  });
+  assert.match(
+    JSON.parse(res.stdout).hookSpecificOutput.additionalContext,
+    /UNSANITIZED/,
+  );
+  // Skipped, not merely discarded: a launcher that ran it and dropped the
+  // output would satisfy the degraded envelope above just as well.
+  assert.doesNotMatch(res.stdout, /fromBinary/);
+});
+
+test("a binary that cannot answer falls back to node with the SAME payload", (t) => {
+  // The binary consumed stdin before failing, so the fallback only means
+  // anything if the captured payload is replayed to the bundle byte-for-byte:
+  // the fake node echoes its stdin back as the verdict to prove it.
+  const nodeDir = join(scratch(t), "node-bin");
+  fakeNode(nodeDir, `out=$(cat); printf '%s' "$out"`);
+  const payload = { hook_event_name: "PreToolUse", marker: "replayed-bytes" };
+  const res = spawnSync(
+    "bash",
+    [
+      join(stagePlugin(t), "scripts", "safe-launch.sh"),
+      "PreToolUse",
+      "--hook=pretooluse-sanitize",
+    ],
+    {
+      input: JSON.stringify(payload),
+      encoding: "utf8",
+      cwd: tmpdir(),
+      env: {
+        ...baseEnv(),
+        ...sessionEnv(),
+        PATH: `${nodeDir}:${stubBin(t, [])}`,
+        _AGENT_SANITIZER_NODE_SEARCH: "0",
+        CLAUDE_PLUGIN_DATA: stageHookBinary(t, "exit 3"),
+      },
+    },
+  );
+  assert.match(res.stderr, /hook binary exited 3 without reaching a verdict/);
+  assert.equal(res.status, 0, res.stderr);
+  assert.deepEqual(JSON.parse(res.stdout), payload);
+});
+
+test("a binary's deliberate blocking exit survives, exactly as the bundle's does", (t) => {
+  const res = launchWithoutNode(t, stagePlugin(t), {
+    CLAUDE_PLUGIN_DATA: stageHookBinary(
+      t,
+      `cat >/dev/null; printf '{"decision":"block","reason":"wired wrong"}'; exit 2`,
+    ),
+  });
+  assert.equal(res.status, 2);
+  assert.deepEqual(JSON.parse(res.stdout), {
+    decision: "block",
+    reason: "wired wrong",
+  });
+});
+
+test("a binary's verdict on a non-zero exit still forwards — the advisory-exit case", (t) => {
+  const res = launchWithoutNode(t, stagePlugin(t), {
+    CLAUDE_PLUGIN_DATA: stageHookBinary(
+      t,
+      `cat >/dev/null; printf '{"hookSpecificOutput":{"hookEventName":"PreToolUse"}}'; exit 1`,
+    ),
+  });
+  assert.equal(res.status, 0, res.stderr);
+  assert.equal(
+    JSON.parse(res.stdout).hookSpecificOutput.hookEventName,
+    "PreToolUse",
+  );
+});
+
+test("a broken binary on a node-less host still degrades loudly", (t) => {
+  const res = launchWithoutNode(t, stagePlugin(t), {
+    CLAUDE_PLUGIN_DATA: stageHookBinary(t, "cat >/dev/null; exit 3"),
+  });
+  assert.equal(res.status, 0);
+  assert.match(res.stderr, /hook binary exited 3/);
+  assert.match(
+    JSON.parse(res.stdout).hookSpecificOutput.additionalContext,
+    /UNSANITIZED/,
+  );
 });
 
 test("launcher fails OPEN per event shape on a corrupt bundle", (t) => {

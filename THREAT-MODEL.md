@@ -521,15 +521,48 @@ there. The `sgrNote` flag on a `./output` result means "nothing here rose above 
 note", so a caller can show the quiet line instead of the banner; one warning
 anywhere in the walk clears it.
 
+## Provisioned hook binary (supply chain)
+
+The hooks can run from a self-contained executable compiled with
+`bun build --compile`, so a session whose `PATH` has no node at all still
+sanitizes (see `plugin/scripts/provision-hook-binary.sh`). That is the
+product's only path that fetches an executable over the network and later runs
+it, so what anchors its trust is worth stating exactly.
+
+- **The anchor is in the repo, not on the wire.** `plugin/dist/hooks/hook-binaries.sha256`
+  is committed, and the SessionStart provisioner refuses to install any download
+  that does not hash to the digest it pins for that platform. A compromised or
+  substituted release asset alone therefore cannot be installed: it fails the
+  comparison, is deleted, and the launcher keeps degrading loudly through node.
+- **What the digest is worth rests on the compile being reproducible.** The
+  committed digests are generated from the committed bundle, and CI recompiles
+  and byte-compares them (`build-hook-binaries.mjs --check`), so a manifest that
+  does not describe the bundle in the same commit fails before release.
+- **Not covered: an attacker who can write BOTH the repository and the release.**
+  There is no signature; the manifest is trusted because it arrives through the
+  same reviewed, gated path as the rest of the plugin. Rewriting it is rewriting
+  the plugin, which is outside this boundary.
+- **Not covered: re-verification at exec time.** The digest is checked once, at
+  install. The launcher then execs
+  `${CLAUDE_PLUGIN_DATA}/hook-binary/agent-sanitizer-hooks` on every hook
+  invocation without re-hashing it — that would cost a ~100 MB read per tool
+  call. Anything able to write inside `CLAUDE_PLUGIN_DATA` can therefore run
+  code in the session, which is why the provisioner creates that directory mode
+  700 and installs the binary mode 700. A user-owned data directory is the
+  assumption; a shared or world-writable one is not supported.
+- **Opting out.** `AGENT_SANITIZER_HOOK_BINARY=0` never downloads and never
+  runs a binary, leaving the node path exactly as it was.
+
 ## Failure posture (`AGENT_SANITIZER_FAIL_OPEN`)
 
 Installed as Claude Code hooks, these fail **open**: a hook that could not
 complete lets the guarded action through with a warning in `additionalContext`
 rather than blocking the session. `AGENT_SANITIZER_FAIL_OPEN=0` (or `false`)
 restores the fail-closed verdicts — block, ask, suppress. The posture covers
-every way a hook can fail: the launcher not starting (no `node`, missing or
-corrupt bundle), the package never loading, a payload that never parsed, and a
-layer that ran and threw.
+every way a hook can fail: the launcher finding no runtime (no `node`, and the
+provisioned hook binary missing, unexecutable or failing without a verdict),
+a missing or corrupt bundle, the package never loading, a payload that never
+parsed, and a layer that ran and threw.
 
 One carve-out: when the PreToolUse hook itself fails (redactor daemon down,
 package failed to load, a layer threw) and the call is a **write-shaped tool**
@@ -542,11 +575,12 @@ placeholder-bearing write is never the benign availability case the open default
 protects — the model can retry once the sanitizer recovers, or ask the user. The
 check is package-free (a literal-string test on the already-parsed payload), so
 it holds even when the failure IS the missing package. Two accepted gaps: a
-launcher-level failure (no `node`, corrupt bundle) never reaches the check — the
-launcher cannot inspect the payload and always warns — and `Bash` is excluded
-even though shell redirection can also persist placeholder text, because command
-strings mention `[REDACTED` benignly far too often for the ask to hold
-precision. All other faults keep the open default, and
+launcher-level failure (no `node`, corrupt bundle, a provisioned hook binary
+that is missing, unexecutable or dies without a verdict) never reaches the
+check — the launcher cannot inspect the payload and always warns — and `Bash`
+is excluded even though shell redirection can also persist placeholder text,
+because command strings mention `[REDACTED` benignly far too often for the ask
+to hold precision. All other faults keep the open default, and
 `AGENT_SANITIZER_FAIL_OPEN=0` behavior is unchanged.
 
 **The open default is not enforceable against content.** Several of those

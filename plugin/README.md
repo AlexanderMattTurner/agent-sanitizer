@@ -13,6 +13,10 @@ warning by default; `AGENT_SANITIZER_FAIL_OPEN=0` makes them block instead, and
 /agent-sanitizer:enable-auto-update
 ```
 
+The hooks run on any node >=22 the launcher can find — or, on the common
+platforms, on a self-contained binary a SessionStart hook provisions when no
+such node exists (see [Configuration](#configuration)).
+
 With `AGENT_SANITIZER_SECRETS_ENABLED=1` set (the secret layer is off by
 default — see [Configuration](#configuration)), the first session after install
 provisions the Python secret-redaction engine (`agent-sanitizer[secrets]`) into
@@ -82,8 +86,9 @@ the banner keeps meaning something, because a banner that fires on every
 ordinary page is one you learn to skip — and then the one that mattered scrolls
 past too.
 
-Every hook also times itself, as do the two SessionStart shell entry points (the
-launcher's preflight and the redactor provisioning). A run that overruns its
+Every hook also times itself, as do the SessionStart shell entry points (the
+launcher's preflight, the hook-binary provisioning and the redactor
+provisioning). A run that overruns its
 budget — one second for a hook, a minute for a one-time install — says so in the
 model's context and on stderr, naming the step and the timing and asking you to
 report it, because a slow hook is otherwise indistinguishable from a slow agent.
@@ -130,11 +135,12 @@ next plugin update overwrites it:
 | --------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | `AGENT_SANITIZER_DISABLED_HOOKS=` | Comma-separated hook names to stand down: `scan-invisible-chars`, `sanitize-user-prompt`, `pretooluse-sanitize`, `sanitize-output`. Each still answers, with an empty verdict, so nothing degrades — the event is simply unguarded. A name that is not a hook is reported on stderr and its hook keeps guarding: the variable is set outside the session, so a typo must not be able to halt it. |
 
-Two knobs for how the launcher finds and reports its runtime:
+Three knobs for how the launcher finds and reports its runtime:
 
 | Variable                                    | Effect                                                                                                                                                                                                                                                                                                                     |
 | ------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `AGENT_SANITIZER_NODE=`                     | Absolute path to the node the hooks run on, skipping the search below. The hooks need node >=22; a node under that is named as the fault rather than reported as a corrupt install.                                                                                                                                        |
+| `AGENT_SANITIZER_HOOK_BINARY=`              | `0` never provisions nor runs the compiled hook binary; `1` provisions it even when a usable node exists. Unset is auto: provision only when the node search below finds nothing at or above the floor, and prefer a provisioned binary once it is present.                                                                |
 | `AGENT_SANITIZER_REPEAT_DEGRADED_CONTEXT=1` | Attach the fail-open warning to every affected call. By default it is attached once per session — a session whose sanitizer is broken stays broken, and the repeats told the model nothing new. The stderr warning and the fail-closed verdicts are unaffected, and repeat either way when the host exports no session id. |
 
 A session started outside an interactive shell — launchd, cron, CI, a GUI
@@ -142,6 +148,23 @@ launch — inherits roughly `/usr/bin:/bin`, and fnm/nvm/mise/volta/asdf all put
 node on `PATH` from a shell rc file that never ran there, as does Homebrew's
 prefix. So a node that is not on `PATH` is looked for in those installs (newest
 version wins) before the launcher gives up and degrades.
+
+When even that search comes up empty — a host with no node install at all — a
+SessionStart hook (`scripts/provision-hook-binary.sh`) downloads a
+self-contained hook executable for the platform (darwin-arm64, darwin-x64,
+linux-x64, linux-arm64) from this repository's GitHub release for the installed
+plugin version, verifies its SHA-256 against the manifest committed at
+`dist/hooks/hook-binaries.sha256` before it is ever installed, and puts it at
+`${CLAUDE_PLUGIN_DATA}/hook-binary/agent-sanitizer-hooks`. With that binary
+present and executable the launcher runs it directly — no node needed at all —
+under the same never-silent posture: a binary that fails to produce a verdict is
+named on stderr and the launcher falls back to the node search in the same
+invocation. Provisioning needs only `curl` or `wget` plus `sha256sum` or
+`shasum`, all stock on macOS and Linux even under `PATH=/usr/bin:/bin`; a
+provisioning failure is advisory and loud on stderr, the hooks keep using the
+node path meanwhile, and an unsupported platform skips silently. This closes the
+session started by launchd or cron with no node installed anywhere, as long as
+the host can reach github.com once.
 
 And one posture knob, for what happens when a hook itself fails:
 
@@ -190,10 +213,16 @@ skills/enable-auto-update/   /agent-sanitizer:enable-auto-update
 scripts/safe-launch.sh       launcher (prints a response even when node is missing)
 scripts/enable-auto-update.mjs  flips autoUpdate on this marketplace's registry entry
 scripts/provision-redactor.sh  SessionStart provisioning of the Python redactor
+scripts/provision-hook-binary.sh  SessionStart provisioning of the compiled hook binary
 scripts/build-plugin.mjs     builds dist/ from claude-hooks/ against this repo's src/
-scripts/lib/hook-timing.sh   shell port of the hook timer, for the two SessionStart scripts
+scripts/build-hook-binaries.mjs  compiles the bundle into the per-platform release binaries
+scripts/lib/hook-timing.sh   shell port of the hook timer, for the SessionStart scripts
+scripts/lib/node-resolve.sh  the node search, for hosts whose PATH never saw a shell rc
+scripts/lib/node-floor.sh    the node version floor (generated from engines.node — do not edit)
+scripts/lib/fail-open.sh     the shared posture-knob reader (generated — do not edit)
 scripts/lock-redactor-deps.mjs  compiles requirements.in into the hash-pinned requirements.txt
 dist/hooks/*.bundle.mjs      the committed, self-contained bundle (generated — do not edit)
+dist/hooks/hook-binaries.sha256  SHA-256 manifest of the release binaries (generated — do not edit)
 dist/redactor/daemon.pyz     the committed redaction engine zipapp (generated — do not edit)
 dist/redactor/*.whl          the committed engine wheel both the zipapp and the venv install
 requirements.in              the engine's third-party dependencies (generated — do not edit)
@@ -206,6 +235,20 @@ and the provisioned venv are one commit and cannot be three versions.
 `dist/hooks/` and `requirements.in` are regenerated offline by
 `node plugin/scripts/build-plugin.mjs` and verified byte-for-byte in CI; they
 change only when the hook sources or the engine's dependencies do.
+
+The compiled hook binaries are a third artifact class. At ~100 MB each they are
+not committed; they are attached to this repository's GitHub release
+`v<version>` as `agent-sanitizer-hooks-<platform>` (darwin-arm64, darwin-x64,
+linux-x64, linux-arm64), compiled from the committed bundle with the pnpm-pinned
+bun (`bun build --compile`) by `plugin/scripts/build-hook-binaries.mjs`. What is
+committed is their SHA-256 manifest, `dist/hooks/hook-binaries.sha256`, which
+the same script generates — and because bun's compile is byte-deterministic for
+a fixed bun version, target, input bundle and outfile name, CI regenerates the
+binaries and byte-checks their digests against the manifest: the reproducibility
+gate survives as a digest round-trip. The provisioner verifies a downloaded
+binary against that manifest before it is ever installed, so a release asset that
+does not hash to the committed digest never runs. Compiled from the committed
+bundle, the binaries stay one commit with everything above.
 
 `requirements.txt` is the fully resolved third-party tree, every version and
 artifact hash pinned. It is what both `dist/redactor/daemon.pyz` is built from

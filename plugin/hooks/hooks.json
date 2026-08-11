@@ -11,6 +11,11 @@
           },
           {
             "type": "command",
+            "command": "bash \"${CLAUDE_PLUGIN_ROOT}\"/scripts/provision-hook-binary.sh \"${CLAUDE_PLUGIN_DATA}\"",
+            "timeout": 1800
+          },
+          {
+            "type": "command",
             "command": "bash \"${CLAUDE_PLUGIN_ROOT}\"/scripts/safe-launch.sh SessionStart --hook=scan-invisible-chars",
             "timeout": 1800
           }
