@@ -128,8 +128,8 @@ def test_every_exemption_names_a_version_we_actually_pin(
 # just shipped and buys nothing. Every other package stays behind the window.
 #
 # `agent-control-plane-core` is the guardrail contract the Claude hooks load on
-# every gated tool call; it ships from AlexanderMattTurner/agent-control-plane-core
-# via the same auto-version + provenance path this repo uses.
+# every gated tool call. Its own repo publishes it through the same auto-version
+# and provenance path this repo uses.
 FIRST_PARTY_PACKAGES = frozenset({"agent-control-plane-core"})
 
 
