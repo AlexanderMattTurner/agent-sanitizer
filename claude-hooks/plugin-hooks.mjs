@@ -64,9 +64,10 @@ registerFaultPolicy(HOOK_NAME, {
 // against a node_modules the plugin does not ship, and every registration would
 // fail at once.
 const LAZY_LOADERS = {
-  "agent-control-plane-core": () => import("agent-control-plane-core"),
   "agent-control-plane-core/claude": () =>
     import("agent-control-plane-core/claude"),
+  "agent-control-plane-core/contract": () =>
+    import("agent-control-plane-core/contract"),
   "agent-sanitizer": () => import("agent-sanitizer"),
   "agent-sanitizer/confusables": () => import("agent-sanitizer/confusables"),
   "agent-sanitizer/instructions": () => import("agent-sanitizer/instructions"),

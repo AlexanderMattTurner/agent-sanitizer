@@ -56,7 +56,7 @@ const cp = (n) => String.fromCodePoint(n);
 const grow = (unit, n) => unit.repeat(Math.ceil(n / unit.length)).slice(0, n);
 
 /**
- * The FASTEST of four timed runs after a warm-up call, in ms.
+ * The FASTEST of {@link SAMPLES} timed runs after a warm-up call, in ms.
  *
  * Contention and collector pauses only ever ADD time, so the minimum is the
  * closest any of the samples got to the cost of the code itself, and it is what
