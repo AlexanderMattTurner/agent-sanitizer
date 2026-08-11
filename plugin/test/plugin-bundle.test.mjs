@@ -110,6 +110,22 @@ function baseEnv() {
   delete env.AGENT_SANITIZER_FAIL_OPEN;
   delete env.AGENT_SANITIZER_NODE;
   delete env.AGENT_SANITIZER_REPEAT_DEGRADED_CONTEXT;
+  // The launcher's node search reads a version manager's own env var in
+  // preference to its default location under $HOME, so a runner that exports
+  // one (GitHub's images export NVM_DIR) would send the search somewhere other
+  // than the tree a test staged — and the test would assert against a host
+  // fact rather than the code. Cleared here, and set explicitly by the one
+  // test that covers honoring them.
+  for (const managerVar of [
+    "NVM_DIR",
+    "FNM_DIR",
+    "MISE_DATA_DIR",
+    "XDG_DATA_HOME",
+    "ASDF_DATA_DIR",
+    "VOLTA_HOME",
+    "N_PREFIX",
+  ])
+    delete env[managerVar];
   env.AGENT_SANITIZER_SECRETS_ENABLED = "1";
   return env;
 }
@@ -1132,6 +1148,22 @@ test("the newest install wins, numerically and not lexicographically", (t) => {
   assert.equal(
     JSON.parse(res.stdout).picked,
     join(home, ".nvm/versions/node/v22.11.0/bin/node"),
+  );
+});
+
+test("a manager's own env var is searched ahead of its default location", (t) => {
+  // fnm/nvm/mise let the install root move; the search has to follow it, or a
+  // relocated install looks like no install at all.
+  const relocated = scratch(t);
+  fakeNode(join(relocated, "versions", "node", "v22.11.0", "bin"), REPORT_ARGV);
+  const res = launchWithoutNode(t, stagePlugin(t), {
+    HOME: scratch(t),
+    NVM_DIR: relocated,
+    _AGENT_SANITIZER_NODE_SEARCH: "1",
+  });
+  assert.equal(
+    JSON.parse(res.stdout).picked,
+    join(relocated, "versions/node/v22.11.0/bin/node"),
   );
 });
 
