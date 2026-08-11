@@ -221,7 +221,7 @@
     "SECURITY.md"
   ],
   "dependencies": {
-    "agent-control-plane-core": "0.2.13",
+    "agent-control-plane-core": "0.3.0",
     "css-tree": "^3.2.1",
     "namespace-guard": "0.20.0",
     "rehype-parse": "9.0.1",

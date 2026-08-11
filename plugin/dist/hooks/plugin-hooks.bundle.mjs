@@ -467,6 +467,33 @@ var init_hook_fault = __esm({
 });
 
 // agent-control-plane-core/src/control-plane.mjs
+var control_plane_exports = {};
+__export(control_plane_exports, {
+  CALL_CLASSES: () => CALL_CLASSES,
+  CONTROL_PLANE_SCHEMA: () => CONTROL_PLANE_SCHEMA,
+  CallClass: () => CallClass,
+  CoverageStatus: () => CoverageStatus,
+  Decision: () => Decision,
+  EventKind: () => EventKind,
+  IntegrationMode: () => IntegrationMode,
+  MODELED_TOOLS: () => MODELED_TOOLS,
+  SCHEMA_VERSION: () => SCHEMA_VERSION,
+  TOOL_ALIASES: () => TOOL_ALIASES,
+  asObject: () => asObject,
+  asString: () => asString,
+  asStringOrNull: () => asStringOrNull,
+  assertAliasTargetsModeled: () => assertAliasTargetsModeled,
+  canonicalTool: () => canonicalTool,
+  classifyCallClass: () => classifyCallClass,
+  collectPassthrough: () => collectPassthrough,
+  coverageAllowsVeto: () => coverageAllowsVeto,
+  isCoverageStatus: () => isCoverageStatus,
+  lookup: () => lookup,
+  makeEvent: () => makeEvent,
+  nativeResponse: () => nativeResponse,
+  normalizeVerdict: () => normalizeVerdict,
+  sanitizeVerdict: () => sanitizeVerdict
+});
 function assertAliasTargetsModeled(aliases) {
   for (const canonical of Object.values(aliases)) {
     if (!MODELED_TOOL_SET.has(canonical))
@@ -644,7 +671,7 @@ function nativeResponse({
 }
 var CONTROL_PLANE_SCHEMA, SCHEMA_VERSION, EventKind, EVENT_KIND_VALUES, Decision, MODELED_TOOLS, MODELED_TOOL_SET, TOOL_ALIASES, IntegrationMode, CallClass, CALL_CLASSES, CoverageStatus, COVERAGE_STATUS_VALUES;
 var init_control_plane = __esm({
-  "node_modules/.pnpm/agent-control-plane-core@0.2.13/node_modules/agent-control-plane-core/src/control-plane.mjs"() {
+  "node_modules/.pnpm/agent-control-plane-core@0.3.0/node_modules/agent-control-plane-core/src/control-plane.mjs"() {
     CONTROL_PLANE_SCHEMA = "control-plane/v1";
     SCHEMA_VERSION = 1;
     EventKind = Object.freeze({
@@ -800,7 +827,7 @@ function nonGatingBody(hookEventName, vd) {
 }
 var AGENT, INTEGRATION_MODE, COVERAGE, HookEvent2, NATIVE_TO_KIND, KIND_TO_NATIVE, CONSUMED, claudeAdapter;
 var init_claude = __esm({
-  "node_modules/.pnpm/agent-control-plane-core@0.2.13/node_modules/agent-control-plane-core/src/adapters/claude.mjs"() {
+  "node_modules/.pnpm/agent-control-plane-core@0.3.0/node_modules/agent-control-plane-core/src/adapters/claude.mjs"() {
     init_control_plane();
     AGENT = "claude";
     INTEGRATION_MODE = IntegrationMode.EXTERNAL_HOOK;
@@ -846,2538 +873,6 @@ var init_claude = __esm({
       parse,
       render
     };
-  }
-});
-
-// node_modules/.pnpm/semver@7.8.5/node_modules/semver/internal/constants.js
-var require_constants = __commonJS({
-  "node_modules/.pnpm/semver@7.8.5/node_modules/semver/internal/constants.js"(exports, module) {
-    "use strict";
-    var SEMVER_SPEC_VERSION = "2.0.0";
-    var MAX_LENGTH = 256;
-    var MAX_SAFE_INTEGER = Number.MAX_SAFE_INTEGER || /* istanbul ignore next */
-    9007199254740991;
-    var MAX_SAFE_COMPONENT_LENGTH = 16;
-    var MAX_SAFE_BUILD_LENGTH = MAX_LENGTH - 6;
-    var RELEASE_TYPES = [
-      "major",
-      "premajor",
-      "minor",
-      "preminor",
-      "patch",
-      "prepatch",
-      "prerelease"
-    ];
-    module.exports = {
-      MAX_LENGTH,
-      MAX_SAFE_COMPONENT_LENGTH,
-      MAX_SAFE_BUILD_LENGTH,
-      MAX_SAFE_INTEGER,
-      RELEASE_TYPES,
-      SEMVER_SPEC_VERSION,
-      FLAG_INCLUDE_PRERELEASE: 1,
-      FLAG_LOOSE: 2
-    };
-  }
-});
-
-// node_modules/.pnpm/semver@7.8.5/node_modules/semver/internal/debug.js
-var require_debug = __commonJS({
-  "node_modules/.pnpm/semver@7.8.5/node_modules/semver/internal/debug.js"(exports, module) {
-    "use strict";
-    var debug = typeof process === "object" && process.env && process.env.NODE_DEBUG && /\bsemver\b/i.test(process.env.NODE_DEBUG) ? (...args) => console.error("SEMVER", ...args) : () => {
-    };
-    module.exports = debug;
-  }
-});
-
-// node_modules/.pnpm/semver@7.8.5/node_modules/semver/internal/re.js
-var require_re = __commonJS({
-  "node_modules/.pnpm/semver@7.8.5/node_modules/semver/internal/re.js"(exports, module) {
-    "use strict";
-    var {
-      MAX_SAFE_COMPONENT_LENGTH,
-      MAX_SAFE_BUILD_LENGTH,
-      MAX_LENGTH
-    } = require_constants();
-    var debug = require_debug();
-    exports = module.exports = {};
-    var re = exports.re = [];
-    var safeRe = exports.safeRe = [];
-    var src = exports.src = [];
-    var safeSrc = exports.safeSrc = [];
-    var t = exports.t = {};
-    var R4 = 0;
-    var LETTERDASHNUMBER = "[a-zA-Z0-9-]";
-    var safeRegexReplacements = [
-      ["\\s", 1],
-      ["\\d", MAX_LENGTH],
-      [LETTERDASHNUMBER, MAX_SAFE_BUILD_LENGTH]
-    ];
-    var makeSafeRegex = (value) => {
-      for (const [token, max] of safeRegexReplacements) {
-        value = value.split(`${token}*`).join(`${token}{0,${max}}`).split(`${token}+`).join(`${token}{1,${max}}`);
-      }
-      return value;
-    };
-    var createToken = (name50, value, isGlobal) => {
-      const safe2 = makeSafeRegex(value);
-      const index2 = R4++;
-      debug(name50, index2, value);
-      t[name50] = index2;
-      src[index2] = value;
-      safeSrc[index2] = safe2;
-      re[index2] = new RegExp(value, isGlobal ? "g" : void 0);
-      safeRe[index2] = new RegExp(safe2, isGlobal ? "g" : void 0);
-    };
-    createToken("NUMERICIDENTIFIER", "0|[1-9]\\d*");
-    createToken("NUMERICIDENTIFIERLOOSE", "\\d+");
-    createToken("NONNUMERICIDENTIFIER", `\\d*[a-zA-Z-]${LETTERDASHNUMBER}*`);
-    createToken("MAINVERSION", `(${src[t.NUMERICIDENTIFIER]})\\.(${src[t.NUMERICIDENTIFIER]})\\.(${src[t.NUMERICIDENTIFIER]})`);
-    createToken("MAINVERSIONLOOSE", `(${src[t.NUMERICIDENTIFIERLOOSE]})\\.(${src[t.NUMERICIDENTIFIERLOOSE]})\\.(${src[t.NUMERICIDENTIFIERLOOSE]})`);
-    createToken("PRERELEASEIDENTIFIER", `(?:${src[t.NONNUMERICIDENTIFIER]}|${src[t.NUMERICIDENTIFIER]})`);
-    createToken("PRERELEASEIDENTIFIERLOOSE", `(?:${src[t.NONNUMERICIDENTIFIER]}|${src[t.NUMERICIDENTIFIERLOOSE]})`);
-    createToken("PRERELEASE", `(?:-(${src[t.PRERELEASEIDENTIFIER]}(?:\\.${src[t.PRERELEASEIDENTIFIER]})*))`);
-    createToken("PRERELEASELOOSE", `(?:-?(${src[t.PRERELEASEIDENTIFIERLOOSE]}(?:\\.${src[t.PRERELEASEIDENTIFIERLOOSE]})*))`);
-    createToken("BUILDIDENTIFIER", `${LETTERDASHNUMBER}+`);
-    createToken("BUILD", `(?:\\+(${src[t.BUILDIDENTIFIER]}(?:\\.${src[t.BUILDIDENTIFIER]})*))`);
-    createToken("FULLPLAIN", `v?${src[t.MAINVERSION]}${src[t.PRERELEASE]}?${src[t.BUILD]}?`);
-    createToken("FULL", `^${src[t.FULLPLAIN]}$`);
-    createToken("LOOSEPLAIN", `[v=\\s]*${src[t.MAINVERSIONLOOSE]}${src[t.PRERELEASELOOSE]}?${src[t.BUILD]}?`);
-    createToken("LOOSE", `^${src[t.LOOSEPLAIN]}$`);
-    createToken("GTLT", "((?:<|>)?=?)");
-    createToken("XRANGEIDENTIFIERLOOSE", `${src[t.NUMERICIDENTIFIERLOOSE]}|x|X|\\*`);
-    createToken("XRANGEIDENTIFIER", `${src[t.NUMERICIDENTIFIER]}|x|X|\\*`);
-    createToken("XRANGEPLAIN", `[v=\\s]*(${src[t.XRANGEIDENTIFIER]})(?:\\.(${src[t.XRANGEIDENTIFIER]})(?:\\.(${src[t.XRANGEIDENTIFIER]})(?:${src[t.PRERELEASE]})?${src[t.BUILD]}?)?)?`);
-    createToken("XRANGEPLAINLOOSE", `[v=\\s]*(${src[t.XRANGEIDENTIFIERLOOSE]})(?:\\.(${src[t.XRANGEIDENTIFIERLOOSE]})(?:\\.(${src[t.XRANGEIDENTIFIERLOOSE]})(?:${src[t.PRERELEASELOOSE]})?${src[t.BUILD]}?)?)?`);
-    createToken("XRANGE", `^${src[t.GTLT]}\\s*${src[t.XRANGEPLAIN]}$`);
-    createToken("XRANGELOOSE", `^${src[t.GTLT]}\\s*${src[t.XRANGEPLAINLOOSE]}$`);
-    createToken("COERCEPLAIN", `${"(^|[^\\d])(\\d{1,"}${MAX_SAFE_COMPONENT_LENGTH}})(?:\\.(\\d{1,${MAX_SAFE_COMPONENT_LENGTH}}))?(?:\\.(\\d{1,${MAX_SAFE_COMPONENT_LENGTH}}))?`);
-    createToken("COERCE", `${src[t.COERCEPLAIN]}(?:$|[^\\d])`);
-    createToken("COERCEFULL", src[t.COERCEPLAIN] + `(?:${src[t.PRERELEASE]})?(?:${src[t.BUILD]})?(?:$|[^\\d])`);
-    createToken("COERCERTL", src[t.COERCE], true);
-    createToken("COERCERTLFULL", src[t.COERCEFULL], true);
-    createToken("LONETILDE", "(?:~>?)");
-    createToken("TILDETRIM", `(\\s*)${src[t.LONETILDE]}\\s+`, true);
-    exports.tildeTrimReplace = "$1~";
-    createToken("TILDE", `^${src[t.LONETILDE]}${src[t.XRANGEPLAIN]}$`);
-    createToken("TILDELOOSE", `^${src[t.LONETILDE]}${src[t.XRANGEPLAINLOOSE]}$`);
-    createToken("LONECARET", "(?:\\^)");
-    createToken("CARETTRIM", `(\\s*)${src[t.LONECARET]}\\s+`, true);
-    exports.caretTrimReplace = "$1^";
-    createToken("CARET", `^${src[t.LONECARET]}${src[t.XRANGEPLAIN]}$`);
-    createToken("CARETLOOSE", `^${src[t.LONECARET]}${src[t.XRANGEPLAINLOOSE]}$`);
-    createToken("COMPARATORLOOSE", `^${src[t.GTLT]}\\s*(${src[t.LOOSEPLAIN]})$|^$`);
-    createToken("COMPARATOR", `^${src[t.GTLT]}\\s*(${src[t.FULLPLAIN]})$|^$`);
-    createToken("COMPARATORTRIM", `(\\s*)${src[t.GTLT]}\\s*(${src[t.LOOSEPLAIN]}|${src[t.XRANGEPLAIN]})`, true);
-    exports.comparatorTrimReplace = "$1$2$3";
-    createToken("HYPHENRANGE", `^\\s*(${src[t.XRANGEPLAIN]})\\s+-\\s+(${src[t.XRANGEPLAIN]})\\s*$`);
-    createToken("HYPHENRANGELOOSE", `^\\s*(${src[t.XRANGEPLAINLOOSE]})\\s+-\\s+(${src[t.XRANGEPLAINLOOSE]})\\s*$`);
-    createToken("STAR", "(<|>)?=?\\s*\\*");
-    createToken("GTE0", "^\\s*>=\\s*0\\.0\\.0\\s*$");
-    createToken("GTE0PRE", "^\\s*>=\\s*0\\.0\\.0-0\\s*$");
-  }
-});
-
-// node_modules/.pnpm/semver@7.8.5/node_modules/semver/internal/parse-options.js
-var require_parse_options = __commonJS({
-  "node_modules/.pnpm/semver@7.8.5/node_modules/semver/internal/parse-options.js"(exports, module) {
-    "use strict";
-    var looseOption = Object.freeze({ loose: true });
-    var emptyOpts = Object.freeze({});
-    var parseOptions = (options) => {
-      if (!options) {
-        return emptyOpts;
-      }
-      if (typeof options !== "object") {
-        return looseOption;
-      }
-      return options;
-    };
-    module.exports = parseOptions;
-  }
-});
-
-// node_modules/.pnpm/semver@7.8.5/node_modules/semver/internal/identifiers.js
-var require_identifiers = __commonJS({
-  "node_modules/.pnpm/semver@7.8.5/node_modules/semver/internal/identifiers.js"(exports, module) {
-    "use strict";
-    var numeric = /^[0-9]+$/;
-    var compareIdentifiers = (a, b) => {
-      if (typeof a === "number" && typeof b === "number") {
-        return a === b ? 0 : a < b ? -1 : 1;
-      }
-      const anum = numeric.test(a);
-      const bnum = numeric.test(b);
-      if (anum && bnum) {
-        a = +a;
-        b = +b;
-      }
-      return a === b ? 0 : anum && !bnum ? -1 : bnum && !anum ? 1 : a < b ? -1 : 1;
-    };
-    var rcompareIdentifiers = (a, b) => compareIdentifiers(b, a);
-    module.exports = {
-      compareIdentifiers,
-      rcompareIdentifiers
-    };
-  }
-});
-
-// node_modules/.pnpm/semver@7.8.5/node_modules/semver/classes/semver.js
-var require_semver = __commonJS({
-  "node_modules/.pnpm/semver@7.8.5/node_modules/semver/classes/semver.js"(exports, module) {
-    "use strict";
-    var debug = require_debug();
-    var { MAX_LENGTH, MAX_SAFE_INTEGER } = require_constants();
-    var { safeRe: re, t } = require_re();
-    var parseOptions = require_parse_options();
-    var { compareIdentifiers } = require_identifiers();
-    var isPrereleaseIdentifier = (prerelease, identifier) => {
-      const identifiers = identifier.split(".");
-      if (identifiers.length > prerelease.length) {
-        return false;
-      }
-      for (let i = 0; i < identifiers.length; i++) {
-        if (compareIdentifiers(prerelease[i], identifiers[i]) !== 0) {
-          return false;
-        }
-      }
-      return true;
-    };
-    var SemVer = class _SemVer {
-      constructor(version2, options) {
-        options = parseOptions(options);
-        if (version2 instanceof _SemVer) {
-          if (version2.loose === !!options.loose && version2.includePrerelease === !!options.includePrerelease) {
-            return version2;
-          } else {
-            version2 = version2.version;
-          }
-        } else if (typeof version2 !== "string") {
-          throw new TypeError(`Invalid version. Must be a string. Got type "${typeof version2}".`);
-        }
-        if (version2.length > MAX_LENGTH) {
-          throw new TypeError(
-            `version is longer than ${MAX_LENGTH} characters`
-          );
-        }
-        debug("SemVer", version2, options);
-        this.options = options;
-        this.loose = !!options.loose;
-        this.includePrerelease = !!options.includePrerelease;
-        const m = version2.trim().match(options.loose ? re[t.LOOSE] : re[t.FULL]);
-        if (!m) {
-          throw new TypeError(`Invalid Version: ${version2}`);
-        }
-        this.raw = version2;
-        this.major = +m[1];
-        this.minor = +m[2];
-        this.patch = +m[3];
-        if (this.major > MAX_SAFE_INTEGER || this.major < 0) {
-          throw new TypeError("Invalid major version");
-        }
-        if (this.minor > MAX_SAFE_INTEGER || this.minor < 0) {
-          throw new TypeError("Invalid minor version");
-        }
-        if (this.patch > MAX_SAFE_INTEGER || this.patch < 0) {
-          throw new TypeError("Invalid patch version");
-        }
-        if (!m[4]) {
-          this.prerelease = [];
-        } else {
-          this.prerelease = m[4].split(".").map((id) => {
-            if (/^[0-9]+$/.test(id)) {
-              const num = +id;
-              if (num >= 0 && num < MAX_SAFE_INTEGER) {
-                return num;
-              }
-            }
-            return id;
-          });
-        }
-        this.build = m[5] ? m[5].split(".") : [];
-        this.format();
-      }
-      format() {
-        this.version = `${this.major}.${this.minor}.${this.patch}`;
-        if (this.prerelease.length) {
-          this.version += `-${this.prerelease.join(".")}`;
-        }
-        return this.version;
-      }
-      toString() {
-        return this.version;
-      }
-      compare(other) {
-        debug("SemVer.compare", this.version, this.options, other);
-        if (!(other instanceof _SemVer)) {
-          if (typeof other === "string" && other === this.version) {
-            return 0;
-          }
-          other = new _SemVer(other, this.options);
-        }
-        if (other.version === this.version) {
-          return 0;
-        }
-        return this.compareMain(other) || this.comparePre(other);
-      }
-      compareMain(other) {
-        if (!(other instanceof _SemVer)) {
-          other = new _SemVer(other, this.options);
-        }
-        if (this.major < other.major) {
-          return -1;
-        }
-        if (this.major > other.major) {
-          return 1;
-        }
-        if (this.minor < other.minor) {
-          return -1;
-        }
-        if (this.minor > other.minor) {
-          return 1;
-        }
-        if (this.patch < other.patch) {
-          return -1;
-        }
-        if (this.patch > other.patch) {
-          return 1;
-        }
-        return 0;
-      }
-      comparePre(other) {
-        if (!(other instanceof _SemVer)) {
-          other = new _SemVer(other, this.options);
-        }
-        if (this.prerelease.length && !other.prerelease.length) {
-          return -1;
-        } else if (!this.prerelease.length && other.prerelease.length) {
-          return 1;
-        } else if (!this.prerelease.length && !other.prerelease.length) {
-          return 0;
-        }
-        let i = 0;
-        do {
-          const a = this.prerelease[i];
-          const b = other.prerelease[i];
-          debug("prerelease compare", i, a, b);
-          if (a === void 0 && b === void 0) {
-            return 0;
-          } else if (b === void 0) {
-            return 1;
-          } else if (a === void 0) {
-            return -1;
-          } else if (a === b) {
-            continue;
-          } else {
-            return compareIdentifiers(a, b);
-          }
-        } while (++i);
-      }
-      compareBuild(other) {
-        if (!(other instanceof _SemVer)) {
-          other = new _SemVer(other, this.options);
-        }
-        let i = 0;
-        do {
-          const a = this.build[i];
-          const b = other.build[i];
-          debug("build compare", i, a, b);
-          if (a === void 0 && b === void 0) {
-            return 0;
-          } else if (b === void 0) {
-            return 1;
-          } else if (a === void 0) {
-            return -1;
-          } else if (a === b) {
-            continue;
-          } else {
-            return compareIdentifiers(a, b);
-          }
-        } while (++i);
-      }
-      // preminor will bump the version up to the next minor release, and immediately
-      // down to pre-release. premajor and prepatch work the same way.
-      inc(release, identifier, identifierBase) {
-        if (release.startsWith("pre")) {
-          if (!identifier && identifierBase === false) {
-            throw new Error("invalid increment argument: identifier is empty");
-          }
-          if (identifier) {
-            const match = `-${identifier}`.match(this.options.loose ? re[t.PRERELEASELOOSE] : re[t.PRERELEASE]);
-            if (!match || match[1] !== identifier) {
-              throw new Error(`invalid identifier: ${identifier}`);
-            }
-          }
-        }
-        switch (release) {
-          case "premajor":
-            this.prerelease.length = 0;
-            this.patch = 0;
-            this.minor = 0;
-            this.major++;
-            this.inc("pre", identifier, identifierBase);
-            break;
-          case "preminor":
-            this.prerelease.length = 0;
-            this.patch = 0;
-            this.minor++;
-            this.inc("pre", identifier, identifierBase);
-            break;
-          case "prepatch":
-            this.prerelease.length = 0;
-            this.inc("patch", identifier, identifierBase);
-            this.inc("pre", identifier, identifierBase);
-            break;
-          // If the input is a non-prerelease version, this acts the same as
-          // prepatch.
-          case "prerelease":
-            if (this.prerelease.length === 0) {
-              this.inc("patch", identifier, identifierBase);
-            }
-            this.inc("pre", identifier, identifierBase);
-            break;
-          case "release":
-            if (this.prerelease.length === 0) {
-              throw new Error(`version ${this.raw} is not a prerelease`);
-            }
-            this.prerelease.length = 0;
-            break;
-          case "major":
-            if (this.minor !== 0 || this.patch !== 0 || this.prerelease.length === 0) {
-              this.major++;
-            }
-            this.minor = 0;
-            this.patch = 0;
-            this.prerelease = [];
-            break;
-          case "minor":
-            if (this.patch !== 0 || this.prerelease.length === 0) {
-              this.minor++;
-            }
-            this.patch = 0;
-            this.prerelease = [];
-            break;
-          case "patch":
-            if (this.prerelease.length === 0) {
-              this.patch++;
-            }
-            this.prerelease = [];
-            break;
-          // This probably shouldn't be used publicly.
-          // 1.0.0 'pre' would become 1.0.0-0 which is the wrong direction.
-          case "pre": {
-            const base2 = Number(identifierBase) ? 1 : 0;
-            if (this.prerelease.length === 0) {
-              this.prerelease = [base2];
-            } else {
-              let i = this.prerelease.length;
-              while (--i >= 0) {
-                if (typeof this.prerelease[i] === "number") {
-                  this.prerelease[i]++;
-                  i = -2;
-                }
-              }
-              if (i === -1) {
-                if (identifier === this.prerelease.join(".") && identifierBase === false) {
-                  throw new Error("invalid increment argument: identifier already exists");
-                }
-                this.prerelease.push(base2);
-              }
-            }
-            if (identifier) {
-              let prerelease = [identifier, base2];
-              if (identifierBase === false) {
-                prerelease = [identifier];
-              }
-              if (isPrereleaseIdentifier(this.prerelease, identifier)) {
-                const prereleaseBase = this.prerelease[identifier.split(".").length];
-                if (isNaN(prereleaseBase)) {
-                  this.prerelease = prerelease;
-                }
-              } else {
-                this.prerelease = prerelease;
-              }
-            }
-            break;
-          }
-          default:
-            throw new Error(`invalid increment argument: ${release}`);
-        }
-        this.raw = this.format();
-        if (this.build.length) {
-          this.raw += `+${this.build.join(".")}`;
-        }
-        return this;
-      }
-    };
-    module.exports = SemVer;
-  }
-});
-
-// node_modules/.pnpm/semver@7.8.5/node_modules/semver/functions/parse.js
-var require_parse = __commonJS({
-  "node_modules/.pnpm/semver@7.8.5/node_modules/semver/functions/parse.js"(exports, module) {
-    "use strict";
-    var SemVer = require_semver();
-    var parse60 = (version2, options, throwErrors = false) => {
-      if (version2 instanceof SemVer) {
-        return version2;
-      }
-      try {
-        return new SemVer(version2, options);
-      } catch (er) {
-        if (!throwErrors) {
-          return null;
-        }
-        throw er;
-      }
-    };
-    module.exports = parse60;
-  }
-});
-
-// node_modules/.pnpm/semver@7.8.5/node_modules/semver/functions/valid.js
-var require_valid = __commonJS({
-  "node_modules/.pnpm/semver@7.8.5/node_modules/semver/functions/valid.js"(exports, module) {
-    "use strict";
-    var parse60 = require_parse();
-    var valid2 = (version2, options) => {
-      const v = parse60(version2, options);
-      return v ? v.version : null;
-    };
-    module.exports = valid2;
-  }
-});
-
-// node_modules/.pnpm/semver@7.8.5/node_modules/semver/functions/clean.js
-var require_clean = __commonJS({
-  "node_modules/.pnpm/semver@7.8.5/node_modules/semver/functions/clean.js"(exports, module) {
-    "use strict";
-    var parse60 = require_parse();
-    var clean = (version2, options) => {
-      const s2 = parse60(version2.trim().replace(/^[=v]+/, ""), options);
-      return s2 ? s2.version : null;
-    };
-    module.exports = clean;
-  }
-});
-
-// node_modules/.pnpm/semver@7.8.5/node_modules/semver/functions/inc.js
-var require_inc = __commonJS({
-  "node_modules/.pnpm/semver@7.8.5/node_modules/semver/functions/inc.js"(exports, module) {
-    "use strict";
-    var SemVer = require_semver();
-    var inc = (version2, release, options, identifier, identifierBase) => {
-      if (typeof options === "string") {
-        identifierBase = identifier;
-        identifier = options;
-        options = void 0;
-      }
-      try {
-        return new SemVer(
-          version2 instanceof SemVer ? version2.version : version2,
-          options
-        ).inc(release, identifier, identifierBase).version;
-      } catch (er) {
-        return null;
-      }
-    };
-    module.exports = inc;
-  }
-});
-
-// node_modules/.pnpm/semver@7.8.5/node_modules/semver/functions/diff.js
-var require_diff = __commonJS({
-  "node_modules/.pnpm/semver@7.8.5/node_modules/semver/functions/diff.js"(exports, module) {
-    "use strict";
-    var parse60 = require_parse();
-    var diff = (version1, version2) => {
-      const v1 = parse60(version1, null, true);
-      const v2 = parse60(version2, null, true);
-      const comparison = v1.compare(v2);
-      if (comparison === 0) {
-        return null;
-      }
-      const v1Higher = comparison > 0;
-      const highVersion = v1Higher ? v1 : v2;
-      const lowVersion = v1Higher ? v2 : v1;
-      const highHasPre = !!highVersion.prerelease.length;
-      const lowHasPre = !!lowVersion.prerelease.length;
-      if (lowHasPre && !highHasPre) {
-        if (!lowVersion.patch && !lowVersion.minor) {
-          return "major";
-        }
-        if (lowVersion.compareMain(highVersion) === 0) {
-          if (lowVersion.minor && !lowVersion.patch) {
-            return "minor";
-          }
-          return "patch";
-        }
-      }
-      const prefix = highHasPre ? "pre" : "";
-      if (v1.major !== v2.major) {
-        return prefix + "major";
-      }
-      if (v1.minor !== v2.minor) {
-        return prefix + "minor";
-      }
-      if (v1.patch !== v2.patch) {
-        return prefix + "patch";
-      }
-      return "prerelease";
-    };
-    module.exports = diff;
-  }
-});
-
-// node_modules/.pnpm/semver@7.8.5/node_modules/semver/functions/major.js
-var require_major = __commonJS({
-  "node_modules/.pnpm/semver@7.8.5/node_modules/semver/functions/major.js"(exports, module) {
-    "use strict";
-    var SemVer = require_semver();
-    var major = (a, loose) => new SemVer(a, loose).major;
-    module.exports = major;
-  }
-});
-
-// node_modules/.pnpm/semver@7.8.5/node_modules/semver/functions/minor.js
-var require_minor = __commonJS({
-  "node_modules/.pnpm/semver@7.8.5/node_modules/semver/functions/minor.js"(exports, module) {
-    "use strict";
-    var SemVer = require_semver();
-    var minor = (a, loose) => new SemVer(a, loose).minor;
-    module.exports = minor;
-  }
-});
-
-// node_modules/.pnpm/semver@7.8.5/node_modules/semver/functions/patch.js
-var require_patch = __commonJS({
-  "node_modules/.pnpm/semver@7.8.5/node_modules/semver/functions/patch.js"(exports, module) {
-    "use strict";
-    var SemVer = require_semver();
-    var patch3 = (a, loose) => new SemVer(a, loose).patch;
-    module.exports = patch3;
-  }
-});
-
-// node_modules/.pnpm/semver@7.8.5/node_modules/semver/functions/prerelease.js
-var require_prerelease = __commonJS({
-  "node_modules/.pnpm/semver@7.8.5/node_modules/semver/functions/prerelease.js"(exports, module) {
-    "use strict";
-    var parse60 = require_parse();
-    var prerelease = (version2, options) => {
-      const parsed = parse60(version2, options);
-      return parsed && parsed.prerelease.length ? parsed.prerelease : null;
-    };
-    module.exports = prerelease;
-  }
-});
-
-// node_modules/.pnpm/semver@7.8.5/node_modules/semver/functions/compare.js
-var require_compare = __commonJS({
-  "node_modules/.pnpm/semver@7.8.5/node_modules/semver/functions/compare.js"(exports, module) {
-    "use strict";
-    var SemVer = require_semver();
-    var compare = (a, b, loose) => new SemVer(a, loose).compare(new SemVer(b, loose));
-    module.exports = compare;
-  }
-});
-
-// node_modules/.pnpm/semver@7.8.5/node_modules/semver/functions/rcompare.js
-var require_rcompare = __commonJS({
-  "node_modules/.pnpm/semver@7.8.5/node_modules/semver/functions/rcompare.js"(exports, module) {
-    "use strict";
-    var compare = require_compare();
-    var rcompare = (a, b, loose) => compare(b, a, loose);
-    module.exports = rcompare;
-  }
-});
-
-// node_modules/.pnpm/semver@7.8.5/node_modules/semver/functions/compare-loose.js
-var require_compare_loose = __commonJS({
-  "node_modules/.pnpm/semver@7.8.5/node_modules/semver/functions/compare-loose.js"(exports, module) {
-    "use strict";
-    var compare = require_compare();
-    var compareLoose = (a, b) => compare(a, b, true);
-    module.exports = compareLoose;
-  }
-});
-
-// node_modules/.pnpm/semver@7.8.5/node_modules/semver/functions/compare-build.js
-var require_compare_build = __commonJS({
-  "node_modules/.pnpm/semver@7.8.5/node_modules/semver/functions/compare-build.js"(exports, module) {
-    "use strict";
-    var SemVer = require_semver();
-    var compareBuild = (a, b, loose) => {
-      const versionA = new SemVer(a, loose);
-      const versionB = new SemVer(b, loose);
-      return versionA.compare(versionB) || versionA.compareBuild(versionB);
-    };
-    module.exports = compareBuild;
-  }
-});
-
-// node_modules/.pnpm/semver@7.8.5/node_modules/semver/functions/sort.js
-var require_sort = __commonJS({
-  "node_modules/.pnpm/semver@7.8.5/node_modules/semver/functions/sort.js"(exports, module) {
-    "use strict";
-    var compareBuild = require_compare_build();
-    var sort = (list3, loose) => list3.sort((a, b) => compareBuild(a, b, loose));
-    module.exports = sort;
-  }
-});
-
-// node_modules/.pnpm/semver@7.8.5/node_modules/semver/functions/rsort.js
-var require_rsort = __commonJS({
-  "node_modules/.pnpm/semver@7.8.5/node_modules/semver/functions/rsort.js"(exports, module) {
-    "use strict";
-    var compareBuild = require_compare_build();
-    var rsort = (list3, loose) => list3.sort((a, b) => compareBuild(b, a, loose));
-    module.exports = rsort;
-  }
-});
-
-// node_modules/.pnpm/semver@7.8.5/node_modules/semver/functions/gt.js
-var require_gt = __commonJS({
-  "node_modules/.pnpm/semver@7.8.5/node_modules/semver/functions/gt.js"(exports, module) {
-    "use strict";
-    var compare = require_compare();
-    var gt = (a, b, loose) => compare(a, b, loose) > 0;
-    module.exports = gt;
-  }
-});
-
-// node_modules/.pnpm/semver@7.8.5/node_modules/semver/functions/lt.js
-var require_lt = __commonJS({
-  "node_modules/.pnpm/semver@7.8.5/node_modules/semver/functions/lt.js"(exports, module) {
-    "use strict";
-    var compare = require_compare();
-    var lt = (a, b, loose) => compare(a, b, loose) < 0;
-    module.exports = lt;
-  }
-});
-
-// node_modules/.pnpm/semver@7.8.5/node_modules/semver/functions/eq.js
-var require_eq = __commonJS({
-  "node_modules/.pnpm/semver@7.8.5/node_modules/semver/functions/eq.js"(exports, module) {
-    "use strict";
-    var compare = require_compare();
-    var eq = (a, b, loose) => compare(a, b, loose) === 0;
-    module.exports = eq;
-  }
-});
-
-// node_modules/.pnpm/semver@7.8.5/node_modules/semver/functions/neq.js
-var require_neq = __commonJS({
-  "node_modules/.pnpm/semver@7.8.5/node_modules/semver/functions/neq.js"(exports, module) {
-    "use strict";
-    var compare = require_compare();
-    var neq = (a, b, loose) => compare(a, b, loose) !== 0;
-    module.exports = neq;
-  }
-});
-
-// node_modules/.pnpm/semver@7.8.5/node_modules/semver/functions/gte.js
-var require_gte = __commonJS({
-  "node_modules/.pnpm/semver@7.8.5/node_modules/semver/functions/gte.js"(exports, module) {
-    "use strict";
-    var compare = require_compare();
-    var gte = (a, b, loose) => compare(a, b, loose) >= 0;
-    module.exports = gte;
-  }
-});
-
-// node_modules/.pnpm/semver@7.8.5/node_modules/semver/functions/lte.js
-var require_lte = __commonJS({
-  "node_modules/.pnpm/semver@7.8.5/node_modules/semver/functions/lte.js"(exports, module) {
-    "use strict";
-    var compare = require_compare();
-    var lte = (a, b, loose) => compare(a, b, loose) <= 0;
-    module.exports = lte;
-  }
-});
-
-// node_modules/.pnpm/semver@7.8.5/node_modules/semver/functions/cmp.js
-var require_cmp = __commonJS({
-  "node_modules/.pnpm/semver@7.8.5/node_modules/semver/functions/cmp.js"(exports, module) {
-    "use strict";
-    var eq = require_eq();
-    var neq = require_neq();
-    var gt = require_gt();
-    var gte = require_gte();
-    var lt = require_lt();
-    var lte = require_lte();
-    var cmp = (a, op, b, loose) => {
-      switch (op) {
-        case "===":
-          if (typeof a === "object") {
-            a = a.version;
-          }
-          if (typeof b === "object") {
-            b = b.version;
-          }
-          return a === b;
-        case "!==":
-          if (typeof a === "object") {
-            a = a.version;
-          }
-          if (typeof b === "object") {
-            b = b.version;
-          }
-          return a !== b;
-        case "":
-        case "=":
-        case "==":
-          return eq(a, b, loose);
-        case "!=":
-          return neq(a, b, loose);
-        case ">":
-          return gt(a, b, loose);
-        case ">=":
-          return gte(a, b, loose);
-        case "<":
-          return lt(a, b, loose);
-        case "<=":
-          return lte(a, b, loose);
-        default:
-          throw new TypeError(`Invalid operator: ${op}`);
-      }
-    };
-    module.exports = cmp;
-  }
-});
-
-// node_modules/.pnpm/semver@7.8.5/node_modules/semver/functions/coerce.js
-var require_coerce = __commonJS({
-  "node_modules/.pnpm/semver@7.8.5/node_modules/semver/functions/coerce.js"(exports, module) {
-    "use strict";
-    var SemVer = require_semver();
-    var parse60 = require_parse();
-    var { safeRe: re, t } = require_re();
-    var coerce = (version2, options) => {
-      if (version2 instanceof SemVer) {
-        return version2;
-      }
-      if (typeof version2 === "number") {
-        version2 = String(version2);
-      }
-      if (typeof version2 !== "string") {
-        return null;
-      }
-      options = options || {};
-      let match = null;
-      if (!options.rtl) {
-        match = version2.match(options.includePrerelease ? re[t.COERCEFULL] : re[t.COERCE]);
-      } else {
-        const coerceRtlRegex = options.includePrerelease ? re[t.COERCERTLFULL] : re[t.COERCERTL];
-        let next2;
-        while ((next2 = coerceRtlRegex.exec(version2)) && (!match || match.index + match[0].length !== version2.length)) {
-          if (!match || next2.index + next2[0].length !== match.index + match[0].length) {
-            match = next2;
-          }
-          coerceRtlRegex.lastIndex = next2.index + next2[1].length + next2[2].length;
-        }
-        coerceRtlRegex.lastIndex = -1;
-      }
-      if (match === null) {
-        return null;
-      }
-      const major = match[2];
-      const minor = match[3] || "0";
-      const patch3 = match[4] || "0";
-      const prerelease = options.includePrerelease && match[5] ? `-${match[5]}` : "";
-      const build = options.includePrerelease && match[6] ? `+${match[6]}` : "";
-      return parse60(`${major}.${minor}.${patch3}${prerelease}${build}`, options);
-    };
-    module.exports = coerce;
-  }
-});
-
-// node_modules/.pnpm/semver@7.8.5/node_modules/semver/functions/truncate.js
-var require_truncate = __commonJS({
-  "node_modules/.pnpm/semver@7.8.5/node_modules/semver/functions/truncate.js"(exports, module) {
-    "use strict";
-    var parse60 = require_parse();
-    var constants3 = require_constants();
-    var SemVer = require_semver();
-    var truncate = (version2, truncation, options) => {
-      if (!constants3.RELEASE_TYPES.includes(truncation)) {
-        return null;
-      }
-      const clonedVersion = cloneInputVersion(version2, options);
-      return clonedVersion && doTruncation(clonedVersion, truncation);
-    };
-    var cloneInputVersion = (version2, options) => {
-      const versionStringToParse = version2 instanceof SemVer ? version2.version : version2;
-      return parse60(versionStringToParse, options);
-    };
-    var doTruncation = (version2, truncation) => {
-      if (isPrerelease(truncation)) {
-        return version2.version;
-      }
-      version2.prerelease = [];
-      switch (truncation) {
-        case "major":
-          version2.minor = 0;
-          version2.patch = 0;
-          break;
-        case "minor":
-          version2.patch = 0;
-          break;
-      }
-      return version2.format();
-    };
-    var isPrerelease = (type) => {
-      return type.startsWith("pre");
-    };
-    module.exports = truncate;
-  }
-});
-
-// node_modules/.pnpm/semver@7.8.5/node_modules/semver/internal/lrucache.js
-var require_lrucache = __commonJS({
-  "node_modules/.pnpm/semver@7.8.5/node_modules/semver/internal/lrucache.js"(exports, module) {
-    "use strict";
-    var LRUCache = class {
-      constructor() {
-        this.max = 1e3;
-        this.map = /* @__PURE__ */ new Map();
-      }
-      get(key) {
-        const value = this.map.get(key);
-        if (value === void 0) {
-          return void 0;
-        } else {
-          this.map.delete(key);
-          this.map.set(key, value);
-          return value;
-        }
-      }
-      delete(key) {
-        return this.map.delete(key);
-      }
-      set(key, value) {
-        const deleted = this.delete(key);
-        if (!deleted && value !== void 0) {
-          if (this.map.size >= this.max) {
-            const firstKey = this.map.keys().next().value;
-            this.delete(firstKey);
-          }
-          this.map.set(key, value);
-        }
-        return this;
-      }
-    };
-    module.exports = LRUCache;
-  }
-});
-
-// node_modules/.pnpm/semver@7.8.5/node_modules/semver/classes/range.js
-var require_range = __commonJS({
-  "node_modules/.pnpm/semver@7.8.5/node_modules/semver/classes/range.js"(exports, module) {
-    "use strict";
-    var SPACE_CHARACTERS = /\s+/g;
-    var Range = class _Range {
-      constructor(range, options) {
-        options = parseOptions(options);
-        if (range instanceof _Range) {
-          if (range.loose === !!options.loose && range.includePrerelease === !!options.includePrerelease) {
-            return range;
-          } else {
-            return new _Range(range.raw, options);
-          }
-        }
-        if (range instanceof Comparator) {
-          this.raw = range.value;
-          this.set = [[range]];
-          this.formatted = void 0;
-          return this;
-        }
-        this.options = options;
-        this.loose = !!options.loose;
-        this.includePrerelease = !!options.includePrerelease;
-        this.raw = range.trim().replace(SPACE_CHARACTERS, " ");
-        this.set = this.raw.split("||").map((r) => this.parseRange(r.trim())).filter((c) => c.length);
-        if (!this.set.length) {
-          throw new TypeError(`Invalid SemVer Range: ${this.raw}`);
-        }
-        if (this.set.length > 1) {
-          const first = this.set[0];
-          this.set = this.set.filter((c) => !isNullSet(c[0]));
-          if (this.set.length === 0) {
-            this.set = [first];
-          } else if (this.set.length > 1) {
-            for (const c of this.set) {
-              if (c.length === 1 && isAny(c[0])) {
-                this.set = [c];
-                break;
-              }
-            }
-          }
-        }
-        this.formatted = void 0;
-      }
-      get range() {
-        if (this.formatted === void 0) {
-          this.formatted = "";
-          for (let i = 0; i < this.set.length; i++) {
-            if (i > 0) {
-              this.formatted += "||";
-            }
-            const comps = this.set[i];
-            for (let k = 0; k < comps.length; k++) {
-              if (k > 0) {
-                this.formatted += " ";
-              }
-              this.formatted += comps[k].toString().trim();
-            }
-          }
-        }
-        return this.formatted;
-      }
-      format() {
-        return this.range;
-      }
-      toString() {
-        return this.range;
-      }
-      parseRange(range) {
-        range = range.replace(BUILDSTRIPRE, "");
-        const memoOpts = (this.options.includePrerelease && FLAG_INCLUDE_PRERELEASE) | (this.options.loose && FLAG_LOOSE);
-        const memoKey = memoOpts + ":" + range;
-        const cached = cache.get(memoKey);
-        if (cached) {
-          return cached;
-        }
-        const loose = this.options.loose;
-        const hr = loose ? re[t.HYPHENRANGELOOSE] : re[t.HYPHENRANGE];
-        range = range.replace(hr, hyphenReplace(this.options.includePrerelease));
-        debug("hyphen replace", range);
-        range = range.replace(re[t.COMPARATORTRIM], comparatorTrimReplace);
-        debug("comparator trim", range);
-        range = range.replace(re[t.TILDETRIM], tildeTrimReplace);
-        debug("tilde trim", range);
-        range = range.replace(re[t.CARETTRIM], caretTrimReplace);
-        debug("caret trim", range);
-        let rangeList = range.split(" ").map((comp) => parseComparator(comp, this.options)).join(" ").split(/\s+/).map((comp) => replaceGTE0(comp, this.options));
-        if (loose) {
-          rangeList = rangeList.filter((comp) => {
-            debug("loose invalid filter", comp, this.options);
-            return !!comp.match(re[t.COMPARATORLOOSE]);
-          });
-        }
-        debug("range list", rangeList);
-        const rangeMap = /* @__PURE__ */ new Map();
-        const comparators = rangeList.map((comp) => new Comparator(comp, this.options));
-        for (const comp of comparators) {
-          if (isNullSet(comp)) {
-            return [comp];
-          }
-          rangeMap.set(comp.value, comp);
-        }
-        if (rangeMap.size > 1 && rangeMap.has("")) {
-          rangeMap.delete("");
-        }
-        const result = [...rangeMap.values()];
-        cache.set(memoKey, result);
-        return result;
-      }
-      intersects(range, options) {
-        if (!(range instanceof _Range)) {
-          throw new TypeError("a Range is required");
-        }
-        return this.set.some((thisComparators) => {
-          return isSatisfiable(thisComparators, options) && range.set.some((rangeComparators) => {
-            return isSatisfiable(rangeComparators, options) && thisComparators.every((thisComparator) => {
-              return rangeComparators.every((rangeComparator) => {
-                return thisComparator.intersects(rangeComparator, options);
-              });
-            });
-          });
-        });
-      }
-      // if ANY of the sets match ALL of its comparators, then pass
-      test(version2) {
-        if (!version2) {
-          return false;
-        }
-        if (typeof version2 === "string") {
-          try {
-            version2 = new SemVer(version2, this.options);
-          } catch (er) {
-            return false;
-          }
-        }
-        for (let i = 0; i < this.set.length; i++) {
-          if (testSet(this.set[i], version2, this.options)) {
-            return true;
-          }
-        }
-        return false;
-      }
-    };
-    module.exports = Range;
-    var LRU = require_lrucache();
-    var cache = new LRU();
-    var parseOptions = require_parse_options();
-    var Comparator = require_comparator();
-    var debug = require_debug();
-    var SemVer = require_semver();
-    var {
-      safeRe: re,
-      src,
-      t,
-      comparatorTrimReplace,
-      tildeTrimReplace,
-      caretTrimReplace
-    } = require_re();
-    var { FLAG_INCLUDE_PRERELEASE, FLAG_LOOSE } = require_constants();
-    var BUILDSTRIPRE = new RegExp(src[t.BUILD], "g");
-    var isNullSet = (c) => c.value === "<0.0.0-0";
-    var isAny = (c) => c.value === "";
-    var isSatisfiable = (comparators, options) => {
-      let result = true;
-      const remainingComparators = comparators.slice();
-      let testComparator = remainingComparators.pop();
-      while (result && remainingComparators.length) {
-        result = remainingComparators.every((otherComparator) => {
-          return testComparator.intersects(otherComparator, options);
-        });
-        testComparator = remainingComparators.pop();
-      }
-      return result;
-    };
-    var parseComparator = (comp, options) => {
-      comp = comp.replace(re[t.BUILD], "");
-      debug("comp", comp, options);
-      comp = replaceCarets(comp, options);
-      debug("caret", comp);
-      comp = replaceTildes(comp, options);
-      debug("tildes", comp);
-      comp = replaceXRanges(comp, options);
-      debug("xrange", comp);
-      comp = replaceStars(comp, options);
-      debug("stars", comp);
-      return comp;
-    };
-    var isX = (id) => !id || id.toLowerCase() === "x" || id === "*";
-    var invalidXRangeOrder = (M, m, p) => isX(M) && !isX(m) || isX(m) && p && !isX(p);
-    var replaceTildes = (comp, options) => {
-      return comp.trim().split(/\s+/).map((c) => replaceTilde(c, options)).join(" ");
-    };
-    var replaceTilde = (comp, options) => {
-      const r = options.loose ? re[t.TILDELOOSE] : re[t.TILDE];
-      const z = options.includePrerelease ? "-0" : "";
-      return comp.replace(r, (_, M, m, p, pr) => {
-        debug("tilde", comp, _, M, m, p, pr);
-        let ret;
-        if (isX(M)) {
-          ret = "";
-        } else if (isX(m)) {
-          ret = `>=${M}.0.0${z} <${+M + 1}.0.0-0`;
-        } else if (isX(p)) {
-          ret = `>=${M}.${m}.0${z} <${M}.${+m + 1}.0-0`;
-        } else if (pr) {
-          debug("replaceTilde pr", pr);
-          ret = `>=${M}.${m}.${p}-${pr} <${M}.${+m + 1}.0-0`;
-        } else {
-          ret = `>=${M}.${m}.${p} <${M}.${+m + 1}.0-0`;
-        }
-        debug("tilde return", ret);
-        return ret;
-      });
-    };
-    var replaceCarets = (comp, options) => {
-      return comp.trim().split(/\s+/).map((c) => replaceCaret(c, options)).join(" ");
-    };
-    var replaceCaret = (comp, options) => {
-      debug("caret", comp, options);
-      const r = options.loose ? re[t.CARETLOOSE] : re[t.CARET];
-      const z = options.includePrerelease ? "-0" : "";
-      return comp.replace(r, (_, M, m, p, pr) => {
-        debug("caret", comp, _, M, m, p, pr);
-        let ret;
-        if (isX(M)) {
-          ret = "";
-        } else if (isX(m)) {
-          ret = `>=${M}.0.0${z} <${+M + 1}.0.0-0`;
-        } else if (isX(p)) {
-          if (M === "0") {
-            ret = `>=${M}.${m}.0${z} <${M}.${+m + 1}.0-0`;
-          } else {
-            ret = `>=${M}.${m}.0${z} <${+M + 1}.0.0-0`;
-          }
-        } else if (pr) {
-          debug("replaceCaret pr", pr);
-          if (M === "0") {
-            if (m === "0") {
-              ret = `>=${M}.${m}.${p}-${pr} <${M}.${m}.${+p + 1}-0`;
-            } else {
-              ret = `>=${M}.${m}.${p}-${pr} <${M}.${+m + 1}.0-0`;
-            }
-          } else {
-            ret = `>=${M}.${m}.${p}-${pr} <${+M + 1}.0.0-0`;
-          }
-        } else {
-          debug("no pr");
-          if (M === "0") {
-            if (m === "0") {
-              ret = `>=${M}.${m}.${p} <${M}.${m}.${+p + 1}-0`;
-            } else {
-              ret = `>=${M}.${m}.${p} <${M}.${+m + 1}.0-0`;
-            }
-          } else {
-            ret = `>=${M}.${m}.${p} <${+M + 1}.0.0-0`;
-          }
-        }
-        debug("caret return", ret);
-        return ret;
-      });
-    };
-    var replaceXRanges = (comp, options) => {
-      debug("replaceXRanges", comp, options);
-      return comp.split(/\s+/).map((c) => replaceXRange(c, options)).join(" ");
-    };
-    var replaceXRange = (comp, options) => {
-      comp = comp.trim();
-      const r = options.loose ? re[t.XRANGELOOSE] : re[t.XRANGE];
-      return comp.replace(r, (ret, gtlt, M, m, p, pr) => {
-        debug("xRange", comp, ret, gtlt, M, m, p, pr);
-        if (invalidXRangeOrder(M, m, p)) {
-          return comp;
-        }
-        const xM = isX(M);
-        const xm = xM || isX(m);
-        const xp = xm || isX(p);
-        const anyX = xp;
-        if (gtlt === "=" && anyX) {
-          gtlt = "";
-        }
-        pr = options.includePrerelease ? "-0" : "";
-        if (xM) {
-          if (gtlt === ">" || gtlt === "<") {
-            ret = "<0.0.0-0";
-          } else {
-            ret = "*";
-          }
-        } else if (gtlt && anyX) {
-          if (xm) {
-            m = 0;
-          }
-          p = 0;
-          if (gtlt === ">") {
-            gtlt = ">=";
-            if (xm) {
-              M = +M + 1;
-              m = 0;
-              p = 0;
-            } else {
-              m = +m + 1;
-              p = 0;
-            }
-          } else if (gtlt === "<=") {
-            gtlt = "<";
-            if (xm) {
-              M = +M + 1;
-            } else {
-              m = +m + 1;
-            }
-          }
-          if (gtlt === "<") {
-            pr = "-0";
-          }
-          ret = `${gtlt + M}.${m}.${p}${pr}`;
-        } else if (xm) {
-          ret = `>=${M}.0.0${pr} <${+M + 1}.0.0-0`;
-        } else if (xp) {
-          ret = `>=${M}.${m}.0${pr} <${M}.${+m + 1}.0-0`;
-        }
-        debug("xRange return", ret);
-        return ret;
-      });
-    };
-    var replaceStars = (comp, options) => {
-      debug("replaceStars", comp, options);
-      return comp.trim().replace(re[t.STAR], "");
-    };
-    var replaceGTE0 = (comp, options) => {
-      debug("replaceGTE0", comp, options);
-      return comp.trim().replace(re[options.includePrerelease ? t.GTE0PRE : t.GTE0], "");
-    };
-    var hyphenReplace = (incPr) => ($0, from, fM, fm, fp, fpr, fb, to, tM, tm, tp, tpr) => {
-      if (isX(fM)) {
-        from = "";
-      } else if (isX(fm)) {
-        from = `>=${fM}.0.0${incPr ? "-0" : ""}`;
-      } else if (isX(fp)) {
-        from = `>=${fM}.${fm}.0${incPr ? "-0" : ""}`;
-      } else if (fpr) {
-        from = `>=${from}`;
-      } else {
-        from = `>=${from}${incPr ? "-0" : ""}`;
-      }
-      if (isX(tM)) {
-        to = "";
-      } else if (isX(tm)) {
-        to = `<${+tM + 1}.0.0-0`;
-      } else if (isX(tp)) {
-        to = `<${tM}.${+tm + 1}.0-0`;
-      } else if (tpr) {
-        to = `<=${tM}.${tm}.${tp}-${tpr}`;
-      } else if (incPr) {
-        to = `<${tM}.${tm}.${+tp + 1}-0`;
-      } else {
-        to = `<=${to}`;
-      }
-      return `${from} ${to}`.trim();
-    };
-    var testSet = (set, version2, options) => {
-      for (let i = 0; i < set.length; i++) {
-        if (!set[i].test(version2)) {
-          return false;
-        }
-      }
-      if (version2.prerelease.length && !options.includePrerelease) {
-        for (let i = 0; i < set.length; i++) {
-          debug(set[i].semver);
-          if (set[i].semver === Comparator.ANY) {
-            continue;
-          }
-          if (set[i].semver.prerelease.length > 0) {
-            const allowed = set[i].semver;
-            if (allowed.major === version2.major && allowed.minor === version2.minor && allowed.patch === version2.patch) {
-              return true;
-            }
-          }
-        }
-        return false;
-      }
-      return true;
-    };
-  }
-});
-
-// node_modules/.pnpm/semver@7.8.5/node_modules/semver/classes/comparator.js
-var require_comparator = __commonJS({
-  "node_modules/.pnpm/semver@7.8.5/node_modules/semver/classes/comparator.js"(exports, module) {
-    "use strict";
-    var ANY = /* @__PURE__ */ Symbol("SemVer ANY");
-    var Comparator = class _Comparator {
-      static get ANY() {
-        return ANY;
-      }
-      constructor(comp, options) {
-        options = parseOptions(options);
-        if (comp instanceof _Comparator) {
-          if (comp.loose === !!options.loose) {
-            return comp;
-          } else {
-            comp = comp.value;
-          }
-        }
-        comp = comp.trim().split(/\s+/).join(" ");
-        debug("comparator", comp, options);
-        this.options = options;
-        this.loose = !!options.loose;
-        this.parse(comp);
-        if (this.semver === ANY) {
-          this.value = "";
-        } else {
-          this.value = this.operator + this.semver.version;
-        }
-        debug("comp", this);
-      }
-      parse(comp) {
-        const r = this.options.loose ? re[t.COMPARATORLOOSE] : re[t.COMPARATOR];
-        const m = comp.match(r);
-        if (!m) {
-          throw new TypeError(`Invalid comparator: ${comp}`);
-        }
-        this.operator = m[1] !== void 0 ? m[1] : "";
-        if (this.operator === "=") {
-          this.operator = "";
-        }
-        if (!m[2]) {
-          this.semver = ANY;
-        } else {
-          this.semver = new SemVer(m[2], this.options.loose);
-        }
-      }
-      toString() {
-        return this.value;
-      }
-      test(version2) {
-        debug("Comparator.test", version2, this.options.loose);
-        if (this.semver === ANY || version2 === ANY) {
-          return true;
-        }
-        if (typeof version2 === "string") {
-          try {
-            version2 = new SemVer(version2, this.options);
-          } catch (er) {
-            return false;
-          }
-        }
-        return cmp(version2, this.operator, this.semver, this.options);
-      }
-      intersects(comp, options) {
-        if (!(comp instanceof _Comparator)) {
-          throw new TypeError("a Comparator is required");
-        }
-        if (this.operator === "") {
-          if (this.value === "") {
-            return true;
-          }
-          return new Range(comp.value, options).test(this.value);
-        } else if (comp.operator === "") {
-          if (comp.value === "") {
-            return true;
-          }
-          return new Range(this.value, options).test(comp.semver);
-        }
-        options = parseOptions(options);
-        if (options.includePrerelease && (this.value === "<0.0.0-0" || comp.value === "<0.0.0-0")) {
-          return false;
-        }
-        if (!options.includePrerelease && (this.value.startsWith("<0.0.0") || comp.value.startsWith("<0.0.0"))) {
-          return false;
-        }
-        if (this.operator.startsWith(">") && comp.operator.startsWith(">")) {
-          return true;
-        }
-        if (this.operator.startsWith("<") && comp.operator.startsWith("<")) {
-          return true;
-        }
-        if (this.semver.version === comp.semver.version && this.operator.includes("=") && comp.operator.includes("=")) {
-          return true;
-        }
-        if (cmp(this.semver, "<", comp.semver, options) && this.operator.startsWith(">") && comp.operator.startsWith("<")) {
-          return true;
-        }
-        if (cmp(this.semver, ">", comp.semver, options) && this.operator.startsWith("<") && comp.operator.startsWith(">")) {
-          return true;
-        }
-        return false;
-      }
-    };
-    module.exports = Comparator;
-    var parseOptions = require_parse_options();
-    var { safeRe: re, t } = require_re();
-    var cmp = require_cmp();
-    var debug = require_debug();
-    var SemVer = require_semver();
-    var Range = require_range();
-  }
-});
-
-// node_modules/.pnpm/semver@7.8.5/node_modules/semver/functions/satisfies.js
-var require_satisfies = __commonJS({
-  "node_modules/.pnpm/semver@7.8.5/node_modules/semver/functions/satisfies.js"(exports, module) {
-    "use strict";
-    var Range = require_range();
-    var satisfies = (version2, range, options) => {
-      try {
-        range = new Range(range, options);
-      } catch (er) {
-        return false;
-      }
-      return range.test(version2);
-    };
-    module.exports = satisfies;
-  }
-});
-
-// node_modules/.pnpm/semver@7.8.5/node_modules/semver/ranges/to-comparators.js
-var require_to_comparators = __commonJS({
-  "node_modules/.pnpm/semver@7.8.5/node_modules/semver/ranges/to-comparators.js"(exports, module) {
-    "use strict";
-    var Range = require_range();
-    var toComparators = (range, options) => new Range(range, options).set.map((comp) => comp.map((c) => c.value).join(" ").trim().split(" "));
-    module.exports = toComparators;
-  }
-});
-
-// node_modules/.pnpm/semver@7.8.5/node_modules/semver/ranges/max-satisfying.js
-var require_max_satisfying = __commonJS({
-  "node_modules/.pnpm/semver@7.8.5/node_modules/semver/ranges/max-satisfying.js"(exports, module) {
-    "use strict";
-    var SemVer = require_semver();
-    var Range = require_range();
-    var maxSatisfying = (versions, range, options) => {
-      let max = null;
-      let maxSV = null;
-      let rangeObj = null;
-      try {
-        rangeObj = new Range(range, options);
-      } catch (er) {
-        return null;
-      }
-      versions.forEach((v) => {
-        if (rangeObj.test(v)) {
-          if (!max || maxSV.compare(v) === -1) {
-            max = v;
-            maxSV = new SemVer(max, options);
-          }
-        }
-      });
-      return max;
-    };
-    module.exports = maxSatisfying;
-  }
-});
-
-// node_modules/.pnpm/semver@7.8.5/node_modules/semver/ranges/min-satisfying.js
-var require_min_satisfying = __commonJS({
-  "node_modules/.pnpm/semver@7.8.5/node_modules/semver/ranges/min-satisfying.js"(exports, module) {
-    "use strict";
-    var SemVer = require_semver();
-    var Range = require_range();
-    var minSatisfying = (versions, range, options) => {
-      let min = null;
-      let minSV = null;
-      let rangeObj = null;
-      try {
-        rangeObj = new Range(range, options);
-      } catch (er) {
-        return null;
-      }
-      versions.forEach((v) => {
-        if (rangeObj.test(v)) {
-          if (!min || minSV.compare(v) === 1) {
-            min = v;
-            minSV = new SemVer(min, options);
-          }
-        }
-      });
-      return min;
-    };
-    module.exports = minSatisfying;
-  }
-});
-
-// node_modules/.pnpm/semver@7.8.5/node_modules/semver/ranges/min-version.js
-var require_min_version = __commonJS({
-  "node_modules/.pnpm/semver@7.8.5/node_modules/semver/ranges/min-version.js"(exports, module) {
-    "use strict";
-    var SemVer = require_semver();
-    var Range = require_range();
-    var gt = require_gt();
-    var minVersion = (range, loose) => {
-      range = new Range(range, loose);
-      let minver = new SemVer("0.0.0");
-      if (range.test(minver)) {
-        return minver;
-      }
-      minver = new SemVer("0.0.0-0");
-      if (range.test(minver)) {
-        return minver;
-      }
-      minver = null;
-      for (let i = 0; i < range.set.length; ++i) {
-        const comparators = range.set[i];
-        let setMin = null;
-        comparators.forEach((comparator) => {
-          const compver = new SemVer(comparator.semver.version);
-          switch (comparator.operator) {
-            case ">":
-              if (compver.prerelease.length === 0) {
-                compver.patch++;
-              } else {
-                compver.prerelease.push(0);
-              }
-              compver.raw = compver.format();
-            /* fallthrough */
-            case "":
-            case ">=":
-              if (!setMin || gt(compver, setMin)) {
-                setMin = compver;
-              }
-              break;
-            case "<":
-            case "<=":
-              break;
-            /* istanbul ignore next */
-            default:
-              throw new Error(`Unexpected operation: ${comparator.operator}`);
-          }
-        });
-        if (setMin && (!minver || gt(minver, setMin))) {
-          minver = setMin;
-        }
-      }
-      if (minver && range.test(minver)) {
-        return minver;
-      }
-      return null;
-    };
-    module.exports = minVersion;
-  }
-});
-
-// node_modules/.pnpm/semver@7.8.5/node_modules/semver/ranges/valid.js
-var require_valid2 = __commonJS({
-  "node_modules/.pnpm/semver@7.8.5/node_modules/semver/ranges/valid.js"(exports, module) {
-    "use strict";
-    var Range = require_range();
-    var validRange = (range, options) => {
-      try {
-        return new Range(range, options).range || "*";
-      } catch (er) {
-        return null;
-      }
-    };
-    module.exports = validRange;
-  }
-});
-
-// node_modules/.pnpm/semver@7.8.5/node_modules/semver/ranges/outside.js
-var require_outside = __commonJS({
-  "node_modules/.pnpm/semver@7.8.5/node_modules/semver/ranges/outside.js"(exports, module) {
-    "use strict";
-    var SemVer = require_semver();
-    var Comparator = require_comparator();
-    var { ANY } = Comparator;
-    var Range = require_range();
-    var satisfies = require_satisfies();
-    var gt = require_gt();
-    var lt = require_lt();
-    var lte = require_lte();
-    var gte = require_gte();
-    var outside = (version2, range, hilo, options) => {
-      version2 = new SemVer(version2, options);
-      range = new Range(range, options);
-      let gtfn, ltefn, ltfn, comp, ecomp;
-      switch (hilo) {
-        case ">":
-          gtfn = gt;
-          ltefn = lte;
-          ltfn = lt;
-          comp = ">";
-          ecomp = ">=";
-          break;
-        case "<":
-          gtfn = lt;
-          ltefn = gte;
-          ltfn = gt;
-          comp = "<";
-          ecomp = "<=";
-          break;
-        default:
-          throw new TypeError('Must provide a hilo val of "<" or ">"');
-      }
-      if (satisfies(version2, range, options)) {
-        return false;
-      }
-      for (let i = 0; i < range.set.length; ++i) {
-        const comparators = range.set[i];
-        let high = null;
-        let low = null;
-        comparators.forEach((comparator) => {
-          if (comparator.semver === ANY) {
-            comparator = new Comparator(">=0.0.0");
-          }
-          high = high || comparator;
-          low = low || comparator;
-          if (gtfn(comparator.semver, high.semver, options)) {
-            high = comparator;
-          } else if (ltfn(comparator.semver, low.semver, options)) {
-            low = comparator;
-          }
-        });
-        if (high.operator === comp || high.operator === ecomp) {
-          return false;
-        }
-        if ((!low.operator || low.operator === comp) && ltefn(version2, low.semver)) {
-          return false;
-        } else if (low.operator === ecomp && ltfn(version2, low.semver)) {
-          return false;
-        }
-      }
-      return true;
-    };
-    module.exports = outside;
-  }
-});
-
-// node_modules/.pnpm/semver@7.8.5/node_modules/semver/ranges/gtr.js
-var require_gtr = __commonJS({
-  "node_modules/.pnpm/semver@7.8.5/node_modules/semver/ranges/gtr.js"(exports, module) {
-    "use strict";
-    var outside = require_outside();
-    var gtr = (version2, range, options) => outside(version2, range, ">", options);
-    module.exports = gtr;
-  }
-});
-
-// node_modules/.pnpm/semver@7.8.5/node_modules/semver/ranges/ltr.js
-var require_ltr = __commonJS({
-  "node_modules/.pnpm/semver@7.8.5/node_modules/semver/ranges/ltr.js"(exports, module) {
-    "use strict";
-    var outside = require_outside();
-    var ltr = (version2, range, options) => outside(version2, range, "<", options);
-    module.exports = ltr;
-  }
-});
-
-// node_modules/.pnpm/semver@7.8.5/node_modules/semver/ranges/intersects.js
-var require_intersects = __commonJS({
-  "node_modules/.pnpm/semver@7.8.5/node_modules/semver/ranges/intersects.js"(exports, module) {
-    "use strict";
-    var Range = require_range();
-    var intersects = (r1, r2, options) => {
-      r1 = new Range(r1, options);
-      r2 = new Range(r2, options);
-      return r1.intersects(r2, options);
-    };
-    module.exports = intersects;
-  }
-});
-
-// node_modules/.pnpm/semver@7.8.5/node_modules/semver/ranges/simplify.js
-var require_simplify = __commonJS({
-  "node_modules/.pnpm/semver@7.8.5/node_modules/semver/ranges/simplify.js"(exports, module) {
-    "use strict";
-    var satisfies = require_satisfies();
-    var compare = require_compare();
-    module.exports = (versions, range, options) => {
-      const set = [];
-      let first = null;
-      let prev = null;
-      const v = versions.sort((a, b) => compare(a, b, options));
-      for (const version2 of v) {
-        const included = satisfies(version2, range, options);
-        if (included) {
-          prev = version2;
-          if (!first) {
-            first = version2;
-          }
-        } else {
-          if (prev) {
-            set.push([first, prev]);
-          }
-          prev = null;
-          first = null;
-        }
-      }
-      if (first) {
-        set.push([first, null]);
-      }
-      const ranges = [];
-      for (const [min, max] of set) {
-        if (min === max) {
-          ranges.push(min);
-        } else if (!max && min === v[0]) {
-          ranges.push("*");
-        } else if (!max) {
-          ranges.push(`>=${min}`);
-        } else if (min === v[0]) {
-          ranges.push(`<=${max}`);
-        } else {
-          ranges.push(`${min} - ${max}`);
-        }
-      }
-      const simplified = ranges.join(" || ");
-      const original = typeof range.raw === "string" ? range.raw : String(range);
-      return simplified.length < original.length ? simplified : range;
-    };
-  }
-});
-
-// node_modules/.pnpm/semver@7.8.5/node_modules/semver/ranges/subset.js
-var require_subset = __commonJS({
-  "node_modules/.pnpm/semver@7.8.5/node_modules/semver/ranges/subset.js"(exports, module) {
-    "use strict";
-    var Range = require_range();
-    var Comparator = require_comparator();
-    var { ANY } = Comparator;
-    var satisfies = require_satisfies();
-    var compare = require_compare();
-    var subset = (sub, dom, options = {}) => {
-      if (sub === dom) {
-        return true;
-      }
-      sub = new Range(sub, options);
-      dom = new Range(dom, options);
-      let sawNonNull = false;
-      OUTER: for (const simpleSub of sub.set) {
-        for (const simpleDom of dom.set) {
-          const isSub = simpleSubset(simpleSub, simpleDom, options);
-          sawNonNull = sawNonNull || isSub !== null;
-          if (isSub) {
-            continue OUTER;
-          }
-        }
-        if (sawNonNull) {
-          return false;
-        }
-      }
-      return true;
-    };
-    var minimumVersionWithPreRelease = [new Comparator(">=0.0.0-0")];
-    var minimumVersion = [new Comparator(">=0.0.0")];
-    var simpleSubset = (sub, dom, options) => {
-      if (sub === dom) {
-        return true;
-      }
-      if (sub.length === 1 && sub[0].semver === ANY) {
-        if (dom.length === 1 && dom[0].semver === ANY) {
-          return true;
-        } else if (options.includePrerelease) {
-          sub = minimumVersionWithPreRelease;
-        } else {
-          sub = minimumVersion;
-        }
-      }
-      if (dom.length === 1 && dom[0].semver === ANY) {
-        if (options.includePrerelease) {
-          return true;
-        } else {
-          dom = minimumVersion;
-        }
-      }
-      const eqSet = /* @__PURE__ */ new Set();
-      let gt, lt;
-      for (const c of sub) {
-        if (c.operator === ">" || c.operator === ">=") {
-          gt = higherGT(gt, c, options);
-        } else if (c.operator === "<" || c.operator === "<=") {
-          lt = lowerLT(lt, c, options);
-        } else {
-          eqSet.add(c.semver);
-        }
-      }
-      if (eqSet.size > 1) {
-        return null;
-      }
-      let gtltComp;
-      if (gt && lt) {
-        gtltComp = compare(gt.semver, lt.semver, options);
-        if (gtltComp > 0) {
-          return null;
-        } else if (gtltComp === 0 && (gt.operator !== ">=" || lt.operator !== "<=")) {
-          return null;
-        }
-      }
-      for (const eq of eqSet) {
-        if (gt && !satisfies(eq, String(gt), options)) {
-          return null;
-        }
-        if (lt && !satisfies(eq, String(lt), options)) {
-          return null;
-        }
-        for (const c of dom) {
-          if (!satisfies(eq, String(c), options)) {
-            return false;
-          }
-        }
-        return true;
-      }
-      let higher, lower;
-      let hasDomLT, hasDomGT;
-      let needDomLTPre = lt && !options.includePrerelease && lt.semver.prerelease.length ? lt.semver : false;
-      let needDomGTPre = gt && !options.includePrerelease && gt.semver.prerelease.length ? gt.semver : false;
-      if (needDomLTPre && needDomLTPre.prerelease.length === 1 && lt.operator === "<" && needDomLTPre.prerelease[0] === 0) {
-        needDomLTPre = false;
-      }
-      for (const c of dom) {
-        hasDomGT = hasDomGT || c.operator === ">" || c.operator === ">=";
-        hasDomLT = hasDomLT || c.operator === "<" || c.operator === "<=";
-        if (gt) {
-          if (needDomGTPre) {
-            if (c.semver.prerelease && c.semver.prerelease.length && c.semver.major === needDomGTPre.major && c.semver.minor === needDomGTPre.minor && c.semver.patch === needDomGTPre.patch) {
-              needDomGTPre = false;
-            }
-          }
-          if (c.operator === ">" || c.operator === ">=") {
-            higher = higherGT(gt, c, options);
-            if (higher === c && higher !== gt) {
-              return false;
-            }
-          } else if (gt.operator === ">=" && !c.test(gt.semver)) {
-            return false;
-          }
-        }
-        if (lt) {
-          if (needDomLTPre) {
-            if (c.semver.prerelease && c.semver.prerelease.length && c.semver.major === needDomLTPre.major && c.semver.minor === needDomLTPre.minor && c.semver.patch === needDomLTPre.patch) {
-              needDomLTPre = false;
-            }
-          }
-          if (c.operator === "<" || c.operator === "<=") {
-            lower = lowerLT(lt, c, options);
-            if (lower === c && lower !== lt) {
-              return false;
-            }
-          } else if (lt.operator === "<=" && !c.test(lt.semver)) {
-            return false;
-          }
-        }
-        if (!c.operator && (lt || gt) && gtltComp !== 0) {
-          return false;
-        }
-      }
-      if (gt && hasDomLT && !lt && gtltComp !== 0) {
-        return false;
-      }
-      if (lt && hasDomGT && !gt && gtltComp !== 0) {
-        return false;
-      }
-      if (needDomGTPre || needDomLTPre) {
-        return false;
-      }
-      return true;
-    };
-    var higherGT = (a, b, options) => {
-      if (!a) {
-        return b;
-      }
-      const comp = compare(a.semver, b.semver, options);
-      return comp > 0 ? a : comp < 0 ? b : b.operator === ">" && a.operator === ">=" ? b : a;
-    };
-    var lowerLT = (a, b, options) => {
-      if (!a) {
-        return b;
-      }
-      const comp = compare(a.semver, b.semver, options);
-      return comp < 0 ? a : comp > 0 ? b : b.operator === "<" && a.operator === "<=" ? b : a;
-    };
-    module.exports = subset;
-  }
-});
-
-// node_modules/.pnpm/semver@7.8.5/node_modules/semver/index.js
-var require_semver2 = __commonJS({
-  "node_modules/.pnpm/semver@7.8.5/node_modules/semver/index.js"(exports, module) {
-    "use strict";
-    var internalRe = require_re();
-    var constants3 = require_constants();
-    var SemVer = require_semver();
-    var identifiers = require_identifiers();
-    var parse60 = require_parse();
-    var valid2 = require_valid();
-    var clean = require_clean();
-    var inc = require_inc();
-    var diff = require_diff();
-    var major = require_major();
-    var minor = require_minor();
-    var patch3 = require_patch();
-    var prerelease = require_prerelease();
-    var compare = require_compare();
-    var rcompare = require_rcompare();
-    var compareLoose = require_compare_loose();
-    var compareBuild = require_compare_build();
-    var sort = require_sort();
-    var rsort = require_rsort();
-    var gt = require_gt();
-    var lt = require_lt();
-    var eq = require_eq();
-    var neq = require_neq();
-    var gte = require_gte();
-    var lte = require_lte();
-    var cmp = require_cmp();
-    var coerce = require_coerce();
-    var truncate = require_truncate();
-    var Comparator = require_comparator();
-    var Range = require_range();
-    var satisfies = require_satisfies();
-    var toComparators = require_to_comparators();
-    var maxSatisfying = require_max_satisfying();
-    var minSatisfying = require_min_satisfying();
-    var minVersion = require_min_version();
-    var validRange = require_valid2();
-    var outside = require_outside();
-    var gtr = require_gtr();
-    var ltr = require_ltr();
-    var intersects = require_intersects();
-    var simplifyRange = require_simplify();
-    var subset = require_subset();
-    module.exports = {
-      parse: parse60,
-      valid: valid2,
-      clean,
-      inc,
-      diff,
-      major,
-      minor,
-      patch: patch3,
-      prerelease,
-      compare,
-      rcompare,
-      compareLoose,
-      compareBuild,
-      sort,
-      rsort,
-      gt,
-      lt,
-      eq,
-      neq,
-      gte,
-      lte,
-      cmp,
-      coerce,
-      truncate,
-      Comparator,
-      Range,
-      satisfies,
-      toComparators,
-      maxSatisfying,
-      minSatisfying,
-      minVersion,
-      validRange,
-      outside,
-      gtr,
-      ltr,
-      intersects,
-      simplifyRange,
-      subset,
-      SemVer,
-      re: internalRe.re,
-      src: internalRe.src,
-      tokens: internalRe.t,
-      SEMVER_SPEC_VERSION: constants3.SEMVER_SPEC_VERSION,
-      RELEASE_TYPES: constants3.RELEASE_TYPES,
-      compareIdentifiers: identifiers.compareIdentifiers,
-      rcompareIdentifiers: identifiers.rcompareIdentifiers
-    };
-  }
-});
-
-// agent-control-plane-core/src/adapters/codex.mjs
-function canEnforce(version2) {
-  const coerced = import_semver.default.coerce(asString(version2, ""));
-  if (coerced === null) return false;
-  return import_semver.default.gte(coerced, MIN_ENFORCING_SEMVER);
-}
-function parse2(native) {
-  const raw = asObject(native);
-  const nativeEvent = asString(raw.hook_event_name, "");
-  const gating = GATING_EVENTS.has(nativeEvent);
-  const kind = gating ? EventKind.PRE_TOOL : EventKind.UNKNOWN;
-  const enforce = canEnforce(raw.version);
-  const meta = {
-    agent: AGENT2,
-    native_event: nativeEvent,
-    integration_mode: enforce ? IntegrationMode.EXTERNAL_HOOK : IntegrationMode.OBSERVE_ONLY,
-    primary_gate_present: true,
-    passthrough: collectPassthrough(raw, CONSUMED2)
-  };
-  if (typeof raw.session_id === "string") meta.session_id = raw.session_id;
-  if (typeof raw.cwd === "string") meta.cwd = raw.cwd;
-  if (typeof raw.permission_mode === "string")
-    meta.permission_mode = raw.permission_mode;
-  if (typeof raw.transcript_path === "string")
-    meta.transcript_path = raw.transcript_path;
-  const nativeTool = asStringOrNull(raw.tool_name);
-  if (nativeTool !== null) meta.native_tool = nativeTool;
-  const vetoable = enforce && coverageAllowsVeto(COVERAGE2[classifyCallClass(nativeTool, raw)]);
-  return makeEvent({
-    event: kind,
-    tool: canonicalTool(nativeTool),
-    input: asObject(raw.tool_input),
-    response: void 0,
-    this_call_vetoable: vetoable,
-    meta
-  });
-}
-function render2(verdict, event, { soleGate = false } = {}) {
-  const vd = normalizeVerdict(verdict);
-  const enforced = vd.decision === Decision.DENY && event.this_call_vetoable;
-  const hookEventName = event.meta.native_event || "PreToolUse";
-  const body = { hookEventName };
-  if (vd.decision !== Decision.ALLOW || soleGate) {
-    body.permissionDecision = vd.decision;
-    if (vd.reason !== void 0) body.permissionDecisionReason = vd.reason;
-  }
-  if (enforced && !body.permissionDecisionReason)
-    body.permissionDecisionReason = DEFAULT_DENY_REASON;
-  if (vd.mutated_input !== void 0) body.updatedInput = vd.mutated_input;
-  return nativeResponse({
-    transport: event.meta.integration_mode,
-    exit_code: enforced ? 2 : 0,
-    enforced,
-    stdout: { hookSpecificOutput: body }
-  });
-}
-var import_semver, AGENT2, INTEGRATION_MODE2, COVERAGE2, MIN_ENFORCING_VERSION, MIN_ENFORCING_SEMVER, GATING_EVENTS, DEFAULT_DENY_REASON, CONSUMED2, codexAdapter;
-var init_codex = __esm({
-  "node_modules/.pnpm/agent-control-plane-core@0.2.13/node_modules/agent-control-plane-core/src/adapters/codex.mjs"() {
-    import_semver = __toESM(require_semver2(), 1);
-    init_control_plane();
-    AGENT2 = "codex";
-    INTEGRATION_MODE2 = IntegrationMode.EXTERNAL_HOOK;
-    COVERAGE2 = Object.freeze({
-      [CallClass.BUILTIN]: CoverageStatus.PARTIAL,
-      [CallClass.MCP]: CoverageStatus.UNCOVERED,
-      [CallClass.SUBAGENT]: CoverageStatus.UNKNOWN,
-      [CallClass.RESUMED]: CoverageStatus.UNKNOWN
-    });
-    MIN_ENFORCING_VERSION = Object.freeze([0, 135]);
-    MIN_ENFORCING_SEMVER = `${MIN_ENFORCING_VERSION[0]}.${MIN_ENFORCING_VERSION[1]}.0`;
-    GATING_EVENTS = /* @__PURE__ */ new Set(["PreToolUse", "PermissionRequest"]);
-    DEFAULT_DENY_REASON = "blocked by monitor";
-    CONSUMED2 = /* @__PURE__ */ new Set([
-      "hook_event_name",
-      "session_id",
-      "cwd",
-      "permission_mode",
-      "transcript_path",
-      "tool_name",
-      "tool_input",
-      "version"
-    ]);
-    codexAdapter = {
-      AGENT: AGENT2,
-      INTEGRATION_MODE: INTEGRATION_MODE2,
-      COVERAGE: COVERAGE2,
-      parse: parse2,
-      render: render2
-    };
-  }
-});
-
-// agent-control-plane-core/src/adapters/amp.mjs
-function parse3(native) {
-  const raw = asObject(native);
-  const meta = {
-    agent: AGENT3,
-    native_event: "delegate",
-    integration_mode: INTEGRATION_MODE3,
-    primary_gate_present: true,
-    passthrough: collectPassthrough(raw, CONSUMED3)
-  };
-  if (typeof raw.session_id === "string") meta.session_id = raw.session_id;
-  if (typeof raw.cwd === "string") meta.cwd = raw.cwd;
-  const nativeTool = asStringOrNull(raw.tool);
-  if (nativeTool !== null) meta.native_tool = nativeTool;
-  return makeEvent({
-    event: EventKind.PRE_TOOL,
-    tool: canonicalTool(nativeTool),
-    input: asObject(raw.input),
-    response: void 0,
-    // Classify on the NATIVE name (MCP detection keys on `mcp__…`).
-    this_call_vetoable: coverageAllowsVeto(
-      COVERAGE3[classifyCallClass(nativeTool, raw)]
-    ),
-    meta
-  });
-}
-function render3(verdict, event) {
-  const vd = normalizeVerdict(verdict);
-  const enforced = vd.decision === Decision.DENY && event.this_call_vetoable;
-  const exit_code = enforced ? 2 : vd.decision === Decision.ASK ? 1 : 0;
-  return nativeResponse({ transport: INTEGRATION_MODE3, exit_code, enforced });
-}
-var AGENT3, INTEGRATION_MODE3, COVERAGE3, CONSUMED3, ampAdapter;
-var init_amp = __esm({
-  "node_modules/.pnpm/agent-control-plane-core@0.2.13/node_modules/agent-control-plane-core/src/adapters/amp.mjs"() {
-    init_control_plane();
-    AGENT3 = "amp";
-    INTEGRATION_MODE3 = IntegrationMode.EXTERNAL_HOOK;
-    COVERAGE3 = Object.freeze({
-      [CallClass.BUILTIN]: CoverageStatus.COVERED,
-      [CallClass.MCP]: CoverageStatus.COVERED,
-      [CallClass.SUBAGENT]: CoverageStatus.COVERED,
-      [CallClass.RESUMED]: CoverageStatus.UNKNOWN
-    });
-    CONSUMED3 = /* @__PURE__ */ new Set(["tool", "input", "session_id", "cwd"]);
-    ampAdapter = { AGENT: AGENT3, INTEGRATION_MODE: INTEGRATION_MODE3, COVERAGE: COVERAGE3, parse: parse3, render: render3 };
-  }
-});
-
-// agent-control-plane-core/src/adapters/gemini.mjs
-function geminiMeta(nativeEvent, raw) {
-  const meta = {
-    agent: AGENT4,
-    native_event: nativeEvent,
-    integration_mode: INTEGRATION_MODE4,
-    primary_gate_present: true,
-    passthrough: collectPassthrough(raw, CONSUMED4)
-  };
-  if (typeof raw.session_id === "string") meta.session_id = raw.session_id;
-  if (typeof raw.cwd === "string") meta.cwd = raw.cwd;
-  if (typeof raw.transcript_path === "string")
-    meta.transcript_path = raw.transcript_path;
-  return meta;
-}
-function geminiCanonicalTool(nativeTool, callClass) {
-  if (nativeTool !== null && callClass === CallClass.BUILTIN) {
-    const scoped = lookup(GEMINI_TOOL_ALIASES, nativeTool);
-    if (scoped !== void 0) return scoped;
-  }
-  return canonicalTool(nativeTool);
-}
-function geminiInput(kind, raw) {
-  if (kind === EventKind.PROMPT_SUBMIT)
-    return { prompt: asString(raw.prompt, "") };
-  if (kind === EventKind.PRE_TOOL || kind === EventKind.POST_TOOL)
-    return asObject(raw.tool_input);
-  return {};
-}
-function parse4(native) {
-  const raw = asObject(native);
-  const nativeEvent = typeof raw.hook_event_name === "string" ? raw.hook_event_name : "";
-  const kind = lookup(
-    /** @type {Record<string, string>} */
-    NATIVE_TO_KIND2,
-    nativeEvent
-  ) ?? EventKind.UNKNOWN;
-  const gating = kind === EventKind.PRE_TOOL || kind === EventKind.POST_TOOL;
-  const response = kind === EventKind.POST_TOOL ? raw.tool_response : void 0;
-  const nativeTool = gating ? asStringOrNull(raw.tool_name) : null;
-  const meta = geminiMeta(nativeEvent, raw);
-  if (nativeTool !== null) meta.native_tool = nativeTool;
-  const callClass = classifyCallClass(nativeTool, raw);
-  return makeEvent({
-    event: kind,
-    tool: geminiCanonicalTool(nativeTool, callClass),
-    input: geminiInput(kind, raw),
-    response,
-    this_call_vetoable: coverageAllowsVeto(COVERAGE4[callClass]),
-    meta
-  });
-}
-function render4(verdict, event, { soleGate = false } = {}) {
-  const vd = normalizeVerdict(verdict);
-  const enforced = vd.decision === Decision.DENY && event.this_call_vetoable;
-  if (enforced)
-    return nativeResponse({
-      transport: INTEGRATION_MODE4,
-      exit_code: 2,
-      enforced: true,
-      ...vd.reason !== void 0 ? { stderr: vd.reason } : {}
-    });
-  const body = event.event === EventKind.PROMPT_SUBMIT ? promptSubmitBody(vd) : decisionBody(vd, soleGate);
-  return nativeResponse({
-    transport: INTEGRATION_MODE4,
-    exit_code: 0,
-    enforced: false,
-    ...body === void 0 ? {} : { stdout: body }
-  });
-}
-function decisionBody(vd, soleGate) {
-  const out = {};
-  if (vd.decision === Decision.DENY || vd.decision === Decision.ASK) {
-    out.decision = "deny";
-    if (vd.reason !== void 0) out.reason = vd.reason;
-  } else if (soleGate) {
-    out.decision = "allow";
-  }
-  if (vd.mutated_input !== void 0)
-    out.hookSpecificOutput = { tool_input: vd.mutated_input };
-  if (vd.additional_context !== void 0)
-    out.systemMessage = vd.additional_context;
-  return Object.keys(out).length > 0 ? out : void 0;
-}
-function promptSubmitBody(vd) {
-  const out = {};
-  if (vd.decision === Decision.DENY || vd.decision === Decision.ASK) {
-    out.decision = "deny";
-    if (vd.reason !== void 0) out.reason = vd.reason;
-  }
-  if (vd.additional_context !== void 0)
-    out.hookSpecificOutput = { additionalContext: vd.additional_context };
-  return Object.keys(out).length > 0 ? out : void 0;
-}
-var AGENT4, INTEGRATION_MODE4, COVERAGE4, HookEvent3, NATIVE_TO_KIND2, CONSUMED4, GEMINI_TOOL_ALIASES, geminiAdapter;
-var init_gemini = __esm({
-  "node_modules/.pnpm/agent-control-plane-core@0.2.13/node_modules/agent-control-plane-core/src/adapters/gemini.mjs"() {
-    init_control_plane();
-    AGENT4 = "gemini";
-    INTEGRATION_MODE4 = IntegrationMode.EXTERNAL_HOOK;
-    COVERAGE4 = Object.freeze({
-      [CallClass.BUILTIN]: CoverageStatus.COVERED,
-      [CallClass.MCP]: CoverageStatus.UNKNOWN,
-      [CallClass.SUBAGENT]: CoverageStatus.UNKNOWN,
-      [CallClass.RESUMED]: CoverageStatus.UNKNOWN
-    });
-    HookEvent3 = Object.freeze({
-      BEFORE_TOOL: "BeforeTool",
-      AFTER_TOOL: "AfterTool",
-      BEFORE_AGENT: "BeforeAgent"
-    });
-    NATIVE_TO_KIND2 = Object.freeze({
-      [HookEvent3.BEFORE_TOOL]: EventKind.PRE_TOOL,
-      [HookEvent3.AFTER_TOOL]: EventKind.POST_TOOL,
-      [HookEvent3.BEFORE_AGENT]: EventKind.PROMPT_SUBMIT
-    });
-    CONSUMED4 = /* @__PURE__ */ new Set([
-      "hook_event_name",
-      "session_id",
-      "cwd",
-      "transcript_path",
-      "tool_name",
-      "tool_input",
-      "tool_response",
-      "prompt"
-    ]);
-    GEMINI_TOOL_ALIASES = Object.freeze({
-      read_file: "Read",
-      write_file: "Write",
-      web_fetch: "WebFetch"
-    });
-    assertAliasTargetsModeled(GEMINI_TOOL_ALIASES);
-    geminiAdapter = {
-      AGENT: AGENT4,
-      INTEGRATION_MODE: INTEGRATION_MODE4,
-      COVERAGE: COVERAGE4,
-      parse: parse4,
-      render: render4
-    };
-  }
-});
-
-// agent-control-plane-core/src/registry.mjs
-function assertRegistryConsistent(adapters) {
-  for (const [id, adapter] of Object.entries(adapters)) {
-    if (adapter.AGENT !== id)
-      throw new Error(
-        `registry: id ${JSON.stringify(id)} resolves adapter whose AGENT is ${JSON.stringify(adapter.AGENT)}`
-      );
-  }
-}
-function adapterFor(id) {
-  const adapter = lookup(ADAPTERS, id);
-  if (adapter === void 0)
-    throw new Error(
-      `registry: no adapter for agent id ${JSON.stringify(id)} (known: ${AGENT_IDS.join(", ")})`
-    );
-  return adapter;
-}
-var ADAPTERS, AGENT_IDS;
-var init_registry = __esm({
-  "node_modules/.pnpm/agent-control-plane-core@0.2.13/node_modules/agent-control-plane-core/src/registry.mjs"() {
-    init_control_plane();
-    init_claude();
-    init_codex();
-    init_amp();
-    init_gemini();
-    ADAPTERS = Object.freeze({
-      [claudeAdapter.AGENT]: claudeAdapter,
-      [codexAdapter.AGENT]: codexAdapter,
-      [ampAdapter.AGENT]: ampAdapter,
-      [geminiAdapter.AGENT]: geminiAdapter
-    });
-    AGENT_IDS = Object.freeze(Object.keys(ADAPTERS));
-    assertRegistryConsistent(ADAPTERS);
-  }
-});
-
-// agent-control-plane-core/src/conformance.mjs
-function assertCoverageWellFormed(adapter, assert) {
-  assert.ok(
-    adapter.COVERAGE && typeof adapter.COVERAGE === "object",
-    `adapter '${adapter.AGENT}' declares no COVERAGE matrix`
-  );
-  const declared = Object.keys(adapter.COVERAGE).sort();
-  assert.deepEqual(
-    declared,
-    [...CALL_CLASSES].sort(),
-    `adapter '${adapter.AGENT}' COVERAGE must classify exactly the call classes ${JSON.stringify([...CALL_CLASSES])}`
-  );
-  for (const cls of CALL_CLASSES) {
-    assert.ok(
-      isCoverageStatus(adapter.COVERAGE[cls]),
-      `adapter '${adapter.AGENT}' COVERAGE.${cls} is not a valid coverage status: ${JSON.stringify(adapter.COVERAGE[cls])}`
-    );
-  }
-}
-function assertToolAliasesCovered(fixturesList, assert, adapterAliases = {}) {
-  const witnessedByAgent = /* @__PURE__ */ new Map();
-  for (const fixtures of fixturesList) {
-    let witnessed = witnessedByAgent.get(fixtures.agent);
-    if (witnessed === void 0)
-      witnessedByAgent.set(fixtures.agent, witnessed = /* @__PURE__ */ new Map());
-    const scopedMap = adapterAliases[fixtures.agent] ?? {};
-    for (const testCase of fixtures.cases) {
-      const nativeTool = testCase.event?.meta?.native_tool;
-      if (typeof nativeTool !== "string") continue;
-      const canon = testCase.event.tool;
-      const allowed = /* @__PURE__ */ new Set([canonicalTool(nativeTool)]);
-      if (scopedMap[nativeTool] !== void 0)
-        allowed.add(scopedMap[nativeTool]);
-      assert.ok(
-        allowed.has(canon),
-        `fixture '${testCase.name}' (${fixtures.agent}): native_tool ${JSON.stringify(nativeTool)} normalized to ${JSON.stringify(canon)}, but only ${JSON.stringify([...allowed])} are valid canonicalizations for this agent`
-      );
-      let canons = witnessed.get(nativeTool);
-      if (canons === void 0) witnessed.set(nativeTool, canons = /* @__PURE__ */ new Set());
-      canons.add(canon);
-    }
-  }
-  const witnessedAnywhere = (nativeName, canonical) => [...witnessedByAgent.values()].some(
-    (w) => w.get(nativeName)?.has(canonical)
-  );
-  for (const [nativeName, canonical] of Object.entries(TOOL_ALIASES)) {
-    assert.ok(
-      witnessedAnywhere(nativeName, canonical),
-      `tool alias ${JSON.stringify(nativeName)} -> ${JSON.stringify(canonical)} is not witnessed by any conformance fixture \u2014 add a golden case whose native tool is ${JSON.stringify(nativeName)}`
-    );
-  }
-  for (const [agent, scopedMap] of Object.entries(adapterAliases)) {
-    for (const [nativeName, canonical] of Object.entries(scopedMap)) {
-      assert.ok(
-        witnessedByAgent.get(agent)?.get(nativeName)?.has(canonical),
-        `adapter-scoped tool alias ${JSON.stringify(nativeName)} -> ${JSON.stringify(canonical)} (${agent}) is not witnessed by a '${agent}' conformance fixture \u2014 add a golden ${agent} case whose native tool is ${JSON.stringify(nativeName)}`
-      );
-    }
-  }
-}
-function runAdapterConformance({ adapter, fixtures, assert }) {
-  assert.equal(
-    adapter.AGENT,
-    fixtures.agent,
-    `adapter AGENT '${adapter.AGENT}' does not match fixtures.agent '${fixtures.agent}'`
-  );
-  assertCoverageWellFormed(adapter, assert);
-  const decisionsSeen = /* @__PURE__ */ new Set();
-  const coverageClassesChecked = /* @__PURE__ */ new Set();
-  let mutationSeen = false;
-  let enforcedDenySeen = false;
-  let renders = 0;
-  for (const testCase of fixtures.cases) {
-    const parsed = adapter.parse(testCase.native);
-    assert.deepEqual(
-      parsed,
-      testCase.event,
-      `parse mismatch: ${testCase.name}`
-    );
-    if (testCase.call_class !== void 0) {
-      assert.ok(
-        CALL_CLASSES.includes(testCase.call_class),
-        `unknown call_class '${testCase.call_class}': ${testCase.name}`
-      );
-      if (!coverageAllowsVeto(adapter.COVERAGE[testCase.call_class])) {
-        assert.equal(
-          parsed.this_call_vetoable,
-          false,
-          `call_class '${testCase.call_class}' is ${adapter.COVERAGE[testCase.call_class]} (no veto) but parsed this_call_vetoable !== false: ${testCase.name}`
-        );
-      }
-      coverageClassesChecked.add(testCase.call_class);
-    }
-    for (const [scenario, raw] of Object.entries(testCase.render)) {
-      const spec2 = (
-        /** @type {{ verdict: any, native: any }} */
-        raw
-      );
-      const rendered = adapter.render(spec2.verdict, parsed);
-      assert.deepEqual(
-        rendered,
-        spec2.native,
-        `render mismatch: ${testCase.name} / ${scenario}`
-      );
-      if (rendered.enforced) {
-        assert.ok(
-          rendered.exit_code !== 0,
-          `enforced deny carries no block signal: ${testCase.name} / ${scenario}`
-        );
-        enforcedDenySeen = true;
-      }
-      if (parsed.this_call_vetoable === false) {
-        assert.equal(
-          rendered.enforced,
-          false,
-          `non-vetoable call rendered as enforced: ${testCase.name} / ${scenario}`
-        );
-      }
-      if (spec2.verdict.decision === "allow") {
-        assert.equal(
-          rendered.enforced,
-          false,
-          `allow rendered as enforced: ${testCase.name} / ${scenario}`
-        );
-        assert.equal(
-          rendered.exit_code,
-          0,
-          `allow rendered a non-zero exit_code: ${testCase.name} / ${scenario}`
-        );
-      }
-      decisionsSeen.add(spec2.verdict.decision);
-      if (spec2.verdict.mutated_input !== void 0) mutationSeen = true;
-      renders += 1;
-    }
-  }
-  for (const decision of ["allow", "deny", "ask"]) {
-    assert.ok(
-      decisionsSeen.has(decision),
-      `conformance fixtures never render a '${decision}' verdict \u2014 the suite is vacuous`
-    );
-  }
-  assert.ok(
-    mutationSeen,
-    "conformance fixtures never render a mutated_input verdict \u2014 mutation is untested"
-  );
-  assert.ok(
-    enforcedDenySeen,
-    "no enforced deny rendered \u2014 enforcement honesty is untested"
-  );
-  assert.ok(renders > 0, "conformance fixtures render nothing");
-  return {
-    cases: fixtures.cases.length,
-    renders,
-    decisionsSeen,
-    mutationSeen,
-    enforcedDenySeen,
-    coverageClassesChecked
-  };
-}
-var init_conformance = __esm({
-  "node_modules/.pnpm/agent-control-plane-core@0.2.13/node_modules/agent-control-plane-core/src/conformance.mjs"() {
-    init_control_plane();
-  }
-});
-
-// agent-control-plane-core/src/index.mjs
-var src_exports = {};
-__export(src_exports, {
-  ADAPTERS: () => ADAPTERS,
-  AGENT_IDS: () => AGENT_IDS,
-  CALL_CLASSES: () => CALL_CLASSES,
-  CONTROL_PLANE_SCHEMA: () => CONTROL_PLANE_SCHEMA,
-  CallClass: () => CallClass,
-  CoverageStatus: () => CoverageStatus,
-  Decision: () => Decision,
-  EventKind: () => EventKind,
-  GEMINI_TOOL_ALIASES: () => GEMINI_TOOL_ALIASES,
-  HookEvent: () => HookEvent2,
-  IntegrationMode: () => IntegrationMode,
-  MODELED_TOOLS: () => MODELED_TOOLS,
-  SCHEMA_VERSION: () => SCHEMA_VERSION,
-  TOOL_ALIASES: () => TOOL_ALIASES,
-  adapterFor: () => adapterFor,
-  ampAdapter: () => ampAdapter,
-  asObject: () => asObject,
-  asString: () => asString,
-  asStringOrNull: () => asStringOrNull,
-  assertAliasTargetsModeled: () => assertAliasTargetsModeled,
-  assertCoverageWellFormed: () => assertCoverageWellFormed,
-  assertRegistryConsistent: () => assertRegistryConsistent,
-  assertToolAliasesCovered: () => assertToolAliasesCovered,
-  canonicalTool: () => canonicalTool,
-  classifyCallClass: () => classifyCallClass,
-  claudeAdapter: () => claudeAdapter,
-  codexAdapter: () => codexAdapter,
-  collectPassthrough: () => collectPassthrough,
-  coverageAllowsVeto: () => coverageAllowsVeto,
-  geminiAdapter: () => geminiAdapter,
-  isCoverageStatus: () => isCoverageStatus,
-  lookup: () => lookup,
-  makeEvent: () => makeEvent,
-  nativeResponse: () => nativeResponse,
-  normalizeVerdict: () => normalizeVerdict,
-  runAdapterConformance: () => runAdapterConformance,
-  sanitizeVerdict: () => sanitizeVerdict
-});
-var init_src = __esm({
-  "node_modules/.pnpm/agent-control-plane-core@0.2.13/node_modules/agent-control-plane-core/src/index.mjs"() {
-    init_control_plane();
-    init_claude();
-    init_codex();
-    init_amp();
-    init_gemini();
-    init_registry();
-    init_conformance();
   }
 });
 
@@ -8437,7 +5932,7 @@ function createParser(config) {
     getLocation: (offset) => locationMap.getLocation(offset, filename),
     getRangeLocation: (start, end) => locationMap.getLocationRange(start, end, filename)
   });
-  const parse60 = function(source_, options) {
+  const parse57 = function(source_, options) {
     source = source_;
     options = options || {};
     parser.setSource(source, tokenize);
@@ -8482,7 +5977,7 @@ function createParser(config) {
     }
     return ast;
   };
-  return Object.assign(parse60, {
+  return Object.assign(parse57, {
     SyntaxError: SyntaxError2,
     config: parser.config
   });
@@ -11614,7 +9109,7 @@ function peek(scanner) {
       return maybeToken(scanner);
   }
 }
-function parse5(source) {
+function parse2(source) {
   const scanner = new Scanner(source);
   const result = readImplicitGroup(scanner);
   if (scanner.pos !== source.length) {
@@ -12127,7 +9622,7 @@ function buildMatchGraphInternal(node2) {
 }
 function buildMatchGraph(syntaxTree, ref) {
   if (typeof syntaxTree === "string") {
-    syntaxTree = parse5(syntaxTree);
+    syntaxTree = parse2(syntaxTree);
   }
   return {
     type: "MatchGraph",
@@ -12984,7 +10479,7 @@ var init_Lexer = __esm({
             Object.defineProperty(descriptor, "syntax", {
               get() {
                 Object.defineProperty(descriptor, "syntax", {
-                  value: parse5(syntax)
+                  value: parse2(syntax)
                 });
                 return descriptor.syntax;
               }
@@ -13336,7 +10831,7 @@ var init_mix = __esm({
 
 // node_modules/.pnpm/css-tree@3.2.1/node_modules/css-tree/lib/syntax/create.js
 function createSyntax(config) {
-  const parse60 = createParser(config);
+  const parse57 = createParser(config);
   const walk4 = createWalker(config);
   const generate52 = createGenerator(config);
   const { fromPlainObject: fromPlainObject2, toPlainObject: toPlainObject2 } = createConvertor(walk4);
@@ -13344,7 +10839,7 @@ function createSyntax(config) {
     lexer: null,
     createLexer: (config2) => new Lexer(config2, syntax, syntax.lexer.structure),
     tokenize,
-    parse: parse60,
+    parse: parse57,
     generate: generate52,
     walk: walk4,
     find: walk4.find,
@@ -27974,7 +25469,7 @@ var AnPlusB_exports = {};
 __export(AnPlusB_exports, {
   generate: () => generate2,
   name: () => name,
-  parse: () => parse6,
+  parse: () => parse3,
   structure: () => structure
 });
 function checkInteger2(offset, disallowSign) {
@@ -28042,7 +25537,7 @@ function consumeB2() {
   checkTokenIsInteger.call(this, sign !== 0);
   return sign === HYPHENMINUS5 ? "-" + this.consume(Number2) : this.consume(Number2);
 }
-function parse6() {
+function parse3() {
   const start = this.tokenStart;
   let a = null;
   let b = null;
@@ -28187,7 +25682,7 @@ var Atrule_exports = {};
 __export(Atrule_exports, {
   generate: () => generate3,
   name: () => name2,
-  parse: () => parse7,
+  parse: () => parse4,
   structure: () => structure2,
   walkContext: () => walkContext
 });
@@ -28205,7 +25700,7 @@ function isDeclarationBlockAtrule() {
   }
   return false;
 }
-function parse7(isDeclaration = false) {
+function parse4(isDeclaration = false) {
   const start = this.tokenStart;
   let name50;
   let nameLowerCase;
@@ -28273,11 +25768,11 @@ var AtrulePrelude_exports = {};
 __export(AtrulePrelude_exports, {
   generate: () => generate4,
   name: () => name3,
-  parse: () => parse8,
+  parse: () => parse5,
   structure: () => structure3,
   walkContext: () => walkContext2
 });
-function parse8(name50) {
+function parse5(name50) {
   let children = null;
   if (name50 !== null) {
     name50 = name50.toLowerCase();
@@ -28318,7 +25813,7 @@ var AttributeSelector_exports = {};
 __export(AttributeSelector_exports, {
   generate: () => generate5,
   name: () => name4,
-  parse: () => parse9,
+  parse: () => parse6,
   structure: () => structure4
 });
 function getAttributeName() {
@@ -28369,7 +25864,7 @@ function getOperator() {
   }
   return this.substrToCursor(start);
 }
-function parse9() {
+function parse6() {
   const start = this.tokenStart;
   let name50;
   let matcher = null;
@@ -28438,7 +25933,7 @@ var Block_exports = {};
 __export(Block_exports, {
   generate: () => generate6,
   name: () => name5,
-  parse: () => parse10,
+  parse: () => parse7,
   structure: () => structure5,
   walkContext: () => walkContext3
 });
@@ -28461,7 +25956,7 @@ function consumeDeclaration() {
   }
   return node2;
 }
-function parse10(isStyleBlock) {
+function parse7(isStyleBlock) {
   const consumer = isStyleBlock ? consumeDeclaration : consumeRule;
   const start = this.tokenStart;
   let children = this.createList();
@@ -28526,10 +26021,10 @@ var Brackets_exports = {};
 __export(Brackets_exports, {
   generate: () => generate7,
   name: () => name6,
-  parse: () => parse11,
+  parse: () => parse8,
   structure: () => structure6
 });
-function parse11(readSequence2, recognizer) {
+function parse8(readSequence2, recognizer) {
   const start = this.tokenStart;
   let children = null;
   this.eat(LeftSquareBracket);
@@ -28564,10 +26059,10 @@ var CDC_exports = {};
 __export(CDC_exports, {
   generate: () => generate8,
   name: () => name7,
-  parse: () => parse12,
+  parse: () => parse9,
   structure: () => structure7
 });
-function parse12() {
+function parse9() {
   const start = this.tokenStart;
   this.eat(CDC);
   return {
@@ -28592,10 +26087,10 @@ var CDO_exports = {};
 __export(CDO_exports, {
   generate: () => generate9,
   name: () => name8,
-  parse: () => parse13,
+  parse: () => parse10,
   structure: () => structure8
 });
-function parse13() {
+function parse10() {
   const start = this.tokenStart;
   this.eat(CDO);
   return {
@@ -28620,10 +26115,10 @@ var ClassSelector_exports = {};
 __export(ClassSelector_exports, {
   generate: () => generate10,
   name: () => name9,
-  parse: () => parse14,
+  parse: () => parse11,
   structure: () => structure9
 });
-function parse14() {
+function parse11() {
   this.eatDelim(FULLSTOP);
   return {
     type: "ClassSelector",
@@ -28652,10 +26147,10 @@ var Combinator_exports = {};
 __export(Combinator_exports, {
   generate: () => generate11,
   name: () => name10,
-  parse: () => parse15,
+  parse: () => parse12,
   structure: () => structure10
 });
-function parse15() {
+function parse12() {
   const start = this.tokenStart;
   let name50;
   switch (this.tokenType) {
@@ -28709,10 +26204,10 @@ var Comment_exports = {};
 __export(Comment_exports, {
   generate: () => generate12,
   name: () => name11,
-  parse: () => parse16,
+  parse: () => parse13,
   structure: () => structure11
 });
-function parse16() {
+function parse13() {
   const start = this.tokenStart;
   let end = this.tokenEnd;
   this.eat(Comment);
@@ -28746,7 +26241,7 @@ var Condition_exports = {};
 __export(Condition_exports, {
   generate: () => generate13,
   name: () => name12,
-  parse: () => parse17,
+  parse: () => parse14,
   structure: () => structure12
 });
 function featureOrRange(kind) {
@@ -28755,7 +26250,7 @@ function featureOrRange(kind) {
   }
   return this.FeatureRange(kind);
 }
-function parse17(kind = "media") {
+function parse14(kind = "media") {
   const children = this.createList();
   scan: while (!this.eof) {
     switch (this.tokenType) {
@@ -28854,7 +26349,7 @@ var Declaration_exports = {};
 __export(Declaration_exports, {
   generate: () => generate14,
   name: () => name13,
-  parse: () => parse18,
+  parse: () => parse15,
   structure: () => structure13,
   walkContext: () => walkContext4
 });
@@ -28872,7 +26367,7 @@ function consumeValue() {
   }
   return value;
 }
-function parse18() {
+function parse15() {
   const start = this.tokenStart;
   const startToken = this.tokenIndex;
   const property2 = readProperty2.call(this);
@@ -28988,13 +26483,13 @@ var DeclarationList_exports = {};
 __export(DeclarationList_exports, {
   generate: () => generate15,
   name: () => name14,
-  parse: () => parse19,
+  parse: () => parse16,
   structure: () => structure14
 });
 function consumeRaw3() {
   return this.Raw(this.consumeUntilSemicolonIncluded, true);
 }
-function parse19() {
+function parse16() {
   const children = this.createList();
   scan:
     while (!this.eof) {
@@ -29049,10 +26544,10 @@ var Dimension_exports = {};
 __export(Dimension_exports, {
   generate: () => generate16,
   name: () => name15,
-  parse: () => parse20,
+  parse: () => parse17,
   structure: () => structure15
 });
-function parse20() {
+function parse17() {
   const start = this.tokenStart;
   const value = this.consumeNumber(Dimension);
   return {
@@ -29082,10 +26577,10 @@ var Feature_exports = {};
 __export(Feature_exports, {
   generate: () => generate17,
   name: () => name16,
-  parse: () => parse21,
+  parse: () => parse18,
   structure: () => structure16
 });
-function parse21(kind) {
+function parse18(kind) {
   const start = this.tokenStart;
   let name50;
   let value = null;
@@ -29169,7 +26664,7 @@ var FeatureFunction_exports = {};
 __export(FeatureFunction_exports, {
   generate: () => generate18,
   name: () => name17,
-  parse: () => parse22,
+  parse: () => parse19,
   structure: () => structure17
 });
 function getFeatureParser(kind, name50) {
@@ -29180,7 +26675,7 @@ function getFeatureParser(kind, name50) {
   }
   return parser;
 }
-function parse22(kind = "unknown") {
+function parse19(kind = "unknown") {
   const start = this.tokenStart;
   const functionName = this.consumeFunctionName();
   const valueParser = getFeatureParser.call(this, kind, functionName.toLowerCase());
@@ -29230,7 +26725,7 @@ var FeatureRange_exports = {};
 __export(FeatureRange_exports, {
   generate: () => generate19,
   name: () => name18,
-  parse: () => parse23,
+  parse: () => parse20,
   structure: () => structure18
 });
 function readTerm() {
@@ -29280,7 +26775,7 @@ function readComparison(expectColon) {
   }
   this.error(`Expected ${expectColon ? '":", ' : ""}"<", ">", "=" or ")"`);
 }
-function parse23(kind = "unknown") {
+function parse20(kind = "unknown") {
   const start = this.tokenStart;
   this.skipSC();
   this.eat(LeftParenthesis);
@@ -29342,11 +26837,11 @@ var Function_exports = {};
 __export(Function_exports, {
   generate: () => generate20,
   name: () => name19,
-  parse: () => parse24,
+  parse: () => parse21,
   structure: () => structure19,
   walkContext: () => walkContext5
 });
-function parse24(readSequence2, recognizer) {
+function parse21(readSequence2, recognizer) {
   const start = this.tokenStart;
   const name50 = this.consumeFunctionName();
   const nameLowerCase = name50.toLowerCase();
@@ -29385,10 +26880,10 @@ var GeneralEnclosed_exports = {};
 __export(GeneralEnclosed_exports, {
   generate: () => generate21,
   name: () => name20,
-  parse: () => parse25,
+  parse: () => parse22,
   structure: () => structure20
 });
-function parse25(kind) {
+function parse22(kind) {
   const start = this.tokenStart;
   let functionName = null;
   if (this.tokenType === Function) {
@@ -29447,11 +26942,11 @@ var Hash_exports = {};
 __export(Hash_exports, {
   generate: () => generate22,
   name: () => name21,
-  parse: () => parse26,
+  parse: () => parse23,
   structure: () => structure21,
   xxx: () => xxx
 });
-function parse26() {
+function parse23() {
   const start = this.tokenStart;
   this.eat(Hash);
   return {
@@ -29480,10 +26975,10 @@ var Identifier_exports = {};
 __export(Identifier_exports, {
   generate: () => generate23,
   name: () => name22,
-  parse: () => parse27,
+  parse: () => parse24,
   structure: () => structure22
 });
-function parse27() {
+function parse24() {
   return {
     type: "Identifier",
     loc: this.getLocation(this.tokenStart, this.tokenEnd),
@@ -29509,10 +27004,10 @@ var IdSelector_exports = {};
 __export(IdSelector_exports, {
   generate: () => generate24,
   name: () => name23,
-  parse: () => parse28,
+  parse: () => parse25,
   structure: () => structure23
 });
-function parse28() {
+function parse25() {
   const start = this.tokenStart;
   this.eat(Hash);
   return {
@@ -29540,10 +27035,10 @@ var Layer_exports = {};
 __export(Layer_exports, {
   generate: () => generate25,
   name: () => name24,
-  parse: () => parse29,
+  parse: () => parse26,
   structure: () => structure24
 });
-function parse29() {
+function parse26() {
   let tokenStart = this.tokenStart;
   let name50 = this.consume(Ident);
   while (this.isDelim(FULLSTOP2)) {
@@ -29576,10 +27071,10 @@ var LayerList_exports = {};
 __export(LayerList_exports, {
   generate: () => generate26,
   name: () => name25,
-  parse: () => parse30,
+  parse: () => parse27,
   structure: () => structure25
 });
-function parse30() {
+function parse27() {
   const children = this.createList();
   this.skipSC();
   while (!this.eof) {
@@ -29618,10 +27113,10 @@ var MediaQuery_exports = {};
 __export(MediaQuery_exports, {
   generate: () => generate27,
   name: () => name26,
-  parse: () => parse31,
+  parse: () => parse28,
   structure: () => structure26
 });
-function parse31() {
+function parse28() {
   const start = this.tokenStart;
   let modifier = null;
   let mediaType = null;
@@ -29708,10 +27203,10 @@ var MediaQueryList_exports = {};
 __export(MediaQueryList_exports, {
   generate: () => generate28,
   name: () => name27,
-  parse: () => parse32,
+  parse: () => parse29,
   structure: () => structure27
 });
-function parse32() {
+function parse29() {
   const children = this.createList();
   this.skipSC();
   while (!this.eof) {
@@ -29748,10 +27243,10 @@ var NestingSelector_exports = {};
 __export(NestingSelector_exports, {
   generate: () => generate29,
   name: () => name28,
-  parse: () => parse33,
+  parse: () => parse30,
   structure: () => structure28
 });
-function parse33() {
+function parse30() {
   const start = this.tokenStart;
   this.eatDelim(AMPERSAND5);
   return {
@@ -29777,10 +27272,10 @@ var Nth_exports = {};
 __export(Nth_exports, {
   generate: () => generate30,
   name: () => name29,
-  parse: () => parse34,
+  parse: () => parse31,
   structure: () => structure29
 });
-function parse34() {
+function parse31() {
   this.skipSC();
   const start = this.tokenStart;
   let end = start;
@@ -29829,10 +27324,10 @@ var Number_exports = {};
 __export(Number_exports, {
   generate: () => generate31,
   name: () => name30,
-  parse: () => parse35,
+  parse: () => parse32,
   structure: () => structure30
 });
-function parse35() {
+function parse32() {
   return {
     type: "Number",
     loc: this.getLocation(this.tokenStart, this.tokenEnd),
@@ -29858,10 +27353,10 @@ var Operator_exports = {};
 __export(Operator_exports, {
   generate: () => generate32,
   name: () => name31,
-  parse: () => parse36,
+  parse: () => parse33,
   structure: () => structure31
 });
-function parse36() {
+function parse33() {
   const start = this.tokenStart;
   this.next();
   return {
@@ -29888,10 +27383,10 @@ var Parentheses_exports = {};
 __export(Parentheses_exports, {
   generate: () => generate33,
   name: () => name32,
-  parse: () => parse37,
+  parse: () => parse34,
   structure: () => structure32
 });
-function parse37(readSequence2, recognizer) {
+function parse34(readSequence2, recognizer) {
   const start = this.tokenStart;
   let children = null;
   this.eat(LeftParenthesis);
@@ -29926,10 +27421,10 @@ var Percentage_exports = {};
 __export(Percentage_exports, {
   generate: () => generate34,
   name: () => name33,
-  parse: () => parse38,
+  parse: () => parse35,
   structure: () => structure33
 });
-function parse38() {
+function parse35() {
   return {
     type: "Percentage",
     loc: this.getLocation(this.tokenStart, this.tokenEnd),
@@ -29955,11 +27450,11 @@ var PseudoClassSelector_exports = {};
 __export(PseudoClassSelector_exports, {
   generate: () => generate35,
   name: () => name34,
-  parse: () => parse39,
+  parse: () => parse36,
   structure: () => structure34,
   walkContext: () => walkContext6
 });
-function parse39() {
+function parse36() {
   const start = this.tokenStart;
   let children = null;
   let name50;
@@ -30019,11 +27514,11 @@ var PseudoElementSelector_exports = {};
 __export(PseudoElementSelector_exports, {
   generate: () => generate36,
   name: () => name35,
-  parse: () => parse40,
+  parse: () => parse37,
   structure: () => structure35,
   walkContext: () => walkContext7
 });
-function parse40() {
+function parse37() {
   const start = this.tokenStart;
   let children = null;
   let name50;
@@ -30085,7 +27580,7 @@ var Ratio_exports = {};
 __export(Ratio_exports, {
   generate: () => generate37,
   name: () => name36,
-  parse: () => parse41,
+  parse: () => parse38,
   structure: () => structure36
 });
 function consumeTerm() {
@@ -30099,7 +27594,7 @@ function consumeTerm() {
       this.error("Number of function is expected");
   }
 }
-function parse41() {
+function parse38() {
   const start = this.tokenStart;
   const left = consumeTerm.call(this);
   let right = null;
@@ -30142,7 +27637,7 @@ var Raw_exports = {};
 __export(Raw_exports, {
   generate: () => generate38,
   name: () => name37,
-  parse: () => parse42,
+  parse: () => parse39,
   structure: () => structure37
 });
 function getOffsetExcludeWS() {
@@ -30153,7 +27648,7 @@ function getOffsetExcludeWS() {
   }
   return this.tokenStart;
 }
-function parse42(consumeUntil, excludeWhiteSpace) {
+function parse39(consumeUntil, excludeWhiteSpace) {
   const startOffset = this.getTokenStart(this.tokenIndex);
   let endOffset;
   this.skipUntilBalanced(this.tokenIndex, consumeUntil || this.consumeUntilBalanceEnd);
@@ -30187,7 +27682,7 @@ var Rule_exports = {};
 __export(Rule_exports, {
   generate: () => generate39,
   name: () => name38,
-  parse: () => parse43,
+  parse: () => parse40,
   structure: () => structure38,
   walkContext: () => walkContext8
 });
@@ -30201,7 +27696,7 @@ function consumePrelude() {
   }
   return prelude;
 }
-function parse43() {
+function parse40() {
   const startToken = this.tokenIndex;
   const startOffset = this.tokenStart;
   let prelude;
@@ -30241,10 +27736,10 @@ var Scope_exports = {};
 __export(Scope_exports, {
   generate: () => generate40,
   name: () => name39,
-  parse: () => parse44,
+  parse: () => parse41,
   structure: () => structure39
 });
-function parse44() {
+function parse41() {
   let root2 = null;
   let limit = null;
   this.skipSC();
@@ -30309,10 +27804,10 @@ var Selector_exports = {};
 __export(Selector_exports, {
   generate: () => generate41,
   name: () => name40,
-  parse: () => parse45,
+  parse: () => parse42,
   structure: () => structure40
 });
-function parse45() {
+function parse42() {
   const children = this.readSequence(this.scope.Selector);
   if (this.getFirstListNode(children) === null) {
     this.error("Selector is expected");
@@ -30349,11 +27844,11 @@ var SelectorList_exports = {};
 __export(SelectorList_exports, {
   generate: () => generate42,
   name: () => name41,
-  parse: () => parse46,
+  parse: () => parse43,
   structure: () => structure41,
   walkContext: () => walkContext9
 });
-function parse46() {
+function parse43() {
   const children = this.createList();
   while (!this.eof) {
     children.push(this.Selector());
@@ -30464,10 +27959,10 @@ var String_exports = {};
 __export(String_exports, {
   generate: () => generate43,
   name: () => name42,
-  parse: () => parse47,
+  parse: () => parse44,
   structure: () => structure42
 });
-function parse47() {
+function parse44() {
   return {
     type: "String",
     loc: this.getLocation(this.tokenStart, this.tokenEnd),
@@ -30494,14 +27989,14 @@ var StyleSheet_exports = {};
 __export(StyleSheet_exports, {
   generate: () => generate44,
   name: () => name43,
-  parse: () => parse48,
+  parse: () => parse45,
   structure: () => structure43,
   walkContext: () => walkContext10
 });
 function consumeRaw5() {
   return this.Raw(null, false);
 }
-function parse48() {
+function parse45() {
   const start = this.tokenStart;
   const children = this.createList();
   let child;
@@ -30570,10 +28065,10 @@ var SupportsDeclaration_exports = {};
 __export(SupportsDeclaration_exports, {
   generate: () => generate45,
   name: () => name44,
-  parse: () => parse49,
+  parse: () => parse46,
   structure: () => structure44
 });
-function parse49() {
+function parse46() {
   const start = this.tokenStart;
   this.eat(LeftParenthesis);
   this.skipSC();
@@ -30608,7 +28103,7 @@ var TypeSelector_exports = {};
 __export(TypeSelector_exports, {
   generate: () => generate46,
   name: () => name45,
-  parse: () => parse50,
+  parse: () => parse47,
   structure: () => structure45
 });
 function eatIdentifierOrAsterisk() {
@@ -30617,7 +28112,7 @@ function eatIdentifierOrAsterisk() {
   }
   this.next();
 }
-function parse50() {
+function parse47() {
   const start = this.tokenStart;
   if (this.isDelim(VERTICALLINE3)) {
     this.next();
@@ -30656,7 +28151,7 @@ var UnicodeRange_exports = {};
 __export(UnicodeRange_exports, {
   generate: () => generate47,
   name: () => name46,
-  parse: () => parse51,
+  parse: () => parse48,
   structure: () => structure46
 });
 function eatHexSequence(offset, allowDash) {
@@ -30733,7 +28228,7 @@ function scanUnicodeRange() {
       this.error("Hex digit or question mark is expected");
   }
 }
-function parse51() {
+function parse48() {
   const start = this.tokenStart;
   this.eatIdent("u");
   scanUnicodeRange.call(this);
@@ -30843,10 +28338,10 @@ var Url_exports = {};
 __export(Url_exports, {
   generate: () => generate48,
   name: () => name47,
-  parse: () => parse52,
+  parse: () => parse49,
   structure: () => structure47
 });
-function parse52() {
+function parse49() {
   const start = this.tokenStart;
   let value;
   switch (this.tokenType) {
@@ -30895,10 +28390,10 @@ var Value_exports = {};
 __export(Value_exports, {
   generate: () => generate49,
   name: () => name48,
-  parse: () => parse53,
+  parse: () => parse50,
   structure: () => structure48
 });
-function parse53() {
+function parse50() {
   const start = this.tokenStart;
   const children = this.readSequence(this.scope.Value);
   return {
@@ -30925,10 +28420,10 @@ var WhiteSpace_exports = {};
 __export(WhiteSpace_exports, {
   generate: () => generate50,
   name: () => name49,
-  parse: () => parse54,
+  parse: () => parse51,
   structure: () => structure49
 });
-function parse54() {
+function parse51() {
   this.eat(WhiteSpace);
   return SPACE4;
 }
@@ -31341,11 +28836,11 @@ var init_font_face = __esm({
 });
 
 // node_modules/.pnpm/css-tree@3.2.1/node_modules/css-tree/lib/syntax/atrule/import.js
-function parseWithFallback(parse60, fallback) {
+function parseWithFallback(parse57, fallback) {
   return this.parseWithFallback(
     () => {
       try {
-        return parse60.call(this);
+        return parse57.call(this);
       } finally {
         this.skipSC();
         if (this.lookupNonWSType(0) !== RightParenthesis) {
@@ -31668,55 +29163,55 @@ var init_pseudo = __esm({
 // node_modules/.pnpm/css-tree@3.2.1/node_modules/css-tree/lib/syntax/node/index-parse.js
 var index_parse_exports = {};
 __export(index_parse_exports, {
-  AnPlusB: () => parse6,
-  Atrule: () => parse7,
-  AtrulePrelude: () => parse8,
-  AttributeSelector: () => parse9,
-  Block: () => parse10,
-  Brackets: () => parse11,
-  CDC: () => parse12,
-  CDO: () => parse13,
-  ClassSelector: () => parse14,
-  Combinator: () => parse15,
-  Comment: () => parse16,
-  Condition: () => parse17,
-  Declaration: () => parse18,
-  DeclarationList: () => parse19,
-  Dimension: () => parse20,
-  Feature: () => parse21,
-  FeatureFunction: () => parse22,
-  FeatureRange: () => parse23,
-  Function: () => parse24,
-  GeneralEnclosed: () => parse25,
-  Hash: () => parse26,
-  IdSelector: () => parse28,
-  Identifier: () => parse27,
-  Layer: () => parse29,
-  LayerList: () => parse30,
-  MediaQuery: () => parse31,
-  MediaQueryList: () => parse32,
-  NestingSelector: () => parse33,
-  Nth: () => parse34,
-  Number: () => parse35,
-  Operator: () => parse36,
-  Parentheses: () => parse37,
-  Percentage: () => parse38,
-  PseudoClassSelector: () => parse39,
-  PseudoElementSelector: () => parse40,
-  Ratio: () => parse41,
-  Raw: () => parse42,
-  Rule: () => parse43,
-  Scope: () => parse44,
-  Selector: () => parse45,
-  SelectorList: () => parse46,
-  String: () => parse47,
-  StyleSheet: () => parse48,
-  SupportsDeclaration: () => parse49,
-  TypeSelector: () => parse50,
-  UnicodeRange: () => parse51,
-  Url: () => parse52,
-  Value: () => parse53,
-  WhiteSpace: () => parse54
+  AnPlusB: () => parse3,
+  Atrule: () => parse4,
+  AtrulePrelude: () => parse5,
+  AttributeSelector: () => parse6,
+  Block: () => parse7,
+  Brackets: () => parse8,
+  CDC: () => parse9,
+  CDO: () => parse10,
+  ClassSelector: () => parse11,
+  Combinator: () => parse12,
+  Comment: () => parse13,
+  Condition: () => parse14,
+  Declaration: () => parse15,
+  DeclarationList: () => parse16,
+  Dimension: () => parse17,
+  Feature: () => parse18,
+  FeatureFunction: () => parse19,
+  FeatureRange: () => parse20,
+  Function: () => parse21,
+  GeneralEnclosed: () => parse22,
+  Hash: () => parse23,
+  IdSelector: () => parse25,
+  Identifier: () => parse24,
+  Layer: () => parse26,
+  LayerList: () => parse27,
+  MediaQuery: () => parse28,
+  MediaQueryList: () => parse29,
+  NestingSelector: () => parse30,
+  Nth: () => parse31,
+  Number: () => parse32,
+  Operator: () => parse33,
+  Parentheses: () => parse34,
+  Percentage: () => parse35,
+  PseudoClassSelector: () => parse36,
+  PseudoElementSelector: () => parse37,
+  Ratio: () => parse38,
+  Raw: () => parse39,
+  Rule: () => parse40,
+  Scope: () => parse41,
+  Selector: () => parse42,
+  SelectorList: () => parse43,
+  String: () => parse44,
+  StyleSheet: () => parse45,
+  SupportsDeclaration: () => parse46,
+  TypeSelector: () => parse47,
+  UnicodeRange: () => parse48,
+  Url: () => parse49,
+  Value: () => parse50,
+  WhiteSpace: () => parse51
 });
 var init_index_parse = __esm({
   "node_modules/.pnpm/css-tree@3.2.1/node_modules/css-tree/lib/syntax/node/index-parse.js"() {
@@ -32065,7 +29560,7 @@ var init_ident = __esm({
 });
 
 // node_modules/.pnpm/css-tree@3.2.1/node_modules/css-tree/lib/index.js
-var tokenize2, parse55, generate51, lexer, createLexer, walk2, find, findLast, findAll, toPlainObject, fromPlainObject, fork;
+var tokenize2, parse52, generate51, lexer, createLexer, walk2, find, findLast, findAll, toPlainObject, fromPlainObject, fork;
 var init_lib = __esm({
   "node_modules/.pnpm/css-tree@3.2.1/node_modules/css-tree/lib/index.js"() {
     init_syntax();
@@ -32077,7 +29572,7 @@ var init_lib = __esm({
     init_url();
     ({
       tokenize: tokenize2,
-      parse: parse55,
+      parse: parse52,
       generate: generate51,
       lexer,
       createLexer,
@@ -40087,7 +37582,7 @@ var init_create_tokenizer = __esm({
 });
 
 // node_modules/.pnpm/micromark@4.0.2/node_modules/micromark/lib/parse.js
-function parse56(options) {
+function parse53(options) {
   const settings = options || {};
   const constructs2 = (
     /** @type {FullNormalizedExtension} */
@@ -40259,7 +37754,7 @@ function fromMarkdown(value, encoding, options) {
     options = encoding;
     encoding = void 0;
   }
-  return compiler(options)(postprocess(parse56(options).document().write(preprocess()(value, encoding, true))));
+  return compiler(options)(postprocess(parse53(options).document().write(preprocess()(value, encoding, true))));
 }
 function compiler(options) {
   const config = {
@@ -46075,7 +43570,7 @@ var init_property_information = __esm({
 });
 
 // node_modules/.pnpm/comma-separated-tokens@2.0.3/node_modules/comma-separated-tokens/index.js
-function parse57(value) {
+function parse54(value) {
   const tokens = [];
   const input = String(value || "");
   let index2 = input.indexOf(",");
@@ -46151,7 +43646,7 @@ var init_hast_util_parse_selector = __esm({
 });
 
 // node_modules/.pnpm/space-separated-tokens@2.0.2/node_modules/space-separated-tokens/index.js
-function parse58(value) {
+function parse55(value) {
   const input = String(value || "").trim();
   return input ? input.split(/[ \t\n\r\f]+/g) : [];
 }
@@ -46237,11 +43732,11 @@ function addProperty(schema, properties2, key, value) {
     result = value;
   } else if (typeof value === "string") {
     if (info.spaceSeparated) {
-      result = parse58(value);
+      result = parse55(value);
     } else if (info.commaSeparated) {
-      result = parse57(value);
+      result = parse54(value);
     } else if (info.commaOrSpaceSeparated) {
-      result = parse58(parse57(value).join(" "));
+      result = parse55(parse54(value).join(" "));
     } else {
       result = parsePrimitive(info, info.property, value);
     }
@@ -54612,7 +52107,7 @@ var init_serializer = __esm({
 });
 
 // node_modules/.pnpm/parse5@7.3.0/node_modules/parse5/dist/index.js
-function parse59(html4, options) {
+function parse56(html4, options) {
   return Parser.parse(html4, options);
 }
 function parseFragment(fragmentContext, html4, options) {
@@ -54964,7 +52459,7 @@ function fromHtml(value, options) {
   const settings = options || emptyOptions3;
   const onerror = settings.onerror;
   const file = value instanceof VFile ? value : new VFile(value);
-  const parseFunction = settings.fragment ? parseFragment : parse59;
+  const parseFunction = settings.fragment ? parseFragment : parse56;
   const document3 = String(file);
   const p5Document = parseFunction(document3, {
     sourceCodeLocationInfo: true,
@@ -55477,7 +52972,7 @@ function parseDeclarations(styleStr) {
   const decls = /* @__PURE__ */ new Map();
   let ast;
   try {
-    ast = parse55(styleStr, {
+    ast = parse52(styleStr, {
       context: "declarationList",
       parseValue: true,
       parseCustomProperty: false,
@@ -55566,12 +53061,12 @@ function walk3(tree, test, visitor) {
     }
   }
 }
-function lastParseCached(parse60) {
+function lastParseCached(parse57) {
   let cachedText = null;
   let cachedTree = null;
   return (text5) => {
     if (cachedText === text5) return cachedTree;
-    const tree = parse60(text5);
+    const tree = parse57(text5);
     cachedText = text5;
     cachedTree = tree;
     return tree;
@@ -56870,8 +54365,8 @@ var init_output = __esm({
 });
 
 // src/index.mjs
-var src_exports2 = {};
-__export(src_exports2, {
+var src_exports = {};
+__export(src_exports, {
   BLANK_NON_CF: () => BLANK_NON_CF,
   CATEGORY: () => CATEGORY,
   CATEGORY_LABELS: () => CATEGORY_LABELS,
@@ -56922,7 +54417,7 @@ async function sanitize(text5, options) {
     ...splices !== void 0 && { splices }
   };
 }
-var init_src2 = __esm({
+var init_src = __esm({
   "src/index.mjs"() {
     "use strict";
     init_output();
@@ -68340,8 +65835,8 @@ var init_control_plane2 = __esm({
           await lazyImport("agent-control-plane-core/claude")
         );
         const { Decision: decision, EventKind: eventKind } = (
-          /** @type {Partial<typeof import("agent-control-plane-core")>} */
-          await lazyImport("agent-control-plane-core")
+          /** @type {Partial<typeof import("agent-control-plane-core/contract")>} */
+          await lazyImport("agent-control-plane-core/contract")
         );
         if (!adapter || !decision || !eventKind) return null;
         return { claudeAdapter: adapter, Decision: decision, EventKind: eventKind };
@@ -71191,9 +68686,9 @@ registerFaultPolicy(HOOK_NAME5, {
   closed: unknownMode
 });
 var LAZY_LOADERS = {
-  "agent-control-plane-core": () => Promise.resolve().then(() => (init_src(), src_exports)),
   "agent-control-plane-core/claude": () => Promise.resolve().then(() => (init_claude(), claude_exports)),
-  "agent-sanitizer": () => Promise.resolve().then(() => (init_src2(), src_exports2)),
+  "agent-control-plane-core/contract": () => Promise.resolve().then(() => (init_control_plane(), control_plane_exports)),
+  "agent-sanitizer": () => Promise.resolve().then(() => (init_src(), src_exports)),
   "agent-sanitizer/confusables": () => Promise.resolve().then(() => (init_confusables(), confusables_exports)),
   "agent-sanitizer/instructions": () => Promise.resolve().then(() => (init_instructions(), instructions_exports)),
   "agent-sanitizer/invisible": () => Promise.resolve().then(() => (init_invisible(), invisible_exports)),
