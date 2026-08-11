@@ -11,12 +11,13 @@
 # A caller resolves its own directory (it cannot source a file whose path it has
 # not resolved yet) and sources this; everything after that line is shared.
 
+_provision_lib_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+
 # The plugin root, for the caller — the one variable this file publishes rather
 # than keeps to itself, hence the disable.
 # shellcheck disable=SC2034
-plugin_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)"
+plugin_root="$(cd -- "$_provision_lib_dir/../.." && pwd)"
 
-_provision_lib_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 _provision_step=""
 _provision_started_ms=""
 
@@ -48,7 +49,8 @@ provision_report_elapsed() {
   report_slow_provision "$_provision_step" "$_provision_started_ms" "${1:-}"
 }
 
-# Refuse to claim success unless $1 is executable, saying $2 if it is not.
+# Return when $1 is executable; otherwise say $2 and exit 1, aborting the
+# caller. Never call it as `$(…)` — the exit would die with the subshell.
 #
 # The post-condition, not the exit status of whatever wrote it: an install whose
 # every command returned 0 and left nothing runnable is exactly the failure a

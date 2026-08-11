@@ -1,11 +1,12 @@
 # shellcheck shell=bash
-# The shell port of claude-hooks/lib/hook-timing.mjs, for the two SessionStart
-# entry points that never reach node: scripts/safe-launch.sh (whose preflight —
-# a PATH probe and the redactor-daemon resolution — runs before the hook it
-# launches can time anything) and
-# scripts/provision-redactor.sh (which is a python install, not a node process).
+# The shell port of claude-hooks/lib/hook-timing.mjs, for the entry points that
+# never reach node: scripts/safe-launch.sh (whose preflight — a PATH probe and
+# the redactor-daemon resolution — runs before the hook it launches can time
+# anything), and the two SessionStart provisioners, which are a python install
+# and a download rather than node processes and reach this through
+# lib/provision-common.sh.
 #
-# Sourced by both, so the shell answer is written once rather than twice; that
+# Sourced, so the shell answer is written once rather than three times; that
 # node module is still the SSOT for the thresholds and the prose, and
 # test/hook-timing-shell-parity.test.mjs runs both implementations over the same
 # inputs and asserts byte-identical output, so a reworded notice or a moved

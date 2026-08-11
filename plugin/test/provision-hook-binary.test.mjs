@@ -360,14 +360,50 @@ test("a missing shared provisioning lib refuses to provision", (t) => {
   rmSync(join(staged.plugin, "scripts", "lib", "provision-common.sh"));
   const { path, curlLog } = provisionPath(t, staged.fixture);
   const res = provision(staged, path);
-  // A truncated install must not run on whatever the shell makes of the
-  // missing definitions: unset `plugin_root` would resolve the manifest to
-  // `/dist/hooks/...` and the reader below would answer for a file nobody
-  // shipped.
+  // It aborts AT the missing source, naming the file: under `set -u` the first
+  // thing the lib was to define aborts with `provision_begin: command not
+  // found`, which names nothing an operator can act on, and nothing is
+  // downloaded on the way there.
   assert.equal(res.status, 1);
   assert.match(res.stderr, /provision-common\.sh is missing/);
   assert.match(res.stderr, /reinstall the plugin/);
   assert.ok(!existsSync(curlLog));
+});
+
+test("a missing timing lib degrades to an untimed download, not to failure", (t) => {
+  const staged = stageProvisionable(t);
+  rmSync(join(staged.plugin, "scripts", "lib", "hook-timing.sh"));
+  const { path } = provisionPath(t, staged.fixture);
+  const res = provision(staged, path, {
+    _AGENT_SANITIZER_SLOW_PROVISION_MS: "0",
+  });
+  // A host that can still download must still download: under
+  // `set -euo pipefail` a non-zero from the timing arm would turn a missing
+  // stopwatch into a host left on the node path the binary exists to replace.
+  assert.equal(res.status, 0, res.stderr);
+  assert.match(res.stderr, /hook-timing\.sh is missing/);
+  assert.match(res.stderr, /hook binary provisioned/);
+  // Nothing pretends to have measured: the threshold is 0 here, so a live
+  // timer would report on this very run.
+  assert.equal(res.stderr.includes("PERFORMANCE"), false, res.stderr);
+});
+
+test("a binary that lands un-executable is not reported as provisioned", (t) => {
+  const staged = stageProvisionable(t);
+  // chmod is the only thing that makes the download executable, so a no-op one
+  // reproduces an install whose every command exits 0 while leaving nothing
+  // runnable — the state the stamps written just above the check would
+  // otherwise record as "provisioned from this manifest".
+  const { path } = provisionPath(t, staged.fixture);
+  writeFileSync(join(path, "chmod"), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+  const res = provision(staged, path);
+  assert.equal(res.status, 1);
+  assert.match(res.stderr, /install finished but .* is not an executable file/);
+  assert.equal(
+    res.stderr.includes("hook binary provisioned"),
+    false,
+    res.stderr,
+  );
 });
 
 // What `uname -s`/`-m` report on each platform the release carries a binary

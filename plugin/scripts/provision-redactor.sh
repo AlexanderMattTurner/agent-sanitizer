@@ -71,7 +71,7 @@ else
 fi
 
 provision_require_executable "$venv/bin/agent-secret-redactor-daemon" \
-  "agent-sanitizer: install finished but $venv/bin/agent-secret-redactor-daemon is missing"
+  "agent-sanitizer: install finished but $venv/bin/agent-secret-redactor-daemon is not an executable file"
 cp -- "$req" "$stamp"
 cp -- "$wheel" "$wheel_stamp"
 echo "agent-sanitizer: secret-redaction engine provisioned into $venv" >&2
