@@ -130,6 +130,19 @@ next plugin update overwrites it:
 | --------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | `AGENT_SANITIZER_DISABLED_HOOKS=` | Comma-separated hook names to stand down: `scan-invisible-chars`, `sanitize-user-prompt`, `pretooluse-sanitize`, `sanitize-output`. Each still answers, with an empty verdict, so nothing degrades — the event is simply unguarded. A name that is not a hook is reported on stderr and its hook keeps guarding: the variable is set outside the session, so a typo must not be able to halt it. |
 
+Two knobs for how the launcher finds and reports its runtime:
+
+| Variable                                    | Effect                                                                                                                                                                                                                                                                                                                     |
+| ------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `AGENT_SANITIZER_NODE=`                     | Absolute path to the node the hooks run on, skipping the search below. The hooks need node >=22; a node under that is named as the fault rather than reported as a corrupt install.                                                                                                                                        |
+| `AGENT_SANITIZER_REPEAT_DEGRADED_CONTEXT=1` | Attach the fail-open warning to every affected call. By default it is attached once per session — a session whose sanitizer is broken stays broken, and the repeats told the model nothing new. The stderr warning and the fail-closed verdicts are unaffected, and repeat either way when the host exports no session id. |
+
+A session started outside an interactive shell — launchd, cron, CI, a GUI
+launch — inherits roughly `/usr/bin:/bin`, and fnm/nvm/mise/volta/asdf all put
+node on `PATH` from a shell rc file that never ran there, as does Homebrew's
+prefix. So a node that is not on `PATH` is looked for in those installs (newest
+version wins) before the launcher gives up and degrades.
+
 And one posture knob, for what happens when a hook itself fails:
 
 | Variable                      | Effect                                                                                        |

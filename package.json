@@ -26,6 +26,7 @@
     "prepack": "pnpm build:types",
     "gen:joining-type": "node scripts/gen-joining-type.mjs",
     "gen:fail-open-lib": "node scripts/gen-fail-open-lib.mjs",
+    "gen:node-floor-lib": "node scripts/gen-node-floor-lib.mjs",
     "lint": "eslint .",
     "test:mutation": "node scripts/mutate.mjs",
     "format": "prettier --write .",

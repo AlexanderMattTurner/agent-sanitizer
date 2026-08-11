@@ -8,12 +8,13 @@
 #
 # Claude Code treats a non-zero exit OR empty stdout from a hook as a
 # NON-blocking hook error and lets the guarded action through with no trace at
-# all, so a hook that cannot start (node absent from PATH) or cannot finish (a
-# missing, truncated, or throwing bundle) would silently disable the whole
-# sanitization pipeline. This shim is what prevents that: whenever the bundle
-# fails to reach a verdict it still PRINTS an event-appropriate response and
-# exits 0 — by default a warning the transcript carries, or the fail-closed
-# verdict under AGENT_SANITIZER_FAIL_OPEN=0 (see emit_degraded).
+# all, so a hook that cannot start (no node found, or one too old to run the
+# bundle) or cannot finish (a missing, truncated, or throwing bundle) would
+# silently disable the whole sanitization pipeline. This shim is what prevents
+# that: whenever the bundle fails to reach a verdict it still PRINTS an
+# event-appropriate response and exits 0 — by default a warning the transcript
+# carries, or the fail-closed verdict under AGENT_SANITIZER_FAIL_OPEN=0 (see
+# emit_degraded).
 #
 # The gate is the POST-CONDITION, checked once after the bundle has run: a
 # non-zero exit with nothing on stdout means no verdict came back, whatever the
@@ -29,8 +30,8 @@ set -uo pipefail
 
 script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 
-# The launcher's own preflight — a PATH probe and the daemon resolution below —
-# runs on EVERY hook invocation, ahead of the hook that could time it. So it
+# The launcher's own preflight — the node search and the daemon resolution
+# below — runs on EVERY hook invocation, ahead of the hook that could time it. So it
 # times itself, against the same budget and with the same wording as the node
 # hooks (see lib/hook-timing.sh). A missing timing lib disables the measurement
 # and says so: the launcher's job is to keep the sanitizer running, and losing a
@@ -62,6 +63,31 @@ if [[ -r "$fail_open_lib" ]]; then
 else
   echo "agent-sanitizer: $fail_open_lib is missing — AGENT_SANITIZER_FAIL_OPEN cannot be honored, defaulting to fail OPEN (reinstall the plugin)" >&2
   agent_sanitizer_fail_open() { return 0; }
+fi
+
+# Where node is, and what version is new enough — see each lib's header. Both
+# degrade to the behaviour that predates them (a bare PATH lookup, and no
+# version diagnosis) rather than refusing to launch: a missing lib is a broken
+# install, and this shim's contract is that its own breakage never stalls the
+# session.
+node_resolve_lib="$script_dir/lib/node-resolve.sh"
+if [[ -r "$node_resolve_lib" ]]; then
+  # shellcheck source=lib/node-resolve.sh
+  . "$node_resolve_lib"
+else
+  echo "agent-sanitizer: $node_resolve_lib is missing — node will only be looked for on PATH (reinstall the plugin)" >&2
+  agent_sanitizer_resolve_node() { command -v node 2>/dev/null; }
+fi
+
+node_floor_lib="$script_dir/lib/node-floor.sh"
+if [[ -r "$node_floor_lib" ]]; then
+  # shellcheck source=lib/node-floor.sh
+  . "$node_floor_lib"
+else
+  echo "agent-sanitizer: $node_floor_lib is missing — an unsupported node version cannot be named (reinstall the plugin)" >&2
+  AGENT_SANITIZER_NODE_MAJOR_FLOOR=""
+  agent_sanitizer_node_major() { :; }
+  agent_sanitizer_node_meets_floor() { return 0; }
 fi
 
 hook_event="${1:?usage: safe-launch.sh <HookEvent> [args...]}"
@@ -110,6 +136,69 @@ json_escape() {
   printf '%s' "${esc//\"/\\\"}"
 }
 
+# How long a "already warned" marker is honored. Only relevant to the $PPID
+# fallback key below: a PID the OS reuses days later must not inherit the
+# suppression of the session that held it before.
+DEGRADED_MARKER_TTL_MIN=720
+
+# Has this session already been told about THIS degradation ($1, the reason
+# about to be emitted)? Returns 0 when it has (so the CONTEXT can be left out),
+# 1 when it has not.
+#
+# A session whose sanitizer is broken stays broken for its lifetime, and the
+# fail-open warning rides on additionalContext — so repeating it on every tool
+# call past the first tells the model nothing new and costs context the user
+# paid for.
+#
+# Only the CONTEXT is deduplicated. The stderr line still prints every time (it
+# costs the model nothing and is the operator's live signal), a verdict envelope
+# is still emitted every time (empty stdout reads as a clean run — the silent
+# fail-open this shim exists to prevent), and the fail-CLOSED arm never consults
+# this at all: a block/ask/suppression is a decision about THIS call, not a
+# notification about the session.
+#
+# The key is the session id when the host exports one. Where it does not, $PPID
+# stands in: if the harness spawns hooks directly it is the harness process and
+# the dedupe holds for the session; if it spawns them through a per-hook shell
+# the key changes every time and the warning repeats on every call.
+# Neither spelling can suppress ACROSS sessions, which is the only failure here
+# that would matter.
+degraded_context_already_sent() {
+  [[ "${AGENT_SANITIZER_REPEAT_DEGRADED_CONTEXT:-}" == "1" ]] && return 1
+  local key class marker_root marker stale
+  key="${CLAUDE_SESSION_ID:-${CLAUDE_CODE_SESSION_ID:-ppid-$PPID}}"
+  # The key becomes a path component, so anything outside this class — a `/` in
+  # a hostile session id above all — is folded away rather than escaping the
+  # marker dir.
+  key="${key//[^A-Za-z0-9._-]/_}"
+  # Keyed by the FAULT as well as the session: a session that loses node and
+  # later meets a corrupt bundle has two things to say, and only a repeat of the
+  # same one is noise. The length disambiguates reasons sharing a prefix.
+  class="${1//[^A-Za-z0-9]/}"
+  class="${class:0:48}-${#1}"
+  marker_root="${TMPDIR:-/tmp}/agent-sanitizer-degraded-${UID:-0}"
+  marker="$marker_root/${key}__${class}"
+  mkdir -m 700 "$marker_root" 2>/dev/null
+  # Not `mkdir` as the test-and-set: a marker root we cannot write to (a
+  # squatted /tmp entry) must WARN, not go quiet, so the state is read first and
+  # every failure to record one falls through to the warning. What a squatter
+  # who pre-creates a marker can still take is one paragraph of context: the
+  # stderr line and the verdict envelope are emitted before this is consulted.
+  if [[ ! -d "$marker" ]]; then
+    mkdir "$marker" 2>/dev/null
+    return 1
+  fi
+  # No `find` on PATH (a stripped hook environment) leaves staleness
+  # unknowable — and warning again is the failure that costs nothing but a line
+  # of context, so the branch is on find's exit code, not on its empty output
+  # (which is how it reports a marker that is still FRESH).
+  stale="$(find "$marker" -maxdepth 0 -mmin "+$DEGRADED_MARKER_TTL_MIN" 2>/dev/null)" || return 1
+  [[ -z "$stale" ]] && return 0
+  rmdir "$marker" 2>/dev/null
+  mkdir "$marker" 2>/dev/null
+  return 1
+}
+
 # Emit the degraded response for the guarded event. $1 = reason.
 #
 # Default posture is fail-OPEN: the guarded action passes through UNSANITIZED
@@ -125,11 +214,19 @@ emit_degraded() {
   # FAIL_CLOSED_VALUES — this shim no longer restates the literals.
   if agent_sanitizer_fail_open; then
     echo "agent-sanitizer: failing open — $event_name unguarded (set AGENT_SANITIZER_FAIL_OPEN=0 to fail closed)" >&2
+    # The envelope, minus the context this session has already been given. Still
+    # non-empty, because an empty stdout reads as a clean run rather than a
+    # degraded one — the harness cannot tell the difference and would let the
+    # call through with no trace at all.
+    if degraded_context_already_sent "$1"; then
+      printf '{"hookSpecificOutput":{"hookEventName":"%s"}}\n' "$event_name"
+      return 0
+    fi
     # No permissionDecision, no decision, no updatedToolOutput: nothing is
     # blocked or replaced. The context is all that is left, and it is why stdout
     # is still non-empty — an empty one reads as a clean run, not a degraded one.
     printf '{"hookSpecificOutput":{"hookEventName":"%s","additionalContext":"%s"}}\n' \
-      "$event_name" "$reason The sanitizer is failing open, so $unguarded_note Set AGENT_SANITIZER_FAIL_OPEN=0 to fail closed on hook failures."
+      "$event_name" "$reason The sanitizer is failing open, so $unguarded_note Later calls in this session may pass through with no warning at all, so assume this holds until it is fixed. Set AGENT_SANITIZER_FAIL_OPEN=0 to fail closed on hook failures."
     return 0
   fi
   case "$hook_event" in
@@ -155,11 +252,22 @@ emit_degraded() {
   esac
 }
 
-# Checked before anything else (and with shell builtins only), so a node-less
-# host reaches the degraded verdict rather than dying on a missing utility.
-if ! command -v node >/dev/null 2>&1; then
-  echo "agent-sanitizer: node not found on PATH — sanitization cannot run" >&2
-  emit_degraded "sanitizer plugin: node is not on PATH; verdict unavailable."
+# Checked before anything else, so a node-less host reaches the degraded verdict
+# rather than dying on a missing utility. Not a bare `command -v node`: see
+# lib/node-resolve.sh for the hosts that answers nothing for, every one of which
+# would otherwise run unguarded. AGENT_SANITIZER_NODE overrides the search.
+node_bin="$(agent_sanitizer_resolve_node)"
+if [[ -z "$node_bin" ]]; then
+  echo "agent-sanitizer: no node found on PATH or in any known version-manager install — sanitization cannot run (set AGENT_SANITIZER_NODE to its path)" >&2
+  emit_degraded "sanitizer plugin: node was not found on PATH or in any known version-manager install directory; verdict unavailable. If node is installed, set AGENT_SANITIZER_NODE to its absolute path — a session started outside an interactive shell (launchd, cron, CI, a GUI launch) does not inherit the PATH your shell builds."
+  exit 0
+fi
+
+# The pin is honored verbatim, so a typo in it must be reported AS a typo — the
+# bundle would otherwise die at exec and be diagnosed as a corrupt install.
+if [[ -n "${AGENT_SANITIZER_NODE:-}" && ! -x "$node_bin" ]]; then
+  echo "agent-sanitizer: AGENT_SANITIZER_NODE=$node_bin is not an executable — sanitization cannot run" >&2
+  emit_degraded "sanitizer plugin: AGENT_SANITIZER_NODE points at $node_bin, which is not an executable file; verdict unavailable."
   exit 0
 fi
 
@@ -215,12 +323,12 @@ stdout_file="$(mktemp 2>/dev/null)"
 bundle_out=""
 if [[ -n "$stdout_file" ]]; then
   trap 'rm -f "$stdout_file"' EXIT
-  node "$bundle" ${@+"$@"} >"$stdout_file"
+  "$node_bin" "$bundle" ${@+"$@"} >"$stdout_file"
   bundle_rc=$?
 else
   # mktemp unavailable (a broken TMPDIR): still gate on the post-condition, at
   # the cost of trailing-newline fidelity in the replayed verdict.
-  bundle_out="$(node "$bundle" ${@+"$@"})"
+  bundle_out="$("$node_bin" "$bundle" ${@+"$@"})"
   bundle_rc=$?
 fi
 
@@ -264,6 +372,16 @@ bundle_reached_a_verdict=0
 [[ "$verdict_bytes" == "{"*"}" ]] && bundle_reached_a_verdict=1
 if [[ "$bundle_rc" -ne 0 && "$bundle_reached_a_verdict" -eq 0 ]]; then
   echo "agent-sanitizer: hook bundle exited $bundle_rc without reaching a verdict: $bundle" >&2
+  # A node below the floor the bundle is built for dies before it can answer, and
+  # "reinstall the plugin" then sends the operator to replace a plugin that is
+  # intact. The version is asked for only on this arm: probing it on the healthy
+  # path would buy a node startup on every single tool call.
+  if ! agent_sanitizer_node_meets_floor "$node_bin"; then
+    running_major="$(agent_sanitizer_node_major "$node_bin")"
+    echo "agent-sanitizer: $node_bin is node $running_major, below the node >=$AGENT_SANITIZER_NODE_MAJOR_FLOOR this plugin requires" >&2
+    emit_degraded "sanitizer plugin: the hook bundle could not run — $node_bin is node $running_major, and this plugin requires node >=$AGENT_SANITIZER_NODE_MAJOR_FLOOR. Upgrade node, or set AGENT_SANITIZER_NODE to the path of a node >=$AGENT_SANITIZER_NODE_MAJOR_FLOOR."
+    exit 0
+  fi
   emit_degraded "sanitizer plugin: the hook bundle exited $bundle_rc without producing a verdict; reinstall the plugin."
   exit 0
 fi

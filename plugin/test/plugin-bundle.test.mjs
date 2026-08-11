@@ -12,6 +12,7 @@ import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
 import { createServer } from "node:net";
 import {
+  chmodSync,
   cpSync,
   mkdirSync,
   mkdtempSync,
@@ -107,8 +108,84 @@ function stagePlugin(t) {
 function baseEnv() {
   const env = { ...process.env };
   delete env.AGENT_SANITIZER_FAIL_OPEN;
+  delete env.AGENT_SANITIZER_NODE;
+  delete env.AGENT_SANITIZER_REPEAT_DEGRADED_CONTEXT;
+  // The launcher's node search reads a version manager's own env var in
+  // preference to its default location under $HOME, so a runner that exports
+  // one (GitHub's images export NVM_DIR) would send the search somewhere other
+  // than the tree a test staged — and the test would assert against a host
+  // fact rather than the code. Cleared here, and set explicitly by the one
+  // test that covers honoring them.
+  for (const managerVar of [
+    "NVM_DIR",
+    "FNM_DIR",
+    "MISE_DATA_DIR",
+    "XDG_DATA_HOME",
+    "ASDF_DATA_DIR",
+    "VOLTA_HOME",
+    "N_PREFIX",
+  ])
+    delete env[managerVar];
   env.AGENT_SANITIZER_SECRETS_ENABLED = "1";
   return env;
+}
+
+/**
+ * The session identity the launcher keys its once-per-session degraded warning
+ * on, distinct for every spawn unless a test pins it.
+ *
+ * Without this a suite of degraded-path assertions would silently become a
+ * suite of ONE: every spawn inherits the developer's real session id (or falls
+ * back to a shared $PPID, this process), so the second launch onward would find
+ * the marker the first left and drop the context those tests assert on. TMPDIR
+ * moves with it so the markers land in a scratch dir rather than the real one.
+ */
+let launchSeq = 0;
+const MARKER_TMPDIR = mkdtempSync(join(tmpdir(), "agent-sanitizer-markers-"));
+process.on("exit", () =>
+  rmSync(MARKER_TMPDIR, { recursive: true, force: true }),
+);
+function sessionEnv() {
+  return {
+    CLAUDE_SESSION_ID: `test-session-${process.pid}-${(launchSeq += 1)}`,
+    CLAUDE_CODE_SESSION_ID: "",
+    TMPDIR: MARKER_TMPDIR,
+  };
+}
+
+/**
+ * A stand-in for the node binary: a shell script running `body`, with the
+ * launcher's argv in `"$@"` and its own path in `"$0"`.
+ */
+function fakeNode(dir, body) {
+  mkdirSync(dir, { recursive: true });
+  const bin = join(dir, "node");
+  writeFileSync(bin, `#!/bin/sh\n${body}\n`);
+  chmodSync(bin, 0o755);
+  return bin;
+}
+
+/** A verdict naming the node that produced it and the bundle it was handed. */
+const REPORT_ARGV = `printf '{"picked":"%s","bundle":"%s"}' "$0" "$1"`;
+
+/**
+ * A HOME holding one version-manager tree, as the version managers lay it out:
+ * `$NVM_DIR/versions/node/<version>/bin/node` for nvm, and fnm's extra
+ * `installation/` level. Returns the home dir.
+ */
+function homeWithNodeVersions(
+  t,
+  versions,
+  { fnm = false, body = REPORT_ARGV } = {},
+) {
+  const home = scratch(t);
+  for (const version of versions) {
+    const base = fnm
+      ? join(home, ".local", "share", "fnm", "node-versions", version)
+      : join(home, ".nvm", "versions", "node", version);
+    fakeNode(join(base, ...(fnm ? ["installation", "bin"] : ["bin"])), body);
+  }
+  return home;
 }
 
 /** The secret layer's default (opt-in absent), as an `env` override. */
@@ -129,7 +206,7 @@ function launch(pluginRoot, event, hook, payload, { env = {}, cwd } = {}) {
       input: typeof payload === "string" ? payload : JSON.stringify(payload),
       encoding: "utf8",
       cwd: cwd ?? tmpdir(),
-      env: { ...baseEnv(), ...env },
+      env: { ...baseEnv(), ...sessionEnv(), ...env },
     },
   );
 }
@@ -144,7 +221,7 @@ function launchAsync(pluginRoot, event, hook, payload, { env = {} } = {}) {
   const child = spawn(
     "bash",
     [join(pluginRoot, "scripts", "safe-launch.sh"), event, `--hook=${hook}`],
-    { cwd: tmpdir(), env: { ...baseEnv(), ...env } },
+    { cwd: tmpdir(), env: { ...baseEnv(), ...sessionEnv(), ...env } },
   );
   let stdout = "";
   let stderr = "";
@@ -196,7 +273,22 @@ function stageSources(t, { omit = [] } = {}) {
 function stubBin(t, omit) {
   const dir = join(scratch(t), "bin");
   mkdirSync(dir, { recursive: true });
-  for (const cmd of ["bash", "sh", "dirname", "cmp", "cp", "head", "pwd"]) {
+  // mkdir/rmdir/find are here so a stripped PATH still models the real one for
+  // the launcher's degraded-warning marker; without them that state is
+  // unrecordable and every warning repeats, which would pass a dedupe test
+  // vacuously.
+  for (const cmd of [
+    "bash",
+    "sh",
+    "dirname",
+    "cmp",
+    "cp",
+    "head",
+    "pwd",
+    "mkdir",
+    "rmdir",
+    "find",
+  ]) {
     const found = spawnSync("command", ["-v", cmd], {
       shell: true,
       encoding: "utf8",
@@ -754,7 +846,15 @@ function launchWithoutNode(t, plugin, env = {}) {
       input: "{}",
       encoding: "utf8",
       cwd: tmpdir(),
-      env: { ...baseEnv(), PATH: stubBin(t, ["node"]), ...env },
+      env: {
+        ...baseEnv(),
+        ...sessionEnv(),
+        PATH: stubBin(t, ["node"]),
+        // The search for version-manager installs must not reach the runner's
+        // own node: this helper models a host that genuinely has none.
+        _AGENT_SANITIZER_NODE_SEARCH: "0",
+        ...env,
+      },
     },
   );
 }
@@ -992,6 +1092,265 @@ test("launcher fails CLOSED per event shape under the opt-out on a corrupt bundl
     JSON.parse(start.stdout).hookSpecificOutput.hookEventName,
     "SessionStart",
   );
+});
+
+// ─── Finding node at all ─────────────────────────────────────────────────────
+//
+// A hook inherits the environment of whatever started Claude Code. A session
+// started outside an interactive shell — launchd, cron, CI, a GUI launch — gets
+// roughly `/usr/bin:/bin`, and every version manager puts node on PATH from a
+// shell rc file that never ran. On those hosts a PATH-only lookup found nothing
+// and EVERY hook in the session failed open, on a machine with node installed.
+
+test("a version-manager install is found when PATH has no node", (t) => {
+  const plugin = stagePlugin(t);
+  const home = homeWithNodeVersions(t, ["v22.11.0"]);
+  const res = launchWithoutNode(t, plugin, {
+    HOME: home,
+    _AGENT_SANITIZER_NODE_SEARCH: "1",
+  });
+  assert.equal(res.status, 0, res.stderr);
+  const verdict = JSON.parse(res.stdout);
+  assert.equal(
+    verdict.picked,
+    join(home, ".nvm/versions/node/v22.11.0/bin/node"),
+  );
+  // It was handed the staged bundle, so the hook really ran — this is a launch,
+  // not just a resolution.
+  assert.equal(
+    verdict.bundle,
+    join(plugin, "dist", "hooks", "plugin-hooks.bundle.mjs"),
+  );
+  assert.doesNotMatch(res.stderr, /failing open/);
+});
+
+test("fnm's nested layout is found too", (t) => {
+  const home = homeWithNodeVersions(t, ["v22.11.0"], { fnm: true });
+  const res = launchWithoutNode(t, stagePlugin(t), {
+    HOME: home,
+    _AGENT_SANITIZER_NODE_SEARCH: "1",
+  });
+  assert.equal(
+    JSON.parse(res.stdout).picked,
+    join(home, ".local/share/fnm/node-versions/v22.11.0/installation/bin/node"),
+  );
+});
+
+test("the newest install wins, numerically and not lexicographically", (t) => {
+  // v9 sorts after v22 as a string, so a glob-order pick would run the oldest
+  // node on the box — and then diagnose a version fault against a runtime the
+  // operator never chose.
+  const home = homeWithNodeVersions(t, ["v9.9.9", "v18.20.8", "v22.11.0"]);
+  const res = launchWithoutNode(t, stagePlugin(t), {
+    HOME: home,
+    _AGENT_SANITIZER_NODE_SEARCH: "1",
+  });
+  assert.equal(
+    JSON.parse(res.stdout).picked,
+    join(home, ".nvm/versions/node/v22.11.0/bin/node"),
+  );
+});
+
+test("a manager's own env var is searched ahead of its default location", (t) => {
+  // fnm/nvm/mise let the install root move; the search has to follow it, or a
+  // relocated install looks like no install at all.
+  const relocated = scratch(t);
+  fakeNode(join(relocated, "versions", "node", "v22.11.0", "bin"), REPORT_ARGV);
+  const res = launchWithoutNode(t, stagePlugin(t), {
+    HOME: scratch(t),
+    NVM_DIR: relocated,
+    _AGENT_SANITIZER_NODE_SEARCH: "1",
+  });
+  assert.equal(
+    JSON.parse(res.stdout).picked,
+    join(relocated, "versions/node/v22.11.0/bin/node"),
+  );
+});
+
+test("AGENT_SANITIZER_NODE overrides the whole search", (t) => {
+  const pinned = fakeNode(scratch(t), REPORT_ARGV);
+  const res = launchWithoutNode(t, stagePlugin(t), {
+    HOME: homeWithNodeVersions(t, ["v22.11.0"]),
+    _AGENT_SANITIZER_NODE_SEARCH: "1",
+    AGENT_SANITIZER_NODE: pinned,
+  });
+  assert.equal(JSON.parse(res.stdout).picked, pinned);
+});
+
+test("a host with no node anywhere still degrades, and names the way out", (t) => {
+  const res = launchWithoutNode(t, stagePlugin(t));
+  assert.equal(res.status, 0);
+  const { additionalContext } = JSON.parse(res.stdout).hookSpecificOutput;
+  assert.match(additionalContext, /UNSANITIZED/);
+  assert.match(additionalContext, /AGENT_SANITIZER_NODE/);
+  assert.match(res.stderr, /AGENT_SANITIZER_NODE/);
+});
+
+// ─── Naming an unsupported runtime ───────────────────────────────────────────
+
+/** A node stub that reports `version` and otherwise dies without a verdict. */
+function crashingNode(t, version) {
+  const dir = scratch(t);
+  fakeNode(
+    dir,
+    `case "$1" in --version) printf '%s\\n' "${version}"; exit 0;; esac\nexit 1`,
+  );
+  return join(dir, "node");
+}
+
+test("a pinned node that is not executable is named as the pin's fault", (t) => {
+  const res = launchWithoutNode(t, stagePlugin(t), {
+    AGENT_SANITIZER_NODE: join(scratch(t), "typo", "node"),
+  });
+  assert.equal(res.status, 0);
+  const { additionalContext } = JSON.parse(res.stdout).hookSpecificOutput;
+  assert.match(additionalContext, /AGENT_SANITIZER_NODE points at/);
+  assert.doesNotMatch(additionalContext, /reinstall the plugin/);
+});
+
+test("a node below the floor is named, not blamed on the plugin", (t) => {
+  // An unsupported runtime dies at parse/import, reaching the same
+  // post-condition as a corrupt install — so the verdict has to name the
+  // runtime, or it sends the operator to replace a plugin that is intact.
+  const res = launchWithoutNode(t, stagePlugin(t), {
+    AGENT_SANITIZER_NODE: crashingNode(t, "v18.20.8"),
+  });
+  assert.equal(res.status, 0);
+  const { additionalContext } = JSON.parse(res.stdout).hookSpecificOutput;
+  assert.match(additionalContext, /node 18/);
+  assert.match(additionalContext, /node >=22/);
+  assert.doesNotMatch(additionalContext, /reinstall the plugin/);
+  assert.match(res.stderr, /below the node >=22/);
+});
+
+test("a supported node that dies is still the plugin's fault", (t) => {
+  const res = launchWithoutNode(t, stagePlugin(t), {
+    AGENT_SANITIZER_NODE: crashingNode(t, "v22.11.0"),
+  });
+  const { additionalContext } = JSON.parse(res.stdout).hookSpecificOutput;
+  assert.match(additionalContext, /reinstall the plugin/);
+  assert.doesNotMatch(additionalContext, /requires node/);
+});
+
+test("an unreadable version blames neither — it reports what it knows", (t) => {
+  // Precision over recall: a stub that answers nothing usable is UNKNOWN, and
+  // unknown must not be reported as too old.
+  const dir = scratch(t);
+  fakeNode(dir, "exit 1");
+  const res = launchWithoutNode(t, stagePlugin(t), {
+    AGENT_SANITIZER_NODE: join(dir, "node"),
+  });
+  const { additionalContext } = JSON.parse(res.stdout).hookSpecificOutput;
+  assert.match(additionalContext, /reinstall the plugin/);
+  assert.doesNotMatch(additionalContext, /requires node/);
+});
+
+// ─── One degraded warning per session, not one per tool call ─────────────────
+
+/** Launch a broken-bundle PreToolUse hook, twice, under one session id. */
+function twoDegradedCalls(t, env = {}) {
+  const plugin = stagePlugin(t);
+  breakBundle(plugin);
+  const session = {
+    CLAUDE_SESSION_ID: `pinned-${process.pid}-${Math.random()}`,
+  };
+  return [1, 2].map(() =>
+    launch(
+      plugin,
+      "PreToolUse",
+      "pretooluse-sanitize",
+      {},
+      {
+        env: { ...session, ...env },
+      },
+    ),
+  );
+}
+
+test("the fail-open warning is injected once per session", (t) => {
+  const [first, second] = twoDegradedCalls(t);
+  for (const res of [first, second]) {
+    assert.equal(res.status, 0, res.stderr);
+    // Every call still ANSWERS: empty stdout reads as a clean run, so dropping
+    // the verdict envelope would be the silent fail-open the launcher exists
+    // to prevent — and every call still says so on stderr, which costs the
+    // model nothing.
+    assert.equal(
+      JSON.parse(res.stdout).hookSpecificOutput.hookEventName,
+      "PreToolUse",
+    );
+    assert.match(res.stderr, /failing open/);
+  }
+  const context = (res) =>
+    JSON.parse(res.stdout).hookSpecificOutput.additionalContext;
+  assert.match(context(first), /UNSANITIZED/);
+  // The one copy the model gets has to carry the session-wide claim, since no
+  // later call will repeat it — and must not promise silence it cannot keep
+  // (under the repeat knob, or where the marker cannot be recorded, later calls
+  // DO warn).
+  assert.match(context(first), /assume this holds until it is fixed/);
+  assert.doesNotMatch(context(first), /not repeated/);
+  assert.equal(context(second), undefined);
+});
+
+test("a DIFFERENT fault in the same session still gets its warning", (t) => {
+  // Suppression is per fault, not per session: a session that loses node and
+  // later meets a corrupt bundle has two things to say, and only the repeat of
+  // one of them is noise.
+  const plugin = stagePlugin(t);
+  breakBundle(plugin);
+  const session = { CLAUDE_SESSION_ID: `two-faults-${process.pid}` };
+  const context = (node) =>
+    JSON.parse(
+      launch(
+        plugin,
+        "PreToolUse",
+        "pretooluse-sanitize",
+        {},
+        {
+          env: { ...session, AGENT_SANITIZER_NODE: node },
+        },
+      ).stdout,
+    ).hookSpecificOutput.additionalContext;
+  assert.match(context(crashingNode(t, "v22.11.0")), /reinstall the plugin/);
+  assert.match(
+    context(join(scratch(t), "typo", "node")),
+    /AGENT_SANITIZER_NODE points at/,
+  );
+});
+
+test("a second session gets its own warning", (t) => {
+  // The suppression is per session and cannot leak across them — launch()
+  // hands every spawn a fresh session id.
+  const plugin = stagePlugin(t);
+  breakBundle(plugin);
+  for (let call = 0; call < 2; call += 1) {
+    const res = launch(plugin, "PreToolUse", "pretooluse-sanitize", {});
+    assert.match(
+      JSON.parse(res.stdout).hookSpecificOutput.additionalContext,
+      /UNSANITIZED/,
+    );
+  }
+});
+
+test("the fail-CLOSED verdict is never deduplicated", (t) => {
+  // A block/ask/suppression is a decision about THIS call, not a notification:
+  // suppressing the second one would let an unguarded tool call through.
+  for (const res of twoDegradedCalls(t, FAIL_CLOSED))
+    assert.equal(
+      JSON.parse(res.stdout).hookSpecificOutput.permissionDecision,
+      "ask",
+    );
+});
+
+test("the repeat knob restores per-call context", (t) => {
+  for (const res of twoDegradedCalls(t, {
+    AGENT_SANITIZER_REPEAT_DEGRADED_CONTEXT: "1",
+  }))
+    assert.match(
+      JSON.parse(res.stdout).hookSpecificOutput.additionalContext,
+      /UNSANITIZED/,
+    );
 });
 
 test("output hook fails OPEN when the redactor is unreachable", (t) => {
