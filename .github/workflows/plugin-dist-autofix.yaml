@@ -91,6 +91,9 @@ jobs:
           # lock exists to stop.
           node plugin/scripts/lock-redactor-deps.mjs --if-stale
           node plugin/scripts/build-redactor-pyz.mjs
+          # --if-stale: skip the ~4-target bun compile when the committed digest
+          # manifest already matches this tree (same bundle, same pinned bun).
+          node plugin/scripts/build-hook-binaries.mjs --if-stale
           # `git diff --quiet` exits non-zero exactly when the build changed files.
           if git diff --quiet; then
             echo "changed=false" >>"$GITHUB_OUTPUT"

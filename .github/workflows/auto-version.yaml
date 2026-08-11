@@ -131,3 +131,18 @@ jobs:
           # twine hides the registry's rejection reason (e.g. which metadata
           # field or publisher mismatch caused a 400) unless verbose.
           verbose: true
+
+      # Coupled GitHub release carrying the bun-compiled hook binaries (~100 MB
+      # each, never committed — release assets are their only distribution
+      # channel; the SessionStart provisioner downloads and digest-verifies
+      # them). Runs LAST so a failure here cannot strand the npm/PyPI release or
+      # the tag, which version-bump.sh has already pushed; the step failing is
+      # the signal — build-publish-notify.yaml turns it into an alert. The job's
+      # `contents: write` permission covers release creation and asset upload,
+      # so the stock token suffices.
+      - name: Build the hook binaries and attach them to the GitHub release
+        if: steps.release.outputs.released == 'true'
+        env:
+          VERSION: ${{ steps.release.outputs.version }}
+          GH_TOKEN: ${{ github.token }}
+        run: bash .github/scripts/release-hook-binaries.sh

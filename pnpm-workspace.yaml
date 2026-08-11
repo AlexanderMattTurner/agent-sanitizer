@@ -1,4 +1,7 @@
 allowBuilds:
+  # bun's postinstall links the platform binary out of its optionalDependencies;
+  # without it node_modules/.bin/bun is a stub that exits 1.
+  bun: true
   esbuild: true
 
 # Supply-chain cooling-off window: refuse to RESOLVE a dependency version

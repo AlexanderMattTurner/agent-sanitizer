@@ -527,9 +527,10 @@ Installed as Claude Code hooks, these fail **open**: a hook that could not
 complete lets the guarded action through with a warning in `additionalContext`
 rather than blocking the session. `AGENT_SANITIZER_FAIL_OPEN=0` (or `false`)
 restores the fail-closed verdicts — block, ask, suppress. The posture covers
-every way a hook can fail: the launcher not starting (no `node`, missing or
-corrupt bundle), the package never loading, a payload that never parsed, and a
-layer that ran and threw.
+every way a hook can fail: the launcher finding no runtime (no `node`, and the
+provisioned hook binary missing, unexecutable or failing without a verdict),
+a missing or corrupt bundle, the package never loading, a payload that never
+parsed, and a layer that ran and threw.
 
 One carve-out: when the PreToolUse hook itself fails (redactor daemon down,
 package failed to load, a layer threw) and the call is a **write-shaped tool**
@@ -542,11 +543,12 @@ placeholder-bearing write is never the benign availability case the open default
 protects — the model can retry once the sanitizer recovers, or ask the user. The
 check is package-free (a literal-string test on the already-parsed payload), so
 it holds even when the failure IS the missing package. Two accepted gaps: a
-launcher-level failure (no `node`, corrupt bundle) never reaches the check — the
-launcher cannot inspect the payload and always warns — and `Bash` is excluded
-even though shell redirection can also persist placeholder text, because command
-strings mention `[REDACTED` benignly far too often for the ask to hold
-precision. All other faults keep the open default, and
+launcher-level failure (no `node`, corrupt bundle, a provisioned hook binary
+that is missing, unexecutable or dies without a verdict) never reaches the
+check — the launcher cannot inspect the payload and always warns — and `Bash`
+is excluded even though shell redirection can also persist placeholder text,
+because command strings mention `[REDACTED` benignly far too often for the ask
+to hold precision. All other faults keep the open default, and
 `AGENT_SANITIZER_FAIL_OPEN=0` behavior is unchanged.
 
 **The open default is not enforceable against content.** Several of those
