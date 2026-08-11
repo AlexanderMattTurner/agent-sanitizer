@@ -146,9 +146,9 @@ DEGRADED_MARKER_TTL_MIN=720
 # 1 when it has not.
 #
 # A session whose sanitizer is broken stays broken for its lifetime, and the
-# fail-open warning rides on additionalContext — so the identical paragraph was
-# injected on EVERY tool call from the first failure onward. Past the first copy
-# it tells the model nothing new and costs context the user paid for.
+# fail-open warning rides on additionalContext — so repeating it on every tool
+# call past the first tells the model nothing new and costs context the user
+# paid for.
 #
 # Only the CONTEXT is deduplicated. The stderr line still prints every time (it
 # costs the model nothing and is the operator's live signal), a verdict envelope
@@ -160,7 +160,7 @@ DEGRADED_MARKER_TTL_MIN=720
 # The key is the session id when the host exports one. Where it does not, $PPID
 # stands in: if the harness spawns hooks directly it is the harness process and
 # the dedupe holds for the session; if it spawns them through a per-hook shell
-# the key changes every time and the warning repeats exactly as it used to.
+# the key changes every time and the warning repeats on every call.
 # Neither spelling can suppress ACROSS sessions, which is the only failure here
 # that would matter.
 degraded_context_already_sent() {
@@ -259,9 +259,10 @@ emit_degraded() {
 # an interactive shell built. A launchd- or cron-scheduled session, a CI job, or
 # a GUI-launched Claude Code inherits roughly `/usr/bin:/bin`, and every version
 # manager (fnm, nvm, mise, volta, asdf) — plus Homebrew's prefix — puts node on
-# PATH from a shell rc file that never runs there. Those sessions had EVERY hook
-# fail open on a machine with node installed. lib/node-resolve.sh looks where
-# those installs actually live; AGENT_SANITIZER_NODE overrides the whole search.
+# PATH from a shell rc file that never runs there, so a PATH-only lookup leaves
+# EVERY hook in such a session failing open on a machine with node installed.
+# lib/node-resolve.sh looks where those installs actually live;
+# AGENT_SANITIZER_NODE overrides the whole search.
 node_bin="$(agent_sanitizer_resolve_node)"
 if [[ -z "$node_bin" ]]; then
   echo "agent-sanitizer: no node found on PATH or in any known version-manager install — sanitization cannot run (set AGENT_SANITIZER_NODE to its path)" >&2

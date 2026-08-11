@@ -3,11 +3,11 @@
  * Emit `plugin/scripts/lib/node-floor.sh` from `package.json`'s `engines.node`.
  *
  * The floor is declared once, for npm, in `engines.node`. The plugin launcher
- * needs the same number at runtime — it is the difference between "your node is
- * too old" and the "reinstall the plugin" it used to print when an unsupported
- * runtime made the bundle die — and it runs inside an installed plugin, where
- * this `package.json` is not on disk. So the number is RENDERED into a shell lib
- * that ships with the plugin rather than re-typed there.
+ * needs the same number at runtime — an unsupported runtime kills the bundle
+ * before it can answer, and without the floor that is indistinguishable from a
+ * corrupt install — and it runs inside an installed plugin, where this
+ * `package.json` is not on disk. So the number is RENDERED into a shell lib that
+ * ships with the plugin rather than re-typed there.
  *
  * A build-time emitter, deliberately standalone (the same split as
  * `gen-fail-open-lib.mjs`): nothing a hook imports at runtime should carry a

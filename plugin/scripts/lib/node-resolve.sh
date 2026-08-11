@@ -7,9 +7,9 @@
 # cron-scheduled run, a CI job, a GUI-launched app on macOS — inherit a PATH of
 # roughly `/usr/bin:/bin`, and every version manager (fnm, nvm, mise, volta,
 # asdf, nodenv) puts node on PATH from a shell rc file, never there. Homebrew's
-# `/opt/homebrew/bin` is missing from that PATH too. So the sanitizer's own
-# launcher found no node, degraded, and every hook in the session failed open —
-# on a machine where node was installed the whole time.
+# `/opt/homebrew/bin` is missing from that PATH too. Without this search the
+# launcher finds no node on such a host and degrades, leaving every hook in the
+# session failing open on a machine where node is installed.
 #
 # This is a best-effort search of where those installs actually live, and its
 # posture is deliberate: when it finds nothing, the caller still degrades
