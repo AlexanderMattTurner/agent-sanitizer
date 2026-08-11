@@ -38,7 +38,7 @@
  * with the hook that walks it, or a plugin built against an older pin would
  * prune the wrong directories while believing it had scanned everything.
  */
-import { dirname, join, resolve } from "node:path";
+import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 
 /**
  * The `.claude/` subdirectories whose markdown Claude Code loads as model
@@ -177,6 +177,26 @@ export function ancestorInstructionFiles(dir) {
     for (const name of CLAUDE_MEMORY_FILES) files.push(join(current, name));
   }
   return files;
+}
+
+/**
+ * Whether `file` lives inside `dir`. Lexical, on already-absolute paths, and the
+ * bound on where an instruction-file scanner may REWRITE: a file above the scan
+ * root is shared with every other project beneath that root, so it is reported
+ * rather than silently edited. Both scanners ask this — one for a target it
+ * globbed, one for a path an event handed it — and a copy each is a copy that
+ * can drift into rewriting a file the other would not.
+ *
+ * Symlinks are deliberately not resolved: the guard that stops a link from
+ * redirecting the write has to live at the write itself (cleanFile opens
+ * O_NOFOLLOW), and resolving here would only duplicate it a check too early.
+ * @param {string} dir
+ * @param {string} file
+ * @returns {boolean}
+ */
+export function isInsideDir(dir, file) {
+  const rel = relative(dir, file);
+  return rel !== "" && !rel.startsWith("..") && !isAbsolute(rel);
 }
 
 /**

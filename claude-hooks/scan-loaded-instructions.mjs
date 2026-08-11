@@ -39,7 +39,7 @@ import {
 import { bestEffortTrace, trace, TraceEvent } from "./lib/trace.mjs";
 import { reportSlowHook, startHookTimer } from "./lib/hook-timing.mjs";
 import { formatReport } from "./lib/invisible-report.mjs";
-import { isAbsolute, relative } from "node:path";
+import { isInsideDir } from "../src/claude-context.mjs";
 
 // The instruction-scanner SSOT, bound via lazyImport (see its doc for the
 // fail-OPEN hazard of a bare static npm import — here a loaded instruction file
@@ -120,21 +120,6 @@ export function readLoadedFile(payload) {
 }
 
 /**
- * Whether `file` lives inside `dir` — the same lexical test scan-invisible-chars
- * applies before rewriting a target, for the same reason: a file above the
- * project is shared with every other project under that directory, so it is
- * reported rather than silently edited. cleanFile's O_NOFOLLOW open is what
- * stops a symlink from redirecting the write it does perform.
- * @param {string} dir
- * @param {string} file
- * @returns {boolean}
- */
-function isInside(dir, file) {
-  const rel = relative(dir, file);
-  return rel !== "" && !rel.startsWith("..") && !isAbsolute(rel);
-}
-
-/**
  * Scan one loaded instruction file. Returns the report and what to do with it:
  * `cleaned` says the payload is gone from disk, `alert` carries the text that
  * must arm the PreToolUse gate (empty when the clean succeeded).
@@ -155,7 +140,7 @@ export function scanLoadedFile(
   const findings = scanText(content);
   if (findings.length === 0) return null;
   const report = formatReport([{ file: filePath, findings }]);
-  if (!isInside(projectDir, filePath))
+  if (!isInsideDir(projectDir, filePath))
     return {
       report,
       cleaned: false,

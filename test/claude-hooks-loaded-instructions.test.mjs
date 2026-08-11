@@ -18,6 +18,7 @@ import {
   mkdtempSync,
   readFileSync,
   rmSync,
+  utimesSync,
   writeFileSync,
 } from "node:fs";
 import { spawnSync } from "node:child_process";
@@ -349,6 +350,27 @@ describe("a host that never emits the event is named, once", () => {
     assert.equal(instructionsLoadedSeen(SESSION), false);
     assert.match(instructionsLoadedGapNotice(SESSION), /unscanned/u);
     rmSync(instructionsLoadedFile("sess-earlier"), { force: true });
+  });
+
+  it("sweeps a past session's markers, keeping this session's and recent ones", () => {
+    // One marker pair per session, never cleared while the session could still
+    // ask — so the only thing keeping $TMPDIR from growing without bound is this
+    // sweep on the first fire of a later session.
+    const old = instructionsLoadedFile("sess-ancient");
+    const recent = instructionsLoadedFile("sess-yesterday");
+    for (const path of [old, recent]) writeFileSync(path, "");
+    const eightDaysAgo = new Date(Date.now() - 8 * 24 * 60 * 60 * 1000);
+    utimesSync(old, eightDaysAgo, eightDaysAgo);
+
+    recordInstructionsLoaded(SESSION);
+
+    assert.equal(existsSync(old), false, "a stale marker was left behind");
+    assert.ok(existsSync(recent), "a marker inside the TTL was swept");
+    assert.ok(
+      existsSync(instructionsLoadedFile(SESSION)),
+      "the sweep took the marker it had just written",
+    );
+    rmSync(recent, { force: true });
   });
 
   it("folds a path separator out of a hostile session id", () => {

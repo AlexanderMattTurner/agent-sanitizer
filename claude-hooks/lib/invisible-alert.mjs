@@ -10,9 +10,9 @@
  * Both hooks reach the state through this module so the paths and the trust rule
  * have one definition.
  */
-import { readFileSync } from "node:fs";
+import { lstatSync, readdirSync, readFileSync, unlinkSync } from "node:fs";
 import { createHash } from "node:crypto";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { tmpdir } from "node:os";
 import {
   lazyImport,
@@ -56,7 +56,8 @@ export const ALERT_ACK_FILE = `${ALERT_FILE}.acked`;
  * Marker the InstructionsLoaded scanner writes on every fire, so another hook
  * can tell whether that event is being scanned at all this session.
  *
- * Keyed by the SESSION, not cleared at SessionStart like the alert pair above:
+ * Keyed by the SESSION, and never cleared at SessionStart like the alert pair
+ * above (a later session sweeps it once it is older than the TTL):
  * nothing pins the order of SessionStart against the InstructionsLoaded events
  * Claude Code fires for the files it loads at launch, so a clear could erase a
  * marker written moments earlier and produce the notice on a session that IS
@@ -98,14 +99,45 @@ export function instructionsLoadedSeen(sessionId) {
   return markerIsTrusted(instructionsLoadedFile(sessionId));
 }
 
+/** How long a past session's marker is kept before the next session sweeps it. */
+const MARKER_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+
+/**
+ * Delete this project's session markers older than the TTL. Only PAST sessions'
+ * files are candidates — the current session's was just written, so the sweep
+ * cannot answer its own question wrong.
+ * @param {string} keep  the marker path this session owns
+ * @returns {void}
+ */
+function sweepStaleMarkers(keep) {
+  const dir = tmpdir();
+  const prefix = `${basename(ALERT_FILE)}.instructions-loaded.`;
+  const cutoff = Date.now() - MARKER_TTL_MS;
+  for (const name of readdirSync(dir)) {
+    if (!name.startsWith(prefix)) continue;
+    const path = join(dir, name);
+    if (path === keep || path === `${keep}.noticed`) continue;
+    // lstat, not stat: a squatted symlink at a predictable $TMPDIR path must be
+    // judged on ITSELF, not on whatever it points at. unlink removes the link.
+    if (lstatSync(path).mtimeMs < cutoff) unlinkSync(path);
+  }
+}
+
 /**
  * Record that the InstructionsLoaded scanner engaged. Symlink-safe presence
  * write (see writeSentinelFile) at a predictable $TMPDIR path.
+ *
+ * The event fires once per instruction file loaded, so the already-recorded case
+ * returns without a write — and the stale-marker sweep rides the FIRST fire of a
+ * session, where one readdir is paid once rather than per loaded file.
  * @param {string} [sessionId]
  * @returns {void}
  */
 export function recordInstructionsLoaded(sessionId) {
-  writeSentinelFile(instructionsLoadedFile(sessionId));
+  const marker = instructionsLoadedFile(sessionId);
+  if (markerIsTrusted(marker)) return;
+  writeSentinelFile(marker);
+  sweepStaleMarkers(marker);
 }
 
 /**

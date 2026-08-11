@@ -22,7 +22,7 @@
  * `writeFileSync` with none of cleanFile's symlink/UTF-8/TOCTOU guards.
  */
 import { existsSync, readFileSync, globSync, unlinkSync } from "node:fs";
-import { isAbsolute, join, relative, resolve } from "node:path";
+import { join, relative, resolve } from "node:path";
 import {
   awaitLazyDependency,
   emitHookResponse,
@@ -60,6 +60,7 @@ import {
   CLAUDE_INSTRUCTION_GLOBS,
   CLAUDE_LAUNCH_GLOBS,
   excludeFromContextScan,
+  isInsideDir,
 } from "../src/claude-context.mjs";
 
 // Layer-1 primitives + the instruction-scanner SSOT, bound via lazyImport (see
@@ -255,21 +256,6 @@ function findInstructionFiles(dir) {
   ];
 }
 
-/**
- * Whether `file` lives inside `dir`. Lexical, on already-absolute paths: the
- * only thing it decides is whether this hook may REWRITE the file (see
- * {@link autoCleanFindings}), and cleanFile's own O_NOFOLLOW open is what stops
- * a symlink from redirecting that write outside the tree — so resolving links
- * here would duplicate a guard that has to live at the write anyway.
- * @param {string} dir
- * @param {string} file
- * @returns {boolean}
- */
-function isInside(dir, file) {
-  const rel = relative(dir, file);
-  return rel !== "" && !rel.startsWith("..") && !isAbsolute(rel);
-}
-
 // Scanner
 
 /**
@@ -353,7 +339,7 @@ function classifyReadFailure(err) {
 export function scanProject(dir = PROJECT_DIR) {
   const targets = [...new Set(findInstructionFiles(dir))];
   const report = (/** @type {string} */ file) =>
-    isInside(dir, file) ? relative(dir, file) : file;
+    isInsideDir(dir, file) ? relative(dir, file) : file;
   const findings = [];
   const skipped = [];
   const absent = [];
@@ -564,7 +550,7 @@ function autoCleanFindings(allFindings, dir) {
     // it — is a wider blast radius than an auto-clean has any claim to. Leaving
     // it uncleaned is what routes it to the alert below, whose remedy names the
     // cleanFile CLI to run against it deliberately.
-    if (!isInside(dir, absPath)) continue;
+    if (!isInsideDir(dir, absPath)) continue;
     try {
       // The SSOT clean: O_NOFOLLOW open, UTF-8 round-trip check, TOCTOU
       // recheck, atomic rename + fsync, mode preservation. The bare
