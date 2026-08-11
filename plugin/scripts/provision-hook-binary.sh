@@ -27,7 +27,12 @@ esac
 
 data_dir="${1:?usage: provision-hook-binary.sh <plugin-data-dir>}"
 script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
-plugin_root="$(cd -- "$script_dir/.." && pwd)"
+if [[ ! -r "$script_dir/lib/provision-common.sh" ]]; then
+  echo "agent-sanitizer: $script_dir/lib/provision-common.sh is missing — the hook binary will not be provisioned (reinstall the plugin)" >&2
+  exit 1
+fi
+# shellcheck source=lib/provision-common.sh
+. "$script_dir/lib/provision-common.sh"
 
 # Only the platforms the release carries binaries for (the case arms mirror
 # PLATFORMS in build-hook-binaries.mjs; provision-hook-binary.test.mjs drives
@@ -50,22 +55,12 @@ installed_stamp="$dest_dir/.manifest-installed"
 reject_stamp="$dest_dir/.download-rejected"
 download=""
 
-# A ~100 MB download can dominate session start, and it blocks under the same
-# 1800s harness timeout as every hook — so it reports itself against the
-# provisioning budget, not the per-hook one (see lib/hook-timing.sh), with
-# download advice rather than the default's installer advice.
-provision_started_ms=0
-if [[ -r "$script_dir/lib/hook-timing.sh" ]]; then
-  # shellcheck source=lib/hook-timing.sh
-  . "$script_dir/lib/hook-timing.sh"
-  provision_started_ms="$(hook_timing_now_ms)"
-else
-  echo "agent-sanitizer: $script_dir/lib/hook-timing.sh is missing — provisioning timing disabled (reinstall the plugin)" >&2
-  report_slow_provision() { :; }
-fi
-# $download is empty until mktemp names one, so this removes a partial transfer
-# and never another process's file.
-trap 'rm -f -- "${download:-}"; report_slow_provision "hook binary download" "$provision_started_ms" "The binary is ~100 MB, so this mostly measures the connection to github.com"' EXIT
+# Download advice rather than the shared default's installer advice: telling a
+# user mid-download that uv would help is advice about the wrong step.
+# $download is empty until mktemp names one, so the cleanup removes a partial
+# transfer and never another process's file.
+provision_begin "hook binary download"
+trap 'rm -f -- "${download:-}"; provision_report_elapsed "The binary is ~100 MB, so this mostly measures the connection to github.com"' EXIT
 
 if [[ ! -f "$manifest" ]]; then
   echo "agent-sanitizer: $manifest is missing — the hook binary cannot be verified, so it will not be provisioned (reinstall the plugin)" >&2
@@ -241,10 +236,6 @@ mv -f -- "$download" "$binary" || install_failed "mv"
 download=""
 cp -- "$manifest" "$installed_stamp" || install_failed "recording the install stamp"
 rm -f -- "$reject_stamp" || install_failed "clearing the reject stamp"
-# The success line is gated on the POST-CONDITION, not on the commands above
-# exiting 0 — this is what may not lie to the operator about a dead install.
-if [[ ! -x "$binary" ]]; then
-  echo "agent-sanitizer: install finished but $binary is not an executable file — $consequence" >&2
-  exit 1
-fi
+provision_require_executable "$binary" \
+  "agent-sanitizer: install finished but $binary is not an executable file — $consequence"
 echo "agent-sanitizer: hook binary provisioned into $binary — hooks now run with no node dependency" >&2

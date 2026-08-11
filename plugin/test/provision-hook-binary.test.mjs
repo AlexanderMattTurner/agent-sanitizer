@@ -324,6 +324,88 @@ test("a missing manifest refuses to provision", (t) => {
   assert.ok(!existsSync(curlLog));
 });
 
+test("a slow download reports against the one-time setup budget", (t) => {
+  const staged = stageProvisionable(t);
+  const { path } = provisionPath(t, staged.fixture);
+  // Threshold 0 rather than a real overrun: what is under test is that this
+  // script measures and reports at all, and with the advice that fits a
+  // download — the shared default names an installer, which is advice about
+  // the wrong step here.
+  const res = provision(staged, path, {
+    _AGENT_SANITIZER_SLOW_PROVISION_MS: "0",
+  });
+  assert.equal(res.status, 0, res.stderr);
+  assert.match(
+    res.stderr,
+    /PERFORMANCE: one-time setup \(hook binary download\)/,
+  );
+  assert.match(res.stderr, /~100 MB/);
+  // The install budget, not the per-call one: a ~100 MB transfer charged to a
+  // 1s hook budget would report on every cold session and name the wrong cost.
+  assert.equal(res.stderr.includes("hook took"), false, res.stderr);
+});
+
+test("a fast download says nothing about timing", (t) => {
+  const staged = stageProvisionable(t);
+  const { path } = provisionPath(t, staged.fixture);
+  const res = provision(staged, path);
+  // Non-vacuity for the case above: with the real threshold in force the same
+  // run is silent, so it observes the report and not just any stderr.
+  assert.equal(res.status, 0, res.stderr);
+  assert.equal(res.stderr.includes("PERFORMANCE"), false, res.stderr);
+});
+
+test("a missing shared provisioning lib refuses to provision", (t) => {
+  const staged = stageProvisionable(t);
+  rmSync(join(staged.plugin, "scripts", "lib", "provision-common.sh"));
+  const { path, curlLog } = provisionPath(t, staged.fixture);
+  const res = provision(staged, path);
+  // It aborts AT the missing source, naming the file: under `set -u` the first
+  // thing the lib was to define aborts with `provision_begin: command not
+  // found`, which names nothing an operator can act on, and nothing is
+  // downloaded on the way there.
+  assert.equal(res.status, 1);
+  assert.match(res.stderr, /provision-common\.sh is missing/);
+  assert.match(res.stderr, /reinstall the plugin/);
+  assert.ok(!existsSync(curlLog));
+});
+
+test("a missing timing lib degrades to an untimed download, not to failure", (t) => {
+  const staged = stageProvisionable(t);
+  rmSync(join(staged.plugin, "scripts", "lib", "hook-timing.sh"));
+  const { path } = provisionPath(t, staged.fixture);
+  const res = provision(staged, path, {
+    _AGENT_SANITIZER_SLOW_PROVISION_MS: "0",
+  });
+  // A host that can still download must still download: under
+  // `set -euo pipefail` a non-zero from the timing arm would turn a missing
+  // stopwatch into a host left on the node path the binary exists to replace.
+  assert.equal(res.status, 0, res.stderr);
+  assert.match(res.stderr, /hook-timing\.sh is missing/);
+  assert.match(res.stderr, /hook binary provisioned/);
+  // Nothing pretends to have measured: the threshold is 0 here, so a live
+  // timer would report on this very run.
+  assert.equal(res.stderr.includes("PERFORMANCE"), false, res.stderr);
+});
+
+test("a binary that lands un-executable is not reported as provisioned", (t) => {
+  const staged = stageProvisionable(t);
+  // chmod is the only thing that makes the download executable, so a no-op one
+  // reproduces an install whose every command exits 0 while leaving nothing
+  // runnable — the state the stamps written just above the check would
+  // otherwise record as "provisioned from this manifest".
+  const { path } = provisionPath(t, staged.fixture);
+  writeFileSync(join(path, "chmod"), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+  const res = provision(staged, path);
+  assert.equal(res.status, 1);
+  assert.match(res.stderr, /install finished but .* is not an executable file/);
+  assert.equal(
+    res.stderr.includes("hook binary provisioned"),
+    false,
+    res.stderr,
+  );
+});
+
 // What `uname -s`/`-m` report on each platform the release carries a binary
 // for. A platform the script's `case` cannot name is a platform whose users
 // silently keep the node dependency the binary exists to remove, so every key

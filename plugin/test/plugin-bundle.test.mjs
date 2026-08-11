@@ -1857,6 +1857,58 @@ test("provision fails loud when no Python toolchain exists", (t) => {
   assert.match(res.stderr, /UNREDACTED/);
 });
 
+test("an install that produces no daemon fails loud, not silently", (t) => {
+  const plugin = stagePlugin(t);
+  const bin = stubBin(t, ["python3", "uv", "pip"]);
+  // A toolchain whose every command exits 0 while producing nothing: the state
+  // an exit-status check reports as a successful install, leaving the launcher
+  // to find no daemon after the operator was told there is one.
+  writeFileSync(join(bin, "uv"), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+  const res = spawnSync(
+    "bash",
+    [
+      join(plugin, "scripts", "provision-redactor.sh"),
+      join(scratch(t), "data"),
+    ],
+    {
+      encoding: "utf8",
+      env: { PATH: bin, AGENT_SANITIZER_SECRETS_ENABLED: "1" },
+    },
+  );
+  assert.equal(res.status, 1);
+  assert.match(
+    res.stderr,
+    /install finished but .*agent-secret-redactor-daemon is not an executable file/,
+  );
+  assert.equal(res.stderr.includes("provisioned into"), false, res.stderr);
+});
+
+test("a missing shared provisioning lib refuses to provision", (t) => {
+  const plugin = stagePlugin(t);
+  rmSync(join(plugin, "scripts", "lib", "provision-common.sh"));
+  const res = spawnSync(
+    "bash",
+    [
+      join(plugin, "scripts", "provision-redactor.sh"),
+      join(scratch(t), "data"),
+    ],
+    {
+      encoding: "utf8",
+      env: {
+        PATH: stubBin(t, ["python3", "uv", "pip"]),
+        AGENT_SANITIZER_SECRETS_ENABLED: "1",
+      },
+    },
+  );
+  assert.equal(res.status, 1);
+  assert.match(res.stderr, /provision-common\.sh is missing/);
+  // It aborts AT the missing source, naming the file: the toolchain check
+  // further down never gets to speak, and `set -u` on the first unset variable
+  // the lib was to define would abort with `plugin_root: unbound variable`,
+  // which names nothing an operator can act on.
+  assert.equal(res.stderr.includes("python3 not found"), false, res.stderr);
+});
+
 test("provision is a silent no-op without the secret opt-in", (t) => {
   const plugin = stagePlugin(t);
   const res = spawnSync(
@@ -1925,6 +1977,39 @@ test("a healthy launcher run says nothing about timing", (t) => {
   // Non-vacuity for the two cases above: with the real threshold in force the
   // same run is silent, so they are observing the report and not just any
   // stderr the launcher happens to produce.
+  assert.equal(res.stderr.includes("PERFORMANCE"), false, res.stderr);
+});
+
+test("a missing timing lib degrades to untimed provisioning, not to failure", (t) => {
+  const plugin = stagePlugin(t);
+  rmSync(join(plugin, "scripts", "lib", "hook-timing.sh"));
+  const data = join(scratch(t), "data");
+  const venvBin = join(data, "venv", "bin");
+  mkdirSync(venvBin, { recursive: true });
+  writeFileSync(join(venvBin, "agent-secret-redactor-daemon"), "#!/bin/sh\n", {
+    mode: 0o755,
+  });
+  stampProvisionInputs(plugin, data);
+  const res = spawnSync(
+    "bash",
+    [join(plugin, "scripts", "provision-redactor.sh"), data],
+    {
+      encoding: "utf8",
+      env: {
+        PATH: stubBin(t, ["python3", "uv", "pip"]),
+        AGENT_SANITIZER_SECRETS_ENABLED: "1",
+        ...REPORT_EVERY_RUN,
+      },
+    },
+  );
+  // An install that can still provision must still provision: under
+  // `set -euo pipefail` a non-zero from the timing arm would turn a missing
+  // stopwatch into an aborted Layer 4.
+  assert.equal(res.status, 0, res.stderr);
+  assert.match(res.stderr, /hook-timing\.sh is missing/);
+  assert.match(res.stderr, /timing disabled/);
+  // Nothing pretends to have measured: the thresholds are 0 here, so a live
+  // timer would report on this very run.
   assert.equal(res.stderr.includes("PERFORMANCE"), false, res.stderr);
 });
 

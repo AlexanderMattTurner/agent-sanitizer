@@ -216,6 +216,7 @@ scripts/provision-redactor.sh  SessionStart provisioning of the Python redactor
 scripts/provision-hook-binary.sh  SessionStart provisioning of the compiled hook binary
 scripts/build-plugin.mjs     builds dist/ from claude-hooks/ against this repo's src/
 scripts/build-hook-binaries.mjs  compiles the bundle into the per-platform release binaries
+scripts/lib/provision-common.sh  the scaffolding both SessionStart provisioners share
 scripts/lib/hook-timing.sh   shell port of the hook timer, for the SessionStart scripts
 scripts/lib/node-resolve.sh  the node search, for hosts whose PATH never saw a shell rc
 scripts/lib/node-floor.sh    the node version floor (generated from engines.node — do not edit)
