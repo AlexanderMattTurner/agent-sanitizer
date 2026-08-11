@@ -8,6 +8,18 @@ adhere to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+## [2.34.13] - 2026-08-11
+
+### Added
+- Node launcher now searches for Node.js outside the interactive shell's PATH, improving compatibility with non-standard installations.
+- Added validation to identify and name Node.js versions that are too old for the plugin.
+
+### Fixed
+- Fixed degraded warning that incorrectly promised silence it could not keep.
+
+### Changed
+- Improved launcher documentation to state its rationale in present tense.
+
 ## [2.34.12] - 2026-08-10
 
 ### Changed
