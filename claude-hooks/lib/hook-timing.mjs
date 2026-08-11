@@ -158,19 +158,23 @@ export function slowHookNotice(
  * @param {string} stepName
  * @param {number} elapsedMs
  * @param {number} [thresholdMs]
+ * @param {string} [advice] step-specific speedup advice — the default fits the
+ *   engine install; the hook-binary download passes its own, because telling a
+ *   user mid-download that uv would help is advice about the wrong step
  * @returns {string | null}
  */
 export function slowProvisionNotice(
   stepName,
   elapsedMs,
   thresholdMs = SLOW_PROVISION_THRESHOLD_MS,
+  advice = "Installing uv makes it faster",
 ) {
   if (elapsedMs <= thresholdMs) return null;
   return (
     `agent-sanitizer PERFORMANCE: one-time setup (${stepName}) took ` +
     `${formatSeconds(elapsedMs)}s, over its ${formatSeconds(thresholdMs)}s budget — ` +
     "this is paid once per install, not per tool call, so the session is not slow from here on. " +
-    `Installing uv makes it faster; if it happens on EVERY new session, report it at ${ISSUE_URL}.`
+    `${advice}; if it happens on EVERY new session, report it at ${ISSUE_URL}.`
   );
 }
 

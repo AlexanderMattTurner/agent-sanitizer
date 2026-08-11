@@ -43,7 +43,9 @@ jobs:
     # fix it.
     if: github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    # Regenerating the hook-binary manifest compiles four bun binaries (~100 MB
+    # each), downloading each cross-target runtime on a cold cache.
+    timeout-minutes: 30
     steps:
       # A GITHUB_TOKEN push does not re-trigger workflows, so the Required
       # node-tests check would stay pending on the fixed commit and block the PR.

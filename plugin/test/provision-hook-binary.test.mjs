@@ -26,6 +26,8 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { ASSET_PREFIX, PLATFORMS } from "../scripts/build-hook-binaries.mjs";
+
 const ROOT = dirname(dirname(dirname(fileURLToPath(import.meta.url))));
 const PLUGIN_DIR = join(ROOT, "plugin");
 
@@ -45,7 +47,10 @@ const ASSET = "agent-sanitizer-hooks-linux-x64";
  * platform, plus a fixture "release asset" the curl stub serves. Returns the
  * staged pieces.
  */
-function stageProvisionable(t, { assetBytes = "FAKE HOOK BINARY\n" } = {}) {
+function stageProvisionable(
+  t,
+  { assetBytes = "FAKE HOOK BINARY\n", asset = ASSET } = {},
+) {
   const dir = scratch(t);
   const plugin = join(dir, "plugin");
   cpSync(PLUGIN_DIR, plugin, { recursive: true });
@@ -59,7 +64,7 @@ function stageProvisionable(t, { assetBytes = "FAKE HOOK BINARY\n" } = {}) {
       "# repository=example-owner/example-repo\n" +
       "# bun=0.0.0\n" +
       "# bundle=0000000000000000000000000000000000000000000000000000000000000000\n" +
-      `${digest}  ${ASSET}\n`,
+      `${digest}  ${asset}\n`,
   );
   return { dir, plugin, fixture, manifest, data: join(dir, "data") };
 }
@@ -70,7 +75,11 @@ function stageProvisionable(t, { assetBytes = "FAKE HOOK BINARY\n" } = {}) {
  * the fixture while logging its argv — so no test touches the network and the
  * requested URL is observable. `omit` drops commands to model a bare host.
  */
-function provisionPath(t, fixture, { omit = [], uname = STUB_PLATFORM } = {}) {
+function provisionPath(
+  t,
+  fixture,
+  { omit = [], uname = STUB_PLATFORM, downloader = "curl" } = {},
+) {
   const dir = join(scratch(t), "bin");
   mkdirSync(dir, { recursive: true });
   for (const cmd of [
@@ -102,11 +111,15 @@ function provisionPath(t, fixture, { omit = [], uname = STUB_PLATFORM } = {}) {
     `#!/bin/sh\ncase "$1" in\n-s) echo ${uname[0]} ;;\n-m) echo ${uname[1]} ;;\nesac\n`,
     { mode: 0o755 },
   );
+  // One log for whichever downloader the host has, so every assertion about
+  // "did it download, and from where" reads the same regardless of which arm
+  // of the script ran. curl writes to -o, wget to -O.
   const curlLog = join(dir, "..", "curl-log");
-  if (!omit.includes("curl"))
+  const outFlag = downloader === "wget" ? "-O" : "-o";
+  if (!omit.includes(downloader))
     writeFileSync(
-      join(dir, "curl"),
-      `#!/bin/sh\necho "$@" >>"${curlLog}"\nout=""\nprev=""\nfor a in "$@"; do\n  if [ "$prev" = "-o" ]; then out="$a"; fi\n  prev="$a"\ndone\ncp "${fixture}" "$out"\n`,
+      join(dir, downloader),
+      `#!/bin/sh\necho "$@" >>"${curlLog}"\nout=""\nprev=""\nfor a in "$@"; do\n  if [ "$prev" = "${outFlag}" ]; then out="$a"; fi\n  prev="$a"\ndone\ncp "${fixture}" "$out"\n`,
       { mode: 0o755 },
     );
   return { path: dir, curlLog };
@@ -303,6 +316,93 @@ test("a missing manifest refuses to provision", (t) => {
   assert.equal(res.status, 1);
   assert.match(res.stderr, /reinstall the plugin/);
   assert.ok(!existsSync(curlLog));
+});
+
+// What `uname -s`/`-m` report on each platform the release carries a binary
+// for. A platform the script's `case` cannot name is a platform whose users
+// silently keep the node dependency the binary exists to remove, so every key
+// of PLATFORMS is driven through the real dispatch below.
+const UNAME_BY_PLATFORM = {
+  "darwin-arm64": [["Darwin", "arm64"]],
+  "darwin-x64": [["Darwin", "x86_64"]],
+  "linux-x64": [["Linux", "x86_64"]],
+  "linux-arm64": [
+    ["Linux", "aarch64"],
+    ["Linux", "arm64"],
+  ],
+};
+
+test("every platform the manifest covers resolves to its own release asset", async (t) => {
+  assert.deepEqual(
+    Object.keys(UNAME_BY_PLATFORM).sort(),
+    Object.keys(PLATFORMS).sort(),
+  );
+  for (const [platform, unames] of Object.entries(UNAME_BY_PLATFORM)) {
+    for (const uname of unames) {
+      await t.test(`${uname.join(" ")} → ${platform}`, (sub) => {
+        const asset = `${ASSET_PREFIX}${platform}`;
+        const staged = stageProvisionable(sub, { asset });
+        const { path, curlLog } = provisionPath(sub, staged.fixture, { uname });
+        const res = provision(staged, path);
+        assert.equal(res.status, 0, res.stderr);
+        const requested = readFileSync(curlLog, "utf8")
+          .trim()
+          .split(" ")
+          .at(-1);
+        assert.equal(requested?.endsWith(`/${asset}`), true, requested);
+      });
+    }
+  }
+});
+
+test("a host with only wget downloads through it", (t) => {
+  const staged = stageProvisionable(t);
+  const { path, curlLog } = provisionPath(t, staged.fixture, {
+    downloader: "wget",
+  });
+  const res = provision(staged, path);
+  assert.equal(res.status, 0, res.stderr);
+  assert.equal(
+    readFileSync(join(staged.data, "hook-binary", "agent-sanitizer-hooks"), {
+      encoding: "utf8",
+    }),
+    "FAKE HOOK BINARY\n",
+  );
+  assert.equal(readFileSync(curlLog, "utf8").trim().split("\n").length, 1);
+});
+
+test("a rejected download is not re-fetched on the next session", (t) => {
+  // Re-downloading ~100 MB every session start only to re-reject it is pure
+  // waste: the (manifest, version) pair that failed will fail identically
+  // until one of them moves.
+  const staged = stageProvisionable(t);
+  writeFileSync(staged.fixture, "NOT WHAT THE MANIFEST PINS\n");
+  const { path, curlLog } = provisionPath(t, staged.fixture);
+  assert.equal(provision(staged, path).status, 1);
+  assert.equal(readFileSync(curlLog, "utf8").trim().split("\n").length, 1);
+
+  const second = provision(staged, path);
+  assert.equal(second.status, 1);
+  assert.match(second.stderr, /not retrying/);
+  assert.equal(
+    readFileSync(curlLog, "utf8").trim().split("\n").length,
+    1,
+    "the rejected asset was downloaded a second time",
+  );
+
+  // The cache is scoped to that pair, not permanent: a manifest that moves
+  // (a plugin update) retries, and here the release now matches.
+  writeFileSync(staged.fixture, "FIXED HOOK BINARY\n");
+  writeFileSync(
+    staged.manifest,
+    readFileSync(staged.manifest, "utf8").replace(
+      /^[0-9a-f]{64}/m,
+      createHash("sha256").update("FIXED HOOK BINARY\n").digest("hex"),
+    ),
+  );
+  const third = provision(staged, path);
+  assert.equal(third.status, 0, third.stderr);
+  assert.equal(readFileSync(curlLog, "utf8").trim().split("\n").length, 2);
 });
 
 test("the staged manifest fixture parses the way the generator's own reader parses it", async (t) => {

@@ -289,17 +289,22 @@ stdout_file=""
 trap 'rm -f "$payload_file" "$bin_stdout_file" "$stdout_file"' EXIT
 
 # The provisioned self-contained binary (see provision-hook-binary.sh) carries
-# its own runtime, so while it answers, the node search below never has to
-# run — which is the point: it serves the hosts where that search finds
-# nothing. AGENT_SANITIZER_HOOK_BINARY=0 opts out. The attempt requires
-# working temp files: stdin is captured first so a binary that fails to answer
-# can be retried on the node path with the SAME payload — without mktemp the
-# binary is skipped outright rather than run a fallback whose payload was
-# already consumed.
+# its own runtime, so while it answers, the node search below never runs — the
+# hosts where that search finds nothing are its whole point.
+# AGENT_SANITIZER_HOOK_BINARY=0 opts out. Without working temp files the binary
+# is skipped outright: stdin must be captured so a binary that fails to answer
+# can be retried on the node path with the SAME payload.
 hook_binary="${CLAUDE_PLUGIN_DATA:-}/hook-binary/agent-sanitizer-hooks"
 if [[ "${AGENT_SANITIZER_HOOK_BINARY:-}" != "0" && -n "${CLAUDE_PLUGIN_DATA:-}" && -f "$hook_binary" && -x "$hook_binary" ]]; then
   payload_file="$(mktemp 2>/dev/null)"
   bin_stdout_file="$(mktemp 2>/dev/null)"
+fi
+# BOTH temp files or neither: a payload_file that outlives a failed
+# bin_stdout_file mktemp would later redirect the bundle's stdin from an EMPTY
+# capture — the hook would judge "" instead of the real payload.
+if [[ -n "$payload_file" && -z "$bin_stdout_file" ]]; then
+  rm -f "$payload_file"
+  payload_file=""
 fi
 if [[ -n "$payload_file" && -n "$bin_stdout_file" ]]; then
   cat >"$payload_file"

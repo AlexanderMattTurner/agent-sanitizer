@@ -45,6 +45,7 @@ if [[ "$dist_changed" == true && "$input_changed" == false ]]; then
   echo "means the artifact was edited by hand or carried over from another branch. Rebuild with:" >&2
   echo "  node plugin/scripts/build-plugin.mjs        # JS bundle + requirements.in" >&2
   echo "  node plugin/scripts/build-redactor-pyz.mjs  # zipapp, from the committed lock" >&2
+  echo "  node plugin/scripts/build-hook-binaries.mjs # hook-binary digest manifest" >&2
   git diff --stat "$base_ref"...HEAD -- plugin/dist >&2
   exit 1
 fi

@@ -36,7 +36,9 @@ jobs:
   version-and-publish:
     name: Bump version and publish to npm
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    # Generous because the last step compiles four bun hook binaries (~100 MB
+    # each) on a cold cross-target runtime cache before attaching them.
+    timeout-minutes: 30
     steps:
       - name: Checkout
         # Credentials stay persisted: version-bump.sh pushes the release-docs

@@ -121,6 +121,35 @@ describe("hook timing: the shell port matches the node module", () => {
     );
   });
 
+  it("carries a caller's step-specific advice through both ports", () => {
+    // The hook-binary provisioner passes download advice where the engine
+    // install's "Installing uv makes it faster" would be advice about the wrong
+    // step. An empty threshold argument selects the default on both sides.
+    const advice = "The binary is ~100 MB, so this mostly measures the network";
+    const shell = sh([
+      "slow_provision_notice",
+      "hook binary download",
+      "90000",
+      "",
+      advice,
+    ]);
+    assert.equal(
+      shell,
+      slowProvisionNotice("hook binary download", 90000, undefined, advice),
+    );
+    assert.match(shell, new RegExp(advice.replaceAll(".", "\\.")));
+    assert.doesNotMatch(shell, /Installing uv/);
+    // ...and omitting it still yields the engine-install default on both sides.
+    assert.equal(
+      sh(["slow_provision_notice", "engine install", "90000"]),
+      slowProvisionNotice("engine install", 90000),
+    );
+    assert.match(
+      sh(["slow_provision_notice", "engine install", "90000"]),
+      /Installing uv makes it faster/,
+    );
+  });
+
   it("keeps the provisioning message DIFFERENT from the hook one", () => {
     // They are two ports of two messages, not one message twice: a provisioning
     // wait is not paid per call, and saying it is would send the reader looking
