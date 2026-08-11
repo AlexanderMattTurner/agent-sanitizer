@@ -168,22 +168,35 @@ describe("a loaded file inside the project is cleaned on disk", () => {
 });
 
 describe("a loaded file outside the project is reported, never rewritten", () => {
-  it("leaves the bytes alone and says why", () => {
-    const outside = mkdtempSync(join(tmpdir(), "sanitizer-loaded-outside-"));
-    const filePath = join(outside, "CLAUDE.md");
-    const content = `${PROSE}hidden:${PAYLOAD}\n`;
-    writeFileSync(filePath, content);
+  // Both roots Claude Code loads instructions from that this session does not
+  // own. The user-global tree is the reason this hook, and not the SessionStart
+  // walk, is where that coverage lives: `~/.claude/CLAUDE.md` and the global
+  // rules load into EVERY session on the machine, and the event carries their
+  // bytes — so scanning them costs nothing at startup and needs no second root
+  // globbed at launch.
+  for (const [label, ...rel] of [
+    ["above the project", "CLAUDE.md"],
+    ["in the user-global tree", ".claude", "CLAUDE.md"],
+    ["in a user-global rule", ".claude", "rules", "security.md"],
+  ])
+    it(`leaves the bytes of a file ${label} alone and says why`, () => {
+      const outside = mkdtempSync(join(tmpdir(), "sanitizer-loaded-outside-"));
+      const filePath = join(outside, ...rel);
+      const content = `${PROSE}hidden:${PAYLOAD}\n`;
+      mkdirSync(join(filePath, ".."), { recursive: true });
+      writeFileSync(filePath, content);
 
-    const result = scanLoadedFile({ filePath, content });
-    assert.equal(result.cleaned, false);
-    assert.match(result.reason, /outside this project/u);
-    assert.equal(
-      readFileSync(filePath, "utf8"),
-      content,
-      "a file above the project was rewritten",
-    );
-    rmSync(outside, { recursive: true, force: true });
-  });
+      const result = scanLoadedFile({ filePath, content });
+      assert.match(result.report, /INVISIBLE CHARACTER INJECTION DETECTED/u);
+      assert.equal(result.cleaned, false);
+      assert.match(result.reason, /outside this project/u);
+      assert.equal(
+        readFileSync(filePath, "utf8"),
+        content,
+        "a file outside the project was rewritten",
+      );
+      rmSync(outside, { recursive: true, force: true });
+    });
 });
 
 describe("the message reaches whoever can act on it", () => {

@@ -7,10 +7,12 @@
  * post-compaction reload) only when it needs it, and this event fires with the
  * loaded bytes in hand — so the scan costs one `scanText` over text already read
  * for us, with no glob, no walk, and no second read. The SessionStart scan
- * covers what loads at launch and nothing below it; between them the coverage is
- * wider than the whole-tree walk they replace, which could not see a file
- * created after it ran, a rule outside the project, or the CLAUDE.md chain above
- * it.
+ * covers what loads at launch from the project root and its parents; everything
+ * else arrives here, including the user-global `~/.claude` memory and rules that
+ * load into every session on the machine — a second root that would otherwise
+ * need its own walk at every startup. Between them the coverage is wider than
+ * the whole-tree walk they replace, which could not see a file created after it
+ * ran, a rule outside the project, or the CLAUDE.md chain above it.
  *
  * The event CANNOT block: its exit code is ignored and the bytes are already in
  * context by the time it fires. What it can do is exactly what SessionStart does

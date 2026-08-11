@@ -159,9 +159,12 @@ buy you:
    start covers what Claude Code loads at launch — the project root's own
    instruction files, the `CLAUDE.md` chain above it, and the root `.claude/`
    context subdirectories (rules, skills, agents), never bulk data parked there
-   (`worktrees/`, caches, transcripts). Everything Claude Code loads later — a
-   subdirectory's `CLAUDE.md`, a path-scoped rule, an `@import` — is scanned at
-   the moment it loads, so startup costs no tree walk at all.
+   (`worktrees/`, caches, transcripts). Everything else Claude Code loads — a
+   subdirectory's `CLAUDE.md`, a path-scoped rule, an `@import`, your
+   user-global `~/.claude/CLAUDE.md` and global rules — is scanned from the
+   bytes the load event carries, at the moment it loads, so startup costs no
+   tree walk at all. Only files inside the project are rewritten: one shared
+   with every other project on the machine is reported, not edited.
 2. Prompts carrying payload-capable invisible or ANSI characters are blocked
    before they reach the model; pasted terminal color passes with a note.
 3. Look-alike glyphs in tool inputs are folded to ASCII, so a Cyrillic `а` can't
