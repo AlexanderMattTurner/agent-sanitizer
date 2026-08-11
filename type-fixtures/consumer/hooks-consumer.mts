@@ -21,6 +21,7 @@ import {
   scanFile,
   LONG_RUN_THRESHOLD,
 } from "agent-sanitizer/claude-hooks/scan-invisible-chars";
+import { scanLoadedFile } from "agent-sanitizer/claude-hooks/scan-loaded-instructions";
 import {
   lazyImport,
   registerLazyModules,
@@ -45,6 +46,7 @@ const _evaluateToolOutputNotAny: IsAny<typeof evaluateToolOutput> = false;
 const _judgePreToolUseNotAny: IsAny<typeof judgePreToolUseSanitize> = false;
 const _judgePromptNotAny: IsAny<typeof judgeSanitizeUserPrompt> = false;
 const _scanFileNotAny: IsAny<typeof scanFile> = false;
+const _scanLoadedNotAny: IsAny<typeof scanLoadedFile> = false;
 const _lazyImportNotAny: IsAny<typeof lazyImport> = false;
 const _runJudgeCliNotAny: IsAny<typeof runJudgeCli> = false;
 
@@ -109,6 +111,14 @@ adoptHookIoSharedState(hookIoSharedState());
 // The remaining exported pieces, called at their documented signatures.
 const _threshold: number = LONG_RUN_THRESHOLD;
 
+// scan-loaded-instructions answers null for a clean file, so the nullability is
+// part of the contract a composer branches on.
+const _loaded: {
+  report: string;
+  cleaned: boolean;
+  reason: string | null;
+} | null = scanLoadedFile({ filePath: "/tmp/CLAUDE.md", content: "clean" });
+
 // Reference every binding so readers (and noUnusedLocals, if ever enabled) see
 // them as load-bearing assertions rather than dead code.
 export const _assertions = [
@@ -118,6 +128,7 @@ export const _assertions = [
   _judgePreToolUseNotAny,
   _judgePromptNotAny,
   _scanFileNotAny,
+  _scanLoadedNotAny,
   _lazyImportNotAny,
   _runJudgeCliNotAny,
   _secretNotAny,
@@ -136,4 +147,5 @@ export const _assertions = [
   _flag,
   _lazy,
   _threshold,
+  _loaded,
 ] as const;

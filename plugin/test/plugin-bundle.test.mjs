@@ -989,6 +989,8 @@ test("a healthy clean run is still silent — the accepted false negative, from 
   // degraded warning on ordinary traffic. Pinned so a later attempt to tighten
   // the gate that way fails here instead of in a user's transcript.
   const plugin = stagePlugin(t);
+  const clean = join(plugin, "clean-CLAUDE.md");
+  writeFileSync(clean, "ordinary, clean prose\n");
   for (const [event, hook] of wiredHooks()) {
     if (hook === "scan-invisible-chars") continue; // walks the project, not stdin
     const res = launch(plugin, event, hook, {
@@ -997,6 +999,11 @@ test("a healthy clean run is still silent — the accepted false negative, from 
       tool_input: { command: "ls" },
       tool_response: { stdout: "ok" },
       prompt: "hello",
+      // The InstructionsLoaded scanner reads a different event shape: the file
+      // that just loaded, and its bytes. A tool payload is not a CLEAN payload
+      // for it, it is a malformed one — which it reports, loudly and correctly.
+      file_path: clean,
+      file_content: "ordinary, clean prose\n",
     });
     assert.equal(res.status, 0, `${hook}: ${res.stderr}`);
     assert.equal(res.stdout, "", `${hook} spoke on a clean payload`);
@@ -1723,6 +1730,12 @@ test("both postures answer a payload that never parsed, each in its own shape", 
     PostToolUse: (parsed) =>
       parsed.hookSpecificOutput?.updatedToolOutput === undefined &&
       /UNSANITIZED/.test(parsed.hookSpecificOutput?.additionalContext ?? ""),
+    // Advisory event: nothing to withhold or block — the file is already in
+    // context — so both arms are the same envelope, keyed on the event, and the
+    // note names the scan that did not happen rather than an action that passed.
+    InstructionsLoaded: (parsed) =>
+      parsed.hookSpecificOutput?.hookEventName === "InstructionsLoaded" &&
+      /UNSCANNED/.test(parsed.hookSpecificOutput?.additionalContext ?? ""),
   };
   const closedShape = {
     UserPromptSubmit: (parsed) => parsed.decision === "block",
@@ -1730,6 +1743,9 @@ test("both postures answer a payload that never parsed, each in its own shape", 
       parsed.hookSpecificOutput?.permissionDecision === "deny",
     PostToolUse: (parsed) =>
       typeof parsed.hookSpecificOutput?.updatedToolOutput === "string",
+    InstructionsLoaded: (parsed) =>
+      parsed.hookSpecificOutput?.hookEventName === "InstructionsLoaded" &&
+      typeof parsed.hookSpecificOutput?.additionalContext === "string",
   };
   // Non-vacuity: every stdin-reading hook must be reached, and every event must
   // have a shape stated for it rather than silently skipping the assertion.
@@ -2647,7 +2663,10 @@ test("every wired hook sits in exactly one degraded-response class", () => {
     "PostToolUse", // updatedToolOutput suppression
     "PreToolUse", // permissionDecision:"ask"
   ]);
-  const ADVISORY = new Set(["SessionStart"]);
+  const ADVISORY = new Set([
+    "SessionStart",
+    "InstructionsLoaded", // the file is already in context; the exit code is ignored
+  ]);
   for (const [event, hook] of wiredHooks()) {
     const closed = VERDICT_BEARING.has(event);
     const advisory = ADVISORY.has(event);

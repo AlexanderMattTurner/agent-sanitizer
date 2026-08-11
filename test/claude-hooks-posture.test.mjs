@@ -56,6 +56,7 @@ const preToolUse = await import("../claude-hooks/pretooluse-sanitize.mjs");
 const sanitizeOutput = await import("../claude-hooks/sanitize-output.mjs");
 const userPrompt = await import("../claude-hooks/sanitize-user-prompt.mjs");
 const scanInvisible = await import("../claude-hooks/scan-invisible-chars.mjs");
+await import("../claude-hooks/scan-loaded-instructions.mjs");
 await import("../claude-hooks/plugin-hooks.mjs");
 const { ALERT_FILE } = scanInvisible;
 

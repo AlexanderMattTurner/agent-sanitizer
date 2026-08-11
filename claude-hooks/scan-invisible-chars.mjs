@@ -1,9 +1,16 @@
 /**
- * SessionStart: scan CLAUDE.md and .claude/ markdown for runs of invisible
- * Unicode that may encode hidden instructions. Pasted markdown can embed
- * invisible sequences (tag chars, zero-width encodings) that hijack the model's
- * behavior — invisible in an editor but read by the LLM. These files load as
- * project instructions at session start, bypassing the PostToolUse sanitizer.
+ * SessionStart: scan the instruction files that load AT LAUNCH — the project's
+ * own CLAUDE.md / AGENTS.md, its `.claude/` context markdown, and the CLAUDE.md
+ * chain above it — for runs of invisible Unicode that may encode hidden
+ * instructions. Pasted markdown can embed invisible sequences (tag chars,
+ * zero-width encodings) that hijack the model's behavior — invisible in an
+ * editor but read by the LLM. These files load as project instructions at
+ * session start, bypassing the PostToolUse sanitizer.
+ *
+ * A SUBDIRECTORY's instruction file is not this hook's job: Claude Code loads it
+ * only when a tool reads that subdirectory, and scan-loaded-instructions.mjs
+ * scans it there, at the moment it loads. Globbing for those here is what made a
+ * session launched in a home directory wait ~100 seconds (see findInstructionFiles).
  *
  * The scan/decode/clean LOGIC lives in `agent-sanitizer/instructions` — this
  * hook is glue (target discovery, accounting, alert persistence, fault
@@ -14,8 +21,8 @@
  * false positive the SSOT had already fixed, and its clean path was a bare
  * `writeFileSync` with none of cleanFile's symlink/UTF-8/TOCTOU guards.
  */
-import { readFileSync, globSync, unlinkSync } from "node:fs";
-import { join, relative } from "node:path";
+import { existsSync, readFileSync, globSync, unlinkSync } from "node:fs";
+import { isAbsolute, join, relative, resolve } from "node:path";
 import {
   awaitLazyDependency,
   emitHookResponse,
@@ -38,6 +45,7 @@ import {
   ALERT_ACK_FILE,
   PROJECT_DIR,
 } from "./lib/invisible-alert.mjs";
+import { formatReport } from "./lib/invisible-report.mjs";
 import { bestEffortTrace, trace, TraceEvent } from "./lib/trace.mjs";
 import { reportSlowHook, startHookTimer } from "./lib/hook-timing.mjs";
 // Relative, not the `agent-sanitizer` specifier every other engine import uses:
@@ -47,8 +55,10 @@ import { reportSlowHook, startHookTimer } from "./lib/hook-timing.mjs";
 // so importing it statically carries none of the fail-open hazard lazyImport
 // exists to cover.
 import {
+  ancestorInstructionFiles,
   CLAUDE_CONTEXT_SUBDIRS,
   CLAUDE_INSTRUCTION_GLOBS,
+  CLAUDE_LAUNCH_GLOBS,
   excludeFromContextScan,
 } from "../src/claude-context.mjs";
 
@@ -209,26 +219,55 @@ function decodeRun(run) {
 // by cleanFile's own O_NOFOLLOW open.
 
 /**
- * Every file under `dir` that Claude Code loads as model context: the
- * per-directory instruction files (CLAUDE.md, CLAUDE.local.md, AGENTS.md) and
- * the whitelisted `.claude/` markdown. Claude Code loads these on entry to their
- * containing directory — a load path that bypasses the PostToolUse sanitizer —
- * so a payload planted in e.g. `packages/foo/CLAUDE.md` reaches the model
- * uncleaned unless it is scanned here.
+ * Every file Claude Code loads as model context AT LAUNCH: `dir`'s own
+ * instruction files and its `.claude/` context tree, plus the CLAUDE.md /
+ * CLAUDE.local.md of every directory above it (loaded in full at launch, and
+ * until now never scanned by anything). These load before the session's first
+ * tool call — a path that bypasses the PostToolUse sanitizer — so a payload in
+ * one of them reaches the model uncleaned unless it is scanned here.
  *
- * The scope itself — which globs, and which directories the walk must prune —
- * is the library's {@link CLAUDE_INSTRUCTION_GLOBS} /
- * {@link excludeFromContextScan}, so this hook and every other consumer read one
- * list (see src/claude-context.mjs for why it is imported relatively rather than
- * through the `agent-sanitizer` specifier the plugin bundle pins).
+ * Bounded on purpose: one shallow glob plus a walk up the parent chain. The
+ * `**`-rooted scope ({@link CLAUDE_INSTRUCTION_GLOBS}) walks the entire tree
+ * below `dir`, which for a session launched in a home directory is ~100 seconds
+ * of blocked startup spent on files Claude Code does not load at launch. Those
+ * files load when a tool reads their directory, and scan-loaded-instructions
+ * scans each one at that moment.
+ *
+ * The scope itself — which globs, and which directories the walk must prune — is
+ * the library's (see src/claude-context.mjs for why it is imported relatively
+ * rather than through the `agent-sanitizer` specifier the plugin bundle pins).
  * @param {string} dir
  * @returns {string[]}
  */
 function findInstructionFiles(dir) {
-  return globSync([...CLAUDE_INSTRUCTION_GLOBS], {
-    cwd: dir,
-    exclude: excludeFromContextScan,
-  }).map((name) => join(dir, name));
+  return [
+    ...globSync([...CLAUDE_LAUNCH_GLOBS], {
+      cwd: dir,
+      exclude: excludeFromContextScan,
+    }).map((name) => join(dir, name)),
+    // Filtered, unlike the glob's matches: almost every parent directory holds
+    // neither memory file, so the unfiltered chain would file ~10 phantom
+    // targets per session into the `absent` bucket and bury the one thing that
+    // bucket reports — a target that existed when the scan listed it and was
+    // gone by the read. A file that appears after this check was not loaded at
+    // launch either, so nothing is lost by not listing it.
+    ...ancestorInstructionFiles(dir).filter((file) => existsSync(file)),
+  ];
+}
+
+/**
+ * Whether `file` lives inside `dir`. Lexical, on already-absolute paths: the
+ * only thing it decides is whether this hook may REWRITE the file (see
+ * {@link autoCleanFindings}), and cleanFile's own O_NOFOLLOW open is what stops
+ * a symlink from redirecting that write outside the tree — so resolving links
+ * here would duplicate a guard that has to live at the write anyway.
+ * @param {string} dir
+ * @param {string} file
+ * @returns {boolean}
+ */
+function isInside(dir, file) {
+  const rel = relative(dir, file);
+  return rel !== "" && !rel.startsWith("..") && !isAbsolute(rel);
 }
 
 // Scanner
@@ -253,6 +292,7 @@ export {
   // get that same list rather than a second copy that can drift.
   CLAUDE_CONTEXT_SUBDIRS,
   CLAUDE_INSTRUCTION_GLOBS,
+  CLAUDE_LAUNCH_GLOBS,
   decodeRun,
   findInstructionFiles,
   scanFile,
@@ -262,49 +302,6 @@ export {
   LONG_RUN_THRESHOLD,
   TOTAL_INVISIBLE_THRESHOLD,
 };
-
-/**
- * @param {Array<{
- *   file: string,
- *   findings: Array<{ line: number | null, charCount: number, method: string, decoded: string }>,
- * }>} allFindings
- * @returns {string}
- */
-function formatReport(allFindings) {
-  const BAR = "━".repeat(52);
-  const lines = [
-    "",
-    `━━━ INVISIBLE CHARACTER INJECTION DETECTED ${BAR.slice(0, 11)}`,
-    "",
-    "Invisible Unicode in instruction files can hijack the model’s behavior",
-    "(skill invocation, tool use, instruction override). This commonly",
-    "happens when copy-pasting content from the internet.",
-    "",
-    "These files are loaded directly as context, bypassing PostToolUse",
-    "sanitization, so the invisible characters reach the model raw.",
-    "",
-  ];
-
-  for (const { file, findings } of allFindings) {
-    lines.push(`  ${file}:`);
-    for (const finding of findings) {
-      // `line` is null for the whole-file scattered-chars finding, which is
-      // not tied to any single line.
-      const where =
-        finding.line === null ? "Whole file" : `Line ${finding.line}`;
-      lines.push(
-        `    ${where}: ${finding.charCount} invisible chars (${finding.method})`,
-      );
-      lines.push(`    Decodes to: ${JSON.stringify(finding.decoded)}`);
-    }
-    lines.push("");
-  }
-
-  lines.push(BAR);
-  return lines.join("\n");
-}
-
-export { formatReport };
 
 // Main (skip when imported for testing)
 
@@ -355,6 +352,8 @@ function classifyReadFailure(err) {
  */
 export function scanProject(dir = PROJECT_DIR) {
   const targets = [...new Set(findInstructionFiles(dir))];
+  const report = (/** @type {string} */ file) =>
+    isInside(dir, file) ? relative(dir, file) : file;
   const findings = [];
   const skipped = [];
   const absent = [];
@@ -364,18 +363,18 @@ export function scanProject(dir = PROJECT_DIR) {
       fileFindings = scanFile(file);
     } catch (err) {
       if (classifyReadFailure(err) === "absent") {
-        absent.push(relative(dir, file));
+        absent.push(report(file));
         continue;
       }
       // safeErrMessage, not errMessage: this reason is rendered into stderr and
       // into ALERT_FILE, and an errno message embeds the absolute path globbed
       // out of a possibly-hostile repo — a filename carrying ANSI or invisible
       // bytes would otherwise reach the operator's terminal raw.
-      skipped.push({ file: relative(dir, file), reason: safeErrMessage(err) });
+      skipped.push({ file: report(file), reason: safeErrMessage(err) });
       continue;
     }
     if (fileFindings.length > 0)
-      findings.push({ file: relative(dir, file), findings: fileFindings });
+      findings.push({ file: report(file), findings: fileFindings });
   }
   const scanned = targets.length - skipped.length - absent.length;
   return { targets, scanned, findings, skipped, absent };
@@ -556,7 +555,16 @@ async function runScanCli({ trace: sink = trace, scan: runScan }) {
 function autoCleanFindings(allFindings, dir) {
   let cleaned = 0;
   for (const { file } of allFindings) {
-    const absPath = join(dir, file);
+    // `resolve`, not `join`: an ancestor target is reported as an ABSOLUTE path
+    // (it has no honest path relative to the project), which join would prefix.
+    const absPath = resolve(dir, file);
+    // A contaminated file ABOVE the project is real context and is reported, but
+    // this hook does not rewrite it: it was pointed at a project, and silently
+    // editing a parent directory's file — shared with every other project under
+    // it — is a wider blast radius than an auto-clean has any claim to. Leaving
+    // it uncleaned is what routes it to the alert below, whose remedy names the
+    // cleanFile CLI to run against it deliberately.
+    if (!isInside(dir, absPath)) continue;
     try {
       // The SSOT clean: O_NOFOLLOW open, UTF-8 round-trip check, TOCTOU
       // recheck, atomic rename + fsync, mode preservation. The bare
@@ -602,10 +610,8 @@ function autoCleanFindings(allFindings, dir) {
     );
     return [];
   }
-  /* c8 ignore start -- only reachable when the write catch above fires */
   process.stderr.write(report + "\n");
   return [report];
-  /* c8 ignore stop */
 }
 
 if (isMain(import.meta.url)) {

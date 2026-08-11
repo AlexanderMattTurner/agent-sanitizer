@@ -18,6 +18,7 @@ import {
   lazyImport,
   markerIsTrusted,
   scrubUntrustedText,
+  writeFileNoFollow,
   writeSentinelFile,
 } from "./hook-io.mjs";
 
@@ -52,6 +53,62 @@ export const ALERT_FILE = join(
 export const ALERT_ACK_FILE = `${ALERT_FILE}.acked`;
 
 /**
+ * Marker the InstructionsLoaded scanner writes on every fire, so another hook
+ * can tell whether this host emits that event at all. Cleared at SessionStart
+ * alongside the alert, so each session answers for itself.
+ */
+export const INSTRUCTIONS_LOADED_FILE = `${ALERT_FILE}.instructions-loaded`;
+
+/** Companion marker: the unsupported-host notice below has been surfaced. */
+export const INSTRUCTIONS_LOADED_NOTICE_FILE = `${INSTRUCTIONS_LOADED_FILE}.noticed`;
+
+/**
+ * Whether the InstructionsLoaded scanner has run this session — i.e. whether
+ * this Claude Code emits the event the lazily-loaded instruction files are
+ * scanned by. Ownership-validated like every other marker here: a co-tenant
+ * could otherwise plant the predictable path and suppress the notice below,
+ * which is the whole signal that nested files are going unscanned.
+ * @returns {boolean}
+ */
+export function instructionsLoadedSeen() {
+  return markerIsTrusted(INSTRUCTIONS_LOADED_FILE);
+}
+
+/**
+ * Record that the InstructionsLoaded scanner engaged. Symlink-safe presence
+ * write (see writeSentinelFile) at a predictable $TMPDIR path.
+ * @returns {void}
+ */
+export function recordInstructionsLoaded() {
+  writeSentinelFile(INSTRUCTIONS_LOADED_FILE);
+}
+
+/**
+ * The one-time context line for a host that does not emit InstructionsLoaded,
+ * or null when the event has been seen or the notice was already surfaced this
+ * session. Records the notice as it hands it out, so it rides on ONE tool call
+ * rather than every one — the per-call repeat is what trains a reader to skip it.
+ *
+ * The loss it names is real and otherwise invisible: SessionStart scans the
+ * instruction files that load at launch, and everything a subdirectory loads
+ * later is scanned by the event. No event, no scan, and nothing says so.
+ * @returns {string | null}
+ */
+export function instructionsLoadedGapNotice() {
+  if (instructionsLoadedSeen()) return null;
+  if (markerIsTrusted(INSTRUCTIONS_LOADED_NOTICE_FILE)) return null;
+  writeSentinelFile(INSTRUCTIONS_LOADED_NOTICE_FILE);
+  return (
+    "agent-sanitizer: this Claude Code has not emitted an InstructionsLoaded " +
+    "event this session, so instruction files loaded from SUBDIRECTORIES " +
+    "(a nested CLAUDE.md, a directory-scoped rule) are reaching the model " +
+    "unscanned for hidden Unicode — the session-start scan covers only the " +
+    "files loaded at launch. Tell the user; upgrading Claude Code to a version " +
+    "that emits InstructionsLoaded restores that coverage."
+  );
+}
+
+/**
  * The alert findings if invisible-char injection was detected in instruction
  * files and couldn't be auto-cleaned, else null. ALERT_FILE lives at a predictable,
  * world-visible $TMPDIR path, so its contents are attacker-writable (a co-tenant can
@@ -65,6 +122,27 @@ export function invisibleCharAlert() {
   if (!markerIsTrusted(ALERT_FILE)) return null;
   const raw = readFileSync(ALERT_FILE, "utf-8").trim();
   return scrubUntrustedText(raw, applyLayer1);
+}
+
+/**
+ * Add `text` to the alert the PreToolUse gate surfaces, keeping whatever is
+ * already there.
+ *
+ * Appending, where the SessionStart scanner TRUNCATES: that scan runs once and
+ * owns the session's reset, while an instruction file loaded mid-session is one
+ * more finding on top of whatever the launch scan left — a truncating write here
+ * would silently drop the earlier report. Symlink-refusing (writeFileNoFollow)
+ * and ownership-checked on read, because ALERT_FILE sits at a predictable,
+ * world-visible $TMPDIR path; a foreign or squatted file reads as empty and is
+ * replaced rather than appended to.
+ * @param {string} text
+ * @returns {void}
+ */
+export function appendAlert(text) {
+  const existing = markerIsTrusted(ALERT_FILE)
+    ? readFileSync(ALERT_FILE, "utf-8")
+    : "";
+  writeFileNoFollow(ALERT_FILE, existing + text + "\n");
 }
 
 /**

@@ -45,6 +45,7 @@ export const FAULT_POLICY_HOOKS = Object.freeze([
   "sanitize-output",
   "sanitize-user-prompt",
   "scan-invisible-chars",
+  "scan-loaded-instructions",
 ]);
 
 /**

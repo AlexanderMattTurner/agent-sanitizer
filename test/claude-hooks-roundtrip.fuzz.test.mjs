@@ -70,6 +70,14 @@ const { buildPreToolUseResponse, rehydrateLayer2 } =
 const { LAYER2_PLACEHOLDER_RE } =
   await import("../claude-hooks/lib/placeholder-grammar.mjs");
 const { PermissionDecision } = await import("../claude-hooks/lib/hook-io.mjs");
+const { INSTRUCTIONS_LOADED_FILE, recordInstructionsLoaded } =
+  await import("../claude-hooks/lib/invisible-alert.mjs");
+
+// This suite's oracle predicts the pipeline's context byte-for-byte, and the
+// gate attaches a one-time notice when no InstructionsLoaded event has been seen
+// this session. Recording the marker states which side of that fork the run is
+// on instead of inheriting it from whatever $TMPDIR happens to hold.
+recordInstructionsLoaded();
 
 // The grammar as the ORACLE understands it. Restated as a literal rather than
 // reused from the hooks so the two can disagree: were the shipped grammar
@@ -98,6 +106,7 @@ after(async () => {
   await new Promise((resolve) => daemon.close(resolve));
   for (const dir of [socketDir, projectDir, revealBase])
     rmSync(dir, { recursive: true, force: true });
+  rmSync(INSTRUCTIONS_LOADED_FILE, { force: true });
 });
 
 // One fresh span store PER fc ITERATION, shared across the rounds inside it:

@@ -34,6 +34,18 @@
         ]
       }
     ],
+    "InstructionsLoaded": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"${CLAUDE_PLUGIN_ROOT}\"/scripts/safe-launch.sh InstructionsLoaded --hook=scan-loaded-instructions",
+            "timeout": 1800
+          }
+        ]
+      }
+    ],
     "PreToolUse": [
       {
         "matcher": "",

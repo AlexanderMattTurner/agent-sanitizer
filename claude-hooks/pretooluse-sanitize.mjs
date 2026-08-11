@@ -55,6 +55,7 @@ import {
   gateReminderContext,
   alertAcknowledged,
   acknowledgeAlert,
+  instructionsLoadedGapNotice,
 } from "./lib/invisible-alert.mjs";
 import {
   sanitizeAuthoredContent,
@@ -457,6 +458,14 @@ export async function buildPreToolUseResponse(
       pendingGateAck = true;
     }
   }
+
+  // Coverage notice, once per session: a Claude Code that never emits
+  // InstructionsLoaded leaves every instruction file loaded from a subdirectory
+  // unscanned, and the SessionStart scan — which covers only what loads at
+  // launch — cannot see the loss. Reported here because this is the first hook
+  // that runs after the loads would have happened.
+  const gapNotice = instructionsLoadedGapNotice();
+  if (gapNotice !== null) contexts.push(gapNotice);
 
   const { tool_name: tool, tool_input: toolInput } = input;
 

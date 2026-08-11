@@ -1,5 +1,5 @@
 /**
- * The injectable trace sink on all four hooks.
+ * The injectable trace sink on every hook.
  *
  * Every hook announces that it ENGAGED on the trace channel, so a missing
  * announcement is loud — that is the point of the channel. But the default sink
@@ -18,7 +18,7 @@
  *     onto a second channel would leave the host's detector satisfied while the
  *     package kept writing to a file the host never configured.
  *
- * Both are asserted for all four hooks member-by-member rather than for a
+ * Both are asserted for every hook member-by-member rather than for a
  * representative one: the threading is hand-written per hook (an options bag
  * here, an extension bag there), so a hook that drops the sink is exactly the
  * regression this file exists to catch. A third case per hook covers the sink
@@ -51,6 +51,9 @@ const preToolUse = await import("../claude-hooks/pretooluse-sanitize.mjs");
 const sanitizeOutput = await import("../claude-hooks/sanitize-output.mjs");
 const userPrompt = await import("../claude-hooks/sanitize-user-prompt.mjs");
 const scanInvisible = await import("../claude-hooks/scan-invisible-chars.mjs");
+const scanLoaded = await import("../claude-hooks/scan-loaded-instructions.mjs");
+const { INSTRUCTIONS_LOADED_FILE } =
+  await import("../claude-hooks/lib/invisible-alert.mjs");
 
 const traceDir = mkdtempSync(join(tmpdir(), "sanitizer-trace-"));
 let traceFileSeq = 0;
@@ -160,6 +163,21 @@ const HOOKS = [
     run: (sink) =>
       sink ? scanInvisible.cliMain({ trace: sink }) : scanInvisible.cliMain(),
   },
+  {
+    name: "scan-loaded-instructions",
+    event: TraceEvent.SCAN_LOADED_INSTRUCTIONS_RAN,
+    run: (sink) =>
+      withStdio(
+        {
+          hook_event_name: "InstructionsLoaded",
+          file_path: join(projectDir, "packages", "foo", "CLAUDE.md"),
+          load_reason: "nested_traversal",
+          file_content: "# Foo\n\nordinary, clean prose\n",
+        },
+        () =>
+          sink ? scanLoaded.cliMain({ trace: sink }) : scanLoaded.cliMain(),
+      ),
+  },
 ];
 
 for (const hook of HOOKS) {
@@ -236,4 +254,8 @@ describe("scan-invisible-chars with a throwing sink", () => {
 after(() => {
   for (const dir of [traceDir, projectDir])
     rmSync(dir, { recursive: true, force: true });
+  // The InstructionsLoaded run writes its support marker under $TMPDIR, outside
+  // both dirs above; left behind it answers "does this host emit the event" for
+  // a later run keyed to the same project hash.
+  rmSync(INSTRUCTIONS_LOADED_FILE, { force: true });
 });

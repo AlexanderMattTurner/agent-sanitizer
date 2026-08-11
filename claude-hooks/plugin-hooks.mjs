@@ -1,7 +1,7 @@
 /**
- * Entry point: ALL FOUR sanitization hooks behind one dispatch flag. The four
- * hooks share almost the entire package graph, so one bundle per hook would ship
- * four near-identical copies; a single entry with a `--hook=<name>` flag
+ * Entry point: EVERY sanitization hook behind one dispatch flag. The hooks
+ * share almost the entire package graph, so one bundle per hook would ship a
+ * near-identical copy per hook; a single entry with a `--hook=<name>` flag
  * selecting the hook ships the graph once (hooks.json passes the flag).
  *
  * The plugin's shipped artifact is the esbuild BUNDLE with every package inlined
@@ -33,7 +33,7 @@ import {
 const HOOK_NAME = "plugin-hooks";
 
 // The dispatcher's entry in the one posture table (lib/hook-fault.mjs). It
-// answers no single event — it is the binder in front of all four — so it
+// answers no single event — it is the binder in front of all of them — so it
 // carries no stdout envelope and both arms are process-level.
 //
 // BOTH ARMS BLOCK, and that is the declaration, not an oversight. The
@@ -41,7 +41,7 @@ const HOOK_NAME = "plugin-hooks";
 // mode is static wiring corruption, which means no hook runs at all, silently,
 // for the life of the install — there is no run to degrade. Stating it here (and
 // pinning it in plugin/test/plugin-bundle.test.mjs) is the point of the table:
-// the arm that ignores the knob does so on the record, next to the four that
+// the arm that ignores the knob does so on the record, next to the ones that
 // honor it, instead of by hard-exiting past the question.
 //
 // Exit 2 is the one non-zero code Claude Code treats as BLOCKING: it blocks
@@ -157,6 +157,16 @@ const HOOKS = {
       const { cliMain } =
         /** @type {typeof import("./scan-invisible-chars.mjs")} */ (
           await import("./scan-invisible-chars.mjs")
+        );
+      await cliMain();
+    },
+  },
+  "scan-loaded-instructions": {
+    event: HookEvent.INSTRUCTIONS_LOADED,
+    run: async () => {
+      const { cliMain } =
+        /** @type {typeof import("./scan-loaded-instructions.mjs")} */ (
+          await import("./scan-loaded-instructions.mjs")
         );
       await cliMain();
     },

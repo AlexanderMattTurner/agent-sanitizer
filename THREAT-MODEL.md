@@ -281,6 +281,20 @@ ASCII, zero-width **binary**), and catches scattered payloads below the long-run
 threshold. `cleanFile` strips the payload in place (Layer-1 strip), failing loud
 if a contaminated file cannot be rewritten.
 
+As Claude Code hooks the coverage is split to match how Claude Code loads these
+files. `scan-invisible-chars` (SessionStart) scans the launch set — the project
+root's own instruction files, the `CLAUDE.md` chain above it, and the root
+`.claude/` context subdirectories — and `scan-loaded-instructions`
+(InstructionsLoaded) scans every other instruction file from the bytes the event
+carries, at the moment it loads. The second cannot block: the file is already in
+context when it fires, so its neutralization is to strip the payload from disk
+(so no reload re-reads it) and tell the model to treat what it just read as
+untrusted data. Auto-cleaning is confined to `CLAUDE_PROJECT_DIR` in both — an
+ancestor file is shared with every other project beneath it, so it is reported
+through the cross-hook alert and never rewritten. A Claude Code build that emits
+no `InstructionsLoaded` event loses the lazy half entirely; the PreToolUse gate
+says so once per session rather than leaving the gap silent.
+
 ## User-prompt verdict
 
 `./prompt` classifies a submitted prompt as **pass / pass-with-note / block** on

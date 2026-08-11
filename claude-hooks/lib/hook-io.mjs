@@ -186,6 +186,7 @@ export const HookEvent = Object.freeze({
   POST_TOOL_USE: "PostToolUse",
   USER_PROMPT_SUBMIT: "UserPromptSubmit",
   SESSION_START: "SessionStart",
+  INSTRUCTIONS_LOADED: "InstructionsLoaded",
 });
 
 /** Claude Code permissionDecision verdicts. */
