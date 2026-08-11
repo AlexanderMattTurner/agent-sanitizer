@@ -324,6 +324,52 @@ test("a missing manifest refuses to provision", (t) => {
   assert.ok(!existsSync(curlLog));
 });
 
+test("a slow download reports against the one-time setup budget", (t) => {
+  const staged = stageProvisionable(t);
+  const { path } = provisionPath(t, staged.fixture);
+  // Threshold 0 rather than a real overrun: what is under test is that this
+  // script measures and reports at all, and with the advice that fits a
+  // download — the shared default names an installer, which is advice about
+  // the wrong step here.
+  const res = provision(staged, path, {
+    _AGENT_SANITIZER_SLOW_PROVISION_MS: "0",
+  });
+  assert.equal(res.status, 0, res.stderr);
+  assert.match(
+    res.stderr,
+    /PERFORMANCE: one-time setup \(hook binary download\)/,
+  );
+  assert.match(res.stderr, /~100 MB/);
+  // The install budget, not the per-call one: a ~100 MB transfer charged to a
+  // 1s hook budget would report on every cold session and name the wrong cost.
+  assert.equal(res.stderr.includes("hook took"), false, res.stderr);
+});
+
+test("a fast download says nothing about timing", (t) => {
+  const staged = stageProvisionable(t);
+  const { path } = provisionPath(t, staged.fixture);
+  const res = provision(staged, path);
+  // Non-vacuity for the case above: with the real threshold in force the same
+  // run is silent, so it observes the report and not just any stderr.
+  assert.equal(res.status, 0, res.stderr);
+  assert.equal(res.stderr.includes("PERFORMANCE"), false, res.stderr);
+});
+
+test("a missing shared provisioning lib refuses to provision", (t) => {
+  const staged = stageProvisionable(t);
+  rmSync(join(staged.plugin, "scripts", "lib", "provision-common.sh"));
+  const { path, curlLog } = provisionPath(t, staged.fixture);
+  const res = provision(staged, path);
+  // A truncated install must not run on whatever the shell makes of the
+  // missing definitions: unset `plugin_root` would resolve the manifest to
+  // `/dist/hooks/...` and the reader below would answer for a file nobody
+  // shipped.
+  assert.equal(res.status, 1);
+  assert.match(res.stderr, /provision-common\.sh is missing/);
+  assert.match(res.stderr, /reinstall the plugin/);
+  assert.ok(!existsSync(curlLog));
+});
+
 // What `uname -s`/`-m` report on each platform the release carries a binary
 // for. A platform the script's `case` cannot name is a platform whose users
 // silently keep the node dependency the binary exists to remove, so every key

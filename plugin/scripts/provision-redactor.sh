@@ -18,24 +18,18 @@ fi
 
 data_dir="${1:?usage: provision-redactor.sh <plugin-data-dir>}"
 script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
-plugin_root="$(cd -- "$script_dir/.." && pwd)"
-
-# This install blocks session start with a 1800s harness timeout above it, and
-# nothing downstream can attribute the wait to it: the hooks it provisions FOR
-# deliberately exclude one-time provisioning from their own budgets, so a
-# pathological install was, until now, wall-clock nobody reported. Budgeted as
-# provisioning, not as a hook — see lib/hook-timing.sh for why that is a
-# different threshold and a different message. The trap covers every exit,
-# including the idempotent early return (which is fast, so it prints nothing)
-# and the failure arms.
-if [[ -r "$script_dir/lib/hook-timing.sh" ]]; then
-  # shellcheck source=lib/hook-timing.sh
-  . "$script_dir/lib/hook-timing.sh"
-  provision_started_ms="$(hook_timing_now_ms)"
-  trap 'report_slow_provision "secret-redaction engine install" "$provision_started_ms"' EXIT
-else
-  echo "agent-sanitizer: $script_dir/lib/hook-timing.sh is missing — provisioning timing disabled (reinstall the plugin)" >&2
+if [[ ! -r "$script_dir/lib/provision-common.sh" ]]; then
+  echo "agent-sanitizer: $script_dir/lib/provision-common.sh is missing — the secret-redaction engine (Layer 4) cannot be provisioned (reinstall the plugin)" >&2
+  exit 1
 fi
+# shellcheck source=lib/provision-common.sh
+. "$script_dir/lib/provision-common.sh"
+
+# The trap covers every exit, including the idempotent early return (which is
+# fast, so it prints nothing) and the failure arms.
+provision_begin "secret-redaction engine install"
+trap provision_report_elapsed EXIT
+
 req="$plugin_root/requirements.txt"
 # The engine itself ships as a wheel beside the zipapp rather than being resolved
 # from PyPI: the venv and the committed daemon.pyz are then the SAME build, so
@@ -76,10 +70,8 @@ else
   exit 1
 fi
 
-[[ -x "$venv/bin/agent-secret-redactor-daemon" ]] || {
-  echo "agent-sanitizer: install finished but $venv/bin/agent-secret-redactor-daemon is missing" >&2
-  exit 1
-}
+provision_require_executable "$venv/bin/agent-secret-redactor-daemon" \
+  "agent-sanitizer: install finished but $venv/bin/agent-secret-redactor-daemon is missing"
 cp -- "$req" "$stamp"
 cp -- "$wheel" "$wheel_stamp"
 echo "agent-sanitizer: secret-redaction engine provisioned into $venv" >&2
