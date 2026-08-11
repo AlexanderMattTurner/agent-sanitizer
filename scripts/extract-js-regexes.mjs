@@ -4,8 +4,7 @@
  * the TypeScript compiler (a dev dependency — a real JS parser, not a
  * hand-rolled regex-over-regex approximation) and emits, as JSON on stdout:
  *
- *   { "roots":    { "src": ["src/html.mjs", ...], ... },
- *     "patterns": [{ "file": "src/html.mjs", "line": 12, "pattern": "...",
+ *   { "patterns": [{ "file": "src/html.mjs", "line": 12, "pattern": "...",
  *                    "flags": "..." }] }
  *
  * Collected forms:
@@ -16,48 +15,33 @@
  *     test asserts the total inventory count so a new dynamic construction site
  *     shows up as a count change, not a silent hole).
  */
-import { readdirSync, readFileSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import ts from "typescript";
 
+import { shippedSources } from "./shipped-sources.mjs";
+
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
 
-// The roots whose regexes meet input an attacker chooses: the engine, the hooks
-// that hand it tool output and prompts, and the CLI the wheel ships. All three
-// are inlined into the shipped plugin bundle, so a super-linear pattern here
-// runs inside a host's hook and can push it past the kill that reads as a
-// non-blocking error. Build and CI tooling (scripts/, .github/scripts/,
-// .claude/hooks/, .hooks/) is deliberately out: it reads what this repo
-// produces, not what a remote sent, and a runaway there stops at the job's
-// timeout-minutes rather than at a user's session.
-const ROOTS = ["src", "claude-hooks", "bin"];
-
-/** Every non-test `.mjs` under `dir`, recursively, repo-relative. */
-function sources(dir) {
-  const out = [];
-  for (const entry of readdirSync(join(repoRoot, dir), {
-    withFileTypes: true,
-  }).sort((a, b) => a.name.localeCompare(b.name))) {
-    const rel = `${dir}/${entry.name}`;
-    if (entry.isDirectory()) out.push(...sources(rel));
-    else if (entry.name.endsWith(".mjs") && !entry.name.endsWith(".test.mjs"))
-      out.push(rel);
-  }
-  return out;
-}
-
-// Reported alongside the patterns so the guard test can assert each root was
-// actually walked. A total count cannot: src alone carries more patterns than
-// any floor worth setting, so a root dropping out of ROOTS — or a walk that
-// stops descending — leaves the guard green over a surface nobody analyzed.
-const walked = Object.fromEntries(ROOTS.map((root) => [root, sources(root)]));
+// Every .mjs this package SHIPS, from the one place that answers that question
+// (scripts/shipped-sources.mjs, which resolves package.json's `files`). Shipped
+// is exactly the scope that matters here: those modules are inlined into the
+// plugin bundle and run inside a host's hook over tool output and prompts, so a
+// super-linear pattern there can push the hook past the kill a host reads as a
+// non-blocking error. Build and CI tooling is not shipped and so is not walked;
+// it reads what this repo produces under a job timeout, not what a remote sent.
+//
+// Reading the manifest rather than a hardcoded root list is what keeps this
+// honest: a newly shipped module, or a whole new shipped directory, joins the
+// inventory with no edit here.
+const analyzed = shippedSources(repoRoot);
 
 /** @type {{file: string, line: number, pattern: string, flags: string}[]} */
 const found = [];
 
-for (const rel of Object.values(walked).flat()) {
+for (const rel of analyzed) {
   const text = readFileSync(join(repoRoot, rel), "utf8");
   const sf = ts.createSourceFile(rel, text, ts.ScriptTarget.ESNext, true);
 
@@ -92,6 +76,4 @@ for (const rel of Object.values(walked).flat()) {
   visit(sf);
 }
 
-process.stdout.write(
-  JSON.stringify({ roots: walked, patterns: found }, null, 2) + "\n",
-);
+process.stdout.write(JSON.stringify({ patterns: found }, null, 2) + "\n");

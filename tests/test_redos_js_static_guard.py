@@ -9,11 +9,12 @@ collects every regex literal and every ``new RegExp("...")`` string pattern —
 so a future super-linear pattern fails here statically, with no timing
 flakiness.
 
-That extractor owns which roots are in scope (``src/``, ``claude-hooks/``,
-``bin/``): the engine, the hooks that hand it tool output and prompts, and the
-CLI the wheel ships. A super-linear pattern in any of them runs inside a host's
-hook, where an overrun reads as a non-blocking error and shows the model the
-raw text.
+The extractor's scope is every ``.mjs`` this package SHIPS, read from
+``scripts/shipped-sources.mjs`` — the engine, the hooks that hand it tool output
+and prompts, and the CLI the wheel ships. A super-linear pattern in any of them
+runs inside a host's hook, where an overrun reads as a non-blocking error and
+shows the model the raw text. A newly shipped module joins this guard with no
+edit here.
 
 JS-only syntax regexploit's parser cannot read is handled explicitly, never
 silently:
@@ -72,7 +73,6 @@ def _extract_inventory() -> dict:
 
 _EXTRACTED = _extract_inventory()
 _INVENTORY = _EXTRACTED["patterns"]
-_WALKED = _EXTRACTED["roots"]
 _ALL = {
     f"{p['file']}:{p['line']}": p["pattern"]
     for p in _INVENTORY
@@ -98,19 +98,6 @@ def test_pattern_inventory_is_non_empty() -> None:
     # this floor of regexes today.
     assert len(_INVENTORY) >= 50
     assert len(_ALL) >= 50 - len(UNANALYZABLE_JS_ONLY)
-
-
-def test_every_declared_root_is_actually_walked() -> None:
-    # Scope: a root the extractor DECLARES but no longer reaches — a renamed
-    # directory, a recursion that stops descending. The count floor above cannot
-    # see that, because src/ alone carries more patterns than any floor worth
-    # setting. A root with files but no regex is fine and stays covered; a root
-    # with no FILES means the walk is broken. Deleting a root from ROOTS is a
-    # deliberate edit to the extractor's documented scope, and this does not
-    # catch it — read that header, not this test, for what is in scope.
-    assert _WALKED, "the extractor declared no roots"
-    for root, files in sorted(_WALKED.items()):
-        assert files, f"{root}: the extractor walked no .mjs file under it"
 
 
 def test_skip_list_entries_are_live_and_actually_unanalyzable() -> None:
