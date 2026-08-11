@@ -226,7 +226,7 @@ emit_degraded() {
     # blocked or replaced. The context is all that is left, and it is why stdout
     # is still non-empty — an empty one reads as a clean run, not a degraded one.
     printf '{"hookSpecificOutput":{"hookEventName":"%s","additionalContext":"%s"}}\n' \
-      "$event_name" "$reason The sanitizer is failing open, so $unguarded_note This warning is not repeated on every later call, so assume the same holds for the rest of this session until it is fixed. Set AGENT_SANITIZER_FAIL_OPEN=0 to fail closed on hook failures."
+      "$event_name" "$reason The sanitizer is failing open, so $unguarded_note Later calls in this session may pass through with no warning at all, so assume this holds until it is fixed. Set AGENT_SANITIZER_FAIL_OPEN=0 to fail closed on hook failures."
     return 0
   fi
   case "$hook_event" in
@@ -253,16 +253,9 @@ emit_degraded() {
 }
 
 # Checked before anything else, so a node-less host reaches the degraded verdict
-# rather than dying on a missing utility.
-#
-# NOT a bare `command -v node`: that answers only for sessions whose environment
-# an interactive shell built. A launchd- or cron-scheduled session, a CI job, or
-# a GUI-launched Claude Code inherits roughly `/usr/bin:/bin`, and every version
-# manager (fnm, nvm, mise, volta, asdf) — plus Homebrew's prefix — puts node on
-# PATH from a shell rc file that never runs there, so a PATH-only lookup leaves
-# EVERY hook in such a session failing open on a machine with node installed.
-# lib/node-resolve.sh looks where those installs actually live;
-# AGENT_SANITIZER_NODE overrides the whole search.
+# rather than dying on a missing utility. Not a bare `command -v node`: see
+# lib/node-resolve.sh for the hosts that answers nothing for, every one of which
+# would otherwise run unguarded. AGENT_SANITIZER_NODE overrides the search.
 node_bin="$(agent_sanitizer_resolve_node)"
 if [[ -z "$node_bin" ]]; then
   echo "agent-sanitizer: no node found on PATH or in any known version-manager install — sanitization cannot run (set AGENT_SANITIZER_NODE to its path)" >&2

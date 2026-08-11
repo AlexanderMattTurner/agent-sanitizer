@@ -1285,8 +1285,11 @@ test("the fail-open warning is injected once per session", (t) => {
     JSON.parse(res.stdout).hookSpecificOutput.additionalContext;
   assert.match(context(first), /UNSANITIZED/);
   // The one copy the model gets has to carry the session-wide claim, since no
-  // later call will repeat it.
-  assert.match(context(first), /rest of this session/);
+  // later call will repeat it — and must not promise silence it cannot keep
+  // (under the repeat knob, or where the marker cannot be recorded, later calls
+  // DO warn).
+  assert.match(context(first), /assume this holds until it is fixed/);
+  assert.doesNotMatch(context(first), /not repeated/);
   assert.equal(context(second), undefined);
 });
 
