@@ -1,4 +1,4 @@
-"""Static ReDoS guard over every regex in the JS sources (``src/*.mjs``).
+"""Static ReDoS guard over every regex in the JS that runs on untrusted input.
 
 The Python twin (``tests/secrets/test_redos_static_guard.py``) covers the
 secrets engine and detector JSON; nothing covered the JS side, where
@@ -8,6 +8,13 @@ test drives the SAME analyzer (``regexploit``) over an inventory extracted by
 collects every regex literal and every ``new RegExp("...")`` string pattern —
 so a future super-linear pattern fails here statically, with no timing
 flakiness.
+
+The extractor's scope is every ``.mjs`` this package SHIPS, read from
+``scripts/shipped-sources.mjs`` — the engine, the hooks that hand it tool output
+and prompts, and the CLI the wheel ships. A super-linear pattern in any of them
+runs inside a host's hook, where an overrun reads as a non-blocking error and
+shows the model the raw text. A newly shipped module joins this guard with no
+edit here.
 
 JS-only syntax regexploit's parser cannot read is handled explicitly, never
 silently:
@@ -53,7 +60,7 @@ UNANALYZABLE_JS_ONLY = {
 _NAMED_GROUP_RE = re.compile(r"\(\?<(?![=!])")
 
 
-def _extract_inventory() -> list[dict]:
+def _extract_inventory() -> dict:
     out = subprocess.run(
         ["node", "scripts/extract-js-regexes.mjs"],
         cwd=REPO_ROOT,
@@ -64,7 +71,8 @@ def _extract_inventory() -> list[dict]:
     return json.loads(out)
 
 
-_INVENTORY = _extract_inventory()
+_EXTRACTED = _extract_inventory()
+_INVENTORY = _EXTRACTED["patterns"]
 _ALL = {
     f"{p['file']}:{p['line']}": p["pattern"]
     for p in _INVENTORY
