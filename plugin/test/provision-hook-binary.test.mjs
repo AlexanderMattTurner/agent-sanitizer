@@ -20,6 +20,7 @@ import {
   mkdtempSync,
   readFileSync,
   rmSync,
+  statSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -92,6 +93,7 @@ function provisionPath(
     "chmod",
     "date",
     "mkdir",
+    "mktemp",
     "mv",
     "rm",
     "sha256sum",
@@ -156,6 +158,10 @@ test("downloads the release asset, verifies it, and installs it executable", (t)
   const binary = join(staged.data, "hook-binary", "agent-sanitizer-hooks");
   assert.equal(readFileSync(binary, "utf8"), "FAKE HOOK BINARY\n");
   accessSync(binary, constants.X_OK);
+  // Owner-only: every hook in the session execs this file, so anything that
+  // could write it would have code execution in each of them.
+  assert.equal(statSync(binary).mode & 0o777, 0o700);
+  assert.equal(statSync(join(staged.data, "hook-binary")).mode & 0o777, 0o700);
 
   // The URL is derived from the manifest's repository slug and the plugin
   // manifest's own version — read here through JSON.parse, which holds the
@@ -345,11 +351,20 @@ test("every platform the manifest covers resolves to its own release asset", asy
         const { path, curlLog } = provisionPath(sub, staged.fixture, { uname });
         const res = provision(staged, path);
         assert.equal(res.status, 0, res.stderr);
+        const { version } = JSON.parse(
+          readFileSync(
+            join(staged.plugin, ".claude-plugin", "plugin.json"),
+            "utf8",
+          ),
+        );
         const requested = readFileSync(curlLog, "utf8")
           .trim()
           .split(" ")
           .at(-1);
-        assert.equal(requested?.endsWith(`/${asset}`), true, requested);
+        assert.equal(
+          requested,
+          `https://github.com/example-owner/example-repo/releases/download/v${version}/${asset}`,
+        );
       });
     }
   }
@@ -383,7 +398,10 @@ test("a rejected download is not re-fetched on the next session", (t) => {
 
   const second = provision(staged, path);
   assert.equal(second.status, 1);
-  assert.match(second.stderr, /not retrying/);
+  assert.match(second.stderr, /already failed digest verification/);
+  // The repeat is deliberately quiet: this state heals on the next release, so
+  // the loud refusal wording belongs only on the session that discovered it.
+  assert.doesNotMatch(second.stderr, /DEGRADED|refusing to install/);
   assert.equal(
     readFileSync(curlLog, "utf8").trim().split("\n").length,
     1,
@@ -403,6 +421,69 @@ test("a rejected download is not re-fetched on the next session", (t) => {
   const third = provision(staged, path);
   assert.equal(third.status, 0, third.stderr);
   assert.equal(readFileSync(curlLog, "utf8").trim().split("\n").length, 2);
+});
+
+test("a failed download stays retryable — no reject stamp is written", (t) => {
+  // The most common real path: a tree released moments ago has no assets
+  // attached yet. Unlike a digest mismatch, a network failure says nothing
+  // about whether the release's bytes match, so caching it would strand the
+  // host until the NEXT release even once the assets appear.
+  const staged = stageProvisionable(t);
+  const { path, curlLog } = provisionPath(t, staged.fixture);
+  const workingCurl = readFileSync(join(path, "curl"), "utf8");
+  writeFileSync(
+    join(path, "curl"),
+    `#!/bin/sh\necho "$@" >>"${curlLog}"\nexit 22\n`,
+    { mode: 0o755 },
+  );
+  const first = provision(staged, path);
+  assert.equal(first.status, 1);
+  assert.match(first.stderr, /failed \(exit 22\)/);
+  const dir = join(staged.data, "hook-binary");
+  assert.ok(!existsSync(join(dir, "agent-sanitizer-hooks")));
+  assert.ok(
+    !existsSync(join(dir, ".download-rejected")),
+    "a network failure was cached as a rejection, so the next session will not retry",
+  );
+
+  // The next session retries, and succeeds once the asset is really there.
+  writeFileSync(join(path, "curl"), workingCurl, { mode: 0o755 });
+  const second = provision(staged, path);
+  assert.equal(second.status, 0, second.stderr);
+  assert.equal(
+    readFileSync(join(dir, "agent-sanitizer-hooks"), "utf8"),
+    "FAKE HOOK BINARY\n",
+  );
+});
+
+test("a manifest with no digest for THIS platform refuses to provision", (t) => {
+  // Distinct from a missing manifest: the file is present and well-formed but
+  // carries no line for the running platform, so there is nothing a download
+  // could be verified against.
+  const staged = stageProvisionable(t, {
+    asset: "agent-sanitizer-hooks-darwin-arm64",
+  });
+  const { path, curlLog } = provisionPath(t, staged.fixture);
+  const res = provision(staged, path);
+  assert.equal(res.status, 1);
+  assert.match(res.stderr, /no usable repository\/digest/);
+  assert.ok(
+    !existsSync(curlLog),
+    "it downloaded with nothing to verify against",
+  );
+});
+
+test("an unrecognized knob value warns instead of silently meaning auto", (t) => {
+  const staged = stageProvisionable(t);
+  const { path, curlLog } = provisionPath(t, staged.fixture);
+  const res = provision(staged, path, { AGENT_SANITIZER_HOOK_BINARY: "false" });
+  assert.equal(res.status, 0, res.stderr);
+  assert.match(
+    res.stderr,
+    /AGENT_SANITIZER_HOOK_BINARY=false is not 0, 1 or unset/,
+  );
+  // It still means auto — the warning is the fix, not a change of behaviour.
+  assert.equal(readFileSync(curlLog, "utf8").trim().split("\n").length, 1);
 });
 
 test("the staged manifest fixture parses the way the generator's own reader parses it", async (t) => {

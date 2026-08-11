@@ -24,21 +24,9 @@ trap 'rm -rf "$OUTDIR"' EXIT
 # --outdir keeps the digest-verified binaries around for the upload below.
 node plugin/scripts/build-hook-binaries.mjs --check --outdir="$OUTDIR"
 
-# The manifest's digest lines are the platform list — counting them here rather
-# than hardcoding a number keeps adding a platform a one-file change.
-MANIFEST=plugin/dist/hooks/hook-binaries.sha256
-EXPECTED=0
-while IFS= read -r line; do
-  case "$line" in
-  [0-9a-f]*"  agent-sanitizer-hooks-"*) EXPECTED=$((EXPECTED + 1)) ;;
-  esac
-done <"$MANIFEST"
-
+# --check above rendered the manifest from a digest of every file it compiled,
+# so a missing platform fails there rather than turning into a short upload.
 ASSETS=("$OUTDIR"/agent-sanitizer-hooks-*)
-if [[ "$EXPECTED" -eq 0 || "${#ASSETS[@]}" -ne "$EXPECTED" ]]; then
-  log "Error: expected $EXPECTED hook binaries (per $MANIFEST) in $OUTDIR, found ${#ASSETS[@]}: ${ASSETS[*]}"
-  exit 1
-fi
 
 # Notes stay minimal: the CHANGELOG's matching "## [$VERSION]" section is the
 # release-notes source of truth (promoted by version-bump.sh), so the release

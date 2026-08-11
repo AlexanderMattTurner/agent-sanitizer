@@ -290,9 +290,8 @@ function stubBin(t, omit) {
   // mkdir/rmdir/find are here so a stripped PATH still models the real one for
   // the launcher's degraded-warning marker; without them that state is
   // unrecordable and every warning repeats, which would pass a dedupe test
-  // vacuously. cat/mktemp/rm/mv/chmod likewise: a real /usr/bin:/bin host has
-  // them, and the launcher's binary arm needs temp files to capture the
-  // payload it may have to replay.
+  // vacuously. cat/mktemp/rm likewise: the binary arm captures stdin to temp
+  // files so it can replay the payload to the node path.
   for (const cmd of [
     "bash",
     "sh",
@@ -300,10 +299,8 @@ function stubBin(t, omit) {
     "cat",
     "cmp",
     "cp",
-    "chmod",
     "head",
     "mktemp",
-    "mv",
     "pwd",
     "mkdir",
     "rm",
@@ -1093,6 +1090,41 @@ test("a provisioned binary answers with no node anywhere on the host", (t) => {
   assert.doesNotMatch(res.stderr, /failing open/);
 });
 
+test("a provisioned binary answers even when node IS available", (t) => {
+  // The launcher PREFERS the binary once it is present — which is the whole
+  // reason the provisioner refreshes it on hosts whose node search succeeds,
+  // and the reason AGENT_SANITIZER_HOOK_BINARY=1 does anything. Without a
+  // both-present case, gating the binary arm on "no node found" would pass
+  // every other launcher test in this file.
+  const nodeDir = join(scratch(t), "node-bin");
+  fakeNode(nodeDir, `cat >/dev/null; printf '{"fromNode":true}'`);
+  const res = spawnSync(
+    "bash",
+    [
+      join(stagePlugin(t), "scripts", "safe-launch.sh"),
+      "PreToolUse",
+      "--hook=pretooluse-sanitize",
+    ],
+    {
+      input: "{}",
+      encoding: "utf8",
+      cwd: tmpdir(),
+      env: {
+        ...baseEnv(),
+        ...sessionEnv(),
+        PATH: `${nodeDir}:${stubBin(t, ["node"])}`,
+        _AGENT_SANITIZER_NODE_SEARCH: "0",
+        CLAUDE_PLUGIN_DATA: stageHookBinary(
+          t,
+          `cat >/dev/null; printf '{"fromBinary":true}'`,
+        ),
+      },
+    },
+  );
+  assert.equal(res.status, 0, res.stderr);
+  assert.deepEqual(JSON.parse(res.stdout), { fromBinary: true });
+});
+
 test("the binary receives the same argv and payload the bundle would", (t) => {
   const data = stageHookBinary(
     t,
@@ -1101,6 +1133,7 @@ test("the binary receives the same argv and payload the bundle would", (t) => {
   const res = launchWithoutNode(t, stagePlugin(t), {
     CLAUDE_PLUGIN_DATA: data,
   });
+  assert.equal(res.status, 0, res.stderr);
   // launchWithoutNode pipes `{}` as the payload.
   assert.deepEqual(JSON.parse(res.stdout), {
     argv: "--hook=pretooluse-sanitize",
@@ -1132,6 +1165,9 @@ test("a non-executable binary is skipped, not run", (t) => {
     JSON.parse(res.stdout).hookSpecificOutput.additionalContext,
     /UNSANITIZED/,
   );
+  // Skipped, not merely discarded: a launcher that ran it and dropped the
+  // output would satisfy the degraded envelope above just as well.
+  assert.doesNotMatch(res.stdout, /fromBinary/);
 });
 
 test("a binary that cannot answer falls back to node with the SAME payload", (t) => {

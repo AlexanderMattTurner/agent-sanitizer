@@ -154,7 +154,7 @@ SessionStart hook (`scripts/provision-hook-binary.sh`) downloads a
 self-contained hook executable for the platform (darwin-arm64, darwin-x64,
 linux-x64, linux-arm64) from this repository's GitHub release for the installed
 plugin version, verifies its SHA-256 against the manifest committed at
-`dist/hooks/hook-binaries.sha256` before it is ever executed, and installs it at
+`dist/hooks/hook-binaries.sha256` before it is ever installed, and puts it at
 `${CLAUDE_PLUGIN_DATA}/hook-binary/agent-sanitizer-hooks`. With that binary
 present and executable the launcher runs it directly — no node needed at all —
 under the same never-silent posture: a binary that fails to produce a verdict is
@@ -246,7 +246,7 @@ the same script generates — and because bun's compile is byte-deterministic fo
 a fixed bun version, target, input bundle and outfile name, CI regenerates the
 binaries and byte-checks their digests against the manifest: the reproducibility
 gate survives as a digest round-trip. The provisioner verifies a downloaded
-binary against that manifest before it is ever executed, so a release asset that
+binary against that manifest before it is ever installed, so a release asset that
 does not hash to the committed digest never runs. Compiled from the committed
 bundle, the binaries stay one commit with everything above.
 

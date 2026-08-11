@@ -288,20 +288,19 @@ bin_stdout_file=""
 stdout_file=""
 trap 'rm -f "$payload_file" "$bin_stdout_file" "$stdout_file"' EXIT
 
-# The provisioned self-contained binary (see provision-hook-binary.sh) carries
-# its own runtime, so while it answers, the node search below never runs — the
-# hosts where that search finds nothing are its whole point.
-# AGENT_SANITIZER_HOOK_BINARY=0 opts out. Without working temp files the binary
-# is skipped outright: stdin must be captured so a binary that fails to answer
-# can be retried on the node path with the SAME payload.
+# The provisioned self-contained binary carries its own runtime, so while it
+# answers, the node search below never runs — the hosts where that search finds
+# nothing are its whole point. It is preferred whenever present, which is what
+# makes the provisioner's refresh and its =1 knob mean anything.
 hook_binary="${CLAUDE_PLUGIN_DATA:-}/hook-binary/agent-sanitizer-hooks"
 if [[ "${AGENT_SANITIZER_HOOK_BINARY:-}" != "0" && -n "${CLAUDE_PLUGIN_DATA:-}" && -f "$hook_binary" && -x "$hook_binary" ]]; then
   payload_file="$(mktemp 2>/dev/null)"
   bin_stdout_file="$(mktemp 2>/dev/null)"
 fi
-# BOTH temp files or neither: a payload_file that outlives a failed
+# BOTH temp files or neither. A payload_file that outlives a failed
 # bin_stdout_file mktemp would later redirect the bundle's stdin from an EMPTY
-# capture — the hook would judge "" instead of the real payload.
+# capture, and the hook would judge "" instead of the real payload; with
+# neither, the binary is skipped so nothing consumes the stdin it cannot replay.
 if [[ -n "$payload_file" && -z "$bin_stdout_file" ]]; then
   rm -f "$payload_file"
   payload_file=""
@@ -314,14 +313,15 @@ if [[ -n "$payload_file" && -n "$bin_stdout_file" ]]; then
   # Exit 2 is a DECISION, not a fault — the dispatcher's declared block for
   # static wiring corruption. It goes through with whatever it wrote, exactly
   # as on the node arm below.
+  bin_stdout="$(cat "$bin_stdout_file")"
   if [[ "$bin_rc" -eq 2 ]]; then
-    cat "$bin_stdout_file"
+    printf '%s' "$bin_stdout"
     exit 2
   fi
   # A clean exit (silent or not), or a verdict despite a non-zero exit (the
   # advisory-exit case the node arm honors), is an answer: forward it.
-  if [[ "$bin_rc" -eq 0 ]] || reached_a_verdict "$(cat "$bin_stdout_file")"; then
-    cat "$bin_stdout_file"
+  if [[ "$bin_rc" -eq 0 ]] || reached_a_verdict "$bin_stdout"; then
+    printf '%s' "$bin_stdout"
     exit 0
   fi
   # No verdict came back. The binary is one provisioned artifact on one host,

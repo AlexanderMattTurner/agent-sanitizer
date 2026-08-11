@@ -521,6 +521,38 @@ there. The `sgrNote` flag on a `./output` result means "nothing here rose above 
 note", so a caller can show the quiet line instead of the banner; one warning
 anywhere in the walk clears it.
 
+## Provisioned hook binary (supply chain)
+
+The hooks can run from a self-contained executable compiled with
+`bun build --compile`, so a session whose `PATH` has no node at all still
+sanitizes (see `plugin/scripts/provision-hook-binary.sh`). That is the
+product's only path that fetches an executable over the network and later runs
+it, so what anchors its trust is worth stating exactly.
+
+- **The anchor is in the repo, not on the wire.** `plugin/dist/hooks/hook-binaries.sha256`
+  is committed, and the SessionStart provisioner refuses to install any download
+  that does not hash to the digest it pins for that platform. A compromised or
+  substituted release asset alone therefore cannot be installed: it fails the
+  comparison, is deleted, and the launcher keeps degrading loudly through node.
+- **What the digest is worth rests on the compile being reproducible.** The
+  committed digests are generated from the committed bundle, and CI recompiles
+  and byte-compares them (`build-hook-binaries.mjs --check`), so a manifest that
+  does not describe the bundle in the same commit fails before release.
+- **Not covered: an attacker who can write BOTH the repository and the release.**
+  There is no signature; the manifest is trusted because it arrives through the
+  same reviewed, gated path as the rest of the plugin. Rewriting it is rewriting
+  the plugin, which is outside this boundary.
+- **Not covered: re-verification at exec time.** The digest is checked once, at
+  install. The launcher then execs
+  `${CLAUDE_PLUGIN_DATA}/hook-binary/agent-sanitizer-hooks` on every hook
+  invocation without re-hashing it — that would cost a ~100 MB read per tool
+  call. Anything able to write inside `CLAUDE_PLUGIN_DATA` can therefore run
+  code in the session, which is why the provisioner creates that directory mode
+  700 and installs the binary mode 700. A user-owned data directory is the
+  assumption; a shared or world-writable one is not supported.
+- **Opting out.** `AGENT_SANITIZER_HOOK_BINARY=0` never downloads and never
+  runs a binary, leaving the node path exactly as it was.
+
 ## Failure posture (`AGENT_SANITIZER_FAIL_OPEN`)
 
 Installed as Claude Code hooks, these fail **open**: a hook that could not

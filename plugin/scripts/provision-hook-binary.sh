@@ -7,7 +7,7 @@
 # launch, where PATH is roughly /usr/bin:/bin and every version manager's rc
 # file never ran). The binary is downloaded from this repo's GitHub release for
 # the installed plugin version and verified against the committed digest
-# manifest before it is ever executed. Failure here is advisory — the launcher
+# manifest before it is ever installed. Failure here is advisory — the launcher
 # keeps degrading loudly through its node path until a binary exists.
 set -euo pipefail
 
@@ -18,6 +18,12 @@ set -euo pipefail
 if [[ "${AGENT_SANITIZER_HOOK_BINARY:-}" == "0" ]]; then
   exit 0
 fi
+# An unrecognized spelling must not quietly mean auto: a user who wrote `false`
+# meaning off would otherwise get the download on exactly the hosts it targets.
+case "${AGENT_SANITIZER_HOOK_BINARY:-}" in
+"" | 0 | 1) ;;
+*) echo "agent-sanitizer: AGENT_SANITIZER_HOOK_BINARY=${AGENT_SANITIZER_HOOK_BINARY} is not 0, 1 or unset — treating it as unset (auto)" >&2 ;;
+esac
 
 data_dir="${1:?usage: provision-hook-binary.sh <plugin-data-dir>}"
 script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
@@ -40,17 +46,14 @@ asset="agent-sanitizer-hooks-$platform"
 manifest="$plugin_root/dist/hooks/hook-binaries.sha256"
 dest_dir="$data_dir/hook-binary"
 binary="$dest_dir/agent-sanitizer-hooks"
-stamp="$dest_dir/.manifest-installed"
+installed_stamp="$dest_dir/.manifest-installed"
 reject_stamp="$dest_dir/.download-rejected"
-reject_version_stamp="$dest_dir/.download-rejected-version"
-download="$dest_dir/.agent-sanitizer-hooks.download"
+download=""
 
 # A ~100 MB download can dominate session start, and it blocks under the same
 # 1800s harness timeout as every hook — so it reports itself against the
 # provisioning budget, not the per-hook one (see lib/hook-timing.sh), with
-# download advice rather than the default's installer advice. The one EXIT
-# trap also owns the partial download: no path below may leave one behind to
-# be mistaken for a binary.
+# download advice rather than the default's installer advice.
 provision_started_ms=0
 if [[ -r "$script_dir/lib/hook-timing.sh" ]]; then
   # shellcheck source=lib/hook-timing.sh
@@ -60,7 +63,9 @@ else
   echo "agent-sanitizer: $script_dir/lib/hook-timing.sh is missing — provisioning timing disabled (reinstall the plugin)" >&2
   report_slow_provision() { :; }
 fi
-trap 'rm -f -- "$download"; report_slow_provision "hook binary download" "$provision_started_ms" "The binary is ~100 MB, so this mostly measures the connection to github.com"' EXIT
+# $download is empty until mktemp names one, so this removes a partial transfer
+# and never another process's file.
+trap 'rm -f -- "${download:-}"; report_slow_provision "hook binary download" "$provision_started_ms" "The binary is ~100 MB, so this mostly measures the connection to github.com"' EXIT
 
 if [[ ! -f "$manifest" ]]; then
   echo "agent-sanitizer: $manifest is missing — the hook binary cannot be verified, so it will not be provisioned (reinstall the plugin)" >&2
@@ -89,33 +94,34 @@ fi
 # the manifest re-provisions even on hosts whose node search succeeds, because
 # the launcher prefers an existing binary and must never keep running a stale
 # one.
-if [[ -x "$binary" ]] && cmp -s "$manifest" "$stamp"; then
+if [[ -x "$binary" ]] && cmp -s "$manifest" "$installed_stamp"; then
   exit 0
 fi
 
+# Missing search libs count as "no adequate node" — provisioning on doubt costs
+# bandwidth, not correctness.
+host_has_adequate_node() {
+  [[ -r "$script_dir/lib/node-resolve.sh" && -r "$script_dir/lib/node-floor.sh" ]] || return 1
+  # shellcheck source=lib/node-resolve.sh
+  . "$script_dir/lib/node-resolve.sh"
+  # shellcheck source=lib/node-floor.sh
+  . "$script_dir/lib/node-floor.sh"
+  local node_bin node_major
+  node_bin="$(agent_sanitizer_resolve_node)" || return 1
+  [[ -n "$node_bin" && -x "$node_bin" ]] || return 1
+  # A node whose version cannot even be read must NOT count as adequate:
+  # meets_floor answers 0 on unknown (right for the launcher, which must not
+  # blame a version it could not read), but skipping the download on that
+  # answer would strand exactly the host the binary exists for.
+  node_major="$(agent_sanitizer_node_major "$node_bin")"
+  [[ -n "$node_major" ]] || return 1
+  agent_sanitizer_node_meets_floor "$node_bin"
+}
+
 # No binary yet: on the default posture, a host whose node search finds a
-# runtime the bundle can run needs nothing from us. Missing search libs count
-# as "no adequate node" — provisioning is the recovery that costs bandwidth,
-# not correctness.
-if [[ "${AGENT_SANITIZER_HOOK_BINARY:-}" != "1" && ! -x "$binary" ]]; then
-  if [[ -r "$script_dir/lib/node-resolve.sh" && -r "$script_dir/lib/node-floor.sh" ]]; then
-    # shellcheck source=lib/node-resolve.sh
-    . "$script_dir/lib/node-resolve.sh"
-    # shellcheck source=lib/node-floor.sh
-    . "$script_dir/lib/node-floor.sh"
-    node_bin="$(agent_sanitizer_resolve_node)" || node_bin=""
-    if [[ -n "$node_bin" && -x "$node_bin" ]]; then
-      node_major="$(agent_sanitizer_node_major "$node_bin")"
-      # A node whose version cannot even be read must NOT count as adequate:
-      # meets_floor answers 0 on unknown (right for the launcher, which must
-      # not blame a version it could not read), but skipping the download on
-      # that answer would strand exactly the host the binary exists for.
-      # Provisioning on doubt costs bandwidth, not correctness.
-      if [[ -n "$node_major" ]] && agent_sanitizer_node_meets_floor "$node_bin"; then
-        exit 0
-      fi
-    fi
-  fi
+# runtime the bundle can run needs nothing from us.
+if [[ "${AGENT_SANITIZER_HOOK_BINARY:-}" != "1" && ! -x "$binary" ]] && host_has_adequate_node; then
+  exit 0
 fi
 
 # plugin.json is small, written by this repo's own release tooling with a
@@ -141,35 +147,62 @@ if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
 fi
 
 url="https://github.com/$repository/releases/download/v$version/$asset"
-consequence="the hooks keep using the node runtime search; on a host without node >=22, sanitization stays DEGRADED (failing open unless AGENT_SANITIZER_FAIL_OPEN=0) until a new session provisions the binary."
+# A refresh that fails on a host that ALREADY has a binary leaves that binary
+# serving — the launcher prefers it over node — so one sentence cannot cover
+# both cases without misnaming the runtime that is actually running.
+if [[ -x "$binary" ]]; then
+  consequence="the hooks keep running the previously provisioned $binary, which was compiled from an OLDER bundle — this session sanitizes one plugin version behind until a later session refreshes it."
+else
+  consequence="the hooks keep using the node runtime search; on a host without node >=22, sanitization stays DEGRADED (failing open unless AGENT_SANITIZER_FAIL_OPEN=0) until a new session provisions the binary."
+fi
 
 # A release whose asset already failed verification for THIS (version,
 # manifest) pair will fail it again — a checkout whose bundle moved after the
 # last release stays in that state until the next release, and re-downloading
-# ~100 MB every session start to re-reject it is pure waste. The stamps clear
-# on the next release (version moves) or plugin update (manifest moves).
-if [[ -f "$reject_stamp" && -f "$reject_version_stamp" ]] &&
-  cmp -s "$manifest" "$reject_stamp" &&
-  [[ "$(cat "$reject_version_stamp")" == "$version" ]]; then
-  echo "agent-sanitizer: not retrying $url — its digest already failed verification against this checkout's manifest (a later release or plugin update retries); $consequence" >&2
+# ~100 MB every session start to re-reject it is pure waste. The stamp clears
+# on the next release (version moves) or plugin update (manifest moves). The
+# repeat line stays quiet: this state is self-healing, and the loud version of
+# it on every session start is alert fatigue.
+rejected_marker="$version"$'\n'"$(cat "$manifest")"
+if [[ -f "$reject_stamp" && "$(cat "$reject_stamp")" == "$rejected_marker" ]]; then
+  echo "agent-sanitizer: skipping the hook binary — $url already failed digest verification for this checkout; a later release or plugin update retries." >&2
   exit 1
 fi
 
-mkdir -p -- "$dest_dir"
+# The post-condition, not mkdir's exit status: `mkdir -p` returns 0 on a
+# dangling symlink on macOS/BSD. Mode 700 because everything under it is
+# executed by every hook in the session.
+mkdir_rc=0
+mkdir -p -- "$dest_dir" || mkdir_rc=$?
 if [[ ! -d "$dest_dir" ]]; then
-  echo "agent-sanitizer: cannot create $dest_dir — $consequence" >&2
+  echo "agent-sanitizer: cannot create $dest_dir (mkdir exit $mkdir_rc) — $consequence" >&2
+  exit 1
+fi
+chmod 700 -- "$dest_dir"
+
+# An unpredictable name, not a fixed one: with a fixed path a second concurrent
+# session's download can replace these bytes between the digest check and the
+# install below (so a binary that never passed verification gets executed), and
+# anything that can write $dest_dir can pre-place a symlink for curl to follow.
+download="$(mktemp "$dest_dir/.agent-sanitizer-hooks.download.XXXXXX" 2>/dev/null)" || download=""
+if [[ -z "$download" ]]; then
+  echo "agent-sanitizer: cannot create a temporary file in $dest_dir — $consequence" >&2
   exit 1
 fi
 
+# --max-time and the retry budget together stay inside the 1800s the harness
+# allows this hook, so a wedged mirror cannot outlive the session start.
 fetch_rc=0
 if command -v curl >/dev/null 2>&1; then
-  curl -fsSL --retry 2 --max-time 900 -o "$download" -- "$url" || fetch_rc=$? # pin-exempt: sha256-verified against the committed manifest below before install; a mismatch is deleted, never executed
+  curl -fsSL --retry 2 --retry-max-time 1200 --max-time 600 -o "$download" -- "$url" || fetch_rc=$? # pin-exempt: sha256-verified against the committed manifest below before install; a mismatch is deleted, never executed
 elif command -v wget >/dev/null 2>&1; then
-  wget -q -T 900 -O "$download" -- "$url" || fetch_rc=$? # pin-exempt: sha256-verified against the committed manifest below before install; a mismatch is deleted, never executed
+  wget -q -T 600 -O "$download" -- "$url" || fetch_rc=$? # pin-exempt: sha256-verified against the committed manifest below before install; a mismatch is deleted, never executed
 else
   echo "agent-sanitizer: neither curl nor wget is available — the hook binary cannot be downloaded; $consequence" >&2
   exit 1
 fi
+# A network failure writes no reject stamp: unlike a digest mismatch it says
+# nothing about whether this release's bytes match, so the next session retries.
 if [[ "$fetch_rc" -ne 0 ]]; then
   echo "agent-sanitizer: downloading $url failed (exit $fetch_rc) — $consequence (A tree released moments ago may not have its binaries attached yet; a later session retries.)" >&2
   exit 1
@@ -179,26 +212,35 @@ fi
 # and this refusal is what blocks a tampered or truncated binary — or one from
 # a release that does not match this checkout — from ever being executed. No
 # digest tool means no verification, which means no install.
+got=""
 if command -v sha256sum >/dev/null 2>&1; then
-  got="$(sha256sum <"$download")"
+  got="$(sha256sum <"$download")" || got=""
 elif command -v shasum >/dev/null 2>&1; then
-  got="$(shasum -a 256 <"$download")"
+  got="$(shasum -a 256 <"$download")" || got=""
 else
   echo "agent-sanitizer: neither sha256sum nor shasum is available — the downloaded hook binary cannot be verified, so it will not be installed; $consequence" >&2
   exit 1
 fi
 got="${got%% *}"
+if [[ ! "$got" =~ ^[0-9a-f]{64}$ ]]; then
+  echo "agent-sanitizer: hashing the downloaded $asset produced no usable digest — refusing to install it; $consequence" >&2
+  exit 1
+fi
 if [[ "$got" != "$expected_digest" ]]; then
-  cp -- "$manifest" "$reject_stamp"
-  printf '%s' "$version" >"$reject_version_stamp"
   echo "agent-sanitizer: $asset from $url hashes to $got, but the committed manifest pins $expected_digest — refusing to install it; $consequence (A checkout ahead of its latest release hits this until the next release; it heals on its own.)" >&2
+  printf '%s' "$rejected_marker" >"$reject_stamp"
   exit 1
 fi
 
-chmod 755 -- "$download"
-mv -f -- "$download" "$binary"
-cp -- "$manifest" "$stamp"
-rm -f -- "$reject_stamp" "$reject_version_stamp"
+install_failed() {
+  echo "agent-sanitizer: installing the verified hook binary into $binary failed ($1) — $consequence" >&2
+  exit 1
+}
+chmod 700 -- "$download" || install_failed "chmod"
+mv -f -- "$download" "$binary" || install_failed "mv"
+download=""
+cp -- "$manifest" "$installed_stamp" || install_failed "recording the install stamp"
+rm -f -- "$reject_stamp" || install_failed "clearing the reject stamp"
 # The success line is gated on the POST-CONDITION, not on the commands above
 # exiting 0 — this is what may not lie to the operator about a dead install.
 if [[ ! -x "$binary" ]]; then

@@ -6,12 +6,12 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash \"${CLAUDE_PLUGIN_ROOT}\"/scripts/provision-hook-binary.sh \"${CLAUDE_PLUGIN_DATA}\"",
+            "command": "bash \"${CLAUDE_PLUGIN_ROOT}\"/scripts/provision-redactor.sh \"${CLAUDE_PLUGIN_DATA}\"",
             "timeout": 1800
           },
           {
             "type": "command",
-            "command": "bash \"${CLAUDE_PLUGIN_ROOT}\"/scripts/provision-redactor.sh \"${CLAUDE_PLUGIN_DATA}\"",
+            "command": "bash \"${CLAUDE_PLUGIN_ROOT}\"/scripts/provision-hook-binary.sh \"${CLAUDE_PLUGIN_DATA}\"",
             "timeout": 1800
           },
           {
