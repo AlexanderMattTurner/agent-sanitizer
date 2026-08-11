@@ -459,15 +459,15 @@ export async function buildPreToolUseResponse(
     }
   }
 
-  // Coverage notice, once per session: a Claude Code that never emits
-  // InstructionsLoaded leaves every instruction file loaded from a subdirectory
+  const { tool_name: tool, tool_input: toolInput } = input;
+
+  // Coverage notice, once per session: with no InstructionsLoaded scan running,
+  // every instruction file loaded from a subdirectory reaches the model
   // unscanned, and the SessionStart scan — which covers only what loads at
   // launch — cannot see the loss. Reported here because this is the first hook
   // that runs after the loads would have happened.
-  const gapNotice = instructionsLoadedGapNotice();
+  const gapNotice = instructionsLoadedGapNotice(input.session_id);
   if (gapNotice !== null) contexts.push(gapNotice);
-
-  const { tool_name: tool, tool_input: toolInput } = input;
 
   // Layers 2-4, run by the declared pipeline: the driver — not this call order —
   // is what keeps the confusable fold's soundness precondition true once an

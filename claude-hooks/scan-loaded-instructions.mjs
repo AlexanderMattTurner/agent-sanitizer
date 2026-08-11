@@ -220,13 +220,14 @@ export async function cliMain({ trace: sink = trace } = {}) {
   const elapsed = startHookTimer();
   const emitTrace = bestEffortTrace(sink);
   try {
-    // Recorded before the scan, not after: the marker answers "does this host
-    // emit the event", which is true the moment the hook is running, and a
-    // faulting scan must not read as an absent event (that notice names a
-    // different loss, and pointing the operator at a Claude Code upgrade for a
-    // scanner fault sends them to the wrong fix).
-    recordInstructionsLoaded();
-    const loaded = readLoadedFile(await readStdinJson());
+    const payload = await readStdinJson();
+    // Recorded before the scan, not after: the marker answers "is this event
+    // being scanned", which is true the moment the hook is running, and a
+    // faulting scan must not read as an unscanned event — that notice names a
+    // different loss and sends the operator to the wrong fix. It is written
+    // before the payload's OWN fields are validated for the same reason.
+    recordInstructionsLoaded(payload?.session_id);
+    const loaded = readLoadedFile(payload);
     const result = scanLoadedFile(loaded);
     if (result === null) {
       emitTrace(TraceEvent.SCAN_LOADED_INSTRUCTIONS_RAN, {

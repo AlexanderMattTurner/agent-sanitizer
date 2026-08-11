@@ -314,4 +314,53 @@ describe("a contaminated project is cleaned on disk and reported", () => {
     assert.match(readFileSync(ALERT_FILE, "utf8"), /AGENTS\.md/u);
     rmSync(join(projectDir, "AGENTS.md"), { force: true });
   });
+
+  it("reports a contaminated file ABOVE the project without rewriting it", async () => {
+    // The parent chain is scanned (Claude Code loads it in full at launch) but
+    // never auto-cleaned: that file is shared with every other project under
+    // the same directory, so the hook reports it and leaves the rewrite to the
+    // operator. The finding is reported by ABSOLUTE path, which is also the
+    // path shape autoCleanFindings has to not re-root under the project.
+    const outside = mkdtempSync(join(tmpdir(), "sanitizer-coverage-above-"));
+    const above = join(outside, "CLAUDE.md");
+    const contaminated = `${clean}hidden:${payload}\n`;
+    writeFileSync(above, contaminated);
+    rmSync(ALERT_FILE, { force: true });
+
+    const { sink } = collector();
+    await cliMain({
+      trace: sink,
+      scan: () => ({
+        targets: [above],
+        scanned: 1,
+        skipped: [],
+        absent: [],
+        findings: [
+          {
+            file: above,
+            findings: [
+              {
+                line: 1,
+                charCount: LONG_RUN_THRESHOLD,
+                method: "invisible Unicode sequence",
+                decoded: "U+E0001",
+              },
+            ],
+          },
+        ],
+      }),
+    });
+
+    assert.equal(
+      readFileSync(above, "utf8"),
+      contaminated,
+      "a file outside the project was rewritten",
+    );
+    assert.ok(
+      existsSync(ALERT_FILE),
+      "an uncleaned file above the project did not arm the gate",
+    );
+    assert.match(readFileSync(ALERT_FILE, "utf8"), /CLAUDE\.md/u);
+    rmSync(outside, { recursive: true, force: true });
+  });
 });

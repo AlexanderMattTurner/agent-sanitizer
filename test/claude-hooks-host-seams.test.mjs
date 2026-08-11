@@ -36,7 +36,7 @@ const {
   awaitLazyDependency,
 } = await import("../claude-hooks/lib/hook-io.mjs");
 const { controlPlane } = await import("../claude-hooks/lib/control-plane.mjs");
-const { INSTRUCTIONS_LOADED_FILE, recordInstructionsLoaded } =
+const { instructionsLoadedFile, recordInstructionsLoaded } =
   await import("../claude-hooks/lib/invisible-alert.mjs");
 const {
   configureEnvConfigSource,
@@ -501,7 +501,7 @@ describe("PreToolUse host gates", () => {
   // the event as seen so both calls are notice-free; the notice itself is driven
   // in claude-hooks-loaded-instructions.test.mjs.
   before(() => recordInstructionsLoaded());
-  after(() => rmSync(INSTRUCTIONS_LOADED_FILE, { force: true }));
+  after(() => rmSync(instructionsLoadedFile(), { force: true }));
 
   /** A tool input the confusable layer WILL rewrite, so a skipped layer shows. */
   const confusableWrite = () =>

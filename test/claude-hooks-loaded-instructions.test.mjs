@@ -36,13 +36,16 @@ const { readLoadedFile, scanLoadedFile, loadedFileMessage } =
 const { LONG_RUN_THRESHOLD } = await import("../src/invisible.mjs");
 const {
   ALERT_FILE,
-  INSTRUCTIONS_LOADED_FILE,
-  INSTRUCTIONS_LOADED_NOTICE_FILE,
   appendAlert,
+  instructionsLoadedFile,
   instructionsLoadedGapNotice,
+  instructionsLoadedNoticeFile,
   instructionsLoadedSeen,
   recordInstructionsLoaded,
 } = await import("../claude-hooks/lib/invisible-alert.mjs");
+
+/** The session id the CLI cases send, so their markers are this session's. */
+const SESSION = "sess-loaded-1";
 
 /** A payload long enough for the scanner's long-run threshold to flag it. */
 const PAYLOAD = "\u{e0001}".repeat(LONG_RUN_THRESHOLD + 2);
@@ -50,8 +53,10 @@ const PROSE = "real prose the strip must keep\n";
 
 const markers = [
   ALERT_FILE,
-  INSTRUCTIONS_LOADED_FILE,
-  INSTRUCTIONS_LOADED_NOTICE_FILE,
+  instructionsLoadedFile(),
+  instructionsLoadedNoticeFile(),
+  instructionsLoadedFile(SESSION),
+  instructionsLoadedNoticeFile(SESSION),
 ];
 
 beforeEach(() => {
@@ -244,6 +249,7 @@ describe("the hook CLI, driven end to end on a real event", () => {
     const filePath = project("nested/CLAUDE.md", `${PROSE}${PAYLOAD}\n`);
     const { json, stderr } = fire({
       hook_event_name: "InstructionsLoaded",
+      session_id: SESSION,
       file_path: filePath,
       load_reason: "nested_traversal",
       file_content: `${PROSE}${PAYLOAD}\n`,
@@ -258,7 +264,7 @@ describe("the hook CLI, driven end to end on a real event", () => {
     assert.match(stderr, /INVISIBLE CHARACTER INJECTION DETECTED/u);
     // Cleaned, so nothing is left for the gate to ask about.
     assert.equal(existsSync(ALERT_FILE), false);
-    assert.ok(existsSync(INSTRUCTIONS_LOADED_FILE));
+    assert.ok(existsSync(instructionsLoadedFile(SESSION)));
   });
 
   it("arms the gate when the payload is still on disk", () => {
@@ -268,6 +274,7 @@ describe("the hook CLI, driven end to end on a real event", () => {
 
     fire({
       hook_event_name: "InstructionsLoaded",
+      session_id: SESSION,
       file_path: filePath,
       load_reason: "include",
       file_content: `${PROSE}${PAYLOAD}\n`,
@@ -282,6 +289,7 @@ describe("the hook CLI, driven end to end on a real event", () => {
     const filePath = project("CLAUDE.md", PROSE);
     const { stdout, stderr } = fire({
       hook_event_name: "InstructionsLoaded",
+      session_id: SESSION,
       file_path: filePath,
       load_reason: "session_start",
       file_content: PROSE,
@@ -291,7 +299,7 @@ describe("the hook CLI, driven end to end on a real event", () => {
     assert.equal(existsSync(ALERT_FILE), false);
     // The marker is what tells the PreToolUse gate this host emits the event at
     // all; a clean file must still leave it.
-    assert.ok(existsSync(INSTRUCTIONS_LOADED_FILE));
+    assert.ok(existsSync(instructionsLoadedFile(SESSION)));
   });
 
   it("reports a malformed event instead of passing it as clean", () => {
@@ -306,10 +314,14 @@ describe("the hook CLI, driven end to end on a real event", () => {
 });
 
 describe("a host that never emits the event is named, once", () => {
-  it("warns while the event has not been seen", () => {
+  it("warns while no scan has been seen, naming both causes", () => {
     const notice = instructionsLoadedGapNotice();
     assert.match(notice, /InstructionsLoaded/u);
     assert.match(notice, /unscanned/u);
+    // The marker cannot distinguish a host that never emits the event from an
+    // operator who switched the hook off, so the notice must not assert either
+    // one — a reader sent to the wrong fix stops trusting the next notice.
+    assert.match(notice, /AGENT_SANITIZER_DISABLED_HOOKS/u);
   });
 
   it("does not repeat the warning on later tool calls", () => {
@@ -321,8 +333,30 @@ describe("a host that never emits the event is named, once", () => {
   it("stays silent once the hook has run", () => {
     assert.equal(instructionsLoadedSeen(), false);
     recordInstructionsLoaded();
-    assert.ok(existsSync(INSTRUCTIONS_LOADED_FILE));
+    assert.ok(existsSync(instructionsLoadedFile()));
     assert.equal(instructionsLoadedSeen(), true);
     assert.equal(instructionsLoadedGapNotice(), null);
+  });
+
+  it("does not let one session's marker answer for another", () => {
+    // The markers outlive the session that wrote them — nothing clears them at
+    // SessionStart, because SessionStart is not ordered against the
+    // InstructionsLoaded events fired for the files loaded at launch. Keying
+    // them by session is what keeps a previous session's coverage from
+    // silencing this session's gap.
+    recordInstructionsLoaded("sess-earlier");
+    assert.equal(instructionsLoadedSeen("sess-earlier"), true);
+    assert.equal(instructionsLoadedSeen(SESSION), false);
+    assert.match(instructionsLoadedGapNotice(SESSION), /unscanned/u);
+    rmSync(instructionsLoadedFile("sess-earlier"), { force: true });
+  });
+
+  it("folds a path separator out of a hostile session id", () => {
+    // The id becomes a path component. A `/` in it would put the marker
+    // somewhere other than $TMPDIR — or at a path an attacker chose.
+    assert.equal(
+      instructionsLoadedFile("../../etc/x"),
+      instructionsLoadedFile(".._.._etc_x"),
+    );
   });
 });

@@ -70,7 +70,7 @@ const { buildPreToolUseResponse, rehydrateLayer2 } =
 const { LAYER2_PLACEHOLDER_RE } =
   await import("../claude-hooks/lib/placeholder-grammar.mjs");
 const { PermissionDecision } = await import("../claude-hooks/lib/hook-io.mjs");
-const { INSTRUCTIONS_LOADED_FILE, recordInstructionsLoaded } =
+const { instructionsLoadedFile, recordInstructionsLoaded } =
   await import("../claude-hooks/lib/invisible-alert.mjs");
 
 // This suite's oracle predicts the pipeline's context byte-for-byte, and the
@@ -106,7 +106,7 @@ after(async () => {
   await new Promise((resolve) => daemon.close(resolve));
   for (const dir of [socketDir, projectDir, revealBase])
     rmSync(dir, { recursive: true, force: true });
-  rmSync(INSTRUCTIONS_LOADED_FILE, { force: true });
+  rmSync(instructionsLoadedFile(), { force: true });
 });
 
 // One fresh span store PER fc ITERATION, shared across the rounds inside it:

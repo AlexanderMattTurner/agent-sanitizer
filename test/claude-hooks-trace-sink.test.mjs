@@ -52,7 +52,7 @@ const sanitizeOutput = await import("../claude-hooks/sanitize-output.mjs");
 const userPrompt = await import("../claude-hooks/sanitize-user-prompt.mjs");
 const scanInvisible = await import("../claude-hooks/scan-invisible-chars.mjs");
 const scanLoaded = await import("../claude-hooks/scan-loaded-instructions.mjs");
-const { INSTRUCTIONS_LOADED_FILE } =
+const { instructionsLoadedFile } =
   await import("../claude-hooks/lib/invisible-alert.mjs");
 
 const traceDir = mkdtempSync(join(tmpdir(), "sanitizer-trace-"));
@@ -257,5 +257,5 @@ after(() => {
   // The InstructionsLoaded run writes its support marker under $TMPDIR, outside
   // both dirs above; left behind it answers "does this host emit the event" for
   // a later run keyed to the same project hash.
-  rmSync(INSTRUCTIONS_LOADED_FILE, { force: true });
+  rmSync(instructionsLoadedFile(), { force: true });
 });
