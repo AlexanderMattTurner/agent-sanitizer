@@ -999,11 +999,10 @@ test("a healthy clean run is still silent — the accepted false negative, from 
       tool_input: { command: "ls" },
       tool_response: { stdout: "ok" },
       prompt: "hello",
-      // The InstructionsLoaded scanner reads a different event shape: the file
-      // that just loaded, and its bytes. A tool payload is not a CLEAN payload
-      // for it, it is a malformed one — which it reports, loudly and correctly.
+      // The InstructionsLoaded scanner reads a different event shape: the path
+      // of the file that just loaded. A tool payload is not a CLEAN payload for
+      // it, it is a malformed one — which it reports, loudly and correctly.
       file_path: clean,
-      file_content: "ordinary, clean prose\n",
     });
     assert.equal(res.status, 0, `${hook}: ${res.stderr}`);
     assert.equal(res.stdout, "", `${hook} spoke on a clean payload`);

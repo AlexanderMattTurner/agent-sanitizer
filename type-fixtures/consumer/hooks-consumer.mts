@@ -117,7 +117,7 @@ const _loaded: {
   report: string;
   cleaned: boolean;
   reason: string | null;
-} | null = scanLoadedFile({ filePath: "/tmp/CLAUDE.md", content: "clean" });
+} | null = scanLoadedFile("/tmp/CLAUDE.md", { read: () => "clean" });
 
 // Reference every binding so readers (and noUnusedLocals, if ever enabled) see
 // them as load-bearing assertions rather than dead code.

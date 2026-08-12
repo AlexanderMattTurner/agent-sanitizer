@@ -287,7 +287,7 @@ root's own instruction files, the `CLAUDE.md` chain above it, and the root
 `.claude/` context subdirectories — and `scan-loaded-instructions`
 (InstructionsLoaded) scans every other instruction file — including the
 user-global `~/.claude` memory and rules, which load into every session on the
-machine — from the bytes the event carries, at the moment it loads. The second cannot block: the file is already in
+machine — reading the one path the event names, at the moment it loads. The second cannot block: the file is already in
 context when it fires, so its neutralization is to strip the payload from disk
 (so no reload re-reads it) and tell the model to treat what it just read as
 untrusted data. Auto-cleaning is confined to `CLAUDE_PROJECT_DIR` in both — an
