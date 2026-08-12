@@ -54660,13 +54660,13 @@ function classifyContextPath(path2) {
   ) ?? null;
 }
 function contextScopeContradiction(path2, loadReason) {
+  if (!HOST_CHOSEN_LOAD_REASONS.includes(loadReason)) return null;
   const row = classifyContextPath(path2);
   if (row?.eventNamed || row?.shape === "claude-bulk") return null;
   if (row)
     return `InstructionsLoaded named ${row.name}, which CLAUDE_CONTEXT_KINDS records as a kind the event never names: the lazy scan reaches further than this table, and the docs built on it, claim`;
   const tail = claudeTail(path2, "innermost");
   if (tail === null || tail.length < 2) return null;
-  if (!HOST_CHOSEN_LOAD_REASONS.includes(loadReason)) return null;
   return `.claude/${tail[0]}/ loaded as model context, and CLAUDE_CONTEXT_SUBDIRS does not list it: the SessionStart scan prunes that directory, so every OTHER file in it goes unscanned. Add it there if it is context, not bulk data`;
 }
 var CLAUDE_CONTEXT_KINDS, CLAUDE_CONTEXT_SUBDIRS, CLAUDE_MEMORY_FILES, CLAUDE_DIR_INSTRUCTION_FILES, CLAUDE_INSTRUCTION_GLOBS, CLAUDE_LAUNCH_GLOBS, HOST_CHOSEN_LOAD_REASONS;
@@ -68843,8 +68843,8 @@ function readLoadedFile(payload) {
     );
   return {
     filePath,
-    // Metadata for the trace channel only, so an unknown/absent reason is a
-    // label, never a reason to skip the scan.
+    // Labelled, never missing: the trace channel and the scope notice both read
+    // it, and an unknown reason must not read as a reason to skip the scan.
     loadReason: typeof loadReason === "string" ? loadReason : "unknown"
   };
 }

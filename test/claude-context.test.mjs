@@ -148,9 +148,8 @@ describe("what a loaded path says about the scope table", () => {
   // The InstructionsLoaded event is the only channel that can prove the table
   // wrong, and a notice that fires on ordinary loads is a notice nobody reads.
   // So each reporting case below is paired with the nearest path that must stay
-  // silent, and the silent set carries every kind the event is known to name.
-  // Each silent case is checked under `session_start` — the reason that DOES
-  // report — unless the case is about the reason itself.
+  // silent, under `session_start` — the reason that DOES report — unless the
+  // case is about the reason itself.
   const SILENT = [
     ["the project's own memory file", join(sep, "p", "CLAUDE.md")],
     ["a nested memory file", join(sep, "p", "packages", "foo", "CLAUDE.md")],
@@ -228,10 +227,12 @@ describe("what a loaded path says about the scope table", () => {
   ])
     it(`reports ${label}, a kind the table marks event-blind`, () => {
       // Not a hole — the lazy scan just covered it — but the table and the docs
-      // built on it now understate what the event reaches.
-      const notice = contextScopeContradiction(path);
+      // built on it now understate what the event reaches. Only under a
+      // host-chosen reason: an imported one reaches nothing a scan would.
+      const notice = contextScopeContradiction(path, "nested_traversal");
       assert.match(notice, /InstructionsLoaded named/u);
       assert.ok(notice.includes(named), `${notice} does not name ${named}`);
+      assert.equal(contextScopeContradiction(path, "include"), null);
     });
 
   it("judges a directory-scoped skill by its own `.claude`, not the tree above it", () => {
@@ -249,7 +250,10 @@ describe("what a loaded path says about the scope table", () => {
       "s",
       "SKILL.md",
     );
-    assert.match(contextScopeContradiction(skill), /named skills/u);
+    assert.match(
+      contextScopeContradiction(skill, "session_start"),
+      /named skills/u,
+    );
     // Pruning still reads the OUTERMOST tree, or the walk it exists for stops
     // applying one level down.
     assert.equal(

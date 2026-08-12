@@ -314,19 +314,23 @@ const HOST_CHOSEN_LOAD_REASONS = ["session_start", "nested_traversal"];
  *     coverage is wider than the docs claim, and the lazy scan reaches files
  *     nothing was crediting it with.
  *
- * Only a positive observation reports. A path the table does not name at all
- * (an `@import` of arbitrary markdown) says nothing about the table, so it
- * returns null rather than guessing — the event names files it does not own.
- * A `claude-bulk` row is silent for the same reason in reverse: the table
- * already knows that directory is storage, and asking for it to be whitelisted
- * is asking for the whole-tree walk back.
+ * Both observations are about what the host reaches ON ITS OWN, so both require
+ * a host-chosen `loadReason`: an `@import` names a file the user's own markdown
+ * pointed at, and acting on it would either whitelist an import target or credit
+ * the event with a kind it reaches only when imported. An unrecognized reason is
+ * treated the same way, so this loses a notice rather than inventing one.
+ *
+ * A path the table does not name at all says nothing about the table either, so
+ * it returns null rather than guessing. A `claude-bulk` row is silent for the
+ * reason in reverse: the table already knows that directory is storage.
  * @param {string} path  the path the host loaded
  * @param {string} loadReason  the event's `load_reason`, or "unknown" when the
- *   host sent none; the unlisted-directory observation holds only for a load the
- *   host chose itself, so this is required rather than defaulted
+ *   host sent none; required rather than defaulted, since every observation here
+ *   holds only for a load the host chose itself
  * @returns {string | null} what is stale, phrased for whoever fixes the table
  */
 export function contextScopeContradiction(path, loadReason) {
+  if (!HOST_CHOSEN_LOAD_REASONS.includes(loadReason)) return null;
   const row = classifyContextPath(path);
   if (row?.eventNamed || row?.shape === "claude-bulk") return null;
   if (row)
@@ -337,11 +341,6 @@ export function contextScopeContradiction(path, loadReason) {
     );
   const tail = claudeTail(path, "innermost");
   if (tail === null || tail.length < 2) return null;
-  // An `@import` names a file the user's own markdown pointed at, so it says
-  // nothing about what a scan of that directory would reach — and an
-  // unrecognized reason is treated as one, since reporting on it would ask for
-  // a directory to be whitelisted on the strength of a load nobody explained.
-  if (!HOST_CHOSEN_LOAD_REASONS.includes(loadReason)) return null;
   return (
     `.claude/${tail[0]}/ loaded as model context, and CLAUDE_CONTEXT_SUBDIRS does not list it: ` +
     "the SessionStart scan prunes that directory, so every OTHER file in it goes unscanned. " +

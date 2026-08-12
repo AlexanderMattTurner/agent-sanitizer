@@ -119,8 +119,8 @@ export function readLoadedFile(payload) {
     );
   return {
     filePath,
-    // Metadata for the trace channel only, so an unknown/absent reason is a
-    // label, never a reason to skip the scan.
+    // Labelled, never missing: the trace channel and the scope notice both read
+    // it, and an unknown reason must not read as a reason to skip the scan.
     loadReason: typeof loadReason === "string" ? loadReason : "unknown",
   };
 }

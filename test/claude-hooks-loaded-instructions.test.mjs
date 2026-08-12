@@ -90,8 +90,9 @@ describe("the loaded-file payload is validated, never assumed", () => {
   });
 
   it("labels a missing load reason rather than skipping the scan", () => {
-    // The reason is trace metadata only. Treating its absence as a reason not to
-    // scan would let a harness change silently disable the scan.
+    // The reason decides the scope notice, never the scan: treating its absence
+    // as a reason not to scan would let a harness change disable the scan. The
+    // "unknown" label is what the notice then reads as "not host-chosen".
     assert.equal(
       readLoadedFile({ file_path: "/p/CLAUDE.md" }).loadReason,
       "unknown",

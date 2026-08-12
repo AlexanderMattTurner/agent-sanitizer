@@ -317,9 +317,9 @@ than the table, and this section, credit it with). Everything else is silent, in
 both directions: a path the table does not name — an `@import` of arbitrary
 markdown — reports nothing rather than guessing, and a directory it names as
 storage (`worktrees/`, `projects/`) reports nothing because whitelisting storage
-is the whole-tree walk again. The unlisted-directory case also requires a
-`load_reason` the host chose itself: an `@import` names a file the user's own
-markdown pointed at, which says nothing about what a scan would reach. The
+is the whole-tree walk again. Both observations also require a `load_reason` the
+host chose itself: an `@import` names a file the user's own markdown pointed at,
+which says nothing about what a scan would reach on its own. The
 notice never widens the scan on its own — one load cannot tell a context
 directory from an import target, and whitelisting the wrong one buys back the
 startup cost this split removed — so the whitelist stays hand-maintained and the
