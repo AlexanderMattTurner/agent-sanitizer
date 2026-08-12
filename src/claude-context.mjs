@@ -1,99 +1,108 @@
 /**
- * WHICH files an agent loads as model context, as data: the glob sets and the
- * walk-pruning predicate that together define "everything Claude Code reads as
- * instructions, and nothing else".
- *
- * TWO scopes live here, because Claude Code has two load moments and scanning
- * them at one moment is what made session start unusable:
+ * WHICH files an agent loads as model context, as data: one table of context
+ * KINDS, and the views of it each load moment needs — a launch-time glob set, a
+ * whole-tree glob set, and the check that can tell the table it is wrong.
  *
  *   - {@link CLAUDE_LAUNCH_GLOBS} + {@link ancestorInstructionFiles} — what
- *     loads AT LAUNCH: the working directory's own instruction files, the same
- *     files in every directory above it, and the root `.claude` context tree.
- *     Rooted at the scan root, so it costs one shallow glob and a walk up the
- *     parent chain no matter how large the tree below is.
+ *     loads AT LAUNCH, costing a shallow glob and a walk up the parent chain
+ *     whatever the tree below holds.
  *   - {@link CLAUDE_INSTRUCTION_GLOBS} — every instruction file ANYWHERE in a
- *     tree, `**`-rooted. A library caller asking "scan this project" wants
- *     this; a SessionStart hook must not, because Claude Code loads a
- *     subdirectory's `CLAUDE.md` only when it reads a file in that
- *     subdirectory, and a launch in `$HOME` charges the whole home tree —
- *     ~100 seconds of blocked startup — for files that mostly never load.
- *     Those lazily-loaded files are scanned by the InstructionsLoaded hook, at
- *     the moment they load.
+ *     tree. A SessionStart hook must not walk this: a launch in `$HOME` charges
+ *     the whole home tree — ~100 seconds of blocked startup — for files that
+ *     mostly never load, and the InstructionsLoaded hook scans those as they do.
+ *   - {@link contextScopeContradiction} — what a file the host just loaded says
+ *     about this table, so a stale row surfaces as a notice, not as a hole.
  *
- * This is the SINGLE SOURCE for both. It used to live inside
- * `claude-hooks/scan-invisible-chars.mjs`, which meant the SessionStart hook
- * knew the answer and nobody else did: `src/instructions.mjs` takes
- * caller-supplied globs by design (no agent's convention is baked into the
- * engine), so the CLI, the Python port and every downstream fork spelled their
- * own approximation of this list — and an approximation that drifts either
- * scans bulk data that can never reach the model or MISSES a context directory
- * entirely, which is a silent hole in the one scan standing between a poisoned
- * instruction file and a session that loads it.
- *
- * It is a standalone DATA module carrying no package dependency (like
- * ./cf-charset.mjs) for two reasons: `src/instructions.mjs` re-exports it as the
- * library's public door, and the hook imports it RELATIVELY — deliberately not
- * through the `agent-sanitizer` specifier the plugin bundle pins to a published
- * engine. This scope is hook POLICY, not engine behavior: it must ship and move
- * with the hook that walks it, or a plugin built against an older pin would
- * prune the wrong directories while believing it had scanned everything.
+ * A standalone DATA module with no package dependency: `src/instructions.mjs`
+ * re-exports it as the library's public door, and the hooks import it RELATIVELY
+ * rather than through the `agent-sanitizer` specifier the plugin bundle pins to a
+ * published engine. This scope is hook POLICY, not engine behavior — it must move
+ * with the hook that walks it, or a plugin built against an older pin prunes the
+ * wrong directories while believing it scanned everything.
  */
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 
+// One row of the kind table. Both flags default to the conservative answer —
+// this kind is not on the ancestor chain, and no event announces it — so a row
+// added without them claims nothing the host has not been observed doing.
 /**
- * The `.claude/` subdirectories whose markdown Claude Code loads as model
- * context. This is a WHITELIST, and that is the point: `.claude/` is also where
- * tooling parks bulk data that never loads as context — `worktrees/` (entire
- * checked-out copies of the repo), caches, transcripts, snapshots — and globbing
- * `.claude/**` swept all of it in: on a repo with a few populated worktrees,
- * thousands of files READ at every session start and 30 seconds of blocked
- * startup, paid to scan bytes that cannot reach the model.
- *
- * A whitelist, not a `worktrees` denylist, because the failure modes are not
- * symmetric: an unlisted context directory costs a scan nobody asked for anyway
- * (the PostToolUse sanitizer still cleans those bytes when a tool reads them),
- * while an unlisted BULK directory silently costs every future session its
- * startup. Add an entry here when Claude Code starts loading a new `.claude/`
- * subdirectory as context.
- *
- * Maintaining it by hand is the only option: `InstructionsLoaded`, the one event
- * that names a context file as it loads, is observed to fire only for the
- * `CLAUDE.md` memory family and `.claude/rules/*.md` — never a skill, a command,
- * an output-style or a loose `.claude/*.md` — so a list populated from that
- * event confirms the entries already here and is blind to every new one.
+ * @param {"dir-file" | "claude-md" | "claude-subdir"} shape
+ * @param {string} name  how a reader spells this kind
+ * @param {{ ancestorChain?: boolean, eventNamed?: boolean }} [flags]
  */
-export const CLAUDE_CONTEXT_SUBDIRS = Object.freeze([
-  "agents",
-  "commands",
-  "output-styles",
-  "rules",
-  "skills",
-]);
+function kind(shape, name, { ancestorChain = false, eventNamed = false } = {}) {
+  return Object.freeze({ shape, name, ancestorChain, eventNamed });
+}
 
 /**
- * Claude Code's own per-directory memory files. Their own list because the
- * parent-chain load ({@link ancestorInstructionFiles}) is Claude Code's rule and
- * covers exactly these two.
+ * Every kind of file an agent loads as model context, with the two facts about
+ * it that code branches on. `shape` says where the kind lives; `ancestorChain`
+ * says whether Claude Code also loads it from the directories ABOVE a scan root;
+ * `eventNamed` says whether `InstructionsLoaded` names it as it loads, which is
+ * the claim {@link contextScopeContradiction} checks the host against.
+ *
+ * One table rather than a list per view: a kind spelled in two places is a kind
+ * one scope scans and another misses, and the miss is silent — a poisoned
+ * instruction file that reaches the model because the scan that should have
+ * seen it was built from the other list.
+ *
+ * Shapes:
+ *   - `dir-file` — `name`, in any directory (`packages/foo/CLAUDE.md`).
+ *   - `claude-md` — top-level markdown directly under a `.claude/` directory.
+ *   - `claude-subdir` — `.claude/<name>/` and everything markdown below it.
+ *
+ * `.claude/` is also where tooling parks bulk data that never loads as context —
+ * `worktrees/` (entire repo checkouts), caches, transcripts, snapshots — so the
+ * `claude-subdir` rows are a WHITELIST: an unlisted context directory costs a
+ * scan nobody paid for anyway, while an unlisted BULK directory costs every
+ * future session its startup (thousands of files read, 30 seconds of it).
  */
-export const CLAUDE_MEMORY_FILES = Object.freeze([
-  "CLAUDE.md",
-  "CLAUDE.local.md",
+export const CLAUDE_CONTEXT_KINDS = Object.freeze([
+  kind("dir-file", "CLAUDE.md", { ancestorChain: true, eventNamed: true }),
+  kind("dir-file", "CLAUDE.local.md", {
+    ancestorChain: true,
+    eventNamed: true,
+  }),
+  // AGENTS.md is the cross-agent convention Claude Code does not read itself,
+  // kept because this package guards agents generally. Off the ancestor chain
+  // for the same reason: that load is Claude Code's rule.
+  kind("dir-file", "AGENTS.md"),
+  kind("claude-md", ".claude/*.md"),
+  kind("claude-subdir", "agents"),
+  kind("claude-subdir", "commands"),
+  kind("claude-subdir", "output-styles"),
+  kind("claude-subdir", "rules", { eventNamed: true }),
+  kind("claude-subdir", "skills"),
 ]);
 
+/** The rows of one shape, in table order. @param {string} shape */
+function kindsOfShape(shape) {
+  return CLAUDE_CONTEXT_KINDS.filter((row) => row.shape === shape);
+}
+
+// The names of `rows`, frozen: what a caller that wants one shape's spelling —
+// a glob builder, the parent-chain walk — reads off the table.
+/** @param {readonly {name: string}[]} rows @returns {readonly string[]} */
+function namesOf(rows) {
+  return Object.freeze(rows.map((row) => row.name));
+}
+
+/** The `.claude/` subdirectories whose markdown loads as model context. */
+export const CLAUDE_CONTEXT_SUBDIRS = namesOf(kindsOfShape("claude-subdir"));
+
 /**
- * Every per-directory instruction file: Claude Code's memory files plus
- * `AGENTS.md`, the cross-agent convention Claude Code does not read itself, kept
- * because this package guards agents generally and the file is loaded as
- * instructions by the ones that do.
+ * Claude Code's own per-directory memory files: the kinds it loads from every
+ * directory above a scan root as well as from the root itself.
  */
-export const CLAUDE_DIR_INSTRUCTION_FILES = Object.freeze([
-  ...CLAUDE_MEMORY_FILES,
-  "AGENTS.md",
-]);
+export const CLAUDE_MEMORY_FILES = namesOf(
+  CLAUDE_CONTEXT_KINDS.filter((row) => row.ancestorChain),
+);
+
+/** Every per-directory instruction file, memory files and `AGENTS.md` alike. */
+export const CLAUDE_DIR_INSTRUCTION_FILES = namesOf(kindsOfShape("dir-file"));
 
 // The glob patterns for one `.claude` tree at `prefix` (empty for the scan root,
-// a doubled-star segment for nested ones): its top-level markdown, plus the
-// whitelisted context subdirectories. Built once, from the one list above.
+// a doubled-star segment for nested ones), built from the table's rows.
 /** @param {string} prefix @returns {string[]} */
 function claudeDirPatterns(prefix) {
   return [
@@ -103,12 +112,10 @@ function claudeDirPatterns(prefix) {
 }
 
 /**
- * Every glob whose matches Claude Code loads as model context ANYWHERE in a
- * tree: the per-directory instruction files (CLAUDE.md, CLAUDE.local.md,
- * AGENTS.md) and the whitelisted `.claude/` markdown. Claude Code loads these on
- * entry to their containing directory — a load path that bypasses the PostToolUse
- * sanitizer — so a payload planted in e.g. `packages/foo/CLAUDE.md` reaches the
- * model uncleaned unless something scans it.
+ * Every glob whose matches an agent loads as model context ANYWHERE in a tree.
+ * Claude Code loads these on entry to their containing directory — a load path
+ * that bypasses the PostToolUse sanitizer — so a payload planted in e.g.
+ * `packages/foo/CLAUDE.md` reaches the model uncleaned unless something scans it.
  *
  * This is the WHOLE-TREE scope, for a caller scanning a project on demand (the
  * CLI, the Python port). It is not what a SessionStart hook walks — see
@@ -130,10 +137,8 @@ export const CLAUDE_INSTRUCTION_GLOBS = Object.freeze([
 ]);
 
 /**
- * Every glob whose matches Claude Code loads AT LAUNCH from the scan root
- * itself: the root's own instruction files and its `.claude` context tree. Same
- * patterns as {@link CLAUDE_INSTRUCTION_GLOBS} without the doubled-star root, built
- * from the same two lists so the pair cannot drift.
+ * Every glob whose matches load AT LAUNCH from the scan root itself: the root's
+ * own instruction files and its `.claude` context tree.
  *
  * Deliberately NOT recursive. A subdirectory's `CLAUDE.md` is loaded when Claude
  * Code reads a file in that subdirectory, not at launch, so globbing for it at
@@ -152,12 +157,9 @@ export const CLAUDE_LAUNCH_GLOBS = Object.freeze([
 
 /**
  * The instruction files Claude Code loads from the directories ABOVE `dir`:
- * walking up to the filesystem root, `CLAUDE.md` and `CLAUDE.local.md` in each
- * parent are loaded IN FULL at launch, so a payload planted in a parent
- * directory reaches the model exactly like one in the project's own file.
- *
- * `AGENTS.md` is absent by design: the parent-chain load is Claude Code's rule,
- * and Claude Code does not read `AGENTS.md`.
+ * walking up to the filesystem root, every `ancestorChain` kind in each parent
+ * is loaded IN FULL at launch, so a payload planted in a parent directory
+ * reaches the model exactly like one in the project's own file.
  *
  * Returns CANDIDATES — absolute paths, existing or not, because this module
  * touches no filesystem. Most parents of any directory hold neither file, so a
@@ -215,6 +217,22 @@ export function excludeNodeModules(entry) {
   return entry === "node_modules";
 }
 
+// The path segments below one `.claude` directory in `path`, or null when it
+// names none. Which one differs by question, and both callers need their own:
+// pruning asks whether the path is inside a bulk directory of the tree being
+// walked, so it takes the OUTERMOST (a `worktrees/` checkout carries a whole
+// `.claude` of its own, and the prune has to keep applying below it); naming a
+// kind asks what the file IS, so it takes the INNERMOST tree it belongs to.
+/** @param {string} path @param {"outermost" | "innermost"} which */
+function claudeTail(path, which) {
+  const parts = path.split(/[/\\]/);
+  const claudeIndex =
+    which === "outermost"
+      ? parts.indexOf(".claude")
+      : parts.lastIndexOf(".claude");
+  return claudeIndex === -1 ? null : parts.slice(claudeIndex + 1);
+}
+
 /**
  * Entries a context scan must not descend into or return: `node_modules`, and
  * every child of a `.claude` directory that is not whitelisted context.
@@ -235,12 +253,70 @@ export function excludeNodeModules(entry) {
  */
 export function excludeFromContextScan(entry) {
   if (excludeNodeModules(entry)) return true;
-  const parts = entry.split(/[/\\]/);
-  const claudeIndex = parts.indexOf(".claude");
-  const tail = parts.slice(claudeIndex + 1);
-  if (claudeIndex === -1 || tail.length === 0) return false;
+  const tail = claudeTail(entry, "outermost");
+  if (tail === null || tail.length === 0) return false;
   // `.claude/<file>.md` is context (a top-level note); anything else directly
   // under `.claude` must be a whitelisted subdirectory to be walked at all.
   if (tail.length === 1 && tail[0].endsWith(".md")) return false;
   return !CLAUDE_CONTEXT_SUBDIRS.includes(tail[0]);
+}
+
+/**
+ * The context kind `path` is an instance of, or null when this table claims none
+ * — an `@import` of an arbitrary markdown file, a source file, a bulk `.claude`
+ * entry. Null is the honest answer for anything the table does not name, and
+ * callers must treat it as "no claim", never as "not context".
+ * @param {string} path  absolute or relative; only its segments are read
+ * @returns {(typeof CLAUDE_CONTEXT_KINDS)[number] | null}
+ */
+function classifyContextPath(path) {
+  const segments = path.split(/[/\\]/);
+  const name = segments[segments.length - 1];
+  // A CLAUDE.md is that kind wherever it sits, `.claude` tree or not — which is
+  // what keeps the ordinary nested-memory load from reading as evidence about
+  // the directory it happens to sit under.
+  const dirFile = kindsOfShape("dir-file").find((kind) => kind.name === name);
+  const tail = claudeTail(path, "innermost");
+  if (dirFile || tail === null) return dirFile ?? null;
+  if (tail.length === 1 && name.endsWith(".md"))
+    return kindsOfShape("claude-md")[0];
+  return (
+    kindsOfShape("claude-subdir").find((kind) => kind.name === tail[0]) ?? null
+  );
+}
+
+/**
+ * What a file the host just loaded as model context says about this table, or
+ * null when it says nothing new. The InstructionsLoaded event is the only
+ * observation that can prove the table wrong, and this is what it proves:
+ *
+ *   - a `.claude/` subdirectory outside {@link CLAUDE_CONTEXT_SUBDIRS} loading
+ *     as context means the launch scan skips that whole directory — the file
+ *     here was scanned, every other file in it was not;
+ *   - a kind the table marks `eventNamed: false` being named means the event's
+ *     coverage is wider than the docs claim, and the lazy scan reaches files
+ *     nothing was crediting it with.
+ *
+ * Only a positive observation reports. A path the table does not name at all
+ * (an `@import` of arbitrary markdown) says nothing about the table, so it
+ * returns null rather than guessing — the event names files it does not own.
+ * @param {string} path  the path the host loaded
+ * @returns {string | null} what is stale, phrased for whoever fixes the table
+ */
+export function contextScopeContradiction(path) {
+  const kind = classifyContextPath(path);
+  if (kind?.eventNamed) return null;
+  if (kind !== null)
+    return (
+      `InstructionsLoaded named ${kind.name}, which CLAUDE_CONTEXT_KINDS records as a kind the ` +
+      "event never names: the lazy scan reaches further than this table, and the docs built " +
+      "on it, claim"
+    );
+  const tail = claudeTail(path, "innermost");
+  if (tail === null || tail.length < 2) return null;
+  return (
+    `.claude/${tail[0]}/ loaded as model context, and CLAUDE_CONTEXT_SUBDIRS does not list it: ` +
+    "the SessionStart scan prunes that directory, so every OTHER file in it goes unscanned. " +
+    "Add it there if it is context, not bulk data"
+  );
 }

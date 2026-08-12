@@ -2,17 +2,14 @@
  * InstructionsLoaded: scan an instruction file for hidden-Unicode injection at
  * the moment Claude Code loads it into context.
  *
- * This is the lazy half of the instruction-file scan. Claude Code loads a
- * subdirectory's CLAUDE.md (and a path-scoped rule, an `@import`, a
- * post-compaction reload) only when it needs it, and this event names the file
- * it just loaded — so the scan costs one read and one `scanText` on exactly the
- * file that entered context, with no glob and no walk. The SessionStart scan
- * covers what loads at launch from the project root and its parents; the
- * `CLAUDE.md` family and `.claude/rules` markdown below it arrive here, the
- * user-global `~/.claude` memory and rules among them — a second root that
- * would otherwise need its own walk at every startup. The event fires only
- * for those kinds, so a nested `AGENTS.md` or `.claude/` skill reaches no
- * hook; THREAT-MODEL.md's *Instruction-file scanning* names what covers them.
+ * This is the lazy half of the instruction-file scan: the event names the file
+ * it just loaded, so the scan costs one read and one `scanText` on exactly the
+ * file that entered context, with no glob and no walk. SessionStart covers what
+ * loads at launch from the project root and its parents; the kinds
+ * `src/claude-context.mjs` marks `eventNamed` arrive here, the user-global
+ * `~/.claude` memory and rules among them — a second root that would otherwise
+ * need its own walk at every startup. Naming a file is also the only way the
+ * host can prove that table wrong, which is what {@link scopeNotice} reports.
  *
  * The event CANNOT block: its exit code is ignored and the bytes are already in
  * context by the time it fires. What it can do is exactly what SessionStart does
@@ -42,7 +39,10 @@ import {
 import { bestEffortTrace, trace, TraceEvent } from "./lib/trace.mjs";
 import { reportSlowHook, startHookTimer } from "./lib/hook-timing.mjs";
 import { formatReport } from "./lib/invisible-report.mjs";
-import { isInsideDir } from "../src/claude-context.mjs";
+import {
+  contextScopeContradiction,
+  isInsideDir,
+} from "../src/claude-context.mjs";
 
 // The instruction-scanner SSOT, bound via lazyImport (see its doc for the
 // fail-OPEN hazard of a bare static npm import — here a loaded instruction file
@@ -176,6 +176,24 @@ export function scanLoadedFile(
 }
 
 /**
+ * The operator-facing line for a file whose path contradicts the scope table, or
+ * null when it does not. This hook is where that check belongs and the only
+ * place it can run: the host naming a file as it loads is the one observation
+ * that can prove the SessionStart scan's scope wrong, and a scope that is wrong
+ * about a `.claude/` subdirectory is a launch scan with a hole in it.
+ *
+ * Separate from the finding channels below: this is a maintenance signal about
+ * THIS package, not a verdict about the file, so it never reaches the model and
+ * never arms the tool-call gate.
+ * @param {string} filePath
+ * @returns {string | null}
+ */
+export function scopeNotice(filePath) {
+  const stale = contextScopeContradiction(filePath);
+  return stale && `${HOOK_NAME} scope notice: ${stale}.`;
+}
+
+/**
  * The operator- and model-facing text for a scanned file. Both channels carry
  * it: the bytes are already in context, so the model is told to distrust what it
  * just read, and the user is told what changed on disk.
@@ -221,6 +239,10 @@ export async function cliMain({ trace: sink = trace } = {}) {
     // before the payload's OWN fields are validated for the same reason.
     recordInstructionsLoaded(payload?.session_id);
     const loaded = readLoadedFile(payload);
+    // Before the scan: a file this hook cannot read still told us where the host
+    // loads context from, and that is the half the scope table needs.
+    const notice = scopeNotice(loaded.filePath);
+    if (notice) process.stderr.write(notice + "\n");
     const result = scanLoadedFile(loaded.filePath);
     if (result === null) {
       emitTrace(TraceEvent.SCAN_LOADED_INSTRUCTIONS_RAN, {

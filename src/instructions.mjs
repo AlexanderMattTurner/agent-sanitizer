@@ -51,11 +51,13 @@ import { excludeNodeModules } from "./claude-context.mjs";
 // reads that scope from instead of re-spelling it.
 export {
   ancestorInstructionFiles,
+  CLAUDE_CONTEXT_KINDS,
   CLAUDE_CONTEXT_SUBDIRS,
   CLAUDE_DIR_INSTRUCTION_FILES,
   CLAUDE_INSTRUCTION_GLOBS,
   CLAUDE_LAUNCH_GLOBS,
   CLAUDE_MEMORY_FILES,
+  contextScopeContradiction,
   excludeFromContextScan,
 } from "./claude-context.mjs";
 

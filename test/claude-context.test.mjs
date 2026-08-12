@@ -20,8 +20,10 @@ import { tmpdir } from "node:os";
 import { dirname, join, sep } from "node:path";
 
 import {
+  CLAUDE_CONTEXT_KINDS,
   CLAUDE_CONTEXT_SUBDIRS,
   CLAUDE_INSTRUCTION_GLOBS,
+  contextScopeContradiction,
   excludeFromContextScan,
   findInstructionFiles,
 } from "../src/instructions.mjs";
@@ -141,5 +143,109 @@ describe("the exported Claude Code context scope", () => {
         CLAUDE_INSTRUCTION_GLOBS.includes(`**/.claude/${sub}/**/*.md`),
         `no glob for ${sub}`,
       );
+  });
+});
+
+describe("what a loaded path says about the scope table", () => {
+  // The InstructionsLoaded event is the only channel that can prove the table
+  // wrong, and a notice that fires on ordinary loads is a notice nobody reads.
+  // So each reporting case below is paired with the nearest path that must stay
+  // silent, and the silent set carries every kind the event is known to name.
+  const SILENT = [
+    ["the project's own memory file", join(sep, "p", "CLAUDE.md")],
+    ["a nested memory file", join(sep, "p", "packages", "foo", "CLAUDE.md")],
+    ["a local memory file", join(sep, "p", "CLAUDE.local.md")],
+    ["the user-global memory file", join(sep, "u", ".claude", "CLAUDE.md")],
+    ["a project rule", join(sep, "p", ".claude", "rules", "style.md")],
+    ["a nested rule", join(sep, "p", ".claude", "rules", "deep", "x.md")],
+    ["a user-global rule", join(sep, "u", ".claude", "rules", "x.md")],
+    // An `@import` names a file of the user's choosing. The table claims
+    // nothing about it, and guessing would report on every session that uses
+    // one — the fail-open that keeps this notice worth reading.
+    ["an @import of arbitrary markdown", join(sep, "p", "docs", "style.md")],
+    ["a source file", join(sep, "p", "src", "main.js")],
+    // A memory file inside a pruned directory is still a memory file: judging
+    // it by the directory would report `worktrees/` as newly-loading context.
+    [
+      "a memory file inside a worktree checkout",
+      join(sep, "p", ".claude", "worktrees", "wt", "CLAUDE.md"),
+    ],
+  ];
+
+  for (const [label, path] of SILENT)
+    it(`says nothing about ${label}`, () => {
+      assert.equal(contextScopeContradiction(path), null);
+    });
+
+  it("reports a `.claude/` subdirectory the whitelist does not carry", () => {
+    // The drift that matters: context loading out of a directory the launch
+    // scan prunes, so every OTHER file in it is unscanned at session start.
+    const notice = contextScopeContradiction(
+      join(sep, "p", ".claude", "policies", "house.md"),
+    );
+    assert.match(notice, /\.claude\/policies\//u);
+    assert.match(notice, /CLAUDE_CONTEXT_SUBDIRS/u);
+  });
+
+  for (const [label, path, named] of [
+    [
+      "a nested AGENTS.md",
+      join(sep, "p", "packages", "foo", "AGENTS.md"),
+      "AGENTS.md",
+    ],
+    ["a skill", join(sep, "p", ".claude", "skills", "s", "SKILL.md"), "skills"],
+    [
+      "a loose .claude note",
+      join(sep, "p", ".claude", "notes.md"),
+      ".claude/*.md",
+    ],
+  ])
+    it(`reports ${label}, a kind the table marks event-blind`, () => {
+      // Not a hole — the lazy scan just covered it — but the table and the docs
+      // built on it now understate what the event reaches.
+      const notice = contextScopeContradiction(path);
+      assert.match(notice, /InstructionsLoaded named/u);
+      assert.ok(notice.includes(named), `${notice} does not name ${named}`);
+    });
+
+  it("judges a directory-scoped skill by its own `.claude`, not the tree above it", () => {
+    // Innermost wins for naming a kind: this file IS a skill, whatever pruned
+    // directory it sits under, and reporting it as a `worktrees` finding would
+    // send the reader to add bulk data to the whitelist.
+    const skill = join(
+      sep,
+      "p",
+      ".claude",
+      "worktrees",
+      "wt",
+      ".claude",
+      "skills",
+      "s",
+      "SKILL.md",
+    );
+    assert.match(contextScopeContradiction(skill), /named skills/u);
+    // Pruning still reads the OUTERMOST tree, or the walk it exists for stops
+    // applying one level down.
+    assert.equal(
+      excludeFromContextScan(".claude/worktrees/wt/.claude/skills"),
+      true,
+    );
+  });
+
+  it("answers for every kind the table carries, and says so by name", () => {
+    // Drives the table itself, so a row added without a decision about the
+    // event cannot slip in unexercised: each row is silent exactly when it is
+    // credited to the event, and names itself when it is not.
+    for (const row of CLAUDE_CONTEXT_KINDS) {
+      const path =
+        row.shape === "dir-file"
+          ? join(sep, "p", row.name)
+          : row.shape === "claude-md"
+            ? join(sep, "p", ".claude", "note.md")
+            : join(sep, "p", ".claude", row.name, "f.md");
+      const notice = contextScopeContradiction(path);
+      assert.equal(notice === null, row.eventNamed, `${path}: ${notice}`);
+      if (notice) assert.ok(notice.includes(row.name), notice);
+    }
   });
 });
