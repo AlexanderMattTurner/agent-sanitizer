@@ -18,6 +18,7 @@ import {
   mkdtempSync,
   readFileSync,
   rmSync,
+  symlinkSync,
   utimesSync,
   writeFileSync,
 } from "node:fs";
@@ -164,6 +165,33 @@ describe("a loaded file inside the project is cleaned on disk", () => {
       () => scanLoadedFile(join(projectDir, "no-such-CLAUDE.md")),
       /ENOENT/u,
     );
+  });
+
+  it("reports a symlinked instruction file rather than rewriting through it", () => {
+    // The read follows links and the clean refuses them, and that split is the
+    // behavior: an in-project path pointed at a contaminated file elsewhere is
+    // SCANNED (the bytes did reach the model) but never rewritten (the target
+    // belongs to someone else). Pinned because a later realpath or
+    // follow-refusing open in the read would move it with nothing to notice.
+    const outside = mkdtempSync(join(tmpdir(), "sanitizer-loaded-link-"));
+    const target = join(outside, "target.md");
+    const content = `${PROSE}hidden:${PAYLOAD}\n`;
+    writeFileSync(target, content);
+    const linkPath = join(projectDir, "linked-CLAUDE.md");
+    rmSync(linkPath, { force: true });
+    symlinkSync(target, linkPath);
+
+    const result = scanLoadedFile(linkPath);
+    assert.match(result.report, /INVISIBLE CHARACTER INJECTION DETECTED/u);
+    assert.equal(result.cleaned, false);
+    assert.match(result.reason, /symlink/u);
+    assert.equal(
+      readFileSync(target, "utf8"),
+      content,
+      "the symlink's target was rewritten",
+    );
+    rmSync(outside, { recursive: true, force: true });
+    rmSync(linkPath, { force: true });
   });
 
   it("reports NOT cleaned when the stripper leaves the bytes in place", () => {

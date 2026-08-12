@@ -167,15 +167,12 @@ export function scanLoadedFile(
       cleaned: false,
       reason: "the file changed between the load and the clean",
     };
-    /* c8 ignore start -- only fires on a file cleanFile refuses (symlink,
-       non-UTF-8, concurrent write) or cannot rewrite */
   } catch (err) {
     // A TypeError is an unbound lazy import — a bug in THIS hook — and must not
     // be laundered into "this file resisted cleaning".
     if (err instanceof TypeError) throw err;
     return { report, cleaned: false, reason: safeErrMessage(err) };
   }
-  /* c8 ignore stop */
 }
 
 /**
