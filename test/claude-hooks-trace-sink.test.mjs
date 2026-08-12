@@ -38,6 +38,8 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+import { withCapturedStdout } from "./helpers/capture-stdout.mjs";
+
 // An empty project dir: the SessionStart scanner walks CLAUDE_PROJECT_DIR and
 // REWRITES contaminated instruction files, so pointing it at this repo would let
 // the test edit the tree. Set before the hook imports — invisible-alert.mjs
@@ -79,25 +81,20 @@ function packageChannel(path) {
 }
 
 /**
- * Run `fn` with `payload` as the process's stdin and stdout swallowed — the
- * stdin hooks read the real streams, and their rendered response would otherwise
- * be interleaved into this runner's TAP output.
+ * Run `fn` with `payload` as the process's stdin — the stdin hooks read the real
+ * stream. Stdout is `quietly`'s job, for every hook alike.
  * @param {unknown} payload
  * @param {() => Promise<void>} fn
  */
-async function withStdio(payload, fn) {
+async function withStdin(payload, fn) {
   const stdin = Object.getOwnPropertyDescriptor(process, "stdin");
-  const stdout = process.stdout.write;
   Object.defineProperty(process, "stdin", {
     value: Readable.from([Buffer.from(JSON.stringify(payload))]),
     configurable: true,
   });
-  // @ts-expect-error -- narrower than the overloaded write signature.
-  process.stdout.write = () => true;
   try {
     await fn();
   } finally {
-    process.stdout.write = stdout;
     if (stdin) Object.defineProperty(process, "stdin", stdin);
   }
 }
@@ -116,7 +113,7 @@ const HOOKS = [
     name: "pretooluse-sanitize",
     event: TraceEvent.HOOK_RAN,
     run: (sink) =>
-      withStdio(
+      withStdin(
         {
           hook_event_name: "PreToolUse",
           tool_name: "Bash",
@@ -130,7 +127,7 @@ const HOOKS = [
     name: "sanitize-output",
     event: TraceEvent.HOOK_RAN,
     run: (sink) =>
-      withStdio(
+      withStdin(
         {
           hook_event_name: "PostToolUse",
           tool_name: "Bash",
@@ -167,7 +164,7 @@ const HOOKS = [
     name: "scan-loaded-instructions",
     event: TraceEvent.SCAN_LOADED_INSTRUCTIONS_RAN,
     run: (sink) =>
-      withStdio(
+      withStdin(
         {
           hook_event_name: "InstructionsLoaded",
           file_path: join(projectDir, "packages", "foo", "CLAUDE.md"),
@@ -180,11 +177,18 @@ const HOOKS = [
   },
 ];
 
+// Every hook run goes through here, so a new HOOKS entry cannot arrive with its
+// stdout unguarded: a hook writes its response envelope to stdout, which under
+// `--test-reporter=tap` is the stream this suite's own result is parsed from.
+/** @param {(sink?: import("../claude-hooks/lib/trace.mjs").TraceFn) => Promise<void>} run
+ *  @param {import("../claude-hooks/lib/trace.mjs").TraceFn} [sink] */
+const quietly = (run, sink) => withCapturedStdout(() => run(sink));
+
 for (const hook of HOOKS) {
   describe(hook.name, () => {
     it("announces on the package channel when no sink is supplied", async () => {
       const file = freshTraceFile();
-      await hook.run();
+      await quietly(hook.run);
       const events = packageChannel(file);
       assert.equal(events.length, 1);
       assert.equal(events[0].event, hook.event);
@@ -194,7 +198,7 @@ for (const hook of HOOKS) {
       const file = freshTraceFile();
       /** @type {Array<[string, Record<string, unknown> | undefined]>} */
       const host = [];
-      await hook.run((event, fields) => host.push([event, fields]));
+      await quietly(hook.run, (event, fields) => host.push([event, fields]));
       // The host sees the same event name the default emits, so a detector can
       // key on TraceEvent rather than on this package's file format.
       assert.deepEqual(
@@ -210,7 +214,7 @@ for (const hook of HOOKS) {
       // were placed under one — see bestEffortTrace, which is what makes this
       // hold. scan-invisible-chars gets the assertion with teeth below.
       await assert.doesNotReject(() =>
-        hook.run(() => {
+        quietly(hook.run, () => {
           throw new Error("host channel down");
         }),
       );
@@ -238,11 +242,12 @@ describe("scan-invisible-chars with a throwing sink", () => {
     // @ts-expect-error -- narrower than the overloaded write signature.
     process.stderr.write = () => true;
     try {
-      await scanInvisible.cliMain({
-        trace: () => {
+      await quietly(
+        (sink) => scanInvisible.cliMain({ trace: sink }),
+        () => {
           throw new Error("host channel down");
         },
-      });
+      );
     } finally {
       process.stderr.write = stderr;
     }

@@ -30,6 +30,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { withCapturedStdout } from "./helpers/capture-stdout.mjs";
+
 const hooksDir = fileURLToPath(new URL("../claude-hooks", import.meta.url));
 
 // Set before the hooks import: scan-invisible-chars walks CLAUDE_PROJECT_DIR
@@ -184,10 +186,14 @@ async function runScanUnder(env, opts = {}) {
   };
   const announced = [];
   try {
-    await scanInvisible.cliMain({
-      trace: (event, fields) => announced.push({ event, ...fields }),
-      ...opts,
-    });
+    // The hook's stdout envelope must not reach the real stream: under
+    // `--test-reporter=tap` that stream carries this suite's own result.
+    await withCapturedStdout(() =>
+      scanInvisible.cliMain({
+        trace: (event, fields) => announced.push({ event, ...fields }),
+        ...opts,
+      }),
+    );
   } finally {
     process.stderr.write = realWrite;
     process.exitCode = realExitCode;

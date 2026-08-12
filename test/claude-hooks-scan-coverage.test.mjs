@@ -27,6 +27,8 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+import { withCapturedStdout } from "./helpers/capture-stdout.mjs";
+
 // Set before the hook imports: the scanner walks CLAUDE_PROJECT_DIR and
 // REWRITES the contaminated instruction files it finds, so pointing it at this
 // repo would let the test edit the tree.
@@ -63,6 +65,12 @@ function dangling(dir, name) {
 function unreadable(dir, name) {
   mkdirSync(join(dir, name));
 }
+
+// Every scan run goes through here rather than calling cliMain directly: the
+// hook's stdout envelope must not reach the real stream, which under
+// `--test-reporter=tap` carries this suite's own result.
+/** @param {Parameters<typeof cliMain>[0]} [opts] */
+const runScan = (opts) => withCapturedStdout(() => cliMain(opts));
 
 /** The trace lines a run emitted, in order. */
 function collector() {
@@ -140,7 +148,7 @@ describe("a target that resolves to nothing is not a coverage gap", () => {
     assert.equal(scanned, targets.length - 1);
 
     const { lines, sink } = collector();
-    await cliMain({ trace: sink });
+    await runScan({ trace: sink });
     const announced = lines.filter(
       (l) => l.event === "scan_invisible_chars_ran",
     );
@@ -169,7 +177,7 @@ describe("a scan that could not read a target never announces clean", () => {
 
   it("announces partial, names the skipped files, and arms the gate", async () => {
     const { lines, sink } = collector();
-    await cliMain({ trace: sink });
+    await runScan({ trace: sink });
 
     const announced = lines.filter(
       (l) => l.event === "scan_invisible_chars_ran",
@@ -206,7 +214,7 @@ describe("a fully readable project still announces clean", () => {
 
   it("announces clean and does not arm the gate", async () => {
     const { lines, sink } = collector();
-    await cliMain({ trace: sink });
+    await runScan({ trace: sink });
 
     assert.deepEqual(
       lines
@@ -247,7 +255,7 @@ describe("a contaminated project is cleaned on disk and reported", () => {
 
   it("announces found, strips the payload, and leaves the prose", async () => {
     const { lines, sink } = collector();
-    await cliMain({ trace: sink });
+    await runScan({ trace: sink });
 
     const announced = lines.filter(
       (l) => l.event === "scan_invisible_chars_ran",
@@ -284,7 +292,7 @@ describe("a contaminated project is cleaned on disk and reported", () => {
     writeFileSync(join(projectDir, "AGENTS.md"), clean);
     rmSync(ALERT_FILE, { force: true });
     const { sink } = collector();
-    await cliMain({
+    await runScan({
       trace: sink,
       scan: () => ({
         targets: [join(projectDir, "AGENTS.md")],
@@ -328,7 +336,7 @@ describe("a contaminated project is cleaned on disk and reported", () => {
     rmSync(ALERT_FILE, { force: true });
 
     const { sink } = collector();
-    await cliMain({
+    await runScan({
       trace: sink,
       scan: () => ({
         targets: [above],
