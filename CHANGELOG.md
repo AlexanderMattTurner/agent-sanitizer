@@ -8,6 +8,26 @@ adhere to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+## [2.37.2] - 2026-08-12
+
+### Fixed
+
+- Context loading now correctly treats todos as storage items and judges nesting by the outermost tree structure.
+- Event-blind report generation is now gated on a host-chosen load reason, preventing spurious reports in certain scenarios.
+- Unlisted .claude directory reports are now only generated for host-chosen loads, not bulk context loads.
+- Bulk .claude directory loads remain silent to reduce noise when loading as context.
+
+### Changed
+
+- Context scope handling has been refactored to derive from a single declarative kind table, improving maintainability.
+- The InstructionsLoaded scan coverage is now bounded to only the kinds it fires for, making behavior more predictable.
+- Documentation updated to clarify that the kind table carries non-context storage rows in addition to context rows.
+- The loaded-instructions docstring in claude-hooks has been trimmed to comply with the 20-line cap.
+
+### Added
+
+- Auto-resolve regen rules added for both uv lockfiles.
+
 ## [2.37.1] - 2026-08-12
 
 ### Changed
