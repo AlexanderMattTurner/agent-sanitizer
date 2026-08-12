@@ -2,14 +2,18 @@
 
 ``textstrip.strip_untrusted`` is a pure-Python port of ``src/invisible.mjs``'s
 ``applyLayer1`` (ANSI + invisible-char removal) for no-Node contexts. These
-assert the two load-bearing properties directly rather than trusting the port to
+assert the load-bearing properties directly rather than trusting the port to
 match the JS by inspection:
 
 * it deletes EVERY code point in the pinned cross-language charset (so it cannot
   under-strip relative to the JS layer regardless of this interpreter's Unicode
-  version — the ``Cf`` version-drift regression), and
+  version — the ``Cf`` version-drift regression);
 * over the shared golden corpus it never leaves a payload char that the recorded
-  JS output removed.
+  JS output removed, and where a case is comparable at all it matches the
+  recording BYTE FOR BYTE — the only place the two regex ENGINES are checked
+  against each other on the one pattern they now share; and
+* the escape grammar it compiles is usable as a shipped artifact: plain ``re``,
+  no flags, no groups, and linear on a repartitioning run.
 """
 
 import json

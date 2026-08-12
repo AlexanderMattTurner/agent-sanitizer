@@ -3075,9 +3075,9 @@ var init_ansi = __esm({
       27,
       ...Array.from({ length: 159 - 128 + 1 }, (_, i) => 128 + i)
     ]);
-    CONTROL_INTRODUCER_SOURCE = `[${CONTROL_INTRODUCER_CODEPOINTS.map(
-      (cp) => unicodeEscape(cp)
-    ).join("")}]`;
+    CONTROL_INTRODUCER_SOURCE = charClass(
+      CONTROL_INTRODUCER_CODEPOINTS
+    );
     SGR_SOURCE = "(?:\\u001b\\[|\\u009b)[0-9;:]*m";
     SGR_RE = new RegExp(SGR_SOURCE, "g");
     SGR_ANCHORED_RE = new RegExp(`^${SGR_SOURCE}$`);

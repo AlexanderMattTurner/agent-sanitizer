@@ -43,9 +43,9 @@ export const CONTROL_INTRODUCER_CODEPOINTS = Object.freeze([
 // grep-based drift check as well. Derived from the code-point list above so the
 // regex and the exported data cannot disagree; `\uXXXX` escapes keep every raw
 // control byte out of the source (no `no-control-regex` disable needed).
-export const CONTROL_INTRODUCER_SOURCE = `[${CONTROL_INTRODUCER_CODEPOINTS.map(
-  (cp) => unicodeEscape(cp),
-).join("")}]`;
+export const CONTROL_INTRODUCER_SOURCE = charClass(
+  CONTROL_INTRODUCER_CODEPOINTS,
+);
 
 /** A code point as a `\uXXXX` escape — the one spelling of a control byte that
  * both this module's regexes and the generated Python pattern use, so no raw
