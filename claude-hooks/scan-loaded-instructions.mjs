@@ -4,9 +4,9 @@
  *
  * This is the lazy half of the instruction-file scan. Claude Code loads a
  * subdirectory's CLAUDE.md (and a path-scoped rule, an `@import`, a
- * post-compaction reload) only when it needs it, and this event fires with the
- * loaded bytes in hand — so the scan costs one `scanText` over text already read
- * for us, with no glob, no walk, and no second read. The SessionStart scan
+ * post-compaction reload) only when it needs it, and this event names the file
+ * it just loaded — so the scan costs one read and one `scanText` on exactly the
+ * file that entered context, with no glob and no walk. The SessionStart scan
  * covers what loads at launch from the project root and its parents; everything
  * else arrives here, including the user-global `~/.claude` memory and rules that
  * load into every session on the machine — a second root that would otherwise
@@ -20,6 +20,7 @@
  * reload re-reads it, say so where the user and the model both see it, and arm
  * the PreToolUse gate when the strip did not happen.
  */
+import { readFileSync } from "node:fs";
 import {
   emitHookResponse,
   HookEvent,
@@ -53,6 +54,18 @@ const { scanText, cleanFile } =
   );
 
 const HOOK_NAME = "scan-loaded-instructions";
+
+/**
+ * Read an instruction file for scanning, the same way the SessionStart scan
+ * reads its targets. Cleaning is where the symlink and UTF-8 guards live
+ * (`cleanFile` opens `O_NOFOLLOW`), so a path this read resolves but that one
+ * refuses becomes a reported finding the operator sees, never a silent rewrite.
+ * @param {string} filePath
+ * @returns {string}
+ */
+function readInstructions(filePath) {
+  return readFileSync(filePath, "utf-8");
+}
 
 /**
  * The stderr line both posture arms share: what broke, and what it cost.
@@ -89,32 +102,23 @@ registerFaultPolicy(HOOK_NAME, {
 });
 
 /**
- * The payload fields this hook reads, validated. A payload missing either is
- * harness-contract drift, not a clean file: reporting "no findings" for bytes we
- * never saw is the one answer that must never be reachable, so this throws into
- * the declared fault posture instead.
+ * The payload fields this hook reads, validated. A payload with no `file_path`
+ * is harness-contract drift, not a clean file: reporting "no findings" for a
+ * file we never identified is the one answer that must never be reachable, so
+ * this throws into the declared fault posture instead.
  * @param {unknown} payload
- * @returns {{ filePath: string, content: string, loadReason: string }}
+ * @returns {{ filePath: string, loadReason: string }}
  */
 export function readLoadedFile(payload) {
-  const {
-    file_path: filePath,
-    file_content: content,
-    load_reason: loadReason,
-  } = /** @type {Record<string, unknown>} */ (payload ?? {});
+  const { file_path: filePath, load_reason: loadReason } =
+    /** @type {Record<string, unknown>} */ (payload ?? {});
   if (typeof filePath !== "string" || filePath === "")
     throw new Error(
       "InstructionsLoaded payload carries no file_path; cannot scan or report " +
         "the instruction file that was loaded",
     );
-  if (typeof content !== "string")
-    throw new Error(
-      `InstructionsLoaded payload for ${JSON.stringify(filePath)} carries no ` +
-        "file_content; the loaded bytes are not available to scan",
-    );
   return {
     filePath,
-    content,
     // Metadata for the trace channel only, so an unknown/absent reason is a
     // label, never a reason to skip the scan.
     loadReason: typeof loadReason === "string" ? loadReason : "unknown",
@@ -123,23 +127,28 @@ export function readLoadedFile(payload) {
 
 /**
  * Scan one loaded instruction file. Returns the report and what to do with it:
- * `cleaned` says the payload is gone from disk, `alert` carries the text that
- * must arm the PreToolUse gate (empty when the clean succeeded).
+ * `cleaned` says the payload is gone from disk, and `reason` says why it is not
+ * when it is not — which is what routes the file to the PreToolUse gate.
  *
- * The scan runs on the payload's bytes, never a re-read of the path: those are
- * the bytes that reached the model, and a file rewritten between the load and
- * this hook would otherwise be scanned in a state the model never saw.
- * @param {{ filePath: string, content: string }} loaded
- * @param {{ projectDir?: string, clean?: typeof cleanFile }} [opts]  injectable
- *   for tests; the default cleans through the SSOT's guarded rewrite
+ * The event names the file but carries none of its bytes, so the scan reads the
+ * path. That is also what keeps scan and clean coherent: `cleanFile` rewrites
+ * what is on disk, and this scan is what decides whether it should.
+ *
+ * A read that fails is never an empty findings list — an instruction file
+ * already in context that could not be scanned is exactly what this hook's fault
+ * posture exists to announce, so the error propagates to it.
+ * @param {string} filePath
+ * @param {{ projectDir?: string, clean?: typeof cleanFile,
+ *   read?: (path: string) => string }} [opts]  injectable for tests; the
+ *   defaults read the real file and clean through the SSOT's guarded rewrite
  * @returns {{ report: string, cleaned: boolean, reason: string | null } | null}
  *   null when the file is clean
  */
 export function scanLoadedFile(
-  { filePath, content },
-  { projectDir = PROJECT_DIR, clean = cleanFile } = {},
+  filePath,
+  { projectDir = PROJECT_DIR, clean = cleanFile, read = readInstructions } = {},
 ) {
-  const findings = scanText(content);
+  const findings = scanText(read(filePath));
   if (findings.length === 0) return null;
   const report = formatReport([{ file: filePath, findings }]);
   if (!isInsideDir(projectDir, filePath))
@@ -215,7 +224,7 @@ export async function cliMain({ trace: sink = trace } = {}) {
     // before the payload's OWN fields are validated for the same reason.
     recordInstructionsLoaded(payload?.session_id);
     const loaded = readLoadedFile(payload);
-    const result = scanLoadedFile(loaded);
+    const result = scanLoadedFile(loaded.filePath);
     if (result === null) {
       emitTrace(TraceEvent.SCAN_LOADED_INSTRUCTIONS_RAN, {
         outcome: "clean",
