@@ -186,10 +186,12 @@ export function scanLoadedFile(
  * THIS package, not a verdict about the file, so it never reaches the model and
  * never arms the tool-call gate.
  * @param {string} filePath
+ * @param {string} loadReason  why the host loaded it, which decides whether the
+ *   load is evidence about the scan's scope at all
  * @returns {string | null}
  */
-export function scopeNotice(filePath) {
-  const stale = contextScopeContradiction(filePath);
+export function scopeNotice(filePath, loadReason) {
+  const stale = contextScopeContradiction(filePath, loadReason);
   return stale && `${HOOK_NAME} scope notice: ${stale}.`;
 }
 
@@ -241,7 +243,7 @@ export async function cliMain({ trace: sink = trace } = {}) {
     const loaded = readLoadedFile(payload);
     // Before the scan: a file this hook cannot read still told us where the host
     // loads context from, and that is the half the scope table needs.
-    const notice = scopeNotice(loaded.filePath);
+    const notice = scopeNotice(loaded.filePath, loaded.loadReason);
     if (notice) process.stderr.write(notice + "\n");
     const result = scanLoadedFile(loaded.filePath);
     if (result === null) {

@@ -54659,16 +54659,17 @@ function classifyContextPath(path2) {
     (row) => dirShapes.includes(row.shape) && row.name === tail[0]
   ) ?? null;
 }
-function contextScopeContradiction(path2) {
+function contextScopeContradiction(path2, loadReason) {
   const row = classifyContextPath(path2);
   if (row?.eventNamed || row?.shape === "claude-bulk") return null;
   if (row)
     return `InstructionsLoaded named ${row.name}, which CLAUDE_CONTEXT_KINDS records as a kind the event never names: the lazy scan reaches further than this table, and the docs built on it, claim`;
   const tail = claudeTail(path2, "innermost");
   if (tail === null || tail.length < 2) return null;
+  if (!HOST_CHOSEN_LOAD_REASONS.includes(loadReason)) return null;
   return `.claude/${tail[0]}/ loaded as model context, and CLAUDE_CONTEXT_SUBDIRS does not list it: the SessionStart scan prunes that directory, so every OTHER file in it goes unscanned. Add it there if it is context, not bulk data`;
 }
-var CLAUDE_CONTEXT_KINDS, CLAUDE_CONTEXT_SUBDIRS, CLAUDE_MEMORY_FILES, CLAUDE_DIR_INSTRUCTION_FILES, CLAUDE_INSTRUCTION_GLOBS, CLAUDE_LAUNCH_GLOBS;
+var CLAUDE_CONTEXT_KINDS, CLAUDE_CONTEXT_SUBDIRS, CLAUDE_MEMORY_FILES, CLAUDE_DIR_INSTRUCTION_FILES, CLAUDE_INSTRUCTION_GLOBS, CLAUDE_LAUNCH_GLOBS, HOST_CHOSEN_LOAD_REASONS;
 var init_claude_context = __esm({
   "src/claude-context.mjs"() {
     "use strict";
@@ -54710,6 +54711,7 @@ var init_claude_context = __esm({
       ...CLAUDE_DIR_INSTRUCTION_FILES,
       ...claudeDirPatterns("")
     ]);
+    HOST_CHOSEN_LOAD_REASONS = ["session_start", "nested_traversal"];
   }
 });
 
@@ -68868,8 +68870,8 @@ function scanLoadedFile(filePath, { projectDir = PROJECT_DIR, clean = cleanFile3
     return { report, cleaned: false, reason: safeErrMessage(err) };
   }
 }
-function scopeNotice(filePath) {
-  const stale = contextScopeContradiction(filePath);
+function scopeNotice(filePath, loadReason) {
+  const stale = contextScopeContradiction(filePath, loadReason);
   return stale && `${HOOK_NAME5} scope notice: ${stale}.`;
 }
 function loadedFileMessage({ report, cleaned, reason }, filePath) {
@@ -68884,7 +68886,7 @@ async function cliMain4({ trace: sink = trace } = {}) {
     const payload = await readStdinJson();
     recordInstructionsLoaded(payload?.session_id);
     const loaded2 = readLoadedFile(payload);
-    const notice = scopeNotice(loaded2.filePath);
+    const notice = scopeNotice(loaded2.filePath, loaded2.loadReason);
     if (notice) process.stderr.write(notice + "\n");
     const result = scanLoadedFile(loaded2.filePath);
     if (result === null) {

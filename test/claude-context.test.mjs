@@ -149,6 +149,8 @@ describe("what a loaded path says about the scope table", () => {
   // wrong, and a notice that fires on ordinary loads is a notice nobody reads.
   // So each reporting case below is paired with the nearest path that must stay
   // silent, and the silent set carries every kind the event is known to name.
+  // Each silent case is checked under `session_start` — the reason that DOES
+  // report — unless the case is about the reason itself.
   const SILENT = [
     ["the project's own memory file", join(sep, "p", "CLAUDE.md")],
     ["a nested memory file", join(sep, "p", "packages", "foo", "CLAUDE.md")],
@@ -159,8 +161,20 @@ describe("what a loaded path says about the scope table", () => {
     ["a user-global rule", join(sep, "u", ".claude", "rules", "x.md")],
     // An `@import` names a file of the user's choosing. The table claims
     // nothing about it, and guessing would report on every session that uses
-    // one — the fail-open that keeps this notice worth reading.
+    // one — the fail-open that keeps this notice worth reading. Inside
+    // `.claude/` the path alone is indistinguishable from a real hole, so the
+    // load reason is what separates them.
     ["an @import of arbitrary markdown", join(sep, "p", "docs", "style.md")],
+    [
+      "an @import of markdown under .claude",
+      join(sep, "p", ".claude", "docs", "style.md"),
+      "include",
+    ],
+    [
+      "a load whose reason the host did not give",
+      join(sep, "p", ".claude", "docs", "style.md"),
+      "unknown",
+    ],
     ["a source file", join(sep, "p", "src", "main.js")],
     // A memory file inside a pruned directory is still a memory file: judging
     // it by the directory would report `worktrees/` as newly-loading context.
@@ -181,20 +195,23 @@ describe("what a loaded path says about the scope table", () => {
     ],
   ];
 
-  for (const [label, path] of SILENT)
+  for (const [label, path, reason = "session_start"] of SILENT)
     it(`says nothing about ${label}`, () => {
-      assert.equal(contextScopeContradiction(path), null);
+      assert.equal(contextScopeContradiction(path, reason), null);
     });
 
-  it("reports a `.claude/` subdirectory the whitelist does not carry", () => {
-    // The drift that matters: context loading out of a directory the launch
-    // scan prunes, so every OTHER file in it is unscanned at session start.
-    const notice = contextScopeContradiction(
-      join(sep, "p", ".claude", "policies", "house.md"),
-    );
-    assert.match(notice, /\.claude\/policies\//u);
-    assert.match(notice, /CLAUDE_CONTEXT_SUBDIRS/u);
-  });
+  for (const reason of ["session_start", "nested_traversal"])
+    it(`reports a \`.claude/\` subdirectory the whitelist does not carry (${reason})`, () => {
+      // The drift that matters: context the host reached on its own, out of a
+      // directory the launch scan prunes, so every OTHER file in it is
+      // unscanned at session start.
+      const notice = contextScopeContradiction(
+        join(sep, "p", ".claude", "policies", "house.md"),
+        reason,
+      );
+      assert.match(notice, /\.claude\/policies\//u);
+      assert.match(notice, /CLAUDE_CONTEXT_SUBDIRS/u);
+    });
 
   for (const [label, path, named] of [
     [
@@ -273,7 +290,7 @@ describe("what a loaded path says about the scope table", () => {
           : row.shape === "claude-md"
             ? join(sep, "p", ".claude", "note.md")
             : join(sep, "p", ".claude", row.name, "f.md");
-      const notice = contextScopeContradiction(path);
+      const notice = contextScopeContradiction(path, "session_start");
       assert.equal(notice === null, SILENT_KINDS.includes(row.name), path);
       if (notice) assert.ok(notice.includes(row.name), notice);
     }

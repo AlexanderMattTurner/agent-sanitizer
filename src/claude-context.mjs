@@ -41,16 +41,10 @@ function kind(shape, name, { ancestorChain = false, eventNamed = false } = {}) {
  * rows, the `.claude/` directories that hold anything BUT context, so a consumer
  * filtering this table must filter on `shape` and never take it whole.
  *
- * Each row carries the two facts code branches on. `shape` says where it lives;
- * `ancestorChain`
- * says whether Claude Code also loads it from the directories ABOVE a scan root;
- * `eventNamed` says whether `InstructionsLoaded` names it as it loads, which is
- * the claim {@link contextScopeContradiction} checks the host against.
- *
- * One table rather than a list per view: a kind spelled in two places is a kind
- * one scope scans and another misses, and the miss is silent — a poisoned
- * instruction file that reaches the model because the scan that should have
- * seen it was built from the other list.
+ * Each row carries the two facts code branches on. `shape` says where the kind
+ * lives; `ancestorChain` says whether Claude Code also loads it from the
+ * directories ABOVE a scan root; `eventNamed` says whether `InstructionsLoaded`
+ * names it as it loads, the claim {@link contextScopeContradiction} checks.
  *
  * Shapes:
  *   - `dir-file` — `name`, in any directory (`packages/foo/CLAUDE.md`).
@@ -58,12 +52,10 @@ function kind(shape, name, { ancestorChain = false, eventNamed = false } = {}) {
  *   - `claude-subdir` — `.claude/<name>/` and everything markdown below it.
  *   - `claude-bulk` — `.claude/<name>/`, holding data that is not context.
  *
- * The `claude-subdir` rows are a WHITELIST, because `.claude/` is also where
- * tooling parks bulk data: an unlisted context directory costs a scan nobody
- * paid for anyway, while an unlisted BULK directory costs every future session
- * its startup (thousands of files read, 30 seconds of it). The `claude-bulk`
- * rows name the bulk directories this project has seen, which is what keeps
- * {@link contextScopeContradiction} from asking for one to be whitelisted.
+ * The `claude-subdir` rows are a WHITELIST: an unlisted context directory costs
+ * a scan nobody paid for anyway, while an unlisted BULK directory costs every
+ * future session its startup. The `claude-bulk` rows name the bulk directories
+ * this project has seen, so a load out of one asks for no whitelist entry.
  */
 export const CLAUDE_CONTEXT_KINDS = Object.freeze([
   kind("dir-file", "CLAUDE.md", { ancestorChain: true, eventNamed: true }),
@@ -305,6 +297,11 @@ function classifyContextPath(path) {
   );
 }
 
+// The `load_reason` values that mean Claude Code reached the file on its own —
+// its launch scan, and its walk into a directory. Every other reason names a
+// file something else chose, which is not evidence about the scan's scope.
+const HOST_CHOSEN_LOAD_REASONS = ["session_start", "nested_traversal"];
+
 /**
  * What a file the host just loaded as model context says about this table, or
  * null when it says nothing new. The InstructionsLoaded event is the only
@@ -324,9 +321,12 @@ function classifyContextPath(path) {
  * already knows that directory is storage, and asking for it to be whitelisted
  * is asking for the whole-tree walk back.
  * @param {string} path  the path the host loaded
+ * @param {string} loadReason  the event's `load_reason`, or "unknown" when the
+ *   host sent none; the unlisted-directory observation holds only for a load the
+ *   host chose itself, so this is required rather than defaulted
  * @returns {string | null} what is stale, phrased for whoever fixes the table
  */
-export function contextScopeContradiction(path) {
+export function contextScopeContradiction(path, loadReason) {
   const row = classifyContextPath(path);
   if (row?.eventNamed || row?.shape === "claude-bulk") return null;
   if (row)
@@ -337,6 +337,11 @@ export function contextScopeContradiction(path) {
     );
   const tail = claudeTail(path, "innermost");
   if (tail === null || tail.length < 2) return null;
+  // An `@import` names a file the user's own markdown pointed at, so it says
+  // nothing about what a scan of that directory would reach — and an
+  // unrecognized reason is treated as one, since reporting on it would ask for
+  // a directory to be whitelisted on the strength of a load nobody explained.
+  if (!HOST_CHOSEN_LOAD_REASONS.includes(loadReason)) return null;
   return (
     `.claude/${tail[0]}/ loaded as model context, and CLAUDE_CONTEXT_SUBDIRS does not list it: ` +
     "the SessionStart scan prunes that directory, so every OTHER file in it goes unscanned. " +

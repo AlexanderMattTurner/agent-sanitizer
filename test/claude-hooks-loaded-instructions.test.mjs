@@ -268,10 +268,16 @@ describe("the message reaches whoever can act on it", () => {
     // The prefix is what makes the line greppable next to the hook's error
     // vocabulary; the null case is what keeps every ordinary load silent.
     assert.match(
-      scopeNotice("/p/.claude/policies/house.md"),
+      scopeNotice("/p/.claude/policies/house.md", "session_start"),
       /^scan-loaded-instructions scope notice: /u,
     );
-    assert.equal(scopeNotice("/p/packages/foo/CLAUDE.md"), null);
+    assert.equal(
+      scopeNotice("/p/packages/foo/CLAUDE.md", "session_start"),
+      null,
+    );
+    // The same path under the reason that makes it an ordinary import: the hook
+    // passes the reason through, so this is where that plumbing is pinned.
+    assert.equal(scopeNotice("/p/.claude/policies/house.md", "include"), null);
   });
 });
 

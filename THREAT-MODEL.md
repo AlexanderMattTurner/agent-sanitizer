@@ -317,9 +317,13 @@ than the table, and this section, credit it with). Everything else is silent, in
 both directions: a path the table does not name — an `@import` of arbitrary
 markdown — reports nothing rather than guessing, and a directory it names as
 storage (`worktrees/`, `projects/`) reports nothing because whitelisting storage
-is the whole-tree walk again. The event can never GROW the table, since it only
-names kinds already in it, which is why the whitelist stays hand-maintained;
-what it can do is prove a stale entry the moment one costs coverage.
+is the whole-tree walk again. The unlisted-directory case also requires a
+`load_reason` the host chose itself: an `@import` names a file the user's own
+markdown pointed at, which says nothing about what a scan would reach. The
+notice never widens the scan on its own — one load cannot tell a context
+directory from an import target, and whitelisting the wrong one buys back the
+startup cost this split removed — so the whitelist stays hand-maintained and the
+notice's job is to put a stale entry in front of a person.
 
 ## User-prompt verdict
 
