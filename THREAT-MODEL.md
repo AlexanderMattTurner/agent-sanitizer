@@ -285,8 +285,10 @@ As Claude Code hooks the coverage is split to match how Claude Code loads these
 files. `scan-invisible-chars` (SessionStart) scans the launch set — the project
 root's own instruction files, the `CLAUDE.md` chain above it, and the root
 `.claude/` context subdirectories — and `scan-loaded-instructions`
-(InstructionsLoaded) scans every other instruction file — including the
-user-global `~/.claude` memory and rules, which load into every session on the
+(InstructionsLoaded) scans each file that loads outside it: a subdirectory's
+`CLAUDE.md`, an `@import`, a post-compaction reload, a path-scoped
+`.claude/rules` file, and the user-global `~/.claude` memory and rules, which
+load into every session on the
 machine — from the bytes the event carries, at the moment it loads. The second cannot block: the file is already in
 context when it fires, so its neutralization is to strip the payload from disk
 (so no reload re-reads it) and tell the model to treat what it just read as
@@ -296,6 +298,18 @@ the machine, so it is reported through the cross-hook alert and never
 rewritten. A Claude Code build that emits
 no `InstructionsLoaded` event loses the lazy half entirely; the PreToolUse gate
 says so once per session rather than leaving the gap silent.
+
+The event is observed to fire for those kinds and no others, which bounds what
+the split covers: a **nested** `AGENTS.md`, and the skills, commands,
+output-styles and loose markdown of a **nested** `.claude/` tree, are scanned by
+neither hook. They stay covered on demand by the whole-tree `./instructions`
+scan (`CLAUDE_INSTRUCTION_GLOBS`, what the CLI walks) and by the PostToolUse
+sanitizer whenever a tool reads one; what would cover them eagerly is the
+whole-tree walk at session start that this split exists to remove. For the same
+reason the whitelist of context directories in `src/claude-context.mjs` is
+hand-maintained rather than learned from the event: the event never names a
+directory the list does not already carry, so it can confirm the list but can
+never grow it.
 
 ## User-prompt verdict
 

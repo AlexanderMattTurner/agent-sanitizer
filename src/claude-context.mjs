@@ -43,12 +43,11 @@ import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 /**
  * The `.claude/` subdirectories whose markdown Claude Code loads as model
  * context. This is a WHITELIST, and that is the point: `.claude/` is also where
- * tooling parks bulk data that is never loaded as context — `worktrees/`
- * (entire checked-out copies of the repo), plus caches, transcripts and
- * snapshots — and globbing `.claude/**` swept all of it in. On a repo with a few
- * populated worktrees that is thousands of files READ at every session start:
- * one report put it at 30 seconds of blocked startup, paid for scanning files
- * that cannot reach the model.
+ * tooling parks bulk data that never loads as context — `worktrees/` (entire
+ * checked-out copies of the repo), caches, transcripts, snapshots — and globbing
+ * `.claude/**` swept all of it in: on a repo with a few populated worktrees,
+ * thousands of files READ at every session start and 30 seconds of blocked
+ * startup, paid to scan bytes that cannot reach the model.
  *
  * A whitelist, not a `worktrees` denylist, because the failure modes are not
  * symmetric: an unlisted context directory costs a scan nobody asked for anyway
@@ -56,6 +55,12 @@ import { dirname, isAbsolute, join, relative, resolve } from "node:path";
  * while an unlisted BULK directory silently costs every future session its
  * startup. Add an entry here when Claude Code starts loading a new `.claude/`
  * subdirectory as context.
+ *
+ * Maintaining it by hand is the only option: `InstructionsLoaded`, the one event
+ * that names a context file as it loads, is observed to fire only for the
+ * `CLAUDE.md` memory family and `.claude/rules/*.md` — never a skill, a command,
+ * an output-style or a loose `.claude/*.md` — so a list populated from that
+ * event confirms the entries already here and is blind to every new one.
  */
 export const CLAUDE_CONTEXT_SUBDIRS = Object.freeze([
   "agents",
