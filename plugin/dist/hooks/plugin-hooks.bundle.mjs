@@ -54690,9 +54690,14 @@ function contextScopeContradiction(path2, loadReason) {
     return `InstructionsLoaded named ${row.name}, which CLAUDE_CONTEXT_KINDS records as a kind the event never names: the lazy scan reaches further than this table, and the docs built on it, claim`;
   const tail = claudeTail(path2, "innermost");
   if (tail === null || tail.length < 2) return null;
+  const outer = (
+    /** @type {string[]} */
+    claudeTail(path2, "outermost")
+  );
+  if (CLAUDE_BULK_SUBDIRS.includes(outer[0])) return null;
   return `.claude/${tail[0]}/ loaded as model context, and CLAUDE_CONTEXT_SUBDIRS does not list it: the SessionStart scan prunes that directory, so every OTHER file in it goes unscanned. Add it there if it is context, not bulk data`;
 }
-var CLAUDE_CONTEXT_KINDS, CLAUDE_CONTEXT_SUBDIRS, CLAUDE_MEMORY_FILES, CLAUDE_DIR_INSTRUCTION_FILES, CLAUDE_INSTRUCTION_GLOBS, CLAUDE_LAUNCH_GLOBS, HOST_CHOSEN_LOAD_REASONS;
+var CLAUDE_CONTEXT_KINDS, CLAUDE_CONTEXT_SUBDIRS, CLAUDE_BULK_SUBDIRS, CLAUDE_MEMORY_FILES, CLAUDE_DIR_INSTRUCTION_FILES, CLAUDE_INSTRUCTION_GLOBS, CLAUDE_LAUNCH_GLOBS, HOST_CHOSEN_LOAD_REASONS;
 var init_claude_context = __esm({
   "src/claude-context.mjs"() {
     "use strict";
@@ -54715,9 +54720,11 @@ var init_claude_context = __esm({
       // Repo checkouts and session transcripts: storage the host writes and reads
       // back, so a load out of one is not evidence that the whitelist is short.
       kind("claude-bulk", "worktrees"),
-      kind("claude-bulk", "projects")
+      kind("claude-bulk", "projects"),
+      kind("claude-bulk", "todos")
     ]);
     CLAUDE_CONTEXT_SUBDIRS = namesOf(kindsOfShape("claude-subdir"));
+    CLAUDE_BULK_SUBDIRS = namesOf(kindsOfShape("claude-bulk"));
     CLAUDE_MEMORY_FILES = namesOf(
       // Shape first: only a per-directory file can be walked up a parent chain, so
       // no `.claude/` row can reach this list whatever its flags say.

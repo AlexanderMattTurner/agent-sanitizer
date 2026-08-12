@@ -77,6 +77,7 @@ export const CLAUDE_CONTEXT_KINDS = Object.freeze([
   // back, so a load out of one is not evidence that the whitelist is short.
   kind("claude-bulk", "worktrees"),
   kind("claude-bulk", "projects"),
+  kind("claude-bulk", "todos"),
 ]);
 
 /** The rows of one shape, in table order. @param {string} shape */
@@ -93,6 +94,9 @@ function namesOf(rows) {
 
 /** The `.claude/` subdirectories whose markdown loads as model context. */
 export const CLAUDE_CONTEXT_SUBDIRS = namesOf(kindsOfShape("claude-subdir"));
+
+/** The `.claude/` subdirectories known to hold storage rather than context. */
+const CLAUDE_BULK_SUBDIRS = namesOf(kindsOfShape("claude-bulk"));
 
 /**
  * Claude Code's own per-directory memory files: the kinds it loads from every
@@ -341,6 +345,11 @@ export function contextScopeContradiction(path, loadReason) {
     );
   const tail = claudeTail(path, "innermost");
   if (tail === null || tail.length < 2) return null;
+  // A `.claude` tree nested inside storage describes that checkout's own layout,
+  // not this project's: whitelisting a directory that exists only inside a
+  // pruned worktree adds nothing the launch scan would ever walk.
+  const outer = /** @type {string[]} */ (claudeTail(path, "outermost"));
+  if (CLAUDE_BULK_SUBDIRS.includes(outer[0])) return null;
   return (
     `.claude/${tail[0]}/ loaded as model context, and CLAUDE_CONTEXT_SUBDIRS does not list it: ` +
     "the SessionStart scan prunes that directory, so every OTHER file in it goes unscanned. " +

@@ -51,6 +51,16 @@
       ]
     },
     {
+      "command": [
+        "node",
+        "plugin/scripts/build-hook-binaries.mjs",
+        "--if-stale"
+      ],
+      "sources": ["plugin/dist/hooks/plugin-hooks.bundle.mjs", "package.json"],
+      "sourcesPattern": "^(claude-hooks|src)/.*\\.mjs$",
+      "owns": ["plugin/dist/hooks/hook-binaries.sha256"]
+    },
+    {
       "generator": "plugin/scripts/build-redactor-pyz.mjs",
       "sources": ["plugin/requirements.txt"],
       "sourcesPattern": "^python/(pyproject\\.toml|.*\\.py)$",

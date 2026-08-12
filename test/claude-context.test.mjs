@@ -192,6 +192,21 @@ describe("what a loaded path says about the scope table", () => {
       "a session transcript",
       join(sep, "u", ".claude", "projects", "proj", "transcript.md"),
     ],
+    // A `.claude` tree nested inside a checkout describes that checkout, so the
+    // unlisted-directory report reads the OUTERMOST tree to judge it.
+    [
+      "an unlisted directory inside a worktree's own .claude",
+      join(
+        sep,
+        "p",
+        ".claude",
+        "worktrees",
+        "wt",
+        ".claude",
+        "policies",
+        "house.md",
+      ),
+    ],
   ];
 
   for (const [label, path, reason = "session_start"] of SILENT)
@@ -272,6 +287,7 @@ describe("what a loaded path says about the scope table", () => {
       "rules",
       "worktrees",
       "projects",
+      "todos",
     ];
     const REPORTING_KINDS = [
       "AGENTS.md",
