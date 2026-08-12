@@ -8,6 +8,22 @@ adhere to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+## [2.36.0] - 2026-08-12
+
+### Added
+- New `scan-loaded-instructions.mjs` module to scan instruction files as they load, rather than walking the tree at startup.
+- New `invisible-report.mjs` module for reporting invisible character detection results.
+- New test helpers `capture-stdout.mjs` for improved stdout capture without interfering with TAP streams.
+
+### Fixed
+- InstructionsLoaded coverage marker now keyed to the correct session.
+- Host-seams marker now keyed to the session its events carry, improving session tracking accuracy.
+
+### Changed
+- Refactored auto-clean containment test to use the scope SSOT (Single Source of Truth).
+- Instruction file scanning moved to load-time instead of startup tree walk, improving efficiency.
+- Documentation updated to name the user-global `~/.claude` tree in lazy scan coverage.
+
 ## [2.35.0] - 2026-08-11
 
 ### Added
