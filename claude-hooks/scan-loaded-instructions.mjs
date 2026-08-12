@@ -10,10 +10,9 @@
  * covers what loads at launch from the project root and its parents; the
  * `CLAUDE.md` family and `.claude/rules` markdown below it arrive here, the
  * user-global `~/.claude` memory and rules among them — a second root that
- * would otherwise need its own walk at every startup. The event fires for those
- * kinds only, so a nested `AGENTS.md` or a nested `.claude/` skill reaches no
- * hook; THREAT-MODEL.md's *Instruction-file scanning* states that bound and
- * what covers those files instead.
+ * would otherwise need its own walk at every startup. The event fires only
+ * for those kinds, so a nested `AGENTS.md` or `.claude/` skill reaches no
+ * hook; THREAT-MODEL.md's *Instruction-file scanning* names what covers them.
  *
  * The event CANNOT block: its exit code is ignored and the bytes are already in
  * context by the time it fires. What it can do is exactly what SessionStart does
