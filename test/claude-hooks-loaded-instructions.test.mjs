@@ -18,6 +18,7 @@ import {
   mkdtempSync,
   readFileSync,
   rmSync,
+  symlinkSync,
   utimesSync,
   writeFileSync,
 } from "node:fs";
@@ -78,55 +79,62 @@ function project(name, content) {
 }
 
 describe("the loaded-file payload is validated, never assumed", () => {
-  it("reads the file path, its bytes and the load reason", () => {
+  it("reads the file path and the load reason", () => {
     assert.deepEqual(
       readLoadedFile({
         file_path: "/p/CLAUDE.md",
-        file_content: "hi",
         load_reason: "nested_traversal",
       }),
-      {
-        filePath: "/p/CLAUDE.md",
-        content: "hi",
-        loadReason: "nested_traversal",
-      },
+      { filePath: "/p/CLAUDE.md", loadReason: "nested_traversal" },
     );
   });
 
   it("labels a missing load reason rather than skipping the scan", () => {
     // The reason is trace metadata only. Treating its absence as a reason not to
     // scan would let a harness change silently disable the scan.
-    const loaded = readLoadedFile({
-      file_path: "/p/CLAUDE.md",
-      file_content: "hi",
-    });
-    assert.equal(loaded.loadReason, "unknown");
-    assert.equal(loaded.content, "hi");
+    assert.equal(
+      readLoadedFile({ file_path: "/p/CLAUDE.md" }).loadReason,
+      "unknown",
+    );
+  });
+
+  it("ignores fields the event carries that this hook does not read", () => {
+    // The live payload carries cwd, memory_type, prompt_id, trigger_file_path
+    // and more. Reading only what it needs is what keeps a host that adds a
+    // field from routing a real event into the fault posture.
+    assert.deepEqual(
+      readLoadedFile({
+        file_path: "/p/CLAUDE.md",
+        load_reason: "session_start",
+        memory_type: "project",
+        trigger_file_path: "/p/packages/foo/main.js",
+        prompt_id: "p-1",
+      }),
+      { filePath: "/p/CLAUDE.md", loadReason: "session_start" },
+    );
   });
 
   for (const [name, payload] of [
-    ["no file_path", { file_content: "hi" }],
-    ["an empty file_path", { file_path: "", file_content: "hi" }],
-    ["no file_content", { file_path: "/p/CLAUDE.md" }],
-    [
-      "a non-string file_content",
-      { file_path: "/p/CLAUDE.md", file_content: 7 },
-    ],
+    ["no file_path", { load_reason: "session_start" }],
+    ["an empty file_path", { file_path: "" }],
+    ["a non-string file_path", { file_path: 7 }],
     ["nothing at all", undefined],
   ])
     it(`throws on ${name}, rather than reporting a clean file`, () => {
-      // The one answer that must be unreachable: "no findings" for bytes the
-      // hook never saw. The throw routes to the declared fault posture.
-      assert.throws(() => readLoadedFile(payload), /file_path|file_content/u);
+      // The one answer that must be unreachable: "no findings" for a file the
+      // hook never identified. The throw routes to the declared fault posture.
+      assert.throws(() => readLoadedFile(payload), /file_path/u);
     });
 });
 
 describe("a loaded file inside the project is cleaned on disk", () => {
   it("strips the payload and reports it cleaned", () => {
-    const content = `${PROSE}hidden:${PAYLOAD}\n`;
-    const filePath = project("packages/foo/CLAUDE.md", content);
+    const filePath = project(
+      "packages/foo/CLAUDE.md",
+      `${PROSE}hidden:${PAYLOAD}\n`,
+    );
 
-    const result = scanLoadedFile({ filePath, content });
+    const result = scanLoadedFile(filePath);
     assert.equal(result.cleaned, true);
     assert.equal(result.reason, null);
 
@@ -135,33 +143,63 @@ describe("a loaded file inside the project is cleaned on disk", () => {
     assert.ok(!after.includes("\u{e0001}"), "the payload is still on disk");
   });
 
-  it("scans the LOADED bytes, not a re-read of the path", () => {
-    // The file on disk is clean; the bytes Claude Code loaded were not. Scanning
-    // the path would report nothing and the model would keep reading a payload
-    // nothing ever named.
-    const filePath = project("CLAUDE.md", PROSE);
-    const result = scanLoadedFile({
-      filePath,
-      content: `${PROSE}hidden:${PAYLOAD}\n`,
-    });
+  it("scans the file the event names, taking no bytes from the payload", () => {
+    // The live event carries file_path and no file_content, so the path is the
+    // only source of bytes there is. A scan that waited for payload bytes
+    // reports nothing on every real event.
+    const filePath = project("CLAUDE.md", `${PROSE}hidden:${PAYLOAD}\n`);
+    const result = scanLoadedFile(filePath);
     assert.notEqual(result, null);
     assert.match(result.report, /INVISIBLE CHARACTER INJECTION DETECTED/u);
   });
 
   it("says nothing about a clean file", () => {
-    const filePath = project("CLAUDE.md", PROSE);
-    assert.equal(scanLoadedFile({ filePath, content: PROSE }), null);
+    assert.equal(scanLoadedFile(project("CLAUDE.md", PROSE)), null);
+  });
+
+  it("propagates an unreadable file instead of calling it clean", () => {
+    // The bytes are in context and could not be checked. Returning null here
+    // would announce "clean" for a file nothing scanned; the throw is what
+    // routes it to the hook's fault posture.
+    assert.throws(
+      () => scanLoadedFile(join(projectDir, "no-such-CLAUDE.md")),
+      /ENOENT/u,
+    );
+  });
+
+  it("reports a symlinked instruction file rather than rewriting through it", () => {
+    // The read follows links and the clean refuses them, and that split is the
+    // behavior: an in-project path pointed at a contaminated file elsewhere is
+    // SCANNED (the bytes did reach the model) but never rewritten (the target
+    // belongs to someone else). Pinned because a later realpath or
+    // follow-refusing open in the read would move it with nothing to notice.
+    const outside = mkdtempSync(join(tmpdir(), "sanitizer-loaded-link-"));
+    const target = join(outside, "target.md");
+    const content = `${PROSE}hidden:${PAYLOAD}\n`;
+    writeFileSync(target, content);
+    const linkPath = join(projectDir, "linked-CLAUDE.md");
+    rmSync(linkPath, { force: true });
+    symlinkSync(target, linkPath);
+
+    const result = scanLoadedFile(linkPath);
+    assert.match(result.report, /INVISIBLE CHARACTER INJECTION DETECTED/u);
+    assert.equal(result.cleaned, false);
+    assert.match(result.reason, /symlink/u);
+    assert.equal(
+      readFileSync(target, "utf8"),
+      content,
+      "the symlink's target was rewritten",
+    );
+    rmSync(outside, { recursive: true, force: true });
+    rmSync(linkPath, { force: true });
   });
 
   it("reports NOT cleaned when the stripper leaves the bytes in place", () => {
     // cleanFile returns false when it re-scans and finds nothing to strip — the
     // file changed under us. The finding stands, so the file must not be
     // recorded as cleaned; that is what routes it to the gate.
-    const filePath = project("CLAUDE.md", PROSE);
-    const result = scanLoadedFile(
-      { filePath, content: `${PROSE}${PAYLOAD}` },
-      { clean: () => false },
-    );
+    const filePath = project("CLAUDE.md", `${PROSE}${PAYLOAD}`);
+    const result = scanLoadedFile(filePath, { clean: () => false });
     assert.equal(result.cleaned, false);
     assert.match(result.reason, /changed/u);
   });
@@ -171,9 +209,8 @@ describe("a loaded file outside the project is reported, never rewritten", () =>
   // Both roots Claude Code loads instructions from that this session does not
   // own. The user-global tree is the reason this hook, and not the SessionStart
   // walk, is where that coverage lives: `~/.claude/CLAUDE.md` and the global
-  // rules load into EVERY session on the machine, and the event carries their
-  // bytes — so scanning them costs nothing at startup and needs no second root
-  // globbed at launch.
+  // rules load into EVERY session on the machine, and the event names them as
+  // they load — so nothing needs a second root globbed at launch.
   for (const [label, ...rel] of [
     ["above the project", "CLAUDE.md"],
     ["in the user-global tree", ".claude", "CLAUDE.md"],
@@ -186,7 +223,7 @@ describe("a loaded file outside the project is reported, never rewritten", () =>
       mkdirSync(join(filePath, ".."), { recursive: true });
       writeFileSync(filePath, content);
 
-      const result = scanLoadedFile({ filePath, content });
+      const result = scanLoadedFile(filePath);
       assert.match(result.report, /INVISIBLE CHARACTER INJECTION DETECTED/u);
       assert.equal(result.cleaned, false);
       assert.match(result.reason, /outside this project/u);
@@ -261,12 +298,19 @@ describe("the hook CLI, driven end to end on a real event", () => {
 
   it("cleans the file and answers on both channels", () => {
     const filePath = project("nested/CLAUDE.md", `${PROSE}${PAYLOAD}\n`);
+    // The live payload, field for field, as a real host emits it: no
+    // file_content anywhere in it. A hook that requires those bytes faults on
+    // this event instead of scanning, and does so on every event it ever sees.
     const { json, stderr } = fire({
       hook_event_name: "InstructionsLoaded",
       session_id: SESSION,
+      cwd: projectDir,
       file_path: filePath,
       load_reason: "nested_traversal",
-      file_content: `${PROSE}${PAYLOAD}\n`,
+      memory_type: "project",
+      trigger_file_path: join(projectDir, "nested", "main.js"),
+      prompt_id: "prompt-1",
+      transcript_path: join(projectDir, "transcript.jsonl"),
     });
 
     assert.ok(!readFileSync(filePath, "utf8").includes("\u{e0001}"));
@@ -291,7 +335,6 @@ describe("the hook CLI, driven end to end on a real event", () => {
       session_id: SESSION,
       file_path: filePath,
       load_reason: "include",
-      file_content: `${PROSE}${PAYLOAD}\n`,
     });
 
     assert.ok(existsSync(ALERT_FILE), "the PreToolUse gate was not armed");
@@ -306,7 +349,6 @@ describe("the hook CLI, driven end to end on a real event", () => {
       session_id: SESSION,
       file_path: filePath,
       load_reason: "session_start",
-      file_content: PROSE,
     });
     assert.equal(stdout, "");
     assert.equal(stderr, "");

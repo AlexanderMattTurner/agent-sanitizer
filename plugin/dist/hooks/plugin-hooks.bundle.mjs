@@ -68771,15 +68771,15 @@ __export(scan_loaded_instructions_exports, {
   readLoadedFile: () => readLoadedFile,
   scanLoadedFile: () => scanLoadedFile
 });
+import { readFileSync as readFileSync8 } from "node:fs";
+function readInstructions(filePath) {
+  return readFileSync8(filePath, "utf-8");
+}
 function faultLine2(ctx) {
   return `${HOOK_NAME5} hook error: ${ctx.message}. An instruction file Claude Code just loaded was NOT scanned for hidden Unicode, so any payload in it reaches the model unvetted.`;
 }
 function readLoadedFile(payload) {
-  const {
-    file_path: filePath,
-    file_content: content3,
-    load_reason: loadReason
-  } = (
+  const { file_path: filePath, load_reason: loadReason } = (
     /** @type {Record<string, unknown>} */
     payload ?? {}
   );
@@ -68787,20 +68787,15 @@ function readLoadedFile(payload) {
     throw new Error(
       "InstructionsLoaded payload carries no file_path; cannot scan or report the instruction file that was loaded"
     );
-  if (typeof content3 !== "string")
-    throw new Error(
-      `InstructionsLoaded payload for ${JSON.stringify(filePath)} carries no file_content; the loaded bytes are not available to scan`
-    );
   return {
     filePath,
-    content: content3,
     // Metadata for the trace channel only, so an unknown/absent reason is a
     // label, never a reason to skip the scan.
     loadReason: typeof loadReason === "string" ? loadReason : "unknown"
   };
 }
-function scanLoadedFile({ filePath, content: content3 }, { projectDir = PROJECT_DIR, clean = cleanFile3 } = {}) {
-  const findings = scanText3(content3);
+function scanLoadedFile(filePath, { projectDir = PROJECT_DIR, clean = cleanFile3, read = readInstructions } = {}) {
+  const findings = scanText3(read(filePath));
   if (findings.length === 0) return null;
   const report = formatReport([{ file: filePath, findings }]);
   if (!isInsideDir(projectDir, filePath))
@@ -68833,7 +68828,7 @@ async function cliMain4({ trace: sink = trace } = {}) {
     const payload = await readStdinJson();
     recordInstructionsLoaded(payload?.session_id);
     const loaded2 = readLoadedFile(payload);
-    const result = scanLoadedFile(loaded2);
+    const result = scanLoadedFile(loaded2.filePath);
     if (result === null) {
       emitTrace(TraceEvent.SCAN_LOADED_INSTRUCTIONS_RAN, {
         outcome: "clean",

@@ -30,6 +30,7 @@ import assert from "node:assert/strict";
 import { Readable } from "node:stream";
 import {
   existsSync,
+  mkdirSync,
   mkdtempSync,
   readFileSync,
   rmSync,
@@ -56,6 +57,13 @@ const scanInvisible = await import("../claude-hooks/scan-invisible-chars.mjs");
 const scanLoaded = await import("../claude-hooks/scan-loaded-instructions.mjs");
 const { instructionsLoadedFile } =
   await import("../claude-hooks/lib/invisible-alert.mjs");
+
+// The InstructionsLoaded event names a file and carries none of its bytes, so
+// the hook reads the path; an absent one would run its fault posture rather than
+// the clean path these cases assert the announcement for.
+const loadedFile = join(projectDir, "packages", "foo", "CLAUDE.md");
+mkdirSync(join(loadedFile, ".."), { recursive: true });
+writeFileSync(loadedFile, "# Foo\n\nordinary, clean prose\n");
 
 const traceDir = mkdtempSync(join(tmpdir(), "sanitizer-trace-"));
 let traceFileSeq = 0;
@@ -167,9 +175,8 @@ const HOOKS = [
       withStdin(
         {
           hook_event_name: "InstructionsLoaded",
-          file_path: join(projectDir, "packages", "foo", "CLAUDE.md"),
+          file_path: loadedFile,
           load_reason: "nested_traversal",
-          file_content: "# Foo\n\nordinary, clean prose\n",
         },
         () =>
           sink ? scanLoaded.cliMain({ trace: sink }) : scanLoaded.cliMain(),
