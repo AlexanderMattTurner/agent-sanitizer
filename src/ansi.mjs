@@ -92,9 +92,19 @@ const ESC = 0x1b;
 const CSI_C1 = 0x9b;
 const ST_C1 = 0x9c;
 const BEL = 0x07;
-// CAN/SUB cancel a control string per ECMA-48 and the xterm parser; LF/CR do
-// not, but bound the body anyway as a fail-closed blast-radius limit (see
-// scanControlString).
+// THE ABORT SET — the four controls that end a control string short of its
+// terminator, and the whole of it. Every other C0 control and DEL is
+// deliberately consumed as body, because that is what a terminal does with
+// them: DEC's parser (vt100.net/emu/dec_ansi_parser) IGNORES C0 other than
+// CAN/SUB/ESC in `osc_string` and `sos_pm_apc_string` and `put`s them in
+// `dcs_passthrough`, so aborting on `VT`/`FF`/`NUL`/`DEL` would end the token
+// early and splice the rest of a payload the terminal swallows back into the
+// model's view — the under-strip this layer exists to close.
+//   CAN/SUB — ECMA-48 and that same parser cancel the string here.
+//   LF/CR   — NOT terminal behavior, a fail-closed blast-radius limit: they
+//             are the only two controls that cross a line, and a body running
+//             past one blinds a reader who consumes the strip as a RECORD
+//             rather than rendering it (see scanControlString).
 const CAN = 0x18;
 const SUB = 0x1a;
 const LF = 0x0a;
@@ -230,7 +240,9 @@ export function orphanKindFor(ch, next) {
  *      bound one stray `ESC ]` deleted every later line to end of input, so on a
  *      consumer that reads the strip as a RECORD (a model, not a display) one
  *      introducer blinded the whole tail behind a clean-looking prefix. The
- *      break survives; the payload after it on the same line is dropped.
+ *      break survives; the payload after it on the same line is dropped. This is
+ *      what makes the layer-wide invariant hold — no token of any kind spans a
+ *      line break, so a strip NEVER removes a newline (test/layer1-ansi).
  *   4. end of input, for a genuinely unterminated string with no line break:
  *      fail closed and drop everything from the introducer on, so no body
  *      survives.

@@ -73,6 +73,11 @@ const ansiFragment = fc.constantFrom(
   "12345",
   "J",
   "\\",
+  // Line breaks are FRAGMENTS, not filler: an alphabet without them cannot
+  // reach the shape where a control-string body meets a newline, which is
+  // exactly the input that let one stray `ESC ]` blind a whole record.
+  "\n",
+  "\r\n",
 );
 
 const invisibleChar = fc.constantFrom(ZWSP, ZWJ, ZWNJ, cp(0xfeff), cp(0xfe0f));
@@ -239,6 +244,79 @@ describe("scanAnsi", () => {
       }),
       fcRunOptions(),
     );
+  });
+});
+
+// ─── The abort set: no token spans a line break ──────────────────────────────
+
+// One entry per way a control string can end, plus the CSI arms — the forms the
+// example-based cases above pin one at a time. Here they are driven as a MATRIX
+// against the invariant they all share, because the bug that shipped was in a
+// form no single example covered: a body that met a newline.
+const CONTROL_STRING_FORMS = [
+  ["osc + BEL", `${ESC}]0;t${BEL}`],
+  ["osc + ESC \\", `${ESC}]0;t${ESC}\\`],
+  ["C1 osc + C1 ST", `${OSC}0;t${ST}`],
+  ["dcs + ESC \\", `${ESC}Pq#x${ESC}\\`],
+  ["C1 apc + C1 ST", `${APC}cmd${ST}`],
+  ["osc cancelled by CAN", `${ESC}]t${cp(0x18)}rest`],
+  ["osc cancelled by SUB", `${ESC}]t${cp(0x1a)}rest`],
+  ["nested introducer abort", `${OSC}a${OSC}b${BEL}`],
+  ["ESC abort", `${ESC}]t${ESC}[0mrest`],
+  ["unterminated", `${ESC}]dangling`],
+  ["csi", `${ESC}[2J`],
+  ["C1 csi", `${CSI}31m`],
+];
+
+// C0 controls that are NOT in the abort set. A terminal ignores (or `put`s)
+// these inside a control string, so the body must swallow them: an abort here
+// would end the token early and hand the rest of the payload back as visible
+// text (see THE ABORT SET in src/ansi.mjs).
+const NON_ABORTING_C0 = [0x00, 0x0b, 0x0c, 0x01, 0x1f, 0x7f];
+
+describe("the abort set", () => {
+  it("never removes a line break, whatever arm it lands next to", () => {
+    // The invariant the shipped bug violated — stated over the FORM, not over
+    // the one input that exposed it. A control-string body that ran past a
+    // newline deleted every later line of a record; nothing about the arms is
+    // allowed to consume a break, so the counts must survive exactly.
+    for (const [name, seq] of CONTROL_STRING_FORMS)
+      for (const [placement, input] of [
+        ["before", `A\n${seq}Z`],
+        ["inside", `A${seq.slice(0, 3)}\n${seq.slice(3)}Z`],
+        ["after", `A${seq}\nZ`],
+        ["surrounded", `A\n${seq}\nZ\n`],
+      ]) {
+        const label = `${name} / newline ${placement}`;
+        const breaks = (s) => [...s].filter((c) => c === "\n").length;
+        assert.equal(breaks(stripAnsiFully(input)), breaks(input), label);
+        assert.equal(breaks(applyLayer1(input).cleaned), breaks(input), label);
+        // Non-vacuity: the case really did carry a break into the strip.
+        assert.ok(breaks(input) > 0, label);
+      }
+  });
+
+  it("keeps every line break under free-form ANSI interleavings", () => {
+    fc.assert(
+      fc.property(ansiText, (text) => {
+        const count = (s, ch) => [...s].filter((c) => c === ch).length;
+        for (const ch of ["\n", "\r"]) {
+          assert.equal(count(stripAnsiFully(text), ch), count(text, ch));
+          assert.equal(count(applyLayer1(text).cleaned, ch), count(text, ch));
+        }
+      }),
+      fcRunOptions(),
+    );
+  });
+
+  it("consumes non-aborting C0 and DEL as control-string body", () => {
+    // The other half of the decision: widening the abort set to all of C0 would
+    // end each of these tokens early and splice `PAYLOAD` back into the model's
+    // view, though a terminal swallows it. Each row must strip to `xy`.
+    for (const code of NON_ABORTING_C0) {
+      const input = `x${ESC}]0;a${cp(code)}PAYLOAD${BEL}y`;
+      assert.equal(stripAnsiFully(input), "xy", `U+${code.toString(16)}`);
+    }
   });
 });
 

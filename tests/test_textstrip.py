@@ -106,6 +106,15 @@ _ANSI_CASES = [
     # byte with the body — ECMA-48 and xterm behavior.
     ("osc_cancelled_by_can", "x\x1b]t\x18rest", "xrest"),
     ("osc_cancelled_by_sub", "x\x1b]t\x1arest", "xrest"),
+    # The other half of the abort-set decision: a C0 control that is NOT in the
+    # set (and DEL) stays BODY. DEC's parser ignores/``put``s these rather than
+    # ending the string, so aborting here would splice ``PAYLOAD`` — text the
+    # terminal swallows — back into the model's view.
+    ("osc_body_swallows_nul", "x\x1b]0;a\x00PAYLOAD\x07y", "xy"),
+    ("osc_body_swallows_vt", "x\x1b]0;a\x0bPAYLOAD\x07y", "xy"),
+    ("osc_body_swallows_ff", "x\x1b]0;a\x0cPAYLOAD\x07y", "xy"),
+    ("osc_body_swallows_us", "x\x1b]0;a\x1fPAYLOAD\x07y", "xy"),
+    ("osc_body_swallows_del", "x\x1b]0;a\x7fPAYLOAD\x07y", "xy"),
 ]
 
 
@@ -197,6 +206,25 @@ def test_deletion_only_and_idempotent(text: str) -> None:
     assert "\x1b" not in out
     # Idempotent: a second pass changes nothing.
     assert strip_untrusted(out) == out
+
+
+# The escape alphabet the line-break property needs. ``st.text()`` draws an ESC
+# essentially never, so a property over it cannot reach the shape the shipped
+# bug lived in — a control-string body meeting a newline.
+_ESCAPE_ALPHABET = "\x1b\x9b\x9d\x90\x98\x9e\x9f\x9c\x07\x18\x1a\x00\x0b\x0c\x7f"
+_ESCAPE_ALPHABET += "[]PX^_\\m0;:?(#~2JB \n\rab"
+
+
+@pytest.mark.skipif(not _HAS_HYPOTHESIS, reason="hypothesis not installed")
+@given(st.text(alphabet=_ESCAPE_ALPHABET, max_size=40))
+def test_line_breaks_are_never_removed(text: str) -> None:
+    """The invariant the control-string bug violated, stated over every input
+    that carries a break rather than over the one payload that exposed it: no
+    arm of the grammar may span a line break, so the strip preserves every
+    ``\\n`` and ``\\r``. ``src/ansi.mjs``'s scanner holds the same property."""
+    out = strip_untrusted(text)
+    for char in ("\n", "\r"):
+        assert out.count(char) == text.count(char), repr(text)
 
 
 @pytest.mark.parametrize(

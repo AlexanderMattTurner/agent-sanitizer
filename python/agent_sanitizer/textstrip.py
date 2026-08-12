@@ -59,7 +59,13 @@ from .invisible import control_introducers, invisible_charset
 #                    consumer that reads the strip as a RECORD (a model, not a
 #                    display) one introducer blinded the whole tail behind a
 #                    clean-looking prefix. The break stays visible; the payload
-#                    after it on the same line is dropped, later lines survive;
+#                    after it on the same line is dropped, later lines survive.
+#                    THE ABORT SET IS EXACTLY {ESC, CAN, SUB, LF, CR} (plus a
+#                    nested introducer): every other C0 control and DEL stays in
+#                    the body class deliberately, because DEC's parser ignores /
+#                    ``put``s them rather than ending the string, so aborting on
+#                    one would splice a payload the terminal swallows back into
+#                    the model's view. ``src/ansi.mjs`` states the same set;
 #                  - a genuinely UNTERMINATED string with no line break ends at
 #                    end-of-input via ``\Z`` (why ``\Z`` is in the alternation: else
 #                    the arm failed to match, the general arm ate only ``ESC ]``, and
