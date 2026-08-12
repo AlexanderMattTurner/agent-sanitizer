@@ -25,6 +25,7 @@ import {
   excludeFromContextScan,
   findInstructionFiles,
 } from "../src/instructions.mjs";
+import { isInsideDir } from "../src/claude-context.mjs";
 
 const dir = mkdtempSync(join(tmpdir(), "sanitizer-claude-context-"));
 after(() => rmSync(dir, { recursive: true, force: true }));
@@ -94,6 +95,20 @@ describe("the exported Claude Code context scope", () => {
     assert.equal(excludeFromContextScan(".claude\\worktrees"), true);
     for (const sub of CLAUDE_CONTEXT_SUBDIRS)
       assert.equal(excludeFromContextScan(`.claude/${sub}`), false);
+  });
+
+  it("bounds where a scanner may rewrite to inside the scan root", () => {
+    // The predicate both instruction scanners gate their auto-clean on: a file
+    // above the root is shared with every project under it, so it is reported
+    // and never rewritten.
+    const root = join(sep, "home", "u", "proj");
+    assert.equal(isInsideDir(root, join(root, "CLAUDE.md")), true);
+    assert.equal(isInsideDir(root, join(root, "a", "b", "CLAUDE.md")), true);
+    assert.equal(isInsideDir(root, join(sep, "home", "u", "CLAUDE.md")), false);
+    // A sibling whose name merely starts with the root's is outside it, and the
+    // root itself is not a file this decides about.
+    assert.equal(isInsideDir(root, `${root}-other${sep}CLAUDE.md`), false);
+    assert.equal(isInsideDir(root, root), false);
   });
 
   it("keeps pruning node_modules when a caller supplies its own exclude", () => {

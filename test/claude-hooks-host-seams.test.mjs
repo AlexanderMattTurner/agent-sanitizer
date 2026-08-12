@@ -16,8 +16,9 @@
  *     and a host gate's deny must SHORT-CIRCUIT the rewriting layers — a call
  *     reported as both denied and sanitized is two verdicts for one event.
  */
-import { describe, it } from "node:test";
+import { after, before, describe, it } from "node:test";
 import assert from "node:assert/strict";
+import { rmSync } from "node:fs";
 
 const { claudeAdapter } = await import("agent-control-plane-core/claude");
 const { Decision } = await import("agent-control-plane-core");
@@ -35,6 +36,8 @@ const {
   awaitLazyDependency,
 } = await import("../claude-hooks/lib/hook-io.mjs");
 const { controlPlane } = await import("../claude-hooks/lib/control-plane.mjs");
+const { instructionsLoadedFile, recordInstructionsLoaded } =
+  await import("../claude-hooks/lib/invisible-alert.mjs");
 const {
   configureEnvConfigSource,
   minEnvSecretLen,
@@ -492,6 +495,16 @@ describe("user-prompt gate reason table", () => {
 });
 
 describe("PreToolUse host gates", () => {
+  // The gate also carries a once-per-session notice for a host that never emits
+  // InstructionsLoaded, which would land on the FIRST call below and not the
+  // second — an asymmetry that has nothing to do with the seam under test. Mark
+  // the event as seen so both calls are notice-free; the notice itself is driven
+  // in claude-hooks-loaded-instructions.test.mjs. Keyed to the session id the
+  // events below carry, which is the key the gate looks the marker up under.
+  const SESSION = "sess-1";
+  before(() => recordInstructionsLoaded(SESSION));
+  after(() => rmSync(instructionsLoadedFile(SESSION), { force: true }));
+
   /** A tool input the confusable layer WILL rewrite, so a skipped layer shows. */
   const confusableWrite = () =>
     parse({
@@ -499,7 +512,7 @@ describe("PreToolUse host gates", () => {
       tool_name: "Bash",
       // Cyrillic es/a/er in place of Latin c/a/p.
       tool_input: { command: "сар /tmp/x /tmp/y" },
-      session_id: "sess-1",
+      session_id: SESSION,
     });
 
   it("is inert with no gates supplied", async () => {

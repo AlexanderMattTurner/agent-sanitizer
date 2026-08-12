@@ -35,6 +35,7 @@ import { appendFileSync } from "node:fs";
 export const TraceEvent = Object.freeze({
   HOOK_RAN: "hook_ran",
   SCAN_INVISIBLE_CHARS_RAN: "scan_invisible_chars_ran",
+  SCAN_LOADED_INSTRUCTIONS_RAN: "scan_loaded_instructions_ran",
 });
 
 const LEVELS = Object.freeze({ off: 0, info: 1, debug: 2 });

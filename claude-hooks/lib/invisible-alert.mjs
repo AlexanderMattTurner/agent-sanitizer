@@ -10,14 +10,15 @@
  * Both hooks reach the state through this module so the paths and the trust rule
  * have one definition.
  */
-import { readFileSync } from "node:fs";
+import { lstatSync, readdirSync, readFileSync, unlinkSync } from "node:fs";
 import { createHash } from "node:crypto";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { tmpdir } from "node:os";
 import {
   lazyImport,
   markerIsTrusted,
   scrubUntrustedText,
+  writeFileNoFollow,
   writeSentinelFile,
 } from "./hook-io.mjs";
 
@@ -52,6 +53,128 @@ export const ALERT_FILE = join(
 export const ALERT_ACK_FILE = `${ALERT_FILE}.acked`;
 
 /**
+ * Marker the InstructionsLoaded scanner writes on every fire, so another hook
+ * can tell whether that event is being scanned at all this session.
+ *
+ * Keyed by the SESSION, and never cleared at SessionStart like the alert pair
+ * above (a later session sweeps it once it is older than the TTL):
+ * nothing pins the order of SessionStart against the InstructionsLoaded events
+ * Claude Code fires for the files it loads at launch, so a clear could erase a
+ * marker written moments earlier and produce the notice on a session that IS
+ * covered. Session-keyed, the question each session asks is answered by that
+ * session's own file and no ordering matters. A host that exports no session id
+ * falls back to one shared name — where the marker can outlive its session, and
+ * a later session on a host that stopped emitting the event stays quiet.
+ * @param {string} [sessionId]
+ * @returns {string}
+ */
+export function instructionsLoadedFile(sessionId) {
+  // The id becomes a path component, so anything outside this class — a `/` in
+  // a hostile session id above all — is folded away rather than escaping
+  // $TMPDIR.
+  const key =
+    (sessionId ?? "").replace(/[^A-Za-z0-9._-]/gu, "_") || "no-session";
+  return `${ALERT_FILE}.instructions-loaded.${key}`;
+}
+
+/**
+ * Companion marker: the notice below has been surfaced this session.
+ * @param {string} [sessionId]
+ * @returns {string}
+ */
+export function instructionsLoadedNoticeFile(sessionId) {
+  return `${instructionsLoadedFile(sessionId)}.noticed`;
+}
+
+/**
+ * Whether the InstructionsLoaded scanner has run this session — i.e. whether the
+ * lazily-loaded instruction files are being scanned at all. Ownership-validated
+ * like every other marker here: a co-tenant could otherwise plant the
+ * predictable path and suppress the notice below, which is the whole signal that
+ * nested files are going unscanned.
+ * @param {string} [sessionId]
+ * @returns {boolean}
+ */
+export function instructionsLoadedSeen(sessionId) {
+  return markerIsTrusted(instructionsLoadedFile(sessionId));
+}
+
+/** How long a past session's marker is kept before the next session sweeps it. */
+const MARKER_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+
+/**
+ * Delete this project's session markers older than the TTL. Only PAST sessions'
+ * files are candidates — the current session's was just written, so the sweep
+ * cannot answer its own question wrong.
+ * @param {string} keep  the marker path this session owns
+ * @returns {void}
+ */
+function sweepStaleMarkers(keep) {
+  const dir = tmpdir();
+  const prefix = `${basename(ALERT_FILE)}.instructions-loaded.`;
+  const cutoff = Date.now() - MARKER_TTL_MS;
+  for (const name of readdirSync(dir)) {
+    if (!name.startsWith(prefix)) continue;
+    const path = join(dir, name);
+    if (path === keep || path === `${keep}.noticed`) continue;
+    // lstat, not stat: a squatted symlink at a predictable $TMPDIR path must be
+    // judged on ITSELF, not on whatever it points at. unlink removes the link.
+    if (lstatSync(path).mtimeMs < cutoff) unlinkSync(path);
+  }
+}
+
+/**
+ * Record that the InstructionsLoaded scanner engaged. Symlink-safe presence
+ * write (see writeSentinelFile) at a predictable $TMPDIR path.
+ *
+ * The event fires once per instruction file loaded, so the already-recorded case
+ * returns without a write — and the stale-marker sweep rides the FIRST fire of a
+ * session, where one readdir is paid once rather than per loaded file.
+ * @param {string} [sessionId]
+ * @returns {void}
+ */
+export function recordInstructionsLoaded(sessionId) {
+  const marker = instructionsLoadedFile(sessionId);
+  if (markerIsTrusted(marker)) return;
+  writeSentinelFile(marker);
+  sweepStaleMarkers(marker);
+}
+
+/**
+ * The one-time context line for a session where no InstructionsLoaded scan ran,
+ * or null when the scan has been seen or the notice was already surfaced this
+ * session. Records the notice as it hands it out, so it rides on ONE tool call
+ * rather than every one — the per-call repeat is what trains a reader to skip it.
+ *
+ * The loss it names is real and otherwise invisible: SessionStart scans the
+ * instruction files that load at launch, and everything a subdirectory loads
+ * later is scanned by the event. No scan, and nothing says so.
+ *
+ * The notice names the OBSERVABLE — no scan ran — and both of its causes, because
+ * the marker cannot tell a host that never emits the event from an operator who
+ * switched the hook off in AGENT_SANITIZER_DISABLED_HOOKS, and asserting the
+ * first would send an operator who chose the second to the wrong fix.
+ * @param {string} [sessionId]  the harness's session identity, so the answer
+ *   belongs to THIS session (see instructionsLoadedFile)
+ * @returns {string | null}
+ */
+export function instructionsLoadedGapNotice(sessionId) {
+  if (instructionsLoadedSeen(sessionId)) return null;
+  const noticeFile = instructionsLoadedNoticeFile(sessionId);
+  if (markerIsTrusted(noticeFile)) return null;
+  writeSentinelFile(noticeFile);
+  return (
+    "agent-sanitizer: no InstructionsLoaded scan has run this session, so " +
+    "instruction files loaded from SUBDIRECTORIES (a nested CLAUDE.md, a " +
+    "directory-scoped rule) are reaching the model unscanned for hidden " +
+    "Unicode — the session-start scan covers only the files loaded at launch. " +
+    "Tell the user, and name both causes: a Claude Code that does not emit " +
+    "the event (upgrading restores the coverage), or scan-loaded-instructions " +
+    "switched off in AGENT_SANITIZER_DISABLED_HOOKS."
+  );
+}
+
+/**
  * The alert findings if invisible-char injection was detected in instruction
  * files and couldn't be auto-cleaned, else null. ALERT_FILE lives at a predictable,
  * world-visible $TMPDIR path, so its contents are attacker-writable (a co-tenant can
@@ -65,6 +188,27 @@ export function invisibleCharAlert() {
   if (!markerIsTrusted(ALERT_FILE)) return null;
   const raw = readFileSync(ALERT_FILE, "utf-8").trim();
   return scrubUntrustedText(raw, applyLayer1);
+}
+
+/**
+ * Add `text` to the alert the PreToolUse gate surfaces, keeping whatever is
+ * already there.
+ *
+ * Appending, where the SessionStart scanner TRUNCATES: that scan runs once and
+ * owns the session's reset, while an instruction file loaded mid-session is one
+ * more finding on top of whatever the launch scan left — a truncating write here
+ * would silently drop the earlier report. Symlink-refusing (writeFileNoFollow)
+ * and ownership-checked on read, because ALERT_FILE sits at a predictable,
+ * world-visible $TMPDIR path; a foreign or squatted file reads as empty and is
+ * replaced rather than appended to.
+ * @param {string} text
+ * @returns {void}
+ */
+export function appendAlert(text) {
+  const existing = markerIsTrusted(ALERT_FILE)
+    ? readFileSync(ALERT_FILE, "utf-8")
+    : "";
+  writeFileNoFollow(ALERT_FILE, existing + text + "\n");
 }
 
 /**

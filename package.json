@@ -168,6 +168,10 @@
       "types": "./types/claude-hooks/scan-invisible-chars.d.mts",
       "default": "./claude-hooks/scan-invisible-chars.mjs"
     },
+    "./claude-hooks/scan-loaded-instructions": {
+      "types": "./types/claude-hooks/scan-loaded-instructions.d.mts",
+      "default": "./claude-hooks/scan-loaded-instructions.mjs"
+    },
     "./claude-hooks/lib/hook-io": {
       "types": "./types/claude-hooks/lib/hook-io.d.mts",
       "default": "./claude-hooks/lib/hook-io.mjs"

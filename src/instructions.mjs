@@ -13,8 +13,10 @@
  * instruction files live under (e.g. `["CLAUDE.md", "AGENTS.md",
  * ".claude/**\/*.md", "**\/SKILL.md"]`), so no agent's convention is baked in.
  * Claude Code's own convention is re-exported below
- * ({@link CLAUDE_INSTRUCTION_GLOBS} / {@link excludeFromContextScan}) so a
- * caller that wants it takes the SessionStart hook's exact scope rather than
+ * ({@link CLAUDE_INSTRUCTION_GLOBS} for a whole tree,
+ * {@link CLAUDE_LAUNCH_GLOBS} + {@link ancestorInstructionFiles} for just what a
+ * session loads at launch, {@link excludeFromContextScan} to prune either walk)
+ * so a caller that wants it takes the hooks' exact scope rather than
  * approximating it — see ./claude-context.mjs.
  */
 import {
@@ -48,8 +50,12 @@ import { excludeNodeModules } from "./claude-context.mjs";
 // makes `agent-sanitizer/instructions` the single place a CLI, a port or a fork
 // reads that scope from instead of re-spelling it.
 export {
+  ancestorInstructionFiles,
   CLAUDE_CONTEXT_SUBDIRS,
+  CLAUDE_DIR_INSTRUCTION_FILES,
   CLAUDE_INSTRUCTION_GLOBS,
+  CLAUDE_LAUNCH_GLOBS,
+  CLAUDE_MEMORY_FILES,
   excludeFromContextScan,
 } from "./claude-context.mjs";
 

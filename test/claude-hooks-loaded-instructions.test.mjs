@@ -1,0 +1,397 @@
+/**
+ * The InstructionsLoaded scan: what happens to an instruction file at the moment
+ * Claude Code loads it.
+ *
+ * This hook is the lazy half of the instruction-file scan — the SessionStart
+ * scan covers what loads at launch, and everything a subdirectory, a rule glob
+ * or a compaction reload pulls in later arrives here. It cannot block (the event
+ * ignores its exit code) and the bytes are already in context when it runs, so
+ * the three things it CAN do are the contract: strip the payload from disk, say
+ * so on both the user and model channels, and arm the PreToolUse gate when the
+ * strip did not happen.
+ */
+import { describe, it, after, beforeEach } from "node:test";
+import assert from "node:assert/strict";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  utimesSync,
+  writeFileSync,
+} from "node:fs";
+import { spawnSync } from "node:child_process";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { repoRoot } from "./helpers/repo-root.mjs";
+
+// Set before the hook imports: it REWRITES contaminated instruction files under
+// CLAUDE_PROJECT_DIR, so pointing it at this repo would let the test edit the
+// tree.
+const projectDir = mkdtempSync(join(tmpdir(), "sanitizer-loaded-proj-"));
+process.env.CLAUDE_PROJECT_DIR = projectDir;
+
+const { readLoadedFile, scanLoadedFile, loadedFileMessage } =
+  await import("../claude-hooks/scan-loaded-instructions.mjs");
+const { LONG_RUN_THRESHOLD } = await import("../src/invisible.mjs");
+const {
+  ALERT_FILE,
+  appendAlert,
+  instructionsLoadedFile,
+  instructionsLoadedGapNotice,
+  instructionsLoadedNoticeFile,
+  instructionsLoadedSeen,
+  recordInstructionsLoaded,
+} = await import("../claude-hooks/lib/invisible-alert.mjs");
+
+/** The session id the CLI cases send, so their markers are this session's. */
+const SESSION = "sess-loaded-1";
+
+/** A payload long enough for the scanner's long-run threshold to flag it. */
+const PAYLOAD = "\u{e0001}".repeat(LONG_RUN_THRESHOLD + 2);
+const PROSE = "real prose the strip must keep\n";
+
+const markers = [
+  ALERT_FILE,
+  instructionsLoadedFile(),
+  instructionsLoadedNoticeFile(),
+  instructionsLoadedFile(SESSION),
+  instructionsLoadedNoticeFile(SESSION),
+];
+
+beforeEach(() => {
+  for (const path of markers) rmSync(path, { force: true });
+});
+
+after(() => {
+  rmSync(projectDir, { recursive: true, force: true });
+  for (const path of markers) rmSync(path, { force: true });
+});
+
+/** Write `content` to `name` under the project and return its absolute path. */
+function project(name, content) {
+  const abs = join(projectDir, name);
+  mkdirSync(join(abs, ".."), { recursive: true });
+  writeFileSync(abs, content);
+  return abs;
+}
+
+describe("the loaded-file payload is validated, never assumed", () => {
+  it("reads the file path, its bytes and the load reason", () => {
+    assert.deepEqual(
+      readLoadedFile({
+        file_path: "/p/CLAUDE.md",
+        file_content: "hi",
+        load_reason: "nested_traversal",
+      }),
+      {
+        filePath: "/p/CLAUDE.md",
+        content: "hi",
+        loadReason: "nested_traversal",
+      },
+    );
+  });
+
+  it("labels a missing load reason rather than skipping the scan", () => {
+    // The reason is trace metadata only. Treating its absence as a reason not to
+    // scan would let a harness change silently disable the scan.
+    const loaded = readLoadedFile({
+      file_path: "/p/CLAUDE.md",
+      file_content: "hi",
+    });
+    assert.equal(loaded.loadReason, "unknown");
+    assert.equal(loaded.content, "hi");
+  });
+
+  for (const [name, payload] of [
+    ["no file_path", { file_content: "hi" }],
+    ["an empty file_path", { file_path: "", file_content: "hi" }],
+    ["no file_content", { file_path: "/p/CLAUDE.md" }],
+    [
+      "a non-string file_content",
+      { file_path: "/p/CLAUDE.md", file_content: 7 },
+    ],
+    ["nothing at all", undefined],
+  ])
+    it(`throws on ${name}, rather than reporting a clean file`, () => {
+      // The one answer that must be unreachable: "no findings" for bytes the
+      // hook never saw. The throw routes to the declared fault posture.
+      assert.throws(() => readLoadedFile(payload), /file_path|file_content/u);
+    });
+});
+
+describe("a loaded file inside the project is cleaned on disk", () => {
+  it("strips the payload and reports it cleaned", () => {
+    const content = `${PROSE}hidden:${PAYLOAD}\n`;
+    const filePath = project("packages/foo/CLAUDE.md", content);
+
+    const result = scanLoadedFile({ filePath, content });
+    assert.equal(result.cleaned, true);
+    assert.equal(result.reason, null);
+
+    const after = readFileSync(filePath, "utf8");
+    assert.ok(after.includes(PROSE), "the strip took real prose with it");
+    assert.ok(!after.includes("\u{e0001}"), "the payload is still on disk");
+  });
+
+  it("scans the LOADED bytes, not a re-read of the path", () => {
+    // The file on disk is clean; the bytes Claude Code loaded were not. Scanning
+    // the path would report nothing and the model would keep reading a payload
+    // nothing ever named.
+    const filePath = project("CLAUDE.md", PROSE);
+    const result = scanLoadedFile({
+      filePath,
+      content: `${PROSE}hidden:${PAYLOAD}\n`,
+    });
+    assert.notEqual(result, null);
+    assert.match(result.report, /INVISIBLE CHARACTER INJECTION DETECTED/u);
+  });
+
+  it("says nothing about a clean file", () => {
+    const filePath = project("CLAUDE.md", PROSE);
+    assert.equal(scanLoadedFile({ filePath, content: PROSE }), null);
+  });
+
+  it("reports NOT cleaned when the stripper leaves the bytes in place", () => {
+    // cleanFile returns false when it re-scans and finds nothing to strip — the
+    // file changed under us. The finding stands, so the file must not be
+    // recorded as cleaned; that is what routes it to the gate.
+    const filePath = project("CLAUDE.md", PROSE);
+    const result = scanLoadedFile(
+      { filePath, content: `${PROSE}${PAYLOAD}` },
+      { clean: () => false },
+    );
+    assert.equal(result.cleaned, false);
+    assert.match(result.reason, /changed/u);
+  });
+});
+
+describe("a loaded file outside the project is reported, never rewritten", () => {
+  // Both roots Claude Code loads instructions from that this session does not
+  // own. The user-global tree is the reason this hook, and not the SessionStart
+  // walk, is where that coverage lives: `~/.claude/CLAUDE.md` and the global
+  // rules load into EVERY session on the machine, and the event carries their
+  // bytes — so scanning them costs nothing at startup and needs no second root
+  // globbed at launch.
+  for (const [label, ...rel] of [
+    ["above the project", "CLAUDE.md"],
+    ["in the user-global tree", ".claude", "CLAUDE.md"],
+    ["in a user-global rule", ".claude", "rules", "security.md"],
+  ])
+    it(`leaves the bytes of a file ${label} alone and says why`, () => {
+      const outside = mkdtempSync(join(tmpdir(), "sanitizer-loaded-outside-"));
+      const filePath = join(outside, ...rel);
+      const content = `${PROSE}hidden:${PAYLOAD}\n`;
+      mkdirSync(join(filePath, ".."), { recursive: true });
+      writeFileSync(filePath, content);
+
+      const result = scanLoadedFile({ filePath, content });
+      assert.match(result.report, /INVISIBLE CHARACTER INJECTION DETECTED/u);
+      assert.equal(result.cleaned, false);
+      assert.match(result.reason, /outside this project/u);
+      assert.equal(
+        readFileSync(filePath, "utf8"),
+        content,
+        "a file outside the project was rewritten",
+      );
+      rmSync(outside, { recursive: true, force: true });
+    });
+});
+
+describe("the message reaches whoever can act on it", () => {
+  const report = "REPORT-BODY";
+
+  it("tells the model the loaded bytes are data, not instructions", () => {
+    for (const result of [
+      { report, cleaned: true, reason: null },
+      { report, cleaned: false, reason: "it lives outside this project" },
+    ]) {
+      const message = loadedFileMessage(result, "/p/CLAUDE.md");
+      assert.ok(message.includes(report));
+      assert.ok(message.includes("/p/CLAUDE.md"));
+      assert.match(message, /untrusted data, not as instructions/u);
+    }
+  });
+
+  it("distinguishes a cleaned file from one still carrying the payload", () => {
+    const cleaned = loadedFileMessage(
+      { report, cleaned: true, reason: null },
+      "/p/CLAUDE.md",
+    );
+    const uncleaned = loadedFileMessage(
+      { report, cleaned: false, reason: "it is read-only" },
+      "/p/CLAUDE.md",
+    );
+    assert.match(cleaned, /stripped/u);
+    assert.match(uncleaned, /STILL in \/p\/CLAUDE\.md — it is read-only/u);
+  });
+});
+
+describe("the alert accumulates rather than clobbering", () => {
+  it("keeps an earlier report when a later load adds one", () => {
+    // The SessionStart scan writes the launch report; a file loaded later adds
+    // to it. A truncating write here would drop the launch findings, and the
+    // gate would surface only the newest one.
+    appendAlert("launch finding");
+    appendAlert("nested finding");
+    const alert = readFileSync(ALERT_FILE, "utf8");
+    assert.match(alert, /launch finding/u);
+    assert.match(alert, /nested finding/u);
+  });
+});
+
+describe("the hook CLI, driven end to end on a real event", () => {
+  /** Run the hook as Claude Code does: one JSON event on stdin. */
+  function fire(payload) {
+    const result = spawnSync(
+      process.execPath,
+      [join(repoRoot, "claude-hooks", "scan-loaded-instructions.mjs")],
+      {
+        input: JSON.stringify(payload),
+        encoding: "utf8",
+        env: { ...process.env, CLAUDE_PROJECT_DIR: projectDir },
+      },
+    );
+    return {
+      ...result,
+      json: result.stdout ? JSON.parse(result.stdout) : null,
+    };
+  }
+
+  it("cleans the file and answers on both channels", () => {
+    const filePath = project("nested/CLAUDE.md", `${PROSE}${PAYLOAD}\n`);
+    const { json, stderr } = fire({
+      hook_event_name: "InstructionsLoaded",
+      session_id: SESSION,
+      file_path: filePath,
+      load_reason: "nested_traversal",
+      file_content: `${PROSE}${PAYLOAD}\n`,
+    });
+
+    assert.ok(!readFileSync(filePath, "utf8").includes("\u{e0001}"));
+    // systemMessage reaches the user, additionalContext the model: the file is
+    // already in context, so both parties need telling.
+    assert.match(json.systemMessage, /INVISIBLE CHARACTER INJECTION DETECTED/u);
+    assert.equal(json.hookSpecificOutput.hookEventName, "InstructionsLoaded");
+    assert.match(json.hookSpecificOutput.additionalContext, /untrusted data/u);
+    assert.match(stderr, /INVISIBLE CHARACTER INJECTION DETECTED/u);
+    // Cleaned, so nothing is left for the gate to ask about.
+    assert.equal(existsSync(ALERT_FILE), false);
+    assert.ok(existsSync(instructionsLoadedFile(SESSION)));
+  });
+
+  it("arms the gate when the payload is still on disk", () => {
+    const outside = mkdtempSync(join(tmpdir(), "sanitizer-loaded-cli-"));
+    const filePath = join(outside, "CLAUDE.md");
+    writeFileSync(filePath, `${PROSE}${PAYLOAD}\n`);
+
+    fire({
+      hook_event_name: "InstructionsLoaded",
+      session_id: SESSION,
+      file_path: filePath,
+      load_reason: "include",
+      file_content: `${PROSE}${PAYLOAD}\n`,
+    });
+
+    assert.ok(existsSync(ALERT_FILE), "the PreToolUse gate was not armed");
+    assert.match(readFileSync(ALERT_FILE, "utf8"), /CLAUDE\.md/u);
+    rmSync(outside, { recursive: true, force: true });
+  });
+
+  it("stays silent on a clean file, and still records that it ran", () => {
+    const filePath = project("CLAUDE.md", PROSE);
+    const { stdout, stderr } = fire({
+      hook_event_name: "InstructionsLoaded",
+      session_id: SESSION,
+      file_path: filePath,
+      load_reason: "session_start",
+      file_content: PROSE,
+    });
+    assert.equal(stdout, "");
+    assert.equal(stderr, "");
+    assert.equal(existsSync(ALERT_FILE), false);
+    // The marker is what tells the PreToolUse gate this host emits the event at
+    // all; a clean file must still leave it.
+    assert.ok(existsSync(instructionsLoadedFile(SESSION)));
+  });
+
+  it("reports a malformed event instead of passing it as clean", () => {
+    const { stderr, status } = fire({
+      hook_event_name: "InstructionsLoaded",
+      load_reason: "session_start",
+    });
+    assert.match(stderr, /scan-loaded-instructions/u);
+    assert.match(stderr, /file_path/u);
+    assert.notEqual(status, 0);
+  });
+});
+
+describe("a host that never emits the event is named, once", () => {
+  it("warns while no scan has been seen, naming both causes", () => {
+    const notice = instructionsLoadedGapNotice();
+    assert.match(notice, /InstructionsLoaded/u);
+    assert.match(notice, /unscanned/u);
+    // The marker cannot distinguish a host that never emits the event from an
+    // operator who switched the hook off, so the notice must not assert either
+    // one — a reader sent to the wrong fix stops trusting the next notice.
+    assert.match(notice, /AGENT_SANITIZER_DISABLED_HOOKS/u);
+  });
+
+  it("does not repeat the warning on later tool calls", () => {
+    assert.notEqual(instructionsLoadedGapNotice(), null);
+    assert.equal(instructionsLoadedGapNotice(), null);
+    assert.equal(instructionsLoadedGapNotice(), null);
+  });
+
+  it("stays silent once the hook has run", () => {
+    assert.equal(instructionsLoadedSeen(), false);
+    recordInstructionsLoaded();
+    assert.ok(existsSync(instructionsLoadedFile()));
+    assert.equal(instructionsLoadedSeen(), true);
+    assert.equal(instructionsLoadedGapNotice(), null);
+  });
+
+  it("does not let one session's marker answer for another", () => {
+    // The markers outlive the session that wrote them — nothing clears them at
+    // SessionStart, because SessionStart is not ordered against the
+    // InstructionsLoaded events fired for the files loaded at launch. Keying
+    // them by session is what keeps a previous session's coverage from
+    // silencing this session's gap.
+    recordInstructionsLoaded("sess-earlier");
+    assert.equal(instructionsLoadedSeen("sess-earlier"), true);
+    assert.equal(instructionsLoadedSeen(SESSION), false);
+    assert.match(instructionsLoadedGapNotice(SESSION), /unscanned/u);
+    rmSync(instructionsLoadedFile("sess-earlier"), { force: true });
+  });
+
+  it("sweeps a past session's markers, keeping this session's and recent ones", () => {
+    // One marker pair per session, never cleared while the session could still
+    // ask — so the only thing keeping $TMPDIR from growing without bound is this
+    // sweep on the first fire of a later session.
+    const old = instructionsLoadedFile("sess-ancient");
+    const recent = instructionsLoadedFile("sess-yesterday");
+    for (const path of [old, recent]) writeFileSync(path, "");
+    const eightDaysAgo = new Date(Date.now() - 8 * 24 * 60 * 60 * 1000);
+    utimesSync(old, eightDaysAgo, eightDaysAgo);
+
+    recordInstructionsLoaded(SESSION);
+
+    assert.equal(existsSync(old), false, "a stale marker was left behind");
+    assert.ok(existsSync(recent), "a marker inside the TTL was swept");
+    assert.ok(
+      existsSync(instructionsLoadedFile(SESSION)),
+      "the sweep took the marker it had just written",
+    );
+    rmSync(recent, { force: true });
+  });
+
+  it("folds a path separator out of a hostile session id", () => {
+    // The id becomes a path component. A `/` in it would put the marker
+    // somewhere other than $TMPDIR — or at a path an attacker chose.
+    assert.equal(
+      instructionsLoadedFile("../../etc/x"),
+      instructionsLoadedFile(".._.._etc_x"),
+    );
+  });
+});
