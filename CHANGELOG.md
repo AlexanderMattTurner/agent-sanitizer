@@ -8,6 +8,12 @@ adhere to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+## [2.37.0] - 2026-08-12
+
+### Fixed
+
+- Fixed `claude-hooks` scan to correctly read the `InstructionsLoaded` file names instead of attempting to access a field that is never sent.
+
 ## [2.36.0] - 2026-08-12
 
 ### Added
