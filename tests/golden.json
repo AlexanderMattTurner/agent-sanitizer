@@ -601,6 +601,95 @@
         ],
         "notes": []
       }
+    },
+    {
+      "name": "ansi_control_strings_across_lines",
+      "plain": {
+        "cleaned": [
+          104, 101, 97, 100, 10, 98, 101, 108, 32, 32, 97, 102, 116, 101, 114,
+          10, 115, 116, 32, 32, 97, 102, 116, 101, 114, 10, 99, 49, 32, 32, 97,
+          102, 116, 101, 114, 10, 100, 99, 115, 32, 32, 97, 102, 116, 101, 114,
+          10, 97, 112, 99, 32, 32, 97, 102, 116, 101, 114, 10, 99, 97, 110, 32,
+          32, 97, 102, 116, 101, 114, 10, 115, 117, 98, 32, 32, 97, 102, 116,
+          101, 114, 10, 110, 101, 115, 116, 101, 100, 32, 32, 97, 102, 116, 101,
+          114, 10, 101, 115, 99, 32, 32, 97, 102, 116, 101, 114, 10, 116, 97,
+          105, 108, 32, 77, 85, 83, 84, 32, 83, 69, 69, 10
+        ],
+        "found": ["ansi"],
+        "warnings": [
+          "Stripped: ANSI escapes — inspect the removed bytes with a hex dump (xxd / od -c), which survives sanitization"
+        ],
+        "notes": []
+      },
+      "html": {
+        "cleaned": [
+          104, 101, 97, 100, 10, 98, 101, 108, 32, 32, 97, 102, 116, 101, 114,
+          10, 115, 116, 32, 32, 97, 102, 116, 101, 114, 10, 99, 49, 32, 32, 97,
+          102, 116, 101, 114, 10, 100, 99, 115, 32, 32, 97, 102, 116, 101, 114,
+          10, 97, 112, 99, 32, 32, 97, 102, 116, 101, 114, 10, 99, 97, 110, 32,
+          32, 97, 102, 116, 101, 114, 10, 115, 117, 98, 32, 32, 97, 102, 116,
+          101, 114, 10, 110, 101, 115, 116, 101, 100, 32, 32, 97, 102, 116, 101,
+          114, 10, 101, 115, 99, 32, 32, 97, 102, 116, 101, 114, 10, 116, 97,
+          105, 108, 32, 77, 85, 83, 84, 32, 83, 69, 69, 10
+        ],
+        "found": ["ansi"],
+        "warnings": [
+          "Stripped: ANSI escapes — inspect the removed bytes with a hex dump (xxd / od -c), which survives sanitization"
+        ],
+        "notes": []
+      }
+    },
+    {
+      "name": "ansi_control_string_bodies_meet_newline",
+      "plain": {
+        "cleaned": [
+          104, 101, 97, 100, 10, 111, 115, 99, 32, 10, 116, 108, 101, 7, 32, 97,
+          102, 116, 101, 114, 10, 99, 49, 32, 10, 116, 108, 101, 32, 97, 102,
+          116, 101, 114, 10, 100, 99, 115, 32, 10, 108, 111, 97, 100, 92, 32,
+          97, 102, 116, 101, 114, 10, 97, 112, 99, 32, 10, 109, 97, 110, 100,
+          32, 97, 102, 116, 101, 114, 10, 116, 97, 105, 108, 32, 77, 85, 83, 84,
+          32, 83, 69, 69, 10
+        ],
+        "found": ["ansi"],
+        "warnings": [
+          "Stripped: ANSI escapes — inspect the removed bytes with a hex dump (xxd / od -c), which survives sanitization"
+        ],
+        "notes": []
+      },
+      "html": {
+        "cleaned": [
+          104, 101, 97, 100, 10, 111, 115, 99, 32, 10, 116, 108, 101, 7, 32, 97,
+          102, 116, 101, 114, 10, 99, 49, 32, 10, 116, 108, 101, 32, 97, 102,
+          116, 101, 114, 10, 100, 99, 115, 32, 10, 108, 111, 97, 100, 92, 32,
+          97, 102, 116, 101, 114, 10, 97, 112, 99, 32, 10, 109, 97, 110, 100,
+          32, 97, 102, 116, 101, 114, 10, 116, 97, 105, 108, 32, 77, 85, 83, 84,
+          32, 83, 69, 69, 10
+        ],
+        "found": ["ansi"],
+        "warnings": [
+          "Stripped: ANSI escapes — inspect the removed bytes with a hex dump (xxd / od -c), which survives sanitization"
+        ],
+        "notes": []
+      }
+    },
+    {
+      "name": "ansi_control_string_unterminated_at_eof",
+      "plain": {
+        "cleaned": [108, 105, 110, 101, 49, 10, 108, 105, 110, 101, 50, 10],
+        "found": ["ansi"],
+        "warnings": [
+          "Stripped: ANSI escapes — inspect the removed bytes with a hex dump (xxd / od -c), which survives sanitization"
+        ],
+        "notes": []
+      },
+      "html": {
+        "cleaned": [108, 105, 110, 101, 49, 10, 108, 105, 110, 101, 50, 10],
+        "found": ["ansi"],
+        "warnings": [
+          "Stripped: ANSI escapes — inspect the removed bytes with a hex dump (xxd / od -c), which survives sanitization"
+        ],
+        "notes": []
+      }
     }
   ]
 }

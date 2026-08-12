@@ -13,7 +13,10 @@ match the JS by inspection:
 """
 
 import json
+import re
+import time
 import unicodedata
+import warnings
 
 import pytest
 
@@ -24,10 +27,11 @@ ensure_python_pkg_on_path()
 from agent_sanitizer.invisible import (  # noqa: E402
     cf_codepoints,
     control_introducers,
+    escape_sequence_pattern,
     extra_codepoints,
     invisible_charset,
 )
-from agent_sanitizer.textstrip import strip_untrusted  # noqa: E402
+from agent_sanitizer.textstrip import ANSI_RE, strip_untrusted  # noqa: E402
 
 _INVISIBLE = invisible_charset()
 
@@ -39,8 +43,13 @@ _INVISIBLE = invisible_charset()
 _ANSI_CASES = [
     ("csi_sgr_color", "a\x1b[31mred\x1b[0mb", "aredb"),
     ("csi_cursor_move", "x\x1b[2Ky", "xy"),
-    # no final byte; ESC[ swept, digit left
-    ("csi_truncated_leaves_body", "a\x1b[1", "a1"),
+    # No final byte, so this completes NO sequence: the JS layer classifies it
+    # orphan-csi and removes only the raw ESC in its residual sweep, leaving
+    # `[1` visible. The port's own general arm used to eat the bracket too —
+    # deleting a visible byte the authoritative layer keeps, which is the
+    # over-strip direction and a divergence no equivalence test could see while
+    # each port hand-wrote its own grammar.
+    ("csi_truncated_leaves_bracket", "a\x1b[1", "a[1"),
     ("osc_title_bel", "a\x1b]0;title\x07b", "ab"),
     ("osc_title_st", "a\x1b]0;title\x1b\\b", "ab"),
     ("general_charset_select", "a\x1b(Bb", "ab"),
@@ -132,6 +141,57 @@ def test_no_raw_esc_survives() -> None:
     residual ESC the alternation can't consume must still be gone."""
     for text in ("\x1b", "\x1b\x1b\x1b", "plain\x1b", "\x1b\x00tail", "a\x1b"):
         assert "\x1b" not in strip_untrusted(text), repr(text)
+
+
+# ─── The shipped grammar is an artifact, not an accident ─────────────────────
+
+
+def test_pattern_compiles_under_plain_re_with_no_flags() -> None:
+    """The whole contract a stdlib-only consumer gets: ``re.compile(pattern)``,
+    nothing else. A future rewrite reaching for ``re.VERBOSE``/``(?x)`` — or for
+    a named group, which a consumer materializing this into its own regex cannot
+    merge — has to fail HERE rather than in a downstream sandbox with no install
+    path. ``FutureWarning`` counts as failure too: ``[[…]`` compiles today and is
+    a hard error in a future Python."""
+    pattern = escape_sequence_pattern()
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        compiled = re.compile(pattern)
+    # No inline flag group: an embedded `(?x)`/`(?i)` shows up in `.flags`, which
+    # for a plain str pattern is UNICODE and nothing else.
+    assert compiled.flags == re.UNICODE
+    assert compiled.groups == 0
+    assert compiled.groupindex == {}
+    # It is the pattern the module actually strips with, not a second copy.
+    assert ANSI_RE.pattern == pattern
+
+
+def test_pattern_does_not_backtrack_on_a_repartitioning_run() -> None:
+    """The generated pattern runs on untrusted input inside a consumer with no
+    timeout, and ``regexploit`` (the repo's static ReDoS analyzer) does not model
+    this shape: two ADJACENT quantified classes that both accept ``;``, which
+    repartition quadratically with no nested quantifier for it to find. What
+    holds the CSI arm linear is the negative lookahead pinning the intro run
+    maximal, so the guard has to be the cost itself.
+
+    The control is DERIVED from the shipped pattern by deleting that lookahead,
+    so it cannot rot into testing some other regex, and the comparison is a ratio
+    on one machine rather than a wall-clock threshold on an unknown runner."""
+    bomb = "\x1b" + ";" * 8000
+    guarded = re.compile(escape_sequence_pattern())
+    unguarded = re.compile(re.sub(r"\(\?!\[[^]]*\]\)", "", escape_sequence_pattern()))
+    assert unguarded.pattern != guarded.pattern, "the lookahead was not found"
+
+    def seconds(compiled: re.Pattern) -> float:
+        start = time.perf_counter()
+        compiled.search(bomb)
+        return time.perf_counter() - start
+
+    fast, slow = seconds(guarded), seconds(unguarded)
+    # Non-vacuity: the input really is a backtracking bomb for the unguarded
+    # form (quadratic — ~4x per doubling of the run), so a pass here means the
+    # lookahead defused it rather than that the input was harmless.
+    assert slow > fast * 20, f"guarded {fast:.4f}s vs unguarded {slow:.4f}s"
 
 
 # ─── Invisible charset completeness (the pinned-SSOT guarantee) ───────────────
@@ -287,3 +347,51 @@ def test_never_understrips_vs_js(input_text: str, js_cleaned: str) -> None:
     removed_by_py = in_cp - py_cp
     still_present = removed_by_js - removed_by_py
     assert not still_present, sorted(hex(c) for c in still_present)
+
+
+def _has_lone_surrogate(text: str) -> bool:
+    # `_from_units` decodes with `surrogatepass`, so a well-formed pair has
+    # already become one astral code point — any surrogate still standing here
+    # is by definition lone.
+    return any(0xD800 <= ord(c) <= 0xDFFF for c in text)
+
+
+# Two documented reasons a case cannot be compared for EQUALITY: the JS layer
+# preserves a linguistically-used joiner or variation selector this port always
+# deletes, and `sanitize` normalizes a lone surrogate to U+FFFD at its boundary
+# where `applyLayer1` (and so this port) does not. Everything else must match
+# byte for byte.
+_EQUALITY_CORPUS = [
+    case
+    for case in _CORPUS
+    if not (set(map(ord, case[1])) & _INVISIBLE) and not _has_lone_surrogate(case[1])
+]
+
+
+def test_equality_corpus_covers_the_control_string_arms() -> None:
+    """Non-vacuity for the equality check below, and the reason the corpus grew:
+    the arms it discriminates must actually be IN it. A corpus that enumerates
+    sequence forms without ever putting a newline in, around and inside a control
+    string is what let one bug live identically in both ports — no case
+    disagreed, so no cross-port assertion could fire."""
+    names = {case[0] for case in _EQUALITY_CORPUS}
+    assert {
+        "ansi_control_strings_across_lines",
+        "ansi_control_string_bodies_meet_newline",
+        "ansi_control_string_unterminated_at_eof",
+    } <= names
+    assert len(_EQUALITY_CORPUS) >= 18
+
+
+@pytest.mark.parametrize(
+    "input_text,js_cleaned",
+    [(c[1], c[2]) for c in _EQUALITY_CORPUS],
+    ids=[c[0] for c in _EQUALITY_CORPUS],
+)
+def test_matches_js_exactly_where_comparable(input_text: str, js_cleaned: str) -> None:
+    """Two ENGINES, one pattern: the port compiles the grammar
+    ``src/ansi.mjs`` pins, but nothing in either language proves JS's and
+    Python's regex engines read that pattern the same way. This is where that is
+    checked — byte equality against the recorded JS output, not the one-sided
+    payload mask above, which passes whenever the port strips MORE."""
+    assert strip_untrusted(input_text) == js_cleaned
