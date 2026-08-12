@@ -33,7 +33,10 @@ import { writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { CONTROL_INTRODUCER_CODEPOINTS } from "../src/ansi.mjs";
+import {
+  CONTROL_INTRODUCER_CODEPOINTS,
+  ESCAPE_SEQUENCE_SOURCE,
+} from "../src/ansi.mjs";
 import { VS, BLANK_NON_CF } from "../src/invisible.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -76,13 +79,18 @@ export function charsetDoc() {
       "version delta escape one layer. The deletion set is the UNION of the two " +
       "lists. `control_introducers` is the raw ANSI control-introducer set " +
       "(ESC + the C1 block) from src/ansi.mjs, which Layer 1 sweeps and the " +
-      "Python textstrip port must sweep identically. Consumers in other " +
+      "Python textstrip port must sweep identically. `escape_sequence_pattern` " +
+      "is the escape GRAMMAR from that same module, as a regex source valid in " +
+      "JS and in Python `re` with no flags: src/ansi.mjs's scanner is the " +
+      "authoritative implementation, and a stdlib-only consumer compiles this " +
+      "rather than hand-writing a second spelling of it. Consumers in other " +
       "languages read this file instead of forking the lists — a fork is a " +
       "silent security regression.",
     unicode_version: unicodeVersion(),
     extra_codepoints: extraCodepoints(),
     cf_codepoints: cfCodepoints(),
     control_introducers: [...CONTROL_INTRODUCER_CODEPOINTS],
+    escape_sequence_pattern: ESCAPE_SEQUENCE_SOURCE,
   };
 }
 

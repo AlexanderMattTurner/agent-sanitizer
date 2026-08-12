@@ -43,9 +43,25 @@ export const CONTROL_INTRODUCER_CODEPOINTS = Object.freeze([
 // grep-based drift check as well. Derived from the code-point list above so the
 // regex and the exported data cannot disagree; `\uXXXX` escapes keep every raw
 // control byte out of the source (no `no-control-regex` disable needed).
-export const CONTROL_INTRODUCER_SOURCE = `[${CONTROL_INTRODUCER_CODEPOINTS.map(
-  (cp) => `\\u${cp.toString(16).padStart(4, "0")}`,
-).join("")}]`;
+export const CONTROL_INTRODUCER_SOURCE = charClass(
+  CONTROL_INTRODUCER_CODEPOINTS,
+);
+
+/** A code point as a `\uXXXX` escape — the one spelling of a control byte that
+ * both this module's regexes and the generated Python pattern use, so no raw
+ * control byte ever lands in either source.
+ * @param {number} cp
+ * @returns {string} */
+function unicodeEscape(cp) {
+  return `\\u${cp.toString(16).padStart(4, "0")}`;
+}
+
+/** A character class matching exactly the given code points.
+ * @param {readonly number[]} cps
+ * @returns {string} */
+function charClass(cps) {
+  return `[${cps.map(unicodeEscape).join("")}]`;
+}
 
 // SGR (Select Graphic Rendition): colors, bold, reset. The grammar is closed:
 // params are [0-9;:]* and the final byte is `m`, so a match can only restyle
@@ -73,10 +89,15 @@ const SGR_ANCHORED_RE = new RegExp(`^${SGR_SOURCE}$`);
 // Private parameter-prefix and intermediate bytes that may follow an
 // introducer before the parameters (`ESC[?25h`, `ESC(B`, `ESC#8`). Also covers
 // the 7-bit `ESC [` CSI introducer's bracket itself.
-const CSI_INTRO_RE = /[[()#;?]/;
+// The `[` is escaped though neither engine requires it: Python's `re` warns
+// `FutureWarning: Possible nested set` on a bare one, and this class ships as
+// the generated pattern a Python consumer compiles.
+const CSI_INTRO_CLASS = "[\\[()#;?]";
+const CSI_INTRO_RE = new RegExp(CSI_INTRO_CLASS);
 
 // ECMA-48 parameter bytes.
-const CSI_PARAM_RE = /[0-9;:]/;
+const CSI_PARAM_CLASS = "[0-9;:]";
+const CSI_PARAM_RE = new RegExp(CSI_PARAM_CLASS);
 
 // ECMA-48 final bytes, minus the ones a terminal never accepts here. Digits are
 // PARAMETER bytes and can never terminate a sequence — an unterminated `ESC[`
@@ -86,15 +107,26 @@ const CSI_PARAM_RE = /[0-9;:]/;
 // PARAMETER-prefix bytes per ECMA-48 § 5.4, not finals — including them let a
 // private-marker sequence terminate one byte too early. `~` (0x7E) IS a real
 // final byte (vt220 function keys, `ESC[3~` for Delete) and is kept.
-const CSI_FINAL_RE = /[A-PR-TZcf-nqrty~]/;
+const CSI_FINAL_CLASS = "[A-PR-TZcf-nqrty~]";
+const CSI_FINAL_RE = new RegExp(CSI_FINAL_CLASS);
 
 const ESC = 0x1b;
 const CSI_C1 = 0x9b;
 const ST_C1 = 0x9c;
 const BEL = 0x07;
-// CAN/SUB cancel a control string per ECMA-48 and the xterm parser; LF/CR do
-// not, but bound the body anyway as a fail-closed blast-radius limit (see
-// scanControlString).
+// THE ABORT SET — the four controls that end a control string short of its
+// terminator, and the whole of it. Every other C0 control and DEL is
+// deliberately consumed as body, because that is what a terminal does with
+// them: DEC's parser (vt100.net/emu/dec_ansi_parser) IGNORES C0 other than
+// CAN/SUB/ESC in `osc_string` and `sos_pm_apc_string` and `put`s them in
+// `dcs_passthrough`, so aborting on `VT`/`FF`/`NUL`/`DEL` would end the token
+// early and splice the rest of a payload the terminal swallows back into the
+// model's view — the under-strip this layer exists to close.
+//   CAN/SUB — ECMA-48 and that same parser cancel the string here.
+//   LF/CR   — NOT terminal behavior, a fail-closed blast-radius limit: they
+//             are the only two controls that cross a line, and a body running
+//             past one blinds a reader who consumes the strip as a RECORD
+//             rather than rendering it (see scanControlString).
 const CAN = 0x18;
 const SUB = 0x1a;
 const LF = 0x0a;
@@ -119,6 +151,59 @@ const OSC_C1 = 0x9d;
 // introducer aborts on (see scanControlString case 2) — the two ARE the same
 // set: opening a string is exactly what ends the one already open.
 const STRING_INTRO_C1 = new Set([0x90, 0x98, OSC_C1, 0x9e, 0x9f]);
+
+/**
+ * The same grammar {@link scanAnsi} implements, as a REGEX SOURCE — the shipped
+ * artifact for a consumer that cannot run this module.
+ *
+ * The scanner below is AUTHORITATIVE and this is derived from its own constants,
+ * never the other way round: the scanner emits token KINDS a regex cannot, and
+ * it is linear by construction where the regex form has to carry an explicit
+ * guard to stay linear (see the CSI arm's lookahead). What a regex CAN be is data —
+ * a stdlib-only Python filter on an uncontrolled host, with no install path for
+ * this package, can read a pattern string but cannot import a tokenizer. So the
+ * generator pins this into `data/invisible-charset.json` beside the introducer
+ * set, `agent_sanitizer.textstrip` compiles it, and the two ports stop being two
+ * hand-written spellings of one grammar.
+ *
+ * Every construct here is common to JS and Python `re` with NO flags —
+ * `\uXXXX`, `(?:)`, `(?=)`, `(?!)`, and `(?![\s\S])` for end-of-input (Python's
+ * `$` also matches before a trailing newline, JS's does not; `\Z` is Python-only)
+ * — so ONE pattern string is what both engines read.
+ * `test/ansi-pattern-parity.test.mjs` runs it against the scanner over a fuzz
+ * corpus; `tests/test_textstrip.py` asserts it compiles under plain `re`.
+ */
+export const ESCAPE_SEQUENCE_SOURCE = (() => {
+  const introducer7Bit = `${unicodeEscape(ESC)}${charClass(
+    [...STRING_INTRO_7BIT].map((ch) => ch.charCodeAt(0)),
+  )}`;
+  const c1Introducers = [...STRING_INTRO_C1].sort((a, b) => a - b);
+  // Consumed with the body, vs the bytes the token ends BEFORE (zero-width) so
+  // the scan re-reads them — the split scanControlString makes byte for byte.
+  const consumed = [BEL, CAN, SUB, ST_C1].sort((a, b) => a - b);
+  const abortBefore = [ESC, ...c1Introducers, LF, CR].sort((a, b) => a - b);
+  const body = `[^${[...new Set([...consumed, ...abortBefore])]
+    .sort((a, b) => a - b)
+    .map(unicodeEscape)
+    .join("")}]*`;
+  // `ESC \` is the 7-bit ST, the one two-byte terminator.
+  const escapeSt = `${unicodeEscape(ESC)}${unicodeEscape(0x5c)}`;
+  const terminator =
+    `(?:${charClass(consumed)}|${escapeSt}` +
+    `|(?=${charClass(abortBefore)})|(?![\\s\\S]))`;
+  const stringArm = `(?:${introducer7Bit}|${charClass(c1Introducers)})${body}${terminator}`;
+  // The negative lookahead pins the intro run MAXIMAL — which is what the
+  // scanner's `while` loop does — and in doing so removes the only place the
+  // two quantifiers could repartition (`;` is in both classes), so this cannot
+  // backtrack super-linearly the way an unbounded `[…;…]*[…;…]*` would.
+  const csiArm =
+    `${charClass([ESC, CSI_C1])}${CSI_INTRO_CLASS}*(?!${CSI_INTRO_CLASS})` +
+    `${CSI_PARAM_CLASS}*${CSI_FINAL_CLASS}`;
+  // The string arm runs FIRST for the same reason it does in scanAnsi: `P` is
+  // also a CSI final byte, so a CSI-first alternation takes `ESC P` alone and
+  // leaves the DCS body as visible text.
+  return `(?:${stringArm}|${csiArm})`;
+})();
 
 /** The seven things an introducer can turn out to be. */
 export const TOKEN_KIND = Object.freeze({
@@ -230,7 +315,9 @@ export function orphanKindFor(ch, next) {
  *      bound one stray `ESC ]` deleted every later line to end of input, so on a
  *      consumer that reads the strip as a RECORD (a model, not a display) one
  *      introducer blinded the whole tail behind a clean-looking prefix. The
- *      break survives; the payload after it on the same line is dropped.
+ *      break survives; the payload after it on the same line is dropped. This is
+ *      what makes the layer-wide invariant hold — no token of any kind spans a
+ *      line break, so a strip NEVER removes a newline (test/layer1-ansi).
  *   4. end of input, for a genuinely unterminated string with no line break:
  *      fail closed and drop everything from the introducer on, so no body
  *      survives.
