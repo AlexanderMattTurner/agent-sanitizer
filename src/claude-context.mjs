@@ -26,7 +26,7 @@ import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 // this kind is not on the ancestor chain, and no event announces it — so a row
 // added without them claims nothing the host has not been observed doing.
 /**
- * @param {"dir-file" | "claude-md" | "claude-subdir"} shape
+ * @param {"dir-file" | "claude-md" | "claude-subdir" | "claude-bulk"} shape
  * @param {string} name  how a reader spells this kind
  * @param {{ ancestorChain?: boolean, eventNamed?: boolean }} [flags]
  */
@@ -50,12 +50,14 @@ function kind(shape, name, { ancestorChain = false, eventNamed = false } = {}) {
  *   - `dir-file` — `name`, in any directory (`packages/foo/CLAUDE.md`).
  *   - `claude-md` — top-level markdown directly under a `.claude/` directory.
  *   - `claude-subdir` — `.claude/<name>/` and everything markdown below it.
+ *   - `claude-bulk` — `.claude/<name>/`, holding data that is not context.
  *
- * `.claude/` is also where tooling parks bulk data that never loads as context —
- * `worktrees/` (entire repo checkouts), caches, transcripts, snapshots — so the
- * `claude-subdir` rows are a WHITELIST: an unlisted context directory costs a
- * scan nobody paid for anyway, while an unlisted BULK directory costs every
- * future session its startup (thousands of files read, 30 seconds of it).
+ * The `claude-subdir` rows are a WHITELIST, because `.claude/` is also where
+ * tooling parks bulk data: an unlisted context directory costs a scan nobody
+ * paid for anyway, while an unlisted BULK directory costs every future session
+ * its startup (thousands of files read, 30 seconds of it). The `claude-bulk`
+ * rows name the bulk directories this project has seen, which is what keeps
+ * {@link contextScopeContradiction} from asking for one to be whitelisted.
  */
 export const CLAUDE_CONTEXT_KINDS = Object.freeze([
   kind("dir-file", "CLAUDE.md", { ancestorChain: true, eventNamed: true }),
@@ -73,6 +75,10 @@ export const CLAUDE_CONTEXT_KINDS = Object.freeze([
   kind("claude-subdir", "output-styles"),
   kind("claude-subdir", "rules", { eventNamed: true }),
   kind("claude-subdir", "skills"),
+  // Repo checkouts and session transcripts: storage the host writes and reads
+  // back, so a load out of one is not evidence that the whitelist is short.
+  kind("claude-bulk", "worktrees"),
+  kind("claude-bulk", "projects"),
 ]);
 
 /** The rows of one shape, in table order. @param {string} shape */
@@ -218,11 +224,10 @@ export function excludeNodeModules(entry) {
 }
 
 // The path segments below one `.claude` directory in `path`, or null when it
-// names none. Which one differs by question, and both callers need their own:
-// pruning asks whether the path is inside a bulk directory of the tree being
-// walked, so it takes the OUTERMOST (a `worktrees/` checkout carries a whole
-// `.claude` of its own, and the prune has to keep applying below it); naming a
-// kind asks what the file IS, so it takes the INNERMOST tree it belongs to.
+// names none. Pruning asks whether the path is inside a bulk directory of the
+// tree being walked, so it takes the OUTERMOST — a `worktrees/` checkout carries
+// a whole `.claude` of its own, below which the prune must keep applying.
+// Naming a kind asks what the file IS, so it takes the INNERMOST tree.
 /** @param {string} path @param {"outermost" | "innermost"} which */
 function claudeTail(path, which) {
   const parts = path.split(/[/\\]/);
@@ -240,10 +245,10 @@ function claudeTail(path, which) {
  * The globs alone would already refuse to MATCH those files, but a glob walker
  * calls this on directories as it walks and prunes the ones it rejects — which
  * is where the cost actually is. Without the prune, a `.claude/worktrees/`
- * holding a few repo checkouts is walked in full on every session start (and,
- * because a doubled-star segment does cross into a dot directory when the
- * pattern names one, a `.claude` NESTED inside a worktree was matched and
- * scanned as if it were this session's context).
+ * holding a few repo checkouts is walked in full on every session start, and a
+ * `.claude` NESTED inside a worktree is scanned as if it were this session's
+ * context: a doubled-star segment does cross into a dot directory when the
+ * pattern names one.
  *
  * A walker calls this with both bare names and root-relative paths, so it must
  * answer for either; a bare name carries no `.claude` context and is judged only
@@ -262,9 +267,9 @@ export function excludeFromContextScan(entry) {
 }
 
 /**
- * The context kind `path` is an instance of, or null when this table claims none
- * — an `@import` of an arbitrary markdown file, a source file, a bulk `.claude`
- * entry. Null is the honest answer for anything the table does not name, and
+ * The kind `path` is an instance of, or null when this table claims none — an
+ * `@import` of an arbitrary markdown file, a source file, an unlisted `.claude`
+ * directory. Null is the honest answer for anything the table does not name, and
  * callers must treat it as "no claim", never as "not context".
  * @param {string} path  absolute or relative; only its segments are read
  * @returns {(typeof CLAUDE_CONTEXT_KINDS)[number] | null}
@@ -275,13 +280,18 @@ function classifyContextPath(path) {
   // A CLAUDE.md is that kind wherever it sits, `.claude` tree or not — which is
   // what keeps the ordinary nested-memory load from reading as evidence about
   // the directory it happens to sit under.
-  const dirFile = kindsOfShape("dir-file").find((kind) => kind.name === name);
+  const dirFile = kindsOfShape("dir-file").find((row) => row.name === name);
   const tail = claudeTail(path, "innermost");
   if (dirFile || tail === null) return dirFile ?? null;
   if (tail.length === 1 && name.endsWith(".md"))
     return kindsOfShape("claude-md")[0];
+  // Both directory shapes, so a bulk directory classifies as itself rather than
+  // falling through to the unlisted-directory report below.
+  const dirShapes = ["claude-subdir", "claude-bulk"];
   return (
-    kindsOfShape("claude-subdir").find((kind) => kind.name === tail[0]) ?? null
+    CLAUDE_CONTEXT_KINDS.find(
+      (row) => dirShapes.includes(row.shape) && row.name === tail[0],
+    ) ?? null
   );
 }
 
@@ -300,15 +310,18 @@ function classifyContextPath(path) {
  * Only a positive observation reports. A path the table does not name at all
  * (an `@import` of arbitrary markdown) says nothing about the table, so it
  * returns null rather than guessing — the event names files it does not own.
+ * A `claude-bulk` row is silent for the same reason in reverse: the table
+ * already knows that directory is storage, and asking for it to be whitelisted
+ * is asking for the whole-tree walk back.
  * @param {string} path  the path the host loaded
  * @returns {string | null} what is stale, phrased for whoever fixes the table
  */
 export function contextScopeContradiction(path) {
-  const kind = classifyContextPath(path);
-  if (kind?.eventNamed) return null;
-  if (kind !== null)
+  const row = classifyContextPath(path);
+  if (row?.eventNamed || row?.shape === "claude-bulk") return null;
+  if (row)
     return (
-      `InstructionsLoaded named ${kind.name}, which CLAUDE_CONTEXT_KINDS records as a kind the ` +
+      `InstructionsLoaded named ${row.name}, which CLAUDE_CONTEXT_KINDS records as a kind the ` +
       "event never names: the lazy scan reaches further than this table, and the docs built " +
       "on it, claim"
     );

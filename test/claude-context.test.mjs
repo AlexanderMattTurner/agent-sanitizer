@@ -1,7 +1,6 @@
 /**
- * The context scope as a LIBRARY value: the glob set and the prune predicate
- * that used to live inside the SessionStart hook, where nobody else could read
- * them.
+ * The context scope as a LIBRARY value: the glob set, the prune predicate and
+ * the scope falsifier, exercised through the public door.
  *
  * `test/claude-hooks-scan-scope.test.mjs` pins the hook's behavior over a real
  * fixture tree; this file pins the same scope through the public door, because
@@ -10,8 +9,8 @@
  * has to get right are asymmetric: an unlisted CONTEXT directory is a silent
  * hole in the scan, and an unlisted BULK directory is the 30-second session
  * start. So the cases below assert both directions, and that the composed
- * `exclude` in findInstructionFiles ANDs the caller's predicate with the
- * built-in `node_modules` prune rather than replacing either.
+ * `exclude` in findInstructionFiles ORs the caller's predicate with the built-in
+ * `node_modules` prune rather than replacing either.
  */
 import { describe, it, after } from "node:test";
 import assert from "node:assert/strict";
@@ -76,14 +75,13 @@ describe("the exported Claude Code context scope", () => {
         exclude: excludeFromContextScan,
       }),
     );
-    assert.deepEqual(found, [...CONTEXT].sort());
-    // Spelled out separately from the deepEqual so a failure names the file:
-    // a missing context file is a hole in the scan, an included bulk file is
-    // the startup cost.
+    // Named per file first, so a failure says WHICH: a missing context file is
+    // a hole in the scan, an included bulk file is the startup cost.
     for (const path of CONTEXT)
       assert.ok(found.includes(path), `missing ${path}`);
     for (const path of BULK)
       assert.ok(!found.includes(path), `swept in ${path}`);
+    assert.deepEqual(found, [...CONTEXT].sort());
   });
 
   it("judges bare names and root-relative paths alike", () => {
@@ -170,6 +168,17 @@ describe("what a loaded path says about the scope table", () => {
       "a memory file inside a worktree checkout",
       join(sep, "p", ".claude", "worktrees", "wt", "CLAUDE.md"),
     ],
+    // The two bulk directories by name, on files the dir-file rule does NOT
+    // rescue: asking for storage to be whitelisted is asking for the whole-tree
+    // walk back, so these reach the reporting branch and must still say nothing.
+    [
+      "a note inside a worktree checkout",
+      join(sep, "p", ".claude", "worktrees", "wt", "docs", "notes.md"),
+    ],
+    [
+      "a session transcript",
+      join(sep, "u", ".claude", "projects", "proj", "transcript.md"),
+    ],
   ];
 
   for (const [label, path] of SILENT)
@@ -234,8 +243,9 @@ describe("what a loaded path says about the scope table", () => {
 
   it("answers for every kind the table carries, and says so by name", () => {
     // Drives the table itself, so a row added without a decision about the
-    // event cannot slip in unexercised: each row is silent exactly when it is
-    // credited to the event, and names itself when it is not.
+    // event cannot slip in unexercised. The spec per row: a bulk directory is
+    // storage and always silent; every other kind is silent exactly when the
+    // event is credited with it, and names itself when it is not.
     for (const row of CLAUDE_CONTEXT_KINDS) {
       const path =
         row.shape === "dir-file"
@@ -243,8 +253,9 @@ describe("what a loaded path says about the scope table", () => {
           : row.shape === "claude-md"
             ? join(sep, "p", ".claude", "note.md")
             : join(sep, "p", ".claude", row.name, "f.md");
+      const silent = row.eventNamed || row.shape === "claude-bulk";
       const notice = contextScopeContradiction(path);
-      assert.equal(notice === null, row.eventNamed, `${path}: ${notice}`);
+      assert.equal(notice === null, silent, `${path}: ${notice}`);
       if (notice) assert.ok(notice.includes(row.name), notice);
     }
   });

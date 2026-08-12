@@ -54649,18 +54649,21 @@ function excludeFromContextScan(entry) {
 function classifyContextPath(path2) {
   const segments = path2.split(/[/\\]/);
   const name50 = segments[segments.length - 1];
-  const dirFile = kindsOfShape("dir-file").find((kind2) => kind2.name === name50);
+  const dirFile = kindsOfShape("dir-file").find((row) => row.name === name50);
   const tail = claudeTail(path2, "innermost");
   if (dirFile || tail === null) return dirFile ?? null;
   if (tail.length === 1 && name50.endsWith(".md"))
     return kindsOfShape("claude-md")[0];
-  return kindsOfShape("claude-subdir").find((kind2) => kind2.name === tail[0]) ?? null;
+  const dirShapes = ["claude-subdir", "claude-bulk"];
+  return CLAUDE_CONTEXT_KINDS.find(
+    (row) => dirShapes.includes(row.shape) && row.name === tail[0]
+  ) ?? null;
 }
 function contextScopeContradiction(path2) {
-  const kind2 = classifyContextPath(path2);
-  if (kind2?.eventNamed) return null;
-  if (kind2 !== null)
-    return `InstructionsLoaded named ${kind2.name}, which CLAUDE_CONTEXT_KINDS records as a kind the event never names: the lazy scan reaches further than this table, and the docs built on it, claim`;
+  const row = classifyContextPath(path2);
+  if (row?.eventNamed || row?.shape === "claude-bulk") return null;
+  if (row)
+    return `InstructionsLoaded named ${row.name}, which CLAUDE_CONTEXT_KINDS records as a kind the event never names: the lazy scan reaches further than this table, and the docs built on it, claim`;
   const tail = claudeTail(path2, "innermost");
   if (tail === null || tail.length < 2) return null;
   return `.claude/${tail[0]}/ loaded as model context, and CLAUDE_CONTEXT_SUBDIRS does not list it: the SessionStart scan prunes that directory, so every OTHER file in it goes unscanned. Add it there if it is context, not bulk data`;
@@ -54684,7 +54687,11 @@ var init_claude_context = __esm({
       kind("claude-subdir", "commands"),
       kind("claude-subdir", "output-styles"),
       kind("claude-subdir", "rules", { eventNamed: true }),
-      kind("claude-subdir", "skills")
+      kind("claude-subdir", "skills"),
+      // Repo checkouts and session transcripts: storage the host writes and reads
+      // back, so a load out of one is not evidence that the whitelist is short.
+      kind("claude-bulk", "worktrees"),
+      kind("claude-bulk", "projects")
     ]);
     CLAUDE_CONTEXT_SUBDIRS = namesOf(kindsOfShape("claude-subdir"));
     CLAUDE_MEMORY_FILES = namesOf(
