@@ -1,7 +1,6 @@
 /**
- * The context scope as a LIBRARY value: the glob set and the prune predicate
- * that used to live inside the SessionStart hook, where nobody else could read
- * them.
+ * The context scope as a LIBRARY value: the glob set, the prune predicate and
+ * the scope falsifier, exercised through the public door.
  *
  * `test/claude-hooks-scan-scope.test.mjs` pins the hook's behavior over a real
  * fixture tree; this file pins the same scope through the public door, because
@@ -10,8 +9,8 @@
  * has to get right are asymmetric: an unlisted CONTEXT directory is a silent
  * hole in the scan, and an unlisted BULK directory is the 30-second session
  * start. So the cases below assert both directions, and that the composed
- * `exclude` in findInstructionFiles ANDs the caller's predicate with the
- * built-in `node_modules` prune rather than replacing either.
+ * `exclude` in findInstructionFiles ORs the caller's predicate with the built-in
+ * `node_modules` prune rather than replacing either.
  */
 import { describe, it, after } from "node:test";
 import assert from "node:assert/strict";
@@ -20,8 +19,10 @@ import { tmpdir } from "node:os";
 import { dirname, join, sep } from "node:path";
 
 import {
+  CLAUDE_CONTEXT_KINDS,
   CLAUDE_CONTEXT_SUBDIRS,
   CLAUDE_INSTRUCTION_GLOBS,
+  contextScopeContradiction,
   excludeFromContextScan,
   findInstructionFiles,
 } from "../src/instructions.mjs";
@@ -74,14 +75,13 @@ describe("the exported Claude Code context scope", () => {
         exclude: excludeFromContextScan,
       }),
     );
-    assert.deepEqual(found, [...CONTEXT].sort());
-    // Spelled out separately from the deepEqual so a failure names the file:
-    // a missing context file is a hole in the scan, an included bulk file is
-    // the startup cost.
+    // Named per file first, so a failure says WHICH: a missing context file is
+    // a hole in the scan, an included bulk file is the startup cost.
     for (const path of CONTEXT)
       assert.ok(found.includes(path), `missing ${path}`);
     for (const path of BULK)
       assert.ok(!found.includes(path), `swept in ${path}`);
+    assert.deepEqual(found, [...CONTEXT].sort());
   });
 
   it("judges bare names and root-relative paths alike", () => {
@@ -141,5 +141,178 @@ describe("the exported Claude Code context scope", () => {
         CLAUDE_INSTRUCTION_GLOBS.includes(`**/.claude/${sub}/**/*.md`),
         `no glob for ${sub}`,
       );
+  });
+});
+
+describe("what a loaded path says about the scope table", () => {
+  // The InstructionsLoaded event is the only channel that can prove the table
+  // wrong, and a notice that fires on ordinary loads is a notice nobody reads.
+  // So each reporting case below is paired with the nearest path that must stay
+  // silent, under `session_start` — the reason that DOES report — unless the
+  // case is about the reason itself.
+  const SILENT = [
+    ["the project's own memory file", join(sep, "p", "CLAUDE.md")],
+    ["a nested memory file", join(sep, "p", "packages", "foo", "CLAUDE.md")],
+    ["a local memory file", join(sep, "p", "CLAUDE.local.md")],
+    ["the user-global memory file", join(sep, "u", ".claude", "CLAUDE.md")],
+    ["a project rule", join(sep, "p", ".claude", "rules", "style.md")],
+    ["a nested rule", join(sep, "p", ".claude", "rules", "deep", "x.md")],
+    ["a user-global rule", join(sep, "u", ".claude", "rules", "x.md")],
+    // An `@import` names a file of the user's choosing. The table claims
+    // nothing about it, and guessing would report on every session that uses
+    // one — the fail-open that keeps this notice worth reading. Inside
+    // `.claude/` the path alone is indistinguishable from a real hole, so the
+    // load reason is what separates them.
+    ["an @import of arbitrary markdown", join(sep, "p", "docs", "style.md")],
+    [
+      "an @import of markdown under .claude",
+      join(sep, "p", ".claude", "docs", "style.md"),
+      "include",
+    ],
+    [
+      "a load whose reason the host did not give",
+      join(sep, "p", ".claude", "docs", "style.md"),
+      "unknown",
+    ],
+    ["a source file", join(sep, "p", "src", "main.js")],
+    // A memory file inside a pruned directory is still a memory file: judging
+    // it by the directory would report `worktrees/` as newly-loading context.
+    [
+      "a memory file inside a worktree checkout",
+      join(sep, "p", ".claude", "worktrees", "wt", "CLAUDE.md"),
+    ],
+    // The two bulk directories by name, on files the dir-file rule does NOT
+    // rescue: asking for storage to be whitelisted is asking for the whole-tree
+    // walk back, so these reach the reporting branch and must still say nothing.
+    [
+      "a note inside a worktree checkout",
+      join(sep, "p", ".claude", "worktrees", "wt", "docs", "notes.md"),
+    ],
+    [
+      "a session transcript",
+      join(sep, "u", ".claude", "projects", "proj", "transcript.md"),
+    ],
+    // A `.claude` tree nested inside a checkout describes that checkout, so the
+    // unlisted-directory report reads the OUTERMOST tree to judge it.
+    [
+      "an unlisted directory inside a worktree's own .claude",
+      join(
+        sep,
+        "p",
+        ".claude",
+        "worktrees",
+        "wt",
+        ".claude",
+        "policies",
+        "house.md",
+      ),
+    ],
+  ];
+
+  for (const [label, path, reason = "session_start"] of SILENT)
+    it(`says nothing about ${label}`, () => {
+      assert.equal(contextScopeContradiction(path, reason), null);
+    });
+
+  for (const reason of ["session_start", "nested_traversal"])
+    it(`reports a \`.claude/\` subdirectory the whitelist does not carry (${reason})`, () => {
+      // The drift that matters: context the host reached on its own, out of a
+      // directory the launch scan prunes, so every OTHER file in it is
+      // unscanned at session start.
+      const notice = contextScopeContradiction(
+        join(sep, "p", ".claude", "policies", "house.md"),
+        reason,
+      );
+      assert.match(notice, /\.claude\/policies\//u);
+      assert.match(notice, /CLAUDE_CONTEXT_SUBDIRS/u);
+    });
+
+  for (const [label, path, named] of [
+    [
+      "a nested AGENTS.md",
+      join(sep, "p", "packages", "foo", "AGENTS.md"),
+      "AGENTS.md",
+    ],
+    ["a skill", join(sep, "p", ".claude", "skills", "s", "SKILL.md"), "skills"],
+    [
+      "a loose .claude note",
+      join(sep, "p", ".claude", "notes.md"),
+      ".claude/*.md",
+    ],
+  ])
+    it(`reports ${label}, a kind the table marks event-blind`, () => {
+      // Not a hole — the lazy scan just covered it — but the table and the docs
+      // built on it now understate what the event reaches. Only under a
+      // host-chosen reason: an imported one reaches nothing a scan would.
+      const notice = contextScopeContradiction(path, "nested_traversal");
+      assert.match(notice, /InstructionsLoaded named/u);
+      assert.ok(notice.includes(named), `${notice} does not name ${named}`);
+      assert.equal(contextScopeContradiction(path, "include"), null);
+    });
+
+  it("judges a directory-scoped skill by its own `.claude`, not the tree above it", () => {
+    // Innermost wins for naming a kind: this file IS a skill, whatever pruned
+    // directory it sits under, and reporting it as a `worktrees` finding would
+    // send the reader to add bulk data to the whitelist.
+    const skill = join(
+      sep,
+      "p",
+      ".claude",
+      "worktrees",
+      "wt",
+      ".claude",
+      "skills",
+      "s",
+      "SKILL.md",
+    );
+    assert.match(
+      contextScopeContradiction(skill, "session_start"),
+      /named skills/u,
+    );
+    // Pruning still reads the OUTERMOST tree, or the walk it exists for stops
+    // applying one level down.
+    assert.equal(
+      excludeFromContextScan(".claude/worktrees/wt/.claude/skills"),
+      true,
+    );
+  });
+
+  it("answers for every kind the table carries, and says so by name", () => {
+    // The verdict per kind, written out rather than recomputed from the row —
+    // recomputing would agree with any table, including one whose new row was
+    // added without a decision. Silent means "this load tells us nothing new".
+    const SILENT_KINDS = [
+      "CLAUDE.md",
+      "CLAUDE.local.md",
+      "rules",
+      "worktrees",
+      "projects",
+      "todos",
+    ];
+    const REPORTING_KINDS = [
+      "AGENTS.md",
+      ".claude/*.md",
+      "agents",
+      "commands",
+      "output-styles",
+      "skills",
+    ];
+    // The two verdicts partition the table: a row added without appearing in
+    // one of them fails here rather than inheriting whatever the code decides.
+    assert.deepEqual(
+      CLAUDE_CONTEXT_KINDS.map((row) => row.name).sort(),
+      [...SILENT_KINDS, ...REPORTING_KINDS].sort(),
+    );
+    for (const row of CLAUDE_CONTEXT_KINDS) {
+      const path =
+        row.shape === "dir-file"
+          ? join(sep, "p", row.name)
+          : row.shape === "claude-md"
+            ? join(sep, "p", ".claude", "note.md")
+            : join(sep, "p", ".claude", row.name, "f.md");
+      const notice = contextScopeContradiction(path, "session_start");
+      assert.equal(notice === null, SILENT_KINDS.includes(row.name), path);
+      if (notice) assert.ok(notice.includes(row.name), notice);
+    }
   });
 });

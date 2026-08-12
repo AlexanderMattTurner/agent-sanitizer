@@ -33,7 +33,7 @@ import { repoRoot } from "./helpers/repo-root.mjs";
 const projectDir = mkdtempSync(join(tmpdir(), "sanitizer-loaded-proj-"));
 process.env.CLAUDE_PROJECT_DIR = projectDir;
 
-const { readLoadedFile, scanLoadedFile, loadedFileMessage } =
+const { readLoadedFile, scanLoadedFile, loadedFileMessage, scopeNotice } =
   await import("../claude-hooks/scan-loaded-instructions.mjs");
 const { LONG_RUN_THRESHOLD } = await import("../src/invisible.mjs");
 const {
@@ -90,8 +90,9 @@ describe("the loaded-file payload is validated, never assumed", () => {
   });
 
   it("labels a missing load reason rather than skipping the scan", () => {
-    // The reason is trace metadata only. Treating its absence as a reason not to
-    // scan would let a harness change silently disable the scan.
+    // The reason decides the scope notice, never the scan: treating its absence
+    // as a reason not to scan would let a harness change disable the scan. The
+    // "unknown" label is what the notice then reads as "not host-chosen".
     assert.equal(
       readLoadedFile({ file_path: "/p/CLAUDE.md" }).loadReason,
       "unknown",
@@ -263,6 +264,22 @@ describe("the message reaches whoever can act on it", () => {
     assert.match(cleaned, /stripped/u);
     assert.match(uncleaned, /STILL in \/p\/CLAUDE\.md — it is read-only/u);
   });
+
+  it("frames a scope contradiction as this hook's notice, and only when there is one", () => {
+    // The prefix is what makes the line greppable next to the hook's error
+    // vocabulary; the null case is what keeps every ordinary load silent.
+    assert.match(
+      scopeNotice("/p/.claude/policies/house.md", "session_start"),
+      /^scan-loaded-instructions scope notice: /u,
+    );
+    assert.equal(
+      scopeNotice("/p/packages/foo/CLAUDE.md", "session_start"),
+      null,
+    );
+    // The same path under the reason that makes it an ordinary import: the hook
+    // passes the reason through, so this is where that plumbing is pinned.
+    assert.equal(scopeNotice("/p/.claude/policies/house.md", "include"), null);
+  });
 });
 
 describe("the alert accumulates rather than clobbering", () => {
@@ -340,6 +357,25 @@ describe("the hook CLI, driven end to end on a real event", () => {
     assert.ok(existsSync(ALERT_FILE), "the PreToolUse gate was not armed");
     assert.match(readFileSync(ALERT_FILE, "utf8"), /CLAUDE\.md/u);
     rmSync(outside, { recursive: true, force: true });
+  });
+
+  it("reports a `.claude/` directory the scope table does not carry", () => {
+    // The event is the only thing that can prove the SessionStart scan's scope
+    // stale, and this is the proof: context loading out of a directory that
+    // scan prunes. The file itself is clean, so the notice is the only output —
+    // it is a maintenance signal about this package, not a verdict on the file.
+    const filePath = project(".claude/policies/house.md", PROSE);
+    const { stdout, stderr } = fire({
+      hook_event_name: "InstructionsLoaded",
+      session_id: SESSION,
+      file_path: filePath,
+      load_reason: "session_start",
+    });
+    assert.match(stderr, /scope notice/u);
+    assert.match(stderr, /\.claude\/policies\//u);
+    // Not a finding: no model/user channel, and nothing for the gate to ask.
+    assert.equal(stdout, "");
+    assert.equal(existsSync(ALERT_FILE), false);
   });
 
   it("stays silent on a clean file, and still records that it ran", () => {

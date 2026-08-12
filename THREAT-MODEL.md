@@ -282,20 +282,48 @@ threshold. `cleanFile` strips the payload in place (Layer-1 strip), failing loud
 if a contaminated file cannot be rewritten.
 
 As Claude Code hooks the coverage is split to match how Claude Code loads these
-files. `scan-invisible-chars` (SessionStart) scans the launch set — the project
-root's own instruction files, the `CLAUDE.md` chain above it, and the root
-`.claude/` context subdirectories — and `scan-loaded-instructions`
-(InstructionsLoaded) scans every other instruction file — including the
-user-global `~/.claude` memory and rules, which load into every session on the
-machine — reading the one path the event names, at the moment it loads. The second cannot block: the file is already in
-context when it fires, so its neutralization is to strip the payload from disk
-(so no reload re-reads it) and tell the model to treat what it just read as
-untrusted data. Auto-cleaning is confined to `CLAUDE_PROJECT_DIR` in both — an
-ancestor file, or one under `~/.claude`, is shared with every other project on
-the machine, so it is reported through the cross-hook alert and never
-rewritten. A Claude Code build that emits
+files, and `src/claude-context.mjs` is where the split is defined: one table of
+context KINDS, each row naming what loads it and when.
+
+- **SessionStart** (`scan-invisible-chars`) scans the launch set — the project
+  root's own instruction files, the `CLAUDE.md` chain above it, and the root
+  `.claude/` context subdirectories. O(directory depth), not O(tree).
+- **InstructionsLoaded** (`scan-loaded-instructions`) scans each file the host
+  names as it loads it: the rows marked `eventNamed` — the `CLAUDE.md` family
+  and `.claude/rules` — wherever they sit, including the user-global `~/.claude`
+  memory and rules that load into every session on the machine.
+- **Everything else** — a nested `AGENTS.md`, a nested `.claude/` skill,
+  command or output-style — is covered on demand by the whole-tree
+  `CLAUDE_INSTRUCTION_GLOBS` scan (what the CLI walks) and by the PostToolUse
+  sanitizer when a tool reads one. Covering those eagerly means the whole-tree
+  walk at session start that this split exists to remove.
+
+The lazy half cannot block: the file is already in context when it fires, so its
+neutralization is to strip the payload from disk (so no reload re-reads it) and
+tell the model to treat what it just read as untrusted data. Auto-cleaning is
+confined to `CLAUDE_PROJECT_DIR` in both — an ancestor file, or one under
+`~/.claude`, is shared with every other project on the machine, so it is reported
+through the cross-hook alert and never rewritten. A Claude Code build that emits
 no `InstructionsLoaded` event loses the lazy half entirely; the PreToolUse gate
 says so once per session rather than leaving the gap silent.
+
+That table is a claim about someone else's product, so the event that names a
+loaded file is also what falsifies it. `contextScopeContradiction` checks every
+path the hook is handed and reports two observations: context loading out of a
+`.claude/` subdirectory the whitelist does not carry (the launch scan prunes
+that directory, so every other file in it is unscanned), and a kind marked
+event-blind arriving through the event anyway (the lazy scan reaches further
+than the table, and this section, credit it with). Everything else is silent, in
+both directions: a path the table does not name — an `@import` of arbitrary
+markdown — reports nothing rather than guessing, and a directory it names as
+storage (`worktrees/`, `projects/`) reports nothing because whitelisting storage
+is the whole-tree walk again. Both observations also require a `load_reason` the
+host chose itself: an `@import` names a file the user's own markdown pointed at,
+which says nothing about what a scan would reach on its own. The
+notice never widens the scan on its own — one load cannot tell a context
+directory from an import target, and whitelisting the wrong one buys back the
+startup cost this split removed — so the whitelist stays hand-maintained and the
+notice's job is to put a stale entry in front of a person.
 
 ## User-prompt verdict
 
