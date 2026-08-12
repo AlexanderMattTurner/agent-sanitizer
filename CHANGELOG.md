@@ -8,6 +8,13 @@ adhere to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+## [2.37.1] - 2026-08-12
+
+### Changed
+- ANSI escape sequence handling now generates Python escape grammar from the JavaScript scanner for consistency across implementations.
+- Improved ANSI escape sequence processing by refactoring the introducer class to use the shared charClass helper.
+- Control-string abort set behavior is now explicitly pinned to ESC/CAN/SUB/LF/CR characters.
+
 ## [2.37.0] - 2026-08-12
 
 ### Fixed
