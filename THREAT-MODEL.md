@@ -313,11 +313,13 @@ path the hook is handed and reports two observations: context loading out of a
 `.claude/` subdirectory the whitelist does not carry (the launch scan prunes
 that directory, so every other file in it is unscanned), and a kind marked
 event-blind arriving through the event anyway (the lazy scan reaches further
-than the table, and this section, credit it with). Anything the table does not
-name — an `@import` of arbitrary markdown — reports nothing rather than
-guessing. The event can never GROW the table, since it only names kinds already
-in it, which is why the whitelist stays hand-maintained; what it can do is prove
-a stale entry the moment one costs coverage.
+than the table, and this section, credit it with). Everything else is silent, in
+both directions: a path the table does not name — an `@import` of arbitrary
+markdown — reports nothing rather than guessing, and a directory it names as
+storage (`worktrees/`, `projects/`) reports nothing because whitelisting storage
+is the whole-tree walk again. The event can never GROW the table, since it only
+names kinds already in it, which is why the whitelist stays hand-maintained;
+what it can do is prove a stale entry the moment one costs coverage.
 
 ## User-prompt verdict
 

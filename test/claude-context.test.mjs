@@ -242,10 +242,30 @@ describe("what a loaded path says about the scope table", () => {
   });
 
   it("answers for every kind the table carries, and says so by name", () => {
-    // Drives the table itself, so a row added without a decision about the
-    // event cannot slip in unexercised. The spec per row: a bulk directory is
-    // storage and always silent; every other kind is silent exactly when the
-    // event is credited with it, and names itself when it is not.
+    // The verdict per kind, written out rather than recomputed from the row —
+    // recomputing would agree with any table, including one whose new row was
+    // added without a decision. Silent means "this load tells us nothing new".
+    const SILENT_KINDS = [
+      "CLAUDE.md",
+      "CLAUDE.local.md",
+      "rules",
+      "worktrees",
+      "projects",
+    ];
+    const REPORTING_KINDS = [
+      "AGENTS.md",
+      ".claude/*.md",
+      "agents",
+      "commands",
+      "output-styles",
+      "skills",
+    ];
+    // The two verdicts partition the table: a row added without appearing in
+    // one of them fails here rather than inheriting whatever the code decides.
+    assert.deepEqual(
+      CLAUDE_CONTEXT_KINDS.map((row) => row.name).sort(),
+      [...SILENT_KINDS, ...REPORTING_KINDS].sort(),
+    );
     for (const row of CLAUDE_CONTEXT_KINDS) {
       const path =
         row.shape === "dir-file"
@@ -253,9 +273,8 @@ describe("what a loaded path says about the scope table", () => {
           : row.shape === "claude-md"
             ? join(sep, "p", ".claude", "note.md")
             : join(sep, "p", ".claude", row.name, "f.md");
-      const silent = row.eventNamed || row.shape === "claude-bulk";
       const notice = contextScopeContradiction(path);
-      assert.equal(notice === null, silent, `${path}: ${notice}`);
+      assert.equal(notice === null, SILENT_KINDS.includes(row.name), path);
       if (notice) assert.ok(notice.includes(row.name), notice);
     }
   });

@@ -24,7 +24,9 @@ import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 
 // One row of the kind table. Both flags default to the conservative answer —
 // this kind is not on the ancestor chain, and no event announces it — so a row
-// added without them claims nothing the host has not been observed doing.
+// added without them claims nothing the host has not been observed doing. Both
+// describe how a kind LOADS, so neither means anything on a `claude-bulk` row:
+// the readers below gate on shape before they read either flag.
 /**
  * @param {"dir-file" | "claude-md" | "claude-subdir" | "claude-bulk"} shape
  * @param {string} name  how a reader spells this kind
@@ -35,8 +37,12 @@ function kind(shape, name, { ancestorChain = false, eventNamed = false } = {}) {
 }
 
 /**
- * Every kind of file an agent loads as model context, with the two facts about
- * it that code branches on. `shape` says where the kind lives; `ancestorChain`
+ * Every kind of file an agent loads as model context — plus, as `claude-bulk`
+ * rows, the `.claude/` directories that hold anything BUT context, so a consumer
+ * filtering this table must filter on `shape` and never take it whole.
+ *
+ * Each row carries the two facts code branches on. `shape` says where it lives;
+ * `ancestorChain`
  * says whether Claude Code also loads it from the directories ABOVE a scan root;
  * `eventNamed` says whether `InstructionsLoaded` names it as it loads, which is
  * the claim {@link contextScopeContradiction} checks the host against.
@@ -101,7 +107,11 @@ export const CLAUDE_CONTEXT_SUBDIRS = namesOf(kindsOfShape("claude-subdir"));
  * directory above a scan root as well as from the root itself.
  */
 export const CLAUDE_MEMORY_FILES = namesOf(
-  CLAUDE_CONTEXT_KINDS.filter((row) => row.ancestorChain),
+  // Shape first: only a per-directory file can be walked up a parent chain, so
+  // no `.claude/` row can reach this list whatever its flags say.
+  CLAUDE_CONTEXT_KINDS.filter(
+    (row) => row.shape === "dir-file" && row.ancestorChain,
+  ),
 );
 
 /** Every per-directory instruction file, memory files and `AGENTS.md` alike. */

@@ -54695,7 +54695,11 @@ var init_claude_context = __esm({
     ]);
     CLAUDE_CONTEXT_SUBDIRS = namesOf(kindsOfShape("claude-subdir"));
     CLAUDE_MEMORY_FILES = namesOf(
-      CLAUDE_CONTEXT_KINDS.filter((row) => row.ancestorChain)
+      // Shape first: only a per-directory file can be walked up a parent chain, so
+      // no `.claude/` row can reach this list whatever its flags say.
+      CLAUDE_CONTEXT_KINDS.filter(
+        (row) => row.shape === "dir-file" && row.ancestorChain
+      )
     );
     CLAUDE_DIR_INSTRUCTION_FILES = namesOf(kindsOfShape("dir-file"));
     CLAUDE_INSTRUCTION_GLOBS = Object.freeze([
