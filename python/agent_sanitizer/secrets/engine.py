@@ -1219,7 +1219,6 @@ def configure_plugins(high_confidence: bool = False):
             # engine scans tool output, which an attacker can shape, so leaving
             # it enabled lets a planted pragma suppress its own secret's
             # redaction. Disable it so no line can allowlist itself.
-            # `disable_filters` clears `get_filters`'s cache itself.
             get_settings().disable_filters(
                 "detect_secrets.filters.allowlist.is_line_allowlisted"
             )

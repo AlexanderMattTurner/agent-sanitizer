@@ -404,7 +404,6 @@ def test_allowlist_filter_is_in_detect_secrets_defaults():
     from detect_secrets.settings import Settings
 
     default_settings = Settings()
-    default_settings.clear()
     assert (
         "detect_secrets.filters.allowlist.is_line_allowlisted"
         in default_settings.filters
