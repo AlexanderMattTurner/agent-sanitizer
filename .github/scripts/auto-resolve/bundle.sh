@@ -127,6 +127,21 @@ fi
 # resolve-generated script (else DEFERRED_REGEN is always empty).
 read -ra deferred_list <<<"${DEFERRED_REGEN:-}"
 if [[ ${#deferred_list[@]} -gt 0 ]] && has_resolve_generated; then
+  # Snapshot every deferred path BEFORE the generator runs, so "did the
+  # generator answer for this path?" is observable afterwards. A generator-owned
+  # conflict can be MARKER-FREE — binary, or modify/delete — and prepare.sh
+  # routes on ownership before either classification, so git leaves its
+  # surviving side verbatim in the working tree. Staging on existence alone
+  # would commit that stale side as if it were generated output, and the marker
+  # scan below cannot see a file that never had markers.
+  declare -A regen_before=()
+  for f in "${deferred_list[@]}"; do
+    if [[ -e "$f" || -L "$f" ]]; then
+      regen_before["$f"]="$(git hash-object -- "$f")"
+    else
+      regen_before["$f"]=absent
+    fi
+  done
   regen_rc=0
   # shellcheck disable=SC2119  # no flags: this is the plain regenerate-everything run
   run_resolve_generated || regen_rc=$?
@@ -137,7 +152,18 @@ if [[ ${#deferred_list[@]} -gt 0 ]] && has_resolve_generated; then
   # still holds git's "ours" side, never a generator's answer.
   if [[ "$regen_rc" -eq 0 ]]; then
     for f in "${deferred_list[@]}"; do
-      [[ -e "$f" ]] || continue
+      if [[ ! -e "$f" && ! -L "$f" ]]; then
+        # Gone after a clean run, having been there before it: the resolved
+        # sources no longer produce this artifact, so the DELETION is the
+        # generated answer and staging it resolves the path. A path absent on
+        # both sides of the run got no answer at all — leave it unmerged.
+        [[ "${regen_before["$f"]}" == absent ]] && continue
+        git add -A -- "$f"
+        continue
+      fi
+      # Byte-identical to what the merge left behind is not evidence of a
+      # rewrite; leave it unmerged so the refusal below names it.
+      [[ "$(git hash-object -- "$f")" == "${regen_before["$f"]}" ]] && continue
       git add -- "$f"
     done
   else

@@ -189,6 +189,9 @@ function runBundle(work, conflictList, env = {}) {
     });
   } catch (err) {
     error = err;
+    // A failing run is exactly when a test needs to know HOW FAR bundle.sh got,
+    // and execFileSync throws its output away unless it is read off the error.
+    stdout = err.stdout ?? "";
   }
   let merging = true;
   try {
