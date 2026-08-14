@@ -164,7 +164,7 @@ function runBundle(work, conflictList, env = {}) {
   chmodSync(ghPath, 0o755);
   const bundleDir = join(root, "bundle-out");
   let error = null;
-  let stdout = "";
+  let stdout;
   try {
     stdout = execFileSync("bash", [SCRIPT], {
       cwd: work,
