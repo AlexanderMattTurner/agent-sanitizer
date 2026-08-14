@@ -14,14 +14,7 @@
  */
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
-import {
-  chmodSync,
-  mkdirSync,
-  mkdtempSync,
-  readFileSync,
-  rmSync,
-  writeFileSync,
-} from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, before, describe, it } from "node:test";
@@ -58,51 +51,6 @@ function runHook(refLine) {
 }
 
 const headOf = (ref) => git(["rev-parse", ref], clone);
-
-/**
- * Run the hook with a recording `pre-commit` stub first on PATH.
- *
- * `failing` names a hook id the stub should fail, so a test can prove one
- * concurrent hook's failure still aborts the push. Every invocation appends its
- * `SKIP` value and its argv to a log, which is what the fan-out assertions read.
- */
-function runHookWithStub(
-  refLine,
-  { failing = null, unprovisioned = null } = {},
-) {
-  const binDir = join(scratch, "stubbin");
-  const log = join(scratch, "precommit-calls");
-  mkdirSync(binDir, { recursive: true });
-  writeFileSync(log, "");
-  const stub = join(binDir, "pre-commit");
-  writeFileSync(
-    stub,
-    `#!/usr/bin/env bash\nprintf 'SKIP=%s ARGV=%s\\n' "\${SKIP:-}" "$*" >>${JSON.stringify(log)}\n` +
-      (failing
-        ? `[[ "\${2:-}" == ${JSON.stringify(failing)} ]] && { echo "stub: ${failing} failed"; exit 1; }\n`
-        : "") +
-      (unprovisioned
-        ? `[[ "\${2:-}" == ${JSON.stringify(unprovisioned)} ]] && exit 3\n`
-        : "") +
-      "exit 0\n",
-  );
-  chmodSync(stub, 0o755);
-  const result = spawnSync("bash", [HOOK], {
-    cwd: clone,
-    input: `${refLine}\n`,
-    encoding: "utf8",
-    env: {
-      PATH: `${binDir}:/usr/bin:/bin`,
-      HOME: join(scratch, "home"),
-    },
-  });
-  return {
-    status: result.status,
-    stdout: result.stdout,
-    stderr: result.stderr,
-    calls: readFileSync(log, "utf8").split("\n").filter(Boolean),
-  };
-}
 
 before(() => {
   scratch = mkdtempSync(join(tmpdir(), "pre-push-guard-"));
@@ -218,108 +166,6 @@ describe("pre-push merged-history guard", () => {
     } finally {
       git(["fetch", "-q", "origin"], clone);
       git(["remote", "set-head", "origin", "-a"], clone);
-    }
-  });
-});
-
-/**
- * The pushed-range lint is the expensive half of this hook, and the hooks that
- * only READ the tree are fanned out concurrently to pay for it. What that
- * partition must never do is drop a hook: every id the serial pass is told to
- * SKIP has to reappear as its own invocation, or a check silently stops running
- * on push while still reading as "pre-commit ran".
- */
-describe("pre-push pushed-range fan-out", () => {
-  let sha;
-
-  before(() => {
-    // The hook reads the real config to intersect its allowlist against the
-    // hooks that actually exist, so the throwaway clone needs one.
-    writeFileSync(
-      join(clone, ".pre-commit-config.yaml"),
-      [
-        "repos:",
-        "  - repo: local",
-        "    hooks:",
-        "      - id: trailing-whitespace",
-        "      - id: check-yaml",
-        "      - id: check-tier1",
-        "      - id: retired-hook-not-in-config",
-        "",
-      ].join("\n"),
-    );
-    git(["checkout", "-q", "-B", "fanout", "origin/main"], clone);
-    git(["add", "-A"], clone);
-    git(["commit", "-qm", "chore: seed a pre-commit config"], clone);
-    sha = headOf("HEAD");
-  });
-
-  const refLine = () => `refs/heads/fanout ${sha} refs/heads/fanout ${ZERO}`;
-
-  it("skips the read-only hooks serially and runs each of them on its own", () => {
-    const { status, calls } = runHookWithStub(refLine());
-    assert.equal(status, 0);
-
-    const serial = calls.filter((c) => /ARGV=run --from-ref/.test(c));
-    assert.equal(serial.length, 1, `expected one serial pass, got: ${calls}`);
-    const skipped = /SKIP=(\S*) /.exec(serial[0])[1].split(",").filter(Boolean);
-    // The mutating hook must NOT be skipped — it is why the serial pass exists.
-    assert.ok(!skipped.includes("trailing-whitespace"));
-    assert.deepEqual(skipped.slice().sort(), ["check-tier1", "check-yaml"]);
-
-    // Every skipped hook comes back as its own run. Deriving the expectation
-    // from `skipped` is what makes this a partition check rather than a list
-    // of names that can drift away from the hook's allowlist.
-    for (const hook of skipped) {
-      assert.equal(
-        calls.filter((c) => c.includes(`ARGV=run ${hook} --from-ref`)).length,
-        1,
-        `${hook} was skipped in the serial pass and never run on its own`,
-      );
-    }
-  });
-
-  it("does not invoke a hook the config no longer declares", () => {
-    // A stale allowlist entry would otherwise reach `pre-commit run <unknown>`,
-    // which dies and blocks every push.
-    const { calls } = runHookWithStub(refLine());
-    assert.ok(!calls.join("\n").includes("retired-hook-not-in-config"));
-  });
-
-  it("fails the push when one concurrently-run hook fails", () => {
-    const { status, stdout } = runHookWithStub(refLine(), {
-      failing: "check-tier1",
-    });
-    assert.equal(status, 1, "a failing read-only hook must abort the push");
-    assert.match(stdout, /stub: check-tier1 failed/);
-  });
-
-  it("lets a real failure outrank another hook's provisioning skip", () => {
-    // Exit 3 is "could not install a hook environment", which the caller
-    // degrades to a loud skip. If it won over a hook that genuinely failed, a
-    // sandbox that cannot reach an index would wave every lint error through.
-    const { status, stderr } = runHookWithStub(refLine(), {
-      failing: "check-tier1",
-      // check-yaml, not some hook absent from the fixture config: an id the
-      // config never declares is never run, and the case would prove nothing.
-      unprovisioned: "check-yaml",
-    });
-    assert.equal(status, 1, "a lint failure was masked by a provisioning skip");
-    assert.doesNotMatch(stderr, /could not PROVISION/);
-  });
-
-  it("falls back to ONE serial run when the working tree is dirty", () => {
-    // Concurrent pre-commit processes stash and restore unstaged changes over
-    // each other, which corrupts the tree mid-run. Nothing to stash is what
-    // makes the fan-out safe, so a dirty tree must not take it.
-    writeFileSync(join(clone, "seed.txt"), "dirtied, unstaged\n");
-    try {
-      const { status, calls } = runHookWithStub(refLine());
-      assert.equal(status, 0);
-      assert.equal(calls.length, 1, `expected one run, got: ${calls}`);
-      assert.match(calls[0], /^SKIP= ARGV=run --from-ref/);
-    } finally {
-      git(["checkout", "--", "seed.txt"], clone);
     }
   });
 });

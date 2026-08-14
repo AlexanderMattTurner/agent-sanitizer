@@ -59,118 +59,6 @@ else
   echo "pre-push: install uv (https://docs.astral.sh/uv/) or 'pip install pre-commit'; CI still enforces the suite." >&2
 fi
 
-# Hooks that only READ the tree, so running them concurrently is safe. The rest
-# — trailing-whitespace, end-of-file-fixer, mixed-line-ending, shfmt -w,
-# ruff-check --fix, ruff-format — REWRITE the files they check, and two of those
-# rewriting one file at the same time loses one of the two fixes, so they run
-# serially first (their output is also what the read-only hooks then see, the
-# same order a single `pre-commit run` gives).
-#
-# The list is an allowlist for a reason: a hook added to
-# .pre-commit-config.yaml and not named here runs in the serial pass, which is
-# slower and always correct. Only membership here asserts "safe to parallelise".
-readonly_hooks=(
-  check-added-large-files
-  check-case-conflict
-  check-executables-have-shebangs
-  check-hook-stdin-guarded
-  check-hook-timeouts
-  check-json
-  check-merge-conflict
-  check-proto-pollution
-  check-shebang-scripts-are-executable
-  check-symlinks
-  check-test-repo-root
-  check-tier1
-  check-tier2
-  check-extras
-  check-yaml
-  dot-directory-test-suites
-  lint-skills
-  shellcheck
-  validate-config
-  zizmor
-)
-
-# Run the pushed-range pre-commit suite, serial fixers first and the read-only
-# hooks fanned out. Returns pre-commit's own exit status, so the caller's
-# exit-code-3 (provisioning failure) branch keeps working.
-#
-# The fan-out is gated on a CLEAN working tree, and that gate is the whole
-# safety argument. pre-commit stashes unstaged changes for the duration of a
-# run and restores them after, so concurrent invocations stash and restore over
-# each other: measured, that reports "files were modified by this hook" against
-# an untouched tree and fails suites that pass in isolation. With no unstaged
-# changes there is nothing to stash, and the read-only hooks below touch
-# nothing else. A dirty tree falls back to one serial run — slower, and the
-# behaviour this hook has always had.
-precommit_range() {
-  local from="$1" to="$2" rc=0 out hook parallel=() config_ids
-  # `git diff` with no arguments is exactly pre-commit's stash condition:
-  # tracked changes present in the working tree but not the index.
-  if ! git diff --quiet; then
-    out=$("${precommit_cmd[@]}" run --from-ref "$from" --to-ref "$to" \
-      --show-diff-on-failure </dev/null 2>&1) || rc=$?
-    printf '%s\n' "$out"
-    return "$rc"
-  fi
-  config_ids=$(sed -n 's/^[[:space:]]*-\{0,1\}[[:space:]]*id:[[:space:]]*\([^[:space:]]*\).*/\1/p' \
-    "$git_root/.pre-commit-config.yaml")
-  # Intersect with what the config actually declares: a stale entry above would
-  # otherwise make `pre-commit run <id>` die on an unknown hook. Anything this
-  # misses simply stays out of `parallel`, and so is never added to SKIP —
-  # a missed id runs serially rather than not running at all.
-  for hook in "${readonly_hooks[@]}"; do
-    grep -qxF "$hook" <<<"$config_ids" && parallel+=("$hook")
-  done
-
-  local skip=""
-  [[ ${#parallel[@]} -gt 0 ]] && skip=$(
-    IFS=,
-    echo "${parallel[*]}"
-  )
-  out=$(SKIP="$skip" "${precommit_cmd[@]}" run --from-ref "$from" --to-ref "$to" \
-    --show-diff-on-failure </dev/null 2>&1) || rc=$?
-  printf '%s\n' "$out"
-  [[ "$rc" -eq 0 ]] || return "$rc"
-  [[ ${#parallel[@]} -eq 0 ]] && return 0
-
-  local tmp runner jobs
-  tmp=$(mktemp -d)
-  runner="$tmp/run-hook"
-  # The single quotes are deliberate: everything but the %q substitutions is the
-  # CHILD's source text, and expanding it here would bake this shell's values in.
-  # shellcheck disable=SC2016
-  {
-    echo '#!/bin/bash'
-    echo 'rc=0'
-    printf 'out=$(%s run "$1" --from-ref %q --to-ref %q --show-diff-on-failure </dev/null 2>&1) || rc=$?\n' \
-      "$(printf '%q ' "${precommit_cmd[@]}")" "$from" "$to"
-    printf 'printf "%%s\\n" "$out" >%q/"$1".log\n' "$tmp"
-    printf 'echo "$rc" >%q/"$1".rc\n' "$tmp"
-  } >"$runner"
-  chmod +x "$runner"
-  jobs=$(getconf _NPROCESSORS_ONLN 2>/dev/null) || jobs=4
-  printf '%s\n' "${parallel[@]}" | xargs -P "$jobs" -n1 "$runner"
-
-  # Report every failure, not just the first: the hooks ran concurrently, so
-  # stopping at one would hide results already computed.
-  for hook in "${parallel[@]}"; do
-    local hook_rc
-    hook_rc=$(<"$tmp/$hook.rc")
-    [[ "$hook_rc" -eq 0 ]] && continue
-    cat "$tmp/$hook.log"
-    # A real lint failure (1) outranks a provisioning failure (3). The caller
-    # degrades to a loud SKIP on 3, so letting 3 win would turn a hook that
-    # genuinely failed into "network blocked, never mind" and let the push
-    # through.
-    [[ "$rc" -eq 1 ]] && continue
-    rc="$hook_rc"
-  done
-  rm -rf "$tmp"
-  return "$rc"
-}
-
 # origin's default branch — the base the new-branch fallback diffs against.
 # "origin/main" is a documented, widely-correct default for the (rare) case
 # origin/HEAD isn't set locally; a wrong guess here only widens the diffed
@@ -274,7 +162,9 @@ while read -r -u 3 _local_ref local_sha remote_ref remote_sha; do
   # signatures instead would be self-defeating, since --show-diff-on-failure can
   # print a diff of THIS file containing those very strings.
   precommit_rc=0
-  precommit_range "$from_ref" "$local_sha" || precommit_rc=$?
+  precommit_out=$("${precommit_cmd[@]}" run --from-ref "$from_ref" --to-ref "$local_sha" --show-diff-on-failure </dev/null 2>&1) ||
+    precommit_rc=$?
+  printf '%s\n' "$precommit_out"
   if [[ "$precommit_rc" -eq 3 ]]; then
     echo "pre-push: pre-commit could not PROVISION a hook environment (network/egress blocked, not a lint failure) — SKIPPING the pushed-range run. CI still enforces the full suite on the PR." >&2
     continue
