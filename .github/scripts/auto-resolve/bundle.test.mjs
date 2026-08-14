@@ -243,8 +243,9 @@ test("a deferred generated file is regenerated from the resolved source and STAG
 });
 
 test("a deferred generated file that the generator never rewrites still fails loud", () => {
-  // The generator writes a DIFFERENT path, so gen.txt keeps git's "ours" bytes
-  // and stays unmerged — the failure this refusal exists to produce.
+  // The generator DELETES gen.txt instead of regenerating it, so bundle.sh's
+  // `[[ -e "$f" ]]` skips staging it and it stays unmerged — the failure this
+  // refusal exists to produce.
   const { work } = midMergeGenerated({
     generatorBody: 'import { rmSync } from "node:fs";\nrmSync("gen.txt");\n',
   });

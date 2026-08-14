@@ -110,11 +110,12 @@ describe("pre-push merged-history guard", () => {
     assert.doesNotMatch(stderr, /already contained/);
   });
 
-  it("allows a ROLLBACK of the default branch, which introduces nothing new", () => {
-    // Restoring a clobbered default branch pushes an ANCESTOR of origin/main,
-    // so `rev-list --count origin/main..<sha>` is 0 — indistinguishable from a
-    // stale feature branch by that count alone, and refused before the
-    // exemption. The remote sha is non-zero: this ref already exists.
+  it("still refuses a force-push to the default branch that adds nothing, with rollback-aware wording", () => {
+    // A ref pushed AT origin/main only reaches "ahead == 0" via a force push —
+    // an ordinary push adding nothing is rejected by git before the hook runs.
+    // The hook cannot tell a deliberate rollback from an accidental stale
+    // force-push, so it still refuses; only the message changes, so the
+    // rollback case doesn't get told to "restart the branch" against itself.
     git(["checkout", "-q", "-B", "ahead", "origin/main"], clone);
     writeFileSync(join(clone, "later.txt"), "later\n");
     git(["add", "-A"], clone);
@@ -124,15 +125,20 @@ describe("pre-push merged-history guard", () => {
     const { status, stderr } = runHook(
       `refs/heads/ahead ${rollbackTo} refs/heads/main ${current}`,
     );
-    assert.equal(status, 0, `expected the rollback to pass, stderr: ${stderr}`);
+    assert.equal(status, 1, `expected the refusal, stderr: ${stderr}`);
     assert.doesNotMatch(stderr, /already contained/);
-    // Non-vacuity: the SAME sha aimed at a feature branch is still refused, so
-    // the pass above comes from the ref being the default branch and nothing else.
+    assert.doesNotMatch(stderr, /restart the branch/i);
+    assert.match(stderr, /deliberate rollback/);
+    assert.match(stderr, /--no-verify/);
+    // Non-vacuity: the SAME sha aimed at a feature branch gets the ordinary
+    // feature-branch wording instead, so the message above is keyed on the
+    // ref being the default branch and nothing else.
     const feature = runHook(
       `refs/heads/ahead ${rollbackTo} refs/heads/other ${current}`,
     );
     assert.equal(feature.status, 1);
     assert.match(feature.stderr, /every commit in it is already contained/);
+    assert.doesNotMatch(feature.stderr, /deliberate rollback/);
   });
 
   it("skips a branch deletion", () => {

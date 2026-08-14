@@ -105,26 +105,36 @@ while read -r -u 3 _local_ref local_sha remote_ref remote_sha; do
   # Deliberately BEFORE the pre-commit tool gate below, so it still runs on a
   # machine that has no pre-commit. `git push --no-verify` remains the override.
   #
-  # It asks about FEATURE branches, so it is not asked of a push aimed at the
-  # default branch itself. There "introduces nothing new" is never a stale local
-  # ref: a genuine no-op never reaches a hook (git answers "Everything
-  # up-to-date" first), so the only push it can describe is a deliberate
-  # rollback — including the one that restores a default branch someone
-  # clobbered, which is exactly when a refusal citing merged pull requests is
-  # both wrong and hardest to argue with.
+  # A ref pushed at $default_branch itself only reaches "ahead == 0" via a
+  # non-fast-forward (force) push — an ordinary push that adds nothing is
+  # rejected by git before this hook runs at all. That force can be a
+  # deliberate ROLLBACK (restoring a clobbered default branch) as easily as an
+  # accidental stale-ref push, and this hook cannot tell those apart — so it
+  # still refuses, the same as any other ref, but with wording that does not
+  # call a legitimate rollback a stale branch: the "restart from the default"
+  # advice is nonsense against the default branch's own ref, and `--no-verify`
+  # is the one mechanism that stays correct either way.
   if [[ "$remote_ref" == "$default_remote_ref" ]]; then
-    : # a push to the default branch itself; the rule does not apply
-  elif ! git rev-parse --verify --quiet "${default_branch}^{commit}" >/dev/null; then
-    echo "pre-push: ${default_branch} is not present locally — SKIPPING the merged-history check. Run 'git fetch origin' to enable it." >&2
+    default_ref_message=true
   else
+    default_ref_message=false
+  fi
+  if git rev-parse --verify --quiet "${default_branch}^{commit}" >/dev/null; then
     ahead=$(git rev-list --count "${default_branch}..${local_sha}")
     if [[ "$ahead" -eq 0 ]]; then
-      echo "pre-push: refusing to push ${remote_ref} — every commit in it is already contained in ${default_branch}, so this push introduces nothing." >&2
-      echo "pre-push: this is what a stale local ref looks like after its pull request merged. Restart the branch from the current default and put the follow-up work there:" >&2
-      echo "pre-push:   git fetch origin && git checkout -B \"\${branch}\" ${default_branch}" >&2
-      echo "pre-push: if the branch really does carry unmerged commits, fetch first — the local view of ${default_branch} may be behind. Override with 'git push --no-verify'." >&2
+      if [[ "$default_ref_message" == "true" ]]; then
+        echo "pre-push: refusing to force-push ${remote_ref} — it adds no commit beyond ${default_branch}." >&2
+        echo "pre-push: if this restores a default branch that was force-pushed to a bad state, that is a deliberate rollback, not a stale ref — override with 'git push --no-verify'." >&2
+      else
+        echo "pre-push: refusing to push ${remote_ref} — every commit in it is already contained in ${default_branch}, so this push introduces nothing." >&2
+        echo "pre-push: this is what a stale local ref looks like after its pull request merged. Restart the branch from the current default and put the follow-up work there:" >&2
+        echo "pre-push:   git fetch origin && git checkout -B \"\${branch}\" ${default_branch}" >&2
+        echo "pre-push: if the branch really does carry unmerged commits, fetch first — the local view of ${default_branch} may be behind. Override with 'git push --no-verify'." >&2
+      fi
       exit 1
     fi
+  else
+    echo "pre-push: ${default_branch} is not present locally — SKIPPING the merged-history check. Run 'git fetch origin' to enable it." >&2
   fi
 
   # No pre-commit anywhere: already announced above, so skip quietly here.

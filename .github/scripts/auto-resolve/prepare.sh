@@ -135,35 +135,13 @@ if git merge --no-edit "origin/${BASE_REF}"; then
   exit 0
 fi
 
-# Optional deterministic pre-pass: when the repo declares regen rules, re-derive
-# its generated files from the merged sources. This writes the working tree only
-# — nothing is staged here, because mid-merge the sources may still carry
-# conflict markers, so any output built now is provisional. The classification
-# below routes every generator-owned conflict to BUNDLE, which regenerates from
-# the RESOLVED sources and stages that. Skipped entirely (and the whole
-# generated-file classification collapses to empty) when the repo declares none.
-if has_resolve_generated; then
-  # shellcheck disable=SC2119  # no flags: this is the plain regenerate-everything run
-  # echo-fallback-ok: regeneration is best-effort by design; the bundle step's unmerged check is the real gate
-  run_resolve_generated || echo "resolve-generated made no change (or errored) — continuing."
-else
-  echo "no $RESOLVE_GENERATED_CONFIG — skipping the deterministic generated-file pre-pass."
-fi
-
+# Generator-owned conflicts are never regenerated HERE: whatever this pre-pass
+# could write mid-merge is provisional (sources may still carry markers) and
+# gets staged nowhere, so it changes no unmerged path's stage and BUNDLE
+# regenerates from scratch anyway once the LLM resolves the sources. Classifying
+# owned conflicts below is the only thing this step needs `has_resolve_generated`
+# for.
 mapfile -t conflicts < <(git diff --name-only --diff-filter=U)
-declare -A unmerged=()
-for f in "${conflicts[@]}"; do unmerged["$f"]=1; done
-
-# A resolve-generated pre-pass may also rewrite UNOWNED splice outputs in the
-# working tree. Those bytes are not part of the deterministic resolution —
-# restore them to the merged index state so the bundle step's out-of-set guard sees
-# only the LLM's edits. (A worktree diff lists unmerged paths too; those are the
-# conflicts themselves, not regen noise.) A no-op with no resolve-generated
-# script, since then git diff --name-only lists only the conflicts.
-while IFS= read -r f; do
-  [[ -z "$f" || -n "${unmerged["$f"]:-}" ]] && continue
-  git checkout -- "$f"
-done < <(git diff --name-only)
 
 if [[ ${#conflicts[@]} -eq 0 ]]; then
   echo "All conflicts resolved deterministically — committing without Claude."
