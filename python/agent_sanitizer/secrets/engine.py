@@ -951,19 +951,27 @@ _PREFILTER_WINDOW_PAD = 64
 
 
 @functools.cache
-def _eligible_prefilter() -> re.Pattern[str]:
-    """A single regex whose match is a NECESSARY (not sufficient) condition for a
-    cross-line-eligible detection: the union of every eligible detector's OWN
+def _eligible_prefilter() -> tuple[re.Pattern[str], ...]:
+    """One regex per distinct flag set among eligible denylist patterns; each
+    match is a NECESSARY (not sufficient) condition for a cross-line-eligible
+    detection. Built from the union of every eligible detector's OWN
     ``denylist`` regex, read live off :func:`~detect_secrets.settings.get_plugins`
     rather than re-typed here, so a detect-secrets upgrade or a new entry in
     ``data/secret-detectors.json`` changes what this matches with no edit here.
+
+    Grouped by ``pattern.flags`` (almost always just the default vs. that plus
+    ``re.IGNORECASE`` — Slack's and AWS's keyword-context patterns carry it)
+    rather than joined into one flag-less ``re.compile``: a plain string join
+    would silently drop a case-insensitive detector's case-insensitivity from
+    the union, missing a real cross-line hit that scan_line itself would have
+    caught once handed the window.
 
     Every ``_CROSS_LINE_ELIGIBLE_TYPES`` entry is served by a
     :class:`~detect_secrets.plugins.base.RegexBasedDetector`, whose
     ``analyze_string`` yields exactly its denylist's matches (further filtered,
     never widened, by detect-secrets' own machinery — see
     :func:`~detect_secrets.plugins.jwt.JwtTokenDetector.is_formally_valid` for the
-    strictest example). So a text this union does NOT match cannot be a hit
+    strictest example). So a text none of these regexes match cannot be a hit
     :func:`_cross_line_candidate_spans` would have found either way, and this is
     a pure performance prefilter, never a detection gate of its own.
     ``functools.cache``'d: the plugin set for a given detect-secrets install is
@@ -971,19 +979,22 @@ def _eligible_prefilter() -> re.Pattern[str]:
     active :func:`configure_plugins`/``transient_settings`` block, same as
     :func:`~detect_secrets.core.scan.scan_line` itself.
     """
-    patterns = [
-        pat.pattern
-        for plugin in get_plugins()
-        if getattr(plugin, "secret_type", None) in _CROSS_LINE_ELIGIBLE_TYPES
-        for pat in getattr(plugin, "denylist", ())
-    ]
-    if not patterns:
+    by_flags: dict[int, list[str]] = {}
+    for plugin in get_plugins():
+        if getattr(plugin, "secret_type", None) not in _CROSS_LINE_ELIGIBLE_TYPES:
+            continue
+        for pat in getattr(plugin, "denylist", ()):
+            by_flags.setdefault(pat.flags, []).append(pat.pattern)
+    if not by_flags:
         raise RuntimeError(
             "no _CROSS_LINE_ELIGIBLE_TYPES detector supplied a denylist regex to "
             "prefilter against — either the eligible-type list or detect-secrets' "
             "plugin set has drifted; see test_cross_line_prefilter_is_sound"
         )
-    return re.compile("|".join(f"(?:{p})" for p in patterns))
+    return tuple(
+        re.compile("|".join(f"(?:{p})" for p in patterns), flags)
+        for flags, patterns in by_flags.items()
+    )
 
 
 def _cross_line_candidate_spans(
@@ -1019,7 +1030,12 @@ def _cross_line_candidate_spans(
     spans: list[tuple[int, int, str, str]] = []
     stripped, offsets = strip_invisible_with_map(collapsed, charset)
     seen: set[tuple[str, str]] = set()
-    for hit in _eligible_prefilter().finditer(stripped):
+    hits = (
+        hit
+        for prefilter in _eligible_prefilter()
+        for hit in prefilter.finditer(stripped)
+    )
+    for hit in hits:
         window_start = max(0, hit.start() - _PREFILTER_WINDOW_PAD)
         window_end = min(len(stripped), hit.end() + _PREFILTER_WINDOW_PAD)
         for secret in scan_line(stripped[window_start:window_end]):

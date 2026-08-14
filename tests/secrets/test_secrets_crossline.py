@@ -133,7 +133,7 @@ def _fake_scan(monkeypatch, *pairs):
     # prefilter to a catch-all — these tests are exercising _redact_cross_line's
     # offset-translation/overlap logic in isolation from any real detector shape,
     # not the prefilter itself (that has its own soundness test).
-    monkeypatch.setattr(E, "_eligible_prefilter", lambda: re.compile(".", re.DOTALL))
+    monkeypatch.setattr(E, "_eligible_prefilter", lambda: (re.compile(".", re.DOTALL),))
 
 
 def _ph(secret_type: str) -> str:
@@ -331,15 +331,41 @@ def test_cross_line_prefilter_is_sound():
                 "secret of this type could be missed entirely"
             )
 
-        prefilter = E._eligible_prefilter()
-        assert prefilter.pattern, "prefilter derived an empty pattern"
-        # Not vacuous: at least one real denylist pattern is actually IN the
-        # union, not just that the union is non-empty text.
+        prefilters = E._eligible_prefilter()
+        assert prefilters and all(p.pattern for p in prefilters), (
+            "prefilter derived no (or an empty) pattern"
+        )
+        # Not vacuous: at least one real denylist pattern is actually IN one of
+        # the unions, not just that the unions are non-empty text.
         assert any(
             pat.pattern in prefilter.pattern
             for plugin in by_type.values()
             for pat in plugin.denylist
+            for prefilter in prefilters
         )
+        # Every distinct flag combination among eligible denylists gets its own
+        # compiled union — a case-insensitive pattern (Slack, AWS's
+        # keyword-context form) must not be silently folded into a flag-less
+        # compile that drops its case-insensitivity.
+        eligible_flag_sets = {
+            pat.flags for plugin in by_type.values() for pat in plugin.denylist
+        }
+        assert {p.flags for p in prefilters} == eligible_flag_sets
+
+
+def test_cross_line_prefilter_keeps_case_insensitive_detector_case_insensitive():
+    """Slack's denylist pattern is compiled with re.IGNORECASE; a flag-less
+    join of the eligible-type union (an earlier version of this prefilter)
+    would silently stop matching an upper-cased split token, since
+    `xox(?:a|b|p|o|s|r)-...` never matches "XOXB-..." without that flag."""
+    value = "XOXB-123-456-ABCDEFGHIJ"
+    head, tail = value[:14], value[14:]
+    text = f"prefix {head}\n{tail} suffix"
+    with E.configure_plugins():
+        found: list[str] = []
+        out = E._redact_cross_line(text, found, cfg())
+    assert out == f"prefix {_ph('Slack Token')} suffix"
+    assert found == ["Slack Token"]
 
 
 def test_cross_line_prefilter_cache_does_not_survive_a_reconfigure():
