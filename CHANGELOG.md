@@ -8,6 +8,17 @@ adhere to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+## [2.37.3] - 2026-08-14
+
+### Added
+- Opt-in metered Anthropic API key support as an additional tier in claude-run's authentication ladder.
+
+### Fixed
+- Disable the allowlist filter for secret redaction to prevent pragma comments from suppressing redaction.
+
+### Changed
+- Rename the metered-key secret to `FAR_ANTHROPIC_API_KEY` for consistency.
+
 ## [2.37.2] - 2026-08-12
 
 ### Fixed
