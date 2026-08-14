@@ -29,7 +29,7 @@ from urllib.parse import urlsplit
 from detect_secrets.core.plugins.util import get_mapping_from_secret_type_to_class
 from detect_secrets.core.potential_secret import PotentialSecret
 from detect_secrets.core.scan import scan_line
-from detect_secrets.settings import transient_settings
+from detect_secrets.settings import get_settings, transient_settings
 
 from . import detectors
 from .config import RedactorConfig
@@ -1214,6 +1214,15 @@ def configure_plugins(high_confidence: bool = False):
                 {"plugins_used": plugins + CUSTOM_PLUGINS}
             )
             self._settings.__enter__()
+            # detect-secrets' allowlist filter is on by default and honors
+            # `# pragma: allowlist secret` on the scanned line itself. This
+            # engine scans tool output, which an attacker can shape, so leaving
+            # it enabled lets a planted pragma suppress its own secret's
+            # redaction. Disable it so no line can allowlist itself.
+            # `disable_filters` clears `get_filters`'s cache itself.
+            get_settings().disable_filters(
+                "detect_secrets.filters.allowlist.is_line_allowlisted"
+            )
             get_mapping_from_secret_type_to_class.cache_clear()
             return self
 
