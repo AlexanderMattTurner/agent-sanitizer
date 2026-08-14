@@ -330,8 +330,8 @@ _UPSTREAM_NPM_RE = re.compile(
 _NEW_NPM_RE = D.NpmDetector.denylist[0]
 
 
-def _npmrc_line(host: str, path: str, token: str) -> str:
-    return f"//{host}/{path}/:_authToken={token}"
+def _npmrc_line(host: str, path: str, token: str, gap: str = "") -> str:
+    return f"//{host}/{path}/:_authToken={gap}{token}"
 
 
 _NPM_POSITIVE_CORPUS = [
@@ -339,6 +339,10 @@ _NPM_POSITIVE_CORPUS = [
     _npmrc_line("registry.npmjs.org", "@scope", "npm_" + "A1b2C3" * 6),
     _npmrc_line("npm.pkg.github.com", "myorg", "a1b2c3d4-e5f6-7890-abcd-ef0123456789"),
     _npmrc_line("registry.yarnpkg.com", "", "A" * 36),
+    # Upstream's gap before the token is unbounded (`\s*`); a real-world value
+    # is never THIS padded, but the replacement's bound must still cover
+    # whatever upstream would have matched, up to its own {0,256} floor.
+    _npmrc_line("registry.npmjs.org", "", "npm_" + "a" * 36, gap=" " * 20),
 ]
 
 
@@ -362,15 +366,19 @@ _HOST_PATH_ALPHABET = string.ascii_letters + string.digits + "-_.@"
     host=st.text(alphabet=_HOST_PATH_ALPHABET, min_size=1, max_size=40),
     path=st.text(alphabet=_HOST_PATH_ALPHABET, min_size=0, max_size=40),
     token=st.text(alphabet=_TOKEN_ALPHABET, min_size=1, max_size=80),
+    # The one dimension the two patterns bound differently (upstream: unbounded
+    # `\s*`; replacement: `{0,256}`) — generated explicitly so equivalence is
+    # actually exercised across it, not just assumed from the fixed corpus.
+    gap=st.text(alphabet=" \t", max_size=30),
 )
 @settings(max_examples=200, deadline=None)
 def test_npm_detector_detection_matches_upstream_over_random_npmrc_shapes(
-    host, path, token
+    host, path, token, gap
 ):
-    line = _npmrc_line(host, path, token)
+    line = _npmrc_line(host, path, token, gap=gap)
     upstream_hit = bool(_UPSTREAM_NPM_RE.search(line))
     new_hit = bool(_NEW_NPM_RE.search(line))
-    assert new_hit == upstream_hit, (host, path, token, line)
+    assert new_hit == upstream_hit, (host, path, token, gap, line)
 
 
 # The one accepted behaviour difference (see the JSON entry's note): the

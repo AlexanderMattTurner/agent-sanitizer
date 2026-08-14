@@ -1317,18 +1317,28 @@ def configure_plugins(high_confidence: bool = False):
             )
             self._settings.__enter__()
             get_mapping_from_secret_type_to_class.cache_clear()
+            # _eligible_prefilter() reads get_plugins(), which answers for
+            # WHICHEVER config is active — high_confidence and the default both
+            # run in this same process (the daemon serves both), and without
+            # this clear the prefilter built under the first config active in
+            # the process stays cached for the other one too. The two configs
+            # happen to agree on every _CROSS_LINE_ELIGIBLE_TYPES entry today
+            # (PLUGINS_HIGH_CONFIDENCE only drops KeywordDetector, which isn't
+            # eligible), but that is not a premise this cache should rely on.
+            _eligible_prefilter.cache_clear()
             return self
 
         def __exit__(self, *exc):
             # A bare `return` inside `finally` swallows any exception propagating
             # out of the `try` — here a `cache_clear()` fault — replacing it with
-            # the returned value. Clear the cache in the `try`; run the inner
+            # the returned value. Clear the caches in the `try`; run the inner
             # __exit__ (always, so the transient settings are released even if
-            # cache_clear raised) in the `finally`, capturing its verdict; and
+            # a cache_clear raised) in the `finally`, capturing its verdict; and
             # `return` that verdict AFTER the finally so a cache_clear exception
             # propagates instead of being masked.
             try:
                 get_mapping_from_secret_type_to_class.cache_clear()
+                _eligible_prefilter.cache_clear()
             finally:
                 settings_result = self._settings.__exit__(*exc)
             return settings_result

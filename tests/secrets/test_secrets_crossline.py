@@ -340,3 +340,22 @@ def test_cross_line_prefilter_is_sound():
             for plugin in by_type.values()
             for pat in plugin.denylist
         )
+
+
+def test_cross_line_prefilter_cache_does_not_survive_a_reconfigure():
+    """_eligible_prefilter() is process-wide functools.cache'd, keyed on no
+    arguments — so it must be cleared on every configure_plugins() entry/exit,
+    or a prefilter built under one plugin config (e.g. high_confidence) would
+    silently answer for a LATER, differently-configured scan in the same
+    process (the daemon serves both configs). Observed via cache_info(), since
+    high_confidence and the default set agree on every eligible type today and
+    so cannot be told apart by the prefilter's own text."""
+    with E.configure_plugins():
+        E._eligible_prefilter()
+        assert E._eligible_prefilter.cache_info().currsize == 1
+    with E.configure_plugins(high_confidence=True):
+        assert E._eligible_prefilter.cache_info().currsize == 0
+        E._eligible_prefilter()
+        assert E._eligible_prefilter.cache_info().currsize == 1
+    with E.configure_plugins():
+        assert E._eligible_prefilter.cache_info().currsize == 0

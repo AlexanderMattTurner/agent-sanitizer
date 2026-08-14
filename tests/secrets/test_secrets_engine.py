@@ -392,6 +392,23 @@ def test_known_prefix_redacted():
     assert result["text"] == "key: [REDACTED: AWS Access Key]"
 
 
+def test_repeated_line_redacts_and_reports_every_occurrence():
+    """_redact_lines caches identical lines in plain mode; a cache replay must
+    still redact each occurrence and add its own `found` entry — the memoized
+    line's savings must not silently drop a duplicate detection.
+
+    Uses `redact()` directly (not `run_plain`/`handle_request`), since the
+    response-shaping layer dedupes `found` — the raw per-occurrence count only
+    survives at the engine's own boundary."""
+    line = f"key: {AWS_KEY}"
+    text = "\n".join([line, "unrelated line", line, line]) + "\n"
+    redacted, found = redact(text)
+    assert found.count("AWS Access Key") == 3
+    assert AWS_KEY not in redacted
+    assert redacted.count("[REDACTED: AWS Access Key]") == 3
+    assert "unrelated line" in redacted
+
+
 # ─── Invisible-character-spliced structural secrets (engine.py `_redact_line`,
 # `_cross_line_candidate_spans`) — a zero-width char wedged INSIDE a leaked
 # credential must not evade a structural (prefix) detector. ──────────────────
@@ -1610,6 +1627,20 @@ def test_map_mode_env_value_yields_pair_per_occurrence():
     assert {p["placeholder"] for p in view["pairs"]} == {
         "[REDACTED: VENICE_INFERENCE_KEY]"
     }
+
+
+def test_map_mode_repeated_line_gives_each_occurrence_its_own_sentinel():
+    """Map mode must bypass the plain-mode per-line cache: replaying a cached
+    sentinel across occurrences would hand two distinct source spans the same
+    entries-index sentinel, collapsing three pairs into one and desyncing
+    _resolve_marks' offsets from the actual text."""
+    line = f"key: {AWS_KEY}"
+    text = "\n".join([line, line, line]) + "\n"
+    view = run_map(text)
+    assert reconstruct(view) == text
+    assert [p["original"] for p in view["pairs"]] == [AWS_KEY] * 3
+    starts = [p["start"] for p in view["pairs"]]
+    assert len(set(starts)) == 3, "cache replay collapsed distinct occurrences"
 
 
 def test_map_mode_three_distinct_secrets_keep_their_own_original():

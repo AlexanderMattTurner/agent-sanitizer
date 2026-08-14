@@ -14,6 +14,7 @@ from agent_sanitizer.secrets import strip_invisible
 from agent_sanitizer.secrets.invisible import (
     default_charset,
     invisible_run_pattern,
+    strip_invisible_with_map,
 )
 
 # Cf representatives by code point: zero-width, ZWNJ/ZWJ, word-joiner, BOM, soft
@@ -142,6 +143,32 @@ def test_strip_invisible_explicit_charset_overrides_default():
     """A caller may pin a bespoke charset; only its members are stripped."""
     assert strip_invisible("a​b", frozenset({0x200B})) == "ab"
     assert strip_invisible("a​b", frozenset({0x2060})) == "a​b"
+
+
+# ─── strip_invisible_with_map ─────────────────────────────────────────────────
+
+
+def test_strip_invisible_with_map_clean_text_takes_the_identity_fast_path():
+    """No charset member present: the `str.translate` presence probe must short
+    -circuit to the identity `range`, not fall through to the per-character
+    loop."""
+    text = "clean text, no invisibles: AKIA1234"
+    result_text, offsets = strip_invisible_with_map(text)
+    assert result_text == text
+    assert isinstance(offsets, range)
+    assert list(offsets) == list(range(len(text)))
+
+
+def test_strip_invisible_with_map_deletes_and_offsets_correctly():
+    """With a charset member present, the general per-character path must still
+    produce the deleted text and an offset map pointing each stripped
+    character back at its original index."""
+    text = "a" + chr(0x200B) + "b" + chr(0x200B) + "c"
+    result_text, offsets = strip_invisible_with_map(text)
+    assert result_text == "abc"
+    assert not isinstance(offsets, range)
+    assert list(offsets) == [0, 2, 4]
+    assert all(text[offsets[i]] == result_text[i] for i in range(len(result_text)))
 
 
 # ─── invisible_run_pattern domain ────────────────────────────────────────────
