@@ -201,6 +201,11 @@ jobs:
           oauth_token_fallback_4: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN_FALLBACK_4 }}
           oauth_token_fallback_5: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN_FALLBACK_5 }}
           oauth_token_fallback_6: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN_FALLBACK_6 }}
+          # The one metered, opt-in rung: tried only after all seven OAuth
+          # credentials above are exhausted (see claude-run/action.yaml). PR
+          # review is the workflow that most often exhausts the subscription
+          # ladder, so it is the one caller that opts in.
+          anthropic_api_key: ${{ secrets.GH_ACTION_ANTHROPIC_API_KEY }}
           # Give the action the workflow token directly. Without it, the action
           # tries to mint one via an OIDC→GitHub-App token exchange that isn't
           # authorized here and fails with "401 Invalid OIDC token" before Claude
