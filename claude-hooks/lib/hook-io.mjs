@@ -366,11 +366,34 @@ async function readAllBounded(stream, maxBytes = MAX_STDIN_BYTES) {
 }
 
 /**
+ * Byte length of the most recent {@link readStdinJson} read, or null before
+ * the first one. Recorded as a side channel rather than widened into
+ * `readStdinJson`'s return value, since that return shape is depended on by
+ * callers (plugin-hooks.mjs, sanitize-user-prompt.mjs,
+ * scan-loaded-instructions.mjs, control-plane.mjs) that only want the parsed
+ * payload.
+ * @type {number | null}
+ */
+let lastStdinBytes = null;
+
+/**
+ * The byte length recorded by the most recent {@link readStdinJson} call, or
+ * null if none has run yet (e.g. a test injected its own `readInput`). Read by
+ * `runJudgeCli` to fold the payload size into the slow-hook notice.
+ * @returns {number | null}
+ */
+export function lastStdinByteLength() {
+  return lastStdinBytes;
+}
+
+/**
  * @param {number} [maxBytes] cap before aborting (overridable for tests)
  * @returns {Promise<any>}
  */
 export async function readStdinJson(maxBytes = MAX_STDIN_BYTES) {
-  return JSON.parse((await readAllBounded(process.stdin, maxBytes)).toString());
+  const buf = await readAllBounded(process.stdin, maxBytes);
+  lastStdinBytes = buf.length;
+  return JSON.parse(buf.toString());
 }
 
 /**

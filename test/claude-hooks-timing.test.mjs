@@ -12,10 +12,12 @@ import assert from "node:assert/strict";
 
 import {
   excludeProvisioning,
+  formatBytes,
   reportSlowHook,
   slowHookNotice,
   startHookTimer,
   withSlowHookNotice,
+  writeSlowHookNotice,
   SLOW_HOOK_THRESHOLD_MS,
 } from "../claude-hooks/lib/hook-timing.mjs";
 import { runJudgeCli } from "../claude-hooks/lib/control-plane.mjs";
@@ -153,6 +155,89 @@ describe("slowHookNotice", () => {
   it("honors an explicit threshold", () => {
     assert.equal(slowHookNotice("x", 50, 100), null);
     assert.match(slowHookNotice("x", 300, 100), /0\.3s/);
+  });
+
+  it("omits the context clause when no context is given", () => {
+    const notice = slowHookNotice("h", SLOW_HOOK_THRESHOLD_MS + 500);
+    assert.doesNotMatch(notice, /payload/);
+    assert.doesNotMatch(notice, /tool /);
+  });
+
+  it("omits the context clause when context carries neither field", () => {
+    const notice = slowHookNotice(
+      "h",
+      SLOW_HOOK_THRESHOLD_MS + 500,
+      undefined,
+      {},
+    );
+    assert.doesNotMatch(notice, /payload/);
+  });
+
+  it("names the payload size and triggering tool when both are known", () => {
+    const notice = slowHookNotice(
+      "sanitize-output",
+      SLOW_HOOK_THRESHOLD_MS + 3_400,
+      undefined,
+      { payloadBytes: 1_363_149, tool: "TaskOutput" },
+    );
+    assert.match(notice, /a 1\.3 MB payload/);
+    assert.match(notice, /tool TaskOutput/);
+  });
+
+  it("names only the field that is known", () => {
+    const bytesOnly = slowHookNotice(
+      "h",
+      SLOW_HOOK_THRESHOLD_MS + 500,
+      undefined,
+      { payloadBytes: 2048 },
+    );
+    assert.match(bytesOnly, /a 2\.0 KB payload/);
+    assert.doesNotMatch(bytesOnly, /tool /);
+
+    const toolOnly = slowHookNotice(
+      "h",
+      SLOW_HOOK_THRESHOLD_MS + 500,
+      undefined,
+      { tool: "Bash" },
+    );
+    assert.match(toolOnly, /tool Bash/);
+    assert.doesNotMatch(toolOnly, /payload/);
+  });
+});
+
+describe("formatBytes", () => {
+  it("tiers bytes, KB and MB", () => {
+    assert.equal(formatBytes(512), "512 B");
+    assert.equal(formatBytes(2048), "2.0 KB");
+    assert.equal(formatBytes(1_363_149), "1.3 MB");
+  });
+});
+
+describe("writeSlowHookNotice with context", () => {
+  it("carries the context into the stderr-written notice", () => {
+    const errs = [];
+    const notice = writeSlowHookNotice(
+      "h",
+      SLOW_HOOK_THRESHOLD_MS + 500,
+      (chunk) => errs.push(chunk),
+      { payloadBytes: 100, tool: "Bash" },
+    );
+    assert.match(notice, /tool Bash/);
+    assert.match(errs[0], /tool Bash/);
+  });
+});
+
+describe("withSlowHookNotice with context", () => {
+  it("folds the context into the verdict's additional_context", () => {
+    const out = withSlowHookNotice(
+      "h",
+      SLOW_HOOK_THRESHOLD_MS + 500,
+      { decision: "allow" },
+      () => {},
+      { payloadBytes: 1_363_149, tool: "TaskOutput" },
+    );
+    assert.match(out.additional_context, /a 1\.3 MB payload/);
+    assert.match(out.additional_context, /tool TaskOutput/);
   });
 });
 
@@ -335,6 +420,31 @@ describe("runJudgeCli times every judge hook", () => {
     // The posture still runs: the timing is an addition to the fault report,
     // never a replacement for it.
     assert.ok(onErrorCalled, "onError must still take the failure posture");
+  });
+
+  it("names the triggering tool in the notice, but omits payload size for an injected reader", async () => {
+    // The tool name comes from adapter.parse(event), independent of which
+    // stdin reader ran; the payload-size clause is keyed off readInput being
+    // the real readStdinJson, so an injected test seam must not report a
+    // stale size left by some earlier real call.
+    const written = [];
+    await runJudgeCli(
+      "pretooluse-sanitize",
+      async () => {
+        await new Promise((resolve) =>
+          setTimeout(resolve, SLOW_HOOK_THRESHOLD_MS + 100),
+        );
+        return { decision: "allow" };
+      },
+      {
+        onError: (err) => assert.fail(String(err)),
+        readInput: async () => event,
+        write: (chunk) => written.push(chunk),
+      },
+    );
+    const stdout = written.join("");
+    assert.match(stdout, /tool Bash/);
+    assert.doesNotMatch(stdout, /payload/);
   });
 
   it("says nothing about timing when the INPUT read is what failed", async () => {
