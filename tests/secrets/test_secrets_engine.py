@@ -432,6 +432,37 @@ def test_allowlist_filter_is_disabled_inside_configure_plugins():
         )
 
 
+def test_allowlist_filter_is_absent_from_the_filters_that_actually_run():
+    """The sibling above pins the SETTINGS dict; this pins what actually runs.
+
+    ``Settings.disable_filters`` only pops from a dict, while the filters
+    ``scan_line`` applies come from ``get_filters`` — an ``lru_cache`` OVER that
+    dict. The disable therefore only bites because ``transient_settings`` calls
+    ``cache_bust()`` on entry (``settings.py``), clearing ``get_filters`` so the
+    first rebuild after the pop reflects the pruned dict. That is an upstream
+    internal, not a documented contract: a detect-secrets that stopped busting
+    would leave settings looking correct while the stale, permissive filter list
+    kept running — silently reopening the self-allowlisting hole — and every
+    other test in this block would still pass.
+    """
+    from detect_secrets.core.scan import scan_line
+    from detect_secrets.settings import get_filters
+
+    allowlist = "detect_secrets.filters.allowlist.is_line_allowlisted"
+    # Non-vacuity: the filter really is live outside the block, so its absence
+    # inside is caused by `configure_plugins` and not by it never being there.
+    assert allowlist in [f.path for f in get_filters()]
+
+    with E.configure_plugins():
+        assert allowlist not in [f.path for f in get_filters()]
+        # And it stays gone across a real scan, which re-clears the cache itself.
+        list(scan_line(f'aws_key = "{AWS_KEY}"'))
+        assert allowlist not in [f.path for f in get_filters()]
+
+    # Restored on exit: the disable is scoped to the block, not process-global.
+    assert allowlist in [f.path for f in get_filters()]
+
+
 @pytest.mark.parametrize(
     "comment",
     ["  # pragma: allowlist secret", "  // pragma: allowlist secret"],
