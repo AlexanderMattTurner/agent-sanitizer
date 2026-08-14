@@ -9,11 +9,15 @@ import { mkdtempSync, writeFileSync, readFileSync, chmodSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
+import { cleanGitEnv } from "../../../test/helpers/git-env.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const SCRIPT = join(HERE, "mark-attempt.sh");
 const git = (cwd, ...args) =>
-  execFileSync("git", ["-C", cwd, ...args], { encoding: "utf8" });
+  execFileSync("git", ["-C", cwd, ...args], {
+    encoding: "utf8",
+    env: cleanGitEnv,
+  });
 
 // A one-commit repo plus a recording `gh`; returns the run result, the recorded
 // gh argv lines, and the SHA the script should have marked.
@@ -41,8 +45,8 @@ function runMark({ ghExit = 0 } = {}) {
     cwd: work,
     encoding: "utf8",
     env: {
-      ...process.env,
-      PATH: `${root}:${process.env.PATH ?? ""}`,
+      ...cleanGitEnv,
+      PATH: `${root}:${cleanGitEnv.PATH ?? ""}`,
       REPO: "owner/repo",
       GH_TOKEN: "x",
       // One attempt, no backoff: the gh-down case would otherwise sit through the

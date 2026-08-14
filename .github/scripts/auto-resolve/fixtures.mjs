@@ -12,18 +12,26 @@ import {
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
+import { cleanGitEnv } from "../../../test/helpers/git-env.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const SCRIPT = join(HERE, "bundle.sh");
 const scratch = () => mkdtempSync(join(tmpdir(), "auto-resolve-bundle-"));
 const git = (cwd, ...args) =>
-  execFileSync("git", ["-C", cwd, ...args], { encoding: "utf8" });
+  execFileSync("git", ["-C", cwd, ...args], {
+    encoding: "utf8",
+    env: cleanGitEnv,
+  });
 
 // A work clone mid-merge: `main` and `feature` both edit a.md, and b.md exists
 // cleanly on both. Merging main into feature conflicts on a.md only. Both
 // branches are pushed, so the merge's two parents are reachable from origin —
 // which is what the land step requires.
-function midMerge({ bContent = "b base\n", extraConflict = null } = {}) {
+function midMerge({
+  bContent = "b base\n",
+  extraConflict = null,
+  seed = null,
+} = {}) {
   const root = scratch();
   const origin = join(root, "origin.git");
   const work = join(root, "work");
@@ -34,6 +42,9 @@ function midMerge({ bContent = "b base\n", extraConflict = null } = {}) {
   git(work, "config", "commit.gpgsign", "false");
   writeFileSync(join(work, "a.md"), "base\n");
   writeFileSync(join(work, "b.md"), bContent);
+  // Files both branches share unchanged (a repo's committed tooling), so they
+  // are present mid-merge without being part of the conflict.
+  if (seed) seed(work);
   if (extraConflict) {
     mkdirSync(dirname(join(work, extraConflict)), { recursive: true });
     writeFileSync(join(work, extraConflict), "base\n");
@@ -97,6 +108,42 @@ function midMergeModifyDelete() {
   return { work, origin, root };
 }
 
+// A mid-merge tree that also declares regen rules: `gen.txt` is generator-owned
+// and conflicts alongside its source `a.md`, which is exactly the case
+// prepare.sh defers to bundle.sh's post-LLM regeneration. The generator is
+// committed (bundle.sh refuses untracked files) and derives its output from the
+// resolved source, so a test can tell a real regeneration from git's "ours".
+//
+// `generatorBody` is the committed generator's script body; the default writes
+// gen.txt from a.md. Pass a failing body to exercise the refusal path.
+function midMergeGenerated({ generatorBody = null } = {}) {
+  const body =
+    generatorBody ??
+    `import { readFileSync, writeFileSync } from "node:fs";
+writeFileSync("gen.txt", "generated from: " + readFileSync("a.md", "utf8"));
+`;
+  return midMerge({
+    extraConflict: "gen.txt",
+    seed: (w) => {
+      mkdirSync(join(w, ".github", "scripts"), { recursive: true });
+      mkdirSync(join(w, "config"), { recursive: true });
+      writeFileSync(
+        join(w, ".github", "scripts", "resolve-generated.mjs"),
+        readFileSync(join(HERE, "..", "resolve-generated.mjs"), "utf8"),
+      );
+      writeFileSync(
+        join(w, "config", "auto-resolve-regen-rules.json"),
+        JSON.stringify({
+          rules: [
+            { generator: "gen.mjs", sources: ["a.md"], owns: ["gen.txt"] },
+          ],
+        }),
+      );
+      writeFileSync(join(w, "gen.mjs"), body);
+    },
+  });
+}
+
 // Runs bundle.sh in `work` with a fake `gh` on PATH that records every
 // invocation, so a test can assert on the comment(s)/labels it posts. The
 // self-review is left unconfigured (no OAuth token in the environment), so
@@ -117,13 +164,13 @@ function runBundle(work, conflictList, env = {}) {
   chmodSync(ghPath, 0o755);
   const bundleDir = join(root, "bundle-out");
   let error = null;
-  let stdout = "";
+  let stdout;
   try {
     stdout = execFileSync("bash", [SCRIPT], {
       cwd: work,
       encoding: "utf8",
       env: {
-        ...process.env,
+        ...cleanGitEnv,
         HEAD_REF: "feature",
         BASE_REF: "main",
         PR: "1",
@@ -137,11 +184,14 @@ function runBundle(work, conflictList, env = {}) {
         CLAUDE_CODE_OAUTH_TOKEN_FALLBACK_5: "",
         CLAUDE_CODE_OAUTH_TOKEN_FALLBACK_6: "",
         ...env,
-        PATH: `${binDir}:${process.env.PATH ?? ""}`,
+        PATH: `${binDir}:${cleanGitEnv.PATH ?? ""}`,
       },
     });
   } catch (err) {
     error = err;
+    // A failing run is exactly when a test needs to know HOW FAR bundle.sh got,
+    // and execFileSync throws its output away unless it is read off the error.
+    stdout = err.stdout ?? "";
   }
   let merging = true;
   try {
@@ -160,4 +210,4 @@ function runBundle(work, conflictList, env = {}) {
   };
 }
 
-export { midMerge, midMergeModifyDelete, runBundle };
+export { midMerge, midMergeModifyDelete, midMergeGenerated, runBundle };

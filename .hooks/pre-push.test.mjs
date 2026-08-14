@@ -20,6 +20,7 @@ import { join } from "node:path";
 import { after, before, describe, it } from "node:test";
 
 import { repoRoot } from "../test/helpers/repo-root.mjs";
+import { cleanGitEnv } from "../test/helpers/git-env.mjs";
 
 const HOOK = join(repoRoot, ".hooks", "pre-push");
 const ZERO = "0".repeat(40);
@@ -28,15 +29,8 @@ let scratch;
 let origin;
 let clone;
 
-// Git's own environment must not leak in from whatever invoked this suite:
-// under the pre-commit hook `GIT_INDEX_FILE` names the OUTER repo's temporary
-// index, and every git call in this throwaway repo would use it.
-const cleanEnv = Object.fromEntries(
-  Object.entries(process.env).filter(([key]) => !key.startsWith("GIT_")),
-);
-
 const git = (args, cwd) =>
-  execFileSync("git", args, { cwd, encoding: "utf8", env: cleanEnv }).trim();
+  execFileSync("git", args, { cwd, encoding: "utf8", env: cleanGitEnv }).trim();
 
 /**
  * Run the hook against `clone` with one ref line on stdin.
@@ -114,6 +108,37 @@ describe("pre-push merged-history guard", () => {
     );
     assert.equal(status, 0);
     assert.doesNotMatch(stderr, /already contained/);
+  });
+
+  it("still refuses a force-push to the default branch that adds nothing, with rollback-aware wording", () => {
+    // A ref pushed AT origin/main only reaches "ahead == 0" via a force push —
+    // an ordinary push adding nothing is rejected by git before the hook runs.
+    // The hook cannot tell a deliberate rollback from an accidental stale
+    // force-push, so it still refuses; only the message changes, so the
+    // rollback case doesn't get told to "restart the branch" against itself.
+    git(["checkout", "-q", "-B", "ahead", "origin/main"], clone);
+    writeFileSync(join(clone, "later.txt"), "later\n");
+    git(["add", "-A"], clone);
+    git(["commit", "-qm", "feat: later work"], clone);
+    const rollbackTo = git(["rev-parse", "origin/main"], clone);
+    const current = headOf("HEAD");
+    const { status, stderr } = runHook(
+      `refs/heads/ahead ${rollbackTo} refs/heads/main ${current}`,
+    );
+    assert.equal(status, 1, `expected the refusal, stderr: ${stderr}`);
+    assert.doesNotMatch(stderr, /already contained/);
+    assert.doesNotMatch(stderr, /restart the branch/i);
+    assert.match(stderr, /deliberate rollback/);
+    assert.match(stderr, /--no-verify/);
+    // Non-vacuity: the SAME sha aimed at a feature branch gets the ordinary
+    // feature-branch wording instead, so the message above is keyed on the
+    // ref being the default branch and nothing else.
+    const feature = runHook(
+      `refs/heads/ahead ${rollbackTo} refs/heads/other ${current}`,
+    );
+    assert.equal(feature.status, 1);
+    assert.match(feature.stderr, /every commit in it is already contained/);
+    assert.doesNotMatch(feature.stderr, /deliberate rollback/);
   });
 
   it("skips a branch deletion", () => {

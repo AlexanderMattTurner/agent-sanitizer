@@ -11,11 +11,15 @@ import { mkdtempSync, writeFileSync, readFileSync, chmodSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
+import { cleanGitEnv } from "../../../test/helpers/git-env.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const SCRIPT = join(HERE, "release-attempt.sh");
 const git = (cwd, ...args) =>
-  execFileSync("git", ["-C", cwd, ...args], { encoding: "utf8" });
+  execFileSync("git", ["-C", cwd, ...args], {
+    encoding: "utf8",
+    env: cleanGitEnv,
+  });
 
 // A one-commit repo plus a recording `gh`. HEAD_SHA is deliberately NOT the
 // worktree's HEAD in the default case: the fast-forward no-op leaves HEAD on the
@@ -44,8 +48,8 @@ function runRelease({ ghExit = 0, headSha = "deadbeef" } = {}) {
     cwd: work,
     encoding: "utf8",
     env: {
-      ...process.env,
-      PATH: `${root}:${process.env.PATH ?? ""}`,
+      ...cleanGitEnv,
+      PATH: `${root}:${cleanGitEnv.PATH ?? ""}`,
       REPO: "owner/repo",
       GH_TOKEN: "x",
       HEAD_SHA: headSha,
@@ -84,7 +88,7 @@ test("it refuses to guess the SHA when prepare reported none", () => {
   const res = spawnSync("bash", [SCRIPT], {
     cwd: root,
     encoding: "utf8",
-    env: { ...process.env, REPO: "owner/repo", GH_TOKEN: "x" },
+    env: { ...cleanGitEnv, REPO: "owner/repo", GH_TOKEN: "x" },
   });
   assert.notEqual(res.status, 0);
   assert.match(res.stderr, /HEAD_SHA/);

@@ -122,14 +122,54 @@ if [[ ${#staged_list[@]} -gt 0 ]]; then
 fi
 
 # Deferred regeneration: generator-owned outputs whose sources were among the
-# LLM-resolved conflicts. With the sources now staged clean, the regen pre-pass
-# resolves them deterministically (regenerate + stage). Only reachable when the
-# repo has a resolve-generated script (else DEFERRED_REGEN is always empty).
+# LLM-resolved conflicts. With the sources now staged clean, the regen pass
+# re-derives them and stages the result. Only reachable when the repo has a
+# resolve-generated script (else DEFERRED_REGEN is always empty).
 read -ra deferred_list <<<"${DEFERRED_REGEN:-}"
 if [[ ${#deferred_list[@]} -gt 0 ]] && has_resolve_generated; then
+  # Snapshot every deferred path BEFORE the generator runs, so "did the
+  # generator answer for this path?" is observable afterwards. A generator-owned
+  # conflict can be MARKER-FREE — binary, or modify/delete — and prepare.sh
+  # routes on ownership before either classification, so git leaves its
+  # surviving side verbatim in the working tree. Staging on existence alone
+  # would commit that stale side as if it were generated output, and the marker
+  # scan below cannot see a file that never had markers.
+  declare -A regen_before=()
+  for f in "${deferred_list[@]}"; do
+    if [[ -e "$f" || -L "$f" ]]; then
+      regen_before["$f"]="$(git hash-object -- "$f")"
+    else
+      regen_before["$f"]=absent
+    fi
+  done
+  regen_rc=0
   # shellcheck disable=SC2119  # no flags: this is the plain regenerate-everything run
-  # echo-fallback-ok: regeneration is best-effort by design; the unmerged check below is the real gate
-  run_resolve_generated || echo "resolve-generated errored — the unmerged check below decides."
+  run_resolve_generated || regen_rc=$?
+  # Staging is what turns a regeneration into a RESOLUTION: generator output
+  # written to the working tree leaves the path UNMERGED in the index, so the
+  # check below rejects every unstaged deferred path. Gated on a clean run —
+  # resolve-generated stops at its first failing rule, and a later rule's output
+  # still holds git's "ours" side, never a generator's answer.
+  if [[ "$regen_rc" -eq 0 ]]; then
+    for f in "${deferred_list[@]}"; do
+      if [[ ! -e "$f" && ! -L "$f" ]]; then
+        # Gone after a clean run, having been there before it: the resolved
+        # sources no longer produce this artifact, so the DELETION is the
+        # generated answer and staging it resolves the path. A path absent on
+        # both sides of the run got no answer at all — leave it unmerged.
+        [[ "${regen_before["$f"]}" == absent ]] && continue
+        git add -A -- "$f"
+        continue
+      fi
+      # Byte-identical to what the merge left behind is not evidence of a
+      # rewrite; leave it unmerged so the refusal below names it.
+      [[ "$(git hash-object -- "$f")" == "${regen_before["$f"]}" ]] && continue
+      git add -- "$f"
+    done
+  else
+    # echo-fallback-ok: diagnostic only; the unmerged check below fails the run
+    echo "resolve-generated exited ${regen_rc} — deferred paths left unstaged."
+  fi
   still_unmerged=()
   for f in "${deferred_list[@]}"; do
     [[ -n "$(git ls-files -u -- "$f")" ]] && still_unmerged+=("$f")

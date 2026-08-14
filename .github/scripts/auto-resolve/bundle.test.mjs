@@ -3,10 +3,19 @@ import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { writeFileSync, readFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
-import { midMerge, midMergeModifyDelete, runBundle } from "./fixtures.mjs";
+import {
+  midMerge,
+  midMergeModifyDelete,
+  midMergeGenerated,
+  runBundle,
+} from "./fixtures.mjs";
+import { cleanGitEnv } from "../../../test/helpers/git-env.mjs";
 
 const git = (cwd, ...args) =>
-  execFileSync("git", ["-C", cwd, ...args], { encoding: "utf8" });
+  execFileSync("git", ["-C", cwd, ...args], {
+    encoding: "utf8",
+    env: cleanGitEnv,
+  });
 
 test("bundle commits the merge and emits a bundle when the resolution stays in the conflicted set", () => {
   const { work } = midMerge();
@@ -18,6 +27,7 @@ test("bundle commits the merge and emits a bundle when the resolution stays in t
   // The bundle carries the merge commit under the handoff ref, and nothing else.
   const listed = execFileSync("git", ["bundle", "list-heads", bundle], {
     encoding: "utf8",
+    env: cleanGitEnv,
   });
   assert.match(listed, /refs\/auto-resolve\/result/);
   assert.equal(listed.trim().split("\n").length, 1);
@@ -206,4 +216,85 @@ test("the self-review is skipped, and the merge still bundled, when it is turned
   });
   assert.equal(error, null);
   assert.ok(existsSync(bundle));
+});
+
+// ─── Deferred regeneration (DEFERRED_REGEN). A generator-owned file whose
+// SOURCE also conflicted is regenerated here, after the LLM resolves that
+// source. Regenerating alone is not a resolution: generator output written to
+// the working tree leaves the path unmerged in the index, so bundle.sh must
+// stage it. ──────────────────────────────────────────────────────────────────
+
+test("a deferred generated file is regenerated from the resolved source and STAGED, so the merge bundles", () => {
+  const { work } = midMergeGenerated();
+  writeFileSync(join(work, "a.md"), "resolved: feature + main\n");
+  const { error, merging, bundle } = runBundle(work, "a.md", {
+    DEFERRED_REGEN: "gen.txt",
+  });
+  assert.equal(error, null);
+  assert.equal(merging, false);
+  assert.ok(existsSync(bundle));
+  // The committed bytes are the GENERATOR's answer for the resolved source —
+  // not git's "ours" side, which staging blindly would have preserved.
+  assert.equal(
+    git(work, "show", "HEAD:gen.txt"),
+    "generated from: resolved: feature + main\n",
+  );
+  assert.notEqual(git(work, "show", "HEAD:gen.txt"), "feature side\n");
+});
+
+test("a generator that DELETES a deferred file stages the deletion, which is its answer", () => {
+  // The resolved sources no longer produce gen.txt. Requiring the path to still
+  // exist would leave its unmerged stages in place and reject a resolution the
+  // generator did make.
+  const { work } = midMergeGenerated({
+    generatorBody: 'import { rmSync } from "node:fs";\nrmSync("gen.txt");\n',
+  });
+  writeFileSync(join(work, "a.md"), "resolved\n");
+  const { error, merging, bundle } = runBundle(work, "a.md", {
+    DEFERRED_REGEN: "gen.txt",
+  });
+  assert.equal(error, null);
+  assert.equal(merging, false);
+  assert.ok(existsSync(bundle));
+  assert.equal(
+    git(work, "ls-tree", "--name-only", "HEAD", "gen.txt").trim(),
+    "",
+    "gen.txt survived a commit that was supposed to record its deletion",
+  );
+});
+
+test("a generator that exits 0 without rewriting a deferred file fails loud, before the marker scan", () => {
+  // The blind spot this guards: a generator-owned conflict can be MARKER-FREE
+  // (binary, modify/delete), so the marker scan cannot tell git's surviving
+  // side from generated output. Staging on existence alone would bundle the
+  // stale side. Evidence of a rewrite is the content changing, and the refusal
+  // has to come from the unmerged check — reaching the marker scan at all means
+  // the stale side was already staged.
+  const { work } = midMergeGenerated({ generatorBody: "process.exit(0);\n" });
+  writeFileSync(join(work, "a.md"), "resolved\n");
+  const { error, merging, bundle, ghCalls, stdout } = runBundle(work, "a.md", {
+    DEFERRED_REGEN: "gen.txt",
+  });
+  assert.notEqual(error, null);
+  assert.equal(merging, false); // merge aborted
+  assert.ok(!existsSync(bundle));
+  assert.match(ghCalls.join("\n"), /could not be regenerated/);
+  assert.doesNotMatch(
+    stdout,
+    /Conflict markers still present/,
+    "the run reached the marker scan, so the unrewritten path had been staged",
+  );
+});
+
+test("a FAILING generator leaves the deferred path unstaged rather than committing git's 'ours'", () => {
+  const { work } = midMergeGenerated({
+    generatorBody: "process.exit(3);\n",
+  });
+  writeFileSync(join(work, "a.md"), "resolved\n");
+  const { error, bundle, ghCalls } = runBundle(work, "a.md", {
+    DEFERRED_REGEN: "gen.txt",
+  });
+  assert.notEqual(error, null);
+  assert.ok(!existsSync(bundle));
+  assert.match(ghCalls.join("\n"), /could not be regenerated/);
 });
