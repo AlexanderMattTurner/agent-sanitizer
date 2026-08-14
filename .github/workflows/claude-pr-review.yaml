@@ -205,7 +205,7 @@ jobs:
           # credentials above are exhausted (see claude-run/action.yaml). PR
           # review is the workflow that most often exhausts the subscription
           # ladder, so it is the one caller that opts in.
-          anthropic_api_key: ${{ secrets.GH_ACTION_ANTHROPIC_API_KEY }}
+          anthropic_api_key: ${{ secrets.FAR_ANTHROPIC_API_KEY }}
           # Give the action the workflow token directly. Without it, the action
           # tries to mint one via an OIDC→GitHub-App token exchange that isn't
           # authorized here and fails with "401 Invalid OIDC token" before Claude
