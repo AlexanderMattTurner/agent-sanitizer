@@ -2,8 +2,12 @@
 
 import json
 import re
+import string
+import time
 
 import pytest
+from hypothesis import given, settings
+from hypothesis import strategies as st
 
 import agent_sanitizer.secrets.detectors as D
 import agent_sanitizer.secrets.engine as E
@@ -313,3 +317,81 @@ def test_cross_line_eligibility_partitions_every_active_detector():
         "stale_in_ineligible": sorted(ineligible - active),
     }
     assert {"Groq API Key", "xAI API Key", "Replicate API Token"} <= ineligible
+
+
+# ─── NpmDetector: equivalence with the upstream quadratic pattern ────────────
+# detect-secrets' bundled NpmDetector denylist — quoted verbatim (not imported:
+# the whole point of replacing it is that this repo no longer loads it) so the
+# equivalence claim below is checked against the actual upstream shape, not a
+# restatement of the replacement.
+_UPSTREAM_NPM_RE = re.compile(r"\/\/.+\/:_authToken=\s*((npm_.+)|([A-Fa-f0-9-]{36})).*")
+_NEW_NPM_RE = D.NpmDetector.denylist[0]
+
+
+def _npmrc_line(host: str, path: str, token: str) -> str:
+    return f"//{host}/{path}/:_authToken={token}"
+
+
+_NPM_POSITIVE_CORPUS = [
+    _npmrc_line("registry.npmjs.org", "", "npm_" + "a" * 36),
+    _npmrc_line("registry.npmjs.org", "@scope", "npm_" + "A1b2C3" * 6),
+    _npmrc_line("npm.pkg.github.com", "myorg", "a1b2c3d4-e5f6-7890-abcd-ef0123456789"),
+    _npmrc_line("registry.yarnpkg.com", "", "A" * 36),
+]
+
+
+@pytest.mark.parametrize("line", _NPM_POSITIVE_CORPUS)
+def test_npm_detector_matches_every_upstream_shaped_line(line):
+    assert _UPSTREAM_NPM_RE.search(line), (
+        f"test corpus line not upstream-shaped: {line}"
+    )
+    assert _NEW_NPM_RE.search(line), f"replacement missed a genuine npmrc token: {line}"
+
+
+# Alphabet excludes whitespace (both patterns require a whitespace-free run up
+# to `:_authToken=`) and `/` (kept out of host/path so the generator can't
+# accidentally produce a SECOND `/:_authToken=` sentinel mid-string, which would
+# change which occurrence each pattern anchors on).
+_TOKEN_ALPHABET = string.ascii_letters + string.digits + "-_."
+_HOST_PATH_ALPHABET = string.ascii_letters + string.digits + "-_.@"
+
+
+@given(
+    host=st.text(alphabet=_HOST_PATH_ALPHABET, min_size=1, max_size=40),
+    path=st.text(alphabet=_HOST_PATH_ALPHABET, min_size=0, max_size=40),
+    token=st.text(alphabet=_TOKEN_ALPHABET, min_size=1, max_size=80),
+)
+@settings(max_examples=200, deadline=None)
+def test_npm_detector_detection_matches_upstream_over_random_npmrc_shapes(
+    host, path, token
+):
+    line = _npmrc_line(host, path, token)
+    upstream_hit = bool(_UPSTREAM_NPM_RE.search(line))
+    new_hit = bool(_NEW_NPM_RE.search(line))
+    assert new_hit == upstream_hit, (host, path, token, line)
+
+
+# The one accepted behaviour difference (see the JSON entry's note): the
+# upstream pattern's ungrouped trailing `.*` lets its reported value swallow
+# trailing prose after the token; the replacement stops the value at the next
+# whitespace, like every other token detector in this file. Detection agrees on
+# every case above — only the captured VALUE differs.
+def test_npm_detector_value_stops_at_whitespace_unlike_upstream():
+    token = "npm_" + "a" * 36
+    line = f"//registry.npmjs.org/:_authToken={token} trailing prose here"
+    upstream_match = _UPSTREAM_NPM_RE.search(line)
+    new_match = _NEW_NPM_RE.search(line)
+    assert upstream_match and new_match
+    assert upstream_match.group(1) == f"{token} trailing prose here"
+    assert new_match.group(1) == token
+
+
+# A pathological whitespace-free line is exactly what made the upstream pattern
+# quadratic (its leading `.+` restarts at every `//`); this pins the fix at the
+# regex level, cheaper than re-running the whole-corpus benchmark per commit.
+def test_npm_detector_denylist_is_linear_on_whitespace_free_input():
+    adversarial = "//" + "a" * 200_000
+    started = time.monotonic()
+    _NEW_NPM_RE.search(adversarial)
+    elapsed = time.monotonic() - started
+    assert elapsed < 1.0, f"NpmDetector denylist took {elapsed:.2f}s — quadratic again?"
