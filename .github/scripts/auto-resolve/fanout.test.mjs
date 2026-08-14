@@ -19,6 +19,7 @@ import {
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
+import { cleanGitEnv } from "../../../test/helpers/git-env.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const SCRIPT = join(HERE, "fanout.sh");
@@ -160,8 +161,8 @@ function run(fx, { files, create = files, env = {} } = {}) {
     encoding: "utf8",
     cwd: fx.work,
     env: {
-      ...process.env,
-      PATH: `${fx.path}:${process.env.PATH}`,
+      ...cleanGitEnv,
+      PATH: `${fx.path}:${cleanGitEnv.PATH}`,
       STUB_DIR: fx.stub,
       CONFLICT_LIST: files.join(" "),
       PR_NUMBER: "41",
@@ -247,7 +248,7 @@ function gate(fx, executionFile) {
   const res = spawnSync("bash", [GATE], {
     encoding: "utf8",
     env: {
-      ...process.env,
+      ...cleanGitEnv,
       EXECUTION_FILE: executionFile,
       GITHUB_OUTPUT: out,
       CONTEXT: "Claude conflict resolution",
@@ -914,7 +915,10 @@ test("the actor gate admits a write-access human and the relay bot", () => {
 // falsifiable to carry.
 function midMergeWork(fx, f, { bulkPrCommits = 0 } = {}) {
   const g = (...a) =>
-    execFileSync("git", ["-C", fx.work, ...a], { encoding: "utf8" });
+    execFileSync("git", ["-C", fx.work, ...a], {
+      encoding: "utf8",
+      env: cleanGitEnv,
+    });
   g("init", "-q", "-b", "main");
   g("config", "user.email", "t@t");
   g("config", "user.name", "t");

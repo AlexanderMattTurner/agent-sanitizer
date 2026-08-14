@@ -12,11 +12,15 @@ import {
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { midMerge, runBundle } from "./fixtures.mjs";
+import { cleanGitEnv } from "../../../test/helpers/git-env.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const SCRIPT = join(HERE, "land.sh");
 const git = (cwd, ...args) =>
-  execFileSync("git", ["-C", cwd, ...args], { encoding: "utf8" });
+  execFileSync("git", ["-C", cwd, ...args], {
+    encoding: "utf8",
+    env: cleanGitEnv,
+  });
 
 // Produces a real bundle the way the resolve job does, then hands back a FRESH
 // clone standing in for the land job's own checkout — which shares no state
@@ -90,7 +94,7 @@ function runLand(landDir, bundleDir, env = {}) {
       cwd: landDir,
       encoding: "utf8",
       env: {
-        ...process.env,
+        ...cleanGitEnv,
         HEAD_REF: "feature",
         BASE_REF: "main",
         PR: "1",
@@ -99,7 +103,7 @@ function runLand(landDir, bundleDir, env = {}) {
         BUNDLE_DIR: bundleDir,
         RUNNER_TEMP: runnerTemp,
         ...env,
-        PATH: `${binDir}:${process.env.PATH ?? ""}`,
+        PATH: `${binDir}:${cleanGitEnv.PATH ?? ""}`,
       },
     });
   } catch (err) {

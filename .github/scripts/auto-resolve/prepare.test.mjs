@@ -11,13 +11,17 @@ import {
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
+import { cleanGitEnv } from "../../../test/helpers/git-env.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const SCRIPT = join(HERE, "prepare.sh");
 const scratch = () => mkdtempSync(join(tmpdir(), "auto-resolve-"));
 
 const git = (cwd, ...args) =>
-  execFileSync("git", ["-C", cwd, ...args], { encoding: "utf8" });
+  execFileSync("git", ["-C", cwd, ...args], {
+    encoding: "utf8",
+    env: cleanGitEnv,
+  });
 
 // Build an origin repo whose `main` and `feature` branches both edit `file`, so
 // merging main into feature conflicts on exactly that path. Returns a `work`
@@ -166,12 +170,12 @@ function runPrepare(work, extraEnv = {}, { mergiraf = "cannot-solve" } = {}) {
       cwd: work,
       encoding: "utf8",
       env: {
-        ...process.env,
+        ...cleanGitEnv,
         BASE_REF: "main",
         HEAD_REF: "feature",
         GITHUB_TOKEN: "x",
         GITHUB_OUTPUT: outFile,
-        PATH: `${ghBin}:${process.env.PATH ?? ""}`,
+        PATH: `${ghBin}:${cleanGitEnv.PATH ?? ""}`,
         ...extraEnv,
       },
     });

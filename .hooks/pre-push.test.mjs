@@ -20,6 +20,7 @@ import { join } from "node:path";
 import { after, before, describe, it } from "node:test";
 
 import { repoRoot } from "../test/helpers/repo-root.mjs";
+import { cleanGitEnv } from "../test/helpers/git-env.mjs";
 
 const HOOK = join(repoRoot, ".hooks", "pre-push");
 const ZERO = "0".repeat(40);
@@ -28,15 +29,8 @@ let scratch;
 let origin;
 let clone;
 
-// Git's own environment must not leak in from whatever invoked this suite:
-// under the pre-commit hook `GIT_INDEX_FILE` names the OUTER repo's temporary
-// index, and every git call in this throwaway repo would use it.
-const cleanEnv = Object.fromEntries(
-  Object.entries(process.env).filter(([key]) => !key.startsWith("GIT_")),
-);
-
 const git = (args, cwd) =>
-  execFileSync("git", args, { cwd, encoding: "utf8", env: cleanEnv }).trim();
+  execFileSync("git", args, { cwd, encoding: "utf8", env: cleanGitEnv }).trim();
 
 /**
  * Run the hook against `clone` with one ref line on stdin.
@@ -114,6 +108,31 @@ describe("pre-push merged-history guard", () => {
     );
     assert.equal(status, 0);
     assert.doesNotMatch(stderr, /already contained/);
+  });
+
+  it("allows a ROLLBACK of the default branch, which introduces nothing new", () => {
+    // Restoring a clobbered default branch pushes an ANCESTOR of origin/main,
+    // so `rev-list --count origin/main..<sha>` is 0 — indistinguishable from a
+    // stale feature branch by that count alone, and refused before the
+    // exemption. The remote sha is non-zero: this ref already exists.
+    git(["checkout", "-q", "-B", "ahead", "origin/main"], clone);
+    writeFileSync(join(clone, "later.txt"), "later\n");
+    git(["add", "-A"], clone);
+    git(["commit", "-qm", "feat: later work"], clone);
+    const rollbackTo = git(["rev-parse", "origin/main"], clone);
+    const current = headOf("HEAD");
+    const { status, stderr } = runHook(
+      `refs/heads/ahead ${rollbackTo} refs/heads/main ${current}`,
+    );
+    assert.equal(status, 0, `expected the rollback to pass, stderr: ${stderr}`);
+    assert.doesNotMatch(stderr, /already contained/);
+    // Non-vacuity: the SAME sha aimed at a feature branch is still refused, so
+    // the pass above comes from the ref being the default branch and nothing else.
+    const feature = runHook(
+      `refs/heads/ahead ${rollbackTo} refs/heads/other ${current}`,
+    );
+    assert.equal(feature.status, 1);
+    assert.match(feature.stderr, /every commit in it is already contained/);
   });
 
   it("skips a branch deletion", () => {

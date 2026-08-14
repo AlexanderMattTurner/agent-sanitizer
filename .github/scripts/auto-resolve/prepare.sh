@@ -135,11 +135,13 @@ if git merge --no-edit "origin/${BASE_REF}"; then
   exit 0
 fi
 
-# Optional deterministic pre-pass: when the repo defines a `resolve-generated`
-# script, regenerate + stage conflicted fully-generated files so Claude only ever
-# sees genuine source conflicts. Non-fatal on its own; skipped entirely (and the
-# whole generated-file classification collapses to empty) when the repo has no
-# such script.
+# Optional deterministic pre-pass: when the repo declares regen rules, re-derive
+# its generated files from the merged sources. This writes the working tree only
+# — nothing is staged here, because mid-merge the sources may still carry
+# conflict markers, so any output built now is provisional. The classification
+# below routes every generator-owned conflict to BUNDLE, which regenerates from
+# the RESOLVED sources and stages that. Skipped entirely (and the whole
+# generated-file classification collapses to empty) when the repo declares none.
 if has_resolve_generated; then
   # shellcheck disable=SC2119  # no flags: this is the plain regenerate-everything run
   # echo-fallback-ok: regeneration is best-effort by design; the bundle step's unmerged check is the real gate
@@ -208,9 +210,9 @@ is_owned() {
   return 1
 }
 
-# Partition. An owned conflict means its source ALSO conflicted (the pre-pass
-# already resolved the clean-source ones) — the bundle step regenerates it after the
-# LLM resolves the source. A `-merge`-attributed or binary conflict has no
+# Partition. An owned conflict is never handed to the LLM — the bundle step
+# regenerates it from the sources once the LLM has resolved those. A
+# `-merge`-attributed or binary conflict has no
 # markers to resolve and no generator to rerun: only a human (relocking,
 # re-exporting the asset) can produce the right content.
 #

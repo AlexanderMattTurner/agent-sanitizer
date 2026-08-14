@@ -13,13 +13,17 @@ import {
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
+import { cleanGitEnv } from "../../../test/helpers/git-env.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const SCRIPT = join(HERE, "self-review.sh");
 const scratch = () => mkdtempSync(join(tmpdir(), "self-review-"));
 
 const git = (cwd, ...args) =>
-  execFileSync("git", ["-C", cwd, ...args], { encoding: "utf8" });
+  execFileSync("git", ["-C", cwd, ...args], {
+    encoding: "utf8",
+    env: cleanGitEnv,
+  });
 
 const CLEAN_REVIEW =
   "No suspicious merge-resolution deltas: every hand-authored change traces to a parent's intent.\n";
@@ -223,7 +227,7 @@ function runSelfReview({
       cwd: work,
       encoding: "utf8",
       env: {
-        ...process.env,
+        ...cleanGitEnv,
         ...ladder,
         BASE_WORKTREE: base,
         SELF_REVIEW_DIR: reviewDir,
@@ -234,7 +238,7 @@ function runSelfReview({
         CLAUDE_STUB_WORK: work,
         CLAUDE_STUB_CLEAN: CLEAN_REVIEW,
         CLAUDE_STUB_FLAGGED: FLAGGED_REVIEW,
-        PATH: `${bin}:${process.env.PATH ?? ""}`,
+        PATH: `${bin}:${cleanGitEnv.PATH ?? ""}`,
         ...env,
       },
     });
