@@ -324,7 +324,9 @@ def test_cross_line_eligibility_partitions_every_active_detector():
 # the whole point of replacing it is that this repo no longer loads it) so the
 # equivalence claim below is checked against the actual upstream shape, not a
 # restatement of the replacement.
-_UPSTREAM_NPM_RE = re.compile(r"\/\/.+\/:_authToken=\s*((npm_.+)|([A-Fa-f0-9-]{36})).*")
+_UPSTREAM_NPM_RE = re.compile(
+    r"\/\/.+\/:_authToken=\s*(?P<value>(?:npm_.+)|(?:[A-Fa-f0-9-]{36})).*"
+)
 _NEW_NPM_RE = D.NpmDetector.denylist[0]
 
 
@@ -382,7 +384,7 @@ def test_npm_detector_value_stops_at_whitespace_unlike_upstream():
     upstream_match = _UPSTREAM_NPM_RE.search(line)
     new_match = _NEW_NPM_RE.search(line)
     assert upstream_match and new_match
-    assert upstream_match.group(1) == f"{token} trailing prose here"
+    assert upstream_match.group("value") == f"{token} trailing prose here"
     assert new_match.group(1) == token
 
 
