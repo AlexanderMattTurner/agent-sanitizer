@@ -8,6 +8,16 @@ adhere to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+## [2.37.4] - 2026-08-14
+
+### Fixed
+- Auto-resolve now requires rewrite evidence before staging regenerated files, preventing spurious regeneration attempts.
+- Auto-resolve preserves the merged-history guard on the default branch during conflict resolution.
+- Auto-resolve correctly stages regenerated files to resolve generated-file conflicts.
+
+### Changed
+- Pre-push hooks now run concurrently for improved performance.
+
 ## [2.37.3] - 2026-08-14
 
 ### Added
