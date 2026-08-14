@@ -392,6 +392,76 @@ def test_known_prefix_redacted():
     assert result["text"] == "key: [REDACTED: AWS Access Key]"
 
 
+# ─── Allowlist-pragma filter disabled (engine.py `configure_plugins`) — this
+# engine scans tool output, which an attacker can shape, so a line must not be
+# able to allowlist itself via detect-secrets' `# pragma: allowlist secret`. ──
+
+
+def test_allowlist_filter_is_in_detect_secrets_defaults():
+    """Pins the upstream default filter set exactly, not just membership: an
+    unpinned upper bound on the detect-secrets dependency means a bump can add
+    another line-inspecting default filter, which would reopen the
+    self-allowlisting hole this module closes. An exact-set mismatch fails
+    loud and forces an explicit keep-or-disable decision rather than landing
+    silently. (The sibling test below is what catches a typo'd disable path.)"""
+    from detect_secrets.settings import Settings
+
+    assert set(Settings().filters) == {
+        "detect_secrets.filters.allowlist.is_line_allowlisted",
+        "detect_secrets.filters.common.is_invalid_file",
+        "detect_secrets.filters.heuristic.is_indirect_reference",
+        "detect_secrets.filters.heuristic.is_likely_id_string",
+        "detect_secrets.filters.heuristic.is_lock_file",
+        "detect_secrets.filters.heuristic.is_non_text_file",
+        "detect_secrets.filters.heuristic.is_not_alphanumeric_string",
+        "detect_secrets.filters.heuristic.is_potential_uuid",
+        "detect_secrets.filters.heuristic.is_prefixed_with_dollar_sign",
+        "detect_secrets.filters.heuristic.is_sequential_string",
+        "detect_secrets.filters.heuristic.is_swagger_file",
+        "detect_secrets.filters.heuristic.is_templated_secret",
+    }
+
+
+def test_allowlist_filter_is_disabled_inside_configure_plugins():
+    with E.configure_plugins():
+        from detect_secrets.settings import get_settings
+
+        assert (
+            "detect_secrets.filters.allowlist.is_line_allowlisted"
+            not in get_settings().filters
+        )
+
+
+@pytest.mark.parametrize(
+    "comment",
+    ["  # pragma: allowlist secret", "  // pragma: allowlist secret"],
+    ids=["hash-comment", "slash-comment"],
+)
+@pytest.mark.parametrize("web_ingress", [True, False])
+def test_allowlist_pragma_does_not_suppress_redaction(comment, web_ingress):
+    line = f'aws_key = "{AWS_KEY}"'
+    # Non-vacuity control: the same line without the pragma must also redact,
+    # so a pass on the pragma case can't come from the secret going undetected.
+    control = run_plain(line, cfg(web_ingress=web_ingress))
+    assert control is not None
+    assert "AWS Access Key" in control["found"]
+
+    result = run_plain(line + comment, cfg(web_ingress=web_ingress))
+    assert result is not None
+    assert "AWS Access Key" in result["found"]
+    assert AWS_KEY not in result["text"]
+
+
+def test_allowlist_nextline_pragma_does_not_suppress_redaction():
+    # `scan_line` builds a single-line context, so the two-line `nextline`
+    # pragma form cannot reach the line it guards.
+    text = "# pragma: allowlist nextline secret\naws_key = " + f'"{AWS_KEY}"'
+    result = run_plain(text)
+    assert result is not None
+    assert "AWS Access Key" in result["found"]
+    assert AWS_KEY not in result["text"]
+
+
 # ─── Invisible-character-spliced structural secrets (engine.py `_redact_line`,
 # `_cross_line_candidate_spans`) — a zero-width char wedged INSIDE a leaked
 # credential must not evade a structural (prefix) detector. ──────────────────

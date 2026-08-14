@@ -148,7 +148,7 @@ test("a wrong-shaped rung is stepped over, not fatal to the whole walk", () => {
   assert.match(res.stdout, /USED=sk-ant-oat-good/);
 });
 
-test("no workflow or composite action hands Claude an API key", () => {
+test("no workflow or composite action hands Claude an API key, except claude-run's opt-in rung", () => {
   const roots = [
     join(REPO_ROOT, ".github", "workflows"),
     join(REPO_ROOT, ".github", "actions"),
@@ -175,9 +175,19 @@ test("no workflow or composite action hands Claude an API key", () => {
     "no scanned file references CLAUDE_CODE_OAUTH_TOKEN — the scan is not reading the Claude workflows",
   );
 
+  // claude-run/action.yaml's eighth rung, and claude-pr-review.yaml (the one
+  // caller that wires it), are the sole deliberate exception: an opt-in,
+  // metered fallback tried only after all seven OAuth rungs are exhausted.
+  // Everything else stays held to zero — a new file matching the pattern is a
+  // real regression, not a rung this repo already accepted.
+  const EXEMPT = new Set([
+    join(".github", "actions", "claude-run", "action.yaml"),
+    join(".github", "workflows", "claude-pr-review.yaml"),
+  ]);
   const offenders = files
     .filter((f) => /ANTHROPIC_API_KEY|anthropic_api_key/.test(f.body))
-    .map((f) => f.path.slice(REPO_ROOT.length + 1));
+    .map((f) => f.path.slice(REPO_ROOT.length + 1))
+    .filter((path) => !EXEMPT.has(path));
   assert.deepEqual(
     offenders,
     [],

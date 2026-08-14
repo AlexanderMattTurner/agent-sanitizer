@@ -25,9 +25,13 @@
 
 # The ladder, in attempt order: the same subscription tokens the Claude
 # workflows use, and ONLY those. A metered ANTHROPIC_API_KEY rung used to sit at
-# the bottom; it was removed deliberately, so no CI path can fall through to
-# spending real credits. Exhausting the subscription rungs now degrades — the
-# changelog prose falls back to a plain commit list — rather than billing.
+# the bottom; it was removed deliberately, so no caller of THIS ladder (the
+# direct-API callers: changelog polishing, the conflict-resolver fan-out, the
+# pre-push self-review) can fall through to spending real credits. Exhausting
+# the subscription rungs now degrades — e.g. the changelog prose falls back to
+# a plain commit list — rather than billing. claude-run/action.yaml, the
+# separate ladder claude-code-action callers (like PR review) go through, does
+# have one opt-in metered rung; it does not touch this file.
 # shellcheck source=.github/scripts/lib/claude-oauth-ladder.bash
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/claude-oauth-ladder.bash"
 
