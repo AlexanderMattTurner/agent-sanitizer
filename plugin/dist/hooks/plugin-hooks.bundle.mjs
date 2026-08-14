@@ -48,6 +48,19 @@ var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__ge
 function formatSeconds(ms) {
   return (Math.round(ms / 100) / 10).toFixed(1);
 }
+function formatBytes(bytes) {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+function formatContextSuffix(context) {
+  if (!context) return "";
+  const parts2 = [];
+  if (typeof context.payloadBytes === "number")
+    parts2.push(`a ${formatBytes(context.payloadBytes)} payload`);
+  if (context.tool) parts2.push(`tool ${context.tool}`);
+  return parts2.length > 0 ? ` (${parts2.join(", ")})` : "";
+}
 async function excludeProvisioning(work, now = Date.now) {
   const started = now();
   try {
@@ -61,18 +74,18 @@ function startHookTimer(now = Date.now) {
   const provisionedBefore = provisioningMs;
   return () => Math.max(0, now() - started - (provisioningMs - provisionedBefore));
 }
-function slowHookNotice(hookName, elapsedMs, thresholdMs = SLOW_HOOK_THRESHOLD_MS) {
+function slowHookNotice(hookName, elapsedMs, thresholdMs = SLOW_HOOK_THRESHOLD_MS, context) {
   if (elapsedMs <= thresholdMs) return null;
-  return `agent-sanitizer PERFORMANCE: the ${hookName} hook took ${formatSeconds(elapsedMs)}s, over its ${formatSeconds(thresholdMs)}s budget \u2014 this delay is the sanitizer's, not the model's, and every affected call pays it. Tell the user, and suggest they report it at ${ISSUE_URL} with the hook name and timing.`;
+  return `agent-sanitizer PERFORMANCE: the ${hookName} hook took ${formatSeconds(elapsedMs)}s${formatContextSuffix(context)}, over its ${formatSeconds(thresholdMs)}s budget \u2014 this delay is the sanitizer's, not the model's, and every affected call pays it. Tell the user, and suggest they report it at ${ISSUE_URL} with the hook name and timing.`;
 }
-function writeSlowHookNotice(hookName, elapsedMs, writeErr = (chunk) => process.stderr.write(chunk)) {
-  const notice = slowHookNotice(hookName, elapsedMs);
+function writeSlowHookNotice(hookName, elapsedMs, writeErr = (chunk) => process.stderr.write(chunk), context) {
+  const notice = slowHookNotice(hookName, elapsedMs, void 0, context);
   if (notice === null) return null;
   writeErr(notice + "\n");
   return notice;
 }
-function withSlowHookNotice(hookName, elapsedMs, verdict, writeErr = (chunk) => process.stderr.write(chunk)) {
-  const notice = writeSlowHookNotice(hookName, elapsedMs, writeErr);
+function withSlowHookNotice(hookName, elapsedMs, verdict, writeErr = (chunk) => process.stderr.write(chunk), context) {
+  const notice = writeSlowHookNotice(hookName, elapsedMs, writeErr, context);
   if (notice === null) return verdict;
   return {
     ...verdict,
@@ -150,8 +163,13 @@ async function readAllBounded(stream, maxBytes = MAX_STDIN_BYTES) {
   }
   return Buffer.concat(chunks);
 }
+function lastStdinByteLength() {
+  return lastStdinBytes;
+}
 async function readStdinJson(maxBytes = MAX_STDIN_BYTES) {
-  return JSON.parse((await readAllBounded(process.stdin, maxBytes)).toString());
+  const buf = await readAllBounded(process.stdin, maxBytes);
+  lastStdinBytes = buf.length;
+  return JSON.parse(buf.toString());
 }
 function registerLazyModules(modules) {
   Object.assign(shared.lazyModules, modules);
@@ -363,7 +381,7 @@ function writeFileNoFollow(path2, content3, mode = 384) {
     closeSync(fd);
   }
 }
-var defaultSharedState, shared, HookEvent, PermissionDecision, FAIL_OPEN_ENV, FAIL_CLOSED_VALUES, FAIL_CLOSED_SET, DISABLED_HOOKS_ENV, LONE_SURROGATE_RE, MAX_STDIN_BYTES, lazyImportErrors, DEFAULT_MISSING_PACKAGE_REMEDY, UNTRUSTED_TEXT_CAP, HOOKGATE_MARKER_STEM;
+var defaultSharedState, shared, HookEvent, PermissionDecision, FAIL_OPEN_ENV, FAIL_CLOSED_VALUES, FAIL_CLOSED_SET, DISABLED_HOOKS_ENV, LONE_SURROGATE_RE, MAX_STDIN_BYTES, lastStdinBytes, lazyImportErrors, DEFAULT_MISSING_PACKAGE_REMEDY, UNTRUSTED_TEXT_CAP, HOOKGATE_MARKER_STEM;
 var init_hook_io = __esm({
   "claude-hooks/lib/hook-io.mjs"() {
     "use strict";
@@ -394,6 +412,7 @@ var init_hook_io = __esm({
     DISABLED_HOOKS_ENV = "AGENT_SANITIZER_DISABLED_HOOKS";
     LONE_SURROGATE_RE = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g;
     MAX_STDIN_BYTES = 64 * 1024 * 1024;
+    lastStdinBytes = null;
     lazyImportErrors = /* @__PURE__ */ new Map();
     DEFAULT_MISSING_PACKAGE_REMEDY = "reinstall the hook dependencies (pnpm install) and retry.";
     UNTRUSTED_TEXT_CAP = 500;
@@ -65918,20 +65937,34 @@ async function runJudgeCli(hookName, judge, {
 }) {
   let input;
   let elapsed = null;
+  let payloadBytes = null;
+  let tool = null;
   try {
     input = await readInput();
+    payloadBytes = readInput === readStdinJson ? lastStdinByteLength() : null;
     elapsed = startHookTimer();
     const { claudeAdapter: adapter } = controlPlane();
     const event = adapter.parse(transformInput(input));
+    tool = event.tool ?? null;
     const judged = await judge(event);
     const out = nativeStdout(
-      adapter.render(withSlowHookNotice(hookName, elapsed(), judged), event)
+      adapter.render(
+        withSlowHookNotice(hookName, elapsed(), judged, void 0, {
+          payloadBytes,
+          tool
+        }),
+        event
+      )
     );
     if (out !== null) write(out);
   } catch (err) {
     process.stderr.write(`${hookName} hook error: ${errMessage(err)}
 `);
-    if (elapsed !== null) writeSlowHookNotice(hookName, elapsed());
+    if (elapsed !== null)
+      writeSlowHookNotice(hookName, elapsed(), void 0, {
+        payloadBytes,
+        tool
+      });
     onError(err, input);
   }
 }

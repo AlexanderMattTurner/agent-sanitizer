@@ -69,6 +69,45 @@ export function formatSeconds(ms) {
   return (Math.round(ms / 100) / 10).toFixed(1);
 }
 
+/**
+ * Bytes as a human-scaled string (B / KB / MB, one decimal past B) for the
+ * slow-hook notice's payload clause. No shell-parity constraint applies here —
+ * unlike {@link formatSeconds}, the shell port never has a payload size to
+ * print (see plugin/scripts/lib/hook-timing.sh's header).
+ * @param {number} bytes
+ * @returns {string}
+ */
+export function formatBytes(bytes) {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+/**
+ * Debugging context a caller may already have in hand when a hook overruns its
+ * budget, so the notice names WHAT was slow instead of just HOW slow — the gap
+ * that made this specific latency report take a manual multi-step
+ * investigation to characterize (which tool call, how large a payload) before
+ * anyone could act on it.
+ * @typedef {{ payloadBytes?: number | null, tool?: string | null }} SlowHookContext
+ */
+
+/**
+ * The parenthetical clause naming `context`'s known fields, or `""` when
+ * `context` is absent or carries neither — so a caller with no context to give
+ * gets the exact same notice text as before this existed.
+ * @param {SlowHookContext | undefined} [context]
+ * @returns {string}
+ */
+function formatContextSuffix(context) {
+  if (!context) return "";
+  const parts = [];
+  if (typeof context.payloadBytes === "number")
+    parts.push(`a ${formatBytes(context.payloadBytes)} payload`);
+  if (context.tool) parts.push(`tool ${context.tool}`);
+  return parts.length > 0 ? ` (${parts.join(", ")})` : "";
+}
+
 // Process-wide total of milliseconds spent in one-time provisioning. A running
 // total rather than a flag because a single hook run can pay more than one (a
 // dependency wait AND a cold daemon spawn), and they may not nest.
@@ -124,17 +163,21 @@ export function startHookTimer(now = Date.now) {
  * @param {string} hookName
  * @param {number} elapsedMs
  * @param {number} [thresholdMs]
+ * @param {SlowHookContext} [context]  known payload size / triggering tool, so
+ *   the notice is self-diagnosing rather than requiring the next reader to
+ *   reconstruct what was slow by hand
  * @returns {string | null}
  */
 export function slowHookNotice(
   hookName,
   elapsedMs,
   thresholdMs = SLOW_HOOK_THRESHOLD_MS,
+  context,
 ) {
   if (elapsedMs <= thresholdMs) return null;
   return (
     `agent-sanitizer PERFORMANCE: the ${hookName} hook took ` +
-    `${formatSeconds(elapsedMs)}s, over its ${formatSeconds(thresholdMs)}s budget — ` +
+    `${formatSeconds(elapsedMs)}s${formatContextSuffix(context)}, over its ${formatSeconds(thresholdMs)}s budget — ` +
     "this delay is the sanitizer's, not the model's, and every affected call pays it. " +
     `Tell the user, and suggest they report it at ${ISSUE_URL} with the hook name and timing.`
   );
@@ -191,14 +234,16 @@ export function slowProvisionNotice(
  * @param {string} hookName
  * @param {number} elapsedMs
  * @param {(chunk: string) => void} [writeErr]  injectable stderr sink, for tests
+ * @param {SlowHookContext} [context]  see {@link slowHookNotice}
  * @returns {string | null}
  */
 export function writeSlowHookNotice(
   hookName,
   elapsedMs,
   writeErr = (chunk) => process.stderr.write(chunk),
+  context,
 ) {
-  const notice = slowHookNotice(hookName, elapsedMs);
+  const notice = slowHookNotice(hookName, elapsedMs, undefined, context);
   if (notice === null) return null;
   writeErr(notice + "\n");
   return notice;
@@ -217,6 +262,7 @@ export function writeSlowHookNotice(
  * @param {number} elapsedMs
  * @param {V} verdict
  * @param {(chunk: string) => void} [writeErr]  injectable stderr sink, for tests
+ * @param {SlowHookContext} [context]  see {@link slowHookNotice}
  * @returns {V}
  */
 export function withSlowHookNotice(
@@ -224,8 +270,9 @@ export function withSlowHookNotice(
   elapsedMs,
   verdict,
   writeErr = (chunk) => process.stderr.write(chunk),
+  context,
 ) {
-  const notice = writeSlowHookNotice(hookName, elapsedMs, writeErr);
+  const notice = writeSlowHookNotice(hookName, elapsedMs, writeErr, context);
   if (notice === null) return verdict;
   return {
     ...verdict,

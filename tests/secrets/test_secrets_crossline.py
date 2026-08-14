@@ -5,9 +5,11 @@ Env-bound values now come from a :class:`RedactorConfig` (``provider_vars`` /
 originals.
 """
 
+import re
 import types
 
 import pytest
+from detect_secrets.settings import get_plugins
 
 import agent_sanitizer.secrets.engine as E
 from agent_sanitizer.secrets import (
@@ -123,6 +125,15 @@ def _fake_scan(monkeypatch, *pairs):
     monkeypatch.setattr(
         E, "scan_line", lambda line: [f for f in fakes if f.secret_value in line]
     )
+    # _cross_line_candidate_spans now prefilters with the real detectors' own
+    # denylist regexes (_eligible_prefilter) before ever calling scan_line, so it
+    # only hands scan_line a window around a hit. These tests invent synthetic
+    # values ("ABCD", "WXYZ", …) that no real detector shape matches, so the
+    # patched scan_line above would never be reached without also patching the
+    # prefilter to a catch-all — these tests are exercising _redact_cross_line's
+    # offset-translation/overlap logic in isolation from any real detector shape,
+    # not the prefilter itself (that has its own soundness test).
+    monkeypatch.setattr(E, "_eligible_prefilter", lambda: (re.compile(".", re.DOTALL),))
 
 
 def _ph(secret_type: str) -> str:
@@ -207,7 +218,11 @@ def test_cross_line_redacts_split_env_value(monkeypatch):
     monkeypatch.setattr(E, "scan_line", lambda line: [])
     head, tail = _LONG[:16], _LONG[16:]
     found: list[str] = []
-    out = E._redact_cross_line(f"key {head}\n{tail} end", found, config)
+    # _eligible_prefilter reads the live detect-secrets plugin set (see its
+    # doc), so it needs a configured context even though scan_line itself is
+    # stubbed to a no-op here — this test only exercises the env-bound path.
+    with E.configure_plugins():
+        out = E._redact_cross_line(f"key {head}\n{tail} end", found, config)
     assert out == "key [REDACTED: VENICE_INFERENCE_KEY] end"
     assert found == ["VENICE_INFERENCE_KEY"]
 
@@ -218,7 +233,8 @@ def test_cross_line_env_value_at_exact_floor_redacts(monkeypatch):
     monkeypatch.setattr(E, "scan_line", lambda line: [])
     head, tail = value[:3], value[3:]
     found: list[str] = []
-    out = E._redact_cross_line(f"k {head}\n{tail} e", found, config)
+    with E.configure_plugins():
+        out = E._redact_cross_line(f"k {head}\n{tail} e", found, config)
     assert out == "k [REDACTED: VENICE_INFERENCE_KEY] e"
     assert found == ["VENICE_INFERENCE_KEY"]
 
@@ -286,3 +302,86 @@ def test_env_value_re_tolerates_non_enumerated_invisible_splice(cp):
     value = "sk-abcdefghijklmnopqrstuvwxyz0123456789"
     spliced = value[:6] + chr(cp) + value[6:]
     assert E._env_value_re(value, default_charset()).fullmatch(spliced)
+
+
+# ─── _eligible_prefilter soundness guard ─────────────────────────────────────
+# The prefilter's whole premise (see its docstring) is that every
+# _CROSS_LINE_ELIGIBLE_TYPES entry is served by a RegexBasedDetector whose
+# denylist IS its detection surface, so a prefilter miss cannot hide a real
+# detection. This guard states that premise directly rather than trusting it:
+# if a future detect-secrets upgrade ever gives an eligible type a detector with
+# no denylist regex (a custom analyze_string with no regex backing it), the
+# prefilter would silently stop covering that type — this fails loud instead.
+
+
+def test_cross_line_prefilter_is_sound():
+    with E.configure_plugins():
+        by_type = {}
+        for plugin in get_plugins():
+            secret_type = getattr(plugin, "secret_type", None)
+            if secret_type in E._CROSS_LINE_ELIGIBLE_TYPES:
+                by_type[secret_type] = plugin
+        missing = E._CROSS_LINE_ELIGIBLE_TYPES - by_type.keys()
+        assert not missing, f"no active plugin for eligible type(s): {missing}"
+        for secret_type, plugin in by_type.items():
+            denylist = getattr(plugin, "denylist", ())
+            assert denylist, (
+                f"{secret_type}'s plugin {type(plugin).__name__} has no denylist "
+                "regex — _eligible_prefilter cannot cover it, and a cross-line "
+                "secret of this type could be missed entirely"
+            )
+
+        prefilters = E._eligible_prefilter()
+        assert prefilters and all(p.pattern for p in prefilters), (
+            "prefilter derived no (or an empty) pattern"
+        )
+        # Not vacuous: at least one real denylist pattern is actually IN one of
+        # the unions, not just that the unions are non-empty text.
+        assert any(
+            pat.pattern in prefilter.pattern
+            for plugin in by_type.values()
+            for pat in plugin.denylist
+            for prefilter in prefilters
+        )
+        # Every distinct flag combination among eligible denylists gets its own
+        # compiled union — a case-insensitive pattern (Slack, AWS's
+        # keyword-context form) must not be silently folded into a flag-less
+        # compile that drops its case-insensitivity.
+        eligible_flag_sets = {
+            pat.flags for plugin in by_type.values() for pat in plugin.denylist
+        }
+        assert {p.flags for p in prefilters} == eligible_flag_sets
+
+
+def test_cross_line_prefilter_keeps_case_insensitive_detector_case_insensitive():
+    """Slack's denylist pattern is compiled with re.IGNORECASE; a flag-less
+    join of the eligible-type union (an earlier version of this prefilter)
+    would silently stop matching an upper-cased split token, since
+    `xox(?:a|b|p|o|s|r)-...` never matches "XOXB-..." without that flag."""
+    value = "XOXB-123-456-ABCDEFGHIJ"
+    head, tail = value[:14], value[14:]
+    text = f"prefix {head}\n{tail} suffix"
+    with E.configure_plugins():
+        found: list[str] = []
+        out = E._redact_cross_line(text, found, cfg())
+    assert out == f"prefix {_ph('Slack Token')} suffix"
+    assert found == ["Slack Token"]
+
+
+def test_cross_line_prefilter_cache_does_not_survive_a_reconfigure():
+    """_eligible_prefilter() is process-wide functools.cache'd, keyed on no
+    arguments — so it must be cleared on every configure_plugins() entry/exit,
+    or a prefilter built under one plugin config (e.g. high_confidence) would
+    silently answer for a LATER, differently-configured scan in the same
+    process (the daemon serves both configs). Observed via cache_info(), since
+    high_confidence and the default set agree on every eligible type today and
+    so cannot be told apart by the prefilter's own text."""
+    with E.configure_plugins():
+        E._eligible_prefilter()
+        assert E._eligible_prefilter.cache_info().currsize == 1
+    with E.configure_plugins(high_confidence=True):
+        assert E._eligible_prefilter.cache_info().currsize == 0
+        E._eligible_prefilter()
+        assert E._eligible_prefilter.cache_info().currsize == 1
+    with E.configure_plugins():
+        assert E._eligible_prefilter.cache_info().currsize == 0

@@ -118,6 +118,7 @@ const PATTERN_EXAMPLES = {
   "GitHubClassicTokenDetector[0]": `ghp_${rep(36)}`,
   "GitLabAccessTokenDetector[0]": `glpat-${rep(30)}`,
   "GitLabAccessTokenDetector[1]": `glcbt-ab_${rep(30)}`,
+  "NpmDetector[0]": `//registry.npmjs.org/:_authToken=npm_${rep(30)}`,
 };
 
 // [label, pattern, example] for every pattern in the SSOT, so completeness and

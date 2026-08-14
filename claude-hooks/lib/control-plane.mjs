@@ -11,6 +11,7 @@ import {
   awaitLazyDependency,
   errMessage,
   hookgateMarkerPath,
+  lastStdinByteLength,
   lazyImport,
   markerIsTrusted,
   missingPackageError,
@@ -171,19 +172,34 @@ export async function runJudgeCli(
   // an invented number is worse than none.
   /** @type {(() => number) | null} */
   let elapsed = null;
+  /** @type {number | null} */
+  let payloadBytes = null;
+  /** @type {string | null} */
+  let tool = null;
   try {
     input = await readInput();
+    // Read right after the call that would have set it — an injected test
+    // seam bypasses readStdinJson entirely, so lastStdinByteLength() would
+    // otherwise report a STALE size left by a previous real call.
+    payloadBytes = readInput === readStdinJson ? lastStdinByteLength() : null;
     // Timed from HERE, not from process start: the wait for the harness to hand
     // over stdin is not this hook's cost, and blaming it for one would send
     // operators chasing a bug report that is not theirs to fix.
     elapsed = startHookTimer();
     const { claudeAdapter: adapter } = controlPlane();
     const event = adapter.parse(transformInput(input));
+    tool = event.tool ?? null;
     // Awaited into its own binding first: as an inline argument, `elapsed()`
     // would be evaluated BEFORE the judge it is supposed to be timing.
     const judged = await judge(event);
     const out = nativeStdout(
-      adapter.render(withSlowHookNotice(hookName, elapsed(), judged), event),
+      adapter.render(
+        withSlowHookNotice(hookName, elapsed(), judged, undefined, {
+          payloadBytes,
+          tool,
+        }),
+        event,
+      ),
     );
     if (out !== null) write(out);
   } catch (err) {
@@ -192,7 +208,11 @@ export async function runJudgeCli(
     // must act on first, and the timing is context for it. stderr only — the
     // model-facing channel here belongs to onError's fail-closed message, and a
     // performance aside must not dilute a "this output was never vetted".
-    if (elapsed !== null) writeSlowHookNotice(hookName, elapsed());
+    if (elapsed !== null)
+      writeSlowHookNotice(hookName, elapsed(), undefined, {
+        payloadBytes,
+        tool,
+      });
     onError(err, input);
   }
 }
