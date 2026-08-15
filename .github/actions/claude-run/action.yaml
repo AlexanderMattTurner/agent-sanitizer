@@ -7,7 +7,11 @@ description: >-
   SSOT. That eighth rung is the one deliberate exception to this repo's default
   of never billing a metered key in CI; leaving anthropic_api_key unset (the
   default) keeps a caller on the OAuth-only seven-rung ladder every other caller
-  has. A rung is attempted when NO earlier rung
+  has. A caller that also sets metered_first="true" attempts that same key as
+  rung 0, BEFORE the OAuth ladder, falling through to the normal seven-rung
+  order only if it errors — an explicit per-caller opt-in for when a degraded
+  OAuth pool makes the free tiers themselves unreliable; every other caller is
+  unaffected. A rung is attempted when NO earlier rung
   has produced a non-errored run and that rung's own token is non-empty, so an
   unset middle tier is stepped over instead of ending the ladder (claude-code-action
   exits 0 even on a failure, so the execution log is the only signal). Each retry
@@ -66,12 +70,24 @@ inputs:
     default: ""
   anthropic_api_key:
     description: >-
-      Metered Anthropic API key, tried ONLY after all seven OAuth rungs above
-      are exhausted. Outside the OAuth ladder SSOT by design — this is the one
-      rung that bills. Empty (the default) skips it, so a caller must opt in
-      explicitly; most callers should leave this unset.
+      Metered Anthropic API key. By default tried ONLY after all seven OAuth
+      rungs below are exhausted (see metered_first to invert that). Outside the
+      OAuth ladder SSOT by design — this is the one rung that bills. Empty (the
+      default) skips it, so a caller must opt in explicitly; most callers
+      should leave this unset.
     required: false
     default: ""
+  metered_first:
+    description: >-
+      "true" attempts anthropic_api_key BEFORE the OAuth ladder (rung 0) and
+      falls through to the normal seven-rung OAuth ladder only if that attempt
+      errors. Every other caller must leave this "false" (the default): the
+      OAuth-first order above is the repo's cost-avoidance policy, and this
+      input exists for a caller that has explicitly decided the metered rung
+      should go first (e.g. a degraded OAuth pool making the free tiers
+      unreliable). No effect when anthropic_api_key is empty.
+    required: false
+    default: "false"
   github_token:
     description: >-
       The workflow GITHUB_TOKEN, handed to the action directly so it skips the
@@ -137,9 +153,10 @@ outputs:
     description: >-
       'true'/'false' from the LAST attempt that ran. A skipped attempt's check
       emits nothing, so the newest-first `||` resolves to the final attempt's
-      verdict. The primary's check always runs, so this is never empty and a
-      ladder that never reached a working credential reports 'true'. The final
-      step below fails the composite loud on 'true'.
+      verdict. The primary's check always runs UNLESS a caller's metered_first
+      rung 0 already succeeded, so this is never empty and a ladder that never
+      reached a working credential reports 'true'. The final step below fails
+      the composite loud on 'true'.
 
       An attempt that writes NO execution log is 'true' as well, and the ladder
       then walks every remaining credential. Some of those failures are
@@ -154,7 +171,7 @@ outputs:
       job log. Reading it would mean log scraping, and re-deriving the actor
       verdict here would fork the gate; both are worse than eight (or nine)
       wasted attempts.
-    value: ${{ steps.c7.outputs.errored || steps.c6.outputs.errored || steps.c5.outputs.errored || steps.c4.outputs.errored || steps.c3.outputs.errored || steps.c2b.outputs.errored || steps.c2.outputs.errored || steps.c1r.outputs.errored || steps.c1.outputs.errored }}
+    value: ${{ steps.c7.outputs.errored || steps.c6.outputs.errored || steps.c5.outputs.errored || steps.c4.outputs.errored || steps.c3.outputs.errored || steps.c2b.outputs.errored || steps.c2.outputs.errored || steps.c1r.outputs.errored || steps.c1.outputs.errored || steps.c0.outputs.errored }}
 runs:
   using: "composite"
   steps:
@@ -194,8 +211,45 @@ runs:
         PREAMBLE="${GITHUB_ACTION_PATH}/../../prompts/untrusted-data-preamble.md" \
           bash "${GITHUB_ACTION_PATH}/../../scripts/compose-claude-prompt.sh"
 
+    # Rung 0: the metered_first opt-in. Runs BEFORE the primary OAuth attempt
+    # (no backoff — it's the first thing this ladder tries) only when a caller
+    # set metered_first="true" and wired anthropic_api_key. Every other caller
+    # leaves metered_first "false", so this step's `if:` is false, c0 emits no
+    # output, and a1 below (gated on c0 != 'false') runs exactly as it always
+    # has — the OAuth-first order is unchanged for them.
+    - name: Attempt with the metered credential first (metered_first opt-in)
+      id: a0
+      if: inputs.metered_first == 'true' && inputs.anthropic_api_key != ''
+      continue-on-error: true
+      uses: anthropics/claude-code-action@428971d2ecd6e3a7cb0ee0da2a3a8b33fdb3678d # v1.0.157
+      env:
+        GH_TOKEN: ${{ inputs.gh_token || inputs.github_token }}
+      with:
+        anthropic_api_key: ${{ inputs.anthropic_api_key }}
+        github_token: ${{ inputs.github_token }}
+        allowed_non_write_users: ${{ inputs.allowed_non_write_users }}
+        allowed_bots: ${{ inputs.allowed_bots }}
+        claude_args: >-
+          --model ${{ inputs.model }}
+          ${{ inputs.claude_args }}
+        prompt: ${{ steps.compose_prompt.outputs.prompt }}
+
+    - name: Did the metered-first attempt run?
+      id: c0
+      if: inputs.metered_first == 'true' && inputs.anthropic_api_key != ''
+      shell: bash
+      env:
+        EXECUTION_FILE: ${{ steps.a0.outputs.execution_file }}
+      run: bash .github/scripts/claude-run-errored.sh
+
+    # Gated on c0 rather than an unconditional run: when rung 0 wasn't
+    # attempted (the default — c0.outputs.errored is empty, which is != 'false')
+    # this still runs, preserving today's OAuth-first behavior for every other
+    # caller. When rung 0 WAS attempted and succeeded (errored == 'false'), this
+    # and the rest of the OAuth ladder are skipped entirely.
     - name: Attempt with the primary credential
       id: a1
+      if: steps.c0.outputs.errored != 'false'
       continue-on-error: true
       uses: anthropics/claude-code-action@428971d2ecd6e3a7cb0ee0da2a3a8b33fdb3678d # v1.0.157
       env:
@@ -212,6 +266,7 @@ runs:
 
     - name: Did the primary credential run?
       id: c1
+      if: steps.c0.outputs.errored != 'false'
       shell: bash
       env:
         EXECUTION_FILE: ${{ steps.a1.outputs.execution_file }}
@@ -229,7 +284,12 @@ runs:
       id: s1
       shell: bash
       env:
-        PRIOR: "true"
+        # "true" in the default (no metered_first) case, same as before this
+        # rung existed. When rung 0 ran and SUCCEEDED, c1 was skipped (its
+        # `if:` above) and this must read "false", or the hardcoded "true" this
+        # replaced would resume the OAuth ladder after a rung 0 that already
+        # succeeded.
+        PRIOR: ${{ steps.c0.outputs.errored != 'false' }}
         ERRORED: ${{ steps.c1.outputs.errored }}
       run: |
         set -euo pipefail
@@ -652,7 +712,7 @@ runs:
       id: resolve_log
       shell: bash
       env:
-        EXECUTION_FILE: ${{ steps.a7.outputs.execution_file || steps.a6.outputs.execution_file || steps.a5.outputs.execution_file || steps.a4.outputs.execution_file || steps.a3.outputs.execution_file || steps.a2b.outputs.execution_file || steps.a2.outputs.execution_file || steps.a1r.outputs.execution_file || steps.a1.outputs.execution_file }}
+        EXECUTION_FILE: ${{ steps.a7.outputs.execution_file || steps.a6.outputs.execution_file || steps.a5.outputs.execution_file || steps.a4.outputs.execution_file || steps.a3.outputs.execution_file || steps.a2b.outputs.execution_file || steps.a2.outputs.execution_file || steps.a1r.outputs.execution_file || steps.a1.outputs.execution_file || steps.a0.outputs.execution_file }}
       run: echo "execution_file=${EXECUTION_FILE}" >>"$GITHUB_OUTPUT"
 
     # A rung exiting 0 is NOT proof Claude ran: an auth failure, a crash before
