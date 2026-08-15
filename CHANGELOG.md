@@ -8,6 +8,12 @@ adhere to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+## [2.40.3] - 2026-08-15
+
+### Fixed
+- Close review-found holes in the Secret Keyword redaction and bound the redaction span for more accurate secret detection.
+- Fixed redaction span boundaries for the Secret Keyword detector to prevent over-redaction and ensure precision.
+
 ## [2.40.2] - 2026-08-15
 
 ### Added
