@@ -2,8 +2,8 @@
 # Fetch the untrusted PR diff + metadata and run them through the
 # agent-sanitizer (sanitize-pr-input.mjs) BEFORE the review agent sees
 # them. The agent reads only the sanitized files this writes — never the raw
-# `gh pr diff` — so an injection payload hidden in the diff (zero-width control
-# text, ANSI escapes, exfil beacons) cannot reach the agent intact.
+# diff — so an injection payload hidden in it (zero-width control text, ANSI
+# escapes, exfil beacons) cannot reach the agent intact.
 #
 # Oversized-diff guard: the base-only checkout means diff.txt is the ONLY source
 # of the PR's changes — the agent cannot reconstruct them from the trusted base
@@ -44,10 +44,17 @@ emit_output() {
 # diff.txt ever reaches the reviewer.
 raw_diff="$(mktemp)"
 trap 'rm -f "$raw_diff"' EXIT
+# The diff media type via `gh api`, not `gh pr diff`: that command refuses to
+# emit a diff holding terminal escape sequences unless --allow-escape-sequences
+# is passed, so it fails closed on exactly the payloads this pipeline exists to
+# sanitize — and that flag is absent from older gh builds. The API response
+# carries no such guard, and only the sanitizer below ever reads these bytes.
+#
 # retry_stdout via a command substitution: a transient blip re-fetches the whole
 # diff and only the succeeding attempt's bytes land in raw_diff. A plain `retry
 # … >"$raw_diff"` would leak a failing attempt's error body into the file.
-raw_diff_content="$(retry_stdout gh pr diff "$PR")"
+raw_diff_content="$(retry_stdout gh api "repos/{owner}/{repo}/pulls/${PR}" \
+  -H "Accept: application/vnd.github.v3.diff")"
 printf '%s\n' "$raw_diff_content" >"$raw_diff"
 
 diff_lines="$(wc -l <"$raw_diff" | tr -d '[:space:]')"
