@@ -8,6 +8,21 @@ adhere to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+## [2.39.0] - 2026-08-15
+
+### Added
+- Slow-hook notices now report payload size and triggering tool for better observability.
+- Per-pattern regex flags are now preserved in the cross-line prefilter for secrets detection.
+
+### Changed
+- NpmDetector's whitespace bound has been widened to improve detection accuracy.
+
+### Fixed
+- Prefilter cache is now cleared on reconfiguration to ensure consistent secret detection behavior.
+
+### Performance
+- Redaction latency on large payloads has been significantly improved, reducing processing time from 7.4s to approximately 3.4s.
+
 ## [2.37.4] - 2026-08-14
 
 ### Fixed
