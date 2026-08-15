@@ -8,6 +8,12 @@ adhere to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+## [2.40.4] - 2026-08-15
+
+### Fixed
+
+- Improved PR review process to fetch diffs through the API, preventing escape sequences from blocking review operations.
+
 ## [2.40.3] - 2026-08-15
 
 ### Fixed
