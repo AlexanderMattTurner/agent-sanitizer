@@ -16,6 +16,7 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { describe, it } from "node:test";
+import { fileURLToPath } from "node:url";
 
 import {
   gatedScopes,
@@ -220,5 +221,31 @@ describe("gatedScopes", () => {
         files.some((file) => scope.inScope(file)),
         `scope "${scope.name}" claims no mutated file`,
       );
+  });
+});
+
+describe("the CLI's report-directory read", () => {
+  it("reports zero shards, not ENOENT, when the download produced no directory", () => {
+    // download-artifact writes nothing when the shard jobs were cancelled (a
+    // superseded push) or uploaded nothing, so the aggregate step runs against
+    // a path that does not exist. It must still fail — gating on zero shards
+    // would score a subset as the whole project — but with the missing-shard
+    // diagnostic, not a stack trace about the script itself.
+    const script = fileURLToPath(
+      new URL("../.github/scripts/aggregate-mutation.mjs", import.meta.url),
+    );
+    assert.throws(
+      () =>
+        execFileSync("node", [script, "no-such-shard-reports-dir"], {
+          encoding: "utf8",
+          stdio: "pipe",
+        }),
+      (err) => {
+        assert.match(err.stderr, /found 0 under no-such-shard-reports-dir/u);
+        assert.match(err.stderr, /refusing to gate on a partial result/u);
+        assert.doesNotMatch(err.stderr, /ENOENT/u);
+        return true;
+      },
+    );
   });
 });

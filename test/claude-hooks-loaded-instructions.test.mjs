@@ -405,14 +405,20 @@ describe("the hook CLI, driven end to end on a real event", () => {
   });
 });
 
-describe("a host that never emits the event is named, once", () => {
-  it("warns while no scan has been seen, naming both causes", () => {
+describe("a session with no InstructionsLoaded scan is named, once", () => {
+  it("warns while no scan has been seen, naming every cause", () => {
     const notice = instructionsLoadedGapNotice();
     assert.match(notice, /InstructionsLoaded/u);
     assert.match(notice, /unscanned/u);
-    // The marker cannot distinguish a host that never emits the event from an
-    // operator who switched the hook off, so the notice must not assert either
-    // one — a reader sent to the wrong fix stops trusting the next notice.
+    // The marker cannot distinguish the three causes, so the notice must assert
+    // none of them — a reader sent to the wrong fix stops trusting the next
+    // notice. One marker each, so dropping a cause reds here:
+    // the host never wired the event (the self-wiring host's case, and the one
+    // cause the reader can repair in this session)...
+    assert.match(notice, /wired/u);
+    // ...a Claude Code that does not emit it...
+    assert.match(notice, /upgrading/u);
+    // ...and the hook switched off by the operator.
     assert.match(notice, /AGENT_SANITIZER_DISABLED_HOOKS/u);
   });
 

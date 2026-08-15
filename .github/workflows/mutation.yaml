@@ -193,31 +193,43 @@ jobs:
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    # A cancelled shard set is a run nobody is waiting on — `cancel-in-progress`
+    # kills the shards the moment a newer commit lands, and the reports they
+    # never uploaded would fail the aggregate below as a partial result. Scoring
+    # a cancelled run says nothing about either commit, so the whole job's work
+    # is gated on `run == 'true' && mutation.result != 'cancelled'`. A shard that
+    # FAILED still aggregates: that one is a result, and it must be reported.
+    env:
+      SCORE: ${{ needs.changes.outputs.run == 'true' && needs.mutation.result != 'cancelled' }}
     steps:
       - name: Skip when shards did not run
         if: needs.changes.outputs.run != 'true'
         run: echo "::notice::No mutation-relevant files changed, nothing to aggregate"
 
+      - name: Skip when a newer commit cancelled the shards
+        if: needs.mutation.result == 'cancelled'
+        run: echo "::notice::Shards cancelled by a newer commit; the run on that commit is what gates"
+
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
-        if: needs.changes.outputs.run == 'true'
+        if: env.SCORE == 'true'
         with:
           persist-credentials: false
 
       - name: Set up Node.js
-        if: needs.changes.outputs.run == 'true'
+        if: env.SCORE == 'true'
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: "22"
 
       - name: Download shard reports
-        if: needs.changes.outputs.run == 'true'
+        if: env.SCORE == 'true'
         uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0.0
         with:
           pattern: mutation-report-*
           path: shard-reports
 
       - name: Aggregate and apply threshold
-        if: needs.changes.outputs.run == 'true'
+        if: env.SCORE == 'true'
         run: node .github/scripts/aggregate-mutation.mjs shard-reports
 
   # Stable Required check: runs even when upstream jobs are cancelled/skipped, so
