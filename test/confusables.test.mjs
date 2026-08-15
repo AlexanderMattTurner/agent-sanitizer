@@ -10,13 +10,17 @@ import assert from "node:assert/strict";
 
 import {
   DEFAULT_FIELDS,
+  EXEMPT_TOOLS,
+  EXEMPT_TOOL_PATTERNS,
   hasNonAscii,
   normalizeContext,
   foldConfusables,
   normalizeConfusables,
+  scopeFor,
   selectFoldableFindings,
 } from "../src/confusables.mjs";
 import { cp } from "./test-helpers.mjs";
+import { liveToolSurface } from "./helpers/tool-surface.mjs";
 
 const CYR_A = cp(0x0430); // Cyrillic а → ASCII "a"
 const CYR_O = cp(0x043e); // Cyrillic о → ASCII "o"
@@ -683,5 +687,147 @@ describe("normalizeConfusables: null cases", () => {
       updatedInput: { file_path: "/ax" },
       normalized: ['file_path (U+0430 → "a")'],
     });
+  });
+});
+
+// ─── The default engine ──────────────────────────────────────────────────────
+// Every test above injects a fake `scan`, which is what makes them independent
+// of any real map — and is also how a caller who FORGOT to wire an engine used
+// to get silent zero coverage. These drive the shipped default instead.
+
+describe("the scanner defaults to namespace-guard when none is injected", () => {
+  it("folds a disguised command with no options argument at all", () => {
+    assert.deepEqual(
+      normalizeConfusables("Bash", {
+        command: `${cp(0x0441)}at /etc/p${CYR_A}sswd`,
+      }),
+      {
+        updatedInput: { command: "cat /etc/passwd" },
+        normalized: ['command (U+0441 → "c", U+0430 → "a")'],
+      },
+    );
+  });
+
+  it("leaves genuine Cyrillic prose alone under the default engine too", () => {
+    assert.equal(
+      normalizeConfusables("Bash", { command: "echo Привет мир" }),
+      null,
+    );
+  });
+
+  it("an injected scan still overrides the default", () => {
+    // The default engine WOULD fold this; the injected one finds nothing, so a
+    // null result proves the override reached the fold rather than the default.
+    assert.equal(
+      normalizeConfusables(
+        "Bash",
+        { command: `${cp(0x0441)}at /etc/p${CYR_A}sswd` },
+        { scan: () => ({ findings: [] }) },
+      ),
+      null,
+    );
+  });
+});
+
+// ─── Declared tool scope ─────────────────────────────────────────────────────
+// The fold's TOOL SCOPE is a declared partition, not a silent fallthrough.
+// Returning null is the right BEHAVIOUR for a tool with no path or command
+// field, but "no field to fold" and "nobody has looked at this tool" used to be
+// the same line of code, so an unlisted tool left no record that a decision had
+// been made. Mirrors test/claude-hooks-authored-scope.test.mjs, over the same
+// live tool surface.
+
+describe("the fold's tool scope is a declared partition", () => {
+  it("every tool is covered or exempt, never both, never neither", () => {
+    const unclassified = [];
+    const doubleClassified = [];
+    for (const tool of liveToolSurface()) {
+      const covered = Object.hasOwn(DEFAULT_FIELDS, tool);
+      const exempt = scopeFor(tool).kind === "exempt";
+      if (!covered && !exempt) unclassified.push(tool);
+      if (covered && exempt) doubleClassified.push(tool);
+    }
+    assert.deepEqual(
+      unclassified,
+      [],
+      "tools the fold has taken no position on — add a field list to " +
+        "DEFAULT_FIELDS or an entry (with a reason) to EXEMPT_TOOLS / " +
+        "EXEMPT_TOOL_PATTERNS",
+    );
+    assert.deepEqual(doubleClassified, []);
+  });
+
+  it("every exemption states a reason", () => {
+    const entries = Object.entries(EXEMPT_TOOLS);
+    assert.ok(entries.length > 0, "EXEMPT_TOOLS is empty — partition vacuous");
+    for (const [tool, reason] of entries)
+      assert.ok(
+        typeof reason === "string" && reason.length > 20,
+        `EXEMPT_TOOLS.${tool} carries no usable rationale`,
+      );
+    assert.ok(EXEMPT_TOOL_PATTERNS.length > 0, "EXEMPT_TOOL_PATTERNS is empty");
+    for (const { pattern, reason } of EXEMPT_TOOL_PATTERNS)
+      assert.ok(
+        pattern instanceof RegExp &&
+          typeof reason === "string" &&
+          reason.length > 20,
+        `EXEMPT_TOOL_PATTERNS entry for ${pattern} carries no usable rationale`,
+      );
+  });
+
+  it("positive marker: every covered tool folds a disguise in every declared field", () => {
+    const tools = Object.entries(DEFAULT_FIELDS);
+    assert.ok(tools.length > 0, "DEFAULT_FIELDS is empty — markers vacuous");
+    for (const [tool, fields] of tools) {
+      assert.ok(fields.length > 0, `${tool} declares no fields`);
+      for (const field of fields) {
+        const result = normalizeConfusables(
+          tool,
+          { [field]: `p${CYR_A}sswd` },
+          { scan },
+        );
+        assert.ok(result, `${tool}.${field} left a disguise in place`);
+        assert.equal(result.updatedInput[field], "passwd");
+      }
+    }
+  });
+
+  it("negative marker: an exempt tool is a real pass-through, not a claim", () => {
+    // Every field name any covered tool declares, so the pass-through is proven
+    // against the shapes the fold knows how to rewrite — not an empty input.
+    const everyField = {};
+    for (const fields of Object.values(DEFAULT_FIELDS))
+      everyField[fields[0]] = `p${CYR_A}sswd`;
+    for (const tool of [
+      ...Object.keys(EXEMPT_TOOLS),
+      "mcp__github__create_issue",
+    ]) {
+      assert.equal(scopeFor(tool).kind, "exempt", tool);
+      assert.equal(
+        normalizeConfusables(tool, everyField, { scan }),
+        null,
+        tool,
+      );
+    }
+  });
+
+  it("a tool on neither side is undeclared, not silently covered", () => {
+    assert.deepEqual(scopeFor("TodoWrite"), { kind: "undeclared" });
+    assert.equal(
+      normalizeConfusables("TodoWrite", { path: `p${CYR_A}` }),
+      null,
+    );
+  });
+
+  it("an inherited Object.prototype key is undeclared, not a field list", () => {
+    // `tool` comes from an untrusted payload, so every lookup in scopeFor is an
+    // Object.hasOwn: `DEFAULT_FIELDS.constructor` is a truthy function a plain
+    // `in`/index check would hand to the field loop as if it were a field list.
+    for (const key of ["constructor", "toString", "__proto__", "valueOf"])
+      assert.deepEqual(scopeFor(key), { kind: "undeclared" }, key);
+    assert.equal(
+      normalizeConfusables("constructor", { path: `p${CYR_A}` }),
+      null,
+    );
   });
 });

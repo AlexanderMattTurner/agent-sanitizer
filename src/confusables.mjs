@@ -48,12 +48,15 @@
  * Genuine non-confusable non-ASCII (accented Latin, CJK, emoji) is untouched
  * regardless, since a faithful scanner does not flag it.
  *
- * The confusable scanner is INJECTED, never imported: the canonical engine
- * (namespace-guard's vision-weighted map) is a heavy, separately-owned peer.
- * Pass `{ scan }` where `scan(text)` returns `{ findings: [{ index, char,
- * latinEquivalent }] }` — `index` a UTF-16 offset, `char` the matched glyph
+ * The confusable scanner defaults to namespace-guard and is resolved LAZILY, on
+ * the first field that actually carries a non-ASCII glyph: loading its
+ * vision-weighted map costs ~29 ms, and this module sits on the PreToolUse hook
+ * path, which pays module load on every tool call. Pass `{ scan }` to override
+ * with another engine — `scan(text)` returns `{ findings: [{ index, char,
+ * latinEquivalent }] }`, `index` a UTF-16 offset, `char` the matched glyph
  * (possibly a 2-unit astral char), `latinEquivalent` its ASCII canon.
  */
+import { createRequire } from "node:module";
 
 /**
  * Default path/command fields to fold per tool. Agent-agnostic: the keys are
@@ -72,6 +75,79 @@ export const DEFAULT_FIELDS = {
   Glob: ["pattern", "path"],
   LS: ["path"],
 };
+
+// The other half of the partition: tools this layer has LOOKED AT and decided
+// carry no field a deny rule matches byte-for-byte, each with the reason.
+// Together with DEFAULT_FIELDS this is a declared scope rather than a
+// fallthrough — an omission becomes a reviewable line instead of the absence of
+// one, and test/confusables.test.mjs fails when a tool the package elsewhere
+// claims to know lands in neither side.
+/** @type {Record<string, string>} */
+export const EXEMPT_TOOLS = Object.freeze({
+  WebFetch:
+    "the url is matched by a resolver, not by an ASCII deny rule, so folding " +
+    "it would rewrite the attacker's host to the real one it merely resembles " +
+    "— laundering the deception into a name the model then reports with " +
+    "confidence. Confusable URLs are DETECTED instead (see ./confusable-host.mjs).",
+  WebSearch:
+    "the query is free text a search engine tokenizes; no byte-equal deny-rule " +
+    "target exists for it, and folding would rewrite what the user asked for",
+  Task: "inputs are a prompt and an agent name — free text, with no path or command field",
+});
+
+// Prefix-shaped exemptions, for tool families no fixed list can enumerate.
+/** @type {ReadonlyArray<{ pattern: RegExp, reason: string }>} */
+export const EXEMPT_TOOL_PATTERNS = Object.freeze([
+  Object.freeze({
+    pattern: /^mcp__/u,
+    reason:
+      "MCP tool inputs follow a server-declared schema this package cannot see, " +
+      "so there is no field it can name as a path or command. A blanket fold " +
+      "over every string in the input would rewrite opaque IDs and protocol " +
+      "fields the server parses. A deployment that wants a specific server's " +
+      "path field folded adds it to `fields` by its full tool name.",
+  }),
+]);
+
+/**
+ * The single place an unlisted tool's fate is decided: covered by a field list,
+ * exempt with a stated reason, or undeclared — nobody has classified it.
+ *
+ * `undeclared` is NOT a runtime alarm; every arm leaves the tool unfolded, which
+ * is what an unlisted tool already got. The signal is the partition test, which
+ * reads this function.
+ * @param {string} tool
+ * @param {Record<string, string[]>} [fields]
+ * @returns {{ kind: "covered", fields: string[] } | { kind: "exempt", reason: string } | { kind: "undeclared" }}
+ */
+export function scopeFor(tool, fields = DEFAULT_FIELDS) {
+  if (Object.hasOwn(fields, tool))
+    return { kind: "covered", fields: fields[tool] };
+  if (Object.hasOwn(EXEMPT_TOOLS, tool))
+    return { kind: "exempt", reason: EXEMPT_TOOLS[tool] };
+  for (const { pattern, reason } of EXEMPT_TOOL_PATTERNS)
+    if (pattern.test(tool)) return { kind: "exempt", reason };
+  return { kind: "undeclared" };
+}
+
+/**
+ * The default scanner, resolved on first use. `require` rather than a static
+ * import so a caller that never hands this module a non-ASCII field never pays
+ * namespace-guard's map load — see the module header.
+ *
+ * This does NOT make the hook's own `scan` injection redundant: the plugin
+ * bundle ships without a node_modules, where namespace-guard exists only as a
+ * pre-registered inlined copy, so a bare require there resolves nothing. The
+ * hook's registry-first seam is the path that works on such a host.
+ * @type {((text: string) => { findings: Array<{ index: number, char: string, latinEquivalent: string }> }) | undefined}
+ */
+let defaultScan;
+
+/** @returns {(text: string) => { findings: Array<{ index: number, char: string, latinEquivalent: string }> }} */
+function resolveScan() {
+  defaultScan ??= createRequire(import.meta.url)("namespace-guard").scan;
+  return /** @type {any} */ (defaultScan);
+}
 
 /**
  * True iff any UTF-16 code unit is outside ASCII (> 0x7F). Surrogates (astral
@@ -318,36 +394,38 @@ export function foldConfusables(text, findings) {
 /**
  * Normalize confusable/homoglyph chars in the path/command fields of a tool
  * call. Returns the updated input plus the fields touched, or null when nothing
- * changed. Throws if the injected scanner fails (the caller fails closed: an
+ * changed. Throws if the scanner fails (the caller fails closed: an
  * un-normalized confusable could slip past a deny rule).
  *
- * `scan` is the injected confusable engine: `scan(text)` → `{ findings }` (an
- * empty `findings` means no confusables). `fields` maps a tool name to the
- * input keys to fold; defaults to {@link DEFAULT_FIELDS}.
+ * `scan` overrides the confusable engine: `scan(text)` → `{ findings }` (an
+ * empty `findings` means no confusables). Omit it to use namespace-guard, which
+ * is resolved lazily. `fields` maps a tool name to the input keys to fold;
+ * defaults to {@link DEFAULT_FIELDS}.
  * @param {string} tool
  * @param {any} toolInput
- * @param {{ scan: (text: string) => { findings: Array<{ index: number, char: string, latinEquivalent: string }> }, fields?: Record<string, string[]> }} options
+ * @param {{ scan?: (text: string) => { findings: Array<{ index: number, char: string, latinEquivalent: string }> }, fields?: Record<string, string[]> }} [options]
  * @returns {{ updatedInput: any, normalized: string[] } | null}
  */
-export function normalizeConfusables(
-  tool,
-  toolInput,
-  { scan, fields = DEFAULT_FIELDS },
-) {
-  const keys = Object.hasOwn(fields, tool) ? fields[tool] : undefined;
-  if (!keys || toolInput === null || toolInput === undefined) return null;
+export function normalizeConfusables(tool, toolInput, options = {}) {
+  const { scan, fields = DEFAULT_FIELDS } = options;
+  const scope = scopeFor(tool, fields);
+  if (scope.kind !== "covered" || toolInput === null || toolInput === undefined)
+    return null;
+  const keys = scope.fields;
 
   // ASCII fast-path: only a field carrying a non-ASCII code unit can hold a
-  // confusable, so all-ASCII input never invokes the (heavy) scanner.
+  // confusable, so all-ASCII input never invokes the (heavy) scanner — and never
+  // loads it either, when the default engine is the one in use.
   const candidates = keys.filter(
     (k) => typeof toolInput[k] === "string" && hasNonAscii(toolInput[k]),
   );
   if (candidates.length === 0) return null;
 
+  const runScan = scan ?? resolveScan();
   const normalized = [];
   const updatedInput = { ...toolInput };
   for (const k of candidates) {
-    const { findings } = scan(toolInput[k]);
+    const { findings } = runScan(toolInput[k]);
     if (findings.length === 0) continue;
     // Precision gate: fold only what a deny rule could actually match (see
     // selectFoldableFindings). Report the folds APPLIED, not the ones scanned —

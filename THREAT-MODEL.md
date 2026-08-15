@@ -7,11 +7,11 @@ visible-or-gone and surfaces exfil-shaped URLs, so the model and the operator
 see the same thing. Egress controls remain your enforcement layer.
 
 Five sanitization layers are documented below — invisible characters/ANSI (1),
-hidden HTML (2), exfil URLs (3), secret redaction (4, an injected redactor) and
-injection filtering (5, an injected filter the caller wires) — plus the entry
-points built on them: confusable folding, instruction-file scanning, the
-user-prompt verdict and edit rehydration. All are independent; use only the ones
-your ingress needs. The README's [entry-point
+hidden HTML (2), exfil URLs and confusable hosts (3), secret redaction (4, an
+injected redactor) and injection filtering (5, an injected filter the caller
+wires) — plus the entry points built on them: confusable folding,
+instruction-file scanning, the user-prompt verdict and edit rehydration. All are
+independent; use only the ones your ingress needs. The README's [entry-point
 table](./README.md#entry-points) maps each to its import.
 
 ## Layer 1—invisible characters & ANSI (zero-dependency)
@@ -153,6 +153,63 @@ the model chooses to follow it — and the sentence reporting it is precisely th
 instruction not to. A target whose kind cannot be resolved is treated as
 auto-fetched (fail closed).
 
+### Confusable hosts
+
+The same walk feeds a second, independent detector: a URL whose **host** is a
+look-alike of an ASCII name (`аpple.com` with a Cyrillic а, all-Cyrillic
+`раураӏ.com`). It is independent of the exfil-shape test above because a
+homoglyph domain needs no suspicious query to be the whole attack —
+`https://аpple.com/docs` is reported while the exfil check stays silent on it.
+
+**Why detect and never rewrite.** The fold below rewrites confusables in tool
+_input_; doing that to a URL in model-facing text would rewrite the attacker's
+`аpple.com` to the real `apple.com`, laundering the deception into a name the
+model then reports with confidence. Folding is sound only where the folded value
+is matched against an ASCII deny target and the original bytes are re-derived.
+Here the URL is left byte-identical and the finding names the deception.
+
+**The rule** applies per DNS label, decoded from punycode with `domainToUnicode`
+(the URL parser hands back the A-label, which is the punycode rather than the
+deception). Its two tiers are evidential strength, not attack class — both
+describe a host that resolves and both deceive the same reader; they differ only
+in how certain the evidence is:
+
+- **WARNING** — the label holds a non-ASCII code point and its _whole_ TR39
+  skeleton is pure ASCII: it claims to be an ASCII name it is not. That is the
+  same argument the fold gate makes ("folds to pure ASCII"), so it inherits the
+  same precision story — a label keeping an unmapped glyph after skeletoning
+  (`россия` → `poccия`) is a real word in its own script, not a disguise.
+- **NOTE** — the label carries a cross-script confusable but keeps an unmapped
+  glyph, so it reads as no ASCII name. That is the "unmapped glyph spliced in to
+  suppress the strong rule" shape, and it is equally what an ordinary word with
+  one look-alike letter produces, so the evidence is thin and the finding stays
+  quiet.
+
+Scored against `test/data/confusable-hosts.json`, which is the single source for
+both halves: **zero findings** across 52 real internationalized labels spanning
+Latin, Cyrillic, Greek, Han, Hiragana, Hangul, Arabic, Devanagari and Thai, and
+every attack label caught at its declared tier. Recall alone would reward a rule
+that flags everything, so the false-positive half is the half that makes the
+number mean anything.
+
+**Known false negatives**, each pinned as a test rather than left as a claim:
+
+- A label whose disguising glyph has no TR39 ASCII mapping at all — Cyrillic `м`
+  in `мicrosoft`, Greek `ε` in `αρριε`. Nothing marks it as a confusable, so
+  there is no evidence to act on.
+- **ASCII-only look-alikes** (`Iodash` for `lodash`, `paypaI`, `rn` for `m`) are
+  declared out of scope, not missed by accident. Both this rule and the fold's
+  gate open on a non-ASCII code point being present at all, and `paypaI` holds
+  none, so the class cannot be expressed on either side. This is where the real
+  npm/PyPI typosquats live — those registries are ASCII-only — but flagging `I`
+  against `l` in general text is a precision catastrophe, and a detector nobody
+  trusts is worse than no detector.
+- A bare URL in text carrying no markdown link and no HTML tag: the Layer-2/3
+  pre-gate skips the markdown parse entirely, so the walk never runs. Widening
+  that gate would make every URL-bearing string pay the heavy parse, which is a
+  cost for every consumer rather than a fix for this one. Where the gate does
+  open, GFM autolink literals mean bare URLs _are_ covered.
+
 ## Layer 4—secret redaction (injected engine)
 
 The threat is the reverse of the other layers: not attacker text reaching the
@@ -266,10 +323,25 @@ The soundness argument assumes no later layer erases code points from the same
 field, which could remove an unmapped glyph the gate relied on after the decision
 was made. Layer 4 runs before `sanitizeAuthoredContent` on `Bash.command`.
 
-The homoglyph engine is **injected** (`{ scan }`) — the package owns no glyph
-map. An all-ASCII field never invokes the scanner. This narrows a steganographic
-channel; it is not an enforcement boundary (distinct code points would not match
-a deny rule anyway).
+**Declared tool scope.** Which tools the fold covers is a partition, not a
+fallthrough: `DEFAULT_FIELDS` names the covered tools and their fields, and
+`EXEMPT_TOOLS` / `EXEMPT_TOOL_PATTERNS` name the ones deliberately left alone
+with the reason each time — `WebFetch.url` because folding a URL launders the
+attacker's host into the real one (the confusable-host detector above covers it
+instead), `WebSearch` and `Task` because their fields are free text no deny rule
+matches byte-for-byte, and `mcp__*` because a server-declared schema names no
+field this package can call a path. A tool on neither side reads as
+`undeclared`, which the partition test in `test/confusables.test.mjs` fails on —
+so an unclassified tool is a reviewable line rather than the absence of one.
+
+The homoglyph engine defaults to `namespace-guard` and is resolved **lazily**, on
+the first field that actually carries a non-ASCII glyph — its map costs ~29 ms to
+load and this module sits on the PreToolUse hook path, which pays module load on
+every tool call. Pass `{ scan }` to override with another engine; the Claude Code
+hook does, because the plugin bundle ships without a `node_modules` and reaches
+its inlined copy through a registry instead. An all-ASCII field neither invokes
+nor loads the scanner. This narrows a steganographic channel; it is not an
+enforcement boundary (distinct code points would not match a deny rule anyway).
 
 ## Instruction-file scanning
 

@@ -167,6 +167,7 @@ describe("guard: CATEGORY codes are the documented literals", () => {
         HTML_COMMENTS: "html-comments",
         HIDDEN_HTML: "hidden-html",
         EXFIL_URLS: "exfil-urls",
+        CONFUSABLE_HOST: "confusable-host",
       },
     );
   });

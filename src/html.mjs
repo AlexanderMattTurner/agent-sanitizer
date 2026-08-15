@@ -44,6 +44,8 @@ import {
   SECRET_HINT_EXT,
   matchesSecretHint,
 } from "./gates.mjs";
+import { confusableHost, describeConfusableHost } from "./confusable-host.mjs";
+import { SEVERITY } from "./severity.mjs";
 
 // The cheap pre-gates live in the dependency-free `./gates.mjs` so the package
 // root can re-export them without eagerly loading this module's remark/rehype
@@ -2713,6 +2715,51 @@ const OFF_ORIGIN_REASON = {
 };
 
 /**
+ * @typedef {{ url: string, isImage: boolean, autoFetched: boolean, context: "resource" | "form" | "refresh" }} CollectedUrl
+ */
+
+/**
+ * Every URL a Layer-3 detector reads: markdown links/images/definitions plus the
+ * URL-bearing HTML attributes `extractHtmlUrls` covers. Both detectors below
+ * consume this rather than deciding for themselves what counts as a URL, so a
+ * node type is either in scope for all of them or for none — a second walk is
+ * how one detector silently stops covering a shape the other still does.
+ * `parseMarkdown` memoizes its last tree, so the detectors running back to back
+ * over one document share the parse as well as the definition.
+ *
+ * A markdown node is reported with `context: "resource"`, which is the context
+ * that applies no off-origin rule — markdown carries no form or refresh target.
+ * @param {string} text
+ * @returns {CollectedUrl[]}
+ */
+function collectUrls(text) {
+  /** @type {CollectedUrl[]} */
+  const urls = [];
+  // Remark AST handles markdown links/images/definitions (balanced parens,
+  // reference links, GFM autolink literals) correctly, unlike a hand-rolled
+  // regex.
+  walk(parseMarkdown(text), null, (node) => {
+    if (
+      node.type !== "link" &&
+      node.type !== "image" &&
+      node.type !== "definition"
+    )
+      return;
+    urls.push({
+      url: node.url,
+      isImage: node.type === "image",
+      // A markdown image is fetched the moment the document renders; a link
+      // (or a definition, which only names one) is not.
+      autoFetched: node.type === "image",
+      context: "resource",
+    });
+  });
+  // HTML attributes (not AST nodes in remark).
+  urls.push(...extractHtmlUrls(text));
+  return urls;
+}
+
+/**
  * Layer 3: report data-exfil-shaped URLs in markdown links/images/definitions
  * and HTML attributes (src/href/background/srcset/ping, form action/formaction,
  * meta-refresh). Detection only — the text is never modified; the caller
@@ -2732,32 +2779,7 @@ export function detectExfil(text) {
   const threats = [];
 
   try {
-    // Remark AST handles markdown links/images/definitions (balanced parens,
-    // reference links) correctly, unlike a hand-rolled regex.
-    const tree = parseMarkdown(text);
-    walk(tree, null, (node) => {
-      if (
-        node.type !== "link" &&
-        node.type !== "image" &&
-        node.type !== "definition"
-      )
-        return;
-      const reason = checkExfilUrl(node.url);
-      if (!reason) return;
-      threats.push({
-        isImage: node.type === "image",
-        // A markdown image is fetched the moment the document renders; a link
-        // (or a definition, which only names one) is not.
-        autoFetched: node.type === "image",
-        reason,
-        target: urlHost(node.url),
-      });
-    });
-
-    // HTML attributes (not AST nodes in remark).
-    for (const { url, isImage, autoFetched, context } of extractHtmlUrls(
-      text,
-    )) {
+    for (const { url, isImage, autoFetched, context } of collectUrls(text)) {
       const reason =
         checkExfilUrl(url) ||
         (context !== "resource" && isOffOrigin(url)
@@ -2779,6 +2801,48 @@ export function detectExfil(text) {
         autoFetched: true,
         reason: "input too deeply nested to scan for exfil URLs",
         target: "(unparseable HTML)",
+      },
+    ];
+  }
+
+  return threats.length > 0 ? threats : null;
+}
+
+/**
+ * Layer 3, second detector: report URLs whose HOST is a confusable of an ASCII
+ * name (`аpple.com`). Detection only, and deliberately independent of the
+ * exfil-shape test above — a homoglyph domain needs no suspicious query to be
+ * the whole attack, so `https://аpple.com/docs` is reported while
+ * {@link detectExfil} stays silent on it.
+ *
+ * Fails CLOSED on a parse blow-up for the same reason detectExfil does.
+ * @param {string} text
+ * @returns {Array<{ severity: string, description: string }> | null}
+ */
+export function detectConfusableHosts(text) {
+  if (!MD_LINK_HINT.test(text) && !HTML_TAG_PRESENT.test(text)) return null;
+
+  /** @type {Array<{ severity: string, description: string }>} */
+  const threats = [];
+  /** @type {Set<string>} */
+  const seen = new Set();
+
+  try {
+    for (const { url } of collectUrls(text)) {
+      const found = confusableHost(url);
+      // One host repeated across a document is one deception, not N.
+      if (!found || seen.has(found.ascii)) continue;
+      seen.add(found.ascii);
+      threats.push({
+        severity: found.severity,
+        description: describeConfusableHost(found),
+      });
+    }
+  } catch {
+    return [
+      {
+        severity: SEVERITY.WARNING,
+        description: "input too deeply nested to scan for confusable hosts",
       },
     ];
   }

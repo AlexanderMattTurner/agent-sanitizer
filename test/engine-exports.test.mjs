@@ -108,6 +108,7 @@ const PUBLISHED_EXPORTS = {
     "UNPARSEABLE_PLACEHOLDER",
     "checkExfilUrl",
     "closingTagName",
+    "detectConfusableHosts",
     "detectExfil",
     "isHiddenElement",
     "isHiddenOpen",
@@ -122,10 +123,13 @@ const PUBLISHED_EXPORTS = {
   ],
   "./confusables": [
     "DEFAULT_FIELDS",
+    "EXEMPT_TOOLS",
+    "EXEMPT_TOOL_PATTERNS",
     "foldConfusables",
     "hasNonAscii",
     "normalizeConfusables",
     "normalizeContext",
+    "scopeFor",
     "selectFoldableFindings",
   ],
   "./instructions": [

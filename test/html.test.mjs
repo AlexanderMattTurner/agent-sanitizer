@@ -19,6 +19,7 @@ import { fcRunOptions } from "./test-helpers.mjs";
 import {
   sanitizeHtml,
   detectExfil,
+  detectConfusableHosts,
   isHiddenStyle,
   isHiddenElement,
   isHiddenOpen,
@@ -38,6 +39,7 @@ import {
 } from "../src/html.mjs";
 import { sanitize } from "../src/index.mjs";
 import { HTML_UNPARSEABLE_WARNING } from "../src/warnings.mjs";
+import { SEVERITY } from "../src/severity.mjs";
 
 const applyHtml = (text) => sanitizeHtml(text)?.text ?? text;
 // The keyed placeholder for one splice, computed from the exact original bytes
@@ -1601,6 +1603,15 @@ describe("R1: parser stack overflow fails closed (never throws)", () => {
     assert.equal(threats.length, 1);
     assert.equal(threats[0].target, "(unparseable HTML)");
     assert.match(threats[0].reason, /too deeply nested/);
+  });
+
+  it("detectConfusableHosts returns one sentinel threat instead of throwing", () => {
+    const threats = detectConfusableHosts(OVERFLOW);
+    assert.equal(threats.length, 1);
+    // Fail closed on the tier too: an input the walk could not read is not
+    // evidence that the hosts it hides are honest.
+    assert.equal(threats[0].severity, SEVERITY.WARNING);
+    assert.match(threats[0].description, /too deeply nested/);
   });
 
   it("top-level sanitize(html:true) never throws and returns a warned string", async () => {
