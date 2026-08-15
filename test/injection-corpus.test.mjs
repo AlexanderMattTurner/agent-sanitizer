@@ -33,12 +33,12 @@ const confusableScan = (text) => require("namespace-guard").scan(text);
 // Concealment code points, as Unicode escapes (code-style: no raw control bytes
 // in source). ESC drives ANSI; RLO/PDF are the bidi override pair; ZWSP/ZWNJ are
 // the zero-width bits; ZWJ joins emoji/Indic clusters; the tag plane is U+E0000.
-const ESC = "";
-const RLO = "‮";
-const PDF = "‬";
-const ZWSP = "​";
-const ZWNJ = "‌";
-const ZWJ = "‍";
+const ESC = "\u001b";
+const RLO = "\u202e";
+const PDF = "\u202c";
+const ZWSP = "\u200b";
+const ZWNJ = "\u200c";
+const ZWJ = "\u200d";
 
 /** Unicode-tag encoding: add the tag-plane offset to each code point. Renders
  * invisible; models still read it. (garak goodside.Tag; Cisco advisory.) */
@@ -201,7 +201,7 @@ const BENIGN = [
     name: "emoji-zwj-family",
     input: `\u{1f468}${ZWJ}\u{1f469}${ZWJ}\u{1f467} family`,
   },
-  { name: "emoji-zwj-flag", input: `\u{1f3f4}${ZWJ}☠️ flag` },
+  { name: "emoji-zwj-flag", input: `\u{1f3f4}${ZWJ}\u2620\ufe0f flag` },
   { name: "cjk-prose", input: "漢字のテストです" },
   { name: "devanagari-zwj", input: `क्${ZWJ}ष` },
   {
