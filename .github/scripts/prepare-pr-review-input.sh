@@ -12,8 +12,9 @@
 # MAX_DIFF_LINES lines this skips the review, emitting oversized=true so the
 # caller posts a "please review manually" notice instead of spending the read.
 #
-# Requires: gh authenticated (GH_TOKEN/GH_REPO), node + `pnpm install` done
-# (agent-sanitizer on the module path). Emits to GITHUB_OUTPUT:
+# Requires: GH_TOKEN/GH_REPO (the diff fetch calls the API directly with these;
+# `gh pr view` below still expects them as gh's own auth env vars), node +
+# `pnpm install` done (agent-sanitizer on the module path). Emits to GITHUB_OUTPUT:
 #   oversized=true|false       — whether the review was skipped for size
 #   diff_lines=<n>             — the diff's line count (only when oversized)
 # Writes into $PR_INPUT_DIR (only when NOT oversized):
@@ -28,6 +29,8 @@ source "$(dirname "${BASH_SOURCE[0]}")/lib-ci-retry.sh"
 
 : "${PR:?PR number required}"
 : "${PR_INPUT_DIR:?PR_INPUT_DIR required}"
+: "${GH_TOKEN:?GH_TOKEN required}"
+: "${GH_REPO:?GH_REPO required}"
 
 MAX_DIFF_LINES="${MAX_DIFF_LINES:-20000}"
 
@@ -44,17 +47,23 @@ emit_output() {
 # diff.txt ever reaches the reviewer.
 raw_diff="$(mktemp)"
 trap 'rm -f "$raw_diff"' EXIT
-# The diff media type via `gh api`, not `gh pr diff`: that command refuses to
-# emit a diff holding terminal escape sequences unless --allow-escape-sequences
-# is passed, so it fails closed on exactly the payloads this pipeline exists to
-# sanitize — and that flag is absent from older gh builds. The API response
-# carries no such guard, and only the sanitizer below ever reads these bytes.
+# curl for the diff media type, not `gh api`/`gh pr diff`: gh's own
+# client-side safety guard (pkg/iostreams content sanitization) refuses to
+# print ANY response holding a raw terminal escape sequence unless
+# --allow-escape-sequences is passed, and that guard fires identically whether
+# the request is made through `gh pr diff` or `gh api` — it is not a `pr diff`
+# quirk, so switching gh subcommands cannot clear it. curl has no such guard,
+# and only the sanitizer below ever reads these bytes.
 #
 # retry_stdout via a command substitution: a transient blip re-fetches the whole
 # diff and only the succeeding attempt's bytes land in raw_diff. A plain `retry
 # … >"$raw_diff"` would leak a failing attempt's error body into the file.
-raw_diff_content="$(retry_stdout gh api "repos/{owner}/{repo}/pulls/${PR}" \
-  -H "Accept: application/vnd.github.v3.diff")"
+api_url="${GITHUB_API_URL:-https://api.github.com}"
+raw_diff_content="$(retry_stdout curl -fsS \
+  -H "Authorization: Bearer ${GH_TOKEN}" \
+  -H "Accept: application/vnd.github.v3.diff" \
+  -H "X-GitHub-Api-Version: 2022-11-28" \
+  "${api_url}/repos/${GH_REPO}/pulls/${PR}")"
 printf '%s\n' "$raw_diff_content" >"$raw_diff"
 
 diff_lines="$(wc -l <"$raw_diff" | tr -d '[:space:]')"
