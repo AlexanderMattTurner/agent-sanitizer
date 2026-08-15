@@ -1,10 +1,12 @@
-"""Static ReDoS guard over every secrets-engine and detector-JSON regex.
+"""Static ReDoS guard over every secrets-engine, detector-class, and
+detector-JSON regex.
 
 This is the *generalizable* check that would have caught the ``FIELD_VALUE_RE``
 ReDoS (audit finding P1) at analysis time. The per-pattern wall-clock test in
 ``test_secrets_engine.py`` asserts one pattern stays fast today; this instead
-introspects EVERY compiled regex in the engine module and EVERY detector pattern
-in ``secret-detectors.json`` and rejects super-linear backtracking statically —
+introspects EVERY compiled regex in the engine module, EVERY detector class's
+own ``denylist`` in ``detectors.py``, and EVERY detector pattern in
+``secret-detectors.json``, and rejects super-linear backtracking statically —
 so a *future* pattern with catastrophic backtracking fails here automatically,
 with no timing flakiness.
 
@@ -20,7 +22,9 @@ import subprocess
 
 import pytest
 
+import agent_sanitizer.secrets.detectors as D
 import agent_sanitizer.secrets.engine as E
+from detect_secrets.plugins.base import BasePlugin
 from tests._helpers import REPO_ROOT
 
 # Atomic groups / possessive quantifiers cannot backtrack, so a pattern using
@@ -58,7 +62,29 @@ def _json_patterns() -> dict[str, str]:
     return patterns
 
 
-_ALL_PATTERNS = {**_engine_patterns(), **_json_patterns()}
+def _detector_patterns() -> dict[str, str]:
+    """Every ``denylist`` regex carried INLINE by a detector CLASS in
+    ``detectors.py`` (``JwtFullTokenDetector``, ``BoundedKeywordDetector``) —
+    the one source ``_engine_patterns``/``_json_patterns`` above cannot see,
+    since neither walks ``detectors.py``'s classes."""
+    patterns = {}
+    for name in dir(D):
+        obj = getattr(D, name)
+        if not (isinstance(obj, type) and issubclass(obj, BasePlugin)):
+            continue
+        denylist = getattr(obj, "denylist", ())
+        # An imported abstract class (RegexBasedDetector itself) never
+        # overrides `denylist`, so accessing it on the class returns the
+        # unresolved abstractproperty descriptor rather than a list — skip it,
+        # it carries no concrete regex to analyze.
+        if not isinstance(denylist, (list, tuple)):
+            continue
+        for i, pattern in enumerate(denylist):
+            patterns[f"{name}.denylist[{i}]"] = pattern.pattern
+    return patterns
+
+
+_ALL_PATTERNS = {**_engine_patterns(), **_json_patterns(), **_detector_patterns()}
 
 
 def _analyze(pattern: str) -> str:
@@ -71,9 +97,10 @@ def _analyze(pattern: str) -> str:
 
 def test_pattern_inventory_is_non_empty() -> None:
     # A refactor that stops discovering patterns would make the parametrized
-    # test below pass vacuously; assert both sources are actually populated.
+    # test below pass vacuously; assert every source is actually populated.
     assert len(_engine_patterns()) >= 5
     assert len(_json_patterns()) >= 5
+    assert len(_detector_patterns()) >= 4
 
 
 @pytest.mark.parametrize("name, pattern", sorted(_ALL_PATTERNS.items()))

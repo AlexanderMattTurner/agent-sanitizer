@@ -8,6 +8,26 @@ adhere to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+## [2.40.4] - 2026-08-15
+
+### Fixed
+
+- Improved PR review process to fetch diffs through the API, preventing escape sequences from blocking review operations.
+
+## [2.40.3] - 2026-08-15
+
+### Fixed
+- Close review-found holes in the Secret Keyword redaction and bound the redaction span for more accurate secret detection.
+- Fixed redaction span boundaries for the Secret Keyword detector to prevent over-redaction and ensure precision.
+
+## [2.40.2] - 2026-08-15
+
+### Added
+- Literature-cited invisible-injection benchmark corpus for testing injection vulnerabilities.
+
+### Fixed
+- Escape raw control bytes in the injection corpus test source to prevent parsing issues.
+
 ## [2.40.1] - 2026-08-15
 
 ### Fixed

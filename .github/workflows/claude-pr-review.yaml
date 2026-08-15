@@ -9,9 +9,9 @@ name: Claude PR review
 #   trusted context (with secrets), so to stay safe this job:
 #     1. checks out the BASE branch, never the untrusted PR head — no
 #        fork-authored code is ever checked out or executed here;
-#     2. reads the PR's changes only as DATA via `gh pr diff` (a unified diff
-#        fetched from the API), and the prompt treats that diff as untrusted
-#        input, never as instructions;
+#     2. reads the PR's changes only as DATA (a unified diff fetched from the
+#        API), and the prompt treats that diff as untrusted input, never as
+#        instructions;
 #     3. holds least privilege — contents:read + pull-requests:write only, so
 #        even a successful prompt injection can post a PR comment but cannot
 #        push code, merge, or reach any other scope.
@@ -171,8 +171,8 @@ jobs:
       - name: Fetch and sanitize the untrusted PR input
         # Runs the diff + metadata through the agent-sanitizer BEFORE Claude
         # sees them, writing sanitized files under runner.temp. Claude reads only
-        # those files (below), never the raw `gh pr diff` — so an injection hidden
-        # in the diff (invisible control text, ANSI escapes, exfil beacons) is
+        # those files (below), never the raw diff — so an injection hidden
+        # in it (invisible control text, ANSI escapes, exfil beacons) is
         # neutralized before it can reach the agent. Also gates the review by
         # size: a diff over MAX_DIFF_LINES sets oversized=true and the Opus read
         # is skipped (the notice step below asks for a human review instead).
