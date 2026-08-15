@@ -2,8 +2,8 @@
 # Fetch the untrusted PR diff + metadata and run them through the
 # agent-sanitizer (sanitize-pr-input.mjs) BEFORE the review agent sees
 # them. The agent reads only the sanitized files this writes — never the raw
-# `gh pr diff` — so an injection payload hidden in the diff (zero-width control
-# text, ANSI escapes, exfil beacons) cannot reach the agent intact.
+# diff — so an injection payload hidden in it (zero-width control text, ANSI
+# escapes, exfil beacons) cannot reach the agent intact.
 #
 # Oversized-diff guard: the base-only checkout means diff.txt is the ONLY source
 # of the PR's changes — the agent cannot reconstruct them from the trusted base
