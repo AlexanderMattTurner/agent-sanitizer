@@ -8,6 +8,12 @@ adhere to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+## [2.40.5] - 2026-08-15
+
+### Fixed
+
+- CI: improved PR review input preparation by fetching the PR diff with curl instead of gh api, which resolves escape-sequence handling issues.
+
 ## [2.40.4] - 2026-08-15
 
 ### Fixed
