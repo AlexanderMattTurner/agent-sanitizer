@@ -1,13 +1,15 @@
 name: "Claude Code with credential fallback"
 description: >-
-  Run anthropics/claude-code-action with an ordered credential ladder: a primary
-  OAuth token, then up to six OAuth fallbacks — one input per credential in the
-  ladder SSOT, .github/scripts/lib/claude-oauth-ladder.bash — then, only for a
-  caller that wires anthropic_api_key, one final metered rung outside that OAuth
-  SSOT. That eighth rung is the one deliberate exception to this repo's default
-  of never billing a metered key in CI; leaving anthropic_api_key unset (the
-  default) keeps a caller on the OAuth-only seven-rung ladder every other caller
-  has. A rung is attempted when NO earlier rung
+  Run anthropics/claude-code-action with an ordered credential ladder. For a
+  caller that wires anthropic_api_key, that metered rung goes FIRST — the
+  caller is choosing to pay for a reliable run on every attempt, not just as a
+  last resort — with a primary OAuth token and up to six OAuth fallbacks below
+  it as the free backstop if the key itself fails. One input per OAuth
+  credential in the ladder SSOT, .github/scripts/lib/claude-oauth-ladder.bash;
+  anthropic_api_key sits outside that SSOT by design. Leaving it unset (the
+  default) keeps a caller on the OAuth-only seven-rung ladder every other
+  caller has — this is the one deliberate exception to this repo's default of
+  never billing a metered key in CI. A rung is attempted when NO earlier rung
   has produced a non-errored run and that rung's own token is non-empty, so an
   unset middle tier is stepped over instead of ending the ladder (claude-code-action
   exits 0 even on a failure, so the execution log is the only signal). Each retry
@@ -66,10 +68,12 @@ inputs:
     default: ""
   anthropic_api_key:
     description: >-
-      Metered Anthropic API key, tried ONLY after all seven OAuth rungs above
-      are exhausted. Outside the OAuth ladder SSOT by design — this is the one
-      rung that bills. Empty (the default) skips it, so a caller must opt in
-      explicitly; most callers should leave this unset.
+      Metered Anthropic API key, tried FIRST — before the primary OAuth token
+      and its six fallbacks, which become the free backstop if this rung
+      itself fails. Outside the OAuth ladder SSOT by design — this is the one
+      rung that bills, on every attempt it makes. Empty (the default) skips
+      it, so a caller must opt in explicitly; most callers should leave this
+      unset.
     required: false
     default: ""
   github_token:
@@ -137,16 +141,19 @@ outputs:
     description: >-
       'true'/'false' from the LAST attempt that ran. A skipped attempt's check
       emits nothing, so the newest-first `||` resolves to the final attempt's
-      verdict. The primary's check always runs, so this is never empty and a
-      ladder that never reached a working credential reports 'true'. The final
-      step below fails the composite loud on 'true'.
+      verdict. c0 (the metered rung, first when wired) sits LAST in the chain
+      for that reason — it is the earliest-run rung, not the latest. At least
+      one rung's check always runs (c0 when anthropic_api_key is set,
+      otherwise c1), so this is never empty and a ladder that never reached a
+      working credential reports 'true'. The final step below fails the
+      composite loud on 'true'.
 
       An attempt that writes NO execution log is 'true' as well, and the ladder
       then walks every remaining credential. Some of those failures are
       credential-independent — the action's actor gate (allowed_bots /
       allowed_non_write_users) throws before it ever validates the Anthropic
-      token, so a bot-authored PR burns all seven OAuth rungs (eight when
-      anthropic_api_key is wired) — plus the free same-credential retry, since a
+      token, so a bot-authored PR burns all eight rungs when anthropic_api_key
+      is wired (seven otherwise) — plus the free same-credential retry, since a
       run that writes no log billed nothing and so reads as zero_cost — on one
       unchangeable verdict. The ladder cannot tell that case from a genuinely
       empty token, which fails the same way: claude-code-action exports no
@@ -154,14 +161,14 @@ outputs:
       job log. Reading it would mean log scraping, and re-deriving the actor
       verdict here would fork the gate; both are worse than eight (or nine)
       wasted attempts.
-    value: ${{ steps.c7.outputs.errored || steps.c6.outputs.errored || steps.c5.outputs.errored || steps.c4.outputs.errored || steps.c3.outputs.errored || steps.c2b.outputs.errored || steps.c2.outputs.errored || steps.c1r.outputs.errored || steps.c1.outputs.errored }}
+    value: ${{ steps.c6.outputs.errored || steps.c5.outputs.errored || steps.c4.outputs.errored || steps.c3.outputs.errored || steps.c2b.outputs.errored || steps.c2.outputs.errored || steps.c1r.outputs.errored || steps.c1.outputs.errored || steps.c0.outputs.errored }}
 runs:
   using: "composite"
   steps:
     # An empty `model` renders `--model` with no value, and claude-code-action
     # then runs on ITS default (Opus, ~5x Sonnet). Refusing here is the choke
-    # point: every caller reaches the action through these seven rungs, so no
-    # present or future one can spend an unpinned model.
+    # point: every caller reaches the action through every rung of the ladder,
+    # so no present or future one can spend an unpinned model.
     - name: Refuse an unpinned model
       shell: bash
       env:
@@ -194,8 +201,59 @@ runs:
         PREAMBLE="${GITHUB_ACTION_PATH}/../../prompts/untrusted-data-preamble.md" \
           bash "${GITHUB_ACTION_PATH}/../../scripts/compose-claude-prompt.sh"
 
+    # The metered rung goes FIRST: a caller that wires anthropic_api_key wants
+    # its reviews to land reliably and is choosing to pay for that on every
+    # run, not just as a last resort. Unset (the default) skips straight to
+    # the primary OAuth credential below, unconditionally, exactly as before.
+    - name: Attempt with the metered API key
+      id: a0
+      if: inputs.anthropic_api_key != ''
+      continue-on-error: true
+      uses: anthropics/claude-code-action@428971d2ecd6e3a7cb0ee0da2a3a8b33fdb3678d # v1.0.157
+      env:
+        GH_TOKEN: ${{ inputs.gh_token || inputs.github_token }}
+      with:
+        anthropic_api_key: ${{ inputs.anthropic_api_key }}
+        github_token: ${{ inputs.github_token }}
+        allowed_non_write_users: ${{ inputs.allowed_non_write_users }}
+        allowed_bots: ${{ inputs.allowed_bots }}
+        claude_args: >-
+          --model ${{ inputs.model }}
+          ${{ inputs.claude_args }}
+        prompt: ${{ steps.compose_prompt.outputs.prompt }}
+
+    - name: Did the metered API-key attempt run?
+      id: c0
+      if: inputs.anthropic_api_key != ''
+      shell: bash
+      env:
+        EXECUTION_FILE: ${{ steps.a0.outputs.execution_file }}
+      run: bash .github/scripts/claude-run-errored.sh
+
+    - name: Ladder state after the metered API-key attempt
+      id: s0
+      shell: bash
+      env:
+        PRIOR: "true"
+        ERRORED: ${{ steps.c0.outputs.errored }}
+      run: |
+        set -euo pipefail
+        still="false"
+        if [[ "$PRIOR" == "true" && "$ERRORED" != "false" ]]; then
+          still="true"
+        fi
+        echo "still_needs_attempt=${still}" >>"$GITHUB_OUTPUT"
+
+    - name: Back off before the primary-credential attempt
+      if: steps.s0.outputs.still_needs_attempt == 'true' && inputs.anthropic_api_key != ''
+      shell: bash
+      env:
+        BACKOFF_SECONDS: "10"
+      run: sleep "$BACKOFF_SECONDS"
+
     - name: Attempt with the primary credential
       id: a1
+      if: steps.s0.outputs.still_needs_attempt == 'true'
       continue-on-error: true
       uses: anthropics/claude-code-action@428971d2ecd6e3a7cb0ee0da2a3a8b33fdb3678d # v1.0.157
       env:
@@ -212,6 +270,7 @@ runs:
 
     - name: Did the primary credential run?
       id: c1
+      if: steps.s0.outputs.still_needs_attempt == 'true'
       shell: bash
       env:
         EXECUTION_FILE: ${{ steps.a1.outputs.execution_file }}
@@ -229,7 +288,7 @@ runs:
       id: s1
       shell: bash
       env:
-        PRIOR: "true"
+        PRIOR: ${{ steps.s0.outputs.still_needs_attempt }}
         ERRORED: ${{ steps.c1.outputs.errored }}
       run: |
         set -euo pipefail
@@ -592,51 +651,17 @@ runs:
         fi
         echo "still_needs_attempt=${still}" >>"$GITHUB_OUTPUT"
 
-    # The eighth, metered rung. Outside the OAuth ladder SSOT (claude-oauth-ladder.bash)
-    # by design: it authenticates with anthropic_api_key, not an sk-ant-oat… token,
-    # and it only runs at all when a caller opts in by wiring that input — the
-    # default keeps every other caller on the seven-rung OAuth-only ladder.
-    - name: Back off before the metered API-key attempt
-      if: steps.s6.outputs.still_needs_attempt == 'true' && inputs.anthropic_api_key != ''
-      shell: bash
-      env:
-        BACKOFF_SECONDS: "60"
-      run: sleep "$BACKOFF_SECONDS"
-
-    - name: Retry with the metered API key
-      id: a7
-      if: steps.s6.outputs.still_needs_attempt == 'true' && inputs.anthropic_api_key != ''
-      continue-on-error: true
-      uses: anthropics/claude-code-action@428971d2ecd6e3a7cb0ee0da2a3a8b33fdb3678d # v1.0.157
-      env:
-        GH_TOKEN: ${{ inputs.gh_token || inputs.github_token }}
-      with:
-        anthropic_api_key: ${{ inputs.anthropic_api_key }}
-        github_token: ${{ inputs.github_token }}
-        allowed_non_write_users: ${{ inputs.allowed_non_write_users }}
-        allowed_bots: ${{ inputs.allowed_bots }}
-        claude_args: >-
-          --model ${{ inputs.model }}
-          ${{ inputs.claude_args }}
-        prompt: ${{ steps.compose_prompt.outputs.prompt }}
-
-    - name: Did the metered API-key attempt run?
-      id: c7
-      if: steps.s6.outputs.still_needs_attempt == 'true' && inputs.anthropic_api_key != ''
-      shell: bash
-      env:
-        EXECUTION_FILE: ${{ steps.a7.outputs.execution_file }}
-      run: bash .github/scripts/claude-run-errored.sh
-
     # Sanitizer's callers rely on the composite itself failing when no credential
     # worked: they read execution_file for the cost footer and would otherwise
     # carry on as if the agent had run. This is the hard gate the ladder's own
-    # `errored` output only reports.
+    # `errored` output only reports. c0 sits LAST in this OR-chain rather than
+    # first: it is the earliest-run rung now, not the latest, and the chain
+    # resolves to whichever check actually ran most recently.
     - name: Propagate the ladder result
       if: >-
-        (steps.c7.outputs.errored || steps.c6.outputs.errored || steps.c5.outputs.errored || steps.c4.outputs.errored ||
+        (steps.c6.outputs.errored || steps.c5.outputs.errored || steps.c4.outputs.errored ||
          steps.c3.outputs.errored || steps.c2b.outputs.errored || steps.c2.outputs.errored ||
-         steps.c1r.outputs.errored || steps.c1.outputs.errored) == 'true'
+         steps.c1r.outputs.errored || steps.c1.outputs.errored || steps.c0.outputs.errored) == 'true'
       shell: bash
       run: |
         echo "::error::claude-run: every configured Claude credential failed (set CLAUDE_CODE_OAUTH_TOKEN, CLAUDE_CODE_OAUTH_TOKEN_FALLBACK[_2..6], or the optional metered anthropic_api_key)." >&2
@@ -652,7 +677,7 @@ runs:
       id: resolve_log
       shell: bash
       env:
-        EXECUTION_FILE: ${{ steps.a7.outputs.execution_file || steps.a6.outputs.execution_file || steps.a5.outputs.execution_file || steps.a4.outputs.execution_file || steps.a3.outputs.execution_file || steps.a2b.outputs.execution_file || steps.a2.outputs.execution_file || steps.a1r.outputs.execution_file || steps.a1.outputs.execution_file }}
+        EXECUTION_FILE: ${{ steps.a6.outputs.execution_file || steps.a5.outputs.execution_file || steps.a4.outputs.execution_file || steps.a3.outputs.execution_file || steps.a2b.outputs.execution_file || steps.a2.outputs.execution_file || steps.a1r.outputs.execution_file || steps.a1.outputs.execution_file || steps.a0.outputs.execution_file }}
       run: echo "execution_file=${EXECUTION_FILE}" >>"$GITHUB_OUTPUT"
 
     # A rung exiting 0 is NOT proof Claude ran: an auth failure, a crash before

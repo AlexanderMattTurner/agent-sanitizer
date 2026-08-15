@@ -8,17 +8,20 @@ adhere to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
-## [2.38.0] - 2026-08-14
+## [2.39.0] - 2026-08-15
 
 ### Added
-- Hooks report payload size and the triggering tool in the slow-hook notice.
-
-### Fixed
-- The secrets redaction engine preserves per-pattern regex flags in the cross-line prefilter.
-- `NpmDetector`'s whitespace bound is widened and its prefilter cache clears on reconfigure.
+- Slow-hook notices now report payload size and triggering tool for better observability.
+- Per-pattern regex flags are now preserved in the cross-line prefilter for secrets detection.
 
 ### Changed
-- Secrets redaction latency on large payloads cut from ~7.4s to ~3.4s.
+- NpmDetector's whitespace bound has been widened to improve detection accuracy.
+
+### Fixed
+- Prefilter cache is now cleared on reconfiguration to ensure consistent secret detection behavior.
+
+### Performance
+- Redaction latency on large payloads has been significantly improved, reducing processing time from 7.4s to approximately 3.4s.
 
 ## [2.37.4] - 2026-08-14
 
