@@ -4,6 +4,7 @@
  * directions, so this file asserts both:
  *
  *   - the exported entries resolve and load (a consumer can compose them);
+ *   - each one's named exports are exactly the snapshotted set;
  *   - every other module stays REFUSED (ERR_PACKAGE_PATH_NOT_EXPORTED);
  *   - the README's table of the surface is exactly that set.
  *
@@ -123,6 +124,185 @@ const REQUIRED_EXPORT = {
   "lib/trace": "trace",
 };
 
+// Every named export of every PUBLISHED module. The entry symbol above proves a
+// module is usable; this proves the whole surface a consumer can import is the
+// surface this package meant to publish. Without it a symbol can leave a
+// published module unremarked, and a consumer's build breaks on what its
+// version range says is a compatible upgrade — `formatReport` left
+// `scan-invisible-chars` that way. Removing an entry here is the edit that says
+// the removal is deliberate, which is the point to release it as breaking.
+// Adding one is cheap and belongs in the same commit as the export.
+const PUBLISHED_EXPORTS = {
+  "plugin-hooks": ["HOOK_MODES", "main"],
+  "pretooluse-sanitize": [
+    "PRE_TOOL_USE_MESSAGES",
+    "REDACTION_HINT",
+    "WRITE_SHAPED_TOOLS",
+    "buildPreToolUseResponse",
+    "cliMain",
+    "depLoadHint",
+    "failClosedFields",
+    "hintedWriteFault",
+    "hookFailureFields",
+    "judgePreToolUseSanitize",
+    "preToolUseLayers",
+    "rehydrateLayer2",
+  ],
+  "sanitize-output": [
+    "COLLISION_WITHHELD_MESSAGE",
+    "ON_DISK_PLACEHOLDER_WARNING",
+    "REVEAL_WITHHELD_WARNING",
+    "SECRET_HINT",
+    "SECRET_HINT_EXT",
+    "applyLayer1",
+    "cliMain",
+    "collisionWarning",
+    "composeContext",
+    "describeRemoved",
+    "describeWarned",
+    "emitFailClosed",
+    "emitHookFailure",
+    "evaluateToolOutput",
+    "failClosedContext",
+    "failClosedReplacement",
+    "judgeSanitizeOutput",
+    "matchesSecretHint",
+    "sanitizeText",
+    "sanitizeValue",
+    "sanitizerDepsLoaded",
+    "suppressToolOutput",
+    "withPostToolUseDefault",
+  ],
+  "sanitize-user-prompt": [
+    "USER_PROMPT_MESSAGES",
+    "classifyPrompt",
+    "judgeSanitizeUserPrompt",
+    "main",
+  ],
+  "scan-invisible-chars": [
+    "ALERT_ACK_FILE",
+    "ALERT_FILE",
+    "CLAUDE_CONTEXT_SUBDIRS",
+    "CLAUDE_INSTRUCTION_GLOBS",
+    "CLAUDE_LAUNCH_GLOBS",
+    "LONG_RUN_RE",
+    "LONG_RUN_THRESHOLD",
+    "TOTAL_INVISIBLE_THRESHOLD",
+    "cliMain",
+    "decodeRun",
+    "findInstructionFiles",
+    "formatSkipped",
+    "scanFile",
+    "scanProject",
+  ],
+  "scan-loaded-instructions": [
+    "HOOK_NAME",
+    "cliMain",
+    "loadedFileMessage",
+    "readLoadedFile",
+    "scanLoadedFile",
+    "scopeNotice",
+  ],
+  "lib/authored-content": [
+    "AUTHORED_FIELDS",
+    "EXEMPT_TOOLS",
+    "EXEMPT_TOOL_PATTERNS",
+    "authoredContext",
+    "authoredScopeDecision",
+    "sanitizeAuthoredContent",
+  ],
+  "lib/control-plane": ["controlPlane", "nativeStdout", "runJudgeCli"],
+  "lib/env-config": [
+    "SECRETS_ENABLED_ENV",
+    "configureEnvConfigSource",
+    "dynamicSecretVars",
+    "envBoundSecretVars",
+    "extraSecretVars",
+    "inferenceKeyVars",
+    "looksLikeCredentialVar",
+    "minEnvSecretLen",
+    "secretsEnabled",
+  ],
+  "lib/hook-io": [
+    "DEFAULT_MISSING_PACKAGE_REMEDY",
+    "DISABLED_HOOKS_ENV",
+    "FAIL_CLOSED_VALUES",
+    "FAIL_OPEN_ENV",
+    "HookEvent",
+    "MAX_STDIN_BYTES",
+    "PermissionDecision",
+    "adoptHookIoSharedState",
+    "awaitLazyDependency",
+    "claimCliEntry",
+    "configureHookgateMarker",
+    "configureMissingPackageRemedy",
+    "disabledHooks",
+    "emitHookResponse",
+    "errMessage",
+    "failOpenContext",
+    "failOpenEnabled",
+    "failedLazyPackages",
+    "hookIoSharedState",
+    "hookgateMarkerPath",
+    "isMain",
+    "lastStdinByteLength",
+    "lazyImport",
+    "lazyImportErrorFor",
+    "makeDeadline",
+    "markerIsTrusted",
+    "missingPackageError",
+    "missingPackageMessage",
+    "probeSetupAlive",
+    "readFlag",
+    "readStdinJson",
+    "registerLazyModules",
+    "registeredLazyModule",
+    "safeErrMessage",
+    "scrubUntrustedText",
+    "writeFileNoFollow",
+    "writeSentinelFile",
+  ],
+  "lib/invisible-alert": [
+    "ALERT_ACK_FILE",
+    "ALERT_FILE",
+    "PROJECT_DIR",
+    "PROJECT_HASH",
+    "acknowledgeAlert",
+    "alertAcknowledged",
+    "appendAlert",
+    "gateAskReason",
+    "gateReminderContext",
+    "instructionsLoadedFile",
+    "instructionsLoadedGapNotice",
+    "instructionsLoadedNoticeFile",
+    "instructionsLoadedSeen",
+    "invisibleCharAlert",
+    "recordInstructionsLoaded",
+  ],
+  "lib/redactor-client": [
+    "DEFAULT_SOCKET_PATH",
+    "FRAME_CAP",
+    "classifySocket",
+    "connectAndRequest",
+    "positiveMsOr",
+    "redactViaDaemon",
+    "spawnDaemon",
+    "waitForSocket",
+  ],
+  "lib/reveal": [
+    "REVEAL_READ_ENVELOPE",
+    "SPAN_ROUNDTRIP_NOTICE",
+    "isRevealRead",
+    "persistReveal",
+    "persistSpan",
+    "readSpan",
+    "revealDir",
+    "spanPath",
+  ],
+  "lib/secret-annotate": ["envValueRegex", "hasEnvBoundSecret"],
+  "lib/trace": ["TraceEvent", "bestEffortTrace", "trace", "traceThreshold"],
+};
+
 describe("claude-hooks composition surface resolves through the exports map", () => {
   const modules = hookModules();
 
@@ -135,6 +315,16 @@ describe("claude-hooks composition surface resolves through the exports map", ()
       modules.filter((m) => !REQUIRED_EXPORT[m]),
       [],
       "hook modules with no REQUIRED_EXPORT entry — add one",
+    );
+    // Every PUBLISHED module must carry a full-surface snapshot, in both
+    // directions: an export added to the map with no snapshot would publish an
+    // unpinned surface, and a snapshot left behind by a dropped export pins one
+    // nobody can import. `plugin-hooks` is published as the bare
+    // `./claude-hooks` entry, so it is snapshotted beside the curated subpaths.
+    assert.deepEqual(
+      Object.keys(PUBLISHED_EXPORTS).sort(),
+      [...EXPORTED, "plugin-hooks"].sort(),
+      "PUBLISHED_EXPORTS and the published modules disagree",
     );
     // Every exported subpath must name a module that exists — a curated entry
     // pointing at a deleted file resolves to nothing and fails only at import.
@@ -169,6 +359,11 @@ describe("claude-hooks composition surface resolves through the exports map", ()
       assert.ok(
         typeof mod[REQUIRED_EXPORT[name]] === "function",
         `${subpath} does not export ${REQUIRED_EXPORT[name]} as a function`,
+      );
+      assert.deepEqual(
+        Object.keys(mod).sort(),
+        PUBLISHED_EXPORTS[name],
+        `${subpath}'s published exports moved — update PUBLISHED_EXPORTS, and release a removal as breaking`,
       );
     });
   }
@@ -207,7 +402,12 @@ describe("claude-hooks composition surface resolves through the exports map", ()
       fileURLToPath(resolved),
       path.join(hooksDir, "plugin-hooks.mjs"),
     );
-    const { main } = await import(resolved);
-    assert.equal(typeof main, "function");
+    const mod = await import(resolved);
+    assert.equal(typeof mod.main, "function");
+    assert.deepEqual(
+      Object.keys(mod).sort(),
+      PUBLISHED_EXPORTS["plugin-hooks"],
+      "the CLI dispatcher's published exports moved — update PUBLISHED_EXPORTS, and release a removal as breaking",
+    );
   });
 });
