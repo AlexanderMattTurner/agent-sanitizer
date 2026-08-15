@@ -44,6 +44,7 @@
  */
 import {
   appendFileSync,
+  existsSync,
   readdirSync,
   readFileSync,
   realpathSync,
@@ -248,9 +249,15 @@ function main(reportsDir) {
     toolingScopeBreak,
   });
 
-  const reportFiles = readdirSync(reportsDir, { recursive: true })
-    .map((entry) => join(reportsDir, entry.toString()))
-    .filter((p) => p.endsWith("mutation.json"));
+  // No directory is zero reports, not a different failure: download-artifact
+  // creates nothing when the shards were cancelled (a superseded push) or
+  // uploaded nothing, and a raw ENOENT stack there reports a broken script
+  // instead of the missing-shard condition the count check below names.
+  const reportFiles = existsSync(reportsDir)
+    ? readdirSync(reportsDir, { recursive: true })
+        .map((entry) => join(reportsDir, entry.toString()))
+        .filter((p) => p.endsWith("mutation.json"))
+    : [];
 
   // Every shard uploads exactly one report. Demand one per shard so a silently
   // missing artifact fails the gate loudly instead of scoring a subset as if it
