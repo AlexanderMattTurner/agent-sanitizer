@@ -8,6 +8,13 @@ adhere to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+## [2.40.1] - 2026-08-15
+
+### Fixed
+
+- CI now reports zero mutation shards instead of an ENOENT error when applicable.
+- The `InstructionsLoaded` event in claude-hooks is now properly named in coverage notices.
+
 ## [2.40.0] - 2026-08-15
 
 ### Fixed
