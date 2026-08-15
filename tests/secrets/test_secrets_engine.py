@@ -52,7 +52,12 @@ _PEM = (
 
 def test_plugins_list():
     names = [p["name"] for p in E.PLUGINS]
-    assert {"AWSKeyDetector", "KeywordDetector"} <= set(names)
+    assert "AWSKeyDetector" in names
+    # The keyword detector is a CUSTOM plugin (engine.py loads a bounded
+    # reimplementation from detectors.py, not detect-secrets' bundled one), so
+    # it lives in CUSTOM_PLUGINS/ALL_PLUGINS, never in this bundled-only list.
+    assert "KeywordDetector" not in names
+    assert "BoundedKeywordDetector" not in names
     assert all(set(p.keys()) == {"name"} for p in E.PLUGINS)
 
 
@@ -900,22 +905,6 @@ def test_passphrase_is_redacted_though_credential_is_not():
     assert run_plain("credential = s3cr3tDiceWareValue99xyz") is None
 
 
-# ─── Markdown code prose not redacted ────────────────────────────────────────
-
-
-@pytest.mark.parametrize(
-    "label, value, expected",
-    [
-        ("backtick markdown prose", "re.IGNORECASE | re.MULTILINE` `flags", True),
-        ("spaced passphrase", "correct horse battery staple", False),
-        ("backtick but no whitespace", "P@ss`word", False),
-        ("contiguous credential", "q9X2mN7pK4rT8wY1cV5bZ3dF6gH0jL2e", False),
-    ],
-)
-def test_is_markdown_code_prose(label, value, expected):
-    assert E._is_markdown_code_prose(val_cand(value)) is expected, label
-
-
 # ─── Lowercase metavariables / timestamps / versions not redacted ────────────
 
 
@@ -1022,27 +1011,17 @@ def test_shape_skips_never_leak_real_secrets(label, text, needle):
     assert needle not in redacted, label
 
 
-def test_is_benign_keyword_match_none_secret_value():
-    from detect_secrets.core.potential_secret import PotentialSecret
-
-    secret = PotentialSecret(type="Secret Keyword", filename="f", secret="x")
-    secret.secret_value = None
-    assert E._is_benign_keyword_match(secret, "some line", False) is False
-
-
-def test_markdown_code_prose_skipped_locally_redacted_on_web(monkeypatch):
-    import types
-
-    value = "re.IGNORECASE | re.MULTILINE` `flags"
-    text = "doc says " + value + " here"
-    fake = types.SimpleNamespace(type="Secret Keyword", secret_value=value)
-    monkeypatch.setattr(E, "scan_line", lambda line: [fake] if value in line else [])
-
-    local, local_found = redact(text, cfg(web_ingress=False))
-    web, web_found = redact(text, cfg(web_ingress=True))
-
-    assert local == text and local_found == [], "local: prose must pass through"
-    assert web_found == ["Secret Keyword"] and "[REDACTED" in web, "web: must redact"
+@pytest.mark.parametrize("web_ingress", [False, True])
+def test_markdown_code_prose_never_redacted(web_ingress):
+    """A backtick is markdown emphasis, never a credential byte:
+    BoundedKeywordDetector's value class excludes it everywhere (not only as a
+    delimiter), so this shape can no longer reach either detection path,
+    regardless of ingress — unlike the bundled KeywordDetector this replaces,
+    whose backtick-as-quote bug is what let a documentation line redact whole
+    (the incident this detector exists to fix)."""
+    text = "doc says " + "re.IGNORECASE | re.MULTILINE` `flags" + " here"
+    redacted, found = redact(text, cfg(web_ingress=web_ingress))
+    assert redacted == text and found == []
 
 
 @pytest.mark.parametrize(
@@ -1159,13 +1138,15 @@ def test_env_reference_field_value_not_redacted(label, text):
 
 
 def test_env_reference_keyword_match_skipped():
-    import types
-
-    fake = types.SimpleNamespace(
-        type="Secret Keyword", secret_value="process.env.SOME_SECRET_VAR"
+    # A keyword match whose value is wholly an unforgeable env-var reference is
+    # benign regardless of ingress — `_is_code_env_reference` is a SHAPE gate,
+    # applied on every ingress. This is the same `is_benign` chokepoint
+    # `_keyword_candidate_spans` calls for every real keyword match.
+    c = E.Candidate(
+        value="process.env.SOME_SECRET_VAR", line="k = process.env.SOME_SECRET_VAR"
     )
-    assert E._is_benign_keyword_match(fake, "k = process.env.SOME_SECRET_VAR", False)
-    assert E._is_benign_keyword_match(fake, "k = process.env.SOME_SECRET_VAR", True)
+    assert E.is_benign(c, web_ingress=False)
+    assert E.is_benign(c, web_ingress=True)
 
 
 _ENV_REF_NEEDLE = "q9X2mN7pK4rT8wY1cV5bZ3dF6gH0jL2e"
@@ -1818,8 +1799,8 @@ def test_detected_secret_values_clean_text_is_empty():
 
 def test_high_confidence_plugin_subset_drops_keyword_detector():
     names = {p["name"] for p in E.PLUGINS_HIGH_CONFIDENCE}
-    assert "KeywordDetector" not in names
-    assert names == {p["name"] for p in E.PLUGINS} - {"KeywordDetector"}
+    assert "BoundedKeywordDetector" not in names
+    assert names == {p["name"] for p in E.ALL_PLUGINS} - {"BoundedKeywordDetector"}
 
 
 def test_high_confidence_drops_keyword_match():

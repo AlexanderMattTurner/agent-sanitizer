@@ -29,14 +29,16 @@ import json
 import re
 from pathlib import Path
 
-# Imported as a MODULE, not `from … import JwtTokenDetector`: detect-secrets'
-# custom-plugin loader (get_plugins_from_file) scans this module's attributes for
-# any BasePlugin subclass and keys them by secret_type, so a bare
-# ``JwtTokenDetector`` name in scope would be re-registered under "JSON Web Token"
-# and, sorting after JwtFullTokenDetector, overwrite it — leaving the subclass
-# unfindable by classname ("No such JwtFullTokenDetector plugin"). A module
-# attribute is not a class, so the scanner ignores it.
+# Imported as a MODULE, not `from … import JwtTokenDetector` / `KeywordDetector`:
+# detect-secrets' custom-plugin loader (get_plugins_from_file) scans this
+# module's attributes for any BasePlugin subclass and keys them by secret_type,
+# so a bare `JwtTokenDetector`/`KeywordDetector` name in scope would be
+# re-registered under its own secret_type and, sorting after the subclass below
+# it, overwrite it — leaving the subclass unfindable by classname ("No such
+# JwtFullTokenDetector/BoundedKeywordDetector plugin"). A module attribute is
+# not a class, so the scanner ignores it.
 from detect_secrets.plugins import jwt as _jwt
+from detect_secrets.plugins import keyword as _keyword
 from detect_secrets.plugins.base import RegexBasedDetector
 
 # Compiled denylists keyed by detector class name, loaded from the shared SSOT
@@ -259,3 +261,78 @@ class JwtFullTokenDetector(_jwt.JwtTokenDetector):
             except (TypeError, ValueError, UnicodeDecodeError):
                 return False
         return True
+
+
+# ── Reimplementation of a bundled detector with an unbounded value span ──────
+# The bundled KeywordDetector's own value class (``keyword.SECRET``) is
+# ``[^\v'"]*`` — excluding only VERTICAL TAB (in Python `re`, `\v` is `\x0b`,
+# not "any line break") and the two real quote characters — while its own
+# ``keyword.QUOTE`` treats a MARKDOWN BACKTICK as a third quote alongside `'`/
+# `"`. A quoted value's body already excludes both real quote characters, so it
+# is bounded by its own closing delimiter; a backtick-opened value has no such
+# stop. A GitHub PR body's `` `_load_secret`, `` opened a "value" that ran
+# greedily to the LAST backtick-then-semicolon in the scanned text, swallowing
+# ~2,800 characters of unrelated prose into one `[REDACTED: Secret Keyword]`.
+# This reimplementation drops the backtick from both the quote and the value
+# classes entirely: a backtick is markdown emphasis, never a credential byte,
+# so excluding it from the value everywhere (not just as a delimiter) makes the
+# over-capture shape structurally impossible from this detector, not merely
+# suppressed downstream. The value is also a BOUNDED run of quote/backtick/
+# whitespace-free words (see ``_KEYWORD_VALUE`` below): unbounded like the
+# upstream body would let an unterminated quote retry an unbounded scan for its
+# own close (the same class of ReDoS risk NpmDetector/JwtFullTokenDetector
+# above already guard against), and a length past the bound cannot be a
+# real single credential.
+#
+# The noun vocabulary (``_keyword.DENYLIST``) is upstream's own, not re-typed —
+# only the regex SHAPE around it is this repo's. Reimplements only the one
+# regex table `scan_line` ever reaches: detect-secrets scans with
+# ``filename='adhoc-string-scan'`` (no extension), so
+# ``KeywordDetector.analyze_line``'s file-type dispatch always falls back to
+# ``QUOTES_REQUIRED_DENYLIST_REGEX_TO_GROUP`` — the other filetype-specific
+# tables in ``REGEX_BY_FILETYPE`` are unreachable through this engine and are
+# not reimplemented.
+_KEYWORD_QUOTE = r"[\"']"
+# A single word excludes whitespace, both quote characters, and the backtick;
+# up to 8 such words joined by a single space/tab is generous enough for a
+# diceware passphrase (`correct horse battery staple`) while remaining a hard
+# ceiling no keyword-adjacent prose paragraph can cross.
+_KEYWORD_WORD = r"[^\s\"'`]{1,64}"
+_KEYWORD_VALUE = rf"{_KEYWORD_WORD}(?:[ \t]{_KEYWORD_WORD}){{0,7}}"
+KEYWORD_VALUE_MAX_LEN = 8 * 64 + 7
+# Bounded affix/closing runs, matching this module's own bounded-quantifier
+# convention rather than upstream's unbounded `\w*`.
+_KEYWORD_NOUN = "(?:" + "|".join(_keyword.DENYLIST) + r")\w{0,40}"
+_KEYWORD_CLOSING = r"[]'\"]{0,2}"
+
+
+class BoundedKeywordDetector(RegexBasedDetector):
+    """Secret-sounding field names with a length- and shape-bounded value.
+
+    Each pattern below carries exactly ONE capture group: unlike upstream's
+    ``KeywordDetector`` (a plain ``BasePlugin`` with its own ``analyze_string``
+    and per-arm group index), ``RegexBasedDetector.analyze_string`` reports
+    ``regex.findall(string)`` and yields every truthy submatch of a tuple
+    result — a second group would be reported as a secret of its own."""
+
+    secret_type = "Secret Keyword"  # noqa: S105 — a detector label, not a secret
+    denylist = [  # noqa: RUF012
+        # my_password = "v" / api_key: "v" / secret == "v" / api_key => "v"
+        re.compile(
+            rf"{_KEYWORD_NOUN}{_KEYWORD_CLOSING}\s*(?:={{1,3}}|!={{1,2}}|=>|:)"
+            rf"\s*{_KEYWORD_QUOTE}({_KEYWORD_VALUE}){_KEYWORD_QUOTE}",
+            re.IGNORECASE,
+        ),
+        # if ("v" == my_password_secure)
+        re.compile(
+            rf"{_KEYWORD_QUOTE}({_KEYWORD_VALUE}){_KEYWORD_QUOTE}"
+            rf"\s*[!=]{{2,3}}\s*\w{{0,40}}{_KEYWORD_NOUN}"
+        ),
+        # private_key "v"; — a config directive's argument sits directly
+        # beside its keyword, so upstream's `[^\s]{0,50}?` slop between them is
+        # dropped rather than bounded: nothing legitimate needs it.
+        re.compile(
+            rf"{_KEYWORD_NOUN}\s+{_KEYWORD_QUOTE}({_KEYWORD_VALUE}){_KEYWORD_QUOTE};",
+            re.IGNORECASE,
+        ),
+    ]
