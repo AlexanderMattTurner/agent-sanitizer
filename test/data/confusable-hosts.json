@@ -1,0 +1,164 @@
+{
+  "_comment": "Corpus for the confusable-host rule (src/confusable-host.mjs). SINGLE SOURCE: every test that scores the rule, and any external benchmark harness, reads this file rather than restating cases. `benign` is the half that decides whether the rule is honest — real internationalized domain labels across many scripts, every one of which must produce ZERO findings; a rule that flags one of these is trading a real false positive for recall. `attacks` carries the expected severity per label, and the two tiers are evidential strength rather than attack class: `warning` for a label whose whole TR39 skeleton is pure ASCII, so it reads as an ASCII name outright, and `note` for a label that carries a cross-script confusable but keeps an unmapped glyph, so it reads as no ASCII name — thin evidence, since an ordinary word with one look-alike letter produces the same shape. `misses` are vectors the rule does NOT catch, kept here so the residual is a tested fact rather than a claim in a doc.",
+
+  "benign": [
+    { "label": "münchen", "script": "Latin", "note": "German umlaut" },
+    { "label": "bücher", "script": "Latin", "note": "German umlaut" },
+    { "label": "köln", "script": "Latin", "note": "German umlaut" },
+    { "label": "français", "script": "Latin", "note": "French cedilla" },
+    { "label": "société", "script": "Latin", "note": "French acute" },
+    { "label": "québec", "script": "Latin", "note": "French acute" },
+    { "label": "españa", "script": "Latin", "note": "Spanish tilde" },
+    { "label": "niño", "script": "Latin", "note": "Spanish tilde" },
+    { "label": "piñata", "script": "Latin", "note": "Spanish tilde" },
+    { "label": "café", "script": "Latin", "note": "French acute" },
+    { "label": "naïve", "script": "Latin", "note": "diaeresis" },
+    { "label": "türkiye", "script": "Latin", "note": "Turkish" },
+    { "label": "çiçek", "script": "Latin", "note": "Turkish cedilla" },
+    {
+      "label": "İstanbul",
+      "script": "Latin",
+      "note": "Turkish dotted capital I"
+    },
+    { "label": "örebro", "script": "Latin", "note": "Swedish" },
+    { "label": "malmö", "script": "Latin", "note": "Swedish" },
+    { "label": "ålesund", "script": "Latin", "note": "Norwegian" },
+    { "label": "brønnøy", "script": "Latin", "note": "Norwegian slashed o" },
+    { "label": "århus", "script": "Latin", "note": "Danish" },
+    { "label": "ísland", "script": "Latin", "note": "Icelandic" },
+    { "label": "zürich", "script": "Latin", "note": "Swiss German" },
+    { "label": "genève", "script": "Latin", "note": "Swiss French" },
+    { "label": "россия", "script": "Cyrillic", "note": "skeleton keeps и/я" },
+    { "label": "москва", "script": "Cyrillic", "note": "skeleton keeps м/к/в" },
+    { "label": "президент", "script": "Cyrillic" },
+    { "label": "правительство", "script": "Cyrillic" },
+    { "label": "новости", "script": "Cyrillic" },
+    { "label": "почта", "script": "Cyrillic" },
+    { "label": "здоровье", "script": "Cyrillic" },
+    { "label": "работа", "script": "Cyrillic" },
+    { "label": "мвд", "script": "Cyrillic" },
+    {
+      "label": "рф",
+      "script": "Cyrillic",
+      "note": "the Russian ccTLD label itself"
+    },
+    { "label": "ελλάδα", "script": "Greek" },
+    { "label": "αθήνα", "script": "Greek" },
+    { "label": "ελληνικά", "script": "Greek" },
+    { "label": "κόσμος", "script": "Greek" },
+    { "label": "日本語", "script": "Han" },
+    {
+      "label": "例え",
+      "script": "Han+Hiragana",
+      "note": "Japanese mixes scripts by nature"
+    },
+    { "label": "東京", "script": "Han" },
+    { "label": "北京", "script": "Han" },
+    { "label": "中国", "script": "Han" },
+    { "label": "대한민국", "script": "Hangul" },
+    { "label": "서울", "script": "Hangul" },
+    { "label": "한국", "script": "Hangul" },
+    { "label": "العربية", "script": "Arabic" },
+    { "label": "مصر", "script": "Arabic" },
+    { "label": "السعودية", "script": "Arabic" },
+    { "label": "भारत", "script": "Devanagari" },
+    { "label": "हिन्दी", "script": "Devanagari" },
+    { "label": "ไทย", "script": "Thai" },
+    { "label": "กรุงเทพ", "script": "Thai" },
+    {
+      "label": "istanbul",
+      "script": "ASCII",
+      "note": "pure ASCII is never a pretender"
+    }
+  ],
+
+  "attacks": [
+    {
+      "label": "аpple",
+      "reads": "apple",
+      "severity": "warning",
+      "script": "Cyrillic"
+    },
+    {
+      "label": "раураӏ",
+      "reads": "paypal",
+      "severity": "warning",
+      "script": "Cyrillic",
+      "note": "every letter is Cyrillic, yet the whole label skeletons to ASCII"
+    },
+    {
+      "label": "ѕcript",
+      "reads": "script",
+      "severity": "warning",
+      "script": "Cyrillic"
+    },
+    {
+      "label": "gооgle",
+      "reads": "google",
+      "severity": "warning",
+      "script": "Cyrillic"
+    },
+    {
+      "label": "аmazon",
+      "reads": "amazon",
+      "severity": "warning",
+      "script": "Cyrillic"
+    },
+    {
+      "label": "githυb",
+      "reads": "github",
+      "severity": "warning",
+      "script": "Greek"
+    },
+    {
+      "label": "ораі",
+      "reads": "opai",
+      "severity": "warning",
+      "script": "Cyrillic"
+    },
+    {
+      "label": "binаnce",
+      "reads": "binance",
+      "severity": "warning",
+      "script": "Cyrillic"
+    },
+    {
+      "label": "сoinbase",
+      "reads": "coinbase",
+      "severity": "warning",
+      "script": "Cyrillic"
+    },
+    {
+      "label": "аppleм",
+      "reads": "appleм",
+      "severity": "note",
+      "script": "Cyrillic+Latin",
+      "note": "unmapped м suppresses the strong rule, leaving the quiet mixed-script tier"
+    },
+    {
+      "label": "gооgleж",
+      "reads": "googleж",
+      "severity": "note",
+      "script": "Cyrillic+Latin"
+    }
+  ],
+
+  "misses": [
+    {
+      "label": "мicrosoft",
+      "why": "Cyrillic м has no TR39 ASCII mapping, so the skeleton keeps it (мicrosoft) and the label reads as no ASCII name. The mixed-script tier misses it too: that tier fires on a confusable glyph sitting among Latin letters, and м is not a confusable at all, so the label carries no finding to mark."
+    },
+    {
+      "label": "αρριε",
+      "why": "Greek ε has no TR39 mapping to Latin e, so the skeleton keeps it (appiε) and the label is not claiming to be an ASCII name. Single-script, so no mixed-script note either."
+    },
+    {
+      "label": "paypaI",
+      "why": "ASCII-only lookalike (capital I for lowercase l). Declared out of scope: skeleton('paypaI') is 'paypai', and flagging I-versus-l in general text is a precision catastrophe."
+    },
+    {
+      "label": "rnicrosoft",
+      "why": "ASCII-only lookalike (rn for m). Same out-of-scope class as paypaI."
+    }
+  ]
+}

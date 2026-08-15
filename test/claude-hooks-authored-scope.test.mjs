@@ -28,43 +28,12 @@ import {
   authoredScopeDecision,
   sanitizeAuthoredContent,
 } from "../claude-hooks/lib/authored-content.mjs";
-import { REHYDRATED_TOOLS } from "../claude-hooks/lib/placeholder-grammar.mjs";
-import { WRITE_SHAPED_TOOLS } from "../claude-hooks/pretooluse-sanitize.mjs";
-import { DEFAULT_FIELDS } from "../src/confusables.mjs";
+import { liveToolSurface } from "./helpers/tool-surface.mjs";
 
 // A raw ESC built in-language: a literal one in a shell string trips this repo's
 // own PreToolUse guard, which is the layer under test.
-const ESC = "";
+const ESC = "\u001b";
 const ANSI_PAYLOAD = `before${ESC}[2Jafter`;
-
-/**
- * Every tool name the package elsewhere claims to know, plus a representative
- * `mcp__*` sample. Layer 3 must have taken a position on each one.
- *
- * The two hook-side sets are IMPORTED, not source-read: an earlier draft parsed
- * their `new Set([...])` literals out of the files, which broke under Stryker —
- * the mutation runner instruments exactly those files, so the regex saw
- * rewritten source and the partition assertion fired on a healthy tree. A
- * hand-copied list would be the drift this file exists to catch, so importing
- * the live objects is the only spelling that is neither a copy nor a parser
- * approximation.
- */
-function liveToolSurface() {
-  // Non-vacuity: an emptied set would silently shrink the surface and make the
-  // partition assertion pass over almost nothing.
-  assert.ok(REHYDRATED_TOOLS.size > 0, "REHYDRATED_TOOLS is empty");
-  assert.ok(WRITE_SHAPED_TOOLS.size > 0, "WRITE_SHAPED_TOOLS is empty");
-  return new Set([
-    ...Object.keys(DEFAULT_FIELDS),
-    ...REHYDRATED_TOOLS,
-    ...WRITE_SHAPED_TOOLS,
-    // MCP tool names are server-defined, so no list can enumerate them; a
-    // sample is enough to pin which SIDE of the partition they land on.
-    "mcp__github__create_issue",
-    "mcp__slack__post_message",
-    "mcp__linear__create_comment",
-  ]);
-}
 
 /**
  * A tool_input carrying `value` in the field `spec` addresses, so the positive

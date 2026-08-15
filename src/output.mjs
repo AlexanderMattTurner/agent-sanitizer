@@ -37,6 +37,7 @@ import {
   LONE_SURROGATE_RE,
 } from "./layer1.mjs";
 import {
+  describeConfusableHosts,
   describeExfil,
   describeHtmlSanitized,
   HTML_UNPARSEABLE_WARNING,
@@ -47,6 +48,7 @@ import {
   finding,
   note,
   noteMessages,
+  SEVERITY,
   warning,
   warningMessages,
 } from "./severity.mjs";
@@ -432,7 +434,7 @@ async function applyMarkdownPipeline(state, { html, exfilScan, deadline }) {
       );
   };
   refuseIfSpent();
-  let sanitizeHtml, detectExfil;
+  let sanitizeHtml, detectExfil, detectConfusableHosts;
   /* c8 ignore start -- a rejected dynamic import of a module that ships in
      this very package (not an optional peer dep) requires corrupting
      node_modules or the filesystem to trigger; there's no clean way to force
@@ -440,7 +442,8 @@ async function applyMarkdownPipeline(state, { html, exfilScan, deadline }) {
      mock.module needs --experimental-test-module-mocks, which isn't wired
      into this repo's test script). Fail loudly with context if it ever fires. */
   try {
-    ({ sanitizeHtml, detectExfil } = await import("./html.mjs"));
+    ({ sanitizeHtml, detectExfil, detectConfusableHosts } =
+      await import("./html.mjs"));
   } catch (importErr) {
     throw new Error(
       "agent-sanitizer: failed to load ./html.mjs, so Layers 2/3 could not run " +
@@ -507,6 +510,21 @@ async function applyMarkdownPipeline(state, { html, exfilScan, deadline }) {
         finding(
           threats.some((threat) => threat.autoFetched),
           describeExfil(threats),
+        ),
+      );
+    }
+    // Confusable hosts ride the same scan flag but are a SEPARATE finding: a
+    // look-alike domain needs no exfil-shaped query to be the whole attack, and
+    // the two say different things to a reader. Tier per ./confusable-host.mjs,
+    // and the loudest member wins the shared line.
+    refuseIfSpent();
+    const confusable = detectConfusableHosts(inputText);
+    if (confusable) {
+      state.found.push(CATEGORY.CONFUSABLE_HOST);
+      state.findings.push(
+        finding(
+          confusable.some((threat) => threat.severity === SEVERITY.WARNING),
+          describeConfusableHosts(confusable),
         ),
       );
     }
