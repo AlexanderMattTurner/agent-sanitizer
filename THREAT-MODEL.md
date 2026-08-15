@@ -183,7 +183,7 @@ normalizer so they cannot drift.
 
 **Detection.** detect-secrets is the single oracle — its bundled plugins plus
 gitleaks-sourced ones for formats it lacks — extended with a regex
-for the unquoted `key=value` shapes `KeywordDetector` misses, PEM block
+for the unquoted `key=value` shapes the keyword detector misses, PEM block
 collapse, cross-line reassembly of a secret split across lines, and exact-match
 redaction of caller-supplied env-var **values**. Each hit becomes
 `[REDACTED: <label>]` and its label joins `found`.

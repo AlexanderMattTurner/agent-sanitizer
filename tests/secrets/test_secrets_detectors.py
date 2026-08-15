@@ -14,7 +14,7 @@ import agent_sanitizer.secrets.engine as E
 from redactor_helpers import SAMPLES, run_plain
 
 _DETECTORS_JSON = D.DETECTORS_FILE
-_INLINE_DETECTOR = "JwtFullTokenDetector"
+_INLINE_DETECTORS = ("JwtFullTokenDetector", "BoundedKeywordDetector")
 
 
 def test_custom_plugins_derived_from_detector_ssot():
@@ -22,7 +22,7 @@ def test_custom_plugins_derived_from_detector_ssot():
         entry["const"] for entry in json.loads(_DETECTORS_JSON.read_text())["detectors"]
     ]
     names = [plugin["name"] for plugin in E.CUSTOM_PLUGINS]
-    assert names == [*configured, _INLINE_DETECTOR]
+    assert names == [*configured, *_INLINE_DETECTORS]
     assert all(p["path"].endswith("detectors.py") for p in E.CUSTOM_PLUGINS)
     for name in names:
         assert isinstance(getattr(D, name, None), type), (

@@ -148,7 +148,12 @@ def test_redact_line_overlapping_secrets_no_tail_leak(monkeypatch):
     out = E._redact_line(f"x={long_val}", False, None, found)
     assert out == f"x={_ph('Long')}"
     assert short_val not in out and "efgh5678" not in out
-    assert found == ["Long"]
+    # "Short"'s only occurrence overlaps the accepted "Long" span, so its bytes
+    # are already gone — but its type still appears: the covered detection
+    # is reported, not silently dropped (the fix for the incident's second
+    # amplifier, where a real credential redacted under a covering span used
+    # to vanish from the operator warning entirely).
+    assert found == ["Long", "Short"]
 
 
 def test_cross_line_no_newline_is_noop():
