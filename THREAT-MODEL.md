@@ -676,3 +676,44 @@ is only as durable as the files carrying it.
 The knob adds no layer and changes no layer's semantics. Ambiguous input still
 fails open at the detection level (precision over recall), as it always has —
 that is a separate, and unrelated, sense of the phrase.
+
+## Benchmark (`test/injection-corpus.test.mjs`)
+
+The published "invisible prompt injection" corpora fall in two families, and
+only one benchmarks a deterministic transform. Model-susceptibility suites
+(AgentDojo, InjecAgent, Agent Security Bench, LLMail-Inject, Reverse CAPTCHA)
+measure whether a _model_ obeys an injection; scoring against them needs an LLM
+in the loop, and most inject in plaintext — a channel this library does not
+touch. Payload corpora do apply, because ground truth ("this text carries
+operator-hidden content") is checkable with no model.
+
+`test/injection-corpus.test.mjs` is that benchmark, built the way the rest of
+this repo pins behavior: a self-authored, append-only corpus. It transcribes
+each documented encoding — the encoders in the file are the cited spec, not a
+vendored dependency — over benign carrier and payload text, and scores the pair
+a sanitizer is actually responsible for: the concealment is **neutralized** and
+the finding is **reported at the right tier**. One vector per named technique:
+
+- Unicode tags (garak `goodside.Tag`; Cisco Unicode-tag advisory) → Layer 1.
+- Zero-width binary (Reverse CAPTCHA) → Layer 1.
+- Variation-selector smuggling (sneaky-bits; garak `badchars`) → Layer 1.
+- ANSI hidden text (garak `ansiescape`) → Layer 1.
+- Bidi override (Trojan Source; garak `badchars`) → Layer 1.
+- Markdown-image exfil URL (garak `web_injection.MarkdownImageExfil`) → Layer 3.
+- Homoglyph command (garak `smuggling.HomoglyphObfuscation`) → Layer 4.
+
+Two things the corpus fixes that a naive harness gets wrong. It drives Layer 4
+through the wired `namespace-guard` seam, not `sanitize()` — which never reaches
+confusable folding, so a one-entry-point harness reports a false 0% on every
+homoglyph vector. And it pins the _observed_ verdict, not a wished one: a short
+bidi override is stripped and reported (`cf-format`) but is not payload-shaped,
+so `classifyPrompt` passes it — recorded as a measured partial-coverage point
+rather than asserted away.
+
+The benign twin is load-bearing. Every public corpus is positives-only, and a
+recall-only score rewards the over-triggering this repo forbids ("flag
+everything" scores 100%). The corpus pairs the vectors with legitimate inputs —
+preserved ZWNJ/ZWJ joiners, emoji sequences, non-Latin prose, long-but-benign
+opaque-token URLs (presigned S3, OAuth callbacks) — asserting **zero** findings,
+so the number that ships is precision alongside recall. `INJECTION_REPORT=1
+node --test test/injection-corpus.test.mjs` prints the roll-up.
