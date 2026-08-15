@@ -150,10 +150,12 @@ export function recordInstructionsLoaded(sessionId) {
  * instruction files that load at launch, and everything a subdirectory loads
  * later is scanned by the event. No scan, and nothing says so.
  *
- * The notice names the OBSERVABLE — no scan ran — and both of its causes, because
- * the marker cannot tell a host that never emits the event from an operator who
- * switched the hook off in AGENT_SANITIZER_DISABLED_HOOKS, and asserting the
- * first would send an operator who chose the second to the wrong fix.
+ * The notice names the OBSERVABLE — no scan ran — and all three causes, because
+ * the marker cannot tell them apart: a host that never wired the event to
+ * scan-loaded-instructions, a Claude Code that does not emit it, and the hook
+ * switched off in AGENT_SANITIZER_DISABLED_HOOKS; asserting one sends a reader
+ * who is in another to the wrong fix. The wiring cause leads because it is the
+ * only one the reader can repair in this session, and nothing else reports it.
  * @param {string} [sessionId]  the harness's session identity, so the answer
  *   belongs to THIS session (see instructionsLoadedFile)
  * @returns {string | null}
@@ -168,9 +170,11 @@ export function instructionsLoadedGapNotice(sessionId) {
     "instruction files loaded from SUBDIRECTORIES (a nested CLAUDE.md, a " +
     "directory-scoped rule) are reaching the model unscanned for hidden " +
     "Unicode — the session-start scan covers only the files loaded at launch. " +
-    "Tell the user, and name both causes: a Claude Code that does not emit " +
-    "the event (upgrading restores the coverage), or scan-loaded-instructions " +
-    "switched off in AGENT_SANITIZER_DISABLED_HOOKS."
+    "Tell the user, and name all three causes: this host never wired the " +
+    "InstructionsLoaded event to scan-loaded-instructions (wiring it restores " +
+    "the coverage), a Claude Code that does not emit the event (upgrading " +
+    "restores it), or scan-loaded-instructions switched off in " +
+    "AGENT_SANITIZER_DISABLED_HOOKS."
   );
 }
 

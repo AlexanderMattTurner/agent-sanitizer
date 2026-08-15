@@ -303,9 +303,12 @@ neutralization is to strip the payload from disk (so no reload re-reads it) and
 tell the model to treat what it just read as untrusted data. Auto-cleaning is
 confined to `CLAUDE_PROJECT_DIR` in both — an ancestor file, or one under
 `~/.claude`, is shared with every other project on the machine, so it is reported
-through the cross-hook alert and never rewritten. A Claude Code build that emits
-no `InstructionsLoaded` event loses the lazy half entirely; the PreToolUse gate
-says so once per session rather than leaving the gap silent.
+through the cross-hook alert and never rewritten. Three things lose the lazy half
+entirely: a host that never wired the `InstructionsLoaded` event to
+`scan-loaded-instructions`, a Claude Code build that does not emit that event,
+and `scan-loaded-instructions` switched off in `AGENT_SANITIZER_DISABLED_HOOKS`.
+Nothing on disk tells them apart, so the PreToolUse gate names all three, once
+per session, rather than leaving the gap silent.
 
 That table is a claim about someone else's product, so the event that names a
 loaded file is also what falsifies it. `contextScopeContradiction` checks every

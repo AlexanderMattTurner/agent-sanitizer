@@ -66040,7 +66040,7 @@ function instructionsLoadedGapNotice(sessionId) {
   const noticeFile = instructionsLoadedNoticeFile(sessionId);
   if (markerIsTrusted(noticeFile)) return null;
   writeSentinelFile(noticeFile);
-  return "agent-sanitizer: no InstructionsLoaded scan has run this session, so instruction files loaded from SUBDIRECTORIES (a nested CLAUDE.md, a directory-scoped rule) are reaching the model unscanned for hidden Unicode \u2014 the session-start scan covers only the files loaded at launch. Tell the user, and name both causes: a Claude Code that does not emit the event (upgrading restores the coverage), or scan-loaded-instructions switched off in AGENT_SANITIZER_DISABLED_HOOKS.";
+  return "agent-sanitizer: no InstructionsLoaded scan has run this session, so instruction files loaded from SUBDIRECTORIES (a nested CLAUDE.md, a directory-scoped rule) are reaching the model unscanned for hidden Unicode \u2014 the session-start scan covers only the files loaded at launch. Tell the user, and name all three causes: this host never wired the InstructionsLoaded event to scan-loaded-instructions (wiring it restores the coverage), a Claude Code that does not emit the event (upgrading restores it), or scan-loaded-instructions switched off in AGENT_SANITIZER_DISABLED_HOOKS.";
 }
 function invisibleCharAlert() {
   if (!markerIsTrusted(ALERT_FILE)) return null;
