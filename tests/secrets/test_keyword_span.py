@@ -17,10 +17,13 @@ finding — since a test that only checks ``found`` cannot fail on a match that
 is merely too wide.
 """
 
+import re
+
 import pytest
 
 import agent_sanitizer.secrets.detectors as D
 import agent_sanitizer.secrets.engine as E
+from agent_sanitizer.secrets.placeholders import placeholder
 from redactor_helpers import SAMPLES, cfg, run_map, run_plain
 
 # The exact identifier list from the incident report, wrapped in the same
@@ -89,12 +92,13 @@ def test_a_keyword_span_never_exceeds_the_published_bound():
     newline — so no future change can silently widen the span back out.
     A positive marker (asserted below) proves the corpus isn't vacuously empty
     for this type."""
+    keyword_placeholder = placeholder("Secret Keyword")
     keyword_pairs = []
     for sample in SAMPLES:
         token = "".join(sample["parts"])
         view = run_map(f"key: {token}")
         keyword_pairs.extend(
-            p for p in view["pairs"] if sample["name"] == "Secret Keyword"
+            p for p in view["pairs"] if p["placeholder"] == keyword_placeholder
         )
     assert keyword_pairs, "no Secret Keyword sample produced a pair — corpus is vacuous"
     for pair in keyword_pairs:
@@ -123,6 +127,10 @@ def test_a_keyword_span_never_exceeds_the_published_bound():
             'private_key "abcd1234efgh5678";',
             "abcd1234efgh5678",
         ),
+        # A backtick is allowed in the BODY (only excluded as a delimiter):
+        # a password containing one is a legitimate shape and must still
+        # redact, not be silently dropped for the sake of the incident fix.
+        ("backtick inside a real password", 'password: "P@ss`word"', "P@ss`word"),
     ],
 )
 def test_recall_is_unchanged_for_every_arm(label, text, expected_value):
@@ -131,13 +139,52 @@ def test_recall_is_unchanged_for_every_arm(label, text, expected_value):
     assert [p["original"] for p in view["pairs"]] == [expected_value], label
 
 
+def test_every_genuine_occurrence_of_a_repeated_value_is_found():
+    """Two DIFFERENT keyword-anchored fields sharing one value are two real
+    matches, not one — both must redact, not just the first (the amplifier-A
+    fix locates every real match, not merely the first occurrence found)."""
+    text = 'password: "abc123xyz"; token_secret = "abc123xyz";'
+    view = run_map(text, cfg(web_ingress=True))
+    assert "abc123xyz" not in view["text"]
+    assert len(view["pairs"]) == 2
+    assert all(p["original"] == "abc123xyz" for p in view["pairs"])
+
+
+def test_metadata_field_gate_now_decides_on_the_keyword_path():
+    """A real match offset (:func:`_keyword_candidate_spans`) lets
+    ``_is_metadata_field`` actually decide on the keyword path instead of
+    declining, as it always did before this fix. ``password_name`` names a
+    field, not a secret, and is left alone; a real ``password`` elsewhere on
+    the same line still redacts."""
+    text = 'password_name = "S3cretValue99"; password = "S3cretValue99different"'
+    view = run_map(text, cfg(web_ingress=False))
+    assert view["text"] == (
+        'password_name = "S3cretValue99"; password = "[REDACTED: Secret Keyword]"'
+    )
+    assert [p["original"] for p in view["pairs"]] == ["S3cretValue99different"]
+
+
+def test_tail_beyond_a_covering_structural_span_is_not_leaked():
+    """The keyword grammar's whitespace-joined words let a captured value run
+    past a real credential into adjacent prose (``ghp_<token> tail9xyzQ``). A
+    structural detector's shorter span must never win arbitration outright and
+    leave that non-overlapping tail in cleartext — length must be the primary
+    sort key, structural only a tie-break."""
+    token = "ghp_" + "A1b2C3d4E5" * 4
+    text = f'secret = "{token} tail9xyzQ"; end'
+    out, found = E.redact(text, cfg(web_ingress=True))
+    assert "tail9xyzQ" not in out
+    assert token not in out
+
+
 def test_a_value_past_the_word_bound_is_still_redacted_by_the_field_path():
     """The bound must refuse to match, never truncate: a truncated match would
     redact a prefix and leave the tail in cleartext — the exact defect class
     the GitHub/GitLab/JWT reimplementations in detectors.py already fix for
     their own formats. A contiguous value past the keyword bound is still
     caught by FIELD_VALUE_RE, which has no upper bound."""
-    token = "aB3" * 100
+    token = "aB3" * (D.KEYWORD_VALUE_MAX_LEN // 3 + 10)
+    assert len(token) > D.KEYWORD_VALUE_MAX_LEN
     text = f'password: "{token}"'
     assert not any(p.findall(text) for p in D.BoundedKeywordDetector.denylist)
     out, found = E.redact(text)
@@ -184,7 +231,9 @@ def test_bounded_keyword_detector_is_the_registered_secret_keyword_plugin():
     with E.configure_plugins():
         cls = get_mapping_from_secret_type_to_class()["Secret Keyword"]
     assert cls.__name__ == "BoundedKeywordDetector"
-    assert len(cls.denylist) == len(D.BoundedKeywordDetector.denylist)
+    assert [p.pattern for p in cls.denylist] == [
+        p.pattern for p in D.BoundedKeywordDetector.denylist
+    ]
 
 
 def test_the_bundled_detector_really_did_over_capture():
@@ -192,8 +241,6 @@ def test_the_bundled_detector_really_did_over_capture():
     pattern (quoted verbatim, not imported — the point is this repo no longer
     loads it), over-captures hundreds of characters. Without this, the tests
     above could pass identically against a detector that never fires at all."""
-    import re
-
     upstream_quote = r"[\'\"`]"
     upstream_secret = r"(?=[^\v\'\"]*)(?=\w+)[^\v\'\"]*[^\v,\'\"`]"
     upstream = re.compile(
@@ -215,7 +262,10 @@ def test_the_bundled_detector_really_did_over_capture():
     assert not any(p.findall(_INCIDENT_BODY) for p in D.BoundedKeywordDetector.denylist)
 
 
-def test_run_plain_matches_map_mode_on_the_incident():
+def test_incident_is_clean_in_plain_mode_and_agrees_with_map_mode():
     """Sanity: the plain-mode API used by the rest of the suite agrees with
-    map mode on the headline case."""
+    map mode (both report the incident text as clean) on the headline case."""
     assert run_plain(_INCIDENT_ONE_LINE, cfg(web_ingress=True)) is None
+    assert (
+        run_map(_INCIDENT_ONE_LINE, cfg(web_ingress=True))["text"] == _INCIDENT_ONE_LINE
+    )

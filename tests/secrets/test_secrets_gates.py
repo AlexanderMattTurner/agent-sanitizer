@@ -94,6 +94,7 @@ _SHAPE_FIXTURES = {
     # test_secrets_engine.py::test_is_timestamp.
     "_is_timestamp": ("2024-01-15T10:30:00.000000Z",),
     "_is_version": ("v2.0.1", "1.2.3-alpha.build.abcdef"),
+    "_is_markdown_code_prose": ("run `--api-key` with your own credentials",),
 }
 _NAME_TRUST_FIXTURES = {
     "_is_config_attr_reference": (

@@ -48,7 +48,13 @@ CASES: dict[str, tuple[str, str]] = {
 # to write for them. Listed with a reason rather than silently omitted: that is
 # what makes the partition assertion below a real cover check instead of a
 # restatement of whichever gates someone happened to think of.
-NOT_FIELD_REACHABLE: dict[str, str] = {}
+NOT_FIELD_REACHABLE: dict[str, str] = {
+    "_is_markdown_code_prose": (
+        "keyword-path only — FIELD_VALUE_RE's value class excludes both "
+        "whitespace and backticks, and this gate requires each, so no "
+        "field-value match can reach it (engine.py's own docstring says so)"
+    ),
+}
 
 # "" proves the bare value is benign in the first place: without it every
 # assertion below could pass because the value redacts identically with and

@@ -9,12 +9,9 @@ caller-supplied env-var values.
 Everything environment-specific is supplied by the caller through
 :class:`~agent_sanitizer.secrets.config.RedactorConfig` — the engine discovers
 nothing on its own. detect-secrets is the ONE detection oracle; no second port
-to keep in sync. The one exception is the ``Secret Keyword`` type, whose
-redaction span :func:`_keyword_candidate_spans` recovers by re-running its
-plugin's OWN registered ``denylist`` patterns directly — not a second
-detector, since detect-secrets reports a keyword hit as a bare value with no
-offset, and there is no way to recover "redact only this occurrence" from
-that report once several textually distinct matches share one value.
+to keep in sync. The one exception is ``Secret Keyword``'s redaction SPAN,
+which :func:`_keyword_candidate_spans` recovers by re-running its own
+registered ``denylist`` patterns (see that function's docstring).
 
 The detect-secrets ``secret_type -> class`` mapping is a process-global
 ``lru_cache(maxsize=1)`` built from whichever settings were active at the FIRST
@@ -29,6 +26,7 @@ import json
 import re
 from dataclasses import dataclass
 from pathlib import Path
+from typing import NamedTuple
 from urllib.parse import urlsplit
 
 from detect_secrets.core.plugins.util import get_mapping_from_secret_type_to_class
@@ -598,6 +596,16 @@ def _is_metadata_field(c: Candidate) -> bool:
     return bool(field) and field.lower().endswith(_METADATA_SUFFIXES)
 
 
+# A value that spans whitespace AND embeds a backtick is markdown prose, never
+# a credential: a contiguous secret has no whitespace, a spaced passphrase has
+# no backtick. A pure SHAPE gate — it reads only the value's own bytes, so it
+# applies on every ingress.
+def _is_markdown_code_prose(c: Candidate) -> bool:
+    """True when the value is backtick-bearing, whitespace-spanning markdown
+    prose the keyword grammar's bounded word-run over-captured, not a secret."""
+    return "`" in c.value and any(ch.isspace() for ch in c.value)
+
+
 # A value that is *wholly* an environment-variable reference names a secret
 # without holding it. Two families, both anchored (\Z) so the WHOLE value must be
 # the reference — a real token that merely begins with one of these words still
@@ -994,26 +1002,6 @@ def _eligible_prefilter() -> tuple[re.Pattern[str], ...]:
     )
 
 
-@functools.cache
-def _structural_secret_types() -> frozenset[str]:
-    """Secret types whose match SHAPE is the credential — the type label of
-    every plugin in :data:`PLUGINS_HIGH_CONFIDENCE`, read from the live
-    secret_type->class mapping rather than a hand-kept name list, so it cannot
-    drift from that set. Used by :func:`_redact_line` to accept a structural
-    detection over an overlapping fuzzy ``Secret Keyword`` one regardless of
-    which is longer — a keyword value is a guess about a delimiter, a
-    structural match's shape IS the credential. ``functools.cache``'d and
-    cleared alongside :func:`_eligible_prefilter`, for the same reason: the
-    active plugin set differs between the default and high-confidence configs.
-    """
-    high_confidence_names = {p["name"] for p in PLUGINS_HIGH_CONFIDENCE}
-    return frozenset(
-        secret_type
-        for secret_type, cls in get_mapping_from_secret_type_to_class().items()
-        if cls.__name__ in high_confidence_names
-    )
-
-
 def _cross_line_candidate_spans(
     collapsed: str, config: RedactorConfig
 ) -> list[tuple[int, int, str, str]]:
@@ -1126,6 +1114,7 @@ SHAPE_GATES = (
     _is_public_endpoint_url,
     _is_timestamp,
     _is_version,
+    _is_markdown_code_prose,
 )
 # NAME/CONVENTION gates: the verdict rests on something the author of the text
 # chose (a field name, a bare-word root, a path spelling), which text arriving
@@ -1155,38 +1144,32 @@ def is_benign(c: Candidate, *, web_ingress: bool) -> bool:
     return not web_ingress and any(gate(c) for gate in NAME_TRUST_GATES)
 
 
+_KEYWORD_SECRET_TYPE = detectors.BoundedKeywordDetector.secret_type
+
+
 def _keyword_candidate_spans(
     stripped: str, secrets: list[PotentialSecret], web_ingress: bool
 ) -> list[tuple[int, int]]:
-    """``(start, end)`` for every real match location of a ``Secret Keyword``
-    value already present in ``secrets`` (the same :func:`scan_line` result
-    :func:`_redact_line` scans for every other type).
+    """Deduplicated ``(start, end)`` for every real match location of a
+    ``Secret Keyword`` value already present in ``secrets`` (the same
+    :func:`scan_line` result :func:`_redact_line` scans for every other type).
 
-    detect-secrets applies its OWN default filters inside ``scan_line`` before
-    a ``PotentialSecret`` is ever yielded — ``is_not_alphanumeric_string``,
-    ``is_sequential_string``, ``is_potential_uuid``, ``is_likely_id_string``,
-    ``is_templated_secret`` and more (see ``detect_secrets.settings.Settings``)
-    — so this only re-runs :data:`detectors.BoundedKeywordDetector`'s OWN
-    ``denylist`` patterns to LOCATE a value ``scan_line`` already approved,
-    never to approve one itself; a value absent from ``secrets`` is skipped
-    regardless of what our patterns match. This is not a second detection
-    oracle: the patterns run are the exact ``denylist`` the plugin is
-    registered with, invoked directly only to recover the position
-    ``PotentialSecret`` discards — which is what lets every genuine occurrence
-    of a repeated value be found, rather than only the first, and what stops
-    an unrelated occurrence of that same string elsewhere on the line from
-    being swept in in the first place (see the module docstring).
-
-    A real match offset also lets ``value_start`` be populated here, so
-    ``_is_metadata_field`` and ``_is_benign_cursor`` can actually decide
-    instead of declining, as they did on the old value-only keyword path.
+    Re-runs :data:`detectors.BoundedKeywordDetector`'s OWN ``denylist``
+    patterns to LOCATE a value ``scan_line`` already approved (detect-secrets'
+    own default filters — ``is_not_alphanumeric_string``, ``is_sequential_string``,
+    etc. — already ran inside ``scan_line``); a value absent from ``secrets``
+    is skipped regardless of what our patterns match, so this is not a second
+    detection oracle. See ``detectors.py``'s module docstring for why the
+    engine needs real positions here at all.
     """
     values = {
-        s.secret_value for s in secrets if s.type == "Secret Keyword" and s.secret_value
+        s.secret_value
+        for s in secrets
+        if s.type == _KEYWORD_SECRET_TYPE and s.secret_value
     }
     if not values:
         return []
-    spans: list[tuple[int, int]] = []
+    spans: set[tuple[int, int]] = set()
     for pattern in detectors.BoundedKeywordDetector.denylist:
         for m in pattern.finditer(stripped):
             value = m.group(1)
@@ -1194,8 +1177,21 @@ def _keyword_candidate_spans(
                 continue
             candidate = Candidate(value=value, line=stripped, value_start=m.start(1))
             if not is_benign(candidate, web_ingress=web_ingress):
-                spans.append((m.start(1), m.end(1)))
-    return spans
+                spans.add((m.start(1), m.end(1)))
+    return sorted(spans)
+
+
+class _Group(NamedTuple):
+    """One detected value's redaction candidate: every occurrence span to
+    redact together, plus the arbitration key. ``is_structural`` is a literal,
+    not a lookup — every non-keyword type ``scan_line`` can emit (given
+    :data:`ALL_PLUGINS`) has a shape that IS the credential; only the keyword
+    type is a guess about a delimiter."""
+
+    length: int
+    is_structural: bool
+    occurrences: list[tuple[int, int]]
+    secret_type: str
 
 
 def _redact_line(
@@ -1220,24 +1216,21 @@ def _redact_line(
     the hot path should pass ``config.resolved_charset()`` to avoid re-resolving
     it per line.
 
-    Every detected value becomes a GROUP of one or more occurrence spans: for a
-    structural/prefix/keyword-noun type (``scan_line``'s report), every
-    occurrence of that exact string in the line, since the match SHAPE is the
-    credential and a value repeated on the line is the same credential twice;
-    for ``Secret Keyword``, the single real span :func:`_keyword_candidate_spans`
-    found, since a keyword value is a guess about a delimiter, not the
-    credential itself, and redacting an unrelated occurrence of that same
-    string elsewhere on the line would be a bug, not a floor.
+    Every detected value becomes a :class:`_Group` of one or more occurrence
+    spans: for a structural/prefix type, every occurrence of that exact
+    string in the line (the match SHAPE is the credential, so a repeat is the
+    same credential twice); for ``Secret Keyword``, only the real spans
+    :func:`_keyword_candidate_spans` found.
 
-    Groups are accepted structural-first, then longest-value-first, skipping
-    any occurrence whose original span overlaps a span already accepted — so a
-    short secret that is a SUBSTRING of a longer one doesn't leak the longer
-    secret's non-overlapping tail, and a real credential's structural detection
-    is never displaced by an overlapping ``Secret Keyword`` guess merely
-    because the guess's captured text happened to be as long or longer. A group
-    every one of whose occurrences lost that arbitration is still named in
-    ``found``: its bytes are removed by the wider span that covers it, and the
-    operator warning should say what was actually there, not drop it silently.
+    Groups are accepted longest-first, structural-first on a length TIE only
+    — never structural-first outright, which would let an accepted short
+    structural span leave a wider overlapping keyword group's non-overlapping
+    TAIL unredacted. Any occurrence overlapping an already-accepted span is
+    skipped, so a short secret that is a SUBSTRING of a longer one doesn't
+    leak the longer secret's non-overlapping tail. Every group still names its
+    type in ``found``, even one whose every occurrence lost arbitration: its
+    bytes are removed by the wider span that covers them regardless, and the
+    operator warning should say what was there, not drop it silently.
     """
     stripped, offsets = strip_invisible_with_map(line, charset)
     accepted: list[tuple[int, int, str]] = []
@@ -1247,39 +1240,39 @@ def _redact_line(
         return any(a_start < e and a_end > s for s, e in redacted_spans)
 
     secrets = list(scan_line(stripped))
-    groups: list[tuple[bool, int, list[tuple[int, int]], str]] = []
+    groups: list[_Group] = []
     for secret in secrets:
         value = secret.secret_value
-        if not value or secret.type == "Secret Keyword":
+        if not value or secret.type == _KEYWORD_SECRET_TYPE:
             continue
         occurrences = []
         start = stripped.find(value)
         while start != -1:
             occurrences.append((start, start + len(value)))
             start = stripped.find(value, start + len(value))
-        groups.append(
-            (
-                secret.type in _structural_secret_types(),
-                len(value),
-                occurrences,
-                secret.type,
-            )
-        )
-    for kw_start, kw_end in _keyword_candidate_spans(stripped, secrets, web_ingress):
-        groups.append(
-            (False, kw_end - kw_start, [(kw_start, kw_end)], "Secret Keyword")
-        )
+        groups.append(_Group(len(value), True, occurrences, secret.type))
+    keyword_spans = _keyword_candidate_spans(stripped, secrets, web_ingress)
+    groups.extend(
+        _Group(end - start, False, [(start, end)], _KEYWORD_SECRET_TYPE)
+        for start, end in keyword_spans
+    )
 
-    for is_structural, _length, occurrences, secret_type in sorted(
-        groups, key=lambda g: (g[0], g[1]), reverse=True
+    for group in sorted(
+        groups, key=lambda g: (g.length, g.is_structural), reverse=True
     ):
-        for start, end in occurrences:
+        for start, end in group.occurrences:
             orig_start, orig_end = offsets[start], offsets[end - 1] + 1
             if _overlaps(orig_start, orig_end):
                 continue
-            accepted.append((orig_start, orig_end, secret_type))
+            accepted.append((orig_start, orig_end, group.secret_type))
             redacted_spans.append((orig_start, orig_end))
-        found.append(secret_type)
+        # Reported even when every occurrence overlapped an already-accepted
+        # span: its bytes are still removed by that wider span, so the
+        # operator warning should name it, not drop it silently. `occurrences`
+        # is never actually empty (every group's construction above guarantees
+        # at least one), but the guard costs nothing and documents the claim.
+        if group.occurrences:
+            found.append(group.secret_type)
 
     if not accepted:
         return line
@@ -1412,17 +1405,16 @@ def configure_plugins(high_confidence: bool = False):
                 "detect_secrets.filters.allowlist.is_line_allowlisted"
             )
             get_mapping_from_secret_type_to_class.cache_clear()
-            # _eligible_prefilter() and _structural_secret_types() both read
-            # get_plugins(), which answers for WHICHEVER config is active —
-            # high_confidence and the default both run in this same process
-            # (the daemon serves both), and without this clear each stays
-            # cached for the wrong config. The two configs happen to agree on
-            # every _CROSS_LINE_ELIGIBLE_TYPES entry today (the only plugin
-            # PLUGINS_HIGH_CONFIDENCE drops is the keyword detector, which
-            # isn't cross-line-eligible), but that is not a premise these
-            # caches should rely on.
+            # _eligible_prefilter() reads get_plugins(), which answers for
+            # WHICHEVER config is active — high_confidence and the default both
+            # run in this same process (the daemon serves both), and without
+            # this clear the prefilter built under the first config active in
+            # the process stays cached for the other one too. The two configs
+            # happen to agree on every _CROSS_LINE_ELIGIBLE_TYPES entry today
+            # (the only plugin PLUGINS_HIGH_CONFIDENCE drops is the keyword
+            # detector, which isn't cross-line-eligible), but that is not a
+            # premise this cache should rely on.
             _eligible_prefilter.cache_clear()
-            _structural_secret_types.cache_clear()
             return self
 
         def __exit__(self, *exc):
@@ -1436,7 +1428,6 @@ def configure_plugins(high_confidence: bool = False):
             try:
                 get_mapping_from_secret_type_to_class.cache_clear()
                 _eligible_prefilter.cache_clear()
-                _structural_secret_types.cache_clear()
             finally:
                 settings_result = self._settings.__exit__(*exc)
             return settings_result
