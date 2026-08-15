@@ -32,7 +32,7 @@ import { liveToolSurface } from "./helpers/tool-surface.mjs";
 
 // A raw ESC built in-language: a literal one in a shell string trips this repo's
 // own PreToolUse guard, which is the layer under test.
-const ESC = "";
+const ESC = "\u001b";
 const ANSI_PAYLOAD = `before${ESC}[2Jafter`;
 
 /**

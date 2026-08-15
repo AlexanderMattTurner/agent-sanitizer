@@ -44,10 +44,18 @@ emit_output() {
 # diff.txt ever reaches the reviewer.
 raw_diff="$(mktemp)"
 trap 'rm -f "$raw_diff"' EXIT
+# The diff comes from `gh api` with the diff media type, NOT `gh pr diff`: that
+# command refuses to emit a diff containing terminal escape sequences unless
+# --allow-escape-sequences is passed, so it fails closed on exactly the payloads
+# this pipeline exists to sanitize — and the override flag is absent from older
+# gh builds a self-hosted runner may carry. The API response has no such guard,
+# and the bytes go to a file that only the sanitizer below ever reads.
+#
 # retry_stdout via a command substitution: a transient blip re-fetches the whole
 # diff and only the succeeding attempt's bytes land in raw_diff. A plain `retry
 # … >"$raw_diff"` would leak a failing attempt's error body into the file.
-raw_diff_content="$(retry_stdout gh pr diff "$PR")"
+raw_diff_content="$(retry_stdout gh api "repos/{owner}/{repo}/pulls/${PR}" \
+  -H "Accept: application/vnd.github.v3.diff")"
 printf '%s\n' "$raw_diff_content" >"$raw_diff"
 
 diff_lines="$(wc -l <"$raw_diff" | tr -d '[:space:]')"
