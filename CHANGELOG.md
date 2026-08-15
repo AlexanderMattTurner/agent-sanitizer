@@ -8,6 +8,13 @@ adhere to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+## [2.40.0] - 2026-08-15
+
+### Fixed
+
+- Fixed PyPI publish workflow and backfilled the orphaned 2.38.0 release.
+- Improved credential ladder handling in claude-pr-review to properly reach the metered rung.
+
 ## [2.39.0] - 2026-08-15
 
 ### Added
