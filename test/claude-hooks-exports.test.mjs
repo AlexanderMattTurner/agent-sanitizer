@@ -126,12 +126,9 @@ const REQUIRED_EXPORT = {
 
 // Every named export of every PUBLISHED module. The entry symbol above proves a
 // module is usable; this proves the whole surface a consumer can import is the
-// surface this package meant to publish. Without it a symbol can leave a
-// published module unremarked, and a consumer's build breaks on what its
-// version range says is a compatible upgrade — `formatReport` left
-// `scan-invisible-chars` that way. Removing an entry here is the edit that says
-// the removal is deliberate, which is the point to release it as breaking.
-// Adding one is cheap and belongs in the same commit as the export.
+// surface this package meant to publish, so a symbol added or dropped without
+// updating this map is caught here instead of breaking a consumer's build.
+// Removing an entry is the edit that marks the removal deliberate and breaking.
 const PUBLISHED_EXPORTS = {
   "plugin-hooks": ["HOOK_MODES", "main"],
   "pretooluse-sanitize": [
