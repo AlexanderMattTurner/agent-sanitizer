@@ -8,6 +8,14 @@ adhere to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+## [2.40.2] - 2026-08-15
+
+### Added
+- Literature-cited invisible-injection benchmark corpus for testing injection vulnerabilities.
+
+### Fixed
+- Escape raw control bytes in the injection corpus test source to prevent parsing issues.
+
 ## [2.40.1] - 2026-08-15
 
 ### Fixed
