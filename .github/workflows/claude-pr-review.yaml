@@ -124,7 +124,14 @@ jobs:
       group: claude-pr-review-${{ github.event.pull_request.number }}
       cancel-in-progress: true
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    # claude-run's credential ladder can walk up to 8 rungs (the metered
+    # anthropic_api_key first when wired, up to 7 free OAuth tiers as backstop
+    # — see claude-run's header, reordered by #313) with ~4 minutes of
+    # escalating backoff between tiers on top of each attempt's own runtime.
+    # At 15 minutes a slow/hanging attempt can burn the whole budget before the
+    # ladder resolves — observed twice on this PR, cancelled at the timeout
+    # with every rung still unresolved.
+    timeout-minutes: 30
     permissions:
       contents: read # checkout the trusted base branch
       pull-requests: write # post the review
