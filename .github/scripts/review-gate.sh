@@ -8,8 +8,9 @@
 # review simply was not part of the merge gate.
 #
 # The predicate is one line and stateless: a pull request is clear when at least
-# one review of it stands undismissed. It needs no memory of which reviews have
-# been seen, and it re-derives the same answer on every event.
+# one review of it BY THE AUTOMATED REVIEWER stands undismissed. It needs no
+# memory of which reviews have been seen, and it re-derives the same answer on
+# every event.
 #
 # PR-SCOPED, NOT HEAD-SCOPED, and that is load-bearing. Requiring a review OF THE
 # CURRENT HEAD looks stricter and strands the pull request instead:
@@ -44,6 +45,24 @@ set -euo pipefail
 # never satisfies it.
 GATE_CONTEXT="Automated review posted"
 
+# WHOSE review clears this gate, and the reason the answer is not "anyone's": a
+# review is something the PR author can post on their own pull request, so an
+# any-actor gate is cleared by the author writing a one-word COMMENT review and
+# the required context then asserts an automated review that never ran.
+#
+# The reviewer posts with the workflow GITHUB_TOKEN, so its reviews are authored
+# by this bot — as is the approval auto-approve-skipped posts for a PR the
+# reviewer skips by title or author, which is what still clears this gate for
+# that class without re-deriving decide-pr-review-trigger.sh's skip rules here.
+#
+# DUPLICATED, deliberately: review-findings-gate.sh sets the same login and both
+# gates must mean the same reviewer. Neither can source it from a lib, because
+# five workflows fetch this script ALONE via `sparse-checkout:
+# .github/scripts/review-gate.sh`, and a lib absent from those checkouts would
+# kill the gate at runtime under `set -e`. The drift is guarded by a test.
+REVIEWER_LOGIN_BARE="github-actions"
+export REVIEWER_LOGIN_BARE
+
 # Every review that still stands, paginated: a long-lived PR accumulates more
 # than one page. A DISMISSED review is dropped here, which is what makes the
 # workflow's `dismissed` trigger do something — dismissing the only review
@@ -53,12 +72,26 @@ GATE_CONTEXT="Automated review posted"
 # --paginate --jq` applies the filter to EACH page, so a `first`/`max_by` would
 # silently run once per page and answer from the last one.
 #
-# Any actor's review counts. The reviewer's own clears it, and so does the
-# approval auto-approve-skipped posts for a PR the reviewer skips by title or
-# author — reading that OUTCOME rather than re-deriving the skip predicate,
-# which would be a second copy of decide-pr-review-trigger.sh's rules.
+# Only the reviewer's own reviews count (see REVIEWER_LOGIN_BARE above). The
+# REST endpoint spells an app bot's login WITH the `[bot]` suffix while GraphQL
+# spells it without, so the login is stripped before comparing and either
+# spelling matches — the same normalization lib/pr-reviews.bash applies.
+#
+# The body-non-empty test asks WHETHER THIS IS A REVIEW, which the author test
+# does not. GitHub synthesizes a body-less COMMENTED review by the same bot
+# around every standalone review-comment POST, and resolve-addressed-threads.sh
+# posts its audit replies under that identity. Counting one satisfies this gate
+# vacuously on exactly the PRs that carry threads — the ones
+# approve-if-reviewer-hold-clear.sh dismisses a CHANGES_REQUESTED on, where a
+# standing synthesized review holds the status green and strips the workflow's
+# `dismissed` trigger of meaning. Every bot writer passes a non-empty body
+# (post-pr-review.mjs falls back to "Automated review."), so the test costs
+# nothing. lib/pr-reviews.bash applies the same one for the sibling gate.
 reviewers="$(gh api --paginate "repos/${GH_REPO}/pulls/${PR}/reviews" \
-  --jq '.[] | select(.state != "DISMISSED") | .user.login // ""')"
+  --jq '.[] | select(.state != "DISMISSED")
+      | select((.body // "") != "")
+      | select((.user.login // "" | sub("\\[bot\\]$"; "")) == env.REVIEWER_LOGIN_BARE)
+      | .user.login // ""')"
 reviewer="$(head -n 1 <<<"$reviewers")"
 
 if [[ -n "$reviewer" ]]; then
