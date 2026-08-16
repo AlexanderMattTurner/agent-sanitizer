@@ -200,17 +200,23 @@ const SHAPES = {
  * every other character is real work for the prompt classifier's scatter count
  * and almost none for the strip the output path runs.
  *
- * This and every `budget` entry below is 1.3x the DEAREST reading across three
- * environments: standalone, under the parallel coverage run, and standalone
- * against four workers of competing CPU and allocation load. The instrumented
- * run reads LOWER on every heavy cell, since c8 charges this file's calibration
- * harder than the code under test, so the ceilings come from the two
- * uninstrumented ones. Across those runs no case reads more than 1.12x its
- * own median, so 1.3x covers run-to-run variation and nothing more — every
- * ceiling here sits under twice its case's median, which is the standard: a
- * doubling is red, and anything looser is a ceiling nothing is under.
+ * This and every `budget` entry below is 1.3x the DEAREST reading across four
+ * environments: standalone, under the parallel coverage run, standalone against
+ * four workers of competing CPU and allocation load, and the GitHub runner. The
+ * instrumented run reads LOWER on every heavy cell, since c8 charges this file's
+ * calibration harder than the code under test, so the ceilings come from the
+ * uninstrumented ones. Within one machine no case reads more than 1.12x its own
+ * median, so 1.3x covers run-to-run variation and nothing more.
+ *
+ * Between machines the same ratio moves further: `sanitizeText/payload-scattered`
+ * costs 9.9ms of CPU on the runner against 6.5ms here for the same ~0.89ms unit,
+ * so the ceiling has to be the dearest microarchitecture's, not the developer's.
+ * Every ceiling still sits under twice its case's median on the environment that
+ * set it, which is the standard: a doubling is red, and anything looser is a
+ * ceiling nothing is under. The per-case diagnostic each gate emits is what makes
+ * a runner's numbers readable, so this table can be re-derived from CI.
  */
-const CHEAP_BUDGET = 11;
+const CHEAP_BUDGET = 15;
 
 /**
  * The blocking entry points, each with the shapes it must answer cheaply.
@@ -546,11 +552,17 @@ describe("hook-path latency", () => {
   });
 
   for (const { entry, shape, name } of CASES)
-    timed(`${name}: 256 KB stays inside its budget`, () => {
+    timed(`${name}: 256 KB stays inside its budget`, (t) => {
       const { cheap, budget: heavy } = ENTRIES[entry];
       // `cheap` is the only declaration of which shapes an entry answers
       // cheaply; a shape in neither list yields undefined and fails loud.
       const budget = cheap.includes(shape) ? CHEAP_BUDGET : heavy[shape];
+      // Emitted on the green path too: the table above is derived from the
+      // dearest reading across machines, and a passing run is the only place a
+      // machine this file has never been measured on reports its numbers.
+      t.diagnostic(
+        `${name}: ${timing.units[name].toFixed(1)}/${budget} units (${timing.large[name].toFixed(1)}ms CPU, unit ${timing.unit.toFixed(3)}ms)`,
+      );
       assert.ok(
         timing.units[name] <= budget,
         `${name} ran in ${timing.units[name].toFixed(1)} units (${timing.large[name].toFixed(1)}ms CPU), budget ${budget}`,
