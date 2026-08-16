@@ -8,6 +8,15 @@ adhere to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+## [2.43.2] - 2026-08-16
+
+### Added
+- README now describes both fail-closed channels for tool output.
+
+### Fixed
+- Hook sandboxes no longer commit into the real repository during testing.
+- Git location overrides are now stripped from guard-suite child processes.
+
 ## [2.43.1] - 2026-08-16
 
 ### Fixed
