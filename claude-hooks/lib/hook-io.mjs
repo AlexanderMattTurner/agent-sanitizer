@@ -408,9 +408,7 @@ export class EmptyStdinError extends Error {
 export async function readStdinJson(maxBytes = MAX_STDIN_BYTES) {
   const buf = await readAllBounded(process.stdin, maxBytes);
   lastStdinBytes = buf.length;
-  // Before the parse, so the empty case never reaches JSON.parse and never
-  // renders as malformed JSON. A non-empty payload — malformed or not — is
-  // untouched by this guard.
+  // Before the parse, so the empty case never renders as malformed JSON.
   if (buf.length === 0) throw new EmptyStdinError();
   return JSON.parse(buf.toString());
 }
