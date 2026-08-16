@@ -2387,12 +2387,9 @@ function rawParams(qs) {
     const eq = pair.indexOf("=");
     const name = eq === -1 ? pair : pair.slice(0, eq);
     // A VALUELESS param carries its payload in the only token it has, so that
-    // token is its candidate value as well as its name — `?<blob>` and
-    // `?d=<blob>` are one channel, and so is `?<blob>=`, whose sole `=` is
-    // base64 padding the split reads as the separator. Reporting `""` here made
-    // every shape test (all of which read only the value) blind to the shorter
-    // spellings. The name still goes through BENIGN_BLOB_PARAM_RE, so no
-    // allowlisted param gains a value it did not have.
+    // token is its candidate value too — `?<blob>`, `?d=<blob>`, and `?<blob>=`
+    // (whose sole `=` is base64 padding) are one channel. The name alone still
+    // goes through BENIGN_BLOB_PARAM_RE.
     const afterEq = eq === -1 ? "" : pair.slice(eq + 1);
     const value = afterEq === "" ? pair : afterEq;
     pairs.push([name.toLowerCase(), value]);
