@@ -87,9 +87,10 @@ jobs:
 
       # `pnpm test` runs this suite under c8, and c8 multiplies wall clock
       # several-fold — so the one gate that promises the hooks answer a
-      # realistic input in under 100ms stands down there and would be checked
-      # nowhere. Uninstrumented it is the only latency assertion that speaks in
-      # milliseconds rather than ratios; the ratio gates simply pass twice.
+      # realistic 256 KB input in a bounded number of milliseconds stands down
+      # there and would be checked nowhere. Uninstrumented it is the only
+      # latency assertion that speaks in wall-clock milliseconds rather than
+      # ratios of CPU time; the ratio gates simply pass twice.
       - name: Run the hook latency gates uninstrumented
         run: node --test test/hook-latency.test.mjs
 
