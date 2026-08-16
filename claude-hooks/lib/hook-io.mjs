@@ -387,12 +387,31 @@ export function lastStdinByteLength() {
 }
 
 /**
+ * A hook run that received no event at all: stdin closed with zero bytes. Its
+ * own type, not the `SyntaxError` an empty string gets from `JSON.parse`,
+ * because the two are different faults with different fixes — a malformed
+ * payload is a sender that sent something wrong, an empty one is a hook wired to
+ * a channel that sent nothing, and a caller that cannot tell them apart reports
+ * the wrong cause and offers remedies for content it never received.
+ */
+export class EmptyStdinError extends Error {
+  constructor() {
+    super("empty stdin: the hook received no payload");
+    this.name = "EmptyStdinError";
+  }
+}
+
+/**
  * @param {number} [maxBytes] cap before aborting (overridable for tests)
  * @returns {Promise<any>}
  */
 export async function readStdinJson(maxBytes = MAX_STDIN_BYTES) {
   const buf = await readAllBounded(process.stdin, maxBytes);
   lastStdinBytes = buf.length;
+  // Before the parse, so the empty case never reaches JSON.parse and never
+  // renders as malformed JSON. A non-empty payload — malformed or not — is
+  // untouched by this guard.
+  if (buf.length === 0) throw new EmptyStdinError();
   return JSON.parse(buf.toString());
 }
 

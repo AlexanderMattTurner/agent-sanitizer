@@ -20,6 +20,7 @@
 import { readFileSync } from "node:fs";
 import {
   emitHookResponse,
+  EmptyStdinError,
   HookEvent,
   isMain,
   lazyImport,
@@ -82,6 +83,30 @@ function faultLine(ctx) {
   );
 }
 
+/**
+ * The parts for a run that received no event at all, or null when the fault is
+ * anything else. Zero bytes on stdin means no InstructionsLoaded payload was
+ * delivered, so no file was named and none went unscanned: the fault is in how
+ * the hook was INVOKED, not in a scan. Both postures render it the same way and
+ * neither arms the tool-call gate — that gate asks the user to clear something
+ * about this project's instruction files, and this fault says nothing about
+ * them, so arming it blocks the next tool call over a hook that was handed no
+ * event.
+ * @param {import("./lib/hook-fault.mjs").FaultContext} ctx
+ * @returns {import("./lib/hook-fault.mjs").FaultParts | null}
+ */
+function emptyPayloadParts(ctx) {
+  if (!(ctx.err instanceof EmptyStdinError)) return null;
+  return {
+    stderr:
+      `${HOOK_NAME} hook error: ${ctx.message}. No instruction file was named, so nothing ` +
+      "was scanned and nothing was left unguarded. Check how this hook is invoked: it reads " +
+      "its InstructionsLoaded event as JSON on stdin, and one wired to a channel that " +
+      "delivers nothing scans nothing for the whole session.\n",
+    exitCode: 1,
+  };
+}
+
 // This hook's entry in the one posture table (lib/hook-fault.mjs). Like
 // scan-invisible-chars it has no stdout verdict channel — InstructionsLoaded
 // cannot block, and its exit code is ignored — so both arms are stated
@@ -90,15 +115,17 @@ function faultLine(ctx) {
 registerFaultPolicy(HOOK_NAME, {
   event: HookEvent.INSTRUCTIONS_LOADED,
   guarded: "a loaded instruction file",
-  open: (ctx) => ({
-    stderr: `${faultLine(ctx)} Passing through unguarded; set AGENT_SANITIZER_FAIL_OPEN=0 to arm the tool-call gate instead.\n`,
-    exitCode: 1,
-  }),
-  closed: (ctx) => ({
-    stderr: `${faultLine(ctx)} Arming the tool-call gate (AGENT_SANITIZER_FAIL_OPEN=0).\n`,
-    exitCode: 1,
-    armAlert: true,
-  }),
+  open: (ctx) =>
+    emptyPayloadParts(ctx) ?? {
+      stderr: `${faultLine(ctx)} Passing through unguarded; set AGENT_SANITIZER_FAIL_OPEN=0 to arm the tool-call gate instead.\n`,
+      exitCode: 1,
+    },
+  closed: (ctx) =>
+    emptyPayloadParts(ctx) ?? {
+      stderr: `${faultLine(ctx)} Arming the tool-call gate (AGENT_SANITIZER_FAIL_OPEN=0).\n`,
+      exitCode: 1,
+      armAlert: true,
+    },
 });
 
 /**

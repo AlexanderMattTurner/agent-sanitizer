@@ -169,6 +169,7 @@ function lastStdinByteLength() {
 async function readStdinJson(maxBytes = MAX_STDIN_BYTES) {
   const buf = await readAllBounded(process.stdin, maxBytes);
   lastStdinBytes = buf.length;
+  if (buf.length === 0) throw new EmptyStdinError();
   return JSON.parse(buf.toString());
 }
 function registerLazyModules(modules) {
@@ -381,7 +382,7 @@ function writeFileNoFollow(path2, content3, mode = 384) {
     closeSync(fd);
   }
 }
-var defaultSharedState, shared, HookEvent, PermissionDecision, FAIL_OPEN_ENV, FAIL_CLOSED_VALUES, FAIL_CLOSED_SET, DISABLED_HOOKS_ENV, LONE_SURROGATE_RE, MAX_STDIN_BYTES, lastStdinBytes, lazyImportErrors, DEFAULT_MISSING_PACKAGE_REMEDY, UNTRUSTED_TEXT_CAP, HOOKGATE_MARKER_STEM;
+var defaultSharedState, shared, HookEvent, PermissionDecision, FAIL_OPEN_ENV, FAIL_CLOSED_VALUES, FAIL_CLOSED_SET, DISABLED_HOOKS_ENV, LONE_SURROGATE_RE, MAX_STDIN_BYTES, lastStdinBytes, EmptyStdinError, lazyImportErrors, DEFAULT_MISSING_PACKAGE_REMEDY, UNTRUSTED_TEXT_CAP, HOOKGATE_MARKER_STEM;
 var init_hook_io = __esm({
   "claude-hooks/lib/hook-io.mjs"() {
     "use strict";
@@ -413,6 +414,12 @@ var init_hook_io = __esm({
     LONE_SURROGATE_RE = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g;
     MAX_STDIN_BYTES = 64 * 1024 * 1024;
     lastStdinBytes = null;
+    EmptyStdinError = class extends Error {
+      constructor() {
+        super("empty stdin: the hook received no payload");
+        this.name = "EmptyStdinError";
+      }
+    };
     lazyImportErrors = /* @__PURE__ */ new Map();
     DEFAULT_MISSING_PACKAGE_REMEDY = "reinstall the hook dependencies (pnpm install) and retry.";
     UNTRUSTED_TEXT_CAP = 500;
@@ -69009,6 +69016,14 @@ function readInstructions(filePath) {
 function faultLine2(ctx) {
   return `${HOOK_NAME5} hook error: ${ctx.message}. An instruction file Claude Code just loaded was NOT scanned for hidden Unicode, so any payload in it reaches the model unvetted.`;
 }
+function emptyPayloadParts(ctx) {
+  if (!(ctx.err instanceof EmptyStdinError)) return null;
+  return {
+    stderr: `${HOOK_NAME5} hook error: ${ctx.message}. No instruction file was named, so nothing was scanned and nothing was left unguarded. Check how this hook is invoked: it reads its InstructionsLoaded event as JSON on stdin, and one wired to a channel that delivers nothing scans nothing for the whole session.
+`,
+    exitCode: 1
+  };
+}
 function readLoadedFile(payload) {
   const { file_path: filePath, load_reason: loadReason } = (
     /** @type {Record<string, unknown>} */
@@ -69123,17 +69138,17 @@ var init_scan_loaded_instructions = __esm({
     registerFaultPolicy(HOOK_NAME5, {
       event: HookEvent.INSTRUCTIONS_LOADED,
       guarded: "a loaded instruction file",
-      open: (ctx) => ({
+      open: (ctx) => emptyPayloadParts(ctx) ?? {
         stderr: `${faultLine2(ctx)} Passing through unguarded; set AGENT_SANITIZER_FAIL_OPEN=0 to arm the tool-call gate instead.
 `,
         exitCode: 1
-      }),
-      closed: (ctx) => ({
+      },
+      closed: (ctx) => emptyPayloadParts(ctx) ?? {
         stderr: `${faultLine2(ctx)} Arming the tool-call gate (AGENT_SANITIZER_FAIL_OPEN=0).
 `,
         exitCode: 1,
         armAlert: true
-      })
+      }
     });
     if (isMain(import.meta.url)) {
       await cliMain4();

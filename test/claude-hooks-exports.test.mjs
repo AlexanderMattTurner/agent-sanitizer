@@ -223,6 +223,7 @@ const PUBLISHED_EXPORTS = {
   "lib/hook-io": [
     "DEFAULT_MISSING_PACKAGE_REMEDY",
     "DISABLED_HOOKS_ENV",
+    "EmptyStdinError",
     "FAIL_CLOSED_VALUES",
     "FAIL_OPEN_ENV",
     "HookEvent",
