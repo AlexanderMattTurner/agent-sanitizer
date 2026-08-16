@@ -8,6 +8,12 @@ adhere to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+## [2.43.6] - 2026-08-16
+
+### Fixed
+
+- Bundle parsing now correctly identifies runtime `require()` calls within bundled code.
+
 ## [2.43.4] - 2026-08-16
 
 ### Fixed
