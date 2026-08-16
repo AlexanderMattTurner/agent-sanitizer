@@ -331,6 +331,69 @@ test("a manifest with no bundle digest provisions nothing", (t) => {
   assert.ok(!existsSync(curlLog));
 });
 
+// Each entry breaks one of the things the provisioner refuses to proceed
+// without, so a host that DOES need a binary is failed loudly for it.
+const UNPROVISIONABLE = [
+  [
+    "a bundle the manifest does not pin",
+    (staged) => {
+      const bundle = join(
+        staged.plugin,
+        "dist",
+        "hooks",
+        "plugin-hooks.bundle.mjs",
+      );
+      writeFileSync(
+        bundle,
+        `${readFileSync(bundle, "utf8")}\n// a later commit\n`,
+      );
+      return {};
+    },
+  ],
+  [
+    "a manifest with no bundle digest",
+    (staged) => {
+      writeFileSync(
+        staged.manifest,
+        readFileSync(staged.manifest, "utf8").replace(/^# bundle=.*\n/m, ""),
+      );
+      return {};
+    },
+  ],
+  ["no digest tool at all", () => ({ omit: ["sha256sum", "shasum"] })],
+];
+
+for (const [label, breakIt] of UNPROVISIONABLE) {
+  test(`an adequate node with no binary on disk exits 0 despite ${label}`, (t) => {
+    // This host installs nothing, so it has nothing to certify: every refusal
+    // below the node check is about an artifact that is on disk or about to
+    // be. Refusing here instead errors on every session start of the ordinary
+    // checkout whose committed bundle has moved since the last
+    // `pnpm gen:hook-binaries` — this repo's own dev loop.
+    const staged = stageProvisionable(t);
+    const pathOpts = breakIt(staged);
+    const { path, curlLog } = provisionPath(t, staged.fixture, pathOpts);
+    const node = join(scratch(t), "node");
+    writeFileSync(node, "#!/bin/sh\necho v22.10.0\n", { mode: 0o755 });
+
+    const res = provision(staged, path, { AGENT_SANITIZER_NODE: node });
+    assert.equal(res.status, 0, res.stderr);
+    assert.equal(res.stderr, "");
+    assert.ok(!existsSync(curlLog), "it downloaded a binary it cannot accept");
+    assert.ok(
+      !existsSync(join(staged.data, "hook-binary", "agent-sanitizer-hooks")),
+      "it installed a binary on a host that needed none",
+    );
+
+    // Non-vacuity: the same broken tree on a node-less host — the host class
+    // the binary exists for — still refuses loudly, so the exit 0 above is the
+    // node check answering and not the gate having gone missing.
+    const bare = provision(staged, path);
+    assert.equal(bare.status, 1, bare.stderr);
+    assert.match(bare.stderr, /will not be (provisioned|installed)/);
+  });
+}
+
 test("a changed manifest re-provisions even though a node is available", (t) => {
   // The launcher PREFERS an existing binary, so a plugin update that moves the
   // manifest must refresh it — an adequate node is no excuse to keep serving

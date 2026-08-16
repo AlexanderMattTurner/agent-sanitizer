@@ -101,6 +101,35 @@ set_consequence() {
 }
 set_consequence
 
+# Missing search libs count as "no adequate node" — provisioning on doubt costs
+# bandwidth, not correctness.
+host_has_adequate_node() {
+  [[ -r "$script_dir/lib/node-resolve.sh" && -r "$script_dir/lib/node-floor.sh" ]] || return 1
+  # shellcheck source=lib/node-resolve.sh
+  . "$script_dir/lib/node-resolve.sh"
+  # shellcheck source=lib/node-floor.sh
+  . "$script_dir/lib/node-floor.sh"
+  local node_bin node_major
+  node_bin="$(agent_sanitizer_resolve_node)" || return 1
+  [[ -n "$node_bin" && -x "$node_bin" ]] || return 1
+  # A node whose version cannot even be read must NOT count as adequate:
+  # meets_floor answers 0 on unknown (right for the launcher, which must not
+  # blame a version it could not read), but skipping the download on that
+  # answer would strand exactly the host the binary exists for.
+  node_major="$(agent_sanitizer_node_major "$node_bin")"
+  [[ -n "$node_major" ]] || return 1
+  agent_sanitizer_node_meets_floor "$node_bin"
+}
+
+# No binary yet: on the default posture, a host whose node search finds a
+# runtime the bundle can run needs nothing from us. Answered ahead of every
+# refusal below so that each of those is about an artifact that is really
+# there — this host installs nothing, so it has nothing to certify and must not
+# be failed on every session start for a manifest it never consults.
+if [[ "${AGENT_SANITIZER_HOOK_BINARY:-}" != "1" && ! -x "$binary" ]] && host_has_adequate_node; then
+  exit 0
+fi
+
 # Resolved before anything is trusted, because the digest is the ONLY evidence
 # this script has about any of the three artifacts it reasons over: the
 # installed binary, this install's bundle, and the download. No digest tool
@@ -168,9 +197,7 @@ fi
 # living in the same directory as the binary, so anything able to plant a
 # binary can plant the stamp beside it. Hashing the binary is what a planted
 # one cannot survive.
-had_binary=0
 if [[ -x "$binary" ]]; then
-  had_binary=1
   installed_digest="$(sha256_of "$binary")" || installed_digest=""
   if [[ "$installed_digest" == "$expected_digest" ]]; then
     # The stamp records which manifest wrote this file; a manifest that moved
@@ -206,35 +233,6 @@ if [[ -x "$binary" ]]; then
     echo "agent-sanitizer: $binary did not hash to the digest $manifest pins for $asset — it predates this manifest, and nothing here can verify it. It has been removed; re-provisioning from the release." >&2
   fi
   set_consequence
-fi
-
-# Missing search libs count as "no adequate node" — provisioning on doubt costs
-# bandwidth, not correctness.
-host_has_adequate_node() {
-  [[ -r "$script_dir/lib/node-resolve.sh" && -r "$script_dir/lib/node-floor.sh" ]] || return 1
-  # shellcheck source=lib/node-resolve.sh
-  . "$script_dir/lib/node-resolve.sh"
-  # shellcheck source=lib/node-floor.sh
-  . "$script_dir/lib/node-floor.sh"
-  local node_bin node_major
-  node_bin="$(agent_sanitizer_resolve_node)" || return 1
-  [[ -n "$node_bin" && -x "$node_bin" ]] || return 1
-  # A node whose version cannot even be read must NOT count as adequate:
-  # meets_floor answers 0 on unknown (right for the launcher, which must not
-  # blame a version it could not read), but skipping the download on that
-  # answer would strand exactly the host the binary exists for.
-  node_major="$(agent_sanitizer_node_major "$node_bin")"
-  [[ -n "$node_major" ]] || return 1
-  agent_sanitizer_node_meets_floor "$node_bin"
-}
-
-# Never provisioned here: on the default posture, a host whose node search
-# finds a runtime the bundle can run needs nothing from us. `had_binary` is
-# what keeps a host that WAS provisioned provisioned — the unverifiable binary
-# removed above must be replaced, and testing only for the file would read that
-# removal as "this host never wanted one".
-if [[ "${AGENT_SANITIZER_HOOK_BINARY:-}" != "1" && "$had_binary" -eq 0 && ! -x "$binary" ]] && host_has_adequate_node; then
-  exit 0
 fi
 
 # plugin.json is small, written by this repo's own release tooling with a
