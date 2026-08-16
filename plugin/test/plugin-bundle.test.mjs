@@ -1068,15 +1068,54 @@ test("launcher fails OPEN when node is absent from PATH", (t) => {
  * it holds the bundle to, and a real `bun build --compile` would cost ~100 MB
  * per staged test. Returns the dir to pass as CLAUDE_PLUGIN_DATA.
  */
-function stageHookBinary(t, body, { mode = 0o755 } = {}) {
+function stageHookBinary(t, body, { mode = 0o755, dirMode = 0o700 } = {}) {
   const data = scratch(t);
   const dir = join(data, "hook-binary");
   mkdirSync(dir, { recursive: true });
   const bin = join(dir, "agent-sanitizer-hooks");
   writeFileSync(bin, `#!/bin/sh\n${body}\n`);
   chmodSync(bin, mode);
+  // Stated, not inherited from the runner's umask: the launcher refuses to
+  // execute a binary out of a group- or other-writable directory, so a
+  // permissive umask would silently turn every case below into that refusal.
+  chmodSync(dir, dirMode);
   return data;
 }
+
+test("a binary in a directory anything can write is refused, not executed", (t) => {
+  // The one artifact the launcher EXECUTES, and the directory's mode is what
+  // decides who may replace it: creating an inode needs write on the parent,
+  // not on the file. A 0777 install dir therefore hands arbitrary code — and a
+  // verdict of the attacker's choosing — to every hook of the session.
+  const res = launchWithoutNode(t, stagePlugin(t), {
+    CLAUDE_PLUGIN_DATA: stageHookBinary(t, `printf '{"fromBinary":true}'`, {
+      dirMode: 0o777,
+    }),
+  });
+  assert.equal(res.status, 0);
+  assert.doesNotMatch(res.stdout, /fromBinary/, "the planted binary answered");
+  assert.match(res.stderr, /refusing to run/);
+  // Refused, not silently ignored: with no node on this host the session must
+  // still be told it is running unguarded.
+  assert.match(
+    JSON.parse(res.stdout).hookSpecificOutput.additionalContext,
+    /UNSANITIZED/,
+  );
+});
+
+test("an install directory owned by this user with owner-only write still runs", (t) => {
+  // Non-vacuity for the refusal above: the same host, the same binary, with
+  // the mode the provisioner leaves behind, answers.
+  const res = launchWithoutNode(t, stagePlugin(t), {
+    CLAUDE_PLUGIN_DATA: stageHookBinary(
+      t,
+      `cat >/dev/null; printf '{"fromBinary":true}'`,
+    ),
+  });
+  assert.equal(res.status, 0, res.stderr);
+  assert.deepEqual(JSON.parse(res.stdout), { fromBinary: true });
+  assert.doesNotMatch(res.stderr, /refusing to run/);
+});
 
 test("a provisioned binary answers with no node anywhere on the host", (t) => {
   // The acceptance case of the whole binary path: a launchd/cron-shaped session

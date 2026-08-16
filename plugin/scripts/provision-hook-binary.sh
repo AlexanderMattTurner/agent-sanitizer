@@ -49,6 +49,7 @@ esac
 
 asset="agent-sanitizer-hooks-$platform"
 manifest="$plugin_root/dist/hooks/hook-binaries.sha256"
+bundle="$plugin_root/dist/hooks/plugin-hooks.bundle.mjs"
 dest_dir="$data_dir/hook-binary"
 binary="$dest_dir/agent-sanitizer-hooks"
 installed_stamp="$dest_dir/.manifest-installed"
@@ -73,9 +74,11 @@ fi
 # holds this reader to the generator's own parser.
 repository=""
 expected_digest=""
+expected_bundle=""
 while IFS= read -r line; do
   case "$line" in
   "# repository="*) repository="${line#"# repository="}" ;;
+  "# bundle="*) expected_bundle="${line#"# bundle="}" ;;
   *"  $asset") expected_digest="${line%% *}" ;;
   esac
 done <"$manifest"
@@ -84,13 +87,125 @@ if [[ ! "$repository" =~ ^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$ || ! "$expected_diges
   exit 1
 fi
 
-# Already provisioned from THIS manifest? The stamp is a copy compared with
-# `cmp` (no digest tool needed on the fast path); a plugin update that moves
-# the manifest re-provisions even on hosts whose node search succeeds, because
-# the launcher prefers an existing binary and must never keep running a stale
-# one.
-if [[ -x "$binary" ]] && cmp -s "$manifest" "$installed_stamp"; then
-  exit 0
+# A refresh that fails on a host that ALREADY has a binary leaves that binary
+# serving — the launcher prefers it over node — so one sentence cannot cover
+# both cases without misnaming the runtime that is actually running. Recomputed
+# rather than fixed, because removing a tampered binary below changes which
+# case the host is in.
+set_consequence() {
+  if [[ -x "$binary" ]]; then
+    consequence="the hooks keep running the previously provisioned $binary, which was compiled from an OLDER bundle — this session sanitizes one plugin version behind until a later session refreshes it."
+    return 0
+  fi
+  consequence="the hooks keep using the node runtime search; on a host without node >=22, sanitization stays DEGRADED (failing open unless AGENT_SANITIZER_FAIL_OPEN=0) until a new session provisions the binary."
+}
+set_consequence
+
+# Resolved before anything is trusted, because the digest is the ONLY evidence
+# this script has about any of the three artifacts it reasons over: the
+# installed binary, this install's bundle, and the download. No digest tool
+# means no evidence, which means nothing is provisioned and nothing already
+# installed is certified.
+digest_tool=""
+if command -v sha256sum >/dev/null 2>&1; then
+  digest_tool="sha256sum"
+elif command -v shasum >/dev/null 2>&1; then
+  digest_tool="shasum"
+fi
+if [[ -z "$digest_tool" ]]; then
+  echo "agent-sanitizer: neither sha256sum nor shasum is available — the hook binary cannot be verified, so it will not be installed; $consequence" >&2
+  exit 1
+fi
+
+# Print $1's sha256, or nothing at all when the file cannot be hashed into one.
+# A caller that gets nothing must refuse: an unhashable file is an unverified
+# one, and this script's whole job is to keep an unverified file from being
+# executed by every hook in the session.
+sha256_of() {
+  local out=""
+  case "$digest_tool" in
+  sha256sum) out="$(sha256sum <"$1")" || out="" ;;
+  shasum) out="$(shasum -a 256 <"$1")" || out="" ;;
+  esac
+  out="${out%% *}"
+  [[ "$out" =~ ^[0-9a-f]{64}$ ]] || return 1
+  printf '%s' "$out"
+}
+
+# The manifest pins the bundle the release binaries were compiled FROM
+# (build-hook-binaries.mjs verifies that pin when it builds them). A checkout
+# whose committed bundle has moved since the last manifest regen therefore
+# describes DIFFERENT sanitizer code than the release binary runs — and the
+# launcher prefers the binary over the bundle, so provisioning here would guard
+# the session with code that is not the code in this install.
+if [[ ! "$expected_bundle" =~ ^[0-9a-f]{64}$ ]]; then
+  echo "agent-sanitizer: $manifest carries no usable bundle digest — the hook binary cannot be tied to the bundle this install ships, so it will not be provisioned (reinstall the plugin)" >&2
+  exit 1
+fi
+installed_bundle="$(sha256_of "$bundle")" || installed_bundle=""
+if [[ "$installed_bundle" != "$expected_bundle" ]]; then
+  echo "agent-sanitizer: $bundle hashes to ${installed_bundle:-nothing readable}, but $manifest pins $expected_bundle — the release binary was compiled from a DIFFERENT bundle than this install ships, so it will not be provisioned; $consequence (Regenerate the manifest with plugin/scripts/build-hook-binaries.mjs.)" >&2
+  exit 1
+fi
+
+# 700 because every hook in the session EXECS what lives under this dir:
+# anything that can write it can replace that binary. Repaired on every run,
+# not only after an install — a dir pre-created 0777 before the first
+# provisioning would otherwise keep those bits for the life of the install.
+harden_dest_dir() {
+  local rc=0
+  chmod 700 -- "$dest_dir" || rc=$?
+  [[ "$rc" -eq 0 ]] && return 0
+  echo "agent-sanitizer: cannot restrict $dest_dir to owner-only access (chmod exit $rc) — refusing to provision or to trust a hook binary there; $consequence" >&2
+  exit 1
+}
+if [[ -d "$dest_dir" ]]; then
+  harden_dest_dir
+fi
+
+# Already provisioned, and still the file this manifest pins? The DIGEST is the
+# question, not the stamp: the stamp is a copy of a public committed file
+# living in the same directory as the binary, so anything able to plant a
+# binary can plant the stamp beside it. Hashing the binary is what a planted
+# one cannot survive.
+had_binary=0
+if [[ -x "$binary" ]]; then
+  had_binary=1
+  installed_digest="$(sha256_of "$binary")" || installed_digest=""
+  if [[ "$installed_digest" == "$expected_digest" ]]; then
+    # The stamp records which manifest wrote this file; a manifest that moved
+    # without moving THIS platform's digest costs a stamp refresh rather than a
+    # ~100 MB re-download.
+    if ! cmp -s "$manifest" "$installed_stamp"; then
+      cp -- "$manifest" "$installed_stamp" || {
+        echo "agent-sanitizer: recording the install stamp for the verified $binary failed — $consequence" >&2
+        exit 1
+      }
+    fi
+    exit 0
+  fi
+  # The binary hashes to something this manifest does not pin, and nothing here
+  # can authenticate it: the only other record of what was installed is the
+  # stamp, which is a copy of a public committed file living in this same
+  # writable directory, so a planted binary can carry a stamp that agrees with
+  # it. So it is REMOVED rather than kept as "probably the previous release" —
+  # the launcher prefers this file over node, and leaving it would run
+  # unverified code on every hook call whatever this script does next. The two
+  # messages differ only in the likely cause; the refusal does not.
+  stamp_is_current=0
+  cmp -s "$manifest" "$installed_stamp" && stamp_is_current=1
+  rm_rc=0
+  rm -f -- "$binary" || rm_rc=$?
+  if [[ -e "$binary" ]]; then
+    echo "agent-sanitizer: $binary does not hash to the digest $manifest pins for $asset, and it could not be removed (rm exit $rm_rc) — every hook in this session will exec it; delete it by hand" >&2
+    exit 1
+  fi
+  if [[ "$stamp_is_current" -eq 1 ]]; then
+    echo "agent-sanitizer: $binary did not hash to the digest $manifest pins for $asset, though its install stamp names that very manifest — it was REPLACED after it was installed. It has been removed; re-provisioning from the release." >&2
+  else
+    echo "agent-sanitizer: $binary did not hash to the digest $manifest pins for $asset — it predates this manifest, and nothing here can verify it. It has been removed; re-provisioning from the release." >&2
+  fi
+  set_consequence
 fi
 
 # Missing search libs count as "no adequate node" — provisioning on doubt costs
@@ -113,9 +228,12 @@ host_has_adequate_node() {
   agent_sanitizer_node_meets_floor "$node_bin"
 }
 
-# No binary yet: on the default posture, a host whose node search finds a
-# runtime the bundle can run needs nothing from us.
-if [[ "${AGENT_SANITIZER_HOOK_BINARY:-}" != "1" && ! -x "$binary" ]] && host_has_adequate_node; then
+# Never provisioned here: on the default posture, a host whose node search
+# finds a runtime the bundle can run needs nothing from us. `had_binary` is
+# what keeps a host that WAS provisioned provisioned — the unverifiable binary
+# removed above must be replaced, and testing only for the file would read that
+# removal as "this host never wanted one".
+if [[ "${AGENT_SANITIZER_HOOK_BINARY:-}" != "1" && "$had_binary" -eq 0 && ! -x "$binary" ]] && host_has_adequate_node; then
   exit 0
 fi
 
@@ -142,14 +260,6 @@ if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
 fi
 
 url="https://github.com/$repository/releases/download/v$version/$asset"
-# A refresh that fails on a host that ALREADY has a binary leaves that binary
-# serving — the launcher prefers it over node — so one sentence cannot cover
-# both cases without misnaming the runtime that is actually running.
-if [[ -x "$binary" ]]; then
-  consequence="the hooks keep running the previously provisioned $binary, which was compiled from an OLDER bundle — this session sanitizes one plugin version behind until a later session refreshes it."
-else
-  consequence="the hooks keep using the node runtime search; on a host without node >=22, sanitization stays DEGRADED (failing open unless AGENT_SANITIZER_FAIL_OPEN=0) until a new session provisions the binary."
-fi
 
 # A release whose asset already failed verification for THIS (version,
 # manifest) pair will fail it again — a checkout whose bundle moved after the
@@ -173,7 +283,7 @@ if [[ ! -d "$dest_dir" ]]; then
   echo "agent-sanitizer: cannot create $dest_dir (mkdir exit $mkdir_rc) — $consequence" >&2
   exit 1
 fi
-chmod 700 -- "$dest_dir"
+harden_dest_dir
 
 # An unpredictable name, not a fixed one: with a fixed path a second concurrent
 # session's download can replace these bytes between the digest check and the
@@ -205,19 +315,9 @@ fi
 
 # The verification IS the trust boundary: the download came over the network,
 # and this refusal is what blocks a tampered or truncated binary — or one from
-# a release that does not match this checkout — from ever being executed. No
-# digest tool means no verification, which means no install.
-got=""
-if command -v sha256sum >/dev/null 2>&1; then
-  got="$(sha256sum <"$download")" || got=""
-elif command -v shasum >/dev/null 2>&1; then
-  got="$(shasum -a 256 <"$download")" || got=""
-else
-  echo "agent-sanitizer: neither sha256sum nor shasum is available — the downloaded hook binary cannot be verified, so it will not be installed; $consequence" >&2
-  exit 1
-fi
-got="${got%% *}"
-if [[ ! "$got" =~ ^[0-9a-f]{64}$ ]]; then
+# a release that does not match this checkout — from ever being executed.
+got="$(sha256_of "$download")" || got=""
+if [[ -z "$got" ]]; then
   echo "agent-sanitizer: hashing the downloaded $asset produced no usable digest — refusing to install it; $consequence" >&2
   exit 1
 fi

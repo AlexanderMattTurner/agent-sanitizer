@@ -298,14 +298,44 @@ bin_stdout_file=""
 stdout_file=""
 trap 'rm -f "$payload_file" "$bin_stdout_file" "$stdout_file"' EXIT
 
+# Whether $1 keeps every OTHER uid from replacing what lives in it. Replacing a
+# file means creating an inode in its parent, which needs write on the parent —
+# so the parent's own mode and owner are the property, not the file's. This is
+# the shell port of isTrustedSocketDir in claude-hooks/lib/redactor-client.mjs,
+# minus its root-owned arm: the daemon's socket dir may be handed to root after
+# it binds, while this dir is one the provisioner itself creates and writes.
+#
+# An answer this cannot establish — no `find` to read the mode with, a
+# non-directory, a symlink — is NOT a pass: refusing costs the session the
+# binary and leaves the node path below still sanitizing, while trusting on
+# doubt is arbitrary code in every hook of the session.
+trusted_exec_dir() {
+  local dir="$1" writable
+  [[ -d "$dir" && ! -L "$dir" && -O "$dir" ]] || return 1
+  command -v find >/dev/null 2>&1 || return 1
+  writable="$(find "$dir" -maxdepth 0 \( -perm -g+w -o -perm -o+w \) 2>/dev/null)" || return 1
+  [[ -z "$writable" ]]
+}
+
 # The provisioned self-contained binary carries its own runtime, so while it
 # answers, the node search below never runs — the hosts where that search finds
 # nothing are its whole point. It is preferred whenever present, which is what
 # makes the provisioner's refresh and its =1 knob mean anything.
-hook_binary="${CLAUDE_PLUGIN_DATA:-}/hook-binary/agent-sanitizer-hooks"
+#
+# This is the ONE artifact the launcher EXECUTES, so the refusal below is what
+# stands between a file anything on the host could have written and code
+# execution as the user on every single tool call, plus a "verdict" of its
+# choosing — an attacker's binary that prints an allow envelope silences the
+# whole sanitizer with no trace.
+hook_binary_dir="${CLAUDE_PLUGIN_DATA:-}/hook-binary"
+hook_binary="$hook_binary_dir/agent-sanitizer-hooks"
 if [[ "${AGENT_SANITIZER_HOOK_BINARY:-}" != "0" && -n "${CLAUDE_PLUGIN_DATA:-}" && -f "$hook_binary" && -x "$hook_binary" ]]; then
-  payload_file="$(mktemp 2>/dev/null)"
-  bin_stdout_file="$(mktemp 2>/dev/null)"
+  if trusted_exec_dir "$hook_binary_dir"; then
+    payload_file="$(mktemp 2>/dev/null)"
+    bin_stdout_file="$(mktemp 2>/dev/null)"
+  else
+    echo "agent-sanitizer: refusing to run $hook_binary — $hook_binary_dir is not a plain directory this user owns with owner-only write, so anything that can write it can replace the binary every hook executes; using the node runtime instead (fix the directory's owner and mode, or delete it and start a new session to re-provision)" >&2
+  fi
 fi
 # BOTH temp files or neither. A payload_file that outlives a failed
 # bin_stdout_file mktemp would later redirect the bundle's stdin from an EMPTY
