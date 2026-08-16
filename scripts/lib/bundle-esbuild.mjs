@@ -22,12 +22,15 @@
  *      the build rather than by a user.
  *
  * `BUNDLE_TARGETS` is the single list of shipped entries; add an entry here and
- * the contract test in `test/bundle-hardening.test.mjs` covers it automatically.
+ * the contract test in `bundle-hardening.test.mjs` beside it covers that entry
+ * automatically.
  */
 import { readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { parse } from "acorn";
+import { simple } from "acorn-walk";
 import { build } from "esbuild";
 
 /** Repo root (this module lives at scripts/lib/). */
@@ -70,6 +73,14 @@ const inlineRuntimeJsonRequires = {
 };
 
 /**
+ * Reported in place of a specifier whose value the bundle decides at runtime.
+ * No allowlist may contain it, so such a call always fails the build: a
+ * specifier the build cannot read is a specifier the build cannot prove
+ * resolvable in a deployment that has no node_modules.
+ */
+export const COMPUTED_SPECIFIER = "<computed>";
+
+/**
  * Fail the build on any runtime require the shipped artifact could not resolve.
  * This is the general guard: the rewrite above handles the shape we know, and
  * this refuses to ship the shape we do not.
@@ -79,26 +90,69 @@ const inlineRuntimeJsonRequires = {
 export function assertNoRuntimeRequires(text, allowedRuntimeRequires) {
   const allowed = new Set(allowedRuntimeRequires);
   const survivors = runtimeRequires(text).filter((spec) => !allowed.has(spec));
-  if (survivors.length > 0)
-    throw new Error(
-      `bundle keeps runtime require() of: ${survivors.join(", ")}. ` +
-        "A shipped bundle has no node_modules and no sibling data files, so " +
-        "these throw on first use. Inline them at build time.",
-    );
+  if (survivors.length === 0) return;
+  const computed = survivors.includes(COMPUTED_SPECIFIER)
+    ? ` ${COMPUTED_SPECIFIER} means the call's argument is not a string literal, so the build cannot prove what it resolves to.`
+    : "";
+  throw new Error(
+    `bundle keeps runtime require() of: ${survivors.join(", ")}. ` +
+      "A shipped bundle has no node_modules and no sibling data files, so " +
+      "these throw on first use. Inline them at build time." +
+      computed,
+  );
+}
+
+/** esbuild renames the require shim (`require2(…)`), hence the digit suffix. */
+const RUNTIME_REQUIRE_CALLEE = /^require\d*$/;
+
+/**
+ * The specifier a `require()` call names, or `COMPUTED_SPECIFIER` when the
+ * argument is anything other than a single string literal — a variable, a
+ * template literal, a concatenation, or no argument at all.
+ * @param {import("acorn").CallExpression} node
+ * @returns {string}
+ */
+function requireSpecifier(node) {
+  const [arg, ...rest] = node.arguments;
+  if (
+    rest.length === 0 &&
+    arg?.type === "Literal" &&
+    typeof arg.value === "string"
+  )
+    return arg.value;
+  return COMPUTED_SPECIFIER;
 }
 
 /**
  * The distinct specifiers the artifact still hands to a runtime `require()`.
- * esbuild renames the shim (`require2(…)`), hence the digit suffix.
+ *
+ * Parses the bundle rather than scanning it, because "is this a call" is a
+ * question about JavaScript structure. A text scan answers it wrong in both
+ * directions on inputs this build produces: `inlineRuntimeJsonRequires` splices
+ * dependency JSON into the bundle and `legalComments: "eof"` appends third-party
+ * comments to it, so a `require("x")` mentioned inside a string or a comment
+ * reads as a real call; and `minify: false` lets esbuild wrap a long argument
+ * list onto its own line, so a real call reads as nothing at all.
+ *
+ * A parse error propagates: a bundle that is not valid ESM is a build failure,
+ * not a bundle with no requires.
+ *
  * @param {string} text
  * @returns {string[]}
  */
 export function runtimeRequires(text) {
-  return [
-    ...new Set(
-      [...text.matchAll(/\brequire\d*\((['"])([^'"]+)\1\)/g)].map((m) => m[2]),
-    ),
-  ];
+  /** @type {Set<string>} */
+  const found = new Set();
+  simple(parse(text, { sourceType: "module", ecmaVersion: "latest" }), {
+    CallExpression(node) {
+      if (
+        node.callee.type === "Identifier" &&
+        RUNTIME_REQUIRE_CALLEE.test(node.callee.name)
+      )
+        found.add(requireSpecifier(node));
+    },
+  });
+  return [...found];
 }
 
 /**
