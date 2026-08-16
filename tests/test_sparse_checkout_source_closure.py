@@ -24,7 +24,11 @@ import pytest
 import yaml
 
 from tests._helpers import REPO_ROOT
-from tests._source_closure import source_closure, tracked_files
+from tests._source_closure import (
+    source_closure,
+    tracked_files,
+    unresolved_sources,
+)
 
 WORKFLOWS = sorted((REPO_ROOT / ".github" / "workflows").glob("*.yaml"))
 
@@ -115,3 +119,16 @@ def test_the_review_gate_lists_are_checked_against_a_real_source_closure() -> No
     )
     for path in closure:
         assert (REPO_ROOT / path).is_file()
+
+    # Every `source` inside the closure has to reach a tracked file. One the walk
+    # skipped is a checkout requirement nothing states, and the three jobs that
+    # fetch review-gate.sh one file at a time would each be short a library.
+    skipped = {
+        f"{path}: {written}"
+        for path in closure
+        for written in unresolved_sources(path, TRACKED)
+    }
+    assert not skipped, (
+        f"the {gate} closure skipped {sorted(skipped)} — each is a file the narrow "
+        "sparse-checkout lists are never told to fetch"
+    )
