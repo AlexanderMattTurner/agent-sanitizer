@@ -8,6 +8,7 @@ import time
 
 import pytest
 
+import agent_sanitizer.secrets.engine as E
 from agent_sanitizer.secrets import daemon as S
 from tests.secrets.redactor_helpers import wait_for_listener
 
@@ -95,6 +96,48 @@ def test_request_config_rejects_placeholder_breaking_env_var_name():
 def test_request_config_web_ingress_explicit_false_is_honored():
     config = S._request_config({"text": "x", "web_ingress": False})
     assert config.web_ingress is False
+
+
+# ─── Per-request compute budget ──────────────────────────────────────────────
+# CONN_TIMEOUT_SECONDS bounds socket I/O and nothing else, so before this budget
+# a payload whose SCAN was slow held its worker for as long as the scan ran.
+# WORKER_POOL_SIZE such frames occupied every worker, and a client that cannot
+# reach the daemon fails closed — one crafted frame per worker denied ALL tool
+# output.
+
+
+def test_request_config_sets_a_compute_budget():
+    config = S._request_config({"text": "x"})
+    assert config.compute_budget_seconds == S.REQUEST_COMPUTE_BUDGET_SECONDS
+    assert S.REQUEST_COMPUTE_BUDGET_SECONDS > 0
+
+
+def test_a_request_cannot_raise_its_own_compute_budget():
+    """The budget protects the OTHER clients on this shared socket, so it is not
+    a per-request knob a caller can turn up."""
+    config = S._request_config(
+        {"text": "x", "compute_budget_seconds": 3600, "min_secret_len": 1}
+    )
+    assert config.compute_budget_seconds == S.REQUEST_COMPUTE_BUDGET_SECONDS
+
+
+def test_an_over_budget_scan_fails_that_request_closed(monkeypatch):
+    """A scan past the budget raises, so `_serve_one` answers that ONE client an
+    error and frees its worker — rather than the worker running unbounded."""
+    monkeypatch.setattr(S, "REQUEST_COMPUTE_BUDGET_SECONDS", 0.0)
+    config = S._request_config({"text": "x"})
+    with pytest.raises(E.RedactionBudgetExceeded):
+        E.redact("api_key: AKIAIOSFODNN7EXAMPLE\nsecond line\n" * 50, config)
+
+
+def test_an_ordinary_payload_stays_well_inside_the_budget():
+    """Non-vacuity in the other direction: the budget must not be tripping on
+    legitimate traffic, or the check above would pass for the wrong reason."""
+    config = S._request_config({"text": "x"})
+    text = "api_key: AKIAIOSFODNN7EXAMPLE\nordinary log line\n" * 200
+    started = time.monotonic()
+    E.redact(text, config)
+    assert time.monotonic() - started < S.REQUEST_COMPUTE_BUDGET_SECONDS / 2
 
 
 # ─── Live socket round-trip ──────────────────────────────────────────────────
@@ -205,6 +248,21 @@ def test_daemon_survives_malformed_frame_then_serves(daemon):
     sock.close()
     resp = _client_request(daemon, {"text": "key: AKIAIOSFODNN7EXAMPLE", "map": False})
     assert "AWS Access Key" in resp["found"]
+
+
+def test_daemon_over_budget_request_errors_and_frees_the_worker(daemon, monkeypatch):
+    """End of the chain: an over-budget scan answers THAT client `{"error"}` and
+    the daemon keeps serving everyone else. Without the budget the worker would
+    still be scanning, and enough such frames leave every client failing closed."""
+    monkeypatch.setattr(S, "REQUEST_COMPUTE_BUDGET_SECONDS", 0.0)
+    payload = "api_key: AKIAIOSFODNN7EXAMPLE\nordinary log line\n" * 50
+    resp = _client_request(daemon, {"text": payload, "map": False})
+    assert resp == {"error": "redaction failed"}
+    monkeypatch.undo()
+    # Positive marker: the same worker pool serves the next client normally, so
+    # the error above was this request failing closed, not the daemon breaking.
+    ok = _client_request(daemon, {"text": "key: AKIAIOSFODNN7EXAMPLE", "map": False})
+    assert "AWS Access Key" in ok["found"]
 
 
 def test_daemon_slow_client_does_not_block_a_second_client(daemon):

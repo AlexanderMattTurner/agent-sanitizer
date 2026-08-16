@@ -42,6 +42,12 @@ CASES: dict[str, tuple[str, str]] = {
     "_is_filesystem_path": ("token", "/etc/vault/agent/current-token"),
     "_is_metadata_field": ("secret_name", "prod-database-primary-credential"),
     "_is_regex_literal": ("SECRET_HINT", "/secret|token|password/i"),
+    # The value FIELD_VALUE_RE captures here is the identifier alone (its value
+    # class excludes `(`), and the `(` that follows is what the gate reads.
+    "_is_call_or_code_ref": (
+        "secret",
+        "derive_encryption_key_from_password(user_password)",
+    ),
 }
 
 # Gates that CANNOT fire on the field-value path, so there is no terminator case

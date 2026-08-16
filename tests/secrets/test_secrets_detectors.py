@@ -11,10 +11,15 @@ from hypothesis import strategies as st
 
 import agent_sanitizer.secrets.detectors as D
 import agent_sanitizer.secrets.engine as E
+from detect_secrets.plugins.cloudant import CloudantDetector as _UpstreamCloudant
+from detect_secrets.plugins.ibm_cloud_iam import IbmCloudIamDetector as _UpstreamIbmIam
+from detect_secrets.plugins.ibm_cos_hmac import IbmCosHmacDetector as _UpstreamIbmCos
+from detect_secrets.plugins.softlayer import SoftlayerDetector as _UpstreamSoftlayer
+from detect_secrets.settings import get_plugins
 from redactor_helpers import SAMPLES, run_plain
 
 _DETECTORS_JSON = D.DETECTORS_FILE
-_INLINE_DETECTORS = ("JwtFullTokenDetector", "BoundedKeywordDetector")
+_INLINE_DETECTORS = tuple(E._INLINE_PLUGINS)
 
 
 def test_custom_plugins_derived_from_detector_ssot():
@@ -23,6 +28,12 @@ def test_custom_plugins_derived_from_detector_ssot():
     ]
     names = [plugin["name"] for plugin in E.CUSTOM_PLUGINS]
     assert names == [*configured, *_INLINE_DETECTORS]
+    # Non-vacuity for the derivation above: the two registries are disjoint (a
+    # detector carries its regex in the JSON or inline, never both) and each is
+    # actually populated, so `names` cannot be equal by both sides being empty.
+    assert set(configured).isdisjoint(_INLINE_DETECTORS)
+    assert "BoundedKeywordDetector" in _INLINE_DETECTORS
+    assert len(configured) >= 10
     assert all(p["path"].endswith("detectors.py") for p in E.CUSTOM_PLUGINS)
     for name in names:
         assert isinstance(getattr(D, name, None), type), (
@@ -285,38 +296,66 @@ def test_fixture_covers_every_active_detector():
     )
 
 
-_CROSS_LINE_INELIGIBLE_TYPES = frozenset(
-    {
-        "Secret Keyword",
-        "Basic Auth Credentials",
-        "Artifactory Credentials",
-        "Azure Storage Account access key",
-        "Cloudant Credentials",
-        "SoftLayer Credentials",
-        "IBM Cloud IAM Key",
-        "IBM COS HMAC Credentials",
+def _cross_line_verdict_by_class() -> dict[str, bool]:
+    """Every detector CLASS the engine can enable, mapped to its declared
+    cross-line verdict — read from the three registries that declare it, which
+    is the same union `engine._CROSS_LINE_ELIGIBLE_CLASSES` is built from."""
+    rows = json.loads(_DETECTORS_JSON.read_text())["detectors"]
+    return {
+        **E._BUNDLED_PLUGINS,
+        **{entry["const"]: entry["cross_line"] for entry in rows},
+        **E._INLINE_PLUGINS,
+    }
+
+
+def test_every_json_detector_row_declares_a_cross_line_verdict():
+    """The verdict is a REQUIRED field, with a note saying why — so a detector
+    added to the SSOT cannot land uncategorised and silently ineligible."""
+    rows = json.loads(_DETECTORS_JSON.read_text())["detectors"]
+    assert len(rows) >= 10, "no detector rows discovered — this check is vacuous"
+    for entry in rows:
+        assert isinstance(entry.get("cross_line"), bool), entry["const"]
+        assert len(entry.get("cross_line_note", "")) > 20, entry["const"]
+    # Both verdicts are actually represented, so neither branch is untested.
+    assert {entry["cross_line"] for entry in rows} == {True, False}
+
+
+def test_cross_line_eligibility_partitions_every_active_detector():
+    """Every LIVE plugin's type is either cross-line eligible or exempt, and the
+    two sides are disjoint. Driven off the live plugin set and the declared
+    verdicts, so a new detector with no verdict fails here rather than defaulting
+    to one."""
+    verdicts = _cross_line_verdict_by_class()
+    # The map above re-derives what engine._CROSS_LINE_ELIGIBLE_CLASSES unions,
+    # so pin the two together: a test reading the registries differently from the
+    # engine would partition a set the engine never uses.
+    assert {
+        name for name, eligible in verdicts.items() if eligible
+    } == E._CROSS_LINE_ELIGIBLE_CLASSES
+    with E.configure_plugins():
+        live = {type(plugin).__name__: plugin.secret_type for plugin in get_plugins()}
+        eligible = E._cross_line_eligible_types()
+    assert live, "no live plugins discovered — this partition would be vacuous"
+    unclassified = sorted(set(live) - set(verdicts))
+    assert not unclassified, f"live plugins with no cross_line verdict: {unclassified}"
+    exempt = {
+        secret_type
+        for cls, secret_type in live.items()
+        if not verdicts[cls] and secret_type not in eligible
+    }
+    assert not (eligible & exempt), "a type is both eligible and exempt"
+    assert eligible | exempt == set(live.values()), {
+        "unclassified": sorted(set(live.values()) - eligible - exempt),
+        "stale_in_eligible": sorted(eligible - set(live.values())),
+    }
+    # Positive markers on both sides, so neither can pass by being empty.
+    assert {"AWS Access Key", "GitHub Token", "Private Key"} <= eligible
+    assert {
         "Groq API Key",
         "xAI API Key",
         "Replicate API Token",
-        "Twilio API Key",
-        "Telegram Bot Token",
-        "Mailchimp Access Key",
-    }
-)
-
-
-@pytest.mark.drift_guard
-def test_cross_line_eligibility_partitions_every_active_detector():
-    eligible = E._CROSS_LINE_ELIGIBLE_TYPES
-    ineligible = _CROSS_LINE_INELIGIBLE_TYPES
-    assert not (eligible & ineligible), "a type is both eligible and ineligible"
-    active = _active_detector_secret_types()
-    assert eligible | ineligible == active, {
-        "unclassified": sorted(active - eligible - ineligible),
-        "stale_in_eligible": sorted(eligible - active),
-        "stale_in_ineligible": sorted(ineligible - active),
-    }
-    assert {"Groq API Key", "xAI API Key", "Replicate API Token"} <= ineligible
+        "Secret Keyword",
+    } <= exempt
 
 
 # ─── NpmDetector: equivalence with the upstream quadratic pattern ────────────
@@ -405,3 +444,106 @@ def test_npm_detector_denylist_is_linear_on_whitespace_free_input():
     _NEW_NPM_RE.search(adversarial)
     elapsed = time.monotonic() - started
     assert elapsed < 1.0, f"NpmDetector denylist took {elapsed:.2f}s — quadratic again?"
+
+
+# ─── Keyword-context detectors: equivalence with the upstream cubic patterns ──
+# detect-secrets' bundled Cloudant / IBM Cloud IAM / IBM COS HMAC / SoftLayer
+# detectors spell their separator `(?: *)(?:=|:|:=|=>| +|::)(?: *)`, which splits
+# a run of k spaces O(k^2) ways and rates complexity 3 (cubic) under regexploit.
+# `"key" + " "*1200` cost 8.5s of CPU in one redact() call. The bundled patterns
+# are quoted through their upstream MODULES (imported here only — engine.py no
+# longer enables them) so the equivalence claim below is checked against the real
+# upstream shape rather than a restatement of it.
+_REPLACED_DETECTORS = {
+    "Cloudant Credentials": (_UpstreamCloudant, D.CloudantCredentialsDetector),
+    "IBM Cloud IAM Key": (_UpstreamIbmIam, D.IbmCloudIamKeyDetector),
+    "IBM COS HMAC Credentials": (_UpstreamIbmCos, D.IbmCosHmacKeyDetector),
+    "SoftLayer Credentials": (_UpstreamSoftlayer, D.SoftlayerCredentialsDetector),
+}
+
+_H64 = "9af3b71e6c2d80f54e9b1a7c3d6f20e8" * 2
+_A24 = "qxmzfwbnlvkrtdpghsjcyuxb"
+_V44 = "q9x2mn7pk4rt8wy1cv5bz3df6gh0jl2eq9x2mn7pk4rt"
+_H48 = "9af3b71e6c2d80f54e9b1a7c3d6f20e89af3b71e6c2d80f5"
+_SL64 = "q9x2mn7pk4rt8wy1cv5bz3df6gh0jl2e" * 2
+
+# Every separator, wrapper and casing spelling the upstream patterns accept, plus
+# negatives (a mid-identifier name, a value one char short) so agreement is
+# checked in both directions rather than only on hits.
+_KEYWORD_CONTEXT_CORPUS = [
+    f'cloudant_key = "{_A24}"',
+    f"cloudant_key {_A24}",
+    f"CLOUDANT_PASSWORD: {_H64}",
+    f'["cl_pw"] := "{_A24}"',
+    f"clou-token=  {_A24}",
+    f"cloudantkey::{_A24}",
+    f"cloudant_key   =>   '{_A24}'",
+    f"my_cloudant_key = {_A24}",
+    f"cloudant_key = {_A24[:-1]}",
+    f"https://user:{_H64}@acct.cloudant.com",
+    f'iam_key = "{_V44}"',
+    f"iam_key => {_V44}",
+    f"ibm_cloud_iam_api_key: {_V44}",
+    f"key = {_V44}",
+    f"IAM_TOKEN  ::  {_V44}",
+    f'cos_secret_access_key = "{_H48}"',
+    f"secret_key {_H48}",
+    f"ibm-cos-hmac_secret_access_key={_H48}",
+    f'softlayer_key = "{_SL64}"',
+    f"softlayer_key {_SL64}",
+    f'sl_api_key: "{_SL64}"',
+    f"https://api.softlayer.com/soap/v3/{_SL64}",
+    f"softlayer_key = {_SL64[:-1]}",
+    "nothing here at all",
+    f"password = {_V44}",
+]
+
+
+@pytest.mark.parametrize("line", _KEYWORD_CONTEXT_CORPUS)
+@pytest.mark.parametrize("secret_type", sorted(_REPLACED_DETECTORS))
+def test_linear_detector_reports_exactly_what_the_bundled_one_did(secret_type, line):
+    """The replacement changes the DECISION PROCEDURE, not the verdict: same
+    reported values on every corpus line, hit and miss alike."""
+    upstream, replacement = _REPLACED_DETECTORS[secret_type]
+    assert replacement.secret_type == upstream.secret_type
+    old = sorted({m for p in upstream.denylist for m in p.findall(line)})
+    new = sorted({m for p in replacement.denylist for m in p.findall(line)})
+    assert new == old, line
+
+
+@pytest.mark.parametrize("secret_type", sorted(_REPLACED_DETECTORS))
+def test_linear_detector_corpus_actually_exercises_it(secret_type):
+    """Non-vacuity for the equivalence above: agreeing on nothing but misses
+    would pass it. Each detector must fire on at least two corpus lines."""
+    _upstream, replacement = _REPLACED_DETECTORS[secret_type]
+    hits = [
+        line
+        for line in _KEYWORD_CONTEXT_CORPUS
+        if any(p.search(line) for p in replacement.denylist)
+    ]
+    assert len(hits) >= 2, hits
+
+
+@pytest.mark.parametrize("secret_type", sorted(_REPLACED_DETECTORS))
+def test_linear_detector_is_linear_on_a_space_run(secret_type):
+    """The defect itself: a run of spaces after a credential noun. Cubic means
+    doubling the run costs 8x, so a 4000-space run is the shape that cost
+    seconds; every replacement must scan it in milliseconds."""
+    _upstream, replacement = _REPLACED_DETECTORS[secret_type]
+    adversarial = "key" + " " * 4000
+    started = time.monotonic()
+    for pattern in replacement.denylist:
+        pattern.search(adversarial)
+    elapsed = time.monotonic() - started
+    assert elapsed < 0.5, f"{secret_type} took {elapsed:.2f}s on a space run"
+
+
+def test_redact_is_linear_on_the_reported_redos_payload():
+    """End-to-end floor for the whole engine on the audit's own repro: `"key" +
+    " "*1200` measured 8.53s of CPU, and 400/800/1600 spaces measured
+    0.54s/4.76s/40.1s (cubic). One second is far above the post-fix cost
+    (milliseconds) and far below the pre-fix one."""
+    started = time.monotonic()
+    run_plain("key" + " " * 1200)
+    elapsed = time.monotonic() - started
+    assert elapsed < 1.0, f"redact() took {elapsed:.2f}s on the ReDoS payload"

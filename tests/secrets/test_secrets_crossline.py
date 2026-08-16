@@ -140,6 +140,21 @@ def _ph(secret_type: str) -> str:
     return f"[REDACTED: {secret_type}]"
 
 
+@pytest.fixture
+def configured():
+    """_redact_cross_line reads the LIVE plugin set to decide which detector
+    types are cross-line eligible (E._cross_line_eligible_types), exactly as it
+    reads it for the prefilter — so it must run inside a configure_plugins()
+    block even when scan_line itself is stubbed out.
+
+    Requested BEFORE `monkeypatch` by every test that uses both, so it is set up
+    first and therefore torn down LAST: configure_plugins()'s exit calls
+    cache_clear() on E._eligible_prefilter, which _fake_scan replaces with a
+    plain lambda, so monkeypatch must undo its patch first."""
+    with E.configure_plugins():
+        yield
+
+
 def test_redact_line_overlapping_secrets_no_tail_leak(monkeypatch):
     short_val = "abcd1234"
     long_val = "abcd1234efgh5678"
@@ -162,7 +177,7 @@ def test_cross_line_no_newline_is_noop():
     assert found == []
 
 
-def test_cross_line_redacts_split_structural(monkeypatch):
+def test_cross_line_redacts_split_structural(configured, monkeypatch):
     head, tail = AWS_KEY[:12], AWS_KEY[12:]
     _fake_scan(monkeypatch, ("AWS Access Key", AWS_KEY))
     found: list[str] = []
@@ -171,14 +186,14 @@ def test_cross_line_redacts_split_structural(monkeypatch):
     assert found == ["AWS Access Key"]
 
 
-def test_cross_line_redacts_split_at_offset_zero(monkeypatch):
+def test_cross_line_redacts_split_at_offset_zero(configured, monkeypatch):
     _fake_scan(monkeypatch, ("AWS Access Key", "ABCD"))
     found: list[str] = []
     assert E._redact_cross_line("AB\nCD", found, cfg()) == _ph("AWS Access Key")
     assert found == ["AWS Access Key"]
 
 
-def test_cross_line_redacts_repeated_value_at_two_sites(monkeypatch):
+def test_cross_line_redacts_repeated_value_at_two_sites(configured, monkeypatch):
     _fake_scan(monkeypatch, ("AWS Access Key", "WXYZ"))
     found: list[str] = []
     out = E._redact_cross_line("WX\nYZ gap WX\nYZ", found, cfg())
@@ -186,7 +201,7 @@ def test_cross_line_redacts_repeated_value_at_two_sites(monkeypatch):
     assert found == ["AWS Access Key", "AWS Access Key"]
 
 
-def test_cross_line_leaves_within_line_match(monkeypatch):
+def test_cross_line_leaves_within_line_match(configured, monkeypatch):
     _fake_scan(monkeypatch, ("AWS Access Key", AWS_KEY))
     found: list[str] = []
     text = f"first line\nprefix {AWS_KEY} end"
@@ -194,21 +209,21 @@ def test_cross_line_leaves_within_line_match(monkeypatch):
     assert found == []
 
 
-def test_cross_line_skips_ineligible_type_and_empty(monkeypatch):
+def test_cross_line_skips_ineligible_type_and_empty(configured, monkeypatch):
     _fake_scan(monkeypatch, ("Secret Keyword", "abcd"), ("AWS Access Key", ""))
     found: list[str] = []
     assert E._redact_cross_line("ab\ncd", found, cfg()) == "ab\ncd"
     assert found == []
 
 
-def test_cross_line_overlapping_spans_redact_widest_once(monkeypatch):
+def test_cross_line_overlapping_spans_redact_widest_once(configured, monkeypatch):
     _fake_scan(monkeypatch, ("AWS Access Key", "ABCDEF"), ("GitHub Token", "ABC"))
     found: list[str] = []
     assert E._redact_cross_line("A\nBCDEF", found, cfg()) == _ph("AWS Access Key")
     assert found == ["AWS Access Key"]
 
 
-def test_cross_line_adjacent_spans_both_kept(monkeypatch):
+def test_cross_line_adjacent_spans_both_kept(configured, monkeypatch):
     _fake_scan(monkeypatch, ("AWS Access Key", "AABB"), ("GitHub Token", "CCDD"))
     found: list[str] = []
     out = E._redact_cross_line("AA\nBBCC\nDD", found, cfg())
@@ -311,7 +326,7 @@ def test_env_value_re_tolerates_non_enumerated_invisible_splice(cp):
 
 # ─── _eligible_prefilter soundness guard ─────────────────────────────────────
 # The prefilter's whole premise (see its docstring) is that every
-# _CROSS_LINE_ELIGIBLE_TYPES entry is served by a RegexBasedDetector whose
+# cross-line-eligible entry is served by a RegexBasedDetector whose
 # denylist IS its detection surface, so a prefilter miss cannot hide a real
 # detection. This guard states that premise directly rather than trusting it:
 # if a future detect-secrets upgrade ever gives an eligible type a detector with
@@ -324,9 +339,9 @@ def test_cross_line_prefilter_is_sound():
         by_type = {}
         for plugin in get_plugins():
             secret_type = getattr(plugin, "secret_type", None)
-            if secret_type in E._CROSS_LINE_ELIGIBLE_TYPES:
+            if secret_type in E._cross_line_eligible_types():
                 by_type[secret_type] = plugin
-        missing = E._CROSS_LINE_ELIGIBLE_TYPES - by_type.keys()
+        missing = E._cross_line_eligible_types() - by_type.keys()
         assert not missing, f"no active plugin for eligible type(s): {missing}"
         for secret_type, plugin in by_type.items():
             denylist = getattr(plugin, "denylist", ())

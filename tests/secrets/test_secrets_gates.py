@@ -95,6 +95,10 @@ _SHAPE_FIXTURES = {
     "_is_timestamp": ("2024-01-15T10:30:00.000000Z",),
     "_is_version": ("v2.0.1", "1.2.3-alpha.build.abcdef"),
     "_is_markdown_code_prose": ("run `--api-key` with your own credentials",),
+    # Decides on the byte AFTER the value (a `(` proving the identifier is
+    # called), which a bare value/line pair cannot carry — see the exercised-set
+    # allow-list below and test_secrets_engine.py::test_is_call_or_code_ref.
+    "_is_call_or_code_ref": (),
 }
 _NAME_TRUST_FIXTURES = {
     "_is_config_attr_reference": (
@@ -116,6 +120,25 @@ _NAME_TRUST_FIXTURES = {
     # and excluded from the independence matrix rather than given fake fixtures.
     "_is_benign_cursor": (),
     "_is_metadata_field": (),
+}
+
+
+# The gates the fixture matrices below cannot exercise, each with the input it
+# reads that a bare (value, line) pair does not carry. Every one has its own
+# dedicated test in test_secrets_engine.py.
+_NOT_VALUE_ONLY_GATES = {
+    "_is_benign_cursor": (
+        "reads the FIELD NAME glued before the match, so the field name is its "
+        "input rather than a variable the independence matrix sweeps"
+    ),
+    "_is_metadata_field": (
+        "reads the FIELD NAME's suffix, so the field name is its input rather "
+        "than a variable the independence matrix sweeps"
+    ),
+    "_is_call_or_code_ref": (
+        "reads the byte immediately AFTER the value in the line, which a "
+        "Candidate built as (value, line=value) has no room to carry"
+    ),
 }
 
 
@@ -145,17 +168,20 @@ def test_every_gate_has_positive_fixtures():
     )
     # The key-set checks above are satisfied by an empty fixture tuple, which
     # exercises nothing — so the opt-out is an explicit allow-list rather than a
-    # spelling the next gate can be copy-pasted into. Only the two gates that
-    # decide ON the field name may take it.
+    # spelling the next gate can be copy-pasted into. Only a gate whose input is
+    # something OTHER than the value's own bytes may take it, and each entry
+    # names what that other input is.
     unexercised = {
         name
         for name, values in (*_SHAPE_FIXTURES.items(), *_NAME_TRUST_FIXTURES.items())
         if not values
     }
-    assert unexercised == {"_is_benign_cursor", "_is_metadata_field"}, (
+    assert unexercised == set(_NOT_VALUE_ONLY_GATES), (
         f"{sorted(unexercised)} register no fixtures, so the independence and "
         "non-vacuity matrices skip them entirely"
     )
+    for name, reason in _NOT_VALUE_ONLY_GATES.items():
+        assert len(reason) > 20, f"_NOT_VALUE_ONLY_GATES[{name}] needs a real reason"
 
 
 _SHAPE_CASES = [
