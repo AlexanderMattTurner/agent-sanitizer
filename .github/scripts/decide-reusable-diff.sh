@@ -10,6 +10,8 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 . "$HERE/lib-decide-range.sh"
 # shellcheck source=lib-path-match.sh disable=SC1091
 . "$HERE/lib-path-match.sh"
+# shellcheck source=lib-git-auth.sh disable=SC1091
+. "$HERE/lib-git-auth.sh"
 # Normalize every input to defined-possibly-empty so `set -u` catches a future
 # reference to a genuinely-unset variable (a real bug) without crashing on an
 # intentionally-omitted optional trigger. BASE_SHA/HEAD_SHA absent keeps its
@@ -85,8 +87,9 @@ fi
 # no BASE_REF and keep their exact ranges. Fail-open: any fetch/resolve failure leaves
 # BASE_SHA at the webhook value — today's safe over-run, never an under-run.
 if [[ -n "${BASE_REF:-}" && -n "${GH_TOKEN:-}" ]]; then
-  auth="$(printf 'x-access-token:%s' "$GH_TOKEN" | base64 | tr -d '\n')"
-  if git -c "http.extraheader=AUTHORIZATION: basic $auth" \
+  auth="" # assigned by name below; shellcheck cannot follow printf -v
+  git_auth_header_value auth "$GH_TOKEN"
+  if git -c "$GIT_AUTH_HEADER_KEY=$auth" \
     fetch --no-tags --quiet origin "$BASE_REF" 2>/dev/null; then
     live_base="$(git rev-parse FETCH_HEAD 2>/dev/null || true)"
     # Only advance the base FORWARD along history: require the live tip to be a
