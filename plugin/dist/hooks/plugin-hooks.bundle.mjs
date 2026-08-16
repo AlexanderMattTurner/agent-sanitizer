@@ -3864,15 +3864,19 @@ var init_invisible = __esm({
 function needsMarkdownPipeline(text5) {
   return HTML_TAG_PRESENT.test(text5) || MD_LINK_HINT.test(text5);
 }
+function needsUrlScan(text5) {
+  return URL_PRESENT.test(text5) || needsMarkdownPipeline(text5);
+}
 function matchesSecretHint(text5) {
   return SECRET_HINT.test(text5) || SECRET_HINT_EXT.test(text5);
 }
-var HTML_TAG_PRESENT, MD_LINK_HINT, SECRET_HINT, SECRET_HINT_EXT;
+var HTML_TAG_PRESENT, MD_LINK_HINT, URL_PRESENT, SECRET_HINT, SECRET_HINT_EXT;
 var init_gates = __esm({
   "src/gates.mjs"() {
     "use strict";
     HTML_TAG_PRESENT = /<[a-zA-Z/!?][^<>]*>/;
     MD_LINK_HINT = /\]\(|!\[|^[ \t]*\[[^[\]\n]+\]:\s/m;
+    URL_PRESENT = /https?:\/\//i;
     SECRET_HINT = /secret|token|password|passwd|pwd|bearer|credential|authorization|contrase[nñ]a|-----BEGIN|(?:api|auth|service|account|db|database|priv|private|client|access)[_-]?key|(?:db|database|key)[_-]?pass|(?:A3T|AKIA|AGPA|AIDA|AROA|AIPA|ANPA|ANVA|ASIA)[A-Z0-9]{16}|gh[pousr]_[A-Za-z0-9]|github_pat_|gl[a-z]{2,12}-[0-9A-Za-z_-]{20}|sk-ant-|AIza[0-9A-Za-z_-]{35}|sk_live_|sk_test_|rk_live_|rk_test_|xox[bpasr]-|eyJ[A-Za-z0-9]|do[opr]_v1_[a-f0-9]{16}|v1\.0-[a-f0-9]{24}-|hv[sb]\.[A-Za-z0-9_-]{20}|(?<![a-z0-9])[a-z0-9]{14}\.atlasv1\.|sk-or-v1-[0-9a-f]{16}|gsk_[A-Za-z0-9]{16}|xai-[A-Za-z0-9]{16}|r8_[A-Za-z0-9]{16}/i;
     SECRET_HINT_EXT = /(?:AC|SK)[a-z0-9]{32}|SG\.[A-Za-z0-9_-]{22}\.[A-Za-z0-9_-]{43}|sq0csp-[0-9A-Za-z_-]{43}|(?<![0-9])[0-9]{8,10}:[0-9A-Za-z_-]{35}|(?<![0-9a-z])[0-9a-z]{32}-us[0-9]{1,2}|(?<![A-Za-z0-9_-])[MNO][A-Za-z0-9_-]{23,25}\.[A-Za-z0-9_-]{6}\.[A-Za-z0-9_-]{27}|T3BlbkFJ|pypi-AgE|(?<![A-Za-z0-9])AKC[A-Za-z0-9]{10}|(?<![A-Za-z0-9])AP[0-9A-Fa-f][A-Za-z0-9]{8}|:\/\/[^\s:/@]{1,64}:[^\s:/@]{1,64}@|(?:key|pw|pass)["']?[\s:=>]+["']?[A-Za-z0-9_/+-]{20}/i;
   }
@@ -63327,13 +63331,12 @@ function isHidingTransform(node2) {
     const name50 = fn.name;
     const args = valueTokens(fn);
     if (/^(?:scale|scale3d|scalex|scaley|matrix|matrix3d)$/.test(name50)) {
-      const numbers = args.filter(
-        (a) => a.type === "Number"
-      );
+      const groups = functionArgs(fn);
       const factorIdx = name50 === "matrix" ? [0, 3] : name50 === "matrix3d" ? [0, 5] : [0, 1];
       if (factorIdx.some((i) => {
-        const f = numbers[i];
-        return f && Math.abs(parseFloat(f.value)) < NEAR_ZERO_EPSILON;
+        const group = groups[i];
+        const factor = group && group.length === 1 ? group[0] : null;
+        return factor !== null && factor.type === "Number" && Math.abs(parseFloat(factor.value)) < NEAR_ZERO_EPSILON;
       }))
         return true;
     } else if (name50 === "rotatex" || name50 === "rotatey") {
@@ -63462,14 +63465,17 @@ function canonicalizeColorFunction(value) {
   if (h2 === null || s2 === null || l === null) return null;
   return hslToHex(h2, s2, l);
 }
+function canonicalizeHex(digits) {
+  const expanded = digits.length <= 4 ? [...digits].map((digit) => digit + digit).join("") : digits;
+  if (expanded.slice(6) === "00") return "transparent";
+  return `#${expanded.slice(0, 6)}`;
+}
 function canonicalizeColor(raw) {
   const value = raw.trim().toLowerCase();
   if (!value) return "";
   if (Object.hasOwn(NAMED_COLORS, value)) return NAMED_COLORS[value];
-  const shortHex = value.match(/^#([0-9a-f])([0-9a-f])([0-9a-f])$/);
-  if (shortHex)
-    return `#${shortHex[1]}${shortHex[1]}${shortHex[2]}${shortHex[2]}${shortHex[3]}${shortHex[3]}`;
-  if (/^#[0-9a-f]{6}$/.test(value)) return value;
+  const hex = value.match(/^#([0-9a-f]{3,4}|[0-9a-f]{6}|[0-9a-f]{8})$/);
+  if (hex) return canonicalizeHex(hex[1]);
   return canonicalizeColorFunction(value) ?? value;
 }
 function paintsImageLayer(node2) {
@@ -64032,7 +64038,8 @@ function rawParams(qs) {
     if (!pair) continue;
     const eq = pair.indexOf("=");
     const name50 = eq === -1 ? pair : pair.slice(0, eq);
-    const value = eq === -1 ? "" : pair.slice(eq + 1);
+    const afterEq = eq === -1 ? "" : pair.slice(eq + 1);
+    const value = afterEq === "" ? pair : afterEq;
     pairs.push([name50.toLowerCase(), value]);
   }
   return pairs;
@@ -64230,7 +64237,7 @@ function collectUrls(text5) {
   return urls;
 }
 function detectExfil(text5) {
-  if (!MD_LINK_HINT.test(text5) && !HTML_TAG_PRESENT.test(text5)) return null;
+  if (!needsUrlScan(text5)) return null;
   const threats = [];
   try {
     for (const { url, isImage, autoFetched, context } of collectUrls(text5)) {
@@ -64253,7 +64260,7 @@ function detectExfil(text5) {
   return threats.length > 0 ? threats : null;
 }
 function detectConfusableHosts(text5) {
-  if (!MD_LINK_HINT.test(text5) && !HTML_TAG_PRESENT.test(text5)) return null;
+  if (!needsUrlScan(text5)) return null;
   const threats = [];
   const seen = /* @__PURE__ */ new Set();
   try {
@@ -64580,7 +64587,7 @@ var init_html4 = __esm({
     DATA_URI_LENGTH_THRESHOLD = 4096;
     SCRIPT_URI_RE = /^\s*(?:javascript|vbscript):/i;
     RELATIVE_URL_BASE = "http://relative.invalid";
-    BENIGN_BLOB_PARAM_RE = /^(?:x-(?:amz|goog|ms|oss|obs)-[a-z0-9-]+|amz-[a-z0-9-]+|utm_[a-z]+|sig|signature|hmac|policy|credential|expires|key-pair-id|se|sp|sr|sv|st|spr|si|skoid|sktid|cursor|after|before|continuation|continuationtoken|continuation_token|pagetoken|page_token|nexttoken|next_token|gclid|fbclid|dclid|msclkid|gbraid|wbraid|_ga|_gl|mc_eid|mc_cid)$/i;
+    BENIGN_BLOB_PARAM_RE = /^(?:x-(?:amz|goog|ms|oss|obs)-[a-z0-9-]+|amz-[a-z0-9-]+|utm_[a-z]+|sig|signature|hmac|policy|credential|expires|key-pair-id|se|sp|sr|sv|st|spr|si|skoid|sktid|code|state|cursor|after|before|continuation|continuationtoken|continuation_token|pagetoken|page_token|nexttoken|next_token|gclid|fbclid|dclid|msclkid|gbraid|wbraid|_ga|_gl|mc_eid|mc_cid)$/i;
     OPAQUE_TOKEN_RE = /[A-Za-z0-9_]{20,}/g;
     VALUE_HAS_DIGIT_RE = /\d/;
     BLOB_VALUE_B64_RE = /^[A-Za-z0-9+/]{40,}={0,2}$/;
@@ -64701,8 +64708,9 @@ async function applyMarkdownPipeline(state, { html: html4, exfilScan, deadline }
   const inputText = state.text;
   let reveal;
   const splices = [];
-  if (!html4 && !exfilScan || !needsMarkdownPipeline(inputText))
-    return { reveal: void 0, splices };
+  const runLayer2 = Boolean(html4) && needsMarkdownPipeline(inputText);
+  const runLayer3 = Boolean(exfilScan) && needsUrlScan(inputText);
+  if (!runLayer2 && !runLayer3) return { reveal: void 0, splices };
   const refuseIfSpent = () => {
     if (deadline && deadline.remainingMs() <= 0)
       throw new Error(
@@ -64719,7 +64727,7 @@ async function applyMarkdownPipeline(state, { html: html4, exfilScan, deadline }
       { cause: importErr }
     );
   }
-  if (html4) {
+  if (runLayer2) {
     const layer2 = sanitizeHtml2(state.text);
     if (layer2) {
       if (layer2.text !== state.text) {
@@ -64740,7 +64748,7 @@ async function applyMarkdownPipeline(state, { html: html4, exfilScan, deadline }
       if (preserved) state.findings.push(note(preserved));
     }
   }
-  if (exfilScan) {
+  if (runLayer3) {
     refuseIfSpent();
     const threats = detectExfil2(inputText);
     if (threats) {
