@@ -34,6 +34,26 @@
 # Env: GH_TOKEN, GH_REPO (owner/name), PR, HEAD_SHA, RUN_URL.
 set -euo pipefail
 
+# WHOSE review clears this gate, and the reason the answer is not "anyone's": a
+# review is something the PR author can post on their own pull request, so an
+# any-actor gate is cleared by the author writing a one-word COMMENT review and
+# the required context then asserts an automated review that never ran.
+#
+# The reviewer posts with the workflow GITHUB_TOKEN, so its reviews are authored
+# by this bot — as is the approval auto-approve-skipped posts for a PR the
+# reviewer skips by title or author, which is what still clears this gate for
+# that class without re-deriving decide-pr-review-trigger.sh's skip rules here.
+#
+# lib/reviewer-identity.bash is the one definition of that reviewer, shared with
+# the sibling gate — two gates naming different reviewers is a required context
+# nothing that runs can clear. It sources nothing, so it costs the narrow
+# `sparse-checkout` lists that fetch this script one more line and no runtime
+# risk; tests/test_sparse_checkout_source_closure.py reds CI on a list that
+# omits it.
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=.github/scripts/lib/reviewer-identity.bash
+source "$SCRIPT_DIR/lib/reviewer-identity.bash"
+
 : "${GH_REPO:?GH_REPO required}"
 : "${PR:?PR number required}"
 : "${HEAD_SHA:?HEAD_SHA required}"
@@ -45,24 +65,6 @@ set -euo pipefail
 # never satisfies it.
 GATE_CONTEXT="Automated review posted"
 
-# WHOSE review clears this gate, and the reason the answer is not "anyone's": a
-# review is something the PR author can post on their own pull request, so an
-# any-actor gate is cleared by the author writing a one-word COMMENT review and
-# the required context then asserts an automated review that never ran.
-#
-# The reviewer posts with the workflow GITHUB_TOKEN, so its reviews are authored
-# by this bot — as is the approval auto-approve-skipped posts for a PR the
-# reviewer skips by title or author, which is what still clears this gate for
-# that class without re-deriving decide-pr-review-trigger.sh's skip rules here.
-#
-# DUPLICATED, deliberately: review-findings-gate.sh sets the same login and both
-# gates must mean the same reviewer. Neither can source it from a lib, because
-# five workflows fetch this script ALONE via `sparse-checkout:
-# .github/scripts/review-gate.sh`, and a lib absent from those checkouts would
-# kill the gate at runtime under `set -e`. The drift is guarded by a test.
-REVIEWER_LOGIN_BARE="github-actions"
-export REVIEWER_LOGIN_BARE
-
 # Every review that still stands, paginated: a long-lived PR accumulates more
 # than one page. A DISMISSED review is dropped here, which is what makes the
 # workflow's `dismissed` trigger do something — dismissing the only review
@@ -72,25 +74,13 @@ export REVIEWER_LOGIN_BARE
 # --paginate --jq` applies the filter to EACH page, so a `first`/`max_by` would
 # silently run once per page and answer from the last one.
 #
-# Only the reviewer's own reviews count (see REVIEWER_LOGIN_BARE above). The
-# REST endpoint spells an app bot's login WITH the `[bot]` suffix while GraphQL
-# spells it without, so the login is stripped before comparing and either
-# spelling matches — the same normalization lib/pr-reviews.bash applies.
-#
-# The body-non-empty test asks WHETHER THIS IS A REVIEW, which the author test
-# does not. GitHub synthesizes a body-less COMMENTED review by the same bot
-# around every standalone review-comment POST, and resolve-addressed-threads.sh
-# posts its audit replies under that identity. Counting one satisfies this gate
-# vacuously on exactly the PRs that carry threads — the ones
-# approve-if-reviewer-hold-clear.sh dismisses a CHANGES_REQUESTED on, where a
-# standing synthesized review holds the status green and strips the workflow's
-# `dismissed` trigger of meaning. Every bot writer passes a non-empty body
-# (post-pr-review.mjs falls back to "Automated review."), so the test costs
-# nothing. lib/pr-reviews.bash applies the same one for the sibling gate.
+# `is_reviewer_review` is the shared predicate: authored by the reviewer AND
+# carrying a body. The body half is what makes this gate mean something on a PR
+# that carries threads — see lib/reviewer-identity.bash for the synthesized
+# review it excludes.
 reviewers="$(gh api --paginate "repos/${GH_REPO}/pulls/${PR}/reviews" \
-  --jq '.[] | select(.state != "DISMISSED")
-      | select((.body // "") != "")
-      | select((.user.login // "" | sub("\\[bot\\]$"; "")) == env.REVIEWER_LOGIN_BARE)
+  --jq "$REVIEWER_JQ"'.[] | select(.state != "DISMISSED")
+      | select(is_reviewer_review)
       | .user.login // ""')"
 reviewer="$(head -n 1 <<<"$reviewers")"
 

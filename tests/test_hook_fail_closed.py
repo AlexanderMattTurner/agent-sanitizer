@@ -8,11 +8,16 @@ than skips. Positive controls (the escape hatch works; the command gate skips
 non-push commands) keep the suite from passing vacuously.
 """
 
+import os
 import shutil
 import subprocess
 from pathlib import Path
 
-from tests._helpers import REPO_ROOT
+from tests._helpers import (
+    GIT_LOCATION_VARS_CONFIG,
+    REPO_ROOT,
+    env_without_git_location,
+)
 
 # Coreutils the hooks legitimately need; everything else is "absent" unless a
 # test opts it back in. printf/pwd/cd/command/[[ are bash builtins (always
@@ -21,6 +26,17 @@ BASE_TOOLS = [
     "bash", "sh", "git", "cat", "grep", "sed", "awk", "tr", "head", "cut",
     "dirname", "basename", "env", "mktemp", "rm", "xargs", "find", "id",
 ]  # fmt: skip
+
+
+def git(repo: Path, *args: str) -> None:
+    """Run git against the SANDBOX repo, never the one this suite runs inside.
+
+    The repo-location overrides have to be stripped: the pre-commit hook exports
+    GIT_DIR into every child, and with GIT_DIR set `cwd=` stops deciding which
+    repository git answers for. These sandboxes commit and stage, so an inherited
+    GIT_DIR writes those commits into the developer's own checkout.
+    """
+    subprocess.run(["git", *args], cwd=repo, check=True, env=env_without_git_location())
 
 
 def curated_path(tmp_path: Path, allow: list[str]) -> str:
@@ -43,15 +59,15 @@ def base_env(path: str) -> dict[str, str]:
     }
 
 
-def init_repo(tmp_path: Path) -> Path:
-    repo = tmp_path / "repo"
-    repo.mkdir()
-    subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+def init_repo(tmp_path: Path, name: str = "repo") -> Path:
+    repo = tmp_path / name
+    repo.mkdir(parents=True)
+    git(repo, "init", "-q")
     # A CI runner has no global git identity, so a sandbox that commits (the
     # staged-deletion cases seed a commit first) dies with "empty ident name"
     # there while passing on any developer machine.
     for key, value in (("user.email", "test@example.com"), ("user.name", "Test")):
-        subprocess.run(["git", "config", key, value], cwd=repo, check=True)
+        git(repo, "config", key, value)
     # Every .hooks/ hook sources lib-gate.sh relative to the sandbox's own git
     # root, not to the hook's own path, so the helper has to exist here even
     # when the hook under test is invoked from REPO_ROOT.
@@ -167,7 +183,7 @@ def test_pre_commit_runs_lint_staged_directly_without_package_manager(
     fake.write_text(f'#!/bin/bash\necho ran > "{marker}"\nexit 0\n')
     fake.chmod(0o755)
     (repo / "a.txt").write_text("hello\n")
-    subprocess.run(["git", "add", "a.txt"], cwd=repo, check=True)
+    git(repo, "add", "a.txt")
     path = curated_path(tmp_path, BASE_TOOLS)  # no pnpm/npm
     result = subprocess.run(
         ["bash", str(REPO_ROOT / ".hooks" / "pre-commit")],
@@ -192,7 +208,7 @@ def test_pre_commit_fails_closed_when_lint_staged_missing(tmp_path: Path) -> Non
     repo = init_repo(tmp_path)
     (repo / "package.json").write_text("{}\n")
     (repo / "a.txt").write_text("hello\n")
-    subprocess.run(["git", "add", "a.txt"], cwd=repo, check=True)
+    git(repo, "add", "a.txt")
     path = curated_path(tmp_path, BASE_TOOLS)  # no node_modules in repo at all
     result = subprocess.run(
         ["bash", str(REPO_ROOT / ".hooks" / "pre-commit")],
@@ -213,7 +229,7 @@ def test_pre_commit_passes_without_package_json(tmp_path: Path) -> None:
     # with a broken gate", not from "no lint-staged binary" on its own.
     repo = init_repo(tmp_path)
     (repo / "a.txt").write_text("hello\n")
-    subprocess.run(["git", "add", "a.txt"], cwd=repo, check=True)
+    git(repo, "add", "a.txt")
     path = curated_path(tmp_path, BASE_TOOLS)
     result = subprocess.run(
         ["bash", str(REPO_ROOT / ".hooks" / "pre-commit")],
@@ -254,6 +270,11 @@ def _sandbox_guarded_repo(
     # pass for the wrong reason — which is why the sandbox mirrors the real
     # dependency instead of stubbing the scan out.
     shutil.copytree(REPO_ROOT / ".hooks" / "lib", hooks / "lib")
+    # Same reasoning for the shared list of git's repository-location overrides:
+    # the runner strips them from the env it gives every suite, and reads their
+    # names from this file.
+    (repo / GIT_LOCATION_VARS_CONFIG).parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy(REPO_ROOT / GIT_LOCATION_VARS_CONFIG, repo / GIT_LOCATION_VARS_CONFIG)
     if with_acorn:
         (repo / "node_modules" / "acorn").symlink_to(
             REPO_ROOT / "node_modules" / "acorn"
@@ -270,7 +291,7 @@ def _sandbox_guarded_repo(
     # pairing path, which is the only thing these two tests cover, would be
     # asserting nothing. The suite does not need to be tracked: the runner
     # executes it by path.
-    subprocess.run(["git", "add", "--", *stage], cwd=repo, check=True)
+    git(repo, "add", "--", *stage)
     return repo
 
 
@@ -365,10 +386,8 @@ def test_pre_commit_does_not_schedule_a_deleted_suite(tmp_path: Path) -> None:
     repo = _sandbox_guarded_repo(
         tmp_path, PASSING_GUARD, pairs="{}", stage=("guard.test.mjs",)
     )
-    subprocess.run(
-        ["git", "commit", "-q", "-m", "seed", "--no-verify"], cwd=repo, check=True
-    )
-    subprocess.run(["git", "rm", "-q", "--", "guard.test.mjs"], cwd=repo, check=True)
+    git(repo, "commit", "-q", "-m", "seed", "--no-verify")
+    git(repo, "rm", "-q", "--", "guard.test.mjs")
     result = _run_pre_commit_guarded(repo, tmp_path)
     assert result.returncode == 0, (
         "deleting a suite must not block the commit\n" + result.stderr
@@ -393,10 +412,8 @@ def test_pre_commit_guards_a_staged_deletion_of_a_guarded_source(
     pair present this would pass without the scan running at all.
     """
     repo = _sandbox_guarded_repo(tmp_path, DERIVED_FAILING_GUARD, pairs="{}")
-    subprocess.run(
-        ["git", "commit", "-q", "-m", "seed", "--no-verify"], cwd=repo, check=True
-    )
-    subprocess.run(["git", "rm", "-q", "--", "data.json"], cwd=repo, check=True)
+    git(repo, "commit", "-q", "-m", "seed", "--no-verify")
+    git(repo, "rm", "-q", "--", "data.json")
     result = _run_pre_commit_guarded(repo, tmp_path)
     assert result.returncode != 0, (
         "deleting a guarded source must still run its guard\n" + result.stderr
@@ -451,3 +468,85 @@ def test_pre_commit_refuses_a_pair_naming_a_missing_guard(tmp_path: Path) -> Non
     result = _run_pre_commit_guarded(repo, tmp_path)
     assert result.returncode != 0, result.stderr
     assert "gone.test.mjs, which does not exist" in result.stderr
+
+
+def _head(repo: Path) -> str:
+    return subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=repo,
+        check=True,
+        capture_output=True,
+        text=True,
+        env=env_without_git_location(),
+    ).stdout
+
+
+def test_the_sandbox_git_helper_ignores_an_inherited_git_dir(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """A sandbox commit lands in the sandbox, whatever GIT_DIR the caller exports.
+
+    This is the incident, not a hypothetical: run under the pre-commit hook —
+    which exports GIT_DIR — the helpers above committed each sandbox's fixture
+    files onto the developer's own branch, because with GIT_DIR set `cwd=` no
+    longer decides which repository git answers for.
+    """
+    sandbox = init_repo(tmp_path, "sandbox")
+    decoy = init_repo(tmp_path, "decoy")
+    (decoy / "kept.txt").write_text("do not touch\n")
+    git(decoy, "add", "kept.txt")
+    git(decoy, "commit", "-q", "-m", "decoy", "--no-verify")
+    decoy_head = _head(decoy)
+
+    monkeypatch.setenv("GIT_DIR", str(decoy / ".git"))
+    (sandbox / "fixture.txt").write_text("sandbox only\n")
+    git(sandbox, "add", "fixture.txt")
+    git(sandbox, "commit", "-q", "-m", "seed", "--no-verify")
+
+    assert _head(decoy) == decoy_head, (
+        "the sandbox commit landed in the decoy repository"
+    )
+    # Positive marker: the commit really happened, so the assertion above is not
+    # satisfied by a helper that quietly did nothing at all.
+    listed = subprocess.run(
+        ["git", "show", "--name-only", "--format=", "HEAD"],
+        cwd=sandbox,
+        check=True,
+        capture_output=True,
+        text=True,
+        env=env_without_git_location(),
+    ).stdout
+    assert listed.split() == ["fixture.txt"]
+
+
+def test_the_guard_pair_runner_strips_an_inherited_git_dir(tmp_path: Path) -> None:
+    """The runner's own children get no GIT_DIR, whatever the hook exported.
+
+    Fixing each suite one module at a time leaves the next one to be written
+    exposed, so the strip belongs where the suites are spawned. The probe is the
+    suite that actually did the damage: with GIT_DIR inherited,
+    tests/test_template_sync.py checked out fixture refs in the developer's own
+    repository and rewound the working tree in the middle of a commit.
+    """
+    decoy = init_repo(tmp_path, "decoy")
+    (decoy / "kept.txt").write_text("do not touch\n")
+    git(decoy, "add", "kept.txt")
+    git(decoy, "commit", "-q", "-m", "decoy", "--no-verify")
+    head = _head(decoy)
+
+    result = subprocess.run(
+        [
+            "node",
+            str(REPO_ROOT / ".hooks" / "run-guard-pairs.mjs"),
+            "tests/test_template_sync.py",
+        ],
+        cwd=REPO_ROOT,
+        env={**os.environ, "GIT_DIR": str(decoy / ".git")},
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stderr
+    # Positive marker: the suite really ran, so the untouched decoy below is not
+    # the result of the runner scheduling nothing at all.
+    assert "tests/test_template_sync.py" in result.stderr
+    assert _head(decoy) == head, "a guard suite wrote into the repo GIT_DIR named"

@@ -4,28 +4,44 @@ Lives in a regular module (not `conftest.py`) so it can be imported directly
 without manipulating `sys.path` or relying on the conftest plugin loader.
 """
 
+import json
 import os
 import shutil
 import subprocess
 import sys
 from pathlib import Path
 
-#: Git's own repository-location overrides. A git hook exports GIT_DIR (and
-#: friends) into every child process, and with GIT_DIR set but no GIT_WORK_TREE
-#: git treats the CURRENT DIRECTORY as the work tree — so `rev-parse
-#: --show-toplevel` run from `tests/` answers `<repo>/tests`, not `<repo>`.
-#: Under the pre-commit guard-pair runner that made REPO_ROOT wrong by one
-#: directory for every pytest guard, and each one died on a FileNotFoundError
-#: for a repo file it was reading. Stripping the overrides makes the lookup mean
-#: "the repo this file lives in", which is what every caller wants.
-_GIT_LOCATION_VARS = (
-    "GIT_DIR",
-    "GIT_WORK_TREE",
-    "GIT_COMMON_DIR",
-    "GIT_INDEX_FILE",
-    "GIT_OBJECT_DIRECTORY",
-    "GIT_PREFIX",
-)
+#: The one list of git's repository-location overrides, shared with the JS side
+#: through `.hooks/lib/git-location-env.mjs`.
+GIT_LOCATION_VARS_CONFIG = "config/git-location-vars.json"
+
+
+def _git_location_vars() -> frozenset[str]:
+    """The override names, found by walking up from this file.
+
+    The walk cannot ask git where the repo is, because this list is what makes
+    that answer trustworthy. It looks for the config file itself rather than
+    counting `.parent` hops, so moving this module does not break it.
+    """
+    for directory in Path(__file__).resolve().parents:
+        config = directory / GIT_LOCATION_VARS_CONFIG
+        if config.is_file():
+            return frozenset(json.loads(config.read_text(encoding="utf-8"))["vars"])
+    raise FileNotFoundError(
+        f"no {GIT_LOCATION_VARS_CONFIG} above {__file__} — the tests cannot strip "
+        "git's repository-location overrides, so every subprocess they run would "
+        "answer for whichever repository GIT_DIR names"
+    )
+
+
+#: A git hook exports GIT_DIR (and friends) into every child process, and with
+#: GIT_DIR set but no GIT_WORK_TREE git treats the CURRENT DIRECTORY as the work
+#: tree — so `rev-parse --show-toplevel` run from `tests/` answers `<repo>/tests`,
+#: not `<repo>`. Under the pre-commit guard-pair runner that made REPO_ROOT wrong
+#: by one directory for every pytest guard, and each one died on a
+#: FileNotFoundError for a repo file it was reading. Stripping the overrides makes
+#: the lookup mean "the repo this file lives in", which every caller wants.
+_GIT_LOCATION_VARS = _git_location_vars()
 
 
 def env_without_git_location() -> dict[str, str]:

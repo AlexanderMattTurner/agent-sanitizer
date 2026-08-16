@@ -46,12 +46,6 @@ source "$SCRIPT_DIR/lib/pr-reviews.bash"
 # here has to land under the same context or the PR head never satisfies the gate.
 CHECK_NAME="Review findings resolved"
 
-# The reviewer posts with the workflow GITHUB_TOKEN, so its reviews and threads
-# are authored by this bot. GraphQL returns an app bot's login WITHOUT the REST
-# `[bot]` suffix; both the review and thread queries below compare the BARE
-# login (see the lib headers).
-export REVIEWER_LOGIN_BARE="github-actions"
-
 owner="${GH_REPO%%/*}"
 name="${GH_REPO##*/}"
 

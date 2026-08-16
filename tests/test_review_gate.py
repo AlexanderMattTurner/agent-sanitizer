@@ -17,7 +17,6 @@ why both spellings are tested.
 
 import json
 import os
-import re
 import subprocess
 from pathlib import Path
 
@@ -26,7 +25,6 @@ import pytest
 from tests._helpers import REPO_ROOT
 
 SCRIPT = REPO_ROOT / ".github" / "scripts" / "review-gate.sh"
-FINDINGS_GATE = REPO_ROOT / ".github" / "scripts" / "review-findings-gate.sh"
 
 _FAKE_GH = r"""#!/usr/bin/env python3
 # gh stub: serves the PR reviews list from a canned file, running the CALLER'S
@@ -230,29 +228,3 @@ def test_a_failed_reviews_read_fails_closed_with_no_status(tmp_path: Path) -> No
     proc, posted = _run(tmp_path, [], fail_reads=True)
     assert proc.returncode != 0
     assert posted == []
-
-
-@pytest.mark.drift_guard
-def test_drift_guard_both_gates_name_the_same_reviewer_login() -> None:
-    """DRIFT GUARD — two copies of one login, asserted equal. Named honestly
-    rather than as "the gates agree", which would launder the duplication.
-
-    Why a true SSOT is infeasible here: five workflows fetch review-gate.sh
-    ALONE via `sparse-checkout: .github/scripts/review-gate.sh`, so a lib it
-    sourced would be missing from those checkouts and kill the gate at runtime
-    under `set -e`. Moving the login into a lib means adding it to every one of
-    those checkout lists first.
-
-    What the drift costs: the two required contexts would answer to different
-    reviewers, so one of them could never be cleared by the reviewer that runs.
-    """
-    pattern = re.compile(r'REVIEWER_LOGIN_BARE="(?P<login>[^"]+)"')
-    logins = {
-        path.name: pattern.findall(path.read_text(encoding="utf-8"))
-        for path in (SCRIPT, FINDINGS_GATE)
-    }
-    # Positive marker: each assignment must actually exist, or the equality
-    # below passes on two empty lists.
-    for name, found in logins.items():
-        assert found, f"{name} no longer assigns REVIEWER_LOGIN_BARE"
-    assert set(logins[SCRIPT.name]) == set(logins[FINDINGS_GATE.name])

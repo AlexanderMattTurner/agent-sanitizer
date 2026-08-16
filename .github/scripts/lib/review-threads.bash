@@ -8,12 +8,16 @@
 # thread past the first page and reports the truncated slice as the whole set.
 # Callers differ only in the jq they project each page's nodes through.
 #
-# Consumers: fetch-unresolved-review-threads.sh, review-findings-gate.sh.
+# Consumers: fetch-unresolved-review-threads.sh, review-findings-gate.sh,
+# approve-if-reviewer-hold-clear.sh.
 
-# retry_stdout: sourced here rather than assumed, so a consumer gets the retry
-# ladder by sourcing this file alone. lib-ci-retry.sh guards against double-source.
+# retry_stdout and the reviewer predicate: sourced here rather than assumed, so a
+# consumer gets both by sourcing this file alone. Each is idempotent under a
+# second source.
 # shellcheck source=.github/scripts/lib-ci-retry.sh
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/lib-ci-retry.sh"
+# shellcheck source=.github/scripts/lib/reviewer-identity.bash
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/reviewer-identity.bash"
 
 # $endCursor + pageInfo are what make `gh api graphql --paginate` able to walk:
 # gh feeds the previous page's endCursor back in and stops on hasNextPage=false.
@@ -47,12 +51,12 @@ GRAPHQL
 )
 
 # jq predicate over ONE thread node: its ROOT comment was authored by the
-# automated reviewer. Requires the caller to have EXPORTED REVIEWER_LOGIN_BARE
-# (jq reads it out of `env`) — GraphQL returns an app bot's login WITHOUT the REST
-# `[bot]` suffix (`github-actions`, not `github-actions[bot]`), so both sides are
-# stripped before comparing and either spelling matches.
+# automated reviewer. The authorship question itself belongs to `is_reviewer` in
+# lib/reviewer-identity.bash; a thread root is just another authored node, so
+# this only says WHICH node to ask about. fetch_review_threads prepends the
+# definitions, so a projection using this needs no prelude of its own.
 # shellcheck disable=SC2034 # spliced into the sourcing scripts' projections
-REVIEW_THREAD_ROOT_IS_REVIEWER='select((.comments.nodes[0].author.login // "" | sub("\\[bot\\]$"; "")) == env.REVIEWER_LOGIN_BARE)'
+REVIEW_THREAD_ROOT_IS_REVIEWER='select(.comments.nodes[0] | is_reviewer)'
 
 # fetch_review_threads <owner> <name> <pr> <jq> [comments-per-thread]
 #
@@ -67,5 +71,5 @@ fetch_review_threads() {
   retry_stdout gh api graphql --paginate \
     -f query="$REVIEW_THREADS_QUERY" \
     -f owner="$owner" -f name="$name" -F pr="$pr" -F comments="$comments" \
-    --jq ".data.repository.pullRequest.reviewThreads.nodes | $projection"
+    --jq "$REVIEWER_JQ .data.repository.pullRequest.reviewThreads.nodes | $projection"
 }

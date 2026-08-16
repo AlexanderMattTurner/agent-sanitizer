@@ -31,6 +31,8 @@ import { existsSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { envWithoutGitLocation } from "./lib/git-location-env.mjs";
+
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
 const { pairs, tooSlowForCommit } = JSON.parse(
   readFileSync(join(repoRoot, ".hooks", "guard-pairs.json"), "utf8"),
@@ -158,11 +160,21 @@ if (unclaimed.length > 0) {
   process.exit(1);
 }
 
+// Git's repository-location overrides, which a git hook exports into every
+// child it starts. With GIT_DIR set, a `cwd:` no longer decides which repository
+// git answers for — so a guard suite that builds a throwaway repo in a tmpdir and
+// commits into it writes those commits onto the DEVELOPER'S branch instead, and
+// one that checks out a fixture ref rewinds the working tree mid-commit. Both
+// happened. Stripping them here fixes every suite at once, rather than each
+// module remembering.
+const runnerEnv = envWithoutGitLocation(process.env);
+
 for (const runner of RUNNERS) {
   const forRunner = files.filter(runner.match);
   if (forRunner.length === 0) continue;
   const result = spawnSync(runner.command, [...runner.leading, ...forRunner], {
     cwd: repoRoot,
+    env: runnerEnv,
     stdio: ["ignore", "inherit", "inherit"],
   });
   // A missing runner is NOT a pass: the guard did not run, so the commit it was
