@@ -8,6 +8,15 @@ adhere to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+## [2.43.0] - 2026-08-16
+
+### Fixed
+- Plugin now correctly checks node validity before applying hook-binary refusals.
+- Secrets detection: removed cubic-backtracking regex patterns and fixed over-redaction of credential-named function calls.
+- Plugin shell handler now correctly emits block decision in fail-closed PostToolUse mode.
+- Plugin verifies hook binary's cryptographic digest and installation directory before execution.
+- Layer 3 scanning now processes plain-text URLs and CSS values by shape rather than position.
+
 ## [2.41.4] - 2026-08-16
 
 ### Fixed
