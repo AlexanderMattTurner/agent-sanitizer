@@ -23,7 +23,12 @@ from pathlib import Path
 
 import pytest
 
-from tests._helpers import REPO_ROOT
+from tests._helpers import (
+    REPO_ROOT,
+    commit_all,
+    env_without_git_location,
+    init_test_repo,
+)
 
 pytestmark = pytest.mark.drift_guard
 
@@ -89,4 +94,42 @@ def test_the_hazard_is_real_without_the_fix() -> None:
         "longer reports the cwd as the work tree, so the env-stripping in "
         "tests/_helpers.py may now be guarding nothing — re-check before "
         "deleting it"
+    )
+
+
+def test_a_sandbox_commit_lands_in_the_sandbox_under_a_hooks_git_dir(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`commit_all` must resolve its SHA in the sandbox, not in whatever repo
+    `GIT_DIR` names.
+
+    The regression this pins reached CI: `git_env()` inherited the location
+    overrides, so a fixture's commits landed in the repo `GIT_DIR` pointed at
+    while `decide-reusable-diff.sh` — which strips them — looked for those SHAs
+    in the sandbox and reported `could not parse commit <sha>`.
+
+    `GIT_DIR` points at a DECOY repo, never this one: with the bug present the
+    commit below lands wherever it points, and naming the real checkout there
+    rewrites the branch the developer is on.
+    """
+    decoy = tmp_path / "decoy"
+    init_test_repo(decoy)
+    sandbox = tmp_path / "sandbox"
+    init_test_repo(sandbox)
+    (sandbox / "file.txt").write_text("x\n")
+
+    monkeypatch.setenv("GIT_DIR", str(decoy / ".git"))
+    monkeypatch.setenv("GIT_INDEX_FILE", str(decoy / ".git" / "index"))
+    sha = commit_all(sandbox, "chore: sandbox commit")
+
+    kind = subprocess.run(
+        ["git", "cat-file", "-t", sha],
+        cwd=sandbox,
+        env=env_without_git_location(),
+        capture_output=True,
+        text=True,
+    )
+    assert kind.returncode == 0 and kind.stdout.strip() == "commit", (
+        f"{sha} is not a commit in the sandbox — `commit_all` wrote it to the "
+        f"repo GIT_DIR named instead: {kind.stderr.strip()}"
     )
