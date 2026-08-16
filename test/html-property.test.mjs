@@ -52,6 +52,12 @@ const tagName = fc.constantFrom(
   "img",
   "iframe",
   "svg",
+  // Table tags need no table around them here: a stray `<td>`/`<tr>` at the
+  // root of a fragment is exactly the shape whose parse MOVES when a sibling
+  // is spliced, because parse5 places it by table scope rather than in order.
+  "table",
+  "tr",
+  "td",
 );
 const safeAttrValue = fc
   .string({ maxLength: 30 })
@@ -102,6 +108,9 @@ const malformedInlineToken = fc.constantFrom(
   // stray partial open
   "<div hidden",
   "<span",
+  // an UNTERMINATED processing instruction swallows the markup up to the next
+  // `>`, so which bytes are markup depends on what a splice left around it
+  "<? ",
   // raw-text / RCDATA elements: `<!…`/`</…` — and hidden-tag LITERALS — inside
   // are opaque content, not markup, and must survive verbatim
   "<style><!x</style>",
@@ -139,6 +148,23 @@ describe("property: sanitizeHtml is idempotent", () => {
       // a re-run neither re-splices them nor mangles their keys.
       assert.equal(applyHtml(passOne), passOne);
     }));
+
+  it("an UNPLANTED document is a fixed point too", () => {
+    // The plant above opens the document with bare text, which pins every draw
+    // to the markdown branch. Only a document parse5 reads as HTML SOURCE
+    // reaches the branch where a splice reshapes the tree around it — a stray
+    // `<td>` parse5 placed by table scope, a `<? ` whose bogus comment now ends
+    // somewhere else — so the source branch needs its own unplanted draw.
+    let spliced = 0;
+    checkProperty(arbitraryHtmlFragment, (input) => {
+      const passOne = applyHtml(input);
+      if (PLACEHOLDER_RE.test(passOne)) spliced += 1;
+      assert.equal(applyHtml(passOne), passOne, input);
+    });
+    // Idempotence over an unspliced document is vacuous, and nothing else here
+    // forces a splice.
+    assert.ok(spliced > 0, "no generated document was spliced");
+  });
 });
 
 // ─── 1b. Round-trip: splices restore the input byte-identically ──────────────
