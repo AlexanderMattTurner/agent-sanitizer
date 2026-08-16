@@ -31,6 +31,8 @@ import { existsSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { envWithoutGitLocation } from "./lib/git-location-env.mjs";
+
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
 const { pairs, tooSlowForCommit } = JSON.parse(
   readFileSync(join(repoRoot, ".hooks", "guard-pairs.json"), "utf8"),
@@ -165,19 +167,7 @@ if (unclaimed.length > 0) {
 // one that checks out a fixture ref rewinds the working tree mid-commit. Both
 // happened. Stripping them here fixes every suite at once, rather than each
 // module remembering.
-const GIT_LOCATION_VARS = [
-  "GIT_DIR",
-  "GIT_WORK_TREE",
-  "GIT_COMMON_DIR",
-  "GIT_INDEX_FILE",
-  "GIT_OBJECT_DIRECTORY",
-  "GIT_PREFIX",
-];
-const runnerEnv = Object.fromEntries(
-  Object.entries(process.env).filter(
-    ([key]) => !GIT_LOCATION_VARS.includes(key),
-  ),
-);
+const runnerEnv = envWithoutGitLocation(process.env);
 
 for (const runner of RUNNERS) {
   const forRunner = files.filter(runner.match);

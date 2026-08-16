@@ -13,7 +13,11 @@ import shutil
 import subprocess
 from pathlib import Path
 
-from tests._helpers import REPO_ROOT, env_without_git_location
+from tests._helpers import (
+    GIT_LOCATION_VARS_CONFIG,
+    REPO_ROOT,
+    env_without_git_location,
+)
 
 # Coreutils the hooks legitimately need; everything else is "absent" unless a
 # test opts it back in. printf/pwd/cd/command/[[ are bash builtins (always
@@ -266,6 +270,11 @@ def _sandbox_guarded_repo(
     # pass for the wrong reason — which is why the sandbox mirrors the real
     # dependency instead of stubbing the scan out.
     shutil.copytree(REPO_ROOT / ".hooks" / "lib", hooks / "lib")
+    # Same reasoning for the shared list of git's repository-location overrides:
+    # the runner strips them from the env it gives every suite, and reads their
+    # names from this file.
+    (repo / GIT_LOCATION_VARS_CONFIG).parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy(REPO_ROOT / GIT_LOCATION_VARS_CONFIG, repo / GIT_LOCATION_VARS_CONFIG)
     if with_acorn:
         (repo / "node_modules" / "acorn").symlink_to(
             REPO_ROOT / "node_modules" / "acorn"

@@ -1,0 +1,11 @@
+{
+  "comment": "SSOT for git's repository-location overrides. A git hook exports these into every child process, and with GIT_DIR set but no GIT_WORK_TREE git treats the CURRENT DIRECTORY as the work tree — so a suite that builds a throwaway repo in a tmpdir commits onto the developer's branch instead, and `rev-parse --show-toplevel` answers the wrong directory. Every reader that runs git against a path of its own choosing strips this list first. Consumers: .hooks/lib/git-location-env.mjs (the env the pre-commit guard-pair runner gives every suite it spawns), tests/_helpers.py (env_without_git_location, used by every pytest module that runs git). tests/test_git_location_vars.py measures both readers against this file.",
+  "vars": [
+    "GIT_DIR",
+    "GIT_WORK_TREE",
+    "GIT_COMMON_DIR",
+    "GIT_INDEX_FILE",
+    "GIT_OBJECT_DIRECTORY",
+    "GIT_PREFIX"
+  ]
+}
