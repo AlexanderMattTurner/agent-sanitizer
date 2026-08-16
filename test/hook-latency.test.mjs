@@ -10,12 +10,33 @@
  *
  * Every budget is a RATIO against a calibration measured in this same process:
  * one code-point-by-code-point pass over a fixed 256 KB input, which is the
- * cheapest full read of a text anything here can do. Machine speed, CPU
- * contention and the coverage instrumentation scale both sides, so the ratios
- * survive a loaded CI runner in a way wall-clock milliseconds do not — the
- * calibration is written in this file, rather than reaching for a native
- * builtin, precisely so it pays the same instrumentation tax as the code it
- * normalizes.
+ * cheapest full read of a text anything here can do. Machine speed and the
+ * coverage instrumentation scale both sides, so the ratios survive a slow or
+ * instrumented runner in a way wall-clock milliseconds do not — the calibration
+ * is written in this file, rather than reaching for a native builtin, precisely
+ * so it pays the same instrumentation tax as the code it normalizes.
+ *
+ * CONTENTION is a different problem, and the ratio does not solve it. A ratio
+ * cancels a slower machine because both sides run at that speed; it cannot
+ * cancel a BUSY one, because the two sides are timed over blocks of very
+ * different length. A calibration pass takes about a millisecond, so
+ * {@link measure}'s fastest-of-N estimator reliably catches a quiet slot for it,
+ * while a 256 KB parse5 run takes hundreds of milliseconds and on a loaded
+ * runner gets no quiet slot in any sample. The divisor stays flat while the
+ * numerator inflates, and the ratio reports the load as a regression. So every
+ * timed block here is charged in the CPU time the process actually spent
+ * (`process.cpuUsage`) rather than the wall clock it occupied: time spent
+ * descheduled behind another test worker is not time this code spent. Measured
+ * on the dearest cell, four workers of competing load move the wall clock 1.9x
+ * and the CPU time 1.06x.
+ *
+ * The calibration is allocation-free for the same reason. Reading the text with
+ * `for (const ch of text)` materializes a string per code point, which makes the
+ * pass a measure of the collector's current disposition — and the young
+ * generation's size is set by whatever ran before, so the same pass cost 3.0ms
+ * in a fresh process and 1.4ms once a parse5 run had grown the heap. A
+ * calibration that halves for a reason unrelated to the machine doubles every
+ * ratio read against it.
  */
 import { describe, it, before } from "node:test";
 import assert from "node:assert/strict";
@@ -56,17 +77,31 @@ const cp = (n) => String.fromCodePoint(n);
 const grow = (unit, n) => unit.repeat(Math.ceil(n / unit.length)).slice(0, n);
 
 /**
- * The FASTEST of {@link SAMPLES} timed runs after a warm-up call, in ms.
+ * The FASTEST of {@link SAMPLES} timed runs after a warm-up call.
  *
- * Contention and collector pauses only ever ADD time, so the minimum is the
- * closest any of the samples got to the cost of the code itself, and it is what
- * keeps these gates readable on a two-core shared runner that is also running
- * the rest of the suite. A median still carries whatever noise landed on the
- * middle sample, which on such a runner is most of them. The estimator loses
- * nothing the gates are for: a path that got an order of magnitude slower is an
- * order of magnitude slower in its fastest run too.
+ * Collector pauses and the scheduling the CPU clock still sees only ever ADD
+ * time, so the minimum is the closest any of the samples got to the cost of the
+ * code itself. A median still carries whatever noise landed on the middle
+ * sample, which on a shared runner is most of them. The estimator loses nothing
+ * the gates are for: a path that got an order of magnitude slower is an order of
+ * magnitude slower in its fastest run too.
  */
 const SAMPLES = 4;
+
+/**
+ * A timed block, in ms: the CPU time the process spent, and the wall clock it
+ * occupied.
+ * @typedef {{cpu: number, wall: number}} Timing
+ */
+
+/** The CPU time a block charged the process, in ms. `process.cpuUsage` counts
+ * every thread, so a collector pass or a background compile the block provoked
+ * is charged to it — which is the intent, since the hook pays for those too. */
+const cpuSince = (mark) => {
+  const spent = process.cpuUsage(mark);
+  return (spent.user + spent.system) / 1000;
+};
+
 /**
  * Each call gets its own document from `input(attempt)`. Handing every call the
  * same string measures a memo hit rather than the work: the HTML layer
@@ -76,37 +111,59 @@ const SAMPLES = 4;
  * The inputs differ in length by one code point, so the shape is unchanged.
  * @param {(attempt: number) => string} input
  * @param {(text: string) => unknown | Promise<unknown>} fn
+ * @returns {Promise<Timing>}
  */
 async function measure(input, fn) {
   await fn(input(0));
-  let best = Infinity;
+  const best = { cpu: Infinity, wall: Infinity };
   for (let i = 1; i <= SAMPLES; i++) {
     const text = input(i);
+    const mark = process.cpuUsage();
     const started = performance.now();
     await fn(text);
-    best = Math.min(best, performance.now() - started);
+    // Each estimator takes its own minimum: the quietest sample by wall clock
+    // need not be the cheapest by CPU, and taking the pair from one sample would
+    // charge the CPU figure for whatever made that sample the quietest.
+    best.wall = Math.min(best.wall, performance.now() - started);
+    best.cpu = Math.min(best.cpu, cpuSince(mark));
   }
   return best;
 }
 
 /** A timed block has to last at least this long to be a measurement rather than
- * timer noise. */
+ * timer noise, however cheap the call it is made of. */
 const MIN_BLOCK_MS = 5;
 /** How many distinct documents a timed block cycles through. */
 const BLOCK_RING = 8;
 
 /**
- * The per-call cost of `fn`, timed over as many calls as it takes to be a
- * measurement.
+ * The per-call CPU cost of `fn`, timed over as many calls as it takes to fill a
+ * block of `blockMs`.
  *
  * One 32 KB pass costs a fraction of a millisecond on a fast machine, and that
  * is the number the scaling gate divides by. Timing a batch and dividing keeps
  * the small end meaningful at any machine speed, so the gate covers every case
  * instead of losing the cheap ones to the timer's resolution.
+ *
+ * `blockMs` is what makes the two sides of a scaling ratio comparable, and the
+ * caller passes the cost of the side it will be divided into. Fastest-of-N is
+ * only a fair estimator between blocks of similar length: a 12 ms call can
+ * finish entirely between two collections and four tries usually find one that
+ * does, while a 250 ms call always pays a share of the collector, so the short
+ * side reads low and the ratio reads high. Matching the block lengths amortizes
+ * the collector equally over both. Measured on `sanitizeText/html-prose`, a
+ * fixed 5 ms block put the 8x ratio at 14.1x–22.2x against a 24x limit; matched
+ * blocks put it at 13.4x–17.4x.
+ * @param {(attempt: number) => string} input
+ * @param {(text: string) => unknown | Promise<unknown>} fn
+ * @param {number} blockMs
+ * @returns {Promise<number>}
  */
-async function measurePerCall(input, fn) {
-  const single = await measure(input, fn);
-  const repeats = Math.ceil(MIN_BLOCK_MS / Math.max(single, Number.EPSILON));
+async function measurePerCall(input, fn, blockMs) {
+  const single = (await measure(input, fn)).cpu;
+  const repeats = Math.ceil(
+    Math.max(MIN_BLOCK_MS, blockMs) / Math.max(single, Number.EPSILON),
+  );
   if (repeats <= 1) return single;
   // The block cycles a ring of distinct documents for the same reason `measure`
   // varies its input, and a ring rather than one document per call because
@@ -122,7 +179,7 @@ async function measurePerCall(input, fn) {
       for (let i = 0; i < repeats; i++) await fn(ring[i % ring.length]);
     },
   );
-  return block / repeats;
+  return block.cpu / repeats;
 }
 
 // Text shapes with materially different cost profiles. The clean ones answer
@@ -147,20 +204,23 @@ const SHAPES = {
 };
 
 // Ceilings in calibration units for the shapes an entry does real work on. Each
-// is sized off the DEARER of two measurements — standalone, and under the
-// parallel coverage run, where the ratios move because c8 instruments the code
-// under test harder than it instruments this file's calibration — with 1.6x on
-// top. The two environments disagree by up to ~40% on the same case, so 1.6x is
-// what covers that disagreement and nothing more: enough that a green run means
-// the path is where it was left, tight enough that a doubling is red. Anything
-// with more slack than that is a ceiling nothing is under. CHEAP_BUDGET is
-// tighter, and each entry's `cheap` list names the shapes that entry has no
-// per-code-point work to do on: past ten passes' worth of work, such an input is
-// being analyzed for something it does not contain. The lists differ per entry
-// because the entries read different things — a soft hyphen every other
-// character is real work for the prompt classifier's scatter count and almost
-// none for the strip the output path runs.
-const CHEAP_BUDGET = 9;
+// is 1.3x the DEAREST reading across three environments: standalone, under the
+// parallel coverage run, and standalone against four workers of competing CPU
+// and allocation load. The instrumented run reads LOWER on every heavy cell,
+// because c8 charges this file's calibration harder than it charges the code
+// under test, so the ceilings are set by the two uninstrumented environments.
+// The dearest reading already contains a loaded run's collector spikes — up to
+// 1.7x that case's median — so 1.3x on top covers run-to-run variation and
+// nothing more: enough that a green run means the path is where it was left,
+// tight enough that a doubling is red. Anything with more slack than that is a
+// ceiling nothing is under. CHEAP_BUDGET is tighter, and each entry's `cheap`
+// list names the shapes that entry has no per-code-point work to do on: past a
+// dozen passes' worth of work, such an input is being analyzed for something it
+// does not contain. The lists differ per entry because the entries read
+// different things — a soft hyphen every other character is real work for the
+// prompt classifier's scatter count and almost none for the strip the output
+// path runs.
+const CHEAP_BUDGET = 11;
 
 /**
  * The blocking entry points, each with the shapes it must answer cheaply.
@@ -174,12 +234,12 @@ const ENTRIES = {
     // ANSI, and HTML-shaped text carries neither.
     cheap: ["ascii-prose", "cjk-prose", "emoji-prose", "html-prose"],
     budget: {
-      "joiner-dense": 37,
-      "vs-dense": 37,
-      "payload-run": 100,
+      "joiner-dense": 47,
+      "vs-dense": 42,
+      "payload-run": 84,
       "payload-scattered": 29,
-      "emoji-zwj": 36,
-      "run-dense": 53,
+      "emoji-zwj": 52,
+      "run-dense": 44,
     },
   },
   sanitizeText: {
@@ -200,12 +260,12 @@ const ENTRIES = {
       // for: it is parse5 building a 256 KB fragment, so it moves with the
       // parser rather than with anything here. SUPERLINEAR below is what
       // actually holds this path.
-      "html-prose": 168,
-      "joiner-dense": 65,
-      "vs-dense": 45,
-      "payload-run": 58,
-      "emoji-zwj": 45,
-      "run-dense": 32,
+      "html-prose": 467,
+      "joiner-dense": 45,
+      "vs-dense": 39,
+      "payload-run": 57,
+      "emoji-zwj": 39,
+      "run-dense": 41,
     },
   },
   scanText: {
@@ -215,15 +275,15 @@ const ENTRIES = {
     run: (text) => scanText(text),
     cheap: ["ascii-prose", "cjk-prose", "emoji-prose", "html-prose"],
     budget: {
-      "joiner-dense": 37,
-      "vs-dense": 21,
+      "joiner-dense": 22,
+      "vs-dense": 17,
       // One 256 KB run decodes as a single payload, so this case is dominated by
       // one large allocation and swings with the collector — the widest budget
       // here buys tolerance for that rather than for a slower machine.
-      "payload-run": 55,
-      "payload-scattered": 25,
-      "emoji-zwj": 24,
-      "run-dense": 28,
+      "payload-run": 87,
+      "payload-scattered": 16,
+      "emoji-zwj": 19,
+      "run-dense": 39,
     },
   },
 };
@@ -267,7 +327,7 @@ const SUPERLINEAR = {
  */
 const FOLD_GLYPH = "\u0430";
 const foldText = (n) => grow(FOLD_GLYPH + "bcdefghijklmn ", n);
-const FOLD_BUDGET = 23;
+const FOLD_BUDGET = 17;
 
 /**
  * The one gate that promises a NUMBER rather than a ratio.
@@ -275,7 +335,10 @@ const FOLD_BUDGET = 23;
  * Every budget above is machine-relative on purpose, and a table of ratios can
  * stay green while each hook takes a second, so the thing a user actually
  * notices \u2014 the wait before a session starts, the wait before a prompt goes \u2014
- * needs a ceiling in milliseconds. The input is ordinary text at 256 KB, which
+ * needs a ceiling in milliseconds — and, alone here, in WALL-CLOCK
+ * milliseconds: a user waiting on a hook waits through the time it spends
+ * descheduled too, so the CPU clock the ratios use would understate exactly the
+ * thing this gate promises. The input is ordinary text at 256 KB, which
  * is several times any real instruction set and larger than most pastes; the
  * adversarial shapes keep their ratio budgets, because a ceiling wide enough for
  * 256 KB of nothing but zero-width space on a slow runner would not be a
@@ -308,30 +371,44 @@ function foldFindings(text) {
 
 const CALIBRATION_TEXT = SHAPES["ascii-prose"](LARGE);
 
-/** One pass over the input, a code point at a time — the unit every budget is
+/**
+ * One pass over the input, a code point at a time — the unit every budget is
  * quoted in. Deliberately trivial: it must not get faster or slower for any
- * reason except the machine it runs on. */
+ * reason except the machine it runs on.
+ *
+ * Indexing rather than iterating is what keeps that promise. `for (const ch of
+ * text)` reads the same code points but materializes a string for each one, so
+ * its cost tracks the young generation's size — which the rest of the process
+ * sets, not the machine. This loop allocates nothing.
+ */
 function calibrationPass(text) {
   let seen = 0;
-  for (const ch of text) seen += ch.length;
+  for (let i = 0; i < text.length;) {
+    const point = text.codePointAt(i);
+    seen += point;
+    i += point > 0xffff ? 2 : 1;
+  }
   return seen;
 }
 
-const calibrate = () => measure(() => CALIBRATION_TEXT, calibrationPass);
+/** The unit, in CPU ms per pass. */
+const calibrate = async () =>
+  (await measure(() => CALIBRATION_TEXT, calibrationPass)).cpu;
 
 /**
- * `fn`'s cost in calibration units, calibrating on BOTH sides of the
+ * `fn`'s CPU cost in calibration units, calibrating on BOTH sides of the
  * measurement and taking the larger unit. The test runner runs files in
- * parallel, so the load on the machine drifts during a run; a single calibration
- * taken up front can be read against a case measured under quite different
- * contention. Bracketing the measurement keeps the two comparable, and taking
- * the larger unit resolves a drift in the direction that does not manufacture a
- * failure.
+ * parallel, so the machine's clock speed and cache pressure drift during a run;
+ * a single calibration taken up front can be read against a case measured in
+ * quite different conditions. Bracketing the measurement keeps the two
+ * comparable, and taking the larger unit resolves a drift in the direction that
+ * does not manufacture a failure.
+ * @returns {Promise<{cost: Timing, units: number}>}
  */
 async function unitsFor(input, fn) {
   const opening = await calibrate();
   const cost = await measure(input, fn);
-  return { cost, units: cost / Math.max(opening, await calibrate()) };
+  return { cost, units: cost.cpu / Math.max(opening, await calibrate()) };
 }
 
 /** Every entry x shape pair the gates below speak about. */
@@ -343,7 +420,10 @@ const CASES = Object.keys(ENTRIES).flatMap((entry) =>
   })),
 );
 
-/** @type {{unit: number, large: Record<string, number>, small: Record<string, number>,
+/**
+ * Every figure here is CPU ms except `realistic`, which is the wall clock the
+ * millisecond ceiling is about.
+ * @type {{unit: number, large: Record<string, number>, small: Record<string, number>,
  *   units: Record<string, number>, superlinear: Record<string, number>,
  *   realistic: Record<string, number>,
  *   fold: Record<string, number>, foldUnits: number, foldChanged: boolean}} */
@@ -368,26 +448,31 @@ before(async () => {
       (attempt) => SHAPES[shape](LARGE - attempt),
       (text) => run(text, shape),
     );
-    timing.large[name] = measured.cost;
+    timing.large[name] = measured.cost.cpu;
     timing.units[name] = measured.units;
     timing.small[name] = await measurePerCall(
       (attempt) => SHAPES[shape](SMALL - attempt),
       (text) => run(text, shape),
+      measured.cost.cpu,
     );
   }
   for (const [entry, { run }] of Object.entries(ENTRIES))
     // Not "html-prose", so `sanitizeText` takes the Layer-1 path the majority of
     // tool results take rather than the markup path only web ingress reaches.
-    timing.realistic[entry] = await measure(
-      (attempt) => REALISTIC_TEXT.slice(0, REALISTIC_TEXT.length - attempt),
-      (text) => run(text, "realistic-prose"),
-    );
+    timing.realistic[entry] = (
+      await measure(
+        (attempt) => REALISTIC_TEXT.slice(0, REALISTIC_TEXT.length - attempt),
+        (text) => run(text, "realistic-prose"),
+      )
+    ).wall;
   const { run } = ENTRIES[SUPERLINEAR.entry];
   for (const end of ["from", "to"]) {
-    timing.superlinear[end] = await measure(
-      (attempt) => SHAPES[SUPERLINEAR.shape](SUPERLINEAR[end] - attempt),
-      (text) => run(text, SUPERLINEAR.shape),
-    );
+    timing.superlinear[end] = (
+      await measure(
+        (attempt) => SHAPES[SUPERLINEAR.shape](SUPERLINEAR[end] - attempt),
+        (text) => run(text, SUPERLINEAR.shape),
+      )
+    ).cpu;
   }
   for (const [size, key] of [
     [SMALL, "small"],
@@ -402,7 +487,7 @@ before(async () => {
     // The fold takes no parse and holds no memo, so every run may share one
     // input; the offsets `findings` carries are only valid for this one.
     const measured = await unitsFor(() => text, fold);
-    timing.fold[key] = measured.cost;
+    timing.fold[key] = measured.cost.cpu;
     if (key === "large") {
       timing.foldUnits = measured.units;
       timing.foldChanged = fold() !== text;
@@ -424,12 +509,13 @@ const timed = (name, fn) =>
 
 describe("hook-path latency", () => {
   timed("the calibration is a measurement, not timer noise", () => {
-    // Every ratio below divides by this. A machine that materializes 256 KB in
-    // under a third of a millisecond is not one these gates can speak about, so
-    // say so loudly rather than passing on a division by noise.
+    // Every ratio below divides by this. `process.cpuUsage` accounts in whole
+    // microseconds, so a pass under a tenth of a millisecond is quantized to
+    // within a percent of itself and the ratios stop meaning anything — say so
+    // loudly rather than passing on a division by noise.
     assert.ok(
-      timing.unit > 0.3,
-      `calibration ran in ${timing.unit.toFixed(3)}ms — too fast to divide by`,
+      timing.unit > 0.1,
+      `calibration ran in ${timing.unit.toFixed(3)}ms of CPU — too fast to divide by`,
     );
   });
 
@@ -441,7 +527,7 @@ describe("hook-path latency", () => {
       const budget = cheap.includes(shape) ? CHEAP_BUDGET : heavy[shape];
       assert.ok(
         timing.units[name] <= budget,
-        `${name} ran in ${timing.units[name].toFixed(1)} units (${timing.large[name].toFixed(1)}ms), budget ${budget}`,
+        `${name} ran in ${timing.units[name].toFixed(1)} units (${timing.large[name].toFixed(1)}ms CPU), budget ${budget}`,
       );
     });
 
@@ -467,7 +553,7 @@ describe("hook-path latency", () => {
       for (const shape of Object.keys(SHAPES).filter((s) => !cheap.includes(s)))
         assert.ok(
           timing.large[`${entry}/${shape}`] > dearest,
-          `${entry}/${shape} (${timing.large[`${entry}/${shape}`].toFixed(1)}ms) no longer costs more than the dearest cheap shape (${dearest.toFixed(1)}ms) — it is not exercising the path it was written for`,
+          `${entry}/${shape} (${timing.large[`${entry}/${shape}`].toFixed(1)}ms CPU) no longer costs more than the dearest cheap shape (${dearest.toFixed(1)}ms CPU) — it is not exercising the path it was written for`,
         );
     });
 
@@ -510,7 +596,7 @@ describe("hook-path latency", () => {
       );
       assert.ok(
         units <= CHEAP_BUDGET,
-        `the hook judged a clean 256 KB prompt in ${units.toFixed(1)} units (${cost.toFixed(1)}ms), budget ${CHEAP_BUDGET}`,
+        `the hook judged a clean 256 KB prompt in ${units.toFixed(1)} units (${cost.cpu.toFixed(1)}ms CPU), budget ${CHEAP_BUDGET}`,
       );
     },
   );
@@ -525,7 +611,7 @@ describe("hook-path latency", () => {
     () => {
       assert.ok(
         superlinearGrowth() <= SUPERLINEAR.limit,
-        `${superlinearName} cost ${superlinearGrowth().toFixed(1)}x for ${sizeStep}x the input (${timing.superlinear.from.toFixed(1)}ms → ${timing.superlinear.to.toFixed(1)}ms), limit ${SUPERLINEAR.limit}x`,
+        `${superlinearName} cost ${superlinearGrowth().toFixed(1)}x for ${sizeStep}x the input (${timing.superlinear.from.toFixed(1)}ms → ${timing.superlinear.to.toFixed(1)}ms CPU), limit ${SUPERLINEAR.limit}x`,
       );
     },
   );
@@ -541,7 +627,7 @@ describe("hook-path latency", () => {
       );
       assert.ok(
         timing.foldUnits <= FOLD_BUDGET,
-        `folding 256 KB of look-alikes took ${timing.foldUnits.toFixed(1)} units (${timing.fold.large.toFixed(1)}ms), budget ${FOLD_BUDGET}`,
+        `folding 256 KB of look-alikes took ${timing.foldUnits.toFixed(1)} units (${timing.fold.large.toFixed(1)}ms CPU), budget ${FOLD_BUDGET}`,
       );
     },
   );
