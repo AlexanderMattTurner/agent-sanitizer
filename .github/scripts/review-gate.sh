@@ -76,8 +76,20 @@ export REVIEWER_LOGIN_BARE
 # REST endpoint spells an app bot's login WITH the `[bot]` suffix while GraphQL
 # spells it without, so the login is stripped before comparing and either
 # spelling matches — the same normalization lib/pr-reviews.bash applies.
+#
+# The body-non-empty test asks WHETHER THIS IS A REVIEW, which the author test
+# does not. GitHub synthesizes a body-less COMMENTED review by the same bot
+# around every standalone review-comment POST, and resolve-addressed-threads.sh
+# posts its audit replies under that identity. Counting one satisfies this gate
+# vacuously on exactly the PRs that carry threads — the ones
+# approve-if-reviewer-hold-clear.sh dismisses a CHANGES_REQUESTED on, where a
+# standing synthesized review holds the status green and strips the workflow's
+# `dismissed` trigger of meaning. Every bot writer passes a non-empty body
+# (post-pr-review.mjs falls back to "Automated review."), so the test costs
+# nothing. lib/pr-reviews.bash applies the same one for the sibling gate.
 reviewers="$(gh api --paginate "repos/${GH_REPO}/pulls/${PR}/reviews" \
   --jq '.[] | select(.state != "DISMISSED")
+      | select((.body // "") != "")
       | select((.user.login // "" | sub("\\[bot\\]$"; "")) == env.REVIEWER_LOGIN_BARE)
       | .user.login // ""')"
 reviewer="$(head -n 1 <<<"$reviewers")"

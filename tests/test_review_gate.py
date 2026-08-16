@@ -90,9 +90,16 @@ sys.exit(2)
 HEAD_SHA = "deadbeef"
 
 
-def _review(login: str, *, state: str = "COMMENTED") -> dict:
-    """A review as the REST pulls/{n}/reviews endpoint returns it."""
-    return {"user": {"login": login}, "state": state}
+def _review(
+    login: str, *, state: str = "COMMENTED", body: str = "Automated review."
+) -> dict:
+    """A review as the REST pulls/{n}/reviews endpoint returns it.
+
+    `body` defaults to non-empty because every real writer sends one. Pass
+    `body=""` to model the review GitHub synthesizes around a standalone
+    review-comment POST, which is not a review anyone wrote.
+    """
+    return {"user": {"login": login}, "state": state, "body": body}
 
 
 def _run(
@@ -136,6 +143,32 @@ def test_a_non_reviewer_comment_review_leaves_the_gate_pending(tmp_path: Path) -
     proc, posted = _run(tmp_path, [_review("pr-author", state="COMMENTED")])
     assert proc.returncode == 0, proc.stderr
     assert _only(posted)["state"] == "pending"
+
+
+def test_a_body_less_reviewer_review_leaves_the_gate_pending(tmp_path: Path) -> None:
+    # GitHub synthesizes a body-less COMMENTED review by the same bot around
+    # every standalone review-comment POST, and resolve-addressed-threads.sh
+    # posts its audit replies under that identity. Counting one would clear the
+    # gate on exactly the PRs that carry threads, without anyone reviewing.
+    proc, posted = _run(tmp_path, [_review("github-actions[bot]", body="")])
+    assert proc.returncode == 0, proc.stderr
+    assert _only(posted)["state"] == "pending"
+
+
+def test_a_real_reviewer_review_still_clears_the_gate_behind_a_synthesized_one(
+    tmp_path: Path,
+) -> None:
+    # The positive marker for the test above: the body-non-empty filter must not
+    # swallow the review that genuinely stands.
+    proc, posted = _run(
+        tmp_path,
+        [
+            _review("github-actions[bot]", body=""),
+            _review("github-actions[bot]", body="Automated review."),
+        ],
+    )
+    assert proc.returncode == 0, proc.stderr
+    assert _only(posted)["state"] == "success"
 
 
 @pytest.mark.parametrize("state", ["COMMENTED", "APPROVED", "CHANGES_REQUESTED"])
