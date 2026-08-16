@@ -8,6 +8,17 @@ adhere to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+## [2.41.3] - 2026-08-16
+
+### Fixed
+
+- HTML sanitization now settles in a single pass for correctness.
+- HTML coverage-ignore blocks are now properly respected for round-cap branches.
+
+### Changed
+
+- Performance improvements to HTML splice-offset remapping and scan/splice round management through bisection.
+
 ## [2.41.2] - 2026-08-16
 
 ### Fixed
