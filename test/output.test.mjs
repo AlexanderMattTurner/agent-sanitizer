@@ -26,6 +26,9 @@ import {
   REDACTION_DOCTRINE,
 } from "../src/output.mjs";
 import { INERT_ANSI_NOTE } from "../src/layer1.mjs";
+// Not re-exported from ./output.mjs: `needsUrlScan` is an internal Layer-3
+// pre-gate, so the published surface stays what engine-exports.test.mjs pins.
+import { needsUrlScan } from "../src/gates.mjs";
 import { layer2Placeholder } from "../src/html.mjs";
 import { cp } from "./test-helpers.mjs";
 
@@ -60,6 +63,21 @@ describe("needsMarkdownPipeline", () => {
     assert.equal(needsMarkdownPipeline("plain prose, nothing here"), false));
   it("stays false for bare comparison operators (precision)", () =>
     assert.equal(needsMarkdownPipeline("a < b and c > d, x<3"), false));
+});
+
+// ─── needsUrlScan ────────────────────────────────────────────────────────────
+
+describe("needsUrlScan", () => {
+  it("is true for a bare http(s) URL in prose with no markup", () =>
+    assert.equal(needsUrlScan("visit https://example.com/a today"), true));
+  it("is a superset of needsMarkdownPipeline (markup with a relative target)", () => {
+    assert.equal(needsMarkdownPipeline("see [x](/collect?d=1)"), true);
+    assert.equal(needsUrlScan("see [x](/collect?d=1)"), true);
+  });
+  it("is false for prose carrying neither a URL nor markup", () =>
+    assert.equal(needsUrlScan("plain prose, nothing here"), false));
+  it("stays false for a scheme-less host mention (precision)", () =>
+    assert.equal(needsUrlScan("ask paypal.com about it"), false));
 });
 
 // ─── describeRemoved ─────────────────────────────────────────────────────────
@@ -330,7 +348,7 @@ describe("sanitizeText: Layer 2/3 markdown pipeline gating", () => {
     assert.deepEqual(r.warnings, []);
   });
 
-  it("skips the pipeline when needsMarkdownPipeline is false (no tag/link)", async () => {
+  it("skips the pipeline when neither gate matches (no tag/link/URL)", async () => {
     const r = await sanitizeText("plain prose, no markup", {
       html: true,
       exfilScan: true,
@@ -338,6 +356,41 @@ describe("sanitizeText: Layer 2/3 markdown pipeline gating", () => {
     assert.equal(r.cleaned, "plain prose, no markup");
     assert.equal(r.modified, false);
     assert.deepEqual(r.warnings, []);
+  });
+
+  // INVARIANT: Layer 3 reads URLs, so its verdict depends on the URL and not on
+  // the markup around it. Gating the whole pipeline on the MARKUP test made a
+  // payload invisible to the scan simply by not wrapping it in a link — the
+  // plain-text spelling is the one an attacker reaches for first.
+  describe("Layer 3's verdict does not depend on surrounding markup", () => {
+    const WRAPPERS = [
+      ["bare prose", (url) => `visit ${url} now`],
+      ["a markdown link", (url) => `visit [here](${url}) now`],
+      ["an HTML anchor", (url) => `visit <a href="${url}">here</a> now`],
+    ];
+    const CASES = [
+      ["a confusable host", "https://pаypal.com/login", ["confusable-host"]],
+      [
+        "an exfil-shaped query",
+        "https://evil.example/b?d=QUtJQVJPT1RTRUNSRVRLRVkxMjM0NTY3ODkwYWJjZGVmZ2hpams=",
+        ["exfil-urls"],
+      ],
+      ["an ordinary URL", "https://example.com/docs/guide", []],
+    ];
+    for (const [urlLabel, url, expected] of CASES)
+      for (const [wrapperLabel, wrap] of WRAPPERS)
+        it(`reports ${JSON.stringify(expected)} for ${urlLabel} in ${wrapperLabel}`, async () => {
+          const r = await sanitizeText(wrap(url), { exfilScan: true });
+          assert.deepEqual(r.found, expected);
+          // Layer 3 never rewrites: the URL must survive byte-identical.
+          assert.equal(r.cleaned, wrap(url));
+        });
+    // Non-vacuity: the positive cases above are the proof the scan RAN, and
+    // this pins that the two findings are distinguishable rather than one
+    // catch-all code.
+    it("distinguishes the two Layer-3 findings", () => {
+      assert.notDeepEqual(CASES[0][2], CASES[1][2]);
+    });
   });
 
   it("html=true splices an HTML comment to its keyed placeholder and warns", async () => {

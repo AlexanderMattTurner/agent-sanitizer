@@ -43,6 +43,7 @@ import {
   SECRET_HINT,
   SECRET_HINT_EXT,
   matchesSecretHint,
+  needsUrlScan,
 } from "./gates.mjs";
 import { confusableHost, describeConfusableHost } from "./confusable-host.mjs";
 import { SEVERITY } from "./severity.mjs";
@@ -231,26 +232,34 @@ function isHidingTransform(node) {
     const name = fn.name;
     const args = valueTokens(fn);
     if (/^(?:scale|scale3d|scalex|scaley|matrix|matrix3d)$/.test(name)) {
-      // scale/matrix collapse to nothing when EITHER axis factor is (near-)zero —
-      // `scale(1,0)` / `scale3d(1,0,1)` collapse the Y axis, `matrix(1,0,0,0,…)`
-      // sets scaleY (d) to 0 — so testing only the first factor missed the
-      // multi-arg Y-collapse forms. css-tree reads the exponent form (`1e-3`) at
-      // full value; scale()/matrix() factors are <number>s (never lengths). For
-      // `matrix(a,b,c,d,…)` the two scale factors are a (index 0) and d (index 3).
-      // The two scale factors' positions differ per function: scale/scale3d/
-      // scaleX/scaleY carry them first (a single scaleX(0)/scaleY(0) sits at 0);
-      // `matrix(a,b,c,d,…)` puts scaleX=a (0) and scaleY=d (3); `matrix3d` puts
-      // scaleX=m11 (0) and scaleY=m22 (5). Do NOT use index 3 for matrix3d — that
-      // is m14, which is legitimately 0 on the identity matrix (false positive).
-      const numbers = args.filter(
-        (/** @type {any} */ a) => a.type === "Number",
-      );
+      // scale/matrix collapse to nothing when EITHER axis factor is (near-)zero:
+      // `scale(1,0)` collapses the Y axis, as does `matrix(1,0,0,0,…)` (d=0).
+      // A factor sits at a fixed ARGUMENT position, so the comma-separated
+      // argument list is what carries it — indexing a Number-filtered token list
+      // instead drops an unresolvable `var()`/`calc()` argument and slides a
+      // later benign 0 into a factor slot, splicing VISIBLE text.
+      // Factor positions per function:
+      //   scale/scale3d/scaleX/scaleY: scaleX=0, scaleY=1 (a lone scaleX(0) or
+      //     scaleY(0) argument sits at 0)
+      //   matrix(a,b,c,d,…): scaleX=a (0), scaleY=d (3)
+      //   matrix3d(m11,…): scaleX=m11 (0), scaleY=m22 (5) — index 3 is m14,
+      //     which the identity matrix leaves at 0 (a false positive)
+      const groups = functionArgs(fn);
       const factorIdx =
         name === "matrix" ? [0, 3] : name === "matrix3d" ? [0, 5] : [0, 1];
+      // css-tree reads the exponent form (`1e-3`) at full value; scale()/matrix()
+      // factors are <number>s (never lengths). An argument that is not one Number
+      // token — `var(--x)`, `calc(…)`, a missing slot — is unresolvable and fails
+      // OPEN: it yields no hidden verdict.
       if (
         factorIdx.some((/** @type {number} */ i) => {
-          const f = numbers[i];
-          return f && Math.abs(parseFloat(f.value)) < NEAR_ZERO_EPSILON;
+          const group = groups[i];
+          const factor = group && group.length === 1 ? group[0] : null;
+          return (
+            factor !== null &&
+            factor.type === "Number" &&
+            Math.abs(parseFloat(factor.value)) < NEAR_ZERO_EPSILON
+          );
         })
       )
         return true;
@@ -680,12 +689,37 @@ function canonicalizeColorFunction(value) {
 }
 
 /**
- * Canonicalize a CSS color to lowercase `#rrggbb` so `white`, `#FFF`,
- * `#ffffff`, `rgb(255, 255, 255)`, `rgb(255 255 255)`, `rgb(100% 100% 100%)`,
- * and `hsl(0 0% 100%)` all compare equal. Returns the trimmed lowercased input
- * unchanged when it is not a form we recognize; callers gate the same-color
- * compare on isConcreteColor so an unresolved token (`var()`, `inherit`) never
- * falsely reads as a same-color hide.
+ * Fold one hex color body — 3, 4, 6 or 8 digits, `#` already stripped — to
+ * `#rrggbb`, or to `transparent` when its alpha byte is zero. `#RGB`/`#RGBA`
+ * expand by doubling each digit, exactly as a browser reads them.
+ *
+ * A PARTIAL alpha (neither `00` nor `ff`) drops out and leaves the color, which
+ * is what {@link canonicalizeColorFunction} already does with `rgba(…, .5)`:
+ * the caller compares this color against the backdrop it is painted on, and a
+ * color blended over its own value renders that value at every alpha. Keeping
+ * the two spellings apart here would leave `#ffffff80` a bypass of a hide that
+ * `rgba(255,255,255,.5)` is caught for.
+ * @param {string} digits
+ * @returns {string}
+ */
+function canonicalizeHex(digits) {
+  const expanded =
+    digits.length <= 4
+      ? [...digits].map((digit) => digit + digit).join("")
+      : digits;
+  if (expanded.slice(6) === "00") return "transparent";
+  return `#${expanded.slice(0, 6)}`;
+}
+
+/**
+ * Canonicalize a CSS color to lowercase `#rrggbb` (or the `transparent`
+ * sentinel) so `white`, `#FFF`, `#ffffff`, `#ffffffff`, `rgb(255, 255, 255)`,
+ * `rgb(255 255 255)`, `rgb(100% 100% 100%)`, and `hsl(0 0% 100%)` all compare
+ * equal — as do `transparent`, `#0000`, `#00000000` and `rgba(0,0,0,0)`.
+ * Returns the trimmed lowercased input unchanged when it is not a form we
+ * recognize; callers gate the same-color compare on isConcreteColor so an
+ * unresolved token (`var()`, `inherit`) never falsely reads as a same-color
+ * hide.
  * @param {string} raw
  * @returns {string}
  */
@@ -697,10 +731,11 @@ function canonicalizeColor(raw) {
   // (poisoning isHiddenStyle's return) instead of falling through as a plain
   // string.
   if (Object.hasOwn(NAMED_COLORS, value)) return NAMED_COLORS[value];
-  const shortHex = value.match(/^#([0-9a-f])([0-9a-f])([0-9a-f])$/);
-  if (shortHex)
-    return `#${shortHex[1]}${shortHex[1]}${shortHex[2]}${shortHex[2]}${shortHex[3]}${shortHex[3]}`;
-  if (/^#[0-9a-f]{6}$/.test(value)) return value;
+  // All four hex notations in one match: reading only #RGB and #RRGGBB left
+  // `#0000` and `#00000000` — exact synonyms of `transparent`, which IS a hide —
+  // unresolved, so invisible text reached the model.
+  const hex = value.match(/^#([0-9a-f]{3,4}|[0-9a-f]{6}|[0-9a-f]{8})$/);
+  if (hex) return canonicalizeHex(hex[1]);
   return canonicalizeColorFunction(value) ?? value;
 }
 
@@ -2341,9 +2376,13 @@ const RELATIVE_URL_BASE = "http://relative.invalid";
 // would only widen the rename-dodge surface. A blob or credential-shaped value
 // in any OTHER parameter still fires — this allowlist trades a narrow dodge
 // (`?sig=<stolen>`) for not drowning the model in false positives on ordinary
-// fetched pages.
+// fetched pages. The OAuth callback pair (`code`, `state`) is listed for that
+// same trade: a redirect URL is one of the most common things a fetched page or
+// a browser tool prints, and both values are opaque by design (an authorization
+// code, a signed CSRF nonce), so the value shape cannot separate them from a
+// payload.
 const BENIGN_BLOB_PARAM_RE =
-  /^(?:x-(?:amz|goog|ms|oss|obs)-[a-z0-9-]+|amz-[a-z0-9-]+|utm_[a-z]+|sig|signature|hmac|policy|credential|expires|key-pair-id|se|sp|sr|sv|st|spr|si|skoid|sktid|cursor|after|before|continuation|continuationtoken|continuation_token|pagetoken|page_token|nexttoken|next_token|gclid|fbclid|dclid|msclkid|gbraid|wbraid|_ga|_gl|mc_eid|mc_cid)$/i;
+  /^(?:x-(?:amz|goog|ms|oss|obs)-[a-z0-9-]+|amz-[a-z0-9-]+|utm_[a-z]+|sig|signature|hmac|policy|credential|expires|key-pair-id|se|sp|sr|sv|st|spr|si|skoid|sktid|code|state|cursor|after|before|continuation|continuationtoken|continuation_token|pagetoken|page_token|nexttoken|next_token|gclid|fbclid|dclid|msclkid|gbraid|wbraid|_ga|_gl|mc_eid|mc_cid)$/i;
 
 // matchesSecretHint is a deliberately broad PRE-gate whose bare-keyword arms
 // (`token`, `secret`, `authorization`, …) also match ordinary hyphen/word
@@ -2451,7 +2490,12 @@ function rawParams(qs) {
     if (!pair) continue;
     const eq = pair.indexOf("=");
     const name = eq === -1 ? pair : pair.slice(0, eq);
-    const value = eq === -1 ? "" : pair.slice(eq + 1);
+    // A VALUELESS param carries its payload in the only token it has, so that
+    // token is its candidate value too — `?<blob>`, `?d=<blob>`, and `?<blob>=`
+    // (whose sole `=` is base64 padding) are one channel. The name alone still
+    // goes through BENIGN_BLOB_PARAM_RE.
+    const afterEq = eq === -1 ? "" : pair.slice(eq + 1);
+    const value = afterEq === "" ? pair : afterEq;
     pairs.push([name.toLowerCase(), value]);
   }
   return pairs;
@@ -2877,7 +2921,7 @@ function collectUrls(text) {
  * @returns {Array<{ isImage: boolean, autoFetched: boolean, reason: string, target: string }> | null}
  */
 export function detectExfil(text) {
-  if (!MD_LINK_HINT.test(text) && !HTML_TAG_PRESENT.test(text)) return null;
+  if (!needsUrlScan(text)) return null;
 
   /** @type {Array<{ isImage: boolean, autoFetched: boolean, reason: string, target: string }>} */
   const threats = [];
@@ -2924,7 +2968,7 @@ export function detectExfil(text) {
  * @returns {Array<{ severity: string, description: string }> | null}
  */
 export function detectConfusableHosts(text) {
-  if (!MD_LINK_HINT.test(text) && !HTML_TAG_PRESENT.test(text)) return null;
+  if (!needsUrlScan(text)) return null;
 
   /** @type {Array<{ severity: string, description: string }>} */
   const threats = [];

@@ -44,6 +44,27 @@ export function needsMarkdownPipeline(text) {
   return HTML_TAG_PRESENT.test(text) || MD_LINK_HINT.test(text);
 }
 
+/**
+ * Matches an absolute http(s) URL anywhere in the text. Gate for the Layer-3
+ * URL detectors, which read the URLs a GFM autolink literal yields and so find
+ * a look-alike host or an exfil-shaped query in bare prose — no tag and no
+ * link syntax required.
+ */
+export const URL_PRESENT = /https?:\/\//i;
+
+/**
+ * True when Layer 3 (exfil + confusable-host detection) can find something.
+ * A superset of {@link needsMarkdownPipeline}: a markup-bearing document can
+ * carry a relative exfil target (`[x](/collect?d=…)`), and a plain-prose one
+ * can carry an absolute URL with no markup at all. Layer 2 keeps the narrower
+ * gate — it can only splice what a tag delimits.
+ * @param {string} text
+ * @returns {boolean}
+ */
+export function needsUrlScan(text) {
+  return URL_PRESENT.test(text) || needsMarkdownPipeline(text);
+}
+
 // ─── Secret-shape pre-gate (Layer 3 URL-param reuse) ─────────────────────────
 // Cheap shape match that decides whether a URL parameter value carries a
 // credential (Layer 3). This hand-duplicates credential-shape knowledge that

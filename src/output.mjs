@@ -29,7 +29,7 @@ import {
   describeStripped,
   isIncidentalInvisible,
 } from "./invisible.mjs";
-import { needsMarkdownPipeline } from "./gates.mjs";
+import { needsMarkdownPipeline, needsUrlScan } from "./gates.mjs";
 import {
   applyLayer1,
   INERT_ANSI_NOTE,
@@ -418,8 +418,13 @@ async function applyMarkdownPipeline(state, { html, exfilScan, deadline }) {
   let reveal;
   /** @type {Array<{ placeholder: string, original: string }>} */
   const splices = [];
-  if ((!html && !exfilScan) || !needsMarkdownPipeline(inputText))
-    return { reveal: undefined, splices };
+  // Each layer carries its OWN pre-gate: Layer 2 can only splice what a tag
+  // delimits, while Layer 3's detectors read a bare `https://…` in prose that
+  // holds no markup at all. Gating both on the markup test hid every plain-text
+  // look-alike host and exfil URL from the scan.
+  const runLayer2 = Boolean(html) && needsMarkdownPipeline(inputText);
+  const runLayer3 = Boolean(exfilScan) && needsUrlScan(inputText);
+  if (!runLayer2 && !runLayer3) return { reveal: undefined, splices };
   // INVARIANT: this refusal stops a layer below from STARTING with no budget
   // left. Each parses the whole document in ONE synchronous call, so nothing
   // interrupts it, and a host that kills the overrun hook shows the RAW text.
@@ -455,7 +460,7 @@ async function applyMarkdownPipeline(state, { html, exfilScan, deadline }) {
   // Layer 2 — strips what a rendered page would not show (comments, hidden
   // elements); scripting/resource tags preserved+reported. Each cut leaves a
   // keyed placeholder whose original bytes ride out in `splices`.
-  if (html) {
+  if (runLayer2) {
     const layer2 = sanitizeHtml(state.text);
     if (layer2) {
       if (layer2.text !== state.text) {
@@ -494,7 +499,7 @@ async function applyMarkdownPipeline(state, { html, exfilScan, deadline }) {
   // use them. Scan the ORIGINAL text, not the Layer-2 splice output: a beacon
   // URL hidden inside a display:none element or an HTML comment is MORE
   // suspicious, not less, yet Layer 2 has already removed it from `cleaned`.
-  if (exfilScan) {
+  if (runLayer3) {
     refuseIfSpent();
     const threats = detectExfil(inputText);
     // Severity tracks who does the fetching. An auto-fetched target — an image,

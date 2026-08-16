@@ -243,6 +243,13 @@ const HIDDEN_STYLE_CASES = [
   // matrix3d IDENTITY must NOT read as hidden: m14 (index 3) is legitimately 0,
   // so a naive "index 3 is scaleY" check would false-positive here.
   ["transform:matrix3d(1,0,0,0,0,1,0,0,0,0,1,0,0,0,0,1)", false],
+  // An unresolvable ARGUMENT is not a missing one: reading the factors out of a
+  // Number-filtered token list dropped the var() and slid the benign `c` zero
+  // into the scaleY slot, splicing visible text.
+  ["transform:matrix(1,var(--x),0,1,0,0)", false],
+  ["transform:matrix(1,calc(1 - 1),0,1,0,0)", false],
+  ["transform:scale(1,var(--y))", false], // the factor slot itself is unresolvable
+  ["transform:scale(var(--x),0)", true], // the OTHER factor still resolves to 0
   ["transform:rotateY(90deg)", true], // edge-on (bug: not detected)
   ["transform:rotateX(90deg)", true],
   ["transform:rotateY(-90deg)", true],
@@ -315,6 +322,16 @@ const HIDDEN_STYLE_CASES = [
   ["color:rgb(0 0 0 / 0);background:white", true], // zero alpha = transparent text
   ["color:rgba(1,2,3,0);background:white", true], // legacy comma 4th-channel zero alpha
   ["color:rgba(255,255,255,0.5);background-color:white", true], // non-zero alpha ignored for the hex compare
+  // ── hex notations WITH alpha: #RGBA and #RRGGBBAA are as much CSS as #RGB is,
+  //    and a zero alpha is a spelling of `transparent` ──
+  ["color:#0000", true], // 4-digit zero alpha === transparent
+  ["color:#00000000", true], // 8-digit zero alpha === transparent
+  ["color:#ffffffff;background:white", true], // opaque alpha === #ffffff on white
+  ["color:#ffff;background:#fff", true], // 4-digit opaque white on white
+  ["color:#ffffff80;background:white", true], // partial alpha, same as the rgba() spelling above
+  ["color:#0000ff;background:white", false], // 6 digits: blue on white, not a zero-alpha read
+  ["color:#abcde", false], // 5 digits is not a hex color — fail open
+  ["color:#000000000", false], // 9 digits is not a hex color — fail open
   ["color:hsl(0 0% 100%);background:hsl(0 0% 50%)", false], // distinct hsl lightness
   // hsl hue sectors (each 60° arc of the conversion) as same-color hides.
   ["color:hsl(90 100% 50%);background-color:hsl(90 100% 50%)", true],
@@ -523,6 +540,129 @@ describe("unit: isHiddenStyle exact verdicts", () => {
   ])
     it(`returns false (not a poisoned non-boolean) for color:${proto}`, () =>
       assert.equal(isHiddenStyle(`background:${proto}`), false));
+});
+
+// ─── invariant: one rendered color, one verdict ──────────────────────────────
+//
+// A browser renders every spelling of a color identically, so isHiddenStyle
+// owes them one verdict. Asserting the INVARIANT rather than "#0000 is hidden"
+// fails for the next notation the canonicalizer forgets, not just for the two
+// hex-with-alpha forms that reached the model as invisible text.
+
+describe("invariant: every spelling of one rendered color gets one verdict", () => {
+  // Each group is one rendered color, spelled every way CSS allows.
+  const COLOR_SPELLINGS = {
+    transparent: [
+      "transparent",
+      "#0000",
+      "#00000000",
+      "rgba(0,0,0,0)",
+      "rgb(0 0 0 / 0%)",
+    ],
+    white: [
+      "white",
+      "#fff",
+      "#ffff",
+      "#ffffff",
+      "#ffffffff",
+      "rgb(255,255,255)",
+      "rgb(100% 100% 100%)",
+      "hsl(0 0% 100%)",
+    ],
+    black: ["black", "#000", "#000f", "#000000", "#000000ff", "rgb(0,0,0)"],
+  };
+  // Two frames per group: one where the color hides the text and one where it
+  // does not. Without the visible frame a canonicalizer that mapped every
+  // spelling to the same WRONG color would still pass.
+  const FRAMES = [
+    [
+      "hidden on a matching backdrop",
+      (color) => `color:${color};background:${color}`,
+      true,
+    ],
+    [
+      "visible on a contrasting backdrop",
+      (color) => `color:${color};background:#7f3a1d`,
+      false,
+    ],
+  ];
+  for (const [group, spellings] of Object.entries(COLOR_SPELLINGS))
+    for (const [frameLabel, frame, expected] of FRAMES)
+      it(`${group}: every spelling reads ${expected} — ${frameLabel}`, () => {
+        /** @type {Record<string, boolean>} */
+        const verdicts = {};
+        for (const spelling of spellings)
+          verdicts[spelling] = isHiddenStyle(frame(spelling));
+        // `transparent` hides on ANY backdrop, so its "visible" frame is the
+        // one place the expectation flips — pin the group's own expectation.
+        const want = group === "transparent" ? true : expected;
+        assert.deepEqual(
+          verdicts,
+          Object.fromEntries(spellings.map((s) => [s, want])),
+        );
+      });
+  it("the corpus is not vacuous: the frames disagree for a concrete color", () => {
+    // If both frames returned the same verdict for `white`, every assertion
+    // above would hold for a canonicalizer that resolved nothing at all.
+    assert.equal(isHiddenStyle("color:white;background:white"), true);
+    assert.equal(isHiddenStyle("color:white;background:#7f3a1d"), false);
+  });
+});
+
+// ─── invariant: an unresolvable transform factor never hides ─────────────────
+//
+// The module's doctrine is fail-OPEN on CSS it cannot resolve: a splice removes
+// text the model needed, so an unresolved value must never produce a hidden
+// verdict. Reading scale factors out of a Number-FILTERED token list broke that
+// in the one direction that matters — an argument css-tree could not resolve
+// vanished from the list and a later benign 0 took its slot.
+
+describe("invariant: an unresolvable transform argument never yields a hidden verdict", () => {
+  // Every transform whose verdict this repo pins as hidden through a scale
+  // factor, with the argument INDEX of each factor.
+  const SCALED = [
+    ["scale(1,1)", [0, 1]],
+    ["scale3d(1,1,1)", [0, 1]],
+    ["matrix(1,0,0,1,0,0)", [0, 3]],
+    ["matrix3d(1,0,0,0,0,1,0,0,0,0,1,0,0,0,0,1)", [0, 5]],
+  ];
+  const UNRESOLVABLE = ["var(--x)", "calc(1 - 1)", "attr(data-s)"];
+
+  /** Replace argument `index` of a one-function transform value. */
+  const withArg = (fn, index, replacement) => {
+    const open = fn.indexOf("(");
+    const args = fn.slice(open + 1, -1).split(",");
+    args[index] = replacement;
+    return `${fn.slice(0, open)}(${args.join(",")})`;
+  };
+
+  it("substituting one argument is not a no-op (the mutator works)", () => {
+    assert.equal(
+      withArg("matrix(1,0,0,1,0,0)", 3, "var(--x)"),
+      "matrix(1,0,0,var(--x),0,0)",
+    );
+    assert.equal(withArg("scale(1,1)", 0, "0"), "scale(0,1)");
+  });
+
+  for (const [fn, factorIdx] of SCALED) {
+    const argCount = fn.slice(fn.indexOf("(") + 1, -1).split(",").length;
+    for (const token of UNRESOLVABLE)
+      for (let index = 0; index < argCount; index++)
+        it(`transform:${fn} with argument ${index} = ${token} is not hidden`, () =>
+          assert.equal(
+            isHiddenStyle(`transform:${withArg(fn, index, token)}`),
+            false,
+          ));
+    // Non-vacuity: the same functions DO report hidden when a factor genuinely
+    // resolves to zero, so the assertions above are about the unresolvable
+    // token and not about a detector that never fires.
+    for (const index of factorIdx)
+      it(`transform:${fn} with factor ${index} = 0 IS hidden`, () =>
+        assert.equal(
+          isHiddenStyle(`transform:${withArg(fn, index, "0")}`),
+          true,
+        ));
+  }
 });
 
 // ─── metamorphic: ident spelling never changes the verdict ───────────────────
@@ -790,11 +930,16 @@ describe("unit: checkExfilUrl exact verdicts", () => {
       "embedded credentials",
     ));
   it("flags a fragment past the threshold (201), not at it (200)", () => {
+    // A hyphenated slug, so the LENGTH branch is what this measures: a run of
+    // 200 unbroken alphanumerics is blob-shaped and the value-shape test claims
+    // it first, whichever side of the threshold it sits on.
+    const slug = "a-".repeat(100);
+    assert.equal(slug.length, 200);
     assert.equal(
-      checkExfilUrl("https://e.com/p#" + "A".repeat(200)),
+      checkExfilUrl("https://e.com/p#" + slug),
       "unusually long fragment",
     );
-    assert.equal(checkExfilUrl("https://e.com/p#" + "A".repeat(199)), null);
+    assert.equal(checkExfilUrl("https://e.com/p#" + slug.slice(0, 199)), null);
   });
   it("flags an active-content data: URI even with leading whitespace (\\s, not \\S)", () =>
     assert.equal(
@@ -978,6 +1123,89 @@ describe("unit: checkExfilUrl exact verdicts", () => {
     assert.equal(checkExfilUrl(`https://api.x/items?cursor=${b64url}`), null));
   it("leaves a utm_* param carrying a base64url value alone (allowlisted)", () =>
     assert.equal(checkExfilUrl(`https://x.com/p?utm_content=${b64url}`), null));
+  // An OAuth redirect is one of the commonest URLs a fetched page prints, and
+  // its authorization code is opaque by design — the value shape cannot tell it
+  // from a payload, so the name carries the verdict (precision doctrine).
+  it("leaves an OAuth callback's code/state alone (allowlisted)", () => {
+    assert.equal(
+      checkExfilUrl(
+        "https://app.example.com/callback?code=4%2F0AWtgzh5AbCdEfGhIjKlMnOpQrStUvWxYz1234567890&state=xyz",
+      ),
+      null,
+    );
+    assert.equal(
+      checkExfilUrl(`https://app.example.com/cb?state=${b64url}`),
+      null,
+    );
+    // Non-vacuous: the same value in a non-allowlisted param still fires.
+    assert.equal(
+      checkExfilUrl(`https://app.example.com/cb?c=${b64url}`),
+      "suspicious query parameter",
+    );
+  });
+});
+
+// ─── invariant: the `=` is not a hiding place ────────────────────────────────
+//
+// `?<payload>`, `?<payload>=` and `?d=<payload>` are one exfil channel: the
+// server reads the query string either way. Splitting on `=` and keeping only
+// the right-hand side gave the shortest spelling an empty value, and every
+// shape test reads the value — so dropping two characters bought silence.
+
+describe("invariant: a parameter's exfil verdict ignores whether it carries an `=`", () => {
+  // Each payload as a named value, as a bare query token, and in the fragment,
+  // which carries the same `key=value` channel. The base64 payload's trailing
+  // `=` padding also covers the case where the split reads the padding as the
+  // separator and leaves an empty right-hand side.
+  const spellings = (payload) => ({
+    "named value": `?d=${payload}`,
+    "bare token": `?${payload}`,
+    "in the fragment": `#${payload}`,
+  });
+  const PAYLOADS = [
+    ["a base64 blob", "QUtJQVJPT1RTRUNSRVRLRVkxMjM0NTY3ODkwYWJjZGVmZ2hpams="],
+    ["a hex blob", "a".repeat(16) + "b3c4d5e6f7081920"],
+    ["an ordinary word", "guide"],
+  ];
+  for (const [label, payload] of PAYLOADS) {
+    const forms = spellings(payload);
+    it(`agrees across every spelling of ${label}`, () => {
+      const verdicts = Object.fromEntries(
+        Object.entries(forms).map(([form, suffix]) => [
+          form,
+          checkExfilUrl(`https://e.com/p${suffix}`),
+        ]),
+      );
+      const [first] = Object.values(verdicts);
+      assert.deepEqual(
+        verdicts,
+        Object.fromEntries(Object.keys(forms).map((form) => [form, first])),
+      );
+    });
+  }
+  // Non-vacuity: the payloads above must not ALL be null, or the agreement
+  // holds for a detector that never fires.
+  it("flags the blob spellings and clears the word (the corpus separates them)", () => {
+    assert.equal(
+      checkExfilUrl(`https://e.com/p?${PAYLOADS[0][1]}`),
+      "suspicious query parameter",
+    );
+    assert.equal(
+      checkExfilUrl(`https://e.com/p?${PAYLOADS[1][1]}`),
+      "suspicious query parameter",
+    );
+    assert.equal(checkExfilUrl(`https://e.com/p?${PAYLOADS[2][1]}`), null);
+  });
+  // Precision: the allowlist is keyed on the NAME, and a valueless param's
+  // token is its name — so an allowlisted param stays silent, and a benign
+  // valueless flag never becomes a finding.
+  for (const [label, url] of [
+    ["an allowlisted signing param", "https://cdn.x/a?sig"],
+    ["a bare feature flag", "https://x.com/app?debug"],
+    ["an empty value", "https://x.com/app?flag="],
+    ["a section anchor", "https://x.com/guide#installation-on-linux"],
+  ])
+    it(`leaves ${label} alone`, () => assert.equal(checkExfilUrl(url), null));
 });
 
 describe("unit: urlHost exact verdicts", () => {
