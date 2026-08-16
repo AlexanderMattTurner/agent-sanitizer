@@ -8,6 +8,11 @@ adhere to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+## [2.41.2] - 2026-08-16
+
+### Fixed
+- Warn about stale hook-binary manifests at commit time instead of blocking the commit or deferring the check to CI.
+
 ## [2.41.1] - 2026-08-16
 
 ### Fixed
