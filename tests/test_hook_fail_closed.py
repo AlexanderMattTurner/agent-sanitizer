@@ -8,6 +8,7 @@ than skips. Positive controls (the escape hatch works; the command gate skips
 non-push commands) keep the suite from passing vacuously.
 """
 
+import os
 import shutil
 import subprocess
 from pathlib import Path
@@ -507,3 +508,36 @@ def test_the_sandbox_git_helper_ignores_an_inherited_git_dir(
         env=env_without_git_location(),
     ).stdout
     assert listed.split() == ["fixture.txt"]
+
+
+def test_the_guard_pair_runner_strips_an_inherited_git_dir(tmp_path: Path) -> None:
+    """The runner's own children get no GIT_DIR, whatever the hook exported.
+
+    Fixing each suite one module at a time leaves the next one to be written
+    exposed, so the strip belongs where the suites are spawned. The probe is the
+    suite that actually did the damage: with GIT_DIR inherited,
+    tests/test_template_sync.py checked out fixture refs in the developer's own
+    repository and rewound the working tree in the middle of a commit.
+    """
+    decoy = init_repo(tmp_path, "decoy")
+    (decoy / "kept.txt").write_text("do not touch\n")
+    git(decoy, "add", "kept.txt")
+    git(decoy, "commit", "-q", "-m", "decoy", "--no-verify")
+    head = _head(decoy)
+
+    result = subprocess.run(
+        [
+            "node",
+            str(REPO_ROOT / ".hooks" / "run-guard-pairs.mjs"),
+            "tests/test_template_sync.py",
+        ],
+        cwd=REPO_ROOT,
+        env={**os.environ, "GIT_DIR": str(decoy / ".git")},
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stderr
+    # Positive marker: the suite really ran, so the untouched decoy below is not
+    # the result of the runner scheduling nothing at all.
+    assert "tests/test_template_sync.py" in result.stderr
+    assert _head(decoy) == head, "a guard suite wrote into the repo GIT_DIR named"
