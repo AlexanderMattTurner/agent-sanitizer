@@ -15,6 +15,7 @@ import agent_sanitizer.secrets.engine as E
 from agent_sanitizer.secrets import (
     RedactorConfig,
     credential_field_name_patterns,
+    credential_name_segments,
     detected_secret_values,
     mask_secret_lines,
     redact,
@@ -246,9 +247,135 @@ def test_bracket_peeling_leaves_env_and_call_fp_guards_intact():
     for text in (
         "api_key = ${SECRET_KEY_REFERENCE_NAME}",
         'token = os.getenv("FOO_BAR_BAZ_LONGNAME")',
+        # A call whose NAME alone clears the 19-byte value floor, so it really
+        # does reach the field-value path and exercise a call guard. The two
+        # values above are 9 and 9 bytes, which the floor rejects on its own.
+        "secret = derive_encryption_key_from_password(user_password)",
     ):
         out, _ = redact(text)
         assert out == text, text
+
+
+# ─── _is_call_or_code_ref ────────────────────────────────────────────────────
+# The class: FIELD_VALUE_RE excludes `(` from the value class, so a
+# credential-named constant assigned a CALL matched with the value stopping one
+# byte before the evidence that it is a call, and the identifier was rewritten
+# to `[REDACTED](pw)` — source the model needed, silently changed.
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "secret = derive_encryption_key_from_password(user_password)",
+        "password = read_credentials_from_disk(path)",
+        "api_key := build_authorization_header_value(request)",
+        "token => compute_the_session_identifier()",
+        'auth_token: fetch_bearer_token_for_account("acct")',
+    ],
+)
+def test_credential_named_call_is_left_verbatim(text):
+    out, found = redact(text)
+    assert out == text
+    assert found == []
+
+
+@pytest.mark.parametrize(
+    "value, line, expected",
+    [
+        # The two conditions, each alone and together.
+        (
+            "derive_encryption_key_from_password",
+            "s = derive_encryption_key_from_password(p)",
+            True,
+        ),
+        (
+            "derive_encryption_key_from_password",
+            "s = derive_encryption_key_from_password",
+            False,
+        ),
+        # An opaque credential-shaped run refuses the skip even with the `(`, so
+        # a token cannot be laundered by appending an open paren.
+        (
+            "q9X2mN7pK4rT8wY1cV5bZ3dF6gH0jL2e",
+            "s = q9X2mN7pK4rT8wY1cV5bZ3dF6gH0jL2e(",
+            False,
+        ),
+        # A different byte after the value is not a call.
+        (
+            "derive_encryption_key_from_password",
+            "s = derive_encryption_key_from_password;",
+            False,
+        ),
+    ],
+)
+def test_is_call_or_code_ref(value, line, expected):
+    candidate = E.Candidate(value=value, line=line, value_start=line.find(value))
+    assert E._is_call_or_code_ref(candidate) is expected
+
+
+def test_is_call_or_code_ref_declines_without_an_offset():
+    """No `value_start` means the value's position in the line is a guess, and a
+    guess here suppresses a real detection. The gate declines instead."""
+    line = "s = derive_encryption_key_from_password(p)"
+    assert (
+        E._is_call_or_code_ref(
+            E.Candidate(value="derive_encryption_key_from_password", line=line)
+        )
+        is False
+    )
+
+
+def test_a_credential_named_call_argument_still_redacts():
+    """The gate must not become a bypass: it skips the CALLEE's name, and a real
+    credential passed as the argument is still removed."""
+    secret = "wJalrXUtnFEMIK7MDENGbPxRfiCYEXAMPLEKEY"
+    text = f"aws_secret_access_key = {secret}"
+    out, found = redact(text)
+    assert secret not in out
+    assert found
+
+
+# ─── _KEYWORD_NOUN_LITERALS is derived from the vocabulary ───────────────────
+
+
+def _vocabulary_nouns() -> list[str]:
+    """Every credential noun the published vocabulary renders, in the spellings
+    an author writes as a VALUE (`access_token`, `access-token`, `accesstoken`)."""
+    spellings = []
+    for pattern in credential_field_name_patterns():
+        for separator in ("_", "-", ""):
+            spellings.append(pattern.replace("[_-]?", separator))
+    for segment in credential_name_segments():
+        spellings.append(segment.lower())
+    return sorted(set(spellings))
+
+
+def test_noun_literals_cover_the_whole_vocabulary():
+    """The class: `_KEYWORD_NOUN_LITERALS` was a hand-typed second copy that had
+    drifted 7 nouns below the SSOT, so `secret_key = "access_token"` was mangled
+    while `secret_key = "password"` was left alone. Driving from the vocabulary
+    means a noun added there is covered with no edit here."""
+    nouns = _vocabulary_nouns()
+    assert len(nouns) >= 20, "the vocabulary rendered almost nothing"
+    for noun in nouns:
+        assert E._normalize_ident(noun) in E._KEYWORD_NOUN_LITERALS, noun
+
+
+@pytest.mark.parametrize("noun", _vocabulary_nouns())
+def test_a_bare_vocabulary_noun_as_a_value_is_left_verbatim(noun):
+    text = f'secret_key = "{noun}"'
+    out, found = redact(text)
+    assert out == text
+    assert found == []
+
+
+def test_a_non_noun_value_in_the_same_shape_still_redacts():
+    """Non-vacuity for the sweep above: the shape it asserts is benign is one
+    the engine really does redact when the value is not a bare noun."""
+    text = 'secret_key = "hunter2xyz"'
+    out, found = redact(text)
+    assert out != text
+    assert found == ["Secret Keyword"]
 
 
 # ─── PEM block redaction ─────────────────────────────────────────────────────
