@@ -10,6 +10,13 @@
  * because a passthrough executes the line without violating any asserted
  * invariant. A percentage can't catch "this parser has no security invariant";
  * requiring a named fuzz target for each one can.
+ *
+ * Each obligation list is one part of a PARTITION over the population it draws
+ * from: FUZZ_REQUIRED + FUZZ_EXEMPT + FUZZ_TODO cover every exported function,
+ * SEMANTIC_FUZZ_REQUIRED + SEMANTIC_FUZZ_EXEMPT cover every required name, and
+ * IN_SCOPE + OUT_OF_SCOPE cover every discovered suite. A required list on its
+ * own proves only what it names; the other parts are what make a new export or
+ * a new suite impossible to land without a human choosing a side.
  */
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
@@ -17,6 +24,7 @@ import { execFileSync } from "node:child_process";
 import { readFileSync, readdirSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
+import { parse } from "acorn";
 
 import * as invisible from "../src/invisible.mjs";
 import * as html from "../src/html.mjs";
@@ -36,23 +44,13 @@ import { CHECKS } from "../src/invisible.mjs";
 import {
   THREAT_CODEPOINTS,
   IN_SCOPE_MEMBERS,
+  OUT_OF_SCOPE,
   acceptedSpellings,
   spellingMatches,
   threat,
 } from "./threat-codepoints.mjs";
 
 // Functions that ingest untrusted text/URLs/ranges and so owe a fuzz target.
-// Intentionally excluded (documented so the omission is a choice, not a miss):
-//   - isSgrOnly, isHiddenOpen, closingTagName: pure short-string predicates
-//     with no transform/parse step, covered by example tests and indirectly
-//     through their callers.
-//   - looksLikeHtmlSource: parses, but returns a verdict rather than a
-//     transform, so it has no fuzzable invariant of its own; the verdict is
-//     pinned by the exact-verdict corpus in html.test.mjs and both branches it
-//     selects are fuzzed through sanitizeHtml.
-//   - scanHtmlFragment: has no invariant of its own beyond what the
-//     sanitizeHtml round-trip / splice-fidelity properties already assert on
-//     its output.
 const FUZZ_REQUIRED = [
   "stripInvisible",
   "stripInvisibleWithReport",
@@ -64,6 +62,7 @@ const FUZZ_REQUIRED = [
   "detectExfil",
   "checkExfilUrl",
   "urlHost",
+  "detectConfusableHosts",
   // Agent-pipeline transforms/parsers over untrusted input (one named fuzz
   // target each — the same obligation extended to the new entry points).
   "normalizeConfusables",
@@ -93,18 +92,101 @@ const FUZZ_REQUIRED = [
   "rehydrateLayer2",
 ];
 
+/**
+ * The DENIAL part of the export partition: every exported function that owes no
+ * fuzz target, and the one-line reason it owes none. Every entry here is a
+ * settled "no" — a name that owes a suite it does not have belongs in
+ * {@link FUZZ_TODO}, so a deferral cannot ride in as a reason string.
+ * @type {Readonly<Record<string, string>>}
+ */
+const FUZZ_EXEMPT = Object.freeze({
+  // ── predicates and lookups: no parse or transform step of their own ──────
+  closingTagName: "reads one tag name out of an already-tokenized HTML value",
+  contextScopeContradiction:
+    "maps a host-supplied load reason through a table, with no parse",
+  excludeFromContextScan: "path-prefix predicate over one scan entry name",
+  hasNonAscii: "code-unit range predicate over one string",
+  isBenignAnsiKinds:
+    "set membership over the TOKEN_KIND values Layer 1 removed",
+  isHiddenOpen: "short-string predicate over one open tag",
+  isIncidentalInvisible:
+    "threshold read over counts the invisible analysis produced",
+  isSgrOnly: "predicate over the tokens scanAnsi produced",
+  isWalkableContainer: "shape predicate over one JSON value",
+  looksLikeHtmlSource:
+    "returns a verdict rather than a transform, and both branches it selects are fuzzed through sanitizeHtml",
+  scopeFor: "looks a tool name up in the fold-scope table",
+
+  // ── operator-facing prose built from an already-classified finding ───────
+  composeContext: "assembles the context block from a computed warning list",
+  describeExfil: "formats Layer 3's classified threats into prose",
+  describeRemoved: "formats Layer 2's removal counts into prose",
+  describeStripped: "formats Layer 1's CATEGORY codes into prose",
+  describeWarned: "formats Layer 2's preserved-tag counts into prose",
+  formatReason: "formats the prompt gate's block reason into prose",
+  normalizeContext: "formats the folded field names into a model-facing note",
+  withheldWarning:
+    "formats one noun phrase into the withheld-artifact sentence",
+
+  // ── filesystem entry points whose only parse is an already-required one ──
+  ancestorInstructionFiles: "pure parent-path arithmetic over a directory path",
+  atomicReplaceFile: "write primitive over text a required scan produced",
+  cleanFile: "reads a file and delegates the parse to scanText",
+  findInstructionFiles: "enumerates paths and reads no file content",
+  scanInstructionFiles: "reads files and delegates the parse to scanText",
+
+  // ── compositions and views fuzzed through the entry point above them ─────
+  applyLayer1:
+    "the Layer-1 composition, fuzzed through sanitize and sanitizeText",
+  countEffectiveInvisible: "reads the analysis stripInvisible already ran",
+  countPayloadInvisible: "reads the analysis stripInvisible already ran",
+  findLongRuns: "one anchored scan, fuzzed through stripInvisibleWithReport",
+  hasLongRun: "the yes/no of findLongRuns, over the same anchored scan",
+  isBenignAnsi: "runs applyLayer1 and reads its kinds",
+  layer2Placeholder:
+    "derives a keyed placeholder by sha256; the round-trip fuzz oracle pins its grammar",
+  makeFileView:
+    "freezes a text and pair list into a view, validated at construction",
+  orderedMatches:
+    "orders what occurrences found, and spliceOrdered consumes that order",
+  pairsToUtf16:
+    "converts pair offsets between spaces, fuzzed through resolveSpan",
+  payloadInvisibleView:
+    "the view the long-run probe reads, pinned by invisible-fast-path",
+  payloadLongRunSample: "reads that same view, pinned by invisible-fast-path",
+  scanHtmlFragment:
+    "has no invariant of its own beyond what the sanitizeHtml round-trip and splice-fidelity properties assert on its output",
+  stripAnsiFully: "the ANSI half of applyLayer1, fuzzed through layer1-ansi",
+  suppressToolOutput: "substitutes a sentinel for a subtree and parses nothing",
+  toUtf16View:
+    "converts a view between offset spaces, validated at construction",
+  viewMapDefect: "self-check over a view the pipeline built",
+});
+
+/**
+ * The DEFERRAL part of the export partition: every exported function that owes
+ * a property suite but does not have one yet, and the untrusted input it takes.
+ *
+ * A named list rather than a reason-string convention inside FUZZ_EXEMPT,
+ * because both edits a deferral allows must be visible. Growing the deferred
+ * set adds a line here; and demoting a name out of FUZZ_REQUIRED deletes its
+ * suite obligation, which the partition forces to read as a deletion from one
+ * list and an addition to another.
+ * @type {Readonly<Record<string, string>>}
+ */
+const FUZZ_TODO = Object.freeze({
+  anchorSpans: "anchors a prefix/suffix over untrusted Write content",
+  matchesSecretHint: "a fail-open pre-gate for the secret scan",
+  needsMarkdownPipeline: "a fail-open pre-gate for Layers 2 and 3",
+  overlapAwareCount: "decides Edit ambiguity over untrusted needles",
+  pairDiskSpans: "maps redaction pairs onto on-disk spans",
+});
+
 // Entry points that owe SEMANTIC-CORRECTNESS fuzzing, not just structural
 // fuzzing: a structural property (never-throws, idempotent, shape-preserved)
 // can hold in aggregate while a detector corrupts the wrong leaf or misses a
 // specific payload shape — exactly the class of false positive that shipped
-// in scanText's scatter floor (fixed alongside this gate). A subset of
-// FUZZ_REQUIRED: named internal helpers (isHiddenStyle, decodeRun,
-// resolveSpan, alignDeletions, rehydrateNewString, stripInvisibleWithReport,
-// deleteVerbatimSpans; urlHost's sibling checkExfilUrl is kept since it's
-// independently callable) are exercised only THROUGH their public entry
-// point in these suites, so requiring their own name to appear here would be
-// a false negative, not a stronger check — the precision property is
-// asserted at the entry point.
+// in scanText's scatter floor (fixed alongside this gate).
 const SEMANTIC_FUZZ_REQUIRED = [
   "stripInvisible",
   "sanitizeHtml",
@@ -122,6 +204,40 @@ const SEMANTIC_FUZZ_REQUIRED = [
   "occurrences",
 ];
 
+/**
+ * The other half of the semantic partition, over FUZZ_REQUIRED. Most entries
+ * are named internal helpers a semantic suite drives only THROUGH their public
+ * entry point, where the precision property is asserted: requiring their own
+ * name here would be a false negative, not a stronger check.
+ * @type {Readonly<Record<string, string>>}
+ */
+const SEMANTIC_FUZZ_EXEMPT = Object.freeze({
+  alignDeletions:
+    "driven through rehydrateRedacted, where precision is asserted",
+  buildPreToolUseResponse:
+    "a whole-process composition; each layer's precision is asserted at its own entry point",
+  decodeRun: "driven through scanText, where precision is asserted",
+  deleteVerbatimSpans:
+    "driven through sanitizeText, where precision is asserted",
+  detectConfusableHosts:
+    "its precision is pinned exactly by the benign/attack corpus in confusable-host.test.mjs",
+  evaluateToolOutput:
+    "a whole-process composition; each layer's precision is asserted at its own entry point",
+  isHiddenElement: "driven through sanitizeHtml, where precision is asserted",
+  isHiddenStyle: "driven through sanitizeHtml, where precision is asserted",
+  rehydrateLayer2:
+    "a whole-process composition; each layer's precision is asserted at its own entry point",
+  rehydrateNewString:
+    "driven through rehydrateRedacted, where precision is asserted",
+  resolveSpan: "driven through rehydrateRedacted, where precision is asserted",
+  sanitize:
+    "the top-level composition over layers that each carry their own semantic suite",
+  spliceOrdered: "driven through sanitizeText, where precision is asserted",
+  spliceRanges: "driven through sanitizeHtml, where precision is asserted",
+  stripInvisibleWithReport:
+    "driven through stripInvisible, where precision is asserted",
+});
+
 const repoRoot = execFileSync("git", ["rev-parse", "--show-toplevel"], {
   encoding: "utf8",
 }).trim();
@@ -134,184 +250,281 @@ const testDir = path.join(repoRoot, "test");
 // the "fc.assert(" sentinel itself), so scanning it would pass vacuously.
 const selfName = path.basename(fileURLToPath(import.meta.url));
 
-// Strip import statements and comments so a required name only counts when it
-// appears in actual test code — a function listed in an `import {…}` or named
-// in a comment is NOT evidence that a property exercises it.
-const stripImportsAndComments = (source) =>
-  source
-    .replace(/^import\b[\s\S]*?from\s+["'][^"']+["'];?[ \t]*$/gm, "")
-    .replace(/\/\*[\s\S]*?\*\//g, "")
-    .replace(/(^|[^:])\/\/.*$/gm, "$1");
+// ─── JS structure, answered by the grammar ───────────────────────────────────
+// Every question in this section is about the JS GRAMMAR — is this identifier
+// inside a property invocation, where does this arrow body end, is this token
+// code or the inside of a string — so acorn answers it. A depth counter over
+// the text cannot: 69 string, template and regex literals in this repo's
+// fast-check suites hold unbalanced parens, and one of them inside a property
+// body moves the captured span off its real end in either direction.
 
-// A name appearing ANYWHERE in a file that merely CONTAINS an `fc.assert(`/
-// `fc.property(` call somewhere is not evidence that a PROPERTY exercises
-// that name — this repo mixes a handful of property tests into files that
-// are otherwise hundreds of lines of ordinary example-based `it(...)` tests
-// (test/cli.test.mjs, test/html.test.mjs, test/invisible.test.mjs), so an
-// ordinary example test calling e.g. `sanitize(...)` would otherwise satisfy
-// "coverage" for `sanitize` even after its actual property test was deleted.
-// Narrow the match to only the source WITHIN each `fc.assert(...)` /
-// `fc.property(...)` call (balanced-paren scan from the callee's opening
-// paren to its matching close) so a name only counts when it is textually
-// inside a real property/fuzz invocation.
+const FC_PROPERTY_METHODS = new Set(["assert", "property", "asyncProperty"]);
 
-// Several suites (confusables-property, html-property, prompt-property,
-// view-map-property) factor the boilerplate into a one-line local wrapper —
-// e.g. `const check = (arbitrary, predicate) =>\n  fc.assert(fc.property(arbitrary, predicate), runOptions);`
-// — and drive every property through `check(arb, (x) => ...)`. The predicate
-// closure (where a required name actually gets referenced) then sits inside
-// the WRAPPER's call, not literally inside `fc.assert(...)`, so a matcher
-// that only recognizes the literal fc.* callees would false-negative on
-// every one of those suites. Detect such local wrappers by their definition
-// (a same-line-or-wrapped arrow whose body directly calls fc.assert/
-// fc.property/fc.asyncProperty) and treat calls to them as property
-// invocations too.
-const WRAPPER_DEF_RE =
-  /\bconst\s+(\w+)\s*=\s*\([^)]*\)\s*=>\s*fc\.(?:assert|property|asyncProperty)\(/g;
+const FUNCTION_TYPES = new Set([
+  "ArrowFunctionExpression",
+  "FunctionDeclaration",
+  "FunctionExpression",
+]);
 
-// Other suites (html-property's containsForbiddenNode/isHiddenElement,
-// rehydrate-semantic-fuzz's editCall/rehydrateRedacted and
-// ioFor->mkView->occurrences) call the required name only from INSIDE a
-// locally-defined helper function's own body, one or more indirection
-// levels away from the fc.assert/property call site itself. A name used
-// only via such a helper is exercised by the fuzz run exactly as much as one
-// referenced directly, so its OWN definition body is pulled in transitively
-// below (extractDefinitions + the fixpoint loop in extractFcCallSpans).
-const FUNCTION_DEF_RE =
-  /\bfunction\s+(\w+)\s*\(|\b(?:const|let|var)\s+(\w+)\s*=\s*(?:async\s*)?\(/g;
+// A `var` hoists to the nearest of these; everything else binds where it sits.
+const FUNCTION_SCOPE_TYPES = new Set([...FUNCTION_TYPES, "Program"]);
 
-const escapeRegExp = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-
-/** @returns {number} index of the matching close paren, or -1 */
-const findMatchingParen = (code, openIdx) => {
-  let depth = 0;
-  for (let i = openIdx; i < code.length; i++) {
-    if (code[i] === "(") depth++;
-    else if (code[i] === ")") {
-      depth--;
-      if (depth === 0) return i;
-    }
-  }
-  return -1;
-};
-
-/** @returns {number} index of the matching close brace, or -1 */
-const findMatchingBrace = (code, openIdx) => {
-  let depth = 0;
-  for (let i = openIdx; i < code.length; i++) {
-    if (code[i] === "{") depth++;
-    else if (code[i] === "}") {
-      depth--;
-      if (depth === 0) return i;
-    }
-  }
-  return -1;
-};
+const BLOCK_SCOPE_TYPES = new Set([
+  "BlockStatement",
+  "CatchClause",
+  "ClassDeclaration",
+  "ClassExpression",
+  "ForInStatement",
+  "ForOfStatement",
+  "ForStatement",
+  "StaticBlock",
+  "SwitchStatement",
+]);
 
 /**
- * Finds every named `function NAME(...) {...}` and
- * `const/let/var NAME = (...) => ...` (block- or expression-bodied)
- * definition in `code` and returns a Map from name to its full [start, end)
- * source span (declaration keyword through the body's end).
- * @param {string} code
- * @returns {Map<string, [number, number]>}
+ * Parse one ES module, collecting its comment ranges.
+ * @param {string} source
+ * @returns {{ ast: any, comments: {start: number, end: number}[] }}
  */
-const extractDefinitions = (code) => {
-  const defs = new Map();
-  for (const match of code.matchAll(FUNCTION_DEF_RE)) {
-    const name = match[1] ?? match[2];
-    const isFunctionKeyword = match[1] !== undefined;
-    const parenOpen = match.index + match[0].length - 1;
-    const parenClose = findMatchingParen(code, parenOpen);
-    if (parenClose === -1) continue;
-    let i = parenClose + 1;
-    while (i < code.length && /\s/.test(code[i])) i++;
-    if (isFunctionKeyword) {
-      if (code[i] !== "{") continue;
-      const braceClose = findMatchingBrace(code, i);
-      if (braceClose === -1) continue;
-      defs.set(name, [match.index, braceClose + 1]);
-      continue;
-    }
-    // const/let/var NAME = (...) — only a function definition if an arrow
-    // follows the params; `const x = (a + b) * c;` must NOT match.
-    if (code.slice(i, i + 2) !== "=>") continue;
-    i += 2;
-    while (i < code.length && /\s/.test(code[i])) i++;
-    if (code[i] === "{") {
-      const braceClose = findMatchingBrace(code, i);
-      if (braceClose === -1) continue;
-      defs.set(name, [match.index, braceClose + 1]);
-      continue;
-    }
-    // Expression-bodied arrow: scan to the top-level (depth-0) terminating
-    // semicolon so a body containing its own (), {}, [] doesn't cut short.
-    let depth = 0;
-    let j = i;
-    for (; j < code.length; j++) {
-      const c = code[j];
-      if (c === "(" || c === "{" || c === "[") depth++;
-      else if (c === ")" || c === "}" || c === "]") depth--;
-      else if (c === ";" && depth === 0) break;
-    }
-    defs.set(name, [match.index, Math.min(j + 1, code.length)]);
+const parseModule = (source) => {
+  /** @type {{start: number, end: number}[]} */
+  const comments = [];
+  const ast = parse(source, {
+    ecmaVersion: "latest",
+    sourceType: "module",
+    onComment: comments,
+  });
+  return { ast, comments };
+};
+
+/** Every child node of `node`. */
+function* childNodes(node) {
+  for (const key of Object.keys(node)) {
+    const value = node[key];
+    if (Array.isArray(value)) {
+      for (const item of value)
+        if (item && typeof item.type === "string") yield item;
+    } else if (value && typeof value.type === "string") yield value;
   }
-  return defs;
+}
+
+/** `node` and every node beneath it. */
+const subtree = (node, out = []) => {
+  out.push(node);
+  for (const child of childNodes(node)) subtree(child, out);
+  return out;
+};
+
+/** Every name a binding pattern introduces. */
+function* patternNames(pattern) {
+  if (pattern === null || pattern === undefined) return;
+  if (pattern.type === "Identifier") yield pattern.name;
+  else if (pattern.type === "ObjectPattern")
+    for (const property of pattern.properties)
+      yield* patternNames(
+        property.type === "RestElement" ? property.argument : property.value,
+      );
+  else if (pattern.type === "ArrayPattern")
+    for (const element of pattern.elements) yield* patternNames(element);
+  else if (pattern.type === "AssignmentPattern")
+    yield* patternNames(pattern.left);
+  else if (pattern.type === "RestElement")
+    yield* patternNames(pattern.argument);
+}
+
+/**
+ * Resolve identifiers to the binding they name, so a call is matched by what it
+ * REFERS to rather than by how it is spelled.
+ * @param {any} ast
+ * @returns {(name: string, node: any) => any} the local function a name is
+ *   bound to, or null when the name is unbound, imported, or a parameter
+ */
+const identifierBindings = (ast) => {
+  const scopeOf = new Map();
+  const declare = (scope, name, definition) => {
+    if (!scope.bindings.has(name)) scope.bindings.set(name, definition);
+  };
+  const enclosingFunction = (scope) =>
+    scope.isFunction ? scope : enclosingFunction(scope.parent);
+
+  const visit = (node, outer) => {
+    scopeOf.set(node, outer);
+    const isFunction = FUNCTION_SCOPE_TYPES.has(node.type);
+    const scope =
+      isFunction || BLOCK_SCOPE_TYPES.has(node.type)
+        ? { parent: outer, isFunction, bindings: new Map() }
+        : outer;
+    if (node.type === "FunctionDeclaration" || node.type === "ClassDeclaration")
+      declare(outer, node.id.name, node);
+    if (isFunction && node.params)
+      for (const param of node.params)
+        for (const name of patternNames(param)) declare(scope, name, null);
+    if (node.type === "CatchClause")
+      for (const name of patternNames(node.param)) declare(scope, name, null);
+    if (node.type === "VariableDeclaration")
+      for (const declarator of node.declarations)
+        for (const name of patternNames(declarator.id))
+          declare(
+            node.kind === "var" ? enclosingFunction(outer) : outer,
+            name,
+            declarator.init,
+          );
+    if (node.type === "ImportDeclaration")
+      for (const specifier of node.specifiers)
+        declare(outer, specifier.local.name, null);
+    for (const child of childNodes(node)) visit(child, scope);
+  };
+  visit(ast, { parent: null, isFunction: true, bindings: new Map() });
+
+  return (name, node) => {
+    for (let scope = scopeOf.get(node); scope; scope = scope.parent)
+      if (scope.bindings.has(name)) return scope.bindings.get(name);
+    return null;
+  };
+};
+
+/** True for a direct `fc.assert(…)` / `fc.property(…)` / `fc.asyncProperty(…)`. */
+const isFcPropertyCall = (node) =>
+  node.type === "CallExpression" &&
+  node.callee.type === "MemberExpression" &&
+  !node.callee.computed &&
+  node.callee.object.type === "Identifier" &&
+  node.callee.object.name === "fc" &&
+  node.callee.property.type === "Identifier" &&
+  FC_PROPERTY_METHODS.has(node.callee.property.name);
+
+/**
+ * True when `node` invokes `fc.assert`/`fc.property`/`fc.asyncProperty` in its
+ * OWN body. A nested function is not descended into: a helper that merely
+ * builds `it(…, () => fc.assert(…))` registers a test rather than running a
+ * property, so calling it is not itself a property invocation.
+ * @param {any} node
+ * @returns {boolean}
+ */
+const callsFcDirectly = (node) => {
+  if (isFcPropertyCall(node)) return true;
+  for (const child of childNodes(node)) {
+    if (FUNCTION_TYPES.has(child.type)) continue;
+    if (callsFcDirectly(child)) return true;
+  }
+  return false;
 };
 
 /**
- * Concatenates the source spanned by every `fc.assert(...)`, `fc.property(...)`,
- * `fc.asyncProperty(...)` call, every call to a local wrapper function whose
- * own body directly invokes one of those (WRAPPER_DEF_RE), AND — by
- * fixpoint — the full definition body of any locally-defined helper
- * function called from within source already pulled in (so a name used only
- * inside a helper-of-a-helper, e.g. an `editCall(...)` invoked inside a
- * property that itself calls `rehydrateRedacted(...)`, still counts). Each
- * direct call span runs from the callee's opening paren to its balanced
- * closing paren.
- * @param {string} code
+ * The identifier names a suite references from inside a property invocation.
+ *
+ * A name appearing anywhere in a file that merely CONTAINS a property call is
+ * not evidence that a PROPERTY exercises it: this repo mixes a handful of
+ * property tests into files that are otherwise hundreds of lines of ordinary
+ * example-based `it(...)` tests, so an example test calling `sanitize(...)`
+ * would otherwise satisfy the obligation after its property test was deleted.
+ *
+ * Three shapes count as a property invocation. A direct `fc.*` call; a call to
+ * a LOCAL WRAPPER whose own body invokes one (several suites factor the
+ * boilerplate into `const check = (arb, pred) => fc.assert(fc.property(…))`,
+ * putting the predicate closure inside the wrapper's call rather than fc's);
+ * and, transitively, the body of any local helper called from source already
+ * included, since a name reached through a helper is exercised by the fuzz run
+ * exactly as much as one referenced directly.
+ * @param {any} ast
+ * @returns {{ names: Set<string>, spanLength: number }}
+ */
+const propertyReferences = (ast) => {
+  const definitionOf = identifierBindings(ast);
+  const nodes = subtree(ast);
+
+  const wrapperCache = new Map();
+  const isWrapper = (definition) => {
+    if (definition === null || !FUNCTION_TYPES.has(definition.type))
+      return false;
+    if (!wrapperCache.has(definition))
+      wrapperCache.set(definition, callsFcDirectly(definition.body));
+    return wrapperCache.get(definition);
+  };
+  const calledDefinition = (node) =>
+    node.type === "CallExpression" && node.callee.type === "Identifier"
+      ? definitionOf(node.callee.name, node.callee)
+      : null;
+
+  const roots = nodes.filter(
+    (node) => isFcPropertyCall(node) || isWrapper(calledDefinition(node)),
+  );
+  // A nested root (fc.property inside fc.assert) already sits inside its
+  // parent's span; counting only the outermost keeps spanLength a real
+  // character count rather than one that double-counts.
+  const outermost = roots.filter(
+    (root) =>
+      !roots.some(
+        (other) =>
+          other !== root && other.start <= root.start && root.end <= other.end,
+      ),
+  );
+
+  const names = new Set();
+  const visited = new Set();
+  const queue = [...outermost];
+  while (queue.length > 0) {
+    const region = queue.pop();
+    if (visited.has(region)) continue;
+    visited.add(region);
+    for (const node of subtree(region)) {
+      if (node.type === "Identifier") names.add(node.name);
+      const definition = calledDefinition(node);
+      if (definition !== null && FUNCTION_TYPES.has(definition.type))
+        queue.push(definition);
+    }
+  }
+  return {
+    names,
+    spanLength: outermost.reduce(
+      (sum, node) => sum + (node.end - node.start),
+      0,
+    ),
+  };
+};
+
+/** Every identifier a module references outside its own import statements. */
+const referencedIdentifiers = (ast) => {
+  const names = new Set();
+  const visit = (node) => {
+    if (node.type === "ImportDeclaration") return;
+    if (node.type === "Identifier") names.add(node.name);
+    for (const child of childNodes(node)) visit(child);
+  };
+  visit(ast);
+  return names;
+};
+
+/**
+ * `source` with each `[start, end)` range blanked and every other offset
+ * unmoved. Split by UTF-16 code UNIT, the space acorn's offsets index: an
+ * astral character in a suite (this repo's tests are full of emoji) is two
+ * units, and walking code points instead shifts every range after the first one.
+ * @param {string} source
+ * @param {{start: number, end: number}[]} ranges
  * @returns {string}
  */
-const extractFcCallSpans = (code) => {
-  const wrapperNames = new Set(
-    [...code.matchAll(WRAPPER_DEF_RE)].map((m) => m[1]),
-  );
-  const calleeAlternation = [
-    "fc\\.assert",
-    "fc\\.property",
-    "fc\\.asyncProperty",
-    ...[...wrapperNames].map(escapeRegExp),
-  ].join("|");
-  const callStartRe = new RegExp(`\\b(?:${calleeAlternation})\\(`, "g");
-
-  /** @type {[number, number][]} */
-  const included = [];
-  for (const match of code.matchAll(callStartRe)) {
-    const start = match.index;
-    const parenOpen = start + match[0].length - 1;
-    const parenClose = findMatchingParen(code, parenOpen);
-    if (parenClose === -1) continue;
-    included.push([start, parenClose + 1]);
-  }
-
-  const defs = extractDefinitions(code);
-  const pulledIn = new Set();
-  let changed = true;
-  while (changed) {
-    changed = false;
-    const currentText = included.map(([s, e]) => code.slice(s, e)).join("\n");
-    for (const [name, span] of defs) {
-      if (pulledIn.has(name)) continue;
-      if (new RegExp(`\\b${escapeRegExp(name)}\\s*\\(`).test(currentText)) {
-        pulledIn.add(name);
-        included.push(span);
-        changed = true;
-      }
-    }
-  }
-
-  return included.map(([s, e]) => code.slice(s, e)).join("\n");
+const blankRanges = (source, ranges) => {
+  const units = source.split("");
+  for (const { start, end } of ranges)
+    for (let i = start; i < end; i++) if (units[i] !== "\n") units[i] = " ";
+  return units.join("");
 };
+
+/**
+ * `source` with its comments and import statements blanked, so a name surviving
+ * here is a real use — a function listed in an `import {…}` or named in a
+ * comment is NOT evidence that a property exercises it.
+ * @param {string} source
+ * @param {any} ast
+ * @param {{start: number, end: number}[]} comments
+ * @returns {string}
+ */
+const strippedSource = (source, ast, comments) =>
+  blankRanges(source, [
+    ...comments,
+    ...ast.body.filter((node) => node.type === "ImportDeclaration"),
+  ]);
 
 // The shared arbitraries in test-helpers.mjs (unicodeChar / loneSurrogate)
 // carry their seed literals — the surrogate bounds 0xd800/0xdfff — in the
@@ -327,66 +540,93 @@ const extractFcCallSpans = (code) => {
 // satisfy that obligation transitively without ever fuzzing it.
 const SHARED_ARBITRARIES = ["unicodeChar", "loneSurrogate"];
 
-const helperSource = stripImportsAndComments(
-  readFileSync(path.join(testDir, "test-helpers.mjs"), "utf8"),
+const helperText = readFileSync(path.join(testDir, "test-helpers.mjs"), "utf8");
+const helperParse = parseModule(helperText);
+const helperSource = strippedSource(
+  helperText,
+  helperParse.ast,
+  helperParse.comments,
 );
 
 /**
- * The source span of a single `export … <name> …` declaration in `code`: from
- * the `export` keyword to just before the next top-level `export ` (or EOF).
- * @param {string} code
+ * The `[start, end)` range of the `export … <name> …` declaration in `ast`.
+ * @param {any} ast
  * @param {string} name
- * @returns {string|null} null when no such declaration exists
+ * @returns {{start: number, end: number}|null} null when no such export exists
  */
-const extractExportSpan = (code, name) => {
-  const decl = new RegExp(
-    `^export\\s+(?:async\\s+)?(?:const|let|var|function)\\s+${escapeRegExp(name)}\\b`,
-    "m",
-  );
-  const match = decl.exec(code);
-  if (!match) return null;
-  const bodyStart = match.index + match[0].length;
-  const next = code.slice(bodyStart).search(/^export\s/m);
-  return next === -1
-    ? code.slice(match.index)
-    : code.slice(match.index, bodyStart + next);
+const exportRange = (ast, name) => {
+  for (const node of ast.body) {
+    if (node.type !== "ExportNamedDeclaration" || !node.declaration) continue;
+    const declaration = node.declaration;
+    const declared =
+      declaration.type === "VariableDeclaration"
+        ? declaration.declarations.flatMap((one) => [...patternNames(one.id)])
+        : [declaration.id.name];
+    if (declared.includes(name)) return { start: node.start, end: node.end };
+  }
+  return null;
 };
 
 /**
- * `.filter(...)` clauses removed. A filter can only REMOVE values from an
- * arbitrary's domain, so a code point named inside one is evidence of an
- * EXCLUSION, never of seeding: `unicodeChar` spells the surrogate bounds
- * 0xd800/0xdfff precisely because it cannot generate them, and crediting its
- * importers for the lone-surrogate class was the false negative this guard
- * exists to prevent. Dropping a narrowing filter can only lose credit (a false
- * negative), which is the direction CLAUDE.md asks these heuristics to fail.
- * @param {string} span
+ * The source of one export declaration with its `.filter(…)` calls removed.
+ *
+ * A filter can only REMOVE values from an arbitrary's domain, so a code point
+ * named inside one is evidence of an EXCLUSION, never of seeding: `unicodeChar`
+ * spells the surrogate bounds 0xd800/0xdfff precisely because it cannot
+ * generate them, and crediting its importers for the lone-surrogate class was
+ * the false negative this guard exists to prevent. Dropping a narrowing filter
+ * can only lose credit, which is the direction CLAUDE.md asks these heuristics
+ * to fail.
+ * @param {string} source  the comment-blanked module text
+ * @param {any} ast
+ * @param {{start: number, end: number}} range
  * @returns {string}
  */
-const stripFilterClauses = (span) => {
-  let out = span;
-  for (;;) {
-    const idx = out.indexOf(".filter(");
-    if (idx === -1) return out;
-    const close = findMatchingParen(out, idx + ".filter".length);
-    if (close === -1)
-      throw new Error(`unbalanced .filter( in shared-arbitrary span: ${out}`);
-    out = out.slice(0, idx) + out.slice(close + 1);
+const seedingSource = (source, ast, range) => {
+  const declaration = subtree(ast).find(
+    (node) => node.start === range.start && node.end === range.end,
+  );
+  const dropped = subtree(declaration)
+    .filter(
+      (node) =>
+        node.type === "CallExpression" &&
+        node.callee.type === "MemberExpression" &&
+        !node.callee.computed &&
+        node.callee.property.type === "Identifier" &&
+        node.callee.property.name === "filter",
+    )
+    .map((node) => ({ start: node.callee.object.end, end: node.end }));
+  // Outermost-first: a filter nested inside another goes with it.
+  const outermost = dropped
+    .filter(
+      (one) =>
+        !dropped.some(
+          (other) =>
+            other !== one && other.start <= one.start && one.end <= other.end,
+        ),
+    )
+    .sort((a, b) => a.start - b.start);
+  let kept = "";
+  let cursor = range.start;
+  for (const { start, end } of outermost) {
+    kept += source.slice(cursor, start);
+    cursor = end;
   }
+  return (kept + source.slice(cursor, range.end)).trim();
 };
 
 /** Shared arbitrary name → the source that evidences what it SEEDS. */
 const seedingSpans = new Map(
   SHARED_ARBITRARIES.map((name) => {
-    const span = extractExportSpan(helperSource, name);
-    if (span === null)
+    const range = exportRange(helperParse.ast, name);
+    if (range === null)
       throw new Error(
         `test-helpers.mjs has no 'export … ${name}' declaration — the ` +
           `shared-arbitrary extraction is stale. Fix it (or drop the name from ` +
           `SHARED_ARBITRARIES): silently appending nothing would re-create the ` +
           `false negative this credit exists to prevent.`,
       );
-    const seeding = stripFilterClauses(span).trim();
+    const seeding = seedingSource(helperSource, helperParse.ast, range);
     if (seeding === "")
       throw new Error(
         `the extracted span for ${name} is empty after removing .filter(…) clauses`,
@@ -397,30 +637,33 @@ const seedingSpans = new Map(
 
 const fuzzFiles = readdirSync(testDir)
   .filter((name) => name.endsWith(".test.mjs") && name !== selfName)
-  .map((name) => {
-    const source = readFileSync(path.join(testDir, name), "utf8");
-    const stripped = stripImportsAndComments(source);
-    // The import line itself is stripped, so a name surviving in `stripped` is
-    // a real use; requiring the helper import too keeps a same-named local
-    // arbitrary from claiming the shared one's credit.
+  .map((name) => ({
+    name,
+    source: readFileSync(path.join(testDir, name), "utf8"),
+  }))
+  .filter((file) => file.source.includes("fc.assert("))
+  .map(({ name, source }) => {
+    const { ast, comments } = parseModule(source);
+    // Requiring the helper import too keeps a same-named local arbitrary from
+    // claiming the shared one's credit.
+    const identifiers = referencedIdentifiers(ast);
     const referencedArbitraries = source.includes('from "./test-helpers.mjs"')
-      ? SHARED_ARBITRARIES.filter((arb) =>
-          new RegExp(`\\b${escapeRegExp(arb)}\\b`).test(stripped),
-        )
+      ? SHARED_ARBITRARIES.filter((arb) => identifiers.has(arb))
       : [];
     const code = [
-      stripped,
+      strippedSource(source, ast, comments),
       ...referencedArbitraries.map((arb) => seedingSpans.get(arb)),
     ].join("\n");
+    const { names, spanLength } = propertyReferences(ast);
     return {
       name,
-      source,
       code,
+      identifiers,
       referencedArbitraries,
-      fcCode: extractFcCallSpans(code),
+      fcNames: names,
+      fcSpanLength: spanLength,
     };
-  })
-  .filter((file) => file.source.includes("fc.assert("));
+  });
 
 // A "semantic-fuzz suite" is a fuzz file following the `*-semantic-fuzz.
 // test.mjs` naming convention this repo uses for precision fuzzing (fast-check
@@ -468,6 +711,30 @@ for (const [name, mod] of [
   exportedFunctions.set(name, mod[name]);
 }
 
+/**
+ * Assert `parts` partition `population` exactly, so a member of the population
+ * cannot exist without a human having classified it into exactly ONE part. The
+ * concatenation is compared element-wise, so a name listed in two parts fails
+ * here as loudly as a name listed in none.
+ * @param {string[]} population
+ * @param {string[][]} parts
+ * @param {string} hint  what the reader must do about a mismatch
+ */
+const assertPartition = (population, parts, hint) => {
+  assert.ok(
+    population.length > 0,
+    "empty population — the partition would hold vacuously",
+  );
+  assert.deepEqual([...population].sort(), parts.flat().sort(), hint);
+};
+
+/** The three parts of the export partition, in classification order. */
+const exportParts = [
+  FUZZ_REQUIRED,
+  Object.keys(FUZZ_EXEMPT),
+  Object.keys(FUZZ_TODO),
+];
+
 describe("fuzz-coverage obligation gate", () => {
   it("discovers at least one fast-check suite (gate is not vacuous)", () => {
     assert.ok(
@@ -478,18 +745,100 @@ describe("fuzz-coverage obligation gate", () => {
   });
 
   it("the fc-call span extractor actually finds spans (gate is not vacuous)", () => {
-    // Guards against the extractor silently matching nothing (e.g. a
-    // refactor to a callee spelling FC_CALL_START_RE no longer matches),
-    // which would make every "is referenced by a fast-check suite" check
-    // below fail closed for the wrong reason instead of proving coverage.
+    // Guards against the extractor silently matching nothing (e.g. a callee
+    // spelling isFcPropertyCall no longer recognizes), which would make every
+    // "is referenced by a fast-check suite" check below fail closed for the
+    // wrong reason instead of proving coverage.
     const totalSpanLength = fuzzFiles.reduce(
-      (sum, file) => sum + file.fcCode.length,
+      (sum, file) => sum + file.fcSpanLength,
       0,
     );
     assert.ok(
       totalSpanLength > 0,
-      "extractFcCallSpans found no fc.assert/fc.property spans in any " +
+      "propertyReferences found no fc.assert/fc.property spans in any " +
         "discovered fuzz file — the span-narrowed match would pass vacuously",
+    );
+  });
+
+  it("every exported function is fuzz-required, exempt, or deferred with a reason", () => {
+    assertPartition(
+      [...exportedFunctions.keys()],
+      exportParts,
+      "a new export must be classified: add it to FUZZ_REQUIRED and give it a " +
+        "property suite, to FUZZ_EXEMPT with the one-line reason it owes none, " +
+        "or to FUZZ_TODO with the untrusted input it takes",
+    );
+    for (const map of [FUZZ_EXEMPT, FUZZ_TODO])
+      for (const [name, reason] of Object.entries(map))
+        assert.ok(reason.length > 0, `${name} carries an empty reason`);
+  });
+
+  it("no FUZZ_EXEMPT reason reads as a deferral", () => {
+    // FUZZ_EXEMPT is a denial; a promise written into a reason string is the
+    // escape hatch FUZZ_TODO exists to make visible instead.
+    const readsAsDeferral = (reason) => /^(todo|fixme)\b/i.test(reason);
+    assert.ok(
+      readsAsDeferral("TODO: owes a property suite"),
+      "the deferral shape matches nothing — this assertion would pass vacuously",
+    );
+    assert.ok(
+      Object.keys(FUZZ_TODO).length > 0,
+      "FUZZ_TODO is empty, so no deferral has anywhere honest to go",
+    );
+    for (const [name, reason] of Object.entries(FUZZ_EXEMPT))
+      assert.ok(
+        !readsAsDeferral(reason),
+        `${name}'s exemption reads as a deferral — move it to FUZZ_TODO`,
+      );
+  });
+
+  it("the export partition rejects an unclassified name (assertion is not vacuous)", () => {
+    const [required, exempt, todo] = exportParts;
+    const population = [...exportedFunctions.keys(), "syntheticNewExport"];
+    assert.throws(
+      () =>
+        assertPartition(
+          population,
+          exportParts,
+          "an unclassified export must fail the partition",
+        ),
+      assert.AssertionError,
+    );
+    // Any ONE of the three classifications satisfies it, so a genuinely new or
+    // undecided export has a side to be put on.
+    for (const parts of [
+      [[...required, "syntheticNewExport"], exempt, todo],
+      [required, [...exempt, "syntheticNewExport"], todo],
+      [required, exempt, [...todo, "syntheticNewExport"]],
+    ])
+      assertPartition(
+        population,
+        parts,
+        "classifying the synthetic export must satisfy the same partition",
+      );
+  });
+
+  it("the export partition rejects a name that is both required and deferred", () => {
+    // The demotion this partition exists to make visible: moving a name out of
+    // FUZZ_REQUIRED into FUZZ_TODO deletes its property-suite obligation, so a
+    // copy that leaves the FUZZ_REQUIRED entry behind must fail rather than
+    // read as a green no-op.
+    const [required, exempt, todo] = exportParts;
+    const population = [...exportedFunctions.keys()];
+    const [demoted, ...stillRequired] = required;
+    assert.throws(
+      () =>
+        assertPartition(
+          population,
+          [required, exempt, [...todo, demoted]],
+          "a name in two parts must fail the partition",
+        ),
+      assert.AssertionError,
+    );
+    assertPartition(
+      population,
+      [stillRequired, exempt, [...todo, demoted]],
+      "an honest demotion — one name moved, not copied — must still partition",
     );
   });
 
@@ -503,11 +852,7 @@ describe("fuzz-coverage obligation gate", () => {
     });
 
     it(`'${name}' is referenced by a fast-check suite`, () => {
-      const wordRe = new RegExp(`\\b${name}\\b`);
-      // Match only within the text spans of actual fc.assert(...)/
-      // fc.property(...) calls, not anywhere in a file that merely contains
-      // such a call elsewhere (see extractFcCallSpans above).
-      const hits = fuzzFiles.filter((file) => wordRe.test(file.fcCode));
+      const hits = fuzzFiles.filter((file) => file.fcNames.has(name));
       assert.ok(
         hits.length > 0,
         `${name} handles untrusted input but no property/fuzz suite's ` +
@@ -515,6 +860,113 @@ describe("fuzz-coverage obligation gate", () => {
       );
     });
   }
+});
+
+describe("property-span extraction runs on the grammar", () => {
+  // A fixture whose property body carries every literal shape a paren-depth
+  // scan mis-reads: a lone ")", a lone "(", a template holding a brace, and a
+  // regex literal holding a paren. `insideProperty` sits AFTER the ")" (a
+  // depth scan closes the call early and loses it) and `notFuzzed` sits after
+  // the whole property (an over-long span hands it the credit it never earned).
+  const FIXTURE = [
+    'import fc from "fast-check";',
+    'import { insideProperty, viaHelper, notFuzzed } from "../src/x.mjs";',
+    "",
+    "const check = (arbitrary, predicate) =>",
+    "  fc.assert(fc.property(arbitrary, predicate), {});",
+    "",
+    "const helper = (value) => viaHelper(value);",
+    "",
+    "check(fc.string(), (text) => {",
+    '  const closer = ")";',
+    '  const opener = "look ![alt](";',
+    "  const braced = `${text} { unmatched`;",
+    "  const pattern = /\\(/;",
+    "  return insideProperty(text, closer, opener, braced, pattern) && helper(text);",
+    "});",
+    "",
+    'it("an ordinary example test", () => {',
+    "  notFuzzed(inComment);",
+    "});",
+    "",
+    "// a comment naming insideProperty is not a reference",
+  ].join("\n");
+
+  const wrapperCallStart = FIXTURE.indexOf("check(fc.string()");
+  const { names, spanLength } = propertyReferences(parseModule(FIXTURE).ast);
+
+  it("a paren-depth scan of the fixture closes early (fixture has teeth)", () => {
+    // The discredited approximation, kept as the negative control this fixture
+    // is aimed at: a depth counter cannot see string or regex literals.
+    let depth = 0;
+    let end = -1;
+    for (
+      let i = FIXTURE.indexOf("(", wrapperCallStart);
+      i < FIXTURE.length;
+      i++
+    ) {
+      if (FIXTURE[i] === "(") depth++;
+      else if (FIXTURE[i] === ")" && --depth === 0) {
+        end = i;
+        break;
+      }
+    }
+    assert.ok(end > wrapperCallStart, "the depth scan found no close paren");
+    assert.ok(
+      !FIXTURE.slice(wrapperCallStart, end).includes("insideProperty"),
+      "the depth scan now reaches insideProperty — the fixture lost its teeth, " +
+        "so it no longer discriminates the grammar from a text scan",
+    );
+  });
+
+  it("resolves a name that follows an unbalanced literal", () => {
+    assert.ok(names.has("insideProperty"));
+  });
+
+  it("resolves a name reached only through a local helper", () => {
+    assert.ok(names.has("viaHelper"));
+  });
+
+  it("gives no credit to a name outside every property call", () => {
+    assert.equal(names.has("notFuzzed"), false);
+    assert.equal(names.has("inComment"), false);
+  });
+
+  it("blanks imports and comments past an astral character", () => {
+    // The emoji is two UTF-16 units and one code point. Walking code points
+    // shifts every range after it by one, so the import survives and real code
+    // is blanked in its place — and this repo's suites are full of emoji.
+    const source = [
+      'const flag = "\u{1f3f4}";',
+      'import fc from "fast-check";',
+      "// insideProperty in a comment",
+      "const kept = flag;",
+    ].join("\n");
+    const { ast, comments } = parseModule(source);
+    const lines = strippedSource(source, ast, comments).split("\n");
+    // Exact line equality, not `includes`: a one-unit shift still blanks most
+    // of the import, and only the boundary characters show which way it moved.
+    assert.equal(lines[0], 'const flag = "\u{1f3f4}";');
+    assert.equal(lines[1].trim(), "", "the import line is not fully blanked");
+    assert.equal(lines[2].trim(), "", "the comment line is not fully blanked");
+    assert.equal(lines[3], "const kept = flag;");
+  });
+
+  it("captures both property invocations in full and no more", () => {
+    // The fixture holds exactly two: the wrapper CALL, and the `fc.assert` in
+    // the wrapper's own definition. A short span loses the tail of the first.
+    const wrapperCall = FIXTURE.slice(
+      wrapperCallStart,
+      FIXTURE.indexOf("});", wrapperCallStart) + 2,
+    );
+    const wrapperBody = "fc.assert(fc.property(arbitrary, predicate), {})";
+    assert.ok(
+      wrapperCall.endsWith("})"),
+      "the wrapper call slice is cut short",
+    );
+    assert.ok(FIXTURE.includes(wrapperBody));
+    assert.equal(spanLength, wrapperCall.length + wrapperBody.length);
+  });
 });
 
 describe("semantic-fuzz obligation gate", () => {
@@ -526,21 +978,24 @@ describe("semantic-fuzz obligation gate", () => {
     assert.ok(SEMANTIC_FUZZ_REQUIRED.length > 0);
   });
 
-  it("every SEMANTIC_FUZZ_REQUIRED name is also in FUZZ_REQUIRED", () => {
+  it("every fuzz-required name is either semantic-required or exempt with a reason", () => {
     // Semantic-fuzz coverage is a stricter obligation layered on top of the
-    // structural one; a name here that isn't in FUZZ_REQUIRED is a drifted
-    // entry, not a real additional target.
-    for (const name of SEMANTIC_FUZZ_REQUIRED)
-      assert.ok(
-        FUZZ_REQUIRED.includes(name),
-        `${name} is in SEMANTIC_FUZZ_REQUIRED but not FUZZ_REQUIRED`,
-      );
+    // structural one, so its population is FUZZ_REQUIRED itself: a name here
+    // that isn't in FUZZ_REQUIRED is a drifted entry, and a required name in
+    // neither list is an obligation nobody decided.
+    assertPartition(
+      FUZZ_REQUIRED,
+      [SEMANTIC_FUZZ_REQUIRED, Object.keys(SEMANTIC_FUZZ_EXEMPT)],
+      "every FUZZ_REQUIRED name must be in SEMANTIC_FUZZ_REQUIRED or in " +
+        "SEMANTIC_FUZZ_EXEMPT with the reason its precision is asserted elsewhere",
+    );
+    for (const [name, reason] of Object.entries(SEMANTIC_FUZZ_EXEMPT))
+      assert.ok(reason.length > 0, `${name} carries an empty exemption reason`);
   });
 
   for (const name of SEMANTIC_FUZZ_REQUIRED) {
     it(`'${name}' is referenced by a *-semantic-fuzz.test.mjs suite`, () => {
-      const wordRe = new RegExp(`\\b${name}\\b`);
-      const hits = semanticFuzzFiles.filter((file) => wordRe.test(file.fcCode));
+      const hits = semanticFuzzFiles.filter((file) => file.fcNames.has(name));
       assert.ok(
         hits.length > 0,
         `${name} is a precision-sensitive entry point (structural fuzzing alone ` +
@@ -627,8 +1082,7 @@ describe("shared-arbitrary seeding credit", () => {
         "non-arbitrary export or delete it",
     );
     for (const file of fuzzFiles) {
-      if (stripImportsAndComments(file.source).includes("keptOutsideNeedles"))
-        continue;
+      if (file.identifiers.has("keptOutsideNeedles")) continue;
       assert.ok(
         !file.code.includes("keptOutsideNeedles"),
         `${file.name} inherited keptOutsideNeedles' body from test-helpers.mjs`,
@@ -649,11 +1103,18 @@ describe("threat-alphabet domain coverage", () => {
       );
   });
 
-  it("every IN_SCOPE suite file actually exists and drives fast-check", () => {
-    for (const name of Object.keys(IN_SCOPE_MEMBERS))
+  it("every discovered fast-check suite is in scope or out of scope", () => {
+    assertPartition(
+      fuzzFiles.map((file) => file.name),
+      [Object.keys(IN_SCOPE_MEMBERS), Object.keys(OUT_OF_SCOPE)],
+      "a new fast-check suite must be classified in test/threat-codepoints.mjs: " +
+        "add it to IN_SCOPE with the alphabet members it owes, or to " +
+        "OUT_OF_SCOPE with the one-line reason it ingests none",
+    );
+    for (const [name, reason] of Object.entries(OUT_OF_SCOPE))
       assert.ok(
-        fuzzFileByName.has(name),
-        `IN_SCOPE names '${name}' but no such fast-check suite was discovered — stale entry or renamed file`,
+        reason.length > 0,
+        `${name} carries an empty out-of-scope reason`,
       );
   });
 
