@@ -53,3 +53,23 @@ if [[ "$before" != "$after" && "${#unstaged[@]}" -gt 0 ]]; then
 fi
 
 git add -- "$bundle" "$requirements"
+
+# The binary manifest pins the bundle its binaries were compiled from, so the
+# rebuild above leaves it stale on every `src/` change. ADVISORY, not a gate:
+# refreshing it is a four-target bun cross-compile that downloads a runtime per
+# target, which is the network dependency this file's header rules out, and
+# `plugin-dist-autofix.yaml` already regenerates and pushes it on any same-repo
+# PR touching `src/**`. This line is for the maintainer who would rather fix it
+# here than wait for that push. It reads only the pinned bundle digest, the part
+# checkable offline — the `bun` pin and `repository` slug the CI test also
+# asserts need bun and stay CI's to catch.
+manifest="$git_root/plugin/dist/hooks/hook-binaries.sha256"
+if [[ -f "$manifest" ]]; then
+  pinned=$(sed -n 's/^# bundle=//p' "$manifest")
+  # node, not shasum/sha256sum: those two spellings split macOS from Linux, and
+  # this hook already runs node.
+  built=$(node -e 'const {createHash}=require("node:crypto");process.stdout.write(createHash("sha256").update(require("node:fs").readFileSync(process.argv[1])).digest("hex"))' "$bundle")
+  if [[ "$pinned" != "$built" ]]; then
+    echo "pre-commit: plugin/dist/hooks/hook-binaries.sha256 pins a different bundle than the one just rebuilt. CI's plugin-dist-autofix regenerates it on push; to fix it here instead, run 'pnpm gen:hook-binaries' and stage the manifest." >&2
+  fi
+fi
