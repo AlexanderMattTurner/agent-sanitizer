@@ -1585,19 +1585,12 @@ export const COMMENT_PLACEHOLDER = "[HTML comment removed";
 export const UNPARSEABLE_PLACEHOLDER = "[HTML unparseable — withheld]";
 
 /**
- * Replace each range of `text` with its kind's keyed placeholder, preserving
- * every byte outside the ranges verbatim. Overlapping/nested ranges are merged
- * (defense-in-depth — the scanners emit disjoint ranges).
- *
- * Returns the spliced text plus `pairs`, one per emitted placeholder in output
- * order, each pairing the placeholder with the ORIGINAL bytes it replaced and
- * its start offset in the RETURNED text (UTF-16 code-unit string indices, the
- * same space as `ranges`) — everything a rehydrator needs to undo the splice.
- * @param {string} text
+ * `ranges` sorted by start with every overlap unioned — one entry per
+ * placeholder {@link spliceRanges} emits, in the same order as its `pairs`.
  * @param {SpliceRange[]} ranges
- * @returns {{ text: string, pairs: SplicePair[] }}
+ * @returns {SpliceRange[]}
  */
-export function spliceRanges(text, ranges) {
+function mergeRanges(ranges) {
   const sorted = [...ranges].sort(
     (left, right) => left.start - right.start || left.end - right.end,
   );
@@ -1616,6 +1609,24 @@ export function spliceRanges(text, ranges) {
       merged.push({ ...range });
     }
   }
+  return merged;
+}
+
+/**
+ * Replace each range of `text` with its kind's keyed placeholder, preserving
+ * every byte outside the ranges verbatim. Overlapping/nested ranges are merged
+ * (defense-in-depth — the scanners emit disjoint ranges).
+ *
+ * Returns the spliced text plus `pairs`, one per emitted placeholder in output
+ * order, each pairing the placeholder with the ORIGINAL bytes it replaced and
+ * its start offset in the RETURNED text (UTF-16 code-unit string indices, the
+ * same space as `ranges`) — everything a rehydrator needs to undo the splice.
+ * @param {string} text
+ * @param {SpliceRange[]} ranges
+ * @returns {{ text: string, pairs: SplicePair[] }}
+ */
+export function spliceRanges(text, ranges) {
+  const merged = mergeRanges(ranges);
   let out = "";
   let cursor = 0;
   /** @type {SplicePair[]} */
@@ -2123,6 +2134,38 @@ export function looksLikeHtmlSource(text) {
 }
 
 /**
+ * `ranges`, which index a text spliced at `merged` (with the resulting
+ * `pairs`), translated back into coordinates of the source that was spliced.
+ *
+ * Every offset outside a placeholder maps by the length the splices before it
+ * removed. No offset ever falls INSIDE one: a placeholder holds neither `<`
+ * nor `>`, and a scanner range always opens on a `<` and closes after a `>` or
+ * at the end of the text — so a placeholder edge is the closest an offset gets,
+ * and the same shift is exact there.
+ * @param {SpliceRange[]} ranges
+ * @param {SpliceRange[]} merged  the spliced spans, sorted, one per pair
+ * @param {SplicePair[]} pairs
+ * @returns {SpliceRange[]}
+ */
+function toSourceRanges(ranges, merged, pairs) {
+  /** @param {number} offset @returns {number} */
+  const toSource = (offset) => {
+    let shift = 0;
+    for (const [index, pair] of pairs.entries()) {
+      const placeholderEnd = pair.start + pair.placeholder.length;
+      if (placeholderEnd > offset) break;
+      shift = merged[index].end - placeholderEnd;
+    }
+    return offset + shift;
+  };
+  return ranges.map((range) => ({
+    start: toSource(range.start),
+    end: toSource(range.end),
+    kind: range.kind,
+  }));
+}
+
+/**
  * Layer 2 over web-ingress text: splice out HTML comments and hidden elements
  * (keyed placeholders mark the cuts; all other bytes are preserved verbatim)
  * and count preserved scripting/resource tags for the caller's warning. Returns
@@ -2139,41 +2182,70 @@ export function looksLikeHtmlSource(text) {
  * located, so nothing is recoverable per-splice (the caller's pre-splice
  * `reveal` is the only copy).
  *
- * Idempotent over its own output: a keyed placeholder contains no `<`, so a
- * re-run neither gates on it (HTML_TAG_PRESENT needs a tag) nor reads it as
- * markup — placeholders already in the text pass through byte-identical.
+ * Idempotent over its own output, and by CONSTRUCTION rather than by argument:
+ * the scan is re-run over the spliced text until it finds nothing more, so the
+ * returned text is a fixed point. One pass is not enough on its own, because
+ * removing an element changes how parse5 reparents the bytes around it, which
+ * can flip {@link htmlSourceTree}'s markdown/source verdict for the next run.
  * @param {string} text
  * @returns {{ text: string, removed: { comments: number, hidden: number }, warned: { tags: Record<string, number>, dataSrc: number }, splices: SplicePair[], unparseable?: true } | null}
  */
 export function sanitizeHtml(text) {
   if (!HTML_TAG_PRESENT.test(text)) return null;
-  /** @type {{ ranges: SpliceRange[], warned: ReturnType<typeof newWarned> }} */
-  let scan;
-  try {
-    // One parse decides the branch AND feeds it, so the source branch does not
-    // tokenize the input twice.
-    const sourceTree = htmlSourceTree(text);
-    scan = sourceTree ? scanFragmentTree(text, sourceTree) : scanMarkdown(text);
-  } catch {
-    // The parse/visit blew up (stack overflow on pathological nesting, or any
-    // other parser error). Fail CLOSED at this boundary so `sanitize`/
-    // `sanitizeText` keep their never-throw contract: withhold the whole input
-    // behind a placeholder and report it as hidden content removed.
-    return {
-      text: UNPARSEABLE_PLACEHOLDER,
-      removed: { comments: 0, hidden: 1 },
-      warned: newWarned(),
-      splices: [],
-      unparseable: true,
-    };
-  }
-  const { ranges, warned } = scan;
-  if (ranges.length === 0 && !hasWarned(warned)) return null;
+  /** @type {SpliceRange[]} Every span found so far, in SOURCE coordinates. */
+  let ranges = [];
+  let spliced = { text, pairs: /** @type {SplicePair[]} */ ([]) };
   const removed = { comments: 0, hidden: 0 };
-  for (const range of ranges)
-    removed[range.kind === "comment" ? "comments" : "hidden"]++;
-  const spliced =
-    ranges.length > 0 ? spliceRanges(text, ranges) : { text, pairs: [] };
+  /** @type {ReturnType<typeof newWarned>} */
+  let warned;
+  // Each round splices at least one more span of `text`, so the covered length
+  // grows strictly and the loop terminates. A placeholder holds no `<`, so no
+  // round can find a span inside one and re-cover ground already covered.
+  for (;;) {
+    /** @type {{ ranges: SpliceRange[], warned: ReturnType<typeof newWarned> }} */
+    let scan;
+    try {
+      // One parse decides the branch AND feeds it, so the source branch does not
+      // tokenize the input twice.
+      const sourceTree = htmlSourceTree(spliced.text);
+      scan = sourceTree
+        ? scanFragmentTree(spliced.text, sourceTree)
+        : scanMarkdown(spliced.text);
+    } catch {
+      // The parse/visit blew up (stack overflow on pathological nesting, or any
+      // other parser error). Fail CLOSED at this boundary so `sanitize`/
+      // `sanitizeText` keep their never-throw contract: withhold the whole input
+      // behind a placeholder and report it as hidden content removed.
+      return {
+        text: UNPARSEABLE_PLACEHOLDER,
+        removed: { comments: 0, hidden: 1 },
+        warned: newWarned(),
+        splices: [],
+        unparseable: true,
+      };
+    }
+    // The last scan saw exactly the text being returned, so its tag counts are
+    // the ones that describe that text.
+    warned = scan.warned;
+    if (scan.ranges.length === 0) break;
+    // Re-splice from the SOURCE every round: pairs then carry original bytes
+    // and offsets into the returned text, never a nested earlier placeholder.
+    const grown = mergeRanges([
+      ...ranges,
+      ...toSourceRanges(scan.ranges, ranges, spliced.pairs),
+    ]);
+    const next = spliceRanges(text, grown);
+    /* c8 ignore next 4 -- unreachable: every range holds a `<` and no
+       placeholder does, so each round covers source bytes the last one did
+       not and the text must change. Kept because the alternative to this
+       stop is a hook that spins on untrusted input. */
+    if (next.text === spliced.text) break;
+    for (const range of scan.ranges)
+      removed[range.kind === "comment" ? "comments" : "hidden"]++;
+    ranges = grown;
+    spliced = next;
+  }
+  if (ranges.length === 0 && !hasWarned(warned)) return null;
   return {
     text: spliced.text,
     removed,

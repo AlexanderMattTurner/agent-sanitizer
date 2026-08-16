@@ -1833,6 +1833,32 @@ describe("splice fidelity and regressions", () => {
       applyHtml("> <div hidden>x</div>\n> visible"),
       `> ${hid("<div hidden>x</div>")}\n> visible`,
     ));
+  // Splicing an element changes how parse5 reads the bytes AROUND it, so the
+  // scan that ran once over the input was never a fixed point: the branch
+  // verdict flips, or a node parse5 had dropped comes back. Each input below is
+  // a distinct way the parse moves; every one must be settled by pass one.
+  for (const input of [
+    // markdown branch on pass one, HTML source on pass two: with the hidden
+    // `<a>` gone, the adoption agency pulls the trailing ` !` inside the first
+    // `<a>`, leaving no character data outside an element
+    `<a><A</a> <a hidden=""></a> <? <div></div> !`,
+    // a root-level `<td>` is placed by table scope, so which node parse5 keeps
+    // for it depends on the siblings a splice left behind
+    `<div hidden=""></div> <td hidden=""></td>`,
+    `<td hidden=""></td> <table hidden=""></table>`,
+    `<br hidden> <td hidden=""></td>`,
+    `<input style="display:none"> <td hidden=""></td>`,
+    `<!bogus secret> <div></div> <td hidden=""></td>`,
+    // an unterminated `<? ` runs to the next `>`, which a splice can move
+    `! <?  <div></div> <iframe></iframe> <?php evil ?> <div hidden=""></div>`,
+    // the span the later round finds sits BEFORE the one the first round
+    // spliced, so its offsets must be read back past a placeholder, not through
+    `<svg>x</svg> <td hidden=""></td> <!b>`,
+  ])
+    it(`regression: one pass settles ${input}`, () => {
+      const passOne = applyHtml(input);
+      assert.equal(applyHtml(passOne), passOne);
+    });
   it("regression: idempotent when a bogus end tag precedes a hidden element", () => {
     // parse5 (flow branch) models `</A` as a bogus comment that absorbs the
     // following `<div hidden>`, so it survives pass one; the balance walk must

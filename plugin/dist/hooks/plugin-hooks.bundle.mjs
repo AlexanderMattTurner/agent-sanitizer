@@ -63743,7 +63743,7 @@ function layer2Placeholder(kind2, original) {
   const key = createHash2("sha256").update(original, "utf8").digest("hex").slice(0, PLACEHOLDER_KEY_LEN);
   return `[${PLACEHOLDER_LABEL[kind2]} removed #${key}]`;
 }
-function spliceRanges(text5, ranges) {
+function mergeRanges(ranges) {
   const sorted = [...ranges].sort(
     (left, right) => left.start - right.start || left.end - right.end
   );
@@ -63757,6 +63757,10 @@ function spliceRanges(text5, ranges) {
       merged.push({ ...range });
     }
   }
+  return merged;
+}
+function spliceRanges(text5, ranges) {
+  const merged = mergeRanges(ranges);
   let out = "";
   let cursor = 0;
   const pairs = [];
@@ -63976,27 +63980,59 @@ function htmlSourceTree(text5) {
 function looksLikeHtmlSource(text5) {
   return htmlSourceTree(text5) !== null;
 }
+function toSourceRanges(ranges, merged, pairs) {
+  const toSource = (offset) => {
+    let shift = 0;
+    for (const [index2, pair] of pairs.entries()) {
+      const placeholderEnd = pair.start + pair.placeholder.length;
+      if (placeholderEnd > offset) break;
+      shift = merged[index2].end - placeholderEnd;
+    }
+    return offset + shift;
+  };
+  return ranges.map((range) => ({
+    start: toSource(range.start),
+    end: toSource(range.end),
+    kind: range.kind
+  }));
+}
 function sanitizeHtml(text5) {
   if (!HTML_TAG_PRESENT.test(text5)) return null;
-  let scan2;
-  try {
-    const sourceTree = htmlSourceTree(text5);
-    scan2 = sourceTree ? scanFragmentTree(text5, sourceTree) : scanMarkdown(text5);
-  } catch {
-    return {
-      text: UNPARSEABLE_PLACEHOLDER,
-      removed: { comments: 0, hidden: 1 },
-      warned: newWarned(),
-      splices: [],
-      unparseable: true
-    };
-  }
-  const { ranges, warned } = scan2;
-  if (ranges.length === 0 && !hasWarned(warned)) return null;
+  let ranges = [];
+  let spliced = { text: text5, pairs: (
+    /** @type {SplicePair[]} */
+    []
+  ) };
   const removed = { comments: 0, hidden: 0 };
-  for (const range of ranges)
-    removed[range.kind === "comment" ? "comments" : "hidden"]++;
-  const spliced = ranges.length > 0 ? spliceRanges(text5, ranges) : { text: text5, pairs: [] };
+  let warned;
+  for (; ; ) {
+    let scan2;
+    try {
+      const sourceTree = htmlSourceTree(spliced.text);
+      scan2 = sourceTree ? scanFragmentTree(spliced.text, sourceTree) : scanMarkdown(spliced.text);
+    } catch {
+      return {
+        text: UNPARSEABLE_PLACEHOLDER,
+        removed: { comments: 0, hidden: 1 },
+        warned: newWarned(),
+        splices: [],
+        unparseable: true
+      };
+    }
+    warned = scan2.warned;
+    if (scan2.ranges.length === 0) break;
+    const grown = mergeRanges([
+      ...ranges,
+      ...toSourceRanges(scan2.ranges, ranges, spliced.pairs)
+    ]);
+    const next2 = spliceRanges(text5, grown);
+    if (next2.text === spliced.text) break;
+    for (const range of scan2.ranges)
+      removed[range.kind === "comment" ? "comments" : "hidden"]++;
+    ranges = grown;
+    spliced = next2;
+  }
+  if (ranges.length === 0 && !hasWarned(warned)) return null;
   return {
     text: spliced.text,
     removed,
