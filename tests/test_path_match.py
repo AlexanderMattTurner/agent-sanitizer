@@ -73,3 +73,34 @@ def test_grep_failure_widens_to_every_changed_file(tmp_path: Path, fn: str) -> N
     result = run_helper(fn, HELPERS[fn], path=f"{stub_dir}:/usr/bin:/bin")
     assert result.returncode == 0, result.stderr
     assert result.stdout == CHANGED + "\n"
+
+
+#: What a caller's derivation hands the fixed-line helper when it produced no
+#: paths. `""` is the derivation that printed nothing; `"\n"` is that same answer
+#: after the caller appended its record separator, which is the shape
+#: decide-reusable-diff.sh actually builds.
+EMPTY_DERIVATIONS = ("", "\n", "  \n\t\n")
+
+
+@pytest.mark.parametrize("derived", EMPTY_DERIVATIONS)
+def test_an_empty_derived_list_widens_to_every_changed_file(derived: str) -> None:
+    """A derivation that produced nothing is a derivation that failed.
+
+    grep answers a blank pattern list with a clean exit 1, which is
+    indistinguishable from "no watched path changed" — and reading it that way
+    skips the gated job and greens its always() reporter, the exact false green
+    this library exists to prevent. Widening is the same fail-open posture the
+    exit-2 case takes.
+    """
+    result = run_helper("path_gate_matching_fixed_lines", derived)
+    assert result.returncode == 0, result.stderr
+    assert result.stdout == CHANGED + "\n"
+
+
+@pytest.mark.parametrize("fn", sorted(HELPERS))
+def test_widening_an_empty_changed_list_emits_no_path(fn: str) -> None:
+    """Widening means "every changed file", and with nothing changed that is no
+    file at all — a blank line here would reach the caller as a path to diff."""
+    result = run_helper(fn, "", changed="")
+    assert result.returncode == 0, result.stderr
+    assert result.stdout == ""

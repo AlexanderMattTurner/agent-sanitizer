@@ -44,11 +44,18 @@ path_gate_matching_lines() {
 # newline-separated list of whole-line literals (a derived file closure) instead
 # of a regex. Same posture, and it is the reason this exists: the fixed-string
 # arm reads the same grep status and must not spell it `|| true`.
+#
+# A blank PATTERNS list skips grep and keeps the whole list, because a derivation
+# that produced nothing is a derivation that failed: grep answers a blank pattern
+# list with a clean exit 1, and reading that as "no watched path changed" is the
+# silent skip this file exists to prevent.
 path_gate_matching_fixed_lines() {
-  local rc=0 out=""
-  out=$(grep -Fxf <(printf '%s\n' "$1") <<<"$2") || rc=$?
-  if ((rc > 1)); then
-    out="$2"
+  local rc=0 out="$2"
+  if [[ -n "${1//[[:space:]]/}" ]]; then
+    out=$(grep -Fxf <(printf '%s\n' "$1") <<<"$2") || rc=$?
+    if ((rc > 1)); then
+      out="$2"
+    fi
   fi
   if [[ -n "$out" ]]; then
     printf '%s\n' "$out"
