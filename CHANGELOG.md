@@ -8,6 +8,13 @@ adhere to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+## [2.41.4] - 2026-08-16
+
+### Fixed
+
+- Review gate now requires a non-empty body in addition to verifying the correct author.
+- PR reviews from forks are no longer able to skip and approve their own review gates.
+
 ## [2.41.3] - 2026-08-16
 
 ### Fixed
