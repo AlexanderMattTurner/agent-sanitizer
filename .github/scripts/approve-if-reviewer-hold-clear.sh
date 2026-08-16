@@ -41,6 +41,10 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=lib/github-token-ladder.bash disable=SC1091
 source "$SCRIPT_DIR/lib/github-token-ladder.bash"
+# shellcheck source=.github/scripts/lib/review-threads.bash
+source "$SCRIPT_DIR/lib/review-threads.bash"
+# shellcheck source=.github/scripts/lib/pr-reviews.bash
+source "$SCRIPT_DIR/lib/pr-reviews.bash"
 
 # Every call below spends API quota, so pick a credential that has some before
 # the first one rather than discovering it mid-flight. Reddening only once EVERY
@@ -52,33 +56,15 @@ GH_TOKEN="$(github_token_with_quota)" || {
   exit 1
 }
 export GH_TOKEN
-REVIEWER_LOGIN="${REVIEWER_LOGIN:-github-actions[bot]}"
-# GitHub's GraphQL API returns an app bot's `login` WITHOUT the `[bot]` suffix the
-# REST API appends (REST `github-actions[bot]` ↔ GraphQL `github-actions`). Both
-# reviewer lookups below run through `gh api graphql`, so they compare against the
-# BARE login — strip a trailing `[bot]` from the configured value (and, in the jq,
-# from each node's login) so either spelling matches. Comparing the REST-shaped
-# `github-actions[bot]` against GraphQL's `github-actions` matched zero reviews, so
-# the script always concluded "no live hold" and never posted the clearing approval.
-REVIEWER_LOGIN_BARE="${REVIEWER_LOGIN%'[bot]'}"
 
 owner="${GH_REPO%%/*}"
 name="${GH_REPO##*/}"
 
-# Count the reviewer's threads two ways. Paginated: a PR can accrue >100 threads,
-# and an unpaginated first:100 would miss a thread on a later page. The per-page
-# --jq emits one {total, unresolved} object; the trailing reduce sums them.
-# shellcheck disable=SC2016 # GraphQL query + jq program are literal, not shell
-remaining_query='query($owner: String!, $name: String!, $pr: Int!, $endCursor: String) {
-  repository(owner: $owner, name: $name) {
-    pullRequest(number: $pr) {
-      reviewThreads(first: 100, after: $endCursor) {
-        pageInfo { hasNextPage endCursor }
-        nodes { isResolved comments(first: 1) { nodes { author { login } } } }
-      }
-    }
-  }
-}'
+# Count the reviewer's threads two ways, over the shared paginated read — a PR
+# can accrue >100 threads, and an unpaginated first:100 would miss a later page.
+# The per-page projection emits one {total, unresolved} object; the trailing
+# reduce sums them.
+#
 # A thread hold is "demonstrably cleared" only when the reviewer opened at least
 # one thread AND none remain unresolved. A CHANGES_REQUESTED / COMMENTED review
 # that opened ZERO threads carries no THREAD resolution signal; it is cleared only
@@ -86,12 +72,9 @@ remaining_query='query($owner: String!, $name: String!, $pr: Int!, $endCursor: S
 # addressed), never on thread state alone — auto-clearing a thread-less hold on
 # "unresolved == 0" (trivially true with no threads) would merge the reviewer's
 # concern unaddressed.
-# shellcheck disable=SC2016 # jq program is literal, not shell ($p is a jq var)
-counts="$(REVIEWER_LOGIN_BARE="$REVIEWER_LOGIN_BARE" gh api graphql --paginate \
-  -f query="$remaining_query" -f owner="$owner" -f name="$name" -F pr="$PR" \
-  --jq '[.data.repository.pullRequest.reviewThreads.nodes[]
-         | select((.comments.nodes[0].author.login // "" | sub("\\[bot\\]$"; "")) == env.REVIEWER_LOGIN_BARE)]
-        | {total: length, unresolved: (map(select(.isResolved == false)) | length)}' |
+counts="$(fetch_review_threads "$owner" "$name" "$PR" \
+  "[.[] | $REVIEW_THREAD_ROOT_IS_REVIEWER]
+   | {total: length, unresolved: (map(select(.isResolved == false)) | length)}" |
   jq -s 'reduce .[] as $p ({total: 0, unresolved: 0};
            {total: (.total + $p.total), unresolved: (.unresolved + $p.unresolved)})')"
 unresolved="$(jq -r '.unresolved' <<<"$counts")"
@@ -124,27 +107,12 @@ if [[ "${total:-0}" -eq 0 ]]; then
   body_hold_cleared=true
 fi
 
-# What is the reviewer's latest review state? Paginated (a long-lived PR can
-# accrue >100 reviews, and an unpaginated first:100 returns the OLDEST 100 and
-# would pick a stale state): the per-page --jq emits the reviewer's reviews as
-# NDJSON and the slurp picks the globally latest by submittedAt.
-# shellcheck disable=SC2016 # GraphQL query + jq program are literal, not shell
-reviews_query='query($owner: String!, $name: String!, $pr: Int!, $endCursor: String) {
-  repository(owner: $owner, name: $name) {
-    pullRequest(number: $pr) {
-      reviews(first: 100, after: $endCursor) {
-        pageInfo { hasNextPage endCursor }
-        nodes { databaseId author { login } state submittedAt }
-      }
-    }
-  }
-}'
-latest_state="$(REVIEWER_LOGIN_BARE="$REVIEWER_LOGIN_BARE" gh api graphql --paginate \
-  -f query="$reviews_query" -f owner="$owner" -f name="$name" -F pr="$PR" \
-  --jq '.data.repository.pullRequest.reviews.nodes[]
-        | select((.author.login // "" | sub("\\[bot\\]$"; "")) == env.REVIEWER_LOGIN_BARE)
-        | {state, submittedAt}' |
-  jq -rs 'if length == 0 then "" else (sort_by(.submittedAt) | last | .state) end')"
+# What is the reviewer's latest review state? reviewer_reviews_ndjson owns the
+# paginated read (a long-lived PR can accrue >100 reviews, and an unpaginated
+# first:100 returns the OLDEST 100 and would pick a stale state) and the reviewer
+# predicate; the slurp picks the globally latest by submittedAt.
+reviews_ndjson="$(reviewer_reviews_ndjson "$owner" "$name" "$PR")"
+latest_state="$(jq -rs 'if length == 0 then "" else (sort_by(.submittedAt) | last | .state) end' <<<"$reviews_ndjson")"
 
 if [[ "$latest_state" != "CHANGES_REQUESTED" && "$latest_state" != "COMMENTED" ]]; then
   echo "reviewer's latest review is '${latest_state:-<none>}' — no live hold to clear; nothing to do" >&2
@@ -165,23 +133,19 @@ fi
 # so it succeeds exactly where the approval cannot — including for GITHUB_TOKEN,
 # which GitHub bars from approving at all, so the periodic sweep gains it too.
 #
-# The selection is what makes this safe: it filters on the reviewer's own login,
-# so a HUMAN's CHANGES_REQUESTED is never a candidate. A human hold still blocks
-# and still needs that human. Dismissing is also idempotent — a dismissed review's
-# state stops being CHANGES_REQUESTED, so a re-run finds nothing and says so.
+# The candidate set is what makes this safe: reviews_ndjson holds the reviewer's
+# own reviews and no others, so a HUMAN's CHANGES_REQUESTED is never a candidate.
+# A human hold still blocks and still needs that human. Dismissing is also
+# idempotent — a dismissed review's state stops being CHANGES_REQUESTED, so a
+# re-run finds nothing and says so.
 dismiss_stale_hold() {
   local reason="$1" review_id dismiss_err
   # The most recent CHANGES_REQUESTED specifically, NOT the latest review: a
   # CHANGES_REQUESTED keeps blocking until dismissed or superseded by an APPROVED
   # from the same reviewer, and a later COMMENTED review does not clear it. So the
   # blocking review is routinely not the latest one.
-  review_id="$(REVIEWER_LOGIN_BARE="$REVIEWER_LOGIN_BARE" gh api graphql --paginate \
-    -f query="$reviews_query" -f owner="$owner" -f name="$name" -F pr="$PR" \
-    --jq '.data.repository.pullRequest.reviews.nodes[]
-          | select((.author.login // "" | sub("\\[bot\\]$"; "")) == env.REVIEWER_LOGIN_BARE)
-          | select(.state == "CHANGES_REQUESTED")
-          | {databaseId, submittedAt}' |
-    jq -rs 'if length == 0 then "" else (sort_by(.submittedAt) | last | .databaseId) end')"
+  review_id="$(jq -rs '[.[] | select(.state == "CHANGES_REQUESTED")]
+    | if length == 0 then "" else (sort_by(.submittedAt) | last | .databaseId) end' <<<"$reviews_ndjson")"
 
   if [[ -z "$review_id" ]]; then
     echo "no active CHANGES_REQUESTED from ${REVIEWER_LOGIN} to dismiss — its hold was a COMMENTED review, which does not block a merge." >&2

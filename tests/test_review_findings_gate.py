@@ -32,8 +32,10 @@ import pytest
 import yaml
 
 from tests._helpers import REPO_ROOT
+from tests._source_closure import source_closure
 
-SCRIPT = REPO_ROOT / ".github" / "scripts" / "review-findings-gate.sh"
+GATE_REL = ".github/scripts/review-findings-gate.sh"
+SCRIPT = REPO_ROOT / GATE_REL
 # The merge-queue leg lives in its own merge_group-only workflow so no PR event
 # can ever report the required context as a passing `skipped` instance.
 WORKFLOW = REPO_ROOT / ".github" / "workflows" / "review-findings-merge-gate.yaml"
@@ -334,16 +336,14 @@ def _copy_gate_tree(
     """Lay the gate script + its libs out under `dest` the way the repo does
     (scripts at .github/scripts, config at ../../config), optionally omitting or
     rewriting the severity config. Returns the copied script's path."""
-    scripts = dest / ".github" / "scripts"
-    (scripts / "lib").mkdir(parents=True)
-    src = REPO_ROOT / ".github" / "scripts"
-    for rel in (
-        "review-findings-gate.sh",
-        "lib-ci-retry.sh",
-        "lib/review-threads.bash",
-        "lib/pr-reviews.bash",
-    ):
-        (scripts / rel).write_bytes((src / rel).read_bytes())
+    # The file set is DERIVED from what the gate script sources, not listed here:
+    # a hand-written list is a second spelling of the script's own `source` lines,
+    # and the copy that goes stale produces a "No such file" the assertions below
+    # read as the failure they were checking for.
+    for rel in source_closure({GATE_REL}):
+        copied = dest / rel
+        copied.parent.mkdir(parents=True, exist_ok=True)
+        copied.write_bytes((REPO_ROOT / rel).read_bytes())
     if with_config:
         cfg = dest / "config"
         cfg.mkdir()
@@ -351,7 +351,7 @@ def _copy_gate_tree(
         if gating is not None:
             spec["gating"] = gating
         (cfg / "review-severities.json").write_text(json.dumps(spec))
-    return scripts / "review-findings-gate.sh"
+    return dest / GATE_REL
 
 
 def _run_copied(script: Path) -> subprocess.CompletedProcess:

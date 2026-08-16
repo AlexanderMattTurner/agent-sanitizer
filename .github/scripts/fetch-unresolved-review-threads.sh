@@ -3,9 +3,9 @@
 # PR, so a Haiku pass can judge whether later commits addressed each one.
 #
 # A "reviewer thread" is a review thread whose ROOT comment was authored by the
-# reviewer bot (REVIEWER_LOGIN, default github-actions[bot] — the identity that
-# posts the review in post-pr-review.sh). Human threads and the PR author's own
-# replies are never touched: we key on the root comment's author only.
+# reviewer bot — the identity lib/reviewer-identity.bash defines, which is the
+# one that posts the review in post-pr-review.sh. Human threads and the PR
+# author's own replies are never touched: we key on the root comment's author.
 #
 # Writes $PR_INPUT_DIR/threads.json — a JSON array of
 #   {index, id, path, line, body}
@@ -25,14 +25,6 @@ source "$SCRIPT_DIR/lib/review-threads.bash"
 : "${GH_REPO:?GH_REPO required}"
 : "${PR:?PR number required}"
 : "${PR_INPUT_DIR:?PR_INPUT_DIR required}"
-REVIEWER_LOGIN="${REVIEWER_LOGIN:-github-actions[bot]}"
-# GraphQL returns an app bot's `login` WITHOUT the REST `[bot]` suffix
-# (`github-actions`, not `github-actions[bot]`), and the thread query below runs
-# through `gh api graphql`; compare against the BARE login so the reviewer's own
-# threads are actually matched. Comparing the REST-shaped `github-actions[bot]`
-# matched zero threads, so has_threads was always false and the Haiku resolver
-# never ran.
-REVIEWER_LOGIN_BARE="${REVIEWER_LOGIN%'[bot]'}"
 
 mkdir -p "$PR_INPUT_DIR"
 owner="${GH_REPO%%/*}"
@@ -41,9 +33,6 @@ name="${GH_REPO##*/}"
 # fetch_review_threads owns the paginated read (a PR can accrue more reviewer
 # threads than one page holds); this projection keeps only unresolved threads
 # whose root comment is the reviewer's, emitting one NDJSON object per survivor.
-# Exported for the jq inside the external `gh` process, which reads it from `env`.
-export REVIEWER_LOGIN_BARE
-
 ndjson="${PR_INPUT_DIR}/threads.ndjson"
 fetch_review_threads "$owner" "$name" "$PR" \
   ".[] | select(.isResolved == false)

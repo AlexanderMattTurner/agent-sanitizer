@@ -404,9 +404,14 @@ jobs:
           # decide/review jobs: the script is trusted repo content, no PR code runs.
           ref: ${{ github.event.pull_request.base.ref }}
           persist-credentials: false
+          # Each script AND every lib it sources: a sourced file missing from
+          # this list kills the step at runtime under `set -e`.
+          # tests/test_sparse_checkout_source_closure.py derives this list's
+          # requirement from the scripts' own `source` lines.
           sparse-checkout: |
             .github/scripts/auto-approve-skipped-pr.sh
             .github/scripts/review-gate.sh
+            .github/scripts/lib/reviewer-identity.bash
           sparse-checkout-cone-mode: false
       - name: Approve so a review-required ruleset doesn't strand a skipped PR
         if: >-

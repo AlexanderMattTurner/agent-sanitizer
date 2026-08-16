@@ -22,6 +22,13 @@ dev = [
     "hypothesis>=6",
     "regexploit>=1.0.0",
     "tomli>=2 ; python_version < '3.11'",
+    # tree-sitter + its bash grammar answer the one structural question in
+    # tests/test_sparse_checkout_source_closure.py — what does this script
+    # `source`? A text scan cannot tell a real `source` from one written into a
+    # heredoc or a message string, and getting that wrong makes the check fail
+    # open on the very omission it exists to catch.
+    "tree-sitter>=0.25",
+    "tree-sitter-bash>=0.25",
 ]
 
 [tool.ruff]
