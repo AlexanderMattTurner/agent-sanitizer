@@ -53,3 +53,20 @@ if [[ "$before" != "$after" && "${#unstaged[@]}" -gt 0 ]]; then
 fi
 
 git add -- "$bundle" "$requirements"
+
+# The binary manifest pins the bundle its binaries were compiled from, so the
+# rebuild above leaves it stale on every `src/` change. Refreshing it means
+# compiling with bun for four targets, which needs the network a hook must not,
+# so this reports instead of repairing: one line here in place of a CI red on
+# "committed hook-binary manifest is fresh for this tree".
+manifest="$git_root/plugin/dist/hooks/hook-binaries.sha256"
+if [[ -f "$manifest" ]]; then
+  pinned=$(sed -n 's/^# bundle=//p' "$manifest")
+  # node, not shasum/sha256sum: those two spellings split macOS from Linux, and
+  # this hook already runs node.
+  built=$(node -e 'const {createHash}=require("node:crypto");process.stdout.write(createHash("sha256").update(require("node:fs").readFileSync(process.argv[1])).digest("hex"))' "$bundle")
+  if [[ "$pinned" != "$built" ]]; then
+    echo "pre-commit: plugin/dist/hooks/hook-binaries.sha256 pins a different bundle than the one just rebuilt. Run 'pnpm gen:hook-binaries', stage the manifest, then retry the commit." >&2
+    exit 1
+  fi
+fi
