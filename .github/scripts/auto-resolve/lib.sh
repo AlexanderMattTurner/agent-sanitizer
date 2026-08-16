@@ -36,19 +36,8 @@ protected_matches() {
   return 0
 }
 
-# Authenticates git over HTTPS with TOKEN for the rest of this process, without
-# writing the token into .git/config (every checkout here is
-# persist-credentials: false). It RESETS GIT_CONFIG_COUNT rather than appending:
-# re-authenticating with a second token must replace the first token's header,
-# and starting from 1 also discards any GIT_CONFIG_* transport override an
-# earlier step left in the environment.
-git_auth_header() {
-  local basic
-  basic="$(printf 'x-access-token:%s' "${1:?token required}" | base64 | tr -d '\n')"
-  export GIT_CONFIG_COUNT=1
-  export GIT_CONFIG_KEY_0="http.https://github.com/.extraheader"
-  export GIT_CONFIG_VALUE_0="AUTHORIZATION: basic ${basic}"
-}
+# shellcheck source=.github/scripts/lib-git-auth.sh disable=SC1091
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/lib-git-auth.sh"
 
 # Marks the PR as one auto-resolve must not spend on again until a human acts.
 # discover excludes the label, so a permanent blocker (a missing push token, a

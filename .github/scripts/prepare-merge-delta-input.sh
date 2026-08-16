@@ -19,8 +19,13 @@
 #   merge-delta.report.txt     — what the sanitizer neutralized (if anything)
 set -euo pipefail
 
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=lib-git-auth.sh disable=SC1091
+. "$HERE/lib-git-auth.sh"
+
 : "${PR:?PR number required}"
 : "${PR_INPUT_DIR:?PR_INPUT_DIR required}"
+: "${GH_TOKEN:?GH_TOKEN required}"
 
 mkdir -p "$PR_INPUT_DIR"
 
@@ -39,8 +44,9 @@ trap 'rm -f "$raw" "$err"' EXIT
 # diff, not code to run. A fetch or merge-base failure is a can't-verify, not a
 # no-op: fail loud rather than skip the review (a PR head always has a
 # refs/pull/N/head, so a failure here is a real problem, not "no merges").
-auth="AUTHORIZATION: basic $(printf 'x-access-token:%s' "${GH_TOKEN:-}" | base64 | tr -d '\n')"
-if ! git -c "http.https://github.com/.extraheader=${auth}" \
+auth="" # assigned by name below; shellcheck cannot follow printf -v
+git_auth_header_value auth "$GH_TOKEN"
+if ! git -c "$GIT_AUTH_HEADER_KEY=$auth" \
   fetch --no-tags --quiet origin "+refs/pull/${PR}/head:refs/remotes/pr/head"; then
   echo "::error::could not fetch refs/pull/${PR}/head as data — cannot review this PR's merge deltas" >&2
   exit 1
