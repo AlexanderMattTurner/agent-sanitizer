@@ -107,9 +107,8 @@ const INVISIBLE_MEMBERS = THREAT_CODEPOINTS.filter(
  * fuzz suite must seed. `"all"` means the whole alphabet; an array names the
  * in-scope subset. Every exclusion (a member present in the alphabet but absent
  * from a suite's list) is justified inline — a carve-out is a choice, not a miss.
- * A suite NOT listed here is not gated for domain coverage (it does not ingest
- * the threat alphabet — e.g. confusables/splice/view-map operate on already-
- * mapped offsets or a confusable glyph table, not raw invisible/ANSI bytes).
+ * A suite absent from here must appear in {@link OUT_OF_SCOPE} with its reason;
+ * the gate asserts the two together cover every discovered fast-check suite.
  * @type {Readonly<Record<string, number[] | "all">>}
  */
 export const IN_SCOPE = Object.freeze({
@@ -131,18 +130,83 @@ export const IN_SCOPE = Object.freeze({
   // its unicodeChar arbitrary. It owes every invisible member plus the surrogate
   // totality probe.
   "instructions-property.test.mjs": [...INVISIBLE_MEMBERS, 0xd800],
+});
 
-  // NOT gated for the threat alphabet (and so deliberately absent):
-  //   - exfil-property.test.mjs: Layer 3 inspects URL/markdown link destinations,
-  //     which run AFTER Layer 1 has already stripped every invisible/ANSI byte —
-  //     seeding those here would test a state the layer never sees. Its totality
-  //     (never-throw on lone surrogates / astral) is already covered by its
-  //     fc.string() URL arbitraries, not a hard-coded code-point literal.
-  //   - html-property.test.mjs: same boundary — the HTML parser runs post-Layer-1
-  //     and invisible/ANSI/joiner/TAG members carry no markup meaning; surrogate/
-  //     astral totality rides in on its fc.string() fragments.
-  //   - confusables / splice / view-map / rehydrate: operate on a confusable
-  //     glyph table or already-mapped offsets, not raw invisible/ANSI input.
+/**
+ * The other half of the same partition: every fast-check suite that is NOT
+ * gated for domain coverage, and the reason it owes nothing.
+ *
+ * IN_SCOPE alone is one-directional. It proves each listed suite seeds what it
+ * owes, and says nothing about a suite nobody listed — so a new fuzz target for
+ * a raw-byte entry point can land with an input domain that never reaches the
+ * dangerous bytes, which is the U+009B trap this module exists to close. The
+ * gate asserts IN_SCOPE and OUT_OF_SCOPE together cover the discovered suites,
+ * so a new suite forces a human to pick a side.
+ * @type {Readonly<Record<string, string>>}
+ */
+export const OUT_OF_SCOPE = Object.freeze({
+  // ── post-Layer-1 consumers: Layer 1 strips every invisible and ANSI byte
+  // before these layers run, so seeding the alphabet here tests a state the
+  // layer never sees. Surrogate/astral totality rides in on fc.string().
+  "exfil-property.test.mjs":
+    "Layer 3 reads URL and markdown link destinations, which Layer 1 has already cleaned",
+  "html-exfil-semantic-fuzz.test.mjs":
+    "Layer 3 precision over whole documents, downstream of the same strip",
+  "html-property.test.mjs":
+    "the HTML parser runs post-Layer-1, and no alphabet member carries markup meaning",
+  "html-semantic-fuzz.test.mjs":
+    "hidden-element splice precision, downstream of the same strip",
+  "html.test.mjs":
+    "exact-verdict HTML unit tests, downstream of the same strip",
+
+  // ── offset and table engines: their input is a resolved offset, a needle or
+  // a confusable glyph table, never raw untrusted bytes.
+  "confusables-property.test.mjs":
+    "folds against an injected scanner over a confusable glyph table",
+  "confusables-semantic-fuzz.test.mjs":
+    "fold precision over genuine non-Latin words versus confusable lookalikes",
+  "confusable-host-property.test.mjs":
+    "reads hostnames the WHATWG URL parser already resolved, not raw text",
+  "splice-property.test.mjs":
+    "splices ranges and needle matches an earlier layer resolved",
+  "view-map-property.test.mjs":
+    "offset algebra between the disk, cleaned and redacted views",
+  "rehydrate-property.test.mjs":
+    "re-anchors an Edit against a view the pipeline already produced",
+  "rehydrate-semantic-fuzz.test.mjs":
+    "re-anchoring precision over the same already-produced views",
+
+  // ── differentials and fast paths: each pins one implementation against
+  // another over the alphabet its own subject defines.
+  "ansi-pattern-parity.test.mjs":
+    "differentials the shipped escape regex against the scanner over the ANSI grammar",
+  "invisible-differential.test.mjs":
+    "differentials the optimized carve analysis against the slow one",
+  "invisible-fast-path.test.mjs":
+    "pins each counting short-circuit against the analysis it replaces",
+  "invisible-property.test.mjs":
+    "fuzzes the ZWNJ/ZWJ carve-out over its own joiner and emoji alphabet",
+  "invisible-semantic-fuzz.test.mjs":
+    "carve-out precision over that same joiner alphabet",
+  "invisible.test.mjs":
+    "unit tests driven from the CHECKS/VS/BLANK_NON_CF SSOT",
+  "layer1-ansi.test.mjs":
+    "Layer 1's own idempotence and containment invariants over the ANSI grammar",
+
+  // ── precision suites whose structural sibling carries the domain gate.
+  "instructions-semantic-fuzz.test.mjs":
+    "instructions-property.test.mjs is the gated suite for this entry point",
+  "output-semantic-fuzz.test.mjs":
+    "output-property.test.mjs is the gated suite for this entry point",
+  "prompt-semantic-fuzz.test.mjs":
+    "prompt-property.test.mjs is the gated suite for this entry point",
+
+  // ── whole-process compositions over text the gated entry points produce.
+  "claude-hooks-layer-pipeline.test.mjs":
+    "asserts the PreToolUse layer ORDER on what the hook emits",
+  "claude-hooks-roundtrip.fuzz.test.mjs":
+    "fuzzes the sanitize to edit to rehydrate loop, whose input is sanitized text",
+  "cli.test.mjs": "pins the CLI I/O envelope against sanitize as its oracle",
 });
 
 // Round-trip guard data: every cp named in IN_SCOPE must be a real alphabet

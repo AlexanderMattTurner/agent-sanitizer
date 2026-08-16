@@ -10,6 +10,13 @@
  * because a passthrough executes the line without violating any asserted
  * invariant. A percentage can't catch "this parser has no security invariant";
  * requiring a named fuzz target for each one can.
+ *
+ * Each obligation list is one half of a PARTITION over the population it draws
+ * from: FUZZ_REQUIRED + FUZZ_EXEMPT cover every exported function,
+ * SEMANTIC_FUZZ_REQUIRED + SEMANTIC_FUZZ_EXEMPT cover every required name, and
+ * IN_SCOPE + OUT_OF_SCOPE cover every discovered suite. A required list on its
+ * own proves only what it names; the exempt half is what makes a new export or
+ * a new suite impossible to land without a human choosing a side.
  */
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
@@ -37,23 +44,13 @@ import { CHECKS } from "../src/invisible.mjs";
 import {
   THREAT_CODEPOINTS,
   IN_SCOPE_MEMBERS,
+  OUT_OF_SCOPE,
   acceptedSpellings,
   spellingMatches,
   threat,
 } from "./threat-codepoints.mjs";
 
 // Functions that ingest untrusted text/URLs/ranges and so owe a fuzz target.
-// Intentionally excluded (documented so the omission is a choice, not a miss):
-//   - isSgrOnly, isHiddenOpen, closingTagName: pure short-string predicates
-//     with no transform/parse step, covered by example tests and indirectly
-//     through their callers.
-//   - looksLikeHtmlSource: parses, but returns a verdict rather than a
-//     transform, so it has no fuzzable invariant of its own; the verdict is
-//     pinned by the exact-verdict corpus in html.test.mjs and both branches it
-//     selects are fuzzed through sanitizeHtml.
-//   - scanHtmlFragment: has no invariant of its own beyond what the
-//     sanitizeHtml round-trip / splice-fidelity properties already assert on
-//     its output.
 const FUZZ_REQUIRED = [
   "stripInvisible",
   "stripInvisibleWithReport",
@@ -95,18 +92,94 @@ const FUZZ_REQUIRED = [
   "rehydrateLayer2",
 ];
 
+/**
+ * The other half of the export partition: every exported function that owes no
+ * fuzz target, and the one-line reason it owes none. A `TODO:` reason marks a
+ * genuine gap that is tracked rather than denied — the name still cannot be
+ * deleted or renamed without this gate noticing, and the next reader sees it.
+ * @type {Readonly<Record<string, string>>}
+ */
+const FUZZ_EXEMPT = Object.freeze({
+  // ── genuine gaps, tracked ────────────────────────────────────────────────
+  anchorSpans:
+    "TODO: owes a property suite — it anchors a prefix/suffix over untrusted Write content",
+  matchesSecretHint:
+    "TODO: owes a property suite — a fail-open pre-gate for the secret scan",
+  needsMarkdownPipeline:
+    "TODO: owes a property suite — a fail-open pre-gate for Layers 2 and 3",
+  overlapAwareCount:
+    "TODO: owes a property suite — it decides Edit ambiguity over untrusted needles",
+  pairDiskSpans:
+    "TODO: owes a property suite — it maps redaction pairs onto on-disk spans",
+
+  // ── predicates and lookups: no parse or transform step of their own ──────
+  closingTagName: "reads one tag name out of an already-tokenized HTML value",
+  contextScopeContradiction:
+    "maps a host-supplied load reason through a table, with no parse",
+  excludeFromContextScan: "path-prefix predicate over one scan entry name",
+  hasNonAscii: "code-unit range predicate over one string",
+  isBenignAnsiKinds:
+    "set membership over the TOKEN_KIND values Layer 1 removed",
+  isHiddenOpen: "short-string predicate over one open tag",
+  isIncidentalInvisible:
+    "threshold read over counts the invisible analysis produced",
+  isSgrOnly: "predicate over the tokens scanAnsi produced",
+  isWalkableContainer: "shape predicate over one JSON value",
+  looksLikeHtmlSource:
+    "returns a verdict rather than a transform, and both branches it selects are fuzzed through sanitizeHtml",
+  scopeFor: "looks a tool name up in the fold-scope table",
+
+  // ── operator-facing prose built from an already-classified finding ───────
+  composeContext: "assembles the context block from a computed warning list",
+  describeExfil: "formats Layer 3's classified threats into prose",
+  describeRemoved: "formats Layer 2's removal counts into prose",
+  describeStripped: "formats Layer 1's CATEGORY codes into prose",
+  describeWarned: "formats Layer 2's preserved-tag counts into prose",
+  formatReason: "formats the prompt gate's block reason into prose",
+  normalizeContext: "formats the folded field names into a model-facing note",
+  withheldWarning:
+    "formats one noun phrase into the withheld-artifact sentence",
+
+  // ── filesystem entry points whose only parse is an already-required one ──
+  ancestorInstructionFiles: "pure parent-path arithmetic over a directory path",
+  atomicReplaceFile: "write primitive over text a required scan produced",
+  cleanFile: "reads a file and delegates the parse to scanText",
+  findInstructionFiles: "enumerates paths and reads no file content",
+  scanInstructionFiles: "reads files and delegates the parse to scanText",
+
+  // ── compositions and views fuzzed through the entry point above them ─────
+  applyLayer1:
+    "the Layer-1 composition, fuzzed through sanitize and sanitizeText",
+  countEffectiveInvisible: "reads the analysis stripInvisible already ran",
+  countPayloadInvisible: "reads the analysis stripInvisible already ran",
+  findLongRuns: "one anchored scan, fuzzed through stripInvisibleWithReport",
+  hasLongRun: "the yes/no of findLongRuns, over the same anchored scan",
+  isBenignAnsi: "runs applyLayer1 and reads its kinds",
+  layer2Placeholder:
+    "derives a keyed placeholder by sha256; the round-trip fuzz oracle pins its grammar",
+  makeFileView:
+    "freezes a text and pair list into a view, validated at construction",
+  orderedMatches:
+    "orders what occurrences found, and spliceOrdered consumes that order",
+  pairsToUtf16:
+    "converts pair offsets between spaces, fuzzed through resolveSpan",
+  payloadInvisibleView:
+    "the view the long-run probe reads, pinned by invisible-fast-path",
+  payloadLongRunSample: "reads that same view, pinned by invisible-fast-path",
+  scanHtmlFragment:
+    "has no invariant of its own beyond what the sanitizeHtml round-trip and splice-fidelity properties assert on its output",
+  stripAnsiFully: "the ANSI half of applyLayer1, fuzzed through layer1-ansi",
+  suppressToolOutput: "substitutes a sentinel for a subtree and parses nothing",
+  toUtf16View:
+    "converts a view between offset spaces, validated at construction",
+  viewMapDefect: "self-check over a view the pipeline built",
+});
+
 // Entry points that owe SEMANTIC-CORRECTNESS fuzzing, not just structural
 // fuzzing: a structural property (never-throws, idempotent, shape-preserved)
 // can hold in aggregate while a detector corrupts the wrong leaf or misses a
 // specific payload shape — exactly the class of false positive that shipped
-// in scanText's scatter floor (fixed alongside this gate). A subset of
-// FUZZ_REQUIRED: named internal helpers (isHiddenStyle, decodeRun,
-// resolveSpan, alignDeletions, rehydrateNewString, stripInvisibleWithReport,
-// deleteVerbatimSpans; urlHost's sibling checkExfilUrl is kept since it's
-// independently callable) are exercised only THROUGH their public entry
-// point in these suites, so requiring their own name to appear here would be
-// a false negative, not a stronger check — the precision property is
-// asserted at the entry point.
+// in scanText's scatter floor (fixed alongside this gate).
 const SEMANTIC_FUZZ_REQUIRED = [
   "stripInvisible",
   "sanitizeHtml",
@@ -123,6 +196,40 @@ const SEMANTIC_FUZZ_REQUIRED = [
   "rehydrateRedacted",
   "occurrences",
 ];
+
+/**
+ * The other half of the semantic partition, over FUZZ_REQUIRED. Most entries
+ * are named internal helpers a semantic suite drives only THROUGH their public
+ * entry point, where the precision property is asserted: requiring their own
+ * name here would be a false negative, not a stronger check.
+ * @type {Readonly<Record<string, string>>}
+ */
+const SEMANTIC_FUZZ_EXEMPT = Object.freeze({
+  alignDeletions:
+    "driven through rehydrateRedacted, where precision is asserted",
+  buildPreToolUseResponse:
+    "a whole-process composition; each layer's precision is asserted at its own entry point",
+  decodeRun: "driven through scanText, where precision is asserted",
+  deleteVerbatimSpans:
+    "driven through sanitizeText, where precision is asserted",
+  detectConfusableHosts:
+    "its precision is pinned exactly by the benign/attack corpus in confusable-host.test.mjs",
+  evaluateToolOutput:
+    "a whole-process composition; each layer's precision is asserted at its own entry point",
+  isHiddenElement: "driven through sanitizeHtml, where precision is asserted",
+  isHiddenStyle: "driven through sanitizeHtml, where precision is asserted",
+  rehydrateLayer2:
+    "a whole-process composition; each layer's precision is asserted at its own entry point",
+  rehydrateNewString:
+    "driven through rehydrateRedacted, where precision is asserted",
+  resolveSpan: "driven through rehydrateRedacted, where precision is asserted",
+  sanitize:
+    "the top-level composition over layers that each carry their own semantic suite",
+  spliceOrdered: "driven through sanitizeText, where precision is asserted",
+  spliceRanges: "driven through sanitizeHtml, where precision is asserted",
+  stripInvisibleWithReport:
+    "driven through stripInvisible, where precision is asserted",
+});
 
 const repoRoot = execFileSync("git", ["rev-parse", "--show-toplevel"], {
   encoding: "utf8",
@@ -597,6 +704,26 @@ for (const [name, mod] of [
   exportedFunctions.set(name, mod[name]);
 }
 
+/**
+ * Assert `required` and `exempt` partition `population` exactly, so a member
+ * of the population cannot exist without a human having classified it.
+ * @param {string[]} population
+ * @param {string[]} required
+ * @param {string[]} exempt
+ * @param {string} hint  what the reader must do about a mismatch
+ */
+const assertPartition = (population, required, exempt, hint) => {
+  assert.ok(
+    population.length > 0,
+    "empty population — the partition would hold vacuously",
+  );
+  assert.deepEqual(
+    [...population].sort(),
+    [...required, ...exempt].sort(),
+    hint,
+  );
+};
+
 describe("fuzz-coverage obligation gate", () => {
   it("discovers at least one fast-check suite (gate is not vacuous)", () => {
     assert.ok(
@@ -619,6 +746,38 @@ describe("fuzz-coverage obligation gate", () => {
       totalSpanLength > 0,
       "propertyReferences found no fc.assert/fc.property spans in any " +
         "discovered fuzz file — the span-narrowed match would pass vacuously",
+    );
+  });
+
+  it("every exported function is either fuzz-required or exempt with a reason", () => {
+    assertPartition(
+      [...exportedFunctions.keys()],
+      FUZZ_REQUIRED,
+      Object.keys(FUZZ_EXEMPT),
+      "a new export must be classified: add it to FUZZ_REQUIRED and give it a " +
+        "property suite, or to FUZZ_EXEMPT with the one-line reason it owes none",
+    );
+    for (const [name, reason] of Object.entries(FUZZ_EXEMPT))
+      assert.ok(reason.length > 0, `${name} carries an empty exemption reason`);
+  });
+
+  it("the export partition rejects an unclassified name (assertion is not vacuous)", () => {
+    const population = [...exportedFunctions.keys(), "syntheticNewExport"];
+    assert.throws(
+      () =>
+        assertPartition(
+          population,
+          FUZZ_REQUIRED,
+          Object.keys(FUZZ_EXEMPT),
+          "an unclassified export must fail the partition",
+        ),
+      assert.AssertionError,
+    );
+    assertPartition(
+      population,
+      FUZZ_REQUIRED,
+      [...Object.keys(FUZZ_EXEMPT), "syntheticNewExport"],
+      "classifying the synthetic export must satisfy the same partition",
     );
   });
 
@@ -758,15 +917,20 @@ describe("semantic-fuzz obligation gate", () => {
     assert.ok(SEMANTIC_FUZZ_REQUIRED.length > 0);
   });
 
-  it("every SEMANTIC_FUZZ_REQUIRED name is also in FUZZ_REQUIRED", () => {
+  it("every fuzz-required name is either semantic-required or exempt with a reason", () => {
     // Semantic-fuzz coverage is a stricter obligation layered on top of the
-    // structural one; a name here that isn't in FUZZ_REQUIRED is a drifted
-    // entry, not a real additional target.
-    for (const name of SEMANTIC_FUZZ_REQUIRED)
-      assert.ok(
-        FUZZ_REQUIRED.includes(name),
-        `${name} is in SEMANTIC_FUZZ_REQUIRED but not FUZZ_REQUIRED`,
-      );
+    // structural one, so its population is FUZZ_REQUIRED itself: a name here
+    // that isn't in FUZZ_REQUIRED is a drifted entry, and a required name in
+    // neither list is an obligation nobody decided.
+    assertPartition(
+      FUZZ_REQUIRED,
+      SEMANTIC_FUZZ_REQUIRED,
+      Object.keys(SEMANTIC_FUZZ_EXEMPT),
+      "every FUZZ_REQUIRED name must be in SEMANTIC_FUZZ_REQUIRED or in " +
+        "SEMANTIC_FUZZ_EXEMPT with the reason its precision is asserted elsewhere",
+    );
+    for (const [name, reason] of Object.entries(SEMANTIC_FUZZ_EXEMPT))
+      assert.ok(reason.length > 0, `${name} carries an empty exemption reason`);
   });
 
   for (const name of SEMANTIC_FUZZ_REQUIRED) {
@@ -879,11 +1043,19 @@ describe("threat-alphabet domain coverage", () => {
       );
   });
 
-  it("every IN_SCOPE suite file actually exists and drives fast-check", () => {
-    for (const name of Object.keys(IN_SCOPE_MEMBERS))
+  it("every discovered fast-check suite is in scope or out of scope", () => {
+    assertPartition(
+      fuzzFiles.map((file) => file.name),
+      Object.keys(IN_SCOPE_MEMBERS),
+      Object.keys(OUT_OF_SCOPE),
+      "a new fast-check suite must be classified in test/threat-codepoints.mjs: " +
+        "add it to IN_SCOPE with the alphabet members it owes, or to " +
+        "OUT_OF_SCOPE with the one-line reason it ingests none",
+    );
+    for (const [name, reason] of Object.entries(OUT_OF_SCOPE))
       assert.ok(
-        fuzzFileByName.has(name),
-        `IN_SCOPE names '${name}' but no such fast-check suite was discovered — stale entry or renamed file`,
+        reason.length > 0,
+        `${name} carries an empty out-of-scope reason`,
       );
   });
 
