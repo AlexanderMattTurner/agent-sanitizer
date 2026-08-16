@@ -65,6 +65,7 @@ const FUZZ_REQUIRED = [
   "detectExfil",
   "checkExfilUrl",
   "urlHost",
+  "detectConfusableHosts",
   // Agent-pipeline transforms/parsers over untrusted input (one named fuzz
   // target each — the same obligation extended to the new entry points).
   "normalizeConfusables",
