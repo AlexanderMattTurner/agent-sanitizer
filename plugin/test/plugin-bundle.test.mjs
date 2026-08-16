@@ -797,6 +797,103 @@ test("output hook fails CLOSED under the opt-out when the redactor is unreachabl
   assert.match(out.updatedToolOutput.stdout, /SANITIZATION FAILED/);
 });
 
+/**
+ * Does the harness KEEP this `updatedToolOutput`, or drop it and show the raw
+ * output? It ignores one whose shape does not match the tool's own response
+ * (see sanitizeValue in claude-hooks/sanitize-output.mjs), so THIS — not the
+ * presence of the field — is what "the output was actually withheld" means.
+ */
+function withholds(updated, response) {
+  if (updated === undefined) return false;
+  if (typeof response !== "object" || response === null)
+    return typeof updated === typeof response;
+  if (typeof updated !== "object" || updated === null) return false;
+  return (
+    Object.keys(updated).sort().join() === Object.keys(response).sort().join()
+  );
+}
+
+/** The dead-daemon environment that drives the node hook's fail-closed arm. */
+const DEAD_REDACTOR = {
+  _AGENT_SANITIZER_REDACTOR_SOCKET: join(tmpdir(), "no-such-redactor.sock"),
+  _AGENT_SANITIZER_REDACTOR_DAEMON: "/nonexistent/agent-secret-redactor-daemon",
+  _AGENT_SANITIZER_REDACTOR_WAIT_MS: "300",
+  _AGENT_SANITIZER_REDACTOR_REQUEST_MS: "300",
+};
+
+test("the two fail-CLOSED PostToolUse arms agree only where the shell one can withhold", (t) => {
+  // The shim's closed arm and the node hook's closed arm answer the same
+  // event, and an operator who set AGENT_SANITIZER_FAIL_OPEN=0 asked both for
+  // the same thing. They cannot deliver the same thing: shaping a replacement
+  // to an object-shaped tool_response means parsing the payload, and the shim
+  // runs precisely when no runtime was available to parse it. This pins the
+  // real table rather than an assumed parity — including the compensation the
+  // shim owes on the row where it loses.
+  const plugin = stagePlugin(t);
+  const secret = "AKIAIOSFODNN7EXAMPLE";
+  const payloadFor = (toolResponse) => ({
+    hook_event_name: "PostToolUse",
+    tool_name: "Bash",
+    tool_input: {},
+    tool_response: toolResponse,
+  });
+  const shellArm = (toolResponse) =>
+    launch(plugin, "PostToolUse", "sanitize-output", payloadFor(toolResponse), {
+      env: {
+        ...FAIL_CLOSED,
+        PATH: stubBin(t, ["node"]),
+        _AGENT_SANITIZER_NODE_SEARCH: "0",
+      },
+    });
+  const nodeArm = (toolResponse) =>
+    launch(plugin, "PostToolUse", "sanitize-output", payloadFor(toolResponse), {
+      env: { ...FAIL_CLOSED, ...DEAD_REDACTOR },
+    });
+
+  // A string-shaped output: both arms withhold, and they agree.
+  const flat = `aws_key=${secret}`;
+  for (const [name, res] of [
+    ["node", nodeArm(flat)],
+    ["shell", shellArm(flat)],
+  ]) {
+    assert.equal(res.status, 0, `${name}: ${res.stderr}`);
+    const out = JSON.parse(res.stdout).hookSpecificOutput;
+    assert.ok(
+      withholds(out.updatedToolOutput, flat),
+      `${name} arm did not withhold a string-shaped output`,
+    );
+  }
+
+  // An object-shaped output — Bash's own shape, and most built-ins'. The node
+  // arm walks it and replaces every leaf; the shim has nothing to walk.
+  const structured = {
+    stdout: `aws_key=${secret}`,
+    stderr: "",
+    interrupted: false,
+  };
+  const nodeRes = nodeArm(structured);
+  const nodeOut = JSON.parse(nodeRes.stdout).hookSpecificOutput;
+  assert.ok(
+    withholds(nodeOut.updatedToolOutput, structured),
+    "the node arm stopped withholding object-shaped output",
+  );
+  assert.ok(!JSON.stringify(nodeOut).includes(secret));
+
+  const shellRes = shellArm(structured);
+  assert.equal(shellRes.status, 0, shellRes.stderr);
+  const shell = JSON.parse(shellRes.stdout);
+  assert.equal(
+    withholds(shell.hookSpecificOutput.updatedToolOutput, structured),
+    false,
+    "the shim claims a suppression the harness would drop — say what it does",
+  );
+  // What it owes instead: the top-level decision/reason pair, which the
+  // harness honors whatever the output's shape, telling the model that what it
+  // can see went unsanitized.
+  assert.equal(shell.decision, "block");
+  assert.match(shell.reason, /UNSANITIZED/);
+});
+
 test("output hook redacts through the daemon wire protocol", async (t) => {
   const plugin = stagePlugin(t);
   const sockDir = mkdtempSync(join(tmpdir(), "agent-sanitizer-sock-"));
@@ -1068,15 +1165,54 @@ test("launcher fails OPEN when node is absent from PATH", (t) => {
  * it holds the bundle to, and a real `bun build --compile` would cost ~100 MB
  * per staged test. Returns the dir to pass as CLAUDE_PLUGIN_DATA.
  */
-function stageHookBinary(t, body, { mode = 0o755 } = {}) {
+function stageHookBinary(t, body, { mode = 0o755, dirMode = 0o700 } = {}) {
   const data = scratch(t);
   const dir = join(data, "hook-binary");
   mkdirSync(dir, { recursive: true });
   const bin = join(dir, "agent-sanitizer-hooks");
   writeFileSync(bin, `#!/bin/sh\n${body}\n`);
   chmodSync(bin, mode);
+  // Stated, not inherited from the runner's umask: the launcher refuses to
+  // execute a binary out of a group- or other-writable directory, so a
+  // permissive umask would silently turn every case below into that refusal.
+  chmodSync(dir, dirMode);
   return data;
 }
+
+test("a binary in a directory anything can write is refused, not executed", (t) => {
+  // The one artifact the launcher EXECUTES, and the directory's mode is what
+  // decides who may replace it: creating an inode needs write on the parent,
+  // not on the file. A 0777 install dir therefore hands arbitrary code — and a
+  // verdict of the attacker's choosing — to every hook of the session.
+  const res = launchWithoutNode(t, stagePlugin(t), {
+    CLAUDE_PLUGIN_DATA: stageHookBinary(t, `printf '{"fromBinary":true}'`, {
+      dirMode: 0o777,
+    }),
+  });
+  assert.equal(res.status, 0);
+  assert.doesNotMatch(res.stdout, /fromBinary/, "the planted binary answered");
+  assert.match(res.stderr, /refusing to run/);
+  // Refused, not silently ignored: with no node on this host the session must
+  // still be told it is running unguarded.
+  assert.match(
+    JSON.parse(res.stdout).hookSpecificOutput.additionalContext,
+    /UNSANITIZED/,
+  );
+});
+
+test("an install directory owned by this user with owner-only write still runs", (t) => {
+  // Non-vacuity for the refusal above: the same host, the same binary, with
+  // the mode the provisioner leaves behind, answers.
+  const res = launchWithoutNode(t, stagePlugin(t), {
+    CLAUDE_PLUGIN_DATA: stageHookBinary(
+      t,
+      `cat >/dev/null; printf '{"fromBinary":true}'`,
+    ),
+  });
+  assert.equal(res.status, 0, res.stderr);
+  assert.deepEqual(JSON.parse(res.stdout), { fromBinary: true });
+  assert.doesNotMatch(res.stderr, /refusing to run/);
+});
 
 test("a provisioned binary answers with no node anywhere on the host", (t) => {
   // The acceptance case of the whole binary path: a launchd/cron-shaped session
