@@ -8,6 +8,11 @@ adhere to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+## [2.41.1] - 2026-08-16
+
+### Fixed
+- Empty hook stdin is now reported as its own distinct error instead of being conflated with a failed scan.
+
 ## [2.41.0] - 2026-08-16
 
 ### Added
