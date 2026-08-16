@@ -28,8 +28,16 @@ _GIT_LOCATION_VARS = (
 )
 
 
+def env_without_git_location() -> dict[str, str]:
+    """`os.environ` minus the repo-location overrides in {@link _GIT_LOCATION_VARS}.
+
+    Every subprocess a test runs against a path of its own choosing needs this:
+    with `GIT_DIR` exported, `cwd=` stops deciding which repo git answers for.
+    """
+    return {k: v for k, v in os.environ.items() if k not in _GIT_LOCATION_VARS}
+
+
 def _repo_root() -> Path:
-    env = {k: v for k, v in os.environ.items() if k not in _GIT_LOCATION_VARS}
     return Path(
         subprocess.run(
             ["git", "rev-parse", "--show-toplevel"],
@@ -37,7 +45,7 @@ def _repo_root() -> Path:
             capture_output=True,
             text=True,
             check=True,
-            env=env,
+            env=env_without_git_location(),
         ).stdout.strip()
     )
 
@@ -68,15 +76,24 @@ GIT_IDENTITY_ENV = {
 
 
 def git_env() -> dict[str, str]:
-    """Environment for running git in test sandboxes."""
-    return {**os.environ, **GIT_IDENTITY_ENV}
+    """Environment for running git in test sandboxes.
+
+    The repo-location overrides are stripped for the same reason `_repo_root`
+    strips them, and the omission was a real CI red: with `GIT_DIR` exported,
+    `cwd=<sandbox>` no longer picks the repo, so a fixture's commits land in the
+    REAL repo and the sandbox cannot resolve the SHAs it was just handed.
+    """
+    return {**env_without_git_location(), **GIT_IDENTITY_ENV}
 
 
 def init_test_repo(path: Path) -> None:
     """Init a throwaway repo with signing/hooks disabled so fixtures can commit
     in any environment (including CI runners with enforced commit signing)."""
     path.mkdir(parents=True, exist_ok=True)
-    subprocess.run(["git", "init", "-q", "-b", "main"], cwd=path, check=True)
+    env = git_env()
+    subprocess.run(
+        ["git", "init", "-q", "-b", "main"], cwd=path, env=env, check=True
+    )
     for k, v in [
         ("commit.gpgsign", "false"),
         ("tag.gpgsign", "false"),
@@ -84,7 +101,9 @@ def init_test_repo(path: Path) -> None:
         ("user.email", "t@t"),
         ("core.hooksPath", "/dev/null"),
     ]:
-        subprocess.run(["git", "config", "--local", k, v], cwd=path, check=True)
+        subprocess.run(
+            ["git", "config", "--local", k, v], cwd=path, env=env, check=True
+        )
 
 
 def commit_all(repo: Path, message: str = "fixture") -> str:
@@ -100,6 +119,7 @@ def commit_all(repo: Path, message: str = "fixture") -> str:
     sha = subprocess.run(
         ["git", "rev-parse", "HEAD"],
         cwd=repo,
+        env=env,
         capture_output=True,
         text=True,
         check=True,

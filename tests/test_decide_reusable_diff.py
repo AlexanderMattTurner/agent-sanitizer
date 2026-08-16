@@ -18,7 +18,12 @@ from pathlib import Path
 
 import pytest
 
-from tests._helpers import REPO_ROOT, commit_all, init_test_repo
+from tests._helpers import (
+    REPO_ROOT,
+    commit_all,
+    env_without_git_location,
+    init_test_repo,
+)
 
 SCRIPT = REPO_ROOT / ".github" / "scripts" / "decide-reusable-diff.sh"
 
@@ -278,6 +283,8 @@ def closure_member() -> str:
             str(REPO_ROOT / ".github" / "scripts" / "shell-run-closure.py"),
             CLOSURE_ENTRY,
         ],
+        cwd=REPO_ROOT,
+        env=env_without_git_location(),
         capture_output=True,
         text=True,
         check=True,
