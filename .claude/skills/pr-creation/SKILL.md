@@ -240,3 +240,5 @@ Use the `/pr-creation` skill. For contributions to others' repos, before writing
 **Lessons only reach the template repo if they appear in the PR description**—lessons mentioned only in chat are never propagated and are permanently lost.
 
 **Resolve each review thread once you've addressed it**, so the unresolved count reflects only what still needs attention and auto-merge isn't held on stale threads. Resolve **only** a thread you actually addressed — a fix or a reply first, never resolving to clear the count.
+
+There is no automated resolver that will do this for you, and pushing the fix does not do it either: `Review findings resolved` reads the thread's resolved flag, so one addressed-but-unresolved thread blocks the merge indefinitely. Resolving also fires no workflow event, so re-run the gate right after: `gh pr edit <N> --remove-label recheck-review-gate` then `--add-label recheck-review-gate`. Both halves, in that order — a bare add over a label already present fires nothing, since `labeled` fires on a transition. See CLAUDE.md's Pull Requests section for the mechanism.
