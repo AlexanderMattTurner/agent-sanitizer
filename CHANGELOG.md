@@ -8,6 +8,13 @@ adhere to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+## [2.43.4] - 2026-08-16
+
+### Fixed
+
+- redos-guard now refuses to resolve regexes built from mutable bindings, improving security against regular expression denial of service (ReDoS) attacks.
+- redos-guard now analyzes regexes built from constants, not just string literals, providing more comprehensive ReDoS detection.
+
 ## [2.43.2] - 2026-08-16
 
 ### Added
