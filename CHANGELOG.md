@@ -8,6 +8,14 @@ adhere to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+## [2.41.0] - 2026-08-16
+
+### Added
+- Report confusable look-alike hosts under a new `confusable-host` code in HTML reports.
+
+### Fixed
+- CI: Fixed escape sequence handling when fetching PR diffs for review input preparation.
+
 ## [2.40.5] - 2026-08-15
 
 ### Fixed
