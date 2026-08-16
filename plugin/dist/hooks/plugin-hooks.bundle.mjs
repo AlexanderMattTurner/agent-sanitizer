@@ -63988,14 +63988,17 @@ function looksLikeHtmlSource(text5) {
   return htmlSourceTree(text5) !== null;
 }
 function toSourceRanges(ranges, merged, pairs) {
+  const ends = pairs.map((pair) => pair.start + pair.placeholder.length);
+  const shifts = merged.map((range, index2) => range.end - ends[index2]);
   const toSource = (offset) => {
-    let shift = 0;
-    for (const [index2, pair] of pairs.entries()) {
-      const placeholderEnd = pair.start + pair.placeholder.length;
-      if (placeholderEnd > offset) break;
-      shift = merged[index2].end - placeholderEnd;
+    let low = 0;
+    let high = ends.length;
+    while (low < high) {
+      const mid = Math.floor((low + high) / 2);
+      if (ends[mid] <= offset) low = mid + 1;
+      else high = mid;
     }
-    return offset + shift;
+    return low === 0 ? offset : offset + shifts[low - 1];
   };
   return ranges.map((range) => ({
     start: toSource(range.start),
@@ -64012,7 +64015,15 @@ function sanitizeHtml(text5) {
   ) };
   const removed = { comments: 0, hidden: 0 };
   let warned;
-  for (; ; ) {
+  for (let round = 0; ; round++) {
+    if (round === MAX_SPLICE_ROUNDS)
+      return {
+        text: UNPARSEABLE_PLACEHOLDER,
+        removed: { comments: 0, hidden: 1 },
+        warned: newWarned(),
+        splices: [],
+        unparseable: true
+      };
     let scan2;
     try {
       const sourceTree = htmlSourceTree(spliced.text);
@@ -64312,7 +64323,7 @@ function detectConfusableHosts(text5) {
   }
   return threats.length > 0 ? threats : null;
 }
-var NEAR_ZERO_EPSILON, OFFSCREEN_ABSOLUTE_THRESHOLD, OFFSCREEN_VIEWPORT_THRESHOLD, ABSOLUTE_UNITS, VIEWPORT_UNITS, ANGLE_UNITS, NAMED_COLORS, BLOCK_AXIS_EXTENT_PROPS, INLINE_AXIS_EXTENT_PROPS, BORDER_SHORTHANDS, BORDER_WIDTH_KEYWORDS, FONT_SIZE_UNITS, CSS_PROPERTY_IDENT_RE, REPORTED_TAGS, VOID_ELEMENTS2, FOREIGN_ELEMENTS, RAW_TEXT_ELEMENTS, htmlParser, parseFragment2, PLACEHOLDER_LABEL, PLACEHOLDER_KEY_LEN, LAYER2_PLACEHOLDER_RE, HIDDEN_PLACEHOLDER, COMMENT_PLACEHOLDER, UNPARSEABLE_PLACEHOLDER, mdParser, parseMarkdown, MARKDOWN_CODE_HINT, BOGUS_COMMENT_OPEN_RE, UNTERMINATED_MARKUP_TAIL_RE, PHRASING_ROOTS, FLOW_HTML_PARENTS, EXFIL_INDICATORS, KEYWORD_PARAM_NAME_RE, LONG_QUERY_THRESHOLD, DATA_URI_ACTIVE_RE, DATA_URI_LENGTH_THRESHOLD, SCRIPT_URI_RE, RELATIVE_URL_BASE, BENIGN_BLOB_PARAM_RE, OPAQUE_TOKEN_RE, VALUE_HAS_DIGIT_RE, BLOB_VALUE_B64_RE, BLOB_VALUE_HEX_RE, BLOB_VALUE_B64URL_RE, B64URL_MIXED_RE, PATH_BLOB_RE, PATH_BLOB_MIN_LEN, SRCSET_WS_RE, OFF_ORIGIN_REASON;
+var NEAR_ZERO_EPSILON, OFFSCREEN_ABSOLUTE_THRESHOLD, OFFSCREEN_VIEWPORT_THRESHOLD, ABSOLUTE_UNITS, VIEWPORT_UNITS, ANGLE_UNITS, NAMED_COLORS, BLOCK_AXIS_EXTENT_PROPS, INLINE_AXIS_EXTENT_PROPS, BORDER_SHORTHANDS, BORDER_WIDTH_KEYWORDS, FONT_SIZE_UNITS, CSS_PROPERTY_IDENT_RE, REPORTED_TAGS, VOID_ELEMENTS2, FOREIGN_ELEMENTS, RAW_TEXT_ELEMENTS, htmlParser, parseFragment2, PLACEHOLDER_LABEL, PLACEHOLDER_KEY_LEN, LAYER2_PLACEHOLDER_RE, HIDDEN_PLACEHOLDER, COMMENT_PLACEHOLDER, UNPARSEABLE_PLACEHOLDER, mdParser, parseMarkdown, MARKDOWN_CODE_HINT, BOGUS_COMMENT_OPEN_RE, UNTERMINATED_MARKUP_TAIL_RE, PHRASING_ROOTS, FLOW_HTML_PARENTS, MAX_SPLICE_ROUNDS, EXFIL_INDICATORS, KEYWORD_PARAM_NAME_RE, LONG_QUERY_THRESHOLD, DATA_URI_ACTIVE_RE, DATA_URI_LENGTH_THRESHOLD, SCRIPT_URI_RE, RELATIVE_URL_BASE, BENIGN_BLOB_PARAM_RE, OPAQUE_TOKEN_RE, VALUE_HAS_DIGIT_RE, BLOB_VALUE_B64_RE, BLOB_VALUE_HEX_RE, BLOB_VALUE_B64URL_RE, B64URL_MIXED_RE, PATH_BLOB_RE, PATH_BLOB_MIN_LEN, SRCSET_WS_RE, OFF_ORIGIN_REASON;
 var init_html4 = __esm({
   "src/html.mjs"() {
     "use strict";
@@ -64609,6 +64620,7 @@ var init_html4 = __esm({
       "listItem",
       "footnoteDefinition"
     ]);
+    MAX_SPLICE_ROUNDS = 8;
     EXFIL_INDICATORS = [/\$\{[^{}]+\}/, /\{\{[^{}]+\}\}/];
     KEYWORD_PARAM_NAME_RE = /^(?:data|d|payload|exfil|leak|steal|secret|token|key|env|password|pwd|cookie|session|auth)$/i;
     LONG_QUERY_THRESHOLD = 200;

@@ -1859,6 +1859,17 @@ describe("splice fidelity and regressions", () => {
       const passOne = applyHtml(input);
       assert.equal(applyHtml(passOne), passOne);
     });
+  it("regression: a chained-reveal document settles at scale, in one call", () => {
+    // The unit above, 4096 times: ~172 KB where EVERY node is revealed by the
+    // round before it, which is the shape whose cost grows with the round
+    // count. Remapping a round's offsets by walking the pair list per offset
+    // instead of bisecting it made this ~10^8 steps — this case is what shows
+    // that as a hang rather than as a slightly slower suite.
+    const document = `<div hidden=""></div> <td hidden=""></td> `.repeat(4096);
+    const result = sanitizeHtml(document);
+    assert.deepEqual(result.removed, { comments: 0, hidden: 8192 });
+    assert.equal(sanitizeHtml(result.text), null);
+  });
   it("regression: idempotent when a bogus end tag precedes a hidden element", () => {
     // parse5 (flow branch) models `</A` as a bogus comment that absorbs the
     // following `<div hidden>`, so it survives pass one; the balance walk must
