@@ -296,21 +296,30 @@ describe("the alert accumulates rather than clobbering", () => {
 });
 
 describe("the hook CLI, driven end to end on a real event", () => {
-  /** Run the hook as Claude Code does: one JSON event on stdin. */
-  function fire(payload) {
+  /**
+   * Run the hook with `input` verbatim on stdin, so a test can drive the bytes
+   * a host actually delivers — including the ones no `JSON.stringify` can
+   * produce, like nothing at all.
+   */
+  function fireRaw(input, env = {}) {
     const result = spawnSync(
       process.execPath,
       [join(repoRoot, "claude-hooks", "scan-loaded-instructions.mjs")],
       {
-        input: JSON.stringify(payload),
+        input,
         encoding: "utf8",
-        env: { ...process.env, CLAUDE_PROJECT_DIR: projectDir },
+        env: { ...process.env, CLAUDE_PROJECT_DIR: projectDir, ...env },
       },
     );
     return {
       ...result,
       json: result.stdout ? JSON.parse(result.stdout) : null,
     };
+  }
+
+  /** Run the hook as Claude Code does: one JSON event on stdin. */
+  function fire(payload) {
+    return fireRaw(JSON.stringify(payload));
   }
 
   it("cleans the file and answers on both channels", () => {
@@ -402,6 +411,41 @@ describe("the hook CLI, driven end to end on a real event", () => {
     assert.match(stderr, /scan-loaded-instructions/u);
     assert.match(stderr, /file_path/u);
     assert.notEqual(status, 0);
+  });
+
+  // An empty stdin is a hook that was handed no event at all — a different
+  // fault from a file it could not scan, with a different fix. Reported as
+  // itself, or the operator is sent to the gate's remedies (a symlink on the
+  // path, a permission bit, `pnpm install`) for a file that was never read.
+  it("names an empty payload as its own fault, not an unscanned file", () => {
+    const { stderr, stdout, status } = fireRaw("");
+    assert.match(stderr, /scan-loaded-instructions hook error/u);
+    assert.match(stderr, /received no payload/u);
+    // The two claims that are false here: no file went unscanned, and nothing
+    // was malformed — `JSON.parse` never saw the empty buffer.
+    assert.doesNotMatch(stderr, /NOT scanned/u);
+    assert.doesNotMatch(stderr, /Unexpected end of JSON input/u);
+    assert.equal(stdout, "");
+    assert.notEqual(status, 0);
+  });
+
+  it("does not arm the tool-call gate on an empty payload, even fail-closed", () => {
+    const { stderr } = fireRaw("", { AGENT_SANITIZER_FAIL_OPEN: "0" });
+    assert.match(stderr, /received no payload/u);
+    assert.equal(existsSync(ALERT_FILE), false);
+  });
+
+  // The other half of that distinction, and what keeps the assertions above
+  // from passing vacuously: a non-empty payload that is malformed still reads
+  // as an unscanned file and still arms the gate under the strict posture.
+  it("still reports a non-empty malformed payload as an unscanned file", () => {
+    const { stderr, status } = fireRaw("{not json", {
+      AGENT_SANITIZER_FAIL_OPEN: "0",
+    });
+    assert.match(stderr, /NOT scanned/u);
+    assert.doesNotMatch(stderr, /received no payload/u);
+    assert.notEqual(status, 0);
+    assert.ok(existsSync(ALERT_FILE), "the PreToolUse gate was not armed");
   });
 });
 
