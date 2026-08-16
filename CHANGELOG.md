@@ -8,6 +8,13 @@ adhere to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+## [2.43.1] - 2026-08-16
+
+### Fixed
+
+- Fix CI path gate to properly handle empty derived file lists.
+- Fix CI diff-gate fetch to scope git's auth header to github.com, improving security and preventing credential leakage to other hosts.
+
 ## [2.43.0] - 2026-08-16
 
 ### Fixed
