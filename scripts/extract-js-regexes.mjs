@@ -27,8 +27,9 @@
  * re-deriving that from source text is the partial evaluator this file
  * deliberately does not contain. A name that some inner scope also binds is
  * refused outright — this walk cannot tell the two bindings apart, and a
- * confidently wrong pattern is worse than a reported gap. Everything still
- * unresolved is reported as such, never dropped.
+ * confidently wrong pattern is worse than a reported gap. A name a module-scope
+ * `let`/`var` binds is refused for the same reason. Everything still unresolved
+ * is reported as such, never dropped.
  *
  * Usage:
  *   node scripts/extract-js-regexes.mjs           → every shipped `.mjs`
@@ -135,6 +136,12 @@ function loadModule(abs) {
 
   for (const st of sf.statements) {
     if (ts.isVariableStatement(st)) {
+      // Only a `const` binding has a single value. A module-scope `let`/`var`
+      // can be reassigned after its initializer, so neither the initializer nor
+      // the live value an import reads is reliably the one a site compiles.
+      // Leaving it out of both `consts` and `owner` is what makes a site built
+      // from such a name report as unresolved instead of as a guess.
+      if (!(st.declarationList.flags & ts.NodeFlags.Const)) continue;
       const isExported = st.modifiers?.some(
         (m) => m.kind === ts.SyntaxKind.ExportKeyword,
       );

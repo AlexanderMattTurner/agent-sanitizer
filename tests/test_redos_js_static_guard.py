@@ -286,6 +286,28 @@ export function valueRegex(parts) {
 }
 """
 
+# A module-scope `let`/`var` holds a different value at each point of the
+# module, so neither its initializer nor the value an import reads is reliably
+# the one a site compiles. Each fixture below states the mismatch outright: the
+# first compiles `^[0-9]{1,8}$` while the initializer spells `A-Za-z0-9`, and
+# the second's line-4 site compiles `^a+$` while the imported binding holds
+# `^b+$`. Resolving either produces a pattern no regex in the file compiles.
+_MUTABLE_FIXTURES = {
+    "let-const-map": """\
+let LABEL_CHARS = "A-Za-z0-9";
+LABEL_CHARS = "0-9";
+const LABEL_RE = new RegExp(`^[${LABEL_CHARS}]{1,8}$`, "u");
+export const matches = (text) => LABEL_RE.test(text);
+""",
+    "exported-let-live-value": """\
+function initialSource() {
+  return "^a+$";
+}
+export let RE = new RegExp(initialSource(), "u");
+RE = new RegExp("^b+$", "u");
+""",
+}
+
 # The resolvable fixture's own shape, with the one difference that a parameter
 # rebinds LABEL_CHARS. The extractor knows the syntax, not the scopes, so it
 # must decline this rather than analyze the module-level value.
@@ -323,6 +345,32 @@ def test_extractor_reports_a_genuinely_dynamic_construction(tmp_path) -> None:
     assert [s["resolved"] for s in sites] == [False]
     exempt_exprs = {expr for _, expr in UNRESOLVABLE_SITES}
     assert not exempt_exprs & {s["expr"] for s in sites}
+
+
+@pytest.mark.parametrize(
+    "name, expected_verdicts",
+    [("let-const-map", [False]), ("exported-let-live-value", [False, True])],
+)
+def test_extractor_declines_a_mutable_binding(
+    tmp_path, name: str, expected_verdicts: list[bool]
+) -> None:
+    # Sibling of the shadow rule: resolving a reassignable binding puts a
+    # pattern in the inventory that the file never compiles, which is a false
+    # analysis rather than a gap. The second fixture's trailing `True` is a site
+    # built from a plain string literal, which stays resolvable — the refusal is
+    # scoped to the site that reads the mutable name.
+    fixture = tmp_path / f"{name}.mjs"
+    fixture.write_text(_MUTABLE_FIXTURES[name], encoding="utf-8")
+
+    extracted = _run_extractor(str(fixture))
+    sites = extracted["constructionSites"]
+    assert [s["resolved"] for s in sites] == expected_verdicts
+
+    # The partition test sees this shape: a declined site is reported, and it
+    # matches no exemption entry, so it fails there instead of vanishing.
+    unresolved_lines = {s["line"] for s in sites if not s["resolved"]}
+    assert not unresolved_lines & {p["line"] for p in extracted["patterns"]}
+    assert not {expr for _, expr in UNRESOLVABLE_SITES} & {s["expr"] for s in sites}
 
 
 def test_extractor_declines_a_shadowed_const(tmp_path) -> None:
