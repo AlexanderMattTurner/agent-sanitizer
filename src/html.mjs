@@ -2220,7 +2220,7 @@ export function sanitizeHtml(text) {
     // an input that reveals one more node per round would pay one per node.
     // This refuses past the ceiling instead, the way MAX_DEPTH in output.mjs
     // refuses past a nesting depth.
-    /* c8 ignore next 9 -- no input is known to reach round MAX_SPLICE_ROUNDS:
+    /* c8 ignore start -- no input is known to reach round MAX_SPLICE_ROUNDS:
        370k adversarial draws over the shapes that DO chain (a stray `<td>` the
        source branch drops, a bogus comment, the adoption-agency reparent that
        flips the branch) settle in at most 2. Defense in depth on the
@@ -2233,6 +2233,7 @@ export function sanitizeHtml(text) {
         splices: [],
         unparseable: true,
       };
+    /* c8 ignore stop */
     /** @type {{ ranges: SpliceRange[], warned: ReturnType<typeof newWarned> }} */
     let scan;
     try {
