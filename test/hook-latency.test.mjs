@@ -9,34 +9,14 @@
  * scan sat in the carve analysis charging ~250 ms per megabyte.
  *
  * Every budget is a RATIO against a calibration measured in this same process:
- * one code-point-by-code-point pass over a fixed 256 KB input, which is the
- * cheapest full read of a text anything here can do. Machine speed and the
- * coverage instrumentation scale both sides, so the ratios survive a slow or
- * instrumented runner in a way wall-clock milliseconds do not — the calibration
- * is written in this file, rather than reaching for a native builtin, precisely
- * so it pays the same instrumentation tax as the code it normalizes.
- *
- * CONTENTION is a different problem, and the ratio does not solve it. A ratio
- * cancels a slower machine because both sides run at that speed; it cannot
- * cancel a BUSY one, because the two sides are timed over blocks of very
- * different length. A calibration pass takes about a millisecond, so
- * {@link measure}'s fastest-of-N estimator reliably catches a quiet slot for it,
- * while a 256 KB parse5 run takes hundreds of milliseconds and on a loaded
- * runner gets no quiet slot in any sample. The divisor stays flat while the
- * numerator inflates, and the ratio reports the load as a regression. So every
- * timed block here is charged in the CPU time the process actually spent
- * (`process.cpuUsage`) rather than the wall clock it occupied: time spent
- * descheduled behind another test worker is not time this code spent. Measured
- * on the dearest cell, four workers of competing load move the wall clock 1.9x
- * and the CPU time 1.06x.
- *
- * The calibration is allocation-free for the same reason. Reading the text with
- * `for (const ch of text)` materializes a string per code point, which makes the
- * pass a measure of the collector's current disposition — and the young
- * generation's size is set by whatever ran before, so the same pass cost 3.0ms
- * in a fresh process and 1.4ms once a parse5 run had grown the heap. A
- * calibration that halves for a reason unrelated to the machine doubles every
- * ratio read against it.
+ * {@link calibrationPass} over a fixed 256 KB input, the cheapest full read of a
+ * text anything here can do. Machine speed and the coverage instrumentation
+ * scale both sides, so the ratios survive a slow or instrumented runner in a way
+ * milliseconds do not — the calibration lives in this file, rather than reaching
+ * for a native builtin, so it pays the same instrumentation tax as the code it
+ * normalizes. A ratio does not cancel a BUSY machine, though, so every timed
+ * block is charged in CPU time rather than wall clock (see {@link measure}).
+ * {@link REALISTIC_MS} is the lone exception.
  */
 import { describe, it, before } from "node:test";
 import assert from "node:assert/strict";
@@ -79,14 +59,17 @@ const grow = (unit, n) => unit.repeat(Math.ceil(n / unit.length)).slice(0, n);
 /**
  * The FASTEST of {@link SAMPLES} timed runs after a warm-up call.
  *
- * Collector pauses and the scheduling the CPU clock still sees only ever ADD
+ * Collector pauses, and the descheduling the CPU clock still sees, only ever ADD
  * time, so the minimum is the closest any of the samples got to the cost of the
  * code itself. A median still carries whatever noise landed on the middle
  * sample, which on a shared runner is most of them. The estimator loses nothing
  * the gates are for: a path that got an order of magnitude slower is an order of
- * magnitude slower in its fastest run too.
+ * magnitude slower in its fastest run too. Eight rather than four because four
+ * tries are not enough on a loaded runner for the collector to miss one: at four
+ * the dearest cells read up to 1.7x their own median, at eight up to 1.1x, which
+ * is what lets the budgets below stay tight enough to catch a doubling.
  */
-const SAMPLES = 4;
+const SAMPLES = 8;
 
 /**
  * A timed block, in ms: the CPU time the process spent, and the wall clock it
@@ -103,6 +86,14 @@ const cpuSince = (mark) => {
 };
 
 /**
+ * A block's cost, in both clocks. `cpu` is what every ratio below reads: a ratio
+ * cancels a slower machine because both sides run at that speed, but not a busy
+ * one, because the two sides are timed over blocks of very different length — a
+ * 1 ms calibration pass reliably catches a quiet slot for its fastest sample and
+ * a 250 ms parse5 run never does, so the divisor stays flat while the numerator
+ * inflates. Time descheduled behind another test worker is not time this code
+ * spent, and the CPU clock does not charge it.
+ *
  * Each call gets its own document from `input(attempt)`. Handing every call the
  * same string measures a memo hit rather than the work: the HTML layer
  * remembers its last parse, so the warm-up builds the tree the timed runs then
@@ -142,18 +133,14 @@ const BLOCK_RING = 8;
  *
  * One 32 KB pass costs a fraction of a millisecond on a fast machine, and that
  * is the number the scaling gate divides by. Timing a batch and dividing keeps
- * the small end meaningful at any machine speed, so the gate covers every case
- * instead of losing the cheap ones to the timer's resolution.
+ * the small end meaningful at any machine speed.
  *
- * `blockMs` is what makes the two sides of a scaling ratio comparable, and the
- * caller passes the cost of the side it will be divided into. Fastest-of-N is
- * only a fair estimator between blocks of similar length: a 12 ms call can
- * finish entirely between two collections and four tries usually find one that
- * does, while a 250 ms call always pays a share of the collector, so the short
- * side reads low and the ratio reads high. Matching the block lengths amortizes
- * the collector equally over both. Measured on `sanitizeText/html-prose`, a
- * fixed 5 ms block put the 8x ratio at 14.1x–22.2x against a 24x limit; matched
- * blocks put it at 13.4x–17.4x.
+ * `blockMs` is what makes the two sides of a scaling ratio comparable: the
+ * caller passes the cost of the side it will be divided into, since
+ * fastest-of-N is fair only between blocks of similar length (see
+ * {@link measure}). Under {@link MIN_BLOCK_MS} the floor wins and the bias runs
+ * the other way — those cells sit an order of magnitude clear of
+ * {@link SCALING_LIMIT}.
  * @param {(attempt: number) => string} input
  * @param {(text: string) => unknown | Promise<unknown>} fn
  * @param {number} blockMs
@@ -161,9 +148,11 @@ const BLOCK_RING = 8;
  */
 async function measurePerCall(input, fn, blockMs) {
   const single = (await measure(input, fn)).cpu;
-  const repeats = Math.ceil(
-    Math.max(MIN_BLOCK_MS, blockMs) / Math.max(single, Number.EPSILON),
-  );
+  // A zero would divide into a repeat count no loop finishes. The resolution
+  // probe in `before` is what normally catches a clock too coarse to measure
+  // these calls; this refuses to hang if one gets past it.
+  assert.ok(single > 0, "the CPU clock reported no time for a timed call");
+  const repeats = Math.ceil(Math.max(MIN_BLOCK_MS, blockMs) / single);
   if (repeats <= 1) return single;
   // The block cycles a ring of distinct documents for the same reason `measure`
   // varies its input, and a ring rather than one document per call because
@@ -203,23 +192,24 @@ const SHAPES = {
     grow("ordinary instruction text " + cp(0x200b).repeat(12) + "\n", n),
 };
 
-// Ceilings in calibration units for the shapes an entry does real work on. Each
-// is 1.3x the DEAREST reading across three environments: standalone, under the
-// parallel coverage run, and standalone against four workers of competing CPU
-// and allocation load. The instrumented run reads LOWER on every heavy cell,
-// because c8 charges this file's calibration harder than it charges the code
-// under test, so the ceilings are set by the two uninstrumented environments.
-// The dearest reading already contains a loaded run's collector spikes — up to
-// 1.7x that case's median — so 1.3x on top covers run-to-run variation and
-// nothing more: enough that a green run means the path is where it was left,
-// tight enough that a doubling is red. Anything with more slack than that is a
-// ceiling nothing is under. CHEAP_BUDGET is tighter, and each entry's `cheap`
-// list names the shapes that entry has no per-code-point work to do on: past a
-// dozen passes' worth of work, such an input is being analyzed for something it
-// does not contain. The lists differ per entry because the entries read
-// different things — a soft hyphen every other character is real work for the
-// prompt classifier's scatter count and almost none for the strip the output
-// path runs.
+/**
+ * The ceiling, in calibration units, for a shape an entry has no per-code-point
+ * work to do on: past a dozen passes' worth of work, such an input is being
+ * analyzed for something it does not contain. Each entry's `cheap` list names
+ * its own such shapes, because the entries read different things — a soft hyphen
+ * every other character is real work for the prompt classifier's scatter count
+ * and almost none for the strip the output path runs.
+ *
+ * This and every `budget` entry below is 1.3x the DEAREST reading across three
+ * environments: standalone, under the parallel coverage run, and standalone
+ * against four workers of competing CPU and allocation load. The instrumented
+ * run reads LOWER on every heavy cell, since c8 charges this file's calibration
+ * harder than the code under test, so the ceilings come from the two
+ * uninstrumented ones. Across those runs no case reads more than 1.12x its
+ * own median, so 1.3x covers run-to-run variation and nothing more — every
+ * ceiling here sits under twice its case's median, which is the standard: a
+ * doubling is red, and anything looser is a ceiling nothing is under.
+ */
 const CHEAP_BUDGET = 11;
 
 /**
@@ -234,12 +224,12 @@ const ENTRIES = {
     // ANSI, and HTML-shaped text carries neither.
     cheap: ["ascii-prose", "cjk-prose", "emoji-prose", "html-prose"],
     budget: {
-      "joiner-dense": 47,
-      "vs-dense": 42,
+      "joiner-dense": 31,
+      "vs-dense": 34,
       "payload-run": 84,
       "payload-scattered": 29,
-      "emoji-zwj": 52,
-      "run-dense": 44,
+      "emoji-zwj": 31,
+      "run-dense": 48,
     },
   },
   sanitizeText: {
@@ -260,12 +250,12 @@ const ENTRIES = {
       // for: it is parse5 building a 256 KB fragment, so it moves with the
       // parser rather than with anything here. SUPERLINEAR below is what
       // actually holds this path.
-      "html-prose": 467,
-      "joiner-dense": 45,
-      "vs-dense": 39,
-      "payload-run": 57,
-      "emoji-zwj": 39,
-      "run-dense": 41,
+      "html-prose": 365,
+      "joiner-dense": 43,
+      "vs-dense": 38,
+      "payload-run": 59,
+      "emoji-zwj": 38,
+      "run-dense": 32,
     },
   },
   scanText: {
@@ -280,10 +270,10 @@ const ENTRIES = {
       // One 256 KB run decodes as a single payload, so this case is dominated by
       // one large allocation and swings with the collector — the widest budget
       // here buys tolerance for that rather than for a slower machine.
-      "payload-run": 87,
-      "payload-scattered": 16,
+      "payload-run": 64,
+      "payload-scattered": 17,
       "emoji-zwj": 19,
-      "run-dense": 39,
+      "run-dense": 34,
     },
   },
 };
@@ -327,7 +317,7 @@ const SUPERLINEAR = {
  */
 const FOLD_GLYPH = "\u0430";
 const foldText = (n) => grow(FOLD_GLYPH + "bcdefghijklmn ", n);
-const FOLD_BUDGET = 17;
+const FOLD_BUDGET = 16;
 
 /**
  * The one gate that promises a NUMBER rather than a ratio.
@@ -335,14 +325,12 @@ const FOLD_BUDGET = 17;
  * Every budget above is machine-relative on purpose, and a table of ratios can
  * stay green while each hook takes a second, so the thing a user actually
  * notices \u2014 the wait before a session starts, the wait before a prompt goes \u2014
- * needs a ceiling in milliseconds — and, alone here, in WALL-CLOCK
- * milliseconds: a user waiting on a hook waits through the time it spends
- * descheduled too, so the CPU clock the ratios use would understate exactly the
- * thing this gate promises. The input is ordinary text at 256 KB, which
- * is several times any real instruction set and larger than most pastes; the
- * adversarial shapes keep their ratio budgets, because a ceiling wide enough for
- * 256 KB of nothing but zero-width space on a slow runner would not be a
- * guarantee about anything.
+ * needs a ceiling in milliseconds — and, alone here, in WALL-CLOCK milliseconds,
+ * since a user waits through descheduling too and the CPU clock the ratios use
+ * would understate the very thing this gate promises. The input is ordinary text
+ * at 256 KB, larger than most pastes; the adversarial shapes keep their ratio
+ * budgets, because a ceiling wide enough for 256 KB of nothing but zero-width
+ * space on a slow runner would not be a guarantee about anything.
  *
  * c8 multiplies wall clock by roughly seven here, which is a fact about the
  * instrumentation and not about the hook, so this half stands down under
@@ -395,6 +383,33 @@ function calibrationPass(text) {
 const calibrate = async () =>
   (await measure(() => CALIBRATION_TEXT, calibrationPass)).cpu;
 
+/** How long a probe block busy-waits, and how many it runs. */
+const PROBE_MS = 0.2;
+const PROBE_BLOCKS = 40;
+
+/**
+ * The finest CPU-time reading this clock resolves, in ms.
+ *
+ * `process.cpuUsage` reports microseconds, but a kernel that accumulates rusage
+ * at tick granularity only ever reports whole ticks — 1 ms, or 4 ms — and the
+ * calibration pass costs about one millisecond, so on such a kernel the unit is
+ * quantized to within its own size and no ratio here means anything. Busy-wait
+ * blocks well under a tick and keep the smallest non-zero reading: it comes back
+ * near {@link PROBE_MS} on a microsecond clock and at a whole tick otherwise.
+ */
+function clockResolutionMs() {
+  let finest = Infinity;
+  for (let i = 0; i < PROBE_BLOCKS; i++) {
+    const mark = process.cpuUsage();
+    const until = performance.now() + PROBE_MS;
+    let spin = 0;
+    while (performance.now() < until) spin += Math.sqrt(spin + 1);
+    const spent = cpuSince(mark);
+    if (spent > 0 && spent < finest) finest = spent;
+  }
+  return finest;
+}
+
 /**
  * `fn`'s CPU cost in calibration units, calibrating on BOTH sides of the
  * measurement and taking the larger unit. The test runner runs files in
@@ -439,8 +454,19 @@ const timing = {
   foldChanged: false,
 };
 
+/** The coarsest clock these gates can be read on. A reading no finer than this
+ * cannot resolve the calibration pass, and `measurePerCall` would divide a
+ * matched block by a zero. Checked here rather than in a test body: every
+ * measurement below is downstream of it. */
+const RESOLUTION_CEILING_MS = 0.5;
+
 before(async () => {
   if (MUTATION_RUN) return;
+  const resolution = clockResolutionMs();
+  assert.ok(
+    resolution <= RESOLUTION_CEILING_MS,
+    `process.cpuUsage resolves no finer than ${resolution.toFixed(3)}ms on this kernel, so the calibration pass is quantized to within its own size`,
+  );
   timing.unit = await calibrate();
   for (const { entry, shape, name } of CASES) {
     const { run } = ENTRIES[entry];
@@ -651,7 +677,7 @@ describe("hook-path latency", () => {
       );
       return;
     }
-    // The other half of the ratchet. A ceiling of 12x on a path that grew
+    // The other half of the ratchet. SUPERLINEAR.limit on a path that grew
     // linearly would gate nothing at all, so this fails the moment the HTML
     // layer stops being super-linear — and the fix is to delete SUPERLINEAR and
     // let the ordinary scaling gate own it.
