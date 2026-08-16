@@ -64,19 +64,43 @@ jobs:
   # event bypasses the title/author skips entirely — the label IS the request to
   # review a PR the skips would otherwise drop — and the script confirms the
   # label is `needs-auto-review` before running (any other label is a no-op).
+  #
+  # The skip set applies to a TRUSTED PR only. A PR title is author-controlled,
+  # so an untrusted author who may skip by title chooses whether their own code
+  # is read — and the auto-approve job below turns that same title into an
+  # approving review. Trust is the PR being same-repo (a fork cannot write a
+  # branch here) or the author being an OWNER/MEMBER/COLLABORATOR; both come
+  # from the event payload, which GitHub sets and the actor cannot spoof.
+  # `author_association` on a fork PR reflects the BASE repo's permissions.
+  #
+  # This gate and the auto-approve job's must move TOGETHER. Guarding only the
+  # approval would leave a fork PR titled `chore:` skipped here and unapproved
+  # there — no review, no approval, and no event that produces either. Skipping
+  # untrusted PRs from the skip set is what keeps the two exhaustive: every PR
+  # is reviewed or auto-approved, never neither.
   decide:
     name: Decide whether to review
     if: >-
       github.event.action == 'labeled' ||
       (
         github.event.pull_request.draft == false &&
-        github.event.pull_request.user.type != 'Bot' &&
-        !startsWith(github.event.pull_request.title, 'chore:') &&
-        !startsWith(github.event.pull_request.title, 'chore(') &&
-        !startsWith(github.event.pull_request.title, 'style:') &&
-        !startsWith(github.event.pull_request.title, 'style(') &&
-        !startsWith(github.event.pull_request.title, 'release:') &&
-        !startsWith(github.event.pull_request.title, 'release(')
+        !(
+          (
+            github.event.pull_request.head.repo.full_name == github.repository ||
+            github.event.pull_request.author_association == 'OWNER' ||
+            github.event.pull_request.author_association == 'MEMBER' ||
+            github.event.pull_request.author_association == 'COLLABORATOR'
+          ) &&
+          (
+            github.event.pull_request.user.type == 'Bot' ||
+            startsWith(github.event.pull_request.title, 'chore:') ||
+            startsWith(github.event.pull_request.title, 'chore(') ||
+            startsWith(github.event.pull_request.title, 'style:') ||
+            startsWith(github.event.pull_request.title, 'style(') ||
+            startsWith(github.event.pull_request.title, 'release:') ||
+            startsWith(github.event.pull_request.title, 'release(')
+          )
+        )
       )
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -330,13 +354,32 @@ jobs:
   # re-clear a skipped PR would merge on its first head and be blocked forever
   # after its second.
   #
-  # Title/author come from the event payload (set by GitHub, unspoofable by the
-  # triggering actor). This posts a review and a check run, runs no PR code, and
-  # holds pull-requests:write + checks:write and nothing else.
+  # THE TRUST GATE BELOW IS WHAT STOPS A PR FROM APPROVING ITSELF. The three
+  # steps here clear three merge levers — an approving review, the "Review
+  # findings resolved" check run, and the "Automated review posted" status — and
+  # the skip set they key on is the PR TITLE, which the PR author writes. The
+  # author (`user.type`) does come from the event payload and cannot be spoofed;
+  # the title carries no such guarantee, so without this gate any fork PR named
+  # `chore: …` cleared all three levers and was never read.
+  #
+  # Trusted means same-repo (a fork author cannot write a branch here) or an
+  # OWNER/MEMBER/COLLABORATOR author — both payload fields GitHub sets. It is
+  # the same predicate the `decide` job skips on, and the two are exhaustive by
+  # construction: an untrusted PR is never skipped there, so it gets the real
+  # review instead of the approval it cannot earn here.
+  #
+  # This posts a review and a check run, runs no PR code, and holds
+  # pull-requests:write + checks:write and nothing else.
   auto-approve-skipped:
     name: Auto-approve low-risk and bot PRs the reviewer skips
     if: >-
       github.event.pull_request.draft == false &&
+      (
+        github.event.pull_request.head.repo.full_name == github.repository ||
+        github.event.pull_request.author_association == 'OWNER' ||
+        github.event.pull_request.author_association == 'MEMBER' ||
+        github.event.pull_request.author_association == 'COLLABORATOR'
+      ) &&
       (
         github.event.pull_request.user.type == 'Bot' ||
         startsWith(github.event.pull_request.title, 'chore:') ||
