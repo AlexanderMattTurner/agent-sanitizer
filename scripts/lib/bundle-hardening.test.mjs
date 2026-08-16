@@ -239,7 +239,7 @@ const REQUIRE_SHAPES = [
     'var patch = require2("./data/patch.json");',
     ["./data/patch.json"],
   ],
-  // The three computed shapes. None can be allowlisted, so each fails the build.
+  // The four computed shapes. None can be allowlisted, so each fails the build.
   [
     "variable specifier",
     'const p = "./data/patch.json"; require2(p);',
@@ -255,6 +255,7 @@ const REQUIRE_SHAPES = [
     'require2("./data/" + name + ".json");',
     [COMPUTED_SPECIFIER],
   ],
+  ["no argument", "require2();", [COMPUTED_SPECIFIER]],
   // The two probes every text scanner must survive. `inlineRuntimeJsonRequires`
   // splices dependency JSON into the bundle and `legalComments: "eof"` appends
   // third-party comments to it, so both shapes are present in shipped bytes.
