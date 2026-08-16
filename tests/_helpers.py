@@ -91,9 +91,7 @@ def init_test_repo(path: Path) -> None:
     in any environment (including CI runners with enforced commit signing)."""
     path.mkdir(parents=True, exist_ok=True)
     env = git_env()
-    subprocess.run(
-        ["git", "init", "-q", "-b", "main"], cwd=path, env=env, check=True
-    )
+    subprocess.run(["git", "init", "-q", "-b", "main"], cwd=path, env=env, check=True)
     for k, v in [
         ("commit.gpgsign", "false"),
         ("tag.gpgsign", "false"),
