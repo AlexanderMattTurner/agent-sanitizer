@@ -30,6 +30,7 @@ import { layer2Placeholder } from "../../src/html.mjs";
 
 import {
   BUNDLE_TARGETS,
+  COMPUTED_SPECIFIER,
   assertNoRuntimeRequires,
   bundleHardened,
   bundleTarget,
@@ -214,6 +215,86 @@ for (const target of BUNDLE_TARGETS) {
     assert.equal(SMOKE_DRIVERS[target.name](t, artifact), expected);
   });
 }
+
+/**
+ * What `runtimeRequires` must answer on the shapes this build actually emits.
+ * Each case is a source form a text scan gets wrong in one direction or the
+ * other; naming which one it is here is what keeps the case from being
+ * redundant with its neighbours.
+ * @type {readonly [string, string, readonly string[]][]}
+ */
+const REQUIRE_SHAPES = [
+  // esbuild pretty-prints (`minify: false`), so it wraps a long argument list
+  // onto its own line. This is the reachable false negative: a wrapped require
+  // in a future dependency would pass the guard and ship.
+  [
+    "wrapped across lines",
+    'require2(\n  "./data/patch.json"\n)',
+    ["./data/patch.json"],
+  ],
+  // The positive control: the one shape a text scan already got right, so a
+  // table that failed on every row would be visible as a bug in the table.
+  [
+    "single line",
+    'var patch = require2("./data/patch.json");',
+    ["./data/patch.json"],
+  ],
+  // The three computed shapes. None can be allowlisted, so each fails the build.
+  [
+    "variable specifier",
+    'const p = "./data/patch.json"; require2(p);',
+    [COMPUTED_SPECIFIER],
+  ],
+  [
+    "template literal",
+    "require2(`./data/${name}.json`);",
+    [COMPUTED_SPECIFIER],
+  ],
+  [
+    "concatenation",
+    'require2("./data/" + name + ".json");',
+    [COMPUTED_SPECIFIER],
+  ],
+  // The two probes every text scanner must survive. `inlineRuntimeJsonRequires`
+  // splices dependency JSON into the bundle and `legalComments: "eof"` appends
+  // third-party comments to it, so both shapes are present in shipped bytes.
+  [
+    "inside a string literal",
+    'var json = {"note": "require(\'left-pad\')"};',
+    [],
+  ],
+  ["inside a comment", '// TODO: require("left-pad") here\n', []],
+];
+
+for (const [shape, source, expected] of REQUIRE_SHAPES)
+  test(`runtimeRequires reads a require ${shape}`, () => {
+    assert.deepEqual(runtimeRequires(source), [...expected]);
+  });
+
+test("a computed specifier fails the build", () => {
+  // The whole point of reporting `<computed>`: an allowlist cannot contain it,
+  // so a require whose target the build cannot read is refused rather than
+  // passed. The wide allowlist proves the refusal is not an allowlist miss.
+  assert.throws(
+    () =>
+      assertNoRuntimeRequires('const p = "./data/patch.json"; require2(p);', [
+        "./data/patch.json",
+        "namespace-guard",
+      ]),
+    /runtime require\(\) of: <computed>.*not a string literal/s,
+  );
+  // The explanation of `<computed>` stays out of a message that has no computed
+  // survivor to explain.
+  assert.throws(
+    () => assertNoRuntimeRequires('require2("../data/patch.json");', []),
+    (err) => !/not a string literal/.test(err.message),
+  );
+});
+
+test("a bundle that is not valid ESM fails loud", () => {
+  // A parse error must not read as "this bundle has no runtime requires".
+  assert.throws(() => runtimeRequires("const = ;"), SyntaxError);
+});
 
 test("the require guard rejects a survivor and accepts the allowlist", () => {
   // The guard is what makes a would-be-broken bundle unwritable, so prove it
