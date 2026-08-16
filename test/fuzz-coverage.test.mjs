@@ -11,11 +11,11 @@
  * invariant. A percentage can't catch "this parser has no security invariant";
  * requiring a named fuzz target for each one can.
  *
- * Each obligation list is one half of a PARTITION over the population it draws
- * from: FUZZ_REQUIRED + FUZZ_EXEMPT cover every exported function,
+ * Each obligation list is one part of a PARTITION over the population it draws
+ * from: FUZZ_REQUIRED + FUZZ_EXEMPT + FUZZ_TODO cover every exported function,
  * SEMANTIC_FUZZ_REQUIRED + SEMANTIC_FUZZ_EXEMPT cover every required name, and
  * IN_SCOPE + OUT_OF_SCOPE cover every discovered suite. A required list on its
- * own proves only what it names; the exempt half is what makes a new export or
+ * own proves only what it names; the other parts are what make a new export or
  * a new suite impossible to land without a human choosing a side.
  */
 import { describe, it } from "node:test";
@@ -93,25 +93,13 @@ const FUZZ_REQUIRED = [
 ];
 
 /**
- * The other half of the export partition: every exported function that owes no
- * fuzz target, and the one-line reason it owes none. A `TODO:` reason marks a
- * genuine gap that is tracked rather than denied — the name still cannot be
- * deleted or renamed without this gate noticing, and the next reader sees it.
+ * The DENIAL part of the export partition: every exported function that owes no
+ * fuzz target, and the one-line reason it owes none. Every entry here is a
+ * settled "no" — a name that owes a suite it does not have belongs in
+ * {@link FUZZ_TODO}, so a deferral cannot ride in as a reason string.
  * @type {Readonly<Record<string, string>>}
  */
 const FUZZ_EXEMPT = Object.freeze({
-  // ── genuine gaps, tracked ────────────────────────────────────────────────
-  anchorSpans:
-    "TODO: owes a property suite — it anchors a prefix/suffix over untrusted Write content",
-  matchesSecretHint:
-    "TODO: owes a property suite — a fail-open pre-gate for the secret scan",
-  needsMarkdownPipeline:
-    "TODO: owes a property suite — a fail-open pre-gate for Layers 2 and 3",
-  overlapAwareCount:
-    "TODO: owes a property suite — it decides Edit ambiguity over untrusted needles",
-  pairDiskSpans:
-    "TODO: owes a property suite — it maps redaction pairs onto on-disk spans",
-
   // ── predicates and lookups: no parse or transform step of their own ──────
   closingTagName: "reads one tag name out of an already-tokenized HTML value",
   contextScopeContradiction:
@@ -173,6 +161,25 @@ const FUZZ_EXEMPT = Object.freeze({
   toUtf16View:
     "converts a view between offset spaces, validated at construction",
   viewMapDefect: "self-check over a view the pipeline built",
+});
+
+/**
+ * The DEFERRAL part of the export partition: every exported function that owes
+ * a property suite but does not have one yet, and the untrusted input it takes.
+ *
+ * A named list rather than a reason-string convention inside FUZZ_EXEMPT,
+ * because both edits a deferral allows must be visible. Growing the deferred
+ * set adds a line here; and demoting a name out of FUZZ_REQUIRED deletes its
+ * suite obligation, which the partition forces to read as a deletion from one
+ * list and an addition to another.
+ * @type {Readonly<Record<string, string>>}
+ */
+const FUZZ_TODO = Object.freeze({
+  anchorSpans: "anchors a prefix/suffix over untrusted Write content",
+  matchesSecretHint: "a fail-open pre-gate for the secret scan",
+  needsMarkdownPipeline: "a fail-open pre-gate for Layers 2 and 3",
+  overlapAwareCount: "decides Edit ambiguity over untrusted needles",
+  pairDiskSpans: "maps redaction pairs onto on-disk spans",
 });
 
 // Entry points that owe SEMANTIC-CORRECTNESS fuzzing, not just structural
@@ -705,24 +712,28 @@ for (const [name, mod] of [
 }
 
 /**
- * Assert `required` and `exempt` partition `population` exactly, so a member
- * of the population cannot exist without a human having classified it.
+ * Assert `parts` partition `population` exactly, so a member of the population
+ * cannot exist without a human having classified it into exactly ONE part. The
+ * concatenation is compared element-wise, so a name listed in two parts fails
+ * here as loudly as a name listed in none.
  * @param {string[]} population
- * @param {string[]} required
- * @param {string[]} exempt
+ * @param {string[][]} parts
  * @param {string} hint  what the reader must do about a mismatch
  */
-const assertPartition = (population, required, exempt, hint) => {
+const assertPartition = (population, parts, hint) => {
   assert.ok(
     population.length > 0,
     "empty population — the partition would hold vacuously",
   );
-  assert.deepEqual(
-    [...population].sort(),
-    [...required, ...exempt].sort(),
-    hint,
-  );
+  assert.deepEqual([...population].sort(), parts.flat().sort(), hint);
 };
+
+/** The three parts of the export partition, in classification order. */
+const exportParts = [
+  FUZZ_REQUIRED,
+  Object.keys(FUZZ_EXEMPT),
+  Object.keys(FUZZ_TODO),
+];
 
 describe("fuzz-coverage obligation gate", () => {
   it("discovers at least one fast-check suite (gate is not vacuous)", () => {
@@ -749,35 +760,85 @@ describe("fuzz-coverage obligation gate", () => {
     );
   });
 
-  it("every exported function is either fuzz-required or exempt with a reason", () => {
+  it("every exported function is fuzz-required, exempt, or deferred with a reason", () => {
     assertPartition(
       [...exportedFunctions.keys()],
-      FUZZ_REQUIRED,
-      Object.keys(FUZZ_EXEMPT),
+      exportParts,
       "a new export must be classified: add it to FUZZ_REQUIRED and give it a " +
-        "property suite, or to FUZZ_EXEMPT with the one-line reason it owes none",
+        "property suite, to FUZZ_EXEMPT with the one-line reason it owes none, " +
+        "or to FUZZ_TODO with the untrusted input it takes",
+    );
+    for (const map of [FUZZ_EXEMPT, FUZZ_TODO])
+      for (const [name, reason] of Object.entries(map))
+        assert.ok(reason.length > 0, `${name} carries an empty reason`);
+  });
+
+  it("no FUZZ_EXEMPT reason reads as a deferral", () => {
+    // FUZZ_EXEMPT is a denial; a promise written into a reason string is the
+    // escape hatch FUZZ_TODO exists to make visible instead.
+    const readsAsDeferral = (reason) => /^(todo|fixme)\b/i.test(reason);
+    assert.ok(
+      readsAsDeferral("TODO: owes a property suite"),
+      "the deferral shape matches nothing — this assertion would pass vacuously",
+    );
+    assert.ok(
+      Object.keys(FUZZ_TODO).length > 0,
+      "FUZZ_TODO is empty, so no deferral has anywhere honest to go",
     );
     for (const [name, reason] of Object.entries(FUZZ_EXEMPT))
-      assert.ok(reason.length > 0, `${name} carries an empty exemption reason`);
+      assert.ok(
+        !readsAsDeferral(reason),
+        `${name}'s exemption reads as a deferral — move it to FUZZ_TODO`,
+      );
   });
 
   it("the export partition rejects an unclassified name (assertion is not vacuous)", () => {
+    const [required, exempt, todo] = exportParts;
     const population = [...exportedFunctions.keys(), "syntheticNewExport"];
     assert.throws(
       () =>
         assertPartition(
           population,
-          FUZZ_REQUIRED,
-          Object.keys(FUZZ_EXEMPT),
+          exportParts,
           "an unclassified export must fail the partition",
+        ),
+      assert.AssertionError,
+    );
+    // Any ONE of the three classifications satisfies it, so a genuinely new or
+    // undecided export has a side to be put on.
+    for (const parts of [
+      [[...required, "syntheticNewExport"], exempt, todo],
+      [required, [...exempt, "syntheticNewExport"], todo],
+      [required, exempt, [...todo, "syntheticNewExport"]],
+    ])
+      assertPartition(
+        population,
+        parts,
+        "classifying the synthetic export must satisfy the same partition",
+      );
+  });
+
+  it("the export partition rejects a name that is both required and deferred", () => {
+    // The demotion this partition exists to make visible: moving a name out of
+    // FUZZ_REQUIRED into FUZZ_TODO deletes its property-suite obligation, so a
+    // copy that leaves the FUZZ_REQUIRED entry behind must fail rather than
+    // read as a green no-op.
+    const [required, exempt, todo] = exportParts;
+    const population = [...exportedFunctions.keys()];
+    const [demoted, ...stillRequired] = required;
+    assert.throws(
+      () =>
+        assertPartition(
+          population,
+          [required, exempt, [...todo, demoted]],
+          "a name in two parts must fail the partition",
         ),
       assert.AssertionError,
     );
     assertPartition(
       population,
-      FUZZ_REQUIRED,
-      [...Object.keys(FUZZ_EXEMPT), "syntheticNewExport"],
-      "classifying the synthetic export must satisfy the same partition",
+      [stillRequired, exempt, [...todo, demoted]],
+      "an honest demotion — one name moved, not copied — must still partition",
     );
   });
 
@@ -924,8 +985,7 @@ describe("semantic-fuzz obligation gate", () => {
     // neither list is an obligation nobody decided.
     assertPartition(
       FUZZ_REQUIRED,
-      SEMANTIC_FUZZ_REQUIRED,
-      Object.keys(SEMANTIC_FUZZ_EXEMPT),
+      [SEMANTIC_FUZZ_REQUIRED, Object.keys(SEMANTIC_FUZZ_EXEMPT)],
       "every FUZZ_REQUIRED name must be in SEMANTIC_FUZZ_REQUIRED or in " +
         "SEMANTIC_FUZZ_EXEMPT with the reason its precision is asserted elsewhere",
     );
@@ -1046,8 +1106,7 @@ describe("threat-alphabet domain coverage", () => {
   it("every discovered fast-check suite is in scope or out of scope", () => {
     assertPartition(
       fuzzFiles.map((file) => file.name),
-      Object.keys(IN_SCOPE_MEMBERS),
-      Object.keys(OUT_OF_SCOPE),
+      [Object.keys(IN_SCOPE_MEMBERS), Object.keys(OUT_OF_SCOPE)],
       "a new fast-check suite must be classified in test/threat-codepoints.mjs: " +
         "add it to IN_SCOPE with the alphabet members it owes, or to " +
         "OUT_OF_SCOPE with the one-line reason it ingests none",

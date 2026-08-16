@@ -148,6 +148,8 @@ export const OUT_OF_SCOPE = Object.freeze({
   // ── post-Layer-1 consumers: Layer 1 strips every invisible and ANSI byte
   // before these layers run, so seeding the alphabet here tests a state the
   // layer never sees. Surrogate/astral totality rides in on fc.string().
+  "confusable-host-property.test.mjs":
+    "Layer 3 reads link destinations in documents Layer 1 has already cleaned",
   "exfil-property.test.mjs":
     "Layer 3 reads URL and markdown link destinations, which Layer 1 has already cleaned",
   "html-exfil-semantic-fuzz.test.mjs":
@@ -165,8 +167,6 @@ export const OUT_OF_SCOPE = Object.freeze({
     "folds against an injected scanner over a confusable glyph table",
   "confusables-semantic-fuzz.test.mjs":
     "fold precision over genuine non-Latin words versus confusable lookalikes",
-  "confusable-host-property.test.mjs":
-    "reads hostnames the WHATWG URL parser already resolved, not raw text",
   "splice-property.test.mjs":
     "splices ranges and needle matches an earlier layer resolved",
   "view-map-property.test.mjs":
