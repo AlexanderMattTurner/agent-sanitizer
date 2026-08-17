@@ -8,6 +8,12 @@ adhere to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+## [2.43.8] - 2026-08-17
+
+### Fixed
+
+- Slow hook CPU time is now accurately reported instead of being masked by sanitizer overhead detection on busy hosts.
+
 ## [2.43.6] - 2026-08-16
 
 ### Fixed
