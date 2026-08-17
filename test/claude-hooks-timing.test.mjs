@@ -489,9 +489,17 @@ describe("runJudgeCli times every judge hook", () => {
     assert.match(stdout, /PERFORMANCE/);
     assert.match(stdout, /pretooluse-sanitize/);
     // A judge that SLEPT past the budget is the contended-host case in
-    // miniature: the wall-clock is real and the CPU behind it is nil, and the
+    // miniature: the wall-clock is real, most of it bought no work, and the
     // notice has to say so rather than call the whole second sanitizer work.
-    assert.match(stdout, /used 0\.0s of CPU/);
+    // Compared, not pinned to 0.0s: the same window really does load the
+    // control plane, and on a cold runner that is a tenth of a second of CPU.
+    const timings = stdout.match(/took (\d+\.\d)s .*?used (\d+\.\d)s of CPU/u);
+    assert.ok(timings, stdout);
+    const [, wall, cpu] = timings;
+    assert.ok(
+      Number(cpu) < Number(wall),
+      `a sleeping judge must report CPU (${cpu}s) below wall (${wall}s)`,
+    );
     assert.ok(
       errs.some((line) => line.includes("PERFORMANCE")),
       "the timing must also reach stderr",
