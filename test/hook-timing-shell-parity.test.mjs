@@ -114,6 +114,21 @@ describe("hook timing: the shell port matches the node module", () => {
     );
   });
 
+  it("ports the no-CPU wording, which is the only one it can measure", () => {
+    // The shell has no per-process CPU reading to give, so what it must match
+    // is the node line for a caller that knows none. Pinning the CPU form as
+    // DIFFERENT is what fails here if the node default ever starts carrying a
+    // number the shell cannot produce.
+    const shell = sh(["slow_hook_notice", "safe-launch PreToolUse", "7200"]);
+    assert.equal(shell, slowHookNotice("safe-launch PreToolUse", 7200));
+    assert.notEqual(
+      shell,
+      slowHookNotice("safe-launch PreToolUse", 7200, undefined, {
+        cpuMs: 300,
+      }),
+    );
+  });
+
   it("honors an explicit threshold argument, as the node signature does", () => {
     assert.equal(
       sh(["slow_hook_notice", "h", "500", "100"]),
@@ -157,7 +172,7 @@ describe("hook timing: the shell port matches the node module", () => {
     const hook = sh(["slow_hook_notice", "x", "90000"]);
     const provision = sh(["slow_provision_notice", "x", "90000"]);
     assert.notEqual(hook, provision);
-    assert.match(hook, /every affected call pays it/);
+    assert.match(hook, /Wall-clock alone cannot separate/);
     assert.match(provision, /paid once per install/);
   });
 

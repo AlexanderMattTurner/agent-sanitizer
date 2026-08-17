@@ -36,9 +36,36 @@ function fakeClock(...deltas) {
 
 describe("startHookTimer", () => {
   it("reports the elapsed milliseconds, and can be read more than once", () => {
-    const elapsed = startHookTimer(fakeClock(250, 400));
-    assert.equal(elapsed(), 250);
-    assert.equal(elapsed(), 650);
+    const timer = startHookTimer(fakeClock(250, 400));
+    assert.equal(timer.wallMs(), 250);
+    assert.equal(timer.wallMs(), 650);
+  });
+
+  it("reports CPU separately from wall-clock", () => {
+    // The split the notice is built on: a run that waited 7.2s while computing
+    // 0.3s of it is a busy machine, not a slow sanitizer.
+    const timer = startHookTimer(fakeClock(7200), fakeClock(300));
+    assert.equal(timer.wallMs(), 7200);
+    assert.equal(timer.cpuMs(), 300);
+  });
+
+  it("measures real CPU through the default clock", () => {
+    // Non-vacuity for the production path: the injected-clock cases above
+    // would all pass if process.cpuUsage() were never wired in at all.
+    const timer = startHookTimer();
+    let sink = 0;
+    for (let i = 0; i < 5_000_000; i++) sink += i % 7;
+    assert.ok(sink > 0);
+    assert.ok(timer.cpuMs() > 0, "a busy loop must show up as CPU");
+  });
+
+  it("charges a hook that WAITS no CPU it did not spend", async () => {
+    // The false positive this whole split closes: a hook parked on a loaded
+    // scheduler or a slow socket burns wall-clock and no processor time.
+    const timer = startHookTimer();
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    assert.ok(timer.wallMs() >= 45, `wall was ${timer.wallMs()}`);
+    assert.ok(timer.cpuMs() < 40, `sleeping cost ${timer.cpuMs()}ms of CPU`);
   });
 });
 
@@ -51,20 +78,43 @@ describe("provisioning is not the hook's cost", () => {
   it("subtracts a provisioning window that runs inside the timer", async () => {
     let t = 0;
     const clock = () => t;
-    const elapsed = startHookTimer(clock);
+    const timer = startHookTimer(clock);
     t += 50; // real hook work
     await excludeProvisioning(async () => {
       t += 30_000; // a dependency install we merely waited out
     }, clock);
     t += 20; // more real work
-    assert.equal(elapsed(), 70);
-    assert.equal(slowHookNotice("h", elapsed()), null);
+    assert.equal(timer.wallMs(), 70);
+    assert.equal(slowHookNotice("h", timer.wallMs()), null);
+  });
+
+  it("subtracts the CPU a provisioning step spent, not just its wait", async () => {
+    // awaitLazyDependency imports the engine INSIDE a provisioning window, and
+    // that import is real in-process work — charged, it would hand the first
+    // call of every session a CPU figure it never spent.
+    let t = 0;
+    let cpu = 0;
+    const clock = () => t;
+    const cpuClock = () => cpu;
+    const timer = startHookTimer(clock, cpuClock);
+    t += 50;
+    cpu += 40; // real hook work
+    await excludeProvisioning(
+      async () => {
+        t += 3_000;
+        cpu += 900; // importing the engine
+      },
+      clock,
+      cpuClock,
+    );
+    assert.equal(timer.wallMs(), 50);
+    assert.equal(timer.cpuMs(), 40);
   });
 
   it("charges provisioning that FAILED, so a failed wait is not reported as slow", async () => {
     let t = 0;
     const clock = () => t;
-    const elapsed = startHookTimer(clock);
+    const timer = startHookTimer(clock);
     await assert.rejects(
       excludeProvisioning(async () => {
         t += 5_000;
@@ -72,26 +122,35 @@ describe("provisioning is not the hook's cost", () => {
       }, clock),
       /install died/u,
     );
-    assert.equal(elapsed(), 0);
+    assert.equal(timer.wallMs(), 0);
   });
 
   it("never lets one run's provisioning pay down a later run's real cost", async () => {
     let t = 0;
+    let cpu = 0;
     const clock = () => t;
-    await excludeProvisioning(async () => {
-      t += 30_000;
-    }, clock);
+    const cpuClock = () => cpu;
+    await excludeProvisioning(
+      async () => {
+        t += 30_000;
+        cpu += 900;
+      },
+      clock,
+      cpuClock,
+    );
     // A LATER timer sees none of that credit: its window starts clean.
-    const elapsed = startHookTimer(clock);
+    const timer = startHookTimer(clock, cpuClock);
     t += 2_000;
-    assert.equal(elapsed(), 2_000);
-    assert.match(slowHookNotice("h", elapsed()), /2\.0s/u);
+    cpu += 1_500;
+    assert.equal(timer.wallMs(), 2_000);
+    assert.equal(timer.cpuMs(), 1_500);
+    assert.match(slowHookNotice("h", timer.wallMs()), /2\.0s/u);
   });
 
   it("excuses the cold-start dependency wait (awaitLazyDependency)", async () => {
     let t = 0;
     const clock = () => t;
-    const elapsed = startHookTimer(clock);
+    const timer = startHookTimer(clock);
     let polls = 0;
     const loaded = await awaitLazyDependency({
       // Resolves only after the install "finishes" — three polls of waiting.
@@ -105,13 +164,13 @@ describe("provisioning is not the hook's cost", () => {
       intervalMs: 10_000,
     });
     assert.deepEqual(loaded, { ok: true });
-    assert.equal(elapsed(), 0, "30s of install wait must not be charged");
+    assert.equal(timer.wallMs(), 0, "30s of install wait must not be charged");
   });
 
   it("excuses the cold redactor-daemon spawn", async () => {
     let t = 0;
     const clock = () => t;
-    const elapsed = startHookTimer(clock);
+    const timer = startHookTimer(clock);
     const dead = Object.assign(new Error("no socket"), { code: "ENOENT" });
     let dialled = 0;
     const result = await redactViaDaemon("some text", {
@@ -128,7 +187,11 @@ describe("provisioning is not the hook's cost", () => {
       now: clock,
     });
     assert.deepEqual(result, { text: "some text", found: [] });
-    assert.equal(elapsed(), 0, "the daemon cold start must not be charged");
+    assert.equal(
+      timer.wallMs(),
+      0,
+      "the daemon cold start must not be charged",
+    );
   });
 });
 
@@ -150,6 +213,39 @@ describe("slowHookNotice", () => {
     assert.match(notice, /30\.0s/);
     assert.match(notice, /1\.0s budget/);
     assert.match(notice, /github\.com\/.*\/issues/);
+  });
+
+  it("names the CPU share, and blames the sanitizer for only that", () => {
+    // The measured case this wording exists for: 7.2s of wall against 0.3s of
+    // work, on a box running three other jobs. The old line asserted the whole
+    // 7.2s was the sanitizer's and that every call repeated it — both false.
+    const notice = slowHookNotice("sanitize-output", 7_200, undefined, {
+      cpuMs: 300,
+    });
+    assert.match(notice, /took 7\.2s/);
+    assert.match(notice, /used 0\.3s of CPU/);
+    assert.match(notice, /Only the CPU share is work every affected call/);
+    assert.match(notice, /waiting on a busy machine/);
+    assert.match(notice, /hook name and both timings/);
+  });
+
+  it("admits it cannot attribute the wait when no CPU figure is given", () => {
+    // The shell port's case. Silence about the split beats a claim nothing
+    // measured — see plugin/scripts/lib/hook-timing.sh.
+    const notice = slowHookNotice("safe-launch PreToolUse", 7_200);
+    assert.match(notice, /Wall-clock alone cannot separate/);
+    assert.doesNotMatch(notice, /CPU share/);
+    assert.match(notice, /hook name and timing\./);
+  });
+
+  it("claims no per-call cost it has not measured, in either form", () => {
+    // Non-vacuity for the two cases above: the retracted sentence is gone from
+    // BOTH forms, not merely reworded in the one the shell does not emit.
+    for (const context of [undefined, { cpuMs: 300 }])
+      assert.doesNotMatch(
+        slowHookNotice("h", 7_200, undefined, context),
+        /this delay is the sanitizer's/,
+      );
   });
 
   it("honors an explicit threshold", () => {
@@ -320,6 +416,23 @@ describe("reportSlowHook (no-verdict events)", () => {
     assert.equal(event, "SessionStart");
     assert.match(fields.additionalContext, /scan-invisible-chars/);
   });
+
+  it("carries the caller's CPU figure into both channels", () => {
+    // The SessionStart scanners have no verdict to fold a notice into, so this
+    // is the only route their CPU reading takes to the model.
+    const errs = [];
+    const emitted = [];
+    reportSlowHook(
+      "scan-invisible-chars",
+      7_200,
+      "SessionStart",
+      (event, fields) => emitted.push([event, fields]),
+      (chunk) => errs.push(chunk),
+      { cpuMs: 700 },
+    );
+    assert.match(emitted[0][1].additionalContext, /used 0\.7s of CPU/);
+    assert.match(errs[0], /used 0\.7s of CPU/);
+  });
 });
 
 describe("runJudgeCli times every judge hook", () => {
@@ -375,6 +488,18 @@ describe("runJudgeCli times every judge hook", () => {
     const stdout = written.join("");
     assert.match(stdout, /PERFORMANCE/);
     assert.match(stdout, /pretooluse-sanitize/);
+    // A judge that SLEPT past the budget is the contended-host case in
+    // miniature: the wall-clock is real, most of it bought no work, and the
+    // notice has to say so rather than call the whole second sanitizer work.
+    // Compared, not pinned to 0.0s: the same window really does load the
+    // control plane, and on a cold runner that is a tenth of a second of CPU.
+    const timings = stdout.match(/took (\d+\.\d)s .*?used (\d+\.\d)s of CPU/u);
+    assert.ok(timings, stdout);
+    const [, wall, cpu] = timings;
+    assert.ok(
+      Number(cpu) < Number(wall),
+      `a sleeping judge must report CPU (${cpu}s) below wall (${wall}s)`,
+    );
     assert.ok(
       errs.some((line) => line.includes("PERFORMANCE")),
       "the timing must also reach stderr",
