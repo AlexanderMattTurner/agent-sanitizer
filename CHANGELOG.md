@@ -8,6 +8,17 @@ adhere to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+## [2.43.10] - 2026-08-17
+
+### Changed
+- CI now reviews each PR only once on open, not on ordinary pushes.
+
+### Fixed
+- Prevent duplicate review purchases when a push occurs during the first review.
+
+### Removed
+- Removed model-judged review-thread resolver and associated cost calculation logic.
+
 ## [2.43.9] - 2026-08-17
 
 ### Fixed
