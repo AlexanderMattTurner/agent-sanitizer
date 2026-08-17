@@ -85,15 +85,13 @@ if (runErrored()) {
 // A compact cost footnote: the review's API-equivalent cost, plus (via
 // plansLine) how many PRs/week that rate sustains on a Max 20x plan — the
 // budget-relative signal a single percentage used to carry, in the form a reader
-// actually reasons about. Emits a hidden `review-cost` marker so the Haiku
-// thread-resolver can read this cost back and fold it into the running total.
+// actually reasons about.
 function costFooter() {
   const { cost, model } = readRunCost();
   if (typeof cost !== "number" || !Number.isFinite(cost) || cost < 0) return "";
   const modelLabel = model ? ` (${model})` : "";
-  const marker = `<!-- review-cost usd=${cost} -->`;
   const costLine = `<sub>📊 Review cost: **$${formatDollars(cost)}**${modelLabel}.</sub>`;
-  return [marker, costLine, plansLine(cost)].filter(Boolean).join("\n");
+  return [costLine, plansLine(cost)].filter(Boolean).join("\n");
 }
 
 let review;

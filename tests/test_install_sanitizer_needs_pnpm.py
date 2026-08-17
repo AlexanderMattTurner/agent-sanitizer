@@ -9,8 +9,8 @@ dependency by PACKING the directory, and packing runs that package's
 ``prepare`` — here ``pnpm build:types`` — no matter what ``--ignore-scripts``
 says (``npm_config_ignore_scripts`` does not suppress it either).
 
-Three workflows (``claude-pr-review``, ``claude-review-thread-resolve``,
-``claude-merge-delta-review``) called the script with no pnpm on PATH. They had
+Three workflows (``claude-pr-review``, ``claude-merge-delta-review`` and the
+since-removed thread resolver) called the script with no pnpm on PATH. They had
 never needed one, because a registry install runs no lifecycle script of ours.
 The moment the local path landed, every one of them died with ``sh: 1: pnpm:
 not found`` / exit 127 — on every open PR at once, ``template-sync`` included.
@@ -84,11 +84,10 @@ def test_the_scan_found_the_call_sites() -> None:
     true, which is exactly what a renamed script or a broken parse produces."""
     assert INSTALL_SITES, f"no workflow step runs {INSTALL_SCRIPT}"
     workflows = {name for name, _, _, _ in INSTALL_SITES}
-    # The four known callers. A NEW caller is fine (it just has to pass the
+    # The three known callers. A NEW caller is fine (it just has to pass the
     # guard below); a caller that VANISHES means the scan stopped seeing it.
     assert workflows >= {
         "claude-pr-review.yaml",
-        "claude-review-thread-resolve.yaml",
         "claude-merge-delta-review.yaml",
         "node-tests.yaml",
     }, workflows

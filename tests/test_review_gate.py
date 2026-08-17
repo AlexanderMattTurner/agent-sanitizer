@@ -145,9 +145,9 @@ def test_a_non_reviewer_comment_review_leaves_the_gate_pending(tmp_path: Path) -
 
 def test_a_body_less_reviewer_review_leaves_the_gate_pending(tmp_path: Path) -> None:
     # GitHub synthesizes a body-less COMMENTED review by the same bot around
-    # every standalone review-comment POST, and resolve-addressed-threads.sh
-    # posts its audit replies under that identity. Counting one would clear the
-    # gate on exactly the PRs that carry threads, without anyone reviewing.
+    # every standalone review-comment POST, and this repo's automation replies on
+    # threads under that identity. Counting one would clear the gate on exactly
+    # the PRs that carry threads, without anyone reviewing.
     proc, posted = _run(tmp_path, [_review("github-actions[bot]", body="")])
     assert proc.returncode == 0, proc.stderr
     assert _only(posted)["state"] == "pending"
