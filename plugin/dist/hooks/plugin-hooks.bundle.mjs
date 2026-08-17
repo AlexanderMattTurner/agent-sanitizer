@@ -76,7 +76,7 @@ function startHookTimer(now = Date.now) {
 }
 function slowHookNotice(hookName, elapsedMs, thresholdMs = SLOW_HOOK_THRESHOLD_MS, context) {
   if (elapsedMs <= thresholdMs) return null;
-  return `agent-sanitizer PERFORMANCE: the ${hookName} hook took ${formatSeconds(elapsedMs)}s${formatContextSuffix(context)}, over its ${formatSeconds(thresholdMs)}s budget \u2014 this delay is the sanitizer's, not the model's, and every affected call pays it. Tell the user, and suggest they report it at ${ISSUE_URL} with the hook name and timing.`;
+  return `agent-sanitizer PERFORMANCE: the ${hookName} hook took ${formatSeconds(elapsedMs)}s${formatContextSuffix(context)}, over its ${formatSeconds(thresholdMs)}s budget \u2014 this delay is the hook's, not the model's, and every affected call pays it. Tell the user, and suggest they report it at ${ISSUE_URL} with the hook name and timing.`;
 }
 function writeSlowHookNotice(hookName, elapsedMs, writeErr = (chunk) => process.stderr.write(chunk), context) {
   const notice = slowHookNotice(hookName, elapsedMs, void 0, context);

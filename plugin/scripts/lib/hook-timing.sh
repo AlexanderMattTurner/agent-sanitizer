@@ -66,7 +66,7 @@ hook_timing_format_seconds() {
 slow_hook_notice() {
   local name="$1" elapsed="$2" threshold="${3:-$SLOW_HOOK_THRESHOLD_MS}"
   ((elapsed > threshold)) || return 0
-  printf '%s' "agent-sanitizer PERFORMANCE: the ${name} hook took $(hook_timing_format_seconds "$elapsed")s, over its $(hook_timing_format_seconds "$threshold")s budget — this delay is the sanitizer's, not the model's, and every affected call pays it. Tell the user, and suggest they report it at ${HOOK_TIMING_ISSUE_URL} with the hook name and timing."
+  printf '%s' "agent-sanitizer PERFORMANCE: the ${name} hook took $(hook_timing_format_seconds "$elapsed")s, over its $(hook_timing_format_seconds "$threshold")s budget — this delay is the hook's, not the model's, and every affected call pays it. Tell the user, and suggest they report it at ${HOOK_TIMING_ISSUE_URL} with the hook name and timing."
 }
 
 # The line for a ONE-TIME provisioning step that overran its (much larger)

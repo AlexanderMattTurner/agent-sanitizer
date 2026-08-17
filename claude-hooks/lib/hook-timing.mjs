@@ -160,6 +160,10 @@ export function startHookTimer(now = Date.now) {
  * not. Addressed to the model because the model is the only party that reliably
  * reads this channel — stderr from a non-blocking hook is easy to miss — and it
  * is asked to relay the number, since the operator is the one who can file it.
+ *
+ * It says "the hook's" and never "the sanitizer's": the measured span covers the
+ * whole hook run, host extensions included, so naming this package as the culprit
+ * sends a report about someone else's code to this issue tracker.
  * @param {string} hookName
  * @param {number} elapsedMs
  * @param {number} [thresholdMs]
@@ -178,7 +182,7 @@ export function slowHookNotice(
   return (
     `agent-sanitizer PERFORMANCE: the ${hookName} hook took ` +
     `${formatSeconds(elapsedMs)}s${formatContextSuffix(context)}, over its ${formatSeconds(thresholdMs)}s budget — ` +
-    "this delay is the sanitizer's, not the model's, and every affected call pays it. " +
+    "this delay is the hook's, not the model's, and every affected call pays it. " +
     `Tell the user, and suggest they report it at ${ISSUE_URL} with the hook name and timing.`
   );
 }
