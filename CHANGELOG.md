@@ -8,6 +8,12 @@ adhere to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+## [2.43.9] - 2026-08-17
+
+### Fixed
+
+- **claude-hooks**: Corrected the slow-hook notice to attribute delays to the hook itself rather than the sanitizer, and removed the misleading cause description.
+
 ## [2.43.8] - 2026-08-17
 
 ### Fixed
