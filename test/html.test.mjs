@@ -1163,7 +1163,18 @@ describe("invariant: a parameter's exfil verdict ignores whether it carries an `
     "in the fragment": `#${payload}`,
   });
   const PAYLOADS = [
-    ["a base64 blob", "QUtJQVJPT1RTRUNSRVRLRVkxMjM0NTY3ODkwYWJjZGVmZ2hpams="],
+    [
+      "a base64 blob with one padding char",
+      "QUtJQVJPT1RTRUNSRVRLRVkxMjM0NTY3ODkwYWJjZGVmZ2hpams=",
+    ],
+    // Two padding characters (source length ≡ 1 mod 3): `indexOf("=")` finds
+    // the FIRST `=`, so the bare-token split left `"="` (the second pad char)
+    // as a non-empty right-hand side — the empty-value fallback below never
+    // fired, and the blob was dropped before reaching the shape regexes.
+    [
+      "a base64 blob with two padding chars",
+      "QUtJQUlPU0ZPRE5ON0VYQU1QTEVLRVlTRUNSRVRYWQ==",
+    ],
     ["a hex blob", "a".repeat(16) + "b3c4d5e6f7081920"],
     ["an ordinary word", "guide"],
   ];
@@ -1194,7 +1205,11 @@ describe("invariant: a parameter's exfil verdict ignores whether it carries an `
       checkExfilUrl(`https://e.com/p?${PAYLOADS[1][1]}`),
       "suspicious query parameter",
     );
-    assert.equal(checkExfilUrl(`https://e.com/p?${PAYLOADS[2][1]}`), null);
+    assert.equal(
+      checkExfilUrl(`https://e.com/p?${PAYLOADS[2][1]}`),
+      "suspicious query parameter",
+    );
+    assert.equal(checkExfilUrl(`https://e.com/p?${PAYLOADS[3][1]}`), null);
   });
   // Precision: the allowlist is keyed on the NAME, and a valueless param's
   // token is its name — so an allowlisted param stays silent, and a benign

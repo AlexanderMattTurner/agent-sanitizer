@@ -2491,11 +2491,11 @@ function rawParams(qs) {
     const eq = pair.indexOf("=");
     const name = eq === -1 ? pair : pair.slice(0, eq);
     // A VALUELESS param carries its payload in the only token it has, so that
-    // token is its candidate value too — `?<blob>`, `?d=<blob>`, and `?<blob>=`
-    // (whose sole `=` is base64 padding) are one channel. The name alone still
-    // goes through BENIGN_BLOB_PARAM_RE.
+    // token is its candidate value too — `?<blob>`, `?d=<blob>`, and
+    // `?<blob>=`/`?<blob>==` (whose trailing `=`s are base64 padding) are one
+    // channel. The name alone still goes through BENIGN_BLOB_PARAM_RE.
     const afterEq = eq === -1 ? "" : pair.slice(eq + 1);
-    const value = afterEq === "" ? pair : afterEq;
+    const value = /^=*$/.test(afterEq) ? pair : afterEq;
     pairs.push([name.toLowerCase(), value]);
   }
   return pairs;

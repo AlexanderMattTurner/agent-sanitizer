@@ -64103,7 +64103,7 @@ function rawParams(qs) {
     const eq = pair.indexOf("=");
     const name50 = eq === -1 ? pair : pair.slice(0, eq);
     const afterEq = eq === -1 ? "" : pair.slice(eq + 1);
-    const value = afterEq === "" ? pair : afterEq;
+    const value = /^=*$/.test(afterEq) ? pair : afterEq;
     pairs.push([name50.toLowerCase(), value]);
   }
   return pairs;
