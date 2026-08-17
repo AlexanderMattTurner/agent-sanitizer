@@ -162,8 +162,8 @@ export function startHookTimer(now = Date.now) {
  * is asked to relay the number, since the operator is the one who can file it.
  *
  * It says "the hook's" and never "the sanitizer's": the measured span covers the
- * whole hook run, host extensions included, so naming this package as the culprit
- * sends a report about someone else's code to this issue tracker.
+ * whole hook run, host extensions included, so naming this package as the
+ * culprit blames it for time it may not have spent.
  * @param {string} hookName
  * @param {number} elapsedMs
  * @param {number} [thresholdMs]

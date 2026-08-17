@@ -152,6 +152,16 @@ describe("slowHookNotice", () => {
     assert.match(notice, /github\.com\/.*\/issues/);
   });
 
+  it("blames the HOOK, never this package", () => {
+    // The measured span covers the whole hook run, host extensions included, so
+    // naming this package is a claim the timer cannot support. The shell-parity
+    // test cannot catch a reword — it only proves the two copies agree — so this
+    // is the only thing pinning WHICH party the notice accuses.
+    const notice = slowHookNotice("sanitize-output", 5_250);
+    assert.match(notice, /this delay is the hook's/);
+    assert.doesNotMatch(notice, /the sanitizer's/);
+  });
+
   it("honors an explicit threshold", () => {
     assert.equal(slowHookNotice("x", 50, 100), null);
     assert.match(slowHookNotice("x", 300, 100), /0\.3s/);
