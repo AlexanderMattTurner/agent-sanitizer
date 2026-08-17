@@ -603,15 +603,15 @@ def test_the_evaluate_job_actually_posts_a_verdict_on_the_head() -> None:
 
 
 # ── Re-post wiring ───────────────────────────────────────────────────────────
-# A review posted with GITHUB_TOKEN fires no pull_request_review webhook, and
-# thread resolution fires no event at all, so the gate verdict only ever flips
-# because the job that changed the predicate re-posts it. Every such job must
-# carry a re-post step, or the required check silently never reds (after a
-# review) or never greens (after a resolve).
+# A review posted with GITHUB_TOKEN fires no pull_request_review webhook, so the
+# gate verdict only ever flips because the job that changed the predicate re-posts
+# it. Every such job must carry a re-post step, or the required check silently
+# never reds after a review. Thread RESOLUTION fires no event either, and nothing
+# re-posts on it: the `recheck-review-gate` label and the hold-clear cron cover
+# that side.
 
 REPOST_JOBS = [
     (".github/workflows/claude-pr-review.yaml", "review"),
-    (".github/workflows/claude-review-thread-resolve.yaml", "resolve"),
 ]
 
 

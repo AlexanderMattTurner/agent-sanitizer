@@ -1,8 +1,6 @@
 // Shared reader for a Claude run's execution log, plus the PR-review cost
 // footnote built from it — used by the reviewer (post-pr-review.mjs, which posts
-// the original cost line) and the Haiku thread-resolver
-// (compute-haiku-cost-footer.mjs, which tallies each follow-up run onto that same
-// footnote). One source for parsing the log, reading a run's cost and its
+// the cost line). One source for parsing the log, reading a run's cost and its
 // error flag, formatting dollars, and rendering the "how many PRs fit in a Max
 // 20x weekly allowance" line, so the consumers can never drift.
 import { readFileSync } from "node:fs";
@@ -55,8 +53,7 @@ export function readRunCost(executionFile) {
   return { cost, model };
 }
 
-// Sub-cent costs keep four decimals (a Haiku run is a fraction of a cent);
-// everything else two.
+// Sub-cent costs keep four decimals; everything else two.
 export function formatDollars(cost) {
   return cost < 0.01 ? cost.toFixed(4) : cost.toFixed(2);
 }

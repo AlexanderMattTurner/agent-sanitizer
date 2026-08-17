@@ -3,10 +3,9 @@
 # hold whose threads are all resolved, by delegating each PR to
 # approve-if-reviewer-hold-clear.sh (the single source of truth for "is the hold
 # cleared -> approve"). This is the no-push safety net: a review thread resolved
-# with no follow-up push emits no workflow-triggering event, so the per-push
-# approve step (claude-review-thread-resolve.yaml) never re-runs for that PR.
-# Enumerating open PRs here and re-evaluating the state-based approve closes that
-# gap. This script only SELECTS PRs; the per-PR verdict stays in the shared
+# with no follow-up push emits no workflow-triggering event at all, so nothing
+# else re-evaluates that PR's hold. Enumerating open PRs here and re-evaluating
+# the state-based approve closes that gap. This script only SELECTS PRs; the per-PR verdict stays in the shared
 # approval script so the sweep and the per-push paths cannot drift.
 #
 # Env: GH_TOKEN, GH_REPO (owner/name); REVIEWER_LOGIN optional (passed through).
