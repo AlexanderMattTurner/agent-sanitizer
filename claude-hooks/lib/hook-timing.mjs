@@ -217,6 +217,10 @@ export function startHookTimer(now = Date.now, cpuNow = processCpuMs) {
  * than asserting an attribution nothing measured: a wall-clock overrun on a
  * loaded host is the common case, and blaming it on the sanitizer sends the
  * operator hunting a per-call cost that does not exist.
+ *
+ * The wait clause names candidates and picks none, for the same reason. A hook
+ * that blocks on a dead socket inside a HOST extension spends no CPU and no
+ * machine load, so naming either as the cause would be a second wrong guess.
  * @param {string} hookName
  * @param {number} elapsedMs
  * @param {number} [thresholdMs]
@@ -236,7 +240,7 @@ export function slowHookNotice(
   const attribution =
     typeof cpuMs === "number"
       ? `, and used ${formatSeconds(cpuMs)}s of CPU. ` +
-        "Only the CPU share is work every affected call repeats; the rest was waiting on a busy machine."
+        "Only the CPU share is work every affected call repeats; the rest was spent waiting, on a busy machine or on something this hook called."
       : ". Wall-clock alone cannot separate the sanitizer's own work from a busy machine.";
   return (
     `agent-sanitizer PERFORMANCE: the ${hookName} hook took ` +

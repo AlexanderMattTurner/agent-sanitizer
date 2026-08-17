@@ -91,7 +91,7 @@ function startHookTimer(now = Date.now, cpuNow = processCpuMs) {
 function slowHookNotice(hookName, elapsedMs, thresholdMs = SLOW_HOOK_THRESHOLD_MS, context) {
   if (elapsedMs <= thresholdMs) return null;
   const cpuMs = context?.cpuMs;
-  const attribution = typeof cpuMs === "number" ? `, and used ${formatSeconds(cpuMs)}s of CPU. Only the CPU share is work every affected call repeats; the rest was waiting on a busy machine.` : ". Wall-clock alone cannot separate the sanitizer's own work from a busy machine.";
+  const attribution = typeof cpuMs === "number" ? `, and used ${formatSeconds(cpuMs)}s of CPU. Only the CPU share is work every affected call repeats; the rest was spent waiting, on a busy machine or on something this hook called.` : ". Wall-clock alone cannot separate the sanitizer's own work from a busy machine.";
   return `agent-sanitizer PERFORMANCE: the ${hookName} hook took ${formatSeconds(elapsedMs)}s${formatContextSuffix(context)}, over its ${formatSeconds(thresholdMs)}s budget${attribution} Tell the user, and suggest they report it at ${ISSUE_URL} with the hook name and ${typeof cpuMs === "number" ? "both timings" : "timing"}.`;
 }
 function writeSlowHookNotice(hookName, elapsedMs, writeErr = (chunk) => process.stderr.write(chunk), context) {

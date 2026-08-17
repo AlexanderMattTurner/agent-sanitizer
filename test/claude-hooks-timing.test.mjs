@@ -225,8 +225,21 @@ describe("slowHookNotice", () => {
     assert.match(notice, /took 7\.2s/);
     assert.match(notice, /used 0\.3s of CPU/);
     assert.match(notice, /Only the CPU share is work every affected call/);
-    assert.match(notice, /waiting on a busy machine/);
+    assert.match(notice, /spent waiting/);
     assert.match(notice, /hook name and both timings/);
+  });
+
+  it("names candidates for the wait and commits to none", () => {
+    // A hook blocked on a dead socket inside a HOST extension spends no CPU and
+    // adds no machine load, so a clause asserting "waiting on a busy machine"
+    // states a cause nothing measured — the same overreach the CPU split closed
+    // one sentence earlier. Observed: 5.25s of wall, ~0 CPU, one unanswered
+    // TCP connect issued by a host extension.
+    const notice = slowHookNotice("sanitize-output", 5_250, undefined, {
+      cpuMs: 0,
+    });
+    assert.match(notice, /on a busy machine or on something this hook called/);
+    assert.doesNotMatch(notice, /the rest was waiting on a busy machine/);
   });
 
   it("admits it cannot attribute the wait when no CPU figure is given", () => {
