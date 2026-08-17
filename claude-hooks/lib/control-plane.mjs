@@ -170,8 +170,8 @@ export async function runJudgeCli(
   // on the success path hides exactly the case where the hook is both slow and
   // broken. Null until stdin arrives — a read that throws measured nothing, and
   // an invented number is worse than none.
-  /** @type {(() => number) | null} */
-  let elapsed = null;
+  /** @type {ReturnType<typeof startHookTimer> | null} */
+  let timer = null;
   /** @type {number | null} */
   let payloadBytes = null;
   /** @type {string | null} */
@@ -185,18 +185,19 @@ export async function runJudgeCli(
     // Timed from HERE, not from process start: the wait for the harness to hand
     // over stdin is not this hook's cost, and blaming it for one would send
     // operators chasing a bug report that is not theirs to fix.
-    elapsed = startHookTimer();
+    timer = startHookTimer();
     const { claudeAdapter: adapter } = controlPlane();
     const event = adapter.parse(transformInput(input));
     tool = event.tool ?? null;
-    // Awaited into its own binding first: as an inline argument, `elapsed()`
+    // Awaited into its own binding first: as an inline argument, the timer read
     // would be evaluated BEFORE the judge it is supposed to be timing.
     const judged = await judge(event);
     const out = nativeStdout(
       adapter.render(
-        withSlowHookNotice(hookName, elapsed(), judged, undefined, {
+        withSlowHookNotice(hookName, timer.wallMs(), judged, undefined, {
           payloadBytes,
           tool,
+          cpuMs: timer.cpuMs(),
         }),
         event,
       ),
@@ -208,10 +209,11 @@ export async function runJudgeCli(
     // must act on first, and the timing is context for it. stderr only — the
     // model-facing channel here belongs to onError's fail-closed message, and a
     // performance aside must not dilute a "this output was never vetted".
-    if (elapsed !== null)
-      writeSlowHookNotice(hookName, elapsed(), undefined, {
+    if (timer !== null)
+      writeSlowHookNotice(hookName, timer.wallMs(), undefined, {
         payloadBytes,
         tool,
+        cpuMs: timer.cpuMs(),
       });
     onError(err, input);
   }
