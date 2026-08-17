@@ -61,22 +61,38 @@ function formatContextSuffix(context) {
   if (context.tool) parts2.push(`tool ${context.tool}`);
   return parts2.length > 0 ? ` (${parts2.join(", ")})` : "";
 }
-async function excludeProvisioning(work, now = Date.now) {
+function processCpuMs() {
+  const { user, system } = process.cpuUsage();
+  return (user + system) / 1e3;
+}
+async function excludeProvisioning(work, now = Date.now, cpuNow = processCpuMs) {
   const started = now();
+  const cpuStarted = cpuNow();
   try {
     return await work();
   } finally {
     provisioningMs += Math.max(0, now() - started);
+    provisioningCpuMs += Math.max(0, cpuNow() - cpuStarted);
   }
 }
-function startHookTimer(now = Date.now) {
+function startHookTimer(now = Date.now, cpuNow = processCpuMs) {
   const started = now();
+  const cpuStarted = cpuNow();
   const provisionedBefore = provisioningMs;
-  return () => Math.max(0, now() - started - (provisioningMs - provisionedBefore));
+  const provisionedCpuBefore = provisioningCpuMs;
+  return {
+    wallMs: () => Math.max(0, now() - started - (provisioningMs - provisionedBefore)),
+    cpuMs: () => Math.max(
+      0,
+      cpuNow() - cpuStarted - (provisioningCpuMs - provisionedCpuBefore)
+    )
+  };
 }
 function slowHookNotice(hookName, elapsedMs, thresholdMs = SLOW_HOOK_THRESHOLD_MS, context) {
   if (elapsedMs <= thresholdMs) return null;
-  return `agent-sanitizer PERFORMANCE: the ${hookName} hook took ${formatSeconds(elapsedMs)}s${formatContextSuffix(context)}, over its ${formatSeconds(thresholdMs)}s budget \u2014 this delay is the hook's, not the model's, and every affected call pays it. Tell the user, and suggest they report it at ${ISSUE_URL} with the hook name and timing.`;
+  const cpuMs = context?.cpuMs;
+  const attribution = typeof cpuMs === "number" ? `, and used ${formatSeconds(cpuMs)}s of CPU. Only the CPU share is work every affected call repeats; the rest was waiting on a busy machine.` : ". Wall-clock alone cannot separate the sanitizer's own work from a busy machine.";
+  return `agent-sanitizer PERFORMANCE: the ${hookName} hook took ${formatSeconds(elapsedMs)}s${formatContextSuffix(context)}, over its ${formatSeconds(thresholdMs)}s budget${attribution} Tell the user, and suggest they report it at ${ISSUE_URL} with the hook name and ${typeof cpuMs === "number" ? "both timings" : "timing"}.`;
 }
 function writeSlowHookNotice(hookName, elapsedMs, writeErr = (chunk) => process.stderr.write(chunk), context) {
   const notice = slowHookNotice(hookName, elapsedMs, void 0, context);
@@ -92,19 +108,20 @@ function withSlowHookNotice(hookName, elapsedMs, verdict, writeErr = (chunk) => 
     additional_context: verdict.additional_context ? `${verdict.additional_context} ${notice}` : notice
   };
 }
-function reportSlowHook(hookName, elapsedMs, hookEventName, emit, writeErr = (chunk) => process.stderr.write(chunk)) {
-  const notice = writeSlowHookNotice(hookName, elapsedMs, writeErr);
+function reportSlowHook(hookName, elapsedMs, hookEventName, emit, writeErr = (chunk) => process.stderr.write(chunk), context) {
+  const notice = writeSlowHookNotice(hookName, elapsedMs, writeErr, context);
   if (notice === null) return false;
   emit(hookEventName, { additionalContext: notice });
   return true;
 }
-var SLOW_HOOK_THRESHOLD_MS, ISSUE_URL, provisioningMs;
+var SLOW_HOOK_THRESHOLD_MS, ISSUE_URL, provisioningMs, provisioningCpuMs;
 var init_hook_timing = __esm({
   "claude-hooks/lib/hook-timing.mjs"() {
     "use strict";
     SLOW_HOOK_THRESHOLD_MS = 1e3;
     ISSUE_URL = "https://github.com/AlexanderMattTurner/agent-sanitizer/issues/new";
     provisioningMs = 0;
+    provisioningCpuMs = 0;
   }
 });
 
@@ -66112,22 +66129,23 @@ async function runJudgeCli(hookName, judge, {
   write = (chunk) => process.stdout.write(chunk)
 }) {
   let input;
-  let elapsed = null;
+  let timer = null;
   let payloadBytes = null;
   let tool = null;
   try {
     input = await readInput();
     payloadBytes = readInput === readStdinJson ? lastStdinByteLength() : null;
-    elapsed = startHookTimer();
+    timer = startHookTimer();
     const { claudeAdapter: adapter } = controlPlane();
     const event = adapter.parse(transformInput(input));
     tool = event.tool ?? null;
     const judged = await judge(event);
     const out = nativeStdout(
       adapter.render(
-        withSlowHookNotice(hookName, elapsed(), judged, void 0, {
+        withSlowHookNotice(hookName, timer.wallMs(), judged, void 0, {
           payloadBytes,
-          tool
+          tool,
+          cpuMs: timer.cpuMs()
         }),
         event
       )
@@ -66136,10 +66154,11 @@ async function runJudgeCli(hookName, judge, {
   } catch (err) {
     process.stderr.write(`${hookName} hook error: ${errMessage(err)}
 `);
-    if (elapsed !== null)
-      writeSlowHookNotice(hookName, elapsed(), void 0, {
+    if (timer !== null)
+      writeSlowHookNotice(hookName, timer.wallMs(), void 0, {
         payloadBytes,
-        tool
+        tool,
+        cpuMs: timer.cpuMs()
       });
     onError(err, input);
   }
@@ -68910,15 +68929,17 @@ function formatSkipped(skipped) {
   ].join("\n");
 }
 async function cliMain3(opts = {}) {
-  const elapsed = startHookTimer();
+  const timer = startHookTimer();
   try {
     await runScanCli(opts);
   } finally {
     reportSlowHook(
       HOOK_NAME4,
-      elapsed(),
+      timer.wallMs(),
       HookEvent.SESSION_START,
-      emitHookResponse
+      emitHookResponse,
+      void 0,
+      { cpuMs: timer.cpuMs() }
     );
   }
 }
@@ -69128,7 +69149,7 @@ function loadedFileMessage({ report, cleaned, reason }, filePath) {
 ${tail}`;
 }
 async function cliMain4({ trace: sink = trace } = {}) {
-  const elapsed = startHookTimer();
+  const timer = startHookTimer();
   const emitTrace = bestEffortTrace(sink);
   try {
     const payload = await readStdinJson();
@@ -69171,9 +69192,11 @@ async function cliMain4({ trace: sink = trace } = {}) {
   } finally {
     reportSlowHook(
       HOOK_NAME5,
-      elapsed(),
+      timer.wallMs(),
       HookEvent.INSTRUCTIONS_LOADED,
-      emitHookResponse
+      emitHookResponse,
+      void 0,
+      { cpuMs: timer.cpuMs() }
     );
   }
 }

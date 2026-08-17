@@ -257,7 +257,7 @@ export { HOOK_NAME };
  * @returns {Promise<void>}
  */
 export async function cliMain({ trace: sink = trace } = {}) {
-  const elapsed = startHookTimer();
+  const timer = startHookTimer();
   const emitTrace = bestEffortTrace(sink);
   try {
     const payload = await readStdinJson();
@@ -310,9 +310,11 @@ export async function cliMain({ trace: sink = trace } = {}) {
   } finally {
     reportSlowHook(
       HOOK_NAME,
-      elapsed(),
+      timer.wallMs(),
       HookEvent.INSTRUCTIONS_LOADED,
       emitHookResponse,
+      undefined,
+      { cpuMs: timer.cpuMs() },
     );
   }
 }

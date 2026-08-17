@@ -63,10 +63,16 @@ hook_timing_format_seconds() {
 
 # The line for a hook that overran its budget, or nothing when it did not.
 # $1 hook name, $2 elapsed ms, $3 threshold ms (optional).
+#
+# This is the node module's NO-CPU wording, and it is the honest one here. The
+# node timer splits the wait with process.cpuUsage(); bash's nearest equivalent
+# is `times`, and reading it the obvious way — inside a command substitution —
+# forks first and so reports the child's zero. A silently-zero CPU figure is
+# worse than none, so this port says it cannot attribute the wait.
 slow_hook_notice() {
   local name="$1" elapsed="$2" threshold="${3:-$SLOW_HOOK_THRESHOLD_MS}"
   ((elapsed > threshold)) || return 0
-  printf '%s' "agent-sanitizer PERFORMANCE: the ${name} hook took $(hook_timing_format_seconds "$elapsed")s, over its $(hook_timing_format_seconds "$threshold")s budget — this delay is the hook's, not the model's, and every affected call pays it. Tell the user, and suggest they report it at ${HOOK_TIMING_ISSUE_URL} with the hook name and timing."
+  printf '%s' "agent-sanitizer PERFORMANCE: the ${name} hook took $(hook_timing_format_seconds "$elapsed")s, over its $(hook_timing_format_seconds "$threshold")s budget. Wall-clock alone cannot separate the sanitizer's own work from a busy machine. Tell the user, and suggest they report it at ${HOOK_TIMING_ISSUE_URL} with the hook name and timing."
 }
 
 # The line for a ONE-TIME provisioning step that overran its (much larger)

@@ -1,24 +1,24 @@
 /**
- * The one place a hook's own wall-clock cost is measured and reported.
+ * The one place a hook's own cost is measured and reported — one threshold, one
+ * message, one merge rule, shared by every hook.
  *
- * These hooks sit on the critical path of every tool call, every prompt and
- * every session start: whatever they spend, the user waits. That cost is also
- * the hardest kind of bug to notice from inside — a hook that got slow looks
- * exactly like an agent that got slow, so it goes unreported for weeks (one
- * SessionStart scan blocked startup for 30 SECONDS before anyone traced it back
- * here). A hook past the budget therefore says so IN BAND, in the model's
- * context, where it cannot be missed and can be relayed to the operator.
+ * These hooks sit on the critical path of every tool call, prompt and session
+ * start: whatever they spend, the user waits. A slow hook is also the hardest
+ * bug to notice from inside — it looks exactly like a slow agent, so it goes
+ * unreported for weeks (one SessionStart scan blocked startup for 30 SECONDS
+ * before anyone traced it back here). A hook past the budget therefore says so
+ * IN BAND, in the model's context, where it can be relayed to the operator.
  *
- * One threshold, one message, one merge rule, shared by every hook — the
- * measurement is worthless if each hook words it differently or picks its own
- * bar for "slow".
+ * TWO numbers, because wall-clock alone cannot say whose cost it is: a hook on
+ * a contended host waits far longer than it computes (a 1.1 KB payload and a
+ * 235 KB one both reported 7.2s on a loaded 2-vCPU box, against 0.3s of work).
+ * So the notice prints CPU beside the clock — the share every affected call
+ * repeats — and never GATES on it: a hook wedged on a dead redactor socket
+ * burns no CPU and is exactly the sanitizer's fault.
  *
- * What it deliberately does NOT count is ONE-TIME PROVISIONING (see
- * {@link excludeProvisioning}). A dependency-install wait or a cold redactor
- * spawn is wall-clock the user really waits, but it is not a cost this hook
- * pays per call and it is not a bug worth a report — charging it would make the
- * FIRST call of every session cry wolf, which is precisely the alert fatigue
- * this notice exists to avoid.
+ * ONE-TIME PROVISIONING is excluded (see {@link excludeProvisioning}): charging
+ * an install to the hook that merely waited it out would make the FIRST call of
+ * every session cry wolf, which is the alert fatigue this notice fights.
  *
  * Dependency-free on purpose: everything imports this, including hook-io, so a
  * back-import would close a cycle. The one emitter it needs is passed in.
@@ -29,8 +29,9 @@
  *
  * A second is far above anything these hooks do when healthy (Layer 1 is a few
  * regex passes; the redactor daemon answers in tens of milliseconds once warm)
- * and far below the point where a human is merely impatient — so crossing it
- * means something is actually wrong, not that the machine is busy.
+ * and far below the point where a human is merely impatient. Crossing it means
+ * the user waited that long, which is worth saying either way; whether the
+ * sanitizer or a busy machine spent it is what the CPU figure answers.
  */
 export const SLOW_HOOK_THRESHOLD_MS = 1000;
 
@@ -89,13 +90,22 @@ export function formatBytes(bytes) {
  * that made this specific latency report take a manual multi-step
  * investigation to characterize (which tool call, how large a payload) before
  * anyone could act on it.
- * @typedef {{ payloadBytes?: number | null, tool?: string | null }} SlowHookContext
+ * `cpuMs` is the run's own processor time (see {@link startHookTimer}); absent
+ * when the caller has no way to measure it, which is what the shell port of
+ * this module reports.
+ * @typedef {{
+ *   payloadBytes?: number | null,
+ *   tool?: string | null,
+ *   cpuMs?: number | null,
+ * }} SlowHookContext
  */
 
 /**
- * The parenthetical clause naming `context`'s known fields, or `""` when
- * `context` is absent or carries neither — so a caller with no context to give
- * gets the exact same notice text as before this existed.
+ * The parenthetical clause naming `context`'s payload size and tool, or `""`
+ * when neither is known — so a caller with nothing to name gets the same notice
+ * text as one that passes no context at all. `cpuMs` is deliberately not here:
+ * it needs the sentence {@link slowHookNotice} gives it, not a bare number in a
+ * list of what was slow.
  * @param {SlowHookContext | undefined} [context]
  * @returns {string}
  */
@@ -108,10 +118,25 @@ function formatContextSuffix(context) {
   return parts.length > 0 ? ` (${parts.join(", ")})` : "";
 }
 
-// Process-wide total of milliseconds spent in one-time provisioning. A running
-// total rather than a flag because a single hook run can pay more than one (a
-// dependency wait AND a cold daemon spawn), and they may not nest.
+/**
+ * This process's own user+system processor time so far, in milliseconds.
+ *
+ * `process.cpuUsage()` is RUSAGE_SELF: it counts what this node process
+ * computed and excludes both idle waiting and any child process. That is
+ * exactly the split the notice needs — a hook blocked on a socket, a lock or a
+ * loaded scheduler adds wall-clock here and no CPU.
+ * @returns {number}
+ */
+function processCpuMs() {
+  const { user, system } = process.cpuUsage();
+  return (user + system) / 1000;
+}
+
+// Process-wide totals of wall-clock and CPU spent in one-time provisioning. A
+// running total rather than a flag because a single hook run can pay more than
+// one (a dependency wait AND a cold daemon spawn), and they may not nest.
 let provisioningMs = 0;
+let provisioningCpuMs = 0;
 
 /**
  * Run `work`, charging its whole duration to provisioning so no timer running
@@ -119,57 +144,85 @@ let provisioningMs = 0;
  * that FAILS is still excluded — the wait happened either way, and a hook that
  * then fails is reported through its fault posture, not as "slow".
  *
+ * Its CPU is charged too, not just its wall-clock: the lazy dependency import
+ * this wraps is real in-process work, so leaving it in would hand the first
+ * call of every session a CPU figure it did not spend.
+ *
  * Wrap only genuinely one-time, per-session setup: waiting out a dependency
  * install, waiting for a cold redactor daemon to bind. Never wrap the hook's
  * actual work — that is exactly what this measurement is for.
  * @template T
  * @param {() => Promise<T>} work
  * @param {() => number} [now]  injectable clock, for tests
+ * @param {() => number} [cpuNow]  injectable CPU clock, for tests
  * @returns {Promise<T>}
  */
-export async function excludeProvisioning(work, now = Date.now) {
+export async function excludeProvisioning(
+  work,
+  now = Date.now,
+  cpuNow = processCpuMs,
+) {
   const started = now();
+  const cpuStarted = cpuNow();
   try {
     return await work();
   } finally {
     provisioningMs += Math.max(0, now() - started);
+    provisioningCpuMs += Math.max(0, cpuNow() - cpuStarted);
   }
 }
 
 /**
- * Start measuring; the returned function reports the milliseconds elapsed so
- * far MINUS any provisioning charged in the meantime, and may be called more
+ * Start measuring; each reader on the returned object reports what has elapsed
+ * so far MINUS any provisioning charged in the meantime, and may be called more
  * than once.
+ *
+ * `wallMs` is what the user waited and `cpuMs` is what this process actually
+ * computed. Both are needed to say whose cost a slow run is — see the module
+ * header for the report that read a contended host as a sanitizer bug.
  *
  * Only provisioning charged since this timer started is subtracted, so an
  * earlier run's cold start cannot pay down a later run's real cost. A
  * provisioning window that straddles the timer's start would otherwise be able
- * to subtract more than the timer has measured, so the result is floored at 0.
+ * to subtract more than the timer has measured, so both results are floored
+ * at 0.
  * @param {() => number} [now]  injectable clock, for tests
- * @returns {() => number}
+ * @param {() => number} [cpuNow]  injectable CPU clock, for tests
+ * @returns {{ wallMs: () => number, cpuMs: () => number }}
  */
-export function startHookTimer(now = Date.now) {
+export function startHookTimer(now = Date.now, cpuNow = processCpuMs) {
   const started = now();
+  const cpuStarted = cpuNow();
   const provisionedBefore = provisioningMs;
-  return () =>
-    Math.max(0, now() - started - (provisioningMs - provisionedBefore));
+  const provisionedCpuBefore = provisioningCpuMs;
+  return {
+    wallMs: () =>
+      Math.max(0, now() - started - (provisioningMs - provisionedBefore)),
+    cpuMs: () =>
+      Math.max(
+        0,
+        cpuNow() - cpuStarted - (provisioningCpuMs - provisionedCpuBefore),
+      ),
+  };
 }
 
 /**
  * The model-facing line for a hook that overran the budget, or null when it did
  * not. Addressed to the model because the model is the only party that reliably
  * reads this channel — stderr from a non-blocking hook is easy to miss — and it
- * is asked to relay the number, since the operator is the one who can file it.
+ * is asked to relay the numbers, since the operator is the one who can file it.
  *
- * It says "the hook's" and never "the sanitizer's": the measured span covers the
- * whole hook run, host extensions included, so naming this package as the
- * culprit blames it for time it may not have spent.
+ * With `context.cpuMs` in hand the line says which share of the wait was the
+ * sanitizer computing. Without it the line says that it cannot tell, rather
+ * than asserting an attribution nothing measured: a wall-clock overrun on a
+ * loaded host is the common case, and blaming it on the sanitizer sends the
+ * operator hunting a per-call cost that does not exist.
  * @param {string} hookName
  * @param {number} elapsedMs
  * @param {number} [thresholdMs]
- * @param {SlowHookContext} [context]  known payload size / triggering tool, so
- *   the notice is self-diagnosing rather than requiring the next reader to
- *   reconstruct what was slow by hand
+ * @param {SlowHookContext} [context]  known CPU time / payload size /
+ *   triggering tool, so the notice is self-diagnosing rather than requiring the
+ *   next reader to reconstruct what was slow by hand
  * @returns {string | null}
  */
 export function slowHookNotice(
@@ -179,11 +232,17 @@ export function slowHookNotice(
   context,
 ) {
   if (elapsedMs <= thresholdMs) return null;
+  const cpuMs = context?.cpuMs;
+  const attribution =
+    typeof cpuMs === "number"
+      ? `, and used ${formatSeconds(cpuMs)}s of CPU. ` +
+        "Only the CPU share is work every affected call repeats; the rest was waiting on a busy machine."
+      : ". Wall-clock alone cannot separate the sanitizer's own work from a busy machine.";
   return (
     `agent-sanitizer PERFORMANCE: the ${hookName} hook took ` +
-    `${formatSeconds(elapsedMs)}s${formatContextSuffix(context)}, over its ${formatSeconds(thresholdMs)}s budget — ` +
-    "this delay is the hook's, not the model's, and every affected call pays it. " +
-    `Tell the user, and suggest they report it at ${ISSUE_URL} with the hook name and timing.`
+    `${formatSeconds(elapsedMs)}s${formatContextSuffix(context)}, over its ${formatSeconds(thresholdMs)}s budget${attribution} ` +
+    `Tell the user, and suggest they report it at ${ISSUE_URL} with the hook name and ` +
+    `${typeof cpuMs === "number" ? "both timings" : "timing"}.`
   );
 }
 
@@ -192,11 +251,11 @@ export function slowHookNotice(
  * {@link SLOW_PROVISION_THRESHOLD_MS}, or null when it did not.
  *
  * Deliberately NOT {@link slowHookNotice} with a bigger threshold: that message
- * says "every affected call pays it", which is false here and would send the
- * reader hunting a per-call cost that does not exist. What is actionable about a
- * slow install is the installer (uv resolves in a fraction of pip's time) and
- * the fact that a repeat means the idempotence check is broken — so this asks
- * for a report only on the repeat, which is the version of this that is a bug.
+ * splits the wait into a per-call share and machine contention, and neither
+ * reading is the one to take away here. What is actionable about a slow install
+ * is the installer (uv resolves in a fraction of pip's time) and the fact that a
+ * repeat means the idempotence check is broken — so this asks for a report only
+ * on the repeat, which is the version of this that is a bug.
  *
  * The one caller is the shell provisioner, whose port of this module
  * (plugin/scripts/lib/hook-timing.sh) must emit this exact string; that port and
@@ -298,6 +357,7 @@ export function withSlowHookNotice(
  *   stdout envelope writer (hook-io's emitHookResponse); passed in rather than
  *   imported so this module stays dependency-free — see the module doc
  * @param {(chunk: string) => void} [writeErr]  injectable stderr sink, for tests
+ * @param {SlowHookContext} [context]  see {@link slowHookNotice}
  * @returns {boolean}  whether a notice was emitted
  */
 export function reportSlowHook(
@@ -306,8 +366,9 @@ export function reportSlowHook(
   hookEventName,
   emit,
   writeErr = (chunk) => process.stderr.write(chunk),
+  context,
 ) {
-  const notice = writeSlowHookNotice(hookName, elapsedMs, writeErr);
+  const notice = writeSlowHookNotice(hookName, elapsedMs, writeErr, context);
   if (notice === null) return false;
   emit(hookEventName, { additionalContext: notice });
   return true;

@@ -412,15 +412,17 @@ export async function cliMain(opts = {}) {
   // inside — it reads as "Claude is slow to start". Timing the whole body and
   // reporting an overrun in band is what turned a 30-second scan from a rumor
   // into a bug report (see lib/hook-timing.mjs).
-  const elapsed = startHookTimer();
+  const timer = startHookTimer();
   try {
     await runScanCli(opts);
   } finally {
     reportSlowHook(
       HOOK_NAME,
-      elapsed(),
+      timer.wallMs(),
       HookEvent.SESSION_START,
       emitHookResponse,
+      undefined,
+      { cpuMs: timer.cpuMs() },
     );
   }
 }
