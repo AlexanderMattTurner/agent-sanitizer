@@ -2,15 +2,18 @@
 pull_request_target events buy a review, and on which model.
 
 The `synchronize` predicate is the one with teeth: a push runs the FIRST
-whole-diff pass when the reviewer has never reviewed this PR, and is never a
-re-read otherwise. Keying it on the latest review's STATE instead would fire on
-every push forever, because every review now posts as COMMENTED (the merge
-consequence lives in the review-findings gate, not the review event).
+whole-diff pass when the reviewer has never reviewed this PR and none is under
+way, and is never a re-read otherwise. Keying it on the latest review's STATE
+instead would fire on every push forever, because every review now posts as
+COMMENTED (the merge consequence lives in the review-findings gate, not the
+review event). Keying it on the reviews list ALONE misses a first pass that is
+still running, which is what bought #340 a second review.
 
-Drives the real script with a fake `gh` on PATH that serves the reviews list
-from a canned array through REAL jq — so the script's own filter (reviewer
-login, the empty-body discriminator, the two-level page flatten) is exercised
-rather than re-implemented — and reads the run=/model= it writes to
+Drives the real script with a fake `gh` on PATH that serves the reviews list,
+the head commit, the workflow-runs list and one run's jobs from canned files
+through REAL jq — so the script's own filters (reviewer login, the empty-body
+discriminator, the two-level page flatten, the sibling-run selection) are
+exercised rather than re-implemented — and reads the run=/model= it writes to
 GITHUB_OUTPUT.
 """
 
@@ -26,12 +29,13 @@ from tests._helpers import REPO_ROOT
 SCRIPT = REPO_ROOT / ".github" / "scripts" / "decide-pr-review-trigger.sh"
 
 _FAKE_GH = r"""#!/usr/bin/env python3
-# gh stub: serves `repos/.../pulls/N/reviews` and `repos/.../commits/SHA` from
-# canned files, running the caller's --jq through real jq and printing raw JSON
-# when there is none. It rejects --slurp alongside --jq exactly as the real gh
-# does, so a caller that pairs them is caught here instead of failing closed in
-# CI. REVIEWS_RC forces the reviews read to fail so the fail-safe branch can be
-# tested.
+# gh stub: serves `repos/.../pulls/N/reviews`, `repos/.../commits/SHA`, the
+# workflow-runs list and one run's jobs from canned files, running the caller's
+# --jq through real jq and printing raw JSON when there is none. It rejects
+# --slurp alongside --jq exactly as the real gh does, so a caller that pairs them
+# is caught here instead of failing closed in CI. REVIEWS_RC and ACTIONS_RC force
+# either read to fail so the fail-safe branches can be tested. Every path is
+# appended to GH_LOG, which is what lets a case assert the ORDER of the reads.
 import json, os, shutil, subprocess, sys
 
 JQ = shutil.which("jq")
@@ -62,6 +66,9 @@ if slurp and jq is not None:
     )
     sys.exit(1)
 
+with open(os.environ["GH_LOG"], "a", encoding="utf-8") as log:
+    log.write("%s\n" % (path,))
+
 
 def emit(doc):
     if jq is None:
@@ -88,17 +95,38 @@ if path and path.endswith("/reviews"):
 if path and "/commits/" in path:
     emit({"commit": {"message": os.environ.get("HEAD_MESSAGE", "chore: push\n")}})
 
+if path and ("/actions/workflows/" in path or "/actions/runs/" in path):
+    rc = int(os.environ.get("ACTIONS_RC", "0"))
+    if rc:
+        sys.stderr.write("fake gh: HTTP 502 on the actions read\n")
+        sys.exit(rc)
+    which = "GH_RUNS" if "/actions/workflows/" in path else "GH_JOBS"
+    with open(os.environ[which], encoding="utf-8") as f:
+        payload = json.load(f)
+    emit({"workflow_runs": payload} if which == "GH_RUNS" else {"jobs": payload})
+
 sys.stderr.write("fake gh: unhandled %r\n" % (sys.argv,))
 sys.exit(2)
 """
 
 REVIEWER = "github-actions[bot]"
+#: The `review` job's `name:` in claude-pr-review.yaml — the job whose presence
+#: on a sibling run means that run will post rather than merely decide.
+REVIEW_JOB = "Claude PR review"
+SELF_RUN_ID = "999"
+PR_NUMBER = 5
 
 
 def _review(
     state: str = "COMMENTED", *, login: str = REVIEWER, body: str = "## Review"
 ) -> dict:
     return {"user": {"login": login}, "state": state, "body": body}
+
+
+def _run(
+    run_id: int = 111, *, pr: int = PR_NUMBER, status: str = "in_progress"
+) -> dict:
+    return {"id": run_id, "status": status, "pull_requests": [{"number": pr}]}
 
 
 def _decide(
@@ -109,14 +137,23 @@ def _decide(
     head_message: str = "chore: push\n",
     label: str | None = None,
     reviews_rc: int = 0,
+    runs: list[dict] | None = None,
+    jobs: list[dict] | None = None,
+    actions_rc: int = 0,
 ) -> dict[str, str]:
-    """Run the real script; return the key=value pairs it wrote to GITHUB_OUTPUT."""
+    """Run the real script; return the key=value pairs it wrote to GITHUB_OUTPUT.
+
+    The paths the stub was asked for land in `tmp_path / "gh.log"`, in order.
+    """
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir(exist_ok=True)
     gh = bin_dir / "gh"
     gh.write_text(_FAKE_GH)
     gh.chmod(0o755)
     (tmp_path / "reviews.json").write_text(json.dumps(reviews or []))
+    (tmp_path / "runs.json").write_text(json.dumps(runs or []))
+    (tmp_path / "jobs.json").write_text(json.dumps(jobs or []))
+    (tmp_path / "gh.log").write_text("")
     out = tmp_path / "gh_output"
     out.write_text("")
     env = {
@@ -125,11 +162,19 @@ def _decide(
         "ACTION": action,
         "REPO": "o/r",
         "HEAD_SHA": "cafe1234",
-        "PR": "5",
+        "PR": str(PR_NUMBER),
         "GITHUB_OUTPUT": str(out),
+        "GITHUB_RUN_ID": SELF_RUN_ID,
+        "GITHUB_WORKFLOW_REF": (
+            "o/r/.github/workflows/claude-pr-review.yaml@refs/pull/5/merge"
+        ),
         "GH_REVIEWS": str(tmp_path / "reviews.json"),
+        "GH_RUNS": str(tmp_path / "runs.json"),
+        "GH_JOBS": str(tmp_path / "jobs.json"),
+        "GH_LOG": str(tmp_path / "gh.log"),
         "HEAD_MESSAGE": head_message,
         "REVIEWS_RC": str(reviews_rc),
+        "ACTIONS_RC": str(actions_rc),
     }
     if label is not None:
         env["LABEL"] = label
@@ -236,3 +281,112 @@ def test_a_failed_reviews_read_does_not_review(tmp_path: Path) -> None:
 def test_an_unhandled_action_does_not_review(tmp_path: Path) -> None:
     got = _decide(tmp_path, action="closed")
     assert got["run"] == "false"
+
+
+def test_a_push_does_not_start_a_second_pass_while_one_is_running(
+    tmp_path: Path,
+) -> None:
+    # The regression this pins (#340): the first pass posts its review in its
+    # LAST step, so the reviews list still reads "never reviewed" while that job
+    # runs. The push bought a second whole-diff pass AND its review job's
+    # concurrency group cancelled the Opus run three seconds from posting.
+    got = _decide(
+        tmp_path,
+        action="synchronize",
+        reviews=[],
+        runs=[_run()],
+        jobs=[{"name": REVIEW_JOB, "status": "in_progress"}],
+    )
+    assert got["run"] == "false"
+
+
+@pytest.mark.parametrize(
+    "jobs",
+    [
+        pytest.param([], id="still-in-its-decide-job"),
+        pytest.param(
+            [{"name": "Decide whether to review", "status": "in_progress"}],
+            id="deciding",
+        ),
+        pytest.param(
+            [{"name": REVIEW_JOB, "status": "completed"}], id="review-job-skipped"
+        ),
+    ],
+)
+def test_a_sibling_that_is_not_reviewing_does_not_suppress_the_first_pass(
+    tmp_path: Path, jobs: list[dict]
+) -> None:
+    # The autofix-bot pattern: a push lands while a sibling run is still deciding
+    # or has skipped its review. Suppressing there drops the first pass for
+    # nothing — and if that sibling does review, the concurrency group already
+    # stops the duplicate.
+    got = _decide(tmp_path, action="synchronize", reviews=[], runs=[_run()], jobs=jobs)
+    assert got["run"] == "true"
+    # Positive marker: the verdict came from asking, not from never looking.
+    assert "/actions/workflows/" in (tmp_path / "gh.log").read_text()
+
+
+def test_an_in_flight_run_for_another_pr_or_for_this_run_is_ignored(
+    tmp_path: Path,
+) -> None:
+    got = _decide(
+        tmp_path,
+        action="synchronize",
+        reviews=[],
+        runs=[_run(222, pr=7), _run(int(SELF_RUN_ID))],
+        jobs=[{"name": REVIEW_JOB, "status": "in_progress"}],
+    )
+    assert got["run"] == "true"
+    # The runs list WAS read (so this is not passing by never looking), and
+    # neither run was then opened for its jobs — the jq filter dropped both.
+    log = (tmp_path / "gh.log").read_text()
+    assert "/actions/workflows/" in log, log
+    assert "/actions/runs/" not in log, log
+
+
+def test_a_failed_in_flight_read_does_not_review(tmp_path: Path) -> None:
+    # Same fail-safe as the reviews read: a query that could not answer must not
+    # read as "nothing is running", which is the reading that spends money.
+    got = _decide(
+        tmp_path,
+        action="synchronize",
+        reviews=[],
+        runs=[_run()],
+        actions_rc=1,
+    )
+    assert got["run"] == "false"
+
+
+def test_the_in_flight_read_happens_before_the_reviews_read(tmp_path: Path) -> None:
+    # The two reads are only gap-free in this order: a sibling that posts
+    # BETWEEN them is caught by the later read, and one that has not posted yet
+    # was still running at the earlier one. Reversed, a sibling that both posts
+    # and finishes in the gap is invisible to both.
+    _decide(
+        tmp_path,
+        action="synchronize",
+        reviews=[],
+        runs=[_run()],
+        jobs=[{"name": REVIEW_JOB, "status": "completed"}],
+    )
+    paths = [p for p in (tmp_path / "gh.log").read_text().splitlines() if p]
+    runs_at = next(i for i, p in enumerate(paths) if "/actions/workflows/" in p)
+    reviews_at = next(i for i, p in enumerate(paths) if p.endswith("/reviews"))
+    assert runs_at < reviews_at, paths
+
+
+def test_the_opus_opt_in_is_not_suppressed_by_an_in_flight_run(
+    tmp_path: Path,
+) -> None:
+    # An explicit re-read is deliberate: it supersedes whatever is running.
+    got = _decide(
+        tmp_path,
+        action="synchronize",
+        reviews=[],
+        head_message="fix: thing [opus-review]\n",
+        runs=[_run()],
+        jobs=[{"name": REVIEW_JOB, "status": "in_progress"}],
+    )
+    assert got["run"] == "true"
+    assert "opus" in got["model"]
+    assert "/actions/" not in (tmp_path / "gh.log").read_text()

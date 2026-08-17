@@ -14,12 +14,13 @@
 #          re-read. Head-scoped (once-per-tag): the re-review fires for the
 #          commit that carries the tag and NOT again on later untagged pushes
 #          (re-tag to run again).
-#       2. The reviewer has NEVER reviewed this PR — the first whole-diff pass,
-#          on the cheap tier, for a PR whose earlier events all skipped. A push is never a
-#          RE-read: the reviewer reads a PR once, and later pushes make progress
-#          by the thread resolver closing findings out, which is what the
-#          review-findings gate reads. This automatic pass NEVER spends Opus —
-#          the expensive model is only ever the explicit [opus-review] opt-in.
+#       2. The reviewer has NEVER reviewed this PR and none is UNDERWAY — the
+#          first whole-diff pass, on the cheap tier, for a PR whose earlier
+#          events all skipped. A push is never a RE-read: the reviewer reads a
+#          PR once, and later pushes make progress by the thread resolver
+#          closing findings out, which is what the review-findings gate reads.
+#          This automatic pass NEVER spends Opus — the expensive model is only
+#          ever the explicit [opus-review] opt-in.
 #
 # Read under pull_request_target, so the untrusted PR head is NEVER checked out
 # or executed here: the head commit's message and the PR's reviews are fetched as
@@ -27,7 +28,8 @@
 # eval). A transient API failure yields run=false (no review, no red) rather than
 # a spurious re-review.
 #
-# Env: GH_TOKEN, ACTION, REPO, HEAD_SHA, PR, LABEL (LABEL set only on `labeled`).
+# Env: GH_TOKEN, ACTION, REPO, HEAD_SHA, PR, LABEL (LABEL set only on `labeled`),
+# plus the GITHUB_WORKFLOW_REF / GITHUB_RUN_ID the runner always sets.
 set -euo pipefail
 
 KEYWORD="[opus-review]"
@@ -36,6 +38,53 @@ REVIEW_LABEL="needs-auto-review"
 REVIEWER="github-actions[bot]"
 OPUS_MODEL="claude-opus-5"
 CHEAP_MODEL="claude-sonnet-5"
+# The `review` job's `name:` in claude-pr-review.yaml, which is what marks a
+# sibling run as one that will post rather than one still deciding.
+REVIEW_JOB="Claude PR review"
+# This workflow's own file, so a rename cannot leave a stale literal here.
+# GITHUB_WORKFLOW_REF is "owner/repo/.github/workflows/file.yaml@refs/…", and the
+# ref half carries slashes, so the "@" must go before the last path segment.
+# Both vars are runner-provided; unset means this is not running where it thinks
+# it is, which is a bug to crash on rather than to degrade around.
+: "${GITHUB_WORKFLOW_REF:?GITHUB_WORKFLOW_REF is required}"
+: "${GITHUB_RUN_ID:?GITHUB_RUN_ID is required}"
+WORKFLOW_FILE="${GITHUB_WORKFLOW_REF%%@*}"
+WORKFLOW_FILE="${WORKFLOW_FILE##*/}"
+
+# Whether another run of this workflow is ALREADY REVIEWING this PR: 0 yes,
+# 1 no, 2 the API could not say.
+#
+# The reviews list this script reads below cannot show a first pass that is still
+# running, because that job posts its review in its last step. On #340 this step
+# decided at 22:20:43 and the opened-event review landed at 22:20:46, so the
+# trigger read "never reviewed", bought a second whole-diff pass, and the review
+# job's concurrency group then cancelled the Opus run three seconds from posting.
+#
+# Only a sibling whose REVIEW JOB already exists counts. A sibling still inside
+# its decide job may yet decide not to review, and if it does review, the
+# concurrency group cancels this run's review job — so no duplicate can post, and
+# suppressing on an undecided sibling would drop pushes for nothing.
+#
+# Bounded at the newest 100 runs of this workflow (the API's page maximum): a
+# sibling that is still running started seconds ago and cannot have fallen off.
+# A fork PR whose run carries no `pull_requests` matches nothing here and keeps
+# the unguarded behaviour — under-suppressing, never over-suppressing.
+review_in_flight() {
+  local runs run pending
+  runs="$(gh api "repos/$REPO/actions/workflows/$WORKFLOW_FILE/runs?per_page=100" \
+    --jq ".workflow_runs[]
+          | select(.status != \"completed\")
+          | select(.id != $GITHUB_RUN_ID)
+          | select([.pull_requests[]?.number] | index($PR))
+          | .id" 2>/dev/null)" || return 2
+  while IFS= read -r run; do
+    [[ -n "$run" ]] || continue
+    pending="$(gh api "repos/$REPO/actions/runs/$run/jobs" \
+      --jq "[.jobs[] | select(.name == \"$REVIEW_JOB\") | select(.status != \"completed\")] | length" 2>/dev/null)" || return 2
+    if [[ "$pending" -gt 0 ]]; then return 0; fi
+  done <<<"$runs"
+  return 1
+}
 
 emit() {
   # $1 run, $2 reason, $3 model (defaults to Opus — the thorough first-look model)
@@ -113,6 +162,15 @@ fi
 # looked at this PR (the strongest reason to review), while a FAILED query also
 # yields "" and must not be read that way — folding them together would review on
 # every push forever whenever the API is flaky or the filter is malformed.
+#
+# The in-flight query runs BEFORE the reviews query, and the order is what makes
+# the pair gap-free: a sibling that posts between the two reads is caught by the
+# LATER one, and a sibling that has not posted yet was still running at the
+# EARLIER one. Reading reviews first leaves a window between them where a sibling
+# both posts and finishes, so neither read sees it.
+in_flight_rc=0
+review_in_flight || in_flight_rc=$?
+
 reviews_rc=0
 state=""
 pages="$(gh api "repos/$REPO/pulls/${PR:-}/reviews" --paginate --slurp 2>/dev/null)" || reviews_rc=$?
@@ -121,8 +179,16 @@ if [[ "$reviews_rc" -eq 0 ]]; then
 fi
 if [[ "$reviews_rc" -ne 0 ]]; then
   emit false "could not read $REPO#${PR:-} reviews (rc=$reviews_rc) — not reviewing rather than guessing"
-elif [[ -z "$state" ]]; then
-  emit true "$REVIEWER has never reviewed this PR — running the first pass this push" "$CHEAP_MODEL"
-else
-  emit false "$REVIEWER already reviewed this PR (latest: $state) — a push is not re-read; put $KEYWORD in a commit title for a full re-read"
+  exit 0
 fi
+if [[ -n "$state" ]]; then
+  emit false "$REVIEWER already reviewed this PR (latest: $state) — a push is not re-read; put $KEYWORD in a commit title for a full re-read"
+  exit 0
+fi
+
+# No review is VISIBLE, which is not the same as none being under way.
+case "$in_flight_rc" in
+0) emit false "another $WORKFLOW_FILE run is already reviewing $REPO#${PR:-} — one first pass per PR, not two" ;;
+1) emit true "$REVIEWER has never reviewed this PR — running the first pass this push" "$CHEAP_MODEL" ;;
+*) emit false "could not read in-flight $WORKFLOW_FILE runs (rc=$in_flight_rc) — not reviewing rather than risking a duplicate" ;;
+esac
