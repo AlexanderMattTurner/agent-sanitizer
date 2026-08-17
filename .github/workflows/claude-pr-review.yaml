@@ -21,17 +21,16 @@ name: Claude PR review
 on: # zizmor: ignore[dangerous-triggers] — base-only checkout + least privilege; see header
   # Review a PR automatically when it first becomes reviewable — `opened` for a
   # normal PR, `ready_for_review` for a draft (skipped by the draft guard) the
-  # moment it's marked ready. On `synchronize` (every push) the `decide` job
-  # below picks the re-review, if any: a `[opus-review]` opt-in in the head
-  # commit title forces a full Opus re-read, and — independently — while the
-  # reviewer still has an unresolved change request the push gets a cheap Haiku
-  # re-check so addressing the requested changes can clear the block. An ordinary
-  # push with no opt-in and no outstanding change request triggers nothing.
-  # `reopened` stays excluded.
+  # moment it's marked ready. That first look is the whole automatic budget: on
+  # `synchronize` (every push) the `decide` job below reviews only on a
+  # `[opus-review]` opt-in in the head commit title, which forces a full Opus
+  # re-read. An ordinary push triggers nothing. `reopened` stays excluded.
   #
   # `labeled` is the on-demand escape hatch: the auto-approve message tells a
   # human to add the `needs-auto-review` label when a skipped PR should get a
   # real Opus read after all, and the decide job runs the review on that label.
+  # It is also how a PR whose first look never posted (a spent credential, a
+  # timed-out run) buys its read, so no push-time catch-up trigger is needed.
   #
   # not-required-check: the review job posts a PR review, it is not a required
   # status check, so the decide gate legitimately skipping it (an untagged push,
@@ -59,11 +58,11 @@ jobs:
   #     reviewed (fail toward reviewing).
   # This job `if:` carries the cheap payload-only skips (no runner boots for a
   # draft/bot/docs PR); the script then decides opened/ready (always, on Opus) vs
-  # synchronize (the [opus-review] head-commit opt-in on Opus, or a Haiku
-  # re-check while a reviewer change request is still outstanding). A `labeled`
-  # event bypasses the title/author skips entirely — the label IS the request to
-  # review a PR the skips would otherwise drop — and the script confirms the
-  # label is `needs-auto-review` before running (any other label is a no-op).
+  # synchronize (the [opus-review] head-commit opt-in, on Opus, and nothing
+  # else). A `labeled` event bypasses the title/author skips entirely — the
+  # label IS the request to review a PR the skips would otherwise drop — and the
+  # script confirms the label is `needs-auto-review` before running (any other
+  # label is a no-op).
   #
   # The skip set applies to a TRUSTED PR only. A PR title is author-controlled,
   # so an untrusted author who may skip by title chooses whether their own code
@@ -107,7 +106,6 @@ jobs:
     permissions:
       contents: read # sparse-checkout the trusted decide script
       pull-requests: read # read the head commit title via the API
-      actions: read # see whether a sibling run is already reviewing this PR
     outputs:
       run: ${{ steps.decide.outputs.run }}
       model: ${{ steps.decide.outputs.model }}
@@ -129,7 +127,6 @@ jobs:
           ACTION: ${{ github.event.action }}
           REPO: ${{ github.repository }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-          PR: ${{ github.event.pull_request.number }}
           LABEL: ${{ github.event.label.name }}
         run: bash .github/scripts/decide-pr-review-trigger.sh
 
@@ -138,15 +135,14 @@ jobs:
     needs: decide
     if: needs.decide.outputs.run == 'true'
     # Concurrency lives on the REVIEW job, not the workflow: a `synchronize` that
-    # decide drops (run=false — no opt-in, and either a review already posted or
-    # one is under way) skips this job, so it never enters the group and cannot
-    # cancel an in-flight review. That is what makes decide's in-flight check
-    # load-bearing rather than merely thrifty: without it a push during the
-    # `opened` first-look joins the group and kills it. Only
-    # a real review joins the group, so cancel-in-progress means one review per
-    # PR at a time and a fresh re-review (an [opus-review] re-read or a Haiku
-    # recheck) supersedes an older one (latest head wins). Keyed by PR number
-    # (not static), so it never strands a required check.
+    # decide drops (run=false — no [opus-review] opt-in) skips this job, so it
+    # never enters the group and cannot cancel the `opened` first look. That is
+    # what makes the decide gate load-bearing rather than merely thrifty — an
+    # ordinary push during the first look must not join this group and kill it.
+    # Only a real review joins, so cancel-in-progress means one review per PR at
+    # a time and a deliberate [opus-review] re-read supersedes an older one
+    # (latest head wins). Keyed by PR number (not static), so it never strands a
+    # required check.
     concurrency:
       group: claude-pr-review-${{ github.event.pull_request.number }}
       cancel-in-progress: true
