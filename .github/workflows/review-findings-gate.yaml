@@ -26,7 +26,7 @@ name: Review-findings gate
 # enforcement point: no PR-authored code is ever checked out or executed here —
 # the job reads review/thread state via the API and posts a check run. Least
 # privilege: contents:read (checkout the scripts) + checks:write (post the
-# verdict) + pull-requests:read + issues:write (remove the command label).
+# verdict) + pull-requests:write (read the threads, remove the command label).
 
 on: # zizmor: ignore[dangerous-triggers] — no PR code executes: API-only scripts off a default-branch checkout; see the SECURITY header
   # A new head sha needs a fresh verdict (synchronize), and a PR becomes gateable
@@ -87,8 +87,12 @@ jobs:
     permissions:
       contents: read # sparse-checkout the trusted gate script
       checks: write # post the "Review findings resolved" check run on the head
-      pull-requests: read # read the PR's reviews and threads
-      issues: write # remove the recheck-review-gate command label
+      # A label on a PULL REQUEST is checked against the pull-requests
+      # permission, not issues. Under `issues: write` alone the DELETE below
+      # 403s and the label stays; while it sits there re-adding it fires no
+      # `labeled` event, which makes the recheck hatch one-shot for the whole
+      # life of the PR.
+      pull-requests: write # read the PR's threads, remove the command label
     env:
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       GH_REPO: ${{ github.repository }}
