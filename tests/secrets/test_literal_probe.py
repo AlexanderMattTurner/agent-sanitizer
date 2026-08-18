@@ -103,7 +103,16 @@ def _engine_probes() -> dict[str, P.LiteralProbe]:
 
 
 def _probe_literal_chars() -> set[str]:
-    return {
+    """Every character a probe searches for in a FOLDED haystack.
+
+    ``_FIELD_NAME_ANCHOR`` belongs here alongside the probes: it is compiled
+    without ``re.IGNORECASE`` and matched against ``fold``'s view precisely so it
+    answers the same case-insensitive question the regex it gates asks, so its
+    own letters need the same equivalence coverage. Its literals are not in any
+    probe's index (`key`'s `k` and `y` reach the fold through nothing else), so
+    omitting it would leave them unchecked."""
+    anchor_letters = {char for char in E._FIELD_NAME_ANCHOR.pattern if char.isalpha()}
+    return anchor_letters | {
         char
         for probe in _engine_probes().values()
         for lit in probe.by_literal
@@ -440,8 +449,16 @@ def test_every_detector_sample_still_redacts_through_the_cascade(sample):
 
 def _open_every_probe(monkeypatch):
     """Replace all four probes with one that rules nothing out, so the engine
-    does the unnarrowed work it did before they existed."""
+    does the unnarrowed work it did before they existed.
+
+    The catch-all's one pattern has no required literal, so it lands in ``weak``
+    and therefore in ``unwindowable`` — which is what makes the cross-line sweep
+    scan the whole text again instead of the windows the real probe hands it.
+    ``_FIELD_NAME_ANCHOR`` is opened separately, to the empty pattern: it matches
+    at every position, so the field-value pass tries its regex everywhere, which
+    is exactly what ``re.sub`` does."""
     catch_all = P.LiteralProbe([re.compile(".", re.DOTALL)])
+    monkeypatch.setattr(E, "_FIELD_NAME_ANCHOR", re.compile(""))
 
     def _cached_stub():
         """A stand-in for a functools.cache'd accessor: configure_plugins() calls
@@ -497,3 +514,298 @@ def test_the_differential_corpus_actually_detects_something():
     result = run_plain("\n".join(SAMPLE_VALUES), cfg())
     assert result is not None
     assert len(set(result["found"])) >= 10, result["found"]
+
+
+# ─── inspect_width: the AST bound the windows rest on ────────────────────────
+
+
+@pytest.mark.parametrize(
+    "pattern, expected",
+    [
+        # A run of literals is its own width.
+        (r"ghp_", 4),
+        # A class, a negated class and `.` each consume exactly one character.
+        (r"[a-z][^a-z].", 3),
+        # A bounded repeat contributes its MAXIMUM, never its minimum.
+        (r"a{2,7}", 7),
+        (r"(?:ab){3}", 6),
+        # An alternation is as wide as its widest arm.
+        (r"(?:ab|abcdef)", 6),
+        # An anchor is zero-width.
+        (r"^abc$", 3),
+        # A trailing lookahead's own width is INCLUDED: a caller that truncates
+        # at the bound must not cut the assertion short and turn a match into a
+        # miss. Same for a negative one.
+        (r"abc(?=defg)", 7),
+        (r"abc(?!defg)", 7),
+        # A lookBEHIND adds nothing — it reads left, which `pos` never hides.
+        (r"(?<![A-Za-z0-9])abc", 3),
+        # Unbounded repeats have no bound, in any spelling.
+        (r"a+", None),
+        (r"a*", None),
+        (r"a{2,}", None),
+        (r"a+?", None),
+        # A group whose body is unbounded poisons the whole pattern.
+        (r"x(?:ab+)y", None),
+        # One unbounded ARM is enough, even beside a bounded one.
+        (r"(?:ab|c+)", None),
+        # A backreference's width belongs to another group, so it is refused
+        # rather than guessed.
+        (r"(a)\1", None),
+    ],
+)
+def test_inspect_width_bounds_how_far_right_a_match_reads(pattern, expected):
+    assert P.inspect_width(pattern, 0) == expected
+
+
+@pytest.mark.parametrize(
+    "spans, expected",
+    [
+        ([], ()),
+        ([(5, 9), (0, 3)], ((0, 3), (5, 9))),
+        # Overlapping ranges merge.
+        ([(0, 5), (3, 9)], ((0, 9),)),
+        # So do ABUTTING ones: scanned apart, a match straddling their shared
+        # edge would fall outside both.
+        ([(0, 5), (5, 9)], ((0, 9),)),
+        # A range wholly inside another does not shorten it.
+        ([(0, 20), (5, 9)], ((0, 20),)),
+    ],
+)
+def test_coalesce_merges_overlapping_and_abutting_ranges(spans, expected):
+    assert P._coalesce(spans) == expected
+
+
+# ─── LiteralProbe.windows ────────────────────────────────────────────────────
+
+
+def _window_holds(windows, match):
+    return any(start <= match.start() and match.end() <= end for start, end in windows)
+
+
+@pytest.mark.parametrize(
+    "pattern, text",
+    [
+        # The literal sits at the match's START.
+        (r"ghp_[A-Za-z0-9]{6}", "noise ghp_abc123 more noise"),
+        # …and at its END, so the window must reach LEFT of the hit.
+        (
+            r"[A-Za-z0-9]{14}\.atlasv1\.[a-z]{4}",
+            "x" * 40 + "abcdefghijklmn.atlasv1.wxyz",
+        ),
+        # A case-insensitive pattern found through the folded haystack.
+        (
+            r"(?i)-----begin rsa private key-----",
+            "j" * 500 + "-----BEGIN RSA PRIVATE KEY-----",
+        ),
+        # Several occurrences, including two close enough to coalesce.
+        (r"kia[0-9]{4}", "kia1234 kia5678" + "q" * 900 + "kia9012"),
+        # A match at the very start and one at the very end, where the window
+        # would run off either edge if it were not clamped.
+        (r"kia[0-9]{4}", "kia1111" + "z" * 800 + "kia2222"),
+    ],
+)
+def test_windows_contain_every_match_of_a_windowable_pattern(pattern, text):
+    """The soundness claim the cross-line narrowing rests on: a window holds
+    every match of the pattern whose literal centred it, span and all."""
+    compiled = re.compile(pattern)
+    probe = P.LiteralProbe([compiled])
+    assert not probe.unwindowable, "pattern should be windowable"
+    windows = probe.windows(text)
+    assert windows is not None
+    matches = list(compiled.finditer(text))
+    assert matches, "no match to contain — the case would pass vacuously"
+    assert [m.group(0) for m in matches if not _window_holds(windows, m)] == []
+    # Non-vacuous in the other direction too: the windows must actually NARROW,
+    # or they would trivially contain everything.
+    assert sum(end - start for start, end in windows) < len(text)
+
+
+def test_windows_finditer_over_them_finds_what_a_full_sweep_finds():
+    """The windows as the engine consumes them — `finditer(text, pos, endpos)`
+    per range, which is the form that keeps a lookbehind reading real bytes."""
+    compiled = re.compile(r"(?<![A-Za-z0-9])kia[0-9]{4}(?![A-Za-z0-9])")
+    probe = P.LiteralProbe([compiled])
+    text = "kia1111 xkia2222 " + "z" * 600 + " kia3333x kia4444"
+    windows = probe.windows(text)
+    assert windows is not None
+    windowed = [
+        m.group(0)
+        for start, end in windows
+        for m in compiled.finditer(text, start, end)
+    ]
+    assert windowed == [m.group(0) for m in compiled.finditer(text)]
+    assert windowed == ["kia1111", "kia4444"]
+
+
+def test_a_pattern_with_an_unbounded_extent_is_never_windowed():
+    """An unbounded match can start arbitrarily far left of its literal, so no
+    window can hold it — it must be handed back for a full scan instead."""
+    unbounded = re.compile(r"xox[a-z]-[0-9]+-[a-z0-9]+")
+    probe = P.LiteralProbe([unbounded])
+    assert P.inspect_width(unbounded.pattern, unbounded.flags) is None
+    assert probe.unwindowable == (unbounded,)
+    # None, not an empty tuple: an empty tuple means "matches nowhere", and this
+    # probe has no way to tell.
+    assert probe.windows("xoxb-1-abc") is None
+
+
+def test_a_pattern_with_no_indexed_literal_is_never_windowed():
+    """Nothing to centre a window on, so it joins the full-scan set."""
+    weak = re.compile(r"[MNO][a-zA-Z]{4}\.[a-z]{3}")
+    probe = P.LiteralProbe([weak])
+    assert probe.by_literal == {}
+    assert probe.unwindowable == (weak,)
+    assert probe.windows("Mabcd.xyz") is None
+
+
+def test_a_literal_whose_windows_span_the_whole_text_declines_to_narrow():
+    """Windowing that covers everything is pure overhead, and since the caller's
+    patterns are shared across literals there is nothing left to narrow: the
+    probe says so with None rather than handing back the whole text as a
+    'window'."""
+    probe = P.LiteralProbe([re.compile(r"ab[0-9]{200}")])
+    assert probe.windows("ab" + "0" * 8) is None
+
+
+def test_windows_finds_overlapping_literal_occurrences():
+    """The scan advances one character, not one literal width. `aa` occurs twice
+    in `aaa`, and only the SECOND occurrence is inside the real match — a scan
+    that resumed past each hit would centre on the first and miss it."""
+    compiled = re.compile(r"aa[0-9]")
+    probe = P.LiteralProbe([compiled])
+    text = "x" * 200 + "aaa1" + "y" * 200
+    windows = probe.windows(text)
+    assert windows is not None
+    matches = list(compiled.finditer(text))
+    assert [m.group(0) for m in matches] == ["aa1"]
+    assert all(_window_holds(windows, m) for m in matches)
+
+
+def test_the_window_probe_yields_to_a_compute_deadline():
+    stages: list[str] = []
+
+    def check(stage: str) -> None:
+        stages.append(stage)
+        raise RuntimeError("budget spent")
+
+    probe = P.LiteralProbe([re.compile(r"ghp_[a-z]{4}")])
+    with pytest.raises(RuntimeError, match="budget spent"):
+        probe.windows("ghp_abcd", check)
+    assert stages == ["candidate-window literal probe"]
+
+
+# ─── the field-value anchor ──────────────────────────────────────────────────
+
+
+def _mark_value(match):
+    return match.group("field_prefix") + "<<" + match.group("secret_value") + ">>"
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        pytest.param("", id="empty"),
+        pytest.param("token", id="noun-with-no-value"),
+        pytest.param("token=" + "a" * 30, id="plain"),
+        pytest.param("TOKEN = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'", id="uppercase-noun"),
+        # A noun starting INSIDE an earlier noun's span: `secret` consumes six
+        # characters, and `token` begins one character inside them. An anchor
+        # scan that skipped past each hit would never try this position.
+        pytest.param("secretoken: " + "z" * 25, id="overlapping-nouns"),
+        pytest.param("passwordtoken=" + "c" * 30, id="adjacent-nouns"),
+        # The IGNORECASE equivalences the fold exists for, spliced into a noun.
+        pytest.param("api_keİ: " + "q" * 25, id="dotted-capital-i"),
+        pytest.param("ſecret: " + "f" * 30, id="long-s"),
+        # Multiple matches, so the resume-at-previous-end order is exercised.
+        pytest.param("PASSWORD: " + "g" * 30 + " token: " + "h" * 30, id="two-matches"),
+        # Every operator spelling, across lines, so `^`/`$` under re.MULTILINE
+        # see the same text a full sweep shows them.
+        pytest.param(
+            "x" * 60 + "\nsecret := " + "d" * 40 + ';\nAUTH_TOKEN=>"' + "e" * 30 + '"',
+            id="multiline-operators",
+        ),
+        pytest.param(
+            (REPO_ROOT / "python/agent_sanitizer/secrets/engine.py").read_text(),
+            id="this-engine-source",
+        ),
+    ],
+)
+def test_the_field_value_sweep_is_byte_identical_to_the_full_sub(text):
+    """The anchor only decides WHERE `FIELD_VALUE_RE` is tried. Output must equal
+    `re.sub`'s exactly — the pass rewrites the payload, so an over-match here
+    would mangle legitimate content and an under-match would leak a credential."""
+    assert E._redact_field_values(text, _mark_value) == E.FIELD_VALUE_RE.sub(
+        _mark_value, text
+    )
+
+
+def test_the_field_value_sweep_corpus_actually_matches_something():
+    """Non-vacuity: a corpus the regex never matches would pass the test above
+    with two untouched copies of the input."""
+    assert "<<" in E._redact_field_values("token=" + "a" * 30, _mark_value)
+
+
+def test_the_field_value_anchor_matches_wherever_the_regex_can_start():
+    """The claim the anchor rests on, stated over the regex itself: every start
+    position `FIELD_VALUE_RE` can match at is one the anchor matches at."""
+    text = (
+        "secretoken: " + "z" * 25 + "\nAPI-KEY => " + "y" * 30 + "\n"
+        "mypassword: " + "x" * 30 + "\nclient_secret_v2:=" + "w" * 30
+    )
+    folded = P.fold(text)
+    assert folded is not None
+    starts = {m.start() for m in E.FIELD_VALUE_RE.finditer(text)}
+    assert starts, "no match — the assertion below would be vacuous"
+    uncovered = {
+        start for start in starts if E._FIELD_NAME_ANCHOR.match(folded, start) is None
+    }
+    assert uncovered == set()
+
+
+def test_the_field_value_sweep_falls_back_when_the_fold_is_refused(monkeypatch):
+    """A fold that changed a length would desynchronize the anchor's offsets from
+    the text's, so the pass reverts to the full sweep rather than trust them."""
+    monkeypatch.setattr(E, "fold", lambda text: None)
+    text = "token=" + "a" * 30
+    assert E._redact_field_values(text, _mark_value) == E.FIELD_VALUE_RE.sub(
+        _mark_value, text
+    )
+    assert "<<" in E._redact_field_values(text, _mark_value)
+
+
+def test_the_field_value_sweep_yields_to_a_compute_deadline():
+    """The anchor loop is one iteration per credential noun in the payload, so an
+    exhausted budget must stop it there rather than after the whole pass."""
+    with pytest.raises(E.RedactionBudgetExceeded, match="during field-value scan"):
+        E._redact_field_values("token=" + "a" * 30, _mark_value, E._Deadline(-1))
+
+
+def test_fold_by_replacement_chain_equals_one_translate():
+    """`fold` swaps `str.translate` for a chain of `str.replace` on the ground
+    that no fixup can feed another. That is checked at import time by
+    `_SELF_FEEDING`; this states the consequence it buys."""
+    exotics = "".join(chr(code_point) for code_point in P._CASE_EQUIVALENT_FIXUPS)
+    for text in (exotics, exotics * 3, "aA" + exotics + "Zz", "plain ascii", ""):
+        expected = text.translate(P._CASE_EQUIVALENT_FIXUPS).lower()
+        assert P.fold(text) == expected, repr(text)
+
+
+def test_no_window_is_reported_when_a_windowable_pattern_matches_nowhere():
+    """The other side of the None contract: an empty tuple is a real verdict —
+    these patterns cannot match anywhere — so the caller may skip the scan."""
+    probe = P.LiteralProbe([re.compile(r"ghp_[a-z]{4}")])
+    assert probe.windows("nothing credential-shaped here") == ()
+
+
+def test_the_field_value_sweep_terminates_under_a_zero_width_anchor(monkeypatch):
+    """`Pattern.search(s, pos)` CLAMPS a pos past the end back to `len(s)` instead
+    of returning None, so an anchor that can match empty is re-found at the same
+    position forever unless the loop bounds its own cursor. The empty anchor is
+    also the shape `_open_every_probe` installs to make the pass try every
+    position, so this is the differential harness's own precondition."""
+    monkeypatch.setattr(E, "_FIELD_NAME_ANCHOR", re.compile(""))
+    text = "token=" + "a" * 30 + " tail"
+    assert E._redact_field_values(text, _mark_value) == E.FIELD_VALUE_RE.sub(
+        _mark_value, text
+    )
