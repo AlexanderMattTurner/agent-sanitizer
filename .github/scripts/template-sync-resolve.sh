@@ -21,7 +21,7 @@
 # Env:
 #   CONFLICT_FILES           whitespace-separated marker-bearing paths (required)
 #   PR_NUMBER                the sync PR, for fanout's per-file prompt (required)
-#   RESOLVER_DIR              the resolver clone's .github/resolver, from the
+#   RESOLVER_DIR             the resolver clone's .github/resolver, from the
 #                            caller's own checkout step (required for tier 2)
 #   CLAUDE_CODE_OAUTH_TOKEN  when unset, tier 2 is skipped and its files are
 #                            reported unresolved — the fallback to today's
