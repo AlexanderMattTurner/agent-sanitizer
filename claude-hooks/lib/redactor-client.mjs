@@ -18,7 +18,7 @@
  * daemon could not vet input.
  */
 import { spawn } from "node:child_process";
-import { excludeProvisioning } from "./hook-timing.mjs";
+import { chargeDaemonWait, excludeProvisioning } from "./hook-timing.mjs";
 import { existsSync, lstatSync } from "node:fs";
 import { createConnection } from "node:net";
 import { tmpdir, userInfo } from "node:os";
@@ -435,9 +435,9 @@ export async function redactViaDaemon(text, opts = {}) {
     connect = connectAndRequest,
     spawn: spawnFn = spawnDaemon,
     waitForSocket: waitFn = waitForSocket,
-    // The clock the provisioning charge is measured on; injectable alongside the
-    // waitForSocket seam it brackets, since a stubbed wait advances a test clock
-    // rather than real time.
+    // The clock the provisioning and daemon-wait charges are measured on;
+    // injectable alongside the seams they bracket, since a stubbed wait or
+    // connect advances a test clock rather than real time.
     now = Date.now,
   } = opts;
   // Remaining shared budget in ms, or undefined when no budget was threaded (the
@@ -487,9 +487,17 @@ export async function redactViaDaemon(text, opts = {}) {
       );
     return result;
   };
+  // Every dial is charged to the daemon share, so the slow-hook notice can say
+  // "the daemon was slow" instead of guessing: the daemon is a separate process,
+  // so its CPU appears in neither this process's getrusage(RUSAGE_SELF) nor —
+  // being long-lived and never reaped here — in RUSAGE_CHILDREN. The round trip
+  // this side waits out is the only measurement of it available.
+  /** @param {number | undefined} deadlineMs @returns {Promise<RedactResponse|null>} */
+  const dial = (deadlineMs) =>
+    chargeDaemonWait(() => connect(socketPath, request, deadlineMs), now);
   try {
     // undefined remaining → connectAndRequest's own default request deadline.
-    return validate(await connect(socketPath, request, remainingMs()));
+    return validate(await dial(remainingMs()));
   } catch (err) {
     if (!isRespawnable(err)) throw failClosed(err);
     // Socket absent or dead: (re)spawn the daemon, wait for it, retry exactly once
@@ -520,7 +528,7 @@ export async function redactViaDaemon(text, opts = {}) {
       );
     if (budgetSpent()) throw outOfBudget("after redactor respawn");
     try {
-      return validate(await connect(socketPath, request, remainingMs()));
+      return validate(await dial(remainingMs()));
     } catch (err2) {
       throw failClosed(err2);
     }

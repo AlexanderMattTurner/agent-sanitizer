@@ -198,6 +198,7 @@ export async function runJudgeCli(
           payloadBytes,
           tool,
           cpuMs: timer.cpuMs(),
+          daemonMs: timer.daemonMs(),
         }),
         event,
       ),
@@ -214,6 +215,7 @@ export async function runJudgeCli(
         payloadBytes,
         tool,
         cpuMs: timer.cpuMs(),
+        daemonMs: timer.daemonMs(),
       });
     onError(err, input);
   }

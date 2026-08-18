@@ -9,12 +9,15 @@
  * before anyone traced it back here). A hook past the budget therefore says so
  * IN BAND, in the model's context, where it can be relayed to the operator.
  *
- * TWO numbers, because wall-clock alone cannot say whose cost it is: a hook on
+ * THREE numbers, because wall-clock alone cannot say whose cost it is: a hook on
  * a contended host waits far longer than it computes (a 1.1 KB payload and a
  * 235 KB one both reported 7.2s on a loaded 2-vCPU box, against 0.3s of work).
- * So the notice prints CPU beside the clock — the share every affected call
- * repeats — and never GATES on it: a hook wedged on a dead redactor socket
- * burns no CPU and is exactly the sanitizer's fault.
+ * So the notice prints, beside the clock, the CPU this process burned and the
+ * time it spent waiting on the redactor daemon — a separate, long-lived process
+ * whose CPU this one cannot see (see {@link processCpuMs}), so the daemon's cost
+ * is measured as the round trip that waits for it. The notice GATES on none of
+ * them: a hook wedged on a dead redactor socket burns no CPU and is exactly the
+ * sanitizer's fault.
  *
  * ONE-TIME PROVISIONING is excluded (see {@link excludeProvisioning}): charging
  * an install to the hook that merely waited it out would make the FIRST call of
@@ -90,13 +93,15 @@ export function formatBytes(bytes) {
  * that made this specific latency report take a manual multi-step
  * investigation to characterize (which tool call, how large a payload) before
  * anyone could act on it.
- * `cpuMs` is the run's own processor time (see {@link startHookTimer}); absent
- * when the caller has no way to measure it, which is what the shell port of
- * this module reports.
+ * `cpuMs` is the run's own processor time and `daemonMs` the wall-clock it spent
+ * waiting on the redactor daemon (both from {@link startHookTimer}); absent when
+ * the caller has no way to measure them, which is what the shell port of this
+ * module reports.
  * @typedef {{
  *   payloadBytes?: number | null,
  *   tool?: string | null,
  *   cpuMs?: number | null,
+ *   daemonMs?: number | null,
  * }} SlowHookContext
  */
 
@@ -138,6 +143,34 @@ function processCpuMs() {
 let provisioningMs = 0;
 let provisioningCpuMs = 0;
 
+// Process-wide total of wall-clock spent inside redactor-daemon round trips.
+// Wall-clock and not CPU because the daemon is a separate process: its work is
+// invisible to processCpuMs, so the only measurement this side can make is how
+// long it waited for an answer.
+let daemonWaitMs = 0;
+
+/**
+ * Run `work` — one redactor-daemon round trip — charging its duration to the
+ * daemon share, so a run's wait on the sanitizer's own daemon is told apart from
+ * a wait on a loaded host. Charged in a `finally`, since a round trip that
+ * THROWS (a stall that hit its deadline) is the one that spent the most.
+ *
+ * Unlike {@link excludeProvisioning} this only attributes; the time stays in the
+ * hook's wall-clock, because a slow daemon is a per-call cost the user waits for.
+ * @template T
+ * @param {() => Promise<T>} work
+ * @param {() => number} [now]  injectable clock, for tests
+ * @returns {Promise<T>}
+ */
+export async function chargeDaemonWait(work, now = Date.now) {
+  const started = now();
+  try {
+    return await work();
+  } finally {
+    daemonWaitMs += Math.max(0, now() - started);
+  }
+}
+
 /**
  * Run `work`, charging its whole duration to provisioning so no timer running
  * across it counts that time. Charged in a `finally`, so a provisioning step
@@ -177,24 +210,27 @@ export async function excludeProvisioning(
  * so far MINUS any provisioning charged in the meantime, and may be called more
  * than once.
  *
- * `wallMs` is what the user waited and `cpuMs` is what this process actually
- * computed. Both are needed to say whose cost a slow run is — see the module
- * header for the report that read a contended host as a sanitizer bug.
+ * `wallMs` is what the user waited, `cpuMs` is what this process actually
+ * computed, and `daemonMs` is what it spent waiting on the redactor daemon
+ * ({@link chargeDaemonWait}). All three are needed to say whose cost a slow run
+ * is — see the module header for the report that read a contended host as a
+ * sanitizer bug.
  *
- * Only provisioning charged since this timer started is subtracted, so an
- * earlier run's cold start cannot pay down a later run's real cost. A
- * provisioning window that straddles the timer's start would otherwise be able
- * to subtract more than the timer has measured, so both results are floored
- * at 0.
+ * Every reader counts only what was charged since this timer started, so an
+ * earlier run's cold start cannot pay down a later run's real cost, and an
+ * earlier run's daemon wait cannot be blamed on this one. A provisioning window
+ * that straddles the timer's start would otherwise be able to subtract more than
+ * the timer has measured, so the results are floored at 0.
  * @param {() => number} [now]  injectable clock, for tests
  * @param {() => number} [cpuNow]  injectable CPU clock, for tests
- * @returns {{ wallMs: () => number, cpuMs: () => number }}
+ * @returns {{ wallMs: () => number, cpuMs: () => number, daemonMs: () => number }}
  */
 export function startHookTimer(now = Date.now, cpuNow = processCpuMs) {
   const started = now();
   const cpuStarted = cpuNow();
   const provisionedBefore = provisioningMs;
   const provisionedCpuBefore = provisioningCpuMs;
+  const daemonBefore = daemonWaitMs;
   return {
     wallMs: () =>
       Math.max(0, now() - started - (provisioningMs - provisionedBefore)),
@@ -203,7 +239,39 @@ export function startHookTimer(now = Date.now, cpuNow = processCpuMs) {
         0,
         cpuNow() - cpuStarted - (provisioningCpuMs - provisionedCpuBefore),
       ),
+    daemonMs: () => Math.max(0, daemonWaitMs - daemonBefore),
   };
+}
+
+/**
+ * The attribution sentence for a run whose CPU and redactor-daemon shares are
+ * both known: the two numbers, then the one of the three shares that dominated.
+ *
+ * It NAMES the dominant share instead of listing candidates because the remedies
+ * are opposite — this hook's own computation and its daemon's are the sanitizer's
+ * to fix, a loaded host is not — and a notice that offers both sends the operator
+ * hunting the wrong one. The daemon share is wall-clock, not CPU: it is spent in
+ * another process that {@link processCpuMs} cannot see. The two shares can
+ * therefore overlap by the framing this side does mid-round-trip, which only
+ * strengthens the reading — a share that dominates despite the overlap is the
+ * one to act on.
+ * @param {number} elapsedMs
+ * @param {number} cpuMs
+ * @param {number} daemonMs
+ * @returns {string}
+ */
+function attributeWait(elapsedMs, cpuMs, daemonMs) {
+  const otherMs = Math.max(0, elapsedMs - cpuMs - daemonMs);
+  const verdict =
+    daemonMs >= cpuMs && daemonMs >= otherMs
+      ? "Most of it went to the redactor daemon, a separate sanitizer process — a per-call cost the sanitizer owns."
+      : cpuMs >= otherMs
+        ? "Most of it is this hook computing — a per-call cost the sanitizer owns, repeated by every affected call."
+        : "Most of it is neither: the hook was blocked on a loaded machine or on something outside the sanitizer that it called.";
+  return (
+    `, of which ${formatSeconds(cpuMs)}s was this hook's own CPU and ` +
+    `${formatSeconds(daemonMs)}s was waiting on the redactor daemon. ${verdict}`
+  );
 }
 
 /**
@@ -213,14 +281,16 @@ export function startHookTimer(now = Date.now, cpuNow = processCpuMs) {
  * is asked to relay the numbers, since the operator is the one who can file it.
  *
  * With `context.cpuMs` in hand the line says which share of the wait was the
- * sanitizer computing. Without it the line says that it cannot tell, rather
- * than asserting an attribution nothing measured: a wall-clock overrun on a
- * loaded host is the common case, and blaming it on the sanitizer sends the
- * operator hunting a per-call cost that does not exist.
+ * sanitizer computing, and with `context.daemonMs` too it names the share that
+ * dominated ({@link attributeWait}). Without them the line says that it cannot
+ * tell, rather than asserting an attribution nothing measured: a wall-clock
+ * overrun on a loaded host is the common case, and blaming it on the sanitizer
+ * sends the operator hunting a per-call cost that does not exist.
  *
- * The wait clause names candidates and picks none, for the same reason. A hook
- * that blocks on a dead socket inside a HOST extension spends no CPU and no
- * machine load, so naming either as the cause would be a second wrong guess.
+ * A CPU figure alone cannot pick a cause, so with only that the clause names
+ * candidates and commits to none. A hook that blocks on a dead socket inside a
+ * HOST extension spends no CPU and adds no machine load, so naming either as the
+ * cause would be a second wrong guess.
  * @param {string} hookName
  * @param {number} elapsedMs
  * @param {number} [thresholdMs]
@@ -237,16 +307,23 @@ export function slowHookNotice(
 ) {
   if (elapsedMs <= thresholdMs) return null;
   const cpuMs = context?.cpuMs;
-  const attribution =
-    typeof cpuMs === "number"
+  const daemonMs = context?.daemonMs;
+  const attributed = typeof cpuMs === "number" && typeof daemonMs === "number";
+  const attribution = attributed
+    ? attributeWait(elapsedMs, cpuMs, daemonMs)
+    : typeof cpuMs === "number"
       ? `, and used ${formatSeconds(cpuMs)}s of CPU. ` +
         "Only the CPU share is work every affected call repeats; the rest was spent waiting, on a busy machine or on something this hook called."
       : ". Wall-clock alone cannot separate the sanitizer's own work from a busy machine.";
+  const timings = attributed
+    ? "all three timings"
+    : typeof cpuMs === "number"
+      ? "both timings"
+      : "timing";
   return (
     `agent-sanitizer PERFORMANCE: the ${hookName} hook took ` +
     `${formatSeconds(elapsedMs)}s${formatContextSuffix(context)}, over its ${formatSeconds(thresholdMs)}s budget${attribution} ` +
-    `Tell the user, and suggest they report it at ${ISSUE_URL} with the hook name and ` +
-    `${typeof cpuMs === "number" ? "both timings" : "timing"}.`
+    `Tell the user, and suggest they report it at ${ISSUE_URL} with the hook name and ${timings}.`
   );
 }
 
