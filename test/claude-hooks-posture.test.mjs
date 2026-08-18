@@ -18,11 +18,9 @@ import { describe, it, after } from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import {
-  existsSync,
   mkdirSync,
   mkdtempSync,
   readdirSync,
-  readFileSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
@@ -60,7 +58,9 @@ const userPrompt = await import("../claude-hooks/sanitize-user-prompt.mjs");
 const scanInvisible = await import("../claude-hooks/scan-invisible-chars.mjs");
 await import("../claude-hooks/scan-loaded-instructions.mjs");
 await import("../claude-hooks/plugin-hooks.mjs");
-const { ALERT_FILE } = scanInvisible;
+const { alertDir } = scanInvisible;
+const { invisibleCharAlert } =
+  await import("../claude-hooks/lib/invisible-alert.mjs");
 
 // Litter is not free: the SessionStart scanner globs **/CLAUDE.md under its
 // project dir, and other suites point that at $TMPDIR — so an unreadable
@@ -68,7 +68,7 @@ const { ALERT_FILE } = scanInvisible;
 // arming their gate and breaking assertions nowhere near this file.
 after(() => {
   rmSync(projectDir, { recursive: true, force: true });
-  rmSync(ALERT_FILE, { force: true });
+  rmSync(alertDir(), { recursive: true, force: true });
 });
 
 /** The two postures, as the environments a hook actually reads. */
@@ -173,7 +173,7 @@ describe("UserPromptSubmit emits exactly its table entry", () => {
  * @param {{ scan?: () => any }} [opts]
  */
 async function runScanUnder(env, opts = {}) {
-  rmSync(ALERT_FILE, { force: true });
+  rmSync(alertDir(), { recursive: true, force: true });
   const stderr = [];
   const realWrite = process.stderr.write;
   const realExitCode = process.exitCode;
@@ -200,7 +200,7 @@ async function runScanUnder(env, opts = {}) {
     if (previous === undefined) delete process.env[FAIL_OPEN_ENV];
     else process.env[FAIL_OPEN_ENV] = previous;
   }
-  return { stderr, announced, alertArmed: existsSync(ALERT_FILE) };
+  return { stderr, announced, alertArmed: invisibleCharAlert() !== null };
 }
 
 describe("SessionStart emits exactly its table entry on a hook FAULT", () => {
@@ -258,7 +258,7 @@ describe("an unreadable instruction file is a COVERAGE GAP, not a hook fault", (
       assert.match(stderr.join(""), /INSTRUCTION FILES NOT SCANNED/u);
       // The errno text is scrubbed on its way to the operator's terminal and to
       // the alert: it embeds a path globbed out of a possibly-hostile repo.
-      assert.match(readFileSync(ALERT_FILE, "utf8"), /CLAUDE\.md: EISDIR/u);
+      assert.match(invisibleCharAlert() ?? "", /CLAUDE\.md: EISDIR/u);
     });
 
   it("keeps scanning the rest of the project", () => {

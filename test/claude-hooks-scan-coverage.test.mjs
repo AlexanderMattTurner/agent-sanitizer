@@ -16,7 +16,6 @@
 import { describe, it, before, after } from "node:test";
 import assert from "node:assert/strict";
 import {
-  existsSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -39,17 +38,19 @@ const scanInvisible = await import("../claude-hooks/scan-invisible-chars.mjs");
 const {
   scanProject,
   findInstructionFiles,
-  ALERT_FILE,
+  alertDir,
   LONG_RUN_THRESHOLD,
   cliMain,
 } = scanInvisible;
+const { invisibleCharAlert } =
+  await import("../claude-hooks/lib/invisible-alert.mjs");
 
 // Same reason as in claude-hooks-posture.test.mjs: an unreadable fixture left
 // under $TMPDIR is an unscannable instruction file for every suite whose
 // project dir is $TMPDIR.
 after(() => {
   rmSync(projectDir, { recursive: true, force: true });
-  rmSync(ALERT_FILE, { force: true });
+  rmSync(alertDir(), { recursive: true, force: true });
 });
 
 /** A target the finder lists that resolves to nothing: a dangling symlink. */
@@ -134,11 +135,11 @@ describe("a target that resolves to nothing is not a coverage gap", () => {
     writeFileSync(join(projectDir, "CLAUDE.md"), "nothing hidden here\n");
     mkdirSync(join(projectDir, ".claude"), { recursive: true });
     dangling(join(projectDir, ".claude"), "README.md");
-    rmSync(ALERT_FILE, { force: true });
+    rmSync(alertDir(), { recursive: true, force: true });
   });
   after(() => {
     rmSync(join(projectDir, ".claude"), { recursive: true, force: true });
-    rmSync(ALERT_FILE, { force: true });
+    rmSync(alertDir(), { recursive: true, force: true });
   });
 
   it("announces clean and leaves the gate unarmed", async () => {
@@ -160,7 +161,7 @@ describe("a target that resolves to nothing is not a coverage gap", () => {
     // visible on the trace channel — just not as an operator-facing block.
     assert.equal(announced[0].absent, 1);
     assert.equal(
-      existsSync(ALERT_FILE),
+      invisibleCharAlert() !== null,
       false,
       "a dangling symlink armed the blocking gate",
     );
@@ -171,9 +172,9 @@ describe("a scan that could not read a target never announces clean", () => {
   before(() => {
     rmSync(join(projectDir, "CLAUDE.md"), { recursive: true, force: true });
     unreadable(projectDir, "CLAUDE.md");
-    rmSync(ALERT_FILE, { force: true });
+    rmSync(alertDir(), { recursive: true, force: true });
   });
-  after(() => rmSync(ALERT_FILE, { force: true }));
+  after(() => rmSync(alertDir(), { recursive: true, force: true }));
 
   it("announces partial, names the skipped files, and arms the gate", async () => {
     const { lines, sink } = collector();
@@ -193,14 +194,17 @@ describe("a scan that could not read a target never announces clean", () => {
 
     // The gate is the enforcement: it asks once on the next tool call, so an
     // unvetted instruction file reaches the operator instead of nobody.
-    assert.ok(existsSync(ALERT_FILE), "the PreToolUse gate was not armed");
-    assert.match(readFileSync(ALERT_FILE, "utf8"), /CLAUDE\.md/u);
+    assert.ok(
+      invisibleCharAlert() !== null,
+      "the PreToolUse gate was not armed",
+    );
+    assert.match(invisibleCharAlert() ?? "", /CLAUDE\.md/u);
   });
 });
 
 describe("a fully readable project still announces clean", () => {
   // The control for the describe above. It must drive cliMain and inspect the
-  // same two observables — the announced outcome and ALERT_FILE — or "never
+  // same two observables — the announced outcome and the alert store — or "never
   // announces clean" would pass just as happily against a scan that never says
   // clean at all, or one that arms the gate unconditionally.
   before(() => {
@@ -208,9 +212,9 @@ describe("a fully readable project still announces clean", () => {
     // project the previous describe sabotaged rather than point somewhere else.
     rmSync(join(projectDir, "CLAUDE.md"), { recursive: true, force: true });
     writeFileSync(join(projectDir, "CLAUDE.md"), "nothing hidden here\n");
-    rmSync(ALERT_FILE, { force: true });
+    rmSync(alertDir(), { recursive: true, force: true });
   });
-  after(() => rmSync(ALERT_FILE, { force: true }));
+  after(() => rmSync(alertDir(), { recursive: true, force: true }));
 
   it("announces clean and does not arm the gate", async () => {
     const { lines, sink } = collector();
@@ -223,7 +227,7 @@ describe("a fully readable project still announces clean", () => {
       ["clean"],
     );
     assert.equal(
-      existsSync(ALERT_FILE),
+      invisibleCharAlert() !== null,
       false,
       "the gate was armed on a project with nothing to report",
     );
@@ -246,11 +250,11 @@ describe("a contaminated project is cleaned on disk and reported", () => {
 
   before(() => {
     writeFileSync(join(projectDir, "CLAUDE.md"), `${clean}hidden:${payload}\n`);
-    rmSync(ALERT_FILE, { force: true });
+    rmSync(alertDir(), { recursive: true, force: true });
   });
   after(() => {
     writeFileSync(join(projectDir, "CLAUDE.md"), "nothing hidden here\n");
-    rmSync(ALERT_FILE, { force: true });
+    rmSync(alertDir(), { recursive: true, force: true });
   });
 
   it("announces found, strips the payload, and leaves the prose", async () => {
@@ -276,7 +280,7 @@ describe("a contaminated project is cleaned on disk and reported", () => {
     // direction — pair it with the re-scan below so "no alert" cannot mean
     // "the scan quietly did nothing".
     assert.equal(
-      existsSync(ALERT_FILE),
+      invisibleCharAlert() !== null,
       false,
       "the gate was armed even though every file was cleaned",
     );
@@ -290,7 +294,7 @@ describe("a contaminated project is cleaned on disk and reported", () => {
     // the `!== null` tautology this file counted as cleaned and the gate stayed
     // silent about a payload nothing had removed.
     writeFileSync(join(projectDir, "AGENTS.md"), clean);
-    rmSync(ALERT_FILE, { force: true });
+    rmSync(alertDir(), { recursive: true, force: true });
     const { sink } = collector();
     await runScan({
       trace: sink,
@@ -316,10 +320,10 @@ describe("a contaminated project is cleaned on disk and reported", () => {
     });
 
     assert.ok(
-      existsSync(ALERT_FILE),
+      invisibleCharAlert() !== null,
       "a file that could not be cleaned did not arm the gate",
     );
-    assert.match(readFileSync(ALERT_FILE, "utf8"), /AGENTS\.md/u);
+    assert.match(invisibleCharAlert() ?? "", /AGENTS\.md/u);
     rmSync(join(projectDir, "AGENTS.md"), { force: true });
   });
 
@@ -333,7 +337,7 @@ describe("a contaminated project is cleaned on disk and reported", () => {
     const above = join(outside, "CLAUDE.md");
     const contaminated = `${clean}hidden:${payload}\n`;
     writeFileSync(above, contaminated);
-    rmSync(ALERT_FILE, { force: true });
+    rmSync(alertDir(), { recursive: true, force: true });
 
     const { sink } = collector();
     await runScan({
@@ -365,10 +369,10 @@ describe("a contaminated project is cleaned on disk and reported", () => {
       "a file outside the project was rewritten",
     );
     assert.ok(
-      existsSync(ALERT_FILE),
+      invisibleCharAlert() !== null,
       "an uncleaned file above the project did not arm the gate",
     );
-    assert.match(readFileSync(ALERT_FILE, "utf8"), /CLAUDE\.md/u);
+    assert.match(invisibleCharAlert() ?? "", /CLAUDE\.md/u);
     rmSync(outside, { recursive: true, force: true });
   });
 });

@@ -692,6 +692,19 @@ export function emitHookResponse(hookEventName, fields) {
   );
 }
 
+/**
+ * The project the hooks are guarding. Every per-project $TMPDIR store is keyed to
+ * it, so it lives here — beside the other shared identity these hooks agree on —
+ * rather than in whichever store happened to need it first.
+ */
+export const PROJECT_DIR = process.env.CLAUDE_PROJECT_DIR || process.cwd();
+
+/** Short project digest keying this project's $TMPDIR store names. */
+export const PROJECT_HASH = createHash("sha256")
+  .update(PROJECT_DIR)
+  .digest("hex")
+  .slice(0, 8);
+
 /** The marker filename stem; the project directory is appended to it. */
 const HOOKGATE_MARKER_STEM = "agent-sanitizer-hookgate-inflight-";
 

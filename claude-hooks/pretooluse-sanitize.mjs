@@ -55,6 +55,7 @@ import {
   gateReminderContext,
   alertAcknowledged,
   acknowledgeAlert,
+  recordInstructionsLoadedNotice,
   instructionsLoadedGapNotice,
 } from "./lib/invisible-alert.mjs";
 import {
@@ -448,10 +449,10 @@ export async function buildPreToolUseResponse(
   // Layer 1: gate. Persists across the session until the injected files are
   // cleaned. It asks ONCE (a hard checkpoint, recorded once emitted) then
   // degrades to a passive reminder, so it doesn't prompt on every tool call.
-  const findings = invisibleCharAlert();
+  const findings = invisibleCharAlert(input.session_id);
   let pendingGateAck = false;
   if (findings) {
-    if (alertAcknowledged()) {
+    if (alertAcknowledged(input.session_id)) {
       contexts.push(gateReminderContext());
     } else {
       asks.push(gateAskReason(findings));
@@ -461,11 +462,11 @@ export async function buildPreToolUseResponse(
 
   const { tool_name: tool, tool_input: toolInput } = input;
 
-  // Coverage notice, once per session: with no InstructionsLoaded scan running,
-  // every instruction file loaded from a subdirectory reaches the model
-  // unscanned, and the SessionStart scan — which covers only what loads at
-  // launch — cannot see the loss. Reported here because this is the first hook
-  // that runs after the loads would have happened.
+  // Reported here because this is the first hook that runs after the launch-time
+  // loads would have happened. assembleResponse — not this call — records that
+  // the notice was surfaced: a rehydrate deny below returns before the response
+  // is assembled, and recording here would burn the session's one report on a
+  // call that never carried it.
   const gapNotice = instructionsLoadedGapNotice(input.session_id);
   if (gapNotice !== null) contexts.push(gapNotice);
 
@@ -504,15 +505,25 @@ export async function buildPreToolUseResponse(
   return emitTraced(
     emitTrace,
     input.tool_name,
-    assembleResponse({ changed, current, asks, contexts, pendingGateAck }),
+    assembleResponse({
+      changed,
+      current,
+      asks,
+      contexts,
+      pendingGateAck,
+      pendingGapNotice: gapNotice !== null,
+      sessionId: input.session_id,
+    }),
   );
 }
 
 /**
  * Assemble the hookSpecificOutput fields from the per-layer results, or null
  * for a clean no-op (nothing asked, changed, or annotated). Records the gate
- * acknowledgement only when an ask actually lands in the response.
- * @param {{ changed: boolean, current: any, asks: string[], contexts: string[], pendingGateAck: boolean }} parts
+ * acknowledgement and the coverage-gap notice only when they actually land in
+ * the response.
+ * @param {{ changed: boolean, current: any, asks: string[], contexts: string[],
+ *   pendingGateAck: boolean, pendingGapNotice: boolean, sessionId?: string }} parts
  * @returns {Record<string, unknown> | null}
  */
 function assembleResponse({
@@ -521,6 +532,8 @@ function assembleResponse({
   asks,
   contexts,
   pendingGateAck,
+  pendingGapNotice,
+  sessionId,
 }) {
   if (asks.length === 0 && !changed && contexts.length === 0) return null;
 
@@ -541,7 +554,8 @@ function assembleResponse({
   if (contexts.length > 0) fields.additionalContext = contexts.join(" ");
   // Record the gate ack only now that the ask is actually in the response — a
   // rehydrate deny above returns first, so a preempted ask is not marked seen.
-  if (pendingGateAck) acknowledgeAlert();
+  if (pendingGateAck) acknowledgeAlert(sessionId);
+  if (pendingGapNotice) recordInstructionsLoadedNotice(sessionId);
   return fields;
 }
 

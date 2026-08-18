@@ -10,19 +10,26 @@
  * Both hooks reach the state through this module so the paths and the trust rule
  * have one definition.
  */
-import { lstatSync, readdirSync, readFileSync, unlinkSync } from "node:fs";
-import { createHash } from "node:crypto";
+import {
+  lstatSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+} from "node:fs";
+import { randomBytes } from "node:crypto";
 import { basename, join } from "node:path";
-import { tmpdir } from "node:os";
+import { tmpdir, userInfo } from "node:os";
 import {
   lazyImport,
   markerIsTrusted,
+  PROJECT_HASH,
   scrubUntrustedText,
   writeFileNoFollow,
   writeSentinelFile,
 } from "./hook-io.mjs";
 
-// Layer-1 scrubber for the untrusted ALERT_FILE contents the gate splices into a
+// Layer-1 scrubber for the untrusted alert-store contents the gate splices into a
 // permissionDecisionReason. Bound via lazyImport (see its doc for the fail-OPEN
 // hazard of a bare static npm import): a load failure leaves applyLayer1 undefined,
 // so scrubUntrustedText throws into the caller's fail-closed catch (→ ask) rather
@@ -31,50 +38,69 @@ const { applyLayer1 } = /** @type {typeof import("agent-sanitizer")} */ (
   await lazyImport("agent-sanitizer")
 );
 
-/** The project the hooks are guarding; the alert paths are keyed to it. */
-export const PROJECT_DIR = process.env.CLAUDE_PROJECT_DIR || process.cwd();
-
-/** Short project digest keying this project's $TMPDIR marker names. */
-export const PROJECT_HASH = createHash("sha256")
-  .update(PROJECT_DIR)
-  .digest("hex")
-  .slice(0, 8);
-
-/** Findings the SessionStart scanner could not clean, for the PreToolUse gate. */
-export const ALERT_FILE = join(
+/**
+ * The path prefix every alert artifact of this PROJECT shares. Never a file
+ * itself — only {@link sessionPrefix} and the sweep read it — so that one
+ * `startsWith` covers every artifact the sweep must age out.
+ */
+export const ALERT_BASE = join(
   tmpdir(),
   `.claude-invisible-char-alert-${PROJECT_HASH}`,
 );
 
-// Companion marker the PreToolUse gate writes once it has surfaced the alert
-// this session, so the gate asks ONCE then degrades to a passive reminder
-// instead of prompting on every tool call. Cleared at SessionStart alongside
-// ALERT_FILE so each fresh session re-asks once.
-export const ALERT_ACK_FILE = `${ALERT_FILE}.acked`;
+/**
+ * The path prefix every alert artifact of ONE session under this project shares.
+ *
+ * Session-keying is what makes the gate's one-time ask correct by construction.
+ * The store and its ack used to be keyed by PROJECT alone and reset by a
+ * destructive clear at SessionStart, which left two ways for a session to
+ * inherit the previous one's answer: an early-exiting scanner arm (a dep-load
+ * failure) returns before the clear, and nothing pins SessionStart against the
+ * InstructionsLoaded events fired for the files loaded at launch. A session that
+ * cannot see another session's files needs neither the clear nor the ordering —
+ * past sessions' artifacts simply age out through {@link sweepStaleSessions}.
+ * @param {string} [sessionId]  the harness's session identity
+ * @returns {string}
+ */
+export function sessionPrefix(sessionId) {
+  // The id becomes a path component, so anything outside this class — a `/` in
+  // a hostile session id above all — is folded away rather than escaping
+  // $TMPDIR. A host that exports no session id falls back to one shared name,
+  // where a marker can outlive its session.
+  const key =
+    (sessionId ?? "").replace(/[^A-Za-z0-9._-]/gu, "_") || "no-session";
+  return `${ALERT_BASE}.s-${key}`;
+}
+
+/**
+ * The directory holding this session's alert findings, one file per finding.
+ * @param {string} [sessionId]
+ * @returns {string}
+ */
+export function alertDir(sessionId) {
+  return `${sessionPrefix(sessionId)}.alerts`;
+}
+
+/**
+ * Companion marker the PreToolUse gate writes once it has surfaced the alert
+ * this session, so the gate asks ONCE then degrades to a passive reminder
+ * instead of prompting on every tool call. Session-keyed like the findings it
+ * answers for, so a fresh session cannot read an older session's answer.
+ * @param {string} [sessionId]
+ * @returns {string}
+ */
+export function alertAckFile(sessionId) {
+  return `${sessionPrefix(sessionId)}.acked`;
+}
 
 /**
  * Marker the InstructionsLoaded scanner writes on every fire, so another hook
  * can tell whether that event is being scanned at all this session.
- *
- * Keyed by the SESSION, and never cleared at SessionStart like the alert pair
- * above (a later session sweeps it once it is older than the TTL):
- * nothing pins the order of SessionStart against the InstructionsLoaded events
- * Claude Code fires for the files it loads at launch, so a clear could erase a
- * marker written moments earlier and produce the notice on a session that IS
- * covered. Session-keyed, the question each session asks is answered by that
- * session's own file and no ordering matters. A host that exports no session id
- * falls back to one shared name — where the marker can outlive its session, and
- * a later session on a host that stopped emitting the event stays quiet.
  * @param {string} [sessionId]
  * @returns {string}
  */
 export function instructionsLoadedFile(sessionId) {
-  // The id becomes a path component, so anything outside this class — a `/` in
-  // a hostile session id above all — is folded away rather than escaping
-  // $TMPDIR.
-  const key =
-    (sessionId ?? "").replace(/[^A-Za-z0-9._-]/gu, "_") || "no-session";
-  return `${ALERT_FILE}.instructions-loaded.${key}`;
+  return `${sessionPrefix(sessionId)}.instructions-loaded`;
 }
 
 /**
@@ -99,27 +125,65 @@ export function instructionsLoadedSeen(sessionId) {
   return markerIsTrusted(instructionsLoadedFile(sessionId));
 }
 
-/** How long a past session's marker is kept before the next session sweeps it. */
+/** How long a past session's artifacts are kept before a later session sweeps. */
 const MARKER_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 
 /**
- * Delete this project's session markers older than the TTL. Only PAST sessions'
- * files are candidates — the current session's was just written, so the sweep
- * cannot answer its own question wrong.
- * @param {string} keep  the marker path this session owns
+ * Whether `path` is a real directory this uid owns — the directory counterpart
+ * of markerIsTrusted. `lstat`, so a symlink planted at the predictable alert-dir
+ * path is judged on ITSELF: followed, it would let a co-tenant aim the gate's
+ * reader at a directory of unrelated files this uid owns and splice their bytes
+ * into a permission prompt.
+ * @param {string} path
+ * @returns {boolean}
+ */
+function dirIsTrusted(path) {
+  let st;
+  try {
+    st = lstatSync(path);
+  } catch {
+    return false;
+  }
+  return st.isDirectory() && st.uid === userInfo().uid;
+}
+
+/**
+ * Delete this project's artifacts from OTHER sessions once they are older than
+ * the TTL. The current session's own prefix is skipped, so the sweep can never
+ * answer its own question wrong; every other session's files are past history
+ * that nothing reads.
+ *
+ * This replaces the destructive SessionStart clear: with the store session-keyed
+ * there is nothing to reset, only old state to age out.
+ * @param {string} [sessionId]  the session whose artifacts must be kept
  * @returns {void}
  */
-function sweepStaleMarkers(keep) {
+export function sweepStaleSessions(sessionId) {
   const dir = tmpdir();
-  const prefix = `${basename(ALERT_FILE)}.instructions-loaded.`;
+  const prefix = `${basename(ALERT_BASE)}.s-`;
+  const keep = basename(sessionPrefix(sessionId));
   const cutoff = Date.now() - MARKER_TTL_MS;
   for (const name of readdirSync(dir)) {
     if (!name.startsWith(prefix)) continue;
+    // Whole-segment match on the keep prefix, not a bare startsWith: session key
+    // "abc" must not claim (and so preserve) session key "abc2"'s artifacts.
+    if (name === keep || name.startsWith(`${keep}.`)) continue;
     const path = join(dir, name);
-    if (path === keep || path === `${keep}.noticed`) continue;
-    // lstat, not stat: a squatted symlink at a predictable $TMPDIR path must be
-    // judged on ITSELF, not on whatever it points at. unlink removes the link.
-    if (lstatSync(path).mtimeMs < cutoff) unlinkSync(path);
+    try {
+      // lstat, not stat: a squatted symlink at a predictable $TMPDIR path must
+      // be judged on ITSELF, not on whatever it points at.
+      if (lstatSync(path).mtimeMs >= cutoff) continue;
+      rmSync(path, { recursive: true, force: true });
+    } catch (err) {
+      // ENOENT: a parallel session swept this entry between readdir and lstat.
+      // EPERM/EACCES: a co-tenant's entry sharing the prefix, which is not ours
+      // to remove. Both are benign races on a shared $TMPDIR, and a throw here
+      // would abort recordInstructionsLoaded and render the "instruction file
+      // was NOT scanned" fault on a session that WAS scanned. Anything else is
+      // a bug in this sweep and propagates.
+      const code = /** @type {NodeJS.ErrnoException} */ (err).code;
+      if (code !== "ENOENT" && code !== "EPERM" && code !== "EACCES") throw err;
+    }
   }
 }
 
@@ -128,8 +192,8 @@ function sweepStaleMarkers(keep) {
  * write (see writeSentinelFile) at a predictable $TMPDIR path.
  *
  * The event fires once per instruction file loaded, so the already-recorded case
- * returns without a write — and the stale-marker sweep rides the FIRST fire of a
- * session, where one readdir is paid once rather than per loaded file.
+ * returns without a write — and the stale-session sweep rides the FIRST fire of
+ * a session, where one readdir is paid once rather than per loaded file.
  * @param {string} [sessionId]
  * @returns {void}
  */
@@ -137,14 +201,18 @@ export function recordInstructionsLoaded(sessionId) {
   const marker = instructionsLoadedFile(sessionId);
   if (markerIsTrusted(marker)) return;
   writeSentinelFile(marker);
-  sweepStaleMarkers(marker);
+  sweepStaleSessions(sessionId);
 }
 
 /**
  * The one-time context line for a session where no InstructionsLoaded scan ran,
  * or null when the scan has been seen or the notice was already surfaced this
- * session. Records the notice as it hands it out, so it rides on ONE tool call
- * rather than every one — the per-call repeat is what trains a reader to skip it.
+ * session.
+ *
+ * PURE: it does not record that the notice was handed out. The caller records
+ * separately, once the notice has actually landed in a response — a deny
+ * assembled after this call discards the notice, and a marker written here would
+ * have burned the session's one chance to report the loss.
  *
  * The loss it names is real and otherwise invisible: SessionStart scans the
  * instruction files that load at launch, and everything a subdirectory loads
@@ -162,9 +230,7 @@ export function recordInstructionsLoaded(sessionId) {
  */
 export function instructionsLoadedGapNotice(sessionId) {
   if (instructionsLoadedSeen(sessionId)) return null;
-  const noticeFile = instructionsLoadedNoticeFile(sessionId);
-  if (markerIsTrusted(noticeFile)) return null;
-  writeSentinelFile(noticeFile);
+  if (markerIsTrusted(instructionsLoadedNoticeFile(sessionId))) return null;
   return (
     "agent-sanitizer: no InstructionsLoaded scan has run this session, so " +
     "instruction files loaded from SUBDIRECTORIES (a nested CLAUDE.md, a " +
@@ -179,64 +245,113 @@ export function instructionsLoadedGapNotice(sessionId) {
 }
 
 /**
- * The alert findings if invisible-char injection was detected in instruction
- * files and couldn't be auto-cleaned, else null. ALERT_FILE lives at a predictable,
- * world-visible $TMPDIR path, so its contents are attacker-writable (a co-tenant can
- * plant a file/symlink there): trust it only when markerIsTrusted confirms a regular
- * file THIS uid owns (a squatted symlink/foreign file reads as no alert), then scrub
- * the bytes through Layer-1 before any caller splices them into a reason — the report
- * would otherwise carry ANSI/invisible spoofing into the model's context.
- * @returns {string | null}
+ * Record that the gap notice above was surfaced, so it rides on ONE tool call
+ * rather than every one — the per-call repeat is what trains a reader to skip it.
+ * Called only once the notice is in a response that is actually being returned.
+ * @param {string} [sessionId]
+ * @returns {void}
  */
-export function invisibleCharAlert() {
-  if (!markerIsTrusted(ALERT_FILE)) return null;
-  const raw = readFileSync(ALERT_FILE, "utf-8").trim();
-  return scrubUntrustedText(raw, applyLayer1);
+export function recordInstructionsLoadedNotice(sessionId) {
+  writeSentinelFile(instructionsLoadedNoticeFile(sessionId));
 }
 
 /**
- * Add `text` to the alert the PreToolUse gate surfaces, keeping whatever is
- * already there.
+ * The alert findings if invisible-char injection was detected in instruction
+ * files and couldn't be auto-cleaned, else null.
  *
- * Appending, where the SessionStart scanner TRUNCATES: that scan runs once and
- * owns the session's reset, while an instruction file loaded mid-session is one
- * more finding on top of whatever the launch scan left — a truncating write here
- * would silently drop the earlier report. Symlink-refusing (writeFileNoFollow)
- * and ownership-checked on read, because ALERT_FILE sits at a predictable,
- * world-visible $TMPDIR path; a foreign or squatted file reads as empty and is
- * replaced rather than appended to.
- * @param {string} text
- * @returns {void}
+ * The store is a DIRECTORY of one file per finding, all at predictable,
+ * world-visible $TMPDIR paths, so both the directory and every entry in it are
+ * attacker-plantable: trust the directory only when it is a real directory this
+ * uid owns (a symlink would let a co-tenant aim this reader at unrelated files),
+ * each entry only when markerIsTrusted confirms a regular file this uid owns,
+ * then scrub the bytes through Layer-1 before any caller splices them into a
+ * reason — the report would otherwise carry ANSI/invisible spoofing into the
+ * model's context.
+ * This session's store AND the shared `no-session` fallback, because a hook that
+ * faults BEFORE it can parse its payload has no session identity to key by: its
+ * finding lands in the fallback, and a strictly session-keyed read would leave
+ * the one report of an unscanned instruction file unreachable. The ack stays
+ * strictly session-keyed, so the gate still asks exactly once per session.
+ * @param {string} [sessionId]
+ * @returns {string | null}
  */
-export function appendAlert(text) {
-  const existing = markerIsTrusted(ALERT_FILE)
-    ? readFileSync(ALERT_FILE, "utf-8")
-    : "";
-  writeFileNoFollow(ALERT_FILE, existing + text + "\n");
+export function invisibleCharAlert(sessionId) {
+  const dirs = [alertDir(sessionId)];
+  if (dirs[0] !== alertDir()) dirs.push(alertDir());
+  const parts = [];
+  for (const dir of dirs) {
+    if (!dirIsTrusted(dir)) continue;
+    // Sorted so a multi-finding report reads the same on every call; the names
+    // are random, so the order carries no meaning beyond being stable.
+    for (const name of readdirSync(dir).sort()) {
+      const path = join(dir, name);
+      if (!markerIsTrusted(path)) continue;
+      const text = readFileSync(path, "utf-8").trim();
+      if (text !== "") parts.push(text);
+    }
+  }
+  if (parts.length === 0) return null;
+  return scrubUntrustedText(parts.join("\n"), applyLayer1);
+}
+
+/**
+ * Add `text` to the alert the PreToolUse gate surfaces this session, keeping
+ * whatever is already there.
+ *
+ * One O_EXCL-created, randomly-named file per finding. The store used to be a
+ * single file appended through a read-modify-write, so two hooks recording a
+ * finding at once silently dropped one of them; a fresh file per finding has no
+ * shared cell to lose. Symlink-refusing (writeFileNoFollow) because the store
+ * sits at a predictable, world-visible $TMPDIR path.
+ * @param {string} text
+ * @param {string} [sessionId]
+ * @returns {boolean} whether the finding was recorded
+ */
+export function appendAlert(text, sessionId) {
+  const dir = alertDir(sessionId);
+  const path = join(dir, randomBytes(8).toString("hex"));
+  // Caught, not propagated: one caller is the fault handler that reports a hook
+  // crash, and a throw there would replace the report with a second crash. The
+  // loss is announced on stderr instead — never swallowed.
+  let usable;
+  try {
+    mkdirSync(dir, { recursive: true, mode: 0o700 });
+    usable = dirIsTrusted(dir);
+  } catch {
+    usable = false;
+  }
+  if (usable && writeFileNoFollow(path, text + "\n")) return true;
+  process.stderr.write(
+    "agent-sanitizer: could not record an instruction-file finding under " +
+      `${dir}; the PreToolUse gate will NOT surface it this session.\n`,
+  );
+  return false;
 }
 
 /**
  * True once the gate has surfaced its blocking ask this session. Validates
- * ownership (not mere existence): a co-tenant could pre-create ALERT_ACK_FILE at its
- * predictable $TMPDIR path to permanently suppress the one-time blocking ask down to
- * the passive reminder, so trust the marker only when it is a regular file this uid
- * wrote (markerIsTrusted), mirroring how acknowledgeAlert writes it.
+ * ownership (not mere existence): a co-tenant could pre-create the ack at its
+ * predictable $TMPDIR path to permanently suppress the one-time blocking ask down
+ * to the passive reminder, so trust the marker only when it is a regular file
+ * this uid wrote (markerIsTrusted), mirroring how acknowledgeAlert writes it.
+ * @param {string} [sessionId]
  * @returns {boolean}
  */
-export function alertAcknowledged() {
-  return markerIsTrusted(ALERT_ACK_FILE);
+export function alertAcknowledged(sessionId) {
+  return markerIsTrusted(alertAckFile(sessionId));
 }
 
 /**
  * Record that the gate has surfaced its blocking ask, so later tool calls get a
- * passive reminder instead of an ask on every call. Cleared at SessionStart by
- * the scanner so each fresh session re-asks once.
+ * passive reminder instead of an ask on every call. Session-keyed, so the next
+ * session re-asks once without anything having to clear this.
+ * @param {string} [sessionId]
  * @returns {void}
  */
-export function acknowledgeAlert() {
-  // Symlink-safe presence write: ALERT_ACK_FILE sits at a predictable $TMPDIR
-  // path a co-tenant could pre-plant a symlink at (see writeSentinelFile).
-  writeSentinelFile(ALERT_ACK_FILE);
+export function acknowledgeAlert(sessionId) {
+  // Symlink-safe presence write: the ack sits at a predictable $TMPDIR path a
+  // co-tenant could pre-plant a symlink at (see writeSentinelFile).
+  writeSentinelFile(alertAckFile(sessionId));
 }
 
 // What the operator can actually DO — one bullet per kind of report the alert
