@@ -237,7 +237,10 @@ jobs:
     # resolver declares and a consumer repository can copy the block verbatim.
     # An unset secret arrives empty, which drops that ladder rung.
     secrets:
-      FAR_ANTHROPIC_API_KEY: ${{ secrets.FAR_ANTHROPIC_API_KEY }}
+      # The metered rung is deliberately NOT passed: this repository ran its
+      # resolver on subscription OAuth alone before the move, and the reusable
+      # workflow declares every secret optional — an unset rung is dropped rather
+      # than failing the call. A consumer that wants the metered rung adds it here.
       CLAUDE_CODE_OAUTH_TOKEN_FALLBACK: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN_FALLBACK }}
       CLAUDE_CODE_OAUTH_TOKEN_FALLBACK_2: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN_FALLBACK_2 }}
       CLAUDE_CODE_OAUTH_TOKEN_FALLBACK_3: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN_FALLBACK_3 }}
