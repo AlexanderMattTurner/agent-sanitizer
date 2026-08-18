@@ -62,9 +62,12 @@ WORKER_POOL_SIZE = 8
 # every other client then times out, and a client that cannot reach the daemon
 # fails closed — one crafted frame per worker denies ALL tool output. The engine
 # checks this budget between units of work (see RedactorConfig), so a request
-# that blows it fails only ITSELF and frees the worker. Generous next to a real
-# scan (milliseconds for an ordinary payload, well under a second for a
-# megabyte), so a legitimate request never trips it.
+# that blows it fails only ITSELF and frees the worker. Ample for the payload
+# sizes an ordinary tool call produces, but it is NOT a size-independent
+# guarantee: scan cost grows with the payload, so a large enough request trips
+# the budget and is refused rather than redacted slowly. That refusal is the
+# intended trade — a request nobody can vet does not get to hold a worker — so
+# raising this number is a decision about that trade, not a free win.
 REQUEST_COMPUTE_BUDGET_SECONDS = 5.0
 
 

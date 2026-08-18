@@ -1072,51 +1072,118 @@ def _cross_line_eligible_types() -> frozenset[str]:
 _PREFILTER_WINDOW_PAD = 64
 
 
-@functools.cache
-def _eligible_prefilter() -> tuple[re.Pattern[str], ...]:
-    """One regex per distinct flag set among eligible denylist patterns; each
-    match is a NECESSARY (not sufficient) condition for a cross-line-eligible
-    detection. Built from the union of every eligible detector's OWN
-    ``denylist`` regex, read live off :func:`~detect_secrets.settings.get_plugins`
-    rather than re-typed here, so a detect-secrets upgrade or a new entry in
-    ``data/secret-detectors.json`` changes what this matches with no edit here.
+_NAMED_GROUP_RE = re.compile(r"\(\?P<[^>]+>")
+
+
+def _degroup(pattern: str) -> str:
+    """A denylist pattern's source text with named groups turned non-capturing,
+    so joining two plugins' patterns that happen to reuse the same group name
+    (e.g. Cloudant's and IBM Cloud's denylists both define ``(?P<secret>...)``)
+    into one union regex cannot raise ``re.error: redefinition of group name``.
+    Only the group's own capture is dropped — the prefilter never reads capture
+    groups, it only asks whether the union matched at all — so this changes
+    nothing the caller can observe.
+
+    A BACKREFERENCE of either spelling is refused. ``(?P=name)`` loses its
+    target's name to the rewrite; a NUMBERED ``\\1`` is the dangerous one,
+    because it keeps compiling while both this rewrite and the caller's ``|``
+    join renumber the groups around it — so it silently comes to point at a
+    different, often unset group and the union quietly under-matches. Under a
+    detection gate an under-match is a missed secret, so this fails loud
+    instead. No current denylist pattern has either (see
+    ``test_full_prefilter_is_sound``).
+    """
+    if "(?P=" in pattern or re.search(r"\\[1-9]", pattern):
+        raise RuntimeError(
+            f"denylist pattern {pattern!r} uses a named backreference or a "
+            "numbered one — _degroup cannot safely strip its group name, and "
+            "joining patterns into one union renumbers their groups"
+        )
+    return _NAMED_GROUP_RE.sub("(?:", pattern)
+
+
+def _denylist_prefilter(types: frozenset[str] | None) -> tuple[re.Pattern[str], ...]:
+    """One regex per distinct flag set among the union of ``denylist`` patterns
+    belonging to plugins whose ``secret_type`` is in ``types`` (every active
+    plugin when ``types`` is ``None``), read live off
+    :func:`~detect_secrets.settings.get_plugins` rather than re-typed here, so a
+    detect-secrets upgrade or a new entry in ``data/secret-detectors.json``
+    changes what this matches with no edit here.
 
     Grouped by ``pattern.flags`` (almost always just the default vs. that plus
     ``re.IGNORECASE`` — Slack's and AWS's keyword-context patterns carry it)
     rather than joined into one flag-less ``re.compile``: a plain string join
     would silently drop a case-insensitive detector's case-insensitivity from
-    the union, missing a real cross-line hit that scan_line itself would have
-    caught once handed the window.
+    the union, missing a real hit that ``scan_line`` itself would have caught.
 
-    Every eligible type is served by a
+    Every plugin covered here is a
     :class:`~detect_secrets.plugins.base.RegexBasedDetector`, whose
     ``analyze_string`` yields exactly its denylist's matches (further filtered,
     never widened, by detect-secrets' own machinery — see
     :func:`~detect_secrets.plugins.jwt.JwtTokenDetector.is_formally_valid` for the
-    strictest example). So a text none of these regexes match cannot be a hit
-    :func:`_cross_line_candidate_spans` would have found either way, and this is
-    a pure performance prefilter, never a detection gate of its own.
-    ``functools.cache``'d: the plugin set for a given detect-secrets install is
-    fixed for the process lifetime, and this must be called only from inside an
-    active :func:`configure_plugins`/``transient_settings`` block, same as
-    :func:`~detect_secrets.core.scan.scan_line` itself.
+    strictest example). So text none of these regexes match cannot be a hit
+    ``scan_line`` would have found either way, and this is a pure performance
+    prefilter, never a detection gate of its own.
     """
     by_flags: dict[int, list[str]] = {}
     for plugin in get_plugins():
-        if getattr(plugin, "secret_type", None) not in _cross_line_eligible_types():
+        if types is not None and getattr(plugin, "secret_type", None) not in types:
             continue
-        for pat in getattr(plugin, "denylist", ()):
-            by_flags.setdefault(pat.flags, []).append(pat.pattern)
+        # A covered plugin that supplies no denylist contributes nothing to the
+        # union, and _redact_line skips scan_line outright on a prefilter miss —
+        # so silently tolerating one would drop every secret of its type with no
+        # runtime signal. This raise is what keeps a detect-secrets upgrade from
+        # turning a detector into a hole.
+        patterns = getattr(plugin, "denylist", ())
+        if not patterns:
+            raise RuntimeError(
+                f"active plugin {type(plugin).__name__} "
+                f"({getattr(plugin, 'secret_type', None)!r}) supplied no denylist "
+                "regex — the prefilter cannot cover it, so secrets of this type "
+                "would be skipped before scan_line ever ran"
+            )
+        for pat in patterns:
+            by_flags.setdefault(pat.flags, []).append(_degroup(pat.pattern))
     if not by_flags:
         raise RuntimeError(
-            "no cross-line-eligible detector supplied a denylist regex to "
-            "prefilter against — either the eligible-type list or detect-secrets' "
-            "plugin set has drifted; see test_cross_line_prefilter_is_sound"
+            "no eligible detector supplied a denylist regex to prefilter "
+            "against — the eligible-type list or detect-secrets' plugin set "
+            "has drifted; see test_cross_line_prefilter_is_sound / "
+            "test_full_prefilter_is_sound"
         )
     return tuple(
         re.compile("|".join(f"(?:{p})" for p in patterns), flags)
         for flags, patterns in by_flags.items()
     )
+
+
+@functools.cache
+def _eligible_prefilter() -> tuple[re.Pattern[str], ...]:
+    """The cross-line prefilter: :func:`_denylist_prefilter` restricted to
+    :func:`_cross_line_eligible_types`. Each match is a NECESSARY (not
+    sufficient) condition for a cross-line-eligible detection.
+    ``functools.cache``'d: the plugin set for a given detect-secrets install is
+    fixed for the process lifetime, and this must be called only from inside an
+    active :func:`configure_plugins`/``transient_settings`` block, same as
+    :func:`~detect_secrets.core.scan.scan_line` itself.
+    """
+    return _denylist_prefilter(_cross_line_eligible_types())
+
+
+@functools.cache
+def _full_prefilter() -> tuple[re.Pattern[str], ...]:
+    """The per-line prefilter: :func:`_denylist_prefilter` over every active
+    plugin, not just the cross-line-eligible subset. :func:`_redact_line` skips
+    ``scan_line`` entirely for a line none of these match — every active plugin
+    is a ``RegexBasedDetector`` (see :func:`_denylist_prefilter`), so a line
+    that matches no plugin's own denylist cannot hold a detection ``scan_line``
+    would otherwise report, and detect-secrets' per-line dispatch (one
+    reflection-heavy call per plugin, see ``detect_secrets.util.inject``) is
+    the dominant cost of redacting a large, mostly-benign file line by line.
+    ``functools.cache``'d for the same reason and under the same constraint as
+    :func:`_eligible_prefilter`.
+    """
+    return _denylist_prefilter(None)
 
 
 def _cross_line_candidate_spans(
@@ -1372,7 +1439,14 @@ def _redact_line(
         after = bisect.bisect_left(span_starts, a_start)
         return after < len(span_starts) and span_starts[after] < a_end
 
-    secrets = list(scan_line(stripped))
+    # A line matching none of _full_prefilter() cannot hold anything scan_line
+    # would report (see its docstring) — skip the reflection-heavy per-plugin
+    # dispatch entirely rather than pay it on every benign line of a large file.
+    secrets = (
+        list(scan_line(stripped))
+        if any(p.search(stripped) for p in _full_prefilter())
+        else []
+    )
     groups: list[_Group] = []
     for secret in secrets:
         # Each pass below re-scans the WHOLE line for one value, so this loop is
@@ -1566,8 +1640,12 @@ def configure_plugins(high_confidence: bool = False):
             # happen to agree on every cross-line-eligible entry today
             # (the only plugin PLUGINS_HIGH_CONFIDENCE drops is the keyword
             # detector, which isn't cross-line-eligible), but that is not a
-            # premise this cache should rely on.
+            # premise this cache should rely on. _full_prefilter() covers every
+            # active plugin, so it DOES differ between the two configs (the
+            # keyword detector's denylist drops out under high_confidence) and
+            # must be cleared for the same reason.
             _eligible_prefilter.cache_clear()
+            _full_prefilter.cache_clear()
             _cross_line_eligible_types.cache_clear()
             return self
 
@@ -1582,6 +1660,7 @@ def configure_plugins(high_confidence: bool = False):
             try:
                 get_mapping_from_secret_type_to_class.cache_clear()
                 _eligible_prefilter.cache_clear()
+                _full_prefilter.cache_clear()
                 _cross_line_eligible_types.cache_clear()
             finally:
                 settings_result = self._settings.__exit__(*exc)

@@ -125,15 +125,18 @@ def _fake_scan(monkeypatch, *pairs):
     monkeypatch.setattr(
         E, "scan_line", lambda line: [f for f in fakes if f.secret_value in line]
     )
-    # _cross_line_candidate_spans now prefilters with the real detectors' own
-    # denylist regexes (_eligible_prefilter) before ever calling scan_line, so it
-    # only hands scan_line a window around a hit. These tests invent synthetic
-    # values ("ABCD", "WXYZ", …) that no real detector shape matches, so the
-    # patched scan_line above would never be reached without also patching the
-    # prefilter to a catch-all — these tests are exercising _redact_cross_line's
-    # offset-translation/overlap logic in isolation from any real detector shape,
-    # not the prefilter itself (that has its own soundness test).
-    monkeypatch.setattr(E, "_eligible_prefilter", lambda: (re.compile(".", re.DOTALL),))
+    # _cross_line_candidate_spans and _redact_line both prefilter with the real
+    # detectors' own denylist regexes (_eligible_prefilter / _full_prefilter)
+    # before ever calling scan_line. These tests invent synthetic values
+    # ("ABCD", "WXYZ", …) that no real detector shape matches, so the patched
+    # scan_line above would never be reached without also patching both
+    # prefilters to a catch-all — these tests are exercising the
+    # offset-translation/overlap/arbitration logic in isolation from any real
+    # detector shape, not the prefilters themselves (each has its own
+    # soundness test).
+    catch_all = (re.compile(".", re.DOTALL),)
+    monkeypatch.setattr(E, "_eligible_prefilter", lambda: catch_all)
+    monkeypatch.setattr(E, "_full_prefilter", lambda: catch_all)
 
 
 def _ph(secret_type: str) -> str:
@@ -155,7 +158,7 @@ def configured():
         yield
 
 
-def test_redact_line_overlapping_secrets_no_tail_leak(monkeypatch):
+def test_redact_line_overlapping_secrets_no_tail_leak(configured, monkeypatch):
     short_val = "abcd1234"
     long_val = "abcd1234efgh5678"
     _fake_scan(monkeypatch, ("Short", short_val), ("Long", long_val))
