@@ -8,6 +8,20 @@ adhere to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+## [2.44.0] - 2026-08-18
+
+### Fixed
+- Prevented race conditions where multiple sessions could simultaneously rebuild virtual environments by serializing provisioner operations.
+- Fixed unsafe registry write operations by staging auto-update writes through atomic O_EXCL temporary files.
+- Corrected doubly-wrapped redactor failure messages and improved wait handling in hooks.
+- Improved Layer-2 reveal store isolation by keying it to the project for proper multi-tenant support.
+- Fixed cold-start marker detection to use lock identity instead of reusable PIDs, improving reliability across sessions.
+- Made redactor socket publishing atomic to ensure live daemons are never unlinked during service lifecycle.
+
+### Changed
+- Keyed instruction-file alerts and acknowledgements by session ID instead of reusable identifiers for better isolation.
+- Enhanced TMPDIR store lifecycle management in hooks with age-out behavior for both stores.
+
 ## [2.43.12] - 2026-08-18
 
 ### Fixed
