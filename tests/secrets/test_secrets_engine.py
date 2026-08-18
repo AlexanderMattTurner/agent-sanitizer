@@ -6,6 +6,7 @@ API-shape: ``redact_text`` → :func:`redact`, ``run_main`` → ``run_plain``,
 env-bound values come from a :class:`RedactorConfig` instead of ``os.environ``.
 """
 
+import hashlib
 import re
 import time
 
@@ -2167,3 +2168,91 @@ def test_fs_path_every_root_skips_local_redaction():
     out, found = redact(f"token: /notaroot/{_BRACKET_NEEDLE}")
     assert _BRACKET_NEEDLE not in out, "non-root path unexpectedly skipped"
     assert found
+
+
+def _counting_offsets_patch(monkeypatch, counter):
+    """Make `_redact_line`'s span offsets count every comparison they take part in.
+
+    `_redact_line` derives each accepted span's bounds from the offset map, so
+    handing back `_CountingInt`s puts one on both sides of the overlap test: the
+    probe and, once inserted, the stored bounds. That turns "how much work does
+    the overlap test do" into a number, which is the property under test.
+    """
+
+    class _CountingInt(int):
+        def __lt__(self, other):
+            counter.append(1)
+            return int.__lt__(self, other)
+
+        def __gt__(self, other):
+            counter.append(1)
+            return int.__gt__(self, other)
+
+    real = E.strip_invisible_with_map
+
+    def counting(line, charset=None):
+        stripped, offsets = real(line, charset)
+        return stripped, [_CountingInt(o) for o in offsets]
+
+    monkeypatch.setattr(E, "strip_invisible_with_map", counting)
+
+
+def test_overlap_test_is_sub_quadratic_in_the_secrets_on_one_line(monkeypatch):
+    """One line's overlap test must not scan every accepted span per candidate.
+
+    `redact` runs over attacker-shaped tool output, so a quadratic here is
+    reachable: the scan runs past its caller's timeout and the caller stops
+    redacting for the rest of the session. The bound asserted is a COUNT of
+    comparisons, not elapsed time — the ratio between the binary search and the
+    linear scan is ~N/log N, so any wall-clock threshold separating them also
+    reports on the machine that ran it (see
+    test_a_hostile_variable_name_cannot_stall_the_matcher for the same reasoning).
+    """
+    n = 600
+    # sha256 of the index, so every key is well mixed (detect-secrets drops a
+    # sequential or low-entropy string) and identical on every machine and run.
+    line = " ".join(
+        "AKIA" + hashlib.sha256(str(i).encode()).hexdigest()[:16].upper()
+        for i in range(n)
+    )
+    counter: list[int] = []
+    _counting_offsets_patch(monkeypatch, counter)
+    found: list[str] = []
+    with E.configure_plugins():
+        E._redact_line(line, False, None, found)
+
+    # Positive marker: the line really did produce ~n accepted spans, so the
+    # bound below is measured against real work and cannot pass vacuously.
+    assert len(found) >= n // 2, len(found)
+    # A per-candidate scan of the accepted spans costs ~n^2/2 = 180_000 here; a
+    # binary search costs ~n*log2(n) with a small constant. 50*n sits an order of
+    # magnitude under the quadratic and well over the real bound.
+    assert len(counter) <= 50 * n, (
+        f"overlap test took {len(counter)} comparisons for {len(found)} spans — "
+        "quadratic again?"
+    )
+
+
+def test_a_compute_budget_interrupts_one_very_long_line():
+    """The budget must bind INSIDE a line, not only between lines.
+
+    A caller's ceiling exists so one request cannot deny service to the next.
+    Checking it only per line leaves it unable to interrupt the single-line
+    payload, which is the shape an attacker controls: the scan runs to
+    completion however long that takes, and the caller's timeout fires instead.
+    """
+    line = " ".join(
+        "AKIA" + hashlib.sha256(str(i).encode()).hexdigest()[:16].upper()
+        for i in range(4000)
+    )
+    budgeted = RedactorConfig(compute_budget_seconds=0.001)
+    with pytest.raises(E.RedactionBudgetExceeded) as raised:
+        redact(line, budgeted)
+    # The SCAN phase must be bounded, not only the arbitration after it: the
+    # group build re-scans the whole line once per detected secret, so it is the
+    # largest term and it all runs before arbitration begins.
+    assert "group build" in str(raised.value), str(raised.value)
+    # Positive marker: the same input redacts normally with no budget, so the
+    # raise above is the budget biting and not the input failing to scan.
+    out, found = redact(line, RedactorConfig())
+    assert found and "AKIA" not in out

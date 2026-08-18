@@ -2382,7 +2382,16 @@ const RELATIVE_URL_BASE = "http://relative.invalid";
 // code, a signed CSRF nonce), so the value shape cannot separate them from a
 // payload.
 const BENIGN_BLOB_PARAM_RE =
-  /^(?:x-(?:amz|goog|ms|oss|obs)-[a-z0-9-]+|amz-[a-z0-9-]+|utm_[a-z]+|sig|signature|hmac|policy|credential|expires|key-pair-id|se|sp|sr|sv|st|spr|si|skoid|sktid|code|state|cursor|after|before|continuation|continuationtoken|continuation_token|pagetoken|page_token|nexttoken|next_token|gclid|fbclid|dclid|msclkid|gbraid|wbraid|_ga|_gl|mc_eid|mc_cid)$/i;
+  /^(?:x-(?:amz|goog|ms|oss|obs)-[a-z0-9-]+|amz-[a-z0-9-]+|utm_[a-z]+|sig|signature|hmac|policy|credential|expires|key-pair-id|skoid|sktid|code|state|cursor|after|before|continuation|continuationtoken|continuation_token|pagetoken|page_token|nexttoken|next_token|gclid|fbclid|dclid|msclkid|gbraid|wbraid|_ga|_gl|mc_eid|mc_cid)$/i;
+
+// The SHORT-valued companions of a signed-CDN link: Azure SAS carries a version
+// date (`sv`), a resource letter (`sr`), start/expiry timestamps (`st`/`se`), a
+// permissions letter (`sp`), a protocol (`spr`) and a policy id (`si`) beside
+// its one long `sig`. They mark a query as signed-CDN traffic, which is all
+// `allParamsBenign` needs — but a name whose benign value is short must never
+// excuse a BLOB, or renaming the payload to `?sr=<blob>` walks past every check
+// above.
+const BENIGN_SHORT_PARAM_RE = /^(?:se|sp|sr|sv|st|spr|si)$/i;
 
 // matchesSecretHint is a deliberately broad PRE-gate whose bare-keyword arms
 // (`token`, `secret`, `authorization`, …) also match ordinary hyphen/word
@@ -2440,6 +2449,52 @@ const PATH_BLOB_MIN_LEN = 128;
  */
 function isBase64UrlBlob(value) {
   return BLOB_VALUE_B64URL_RE.test(value) && B64URL_MIXED_RE.test(value);
+}
+
+// `.` and `,` are legal in a URL but sit outside every blob alphabet above, so
+// chunking a payload on them (`aGVsbG8.d29ybGQ.…`) fails each anchored test
+// whole. Rejoining asks how many encoded bytes a component carries rather than
+// whether it is one unbroken token, which is what a beacon answers.
+const BLOB_SEPARATOR_RE = /[.,]/g;
+
+/**
+ * The separator-free residue of `value`, or null when it carried no separator
+ * (the un-chunked case every caller has already tested).
+ * @param {string} value
+ * @returns {string | null}
+ */
+function chunkedBlobResidue(value) {
+  const joined = value.replace(BLOB_SEPARATOR_RE, "");
+  return joined.length === value.length ? null : joined;
+}
+
+/**
+ * True when a PATH SEGMENT is a payload chunked across `.`/`,`.
+ *
+ * The rejoined bytes must carry base64url's character mix — an uppercase letter
+ * AND a digit — which the unbroken test does not demand. Rejoining is what makes
+ * the stricter bar necessary: a batch REST path is a list of separator-joined
+ * identifiers, so `/v1/quotes/AAPL,MSFT,GOOG,…` rejoins into a pure-uppercase
+ * run and `/v1/products/101,102,…` into a pure-digit one, both long enough to
+ * clear the floor and match the un-mixed arm. The mix is what tells bulk-encoded
+ * bytes from a list of names. It costs a chunked single-alphabet payload, which
+ * is the false negative this layer's doctrine says to take.
+ *
+ * Applied to the PATH only. A JWT is natively three dot-separated base64url
+ * segments running 130 to 600+ chars, so on a query value neither shape nor
+ * length separates a chunked payload from an ordinary `?token=<jwt>`; that
+ * residual is pinned as a test rather than left implicit.
+ * @param {string} segment
+ * @returns {boolean}
+ */
+function isChunkedPathBlob(segment) {
+  const joined = chunkedBlobResidue(segment);
+  return (
+    joined !== null &&
+    joined.length > PATH_BLOB_MIN_LEN &&
+    ((PATH_BLOB_RE.test(joined) && B64URL_MIXED_RE.test(joined)) ||
+      isBase64UrlBlob(joined))
+  );
 }
 
 /** @param {string} value @returns {boolean} */
@@ -2569,8 +2624,9 @@ function rawUrlKeywordExfil(url) {
  * @returns {boolean}
  */
 function allParamsBenign(parsed) {
-  return rawParams(parsed.search.slice(1)).every(([name]) =>
-    BENIGN_BLOB_PARAM_RE.test(name),
+  return rawParams(parsed.search.slice(1)).every(
+    ([name]) =>
+      BENIGN_BLOB_PARAM_RE.test(name) || BENIGN_SHORT_PARAM_RE.test(name),
   );
 }
 
@@ -2602,8 +2658,9 @@ function checkUrlParams(parsed) {
 function checkUrlPath(parsed) {
   for (const segment of parsed.pathname.split("/")) {
     if (
-      segment.length > PATH_BLOB_MIN_LEN &&
-      (PATH_BLOB_RE.test(segment) || isBase64UrlBlob(segment))
+      (segment.length > PATH_BLOB_MIN_LEN &&
+        (PATH_BLOB_RE.test(segment) || isBase64UrlBlob(segment))) ||
+      isChunkedPathBlob(segment)
     )
       return "encoded data blob in path segment";
   }
