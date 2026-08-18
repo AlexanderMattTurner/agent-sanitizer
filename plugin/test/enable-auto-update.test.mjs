@@ -12,6 +12,8 @@ import {
   existsSync,
   mkdtempSync,
   readFileSync,
+  readdirSync,
+  statSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -172,38 +174,42 @@ test(
       // An uncaught errno exits 1 too — the absence of a trace is the fix.
       assert.doesNotMatch(stderr, /\n\s+at /);
       assert.equal(readFileSync(path, "utf-8"), before);
-      assert.equal(existsSync(`${path}.agent-sanitizer.tmp`), false);
+      // Nothing staged survives a refusal — named by listing the directory, so a
+      // temp under any name (the staging name is random) counts as litter.
+      assert.deepEqual(readdirSync(dir), ["known_marketplaces.json"]);
     } finally {
       chmodSync(dir, 0o755);
     }
   },
 );
 
-test(
-  "a refused cleanup is reported, not thrown over the message",
-  // Staging exists because a run can be interrupted, so a leftover temp file is
-  // a state the next run meets. Rewriting that file needs no directory
-  // permission, so the write succeeds and the RENAME is what gets refused —
-  // then the unlink is refused too, on the same missing directory permission.
-  { skip: process.getuid?.() === 0 && "root writes through mode bits" },
-  () => {
-    const { dir, path } = registry(ENTRY);
-    const temp = `${path}.agent-sanitizer.tmp`;
-    writeFileSync(temp, "{half-written", "utf-8");
-    chmodSync(dir, 0o555);
-    try {
-      const { stderr } = runExpectingFailure(dir);
-      assert.match(stderr, /cannot write .* \(EACCES\)/);
-      assert.doesNotMatch(stderr, /\n\s+at /);
-      assert.ok(
-        stderr.includes(`The staged copy at ${temp} could not be cleaned up`),
-        `leftover temp file not reported in:\n${stderr}`,
-      );
-    } finally {
-      chmodSync(dir, 0o755);
-    }
-  },
-);
+test("a temp file another writer staged is neither consumed nor overwritten", () => {
+  // Two writers meet on this file: Claude Code writes it too, and a second run
+  // of this script can be underway. Staging through a name a writer can predict
+  // is how one run renames the other's half-written copy over the registry — so
+  // a file sitting at any name but our own random one must come out untouched.
+  const { dir, path } = registry(ENTRY);
+  const foreign = `${path}.agent-sanitizer.tmp`;
+  writeFileSync(foreign, "{half-written", "utf-8");
+  run(dir);
+  assert.equal(readJson(path)[MARKETPLACE].autoUpdate, true);
+  assert.equal(readFileSync(foreign, "utf-8"), "{half-written");
+  // Our own staging is gone: the foreign file and the registry are all that is left.
+  assert.deepEqual(readdirSync(dir).sort(), [
+    "known_marketplaces.json",
+    "known_marketplaces.json.agent-sanitizer.tmp",
+  ]);
+});
+
+test("the registry keeps its own mode rather than the umask's", () => {
+  // Claude Code owns this file's permissions; a rewrite that widened a 0600
+  // registry to 0644 would publish it to every other user on the box.
+  const { dir, path } = registry(ENTRY);
+  chmodSync(path, 0o600);
+  run(dir);
+  assert.equal(readJson(path)[MARKETPLACE].autoUpdate, true);
+  assert.equal(statSync(path).mode & 0o777, 0o600);
+});
 
 for (const args of [[], ["--disable"]])
   test(

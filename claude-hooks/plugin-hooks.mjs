@@ -154,11 +154,14 @@ const HOOKS = {
   "scan-invisible-chars": {
     event: HookEvent.SESSION_START,
     run: async () => {
-      const { cliMain } =
+      const { cliMain, sessionIdFromStdin } =
         /** @type {typeof import("./scan-invisible-chars.mjs")} */ (
           await import("./scan-invisible-chars.mjs")
         );
-      await cliMain();
+      // The SessionStart payload carries the session identity the alert store is
+      // keyed by; without it every session shares one store and inherits the
+      // previous one's gate acknowledgement.
+      await cliMain({ sessionId: await sessionIdFromStdin() });
     },
   },
   "scan-loaded-instructions": {

@@ -37,13 +37,15 @@ const { readLoadedFile, scanLoadedFile, loadedFileMessage, scopeNotice } =
   await import("../claude-hooks/scan-loaded-instructions.mjs");
 const { LONG_RUN_THRESHOLD } = await import("../src/invisible.mjs");
 const {
-  ALERT_FILE,
+  alertDir,
   appendAlert,
   instructionsLoadedFile,
   instructionsLoadedGapNotice,
   instructionsLoadedNoticeFile,
   instructionsLoadedSeen,
+  invisibleCharAlert,
   recordInstructionsLoaded,
+  recordInstructionsLoadedNotice,
 } = await import("../claude-hooks/lib/invisible-alert.mjs");
 
 /** The session id the CLI cases send, so their markers are this session's. */
@@ -54,20 +56,24 @@ const PAYLOAD = "\u{e0001}".repeat(LONG_RUN_THRESHOLD + 2);
 const PROSE = "real prose the strip must keep\n";
 
 const markers = [
-  ALERT_FILE,
   instructionsLoadedFile(),
   instructionsLoadedNoticeFile(),
   instructionsLoadedFile(SESSION),
   instructionsLoadedNoticeFile(SESSION),
 ];
 
+/** Every alert store these cases touch: the shared fallback and SESSION's. */
+const alertDirs = [alertDir(), alertDir(SESSION)];
+
 beforeEach(() => {
   for (const path of markers) rmSync(path, { force: true });
+  for (const path of alertDirs) rmSync(path, { recursive: true, force: true });
 });
 
 after(() => {
   rmSync(projectDir, { recursive: true, force: true });
   for (const path of markers) rmSync(path, { force: true });
+  for (const path of alertDirs) rmSync(path, { recursive: true, force: true });
 });
 
 /** Write `content` to `name` under the project and return its absolute path. */
@@ -289,7 +295,7 @@ describe("the alert accumulates rather than clobbering", () => {
     // gate would surface only the newest one.
     appendAlert("launch finding");
     appendAlert("nested finding");
-    const alert = readFileSync(ALERT_FILE, "utf8");
+    const alert = invisibleCharAlert();
     assert.match(alert, /launch finding/u);
     assert.match(alert, /nested finding/u);
   });
@@ -347,7 +353,7 @@ describe("the hook CLI, driven end to end on a real event", () => {
     assert.match(json.hookSpecificOutput.additionalContext, /untrusted data/u);
     assert.match(stderr, /INVISIBLE CHARACTER INJECTION DETECTED/u);
     // Cleaned, so nothing is left for the gate to ask about.
-    assert.equal(existsSync(ALERT_FILE), false);
+    assert.equal(invisibleCharAlert(SESSION), null);
     assert.ok(existsSync(instructionsLoadedFile(SESSION)));
   });
 
@@ -363,8 +369,11 @@ describe("the hook CLI, driven end to end on a real event", () => {
       load_reason: "include",
     });
 
-    assert.ok(existsSync(ALERT_FILE), "the PreToolUse gate was not armed");
-    assert.match(readFileSync(ALERT_FILE, "utf8"), /CLAUDE\.md/u);
+    assert.match(
+      invisibleCharAlert(SESSION) ?? "",
+      /CLAUDE\.md/u,
+      "the PreToolUse gate was not armed",
+    );
     rmSync(outside, { recursive: true, force: true });
   });
 
@@ -384,7 +393,7 @@ describe("the hook CLI, driven end to end on a real event", () => {
     assert.match(stderr, /\.claude\/policies\//u);
     // Not a finding: no model/user channel, and nothing for the gate to ask.
     assert.equal(stdout, "");
-    assert.equal(existsSync(ALERT_FILE), false);
+    assert.equal(invisibleCharAlert(SESSION), null);
   });
 
   it("stays silent on a clean file, and still records that it ran", () => {
@@ -397,7 +406,7 @@ describe("the hook CLI, driven end to end on a real event", () => {
     });
     assert.equal(stdout, "");
     assert.equal(stderr, "");
-    assert.equal(existsSync(ALERT_FILE), false);
+    assert.equal(invisibleCharAlert(SESSION), null);
     // The marker is what tells the PreToolUse gate this host emits the event at
     // all; a clean file must still leave it.
     assert.ok(existsSync(instructionsLoadedFile(SESSION)));
@@ -432,7 +441,10 @@ describe("the hook CLI, driven end to end on a real event", () => {
   it("does not arm the tool-call gate on an empty payload, even fail-closed", () => {
     const { stderr } = fireRaw("", { AGENT_SANITIZER_FAIL_OPEN: "0" });
     assert.match(stderr, /received no payload/u);
-    assert.equal(existsSync(ALERT_FILE), false);
+    // Both stores: with no payload there is no session id, so the fallback is
+    // where such a finding would land if one were (wrongly) recorded.
+    assert.equal(invisibleCharAlert(SESSION), null);
+    assert.equal(invisibleCharAlert(), null);
   });
 
   // The other half of that distinction, and what keeps the assertions above
@@ -445,7 +457,14 @@ describe("the hook CLI, driven end to end on a real event", () => {
     assert.match(stderr, /NOT scanned/u);
     assert.doesNotMatch(stderr, /received no payload/u);
     assert.notEqual(status, 0);
-    assert.ok(existsSync(ALERT_FILE), "the PreToolUse gate was not armed");
+    // The payload never parsed, so the hook had no session id to key by: the
+    // finding lands in the shared fallback store, and the gate reads that store
+    // alongside its own so the report still reaches a tool call.
+    assert.notEqual(
+      invisibleCharAlert(SESSION),
+      null,
+      "the PreToolUse gate was not armed",
+    );
   });
 });
 
@@ -466,9 +485,13 @@ describe("a session with no InstructionsLoaded scan is named, once", () => {
     assert.match(notice, /AGENT_SANITIZER_DISABLED_HOOKS/u);
   });
 
-  it("does not repeat the warning on later tool calls", () => {
+  it("does not repeat the warning once it has been surfaced", () => {
+    // The notice itself is a pure read: nothing is recorded until the caller
+    // confirms the notice actually landed in a response, so a call that ends in
+    // a deny leaves the session's one report still to come.
     assert.notEqual(instructionsLoadedGapNotice(), null);
-    assert.equal(instructionsLoadedGapNotice(), null);
+    assert.notEqual(instructionsLoadedGapNotice(), null);
+    recordInstructionsLoadedNotice();
     assert.equal(instructionsLoadedGapNotice(), null);
   });
 
@@ -491,6 +514,23 @@ describe("a session with no InstructionsLoaded scan is named, once", () => {
     assert.equal(instructionsLoadedSeen(SESSION), false);
     assert.match(instructionsLoadedGapNotice(SESSION), /unscanned/u);
     rmSync(instructionsLoadedFile("sess-earlier"), { force: true });
+  });
+
+  it("sweeps a past session's alert store, not only its markers", () => {
+    // The store is a DIRECTORY per session; a sweep that only unlinked files
+    // would leave every past session's directory behind forever.
+    const stale = alertDir("sess-ancient-store");
+    appendAlert("a past session's finding", "sess-ancient-store");
+    const eightDaysAgo = new Date(Date.now() - 8 * 24 * 60 * 60 * 1000);
+    utimesSync(stale, eightDaysAgo, eightDaysAgo);
+
+    recordInstructionsLoaded(SESSION);
+
+    assert.equal(
+      existsSync(stale),
+      false,
+      "a stale alert store was left behind",
+    );
   });
 
   it("sweeps a past session's markers, keeping this session's and recent ones", () => {

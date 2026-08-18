@@ -24,6 +24,7 @@ import {
   HookEvent,
   isMain,
   lazyImport,
+  PROJECT_DIR,
   readStdinJson,
   safeErrMessage,
 } from "./lib/hook-io.mjs";
@@ -34,7 +35,6 @@ import {
 } from "./lib/hook-fault.mjs";
 import {
   appendAlert,
-  PROJECT_DIR,
   recordInstructionsLoaded,
 } from "./lib/invisible-alert.mjs";
 import { bestEffortTrace, trace, TraceEvent } from "./lib/trace.mjs";
@@ -259,8 +259,11 @@ export { HOOK_NAME };
 export async function cliMain({ trace: sink = trace } = {}) {
   const timer = startHookTimer();
   const emitTrace = bestEffortTrace(sink);
+  /** @type {string | undefined} */
+  let sessionId;
   try {
     const payload = await readStdinJson();
+    sessionId = payload?.session_id;
     // Recorded before the scan, not after: the marker answers "is this event
     // being scanned", which is true the moment the hook is running, and a
     // faulting scan must not read as an unscanned event — that notice names a
@@ -289,7 +292,7 @@ export async function cliMain({ trace: sink = trace } = {}) {
     // A payload still on disk is the case the PreToolUse gate exists for: it
     // asks once, on the next tool call, rather than leaving the only report on a
     // channel that scrolls.
-    if (!result.cleaned) appendAlert(message);
+    if (!result.cleaned) appendAlert(message, sessionId);
     // systemMessage reaches the user, additionalContext the model. Both, because
     // this hook cannot block and the file is already loaded: the user is the one
     // who can act on it, and the model is the one currently reading it.
@@ -306,7 +309,11 @@ export async function cliMain({ trace: sink = trace } = {}) {
     emitTrace(TraceEvent.SCAN_LOADED_INSTRUCTIONS_RAN, { outcome: "skipped" });
     const outcome = hookFaultOutcome(HOOK_NAME, err);
     process.exitCode = writeFaultOutcome(outcome);
-    if (outcome.armAlert) appendAlert(/** @type {string} */ (outcome.stderr));
+    // `sessionId`, captured before the throw: a payload read that itself failed
+    // leaves it undefined, and the fault then lands in the shared fallback store
+    // rather than in no store at all.
+    if (outcome.armAlert)
+      appendAlert(/** @type {string} */ (outcome.stderr), sessionId);
   } finally {
     reportSlowHook(
       HOOK_NAME,

@@ -28,12 +28,16 @@
  * pass costs only what today's behavior already allows.
  */
 import { createHash } from "node:crypto";
-import { lstatSync, unlinkSync } from "node:fs";
+import { lstatSync, readdirSync, unlinkSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { tmpdir } from "node:os";
 import { spawnSync } from "node:child_process";
-import { lazyImport, markerIsTrusted, writeSentinelFile } from "./hook-io.mjs";
-import { PROJECT_HASH } from "./invisible-alert.mjs";
+import {
+  lazyImport,
+  markerIsTrusted,
+  PROJECT_HASH,
+  writeSentinelFile,
+} from "./hook-io.mjs";
 
 // Layer-1 view primitives, bound via lazyImport (see its doc for the fail-OPEN
 // hazard of a bare static npm import): a load failure leaves these undefined,
@@ -73,6 +77,37 @@ export function dropFingerprint(filePath, content, dropped = []) {
  */
 export function confirmMarkerPath(fingerprint) {
   return join(tmpdir(), `.claude-secret-drop-${PROJECT_HASH}-${fingerprint}`);
+}
+
+/**
+ * Delete this project's confirm sentinels older than {@link CONFIRM_TTL_MS}.
+ *
+ * consumeConfirm removes the sentinel it honors, but an abandoned confirmation —
+ * denied, never retried — is removed by nothing, so the store grows for the life
+ * of the machine. Called from SessionStart, the one touchpoint that runs once per
+ * session rather than once per tool call. A sentinel past the TTL is already inert
+ * (consumeConfirm refuses it), so this reclaims space without changing a verdict.
+ * @returns {void}
+ */
+export function sweepStaleConfirms() {
+  const dir = tmpdir();
+  const prefix = `.claude-secret-drop-${PROJECT_HASH}-`;
+  const cutoff = Date.now() - CONFIRM_TTL_MS;
+  for (const name of readdirSync(dir)) {
+    if (!name.startsWith(prefix)) continue;
+    const path = join(dir, name);
+    try {
+      // lstat, not stat: a squatted symlink at a predictable path is judged on
+      // ITSELF, and unlink removes the link rather than its target.
+      if (lstatSync(path).mtimeMs < cutoff) unlinkSync(path);
+    } catch (err) {
+      // ENOENT: a parallel session swept this entry between readdir and lstat.
+      // EPERM/EACCES: a co-tenant's entry, which is not ours to remove. Anything
+      // else is a bug in this sweep and propagates.
+      const code = /** @type {NodeJS.ErrnoException} */ (err).code;
+      if (code !== "ENOENT" && code !== "EPERM" && code !== "EACCES") throw err;
+    }
+  }
 }
 
 /**
@@ -165,6 +200,12 @@ export async function secretDropGuard(toolInput, io, opts = {}) {
   if (dropped.length === 0) return null;
 
   const fingerprint = dropFingerprint(filePath, content, dropped);
+  // THE INVARIANT THIS ENFORCES: a confirmation approves exactly one drop —
+  // the identical (path, bytes, drop-set) — and only for CONFIRM_TTL_MS. The
+  // window must outlive a model retry (the confirmation IS the retry, so a
+  // shorter one would deny forever) and must not outlive the session's working
+  // context, or a marker left by an abandoned attempt becomes a standing
+  // auto-approval for a Write the user never saw.
   if (confirmSeen(fingerprint)) return null;
   recordConfirm(fingerprint);
   return { deny: dropDeny(dropped.length, filePath) };

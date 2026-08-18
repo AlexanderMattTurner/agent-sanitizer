@@ -33,6 +33,7 @@ const {
   configureMissingPackageRemedy,
   hookgateMarkerPath,
   probeSetupAlive,
+  SETUP_LOCK_DECLARATION,
   awaitLazyDependency,
 } = await import("../claude-hooks/lib/hook-io.mjs");
 const { controlPlane } = await import("../claude-hooks/lib/control-plane.mjs");
@@ -742,6 +743,59 @@ describe("setup-liveness probe", () => {
     // Garbage contents are a write race, not a death: keep waiting.
     writeFileSync(marker, "not-a-pid");
     assert.equal(probeSetupAlive(marker), true);
+  });
+
+  it("judges a lock-declaring marker by the lock, not by its pid", async (t) => {
+    // A pid is reusable: once setup dies, the number in the marker can name an
+    // unrelated live process and the probe reads a dead install as alive for the
+    // whole ceiling. A flock cannot alias — the kernel releases it at death — so
+    // a marker that declares the lock is judged only by whether it is held.
+    const { writeFileSync, mkdtempSync } = await import("node:fs");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+    const { spawnSync, spawn } = await import("node:child_process");
+    if (spawnSync("flock", ["--version"], { stdio: "ignore" }).error) {
+      t.skip("flock(1) is not available on this host");
+      return;
+    }
+    const marker = join(mkdtempSync(join(tmpdir(), "seam-lock-")), "m");
+    // The pid is this process — alive — so a pid-only reading says "alive" in
+    // BOTH cases below, and only the lock tells them apart.
+    writeFileSync(marker, `${process.pid}\n${SETUP_LOCK_DECLARATION}\n`);
+
+    assert.equal(
+      probeSetupAlive(marker),
+      false,
+      "an unheld lock must read as a setup that has finished or died",
+    );
+
+    const holder = spawn("flock", ["--exclusive", marker, "sleep", "30"], {
+      stdio: "ignore",
+    });
+    t.after(() => holder.kill());
+    // Wait for the lock to actually be taken; the spawn returns before flock has
+    // opened the file.
+    const deadline = Date.now() + 5000;
+    while (Date.now() < deadline && probeSetupAlive(marker) === false)
+      await new Promise((r) => setTimeout(r, 25));
+    assert.equal(
+      probeSetupAlive(marker),
+      true,
+      "a held lock must read as a live setup",
+    );
+  });
+
+  it("falls back to the pid for a marker that declares no lock", async () => {
+    // The old data shape: writers adopt the lock declaration on their own
+    // schedule, and until they do the pid is the only signal there is.
+    const { writeFileSync, mkdtempSync } = await import("node:fs");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+    const marker = join(mkdtempSync(join(tmpdir(), "seam-nolock-")), "m");
+    writeFileSync(marker, String(process.pid));
+    assert.equal(probeSetupAlive(marker), true);
+    writeFileSync(marker, "2147483646");
+    assert.equal(probeSetupAlive(marker), false);
   });
 });
 

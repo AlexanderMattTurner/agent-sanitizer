@@ -16,9 +16,21 @@
  * it does not recognize. A Claude Code release that moves or restructures the
  * file makes this exit non-zero with what it found — never silently no-op.
  */
-import { readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { randomBytes } from "node:crypto";
+import {
+  closeSync,
+  constants,
+  fchmodSync,
+  fsyncSync,
+  openSync,
+  readFileSync,
+  renameSync,
+  statSync,
+  unlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
 
 // Must equal `name` in .claude-plugin/marketplace.json — that is what Claude
@@ -83,50 +95,64 @@ const rerunCommand = (disable) =>
   `node ${shellQuote(process.argv[1])}${disable ? " --disable" : ""}`;
 
 /**
- * Removes the temp file this run staged, reporting whether it is gone.
+ * Replaces the registry with `contents`, atomically.
  *
- * Unlinking needs write permission on the directory, which is exactly what a
- * refused rename says we may not have — so a refusal here is reported in the
- * message below rather than crashing over it with the trace this path exists to
- * remove. Any other errno still propagates.
- *
- * @param {string} temp
- */
-function removeStaged(temp) {
-  try {
-    rmSync(temp, { force: true });
-    return true;
-  } catch (error) {
-    const code = /** @type {NodeJS.ErrnoException} */ (error).code;
-    if (!REFUSED.has(code ?? "")) throw error;
-    return false;
-  }
-}
-
-/**
- * Replaces the registry, staged through a sibling temp file so an interrupted
- * write cannot leave the file Claude Code reads truncated.
+ * The staging name is crypto-random and created with `O_EXCL`, because Claude
+ * Code writes this same file and a second run of this script can be underway:
+ * a fixed name is a path two writers meet on, where one truncates the other's
+ * half-written copy and renames it over the registry. `O_EXCL` also refuses a
+ * symlink planted at that name rather than writing through it. The bytes are
+ * `fsync`ed before the rename and the directory after it, so a crash can leave
+ * the registry only as it was or as it will be, never truncated. `fchmod`
+ * restores the registry's exact mode, which `openSync`'s umask-masked create
+ * mode would otherwise drop.
  *
  * A refused write is a state the user can act on, so it exits with the two
  * routes that do work instead of a stack trace; every other errno propagates.
+ * Either way the staged copy is unlinked first, so no failure path leaves one
+ * behind for the registry's owner to find.
  *
  * @param {string} path
  * @param {string} contents
  * @param {boolean} disable  which invocation to hand back for a rerun
  */
 function replaceRegistry(path, contents, disable) {
-  const temp = `${path}.agent-sanitizer.tmp`;
+  const dir = dirname(path);
+  const temp = join(dir, `.${randomBytes(12).toString("hex")}.tmp`);
+  const mode = statSync(path).mode & 0o7777;
+  // Whether a temp of OURS is sitting at `temp` — the only file this run may
+  // clean up, and the only one it can have created under a name it just drew.
   let staged = false;
+  /** @type {number|null} */
+  let fd = null;
   try {
-    writeFileSync(temp, contents, "utf-8");
+    fd = openSync(
+      temp,
+      constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL,
+      mode,
+    );
     staged = true;
+    // writeFileSync(fd, …) loops until every byte lands; a bare writeSync can
+    // short-write. It does not close the fd.
+    writeFileSync(fd, contents, "utf-8");
+    fchmodSync(fd, mode);
+    fsyncSync(fd);
+    closeSync(fd);
+    fd = null;
     renameSync(temp, path);
+    staged = false;
+    fsyncDir(dir);
   } catch (error) {
+    if (fd !== null) closeSync(fd);
+    if (staged)
+      try {
+        unlinkSync(temp);
+      } catch {
+        // Best-effort cleanup only: the failure reported below is the ORIGINAL
+        // one, not a secondary unlink error, so the real cause stays loud.
+      }
     const code = /** @type {NodeJS.ErrnoException} */ (error).code;
     if (!REFUSED.has(code ?? "")) throw error;
-    // Only a temp file this run wrote is ours to remove; one an interrupted
-    // earlier run left behind belongs to no one we can speak for.
-    const litter = staged && !removeStaged(temp) ? temp : null;
     fail(
       `cannot write ${path} (${code}) — the OS refused it. Claude Code's Bash ` +
         `sandbox confines writes to the workspace, so no session that runs ` +
@@ -136,12 +162,24 @@ function replaceRegistry(path, contents, disable) {
         `Or toggle it without a terminal: /plugin -> Marketplaces -> ` +
         `${MARKETPLACE} -> Enable auto-update.\n` +
         `If the terminal refuses it too, the file's owner or permissions need ` +
-        `fixing.` +
-        (litter
-          ? `\nThe staged copy at ${litter} could not be cleaned up either; ` +
-            `delete it once the permissions are fixed.`
-          : ""),
+        `fixing.`,
     );
+  }
+}
+
+/**
+ * `fsync`s a directory, so a rename into it survives a crash — a rename is a
+ * directory metadata change, which flushing the file's own data blocks does not
+ * make durable.
+ *
+ * @param {string} dir
+ */
+function fsyncDir(dir) {
+  const fd = openSync(dir, constants.O_RDONLY);
+  try {
+    fsyncSync(fd);
+  } finally {
+    closeSync(fd);
   }
 }
 

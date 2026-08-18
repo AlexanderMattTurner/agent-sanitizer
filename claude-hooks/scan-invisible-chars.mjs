@@ -21,7 +21,7 @@
  * false positive the SSOT had already fixed, and its clean path was a bare
  * `writeFileSync` with none of cleanFile's symlink/UTF-8/TOCTOU guards.
  */
-import { existsSync, readFileSync, globSync, unlinkSync } from "node:fs";
+import { existsSync, readFileSync, globSync } from "node:fs";
 import { join, relative, resolve } from "node:path";
 import {
   awaitLazyDependency,
@@ -33,7 +33,8 @@ import {
   lazyImport,
   markerIsTrusted,
   probeSetupAlive,
-  writeFileNoFollow,
+  PROJECT_DIR,
+  readStdinJson,
 } from "./lib/hook-io.mjs";
 import {
   registerFaultPolicy,
@@ -41,11 +42,14 @@ import {
   writeFaultOutcome,
 } from "./lib/hook-fault.mjs";
 import {
-  ALERT_FILE,
-  ALERT_ACK_FILE,
-  PROJECT_DIR,
+  alertAckFile,
+  alertDir,
+  appendAlert,
+  sweepStaleSessions,
 } from "./lib/invisible-alert.mjs";
 import { formatReport } from "./lib/invisible-report.mjs";
+import { sweepStaleReveals } from "./lib/reveal.mjs";
+import { sweepStaleConfirms } from "./lib/secret-drop-guard.mjs";
 import { bestEffortTrace, trace, TraceEvent } from "./lib/trace.mjs";
 import { reportSlowHook, startHookTimer } from "./lib/hook-timing.mjs";
 // Relative, not the `agent-sanitizer` specifier every other engine import uses:
@@ -181,19 +185,15 @@ function reportFault(err) {
 
 /**
  * Persist the accumulated alert text for the PreToolUse gate, or leave the alert
- * absent when there is nothing to surface.
- *
- * ALERT_FILE sits at a predictable, world-visible $TMPDIR path, so a plain
- * writeFileSync would follow a co-tenant-planted symlink and overwrite an
- * arbitrary file this uid owns. Create it symlink-refusingly (see
- * writeFileNoFollow); the gate treats an absent alert as "nothing to surface",
- * so a lost race degrades safely rather than to a hijacked write.
+ * absent when there is nothing to surface. One store entry per part, into THIS
+ * session's alert directory (see appendAlert), so a concurrent
+ * InstructionsLoaded finding cannot clobber the launch scan's report.
  * @param {string[]} parts
+ * @param {string} [sessionId]
  * @returns {void}
  */
-function persistAlert(parts) {
-  if (parts.length === 0) return;
-  writeFileNoFollow(ALERT_FILE, parts.join("\n") + "\n");
+function persistAlert(parts, sessionId) {
+  for (const part of parts) appendAlert(part, sessionId);
 }
 
 // Decoder
@@ -282,8 +282,8 @@ export {
   decodeRun,
   findInstructionFiles,
   scanFile,
-  ALERT_FILE,
-  ALERT_ACK_FILE,
+  alertAckFile,
+  alertDir,
   LONG_RUN_RE,
   LONG_RUN_THRESHOLD,
   TOTAL_INVISIBLE_THRESHOLD,
@@ -353,7 +353,7 @@ export function scanProject(dir = PROJECT_DIR) {
         continue;
       }
       // safeErrMessage, not errMessage: this reason is rendered into stderr and
-      // into ALERT_FILE, and an errno message embeds the absolute path globbed
+      // into the alert store, and an errno message embeds the absolute path globbed
       // out of a possibly-hostile repo — a filename carrying ANSI or invisible
       // bytes would otherwise reach the operator's terminal raw.
       skipped.push({ file: report(file), reason: safeErrMessage(err) });
@@ -399,12 +399,15 @@ export function formatSkipped(skipped) {
  * @param {{
  *   trace?: import("./lib/trace.mjs").TraceFn,
  *   scan?: () => ReturnType<typeof scanProject>,
+ *   sessionId?: string,
  * }} [opts]  `trace` is where this scan announces engagement; a host with its
  *   own trace channel passes its sink so the announcement lands where its
  *   detector reads (see lib/trace.mjs). `scan` is the scanner, injectable so the
  *   FAULT path below — a scanner that throws something other than an errno, i.e.
  *   a bug — is drivable end to end; no filesystem state can force it, and an
  *   untested fault path is how a posture goes missing in the first place.
+ *   `sessionId` keys the alert store this scan writes; the CLI entry reads it off
+ *   the SessionStart payload, and an in-process caller passes it directly.
  * @returns {Promise<void>}
  */
 export async function cliMain(opts = {}) {
@@ -434,10 +437,11 @@ export async function cliMain(opts = {}) {
  * @param {{
  *   trace?: import("./lib/trace.mjs").TraceFn,
  *   scan?: () => ReturnType<typeof scanProject>,
+ *   sessionId?: string,
  * }} opts  see {@link cliMain}
  * @returns {Promise<void>}
  */
-async function runScanCli({ trace: sink = trace, scan: runScan }) {
+async function runScanCli({ trace: sink = trace, scan: runScan, sessionId }) {
   // Bound best-effort: the announcements below run BEFORE the auto-clean and
   // the alert write, with no catch above them, so a throwing host sink would
   // abort the scan silently (see bestEffortTrace).
@@ -470,20 +474,22 @@ async function runScanCli({ trace: sink = trace, scan: runScan }) {
         ),
       ),
     );
-    persistAlert(alertParts);
+    persistAlert(alertParts, sessionId);
     process.exit(1);
   }
   /* c8 ignore stop */
 
-  // Clean up stale alert + its ack marker from a previous session so this
-  // session re-surfaces the gate once if injection is still present.
-  for (const stale of [ALERT_FILE, ALERT_ACK_FILE]) {
-    try {
-      unlinkSync(stale);
-    } catch {
-      // Doesn't exist or not writable
-    }
-  }
+  // No clear: the store is session-keyed, so this session starts empty by
+  // construction and cannot inherit a previous session's ack. Age out what past
+  // sessions left instead — SessionStart is the once-per-session touchpoint the
+  // sweep belongs on.
+  sweepStaleSessions(sessionId);
+  // The other two $TMPDIR stores these hooks own. Both are content- or
+  // fingerprint-addressed with no natural owner to delete them, so without a
+  // sweep they grow for the life of the machine; SessionStart is the only
+  // touchpoint that runs once per session rather than once per tool call.
+  sweepStaleReveals();
+  sweepStaleConfirms();
 
   // Only a non-errno throw reaches here — a bug in the scanner, not a file it
   // could not read (those are accounted for in `skipped`). It is a fault of THIS
@@ -495,7 +501,7 @@ async function runScanCli({ trace: sink = trace, scan: runScan }) {
   } catch (err) {
     emitTrace(TraceEvent.SCAN_INVISIBLE_CHARS_RAN, { outcome: "skipped" });
     alertParts.push(...reportFault(err));
-    persistAlert(alertParts);
+    persistAlert(alertParts, sessionId);
     return;
   }
   const { findings: allFindings, skipped, absent, scanned } = scan;
@@ -529,7 +535,7 @@ async function runScanCli({ trace: sink = trace, scan: runScan }) {
 
   if (allFindings.length > 0)
     alertParts.push(...autoCleanFindings(allFindings, PROJECT_DIR));
-  persistAlert(alertParts);
+  persistAlert(alertParts, sessionId);
 }
 
 /**
@@ -602,6 +608,27 @@ function autoCleanFindings(allFindings, dir) {
   return [report];
 }
 
+/**
+ * The session identity from the SessionStart payload on stdin, or undefined when
+ * the host sent none.
+ *
+ * Swallowing: the payload is read for ONE optional field, and a host that pipes
+ * nothing (or malformed JSON) must still get the scan — a session-start scan
+ * refused over an unparseable envelope is a strictly worse outcome than one
+ * keyed to the shared `no-session` fallback.
+ * @returns {Promise<string | undefined>}
+ */
+export async function sessionIdFromStdin() {
+  // A TTY is a human running this scan by hand, not a harness sending an event:
+  // reading it would block forever waiting for a payload nobody is going to send.
+  if (process.stdin.isTTY) return undefined;
+  try {
+    return (await readStdinJson())?.session_id;
+  } catch {
+    return undefined;
+  }
+}
+
 if (isMain(import.meta.url)) {
-  await cliMain();
+  await cliMain({ sessionId: await sessionIdFromStdin() });
 }

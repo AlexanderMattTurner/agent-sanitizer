@@ -61,7 +61,13 @@ download=""
 # $download is empty until mktemp names one, so the cleanup removes a partial
 # transfer and never another process's file.
 provision_begin "hook binary download"
-trap 'rm -f -- "${download:-}"; provision_report_elapsed "The binary is ~100 MB, so this mostly measures the connection to github.com"' EXIT
+trap 'rm -f -- "${download:-}"; provision_release_lock; provision_report_elapsed "The binary is ~100 MB, so this mostly measures the connection to github.com"' EXIT
+
+# Held across the verify-then-remove-then-refetch sequence below. The install
+# itself is atomic, but the removal of a binary that fails its digest check is
+# not paired with it: a second session verifying the same file between this
+# one's `rm` and its refetch finds nothing and starts a second ~100 MB download.
+provision_hold_lock "$data_dir/.hook-binary-provision.lock"
 
 if [[ ! -f "$manifest" ]]; then
   echo "agent-sanitizer: $manifest is missing — the hook binary cannot be verified, so it will not be provisioned (reinstall the plugin)" >&2

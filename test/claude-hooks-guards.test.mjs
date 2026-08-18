@@ -12,7 +12,14 @@
  */
 import { describe, it, after } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync, unlinkSync, utimesSync } from "node:fs";
+import {
+  existsSync,
+  mkdtempSync,
+  rmSync,
+  unlinkSync,
+  utimesSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -52,6 +59,7 @@ const {
   gitTracked,
   dropFingerprint,
   confirmMarkerPath,
+  sweepStaleConfirms,
   CONFIRM_TTL_MS,
 } = await import("../claude-hooks/lib/secret-drop-guard.mjs");
 const { rehydrateRedacted } = await import("../src/rehydrate.mjs");
@@ -391,6 +399,57 @@ describe("secret-drop-guard", () => {
       } catch {
         // Already consumed.
       }
+    }
+  });
+
+  it("approves nothing but the identical (path, bytes) it denied", async () => {
+    // The confirmation's whole safety argument is that it is narrow: it must
+    // survive a model retry of the SAME call and approve no other. The drop-set
+    // dimension is covered above; these are the other two.
+    const confirmed = { file_path: "/w/.env", content: "narrow-confirm\n" };
+    const seen = new Set();
+    const seams = {
+      ...untracked,
+      confirmSeen: (fp) => seen.delete(fp),
+      recordConfirm: (fp) => seen.add(fp),
+    };
+    const first = await secretDropGuard(confirmed, dropIo(DISK), seams);
+    assert.ok(first !== null && "deny" in first);
+    for (const other of [
+      { file_path: "/w/other.env", content: confirmed.content },
+      { file_path: confirmed.file_path, content: "different bytes\n" },
+    ]) {
+      const res = await secretDropGuard(other, dropIo(DISK), seams);
+      assert.ok(
+        res !== null && "deny" in res,
+        `a confirmation approved ${JSON.stringify(other)}`,
+      );
+    }
+    // Non-vacuity: the confirmation the loop must NOT satisfy is still live and
+    // still approves the call it was issued for.
+    assert.equal(await secretDropGuard(confirmed, dropIo(DISK), seams), null);
+  });
+
+  it("sweeps sentinels past the TTL and keeps the ones still in force", () => {
+    // Nothing else removes an abandoned confirmation — consumeConfirm only
+    // unlinks the ones it honors — so without this sweep the store grows for
+    // the life of the machine.
+    const stale = confirmMarkerPath(dropFingerprint("/w/stale", "s", []));
+    const fresh = confirmMarkerPath(dropFingerprint("/w/fresh", "f", []));
+    writeFileSync(stale, "");
+    writeFileSync(fresh, "");
+    const old = new Date(Date.now() - CONFIRM_TTL_MS - 60_000);
+    utimesSync(stale, old, old);
+    try {
+      sweepStaleConfirms();
+      assert.equal(
+        existsSync(stale),
+        false,
+        "a stale sentinel was left behind",
+      );
+      assert.ok(existsSync(fresh), "a sentinel still in force was swept");
+    } finally {
+      for (const path of [stale, fresh]) rmSync(path, { force: true });
     }
   });
 

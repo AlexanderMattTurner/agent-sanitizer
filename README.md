@@ -368,6 +368,14 @@ hook module, and every consumer waits on that path instead. `lib/control-plane`
 resolves the marker at module scope, so a call that lands after that import
 warns on stderr — it cannot steer the wait that already started.
 
+The marker's first line is the setup process's pid. A writer that also holds an
+exclusive `flock` on the marker file for the whole install says so by adding a
+second line reading `flock` (`SETUP_LOCK_DECLARATION`), and the hooks then judge
+liveness by the lock rather than the pid: the kernel releases an `flock` the
+instant its holder dies, so a killed setup is detected immediately instead of
+being read as alive for as long as a recycled pid keeps answering. A marker that
+declares nothing is judged by its pid, as before.
+
 **A host's own remedy can replace the packaged one in every failure reason**
 (the fail-closed verdicts and the fail-open warning alike). Deep call sites (`lib/control-plane`'s missing-package throw) take no
 remedy argument, so by default they can only say `pnpm install`. A host whose

@@ -466,6 +466,8 @@ export async function redactViaDaemon(text, opts = {}) {
   // reading `result.pairs` on it would silently emit the original secret-shaped
   // content. Validated AFTER the respawn/retry logic so a malformed response is not
   // mistaken for a dead socket worth respawning.
+  // Each throw carries the BARE cause: every call sits inside a catch that
+  // wraps what it caught, so wrapping here too would nest the sentence in itself.
   /** @param {RedactResponse|null} result @returns {RedactResponse|null} */
   const validate = (result) => {
     if (result === null) return null;
@@ -474,18 +476,14 @@ export async function redactViaDaemon(text, opts = {}) {
         result?.unmappable === undefined &&
         !(typeof result?.text === "string" && Array.isArray(result?.pairs))
       )
-        throw failClosed(
-          new Error(
-            "redactor returned a malformed map response (no `unmappable` marker and no `{text, pairs}` map)",
-          ),
+        throw new Error(
+          "redactor returned a malformed map response (no `unmappable` marker and no `{text, pairs}` map)",
         );
       return result;
     }
     if (typeof result?.text !== "string")
-      throw failClosed(
-        new Error(
-          "redactor returned a malformed plain response (no string `text`)",
-        ),
+      throw new Error(
+        "redactor returned a malformed plain response (no string `text`)",
       );
     return result;
   };
@@ -503,17 +501,22 @@ export async function redactViaDaemon(text, opts = {}) {
     // within the deadline; surface that as the actual cause rather than the opaque
     // ENOENT/connect error the retry would otherwise throw.
     const budgetMs = remainingMs();
-    const waitOpts =
+    const waitMs =
       budgetMs === undefined
-        ? undefined
-        : { deadlineMs: Math.min(WAIT_DEADLINE_MS, budgetMs) };
+        ? WAIT_DEADLINE_MS
+        : Math.min(WAIT_DEADLINE_MS, budgetMs);
+    const waitOpts =
+      budgetMs === undefined ? undefined : { deadlineMs: waitMs };
     // The cold-start wait is PROVISIONING — a one-time detect-secrets import and
     // plugin prime (~1-3s, see WAIT_DEADLINE_MS), paid by whichever tool call
     // happens to be first and by no other. Charging it to this hook would make
     // the slow-hook notice fire once per session on a healthy install.
     if (!(await excludeProvisioning(() => waitFn(socketPath, waitOpts), now)))
       throw failClosed(
-        new Error(`redactor daemon did not start within ${WAIT_DEADLINE_MS}ms`),
+        // The CLAMPED wait, since that is what actually elapsed: naming
+        // WAIT_DEADLINE_MS tells an operator debugging a 200ms budget that the
+        // redactor got seconds it was never given.
+        new Error(`redactor daemon did not start within ${waitMs}ms`),
       );
     if (budgetSpent()) throw outOfBudget("after redactor respawn");
     try {
