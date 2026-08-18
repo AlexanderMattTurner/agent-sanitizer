@@ -11,8 +11,9 @@
 # (a digest that no longer describes the pinned artifact) is the one that would
 # certify an unreviewed binary.
 
-# mergiraf backs the structural pre-pass in .github/scripts/auto-resolve/prepare.sh:
-# a syntax-aware merge that resolves the structural subset of a PR's conflicts so
+# mergiraf backs the structural pre-pass in the resolver repository's
+# auto-resolve/prepare.sh, and in template-sync-resolve.sh's tier 1: a
+# syntax-aware merge that resolves the structural subset of a PR's conflicts so
 # only genuinely semantic conflicts reach the paid LLM pass.
 #
 # install-mergiraf.sh downloads the pinned release tarball from Codeberg and

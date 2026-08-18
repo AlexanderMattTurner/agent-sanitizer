@@ -87,7 +87,10 @@ env:
   # file in template" case would copy it straight back. The declined-files check
   # (was_deleted_here) now honours that delete on its own, so this entry is the
   # explicit, belt-and-braces record of it rather than the only thing stopping it.
-  EXCLUDE_PATHS: ".github/workflows/security-vulnerability-scan.yaml .github/prompts/security-vulnerability-scan.md .github/workflows/claude-review.yaml"
+  # .github/scripts/auto-resolve is the retired shell resolver. A consumer that
+  # still carries it keeps its own copy rather than having sync delete it out
+  # from under a caller that has not converted yet.
+  EXCLUDE_PATHS: ".github/workflows/security-vulnerability-scan.yaml .github/prompts/security-vulnerability-scan.md .github/workflows/claude-review.yaml .github/scripts/auto-resolve"
   # Files the sync UPDATES but never INTRODUCES. Absent from the child repo they
   # are skipped; present, they sync like anything else. This is the opt-in half
   # of EXCLUDE_PATHS: opting in is creating the file once, opting out is deleting
@@ -289,12 +292,30 @@ jobs:
         if: inputs.dry-run != true && steps.sync.outputs.has_conflicts == 'true' && steps.create-pr.outputs.pull-request-number
         run: bash .github/scripts/install-mergiraf.sh
 
+      # template-sync-resolve.sh's tier 2 hands unresolved conflicts to the
+      # resolver's own auto-resolve/fanout.py, which no longer ships in this
+      # tree — the resolver moved to its own repository (see
+      # auto-resolve-conflicts.yaml). Pinned to the same SHA that file's `uses:`
+      # line names, so the two never run different commits of the resolver.
+      - name: Check out the resolver from its own repository
+        id: resolver
+        if: inputs.dry-run != true && steps.sync.outputs.has_conflicts == 'true' && steps.create-pr.outputs.pull-request-number
+        env:
+          RESOLVER_REPOSITORY: AlexanderMattTurner/agent-resolve-merge-conflicts
+          RESOLVER_REF: ecbe088b2d3fba81adc6bd77448a03a155dc30ca
+        run: |
+          dest="${RUNNER_TEMP}/resolver"
+          git clone --no-tags "https://github.com/${RESOLVER_REPOSITORY}.git" "${dest}"
+          git -C "${dest}" checkout --detach "${RESOLVER_REF}"
+          echo "dir=${dest}/.github/resolver" >>"$GITHUB_OUTPUT"
+
       - name: Resolve the sync conflicts
         id: resolve
         if: inputs.dry-run != true && steps.sync.outputs.has_conflicts == 'true' && steps.create-pr.outputs.pull-request-number
         env:
           CONFLICT_FILES: ${{ steps.sync.outputs.conflict_files }}
           PR_NUMBER: ${{ steps.create-pr.outputs.pull-request-number }}
+          RESOLVER_DIR: ${{ steps.resolver.outputs.dir }}
           # token-fallback-ok: the dedicated CI token is preferred so a sync does not
           # spend the operator's own account; CLAUDE_CODE_OAUTH_TOKEN is the same
           # credential the ladder ends on, so the fallback costs nothing but order.

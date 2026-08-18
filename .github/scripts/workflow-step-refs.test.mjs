@@ -219,10 +219,9 @@ test("the call-site sweep is non-empty and names the actions it reached", () => 
 
   // A sweep that quietly stopped seeing a call site reports the same empty
   // offender list as a clean repo, so pin which actions are reached. Only the
-  // invoked ones appear: claude-conflict-resolve is a call SITE (it invokes
-  // claude-run) that nothing invokes in turn — .github/scripts/claude-conflict-
-  // resolve.sh superseded it, and its header explains why the composite form
-  // must not come back.
+  // invoked ones appear — the merge-conflict resolver itself now lives in
+  // AlexanderMattTurner/agent-resolve-merge-conflicts and calls claude-run from
+  // its own tree, so this repo's action files hold none of that call.
   const called = [...new Set(calls.map((call) => call.action))].sort();
   assert.deepEqual(called, [
     ".github/actions/claude-run",
