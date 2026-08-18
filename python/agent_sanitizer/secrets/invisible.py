@@ -154,23 +154,20 @@ def strip_invisible_with_map(
 
     Run before detection so a key with invisible chars spliced between its bytes
     is seen whole by every detector, not just the env-bound matcher's own
-    tolerance — the engine's per-line and cross-line passes scan the STRIPPED
-    text, then use ``offsets`` to translate any match span back to the ORIGINAL
-    text before redacting, so the invisible characters inside a redacted span are
-    removed along with the secret and everything outside a match is untouched
-    byte-for-byte.
+    tolerance. The engine scans the STRIPPED text, then uses ``offsets`` to
+    translate a match span back to the ORIGINAL before redacting, so invisibles
+    inside a redacted span go with the secret and everything else is untouched.
 
     The overwhelmingly common case is that ``text`` contains none of the
     charset's code points at all: then the offsets are the identity map, which a
     bare `range` represents with no allocation (the only uses downstream are
     `offsets[i]` and `offsets[end - 1]`, both of which `range` supports). An
     ALL-ASCII text reaches that answer for free, since every charset member is
-    above ASCII (:func:`_is_above_ascii` derives that rather than assuming it) and
-    CPython carries the ascii flag on the string object; anything else is decided
-    by the range-collapsed character class, a C scan that stops at the first hit
-    and never copies the text. Both branches stay at C speed, so neither the size
-    of the payload nor the presence of one zero-width character buys a
-    Python-level per-character loop over megabytes."""
+    above ASCII (:func:`_is_above_ascii` derives that rather than assuming it)
+    and CPython carries the ascii flag on the string object; anything else is
+    decided by the range-collapsed character class, a C scan that stops at the
+    first hit. Every branch stays at C speed, so neither the size of the payload
+    nor one zero-width character buys a Python-level per-character loop."""
     if charset is None:
         charset = default_charset()
     if _is_above_ascii(charset) and text.isascii():

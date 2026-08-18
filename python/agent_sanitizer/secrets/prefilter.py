@@ -111,21 +111,20 @@ def fold(text: str) -> str | None:
 
     Length preservation is what lets a probe map an offset in the folded view
     back to the line it came from, so a fold that changed a length is refused
-    outright rather than allowed to desynchronize one. No code point reaches that
-    branch today — the one that lowers to two characters is in the fixup table
-    above, mapped one-to-one, and
-    test_literal_probe.py::test_fold_preserves_length_over_all_of_unicode is what
-    says so — but a fold that silently shifted offsets would skip lines with
-    secrets on them, and returning ``None`` only makes the caller scan
+    outright rather than allowed to desynchronize one. No code point reaches
+    that branch today — the one that lowers to two characters is in the fixup
+    table above, mapped one-to-one, and
+    test_literal_probe.py::test_fold_preserves_length_over_all_of_unicode is
+    what says so — but a fold that silently shifted offsets would skip lines
+    with secrets on them, and returning ``None`` only makes the caller scan
     everything: slow, never wrong.
 
-    The fixups are applied as five ``str.replace`` calls rather than one
+    The fixups are applied as ``str.replace`` calls rather than one
     ``str.translate``: translate over a dict pays a hash lookup per character
-    even for the megabytes of text that hold no fixup at all, while each replace
-    is a C substring scan that returns the input untouched when its character is
-    absent. Same result (see ``_SELF_FEEDING`` above for why the chain cannot
-    reorder), a fraction of the cost, and it is the whole reason a payload
-    carrying one exotic code point no longer makes every probe pass a slow one.
+    even for the megabytes of text that hold no fixup at all, while each
+    replace is a C substring scan that returns the input untouched when its
+    character is absent. See ``_SELF_FEEDING`` above for why the chain cannot
+    reorder.
     """
     fixed = text
     for source, to in _FIXUP_REPLACEMENTS:
@@ -429,34 +428,23 @@ class LiteralProbe:
     ) -> SweepPlan:
         """Where in ``text`` a caller must run the probed patterns.
 
-        A pattern is WINDOWABLE when it has both an indexed literal and a bounded
-        :func:`inspect_width`; ``windows`` covers every match of those. The rest
-        need the whole text, and ``full_scans`` names the ones a cheap literal
-        check could not rule out — omitting that check would cost a full sweep per
-        such pattern on every payload, including the ones that match nothing.
+        A pattern is WINDOWABLE when it has both an indexed literal and a
+        bounded :func:`inspect_width`; ``windows`` covers every match of those.
+        ``full_scans`` names the unwindowable patterns a cheap literal check
+        could not rule out, and they need the whole text.
 
         Each occurrence of literal ``l`` at ``[start, end)`` yields the window
-        ``(end - w, start + w)`` for that literal's widest pattern ``w``. That
-        contains every match holding the occurrence: the match spans at most ``w``
-        and covers ``[start, end)``, so it begins no earlier than ``end - w``, and
-        it reads no further right than ``w`` past its own start, hence no further
-        than ``start + w``. Ranges are for ``Pattern.finditer(text, pos, endpos)``,
-        NOT for slicing: ``pos`` leaves the text to the left readable, so a
-        lookbehind still sees real bytes rather than a fabricated start-of-string.
+        ``(end - w, start + w)`` for that literal's widest pattern ``w``: a match
+        holding it spans at most ``w`` and covers ``[start, end)``, so it starts
+        no earlier than ``end - w`` and ends no later than ``start + w``. Ranges
+        are for ``Pattern.finditer(text, pos, endpos)``, NOT for slicing —
+        ``pos`` leaves the text to its left readable, so a lookbehind still sees
+        real bytes.
 
-        Overlapping occurrences are found (the scan advances one character, not one
-        literal width) because a window is a range, not a claim about which
-        occurrence produced a match.
-
-        ``windows`` is None when nothing could be narrowed — a probe with no
-        windowable pattern, a fold this text refuses, or a literal whose own
-        windows would span the whole text (and since the caller's patterns are
-        shared across literals, there is then nothing left to narrow either). An
-        empty TUPLE therefore always means "the windowable patterns match
-        nowhere", never "I had no way to tell", so a caller cannot read one as the
-        other and skip a scan the probe never ruled out. ``full_scans`` is empty
-        alongside a None ``windows``: a caller scanning everything already covers
-        them.
+        ``windows`` is None when nothing could be narrowed (no windowable
+        pattern, a refused fold, or a literal whose windows span the whole text)
+        and ``full_scans`` is then empty. An empty TUPLE therefore always means
+        "the windowable patterns match nowhere", never "I had no way to tell".
         """
         folded = fold(text)
         if folded is None or not self.widths:
