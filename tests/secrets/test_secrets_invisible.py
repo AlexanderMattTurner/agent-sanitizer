@@ -6,6 +6,7 @@ sanitizer's), the strip semantics, and the fail-closed behaviour when the shared
 dependency is unavailable.
 """
 
+import re
 import unicodedata
 
 import pytest
@@ -153,9 +154,8 @@ def test_strip_invisible_explicit_charset_overrides_default():
 
 
 def test_strip_invisible_with_map_clean_text_takes_the_identity_fast_path():
-    """No charset member present: the `str.translate` presence probe must short
-    -circuit to the identity `range`, not fall through to the per-character
-    loop."""
+    """No charset member present: the presence probe must short-circuit to the
+    identity `range`, not fall through to locating deletions."""
     text = "clean text, no invisibles: AKIA1234"
     result_text, offsets = strip_invisible_with_map(text)
     assert result_text == text
@@ -182,8 +182,6 @@ def test_env_invis_run_domain_equals_charset():
     """The env-bound run pattern tolerates EXACTLY the charset's code points — no
     subset (a splice using an omitted char would evade the matcher) and no
     superset (dead weight in the class)."""
-    import re
-
     charset = default_charset()
     pattern = invisible_run_pattern(charset)
     inner = re.compile("[" + pattern[1:-2] + "]")
@@ -226,6 +224,19 @@ def test_identity_map_matches_what_a_clean_strip_returns():
     assert (stripped, list(offsets)) == (shortcut, list(shortcut_offsets))
 
 
+def test_an_empty_charset_strips_nothing_rather_than_failing_to_compile():
+    """An empty charset is a legitimate override — strip nothing, tolerate
+    nothing — but a memberless class spells `[]`, which `re` rejects as a syntax
+    error. Non-ASCII text is the case that gets past the `str.isascii` shortcut
+    and reaches the class, so it is what proves the never-matching spelling."""
+    accented = "caf\u00e9"
+    assert strip_invisible_with_map(accented, frozenset()) == identity_map(accented)
+    assert strip_invisible(accented, frozenset()) == accented
+    run = re.compile(invisible_run_pattern(frozenset()))
+    assert run.fullmatch("") is not None
+    assert run.match("\u200b").group(0) == ""
+
+
 class _CountingPattern:
     """A compiled pattern that counts the searches run through it."""
 
@@ -249,13 +260,36 @@ def _count_strips(monkeypatch, text):
     return result, counter.searches
 
 
+_PROBE_LINES = 400
+# Two properties this payload needs, and either one missing makes the counts
+# below vacuous: NON-ASCII, so `strip_invisible_with_map`'s `str.isascii`
+# shortcut cannot answer for free and the charset scan is the only thing that
+# can; and a credential literal per line (`akia`), so the line probe hands each
+# line to `_redact_line` at all. `akia note …` is not key-shaped, so nothing is
+# redacted and the strip count is all that differs.
+_PROBE_PAYLOAD = "\n".join(
+    f"akia note {i} nothing to s\u00e9e" for i in range(_PROBE_LINES)
+)
+
+
 def test_a_clean_payload_pays_no_per_line_strip(monkeypatch):
     """The whole-payload strip already proves no line holds an invisible
-    character, so the per-line strip is skipped outright — one scan for the
-    payload, not one per line."""
-    lines = [f"line {i} nothing to see" for i in range(400)]
-    _, searches = _count_strips(monkeypatch, "\n".join(lines))
-    assert searches < len(lines)
+    character, so the per-line strip is skipped outright — a couple of scans for
+    the payload, not one per line."""
+    _, searches = _count_strips(monkeypatch, _PROBE_PAYLOAD)
+    assert searches < 10, searches
+
+
+def test_without_the_skip_every_line_pays_its_own_strip(monkeypatch):
+    """Non-vacuity for the count above: forcing `invisible_free` off puts the
+    strip back on every line, so that bound measures the skip rather than a
+    payload the strip never reaches."""
+    real = E._redact_line
+    monkeypatch.setattr(
+        E, "_redact_line", lambda *args, **kwargs: real(*args[:7], False)
+    )
+    _, searches = _count_strips(monkeypatch, _PROBE_PAYLOAD)
+    assert searches > _PROBE_LINES, searches
 
 
 _SPLICED_KEY = "AKIA​IOSFODNN7EXAMPLE"

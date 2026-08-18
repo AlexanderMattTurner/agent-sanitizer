@@ -63,6 +63,13 @@ def _invisible_class(charset: frozenset[int]) -> str:
     megabyte an order of magnitude faster while matching exactly the same set.
     Cached per charset, since the hot path always passes the same (SSOT) one.
     """
+    if not charset:
+        # A memberless class spells `[]`, which is a SYNTAX error rather than a
+        # class matching nothing. An empty charset is a legitimate override —
+        # strip nothing, tolerate nothing — so it gets the never-matching
+        # spelling, which also makes :func:`invisible_run_pattern` match exactly
+        # the empty string rather than refuse to compile.
+        return "[^\\s\\S]"
     runs: list[list[int]] = []
     for code_point in sorted(charset):
         if runs and code_point == runs[-1][1] + 1:
