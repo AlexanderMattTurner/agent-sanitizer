@@ -8,6 +8,13 @@ adhere to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+## [2.43.11] - 2026-08-18
+
+### Fixed
+
+- Shape-test parameter names in HTML exfiltration detection to reduce false positives.
+- Detect base64-encoded values with two-padding characters in bare exfiltration query parameters.
+
 ## [2.43.10] - 2026-08-17
 
 ### Changed
