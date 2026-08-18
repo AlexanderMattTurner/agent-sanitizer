@@ -125,34 +125,79 @@ def test_wait_for_listener_rejects_a_socket_file_with_no_listener(sock_dir):
         wait_for_listener(socket_path, timeout=0.2)
 
 
-# ─── _bind_or_exit / _reclaim_stale_socket ───────────────────────────────────
+# ─── _publish_listener / _unlink_if_ours ─────────────────────────────────────
 
 
-def test_reclaim_stale_socket_removes_dead_file(sock_dir):
+def _publish(sock: socket.socket, socket_path: str):
+    """Take the publish lock and publish, as ``serve()`` does."""
+    lock_fd = S._hold_publish_lock(socket_path)
+    try:
+        return S._publish_listener(sock, socket_path)
+    finally:
+        os.close(lock_fd)
+
+
+def test_publish_listener_replaces_a_dead_socket_file(sock_dir):
     socket_path = str(sock_dir / "s.sock")
     # A stale socket FILE with nobody listening: a leftover bind, then closed.
     dead = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
     dead.bind(socket_path)
     dead.close()  # file remains on disk, but no listener
-    assert Path(socket_path).exists()
+    stale = os.lstat(socket_path)
     sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
     try:
-        assert S._bind_or_exit(sock, socket_path) is True
+        identity = _publish(sock, socket_path)
+        assert identity is not None
+        # The published name now points at OUR socket, not the stale inode, and
+        # that socket is already accepting — no bound-but-not-listening window.
+        live = os.lstat(socket_path)
+        assert (live.st_dev, live.st_ino) == identity
+        assert (live.st_dev, live.st_ino) != (stale.st_dev, stale.st_ino)
+        assert oct(live.st_mode)[-3:] == "600"
+        client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        try:
+            client.connect(socket_path)  # listen() already happened
+        finally:
+            client.close()
     finally:
         sock.close()
 
 
-def test_bind_or_exit_returns_false_when_live_daemon_owns_path(sock_dir):
+def test_publish_never_leaves_a_bound_but_unlistening_socket_published(sock_dir):
+    # RED ON OLD. The old code bound IN PLACE and only listened later, so the
+    # published name spent a window naming a socket that refused connections —
+    # indistinguishable from a dead one, which is what let a reclaimer unlink a
+    # live daemon's socket. Drive a publish whose listen() fails: the published
+    # name must be left exactly as it was (here: absent), never pointing at the
+    # half-built socket.
+    socket_path = str(sock_dir / "s.sock")
+
+    class _NoListen(socket.socket):
+        def listen(self, *args):
+            raise OSError("listen failed")
+
+    sock = _NoListen(socket.AF_UNIX, socket.SOCK_STREAM)
+    try:
+        with pytest.raises(OSError, match="listen failed"):
+            _publish(sock, socket_path)
+    finally:
+        sock.close()
+    assert not Path(socket_path).exists()
+    # And the temp name is cleaned up too — no litter in the 0700 socket dir.
+    assert [e.name for e in os.scandir(sock_dir)] == ["s.sock.lock"]
+
+
+def test_publish_listener_returns_none_when_live_daemon_owns_path(sock_dir):
     socket_path = str(sock_dir / "s.sock")
     stop = threading.Event()
     thread = threading.Thread(target=S.serve, args=(socket_path, stop), daemon=True)
     thread.start()
     wait_for_listener(socket_path)
     try:
-        # A second daemon trying the same live path must exit quietly (False).
+        # A second daemon trying the same live path must exit quietly (None).
         second = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         try:
-            assert S._bind_or_exit(second, socket_path) is False
+            assert _publish(second, socket_path) is None
         finally:
             second.close()
         # And a full second serve() likewise returns without taking over. Run it
@@ -188,16 +233,65 @@ def test_bind_or_exit_returns_false_when_live_daemon_owns_path(sock_dir):
         thread.join(timeout=5)
 
 
-def test_bind_or_exit_reraises_non_addrinuse(sock_dir):
-    # A bind error that is NOT EADDRINUSE (here ENOENT: the parent directory does
-    # not exist) must propagate, not be swallowed as a stale-socket case.
+def test_publish_listener_propagates_a_bind_failure(sock_dir):
+    # A bind error (here ENOENT: the socket directory does not exist) must
+    # propagate rather than be swallowed as a stale-socket case.
     sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
     missing = str(sock_dir / "no_such_dir" / "s.sock")
     try:
         with pytest.raises(OSError):
-            S._bind_or_exit(sock, missing)
+            _publish(sock, missing)
     finally:
         sock.close()
+
+
+def test_exiting_daemon_does_not_unlink_a_successors_socket(sock_dir):
+    # RED ON OLD. Teardown used to `os.unlink(socket_path)` by NAME. A daemon
+    # that exits AFTER a fresh one has published deletes the successor's live
+    # socket, and every client then fails closed and respawns. Model that
+    # ordering exactly: publish as daemon A, publish as daemon B (A's file is
+    # replaced by the rename), then run A's teardown.
+    socket_path = str(sock_dir / "s.sock")
+    first = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    second = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    try:
+        first_identity = _publish(first, socket_path)
+        first.close()  # daemon A stops accepting, but has not torn down yet
+        second_identity = _publish(second, socket_path)
+        assert second_identity is not None and second_identity != first_identity
+
+        S._unlink_if_ours(socket_path, first_identity)  # A's late teardown
+
+        live = os.lstat(socket_path)
+        assert (live.st_dev, live.st_ino) == second_identity, (
+            "an exiting daemon must not unlink its successor's published socket"
+        )
+        # Positive marker: the successor is still reachable, not merely present.
+        client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        try:
+            client.connect(socket_path)
+        finally:
+            client.close()
+    finally:
+        first.close()
+        second.close()
+
+
+def test_unlink_if_ours_removes_our_own_socket(sock_dir):
+    # The other half of the invariant: teardown DOES clean up when the published
+    # name still names our inode, so a normal exit leaves no stale file behind.
+    socket_path = str(sock_dir / "s.sock")
+    sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    try:
+        identity = _publish(sock, socket_path)
+    finally:
+        sock.close()
+    S._unlink_if_ours(socket_path, identity)
+    assert not Path(socket_path).exists()
+
+
+def test_unlink_if_ours_tolerates_an_already_absent_path(sock_dir):
+    S._unlink_if_ours(str(sock_dir / "s.sock"), (1, 2))  # no raise
 
 
 # ─── main() ──────────────────────────────────────────────────────────────────
