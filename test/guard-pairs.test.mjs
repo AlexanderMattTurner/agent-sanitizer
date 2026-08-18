@@ -222,8 +222,8 @@ describe("guarded-data scan (the map is derived from the tests)", () => {
         "shell source driven by path",
       ],
       [
-        ".github/scripts/auto-resolve/discover.py",
-        ".github/scripts/auto-resolve/discover.test.mjs",
+        "python/agent_sanitizer/secrets/placeholders.py",
+        "test/placeholder-guards.test.mjs",
         "python source driven by path",
       ],
       [".hooks/guard-pairs.json", "test/guard-pairs.test.mjs", "self-read"],

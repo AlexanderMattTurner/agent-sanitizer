@@ -108,13 +108,13 @@ test("the reachability sweep is non-empty and reaches known-live scripts", () =>
 
   // One per hop the closure has to make: named straight from a workflow;
   // sourced by another script; python-imported without its extension by a
-  // script that is itself only reachable transitively; and referenced only by
-  // a suite that is itself only reachable through what it tests.
+  // script named straight from .pre-commit-config.yaml; and a suite that is
+  // itself only reachable through what it tests.
   for (const path of [
     ".github/scripts/claude-run-errored.sh",
     ".github/scripts/lib/claude-oauth-ladder.bash",
-    ".github/scripts/auto-resolve/_ci_retry.py",
-    ".github/scripts/auto-resolve/fixtures.mjs",
+    ".github/scripts/_linecheck.py",
+    ".github/scripts/resolve-generated.test.mjs",
   ]) {
     assert.ok(SCRIPTS.includes(path), `${path} vanished — update this test`);
     assert.ok(live.has(path), `${path} should be reachable`);

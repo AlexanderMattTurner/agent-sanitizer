@@ -7,5 +7,8 @@
   "commit_status_marks": {
     "auto_resolve_attempt": "auto-resolve/attempted",
     "released_suffix": "-released"
+  },
+  "template_sync": {
+    "conflict_marker_re": "^(<{7}|\\|{7}|={7}|>{7})([ \\t]|$)"
   }
 }

@@ -186,7 +186,7 @@ describe("test-runner discovery partition", () => {
       "test/guard-pairs.test.mjs",
       "test/test-runner-partition.test.mjs",
       ".github/scripts/main-health.test.mjs",
-      ".github/scripts/auto-resolve/lib.test.mjs",
+      ".github/scripts/resolve-generated.test.mjs",
       ".github/scripts/lib/anthropic-ladder.test.mjs",
       "plugin/test/plugin-bundle.test.mjs",
       "scripts/version-bump.test.mjs",

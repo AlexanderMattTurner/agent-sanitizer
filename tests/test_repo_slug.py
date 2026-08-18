@@ -86,7 +86,13 @@ NON_REPO_PATHS = {
 #: Repos owned by THIS owner that are nonetheless not this repo. The workflows
 #: interpolate the owner as the default for the template fork, so the owner
 #: legitimately appears next to a repo name that is not the SSOT one.
-OTHER_REPOS_UNDER_THIS_OWNER = {"claude-automation-template"}
+#: agent-resolve-merge-conflicts is the merge-conflict resolver
+#: auto-resolve-conflicts.yaml and template-sync.yaml call as a reusable
+#: workflow, under the same owner.
+OTHER_REPOS_UNDER_THIS_OWNER = {
+    "claude-automation-template",
+    "agent-resolve-merge-conflicts",
+}
 
 
 def _tracked_files() -> list[str]:
