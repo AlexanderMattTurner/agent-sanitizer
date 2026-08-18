@@ -374,7 +374,10 @@ second line reading `flock` (`SETUP_LOCK_DECLARATION`), and the hooks then judge
 liveness by the lock rather than the pid: the kernel releases an `flock` the
 instant its holder dies, so a killed setup is detected immediately instead of
 being read as alive for as long as a recycled pid keeps answering. A marker that
-declares nothing is judged by its pid, as before.
+declares nothing is judged by its pid. A writer must hold the lock BEFORE the
+declaring marker becomes visible: a marker that says `flock` while its writer
+has not yet locked reads as a free lock, so every waiter abandons an install
+that is still running.
 
 **A host's own remedy can replace the packaged one in every failure reason**
 (the fail-closed verdicts and the fail-open warning alike). Deep call sites (`lib/control-plane`'s missing-package throw) take no

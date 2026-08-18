@@ -168,16 +168,49 @@ function replaceRegistry(path, contents, disable) {
 }
 
 /**
+ * The errnos that make a directory `fsync` unavailable rather than failed.
+ * {@link REFUSED} is what the caller reads as "the write did not happen";
+ * `EISDIR` is Windows' ordinary answer to a read-only open of a directory, and
+ * `EINVAL` is what some filesystems answer to an `fsync` on a directory fd.
+ */
+const DIR_FSYNC_UNAVAILABLE = new Set([...REFUSED, "EISDIR", "EINVAL"]);
+
+/**
+ * Whether `error` says this host cannot fsync a directory at all.
+ * @param {unknown} error
+ */
+const dirFsyncUnavailable = (error) =>
+  DIR_FSYNC_UNAVAILABLE.has(
+    /** @type {NodeJS.ErrnoException} */ (error).code ?? "",
+  );
+
+/**
  * `fsync`s a directory, so a rename into it survives a crash — a rename is a
  * directory metadata change, which flushing the file's own data blocks does not
  * make durable.
  *
+ * Runs after the rename has landed, so a refused open or `fsync` costs
+ * durability, not correctness — and the caller reads exactly {@link REFUSED} as
+ * "the write did not happen", so letting one of those codes out of either call
+ * would report a registry that was in fact updated as a refused write. Those it
+ * swallows; every other errno (`EMFILE`, `ENFILE`, `EIO`) is a real fault the
+ * caller propagates.
+ *
  * @param {string} dir
  */
 function fsyncDir(dir) {
-  const fd = openSync(dir, constants.O_RDONLY);
+  /** @type {number} */
+  let fd;
+  try {
+    fd = openSync(dir, constants.O_RDONLY);
+  } catch (error) {
+    if (!dirFsyncUnavailable(error)) throw error;
+    return;
+  }
   try {
     fsyncSync(fd);
+  } catch (error) {
+    if (!dirFsyncUnavailable(error)) throw error;
   } finally {
     closeSync(fd);
   }
