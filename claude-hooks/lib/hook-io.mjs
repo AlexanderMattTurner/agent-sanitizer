@@ -8,6 +8,7 @@ import {
   unlinkSync,
   writeFileSync,
 } from "node:fs";
+import { spawnSync } from "node:child_process";
 import { userInfo } from "node:os";
 import { createHash } from "node:crypto";
 import { pathToFileURL } from "node:url";
@@ -778,24 +779,70 @@ export function hookgateMarkerPath(
 }
 
 /**
- * Is the setup process that wrote `markerPath` still alive? `process.kill(pid, 0)`
- * probes liveness without signalling: it throws ESRCH once the process is gone (a
- * killed setup → stale marker, so stop waiting) and EPERM when it exists but isn't
- * ours (still alive). An unreadable / not-yet-written marker is treated as alive —
- * favouring a brief wait over a premature give-up during setup's write race. A null
- * markerPath (no project dir → no setup to wait on) reads as alive so the caller's
- * own grace/ceiling bound governs.
+ * The line a cold-start marker carries on its own to declare that its writer holds
+ * an exclusive `flock` on the marker file for the whole install.
+ *
+ * This is the marker's PROTOCOL, and the reason it is declared in the data rather
+ * than assumed: a reader cannot tell "the writer released the lock because it died"
+ * from "the writer never took one" by looking at a free lock, so only a marker that
+ * says it locks may be judged by the lock.
+ */
+export const SETUP_LOCK_DECLARATION = "flock";
+
+/**
+ * Whether an exclusive lock is currently held on `markerPath`, or null when the
+ * question cannot be answered here (no `flock(1)` — it is util-linux, absent from a
+ * stock macOS — or an exit status neither "acquired" nor "busy").
+ * @param {string} markerPath
+ * @returns {boolean | null}
+ */
+function markerLockHeld(markerPath) {
+  const probe = spawnSync(
+    "flock",
+    ["--nonblock", "--exclusive", markerPath, "true"],
+    { stdio: "ignore" },
+  );
+  if (probe.error) return null;
+  if (probe.status === 0) return false; // acquired: nobody holds it
+  if (probe.status === 1) return true; // busy: the writer still holds it
+  return null;
+}
+
+/**
+ * Is the setup process that wrote `markerPath` still alive?
+ *
+ * A marker declaring {@link SETUP_LOCK_DECLARATION} is judged by the LOCK, and that
+ * answer has no aliasing: the kernel drops an flock the instant its holder dies, so
+ * held means alive and free means dead, with no third state and nothing to reuse. A
+ * marker that declares nothing carries only a pid, and `process.kill(pid, 0)` is all
+ * there is — it throws ESRCH once the process is gone (a killed setup → stale
+ * marker, so stop waiting) and EPERM when it exists but is not ours (still alive).
+ * That reading is the one this replaces where it can: a recycled pid reads as a live
+ * setup for as long as the caller's ceiling allows.
+ *
+ * An unreadable / not-yet-written marker is treated as alive — favouring a brief
+ * wait over a premature give-up during setup's write race. A null markerPath (no
+ * project dir → no setup to wait on) reads as alive so the caller's own
+ * grace/ceiling bound governs.
  * @param {string | null} markerPath
  * @returns {boolean}
  */
 export function probeSetupAlive(markerPath) {
   if (markerPath === null) return true;
-  let pid;
+  let raw;
   try {
-    pid = parseInt(readFileSync(markerPath, "utf8"), 10);
+    raw = readFileSync(markerPath, "utf8");
   } catch {
     return true;
   }
+  const lines = raw.split("\n").map((line) => line.trim());
+  if (lines.includes(SETUP_LOCK_DECLARATION)) {
+    const held = markerLockHeld(markerPath);
+    // null only: a host without flock(1) still gets the pid reading below rather
+    // than an answer this probe cannot support.
+    if (held !== null) return held;
+  }
+  const pid = parseInt(lines[0], 10);
   if (!Number.isInteger(pid) || pid <= 0) return true;
   try {
     process.kill(pid, 0);
