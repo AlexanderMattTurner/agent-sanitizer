@@ -82,6 +82,27 @@ _CASE_EQUIVALENT_FIXUPS = {
 }
 
 
+_FIXUP_REPLACEMENTS = tuple(
+    (chr(code_point), to) for code_point, to in _CASE_EQUIVALENT_FIXUPS.items()
+)
+# The chained `str.replace` in `fold` equals one `str.translate` only while no
+# replacement can be re-read as another's INPUT — otherwise the result would
+# depend on the order the table happens to iterate in. Every entry above maps a
+# cased exotic onto a plain ASCII letter or onto non-final sigma, none of which
+# is a key, so the chain is order-free; this raise is what keeps a future entry
+# from silently making it order-dependent.
+_SELF_FEEDING = {
+    source: to
+    for source, to in _FIXUP_REPLACEMENTS
+    if any(other in to for other, _ in _FIXUP_REPLACEMENTS)
+}
+if _SELF_FEEDING:
+    raise RuntimeError(
+        f"case-equivalent fixups {_SELF_FEEDING} emit a character that is itself "
+        "a fixup input, so folding by chained replacement is order-dependent"
+    )
+
+
 def fold(text: str) -> str | None:
     """``text`` case-folded for probing, or ``None`` when it cannot be folded
     without changing its length.
@@ -95,8 +116,19 @@ def fold(text: str) -> str | None:
     says so — but a fold that silently shifted offsets would skip lines with
     secrets on them, and returning ``None`` only makes the caller scan
     everything: slow, never wrong.
+
+    The fixups are applied as five ``str.replace`` calls rather than one
+    ``str.translate``: translate over a dict pays a hash lookup per character
+    even for the megabytes of text that hold no fixup at all, while each replace
+    is a C substring scan that returns the input untouched when its character is
+    absent. Same result (see ``_SELF_FEEDING`` above for why the chain cannot
+    reorder), a fraction of the cost, and it is the whole reason a payload
+    carrying one exotic code point no longer makes every probe pass a slow one.
     """
-    folded = text.translate(_CASE_EQUIVALENT_FIXUPS).lower()
+    fixed = text
+    for source, to in _FIXUP_REPLACEMENTS:
+        fixed = fixed.replace(source, to)
+    folded = fixed.lower()
     return folded if len(folded) == len(text) else None
 
 
@@ -183,6 +215,68 @@ def _required(seq) -> frozenset[str] | None:
     return _most_selective(candidates)
 
 
+def _inspect_width(seq) -> int | None:
+    """An upper bound on how far RIGHT of its start ``seq`` can read, or None when
+    no bound exists.
+
+    Bounds the whole inspected extent, not just the consumed one, so a trailing
+    lookahead's own width is added in: a caller that truncates the text at this
+    distance must not cut a boundary assertion short, since that would turn a
+    real match into a miss. A lookBEHIND adds nothing — it reads left, and the
+    ``pos`` argument this pairs with never hides text to the left.
+
+    Anything not enumerated here yields None. Under a detection gate an
+    unrecognized construct must widen the search, never narrow it, so an opcode
+    this does not understand costs a full scan instead of a wrong bound — a
+    backreference is exactly that case: its width is another group's, which is
+    not readable from here.
+    """
+    total = 0
+    for op, av in seq:
+        if op in (_c.LITERAL, _c.NOT_LITERAL, _c.IN, _c.ANY):
+            total += 1
+        elif op is _c.AT:
+            continue  # A zero-width anchor consumes and inspects nothing.
+        elif op is _c.BRANCH:
+            arms = [_inspect_width(alt) for alt in av[1]]
+            if any(arm is None for arm in arms):
+                return None
+            total += max(arms)
+        elif op is _c.SUBPATTERN:
+            nested = _inspect_width(av[3])
+            if nested is None:
+                return None
+            total += nested
+        elif op is getattr(_c, "ATOMIC_GROUP", None):
+            nested = _inspect_width(av)
+            if nested is None:
+                return None
+            total += nested
+        elif op in _REPEATS:
+            _minimum, maximum, body = av
+            nested = _inspect_width(body)
+            if nested is None or maximum is _c.MAXREPEAT:
+                return None
+            total += maximum * nested
+        elif op in (_c.ASSERT, _c.ASSERT_NOT):
+            direction, body = av
+            if direction < 0:
+                continue
+            nested = _inspect_width(body)
+            if nested is None:
+                return None
+            total += nested
+        else:
+            return None
+    return total
+
+
+def inspect_width(pattern: str, flags: int) -> int | None:
+    """An upper bound on how far right of a match's start ``pattern`` can read,
+    or None when it is unbounded. See :func:`_inspect_width`."""
+    return _inspect_width(_parser.parse(pattern, flags))
+
+
 def required_literals(pattern: str, flags: int) -> frozenset[str] | None:
     """Strings such that any match of ``pattern`` contains at least one of them,
     or None when none could be derived (the caller must then scan everything).
@@ -221,6 +315,22 @@ def _no_deadline_check(stage: str) -> None:
     """The deadline check of a caller that set no compute budget."""
 
 
+def _coalesce(spans: Iterable[tuple[int, int]]) -> tuple[tuple[int, int], ...]:
+    """``spans`` merged into ascending, non-overlapping ranges.
+
+    ABUTTING ranges merge too (``end == start``), not just overlapping ones: two
+    ranges scanned separately would let a match that straddles their shared edge
+    be found by neither, since each half of it falls outside the other's range.
+    """
+    merged: list[list[int]] = []
+    for start, end in sorted(spans):
+        if merged and start <= merged[-1][1]:
+            merged[-1][1] = max(merged[-1][1], end)
+            continue
+        merged.append([start, end])
+    return tuple((start, end) for start, end in merged)
+
+
 class LiteralProbe:
     """The necessary condition for a set of patterns, evaluated over whole text.
 
@@ -239,20 +349,37 @@ class LiteralProbe:
     def __init__(self, patterns: Iterable[re.Pattern[str]]) -> None:
         by_literal: dict[str, list[re.Pattern[str]]] = {}
         weak: list[re.Pattern[str]] = []
+        widths: dict[str, int] = {}
+        unwindowable: list[re.Pattern[str]] = []
         for pattern in patterns:
             found = required_literals(pattern.pattern, pattern.flags)
             if found is None or min(len(lit) for lit in found) < LITERAL_MIN_LEN:
                 weak.append(pattern)
+                unwindowable.append(pattern)
                 continue
+            width = inspect_width(pattern.pattern, pattern.flags)
+            if width is None:
+                unwindowable.append(pattern)
             for literal in found:
                 # Folded and searched against a folded haystack, so one search
                 # serves both a case-sensitive and a case-insensitive pattern.
                 # That over-matches for the case-sensitive ones (a lowercase copy
                 # of `AKIA` also passes), which only sends extra text to the
                 # expensive path — the safe direction.
-                by_literal.setdefault(fold(literal) or literal, []).append(pattern)
+                folded_literal = fold(literal) or literal
+                by_literal.setdefault(folded_literal, []).append(pattern)
+                if width is not None:
+                    # One literal can index several patterns and a window must
+                    # hold the widest of them, so the entry keeps the MAXIMUM.
+                    widths[folded_literal] = max(widths.get(folded_literal, 0), width)
         self.by_literal = {lit: tuple(pats) for lit, pats in by_literal.items()}
         self.weak = tuple(weak)
+        # Every pattern no window can bound: one with no usable literal to centre a
+        # window on, and one whose match extent has no upper bound. A caller that
+        # windows must scan the whole text for THESE, or a match of one that
+        # happens to lie outside every window becomes a missed secret.
+        self.unwindowable = tuple(unwindowable)
+        self.widths = widths
         if not self.by_literal and not self.weak:
             raise RuntimeError(
                 "no pattern contributed a literal or a regex to this probe — "
@@ -268,6 +395,59 @@ class LiteralProbe:
         return any(lit in folded for lit in self.by_literal) or any(
             pattern.search(text) for pattern in self.weak
         )
+
+    def windows(
+        self, text: str, check: Callable[[str], None] = _no_deadline_check
+    ) -> tuple[tuple[int, int], ...] | None:
+        """``(pos, endpos)`` ranges of ``text`` that together contain every match
+        of every WINDOWABLE probed pattern, or None when they cannot be narrowed.
+
+        A windowable pattern is one with both an indexed literal and a bounded
+        :func:`inspect_width`; the rest are :attr:`unwindowable` and the caller
+        must scan the whole text for them, or a match outside every window is a
+        missed secret.
+
+        Each occurrence of literal ``l`` at ``[start, end)`` yields
+        ``(end - w, start + w)`` for that literal's widest pattern ``w``. That
+        contains every match holding the occurrence: the match spans at most ``w``
+        and covers ``[start, end)``, so it begins no earlier than ``end - w``, and
+        it reads no further right than ``w`` past its own start, hence no further
+        than ``start + w``. Ranges are for ``Pattern.finditer(text, pos, endpos)``,
+        NOT for slicing: ``pos`` leaves the text to the left readable, so a
+        lookbehind still sees real bytes rather than a fabricated start-of-string.
+
+        Overlapping occurrences are found (the scan advances one character, not
+        one literal width) because a window is a range, not a claim about which
+        occurrence produced a match. A literal whose own windows would span the
+        whole text is not narrowing anything, and since the caller's patterns are
+        shared across literals there is nothing left to narrow either — that
+        returns None, as does a probe with no windowable pattern at all. An empty
+        TUPLE therefore always means "these patterns match nowhere", never "I had
+        no way to tell", so a caller cannot read one as the other and skip a scan
+        the probe never actually ruled out.
+        """
+        if not self.widths:
+            return None
+        folded = fold(text)
+        if folded is None:
+            return None
+        limit = len(text)
+        spans: list[tuple[int, int]] = []
+        for literal, width in self.widths.items():
+            check("candidate-window literal probe")
+            found: list[tuple[int, int]] = []
+            at = folded.find(literal)
+            while at != -1:
+                found.append(
+                    (max(0, at + len(literal) - width), min(limit, at + width))
+                )
+                at = folded.find(literal, at + 1)
+            merged = _coalesce(found)
+            if sum(end - start for start, end in merged) >= limit:
+                return None
+            spans.extend(merged)
+        check("candidate-window merge")
+        return _coalesce(spans)
 
     def candidates(
         self, text: str, check: Callable[[str], None] = _no_deadline_check
