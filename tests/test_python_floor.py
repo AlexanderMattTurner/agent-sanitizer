@@ -62,6 +62,11 @@ NOT_THE_FLOOR = {
     ("tests/secrets/test_redos_static_guard.py", "3.11"): (
         "the same possessive-quantifier language fact, from the ReDoS guard"
     ),
+    ("python/agent_sanitizer/secrets/prefilter.py", "3.11"): (
+        "which release renamed the stdlib regex parser to `re._parser` — a "
+        "language fact naming the version the import branches on, and the branch "
+        "exists precisely BECAUSE the floor is lower"
+    ),
 }
 
 
