@@ -17,13 +17,15 @@
 import { describe, it, beforeEach, after } from "node:test";
 import assert from "node:assert/strict";
 import {
+  chmodSync,
+  existsSync,
   mkdtempSync,
-  rmSync,
   readFileSync,
-  writeFileSync,
+  rmSync,
   statSync,
   symlinkSync,
-  chmodSync,
+  utimesSync,
+  writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -31,8 +33,15 @@ import { join } from "node:path";
 const base = mkdtempSync(join(tmpdir(), "sanitizer-span-store-"));
 after(() => rmSync(base, { recursive: true, force: true }));
 
-const { spanPath, persistSpan, readSpan } =
-  await import("../claude-hooks/lib/reveal.mjs");
+const {
+  spanPath,
+  persistSpan,
+  readSpan,
+  revealDir,
+  sweepStaleReveals,
+  REVEAL_TTL_MS,
+} = await import("../claude-hooks/lib/reveal.mjs");
+const { PROJECT_HASH } = await import("../claude-hooks/lib/hook-io.mjs");
 
 const SPAN_ID = "0123456789ab";
 const OTHER_SPAN_ID = "ba9876543210";
@@ -119,5 +128,46 @@ describe("failure paths are non-fatal", () => {
     // never following it: the victim file's bytes stay untouched.
     assert.equal(persistSpan(SPAN_ID, "attacker-visible"), true);
     assert.equal(readFileSync(victim, "utf8"), "victim bytes");
+  });
+});
+
+describe("the store is project-keyed and aged out", () => {
+  it("gives two projects different store directories", () => {
+    // One unkeyed directory is shared by every project on the machine, so one
+    // project's sweep ages out another's spans and a rehydration that should
+    // have restored a placeholder fails closed instead. The env override is
+    // what the rest of this file uses, so it is cleared for this case.
+    delete process.env._AGENT_SANITIZER_REVEAL_DIR;
+    const here = revealDir();
+    process.env._AGENT_SANITIZER_REVEAL_DIR = dir;
+    // The digest is THIS project's, not an arbitrary hex suffix: a directory
+    // named for some other key would collide across projects just as an
+    // unkeyed one does.
+    assert.equal(here.endsWith(`-${PROJECT_HASH}`), true, here);
+  });
+
+  it("sweeps entries past the TTL and keeps the ones still in reach", () => {
+    // Every entry is content-addressed with no owner to delete it, so an
+    // unswept store grows for the life of the machine.
+    persistSpan(SPAN_ID, "stale span");
+    persistSpan(OTHER_SPAN_ID, "fresh span");
+    const stale = spanPath(SPAN_ID);
+    const old = new Date(Date.now() - REVEAL_TTL_MS - 60_000);
+    utimesSync(stale, old, old);
+
+    sweepStaleReveals();
+
+    assert.equal(existsSync(stale), false, "a stale span was left behind");
+    assert.equal(
+      readSpan(OTHER_SPAN_ID),
+      "fresh span",
+      "a span still inside the TTL was swept",
+    );
+  });
+
+  it("leaves an unusable store dir alone rather than throwing", () => {
+    process.env._AGENT_SANITIZER_REVEAL_DIR = join(dir, "not-a-dir");
+    writeFileSync(join(dir, "not-a-dir"), "");
+    sweepStaleReveals(); // no throw
   });
 });

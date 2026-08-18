@@ -21,8 +21,11 @@
  */
 import { createHash } from "node:crypto";
 import {
+  existsSync,
   mkdirSync,
   lstatSync,
+  readdirSync,
+  unlinkSync,
   openSync,
   readFileSync,
   closeSync,
@@ -30,7 +33,7 @@ import {
 } from "node:fs";
 import { tmpdir, userInfo } from "node:os";
 import { join, resolve, sep } from "node:path";
-import { writeFileNoFollow } from "./hook-io.mjs";
+import { PROJECT_HASH, writeFileNoFollow } from "./hook-io.mjs";
 
 /**
  * Where reveal sidecars are stored. Exported so the PreToolUse placeholder
@@ -39,10 +42,54 @@ import { writeFileNoFollow } from "./hook-io.mjs";
  * @returns {string}
  */
 export function revealDir() {
+  // Project-keyed like every other $TMPDIR store: one unkeyed directory is shared
+  // by every project on the machine, so one project's sweep ages out another's
+  // spans and a rehydration that should have restored a placeholder fails closed
+  // instead. The 12-hex span KEY inside the directory is untouched — it is the
+  // published placeholder grammar, not a path detail.
   return (
     process.env._AGENT_SANITIZER_REVEAL_DIR ||
-    join(tmpdir(), "agent-sanitizer-layer2-reveal")
+    join(tmpdir(), `agent-sanitizer-layer2-reveal-${PROJECT_HASH}`)
   );
+}
+
+/**
+ * How long a reveal sidecar or span file is kept before a later session sweeps it.
+ * It must outlast the longest session that could still rehydrate a placeholder the
+ * model is holding, so it is generous rather than tight — these files are small,
+ * and the cost of sweeping one too early is a rehydration that fails closed.
+ */
+export const REVEAL_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+
+/**
+ * Delete this project's reveal sidecars and spans older than {@link REVEAL_TTL_MS}.
+ *
+ * Nothing else removes them: every entry is content-addressed, so a store that is
+ * never swept grows for the life of the machine. Called from SessionStart, the one
+ * touchpoint that runs once per session rather than once per tool call.
+ * @returns {void}
+ */
+export function sweepStaleReveals() {
+  const dir = revealDir();
+  // existsSync first: revealDirIsSafe CREATES the directory, and a sweep run on
+  // every session start must not leave an empty store behind for a project that
+  // never spliced anything.
+  if (!existsSync(dir) || !revealDirIsSafe(dir)) return;
+  const cutoff = Date.now() - REVEAL_TTL_MS;
+  for (const name of readdirSync(dir)) {
+    const path = join(dir, name);
+    try {
+      // lstat, not stat: a squatted symlink at a precomputable path is judged on
+      // ITSELF, and unlink removes the link rather than its target.
+      if (lstatSync(path).mtimeMs < cutoff) unlinkSync(path);
+    } catch (err) {
+      // ENOENT: a parallel session swept this entry between readdir and lstat.
+      // EPERM/EACCES: a co-tenant's entry, which is not ours to remove. Anything
+      // else is a bug in this sweep and propagates.
+      const code = /** @type {NodeJS.ErrnoException} */ (err).code;
+      if (code !== "ENOENT" && code !== "EPERM" && code !== "EACCES") throw err;
+    }
+  }
 }
 
 /**
