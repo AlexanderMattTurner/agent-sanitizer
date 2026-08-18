@@ -8,6 +8,15 @@ adhere to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+## [2.45.4] - 2026-08-18
+
+### Fixed
+- Secrets engine now fails loudly when a covered plugin supplies no denylist.
+
+### Changed
+- Improved performance of secrets scanning by skipping line processing when no plugin denylist can match it.
+- Corrected compute-budget documentation comment's throughput claim.
+
 ## [2.45.3] - 2026-08-18
 
 ### Fixed
