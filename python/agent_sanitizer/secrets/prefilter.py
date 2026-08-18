@@ -24,7 +24,7 @@ redaction output is byte-identical with the probes in play and without them.
 """
 
 import re
-from collections.abc import Iterable, Sequence
+from collections.abc import Callable, Iterable, Sequence
 
 # `re._parser`/`re._constants` are the 3.11+ spelling of the stdlib regex parser;
 # 3.10 (this package's floor) exposes the same module as `sre_parse`. The AST is
@@ -72,6 +72,13 @@ _CASE_EQUIVALENT_FIXUPS = {
     0x130: "i",  # LATIN CAPITAL LETTER I WITH DOT ABOVE
     0x131: "i",  # LATIN SMALL LETTER DOTLESS I
     0x17F: "s",  # LATIN SMALL LETTER LONG S
+    # `str.lower` maps a WORD-FINAL capital sigma to U+03C2 and any other to
+    # U+03C3, the only lowering in Python that reads a character's neighbours.
+    # A probe folds its literal in isolation and searches it inside a folded
+    # haystack, so a context-dependent fold makes the two disagree and the probe
+    # misses the line; mapping both sigmas onto U+03C3 first removes the context.
+    0x3A3: "\u03c3",  # GREEK CAPITAL LETTER SIGMA
+    0x3C2: "\u03c3",  # GREEK SMALL LETTER FINAL SIGMA
 }
 
 
@@ -210,6 +217,10 @@ def denylist_patterns(
     return patterns
 
 
+def _no_deadline_check(stage: str) -> None:
+    """The deadline check of a caller that set no compute budget."""
+
+
 class LiteralProbe:
     """The necessary condition for a set of patterns, evaluated over whole text.
 
@@ -258,7 +269,9 @@ class LiteralProbe:
             pattern.search(text) for pattern in self.weak
         )
 
-    def candidates(self, text: str) -> dict[int, tuple[re.Pattern[str], ...]] | None:
+    def candidates(
+        self, text: str, check: Callable[[str], None] = _no_deadline_check
+    ) -> dict[int, tuple[re.Pattern[str], ...]] | None:
         """Each line index (into ``text.split("\\n")``) that could hold a match,
         mapped to the patterns that could produce it — or None meaning "nothing
         could be ruled out, confirm every line against every pattern".
@@ -272,18 +285,34 @@ class LiteralProbe:
         key with a zero-width character spliced into it is probed on the same
         bytes the detector will see. Stripping never removes a newline, so the
         stripped text's line boundaries are the original's.
+
+        ``check`` is the caller's compute-deadline check, called between the
+        probe's units of work — one literal's sweep of the text, one weak
+        pattern's, and the line attribution. Each of those is linear in the
+        text, so the work between two checks is bounded; without it a payload
+        big enough to make this stage expensive would run to completion past a
+        budget the caller set precisely to stop it.
         """
         folded = fold(text)
         if folded is None:
             return None
         hits: list[tuple[int, int, tuple[re.Pattern[str], ...]]] = []
         for literal, patterns in self.by_literal.items():
+            check("candidate-line literal probe")
             width = len(literal)
             at = folded.find(literal)
             while at != -1:
                 hits.append((at, at + width, patterns))
-                at = folded.find(literal, at + 1)
+                # A second occurrence on the same line claims exactly what this
+                # one did — the literal is fixed, so every occurrence spans the
+                # same number of lines from the line it starts on — so the scan
+                # resumes on the NEXT line. Without that skip, one long line of
+                # `key key key ...` yields a hit per word and the attribution
+                # below pays for every one of them.
+                eol = folded.find("\n", at + width)
+                at = -1 if eol == -1 else folded.find(literal, eol + 1)
         for pattern in self.weak:
+            check("candidate-line pattern probe")
             # EVERY line the match touches is claimed, not just the one it starts
             # on. `finditer` yields non-overlapping matches, so a match that runs
             # past a newline consumes bytes on the following line where a second
@@ -292,6 +321,7 @@ class LiteralProbe:
             hits.extend(
                 (m.start(), m.end(), (pattern,)) for m in pattern.finditer(text)
             )
+        check("candidate-line attribution")
         return _patterns_by_line(text, hits)
 
 
@@ -303,26 +333,44 @@ def _patterns_by_line(
     Walks the newlines once in span-start order rather than calling ``str.count``
     per span (quadratic) or materializing a line-start table as long as the file
     even when two lines matched.
+
+    ``ahead`` is what makes that walk once: it holds the position of the next
+    newline at or after the current line's start, so a hit that does not advance
+    the line REUSES that answer instead of re-running ``text.find`` over the same
+    suffix. Searching per hit instead is quadratic in the worst case that
+    matters — one very long line with a hit on every key-ish word, each hit
+    rescanning the whole remaining text — which is attacker-shaped input against
+    a shared daemon, not a hypothetical. ``-1`` (no newline left) is likewise a
+    remembered answer, so the single-line payload costs one search in total.
     """
     claims: dict[int, set[re.Pattern[str]]] = {}
+    # A line's Nth hit on the same literal claims exactly what its first did, and
+    # one line can hold hundreds of thousands of them, so each (line, patterns)
+    # pair is merged into `claims` once. Bounded by lines times literals, where
+    # the hits are bounded only by the payload's length. This dedupes the MERGE
+    # only, never the span walk below: two matches of one weak pattern can start
+    # on the same line and reach different lines, and skipping the second's walk
+    # would leave the lines only it touches unclaimed — a missed secret.
+    merged: set[tuple[int, tuple[re.Pattern[str], ...]]] = set()
+
+    def claim(index: int, patterns: tuple[re.Pattern[str], ...]) -> None:
+        if (index, patterns) in merged:
+            return
+        merged.add((index, patterns))
+        claims.setdefault(index, set()).update(patterns)
+
     line = 0
-    cursor = 0
+    ahead = text.find("\n")
     for start, end, patterns in sorted(hits, key=lambda hit: hit[0]):
-        while True:
-            nxt = text.find("\n", cursor)
-            if nxt == -1 or nxt >= start:
-                break
+        while ahead != -1 and ahead < start:
             line += 1
-            cursor = nxt + 1
-        claims.setdefault(line, set()).update(patterns)
-        # A span's interior newlines are walked on a private cursor so the outer
-        # one stays parked at this span's START, which the sort keeps monotone.
-        span_line, span_cursor = line, cursor
-        while True:
-            nxt = text.find("\n", span_cursor)
-            if nxt == -1 or nxt >= end:
-                break
+            ahead = text.find("\n", ahead + 1)
+        claim(line, patterns)
+        # A span's interior newlines are walked on a private cursor so `ahead`
+        # stays parked at this span's START, which the sort keeps monotone.
+        span_line, span_ahead = line, ahead
+        while span_ahead != -1 and span_ahead < end:
             span_line += 1
-            span_cursor = nxt + 1
-            claims.setdefault(span_line, set()).update(patterns)
+            span_ahead = text.find("\n", span_ahead + 1)
+            claim(span_line, patterns)
     return {index: tuple(patterns) for index, patterns in claims.items()}

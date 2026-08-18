@@ -96,11 +96,29 @@ def test_required_literals_are_genuinely_required_of_the_live_denylists():
 # ─── the case fold ───────────────────────────────────────────────────────────
 
 
-def _probe_literal_chars() -> set[str]:
+def _engine_probes() -> dict[str, P.LiteralProbe]:
     with E.configure_plugins():
-        probes = [E._line_probe(), E._eligible_probe()]
-    probes += [E._PEM_PROBE, E._FIELD_VALUE_PROBE]
-    return {char for probe in probes for lit in probe.by_literal for char in lit}
+        named = {"line": E._line_probe(), "eligible": E._eligible_probe()}
+    return named | {"pem": E._PEM_PROBE, "field-value": E._FIELD_VALUE_PROBE}
+
+
+def _probe_literal_chars() -> set[str]:
+    return {
+        char
+        for probe in _engine_probes().values()
+        for lit in probe.by_literal
+        for char in lit
+    }
+
+
+def test_every_engine_probe_indexes_at_least_one_literal():
+    """Each gate must narrow by LITERAL. A probe whose patterns all fall to
+    `weak` answers `may_match` by running the very whole-payload regex the gate
+    exists to skip, so it becomes pure overhead — and every other test here
+    stays green, because they assert on redaction OUTPUT. Asserted per probe,
+    not over their union: the union is non-empty while any one of them is."""
+    empty = {name for name, probe in _engine_probes().items() if not probe.by_literal}
+    assert empty == set()
 
 
 def test_case_fold_covers_every_ignorecase_equivalent():
@@ -150,6 +168,32 @@ def test_case_fold_covers_every_ignorecase_equivalent():
         if not hits and char.lower() != char.upper()
     }
     assert unchecked == set(), unchecked
+
+
+def test_the_fold_is_context_free_over_all_of_unicode():
+    """The other precondition of folding a literal in ISOLATION and searching it
+    inside a folded haystack: a code point whose fold depends on its NEIGHBOURS
+    would make the two disagree, and the probe would skip the line.
+
+    `str.lower` has one such case — a word-final capital sigma lowers to U+03C2
+    and any other to U+03C3 — which the fixup table removes by mapping both
+    sigmas onto U+03C3. Checking each code point in isolation, as the test above
+    does, cannot see a context-dependent one at all, so this is what makes that
+    per-code-point methodology a complete derivation.
+    """
+    offenders = []
+    for code_point in range(0x110000):
+        candidate = chr(code_point)
+        folded = P.fold(candidate)
+        if folded is None:
+            continue
+        for before, after in (("a", ""), ("", "a")):
+            if P.fold(before + candidate + after) != before + folded + after:
+                offenders.append(f"U+{code_point:04X} {candidate!r} before {after!r}")
+    assert offenders == []
+    # Positive marker: a fold that changed nothing would satisfy the loop above
+    # vacuously, so pin the case the loop exists for.
+    assert P.fold("\u03a3") == P.fold("\u03c2") == "\u03c3"
 
 
 def test_fold_preserves_length_over_all_of_unicode():
@@ -215,6 +259,90 @@ def test_a_weak_pattern_match_claims_every_line_it_touches():
     probe = P.LiteralProbe([weak])
     assert probe.weak == (weak,)
     assert probe.candidates("xxa12\n4zyy") == {0: (weak,), 1: (weak,)}
+
+
+class _CountingText(str):
+    """A text that counts the newline searches run over it."""
+
+    def __new__(cls, body: str) -> "_CountingText":
+        text = super().__new__(cls, body)
+        text.finds = 0
+        return text
+
+    def find(self, *args) -> int:  # type: ignore[override]
+        self.finds += 1
+        return super().find(*args)
+
+
+def test_line_attribution_searches_the_newlines_once_not_once_per_hit():
+    """A hit that does not advance the line must not re-search the text for a
+    newline: one long line with a hit per credential noun is attacker-shaped
+    input against a shared daemon, and re-searching per hit is quadratic in it.
+
+    Bounded on search COUNT, not wall clock, so the guard cannot go quiet on a
+    faster runner — and the count must still EXCEED the newline count, or the
+    walk stopped happening at all.
+    """
+    line = "key " * 4000
+    text = _CountingText("\n".join([line] * 3))
+    hits = [(m.start(), m.end(), ()) for m in re.finditer("key", text)]
+    assert len(hits) == 12000
+    P._patterns_by_line(text, hits)
+    # 2 newlines to walk, plus the terminal search that reports none is left.
+    assert text.finds == 3
+
+
+def test_a_literal_is_reported_once_per_line_not_once_per_occurrence(monkeypatch):
+    """A line is a candidate or it is not, so a literal repeated across it need
+    only be reported once. Reporting every occurrence made the attribution below
+    scale with the payload's length rather than its line count — the cost that
+    took a megabyte of one line into multiple seconds."""
+    probe = P.LiteralProbe([re.compile("ghp_[0-9a-f]{36}")])
+    reported = []
+    monkeypatch.setattr(
+        P, "_patterns_by_line", lambda text, hits: reported.append(list(hits)) or {}
+    )
+    probe.candidates("ghp_" * 4000 + "\nnothing\n" + "ghp_" * 4000)
+    starts = [start for start, _end, _patterns in reported[0]]
+    assert starts == [0, 16009]
+
+
+def test_the_candidate_probe_yields_to_a_compute_deadline():
+    """The probe sweeps the whole payload per literal, so a payload big enough to
+    make it expensive is exactly the one whose caller set a budget to stop it.
+    Without the check threaded through, the budget could not interrupt this
+    stage at all."""
+    probe = P.LiteralProbe([re.compile("ghp_[0-9a-f]{36}")])
+    stages = []
+
+    def check(stage: str) -> None:
+        stages.append(stage)
+        raise E.RedactionBudgetExceeded(stage)
+
+    with pytest.raises(E.RedactionBudgetExceeded):
+        probe.candidates("ghp_" + "a" * 36, check)
+    assert stages == ["candidate-line literal probe"]
+
+
+def test_the_engine_hands_the_probe_the_requests_own_deadline(monkeypatch):
+    """The wiring, not just the parameter: a probe that accepts a deadline check
+    it is never given cannot be interrupted. `check` is positional here, so
+    omitting it is a TypeError, and the deadline it is bound to must be the one
+    carrying the request's budget rather than the unbudgeted singleton."""
+    seen = []
+
+    class _Spy:
+        def candidates(self, text, check):
+            seen.append(check)
+            return {}
+
+    def stub() -> _Spy:
+        return _Spy()
+
+    stub.cache_clear = lambda: None
+    monkeypatch.setattr(E, "_line_probe", stub)
+    run_plain("benign prose", cfg(compute_budget_seconds=5.0))
+    assert [c.__self__.expires_at is not None for c in seen] == [True]
 
 
 def test_a_probe_over_nothing_fails_loud():

@@ -1572,6 +1572,13 @@ def _redact_lines(
             redacted_lines.append(line)
             continue
         confirm = None if candidates is None else candidates[index]
+        # Keyed on the line TEXT alone, though the value was computed under one
+        # occurrence's `confirm`. That is exact, not approximate: two identical
+        # lines index the same literals, and a weak pattern claimed only via a
+        # span reaching in from a NEIGHBOURING line cannot match this line on its
+        # own — so `confirm` cannot differ in a way that flips _redact_line's
+        # gate. A literal spanning a newline would break that and must instead
+        # widen the key.
         cached = cache.get(line)
         if cached is None:
             line_found: list[str] = []
@@ -1622,7 +1629,9 @@ def _redact_core(
     # and stripping deletes no newline, so a stripped line's index is its
     # original's.
     deadline.check("candidate-line probe")
-    candidates = _line_probe().candidates(strip_invisible(working, charset))
+    candidates = _line_probe().candidates(
+        strip_invisible(working, charset), deadline.check
+    )
     lines = _redact_lines(
         working.split("\n"),
         web_ingress,
