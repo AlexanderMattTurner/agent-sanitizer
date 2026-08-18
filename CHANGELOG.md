@@ -8,6 +8,12 @@ adhere to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+## [2.45.3] - 2026-08-18
+
+### Fixed
+
+- Report the review-findings gate red instead of leaving it unreported.
+
 ## [2.45.2] - 2026-08-18
 
 ### Fixed
