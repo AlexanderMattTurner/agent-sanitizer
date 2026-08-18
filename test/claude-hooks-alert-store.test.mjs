@@ -1,12 +1,14 @@
 /**
  * The cross-hook alert store, as the two hooks that share it actually use it.
  *
- * Both of the defects pinned here were silent losses of a security signal, not
- * crashes: a session inheriting a previous session's acknowledgement degrades
- * the gate's one blocking ask to a passive note nobody reads, and a lost
- * concurrent append drops a finding the gate would have asked about. The store
- * is keyed by (project, session) and holds one file per finding precisely so
- * neither state is constructible.
+ * Every defect pinned here was a silent loss of a security signal, not a crash:
+ * a session inheriting a previous session's acknowledgement degrades the gate's
+ * one blocking ask to a passive note nobody reads, a lost concurrent append
+ * drops a finding the gate would have asked about, and a finding with no session
+ * to own it re-arms that ask for sessions that cannot act on it. The store is
+ * keyed by (project, session) and holds one file per finding precisely so the
+ * first two are unconstructible; the shared prefix that has no session keeps the
+ * third out with a lifetime.
  */
 import { describe, it, beforeEach, after } from "node:test";
 import assert from "node:assert/strict";
@@ -16,6 +18,7 @@ import {
   readdirSync,
   rmSync,
   symlinkSync,
+  utimesSync,
   writeFileSync,
 } from "node:fs";
 import { join } from "node:path";
@@ -32,6 +35,7 @@ const {
   alertDir,
   appendAlert,
   invisibleCharAlert,
+  sweepStaleSessions,
 } = await import("../claude-hooks/lib/invisible-alert.mjs");
 
 const SESSIONS = ["sess-alpha", "sess-beta"];
@@ -86,6 +90,98 @@ describe("a session cannot inherit another session's answer", () => {
       "a past session's finding",
       "the older session's own store was disturbed",
     );
+  });
+});
+
+describe("the shared no-session fallback has a lifetime", () => {
+  // A hook that faults before it can parse its payload has no session id, so
+  // its finding lands under the shared prefix that no session owns. Nothing
+  // clears that prefix when a session ends, so without a lifetime one such
+  // finding re-arms the gate's blocking ask for every later session — and on a
+  // host that exports no session id at all the ack lands there too and
+  // suppresses the ask permanently. Both are the inheritance that keying by
+  // session exists to make unconstructible.
+  const HOUR_MS = 60 * 60 * 1000;
+
+  /** Backdate an artifact past any plausible fallback lifetime. */
+  function age(path) {
+    const past = (Date.now() - HOUR_MS) / 1000;
+    utimesSync(path, past, past);
+  }
+
+  /** The one file appendAlert just wrote under the shared prefix. */
+  function soleFallbackEntry() {
+    const names = readdirSync(alertDir());
+    assert.equal(names.length, 1, "expected exactly one fallback finding");
+    return join(alertDir(), names[0]);
+  }
+
+  it("surfaces a fresh fallback finding to the session running now", () => {
+    // Non-vacuity control for the expiry below: the fallback is READ, so the
+    // expiry cases fail for the lifetime and not because nothing is spliced in.
+    appendAlert("a fault with no session id");
+    assert.match(
+      invisibleCharAlert(SESSIONS[0]),
+      /a fault with no session id/u,
+    );
+  });
+
+  it("does not surface an expired fallback finding to a later session", () => {
+    appendAlert("a fault from a session that ended days ago");
+    age(soleFallbackEntry());
+    assert.equal(
+      invisibleCharAlert(SESSIONS[1]),
+      null,
+      "a later session inherited a fallback finding it cannot act on",
+    );
+  });
+
+  it("expires the ack on a host that exports no session id", () => {
+    // There every session shares the fallback prefix, so an ack that never
+    // expires degrades the one-time blocking ask to the passive reminder for
+    // the life of the machine.
+    appendAlert("a finding on a host with no session id");
+    acknowledgeAlert();
+    assert.equal(alertAcknowledged(), true, "the ack did not take at all");
+    age(alertAckFile());
+    assert.equal(
+      alertAcknowledged(),
+      false,
+      "the gate stayed acknowledged, so it can never ask again",
+    );
+  });
+
+  it("keeps a session-keyed ack, however old", () => {
+    // The lifetime is the fallback's alone: a real session's ack ends with the
+    // session, so ageing it must not make the gate re-ask mid-session.
+    acknowledgeAlert(SESSIONS[0]);
+    age(alertAckFile(SESSIONS[0]));
+    assert.equal(alertAcknowledged(SESSIONS[0]), true);
+  });
+
+  it("sweeps the expired fallback artifacts off disk", () => {
+    // The read bound alone would leave the bytes in $TMPDIR forever on a host
+    // with no session id, where the stale-session loop skips the prefix as the
+    // current session's own.
+    appendAlert("an expired finding");
+    const entry = soleFallbackEntry();
+    acknowledgeAlert();
+    age(entry);
+    age(alertAckFile());
+    sweepStaleSessions(SESSIONS[0]);
+    assert.equal(existsSync(entry), false, "the expired finding was kept");
+    assert.equal(existsSync(alertAckFile()), false, "the expired ack was kept");
+  });
+
+  it("keeps fresh fallback artifacts through a sweep", () => {
+    // Non-vacuity for the sweep above: it must age entries out, not empty the
+    // store on every InstructionsLoaded fire.
+    appendAlert("a finding recorded moments ago");
+    const entry = soleFallbackEntry();
+    acknowledgeAlert();
+    sweepStaleSessions(SESSIONS[0]);
+    assert.equal(existsSync(entry), true);
+    assert.equal(existsSync(alertAckFile()), true);
   });
 });
 

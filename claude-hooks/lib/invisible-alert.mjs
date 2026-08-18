@@ -66,7 +66,7 @@ export function sessionPrefix(sessionId) {
   // The id becomes a path component, so anything outside this class — a `/` in
   // a hostile session id above all — is folded away rather than escaping
   // $TMPDIR. A host that exports no session id falls back to one shared name,
-  // where a marker can outlive its session.
+  // whose findings and ack are bounded by FALLBACK_TTL_MS instead.
   const key =
     (sessionId ?? "").replace(/[^A-Za-z0-9._-]/gu, "_") || "no-session";
   return `${ALERT_BASE}.s-${key}`;
@@ -129,6 +129,37 @@ export function instructionsLoadedSeen(sessionId) {
 const MARKER_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 
 /**
+ * How long a finding or an ack recorded WITHOUT a session identity stays live.
+ *
+ * Session-keying is what stops one session inheriting another's answer, and the
+ * shared `no-session` prefix is the one place it is unavailable: a hook that
+ * faults before it can parse its payload has no id to key by, and nothing can
+ * clear its artifact when that session ends. Wall-clock is the only lifetime
+ * left. It is applied at READ time — not by a SessionStart clear, which would
+ * erase a fault recorded moments earlier by an InstructionsLoaded event that had
+ * only this prefix to reach — and again by the sweep, so the bytes go too.
+ *
+ * Wide enough to cover a launch-time fault reaching the session's first tool
+ * call, narrow enough that the next session does not re-arm the gate for a fault
+ * it cannot act on. Past it, a fallback finding is neither surfaced nor
+ * remembered, which is what makes REMEDY's "start a new session and the gate
+ * clears" true for these findings too.
+ */
+const FALLBACK_TTL_MS = 30 * 60 * 1000;
+
+/**
+ * Whether `path` was written inside {@link FALLBACK_TTL_MS}. Every caller has
+ * just cleared the path through markerIsTrusted, so a throw here means the entry
+ * vanished under us — the same $TMPDIR race the reads below already propagate.
+ * `lstat`, so a planted symlink is judged on itself.
+ * @param {string} path
+ * @returns {boolean}
+ */
+function withinFallbackTtl(path) {
+  return lstatSync(path).mtimeMs >= Date.now() - FALLBACK_TTL_MS;
+}
+
+/**
  * Whether `path` is a real directory this uid owns — the directory counterpart
  * of markerIsTrusted. `lstat`, so a symlink planted at the predictable alert-dir
  * path is judged on ITSELF: followed, it would let a co-tenant aim the gate's
@@ -185,6 +216,33 @@ export function sweepStaleSessions(sessionId) {
       if (code !== "ENOENT" && code !== "EPERM" && code !== "EACCES") throw err;
     }
   }
+  sweepStaleFallback();
+}
+
+/**
+ * Remove the shared-prefix findings and ack once they are past
+ * {@link FALLBACK_TTL_MS}, so an artifact the reader already ignores stops
+ * occupying $TMPDIR too.
+ *
+ * Runs even when the fallback IS this session's prefix (a host with no session
+ * id), which is the only place the loop above cannot reach it — it skips the
+ * current session by design. Confined to the two artifacts the TTL governs: the
+ * InstructionsLoaded markers under the same prefix answer "did a scan run at
+ * all", and expiring one mid-session would render the gap notice on a session
+ * that WAS scanned.
+ * @returns {void}
+ */
+function sweepStaleFallback() {
+  const dir = alertDir();
+  const entries = dirIsTrusted(dir)
+    ? readdirSync(dir).map((name) => join(dir, name))
+    : [];
+  for (const path of [alertAckFile(), ...entries])
+    // markerIsTrusted absorbs an absent or foreign entry, and having confirmed
+    // this uid owns the file there is nothing left that can refuse the unlink;
+    // `force` covers only a parallel session removing it first.
+    if (markerIsTrusted(path) && !withinFallbackTtl(path))
+      rmSync(path, { force: true });
 }
 
 /**
@@ -271,13 +329,16 @@ export function recordInstructionsLoadedNotice(sessionId) {
  * faults BEFORE it can parse its payload has no session identity to key by: its
  * finding lands in the fallback, and a strictly session-keyed read would leave
  * the one report of an unscanned instruction file unreachable. The ack stays
- * strictly session-keyed, so the gate still asks exactly once per session.
+ * strictly session-keyed, so the gate still asks exactly once per session. A
+ * fallback finding is read only while it is inside FALLBACK_TTL_MS, which is
+ * what keeps it from re-arming the gate for a later session.
  * @param {string} [sessionId]
  * @returns {string | null}
  */
 export function invisibleCharAlert(sessionId) {
+  const fallback = alertDir();
   const dirs = [alertDir(sessionId)];
-  if (dirs[0] !== alertDir()) dirs.push(alertDir());
+  if (dirs[0] !== fallback) dirs.push(fallback);
   const parts = [];
   for (const dir of dirs) {
     if (!dirIsTrusted(dir)) continue;
@@ -286,6 +347,9 @@ export function invisibleCharAlert(sessionId) {
     for (const name of readdirSync(dir).sort()) {
       const path = join(dir, name);
       if (!markerIsTrusted(path)) continue;
+      // The fallback belongs to no session, so only its age says whether it is
+      // still this session's business (see FALLBACK_TTL_MS).
+      if (dir === fallback && !withinFallbackTtl(path)) continue;
       const text = readFileSync(path, "utf-8").trim();
       if (text !== "") parts.push(text);
     }
@@ -334,11 +398,19 @@ export function appendAlert(text, sessionId) {
  * predictable $TMPDIR path to permanently suppress the one-time blocking ask down
  * to the passive reminder, so trust the marker only when it is a regular file
  * this uid wrote (markerIsTrusted), mirroring how acknowledgeAlert writes it.
+ *
+ * On a host that exports no session id every session shares the fallback prefix,
+ * so the ack has no session to end with and would suppress the one-time blocking
+ * ask down to the passive reminder for the life of the machine. There it expires
+ * with {@link FALLBACK_TTL_MS} like the findings it answers for.
  * @param {string} [sessionId]
  * @returns {boolean}
  */
 export function alertAcknowledged(sessionId) {
-  return markerIsTrusted(alertAckFile(sessionId));
+  const path = alertAckFile(sessionId);
+  if (!markerIsTrusted(path)) return false;
+  if (sessionPrefix(sessionId) !== sessionPrefix()) return true;
+  return withinFallbackTtl(path);
 }
 
 /**
