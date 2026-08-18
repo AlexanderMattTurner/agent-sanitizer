@@ -134,6 +134,7 @@ jobs:
             config
           sparse-checkout-cone-mode: false
       - name: Evaluate the gate and post the verdict on the head
+        id: evaluate
         # The whole point of the job: without this step the workflow removes a
         # label and posts nothing, so the required "Review findings resolved"
         # context is never reported on a new head and the PR blocks forever on
@@ -141,4 +142,21 @@ jobs:
         # to the head's check context; without it the script only exits 0/1.
         env:
           REPORT_SHA: ${{ github.event.pull_request.head.sha }}
+        run: bash .github/scripts/review-findings-gate.sh
+      - name: Report red when the evaluation posted no verdict
+        # The step above posts the required check only if it reaches its POST, so
+        # an evaluation that dies first — an exhausted API retry ladder, a jq
+        # failure on the severity config, a lost runner — leaves the head with NO
+        # check run under a REQUIRED context. GitHub renders that as
+        # "Expected — Waiting for status to be reported" and blocks the merge on
+        # a check nothing will ever send: thread resolution fires no workflow
+        # event, so the gate is not re-derived until the next push or a
+        # `recheck-review-gate` label. Reporting red says the same thing in a
+        # form the merge box can act on. LIMIT: a failure in the checkout above
+        # takes this arm's script with it, so that one still strands the check —
+        # it reds the run loudly in Actions, unlike the silent strand this closes.
+        if: always() && steps.evaluate.outcome != 'success'
+        env:
+          REPORT_SHA: ${{ github.event.pull_request.head.sha }}
+          GATE_UNREPORTED: "1"
         run: bash .github/scripts/review-findings-gate.sh

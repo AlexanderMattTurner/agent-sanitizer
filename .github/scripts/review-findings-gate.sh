@@ -23,11 +23,15 @@
 #     merge_group mode: the calling job is itself the check on the queue sha,
 #     so its exit status is the report.
 #
+# GATE_UNREPORTED set skips the predicate entirely and posts a RED verdict on
+# REPORT_SHA — the caller's `always()` arm for a run that died before it could
+# evaluate, so a required check is never left unreported.
+#
 # Can't-verify is RED, never green: an API failure exhausting the retry ladder
 # propagates as a non-zero exit (set -e), because a gate that fails open lets a
 # PR merge past findings nobody read.
 #
-# Env: GH_TOKEN, GH_REPO (owner/name), PR; REPORT_SHA optional.
+# Env: GH_TOKEN, GH_REPO (owner/name), PR; REPORT_SHA and GATE_UNREPORTED optional.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -45,6 +49,26 @@ source "$SCRIPT_DIR/lib/pr-reviews.bash"
 # derived from that job name (sync-required-checks), and the check run posted
 # here has to land under the same context or the PR head never satisfies the gate.
 CHECK_NAME="Review findings resolved"
+
+# GATE_UNREPORTED mode: the evaluation below never reached its POST, so report
+# red here instead of leaving the head with no check run at all. An unposted
+# REQUIRED context reads as "Expected — Waiting for status to be reported", which
+# blocks the merge on a check that never arrives: thread resolution fires no
+# workflow event, so nothing re-derives this gate until the next push or a
+# `recheck-review-gate` label, and the merge box offers nothing to act on
+# meanwhile. Red is the same state said out loud, and it keeps the retry path.
+if [[ -n "${GATE_UNREPORTED:-}" ]]; then
+  : "${REPORT_SHA:?REPORT_SHA required to report an unevaluated gate}"
+  retry gh api --method POST "repos/${GH_REPO}/check-runs" \
+    -f "name=${CHECK_NAME}" \
+    -f "head_sha=${REPORT_SHA}" \
+    -f "status=completed" \
+    -f "conclusion=failure" \
+    -f "output[title]=red: review-findings gate did not complete" \
+    -f "output[summary]=the gate evaluation failed or was cancelled before deriving a verdict, so it reports red rather than leaving the required check unreported — re-run it by removing and re-adding the recheck-review-gate label" >/dev/null
+  echo "posted failure check run '${CHECK_NAME}' on ${REPORT_SHA}: evaluation did not complete" >&2
+  exit 0
+fi
 
 owner="${GH_REPO%%/*}"
 name="${GH_REPO##*/}"

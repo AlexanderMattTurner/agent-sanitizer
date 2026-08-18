@@ -598,10 +598,24 @@ def test_the_evaluate_job_actually_posts_a_verdict_on_the_head() -> None:
     # the verdict to the head's check context.
     steps = _evaluate_job()["steps"]
     gate_steps = [s for s in steps if "review-findings-gate.sh" in (s.get("run") or "")]
-    assert len(gate_steps) == 1
-    assert (gate_steps[0].get("env") or {}).get("REPORT_SHA") == (
-        "${{ github.event.pull_request.head.sha }}"
-    )
+    # Two arms, and both must route to the HEAD's check context: the evaluation
+    # itself, and the always() arm that reports red when the evaluation posted
+    # nothing. Without the second, a run that dies before its POST strands the
+    # required context at "Expected — Waiting for status to be reported", which
+    # is the same forever-block this test exists for, reached by a crash rather
+    # than by a missing step.
+    assert len(gate_steps) == 2
+    for step in gate_steps:
+        assert (step.get("env") or {}).get("REPORT_SHA") == (
+            "${{ github.event.pull_request.head.sha }}"
+        )
+    evaluate, unreported = gate_steps
+    assert evaluate.get("id") == "evaluate"
+    assert (unreported.get("env") or {}).get("GATE_UNREPORTED")
+    # `always()` is the whole point — a plain `if:` would skip exactly when the
+    # evaluation failed, which is the case that leaves the check unreported.
+    assert "always()" in unreported.get("if", "")
+    assert "steps.evaluate.outcome" in unreported.get("if", "")
     # The script is read from the DEFAULT branch, never the event's sha: this
     # job runs in the base repo's context under pull_request_target, so a
     # head-ref checkout would execute PR-authored code with checks:write.
