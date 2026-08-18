@@ -67,7 +67,13 @@ jobs:
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           persist-credentials: false
-          sparse-checkout: .github/scripts
+          # review-findings-gate.sh reads config/review-severities.json (the
+          # gating-severity SSOT); omitting it here makes the gate fail closed
+          # with "missing ... review-severities.json" on every PR whose hold
+          # actually clears, since rederive_review_gates() calls that script.
+          sparse-checkout: |
+            .github/scripts
+            config
           sparse-checkout-cone-mode: false
       - name: Sweep open PRs and clear any cleared reviewer hold
         run: bash .github/scripts/sweep-reviewer-holds.sh

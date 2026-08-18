@@ -339,8 +339,13 @@ def _copy_gate_tree(
     # The file set is DERIVED from what the gate script sources, not listed here:
     # a hand-written list is a second spelling of the script's own `source` lines,
     # and the copy that goes stale produces a "No such file" the assertions below
-    # read as the failure they were checking for.
+    # read as the failure they were checking for. The closure also names
+    # config/review-severities.json (an assignment, not a `source`), but this
+    # fixture is the thing that varies that exact file via `with_config`, so the
+    # script closure here is scripts only.
     for rel in source_closure({GATE_REL}):
+        if not rel.endswith((".sh", ".bash")):
+            continue
         copied = dest / rel
         copied.parent.mkdir(parents=True, exist_ok=True)
         copied.write_bytes((REPO_ROOT / rel).read_bytes())
