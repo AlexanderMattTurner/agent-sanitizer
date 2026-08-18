@@ -65,12 +65,12 @@ function processCpuMs() {
   const { user, system } = process.cpuUsage();
   return (user + system) / 1e3;
 }
-async function chargeDaemonWait(work, now = Date.now) {
+async function chargeRedactorRoundTrip(work, now = Date.now) {
   const started = now();
   try {
     return await work();
   } finally {
-    daemonWaitMs += Math.max(0, now() - started);
+    redactorRoundTripMs += Math.max(0, now() - started);
   }
 }
 async function excludeProvisioning(work, now = Date.now, cpuNow = processCpuMs) {
@@ -88,27 +88,27 @@ function startHookTimer(now = Date.now, cpuNow = processCpuMs) {
   const cpuStarted = cpuNow();
   const provisionedBefore = provisioningMs;
   const provisionedCpuBefore = provisioningCpuMs;
-  const daemonBefore = daemonWaitMs;
+  const redactorBefore = redactorRoundTripMs;
   return {
     wallMs: () => Math.max(0, now() - started - (provisioningMs - provisionedBefore)),
     cpuMs: () => Math.max(
       0,
       cpuNow() - cpuStarted - (provisioningCpuMs - provisionedCpuBefore)
     ),
-    daemonMs: () => Math.max(0, daemonWaitMs - daemonBefore)
+    redactorMs: () => Math.max(0, redactorRoundTripMs - redactorBefore)
   };
 }
-function attributeWait(elapsedMs, cpuMs, daemonMs) {
-  const otherMs = Math.max(0, elapsedMs - cpuMs - daemonMs);
-  const verdict = daemonMs >= cpuMs && daemonMs >= otherMs ? "Most of it went to the redactor daemon, a separate sanitizer process \u2014 a per-call cost the sanitizer owns." : cpuMs >= otherMs ? "Most of it is this hook computing \u2014 a per-call cost the sanitizer owns, repeated by every affected call." : "Most of it is neither: the hook was blocked on a loaded machine or on something outside the sanitizer that it called.";
-  return `, of which ${formatSeconds(cpuMs)}s was this hook's own CPU and ${formatSeconds(daemonMs)}s was waiting on the redactor daemon. ${verdict}`;
+function attributeWait(elapsedMs, cpuMs, redactorMs) {
+  const otherMs = Math.max(0, elapsedMs - cpuMs - redactorMs);
+  const verdict = redactorMs >= cpuMs && redactorMs >= otherMs ? "Most of it was spent inside the redactor round trip \u2014 the daemon's scan, the host it shares, or both; this hook was not computing it." : cpuMs >= otherMs ? "Most of it is this hook computing \u2014 a per-call cost the sanitizer owns, repeated by every affected call." : "Most of it is neither the redactor nor this hook computing: it was blocked on a loaded machine or on something outside the sanitizer that it called.";
+  return `, of which ${formatSeconds(cpuMs)}s was this hook's own CPU and ${formatSeconds(redactorMs)}s was inside redactor round trips. ${verdict}`;
 }
 function slowHookNotice(hookName, elapsedMs, thresholdMs = SLOW_HOOK_THRESHOLD_MS, context) {
   if (elapsedMs <= thresholdMs) return null;
   const cpuMs = context?.cpuMs;
-  const daemonMs = context?.daemonMs;
-  const attributed = typeof cpuMs === "number" && typeof daemonMs === "number";
-  const attribution = attributed ? attributeWait(elapsedMs, cpuMs, daemonMs) : typeof cpuMs === "number" ? `, and used ${formatSeconds(cpuMs)}s of CPU. Only the CPU share is work every affected call repeats; the rest was spent waiting, on a busy machine or on something this hook called.` : ". Wall-clock alone cannot separate the sanitizer's own work from a busy machine.";
+  const redactorMs = context?.redactorMs;
+  const attributed = typeof cpuMs === "number" && typeof redactorMs === "number";
+  const attribution = attributed ? attributeWait(elapsedMs, cpuMs, redactorMs) : typeof cpuMs === "number" ? `, and used ${formatSeconds(cpuMs)}s of CPU. Only the CPU share is work every affected call repeats; the rest was spent waiting, on a busy machine or on something this hook called.` : ". Wall-clock alone cannot separate the sanitizer's own work from a busy machine.";
   const timings = attributed ? "all three timings" : typeof cpuMs === "number" ? "both timings" : "timing";
   return `agent-sanitizer PERFORMANCE: the ${hookName} hook took ${formatSeconds(elapsedMs)}s${formatContextSuffix(context)}, over its ${formatSeconds(thresholdMs)}s budget${attribution} Tell the user, and suggest they report it at ${ISSUE_URL} with the hook name and ${timings}.`;
 }
@@ -132,7 +132,7 @@ function reportSlowHook(hookName, elapsedMs, hookEventName, emit, writeErr = (ch
   emit(hookEventName, { additionalContext: notice });
   return true;
 }
-var SLOW_HOOK_THRESHOLD_MS, ISSUE_URL, provisioningMs, provisioningCpuMs, daemonWaitMs;
+var SLOW_HOOK_THRESHOLD_MS, ISSUE_URL, provisioningMs, provisioningCpuMs, redactorRoundTripMs;
 var init_hook_timing = __esm({
   "claude-hooks/lib/hook-timing.mjs"() {
     "use strict";
@@ -140,7 +140,7 @@ var init_hook_timing = __esm({
     ISSUE_URL = "https://github.com/AlexanderMattTurner/agent-sanitizer/issues/new";
     provisioningMs = 0;
     provisioningCpuMs = 0;
-    daemonWaitMs = 0;
+    redactorRoundTripMs = 0;
   }
 });
 
@@ -66198,7 +66198,7 @@ async function runJudgeCli(hookName, judge, {
           payloadBytes,
           tool,
           cpuMs: timer.cpuMs(),
-          daemonMs: timer.daemonMs()
+          redactorMs: timer.redactorMs()
         }),
         event
       )
@@ -66212,7 +66212,7 @@ async function runJudgeCli(hookName, judge, {
         payloadBytes,
         tool,
         cpuMs: timer.cpuMs(),
-        daemonMs: timer.daemonMs()
+        redactorMs: timer.redactorMs()
       });
     onError(err, input);
   }
@@ -67000,7 +67000,7 @@ async function redactViaDaemon(text5, opts = {}) {
     connect = connectAndRequest,
     spawn: spawnFn = spawnDaemon,
     waitForSocket: waitFn = waitForSocket,
-    // The clock the provisioning and daemon-wait charges are measured on;
+    // The clock the provisioning and round-trip charges are measured on;
     // injectable alongside the seams they bracket, since a stubbed wait or
     // connect advances a test clock rather than real time.
     now = Date.now
@@ -67033,7 +67033,10 @@ async function redactViaDaemon(text5, opts = {}) {
       );
     return result;
   };
-  const dial = (deadlineMs) => chargeDaemonWait(() => connect(socketPath, request, deadlineMs), now);
+  const dial = (deadlineMs) => chargeRedactorRoundTrip(
+    () => connect(socketPath, request, deadlineMs),
+    now
+  );
   try {
     return validate(await dial(remainingMs()));
   } catch (err) {

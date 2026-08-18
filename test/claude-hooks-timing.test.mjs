@@ -193,21 +193,21 @@ describe("provisioning is not the hook's cost", () => {
       "the daemon cold start must not be charged",
     );
     assert.equal(
-      timer.daemonMs(),
+      timer.redactorMs(),
       0,
       "a cold start is provisioning, not a round trip",
     );
   });
 });
 
-describe("the redactor daemon's share of the wait", () => {
+describe("the redactor round trip's share of the wait", () => {
   // The daemon runs in its own long-lived process, so its cost lands in neither
   // this process's getrusage(RUSAGE_SELF) (what process.cpuUsage reads) nor
   // RUSAGE_CHILDREN (which needs a reaped child). Unmeasured, a hook whose
-  // second went entirely into the daemon reports near-zero CPU and reads as a
-  // busy machine — the one diagnosis with the opposite remedy.
+  // second went entirely into a redaction call reports near-zero CPU and reads
+  // as a busy machine that never touched the sanitizer.
 
-  it("charges a round trip to the daemon, and to the wall-clock the user waited", async () => {
+  it("charges a round trip to the redactor, and to the wall-clock the user waited", async () => {
     let t = 0;
     const clock = () => t;
     const timer = startHookTimer(clock, () => 0);
@@ -219,11 +219,11 @@ describe("the redactor daemon's share of the wait", () => {
       now: clock,
     });
     assert.deepEqual(result, { text: "some text", found: [] });
-    assert.equal(timer.daemonMs(), 2_500);
+    assert.equal(timer.redactorMs(), 2_500);
     assert.equal(
       timer.wallMs(),
       2_500,
-      "a slow daemon is a per-call cost the user waits for, so it stays in wall",
+      "a slow redaction is a per-call cost the user waits for, so it stays in wall",
     );
   });
 
@@ -243,7 +243,7 @@ describe("the redactor daemon's share of the wait", () => {
       }),
       /redactor response timeout/u,
     );
-    assert.equal(timer.daemonMs(), 20_000);
+    assert.equal(timer.redactorMs(), 20_000);
   });
 
   it("charges BOTH dials when a dead socket forces a respawn and retry", async () => {
@@ -265,10 +265,10 @@ describe("the redactor daemon's share of the wait", () => {
       },
       now: clock,
     });
-    assert.equal(timer.daemonMs(), 800, "both dials, and not the cold start");
+    assert.equal(timer.redactorMs(), 800, "both dials, and not the cold start");
   });
 
-  it("never lets one run's daemon wait land on a later run's timer", async () => {
+  it("never lets one run's round trip land on a later run's timer", async () => {
     let t = 0;
     const clock = () => t;
     await redactViaDaemon("some text", {
@@ -280,7 +280,7 @@ describe("the redactor daemon's share of the wait", () => {
     });
     const timer = startHookTimer(clock, () => 0);
     t += 40;
-    assert.equal(timer.daemonMs(), 0);
+    assert.equal(timer.redactorMs(), 0);
   });
 });
 
@@ -331,41 +331,55 @@ describe("slowHookNotice", () => {
     assert.doesNotMatch(notice, /the rest was waiting on a busy machine/);
   });
 
-  it("blames the daemon when the daemon is where the wait went", () => {
+  it("puts the wait in the redactor call when that is where it went", () => {
     // The report this wording exists for: 6.9s of wall against 0.05s of CPU,
-    // all of it inside a redactor round trip. Read as CPU-versus-the-rest that
-    // is indistinguishable from a loaded box, and the two have opposite
-    // remedies — one is the sanitizer's bug, the other is not its problem.
+    // all of it inside a redactor round trip. Read as CPU-versus-the-rest, that
+    // is indistinguishable from a loaded box that never called the sanitizer.
     const notice = slowHookNotice("sanitize-output", 6_900, undefined, {
       cpuMs: 50,
-      daemonMs: 6_800,
+      redactorMs: 6_800,
     });
     assert.match(notice, /0\.1s was this hook's own CPU/);
-    assert.match(notice, /6\.8s was waiting on the redactor daemon/);
-    assert.match(notice, /Most of it went to the redactor daemon/);
-    assert.doesNotMatch(notice, /busy machine/);
+    assert.match(notice, /6\.8s was inside redactor round trips/);
+    assert.match(notice, /Most of it was spent inside the redactor round trip/);
     assert.match(notice, /hook name and all three timings/);
+  });
+
+  it("names the round trip as a WINDOW, never as the culprit inside it", () => {
+    // The round trip is wall-clock from this side, so it holds the daemon's
+    // scan AND whatever descheduling a contended host imposed on either end.
+    // Naming the daemon from that number would re-commit, one bucket over, the
+    // overreach the CPU split exists to retract — so the verdict offers both
+    // and picks neither. Separating them needs telemetry from inside the
+    // daemon, which the wire protocol (whose response may be a bare null) has
+    // nowhere to carry.
+    const notice = slowHookNotice("sanitize-output", 6_900, undefined, {
+      cpuMs: 50,
+      redactorMs: 6_800,
+    });
+    assert.match(notice, /the daemon's scan, the host it shares, or both/);
+    assert.doesNotMatch(notice, /the sanitizer owns/);
   });
 
   it("blames this hook when the hook is what computed", () => {
     const notice = slowHookNotice("scan-invisible-chars", 4_000, undefined, {
       cpuMs: 3_800,
-      daemonMs: 100,
+      redactorMs: 100,
     });
     assert.match(notice, /Most of it is this hook computing/);
-    assert.doesNotMatch(notice, /Most of it went to the redactor daemon/);
+    assert.doesNotMatch(notice, /inside the redactor round trip/);
   });
 
   it("blames neither when the time went somewhere it can see neither of", () => {
-    // Same 7.2s-against-0.3s host contention as above, now with the daemon
-    // ruled OUT by measurement rather than left as an unfalsified candidate.
+    // Same 7.2s-against-0.3s host contention as above, now with the redactor
+    // call ruled OUT by measurement rather than left as an unfalsified
+    // candidate — the one thing this side CAN settle.
     const notice = slowHookNotice("sanitize-output", 7_200, undefined, {
       cpuMs: 300,
-      daemonMs: 120,
+      redactorMs: 120,
     });
-    assert.match(notice, /Most of it is neither/);
+    assert.match(notice, /Most of it is neither the redactor nor this hook/);
     assert.match(notice, /loaded machine/);
-    assert.doesNotMatch(notice, /Most of it went to the redactor daemon/);
   });
 
   it("admits it cannot attribute the wait when no CPU figure is given", () => {
@@ -633,19 +647,19 @@ describe("runJudgeCli times every judge hook", () => {
     // Compared, not pinned to 0.0s: the same window really does load the
     // control plane, and on a cold runner that is a tenth of a second of CPU.
     const timings = stdout.match(
-      /took (\d+\.\d)s .*?of which (\d+\.\d)s was this hook's own CPU and (\d+\.\d)s was waiting on the redactor daemon/u,
+      /took (\d+\.\d)s .*?of which (\d+\.\d)s was this hook's own CPU and (\d+\.\d)s was inside redactor round trips/u,
     );
     assert.ok(timings, stdout);
-    const [, wall, cpu, daemon] = timings;
+    const [, wall, cpu, redactor] = timings;
     assert.ok(
       Number(cpu) < Number(wall),
       `a sleeping judge must report CPU (${cpu}s) below wall (${wall}s)`,
     );
     // A judge that never dialled the daemon is the case the third number
-    // exonerates it in: the notice can only name the sanitizer's own daemon as
-    // the cause when a round trip actually happened.
-    assert.equal(daemon, "0.0", stdout);
-    assert.match(stdout, /Most of it is neither/);
+    // exonerates the redactor in: the notice can only place a wait in that call
+    // when a round trip actually happened.
+    assert.equal(redactor, "0.0", stdout);
+    assert.match(stdout, /Most of it is neither the redactor nor this hook/);
     assert.ok(
       errs.some((line) => line.includes("PERFORMANCE")),
       "the timing must also reach stderr",

@@ -18,7 +18,10 @@
  * daemon could not vet input.
  */
 import { spawn } from "node:child_process";
-import { chargeDaemonWait, excludeProvisioning } from "./hook-timing.mjs";
+import {
+  chargeRedactorRoundTrip,
+  excludeProvisioning,
+} from "./hook-timing.mjs";
 import { existsSync, lstatSync } from "node:fs";
 import { createConnection } from "node:net";
 import { tmpdir, userInfo } from "node:os";
@@ -435,7 +438,7 @@ export async function redactViaDaemon(text, opts = {}) {
     connect = connectAndRequest,
     spawn: spawnFn = spawnDaemon,
     waitForSocket: waitFn = waitForSocket,
-    // The clock the provisioning and daemon-wait charges are measured on;
+    // The clock the provisioning and round-trip charges are measured on;
     // injectable alongside the seams they bracket, since a stubbed wait or
     // connect advances a test clock rather than real time.
     now = Date.now,
@@ -487,14 +490,17 @@ export async function redactViaDaemon(text, opts = {}) {
       );
     return result;
   };
-  // Every dial is charged to the daemon share, so the slow-hook notice can say
-  // "the daemon was slow" instead of guessing: the daemon is a separate process,
-  // so its CPU appears in neither this process's getrusage(RUSAGE_SELF) nor —
-  // being long-lived and never reaped here — in RUSAGE_CHILDREN. The round trip
-  // this side waits out is the only measurement of it available.
+  // Every dial is charged to the redactor share, so the slow-hook notice can
+  // place the wait in this call rather than guess at it: the daemon is a
+  // separate process, so its cost appears in neither this process's
+  // getrusage(RUSAGE_SELF) nor — being long-lived and never reaped here — in
+  // RUSAGE_CHILDREN. The round trip is the only measurable stand-in.
   /** @param {number | undefined} deadlineMs @returns {Promise<RedactResponse|null>} */
   const dial = (deadlineMs) =>
-    chargeDaemonWait(() => connect(socketPath, request, deadlineMs), now);
+    chargeRedactorRoundTrip(
+      () => connect(socketPath, request, deadlineMs),
+      now,
+    );
   try {
     // undefined remaining → connectAndRequest's own default request deadline.
     return validate(await dial(remainingMs()));
