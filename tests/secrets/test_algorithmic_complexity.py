@@ -35,9 +35,11 @@ import pytest
 import agent_sanitizer.secrets as pkg
 from agent_sanitizer.secrets import (
     RedactorConfig,
+    configure_plugins,
     detected_secret_values,
     mask_secret_lines,
     redact,
+    redact_configured,
     redact_map,
     secret_previews,
     strip_invisible,
@@ -73,11 +75,15 @@ def _opcodes(call) -> int:
             count += 1
         return trace
 
+    # Restore whatever tracer was installed (a coverage plugin's), not None:
+    # clearing it would silently stop coverage for every later test that runs
+    # in this process.
+    previous = sys.gettrace()
     sys.settrace(trace)
     try:
         call()
     finally:
-        sys.settrace(None)
+        sys.settrace(previous)
     return count
 
 
@@ -93,37 +99,66 @@ def _secret_line(n: int) -> str:
     )
 
 
-def _growth_ratio(call_with_text) -> float:
+def _growth_ratio(thunk_for) -> float:
     """Opcode growth from :data:`_SMALL` to :data:`_LARGE` secrets on ONE line.
+
+    ``thunk_for(text)`` builds a zero-arg call; only that call is counted, so an
+    entry point's setup (the detection pass feeding ``mask_secret_lines``) runs
+    outside the measure and cannot bury the measured routine's own growth.
 
     A warm-up call first: the engine builds its plugin mapping and compiles its
     prefilters lazily, and charging that one-time cost to the smaller size alone
     would report a ratio far below the truth.
     """
-    call_with_text(_secret_line(5))
-    small = _opcodes(lambda: call_with_text(_secret_line(_SMALL)))
-    large = _opcodes(lambda: call_with_text(_secret_line(_LARGE)))
+    thunk_for(_secret_line(5))()
+    small = _opcodes(thunk_for(_secret_line(_SMALL)))
+    large = _opcodes(thunk_for(_secret_line(_LARGE)))
     assert small > 0, "measured no interpreted work — the entry point never ran"
     return large / small
 
 
 _CONFIG = RedactorConfig()
 
-# The untrusted-TEXT entry points, each as a one-argument call. Every public
+
+def _mask_secret_lines_thunk(text):
+    """Masking measured ALONE: the detection pass that feeds it runs out here,
+    before the count starts. Measured together, detection's far larger opcode
+    count is the whole ratio, and a mask-side quadratic could hide under a
+    linear detection and pass."""
+    values = detected_secret_values(text, _CONFIG)
+    return lambda: mask_secret_lines(text, values)
+
+
+def _redact_configured_thunk(text):
+    """The daemon's shape: enter ``configure_plugins`` once, then redact. The
+    context enter/exit rides inside the count as a per-call constant, which the
+    :data:`_SMALL`/:data:`_LARGE` sizes keep far below the per-secret term."""
+
+    def call():
+        with configure_plugins():
+            redact_configured(text, None, _CONFIG)
+
+    return call
+
+
+# The untrusted-TEXT entry points, each as a text -> zero-arg thunk. Every public
 # export is accounted for below, either here or in _NON_TEXT_EXPORTS, and a test
 # in this file fails when a new export lands in neither — so the scope of this
 # gate is derived from the package's own __all__ rather than from this list.
 _TEXT_ENTRY_POINTS = {
-    "redact": lambda text: redact(text, _CONFIG),
-    "redact_map": lambda text: redact_map(text, _CONFIG),
-    "detected_secret_values": lambda text: detected_secret_values(text, _CONFIG),
-    "secret_previews": lambda text: secret_previews(text, _CONFIG),
-    # Takes the detected values rather than a config, and masking each value
-    # across the whole text is the shape most at risk of a per-value rescan.
-    "mask_secret_lines": lambda text: mask_secret_lines(
-        text, detected_secret_values(text, _CONFIG)
+    "redact": lambda text: lambda: redact(text, _CONFIG),
+    "redact_map": lambda text: lambda: redact_map(text, _CONFIG),
+    "detected_secret_values": lambda text: (
+        lambda: detected_secret_values(text, _CONFIG)
     ),
-    "strip_invisible": strip_invisible,
+    "secret_previews": lambda text: lambda: secret_previews(text, _CONFIG),
+    # Masking each value across the whole text is the shape most at risk of a
+    # per-value rescan, so it is measured with detection hoisted out.
+    "mask_secret_lines": _mask_secret_lines_thunk,
+    # The daemon's per-request hot path — the caller this gate exists to
+    # protect — so it is measured directly, not left as redact's twin.
+    "redact_configured": _redact_configured_thunk,
+    "strip_invisible": lambda text: lambda: strip_invisible(text),
 }
 
 # Public exports that take no untrusted text, with the reason each is out of
@@ -143,7 +178,6 @@ _NON_TEXT_EXPORTS = {
     "handle_request": "the daemon's socket frame handler; covered by the daemon suite",
     "non_secret_name_segments": "returns the vocabulary's renderings",
     "parse_credential_names": "parses the packaged vocabulary file, not untrusted text",
-    "redact_configured": "the hot-path twin of redact; needs an active configure_plugins",
 }
 
 
@@ -190,7 +224,7 @@ def test_the_measure_catches_a_quadratic():
             if not any(s == token for s in seen):
                 seen.append(token)
 
-    ratio = _growth_ratio(quadratic)
+    ratio = _growth_ratio(lambda text: lambda: quadratic(text))
     assert ratio >= _SUPER_LINEAR_RATIO, (
         f"a deliberately quadratic routine measured {ratio:.2f}x — the harness "
         "cannot tell quadratic from linear, so every assertion above is vacuous"
