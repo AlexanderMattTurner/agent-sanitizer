@@ -165,27 +165,62 @@ def _resolve_tail(tail: str, sourcing_file: str, tracked: set[str]) -> str | Non
     return None
 
 
+#: Command names whose first argument is read like a `source`: the script
+#: named there has to be on the same checkout list as `rel` itself. `bash` is
+#: lenient rather than strict like `source`/`.` below — a repo-wide grep turns
+#: up `bash -c`, `bash <(...)`, and third-party scripts nothing here tracks,
+#: and demanding every one of those resolve would raise on code this check was
+#: never meant to cover. It only ever ADDS an edge, on a target it can resolve.
+_LENIENT_INVOCATIONS = ("bash",)
+_STRICT_INVOCATIONS = ("source", ".")
+
+#: A tracked file with one of these suffixes is walked further for its own
+#: `source`s; anything else (`config/review-severities.json`) is a leaf the
+#: closure still has to list.
+_SHELL_SUFFIXES = (".sh", ".bash")
+
+
 def _source_targets(rel: str, tracked: set[str]):
-    """(argument as written, tracked file or None) for each `source` in `rel`.
+    """(argument as written, tracked file or None) for each checkout-relevant
+    reference in `rel`: a `source`/`.`/`bash` target, or an assignment whose
+    literal tail names a tracked non-shell file.
 
     None means the target is a real path that is simply not tracked here — an
-    absolute system path, say. A target the grammar cannot READ raises instead:
-    telling those two apart is the whole point, because a silently dropped edge
-    is a checkout requirement this module failed to state.
+    absolute system path, say. A `source`/`.` target the grammar cannot READ
+    raises instead: telling those two apart is the whole point, because a
+    silently dropped edge is a checkout requirement this module failed to
+    state. `bash` and the assignment scan below never raise on an unresolved
+    target — they only add edges, on the class of reference proven to exist
+    (`review-findings-gate.sh` reads `config/review-severities.json` through a
+    plain assignment, never a `source`).
     """
     tree = _BASH_PARSER.parse((REPO_ROOT / rel).read_bytes())
     assigned = _assigned_tails(tree)
+
+    # A config/data path is routinely tested (`[[ -f "$VAR" ]]`) or read
+    # (`jq ... "$VAR"`) without ever being `source`d, so the assignment itself
+    # is the only place that reference shows up.
+    for tails in assigned.values():
+        for tail in tails:
+            resolved = _resolve_tail(tail, rel, tracked)
+            if resolved is not None and not resolved.endswith(_SHELL_SUFFIXES):
+                yield tail, resolved
+
     for command in (
         QueryCursor(_BASH_COMMANDS).captures(tree.root_node).get("command", [])
     ):
         name = command.child_by_field_name("name")
-        if name is None or name.text.decode() not in ("source", "."):
+        name_text = None if name is None else name.text.decode()
+        strict = name_text in _STRICT_INVOCATIONS
+        if not strict and name_text not in _LENIENT_INVOCATIONS:
             continue
         arguments = [c for c in command.children[1:] if c.type in _ARGUMENT_TYPES]
         written = arguments[0].text.decode() if arguments else ""
         tail = _literal_tail(arguments[0]) if arguments else None
         if tail is not None:
-            yield written, _resolve_tail(tail, rel, tracked)
+            resolved = _resolve_tail(tail, rel, tracked)
+            if strict or resolved is not None:
+                yield written, resolved
             continue
         # No literal in the argument itself: the name usually comes from an
         # assignment in the same file, so ask that before giving up.
@@ -200,6 +235,8 @@ def _source_targets(rel: str, tracked: set[str]):
             )
         if resolved:
             yield written, resolved.pop()
+            continue
+        if not strict:
             continue
         reason = _RUNTIME_NAMED_TARGETS.get((rel, written))
         if reason is None:
