@@ -1263,16 +1263,16 @@ def _cross_line_candidate_spans(
     # extent) still sweeps the whole text, individually; without that a match of
     # one landing outside every window would be a missed secret.
     plan = _eligible_probe().plan(stripped, deadline.check)
-    sweeps: list[tuple[re.Pattern[str], int, int]] = (
-        [(p, 0, len(stripped)) for p in _eligible_prefilter()]
-        if plan.windows is None
-        else [
+    sweeps: list[tuple[re.Pattern[str], int, int]]
+    if plan.windows is None:
+        sweeps = [(p, 0, len(stripped)) for p in _eligible_prefilter()]
+    else:
+        sweeps = [
             (p, start, end)
             for p in _eligible_prefilter()
             for start, end in plan.windows
         ]
-        + [(p, 0, len(stripped)) for p in plan.full_scans]
-    )
+        sweeps += [(p, 0, len(stripped)) for p in plan.full_scans]
     for hit in (
         hit for p, start, end in sweeps for hit in p.finditer(stripped, start, end)
     ):
@@ -1764,8 +1764,7 @@ def _redact_core(
     candidates = _line_probe().candidates(stripped, deadline.check)
     # The strip above deletes only charset code points, so an unchanged LENGTH
     # proves the whole payload holds none of them — and therefore that no line of
-    # it does either. That is the one proof _redact_line needs to skip its own
-    # per-line strip, and it is already paid for here.
+    # it does either.
     lines = _redact_lines(
         working.split("\n"),
         web_ingress,
@@ -1774,7 +1773,7 @@ def _redact_core(
         charset,
         deadline,
         candidates,
-        len(stripped) == len(working),
+        invisible_free=len(stripped) == len(working),
     )
 
     rejoined = "\n".join(lines)
