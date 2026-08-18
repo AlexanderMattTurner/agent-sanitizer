@@ -8,6 +8,18 @@ adhere to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+## [2.44.1] - 2026-08-18
+
+### Fixed
+- Keep a session's own fallback findings and reap its scan markers to prevent stale data accumulation.
+- Bound the session-less alert store so a stale finding cannot re-arm the gate.
+- Stop a refused directory fsync from incorrectly reporting a write operation.
+- Grant the review-gate the permission required for label removal operations.
+
+### Changed
+- Match the review-gate's SECURITY header to its updated permission set.
+- Document the lock-before-marker ordering that the cold-start probe depends on.
+
 ## [2.44.0] - 2026-08-18
 
 ### Fixed
