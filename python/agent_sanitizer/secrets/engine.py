@@ -1082,16 +1082,22 @@ def _degroup(pattern: str) -> str:
     into one union regex cannot raise ``re.error: redefinition of group name``.
     Only the group's own capture is dropped — the prefilter never reads capture
     groups, it only asks whether the union matched at all — so this changes
-    nothing the caller can observe. A named BACKREFERENCE (``(?P=name)``) would
-    break under this rewrite (its target group's name would vanish from under
-    it), so this fails loud rather than silently mis-joining a pattern shaped
-    that way; no current denylist pattern has one (see
+    nothing the caller can observe.
+
+    A BACKREFERENCE of either spelling is refused. ``(?P=name)`` loses its
+    target's name to the rewrite; a NUMBERED ``\\1`` is the dangerous one,
+    because it keeps compiling while both this rewrite and the caller's ``|``
+    join renumber the groups around it — so it silently comes to point at a
+    different, often unset group and the union quietly under-matches. Under a
+    detection gate an under-match is a missed secret, so this fails loud
+    instead. No current denylist pattern has either (see
     ``test_full_prefilter_is_sound``).
     """
-    if "(?P=" in pattern:
+    if "(?P=" in pattern or re.search(r"\\[1-9]", pattern):
         raise RuntimeError(
-            f"denylist pattern {pattern!r} uses a named backreference — "
-            "_degroup cannot safely strip its group name"
+            f"denylist pattern {pattern!r} uses a named backreference or a "
+            "numbered one — _degroup cannot safely strip its group name, and "
+            "joining patterns into one union renumbers their groups"
         )
     return _NAMED_GROUP_RE.sub("(?:", pattern)
 
@@ -1123,7 +1129,20 @@ def _denylist_prefilter(types: frozenset[str] | None) -> tuple[re.Pattern[str], 
     for plugin in get_plugins():
         if types is not None and getattr(plugin, "secret_type", None) not in types:
             continue
-        for pat in getattr(plugin, "denylist", ()):
+        # A covered plugin that supplies no denylist contributes nothing to the
+        # union, and _redact_line skips scan_line outright on a prefilter miss —
+        # so silently tolerating one would drop every secret of its type with no
+        # runtime signal. This raise is what keeps a detect-secrets upgrade from
+        # turning a detector into a hole.
+        patterns = getattr(plugin, "denylist", ())
+        if not patterns:
+            raise RuntimeError(
+                f"active plugin {type(plugin).__name__} "
+                f"({getattr(plugin, 'secret_type', None)!r}) supplied no denylist "
+                "regex — the prefilter cannot cover it, so secrets of this type "
+                "would be skipped before scan_line ever ran"
+            )
+        for pat in patterns:
             by_flags.setdefault(pat.flags, []).append(_degroup(pat.pattern))
     if not by_flags:
         raise RuntimeError(

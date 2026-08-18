@@ -127,6 +127,21 @@ def test_a_real_secret_line_still_reaches_scan_line(monkeypatch):
     assert any(aws_key in line for line in calls)
 
 
+def test_a_denylist_less_plugin_fails_loud(monkeypatch):
+    """A covered plugin with no denylist contributes nothing to the union, and
+    _redact_line skips scan_line outright on a prefilter miss — so tolerating
+    one would drop every secret of its type silently. Build must raise."""
+
+    class _NoDenylist:
+        secret_type = "Bare Detector"  # noqa: S105 — a label, not a secret
+
+    with E.configure_plugins():
+        real_plugins = list(get_plugins())
+        monkeypatch.setattr(E, "get_plugins", lambda: [*real_plugins, _NoDenylist()])
+        with pytest.raises(RuntimeError, match="supplied no denylist"):
+            E._denylist_prefilter(None)
+
+
 # ─── _degroup ──────────────────────────────────────────────────────────────
 
 
@@ -148,43 +163,72 @@ def test_degroup_strips_named_groups_without_changing_match_semantics():
         ),
     }
     with E.configure_plugins():
-        found_named = False
+        # Pairs where the original pattern MATCHED and so did the degrouped one.
+        # A plugin carries several denylist patterns for different value shapes
+        # (Cloudant has both a 64-hex and a 24-alpha form), so any one sample
+        # matches only one of them — `bool == bool` per pattern is therefore
+        # mostly False == False, and this counter is the positive marker that
+        # proves at least one comparison was a real true-true.
+        checked = set()
         for plugin in get_plugins():
             sample = samples.get(plugin.secret_type)
             if sample is None:
                 continue
-            for pat in plugin.denylist:
-                if "(?P<" not in pat.pattern:
-                    continue
-                found_named = True
+            named = [pat for pat in plugin.denylist if "(?P<" in pat.pattern]
+            assert named, (
+                f"{plugin.secret_type} no longer has a named-group denylist "
+                "pattern — this sample no longer exercises _degroup"
+            )
+            matched_here = 0
+            for pat in named:
                 degrouped = E._degroup(pat.pattern)
                 assert "(?P<" not in degrouped
                 compiled = re.compile(degrouped, pat.flags)
-                assert bool(compiled.search(sample)) == bool(pat.search(sample)), (
+                original_hit = pat.search(sample)
+                assert bool(compiled.search(sample)) == bool(original_hit), (
                     f"{plugin.secret_type}: degrouping changed match semantics"
                 )
-        assert found_named, (
-            "no sample exercised a named-group denylist pattern — this test "
-            "would pass vacuously if the vocabulary drifted"
+                matched_here += bool(original_hit)
+            assert matched_here, (
+                f"{plugin.secret_type}: sample matches none of its own "
+                "named-group patterns — every equality above was False == False"
+            )
+            checked.add(plugin.secret_type)
+        assert checked == set(samples), (
+            f"samples {set(samples) - checked} never reached an active plugin — "
+            "the fixture and the live plugin set have drifted"
         )
 
 
-def test_degroup_rejects_named_backreferences():
-    """A named backreference (`(?P=name)`) breaks under a blind
-    s/named-group/non-capturing/ rewrite (its target's name vanishes out
-    from under it) — _degroup fails loud rather than silently mis-joining
-    a pattern shaped that way."""
-    with pytest.raises(RuntimeError, match="named backreference"):
-        E._degroup(r"(?P<tag>foo)-(?P=tag)")
+@pytest.mark.parametrize(
+    "pattern",
+    [
+        # Named: loses its target's name to the rewrite, so it cannot survive.
+        r"(?P<tag>foo)-(?P=tag)",
+        # Numbered: the dangerous one — it keeps COMPILING after degrouping and
+        # joining, while both renumber the groups around it, so it silently
+        # points at a different group and the union under-matches.
+        r"(?P<tag>foo)-\1",
+        r"(foo)-\1",
+    ],
+)
+def test_degroup_rejects_backreferences(pattern):
+    """_degroup fails loud rather than silently mis-joining a pattern whose
+    backreference the rewrite (or the caller's `|` join) would repoint."""
+    with pytest.raises(RuntimeError, match="backreference"):
+        E._degroup(pattern)
 
 
 def test_full_prefilter_joins_denylists_that_reuse_a_group_name():
-    """Two different plugins' denylists (Cloudant's, IBM Cloud IAM's, IBM COS
-    HMAC's, SoftLayer's) each define a capture group named ``secret``.
-    Joining their raw pattern text with `|` would raise `re.error:
-    redefinition of group name` — building the full prefilter must not, since
-    it degroups each pattern before joining."""
+    """Several plugins' denylists (Cloudant's, IBM Cloud IAM's, IBM COS HMAC's,
+    SoftLayer's) each define a capture group named ``secret``, so joining their
+    RAW pattern text with `|` raises `re.error: redefinition of group name`.
+    Pin that as the reason `_degroup` exists: assert the raw join really does
+    raise, then that the real build does not."""
     with E.configure_plugins():
+        raw = [pat.pattern for plugin in get_plugins() for pat in plugin.denylist]
+        with pytest.raises(re.error, match="redefinition of group name"):
+            re.compile("|".join(f"(?:{p})" for p in raw))
         E._full_prefilter()
 
 
