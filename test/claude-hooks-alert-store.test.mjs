@@ -14,11 +14,11 @@ import { describe, it, beforeEach, after } from "node:test";
 import assert from "node:assert/strict";
 import {
   existsSync,
+  lutimesSync,
   mkdtempSync,
   readdirSync,
   rmSync,
   symlinkSync,
-  utimesSync,
   writeFileSync,
 } from "node:fs";
 import { join } from "node:path";
@@ -34,7 +34,11 @@ const {
   alertAcknowledged,
   alertDir,
   appendAlert,
+  instructionsLoadedFile,
+  instructionsLoadedNoticeFile,
+  instructionsLoadedSeen,
   invisibleCharAlert,
+  recordInstructionsLoaded,
   sweepStaleSessions,
 } = await import("../claude-hooks/lib/invisible-alert.mjs");
 
@@ -44,6 +48,8 @@ function clear() {
   for (const id of [...SESSIONS, undefined]) {
     rmSync(alertDir(id), { recursive: true, force: true });
     rmSync(alertAckFile(id), { force: true });
+    rmSync(instructionsLoadedFile(id), { force: true });
+    rmSync(instructionsLoadedNoticeFile(id), { force: true });
   }
 }
 
@@ -101,12 +107,19 @@ describe("the shared no-session fallback has a lifetime", () => {
   // host that exports no session id at all the ack lands there too and
   // suppresses the ask permanently. Both are the inheritance that keying by
   // session exists to make unconstructible.
-  const HOUR_MS = 60 * 60 * 1000;
+  const MINUTE_MS = 60 * 1000;
+  const HOUR_MS = 60 * MINUTE_MS;
+  const DAY_MS = 24 * HOUR_MS;
+
+  /** Backdate an artifact by `ms`, following no symlink. */
+  function ageBy(path, ms) {
+    const past = (Date.now() - ms) / 1000;
+    lutimesSync(path, past, past);
+  }
 
   /** Backdate an artifact past any plausible fallback lifetime. */
   function age(path) {
-    const past = (Date.now() - HOUR_MS) / 1000;
-    utimesSync(path, past, past);
+    ageBy(path, HOUR_MS);
   }
 
   /** The one file appendAlert just wrote under the shared prefix. */
@@ -124,6 +137,15 @@ describe("the shared no-session fallback has a lifetime", () => {
       invisibleCharAlert(SESSIONS[0]),
       /a fault with no session id/u,
     );
+  });
+
+  it("still surfaces a fallback finding just inside the lifetime", () => {
+    // Pins the lifetime's LOWER bound: a launch-time fault has to reach the
+    // session's first tool call, which can be many minutes later. A TTL mistyped
+    // in seconds passes every other case here and fails this one.
+    appendAlert("a fault 29 minutes ago");
+    ageBy(soleFallbackEntry(), 29 * MINUTE_MS);
+    assert.match(invisibleCharAlert(SESSIONS[0]), /a fault 29 minutes ago/u);
   });
 
   it("does not surface an expired fallback finding to a later session", () => {
@@ -182,6 +204,53 @@ describe("the shared no-session fallback has a lifetime", () => {
     sweepStaleSessions(SESSIONS[0]);
     assert.equal(existsSync(entry), true);
     assert.equal(existsSync(alertAckFile()), true);
+  });
+
+  it("leaves an expired entry it does not own", () => {
+    // The store's path is predictable, so a co-tenant can plant an entry in it.
+    // The sweep unlinks by path, so without the ownership check it would delete
+    // whatever a planted symlink names — a file of the victim's this uid owns.
+    appendAlert("a real finding");
+    const decoy = mkdtempSync(join(tmpdir(), "sanitizer-alert-decoy-"));
+    const target = join(decoy, "unrelated");
+    writeFileSync(target, "the victim's own file");
+    const planted = join(alertDir(), "planted");
+    try {
+      symlinkSync(target, planted);
+      ageBy(planted, HOUR_MS);
+      sweepStaleSessions(SESSIONS[0]);
+      assert.equal(existsSync(target), true, "the sweep followed a symlink");
+      assert.equal(
+        existsSync(planted),
+        true,
+        "the sweep removed a foreign entry",
+      );
+    } finally {
+      rmSync(decoy, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps an InstructionsLoaded marker the fallback lifetime has passed", () => {
+    // The lifetime governs findings and the ack only. This marker answers "did a
+    // scan run at all", so expiring it mid-session would render the gap notice
+    // on a session that WAS scanned.
+    // Swept from the session-less host itself, which is the only configuration
+    // where these markers are at risk: with a real session id the loop over the
+    // other prefixes reaps them at the stale-session age instead.
+    recordInstructionsLoaded();
+    age(instructionsLoadedFile());
+    sweepStaleSessions();
+    assert.equal(instructionsLoadedSeen(), true);
+  });
+
+  it("sweeps an InstructionsLoaded marker at the stale-session age", () => {
+    // Non-vacuity for the case above, and the leak it closes: that loop skips
+    // the CURRENT session's prefix, which on a session-less host is this one, so
+    // without this nothing ever removes these two markers there.
+    recordInstructionsLoaded();
+    ageBy(instructionsLoadedFile(), 8 * DAY_MS);
+    sweepStaleSessions();
+    assert.equal(instructionsLoadedSeen(), false);
   });
 });
 

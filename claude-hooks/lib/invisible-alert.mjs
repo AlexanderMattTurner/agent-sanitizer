@@ -141,23 +141,48 @@ const MARKER_TTL_MS = 7 * 24 * 60 * 60 * 1000;
  *
  * Wide enough to cover a launch-time fault reaching the session's first tool
  * call, narrow enough that the next session does not re-arm the gate for a fault
- * it cannot act on. Past it, a fallback finding is neither surfaced nor
- * remembered, which is what makes REMEDY's "start a new session and the gate
+ * it cannot act on. Past it an INHERITED fallback finding is neither surfaced
+ * nor remembered, which is what makes REMEDY's "start a new session and the gate
  * clears" true for these findings too.
+ *
+ * A host that exports no session id keeps its findings, because there the
+ * fallback is the session's OWN store: expiring it would stop telling a
+ * still-running session that its instruction files are unvetted, a silent loss
+ * of the signal this module exists to carry. The ack expires there regardless,
+ * so a suppression that outlives its session fails toward asking again — which
+ * is recoverable, where a silence is not.
  */
 const FALLBACK_TTL_MS = 30 * 60 * 1000;
 
 /**
- * Whether `path` was written inside {@link FALLBACK_TTL_MS}. Every caller has
- * just cleared the path through markerIsTrusted, so a throw here means the entry
- * vanished under us — the same $TMPDIR race the reads below already propagate.
+ * Whether `path` was written inside the last `ttlMs`.
+ *
+ * A path a parallel session removed between the caller's markerIsTrusted and
+ * this `lstat` reads as expired, which is what every caller wants of a file that
+ * is no longer there: the sweep's unlink becomes a no-op, the gate's reader skips
+ * it, and an ack that vanished stops suppressing the ask. Propagating instead
+ * would abort recordInstructionsLoaded on a benign $TMPDIR race and render the
+ * false "instruction file was NOT scanned" fault.
+ *
  * `lstat`, so a planted symlink is judged on itself.
+ * @param {string} path
+ * @param {number} ttlMs
+ * @returns {boolean}
+ */
+function withinTtl(path, ttlMs) {
+  try {
+    return lstatSync(path).mtimeMs >= Date.now() - ttlMs;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Whether `path` was written inside {@link FALLBACK_TTL_MS}.
  * @param {string} path
  * @returns {boolean}
  */
-function withinFallbackTtl(path) {
-  return lstatSync(path).mtimeMs >= Date.now() - FALLBACK_TTL_MS;
-}
+const withinFallbackTtl = (path) => withinTtl(path, FALLBACK_TTL_MS);
 
 /**
  * Whether `path` is a real directory this uid owns — the directory counterpart
@@ -216,33 +241,45 @@ export function sweepStaleSessions(sessionId) {
       if (code !== "ENOENT" && code !== "EPERM" && code !== "EACCES") throw err;
     }
   }
-  sweepStaleFallback();
+  sweepStaleFallback(sessionId);
 }
 
 /**
- * Remove the shared-prefix findings and ack once they are past
- * {@link FALLBACK_TTL_MS}, so an artifact the reader already ignores stops
- * occupying $TMPDIR too.
+ * Remove the shared-prefix artifacts the reader has stopped honouring, so they
+ * stop occupying $TMPDIR too. The loop above cannot: it skips the current
+ * session's prefix, which on a host with no session id IS this one.
  *
- * Runs even when the fallback IS this session's prefix (a host with no session
- * id), which is the only place the loop above cannot reach it — it skips the
- * current session by design. Confined to the two artifacts the TTL governs: the
- * InstructionsLoaded markers under the same prefix answer "did a scan run at
- * all", and expiring one mid-session would render the gap notice on a session
- * that WAS scanned.
+ * Mirrors what {@link invisibleCharAlert} and {@link alertAcknowledged} read.
+ * The ack always expires; the findings only when this session has its own store
+ * and so merely INHERITED these.
+ *
+ * The two InstructionsLoaded markers under the same prefix answer "did a scan
+ * run at all", so FALLBACK_TTL_MS must never reach them: expiring one mid-session
+ * would render the gap notice on a session that WAS scanned. They still go, at
+ * MARKER_TTL_MS — the same age the loop above ages a real session's prefix out
+ * at, and far past any session's life — because the loop skips this prefix and
+ * would otherwise leave a session-less host's markers in $TMPDIR forever, with
+ * the gap notice suppressed on every later session.
+ * @param {string} [sessionId]
  * @returns {void}
  */
-function sweepStaleFallback() {
+function sweepStaleFallback(sessionId) {
   const dir = alertDir();
-  const entries = dirIsTrusted(dir)
+  const inherited = alertDir(sessionId) !== dir && dirIsTrusted(dir);
+  const entries = inherited
     ? readdirSync(dir).map((name) => join(dir, name))
     : [];
+  // markerIsTrusted absorbs an absent or foreign entry, and having confirmed this
+  // uid owns the file there is nothing left that can refuse the unlink; `force`
+  // covers only a parallel session removing it first.
+  /** @param {string} path */
+  const drop = (path) => {
+    if (markerIsTrusted(path)) rmSync(path, { force: true });
+  };
   for (const path of [alertAckFile(), ...entries])
-    // markerIsTrusted absorbs an absent or foreign entry, and having confirmed
-    // this uid owns the file there is nothing left that can refuse the unlink;
-    // `force` covers only a parallel session removing it first.
-    if (markerIsTrusted(path) && !withinFallbackTtl(path))
-      rmSync(path, { force: true });
+    if (!withinFallbackTtl(path)) drop(path);
+  for (const path of [instructionsLoadedFile(), instructionsLoadedNoticeFile()])
+    if (!withinTtl(path, MARKER_TTL_MS)) drop(path);
 }
 
 /**
@@ -336,9 +373,11 @@ export function recordInstructionsLoadedNotice(sessionId) {
  * @returns {string | null}
  */
 export function invisibleCharAlert(sessionId) {
-  const fallback = alertDir();
-  const dirs = [alertDir(sessionId)];
-  if (dirs[0] !== fallback) dirs.push(fallback);
+  const own = alertDir(sessionId);
+  // The second entry, when there is one, is a store belonging to no session,
+  // so only age says whether it is still this session's business. Where the
+  // fallback IS `own` there is nothing inherited and nothing to expire.
+  const dirs = own === alertDir() ? [own] : [own, alertDir()];
   const parts = [];
   for (const dir of dirs) {
     if (!dirIsTrusted(dir)) continue;
@@ -347,9 +386,7 @@ export function invisibleCharAlert(sessionId) {
     for (const name of readdirSync(dir).sort()) {
       const path = join(dir, name);
       if (!markerIsTrusted(path)) continue;
-      // The fallback belongs to no session, so only its age says whether it is
-      // still this session's business (see FALLBACK_TTL_MS).
-      if (dir === fallback && !withinFallbackTtl(path)) continue;
+      if (dir !== own && !withinFallbackTtl(path)) continue;
       const text = readFileSync(path, "utf-8").trim();
       if (text !== "") parts.push(text);
     }
