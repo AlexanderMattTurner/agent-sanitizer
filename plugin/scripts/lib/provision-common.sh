@@ -20,6 +20,12 @@ plugin_root="$(cd -- "$_provision_lib_dir/../.." && pwd)"
 
 _provision_step=""
 _provision_started_ms=""
+_provision_lock_dir=""
+
+# How long the lock-directory fallback waits for another provisioner before it
+# declares the lock abandoned. Generous: it must outlast a real cold install
+# (a venv build, a ~100 MB download) so a slow-but-live holder is never broken.
+_provision_lock_timeout_s=900
 
 # Start measuring a one-time provisioning step named $1.
 #
@@ -61,4 +67,52 @@ provision_require_executable() {
   [[ -x "$path" ]] && return 0
   echo "${2:?provision_require_executable needs a message}" >&2
   exit 1
+}
+
+# Serialize the caller against another session's provisioner, using a lock at
+# $1, until this process exits.
+#
+# Both provisioners are check-then-act — "is the artifact already the pinned
+# one? no, install it" — and two sessions starting together interleave those
+# halves: one recreates the venv (or removes and refetches the binary) under a
+# path the other's daemon is already running from. The lock makes the pair
+# atomic. Only the provisioners take it; nothing on a hook's exec path waits on
+# it, so a session start blocked here never blocks a tool call.
+provision_hold_lock() {
+  local lock_path="${1:?provision_hold_lock needs a lock path}"
+  mkdir -p -- "$(dirname -- "$lock_path")"
+  if command -v flock >/dev/null 2>&1; then
+    # Held for the life of the process: the kernel releases it when this fd
+    # closes, so a killed provisioner cannot leave the lock stuck.
+    exec 9>"$lock_path"
+    flock 9
+    return 0
+  fi
+  # flock(1) is util-linux and absent on a stock macOS, where `mkdir` is the
+  # portable atomic primitive. It has no kernel-backed release, so a holder
+  # killed mid-install leaves the directory behind and every later session
+  # would block on it forever — hence the timeout below, which degrades to the
+  # unserialized behaviour this lock replaces rather than to a wedged install.
+  local dir="$lock_path.d"
+  local waited=0
+  until mkdir -- "$dir" 2>/dev/null; do
+    if [[ "$waited" -ge "$_provision_lock_timeout_s" ]]; then
+      echo "agent-sanitizer: the provisioning lock $dir has been held for over ${_provision_lock_timeout_s}s; treating it as abandoned and provisioning anyway" >&2
+      rm -rf -- "$dir"
+      mkdir -p -- "$dir"
+      break
+    fi
+    sleep 1
+    waited=$((waited + 1))
+  done
+  _provision_lock_dir="$dir"
+}
+
+# Release a lock-directory taken by provision_hold_lock. A no-op under flock,
+# whose release is the kernel's. Armed from the caller's EXIT trap so it covers
+# the failure arms too.
+provision_release_lock() {
+  [[ -n "$_provision_lock_dir" ]] || return 0
+  rm -rf -- "$_provision_lock_dir"
+  _provision_lock_dir=""
 }

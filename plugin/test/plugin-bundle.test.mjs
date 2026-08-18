@@ -2034,6 +2034,54 @@ test("an install that produces no daemon fails loud, not silently", (t) => {
   assert.equal(res.stderr.includes("provisioned into"), false, res.stderr);
 });
 
+test("two provisioners cannot install into the same venv at once", (t) => {
+  // The check ("is the venv already the pinned build?") and the install
+  // (`uv venv`, which RECREATES the directory) are one critical section: two
+  // sessions starting together otherwise both read "not provisioned" and the
+  // second one rebuilds the venv under a daemon the first already launched
+  // from it. The lock makes the pair atomic, so the two installs are ordered
+  // rather than interleaved.
+  const plugin = stagePlugin(t);
+  const data = join(scratch(t), "data");
+  const bin = stubBin(t, ["python3", "pip"]);
+  const trace = join(scratch(t), "uv-trace");
+  // A `uv` slow enough that an unserialized pair MUST interleave: each run
+  // brackets its own work in the trace, so an interleaving is visible as
+  // "enter enter" rather than "enter leave enter leave".
+  writeFileSync(
+    join(bin, "uv"),
+    "#!/bin/sh\n" +
+      `echo enter >> ${trace}\n` +
+      "sleep 1\n" +
+      `echo leave >> ${trace}\n` +
+      // Leave a runnable daemon behind so the post-install check passes. The
+      // venv path is the LAST argument (`uv venv --quiet <path>`).
+      'if [ "$1" = venv ]; then for d in "$@"; do :; done; mkdir -p "$d/bin"; printf "#!/bin/sh\\n" > "$d/bin/agent-secret-redactor-daemon"; chmod 755 "$d/bin/agent-secret-redactor-daemon"; fi\n' +
+      "exit 0\n",
+    { mode: 0o755 },
+  );
+  const env = { PATH: bin, AGENT_SANITIZER_SECRETS_ENABLED: "1" };
+  const script = join(plugin, "scripts", "provision-redactor.sh");
+  const both = spawnSync(
+    "bash",
+    ["-c", `bash ${script} ${data} & bash ${script} ${data}; wait`],
+    { encoding: "utf8", env },
+  );
+  assert.equal(both.status, 0, both.stderr);
+  const steps = readFileSync(trace, "utf8").trim().split("\n");
+  // Non-vacuity: an install actually ran, so the ordering below is a real
+  // observation and not an empty trace.
+  assert.ok(steps.length >= 2, `no install ran: ${JSON.stringify(steps)}`);
+  let held = 0;
+  for (const step of steps) {
+    held += step === "enter" ? 1 : -1;
+    assert.ok(
+      held <= 1,
+      `two provisioners were inside the install at once: ${JSON.stringify(steps)}`,
+    );
+  }
+});
+
 test("a missing shared provisioning lib refuses to provision", (t) => {
   const plugin = stagePlugin(t);
   rmSync(join(plugin, "scripts", "lib", "provision-common.sh"));

@@ -28,7 +28,13 @@ fi
 # The trap covers every exit, including the idempotent early return (which is
 # fast, so it prints nothing) and the failure arms.
 provision_begin "secret-redaction engine install"
-trap provision_report_elapsed EXIT
+trap 'provision_release_lock; provision_report_elapsed' EXIT
+
+# Held across the up-to-date CHECK and the install below, not just the install:
+# without it a second session that reads the check before this one finishes goes
+# on to `uv venv` the same path, recreating the venv under a daemon already
+# running out of it.
+provision_hold_lock "$data_dir/.redactor-provision.lock"
 
 req="$plugin_root/requirements.txt"
 # The engine itself ships as a wheel beside the zipapp rather than being resolved
