@@ -452,8 +452,8 @@ def _open_every_probe(monkeypatch):
     does the unnarrowed work it did before they existed.
 
     The catch-all's one pattern has no required literal, so it lands in ``weak``
-    and therefore in ``unwindowable`` — which is what makes the cross-line sweep
-    scan the whole text again instead of the windows the real probe hands it.
+    and therefore has no window to centre — so its plan narrows nothing and the
+    cross-line sweep covers the whole text again, as it did before the probes.
     ``_FIELD_NAME_ANCHOR`` is opened separately, to the empty pattern: it matches
     at every position, so the field-value pass tries its regex everywhere, which
     is exactly what ``re.sub`` does."""
@@ -610,8 +610,8 @@ def test_windows_contain_every_match_of_a_windowable_pattern(pattern, text):
     every match of the pattern whose literal centred it, span and all."""
     compiled = re.compile(pattern)
     probe = P.LiteralProbe([compiled])
-    assert not probe.unwindowable, "pattern should be windowable"
-    windows = probe.windows(text)
+    assert probe.plan(text).full_scans == (), "pattern should be windowable"
+    windows = probe.plan(text).windows
     assert windows is not None
     matches = list(compiled.finditer(text))
     assert matches, "no match to contain — the case would pass vacuously"
@@ -627,7 +627,7 @@ def test_windows_finditer_over_them_finds_what_a_full_sweep_finds():
     compiled = re.compile(r"(?<![A-Za-z0-9])kia[0-9]{4}(?![A-Za-z0-9])")
     probe = P.LiteralProbe([compiled])
     text = "kia1111 xkia2222 " + "z" * 600 + " kia3333x kia4444"
-    windows = probe.windows(text)
+    windows = probe.plan(text).windows
     assert windows is not None
     windowed = [
         m.group(0)
@@ -644,10 +644,10 @@ def test_a_pattern_with_an_unbounded_extent_is_never_windowed():
     unbounded = re.compile(r"xox[a-z]-[0-9]+-[a-z0-9]+")
     probe = P.LiteralProbe([unbounded])
     assert P.inspect_width(unbounded.pattern, unbounded.flags) is None
-    assert probe.unwindowable == (unbounded,)
     # None, not an empty tuple: an empty tuple means "matches nowhere", and this
-    # probe has no way to tell.
-    assert probe.windows("xoxb-1-abc") is None
+    # probe has no way to tell — and the pattern is handed back for a full scan.
+    plan = probe.plan("xoxb-1-abc")
+    assert plan == P.SweepPlan(None, ())
 
 
 def test_a_pattern_with_no_indexed_literal_is_never_windowed():
@@ -655,8 +655,7 @@ def test_a_pattern_with_no_indexed_literal_is_never_windowed():
     weak = re.compile(r"[MNO][a-zA-Z]{4}\.[a-z]{3}")
     probe = P.LiteralProbe([weak])
     assert probe.by_literal == {}
-    assert probe.unwindowable == (weak,)
-    assert probe.windows("Mabcd.xyz") is None
+    assert probe.plan("Mabcd.xyz") == P.SweepPlan(None, ())
 
 
 def test_a_literal_whose_windows_span_the_whole_text_declines_to_narrow():
@@ -665,7 +664,7 @@ def test_a_literal_whose_windows_span_the_whole_text_declines_to_narrow():
     probe says so with None rather than handing back the whole text as a
     'window'."""
     probe = P.LiteralProbe([re.compile(r"ab[0-9]{200}")])
-    assert probe.windows("ab" + "0" * 8) is None
+    assert probe.plan("ab" + "0" * 8) == P.SweepPlan(None, ())
 
 
 def test_windows_finds_overlapping_literal_occurrences():
@@ -675,7 +674,7 @@ def test_windows_finds_overlapping_literal_occurrences():
     compiled = re.compile(r"aa[0-9]")
     probe = P.LiteralProbe([compiled])
     text = "x" * 200 + "aaa1" + "y" * 200
-    windows = probe.windows(text)
+    windows = probe.plan(text).windows
     assert windows is not None
     matches = list(compiled.finditer(text))
     assert [m.group(0) for m in matches] == ["aa1"]
@@ -691,7 +690,7 @@ def test_the_window_probe_yields_to_a_compute_deadline():
 
     probe = P.LiteralProbe([re.compile(r"ghp_[a-z]{4}")])
     with pytest.raises(RuntimeError, match="budget spent"):
-        probe.windows("ghp_abcd", check)
+        probe.plan("ghp_abcd", check)
     assert stages == ["candidate-window literal probe"]
 
 
@@ -795,7 +794,7 @@ def test_no_window_is_reported_when_a_windowable_pattern_matches_nowhere():
     """The other side of the None contract: an empty tuple is a real verdict —
     these patterns cannot match anywhere — so the caller may skip the scan."""
     probe = P.LiteralProbe([re.compile(r"ghp_[a-z]{4}")])
-    assert probe.windows("nothing credential-shaped here") == ()
+    assert probe.plan("nothing credential-shaped here") == P.SweepPlan((), ())
 
 
 def test_the_field_value_sweep_terminates_under_a_zero_width_anchor(monkeypatch):

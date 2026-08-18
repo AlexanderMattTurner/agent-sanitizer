@@ -163,20 +163,34 @@ def strip_invisible_with_map(
     The overwhelmingly common case is that ``text`` contains none of the
     charset's code points at all: then the offsets are the identity map, which a
     bare `range` represents with no allocation (the only uses downstream are
-    `offsets[i]` and `offsets[end - 1]`, both of which `range` supports). That
-    case is decided by the range-collapsed character class alone — a C scan that
-    stops at the first hit and never copies the text — because `str.translate`
-    pays a dict lookup for every character of a megabyte to reach the same
-    verdict. Both branches stay at C speed, so neither the size of the payload
-    nor the presence of one zero-width character buys a Python-level
-    per-character loop over megabytes."""
+    `offsets[i]` and `offsets[end - 1]`, both of which `range` supports). An
+    ALL-ASCII text reaches that answer for free, since every charset member is
+    above ASCII (:func:`_is_above_ascii` derives that rather than assuming it) and
+    CPython carries the ascii flag on the string object; anything else is decided
+    by the range-collapsed character class, a C scan that stops at the first hit
+    and never copies the text. Both branches stay at C speed, so neither the size
+    of the payload nor the presence of one zero-width character buys a
+    Python-level per-character loop over megabytes."""
     if charset is None:
         charset = default_charset()
+    if _is_above_ascii(charset) and text.isascii():
+        return identity_map(text)
     pattern = _invisible_char_re(charset)
     if not pattern.search(text):
         return identity_map(text)
     deleted = [m.start() for m in pattern.finditer(text)]
     return _without(text, deleted), DeletionOffsets(deleted, len(text) - len(deleted))
+
+
+@functools.cache
+def _is_above_ascii(charset: frozenset[int]) -> bool:
+    """Whether every code point in ``charset`` is outside ASCII, which is what
+    makes ``str.isascii`` a sound proof that a text holds none of them.
+
+    Derived from the charset rather than assumed: a caller may pin a bespoke one,
+    and a single ASCII member would turn that free shortcut into a strip that
+    silently deletes nothing."""
+    return min(charset, default=0x80) > 0x7F
 
 
 def _without(text: str, deleted: Sequence[int]) -> str:

@@ -23,8 +23,10 @@ ends: the per-pattern soundness property, and the stronger end-to-end claim that
 redaction output is byte-identical with the probes in play and without them.
 """
 
+import functools
 import re
 from collections.abc import Callable, Iterable, Sequence
+from typing import NamedTuple
 
 # `re._parser`/`re._constants` are the 3.11+ spelling of the stdlib regex parser;
 # 3.10 (this package's floor) exposes the same module as `sre_parse`. The AST is
@@ -271,16 +273,25 @@ def _inspect_width(seq) -> int | None:
     return total
 
 
+@functools.cache
 def inspect_width(pattern: str, flags: int) -> int | None:
     """An upper bound on how far right of a match's start ``pattern`` can read,
-    or None when it is unbounded. See :func:`_inspect_width`."""
+    or None when it is unbounded. See :func:`_inspect_width`.
+
+    Cached, like :func:`required_literals`: parsing a pattern is the single
+    largest fixed cost of building a probe, and the engine rebuilds all four on
+    every :func:`~agent_sanitizer.secrets.engine.redact` call (the caches are
+    keyed on the live plugin set, so they are cleared with it). The answer depends
+    only on the two arguments, which are the same handful of values every time."""
     return _inspect_width(_parser.parse(pattern, flags))
 
 
+@functools.cache
 def required_literals(pattern: str, flags: int) -> frozenset[str] | None:
     """Strings such that any match of ``pattern`` contains at least one of them,
     or None when none could be derived (the caller must then scan everything).
-    """
+
+    Cached for the reason given on :func:`inspect_width`."""
     return _required(_parser.parse(pattern, flags))
 
 
@@ -331,6 +342,20 @@ def _coalesce(spans: Iterable[tuple[int, int]]) -> tuple[tuple[int, int], ...]:
     return tuple((start, end) for start, end in merged)
 
 
+class SweepPlan(NamedTuple):
+    """Where a caller must run a probe's patterns over one text.
+
+    ``windows`` are ``(pos, endpos)`` ranges holding every match of the probe's
+    windowable patterns, or None when the probe could narrow nothing. ``full_scans``
+    are the patterns no window can bound that this text could still match; they
+    need the whole text, and are empty when ``windows`` is None because a caller
+    scanning everything already covers them.
+    """
+
+    windows: tuple[tuple[int, int], ...] | None
+    full_scans: tuple[re.Pattern[str], ...]
+
+
 class LiteralProbe:
     """The necessary condition for a set of patterns, evaluated over whole text.
 
@@ -350,16 +375,19 @@ class LiteralProbe:
         by_literal: dict[str, list[re.Pattern[str]]] = {}
         weak: list[re.Pattern[str]] = []
         widths: dict[str, int] = {}
-        unwindowable: list[re.Pattern[str]] = []
+        # Each unwindowable pattern with the literals that gate its own full scan.
+        # EMPTY means ungated — a pattern with no usable literal has nothing cheap
+        # to rule it out, so it is scanned whenever anything is.
+        unwindowable: list[tuple[re.Pattern[str], tuple[str, ...]]] = []
         for pattern in patterns:
             found = required_literals(pattern.pattern, pattern.flags)
             if found is None or min(len(lit) for lit in found) < LITERAL_MIN_LEN:
                 weak.append(pattern)
-                unwindowable.append(pattern)
+                unwindowable.append((pattern, ()))
                 continue
             width = inspect_width(pattern.pattern, pattern.flags)
             if width is None:
-                unwindowable.append(pattern)
+                unwindowable.append((pattern, tuple(fold(lit) or lit for lit in found)))
             for literal in found:
                 # Folded and searched against a folded haystack, so one search
                 # serves both a case-sensitive and a case-insensitive pattern.
@@ -378,7 +406,7 @@ class LiteralProbe:
         # window on, and one whose match extent has no upper bound. A caller that
         # windows must scan the whole text for THESE, or a match of one that
         # happens to lie outside every window becomes a missed secret.
-        self.unwindowable = tuple(unwindowable)
+        self._unwindowable = tuple(unwindowable)
         self.widths = widths
         if not self.by_literal and not self.weak:
             raise RuntimeError(
@@ -396,18 +424,18 @@ class LiteralProbe:
             pattern.search(text) for pattern in self.weak
         )
 
-    def windows(
+    def plan(
         self, text: str, check: Callable[[str], None] = _no_deadline_check
-    ) -> tuple[tuple[int, int], ...] | None:
-        """``(pos, endpos)`` ranges of ``text`` that together contain every match
-        of every WINDOWABLE probed pattern, or None when they cannot be narrowed.
+    ) -> SweepPlan:
+        """Where in ``text`` a caller must run the probed patterns.
 
-        A windowable pattern is one with both an indexed literal and a bounded
-        :func:`inspect_width`; the rest are :attr:`unwindowable` and the caller
-        must scan the whole text for them, or a match outside every window is a
-        missed secret.
+        A pattern is WINDOWABLE when it has both an indexed literal and a bounded
+        :func:`inspect_width`; ``windows`` covers every match of those. The rest
+        need the whole text, and ``full_scans`` names the ones a cheap literal
+        check could not rule out — omitting that check would cost a full sweep per
+        such pattern on every payload, including the ones that match nothing.
 
-        Each occurrence of literal ``l`` at ``[start, end)`` yields
+        Each occurrence of literal ``l`` at ``[start, end)`` yields the window
         ``(end - w, start + w)`` for that literal's widest pattern ``w``. That
         contains every match holding the occurrence: the match spans at most ``w``
         and covers ``[start, end)``, so it begins no earlier than ``end - w``, and
@@ -416,21 +444,23 @@ class LiteralProbe:
         NOT for slicing: ``pos`` leaves the text to the left readable, so a
         lookbehind still sees real bytes rather than a fabricated start-of-string.
 
-        Overlapping occurrences are found (the scan advances one character, not
-        one literal width) because a window is a range, not a claim about which
-        occurrence produced a match. A literal whose own windows would span the
-        whole text is not narrowing anything, and since the caller's patterns are
-        shared across literals there is nothing left to narrow either — that
-        returns None, as does a probe with no windowable pattern at all. An empty
-        TUPLE therefore always means "these patterns match nowhere", never "I had
-        no way to tell", so a caller cannot read one as the other and skip a scan
-        the probe never actually ruled out.
+        Overlapping occurrences are found (the scan advances one character, not one
+        literal width) because a window is a range, not a claim about which
+        occurrence produced a match.
+
+        ``windows`` is None when nothing could be narrowed — a probe with no
+        windowable pattern, a fold this text refuses, or a literal whose own
+        windows would span the whole text (and since the caller's patterns are
+        shared across literals, there is then nothing left to narrow either). An
+        empty TUPLE therefore always means "the windowable patterns match
+        nowhere", never "I had no way to tell", so a caller cannot read one as the
+        other and skip a scan the probe never ruled out. ``full_scans`` is empty
+        alongside a None ``windows``: a caller scanning everything already covers
+        them.
         """
-        if not self.widths:
-            return None
         folded = fold(text)
-        if folded is None:
-            return None
+        if folded is None or not self.widths:
+            return SweepPlan(None, ())
         limit = len(text)
         spans: list[tuple[int, int]] = []
         for literal, width in self.widths.items():
@@ -444,10 +474,17 @@ class LiteralProbe:
                 at = folded.find(literal, at + 1)
             merged = _coalesce(found)
             if sum(end - start for start, end in merged) >= limit:
-                return None
+                return SweepPlan(None, ())
             spans.extend(merged)
         check("candidate-window merge")
-        return _coalesce(spans)
+        return SweepPlan(
+            _coalesce(spans),
+            tuple(
+                pattern
+                for pattern, literals in self._unwindowable
+                if not literals or any(lit in folded for lit in literals)
+            ),
+        )
 
     def candidates(
         self, text: str, check: Callable[[str], None] = _no_deadline_check

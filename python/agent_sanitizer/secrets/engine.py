@@ -1262,13 +1262,16 @@ def _cross_line_candidate_spans(
     # pattern no window can bound (no indexed literal, or an unbounded match
     # extent) still sweeps the whole text, individually; without that a match of
     # one landing outside every window would be a missed secret.
-    probe = _eligible_probe()
-    windows = probe.windows(stripped, deadline.check)
+    plan = _eligible_probe().plan(stripped, deadline.check)
     sweeps: list[tuple[re.Pattern[str], int, int]] = (
         [(p, 0, len(stripped)) for p in _eligible_prefilter()]
-        if windows is None
-        else [(p, start, end) for p in _eligible_prefilter() for start, end in windows]
-        + [(p, 0, len(stripped)) for p in probe.unwindowable]
+        if plan.windows is None
+        else [
+            (p, start, end)
+            for p in _eligible_prefilter()
+            for start, end in plan.windows
+        ]
+        + [(p, 0, len(stripped)) for p in plan.full_scans]
     )
     for hit in (
         hit for p, start, end in sweeps for hit in p.finditer(stripped, start, end)
