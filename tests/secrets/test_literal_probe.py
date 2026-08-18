@@ -10,8 +10,6 @@ play and with every one of them opened.
 """
 
 import re
-import subprocess
-from pathlib import Path
 
 import pytest
 from detect_secrets.settings import get_plugins
@@ -19,15 +17,7 @@ from detect_secrets.settings import get_plugins
 import agent_sanitizer.secrets.engine as E
 from agent_sanitizer.secrets import prefilter as P
 from redactor_helpers import SAMPLES, cfg, run_plain
-
-REPO_ROOT = Path(
-    subprocess.run(
-        ["git", "rev-parse", "--show-toplevel"],
-        capture_output=True,
-        text=True,
-        check=True,
-    ).stdout.strip()
-)
+from tests._helpers import REPO_ROOT
 
 # Every active detector has a sample here (test_secrets_detectors.py's
 # test_fixture_covers_every_active_detector derives the requirement from the live
