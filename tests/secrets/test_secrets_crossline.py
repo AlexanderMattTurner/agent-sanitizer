@@ -17,6 +17,7 @@ from agent_sanitizer.secrets import (
     detected_secret_values,
     redact,
 )
+from agent_sanitizer.secrets.prefilter import LiteralProbe
 from redactor_helpers import cfg, run_plain
 
 AWS_KEY = "AKIA" + "ZYXWVUT123456789"
@@ -125,18 +126,20 @@ def _fake_scan(monkeypatch, *pairs):
     monkeypatch.setattr(
         E, "scan_line", lambda line: [f for f in fakes if f.secret_value in line]
     )
-    # _cross_line_candidate_spans and _redact_line both prefilter with the real
-    # detectors' own denylist regexes (_eligible_prefilter / _full_prefilter)
-    # before ever calling scan_line. These tests invent synthetic values
-    # ("ABCD", "WXYZ", …) that no real detector shape matches, so the patched
-    # scan_line above would never be reached without also patching both
-    # prefilters to a catch-all — these tests are exercising the
+    # _cross_line_candidate_spans and _redact_line both narrow with the real
+    # detectors' own denylist regexes (_eligible_prefilter / _full_prefilter,
+    # each behind its own whole-text LiteralProbe) before ever calling scan_line.
+    # These tests invent synthetic values ("ABCD", "WXYZ", …) that no real
+    # detector shape matches, so the patched scan_line above would never be
+    # reached without also opening every gate — these tests are exercising the
     # offset-translation/overlap/arbitration logic in isolation from any real
-    # detector shape, not the prefilters themselves (each has its own
-    # soundness test).
+    # detector shape, not the gates themselves (each has its own soundness test).
     catch_all = (re.compile(".", re.DOTALL),)
     monkeypatch.setattr(E, "_eligible_prefilter", lambda: catch_all)
     monkeypatch.setattr(E, "_full_prefilter", lambda: catch_all)
+    open_probe = LiteralProbe(catch_all)
+    monkeypatch.setattr(E, "_eligible_probe", lambda: open_probe)
+    monkeypatch.setattr(E, "_line_probe", lambda: open_probe)
 
 
 def _ph(secret_type: str) -> str:

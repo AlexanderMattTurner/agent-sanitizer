@@ -42,7 +42,13 @@ from .credential_names import (
     credential_field_name_patterns,
     credential_name_segments,
 )
-from .invisible import invisible_run_pattern, strip_invisible_with_map
+from .invisible import (
+    invisible_run_pattern,
+    newline_offsets,
+    strip_invisible,
+    strip_invisible_with_map,
+)
+from .prefilter import LiteralProbe, degroup, denylist_patterns
 
 # Aliased on import: engine-local `_PLACEHOLDER_RE` is the DOCUMENTATION
 # metavariable shape (`YOUR_API_KEY`), a different concept from the redaction
@@ -1012,6 +1018,15 @@ PEM_BLOCK_RE = re.compile(
 def _redact_pem_blocks(
     text: str, found: list[str], entries: list[tuple[str, str]] | None = None
 ) -> str:
+    """Collapse every PEM private-key block in ``text`` to one placeholder.
+
+    A payload with no ``-----BEGIN `` in it cannot hold a block, so the whole
+    `re.sub` — a pass over the entire request — is skipped on the probe's word
+    rather than run to find nothing.
+    """
+    if not _PEM_PROBE.may_match(text):
+        return text
+
     def _repl(m: re.Match[str]) -> str:
         found.append("Private Key")
         # An unterminated body stops at a line break, so the match can end with
@@ -1072,36 +1087,6 @@ def _cross_line_eligible_types() -> frozenset[str]:
 _PREFILTER_WINDOW_PAD = 64
 
 
-_NAMED_GROUP_RE = re.compile(r"\(\?P<[^>]+>")
-
-
-def _degroup(pattern: str) -> str:
-    """A denylist pattern's source text with named groups turned non-capturing,
-    so joining two plugins' patterns that happen to reuse the same group name
-    (e.g. Cloudant's and IBM Cloud's denylists both define ``(?P<secret>...)``)
-    into one union regex cannot raise ``re.error: redefinition of group name``.
-    Only the group's own capture is dropped — the prefilter never reads capture
-    groups, it only asks whether the union matched at all — so this changes
-    nothing the caller can observe.
-
-    A BACKREFERENCE of either spelling is refused. ``(?P=name)`` loses its
-    target's name to the rewrite; a NUMBERED ``\\1`` is the dangerous one,
-    because it keeps compiling while both this rewrite and the caller's ``|``
-    join renumber the groups around it — so it silently comes to point at a
-    different, often unset group and the union quietly under-matches. Under a
-    detection gate an under-match is a missed secret, so this fails loud
-    instead. No current denylist pattern has either (see
-    ``test_full_prefilter_is_sound``).
-    """
-    if "(?P=" in pattern or re.search(r"\\[1-9]", pattern):
-        raise RuntimeError(
-            f"denylist pattern {pattern!r} uses a named backreference or a "
-            "numbered one — _degroup cannot safely strip its group name, and "
-            "joining patterns into one union renumbers their groups"
-        )
-    return _NAMED_GROUP_RE.sub("(?:", pattern)
-
-
 def _denylist_prefilter(types: frozenset[str] | None) -> tuple[re.Pattern[str], ...]:
     """One regex per distinct flag set among the union of ``denylist`` patterns
     belonging to plugins whose ``secret_type`` is in ``types`` (every active
@@ -1126,24 +1111,8 @@ def _denylist_prefilter(types: frozenset[str] | None) -> tuple[re.Pattern[str], 
     prefilter, never a detection gate of its own.
     """
     by_flags: dict[int, list[str]] = {}
-    for plugin in get_plugins():
-        if types is not None and getattr(plugin, "secret_type", None) not in types:
-            continue
-        # A covered plugin that supplies no denylist contributes nothing to the
-        # union, and _redact_line skips scan_line outright on a prefilter miss —
-        # so silently tolerating one would drop every secret of its type with no
-        # runtime signal. This raise is what keeps a detect-secrets upgrade from
-        # turning a detector into a hole.
-        patterns = getattr(plugin, "denylist", ())
-        if not patterns:
-            raise RuntimeError(
-                f"active plugin {type(plugin).__name__} "
-                f"({getattr(plugin, 'secret_type', None)!r}) supplied no denylist "
-                "regex — the prefilter cannot cover it, so secrets of this type "
-                "would be skipped before scan_line ever ran"
-            )
-        for pat in patterns:
-            by_flags.setdefault(pat.flags, []).append(_degroup(pat.pattern))
+    for pat in denylist_patterns(get_plugins(), types):
+        by_flags.setdefault(pat.flags, []).append(degroup(pat.pattern))
     if not by_flags:
         raise RuntimeError(
             "no eligible detector supplied a denylist regex to prefilter "
@@ -1186,6 +1155,43 @@ def _full_prefilter() -> tuple[re.Pattern[str], ...]:
     return _denylist_prefilter(None)
 
 
+@functools.cache
+def _line_probe() -> LiteralProbe:
+    """The whole-text candidate-line probe — stage 1 of the per-line cascade.
+
+    :func:`_full_prefilter` is a per-LINE regex union, so a payload's benign
+    lines each pay one regex search per flag set. This answers the same
+    necessary condition for the whole text at once, with ``str.find`` over
+    literals lifted from the very same denylists, so a line it rules out costs
+    neither that search nor ``scan_line``'s dispatch. Cached and cleared
+    alongside the prefilters, and for the same reason: it reads the live plugin
+    set.
+    """
+    return LiteralProbe(denylist_patterns(get_plugins()))
+
+
+@functools.cache
+def _eligible_probe() -> LiteralProbe:
+    """The cross-line probe: the necessary condition for
+    :func:`_eligible_prefilter` to match anywhere in a text.
+
+    That prefilter's ``finditer`` sweeps the payload's whole newline-free
+    collapse, which is the single most expensive regex pass in the engine. The
+    eligible types are the structurally-rigid detectors, so their required
+    literals are long and distinctive (``-----BEGIN RSA PRIVATE KEY``, ``ghp_``,
+    ``sk-ant-a``) and ordinary tool output contains none of them.
+    """
+    return LiteralProbe(denylist_patterns(get_plugins(), _cross_line_eligible_types()))
+
+
+# Whole-text probes for the two engine-owned passes that sweep the entire payload
+# with `re.sub`. Both are derived from the very pattern they gate, so neither can
+# drift from it, and both are module-level: they read no plugin state, so unlike
+# the probes above they need no cache invalidation.
+_PEM_PROBE = LiteralProbe([PEM_BLOCK_RE])
+_FIELD_VALUE_PROBE = LiteralProbe([FIELD_VALUE_RE])
+
+
 def _cross_line_candidate_spans(
     collapsed: str, config: RedactorConfig, deadline: _Deadline = _NO_DEADLINE
 ) -> list[tuple[int, int, str, str]]:
@@ -1219,12 +1225,11 @@ def _cross_line_candidate_spans(
     spans: list[tuple[int, int, str, str]] = []
     stripped, offsets = strip_invisible_with_map(collapsed, charset)
     seen: set[tuple[str, str]] = set()
-    hits = (
-        hit
-        for prefilter in _eligible_prefilter()
-        for hit in prefilter.finditer(stripped)
-    )
-    for hit in hits:
+    # The eligible union's sweep over the whole collapse is the engine's single
+    # costliest regex pass, and its probe rules the whole thing out for a payload
+    # carrying none of the structural detectors' distinctive literals.
+    prefilters = _eligible_prefilter() if _eligible_probe().may_match(stripped) else ()
+    for hit in (hit for p in prefilters for hit in p.finditer(stripped)):
         deadline.check("cross-line candidate scan")
         window_start = max(0, hit.start() - _PREFILTER_WINDOW_PAD)
         window_end = min(len(stripped), hit.end() + _PREFILTER_WINDOW_PAD)
@@ -1267,7 +1272,7 @@ def _redact_cross_line(
     """
     if "\n" not in text:
         return text
-    offsets = [i for i, ch in enumerate(text) if ch != "\n"]
+    offsets = newline_offsets(text)
     collapsed = text.replace("\n", "")
 
     accepted: list[tuple[int, int, str, str]] = []
@@ -1390,6 +1395,7 @@ def _redact_line(
     found: list[str],
     charset: frozenset[int] | None = None,
     deadline: _Deadline = _NO_DEADLINE,
+    confirm: tuple[re.Pattern[str], ...] | None = None,
 ) -> str:
     """Redact every detected secret in one ``line``, appending each redacted type
     to ``found``.
@@ -1405,6 +1411,14 @@ def _redact_line(
     :func:`~agent_sanitizer.secrets.invisible.default_charset`); callers on
     the hot path should pass ``config.resolved_charset()`` to avoid re-resolving
     it per line.
+
+    ``confirm`` is the set of denylist patterns that could match THIS line, as
+    :meth:`LiteralProbe.candidates` narrowed them; ``scan_line`` runs only if one
+    of them actually matches. ``None`` means unnarrowed — confirm against the
+    whole :func:`_full_prefilter` union, which is every active plugin's denylist
+    and so detects exactly what an unprobed scan would. That is the default
+    because the failure directions are not symmetric: an over-wide ``confirm``
+    only costs time, while a too-narrow one silently stops detecting.
 
     Every detected value becomes a :class:`_Group` of one or more occurrence
     spans: for a structural/prefix type, every occurrence of that exact
@@ -1439,12 +1453,13 @@ def _redact_line(
         after = bisect.bisect_left(span_starts, a_start)
         return after < len(span_starts) and span_starts[after] < a_end
 
-    # A line matching none of _full_prefilter() cannot hold anything scan_line
-    # would report (see its docstring) — skip the reflection-heavy per-plugin
+    # A line none of `confirm`'s patterns match cannot hold anything scan_line
+    # would report (see _line_probe) — skip the reflection-heavy per-plugin
     # dispatch entirely rather than pay it on every benign line of a large file.
+    patterns = _full_prefilter() if confirm is None else confirm
     secrets = (
         list(scan_line(stripped))
-        if any(p.search(stripped) for p in _full_prefilter())
+        if any(pattern.search(stripped) for pattern in patterns)
         else []
     )
     groups: list[_Group] = []
@@ -1509,11 +1524,22 @@ def _redact_lines(
     found: list[str],
     charset: frozenset[int],
     deadline: _Deadline = _NO_DEADLINE,
+    candidates: dict[int, tuple[re.Pattern[str], ...]] | None = None,
 ) -> list[str]:
     """:func:`_redact_line` over every line of one request, memoizing identical
     lines — repetitive tool output (a CI log, a test runner's per-case lines, a
     progress bar) is exactly the shape where the SAME line recurs verbatim many
     times in one payload.
+
+    ``candidates`` is :meth:`LiteralProbe.candidates`' verdict — each line index
+    that could hold a detection, mapped to the patterns that could produce it —
+    or ``None`` for "the probe declined, confirm every line against the whole
+    :func:`_full_prefilter` union". A line absent from the mapping is returned
+    VERBATIM without calling :func:`_redact_line` at all, which is exactly what
+    that call would have produced: no denylist can match the line, so
+    ``scan_line`` reports nothing, ``_keyword_candidate_spans`` (which only
+    locates values ``scan_line`` already approved) finds nothing, and the
+    empty-``accepted`` branch returns the line unchanged.
 
     Only in PLAIN mode (``entries is None``): in map mode ``_redact_line`` calls
     ``_mark`` for each replacement, which allocates a fresh unique sentinel per
@@ -1526,21 +1552,40 @@ def _redact_lines(
     """
     if entries is not None:
         redacted_map_lines = []
-        for line in lines:
+        for index, line in enumerate(lines):
             deadline.check("per-line scan")
+            if candidates is not None and index not in candidates:
+                redacted_map_lines.append(line)
+                continue
+            confirm = None if candidates is None else candidates[index]
             redacted_map_lines.append(
-                _redact_line(line, web_ingress, entries, found, charset, deadline)
+                _redact_line(
+                    line, web_ingress, entries, found, charset, deadline, confirm
+                )
             )
         return redacted_map_lines
     cache: dict[str, tuple[str, list[str]]] = {}
     redacted_lines: list[str] = []
-    for line in lines:
+    for index, line in enumerate(lines):
         deadline.check("per-line scan")
+        if candidates is not None and index not in candidates:
+            redacted_lines.append(line)
+            continue
+        confirm = None if candidates is None else candidates[index]
+        # Keyed on the line TEXT alone, though the value was computed under one
+        # occurrence's `confirm`. That is exact, not approximate: two identical
+        # lines index the same literals, and a weak pattern claimed only via a
+        # span reaching in from a NEIGHBOURING line cannot match this line on its
+        # own — so `confirm` cannot differ in a way that flips _redact_line's
+        # gate. A literal spanning a newline would break that and must instead
+        # widen the key.
         cached = cache.get(line)
         if cached is None:
             line_found: list[str] = []
             cached = (
-                _redact_line(line, web_ingress, None, line_found, charset, deadline),
+                _redact_line(
+                    line, web_ingress, None, line_found, charset, deadline, confirm
+                ),
                 line_found,
             )
             cache[line] = cached
@@ -1576,8 +1621,25 @@ def _redact_core(
     working = _redact_pem_blocks(working, found, entries)
     # Catch newline-split tokens first, then scan what remains line by line.
     working = _redact_cross_line(working, found, config, entries, deadline)
+    # Stage 1 of the per-line cascade: rule out whole lines in one C-speed sweep
+    # over the payload, so the per-line prefilter and scan_line dispatch run only
+    # on the survivors. The probe is asked about the invisible-STRIPPED view for
+    # the same reason _redact_line scans one — a key with a zero-width character
+    # spliced into its body must be judged on the bytes the detector will see —
+    # and stripping deletes no newline, so a stripped line's index is its
+    # original's.
+    deadline.check("candidate-line probe")
+    candidates = _line_probe().candidates(
+        strip_invisible(working, charset), deadline.check
+    )
     lines = _redact_lines(
-        working.split("\n"), web_ingress, entries, found, charset, deadline
+        working.split("\n"),
+        web_ingress,
+        entries,
+        found,
+        charset,
+        deadline,
+        candidates,
     )
 
     rejoined = "\n".join(lines)
@@ -1606,6 +1668,10 @@ def _redact_core(
             + m.group("closebracket")
         )
 
+    if not _FIELD_VALUE_PROBE.may_match(rejoined):
+        # No credential noun appears anywhere, so the regex cannot match — skip a
+        # second full pass over the payload rather than run it to find nothing.
+        return rejoined, found
     return FIELD_VALUE_RE.sub(_replace_field, rejoined), found
 
 
@@ -1640,12 +1706,14 @@ def configure_plugins(high_confidence: bool = False):
             # happen to agree on every cross-line-eligible entry today
             # (the only plugin PLUGINS_HIGH_CONFIDENCE drops is the keyword
             # detector, which isn't cross-line-eligible), but that is not a
-            # premise this cache should rely on. _full_prefilter() covers every
-            # active plugin, so it DOES differ between the two configs (the
-            # keyword detector's denylist drops out under high_confidence) and
-            # must be cleared for the same reason.
+            # premise this cache should rely on. _full_prefilter() and the probes
+            # cover every active plugin, so they DO differ between the two
+            # configs (the keyword detector's denylist drops out under
+            # high_confidence) and must be cleared for the same reason.
             _eligible_prefilter.cache_clear()
             _full_prefilter.cache_clear()
+            _line_probe.cache_clear()
+            _eligible_probe.cache_clear()
             _cross_line_eligible_types.cache_clear()
             return self
 
@@ -1661,6 +1729,8 @@ def configure_plugins(high_confidence: bool = False):
                 get_mapping_from_secret_type_to_class.cache_clear()
                 _eligible_prefilter.cache_clear()
                 _full_prefilter.cache_clear()
+                _line_probe.cache_clear()
+                _eligible_probe.cache_clear()
                 _cross_line_eligible_types.cache_clear()
             finally:
                 settings_result = self._settings.__exit__(*exc)

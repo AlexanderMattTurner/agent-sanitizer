@@ -2245,7 +2245,12 @@ def test_a_compute_budget_interrupts_one_very_long_line():
         "AKIA" + hashlib.sha256(str(i).encode()).hexdigest()[:16].upper()
         for i in range(4000)
     )
-    budgeted = RedactorConfig(compute_budget_seconds=0.001)
+    # Large enough to clear the whole-text stages ahead of the per-line loop (the
+    # candidate-line gate sweeps this 130KB payload once), small enough that the
+    # group build's ~n^2 re-scan — seconds of work for n=4000 — blows it. A budget
+    # tight enough to expire during an earlier stage would assert on that stage's
+    # name instead and stop testing what this test is about.
+    budgeted = RedactorConfig(compute_budget_seconds=0.05)
     with pytest.raises(E.RedactionBudgetExceeded) as raised:
         redact(line, budgeted)
     # The SCAN phase must be bounded, not only the arbitration after it: the
