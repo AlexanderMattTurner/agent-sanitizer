@@ -8,6 +8,18 @@ adhere to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+## [2.45.5] - 2026-08-18
+
+### Changed
+- Improved performance of secrets scanning by probing payloads for each pattern's required literals before full scanning.
+
+### Fixed
+- Fixed multi-line required literal detection to correctly identify every line a literal can start on.
+
+### Performance
+- Made candidate-line probing linear in payload size.
+- Optimized strip offset mapping to use deletion shift instead of one entry per character.
+
 ## [2.45.4] - 2026-08-18
 
 ### Fixed
