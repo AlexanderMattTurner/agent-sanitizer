@@ -184,6 +184,7 @@ def _run(
     report_sha: str | None = None,
     fail_post: bool = False,
     fail_reads: bool = False,
+    gate_unreported: bool = False,
 ) -> tuple[subprocess.CompletedProcess, list[dict]]:
     """Run the real gate script against canned review/thread nodes; return the
     process and the check runs the fake gh recorded."""
@@ -212,6 +213,8 @@ def _run(
         env["FAIL_CHECK_POST"] = "1"
     if fail_reads:
         env["FAIL_READS"] = "1"
+    if gate_unreported:
+        env["GATE_UNREPORTED"] = "1"
     proc = subprocess.run(
         ["bash", str(SCRIPT)], capture_output=True, text=True, env=env
     )
@@ -453,6 +456,41 @@ def test_report_mode_posts_a_failure_check_run_and_still_exits_zero(
     ]
 
 
+def test_an_unevaluated_gate_reports_red_rather_than_going_unreported(
+    tmp_path: Path,
+) -> None:
+    # The caller's always() arm. An evaluation that dies before its POST leaves
+    # the head with NO check run under a REQUIRED context, which renders as
+    # "Expected — Waiting for status to be reported" and blocks the merge on a
+    # check nothing will ever send: resolving a thread fires no workflow event,
+    # so nothing re-derives the gate until the next push or a recheck label.
+    # Reported red, that same state is one the merge box can act on.
+    #
+    # Driven with reviews/threads that would evaluate GREEN, so a run that fell
+    # through to the predicate instead of taking this mode would post success —
+    # this asserts the mode is what answered, not merely that something did.
+    proc, posted = _run(
+        tmp_path,
+        reviews=[_review()],
+        threads=[],
+        report_sha="cafe1234",
+        gate_unreported=True,
+    )
+    assert proc.returncode == 0, proc.stderr
+    assert [
+        (r["name"], r["head_sha"], r["status"], r["conclusion"]) for r in posted
+    ] == [(CHECK_NAME, "cafe1234", "completed", "failure")]
+
+
+def test_an_unevaluated_gate_refuses_to_report_against_no_sha(tmp_path: Path) -> None:
+    # Fail loud rather than POST an empty head_sha: a check run on "" satisfies
+    # nothing and would strand the head exactly as the silence it replaced does.
+    proc, posted = _run(tmp_path, reviews=[_review()], threads=[], gate_unreported=True)
+    assert proc.returncode != 0
+    assert "REPORT_SHA" in proc.stderr
+    assert posted == []
+
+
 def test_a_failed_check_run_post_fails_the_run_loudly(tmp_path: Path) -> None:
     # A verdict that cannot be reported leaves the required check hanging at
     # "Expected" — the POST failure must red this run, never be swallowed.
@@ -598,10 +636,27 @@ def test_the_evaluate_job_actually_posts_a_verdict_on_the_head() -> None:
     # the verdict to the head's check context.
     steps = _evaluate_job()["steps"]
     gate_steps = [s for s in steps if "review-findings-gate.sh" in (s.get("run") or "")]
-    assert len(gate_steps) == 1
-    assert (gate_steps[0].get("env") or {}).get("REPORT_SHA") == (
-        "${{ github.event.pull_request.head.sha }}"
-    )
+    # Two arms, and both must route to the HEAD's check context: the evaluation
+    # itself, and the always() arm that reports red when the evaluation posted
+    # nothing. Without the second, a run that dies before its POST strands the
+    # required context at "Expected — Waiting for status to be reported", which
+    # is the same forever-block this test exists for, reached by a crash rather
+    # than by a missing step.
+    assert len(gate_steps) == 2
+    for step in gate_steps:
+        assert (step.get("env") or {}).get("REPORT_SHA") == (
+            "${{ github.event.pull_request.head.sha }}"
+        )
+    evaluate, unreported = gate_steps
+    assert evaluate.get("id") == "evaluate"
+    assert (unreported.get("env") or {}).get("GATE_UNREPORTED")
+    # And the evaluation arm must NOT carry it: GATE_UNREPORTED there skips the
+    # predicate, so every run would POST a red verdict on the required context.
+    assert "GATE_UNREPORTED" not in (evaluate.get("env") or {})
+    # `always()` is the whole point — a plain `if:` would skip exactly when the
+    # evaluation failed, which is the case that leaves the check unreported.
+    assert "always()" in unreported.get("if", "")
+    assert "steps.evaluate.outcome" in unreported.get("if", "")
     # The script is read from the DEFAULT branch, never the event's sha: this
     # job runs in the base repo's context under pull_request_target, so a
     # head-ref checkout would execute PR-authored code with checks:write.
