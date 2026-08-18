@@ -138,9 +138,9 @@ def identity_map(text: str) -> tuple[str, Sequence[int]]:
 
     A caller that has already proven its whole payload invisible-free (a
     substring of an invisible-free text is invisible-free too) calls this instead
-    of re-proving it per line, since the proof IS the cost: ``str.translate``
-    over a dict is a hash lookup per character, and one call per line of a large
-    payload is the dominant term.
+    of re-proving it per line, since the proof IS the cost: one scan of a
+    400-member character class per line of a megabyte payload is a bigger term
+    than the single scan that proved it for all of them at once.
     """
     return text, range(len(text))
 

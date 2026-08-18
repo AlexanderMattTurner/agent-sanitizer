@@ -1241,7 +1241,7 @@ def _cross_line_candidate_spans(
 
     Rather than running :func:`scan_line` over the whole (potentially huge)
     ``stripped`` view, this prefilters with :func:`_eligible_prefilter` (itself
-    narrowed to :meth:`LiteralProbe.windows`' ranges) and only
+    narrowed to the ranges :meth:`LiteralProbe.plan` returns) and only
     hands scan_line a small window around each hit — scan_line's own detection
     logic decides the actual match, extraction, and filtering, exactly as before;
     the prefilter only narrows WHERE it looks. ``seen`` dedups by (value, type)

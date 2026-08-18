@@ -576,7 +576,7 @@ def test_coalesce_merges_overlapping_and_abutting_ranges(spans, expected):
     assert P._coalesce(spans) == expected
 
 
-# ─── LiteralProbe.windows ────────────────────────────────────────────────────
+# ─── LiteralProbe.plan ────────────────────────────────────────────────────
 
 
 def _window_holds(windows, match):
