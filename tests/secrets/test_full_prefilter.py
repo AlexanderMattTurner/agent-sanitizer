@@ -15,6 +15,7 @@ import pytest
 from detect_secrets.settings import get_plugins
 
 import agent_sanitizer.secrets.engine as E
+from agent_sanitizer.secrets.prefilter import degroup
 from redactor_helpers import cfg, run_plain
 
 
@@ -35,9 +36,9 @@ def test_full_prefilter_is_sound():
             "prefilter derived no (or an empty) pattern"
         )
         # Not vacuous: at least one real denylist pattern's TEXT is actually IN
-        # one of the unions (post-_degroup, so compare the degrouped form).
+        # one of the unions (post-degroup, so compare the degrouped form).
         assert any(
-            E._degroup(pat.pattern) in prefilter.pattern
+            degroup(pat.pattern) in prefilter.pattern
             for plugin in plugins
             for pat in plugin.denylist
             for prefilter in prefilters
@@ -142,7 +143,7 @@ def test_a_denylist_less_plugin_fails_loud(monkeypatch):
             E._denylist_prefilter(None)
 
 
-# ─── _degroup ──────────────────────────────────────────────────────────────
+# ─── degroup ──────────────────────────────────────────────────────────────
 
 
 def test_degroup_strips_named_groups_without_changing_match_semantics():
@@ -177,11 +178,11 @@ def test_degroup_strips_named_groups_without_changing_match_semantics():
             named = [pat for pat in plugin.denylist if "(?P<" in pat.pattern]
             assert named, (
                 f"{plugin.secret_type} no longer has a named-group denylist "
-                "pattern — this sample no longer exercises _degroup"
+                "pattern — this sample no longer exercises degroup"
             )
             matched_here = 0
             for pat in named:
-                degrouped = E._degroup(pat.pattern)
+                degrouped = degroup(pat.pattern)
                 assert "(?P<" not in degrouped
                 compiled = re.compile(degrouped, pat.flags)
                 original_hit = pat.search(sample)
@@ -213,17 +214,17 @@ def test_degroup_strips_named_groups_without_changing_match_semantics():
     ],
 )
 def test_degroup_rejects_backreferences(pattern):
-    """_degroup fails loud rather than silently mis-joining a pattern whose
+    """degroup fails loud rather than silently mis-joining a pattern whose
     backreference the rewrite (or the caller's `|` join) would repoint."""
     with pytest.raises(RuntimeError, match="backreference"):
-        E._degroup(pattern)
+        degroup(pattern)
 
 
 def test_full_prefilter_joins_denylists_that_reuse_a_group_name():
     """Several plugins' denylists (Cloudant's, IBM Cloud IAM's, IBM COS HMAC's,
     SoftLayer's) each define a capture group named ``secret``, so joining their
     RAW pattern text with `|` raises `re.error: redefinition of group name`.
-    Pin that as the reason `_degroup` exists: assert the raw join really does
+    Pin that as the reason `degroup` exists: assert the raw join really does
     raise, then that the real build does not."""
     with E.configure_plugins():
         raw = [pat.pattern for plugin in get_plugins() for pat in plugin.denylist]
