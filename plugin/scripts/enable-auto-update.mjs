@@ -172,10 +172,21 @@ function replaceRegistry(path, contents, disable) {
  * directory metadata change, which flushing the file's own data blocks does not
  * make durable.
  *
+ * Runs after the rename has landed, so an open the platform refuses (a directory
+ * is not openable read-only on Windows) costs durability, not correctness. It
+ * returns rather than throwing, because the caller's catch would otherwise report
+ * a refused write for a registry that was in fact updated.
+ *
  * @param {string} dir
  */
 function fsyncDir(dir) {
-  const fd = openSync(dir, constants.O_RDONLY);
+  /** @type {number} */
+  let fd;
+  try {
+    fd = openSync(dir, constants.O_RDONLY);
+  } catch {
+    return;
+  }
   try {
     fsyncSync(fd);
   } finally {
