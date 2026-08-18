@@ -272,10 +272,10 @@ function attributeWait(elapsedMs, cpuMs, redactorMs) {
   const otherMs = Math.max(0, elapsedMs - cpuMs - redactorMs);
   const verdict =
     redactorMs >= cpuMs && redactorMs >= otherMs
-      ? "Most of it was spent inside the redactor round trip — the daemon's scan, the host it shares, or both; this hook was not computing it."
+      ? "The largest share was spent inside the redactor round trip — the daemon's scan, the host it shares, or both; this hook was not computing it."
       : cpuMs >= otherMs
-        ? "Most of it is this hook computing — a per-call cost the sanitizer owns, repeated by every affected call."
-        : "Most of it is neither the redactor nor this hook computing: it was blocked on a loaded machine or on something outside the sanitizer that it called.";
+        ? "The largest share is this hook computing — a per-call cost the sanitizer owns, repeated by every affected call."
+        : "The largest share is neither the redactor nor this hook computing: it was blocked on a loaded machine or on something outside the sanitizer that it called.";
   return (
     `, of which ${formatSeconds(cpuMs)}s was this hook's own CPU and ` +
     `${formatSeconds(redactorMs)}s was inside redactor round trips. ${verdict}`

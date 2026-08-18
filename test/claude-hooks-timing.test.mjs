@@ -341,7 +341,10 @@ describe("slowHookNotice", () => {
     });
     assert.match(notice, /0\.1s was this hook's own CPU/);
     assert.match(notice, /6\.8s was inside redactor round trips/);
-    assert.match(notice, /Most of it was spent inside the redactor round trip/);
+    assert.match(
+      notice,
+      /The largest share was spent inside the redactor round trip/,
+    );
     assert.match(notice, /hook name and all three timings/);
   });
 
@@ -366,7 +369,7 @@ describe("slowHookNotice", () => {
       cpuMs: 3_800,
       redactorMs: 100,
     });
-    assert.match(notice, /Most of it is this hook computing/);
+    assert.match(notice, /The largest share is this hook computing/);
     assert.doesNotMatch(notice, /inside the redactor round trip/);
   });
 
@@ -378,7 +381,10 @@ describe("slowHookNotice", () => {
       cpuMs: 300,
       redactorMs: 120,
     });
-    assert.match(notice, /Most of it is neither the redactor nor this hook/);
+    assert.match(
+      notice,
+      /The largest share is neither the redactor nor this hook/,
+    );
     assert.match(notice, /loaded machine/);
   });
 
@@ -659,7 +665,10 @@ describe("runJudgeCli times every judge hook", () => {
     // exonerates the redactor in: the notice can only place a wait in that call
     // when a round trip actually happened.
     assert.equal(redactor, "0.0", stdout);
-    assert.match(stdout, /Most of it is neither the redactor nor this hook/);
+    assert.match(
+      stdout,
+      /The largest share is neither the redactor nor this hook/,
+    );
     assert.ok(
       errs.some((line) => line.includes("PERFORMANCE")),
       "the timing must also reach stderr",
@@ -702,6 +711,13 @@ describe("runJudgeCli times every judge hook", () => {
     assert.match(stderr, /sanitize-output hook error: judge exploded/);
     assert.match(stderr, /PERFORMANCE/);
     assert.match(stderr, /sanitize-output hook took/);
+    // The error path carries all three timings too: a judge that threw after
+    // stalling inside a redaction call is the run whose redactor share is the
+    // finding, and this stderr line is its only report.
+    assert.match(
+      stderr,
+      /of which \d+\.\ds was this hook's own CPU and 0\.0s was inside redactor round trips/u,
+    );
     // The posture still runs: the timing is an addition to the fault report,
     // never a replacement for it.
     assert.ok(onErrorCalled, "onError must still take the failure posture");
