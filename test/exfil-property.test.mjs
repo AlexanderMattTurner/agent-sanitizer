@@ -237,6 +237,33 @@ describe("Layer 3 exfil detection resists punctuation and renames", () => {
       );
   });
 
+  it("leaves comma-joined identifier lists in a path alone", () => {
+    // A batch REST path is a separator-joined list of names, which is the same
+    // shape as a chunked payload once rejoined — a ticker list rejoins to a
+    // pure-uppercase run and an id list to a pure-digit one, both long enough
+    // to clear the 128-char floor. The base64url character mix is what tells
+    // them apart from bulk-encoded bytes.
+    const tickers = Array.from(
+      { length: 30 },
+      (_, i) => "ABCD".slice(0, 4) + String.fromCharCode(65 + (i % 26)),
+    ).join(",");
+    const ids = Array.from({ length: 45 }, (_, i) => String(100 + i)).join(",");
+    for (const [label, path] of [
+      ["tickers", `v1/quotes/${tickers}`],
+      ["ids", `v1/products/${ids}`],
+    ]) {
+      assert.ok(
+        path.length > 128,
+        `${label} case is under the floor, so vacuous`,
+      );
+      assert.equal(
+        checkExfilUrl(`https://api.example.com/${path}`),
+        null,
+        `comma-joined ${label} were reported as a blob`,
+      );
+    }
+  });
+
   it("leaves a real signed-CDN link and ordinary dotted paths alone", () => {
     const sas =
       "https://acct.blob.core.windows.net/c/b.txt?sv=2021-06-08&sr=b" +

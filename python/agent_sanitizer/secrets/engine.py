@@ -1375,6 +1375,11 @@ def _redact_line(
     secrets = list(scan_line(stripped))
     groups: list[_Group] = []
     for secret in secrets:
+        # Each pass below re-scans the WHOLE line for one value, so this loop is
+        # O(secrets x line) and is the largest remaining term on one long line.
+        # Checking here is what bounds it; the arbitration check further down
+        # runs only after every one of these scans has already happened.
+        deadline.check("per-line group build")
         value = secret.secret_value
         if not value or secret.type == _KEYWORD_SECRET_TYPE:
             continue
@@ -1393,9 +1398,8 @@ def _redact_line(
     for group in sorted(
         groups, key=lambda g: (g.length, g.is_structural), reverse=True
     ):
-        # One line can hold thousands of groups, so the budget is checked here
-        # and not only per line: without it the caller's ceiling cannot
-        # interrupt a single adversarial line at all.
+        # One line can hold thousands of groups, so span arbitration is bounded
+        # too, not only the scan above it.
         deadline.check("per-line redaction")
         for start, end in group.occurrences:
             orig_start, orig_end = offsets[start], offsets[end - 1] + 1

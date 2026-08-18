@@ -2390,7 +2390,7 @@ const BENIGN_BLOB_PARAM_RE =
 // its one long `sig`. They mark a query as signed-CDN traffic, which is all
 // `allParamsBenign` needs — but a name whose benign value is short must never
 // excuse a BLOB, or renaming the payload to `?sr=<blob>` walks past every check
-// above. This is the distinction the single list above used to lose.
+// above.
 const BENIGN_SHORT_PARAM_RE = /^(?:se|sp|sr|sv|st|spr|si)$/i;
 
 // matchesSecretHint is a deliberately broad PRE-gate whose bare-keyword arms
@@ -2453,16 +2453,8 @@ function isBase64UrlBlob(value) {
 
 // `.` and `,` are legal in a URL but sit outside every blob alphabet above, so
 // chunking a payload on them (`aGVsbG8.d29ybGQ.…`) fails each anchored test
-// whole. Rejoining first asks how many encoded bytes a component carries rather
-// than whether it is one unbroken token, which is what a beacon answers.
-//
-// Applied to the PATH only, deliberately. A JWT is natively three dot-separated
-// base64url segments, so on a query value this test cannot tell a chunked
-// payload from an ordinary `?token=<jwt>` — no length separates them either,
-// since real JWTs run 130 to 600+ chars. Per the detection-layer doctrine the
-// false negative is the right side to fail on: a query value chunked below the
-// per-part threshold still passes, and that is a known, accepted gap rather
-// than an oversight. The path's 128-char floor carries no such ambiguity.
+// whole. Rejoining asks how many encoded bytes a component carries rather than
+// whether it is one unbroken token, which is what a beacon answers.
 const BLOB_SEPARATOR_RE = /[.,]/g;
 
 /**
@@ -2479,11 +2471,19 @@ function chunkedBlobResidue(value) {
 /**
  * True when a PATH SEGMENT is a payload chunked across `.`/`,`.
  *
- * Runs the segment test on the rejoined bytes, so a chunked payload is judged
- * exactly as its unbroken twin already is — no weaker, which would leave the
- * dodge open for a letters-only alphabet, and no stronger. The 128-char floor
- * carries the precision here: it sits above every standard content hash, and a
- * dotted identifier that long is not a shape real paths take.
+ * The rejoined bytes must carry base64url's character mix — an uppercase letter
+ * AND a digit — which the unbroken test does not demand. Rejoining is what makes
+ * the stricter bar necessary: a batch REST path is a list of separator-joined
+ * identifiers, so `/v1/quotes/AAPL,MSFT,GOOG,…` rejoins into a pure-uppercase
+ * run and `/v1/products/101,102,…` into a pure-digit one, both long enough to
+ * clear the floor and match the un-mixed arm. The mix is what tells bulk-encoded
+ * bytes from a list of names. It costs a chunked single-alphabet payload, which
+ * is the false negative this layer's doctrine says to take.
+ *
+ * Applied to the PATH only. A JWT is natively three dot-separated base64url
+ * segments running 130 to 600+ chars, so on a query value neither shape nor
+ * length separates a chunked payload from an ordinary `?token=<jwt>`; that
+ * residual is pinned as a test rather than left implicit.
  * @param {string} segment
  * @returns {boolean}
  */
@@ -2492,7 +2492,8 @@ function isChunkedPathBlob(segment) {
   return (
     joined !== null &&
     joined.length > PATH_BLOB_MIN_LEN &&
-    (PATH_BLOB_RE.test(joined) || isBase64UrlBlob(joined))
+    ((PATH_BLOB_RE.test(joined) && B64URL_MIXED_RE.test(joined)) ||
+      isBase64UrlBlob(joined))
   );
 }
 

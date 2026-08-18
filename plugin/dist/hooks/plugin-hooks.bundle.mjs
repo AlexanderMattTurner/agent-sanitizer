@@ -64090,7 +64090,7 @@ function chunkedBlobResidue(value) {
 }
 function isChunkedPathBlob(segment) {
   const joined = chunkedBlobResidue(segment);
-  return joined !== null && joined.length > PATH_BLOB_MIN_LEN && (PATH_BLOB_RE.test(joined) || isBase64UrlBlob(joined));
+  return joined !== null && joined.length > PATH_BLOB_MIN_LEN && (PATH_BLOB_RE.test(joined) && B64URL_MIXED_RE.test(joined) || isBase64UrlBlob(joined));
 }
 function isBlobValue(value) {
   return BLOB_VALUE_B64_RE.test(value) || BLOB_VALUE_HEX_RE.test(value) || isBase64UrlBlob(value);

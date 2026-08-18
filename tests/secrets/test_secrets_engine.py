@@ -2246,8 +2246,12 @@ def test_a_compute_budget_interrupts_one_very_long_line():
         for i in range(4000)
     )
     budgeted = RedactorConfig(compute_budget_seconds=0.001)
-    with pytest.raises(E.RedactionBudgetExceeded):
+    with pytest.raises(E.RedactionBudgetExceeded) as raised:
         redact(line, budgeted)
+    # The SCAN phase must be bounded, not only the arbitration after it: the
+    # group build re-scans the whole line once per detected secret, so it is the
+    # largest term and it all runs before arbitration begins.
+    assert "group build" in str(raised.value), str(raised.value)
     # Positive marker: the same input redacts normally with no budget, so the
     # raise above is the budget biting and not the input failing to scan.
     out, found = redact(line, RedactorConfig())
