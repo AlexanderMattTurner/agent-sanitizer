@@ -1,20 +1,21 @@
 """Behavioral tests for .github/scripts/decide-pr-review-trigger.sh — which
 pull_request_target events buy a review, and on which model.
 
-The `synchronize` predicate is the one with teeth: a push runs the FIRST
-whole-diff pass when the reviewer has never reviewed this PR, and is never a
-re-read otherwise. Keying it on the latest review's STATE instead would fire on
-every push forever, because every review now posts as COMMENTED (the merge
-consequence lives in the review-findings gate, not the review event).
+The `synchronize` predicate is the one with teeth: a push reviews ONLY on the
+`[opus-review]` opt-in in the head commit title, and is never a read otherwise.
+A push-time catch-up trigger ("nobody has reviewed this PR yet, so review now")
+used to live here and is deliberately gone: the first pass posts its review in
+its LAST step, so the reviews list reads empty for that whole run and a push
+landing during it bought a second whole-diff pass whose concurrency group then
+cancelled the first (#340). The `needs-auto-review` label serves the same PRs
+without the race, so the script asks nothing about review state at all — which
+the read-surface case below pins.
 
-Drives the real script with a fake `gh` on PATH that serves the reviews list
-from a canned array through REAL jq — so the script's own filter (reviewer
-login, the empty-body discriminator, the two-level page flatten) is exercised
-rather than re-implemented — and reads the run=/model= it writes to
-GITHUB_OUTPUT.
+Drives the real script with a fake `gh` on PATH that serves the head commit from
+the environment and logs every path it is asked for, so a case can assert both
+the verdict and that the script asked for nothing else.
 """
 
-import json
 import os
 import subprocess
 from pathlib import Path
@@ -26,12 +27,9 @@ from tests._helpers import REPO_ROOT
 SCRIPT = REPO_ROOT / ".github" / "scripts" / "decide-pr-review-trigger.sh"
 
 _FAKE_GH = r"""#!/usr/bin/env python3
-# gh stub: serves `repos/.../pulls/N/reviews` and `repos/.../commits/SHA` from
-# canned files, running the caller's --jq through real jq and printing raw JSON
-# when there is none. It rejects --slurp alongside --jq exactly as the real gh
-# does, so a caller that pairs them is caught here instead of failing closed in
-# CI. REVIEWS_RC forces the reviews read to fail so the fail-safe branch can be
-# tested.
+# gh stub: serves `repos/.../commits/SHA` from HEAD_MESSAGE through real jq, and
+# fails loudly on any other path — the script must not read review state, run
+# state, or anything else. Every requested path is appended to GH_LOG.
 import json, os, shutil, subprocess, sys
 
 JQ = shutil.which("jq")
@@ -41,29 +39,22 @@ if JQ is None:
 
 args = sys.argv[1:]
 assert args and args[0] == "api", args
-args, jq, path, slurp = args[1:], None, None, False
+args, jq, path = args[1:], None, None
 i = 0
 while i < len(args):
     a = args[i]
-    if a == "--slurp":
-        slurp, i = True, i + 1
-    elif a == "--paginate":
-        i += 1
-    elif a == "--jq":
+    if a == "--jq":
         jq, i = args[i + 1], i + 2
     elif not a.startswith("-"):
         path, i = a, i + 1
     else:
         i += 1
 
-if slurp and jq is not None:
-    sys.stderr.write(
-        "the `--slurp` option is not supported with `--jq` or `--template`\n"
-    )
-    sys.exit(1)
+with open(os.environ["GH_LOG"], "a", encoding="utf-8") as log:
+    log.write("%s\n" % (path,))
 
-
-def emit(doc):
+if path and "/commits/" in path:
+    doc = {"commit": {"message": os.environ.get("HEAD_MESSAGE", "chore: push\n")}}
     if jq is None:
         sys.stdout.write(json.dumps(doc))
         sys.exit(0)
@@ -74,49 +65,28 @@ def emit(doc):
     sys.stdout.write(r.stdout)
     sys.exit(r.returncode)
 
-
-if path and path.endswith("/reviews"):
-    rc = int(os.environ.get("REVIEWS_RC", "0"))
-    if rc:
-        sys.stderr.write("fake gh: HTTP 502 on the reviews read\n")
-        sys.exit(rc)
-    with open(os.environ["GH_REVIEWS"], encoding="utf-8") as f:
-        reviews = json.load(f)
-    # --slurp over --paginate yields one element PER PAGE; one page here.
-    emit([reviews])
-
-if path and "/commits/" in path:
-    emit({"commit": {"message": os.environ.get("HEAD_MESSAGE", "chore: push\n")}})
-
 sys.stderr.write("fake gh: unhandled %r\n" % (sys.argv,))
 sys.exit(2)
 """
-
-REVIEWER = "github-actions[bot]"
-
-
-def _review(
-    state: str = "COMMENTED", *, login: str = REVIEWER, body: str = "## Review"
-) -> dict:
-    return {"user": {"login": login}, "state": state, "body": body}
 
 
 def _decide(
     tmp_path: Path,
     *,
     action: str,
-    reviews: list[dict] | None = None,
     head_message: str = "chore: push\n",
     label: str | None = None,
-    reviews_rc: int = 0,
 ) -> dict[str, str]:
-    """Run the real script; return the key=value pairs it wrote to GITHUB_OUTPUT."""
+    """Run the real script; return the key=value pairs it wrote to GITHUB_OUTPUT.
+
+    The paths the stub was asked for land in `tmp_path / "gh.log"`, in order.
+    """
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir(exist_ok=True)
     gh = bin_dir / "gh"
     gh.write_text(_FAKE_GH)
     gh.chmod(0o755)
-    (tmp_path / "reviews.json").write_text(json.dumps(reviews or []))
+    (tmp_path / "gh.log").write_text("")
     out = tmp_path / "gh_output"
     out.write_text("")
     env = {
@@ -125,11 +95,9 @@ def _decide(
         "ACTION": action,
         "REPO": "o/r",
         "HEAD_SHA": "cafe1234",
-        "PR": "5",
         "GITHUB_OUTPUT": str(out),
-        "GH_REVIEWS": str(tmp_path / "reviews.json"),
+        "GH_LOG": str(tmp_path / "gh.log"),
         "HEAD_MESSAGE": head_message,
-        "REVIEWS_RC": str(reviews_rc),
     }
     if label is not None:
         env["LABEL"] = label
@@ -163,41 +131,32 @@ def test_an_unrelated_label_is_a_no_op(tmp_path: Path) -> None:
     assert got["run"] == "false"
 
 
-def test_a_push_runs_the_first_pass_when_nothing_ever_reviewed(
-    tmp_path: Path,
-) -> None:
-    got = _decide(tmp_path, action="synchronize", reviews=[])
-    assert got["run"] == "true"
-    # The automatic pass never spends Opus; only the [opus-review] opt-in does.
-    assert "opus" not in got["model"]
-    assert got["model"]
-
-
-def test_a_push_is_not_a_re_read_once_the_reviewer_has_reviewed(
-    tmp_path: Path,
-) -> None:
-    # The regression this pins: every review now posts as COMMENTED, so a
-    # predicate keyed on "latest state is non-approving" would fire here — and on
-    # every subsequent push, forever.
-    got = _decide(tmp_path, action="synchronize", reviews=[_review("COMMENTED")])
+def test_an_ordinary_push_never_reviews(tmp_path: Path) -> None:
+    # The catch-up trigger this replaces reviewed here whenever the reviews list
+    # was empty — which is also how a first pass that is still RUNNING looks, so
+    # a push during the `opened` review bought a duplicate and cancelled it.
+    got = _decide(tmp_path, action="synchronize")
     assert got["run"] == "false"
 
 
-def test_a_human_review_does_not_count_as_the_reviewer_having_reviewed(
-    tmp_path: Path,
-) -> None:
-    got = _decide(tmp_path, action="synchronize", reviews=[_review(login="somehuman")])
-    assert got["run"] == "true"
+def test_a_push_reads_only_the_head_commit(tmp_path: Path) -> None:
+    # The read surface IS the guard: a trigger keyed on review state or on
+    # sibling-run state cannot be reintroduced without a read showing up here.
+    _decide(tmp_path, action="synchronize")
+    paths = [p for p in (tmp_path / "gh.log").read_text().splitlines() if p]
+    assert paths == ["repos/o/r/commits/cafe1234"], paths
 
 
-def test_an_empty_bodied_bot_review_does_not_suppress_the_first_pass(
-    tmp_path: Path,
+@pytest.mark.parametrize(
+    "action", ["opened", "ready_for_review", "labeled", "closed", "reopened"]
+)
+def test_every_non_push_verdict_is_decided_without_an_api_call(
+    tmp_path: Path, action: str
 ) -> None:
-    # GitHub synthesizes a body-less review by this same bot around every
-    # standalone review-comment POST the thread resolver makes. Counting one as
-    # "already reviewed" would permanently deny the PR its only real read.
-    got = _decide(tmp_path, action="synchronize", reviews=[_review(body="")])
-    assert got["run"] == "true"
+    # Every other verdict is decided from the event payload alone, so no runner
+    # spends an API call to reach it.
+    _decide(tmp_path, action=action, label="needs-auto-review")
+    assert (tmp_path / "gh.log").read_text() == ""
 
 
 def test_the_opus_opt_in_in_the_head_title_forces_a_full_re_read(
@@ -206,9 +165,6 @@ def test_the_opus_opt_in_in_the_head_title_forces_a_full_re_read(
     got = _decide(
         tmp_path,
         action="synchronize",
-        reviews=[
-            _review("COMMENTED")
-        ],  # already reviewed: only the opt-in gets through
         head_message="fix: thing [opus-review]\n\nbody\n",
     )
     assert got["run"] == "true"
@@ -219,18 +175,37 @@ def test_the_opt_in_is_matched_on_the_subject_not_the_body(tmp_path: Path) -> No
     got = _decide(
         tmp_path,
         action="synchronize",
-        reviews=[_review("COMMENTED")],
         head_message="fix: thing\n\nsomeone wrote [opus-review] down here\n",
     )
     assert got["run"] == "false"
 
 
-def test_a_failed_reviews_read_does_not_review(tmp_path: Path) -> None:
-    # A failed query yields the same empty string as "nobody ever reviewed", and
-    # the two mean opposite things: folding them together would review on every
-    # push whenever the API is flaky. The documented fail-safe is no review.
-    got = _decide(tmp_path, action="synchronize", reviews=[], reviews_rc=1)
-    assert got["run"] == "false"
+def test_a_failed_head_commit_read_does_not_review(tmp_path: Path) -> None:
+    # The documented fail-safe: an API failure yields no review and no red,
+    # rather than a review nobody asked for. The stub 502s by refusing to serve
+    # a commit path it was not given a message for.
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir(exist_ok=True)
+    gh = bin_dir / "gh"
+    gh.write_text("#!/bin/sh\necho 'HTTP 502' >&2\nexit 1\n")
+    gh.chmod(0o755)
+    out = tmp_path / "gh_output"
+    out.write_text("")
+    proc = subprocess.run(
+        ["bash", str(SCRIPT)],
+        capture_output=True,
+        text=True,
+        env={
+            "PATH": f"{bin_dir}:{os.environ['PATH']}",
+            "GH_TOKEN": "fake",
+            "ACTION": "synchronize",
+            "REPO": "o/r",
+            "HEAD_SHA": "cafe1234",
+            "GITHUB_OUTPUT": str(out),
+        },
+    )
+    assert proc.returncode == 0, proc.stderr
+    assert "run=false" in out.read_text()
 
 
 def test_an_unhandled_action_does_not_review(tmp_path: Path) -> None:

@@ -7,32 +7,22 @@
 #
 # It is deliberately state-based and idempotent: it reads the CURRENT thread and
 # review state via the API and decides from that alone, never from who resolved
-# what. That is what closes the stranding gap — the approval used to fire only as
-# a side effect of the resolver resolving the last thread itself, so a thread
-# resolved any other way (a human clicking Resolve, an agent, a prior run's race)
-# left the CHANGES_REQUESTED with nothing to clear it. Runs on every push
-# (claude-review-thread-resolve.yaml) AND on a periodic sweep of open PRs
-# (claude-reviewer-hold-clear.yaml), so a thread resolved with no follow-up push —
-# which fires no workflow event — cannot leave the hold stranded indefinitely.
+# what. Whoever addressed a finding resolves its thread — the author, an agent, a
+# human clicking Resolve — and a resolve fires no workflow event, so the periodic
+# sweep over open PRs (claude-reviewer-hold-clear.yaml) is what turns the last
+# resolution into a cleared hold.
 #
 # Approves ONLY when the reviewer's LATEST review is a live hold or comment —
 # CHANGES_REQUESTED or COMMENTED (any other latest state means nothing to clear:
 # APPROVED already through, DISMISSED, or "" the reviewer never reviewed this PR —
-# so an unrelated thread-resolved event mints no approval; this allowlist is
-# stricter than "!= APPROVED" on purpose) — AND one of two resolution signals holds:
-#   1. THREAD signal: the reviewer opened at least one thread (root comment authored
-#      by REVIEWER_LOGIN) and none is still unresolved.
-#   2. BODY signal: the reviewer opened ZERO threads (its concern lived only in the
-#      review body) AND the model judged that body finding addressed by a later
-#      commit — passed in as BODY_VERDICT_FILE (.body.addressed == true), the
-#      verdicts.json the Haiku assessor wrote. A thread-less hold has no thread to
-#      resolve, so without this signal it is NOT auto-cleared. Only the push-time
-#      resolver (which runs the assessment) sets BODY_VERDICT_FILE; the periodic
-#      sweep does not, so it never clears a body hold blindly — same trust the
-#      thread path already places in the model's verdicts.json.
+# so an unrelated sweep mints no approval; this allowlist is stricter than
+# "!= APPROVED" on purpose) — AND the reviewer opened at least one thread (root
+# comment authored by REVIEWER_LOGIN) with none still unresolved. A hold whose
+# concern lived only in the review BODY has no thread to resolve and is therefore
+# never auto-cleared; it waits for a human or a re-review.
 #
 # Env: the GH_TOKEN_* ladder rungs (see lib/github-token-ladder.bash), GH_REPO
-# (owner/name), PR; REVIEWER_LOGIN, BODY_VERDICT_FILE optional.
+# (owner/name), PR; REVIEWER_LOGIN optional.
 set -euo pipefail
 
 : "${GH_REPO:?GH_REPO required}"
@@ -67,9 +57,7 @@ name="${GH_REPO##*/}"
 #
 # A thread hold is "demonstrably cleared" only when the reviewer opened at least
 # one thread AND none remain unresolved. A CHANGES_REQUESTED / COMMENTED review
-# that opened ZERO threads carries no THREAD resolution signal; it is cleared only
-# by the BODY signal below (the model judged the review's summary finding
-# addressed), never on thread state alone — auto-clearing a thread-less hold on
+# that opened ZERO threads carries no resolution signal at all — clearing it on
 # "unresolved == 0" (trivially true with no threads) would merge the reviewer's
 # concern unaddressed.
 counts="$(fetch_review_threads "$owner" "$name" "$PR" \
@@ -85,26 +73,9 @@ if [[ "${unresolved:-0}" -ne 0 ]]; then
   exit 0
 fi
 
-# body_hold_cleared distinguishes the two approval paths for the message below:
-# thread signal (threads resolved) vs body signal (model judged the body finding
-# addressed on a thread-less hold).
-body_hold_cleared=false
 if [[ "${total:-0}" -eq 0 ]]; then
-  # No thread signal. Clear ONLY on the model's body verdict, passed by the
-  # push-time resolver as BODY_VERDICT_FILE. Tolerant read: a missing/garbled
-  # verdicts.json (an errored Haiku run) or a verdict without `.body` yields
-  # false, so the hold defers rather than clearing on a non-answer. The periodic
-  # sweep sets no BODY_VERDICT_FILE, so a body hold never clears on the sweep.
-  body_addressed=false
-  if [[ -n "${BODY_VERDICT_FILE:-}" && -f "$BODY_VERDICT_FILE" ]]; then
-    # echo-fallback-ok: fail-closed default: an unreadable verdict file reads as not-addressed, holding the approval
-    body_addressed="$(jq -r '(.body.addressed == true)' "$BODY_VERDICT_FILE" 2>/dev/null || echo false)"
-  fi
-  if [[ "$body_addressed" != "true" ]]; then
-    echo "reviewer opened no thread and no body-finding verdict cleared it; a thread-less hold is not auto-cleared (defer to re-review / human)" >&2
-    exit 0
-  fi
-  body_hold_cleared=true
+  echo "reviewer opened no thread, so nothing here can demonstrate its concern was addressed; a thread-less hold is not auto-cleared (defer to re-review / human)" >&2
+  exit 0
 fi
 
 # What is the reviewer's latest review state? reviewer_reviews_ndjson owns the
@@ -119,11 +90,7 @@ if [[ "$latest_state" != "CHANGES_REQUESTED" && "$latest_state" != "COMMENTED" ]
   exit 0
 fi
 
-if [[ "$body_hold_cleared" == "true" ]]; then
-  cleared_by="the reviewer's body finding was assessed as addressed by a later commit"
-else
-  cleared_by="every review conversation from the automated reviewer has been resolved"
-fi
+cleared_by="every review conversation from the automated reviewer has been resolved"
 
 # Dismiss the REVIEWER'S OWN stale CHANGES_REQUESTED. Reached only when the hold
 # is already proven clear above and the approval was structurally refused, so it
@@ -175,9 +142,8 @@ dismiss_stale_hold() {
 # pull_request_review event for one — so both review-keyed gates would keep a
 # verdict that predates it: pending after an approve, or GREEN after a dismissal
 # that left nothing standing. The second is fail-open on a required merge gate,
-# so the re-derivation lives here beside the writes, covering the push-time
-# resolver and the periodic sweep alike instead of being re-implemented per
-# caller (the same reason the verdict itself lives in this one script).
+# so the re-derivation lives here beside the writes rather than in each caller
+# (the same reason the verdict itself lives in this one script).
 #
 # Safe for every PR this script ACTS on, and it acts on no others: it reaches a
 # write only when the reviewer's latest review is a live hold or comment, so the

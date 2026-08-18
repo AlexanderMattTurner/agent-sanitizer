@@ -1147,27 +1147,46 @@ describe("unit: checkExfilUrl exact verdicts", () => {
 
 // ─── invariant: the `=` is not a hiding place ────────────────────────────────
 //
-// `?<payload>`, `?<payload>=` and `?d=<payload>` are one exfil channel: the
-// server reads the query string either way. Splitting on `=` and keeping only
-// the right-hand side gave the shortest spelling an empty value, and every
-// shape test reads the value — so dropping two characters bought silence.
+// `?<payload>`, `?<payload>=`, `?<payload>=x` and `?d=<payload>` are one exfil
+// channel: the server reads the query string either way, so a payload's
+// verdict must not depend on which side of the `=` it lands on or whether
+// there's an `=` at all — both the name and the value are shape-tested.
 
 describe("invariant: a parameter's exfil verdict ignores whether it carries an `=`", () => {
-  // Each payload as a named value, as a bare query token, and in the fragment,
-  // which carries the same `key=value` channel. The base64 payload's trailing
-  // `=` padding also covers the case where the split reads the padding as the
-  // separator and leaves an empty right-hand side.
+  // Each payload as a named value, as a bare query token, with a non-padding
+  // tail after it (payload lands in the NAME half of the pair, not the value),
+  // and in the fragment, which carries the same `key=value` channel.
   const spellings = (payload) => ({
     "named value": `?d=${payload}`,
     "bare token": `?${payload}`,
+    "with a trailing tail": `?${payload}=x`,
     "in the fragment": `#${payload}`,
   });
+  // [label, payload, expected verdict] — the verdict rides on the row so
+  // adding/reordering payloads can't silently re-point an assertion at a
+  // different one.
   const PAYLOADS = [
-    ["a base64 blob", "QUtJQVJPT1RTRUNSRVRLRVkxMjM0NTY3ODkwYWJjZGVmZ2hpams="],
-    ["a hex blob", "a".repeat(16) + "b3c4d5e6f7081920"],
-    ["an ordinary word", "guide"],
+    [
+      "a base64 blob with one padding char",
+      "QUtJQVJPT1RTRUNSRVRLRVkxMjM0NTY3ODkwYWJjZGVmZ2hpams=",
+      "suspicious query parameter",
+    ],
+    // Two padding characters (source length ≡ 1 mod 3): the bare-token split
+    // reads only the first `=` as the separator, so the whole trailing padding
+    // run — not just a single `=` — must route the token to the shape regexes.
+    [
+      "a base64 blob with two padding chars",
+      "QUtJQUlPU0ZPRE5ON0VYQU1QTEVLRVlTRUNSRVRYWQ==",
+      "suspicious query parameter",
+    ],
+    [
+      "a hex blob",
+      "a".repeat(16) + "b3c4d5e6f7081920",
+      "suspicious query parameter",
+    ],
+    ["an ordinary word", "guide", null],
   ];
-  for (const [label, payload] of PAYLOADS) {
+  for (const [label, payload, expected] of PAYLOADS) {
     const forms = spellings(payload);
     it(`agrees across every spelling of ${label}`, () => {
       const verdicts = Object.fromEntries(
@@ -1176,26 +1195,12 @@ describe("invariant: a parameter's exfil verdict ignores whether it carries an `
           checkExfilUrl(`https://e.com/p${suffix}`),
         ]),
       );
-      const [first] = Object.values(verdicts);
       assert.deepEqual(
         verdicts,
-        Object.fromEntries(Object.keys(forms).map((form) => [form, first])),
+        Object.fromEntries(Object.keys(forms).map((form) => [form, expected])),
       );
     });
   }
-  // Non-vacuity: the payloads above must not ALL be null, or the agreement
-  // holds for a detector that never fires.
-  it("flags the blob spellings and clears the word (the corpus separates them)", () => {
-    assert.equal(
-      checkExfilUrl(`https://e.com/p?${PAYLOADS[0][1]}`),
-      "suspicious query parameter",
-    );
-    assert.equal(
-      checkExfilUrl(`https://e.com/p?${PAYLOADS[1][1]}`),
-      "suspicious query parameter",
-    );
-    assert.equal(checkExfilUrl(`https://e.com/p?${PAYLOADS[2][1]}`), null);
-  });
   // Precision: the allowlist is keyed on the NAME, and a valueless param's
   // token is its name — so an allowlisted param stays silent, and a benign
   // valueless flag never becomes a finding.

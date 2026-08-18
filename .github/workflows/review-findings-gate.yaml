@@ -12,10 +12,9 @@ name: Review-findings gate
 # One job, posting the predicate (review-findings-gate.sh) as a check run named
 # "Review findings resolved" on the PR HEAD sha, so the ruleset's required check
 # is satisfied (or red) there. Thread RESOLUTION fires no workflow event of its
-# own, so the path that resolves threads re-posts the verdict itself
-# (claude-review-thread-resolve.yaml); a human who resolves a thread silently in
-# the UI adds the `recheck-review-gate` label to re-run this evaluation (the
-# labeled trigger below). The merge queue's leg of the same predicate lives in
+# own, so whoever resolves a thread adds the `recheck-review-gate` label to re-run
+# this evaluation (the labeled trigger below); claude-reviewer-hold-clear.yaml's
+# cron bounds a forgotten one to a half-hour of staleness. The merge queue's leg of the same predicate lives in
 # review-findings-merge-gate.yaml — a separate file ON PURPOSE: the required
 # check's job must sit in a workflow with NO PR-event triggers, because a PR
 # event skipping that job would report a `skipped` check run under the required

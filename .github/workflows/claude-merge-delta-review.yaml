@@ -4,8 +4,8 @@ name: Claude merge-delta review
 # (`git show --remerge-diff`) — the one channel through which a conflict
 # resolution can introduce content present in neither parent (an "evil merge")
 # that the ordinary PR diff never isolates. Separate from the first-pass
-# reviewer (claude-pr-review.yaml) and the thread-resolver: those read the net
-# diff and so share the blind spot this closes.
+# reviewer (claude-pr-review.yaml): that one reads the net diff and so shares the
+# blind spot this closes.
 #
 # SECURITY — same posture as claude-pr-review.yaml (see its header): a fork PR on
 # plain `pull_request` gets no secrets, so `pull_request_target` runs in the

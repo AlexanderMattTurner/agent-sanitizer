@@ -913,8 +913,8 @@ describe("post-pr-review: cost footer", () => {
       payload.body,
       /📉 ~12,500 PRs\/week at this rate on a Max 20× plan\./,
     );
-    // The hidden marker lets the resolver read this cost back.
-    assert.match(payload.body, /<!-- review-cost usd=0\.16 -->/);
+    // No machine-readable cost marker: nothing reads one back any more.
+    assert.doesNotMatch(payload.body, /<!-- review-cost/);
     // The fallback summary file carries the identical footered body.
     assert.equal(summary, payload.body);
   });

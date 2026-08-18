@@ -15,7 +15,7 @@
 # from the scripts' own `source` lines, so an omission reds CI rather than
 # killing the gate at runtime under `set -e`.
 #
-# Consumers: review-gate.sh, review-findings-gate.sh, append-haiku-cost.sh,
+# Consumers: review-gate.sh, review-findings-gate.sh,
 # approve-if-reviewer-hold-clear.sh, lib/pr-reviews.bash, lib/review-threads.bash.
 
 REVIEWER_LOGIN="${REVIEWER_LOGIN:-github-actions[bot]}"
@@ -40,7 +40,7 @@ export REVIEWER_LOGIN REVIEWER_LOGIN_BARE
 #
 # `is_reviewer_review` adds the discriminator that says this is a review AT ALL.
 # GitHub synthesizes a body-less COMMENTED review by the same bot around every
-# standalone review-comment POST (the thread resolver's audit replies), so a
+# standalone review-comment POST (any reply on a review thread), so a
 # "has the reviewer spoken?" gate that counts one is satisfied vacuously on
 # exactly the PRs that carry threads. Every real writer passes a non-empty body
 # (post-pr-review.mjs falls back to "Automated review."), so the test is free.

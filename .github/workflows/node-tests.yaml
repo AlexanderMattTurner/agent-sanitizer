@@ -60,11 +60,11 @@ jobs:
       # replaces had rotted in both directions at once: its `auto-resolve-*`
       # glob needs a literal hyphen and does not cross `/`, so it matched only
       # the four FLAT suites — whose scripts nothing invoked any more — while
-      # the nine live suites under auto-resolve/ ran in no job at all, and seven
-      # more (check-claude-execution, sanitize-pr-input, select-resolvable-
-      # threads, pr-review-advisory, resolve-generated, compute-haiku-cost-
-      # footer, phone-home-extract) had never been listed. The script fails loud
-      # on an empty discovery, so this step cannot go decorative again.
+      # the nine live suites under auto-resolve/ ran in no job at all, and five
+      # more (check-claude-execution, sanitize-pr-input, pr-review-advisory,
+      # resolve-generated, phone-home-extract) had never been listed. The script
+      # fails loud on an empty discovery, so this step cannot go decorative
+      # again.
       - name: Run the .github/scripts test suites
         run: bash .github/scripts/run-script-tests.sh
 
