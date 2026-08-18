@@ -26,7 +26,7 @@ name: Review-findings gate
 # enforcement point: no PR-authored code is ever checked out or executed here —
 # the job reads review/thread state via the API and posts a check run. Least
 # privilege: contents:read (checkout the scripts) + checks:write (post the
-# verdict) + pull-requests:read + issues:write (remove the command label).
+# verdict) + pull-requests:write (read the threads, remove the command label).
 
 on: # zizmor: ignore[dangerous-triggers] — no PR code executes: API-only scripts off a default-branch checkout; see the SECURITY header
   # A new head sha needs a fresh verdict (synchronize), and a PR becomes gateable
