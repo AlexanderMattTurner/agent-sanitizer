@@ -303,13 +303,15 @@ class LiteralProbe:
             at = folded.find(literal)
             while at != -1:
                 hits.append((at, at + width, patterns))
-                # A second occurrence on the same line claims exactly what this
-                # one did — the literal is fixed, so every occurrence spans the
-                # same number of lines from the line it starts on — so the scan
-                # resumes on the NEXT line. Without that skip, one long line of
-                # `key key key ...` yields a hit per word and the attribution
-                # below pays for every one of them.
-                eol = folded.find("\n", at + width)
+                # A second occurrence STARTING on this same line claims exactly
+                # what this one did — the literal is fixed, so every occurrence
+                # spans the same number of lines from the line it starts on — so
+                # the scan resumes past the end of the line this one STARTS on.
+                # Resuming past its END instead would skip an occurrence starting
+                # inside a multi-line literal's own span. Without the skip, one
+                # long line of `key key key ...` yields a hit per word and the
+                # attribution below pays for every one of them.
+                eol = folded.find("\n", at)
                 at = -1 if eol == -1 else folded.find(literal, eol + 1)
         for pattern in self.weak:
             check("candidate-line pattern probe")

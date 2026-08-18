@@ -307,6 +307,19 @@ def test_a_literal_is_reported_once_per_line_not_once_per_occurrence(monkeypatch
     assert starts == [0, 16009]
 
 
+def test_a_multi_line_literal_does_not_skip_an_occurrence_inside_its_own_span():
+    """The per-line skip resumes past the line an occurrence STARTS on, not past
+    the line it ENDS on. For a literal carrying a newline the two differ, and
+    resuming past the end would step over an occurrence beginning inside the
+    first one's span — leaving the line its match really sits on unclaimed."""
+    pattern = re.compile("aa\naa[0-9]")
+    probe = P.LiteralProbe([pattern])
+    assert probe.by_literal == {"aa\naa": (pattern,)}
+    text = "aa\naa\naa1"
+    assert pattern.search(text).start() == 3
+    assert probe.candidates(text) == {0: (pattern,), 1: (pattern,), 2: (pattern,)}
+
+
 def test_the_candidate_probe_yields_to_a_compute_deadline():
     """The probe sweeps the whole payload per literal, so a payload big enough to
     make it expensive is exactly the one whose caller set a budget to stop it.
