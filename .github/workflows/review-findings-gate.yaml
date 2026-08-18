@@ -87,12 +87,11 @@ jobs:
     permissions:
       contents: read # sparse-checkout the trusted gate script
       checks: write # post the "Review findings resolved" check run on the head
-      # Write, not read: a label on a PULL REQUEST is checked against the
-      # pull-requests permission, even though the endpoint sits under /issues/.
-      # With `issues: write` alone the DELETE below answered 403 "Resource not
-      # accessible by integration", so the label stayed on the PR — and while it
-      # sits there re-adding it fires no `labeled` event, which makes the recheck
-      # hatch one-shot for the whole life of the PR.
+      # A label on a PULL REQUEST is checked against the pull-requests
+      # permission, not issues. Under `issues: write` alone the DELETE below
+      # 403s and the label stays; while it sits there re-adding it fires no
+      # `labeled` event, which makes the recheck hatch one-shot for the whole
+      # life of the PR.
       pull-requests: write # read the PR's threads, remove the command label
     env:
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

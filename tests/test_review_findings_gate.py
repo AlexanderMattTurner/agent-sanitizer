@@ -577,6 +577,12 @@ def test_the_label_removal_step_is_first_and_unconditional() -> None:
     removal = steps[0]
     assert removal["name"] == "Remove the recheck-review-gate command label"
     assert "if" not in removal
+    # A label on a PR is checked against pull-requests, not issues: under
+    # `issues: write` alone the DELETE 403s and the label stays stuck, which is
+    # the dead hatch above, reached at runtime instead of by displacement. Only
+    # a static assertion catches a narrowing back — the 403 is invisible until
+    # someone uses the hatch on a live PR and reads the warning annotation.
+    assert _evaluate_job()["permissions"].get("pull-requests") == "write"
 
 
 def test_the_evaluate_job_actually_posts_a_verdict_on_the_head() -> None:
