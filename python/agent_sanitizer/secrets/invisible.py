@@ -50,20 +50,7 @@ def strip_invisible(text: str, charset: frozenset[int] | None = None) -> str:
     match found in the stripped view back to the ORIGINAL text's offsets (this
     function throws that mapping away, which is fine for a caller that only wants
     clean text back, but wrong for in-place redaction)."""
-    if charset is None:
-        charset = default_charset()
-    return text.translate(_deletion_table(charset))
-
-
-@functools.cache
-def _deletion_table(charset: frozenset[int]) -> dict[int, None]:
-    """``str.translate`` table deleting every code point in ``charset``: the
-    whole of :func:`strip_invisible`, and the fast presence probe
-    :func:`strip_invisible_with_map` runs before paying for its own
-    per-character offset-map loop. Cached per charset like
-    :func:`invisible_run_pattern`, since the hot path always passes the same
-    (SSOT) charset."""
-    return dict.fromkeys(charset)
+    return strip_invisible_with_map(text, charset)[0]
 
 
 @functools.cache
@@ -145,6 +132,19 @@ def newline_offsets(text: str) -> Sequence[int]:
     return DeletionOffsets(newlines, len(text) - len(newlines))
 
 
+def identity_map(text: str) -> tuple[str, Sequence[int]]:
+    """What :func:`strip_invisible_with_map` returns for a text holding none of
+    the charset — the text itself and the identity offset map.
+
+    A caller that has already proven its whole payload invisible-free (a
+    substring of an invisible-free text is invisible-free too) calls this instead
+    of re-proving it per line, since the proof IS the cost: ``str.translate``
+    over a dict is a hash lookup per character, and one call per line of a large
+    payload is the dominant term.
+    """
+    return text, range(len(text))
+
+
 def strip_invisible_with_map(
     text: str, charset: frozenset[int] | None = None
 ) -> tuple[str, Sequence[int]]:
@@ -163,18 +163,36 @@ def strip_invisible_with_map(
     The overwhelmingly common case is that ``text`` contains none of the
     charset's code points at all: then the offsets are the identity map, which a
     bare `range` represents with no allocation (the only uses downstream are
-    `offsets[i]` and `offsets[end - 1]`, both of which `range` supports). Both
-    branches stay at C speed — `str.translate` does the stripping and a
-    single-character class locates the deletions — so neither the size of the
-    payload nor the presence of one zero-width character buys a Python-level
+    `offsets[i]` and `offsets[end - 1]`, both of which `range` supports). That
+    case is decided by the range-collapsed character class alone — a C scan that
+    stops at the first hit and never copies the text — because `str.translate`
+    pays a dict lookup for every character of a megabyte to reach the same
+    verdict. Both branches stay at C speed, so neither the size of the payload
+    nor the presence of one zero-width character buys a Python-level
     per-character loop over megabytes."""
     if charset is None:
         charset = default_charset()
-    stripped = text.translate(_deletion_table(charset))
-    if len(stripped) == len(text):
-        return text, range(len(text))
-    deleted = [m.start() for m in _invisible_char_re(charset).finditer(text)]
-    return stripped, DeletionOffsets(deleted, len(stripped))
+    pattern = _invisible_char_re(charset)
+    if not pattern.search(text):
+        return identity_map(text)
+    deleted = [m.start() for m in pattern.finditer(text)]
+    return _without(text, deleted), DeletionOffsets(deleted, len(text) - len(deleted))
+
+
+def _without(text: str, deleted: Sequence[int]) -> str:
+    """``text`` with the characters at the ascending indices ``deleted`` removed.
+
+    Spliced from the deletion positions the caller already located rather than
+    re-derived with ``str.translate``: translate is a dict lookup per character
+    of the whole payload, while this copies the handful of runs BETWEEN the
+    deletions at C speed."""
+    pieces = []
+    previous = 0
+    for at in deleted:
+        pieces.append(text[previous:at])
+        previous = at + 1
+    pieces.append(text[previous:])
+    return "".join(pieces)
 
 
 @functools.cache
