@@ -8,6 +8,19 @@ adhere to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+## [2.45.0] - 2026-08-18
+
+### Changed
+
+- **auto-resolve**: The resolver workflow is now called from its own dedicated repository rather than being invoked inline, improving separation of concerns and maintainability.
+
+### Fixed
+
+- **auto-resolve**: The resolver no longer receives a metered API key, preventing potential rate-limiting issues.
+- **auto-resolve**: Restored protected-set coverage and removed orphaned composite configurations.
+- **auto-resolve**: Added a permissions ceiling to the called workflow to enforce principle of least privilege.
+- **auto-resolve**: Fixed RESOLVER_DIR documentation comment alignment.
+
 ## [2.44.1] - 2026-08-18
 
 ### Fixed
