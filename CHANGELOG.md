@@ -8,6 +8,13 @@ adhere to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+## [2.43.12] - 2026-08-18
+
+### Fixed
+
+- Secrets scanning now enforces compute budgets during the scan phase and eliminates quadratic overlap detection that could cause performance degradation.
+- HTML payload handling now properly flags paths chunked across separators and corrects overly permissive SAS name validation for blob detection.
+
 ## [2.43.11] - 2026-08-18
 
 ### Fixed
