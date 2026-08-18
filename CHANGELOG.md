@@ -8,6 +8,14 @@ adhere to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+## [2.45.2] - 2026-08-18
+
+### Fixed
+
+- Corrected hook timing reports to describe the redactor round trip as a window rather than attributing delays to the daemon's fault.
+- Improved error messaging in hook timing to use "largest share" instead of "most" and added test coverage for error-path redactor timing.
+- Hook wait times are now properly attributed to the redactor daemon by name in timing reports.
+
 ## [2.45.0] - 2026-08-18
 
 ### Changed
