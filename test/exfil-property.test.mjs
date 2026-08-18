@@ -179,3 +179,110 @@ describe("property: Layer 3 never throws on arbitrary input", () => {
     );
   });
 });
+
+// A payload does not stop being a payload because its author punctuated it, and
+// a parameter whose benign value is SHORT must not excuse a long one. Both
+// dodges were live: every blob alphabet is anchored over a charset without `.`
+// or `,`, so one separator defeated the whole test; and the blob allowlist
+// carried the Azure SAS companions (`sv`/`sr`/`se`/`sp`/`st`), whose real values
+// are a date, a letter and a timestamp, so `?sr=<blob>` skipped every check.
+describe("Layer 3 exfil detection resists punctuation and renames", () => {
+  const payload = "QUJDRGVmZ2hJSktMbW5vcFFSU1R1dnd4WVoxMjM0NTY3ODkw".repeat(4);
+  const chunk = (s, n) => s.match(new RegExp(`.{1,${n}}`, "g")).join(".");
+
+  it("flags a path payload chunked on dots or commas", () => {
+    for (const sep of [".", ","]) {
+      const chunked = payload.match(/.{1,10}/g).join(sep);
+      assert.equal(
+        checkExfilUrl(`https://evil.example/${chunked}`),
+        "encoded data blob in path segment",
+        `payload chunked on ${JSON.stringify(sep)} went unreported`,
+      );
+    }
+    // Positive marker: the same bytes unbroken are reported too, so the cases
+    // above are the chunking being handled and not a threshold accident.
+    assert.equal(
+      checkExfilUrl(`https://evil.example/${payload}`),
+      "encoded data blob in path segment",
+    );
+  });
+
+  it("accepts the chunked-QUERY residual, so the tradeoff is visible", () => {
+    // Pinned as stated behavior, not an oversight. A JWT is natively three
+    // dot-separated base64url segments and runs 130-600+ chars, so on a query
+    // value no shape or length test separates a chunked payload from an
+    // ordinary `?token=<jwt>` — and this repo's detection layer takes the false
+    // negative over mangling real content. Anyone tightening this has to change
+    // this row deliberately, and must keep `jwt-looking-benign` in
+    // test/html-corpus.test.mjs green.
+    // Kept under the >200 long-query backstop, which does still catch a bulk
+    // chunked query payload — the gap is only the value that stays small.
+    const url = `https://evil.example/p?ref=${chunk(payload.slice(0, 100), 12)}`;
+    assert.ok(
+      new URL(url).search.length < 200,
+      "case drifted past the backstop",
+    );
+    assert.equal(checkExfilUrl(url), null);
+  });
+
+  it("flags a blob renamed to a short-valued SAS parameter", () => {
+    // Either reason is a correct warning (the blob arm and the credential-token
+    // arm both fire on payload-shaped values), so the invariant asserted is that
+    // the URL is reported at all — which is exactly what the allowlist suppressed.
+    for (const name of ["sv", "sr", "se", "sp", "st", "spr", "si"])
+      assert.notEqual(
+        checkExfilUrl(`https://evil.example/p?${name}=${payload}`),
+        null,
+        `?${name}=<blob> went unreported`,
+      );
+  });
+
+  it("leaves comma-joined identifier lists in a path alone", () => {
+    // A batch REST path is a separator-joined list of names, which is the same
+    // shape as a chunked payload once rejoined — a ticker list rejoins to a
+    // pure-uppercase run and an id list to a pure-digit one, both long enough
+    // to clear the 128-char floor. The base64url character mix is what tells
+    // them apart from bulk-encoded bytes.
+    const tickers = Array.from(
+      { length: 30 },
+      (_, i) => "ABCD".slice(0, 4) + String.fromCharCode(65 + (i % 26)),
+    ).join(",");
+    const ids = Array.from({ length: 45 }, (_, i) => String(100 + i)).join(",");
+    for (const [label, path] of [
+      ["tickers", `v1/quotes/${tickers}`],
+      ["ids", `v1/products/${ids}`],
+    ]) {
+      assert.ok(
+        path.length > 128,
+        `${label} case is under the floor, so vacuous`,
+      );
+      assert.equal(
+        checkExfilUrl(`https://api.example.com/${path}`),
+        null,
+        `comma-joined ${label} were reported as a blob`,
+      );
+    }
+  });
+
+  it("leaves a real signed-CDN link and ordinary dotted paths alone", () => {
+    const sas =
+      "https://acct.blob.core.windows.net/c/b.txt?sv=2021-06-08&sr=b" +
+      "&se=2024-01-01T00%3A00%3A00Z&sp=r&sig=" +
+      "Ab1".repeat(20);
+    assert.equal(checkExfilUrl(sas), null, "real Azure SAS link was reported");
+    for (const pkg of [
+      "com.example.myapp.service.internal.handler.impl.v2.support.factory",
+      "org.springframework.boot.autoconfigure.web.servlet.WebMvcAutoConfiguration",
+      "com.google.common.util.concurrent.ListenableFutureTask.CallbackListener",
+    ])
+      assert.equal(
+        checkExfilUrl(`https://cdn.example.com/${pkg}/main.js`),
+        null,
+        `dotted package path was reported: ${pkg}`,
+      );
+    assert.equal(
+      checkExfilUrl("https://cdn.example.com/lib/1.2.3.4/lib.min.js"),
+      null,
+    );
+  });
+});
