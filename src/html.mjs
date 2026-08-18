@@ -2481,52 +2481,55 @@ function decodedBlobMatch(value) {
  * values, turning a `+`-bearing base64 blob into a space-broken string that the
  * anchored blob regexes would miss.
  * @param {string} qs
- * @returns {Array<[string, string]>}
+ * @returns {Array<[string, string, string]>} [lowercased name, value, RAW (case-preserved) name]
  */
 function rawParams(qs) {
-  /** @type {Array<[string, string]>} */
+  /** @type {Array<[string, string, string]>} */
   const pairs = [];
   for (const pair of qs.split(/[&;]/)) {
     if (!pair) continue;
     const eq = pair.indexOf("=");
-    const name = eq === -1 ? pair : pair.slice(0, eq);
-    // A VALUELESS param carries its payload in the only token it has, so that
-    // token is its candidate value too — `?<blob>`, `?d=<blob>`, and `?<blob>=`
-    // (whose sole `=` is base64 padding) are one channel. The name alone still
-    // goes through BENIGN_BLOB_PARAM_RE.
-    const afterEq = eq === -1 ? "" : pair.slice(eq + 1);
-    const value = afterEq === "" ? pair : afterEq;
-    pairs.push([name.toLowerCase(), value]);
+    const rawName = eq === -1 ? pair : pair.slice(0, eq);
+    const value = eq === -1 ? "" : pair.slice(eq + 1);
+    pairs.push([rawName.toLowerCase(), value, rawName]);
   }
   return pairs;
 }
 
 /**
- * Exfil reason for one URL parameter, or null. A credential-shaped value in any
- * non-allowlisted parameter (reusing the secret-shape gate), or a long
- * base64/hex blob in one. Allowlisted signing/pagination/analytics parameters
- * are skipped entirely (see BENIGN_BLOB_PARAM_RE).
- * @param {string} name  lowercased parameter name
- * @param {string} value RAW (un-decoded) value
+ * Exfil reason for one URL parameter, or null. A credential-shaped or
+ * blob-shaped run in EITHER half of the pair — the value, or the name — in any
+ * non-allowlisted parameter. Testing the name too (not just the value) is what
+ * catches a payload that lands on the wrong side of the `=`: `?<blob>`,
+ * `?<blob>=`, `?<blob>==` (trailing `=`s read as padding) and `?<blob>=x` (any
+ * non-padding tail) are one channel, since the server reads the query string
+ * either way. Allowlisted signing/pagination/analytics parameters are skipped
+ * entirely (see BENIGN_BLOB_PARAM_RE).
+ * @param {string} name    lowercased parameter name, for the allowlist gate
+ * @param {string} value   RAW (un-decoded) value
+ * @param {string} rawName RAW (case-preserved, un-decoded) name
  * @returns {string | null}
  */
-function paramExfilReason(name, value) {
+function paramExfilReason(name, value, rawName) {
   if (BENIGN_BLOB_PARAM_RE.test(name)) return null;
-  // A leaked credential is an OPAQUE, separator-free token. Gate the
-  // secret-shape/digit test on the CONTIGUOUS opaque run(s) of the value, not on
-  // the whole prose value: a benign path-like value (`?redirect=/authorization-
-  // service/…abcdefghij1234567890`) otherwise matches "authorization" in one
-  // place and a 20-char run in another and false-fires. Requiring both on the
-  // SAME run keeps `ghp_…`-style contiguous tokens firing while dropping prose.
-  const opaqueRuns = value.match(OPAQUE_TOKEN_RE);
-  if (
-    opaqueRuns?.some(
-      (run) => VALUE_HAS_DIGIT_RE.test(run) && matchesSecretHint(run),
+  for (const candidate of [rawName, value]) {
+    if (!candidate) continue;
+    // A leaked credential is an OPAQUE, separator-free token. Gate the
+    // secret-shape/digit test on the CONTIGUOUS opaque run(s), not on the whole
+    // prose candidate: a benign path-like value (`?redirect=/authorization-
+    // service/…abcdefghij1234567890`) otherwise matches "authorization" in one
+    // place and a 20-char run in another and false-fires. Requiring both on the
+    // SAME run keeps `ghp_…`-style contiguous tokens firing while dropping prose.
+    const opaqueRuns = candidate.match(OPAQUE_TOKEN_RE);
+    if (
+      opaqueRuns?.some(
+        (run) => VALUE_HAS_DIGIT_RE.test(run) && matchesSecretHint(run),
+      )
     )
-  )
-    return "credential-shaped token in URL parameter";
-  if (isBlobValue(value) || decodedBlobMatch(value))
-    return "suspicious query parameter";
+      return "credential-shaped token in URL parameter";
+    if (isBlobValue(candidate) || decodedBlobMatch(candidate))
+      return "suspicious query parameter";
+  }
   return null;
 }
 
@@ -2547,9 +2550,9 @@ function rawUrlKeywordExfil(url) {
   const qIdx = url.search(/[?#]/);
   if (qIdx === -1) return null;
   for (const segment of url.slice(qIdx + 1).split("#")) {
-    for (const [name, value] of rawParams(segment)) {
+    for (const [name, value, rawName] of rawParams(segment)) {
       if (!KEYWORD_PARAM_NAME_RE.test(name)) continue;
-      const reason = paramExfilReason(name, value);
+      const reason = paramExfilReason(name, value, rawName);
       if (reason) return reason;
     }
   }
@@ -2577,14 +2580,14 @@ function allParamsBenign(parsed) {
  * @returns {string | null}
  */
 function checkUrlParams(parsed) {
-  for (const [name, value] of rawParams(parsed.search.slice(1))) {
-    const reason = paramExfilReason(name, value);
+  for (const [name, value, rawName] of rawParams(parsed.search.slice(1))) {
+    const reason = paramExfilReason(name, value, rawName);
     if (reason) return reason;
   }
   // The fragment carries the same `key=value` channel (`#token=…`); a bare
   // anchor (`#section-2`) yields one empty-value param that trips nothing.
-  for (const [name, value] of rawParams(parsed.hash.slice(1))) {
-    const reason = paramExfilReason(name, value);
+  for (const [name, value, rawName] of rawParams(parsed.hash.slice(1))) {
+    const reason = paramExfilReason(name, value, rawName);
     if (reason) return reason;
   }
   return null;

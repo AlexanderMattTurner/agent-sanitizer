@@ -64101,31 +64101,33 @@ function rawParams(qs) {
   for (const pair of qs.split(/[&;]/)) {
     if (!pair) continue;
     const eq = pair.indexOf("=");
-    const name50 = eq === -1 ? pair : pair.slice(0, eq);
-    const afterEq = eq === -1 ? "" : pair.slice(eq + 1);
-    const value = afterEq === "" ? pair : afterEq;
-    pairs.push([name50.toLowerCase(), value]);
+    const rawName = eq === -1 ? pair : pair.slice(0, eq);
+    const value = eq === -1 ? "" : pair.slice(eq + 1);
+    pairs.push([rawName.toLowerCase(), value, rawName]);
   }
   return pairs;
 }
-function paramExfilReason(name50, value) {
+function paramExfilReason(name50, value, rawName) {
   if (BENIGN_BLOB_PARAM_RE.test(name50)) return null;
-  const opaqueRuns = value.match(OPAQUE_TOKEN_RE);
-  if (opaqueRuns?.some(
-    (run) => VALUE_HAS_DIGIT_RE.test(run) && matchesSecretHint(run)
-  ))
-    return "credential-shaped token in URL parameter";
-  if (isBlobValue(value) || decodedBlobMatch(value))
-    return "suspicious query parameter";
+  for (const candidate of [rawName, value]) {
+    if (!candidate) continue;
+    const opaqueRuns = candidate.match(OPAQUE_TOKEN_RE);
+    if (opaqueRuns?.some(
+      (run) => VALUE_HAS_DIGIT_RE.test(run) && matchesSecretHint(run)
+    ))
+      return "credential-shaped token in URL parameter";
+    if (isBlobValue(candidate) || decodedBlobMatch(candidate))
+      return "suspicious query parameter";
+  }
   return null;
 }
 function rawUrlKeywordExfil(url) {
   const qIdx = url.search(/[?#]/);
   if (qIdx === -1) return null;
   for (const segment of url.slice(qIdx + 1).split("#")) {
-    for (const [name50, value] of rawParams(segment)) {
+    for (const [name50, value, rawName] of rawParams(segment)) {
       if (!KEYWORD_PARAM_NAME_RE.test(name50)) continue;
-      const reason = paramExfilReason(name50, value);
+      const reason = paramExfilReason(name50, value, rawName);
       if (reason) return reason;
     }
   }
@@ -64137,12 +64139,12 @@ function allParamsBenign(parsed) {
   );
 }
 function checkUrlParams(parsed) {
-  for (const [name50, value] of rawParams(parsed.search.slice(1))) {
-    const reason = paramExfilReason(name50, value);
+  for (const [name50, value, rawName] of rawParams(parsed.search.slice(1))) {
+    const reason = paramExfilReason(name50, value, rawName);
     if (reason) return reason;
   }
-  for (const [name50, value] of rawParams(parsed.hash.slice(1))) {
-    const reason = paramExfilReason(name50, value);
+  for (const [name50, value, rawName] of rawParams(parsed.hash.slice(1))) {
+    const reason = paramExfilReason(name50, value, rawName);
     if (reason) return reason;
   }
   return null;
