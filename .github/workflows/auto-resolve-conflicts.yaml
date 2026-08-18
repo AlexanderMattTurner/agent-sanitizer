@@ -229,7 +229,10 @@ jobs:
       # A repository VARIABLE with this file's own default behind it. An adopter
       # widens the flagged set without editing a synced file, which template-sync
       # would hand straight back on the next run.
-      protected-paths-regex: ${{ vars.AUTO_RESOLVE_PROTECTED_RE || '^(\.github/|\.claude/|\.hooks/)' }}
+      # No literal here: an empty value takes the resolver's own default, which is
+      # the same spelling `lib/merge-conflict.bash` uses. A second copy would drift,
+      # and this regex decides which resolutions get flagged for a human.
+      protected-paths-regex: ${{ vars.AUTO_RESOLVE_PROTECTED_RE }}
     # Named rather than `secrets: inherit`, so this call passes only what the
     # resolver declares and a consumer repository can copy the block verbatim.
     # An unset secret arrives empty, which drops that ladder rung.
