@@ -531,8 +531,15 @@ def test_the_differential_corpus_actually_detects_something():
         (r"(?:ab){3}", 6),
         # An alternation is as wide as its widest arm.
         (r"(?:ab|abcdef)", 6),
-        # An anchor is zero-width.
+        # A start/end-of-text anchor inspects nothing a window can hide.
         (r"^abc$", 3),
+        (r"abc\Z", 3),
+        # A word boundary reads the character to its RIGHT, so its extent must
+        # reach one past it. A LEADING one over-counts by one, which is the safe
+        # direction.
+        (r"abc\b", 4),
+        (r"abc\B", 4),
+        (r"\babc", 4),
         # A trailing lookahead's own width is INCLUDED: a caller that truncates
         # at the bound must not cut the assertion short and turn a match into a
         # miss. Same for a negative one.
@@ -636,6 +643,23 @@ def test_windows_finditer_over_them_finds_what_a_full_sweep_finds():
     ]
     assert windowed == [m.group(0) for m in compiled.finditer(text)]
     assert windowed == ["kia1111", "kia4444"]
+
+
+def test_windows_keep_a_word_boundary_reading_real_bytes():
+    """`endpos` makes the text LOOK like it ends there, and `\\b`/`\\B` read the
+    character to their right: `abc\\B` matches in `zabcq` but not in `zabc`. So a
+    window has to reach one character past the assertion — bounding it at the
+    consumed width instead drops the match with no error."""
+    compiled = re.compile(r"abc\B")
+    probe = P.LiteralProbe([compiled])
+    text = "z" * 400 + "abcq" + "y" * 400
+    windows = probe.plan(text).windows
+    assert windows is not None
+    windowed = [
+        m.span() for start, end in windows for m in compiled.finditer(text, start, end)
+    ]
+    assert windowed == [m.span() for m in compiled.finditer(text)] == [(400, 403)]
+    assert sum(end - start for start, end in windows) < len(text)
 
 
 def test_a_pattern_with_an_unbounded_extent_is_never_windowed():

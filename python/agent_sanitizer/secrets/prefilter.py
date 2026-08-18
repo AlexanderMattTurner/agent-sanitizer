@@ -216,15 +216,37 @@ def _required(seq) -> frozenset[str] | None:
     return _most_selective(candidates)
 
 
+# How far RIGHT of itself each zero-consuming assertion READS, since a window
+# ending at the assertion hides everything past it. `\b`/`\B` read the character
+# on each side, and truncating the right one to end-of-string flips their answer
+# (`abc\B` matches in `zabcq`, not in `zabc`); an end-of-text assertion only
+# becomes MORE true under truncation, costing a candidate rather than losing one.
+_AT_INSPECT_WIDTHS = {
+    _c.AT_BEGINNING: 0,
+    _c.AT_BEGINNING_LINE: 0,
+    _c.AT_BEGINNING_STRING: 0,
+    _c.AT_END: 0,
+    _c.AT_END_LINE: 0,
+    _c.AT_END_STRING: 0,
+    _c.AT_BOUNDARY: 1,
+    _c.AT_NON_BOUNDARY: 1,
+    _c.AT_LOC_BOUNDARY: 1,
+    _c.AT_LOC_NON_BOUNDARY: 1,
+    _c.AT_UNI_BOUNDARY: 1,
+    _c.AT_UNI_NON_BOUNDARY: 1,
+}
+
+
 def _inspect_width(seq) -> int | None:
     """An upper bound on how far RIGHT of its start ``seq`` can read, or None when
     no bound exists.
 
     Bounds the whole inspected extent, not just the consumed one, so a trailing
-    lookahead's own width is added in: a caller that truncates the text at this
-    distance must not cut a boundary assertion short, since that would turn a
-    real match into a miss. A lookBEHIND adds nothing — it reads left, and the
-    ``pos`` argument this pairs with never hides text to the left.
+    lookahead's width is added in and so is the character a word-boundary
+    assertion reads to its right (:data:`_AT_INSPECT_WIDTHS`): a caller that
+    truncates the text at this bound must not cut an assertion short, since that
+    turns a real match into a miss. A lookBEHIND adds nothing — it reads left,
+    and the ``pos`` argument this pairs with never hides text to the left.
 
     Anything not enumerated here yields None. Under a detection gate an
     unrecognized construct must widen the search, never narrow it, so an opcode
@@ -237,7 +259,10 @@ def _inspect_width(seq) -> int | None:
         if op in (_c.LITERAL, _c.NOT_LITERAL, _c.IN, _c.ANY):
             total += 1
         elif op is _c.AT:
-            continue  # A zero-width anchor consumes and inspects nothing.
+            inspected = _AT_INSPECT_WIDTHS.get(av)
+            if inspected is None:
+                return None
+            total += inspected
         elif op is _c.BRANCH:
             arms = [_inspect_width(alt) for alt in av[1]]
             if any(arm is None for arm in arms):
