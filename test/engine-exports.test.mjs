@@ -95,6 +95,14 @@ const PUBLISHED_EXPORTS = {
     "stripInvisible",
     "stripInvisibleWithReport",
   ],
+  "./layer1": [
+    "INERT_ANSI_NOTE",
+    "LONE_SURROGATE_RE",
+    "applyLayer1",
+    "isBenignAnsi",
+    "isBenignAnsiKinds",
+    "stripAnsiFully",
+  ],
   "./html": [
     "COMMENT_PLACEHOLDER",
     "DATA_URI_LENGTH_THRESHOLD",
