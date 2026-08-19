@@ -122,12 +122,10 @@ describe("lazy-load invariant", () => {
   }
 
   // The `./layer1` subpath is the reason a consumer can take Layer 1 alone, so
-  // it is covered here through the BARE SPECIFIER rather than by a `src/` entry
-  // in the loop above. That is strictly more: the specifier resolves through the
+  // it is covered through the BARE SPECIFIER: the import resolves through the
   // exports map (a missing or misrouted entry fails here, where a relative
-  // import would still pass), it lands on the same graph the file entry would
-  // have recorded, and it applies the same LEAKED filter — so a loop entry for
-  // `layer1.mjs` would spawn a second node process to assert a subset.
+  // import would still pass), lands on the same graph a `src/` entry would
+  // record, and applies the same LEAKED filter.
   it("agent-sanitizer/layer1 resolves and applyLayer1 works through it", async () => {
     const mod = await import("agent-sanitizer/layer1");
     assert.equal(typeof mod.applyLayer1, "function");

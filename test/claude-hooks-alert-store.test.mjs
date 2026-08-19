@@ -324,3 +324,23 @@ describe("the store refuses what it does not own", () => {
     assert.match(invisibleCharAlert(SESSIONS[0]), /a genuine finding/u);
   });
 });
+
+/**
+ * The reason this reader produces is spliced into a permissionDecisionReason, so
+ * it must carry no Layer-1 payload. Note what this path does NOT need to prove:
+ * the store is a UTF-8 FILE, so `readFileSync` has already mapped any planted
+ * lone surrogate to U+FFFD before the scrubber sees it. A surrogate assertion
+ * here would pass whatever `invisible-alert.mjs` injects, so the injected
+ * function's own obligation is pinned in claude-hooks-host-seams.test.mjs.
+ */
+describe("the alert reason is scrubbed before it reaches a reason field", () => {
+  it("strips Layer-1 payloads through the injected seam", () => {
+    appendAlert("vis\u200Bible\u001B[31mred\u001B[0m", SESSIONS[0]);
+    const reason = invisibleCharAlert(SESSIONS[0]);
+    // Positive marker first: the finding really came back, so each absence
+    // below is a strip and not an empty read.
+    assert.match(reason, /visiblered/u);
+    assert.ok(!reason.includes("\u200B"), "zero-width space survived");
+    assert.ok(!reason.includes("\u001B"), "ANSI introducer survived");
+  });
+});

@@ -6,11 +6,14 @@
  * re-implementation would drift, and rehydration's soundness gate depends on
  * re-cleaning reproducing the view).
  *
- * Lone-surrogate normalization is NOT applied by {@link applyLayer1} itself: it
- * is exported as {@link LONE_SURROGATE_RE} for consumers to apply at the boundary
- * that needs a well-formed string (the redactor input in output.mjs's
- * processLayer1 / re-redact, and before the HTML tokenizer), because that is the
- * point where a lone surrogate would otherwise corrupt a match or a parse.
+ * Lone-surrogate normalization is NOT applied by {@link applyLayer1} itself. It
+ * belongs at the boundary that needs a well-formed string — the redactor input
+ * in output.mjs's processLayer1 / re-redact, and before the HTML tokenizer —
+ * because that is the point where a lone surrogate would otherwise corrupt a
+ * match or a parse. Prefer {@link normalizeLoneSurrogates} at each such
+ * boundary, the one definition of that substitution, which output.mjs's
+ * processLayer1 and rehydrate.mjs both call — not a fresh `.replace` over
+ * {@link LONE_SURROGATE_RE}.
  *
  * So {@link applyLayer1} alone is NOT the string the tool-output pipeline shows a
  * model: on an input carrying an unpaired surrogate the two differ at exactly

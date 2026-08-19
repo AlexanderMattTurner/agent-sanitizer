@@ -513,8 +513,11 @@ describe("lone-surrogate divergence between Layer 1 and the model-facing view", 
   });
 
   it("applyLayer1WellFormed replaces exactly that code unit and reports it", () => {
-    const { cleaned, found } = applyLayer1WellFormed(RAW);
+    const { cleaned, deAnsi, found } = applyLayer1WellFormed(RAW);
     assert.equal(cleaned, "ab\uFFFDcred");
+    // `deAnsi` is the ANSI strip of the ORIGINAL text, so it keeps the
+    // surrogate AND the ZWSP — the scope the long-run payload check needs.
+    assert.equal(deAnsi, `a\u200Bb${HIGH}cred`);
     assert.deepEqual(
       [...found].sort(),
       [CATEGORY.ANSI, CATEGORY.CF, CATEGORY.LONE_SURROGATES].sort(),

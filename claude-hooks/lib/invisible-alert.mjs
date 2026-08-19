@@ -30,13 +30,16 @@ import {
 } from "./hook-io.mjs";
 
 // Layer-1 scrubber for the untrusted alert-store contents the gate splices into a
-// permissionDecisionReason. Bound via lazyImport (see its doc for the fail-OPEN
-// hazard of a bare static npm import): a load failure leaves applyLayer1 undefined,
-// so scrubUntrustedText throws into the caller's fail-closed catch (→ ask) rather
-// than emitting an unscrubbed reason.
-const { applyLayer1 } = /** @type {typeof import("agent-sanitizer")} */ (
-  await lazyImport("agent-sanitizer")
-);
+// permissionDecisionReason. The WELL-FORMED composition, not the bare applyLayer1:
+// the reason is spliced into the model's UTF-16 context, and scrubUntrustedText's
+// code-point cap must not slice a lone surrogate half. Bound via lazyImport (see
+// its doc for the fail-OPEN hazard of a bare static npm import): a load failure
+// leaves it undefined, so scrubUntrustedText throws into the caller's fail-closed
+// catch (→ ask) rather than emitting an unscrubbed reason.
+const { applyLayer1WellFormed } =
+  /** @type {typeof import("agent-sanitizer")} */ (
+    await lazyImport("agent-sanitizer")
+  );
 
 /**
  * The path prefix every alert artifact of this PROJECT shares. Never a file
@@ -392,7 +395,7 @@ export function invisibleCharAlert(sessionId) {
     }
   }
   if (parts.length === 0) return null;
-  return scrubUntrustedText(parts.join("\n"), applyLayer1);
+  return scrubUntrustedText(parts.join("\n"), applyLayer1WellFormed);
 }
 
 /**
