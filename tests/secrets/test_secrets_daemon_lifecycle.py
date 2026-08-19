@@ -294,6 +294,45 @@ def test_unlink_if_ours_tolerates_an_already_absent_path(sock_dir):
     S._unlink_if_ours(str(sock_dir / "s.sock"), (1, 2))  # no raise
 
 
+def test_unlink_if_ours_tolerates_a_directory_it_may_not_write(sock_dir, monkeypatch):
+    """A deployment may hand the socket directory to root once the daemon has bound, so
+    that nothing can unlink the socket and rebind a listener answering "nothing to
+    redact" to every payload. Unlink then needs a write this process does not have.
+
+    Teardown runs from ``serve``'s ``finally``, so a raise here REPLACES the exception
+    that was unwinding and hides why the daemon actually died. The refusal is injected
+    rather than made with a directory mode, because root ignores the mode and this suite
+    runs as root in some environments."""
+    socket_path = str(sock_dir / "s.sock")
+    sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    try:
+        identity = _publish(sock, socket_path)
+    finally:
+        sock.close()
+
+    def _refuse(*_args, **_kwargs):
+        raise PermissionError(13, "Permission denied")
+
+    monkeypatch.setattr(S.os, "unlink", _refuse)
+    S._unlink_if_ours(socket_path, identity)  # no raise
+    monkeypatch.undo()
+    assert Path(socket_path).exists(), (
+        "the socket was removed from a directory this process cannot write"
+    )
+
+
+def test_unlink_if_ours_tolerates_a_lock_it_may_not_create(sock_dir, monkeypatch):
+    """The same refusal one step earlier: the publish lock lives in that directory too,
+    so a teardown that cannot even open it must still not raise through ``serve``'s
+    ``finally``."""
+
+    def _refuse(*_args, **_kwargs):
+        raise PermissionError(13, "Permission denied")
+
+    monkeypatch.setattr(S, "_hold_publish_lock", _refuse)
+    S._unlink_if_ours(str(sock_dir / "s.sock"), (1, 2))  # no raise
+
+
 # ─── main() ──────────────────────────────────────────────────────────────────
 
 

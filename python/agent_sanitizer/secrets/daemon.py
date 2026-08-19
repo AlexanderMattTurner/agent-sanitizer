@@ -248,8 +248,19 @@ def _unlink_if_ours(socket_path: str, identity: tuple[int, int]) -> None:
     just published, whose clients then fail closed and respawn in a storm. Taking
     the publish lock and re-``lstat``-ing under it makes the delete a no-op unless
     the inode is still ours.
+
+    A refusal by the DIRECTORY is not an error here. A deployment may hand the socket
+    directory to root after the daemon binds, so that nothing can unlink the socket and
+    rebind a listener in its place; unlink then needs a write this process does not have.
+    This runs from ``serve``'s ``finally``, where a raise REPLACES the exception that was
+    unwinding and hides why the daemon actually died. Leaving the socket is the right
+    outcome anyway: nobody else may rebind it either, so a client gets ECONNREFUSED and
+    fails closed.
     """
-    lock_fd = _hold_publish_lock(socket_path)
+    try:
+        lock_fd = _hold_publish_lock(socket_path)
+    except PermissionError:
+        return
     try:
         try:
             st = os.lstat(socket_path)
@@ -257,7 +268,7 @@ def _unlink_if_ours(socket_path: str, identity: tuple[int, int]) -> None:
             return
         if (st.st_dev, st.st_ino) != identity:
             return  # a successor published its own socket; leave it alone
-        with contextlib.suppress(FileNotFoundError):
+        with contextlib.suppress(FileNotFoundError, PermissionError):
             os.unlink(socket_path)
     finally:
         os.close(lock_fd)
