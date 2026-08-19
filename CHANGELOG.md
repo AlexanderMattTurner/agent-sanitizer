@@ -8,6 +8,11 @@ adhere to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+## [2.46.0] - 2026-08-19
+
+### Added
+- Add `./layer1` subpath export so `applyLayer1` skips the HTML graph.
+
 ## [2.45.8] - 2026-08-19
 
 ### Changed
