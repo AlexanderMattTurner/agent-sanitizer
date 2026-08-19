@@ -72,3 +72,6 @@ stryker.dryrun.json
 
 # `pnpm pack` output: a build artifact regenerated on demand, never a source.
 *.tgz
+
+# Rust build artifacts for the narrowing extension prototype (python/rust/).
+python/rust/target/

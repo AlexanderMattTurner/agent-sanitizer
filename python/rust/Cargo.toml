@@ -1,0 +1,23 @@
+[package]
+name = "agent_sanitizer_narrow"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[lib]
+name = "_narrow"
+crate-type = ["cdylib"]
+
+[dependencies]
+aho-corasick = "1"
+memchr = "2"
+
+[dependencies.pyo3]
+version = "0.24"
+features = ["extension-module"]
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+panic = "abort"
