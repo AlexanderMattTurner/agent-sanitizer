@@ -99,7 +99,7 @@ def test_required_literals_are_genuinely_required_of_the_live_denylists():
 def _engine_probes() -> dict[str, P.LiteralProbe]:
     with E.configure_plugins():
         named = {"line": E._line_probe(), "eligible": E._eligible_probe()}
-    return named | {"pem": E._PEM_PROBE, "field-value": E._FIELD_VALUE_PROBE}
+    return named | {"pem": E._PEM_PROBE}
 
 
 def _probe_literal_chars() -> set[str]:
@@ -301,6 +301,50 @@ def test_line_attribution_searches_the_newlines_once_not_once_per_hit():
     assert text.finds == 3
 
 
+def _attribute_naively(text, hits):
+    """``_patterns_by_line`` spelled the slow, obviously-correct way: count the
+    newlines before each line the span covers, from the start of the text every
+    time. The real one carries a running line number and a remembered next-newline
+    position instead, and that bookkeeping is what this pins."""
+    claims = {}
+    for start, end, patterns in hits:
+        first = text.count("\n", 0, start)
+        for index in range(first, first + text.count("\n", start, end) + 1):
+            claims.setdefault(index, set()).update(patterns)
+    return {index: tuple(patterns) for index, patterns in claims.items()}
+
+
+_ATTRIBUTION_TEXTS = [
+    "",
+    "no newline at all, several key hits: key key key",
+    "\n\nkey\n\n",  # blank lines on both sides of the only hit
+    "a\nkey\n\nkey key\nb\n",
+    "key" + "x" * 300 + "\nkey\n" + "key " * 40,
+    "\n".join(f"line {i} key token" for i in range(60)),
+    "key" * 200,  # one long line, a hit every 3 chars
+]
+
+
+@pytest.mark.parametrize("text", _ATTRIBUTION_TEXTS, ids=range(len(_ATTRIBUTION_TEXTS)))
+@pytest.mark.parametrize("width", [3, 7, 40], ids=lambda w: f"span{w}")
+# A weak pattern's match can begin ON a newline, which is the boundary both
+# cursors are counted from — so one marker deliberately matches one.
+@pytest.mark.parametrize("marker", ["key", "[k\n]"], ids=["key", "key-or-newline"])
+def test_line_attribution_matches_the_naive_count(text, width, marker):
+    """Spans of several widths over texts with no newline, only newlines, and hits
+    that straddle one: the walk's answer must equal the naive count exactly. An
+    off-by-one in either cursor claims a neighbouring line instead of the real
+    one, which drops the line a secret is on."""
+    compiled = re.compile(marker)
+    hits = [
+        (m.start(), min(m.start() + width, len(text)), (compiled,))
+        for m in compiled.finditer(text)
+    ]
+    # Non-vacuity: an empty hit list makes both sides `{}` for free.
+    assert hits or text == ""
+    assert P._patterns_by_line(text, hits) == _attribute_naively(text, hits)
+
+
 def test_a_literal_is_reported_once_per_line_not_once_per_occurrence(monkeypatch):
     """A line is a candidate or it is not, so a literal repeated across it need
     only be reported once. Reporting every occurrence made the attribution below
@@ -448,12 +492,12 @@ def test_every_detector_sample_still_redacts_through_the_cascade(sample):
 
 
 def _open_every_probe(monkeypatch):
-    """Replace all four probes with one that rules nothing out, so the engine
-    does the unnarrowed work it did before they existed.
+    """Replace every probe with one that rules nothing out, so the engine does the
+    unnarrowed work it would without them.
 
     The catch-all's one pattern has no required literal, so it lands in ``weak``
     and therefore has no window to centre — so its plan narrows nothing and the
-    cross-line sweep covers the whole text again, as it did before the probes.
+    cross-line sweep covers the whole text.
     ``_FIELD_NAME_ANCHOR`` is opened separately, to the empty pattern: it matches
     at every position, so the field-value pass tries its regex everywhere, which
     is exactly what ``re.sub`` does."""
@@ -470,7 +514,6 @@ def _open_every_probe(monkeypatch):
     monkeypatch.setattr(E, "_line_probe", _cached_stub())
     monkeypatch.setattr(E, "_eligible_probe", _cached_stub())
     monkeypatch.setattr(E, "_PEM_PROBE", catch_all)
-    monkeypatch.setattr(E, "_FIELD_VALUE_PROBE", catch_all)
 
 
 @pytest.mark.parametrize(
