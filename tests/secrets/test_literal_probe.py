@@ -271,34 +271,43 @@ def test_a_weak_pattern_match_claims_every_line_it_touches():
 
 
 class _CountingText(str):
-    """A text that counts the newline searches run over it."""
+    """A text that counts every newline scan run over it — both the searches and
+    the gap counts, since the walk spends one of each per line it advances."""
 
     def __new__(cls, body: str) -> "_CountingText":
         text = super().__new__(cls, body)
         text.finds = 0
+        text.counts = 0
         return text
 
     def find(self, *args) -> int:  # type: ignore[override]
         self.finds += 1
         return super().find(*args)
 
+    def count(self, *args) -> int:  # type: ignore[override]
+        self.counts += 1
+        return super().count(*args)
 
-def test_line_attribution_searches_the_newlines_once_not_once_per_hit():
-    """A hit that does not advance the line must not re-search the text for a
-    newline: one long line with a hit per credential noun is attacker-shaped
-    input against a shared daemon, and re-searching per hit is quadratic in it.
 
-    Bounded on search COUNT, not wall clock, so the guard cannot go quiet on a
-    faster runner — and the count must still EXCEED the newline count, or the
-    walk stopped happening at all.
+def test_line_attribution_scans_the_newlines_once_not_once_per_hit():
+    """A hit that does not advance the line must not scan the text for a newline:
+    one long line with a hit per credential noun is attacker-shaped input against
+    a shared daemon, and re-scanning per hit is quadratic in it.
+
+    Bounded on SCAN COUNT, not wall clock, so the guard cannot go quiet on a
+    faster runner — and both operations the walk spends are counted, since a
+    bound on only one of them would be blind to the other becoming per-hit.
     """
     line = "key " * 4000
     text = _CountingText("\n".join([line] * 3))
     hits = [(m.start(), m.end(), ()) for m in re.finditer("key", text)]
     assert len(hits) == 12000
     P._patterns_by_line(text, hits)
-    # 2 newlines to walk, plus the terminal search that reports none is left.
+    # 2 newlines to walk, plus the opening search that finds the first one.
     assert text.finds == 3
+    # One gap count per line that HAS a hit, never one per hit — and none for the
+    # first line, whose index the opening search already settled.
+    assert text.counts == 2
 
 
 def _attribute_naively(text, hits):
