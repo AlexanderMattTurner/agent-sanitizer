@@ -143,11 +143,12 @@ def identity_map(text: str) -> tuple[str, Sequence[int]]:
     """What :func:`strip_invisible_with_map` returns for a text holding none of
     the charset — the text itself and the identity offset map.
 
-    A caller that has already proven its whole payload invisible-free (a
-    substring of an invisible-free text is invisible-free too) calls this instead
-    of re-proving it per line, since the proof IS the cost: one scan of a
-    400-member character class per line of a megabyte payload is a bigger term
-    than the single scan that proved it for all of them at once.
+    A caller that has already proven a line holds none of them calls this instead
+    of re-proving it, since the proof IS the cost: one scan of a 400-member
+    character class per line of a megabyte payload is a bigger term than the
+    single scan that answered for all of them at once. That is what
+    :func:`strip_invisible_by_line` returns — the lines a whole-payload strip
+    touched, leaving every other line proven.
     """
     return text, range(len(text))
 
@@ -166,24 +167,87 @@ def strip_invisible_with_map(
     inside a redacted span go with the secret and everything else is untouched.
 
     The overwhelmingly common case is that ``text`` contains none of the
-    charset's code points at all: then the offsets are the identity map, which a
-    bare `range` represents with no allocation (the only uses downstream are
-    `offsets[i]` and `offsets[end - 1]`, both of which `range` supports). An
-    ALL-ASCII text reaches that answer for free, since every charset member is
-    above ASCII (:func:`_is_above_ascii` derives that rather than assuming it)
-    and CPython carries the ascii flag on the string object; anything else is
-    decided by the range-collapsed character class, a C scan that stops at the
-    first hit. Every branch stays at C speed, so neither the size of the payload
-    nor one zero-width character buys a Python-level per-character loop."""
+    charset's code points at all — :func:`_deleted_positions` is what decides
+    that, at C speed — and then the offsets are the identity map, which a bare
+    `range` represents with no allocation (the only uses downstream are
+    `offsets[i]` and `offsets[end - 1]`, both of which `range` supports)."""
     if charset is None:
         charset = default_charset()
-    if _is_above_ascii(charset) and text.isascii():
+    deleted = _deleted_positions(text, charset)
+    if deleted is None:
         return identity_map(text)
+    return _without(text, deleted), DeletionOffsets(deleted, len(text) - len(deleted))
+
+
+def strip_invisible_by_line(
+    text: str, charset: frozenset[int] | None = None
+) -> tuple[str, frozenset[int]]:
+    """:func:`strip_invisible`'s result, plus the indices of the newline-separated
+    lines the strip actually deleted from.
+
+    Lets a caller that then scans line by line prove invisible-freeness EXACTLY
+    per line, out of the one whole-payload scan it already paid for: a line
+    outside the returned set holds none of the charset, so it can take
+    :func:`identity_map` rather than re-scan itself. A whole-payload proof is far
+    too coarse for that: one zero-width character anywhere turns it off for every
+    line, and the payloads that carry one carry it on a handful of lines out of
+    hundreds of thousands.
+
+    A line's index is the same in the stripped text and the original because the
+    strip deletes no newline, and the raise below is what holds that: a charset
+    holding U+000A would renumber the lines a caller then indexes by, quietly
+    turning "this line is proven clean" into a claim about a different line."""
+    if charset is None:
+        charset = default_charset()
+    if 0x0A in charset:
+        raise ValueError(
+            "a charset containing U+000A cannot be stripped per line: deleting "
+            "newlines renumbers the very lines the returned indices name"
+        )
+    deleted = _deleted_positions(text, charset)
+    if deleted is None:
+        return text, frozenset()
+    return _without(text, deleted), _lines_holding(text, deleted)
+
+
+def _deleted_positions(text: str, charset: frozenset[int]) -> list[int] | None:
+    """The ascending indices of the ``text`` characters that are in ``charset``,
+    or None when it holds none of them.
+
+    None rather than an empty list, so the overwhelmingly common answer costs no
+    allocation and a caller can branch on the proof itself. An ALL-ASCII text
+    reaches it for free, since every charset member is above ASCII
+    (:func:`_is_above_ascii` derives that rather than assuming it) and CPython
+    carries the ascii flag on the string object; anything else is decided by the
+    range-collapsed character class, a C scan that stops at the first hit. Every
+    branch stays at C speed, so neither the size of the payload nor one zero-width
+    character buys a Python-level per-character loop."""
+    if _is_above_ascii(charset) and text.isascii():
+        return None
     pattern = _invisible_char_re(charset)
     if not pattern.search(text):
-        return identity_map(text)
-    deleted = [m.start() for m in pattern.finditer(text)]
-    return _without(text, deleted), DeletionOffsets(deleted, len(text) - len(deleted))
+        return None
+    return [m.start() for m in pattern.finditer(text)]
+
+
+def _lines_holding(text: str, positions: Sequence[int]) -> frozenset[int]:
+    """The indices of the newline-separated lines of ``text`` that hold the
+    ascending offsets ``positions``.
+
+    Each position's line is counted forward from the one before it rather than
+    from the start of the text, so the whole walk reads each character at most
+    once — `str.count` at C speed over the gaps — instead of once per position.
+    The gap starts AT the previous position rather than past it, which is exact
+    because a position names a charset character and the caller has already
+    refused a charset holding a newline."""
+    lines = set()
+    line = 0
+    previous = 0
+    for position in positions:
+        line += text.count("\n", previous, position)
+        previous = position
+        lines.add(line)
+    return frozenset(lines)
 
 
 @functools.cache

@@ -47,7 +47,7 @@ from .invisible import (
     identity_map,
     invisible_run_pattern,
     newline_offsets,
-    strip_invisible,
+    strip_invisible_by_line,
     strip_invisible_with_map,
 )
 from .prefilter import LiteralProbe, degroup, denylist_patterns, fold
@@ -1186,12 +1186,11 @@ def _eligible_probe() -> LiteralProbe:
     return LiteralProbe(denylist_patterns(get_plugins(), _cross_line_eligible_types()))
 
 
-# Whole-text probes for the two engine-owned passes that sweep the entire payload
-# with `re.sub`. Both are derived from the very pattern they gate, so neither can
-# drift from it, and both are module-level: they read no plugin state, so unlike
-# the probes above they need no cache invalidation.
+# Whole-text probe for the engine-owned pass that sweeps the entire payload with
+# `re.sub`. Derived from the very pattern it gates, so it cannot drift from it, and
+# module-level: it reads no plugin state, so unlike the probes above it needs no
+# cache invalidation.
 _PEM_PROBE = LiteralProbe([PEM_BLOCK_RE])
-_FIELD_VALUE_PROBE = LiteralProbe([FIELD_VALUE_RE])
 
 # Every FIELD_VALUE_RE match opens with a credential noun, so the positions it can
 # START at are exactly the positions this alternation matches at — which is what
@@ -1582,7 +1581,8 @@ def _redact_lines(
     charset: frozenset[int],
     deadline: _Deadline = _NO_DEADLINE,
     candidates: dict[int, tuple[re.Pattern[str], ...]] | None = None,
-    invisible_free: bool = False,
+    *,
+    invisible_lines: frozenset[int],
 ) -> list[str]:
     """:func:`_redact_line` over every line of one request, memoizing identical
     lines — repetitive tool output (a CI log, a test runner's per-case lines, a
@@ -1608,9 +1608,14 @@ def _redact_lines(
     the request-wide ``web_ingress``/``charset``, both fixed for this call), so
     replaying it is exact, not approximate.
 
-    ``invisible_free`` is forwarded verbatim to :func:`_redact_line`; a line of an
-    invisible-free payload is invisible-free itself, so the whole-payload proof
-    the caller already paid for stands in for one strip per line.
+    ``invisible_lines`` is :func:`strip_invisible_by_line`'s verdict — every line
+    index the caller's whole-payload strip deleted from — so a line outside it is
+    PROVEN to hold no invisible character and skips its own strip. Required and
+    keyword-only: an empty set means "no line holds one", which is the direction
+    that skips strips, so a defaulted caller would silently stop seeing keys
+    spliced with a zero-width character. It is safe under the text-keyed memo
+    below because invisible-freeness is a property of a line's own bytes, so two
+    identical lines always agree on it.
     """
     if entries is not None:
         redacted_map_lines = []
@@ -1629,7 +1634,7 @@ def _redact_lines(
                     charset,
                     deadline,
                     confirm,
-                    invisible_free,
+                    index not in invisible_lines,
                 )
             )
         return redacted_map_lines
@@ -1660,7 +1665,7 @@ def _redact_lines(
                     charset,
                     deadline,
                     confirm,
-                    invisible_free,
+                    index not in invisible_lines,
                 ),
                 line_found,
             )
@@ -1691,8 +1696,11 @@ def _redact_field_values(
     anchor search at the previous match's END reproduces ``sub``'s
     non-overlapping, leftmost-first order.
 
-    A text ``fold`` refuses (a length-changing case fold, which no code point
-    reaches today) falls back to the full sweep: slower, never wrong.
+    A payload holding no credential noun anywhere therefore costs one failed
+    anchor search, which is why nothing gates this call: a whole-payload literal
+    probe in front of it would fold the payload a second time to reach the same
+    answer. A text ``fold`` refuses (a length-changing case fold, which no code
+    point reaches today) falls back to the full sweep: slower, never wrong.
     """
     folded = fold(text)
     if folded is None:
@@ -1760,11 +1768,8 @@ def _redact_core(
     # and stripping deletes no newline, so a stripped line's index is its
     # original's.
     deadline.check("candidate-line probe")
-    stripped = strip_invisible(working, charset)
+    stripped, invisible_lines = strip_invisible_by_line(working, charset)
     candidates = _line_probe().candidates(stripped, deadline.check)
-    # The strip above deletes only charset code points, so an unchanged LENGTH
-    # proves the whole payload holds none of them — and therefore that no line of
-    # it does either.
     lines = _redact_lines(
         working.split("\n"),
         web_ingress,
@@ -1773,7 +1778,7 @@ def _redact_core(
         charset,
         deadline,
         candidates,
-        invisible_free=len(stripped) == len(working),
+        invisible_lines=invisible_lines,
     )
 
     rejoined = "\n".join(lines)
@@ -1802,10 +1807,6 @@ def _redact_core(
             + m.group("closebracket")
         )
 
-    if not _FIELD_VALUE_PROBE.may_match(rejoined):
-        # No credential noun appears anywhere, so the regex cannot match — skip a
-        # second full pass over the payload rather than run it to find nothing.
-        return rejoined, found
     return _redact_field_values(rejoined, _replace_field, deadline), found
 
 
