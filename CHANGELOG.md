@@ -8,6 +8,11 @@ adhere to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+## [2.45.7] - 2026-08-19
+
+### Fixed
+- Prevent daemon teardown from masking the actual reason the daemon died.
+
 ## [2.45.6] - 2026-08-19
 
 ### Changed
