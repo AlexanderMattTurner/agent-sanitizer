@@ -17,6 +17,7 @@ import {
   matchesSecretHint,
 } from "agent-sanitizer";
 import { STRIP, SGR_RE, stripInvisible } from "agent-sanitizer/invisible";
+import { applyLayer1, LONE_SURROGATE_RE } from "agent-sanitizer/layer1";
 import { HTML_TAG_PRESENT, MD_LINK_HINT } from "agent-sanitizer/html";
 import { hasNonAscii, normalizeConfusables } from "agent-sanitizer/confusables";
 import { scanInstructionFiles } from "agent-sanitizer/instructions";
@@ -41,10 +42,12 @@ const _mdNotAny: IsAny<typeof MD_LINK_HINT> = false;
 const _secret: RegExp = SECRET_HINT;
 const _secretExt: RegExp = SECRET_HINT_EXT;
 
-// The remaining six exports subpaths (/confusables, /instructions, /prompt,
-// /output, /view-map, /rehydrate) get the same `any`-leak guard: IsAny on the
-// imported binding itself catches a declaration collapse for a *function*
+// The remaining exports subpaths (/layer1, /confusables, /instructions,
+// /prompt, /output, /view-map, /rehydrate) get the same `any`-leak guard: IsAny
+// on the imported binding itself catches a declaration collapse for a *function*
 // export too, not just the regex constants above.
+const _applyLayer1NotAny: IsAny<typeof applyLayer1> = false;
+const _loneSurrogateNotAny: IsAny<typeof LONE_SURROGATE_RE> = false;
 const _hasNonAsciiNotAny: IsAny<typeof hasNonAscii> = false;
 const _normalizeConfusablesNotAny: IsAny<typeof normalizeConfusables> = false;
 const _scanInstructionFilesNotAny: IsAny<typeof scanInstructionFiles> = false;
@@ -61,6 +64,12 @@ CATEGORY.NOT_A_REAL_CATEGORY;
 
 const _hint: boolean = matchesSecretHint("token=abc");
 const _stripped: string = stripInvisible("x");
+
+// /layer1 — the composed Layer-1 transform, reachable without the HTML graph.
+const _layer1 = applyLayer1("x");
+const _layer1Cleaned: string = _layer1.cleaned;
+const _layer1Found: string[] = _layer1.found;
+const _loneSurrogate: RegExp = LONE_SURROGATE_RE;
 
 // sanitize resolves to the documented result shape.
 const result = await sanitize("x", { html: true });
@@ -133,6 +142,11 @@ export const _assertions = [
   _cf,
   _hint,
   _stripped,
+  _applyLayer1NotAny,
+  _loneSurrogateNotAny,
+  _layer1Cleaned,
+  _layer1Found,
+  _loneSurrogate,
   _cleaned,
   _found,
   _warnings,

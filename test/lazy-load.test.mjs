@@ -99,6 +99,7 @@ describe("lazy-load invariant", () => {
   // it. A static `import … from "./html.mjs"` slipped into any of these would
   // tax every consumer with the ~200ms remark/rehype load on module evaluation.
   for (const file of [
+    "layer1.mjs",
     "output.mjs",
     "rehydrate.mjs",
     "confusables.mjs",
@@ -120,6 +121,41 @@ describe("lazy-load invariant", () => {
       );
     });
   }
+
+  // The `./layer1` subpath is the reason a consumer can take Layer 1 alone. The
+  // loop above proves the FILE is light; these two prove the published SUBPATH
+  // is, because a consumer imports through the exports map and not through a
+  // relative path. Both go through the bare specifier so a missing or misrouted
+  // map entry fails here.
+  it("agent-sanitizer/layer1 resolves and applyLayer1 works through it", async () => {
+    const mod = await import("agent-sanitizer/layer1");
+    assert.equal(typeof mod.applyLayer1, "function");
+    // A zero-width space and an ANSI SGR run: the two halves Layer 1 composes,
+    // so a subpath wired to the wrong module fails loudly rather than blankly.
+    const { cleaned, found } = mod.applyLayer1(
+      "a\u200Bb\u001B[31mred\u001B[0m",
+    );
+    assert.equal(cleaned, "abred");
+    assert.deepEqual([...found].sort(), ["ansi", "cf-format"]);
+  });
+
+  it("importing agent-sanitizer/layer1 does not pull the HTML/remark graph", () => {
+    const graph = resolvedGraph("agent-sanitizer/layer1");
+    assert.ok(
+      graph.some((url) => url.endsWith("/src/layer1.mjs")),
+      "the subpath did not resolve to src/layer1.mjs — exports map entry is wrong or the recorder is dead",
+    );
+    assert.ok(
+      graph.some((url) => url.endsWith("/src/invisible.mjs")),
+      "subpath graph is missing invisible.mjs — Layer 1's own dependency did not load",
+    );
+    const leaked = graph.filter(LEAKED);
+    assert.deepEqual(
+      leaked,
+      [],
+      `agent-sanitizer/layer1 eagerly loaded the heavy HTML graph: ${leaked.join(", ")}`,
+    );
+  });
 
   it("importing the HTML subpath DOES load the heavy graph (negative test is not vacuous)", () => {
     const graph = resolvedGraph(srcUrl("html.mjs"));

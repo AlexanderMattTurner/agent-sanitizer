@@ -116,6 +116,10 @@
       "types": "./types/invisible.d.mts",
       "default": "./src/invisible.mjs"
     },
+    "./layer1": {
+      "types": "./types/layer1.d.mts",
+      "default": "./src/layer1.mjs"
+    },
     "./html": {
       "types": "./types/html.d.mts",
       "default": "./src/html.mjs"
