@@ -6,16 +6,21 @@ sanitizer's), the strip semantics, and the fail-closed behaviour when the shared
 dependency is unavailable.
 """
 
+import re
 import unicodedata
 
 import pytest
 
 from agent_sanitizer.secrets import strip_invisible
+from agent_sanitizer.secrets import invisible as I
 from agent_sanitizer.secrets.invisible import (
     default_charset,
+    identity_map,
     invisible_run_pattern,
     strip_invisible_with_map,
 )
+import agent_sanitizer.secrets.engine as E
+from redactor_helpers import cfg, run_plain
 
 # Cf representatives by code point: zero-width, ZWNJ/ZWJ, word-joiner, BOM, soft
 # hyphen, bidi override/isolate, TAG.
@@ -149,9 +154,8 @@ def test_strip_invisible_explicit_charset_overrides_default():
 
 
 def test_strip_invisible_with_map_clean_text_takes_the_identity_fast_path():
-    """No charset member present: the `str.translate` presence probe must short
-    -circuit to the identity `range`, not fall through to the per-character
-    loop."""
+    """No charset member present: the presence probe must short-circuit to the
+    identity `range`, not fall through to locating deletions."""
     text = "clean text, no invisibles: AKIA1234"
     result_text, offsets = strip_invisible_with_map(text)
     assert result_text == text
@@ -178,8 +182,6 @@ def test_env_invis_run_domain_equals_charset():
     """The env-bound run pattern tolerates EXACTLY the charset's code points — no
     subset (a splice using an omitted char would evade the matcher) and no
     superset (dead weight in the class)."""
-    import re
-
     charset = default_charset()
     pattern = invisible_run_pattern(charset)
     inner = re.compile("[" + pattern[1:-2] + "]")
@@ -207,3 +209,118 @@ def test_default_charset_fails_closed_without_shared_dep(monkeypatch):
     # sanity: the real accessor works (guards against a typo neutering the test)
     inv.invisible_charset.cache_clear()
     assert inv.invisible_charset()
+
+
+# ─── the per-line strip skip ─────────────────────────────────────────────────
+
+
+def test_identity_map_matches_what_a_clean_strip_returns():
+    """`_redact_line` swaps `strip_invisible_with_map` for `identity_map` on a
+    payload proven invisible-free; the two must be indistinguishable, or the
+    offset translation that follows would land somewhere else."""
+    clean = "AKIA1234 token=abcdef"
+    stripped, offsets = strip_invisible_with_map(clean)
+    shortcut, shortcut_offsets = identity_map(clean)
+    assert (stripped, list(offsets)) == (shortcut, list(shortcut_offsets))
+
+
+def test_an_empty_charset_strips_nothing_rather_than_failing_to_compile():
+    """An empty charset is a legitimate override — strip nothing, tolerate
+    nothing — but a memberless class spells `[]`, which `re` rejects as a syntax
+    error. Non-ASCII text is the case that gets past the `str.isascii` shortcut
+    and reaches the class, so it is what proves the never-matching spelling."""
+    accented = "caf\u00e9"
+    assert strip_invisible_with_map(accented, frozenset()) == identity_map(accented)
+    assert strip_invisible(accented, frozenset()) == accented
+    run = re.compile(invisible_run_pattern(frozenset()))
+    assert run.fullmatch("") is not None
+    assert run.match("\u200b").group(0) == ""
+
+
+class _CountingPattern:
+    """A compiled pattern that counts the searches run through it."""
+
+    def __init__(self, inner):
+        self._inner = inner
+        self.searches = 0
+
+    def search(self, *args):
+        self.searches += 1
+        return self._inner.search(*args)
+
+    def finditer(self, *args):
+        return self._inner.finditer(*args)
+
+
+def _count_strips(monkeypatch, text):
+    real = I._invisible_char_re(default_charset())
+    counter = _CountingPattern(real)
+    monkeypatch.setattr(I, "_invisible_char_re", lambda charset: counter)
+    result = run_plain(text, cfg())
+    return result, counter.searches
+
+
+_PROBE_LINES = 400
+# Two properties this payload needs, and either one missing makes the counts
+# below vacuous: NON-ASCII, so `strip_invisible_with_map`'s `str.isascii`
+# shortcut cannot answer for free and the charset scan is the only thing that
+# can; and a credential literal per line (`akia`), so the line probe hands each
+# line to `_redact_line` at all. `akia note …` is not key-shaped, so nothing is
+# redacted and the strip count is all that differs.
+_PROBE_PAYLOAD = "\n".join(
+    f"akia note {i} nothing to s\u00e9e" for i in range(_PROBE_LINES)
+)
+
+
+def test_a_clean_payload_pays_no_per_line_strip(monkeypatch):
+    """The whole-payload strip already proves no line holds an invisible
+    character, so the per-line strip is skipped outright — a couple of scans for
+    the payload, not one per line."""
+    _, searches = _count_strips(monkeypatch, _PROBE_PAYLOAD)
+    assert searches < 10, searches
+
+
+def test_without_the_skip_every_line_pays_its_own_strip(monkeypatch):
+    """Non-vacuity for the count above: forcing `invisible_free` off puts the
+    strip back on every line, so that bound measures the skip rather than a
+    payload the strip never reaches."""
+    real = E._redact_line
+    monkeypatch.setattr(
+        E, "_redact_line", lambda *args, **kwargs: real(*args[:7], False)
+    )
+    _, searches = _count_strips(monkeypatch, _PROBE_PAYLOAD)
+    assert searches > _PROBE_LINES, searches
+
+
+_SPLICED_KEY = "AKIA​IOSFODNN7EXAMPLE"
+# Deliberately a BARE value, with no `aws_access_key_id =` in front of it: the
+# field-value pass would redact that shape whether the strip ran or not, hiding
+# the very difference these two tests exist to show.
+_SPLICED_PAYLOAD = "\n".join(["padding line"] * 50 + [_SPLICED_KEY])
+
+
+def test_a_key_spliced_with_an_invisible_char_still_redacts():
+    """The fail-open direction of that skip: one zero-width character anywhere in
+    the payload means every line is stripped again, so a key carrying one is still
+    seen whole. Detecting it IS the proof the per-line strip ran — the key lies
+    within one line, so the cross-line pass discards it, and no detector matches
+    the spliced bytes unstripped (the test below runs exactly that case)."""
+    result = run_plain(_SPLICED_PAYLOAD, cfg())
+    assert result is not None
+    assert _SPLICED_KEY not in result["text"]
+    assert "AWS Access Key" in result["found"]
+
+
+def test_skipping_the_strip_on_a_dirty_payload_would_leak_the_key(monkeypatch):
+    """Non-vacuity for the test above, and the reason `invisible_free` defaults to
+    False: forcing the skip on a payload that DOES carry an invisible character
+    leaks the spliced key verbatim."""
+    real = E._redact_line
+    monkeypatch.setattr(
+        E,
+        "_redact_line",
+        lambda *args, **kwargs: real(*args[:7], True),
+    )
+    # `run_plain` returns None when nothing was redacted at all, which is the
+    # leak stated as plainly as it can be: the key survives the whole pipeline.
+    assert run_plain(_SPLICED_PAYLOAD, cfg()) is None

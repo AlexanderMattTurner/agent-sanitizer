@@ -26,6 +26,7 @@ import functools
 import json
 import re
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import NamedTuple
@@ -43,12 +44,13 @@ from .credential_names import (
     credential_name_segments,
 )
 from .invisible import (
+    identity_map,
     invisible_run_pattern,
     newline_offsets,
     strip_invisible,
     strip_invisible_with_map,
 )
-from .prefilter import LiteralProbe, degroup, denylist_patterns
+from .prefilter import LiteralProbe, degroup, denylist_patterns, fold
 
 # Aliased on import: engine-local `_PLACEHOLDER_RE` is the DOCUMENTATION
 # metavariable shape (`YOUR_API_KEY`), a different concept from the redaction
@@ -1191,6 +1193,33 @@ def _eligible_probe() -> LiteralProbe:
 _PEM_PROBE = LiteralProbe([PEM_BLOCK_RE])
 _FIELD_VALUE_PROBE = LiteralProbe([FIELD_VALUE_RE])
 
+# Every FIELD_VALUE_RE match opens with a credential noun, so the positions it can
+# START at are exactly the positions this alternation matches at — which is what
+# lets `_redact_field_values` try the expensive regex at those positions instead of
+# sweeping it over the payload. Compiled from the same `_FIELD_NAMES` the regex
+# itself is built from, so the two cannot name different vocabularies; the guard
+# below is what says the noun list is still the FIRST thing the regex matches.
+_FIELD_NAME_ANCHOR_PREFIX = rf"(?P<field_prefix>(?:{_FIELD_NAMES})"
+if not FIELD_VALUE_RE.pattern.startswith(_FIELD_NAME_ANCHOR_PREFIX):
+    raise RuntimeError(
+        "FIELD_VALUE_RE no longer opens with the credential-noun alternation, so "
+        "a noun match is no longer a necessary condition for a match START and "
+        "_redact_field_values would skip real field values"
+    )
+# Searched in `fold`'s lowercased view instead of carrying `re.IGNORECASE`:
+# CPython disables its literal/charset prefix optimization outright for an
+# IGNORECASE pattern (see `re._compiler._compile_info`), which costs this
+# alternation an order of magnitude — 1.8s versus 0.17s over 8MB. The vocabulary
+# is required to be lowercase already so that folding its SOURCE cannot rewrite a
+# character range into a different set.
+if _FIELD_NAMES != _FIELD_NAMES.lower():
+    raise RuntimeError(
+        f"credential field-name patterns {_FIELD_NAMES!r} carry an uppercase "
+        "character; the case-insensitive anchor is matched against folded text, "
+        "so an uppercase literal in the pattern could never match"
+    )
+_FIELD_NAME_ANCHOR = re.compile(_FIELD_NAMES)
+
 
 def _cross_line_candidate_spans(
     collapsed: str, config: RedactorConfig, deadline: _Deadline = _NO_DEADLINE
@@ -1211,7 +1240,8 @@ def _cross_line_candidate_spans(
     directly on ``collapsed``.
 
     Rather than running :func:`scan_line` over the whole (potentially huge)
-    ``stripped`` view, this prefilters with :func:`_eligible_prefilter` and only
+    ``stripped`` view, this prefilters with :func:`_eligible_prefilter` (itself
+    narrowed to the ranges :meth:`LiteralProbe.plan` returns) and only
     hands scan_line a small window around each hit — scan_line's own detection
     logic decides the actual match, extraction, and filtering, exactly as before;
     the prefilter only narrows WHERE it looks. ``seen`` dedups by (value, type)
@@ -1226,10 +1256,26 @@ def _cross_line_candidate_spans(
     stripped, offsets = strip_invisible_with_map(collapsed, charset)
     seen: set[tuple[str, str]] = set()
     # The eligible union's sweep over the whole collapse is the engine's single
-    # costliest regex pass, and its probe rules the whole thing out for a payload
-    # carrying none of the structural detectors' distinctive literals.
-    prefilters = _eligible_prefilter() if _eligible_probe().may_match(stripped) else ()
-    for hit in (hit for p in prefilters for hit in p.finditer(stripped)):
+    # costliest regex pass, so the probe both rules it out for a payload carrying
+    # none of the structural detectors' distinctive literals, and — when it cannot
+    # rule it out — narrows it to windows around the literals it did find. Every
+    # pattern no window can bound (no indexed literal, or an unbounded match
+    # extent) still sweeps the whole text, individually; without that a match of
+    # one landing outside every window would be a missed secret.
+    plan = _eligible_probe().plan(stripped, deadline.check)
+    sweeps: list[tuple[re.Pattern[str], int, int]]
+    if plan.windows is None:
+        sweeps = [(p, 0, len(stripped)) for p in _eligible_prefilter()]
+    else:
+        sweeps = [
+            (p, start, end)
+            for p in _eligible_prefilter()
+            for start, end in plan.windows
+        ]
+        sweeps += [(p, 0, len(stripped)) for p in plan.full_scans]
+    for hit in (
+        hit for p, start, end in sweeps for hit in p.finditer(stripped, start, end)
+    ):
         deadline.check("cross-line candidate scan")
         window_start = max(0, hit.start() - _PREFILTER_WINDOW_PAD)
         window_end = min(len(stripped), hit.end() + _PREFILTER_WINDOW_PAD)
@@ -1396,6 +1442,7 @@ def _redact_line(
     charset: frozenset[int] | None = None,
     deadline: _Deadline = _NO_DEADLINE,
     confirm: tuple[re.Pattern[str], ...] | None = None,
+    invisible_free: bool = False,
 ) -> str:
     """Redact every detected secret in one ``line``, appending each redacted type
     to ``found``.
@@ -1420,6 +1467,12 @@ def _redact_line(
     because the failure directions are not symmetric: an over-wide ``confirm``
     only costs time, while a too-narrow one silently stops detecting.
 
+    ``invisible_free`` asserts the caller has already proven ``line`` holds none
+    of ``charset``, so the strip is the identity and paying for it again is pure
+    cost. It defaults to False — the strip — because that is the answer that is
+    right either way; True on a line that DOES carry an invisible character
+    would hand every detector the spliced bytes and miss the key.
+
     Every detected value becomes a :class:`_Group` of one or more occurrence
     spans: for a structural/prefix type, every occurrence of that exact
     string in the line (the match SHAPE is the credential, so a repeat is the
@@ -1436,7 +1489,11 @@ def _redact_line(
     bytes are removed by the wider span that covers them regardless, and the
     operator warning should say what was there, not drop it silently.
     """
-    stripped, offsets = strip_invisible_with_map(line, charset)
+    stripped, offsets = (
+        identity_map(line)
+        if invisible_free
+        else strip_invisible_with_map(line, charset)
+    )
     accepted: list[tuple[int, int, str]] = []
     # Accepted spans, disjoint by construction (an overlapping candidate is
     # skipped below) and held sorted by start so the test below is a binary
@@ -1525,6 +1582,7 @@ def _redact_lines(
     charset: frozenset[int],
     deadline: _Deadline = _NO_DEADLINE,
     candidates: dict[int, tuple[re.Pattern[str], ...]] | None = None,
+    invisible_free: bool = False,
 ) -> list[str]:
     """:func:`_redact_line` over every line of one request, memoizing identical
     lines — repetitive tool output (a CI log, a test runner's per-case lines, a
@@ -1549,6 +1607,10 @@ def _redact_lines(
     identity to preserve: a line's redaction depends only on its own bytes (plus
     the request-wide ``web_ingress``/``charset``, both fixed for this call), so
     replaying it is exact, not approximate.
+
+    ``invisible_free`` is forwarded verbatim to :func:`_redact_line`; a line of an
+    invisible-free payload is invisible-free itself, so the whole-payload proof
+    the caller already paid for stands in for one strip per line.
     """
     if entries is not None:
         redacted_map_lines = []
@@ -1560,7 +1622,14 @@ def _redact_lines(
             confirm = None if candidates is None else candidates[index]
             redacted_map_lines.append(
                 _redact_line(
-                    line, web_ingress, entries, found, charset, deadline, confirm
+                    line,
+                    web_ingress,
+                    entries,
+                    found,
+                    charset,
+                    deadline,
+                    confirm,
+                    invisible_free,
                 )
             )
         return redacted_map_lines
@@ -1584,7 +1653,14 @@ def _redact_lines(
             line_found: list[str] = []
             cached = (
                 _redact_line(
-                    line, web_ingress, None, line_found, charset, deadline, confirm
+                    line,
+                    web_ingress,
+                    None,
+                    line_found,
+                    charset,
+                    deadline,
+                    confirm,
+                    invisible_free,
                 ),
                 line_found,
             )
@@ -1593,6 +1669,61 @@ def _redact_lines(
         redacted_lines.append(redacted_line)
         found.extend(line_found)
     return redacted_lines
+
+
+def _redact_field_values(
+    text: str,
+    replace: Callable[[re.Match[str]], str],
+    deadline: _Deadline = _NO_DEADLINE,
+) -> str:
+    """``FIELD_VALUE_RE.sub(replace, text)``, evaluated only where a match can
+    begin.
+
+    ``re.sub`` tries the pattern at every one of the payload's positions; this
+    tries it only at the positions :data:`_FIELD_NAME_ANCHOR` matches, which is
+    every position a match can START at (the guard beside that anchor is what
+    holds the claim) plus, harmlessly, some where the rest of the pattern then
+    fails. The result is byte-identical, not an approximation, and the two reasons
+    are that ``Pattern.match(text, pos)`` is exactly the attempt ``sub`` makes at
+    ``pos`` — it reads the WHOLE string, so a lookbehind, ``^`` under
+    ``re.MULTILINE`` and ``$`` all see the same text a full sweep shows them,
+    which slicing the payload into windows would not — and that resuming the
+    anchor search at the previous match's END reproduces ``sub``'s
+    non-overlapping, leftmost-first order.
+
+    A text ``fold`` refuses (a length-changing case fold, which no code point
+    reaches today) falls back to the full sweep: slower, never wrong.
+    """
+    folded = fold(text)
+    if folded is None:
+        return FIELD_VALUE_RE.sub(replace, text)
+    out: list[str] = []
+    cursor = 0
+    # `at` is the next position to look from, and both the loop guard and every
+    # assignment to it keep it strictly increasing and within the text. That is
+    # load-bearing, not defensive: `Pattern.search(s, pos)` CLAMPS a pos past the
+    # end back to `len(s)` rather than returning None, so an anchor that can match
+    # empty would be re-found at that same clamped position forever.
+    at = 0
+    while at <= len(text):
+        # One iteration per credential noun in the payload, and the `match` below
+        # is bounded work, so the deadline gets a chance to fire between them
+        # rather than only after the whole pass.
+        deadline.check("field-value scan")
+        anchor = _FIELD_NAME_ANCHOR.search(folded, at)
+        if anchor is None:
+            break
+        start = anchor.start()
+        match = FIELD_VALUE_RE.match(text, start)
+        if match is None:
+            at = start + 1
+            continue
+        out.append(text[cursor:start])
+        out.append(replace(match))
+        cursor = match.end()
+        at = max(cursor, start + 1)
+    out.append(text[cursor:])
+    return "".join(out)
 
 
 def _redact_core(
@@ -1629,9 +1760,11 @@ def _redact_core(
     # and stripping deletes no newline, so a stripped line's index is its
     # original's.
     deadline.check("candidate-line probe")
-    candidates = _line_probe().candidates(
-        strip_invisible(working, charset), deadline.check
-    )
+    stripped = strip_invisible(working, charset)
+    candidates = _line_probe().candidates(stripped, deadline.check)
+    # The strip above deletes only charset code points, so an unchanged LENGTH
+    # proves the whole payload holds none of them — and therefore that no line of
+    # it does either.
     lines = _redact_lines(
         working.split("\n"),
         web_ingress,
@@ -1640,6 +1773,7 @@ def _redact_core(
         charset,
         deadline,
         candidates,
+        invisible_free=len(stripped) == len(working),
     )
 
     rejoined = "\n".join(lines)
@@ -1672,7 +1806,7 @@ def _redact_core(
         # No credential noun appears anywhere, so the regex cannot match — skip a
         # second full pass over the payload rather than run it to find nothing.
         return rejoined, found
-    return FIELD_VALUE_RE.sub(_replace_field, rejoined), found
+    return _redact_field_values(rejoined, _replace_field, deadline), found
 
 
 def configure_plugins(high_confidence: bool = False):
