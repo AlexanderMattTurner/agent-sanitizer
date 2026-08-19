@@ -6,11 +6,20 @@
  * re-implementation would drift, and rehydration's soundness gate depends on
  * re-cleaning reproducing the view).
  *
- * Lone-surrogate normalization is NOT applied by {@link applyLayer1} itself: it
- * is exported as {@link LONE_SURROGATE_RE} for consumers to apply at the boundary
- * that needs a well-formed string (the redactor input in output.mjs's
- * processLayer1 / re-redact, and before the HTML tokenizer), because that is the
- * point where a lone surrogate would otherwise corrupt a match or a parse.
+ * Lone-surrogate normalization is NOT applied by {@link applyLayer1} itself. It
+ * belongs at the boundary that needs a well-formed string — the redactor input
+ * in output.mjs's processLayer1 / re-redact, and before the HTML tokenizer —
+ * because that is the point where a lone surrogate would otherwise corrupt a
+ * match or a parse. Prefer {@link normalizeLoneSurrogates} at each such
+ * boundary, the one definition of that substitution, which output.mjs's
+ * processLayer1 and rehydrate.mjs both call — not a fresh `.replace` over
+ * {@link LONE_SURROGATE_RE}.
+ *
+ * So {@link applyLayer1} alone is NOT the string the tool-output pipeline shows a
+ * model: on an input carrying an unpaired surrogate the two differ at exactly
+ * that code unit. {@link applyLayer1WellFormed} is the composition the pipeline
+ * runs, and a consumer deriving offsets for redaction or view mapping wants that
+ * one — see its own doc for why the choice matters.
  */
 import { stripInvisibleWithReport, CATEGORY } from "./invisible.mjs";
 import {
@@ -265,4 +274,49 @@ export function applyLayer1(text) {
   // are two readings of one fact.
   if (ansiKinds.size > 0) found.add(CATEGORY.ANSI);
   return { cleaned, deAnsi, found: [...found], ansiKinds: [...ansiKinds] };
+}
+
+/**
+ * Map every lone UTF-16 surrogate to U+FFFD. Load-bearing on ANY path that feeds
+ * text to an injected redactor: a secret split by an interposed lone surrogate
+ * reads as adjacent to a model rendering its own UTF-16 but as broken to a
+ * redactor (Node maps the lone surrogate to U+FFFD en route), so a secret
+ * reconstituted across the surrogate survives redaction unless the text is
+ * normalized first. It also keeps an HTML tokenizer from throwing on a stray
+ * code unit. The substitution is same-LENGTH — one UTF-16 unit for one — so
+ * offsets computed against the un-normalized string stay valid against this one.
+ * @param {string} text
+ * @returns {string}
+ */
+export function normalizeLoneSurrogates(text) {
+  return text.replace(LONE_SURROGATE_RE, "\uFFFD");
+}
+
+/**
+ * {@link applyLayer1} followed by {@link normalizeLoneSurrogates} — the exact
+ * composition `output.mjs`'s processLayer1 runs before Layers 2+ see the text,
+ * so this is the string a model is actually shown.
+ *
+ * Take this one, not `applyLayer1`, whenever the result feeds a redactor, an
+ * offset calculation or a view map: those consumers compare their own string to
+ * the model-facing view, and an unpaired surrogate is exactly where the two
+ * spellings diverge. Take `applyLayer1` when you want Layer 1's removals alone
+ * and intend to hand a possibly ill-formed string onward unchanged.
+ *
+ * `found` gains {@link CATEGORY.LONE_SURROGATES} exactly when the normalization
+ * changed the text, matching what the pipeline reports for the same input.
+ * `deAnsi` is untouched: it is the ANSI strip of the ORIGINAL text, the scope
+ * the long-run payload check needs.
+ * @param {string} text
+ * @returns {{ cleaned: string, deAnsi: string, found: string[], ansiKinds: string[] }}
+ */
+export function applyLayer1WellFormed(text) {
+  const result = applyLayer1(text);
+  const cleaned = normalizeLoneSurrogates(result.cleaned);
+  if (cleaned === result.cleaned) return result;
+  return {
+    ...result,
+    cleaned,
+    found: [...result.found, CATEGORY.LONE_SURROGATES],
+  };
 }

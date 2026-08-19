@@ -35,6 +35,7 @@ const {
   probeSetupAlive,
   SETUP_LOCK_DECLARATION,
   awaitLazyDependency,
+  scrubUntrustedText,
 } = await import("../claude-hooks/lib/hook-io.mjs");
 const { controlPlane } = await import("../claude-hooks/lib/control-plane.mjs");
 const { instructionsLoadedFile, recordInstructionsLoaded } =
@@ -878,5 +879,47 @@ describe("cold-start wait", () => {
     // The ceiling is a backstop, not the normal exit: it must exist, because a
     // hook killed for running over its harness timeout is a fail-OPEN.
     assert.ok(attempts > 1);
+  });
+});
+
+/**
+ * `scrubUntrustedText`'s `layer1` seam. The module used to normalize lone
+ * surrogates itself over a private regex; it now DELEGATES that to the injected
+ * function, so the substitution has one definition in the package. That moves an
+ * obligation onto every caller, and these pin both halves of it: what the seam
+ * no longer does on its own, and what a well-formed injection must deliver.
+ */
+describe("scrubUntrustedText delegates normalization to its layer1 seam", () => {
+  const LONE = "keep\uD800tail";
+
+  it("does not normalize on its own — the injected function owns it", () => {
+    // Pins the CONTRACT this consolidation created. A re-added local `.replace`
+    // would be a second definition of the substitution, and reds here.
+    const out = scrubUntrustedText(LONE, (text) => ({ cleaned: text }));
+    assert.equal(out, LONE);
+  });
+
+  it("emits well-formed UTF-16 when given the composed Layer-1 view", async () => {
+    const { applyLayer1WellFormed } = await import("agent-sanitizer");
+    const out = scrubUntrustedText(LONE, applyLayer1WellFormed);
+    assert.equal(out, "keep\uFFFDtail");
+    assert.equal(
+      /\p{Surrogate}/u.test(out),
+      false,
+      "an unpaired surrogate half reached a reason field",
+    );
+  });
+
+  it("caps by whole code points, never splitting a real pair", () => {
+    // The cap is why the injection must normalize: it counts code points, and a
+    // lone half counts as one, so a non-normalizing layer1 can push a half over
+    // the boundary. A genuine astral pair must never be split here.
+    const out = scrubUntrustedText(
+      "\u{1F600}".repeat(10),
+      (text) => ({ cleaned: text }),
+      4,
+    );
+    assert.equal(out, "\u{1F600}".repeat(4) + "…[truncated]");
+    assert.equal(/\p{Surrogate}/u.test(out), false);
   });
 });

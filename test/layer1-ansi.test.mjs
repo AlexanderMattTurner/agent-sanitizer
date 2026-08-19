@@ -11,6 +11,11 @@
  *      must be exactly the SGR sequences — no visible residue spliced in.
  *   3. The introducer charset is ONE charset: whatever Layer 1 removes as a raw
  *      control introducer must read as non-SGR to `isSgrOnly`.
+ *   4. The LONE-SURROGATE DIVERGENCE is pinned: `applyLayer1` deliberately keeps
+ *      an unpaired surrogate, the pipeline replaces it, and
+ *      `applyLayer1WellFormed` is the composition that matches the pipeline. The
+ *      `./layer1` subpath publishes both, so a consumer that picks the wrong one
+ *      derives a different string than the model was shown.
  *
  * The generators are BIASED toward the shapes that break these (cursive letter,
  * joiner, ANSI fragment) rather than drawing uniformly over 1.1M code points —
@@ -22,7 +27,15 @@ import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import fc from "fast-check";
 
-import { applyLayer1, stripAnsiFully } from "../src/layer1.mjs";
+import {
+  applyLayer1,
+  applyLayer1WellFormed,
+  normalizeLoneSurrogates,
+  stripAnsiFully,
+} from "../src/layer1.mjs";
+// The pipeline itself, so the composed export is pinned to the string a model is
+// ACTUALLY shown rather than to a second spelling of the composition.
+import { sanitizeText } from "../src/output.mjs";
 // The tokenizer assertions below are about src/ansi.mjs, so name it directly
 // rather than reaching it through a re-export layer1.mjs does not otherwise owe.
 import { scanAnsi, TOKEN_KIND } from "../src/ansi.mjs";
@@ -471,5 +484,85 @@ describe("shared control-introducer charset", () => {
       0x1b,
       ...Array.from({ length: 0x20 }, (_, i) => 0x80 + i),
     ]);
+  });
+});
+
+/**
+ * `applyLayer1` leaves an unpaired UTF-16 surrogate in place on purpose; the
+ * tool-output pipeline replaces it with U+FFFD before Layers 2+ run. That gap is
+ * a documented design choice, not a defect — but the `./layer1` subpath now
+ * publishes both spellings, so which one a consumer picks decides whether its
+ * offsets agree with the model-facing view. These pin the gap in both
+ * directions: a test over well-formed input alone would pass either way.
+ */
+describe("lone-surrogate divergence between Layer 1 and the model-facing view", () => {
+  // One high surrogate with no low following it, wrapped in the other two things
+  // Layer 1 removes, so the assertions also pin the ORDER of the composition
+  // rather than the surrogate handling alone.
+  const HIGH = cp(0xd800);
+  const RAW = `a\u200Bb${HIGH}c${ESC}[31mred${ESC}[0m`;
+  const STRIPPED = `ab${HIGH}cred`;
+
+  it("applyLayer1 keeps the unpaired surrogate and does not report it", () => {
+    const { cleaned, found } = applyLayer1(RAW);
+    assert.equal(cleaned, STRIPPED);
+    // Positive marker: Layer 1 really ran on this input, so the absent
+    // lone-surrogate category below is a deliberate omission and not a no-op.
+    assert.deepEqual([...found].sort(), [CATEGORY.ANSI, CATEGORY.CF]);
+    assert.ok(!found.includes(CATEGORY.LONE_SURROGATES));
+  });
+
+  it("applyLayer1WellFormed replaces exactly that code unit and reports it", () => {
+    const { cleaned, deAnsi, found } = applyLayer1WellFormed(RAW);
+    assert.equal(cleaned, "ab\uFFFDcred");
+    // `deAnsi` is the ANSI strip of the ORIGINAL text, so it keeps the
+    // surrogate AND the ZWSP — the scope the long-run payload check needs.
+    assert.equal(deAnsi, `a\u200Bb${HIGH}cred`);
+    assert.deepEqual(
+      [...found].sort(),
+      [CATEGORY.ANSI, CATEGORY.CF, CATEGORY.LONE_SURROGATES].sort(),
+    );
+  });
+
+  it("the two outputs differ at exactly one code unit, same length", () => {
+    const bare = applyLayer1(RAW).cleaned;
+    const composed = applyLayer1WellFormed(RAW).cleaned;
+    assert.equal(bare.length, composed.length);
+    const differing = [...bare]
+      .map((_, i) => i)
+      .filter((i) => bare[i] !== composed[i]);
+    assert.equal(differing.length, 1);
+    assert.equal(bare[differing[0]], HIGH);
+    assert.equal(composed[differing[0]], "\uFFFD");
+  });
+
+  it("applyLayer1WellFormed equals what the pipeline shows a model", async () => {
+    const { cleaned, modified } = await sanitizeText(RAW, {
+      html: false,
+      exfilScan: false,
+      redact: async () => null,
+      filterInjection: () => null,
+    });
+    assert.equal(cleaned, applyLayer1WellFormed(RAW).cleaned);
+    assert.equal(modified, true);
+    // The claim only bites because the OTHER spelling would fail it — without
+    // this line a composed export that silently stopped normalizing would still
+    // satisfy the equality above if the pipeline regressed the same way.
+    assert.notEqual(cleaned, applyLayer1(RAW).cleaned);
+  });
+
+  it("is a no-op on well-formed input: same result, no extra category", () => {
+    const wellFormed = `a\u200Bb${ESC}[31mred${ESC}[0m`;
+    const bare = applyLayer1(wellFormed);
+    const composed = applyLayer1WellFormed(wellFormed);
+    assert.deepEqual(composed, bare);
+    assert.ok(!composed.found.includes(CATEGORY.LONE_SURROGATES));
+  });
+
+  it("normalizeLoneSurrogates maps both unpaired halves, keeping real pairs", () => {
+    assert.equal(normalizeLoneSurrogates(`x${HIGH}y`), "x\uFFFDy");
+    assert.equal(normalizeLoneSurrogates(`x${cp(0xdc00)}y`), "x\uFFFDy");
+    // A genuine pair is one astral character, never two lone halves.
+    assert.equal(normalizeLoneSurrogates("x\u{1F600}y"), "x\u{1F600}y");
   });
 });

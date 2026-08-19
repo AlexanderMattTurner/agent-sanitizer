@@ -34,7 +34,7 @@ import {
   applyLayer1,
   INERT_ANSI_NOTE,
   isBenignAnsiKinds,
-  LONE_SURROGATE_RE,
+  normalizeLoneSurrogates,
 } from "./layer1.mjs";
 import {
   describeConfusableHosts,
@@ -143,21 +143,6 @@ function errMessage(err) {
  *   request) and/or a warning CODE (never free text — the library owns the
  *   message). Null means the filter made no finding.
  */
-
-/**
- * Map every lone UTF-16 surrogate to U+FFFD. Load-bearing on ANY path that feeds
- * text to the injected redactor: a secret split by an interposed lone surrogate
- * reads as adjacent to a model rendering its own UTF-16 but as broken to a
- * redactor (Node maps the lone surrogate to U+FFFD en route), so a secret
- * reconstituted across the surrogate survives redaction unless the text is
- * normalized first. Shared by {@link processLayer1} and the Layer-5 re-redact so
- * the two redact-input paths cannot drift.
- * @param {string} text
- * @returns {string}
- */
-function normalizeLoneSurrogates(text) {
-  return text.replace(LONE_SURROGATE_RE, "�");
-}
 
 /**
  * @typedef {{ text: string, found: string[], findings: import("./severity.mjs").Finding[], modified: boolean, unreportedChange: boolean }} PipelineState

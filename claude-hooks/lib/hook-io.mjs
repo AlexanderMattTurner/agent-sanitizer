@@ -329,13 +329,6 @@ export function failOpenContext(
   );
 }
 
-// Unpaired UTF-16 surrogates: a high half with no low follower, or a low half
-// with no high lead. Hook text spliced into the model's context must be
-// well-formed UTF-16 there, so the sanitizers normalize these out before
-// serializing.
-const LONE_SURROGATE_RE =
-  /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g;
-
 /**
  * Hard cap on hook stdin. A well-formed Claude Code hook payload is at most a
  * few MB (tool input plus the harness-truncated tool output); 64 MiB leaves
@@ -622,20 +615,24 @@ const UNTRUSTED_TEXT_CAP = 500;
 /**
  * Scrub untrusted text before it is spliced into the model's context via a
  * warning/reason field: strip ANSI and payload-capable invisibles to a fixed
- * point (via the injected `layer1`, the package's composite Layer-1 view),
- * replace lone surrogates so the model's UTF-16 context stays well-formed, then
- * cap by whole code points (never mid-pair, which the surrogate pass above
- * already swept). `layer1` is injected rather than imported so this
- * dependency-light module never eagerly loads the sanitizer package — each
- * caller passes its own caught-import binding.
+ * point (via the injected `layer1`), then cap by whole code points. `layer1` is
+ * injected rather than imported so this dependency-light module never eagerly
+ * loads the sanitizer package — each caller passes its own caught-import
+ * binding.
+ *
+ * Pass a layer1 that also normalizes lone surrogates — `applyLayer1WellFormed`,
+ * never the bare `applyLayer1`. The model's UTF-16 context must be well-formed,
+ * and the code-point cap below must not slice a half it mistook for a whole
+ * character. This module used to re-spell that substitution over a private
+ * regex; the package now owns the one definition.
  * @param {unknown} raw
- * @param {(text: string) => { cleaned: string }} layer1
+ * @param {(text: string) => { cleaned: string }} layer1  MUST normalize lone surrogates
  * @param {number} [cap]
  * @returns {string}
  */
 export function scrubUntrustedText(raw, layer1, cap = UNTRUSTED_TEXT_CAP) {
   if (typeof raw !== "string" || raw === "") return "";
-  const cleaned = layer1(raw).cleaned.replace(LONE_SURROGATE_RE, "�");
+  const cleaned = layer1(raw).cleaned;
   const points = [...cleaned];
   return points.length > cap
     ? points.slice(0, cap).join("") + "…[truncated]"

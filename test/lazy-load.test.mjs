@@ -99,7 +99,6 @@ describe("lazy-load invariant", () => {
   // it. A static `import … from "./html.mjs"` slipped into any of these would
   // tax every consumer with the ~200ms remark/rehype load on module evaluation.
   for (const file of [
-    "layer1.mjs",
     "output.mjs",
     "rehydrate.mjs",
     "confusables.mjs",
@@ -122,11 +121,11 @@ describe("lazy-load invariant", () => {
     });
   }
 
-  // The `./layer1` subpath is the reason a consumer can take Layer 1 alone. The
-  // loop above proves the FILE is light; these two prove the published SUBPATH
-  // is, because a consumer imports through the exports map and not through a
-  // relative path. Both go through the bare specifier so a missing or misrouted
-  // map entry fails here.
+  // The `./layer1` subpath is the reason a consumer can take Layer 1 alone, so
+  // it is covered through the BARE SPECIFIER: the import resolves through the
+  // exports map (a missing or misrouted entry fails here, where a relative
+  // import would still pass), lands on the same graph a `src/` entry would
+  // record, and applies the same LEAKED filter.
   it("agent-sanitizer/layer1 resolves and applyLayer1 works through it", async () => {
     const mod = await import("agent-sanitizer/layer1");
     assert.equal(typeof mod.applyLayer1, "function");
