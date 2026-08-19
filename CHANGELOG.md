@@ -8,6 +8,12 @@ adhere to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+## [2.45.8] - 2026-08-19
+
+### Changed
+
+- Performance improvements to the secrets scanning engine with optimized line-walking behavior, field-value probe logic, and per-line invisible-character validation.
+
 ## [2.45.7] - 2026-08-19
 
 ### Fixed
