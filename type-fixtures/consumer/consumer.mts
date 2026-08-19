@@ -17,7 +17,12 @@ import {
   matchesSecretHint,
 } from "agent-sanitizer";
 import { STRIP, SGR_RE, stripInvisible } from "agent-sanitizer/invisible";
-import { applyLayer1, LONE_SURROGATE_RE } from "agent-sanitizer/layer1";
+import {
+  applyLayer1,
+  applyLayer1WellFormed,
+  normalizeLoneSurrogates,
+  LONE_SURROGATE_RE,
+} from "agent-sanitizer/layer1";
 import { HTML_TAG_PRESENT, MD_LINK_HINT } from "agent-sanitizer/html";
 import { hasNonAscii, normalizeConfusables } from "agent-sanitizer/confusables";
 import { scanInstructionFiles } from "agent-sanitizer/instructions";
@@ -47,6 +52,9 @@ const _secretExt: RegExp = SECRET_HINT_EXT;
 // on the imported binding itself catches a declaration collapse for a *function*
 // export too, not just the regex constants above.
 const _applyLayer1NotAny: IsAny<typeof applyLayer1> = false;
+const _applyLayer1WellFormedNotAny: IsAny<typeof applyLayer1WellFormed> = false;
+const _normalizeLoneSurrogatesNotAny: IsAny<typeof normalizeLoneSurrogates> =
+  false;
 const _loneSurrogateNotAny: IsAny<typeof LONE_SURROGATE_RE> = false;
 const _hasNonAsciiNotAny: IsAny<typeof hasNonAscii> = false;
 const _normalizeConfusablesNotAny: IsAny<typeof normalizeConfusables> = false;
@@ -70,6 +78,9 @@ const _layer1 = applyLayer1("x");
 const _layer1Cleaned: string = _layer1.cleaned;
 const _layer1Found: string[] = _layer1.found;
 const _loneSurrogate: RegExp = LONE_SURROGATE_RE;
+// The composed form the pipeline runs: same result shape, well-formed `cleaned`.
+const _wellFormedCleaned: string = applyLayer1WellFormed("x").cleaned;
+const _normalizedText: string = normalizeLoneSurrogates("x");
 
 // sanitize resolves to the documented result shape.
 const result = await sanitize("x", { html: true });
@@ -143,6 +154,10 @@ export const _assertions = [
   _hint,
   _stripped,
   _applyLayer1NotAny,
+  _applyLayer1WellFormedNotAny,
+  _normalizeLoneSurrogatesNotAny,
+  _wellFormedCleaned,
+  _normalizedText,
   _loneSurrogateNotAny,
   _layer1Cleaned,
   _layer1Found,

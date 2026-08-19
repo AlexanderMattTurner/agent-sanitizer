@@ -3999,6 +3999,19 @@ function applyLayer1(text5) {
   if (ansiKinds.size > 0) found.add(CATEGORY.ANSI);
   return { cleaned, deAnsi, found: [...found], ansiKinds: [...ansiKinds] };
 }
+function normalizeLoneSurrogates(text5) {
+  return text5.replace(LONE_SURROGATE_RE2, "\uFFFD");
+}
+function applyLayer1WellFormed(text5) {
+  const result = applyLayer1(text5);
+  const cleaned = normalizeLoneSurrogates(result.cleaned);
+  if (cleaned === result.cleaned) return result;
+  return {
+    ...result,
+    cleaned,
+    found: [...result.found, CATEGORY.LONE_SURROGATES]
+  };
+}
 var CONTROL_INTRODUCER_RE, LONE_SURROGATE_RE2, MAX_ANSI_PASSES, INERT_ANSI_NOTE, MAX_LAYER1_PASSES;
 var init_layer1 = __esm({
   "src/layer1.mjs"() {
@@ -64754,9 +64767,6 @@ function errMessage2(err) {
   const cause = err.cause instanceof Error ? `: ${err.cause.message}` : "";
   return err.message + cause;
 }
-function normalizeLoneSurrogates(text5) {
-  return text5.replace(LONE_SURROGATE_RE2, "\uFFFD");
-}
 function applyMutation(state, nextText) {
   state.text = normalizeLoneSurrogates(nextText);
   state.modified = true;
@@ -65199,12 +65209,14 @@ __export(src_exports, {
   STRIP: () => STRIP,
   VS: () => VS,
   applyLayer1: () => applyLayer1,
+  applyLayer1WellFormed: () => applyLayer1WellFormed,
   findLongRuns: () => findLongRuns,
   hasLongRun: () => hasLongRun,
   isBenignAnsi: () => isBenignAnsi,
   isBenignAnsiKinds: () => isBenignAnsiKinds,
   isSgrOnly: () => isSgrOnly,
   matchesSecretHint: () => matchesSecretHint,
+  normalizeLoneSurrogates: () => normalizeLoneSurrogates,
   sanitize: () => sanitize,
   stripAnsiFully: () => stripAnsiFully,
   stripInvisible: () => stripInvisible,
@@ -65696,7 +65708,7 @@ function layer1View(text5) {
   const { cleaned: layer1Cleaned } = applyLayer1(text5);
   return {
     layer1Cleaned,
-    cleaned: layer1Cleaned.replace(LONE_SURROGATE_RE2, "\uFFFD")
+    cleaned: normalizeLoneSurrogates(layer1Cleaned)
   };
 }
 async function exposedSecrets(secrets, priorView, newContent, io) {

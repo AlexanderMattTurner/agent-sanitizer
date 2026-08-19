@@ -25,8 +25,10 @@ import { sanitizeText } from "./output.mjs";
 // (`./rehydrate`) so every consumer derives the identical model-facing view.
 export {
   applyLayer1,
+  applyLayer1WellFormed,
   isBenignAnsi,
   isBenignAnsiKinds,
+  normalizeLoneSurrogates,
   stripAnsiFully,
   LONE_SURROGATE_RE,
 } from "./layer1.mjs";

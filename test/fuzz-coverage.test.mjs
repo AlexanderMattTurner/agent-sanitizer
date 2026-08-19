@@ -138,6 +138,8 @@ const FUZZ_EXEMPT = Object.freeze({
   // ── compositions and views fuzzed through the entry point above them ─────
   applyLayer1:
     "the Layer-1 composition, fuzzed through sanitize and sanitizeText",
+  applyLayer1WellFormed:
+    "applyLayer1 plus normalizeLoneSurrogates, both fuzzed above it",
   countEffectiveInvisible: "reads the analysis stripInvisible already ran",
   countPayloadInvisible: "reads the analysis stripInvisible already ran",
   findLongRuns: "one anchored scan, fuzzed through stripInvisibleWithReport",
@@ -147,6 +149,8 @@ const FUZZ_EXEMPT = Object.freeze({
     "derives a keyed placeholder by sha256; the round-trip fuzz oracle pins its grammar",
   makeFileView:
     "freezes a text and pair list into a view, validated at construction",
+  normalizeLoneSurrogates:
+    "one same-length substitution over LONE_SURROGATE_RE, fuzzed through sanitizeText",
   orderedMatches:
     "orders what occurrences found, and spliceOrdered consumes that order",
   pairsToUtf16:
