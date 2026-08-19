@@ -562,41 +562,47 @@ def _patterns_by_line(
 ) -> dict[int, tuple[re.Pattern[str], ...]]:
     """Every line index any hit span touches, mapped to that hit's patterns.
 
-    Walks the newlines once in span-start order rather than calling ``str.count``
-    per span (quadratic) or materializing a line-start table as long as the file
-    even when two lines matched.
+    Walks the newlines once in span-start order rather than materializing a
+    line-start table as long as the file even when two lines matched.
 
-    ``ahead`` is what makes that walk once: it holds the position of the next
-    newline at or after the current line's start, so a hit that does not advance
-    the line REUSES that answer instead of re-running ``text.find`` over the same
-    suffix. Searching per hit instead is quadratic in the worst case that
-    matters — one very long line with a hit on every key-ish word, each hit
-    rescanning the whole remaining text — which is attacker-shaped input against
-    a shared daemon, not a hypothetical. ``-1`` (no newline left) is likewise a
-    remembered answer, so the single-line payload costs one search in total.
+    ``ahead`` holds the position of the next newline at or after ``previous``, so
+    a hit that does not advance the line touches the text not at all: ``-1`` (none
+    left) and a newline this hit has not reached both answer from the memo. That
+    is what bounds the worst case that matters — one very long line with a hit on
+    every key-ish word, which is attacker-shaped input against a shared daemon,
+    not a hypothetical. A hit that DOES advance the line covers the whole advance
+    with one ``str.count`` over the gap since the last one; the gaps are disjoint,
+    so the walk stays one pass over the text while costing one call per line that
+    HAS a hit rather than one per line of the payload — and the payloads this runs
+    on are overwhelmingly lines with nothing on them.
     """
+    # A line's Nth hit claims exactly what its first did, and one line can hold
+    # hundreds of thousands of them, so re-merging has to be cheap rather than
+    # avoided: a set union with members already present is idempotent, and testing
+    # for that first would cost more per hit than the union it skips. Only the
+    # MERGE repeats — never the span walk below, since two matches of one weak
+    # pattern can start on the same line and reach different lines, and skipping
+    # the second's walk would leave the lines only it touches unclaimed.
     claims: dict[int, set[re.Pattern[str]]] = {}
-    # A line's Nth hit on the same literal claims exactly what its first did, and
-    # one line can hold hundreds of thousands of them, so each (line, patterns)
-    # pair is merged into `claims` once. Bounded by lines times literals, where
-    # the hits are bounded only by the payload's length. This dedupes the MERGE
-    # only, never the span walk below: two matches of one weak pattern can start
-    # on the same line and reach different lines, and skipping the second's walk
-    # would leave the lines only it touches unclaimed — a missed secret.
-    merged: set[tuple[int, tuple[re.Pattern[str], ...]]] = set()
 
     def claim(index: int, patterns: tuple[re.Pattern[str], ...]) -> None:
-        if (index, patterns) in merged:
+        existing = claims.get(index)
+        if existing is None:
+            claims[index] = set(patterns)
             return
-        merged.add((index, patterns))
-        claims.setdefault(index, set()).update(patterns)
+        existing.update(patterns)
 
+    # `line` counts the newlines in `text[:previous]`, so it is the line index of
+    # `previous` — and of every position up to `ahead`, the first newline at or
+    # after it.
     line = 0
+    previous = 0
     ahead = text.find("\n")
     for start, end, patterns in sorted(hits, key=lambda hit: hit[0]):
-        while ahead != -1 and ahead < start:
-            line += 1
-            ahead = text.find("\n", ahead + 1)
+        if ahead != -1 and ahead < start:
+            line += text.count("\n", previous, start)
+            previous = start
+            ahead = text.find("\n", start)
         claim(line, patterns)
         # A span's interior newlines are walked on a private cursor so `ahead`
         # stays parked at this span's START, which the sort keeps monotone.

@@ -237,6 +237,40 @@ def test_an_empty_charset_strips_nothing_rather_than_failing_to_compile():
     assert run.match("\u200b").group(0) == ""
 
 
+@pytest.mark.parametrize(
+    ("text", "stripped", "dirty"),
+    [
+        # All-ASCII, so the `str.isascii` rung answers; no line is dirty.
+        ("plain\ntext", "plain\ntext", frozenset()),
+        # Non-ASCII but clean, so only the charset scan can answer.
+        ("caf\u00e9\nx", "caf\u00e9\nx", frozenset()),
+        ("a\u200bb", "ab", frozenset({0})),
+        ("clean\nd\u200birty\nclean", "clean\ndirty\nclean", frozenset({1})),
+        # Two deletions on one line collapse to one index; two lines apart stay two.
+        ("x\u200by\u200bz", "xyz", frozenset({0})),
+        ("\u200b\nx\n\u200b", "\nx\n", frozenset({0, 2})),
+    ],
+)
+def test_strip_invisible_by_line_names_exactly_the_lines_it_deleted_from(
+    text, stripped, dirty
+):
+    """The per-line proof `_redact_lines` skips strips on. Naming a line it did
+    NOT delete from would skip that line's strip and leak a spliced key, so the
+    set has to be exact in that direction and is asserted by equality."""
+    assert I.strip_invisible_by_line(text) == (stripped, dirty)
+
+
+def test_strip_invisible_by_line_refuses_a_charset_holding_a_newline():
+    """Deleting newlines renumbers the lines the returned indices name, so a line
+    the caller then treats as proven clean would be a DIFFERENT line — and the
+    engine skips that line's strip, which is a missed spliced key. It raises rather
+    than returning indices into a text it just renumbered."""
+    with pytest.raises(ValueError, match="U\\+000A"):
+        I.strip_invisible_by_line("a\nb", frozenset({0x0A}))
+    # The same charset is fine for the whole-text strip, which names no lines.
+    assert strip_invisible("a\nb", frozenset({0x0A})) == "ab"
+
+
 class _CountingPattern:
     """A compiled pattern that counts the searches run through it."""
 
@@ -280,9 +314,19 @@ def test_a_clean_payload_pays_no_per_line_strip(monkeypatch):
     assert searches < 10, searches
 
 
+def test_one_dirty_line_leaves_every_other_line_proven(monkeypatch):
+    """The proof is per LINE, not per payload: a zero-width character on one line
+    costs exactly that line its strip, and the EQUALITY below is what says so — a
+    whole-payload proof answers False for this input and would put the strip back
+    on every line, while a proof that missed the dirty line would add none."""
+    _, clean = _count_strips(monkeypatch, _PROBE_PAYLOAD)
+    _, dirty = _count_strips(monkeypatch, _PROBE_PAYLOAD + "\nakia\u200b tail")
+    assert dirty == clean + 1, (dirty, clean)
+
+
 def test_without_the_skip_every_line_pays_its_own_strip(monkeypatch):
-    """Non-vacuity for the count above: forcing `invisible_free` off puts the
-    strip back on every line, so that bound measures the skip rather than a
+    """Non-vacuity for the counts above: forcing `invisible_free` off puts the
+    strip back on every line, so those bounds measure the skip rather than a
     payload the strip never reaches."""
     real = E._redact_line
     monkeypatch.setattr(
@@ -300,9 +344,9 @@ _SPLICED_PAYLOAD = "\n".join(["padding line"] * 50 + [_SPLICED_KEY])
 
 
 def test_a_key_spliced_with_an_invisible_char_still_redacts():
-    """The fail-open direction of that skip: one zero-width character anywhere in
-    the payload means every line is stripped again, so a key carrying one is still
-    seen whole. Detecting it IS the proof the per-line strip ran — the key lies
+    """The fail-open direction of that skip: the line carrying a zero-width
+    character is named dirty and stripped, so a key spliced with one is still seen
+    whole. Detecting it IS the proof the per-line strip ran — the key lies
     within one line, so the cross-line pass discards it, and no detector matches
     the spliced bytes unstripped (the test below runs exactly that case)."""
     result = run_plain(_SPLICED_PAYLOAD, cfg())
