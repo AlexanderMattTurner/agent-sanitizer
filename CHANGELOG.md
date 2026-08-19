@@ -8,6 +8,16 @@ adhere to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+## [2.47.0] - 2026-08-19
+
+### Added
+
+- Export `applyLayer1WellFormed` function from the layer1 module, exposing the view transformation that the pipeline applies to models.
+
+### Changed
+
+- Refactored alert handling to use `applyLayer1WellFormed` for consistent well-formedness validation across the library.
+
 ## [2.46.0] - 2026-08-19
 
 ### Added
