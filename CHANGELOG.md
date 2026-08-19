@@ -8,6 +8,20 @@ adhere to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+## [2.45.7] - 2026-08-19
+
+### Fixed
+- Prevent daemon teardown from masking the actual reason the daemon died.
+
+## [2.45.6] - 2026-08-19
+
+### Changed
+- Performance improvements to the secrets engine: gated character stripping on ASCII checks, optimized regex matching to attempt matches only at valid positions, and refactored invisible character detection to use class scanning instead of character translation.
+
+### Fixed
+- Fixed empty invisible charset handling to return empty string instead of raising an error.
+- Fixed word boundary preservation inside candidate windows during secrets detection.
+
 ## [2.45.5] - 2026-08-18
 
 ### Changed
