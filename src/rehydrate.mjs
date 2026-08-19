@@ -54,7 +54,7 @@
  * denied with use-single-Edit guidance (see the dispatch in
  * {@link rehydrateRedacted}).
  */
-import { applyLayer1, LONE_SURROGATE_RE } from "./layer1.mjs";
+import { applyLayer1, normalizeLoneSurrogates } from "./layer1.mjs";
 import {
   occurrences,
   overlapAwareCount,
@@ -114,7 +114,7 @@ function layer1View(text) {
   const { cleaned: layer1Cleaned } = applyLayer1(text);
   return {
     layer1Cleaned,
-    cleaned: layer1Cleaned.replace(LONE_SURROGATE_RE, "\uFFFD"),
+    cleaned: normalizeLoneSurrogates(layer1Cleaned),
   };
 }
 
