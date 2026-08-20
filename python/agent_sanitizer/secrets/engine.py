@@ -221,18 +221,19 @@ def _splice(
     entries: list[tuple[str, str]] | None,
 ) -> str:
     """``text`` with every ``(start, end, placeholder_text)`` span replaced by its
-    mark. ``spans`` must be ascending and disjoint, which is what lets one pass
-    over the text serve all of them.
+    mark, in ONE pass: rebuilding the whole string per span instead costs
+    O(spans x len(text)), which one long line of attacker-shaped output reaches.
 
-    Accumulating segments and joining once is what keeps redaction linear in the
-    text: rebuilding the whole string per span costs O(spans x len(text)), which
-    is reached by a single long line of attacker-shaped output — the redaction
-    then runs past its caller's timeout, and that caller stops redacting for the
-    rest of the session.
+    ``spans`` must be ascending and disjoint — the precondition that makes one
+    pass serve all of them. The assertion below is what keeps a violation loud:
+    a `text[cursor:start]` with `cursor > start` yields ``""``, so an overlapping
+    span would silently DELETE the text between the two, in the one path whose
+    whole job is to hand the caller back everything that was not a secret.
     """
     out: list[str] = []
     cursor = 0
     for start, end, placeholder_text in spans:
+        assert start >= cursor, "spans must be ascending and disjoint"
         out.append(text[cursor:start])
         out.append(_mark(entries, placeholder_text, text[start:end]))
         cursor = end
@@ -1974,7 +1975,8 @@ def detected_secret_values(
     text: str, config: RedactorConfig | None = None
 ) -> list[str]:
     """Raw values of every secret :func:`redact` would remove from ``text``,
-    de-duped in first-seen order (never the placeholders).
+    de-duped in first-seen order — left-to-right within a line, and never the
+    placeholders.
 
     Runs the engine in map mode purely to harvest the recorded originals — the
     redacted text is discarded. Useful for hashing detected values into an
