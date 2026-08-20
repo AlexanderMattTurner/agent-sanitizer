@@ -8,6 +8,14 @@ adhere to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+## [2.47.1] - 2026-08-20
+
+### Fixed
+- Redacted values are now reported in left-to-right order for each line.
+
+### Changed
+- Improved performance of redaction splicing by processing each line's redactions in a single pass.
+
 ## [2.47.0] - 2026-08-19
 
 ### Added
