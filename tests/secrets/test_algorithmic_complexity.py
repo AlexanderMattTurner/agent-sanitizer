@@ -11,24 +11,33 @@ CPU on a 256KB payload. Both gates defend the same claim, stated in
 cost is weaponizable — a stall past the caller's timeout is what makes a caller
 write its unavailable-sentinel and stop redacting for the rest of the session.
 
-WHAT IS MEASURED, and why not time. The bound is a COUNT of interpreted
-bytecode operations at two input sizes, not elapsed seconds. A wall-clock
-threshold also reports on the machine that ran it, so it passes locally and reds
-under CI load — the flake this suite already carries a scar from (see
+WHAT IS MEASURED. The primary bound is a COUNT of interpreted bytecode
+operations at two input sizes, not elapsed seconds. A wall-clock threshold also
+reports on the machine that ran it, so it passes locally and reds under CI load —
+the flake this suite already carries a scar from (see
 ``test_a_hostile_variable_name_cannot_stall_the_matcher``). An opcode count is
 identical on every machine and every run, and the RATIO between two sizes is
 stable across Python versions even as the absolute count moves.
 
-What it does NOT see: work inside C builtins (``str.find``, ``re``) counts as one
-opcode. That is deliberate rather than a gap — the regex gate covers the ``re``
-half, and an algorithmic mistake written in this package is Python-level by
-definition. A quadratic that lives entirely in a dependency (detect-secrets calls
+An opcode count cannot see inside a C builtin: one ``str`` slice costs one
+opcode however many megabytes it copies. That is a hole, not a scope decision,
+and a quadratic shipped through it — ``_redact_line`` rebuilt the whole line once
+per redacted span, so 1 MiB of ``password="`` on ONE line cost ~28s of CPU
+against ~5s for the same bytes at 80 columns.
+:func:`test_copy_volume_is_linear_in_line_length` closes it with the one measure
+that does see a C-level copy — CPU seconds, taken as a RATIO between two sizes in
+one process so the machine's speed cancels. ``time.process_time`` rather than
+wall clock is what keeps a loaded CI runner out of the number, and the threshold
+sits between two MEASURED curves (see that test) rather than at a round number.
+
+A quadratic that lives entirely in a dependency (detect-secrets calls
 ``line.index(secret)`` per secret) is out of both gates' reach and is bounded by
 ``compute_budget_seconds`` instead.
 """
 
 import hashlib
 import sys
+import time
 
 import pytest
 
@@ -208,6 +217,92 @@ def test_entry_point_is_sub_quadratic_on_one_line(name):
         f"{name} grew {ratio:.2f}x when its input doubled "
         f"({_SMALL} -> {_LARGE} secrets on one line); "
         "linear is ~2.0 and quadratic ~4.0, so this is super-linear"
+    )
+
+
+# The copy-volume gate's own sizes and threshold. An 8x step, so linear is ~8x
+# and quadratic ~64x; the per-call fixed cost pulls the measured linear curve
+# slightly under 8. Both curves are MEASURED on the `password="` line below:
+# 7.85x for the splice-once code, 30.27x for the whole-line-rebuild it replaced.
+# 15.0 sits between them with ~2x margin on each side, which is what keeps a
+# noisy runner from reddening it.
+_COPY_SMALL_BYTES = 64 * 1024
+_COPY_LARGE_BYTES = 512 * 1024
+_COPY_GROWTH_LIMIT = 15.0
+
+# One redaction site per 10 bytes, so the number of spans grows WITH the line and
+# a per-span whole-line rebuild shows up as the quadratic it is. Every byte is on
+# ONE line: the same bytes wrapped at 80 columns cost each rebuild only its own
+# short line, which is exactly the asymmetry this gate names.
+_FIELD_UNIT = 'password="'
+
+
+def _long_field_line(nbytes: int) -> str:
+    return _FIELD_UNIT * (nbytes // len(_FIELD_UNIT))
+
+
+def _cpu_seconds(call) -> float:
+    """CPU seconds burned by ``call`` — process time, so another process loading
+    the runner inflates neither number."""
+    start = time.process_time()
+    call()
+    return time.process_time() - start
+
+
+def _cpu_growth_ratio(thunk_for) -> float:
+    """CPU-time growth from :data:`_COPY_SMALL_BYTES` to :data:`_COPY_LARGE_BYTES`
+    on ONE line, with the engine's lazy one-time setup warmed out first (same
+    reason :func:`_growth_ratio` warms up)."""
+    thunk_for(_long_field_line(1024))()
+    small = _cpu_seconds(thunk_for(_long_field_line(_COPY_SMALL_BYTES)))
+    large = _cpu_seconds(thunk_for(_long_field_line(_COPY_LARGE_BYTES)))
+    assert small > 0, "measured no CPU time — the entry point never ran"
+    return large / small
+
+
+@pytest.mark.parametrize("name", sorted(_TEXT_ENTRY_POINTS))
+def test_copy_volume_is_linear_in_line_length(name):
+    """Byte-copying must not grow quadratically with the length of one line.
+
+    The opcode gate above is blind to this whole class: a slice of a megabyte is
+    one opcode. Same entry points, same claim, the measure that can see it.
+    """
+    ratio = _cpu_growth_ratio(_TEXT_ENTRY_POINTS[name])
+    assert ratio < _COPY_GROWTH_LIMIT, (
+        f"{name} burned {ratio:.2f}x the CPU when one line grew 8x "
+        f"({_COPY_SMALL_BYTES} -> {_COPY_LARGE_BYTES} bytes); linear is ~8 and "
+        "quadratic ~64, so this copies the line once per redacted span"
+    )
+
+
+def _rebuild_per_span(text: str) -> None:
+    """The defect this gate exists for, in miniature: replace every 10th-byte span
+    by rebuilding the WHOLE string each time. Quadratic in ``len(text)``, and
+    every one of those bytes is copied inside a C builtin."""
+    out = text
+    for start in range(len(text) - len(_FIELD_UNIT), -1, -len(_FIELD_UNIT)):
+        out = out[:start] + "X" + out[start + len(_FIELD_UNIT) :]
+
+
+def test_the_cpu_measure_catches_a_copy_quadratic():
+    """Non-vacuity: the CPU harness must FAIL a routine whose quadratic lives
+    entirely in C, which is precisely what the opcode harness cannot see."""
+    ratio = _cpu_growth_ratio(lambda text: lambda: _rebuild_per_span(text))
+    assert ratio >= _COPY_GROWTH_LIMIT, (
+        f"a routine that rebuilds the whole string per span measured {ratio:.2f}x "
+        "— the harness cannot see a C-level copy quadratic, so every assertion "
+        "above is vacuous"
+    )
+
+
+def test_the_opcode_measure_is_blind_to_a_copy_quadratic():
+    """The CPU gate's whole rationale, asserted rather than claimed: the opcode
+    count does NOT rise super-linearly for :func:`_rebuild_per_span`, so the gate
+    above it would certify that routine as linear."""
+    ratio = _growth_ratio(lambda text: lambda: _rebuild_per_span(text))
+    assert ratio < _SUPER_LINEAR_RATIO, (
+        f"the opcode measure reported {ratio:.2f}x for a C-level copy quadratic — "
+        "if it can now see this class, the CPU gate's rationale needs rewriting"
     )
 
 

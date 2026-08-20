@@ -215,6 +215,31 @@ def _mark(
     return f"{_MARK_OPEN}{len(entries) - 1} {_MARK_CLOSE}"
 
 
+def _splice(
+    text: str,
+    spans: list[tuple[int, int, str]],
+    entries: list[tuple[str, str]] | None,
+) -> str:
+    """``text`` with every ``(start, end, placeholder_text)`` span replaced by its
+    mark. ``spans`` must be ascending and disjoint, which is what lets one pass
+    over the text serve all of them.
+
+    Accumulating segments and joining once is what keeps redaction linear in the
+    text: rebuilding the whole string per span costs O(spans x len(text)), which
+    is reached by a single long line of attacker-shaped output — the redaction
+    then runs past its caller's timeout, and that caller stops redacting for the
+    rest of the session.
+    """
+    out: list[str] = []
+    cursor = 0
+    for start, end, placeholder_text in spans:
+        out.append(text[cursor:start])
+        out.append(_mark(entries, placeholder_text, text[start:end]))
+        cursor = end
+    out.append(text[cursor:])
+    return "".join(out)
+
+
 def _expand_marks(text: str, entries: list[tuple[str, str]]) -> str:
     """Replace sentinels embedded in a recorded original with their disk text.
 
@@ -1334,10 +1359,7 @@ def _redact_cross_line(
     if not accepted:
         return text
 
-    out = text
-    for orig_start, orig_end, placeholder_text, _ in reversed(accepted):
-        replacement = _mark(entries, placeholder_text, text[orig_start:orig_end])
-        out = out[:orig_start] + replacement + out[orig_end:]
+    out = _splice(text, [span[:3] for span in accepted], entries)
     found.extend(found_type for *_, found_type in accepted)
     return out
 
@@ -1564,13 +1586,10 @@ def _redact_line(
 
     if not accepted:
         return line
-    redacted = line
-    for orig_start, orig_end, secret_type in sorted(accepted, reverse=True):
-        replacement = _mark(
-            entries, placeholder(secret_type), redacted[orig_start:orig_end]
-        )
-        redacted = redacted[:orig_start] + replacement + redacted[orig_end:]
-    return redacted
+    spans = sorted(
+        (start, end, placeholder(secret_type)) for start, end, secret_type in accepted
+    )
+    return _splice(line, spans, entries)
 
 
 def _redact_lines(

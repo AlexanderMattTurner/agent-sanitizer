@@ -1918,6 +1918,14 @@ def test_detected_secret_values_dedupes_repeats():
     assert values.count(aws) == 1
 
 
+def test_detected_secret_values_are_in_first_seen_order_within_a_line():
+    """First-seen order is left-to-right, including for several secrets sharing
+    ONE line — the order a caller hashing these into an ignore list sees."""
+    keys = ["AKIA" + c * 16 for c in "BCD"]
+    line = " ".join(f"k{i}={key}" for i, key in enumerate(keys))
+    assert detected_secret_values(line) == keys
+
+
 def test_detected_secret_values_clean_text_is_empty():
     assert detected_secret_values("nothing to see here\n") == []
 
