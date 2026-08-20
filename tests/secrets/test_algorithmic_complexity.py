@@ -22,8 +22,8 @@ stable across Python versions even as the absolute count moves.
 An opcode count cannot see inside a C builtin: one ``str`` slice costs one
 opcode however many megabytes it copies. That is a hole, not a scope decision,
 and a quadratic shipped through it — ``_redact_line`` rebuilt the whole line once
-per redacted span, so 1 MiB of ``password="`` on ONE line cost ~28s of CPU
-against ~5s for the same bytes at 80 columns.
+per redacted span, so 1 MiB of ``password="`` on ONE line cost 35.6s of CPU
+against 7.8s for the same bytes at 80 columns.
 :func:`test_copy_volume_is_linear_in_line_length` closes it with the one measure
 that does see a C-level copy — CPU seconds, taken as a RATIO between two sizes in
 one process so the machine's speed cancels. ``time.process_time`` rather than
@@ -53,6 +53,7 @@ from agent_sanitizer.secrets import (
     secret_previews,
     strip_invisible,
 )
+from agent_sanitizer.secrets.placeholders import PLACEHOLDER_RE
 
 # Doubling the input doubles the work when the cost is linear and quadruples it
 # when it is quadratic. The sizes are what make that gap readable: the engine's
@@ -220,21 +221,21 @@ def test_entry_point_is_sub_quadratic_on_one_line(name):
     )
 
 
-# The copy-volume gate's own sizes and threshold. An 8x step, so linear is ~8x
-# and quadratic ~64x; the per-call fixed cost pulls the measured linear curve
-# slightly under 8. Both curves are MEASURED on the `password="` line below:
-# 7.85x for the splice-once code, 30.27x for the whole-line-rebuild it replaced.
-# 15.0 sits between them with ~2x margin on each side, which is what keeps a
-# noisy runner from reddening it.
+# The copy-volume gate's sizes and threshold. An 8x step, so linear is ~8x and
+# quadratic ~64x; the per-call fixed cost pulls the linear curve slightly under
+# 8. Both curves are MEASURED on the payload below — 7.85x when each line is
+# spliced in one pass, 30.27x when it is rebuilt per span — and 15.0 sits
+# between them with ~2x margin on each side.
 _COPY_SMALL_BYTES = 64 * 1024
 _COPY_LARGE_BYTES = 512 * 1024
 _COPY_GROWTH_LIMIT = 15.0
 
-# One redaction site per 10 bytes, so the number of spans grows WITH the line and
-# a per-span whole-line rebuild shows up as the quadratic it is. Every byte is on
-# ONE line: the same bytes wrapped at 80 columns cost each rebuild only its own
-# short line, which is exactly the asymmetry this gate names.
+# `password="<next unit's `password=`>"` redacts once per TWO units, so the span
+# count grows with the line and a per-span whole-line rebuild shows as the
+# quadratic it is. Every byte is on ONE line: that is the axis this gate bounds,
+# since a rebuild on 80-column lines only ever copies its own short line.
 _FIELD_UNIT = 'password="'
+_FIELD_UNITS_PER_SITE = 2
 
 
 def _long_field_line(nbytes: int) -> str:
@@ -260,12 +261,54 @@ def _cpu_growth_ratio(thunk_for) -> float:
     return large / small
 
 
-@pytest.mark.parametrize("name", sorted(_TEXT_ENTRY_POINTS))
+# The entry points whose cost this gate can actually read, and the reason each
+# other one is excluded — a name here is a claim a reader can check, not a silent
+# omission. Both exclusions are entry points that do no splicing on this payload,
+# so their measured CPU is call overhead and their ratio is timer noise (measured
+# below 1.0 for `strip_invisible`, i.e. the 8x-larger input reading as CHEAPER).
+_NON_SPLICING_ENTRY_POINTS = {
+    "mask_secret_lines": "masks the ONE distinct detected value; splices nothing",
+    "strip_invisible": "deletes invisible characters, of which this payload has none",
+}
+_SPLICING_ENTRY_POINTS = sorted(
+    set(_TEXT_ENTRY_POINTS) - set(_NON_SPLICING_ENTRY_POINTS)
+)
+
+
+def test_every_copy_gate_exclusion_is_still_an_entry_point():
+    """The gate's scope is :data:`_TEXT_ENTRY_POINTS` MINUS the exclusions, so a
+    new entry point joins it automatically; what can rot is an exclusion whose
+    entry point is gone, which would then excuse nothing while still reading as a
+    considered decision."""
+    assert set(_NON_SPLICING_ENTRY_POINTS) - set(_TEXT_ENTRY_POINTS) == set(), (
+        "excluded name(s) are not entry points at all — drop them"
+    )
+
+
+def test_the_copy_gate_payload_holds_a_span_per_two_units():
+    """Positive marker for the gate below: its ratios only bound splicing while
+    this payload really redacts once per two units, so the span count grows with
+    the line. A precision change that stopped matching ``password="`` would leave
+    every case below measuring an untouched pass-through, green forever."""
+    for units in (10, 40):
+        line = _FIELD_UNIT * units
+        redacted, _found = redact(line, _CONFIG)
+        placeholders = PLACEHOLDER_RE.findall(redacted)
+        assert len(placeholders) == units // _FIELD_UNITS_PER_SITE
+
+
+@pytest.mark.parametrize("name", _SPLICING_ENTRY_POINTS)
 def test_copy_volume_is_linear_in_line_length(name):
     """Byte-copying must not grow quadratically with the length of one line.
 
     The opcode gate above is blind to this whole class: a slice of a megabyte is
     one opcode. Same entry points, same claim, the measure that can see it.
+
+    Reaches the per-line splice only. Cross-line reassembly splices whole-document
+    offsets, but its per-span detection cost so dominates at every size this suite
+    can afford that a rebuild-per-span there measures 7.7x — inside this
+    threshold — so a gate over it would pass either way. What covers it instead is
+    that both paths splice through the ONE ``_splice`` this gate measures.
     """
     ratio = _cpu_growth_ratio(_TEXT_ENTRY_POINTS[name])
     assert ratio < _COPY_GROWTH_LIMIT, (
@@ -276,9 +319,9 @@ def test_copy_volume_is_linear_in_line_length(name):
 
 
 def _rebuild_per_span(text: str) -> None:
-    """The defect this gate exists for, in miniature: replace every 10th-byte span
-    by rebuilding the WHOLE string each time. Quadratic in ``len(text)``, and
-    every one of those bytes is copied inside a C builtin."""
+    """Redact every unit-aligned span by rebuilding the WHOLE string each time —
+    quadratic in ``len(text)``, with every one of those bytes copied inside a C
+    builtin, which is the shape both tests below are about."""
     out = text
     for start in range(len(text) - len(_FIELD_UNIT), -1, -len(_FIELD_UNIT)):
         out = out[:start] + "X" + out[start + len(_FIELD_UNIT) :]
