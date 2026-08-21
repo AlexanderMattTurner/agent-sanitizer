@@ -1084,9 +1084,20 @@ function isPreservedBlankFiller(cps, i) {
 // defines the unit the preserve budget is charged against (see carveStrip).
 // Grapheme segmentation is locale-independent, so the locale is pinned to "en"
 // only for determinism across hosts.
-const GRAPHEME_SEGMENTER = new Intl.Segmenter("en", {
-  granularity: "grapheme",
-});
+//
+// Built on FIRST USE, never at import: constructing it loads ICU's segmentation
+// tables and costs ~10 ms, the largest single item in this module's setup, and
+// only text with carve candidates ever reaches clusterResolver. The hooks that
+// import this run on every tool call, so building it at import charged every
+// call for a segmenter almost none of them use.
+/** @type {Intl.Segmenter | null} */
+let segmenterCache = null;
+
+/** @returns {Intl.Segmenter} the process-wide grapheme segmenter. */
+function graphemeSegmenter() {
+  segmenterCache ??= new Intl.Segmenter("en", { granularity: "grapheme" });
+  return segmenterCache;
+}
 
 /**
  * The UTF-16 index at which each code point of `cps` starts, plus one final
@@ -1148,7 +1159,7 @@ const CONTAINING_CANDIDATE_SHARE = 4;
 function clusterResolver(body, offsets, candidates) {
   const cpCount = offsets.length - 1;
   if (candidates * CONTAINING_CANDIDATE_SHARE < cpCount) {
-    const segments = GRAPHEME_SEGMENTER.segment(body);
+    const segments = graphemeSegmenter().segment(body);
     return (cp) => {
       // `offsets[cp]` is inside the string for every code-point index the walk
       // asks about, so the segment always exists.
@@ -1165,7 +1176,7 @@ function clusterResolver(body, offsets, candidates) {
   // cursor in step with it so no boundary needs searching for. The iterator is
   // abandoned wherever the last candidate leaves it, so a document whose
   // preserve budget is spent in its first line is never segmented past it.
-  const iterator = GRAPHEME_SEGMENTER.segment(body)[Symbol.iterator]();
+  const iterator = graphemeSegmenter().segment(body)[Symbol.iterator]();
   let start = 0;
   let end = 0;
   return (cp) => {

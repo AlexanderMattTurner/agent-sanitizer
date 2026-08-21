@@ -14,11 +14,13 @@ import { createServer } from "node:net";
 import {
   chmodSync,
   cpSync,
+  existsSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
   readdirSync,
   rmSync,
+  statSync,
   symlinkSync,
   writeFileSync,
 } from "node:fs";
@@ -124,6 +126,10 @@ function baseEnv() {
   // the binary answering for the bundle each test just corrupted.
   delete env.CLAUDE_PLUGIN_DATA;
   delete env.AGENT_SANITIZER_HOOK_BINARY;
+  // An exported cache directory sends the launcher down its operator-override
+  // branch, so without this a host fact would pick which branch the whole
+  // launcher suite exercises.
+  delete env.NODE_COMPILE_CACHE;
   // The launcher's node search reads a version manager's own env var in
   // preference to its default location under $HOME, so a runner that exports
   // one (GitHub's images export NVM_DIR) would send the search somewhere other
@@ -2949,4 +2955,149 @@ test("the launcher prefers a provisioned venv daemon over the zipapp", (t) => {
     JSON.parse(res.stdout).hookSpecificOutput.updatedToolOutput.stdout,
     /SANITIZATION FAILED/,
   );
+});
+
+// ─── V8 compile cache: the bundle is compiled once per install ───────────────
+
+/**
+ * A PostToolUse payload with nothing to sanitize — the ordinary tool call whose
+ * cost is all startup, which is what the cache exists to cut.
+ */
+const CLEAN_POST_TOOL_USE = Object.freeze({
+  hook_event_name: "PostToolUse",
+  tool_name: "Bash",
+  tool_response: "ok",
+});
+
+/** Where the launcher keeps V8's code cache under a plugin data dir. */
+const compileCacheDir = (dataDir) => join(dataDir, "node-compile-cache");
+
+/** Every file V8 wrote under `dir` (it keys them by a version tag subdir). */
+function cacheEntries(dir) {
+  if (!existsSync(dir)) return [];
+  return readdirSync(dir, { recursive: true, withFileTypes: true })
+    .filter((entry) => entry.isFile())
+    .map((entry) => entry.name);
+}
+
+/**
+ * V8's own account of what it did with each module it compiled, which is the
+ * only thing that distinguishes a cache that is merely WRITTEN from one that is
+ * read back and accepted.
+ */
+const CACHE_DEBUG = { NODE_DEBUG_NATIVE: "COMPILE_CACHE" };
+
+/** The launcher's default: a fresh data dir, and baseEnv's inherited-var strip. */
+function cacheEnv(dataDir, extra = {}) {
+  return { CLAUDE_PLUGIN_DATA: dataDir, ...extra };
+}
+
+test("a second run compiles the bundle from cache instead of recompiling it", (t) => {
+  const plugin = stagePlugin(t);
+  const data = scratch(t);
+  const env = cacheEnv(data, CACHE_DEBUG);
+  const first = launch(
+    plugin,
+    "PostToolUse",
+    "sanitize-output",
+    CLEAN_POST_TOOL_USE,
+    { env },
+  );
+  const second = launch(
+    plugin,
+    "PostToolUse",
+    "sanitize-output",
+    CLEAN_POST_TOOL_USE,
+    { env },
+  );
+  assert.equal(first.status, 0, first.stderr);
+  assert.equal(second.status, 0, second.stderr);
+  // The bundle by name, not "a cache was used": the launcher's own scripts are
+  // shell, so the only module worth ~40 ms of compile is this one.
+  assert.match(
+    first.stderr,
+    /reading cache from \S+ for ESM \S+plugin-hooks\.bundle\.mjs\.\.\. no such file/,
+  );
+  assert.match(
+    second.stderr,
+    /cache for \S+plugin-hooks\.bundle\.mjs was accepted/,
+  );
+});
+
+test("the compile cache directory is owner-only from the moment it is created", (t) => {
+  const plugin = stagePlugin(t);
+  const data = scratch(t);
+  const res = launch(
+    plugin,
+    "PostToolUse",
+    "sanitize-output",
+    CLEAN_POST_TOOL_USE,
+    {
+      env: cacheEnv(data),
+    },
+  );
+  assert.equal(res.status, 0, res.stderr);
+  // Created by this run, so its mode is the launcher's choice and not a
+  // pre-existing directory's — the next test covers one it did not create.
+  assert.equal(statSync(compileCacheDir(data)).mode & 0o777, 0o700);
+  assert.notDeepEqual(cacheEntries(compileCacheDir(data)), []);
+});
+
+test("a compile cache directory another uid can write is refused, and stays empty", (t) => {
+  const plugin = stagePlugin(t);
+  const data = scratch(t);
+  const dir = compileCacheDir(data);
+  mkdirSync(dir, { recursive: true });
+  chmodSync(dir, 0o777);
+  const res = launch(
+    plugin,
+    "PostToolUse",
+    "sanitize-output",
+    CLEAN_POST_TOOL_USE,
+    {
+      env: cacheEnv(data),
+    },
+  );
+  // The hook still answers — the cache is an accelerator, never a verdict.
+  assert.equal(res.status, 0, res.stderr);
+  assert.match(
+    res.stderr,
+    /not caching compiled bundle code in \S+node-compile-cache/,
+  );
+  // What did NOT happen: V8 was never pointed at a directory anything can write.
+  assert.deepEqual(cacheEntries(dir), []);
+});
+
+test("AGENT_SANITIZER_COMPILE_CACHE=0 leaves no cache directory behind", (t) => {
+  const plugin = stagePlugin(t);
+  const data = scratch(t);
+  const res = launch(
+    plugin,
+    "PostToolUse",
+    "sanitize-output",
+    CLEAN_POST_TOOL_USE,
+    {
+      env: cacheEnv(data, { AGENT_SANITIZER_COMPILE_CACHE: "0" }),
+    },
+  );
+  assert.equal(res.status, 0, res.stderr);
+  assert.equal(existsSync(compileCacheDir(data)), false);
+});
+
+test("an operator's own NODE_COMPILE_CACHE is used as-is", (t) => {
+  const plugin = stagePlugin(t);
+  const data = scratch(t);
+  const chosen = scratch(t);
+  const res = launch(
+    plugin,
+    "PostToolUse",
+    "sanitize-output",
+    CLEAN_POST_TOOL_USE,
+    {
+      env: { CLAUDE_PLUGIN_DATA: data, NODE_COMPILE_CACHE: chosen },
+    },
+  );
+  assert.equal(res.status, 0, res.stderr);
+  assert.notDeepEqual(cacheEntries(chosen), []);
+  assert.equal(existsSync(compileCacheDir(data)), false);
 });

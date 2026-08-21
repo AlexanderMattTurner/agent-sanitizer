@@ -398,6 +398,36 @@ if [[ -n "${AGENT_SANITIZER_NODE:-}" && ! -x "$node_bin" ]]; then
   exit 0
 fi
 
+# V8's compile cache, so the bundle is COMPILED once per install and not once
+# per tool call.
+#
+# The bundle is one ~2.4 MB ESM file that node re-parses and re-compiles on
+# every hook invocation — ~40 ms of the ~150 ms a healthy PostToolUse run costs
+# on a fast host, none of it sanitization. NODE_COMPILE_CACHE (node >=22.1)
+# keeps V8's code cache on disk and reuses it only when the bundle's bytes and
+# the node version both match, so an edited bundle or an upgraded node misses
+# and recompiles. An older node ignores the variable and a node that cannot
+# write the directory recompiles in silence, which is the right failure for an
+# accelerator that reaches no verdict of its own. An operator's own
+# NODE_COMPILE_CACHE is a directory they already chose, so it is left alone.
+#
+# V8 does not treat a code cache as untrusted input, so a cache directory
+# another uid can write is arbitrary code in every hook of the session — the
+# property trusted_exec_dir already states for the hook binary, and the same
+# refusal here. A directory that could not be CREATED says nothing: a read-only
+# or absent plugin data dir is an ordinary host, not a suspicious one.
+compile_cache_dir="${CLAUDE_PLUGIN_DATA:-}/node-compile-cache"
+if [[ "${AGENT_SANITIZER_COMPILE_CACHE:-}" != "0" && -n "${CLAUDE_PLUGIN_DATA:-}" && -z "${NODE_COMPILE_CACHE:-}" ]]; then
+  # No -p: the plugin data dir is the provisioner's to create, and -m would not
+  # reach a parent this made. An absent parent simply leaves the cache off.
+  [[ -d "$compile_cache_dir" ]] || mkdir -m 700 "$compile_cache_dir" 2>/dev/null
+  if trusted_exec_dir "$compile_cache_dir"; then
+    export NODE_COMPILE_CACHE="$compile_cache_dir"
+  elif [[ -d "$compile_cache_dir" ]]; then
+    echo "agent-sanitizer: not caching compiled bundle code in $compile_cache_dir — it is not a plain directory this user owns with owner-only write, so anything that can write it can hand V8 code to run in every hook; hooks still run, one compile slower (fix the directory's owner and mode, or delete it)" >&2
+  fi
+fi
+
 # The bundle runs as a CHILD, not an `exec`, so this shim keeps control long
 # enough to check its POST-CONDITION — did a verdict come back? — instead of
 # probing a proxy for it. The proxy was `node --check "$bundle"`: it caught a
