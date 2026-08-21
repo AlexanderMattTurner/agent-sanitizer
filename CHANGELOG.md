@@ -8,6 +8,14 @@ adhere to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+## [2.47.2] - 2026-08-21
+
+### Changed
+
+- The grapheme segmenter is now built on first use rather than at import, reducing initial load time.
+- Hook bundle compiled code is now reused between tool calls for improved performance.
+- Updated threat model documentation to account for V8 compile cache under `CLAUDE_PLUGIN_DATA`.
+
 ## [2.47.1] - 2026-08-20
 
 ### Fixed
