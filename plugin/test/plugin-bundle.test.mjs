@@ -126,6 +126,10 @@ function baseEnv() {
   // the binary answering for the bundle each test just corrupted.
   delete env.CLAUDE_PLUGIN_DATA;
   delete env.AGENT_SANITIZER_HOOK_BINARY;
+  // An exported cache directory sends the launcher down its operator-override
+  // branch, so without this a host fact would pick which branch the whole
+  // launcher suite exercises.
+  delete env.NODE_COMPILE_CACHE;
   // The launcher's node search reads a version manager's own env var in
   // preference to its default location under $HOME, so a runner that exports
   // one (GitHub's images export NVM_DIR) would send the search somewhere other
@@ -2983,13 +2987,9 @@ function cacheEntries(dir) {
  */
 const CACHE_DEBUG = { NODE_DEBUG_NATIVE: "COMPILE_CACHE" };
 
-/** The launcher's default: no inherited NODE_COMPILE_CACHE, a fresh data dir. */
+/** The launcher's default: a fresh data dir, and baseEnv's inherited-var strip. */
 function cacheEnv(dataDir, extra = {}) {
-  return {
-    CLAUDE_PLUGIN_DATA: dataDir,
-    NODE_COMPILE_CACHE: "",
-    ...extra,
-  };
+  return { CLAUDE_PLUGIN_DATA: dataDir, ...extra };
 }
 
 test("a second run compiles the bundle from cache instead of recompiling it", (t) => {

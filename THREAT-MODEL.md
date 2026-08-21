@@ -669,8 +669,21 @@ it, so what anchors its trust is worth stating exactly.
   code in the session, which is why the provisioner creates that directory mode
   700 and installs the binary mode 700. A user-owned data directory is the
   assumption; a shared or world-writable one is not supported.
-- **Opting out.** `AGENT_SANITIZER_HOOK_BINARY=0` never downloads and never
-  runs a binary, leaving the node path exactly as it was.
+- **A second artifact under that directory is loaded as code: V8's compile
+  cache.** The launcher points node at
+  `${CLAUDE_PLUGIN_DATA}/node-compile-cache` so the hook bundle is compiled once
+  per install instead of once per tool call. V8 does not treat a code cache as
+  untrusted input, so those files are code the session runs, exactly like the
+  binary above. The launcher creates the directory mode 700 and gates it with
+  `trusted_exec_dir` — the same owner-only-write property, refused with a line on
+  stderr when the directory does not hold it — so the same user-owned data
+  directory is the assumption here too. It carries no digest and needs none:
+  anything able to write there can already run code per the bullet above. Nothing
+  is fetched for it, so it adds no supply-chain surface.
+- **Opting out.** `AGENT_SANITIZER_HOOK_BINARY=0` never downloads and never runs
+  a binary. That leaves the node path running the committed bundle and the
+  compile cache above; `AGENT_SANITIZER_COMPILE_CACHE=0` turns the cache off as
+  well, and an operator's own `NODE_COMPILE_CACHE` is used unchanged.
 
 ## Failure posture (`AGENT_SANITIZER_FAIL_OPEN`)
 
