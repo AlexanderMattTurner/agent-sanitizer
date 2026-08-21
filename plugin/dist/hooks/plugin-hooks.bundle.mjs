@@ -3530,6 +3530,10 @@ function isPreservedBlankFiller(cps, i) {
   if (HANGUL_FILLERS.has(cp)) return isHangul(prev) || isHangul(next2);
   return false;
 }
+function graphemeSegmenter() {
+  segmenterCache ??= new Intl.Segmenter("en", { granularity: "grapheme" });
+  return segmenterCache;
+}
 function u16Offsets(cps) {
   const offsets = new Int32Array(cps.length + 1);
   let at = 0;
@@ -3553,7 +3557,7 @@ function cpIndexOf(offsets, u16) {
 function clusterResolver(body, offsets, candidates) {
   const cpCount = offsets.length - 1;
   if (candidates * CONTAINING_CANDIDATE_SHARE < cpCount) {
-    const segments = GRAPHEME_SEGMENTER.segment(body);
+    const segments = graphemeSegmenter().segment(body);
     return (cp) => {
       const found = (
         /** @type {{ index: number, segment: string }} */
@@ -3565,7 +3569,7 @@ function clusterResolver(body, offsets, candidates) {
       };
     };
   }
-  const iterator = GRAPHEME_SEGMENTER.segment(body)[Symbol.iterator]();
+  const iterator = graphemeSegmenter().segment(body)[Symbol.iterator]();
   let start = 0;
   let end = 0;
   return (cp) => {
@@ -3755,7 +3759,7 @@ function stripBody(body, cps, analysis) {
 function stripInvisible(text5) {
   return stripInvisibleWithReport(text5).cleaned;
 }
-var VS, ZERO_WIDTH_MN, BLANK_NON_CF, REGEX_FLAGS, CF_CLASS_SOURCE, CATEGORY, CATEGORY_LABELS, CHECKS, STRIP, LONG_RUN_THRESHOLD, SCATTERED_THRESHOLD, LONG_RUN_RE, RUN_CHUNK, LONG_RUN_CHUNK_RE, RUN_TAIL_RE, BOM, ZWNJ, ZWJ, CONSECUTIVE_JOINER_CAP, CONSECUTIVE_SELECTOR_CAP, TOTAL_PRESERVED_JOINER_BUDGET, PRESERVED_JOINER_PER_VISIBLE, PRESERVE_HARD_CAP, TOTAL_PRESERVED_BLANK_BUDGET, PRESERVED_BLANK_PER_ANCHOR, LINGUISTIC_SCRIPTS, EMOJI_LEFT, KEYCAP_BASE, COMBINING_KEYCAP, EMOJI_BASE, VARIATION_SELECTOR, isEmojiLeft, isEmojiBase, isKeycapBase, isVariationSelectorCp, PRESENTATION_SELECTORS, TAG_BASE, TAG_CANCEL, TAG_SPEC_MIN, TAG_SPEC_MAX, REGISTERED_TAG_PAYLOADS, MAX_TAG_SPEC_CHARS, IVS_MIN, IVS_MAX, CJK_IDEOGRAPH_RE, isCjkIdeograph, BRAILLE_BLANK, HANGUL_FILLERS, GATED_BLANK_RE, BRAILLE_RE, isBrailleScript, HANGUL_RE, isHangulScript, CODE_VISIBLE, CODE_CF, CODE_VS, CODE_BLANK, KIND_NONE, KIND_JOINER, KIND_EMOJIVS, KIND_TAG, KIND_STDVS, KIND_IVS, KIND_BLANK, CODE_CATEGORY, TRACKED_INVISIBLE, MIN_TRACKED_CP, CP_PREDICATE_MEMO_CAP, isCursiveLetter, jtOf, GRAPHEME_SEGMENTER, CONTAINING_CANDIDATE_SHARE, TAG_CHAR_RE;
+var VS, ZERO_WIDTH_MN, BLANK_NON_CF, REGEX_FLAGS, CF_CLASS_SOURCE, CATEGORY, CATEGORY_LABELS, CHECKS, STRIP, LONG_RUN_THRESHOLD, SCATTERED_THRESHOLD, LONG_RUN_RE, RUN_CHUNK, LONG_RUN_CHUNK_RE, RUN_TAIL_RE, BOM, ZWNJ, ZWJ, CONSECUTIVE_JOINER_CAP, CONSECUTIVE_SELECTOR_CAP, TOTAL_PRESERVED_JOINER_BUDGET, PRESERVED_JOINER_PER_VISIBLE, PRESERVE_HARD_CAP, TOTAL_PRESERVED_BLANK_BUDGET, PRESERVED_BLANK_PER_ANCHOR, LINGUISTIC_SCRIPTS, EMOJI_LEFT, KEYCAP_BASE, COMBINING_KEYCAP, EMOJI_BASE, VARIATION_SELECTOR, isEmojiLeft, isEmojiBase, isKeycapBase, isVariationSelectorCp, PRESENTATION_SELECTORS, TAG_BASE, TAG_CANCEL, TAG_SPEC_MIN, TAG_SPEC_MAX, REGISTERED_TAG_PAYLOADS, MAX_TAG_SPEC_CHARS, IVS_MIN, IVS_MAX, CJK_IDEOGRAPH_RE, isCjkIdeograph, BRAILLE_BLANK, HANGUL_FILLERS, GATED_BLANK_RE, BRAILLE_RE, isBrailleScript, HANGUL_RE, isHangulScript, CODE_VISIBLE, CODE_CF, CODE_VS, CODE_BLANK, KIND_NONE, KIND_JOINER, KIND_EMOJIVS, KIND_TAG, KIND_STDVS, KIND_IVS, KIND_BLANK, CODE_CATEGORY, TRACKED_INVISIBLE, MIN_TRACKED_CP, CP_PREDICATE_MEMO_CAP, isCursiveLetter, jtOf, segmenterCache, CONTAINING_CANDIDATE_SHARE, TAG_CHAR_RE;
 var init_invisible = __esm({
   "src/invisible.mjs"() {
     "use strict";
@@ -3908,9 +3912,7 @@ var init_invisible = __esm({
     CP_PREDICATE_MEMO_CAP = 4096;
     isCursiveLetter = (jt) => jt === "D" || jt === "R" || jt === "L";
     jtOf = (cp) => cp < 0 ? "U" : joiningType(cp);
-    GRAPHEME_SEGMENTER = new Intl.Segmenter("en", {
-      granularity: "grapheme"
-    });
+    segmenterCache = null;
     CONTAINING_CANDIDATE_SHARE = 4;
     TAG_CHAR_RE = /[\u{E0000}-\u{E007F}]/u;
   }
