@@ -377,6 +377,22 @@ describe("fenceFile", () => {
       assert.equal(fenceFile(hostile), "*(unrenderable filename)*");
     }
   });
+  // One case per conjunct of the guard, each driven false while the others
+  // hold. A chain of `&&` reports fully covered the moment a single
+  // all-satisfying input runs it, so only per-conjunct cases prove each term is
+  // load-bearing — without these, deleting a term leaves the suite green.
+  it("rejects on each guard term independently", () => {
+    assert.equal(fenceFile("a".repeat(600)), "*(unrenderable filename)*");
+    assert.equal(
+      fenceFile(`${"a".repeat(500)}\``),
+      "*(unrenderable filename)*",
+    );
+    assert.equal(fenceFile(`${"a".repeat(500)}é`), "*(unrenderable filename)*");
+  });
+  it("admits the longest allowed name and refuses one character more", () => {
+    assert.equal(fenceFile("a".repeat(512)), `\`${"a".repeat(512)}\``);
+    assert.equal(fenceFile("a".repeat(513)), "*(unrenderable filename)*");
+  });
 });
 
 describe("renderComment", () => {

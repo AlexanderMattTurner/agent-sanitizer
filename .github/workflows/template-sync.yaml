@@ -30,6 +30,18 @@ name: Sync from Template
 # 5. A workflow that must never be introduced into a repo that has its own
 #    equivalent (the release flow) belongs in OPT_IN_PATHS.
 # =============================================================================
+#
+# ROOT SCAFFOLDING A SYNCED WORKFLOW MAY ASSUME
+#
+# SYNC_PATHS delivers no root project file: package.json, .nvmrc, pyproject.toml,
+# uv.lock and .pre-commit-config.yaml all stay with the consumer. So a synced
+# workflow step that needs one must be gated on `hashFiles('<file>') != ''` and
+# skip when it is absent. Ungated, it hard-fails on every PR in a consumer that
+# never had that scaffolding — a shell-only dotfiles repo, say — and names
+# neither the template nor the missing file in the failure. Adding a workflow to
+# EXCLUDE_PATHS is the consumer's escape hatch, not the fix; gate the step here
+# instead, so a new consumer needs no escape hatch at all.
+# =============================================================================
 
 on:
   workflow_dispatch:
@@ -79,6 +91,7 @@ env:
   # The security-vulnerability-scan workflow + prompt are intentionally NOT
   # propagated to downstream repos; each consumer owns its own security-scan
   # cadence and model pin, so the template stops overwriting them on sync.
+<<<<<<< local
   #
   # claude-review.yaml: this repo runs the reviewer as two split workflows
   # (claude-pr-review, claude-merge-delta-review) that between them produce the
@@ -91,6 +104,14 @@ env:
   # still carries it keeps its own copy rather than having sync delete it out
   # from under a caller that has not converted yet.
   EXCLUDE_PATHS: ".github/workflows/security-vulnerability-scan.yaml .github/prompts/security-vulnerability-scan.md .github/workflows/claude-review.yaml .github/scripts/auto-resolve"
+||||||| base
+  EXCLUDE_PATHS: ".github/workflows/security-vulnerability-scan.yaml .github/prompts/security-vulnerability-scan.md"
+=======
+  # .github/scripts/auto-resolve is the retired shell resolver. A consumer that
+  # still carries it keeps its own copy rather than having sync delete it out
+  # from under a caller that has not converted yet.
+  EXCLUDE_PATHS: ".github/workflows/security-vulnerability-scan.yaml .github/prompts/security-vulnerability-scan.md .github/scripts/auto-resolve"
+>>>>>>> template
   # Files the sync UPDATES but never INTRODUCES. Absent from the child repo they
   # are skipped; present, they sync like anything else. This is the opt-in half
   # of EXCLUDE_PATHS: opting in is creating the file once, opting out is deleting
@@ -326,7 +347,16 @@ jobs:
         run: |
           git fetch --no-tags origin "+refs/heads/template-sync:refs/remotes/origin/template-sync"
           git checkout -B template-sync origin/template-sync
-          bash .github/scripts/template-sync-resolve.sh
+          # Tier 2 of the conflict resolution is the resolver's own fan-out, which
+          # lives in its own repository now. Pinned by SHA to the same commit
+          # auto-resolve-conflicts.yaml calls, so both run one version of it.
+          resolver_dir="${RUNNER_TEMP}/template-sync-resolver"
+          git clone --no-tags --depth 1 \
+            "https://github.com/AlexanderMattTurner/agent-resolve-merge-conflicts.git" "${resolver_dir}"
+          git -C "${resolver_dir}" fetch --no-tags --depth 1 origin ba747a3e64e954a30148db13be96e0cf0002f0a8
+          git -C "${resolver_dir}" checkout --detach FETCH_HEAD
+          RESOLVER_DIR="${resolver_dir}/.github/resolver" \
+            bash .github/scripts/template-sync-resolve.sh
 
       - name: Push the resolutions
         if: steps.resolve.outcome == 'success' && (steps.resolve.outputs.deterministic != '' || steps.resolve.outputs.by_model != '')

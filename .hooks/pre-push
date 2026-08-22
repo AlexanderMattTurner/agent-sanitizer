@@ -41,6 +41,7 @@ gate_tool_path "$git_root"
 # repo's own autofix bots push from runners that carry neither.
 precommit_cmd=()
 if command -v uvx >/dev/null 2>&1; then
+<<<<<<< local
   workflow="$git_root/.github/workflows/pre-commit.yaml"
   run_line=$(grep -m1 -E 'pre-commit==[0-9]' "$workflow") || run_line=''
   pin=$(sed -n 's/.*pre-commit==\([0-9][0-9.]*\).*/\1/p' <<<"$run_line")
@@ -52,6 +53,19 @@ if command -v uvx >/dev/null 2>&1; then
   # `uvx --from`, not `uv run`: this repo has a pyproject.toml and `uv run`
   # would sync the project environment before running anything.
   precommit_cmd=(uvx --python "$python_version" --from "pre-commit==$pin" pre-commit)
+||||||| base
+  pin=$(sed -n 's/.*uvx \(pre-commit==[0-9][0-9.]*\).*/\1/p' \
+    "$git_root/.github/workflows/pre-commit.yaml" | head -n1)
+  precommit_cmd=(uvx "${pin:-pre-commit}")
+=======
+  # First match via parameter expansion, NOT `| head -n1`: head exits after one
+  # line and SIGPIPEs sed, which `set -o pipefail` reports as a failure —
+  # aborting the push the moment the workflow grows a second matching line.
+  pin=$(sed -n 's/.*uvx \(pre-commit==[0-9][0-9.]*\).*/\1/p' \
+    "$git_root/.github/workflows/pre-commit.yaml")
+  pin="${pin%%$'\n'*}"
+  precommit_cmd=(uvx "${pin:-pre-commit}")
+>>>>>>> template
 elif command -v pre-commit >/dev/null 2>&1; then
   precommit_cmd=(pre-commit)
 else
@@ -84,6 +98,7 @@ zero=0000000000000000000000000000000000000000
 exec 3<&0 0</dev/null
 while read -r -u 3 _local_ref local_sha remote_ref remote_sha; do
   [[ "$local_sha" == "$zero" ]] && continue # branch deletion: nothing to check
+<<<<<<< local
   # A tag push introduces no commits — the tagged commit already reached the
   # remote on some branch and was checked then. Tags also have no upstream to
   # diff against, so without this they hit the new-ref fallback below and get
@@ -139,15 +154,34 @@ while read -r -u 3 _local_ref local_sha remote_ref remote_sha; do
 
   # No pre-commit anywhere: already announced above, so skip quietly here.
   [[ ${#precommit_cmd[@]} -eq 0 ]] && continue
+||||||| base
+  if [[ ${#precommit_cmd[@]} -eq 0 ]]; then
+    gate_die_missing_tool pre-push pre-commit "install uv (https://docs.astral.sh/uv/) or 'pip install pre-commit' so the pushed range can be checked, then push again."
+  fi
+=======
+  # An ANNOTATED tag pushes the tag object's sha, not the commit's. That sha can
+  # never equal a ref the remote already has, so the emptiness test below would
+  # read every tag push as a new range. Peel to the commit; a lightweight tag or
+  # a branch tip peels to itself.
+  local_tip=$(git rev-parse --verify --quiet "${local_sha}^{commit}") || continue
+>>>>>>> template
   from_ref="$remote_sha"
   if [[ "$from_ref" == "$zero" ]]; then
-    from_ref=$(git merge-base "$default_branch" "$local_sha" 2>/dev/null) ||
+    from_ref=$(git merge-base "$default_branch" "$local_tip" 2>/dev/null) ||
       from_ref=$(git hash-object -t tree /dev/null)
   fi
-  [[ "$from_ref" == "$local_sha" ]] && continue # nothing new to push
+  [[ "$from_ref" == "$local_tip" ]] && continue # nothing new to push
+  # The tool check sits BELOW the emptiness skip. A push that introduces no
+  # commits has nothing for pre-commit to look at, so demanding the tool first
+  # refuses a release-tag push from a runner that has no pre-commit — which is
+  # every runner auto-version.yaml tags from.
+  if [[ ${#precommit_cmd[@]} -eq 0 ]]; then
+    gate_die_missing_tool pre-push pre-commit "install uv (https://docs.astral.sh/uv/) or 'pip install pre-commit' so the pushed range can be checked, then push again."
+  fi
   # Redirect stdin from /dev/null: git feeds this loop the ref list on stdin,
   # and pre-commit (and the tools it drives) would otherwise inherit and consume
   # it, so a multi-ref push would check only the first range.
+<<<<<<< local
   #
   # A hook-ENVIRONMENT provisioning failure degrades to a loud skip instead of
   # blocking the push: in a restricted-egress sandbox pre-commit can't reach an
@@ -170,6 +204,11 @@ while read -r -u 3 _local_ref local_sha remote_ref remote_sha; do
     continue
   fi
   [[ "$precommit_rc" -eq 0 ]] || exit "$precommit_rc"
+||||||| base
+  "${precommit_cmd[@]}" run --from-ref "$from_ref" --to-ref "$local_sha" --show-diff-on-failure </dev/null
+=======
+  "${precommit_cmd[@]}" run --from-ref "$from_ref" --to-ref "$local_tip" --show-diff-on-failure </dev/null
+>>>>>>> template
 done
 
 # Portable-symlink check: rejects a tracked symlink with an absolute target

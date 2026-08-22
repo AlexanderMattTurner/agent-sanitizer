@@ -27,7 +27,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { join } from "node:path";
-import { pathToFileURL } from "node:url";
+import { isMain } from "./lib-hook-io.mjs";
 
 /** Serial tool-turns (assistant messages with >=1 tool call, no delegation
  * anywhere in the segment) after which the nudge fires. High enough that a
@@ -285,10 +285,7 @@ async function readStdin() {
   return Buffer.concat(chunks).toString("utf8");
 }
 
-if (
-  process.argv[1] &&
-  import.meta.url === pathToFileURL(process.argv[1]).href
-) {
+if (isMain(import.meta.url)) {
   try {
     const payload = JSON.parse(await readStdin());
     const sentinelDir = process.env.TMPDIR || "/tmp";

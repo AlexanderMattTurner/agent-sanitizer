@@ -35,8 +35,23 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+<<<<<<< local
 # shellcheck source=.github/scripts/lib/merge-conflict.bash
 source "$(cd "${SCRIPT_DIR}/lib" && pwd)/merge-conflict.bash"
+||||||| base
+# shellcheck source=.github/scripts/auto-resolve/lib.sh
+source "${SCRIPT_DIR}/auto-resolve/lib.sh"
+=======
+# shellcheck source=.github/scripts/lib/merge-conflict.bash
+source "$(cd "${SCRIPT_DIR}/lib" && pwd)/merge-conflict.bash"
+
+# Tier 2 runs the resolver's fanout.py, and the resolver is its own repository
+# now — so the caller must stage it and say where. Required, not derived: an
+# empty default would silently skip the model tier and report every conflict
+# unresolved, which reads as "the model found nothing" rather than as a missing
+# checkout.
+: "${RESOLVER_DIR:?RESOLVER_DIR required — clone the resolver repository and point this at its .github/resolver}"
+>>>>>>> template
 
 : "${PR_NUMBER:?PR_NUMBER required}"
 out="${GITHUB_OUTPUT:?GITHUB_OUTPUT required}"
@@ -91,7 +106,13 @@ if [[ ${#remaining[@]} -gt 0 ]]; then
     CONFLICT_LIST="${remaining[*]}" \
       MODIFY_DELETE_PATHS="" \
       PR_NUMBER="$PR_NUMBER" \
+<<<<<<< local
       python3 "${RESOLVER_DIR:?RESOLVER_DIR required}/auto-resolve/fanout.py" ||
+||||||| base
+      bash "${SCRIPT_DIR}/auto-resolve/fanout.sh" ||
+=======
+      python3 "${RESOLVER_DIR}/auto-resolve/fanout.py" ||
+>>>>>>> template
       echo "template-sync-resolve: the model tier exited non-zero; the marker sweep below decides." >&2
     by_model=("${remaining[@]}")
   fi
