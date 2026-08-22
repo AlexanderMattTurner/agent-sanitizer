@@ -1,8 +1,22 @@
+<<<<<<< local
 // Shared reader for a Claude run's execution log, plus the PR-review cost
 // footnote built from it — used by the reviewer (post-pr-review.mjs, which posts
 // the cost line). One source for parsing the log, reading a run's cost and its
 // error flag, formatting dollars, and rendering the "how many PRs fit in a Max
 // 20x weekly allowance" line, so the consumers can never drift.
+||||||| base
+// Shared cost accounting for the PR-review footnote — used by both the reviewer
+// (post-pr-review.mjs, which posts the original cost line) and the Haiku
+// thread-resolver (compute-haiku-cost-footer.mjs, which tallies each follow-up
+// run onto that same footnote). One source for reading a Claude run's cost,
+// formatting dollars, and rendering the "how many PRs fit in a Max 20x weekly
+// allowance" line, so the two producers can never drift.
+=======
+// Shared cost accounting for the PR-review footnote — used by post-pr-review.mjs,
+// which posts the cost line. One source for reading a Claude run's cost,
+// formatting dollars, and rendering the "how many PRs fit in a Max 20x weekly
+// allowance" line.
+>>>>>>> template
 import { readFileSync } from "node:fs";
 
 // The Claude action's execution log as a flat event list — an array of streamed
@@ -53,7 +67,15 @@ export function readRunCost(executionFile) {
   return { cost, model };
 }
 
+<<<<<<< local
 // Sub-cent costs keep four decimals; everything else two.
+||||||| base
+// Sub-cent costs keep four decimals (a Haiku run is a fraction of a cent);
+// everything else two.
+=======
+// Sub-cent costs keep four decimals;
+// everything else two.
+>>>>>>> template
 export function formatDollars(cost) {
   return cost < 0.01 ? cost.toFixed(4) : cost.toFixed(2);
 }

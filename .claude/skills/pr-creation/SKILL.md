@@ -113,6 +113,7 @@ Each pass:
    - `subagent_type`: “general-purpose”
    - `description`: “Critique code changes”
    - `prompt`: Include the full diff (`git diff $CLAUDE_CODE_BASE_REF...HEAD`) and the critique prompt from the resource file
+   - `model`: `"opus"` — this is an adversarial review, per `CLAUDE.md` → Delegation's tiering. When the session model that wrote the diff was not Opus, add one line to the prompt: a weaker or cheaper model wrote the diff, so scrutinize it harder than a routine pass.
 2. For each issue raised, assess validity, then take the easy wins first:
    - **Compress**—delete dead code, unused imports, commented-out blocks, WHAT-comments, backwards-compat shims, premature abstractions
    - **Readability**—tighter names, un-nest conditionals, combine related checks, guard-clause early returns
@@ -133,7 +134,7 @@ Run the project’s test/lint/typecheck commands (see [pr-templates.md](pr-templ
 
 ### Step 5: Update PR Title and Description (after any post-creation changes)
 
-Push any commits made during the critique and validation steps, then update the PR to reflect the final state.
+Push any commits made during the critique and validation steps, then update the PR to reflect the final state. **Re-run the prior-art search over merged PRs touching your files first** — one that landed while yours was in review can already own your change, and the pre-branch search cannot see it.
 
 1. Push: `git push`
 
@@ -239,6 +240,14 @@ Use the `/pr-creation` skill. For contributions to others' repos, before writing
 
 **Lessons only reach the template repo if they appear in the PR description**—lessons mentioned only in chat are never propagated and are permanently lost.
 
+<<<<<<< local
 **Resolve each review thread once you've addressed it**, so the unresolved count reflects only what still needs attention and auto-merge isn't held on stale threads. Resolve **only** a thread you actually addressed — a fix or a reply first, never resolving to clear the count.
 
 No automated resolver covers it — every thread is resolved by whoever addressed it. `Review findings resolved` reads a gating (🔴/🟡) thread's resolved flag, not the diff, so one addressed-but-unresolved finding blocks the merge indefinitely. Resolving also fires no workflow event, so re-run the gate right after: `gh pr edit <N> --remove-label recheck-review-gate` then `--add-label recheck-review-gate`. Both halves, in that order — a bare add over a label already present fires nothing, since `labeled` fires on a transition. See CLAUDE.md's Pull Requests section for the mechanism.
+||||||| base
+**Resolve each review thread once you've addressed it**, so the unresolved count reflects only what still needs attention and auto-merge isn't held on stale threads. Resolve **only** a thread you actually addressed — a fix or a reply first, never resolving to clear the count.
+=======
+**Resolving an addressed review thread is YOUR job — no workflow does it.** After each push, re-read the threads (`mcp__github__pull_request_read` method `get_review_comments`, or the GraphQL `reviewThreads` query) and resolve every one the push addressed, with `mcp__github__resolve_review_thread` on the thread's `PRRT_…` node id. Resolve **only** a thread you actually addressed — land the fix or post the reply first, never resolve to clear the count. Confirm each resolve took: a follow-up read shows `is_resolved: true`, because a stale thread id resolves nothing while the call still reports success.
+
+Resolving a thread fires no event `review-gate.yaml` listens for, so the `Automated review posted` status stays stale until your next push re-runs it. The reviewer's own hold clears on the twice-hourly sweep (`claude-reviewer-hold-clear.yaml`) once no reviewer thread is unresolved. A hold whose concern lived only in the review BODY opens no thread to resolve — it clears when the reviewer re-reads your next push.
+>>>>>>> template

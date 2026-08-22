@@ -31,12 +31,28 @@ jobs:
       - name: Validate configuration
         run: bash .github/scripts/validate-config.sh
 
+<<<<<<< local
       # Run the suite on the package's declared floor (3.10). The engine's
       # regexes are the reason this matters: a 3.11-only possessive quantifier
       # once slipped in because CI only exercised 3.11, so the floor is what CI
       # now runs. uv fetches 3.10 on demand.
       - name: Test Claude hooks (Python 3.10 — package floor)
         run: uv run --python 3.10 --extra dev pytest tests/
+||||||| base
+      - name: Test Claude hooks
+        run: uv run --extra dev pytest tests/
+=======
+      # `uv run` needs a pyproject.toml to run in, and `pytest tests/` exits 4 on
+      # a missing directory. template-sync delivers neither file, so a consumer
+      # with no Python project runs nothing here instead of failing.
+      # validate-config.sh above stays ungated — it needs only the .claude/ tree
+      # the sync delivers.
+      - name: Test Claude hooks
+        if: hashFiles('pyproject.toml') != ''
+        run: |
+          [[ -d tests ]] || { echo "No tests/ directory; nothing to run."; exit 0; }
+          uv run --extra dev pytest tests/
+>>>>>>> template
 
   # Stable Required check: runs even when `validate` is cancelled/skipped, so a
   # protected branch never gets stuck on a check that never reports.

@@ -9,11 +9,23 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+<<<<<<< local
 # CONFLICT_MARKER_RE from one place; git_auth_header from another.
 # shellcheck source=.github/scripts/lib/merge-conflict.bash
 source "$(cd "${SCRIPT_DIR}/lib" && pwd)/merge-conflict.bash"
 # shellcheck source=.github/scripts/lib-git-auth.sh
 source "${SCRIPT_DIR}/lib-git-auth.sh"
+||||||| base
+# shellcheck source=.github/scripts/auto-resolve/lib.sh
+source "${SCRIPT_DIR}/auto-resolve/lib.sh"
+=======
+LIB_DIR="$(cd "${SCRIPT_DIR}/lib" && pwd)"
+# CONFLICT_MARKER_RE from one place; git_auth_header from another.
+# shellcheck source=.github/scripts/lib/merge-conflict.bash
+source "${LIB_DIR}/merge-conflict.bash"
+# shellcheck source=.github/scripts/lib/git-auth.bash
+source "${LIB_DIR}/git-auth.bash"
+>>>>>>> template
 
 : "${GITHUB_TOKEN:?GITHUB_TOKEN required}"
 

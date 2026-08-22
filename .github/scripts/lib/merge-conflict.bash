@@ -5,7 +5,7 @@
 #
 # What the template-sync conflict path needs to read a merge. The auto-resolve resolver used to
 # live in this tree and these two came from its shared library; it is now its own repository, so
-# the copy the template-sync scripts still use lives here.
+# the copy the template still uses lives here.
 #
 # CONFLICT_MARKER_RE must stay ONE spelling across every reader: a second copy drifts, and a
 # reader that finds no markers accepts a merge another reader refuses. It also matches

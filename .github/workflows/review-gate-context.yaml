@@ -41,6 +41,7 @@ jobs:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           persist-credentials: false
+<<<<<<< local
           # The gate script AND the lib it sources: a sourced file missing from
           # this list kills the gate at runtime under `set -e`.
           # tests/test_sparse_checkout_source_closure.py derives this list's
@@ -48,6 +49,16 @@ jobs:
           sparse-checkout: |
             .github/scripts/review-gate.sh
             .github/scripts/lib/reviewer-identity.bash
+||||||| base
+          sparse-checkout: .github/scripts/review-gate.sh
+=======
+          # review-gate.sh sources the shared reviewer-identity library, so the
+          # library must land in the same sparse checkout; without it the script
+          # dies at its `source` line under `set -e`.
+          sparse-checkout: |
+            .github/scripts/review-gate.sh
+            .github/scripts/lib/reviewer-login.bash
+>>>>>>> template
           sparse-checkout-cone-mode: false
 
       - name: Evaluate the gate for every pull request in the batch
