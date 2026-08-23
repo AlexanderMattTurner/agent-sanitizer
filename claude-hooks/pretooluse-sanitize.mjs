@@ -81,7 +81,8 @@ const HOOK_NAME = "pretooluse-sanitize";
  * must be blocked, or null to let the pipeline continue. Hosts use these for
  * policy the package has no view of (a required workflow step, a project-local
  * rule); the package ships none.
- * @typedef {(input: { tool_name: string | null, tool_input: any, session_id?: string })
+ * @typedef {(input: { tool_name: string | null, tool_input: any, session_id?: string,
+ *   permission_mode?: string })
  *   => string | null | undefined} HostGate
  */
 
@@ -595,13 +596,16 @@ export async function judgePreToolUseSanitize(event, rehydrate, opts = {}) {
   // a pass is the one incentive a gate must never create.
   if (event.event === EventKind.UNKNOWN)
     return { decision: Decision.DENY, reason: messages.unknownEvent };
-  // The session identity travels in `meta`, not alongside the tool input; a host
-  // gate keyed on the session (a once-per-session checkpoint) cannot tell two
-  // sessions apart without it.
+  // The session identity and the permission mode travel in `meta`, not alongside
+  // the tool input. A gate keyed on the session (a once-per-session checkpoint)
+  // cannot tell two sessions apart without the first, and a gate keyed on the
+  // mode reads `undefined` without the second — so it fires in EVERY mode, which
+  // is the safe direction but not the intended one.
   const input = {
     tool_name: event.tool,
     tool_input: event.input,
     session_id: event.meta?.session_id,
+    permission_mode: event.meta?.permission_mode,
   };
   // Host gates run BEFORE any rewriting layer, because they decide whether the
   // call may happen at all rather than what its input contains — and returning
