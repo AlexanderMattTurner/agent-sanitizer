@@ -17,6 +17,7 @@ from detect_secrets.plugins.ibm_cos_hmac import IbmCosHmacDetector as _UpstreamI
 from detect_secrets.plugins.softlayer import SoftlayerDetector as _UpstreamSoftlayer
 from detect_secrets.settings import get_plugins
 from redactor_helpers import SAMPLES, run_plain
+from test_secrets_gates import _LEGITIMATE
 
 _DETECTORS_JSON = D.DETECTORS_FILE
 _INLINE_DETECTORS = tuple(E._INLINE_PLUGINS)
@@ -186,6 +187,35 @@ def test_prefix_detectors_pin_distinctive_length_floor(cls_name, prefix, floor):
     denylist = getattr(D, cls_name).denylist[0]
     assert denylist.search(prefix + "a" * floor)
     assert not denylist.search(prefix + "a" * (floor - 1))
+
+
+# ─── Precision: a shape detector must not fire on legitimate content ─────────
+
+
+@pytest.mark.parametrize("label", sorted(_LEGITIMATE))
+def test_shape_detectors_find_nothing_in_legitimate_content(label):
+    """Every SHAPE detector's own regex, against the engine's negative corpus.
+
+    `test_negative_corpus_produces_zero_findings` asks whether the ENGINE emits
+    anything, which a gate can clear after a detector has matched. This asks the
+    detector directly, so a prefix arm that widens until it matches ordinary
+    text is caught at the regex rather than resting on a gate to hide it — the
+    precision-over-recall doctrine applied one layer down.
+
+    The keyword-shaped detectors are deliberately out: `BoundedKeywordDetector`
+    and the IBM/Cloudant/Softlayer pairs match `secret_id = "..."` by design and
+    get their precision from the gates, so a raw-regex assertion over them would
+    demand the opposite of how they are built. The engine-level test above is
+    their negative corpus.
+    """
+    text = _LEGITIMATE[label]
+    for cls_name in E._CONFIGURED_DETECTORS:
+        denylist = getattr(D, cls_name).denylist
+        # A detector with an empty denylist would pass by matching nothing.
+        assert denylist, cls_name
+        for pattern in denylist:
+            found = pattern.search(text)
+            assert found is None, f"{cls_name} matched {found!r} in {text!r}"
 
 
 # ─── Multi-member prefix families: one redaction case per member ─────────────

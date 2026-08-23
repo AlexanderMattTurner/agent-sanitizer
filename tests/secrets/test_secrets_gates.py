@@ -377,6 +377,15 @@ _LEGITIMATE = {
     # the tree to name this repo or a classified one. The detector under test
     # cares about the URL's shape, not whose repo it names.
     "public repo url": "git clone https://github.com/owner/repo.git",
+    # Shape-adjacent to a provider key, so these reach the prefix and length
+    # arms rather than the keyword path the entries above exercise.
+    "commit sha": "commit 9f86d081884c7d659a2feaa0c55ad015a3bf4f1b landed",
+    "hashed asset filename": "the bundle main.9fbe7a2c4d.css loaded fine",
+    "sub-floor prefix words": "the r8_cache lookup and the xai-config loader moved",
+    "url with query string": "https://example.invalid/s?q=redaction&page=12&sort=rel",
+    "base64 of a sentence": "dGhlIHF1aWNrIGJyb3duIGZveCBqdW1wcyBvdmVyIHRoZSBsYXp5",
+    "prose naming a key prefix": "every OpenAI key starts with the sk- prefix",
+    "pip requirement pin": "detect-secrets==1.5.0 ; python_version >= '3.10'",
 }
 
 
@@ -389,6 +398,13 @@ def test_negative_corpus_produces_zero_findings(label):
 # The subset that must ALSO survive attacker-controlled ingress: everything
 # whose verdict rests on the value's own shape, never on a forgeable field name.
 _SHAPE_ONLY_LEGITIMATE = (
+    "commit sha",
+    "hashed asset filename",
+    "sub-floor prefix words",
+    "url with query string",
+    "base64 of a sentence",
+    "prose naming a key prefix",
+    "pip requirement pin",
     "python import",
     "env reference in code",
     "oauth discovery doc",
