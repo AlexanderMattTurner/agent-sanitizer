@@ -67718,7 +67718,8 @@ async function judgePreToolUseSanitize(event, rehydrate, opts = {}) {
   const input = {
     tool_name: event.tool,
     tool_input: event.input,
-    session_id: event.meta?.session_id
+    session_id: event.meta?.session_id,
+    permission_mode: event.meta?.permission_mode
   };
   for (const gate of gates) {
     const denyReason = gate(input);

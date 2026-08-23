@@ -577,6 +577,59 @@ describe("PreToolUse host gates", () => {
     assert.equal(got.tool_name, "Bash");
   });
 
+  it("hands the gate the permission mode, which also rides in meta", async () => {
+    const modeSeenFor = async (permissionMode) => {
+      let got;
+      const event = parse({
+        hook_event_name: "PreToolUse",
+        tool_name: "Write",
+        tool_input: { file_path: "/tmp/plan.md", content: "step one" },
+        session_id: SESSION,
+        ...(permissionMode === undefined
+          ? {}
+          : { permission_mode: permissionMode }),
+      });
+      await judgePreToolUseSanitize(event, undefined, {
+        gates: [
+          (input) => {
+            got = input;
+            return null;
+          },
+        ],
+      });
+      return got.permission_mode;
+    };
+    // A gate that fires only in plan mode reads undefined without this, so it
+    // fires in every mode instead of the one it names.
+    assert.equal(await modeSeenFor("plan"), "plan");
+    assert.equal(await modeSeenFor("acceptEdits"), "acceptEdits");
+    // Absent stays absent: the gate still decides what an unknown mode means.
+    assert.equal(await modeSeenFor(undefined), undefined);
+  });
+
+  it("lets a mode-keyed gate deny in plan mode alone", async () => {
+    // The property the forwarding buys, driven through the real judge rather
+    // than asserted of the input bag: one gate, two modes, opposite verdicts.
+    const planOnlyGate = (input) =>
+      input.permission_mode === "plan"
+        ? "denied: plan mode needs the skill"
+        : null;
+    const verdictIn = async (permissionMode) =>
+      await judgePreToolUseSanitize(
+        parse({
+          hook_event_name: "PreToolUse",
+          tool_name: "Write",
+          tool_input: { file_path: "/tmp/plan.md", content: "step one" },
+          session_id: SESSION,
+          permission_mode: permissionMode,
+        }),
+        undefined,
+        { gates: [planOnlyGate] },
+      );
+    assert.equal((await verdictIn("plan")).decision, Decision.DENY);
+    assert.equal((await verdictIn("acceptEdits")).decision, Decision.ALLOW);
+  });
+
   it("fills the unset fields of a PARTIAL reason table", async () => {
     // Every other seam case spreads the whole default table, which is exactly the
     // shape that cannot expose a wholesale substitution. A bare one-field object
