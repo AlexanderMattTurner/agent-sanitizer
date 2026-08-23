@@ -479,7 +479,7 @@ describe("a session with no InstructionsLoaded scan is named, once", () => {
     // the host never wired the event (the self-wiring host's case, and the one
     // cause the reader can repair in this session)...
     assert.match(notice, /wired/u);
-    assert.match(notice, /grep -rl scan-loaded-instructions/u);
+    assert.match(notice, /`\/hooks` command/u);
     // ...a Claude Code below the floor, quoted so "upgrade" names a number the
     // reader can compare `claude --version` against...
     assert.match(notice, /upgrading/u);
