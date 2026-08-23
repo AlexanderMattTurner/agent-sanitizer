@@ -308,7 +308,7 @@ export function recordInstructionsLoaded(sessionId) {
  * CLI below this floor never fires the hook however it is wired. The gap notice
  * quotes it: "upgrade" is unactionable without the number to compare against.
  */
-export const EVENT_MIN_CLI_VERSION = "2.1.69";
+const EVENT_MIN_CLI_VERSION = "2.1.69";
 
 /**
  * The one-time context line for a session where no InstructionsLoaded scan ran,
@@ -330,8 +330,6 @@ export const EVENT_MIN_CLI_VERSION = "2.1.69";
  * the hook switched off in AGENT_SANITIZER_DISABLED_HOOKS; asserting one sends a
  * reader who is in another to the wrong fix. The wiring cause leads because it is
  * the only one the reader can repair in this session, and nothing else reports it.
- * Each cause carries the command that decides it, because a reader who cannot
- * check which one they are in reads all three as none of them.
  * @param {string} [sessionId]  the harness's session identity, so the answer
  *   belongs to THIS session (see instructionsLoadedFile)
  * @returns {string | null}

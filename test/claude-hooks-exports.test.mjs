@@ -266,7 +266,6 @@ const PUBLISHED_EXPORTS = {
   ],
   "lib/invisible-alert": [
     "ALERT_BASE",
-    "EVENT_MIN_CLI_VERSION",
     "acknowledgeAlert",
     "alertAckFile",
     "alertAcknowledged",
