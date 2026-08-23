@@ -377,8 +377,9 @@ confined to `CLAUDE_PROJECT_DIR` in both — an ancestor file, or one under
 `~/.claude`, is shared with every other project on the machine, so it is reported
 through the cross-hook alert and never rewritten. Three things lose the lazy half
 entirely: a host that never wired the `InstructionsLoaded` event to
-`scan-loaded-instructions`, a Claude Code build that does not emit that event,
-and `scan-loaded-instructions` switched off in `AGENT_SANITIZER_DISABLED_HOOKS`.
+`scan-loaded-instructions`, a Claude Code older than 2.1.69, which is the first
+build that emits that event, and `scan-loaded-instructions` switched off in
+`AGENT_SANITIZER_DISABLED_HOOKS`.
 Nothing on disk tells them apart, so the PreToolUse gate names all three, once
 per session, rather than leaving the gap silent.
 

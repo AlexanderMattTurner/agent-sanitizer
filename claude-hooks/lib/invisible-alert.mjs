@@ -303,6 +303,14 @@ export function recordInstructionsLoaded(sessionId) {
 }
 
 /**
+ * The first `@anthropic-ai/claude-code` release that emits `InstructionsLoaded`.
+ * 2.1.68 carries no occurrence of the event name and 2.1.69 carries eight, so a
+ * CLI below this floor never fires the hook however it is wired. The gap notice
+ * quotes it: "upgrade" is unactionable without the number to compare against.
+ */
+export const EVENT_MIN_CLI_VERSION = "2.1.69";
+
+/**
  * The one-time context line for a session where no InstructionsLoaded scan ran,
  * or null when the scan has been seen or the notice was already surfaced this
  * session.
@@ -318,10 +326,12 @@ export function recordInstructionsLoaded(sessionId) {
  *
  * The notice names the OBSERVABLE — no scan ran — and all three causes, because
  * the marker cannot tell them apart: a host that never wired the event to
- * scan-loaded-instructions, a Claude Code that does not emit it, and the hook
- * switched off in AGENT_SANITIZER_DISABLED_HOOKS; asserting one sends a reader
- * who is in another to the wrong fix. The wiring cause leads because it is the
- * only one the reader can repair in this session, and nothing else reports it.
+ * scan-loaded-instructions, a Claude Code older than EVENT_MIN_CLI_VERSION, and
+ * the hook switched off in AGENT_SANITIZER_DISABLED_HOOKS; asserting one sends a
+ * reader who is in another to the wrong fix. The wiring cause leads because it is
+ * the only one the reader can repair in this session, and nothing else reports it.
+ * Each cause carries the command that decides it, because a reader who cannot
+ * check which one they are in reads all three as none of them.
  * @param {string} [sessionId]  the harness's session identity, so the answer
  *   belongs to THIS session (see instructionsLoadedFile)
  * @returns {string | null}
@@ -334,11 +344,13 @@ export function instructionsLoadedGapNotice(sessionId) {
     "instruction files loaded from SUBDIRECTORIES (a nested CLAUDE.md, a " +
     "directory-scoped rule) are reaching the model unscanned for hidden " +
     "Unicode — the session-start scan covers only the files loaded at launch. " +
-    "Tell the user, and name all three causes: this host never wired the " +
-    "InstructionsLoaded event to scan-loaded-instructions (wiring it restores " +
-    "the coverage), a Claude Code that does not emit the event (upgrading " +
-    "restores it), or scan-loaded-instructions switched off in " +
-    "AGENT_SANITIZER_DISABLED_HOOKS."
+    "Tell the user, and name all three causes with the command that decides " +
+    "each: this host never wired the InstructionsLoaded event to " +
+    "scan-loaded-instructions (wiring it restores the coverage), a Claude Code " +
+    `older than ${EVENT_MIN_CLI_VERSION}, the first build that emits the event ` +
+    "(`claude --version`; upgrading restores it), or scan-loaded-instructions " +
+    "switched off in AGENT_SANITIZER_DISABLED_HOOKS (`echo " +
+    "$AGENT_SANITIZER_DISABLED_HOOKS`)."
   );
 }
 
