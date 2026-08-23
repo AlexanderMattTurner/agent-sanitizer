@@ -93,8 +93,8 @@ def strip_untrusted(text: str) -> str:
     is older or newer than the package's.
 
     NOT user-safe, for the same reason: ``Cf`` takes the ZWNJ and ZWJ that do
-    rendering work in Persian, Arabic, Indic and emoji text, and the charset
-    takes the variation selectors — all preserved by ``src/invisible.mjs``.
+    rendering work in Persian, Arabic, Indic and emoji text, and the charset the
+    variation selectors — kept by ``src/invisible.mjs``'s bounded carve-out.
 
     The two strips FEED each other, so they are composed to a fixed point rather
     than run once each — ``applyLayer1``'s structure. The residual introducer

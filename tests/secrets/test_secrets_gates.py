@@ -28,7 +28,7 @@ from agent_sanitizer.secrets.placeholders import (
     PLACEHOLDER_RE,
     placeholder,
 )
-from redactor_helpers import cfg, run_plain
+from redactor_helpers import LEGITIMATE, SHAPE_ONLY_LEGITIMATE, cfg, run_plain
 
 # ─── Field names: every credential noun the vocabulary publishes ─────────────
 # Materialised from the SAME source the engine's `_FIELD_NAMES` alternation is
@@ -347,82 +347,13 @@ def test_pem_body_atom_accepts_every_placeholder_the_producer_emits():
     assert "ordinary following prose" not in match.group(0)
 
 
-# ─── Negative corpus: legitimate content must produce ZERO findings ──────────
-# Precision doctrine — a false positive here deletes text the model needed.
-
-_LEGITIMATE = {
-    "python import": "from agent_sanitizer.secrets import redact, redact_map",
-    "env reference in code": "api_key = os.environ['ANTHROPIC_API_KEY_NAME']",
-    "shell default": 'TOKEN_FILE="${SECRET_FILE:-/etc/app/secret}"',
-    "docker compose mount": "  - secret_path: /run/secrets/app-config:ro",
-    "oauth discovery doc": "token_url = https://oauth2.googleapis.com/token",
-    "oci image digest": "image_digest: sha256:" + "a1b2c3d4e5f60718" * 4,
-    "uuid record id": 'session_secret_id = "550e8400-e29b-41d4-a716-446655440000"',
-    "iso timestamp": 'access_token_expiry = "2025-11-04T10:30:00.000000Z"',
-    "semver": 'secret_version = "1.14.2-rc.1"',
-    "pagination cursor": "nextPageToken=CiAKGjBpNDd2Nmp2Zml2c2Vh",
-    "docs metavariable": 'export ANTHROPIC_API_KEY="<your-api-key-here>"',
-    "ci template": "  api_key: {{ secrets.ANTHROPIC_API_KEY }}",
-    "markdown prose": "Pass the `--api-key` flag or set `ANTHROPIC_API_KEY` first.",
-    "metadata field": 'secret_type = "Anthropic API Key"',
-    "prose about secrets": (
-        "The password field is redacted before the transcript is stored."
-    ),
-    "json config skeleton": '{"client_secret": "changeme", "token": "TODO"}',
-    "log line": "2025-11-04 10:30:00 INFO  auth: token refreshed for user 42",
-    "sql schema": "  api_key_hash CHAR(64) NOT NULL,  -- sha256 of the key",
-    "diff header": "--- a/python/agent_sanitizer/secrets/engine.py",
-    # Deliberately a documented stand-in slug, not a real owner: this corpus is
-    # scanned by tests/test_repo_slug.py, which requires every github.com URL in
-    # the tree to name this repo or a classified one. The detector under test
-    # cares about the URL's shape, not whose repo it names.
-    "public repo url": "git clone https://github.com/owner/repo.git",
-    # Shape-adjacent to a provider key, so these reach the prefix and length
-    # arms rather than the keyword path the entries above exercise.
-    "commit sha": "commit 9f86d081884c7d659a2feaa0c55ad015a3bf4f1b landed",
-    "hashed asset filename": "the bundle main.9fbe7a2c4d.css loaded fine",
-    "sub-floor prefix words": "the r8_cache lookup and the xai-config loader moved",
-    "url with query string": "https://example.invalid/s?q=redaction&page=12&sort=rel",
-    "base64 of a sentence": "dGhlIHF1aWNrIGJyb3duIGZveCBqdW1wcyBvdmVyIHRoZSBsYXp5",
-    "prose naming a key prefix": "every OpenAI key starts with the sk- prefix",
-    "pip requirement pin": "detect-secrets==1.5.0 ; python_version >= '3.10'",
-}
-
-
-@pytest.mark.parametrize("label", sorted(_LEGITIMATE))
+@pytest.mark.parametrize("label", sorted(LEGITIMATE))
 def test_negative_corpus_produces_zero_findings(label):
-    text = _LEGITIMATE[label]
+    text = LEGITIMATE[label]
     assert run_plain(text, cfg(web_ingress=False)) is None, (label, text)
 
 
-# The subset that must ALSO survive attacker-controlled ingress: everything
-# whose verdict rests on the value's own shape, never on a forgeable field name.
-_SHAPE_ONLY_LEGITIMATE = (
-    "commit sha",
-    "hashed asset filename",
-    "sub-floor prefix words",
-    "url with query string",
-    "base64 of a sentence",
-    "prose naming a key prefix",
-    "pip requirement pin",
-    "python import",
-    "env reference in code",
-    "oauth discovery doc",
-    "oci image digest",
-    "uuid record id",
-    "iso timestamp",
-    "semver",
-    "docs metavariable",
-    "ci template",
-    "markdown prose",
-    "prose about secrets",
-    "json config skeleton",
-    "diff header",
-    "public repo url",
-)
-
-
-@pytest.mark.parametrize("label", _SHAPE_ONLY_LEGITIMATE)
+@pytest.mark.parametrize("label", SHAPE_ONLY_LEGITIMATE)
 def test_shape_cleared_negative_corpus_survives_web_ingress(label):
-    text = _LEGITIMATE[label]
+    text = LEGITIMATE[label]
     assert run_plain(text, cfg(web_ingress=True)) is None, (label, text)

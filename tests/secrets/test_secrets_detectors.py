@@ -16,8 +16,7 @@ from detect_secrets.plugins.ibm_cloud_iam import IbmCloudIamDetector as _Upstrea
 from detect_secrets.plugins.ibm_cos_hmac import IbmCosHmacDetector as _UpstreamIbmCos
 from detect_secrets.plugins.softlayer import SoftlayerDetector as _UpstreamSoftlayer
 from detect_secrets.settings import get_plugins
-from redactor_helpers import SAMPLES, run_plain
-from test_secrets_gates import _LEGITIMATE
+from redactor_helpers import LEGITIMATE, SAMPLES, run_plain
 
 _DETECTORS_JSON = D.DETECTORS_FILE
 _INLINE_DETECTORS = tuple(E._INLINE_PLUGINS)
@@ -214,7 +213,7 @@ _SHAPE_DETECTORS = [
 ]
 
 
-@pytest.mark.parametrize("label", sorted(_LEGITIMATE))
+@pytest.mark.parametrize("label", sorted(LEGITIMATE))
 def test_shape_detectors_find_nothing_in_legitimate_content(label):
     """Every SHAPE detector's own regex, against the engine's negative corpus.
 
@@ -228,8 +227,14 @@ def test_shape_detectors_find_nothing_in_legitimate_content(label):
     registry they live in: an inline detector whose credential shape sits in its
     own denylist — `JwtFullTokenDetector` — belongs here exactly as much as a
     JSON-backed one, so a new inline detector is covered the day it lands.
+
+    detect-secrets' own BUNDLED plugins are out for a different reason: this repo
+    does not own their regexes and `detectors.py` exposes no class to reach them
+    through. Two corpus entries therefore do nothing HERE and are carried by the
+    engine-level test alone — "url with query string" (`BasicAuthDetector`) and
+    "prose naming a key prefix" (the upstream `sk-` arms).
     """
-    text = _LEGITIMATE[label]
+    text = LEGITIMATE[label]
     for cls_name in _SHAPE_DETECTORS:
         denylist = getattr(D, cls_name).denylist
         # A detector with an empty denylist would pass by matching nothing.
