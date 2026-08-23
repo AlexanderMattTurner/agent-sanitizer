@@ -8,6 +8,12 @@ adhere to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+## [2.47.3] - 2026-08-23
+
+### Fixed
+
+- claude-hooks: forward the permission mode to PreToolUse host gates
+
 ## [2.47.2] - 2026-08-21
 
 ### Changed
