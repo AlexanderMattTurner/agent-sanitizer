@@ -8,6 +8,14 @@ adhere to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+## [2.47.4] - 2026-08-23
+
+### Fixed
+
+- **claude-hooks**: Corrected wiring checks to use `/hooks` endpoint instead of path grep, and now point checks at the hook config rather than the entire `~/.claude` tree.
+- **claude-hooks**: Extended wiring check to recognize hooks in installed plugins' `hooks.json` files.
+- **claude-hooks**: Added a dedicated check command for wiring cause in gap notices and properly named the CLI version floor in the InstructionsLoaded gap notice.
+
 ## [2.47.3] - 2026-08-23
 
 ### Fixed
