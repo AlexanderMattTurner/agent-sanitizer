@@ -191,6 +191,28 @@ def test_prefix_detectors_pin_distinctive_length_floor(cls_name, prefix, floor):
 
 # ─── Precision: a shape detector must not fire on legitimate content ─────────
 
+# Detectors whose precision lives in the GATES, not in their regex: each matches
+# a credential NOUN beside a value (`secret_id = "..."`) by design, so a raw
+# denylist assertion over one would demand the opposite of how it is built.
+# `test_negative_corpus_produces_zero_findings` is their negative corpus.
+_GATE_DEPENDENT_DETECTORS = frozenset(
+    {
+        "BoundedKeywordDetector",
+        "CloudantCredentialsDetector",
+        "IbmCloudIamKeyDetector",
+        "IbmCosHmacKeyDetector",
+        "SoftlayerCredentialsDetector",
+    }
+)
+
+# Everything else the engine registers, from BOTH registries — a detector whose
+# credential shape is in its own denylist owes this test whichever list it is on.
+_SHAPE_DETECTORS = [
+    name
+    for name in (*E._CONFIGURED_DETECTORS, *E._INLINE_PLUGINS)
+    if name not in _GATE_DEPENDENT_DETECTORS
+]
+
 
 @pytest.mark.parametrize("label", sorted(_LEGITIMATE))
 def test_shape_detectors_find_nothing_in_legitimate_content(label):
@@ -202,14 +224,13 @@ def test_shape_detectors_find_nothing_in_legitimate_content(label):
     text is caught at the regex rather than resting on a gate to hide it — the
     precision-over-recall doctrine applied one layer down.
 
-    The keyword-shaped detectors are deliberately out: `BoundedKeywordDetector`
-    and the IBM/Cloudant/Softlayer pairs match `secret_id = "..."` by design and
-    get their precision from the gates, so a raw-regex assertion over them would
-    demand the opposite of how they are built. The engine-level test above is
-    their negative corpus.
+    Only the keyword-shaped detectors are out, and by NAME rather than by which
+    registry they live in: an inline detector whose credential shape sits in its
+    own denylist — `JwtFullTokenDetector` — belongs here exactly as much as a
+    JSON-backed one, so a new inline detector is covered the day it lands.
     """
     text = _LEGITIMATE[label]
-    for cls_name in E._CONFIGURED_DETECTORS:
+    for cls_name in _SHAPE_DETECTORS:
         denylist = getattr(D, cls_name).denylist
         # A detector with an empty denylist would pass by matching nothing.
         assert denylist, cls_name
