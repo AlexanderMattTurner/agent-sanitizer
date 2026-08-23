@@ -479,10 +479,15 @@ describe("a session with no InstructionsLoaded scan is named, once", () => {
     // the host never wired the event (the self-wiring host's case, and the one
     // cause the reader can repair in this session)...
     assert.match(notice, /wired/u);
-    // ...a Claude Code that does not emit it...
+    assert.match(notice, /`\/hooks` command/u);
+    // ...a Claude Code below the floor, quoted so "upgrade" names a number the
+    // reader can compare `claude --version` against...
     assert.match(notice, /upgrading/u);
+    assert.match(notice, /2\.1\.69/u);
+    assert.match(notice, /claude --version/u);
     // ...and the hook switched off by the operator.
     assert.match(notice, /AGENT_SANITIZER_DISABLED_HOOKS/u);
+    assert.match(notice, /echo \$AGENT_SANITIZER_DISABLED_HOOKS/u);
   });
 
   it("does not repeat the warning once it has been surfaced", () => {
