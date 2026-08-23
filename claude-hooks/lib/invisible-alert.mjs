@@ -344,7 +344,8 @@ export function instructionsLoadedGapNotice(sessionId) {
     "Unicode — the session-start scan covers only the files loaded at launch. " +
     "Tell the user, and name all three causes with the command that decides " +
     "each: this host never wired the InstructionsLoaded event to " +
-    "scan-loaded-instructions (wiring it restores the coverage), a Claude Code " +
+    "scan-loaded-instructions (`grep -rl InstructionsLoaded .claude/settings.json " +
+    "~/.claude/settings.json`; wiring it restores the coverage), a Claude Code " +
     `older than ${EVENT_MIN_CLI_VERSION}, the first build that emits the event ` +
     "(`claude --version`; upgrading restores it), or scan-loaded-instructions " +
     "switched off in AGENT_SANITIZER_DISABLED_HOOKS (`echo " +
