@@ -1,15 +1,18 @@
 #!/usr/bin/env bash
-# Re-derive the `Automated review posted` status on the head of EVERY open PR.
+# Re-derive the `Review findings resolved` status on the head of EVERY open PR.
 #
-# The gate is a pure function of review state, but review-gate.yaml only
-# recomputes it on `pull_request_review` and on a push. Neither fires when this
-# repo's own automation changes that state: a review posted or dismissed with
-# GITHUB_TOKEN emits no `pull_request_review` event (GitHub's recursion guard),
-# and nothing pushes afterwards. The status then keeps whatever it last
-# computed, and it is wrong in BOTH directions:
+# The gate is a pure function of review and thread state, but
+# review-findings-gate.yaml only recomputes it on a push, a review event, or the
+# `recheck-review-gate` label. Two state changes fire none of those: a review
+# posted or dismissed with GITHUB_TOKEN emits no `pull_request_review` event
+# (GitHub's recursion guard), and resolving a thread emits nothing any workflow
+# can trigger on (`pull_request_review_thread` is not a valid Actions `on:`
+# event). The status then keeps whatever it last computed, and it is wrong in
+# BOTH directions:
 #
-#   * stale pending — a review landed after the last push, so a reviewed PR
-#     waits forever on a review it already has (observed on #290);
+#   * stale pending or red — a review landed, or the last gating thread was
+#     resolved, after the last push, so a cleared PR waits forever on findings
+#     it no longer has (observed on #290);
 #   * stale success — the only standing review was dismissed (which is the
 #     ROUTINE outcome of the hold sweeper, because GitHub refuses approvals from
 #     an Actions token), leaving a required merge gate green with nothing
@@ -20,7 +23,7 @@
 # net, not the mechanism: it bounds how long any stale verdict can survive to
 # one sweep interval, including one left by a site added later that forgets.
 # It writes nothing but that status, and the verdict itself stays in
-# review-gate.sh so the sweep and the per-event paths cannot drift.
+# review-findings-gate.sh so the sweep and the per-event paths cannot drift.
 #
 # Env: GH_TOKEN, GH_REPO (owner/name); RUN_URL optional (passed through).
 set -euo pipefail
@@ -38,11 +41,11 @@ readonly PR_LIMIT=200
 prs_json="$(gh pr list --repo "$GH_REPO" --state open --limit "$PR_LIMIT" \
   --json number,headRefOid)"
 if [[ "$(jq 'length' <<<"$prs_json")" -ge "$PR_LIMIT" ]]; then
-  echo "::warning::reconcile-review-gate: open-PR page hit the ${PR_LIMIT} cap; PRs beyond it keep whatever status they last computed. Raise PR_LIMIT or paginate." >&2
+  echo "::warning::reconcile-review-findings-gate: open-PR page hit the ${PR_LIMIT} cap; PRs beyond it keep whatever status they last computed. Raise PR_LIMIT or paginate." >&2
 fi
 
 rows="$(jq -r '.[] | "\(.number) \(.headRefOid)"' <<<"$prs_json")" || {
-  echo "::error::reconcile-review-gate: jq failed to read the open-PR list" >&2
+  echo "::error::reconcile-review-findings-gate: jq failed to read the open-PR list" >&2
   exit 1
 }
 entries=()
@@ -57,8 +60,8 @@ for entry in "${entries[@]}"; do
   echo "::group::PR #${pr}"
   # One PR failing must not abort the rest, but a real API/token fault still has
   # to surface, so record it and exit non-zero at the end.
-  if ! PR="$pr" HEAD_SHA="$head_sha" bash "$here/review-gate.sh"; then
-    echo "reconcile-review-gate: PR #${pr} could not be evaluated" >&2
+  if ! PR="$pr" REPORT_SHA="$head_sha" bash "$here/review-findings-gate.sh"; then
+    echo "reconcile-review-findings-gate: PR #${pr} could not be evaluated" >&2
     status=1
   fi
   echo "::endgroup::"

@@ -151,11 +151,11 @@ sys.exit(2)
 """
 
 
-def _review(login: str = "github-actions") -> dict:
+def _review(login: str = "github-actions", *, state: str = "COMMENTED") -> dict:
     """A completed review node, shaped per REVIEWS_QUERY in lib/pr-reviews.bash."""
     return {
         "author": {"login": login},
-        "state": "COMMENTED",
+        "state": state,
         "body": "## Review\n\nfindings…",
         "submittedAt": "2026-07-01T00:00:00Z",
     }
@@ -226,13 +226,35 @@ def _run(
     return proc, posted
 
 
-def test_red_when_the_reviewer_never_reviewed(tmp_path: Path) -> None:
+def test_unreviewed_holds_the_merge_and_a_human_review_does_not_clear_it(
+    tmp_path: Path,
+) -> None:
     # Zero findings from zero reviews is vacuous — and a HUMAN review alone
     # must not satisfy (a): the reviewer filter is under test, not emptiness.
     proc, posted = _run(tmp_path, reviews=[_review(login="somehuman")], threads=[])
     assert proc.returncode == 1
-    assert "not reviewed" in proc.stderr
+    assert "waiting for the automated review" in proc.stderr
     assert posted == []
+
+
+@pytest.mark.parametrize(
+    ("reviews", "expected"),
+    [
+        # A dismissal returns the PR to waiting: the hold sweeper dismisses the
+        # reviewer's stale hold routinely, and nothing then stands that read it.
+        ([_review(state="DISMISSED")], "pending"),
+        # The positive marker for the case above — the DISMISSED filter must not
+        # swallow the review that genuinely stands behind it.
+        ([_review(state="DISMISSED"), _review()], "success"),
+    ],
+    ids=["dismissed-only", "dismissed-then-standing"],
+)
+def test_only_an_undismissed_reviewer_review_clears_the_reviewed_leg(
+    tmp_path: Path, reviews: list[dict], expected: str
+) -> None:
+    proc, posted = _run(tmp_path, reviews=reviews, threads=[], report_sha="cafe1234")
+    assert proc.returncode == 0, proc.stderr
+    assert [r["state"] for r in posted] == [expected]
 
 
 @pytest.mark.parametrize("severity", GATING)
@@ -314,10 +336,10 @@ def test_an_empty_body_review_does_not_count_as_reviewed(tmp_path: Path) -> None
     # GitHub synthesizes a body-less COMMENTED review by the bot around every
     # standalone review-comment POST; the shared read filters those out, so a PR
     # whose ONLY bot review is empty-bodied has never actually been reviewed and
-    # the gate stays red on the not-reviewed leg — never green vacuously.
+    # the gate holds on the not-reviewed leg — never green vacuously.
     proc, posted = _run(tmp_path, reviews=[_review() | {"body": ""}], threads=[])
     assert proc.returncode == 1
-    assert "not reviewed" in proc.stderr
+    assert "waiting for the automated review" in proc.stderr
     assert posted == []
 
 
@@ -442,6 +464,16 @@ def test_report_mode_posts_a_success_status(tmp_path: Path) -> None:
     assert status["state"] == "success"
 
 
+def test_report_mode_posts_pending_before_the_review_lands(tmp_path: Path) -> None:
+    # `pending`, not `failure`: the review is coming, and a red would send a
+    # reader off to diagnose a gate that is merely waiting. Both hold the merge.
+    proc, posted = _run(tmp_path, reviews=[], threads=[], report_sha="cafe1234")
+    assert proc.returncode == 0, proc.stderr
+    assert [(r["context"], r["sha"], r["state"]) for r in posted] == [
+        (GATE_CONTEXT, "cafe1234", "pending")
+    ]
+
+
 def test_report_mode_posts_a_failure_status_and_still_exits_zero(
     tmp_path: Path,
 ) -> None:
@@ -457,6 +489,55 @@ def test_report_mode_posts_a_failure_status_and_still_exits_zero(
     assert [(r["context"], r["sha"], r["state"]) for r in posted] == [
         (GATE_CONTEXT, "cafe1234", "failure")
     ]
+
+
+def test_a_red_description_is_truncated_to_the_status_cap(tmp_path: Path) -> None:
+    # GitHub caps a status description at 140 characters, and EVERY red reason
+    # exceeds it (the count, the path list, and the how-to-clear tail), so
+    # post_verdict's truncation is on the common path, not an edge case. `<=`
+    # rather than `==` because bash cuts by bytes and the reason carries an em
+    # dash, so the character count lands under the byte budget.
+    proc, posted = _run(
+        tmp_path,
+        reviews=[_review()],
+        threads=[_thread(f"🔴 open finding\n\n{BLOCKING}\n")],
+        report_sha="cafe1234",
+    )
+    assert proc.returncode == 0, proc.stderr
+    description = posted[0]["description"]
+    assert len(description) <= 140
+    assert description.endswith("...")
+    # The head survives the cut: a truncation that kept the tail, or dropped the
+    # ellipsis, would leave the merge box saying nothing about what is wrong.
+    assert description.startswith("1 unresolved reviewer finding(s)")
+
+
+def test_no_posted_description_carries_a_4_byte_code_point(tmp_path: Path) -> None:
+    # GitHub REJECTS a status description containing any non-BMP code point
+    # ("Description doesn't accept 4-byte Unicode"), and this gate's own POST
+    # failing is a hard red that hangs the required check at "Expected". Both
+    # verdicts that carry prose are checked: the green reason is authored here,
+    # and the red one splices PR-controlled paths, so a filename with an emoji
+    # in it is enough to make the gate unreportable.
+    emoji_path = "src/\N{LARGE RED CIRCLE}.mjs"
+    for threads, expected in (
+        ([], "success"),
+        ([_thread(f"finding\n\n{BLOCKING}\n", path=emoji_path)], "failure"),
+    ):
+        proc, posted = _run(
+            tmp_path,
+            reviews=[_review()],
+            threads=threads,
+            report_sha="cafe1234",
+        )
+        assert proc.returncode == 0, proc.stderr
+        assert [p["state"] for p in posted] == [expected]
+        assert all(ord(ch) <= 0xFFFF for ch in posted[0]["description"])
+
+    # Non-vacuous: the last run's reason really did carry the 4-byte path, so
+    # the assertion above passed because post_verdict stripped it — not because
+    # nothing ever put one there. The log line keeps the full reason.
+    assert emoji_path in proc.stderr
 
 
 def test_an_unevaluated_gate_reports_red_rather_than_going_unreported(
@@ -700,6 +781,13 @@ def test_every_predicate_changing_job_reposts_the_gate_on_the_head(
     # check's context — without it the script runs in exit-status mode and posts
     # nothing.
     assert env.get("REPORT_SHA") == "${{ github.event.pull_request.head.sha }}"
+    # A red description is cut at the 140-char status cap, so target_url is the
+    # only place the rest of the finding list survives — a site that posts the
+    # verdict without RUN_URL truncates with nothing to link to.
+    assert env.get("RUN_URL") == (
+        "${{ github.server_url }}/${{ github.repository }}/actions/runs/"
+        "${{ github.run_id }}"
+    )
     # The re-post must come AFTER the write it reports on, or it reads the
     # pre-write state and posts a stale verdict.
     assert gate_steps[0] is not steps[0]

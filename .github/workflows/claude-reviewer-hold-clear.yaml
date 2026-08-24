@@ -15,11 +15,12 @@ name: Claude reviewer-hold sweeper
 # clear.sh reads current thread + review state), so a sweep never double-approves.
 #
 # The same cron carries a SECOND reconciler, for the same reason in a different
-# shape: the `Automated review posted` status is a pure function of review state
-# that only recomputes on `pull_request_review` or a push, and this repo's own
-# automation changes that state with GITHUB_TOKEN, which fires neither.
-# reconcile-review-gate.sh re-derives it for every open PR, bounding a stale
-# verdict — pending on a reviewed PR, or green on one whose only review was
+# shape: the `Review findings resolved` status is a pure function of review and
+# thread state that only recomputes on a review event, a push, or the
+# `recheck-review-gate` label, and neither a GITHUB_TOKEN review nor a thread
+# resolution fires any of those. reconcile-review-findings-gate.sh re-derives it
+# for every open PR, bounding a stale verdict — pending on a reviewed PR, red on
+# one whose findings are all resolved, or green on one whose only review was
 # dismissed — to one sweep interval. Both duties are the same job because both
 # are state-based reconcilers over the open-PR list, and a second scheduled
 # workflow would pay a whole run to do one API read.
@@ -29,10 +30,10 @@ name: Claude reviewer-hold sweeper
 # approval scripts and executes no PR code — it reads thread/review state via the
 # API and can only post an approval or a commit status. Least
 # privilege: contents:read (checkout the scripts) + pull-requests:write (post the
-# approval) + statuses:write (both gate verdicts — `Automated review posted` and
-# `Review findings resolved` are commit statuses), nothing else, so even an
-# unexpected PR can only be approved or have its gate verdicts corrected, never
-# pushed to, merged, or otherwise reached.
+# approval) + statuses:write (the `Review findings resolved` gate verdict is a
+# commit status), nothing else, so even an unexpected PR can only be approved or
+# have its gate verdict corrected, never pushed to, merged, or otherwise
+# reached.
 
 on:
   schedule:
@@ -50,7 +51,7 @@ jobs:
     permissions:
       contents: read # sparse-checkout the trusted approval scripts
       pull-requests: write # submit the approving review
-      statuses: write # re-derive both gate verdicts; no other scope
+      statuses: write # re-derive the gate verdict; no other scope
     env:
       # The sweep's own PR listing runs on the Actions token.
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -61,6 +62,10 @@ jobs:
       # by dismissing it rather than by minting an approval on a PR no push-time
       # review just examined.
       GH_TOKEN_ACTIONS: ${{ secrets.GITHUB_TOKEN }}
+      # Job-level, not per-step: BOTH steps post gate verdicts (the sweep
+      # re-derives them after clearing a hold), and a truncated description
+      # without a target_url has nowhere to send the reader for the rest.
+      RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
     steps:
       - name: Checkout the trusted approval scripts (default branch)
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
@@ -69,7 +74,7 @@ jobs:
           # review-findings-gate.sh reads config/review-severities.json (the
           # gating-severity SSOT); omitting it here makes the gate fail closed
           # with "missing ... review-severities.json" on every PR whose hold
-          # actually clears, since rederive_review_gates() calls that script.
+          # actually clears, since rederive_review_gate() calls that script.
           sparse-checkout: |
             .github/scripts
             config
@@ -79,9 +84,6 @@ jobs:
 
       # `always()`: the two reconcilers are independent, and a hold the sweep
       # could not clear is no reason to leave every open PR's gate status stale.
-      - name: Reconcile the automated-review gate across open PRs
+      - name: Reconcile the review-findings gate across open PRs
         if: always()
-        env:
-          # GH_TOKEN and GH_REPO come from the job env above.
-          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-        run: bash .github/scripts/reconcile-review-gate.sh
+        run: bash .github/scripts/reconcile-review-findings-gate.sh

@@ -3,22 +3,21 @@
  * fresh as the last thing that recomputed it, and in this repo the events that
  * would recompute it do not fire.
  *
- * `review-gate.yaml` and `review-findings-gate.yaml` both key on
- * `pull_request_review`. GitHub does not emit that event for a review posted,
- * dismissed or edited with GITHUB_TOKEN — the recursion guard — so every review
- * this repo's own automation files is invisible to them. Their other leg is a
- * push, which has already happened by the time the review lands. The verdict
- * then survives as whatever it last computed, wrong in both directions: pending
- * on a PR that has been reviewed (observed on #290, and auto-merge waits on it
- * forever), or green on one whose only review was dismissed, which is fail-open
- * on a required merge gate.
+ * `review-findings-gate.yaml` keys on `pull_request_review`. GitHub does not
+ * emit that event for a review posted, dismissed or edited with GITHUB_TOKEN —
+ * the recursion guard — so every review this repo's own automation files is
+ * invisible to it. Its other leg is a push, which has already happened by the
+ * time the review lands. The verdict then survives as whatever it last computed,
+ * wrong in both directions: pending on a PR that has been reviewed (observed on
+ * #290, and auto-merge waits on it forever), or green on one whose only review
+ * was dismissed, which is fail-open on a required merge gate.
  *
  * So the invariant, checked here: EVERY job that mutates review state also
  * re-derives EVERY review-keyed gate, in the same job. Both sides are derived
  * from the tree rather than listed — a new gate on that trigger, or a new job
  * that posts a review, is caught the day it is written rather than the day a PR
- * hangs. `reconcile-review-gate.sh`'s cron bounds the damage to one sweep
- * interval; this bounds it to zero for anything a reviewer can see in a diff.
+ * hangs. `reconcile-review-findings-gate.sh`'s cron bounds the damage to one
+ * sweep interval; this bounds it to zero for anything a reviewer sees in a diff.
  *
  * An exemption is a `# review-gate-exempt: <reason>` marker in the exempt
  * workflow's own file, so the excuse travels with the thing it excuses and
@@ -83,9 +82,10 @@ function jobsWithRunBodies(source) {
 
 /**
  * The scripts a shell command invokes, as repo-relative `.github/scripts` paths.
- * Matched on the FULL path, never the bare basename: `reconcile-review-gate.sh`
- * ends with `review-gate.sh`, so a basename test reports a job as running a gate
- * it never runs — the guard would then pass by mis-reading its own evidence.
+ * Matched on the FULL path, never the bare basename:
+ * `reconcile-review-findings-gate.sh` ends with `review-findings-gate.sh`, so a
+ * basename test reports a job as running a gate it never runs — the guard would
+ * then pass by mis-reading its own evidence.
  */
 const scriptsIn = (command) =>
   scriptPaths.filter((path) => command.includes(path));
@@ -153,7 +153,7 @@ const reviewMutatingScripts = scriptPaths.filter((path) =>
  * The context string is read out of the script that owns it rather than restated
  * here, so a rename moves both sides at once.
  */
-const CONTEXT_CONSTANT = /^(?:CHECK_NAME|GATE_CONTEXT)="(?<context>[^"]+)"/m;
+const CONTEXT_CONSTANT = /^GATE_CONTEXT="(?<context>[^"]+)"/m;
 
 const reviewKeyedGates = workflowPaths.flatMap((path) => {
   const source = read(path);
@@ -186,7 +186,7 @@ describe("review-keyed gates are re-derived wherever review state changes", () =
     for (const gate of reviewKeyedGates)
       assert.ok(
         gate.contexts.length > 0,
-        `${gate.path} keys on pull_request_review but no script it runs declares a CHECK_NAME/GATE_CONTEXT, so no job can be shown to compensate for it`,
+        `${gate.path} keys on pull_request_review but no script it runs declares a GATE_CONTEXT, so no job can be shown to compensate for it`,
       );
   });
 
@@ -198,7 +198,7 @@ describe("review-keyed gates are re-derived wherever review state changes", () =
       for (const job of jobsWithRunBodies(source)) {
         const body = job.runs.join("\n");
         const ran = job.runs.flatMap(scriptsIn);
-        // A step can write a review INLINE — this tree already posts a check run
+        // A step can write a review INLINE — this tree already posts a status
         // that way — and such a job reaches no script at all, so testing only
         // `ran` would let the very regression this file promises to catch pass.
         if (
