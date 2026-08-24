@@ -301,7 +301,7 @@ jobs:
       # the gate red for the findings above.
       #
       # No `if:` — the predicate is stateless, so it is correct on the oversized
-      # path too (no review posted -> the gate stays red on its not-reviewed leg,
+      # path too (no review posted -> the gate holds at its not-reviewed leg,
       # which is exactly the human-read-needed outcome that path wants).
       - name: Re-evaluate the review-findings gate on the head
         env:
@@ -309,28 +309,8 @@ jobs:
           GH_REPO: ${{ github.repository }}
           PR: ${{ github.event.pull_request.number }}
           REPORT_SHA: ${{ github.event.pull_request.head.sha }}
-        run: bash .github/scripts/review-findings-gate.sh
-
-      # The same GITHUB_TOKEN blind spot, on the OTHER gate. review-gate.yaml
-      # has two legs and neither can see this review: its `pull_request_review`
-      # leg never fires for one posted with GITHUB_TOKEN, and its `synchronize`
-      # leg already ran on this head BEFORE the review existed, leaving a
-      # `pending` status. Nothing else re-evaluates it — there is no cron and no
-      # workflow_dispatch — so the required "Automated review posted" context
-      # stays pending until somebody pushes again. A PR that is reviewed and has
-      # nothing left to push then waits forever on a review it already has
-      # (observed on #290, pending from 02:03:28Z with the review at 02:05Z).
-      #
-      # No `if:`, for the same reason as the step above: the predicate is
-      # stateless, so the oversized path posts the correct not-reviewed pending.
-      - name: Re-evaluate the automated-review gate on the head
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GH_REPO: ${{ github.repository }}
-          PR: ${{ github.event.pull_request.number }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-        run: bash .github/scripts/review-gate.sh
+        run: bash .github/scripts/review-findings-gate.sh
 
   # Auto-approve the PRs the reviewer deliberately SKIPS (see `decide` above:
   # low-risk chore/style by title, machine-cut `release:` PRs, and
@@ -352,13 +332,12 @@ jobs:
   # re-clear a skipped PR would merge on its first head and be blocked forever
   # after its second.
   #
-  # THE TRUST GATE BELOW IS WHAT STOPS A PR FROM APPROVING ITSELF. The three
-  # steps here clear three merge levers — an approving review, the "Review
-  # findings resolved" status, and the "Automated review posted" status — and
-  # the skip set they key on is the PR TITLE, which the PR author writes. The
-  # author (`user.type`) does come from the event payload and cannot be spoofed;
-  # the title carries no such guarantee, so without this gate any fork PR named
-  # `chore: …` cleared all three levers and was never read.
+  # THE TRUST GATE BELOW IS WHAT STOPS A PR FROM APPROVING ITSELF. The two steps
+  # here clear both merge levers — an approving review and the "Review findings
+  # resolved" status — and the skip set they key on is the PR TITLE, which the PR
+  # author writes. The author (`user.type`) does come from the event payload and
+  # cannot be spoofed; the title carries no such guarantee, so without this gate
+  # any fork PR named `chore: …` cleared both levers and was never read.
   #
   # Trusted means same-repo (a fork author cannot write a branch here) or an
   # OWNER/MEMBER/COLLABORATOR author — both payload fields GitHub sets. It is
@@ -366,7 +345,7 @@ jobs:
   # construction: an untrusted PR is never skipped there, so it gets the real
   # review instead of the approval it cannot earn here.
   #
-  # This posts a review and two commit statuses, runs no PR code, and holds
+  # This posts a review and one commit status, runs no PR code, and holds
   # pull-requests:write + statuses:write and nothing else.
   auto-approve-skipped:
     name: Auto-approve low-risk and bot PRs the reviewer skips
@@ -407,8 +386,6 @@ jobs:
           # requirement from the scripts' own `source` lines.
           sparse-checkout: |
             .github/scripts/auto-approve-skipped-pr.sh
-            .github/scripts/review-gate.sh
-            .github/scripts/lib/reviewer-identity.bash
           sparse-checkout-cone-mode: false
       - name: Approve so a review-required ruleset doesn't strand a skipped PR
         if: >-
@@ -453,23 +430,3 @@ jobs:
             -f "context=Review findings resolved" \
             -f "description=Review deliberately skipped: bot-authored, or a chore/style/release title. Add needs-auto-review to force a full review." \
             -f "target_url=${RUN_URL}" >/dev/null
-
-      # The approval above is a REVIEW posted with GITHUB_TOKEN, so it fires no
-      # pull_request_review event, and review-gate.yaml's other leg already ran
-      # on this head — on `opened`, before the approval existed. Without this the
-      # whole skipped class sits on a pending required status until someone
-      # pushes, and that class (bot PRs, chore/style/release titles) is the one
-      # least likely to ever push again.
-      #
-      # `always()` for the same reason as the step above: the predicate is
-      # stateless, so a failed approve posts the honest `pending` rather than a
-      # green nothing earned, and the job still goes red on the approve itself.
-      - name: Re-evaluate the automated-review gate on the head
-        if: always()
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GH_REPO: ${{ github.repository }}
-          PR: ${{ github.event.pull_request.number }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-        run: bash .github/scripts/review-gate.sh

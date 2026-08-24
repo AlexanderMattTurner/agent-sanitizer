@@ -3,16 +3,15 @@
 PROBLEM CLASS — a workflow job that checks out a script but not the library the
 script sources. Nothing fails at checkout time: the file is simply absent, and
 the `source` line then dies under `set -e` on the first real run. For the review
-gates that means a required commit status or check run is never posted, so every
-open pull request hangs at "Expected — Waiting" on a context nothing will send.
+gate that means its required commit status is never posted, so every open pull
+request hangs at "Expected — Waiting" on a context nothing will send.
 
 The requirement is DERIVED, never restated: this module reads each job's `run:`
 steps for the scripts they execute, parses those scripts with the bash grammar to
 find what they `source`, and walks that transitively. A list that omits a member
 of the closure reds here. Adding a `source` to a script therefore fails CI until
-every narrow list that fetches it grows the new file, which is the whole reason
-`.github/scripts/lib/reviewer-identity.bash` can be shared by scripts the review
-workflows fetch one file at a time.
+every narrow list that fetches it grows the new file, which is what lets
+`.github/scripts/lib/` be shared by scripts a workflow fetches one file at a time.
 
 Jobs whose list already covers a whole directory (`.github/scripts`) pass
 trivially, and that is correct — the closure IS in their checkout.
@@ -96,39 +95,30 @@ def test_a_sparse_list_fetches_every_file_its_scripts_source(
     )
 
 
-def test_the_review_gate_lists_are_checked_against_a_real_source_closure() -> None:
-    """The narrow lists this check exists for, and proof the closure is not empty.
+def test_the_gate_closure_resolves_a_real_multi_file_source_graph() -> None:
+    """Proof the closure walk resolves anything at all.
 
-    `review-gate.sh` is fetched one file at a time by three jobs; the moment it
-    sources a library, that library has to appear in all three lists. Without
-    this assertion the parametrized check above passes just as happily on a
-    closure computation that resolved nothing.
+    Every assertion above has the form "the job's list covers the closure", which
+    a walk that silently resolved nothing satisfies for free. The merge gate is
+    the deepest source graph in the tree — two libs, each sourcing more — so it
+    is what shows the walk has teeth.
     """
-    gate = ".github/scripts/review-gate.sh"
+    gate = ".github/scripts/review-findings-gate.sh"
     closure = source_closure({gate})
     assert closure > {gate}, f"{gate} sources nothing — the closure walk proves nothing"
-
-    narrow = {
-        f"{name}:{job_id}"
-        for name, job_id, entries, runs in _jobs_with_a_sparse_list()
-        if gate in runs
-        and not any(_covers(entry, gate) and entry != gate for entry in entries)
-    }
-    assert narrow, (
-        "no job fetches review-gate.sh through a file-level sparse-checkout list"
-    )
     for path in closure:
         assert (REPO_ROOT / path).is_file()
 
     # Every `source` inside the closure has to reach a tracked file. One the walk
-    # skipped is a checkout requirement nothing states, and the three jobs that
-    # fetch review-gate.sh one file at a time would each be short a library.
+    # skipped is a checkout requirement nothing states, so a job that fetched this
+    # gate file-by-file would be short a library and die at runtime with the
+    # parametrized check above still green.
     skipped = {
         f"{path}: {written}"
         for path in closure
         for written in unresolved_sources(path, TRACKED)
     }
     assert not skipped, (
-        f"the {gate} closure skipped {sorted(skipped)} — each is a file the narrow "
-        "sparse-checkout lists are never told to fetch"
+        f"the {gate} closure skipped {sorted(skipped)} — each is a file a narrow "
+        "sparse-checkout list would never be told to fetch"
     )

@@ -151,11 +151,11 @@ sys.exit(2)
 """
 
 
-def _review(login: str = "github-actions") -> dict:
+def _review(login: str = "github-actions", *, state: str = "COMMENTED") -> dict:
     """A completed review node, shaped per REVIEWS_QUERY in lib/pr-reviews.bash."""
     return {
         "author": {"login": login},
-        "state": "COMMENTED",
+        "state": state,
         "body": "## Review\n\nfindings…",
         "submittedAt": "2026-07-01T00:00:00Z",
     }
@@ -226,13 +226,35 @@ def _run(
     return proc, posted
 
 
-def test_red_when_the_reviewer_never_reviewed(tmp_path: Path) -> None:
+def test_unreviewed_holds_the_merge_and_a_human_review_does_not_clear_it(
+    tmp_path: Path,
+) -> None:
     # Zero findings from zero reviews is vacuous — and a HUMAN review alone
     # must not satisfy (a): the reviewer filter is under test, not emptiness.
     proc, posted = _run(tmp_path, reviews=[_review(login="somehuman")], threads=[])
     assert proc.returncode == 1
-    assert "not reviewed" in proc.stderr
+    assert "waiting for the automated review" in proc.stderr
     assert posted == []
+
+
+@pytest.mark.parametrize(
+    ("reviews", "expected"),
+    [
+        # A dismissal returns the PR to waiting: the hold sweeper dismisses the
+        # reviewer's stale hold routinely, and nothing then stands that read it.
+        ([_review(state="DISMISSED")], "pending"),
+        # The positive marker for the case above — the DISMISSED filter must not
+        # swallow the review that genuinely stands behind it.
+        ([_review(state="DISMISSED"), _review()], "success"),
+    ],
+    ids=["dismissed-only", "dismissed-then-standing"],
+)
+def test_only_an_undismissed_reviewer_review_clears_the_reviewed_leg(
+    tmp_path: Path, reviews: list[dict], expected: str
+) -> None:
+    proc, posted = _run(tmp_path, reviews=reviews, threads=[], report_sha="cafe1234")
+    assert proc.returncode == 0, proc.stderr
+    assert [r["state"] for r in posted] == [expected]
 
 
 @pytest.mark.parametrize("severity", GATING)
@@ -314,10 +336,10 @@ def test_an_empty_body_review_does_not_count_as_reviewed(tmp_path: Path) -> None
     # GitHub synthesizes a body-less COMMENTED review by the bot around every
     # standalone review-comment POST; the shared read filters those out, so a PR
     # whose ONLY bot review is empty-bodied has never actually been reviewed and
-    # the gate stays red on the not-reviewed leg — never green vacuously.
+    # the gate holds on the not-reviewed leg — never green vacuously.
     proc, posted = _run(tmp_path, reviews=[_review() | {"body": ""}], threads=[])
     assert proc.returncode == 1
-    assert "not reviewed" in proc.stderr
+    assert "waiting for the automated review" in proc.stderr
     assert posted == []
 
 
@@ -440,6 +462,16 @@ def test_report_mode_posts_a_success_status(tmp_path: Path) -> None:
     assert status["context"] == GATE_CONTEXT
     assert status["sha"] == "cafe1234"
     assert status["state"] == "success"
+
+
+def test_report_mode_posts_pending_before_the_review_lands(tmp_path: Path) -> None:
+    # `pending`, not `failure`: the review is coming, and a red would send a
+    # reader off to diagnose a gate that is merely waiting. Both hold the merge.
+    proc, posted = _run(tmp_path, reviews=[], threads=[], report_sha="cafe1234")
+    assert proc.returncode == 0, proc.stderr
+    assert [(r["context"], r["sha"], r["state"]) for r in posted] == [
+        (GATE_CONTEXT, "cafe1234", "pending")
+    ]
 
 
 def test_report_mode_posts_a_failure_status_and_still_exits_zero(

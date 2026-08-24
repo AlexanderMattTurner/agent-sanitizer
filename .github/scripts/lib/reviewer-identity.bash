@@ -15,8 +15,8 @@
 # from the scripts' own `source` lines, so an omission reds CI rather than
 # killing the gate at runtime under `set -e`.
 #
-# Consumers: review-gate.sh, review-findings-gate.sh,
-# approve-if-reviewer-hold-clear.sh, lib/pr-reviews.bash, lib/review-threads.bash.
+# Consumers: review-findings-gate.sh, approve-if-reviewer-hold-clear.sh,
+# lib/pr-reviews.bash, lib/review-threads.bash.
 
 REVIEWER_LOGIN="${REVIEWER_LOGIN:-github-actions[bot]}"
 

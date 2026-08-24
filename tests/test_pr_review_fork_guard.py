@@ -2,10 +2,9 @@
 
 A PR title is written by the PR author. Two jobs key on it: `decide` skips the
 model review for a `chore:`/`style:`/`release:` title, and `auto-approve-skipped`
-answers that same skip with an approving review, a green "Review findings
-resolved" status, and a re-derived "Automated review posted" status. Three
-merge levers, chosen by a string the author controls — so an untrusted PR named
-`chore: bump` merged without ever being read.
+answers that same skip with an approving review and a green "Review findings
+resolved" status. Two merge levers, chosen by a string the author controls — so
+an untrusted PR named `chore: bump` merged without ever being read.
 
 Both jobs now require a TRUST signal before the title means anything: the PR is
 same-repo, or its author is an OWNER/MEMBER/COLLABORATOR of the base repo. The
@@ -262,7 +261,7 @@ def test_every_non_draft_pr_is_reviewed_or_approved_never_neither(
     title: str, trust: dict, user_type: str
 ) -> None:
     # The exhaustiveness invariant the two gates hold jointly. A PR that reaches
-    # neither job gets no review to clear "Automated review posted" and no
+    # neither job gets no review to clear "Review findings resolved" and no
     # approval to clear the review-required ruleset, and no later event
     # produces either — it is stuck, silently.
     github = _github(title, user_type=user_type, **trust)

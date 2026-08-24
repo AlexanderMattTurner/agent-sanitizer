@@ -1,10 +1,18 @@
 #!/usr/bin/env bash
-# The review-findings merge gate, as ONE stateless predicate: a PR is clear to
-# merge when (a) the automated reviewer has completed at least one review of it
-# AND (b) no unresolved reviewer-rooted review thread still carries a
-# merge-gating finding (🔴 blocking / 🟡 warning). Resolving the last gating
-# thread is what flips the gate — there is no approval to mint, no sticky
-# verdict to supersede, and no state beyond what the PR itself shows.
+# The review merge gate, as ONE stateless predicate: a PR is clear to merge when
+# (a) at least one review of it BY THE AUTOMATED REVIEWER stands undismissed AND
+# (b) no unresolved reviewer-rooted review thread still carries a merge-gating
+# finding (🔴 blocking / 🟡 warning). Resolving the last gating thread is what
+# flips the gate — there is no approval to mint, no sticky verdict to supersede,
+# and no state beyond what the PR itself shows.
+#
+# Clause (a) is the whole reason a merge cannot outrun the reviewer: the cheap
+# checks finish in about ninety seconds while an LLM review takes minutes, so a
+# PR gated only on those merges first and the reviewer's findings arrive on a
+# merged PR. It is PR-SCOPED, not head-scoped, and that is load-bearing:
+# decide-pr-review-trigger.sh answers run=false for a plain `synchronize`, so a
+# head-scoped clause would hold a reviewed PR at unreviewed forever the moment a
+# push produced a head nothing will review.
 #
 # The severity of a thread is read from the root comment the reviewer posted:
 # the hidden `<!-- severity: … -->` marker post-pr-review.mjs stamps on every
@@ -16,12 +24,17 @@
 # Two modes, one predicate:
 #   * REPORT_SHA set — post the verdict as a COMMIT STATUS under the context
 #     "$GATE_CONTEXT" on that sha (the PR head), so the ruleset's required check
-#     is satisfied or red there. Exit 0 once the status is posted, whatever the
-#     verdict; a failure to POST it is a hard red (a gate that cannot report is
-#     a gate that hangs the PR at "Expected").
-#   * REPORT_SHA unset — exit 0 when the gate is green, 1 when red. This is the
+#     is satisfied, pending or red there. Exit 0 once the status is posted,
+#     whatever the verdict; a failure to POST it is a hard red (a gate that
+#     cannot report is a gate that hangs the PR at "Expected").
+#   * REPORT_SHA unset — exit 0 when the gate is green, 1 otherwise. This is the
 #     merge_group mode: the calling job is itself the check on the queue sha,
-#     so its exit status is the report.
+#     so its exit status is the report, and a queue has no way to say `pending`.
+#
+# Three verdicts, two of which hold the merge. An unreviewed PR posts `pending`
+# rather than `failure`: the review is coming, and a red there would send a
+# reader off to diagnose a gate that is merely waiting. Unresolved findings post
+# `failure`, because that one IS something to act on.
 #
 # A STATUS, not a check run, and that distinction is load-bearing: a check run
 # POSTed for a bare sha lands in a check suite of the app's own making, whose
@@ -29,7 +42,7 @@
 # suites tied to the pull request. Such a run shows green on the commit and in
 # the Checks tab while the required context sits at "Expected — Waiting for
 # status to be reported" forever. A status carries no suite and is read on the
-# sha itself, which is how the sibling gate (review-gate.sh) reports too.
+# sha itself.
 #
 # GATE_UNREPORTED set skips the predicate entirely and posts a RED verdict on
 # REPORT_SHA — the caller's `always()` arm for a run that died before it could
@@ -122,13 +135,18 @@ done <<<"$severity_rows"
   exit 1
 }
 
-# (a) At least one completed reviewer review. A PR nothing has read must not
-# merge on "zero unresolved findings" — zero findings from zero reviews is
-# vacuous, so the gate stays red until the reviewer's first pass lands.
-reviews="$(reviewer_reviews_ndjson "$owner" "$name" "$PR")"
+# (a) At least one reviewer review still standing. A PR nothing has read must
+# not merge on "zero unresolved findings" — zero findings from zero reviews is
+# vacuous, so the gate waits until the reviewer's first pass lands.
+#
+# DISMISSED reviews are dropped, which is what makes a dismissal mean something:
+# the hold sweeper dismisses the reviewer's stale hold routinely (GitHub refuses
+# approvals from an Actions token), and a PR whose only review was dismissed has
+# nothing standing that read it.
+reviews="$(reviewer_reviews_ndjson "$owner" "$name" "$PR" | jq -c 'select(.state != "DISMISSED")')"
 if [[ -z "$reviews" ]]; then
-  verdict=red
-  reason="the automated reviewer has not reviewed this PR yet — the gate stays red until its first review lands"
+  verdict=pending
+  reason="waiting for the automated review of this pull request"
 else
   # (b) Unresolved reviewer-rooted threads carrying a gating severity, per the
   # SSOT-derived predicate built above — 🔵 nits are advisory and never gate.
@@ -157,8 +175,11 @@ if [[ -z "${REPORT_SHA:-}" ]]; then
   exit 0
 fi
 
-state=success
-[[ "$verdict" == "green" ]] || state=failure
+case "$verdict" in
+green) state=success ;;
+pending) state=pending ;;
+*) state=failure ;;
+esac
 # No `|| true`: a verdict that cannot be reported leaves the required check
 # hanging at "Expected", so a failed POST must red this run loudly.
 post_verdict "$state" "$reason"
