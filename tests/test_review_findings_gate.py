@@ -512,6 +512,34 @@ def test_a_red_description_is_truncated_to_the_status_cap(tmp_path: Path) -> Non
     assert description.startswith("1 unresolved reviewer finding(s)")
 
 
+def test_no_posted_description_carries_a_4_byte_code_point(tmp_path: Path) -> None:
+    # GitHub REJECTS a status description containing any non-BMP code point
+    # ("Description doesn't accept 4-byte Unicode"), and this gate's own POST
+    # failing is a hard red that hangs the required check at "Expected". Both
+    # verdicts that carry prose are checked: the green reason is authored here,
+    # and the red one splices PR-controlled paths, so a filename with an emoji
+    # in it is enough to make the gate unreportable.
+    emoji_path = "src/\N{LARGE RED CIRCLE}.mjs"
+    for threads, expected in (
+        ([], "success"),
+        ([_thread(f"finding\n\n{BLOCKING}\n", path=emoji_path)], "failure"),
+    ):
+        proc, posted = _run(
+            tmp_path,
+            reviews=[_review()],
+            threads=threads,
+            report_sha="cafe1234",
+        )
+        assert proc.returncode == 0, proc.stderr
+        assert [p["state"] for p in posted] == [expected]
+        assert all(ord(ch) <= 0xFFFF for ch in posted[0]["description"])
+
+    # Non-vacuous: the last run's reason really did carry the 4-byte path, so
+    # the assertion above passed because post_verdict stripped it — not because
+    # nothing ever put one there. The log line keeps the full reason.
+    assert emoji_path in proc.stderr
+
+
 def test_an_unevaluated_gate_reports_red_rather_than_going_unreported(
     tmp_path: Path,
 ) -> None:

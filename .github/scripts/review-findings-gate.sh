@@ -75,8 +75,21 @@ GATE_CONTEXT="Review findings resolved"
 # GitHub caps a status description at 140 characters, so the reason a reader
 # acts on lives in this run's log and behind target_url; the merge box gets as
 # much of its head as fits.
+#
+# It also REJECTS any non-BMP code point outright ("Description doesn't accept
+# 4-byte Unicode"), and a rejected POST is a hard red that hangs the PR at
+# "Expected". A red reason names the offending paths, so an emoji in a filename
+# is enough to make the gate unreportable; the code points are dropped here
+# rather than trusted to be absent upstream. The full reason still reaches the
+# log line above and target_url intact.
 post_verdict() {
   local state="$1" description="$2"
+  local stripped
+  stripped="$(jq -rn --arg d "$description" '$d | explode | map(select(. <= 65535)) | implode')"
+  if [[ "$stripped" != "$description" ]]; then
+    echo "stripped non-BMP characters from the status description; the log line above carries the full reason" >&2
+    description="$stripped"
+  fi
   if ((${#description} > 140)); then
     description="${description:0:137}..."
   fi
@@ -160,7 +173,7 @@ else
   count="$(jq 'length' <<<"$gating")"
   if [[ "$count" -eq 0 ]]; then
     verdict=green
-    reason="the reviewer has reviewed this PR and no unresolved thread carries a 🔴/🟡 finding"
+    reason="the reviewer has reviewed this PR and no unresolved thread carries a blocking or warning finding"
   else
     verdict=red
     where="$(jq -r '[.[] | (.path // "(general)") + (if .line then ":" + (.line|tostring) else "" end)] | join(", ")' <<<"$gating")"
