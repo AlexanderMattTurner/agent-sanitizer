@@ -8,6 +8,12 @@ adhere to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+## [2.47.6] - 2026-08-24
+
+### Fixed
+
+- Report the review-findings gate as a commit status instead of a check run.
+
 ## [2.47.5] - 2026-08-24
 
 ### Fixed
