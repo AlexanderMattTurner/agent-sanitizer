@@ -8,6 +8,12 @@ adhere to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+## [2.47.5] - 2026-08-24
+
+### Fixed
+
+- Improved secrets detectors to better distinguish legitimate text patterns from actual secrets, enhancing detection accuracy for JWT shapes and other detector regex patterns.
+
 ## [2.47.4] - 2026-08-23
 
 ### Fixed
