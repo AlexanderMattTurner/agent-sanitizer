@@ -3,7 +3,7 @@
 A PR title is written by the PR author. Two jobs key on it: `decide` skips the
 model review for a `chore:`/`style:`/`release:` title, and `auto-approve-skipped`
 answers that same skip with an approving review, a green "Review findings
-resolved" check run, and a re-derived "Automated review posted" status. Three
+resolved" status, and a re-derived "Automated review posted" status. Three
 merge levers, chosen by a string the author controls — so an untrusted PR named
 `chore: bump` merged without ever being read.
 
@@ -199,7 +199,7 @@ def test_no_title_routes_a_cross_repository_pr_into_auto_approve(
     title: str, trust: dict, user_type: str
 ) -> None:
     # The finding: `auto-approve-skipped` submits an approving review, greens
-    # the review-findings check run and re-derives the review status. A fork PR
+    # the review-findings status and re-derives the review status. A fork PR
     # must reach none of that by naming itself.
     github = _github(title, user_type=user_type, **trust)
     assert not _evaluate(AUTO_APPROVE_IF, github)
