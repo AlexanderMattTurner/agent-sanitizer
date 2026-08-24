@@ -309,6 +309,10 @@ jobs:
           GH_REPO: ${{ github.repository }}
           PR: ${{ github.event.pull_request.number }}
           REPORT_SHA: ${{ github.event.pull_request.head.sha }}
+          # This site posts the LONGEST red reason — it runs right after the
+          # review lands, so the verdict enumerates every gating path:line and
+          # the 140-char status cap bites. target_url is where the reader
+          # recovers the part that was cut.
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: bash .github/scripts/review-findings-gate.sh
 
