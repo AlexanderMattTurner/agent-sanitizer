@@ -16,7 +16,7 @@ from detect_secrets.plugins.ibm_cloud_iam import IbmCloudIamDetector as _Upstrea
 from detect_secrets.plugins.ibm_cos_hmac import IbmCosHmacDetector as _UpstreamIbmCos
 from detect_secrets.plugins.softlayer import SoftlayerDetector as _UpstreamSoftlayer
 from detect_secrets.settings import get_plugins
-from redactor_helpers import SAMPLES, run_plain
+from redactor_helpers import LEGITIMATE, SAMPLES, run_plain
 
 _DETECTORS_JSON = D.DETECTORS_FILE
 _INLINE_DETECTORS = tuple(E._INLINE_PLUGINS)
@@ -186,6 +186,94 @@ def test_prefix_detectors_pin_distinctive_length_floor(cls_name, prefix, floor):
     denylist = getattr(D, cls_name).denylist[0]
     assert denylist.search(prefix + "a" * floor)
     assert not denylist.search(prefix + "a" * (floor - 1))
+
+
+# ─── Precision: a shape detector must not fire on legitimate content ─────────
+
+# Detectors whose precision lives in the GATES, not in their regex: each matches
+# a credential NOUN beside a value (`secret_id = "..."`) by design, so a raw
+# denylist assertion over one would demand the opposite of how it is built.
+# `test_negative_corpus_produces_zero_findings` is their negative corpus.
+_GATE_DEPENDENT_DETECTORS = frozenset(
+    {
+        "BoundedKeywordDetector",
+        "CloudantCredentialsDetector",
+        "IbmCloudIamKeyDetector",
+        "IbmCosHmacKeyDetector",
+        "SoftlayerCredentialsDetector",
+    }
+)
+
+# Everything else the engine registers, from BOTH registries — a detector whose
+# credential shape is in its own denylist owes this test whichever list it is on.
+_SHAPE_DETECTORS = [
+    name
+    for name in (*E._CONFIGURED_DETECTORS, *E._INLINE_PLUGINS)
+    if name not in _GATE_DEPENDENT_DETECTORS
+]
+
+
+@pytest.mark.parametrize("label", sorted(LEGITIMATE))
+def test_shape_detectors_find_nothing_in_legitimate_content(label):
+    """Every SHAPE detector's own regex, against the engine's negative corpus.
+
+    `test_negative_corpus_produces_zero_findings` asks whether the ENGINE emits
+    anything, which a gate can clear after a detector has matched. This asks the
+    detector directly, so a prefix arm that widens until it matches ordinary
+    text is caught at the regex rather than resting on a gate to hide it — the
+    precision-over-recall doctrine applied one layer down.
+
+    Only the keyword-shaped detectors are out, and only their KEYWORD arms:
+    their URL arms carry no credential noun, so
+    {@link test_url_arms_of_gate_dependent_detectors_stay_off_legitimate_content}
+    sweeps those beside this. Excluded by NAME rather than by which
+    registry they live in: an inline detector whose credential shape sits in its
+    own denylist — `JwtFullTokenDetector` — belongs here exactly as much as a
+    JSON-backed one, so a new inline detector is covered the day it lands.
+
+    detect-secrets' own BUNDLED plugins are out for a different reason: this repo
+    does not own their regexes and `detectors.py` exposes no class to reach them
+    through. Two corpus entries therefore do nothing HERE and are carried by the
+    engine-level test alone — "url with query string" (`BasicAuthDetector`) and
+    "prose naming a key prefix" (the upstream `sk-` arms).
+    """
+    text = LEGITIMATE[label]
+    for cls_name in _SHAPE_DETECTORS:
+        denylist = getattr(D, cls_name).denylist
+        # A detector with an empty denylist would pass by matching nothing.
+        assert denylist, cls_name
+        for pattern in denylist:
+            found = pattern.search(text)
+            assert found is None, f"{cls_name} matched {found!r} in {text!r}"
+
+
+# A gate-dependent detector still carries SHAPE arms, and those owe the same
+# precision as any other. Each entry is a URL only that class's URL arm matches,
+# so the arms it selects are exactly the ones a keyword exemption should not
+# cover — no pattern index to drift.
+_URL_ARM_SAMPLES = [
+    ("CloudantCredentialsDetector", "https://u-1:" + "a" * 64 + "@db-1.cloudant.com"),
+    ("SoftlayerCredentialsDetector", "https://api.softlayer.com/soap/v3/" + "a" * 64),
+]
+
+
+@pytest.mark.parametrize("cls_name, url", _URL_ARM_SAMPLES)
+def test_url_arms_of_gate_dependent_detectors_stay_off_legitimate_content(
+    cls_name, url
+):
+    """The shape arms inside a keyword-shaped class, swept like any other.
+
+    Excluding these classes wholesale from the sweep above also excluded their
+    URL arms, which carry no credential noun and so rest on nothing but their
+    own precision — a widening there would leave that test green.
+    """
+    arms = [pattern for pattern in getattr(D, cls_name).denylist if pattern.search(url)]
+    # Positive marker: the URL selects a real arm, so the loop below runs.
+    assert arms, cls_name
+    for pattern in arms:
+        for label, text in LEGITIMATE.items():
+            found = pattern.search(text)
+            assert found is None, f"{cls_name} matched {found!r} in {label}"
 
 
 # ─── Multi-member prefix families: one redaction case per member ─────────────
