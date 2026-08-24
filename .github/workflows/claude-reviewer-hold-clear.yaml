@@ -61,6 +61,10 @@ jobs:
       # by dismissing it rather than by minting an approval on a PR no push-time
       # review just examined.
       GH_TOKEN_ACTIONS: ${{ secrets.GITHUB_TOKEN }}
+      # Job-level, not per-step: BOTH steps post gate verdicts (the sweep
+      # re-derives them after clearing a hold), and a truncated description
+      # without a target_url has nowhere to send the reader for the rest.
+      RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
     steps:
       - name: Checkout the trusted approval scripts (default branch)
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
@@ -81,7 +85,4 @@ jobs:
       # could not clear is no reason to leave every open PR's gate status stale.
       - name: Reconcile the automated-review gate across open PRs
         if: always()
-        env:
-          # GH_TOKEN and GH_REPO come from the job env above.
-          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: bash .github/scripts/reconcile-review-gate.sh

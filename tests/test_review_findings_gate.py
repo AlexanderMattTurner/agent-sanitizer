@@ -459,6 +459,27 @@ def test_report_mode_posts_a_failure_status_and_still_exits_zero(
     ]
 
 
+def test_a_red_description_is_truncated_to_the_status_cap(tmp_path: Path) -> None:
+    # GitHub caps a status description at 140 characters, and EVERY red reason
+    # exceeds it (the count, the path list, and the how-to-clear tail), so
+    # post_verdict's truncation is on the common path, not an edge case. `<=`
+    # rather than `==` because bash cuts by bytes and the reason carries an em
+    # dash, so the character count lands under the byte budget.
+    proc, posted = _run(
+        tmp_path,
+        reviews=[_review()],
+        threads=[_thread(f"🔴 open finding\n\n{BLOCKING}\n")],
+        report_sha="cafe1234",
+    )
+    assert proc.returncode == 0, proc.stderr
+    description = posted[0]["description"]
+    assert len(description) <= 140
+    assert description.endswith("...")
+    # The head survives the cut: a truncation that kept the tail, or dropped the
+    # ellipsis, would leave the merge box saying nothing about what is wrong.
+    assert description.startswith("1 unresolved reviewer finding(s)")
+
+
 def test_an_unevaluated_gate_reports_red_rather_than_going_unreported(
     tmp_path: Path,
 ) -> None:
@@ -700,6 +721,13 @@ def test_every_predicate_changing_job_reposts_the_gate_on_the_head(
     # check's context — without it the script runs in exit-status mode and posts
     # nothing.
     assert env.get("REPORT_SHA") == "${{ github.event.pull_request.head.sha }}"
+    # A red description is cut at the 140-char status cap, so target_url is the
+    # only place the rest of the finding list survives — a site that posts the
+    # verdict without RUN_URL truncates with nothing to link to.
+    assert env.get("RUN_URL") == (
+        "${{ github.server_url }}/${{ github.repository }}/actions/runs/"
+        "${{ github.run_id }}"
+    )
     # The re-post must come AFTER the write it reports on, or it reads the
     # pre-write state and posts a stale verdict.
     assert gate_steps[0] is not steps[0]
