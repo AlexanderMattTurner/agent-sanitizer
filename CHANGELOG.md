@@ -8,6 +8,15 @@ adhere to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+## [2.47.7] - 2026-08-24
+
+### Changed
+- Consolidated the automated-review and review-findings gates into a single review-findings gate.
+- Updated gate status links to reference their corresponding workflow runs for better traceability when status descriptions are truncated.
+
+### Fixed
+- Fixed CI gate status descriptions being rejected by GitHub.
+
 ## [2.47.6] - 2026-08-24
 
 ### Fixed
