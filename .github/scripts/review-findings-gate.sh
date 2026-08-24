@@ -14,14 +14,22 @@
 # post-pr-review.mjs stamps from, so the writer and this reader cannot drift.
 #
 # Two modes, one predicate:
-#   * REPORT_SHA set — post the verdict as a GitHub CHECK RUN named
-#     "$CHECK_NAME" on that sha (the PR head), so the ruleset's required check
-#     is satisfied or red there. Exit 0 once the check run is posted, whatever
-#     the verdict; a failure to POST the check run is a hard red (a gate that
-#     cannot report is a gate that hangs the PR at "Expected").
+#   * REPORT_SHA set — post the verdict as a COMMIT STATUS under the context
+#     "$GATE_CONTEXT" on that sha (the PR head), so the ruleset's required check
+#     is satisfied or red there. Exit 0 once the status is posted, whatever the
+#     verdict; a failure to POST it is a hard red (a gate that cannot report is
+#     a gate that hangs the PR at "Expected").
 #   * REPORT_SHA unset — exit 0 when the gate is green, 1 when red. This is the
 #     merge_group mode: the calling job is itself the check on the queue sha,
 #     so its exit status is the report.
+#
+# A STATUS, not a check run, and that distinction is load-bearing: a check run
+# POSTed for a bare sha lands in a check suite of the app's own making, whose
+# `pull_requests` array is empty, and the PR-scoped merge box counts only the
+# suites tied to the pull request. Such a run shows green on the commit and in
+# the Checks tab while the required context sits at "Expected — Waiting for
+# status to be reported" forever. A status carries no suite and is read on the
+# sha itself, which is how the sibling gate (review-gate.sh) reports too.
 #
 # GATE_UNREPORTED set skips the predicate entirely and posts a RED verdict on
 # REPORT_SHA — the caller's `always()` arm for a run that died before it could
@@ -31,7 +39,8 @@
 # propagates as a non-zero exit (set -e), because a gate that fails open lets a
 # PR merge past findings nobody read.
 #
-# Env: GH_TOKEN, GH_REPO (owner/name), PR; REPORT_SHA and GATE_UNREPORTED optional.
+# Env: GH_TOKEN, GH_REPO (owner/name), PR; REPORT_SHA, RUN_URL and
+# GATE_UNREPORTED optional.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -46,12 +55,27 @@ source "$SCRIPT_DIR/lib/pr-reviews.bash"
 
 # MUST stay byte-identical to the `name:` of the merge_gate job in
 # review-findings-merge-gate.yaml: the ruleset's required-check context is
-# derived from that job name (sync-required-checks), and the check run posted
-# here has to land under the same context or the PR head never satisfies the gate.
-CHECK_NAME="Review findings resolved"
+# derived from that job name (sync-required-checks), and the status posted
+# here has to carry the same context or the PR head never satisfies the gate.
+GATE_CONTEXT="Review findings resolved"
+
+# GitHub caps a status description at 140 characters, so the reason a reader
+# acts on lives in this run's log and behind target_url; the merge box gets as
+# much of its head as fits.
+post_verdict() {
+  local state="$1" description="$2"
+  if ((${#description} > 140)); then
+    description="${description:0:137}..."
+  fi
+  retry gh api --method POST "repos/${GH_REPO}/statuses/${REPORT_SHA}" \
+    -f "state=${state}" \
+    -f "context=${GATE_CONTEXT}" \
+    -f "description=${description}" \
+    -f "target_url=${RUN_URL:-}" >/dev/null
+}
 
 # GATE_UNREPORTED mode: the evaluation below never reached its POST, so report
-# red here instead of leaving the head with no check run at all. An unposted
+# red here instead of leaving the head with no verdict at all. An unposted
 # REQUIRED context reads as "Expected — Waiting for status to be reported", which
 # blocks the merge on a check that never arrives: thread resolution fires no
 # workflow event, so nothing re-derives this gate until the next push or a
@@ -59,14 +83,9 @@ CHECK_NAME="Review findings resolved"
 # meanwhile. Red is the same state said out loud, and it keeps the retry path.
 if [[ -n "${GATE_UNREPORTED:-}" ]]; then
   : "${REPORT_SHA:?REPORT_SHA required to report an unevaluated gate}"
-  retry gh api --method POST "repos/${GH_REPO}/check-runs" \
-    -f "name=${CHECK_NAME}" \
-    -f "head_sha=${REPORT_SHA}" \
-    -f "status=completed" \
-    -f "conclusion=failure" \
-    -f "output[title]=red: review-findings gate did not complete" \
-    -f "output[summary]=the gate evaluation failed or was cancelled before deriving a verdict, so it reports red rather than leaving the required check unreported — re-run it by removing and re-adding the recheck-review-gate label" >/dev/null
-  echo "posted failure check run '${CHECK_NAME}' on ${REPORT_SHA}: evaluation did not complete" >&2
+  post_verdict failure \
+    "the gate evaluation did not complete — re-run it by removing and re-adding the recheck-review-gate label"
+  echo "posted failure status '${GATE_CONTEXT}' on ${REPORT_SHA}: evaluation did not complete" >&2
   exit 0
 fi
 
@@ -138,15 +157,9 @@ if [[ -z "${REPORT_SHA:-}" ]]; then
   exit 0
 fi
 
-conclusion=success
-[[ "$verdict" == "green" ]] || conclusion=failure
+state=success
+[[ "$verdict" == "green" ]] || state=failure
 # No `|| true`: a verdict that cannot be reported leaves the required check
 # hanging at "Expected", so a failed POST must red this run loudly.
-retry gh api --method POST "repos/${GH_REPO}/check-runs" \
-  -f "name=${CHECK_NAME}" \
-  -f "head_sha=${REPORT_SHA}" \
-  -f "status=completed" \
-  -f "conclusion=${conclusion}" \
-  -f "output[title]=${verdict}: review-findings gate" \
-  -f "output[summary]=${reason}" >/dev/null
-echo "posted ${conclusion} check run '${CHECK_NAME}' on ${REPORT_SHA}" >&2
+post_verdict "$state" "$reason"
+echo "posted ${state} status '${GATE_CONTEXT}' on ${REPORT_SHA}" >&2

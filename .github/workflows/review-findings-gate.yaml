@@ -9,9 +9,12 @@ name: Review-findings gate
 # the last gating thread is the whole clearing ceremony — no approval to mint,
 # no sticky verdict to supersede, no scheduled sweep to unstick either.
 #
-# One job, posting the predicate (review-findings-gate.sh) as a check run named
-# "Review findings resolved" on the PR HEAD sha, so the ruleset's required check
-# is satisfied (or red) there. Thread RESOLUTION fires no workflow event of its
+# One job, posting the predicate (review-findings-gate.sh) as a commit status
+# under the context "Review findings resolved" on the PR HEAD sha, so the
+# ruleset's required check is satisfied (or red) there. A status rather than a
+# check run because a check run POSTed for a bare sha lands in a suite GitHub
+# does not tie to the pull request, and the PR-scoped merge box never counts it
+# — see the script's header. Thread RESOLUTION fires no workflow event of its
 # own, so whoever resolves a thread adds the `recheck-review-gate` label to re-run
 # this evaluation (the labeled trigger below); claude-reviewer-hold-clear.yaml's
 # cron bounds a forgotten one to a half-hour of staleness. The merge queue's leg of the same predicate lives in
@@ -24,8 +27,8 @@ name: Review-findings gate
 # SECURITY — pull_request_target and the review events run in the BASE repo's
 # context. The explicit default-branch `ref:` on the checkout below is the
 # enforcement point: no PR-authored code is ever checked out or executed here —
-# the job reads review/thread state via the API and posts a check run. Least
-# privilege: contents:read (checkout the scripts) + checks:write (post the
+# the job reads review/thread state via the API and posts a commit status. Least
+# privilege: contents:read (checkout the scripts) + statuses:write (post the
 # verdict) + pull-requests:write (read the threads, remove the command label).
 
 on: # zizmor: ignore[dangerous-triggers] — no PR code executes: API-only scripts off a default-branch checkout; see the SECURITY header
@@ -73,7 +76,7 @@ jobs:
     # among runs that would post to the SAME sha. NEVER cancelling the running
     # evaluation: cancel-in-progress stays false because GitHub cancels
     # mid-step, so a true here can kill a run between reading the PR state
-    # and POSTing the check run — the verdict is lost and the head keeps a
+    # and POSTing the verdict — that verdict is lost and the head keeps a
     # stale one. With false, only the QUEUED run is ever cancelled, and only
     # by a newer same-head run that itself executes unconditionally (no job
     # `if:`) and posts a fresher verdict — every cancellation is a strict
@@ -86,7 +89,7 @@ jobs:
       cancel-in-progress: false
     permissions:
       contents: read # sparse-checkout the trusted gate script
-      checks: write # post the "Review findings resolved" check run on the head
+      statuses: write # post the "Review findings resolved" verdict on the head
       # A label on a PULL REQUEST is checked against the pull-requests
       # permission, not issues. Under `issues: write` alone the DELETE below
       # 403s and the label stays; while it sits there re-adding it fires no
@@ -139,15 +142,18 @@ jobs:
         # label and posts nothing, so the required "Review findings resolved"
         # context is never reported on a new head and the PR blocks forever on
         # a check that will never arrive. REPORT_SHA is what routes the verdict
-        # to the head's check context; without it the script only exits 0/1.
+        # to the head's status context; without it the script only exits 0/1.
         env:
           REPORT_SHA: ${{ github.event.pull_request.head.sha }}
+          # A status description is capped at 140 characters, so this is where a
+          # reader gets the finding list a red verdict names.
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: bash .github/scripts/review-findings-gate.sh
       - name: Report red when the evaluation posted no verdict
         # The step above posts the required check only if it reaches its POST, so
         # an evaluation that dies first — an exhausted API retry ladder, a jq
         # failure on the severity config, a lost runner — leaves the head with NO
-        # check run under a REQUIRED context. GitHub renders that as
+        # status under a REQUIRED context. GitHub renders that as
         # "Expected — Waiting for status to be reported" and blocks the merge on
         # a check nothing will ever send: thread resolution fires no workflow
         # event, so the gate is not re-derived until the next push or a
@@ -159,4 +165,7 @@ jobs:
         env:
           REPORT_SHA: ${{ github.event.pull_request.head.sha }}
           GATE_UNREPORTED: "1"
+          # Points at the run that failed, which is where the reason this arm
+          # fired at all is legible.
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: bash .github/scripts/review-findings-gate.sh

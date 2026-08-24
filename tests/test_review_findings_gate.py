@@ -6,10 +6,10 @@ the thread's ROOT comment, with the leading emoji as a fallback for threads
 posted before the marker existed); GREEN otherwise.
 
 Two modes, one predicate:
-  * REPORT_SHA set — the verdict is POSTed as a check run named "Review
-    findings resolved" on that sha; the run exits 0 whatever the verdict, and a
-    failed POST is a hard red (a gate that cannot report leaves the required
-    check hanging at "Expected").
+  * REPORT_SHA set — the verdict is POSTed as a COMMIT STATUS under the context
+    "Review findings resolved" on that sha; the run exits 0 whatever the verdict,
+    and a failed POST is a hard red (a gate that cannot report leaves the
+    required check hanging at "Expected").
   * REPORT_SHA unset — the exit status IS the report (merge_group mode; the
     workflow parses the PR number out of the merge-group ref, tested below).
 
@@ -17,7 +17,7 @@ Drives the REAL script (sourcing the real lib/pr-reviews.bash and
 lib/review-threads.bash) with a fake `gh` on PATH that serves the two GraphQL
 reads from canned node arrays by running the script's OWN --jq programs through
 REAL jq — so the reviewer filter, the severity selection, and the emoji
-fallback are exercised, never re-implemented — and records the check-run POST's
+fallback are exercised, never re-implemented — and records the status POST's
 fields for assertion. gh is stubbed because there is no live GitHub to ask; the
 node shapes mirror the GraphQL documents in the two lib files (in particular:
 GraphQL returns an app bot's login WITHOUT the REST `[bot]` suffix).
@@ -25,6 +25,7 @@ GraphQL returns an app bot's login WITHOUT the REST `[bot]` suffix).
 
 import json
 import os
+import re
 import subprocess
 from pathlib import Path
 
@@ -40,12 +41,12 @@ SCRIPT = REPO_ROOT / GATE_REL
 # can ever report the required context as a passing `skipped` instance.
 WORKFLOW = REPO_ROOT / ".github" / "workflows" / "review-findings-merge-gate.yaml"
 
-# The check-run name the gate posts must be byte-identical to the merge_gate
-# job's `name:` (one required-check context, two reporting surfaces), so the
-# expected name is READ from the workflow rather than restated here.
-CHECK_NAME = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))["jobs"]["merge_gate"][
-    "name"
-]
+# The status context the gate posts under must be byte-identical to the
+# merge_gate job's `name:` (one required-check context, two reporting surfaces),
+# so the expected context is READ from the workflow rather than restated here.
+GATE_CONTEXT = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))["jobs"][
+    "merge_gate"
+]["name"]
 
 # The severity SSOT the gate builds its predicate from at runtime — the tests
 # iterate its gating list member-by-member so a severity added to the config
@@ -68,7 +69,7 @@ WARNING = _marker("warning")
 _FAKE_GH = r"""#!/usr/bin/env python3
 # gh stub for the gate: serves the two GraphQL reads from canned node files,
 # running the CALLER'S --jq through real jq (those filters are the logic under
-# test), and records the check-run POST's fields. Anything else is unhandled
+# test), and records the status POST's fields. Anything else is unhandled
 # (exit 2), so a stray API call — a review post, a mutation — reds the run.
 import json, os, shutil, subprocess, sys
 
@@ -134,11 +135,14 @@ if path == "graphql":
             nodes = json.load(f)
         emit({"data": {"repository": {"pullRequest": {"reviews": {"nodes": nodes}}}}})
 
-if path and path.endswith("/check-runs") and method == "POST":
-    if os.environ.get("FAIL_CHECK_POST") == "1":
-        sys.stderr.write("fake gh: HTTP 502 posting the check run\n")
+if path and "/statuses/" in path and method == "POST":
+    if os.environ.get("FAIL_STATUS_POST") == "1":
+        sys.stderr.write("fake gh: HTTP 502 posting the status\n")
         sys.exit(1)
-    with open(os.environ["CHECK_RUN_LOG"], "a", encoding="utf-8") as f:
+    # The sha rides in the path, so it is recorded beside the fields the caller
+    # passed — an assertion on WHICH head got the verdict has nothing else to read.
+    fields["sha"] = path.rsplit("/", 1)[-1]
+    with open(os.environ["STATUS_LOG"], "a", encoding="utf-8") as f:
         f.write(json.dumps(fields) + "\n")
     sys.exit(0)
 
@@ -187,7 +191,7 @@ def _run(
     gate_unreported: bool = False,
 ) -> tuple[subprocess.CompletedProcess, list[dict]]:
     """Run the real gate script against canned review/thread nodes; return the
-    process and the check runs the fake gh recorded."""
+    process and the statuses the fake gh recorded."""
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir(exist_ok=True)
     gh = bin_dir / "gh"
@@ -195,7 +199,7 @@ def _run(
     gh.chmod(0o755)
     (tmp_path / "reviews.json").write_text(json.dumps(reviews))
     (tmp_path / "threads.json").write_text(json.dumps(threads))
-    log = tmp_path / "check_runs"
+    log = tmp_path / "statuses"
     log.write_text("")
     env = {
         "PATH": f"{bin_dir}:{os.environ['PATH']}",
@@ -205,12 +209,12 @@ def _run(
         "RETRY_BASE_DELAY": "0",  # a failing API call must not sleep out the backoff
         "GH_REVIEWS": str(tmp_path / "reviews.json"),
         "GH_THREADS": str(tmp_path / "threads.json"),
-        "CHECK_RUN_LOG": str(log),
+        "STATUS_LOG": str(log),
     }
     if report_sha is not None:
         env["REPORT_SHA"] = report_sha
     if fail_post:
-        env["FAIL_CHECK_POST"] = "1"
+        env["FAIL_STATUS_POST"] = "1"
     if fail_reads:
         env["FAIL_READS"] = "1"
     if gate_unreported:
@@ -317,9 +321,9 @@ def test_an_empty_body_review_does_not_count_as_reviewed(tmp_path: Path) -> None
     assert posted == []
 
 
-def test_a_failed_api_read_fails_closed_with_no_check_run(tmp_path: Path) -> None:
+def test_a_failed_api_read_fails_closed_with_no_status(tmp_path: Path) -> None:
     # Can't-verify is RED, never green: a read that exhausts the retry ladder
-    # must exit non-zero WITHOUT posting any check run — a gate that reported a
+    # must exit non-zero WITHOUT posting any status — a gate that reported a
     # verdict it could not compute would let a PR merge past findings nobody
     # read (success), or hide the outage behind a plausible red (failure).
     proc, posted = _run(
@@ -420,30 +424,29 @@ def test_green_once_every_gating_thread_is_resolved(tmp_path: Path) -> None:
     assert proc.returncode == 0, proc.stderr
 
 
-# ── REPORT_SHA mode: the verdict is a check run ─────────────────────────────
+# ── REPORT_SHA mode: the verdict is a commit status ─────────────────────────
 
 
-def test_report_mode_posts_a_success_check_run(tmp_path: Path) -> None:
+def test_report_mode_posts_a_success_status(tmp_path: Path) -> None:
     proc, posted = _run(
         tmp_path, reviews=[_review()], threads=[], report_sha="cafe1234"
     )
     assert proc.returncode == 0, proc.stderr
     assert len(posted) == 1
-    run = posted[0]
-    # The name must match the merge_gate job's `name:` — one required-check
+    status = posted[0]
+    # The context must match the merge_gate job's `name:` — one required-check
     # context, two reporting surfaces — so it is read from the workflow, and a
     # rename that desyncs the two surfaces reds here.
-    assert run["name"] == CHECK_NAME
-    assert run["head_sha"] == "cafe1234"
-    assert run["status"] == "completed"
-    assert run["conclusion"] == "success"
+    assert status["context"] == GATE_CONTEXT
+    assert status["sha"] == "cafe1234"
+    assert status["state"] == "success"
 
 
-def test_report_mode_posts_a_failure_check_run_and_still_exits_zero(
+def test_report_mode_posts_a_failure_status_and_still_exits_zero(
     tmp_path: Path,
 ) -> None:
-    # The check run IS the report: a red verdict lands as conclusion=failure on
-    # the sha while the posting run itself stays green.
+    # The status IS the report: a red verdict lands as state=failure on the sha
+    # while the posting run itself stays green.
     proc, posted = _run(
         tmp_path,
         reviews=[_review()],
@@ -451,8 +454,8 @@ def test_report_mode_posts_a_failure_check_run_and_still_exits_zero(
         report_sha="cafe1234",
     )
     assert proc.returncode == 0, proc.stderr
-    assert [(r["name"], r["head_sha"], r["conclusion"]) for r in posted] == [
-        (CHECK_NAME, "cafe1234", "failure")
+    assert [(r["context"], r["sha"], r["state"]) for r in posted] == [
+        (GATE_CONTEXT, "cafe1234", "failure")
     ]
 
 
@@ -460,7 +463,7 @@ def test_an_unevaluated_gate_reports_red_rather_than_going_unreported(
     tmp_path: Path,
 ) -> None:
     # The caller's always() arm. An evaluation that dies before its POST leaves
-    # the head with NO check run under a REQUIRED context, which renders as
+    # the head with NO status under a REQUIRED context, which renders as
     # "Expected — Waiting for status to be reported" and blocks the merge on a
     # check nothing will ever send: resolving a thread fires no workflow event,
     # so nothing re-derives the gate until the next push or a recheck label.
@@ -477,13 +480,13 @@ def test_an_unevaluated_gate_reports_red_rather_than_going_unreported(
         gate_unreported=True,
     )
     assert proc.returncode == 0, proc.stderr
-    assert [
-        (r["name"], r["head_sha"], r["status"], r["conclusion"]) for r in posted
-    ] == [(CHECK_NAME, "cafe1234", "completed", "failure")]
+    assert [(r["context"], r["sha"], r["state"]) for r in posted] == [
+        (GATE_CONTEXT, "cafe1234", "failure")
+    ]
 
 
 def test_an_unevaluated_gate_refuses_to_report_against_no_sha(tmp_path: Path) -> None:
-    # Fail loud rather than POST an empty head_sha: a check run on "" satisfies
+    # Fail loud rather than POST against an empty sha: a status on "" satisfies
     # nothing and would strand the head exactly as the silence it replaced does.
     proc, posted = _run(tmp_path, reviews=[_review()], threads=[], gate_unreported=True)
     assert proc.returncode != 0
@@ -491,7 +494,7 @@ def test_an_unevaluated_gate_refuses_to_report_against_no_sha(tmp_path: Path) ->
     assert posted == []
 
 
-def test_a_failed_check_run_post_fails_the_run_loudly(tmp_path: Path) -> None:
+def test_a_failed_status_post_fails_the_run_loudly(tmp_path: Path) -> None:
     # A verdict that cannot be reported leaves the required check hanging at
     # "Expected" — the POST failure must red this run, never be swallowed.
     proc, posted = _run(
@@ -582,7 +585,7 @@ def _evaluate_job() -> dict:
 
 def test_the_evaluate_job_never_cancels_a_running_verdict_post() -> None:
     # GitHub cancels mid-step, so cancel-in-progress: true can kill the run
-    # between reading the PR state and POSTing the check run — the verdict is
+    # between reading the PR state and POSTing the verdict — that verdict is
     # lost and the head keeps a stale one. With false, a running evaluation
     # always finishes its POST; only the queued run is ever displaced.
     concurrency = _evaluate_job()["concurrency"]
@@ -633,10 +636,10 @@ def test_the_evaluate_job_actually_posts_a_verdict_on_the_head() -> None:
     # and label assertions above imply: a job that removes the label and posts
     # nothing leaves the required context unreported on every new head, so the
     # PR blocks forever on a check that never arrives. REPORT_SHA is what routes
-    # the verdict to the head's check context.
+    # the verdict to the head's status context.
     steps = _evaluate_job()["steps"]
     gate_steps = [s for s in steps if "review-findings-gate.sh" in (s.get("run") or "")]
-    # Two arms, and both must route to the HEAD's check context: the evaluation
+    # Two arms, and both must route to the HEAD's status context: the evaluation
     # itself, and the always() arm that reports red when the evaluation posted
     # nothing. Without the second, a run that dies before its POST strands the
     # required context at "Expected — Waiting for status to be reported", which
@@ -659,7 +662,7 @@ def test_the_evaluate_job_actually_posts_a_verdict_on_the_head() -> None:
     assert "steps.evaluate.outcome" in unreported.get("if", "")
     # The script is read from the DEFAULT branch, never the event's sha: this
     # job runs in the base repo's context under pull_request_target, so a
-    # head-ref checkout would execute PR-authored code with checks:write.
+    # head-ref checkout would execute PR-authored code with statuses:write.
     checkouts = [s for s in steps if "actions/checkout" in (s.get("uses") or "")]
     assert len(checkouts) == 1
     assert (
@@ -700,11 +703,11 @@ def test_every_predicate_changing_job_reposts_the_gate_on_the_head(
     # The re-post must come AFTER the write it reports on, or it reads the
     # pre-write state and posts a stale verdict.
     assert gate_steps[0] is not steps[0]
-    # Posting a check run needs checks:write, or the re-post 403s at runtime.
-    assert jobs[job]["permissions"].get("checks") == "write"
+    # Posting the verdict needs statuses:write, or the re-post 403s at runtime.
+    assert jobs[job]["permissions"].get("statuses") == "write"
 
 
-def test_the_skipped_class_is_cleared_under_the_same_check_name() -> None:
+def test_the_skipped_class_is_cleared_under_the_same_context() -> None:
     # A PR the reviewer deliberately skips gets no review, so the gate's
     # reviewed-at-all leg is red on it and the class would be blocked forever.
     # The auto-approve job clears it by posting the SAME required context — a
@@ -715,13 +718,21 @@ def test_the_skipped_class_is_cleared_under_the_same_check_name() -> None:
         )
     )["jobs"]
     job = jobs["auto-approve-skipped"]
-    clearing = [s for s in job["steps"] if "check-runs" in (s.get("run") or "")]
+    clearing = [s for s in job["steps"] if "/statuses/" in (s.get("run") or "")]
     assert len(clearing) == 1
-    assert f"name={CHECK_NAME}" in clearing[0]["run"]
-    assert "conclusion=success" in clearing[0]["run"]
-    assert job["permissions"].get("checks") == "write"
+    assert f"context={GATE_CONTEXT}" in clearing[0]["run"]
+    assert "state=success" in clearing[0]["run"]
+    assert job["permissions"].get("statuses") == "write"
 
-    # A check run is per-SHA and does not carry over to a new head, while the
+    # GitHub truncates a status description past 140 characters, and this one is
+    # the whole explanation the class gets — the gate script's own descriptions
+    # are truncated deliberately (post_verdict), but this literal has no such
+    # guard, so the cap is asserted where it can actually be exceeded.
+    described = re.search(r'description=(?P<text>.*?)"', clearing[0]["run"], re.S)
+    assert described is not None
+    assert len(described["text"]) <= 140
+
+    # A status is per-SHA and does not carry over to a new head, while the
     # gate posts RED on every head of a skipped PR (nothing reviewed it). So the
     # clearing step must fire on EVERY event the job sees, including
     # `synchronize` — gate it to the first-look events and a skipped PR merges on
@@ -748,16 +759,16 @@ def test_the_skipped_class_is_cleared_under_the_same_check_name() -> None:
     assert "opened" not in (job["if"] or "")
 
 
-def test_drift_guard_the_check_name_is_duplicated_in_the_gate_script() -> None:
+def test_drift_guard_the_gate_context_is_duplicated_in_the_gate_script() -> None:
     """DRIFT GUARD — this asserts two copies of one string agree, which means the
-    check name is duplicated rather than sourced once. Naming it honestly instead
-    of "…agree on the check name", which launders exactly the smell a drift guard
+    context is duplicated rather than sourced once. Naming it honestly instead
+    of "…agree on the context", which launders exactly the smell a drift guard
     should expose.
 
     Why a true SSOT is infeasible here: the required-check context is a GitHub job
     `name:`, and a job name cannot be computed — it must be a static literal in the
     workflow YAML. The gate script needs the same string at runtime to POST its
-    check runs under that context. Nothing can generate both, and having the script
+    statuses under that context. Nothing can generate both, and having the script
     grep the name out of the workflow at runtime trades this guard for hand-rolled
     YAML parsing in bash, which is worse.
 
@@ -765,4 +776,4 @@ def test_drift_guard_the_check_name_is_duplicated_in_the_gate_script() -> None:
     requires, and the required context is never reported at all — so PRs hang at
     "Expected" forever. That is why the duplication is guarded rather than left bare.
     """
-    assert f'CHECK_NAME="{CHECK_NAME}"' in SCRIPT.read_text(encoding="utf-8")
+    assert f'GATE_CONTEXT="{GATE_CONTEXT}"' in SCRIPT.read_text(encoding="utf-8")

@@ -15,10 +15,10 @@ name: Review-findings merge gate
 #
 # This job is also where the required-check CONTEXT NAME lives: sync-required-checks
 # reads the `# required-check: true` marker below and registers this job's `name:`
-# in the ruleset, and review-findings-gate.sh posts its PR-head check runs under
-# that same name. This repository has no merge queue enabled, so the job itself
-# does not fire today and the PR-head post is the only reporting surface; the leg
-# is correct the moment a queue is turned on.
+# in the ruleset, and review-findings-gate.sh posts its PR-head commit statuses
+# under that same context. This repository has no merge queue enabled, so the job
+# itself does not fire today and the PR-head post is the only reporting surface;
+# the leg is correct the moment a queue is turned on.
 
 on:
   merge_group:
@@ -29,7 +29,7 @@ jobs:
   merge_gate:
     name: Review findings resolved # required-check: true
     # The job name is the required-check context sync-required-checks registers,
-    # and review-findings-gate.sh posts its PR-head check runs under the SAME
+    # and review-findings-gate.sh posts its PR-head statuses under the SAME
     # name — one context, two reporting surfaces (queue sha here, PR head sha
     # from review-findings-gate.yaml's evaluate job and the resolver step).
     runs-on: ubuntu-latest
