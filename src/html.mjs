@@ -29,9 +29,23 @@
  * entry `await import()`s this module only when its cheap regex gates match.
  */
 import { createHash } from "node:crypto";
+// Subpath specifiers, never the `css-tree` root: the root builds the default
+// syntax at module scope, that construction reaches the lexer's `lib/data.js`,
+// and `lib/data.js` pulls the whole `mdn-data` CSS table set in through
+// `createRequire`. esbuild cannot tree-shake a side-effectful module-level
+// construction, so the root put ~18k lines of at-rule/property/syntax tables
+// into every shipped bundle for four functions that never consult them. Each
+// subpath's closure stops at `syntax/config/*`, and the functions are the same
+// ones the root re-exports, built by the same factories from the same config.
 // @ts-ignore -- css-tree ships no bundled types and @types/css-tree lags the 3.x
 // API (e.g. `ident.decode`); the value AST is walked with local `any` types.
-import * as csstree from "css-tree";
+import cssParse from "css-tree/parser";
+// @ts-ignore -- see above. Aliased: `walk` is this module's own unist walker.
+import cssWalk from "css-tree/walker";
+// @ts-ignore -- see above.
+import cssGenerate from "css-tree/generator";
+// @ts-ignore -- see above.
+import { ident as cssIdent } from "css-tree/utils";
 import { unified } from "unified";
 import remarkParse from "remark-parse";
 import remarkGfm from "remark-gfm";
@@ -752,7 +766,7 @@ function canonicalizeColor(raw) {
 function paintsImageLayer(node) {
   if (!node) return false;
   let found = false;
-  csstree.walk(node, {
+  cssWalk(node, {
     enter(/** @type {any} */ child) {
       if (child.type === "Url" || child.type === "Raw") found = true;
       // Names are canonicalized at the parse boundary, so a suffix test covers
@@ -1111,7 +1125,7 @@ const CSS_PROPERTY_IDENT_RE = /^-{0,2}[A-Za-z_][A-Za-z0-9_-]*$/;
  * @returns {string}
  */
 function tokenText(token) {
-  return token.type === "Identifier" ? token.name : csstree.generate(token);
+  return token.type === "Identifier" ? token.name : cssGenerate(token);
 }
 
 /**
@@ -1151,14 +1165,14 @@ function declText(valueNode) {
  * @returns {void}
  */
 function canonicalizeValue(valueNode) {
-  csstree.walk(valueNode, {
+  cssWalk(valueNode, {
     enter(/** @type {any} */ node) {
-      // ident.decode is pure string iteration and cannot throw on a token the
+      // cssIdent.decode is pure string iteration and cannot throw on a token the
       // tokenizer already produced.
       if (node.type === "Identifier" || node.type === "Function")
-        node.name = csstree.ident.decode(node.name).toLowerCase();
+        node.name = cssIdent.decode(node.name).toLowerCase();
       else if (node.type === "Dimension")
-        node.unit = csstree.ident.decode(node.unit).toLowerCase();
+        node.unit = cssIdent.decode(node.unit).toLowerCase();
     },
   });
 }
@@ -1182,7 +1196,7 @@ function parseDeclarations(styleStr) {
   const decls = new Map();
   let ast;
   try {
-    ast = csstree.parse(styleStr, {
+    ast = cssParse(styleStr, {
       context: "declarationList",
       parseValue: true,
       parseCustomProperty: false,
@@ -1195,12 +1209,12 @@ function parseDeclarations(styleStr) {
     return decls;
   }
   /* c8 ignore stop */
-  csstree.walk(ast, {
+  cssWalk(ast, {
     visit: "Declaration",
     enter(/** @type {any} */ node) {
-      // ident.decode is pure string iteration and cannot throw on a real ident
+      // cssIdent.decode is pure string iteration and cannot throw on a real ident
       // token; property is escape-decoded then gated to a clean CSS ident.
-      const property = csstree.ident.decode(node.property).trim().toLowerCase();
+      const property = cssIdent.decode(node.property).trim().toLowerCase();
       if (!CSS_PROPERTY_IDENT_RE.test(property)) return;
       canonicalizeValue(node.value);
       decls.set(property, node.value);
