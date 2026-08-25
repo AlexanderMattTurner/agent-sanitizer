@@ -8,6 +8,12 @@ adhere to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+## [2.47.8] - 2026-08-25
+
+### Changed
+
+- Documentation improvements: clarified which channels the lead strips and which it reports, and reordered README content to describe the library's functionality before comparing it to classifiers.
+
 ## [2.47.7] - 2026-08-24
 
 ### Changed
