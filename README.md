@@ -1,8 +1,8 @@
 # `agent-sanitizer`
 
-**Strips hidden instructions out of untrusted text before your agent reads it.** An attacker hides a payload where a person cannot see it but the model still reads it: invisible Unicode, ANSI escapes, human-hidden HTML, confusable glyphs and look-alike hosts, and exfil-shaped URLs.
+**Cleans untrusted text before your agent reads it.** An attacker hides a payload where a person cannot see it but the model still reads it: invisible Unicode, ANSI escapes, human-hidden HTML, confusable glyphs, look-alike hosts, and exfil-shaped URLs.
 
-This library closes those channels one at a time. Every layer is a deterministic transform, so you can unit-test it with equality assertions. There is no classifier and no model call, so nothing depends on whether a prediction generalized.
+This library handles each channel on its own terms. It strips invisible characters and ANSI escapes by default, splices out hidden HTML when you opt in, and _reports_ exfil-shaped URLs and look-alike hosts rather than rewriting them — mangling a legitimate link is the worse failure. Every layer is a deterministic transform, so you can unit-test it with equality assertions. There is no classifier and no model call, so nothing rests on whether a prediction generalized.
 
 **As a library:**
 
