@@ -40,7 +40,7 @@ FAULT_BODIES = {
 def test_issue_url_matches_this_repo() -> None:
     """Positive marker: the URL the prompts point at is this repo's tracker —
     a fork that repoints package.json must repoint the prompts too."""
-    package = json.loads((REPO_ROOT / "package.json").read_text())
+    package = json.loads((REPO_ROOT / "package.json").read_text(encoding="utf-8"))
     repo_url = package["repository"]["url"]
     assert (
         ISSUE_URL.removesuffix("/issues/new").split("github.com/")[1].lower()
@@ -89,7 +89,7 @@ def test_bootstrap_degradation_prompts_issue_filing(
         sandbox = make_sandbox(tmp_path / "corrupt")
         write_bootstrap_target(sandbox, cmd)
         wrapper = sandbox / ".claude" / "hooks" / "safe-launch.sh"
-        wrapper.write_text("#!/bin/bash\n<<<<<<< HEAD\n")
+        wrapper.write_text("#!/bin/bash\n<<<<<<< HEAD\n", encoding="utf-8")
         result = run_bootstrap(cmd, sandbox, extra_env=posture_env(fail_open))
         assert result.returncode == 0, result.stderr
         assert ISSUE_URL in degraded_reason(result.stdout, fail_open)

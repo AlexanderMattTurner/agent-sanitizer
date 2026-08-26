@@ -67,7 +67,7 @@ def test_grep_failure_widens_to_every_changed_file(tmp_path: Path, fn: str) -> N
     stub = stub_dir / "grep"
     # Drains stdin before exiting: the caller feeds the changed list in, and a
     # stub that exits without reading leaves the writer with EPIPE.
-    stub.write_text("#!/bin/bash\ncat >/dev/null 2>&1\nexit 2\n")
+    stub.write_text("#!/bin/bash\ncat >/dev/null 2>&1\nexit 2\n", encoding="utf-8")
     stub.chmod(0o755)
 
     result = run_helper(fn, HELPERS[fn], path=f"{stub_dir}:/usr/bin:/bin")

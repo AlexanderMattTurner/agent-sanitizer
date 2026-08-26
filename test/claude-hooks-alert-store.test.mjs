@@ -275,8 +275,8 @@ describe("concurrent findings cannot lose each other", () => {
   });
 
   it("reports the loss on stderr when a finding cannot be recorded", () => {
-    // Fail loudly: the write returning false used to be discarded by both
-    // callers, so a finding that never landed left no trace anywhere.
+    // Fail loudly: a caller that discards the write's false return leaves a
+    // finding that never landed with no trace anywhere.
     const written = [];
     const realWrite = process.stderr.write;
     // @ts-expect-error -- test double for the stderr channel

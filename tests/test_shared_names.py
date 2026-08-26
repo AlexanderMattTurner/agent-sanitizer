@@ -12,7 +12,9 @@ import json
 from tests._helpers import REPO_ROOT
 
 SHARED_NAMES = json.loads(
-    (REPO_ROOT / ".github" / "scripts" / "lib" / "shared-names.json").read_text()
+    (REPO_ROOT / ".github" / "scripts" / "lib" / "shared-names.json").read_text(
+        encoding="utf-8"
+    )
 )
 MERGE_CONFLICT = SHARED_NAMES["pr_labels"]["merge_conflict"]
 
@@ -20,7 +22,7 @@ MERGE_CONFLICT = SHARED_NAMES["pr_labels"]["merge_conflict"]
 def test_auto_resolve_labeled_gate_literal_matches_json() -> None:
     text = (
         REPO_ROOT / ".github" / "workflows" / "auto-resolve-conflicts.yaml"
-    ).read_text()
+    ).read_text(encoding="utf-8")
     # Positive marker first: the labeled-event gate must still exist at all —
     # without it the equality assertion below would pass vacuously.
     assert "github.event.label.name ==" in text, (
@@ -31,7 +33,9 @@ def test_auto_resolve_labeled_gate_literal_matches_json() -> None:
 
 
 def test_template_sync_labels_literal_matches_json() -> None:
-    text = (REPO_ROOT / ".github" / "workflows" / "template-sync.yaml").read_text()
+    text = (REPO_ROOT / ".github" / "workflows" / "template-sync.yaml").read_text(
+        encoding="utf-8"
+    )
     assert "'template-sync," in text, (
         "the conditional labels expression is gone from template-sync.yaml; "
         "update this contract test alongside it"

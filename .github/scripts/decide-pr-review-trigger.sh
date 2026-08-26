@@ -76,7 +76,10 @@ esac
 # would silently fail. Capture into a variable (never `gh … | grep`, whose
 # early-exit SIGPIPEs the still-writing gh under pipefail), then match the
 # subject line.
-message="$(gh api "repos/$REPO/commits/$HEAD_SHA" --jq '.commit.message' 2>/dev/null || true)"
+if ! message="$(gh api "repos/$REPO/commits/$HEAD_SHA" --jq '.commit.message' 2>&1)"; then
+  echo "decide-pr-review-trigger: could not fetch head commit $HEAD_SHA ($message) — treating this push as carrying no $KEYWORD opt-in" >&2
+  message=""
+fi
 subject="${message%%$'\n'*}"
 if grep -qiF "$KEYWORD" <<<"$subject"; then
   emit true "$KEYWORD in head commit title"

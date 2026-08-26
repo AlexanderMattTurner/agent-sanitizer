@@ -9,8 +9,8 @@
  * what went stale (a hand-pinned count is what caught the last red main).
  *
  * A pair is a GUARD, not an SSOT: it says "run this check when that file
- * changes". It derives no content, so calling it otherwise would launder the
- * very smell a drift guard exists to expose.
+ * changes". It derives no content, so calling it an SSOT would launder the
+ * very smell this naming exists to expose.
  *
  * Three mechanisms find a test's inputs, and every one of them is the real
  * parser rather than a regex over source text (CLAUDE.md, Code Style):

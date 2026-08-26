@@ -543,9 +543,9 @@ adhere to [Semantic Versioning](https://semver.org/).
 ## [2.34.1] - 2026-08-10
 
 ### Fixed
-- `enable-auto-update`: gracefully handle refused temporary file cleanup instead of crashing
+- `enable-auto-update`: gracefully handle refused temporary file cleanup instead of crashing <!-- allow-graceful: logs a warning and continues instead of crashing -->
 - `enable-auto-update`: provide a pasteable command when registry write is refused
-- `enable-auto-update`: gracefully handle refused registry write instead of crashing
+- `enable-auto-update`: gracefully handle refused registry write instead of crashing <!-- allow-graceful: logs a warning and continues instead of crashing -->
 
 ## [2.34.0] - 2026-08-10
 
@@ -1567,7 +1567,7 @@ adhere to [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 - Instructions: exclusive temp write without symlink following, and reporting of mixed-encoding runs.
-- Rehydrate: fail gracefully on empty old_string instead of throwing RangeError.
+- Rehydrate: fail gracefully on empty old_string instead of throwing RangeError. <!-- allow-graceful: returns an empty result instead of raising RangeError -->
 - Invisible: capped and flagged carve-out-preserved joiners to close zero-width covert channel.
 - Dependabot configuration with cooldown settings across all ecosystems.
 - Python-client CI matrix pinned to Node 22 for pnpm compatibility.

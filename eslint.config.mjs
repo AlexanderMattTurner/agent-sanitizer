@@ -33,10 +33,10 @@ export default tseslint.config(
   },
   js.configs.recommended,
   {
-    // The automation layer used to be ignored wholesale ("carries its own
-    // conventions"), which meant `pnpm lint` linted 0 of the ~48 JS files under
-    // .github/, .hooks/ and .claude/hooks/ — including four hook modules that
-    // run inside a Claude session and three CommonJS scripts that run in CI
+    // Ignoring the automation layer wholesale ("carries its own conventions")
+    // would leave `pnpm lint` linting 0 of the ~48 JS files under .github/,
+    // .hooks/ and .claude/hooks/ — including four hook modules that run
+    // inside a Claude session and three CommonJS scripts that run in CI
     // with a token. Same rules as the library: an unused binding or a
     // typo'd global is not more acceptable in a workflow script.
     files: [

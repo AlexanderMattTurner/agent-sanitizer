@@ -44,6 +44,10 @@ source "$(dirname "${BASH_SOURCE[0]}")/lib-ci-retry.sh"
 MAX_DIFF_LINES="${MAX_DIFF_LINES:-20000}"
 
 mkdir -p "$PR_INPUT_DIR"
+[[ -d "$PR_INPUT_DIR" ]] || {
+  echo "prepare-pr-review-input: cannot create $PR_INPUT_DIR" >&2
+  exit 1
+}
 
 emit_output() {
   if [[ -n "${GITHUB_OUTPUT:-}" ]]; then
@@ -103,6 +107,9 @@ sanitize <"$review_diff" >"${PR_INPUT_DIR}/diff.txt" 2>"${PR_INPUT_DIR}/diff.rep
 # the sanitizer — retrying gh directly inside the `| sanitize` pipe is unsafe (a
 # failing attempt would stream partial JSON into the sanitizer, and a SIGPIPE if
 # it exited early would trip pipefail).
+# files is display-only metadata for the model's context — the actual
+# reviewed content is diff.txt above, built from the full `git diff`.
+# truncating-pr-json-ok: a PR past 100 files losing entries from this list changes nothing the review judges.
 meta_json="$(retry_stdout gh pr view "$PR" --json title,body,author,files)"
 printf '%s' "$meta_json" |
   sanitize >"${PR_INPUT_DIR}/meta.txt" 2>"${PR_INPUT_DIR}/meta.report.txt"

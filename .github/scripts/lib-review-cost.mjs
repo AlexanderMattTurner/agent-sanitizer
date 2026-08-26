@@ -2,7 +2,7 @@
 // footnote built from it — used by the reviewer (post-pr-review.mjs, which posts
 // the cost line). One source for parsing the log, reading a run's cost and its
 // error flag, formatting dollars, and rendering the "how many PRs fit in a Max
-// 20x weekly allowance" line, so the consumers can never drift.
+// 20x weekly allowance" line, shared by every consumer.
 import { readFileSync } from "node:fs";
 
 // The Claude action's execution log as a flat event list — an array of streamed

@@ -42,7 +42,8 @@ from agent_sanitizer import (  # noqa: E402
 ESC = "\x1b"
 
 pytestmark = pytest.mark.skipif(
-    shutil.which("node") is None, reason="Node.js required for the CLI bridge"
+    shutil.which("node") is None and not os.environ.get("CI"),
+    reason="Node.js required for the CLI bridge",
 )
 
 ZERO_WIDTH_SPACE = "​"

@@ -25,7 +25,7 @@ from agent_sanitizer.secrets import (  # noqa: E402
 )
 
 SAMPLES_FILE = Path(__file__).resolve().parent / "secret-format-samples.json"
-SAMPLES = json.loads(SAMPLES_FILE.read_text())["samples"]
+SAMPLES = json.loads(SAMPLES_FILE.read_text(encoding="utf-8"))["samples"]
 
 
 def cfg(**kwargs) -> RedactorConfig:

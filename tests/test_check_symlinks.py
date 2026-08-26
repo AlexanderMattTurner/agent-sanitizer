@@ -31,9 +31,9 @@ def test_check_symlinks(
     expected_violation: str | None,
 ) -> None:
     if setup == "no_symlinks":
-        (empty_git_repo / "regular.txt").write_text("hi")
+        (empty_git_repo / "regular.txt").write_text("hi", encoding="utf-8")
     elif setup == "relative_symlink":
-        (empty_git_repo / "target.txt").write_text("hi")
+        (empty_git_repo / "target.txt").write_text("hi", encoding="utf-8")
         (empty_git_repo / "link").symlink_to("target.txt")
     elif setup == "absolute_symlink":
         (empty_git_repo / "link").symlink_to("/etc/passwd")

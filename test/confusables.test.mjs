@@ -153,7 +153,7 @@ describe("foldConfusables", () => {
 
   it("throws on a negative index instead of silently corrupting the text", () => {
     // startsWith(char, -1) clamps to 0 and returns true when `char` is a prefix,
-    // so without the explicit range check this used to splice to "abxabc".
+    // so without the explicit range check this would splice to "abxabc".
     assert.throws(
       () =>
         foldConfusables("abc", [
@@ -732,9 +732,9 @@ describe("the scanner defaults to namespace-guard when none is injected", () => 
 // ─── Declared tool scope ─────────────────────────────────────────────────────
 // The fold's TOOL SCOPE is a declared partition, not a silent fallthrough.
 // Returning null is the right BEHAVIOUR for a tool with no path or command
-// field, but "no field to fold" and "nobody has looked at this tool" used to be
-// the same line of code, so an unlisted tool left no record that a decision had
-// been made. Mirrors test/claude-hooks-authored-scope.test.mjs, over the same
+// field, but conflating that with "nobody has looked at this tool" in one line
+// of code would leave an unlisted tool with no record that a decision had been
+// made. Mirrors test/claude-hooks-authored-scope.test.mjs, over the same
 // live tool surface.
 
 describe("the fold's tool scope is a declared partition", () => {

@@ -36,6 +36,7 @@ while IFS= read -r file; do
   src/* | python/* | package.json | pnpm-lock.yaml | claude-hooks/* | plugin/scripts/* | plugin/requirements.in | plugin/requirements.txt)
     input_changed=true
     ;;
+  *) ;;
   esac
 done <<<"$changed"
 

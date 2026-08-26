@@ -9,10 +9,12 @@ echo "Setting up Claude automation template..."
 git config core.hooksPath .hooks
 
 if [ -f package.json ]; then
-  # Install pnpm if not available
+  # Install pnpm if not available, pinned to package.json's own packageManager
+  # field so this installs the exact version pnpm-lock.yaml was generated with.
   if ! command -v pnpm &>/dev/null; then
-    echo "Installing pnpm..."
-    npm install -g pnpm
+    pnpm_version="$(node -p "require('./package.json').packageManager.split('@')[1]")"
+    echo "Installing pnpm@${pnpm_version}..."
+    npm install -g "pnpm@${pnpm_version}"
   fi
 
   # Install dependencies (postinstall also sets core.hooksPath, redundantly)

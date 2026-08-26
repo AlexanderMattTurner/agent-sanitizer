@@ -39,9 +39,10 @@ import { CONTROL_INTRODUCER_SOURCE } from "./ansi.mjs";
 // legitimate prompt (the SGR color carve-out is applied separately, after SGR
 // removal), so the whole block is gated, not a hand-picked subset that lets
 // DCS/SOS/PM/APC through. Built from the SHARED charset source instead of a
-// third hand-written copy: keeping the copies in step used to be a prose
-// obligation recorded in this very comment, and two of the three spelled ESC
-// differently, so even a grep-based drift check would have missed a divergence.
+// third hand-written copy: a hand-written third copy has no drift check
+// beyond a prose reminder in a comment, and a spelling difference between two
+// hand-written copies (e.g. how each spells ESC) is exactly what a grep-based
+// drift check would miss.
 const ANSI_INTRODUCER = new RegExp(CONTROL_INTRODUCER_SOURCE);
 
 /**

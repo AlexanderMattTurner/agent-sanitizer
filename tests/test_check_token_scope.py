@@ -20,7 +20,9 @@ def run_scope_check(
     """Run check-token-scope.sh with a fake curl that emits the given headers."""
     echo_lines = "\n".join(f"echo {h!r}" for h in headers)
     fake_curl = tmp_path / "curl"
-    fake_curl.write_text(f"#!/usr/bin/env bash\n{echo_lines}\nexit {curl_exit}\n")
+    fake_curl.write_text(
+        f"#!/usr/bin/env bash\n{echo_lines}\nexit {curl_exit}\n", encoding="utf-8"
+    )
     fake_curl.chmod(0o755)
     env = {
         **os.environ,

@@ -97,7 +97,9 @@ PLUGINS = [{"name": name} for name in _BUNDLED_PLUGINS]
 # missing from detectors.py fails loud when detect-secrets loads the plugin by
 # name.
 _PLUGIN_FILE = Path(detectors.__file__).resolve().as_uri()
-_DETECTOR_ROWS = json.loads(detectors.DETECTORS_FILE.read_text())["detectors"]
+_DETECTOR_ROWS = json.loads(detectors.DETECTORS_FILE.read_text(encoding="utf-8"))[
+    "detectors"
+]
 _KEYWORD_PLUGIN_NAME = "BoundedKeywordDetector"
 
 # The detectors.py classes that carry their regex INLINE rather than as a JSON
@@ -215,14 +217,23 @@ def _mark(
     return f"{_MARK_OPEN}{len(entries) - 1} {_MARK_CLOSE}"
 
 
+class SpliceSpan(NamedTuple):
+    """A span ready for :func:`_splice`: replace ``text[start:end]`` with a mark
+    for ``placeholder_text``."""
+
+    start: int
+    end: int
+    placeholder_text: str
+
+
 def _splice(
     text: str,
-    spans: list[tuple[int, int, str]],
+    spans: list[SpliceSpan],
     entries: list[tuple[str, str]] | None,
 ) -> str:
-    """``text`` with every ``(start, end, placeholder_text)`` span replaced by its
-    mark, in ONE pass: rebuilding the whole string per span instead costs
-    O(spans x len(text)), which one long line of attacker-shaped output reaches.
+    """``text`` with every span replaced by its mark, in ONE pass: rebuilding the
+    whole string per span instead costs O(spans x len(text)), which one long
+    line of attacker-shaped output reaches.
 
     ``spans`` must be ascending and disjoint — the precondition that makes one
     pass serve all of them. The assertion below is what keeps a violation loud:
@@ -1341,15 +1352,32 @@ if _FIELD_NAMES != _FIELD_NAMES.lower():
 _FIELD_NAME_ANCHOR = re.compile(_FIELD_NAMES)
 
 
+class _Sweep(NamedTuple):
+    """One pattern's search window: run ``pattern`` over ``text[start:end]``."""
+
+    pattern: re.Pattern[str]
+    start: int
+    end: int
+
+
+class CrossLineSpan(NamedTuple):
+    """A candidate structural or env-bound secret span, offsets into a
+    newline-collapsed view of the text."""
+
+    start: int
+    end: int
+    placeholder_text: str
+    found_type: str
+
+
 def _cross_line_candidate_spans(
     collapsed: str,
     config: RedactorConfig,
     deadline: _Deadline = _NO_DEADLINE,
     newline_seams: Sequence[int] = (),
-) -> list[tuple[int, int, str, str]]:
-    """``(start, end, placeholder, found_type)`` — offsets into ``collapsed`` — for
-    every structural or env-bound secret found in the newline-free view
-    ``collapsed``.
+) -> list[CrossLineSpan]:
+    """A :class:`CrossLineSpan` — offsets into ``collapsed`` — for every
+    structural or env-bound secret found in the newline-free view ``collapsed``.
 
     Only detector types in :func:`_cross_line_eligible_types` (long, structurally
     rigid) are eligible; the exact env-var values are always eligible.
@@ -1382,7 +1410,7 @@ def _cross_line_candidate_spans(
     actually was, and silently refuses a real token that starts right after it.
     """
     charset = config.resolved_charset()
-    spans: list[tuple[int, int, str, str]] = []
+    spans: list[CrossLineSpan] = []
     stripped, offsets = strip_invisible_with_map(collapsed, charset)
     seen: set[tuple[str, str]] = set()
     # The eligible union's sweep over the whole collapse is the engine's single
@@ -1393,16 +1421,16 @@ def _cross_line_candidate_spans(
     # extent) still sweeps the whole text, individually; without that a match of
     # one landing outside every window would be a missed secret.
     plan = _eligible_probe().plan(stripped, deadline.check)
-    sweeps: list[tuple[re.Pattern[str], int, int]]
+    sweeps: list[_Sweep]
     if plan.windows is None:
-        sweeps = [(p, 0, len(stripped)) for p in _eligible_prefilter()]
+        sweeps = [_Sweep(p, 0, len(stripped)) for p in _eligible_prefilter()]
     else:
         sweeps = [
-            (p, start, end)
+            _Sweep(p, start, end)
             for p in _eligible_prefilter()
             for start, end in plan.windows
         ]
-        sweeps += [(p, 0, len(stripped)) for p in plan.full_scans]
+        sweeps += [_Sweep(p, 0, len(stripped)) for p in plan.full_scans]
     for hit in (
         hit for p, start, end in sweeps for hit in p.finditer(stripped, start, end)
     ):
@@ -1440,14 +1468,16 @@ def _cross_line_candidate_spans(
             while start != -1:
                 end = start + len(value)
                 cs, ce = offsets[start], offsets[end - 1] + 1
-                spans.append((cs, ce, placeholder(secret.type), secret.type))
+                spans.append(
+                    CrossLineSpan(cs, ce, placeholder(secret.type), secret.type)
+                )
                 start = stripped.find(value, end)
     for name, value in config.env_secrets.items():
         deadline.check("cross-line env-value scan")
         if not value or len(value) < config.min_secret_len:
             continue
         for m in _env_value_re(value, charset).finditer(collapsed):
-            spans.append((m.start(), m.end(), placeholder(name), name))
+            spans.append(CrossLineSpan(m.start(), m.end(), placeholder(name), name))
     return spans
 
 
@@ -1471,7 +1501,7 @@ def _redact_cross_line(
     offsets = newline_offsets(text)
     collapsed = text.replace("\n", "")
 
-    accepted: list[tuple[int, int, str, str]] = []
+    accepted: list[CrossLineSpan] = []
     prev_end = -1
     for cs, ce, placeholder_text, found_type in sorted(
         _cross_line_candidate_spans(collapsed, config, deadline, offsets.seams),
@@ -1480,13 +1510,19 @@ def _redact_cross_line(
         orig_start, orig_end = offsets[cs], offsets[ce - 1] + 1
         if "\n" not in text[orig_start:orig_end] or orig_start < prev_end:
             continue
-        accepted.append((orig_start, orig_end, placeholder_text, found_type))
+        accepted.append(
+            CrossLineSpan(orig_start, orig_end, placeholder_text, found_type)
+        )
         prev_end = orig_end
     if not accepted:
         return text
 
-    out = _splice(text, [span[:3] for span in accepted], entries)
-    found.extend(found_type for *_, found_type in accepted)
+    out = _splice(
+        text,
+        [SpliceSpan(span.start, span.end, span.placeholder_text) for span in accepted],
+        entries,
+    )
+    found.extend(span.found_type for span in accepted)
     return out
 
 
@@ -1581,6 +1617,15 @@ class _Group(NamedTuple):
     secret_type: str
 
 
+class AcceptedSpan(NamedTuple):
+    """One arbitration winner on a line: the span to redact, with its raw
+    detector type (not yet resolved to a placeholder)."""
+
+    start: int
+    end: int
+    secret_type: str
+
+
 def _redact_line(
     line: str,
     web_ingress: bool,
@@ -1641,7 +1686,7 @@ def _redact_line(
         if invisible_free
         else strip_invisible_with_map(line, charset)
     )
-    accepted: list[tuple[int, int, str]] = []
+    accepted: list[AcceptedSpan] = []
     # Accepted spans, disjoint by construction (an overlapping candidate is
     # skipped below) and held sorted by start so the test below is a binary
     # search. Scanning them linearly is quadratic in the secrets on ONE line,
@@ -1698,7 +1743,7 @@ def _redact_line(
             orig_start, orig_end = offsets[start], offsets[end - 1] + 1
             if _overlaps(orig_start, orig_end):
                 continue
-            accepted.append((orig_start, orig_end, group.secret_type))
+            accepted.append(AcceptedSpan(orig_start, orig_end, group.secret_type))
             at = bisect.bisect_left(span_starts, orig_start)
             span_starts.insert(at, orig_start)
             span_ends.insert(at, orig_end)
@@ -1713,7 +1758,8 @@ def _redact_line(
     if not accepted:
         return line
     spans = sorted(
-        (start, end, placeholder(secret_type)) for start, end, secret_type in accepted
+        SpliceSpan(start, end, placeholder(secret_type))
+        for start, end, secret_type in accepted
     )
     return _splice(line, spans, entries)
 

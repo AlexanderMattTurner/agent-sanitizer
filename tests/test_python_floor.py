@@ -32,7 +32,12 @@ import pytest
 
 from tests._helpers import REPO_ROOT
 
-pytestmark = pytest.mark.drift_guard
+pytestmark = pytest.mark.drift_guard(
+    "the Python floor is restated in pyproject.toml x2, ruff's target-version, "
+    "the CI job pin and an operator-facing script message — none can read the "
+    "others across their tool/ecosystem boundary, so each copy is checked "
+    "against the wheel's own requires-python instead"
+)
 
 # A prose version claim, with an optional trailing `+`. The literal prefix is
 # required so bare version-ish numbers (hashes, ratios, dependency pins) are not

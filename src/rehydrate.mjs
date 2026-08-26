@@ -367,8 +367,8 @@ async function rehydrateEdit(
  * The shared anchor-ambiguity refusal: a stripped run abuts kept text it
  * resembles, so greedy deletion alignment cannot prove which bytes the region
  * owns. Edit's searched spans and Write's position-anchored regions hit the
- * same soundness gate and must speak the same language — one builder so the
- * two deny sentences cannot drift apart.
+ * same soundness gate and must speak the same language — one builder for
+ * both deny sentences.
  * @param {string} lead what could not be anchored ("the matched region", …)
  * @param {string} filePath
  * @param {string} guidance the caller-specific way out, without trailing punctuation

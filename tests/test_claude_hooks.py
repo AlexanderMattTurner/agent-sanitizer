@@ -59,7 +59,7 @@ def _write_installer_stubs(stub_dir: Path) -> Path:
     stub_dir.mkdir(parents=True, exist_ok=True)
     for name in _INERT_COMMANDS:
         stub = stub_dir / name
-        stub.write_text("#!/usr/bin/env bash\nexit 0\n")
+        stub.write_text("#!/usr/bin/env bash\nexit 0\n", encoding="utf-8")
         stub.chmod(0o755)
     return stub_dir
 
@@ -133,7 +133,7 @@ def test_gh_repo_extraction(
     )
     exports = [
         line
-        for line in env_file.read_text().splitlines()
+        for line in env_file.read_text(encoding="utf-8").splitlines()
         if line.startswith("export GH_REPO=")
     ]
     if expected is None:
@@ -153,7 +153,7 @@ def test_preserves_pre_set_gh_repo(sandbox: Path) -> None:
     assert result.returncode == 0, result.stderr
     exports = [
         line
-        for line in env_file.read_text().splitlines()
+        for line in env_file.read_text(encoding="utf-8").splitlines()
         if line.startswith("export GH_REPO=")
     ]
     assert exports == []

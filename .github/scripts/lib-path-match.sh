@@ -15,14 +15,6 @@
 # decide job computes many verdicts, and a hard exit there blocks every gate it
 # feeds instead of just over-running one.
 
-# path_gate_matches REGEX TEXT — 0 when a line of TEXT matches REGEX, and 0 when
-# grep itself failed. 1 only on a clean no-match.
-path_gate_matches() {
-  local rc=0
-  grep -qE "$1" <<<"$2" || rc=$?
-  [[ "$rc" != 1 ]]
-}
-
 # path_gate_matching_lines REGEX TEXT — the matching lines of TEXT on stdout, or
 # ALL of TEXT when grep failed, so a caller that narrows the match further (a
 # comment-only diff test) sees the widest set rather than none. A clean no-match

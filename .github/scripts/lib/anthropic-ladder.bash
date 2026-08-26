@@ -91,6 +91,9 @@ anthropic_auth_headers() {
 _anthropic_report_failure() {
   local code="$1" msg
   echo "Claude API call failed (HTTP $code) using auth mode: $AUTH_MODE" >&2
+  # allow-exit-suppress: best-effort diagnostic extra on an already-failed call
+  # — an unparseable response leaves msg empty, and the caller below already
+  # skips printing it when empty; there is no success path this could hide.
   msg=$(jq -r '.error.message // empty' "$_ANTHROPIC_RESPONSE_FILE" 2>/dev/null || true)
   if [[ -n "$msg" ]]; then
     echo "API error: $msg" >&2
@@ -112,7 +115,7 @@ _anthropic_post() {
   # this guard is how a rejection leaves it early.
   [[ "$_ANTHROPIC_CRED_REJECTED" == "true" ]] && return 1
   local code
-  # pin-exempt: Anthropic API JSON response, parsed by jq — never executed/extracted; echo-fallback-ok: "000" is the case analysis's own transport-failure code — the `*)` arm below retries it on this rung, exactly as a 5xx
+  # pin-exempt: Anthropic API JSON response, parsed by jq — never executed/extracted; echo-fallback-ok: "000" is the case analysis's own transport-failure code — the `*)` arm below retries it on this rung, exactly as a 5xx; curl-retry-ok: the whole function is invoked through `retry _anthropic_post` at its call site, which already re-runs this curl end to end on any failure — a `--retry` here would retry the transport twice over
   code=$(curl -s -o "$_ANTHROPIC_RESPONSE_FILE" -w "%{http_code}" \
     --max-time 30 https://api.anthropic.com/v1/messages \
     -H "Content-Type: application/json" \

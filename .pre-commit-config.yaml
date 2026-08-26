@@ -50,22 +50,32 @@ repos:
 
   # ci-truth-serum: catch CI "lies" — pipelines that report success while the
   # real work failed, required checks that silently never report, and artifacts
-  # pinned to mutable names. No published tag yet, so rev is the main HEAD SHA
+  # pinned to mutable names. No published tag yet, so rev is a commit SHA
   # (pinned per the "SHA-pin third-party sources" rule). ALL hooks enabled:
   # Tier 1 (honesty + identity), Tier 2 (opinionated — this repo follows the
   # decide/reporter + cancel-in-progress conventions they assume; its
   # check-required-reporter forces the `# required-check: true|false` markers
-  # sync-required-checks.yaml applies to the branch ruleset), and Extras.
-  # Tier aggregates over per-check ids so a check added upstream to a tier
-  # applies here with no config change; check-symlinks is the one hook outside
-  # any tier, so it stays listed.
-  - repo: https://github.com/alexander-turner/ci-truth-serum
-    rev: 1314a61e16854aa43da3612989c86533a5667b30 # main
+  # sync-required-checks.yaml applies to the branch ruleset), and Extras. Tier
+  # aggregates over per-check ids so a check added upstream to a tier applies
+  # here with no config change. `check-symlinks` no longer names a hook in this
+  # repo — pre-commit/pre-commit-hooks' own `check-symlinks` above already
+  # covers the rule, and ci-truth-serum's `check-absolute-symlinks` (in the
+  # Extras tier) covers a different one.
+  - repo: https://github.com/AlexanderMattTurner/ci-truth-serum
+    rev: 01aa20655323f8ce5a5b8554556dd9dbeeedc232 # ci-truth-serum main, past #169
     hooks:
+      # plugin/dist/ is the committed, generated esbuild bundle (~29k lines,
+      # inlining third-party npm deps) — see the reproducibility note atop
+      # tests/test_repo_slug.py's own GENERATED_PREFIXES. Content lints have
+      # nothing to fix there: a hand-edit is overwritten on the next build,
+      # and a finding inside a bundled dependency belongs to that dependency,
+      # not this repo.
       - id: check-tier1
+        exclude: ^plugin/dist/
       - id: check-tier2
+        exclude: ^plugin/dist/
       - id: check-extras
-      - id: check-symlinks
+        exclude: ^plugin/dist/
 
   - repo: local
     hooks:

@@ -2443,9 +2443,10 @@ test("_AGENT_SANITIZER_REDACTOR_WAIT_MS bounds the wait for a daemon that never 
   });
   const elapsed = Date.now() - started;
 
-  // The variable is what turns an 8s default into a sub-second give-up. Assert
-  // against the DEFAULT, not a tight bound: a loaded CI runner may take a while
-  // to spawn bash+node, but it cannot make the 8s default fit in 4s.
+  // allow-wall-clock: the variable is what turns an 8s default into a
+  // sub-second give-up. Assert against the DEFAULT, not a tight bound: a
+  // loaded CI runner may take a while to spawn bash+node, but it cannot make
+  // the 8s default fit in 4s.
   assert.ok(
     elapsed < 4000,
     `expected the 250ms wait budget to be honoured, took ${elapsed}ms`,
@@ -2538,6 +2539,8 @@ test("_AGENT_SANITIZER_SANITIZE_BUDGET_MS bounds the SUM of the daemon calls", a
   );
   const elapsed = Date.now() - started;
 
+  // allow-wall-clock: a 20x margin over the 1500ms budget — a loaded CI
+  // runner can slow the pass down, but not by 20x.
   assert.ok(
     elapsed < 30000,
     `expected the 1500ms budget to bound the pass, took ${elapsed}ms`,

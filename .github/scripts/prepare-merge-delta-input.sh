@@ -28,6 +28,10 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 : "${GH_TOKEN:?GH_TOKEN required}"
 
 mkdir -p "$PR_INPUT_DIR"
+[[ -d "$PR_INPUT_DIR" ]] || {
+  echo "prepare-merge-delta-input: cannot create $PR_INPUT_DIR" >&2
+  exit 1
+}
 
 emit_output() {
   if [[ -n "${GITHUB_OUTPUT:-}" ]]; then
@@ -46,7 +50,7 @@ trap 'rm -f "$raw" "$err"' EXIT
 # refs/pull/N/head, so a failure here is a real problem, not "no merges").
 auth="" # assigned by name below; shellcheck cannot follow printf -v
 git_auth_header_value auth "$GH_TOKEN"
-if ! git -c "$GIT_AUTH_HEADER_KEY=$auth" \
+if ! timeout --kill-after=10 60 git -c "$GIT_AUTH_HEADER_KEY=$auth" \
   fetch --no-tags --quiet origin "+refs/pull/${PR}/head:refs/remotes/pr/head"; then
   echo "::error::could not fetch refs/pull/${PR}/head as data — cannot review this PR's merge deltas" >&2
   exit 1

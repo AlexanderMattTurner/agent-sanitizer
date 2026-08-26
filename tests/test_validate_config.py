@@ -13,13 +13,15 @@ from tests.test_safe_launch import bootstrap_target, pretooluse_commands
 
 def write_settings(sandbox: Path, settings: dict) -> None:
     (sandbox / ".claude").mkdir(exist_ok=True)
-    (sandbox / ".claude" / "settings.json").write_text(json.dumps(settings))
+    (sandbox / ".claude" / "settings.json").write_text(
+        json.dumps(settings), encoding="utf-8"
+    )
 
 
 def make_hook(sandbox: Path, rel_path: str, executable: bool = True) -> Path:
     path = sandbox / rel_path
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text("#!/usr/bin/env bash\n")
+    path.write_text("#!/usr/bin/env bash\n", encoding="utf-8")
     path.chmod(0o755 if executable else 0o644)
     return path
 
@@ -107,7 +109,9 @@ def test_fails_when_settings_json_is_malformed(tmp_path: Path, copy_script) -> N
     hook-path scan, the safe-launch check, and the matcher-content check), so a
     malformed file surfaces the error three times."""
     (tmp_path / ".claude").mkdir(exist_ok=True)
-    (tmp_path / ".claude" / "settings.json").write_text("{not valid json}")
+    (tmp_path / ".claude" / "settings.json").write_text(
+        "{not valid json}", encoding="utf-8"
+    )
     make_hook(tmp_path, ".hooks/pre-commit", executable=True)
     result = run_validator(tmp_path, copy_script)
     assert result.returncode == 1
@@ -119,7 +123,9 @@ def test_rejects_hook_with_syntax_error(tmp_path: Path, copy_script) -> None:
     write_settings(tmp_path, {"hooks": {}})
     path = tmp_path / ".hooks" / "bad.sh"
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text("#!/usr/bin/env bash\nif [[\n")  # unclosed [[ is a syntax error
+    path.write_text(
+        "#!/usr/bin/env bash\nif [[\n", encoding="utf-8"
+    )  # unclosed [[ is a syntax error
     path.chmod(0o755)
     result = run_validator(tmp_path, copy_script)
     assert result.returncode == 1
@@ -150,7 +156,7 @@ def test_rejects_non_bash_hook_files_with_errors(
     write_settings(tmp_path, {"hooks": {}})
     path = tmp_path / rel_path
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(content)
+    path.write_text(content, encoding="utf-8")
     result = run_validator(tmp_path, copy_script)
     assert result.returncode == 1, result.stdout + result.stderr
     assert expected_substring in result.stdout + result.stderr
@@ -162,8 +168,10 @@ def test_accepts_valid_mjs_and_json_hook_files(tmp_path: Path, copy_script) -> N
     write_settings(tmp_path, {"hooks": {}})
     hooks_dir = tmp_path / ".hooks"
     hooks_dir.mkdir(parents=True, exist_ok=True)
-    (hooks_dir / "helper.mjs").write_text('export const ok = { a: ["b"] };\n')
-    (hooks_dir / "data.json").write_text('{"pairs": {"a": ["b"]}}\n')
+    (hooks_dir / "helper.mjs").write_text(
+        'export const ok = { a: ["b"] };\n', encoding="utf-8"
+    )
+    (hooks_dir / "data.json").write_text('{"pairs": {"a": ["b"]}}\n', encoding="utf-8")
     result = run_validator(tmp_path, copy_script)
     assert result.returncode == 0, result.stdout + result.stderr
     assert "All checks passed" in result.stdout + result.stderr
@@ -270,7 +278,9 @@ def test_pretooluse_with_shipped_bootstrap_passes(tmp_path: Path, copy_script) -
     copied verbatim, not a hand-written approximation — must pass, including
     check 1's path scan, which must strip the `;` that word-splitting glues
     onto the target path in a compound command."""
-    shipped = json.loads((REPO_ROOT / ".claude" / "settings.json").read_text())
+    shipped = json.loads(
+        (REPO_ROOT / ".claude" / "settings.json").read_text(encoding="utf-8")
+    )
     write_settings(tmp_path, {"hooks": {"PreToolUse": shipped["hooks"]["PreToolUse"]}})
     make_hook(tmp_path, ".claude/hooks/safe-launch.sh")
     # Derived, not listed: a hook added to settings.json must not need a second

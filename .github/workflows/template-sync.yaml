@@ -80,7 +80,9 @@ env:
   # propagated to downstream repos; each consumer owns its own security-scan
   # cadence and model pin, so the template stops overwriting them on sync.
   #
-  # claude-review.yaml: this repo runs the reviewer as two split workflows
+  # allow-workflow-ref: claude-review.yaml names the UPSTREAM template repo's
+  # workflow file, not one of this repo's own — this repo runs the reviewer as
+  # two split workflows
   # (claude-pr-review, claude-merge-delta-review) that between them produce the
   # jobs the template's single file does — same job names, same job-level
   # concurrency groups, so the two copies cancelled each other on every push. It was deleted here in #218, and the sync's "new
@@ -302,7 +304,7 @@ jobs:
         if: inputs.dry-run != true && steps.sync.outputs.has_conflicts == 'true' && steps.create-pr.outputs.pull-request-number
         env:
           RESOLVER_REPOSITORY: AlexanderMattTurner/agent-resolve-merge-conflicts
-          RESOLVER_REF: ecbe088b2d3fba81adc6bd77448a03a155dc30ca
+          RESOLVER_REF: ca9a3fa872a9c06ade766de9bf69ff7b0329247f
         run: |
           dest="${RUNNER_TEMP}/resolver"
           git clone --no-tags "https://github.com/${RESOLVER_REPOSITORY}.git" "${dest}"

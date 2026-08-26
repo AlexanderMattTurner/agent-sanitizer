@@ -19,7 +19,7 @@
 # finding, with the finding's leading 🔴/🟡 icon as a fallback for threads
 # posted before the marker existed. Which severities gate — and which icon each
 # renders as — comes from config/review-severities.json, the same SSOT
-# post-pr-review.mjs stamps from, so the writer and this reader cannot drift.
+# post-pr-review.mjs stamps from.
 #
 # Two modes, one predicate:
 #   * REPORT_SHA set — post the verdict as a COMMIT STATUS under the context

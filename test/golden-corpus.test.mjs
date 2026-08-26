@@ -20,6 +20,8 @@ const here = dirname(fileURLToPath(import.meta.url));
 const repoRoot = join(here, "..");
 
 describe("cross-language golden corpus", () => {
+  // drift-guard-ok: a tool-generated artifact, guarded by exactly this
+  // committed == regenerate(src/) freshness check (see generate-golden.mjs).
   it("committed tests/golden.json is in lockstep with src/ (regenerate if this fails)", () => {
     // Exit 0 == fresh; non-zero == stale, with a message on stderr.
     execFileSync(
@@ -53,9 +55,10 @@ describe("cross-language golden corpus", () => {
   // Precision negatives: legitimate glyphs that the Layer-1 carve-out must pass
   // through UNTOUCHED, plus a positive control proving a malformed tag run is
   // still stripped. Asserted directly against the recorded golden (not just its
-  // freshness) so a regression that starts mangling flags / variation sequences —
-  // or stops stripping a partial tag run — fails here, in lockstep across the JS
-  // and Python clients that both read this recording.
+  // freshness) so a regression that starts mangling flags / variation sequences
+  // — or stops stripping a partial tag run — fails here. The JS and Python
+  // clients both read this one recording, so neither can silently disagree
+  // with it.
   const corpus = JSON.parse(
     readFileSync(join(repoRoot, "tests", "golden-corpus.json"), "utf8"),
   );

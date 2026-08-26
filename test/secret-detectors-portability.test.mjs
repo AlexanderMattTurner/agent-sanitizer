@@ -68,6 +68,9 @@ describe("secret-detectors.json patterns are JS-portable", () => {
   }
 });
 
+// drift-guard-ok: a true single source is infeasible here — the JS pre-gate
+// is a different representation for a different constraint (ReDoS safety),
+// not a copy of the Python detector regexes; see the paragraph below.
 /**
  * DRIFT GUARD (not an SSOT — call it what it is). `SECRET_HINT` in gates.mjs
  * hand-duplicates credential-shape knowledge that also lives in the Python
@@ -100,8 +103,9 @@ const hex = (/** @type {number} */ n) =>
 // `${const}[${patternIndex}]` -> a string that matches THAT pattern and is a
 // realistic credential-shaped value. Keyed per PATTERN, not per detector, so a
 // detector with several distinct shapes (e.g. GitLab's glpat-/glcbt-) is covered
-// shape-by-shape. Keep in lockstep with the SSOT via the assertions below (never
-// hand-loosen an example to dodge a failure — extend the pre-gate instead).
+// shape-by-shape. The assertions below hold this converged with the SSOT
+// (never hand-loosen an example to dodge a failure — extend the pre-gate
+// instead).
 /** @type {Record<string, string>} */
 const PATTERN_EXAMPLES = {
   "AnthropicApiKeyDetector[0]": `sk-ant-api03-${rep(93)}AA`,
@@ -130,6 +134,7 @@ const PATTERN_CASES = detectors.flatMap((d) =>
   }),
 );
 
+// drift-guard-ok: see the module-header comment above PATTERN_EXAMPLES.
 describe("drift guard: JS pre-gate covers every detect-secrets detector pattern", () => {
   it("example map covers exactly the live pattern set (no missing/stale)", () => {
     const liveLabels = PATTERN_CASES.map(([label]) => label).sort();

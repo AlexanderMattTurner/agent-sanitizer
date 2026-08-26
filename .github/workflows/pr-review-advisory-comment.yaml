@@ -25,7 +25,7 @@ name: PR review advisory comment
 # gate anything.
 on: # zizmor: ignore[dangerous-triggers]
   workflow_run:
-    workflows: ["PR review advisory"]
+    workflows: ["PR review advisory"] # unfiltered-listener-ok: runs on every PR branch, including forks, so a branches: filter cannot name them in advance; the workflow's own if: does the filtering
     types: [completed]
 
 permissions: {}
@@ -60,7 +60,7 @@ jobs:
         with:
           persist-credentials: false
       - name: Download the diff-data artifact
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0.0
         with:
           name: pr-review-advisory
           run-id: ${{ github.event.workflow_run.id }}

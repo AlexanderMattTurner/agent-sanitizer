@@ -39,7 +39,7 @@ def _referenced_paths() -> list[tuple[str, Path]]:
     """(script name, repo-relative data path) for every self-relative reference."""
     found = []
     for script in sorted(SCRIPT_DIR.rglob("*.sh")):
-        for match in SELF_RELATIVE_PATH.finditer(script.read_text()):
+        for match in SELF_RELATIVE_PATH.finditer(script.read_text(encoding="utf-8")):
             suffix = match.group("suffix")
             if LIB_PREFIX in suffix:
                 continue

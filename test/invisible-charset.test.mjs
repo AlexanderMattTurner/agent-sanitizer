@@ -1,5 +1,7 @@
+// drift-guard-ok: a tool-generated artifact for a non-JS consumer, guarded by
+// exactly this committed == regenerate(src/) freshness check.
 /**
- * Drift guard: the generated invisible-charset SSOT
+ * The generated invisible-charset SSOT
  * (`python/agent_sanitizer/data/invisible-charset.json`) must equal what
  * `scripts/gen-invisible-charset.mjs` produces from `src/invisible.mjs` right
  * now. The JSON is what non-JS consumers (the Python `agent-secret-redactor`

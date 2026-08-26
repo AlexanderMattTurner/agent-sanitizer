@@ -20,6 +20,7 @@
 # walks its own rungs in its own step order and still tries CLAUDE_CODE_OAUTH_TOKEN
 # first; reordering it means renumbering step ids its outputs name, so that is a
 # deliberate change of its own, not a side effect of this list.
+# shellcheck disable=SC2034  # read by the scripts that source this file, never here
 CLAUDE_OAUTH_LADDER_VARS=(
   CLAUDE_CODE_OAUTH_TOKEN_FALLBACK
   CLAUDE_CODE_OAUTH_TOKEN_FALLBACK_2
@@ -29,19 +30,3 @@ CLAUDE_OAUTH_LADDER_VARS=(
   CLAUDE_CODE_OAUTH_TOKEN_FALLBACK_6
   CLAUDE_CODE_OAUTH_TOKEN
 )
-
-# claude_oauth_ladder — the configured OAuth credentials on stdout, one per
-# line, in attempt order. Empty rungs are dropped so an unset middle tier is
-# stepped over rather than truncating the ladder, and duplicates collapse so a
-# credential set twice is not paid for twice. Empty output means none is
-# configured — the caller decides whether that is a refusal or a skip.
-claude_oauth_ladder() {
-  local -A seen=()
-  local var cred
-  for var in "${CLAUDE_OAUTH_LADDER_VARS[@]}"; do
-    cred="${!var:-}"
-    [[ -n "$cred" && -z "${seen["$cred"]:-}" ]] || continue
-    seen["$cred"]=1
-    printf '%s\n' "$cred"
-  done
-}

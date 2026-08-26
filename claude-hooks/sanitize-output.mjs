@@ -680,7 +680,7 @@ export function sanitizerDepsLoaded() {
  * otherwise invisible because every later tool call then fails closed with no
  * stated cause — the recorded loader error and its remedy ride along. The text
  * comes from missingPackageMessage so this hook, the PreToolUse gate and the
- * prompt gate cannot drift apart on what a missing dependency reads like.
+ * prompt gate read the same words for what a missing dependency looks like.
  * @param {() => boolean} [depsLoaded]  injectable seam for testing
  * @param {string} [remedy]  what a reader should run; hosts pass their own
  * @returns {string}
@@ -801,8 +801,8 @@ export function emitHookFailure(
 
 /**
  * The suppression placeholder that replaces the tool output under the closed
- * posture. Named so the posture table and {@link emitFailClosed} cannot drift on
- * the wording the model sees.
+ * posture. Named so the posture table and {@link emitFailClosed} read the
+ * same wording the model sees.
  * @param {string} cause  the scrubbed hook error
  * @returns {string}
  */
@@ -963,12 +963,11 @@ export async function evaluateToolOutput(input, ext = {}) {
     containsPlaceholder(toolOutput)
   )
     warnings.push(ON_DISK_PLACEHOLDER_WARNING);
-  // `notes` is part of the guard, not covered by `modified`. The Layer-1
-  // carve-out that used to be the only note DID imply a strip, but the
-  // detect-only tiers do not: a preserved `<script>` and a plain-link exfil URL
-  // change no bytes and raise no warning, so without this clause the walk would
-  // return `clean` and the note would not be quieter — it would be GONE, taking
-  // "do not fetch, relay, or embed these URLs" with it.
+  // `notes` is part of the guard, not covered by `modified`. A detect-only
+  // tier's note implies no strip: a preserved `<script>` and a plain-link
+  // exfil URL change no bytes and raise no warning, so without this clause the
+  // walk would return `clean` and the note would not be quieter — it would be
+  // GONE, taking "do not fetch, relay, or embed these URLs" with it.
   if (!modified && warnings.length === 0 && notes.length === 0)
     return revealRead
       ? emit("flagged", { additional_context: REVEAL_READ_ENVELOPE })

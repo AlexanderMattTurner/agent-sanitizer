@@ -148,11 +148,13 @@ def test_field_value_re_linear_on_underscore_run(n):
     # run repartitioned exponentially (measured 7.9s at n=38, doubling every 2
     # chars). The non-overlapping `(?:[_-][A-Za-z0-9]+)*` — disjoint separator
     # and body classes — parses the run exactly one way, so search stays linear.
-    # Assert a wall-clock ceiling an exponential blowup at these sizes cannot
-    # meet, run against the REAL compiled pattern (not an approximation).
     adversarial = "token" + "_" * n + "!"
     start = time.perf_counter()
     assert E.FIELD_VALUE_RE.search(adversarial) is None
+    # allow-wall-clock: an exponential ReDoS blowup at these sizes cannot meet
+    # a 1s ceiling under any CI load — this asserts the regex has no
+    # catastrophic backtracking, run against the REAL compiled pattern (not
+    # an approximation).
     assert time.perf_counter() - start < 1.0, n
 
 

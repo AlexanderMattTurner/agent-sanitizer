@@ -28,6 +28,10 @@ on: # zizmor: ignore[dangerous-triggers]
     workflows:
       - Auto version bump and publish
       - Release canary
+    # Both watched workflows only ever run on main/master (auto-version.yaml's
+    # own push trigger; release-canary.yaml's schedule/dispatch fire on the
+    # default branch) — this filter matches that, not the reverse.
+    branches: [main, master]
 
 concurrency:
   # Keyed per triggering workflow so notifications never queue behind each other;
@@ -47,7 +51,7 @@ jobs:
     # same phone twice. What is left here is the coverage ci-failure-notify does
     # not have — tag pushes, workflow_dispatch, and non-default-branch runs.
     if: >-
-      github.event.workflow_run.conclusion == 'failure' &&
+      contains(fromJSON('["action_required", "failure", "startup_failure", "timed_out"]'), github.event.workflow_run.conclusion) &&
       github.event.workflow_run.event != 'pull_request' &&
       !((github.event.workflow_run.event == 'push' ||
          github.event.workflow_run.event == 'schedule') &&

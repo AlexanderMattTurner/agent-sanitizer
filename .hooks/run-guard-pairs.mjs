@@ -19,8 +19,8 @@
  * checked by test/guard-pairs.test.mjs, so an excuse cannot outlive its reason.
  *
  * A pair is a GUARD, not an SSOT: it says "run this check when that file
- * changes". It derives no content, so naming it otherwise would launder the
- * very smell a drift guard exists to expose.
+ * changes". It derives no content, so naming it an SSOT would launder the
+ * very smell this naming exists to expose.
  *
  * A guard test is either a `node --test` file (`*.test.mjs`) or a pytest module
  * (`test_*.py`), dispatched by extension. Both are supported because the map

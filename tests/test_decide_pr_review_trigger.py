@@ -84,11 +84,11 @@ def _decide(
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir(exist_ok=True)
     gh = bin_dir / "gh"
-    gh.write_text(_FAKE_GH)
+    gh.write_text(_FAKE_GH, encoding="utf-8")
     gh.chmod(0o755)
-    (tmp_path / "gh.log").write_text("")
+    (tmp_path / "gh.log").write_text("", encoding="utf-8")
     out = tmp_path / "gh_output"
-    out.write_text("")
+    out.write_text("", encoding="utf-8")
     env = {
         "PATH": f"{bin_dir}:{os.environ['PATH']}",
         "GH_TOKEN": "fake",
@@ -106,7 +106,7 @@ def _decide(
     )
     assert proc.returncode == 0, proc.stderr
     parsed = {}
-    for line in out.read_text().splitlines():
+    for line in out.read_text(encoding="utf-8").splitlines():
         if "=" in line:
             k, _, v = line.partition("=")
             parsed[k] = v
@@ -143,7 +143,9 @@ def test_a_push_reads_only_the_head_commit(tmp_path: Path) -> None:
     # The read surface IS the guard: a trigger keyed on review state or on
     # sibling-run state cannot be reintroduced without a read showing up here.
     _decide(tmp_path, action="synchronize")
-    paths = [p for p in (tmp_path / "gh.log").read_text().splitlines() if p]
+    paths = [
+        p for p in (tmp_path / "gh.log").read_text(encoding="utf-8").splitlines() if p
+    ]
     assert paths == ["repos/o/r/commits/cafe1234"], paths
 
 
@@ -156,7 +158,7 @@ def test_every_non_push_verdict_is_decided_without_an_api_call(
     # Every other verdict is decided from the event payload alone, so no runner
     # spends an API call to reach it.
     _decide(tmp_path, action=action, label="needs-auto-review")
-    assert (tmp_path / "gh.log").read_text() == ""
+    assert (tmp_path / "gh.log").read_text(encoding="utf-8") == ""
 
 
 def test_the_opus_opt_in_in_the_head_title_forces_a_full_re_read(
@@ -187,10 +189,10 @@ def test_a_failed_head_commit_read_does_not_review(tmp_path: Path) -> None:
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir(exist_ok=True)
     gh = bin_dir / "gh"
-    gh.write_text("#!/bin/sh\necho 'HTTP 502' >&2\nexit 1\n")
+    gh.write_text("#!/bin/sh\necho 'HTTP 502' >&2\nexit 1\n", encoding="utf-8")
     gh.chmod(0o755)
     out = tmp_path / "gh_output"
-    out.write_text("")
+    out.write_text("", encoding="utf-8")
     proc = subprocess.run(
         ["bash", str(SCRIPT)],
         capture_output=True,
@@ -205,7 +207,7 @@ def test_a_failed_head_commit_read_does_not_review(tmp_path: Path) -> None:
         },
     )
     assert proc.returncode == 0, proc.stderr
-    assert "run=false" in out.read_text()
+    assert "run=false" in out.read_text(encoding="utf-8")
 
 
 def test_an_unhandled_action_does_not_review(tmp_path: Path) -> None:

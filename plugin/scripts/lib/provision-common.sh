@@ -80,7 +80,13 @@ provision_require_executable() {
 # it, so a session start blocked here never blocks a tool call.
 provision_hold_lock() {
   local lock_path="${1:?provision_hold_lock needs a lock path}"
-  mkdir -p -- "$(dirname -- "$lock_path")"
+  local lock_dir
+  lock_dir="$(dirname -- "$lock_path")"
+  mkdir -p -- "$lock_dir"
+  [[ -d "$lock_dir" ]] || {
+    echo "agent-sanitizer: cannot create $lock_dir for the provisioning lock" >&2
+    return 1
+  }
   if command -v flock >/dev/null 2>&1; then
     # Held for the life of the process: the kernel releases it when this fd
     # closes, so a killed provisioner cannot leave the lock stuck.
@@ -95,11 +101,18 @@ provision_hold_lock() {
   # unserialized behaviour this lock replaces rather than to a wedged install.
   local dir="$lock_path.d"
   local waited=0
+  # retry-loop-ok: a mutex-acquisition spin, not a retry of a failing command
+  # — lib-ci-retry.sh's `retry` re-runs one argv and has no analog for
+  # "keep polling for a directory another process may remove".
   until mkdir -- "$dir" 2>/dev/null; do
     if [[ "$waited" -ge "$_provision_lock_timeout_s" ]]; then
       echo "agent-sanitizer: the provisioning lock $dir has been held for over ${_provision_lock_timeout_s}s; treating it as abandoned and provisioning anyway" >&2
       rm -rf -- "$dir"
       mkdir -p -- "$dir"
+      [[ -d "$dir" ]] || {
+        echo "agent-sanitizer: cannot recreate the provisioning lock dir $dir" >&2
+        return 1
+      }
       break
     fi
     sleep 1

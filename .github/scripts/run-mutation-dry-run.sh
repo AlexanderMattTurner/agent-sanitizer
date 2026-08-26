@@ -39,8 +39,8 @@ mutate="$(
   printf '%s' "${sources[*]}"
 )"
 
-# Derived from the committed config so the two cannot drift, exactly as
-# run-mutation-shard.sh does. Only what a dry run makes meaningless is
+# Derived from the committed config, exactly as run-mutation-shard.sh does.
+# Only what a dry run makes meaningless is
 # overridden: there is no score to threshold, no per-mutant JSON to aggregate,
 # and no incremental verdict to carry forward.
 #

@@ -5,8 +5,9 @@
 # cleared -> approve"). This is the no-push safety net: a review thread resolved
 # with no follow-up push emits no workflow-triggering event at all, so nothing
 # else re-evaluates that PR's hold. Enumerating open PRs here and re-evaluating
-# the state-based approve closes that gap. This script only SELECTS PRs; the per-PR verdict stays in the shared
-# approval script so the sweep and the per-push paths cannot drift.
+# the state-based approve closes that gap. This script only SELECTS PRs; the
+# per-PR verdict stays in the shared approval script, the one place the sweep
+# and the per-push paths both compute it.
 #
 # Env: GH_TOKEN, GH_REPO (owner/name); REVIEWER_LOGIN optional (passed through).
 set -euo pipefail

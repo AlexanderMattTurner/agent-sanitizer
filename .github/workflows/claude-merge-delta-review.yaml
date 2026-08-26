@@ -10,7 +10,8 @@ name: Claude merge-delta review
 # SECURITY — same posture as claude-pr-review.yaml (see its header): a fork PR on
 # plain `pull_request` gets no secrets, so `pull_request_target` runs in the
 # trusted BASE context. To stay safe this workflow:
-#   1. checks out the BASE branch, never the untrusted PR head — no fork-authored
+#   1. checks out the repo's DEFAULT branch (never the PR's own base.ref, which
+#      the PR author picks), and never the untrusted PR head — no fork-authored
 #      code is checked out or executed;
 #   2. brings the PR head's commits in only as git OBJECTS (prepare-merge-delta-
 #      input.sh fetches refs/pull/N/head with per-command auth and never checks it
@@ -57,10 +58,12 @@ jobs:
       - name: Checkout base (trusted) branch
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
-          # Base BRANCH (trusted repo content), never the untrusted PR head — same
-          # rationale as claude-pr-review.yaml. fetch-depth: 0 so the merge-base of
-          # the PR head (fetched as objects) resolves.
-          ref: ${{ github.event.pull_request.base.ref }}
+          # The repo's own default branch, GitHub-reported — never base.ref (a
+          # PR can base on any pushable branch, including a rewritten copy of
+          # the scripts below) and never the untrusted PR head. Same rationale
+          # as claude-pr-review.yaml. fetch-depth: 0 so the merge-base of the
+          # PR head (fetched as objects) resolves.
+          ref: ${{ github.event.repository.default_branch }}
           persist-credentials: false
           fetch-depth: 0
 
@@ -107,7 +110,7 @@ jobs:
           model: claude-sonnet-5
           claude_args: >-
             --setting-sources user
-            --allowedTools "Read,Grep,Glob,Write"
+            --allowedTools "Read(./**),Edit(/${{ runner.temp }}/pr-input/**)"
             --add-dir "${{ runner.temp }}/pr-input"
           prompt: |
             You are the merge-delta reviewer for PR #${{ github.event.pull_request.number }} in ${{ github.repository }}.

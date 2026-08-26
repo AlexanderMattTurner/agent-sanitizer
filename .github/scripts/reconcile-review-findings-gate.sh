@@ -23,7 +23,8 @@
 # net, not the mechanism: it bounds how long any stale verdict can survive to
 # one sweep interval, including one left by a site added later that forgets.
 # It writes nothing but that status, and the verdict itself stays in
-# review-findings-gate.sh so the sweep and the per-event paths cannot drift.
+# review-findings-gate.sh, the one place the sweep and the per-event paths
+# both compute it.
 #
 # Env: GH_TOKEN, GH_REPO (owner/name); RUN_URL optional (passed through).
 set -euo pipefail

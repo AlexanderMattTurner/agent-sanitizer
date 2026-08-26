@@ -89,7 +89,7 @@ fi
 if [[ -n "${BASE_REF:-}" && -n "${GH_TOKEN:-}" ]]; then
   auth="" # assigned by name below; shellcheck cannot follow printf -v
   git_auth_header_value auth "$GH_TOKEN"
-  if git -c "$GIT_AUTH_HEADER_KEY=$auth" \
+  if timeout --kill-after=10 60 git -c "$GIT_AUTH_HEADER_KEY=$auth" \
     fetch --no-tags --quiet origin "$BASE_REF" 2>/dev/null; then
     live_base="$(git rev-parse FETCH_HEAD 2>/dev/null || true)"
     # Only advance the base FORWARD along history: require the live tip to be a
