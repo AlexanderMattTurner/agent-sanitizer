@@ -1339,15 +1339,6 @@ def _cross_line_candidate_spans(
     charset = config.resolved_charset()
     spans: list[tuple[int, int, str, str]] = []
     stripped, offsets = strip_invisible_with_map(collapsed, charset)
-    # `newline_seams` is in `collapsed`-space; translate each into the smallest
-    # `stripped`-index whose own collapsed-space position is at or past it, so
-    # invisible-char deletion ahead of a seam cannot shift it stale. `bisect`
-    # works directly against `offsets` (a `Sequence[int]`, sorted, monotonic)
-    # whether it is the identity `range` (no invisibles present — overwhelmingly
-    # the common case) or a real `DeletionOffsets`.
-    stripped_seams = sorted(
-        {bisect.bisect_left(offsets, seam) for seam in newline_seams}
-    )
     seen: set[tuple[str, str]] = set()
     # The eligible union's sweep over the whole collapse is the engine's single
     # costliest regex pass, so the probe both rules it out for a payload carrying
@@ -1372,15 +1363,17 @@ def _cross_line_candidate_spans(
     ):
         deadline.check("cross-line candidate scan")
         window_start = max(0, hit.start() - _PREFILTER_WINDOW_PAD)
-        # Never let the pad reach past the nearest seam behind the hit: the
-        # INVARIANT this enforces is that a boundary-anchored pattern's leading
-        # lookbehind, evaluated against `stripped[window_start:...]`, sees
-        # nothing before a position a deleted newline actually preceded — so a
-        # token starting right after a wrapped line is never misread as
-        # starting inside the previous line's last word.
-        seam_idx = bisect.bisect_right(stripped_seams, hit.start()) - 1
-        if seam_idx >= 0:
-            window_start = max(window_start, stripped_seams[seam_idx])
+        # INVARIANT: a boundary-anchored lookbehind, evaluated against
+        # `stripped[window_start:...]`, must never see past the nearest deleted
+        # newline seam behind the hit — else a token after a wrapped line reads
+        # as inside the previous line's word. Seams translate lazily, per hit,
+        # so millions of newlines cost only what real hits need.
+        if newline_seams:
+            seam_idx = bisect.bisect_right(newline_seams, offsets[hit.start()]) - 1
+            if seam_idx >= 0:
+                window_start = max(
+                    window_start, bisect.bisect_left(offsets, newline_seams[seam_idx])
+                )
         window_end = min(len(stripped), hit.end() + _PREFILTER_WINDOW_PAD)
         for secret in scan_line(stripped[window_start:window_end]):
             if secret.type not in _cross_line_eligible_types():
