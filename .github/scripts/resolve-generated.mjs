@@ -11,6 +11,15 @@
 // Two modes:
 //   --owned            print every path the rules generate, one per line. This is
 //                      the ownership oracle auto-resolve/prepare.sh partitions on.
+//   --rederived-only   with --owned, print only the paths of rules flagged
+//                      `reviewOmit`, which asserts a required check re-derives
+//                      them and fails on any difference. Two readers hide
+//                      exactly these from a reviewer: strip-generated-diff.mjs
+//                      here, and the resolver's own remerge-diff-report.py,
+//                      which runs `--owned --rederived-only` against this file
+//                      from the pinned agent-resolve-merge-conflicts checkout.
+//                      A generated path with no such check (a lockfile) is
+//                      deliberately NOT listed, so both reviewers read it.
 //   (no flag)          run every rule whose sources changed, re-deriving its outputs.
 //   --changed <paths>  restrict the run to rules matching these changed paths.
 //
@@ -81,6 +90,15 @@ function loadRules() {
         die(`${at}: "ownsPrefix" must be a string ending in "/"`);
       }
     }
+    if (rule.reviewOmit !== undefined && typeof rule.reviewOmit !== "boolean")
+      die(`${at}: "reviewOmit" must be a boolean`);
+    // A check that regenerates its outputs and diffs them says nothing about an
+    // EXTRA file in the subtree, while the reader acting on the flag stops
+    // reading the WHOLE directory.
+    if (rule.reviewOmit === true && rule.ownsPrefix !== undefined)
+      die(
+        `${at}: "reviewOmit" cannot cover an "ownsPrefix" — list the paths in "owns"`,
+      );
     if (rule.sourcesPattern !== undefined) {
       try {
         RegExp(rule.sourcesPattern);
@@ -104,6 +122,14 @@ const ownedPaths = (rules) => {
   }
   return [...new Set(out)];
 };
+
+/** The paths a rule vouches for with `reviewOmit`. Narrower than {@link
+ * ownedPaths} on purpose: being generated says a path has a generator, while
+ * this says a required check re-derives it and reds on a difference, which is
+ * the only thing that makes hiding it from a reviewer safe. This repo runs no
+ * pre-commit regeneration hook, so no rule kind earns the claim by default. */
+const reviewOmitPaths = (rules) =>
+  ownedPaths(rules.filter((r) => r.reviewOmit));
 
 const ruleMatches = (rule, changed) => {
   if (changed === null) return true;
@@ -164,8 +190,17 @@ function runRule(rule) {
 function main(argv) {
   const rules = loadRules();
 
+  // Guard the modifier, because the fallthrough is not inert: a mistyped or
+  // lone --rederived-only would drop into the run path below and rewrite every
+  // generated file in the tree.
+  if (argv.includes("--rederived-only") && !argv.includes("--owned"))
+    die("--rederived-only is a modifier of --owned, not a mode of its own");
+
   if (argv.includes("--owned")) {
-    for (const p of ownedPaths(rules)) process.stdout.write(`${p}\n`);
+    const paths = argv.includes("--rederived-only")
+      ? reviewOmitPaths(rules)
+      : ownedPaths(rules);
+    for (const p of paths) process.stdout.write(`${p}\n`);
     return;
   }
 

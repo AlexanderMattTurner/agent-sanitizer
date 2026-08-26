@@ -215,3 +215,71 @@ test("a failing rule command fails the run", () => {
   assert.match(r.stderr, /exited 1/);
   rmSync(root, { recursive: true, force: true });
 });
+
+// --owned --rederived-only is what strip-generated-diff.mjs hides from the
+// reviewer, so it must be strictly narrower than --owned. A path that is merely
+// generated (a lockfile) has no check re-deriving it in CI, and hiding it would
+// tell the reviewer a guarantee nobody provides.
+const OMIT_RULES = JSON.stringify({
+  rules: [
+    {
+      command: ["true"],
+      sources: ["package.json"],
+      owns: ["dist/bundle.mjs"],
+      reviewOmit: true,
+    },
+    { command: ["true"], sources: ["package.json"], owns: ["pnpm-lock.yaml"] },
+  ],
+});
+
+test("--owned --rederived-only lists only the rules that set the flag", () => {
+  const root = repoWith(OMIT_RULES);
+  const omit = run(root, ["--owned", "--rederived-only"]);
+  assert.equal(omit.status, 0);
+  assert.deepEqual(omit.stdout.split("\n").filter(Boolean), [
+    "dist/bundle.mjs",
+  ]);
+  // Paired positive marker: --owned must still carry BOTH, so a flag that
+  // silently stopped being read would show up here as the two modes agreeing.
+  const owned = run(root, ["--owned"]);
+  assert.deepEqual(owned.stdout.split("\n").filter(Boolean), [
+    "dist/bundle.mjs",
+    "pnpm-lock.yaml",
+  ]);
+  rmSync(root, { recursive: true, force: true });
+});
+
+test("a non-boolean reviewOmit fails loud", () => {
+  // The flag asserts a required check exists. A truthy string would enable the
+  // omission by accident, which is the one direction that loses review coverage.
+  const root = repoWith(
+    '{"rules":[{"command":["true"],"sources":["a"],"owns":["b"],"reviewOmit":"yes"}]}',
+  );
+  const r = run(root, ["--owned", "--rederived-only"]);
+  assert.equal(r.status, 1);
+  assert.match(r.stderr, /"reviewOmit" must be a boolean/);
+  rmSync(root, { recursive: true, force: true });
+});
+
+test("--rederived-only without --owned is refused, never a run", () => {
+  // The fallthrough would re-derive every generated file in the tree, so the
+  // modifier must not be silently ignored when its mode is missing.
+  const root = repoWith(OMIT_RULES);
+  const r = run(root, ["--rederived-only"]);
+  assert.equal(r.status, 1);
+  assert.match(r.stderr, /modifier of --owned/);
+  rmSync(root, { recursive: true, force: true });
+});
+
+test("reviewOmit cannot cover an ownsPrefix", () => {
+  // The check the flag names regenerates its outputs and diffs them, which says
+  // nothing about an EXTRA file in the subtree — while the reader acting on it
+  // stops reading the whole directory. Refused rather than documented.
+  const root = repoWith(
+    '{"rules":[{"command":["true"],"sources":["a"],"ownsPrefix":"dist/","reviewOmit":true}]}',
+  );
+  const r = run(root, ["--owned", "--rederived-only"]);
+  assert.equal(r.status, 1);
+  assert.match(r.stderr, /cannot cover an "ownsPrefix"/);
+  rmSync(root, { recursive: true, force: true });
+});
