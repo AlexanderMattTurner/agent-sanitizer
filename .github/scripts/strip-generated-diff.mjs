@@ -11,7 +11,7 @@
 // each one and fails on any difference, so the diff cannot disagree with its
 // sources.
 //
-// The omit list comes from `resolve-generated.mjs --review-omit`, passed in as a
+// The omit list comes from `resolve-generated.mjs --owned --rederived-only`, passed in as a
 // file. A path is never classified here, and that mode is narrower than
 // `--owned`: it lists only rules whose output a required check re-derives and
 // compares. A lockfile is generated but nothing regenerates it in CI, so it

@@ -8,7 +8,7 @@
     "sourcesPattern": "optional regex (string) matched against changed paths, in addition to `sources`.",
     "owns": "exact paths this rule GENERATES. A conflict in one of these is resolved by regenerating, never by editing.",
     "ownsPrefix": "optional path prefix, ending in '/', whose whole subtree this rule generates.",
-    "reviewOmit": "optional boolean, default false. TRUE asserts that a REQUIRED check re-derives every path this rule owns and fails on any difference, so the committed bytes cannot disagree with their sources. .github/scripts/strip-generated-diff.mjs omits only these paths from the automated reviewer's diff. Set it only beside the name of the check that proves it: a path that is merely machine-written (a lockfile) but that no check regenerates and compares stays VISIBLE, because a reviewer is then the only thing reading it."
+    "reviewOmit": "optional boolean, default false. TRUE asserts that a REQUIRED check re-derives every path this rule owns and fails on any difference, so the committed bytes cannot disagree with their sources. .github/scripts/strip-generated-diff.mjs omits only these paths from the PR reviewer's diff, and the resolver's remerge-diff-report.py reads the same flag through `resolve-generated.mjs --owned --rederived-only` to decide which merge deltas it stops reading. Set it only beside the name of the check that proves it: a path that is merely machine-written (a lockfile) but that no check regenerates and compares stays VISIBLE, because a reviewer is then the only thing reading it."
   },
 
   "notOwned": {

@@ -80,7 +80,7 @@ printf '%s\n' "$raw_diff_content" >"$raw_diff"
 # resolve-generated.mjs owns the decision; nothing classifies a path here. The
 # filter must run BEFORE the line count and before sanitize, so both see the
 # diff a reviewer will actually read.
-node .github/scripts/resolve-generated.mjs --review-omit >"$omit_list"
+node .github/scripts/resolve-generated.mjs --owned --rederived-only >"$omit_list"
 node .github/scripts/strip-generated-diff.mjs "$omit_list" \
   <"$raw_diff" >"$review_diff"
 

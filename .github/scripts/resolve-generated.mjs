@@ -11,11 +11,15 @@
 // Two modes:
 //   --owned            print every path the rules generate, one per line. This is
 //                      the ownership oracle auto-resolve/prepare.sh partitions on.
-//   --review-omit      print only the paths of rules flagged `reviewOmit`, which
-//                      asserts a required check re-derives them and fails on any
-//                      difference. strip-generated-diff.mjs hides exactly these
-//                      from the automated reviewer, so a generated path with no
-//                      such check (a lockfile) is deliberately NOT listed.
+//   --rederived-only   with --owned, print only the paths of rules flagged
+//                      `reviewOmit`, which asserts a required check re-derives
+//                      them and fails on any difference. Two readers hide
+//                      exactly these from a reviewer: strip-generated-diff.mjs
+//                      here, and the resolver's own remerge-diff-report.py,
+//                      which runs `--owned --rederived-only` against this file
+//                      from the pinned agent-resolve-merge-conflicts checkout.
+//                      A generated path with no such check (a lockfile) is
+//                      deliberately NOT listed, so both reviewers read it.
 //   (no flag)          run every rule whose sources changed, re-deriving its outputs.
 //   --changed <paths>  restrict the run to rules matching these changed paths.
 //
@@ -115,7 +119,8 @@ const ownedPaths = (rules) => {
 /** The paths a rule vouches for with `reviewOmit`. Narrower than {@link
  * ownedPaths} on purpose: being generated says a path has a generator, while
  * this says a required check re-derives it and reds on a difference, which is
- * the only thing that makes hiding it from a reviewer safe. */
+ * the only thing that makes hiding it from a reviewer safe. This repo runs no
+ * pre-commit regeneration hook, so no rule kind earns the claim by default. */
 const reviewOmitPaths = (rules) =>
   ownedPaths(rules.filter((r) => r.reviewOmit));
 
@@ -178,13 +183,17 @@ function runRule(rule) {
 function main(argv) {
   const rules = loadRules();
 
-  if (argv.includes("--owned")) {
-    for (const p of ownedPaths(rules)) process.stdout.write(`${p}\n`);
-    return;
-  }
+  // Guard the modifier, because the fallthrough is not inert: a mistyped or
+  // lone --rederived-only would drop into the run path below and rewrite every
+  // generated file in the tree.
+  if (argv.includes("--rederived-only") && !argv.includes("--owned"))
+    die("--rederived-only is a modifier of --owned, not a mode of its own");
 
-  if (argv.includes("--review-omit")) {
-    for (const p of reviewOmitPaths(rules)) process.stdout.write(`${p}\n`);
+  if (argv.includes("--owned")) {
+    const paths = argv.includes("--rederived-only")
+      ? reviewOmitPaths(rules)
+      : ownedPaths(rules);
+    for (const p of paths) process.stdout.write(`${p}\n`);
     return;
   }
 
