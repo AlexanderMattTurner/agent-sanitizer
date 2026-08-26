@@ -252,11 +252,10 @@ const ENTRIES = {
     // the carve analysis finds nothing to preserve and the strip is a bulk pass.
     cheap: ["ascii-prose", "cjk-prose", "emoji-prose", "payload-scattered"],
     budget: {
-      // The dearest cell in the table, and the one the ratio is doing the least
-      // for: it is parse5 building a 256 KB fragment, so it moves with the
-      // parser rather than with anything here. SUPERLINEAR below is what
-      // actually holds this path.
-      "html-prose": 365,
+      // The dearest cell in the table, and the one the ratio is doing the
+      // least for: it is parse5 building a 256 KB fragment, so it moves with
+      // the parser rather than with anything here.
+      "html-prose": 250,
       "joiner-dense": 43,
       "vs-dense": 38,
       "payload-run": 59,
@@ -289,27 +288,6 @@ const ENTRIES = {
 // paste into a hang — and it is measured on one machine in one process, so it
 // needs no headroom for machine speed, only for timer noise.
 const SCALING_LIMIT = 24;
-
-/**
- * The one path whose cost is known to grow faster than its input, pinned where
- * the blow-up actually shows.
- *
- * Layer 2/3 on HTML is super-linear — measured 7.2x for 4x the input at these
- * sizes, most of it inside parse5's `detachNode`, which is O(siblings) per
- * detached node. The 8x step above cannot see it, because the path is still
- * roughly linear below 256 KB, so it gets its own step and its own ceiling: a
- * ratchet holding the exponent where it is, not a budget saying this is fine.
- * The companion case below fails if the growth ever comes back down to linear,
- * which is the signal to delete this exception rather than leave a ceiling
- * nothing is under.
- */
-const SUPERLINEAR = {
-  entry: "sanitizeText",
-  shape: "html-prose",
-  from: 128 * KB,
-  to: 512 * KB,
-  limit: 9,
-};
 
 /**
  * The confusable fold, which the PreToolUse hook runs over a tool call's path and
@@ -445,7 +423,7 @@ const CASES = Object.keys(ENTRIES).flatMap((entry) =>
  * Every figure here is CPU ms except `realistic`, which is the wall clock the
  * millisecond ceiling is about.
  * @type {{unit: number, large: Record<string, number>, small: Record<string, number>,
- *   units: Record<string, number>, superlinear: Record<string, number>,
+ *   units: Record<string, number>,
  *   realistic: Record<string, number>,
  *   fold: Record<string, number>, foldUnits: number, foldChanged: boolean}} */
 const timing = {
@@ -454,7 +432,6 @@ const timing = {
   small: {},
   units: {},
   realistic: {},
-  superlinear: { from: 0, to: 0 },
   fold: { small: 0, large: 0 },
   foldUnits: 0,
   foldChanged: false,
@@ -497,15 +474,6 @@ before(async () => {
         (text) => run(text, "realistic-prose"),
       )
     ).wall;
-  const { run } = ENTRIES[SUPERLINEAR.entry];
-  for (const end of ["from", "to"]) {
-    timing.superlinear[end] = (
-      await measure(
-        (attempt) => SHAPES[SUPERLINEAR.shape](SUPERLINEAR[end] - attempt),
-        (text) => run(text, SUPERLINEAR.shape),
-      )
-    ).cpu;
-  }
   for (const [size, key] of [
     [SMALL, "small"],
     [LARGE, "large"],
@@ -639,21 +607,6 @@ describe("hook-path latency", () => {
     },
   );
 
-  const superlinearName = `${SUPERLINEAR.entry}/${SUPERLINEAR.shape}`;
-  const superlinearGrowth = () =>
-    timing.superlinear.to / timing.superlinear.from;
-  const sizeStep = SUPERLINEAR.to / SUPERLINEAR.from;
-
-  timed(
-    `${superlinearName}: the known super-linearity does not get worse`,
-    () => {
-      assert.ok(
-        superlinearGrowth() <= SUPERLINEAR.limit,
-        `${superlinearName} cost ${superlinearGrowth().toFixed(1)}x for ${sizeStep}x the input (${timing.superlinear.from.toFixed(1)}ms → ${timing.superlinear.to.toFixed(1)}ms CPU), limit ${SUPERLINEAR.limit}x`,
-      );
-    },
-  );
-
   timed(
     "foldConfusables: a glyph-stuffed field stays inside its budget",
     () => {
@@ -675,27 +628,6 @@ describe("hook-path latency", () => {
     assert.ok(
       growth <= SCALING_LIMIT,
       `the fold cost ${growth.toFixed(1)}x for ${LARGE / SMALL}x the field, limit ${SCALING_LIMIT}x`,
-    );
-  });
-
-  timed(`${superlinearName}: the exception is still earning its place`, (t) => {
-    // c8 charges every expression it instruments, which is a large cost LINEAR
-    // in the input — big enough at these sizes to swamp the super-linear term
-    // and make the path look linear. The ceiling above still holds under
-    // coverage; this half cannot be read there.
-    if (process.env.NODE_V8_COVERAGE) {
-      t.skip(
-        "c8's instrumentation adds a linear cost that hides the exponent at these sizes",
-      );
-      return;
-    }
-    // The other half of the ratchet. SUPERLINEAR.limit on a path that grew
-    // linearly would gate nothing at all, so this fails the moment the HTML
-    // layer stops being super-linear — and the fix is to delete SUPERLINEAR and
-    // let the ordinary scaling gate own it.
-    assert.ok(
-      superlinearGrowth() > sizeStep,
-      `${superlinearName} grew ${superlinearGrowth().toFixed(1)}x for ${sizeStep}x the input — that is linear, so delete SUPERLINEAR and let the ${SCALING_LIMIT}x gate cover it`,
     );
   });
 });

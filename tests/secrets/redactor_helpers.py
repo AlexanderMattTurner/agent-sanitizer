@@ -124,6 +124,13 @@ LEGITIMATE = {
     "base64 of a sentence": "dGhlIHF1aWNrIGJyb3duIGZveCBqdW1wcyBvdmVyIHRoZSBsYXp5",
     "prose naming a key prefix": "every OpenAI key starts with the sk- prefix",
     "pip requirement pin": "detect-secrets==1.5.0 ; python_version >= '3.10'",
+    # A token prefix reached WORD-INTERNALLY: "wei|ghs_" inside an ordinary
+    # snake_case name, with an identifier-shaped tail long enough to complete
+    # the classic-GitHub body. This is the shape that made a real pytest name
+    # redact as a GitHub token.
+    "snake_case name containing a token prefix": (
+        "def test_planner_weighs_a_burned_in_check_at_its_own_repeat_count():"
+    ),
 }
 
 
@@ -137,6 +144,7 @@ SHAPE_ONLY_LEGITIMATE = (
     "base64 of a sentence",
     "prose naming a key prefix",
     "pip requirement pin",
+    "snake_case name containing a token prefix",
     "python import",
     "env reference in code",
     "oauth discovery doc",

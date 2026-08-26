@@ -635,3 +635,99 @@ def test_redact_is_linear_on_the_reported_redos_payload():
     run_plain("key" + " " * 1200)
     elapsed = time.monotonic() - started
     assert elapsed < 1.0, f"redact() took {elapsed:.2f}s on the ReDoS payload"
+
+
+# ─── Token prefixes must sit on a boundary, not inside a word ────────────────
+# A prefix whose body class is identifier-shaped ([A-Za-z0-9_]) can be completed
+# by ordinary snake_case text, so a word-internal prefix is a live false
+# positive rather than a theoretical one.
+
+_BOUNDARY_GUARD = "(?<![A-Za-z0-9_])"
+
+
+def _opens_on_punctuation(body: str) -> bool:
+    """True when the pattern's first match position can only be a punctuation
+    character — an escaped literal like NpmDetector's ``\\/``. A literal, a
+    character class or an alternation group all admit a word character, so only
+    the escape form is exempt, and a future pattern that is not one says so by
+    failing rather than by being remembered."""
+    return len(body) > 1 and body[0] == "\\" and not body[1].isalnum()
+
+
+@pytest.mark.parametrize(
+    "const, pattern",
+    [
+        (d["const"], p)
+        for d in json.loads(_DETECTORS_JSON.read_text())["detectors"]
+        for p in d["patterns"]
+    ],
+)
+def test_word_initial_pattern_opens_on_a_token_boundary(const, pattern):
+    """The rule the SSOT's own description states, checked by SHAPE.
+
+    A pattern that can start matching on a word character is reachable from
+    inside an identifier, and a body class admitting ``_`` is then completed by
+    ordinary snake_case text. The lookbehind refuses that. Pinning it per
+    literal pattern would leave the NEXT detector uncovered, so this iterates
+    the file: a new row cannot land without the guard.
+    """
+    body = pattern.removeprefix(_BOUNDARY_GUARD)
+    if _opens_on_punctuation(body):
+        assert pattern == body, f"{const} needs no boundary guard"
+        return
+    assert pattern.startswith(_BOUNDARY_GUARD), (const, pattern)
+
+
+def test_the_boundary_guard_sweep_is_not_vacuous():
+    """Both arms of the rule above must have real members, or a file of nothing
+    but punctuation-initial patterns would pass it."""
+    patterns = [p for ps in _DETECTOR_PATTERNS.values() for p in ps]
+    guarded = [p for p in patterns if p.startswith(_BOUNDARY_GUARD)]
+    assert len(guarded) >= 10, len(guarded)
+    assert [p for p in patterns if _opens_on_punctuation(p)], patterns
+
+
+_WORD_INTERNAL_PREFIXES = [
+    (
+        "GitHub Token",
+        "def test_planner_weighs_a_burned_in_check_at_its_own_repeat_count():",
+    ),
+    ("GitHub Fine-Grained PAT", "the_github_pat_" + "a" * 82 + " helper"),
+]
+
+
+@pytest.mark.parametrize(
+    "secret_type, text",
+    _WORD_INTERNAL_PREFIXES,
+    ids=[t for t, _ in _WORD_INTERNAL_PREFIXES],
+)
+def test_word_internal_token_prefix_is_not_a_secret(secret_type, text):
+    """The reported defect: `weighs_a_burned_in_…` carries `ghs_a_burned_in_…`,
+    which redacted a pytest function name as a GitHub token."""
+    for pattern in _DETECTOR_PATTERNS[secret_type]:
+        found = re.search(pattern, text)
+        assert found is None, f"{secret_type} matched {found!r} in {text!r}"
+    assert run_plain(text) is None, text
+
+
+@pytest.mark.parametrize(
+    "secret_type, prefix, boundary",
+    [
+        (st, p, b)
+        for st, p in [
+            ("GitHub Token", "ghp_"),
+            ("GitHub Fine-Grained PAT", "github_pat_"),
+        ]
+        for b in ["", " ", "=", '"', ":", "/", "\n"]
+    ],
+    ids=lambda v: repr(v),
+)
+def test_boundary_delimited_token_still_redacts(secret_type, prefix, boundary):
+    """Non-vacuity for the guard above: every separator a real token follows
+    still admits it, so the fix removed a false positive and no recall."""
+    token = _sample_token(secret_type)
+    assert token.startswith(prefix), token
+    result = run_plain(f"{boundary}{token}")
+    assert result is not None, (secret_type, boundary)
+    assert secret_type in result["found"], (secret_type, boundary)
+    assert token not in result["text"], (secret_type, boundary)

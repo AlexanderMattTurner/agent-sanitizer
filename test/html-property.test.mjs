@@ -30,6 +30,9 @@ const PLACEHOLDER_RE = new RegExp(LAYER2_PLACEHOLDER_RE.source);
 
 // "Forbidden" = invisible on a rendered page: comments and hidden elements.
 function containsForbiddenNode(htmlText) {
+  // rehype-parse, not the layer's own parse: an oracle built from the code
+  // under test cannot contradict it. This one runs parse5 with the DEFAULT tree
+  // adapter, so it also checks the layer's adapter against a second reader.
   const tree = unified().use(rehypeParse, { fragment: true }).parse(htmlText);
   let forbidden = false;
   visit(tree, (node) => {

@@ -49,7 +49,7 @@ import { ident as cssIdent } from "css-tree/utils";
 import { unified } from "unified";
 import remarkParse from "remark-parse";
 import remarkGfm from "remark-gfm";
-import rehypeParse from "rehype-parse";
+import { parseHtmlFragment } from "./html-tree-adapter.mjs";
 import { SKIP, EXIT } from "unist-util-visit";
 import {
   HTML_TAG_PRESENT,
@@ -1420,11 +1420,6 @@ function hasDataSrc(el) {
   );
 }
 
-// One shared fragment parser for every HTML parse in this module (mirroring
-// `mdParser` below): all of them must agree on the tokenizer's verdict, so
-// there is exactly one parser configuration to reason about.
-const htmlParser = unified().use(rehypeParse, { fragment: true });
-
 /**
  * Preorder depth-first walk of a unist tree, calling `visitor(node, index,
  * parent)` on every node whose `type` is `test` (or on every node when `test` is
@@ -1507,11 +1502,12 @@ function lastParseCached(parse) {
 }
 
 /**
- * Parse `html` as an HTML fragment with the real tokenizer (parse5, via rehype).
- * @param {string} html
- * @returns {any}
+ * The one HTML parse in this module: the real tokenizer (parse5, through
+ * `./html-tree-adapter.mjs`), with the last (input, tree) pair remembered. Every
+ * parse here must agree on the tokenizer's verdict, so there is exactly one
+ * parser configuration to reason about.
  */
-const parseFragment = lastParseCached((html) => htmlParser.parse(html));
+const parseFragment = lastParseCached(parseHtmlFragment);
 
 /**
  * @param {string} htmlValue
@@ -1722,7 +1718,7 @@ function hasWarned(warned) {
 /**
  * Scan raw HTML for hidden content to strip and preserved tags to report.
  * Returned ranges are offsets into `html`; comments and hidden elements span
- * the whole element including its content (rehype positions cover open tag
+ * the whole element including its content (hast positions cover open tag
  * through matching close, and parse5 extends an unclosed element to the end
  * of the fragment — fail-closed for truncated markup).
  * @param {string} html
@@ -1803,8 +1799,8 @@ const BOGUS_COMMENT_OPEN_RE = /<[!?]/g;
 // comment / declaration (`<!`, `<?`). Per the HTML tokenizer such a construct
 // keeps consuming the input stream until the next `>`, so it absorbs the
 // following inline-html node (an open tag swallows it as bogus attributes; a
-// bogus end tag / `<!…` opens a bogus comment). parse5 (the flow/source branch,
-// via rehype) models this; the per-tag balance walk below does not, so without
+// bogus end tag / `<!…` opens a bogus comment). parse5 (the flow/source branch)
+// models this; the per-tag balance walk below does not, so without
 // this a fragment parses differently as a flow block than as a paragraph —
 // breaking idempotency once a first pass demotes a block to phrasing (see
 // html-property "second pass changes nothing"). An open/end tag requires a
@@ -1830,7 +1826,7 @@ function foldAbsorb(absorbing, raw) {
 
 /**
  * Map of comment start-offset -> end-offset (exclusive) for EVERY comment the
- * HTML tokenizer finds in `value`, from a SINGLE rehype parse. Validated against
+ * HTML tokenizer finds in `value`, from a SINGLE parse5 parse. Validated against
  * the real tokenizer (parse5) rather than a hand-rolled bogus-comment state
  * machine, so a bogus comment (`<!bogus>`, `<?php?>`, `<![CDATA[…]]>`) is spliced
  * to exactly the span a browser hides and a `<Foo>` element, a `<!doctype>`, or
@@ -1964,7 +1960,7 @@ function hasHtmlLeaf(node) {
  * the container's end when unbalanced — fail-closed), comments become
  * single-node ranges, and preserved tags are counted. Inline html is tokenized
  * per TAG (an element's content sits in sibling text nodes), which is why this
- * walk exists instead of handing the value to rehype.
+ * walk exists instead of handing the value to parse5.
  *
  * The absorb state is folded from the RAW source between html nodes (not from
  * mdast node values), so markdown constructs that reshuffle the character
@@ -2076,7 +2072,7 @@ function scanMarkdown(text) {
   const ranges = [];
   const warned = newWarned();
 
-  // Flow html blocks carry complete markup, so rehype locates comments/hidden
+  // Flow html blocks carry complete markup, so parse5 locates comments/hidden
   // elements precisely within them; block-local offsets are shifted to
   // document coordinates.
   walk(tree, "html", (/** @type {any} */ node, _index, parent) => {
@@ -2137,7 +2133,7 @@ function hasMarkdownCode(text) {
  * The parsed fragment tree for `text` when `text` is HTML *source*, else null.
  *
  * "HTML source" means the markup accounts for the WHOLE document: the real
- * tokenizer (parse5, via rehype) places every element there is, and the only
+ * tokenizer (parse5) places every element there is, and the only
  * character data it leaves OUTSIDE all of them is whitespace. That is exactly
  * the property the source branch needs — it hands the whole input to
  * `scanHtmlFragment` as one fragment, which is faithful only when there is no
@@ -2847,7 +2843,7 @@ function parseSrcset(value) {
 
 /**
  * Candidate URLs of a `srcset` (a "url descriptor" string parsed per the HTML
- * grammar) or `ping` (a space-separated url list rehype delivers as an array)
+ * grammar) or `ping` (a space-separated url list hast delivers as an array)
  * attribute. An absent attribute (neither string nor array) yields none.
  * @param {unknown} value
  * @returns {string[]}
@@ -2862,8 +2858,9 @@ function multiUrlAttr(value) {
 }
 
 /**
- * URL-bearing attributes of every HTML element in `text`, parsed with rehype so
- * quoting/casing/entities are handled correctly (no hand-rolled tag regex).
+ * URL-bearing attributes of every HTML element in `text`, parsed with the real
+ * HTML tokenizer so quoting/casing/entities are handled correctly (no
+ * hand-rolled tag regex).
  * `context` selects the per-URL check the caller applies: resource URLs get the
  * exfil-shape test; form-submission and meta-refresh targets additionally flag
  * any absolute off-origin destination.
@@ -2906,7 +2903,7 @@ function extractHtmlUrls(text) {
           autoFetched: true,
           context: "form",
         });
-    // rehype delivers `http-equiv` as an array (comma-separated); join it back
+    // hast delivers `http-equiv` as an array (comma-separated); join it back
     // so a `refresh` directive is matched regardless of how it was tokenized.
     const httpEquiv = Array.isArray(props.httpEquiv)
       ? props.httpEquiv.join(",").toLowerCase()
