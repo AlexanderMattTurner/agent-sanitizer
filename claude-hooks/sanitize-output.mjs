@@ -25,12 +25,15 @@
  * isUntrustedIngress).
  */
 import { redactViaDaemon, positiveMsOr } from "./lib/redactor-client.mjs";
-import { chargeHostExtension } from "./lib/hook-timing.mjs";
+import {
+  chargeHostExtension,
+  chargeHostExtensionSync,
+} from "./lib/hook-timing.mjs";
 // Re-exported for a composer whose own awaited work runs INSIDE this hook's
 // judge (an audit POST, a policy call): charging it needs the same module
 // instance the timer reads, and a bundled composer that imports the package
 // subpath separately gets a second instance whose totals no timer sees.
-export { chargeHostExtension };
+export { chargeHostExtension, chargeHostExtensionSync };
 import {
   isMain,
   lazyImport,
@@ -290,8 +293,13 @@ export async function sanitizeText(
           if (!secrets) return null;
           // The note is derived from the PRE-redaction text: the caller's reason for
           // annotating (which variable, which provenance) is exactly what redaction
-          // is about to remove.
-          const note = ext.redactNote?.(content);
+          // is about to remove. Charged like the other seams — this one must answer
+          // synchronously, so a composer that blocks here (a `spawnSync` lookup)
+          // would otherwise leave its wait unattributed and its CPU on the hook.
+          const redactNote = ext.redactNote;
+          const note = redactNote
+            ? chargeHostExtensionSync(() => redactNote(content))
+            : undefined;
           return note
             ? { text: secrets.text, found: secrets.found, note }
             : { text: secrets.text, found: secrets.found };

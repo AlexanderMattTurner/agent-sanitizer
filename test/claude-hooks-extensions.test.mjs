@@ -275,6 +275,30 @@ describe("redactNote", () => {
   });
 });
 
+describe("redactNote timing", () => {
+  it("charges a blocking annotator to the host-extension window", async () => {
+    // redactNote must answer synchronously, so the async charger cannot wrap it;
+    // uncharged, a composer that blocks here loses its wait to the unattributed
+    // remainder AND has its CPU billed to the sanitizer.
+    const timer = startHookTimer();
+    const before = timer.cpuMs();
+    await sanitizeText(SECRET_TEXT, "Bash", undefined, {
+      redactNote: () => {
+        const until = Date.now() + 60;
+        while (Date.now() < until) {
+          /* a callback that computes, as a spawnSync-based annotator does */
+        }
+        return "annotated";
+      },
+    });
+    assert.ok(timer.hostMs() >= 50, `charged (${timer.hostMs()}ms)`);
+    assert.ok(
+      timer.cpuMs() - before < 40,
+      `the annotator's CPU stays off the hook (${timer.cpuMs() - before}ms)`,
+    );
+  });
+});
+
 describe("audit", () => {
   /** @param {any} response @param {any} ext @param {any} [meta] */
   const judge = (response, ext, meta) =>

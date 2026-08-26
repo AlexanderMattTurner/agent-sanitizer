@@ -289,7 +289,7 @@ singleton, and two copies in one bundle double-fire the inlined CLIs.
 | `claude-hooks/lib/reveal`               | The Layer-2 sidecar that lets the model re-read what the HTML splice removed               |
 | `claude-hooks/lib/secret-annotate`      | The cheap deterministic Layer-4 pre-gate checks around the daemon call                     |
 | `claude-hooks/lib/trace`                | The opt-in structured trace channel every layer announces itself on                        |
-| `claude-hooks/lib/hook-timing`          | The shared slow-hook budget, its four measured windows and the notice they compose         |
+| `claude-hooks/lib/hook-timing`          | The shared slow-hook budget, its measured windows and the notice they compose              |
 
 Only `plugin-hooks` itself is unexported under its own name — it is reachable as
 the bare `claude-hooks` entry above.
