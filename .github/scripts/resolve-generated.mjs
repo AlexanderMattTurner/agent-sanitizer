@@ -96,7 +96,9 @@ function loadRules() {
     // EXTRA file in the subtree, while the reader acting on the flag stops
     // reading the WHOLE directory.
     if (rule.reviewOmit === true && rule.ownsPrefix !== undefined)
-      die(`${at}: "reviewOmit" cannot cover an "ownsPrefix" — list the paths in "owns"`);
+      die(
+        `${at}: "reviewOmit" cannot cover an "ownsPrefix" — list the paths in "owns"`,
+      );
     if (rule.sourcesPattern !== undefined) {
       try {
         RegExp(rule.sourcesPattern);
