@@ -8,6 +8,15 @@ adhere to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+## [2.47.12] - 2026-08-26
+
+### Fixed
+- Relaxed and re-clipped the trailing boundary in secret detection; now fails loudly on unrecognized guards.
+- Fixed boundary lookbehind to correctly handle wrapped tokens.
+
+### Changed
+- Improved performance of secret detection by translating newline seams lazily in cross-line matching.
+
 ## [2.47.11] - 2026-08-26
 
 ### Fixed
