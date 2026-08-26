@@ -21,8 +21,8 @@
  * false positive the SSOT had already fixed, and its clean path was a bare
  * `writeFileSync` with none of cleanFile's symlink/UTF-8/TOCTOU guards.
  */
-import { existsSync, readFileSync, globSync } from "node:fs";
-import { join, relative, resolve } from "node:path";
+import { readFileSync } from "node:fs";
+import { relative, resolve } from "node:path";
 import {
   awaitLazyDependency,
   emitHookResponse,
@@ -45,6 +45,7 @@ import {
   alertAckFile,
   alertDir,
   appendAlert,
+  launchInstructionFiles,
   sweepStaleSessions,
 } from "./lib/invisible-alert.mjs";
 import { formatReport } from "./lib/invisible-report.mjs";
@@ -59,11 +60,9 @@ import { reportSlowHook, startHookTimer } from "./lib/hook-timing.mjs";
 // so importing it statically carries none of the fail-open hazard lazyImport
 // exists to cover.
 import {
-  ancestorInstructionFiles,
   CLAUDE_CONTEXT_SUBDIRS,
   CLAUDE_INSTRUCTION_GLOBS,
   CLAUDE_LAUNCH_GLOBS,
-  excludeFromContextScan,
   isInsideDir,
 } from "../src/claude-context.mjs";
 
@@ -234,26 +233,14 @@ function decodeRun(run) {
  * files load when a tool reads their directory, and scan-loaded-instructions
  * scans each one at that moment.
  *
- * The scope itself — which globs, and which directories the walk must prune — is
- * the library's (see src/claude-context.mjs for why it is imported relatively
- * rather than through the `agent-sanitizer` specifier the plugin bundle pins).
+ * lib/invisible-alert.mjs's `launchInstructionFiles` IS this function — shared
+ * so its InstructionsLoaded gap-notice check reads the identical target set
+ * this scan does, rather than a second enumeration that could drift.
  * @param {string} dir
  * @returns {string[]}
  */
 function findInstructionFiles(dir) {
-  return [
-    ...globSync([...CLAUDE_LAUNCH_GLOBS], {
-      cwd: dir,
-      exclude: excludeFromContextScan,
-    }).map((name) => join(dir, name)),
-    // Filtered, unlike the glob's matches: almost every parent directory holds
-    // neither memory file, so the unfiltered chain would file ~10 phantom
-    // targets per session into the `absent` bucket and bury the one thing that
-    // bucket reports — a target that existed when the scan listed it and was
-    // gone by the read. A file that appears after this check was not loaded at
-    // launch either, so nothing is lost by not listing it.
-    ...ancestorInstructionFiles(dir).filter((file) => existsSync(file)),
-  ];
+  return launchInstructionFiles(dir);
 }
 
 // Scanner

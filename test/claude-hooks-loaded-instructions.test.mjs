@@ -44,6 +44,7 @@ const {
   instructionsLoadedNoticeFile,
   instructionsLoadedSeen,
   invisibleCharAlert,
+  launchEmptyFile,
   recordInstructionsLoaded,
   recordInstructionsLoadedNotice,
 } = await import("../claude-hooks/lib/invisible-alert.mjs");
@@ -62,8 +63,8 @@ const markers = [
   instructionsLoadedNoticeFile(SESSION),
   // The "nothing loads at launch" cache instructionsLoadedGapNotice writes
   // itself — see the "no InstructionsLoaded scan" describe block below.
-  `${instructionsLoadedFile()}.launch-empty`,
-  `${instructionsLoadedFile(SESSION)}.launch-empty`,
+  launchEmptyFile(),
+  launchEmptyFile(SESSION),
 ];
 
 /** Every alert store these cases touch: the shared fallback and SESSION's. */
@@ -514,13 +515,15 @@ describe("a session with no InstructionsLoaded scan is named, once", () => {
       assert.equal(instructionsLoadedSeen(emptySession), false);
       assert.equal(instructionsLoadedGapNotice(emptySession, emptyDir), null);
       // Cached, not just silent this once: the launch set cannot change
-      // mid-session, so a second ask must not re-glob to find the same answer.
+      // mid-session, so the first call must have recorded the answer rather
+      // than merely returning null (a call that never wrote the sentinel
+      // would pass this assertion by accident, by re-globbing the same
+      // empty answer every time).
+      assert.ok(existsSync(launchEmptyFile(emptySession)));
       assert.equal(instructionsLoadedGapNotice(emptySession, emptyDir), null);
     } finally {
       rmSync(emptyDir, { recursive: true, force: true });
-      rmSync(`${instructionsLoadedFile(emptySession)}.launch-empty`, {
-        force: true,
-      });
+      rmSync(launchEmptyFile(emptySession), { force: true });
     }
   });
 
@@ -538,6 +541,80 @@ describe("a session with no InstructionsLoaded scan is named, once", () => {
     } finally {
       rmSync(withContentDir, { recursive: true, force: true });
       rmSync(instructionsLoadedNoticeFile(contentSession), { force: true });
+    }
+  });
+
+  it("counts a non-empty ancestor CLAUDE.md as launch content", () => {
+    // The ancestor-chain arm of the launch check, not the root glob: the
+    // checked directory itself carries nothing, but a PARENT does — matching
+    // a project opened one level below a repo-wide CLAUDE.md.
+    const parentDir = mkdtempSync(join(tmpdir(), "sanitizer-ancestor-"));
+    const childDir = join(parentDir, "child");
+    const ancestorSession = "sess-ancestor-launch";
+    try {
+      mkdirSync(childDir);
+      writeFileSync(join(parentDir, "CLAUDE.md"), PROSE);
+      assert.match(
+        instructionsLoadedGapNotice(ancestorSession, childDir),
+        /unscanned/u,
+      );
+    } finally {
+      rmSync(parentDir, { recursive: true, force: true });
+      rmSync(instructionsLoadedNoticeFile(ancestorSession), { force: true });
+    }
+  });
+
+  it("treats an unstattable launch candidate as content, not absence", () => {
+    // A file this uid cannot even stat (ELOOP here; EACCES/EISDIR in
+    // production) is unvetted context, not proof nothing is there — the
+    // opposite of ENOENT. Silently reading it as "empty" would suppress the
+    // notice over a file that may carry a real, unscanned payload.
+    const loopDir = mkdtempSync(join(tmpdir(), "sanitizer-unstattable-"));
+    const loopSession = "sess-unstattable-launch";
+    const loopPath = join(loopDir, "CLAUDE.md");
+    try {
+      symlinkSync(loopPath, loopPath);
+      assert.match(
+        instructionsLoadedGapNotice(loopSession, loopDir),
+        /unscanned/u,
+      );
+    } finally {
+      rmSync(loopDir, { recursive: true, force: true });
+      rmSync(instructionsLoadedNoticeFile(loopSession), { force: true });
+    }
+  });
+
+  it("fires once a later call touches a directory the empty launch never covered", () => {
+    // The blocker this fix must not reintroduce: an empty LAUNCH must not
+    // silence the whole session. If the scanner is genuinely unwired and a
+    // later tool call reaches into a subdirectory that DOES carry real,
+    // still-unscanned content, the notice must still fire there — the
+    // launch-empty cache only ever answers for the launch half.
+    const emptyDir = mkdtempSync(join(tmpdir(), "sanitizer-empty-then-"));
+    const nestedDir = join(emptyDir, "packages", "foo");
+    const session = "sess-empty-then-nested";
+    try {
+      // Call 1: nothing at launch and no touched directory yet — silent, and
+      // the empty answer gets cached.
+      assert.equal(instructionsLoadedGapNotice(session, emptyDir), null);
+      assert.ok(existsSync(launchEmptyFile(session)));
+      // Call 2: still nothing touched — the cached empty answer alone must
+      // not manufacture a warning.
+      assert.equal(instructionsLoadedGapNotice(session, emptyDir), null);
+      // Call 3: a tool now reads a file in a subdirectory that carries real
+      // content, and the scanner STILL never fired InstructionsLoaded — the
+      // one case that must not stay silent.
+      mkdirSync(nestedDir, { recursive: true });
+      writeFileSync(join(nestedDir, "CLAUDE.md"), PROSE);
+      assert.equal(instructionsLoadedSeen(session), false);
+      assert.match(
+        instructionsLoadedGapNotice(session, emptyDir, nestedDir),
+        /unscanned/u,
+      );
+    } finally {
+      rmSync(emptyDir, { recursive: true, force: true });
+      rmSync(launchEmptyFile(session), { force: true });
+      rmSync(instructionsLoadedNoticeFile(session), { force: true });
     }
   });
 

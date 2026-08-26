@@ -29,6 +29,7 @@
  */
 import { createRequire } from "node:module";
 import { readFileSync } from "node:fs";
+import { dirname } from "node:path";
 import {
   isMain,
   lazyImport,
@@ -424,6 +425,40 @@ export function preToolUseLayers(rehydrate, env = process.env) {
     : layers;
 }
 
+// The tools whose path field Claude Code sends as an absolute path by
+// contract, so reading it needs no cwd to resolve against. Bounded to these:
+// Glob/Grep's `path` can be relative or omitted (defaults to a cwd this
+// payload does not carry), and Bash has no reliable target at all — the same
+// carve-out WRITE_SHAPED_TOOLS below takes for Bash writes.
+const PATH_FIELD_BY_TOOL = /** @type {Record<string, string>} */ (
+  Object.freeze({
+    Read: "file_path",
+    Edit: "file_path",
+    Write: "file_path",
+    MultiEdit: "file_path",
+    NotebookEdit: "notebook_path",
+  })
+);
+
+/**
+ * The directory THIS tool call targets, for the InstructionsLoaded gap-notice
+ * check — or undefined when the tool carries no reliable absolute path. An
+ * imprecise guess here only ever WIDENS coverage (see instructionsLoadedGapNotice's
+ * `touchedDir`): missing a real target loses nothing this check did not
+ * already lack, and there is no wrong-directory case that suppresses a real
+ * finding.
+ * @param {string} tool
+ * @param {any} toolInput
+ * @returns {string | undefined}
+ */
+function toolTargetDir(tool, toolInput) {
+  const field = PATH_FIELD_BY_TOOL[tool];
+  const path = field && toolInput?.[field];
+  return typeof path === "string" && path.startsWith("/")
+    ? dirname(path)
+    : undefined;
+}
+
 /**
  * Compose the four protections. Returns the `hookSpecificOutput` fields to
  * emit, or null for a clean no-op. Throws only if a layer's engine throws; the
@@ -468,7 +503,11 @@ export async function buildPreToolUseResponse(
   // the notice was surfaced: a rehydrate deny below returns before the response
   // is assembled, and recording here would burn the session's one report on a
   // call that never carried it.
-  const gapNotice = instructionsLoadedGapNotice(input.session_id);
+  const gapNotice = instructionsLoadedGapNotice(
+    input.session_id,
+    undefined,
+    toolTargetDir(tool, toolInput),
+  );
   if (gapNotice !== null) contexts.push(gapNotice);
 
   // Layers 2-4, run by the declared pipeline: the driver — not this call order —

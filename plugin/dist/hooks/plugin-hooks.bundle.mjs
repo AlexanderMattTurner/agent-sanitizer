@@ -10500,7 +10500,7 @@ var require_util = __commonJS({
       return path2;
     });
     exports.normalize = normalize3;
-    function join9(aRoot, aPath) {
+    function join8(aRoot, aPath) {
       if (aRoot === "") {
         aRoot = ".";
       }
@@ -10532,7 +10532,7 @@ var require_util = __commonJS({
       }
       return joined;
     }
-    exports.join = join9;
+    exports.join = join8;
     exports.isAbsolute = function(aPath) {
       return aPath.charAt(0) === "/" || urlRegexp.test(aPath);
     };
@@ -10746,7 +10746,7 @@ var require_util = __commonJS({
             parsed.path = parsed.path.substring(0, index2 + 1);
           }
         }
-        sourceURL = join9(urlGenerate(parsed), sourceURL);
+        sourceURL = join8(urlGenerate(parsed), sourceURL);
       }
       return normalize3(sourceURL);
     }
@@ -12262,9 +12262,9 @@ var init_lib4 = __esm({
        * @returns {undefined}
        *   Nothing.
        */
-      set dirname(dirname6) {
+      set dirname(dirname7) {
         assertPath(this.basename, "dirname");
-        this.path = default2.join(dirname6 || "", this.basename);
+        this.path = default2.join(dirname7 || "", this.basename);
       }
       /**
        * Get the extname (including dot) (example: `'.js'`).
@@ -47850,6 +47850,7 @@ var init_control_plane2 = __esm({
 
 // claude-hooks/lib/invisible-alert.mjs
 import {
+  existsSync,
   globSync as globSync2,
   lstatSync as lstatSync3,
   mkdirSync,
@@ -47943,30 +47944,43 @@ function recordInstructionsLoaded(sessionId) {
 function launchEmptyFile(sessionId) {
   return `${instructionsLoadedFile(sessionId)}.launch-empty`;
 }
-function launchHasContent(dir) {
-  const candidates = [
+function launchInstructionFiles(dir) {
+  return [
     ...globSync2([...CLAUDE_LAUNCH_GLOBS], {
       cwd: dir,
       exclude: excludeFromContextScan
     }).map((name50) => join3(dir, name50)),
-    ...ancestorInstructionFiles(dir)
+    // Filtered, unlike the glob's matches: almost every parent directory holds
+    // neither memory file, so the unfiltered chain would file ~10 phantom
+    // targets per session into scan-invisible-chars.mjs's operator-facing
+    // "absent" bucket. A file that appears after this check was not loaded at
+    // launch either, so nothing is lost by not listing it.
+    ...ancestorInstructionFiles(dir).filter((file) => existsSync(file))
   ];
-  for (const file of candidates) {
+}
+function launchHasContent(dir) {
+  for (const file of launchInstructionFiles(dir)) {
     try {
       if (statSync(file).size > 0) return true;
-    } catch {
+    } catch (err) {
+      if (
+        /** @type {NodeJS.ErrnoException} */
+        err.code !== "ENOENT"
+      )
+        return true;
     }
   }
   return false;
 }
-function instructionsLoadedGapNotice(sessionId, dir = PROJECT_DIR) {
+function instructionsLoadedGapNotice(sessionId, dir = PROJECT_DIR, touchedDir) {
   if (instructionsLoadedSeen(sessionId)) return null;
   if (markerIsTrusted(instructionsLoadedNoticeFile(sessionId))) return null;
-  if (markerIsTrusted(launchEmptyFile(sessionId))) return null;
-  if (!launchHasContent(dir)) {
+  const launchCached = markerIsTrusted(launchEmptyFile(sessionId));
+  const launchHasBytes = !launchCached && launchHasContent(dir);
+  if (!launchCached && !launchHasBytes)
     writeSentinelFile(launchEmptyFile(sessionId));
-    return null;
-  }
+  const touchedHasBytes = touchedDir !== void 0 && launchHasContent(touchedDir);
+  if (!launchHasBytes && !touchedHasBytes) return null;
   return `agent-sanitizer: no InstructionsLoaded scan has run this session, so instruction files loaded from SUBDIRECTORIES (a nested CLAUDE.md, a directory-scoped rule) are reaching the model unscanned for hidden Unicode \u2014 the session-start scan covers only the files loaded at launch. Tell the user, and name all three causes with the command that decides each: this host never wired the InstructionsLoaded event to scan-loaded-instructions (the \`/hooks\` command lists what this session actually registered, whichever config dir or plugin root the host uses; wiring it restores the coverage), a Claude Code older than ${EVENT_MIN_CLI_VERSION}, the first build that emits the event (\`claude --version\`; upgrading restores it), or scan-loaded-instructions switched off in AGENT_SANITIZER_DISABLED_HOOKS (\`echo $AGENT_SANITIZER_DISABLED_HOOKS\`).`;
 }
 function recordInstructionsLoadedNotice(sessionId) {
@@ -48457,7 +48471,7 @@ var init_env_config = __esm({
 
 // claude-hooks/lib/redactor-client.mjs
 import { spawn } from "node:child_process";
-import { existsSync, lstatSync as lstatSync4 } from "node:fs";
+import { existsSync as existsSync2, lstatSync as lstatSync4 } from "node:fs";
 import { createConnection } from "node:net";
 import { tmpdir as tmpdir2, userInfo as userInfo3 } from "node:os";
 import { dirname as dirname4, join as join5 } from "node:path";
@@ -48470,7 +48484,7 @@ function daemonCommand() {
   const configured = process.env._AGENT_SANITIZER_REDACTOR_DAEMON;
   if (configured) return [configured];
   const pyz = fileURLToPath3(new URL("../redactor/daemon.pyz", import.meta.url));
-  if (existsSync(pyz)) return ["python3", pyz];
+  if (existsSync2(pyz)) return ["python3", pyz];
   return ["agent-secret-redactor-daemon"];
 }
 function requestDeadlineMs() {
@@ -48601,7 +48615,7 @@ function spawnDaemon(socketPath, command = daemonCommand()) {
 async function waitForSocket(socketPath, { deadlineMs = WAIT_DEADLINE_MS, stepMs = 100 } = {}) {
   const deadline = Date.now() + deadlineMs;
   while (Date.now() < deadline) {
-    if (existsSync(socketPath) && await canConnect(socketPath)) return true;
+    if (existsSync2(socketPath) && await canConnect(socketPath)) return true;
     await sleep(stepMs);
   }
   return false;
@@ -48826,7 +48840,7 @@ var init_secret_drop_guard = __esm({
 // claude-hooks/lib/reveal.mjs
 import { createHash as createHash4 } from "node:crypto";
 import {
-  existsSync as existsSync2,
+  existsSync as existsSync3,
   mkdirSync as mkdirSync2,
   lstatSync as lstatSync6,
   readdirSync as readdirSync3,
@@ -48843,7 +48857,7 @@ function revealDir() {
 }
 function sweepStaleReveals() {
   const dir = revealDir();
-  if (!existsSync2(dir) || !revealDirIsSafe(dir)) return;
+  if (!existsSync3(dir) || !revealDirIsSafe(dir)) return;
   const cutoff = Date.now() - REVEAL_TTL_MS;
   for (const name50 of readdirSync3(dir)) {
     const path2 = join7(dir, name50);
@@ -49128,6 +49142,7 @@ __export(pretooluse_sanitize_exports, {
 });
 import { createRequire as createRequire2 } from "node:module";
 import { readFileSync as readFileSync6 } from "node:fs";
+import { dirname as dirname6 } from "node:path";
 function substituteLayer2(text5, field) {
   const matches = [...text5.matchAll(LAYER2_PLACEHOLDER_RE2)].map((match) => ({
     text: match[0],
@@ -49256,6 +49271,11 @@ function preToolUseLayers(rehydrate, env = process.env) {
   ];
   return env.AGENT_SANITIZER_OUTPUT_DISABLED === "1" ? layers.filter((layer) => layer.name !== "authored-content") : layers;
 }
+function toolTargetDir(tool, toolInput) {
+  const field = PATH_FIELD_BY_TOOL[tool];
+  const path2 = field && toolInput?.[field];
+  return typeof path2 === "string" && path2.startsWith("/") ? dirname6(path2) : void 0;
+}
 async function buildPreToolUseResponse(input, rehydrate = defaultRehydrate, sink = trace) {
   const emitTrace = bestEffortTrace(sink);
   const asks = [];
@@ -49271,7 +49291,11 @@ async function buildPreToolUseResponse(input, rehydrate = defaultRehydrate, sink
     }
   }
   const { tool_name: tool, tool_input: toolInput } = input;
-  const gapNotice = instructionsLoadedGapNotice(input.session_id);
+  const gapNotice = instructionsLoadedGapNotice(
+    input.session_id,
+    void 0,
+    toolTargetDir(tool, toolInput)
+  );
   if (gapNotice !== null) contexts.push(gapNotice);
   const {
     updatedInput: current,
@@ -49427,7 +49451,7 @@ async function cliMain(opts = {}) {
     }
   );
 }
-var HOOK_NAME, PRE_TOOL_USE_MESSAGES, normalizeConfusables2, normalizeContext2, rehydrateRedacted2, spliceOrdered2, require2, confusableScan, redactorIo, guardedRehydrate, defaultRehydrate, REDACTION_HINT, WRITE_SHAPED_TOOLS;
+var HOOK_NAME, PRE_TOOL_USE_MESSAGES, normalizeConfusables2, normalizeContext2, rehydrateRedacted2, spliceOrdered2, require2, confusableScan, redactorIo, guardedRehydrate, defaultRehydrate, PATH_FIELD_BY_TOOL, REDACTION_HINT, WRITE_SHAPED_TOOLS;
 var init_pretooluse_sanitize = __esm({
   async "claude-hooks/pretooluse-sanitize.mjs"() {
     "use strict";
@@ -49483,6 +49507,14 @@ var init_pretooluse_sanitize = __esm({
       redactorIo
     );
     defaultRehydrate = async (tool, toolInput) => secretsEnabled() ? guardedRehydrate(tool, toolInput) : null;
+    PATH_FIELD_BY_TOOL = /** @type {Record<string, string>} */
+    Object.freeze({
+      Read: "file_path",
+      Edit: "file_path",
+      Write: "file_path",
+      MultiEdit: "file_path",
+      NotebookEdit: "notebook_path"
+    });
     REDACTION_HINT = "[REDACTED";
     WRITE_SHAPED_TOOLS = /* @__PURE__ */ new Set([
       "Write",
@@ -50635,8 +50667,8 @@ __export(scan_invisible_chars_exports, {
   scanProject: () => scanProject,
   sessionIdFromStdin: () => sessionIdFromStdin
 });
-import { existsSync as existsSync3, readFileSync as readFileSync7, globSync as globSync3 } from "node:fs";
-import { join as join8, relative as relative3, resolve as resolve4 } from "node:path";
+import { readFileSync as readFileSync7 } from "node:fs";
+import { relative as relative3, resolve as resolve4 } from "node:path";
 async function ensureSanitizerLoaded() {
   if (typeof scanText2 === "function" && typeof cleanFile2 === "function")
     return true;
@@ -50684,19 +50716,7 @@ function decodeRun2(run) {
   return instrDecodeRun(run);
 }
 function findInstructionFiles2(dir) {
-  return [
-    ...globSync3([...CLAUDE_LAUNCH_GLOBS], {
-      cwd: dir,
-      exclude: excludeFromContextScan
-    }).map((name50) => join8(dir, name50)),
-    // Filtered, unlike the glob's matches: almost every parent directory holds
-    // neither memory file, so the unfiltered chain would file ~10 phantom
-    // targets per session into the `absent` bucket and bury the one thing that
-    // bucket reports — a target that existed when the scan listed it and was
-    // gone by the read. A file that appears after this check was not loaded at
-    // launch either, so nothing is lost by not listing it.
-    ...ancestorInstructionFiles(dir).filter((file) => existsSync3(file))
-  ];
+  return launchInstructionFiles(dir);
 }
 function scanFile(filePath) {
   return scanText2(readFileSync7(filePath, "utf-8"));
