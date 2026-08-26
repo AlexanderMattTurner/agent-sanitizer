@@ -9,15 +9,21 @@
  * before anyone traced it back here). A hook past the budget therefore says so
  * IN BAND, in the model's context, where it can be relayed to the operator.
  *
- * THREE numbers, because wall-clock alone cannot say whose cost it is: a hook on
+ * FOUR numbers, because wall-clock alone cannot say whose cost it is: a hook on
  * a contended host waits far longer than it computes (a 1.1 KB payload and a
  * 235 KB one both reported 7.2s on a loaded 2-vCPU box, against 0.3s of work).
- * So the notice prints, beside the clock, the CPU this process burned and the
- * time it spent inside redactor round trips — the daemon is a separate,
- * long-lived process whose CPU this one cannot see (see {@link processCpuMs}),
- * so the call that waits for it is the only measurable stand-in. The notice
- * GATES on none of them: a hook wedged on a dead redactor socket burns no CPU
- * and is exactly the sanitizer's fault.
+ * So the notice prints, beside the clock, the CPU this process burned, the time
+ * it spent inside redactor round trips, and the time it spent inside a HOST
+ * EXTENSION it called ({@link chargeHostExtension}) — the redactor daemon and a
+ * host callback's subprocess or socket peer are separate processes whose CPU this
+ * one cannot see (see {@link processCpuMs}), so the call that waits for each is
+ * the only measurable stand-in. The notice GATES on none of them: a hook wedged
+ * on a dead redactor socket burns no CPU and is exactly the sanitizer's fault.
+ *
+ * The host-extension window is what turned "blocked on something outside the
+ * sanitizer" — a verdict nobody can act on — into a named callee: a composer's
+ * best-effort audit POST to an unreachable sink charged every tool call its full
+ * 1.0s connect bound, and the notice could name none of it.
  *
  * ONE-TIME PROVISIONING is excluded (see {@link excludeProvisioning}): charging
  * an install to the hook that merely waited it out would make the FIRST call of
@@ -93,15 +99,16 @@ export function formatBytes(bytes) {
  * that made this specific latency report take a manual multi-step
  * investigation to characterize (which tool call, how large a payload) before
  * anyone could act on it.
- * `cpuMs` is the run's own processor time and `redactorMs` the wall-clock it
- * spent inside redactor round trips (both from {@link startHookTimer}); absent
- * when the caller has no way to measure them, which is what the shell port of
- * this module reports.
+ * `cpuMs` is the run's own processor time, `redactorMs` the wall-clock it spent
+ * inside redactor round trips, and `hostMs` the wall-clock it spent inside host
+ * extensions (all from {@link startHookTimer}); absent when the caller has no way
+ * to measure them, which is what the shell port of this module reports.
  * @typedef {{
  *   payloadBytes?: number | null,
  *   tool?: string | null,
  *   cpuMs?: number | null,
  *   redactorMs?: number | null,
+ *   hostMs?: number | null,
  * }} SlowHookContext
  */
 
@@ -149,6 +156,11 @@ let provisioningCpuMs = 0;
 // measurement available.
 let redactorRoundTripMs = 0;
 
+// Process-wide total of wall-clock spent inside host extensions. Same reason as
+// the redactor total above: a callback's cost lands in a subprocess or a socket
+// peer, so this side's wait is the only measurement available.
+let hostExtensionMs = 0;
+
 /**
  * Run `work` — one redactor round trip — charging its duration to the redactor
  * share, so a run that spent its second inside a redaction call is told apart
@@ -170,6 +182,34 @@ export async function chargeRedactorRoundTrip(work, now = Date.now) {
     return await work();
   } finally {
     redactorRoundTripMs += Math.max(0, now() - started);
+  }
+}
+
+/**
+ * Run `work` — one call into a HOST EXTENSION (a composer's `postText`, `audit`
+ * or other injected callback) — charging its duration to the host share, so a run
+ * that spent its second inside a callback is told apart from one that spent it
+ * anywhere else. Charged in a `finally`, since a callback that THROWS is the one
+ * that spent the most.
+ *
+ * Like {@link chargeRedactorRoundTrip} this only attributes; the time stays in
+ * the hook's wall-clock, because the user waits for it either way. It says WHERE
+ * the time went and declines to say WHOSE: the wait holds the callback's own work
+ * AND whatever descheduling the host imposed on it.
+ *
+ * `work` may be synchronous — a callback that spawns a subprocess and blocks is
+ * charged in full, because the whole call runs inside this bracket.
+ * @template T
+ * @param {() => Promise<T> | T} work
+ * @param {() => number} [now]  injectable clock, for tests
+ * @returns {Promise<T>}
+ */
+export async function chargeHostExtension(work, now = Date.now) {
+  const started = now();
+  try {
+    return await work();
+  } finally {
+    hostExtensionMs += Math.max(0, now() - started);
   }
 }
 
@@ -213,9 +253,10 @@ export async function excludeProvisioning(
  * than once.
  *
  * `wallMs` is what the user waited, `cpuMs` is what this process actually
- * computed, and `redactorMs` is what it spent inside redactor round trips
- * ({@link chargeRedactorRoundTrip}). All three are needed to say where a slow
- * run's time went — see the module header for the report that read a contended
+ * computed, `redactorMs` is what it spent inside redactor round trips
+ * ({@link chargeRedactorRoundTrip}) and `hostMs` what it spent inside host
+ * extensions ({@link chargeHostExtension}). All four are needed to say where a
+ * slow run's time went — see the module header for the report that read a contended
  * host as a sanitizer bug.
  *
  * Every reader counts only what was charged since this timer started, so an
@@ -225,7 +266,7 @@ export async function excludeProvisioning(
  * the timer has measured, so the results are floored at 0.
  * @param {() => number} [now]  injectable clock, for tests
  * @param {() => number} [cpuNow]  injectable CPU clock, for tests
- * @returns {{ wallMs: () => number, cpuMs: () => number, redactorMs: () => number }}
+ * @returns {{ wallMs: () => number, cpuMs: () => number, redactorMs: () => number, hostMs: () => number }}
  */
 export function startHookTimer(now = Date.now, cpuNow = processCpuMs) {
   const started = now();
@@ -233,6 +274,7 @@ export function startHookTimer(now = Date.now, cpuNow = processCpuMs) {
   const provisionedBefore = provisioningMs;
   const provisionedCpuBefore = provisioningCpuMs;
   const redactorBefore = redactorRoundTripMs;
+  const hostBefore = hostExtensionMs;
   return {
     wallMs: () =>
       Math.max(0, now() - started - (provisioningMs - provisionedBefore)),
@@ -242,13 +284,15 @@ export function startHookTimer(now = Date.now, cpuNow = processCpuMs) {
         cpuNow() - cpuStarted - (provisioningCpuMs - provisionedCpuBefore),
       ),
     redactorMs: () => Math.max(0, redactorRoundTripMs - redactorBefore),
+    hostMs: () => Math.max(0, hostExtensionMs - hostBefore),
   };
 }
 
 /**
  * The attribution sentence for a run whose CPU and redactor-round-trip shares
- * are both known: the two numbers, then which of the three WINDOWS the time went
- * into — this hook computing, the redactor call, or neither.
+ * are both known: the three numbers, then which of the four WINDOWS the time went
+ * into — this hook computing, the redactor call, a host extension, or none of
+ * them.
  *
  * A window, not a culprit. The round trip is wall-clock measured from this side,
  * so it holds the daemon's scan AND whatever descheduling the host imposed on
@@ -260,25 +304,35 @@ export function startHookTimer(now = Date.now, cpuNow = processCpuMs) {
  * say WHOSE, while the other two windows, which no host load can move time into,
  * are named outright.
  *
- * The CPU and redactor shares overlap by the framing this side does
- * mid-round-trip, so they do not sum to the elapsed time; a share that dominates
- * despite the overlap is still the one to act on.
+ * The host-extension window is named the same way and for the same reason: the
+ * callback is the composer's code, so a wait inside it is a cost the COMPOSER
+ * owns, and naming it is what lets a reader look at the right repository. A
+ * composer's audit POST to an absent sink is the case that motivated it.
+ *
+ * The CPU, redactor and host shares overlap by the framing this side does
+ * mid-round-trip and mid-callback, so they do not sum to the elapsed time; a
+ * share that dominates despite the overlap is still the one to act on.
  * @param {number} elapsedMs
  * @param {number} cpuMs
  * @param {number} redactorMs
+ * @param {number} hostMs
  * @returns {string}
  */
-function attributeWait(elapsedMs, cpuMs, redactorMs) {
-  const otherMs = Math.max(0, elapsedMs - cpuMs - redactorMs);
+function attributeWait(elapsedMs, cpuMs, redactorMs, hostMs) {
+  const otherMs = Math.max(0, elapsedMs - cpuMs - redactorMs - hostMs);
+  const largest = Math.max(cpuMs, redactorMs, hostMs, otherMs);
   const verdict =
-    redactorMs >= cpuMs && redactorMs >= otherMs
+    redactorMs === largest
       ? "The largest share was spent inside the redactor round trip — the daemon's scan, the host it shares, or both; this hook was not computing it."
-      : cpuMs >= otherMs
-        ? "The largest share is this hook computing — a per-call cost the sanitizer owns, repeated by every affected call."
-        : "The largest share is neither the redactor nor this hook computing: it was blocked on a loaded machine or on something outside the sanitizer that it called.";
+      : hostMs === largest
+        ? "The largest share was spent inside a host extension this hook called — a callback the composer injected, and a cost that composer owns; neither the sanitizer nor the redactor was computing it."
+        : cpuMs === largest
+          ? "The largest share is this hook computing — a per-call cost the sanitizer owns, repeated by every affected call."
+          : "The largest share is none of those three: it was blocked on a loaded machine or on something outside the sanitizer that it called without measuring.";
   return (
-    `, of which ${formatSeconds(cpuMs)}s was this hook's own CPU and ` +
-    `${formatSeconds(redactorMs)}s was inside redactor round trips. ${verdict}`
+    `, of which ${formatSeconds(cpuMs)}s was this hook's own CPU, ` +
+    `${formatSeconds(redactorMs)}s was inside redactor round trips and ` +
+    `${formatSeconds(hostMs)}s was inside host extensions. ${verdict}`
   );
 }
 
@@ -290,7 +344,9 @@ function attributeWait(elapsedMs, cpuMs, redactorMs) {
  *
  * With `context.cpuMs` in hand the line says which share of the wait was the
  * sanitizer computing, and with `context.redactorMs` too it names the window the
- * time went into ({@link attributeWait}). Without them the line says that it cannot
+ * time went into ({@link attributeWait}), including `context.hostMs`'s host
+ * extensions — a caller that measured the first two but has no extensions to
+ * charge reports that window as zero, which is a measurement and not a shrug. Without them the line says that it cannot
  * tell, rather than asserting an attribution nothing measured: a wall-clock
  * overrun on a loaded host is the common case, and blaming it on the sanitizer
  * sends the operator hunting a per-call cost that does not exist.
@@ -318,14 +374,18 @@ export function slowHookNotice(
   const redactorMs = context?.redactorMs;
   const attributed =
     typeof cpuMs === "number" && typeof redactorMs === "number";
+  // A caller with the first two windows but no host measurement charged nothing
+  // to it, which is a zero and not an unknown — every such caller runs the
+  // charger, so an absent number means no callback ran.
+  const hostMs = typeof context?.hostMs === "number" ? context.hostMs : 0;
   const attribution = attributed
-    ? attributeWait(elapsedMs, cpuMs, redactorMs)
+    ? attributeWait(elapsedMs, cpuMs, redactorMs, hostMs)
     : typeof cpuMs === "number"
       ? `, and used ${formatSeconds(cpuMs)}s of CPU. ` +
         "Only the CPU share is work every affected call repeats; the rest was spent waiting, on a busy machine or on something this hook called."
       : ". Wall-clock alone cannot separate the sanitizer's own work from a busy machine.";
   const timings = attributed
-    ? "all three timings"
+    ? "all four timings"
     : typeof cpuMs === "number"
       ? "both timings"
       : "timing";

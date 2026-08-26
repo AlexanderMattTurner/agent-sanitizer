@@ -38,6 +38,7 @@ const { sanitizeText, sanitizeValue, evaluateToolOutput, judgeSanitizeOutput } =
   await import("../claude-hooks/sanitize-output.mjs");
 const { extraSecretVars, envBoundSecretVars } =
   await import("../claude-hooks/lib/env-config.mjs");
+const { startHookTimer } = await import("../claude-hooks/lib/hook-timing.mjs");
 
 // What the stub daemon claims to have redacted. `token` trips the SECRET_HINT
 // pre-gate, so text containing it reaches the daemon at all.
@@ -202,6 +203,28 @@ describe("postText", () => {
   });
 });
 
+describe("postText timing", () => {
+  it("charges a blocking callback to the host-extension window", async () => {
+    // postText is where a composer runs a subprocess (an injection filter), whose
+    // CPU lands in a child this process cannot see; uncharged, that wait is
+    // indistinguishable from host contention.
+    const timer = startHookTimer();
+    await sanitizeText("plain text", "WebFetch", undefined, {
+      postText: () => {
+        const until = Date.now() + 60;
+        while (Date.now() < until) {
+          /* a callback that blocks, as a spawnSync-based filter does */
+        }
+        return null;
+      },
+    });
+    assert.ok(
+      timer.hostMs() >= 50,
+      `the callback's wait must be charged (${timer.hostMs()}ms)`,
+    );
+  });
+});
+
 describe("redactNote", () => {
   const secretEvent = { tool_name: "Bash", tool_response: SECRET_TEXT };
 
@@ -295,6 +318,25 @@ describe("audit", () => {
     assert.equal(records[0].output, REDACTED_TEXT);
     assert.equal(records[0].output, verdict.mutated_output);
     assert.match(String(records[0].context), /redacted/u);
+  });
+
+  it("charges its wait to the host-extension window, not to the remainder", async () => {
+    // The defect this closes: a composer's audit POST to an unreachable sink
+    // waited out its own connect bound on every tool call, and the slow-hook
+    // notice could attribute none of that second to anything — it named a loaded
+    // machine and sent the reader to the wrong repository.
+    const timer = startHookTimer();
+    await judge("plain output", {
+      audit: () => new Promise((resolve) => setTimeout(resolve, 60)),
+    });
+    assert.ok(
+      timer.hostMs() >= 50,
+      `the callback's wait must be charged (${timer.hostMs()}ms)`,
+    );
+    assert.ok(
+      timer.cpuMs() < timer.hostMs(),
+      "a sleeping callback burns wall-clock, not this process's CPU",
+    );
   });
 
   it("does not fire when the event carried no tool response", async () => {
