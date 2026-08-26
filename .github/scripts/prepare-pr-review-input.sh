@@ -5,11 +5,14 @@
 # diff — so an injection payload hidden in it (zero-width control text, ANSI
 # escapes, exfil beacons) cannot reach the agent intact.
 #
-# Generated-file filter: every path config/auto-resolve-regen-rules.json declares
-# as GENERATED is stripped from the diff before it is counted or sanitized. CI
-# rebuilds those artifacts and fails on any difference, so reviewing them adds no
-# signal, and this repo commits a ~29k-line hook bundle that pushed ordinary
-# source edits over the size guard below.
+# Generated-file filter: a path whose regen rule sets `reviewOmit` is stripped
+# from the diff before it is counted or sanitized. That flag asserts a REQUIRED
+# check re-derives the artifact and reds on any difference, so its bytes cannot
+# disagree with their sources and a reviewer reading them learns nothing. Being
+# generated is NOT enough on its own — a lockfile has a generator but no such
+# check, so nothing regenerates it and the reviewer is the only reader it has.
+# This repo commits a ~29k-line hook bundle, which pushed ordinary source edits
+# over the size guard below.
 #
 # Oversized-diff guard: the base-only checkout means diff.txt is the ONLY source
 # of the PR's changes — the agent cannot reconstruct them from the trusted base
@@ -53,8 +56,8 @@ emit_output() {
 # diff.txt ever reaches the reviewer.
 raw_diff="$(mktemp)"
 review_diff="$(mktemp)"
-owned_list="$(mktemp)"
-trap 'rm -f "$raw_diff" "$review_diff" "$owned_list"' EXIT
+omit_list="$(mktemp)"
+trap 'rm -f "$raw_diff" "$review_diff" "$omit_list"' EXIT
 # curl for the diff media type, not `gh api`/`gh pr diff`: gh's own
 # client-side safety guard (pkg/iostreams content sanitization) refuses to
 # print ANY response holding a raw terminal escape sequence unless
@@ -74,14 +77,13 @@ raw_diff_content="$(retry_stdout curl -fsS \
   "${api_url}/repos/${GH_REPO}/pulls/${PR}")"
 printf '%s\n' "$raw_diff_content" >"$raw_diff"
 
-# Drop the generated files before counting or reviewing. CI rebuilds each one
-# and fails on any difference, so its diff cannot disagree with the sources — and
-# this repo commits a ~29k-line hook bundle, so leaving them in pushed an
-# ordinary source edit past MAX_DIFF_LINES and skipped the review of the very
-# lines a human wrote. resolve-generated.mjs is the same ownership oracle the
-# auto-resolver partitions on; nothing classifies a path here.
-node .github/scripts/resolve-generated.mjs --owned >"$owned_list"
-node .github/scripts/strip-generated-diff.mjs "$owned_list" \
+# Drop the vouched-for artifacts before counting or reviewing: leaving them in
+# pushed an ordinary source edit past MAX_DIFF_LINES and skipped the review of
+# the very lines a human wrote. resolve-generated.mjs owns the decision — no path
+# is classified here — and `--review-omit` is narrower than `--owned`, listing
+# only rules whose output a required check re-derives and compares.
+node .github/scripts/resolve-generated.mjs --review-omit >"$omit_list"
+node .github/scripts/strip-generated-diff.mjs "$omit_list" \
   <"$raw_diff" >"$review_diff"
 
 diff_lines="$(wc -l <"$review_diff" | tr -d '[:space:]')"

@@ -11,6 +11,11 @@
 // Two modes:
 //   --owned            print every path the rules generate, one per line. This is
 //                      the ownership oracle auto-resolve/prepare.sh partitions on.
+//   --review-omit      print only the paths of rules flagged `reviewOmit`, which
+//                      asserts a required check re-derives them and fails on any
+//                      difference. strip-generated-diff.mjs hides exactly these
+//                      from the automated reviewer, so a generated path with no
+//                      such check (a lockfile) is deliberately NOT listed.
 //   (no flag)          run every rule whose sources changed, re-deriving its outputs.
 //   --changed <paths>  restrict the run to rules matching these changed paths.
 //
@@ -81,6 +86,8 @@ function loadRules() {
         die(`${at}: "ownsPrefix" must be a string ending in "/"`);
       }
     }
+    if (rule.reviewOmit !== undefined && typeof rule.reviewOmit !== "boolean")
+      die(`${at}: "reviewOmit" must be a boolean`);
     if (rule.sourcesPattern !== undefined) {
       try {
         RegExp(rule.sourcesPattern);
@@ -104,6 +111,13 @@ const ownedPaths = (rules) => {
   }
   return [...new Set(out)];
 };
+
+/** The paths a rule vouches for with `reviewOmit`. Narrower than {@link
+ * ownedPaths} on purpose: being generated says a path has a generator, while
+ * this says a required check re-derives it and reds on a difference, which is
+ * the only thing that makes hiding it from a reviewer safe. */
+const reviewOmitPaths = (rules) =>
+  ownedPaths(rules.filter((r) => r.reviewOmit));
 
 const ruleMatches = (rule, changed) => {
   if (changed === null) return true;
@@ -166,6 +180,11 @@ function main(argv) {
 
   if (argv.includes("--owned")) {
     for (const p of ownedPaths(rules)) process.stdout.write(`${p}\n`);
+    return;
+  }
+
+  if (argv.includes("--review-omit")) {
+    for (const p of reviewOmitPaths(rules)) process.stdout.write(`${p}\n`);
     return;
   }
 

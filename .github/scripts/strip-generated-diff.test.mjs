@@ -26,10 +26,10 @@ const DIFF = [
   "",
 ].join("\n");
 
-const OWNED = ["plugin/dist/hooks/plugin-hooks.bundle.mjs", "types/"];
+const OMIT = ["plugin/dist/hooks/plugin-hooks.bundle.mjs", "types/"];
 
 test("drops a generated file's section and keeps the hand-written one", () => {
-  const { kept, dropped } = stripGenerated(DIFF, OWNED);
+  const { kept, dropped } = stripGenerated(DIFF, OMIT);
   assert.deepEqual(
     dropped.map((d) => d.path),
     ["plugin/dist/hooks/plugin-hooks.bundle.mjs"],
@@ -56,12 +56,12 @@ test("an ownsPrefix entry covers its whole subtree", () => {
     "",
   ].join("\n");
   assert.deepEqual(
-    stripGenerated(diff, OWNED).dropped.map((d) => d.path),
+    stripGenerated(diff, OMIT).dropped.map((d) => d.path),
     ["types/index.d.ts"],
   );
   // The prefix must not match a sibling that merely starts with the same letters.
   assert.deepEqual(
-    stripGenerated(diff.replaceAll("types/", "types-doc/"), OWNED).dropped,
+    stripGenerated(diff.replaceAll("types/", "types-doc/"), OMIT).dropped,
     [],
   );
 });
@@ -72,7 +72,32 @@ test("a rename with only one generated side is kept", () => {
     "similarity index 100%",
     "",
   ].join("\n");
-  assert.deepEqual(stripGenerated(diff, OWNED).dropped, []);
+  assert.deepEqual(stripGenerated(diff, OMIT).dropped, []);
+});
+
+test("a space-bearing path AFTER an omitted file survives", () => {
+  // The section split must not depend on parsing paths. When it did, this
+  // header failed to start a new section, so the hand-written file was appended
+  // to the omitted artifact above it and vanished from the review with it —
+  // fail-CLOSED, the one outcome this script must never produce.
+  const diff = [
+    "diff --git a/plugin/dist/hooks/plugin-hooks.bundle.mjs b/plugin/dist/hooks/plugin-hooks.bundle.mjs",
+    "@@ -1 +1 @@",
+    "-var a = 1;",
+    "+var a = 2;",
+    "diff --git a/src/file name.mjs b/src/file name.mjs",
+    "@@ -1 +1 @@",
+    "-const hand = 1;",
+    "+const written = 2;",
+    "",
+  ].join("\n");
+  const { kept, dropped } = stripGenerated(diff, OMIT);
+  assert.deepEqual(
+    dropped.map((d) => d.path),
+    ["plugin/dist/hooks/plugin-hooks.bundle.mjs"],
+  );
+  assert.ok(kept.includes("+const written = 2;"), kept);
+  assert.ok(kept.includes("diff --git a/src/file name.mjs"), kept);
 });
 
 test("an unparsable header is kept, never dropped", () => {
@@ -85,7 +110,7 @@ test("an unparsable header is kept, never dropped", () => {
     "+b",
     "",
   ].join("\n");
-  assert.deepEqual(stripGenerated(diff, OWNED).dropped, []);
+  assert.deepEqual(stripGenerated(diff, OMIT).dropped, []);
 });
 
 test("an empty owned list drops nothing", () => {

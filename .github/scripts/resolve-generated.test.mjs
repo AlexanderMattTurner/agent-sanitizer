@@ -215,3 +215,48 @@ test("a failing rule command fails the run", () => {
   assert.match(r.stderr, /exited 1/);
   rmSync(root, { recursive: true, force: true });
 });
+
+// --review-omit is what strip-generated-diff.mjs hides from the automated
+// reviewer, so it must be strictly narrower than --owned. A path that is merely
+// generated (a lockfile) has no check re-deriving it in CI, and hiding it would
+// tell the reviewer a guarantee nobody provides.
+const OMIT_RULES = JSON.stringify({
+  rules: [
+    {
+      command: ["true"],
+      sources: ["package.json"],
+      owns: ["dist/bundle.mjs"],
+      reviewOmit: true,
+    },
+    { command: ["true"], sources: ["package.json"], owns: ["pnpm-lock.yaml"] },
+  ],
+});
+
+test("--review-omit lists only the rules that set the flag", () => {
+  const root = repoWith(OMIT_RULES);
+  const omit = run(root, ["--review-omit"]);
+  assert.equal(omit.status, 0);
+  assert.deepEqual(omit.stdout.split("\n").filter(Boolean), [
+    "dist/bundle.mjs",
+  ]);
+  // Paired positive marker: --owned must still carry BOTH, so a flag that
+  // silently stopped being read would show up here as the two modes agreeing.
+  const owned = run(root, ["--owned"]);
+  assert.deepEqual(owned.stdout.split("\n").filter(Boolean), [
+    "dist/bundle.mjs",
+    "pnpm-lock.yaml",
+  ]);
+  rmSync(root, { recursive: true, force: true });
+});
+
+test("a non-boolean reviewOmit fails loud", () => {
+  // The flag asserts a required check exists. A truthy string would enable the
+  // omission by accident, which is the one direction that loses review coverage.
+  const root = repoWith(
+    '{"rules":[{"command":["true"],"sources":["a"],"owns":["b"],"reviewOmit":"yes"}]}',
+  );
+  const r = run(root, ["--review-omit"]);
+  assert.equal(r.status, 1);
+  assert.match(r.stderr, /"reviewOmit" must be a boolean/);
+  rmSync(root, { recursive: true, force: true });
+});
