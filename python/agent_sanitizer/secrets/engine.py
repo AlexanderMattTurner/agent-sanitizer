@@ -26,7 +26,7 @@ import functools
 import json
 import re
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import NamedTuple
@@ -1115,7 +1115,35 @@ def _cross_line_eligible_types() -> frozenset[str]:
 _PREFILTER_WINDOW_PAD = 64
 
 
-def _denylist_prefilter(types: frozenset[str] | None) -> tuple[re.Pattern[str], ...]:
+# A pattern of a boundary-anchored detector opens with one of these two
+# literal lookbehinds (`secret-detectors.json`'s own convention). Stripping a
+# KNOWN literal prefix, rather than parsing the assertion generally, is what
+# keeps this mechanical and auditable: it cannot misread an unrelated
+# lookbehind a future detector might add for some other reason.
+_LEADING_BOUNDARY_LOOKBEHINDS = ("(?<![A-Za-z0-9_])", "(?<![A-Za-z0-9])")
+
+
+def _relax_leading_boundary(pattern: str) -> str:
+    """``pattern`` with a leading token-boundary lookbehind removed, if present.
+
+    The cross-line prefilter's own SEARCH is over ``stripped[window_start:...]``,
+    a slice whose start is not yet known to sit on a real boundary — that is
+    exactly what :attr:`DeletionOffsets.seams` and the window-start clip in
+    :func:`_cross_line_candidate_spans` establish, AFTER a hit locates the
+    candidate. Keeping the lookbehind on the DISCOVERY pattern would refuse the
+    hit before the seam-aware window ever runs, so discovery relaxes it and
+    ``scan_line``'s later, window-clipped, fully-anchored re-match is what
+    actually enforces it.
+    """
+    for prefix in _LEADING_BOUNDARY_LOOKBEHINDS:
+        if pattern.startswith(prefix):
+            return pattern[len(prefix) :]
+    return pattern
+
+
+def _denylist_prefilter(
+    types: frozenset[str] | None, *, relax_leading_boundary: bool = False
+) -> tuple[re.Pattern[str], ...]:
     """One regex per distinct flag set among the union of ``denylist`` patterns
     belonging to plugins whose ``secret_type`` is in ``types`` (every active
     plugin when ``types`` is ``None``), read live off
@@ -1137,10 +1165,17 @@ def _denylist_prefilter(types: frozenset[str] | None) -> tuple[re.Pattern[str], 
     strictest example). So text none of these regexes match cannot be a hit
     ``scan_line`` would have found either way, and this is a pure performance
     prefilter, never a detection gate of its own.
+
+    ``relax_leading_boundary`` strips a leading token-boundary lookbehind from
+    each pattern before it joins the union — see :func:`_relax_leading_boundary`
+    for why the cross-line caller passes it and the per-line one does not.
     """
     by_flags: dict[int, list[str]] = {}
     for pat in denylist_patterns(get_plugins(), types):
-        by_flags.setdefault(pat.flags, []).append(degroup(pat.pattern))
+        source = degroup(pat.pattern)
+        if relax_leading_boundary:
+            source = _relax_leading_boundary(source)
+        by_flags.setdefault(pat.flags, []).append(source)
     if not by_flags:
         raise RuntimeError(
             "no eligible detector supplied a denylist regex to prefilter "
@@ -1157,14 +1192,20 @@ def _denylist_prefilter(types: frozenset[str] | None) -> tuple[re.Pattern[str], 
 @functools.cache
 def _eligible_prefilter() -> tuple[re.Pattern[str], ...]:
     """The cross-line prefilter: :func:`_denylist_prefilter` restricted to
-    :func:`_cross_line_eligible_types`. Each match is a NECESSARY (not
-    sufficient) condition for a cross-line-eligible detection.
+    :func:`_cross_line_eligible_types`, with a leading token-boundary
+    lookbehind relaxed (see :func:`_relax_leading_boundary`) — the collapsed
+    text this searches has not yet had its newline seams located, so requiring
+    the boundary here would refuse a hit the window-clipped ``scan_line`` call
+    later re-validates correctly. Each match is a NECESSARY (not sufficient)
+    condition for a cross-line-eligible detection.
     ``functools.cache``'d: the plugin set for a given detect-secrets install is
     fixed for the process lifetime, and this must be called only from inside an
     active :func:`configure_plugins`/``transient_settings`` block, same as
     :func:`~detect_secrets.core.scan.scan_line` itself.
     """
-    return _denylist_prefilter(_cross_line_eligible_types())
+    return _denylist_prefilter(
+        _cross_line_eligible_types(), relax_leading_boundary=True
+    )
 
 
 @functools.cache
@@ -1208,8 +1249,17 @@ def _eligible_probe() -> LiteralProbe:
     eligible types are the structurally-rigid detectors, so their required
     literals are long and distinctive (``-----BEGIN RSA PRIVATE KEY``, ``ghp_``,
     ``sk-ant-a``) and ordinary tool output contains none of them.
+
+    Built from the SAME boundary-relaxed patterns as :func:`_eligible_prefilter`
+    — a pattern this probe cannot bound with a literal window is handed back
+    verbatim as one of :attr:`~.Plan.full_scans` and swept directly, so a probe
+    built from the anchored source would reintroduce the exact refusal
+    :func:`_relax_leading_boundary` exists to avoid.
     """
-    return LiteralProbe(denylist_patterns(get_plugins(), _cross_line_eligible_types()))
+    return LiteralProbe(
+        re.compile(_relax_leading_boundary(pat.pattern), pat.flags)
+        for pat in denylist_patterns(get_plugins(), _cross_line_eligible_types())
+    )
 
 
 # Whole-text probe for the engine-owned pass that sweeps the entire payload with
@@ -1247,7 +1297,10 @@ _FIELD_NAME_ANCHOR = re.compile(_FIELD_NAMES)
 
 
 def _cross_line_candidate_spans(
-    collapsed: str, config: RedactorConfig, deadline: _Deadline = _NO_DEADLINE
+    collapsed: str,
+    config: RedactorConfig,
+    deadline: _Deadline = _NO_DEADLINE,
+    newline_seams: Sequence[int] = (),
 ) -> list[tuple[int, int, str, str]]:
     """``(start, end, placeholder, found_type)`` — offsets into ``collapsed`` — for
     every structural or env-bound secret found in the newline-free view
@@ -1275,10 +1328,26 @@ def _cross_line_candidate_spans(
     types is kept as two separate candidates, same as scanning the whole text
     would have produced (the caller's overlap-rejecting accept loop is what
     decides which one wins a colliding span).
+
+    ``newline_seams`` (in ``collapsed``'s own index space, from
+    :attr:`DeletionOffsets.seams`) names every point a deleted newline joined
+    two originally-unrelated lines. A window's backward pad must not cross one:
+    a detector whose prefix requires a token boundary sees whatever character
+    sat at the end of the PRECEDING line, not the boundary the deleted newline
+    actually was, and silently refuses a real token that starts right after it.
     """
     charset = config.resolved_charset()
     spans: list[tuple[int, int, str, str]] = []
     stripped, offsets = strip_invisible_with_map(collapsed, charset)
+    # `newline_seams` is in `collapsed`-space; translate each into the smallest
+    # `stripped`-index whose own collapsed-space position is at or past it, so
+    # invisible-char deletion ahead of a seam cannot shift it stale. `bisect`
+    # works directly against `offsets` (a `Sequence[int]`, sorted, monotonic)
+    # whether it is the identity `range` (no invisibles present — overwhelmingly
+    # the common case) or a real `DeletionOffsets`.
+    stripped_seams = sorted(
+        {bisect.bisect_left(offsets, seam) for seam in newline_seams}
+    )
     seen: set[tuple[str, str]] = set()
     # The eligible union's sweep over the whole collapse is the engine's single
     # costliest regex pass, so the probe both rules it out for a payload carrying
@@ -1303,6 +1372,15 @@ def _cross_line_candidate_spans(
     ):
         deadline.check("cross-line candidate scan")
         window_start = max(0, hit.start() - _PREFILTER_WINDOW_PAD)
+        # Never let the pad reach past the nearest seam behind the hit: the
+        # INVARIANT this enforces is that a boundary-anchored pattern's leading
+        # lookbehind, evaluated against `stripped[window_start:...]`, sees
+        # nothing before a position a deleted newline actually preceded — so a
+        # token starting right after a wrapped line is never misread as
+        # starting inside the previous line's last word.
+        seam_idx = bisect.bisect_right(stripped_seams, hit.start()) - 1
+        if seam_idx >= 0:
+            window_start = max(window_start, stripped_seams[seam_idx])
         window_end = min(len(stripped), hit.end() + _PREFILTER_WINDOW_PAD)
         for secret in scan_line(stripped[window_start:window_end]):
             if secret.type not in _cross_line_eligible_types():
@@ -1349,7 +1427,7 @@ def _redact_cross_line(
     accepted: list[tuple[int, int, str, str]] = []
     prev_end = -1
     for cs, ce, placeholder_text, found_type in sorted(
-        _cross_line_candidate_spans(collapsed, config, deadline),
+        _cross_line_candidate_spans(collapsed, config, deadline, offsets.seams),
         key=lambda s: (s[0], -s[1]),
     ):
         orig_start, orig_end = offsets[cs], offsets[ce - 1] + 1

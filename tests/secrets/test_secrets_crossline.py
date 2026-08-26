@@ -411,3 +411,55 @@ def test_cross_line_prefilter_cache_does_not_survive_a_reconfigure():
         assert E._eligible_prefilter.cache_info().currsize == 1
     with E.configure_plugins():
         assert E._eligible_prefilter.cache_info().currsize == 0
+
+
+# ─── Boundary-anchored detectors and cross-line reassembly ───────────────────
+# A wrapped credential preceded by an unrelated line ending in a word character
+# is the exact shape the cross-line pass exists for (fold -w wrapping wraps the
+# WHOLE stream at one column width, so the line before a split token is just as
+# likely to end mid-word as not). Every cross-line-eligible detector whose
+# prefix opens with a leading token-boundary lookbehind is affected: the
+# collapsed text's own boundary check sees the PRECEDING LINE's last character,
+# not the deleted newline, and silently refuses a real token.
+
+
+def test_redact_text_catches_wrapped_token_after_word_ending_line():
+    tok = "ghp_" + "a" * 18 + "\n" + "b" * 18
+    out, found = redact("prefix\n" + tok)
+    assert out == "prefix\n[REDACTED: GitHub Token]"
+    assert found == ["GitHub Token"]
+
+
+def test_redact_text_catches_wrapped_hashicorp_token_after_word_ending_line():
+    # HashiCorp's own leading lookbehind predates this fix — this pins the same
+    # bug for the detector that already carried an anchor before the others did.
+    tok = "abcdefghij1234.atlasv1." + "A" * 32 + "\n" + "B" * 33
+    out, found = redact("prefix\n" + tok)
+    assert out == "prefix\n[REDACTED: Terraform Cloud API Token]"
+    assert found == ["Terraform Cloud API Token"]
+
+
+def test_redact_text_still_catches_wrapped_token_after_a_real_boundary():
+    """Non-regression: a split token preceded by an actual boundary character
+    (not a deleted newline) worked before this fix and must keep working — the
+    relaxed discovery pass is not what is doing the matching here, the
+    window-clipped `scan_line` re-validation still requires a real boundary."""
+    tok = "ghp_" + "a" * 18 + "\n" + "b" * 18
+    out, found = redact("key = " + tok)
+    assert out == "key = [REDACTED: GitHub Token]"
+    assert found == ["GitHub Token"]
+
+
+def test_redact_text_accepts_a_coincidental_newline_inside_a_false_positive():
+    """The accepted residual cost of the fix above, stated as a test rather than
+    left silent: seam-clipping restores a boundary at every DELETED newline, so
+    a real newline landing exactly where a word-internal false positive would
+    have started reopens it for the cross-line path alone — the per-line pass
+    never sees the whole identifier on one line to false-positive on in the
+    first place. This requires an actual `\\n` at that exact position, which is
+    far rarer than the single-line false positive it replaces (any tool output
+    containing the identifier, no wrapping required)."""
+    text = "test_planner_wei\nghs_a_burned_in_check_at_its_own_repeat_count"
+    out, found = redact(text)
+    assert out == "test_planner_wei\n[REDACTED: GitHub Token]"
+    assert found == ["GitHub Token"]
