@@ -667,7 +667,7 @@ def _opens_on_punctuation(body: str) -> bool:
     "const, pattern",
     [
         (d["const"], p)
-        for d in json.loads(_DETECTORS_JSON.read_text())["detectors"]
+        for d in json.loads(_DETECTORS_JSON.read_text(encoding="utf-8"))["detectors"]
         for p in d["patterns"]
     ],
 )
