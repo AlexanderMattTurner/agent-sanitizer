@@ -642,6 +642,51 @@ def test_redact_is_linear_on_the_reported_redos_payload():
 # by ordinary snake_case text, so a word-internal prefix is a live false
 # positive rather than a theoretical one.
 
+_BOUNDARY_GUARD = "(?<![A-Za-z0-9_])"
+
+
+def _opens_on_punctuation(body: str) -> bool:
+    """True when the pattern's first match position can only be a punctuation
+    character — an escaped literal like NpmDetector's ``\\/``. A literal, a
+    character class or an alternation group all admit a word character, so only
+    the escape form is exempt, and a future pattern that is not one says so by
+    failing rather than by being remembered."""
+    return len(body) > 1 and body[0] == "\\" and not body[1].isalnum()
+
+
+@pytest.mark.parametrize(
+    "const, pattern",
+    [
+        (d["const"], p)
+        for d in json.loads(_DETECTORS_JSON.read_text())["detectors"]
+        for p in d["patterns"]
+    ],
+)
+def test_word_initial_pattern_opens_on_a_token_boundary(const, pattern):
+    """The rule the SSOT's own description states, checked by SHAPE.
+
+    A pattern that can start matching on a word character is reachable from
+    inside an identifier, and a body class admitting ``_`` is then completed by
+    ordinary snake_case text. The lookbehind refuses that. Pinning it per
+    literal pattern would leave the NEXT detector uncovered, so this iterates
+    the file: a new row cannot land without the guard.
+    """
+    body = pattern.removeprefix(_BOUNDARY_GUARD)
+    if _opens_on_punctuation(body):
+        assert pattern == body, f"{const} needs no boundary guard"
+        return
+    assert pattern.startswith(_BOUNDARY_GUARD), (const, pattern)
+
+
+def test_the_boundary_guard_sweep_is_not_vacuous():
+    """Both arms of the rule above must have real members, or a file of nothing
+    but punctuation-initial patterns would pass it."""
+    patterns = [p for ps in _DETECTOR_PATTERNS.values() for p in ps]
+    guarded = [p for p in patterns if p.startswith(_BOUNDARY_GUARD)]
+    assert len(guarded) >= 10, len(guarded)
+    assert [p for p in patterns if _opens_on_punctuation(p)], patterns
+
+
 _WORD_INTERNAL_PREFIXES = [
     (
         "GitHub Token",

@@ -68,7 +68,7 @@
     {
       "generator": "plugin/scripts/build-redactor-pyz.mjs",
       "sources": ["plugin/requirements.txt"],
-      "sourcesPattern": "^python/(pyproject\\.toml|.*\\.(py|json))$",
+      "sourcesPattern": "^python/",
       "owns": [
         "plugin/dist/redactor/daemon.pyz",
         "plugin/dist/redactor/agent_sanitizer-0.0.0-py3-none-any.whl"
