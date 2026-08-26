@@ -270,3 +270,16 @@ test("--rederived-only without --owned is refused, never a run", () => {
   assert.match(r.stderr, /modifier of --owned/);
   rmSync(root, { recursive: true, force: true });
 });
+
+test("reviewOmit cannot cover an ownsPrefix", () => {
+  // The check the flag names regenerates its outputs and diffs them, which says
+  // nothing about an EXTRA file in the subtree — while the reader acting on it
+  // stops reading the whole directory. Refused rather than documented.
+  const root = repoWith(
+    '{"rules":[{"command":["true"],"sources":["a"],"ownsPrefix":"dist/","reviewOmit":true}]}',
+  );
+  const r = run(root, ["--owned", "--rederived-only"]);
+  assert.equal(r.status, 1);
+  assert.match(r.stderr, /cannot cover an "ownsPrefix"/);
+  rmSync(root, { recursive: true, force: true });
+});

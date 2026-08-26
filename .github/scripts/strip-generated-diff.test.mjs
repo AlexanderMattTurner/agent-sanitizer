@@ -47,7 +47,11 @@ test("a diff with nothing generated passes through byte for byte", () => {
   assert.equal(kept, DIFF);
 });
 
-test("an ownsPrefix entry covers its whole subtree", () => {
+test("a directory entry hides nothing under it", () => {
+  // A check that regenerates its outputs and diffs them says nothing about an
+  // EXTRA file in the subtree, so a prefix cannot carry the flag's claim.
+  // resolve-generated.mjs refuses such a rule and main() refuses such a list;
+  // this pins the matcher itself, which is what would hide the file.
   const diff = [
     "diff --git a/types/index.d.ts b/types/index.d.ts",
     "@@ -1 +1 @@",
@@ -55,14 +59,11 @@ test("an ownsPrefix entry covers its whole subtree", () => {
     "+declare const a: 2;",
     "",
   ].join("\n");
+  assert.deepEqual(stripGenerated(diff, OMIT).dropped, []);
+  // ...while the exact path it names still goes.
   assert.deepEqual(
-    stripGenerated(diff, OMIT).dropped.map((d) => d.path),
+    stripGenerated(diff, ["types/index.d.ts"]).dropped.map((d) => d.path),
     ["types/index.d.ts"],
-  );
-  // The prefix must not match a sibling that merely starts with the same letters.
-  assert.deepEqual(
-    stripGenerated(diff.replaceAll("types/", "types-doc/"), OMIT).dropped,
-    [],
   );
 });
 

@@ -24,7 +24,7 @@
 // change.
 //
 // Usage: node .github/scripts/strip-generated-diff.mjs <omit-list-file> <diff
-// where <omit-list-file> holds one path (or `ownsPrefix` subtree) per line.
+// where <omit-list-file> holds one exact path per line.
 
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
@@ -39,13 +39,10 @@ const SECTION_START = /^diff --git /u;
 // section is kept — see the fail-open note above.
 const HEADER = /^diff --git a\/(\S+) b\/(\S+)$/u;
 
-/** True when `path` is one the omit list vouches for: an exact `owns` entry, or
- * under an `ownsPrefix` (which the oracle prints with its trailing slash). */
-function isOmitted(path, omit) {
-  return omit.some((entry) =>
-    entry.endsWith("/") ? path.startsWith(entry) : path === entry,
-  );
-}
+/** True when `path` is one the omit list vouches for. EXACT match only: a
+ * directory would hide a file its generator never emits, which no check the
+ * flag names has to catch. resolve-generated.mjs refuses that rule too. */
+const isOmitted = (path, omit) => omit.includes(path);
 
 /** Split a unified diff into sections, each starting at a `diff --git` line.
  * A leading chunk before the first one (git emits none, but a caller may
@@ -110,6 +107,13 @@ export function omissionNote(dropped) {
 
 function main(omitListFile) {
   const omit = readFileSync(omitListFile, "utf8").split("\n").filter(Boolean);
+  const prefix = omit.find((entry) => entry.endsWith("/"));
+  if (prefix) {
+    process.stderr.write(
+      `strip-generated-diff: ${prefix} is a directory; the omit list takes exact paths only\n`,
+    );
+    process.exit(1);
+  }
   const diff = readFileSync(0, "utf8");
   const { kept, dropped } = stripGenerated(diff, omit);
   process.stdout.write(
