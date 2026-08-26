@@ -186,6 +186,10 @@ jobs:
           # needs no base-branch fetch (so persist-credentials:false holds) and
           # yields a commit the fetch-depth:0 checkout already contains.
           GH_TOKEN: ${{ github.token }}
+          # GitHub rejects an issue-comment POST/PATCH over 65536 characters
+          # (422). remerge-diff-comment.sh appends a review block after this
+          # report, so the cap leaves it headroom instead of using the limit.
+          REMERGE_REPORT_MAX_BYTES: "55000"
         run: |
           BASE_SHA="$(bash .github/scripts/precommit-range-base.sh | sed -n 's/^base=//p')"
           HEAD_SHA="$(git rev-parse HEAD)"
