@@ -208,6 +208,11 @@ export async function chargeRedactorRoundTrip(work, now = Date.now) {
  *
  * `work` may be synchronous — a callback that spawns a subprocess and blocks is
  * charged in full, because the whole call runs inside this bracket.
+ *
+ * Reach this through `claude-hooks/sanitize-output`'s re-export whenever the hook
+ * is the bundled copy: importing this subpath separately yields a SECOND module
+ * instance whose total no timer reads, and the notice then reports a measured
+ * `0.0s` for a window that really burned seconds.
  * @template T
  * @param {() => Promise<T> | T} work
  * @param {() => number} [now]  injectable clock, for tests

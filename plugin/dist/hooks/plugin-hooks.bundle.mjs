@@ -50319,7 +50319,10 @@ function suppressionMessage(cause) {
   return `[SANITIZATION FAILED \u2014 original output suppressed for safety. Hook error: ${cause}]`;
 }
 async function evaluateToolOutput(input, ext = {}) {
-  const emitTrace = bestEffortTrace(ext.trace ?? trace);
+  const hostTrace = ext.trace;
+  const emitTrace = bestEffortTrace(
+    hostTrace ? (event, fields2) => chargeHostExtensionSync(() => hostTrace(event, fields2)) : trace
+  );
   const emit = (outcome, fields2) => {
     emitTrace(TraceEvent.HOOK_RAN, {
       hook: HOOK_NAME2,

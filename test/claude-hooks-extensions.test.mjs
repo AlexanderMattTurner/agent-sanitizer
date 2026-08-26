@@ -275,6 +275,56 @@ describe("redactNote", () => {
   });
 });
 
+describe("postText timing (failure path)", () => {
+  it("charges a callback that THREW — its wait still lands in the window", async () => {
+    // The costliest callback is the one that stalled and then failed; charging
+    // outside `finally` would hand that whole wait to the unattributed remainder,
+    // on exactly the error path runJudgeCli reports hostMs from.
+    const timer = startHookTimer();
+    await assert.rejects(
+      sanitizeText("plain text", "WebFetch", undefined, {
+        postText: async () => {
+          await new Promise((resolve) => setTimeout(resolve, 60));
+          throw new Error("extension exploded");
+        },
+      }),
+      /extension exploded/u,
+    );
+    assert.ok(
+      timer.hostMs() >= 50,
+      `a failed callback's wait must still be charged (${timer.hostMs()}ms)`,
+    );
+  });
+});
+
+describe("trace timing", () => {
+  it("charges a composer's trace sink, and not the package's own", async () => {
+    // The sink is composer code on the same seam as the other callbacks: it may
+    // write over a socket whose cost this process's CPU figure cannot see.
+    const hosted = startHookTimer();
+    await evaluateToolOutput(
+      { tool_name: "Bash", tool_input: {}, tool_response: "plain ls" },
+      {
+        trace: () => {
+          const until = Date.now() + 60;
+          while (Date.now() < until) {
+            /* a sink that blocks, as a socket write can */
+          }
+        },
+      },
+    );
+    assert.ok(hosted.hostMs() >= 50, `charged (${hosted.hostMs()}ms)`);
+    // The package's own sink is the sanitizer's work, so it charges nothing.
+    const own = startHookTimer();
+    await evaluateToolOutput({
+      tool_name: "Bash",
+      tool_input: {},
+      tool_response: "plain ls",
+    });
+    assert.equal(own.hostMs(), 0);
+  });
+});
+
 describe("redactNote timing", () => {
   it("charges a blocking annotator to the host-extension window", async () => {
     // redactNote must answer synchronously, so the async charger cannot wrap it;
