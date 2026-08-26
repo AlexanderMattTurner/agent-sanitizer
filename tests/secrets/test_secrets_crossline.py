@@ -135,11 +135,21 @@ def _fake_scan(monkeypatch, *pairs):
     # offset-translation/overlap/arbitration logic in isolation from any real
     # detector shape, not the gates themselves (each has its own soundness test).
     catch_all = (re.compile(".", re.DOTALL),)
-    monkeypatch.setattr(E, "_eligible_prefilter", lambda: catch_all)
     monkeypatch.setattr(E, "_full_prefilter", lambda: catch_all)
-    open_probe = LiteralProbe(catch_all)
-    monkeypatch.setattr(E, "_eligible_probe", lambda: open_probe)
-    monkeypatch.setattr(E, "_line_probe", lambda: open_probe)
+    monkeypatch.setattr(E, "_line_probe", lambda: LiteralProbe(catch_all))
+    # The cross-line window clip relies on a prefilter hit already spanning its
+    # whole candidate (real bounded-quantifier detectors guarantee this) — a
+    # single-character catch-all violates that, so build one from the fake
+    # values themselves, longest first so an overlapping shorter one can't
+    # preempt it in the alternation.
+    values = sorted({v for _, v in pairs if v}, key=len, reverse=True)
+    eligible = (
+        re.compile("|".join(re.escape(v) for v in values))
+        if values
+        else re.compile(r"[^\s\S]")
+    )
+    monkeypatch.setattr(E, "_eligible_prefilter", lambda: (eligible,))
+    monkeypatch.setattr(E, "_eligible_probe", lambda: LiteralProbe((eligible,)))
 
 
 def _ph(secret_type: str) -> str:
@@ -411,3 +421,98 @@ def test_cross_line_prefilter_cache_does_not_survive_a_reconfigure():
         assert E._eligible_prefilter.cache_info().currsize == 1
     with E.configure_plugins():
         assert E._eligible_prefilter.cache_info().currsize == 0
+
+
+# ─── Boundary-anchored detectors and cross-line reassembly ───────────────────
+# A wrapped credential preceded by an unrelated line ending in a word character
+# is the exact shape the cross-line pass exists for (fold -w wrapping wraps the
+# WHOLE stream at one column width, so the line before a split token is just as
+# likely to end mid-word as not). Every cross-line-eligible detector whose
+# prefix opens with a leading token-boundary lookbehind is affected: the
+# collapsed text's own boundary check sees the PRECEDING LINE's last character,
+# not the deleted newline, and silently refuses a real token.
+
+
+def test_redact_text_catches_wrapped_token_after_word_ending_line():
+    tok = "ghp_" + "a" * 18 + "\n" + "b" * 18
+    out, found = redact("prefix\n" + tok)
+    assert out == "prefix\n[REDACTED: GitHub Token]"
+    assert found == ["GitHub Token"]
+
+
+def test_redact_text_catches_wrapped_hashicorp_token_after_word_ending_line():
+    # HashiCorp's own leading lookbehind predates this fix — this pins the same
+    # bug for the detector that already carried an anchor before the others did.
+    tok = "abcdefghij1234.atlasv1." + "A" * 32 + "\n" + "B" * 33
+    out, found = redact("prefix\n" + tok)
+    assert out == "prefix\n[REDACTED: Terraform Cloud API Token]"
+    assert found == ["Terraform Cloud API Token"]
+
+
+def test_redact_text_still_catches_wrapped_token_after_a_real_boundary():
+    """Non-regression: a split token preceded by an actual boundary character
+    (not a deleted newline) worked before this fix and must keep working — the
+    relaxed discovery pass is not what is doing the matching here, the
+    window-clipped `scan_line` re-validation still requires a real boundary."""
+    tok = "ghp_" + "a" * 18 + "\n" + "b" * 18
+    out, found = redact("key = " + tok)
+    assert out == "key = [REDACTED: GitHub Token]"
+    assert found == ["GitHub Token"]
+
+
+def test_redact_text_accepts_a_coincidental_newline_inside_a_false_positive():
+    """The accepted residual cost of the fix above, stated as a test rather than
+    left silent: seam-clipping restores a boundary at every DELETED newline, so
+    a real newline landing exactly where a word-internal false positive would
+    have started reopens it for the cross-line path alone — the per-line pass
+    never sees the whole identifier on one line to false-positive on in the
+    first place. This requires an actual `\\n` at that exact position, which is
+    far rarer than the single-line false positive it replaces (any tool output
+    containing the identifier, no wrapping required)."""
+    text = "test_planner_wei\nghs_a_burned_in_check_at_its_own_repeat_count"
+    out, found = redact(text)
+    assert out == "test_planner_wei\n[REDACTED: GitHub Token]"
+    assert found == ["GitHub Token"]
+
+
+def test_redact_text_catches_wrapped_token_after_an_invisible_bearing_line():
+    """Pins the collapsed-space to stripped-space seam translation: a zero-width
+    char DELETED ahead of the seam shifts every stripped index behind its
+    collapsed one, so a seam used verbatim clips the window past the token's own
+    start and the miss this fix removes comes back."""
+    tok = "ghp_" + "a" * 18 + "\n" + "b" * 18
+    out, found = redact("pre​fix\n" + tok)
+    assert out == "pre​fix\n[REDACTED: GitHub Token]"
+    assert found == ["GitHub Token"]
+
+
+def test_redact_text_catches_a_token_wrapped_right_before_the_next_line():
+    """The mirror image of the leading-boundary fix: a token whose END lands on
+    a wrap column, with the next line opening on an alphanumeric, used to defeat
+    the trailing lookahead the same way a word-ending line defeated the leading
+    one — `window_end` must clip at the seam so the lookahead sees end-of-window,
+    not the next line's first character."""
+    body = "a" * 93
+    tok = "sk-ant-api03-" + body[:40] + "\n" + body[40:] + "AA"
+    out, found = redact(tok + "\nnextline")
+    assert out == "[REDACTED: Anthropic API Key]\nnextline"
+    assert found == ["Anthropic API Key"]
+
+
+def test_relax_leading_boundary_refuses_an_unrecognized_lookbehind():
+    with pytest.raises(ValueError, match="leading lookbehind"):
+        E._relax_leading_boundary(r"(?<!\w)ghp_[A-Za-z0-9_]{36,}")
+
+
+def test_relax_trailing_boundary_refuses_an_unrecognized_lookahead():
+    with pytest.raises(ValueError, match="trailing lookahead"):
+        E._relax_trailing_boundary(r"ghp_[A-Za-z0-9_]{36,}(?!\d)")
+
+
+def test_relax_boundary_leaves_a_pattern_with_no_lookaround_untouched():
+    # NpmDetector's own denylist opens on an escaped `//`, not a boundary
+    # lookaround — the mechanically-exempt shape both relax functions must
+    # pass through rather than mistake for an unrecognized guard.
+    pattern = r"\/\/[^\s]{1,256}\/:_authToken=\s{0,256}npm_[^\s]{1,256}"
+    assert E._relax_leading_boundary(pattern) == pattern
+    assert E._relax_trailing_boundary(pattern) == pattern
