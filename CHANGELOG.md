@@ -8,6 +8,14 @@ adhere to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+## [2.47.13] - 2026-08-26
+
+### Fixed
+
+- Fixed test detector JSON reads to properly use UTF-8 encoding.
+- Updated CI tool pin for the stale agent-resolve-merge-conflicts and ci-truth-serum tooling to resolve their findings.
+- Fixed remerge-diff report's size cap configuration to properly wire into the comment step.
+
 ## [2.47.12] - 2026-08-26
 
 ### Fixed
