@@ -1116,11 +1116,17 @@ _PREFILTER_WINDOW_PAD = 64
 
 
 # A pattern of a boundary-anchored detector opens with one of these two
-# literal lookbehinds (`secret-detectors.json`'s own convention). Stripping a
-# KNOWN literal prefix, rather than parsing the assertion generally, is what
-# keeps this mechanical and auditable: it cannot misread an unrelated
-# lookbehind a future detector might add for some other reason.
+# literal lookbehinds, and closes with one of the two literal lookaheads below
+# (`secret-detectors.json`'s own convention). Stripping a KNOWN literal
+# affix, rather than parsing the assertion generally, is what keeps this
+# mechanical and auditable — but that same literalness means a spelling
+# outside the known set must be REFUSED, not silently kept anchored: keeping
+# it would refuse a genuinely wrapped token at that end and no test would see
+# it, since the relax step would look like a no-op instead of a miss.
 _LEADING_BOUNDARY_LOOKBEHINDS = ("(?<![A-Za-z0-9_])", "(?<![A-Za-z0-9])")
+_TRAILING_BOUNDARY_LOOKAHEADS = ("(?![A-Za-z0-9])", "(?!\\w)")
+_UNRECOGNIZED_LEADING_RE = re.compile(r"^\(\?<![^()]*\)")
+_UNRECOGNIZED_TRAILING_RE = re.compile(r"\(\?![^()]*\)$")
 
 
 def _relax_leading_boundary(pattern: str) -> str:
@@ -1134,15 +1140,50 @@ def _relax_leading_boundary(pattern: str) -> str:
     hit before the seam-aware window ever runs, so discovery relaxes it and
     ``scan_line``'s later, window-clipped, fully-anchored re-match is what
     actually enforces it.
+
+    Raises if ``pattern`` opens with a negative lookbehind that is not one of
+    the two known spellings: silently leaving an unrecognized one in place
+    would restore the exact missed-secret bug this cross-line pass exists to
+    fix, for whichever detector owns it.
     """
     for prefix in _LEADING_BOUNDARY_LOOKBEHINDS:
         if pattern.startswith(prefix):
             return pattern[len(prefix) :]
+    if _UNRECOGNIZED_LEADING_RE.match(pattern):
+        raise ValueError(
+            f"{pattern!r} opens with a leading lookbehind this repo does not "
+            f"recognize as one of {_LEADING_BOUNDARY_LOOKBEHINDS!r}"
+        )
+    return pattern
+
+
+def _relax_trailing_boundary(pattern: str) -> str:
+    """``pattern`` with a trailing token-boundary lookahead removed, if present.
+
+    The mirror image of :func:`_relax_leading_boundary`: a token whose END
+    lands on a wrap column collapses so the next line's first character sits
+    right after it, and a trailing lookahead sees that character and refuses
+    the hit. Discovery relaxes it here; the window-end clip in
+    :func:`_cross_line_candidate_spans` is what keeps ``scan_line``'s later,
+    fully-anchored re-match from seeing the same spurious neighbor.
+
+    Raises if ``pattern`` closes with a negative lookahead that is not one of
+    the two known spellings, for the same reason
+    :func:`_relax_leading_boundary` does.
+    """
+    for suffix in _TRAILING_BOUNDARY_LOOKAHEADS:
+        if pattern.endswith(suffix):
+            return pattern[: -len(suffix)]
+    if _UNRECOGNIZED_TRAILING_RE.search(pattern):
+        raise ValueError(
+            f"{pattern!r} closes with a trailing lookahead this repo does not "
+            f"recognize as one of {_TRAILING_BOUNDARY_LOOKAHEADS!r}"
+        )
     return pattern
 
 
 def _denylist_prefilter(
-    types: frozenset[str] | None, *, relax_leading_boundary: bool = False
+    types: frozenset[str] | None, *, relax_boundaries: bool = False
 ) -> tuple[re.Pattern[str], ...]:
     """One regex per distinct flag set among the union of ``denylist`` patterns
     belonging to plugins whose ``secret_type`` is in ``types`` (every active
@@ -1166,15 +1207,16 @@ def _denylist_prefilter(
     ``scan_line`` would have found either way, and this is a pure performance
     prefilter, never a detection gate of its own.
 
-    ``relax_leading_boundary`` strips a leading token-boundary lookbehind from
-    each pattern before it joins the union — see :func:`_relax_leading_boundary`
-    for why the cross-line caller passes it and the per-line one does not.
+    ``relax_boundaries`` strips a leading token-boundary lookbehind and a
+    trailing one from each pattern before it joins the union — see
+    :func:`_relax_leading_boundary` and :func:`_relax_trailing_boundary` for
+    why the cross-line caller passes it and the per-line one does not.
     """
     by_flags: dict[int, list[str]] = {}
     for pat in denylist_patterns(get_plugins(), types):
         source = degroup(pat.pattern)
-        if relax_leading_boundary:
-            source = _relax_leading_boundary(source)
+        if relax_boundaries:
+            source = _relax_trailing_boundary(_relax_leading_boundary(source))
         by_flags.setdefault(pat.flags, []).append(source)
     if not by_flags:
         raise RuntimeError(
@@ -1193,19 +1235,18 @@ def _denylist_prefilter(
 def _eligible_prefilter() -> tuple[re.Pattern[str], ...]:
     """The cross-line prefilter: :func:`_denylist_prefilter` restricted to
     :func:`_cross_line_eligible_types`, with a leading token-boundary
-    lookbehind relaxed (see :func:`_relax_leading_boundary`) — the collapsed
-    text this searches has not yet had its newline seams located, so requiring
-    the boundary here would refuse a hit the window-clipped ``scan_line`` call
-    later re-validates correctly. Each match is a NECESSARY (not sufficient)
-    condition for a cross-line-eligible detection.
+    lookbehind and a trailing lookahead relaxed (see
+    :func:`_relax_leading_boundary`, :func:`_relax_trailing_boundary`) — the
+    collapsed text this searches has not yet had its newline seams located, so
+    requiring either boundary here would refuse a hit the window-clipped
+    ``scan_line`` call later re-validates correctly. Each match is a
+    NECESSARY (not sufficient) condition for a cross-line-eligible detection.
     ``functools.cache``'d: the plugin set for a given detect-secrets install is
     fixed for the process lifetime, and this must be called only from inside an
     active :func:`configure_plugins`/``transient_settings`` block, same as
     :func:`~detect_secrets.core.scan.scan_line` itself.
     """
-    return _denylist_prefilter(
-        _cross_line_eligible_types(), relax_leading_boundary=True
-    )
+    return _denylist_prefilter(_cross_line_eligible_types(), relax_boundaries=True)
 
 
 @functools.cache
@@ -1254,10 +1295,14 @@ def _eligible_probe() -> LiteralProbe:
     — a pattern this probe cannot bound with a literal window is handed back
     verbatim as one of :attr:`~.Plan.full_scans` and swept directly, so a probe
     built from the anchored source would reintroduce the exact refusal
-    :func:`_relax_leading_boundary` exists to avoid.
+    :func:`_relax_leading_boundary`/:func:`_relax_trailing_boundary` exist to
+    avoid.
     """
     return LiteralProbe(
-        re.compile(_relax_leading_boundary(pat.pattern), pat.flags)
+        re.compile(
+            _relax_trailing_boundary(_relax_leading_boundary(pat.pattern)),
+            pat.flags,
+        )
         for pat in denylist_patterns(get_plugins(), _cross_line_eligible_types())
     )
 
@@ -1375,6 +1420,15 @@ def _cross_line_candidate_spans(
                     window_start, bisect.bisect_left(offsets, newline_seams[seam_idx])
                 )
         window_end = min(len(stripped), hit.end() + _PREFILTER_WINDOW_PAD)
+        # Mirrors the window_start clip above, for a trailing lookahead: never
+        # let the pad reach past the nearest seam AHEAD of the hit, or a token
+        # ending on a wrap column reads as continuing into the next line's word.
+        if newline_seams and hit.end() < len(stripped):
+            seam_idx = bisect.bisect_left(newline_seams, offsets[hit.end()])
+            if seam_idx < len(newline_seams):
+                window_end = min(
+                    window_end, bisect.bisect_left(offsets, newline_seams[seam_idx])
+                )
         for secret in scan_line(stripped[window_start:window_end]):
             if secret.type not in _cross_line_eligible_types():
                 continue

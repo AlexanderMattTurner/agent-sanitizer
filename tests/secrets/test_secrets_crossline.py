@@ -135,11 +135,21 @@ def _fake_scan(monkeypatch, *pairs):
     # offset-translation/overlap/arbitration logic in isolation from any real
     # detector shape, not the gates themselves (each has its own soundness test).
     catch_all = (re.compile(".", re.DOTALL),)
-    monkeypatch.setattr(E, "_eligible_prefilter", lambda: catch_all)
     monkeypatch.setattr(E, "_full_prefilter", lambda: catch_all)
-    open_probe = LiteralProbe(catch_all)
-    monkeypatch.setattr(E, "_eligible_probe", lambda: open_probe)
-    monkeypatch.setattr(E, "_line_probe", lambda: open_probe)
+    monkeypatch.setattr(E, "_line_probe", lambda: LiteralProbe(catch_all))
+    # The cross-line window clip relies on a prefilter hit already spanning its
+    # whole candidate (real bounded-quantifier detectors guarantee this) — a
+    # single-character catch-all violates that, so build one from the fake
+    # values themselves, longest first so an overlapping shorter one can't
+    # preempt it in the alternation.
+    values = sorted({v for _, v in pairs if v}, key=len, reverse=True)
+    eligible = (
+        re.compile("|".join(re.escape(v) for v in values))
+        if values
+        else re.compile(r"[^\s\S]")
+    )
+    monkeypatch.setattr(E, "_eligible_prefilter", lambda: (eligible,))
+    monkeypatch.setattr(E, "_eligible_probe", lambda: LiteralProbe((eligible,)))
 
 
 def _ph(secret_type: str) -> str:
@@ -463,3 +473,46 @@ def test_redact_text_accepts_a_coincidental_newline_inside_a_false_positive():
     out, found = redact(text)
     assert out == "test_planner_wei\n[REDACTED: GitHub Token]"
     assert found == ["GitHub Token"]
+
+
+def test_redact_text_catches_wrapped_token_after_an_invisible_bearing_line():
+    """Pins the collapsed-space to stripped-space seam translation: a zero-width
+    char DELETED ahead of the seam shifts every stripped index behind its
+    collapsed one, so a seam used verbatim clips the window past the token's own
+    start and the miss this fix removes comes back."""
+    tok = "ghp_" + "a" * 18 + "\n" + "b" * 18
+    out, found = redact("pre​fix\n" + tok)
+    assert out == "pre​fix\n[REDACTED: GitHub Token]"
+    assert found == ["GitHub Token"]
+
+
+def test_redact_text_catches_a_token_wrapped_right_before_the_next_line():
+    """The mirror image of the leading-boundary fix: a token whose END lands on
+    a wrap column, with the next line opening on an alphanumeric, used to defeat
+    the trailing lookahead the same way a word-ending line defeated the leading
+    one — `window_end` must clip at the seam so the lookahead sees end-of-window,
+    not the next line's first character."""
+    body = "a" * 93
+    tok = "sk-ant-api03-" + body[:40] + "\n" + body[40:] + "AA"
+    out, found = redact(tok + "\nnextline")
+    assert out == "[REDACTED: Anthropic API Key]\nnextline"
+    assert found == ["Anthropic API Key"]
+
+
+def test_relax_leading_boundary_refuses_an_unrecognized_lookbehind():
+    with pytest.raises(ValueError, match="leading lookbehind"):
+        E._relax_leading_boundary(r"(?<!\w)ghp_[A-Za-z0-9_]{36,}")
+
+
+def test_relax_trailing_boundary_refuses_an_unrecognized_lookahead():
+    with pytest.raises(ValueError, match="trailing lookahead"):
+        E._relax_trailing_boundary(r"ghp_[A-Za-z0-9_]{36,}(?!\d)")
+
+
+def test_relax_boundary_leaves_a_pattern_with_no_lookaround_untouched():
+    # NpmDetector's own denylist opens on an escaped `//`, not a boundary
+    # lookaround — the mechanically-exempt shape both relax functions must
+    # pass through rather than mistake for an unrecognized guard.
+    pattern = r"\/\/[^\s]{1,256}\/:_authToken=\s{0,256}npm_[^\s]{1,256}"
+    assert E._relax_leading_boundary(pattern) == pattern
+    assert E._relax_trailing_boundary(pattern) == pattern
