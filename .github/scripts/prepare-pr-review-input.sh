@@ -5,10 +5,16 @@
 # diff — so an injection payload hidden in it (zero-width control text, ANSI
 # escapes, exfil beacons) cannot reach the agent intact.
 #
+# Generated-file filter: every path config/auto-resolve-regen-rules.json declares
+# as GENERATED is stripped from the diff before it is counted or sanitized. CI
+# rebuilds those artifacts and fails on any difference, so reviewing them adds no
+# signal, and this repo commits a ~29k-line hook bundle that pushed ordinary
+# source edits over the size guard below.
+#
 # Oversized-diff guard: the base-only checkout means diff.txt is the ONLY source
 # of the PR's changes — the agent cannot reconstruct them from the trusted base
-# tree, so an enormous diff (a mega-merge, a vendored/generated dump) would be
-# ingested whole into an Opus read that is slow, costly, and low-signal. Above
+# tree, so an enormous diff (a mega-merge, a vendored dump) would be ingested
+# whole into an Opus read that is slow, costly, and low-signal. Above
 # MAX_DIFF_LINES lines this skips the review, emitting oversized=true so the
 # caller posts a "please review manually" notice instead of spending the read.
 #
@@ -46,7 +52,9 @@ emit_output() {
 # grants the agent read over PR_INPUT_DIR via --add-dir), so only the SANITIZED
 # diff.txt ever reaches the reviewer.
 raw_diff="$(mktemp)"
-trap 'rm -f "$raw_diff"' EXIT
+review_diff="$(mktemp)"
+owned_list="$(mktemp)"
+trap 'rm -f "$raw_diff" "$review_diff" "$owned_list"' EXIT
 # curl for the diff media type, not `gh api`/`gh pr diff`: gh's own
 # client-side safety guard (pkg/iostreams content sanitization) refuses to
 # print ANY response holding a raw terminal escape sequence unless
@@ -66,7 +74,17 @@ raw_diff_content="$(retry_stdout curl -fsS \
   "${api_url}/repos/${GH_REPO}/pulls/${PR}")"
 printf '%s\n' "$raw_diff_content" >"$raw_diff"
 
-diff_lines="$(wc -l <"$raw_diff" | tr -d '[:space:]')"
+# Drop the generated files before counting or reviewing. CI rebuilds each one
+# and fails on any difference, so its diff cannot disagree with the sources — and
+# this repo commits a ~29k-line hook bundle, so leaving them in pushed an
+# ordinary source edit past MAX_DIFF_LINES and skipped the review of the very
+# lines a human wrote. resolve-generated.mjs is the same ownership oracle the
+# auto-resolver partitions on; nothing classifies a path here.
+node .github/scripts/resolve-generated.mjs --owned >"$owned_list"
+node .github/scripts/strip-generated-diff.mjs "$owned_list" \
+  <"$raw_diff" >"$review_diff"
+
+diff_lines="$(wc -l <"$review_diff" | tr -d '[:space:]')"
 if ((diff_lines > MAX_DIFF_LINES)); then
   emit_output "oversized=true"
   emit_output "diff_lines=$diff_lines"
@@ -80,7 +98,7 @@ emit_output "oversized=false"
 
 sanitize() { node .github/scripts/sanitize-pr-input.mjs; }
 
-sanitize <"$raw_diff" >"${PR_INPUT_DIR}/diff.txt" 2>"${PR_INPUT_DIR}/diff.report.txt"
+sanitize <"$review_diff" >"${PR_INPUT_DIR}/diff.txt" 2>"${PR_INPUT_DIR}/diff.report.txt"
 # Capture the metadata JSON with retry_stdout, THEN pipe the clean result into
 # the sanitizer — retrying gh directly inside the `| sanitize` pipe is unsafe (a
 # failing attempt would stream partial JSON into the sanitizer, and a SIGPIPE if
