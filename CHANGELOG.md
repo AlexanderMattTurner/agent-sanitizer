@@ -8,6 +8,17 @@ adhere to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+## [2.47.10] - 2026-08-26
+
+### Changed
+- Hide generated files from the PR reviewer's diff by filtering artifacts and splitting diffs on headers.
+
+### Fixed
+- Refuse omitting claims for directories in CI review preparation.
+- Ensure the reviewer omit list is driven through `--owned --rederived-only` flags.
+- Only omit artifacts that a required check re-derives.
+- Prevent diff content lines from starting a new section.
+
 ## [2.47.9] - 2026-08-26
 
 ### Changed
