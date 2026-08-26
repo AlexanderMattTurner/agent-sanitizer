@@ -8,6 +8,14 @@ adhere to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+## [2.47.11] - 2026-08-26
+
+### Fixed
+- Secrets detector now requires a token boundary before every prefix-anchored detector pattern, and only matches token prefixes on word boundaries.
+
+### Changed
+- HTML parsing now operates in linear time for improved performance when processing HTML fragments.
+
 ## [2.47.10] - 2026-08-26
 
 ### Changed
