@@ -8,6 +8,12 @@ adhere to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+## [2.47.9] - 2026-08-26
+
+### Changed
+
+- HTML plugin now imports css-tree by subpath, reducing bundle size by dropping mdn-data from shipped bundles.
+
 ## [2.47.8] - 2026-08-25
 
 ### Changed
