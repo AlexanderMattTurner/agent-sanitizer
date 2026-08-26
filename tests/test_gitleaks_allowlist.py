@@ -26,7 +26,7 @@ def _allowlist_paths() -> list[str]:
     equivalent to gitleaks, so reading only one spelling would let a config
     rewritten into the other form pass this guard vacuously.
     """
-    config = tomllib.loads(GITLEAKS_TOML.read_text())
+    config = tomllib.loads(GITLEAKS_TOML.read_text(encoding="utf-8"))
     tables = config.get("allowlists", [])
     if "allowlist" in config:
         tables = [config["allowlist"], *tables]

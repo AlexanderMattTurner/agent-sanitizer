@@ -61,7 +61,7 @@ const inlineRuntimeJsonRequires = {
       calls.forEach(([call, , specifier], index) => {
         const binding = `__inlinedJson${index}`;
         imports.push(`import ${binding} from ${JSON.stringify(specifier)};`);
-        contents = contents.replace(call, binding);
+        contents = contents.replace(call, () => binding);
       });
       return {
         contents: `${imports.join("\n")}\n${contents}`,

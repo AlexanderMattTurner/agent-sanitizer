@@ -49,6 +49,9 @@ import re
 import subprocess
 import sys
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
+
+REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 
 RUNS_PER_PAGE = 20
 # How old a verified run may be and still anchor the memo diff. A memoized pass
@@ -77,7 +80,7 @@ def gh_api(path: str) -> dict | None:
 def git_ok(*args: str) -> bool:
     return (
         subprocess.run(
-            ["git", *args], capture_output=True, text=True, check=False
+            ["git", *args], capture_output=True, text=True, check=False, cwd=REPO_ROOT
         ).returncode
         == 0
     )

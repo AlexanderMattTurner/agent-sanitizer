@@ -113,8 +113,8 @@ describe("warning parity between sanitize() and sanitizeText()", () => {
     return Promise.all(
       CASES.map(([, input]) => sanitize(input, { html: true })),
     ).then((results) => {
-      // Both tiers: a note is still a shared string both entry points emit, so
-      // it needs the same drift guard a warning does.
+      // Both tiers: a note is still a shared string both entry points emit,
+      // so it needs the same convergence check this suite runs on a warning.
       const seen = results.flatMap((r) => [...r.warnings, ...r.notes]);
       for (const prefix of shared)
         assert.ok(

@@ -46935,10 +46935,10 @@ async function sanitizeText(text5, options = {}) {
     notes,
     modified: state.modified,
     // Kept under its original name (it is a published field, and renaming a
-    // published field for a wording win is a breaking change) but now derived
-    // rather than tracked: "nothing here rose above a note". That is a strict
-    // generalization of what it used to mean — the inert-ANSI strip that set it
-    // before is now simply the most common way to end up note-only.
+    // published field for a wording win is a breaking change) but derived
+    // rather than tracked: "nothing here rose above a note". The inert-ANSI
+    // strip is simply the most common way to end up note-only, not the only
+    // one this field now covers.
     sgrNote: notes.length > 0 && warnings.length === 0 && !state.unreportedChange,
     ...reveal !== void 0 && { reveal },
     // Presence-gated like `reveal`: the field exists only when Layer 2 spliced

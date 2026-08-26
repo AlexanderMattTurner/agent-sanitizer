@@ -1,4 +1,7 @@
 #!/usr/bin/env node
+// drift-guard-ok: a tool-generated artifact kept for cross-language
+// (JS/Python) parity, guarded by exactly this committed == regenerate(src/)
+// freshness check.
 /**
  * Generate the cross-language golden file from the shared corpus.
  *
@@ -14,8 +17,8 @@
  *
  * Run from the repo root: `node test/generate-golden.mjs`. The committed output
  * (`tests/golden.json`) is regenerated and the diff reviewed; the JS golden test
- * (`test/golden-corpus.test.mjs`) fails if the committed file drifts from a
- * fresh run, so this stays in lockstep with `src/`.
+ * (`test/golden-corpus.test.mjs`) fails if the committed file is stale against a
+ * fresh run.
  */
 import { readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";

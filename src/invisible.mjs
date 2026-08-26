@@ -127,11 +127,11 @@ export const STRIP = new RegExp(
 
 // SGR (Select Graphic Rendition) colour matching. Re-exported from ./ansi.mjs —
 // the ONE ANSI grammar, shared with the Layer-1 stripper, which cannot import
-// this module (layer1.mjs imports invisible.mjs, not the other way round). The
-// two used to be separate regexes with DIFFERENT parameter rules, and the looser
-// copy lived here: `ESC[12345m` read as SGR-only (so the operator got a
-// "display-only colour" note) while the stripper could not match it and spliced
-// a visible `[12345m` into the model's view.
+// this module (layer1.mjs imports invisible.mjs, not the other way round). A
+// second, looser copy here with DIFFERENT parameter rules would read
+// `ESC[12345m` as SGR-only (so the operator got a "display-only colour" note)
+// while the stripper could not match it and would splice a visible `[12345m`
+// into the model's view.
 export { SGR_RE } from "./ansi.mjs";
 
 /**
@@ -252,7 +252,7 @@ export function hasLongRun(text) {
  * payload-length invisible run, and a pointer to recover the bytes — a hex dump
  * is ASCII, so it passes through sanitization untouched. The single source of
  * this note, shared by the `sanitize` convenience entry and the tool-output
- * pipeline so the two can't drift.
+ * pipeline.
  * @param {string[]} invisFound CATEGORY codes applyLayer1 reported removing
  * @param {string} deAnsi ANSI-stripped text (invisible runs intact), for the LONG_RUN probe
  * @returns {string}
@@ -463,9 +463,9 @@ const MAX_TAG_SPEC_CHARS = 6;
 //
 // The two Compatibility Ideograph BLOCKS stay literal: they are not
 // Unified_Ideograph, and JS RegExp exposes no \p{Block=…}. Block boundaries are
-// immutable by Unicode's stability policy, so a literal span cannot drift; the
-// contract test in test/invisible-unicode-tables.test.mjs pins that every
-// ASSIGNED code point inside them is a Script=Han letter.
+// immutable by Unicode's stability policy, so a literal span stays correct
+// forever; the contract test in test/invisible-unicode-tables.test.mjs pins
+// that every ASSIGNED code point inside them is a Script=Han letter.
 const IVS_MIN = 0xe0100;
 const IVS_MAX = 0xe01ef;
 const CJK_IDEOGRAPH_RE =

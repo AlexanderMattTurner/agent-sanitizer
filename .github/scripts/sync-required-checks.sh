@@ -9,10 +9,10 @@
 # different parser versions (the drift that would let the gate and the lint read
 # the same YAML two ways).
 #
-# The module path below is tied to that rev: ci-truth-serum's package was
-# `hooks` at the pinned revision and was later renamed to `ci_truth_serum`, so
-# bumping the rev in .pre-commit-config.yaml past that rename means changing
-# this line in the same commit. Nothing else here needs touching.
+# The module path below is tied to that rev: at the pinned revision
+# ci-truth-serum's package is `ci_truth_serum`. If a future rev bump lands
+# past another package rename, this line needs updating in the same commit;
+# nothing else here does.
 set -euo pipefail
 
 ref="$(awk '/repo:.*ci-truth-serum$/{f=1; next} f && /^[[:space:]]*rev:/{print $2; exit}' .pre-commit-config.yaml)"
@@ -27,5 +27,5 @@ if [[ "${CHECK_ONLY:-false}" == "true" ]]; then
 fi
 
 uv run --no-project \
-  --with "ci-truth-serum @ git+https://github.com/alexander-turner/ci-truth-serum@${ref}" \
-  python -m hooks.sync_required_checks "${args[@]}"
+  --with "ci-truth-serum @ git+https://github.com/AlexanderMattTurner/ci-truth-serum@${ref}" \
+  python -m ci_truth_serum.sync_required_checks "${args[@]}"

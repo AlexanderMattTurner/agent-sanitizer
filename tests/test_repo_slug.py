@@ -41,7 +41,12 @@ import pytest
 
 from tests._helpers import REPO_ROOT
 
-pytestmark = pytest.mark.drift_guard
+pytestmark = pytest.mark.drift_guard(
+    "the repo slug is hand-written in ~20 places across npm, hatchling, "
+    "Claude plugin JSON, GitHub Actions YAML, Markdown and a shell script — "
+    "four ecosystems that cannot read a shared manifest, so each copy is "
+    "checked against package.json's repository.url instead"
+)
 
 # The committed plugin bundle inlines megabytes of third-party sources whose
 # comments cite unrelated repos; it is generated from the linted sources.
@@ -56,7 +61,7 @@ GITHUB_REPO_URL = re.compile(
 #: matched by shape.
 EXTERNAL_REPOS = {
     "alexander-turner/claude-automation-template": "the upstream template this repo syncs from",
-    "alexander-turner/ci-truth-serum": "an upstream CI tool this repo consumes",
+    "AlexanderMattTurner/ci-truth-serum": "an upstream CI tool this repo consumes",
     "astral-sh/ruff-pre-commit": "pinned pre-commit hook source",
     "gitleaks/gitleaks": "pinned pre-commit hook source",
     "pre-commit/pre-commit-hooks": "pinned pre-commit hook source",
@@ -88,10 +93,14 @@ NON_REPO_PATHS = {
 #: legitimately appears next to a repo name that is not the SSOT one.
 #: agent-resolve-merge-conflicts is the merge-conflict resolver
 #: auto-resolve-conflicts.yaml and template-sync.yaml call as a reusable
-#: workflow, under the same owner.
+#: workflow, under the same owner. ci-truth-serum is also EXTERNAL_REPOS'
+#: own key — a fork must leave both the owner-mention shape and the pinned
+#: source pointing at the upstream ci-truth-serum, not at the fork's own
+#: rename, since it is a genuinely separate project this repo consumes.
 OTHER_REPOS_UNDER_THIS_OWNER = {
     "claude-automation-template",
     "agent-resolve-merge-conflicts",
+    "ci-truth-serum",
 }
 
 

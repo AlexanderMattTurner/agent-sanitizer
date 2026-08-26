@@ -195,12 +195,12 @@ def _run(
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir(exist_ok=True)
     gh = bin_dir / "gh"
-    gh.write_text(_FAKE_GH)
+    gh.write_text(_FAKE_GH, encoding="utf-8")
     gh.chmod(0o755)
-    (tmp_path / "reviews.json").write_text(json.dumps(reviews))
-    (tmp_path / "threads.json").write_text(json.dumps(threads))
+    (tmp_path / "reviews.json").write_text(json.dumps(reviews), encoding="utf-8")
+    (tmp_path / "threads.json").write_text(json.dumps(threads), encoding="utf-8")
     log = tmp_path / "statuses"
-    log.write_text("")
+    log.write_text("", encoding="utf-8")
     env = {
         "PATH": f"{bin_dir}:{os.environ['PATH']}",
         "GH_TOKEN": "fake",
@@ -222,7 +222,11 @@ def _run(
     proc = subprocess.run(
         ["bash", str(SCRIPT)], capture_output=True, text=True, env=env
     )
-    posted = [json.loads(ln) for ln in log.read_text().splitlines() if ln.strip()]
+    posted = [
+        json.loads(ln)
+        for ln in log.read_text(encoding="utf-8").splitlines()
+        if ln.strip()
+    ]
     return proc, posted
 
 
@@ -384,7 +388,7 @@ def _copy_gate_tree(
         spec = dict(SEVERITY_CONFIG)
         if gating is not None:
             spec["gating"] = gating
-        (cfg / "review-severities.json").write_text(json.dumps(spec))
+        (cfg / "review-severities.json").write_text(json.dumps(spec), encoding="utf-8")
     return dest / GATE_REL
 
 
@@ -616,7 +620,9 @@ def _run_merge_gate_block(
     scripts = tmp_path / ".github" / "scripts"
     scripts.mkdir(parents=True)
     stub = scripts / "review-findings-gate.sh"
-    stub.write_text('printf \'%s\\n\' "${PR:-unset}" >"$GATE_RECORD"\n')
+    stub.write_text(
+        'printf \'%s\\n\' "${PR:-unset}" >"$GATE_RECORD"\n', encoding="utf-8"
+    )
     record = tmp_path / "gate_pr"
     proc = subprocess.run(
         ["bash", "-c", _merge_gate_run_block()],
@@ -637,7 +643,7 @@ def test_merge_group_ref_parsing_extracts_the_pr_number(tmp_path: Path) -> None:
         tmp_path, "refs/heads/gh-readonly-queue/main/pr-190-0123abcd456789ef"
     )
     assert proc.returncode == 0, proc.stderr
-    assert record.read_text() == "190\n"
+    assert record.read_text(encoding="utf-8") == "190\n"
 
 
 def test_an_unparseable_merge_group_ref_fails_loud(tmp_path: Path) -> None:
@@ -847,6 +853,11 @@ def test_the_skipped_class_is_cleared_under_the_same_context() -> None:
     assert "opened" not in (job["if"] or "")
 
 
+@pytest.mark.drift_guard(
+    "the required-check context is a GitHub job name:, which must be a static "
+    "YAML literal — it cannot be computed, so the gate script's runtime copy "
+    "cannot be generated from it and is checked here instead"
+)
 def test_drift_guard_the_gate_context_is_duplicated_in_the_gate_script() -> None:
     """DRIFT GUARD — this asserts two copies of one string agree, which means the
     context is duplicated rather than sourced once. Naming it honestly instead

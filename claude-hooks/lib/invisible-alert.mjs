@@ -55,13 +55,13 @@ export const ALERT_BASE = join(
  * The path prefix every alert artifact of ONE session under this project shares.
  *
  * Session-keying is what makes the gate's one-time ask correct by construction.
- * The store and its ack used to be keyed by PROJECT alone and reset by a
- * destructive clear at SessionStart, which left two ways for a session to
- * inherit the previous one's answer: an early-exiting scanner arm (a dep-load
- * failure) returns before the clear, and nothing pins SessionStart against the
- * InstructionsLoaded events fired for the files loaded at launch. A session that
- * cannot see another session's files needs neither the clear nor the ordering —
- * past sessions' artifacts simply age out through {@link sweepStaleSessions}.
+ * Keying by PROJECT alone, reset by a destructive clear at SessionStart, would
+ * leave two ways for a session to inherit the previous one's answer: an
+ * early-exiting scanner arm (a dep-load failure) returns before the clear, and
+ * nothing pins SessionStart against the InstructionsLoaded events fired for
+ * the files loaded at launch. A session that cannot see another session's
+ * files needs neither the clear nor the ordering — past sessions' artifacts
+ * simply age out through {@link sweepStaleSessions}.
  * @param {string} [sessionId]  the harness's session identity
  * @returns {string}
  */
@@ -414,11 +414,11 @@ export function invisibleCharAlert(sessionId) {
  * Add `text` to the alert the PreToolUse gate surfaces this session, keeping
  * whatever is already there.
  *
- * One O_EXCL-created, randomly-named file per finding. The store used to be a
- * single file appended through a read-modify-write, so two hooks recording a
- * finding at once silently dropped one of them; a fresh file per finding has no
- * shared cell to lose. Symlink-refusing (writeFileNoFollow) because the store
- * sits at a predictable, world-visible $TMPDIR path.
+ * One O_EXCL-created, randomly-named file per finding. A single file appended
+ * through a read-modify-write would let two hooks recording a finding at once
+ * silently drop one of them; a fresh file per finding has no shared cell to
+ * lose. Symlink-refusing (writeFileNoFollow) because the store sits at a
+ * predictable, world-visible $TMPDIR path.
  * @param {string} text
  * @param {string} [sessionId]
  * @returns {boolean} whether the finding was recorded

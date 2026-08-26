@@ -28,7 +28,7 @@ exit "${UVX_RC:-0}"
 def live_pin_and_python() -> tuple[str, str]:
     """The pre-commit pin and Python version CI actually runs, read
     independently of the hook's own parser."""
-    text = (REPO_ROOT / WORKFLOW).read_text()
+    text = (REPO_ROOT / WORKFLOW).read_text(encoding="utf-8")
     line = next(ln for ln in text.splitlines() if "pre-commit==" in ln)
     pin = re.search(r"pre-commit==(?P<pin>[0-9][0-9.]*)", line)
     python_version = re.search(r"--python (?P<version>[0-9][0-9.]*)", line)
@@ -59,7 +59,7 @@ def sandbox(tmp_path: Path) -> Path:
 
     fake_bin = tmp_path / "bin"
     fake_bin.mkdir()
-    (fake_bin / "uvx").write_text(FAKE_UVX)
+    (fake_bin / "uvx").write_text(FAKE_UVX, encoding="utf-8")
     (fake_bin / "uvx").chmod(0o755)
     (tmp_path / "home").mkdir()
     return repo
@@ -86,7 +86,7 @@ def run_hook(sandbox: Path, refs: str, uvx_rc: int = 0) -> subprocess.CompletedP
 
 def uvx_calls(sandbox: Path) -> list[str]:
     log = sandbox.parent / "uvx.log"
-    return log.read_text().splitlines() if log.exists() else []
+    return log.read_text(encoding="utf-8").splitlines() if log.exists() else []
 
 
 def rev(repo: Path, ref: str) -> str:
@@ -181,7 +181,9 @@ def test_lint_failure_aborts_the_push(sandbox: Path) -> None:
 def test_unparseable_workflow_is_fatal(sandbox: Path) -> None:
     """A silent fallback to an unpinned pre-commit is the drift the parser
     exists to prevent, so an unrecognised run line must fail loudly."""
-    (sandbox / WORKFLOW).write_text("jobs:\n  pre-commit:\n    run: pre-commit run\n")
+    (sandbox / WORKFLOW).write_text(
+        "jobs:\n  pre-commit:\n    run: pre-commit run\n", encoding="utf-8"
+    )
     base, head = rev(sandbox, "HEAD~1"), rev(sandbox, "HEAD")
     result = run_hook(sandbox, f"refs/heads/topic {head} refs/heads/topic {base}\n")
     assert result.returncode == 1

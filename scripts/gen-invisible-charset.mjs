@@ -10,15 +10,15 @@
  * silent security regression (a code point added here but not there lets a key
  * spliced with it escape one layer).
  *
- * `Cf` used to be resolved LIVE by each consumer from its own Unicode database,
- * but Node (U17) and the CPython interpreter (often U14/U15) ship DIFFERENT
- * Unicode versions, so the two layers stripped DIFFERENT `Cf` sets — a key
- * spliced with a code point in the version delta (e.g. U+13439) escaped the layer
- * on the older Unicode. So `Cf` is now PINNED here at generation time (from
- * Node's `\p{Cf}`) alongside the non-Cf extras, and every consumer reads the
- * pinned list instead of resolving `Cf` live. Version-locking the set is what
- * makes the JS layer and the Python port strip an identical set regardless of
- * each runtime's own Unicode version.
+ * Resolving `Cf` LIVE in each consumer would read it from that runtime's own
+ * Unicode database — Node (U17) and the CPython interpreter (often U14/U15)
+ * ship DIFFERENT Unicode versions, so the two layers would strip DIFFERENT
+ * `Cf` sets, and a key spliced with a code point in the version delta (e.g.
+ * U+13439) would escape the layer on the older Unicode. `Cf` is instead
+ * PINNED here at generation time (from Node's `\p{Cf}`) alongside the non-Cf
+ * extras, and every consumer reads the pinned list. Version-locking the set is
+ * what makes the JS layer and the Python port strip an identical set
+ * regardless of each runtime's own Unicode version.
  *
  * Writes two generated artifacts, both from the SAME pinned data so they cannot
  * drift:

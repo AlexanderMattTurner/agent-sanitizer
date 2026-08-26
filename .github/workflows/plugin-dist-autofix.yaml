@@ -7,6 +7,21 @@ name: Plugin dist autofix
 # reproducibility test (committed bundle == fresh build) then passes on the
 # pushed commit; when this workflow cannot run, that test stays red and blocks
 # the merge — the artifact is never silently stale.
+#
+# SECURITY — split into two jobs so the push token and PR-authored code never
+# share a job. `regenerate` checks out the PR head and runs the build (which
+# runs the PR's OWN `pnpm install`/build lifecycle scripts) with no secret
+# anywhere in its environment. It tars up only the files the build changed
+# (some are compiled binaries, so a text `git diff` patch cannot carry them)
+# and uploads that tarball as a build artifact — never a secret, never
+# executable in the next job's context. `push` holds AUTOFIX_TOKEN_ORG and runs
+# no PR-defined script at all: extracting a tarball and `git commit`/`git push`
+# are this workflow's own commands, not the PR's package.json.
+# trusted-base-ok: `push` checks out the PR head so the commit/push land on the
+# right branch, but executes nothing resolved from that checkout — only `tar`
+# and `git`, system binaries, applying a tarball this same workflow produced.
+# No workspace file is ever run as a program, so there is nothing for a
+# rewritten package.json/action.yml/script in the PR to reach.
 on:
   # not-required-check — this workflow pushes a regenerated artifact onto the PR
   # branch; the reproducibility test in the Required node-tests check is what
@@ -46,45 +61,26 @@ jobs:
     # Regenerating the hook-binary manifest compiles four bun binaries (~100 MB
     # each), downloading each cross-target runtime on a cold cache.
     timeout-minutes: 30
+    outputs:
+      changed: ${{ steps.build.outputs.changed }}
     steps:
-      # A GITHUB_TOKEN push does not re-trigger workflows, so the Required
-      # node-tests check would stay pending on the fixed commit and block the PR.
-      # `secrets` can't be read in a job-level `if`, hence this preflight step.
-      - name: Check for AUTOFIX_TOKEN_ORG
-        id: guard
-        env:
-          AUTOFIX_TOKEN_ORG: ${{ secrets.AUTOFIX_TOKEN_ORG }}
-        run: |
-          if [ -n "$AUTOFIX_TOKEN_ORG" ]; then
-            echo "enabled=true" >>"$GITHUB_OUTPUT"
-          else
-            echo "enabled=false" >>"$GITHUB_OUTPUT"
-            echo "::notice::AUTOFIX_TOKEN_ORG secret is not set; skipping plugin dist regeneration. The reproducibility test will fail until the bundle is rebuilt and committed by hand."
-          fi
-
-      - if: steps.guard.outputs.enabled == 'true'
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           ref: ${{ github.event.pull_request.head.ref }}
-          # persist-credentials:false — do NOT leave any push token in .git/config.
-          # `pnpm install` and the build below run PR-defined lifecycle scripts; a
-          # persisted org-write PAT would be readable by that attacker-controlled
-          # code. The PAT is injected only into the final push step, which runs no
-          # PR code.
           persist-credentials: false
           fetch-depth: 0
 
       # The zipapp rebuild resolves the daemon's third-party tree from PyPI, so it
       # needs uv.
       - name: Setup base environment
-        if: steps.guard.outputs.enabled == 'true'
         uses: ./.github/actions/setup-base-env
         with:
           setup-python: "true"
 
-      - name: Rebuild the plugin artifacts and commit
+      # This job holds no secret at all — the build runs the PR's OWN lifecycle
+      # scripts with nothing to exfiltrate.
+      - name: Rebuild the plugin artifacts
         id: build
-        if: steps.guard.outputs.enabled == 'true'
         run: |
           node plugin/scripts/build-plugin.mjs
           # --if-stale: re-lock ONLY when the committed lock still names a
@@ -102,16 +98,70 @@ jobs:
             echo "Plugin artifacts already current; nothing to regenerate."
             exit 0
           fi
+          # tar, not a text patch: several changed files are compiled binaries a
+          # `git diff` patch cannot carry byte-for-byte.
+          git diff --name-only -z >"${RUNNER_TEMP}/changed-files.z"
+          tar --null -T "${RUNNER_TEMP}/changed-files.z" -czf "${RUNNER_TEMP}/dist-changes.tar.gz"
+          echo "changed=true" >>"$GITHUB_OUTPUT"
+
+      - if: steps.build.outputs.changed == 'true'
+        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5.0.0
+        with:
+          name: plugin-dist-autofix-changes
+          path: ${{ runner.temp }}/dist-changes.tar.gz
+          retention-days: 1
+
+  push:
+    needs: regenerate
+    if: needs.regenerate.outputs.changed == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      # A GITHUB_TOKEN push does not re-trigger workflows, so the Required
+      # node-tests check would stay pending on the fixed commit and block the PR.
+      # `secrets` can't be read in a job-level `if`, hence this preflight step.
+      - name: Check for AUTOFIX_TOKEN_ORG
+        id: guard
+        env:
+          AUTOFIX_TOKEN_ORG: ${{ secrets.AUTOFIX_TOKEN_ORG }}
+        run: |
+          if [ -n "$AUTOFIX_TOKEN_ORG" ]; then
+            echo "enabled=true" >>"$GITHUB_OUTPUT"
+          else
+            echo "enabled=false" >>"$GITHUB_OUTPUT"
+            echo "::notice::AUTOFIX_TOKEN_ORG secret is not set; skipping plugin dist regeneration. The reproducibility test will fail until the bundle is rebuilt and committed by hand."
+          fi
+
+      - if: steps.guard.outputs.enabled == 'true'
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: ${{ github.event.pull_request.head.ref }}
+          persist-credentials: false
+          fetch-depth: 0
+
+      - if: steps.guard.outputs.enabled == 'true'
+        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0.0
+        with:
+          name: plugin-dist-autofix-changes
+          path: ${{ runner.temp }}
+
+      # No PR-defined script runs in this job — extracting a tarball this
+      # workflow's own tar command produced, then a plain commit, is this
+      # workflow's own command, not the PR's package.json.
+      - name: Apply the rebuilt artifacts and commit
+        id: commit
+        if: steps.guard.outputs.enabled == 'true'
+        run: |
+          tar -xzf "${RUNNER_TEMP}/dist-changes.tar.gz"
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add -A
           git commit -m "chore(plugin): regenerate dist from this tree"
-          echo "changed=true" >>"$GITHUB_OUTPUT"
 
       # Push in a dedicated step whose only secret is the PAT. No PR code runs
-      # here, so the token cannot be exfiltrated.
+      # in this job, so the token cannot be exfiltrated.
       - name: Push the regenerated artifacts
-        if: steps.guard.outputs.enabled == 'true' && steps.build.outputs.changed == 'true'
+        if: steps.guard.outputs.enabled == 'true'
         env:
           AUTOFIX_TOKEN_ORG: ${{ secrets.AUTOFIX_TOKEN_ORG }}
           HEAD_REF: ${{ github.event.pull_request.head.ref }}

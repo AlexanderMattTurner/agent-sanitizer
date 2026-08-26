@@ -105,7 +105,7 @@ export function minEnvSecretLen() {
   const hostLen = hostSource()?.minSecretLen;
   // The package floor comes from the same physical file
   // agent_sanitizer.secrets.config reads (DEFAULT_MIN_SECRET_LEN), so the JS
-  // pre-gate and the Python daemon cannot drift apart on it.
+  // pre-gate and the Python daemon read the same number.
   if (hostLen === undefined) return redactionFloor.min_secret_len;
   if (!Number.isInteger(hostLen) || hostLen <= 0)
     throw new Error(

@@ -282,8 +282,9 @@ def test_daemon_slow_client_does_not_block_a_second_client(daemon):
         )
         elapsed = time.time() - start
         assert "AWS Access Key" in resp["found"]
-        # Comfortably under CONN_TIMEOUT_SECONDS: a blocked accept loop would make
-        # this second request wait ~10s behind the stalled first client.
+        # allow-wall-clock: comfortably under CONN_TIMEOUT_SECONDS — a blocked
+        # accept loop would make this second request wait ~10s behind the
+        # stalled first client, not merely run slow under CI load.
         assert elapsed < 5, f"second client waited {elapsed:.1f}s behind slow client"
     finally:
         # Close so the stalled worker's recv returns immediately and the pool can

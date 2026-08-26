@@ -53,8 +53,8 @@ export function startStubRedactorDaemon(socketPath, { secret, mark }) {
  * independent of the collect-sort-splice `spliceOrdered` performs — it is the
  * exact expected residue of a deletion when no two needles' matches overlap,
  * and a lower bound on what must survive when they do (an overlapping match is
- * dropped, never applied at a shifted offset). Shared so the splice and Layer-5
- * suites cannot drift into two subtly different oracles.
+ * dropped, never applied at a shifted offset). Shared by the splice and
+ * Layer-5 suites so both check against the one oracle.
  * @param {string} text
  * @param {string[]} needles
  * @returns {string}
@@ -94,8 +94,8 @@ export const cp = (codePoint) => String.fromCodePoint(codePoint);
  * Any single code point except the surrogate range, astral included, so
  * `fromCodePoint` never throws (fast-check v4 dropped `fc.fullUnicode`). Lone
  * surrogates are injected separately via `loneSurrogate` as raw UTF-16 units.
- * One canonical copy so the property suites can't drift onto subtly different
- * input distributions.
+ * One shared generator so every property suite draws from the same input
+ * distribution.
  */
 export const unicodeChar = fc
   .integer({ min: 0, max: 0x10ffff })

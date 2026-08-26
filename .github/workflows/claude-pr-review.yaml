@@ -7,7 +7,8 @@ name: Claude PR review
 #   A fork PR triggered via plain `pull_request` gets NO secrets, so it could
 #   never see the API key. `pull_request_target` runs in the BASE repo's
 #   trusted context (with secrets), so to stay safe this job:
-#     1. checks out the BASE branch, never the untrusted PR head — no
+#     1. checks out the repo's DEFAULT branch (never the PR's own base.ref,
+#        which the PR author picks), and never the untrusted PR head — no
 #        fork-authored code is ever checked out or executed here;
 #     2. reads the PR's changes only as DATA (a unified diff fetched from the
 #        API), and the prompt treats that diff as untrusted input, never as
@@ -113,10 +114,13 @@ jobs:
       - name: Checkout base (trusted) decide script
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
-          # Base BRANCH only (trusted), never the untrusted PR head — the same
-          # posture the review job takes. The script is read as trusted repo
-          # content; the PR head is only ever read as DATA via the API.
-          ref: ${{ github.event.pull_request.base.ref }}
+          # The repo's own default branch (trusted, GitHub-reported, and never
+          # the PR author's choice), not the PR's base.ref — a PR can BASE on
+          # any branch a same-repo author can push, including one carrying a
+          # rewritten copy of the script this step is about to run; checking
+          # out that branch would execute the attacker's version with this
+          # job's token live. Never the untrusted PR head either.
+          ref: ${{ github.event.repository.default_branch }}
           persist-credentials: false
           sparse-checkout: .github/scripts/decide-pr-review-trigger.sh
           sparse-checkout-cone-mode: false
@@ -163,16 +167,12 @@ jobs:
       - name: Checkout base (trusted) branch
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
-          # The base BRANCH is trusted repo content; the untrusted PR head is
-          # never checked out. Do NOT change this to head.sha/head.ref. It must
-          # be base.ref (the branch, resolved at checkout) rather than base.sha:
-          # base.sha is a stale snapshot of the base branch recorded when the PR
-          # was created, so on any PR opened before this workflow's scripts
-          # landed it checks out a tree WITHOUT them and every run dies with
-          # "No such file or directory" — while pull_request_target takes the
-          # workflow file itself from the branch tip. base.ref keeps the
-          # checkout and the workflow definition on the same (trusted) commit.
-          ref: ${{ github.event.pull_request.base.ref }}
+          # The repo's own default branch, GitHub-reported — not base.ref
+          # (a PR can base on any pushable branch, including one carrying a
+          # rewritten copy of the scripts this job runs with a live token) and
+          # not base.sha (a stale snapshot missing scripts this workflow later
+          # added). Never the untrusted PR head/head.sha either.
+          ref: ${{ github.event.repository.default_branch }}
           persist-credentials: false
           fetch-depth: 1
 
@@ -262,7 +262,7 @@ jobs:
           claude_args: >-
             --effort medium
             --setting-sources user
-            --allowedTools "Read,Grep,Glob,Write"
+            --allowedTools "Read(./**),Edit(/${{ runner.temp }}/pr-input/**)"
             --add-dir "${{ runner.temp }}/pr-input"
           prompt: |
             You are the automated reviewer for PR #${{ github.event.pull_request.number }} in ${{ github.repository }}.
@@ -380,9 +380,11 @@ jobs:
       - name: Checkout base (trusted) approval script
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
-          # Base BRANCH only (trusted) — never the untrusted PR head. Matches the
-          # decide/review jobs: the script is trusted repo content, no PR code runs.
-          ref: ${{ github.event.pull_request.base.ref }}
+          # The repo's own default branch, GitHub-reported — never base.ref (a
+          # PR can base on any pushable branch, including a rewritten copy of
+          # this script) and never the untrusted PR head. Matches the
+          # decide/review jobs above.
+          ref: ${{ github.event.repository.default_branch }}
           persist-credentials: false
           # Each script AND every lib it sources: a sourced file missing from
           # this list kills the step at runtime under `set -e`.

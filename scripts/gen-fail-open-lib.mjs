@@ -24,7 +24,7 @@ export const OUTPUT_PATH = join("plugin", "scripts", "lib", "fail-open.sh");
 /**
  * The committed bytes of `plugin/scripts/lib/fail-open.sh`: a shell function
  * deciding the posture exactly as `failOpenEnabled()` does, rendered from
- * `FAIL_CLOSED_VALUES` so the shell and JS spellings cannot drift.
+ * `FAIL_CLOSED_VALUES` so the shell and JS spellings come from one source.
  *
  * Emitted already Prettier-clean (two-space indent, trailing newline) because a
  * generator whose output a formatter then rewrites makes the round-trip test

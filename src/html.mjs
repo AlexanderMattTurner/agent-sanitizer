@@ -2354,10 +2354,10 @@ export function sanitizeHtml(text) {
 // post-parse walk never runs).
 const EXFIL_INDICATORS = [/\$\{[^{}]+\}/, /\{\{[^{}]+\}\}/];
 
-// Parameter NAMES whose presence used to flag on sight; now they only gate
-// WHICH raw params the value-shape test is applied to before the URL is parsed.
-// Kept narrow (the historically over-eager set) so the raw pre-parse pass stays
-// cheap; any non-keyword param is still value-gated post-parse by the walk.
+// Parameter NAMES that gate WHICH raw params the value-shape test is applied
+// to before the URL is parsed — presence alone no longer flags. Kept narrow so
+// the raw pre-parse pass stays cheap; any non-keyword param is still
+// value-gated post-parse by the walk.
 const KEYWORD_PARAM_NAME_RE =
   /^(?:data|d|payload|exfil|leak|steal|secret|token|key|env|password|pwd|cookie|session|auth)$/i;
 

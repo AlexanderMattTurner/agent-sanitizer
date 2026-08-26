@@ -257,6 +257,10 @@ def _cpu_growth_ratio(thunk_for) -> float:
     thunk_for(_long_field_line(1024))()
     small = _cpu_seconds(thunk_for(_long_field_line(_COPY_SMALL_BYTES)))
     large = _cpu_seconds(thunk_for(_long_field_line(_COPY_LARGE_BYTES)))
+    # allow-wall-clock: a zero measurement means the entry point never ran at
+    # all, not that a loaded runner was fast — and the caller's real
+    # assertion is the RATIO below, which stays load-independent because a
+    # loaded runner slows both `small` and `large` by the same factor.
     assert small > 0, "measured no CPU time — the entry point never ran"
     return large / small
 

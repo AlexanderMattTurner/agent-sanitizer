@@ -80,7 +80,9 @@ env:
   # propagated to downstream repos; each consumer owns its own security-scan
   # cadence and model pin, so the template stops overwriting them on sync.
   #
-  # claude-review.yaml: this repo runs the reviewer as two split workflows
+  # allow-workflow-ref: claude-review.yaml names the UPSTREAM template repo's
+  # workflow file, not one of this repo's own — this repo runs the reviewer as
+  # two split workflows
   # (claude-pr-review, claude-merge-delta-review) that between them produce the
   # jobs the template's single file does — same job names, same job-level
   # concurrency groups, so the two copies cancelled each other on every push. It was deleted here in #218, and the sync's "new

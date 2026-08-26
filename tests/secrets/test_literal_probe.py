@@ -541,11 +541,15 @@ def _open_every_probe(monkeypatch):
             "A​KIAIOSFODNN7EXAMPLE and AKIAIOSFODNN7EXAMPLE", id="invisible-spliced"
         ),
         pytest.param(
-            (REPO_ROOT / "python/agent_sanitizer/secrets/engine.py").read_text(),
+            (REPO_ROOT / "python/agent_sanitizer/secrets/engine.py").read_text(
+                encoding="utf-8"
+            ),
             id="this-engine-source",
         ),
         pytest.param(
-            (REPO_ROOT / "tests/secrets/secret-format-samples.json").read_text(),
+            (REPO_ROOT / "tests/secrets/secret-format-samples.json").read_text(
+                encoding="utf-8"
+            ),
             id="the-sample-corpus-file",
         ),
     ],
@@ -801,7 +805,9 @@ def _mark_value(match):
             id="multiline-operators",
         ),
         pytest.param(
-            (REPO_ROOT / "python/agent_sanitizer/secrets/engine.py").read_text(),
+            (REPO_ROOT / "python/agent_sanitizer/secrets/engine.py").read_text(
+                encoding="utf-8"
+            ),
             id="this-engine-source",
         ),
     ],

@@ -11,7 +11,8 @@ import pytest
 from tests._helpers import REPO_ROOT
 
 pytestmark = pytest.mark.skipif(
-    shutil.which("node") is None, reason="node not available"
+    shutil.which("node") is None and not os.environ.get("CI"),
+    reason="node not available",
 )
 
 SCRIPT = REPO_ROOT / ".github" / "scripts" / "phone-home-extract.js"
@@ -55,7 +56,8 @@ extract({{ context, core }}).then(() => {{
   process.stderr.write(err.message + "\\n");
   process.exit(1);
 }});
-"""
+""",
+        encoding="utf-8",
     )
     env = {
         **os.environ,
@@ -70,10 +72,10 @@ extract({{ context, core }}).then(() => {{
     outputs: dict = {}
     if result.returncode == 0 and out_file.exists():
         try:
-            outputs = json.loads(out_file.read_text())
+            outputs = json.loads(out_file.read_text(encoding="utf-8"))
         except json.JSONDecodeError as exc:
             pytest.fail(
-                f"wrapper wrote unparseable JSON {out_file.read_text()!r}: {exc}"
+                f"wrapper wrote unparseable JSON {out_file.read_text(encoding='utf-8')!r}: {exc}"
             )
     return outputs, result
 
@@ -97,7 +99,7 @@ def test_extracts_lessons_with_double_hash(tmp_path: Path) -> None:
     outputs, result = run_extract(tmp_path, pr_body)
     assert result.returncode == 0, result.stderr
     assert outputs.get("has_lessons") == "true"
-    content = (PHONE_HOME_DIR / "lessons.txt").read_text()
+    content = (PHONE_HOME_DIR / "lessons.txt").read_text(encoding="utf-8")
     assert "Use jq instead of node for JSON parsing." in content
     assert "Nothing." not in content  # the following ## section must terminate
 
@@ -114,7 +116,7 @@ def test_extracts_lessons_with_triple_hash(tmp_path: Path) -> None:
     outputs, result = run_extract(tmp_path, pr_body)
     assert result.returncode == 0, result.stderr
     assert outputs.get("has_lessons") == "true"
-    content = (PHONE_HOME_DIR / "lessons.txt").read_text()
+    content = (PHONE_HOME_DIR / "lessons.txt").read_text(encoding="utf-8")
     assert "Always validate input before processing." in content
     assert "noise-after-section." not in content
 
@@ -127,7 +129,7 @@ def test_lessons_not_cut_short_by_internal_blank_line(tmp_path: Path) -> None:
     outputs, result = run_extract(tmp_path, pr_body)
     assert result.returncode == 0, result.stderr
     assert outputs.get("has_lessons") == "true"
-    content = (PHONE_HOME_DIR / "lessons.txt").read_text()
+    content = (PHONE_HOME_DIR / "lessons.txt").read_text(encoding="utf-8")
     assert "First bullet." in content
     assert "Second bullet after blank line." in content
 
@@ -164,5 +166,5 @@ def test_filters_session_links(tmp_path: Path) -> None:
     outputs, result = run_extract(tmp_path, pr_body)
     assert result.returncode == 0, result.stderr
     assert outputs.get("has_lessons") == "true"
-    content = (PHONE_HOME_DIR / "lessons.txt").read_text()
+    content = (PHONE_HOME_DIR / "lessons.txt").read_text(encoding="utf-8")
     assert "claude.ai" not in content

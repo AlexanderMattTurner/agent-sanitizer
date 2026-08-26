@@ -58,6 +58,9 @@ jobs:
         with:
           # Need full history so `git describe`/`git log` can find the last tag.
           fetch-depth: 0
+          # token-fallback-ok: a deliberate degrade — a fork without
+          # TEMPLATE_SYNC_TOKEN_ORG configured still publishes releases under
+          # the stock GITHUB_TOKEN, at reduced (non-cross-repo) privilege.
           token: ${{ secrets.TEMPLATE_SYNC_TOKEN_ORG || secrets.GITHUB_TOKEN }}
 
       - name: Setup base environment

@@ -1,13 +1,14 @@
+// drift-guard-ok: the mirror is unavoidable — the shipped bundle cannot
+// import the engine at its pinned release.
 /**
  * The hooks-layer mirror of the keyed Layer-2 placeholder grammar.
  *
  * The engine (`src/html.mjs`) is the single PRODUCER of Layer-2 placeholders;
  * the hooks carry a MIRRORED regex (lib/placeholder-grammar.mjs) because the
  * shipped plugin bundle resolves the engine from a pinned registry release, so
- * an engine export the pin lacks would be undefined there. This suite is the
- * drift guard the mirror's comment promises: the two regexes must be
- * source-identical, and every placeholder the engine can mint must round-trip
- * through the hooks' parser to the exact key.
+ * an engine export the pin lacks would be undefined there. This suite is what
+ * keeps the two regexes source-identical, and every placeholder the engine
+ * can mint round-trips through the hooks' parser to the exact key.
  *
  * It also pins the property the PreToolUse composition RELIES on: the Layer-2
  * grammar and the secret-redaction grammar are DISJOINT, so the secret

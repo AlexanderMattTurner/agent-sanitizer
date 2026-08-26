@@ -29,9 +29,11 @@ agent_sanitizer_node_major() {
     major="${major%%.*}"
     case "$major" in
     *[!0-9]*) return 0 ;;
+    *) ;;
     esac
     printf '%s' "$major"
     ;;
+  *) ;;
   esac
 }
 

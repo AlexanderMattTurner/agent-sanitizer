@@ -85,7 +85,9 @@ def init_repo(tmp_path: Path, name: str = "repo") -> Path:
 def test_commit_msg_fails_closed_without_node(tmp_path: Path) -> None:
     repo = init_repo(tmp_path)
     msg = repo / "msg.txt"
-    msg.write_text("feat(scope): a perfectly valid conventional subject\n")
+    msg.write_text(
+        "feat(scope): a perfectly valid conventional subject\n", encoding="utf-8"
+    )
     path = curated_path(tmp_path, BASE_TOOLS)  # no node/pnpm/npm/npx
     result = subprocess.run(
         ["bash", str(REPO_ROOT / ".hooks" / "commit-msg"), str(msg)],
@@ -101,7 +103,7 @@ def test_commit_msg_fails_closed_without_node(tmp_path: Path) -> None:
 def test_commit_msg_escape_hatch_allows_skip(tmp_path: Path) -> None:
     repo = init_repo(tmp_path)
     msg = repo / "msg.txt"
-    msg.write_text("anything at all\n")
+    msg.write_text("anything at all\n", encoding="utf-8")
     path = curated_path(tmp_path, BASE_TOOLS)
     result = subprocess.run(
         ["bash", str(REPO_ROOT / ".hooks" / "commit-msg"), str(msg)],
@@ -121,7 +123,9 @@ def test_commit_msg_escape_hatch_allows_skip(tmp_path: Path) -> None:
 
 def _sandbox_pre_push_check(tmp_path: Path) -> Path:
     repo = init_repo(tmp_path)
-    (repo / "package.json").write_text('{"scripts":{"build":"echo build"}}\n')
+    (repo / "package.json").write_text(
+        '{"scripts":{"build":"echo build"}}\n', encoding="utf-8"
+    )
     hooks = repo / ".claude" / "hooks"
     hooks.mkdir(parents=True)
     for name in ("pre-push-check.sh", "lib-checks.sh"):
@@ -175,14 +179,14 @@ def test_pre_commit_runs_lint_staged_directly_without_package_manager(
     tmp_path: Path,
 ) -> None:
     repo = init_repo(tmp_path)
-    (repo / "package.json").write_text("{}\n")
+    (repo / "package.json").write_text("{}\n", encoding="utf-8")
     binp = repo / "node_modules" / ".bin"
     binp.mkdir(parents=True)
     marker = tmp_path / "lint-staged-ran"
     fake = binp / "lint-staged"
-    fake.write_text(f'#!/bin/bash\necho ran > "{marker}"\nexit 0\n')
+    fake.write_text(f'#!/bin/bash\necho ran > "{marker}"\nexit 0\n', encoding="utf-8")
     fake.chmod(0o755)
-    (repo / "a.txt").write_text("hello\n")
+    (repo / "a.txt").write_text("hello\n", encoding="utf-8")
     git(repo, "add", "a.txt")
     path = curated_path(tmp_path, BASE_TOOLS)  # no pnpm/npm
     result = subprocess.run(
@@ -193,7 +197,7 @@ def test_pre_commit_runs_lint_staged_directly_without_package_manager(
         text=True,
     )
     assert result.returncode == 0, result.stderr
-    assert marker.exists() and marker.read_text().strip() == "ran", (
+    assert marker.exists() and marker.read_text(encoding="utf-8").strip() == "ran", (
         "pre-commit must invoke the lint-staged binary directly, not skip"
     )
 
@@ -206,8 +210,8 @@ def test_pre_commit_runs_lint_staged_directly_without_package_manager(
 
 def test_pre_commit_fails_closed_when_lint_staged_missing(tmp_path: Path) -> None:
     repo = init_repo(tmp_path)
-    (repo / "package.json").write_text("{}\n")
-    (repo / "a.txt").write_text("hello\n")
+    (repo / "package.json").write_text("{}\n", encoding="utf-8")
+    (repo / "a.txt").write_text("hello\n", encoding="utf-8")
     git(repo, "add", "a.txt")
     path = curated_path(tmp_path, BASE_TOOLS)  # no node_modules in repo at all
     result = subprocess.run(
@@ -228,7 +232,7 @@ def test_pre_commit_passes_without_package_json(tmp_path: Path) -> None:
     # Positive control for the test above: the refusal comes from "Node project
     # with a broken gate", not from "no lint-staged binary" on its own.
     repo = init_repo(tmp_path)
-    (repo / "a.txt").write_text("hello\n")
+    (repo / "a.txt").write_text("hello\n", encoding="utf-8")
     git(repo, "add", "a.txt")
     path = curated_path(tmp_path, BASE_TOOLS)
     result = subprocess.run(
@@ -260,7 +264,7 @@ def _sandbox_guarded_repo(
     binp = repo / "node_modules" / ".bin"
     binp.mkdir(parents=True)
     fake = binp / "lint-staged"
-    fake.write_text("#!/bin/bash\nexit 0\n")
+    fake.write_text("#!/bin/bash\nexit 0\n", encoding="utf-8")
     fake.chmod(0o755)
     hooks = repo / ".hooks"
     shutil.copy(REPO_ROOT / ".hooks" / "run-guard-pairs.mjs", hooks)
@@ -280,10 +284,10 @@ def _sandbox_guarded_repo(
             REPO_ROOT / "node_modules" / "acorn"
         )
     (hooks / "guard-pairs.json").write_text(
-        f'{{"pairs": {pairs}, "tooSlowForCommit": {too_slow}}}'
+        f'{{"pairs": {pairs}, "tooSlowForCommit": {too_slow}}}', encoding="utf-8"
     )
-    (repo / "guard.test.mjs").write_text(guard_body)
-    (repo / "data.json").write_text("{}\n")
+    (repo / "guard.test.mjs").write_text(guard_body, encoding="utf-8")
+    (repo / "data.json").write_text("{}\n", encoding="utf-8")
     # Stage ONLY the guarded source by default, never `git add -A`. Staging the
     # suite too would schedule it through the runner's "a staged suite is its
     # own guard" rule before `pairs` is consulted at all, and both the failing
@@ -493,13 +497,13 @@ def test_the_sandbox_git_helper_ignores_an_inherited_git_dir(
     """
     sandbox = init_repo(tmp_path, "sandbox")
     decoy = init_repo(tmp_path, "decoy")
-    (decoy / "kept.txt").write_text("do not touch\n")
+    (decoy / "kept.txt").write_text("do not touch\n", encoding="utf-8")
     git(decoy, "add", "kept.txt")
     git(decoy, "commit", "-q", "-m", "decoy", "--no-verify")
     decoy_head = _head(decoy)
 
     monkeypatch.setenv("GIT_DIR", str(decoy / ".git"))
-    (sandbox / "fixture.txt").write_text("sandbox only\n")
+    (sandbox / "fixture.txt").write_text("sandbox only\n", encoding="utf-8")
     git(sandbox, "add", "fixture.txt")
     git(sandbox, "commit", "-q", "-m", "seed", "--no-verify")
 
@@ -529,7 +533,7 @@ def test_the_guard_pair_runner_strips_an_inherited_git_dir(tmp_path: Path) -> No
     repository and rewound the working tree in the middle of a commit.
     """
     decoy = init_repo(tmp_path, "decoy")
-    (decoy / "kept.txt").write_text("do not touch\n")
+    (decoy / "kept.txt").write_text("do not touch\n", encoding="utf-8")
     git(decoy, "add", "kept.txt")
     git(decoy, "commit", "-q", "-m", "decoy", "--no-verify")
     head = _head(decoy)

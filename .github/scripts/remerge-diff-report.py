@@ -53,7 +53,10 @@ import argparse
 import os
 import re
 import subprocess
+from pathlib import Path
 from typing import Callable, NamedTuple
+
+REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 
 MARKER = "<!-- remerge-diff-report -->"
 
@@ -79,7 +82,7 @@ _INTRO = (
 
 def _git(*args: str) -> str:
     return subprocess.run(
-        ["git", *args], capture_output=True, text=True, check=True
+        ["git", *args], capture_output=True, text=True, check=True, cwd=REPO_ROOT
     ).stdout
 
 
@@ -169,6 +172,7 @@ def _mechanical_tree(parent1: str, parent2: str) -> str:
         capture_output=True,
         text=True,
         check=False,
+        cwd=REPO_ROOT,
     )
     tree = res.stdout.split("\n", 1)[0]
     # Exit 1 is git's conflicted-but-written verdict. Anything else — or no tree

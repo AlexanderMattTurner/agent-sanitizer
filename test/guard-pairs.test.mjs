@@ -3,10 +3,10 @@
  *
  * `.hooks/lib/guarded-data-scan.mjs` computes which suite guards which repo
  * file; `.hooks/run-guard-pairs.mjs` runs that scan at commit time and executes
- * the suites covering the staged files. Nothing between them is hand-written
- * any more — the map used to be a 69-entry list, and the list is what went
- * stale: two branches each green on their own base went red together on main
- * because a new file's pair could not exist until both had landed.
+ * the suites covering the staged files. Nothing between them is hand-written —
+ * a hand-written list is what goes stale: two branches each green on their own
+ * base can go red together on main because a new file's pair could not exist
+ * until both had landed.
  *
  * What is left to check is therefore NOT "is the list complete" (it is derived,
  * so it is complete by construction) but "does the derivation still resolve

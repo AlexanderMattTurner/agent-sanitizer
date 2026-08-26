@@ -28,7 +28,9 @@ import pytest
 
 from tests._helpers import REPO_ROOT
 
-SETTINGS = json.loads((REPO_ROOT / ".claude" / "settings.json").read_text())
+SETTINGS = json.loads(
+    (REPO_ROOT / ".claude" / "settings.json").read_text(encoding="utf-8")
+)
 
 BASH_PAYLOAD = json.dumps(
     {"tool_name": "Bash", "tool_input": {"command": "git push origin main"}}
@@ -61,7 +63,7 @@ def make_sandbox(tmp_path: Path) -> Path:
 
 def write_target(sandbox: Path, body: str, name: str = "target.sh") -> Path:
     path = sandbox / ".claude" / "hooks" / name
-    path.write_text(f"#!/bin/bash\n{body}\n")
+    path.write_text(f"#!/bin/bash\n{body}\n", encoding="utf-8")
     path.chmod(0o755)
     return path
 
@@ -216,7 +218,7 @@ def _bootstrap_says_open(fail_open: str | None, tmp_path: Path) -> bool:
     assert commands, "settings.json declares no PreToolUse command to exercise"
     sandbox = make_sandbox(tmp_path / "bootstrap")
     (sandbox / ".claude" / "hooks" / "safe-launch.sh").write_text(
-        "#!/bin/bash\n<<<<<<< HEAD\n"
+        "#!/bin/bash\n<<<<<<< HEAD\n", encoding="utf-8"
     )
     result = run_bootstrap(commands[0], sandbox, extra_env=posture_env(fail_open))
     assert result.returncode == 0, result.stderr
@@ -262,6 +264,12 @@ PARITY_DELEGATES = {
 }
 
 
+@pytest.mark.drift_guard(
+    "the posture knob is decided independently in shell (safe-launch.sh), JS "
+    "(hook-io.mjs) and the settings.json bootstrap — three runtimes that "
+    "cannot share one source — so each is run for real and checked against "
+    "the same expected closed-set semantics"
+)
 @pytest.mark.parametrize("impl", sorted(PARITY_IMPLEMENTATIONS))
 @pytest.mark.parametrize("fail_open", ALL_POSTURES)
 def test_every_posture_implementation_agrees(
@@ -304,7 +312,7 @@ def posture_implementation_files() -> list[str]:
         if not path.startswith("plugin/dist/")
         and not _TEST_PATH.search(path)
         and any(
-            idiom.search((REPO_ROOT / path).read_text())
+            idiom.search((REPO_ROOT / path).read_text(encoding="utf-8"))
             for idiom in IMPLEMENTATION_IDIOMS
         )
     )
@@ -557,7 +565,7 @@ def write_bootstrap_target(sandbox: Path, cmd: str) -> Path:
     """
     name = bootstrap_target(cmd)
     path = sandbox / ".claude" / "hooks" / name
-    path.write_text(TARGET_SOURCES[Path(name).suffix])
+    path.write_text(TARGET_SOURCES[Path(name).suffix], encoding="utf-8")
     path.chmod(0o755)
     return path
 
@@ -619,7 +627,7 @@ def test_bootstrap_degrades_per_posture_when_wrapper_is_corrupt(
         sandbox = make_sandbox(tmp_path / "corrupt")
         write_bootstrap_target(sandbox, cmd)
         wrapper = sandbox / ".claude" / "hooks" / "safe-launch.sh"
-        wrapper.write_text("#!/bin/bash\n<<<<<<< HEAD\n")
+        wrapper.write_text("#!/bin/bash\n<<<<<<< HEAD\n", encoding="utf-8")
         result = run_bootstrap(cmd, sandbox, extra_env=posture_env(fail_open))
         assert result.returncode == 0, result.stderr
         assert "safe-launch.sh" in degraded_reason(result.stdout, fail_open)

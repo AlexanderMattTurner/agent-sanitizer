@@ -419,8 +419,9 @@ def test_stalled_connection_does_not_block_the_daemon(sock_dir, monkeypatch):
         result = _drain(fresh)
         elapsed = time.time() - start
         assert "AWS Access Key" in result["found"]
-        # Bounded by roughly CONN_TIMEOUT_SECONDS (the stalled connection ahead
-        # of it in accept order), never by an unbounded hang.
+        # allow-wall-clock: bounded by roughly CONN_TIMEOUT_SECONDS (the
+        # stalled connection ahead of it in accept order); a real hang would
+        # be unbounded, not merely slow under CI load.
         assert elapsed < 3, (
             f"a stalled peer must not block a fresh request ({elapsed}s)"
         )

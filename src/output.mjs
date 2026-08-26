@@ -163,10 +163,10 @@ function errMessage(err) {
  *      but each mutation can BREAK it again: a Layer-5 span deletion joins the
  *      bytes on either side of the deleted span and can leave a lone surrogate
  *      the model renders as a broken glyph and the redactor reads as U+FFFD.
- *      Repairing it inside whichever layer happened to need it (it used to live
- *      in the post-span-deletion re-redact, so it only ran when a redactor was
- *      configured) makes an invariant of Layer 1 conditional on an unrelated
- *      option.
+ *      Repairing it inside whichever layer happens to need it — e.g. only in
+ *      the post-span-deletion re-redact, so it runs only when a redactor is
+ *      configured — would make an invariant of Layer 1 conditional on an
+ *      unrelated option.
  *   2. `modified` is set — the caller's "bytes changed" banner.
  *   3. `unreportedChange` is set. A mutation that pushed no finding — a Layer-5
  *      span deletion whose filter returned no warning code — is a change the
@@ -196,9 +196,8 @@ function applyMutation(state, nextText) {
 /**
  * Run Layer 4 (`redact`) over the state's current text and fold any finding
  * back in. The single Layer-4 invocation site FOR THE PIPELINE STATE: the first
- * pass and the re-scan after a Layer-5 span deletion are the same call, so their
- * fail-closed handling, warning prose and post-redaction invariants cannot drift
- * apart.
+ * pass and the re-scan after a Layer-5 span deletion are the same call, so they
+ * share one fail-closed handling, warning prose and post-redaction invariant.
  *
  * One other site runs Layer 4 deliberately: {@link vetStageValue}, which vets a
  * stage value on its way out and has no `PipelineState` to fold a finding into.
@@ -714,10 +713,10 @@ export async function sanitizeText(text, options = {}) {
     notes,
     modified: state.modified,
     // Kept under its original name (it is a published field, and renaming a
-    // published field for a wording win is a breaking change) but now derived
-    // rather than tracked: "nothing here rose above a note". That is a strict
-    // generalization of what it used to mean — the inert-ANSI strip that set it
-    // before is now simply the most common way to end up note-only.
+    // published field for a wording win is a breaking change) but derived
+    // rather than tracked: "nothing here rose above a note". The inert-ANSI
+    // strip is simply the most common way to end up note-only, not the only
+    // one this field now covers.
     sgrNote:
       notes.length > 0 && warnings.length === 0 && !state.unreportedChange,
     ...(reveal !== undefined && { reveal }),

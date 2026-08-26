@@ -24,7 +24,10 @@ _INLINE_DETECTORS = tuple(E._INLINE_PLUGINS)
 
 def test_custom_plugins_derived_from_detector_ssot():
     configured = [
-        entry["const"] for entry in json.loads(_DETECTORS_JSON.read_text())["detectors"]
+        entry["const"]
+        for entry in json.loads(_DETECTORS_JSON.read_text(encoding="utf-8"))[
+            "detectors"
+        ]
     ]
     names = [plugin["name"] for plugin in E.CUSTOM_PLUGINS]
     assert names == [*configured, *_INLINE_DETECTORS]
@@ -280,7 +283,7 @@ def test_url_arms_of_gate_dependent_detectors_stay_off_legitimate_content(
 
 _DETECTOR_PATTERNS = {
     d["secret_type"]: d["patterns"]
-    for d in json.loads(_DETECTORS_JSON.read_text())["detectors"]
+    for d in json.loads(_DETECTORS_JSON.read_text(encoding="utf-8"))["detectors"]
 }
 
 
@@ -388,7 +391,7 @@ def _cross_line_verdict_by_class() -> dict[str, bool]:
     """Every detector CLASS the engine can enable, mapped to its declared
     cross-line verdict — read from the three registries that declare it, which
     is the same union `engine._CROSS_LINE_ELIGIBLE_CLASSES` is built from."""
-    rows = json.loads(_DETECTORS_JSON.read_text())["detectors"]
+    rows = json.loads(_DETECTORS_JSON.read_text(encoding="utf-8"))["detectors"]
     return {
         **E._BUNDLED_PLUGINS,
         **{entry["const"]: entry["cross_line"] for entry in rows},
@@ -399,7 +402,7 @@ def _cross_line_verdict_by_class() -> dict[str, bool]:
 def test_every_json_detector_row_declares_a_cross_line_verdict():
     """The verdict is a REQUIRED field, with a note saying why — so a detector
     added to the SSOT cannot land uncategorised and silently ineligible."""
-    rows = json.loads(_DETECTORS_JSON.read_text())["detectors"]
+    rows = json.loads(_DETECTORS_JSON.read_text(encoding="utf-8"))["detectors"]
     assert len(rows) >= 10, "no detector rows discovered — this check is vacuous"
     for entry in rows:
         assert isinstance(entry.get("cross_line"), bool), entry["const"]
@@ -531,6 +534,8 @@ def test_npm_detector_denylist_is_linear_on_whitespace_free_input():
     started = time.monotonic()
     _NEW_NPM_RE.search(adversarial)
     elapsed = time.monotonic() - started
+    # allow-wall-clock: a regressed quadratic on 200k chars costs seconds, not
+    # milliseconds — no CI load pushes a linear match anywhere near 1s.
     assert elapsed < 1.0, f"NpmDetector denylist took {elapsed:.2f}s — quadratic again?"
 
 
@@ -623,6 +628,8 @@ def test_linear_detector_is_linear_on_a_space_run(secret_type):
     for pattern in replacement.denylist:
         pattern.search(adversarial)
     elapsed = time.monotonic() - started
+    # allow-wall-clock: a regressed cubic on a 4000-space run costs seconds,
+    # not milliseconds — no CI load pushes a linear scan anywhere near 0.5s.
     assert elapsed < 0.5, f"{secret_type} took {elapsed:.2f}s on a space run"
 
 
@@ -634,4 +641,6 @@ def test_redact_is_linear_on_the_reported_redos_payload():
     started = time.monotonic()
     run_plain("key" + " " * 1200)
     elapsed = time.monotonic() - started
+    # allow-wall-clock: the pre-fix cost at this size was 8.53s of CPU; the
+    # post-fix cost is milliseconds, so no CI load closes a 1000x margin.
     assert elapsed < 1.0, f"redact() took {elapsed:.2f}s on the ReDoS payload"

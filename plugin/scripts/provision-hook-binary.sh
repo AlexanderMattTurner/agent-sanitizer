@@ -161,6 +161,7 @@ sha256_of() {
   case "$digest_tool" in
   sha256sum) out="$(sha256sum <"$1")" || out="" ;;
   shasum) out="$(shasum -a 256 <"$1")" || out="" ;;
+  *) out="" ;;
   esac
   out="${out%% *}"
   [[ "$out" =~ ^[0-9a-f]{64}$ ]] || return 1
@@ -255,6 +256,7 @@ if [[ -r "$plugin_json" ]]; then
       version="${version%%\"*}"
       break
       ;;
+    *) ;;
     esac
   done <"$plugin_json"
 fi
@@ -283,11 +285,12 @@ fi
 # executed by every hook in the session.
 mkdir_rc=0
 mkdir -p -- "$dest_dir" || mkdir_rc=$?
-if [[ ! -d "$dest_dir" ]]; then
+if [[ -d "$dest_dir" ]]; then
+  harden_dest_dir
+else
   echo "agent-sanitizer: cannot create $dest_dir (mkdir exit $mkdir_rc) — $consequence" >&2
   exit 1
 fi
-harden_dest_dir
 
 # An unpredictable name, not a fixed one: with a fixed path a second concurrent
 # session's download can replace these bytes between the digest check and the

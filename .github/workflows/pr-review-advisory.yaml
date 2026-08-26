@@ -50,7 +50,7 @@ jobs:
           OUT_DIR: ${{ runner.temp }}/pr-review-advisory
         run: bash .github/scripts/pr-review-advisory-compute.sh
       - name: Upload the diff data for the comment consumer
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5.0.0
         with:
           name: pr-review-advisory
           path: ${{ runner.temp }}/pr-review-advisory/

@@ -116,7 +116,7 @@ def test_a_sandbox_commit_lands_in_the_sandbox_under_a_hooks_git_dir(
     init_test_repo(decoy)
     sandbox = tmp_path / "sandbox"
     init_test_repo(sandbox)
-    (sandbox / "file.txt").write_text("x\n")
+    (sandbox / "file.txt").write_text("x\n", encoding="utf-8")
 
     monkeypatch.setenv("GIT_DIR", str(decoy / ".git"))
     monkeypatch.setenv("GIT_INDEX_FILE", str(decoy / ".git" / "index"))

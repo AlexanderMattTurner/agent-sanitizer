@@ -164,7 +164,8 @@ def stub_git(bin_dir: Path, record: Path) -> None:
         f'  printf "key0:%s\\n" "${{GIT_CONFIG_KEY_0:-none}}" >>"{record}"\n'
         "  exit 1\n"
         "fi\n"
-        f'exec {real} "$@"\n'
+        f'exec {real} "$@"\n',
+        encoding="utf-8",
     )
     stub.chmod(0o755)
 
@@ -179,9 +180,9 @@ def test_the_base_reanchor_fetch_scopes_its_header(tmp_path: Path) -> None:
     sandbox = tmp_path / "repo"
     init_test_repo(sandbox)
     (sandbox / "src").mkdir()
-    (sandbox / "src" / "app.mjs").write_text("export const x = 1;\n")
+    (sandbox / "src" / "app.mjs").write_text("export const x = 1;\n", encoding="utf-8")
     base = commit_all(sandbox, "chore: base")
-    (sandbox / "src" / "app.mjs").write_text("export const x = 2;\n")
+    (sandbox / "src" / "app.mjs").write_text("export const x = 2;\n", encoding="utf-8")
     head = commit_all(sandbox, "fix: edit")
 
     record = tmp_path / "fetch.log"
@@ -204,7 +205,7 @@ def test_the_base_reanchor_fetch_scopes_its_header(tmp_path: Path) -> None:
         },
     )
     assert result.returncode == 0, result.stderr
-    recorded = record.read_text()
+    recorded = record.read_text(encoding="utf-8")
     assert "-c http.https://github.com/.extraheader=AUTHORIZATION: basic " in recorded
     assert f"-c {UNSCOPED_KEY}=" not in recorded, recorded
     # Per-command, so the fetch's own environment must carry no auth override —

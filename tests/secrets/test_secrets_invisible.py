@@ -54,8 +54,8 @@ def _pinned_cf() -> frozenset[int]:
 
 def test_default_charset_is_pinned_cf_union_shared_extra():
     """The redactor's charset is exactly the PINNED Cf set UNION the shared non-Cf
-    extras — both read from the generated SSOT, so it cannot drift from the
-    sanitizer regardless of this interpreter's Unicode version."""
+    extras — both read from the generated SSOT, matching the sanitizer
+    regardless of this interpreter's Unicode version."""
     assert default_charset() == _pinned_cf() | _extra()
 
 

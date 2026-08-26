@@ -7,12 +7,12 @@
  * is only paid for by callers that ask for it.
  *
  * Layers 1-3 are NOT implemented here: this module is a facade over the single
- * implementation in `./output.mjs` (`sanitizeText`). The two used to be
- * hand-synced copies and had already drifted apart in their warning prose, so
- * the layer bodies live in exactly one place and this file only translates the
- * facade's option/result shape. Importing `./output.mjs` costs nothing at module
- * scope — its graph is dependency-free and it lazy-loads `./html.mjs` on the
- * same terms this facade used to.
+ * implementation in `./output.mjs` (`sanitizeText`). A hand-synced copy would
+ * drift apart in its warning prose, so the layer bodies live in exactly one
+ * place and this file only translates the facade's option/result shape.
+ * Importing `./output.mjs` costs nothing at module scope — its graph is
+ * dependency-free and it lazy-loads `./html.mjs` on the same terms this facade
+ * does.
  *
  * The low-level building blocks stay public via the `./invisible` and `./html`
  * subpath entries; import those directly when you want a single layer without

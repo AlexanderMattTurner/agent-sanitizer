@@ -1554,8 +1554,8 @@ describe("stripInvisible: every Hangul filler, in and out of Hangul context", ()
 // U+2800 beside a real cell, one for the Hangul fillers beside real Hangul. The
 // edge shape the CI counterexample exposed for Hangul was therefore just as
 // untested for Braille — every fixed U+2800 case anchored the blank on BOTH
-// sides. Pinned here in the same preserved/stripped shape so the two halves of
-// one predicate cannot drift apart in coverage.
+// sides. Pinned here in the same preserved/stripped shape so both halves of
+// one predicate get the same coverage.
 const BRAILLE_CELL = cp(0x2803); // ⠃ — a real (non-blank) Braille cell
 const BRAILLE_BLANK = cp(0x2800);
 

@@ -59,11 +59,11 @@ const FILE_VIEW = Symbol("agent-sanitizer:file-view");
  * Wrap a redactor's map-mode result in a frozen, branded view tagged with the
  * space its offsets are in.
  *
- * The redactor's own object is never touched. It used to be: the caller did
- * `view.pairs = pairsToUtf16(view.text, view.pairs)`, an in-place mutation of a
+ * The redactor's own object is never touched. A caller doing
+ * `view.pairs = pairsToUtf16(view.text, view.pairs)` would mutate in place a
  * value returned from an INJECTED seam. A redactor that memoizes its map result
  * (a reasonable thing for a caller to build) hands back the same object on the
- * second identical call, which then got converted a SECOND time — every
+ * second identical call, which would then get converted a SECOND time — every
  * placeholder preceded by an astral character shifts again and the same input
  * yields a different verdict.
  *

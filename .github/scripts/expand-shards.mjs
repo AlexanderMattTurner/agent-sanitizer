@@ -85,8 +85,8 @@ export function expandShards(repoRoot) {
   const mutated = mutatedSources(repoRoot);
   const splitFiles = (config.split ?? []).map((entry) => entry.file);
   // A `split` entry outside the mutated set is a stale path: its shard mutates
-  // a file no scope scores, while the file it was renamed from silently falls
-  // into the groups below and is mutated twice.
+  // a file no scope scores, while the file's current path silently falls into
+  // the groups below and is mutated twice.
   const stale = splitFiles.filter((file) => !mutated.includes(file));
   if (stale.length > 0) {
     throw new Error(

@@ -127,6 +127,9 @@ if [[ "$NPM_VIEW_RC" -ne 0 ]]; then
   if grep -q "E404" "$NPM_VIEW_ERR"; then
     CURRENT_VERSION="0.0.0" # unpublished — first release
   else
+    # allow-argument-exit: cat's exit status has nothing to gate — this arm
+    # already exits 1 unconditionally on the next line regardless of whether
+    # cat could read the temp file.
     log "Error: npm view failed unexpectedly (not E404). Refusing to guess a version: $(cat "$NPM_VIEW_ERR")"
     exit 1
   fi
@@ -410,7 +413,7 @@ fi
 # this version, and a second `pnpm publish` of it can only fail. Fails open — an
 # ls-remote that errors reads as "no tag" and the release proceeds, because a
 # false positive here would skip a legitimate release outright.
-if [[ -n "$(git ls-remote --tags origin "refs/tags/v$NEW_VERSION" 2>/dev/null)" ]]; then
+if [[ -n "$(timeout --kill-after=10 60 git ls-remote --tags origin "refs/tags/v$NEW_VERSION" 2>/dev/null)" ]]; then
   log "Tag v$NEW_VERSION already exists on the remote — another release workflow is publishing this version. Skipping."
   log "       Two workflows releasing one repo is a misconfiguration: keep exactly one publisher on the default branch."
   exit 0
@@ -559,14 +562,18 @@ restamp_manifest_conflict() {
 
 push_with_rebase() {
   local branch="$1" max="$2" delay="$3" attempt=1
+  # retry-loop-ok: not a retry of one failing command — each attempt fetches,
+  # rebases and resolves a version-manifest conflict differently, so the
+  # shared lib-ci-retry.sh `retry` primitive (re-run the same argv) has no
+  # equivalent to delegate to.
   while [[ "$attempt" -le "$max" ]]; do
-    git push origin "HEAD:$branch" && return 0
+    timeout --kill-after=10 60 git push origin "HEAD:$branch" && return 0
     if [[ "$attempt" -ge "$max" ]]; then
       break
     fi
     printf 'push to %s rejected (attempt %d/%d); rebasing onto the updated tip, retrying in %ds...\n' \
       "$branch" "$attempt" "$max" "$delay" >&2
-    if ! git fetch origin "$branch"; then
+    if ! timeout --kill-after=10 60 git fetch origin "$branch"; then
       log "Warning: 'git fetch origin $branch' failed; will back off and retry the push."
     # --autostash: package.json is left intentionally dirty (npm owns the version;
     # it is never committed), which a plain rebase refuses. autostash shelves that
@@ -660,7 +667,7 @@ fi
 # Fail loudly if the tag never lands: the tag is what stops the next run from
 # re-analyzing these commits (re-drafting the changelog, re-pushing release
 # docs), so a silent failure here would quietly corrupt the next release.
-if ! RETRY_MAX=4 RETRY_BASE_DELAY=2 retry git push origin "v$NEW_VERSION"; then
+if ! RETRY_MAX=4 RETRY_BASE_DELAY=2 retry timeout --kill-after=10 60 git push origin "v$NEW_VERSION"; then
   log "Error: failed to push tag v$NEW_VERSION after retries. The release is published;"
   log "       push the tag manually so the next run does not re-analyze these commits."
   exit 1

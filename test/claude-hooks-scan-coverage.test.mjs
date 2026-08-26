@@ -125,10 +125,10 @@ describe("scanProject accounts for every target the finder returned", () => {
 
 describe("a target that resolves to nothing is not a coverage gap", () => {
   // The false positive this bucket exists to kill: a dangling `.claude/*.md`
-  // symlink — routine in a dotfiles checkout — used to be reported as an
-  // instruction file "loaded but never checked for hidden Unicode", and it armed
-  // the blocking gate on every session. There are no bytes behind the path, so
-  // Claude Code cannot load it either: nothing reaches the model, and nothing is
+  // symlink — routine in a dotfiles checkout — reported as an instruction file
+  // "loaded but never checked for hidden Unicode" would arm the blocking gate
+  // on every session. There are no bytes behind the path, so Claude Code
+  // cannot load it either: nothing reaches the model, and nothing is
   // unvetted.
   before(() => {
     rmSync(join(projectDir, "CLAUDE.md"), { recursive: true, force: true });

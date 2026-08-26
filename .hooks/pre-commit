@@ -41,8 +41,11 @@ gate_tool_path "$git_root"
 # stack, pinned in a ref so it survives gc and is one `git checkout` away.
 if ! git diff --quiet; then
   if _gb_snapshot=$(git stash create 2>/dev/null) && [[ -n "$_gb_snapshot" ]]; then
-    git update-ref refs/gb/precommit-recovery "$_gb_snapshot" 2>/dev/null || true
-    echo "pre-commit: unstaged edits present — saved recovery snapshot $_gb_snapshot (ref refs/gb/precommit-recovery). If this commit fails and your uncommitted edits vanish, restore them with: git checkout $_gb_snapshot -- <path>" >&2
+    if git update-ref refs/gb/precommit-recovery "$_gb_snapshot" 2>/dev/null; then
+      echo "pre-commit: unstaged edits present — saved recovery snapshot $_gb_snapshot (ref refs/gb/precommit-recovery). If this commit fails and your uncommitted edits vanish, restore them with: git checkout $_gb_snapshot -- <path>" >&2
+    else
+      echo "pre-commit: unstaged edits present — snapshot $_gb_snapshot exists but could not be pinned to refs/gb/precommit-recovery, so garbage collection may reclaim it. If this commit fails and your uncommitted edits vanish, restore them NOW with: git checkout $_gb_snapshot -- <path>" >&2
+    fi
   fi
 fi
 

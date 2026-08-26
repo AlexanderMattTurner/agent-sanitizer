@@ -29,9 +29,8 @@ const ZWJ = cp(0x200d);
 const ZWSP = cp(0x200b);
 
 // Known-good, COMPLETE constructs: each must reappear in the output verbatim,
-// unsplit. Mirrors the canonical examples pinned as example tests in
-// invisible.test.mjs, reused here as fuzz-generator inputs rather than fixed
-// cases.
+// unsplit. The same examples invisible.test.mjs pins as example tests, reused
+// here as fuzz-generator inputs rather than fixed cases.
 const KEEP_TOKENS = [
   // 👨‍👩‍👧‍👦 family (3 ZWJ, no selectors)
   cp(0x1f468) + ZWJ + cp(0x1f469) + ZWJ + cp(0x1f467) + ZWJ + cp(0x1f466),

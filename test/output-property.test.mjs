@@ -288,8 +288,8 @@ describe("property: deleteVerbatimSpans only deletes", () => {
         // A length-only invariant can't catch an INJECTION: a buggy deleter that
         // both removed bytes and spliced new ones in could still shrink the text.
         // The expected residue comes from the shared set-union oracle (the same
-        // one test/splice-property.test.mjs asserts against, so the two suites
-        // cannot drift): every index of the ORIGINAL text no span covered. It
+        // one test/splice-property.test.mjs asserts against): every index of
+        // the ORIGINAL text no span covered. It
         // only ever keeps bytes already present in `text`, so any byte in `out`
         // that did not come from `text` — or any byte deleted that no span
         // matched in the INPUT — fails this exact-equality check.

@@ -416,6 +416,9 @@ def test_a_hostile_variable_name_cannot_stall_the_matcher(
 
 CONFORMANCE_FILE = REPO_ROOT / "tests" / "data" / "credential-names.cases.json"
 CONFORMANCE_CASES = json.loads(CONFORMANCE_FILE.read_text(encoding="utf-8"))["cases"]
+# allow-unreset-state: a per-session coverage accumulator, consumed exactly
+# once by the non-vacuity assertion at the end of this same test file — never
+# read across a session boundary, so there is nothing a later test could see.
 _CONSUMED: set[str] = set()
 
 

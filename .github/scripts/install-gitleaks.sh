@@ -31,6 +31,7 @@ PLACEHOLDER_*)
   echo "  published SHA-256 for gitleaks ${GITLEAKS_VERSION} in .github/tool-versions.sh." >&2
   exit 1
   ;;
+*) ;;
 esac
 
 tarball="gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"

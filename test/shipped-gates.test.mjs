@@ -70,12 +70,13 @@ function manifestMjs() {
   ].sort();
 }
 
+// drift-guard-ok: a second copy on purpose, not a drift guard — the point is
+// to make LOWERING a gate cost a second, deliberate edit (CLAUDE.md's
+// SSOT-contract rule), not to detect divergence.
 /**
  * The agreed coverage floors, copied from `scripts/coverage.mjs`.
  *
- * This is a second copy on purpose, and it is not a drift guard — the point is
- * not to detect divergence but to make LOWERING a gate cost a second, obviously
- * deliberate edit in the same commit (CLAUDE.md's SSOT-contract rule). A floor
+ * This is a second copy on purpose. A floor
  * asserted only as `> 0` can be quietly dropped to 1 in a PR that is really
  * about something else, which is precisely the silent weakening this whole
  * change argues against. Raising a floor is equally deliberate: edit both.

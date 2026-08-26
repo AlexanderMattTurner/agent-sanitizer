@@ -60,12 +60,12 @@ class Decide:
     def __init__(self, repo: Path) -> None:
         self.repo = repo
         self.output = repo / "github_output"
-        self.output.write_text("")
+        self.output.write_text("", encoding="utf-8")
 
     def write(self, name: str, body: str) -> None:
         path = self.repo / name
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(body)
+        path.write_text(body, encoding="utf-8")
 
     def commit(self, message: str) -> str:
         return commit_all(self.repo, message)
@@ -91,10 +91,10 @@ class Decide:
         assert result.returncode == 0, result.stderr
         emitted = [
             line
-            for line in self.output.read_text().splitlines()
+            for line in self.output.read_text(encoding="utf-8").splitlines()
             if line.startswith("run=")
         ]
-        assert len(emitted) == 1, self.output.read_text()
+        assert len(emitted) == 1, self.output.read_text(encoding="utf-8")
         return emitted[0].removeprefix("run=")
 
 
@@ -143,7 +143,7 @@ def test_a_gate_with_no_trigger_is_a_loud_misconfiguration(decide: Decide) -> No
     result = decide.run(BASE_SHA=decide.base, HEAD_SHA=decide.head)
     assert result.returncode == 1
     assert "no PATHS_REGEX" in result.stderr
-    assert decide.output.read_text() == ""
+    assert decide.output.read_text(encoding="utf-8") == ""
 
 
 def test_keyword_in_a_range_commit_title_runs_the_gate(decide: Decide) -> None:
@@ -224,7 +224,7 @@ def test_a_bad_paths_regex_file_fails_closed(
     result = decide.run(BASE_SHA=decide.base, HEAD_SHA=head, **inputs)
     assert result.returncode == 1
     assert expected in result.stderr
-    assert decide.output.read_text() == ""
+    assert decide.output.read_text(encoding="utf-8") == ""
 
 
 def test_comment_only_churn_skips_an_opted_in_gate(decide: Decide) -> None:
@@ -321,4 +321,4 @@ def test_an_underivable_shell_target_fails_closed(decide: Decide) -> None:
     )
     assert result.returncode == 1
     assert "could not derive the shell run closure" in result.stderr
-    assert decide.output.read_text() == ""
+    assert decide.output.read_text(encoding="utf-8") == ""

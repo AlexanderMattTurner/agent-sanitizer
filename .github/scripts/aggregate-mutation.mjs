@@ -262,7 +262,7 @@ function main(reportsDir) {
   // Every shard uploads exactly one report. Demand one per shard so a silently
   // missing artifact fails the gate loudly instead of scoring a subset as if it
   // were the whole project. The count comes from the SAME expander the workflow
-  // used to build the matrix, so the two can never drift.
+  // uses to build the matrix.
   const shardCount = expandShards(repoRoot).length;
   if (reportFiles.length !== shardCount) {
     throw new Error(

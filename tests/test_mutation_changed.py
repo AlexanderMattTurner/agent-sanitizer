@@ -26,7 +26,7 @@ WORKFLOW = REPO_ROOT / ".github" / "workflows" / "mutation.yaml"
 def push_paths() -> list[str]:
     """on.push.paths from the real workflow, via a real YAML parser."""
     # `on` parses as the YAML boolean True.
-    paths = yaml.safe_load(WORKFLOW.read_text())[True]["push"]["paths"]
+    paths = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))[True]["push"]["paths"]
     assert paths, "mutation.yaml on.push.paths is empty"
     return paths
 
@@ -39,22 +39,24 @@ def make_sandbox(tmp_path: Path, workflow_text: str) -> Path:
     scripts.mkdir(parents=True)
     workflows.mkdir(parents=True)
     shutil.copy(SCRIPT, scripts / "mutation-changed.sh")
-    (workflows / "mutation.yaml").write_text(workflow_text)
+    (workflows / "mutation.yaml").write_text(workflow_text, encoding="utf-8")
     return repo
 
 
 def run_script(repo: Path, changed_file: str) -> subprocess.CompletedProcess:
     """Commit a base, then a head touching `changed_file`; run the script."""
-    (repo / "README.base").write_text("base\n")
+    (repo / "README.base").write_text("base\n", encoding="utf-8")
     base = commit_all(repo, "base")
     target = repo / changed_file
     target.parent.mkdir(parents=True, exist_ok=True)
     if target.exists():
         # e.g. the workflow or script copy itself: append a comment so the file
         # is changed without destroying what the script needs to read/run.
-        target.write_text(target.read_text() + "# changed\n")
+        target.write_text(
+            target.read_text(encoding="utf-8") + "# changed\n", encoding="utf-8"
+        )
     else:
-        target.write_text("changed\n")
+        target.write_text("changed\n", encoding="utf-8")
     head = commit_all(repo, "head")
     return subprocess.run(
         ["bash", ".github/scripts/mutation-changed.sh"],
@@ -78,7 +80,7 @@ def run_script(repo: Path, changed_file: str) -> subprocess.CompletedProcess:
     ],
 )
 def test_in_list_file_is_relevant(tmp_path: Path, changed_file: str) -> None:
-    repo = make_sandbox(tmp_path, WORKFLOW.read_text())
+    repo = make_sandbox(tmp_path, WORKFLOW.read_text(encoding="utf-8"))
     result = run_script(repo, changed_file)
     assert result.returncode == 0, result.stderr
 
@@ -93,7 +95,7 @@ def test_in_list_file_is_relevant(tmp_path: Path, changed_file: str) -> None:
     ],
 )
 def test_out_of_list_file_is_not_relevant(tmp_path: Path, changed_file: str) -> None:
-    repo = make_sandbox(tmp_path, WORKFLOW.read_text())
+    repo = make_sandbox(tmp_path, WORKFLOW.read_text(encoding="utf-8"))
     result = run_script(repo, changed_file)
     assert result.returncode == 1, (result.returncode, result.stdout, result.stderr)
 
@@ -108,7 +110,9 @@ def test_every_push_path_glob_matches_itself(tmp_path: Path) -> None:
     """
     for glob in push_paths():
         concrete = glob.replace("**/", "a/b/").replace("*", "x")
-        repo = make_sandbox(tmp_path / concrete.replace("/", "_"), WORKFLOW.read_text())
+        repo = make_sandbox(
+            tmp_path / concrete.replace("/", "_"), WORKFLOW.read_text(encoding="utf-8")
+        )
         result = run_script(repo, concrete)
         assert result.returncode == 0, (
             f"{concrete!r} (from glob {glob!r}) not classified relevant: "
@@ -149,7 +153,7 @@ def test_zero_parsed_paths_fails_loudly(tmp_path: Path) -> None:
     the job), never exit 1 (which the workflow reads as a clean skip)."""
     gutted = "\n".join(
         line
-        for line in WORKFLOW.read_text().splitlines()
+        for line in WORKFLOW.read_text(encoding="utf-8").splitlines()
         if not line.lstrip().startswith(("paths:", '- "'))
     )
     repo = make_sandbox(tmp_path, gutted)
@@ -159,8 +163,8 @@ def test_zero_parsed_paths_fails_loudly(tmp_path: Path) -> None:
 
 
 def test_missing_base_fails_open(tmp_path: Path) -> None:
-    repo = make_sandbox(tmp_path, WORKFLOW.read_text())
-    (repo / "README.base").write_text("base\n")
+    repo = make_sandbox(tmp_path, WORKFLOW.read_text(encoding="utf-8"))
+    (repo / "README.base").write_text("base\n", encoding="utf-8")
     head = commit_all(repo, "head")
     result = subprocess.run(
         ["bash", ".github/scripts/mutation-changed.sh"],

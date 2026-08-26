@@ -55,6 +55,8 @@ def test_the_python_reader_strips_exactly_the_listed_names(monkeypatch) -> None:
     assert stripped == set(VARS)
 
 
+# not-a-drift-guard: behavior tested against the one shared JSON config
+# (config/git-location-vars.json), not compared against a second hand-copy.
 def test_the_node_reader_strips_exactly_the_listed_names() -> None:
     env = _probe_env()
     result = subprocess.run(

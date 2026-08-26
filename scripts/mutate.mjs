@@ -4,10 +4,10 @@
  * `.hooks/lib/` tooling — unsharded (the local `pnpm test:mutation` entry
  * point).
  *
- * `stryker.conf.json` deliberately carries NO `mutate` key. It used to say
- * `src/*.mjs`, which silently excluded the entire Claude-hook layer and the
- * published CLI from the mutation gate; a hardcoded list is exactly the thing
- * that goes stale. The spec is computed from `scripts/shipped-sources.mjs`
+ * `stryker.conf.json` deliberately carries NO `mutate` key. A hardcoded list
+ * like `src/*.mjs` would silently exclude the entire Claude-hook layer and
+ * the published CLI from the mutation gate, and is exactly the thing that
+ * goes stale. The spec is computed from `scripts/shipped-sources.mjs`
  * instead and passed on the command line, the same way
  * `.github/scripts/run-mutation-shard.sh` passes its per-shard slice. A bare
  * `stryker run` would fall back to Stryker's own `{src,lib}/**` default, so this

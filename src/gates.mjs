@@ -74,11 +74,11 @@ export function needsUrlScan(text) {
 // opaque run for ReDoS-safety. It is NOT derivable from that JSON: inlining the
 // detector regexes would reintroduce the cross-arm polynomial backtracking the
 // two-alternation split below exists to prevent, so this is a distinct
-// representation for a distinct constraint, not a copy. That duplication can't
-// be collapsed to one source, so it is instead DRIFT-GUARDED: the test in
-// test/secret-detectors-portability.test.mjs drives from the JSON and fails the
-// moment a detector is added/changed without a matching arm here — extend
-// SECRET_HINT when that fires.
+// representation for a distinct constraint, not a copy. drift-guard-ok: that
+// duplication can't be collapsed to one source, so a test instead guards it —
+// test/secret-detectors-portability.test.mjs drives from the JSON and fails
+// the moment a detector is added/changed without a matching arm here —
+// extend SECRET_HINT when that fires.
 // Split across TWO regexes, combined by matchesSecretHint:
 // one alternation of every arm makes a redos analyzer see cross-arm polynomial
 // backtracking (each arm is linear alone, but the union was a 3rd-degree
