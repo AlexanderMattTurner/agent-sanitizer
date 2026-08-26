@@ -81,6 +81,7 @@
     "globals": "17.6.0",
     "lint-staged": "^17.0.5",
     "prettier": "^3.0.0",
+    "rehype-parse": "9.0.1",
     "smol-toml": "^1.7.1",
     "typescript": "6.0.3",
     "typescript-eslint": "8.61.0",
@@ -232,11 +233,13 @@
   "dependencies": {
     "agent-control-plane-core": "0.3.0",
     "css-tree": "^3.2.1",
+    "hast-util-from-parse5": "8.0.3",
     "namespace-guard": "0.20.0",
-    "rehype-parse": "9.0.1",
+    "parse5": "7.3.0",
     "remark-gfm": "4.0.1",
     "remark-parse": "11.0.0",
     "unified": "11.0.5",
-    "unist-util-visit": "5.1.0"
+    "unist-util-visit": "5.1.0",
+    "vfile": "6.0.3"
   }
 }

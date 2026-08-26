@@ -121,6 +121,27 @@ describe("auto-resolve regen rules describe the repo as it is", () => {
     }
   });
 
+  it("watches every tracked input the redactor artifacts are built from", () => {
+    // The wheel and the zipapp are built from `python/` — its package sources,
+    // its `pyproject.toml`, and the `README.md` that `readme`/`include` put in
+    // the wheel. Enumerating extensions here missed the JSON detector SSOTs
+    // once; this asserts the rule covers the SUBTREE, so the next input needs no
+    // edit at all.
+    const rule = rules.find((candidate) =>
+      (candidate.owns ?? []).includes("plugin/dist/redactor/daemon.pyz"),
+    );
+    assert.ok(rule, `${CONFIG}: no rule generates the redactor zipapp`);
+    const inputs = [...tracked].filter((path) => path.startsWith("python/"));
+    // The rule would pass vacuously against an empty tree.
+    assert.ok(inputs.length > 5, inputs.length);
+    const re = new RegExp(rule.sourcesPattern);
+    for (const path of inputs)
+      assert.ok(
+        re.test(path),
+        `${CONFIG}: ${path} is a redactor-artifact input that ${rule.sourcesPattern} does not match`,
+      );
+  });
+
   it("declares something for every rule to generate", () => {
     for (const rule of rules)
       assert.ok(

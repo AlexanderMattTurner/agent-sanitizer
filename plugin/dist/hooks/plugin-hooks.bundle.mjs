@@ -292,10 +292,10 @@ function hookgateMarkerPath(projectDir = process.env.CLAUDE_PROJECT_DIR, runtime
   shared.hookgateMarkerResolved = true;
   if (shared.hookgateMarker !== null) return shared.hookgateMarker;
   if (!projectDir) return null;
-  const base2 = runtimeDir && runtimeDir.startsWith("/") ? runtimeDir : "/tmp";
+  const base = runtimeDir && runtimeDir.startsWith("/") ? runtimeDir : "/tmp";
   const digest = createHash("sha256").update(projectDir).digest("hex").slice(0, 8);
   const flattened = projectDir.replace(/[^A-Za-z0-9]/g, "_");
-  return `${base2}/${HOOKGATE_MARKER_STEM}${flattened}-${digest}`;
+  return `${base}/${HOOKGATE_MARKER_STEM}${flattened}-${digest}`;
 }
 function markerLockHeld(markerPath) {
   const probe = spawnSync(
@@ -1598,8 +1598,8 @@ var init_joining_type = __esm({
 });
 
 // src/standardized-variants.mjs
-function isStandardizedVariant(base2, selector2) {
-  return VARIANT_KEYS.has(base2 * KEY_STRIDE + selector2);
+function isStandardizedVariant(base, selector2) {
+  return VARIANT_KEYS.has(base * KEY_STRIDE + selector2);
 }
 var STANDARDIZED_VARIANTS, KEY_STRIDE, VARIANT_KEYS;
 var init_standardized_variants = __esm({
@@ -2902,7 +2902,7 @@ var init_standardized_variants = __esm({
     ];
     KEY_STRIDE = 1114112;
     VARIANT_KEYS = new Set(
-      STANDARDIZED_VARIANTS.map(([base2, selector2]) => base2 * KEY_STRIDE + selector2)
+      STANDARDIZED_VARIANTS.map(([base, selector2]) => base * KEY_STRIDE + selector2)
     );
   }
 });
@@ -6064,7 +6064,7 @@ function createParser(config) {
     getLocation: (offset) => locationMap.getLocation(offset, filename),
     getRangeLocation: (start, end) => locationMap.getLocationRange(start, end, filename)
   });
-  const parse55 = function(source_, options) {
+  const parse54 = function(source_, options) {
     source = source_;
     options = options || {};
     parser.setSource(source, tokenize);
@@ -6109,7 +6109,7 @@ function createParser(config) {
     }
     return ast;
   };
-  return Object.assign(parse55, {
+  return Object.assign(parse54, {
     SyntaxError: SyntaxError2,
     config: parser.config
   });
@@ -6426,11 +6426,11 @@ var init_font_face = __esm({
 });
 
 // node_modules/.pnpm/css-tree@3.2.1/node_modules/css-tree/lib/syntax/atrule/import.js
-function parseWithFallback(parse55, fallback) {
+function parseWithFallback(parse54, fallback) {
   return this.parseWithFallback(
     () => {
       try {
-        return parse55.call(this);
+        return parse54.call(this);
       } finally {
         this.skipSC();
         if (this.lookupNonWSType(0) !== RightParenthesis) {
@@ -15559,8 +15559,8 @@ var init_micromark_util_combine_extensions = __esm({
 });
 
 // node_modules/.pnpm/micromark-util-decode-numeric-character-reference@2.0.2/node_modules/micromark-util-decode-numeric-character-reference/index.js
-function decodeNumericCharacterReference(value, base2) {
-  const code4 = Number.parseInt(value, base2);
+function decodeNumericCharacterReference(value, base) {
+  const code4 = Number.parseInt(value, base);
   if (
     // C0 except for HT, LF, FF, CR, space.
     code4 < 9 || code4 === 11 || code4 > 13 && code4 < 32 || // Control character (DEL) of C0, and C1 controls.
@@ -24327,1931 +24327,6 @@ var init_remark_gfm = __esm({
   }
 });
 
-// node_modules/.pnpm/property-information@7.2.0/node_modules/property-information/lib/util/schema.js
-var Schema;
-var init_schema = __esm({
-  "node_modules/.pnpm/property-information@7.2.0/node_modules/property-information/lib/util/schema.js"() {
-    Schema = class {
-      /**
-       * @param {SchemaType['property']} property
-       *   Property.
-       * @param {SchemaType['normal']} normal
-       *   Normal.
-       * @param {Space | undefined} [space]
-       *   Space.
-       * @returns
-       *   Schema.
-       */
-      constructor(property, normal, space) {
-        this.normal = normal;
-        this.property = property;
-        if (space) {
-          this.space = space;
-        }
-      }
-    };
-    Schema.prototype.normal = {};
-    Schema.prototype.property = {};
-    Schema.prototype.space = void 0;
-  }
-});
-
-// node_modules/.pnpm/property-information@7.2.0/node_modules/property-information/lib/util/merge.js
-function merge(definitions, space) {
-  const property = {};
-  const normal = {};
-  for (const definition3 of definitions) {
-    Object.assign(property, definition3.property);
-    Object.assign(normal, definition3.normal);
-  }
-  return new Schema(property, normal, space);
-}
-var init_merge = __esm({
-  "node_modules/.pnpm/property-information@7.2.0/node_modules/property-information/lib/util/merge.js"() {
-    init_schema();
-  }
-});
-
-// node_modules/.pnpm/property-information@7.2.0/node_modules/property-information/lib/normalize.js
-function normalize(value) {
-  return value.toLowerCase();
-}
-var init_normalize = __esm({
-  "node_modules/.pnpm/property-information@7.2.0/node_modules/property-information/lib/normalize.js"() {
-  }
-});
-
-// node_modules/.pnpm/property-information@7.2.0/node_modules/property-information/lib/util/info.js
-var Info;
-var init_info = __esm({
-  "node_modules/.pnpm/property-information@7.2.0/node_modules/property-information/lib/util/info.js"() {
-    Info = class {
-      /**
-       * @param {string} property
-       *   Property.
-       * @param {string} attribute
-       *   Attribute.
-       * @returns
-       *   Info.
-       */
-      constructor(property, attribute) {
-        this.attribute = attribute;
-        this.property = property;
-      }
-    };
-    Info.prototype.attribute = "";
-    Info.prototype.booleanish = false;
-    Info.prototype.boolean = false;
-    Info.prototype.commaOrSpaceSeparated = false;
-    Info.prototype.commaSeparated = false;
-    Info.prototype.defined = false;
-    Info.prototype.mustUseProperty = false;
-    Info.prototype.number = false;
-    Info.prototype.overloadedBoolean = false;
-    Info.prototype.property = "";
-    Info.prototype.spaceSeparated = false;
-    Info.prototype.space = void 0;
-  }
-});
-
-// node_modules/.pnpm/property-information@7.2.0/node_modules/property-information/lib/util/types.js
-var types_exports2 = {};
-__export(types_exports2, {
-  boolean: () => boolean,
-  booleanish: () => booleanish,
-  commaOrSpaceSeparated: () => commaOrSpaceSeparated,
-  commaSeparated: () => commaSeparated,
-  number: () => number,
-  overloadedBoolean: () => overloadedBoolean,
-  spaceSeparated: () => spaceSeparated
-});
-function increment() {
-  return 2 ** ++powers;
-}
-var powers, boolean, booleanish, overloadedBoolean, number, spaceSeparated, commaSeparated, commaOrSpaceSeparated;
-var init_types2 = __esm({
-  "node_modules/.pnpm/property-information@7.2.0/node_modules/property-information/lib/util/types.js"() {
-    powers = 0;
-    boolean = increment();
-    booleanish = increment();
-    overloadedBoolean = increment();
-    number = increment();
-    spaceSeparated = increment();
-    commaSeparated = increment();
-    commaOrSpaceSeparated = increment();
-  }
-});
-
-// node_modules/.pnpm/property-information@7.2.0/node_modules/property-information/lib/util/defined-info.js
-function mark(values, key, value) {
-  if (value) {
-    values[key] = value;
-  }
-}
-var checks, DefinedInfo;
-var init_defined_info = __esm({
-  "node_modules/.pnpm/property-information@7.2.0/node_modules/property-information/lib/util/defined-info.js"() {
-    init_info();
-    init_types2();
-    checks = /** @type {ReadonlyArray<keyof typeof types>} */
-    Object.keys(types_exports2);
-    DefinedInfo = class extends Info {
-      /**
-       * @constructor
-       * @param {string} property
-       *   Property.
-       * @param {string} attribute
-       *   Attribute.
-       * @param {number | null | undefined} [mask]
-       *   Mask.
-       * @param {Space | undefined} [space]
-       *   Space.
-       * @returns
-       *   Info.
-       */
-      constructor(property, attribute, mask, space) {
-        let index2 = -1;
-        super(property, attribute);
-        mark(this, "space", space);
-        if (typeof mask === "number") {
-          while (++index2 < checks.length) {
-            const check = checks[index2];
-            mark(this, checks[index2], (mask & types_exports2[check]) === types_exports2[check]);
-          }
-        }
-      }
-    };
-    DefinedInfo.prototype.defined = true;
-  }
-});
-
-// node_modules/.pnpm/property-information@7.2.0/node_modules/property-information/lib/util/create.js
-function create(definition3) {
-  const properties = {};
-  const normals = {};
-  for (const [property, value] of Object.entries(definition3.properties)) {
-    const info = new DefinedInfo(
-      property,
-      definition3.transform(definition3.attributes || {}, property),
-      value,
-      definition3.space
-    );
-    if (definition3.mustUseProperty && definition3.mustUseProperty.includes(property)) {
-      info.mustUseProperty = true;
-    }
-    properties[property] = info;
-    normals[normalize(property)] = property;
-    normals[normalize(info.attribute)] = property;
-  }
-  return new Schema(properties, normals, definition3.space);
-}
-var init_create4 = __esm({
-  "node_modules/.pnpm/property-information@7.2.0/node_modules/property-information/lib/util/create.js"() {
-    init_normalize();
-    init_defined_info();
-    init_schema();
-  }
-});
-
-// node_modules/.pnpm/property-information@7.2.0/node_modules/property-information/lib/aria.js
-var aria;
-var init_aria = __esm({
-  "node_modules/.pnpm/property-information@7.2.0/node_modules/property-information/lib/aria.js"() {
-    init_create4();
-    init_types2();
-    aria = create({
-      properties: {
-        ariaActiveDescendant: null,
-        ariaAtomic: booleanish,
-        ariaAutoComplete: null,
-        ariaBusy: booleanish,
-        ariaChecked: booleanish,
-        ariaColCount: number,
-        ariaColIndex: number,
-        ariaColSpan: number,
-        ariaControls: spaceSeparated,
-        ariaCurrent: null,
-        ariaDescribedBy: spaceSeparated,
-        ariaDetails: null,
-        ariaDisabled: booleanish,
-        ariaDropEffect: spaceSeparated,
-        ariaErrorMessage: null,
-        ariaExpanded: booleanish,
-        ariaFlowTo: spaceSeparated,
-        ariaGrabbed: booleanish,
-        ariaHasPopup: null,
-        ariaHidden: booleanish,
-        ariaInvalid: null,
-        ariaKeyShortcuts: null,
-        ariaLabel: null,
-        ariaLabelledBy: spaceSeparated,
-        ariaLevel: number,
-        ariaLive: null,
-        ariaModal: booleanish,
-        ariaMultiLine: booleanish,
-        ariaMultiSelectable: booleanish,
-        ariaOrientation: null,
-        ariaOwns: spaceSeparated,
-        ariaPlaceholder: null,
-        ariaPosInSet: number,
-        ariaPressed: booleanish,
-        ariaReadOnly: booleanish,
-        ariaRelevant: null,
-        ariaRequired: booleanish,
-        ariaRoleDescription: spaceSeparated,
-        ariaRowCount: number,
-        ariaRowIndex: number,
-        ariaRowSpan: number,
-        ariaSelected: booleanish,
-        ariaSetSize: number,
-        ariaSort: null,
-        ariaValueMax: number,
-        ariaValueMin: number,
-        ariaValueNow: number,
-        ariaValueText: null,
-        role: null
-      },
-      transform(_, property) {
-        return property === "role" ? property : "aria-" + property.slice(4).toLowerCase();
-      }
-    });
-  }
-});
-
-// node_modules/.pnpm/property-information@7.2.0/node_modules/property-information/lib/util/case-sensitive-transform.js
-function caseSensitiveTransform(attributes, attribute) {
-  return attribute in attributes ? attributes[attribute] : attribute;
-}
-var init_case_sensitive_transform = __esm({
-  "node_modules/.pnpm/property-information@7.2.0/node_modules/property-information/lib/util/case-sensitive-transform.js"() {
-  }
-});
-
-// node_modules/.pnpm/property-information@7.2.0/node_modules/property-information/lib/util/case-insensitive-transform.js
-function caseInsensitiveTransform(attributes, property) {
-  return caseSensitiveTransform(attributes, property.toLowerCase());
-}
-var init_case_insensitive_transform = __esm({
-  "node_modules/.pnpm/property-information@7.2.0/node_modules/property-information/lib/util/case-insensitive-transform.js"() {
-    init_case_sensitive_transform();
-  }
-});
-
-// node_modules/.pnpm/property-information@7.2.0/node_modules/property-information/lib/html.js
-var html2;
-var init_html2 = __esm({
-  "node_modules/.pnpm/property-information@7.2.0/node_modules/property-information/lib/html.js"() {
-    init_case_insensitive_transform();
-    init_create4();
-    init_types2();
-    html2 = create({
-      attributes: {
-        acceptcharset: "accept-charset",
-        classname: "class",
-        htmlfor: "for",
-        httpequiv: "http-equiv"
-      },
-      mustUseProperty: ["checked", "multiple", "muted", "selected"],
-      properties: {
-        // Standard Properties.
-        abbr: null,
-        accept: commaSeparated,
-        acceptCharset: spaceSeparated,
-        accessKey: spaceSeparated,
-        action: null,
-        allow: null,
-        allowFullScreen: boolean,
-        allowPaymentRequest: boolean,
-        allowUserMedia: boolean,
-        alpha: boolean,
-        alt: null,
-        as: null,
-        async: boolean,
-        autoCapitalize: null,
-        autoComplete: spaceSeparated,
-        autoFocus: boolean,
-        autoPlay: boolean,
-        blocking: spaceSeparated,
-        capture: null,
-        charSet: null,
-        checked: boolean,
-        cite: null,
-        className: spaceSeparated,
-        closedBy: null,
-        colorSpace: null,
-        cols: number,
-        colSpan: number,
-        command: null,
-        commandFor: null,
-        content: null,
-        contentEditable: booleanish,
-        controls: boolean,
-        controlsList: spaceSeparated,
-        coords: number | commaSeparated,
-        crossOrigin: null,
-        data: null,
-        dateTime: null,
-        decoding: null,
-        default: boolean,
-        defer: boolean,
-        dir: null,
-        dirName: null,
-        disabled: boolean,
-        download: overloadedBoolean,
-        draggable: booleanish,
-        encType: null,
-        enterKeyHint: null,
-        fetchPriority: null,
-        form: null,
-        formAction: null,
-        formEncType: null,
-        formMethod: null,
-        formNoValidate: boolean,
-        formTarget: null,
-        headers: spaceSeparated,
-        height: number,
-        hidden: overloadedBoolean,
-        high: number,
-        href: null,
-        hrefLang: null,
-        htmlFor: spaceSeparated,
-        httpEquiv: spaceSeparated,
-        id: null,
-        imageSizes: null,
-        imageSrcSet: null,
-        inert: boolean,
-        inputMode: null,
-        integrity: null,
-        is: null,
-        isMap: boolean,
-        itemId: null,
-        itemProp: spaceSeparated,
-        itemRef: spaceSeparated,
-        itemScope: boolean,
-        itemType: spaceSeparated,
-        kind: null,
-        label: null,
-        lang: null,
-        language: null,
-        list: null,
-        loading: null,
-        loop: boolean,
-        low: number,
-        manifest: null,
-        max: null,
-        maxLength: number,
-        media: null,
-        method: null,
-        min: null,
-        minLength: number,
-        multiple: boolean,
-        muted: boolean,
-        name: null,
-        nonce: null,
-        noModule: boolean,
-        noValidate: boolean,
-        onAbort: null,
-        onAfterPrint: null,
-        onAuxClick: null,
-        onBeforeMatch: null,
-        onBeforePrint: null,
-        onBeforeToggle: null,
-        onBeforeUnload: null,
-        onBlur: null,
-        onCancel: null,
-        onCanPlay: null,
-        onCanPlayThrough: null,
-        onChange: null,
-        onClick: null,
-        onClose: null,
-        onContextLost: null,
-        onContextMenu: null,
-        onContextRestored: null,
-        onCopy: null,
-        onCueChange: null,
-        onCut: null,
-        onDblClick: null,
-        onDrag: null,
-        onDragEnd: null,
-        onDragEnter: null,
-        onDragExit: null,
-        onDragLeave: null,
-        onDragOver: null,
-        onDragStart: null,
-        onDrop: null,
-        onDurationChange: null,
-        onEmptied: null,
-        onEnded: null,
-        onError: null,
-        onFocus: null,
-        onFormData: null,
-        onHashChange: null,
-        onInput: null,
-        onInvalid: null,
-        onKeyDown: null,
-        onKeyPress: null,
-        onKeyUp: null,
-        onLanguageChange: null,
-        onLoad: null,
-        onLoadedData: null,
-        onLoadedMetadata: null,
-        onLoadEnd: null,
-        onLoadStart: null,
-        onMessage: null,
-        onMessageError: null,
-        onMouseDown: null,
-        onMouseEnter: null,
-        onMouseLeave: null,
-        onMouseMove: null,
-        onMouseOut: null,
-        onMouseOver: null,
-        onMouseUp: null,
-        onOffline: null,
-        onOnline: null,
-        onPageHide: null,
-        onPageShow: null,
-        onPaste: null,
-        onPause: null,
-        onPlay: null,
-        onPlaying: null,
-        onPopState: null,
-        onProgress: null,
-        onRateChange: null,
-        onRejectionHandled: null,
-        onReset: null,
-        onResize: null,
-        onScroll: null,
-        onScrollEnd: null,
-        onSecurityPolicyViolation: null,
-        onSeeked: null,
-        onSeeking: null,
-        onSelect: null,
-        onSlotChange: null,
-        onStalled: null,
-        onStorage: null,
-        onSubmit: null,
-        onSuspend: null,
-        onTimeUpdate: null,
-        onToggle: null,
-        onUnhandledRejection: null,
-        onUnload: null,
-        onVolumeChange: null,
-        onWaiting: null,
-        onWheel: null,
-        open: boolean,
-        optimum: number,
-        pattern: null,
-        ping: spaceSeparated,
-        placeholder: null,
-        playsInline: boolean,
-        popover: null,
-        popoverTarget: null,
-        popoverTargetAction: null,
-        poster: null,
-        preload: null,
-        readOnly: boolean,
-        referrerPolicy: null,
-        rel: spaceSeparated,
-        required: boolean,
-        reversed: boolean,
-        rows: number,
-        rowSpan: number,
-        sandbox: spaceSeparated,
-        scope: null,
-        scoped: boolean,
-        seamless: boolean,
-        selected: boolean,
-        shadowRootClonable: boolean,
-        shadowRootCustomElementRegistry: boolean,
-        shadowRootDelegatesFocus: boolean,
-        shadowRootMode: null,
-        shadowRootSerializable: boolean,
-        shape: null,
-        size: number,
-        sizes: null,
-        slot: null,
-        span: number,
-        spellCheck: booleanish,
-        src: null,
-        srcDoc: null,
-        srcLang: null,
-        srcSet: null,
-        start: number,
-        step: null,
-        style: null,
-        tabIndex: number,
-        target: null,
-        title: null,
-        translate: null,
-        type: null,
-        typeMustMatch: boolean,
-        useMap: null,
-        value: booleanish,
-        width: number,
-        wrap: null,
-        writingSuggestions: null,
-        // Legacy.
-        // See: https://html.spec.whatwg.org/#other-elements,-attributes-and-apis
-        align: null,
-        // Several. Use CSS `text-align` instead,
-        aLink: null,
-        // `<body>`. Use CSS `a:active {color}` instead
-        archive: spaceSeparated,
-        // `<object>`. List of URIs to archives
-        axis: null,
-        // `<td>` and `<th>`. Use `scope` on `<th>`
-        background: null,
-        // `<body>`. Use CSS `background-image` instead
-        bgColor: null,
-        // `<body>` and table elements. Use CSS `background-color` instead
-        border: number,
-        // `<table>`. Use CSS `border-width` instead,
-        borderColor: null,
-        // `<table>`. Use CSS `border-color` instead,
-        bottomMargin: number,
-        // `<body>`
-        cellPadding: null,
-        // `<table>`
-        cellSpacing: null,
-        // `<table>`
-        char: null,
-        // Several table elements. When `align=char`, sets the character to align on
-        charOff: null,
-        // Several table elements. When `char`, offsets the alignment
-        classId: null,
-        // `<object>`
-        clear: null,
-        // `<br>`. Use CSS `clear` instead
-        code: null,
-        // `<object>`
-        codeBase: null,
-        // `<object>`
-        codeType: null,
-        // `<object>`
-        color: null,
-        // `<font>` and `<hr>`. Use CSS instead
-        compact: boolean,
-        // Lists. Use CSS to reduce space between items instead
-        declare: boolean,
-        // `<object>`
-        event: null,
-        // `<script>`
-        face: null,
-        // `<font>`. Use CSS instead
-        frame: null,
-        // `<table>`
-        frameBorder: null,
-        // `<iframe>`. Use CSS `border` instead
-        hSpace: number,
-        // `<img>` and `<object>`
-        leftMargin: number,
-        // `<body>`
-        link: null,
-        // `<body>`. Use CSS `a:link {color: *}` instead
-        longDesc: null,
-        // `<frame>`, `<iframe>`, and `<img>`. Use an `<a>`
-        lowSrc: null,
-        // `<img>`. Use a `<picture>`
-        marginHeight: number,
-        // `<body>`
-        marginWidth: number,
-        // `<body>`
-        noResize: boolean,
-        // `<frame>`
-        noHref: boolean,
-        // `<area>`. Use no href instead of an explicit `nohref`
-        noShade: boolean,
-        // `<hr>`. Use background-color and height instead of borders
-        noWrap: boolean,
-        // `<td>` and `<th>`
-        object: null,
-        // `<applet>`
-        profile: null,
-        // `<head>`
-        prompt: null,
-        // `<isindex>`
-        rev: null,
-        // `<link>`
-        rightMargin: number,
-        // `<body>`
-        rules: null,
-        // `<table>`
-        scheme: null,
-        // `<meta>`
-        scrolling: booleanish,
-        // `<frame>`. Use overflow in the child context
-        standby: null,
-        // `<object>`
-        summary: null,
-        // `<table>`
-        text: null,
-        // `<body>`. Use CSS `color` instead
-        topMargin: number,
-        // `<body>`
-        valueType: null,
-        // `<param>`
-        version: null,
-        // `<html>`. Use a doctype.
-        vAlign: null,
-        // Several. Use CSS `vertical-align` instead
-        vLink: null,
-        // `<body>`. Use CSS `a:visited {color}` instead
-        vSpace: number,
-        // `<img>` and `<object>`
-        // Non-standard Properties.
-        allowTransparency: null,
-        autoCorrect: null,
-        autoSave: null,
-        credentialless: boolean,
-        disablePictureInPicture: boolean,
-        disableRemotePlayback: boolean,
-        exportParts: commaSeparated,
-        part: spaceSeparated,
-        prefix: null,
-        property: null,
-        results: number,
-        security: null,
-        unselectable: null
-      },
-      space: "html",
-      transform: caseInsensitiveTransform
-    });
-  }
-});
-
-// node_modules/.pnpm/property-information@7.2.0/node_modules/property-information/lib/svg.js
-var svg;
-var init_svg = __esm({
-  "node_modules/.pnpm/property-information@7.2.0/node_modules/property-information/lib/svg.js"() {
-    init_case_sensitive_transform();
-    init_create4();
-    init_types2();
-    svg = create({
-      attributes: {
-        accentHeight: "accent-height",
-        alignmentBaseline: "alignment-baseline",
-        arabicForm: "arabic-form",
-        baselineShift: "baseline-shift",
-        capHeight: "cap-height",
-        className: "class",
-        clipPath: "clip-path",
-        clipRule: "clip-rule",
-        colorInterpolation: "color-interpolation",
-        colorInterpolationFilters: "color-interpolation-filters",
-        colorProfile: "color-profile",
-        colorRendering: "color-rendering",
-        crossOrigin: "crossorigin",
-        dataType: "datatype",
-        dominantBaseline: "dominant-baseline",
-        enableBackground: "enable-background",
-        fillOpacity: "fill-opacity",
-        fillRule: "fill-rule",
-        floodColor: "flood-color",
-        floodOpacity: "flood-opacity",
-        fontFamily: "font-family",
-        fontSize: "font-size",
-        fontSizeAdjust: "font-size-adjust",
-        fontStretch: "font-stretch",
-        fontStyle: "font-style",
-        fontVariant: "font-variant",
-        fontWeight: "font-weight",
-        glyphName: "glyph-name",
-        glyphOrientationHorizontal: "glyph-orientation-horizontal",
-        glyphOrientationVertical: "glyph-orientation-vertical",
-        hrefLang: "hreflang",
-        horizAdvX: "horiz-adv-x",
-        horizOriginX: "horiz-origin-x",
-        horizOriginY: "horiz-origin-y",
-        imageRendering: "image-rendering",
-        letterSpacing: "letter-spacing",
-        lightingColor: "lighting-color",
-        markerEnd: "marker-end",
-        markerMid: "marker-mid",
-        markerStart: "marker-start",
-        maskType: "mask-type",
-        navDown: "nav-down",
-        navDownLeft: "nav-down-left",
-        navDownRight: "nav-down-right",
-        navLeft: "nav-left",
-        navNext: "nav-next",
-        navPrev: "nav-prev",
-        navRight: "nav-right",
-        navUp: "nav-up",
-        navUpLeft: "nav-up-left",
-        navUpRight: "nav-up-right",
-        onAbort: "onabort",
-        onActivate: "onactivate",
-        onAfterPrint: "onafterprint",
-        onBeforePrint: "onbeforeprint",
-        onBegin: "onbegin",
-        onCancel: "oncancel",
-        onCanPlay: "oncanplay",
-        onCanPlayThrough: "oncanplaythrough",
-        onChange: "onchange",
-        onClick: "onclick",
-        onClose: "onclose",
-        onCopy: "oncopy",
-        onCueChange: "oncuechange",
-        onCut: "oncut",
-        onDblClick: "ondblclick",
-        onDrag: "ondrag",
-        onDragEnd: "ondragend",
-        onDragEnter: "ondragenter",
-        onDragExit: "ondragexit",
-        onDragLeave: "ondragleave",
-        onDragOver: "ondragover",
-        onDragStart: "ondragstart",
-        onDrop: "ondrop",
-        onDurationChange: "ondurationchange",
-        onEmptied: "onemptied",
-        onEnd: "onend",
-        onEnded: "onended",
-        onError: "onerror",
-        onFocus: "onfocus",
-        onFocusIn: "onfocusin",
-        onFocusOut: "onfocusout",
-        onHashChange: "onhashchange",
-        onInput: "oninput",
-        onInvalid: "oninvalid",
-        onKeyDown: "onkeydown",
-        onKeyPress: "onkeypress",
-        onKeyUp: "onkeyup",
-        onLoad: "onload",
-        onLoadedData: "onloadeddata",
-        onLoadedMetadata: "onloadedmetadata",
-        onLoadStart: "onloadstart",
-        onMessage: "onmessage",
-        onMouseDown: "onmousedown",
-        onMouseEnter: "onmouseenter",
-        onMouseLeave: "onmouseleave",
-        onMouseMove: "onmousemove",
-        onMouseOut: "onmouseout",
-        onMouseOver: "onmouseover",
-        onMouseUp: "onmouseup",
-        onMouseWheel: "onmousewheel",
-        onOffline: "onoffline",
-        onOnline: "ononline",
-        onPageHide: "onpagehide",
-        onPageShow: "onpageshow",
-        onPaste: "onpaste",
-        onPause: "onpause",
-        onPlay: "onplay",
-        onPlaying: "onplaying",
-        onPopState: "onpopstate",
-        onProgress: "onprogress",
-        onRateChange: "onratechange",
-        onRepeat: "onrepeat",
-        onReset: "onreset",
-        onResize: "onresize",
-        onScroll: "onscroll",
-        onSeeked: "onseeked",
-        onSeeking: "onseeking",
-        onSelect: "onselect",
-        onShow: "onshow",
-        onStalled: "onstalled",
-        onStorage: "onstorage",
-        onSubmit: "onsubmit",
-        onSuspend: "onsuspend",
-        onTimeUpdate: "ontimeupdate",
-        onToggle: "ontoggle",
-        onUnload: "onunload",
-        onVolumeChange: "onvolumechange",
-        onWaiting: "onwaiting",
-        onZoom: "onzoom",
-        overlinePosition: "overline-position",
-        overlineThickness: "overline-thickness",
-        paintOrder: "paint-order",
-        panose1: "panose-1",
-        pointerEvents: "pointer-events",
-        referrerPolicy: "referrerpolicy",
-        renderingIntent: "rendering-intent",
-        shapeRendering: "shape-rendering",
-        stopColor: "stop-color",
-        stopOpacity: "stop-opacity",
-        strikethroughPosition: "strikethrough-position",
-        strikethroughThickness: "strikethrough-thickness",
-        strokeDashArray: "stroke-dasharray",
-        strokeDashOffset: "stroke-dashoffset",
-        strokeLineCap: "stroke-linecap",
-        strokeLineJoin: "stroke-linejoin",
-        strokeMiterLimit: "stroke-miterlimit",
-        strokeOpacity: "stroke-opacity",
-        strokeWidth: "stroke-width",
-        tabIndex: "tabindex",
-        textAnchor: "text-anchor",
-        textDecoration: "text-decoration",
-        textRendering: "text-rendering",
-        transformOrigin: "transform-origin",
-        typeOf: "typeof",
-        underlinePosition: "underline-position",
-        underlineThickness: "underline-thickness",
-        unicodeBidi: "unicode-bidi",
-        unicodeRange: "unicode-range",
-        unitsPerEm: "units-per-em",
-        vAlphabetic: "v-alphabetic",
-        vHanging: "v-hanging",
-        vIdeographic: "v-ideographic",
-        vMathematical: "v-mathematical",
-        vectorEffect: "vector-effect",
-        vertAdvY: "vert-adv-y",
-        vertOriginX: "vert-origin-x",
-        vertOriginY: "vert-origin-y",
-        wordSpacing: "word-spacing",
-        writingMode: "writing-mode",
-        xHeight: "x-height",
-        // These were camelcased in Tiny. Now lowercased in SVG 2
-        playbackOrder: "playbackorder",
-        timelineBegin: "timelinebegin"
-      },
-      properties: {
-        about: commaOrSpaceSeparated,
-        accentHeight: number,
-        accumulate: null,
-        additive: null,
-        alignmentBaseline: null,
-        alphabetic: number,
-        amplitude: number,
-        arabicForm: null,
-        ascent: number,
-        attributeName: null,
-        attributeType: null,
-        azimuth: number,
-        bandwidth: null,
-        baselineShift: null,
-        baseFrequency: null,
-        baseProfile: null,
-        bbox: null,
-        begin: null,
-        bias: number,
-        by: null,
-        calcMode: null,
-        capHeight: number,
-        className: spaceSeparated,
-        clip: null,
-        clipPath: null,
-        clipPathUnits: null,
-        clipRule: null,
-        color: null,
-        colorInterpolation: null,
-        colorInterpolationFilters: null,
-        colorProfile: null,
-        colorRendering: null,
-        content: null,
-        contentScriptType: null,
-        contentStyleType: null,
-        crossOrigin: null,
-        cursor: null,
-        cx: null,
-        cy: null,
-        d: null,
-        dataType: null,
-        defaultAction: null,
-        descent: number,
-        diffuseConstant: number,
-        direction: null,
-        display: null,
-        dur: null,
-        divisor: number,
-        dominantBaseline: null,
-        download: boolean,
-        dx: null,
-        dy: null,
-        edgeMode: null,
-        editable: null,
-        elevation: number,
-        enableBackground: null,
-        end: null,
-        event: null,
-        exponent: number,
-        externalResourcesRequired: null,
-        fill: null,
-        fillOpacity: number,
-        fillRule: null,
-        filter: null,
-        filterRes: null,
-        filterUnits: null,
-        floodColor: null,
-        floodOpacity: null,
-        focusable: null,
-        focusHighlight: null,
-        fontFamily: null,
-        fontSize: null,
-        fontSizeAdjust: null,
-        fontStretch: null,
-        fontStyle: null,
-        fontVariant: null,
-        fontWeight: null,
-        format: null,
-        fr: null,
-        from: null,
-        fx: null,
-        fy: null,
-        g1: commaSeparated,
-        g2: commaSeparated,
-        glyphName: commaSeparated,
-        glyphOrientationHorizontal: null,
-        glyphOrientationVertical: null,
-        glyphRef: null,
-        gradientTransform: null,
-        gradientUnits: null,
-        handler: null,
-        hanging: number,
-        hatchContentUnits: null,
-        hatchUnits: null,
-        height: null,
-        href: null,
-        hrefLang: null,
-        horizAdvX: number,
-        horizOriginX: number,
-        horizOriginY: number,
-        id: null,
-        ideographic: number,
-        imageRendering: null,
-        initialVisibility: null,
-        in: null,
-        in2: null,
-        intercept: number,
-        k: number,
-        k1: number,
-        k2: number,
-        k3: number,
-        k4: number,
-        kernelMatrix: commaOrSpaceSeparated,
-        kernelUnitLength: null,
-        keyPoints: null,
-        // SEMI_COLON_SEPARATED
-        keySplines: null,
-        // SEMI_COLON_SEPARATED
-        keyTimes: null,
-        // SEMI_COLON_SEPARATED
-        kerning: null,
-        lang: null,
-        lengthAdjust: null,
-        letterSpacing: null,
-        lightingColor: null,
-        limitingConeAngle: number,
-        local: null,
-        markerEnd: null,
-        markerMid: null,
-        markerStart: null,
-        markerHeight: null,
-        markerUnits: null,
-        markerWidth: null,
-        mask: null,
-        maskContentUnits: null,
-        maskType: null,
-        maskUnits: null,
-        mathematical: null,
-        max: null,
-        media: null,
-        mediaCharacterEncoding: null,
-        mediaContentEncodings: null,
-        mediaSize: number,
-        mediaTime: null,
-        method: null,
-        min: null,
-        mode: null,
-        name: null,
-        navDown: null,
-        navDownLeft: null,
-        navDownRight: null,
-        navLeft: null,
-        navNext: null,
-        navPrev: null,
-        navRight: null,
-        navUp: null,
-        navUpLeft: null,
-        navUpRight: null,
-        numOctaves: null,
-        observer: null,
-        offset: null,
-        onAbort: null,
-        onActivate: null,
-        onAfterPrint: null,
-        onBeforePrint: null,
-        onBegin: null,
-        onCancel: null,
-        onCanPlay: null,
-        onCanPlayThrough: null,
-        onChange: null,
-        onClick: null,
-        onClose: null,
-        onCopy: null,
-        onCueChange: null,
-        onCut: null,
-        onDblClick: null,
-        onDrag: null,
-        onDragEnd: null,
-        onDragEnter: null,
-        onDragExit: null,
-        onDragLeave: null,
-        onDragOver: null,
-        onDragStart: null,
-        onDrop: null,
-        onDurationChange: null,
-        onEmptied: null,
-        onEnd: null,
-        onEnded: null,
-        onError: null,
-        onFocus: null,
-        onFocusIn: null,
-        onFocusOut: null,
-        onHashChange: null,
-        onInput: null,
-        onInvalid: null,
-        onKeyDown: null,
-        onKeyPress: null,
-        onKeyUp: null,
-        onLoad: null,
-        onLoadedData: null,
-        onLoadedMetadata: null,
-        onLoadStart: null,
-        onMessage: null,
-        onMouseDown: null,
-        onMouseEnter: null,
-        onMouseLeave: null,
-        onMouseMove: null,
-        onMouseOut: null,
-        onMouseOver: null,
-        onMouseUp: null,
-        onMouseWheel: null,
-        onOffline: null,
-        onOnline: null,
-        onPageHide: null,
-        onPageShow: null,
-        onPaste: null,
-        onPause: null,
-        onPlay: null,
-        onPlaying: null,
-        onPopState: null,
-        onProgress: null,
-        onRateChange: null,
-        onRepeat: null,
-        onReset: null,
-        onResize: null,
-        onScroll: null,
-        onSeeked: null,
-        onSeeking: null,
-        onSelect: null,
-        onShow: null,
-        onStalled: null,
-        onStorage: null,
-        onSubmit: null,
-        onSuspend: null,
-        onTimeUpdate: null,
-        onToggle: null,
-        onUnload: null,
-        onVolumeChange: null,
-        onWaiting: null,
-        onZoom: null,
-        opacity: null,
-        operator: null,
-        order: null,
-        orient: null,
-        orientation: null,
-        origin: null,
-        overflow: null,
-        overlay: null,
-        overlinePosition: number,
-        overlineThickness: number,
-        paintOrder: null,
-        panose1: null,
-        path: null,
-        pathLength: number,
-        patternContentUnits: null,
-        patternTransform: null,
-        patternUnits: null,
-        phase: null,
-        ping: spaceSeparated,
-        pitch: null,
-        playbackOrder: null,
-        pointerEvents: null,
-        points: null,
-        pointsAtX: number,
-        pointsAtY: number,
-        pointsAtZ: number,
-        preserveAlpha: null,
-        preserveAspectRatio: null,
-        primitiveUnits: null,
-        propagate: null,
-        property: commaOrSpaceSeparated,
-        r: null,
-        radius: null,
-        referrerPolicy: null,
-        refX: null,
-        refY: null,
-        rel: commaOrSpaceSeparated,
-        rev: commaOrSpaceSeparated,
-        renderingIntent: null,
-        repeatCount: null,
-        repeatDur: null,
-        requiredExtensions: commaOrSpaceSeparated,
-        requiredFeatures: commaOrSpaceSeparated,
-        requiredFonts: commaOrSpaceSeparated,
-        requiredFormats: commaOrSpaceSeparated,
-        resource: null,
-        restart: null,
-        result: null,
-        rotate: null,
-        rx: null,
-        ry: null,
-        scale: null,
-        seed: null,
-        shapeRendering: null,
-        side: null,
-        slope: null,
-        snapshotTime: null,
-        specularConstant: number,
-        specularExponent: number,
-        spreadMethod: null,
-        spacing: null,
-        startOffset: null,
-        stdDeviation: null,
-        stemh: null,
-        stemv: null,
-        stitchTiles: null,
-        stopColor: null,
-        stopOpacity: null,
-        strikethroughPosition: number,
-        strikethroughThickness: number,
-        string: null,
-        stroke: null,
-        strokeDashArray: commaOrSpaceSeparated,
-        strokeDashOffset: null,
-        strokeLineCap: null,
-        strokeLineJoin: null,
-        strokeMiterLimit: number,
-        strokeOpacity: number,
-        strokeWidth: null,
-        style: null,
-        surfaceScale: number,
-        syncBehavior: null,
-        syncBehaviorDefault: null,
-        syncMaster: null,
-        syncTolerance: null,
-        syncToleranceDefault: null,
-        systemLanguage: commaOrSpaceSeparated,
-        tabIndex: number,
-        tableValues: null,
-        target: null,
-        targetX: number,
-        targetY: number,
-        textAnchor: null,
-        textDecoration: null,
-        textRendering: null,
-        textLength: null,
-        timelineBegin: null,
-        title: null,
-        transformBehavior: null,
-        type: null,
-        typeOf: commaOrSpaceSeparated,
-        to: null,
-        transform: null,
-        transformOrigin: null,
-        u1: null,
-        u2: null,
-        underlinePosition: number,
-        underlineThickness: number,
-        unicode: null,
-        unicodeBidi: null,
-        unicodeRange: null,
-        unitsPerEm: number,
-        values: null,
-        vAlphabetic: number,
-        vMathematical: number,
-        vectorEffect: null,
-        vHanging: number,
-        vIdeographic: number,
-        version: null,
-        vertAdvY: number,
-        vertOriginX: number,
-        vertOriginY: number,
-        viewBox: null,
-        viewTarget: null,
-        visibility: null,
-        width: null,
-        widths: null,
-        wordSpacing: null,
-        writingMode: null,
-        x: null,
-        x1: null,
-        x2: null,
-        xChannelSelector: null,
-        xHeight: number,
-        y: null,
-        y1: null,
-        y2: null,
-        yChannelSelector: null,
-        z: null,
-        zoomAndPan: null
-      },
-      space: "svg",
-      transform: caseSensitiveTransform
-    });
-  }
-});
-
-// node_modules/.pnpm/property-information@7.2.0/node_modules/property-information/lib/xlink.js
-var xlink;
-var init_xlink = __esm({
-  "node_modules/.pnpm/property-information@7.2.0/node_modules/property-information/lib/xlink.js"() {
-    init_create4();
-    xlink = create({
-      properties: {
-        xLinkActuate: null,
-        xLinkArcRole: null,
-        xLinkHref: null,
-        xLinkRole: null,
-        xLinkShow: null,
-        xLinkTitle: null,
-        xLinkType: null
-      },
-      space: "xlink",
-      transform(_, property) {
-        return "xlink:" + property.slice(5).toLowerCase();
-      }
-    });
-  }
-});
-
-// node_modules/.pnpm/property-information@7.2.0/node_modules/property-information/lib/xmlns.js
-var xmlns;
-var init_xmlns = __esm({
-  "node_modules/.pnpm/property-information@7.2.0/node_modules/property-information/lib/xmlns.js"() {
-    init_create4();
-    init_case_insensitive_transform();
-    xmlns = create({
-      attributes: { xmlnsxlink: "xmlns:xlink" },
-      properties: { xmlnsXLink: null, xmlns: null },
-      space: "xmlns",
-      transform: caseInsensitiveTransform
-    });
-  }
-});
-
-// node_modules/.pnpm/property-information@7.2.0/node_modules/property-information/lib/xml.js
-var xml;
-var init_xml = __esm({
-  "node_modules/.pnpm/property-information@7.2.0/node_modules/property-information/lib/xml.js"() {
-    init_create4();
-    xml = create({
-      properties: { xmlBase: null, xmlLang: null, xmlSpace: null },
-      space: "xml",
-      transform(_, property) {
-        return "xml:" + property.slice(3).toLowerCase();
-      }
-    });
-  }
-});
-
-// node_modules/.pnpm/property-information@7.2.0/node_modules/property-information/lib/find.js
-function find(schema, value) {
-  const normal = normalize(value);
-  let property = value;
-  let Type = Info;
-  if (normal in schema.normal) {
-    return schema.property[schema.normal[normal]];
-  }
-  if (normal.length > 4 && normal.slice(0, 4) === "data" && valid.test(value)) {
-    if (value.charAt(4) === "-") {
-      const rest = value.slice(5).replace(dash, camelcase);
-      property = "data" + rest.charAt(0).toUpperCase() + rest.slice(1);
-    } else {
-      const rest = value.slice(4);
-      if (!dash.test(rest)) {
-        let dashes = rest.replace(cap, kebab);
-        if (dashes.charAt(0) !== "-") {
-          dashes = "-" + dashes;
-        }
-        value = "data" + dashes;
-      }
-    }
-    Type = DefinedInfo;
-  }
-  return new Type(property, value);
-}
-function kebab($0) {
-  return "-" + $0.toLowerCase();
-}
-function camelcase($0) {
-  return $0.charAt(1).toUpperCase();
-}
-var cap, dash, valid;
-var init_find = __esm({
-  "node_modules/.pnpm/property-information@7.2.0/node_modules/property-information/lib/find.js"() {
-    init_defined_info();
-    init_info();
-    init_normalize();
-    cap = /[A-Z]/g;
-    dash = /-[a-z]/g;
-    valid = /^data[-\w.:]+$/i;
-  }
-});
-
-// node_modules/.pnpm/property-information@7.2.0/node_modules/property-information/index.js
-var html3, svg2;
-var init_property_information = __esm({
-  "node_modules/.pnpm/property-information@7.2.0/node_modules/property-information/index.js"() {
-    init_merge();
-    init_aria();
-    init_html2();
-    init_svg();
-    init_xlink();
-    init_xmlns();
-    init_xml();
-    init_find();
-    init_normalize();
-    html3 = merge([aria, html2, xlink, xmlns, xml], "html");
-    svg2 = merge([aria, svg, xlink, xmlns, xml], "svg");
-  }
-});
-
-// node_modules/.pnpm/comma-separated-tokens@2.0.3/node_modules/comma-separated-tokens/index.js
-function parse52(value) {
-  const tokens = [];
-  const input = String(value || "");
-  let index2 = input.indexOf(",");
-  let start = 0;
-  let end = false;
-  while (!end) {
-    if (index2 === -1) {
-      index2 = input.length;
-      end = true;
-    }
-    const token = input.slice(start, index2).trim();
-    if (token || !end) {
-      tokens.push(token);
-    }
-    start = index2 + 1;
-    index2 = input.indexOf(",", start);
-  }
-  return tokens;
-}
-var init_comma_separated_tokens = __esm({
-  "node_modules/.pnpm/comma-separated-tokens@2.0.3/node_modules/comma-separated-tokens/index.js"() {
-  }
-});
-
-// node_modules/.pnpm/hast-util-parse-selector@4.0.0/node_modules/hast-util-parse-selector/lib/index.js
-function parseSelector(selector2, defaultTagName) {
-  const value = selector2 || "";
-  const props = {};
-  let start = 0;
-  let previous3;
-  let tagName;
-  while (start < value.length) {
-    search2.lastIndex = start;
-    const match = search2.exec(value);
-    const subvalue = value.slice(start, match ? match.index : value.length);
-    if (subvalue) {
-      if (!previous3) {
-        tagName = subvalue;
-      } else if (previous3 === "#") {
-        props.id = subvalue;
-      } else if (Array.isArray(props.className)) {
-        props.className.push(subvalue);
-      } else {
-        props.className = [subvalue];
-      }
-      start += subvalue.length;
-    }
-    if (match) {
-      previous3 = match[0];
-      start++;
-    }
-  }
-  return {
-    type: "element",
-    // @ts-expect-error: tag name is parsed.
-    tagName: tagName || defaultTagName || "div",
-    properties: props,
-    children: []
-  };
-}
-var search2;
-var init_lib21 = __esm({
-  "node_modules/.pnpm/hast-util-parse-selector@4.0.0/node_modules/hast-util-parse-selector/lib/index.js"() {
-    search2 = /[#.]/g;
-  }
-});
-
-// node_modules/.pnpm/hast-util-parse-selector@4.0.0/node_modules/hast-util-parse-selector/index.js
-var init_hast_util_parse_selector = __esm({
-  "node_modules/.pnpm/hast-util-parse-selector@4.0.0/node_modules/hast-util-parse-selector/index.js"() {
-    init_lib21();
-  }
-});
-
-// node_modules/.pnpm/space-separated-tokens@2.0.2/node_modules/space-separated-tokens/index.js
-function parse53(value) {
-  const input = String(value || "").trim();
-  return input ? input.split(/[ \t\n\r\f]+/g) : [];
-}
-var init_space_separated_tokens = __esm({
-  "node_modules/.pnpm/space-separated-tokens@2.0.2/node_modules/space-separated-tokens/index.js"() {
-  }
-});
-
-// node_modules/.pnpm/hastscript@9.0.1/node_modules/hastscript/lib/create-h.js
-function createH(schema, defaultTagName, caseSensitive) {
-  const adjust = caseSensitive ? createAdjustMap(caseSensitive) : void 0;
-  function h2(selector2, properties, ...children) {
-    let node2;
-    if (selector2 === null || selector2 === void 0) {
-      node2 = { type: "root", children: [] };
-      const child = (
-        /** @type {Child} */
-        properties
-      );
-      children.unshift(child);
-    } else {
-      node2 = parseSelector(selector2, defaultTagName);
-      const lower = node2.tagName.toLowerCase();
-      const adjusted = adjust ? adjust.get(lower) : void 0;
-      node2.tagName = adjusted || lower;
-      if (isChild(properties)) {
-        children.unshift(properties);
-      } else {
-        for (const [key, value] of Object.entries(properties)) {
-          addProperty(schema, node2.properties, key, value);
-        }
-      }
-    }
-    for (const child of children) {
-      addChild(node2.children, child);
-    }
-    if (node2.type === "element" && node2.tagName === "template") {
-      node2.content = { type: "root", children: node2.children };
-      node2.children = [];
-    }
-    return node2;
-  }
-  return h2;
-}
-function isChild(value) {
-  if (value === null || typeof value !== "object" || Array.isArray(value)) {
-    return true;
-  }
-  if (typeof value.type !== "string") return false;
-  const record = (
-    /** @type {Record<string, unknown>} */
-    value
-  );
-  const keys = Object.keys(value);
-  for (const key of keys) {
-    const value2 = record[key];
-    if (value2 && typeof value2 === "object") {
-      if (!Array.isArray(value2)) return true;
-      const list3 = (
-        /** @type {ReadonlyArray<unknown>} */
-        value2
-      );
-      for (const item of list3) {
-        if (typeof item !== "number" && typeof item !== "string") {
-          return true;
-        }
-      }
-    }
-  }
-  if ("children" in value && Array.isArray(value.children)) {
-    return true;
-  }
-  return false;
-}
-function addProperty(schema, properties, key, value) {
-  const info = find(schema, key);
-  let result;
-  if (value === null || value === void 0) return;
-  if (typeof value === "number") {
-    if (Number.isNaN(value)) return;
-    result = value;
-  } else if (typeof value === "boolean") {
-    result = value;
-  } else if (typeof value === "string") {
-    if (info.spaceSeparated) {
-      result = parse53(value);
-    } else if (info.commaSeparated) {
-      result = parse52(value);
-    } else if (info.commaOrSpaceSeparated) {
-      result = parse53(parse52(value).join(" "));
-    } else {
-      result = parsePrimitive(info, info.property, value);
-    }
-  } else if (Array.isArray(value)) {
-    result = [...value];
-  } else {
-    result = info.property === "style" ? style(value) : String(value);
-  }
-  if (Array.isArray(result)) {
-    const finalResult = [];
-    for (const item of result) {
-      finalResult.push(
-        /** @type {number | string} */
-        parsePrimitive(info, info.property, item)
-      );
-    }
-    result = finalResult;
-  }
-  if (info.property === "className" && Array.isArray(properties.className)) {
-    result = properties.className.concat(
-      /** @type {Array<number | string> | number | string} */
-      result
-    );
-  }
-  properties[info.property] = result;
-}
-function addChild(nodes, value) {
-  if (value === null || value === void 0) {
-  } else if (typeof value === "number" || typeof value === "string") {
-    nodes.push({ type: "text", value: String(value) });
-  } else if (Array.isArray(value)) {
-    for (const child of value) {
-      addChild(nodes, child);
-    }
-  } else if (typeof value === "object" && "type" in value) {
-    if (value.type === "root") {
-      addChild(nodes, value.children);
-    } else {
-      nodes.push(value);
-    }
-  } else {
-    throw new Error("Expected node, nodes, or string, got `" + value + "`");
-  }
-}
-function parsePrimitive(info, name50, value) {
-  if (typeof value === "string") {
-    if (info.number && value && !Number.isNaN(Number(value))) {
-      return Number(value);
-    }
-    if ((info.boolean || info.overloadedBoolean) && (value === "" || normalize(value) === normalize(name50))) {
-      return true;
-    }
-  }
-  return value;
-}
-function style(styles) {
-  const result = [];
-  for (const [key, value] of Object.entries(styles)) {
-    result.push([key, value].join(": "));
-  }
-  return result.join("; ");
-}
-function createAdjustMap(values) {
-  const result = /* @__PURE__ */ new Map();
-  for (const value of values) {
-    result.set(value.toLowerCase(), value);
-  }
-  return result;
-}
-var init_create_h = __esm({
-  "node_modules/.pnpm/hastscript@9.0.1/node_modules/hastscript/lib/create-h.js"() {
-    init_comma_separated_tokens();
-    init_hast_util_parse_selector();
-    init_property_information();
-    init_space_separated_tokens();
-  }
-});
-
-// node_modules/.pnpm/hastscript@9.0.1/node_modules/hastscript/lib/svg-case-sensitive-tag-names.js
-var svgCaseSensitiveTagNames;
-var init_svg_case_sensitive_tag_names = __esm({
-  "node_modules/.pnpm/hastscript@9.0.1/node_modules/hastscript/lib/svg-case-sensitive-tag-names.js"() {
-    svgCaseSensitiveTagNames = [
-      "altGlyph",
-      "altGlyphDef",
-      "altGlyphItem",
-      "animateColor",
-      "animateMotion",
-      "animateTransform",
-      "clipPath",
-      "feBlend",
-      "feColorMatrix",
-      "feComponentTransfer",
-      "feComposite",
-      "feConvolveMatrix",
-      "feDiffuseLighting",
-      "feDisplacementMap",
-      "feDistantLight",
-      "feDropShadow",
-      "feFlood",
-      "feFuncA",
-      "feFuncB",
-      "feFuncG",
-      "feFuncR",
-      "feGaussianBlur",
-      "feImage",
-      "feMerge",
-      "feMergeNode",
-      "feMorphology",
-      "feOffset",
-      "fePointLight",
-      "feSpecularLighting",
-      "feSpotLight",
-      "feTile",
-      "feTurbulence",
-      "foreignObject",
-      "glyphRef",
-      "linearGradient",
-      "radialGradient",
-      "solidColor",
-      "textArea",
-      "textPath"
-    ];
-  }
-});
-
-// node_modules/.pnpm/hastscript@9.0.1/node_modules/hastscript/lib/index.js
-var h, s;
-var init_lib22 = __esm({
-  "node_modules/.pnpm/hastscript@9.0.1/node_modules/hastscript/lib/index.js"() {
-    init_property_information();
-    init_create_h();
-    init_svg_case_sensitive_tag_names();
-    h = createH(html3, "div");
-    s = createH(svg2, "g", svgCaseSensitiveTagNames);
-  }
-});
-
-// node_modules/.pnpm/hastscript@9.0.1/node_modules/hastscript/index.js
-var init_hastscript = __esm({
-  "node_modules/.pnpm/hastscript@9.0.1/node_modules/hastscript/index.js"() {
-    init_lib22();
-  }
-});
-
-// node_modules/.pnpm/vfile-location@5.0.3/node_modules/vfile-location/lib/index.js
-function location(file) {
-  const value = String(file);
-  const indices = [];
-  return { toOffset, toPoint };
-  function toPoint(offset) {
-    if (typeof offset === "number" && offset > -1 && offset <= value.length) {
-      let index2 = 0;
-      while (true) {
-        let end = indices[index2];
-        if (end === void 0) {
-          const eol = next(value, indices[index2 - 1]);
-          end = eol === -1 ? value.length + 1 : eol + 1;
-          indices[index2] = end;
-        }
-        if (end > offset) {
-          return {
-            line: index2 + 1,
-            column: offset - (index2 > 0 ? indices[index2 - 1] : 0) + 1,
-            offset
-          };
-        }
-        index2++;
-      }
-    }
-  }
-  function toOffset(point4) {
-    if (point4 && typeof point4.line === "number" && typeof point4.column === "number" && !Number.isNaN(point4.line) && !Number.isNaN(point4.column)) {
-      while (indices.length < point4.line) {
-        const from = indices[indices.length - 1];
-        const eol = next(value, from);
-        const end = eol === -1 ? value.length + 1 : eol + 1;
-        if (from === end) break;
-        indices.push(end);
-      }
-      const offset = (point4.line > 1 ? indices[point4.line - 2] : 0) + point4.column - 1;
-      if (offset < indices[point4.line - 1]) return offset;
-    }
-  }
-}
-function next(value, from) {
-  const cr = value.indexOf("\r", from);
-  const lf = value.indexOf("\n", from);
-  if (lf === -1) return cr;
-  if (cr === -1 || cr + 1 === lf) return lf;
-  return cr < lf ? cr : lf;
-}
-var init_lib23 = __esm({
-  "node_modules/.pnpm/vfile-location@5.0.3/node_modules/vfile-location/lib/index.js"() {
-  }
-});
-
-// node_modules/.pnpm/vfile-location@5.0.3/node_modules/vfile-location/index.js
-var init_vfile_location = __esm({
-  "node_modules/.pnpm/vfile-location@5.0.3/node_modules/vfile-location/index.js"() {
-    init_lib23();
-  }
-});
-
-// node_modules/.pnpm/web-namespaces@2.0.1/node_modules/web-namespaces/index.js
-var webNamespaces;
-var init_web_namespaces = __esm({
-  "node_modules/.pnpm/web-namespaces@2.0.1/node_modules/web-namespaces/index.js"() {
-    webNamespaces = {
-      html: "http://www.w3.org/1999/xhtml",
-      mathml: "http://www.w3.org/1998/Math/MathML",
-      svg: "http://www.w3.org/2000/svg",
-      xlink: "http://www.w3.org/1999/xlink",
-      xml: "http://www.w3.org/XML/1998/namespace",
-      xmlns: "http://www.w3.org/2000/xmlns/"
-    };
-  }
-});
-
-// node_modules/.pnpm/hast-util-from-parse5@8.0.3/node_modules/hast-util-from-parse5/lib/index.js
-function fromParse5(tree, options) {
-  const settings = options || {};
-  return one2(
-    {
-      file: settings.file || void 0,
-      location: false,
-      schema: settings.space === "svg" ? svg2 : html3,
-      verbose: settings.verbose || false
-    },
-    tree
-  );
-}
-function one2(state, node2) {
-  let result;
-  switch (node2.nodeName) {
-    case "#comment": {
-      const reference = (
-        /** @type {DefaultTreeAdapterMap['commentNode']} */
-        node2
-      );
-      result = { type: "comment", value: reference.data };
-      patch(state, reference, result);
-      return result;
-    }
-    case "#document":
-    case "#document-fragment": {
-      const reference = (
-        /** @type {DefaultTreeAdapterMap['document'] | DefaultTreeAdapterMap['documentFragment']} */
-        node2
-      );
-      const quirksMode = "mode" in reference ? reference.mode === "quirks" || reference.mode === "limited-quirks" : false;
-      result = {
-        type: "root",
-        children: all2(state, node2.childNodes),
-        data: { quirksMode }
-      };
-      if (state.file && state.location) {
-        const document3 = String(state.file);
-        const loc = location(document3);
-        const start = loc.toPoint(0);
-        const end = loc.toPoint(document3.length);
-        ok(start, "expected `start`");
-        ok(end, "expected `end`");
-        result.position = { start, end };
-      }
-      return result;
-    }
-    case "#documentType": {
-      const reference = (
-        /** @type {DefaultTreeAdapterMap['documentType']} */
-        node2
-      );
-      result = { type: "doctype" };
-      patch(state, reference, result);
-      return result;
-    }
-    case "#text": {
-      const reference = (
-        /** @type {DefaultTreeAdapterMap['textNode']} */
-        node2
-      );
-      result = { type: "text", value: reference.value };
-      patch(state, reference, result);
-      return result;
-    }
-    // Element.
-    default: {
-      const reference = (
-        /** @type {DefaultTreeAdapterMap['element']} */
-        node2
-      );
-      result = element(state, reference);
-      return result;
-    }
-  }
-}
-function all2(state, nodes) {
-  let index2 = -1;
-  const results = [];
-  while (++index2 < nodes.length) {
-    const result = (
-      /** @type {RootContent} */
-      one2(state, nodes[index2])
-    );
-    results.push(result);
-  }
-  return results;
-}
-function element(state, node2) {
-  const schema = state.schema;
-  state.schema = node2.namespaceURI === webNamespaces.svg ? svg2 : html3;
-  let index2 = -1;
-  const properties = {};
-  while (++index2 < node2.attrs.length) {
-    const attribute = node2.attrs[index2];
-    const name50 = (attribute.prefix ? attribute.prefix + ":" : "") + attribute.name;
-    if (!own4.call(proto, name50)) {
-      properties[name50] = attribute.value;
-    }
-  }
-  const x = state.schema.space === "svg" ? s : h;
-  const result = x(node2.tagName, properties, all2(state, node2.childNodes));
-  patch(state, node2, result);
-  if (result.tagName === "template") {
-    const reference = (
-      /** @type {DefaultTreeAdapterMap['template']} */
-      node2
-    );
-    const pos = reference.sourceCodeLocation;
-    const startTag = pos && pos.startTag && position2(pos.startTag);
-    const endTag = pos && pos.endTag && position2(pos.endTag);
-    const content3 = (
-      /** @type {Root} */
-      one2(state, reference.content)
-    );
-    if (startTag && endTag && state.file) {
-      content3.position = { start: startTag.end, end: endTag.start };
-    }
-    result.content = content3;
-  }
-  state.schema = schema;
-  return result;
-}
-function patch(state, from, to) {
-  if ("sourceCodeLocation" in from && from.sourceCodeLocation && state.file) {
-    const position3 = createLocation(state, to, from.sourceCodeLocation);
-    if (position3) {
-      state.location = true;
-      to.position = position3;
-    }
-  }
-}
-function createLocation(state, node2, location2) {
-  const result = position2(location2);
-  if (node2.type === "element") {
-    const tail = node2.children[node2.children.length - 1];
-    if (result && !location2.endTag && tail && tail.position && tail.position.end) {
-      result.end = Object.assign({}, tail.position.end);
-    }
-    if (state.verbose) {
-      const properties = {};
-      let key;
-      if (location2.attrs) {
-        for (key in location2.attrs) {
-          if (own4.call(location2.attrs, key)) {
-            properties[find(state.schema, key).property] = position2(
-              location2.attrs[key]
-            );
-          }
-        }
-      }
-      ok(location2.startTag, "a start tag should exist");
-      const opening = position2(location2.startTag);
-      const closing = location2.endTag ? position2(location2.endTag) : void 0;
-      const data = { opening };
-      if (closing) data.closing = closing;
-      data.properties = properties;
-      node2.data = { position: data };
-    }
-  }
-  return result;
-}
-function position2(loc) {
-  const start = point3({
-    line: loc.startLine,
-    column: loc.startCol,
-    offset: loc.startOffset
-  });
-  const end = point3({
-    line: loc.endLine,
-    column: loc.endCol,
-    offset: loc.endOffset
-  });
-  return start || end ? { start, end } : void 0;
-}
-function point3(point4) {
-  return point4.line && point4.column ? point4 : void 0;
-}
-var own4, proto;
-var init_lib24 = __esm({
-  "node_modules/.pnpm/hast-util-from-parse5@8.0.3/node_modules/hast-util-from-parse5/lib/index.js"() {
-    init_default2();
-    init_hastscript();
-    init_property_information();
-    init_vfile_location();
-    init_web_namespaces();
-    own4 = {}.hasOwnProperty;
-    proto = Object.prototype;
-  }
-});
-
-// node_modules/.pnpm/hast-util-from-parse5@8.0.3/node_modules/hast-util-from-parse5/index.js
-var init_hast_util_from_parse5 = __esm({
-  "node_modules/.pnpm/hast-util-from-parse5@8.0.3/node_modules/hast-util-from-parse5/index.js"() {
-    init_lib24();
-  }
-});
-
 // node_modules/.pnpm/parse5@7.3.0/node_modules/parse5/dist/common/unicode.js
 function isSurrogate(cp) {
   return cp >= 55296 && cp <= 57343;
@@ -26771,10 +24846,10 @@ var init_decode = __esm({
       DecodingMode2[DecodingMode2["Attribute"] = 2] = "Attribute";
     })(DecodingMode || (DecodingMode = {}));
     EntityDecoder = class {
-      constructor(decodeTree, emitCodePoint, errors2) {
+      constructor(decodeTree, emitCodePoint, errors) {
         this.decodeTree = decodeTree;
         this.emitCodePoint = emitCodePoint;
-        this.errors = errors2;
+        this.errors = errors;
         this.state = EntityDecoderState.EntityStart;
         this.consumed = 1;
         this.result = 0;
@@ -26848,10 +24923,10 @@ var init_decode = __esm({
         this.state = EntityDecoderState.NumericDecimal;
         return this.stateNumericDecimal(input, offset);
       }
-      addToNumericResult(input, start, end, base2) {
+      addToNumericResult(input, start, end, base) {
         if (start !== end) {
           const digitCount = end - start;
-          this.result = this.result * Math.pow(base2, digitCount) + Number.parseInt(input.substr(start, digitCount), base2);
+          this.result = this.result * Math.pow(base, digitCount) + Number.parseInt(input.substr(start, digitCount), base);
           this.consumed += digitCount;
         }
       }
@@ -27040,7 +25115,7 @@ function getTagID(tagName) {
   return (_a2 = TAG_NAME_TO_ID.get(tagName)) !== null && _a2 !== void 0 ? _a2 : TAG_ID.UNKNOWN;
 }
 var NS, ATTRS, DOCUMENT_MODE, TAG_NAMES, TAG_ID, TAG_NAME_TO_ID, $, SPECIAL_ELEMENTS, NUMBERED_HEADERS, UNESCAPED_TEXT;
-var init_html3 = __esm({
+var init_html2 = __esm({
   "node_modules/.pnpm/parse5@7.3.0/node_modules/parse5/dist/common/html.js"() {
     (function(NS2) {
       NS2["HTML"] = "http://www.w3.org/1999/xhtml";
@@ -27592,7 +25667,7 @@ var init_tokenizer2 = __esm({
     init_token();
     init_decode();
     init_error_codes();
-    init_html3();
+    init_html2();
     (function(State2) {
       State2[State2["DATA"] = 0] = "DATA";
       State2[State2["RCDATA"] = 1] = "RCDATA";
@@ -30175,7 +28250,7 @@ var init_tokenizer2 = __esm({
 var IMPLICIT_END_TAG_REQUIRED, IMPLICIT_END_TAG_REQUIRED_THOROUGHLY, SCOPING_ELEMENTS_HTML, SCOPING_ELEMENTS_HTML_LIST, SCOPING_ELEMENTS_HTML_BUTTON, SCOPING_ELEMENTS_MATHML, SCOPING_ELEMENTS_SVG, TABLE_ROW_CONTEXT, TABLE_BODY_CONTEXT, TABLE_CONTEXT, TABLE_CELLS, OpenElementStack;
 var init_open_element_stack = __esm({
   "node_modules/.pnpm/parse5@7.3.0/node_modules/parse5/dist/parser/open-element-stack.js"() {
-    init_html3();
+    init_html2();
     IMPLICIT_END_TAG_REQUIRED = /* @__PURE__ */ new Set([TAG_ID.DD, TAG_ID.DT, TAG_ID.LI, TAG_ID.OPTGROUP, TAG_ID.OPTION, TAG_ID.P, TAG_ID.RB, TAG_ID.RP, TAG_ID.RT, TAG_ID.RTC]);
     IMPLICIT_END_TAG_REQUIRED_THOROUGHLY = /* @__PURE__ */ new Set([
       ...IMPLICIT_END_TAG_REQUIRED,
@@ -30607,7 +28682,7 @@ var init_formatting_element_list = __esm({
 var defaultTreeAdapter;
 var init_default3 = __esm({
   "node_modules/.pnpm/parse5@7.3.0/node_modules/parse5/dist/tree-adapters/default.js"() {
-    init_html3();
+    init_html2();
     defaultTreeAdapter = {
       //Node construction
       createDocument() {
@@ -30816,7 +28891,7 @@ function getDocumentMode(token) {
 var VALID_DOCTYPE_NAME, VALID_SYSTEM_ID, QUIRKS_MODE_SYSTEM_ID, QUIRKS_MODE_PUBLIC_ID_PREFIXES, QUIRKS_MODE_NO_SYSTEM_ID_PUBLIC_ID_PREFIXES, QUIRKS_MODE_PUBLIC_IDS, LIMITED_QUIRKS_PUBLIC_ID_PREFIXES, LIMITED_QUIRKS_WITH_SYSTEM_ID_PUBLIC_ID_PREFIXES;
 var init_doctype = __esm({
   "node_modules/.pnpm/parse5@7.3.0/node_modules/parse5/dist/common/doctype.js"() {
-    init_html3();
+    init_html2();
     VALID_DOCTYPE_NAME = "html";
     VALID_SYSTEM_ID = "about:legacy-compat";
     QUIRKS_MODE_SYSTEM_ID = "http://www.ibm.com/data/dtd/v11/ibmxhtml1-transitional.dtd";
@@ -30955,7 +29030,7 @@ function isIntegrationPoint(tn, ns, attrs, foreignNS) {
 var MIME_TYPES, DEFINITION_URL_ATTR, ADJUSTED_DEFINITION_URL_ATTR, SVG_ATTRS_ADJUSTMENT_MAP, XML_ATTRS_ADJUSTMENT_MAP, SVG_TAG_NAMES_ADJUSTMENT_MAP, EXITS_FOREIGN_CONTENT;
 var init_foreign_content = __esm({
   "node_modules/.pnpm/parse5@7.3.0/node_modules/parse5/dist/common/foreign-content.js"() {
-    init_html3();
+    init_html2();
     MIME_TYPES = {
       TEXT_HTML: "text/html",
       APPLICATION_XML: "application/xhtml+xml"
@@ -33053,7 +31128,7 @@ var init_parser3 = __esm({
     init_foreign_content();
     init_error_codes();
     init_unicode();
-    init_html3();
+    init_html2();
     init_token();
     HIDDEN_INPUT_TYPE = "hidden";
     AA_OUTER_LOOP_ITER = 8;
@@ -34177,7 +32252,7 @@ var init_escape = __esm({
 var VOID_ELEMENTS;
 var init_serializer = __esm({
   "node_modules/.pnpm/parse5@7.3.0/node_modules/parse5/dist/serializer/index.js"() {
-    init_html3();
+    init_html2();
     init_escape();
     init_default3();
     VOID_ELEMENTS = /* @__PURE__ */ new Set([
@@ -34204,9 +32279,6 @@ var init_serializer = __esm({
 });
 
 // node_modules/.pnpm/parse5@7.3.0/node_modules/parse5/dist/index.js
-function parse54(html4, options) {
-  return Parser.parse(html4, options);
-}
 function parseFragment(fragmentContext, html4, options) {
   if (typeof fragmentContext === "string") {
     options = html4;
@@ -34225,469 +32297,2013 @@ var init_dist = __esm({
     init_serializer();
     init_error_codes();
     init_foreign_content();
-    init_html3();
+    init_html2();
     init_token();
     init_tokenizer2();
   }
 });
 
-// node_modules/.pnpm/hast-util-from-html@2.0.3/node_modules/hast-util-from-html/lib/errors.js
-var errors;
-var init_errors = __esm({
-  "node_modules/.pnpm/hast-util-from-html@2.0.3/node_modules/hast-util-from-html/lib/errors.js"() {
-    errors = {
-      /** @type {ErrorInfo} */
-      abandonedHeadElementChild: {
-        reason: "Unexpected metadata element after head",
-        description: "Unexpected element after head. Expected the element before `</head>`",
-        url: false
-      },
-      /** @type {ErrorInfo} */
-      abruptClosingOfEmptyComment: {
-        reason: "Unexpected abruptly closed empty comment",
-        description: "Unexpected `>` or `->`. Expected `-->` to close comments"
-      },
-      /** @type {ErrorInfo} */
-      abruptDoctypePublicIdentifier: {
-        reason: "Unexpected abruptly closed public identifier",
-        description: "Unexpected `>`. Expected a closing `\"` or `'` after the public identifier"
-      },
-      /** @type {ErrorInfo} */
-      abruptDoctypeSystemIdentifier: {
-        reason: "Unexpected abruptly closed system identifier",
-        description: "Unexpected `>`. Expected a closing `\"` or `'` after the identifier identifier"
-      },
-      /** @type {ErrorInfo} */
-      absenceOfDigitsInNumericCharacterReference: {
-        reason: "Unexpected non-digit at start of numeric character reference",
-        description: "Unexpected `%c`. Expected `[0-9]` for decimal references or `[0-9a-fA-F]` for hexadecimal references"
-      },
-      /** @type {ErrorInfo} */
-      cdataInHtmlContent: {
-        reason: "Unexpected CDATA section in HTML",
-        description: "Unexpected `<![CDATA[` in HTML. Remove it, use a comment, or encode special characters instead"
-      },
-      /** @type {ErrorInfo} */
-      characterReferenceOutsideUnicodeRange: {
-        reason: "Unexpected too big numeric character reference",
-        description: "Unexpectedly high character reference. Expected character references to be at most hexadecimal 10ffff (or decimal 1114111)"
-      },
-      /** @type {ErrorInfo} */
-      closingOfElementWithOpenChildElements: {
-        reason: "Unexpected closing tag with open child elements",
-        description: "Unexpectedly closing tag. Expected other tags to be closed first",
-        url: false
-      },
-      /** @type {ErrorInfo} */
-      controlCharacterInInputStream: {
-        reason: "Unexpected control character",
-        description: "Unexpected control character `%x`. Expected a non-control code point, 0x00, or ASCII whitespace"
-      },
-      /** @type {ErrorInfo} */
-      controlCharacterReference: {
-        reason: "Unexpected control character reference",
-        description: "Unexpectedly control character in reference. Expected a non-control code point, 0x00, or ASCII whitespace"
-      },
-      /** @type {ErrorInfo} */
-      disallowedContentInNoscriptInHead: {
-        reason: "Disallowed content inside `<noscript>` in `<head>`",
-        description: "Unexpected text character `%c`. Only use text in `<noscript>`s in `<body>`",
-        url: false
-      },
-      /** @type {ErrorInfo} */
-      duplicateAttribute: {
-        reason: "Unexpected duplicate attribute",
-        description: "Unexpectedly double attribute. Expected attributes to occur only once"
-      },
-      /** @type {ErrorInfo} */
-      endTagWithAttributes: {
-        reason: "Unexpected attribute on closing tag",
-        description: "Unexpected attribute. Expected `>` instead"
-      },
-      /** @type {ErrorInfo} */
-      endTagWithTrailingSolidus: {
-        reason: "Unexpected slash at end of closing tag",
-        description: "Unexpected `%c-1`. Expected `>` instead"
-      },
-      /** @type {ErrorInfo} */
-      endTagWithoutMatchingOpenElement: {
-        reason: "Unexpected unopened end tag",
-        description: "Unexpected end tag. Expected no end tag or another end tag",
-        url: false
-      },
-      /** @type {ErrorInfo} */
-      eofBeforeTagName: {
-        reason: "Unexpected end of file",
-        description: "Unexpected end of file. Expected tag name instead"
-      },
-      /** @type {ErrorInfo} */
-      eofInCdata: {
-        reason: "Unexpected end of file in CDATA",
-        description: "Unexpected end of file. Expected `]]>` to close the CDATA"
-      },
-      /** @type {ErrorInfo} */
-      eofInComment: {
-        reason: "Unexpected end of file in comment",
-        description: "Unexpected end of file. Expected `-->` to close the comment"
-      },
-      /** @type {ErrorInfo} */
-      eofInDoctype: {
-        reason: "Unexpected end of file in doctype",
-        description: "Unexpected end of file. Expected a valid doctype (such as `<!doctype html>`)"
-      },
-      /** @type {ErrorInfo} */
-      eofInElementThatCanContainOnlyText: {
-        reason: "Unexpected end of file in element that can only contain text",
-        description: "Unexpected end of file. Expected text or a closing tag",
-        url: false
-      },
-      /** @type {ErrorInfo} */
-      eofInScriptHtmlCommentLikeText: {
-        reason: "Unexpected end of file in comment inside script",
-        description: "Unexpected end of file. Expected `-->` to close the comment"
-      },
-      /** @type {ErrorInfo} */
-      eofInTag: {
-        reason: "Unexpected end of file in tag",
-        description: "Unexpected end of file. Expected `>` to close the tag"
-      },
-      /** @type {ErrorInfo} */
-      incorrectlyClosedComment: {
-        reason: "Incorrectly closed comment",
-        description: "Unexpected `%c-1`. Expected `-->` to close the comment"
-      },
-      /** @type {ErrorInfo} */
-      incorrectlyOpenedComment: {
-        reason: "Incorrectly opened comment",
-        description: "Unexpected `%c`. Expected `<!--` to open the comment"
-      },
-      /** @type {ErrorInfo} */
-      invalidCharacterSequenceAfterDoctypeName: {
-        reason: "Invalid sequence after doctype name",
-        description: "Unexpected sequence at `%c`. Expected `public` or `system`"
-      },
-      /** @type {ErrorInfo} */
-      invalidFirstCharacterOfTagName: {
-        reason: "Invalid first character in tag name",
-        description: "Unexpected `%c`. Expected an ASCII letter instead"
-      },
-      /** @type {ErrorInfo} */
-      misplacedDoctype: {
-        reason: "Misplaced doctype",
-        description: "Unexpected doctype. Expected doctype before head",
-        url: false
-      },
-      /** @type {ErrorInfo} */
-      misplacedStartTagForHeadElement: {
-        reason: "Misplaced `<head>` start tag",
-        description: "Unexpected start tag `<head>`. Expected `<head>` directly after doctype",
-        url: false
-      },
-      /** @type {ErrorInfo} */
-      missingAttributeValue: {
-        reason: "Missing attribute value",
-        description: "Unexpected `%c-1`. Expected an attribute value or no `%c-1` instead"
-      },
-      /** @type {ErrorInfo} */
-      missingDoctype: {
-        reason: "Missing doctype before other content",
-        description: "Expected a `<!doctype html>` before anything else",
-        url: false
-      },
-      /** @type {ErrorInfo} */
-      missingDoctypeName: {
-        reason: "Missing doctype name",
-        description: "Unexpected doctype end at `%c`. Expected `html` instead"
-      },
-      /** @type {ErrorInfo} */
-      missingDoctypePublicIdentifier: {
-        reason: "Missing public identifier in doctype",
-        description: "Unexpected `%c`. Expected identifier for `public` instead"
-      },
-      /** @type {ErrorInfo} */
-      missingDoctypeSystemIdentifier: {
-        reason: "Missing system identifier in doctype",
-        description: 'Unexpected `%c`. Expected identifier for `system` instead (suggested: `"about:legacy-compat"`)'
-      },
-      /** @type {ErrorInfo} */
-      missingEndTagName: {
-        reason: "Missing name in end tag",
-        description: "Unexpected `%c`. Expected an ASCII letter instead"
-      },
-      /** @type {ErrorInfo} */
-      missingQuoteBeforeDoctypePublicIdentifier: {
-        reason: "Missing quote before public identifier in doctype",
-        description: "Unexpected `%c`. Expected `\"` or `'` instead"
-      },
-      /** @type {ErrorInfo} */
-      missingQuoteBeforeDoctypeSystemIdentifier: {
-        reason: "Missing quote before system identifier in doctype",
-        description: "Unexpected `%c`. Expected `\"` or `'` instead"
-      },
-      /** @type {ErrorInfo} */
-      missingSemicolonAfterCharacterReference: {
-        reason: "Missing semicolon after character reference",
-        description: "Unexpected `%c`. Expected `;` instead"
-      },
-      /** @type {ErrorInfo} */
-      missingWhitespaceAfterDoctypePublicKeyword: {
-        reason: "Missing whitespace after public identifier in doctype",
-        description: "Unexpected `%c`. Expected ASCII whitespace instead"
-      },
-      /** @type {ErrorInfo} */
-      missingWhitespaceAfterDoctypeSystemKeyword: {
-        reason: "Missing whitespace after system identifier in doctype",
-        description: "Unexpected `%c`. Expected ASCII whitespace instead"
-      },
-      /** @type {ErrorInfo} */
-      missingWhitespaceBeforeDoctypeName: {
-        reason: "Missing whitespace before doctype name",
-        description: "Unexpected `%c`. Expected ASCII whitespace instead"
-      },
-      /** @type {ErrorInfo} */
-      missingWhitespaceBetweenAttributes: {
-        reason: "Missing whitespace between attributes",
-        description: "Unexpected `%c`. Expected ASCII whitespace instead"
-      },
-      /** @type {ErrorInfo} */
-      missingWhitespaceBetweenDoctypePublicAndSystemIdentifiers: {
-        reason: "Missing whitespace between public and system identifiers in doctype",
-        description: "Unexpected `%c`. Expected ASCII whitespace instead"
-      },
-      /** @type {ErrorInfo} */
-      nestedComment: {
-        reason: "Unexpected nested comment",
-        description: "Unexpected `<!--`. Expected `-->`"
-      },
-      /** @type {ErrorInfo} */
-      nestedNoscriptInHead: {
-        reason: "Unexpected nested `<noscript>` in `<head>`",
-        description: "Unexpected `<noscript>`. Expected a closing tag or a meta element",
-        url: false
-      },
-      /** @type {ErrorInfo} */
-      nonConformingDoctype: {
-        reason: "Unexpected non-conforming doctype declaration",
-        description: 'Expected `<!doctype html>` or `<!doctype html system "about:legacy-compat">`',
-        url: false
-      },
-      /** @type {ErrorInfo} */
-      nonVoidHtmlElementStartTagWithTrailingSolidus: {
-        reason: "Unexpected trailing slash on start tag of non-void element",
-        description: "Unexpected `/`. Expected `>` instead"
-      },
-      /** @type {ErrorInfo} */
-      noncharacterCharacterReference: {
-        reason: "Unexpected noncharacter code point referenced by character reference",
-        description: "Unexpected code point. Do not use noncharacters in HTML"
-      },
-      /** @type {ErrorInfo} */
-      noncharacterInInputStream: {
-        reason: "Unexpected noncharacter character",
-        description: "Unexpected code point `%x`. Do not use noncharacters in HTML"
-      },
-      /** @type {ErrorInfo} */
-      nullCharacterReference: {
-        reason: "Unexpected NULL character referenced by character reference",
-        description: "Unexpected code point. Do not use NULL characters in HTML"
-      },
-      /** @type {ErrorInfo} */
-      openElementsLeftAfterEof: {
-        reason: "Unexpected end of file",
-        description: "Unexpected end of file. Expected closing tag instead",
-        url: false
-      },
-      /** @type {ErrorInfo} */
-      surrogateCharacterReference: {
-        reason: "Unexpected surrogate character referenced by character reference",
-        description: "Unexpected code point. Do not use lone surrogate characters in HTML"
-      },
-      /** @type {ErrorInfo} */
-      surrogateInInputStream: {
-        reason: "Unexpected surrogate character",
-        description: "Unexpected code point `%x`. Do not use lone surrogate characters in HTML"
-      },
-      /** @type {ErrorInfo} */
-      unexpectedCharacterAfterDoctypeSystemIdentifier: {
-        reason: "Invalid character after system identifier in doctype",
-        description: "Unexpected character at `%c`. Expected `>`"
-      },
-      /** @type {ErrorInfo} */
-      unexpectedCharacterInAttributeName: {
-        reason: "Unexpected character in attribute name",
-        description: "Unexpected `%c`. Expected whitespace, `/`, `>`, `=`, or probably an ASCII letter"
-      },
-      /** @type {ErrorInfo} */
-      unexpectedCharacterInUnquotedAttributeValue: {
-        reason: "Unexpected character in unquoted attribute value",
-        description: "Unexpected `%c`. Quote the attribute value to include it"
-      },
-      /** @type {ErrorInfo} */
-      unexpectedEqualsSignBeforeAttributeName: {
-        reason: "Unexpected equals sign before attribute name",
-        description: "Unexpected `%c`. Add an attribute name before it"
-      },
-      /** @type {ErrorInfo} */
-      unexpectedNullCharacter: {
-        reason: "Unexpected NULL character",
-        description: "Unexpected code point `%x`. Do not use NULL characters in HTML"
-      },
-      /** @type {ErrorInfo} */
-      unexpectedQuestionMarkInsteadOfTagName: {
-        reason: "Unexpected question mark instead of tag name",
-        description: "Unexpected `%c`. Expected an ASCII letter instead"
-      },
-      /** @type {ErrorInfo} */
-      unexpectedSolidusInTag: {
-        reason: "Unexpected slash in tag",
-        description: "Unexpected `%c-1`. Expected it followed by `>` or in a quoted attribute value"
-      },
-      /** @type {ErrorInfo} */
-      unknownNamedCharacterReference: {
-        reason: "Unexpected unknown named character reference",
-        description: "Unexpected character reference. Expected known named character references"
+// node_modules/.pnpm/property-information@7.2.0/node_modules/property-information/lib/util/schema.js
+var Schema;
+var init_schema = __esm({
+  "node_modules/.pnpm/property-information@7.2.0/node_modules/property-information/lib/util/schema.js"() {
+    Schema = class {
+      /**
+       * @param {SchemaType['property']} property
+       *   Property.
+       * @param {SchemaType['normal']} normal
+       *   Normal.
+       * @param {Space | undefined} [space]
+       *   Space.
+       * @returns
+       *   Schema.
+       */
+      constructor(property, normal, space) {
+        this.normal = normal;
+        this.property = property;
+        if (space) {
+          this.space = space;
+        }
       }
+    };
+    Schema.prototype.normal = {};
+    Schema.prototype.property = {};
+    Schema.prototype.space = void 0;
+  }
+});
+
+// node_modules/.pnpm/property-information@7.2.0/node_modules/property-information/lib/util/merge.js
+function merge(definitions, space) {
+  const property = {};
+  const normal = {};
+  for (const definition3 of definitions) {
+    Object.assign(property, definition3.property);
+    Object.assign(normal, definition3.normal);
+  }
+  return new Schema(property, normal, space);
+}
+var init_merge = __esm({
+  "node_modules/.pnpm/property-information@7.2.0/node_modules/property-information/lib/util/merge.js"() {
+    init_schema();
+  }
+});
+
+// node_modules/.pnpm/property-information@7.2.0/node_modules/property-information/lib/normalize.js
+function normalize(value) {
+  return value.toLowerCase();
+}
+var init_normalize = __esm({
+  "node_modules/.pnpm/property-information@7.2.0/node_modules/property-information/lib/normalize.js"() {
+  }
+});
+
+// node_modules/.pnpm/property-information@7.2.0/node_modules/property-information/lib/util/info.js
+var Info;
+var init_info = __esm({
+  "node_modules/.pnpm/property-information@7.2.0/node_modules/property-information/lib/util/info.js"() {
+    Info = class {
+      /**
+       * @param {string} property
+       *   Property.
+       * @param {string} attribute
+       *   Attribute.
+       * @returns
+       *   Info.
+       */
+      constructor(property, attribute) {
+        this.attribute = attribute;
+        this.property = property;
+      }
+    };
+    Info.prototype.attribute = "";
+    Info.prototype.booleanish = false;
+    Info.prototype.boolean = false;
+    Info.prototype.commaOrSpaceSeparated = false;
+    Info.prototype.commaSeparated = false;
+    Info.prototype.defined = false;
+    Info.prototype.mustUseProperty = false;
+    Info.prototype.number = false;
+    Info.prototype.overloadedBoolean = false;
+    Info.prototype.property = "";
+    Info.prototype.spaceSeparated = false;
+    Info.prototype.space = void 0;
+  }
+});
+
+// node_modules/.pnpm/property-information@7.2.0/node_modules/property-information/lib/util/types.js
+var types_exports2 = {};
+__export(types_exports2, {
+  boolean: () => boolean,
+  booleanish: () => booleanish,
+  commaOrSpaceSeparated: () => commaOrSpaceSeparated,
+  commaSeparated: () => commaSeparated,
+  number: () => number,
+  overloadedBoolean: () => overloadedBoolean,
+  spaceSeparated: () => spaceSeparated
+});
+function increment() {
+  return 2 ** ++powers;
+}
+var powers, boolean, booleanish, overloadedBoolean, number, spaceSeparated, commaSeparated, commaOrSpaceSeparated;
+var init_types2 = __esm({
+  "node_modules/.pnpm/property-information@7.2.0/node_modules/property-information/lib/util/types.js"() {
+    powers = 0;
+    boolean = increment();
+    booleanish = increment();
+    overloadedBoolean = increment();
+    number = increment();
+    spaceSeparated = increment();
+    commaSeparated = increment();
+    commaOrSpaceSeparated = increment();
+  }
+});
+
+// node_modules/.pnpm/property-information@7.2.0/node_modules/property-information/lib/util/defined-info.js
+function mark(values, key, value) {
+  if (value) {
+    values[key] = value;
+  }
+}
+var checks, DefinedInfo;
+var init_defined_info = __esm({
+  "node_modules/.pnpm/property-information@7.2.0/node_modules/property-information/lib/util/defined-info.js"() {
+    init_info();
+    init_types2();
+    checks = /** @type {ReadonlyArray<keyof typeof types>} */
+    Object.keys(types_exports2);
+    DefinedInfo = class extends Info {
+      /**
+       * @constructor
+       * @param {string} property
+       *   Property.
+       * @param {string} attribute
+       *   Attribute.
+       * @param {number | null | undefined} [mask]
+       *   Mask.
+       * @param {Space | undefined} [space]
+       *   Space.
+       * @returns
+       *   Info.
+       */
+      constructor(property, attribute, mask, space) {
+        let index2 = -1;
+        super(property, attribute);
+        mark(this, "space", space);
+        if (typeof mask === "number") {
+          while (++index2 < checks.length) {
+            const check = checks[index2];
+            mark(this, checks[index2], (mask & types_exports2[check]) === types_exports2[check]);
+          }
+        }
+      }
+    };
+    DefinedInfo.prototype.defined = true;
+  }
+});
+
+// node_modules/.pnpm/property-information@7.2.0/node_modules/property-information/lib/util/create.js
+function create(definition3) {
+  const properties = {};
+  const normals = {};
+  for (const [property, value] of Object.entries(definition3.properties)) {
+    const info = new DefinedInfo(
+      property,
+      definition3.transform(definition3.attributes || {}, property),
+      value,
+      definition3.space
+    );
+    if (definition3.mustUseProperty && definition3.mustUseProperty.includes(property)) {
+      info.mustUseProperty = true;
+    }
+    properties[property] = info;
+    normals[normalize(property)] = property;
+    normals[normalize(info.attribute)] = property;
+  }
+  return new Schema(properties, normals, definition3.space);
+}
+var init_create4 = __esm({
+  "node_modules/.pnpm/property-information@7.2.0/node_modules/property-information/lib/util/create.js"() {
+    init_normalize();
+    init_defined_info();
+    init_schema();
+  }
+});
+
+// node_modules/.pnpm/property-information@7.2.0/node_modules/property-information/lib/aria.js
+var aria;
+var init_aria = __esm({
+  "node_modules/.pnpm/property-information@7.2.0/node_modules/property-information/lib/aria.js"() {
+    init_create4();
+    init_types2();
+    aria = create({
+      properties: {
+        ariaActiveDescendant: null,
+        ariaAtomic: booleanish,
+        ariaAutoComplete: null,
+        ariaBusy: booleanish,
+        ariaChecked: booleanish,
+        ariaColCount: number,
+        ariaColIndex: number,
+        ariaColSpan: number,
+        ariaControls: spaceSeparated,
+        ariaCurrent: null,
+        ariaDescribedBy: spaceSeparated,
+        ariaDetails: null,
+        ariaDisabled: booleanish,
+        ariaDropEffect: spaceSeparated,
+        ariaErrorMessage: null,
+        ariaExpanded: booleanish,
+        ariaFlowTo: spaceSeparated,
+        ariaGrabbed: booleanish,
+        ariaHasPopup: null,
+        ariaHidden: booleanish,
+        ariaInvalid: null,
+        ariaKeyShortcuts: null,
+        ariaLabel: null,
+        ariaLabelledBy: spaceSeparated,
+        ariaLevel: number,
+        ariaLive: null,
+        ariaModal: booleanish,
+        ariaMultiLine: booleanish,
+        ariaMultiSelectable: booleanish,
+        ariaOrientation: null,
+        ariaOwns: spaceSeparated,
+        ariaPlaceholder: null,
+        ariaPosInSet: number,
+        ariaPressed: booleanish,
+        ariaReadOnly: booleanish,
+        ariaRelevant: null,
+        ariaRequired: booleanish,
+        ariaRoleDescription: spaceSeparated,
+        ariaRowCount: number,
+        ariaRowIndex: number,
+        ariaRowSpan: number,
+        ariaSelected: booleanish,
+        ariaSetSize: number,
+        ariaSort: null,
+        ariaValueMax: number,
+        ariaValueMin: number,
+        ariaValueNow: number,
+        ariaValueText: null,
+        role: null
+      },
+      transform(_, property) {
+        return property === "role" ? property : "aria-" + property.slice(4).toLowerCase();
+      }
+    });
+  }
+});
+
+// node_modules/.pnpm/property-information@7.2.0/node_modules/property-information/lib/util/case-sensitive-transform.js
+function caseSensitiveTransform(attributes, attribute) {
+  return attribute in attributes ? attributes[attribute] : attribute;
+}
+var init_case_sensitive_transform = __esm({
+  "node_modules/.pnpm/property-information@7.2.0/node_modules/property-information/lib/util/case-sensitive-transform.js"() {
+  }
+});
+
+// node_modules/.pnpm/property-information@7.2.0/node_modules/property-information/lib/util/case-insensitive-transform.js
+function caseInsensitiveTransform(attributes, property) {
+  return caseSensitiveTransform(attributes, property.toLowerCase());
+}
+var init_case_insensitive_transform = __esm({
+  "node_modules/.pnpm/property-information@7.2.0/node_modules/property-information/lib/util/case-insensitive-transform.js"() {
+    init_case_sensitive_transform();
+  }
+});
+
+// node_modules/.pnpm/property-information@7.2.0/node_modules/property-information/lib/html.js
+var html2;
+var init_html3 = __esm({
+  "node_modules/.pnpm/property-information@7.2.0/node_modules/property-information/lib/html.js"() {
+    init_case_insensitive_transform();
+    init_create4();
+    init_types2();
+    html2 = create({
+      attributes: {
+        acceptcharset: "accept-charset",
+        classname: "class",
+        htmlfor: "for",
+        httpequiv: "http-equiv"
+      },
+      mustUseProperty: ["checked", "multiple", "muted", "selected"],
+      properties: {
+        // Standard Properties.
+        abbr: null,
+        accept: commaSeparated,
+        acceptCharset: spaceSeparated,
+        accessKey: spaceSeparated,
+        action: null,
+        allow: null,
+        allowFullScreen: boolean,
+        allowPaymentRequest: boolean,
+        allowUserMedia: boolean,
+        alpha: boolean,
+        alt: null,
+        as: null,
+        async: boolean,
+        autoCapitalize: null,
+        autoComplete: spaceSeparated,
+        autoFocus: boolean,
+        autoPlay: boolean,
+        blocking: spaceSeparated,
+        capture: null,
+        charSet: null,
+        checked: boolean,
+        cite: null,
+        className: spaceSeparated,
+        closedBy: null,
+        colorSpace: null,
+        cols: number,
+        colSpan: number,
+        command: null,
+        commandFor: null,
+        content: null,
+        contentEditable: booleanish,
+        controls: boolean,
+        controlsList: spaceSeparated,
+        coords: number | commaSeparated,
+        crossOrigin: null,
+        data: null,
+        dateTime: null,
+        decoding: null,
+        default: boolean,
+        defer: boolean,
+        dir: null,
+        dirName: null,
+        disabled: boolean,
+        download: overloadedBoolean,
+        draggable: booleanish,
+        encType: null,
+        enterKeyHint: null,
+        fetchPriority: null,
+        form: null,
+        formAction: null,
+        formEncType: null,
+        formMethod: null,
+        formNoValidate: boolean,
+        formTarget: null,
+        headers: spaceSeparated,
+        height: number,
+        hidden: overloadedBoolean,
+        high: number,
+        href: null,
+        hrefLang: null,
+        htmlFor: spaceSeparated,
+        httpEquiv: spaceSeparated,
+        id: null,
+        imageSizes: null,
+        imageSrcSet: null,
+        inert: boolean,
+        inputMode: null,
+        integrity: null,
+        is: null,
+        isMap: boolean,
+        itemId: null,
+        itemProp: spaceSeparated,
+        itemRef: spaceSeparated,
+        itemScope: boolean,
+        itemType: spaceSeparated,
+        kind: null,
+        label: null,
+        lang: null,
+        language: null,
+        list: null,
+        loading: null,
+        loop: boolean,
+        low: number,
+        manifest: null,
+        max: null,
+        maxLength: number,
+        media: null,
+        method: null,
+        min: null,
+        minLength: number,
+        multiple: boolean,
+        muted: boolean,
+        name: null,
+        nonce: null,
+        noModule: boolean,
+        noValidate: boolean,
+        onAbort: null,
+        onAfterPrint: null,
+        onAuxClick: null,
+        onBeforeMatch: null,
+        onBeforePrint: null,
+        onBeforeToggle: null,
+        onBeforeUnload: null,
+        onBlur: null,
+        onCancel: null,
+        onCanPlay: null,
+        onCanPlayThrough: null,
+        onChange: null,
+        onClick: null,
+        onClose: null,
+        onContextLost: null,
+        onContextMenu: null,
+        onContextRestored: null,
+        onCopy: null,
+        onCueChange: null,
+        onCut: null,
+        onDblClick: null,
+        onDrag: null,
+        onDragEnd: null,
+        onDragEnter: null,
+        onDragExit: null,
+        onDragLeave: null,
+        onDragOver: null,
+        onDragStart: null,
+        onDrop: null,
+        onDurationChange: null,
+        onEmptied: null,
+        onEnded: null,
+        onError: null,
+        onFocus: null,
+        onFormData: null,
+        onHashChange: null,
+        onInput: null,
+        onInvalid: null,
+        onKeyDown: null,
+        onKeyPress: null,
+        onKeyUp: null,
+        onLanguageChange: null,
+        onLoad: null,
+        onLoadedData: null,
+        onLoadedMetadata: null,
+        onLoadEnd: null,
+        onLoadStart: null,
+        onMessage: null,
+        onMessageError: null,
+        onMouseDown: null,
+        onMouseEnter: null,
+        onMouseLeave: null,
+        onMouseMove: null,
+        onMouseOut: null,
+        onMouseOver: null,
+        onMouseUp: null,
+        onOffline: null,
+        onOnline: null,
+        onPageHide: null,
+        onPageShow: null,
+        onPaste: null,
+        onPause: null,
+        onPlay: null,
+        onPlaying: null,
+        onPopState: null,
+        onProgress: null,
+        onRateChange: null,
+        onRejectionHandled: null,
+        onReset: null,
+        onResize: null,
+        onScroll: null,
+        onScrollEnd: null,
+        onSecurityPolicyViolation: null,
+        onSeeked: null,
+        onSeeking: null,
+        onSelect: null,
+        onSlotChange: null,
+        onStalled: null,
+        onStorage: null,
+        onSubmit: null,
+        onSuspend: null,
+        onTimeUpdate: null,
+        onToggle: null,
+        onUnhandledRejection: null,
+        onUnload: null,
+        onVolumeChange: null,
+        onWaiting: null,
+        onWheel: null,
+        open: boolean,
+        optimum: number,
+        pattern: null,
+        ping: spaceSeparated,
+        placeholder: null,
+        playsInline: boolean,
+        popover: null,
+        popoverTarget: null,
+        popoverTargetAction: null,
+        poster: null,
+        preload: null,
+        readOnly: boolean,
+        referrerPolicy: null,
+        rel: spaceSeparated,
+        required: boolean,
+        reversed: boolean,
+        rows: number,
+        rowSpan: number,
+        sandbox: spaceSeparated,
+        scope: null,
+        scoped: boolean,
+        seamless: boolean,
+        selected: boolean,
+        shadowRootClonable: boolean,
+        shadowRootCustomElementRegistry: boolean,
+        shadowRootDelegatesFocus: boolean,
+        shadowRootMode: null,
+        shadowRootSerializable: boolean,
+        shape: null,
+        size: number,
+        sizes: null,
+        slot: null,
+        span: number,
+        spellCheck: booleanish,
+        src: null,
+        srcDoc: null,
+        srcLang: null,
+        srcSet: null,
+        start: number,
+        step: null,
+        style: null,
+        tabIndex: number,
+        target: null,
+        title: null,
+        translate: null,
+        type: null,
+        typeMustMatch: boolean,
+        useMap: null,
+        value: booleanish,
+        width: number,
+        wrap: null,
+        writingSuggestions: null,
+        // Legacy.
+        // See: https://html.spec.whatwg.org/#other-elements,-attributes-and-apis
+        align: null,
+        // Several. Use CSS `text-align` instead,
+        aLink: null,
+        // `<body>`. Use CSS `a:active {color}` instead
+        archive: spaceSeparated,
+        // `<object>`. List of URIs to archives
+        axis: null,
+        // `<td>` and `<th>`. Use `scope` on `<th>`
+        background: null,
+        // `<body>`. Use CSS `background-image` instead
+        bgColor: null,
+        // `<body>` and table elements. Use CSS `background-color` instead
+        border: number,
+        // `<table>`. Use CSS `border-width` instead,
+        borderColor: null,
+        // `<table>`. Use CSS `border-color` instead,
+        bottomMargin: number,
+        // `<body>`
+        cellPadding: null,
+        // `<table>`
+        cellSpacing: null,
+        // `<table>`
+        char: null,
+        // Several table elements. When `align=char`, sets the character to align on
+        charOff: null,
+        // Several table elements. When `char`, offsets the alignment
+        classId: null,
+        // `<object>`
+        clear: null,
+        // `<br>`. Use CSS `clear` instead
+        code: null,
+        // `<object>`
+        codeBase: null,
+        // `<object>`
+        codeType: null,
+        // `<object>`
+        color: null,
+        // `<font>` and `<hr>`. Use CSS instead
+        compact: boolean,
+        // Lists. Use CSS to reduce space between items instead
+        declare: boolean,
+        // `<object>`
+        event: null,
+        // `<script>`
+        face: null,
+        // `<font>`. Use CSS instead
+        frame: null,
+        // `<table>`
+        frameBorder: null,
+        // `<iframe>`. Use CSS `border` instead
+        hSpace: number,
+        // `<img>` and `<object>`
+        leftMargin: number,
+        // `<body>`
+        link: null,
+        // `<body>`. Use CSS `a:link {color: *}` instead
+        longDesc: null,
+        // `<frame>`, `<iframe>`, and `<img>`. Use an `<a>`
+        lowSrc: null,
+        // `<img>`. Use a `<picture>`
+        marginHeight: number,
+        // `<body>`
+        marginWidth: number,
+        // `<body>`
+        noResize: boolean,
+        // `<frame>`
+        noHref: boolean,
+        // `<area>`. Use no href instead of an explicit `nohref`
+        noShade: boolean,
+        // `<hr>`. Use background-color and height instead of borders
+        noWrap: boolean,
+        // `<td>` and `<th>`
+        object: null,
+        // `<applet>`
+        profile: null,
+        // `<head>`
+        prompt: null,
+        // `<isindex>`
+        rev: null,
+        // `<link>`
+        rightMargin: number,
+        // `<body>`
+        rules: null,
+        // `<table>`
+        scheme: null,
+        // `<meta>`
+        scrolling: booleanish,
+        // `<frame>`. Use overflow in the child context
+        standby: null,
+        // `<object>`
+        summary: null,
+        // `<table>`
+        text: null,
+        // `<body>`. Use CSS `color` instead
+        topMargin: number,
+        // `<body>`
+        valueType: null,
+        // `<param>`
+        version: null,
+        // `<html>`. Use a doctype.
+        vAlign: null,
+        // Several. Use CSS `vertical-align` instead
+        vLink: null,
+        // `<body>`. Use CSS `a:visited {color}` instead
+        vSpace: number,
+        // `<img>` and `<object>`
+        // Non-standard Properties.
+        allowTransparency: null,
+        autoCorrect: null,
+        autoSave: null,
+        credentialless: boolean,
+        disablePictureInPicture: boolean,
+        disableRemotePlayback: boolean,
+        exportParts: commaSeparated,
+        part: spaceSeparated,
+        prefix: null,
+        property: null,
+        results: number,
+        security: null,
+        unselectable: null
+      },
+      space: "html",
+      transform: caseInsensitiveTransform
+    });
+  }
+});
+
+// node_modules/.pnpm/property-information@7.2.0/node_modules/property-information/lib/svg.js
+var svg;
+var init_svg = __esm({
+  "node_modules/.pnpm/property-information@7.2.0/node_modules/property-information/lib/svg.js"() {
+    init_case_sensitive_transform();
+    init_create4();
+    init_types2();
+    svg = create({
+      attributes: {
+        accentHeight: "accent-height",
+        alignmentBaseline: "alignment-baseline",
+        arabicForm: "arabic-form",
+        baselineShift: "baseline-shift",
+        capHeight: "cap-height",
+        className: "class",
+        clipPath: "clip-path",
+        clipRule: "clip-rule",
+        colorInterpolation: "color-interpolation",
+        colorInterpolationFilters: "color-interpolation-filters",
+        colorProfile: "color-profile",
+        colorRendering: "color-rendering",
+        crossOrigin: "crossorigin",
+        dataType: "datatype",
+        dominantBaseline: "dominant-baseline",
+        enableBackground: "enable-background",
+        fillOpacity: "fill-opacity",
+        fillRule: "fill-rule",
+        floodColor: "flood-color",
+        floodOpacity: "flood-opacity",
+        fontFamily: "font-family",
+        fontSize: "font-size",
+        fontSizeAdjust: "font-size-adjust",
+        fontStretch: "font-stretch",
+        fontStyle: "font-style",
+        fontVariant: "font-variant",
+        fontWeight: "font-weight",
+        glyphName: "glyph-name",
+        glyphOrientationHorizontal: "glyph-orientation-horizontal",
+        glyphOrientationVertical: "glyph-orientation-vertical",
+        hrefLang: "hreflang",
+        horizAdvX: "horiz-adv-x",
+        horizOriginX: "horiz-origin-x",
+        horizOriginY: "horiz-origin-y",
+        imageRendering: "image-rendering",
+        letterSpacing: "letter-spacing",
+        lightingColor: "lighting-color",
+        markerEnd: "marker-end",
+        markerMid: "marker-mid",
+        markerStart: "marker-start",
+        maskType: "mask-type",
+        navDown: "nav-down",
+        navDownLeft: "nav-down-left",
+        navDownRight: "nav-down-right",
+        navLeft: "nav-left",
+        navNext: "nav-next",
+        navPrev: "nav-prev",
+        navRight: "nav-right",
+        navUp: "nav-up",
+        navUpLeft: "nav-up-left",
+        navUpRight: "nav-up-right",
+        onAbort: "onabort",
+        onActivate: "onactivate",
+        onAfterPrint: "onafterprint",
+        onBeforePrint: "onbeforeprint",
+        onBegin: "onbegin",
+        onCancel: "oncancel",
+        onCanPlay: "oncanplay",
+        onCanPlayThrough: "oncanplaythrough",
+        onChange: "onchange",
+        onClick: "onclick",
+        onClose: "onclose",
+        onCopy: "oncopy",
+        onCueChange: "oncuechange",
+        onCut: "oncut",
+        onDblClick: "ondblclick",
+        onDrag: "ondrag",
+        onDragEnd: "ondragend",
+        onDragEnter: "ondragenter",
+        onDragExit: "ondragexit",
+        onDragLeave: "ondragleave",
+        onDragOver: "ondragover",
+        onDragStart: "ondragstart",
+        onDrop: "ondrop",
+        onDurationChange: "ondurationchange",
+        onEmptied: "onemptied",
+        onEnd: "onend",
+        onEnded: "onended",
+        onError: "onerror",
+        onFocus: "onfocus",
+        onFocusIn: "onfocusin",
+        onFocusOut: "onfocusout",
+        onHashChange: "onhashchange",
+        onInput: "oninput",
+        onInvalid: "oninvalid",
+        onKeyDown: "onkeydown",
+        onKeyPress: "onkeypress",
+        onKeyUp: "onkeyup",
+        onLoad: "onload",
+        onLoadedData: "onloadeddata",
+        onLoadedMetadata: "onloadedmetadata",
+        onLoadStart: "onloadstart",
+        onMessage: "onmessage",
+        onMouseDown: "onmousedown",
+        onMouseEnter: "onmouseenter",
+        onMouseLeave: "onmouseleave",
+        onMouseMove: "onmousemove",
+        onMouseOut: "onmouseout",
+        onMouseOver: "onmouseover",
+        onMouseUp: "onmouseup",
+        onMouseWheel: "onmousewheel",
+        onOffline: "onoffline",
+        onOnline: "ononline",
+        onPageHide: "onpagehide",
+        onPageShow: "onpageshow",
+        onPaste: "onpaste",
+        onPause: "onpause",
+        onPlay: "onplay",
+        onPlaying: "onplaying",
+        onPopState: "onpopstate",
+        onProgress: "onprogress",
+        onRateChange: "onratechange",
+        onRepeat: "onrepeat",
+        onReset: "onreset",
+        onResize: "onresize",
+        onScroll: "onscroll",
+        onSeeked: "onseeked",
+        onSeeking: "onseeking",
+        onSelect: "onselect",
+        onShow: "onshow",
+        onStalled: "onstalled",
+        onStorage: "onstorage",
+        onSubmit: "onsubmit",
+        onSuspend: "onsuspend",
+        onTimeUpdate: "ontimeupdate",
+        onToggle: "ontoggle",
+        onUnload: "onunload",
+        onVolumeChange: "onvolumechange",
+        onWaiting: "onwaiting",
+        onZoom: "onzoom",
+        overlinePosition: "overline-position",
+        overlineThickness: "overline-thickness",
+        paintOrder: "paint-order",
+        panose1: "panose-1",
+        pointerEvents: "pointer-events",
+        referrerPolicy: "referrerpolicy",
+        renderingIntent: "rendering-intent",
+        shapeRendering: "shape-rendering",
+        stopColor: "stop-color",
+        stopOpacity: "stop-opacity",
+        strikethroughPosition: "strikethrough-position",
+        strikethroughThickness: "strikethrough-thickness",
+        strokeDashArray: "stroke-dasharray",
+        strokeDashOffset: "stroke-dashoffset",
+        strokeLineCap: "stroke-linecap",
+        strokeLineJoin: "stroke-linejoin",
+        strokeMiterLimit: "stroke-miterlimit",
+        strokeOpacity: "stroke-opacity",
+        strokeWidth: "stroke-width",
+        tabIndex: "tabindex",
+        textAnchor: "text-anchor",
+        textDecoration: "text-decoration",
+        textRendering: "text-rendering",
+        transformOrigin: "transform-origin",
+        typeOf: "typeof",
+        underlinePosition: "underline-position",
+        underlineThickness: "underline-thickness",
+        unicodeBidi: "unicode-bidi",
+        unicodeRange: "unicode-range",
+        unitsPerEm: "units-per-em",
+        vAlphabetic: "v-alphabetic",
+        vHanging: "v-hanging",
+        vIdeographic: "v-ideographic",
+        vMathematical: "v-mathematical",
+        vectorEffect: "vector-effect",
+        vertAdvY: "vert-adv-y",
+        vertOriginX: "vert-origin-x",
+        vertOriginY: "vert-origin-y",
+        wordSpacing: "word-spacing",
+        writingMode: "writing-mode",
+        xHeight: "x-height",
+        // These were camelcased in Tiny. Now lowercased in SVG 2
+        playbackOrder: "playbackorder",
+        timelineBegin: "timelinebegin"
+      },
+      properties: {
+        about: commaOrSpaceSeparated,
+        accentHeight: number,
+        accumulate: null,
+        additive: null,
+        alignmentBaseline: null,
+        alphabetic: number,
+        amplitude: number,
+        arabicForm: null,
+        ascent: number,
+        attributeName: null,
+        attributeType: null,
+        azimuth: number,
+        bandwidth: null,
+        baselineShift: null,
+        baseFrequency: null,
+        baseProfile: null,
+        bbox: null,
+        begin: null,
+        bias: number,
+        by: null,
+        calcMode: null,
+        capHeight: number,
+        className: spaceSeparated,
+        clip: null,
+        clipPath: null,
+        clipPathUnits: null,
+        clipRule: null,
+        color: null,
+        colorInterpolation: null,
+        colorInterpolationFilters: null,
+        colorProfile: null,
+        colorRendering: null,
+        content: null,
+        contentScriptType: null,
+        contentStyleType: null,
+        crossOrigin: null,
+        cursor: null,
+        cx: null,
+        cy: null,
+        d: null,
+        dataType: null,
+        defaultAction: null,
+        descent: number,
+        diffuseConstant: number,
+        direction: null,
+        display: null,
+        dur: null,
+        divisor: number,
+        dominantBaseline: null,
+        download: boolean,
+        dx: null,
+        dy: null,
+        edgeMode: null,
+        editable: null,
+        elevation: number,
+        enableBackground: null,
+        end: null,
+        event: null,
+        exponent: number,
+        externalResourcesRequired: null,
+        fill: null,
+        fillOpacity: number,
+        fillRule: null,
+        filter: null,
+        filterRes: null,
+        filterUnits: null,
+        floodColor: null,
+        floodOpacity: null,
+        focusable: null,
+        focusHighlight: null,
+        fontFamily: null,
+        fontSize: null,
+        fontSizeAdjust: null,
+        fontStretch: null,
+        fontStyle: null,
+        fontVariant: null,
+        fontWeight: null,
+        format: null,
+        fr: null,
+        from: null,
+        fx: null,
+        fy: null,
+        g1: commaSeparated,
+        g2: commaSeparated,
+        glyphName: commaSeparated,
+        glyphOrientationHorizontal: null,
+        glyphOrientationVertical: null,
+        glyphRef: null,
+        gradientTransform: null,
+        gradientUnits: null,
+        handler: null,
+        hanging: number,
+        hatchContentUnits: null,
+        hatchUnits: null,
+        height: null,
+        href: null,
+        hrefLang: null,
+        horizAdvX: number,
+        horizOriginX: number,
+        horizOriginY: number,
+        id: null,
+        ideographic: number,
+        imageRendering: null,
+        initialVisibility: null,
+        in: null,
+        in2: null,
+        intercept: number,
+        k: number,
+        k1: number,
+        k2: number,
+        k3: number,
+        k4: number,
+        kernelMatrix: commaOrSpaceSeparated,
+        kernelUnitLength: null,
+        keyPoints: null,
+        // SEMI_COLON_SEPARATED
+        keySplines: null,
+        // SEMI_COLON_SEPARATED
+        keyTimes: null,
+        // SEMI_COLON_SEPARATED
+        kerning: null,
+        lang: null,
+        lengthAdjust: null,
+        letterSpacing: null,
+        lightingColor: null,
+        limitingConeAngle: number,
+        local: null,
+        markerEnd: null,
+        markerMid: null,
+        markerStart: null,
+        markerHeight: null,
+        markerUnits: null,
+        markerWidth: null,
+        mask: null,
+        maskContentUnits: null,
+        maskType: null,
+        maskUnits: null,
+        mathematical: null,
+        max: null,
+        media: null,
+        mediaCharacterEncoding: null,
+        mediaContentEncodings: null,
+        mediaSize: number,
+        mediaTime: null,
+        method: null,
+        min: null,
+        mode: null,
+        name: null,
+        navDown: null,
+        navDownLeft: null,
+        navDownRight: null,
+        navLeft: null,
+        navNext: null,
+        navPrev: null,
+        navRight: null,
+        navUp: null,
+        navUpLeft: null,
+        navUpRight: null,
+        numOctaves: null,
+        observer: null,
+        offset: null,
+        onAbort: null,
+        onActivate: null,
+        onAfterPrint: null,
+        onBeforePrint: null,
+        onBegin: null,
+        onCancel: null,
+        onCanPlay: null,
+        onCanPlayThrough: null,
+        onChange: null,
+        onClick: null,
+        onClose: null,
+        onCopy: null,
+        onCueChange: null,
+        onCut: null,
+        onDblClick: null,
+        onDrag: null,
+        onDragEnd: null,
+        onDragEnter: null,
+        onDragExit: null,
+        onDragLeave: null,
+        onDragOver: null,
+        onDragStart: null,
+        onDrop: null,
+        onDurationChange: null,
+        onEmptied: null,
+        onEnd: null,
+        onEnded: null,
+        onError: null,
+        onFocus: null,
+        onFocusIn: null,
+        onFocusOut: null,
+        onHashChange: null,
+        onInput: null,
+        onInvalid: null,
+        onKeyDown: null,
+        onKeyPress: null,
+        onKeyUp: null,
+        onLoad: null,
+        onLoadedData: null,
+        onLoadedMetadata: null,
+        onLoadStart: null,
+        onMessage: null,
+        onMouseDown: null,
+        onMouseEnter: null,
+        onMouseLeave: null,
+        onMouseMove: null,
+        onMouseOut: null,
+        onMouseOver: null,
+        onMouseUp: null,
+        onMouseWheel: null,
+        onOffline: null,
+        onOnline: null,
+        onPageHide: null,
+        onPageShow: null,
+        onPaste: null,
+        onPause: null,
+        onPlay: null,
+        onPlaying: null,
+        onPopState: null,
+        onProgress: null,
+        onRateChange: null,
+        onRepeat: null,
+        onReset: null,
+        onResize: null,
+        onScroll: null,
+        onSeeked: null,
+        onSeeking: null,
+        onSelect: null,
+        onShow: null,
+        onStalled: null,
+        onStorage: null,
+        onSubmit: null,
+        onSuspend: null,
+        onTimeUpdate: null,
+        onToggle: null,
+        onUnload: null,
+        onVolumeChange: null,
+        onWaiting: null,
+        onZoom: null,
+        opacity: null,
+        operator: null,
+        order: null,
+        orient: null,
+        orientation: null,
+        origin: null,
+        overflow: null,
+        overlay: null,
+        overlinePosition: number,
+        overlineThickness: number,
+        paintOrder: null,
+        panose1: null,
+        path: null,
+        pathLength: number,
+        patternContentUnits: null,
+        patternTransform: null,
+        patternUnits: null,
+        phase: null,
+        ping: spaceSeparated,
+        pitch: null,
+        playbackOrder: null,
+        pointerEvents: null,
+        points: null,
+        pointsAtX: number,
+        pointsAtY: number,
+        pointsAtZ: number,
+        preserveAlpha: null,
+        preserveAspectRatio: null,
+        primitiveUnits: null,
+        propagate: null,
+        property: commaOrSpaceSeparated,
+        r: null,
+        radius: null,
+        referrerPolicy: null,
+        refX: null,
+        refY: null,
+        rel: commaOrSpaceSeparated,
+        rev: commaOrSpaceSeparated,
+        renderingIntent: null,
+        repeatCount: null,
+        repeatDur: null,
+        requiredExtensions: commaOrSpaceSeparated,
+        requiredFeatures: commaOrSpaceSeparated,
+        requiredFonts: commaOrSpaceSeparated,
+        requiredFormats: commaOrSpaceSeparated,
+        resource: null,
+        restart: null,
+        result: null,
+        rotate: null,
+        rx: null,
+        ry: null,
+        scale: null,
+        seed: null,
+        shapeRendering: null,
+        side: null,
+        slope: null,
+        snapshotTime: null,
+        specularConstant: number,
+        specularExponent: number,
+        spreadMethod: null,
+        spacing: null,
+        startOffset: null,
+        stdDeviation: null,
+        stemh: null,
+        stemv: null,
+        stitchTiles: null,
+        stopColor: null,
+        stopOpacity: null,
+        strikethroughPosition: number,
+        strikethroughThickness: number,
+        string: null,
+        stroke: null,
+        strokeDashArray: commaOrSpaceSeparated,
+        strokeDashOffset: null,
+        strokeLineCap: null,
+        strokeLineJoin: null,
+        strokeMiterLimit: number,
+        strokeOpacity: number,
+        strokeWidth: null,
+        style: null,
+        surfaceScale: number,
+        syncBehavior: null,
+        syncBehaviorDefault: null,
+        syncMaster: null,
+        syncTolerance: null,
+        syncToleranceDefault: null,
+        systemLanguage: commaOrSpaceSeparated,
+        tabIndex: number,
+        tableValues: null,
+        target: null,
+        targetX: number,
+        targetY: number,
+        textAnchor: null,
+        textDecoration: null,
+        textRendering: null,
+        textLength: null,
+        timelineBegin: null,
+        title: null,
+        transformBehavior: null,
+        type: null,
+        typeOf: commaOrSpaceSeparated,
+        to: null,
+        transform: null,
+        transformOrigin: null,
+        u1: null,
+        u2: null,
+        underlinePosition: number,
+        underlineThickness: number,
+        unicode: null,
+        unicodeBidi: null,
+        unicodeRange: null,
+        unitsPerEm: number,
+        values: null,
+        vAlphabetic: number,
+        vMathematical: number,
+        vectorEffect: null,
+        vHanging: number,
+        vIdeographic: number,
+        version: null,
+        vertAdvY: number,
+        vertOriginX: number,
+        vertOriginY: number,
+        viewBox: null,
+        viewTarget: null,
+        visibility: null,
+        width: null,
+        widths: null,
+        wordSpacing: null,
+        writingMode: null,
+        x: null,
+        x1: null,
+        x2: null,
+        xChannelSelector: null,
+        xHeight: number,
+        y: null,
+        y1: null,
+        y2: null,
+        yChannelSelector: null,
+        z: null,
+        zoomAndPan: null
+      },
+      space: "svg",
+      transform: caseSensitiveTransform
+    });
+  }
+});
+
+// node_modules/.pnpm/property-information@7.2.0/node_modules/property-information/lib/xlink.js
+var xlink;
+var init_xlink = __esm({
+  "node_modules/.pnpm/property-information@7.2.0/node_modules/property-information/lib/xlink.js"() {
+    init_create4();
+    xlink = create({
+      properties: {
+        xLinkActuate: null,
+        xLinkArcRole: null,
+        xLinkHref: null,
+        xLinkRole: null,
+        xLinkShow: null,
+        xLinkTitle: null,
+        xLinkType: null
+      },
+      space: "xlink",
+      transform(_, property) {
+        return "xlink:" + property.slice(5).toLowerCase();
+      }
+    });
+  }
+});
+
+// node_modules/.pnpm/property-information@7.2.0/node_modules/property-information/lib/xmlns.js
+var xmlns;
+var init_xmlns = __esm({
+  "node_modules/.pnpm/property-information@7.2.0/node_modules/property-information/lib/xmlns.js"() {
+    init_create4();
+    init_case_insensitive_transform();
+    xmlns = create({
+      attributes: { xmlnsxlink: "xmlns:xlink" },
+      properties: { xmlnsXLink: null, xmlns: null },
+      space: "xmlns",
+      transform: caseInsensitiveTransform
+    });
+  }
+});
+
+// node_modules/.pnpm/property-information@7.2.0/node_modules/property-information/lib/xml.js
+var xml;
+var init_xml = __esm({
+  "node_modules/.pnpm/property-information@7.2.0/node_modules/property-information/lib/xml.js"() {
+    init_create4();
+    xml = create({
+      properties: { xmlBase: null, xmlLang: null, xmlSpace: null },
+      space: "xml",
+      transform(_, property) {
+        return "xml:" + property.slice(3).toLowerCase();
+      }
+    });
+  }
+});
+
+// node_modules/.pnpm/property-information@7.2.0/node_modules/property-information/lib/find.js
+function find(schema, value) {
+  const normal = normalize(value);
+  let property = value;
+  let Type = Info;
+  if (normal in schema.normal) {
+    return schema.property[schema.normal[normal]];
+  }
+  if (normal.length > 4 && normal.slice(0, 4) === "data" && valid.test(value)) {
+    if (value.charAt(4) === "-") {
+      const rest = value.slice(5).replace(dash, camelcase);
+      property = "data" + rest.charAt(0).toUpperCase() + rest.slice(1);
+    } else {
+      const rest = value.slice(4);
+      if (!dash.test(rest)) {
+        let dashes = rest.replace(cap, kebab);
+        if (dashes.charAt(0) !== "-") {
+          dashes = "-" + dashes;
+        }
+        value = "data" + dashes;
+      }
+    }
+    Type = DefinedInfo;
+  }
+  return new Type(property, value);
+}
+function kebab($0) {
+  return "-" + $0.toLowerCase();
+}
+function camelcase($0) {
+  return $0.charAt(1).toUpperCase();
+}
+var cap, dash, valid;
+var init_find = __esm({
+  "node_modules/.pnpm/property-information@7.2.0/node_modules/property-information/lib/find.js"() {
+    init_defined_info();
+    init_info();
+    init_normalize();
+    cap = /[A-Z]/g;
+    dash = /-[a-z]/g;
+    valid = /^data[-\w.:]+$/i;
+  }
+});
+
+// node_modules/.pnpm/property-information@7.2.0/node_modules/property-information/index.js
+var html3, svg2;
+var init_property_information = __esm({
+  "node_modules/.pnpm/property-information@7.2.0/node_modules/property-information/index.js"() {
+    init_merge();
+    init_aria();
+    init_html3();
+    init_svg();
+    init_xlink();
+    init_xmlns();
+    init_xml();
+    init_find();
+    init_normalize();
+    html3 = merge([aria, html2, xlink, xmlns, xml], "html");
+    svg2 = merge([aria, svg, xlink, xmlns, xml], "svg");
+  }
+});
+
+// node_modules/.pnpm/comma-separated-tokens@2.0.3/node_modules/comma-separated-tokens/index.js
+function parse52(value) {
+  const tokens = [];
+  const input = String(value || "");
+  let index2 = input.indexOf(",");
+  let start = 0;
+  let end = false;
+  while (!end) {
+    if (index2 === -1) {
+      index2 = input.length;
+      end = true;
+    }
+    const token = input.slice(start, index2).trim();
+    if (token || !end) {
+      tokens.push(token);
+    }
+    start = index2 + 1;
+    index2 = input.indexOf(",", start);
+  }
+  return tokens;
+}
+var init_comma_separated_tokens = __esm({
+  "node_modules/.pnpm/comma-separated-tokens@2.0.3/node_modules/comma-separated-tokens/index.js"() {
+  }
+});
+
+// node_modules/.pnpm/hast-util-parse-selector@4.0.0/node_modules/hast-util-parse-selector/lib/index.js
+function parseSelector(selector2, defaultTagName) {
+  const value = selector2 || "";
+  const props = {};
+  let start = 0;
+  let previous3;
+  let tagName;
+  while (start < value.length) {
+    search2.lastIndex = start;
+    const match = search2.exec(value);
+    const subvalue = value.slice(start, match ? match.index : value.length);
+    if (subvalue) {
+      if (!previous3) {
+        tagName = subvalue;
+      } else if (previous3 === "#") {
+        props.id = subvalue;
+      } else if (Array.isArray(props.className)) {
+        props.className.push(subvalue);
+      } else {
+        props.className = [subvalue];
+      }
+      start += subvalue.length;
+    }
+    if (match) {
+      previous3 = match[0];
+      start++;
+    }
+  }
+  return {
+    type: "element",
+    // @ts-expect-error: tag name is parsed.
+    tagName: tagName || defaultTagName || "div",
+    properties: props,
+    children: []
+  };
+}
+var search2;
+var init_lib21 = __esm({
+  "node_modules/.pnpm/hast-util-parse-selector@4.0.0/node_modules/hast-util-parse-selector/lib/index.js"() {
+    search2 = /[#.]/g;
+  }
+});
+
+// node_modules/.pnpm/hast-util-parse-selector@4.0.0/node_modules/hast-util-parse-selector/index.js
+var init_hast_util_parse_selector = __esm({
+  "node_modules/.pnpm/hast-util-parse-selector@4.0.0/node_modules/hast-util-parse-selector/index.js"() {
+    init_lib21();
+  }
+});
+
+// node_modules/.pnpm/space-separated-tokens@2.0.2/node_modules/space-separated-tokens/index.js
+function parse53(value) {
+  const input = String(value || "").trim();
+  return input ? input.split(/[ \t\n\r\f]+/g) : [];
+}
+var init_space_separated_tokens = __esm({
+  "node_modules/.pnpm/space-separated-tokens@2.0.2/node_modules/space-separated-tokens/index.js"() {
+  }
+});
+
+// node_modules/.pnpm/hastscript@9.0.1/node_modules/hastscript/lib/create-h.js
+function createH(schema, defaultTagName, caseSensitive) {
+  const adjust = caseSensitive ? createAdjustMap(caseSensitive) : void 0;
+  function h2(selector2, properties, ...children) {
+    let node2;
+    if (selector2 === null || selector2 === void 0) {
+      node2 = { type: "root", children: [] };
+      const child = (
+        /** @type {Child} */
+        properties
+      );
+      children.unshift(child);
+    } else {
+      node2 = parseSelector(selector2, defaultTagName);
+      const lower = node2.tagName.toLowerCase();
+      const adjusted = adjust ? adjust.get(lower) : void 0;
+      node2.tagName = adjusted || lower;
+      if (isChild(properties)) {
+        children.unshift(properties);
+      } else {
+        for (const [key, value] of Object.entries(properties)) {
+          addProperty(schema, node2.properties, key, value);
+        }
+      }
+    }
+    for (const child of children) {
+      addChild(node2.children, child);
+    }
+    if (node2.type === "element" && node2.tagName === "template") {
+      node2.content = { type: "root", children: node2.children };
+      node2.children = [];
+    }
+    return node2;
+  }
+  return h2;
+}
+function isChild(value) {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+    return true;
+  }
+  if (typeof value.type !== "string") return false;
+  const record = (
+    /** @type {Record<string, unknown>} */
+    value
+  );
+  const keys = Object.keys(value);
+  for (const key of keys) {
+    const value2 = record[key];
+    if (value2 && typeof value2 === "object") {
+      if (!Array.isArray(value2)) return true;
+      const list3 = (
+        /** @type {ReadonlyArray<unknown>} */
+        value2
+      );
+      for (const item of list3) {
+        if (typeof item !== "number" && typeof item !== "string") {
+          return true;
+        }
+      }
+    }
+  }
+  if ("children" in value && Array.isArray(value.children)) {
+    return true;
+  }
+  return false;
+}
+function addProperty(schema, properties, key, value) {
+  const info = find(schema, key);
+  let result;
+  if (value === null || value === void 0) return;
+  if (typeof value === "number") {
+    if (Number.isNaN(value)) return;
+    result = value;
+  } else if (typeof value === "boolean") {
+    result = value;
+  } else if (typeof value === "string") {
+    if (info.spaceSeparated) {
+      result = parse53(value);
+    } else if (info.commaSeparated) {
+      result = parse52(value);
+    } else if (info.commaOrSpaceSeparated) {
+      result = parse53(parse52(value).join(" "));
+    } else {
+      result = parsePrimitive(info, info.property, value);
+    }
+  } else if (Array.isArray(value)) {
+    result = [...value];
+  } else {
+    result = info.property === "style" ? style(value) : String(value);
+  }
+  if (Array.isArray(result)) {
+    const finalResult = [];
+    for (const item of result) {
+      finalResult.push(
+        /** @type {number | string} */
+        parsePrimitive(info, info.property, item)
+      );
+    }
+    result = finalResult;
+  }
+  if (info.property === "className" && Array.isArray(properties.className)) {
+    result = properties.className.concat(
+      /** @type {Array<number | string> | number | string} */
+      result
+    );
+  }
+  properties[info.property] = result;
+}
+function addChild(nodes, value) {
+  if (value === null || value === void 0) {
+  } else if (typeof value === "number" || typeof value === "string") {
+    nodes.push({ type: "text", value: String(value) });
+  } else if (Array.isArray(value)) {
+    for (const child of value) {
+      addChild(nodes, child);
+    }
+  } else if (typeof value === "object" && "type" in value) {
+    if (value.type === "root") {
+      addChild(nodes, value.children);
+    } else {
+      nodes.push(value);
+    }
+  } else {
+    throw new Error("Expected node, nodes, or string, got `" + value + "`");
+  }
+}
+function parsePrimitive(info, name50, value) {
+  if (typeof value === "string") {
+    if (info.number && value && !Number.isNaN(Number(value))) {
+      return Number(value);
+    }
+    if ((info.boolean || info.overloadedBoolean) && (value === "" || normalize(value) === normalize(name50))) {
+      return true;
+    }
+  }
+  return value;
+}
+function style(styles) {
+  const result = [];
+  for (const [key, value] of Object.entries(styles)) {
+    result.push([key, value].join(": "));
+  }
+  return result.join("; ");
+}
+function createAdjustMap(values) {
+  const result = /* @__PURE__ */ new Map();
+  for (const value of values) {
+    result.set(value.toLowerCase(), value);
+  }
+  return result;
+}
+var init_create_h = __esm({
+  "node_modules/.pnpm/hastscript@9.0.1/node_modules/hastscript/lib/create-h.js"() {
+    init_comma_separated_tokens();
+    init_hast_util_parse_selector();
+    init_property_information();
+    init_space_separated_tokens();
+  }
+});
+
+// node_modules/.pnpm/hastscript@9.0.1/node_modules/hastscript/lib/svg-case-sensitive-tag-names.js
+var svgCaseSensitiveTagNames;
+var init_svg_case_sensitive_tag_names = __esm({
+  "node_modules/.pnpm/hastscript@9.0.1/node_modules/hastscript/lib/svg-case-sensitive-tag-names.js"() {
+    svgCaseSensitiveTagNames = [
+      "altGlyph",
+      "altGlyphDef",
+      "altGlyphItem",
+      "animateColor",
+      "animateMotion",
+      "animateTransform",
+      "clipPath",
+      "feBlend",
+      "feColorMatrix",
+      "feComponentTransfer",
+      "feComposite",
+      "feConvolveMatrix",
+      "feDiffuseLighting",
+      "feDisplacementMap",
+      "feDistantLight",
+      "feDropShadow",
+      "feFlood",
+      "feFuncA",
+      "feFuncB",
+      "feFuncG",
+      "feFuncR",
+      "feGaussianBlur",
+      "feImage",
+      "feMerge",
+      "feMergeNode",
+      "feMorphology",
+      "feOffset",
+      "fePointLight",
+      "feSpecularLighting",
+      "feSpotLight",
+      "feTile",
+      "feTurbulence",
+      "foreignObject",
+      "glyphRef",
+      "linearGradient",
+      "radialGradient",
+      "solidColor",
+      "textArea",
+      "textPath"
+    ];
+  }
+});
+
+// node_modules/.pnpm/hastscript@9.0.1/node_modules/hastscript/lib/index.js
+var h, s;
+var init_lib22 = __esm({
+  "node_modules/.pnpm/hastscript@9.0.1/node_modules/hastscript/lib/index.js"() {
+    init_property_information();
+    init_create_h();
+    init_svg_case_sensitive_tag_names();
+    h = createH(html3, "div");
+    s = createH(svg2, "g", svgCaseSensitiveTagNames);
+  }
+});
+
+// node_modules/.pnpm/hastscript@9.0.1/node_modules/hastscript/index.js
+var init_hastscript = __esm({
+  "node_modules/.pnpm/hastscript@9.0.1/node_modules/hastscript/index.js"() {
+    init_lib22();
+  }
+});
+
+// node_modules/.pnpm/vfile-location@5.0.3/node_modules/vfile-location/lib/index.js
+function location(file) {
+  const value = String(file);
+  const indices = [];
+  return { toOffset, toPoint };
+  function toPoint(offset) {
+    if (typeof offset === "number" && offset > -1 && offset <= value.length) {
+      let index2 = 0;
+      while (true) {
+        let end = indices[index2];
+        if (end === void 0) {
+          const eol = next(value, indices[index2 - 1]);
+          end = eol === -1 ? value.length + 1 : eol + 1;
+          indices[index2] = end;
+        }
+        if (end > offset) {
+          return {
+            line: index2 + 1,
+            column: offset - (index2 > 0 ? indices[index2 - 1] : 0) + 1,
+            offset
+          };
+        }
+        index2++;
+      }
+    }
+  }
+  function toOffset(point4) {
+    if (point4 && typeof point4.line === "number" && typeof point4.column === "number" && !Number.isNaN(point4.line) && !Number.isNaN(point4.column)) {
+      while (indices.length < point4.line) {
+        const from = indices[indices.length - 1];
+        const eol = next(value, from);
+        const end = eol === -1 ? value.length + 1 : eol + 1;
+        if (from === end) break;
+        indices.push(end);
+      }
+      const offset = (point4.line > 1 ? indices[point4.line - 2] : 0) + point4.column - 1;
+      if (offset < indices[point4.line - 1]) return offset;
+    }
+  }
+}
+function next(value, from) {
+  const cr = value.indexOf("\r", from);
+  const lf = value.indexOf("\n", from);
+  if (lf === -1) return cr;
+  if (cr === -1 || cr + 1 === lf) return lf;
+  return cr < lf ? cr : lf;
+}
+var init_lib23 = __esm({
+  "node_modules/.pnpm/vfile-location@5.0.3/node_modules/vfile-location/lib/index.js"() {
+  }
+});
+
+// node_modules/.pnpm/vfile-location@5.0.3/node_modules/vfile-location/index.js
+var init_vfile_location = __esm({
+  "node_modules/.pnpm/vfile-location@5.0.3/node_modules/vfile-location/index.js"() {
+    init_lib23();
+  }
+});
+
+// node_modules/.pnpm/web-namespaces@2.0.1/node_modules/web-namespaces/index.js
+var webNamespaces;
+var init_web_namespaces = __esm({
+  "node_modules/.pnpm/web-namespaces@2.0.1/node_modules/web-namespaces/index.js"() {
+    webNamespaces = {
+      html: "http://www.w3.org/1999/xhtml",
+      mathml: "http://www.w3.org/1998/Math/MathML",
+      svg: "http://www.w3.org/2000/svg",
+      xlink: "http://www.w3.org/1999/xlink",
+      xml: "http://www.w3.org/XML/1998/namespace",
+      xmlns: "http://www.w3.org/2000/xmlns/"
     };
   }
 });
 
-// node_modules/.pnpm/hast-util-from-html@2.0.3/node_modules/hast-util-from-html/lib/index.js
-function fromHtml(value, options) {
-  const settings = options || emptyOptions3;
-  const onerror = settings.onerror;
-  const file = value instanceof VFile ? value : new VFile(value);
-  const parseFunction = settings.fragment ? parseFragment : parse54;
-  const document3 = String(file);
-  const p5Document = parseFunction(document3, {
-    sourceCodeLocationInfo: true,
-    // Note `parse5` types currently do not allow `undefined`.
-    onParseError: settings.onerror ? internalOnerror : null,
-    scriptingEnabled: false
-  });
-  return (
-    /** @type {Root} */
-    fromParse5(p5Document, {
-      file,
-      space: settings.space,
-      verbose: settings.verbose
-    })
+// node_modules/.pnpm/hast-util-from-parse5@8.0.3/node_modules/hast-util-from-parse5/lib/index.js
+function fromParse5(tree, options) {
+  const settings = options || {};
+  return one2(
+    {
+      file: settings.file || void 0,
+      location: false,
+      schema: settings.space === "svg" ? svg2 : html3,
+      verbose: settings.verbose || false
+    },
+    tree
   );
-  function internalOnerror(error) {
-    const code4 = error.code;
-    const name50 = camelcase2(code4);
-    const setting = settings[name50];
-    const config = setting === null || setting === void 0 ? true : setting;
-    const level = typeof config === "number" ? config : config ? 1 : 0;
-    if (level) {
-      const info = errors[name50];
-      ok(info, "expected known error from `parse5`");
-      const message = new VFileMessage(format(info.reason), {
-        place: {
-          start: {
-            line: error.startLine,
-            column: error.startCol,
-            offset: error.startOffset
-          },
-          end: {
-            line: error.endLine,
-            column: error.endCol,
-            offset: error.endOffset
+}
+function one2(state, node2) {
+  let result;
+  switch (node2.nodeName) {
+    case "#comment": {
+      const reference = (
+        /** @type {DefaultTreeAdapterMap['commentNode']} */
+        node2
+      );
+      result = { type: "comment", value: reference.data };
+      patch(state, reference, result);
+      return result;
+    }
+    case "#document":
+    case "#document-fragment": {
+      const reference = (
+        /** @type {DefaultTreeAdapterMap['document'] | DefaultTreeAdapterMap['documentFragment']} */
+        node2
+      );
+      const quirksMode = "mode" in reference ? reference.mode === "quirks" || reference.mode === "limited-quirks" : false;
+      result = {
+        type: "root",
+        children: all2(state, node2.childNodes),
+        data: { quirksMode }
+      };
+      if (state.file && state.location) {
+        const document3 = String(state.file);
+        const loc = location(document3);
+        const start = loc.toPoint(0);
+        const end = loc.toPoint(document3.length);
+        ok(start, "expected `start`");
+        ok(end, "expected `end`");
+        result.position = { start, end };
+      }
+      return result;
+    }
+    case "#documentType": {
+      const reference = (
+        /** @type {DefaultTreeAdapterMap['documentType']} */
+        node2
+      );
+      result = { type: "doctype" };
+      patch(state, reference, result);
+      return result;
+    }
+    case "#text": {
+      const reference = (
+        /** @type {DefaultTreeAdapterMap['textNode']} */
+        node2
+      );
+      result = { type: "text", value: reference.value };
+      patch(state, reference, result);
+      return result;
+    }
+    // Element.
+    default: {
+      const reference = (
+        /** @type {DefaultTreeAdapterMap['element']} */
+        node2
+      );
+      result = element(state, reference);
+      return result;
+    }
+  }
+}
+function all2(state, nodes) {
+  let index2 = -1;
+  const results = [];
+  while (++index2 < nodes.length) {
+    const result = (
+      /** @type {RootContent} */
+      one2(state, nodes[index2])
+    );
+    results.push(result);
+  }
+  return results;
+}
+function element(state, node2) {
+  const schema = state.schema;
+  state.schema = node2.namespaceURI === webNamespaces.svg ? svg2 : html3;
+  let index2 = -1;
+  const properties = {};
+  while (++index2 < node2.attrs.length) {
+    const attribute = node2.attrs[index2];
+    const name50 = (attribute.prefix ? attribute.prefix + ":" : "") + attribute.name;
+    if (!own4.call(proto, name50)) {
+      properties[name50] = attribute.value;
+    }
+  }
+  const x = state.schema.space === "svg" ? s : h;
+  const result = x(node2.tagName, properties, all2(state, node2.childNodes));
+  patch(state, node2, result);
+  if (result.tagName === "template") {
+    const reference = (
+      /** @type {DefaultTreeAdapterMap['template']} */
+      node2
+    );
+    const pos = reference.sourceCodeLocation;
+    const startTag = pos && pos.startTag && position2(pos.startTag);
+    const endTag = pos && pos.endTag && position2(pos.endTag);
+    const content3 = (
+      /** @type {Root} */
+      one2(state, reference.content)
+    );
+    if (startTag && endTag && state.file) {
+      content3.position = { start: startTag.end, end: endTag.start };
+    }
+    result.content = content3;
+  }
+  state.schema = schema;
+  return result;
+}
+function patch(state, from, to) {
+  if ("sourceCodeLocation" in from && from.sourceCodeLocation && state.file) {
+    const position3 = createLocation(state, to, from.sourceCodeLocation);
+    if (position3) {
+      state.location = true;
+      to.position = position3;
+    }
+  }
+}
+function createLocation(state, node2, location2) {
+  const result = position2(location2);
+  if (node2.type === "element") {
+    const tail = node2.children[node2.children.length - 1];
+    if (result && !location2.endTag && tail && tail.position && tail.position.end) {
+      result.end = Object.assign({}, tail.position.end);
+    }
+    if (state.verbose) {
+      const properties = {};
+      let key;
+      if (location2.attrs) {
+        for (key in location2.attrs) {
+          if (own4.call(location2.attrs, key)) {
+            properties[find(state.schema, key).property] = position2(
+              location2.attrs[key]
+            );
           }
-        },
-        ruleId: code4,
-        source: "hast-util-from-html"
-      });
-      if (file.path) {
-        message.file = file.path;
-        message.name = file.path + ":" + message.name;
-      }
-      message.fatal = fatalities[level];
-      message.note = format(info.description);
-      message.url = info.url === false ? void 0 : base + code4;
-      ok(onerror, "`internalOnerror` is not passed if `onerror` is not set");
-      onerror(message);
-    }
-    function format(value2) {
-      return value2.replace(formatCRe, formatC).replace(formatXRe, formatX);
-      function formatC(_, $1, $2) {
-        const offset = ($2 ? Number.parseInt($2, 10) : 0) * ($1 === "-" ? -1 : 1);
-        const char = document3.charAt(error.startOffset + offset);
-        return visualizeCharacter(char);
-      }
-      function formatX() {
-        return visualizeCharacterCode(document3.charCodeAt(error.startOffset));
-      }
-    }
-  }
-}
-function camelcase2(value) {
-  return (
-    /** @type {ErrorCode} */
-    value.replace(dashToCamelRe, dashToCamel)
-  );
-}
-function dashToCamel($0) {
-  return $0.charAt(1).toUpperCase();
-}
-function visualizeCharacter(char) {
-  return char === "`" ? "` ` `" : char;
-}
-function visualizeCharacterCode(charCode) {
-  return "0x" + charCode.toString(16).toUpperCase();
-}
-var base, dashToCamelRe, formatCRe, formatXRe, fatalities, emptyOptions3;
-var init_lib25 = __esm({
-  "node_modules/.pnpm/hast-util-from-html@2.0.3/node_modules/hast-util-from-html/lib/index.js"() {
-    init_default2();
-    init_hast_util_from_parse5();
-    init_dist();
-    init_vfile();
-    init_vfile_message();
-    init_errors();
-    base = "https://html.spec.whatwg.org/multipage/parsing.html#parse-error-";
-    dashToCamelRe = /-[a-z]/g;
-    formatCRe = /%c(?:([-+])(\d+))?/g;
-    formatXRe = /%x/g;
-    fatalities = { 2: true, 1: false, 0: null };
-    emptyOptions3 = {};
-  }
-});
-
-// node_modules/.pnpm/hast-util-from-html@2.0.3/node_modules/hast-util-from-html/index.js
-var init_hast_util_from_html = __esm({
-  "node_modules/.pnpm/hast-util-from-html@2.0.3/node_modules/hast-util-from-html/index.js"() {
-    init_lib25();
-  }
-});
-
-// node_modules/.pnpm/rehype-parse@9.0.1/node_modules/rehype-parse/lib/index.js
-function rehypeParse(options) {
-  const self = this;
-  const { emitParseErrors, ...settings } = { ...self.data("settings"), ...options };
-  self.parser = parser;
-  function parser(document3, file) {
-    return fromHtml(document3, {
-      ...settings,
-      onerror: emitParseErrors ? function(message) {
-        if (file.path) {
-          message.name = file.path + ":" + message.name;
-          message.file = file.path;
         }
-        file.messages.push(message);
-      } : void 0
-    });
+      }
+      ok(location2.startTag, "a start tag should exist");
+      const opening = position2(location2.startTag);
+      const closing = location2.endTag ? position2(location2.endTag) : void 0;
+      const data = { opening };
+      if (closing) data.closing = closing;
+      data.properties = properties;
+      node2.data = { position: data };
+    }
   }
+  return result;
 }
-var init_lib26 = __esm({
-  "node_modules/.pnpm/rehype-parse@9.0.1/node_modules/rehype-parse/lib/index.js"() {
-    init_hast_util_from_html();
+function position2(loc) {
+  const start = point3({
+    line: loc.startLine,
+    column: loc.startCol,
+    offset: loc.startOffset
+  });
+  const end = point3({
+    line: loc.endLine,
+    column: loc.endCol,
+    offset: loc.endOffset
+  });
+  return start || end ? { start, end } : void 0;
+}
+function point3(point4) {
+  return point4.line && point4.column ? point4 : void 0;
+}
+var own4, proto;
+var init_lib24 = __esm({
+  "node_modules/.pnpm/hast-util-from-parse5@8.0.3/node_modules/hast-util-from-parse5/lib/index.js"() {
+    init_default2();
+    init_hastscript();
+    init_property_information();
+    init_vfile_location();
+    init_web_namespaces();
+    own4 = {}.hasOwnProperty;
+    proto = Object.prototype;
   }
 });
 
-// node_modules/.pnpm/rehype-parse@9.0.1/node_modules/rehype-parse/index.js
-var init_rehype_parse = __esm({
-  "node_modules/.pnpm/rehype-parse@9.0.1/node_modules/rehype-parse/index.js"() {
-    init_lib26();
+// node_modules/.pnpm/hast-util-from-parse5@8.0.3/node_modules/hast-util-from-parse5/index.js
+var init_hast_util_from_parse5 = __esm({
+  "node_modules/.pnpm/hast-util-from-parse5@8.0.3/node_modules/hast-util-from-parse5/index.js"() {
+    init_lib24();
+  }
+});
+
+// src/html-tree-adapter.mjs
+function createTreeAdapter() {
+  const drainedUpTo = /* @__PURE__ */ new Map();
+  function flush(parent) {
+    const at = drainedUpTo.get(parent);
+    if (at === void 0) return;
+    drainedUpTo.delete(parent);
+    parent.childNodes.splice(0, at);
+  }
+  function settle() {
+    for (const parent of [...drainedUpTo.keys()]) flush(parent);
+  }
+  const adapter = {
+    ...defaultTreeAdapter,
+    /** @param {any} node */
+    detachNode(node2) {
+      const parent = node2.parentNode;
+      if (!parent) return;
+      const at = drainedUpTo.get(parent) ?? 0;
+      if (parent.childNodes[at] === node2) {
+        drainedUpTo.set(parent, at + 1);
+        node2.parentNode = null;
+        return;
+      }
+      flush(parent);
+      defaultTreeAdapter.detachNode(node2);
+    },
+    /** @param {any} node */
+    getFirstChild(node2) {
+      return node2.childNodes[drainedUpTo.get(node2) ?? 0];
+    },
+    /** @param {any} node */
+    getChildNodes(node2) {
+      flush(node2);
+      return defaultTreeAdapter.getChildNodes(node2);
+    },
+    /** @param {any} parent @param {any} child */
+    appendChild(parent, child) {
+      flush(parent);
+      defaultTreeAdapter.appendChild(parent, child);
+    },
+    /** @param {any} parent @param {any} child @param {any} reference */
+    insertBefore(parent, child, reference) {
+      flush(parent);
+      defaultTreeAdapter.insertBefore(parent, child, reference);
+    },
+    /** @param {any} parent @param {string} text */
+    insertText(parent, text5) {
+      flush(parent);
+      defaultTreeAdapter.insertText(parent, text5);
+    },
+    /** @param {any} parent @param {string} text @param {any} reference */
+    insertTextBefore(parent, text5, reference) {
+      flush(parent);
+      defaultTreeAdapter.insertTextBefore(parent, text5, reference);
+    }
+  };
+  return { adapter, settle };
+}
+function parseHtmlFragment(html4) {
+  const { adapter, settle } = createTreeAdapter();
+  const fragment = parseFragment(html4, {
+    sourceCodeLocationInfo: true,
+    onParseError: null,
+    scriptingEnabled: false,
+    treeAdapter: adapter
+  });
+  settle();
+  return fromParse5(fragment, { file: new VFile(html4) });
+}
+var init_html_tree_adapter = __esm({
+  "src/html-tree-adapter.mjs"() {
+    "use strict";
+    init_dist();
+    init_hast_util_from_parse5();
+    init_vfile();
   }
 });
 
@@ -45756,12 +45372,12 @@ function walk(tree, test, visitor) {
     }
   }
 }
-function lastParseCached(parse55) {
+function lastParseCached(parse54) {
   let cachedText = null;
   let cachedTree = null;
   return (text5) => {
     if (cachedText === text5) return cachedTree;
-    const tree = parse55(text5);
+    const tree = parse54(text5);
     cachedText = text5;
     cachedTree = tree;
     return tree;
@@ -45877,7 +45493,7 @@ function commentSpans(value) {
   });
   return spans;
 }
-function collectCommentRanges(value, base2, nodeEnd, ranges) {
+function collectCommentRanges(value, base, nodeEnd, ranges) {
   BOGUS_COMMENT_OPEN_RE.lastIndex = 0;
   let spans = null;
   for (let match; match = BOGUS_COMMENT_OPEN_RE.exec(value); ) {
@@ -45885,12 +45501,12 @@ function collectCommentRanges(value, base2, nodeEnd, ranges) {
     if (value.startsWith("<!--", open)) {
       const close = value.indexOf("-->", open + 2);
       if (close === -1) {
-        ranges.push({ start: base2 + open, end: nodeEnd, kind: "comment" });
+        ranges.push({ start: base + open, end: nodeEnd, kind: "comment" });
         break;
       }
       ranges.push({
-        start: base2 + open,
-        end: base2 + close + 3,
+        start: base + open,
+        end: base + close + 3,
         kind: "comment"
       });
       BOGUS_COMMENT_OPEN_RE.lastIndex = close + 3;
@@ -45899,7 +45515,7 @@ function collectCommentRanges(value, base2, nodeEnd, ranges) {
     if (!spans) spans = commentSpans(value);
     const end = spans.get(open);
     if (end === void 0) continue;
-    ranges.push({ start: base2 + open, end: base2 + end, kind: "comment" });
+    ranges.push({ start: base + open, end: base + end, kind: "comment" });
     BOGUS_COMMENT_OPEN_RE.lastIndex = end;
   }
 }
@@ -45944,24 +45560,24 @@ function scanInlineChildren(node2, text5, ranges, warned) {
   let prevEnd = node2.position.start.offset;
   for (const child of inlineHtmlLeaves(node2)) {
     const value = child.value;
-    const base2 = child.position.start.offset;
+    const base = child.position.start.offset;
     const end = child.position.end.offset;
-    absorbing = foldAbsorb(absorbing, text5.slice(prevEnd, base2));
+    absorbing = foldAbsorb(absorbing, text5.slice(prevEnd, base));
     if (rawText) {
       if (new RegExp(`</${rawText}(?![a-z0-9-])`, "i").test(value))
         rawText = null;
     } else if (state.depth > 0) {
       updateHiddenState(state, value, end, ranges);
     } else if (!absorbing) {
-      collectCommentRanges(value, base2, end, ranges);
+      collectCommentRanges(value, base, end, ranges);
       const tagName = isHiddenOpen(value);
       if (tagName) {
         if (VOID_ELEMENTS2.has(tagName) || isSelfClosedForeign(tagName, value))
-          ranges.push({ start: base2, end, kind: "hidden" });
+          ranges.push({ start: base, end, kind: "hidden" });
         else {
           state.tag = tagName;
           state.depth = 1;
-          state.regionStart = base2;
+          state.regionStart = base;
         }
       } else if (!value.startsWith("</")) {
         const el = parseHtmlTag(value);
@@ -45989,12 +45605,12 @@ function scanMarkdown(text5) {
   const warned = newWarned();
   walk(tree, "html", (node2, _index, parent) => {
     if (!FLOW_HTML_PARENTS.has(parent?.type)) return;
-    const base2 = node2.position.start.offset;
-    const sub = scanHtmlFragment(text5.slice(base2, node2.position.end.offset));
+    const base = node2.position.start.offset;
+    const sub = scanHtmlFragment(text5.slice(base, node2.position.end.offset));
     for (const range of sub.ranges) {
       ranges.push({
-        start: base2 + range.start,
-        end: base2 + range.end,
+        start: base + range.start,
+        end: base + range.end,
         kind: range.kind
       });
     }
@@ -46376,7 +45992,7 @@ function detectConfusableHosts(text5) {
   }
   return threats.length > 0 ? threats : null;
 }
-var NEAR_ZERO_EPSILON, OFFSCREEN_ABSOLUTE_THRESHOLD, OFFSCREEN_VIEWPORT_THRESHOLD, ABSOLUTE_UNITS, VIEWPORT_UNITS, ANGLE_UNITS, NAMED_COLORS, BLOCK_AXIS_EXTENT_PROPS, INLINE_AXIS_EXTENT_PROPS, BORDER_SHORTHANDS, BORDER_WIDTH_KEYWORDS, FONT_SIZE_UNITS, CSS_PROPERTY_IDENT_RE, REPORTED_TAGS, VOID_ELEMENTS2, FOREIGN_ELEMENTS, RAW_TEXT_ELEMENTS, htmlParser, parseFragment2, PLACEHOLDER_LABEL, PLACEHOLDER_KEY_LEN, LAYER2_PLACEHOLDER_RE, HIDDEN_PLACEHOLDER, COMMENT_PLACEHOLDER, UNPARSEABLE_PLACEHOLDER, mdParser, parseMarkdown, MARKDOWN_CODE_HINT, BOGUS_COMMENT_OPEN_RE, UNTERMINATED_MARKUP_TAIL_RE, PHRASING_ROOTS, FLOW_HTML_PARENTS, MAX_SPLICE_ROUNDS, EXFIL_INDICATORS, KEYWORD_PARAM_NAME_RE, LONG_QUERY_THRESHOLD, DATA_URI_ACTIVE_RE, DATA_URI_LENGTH_THRESHOLD, SCRIPT_URI_RE, RELATIVE_URL_BASE, BENIGN_BLOB_PARAM_RE, BENIGN_SHORT_PARAM_RE, OPAQUE_TOKEN_RE, VALUE_HAS_DIGIT_RE, BLOB_VALUE_B64_RE, BLOB_VALUE_HEX_RE, BLOB_VALUE_B64URL_RE, B64URL_MIXED_RE, PATH_BLOB_RE, PATH_BLOB_MIN_LEN, BLOB_SEPARATOR_RE, SRCSET_WS_RE, OFF_ORIGIN_REASON;
+var NEAR_ZERO_EPSILON, OFFSCREEN_ABSOLUTE_THRESHOLD, OFFSCREEN_VIEWPORT_THRESHOLD, ABSOLUTE_UNITS, VIEWPORT_UNITS, ANGLE_UNITS, NAMED_COLORS, BLOCK_AXIS_EXTENT_PROPS, INLINE_AXIS_EXTENT_PROPS, BORDER_SHORTHANDS, BORDER_WIDTH_KEYWORDS, FONT_SIZE_UNITS, CSS_PROPERTY_IDENT_RE, REPORTED_TAGS, VOID_ELEMENTS2, FOREIGN_ELEMENTS, RAW_TEXT_ELEMENTS, parseFragment2, PLACEHOLDER_LABEL, PLACEHOLDER_KEY_LEN, LAYER2_PLACEHOLDER_RE, HIDDEN_PLACEHOLDER, COMMENT_PLACEHOLDER, UNPARSEABLE_PLACEHOLDER, mdParser, parseMarkdown, MARKDOWN_CODE_HINT, BOGUS_COMMENT_OPEN_RE, UNTERMINATED_MARKUP_TAIL_RE, PHRASING_ROOTS, FLOW_HTML_PARENTS, MAX_SPLICE_ROUNDS, EXFIL_INDICATORS, KEYWORD_PARAM_NAME_RE, LONG_QUERY_THRESHOLD, DATA_URI_ACTIVE_RE, DATA_URI_LENGTH_THRESHOLD, SCRIPT_URI_RE, RELATIVE_URL_BASE, BENIGN_BLOB_PARAM_RE, BENIGN_SHORT_PARAM_RE, OPAQUE_TOKEN_RE, VALUE_HAS_DIGIT_RE, BLOB_VALUE_B64_RE, BLOB_VALUE_HEX_RE, BLOB_VALUE_B64URL_RE, B64URL_MIXED_RE, PATH_BLOB_RE, PATH_BLOB_MIN_LEN, BLOB_SEPARATOR_RE, SRCSET_WS_RE, OFF_ORIGIN_REASON;
 var init_html4 = __esm({
   "src/html.mjs"() {
     "use strict";
@@ -46387,7 +46003,7 @@ var init_html4 = __esm({
     init_unified();
     init_remark_parse();
     init_remark_gfm();
-    init_rehype_parse();
+    init_html_tree_adapter();
     init_unist_util_visit();
     init_gates();
     init_confusable_host();
@@ -46653,8 +46269,7 @@ var init_html4 = __esm({
       "noframes",
       "plaintext"
     ]);
-    htmlParser = unified().use(rehypeParse, { fragment: true });
-    parseFragment2 = lastParseCached((html4) => htmlParser.parse(html4));
+    parseFragment2 = lastParseCached(parseHtmlFragment);
     PLACEHOLDER_LABEL = Object.freeze({
       hidden: "hidden HTML",
       comment: "HTML comment"
