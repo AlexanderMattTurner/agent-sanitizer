@@ -60,6 +60,10 @@ const markers = [
   instructionsLoadedNoticeFile(),
   instructionsLoadedFile(SESSION),
   instructionsLoadedNoticeFile(SESSION),
+  // The "nothing loads at launch" cache instructionsLoadedGapNotice writes
+  // itself — see the "no InstructionsLoaded scan" describe block below.
+  `${instructionsLoadedFile()}.launch-empty`,
+  `${instructionsLoadedFile(SESSION)}.launch-empty`,
 ];
 
 /** Every alert store these cases touch: the shared fallback and SESSION's. */
@@ -469,6 +473,13 @@ describe("the hook CLI, driven end to end on a real event", () => {
 });
 
 describe("a session with no InstructionsLoaded scan is named, once", () => {
+  // The notice is only a real gap when something at launch could have fired
+  // the event — see the "stays silent when nothing loads at launch" block
+  // below for the empty case. Written explicitly here rather than relying on
+  // an earlier describe block's fixture: it must survive whichever order the
+  // suite runs in.
+  beforeEach(() => project("CLAUDE.md", PROSE));
+
   it("warns while no scan has been seen, naming every cause", () => {
     const notice = instructionsLoadedGapNotice();
     assert.match(notice, /InstructionsLoaded/u);
@@ -488,6 +499,46 @@ describe("a session with no InstructionsLoaded scan is named, once", () => {
     // ...and the hook switched off by the operator.
     assert.match(notice, /AGENT_SANITIZER_DISABLED_HOOKS/u);
     assert.match(notice, /echo \$AGENT_SANITIZER_DISABLED_HOOKS/u);
+  });
+
+  it("stays silent when nothing loads at launch, even with no scan seen", () => {
+    // Reported bug: launching in a directory whose ancestor chain has no
+    // NON-EMPTY CLAUDE.md/rules file (e.g. an empty ~/.claude/CLAUDE.md) gives
+    // Claude Code nothing to fire InstructionsLoaded over, so the missing
+    // event is expected there, not evidence the scanner is unwired.
+    const emptyDir = mkdtempSync(join(tmpdir(), "sanitizer-empty-launch-"));
+    const emptySession = "sess-empty-launch";
+    try {
+      mkdirSync(join(emptyDir, ".claude"));
+      writeFileSync(join(emptyDir, ".claude", "CLAUDE.md"), "");
+      assert.equal(instructionsLoadedSeen(emptySession), false);
+      assert.equal(instructionsLoadedGapNotice(emptySession, emptyDir), null);
+      // Cached, not just silent this once: the launch set cannot change
+      // mid-session, so a second ask must not re-glob to find the same answer.
+      assert.equal(instructionsLoadedGapNotice(emptySession, emptyDir), null);
+    } finally {
+      rmSync(emptyDir, { recursive: true, force: true });
+      rmSync(`${instructionsLoadedFile(emptySession)}.launch-empty`, {
+        force: true,
+      });
+    }
+  });
+
+  it("still warns once the launch set actually has content", () => {
+    const withContentDir = mkdtempSync(
+      join(tmpdir(), "sanitizer-nonempty-launch-"),
+    );
+    const contentSession = "sess-nonempty-launch";
+    try {
+      writeFileSync(join(withContentDir, "CLAUDE.md"), PROSE);
+      assert.match(
+        instructionsLoadedGapNotice(contentSession, withContentDir),
+        /unscanned/u,
+      );
+    } finally {
+      rmSync(withContentDir, { recursive: true, force: true });
+      rmSync(instructionsLoadedNoticeFile(contentSession), { force: true });
+    }
   });
 
   it("does not repeat the warning once it has been surfaced", () => {

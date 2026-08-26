@@ -11,11 +11,13 @@
  * have one definition.
  */
 import {
+  globSync,
   lstatSync,
   mkdirSync,
   readdirSync,
   readFileSync,
   rmSync,
+  statSync,
 } from "node:fs";
 import { randomBytes } from "node:crypto";
 import { basename, join } from "node:path";
@@ -23,11 +25,21 @@ import { tmpdir, userInfo } from "node:os";
 import {
   lazyImport,
   markerIsTrusted,
+  PROJECT_DIR,
   PROJECT_HASH,
   scrubUntrustedText,
   writeFileNoFollow,
   writeSentinelFile,
 } from "./hook-io.mjs";
+// Relative, like scan-invisible-chars.mjs's own import of this module: the
+// launch scope is hook POLICY (see src/claude-context.mjs), and this table is
+// pure data with no fs access of its own — the fs calls below are this
+// module's, not a copy of the SessionStart hook's target-discovery glue.
+import {
+  ancestorInstructionFiles,
+  CLAUDE_LAUNCH_GLOBS,
+  excludeFromContextScan,
+} from "../../src/claude-context.mjs";
 
 // Layer-1 scrubber for the untrusted alert-store contents the gate splices into a
 // permissionDecisionReason. The WELL-FORMED composition, not the bare applyLayer1:
@@ -281,7 +293,11 @@ function sweepStaleFallback(sessionId) {
   };
   for (const path of [alertAckFile(), ...entries])
     if (!withinFallbackTtl(path)) drop(path);
-  for (const path of [instructionsLoadedFile(), instructionsLoadedNoticeFile()])
+  for (const path of [
+    instructionsLoadedFile(),
+    instructionsLoadedNoticeFile(),
+    launchEmptyFile(),
+  ])
     if (!withinTtl(path, MARKER_TTL_MS)) drop(path);
 }
 
@@ -311,32 +327,81 @@ export function recordInstructionsLoaded(sessionId) {
 const EVENT_MIN_CLI_VERSION = "2.1.69";
 
 /**
+ * Companion marker: this session already found nothing at launch — the launch
+ * set is fixed at session start, so a second glob can never change the answer.
+ * @param {string} [sessionId]
+ * @returns {string}
+ */
+function launchEmptyFile(sessionId) {
+  return `${instructionsLoadedFile(sessionId)}.launch-empty`;
+}
+
+/**
+ * Whether anything Claude Code loads at launch from `dir` — its own
+ * instruction files, its `.claude/` context tree, or the CLAUDE.md /
+ * CLAUDE.local.md chain above it — actually has bytes. An existing but EMPTY
+ * file (a freshly `touch`ed `~/.claude/CLAUDE.md`) is nothing to load: Claude
+ * Code 2.1.246 fires no InstructionsLoaded event when a launch has nothing in
+ * it, so the missing event is expected there, not a sign the scanner is
+ * unwired. Same candidate set the SessionStart scan reads (see
+ * scan-invisible-chars.mjs's findInstructionFiles), built from the same
+ * src/claude-context.mjs table so the two enumerations of "what loads at
+ * launch" cannot drift apart.
+ * @param {string} dir
+ * @returns {boolean}
+ */
+function launchHasContent(dir) {
+  const candidates = [
+    ...globSync([...CLAUDE_LAUNCH_GLOBS], {
+      cwd: dir,
+      exclude: excludeFromContextScan,
+    }).map((name) => join(dir, name)),
+    ...ancestorInstructionFiles(dir),
+  ];
+  for (const file of candidates) {
+    try {
+      if (statSync(file).size > 0) return true;
+    } catch {
+      // ENOENT: most candidates — the ancestor chain above all — name a file
+      // that does not exist. Nothing there either way.
+    }
+  }
+  return false;
+}
+
+/**
  * The one-time context line for a session where no InstructionsLoaded scan ran,
- * or null when the scan has been seen or the notice was already surfaced this
- * session.
+ * or null when the scan has been seen, the notice already ran this session, or
+ * nothing at launch could have fired the event ({@link launchHasContent}).
  *
- * PURE: it does not record that the notice was handed out. The caller records
- * separately, once the notice has actually landed in a response — a deny
- * assembled after this call discards the notice, and a marker written here would
- * have burned the session's one chance to report the loss.
+ * PURE for the notice itself: nothing is recorded until the caller confirms it
+ * landed in a returned response, so a discarded deny leaves the report to come.
+ * The launch-emptiness answer is cached as found instead — a fact about the
+ * filesystem at launch, fixed for the session, so caching it early loses nothing.
  *
- * The loss it names is real and otherwise invisible: SessionStart scans the
- * instruction files that load at launch, and everything a subdirectory loads
- * later is scanned by the event. No scan, and nothing says so.
+ * The loss it names is real: SessionStart scans what loads at launch, a
+ * subdirectory's file is scanned by the event, and no scan means nothing says
+ * so — unless launch had nothing to scan either, where silence is correct.
  *
- * The notice names the OBSERVABLE — no scan ran — and all three causes, because
- * the marker cannot tell them apart: a host that never wired the event to
- * scan-loaded-instructions, a Claude Code older than EVENT_MIN_CLI_VERSION, and
- * the hook switched off in AGENT_SANITIZER_DISABLED_HOOKS; asserting one sends a
- * reader who is in another to the wrong fix. The wiring cause leads because it is
- * the only one the reader can repair in this session, and nothing else reports it.
+ * The notice names the OBSERVABLE and all three remaining causes, since the
+ * marker cannot tell them apart: an unwired event, a Claude Code older than
+ * EVENT_MIN_CLI_VERSION, or the hook disabled via AGENT_SANITIZER_DISABLED_HOOKS.
+ * Naming one sends a reader who is in another to the wrong fix; wiring leads
+ * because it is the only cause this session can repair.
  * @param {string} [sessionId]  the harness's session identity, so the answer
  *   belongs to THIS session (see instructionsLoadedFile)
+ * @param {string} [dir]  the project root to check for launch content
+ *   (injectable for tests; defaults to the real project)
  * @returns {string | null}
  */
-export function instructionsLoadedGapNotice(sessionId) {
+export function instructionsLoadedGapNotice(sessionId, dir = PROJECT_DIR) {
   if (instructionsLoadedSeen(sessionId)) return null;
   if (markerIsTrusted(instructionsLoadedNoticeFile(sessionId))) return null;
+  if (markerIsTrusted(launchEmptyFile(sessionId))) return null;
+  if (!launchHasContent(dir)) {
+    writeSentinelFile(launchEmptyFile(sessionId));
+    return null;
+  }
   return (
     "agent-sanitizer: no InstructionsLoaded scan has run this session, so " +
     "instruction files loaded from SUBDIRECTORIES (a nested CLAUDE.md, a " +

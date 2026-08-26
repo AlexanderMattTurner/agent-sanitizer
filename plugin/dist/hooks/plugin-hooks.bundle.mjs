@@ -47850,11 +47850,13 @@ var init_control_plane2 = __esm({
 
 // claude-hooks/lib/invisible-alert.mjs
 import {
+  globSync as globSync2,
   lstatSync as lstatSync3,
   mkdirSync,
   readdirSync,
   readFileSync as readFileSync3,
-  rmSync
+  rmSync,
+  statSync
 } from "node:fs";
 import { randomBytes as randomBytes2 } from "node:crypto";
 import { basename, join as join3 } from "node:path";
@@ -47925,7 +47927,11 @@ function sweepStaleFallback(sessionId) {
   };
   for (const path2 of [alertAckFile(), ...entries])
     if (!withinFallbackTtl(path2)) drop(path2);
-  for (const path2 of [instructionsLoadedFile(), instructionsLoadedNoticeFile()])
+  for (const path2 of [
+    instructionsLoadedFile(),
+    instructionsLoadedNoticeFile(),
+    launchEmptyFile()
+  ])
     if (!withinTtl(path2, MARKER_TTL_MS)) drop(path2);
 }
 function recordInstructionsLoaded(sessionId) {
@@ -47934,9 +47940,33 @@ function recordInstructionsLoaded(sessionId) {
   writeSentinelFile(marker2);
   sweepStaleSessions(sessionId);
 }
-function instructionsLoadedGapNotice(sessionId) {
+function launchEmptyFile(sessionId) {
+  return `${instructionsLoadedFile(sessionId)}.launch-empty`;
+}
+function launchHasContent(dir) {
+  const candidates = [
+    ...globSync2([...CLAUDE_LAUNCH_GLOBS], {
+      cwd: dir,
+      exclude: excludeFromContextScan
+    }).map((name50) => join3(dir, name50)),
+    ...ancestorInstructionFiles(dir)
+  ];
+  for (const file of candidates) {
+    try {
+      if (statSync(file).size > 0) return true;
+    } catch {
+    }
+  }
+  return false;
+}
+function instructionsLoadedGapNotice(sessionId, dir = PROJECT_DIR) {
   if (instructionsLoadedSeen(sessionId)) return null;
   if (markerIsTrusted(instructionsLoadedNoticeFile(sessionId))) return null;
+  if (markerIsTrusted(launchEmptyFile(sessionId))) return null;
+  if (!launchHasContent(dir)) {
+    writeSentinelFile(launchEmptyFile(sessionId));
+    return null;
+  }
   return `agent-sanitizer: no InstructionsLoaded scan has run this session, so instruction files loaded from SUBDIRECTORIES (a nested CLAUDE.md, a directory-scoped rule) are reaching the model unscanned for hidden Unicode \u2014 the session-start scan covers only the files loaded at launch. Tell the user, and name all three causes with the command that decides each: this host never wired the InstructionsLoaded event to scan-loaded-instructions (the \`/hooks\` command lists what this session actually registered, whichever config dir or plugin root the host uses; wiring it restores the coverage), a Claude Code older than ${EVENT_MIN_CLI_VERSION}, the first build that emits the event (\`claude --version\`; upgrading restores it), or scan-loaded-instructions switched off in AGENT_SANITIZER_DISABLED_HOOKS (\`echo $AGENT_SANITIZER_DISABLED_HOOKS\`).`;
 }
 function recordInstructionsLoadedNotice(sessionId) {
@@ -47996,6 +48026,7 @@ var init_invisible_alert = __esm({
   async "claude-hooks/lib/invisible-alert.mjs"() {
     "use strict";
     init_hook_io();
+    init_claude_context();
     ({ applyLayer1WellFormed: applyLayer1WellFormed2 } = /** @type {typeof import("agent-sanitizer")} */
     await lazyImport("agent-sanitizer"));
     ALERT_BASE = join3(
@@ -50604,7 +50635,7 @@ __export(scan_invisible_chars_exports, {
   scanProject: () => scanProject,
   sessionIdFromStdin: () => sessionIdFromStdin
 });
-import { existsSync as existsSync3, readFileSync as readFileSync7, globSync as globSync2 } from "node:fs";
+import { existsSync as existsSync3, readFileSync as readFileSync7, globSync as globSync3 } from "node:fs";
 import { join as join8, relative as relative3, resolve as resolve4 } from "node:path";
 async function ensureSanitizerLoaded() {
   if (typeof scanText2 === "function" && typeof cleanFile2 === "function")
@@ -50654,7 +50685,7 @@ function decodeRun2(run) {
 }
 function findInstructionFiles2(dir) {
   return [
-    ...globSync2([...CLAUDE_LAUNCH_GLOBS], {
+    ...globSync3([...CLAUDE_LAUNCH_GLOBS], {
       cwd: dir,
       exclude: excludeFromContextScan
     }).map((name50) => join8(dir, name50)),
