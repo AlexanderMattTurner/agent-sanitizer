@@ -635,3 +635,54 @@ def test_redact_is_linear_on_the_reported_redos_payload():
     run_plain("key" + " " * 1200)
     elapsed = time.monotonic() - started
     assert elapsed < 1.0, f"redact() took {elapsed:.2f}s on the ReDoS payload"
+
+
+# ─── Token prefixes must sit on a boundary, not inside a word ────────────────
+# A prefix whose body class is identifier-shaped ([A-Za-z0-9_]) can be completed
+# by ordinary snake_case text, so a word-internal prefix is a live false
+# positive rather than a theoretical one.
+
+_WORD_INTERNAL_PREFIXES = [
+    (
+        "GitHub Token",
+        "def test_planner_weighs_a_burned_in_check_at_its_own_repeat_count():",
+    ),
+    ("GitHub Fine-Grained PAT", "the_github_pat_" + "a" * 82 + " helper"),
+]
+
+
+@pytest.mark.parametrize(
+    "secret_type, text",
+    _WORD_INTERNAL_PREFIXES,
+    ids=[t for t, _ in _WORD_INTERNAL_PREFIXES],
+)
+def test_word_internal_token_prefix_is_not_a_secret(secret_type, text):
+    """The reported defect: `weighs_a_burned_in_…` carries `ghs_a_burned_in_…`,
+    which redacted a pytest function name as a GitHub token."""
+    for pattern in _DETECTOR_PATTERNS[secret_type]:
+        found = re.search(pattern, text)
+        assert found is None, f"{secret_type} matched {found!r} in {text!r}"
+    assert run_plain(text) is None, text
+
+
+@pytest.mark.parametrize(
+    "secret_type, prefix, boundary",
+    [
+        (st, p, b)
+        for st, p in [
+            ("GitHub Token", "ghp_"),
+            ("GitHub Fine-Grained PAT", "github_pat_"),
+        ]
+        for b in ["", " ", "=", '"', ":", "/", "\n"]
+    ],
+    ids=lambda v: repr(v),
+)
+def test_boundary_delimited_token_still_redacts(secret_type, prefix, boundary):
+    """Non-vacuity for the guard above: every separator a real token follows
+    still admits it, so the fix removed a false positive and no recall."""
+    token = _sample_token(secret_type)
+    assert token.startswith(prefix), token
+    result = run_plain(f"{boundary}{token}")
+    assert result is not None, (secret_type, boundary)
+    assert secret_type in result["found"], (secret_type, boundary)
+    assert token not in result["text"], (secret_type, boundary)
