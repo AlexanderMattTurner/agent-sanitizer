@@ -77,11 +77,9 @@ raw_diff_content="$(retry_stdout curl -fsS \
   "${api_url}/repos/${GH_REPO}/pulls/${PR}")"
 printf '%s\n' "$raw_diff_content" >"$raw_diff"
 
-# Drop the vouched-for artifacts before counting or reviewing: leaving them in
-# pushed an ordinary source edit past MAX_DIFF_LINES and skipped the review of
-# the very lines a human wrote. resolve-generated.mjs owns the decision — no path
-# is classified here — and `--review-omit` is narrower than `--owned`, listing
-# only rules whose output a required check re-derives and compares.
+# resolve-generated.mjs owns the decision; nothing classifies a path here. The
+# filter must run BEFORE the line count and before sanitize, so both see the
+# diff a reviewer will actually read.
 node .github/scripts/resolve-generated.mjs --review-omit >"$omit_list"
 node .github/scripts/strip-generated-diff.mjs "$omit_list" \
   <"$raw_diff" >"$review_diff"

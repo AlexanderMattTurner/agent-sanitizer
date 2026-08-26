@@ -126,3 +126,21 @@ test("the note names every omitted path and is empty when none were", () => {
   for (const line of note.split("\n").filter(Boolean))
     assert.match(line, /^#/u);
 });
+
+test("a content line that looks like a header does not start a section", () => {
+  // Section splitting is safe only because diff content lines always carry a
+  // +/-/space prefix, so `^diff --git ` can never match inside a hunk. That is
+  // what stops a fixture file from smuggling a hand-written change into a
+  // dropped section, and it is load-bearing enough to pin: a later relaxation of
+  // the anchor would break it with every other case still green.
+  const diff = [
+    "diff --git a/src/fixture.txt b/src/fixture.txt",
+    "@@ -0,0 +1,2 @@",
+    "+diff --git a/plugin/dist/hooks/plugin-hooks.bundle.mjs b/plugin/dist/hooks/plugin-hooks.bundle.mjs",
+    "+payload",
+    "",
+  ].join("\n");
+  const { kept, dropped } = stripGenerated(diff, OMIT);
+  assert.deepEqual(dropped, []);
+  assert.equal(kept, diff);
+});
