@@ -381,6 +381,41 @@ def test_a_non_noun_value_in_the_same_shape_still_redacts():
     assert found == ["Secret Keyword"]
 
 
+# ─── Bare-header detection, for a caller that reads whole files ──────────────
+
+_PEM_HEADER = "-----BEGIN PRIVATE KEY-----"
+
+
+@pytest.mark.parametrize(
+    ("value", "bare"),
+    [
+        (_PEM_HEADER, True),
+        (_PEM_HEADER + "\n", True),
+        (_PEM_HEADER.lower(), True),
+        (_PEM, False),
+        # One line, as a key inside a JSON string reaches the engine.
+        (_PEM.replace("\n", r"\n"), False),
+        (_PEM_HEADER + "\nQ29udGludWVkIGtleQ==", False),
+        (AWS_KEY, False),
+        ("-----BEGIN PASSWORD-----", False),
+        ("-----" + AWS_KEY + "-----", False),
+    ],
+)
+def test_is_bare_pem_header(value, bare):
+    """A header with no body answers True; anything carrying key bytes answers False."""
+    assert E.is_bare_pem_header(value) is bare
+
+
+def test_is_bare_pem_header_agrees_with_what_redaction_matched():
+    """The predicate reads the same pattern redaction took, so a value the engine
+    collapsed as a block with a body is never reported bare."""
+    for value in (_PEM, _PEM_HEADER):
+        found: list[str] = []
+        assert E._redact_pem_blocks(value, found) == "[REDACTED: Private Key]"
+        assert found == ["Private Key"]
+    assert E.is_bare_pem_header(_PEM_HEADER) and not E.is_bare_pem_header(_PEM)
+
+
 # ─── PEM block redaction ─────────────────────────────────────────────────────
 
 
