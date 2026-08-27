@@ -46,6 +46,7 @@ from agent_sanitizer.secrets import (
     RedactorConfig,
     configure_plugins,
     detected_secret_values,
+    is_bare_pem_header,
     mask_secret_lines,
     redact,
     redact_configured,
@@ -169,6 +170,8 @@ _TEXT_ENTRY_POINTS = {
     # protect — so it is measured directly, not left as redact's twin.
     "redact_configured": _redact_configured_thunk,
     "strip_invisible": lambda text: lambda: strip_invisible(text),
+    # Takes a DETECTED value, which is a slice of the same untrusted document.
+    "is_bare_pem_header": lambda text: lambda: is_bare_pem_header(text),
 }
 
 # Public exports that take no untrusted text, with the reason each is out of
