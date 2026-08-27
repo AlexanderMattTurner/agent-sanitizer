@@ -398,7 +398,8 @@ _PEM_HEADER = "-----BEGIN PRIVATE KEY-----"
         (_PEM_HEADER + "\nQ29udGludWVkIGtleQ==", False),
         (AWS_KEY, False),
         ("-----BEGIN PASSWORD-----", False),
-        ("-----" + AWS_KEY + "-----", False),
+        # Six dashes: "-----BEGIN " sits at offset 1, and only the anchor rejects it.
+        ("-" + _PEM_HEADER + "-", False),
     ],
 )
 def test_is_bare_pem_header(value, bare):

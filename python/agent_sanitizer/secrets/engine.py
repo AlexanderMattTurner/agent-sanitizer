@@ -1066,7 +1066,7 @@ def is_bare_pem_header(value: str) -> bool:
     key inside a JSON string is, carries a body and answers False.
     """
     match = PEM_BLOCK_RE.fullmatch(value.strip())
-    return match is not None and match.group(0) == match.group("header")
+    return match is not None and match.end("header") == match.end()
 
 
 def _redact_pem_blocks(
