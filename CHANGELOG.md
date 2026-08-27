@@ -8,6 +8,12 @@ adhere to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+## [2.48.0] - 2026-08-27
+
+### Added
+
+- Export `is_bare_pem_header` function for use by whole-file callers in the secrets engine.
+
 ## [2.47.15] - 2026-08-27
 
 ### Fixed
