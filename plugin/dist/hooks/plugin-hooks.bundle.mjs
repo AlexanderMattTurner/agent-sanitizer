@@ -47861,7 +47861,7 @@ import {
 } from "node:fs";
 import { randomBytes as randomBytes2 } from "node:crypto";
 import { basename, join as join3 } from "node:path";
-import { tmpdir, userInfo as userInfo2 } from "node:os";
+import { homedir, tmpdir, userInfo as userInfo2 } from "node:os";
 function sessionPrefix(sessionId) {
   const key = (sessionId ?? "").replace(/[^A-Za-z0-9._-]/gu, "_") || "no-session";
   return `${ALERT_BASE}.s-${key}`;
@@ -47972,11 +47972,30 @@ function launchHasContent(dir) {
   }
   return false;
 }
+function userGlobalLaunchHasContent(env = process.env) {
+  const configDir = env.CLAUDE_CONFIG_DIR || join3(homedir(), ".claude");
+  const candidates = globSync2(
+    ["*.md", ...CLAUDE_CONTEXT_SUBDIRS.map((sub) => `${sub}/**/*.md`)],
+    { cwd: configDir, exclude: excludeFromContextScan }
+  ).map((name50) => join3(configDir, name50));
+  for (const file of candidates) {
+    try {
+      if (statSync(file).size > 0) return true;
+    } catch (err) {
+      if (
+        /** @type {NodeJS.ErrnoException} */
+        err.code !== "ENOENT"
+      )
+        return true;
+    }
+  }
+  return false;
+}
 function instructionsLoadedGapNotice(sessionId, dir = PROJECT_DIR, touchedDir) {
   if (instructionsLoadedSeen(sessionId)) return null;
   if (markerIsTrusted(instructionsLoadedNoticeFile(sessionId))) return null;
   const launchCached = markerIsTrusted(launchEmptyFile(sessionId));
-  const launchHasBytes = !launchCached && launchHasContent(dir);
+  const launchHasBytes = !launchCached && (launchHasContent(dir) || userGlobalLaunchHasContent());
   if (!launchCached && !launchHasBytes)
     writeSentinelFile(launchEmptyFile(sessionId));
   const touchedHasBytes = touchedDir !== void 0 && launchHasContent(touchedDir);

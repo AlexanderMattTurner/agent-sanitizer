@@ -22,7 +22,7 @@ import {
 } from "node:fs";
 import { randomBytes } from "node:crypto";
 import { basename, join } from "node:path";
-import { tmpdir, userInfo } from "node:os";
+import { homedir, tmpdir, userInfo } from "node:os";
 import {
   lazyImport,
   markerIsTrusted,
@@ -38,6 +38,7 @@ import {
 // module's, not a copy of the SessionStart hook's target-discovery glue.
 import {
   ancestorInstructionFiles,
+  CLAUDE_CONTEXT_SUBDIRS,
   CLAUDE_LAUNCH_GLOBS,
   excludeFromContextScan,
 } from "../../src/claude-context.mjs";
@@ -397,6 +398,37 @@ function launchHasContent(dir) {
 }
 
 /**
+ * Whether the USER-GLOBAL `~/.claude` memory and rules — a second root Claude
+ * Code loads at launch regardless of the project directory (see
+ * scan-loaded-instructions.mjs's header) — has any bytes. `launchHasContent`
+ * cannot see this root on its own: it is `dir`-relative, and `~/.claude` is
+ * outside `dir`'s own tree whenever the project is not `$HOME` itself, exactly
+ * the case a project opened anywhere but home is in.
+ *
+ * Honours `CLAUDE_CONFIG_DIR` the way plugin/scripts/enable-auto-update.mjs's
+ * own resolution does, since that root — not always `~/.claude` — is where
+ * Claude Code actually reads this content from.
+ * @param {Record<string, string | undefined>} [env]
+ * @returns {boolean}
+ */
+function userGlobalLaunchHasContent(env = process.env) {
+  const configDir = env.CLAUDE_CONFIG_DIR || join(homedir(), ".claude");
+  const candidates = globSync(
+    ["*.md", ...CLAUDE_CONTEXT_SUBDIRS.map((sub) => `${sub}/**/*.md`)],
+    { cwd: configDir, exclude: excludeFromContextScan },
+  ).map((name) => join(configDir, name));
+  for (const file of candidates) {
+    try {
+      if (statSync(file).size > 0) return true;
+    } catch (err) {
+      if (/** @type {NodeJS.ErrnoException} */ (err).code !== "ENOENT")
+        return true;
+    }
+  }
+  return false;
+}
+
+/**
  * The one-time context line for a session where no InstructionsLoaded scan ran,
  * or null when the scan has been seen, the notice already ran this session, or
  * neither launch nor `touchedDir` could have fired the event.
@@ -428,7 +460,8 @@ export function instructionsLoadedGapNotice(
   if (instructionsLoadedSeen(sessionId)) return null;
   if (markerIsTrusted(instructionsLoadedNoticeFile(sessionId))) return null;
   const launchCached = markerIsTrusted(launchEmptyFile(sessionId));
-  const launchHasBytes = !launchCached && launchHasContent(dir);
+  const launchHasBytes =
+    !launchCached && (launchHasContent(dir) || userGlobalLaunchHasContent());
   if (!launchCached && !launchHasBytes)
     writeSentinelFile(launchEmptyFile(sessionId));
   const touchedHasBytes =

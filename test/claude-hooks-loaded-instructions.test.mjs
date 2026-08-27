@@ -33,6 +33,17 @@ import { repoRoot } from "./helpers/repo-root.mjs";
 const projectDir = mkdtempSync(join(tmpdir(), "sanitizer-loaded-proj-"));
 process.env.CLAUDE_PROJECT_DIR = projectDir;
 
+// instructionsLoadedGapNotice also checks the user-global `~/.claude` root
+// (CLAUDE_CONFIG_DIR), read fresh from process.env on every call rather than
+// captured at import time. Pointed at an empty directory of our own so a real
+// ~/.claude on the machine running these tests (skills, rules — this very
+// checkout ships some) cannot make an "empty launch" case find content by
+// accident. Tests that need the global root non-empty override this and
+// restore it, never delete it — a later test must not fall back to the host's
+// real ~/.claude either.
+const emptyConfigDir = mkdtempSync(join(tmpdir(), "sanitizer-empty-config-"));
+process.env.CLAUDE_CONFIG_DIR = emptyConfigDir;
+
 const { readLoadedFile, scanLoadedFile, loadedFileMessage, scopeNotice } =
   await import("../claude-hooks/scan-loaded-instructions.mjs");
 const { LONG_RUN_THRESHOLD } = await import("../src/invisible.mjs");
@@ -77,6 +88,7 @@ beforeEach(() => {
 
 after(() => {
   rmSync(projectDir, { recursive: true, force: true });
+  rmSync(emptyConfigDir, { recursive: true, force: true });
   for (const path of markers) rmSync(path, { force: true });
   for (const path of alertDirs) rmSync(path, { recursive: true, force: true });
 });
@@ -561,6 +573,33 @@ describe("a session with no InstructionsLoaded scan is named, once", () => {
     } finally {
       rmSync(parentDir, { recursive: true, force: true });
       rmSync(instructionsLoadedNoticeFile(ancestorSession), { force: true });
+    }
+  });
+
+  it("counts the user-global ~/.claude root as launch content", () => {
+    // A project opened somewhere other than $HOME still has Claude Code load
+    // the user-global `~/.claude` memory and rules at launch (see
+    // scan-loaded-instructions.mjs's header) — a second root the project's own
+    // launch glob and ancestor chain cannot see on their own.
+    const projectEmptyDir = mkdtempSync(
+      join(tmpdir(), "sanitizer-empty-launch2-"),
+    );
+    const globalConfigDir = mkdtempSync(
+      join(tmpdir(), "sanitizer-global-config-"),
+    );
+    const session = "sess-user-global-launch";
+    try {
+      writeFileSync(join(globalConfigDir, "CLAUDE.md"), PROSE);
+      process.env.CLAUDE_CONFIG_DIR = globalConfigDir;
+      assert.match(
+        instructionsLoadedGapNotice(session, projectEmptyDir),
+        /unscanned/u,
+      );
+    } finally {
+      process.env.CLAUDE_CONFIG_DIR = emptyConfigDir;
+      rmSync(projectEmptyDir, { recursive: true, force: true });
+      rmSync(globalConfigDir, { recursive: true, force: true });
+      rmSync(instructionsLoadedNoticeFile(session), { force: true });
     }
   });
 
