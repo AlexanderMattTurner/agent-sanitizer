@@ -100,6 +100,7 @@ After completing any non-trivial task, briefly reflect on how you could have ite
 
 ## Testing
 
+- **Never run the full suite (`pnpm test`) locally, and never run any single command that takes more than 3 minutes.** The local budget is **240 seconds of test execution in total per session** — spend it on the targeted files you changed (`node --test test/<file>.test.mjs`), plus `pnpm lint` / `pnpm check`, and let CI run everything else. Push and read the CI result instead of reproducing it locally. **The same budget binds every subagent you launch** — say so in the prompt when you delegate.
 - Never skip or weaken tests unless asked
 - Parametrize for compactness; prefer exact equality assertions
 - For interaction features/bugs: add Playwright e2e tests (mobile + desktop, verify visual state)

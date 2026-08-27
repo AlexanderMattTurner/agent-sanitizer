@@ -101,6 +101,8 @@ const FUZZ_REQUIRED = [
  */
 const FUZZ_EXEMPT = Object.freeze({
   // ── predicates and lookups: no parse or transform step of their own ──────
+  announcedByInstructionsLoaded:
+    "splits one path on its separators and looks the tail up in the kind table",
   closingTagName: "reads one tag name out of an already-tokenized HTML value",
   contextScopeContradiction:
     "maps a host-supplied load reason through a table, with no parse",

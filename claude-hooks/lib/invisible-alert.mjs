@@ -38,9 +38,10 @@ import {
 // module's, not a copy of the SessionStart hook's target-discovery glue.
 import {
   ancestorInstructionFiles,
-  CLAUDE_CONTEXT_SUBDIRS,
+  announcedByInstructionsLoaded,
   CLAUDE_LAUNCH_GLOBS,
   excludeFromContextScan,
+  USER_GLOBAL_EVENT_NAMED_GLOBS,
 } from "../../src/claude-context.mjs";
 
 // Layer-1 scrubber for the untrusted alert-store contents the gate splices into a
@@ -370,11 +371,10 @@ export function launchInstructionFiles(dir) {
 }
 
 /**
- * Whether anything Claude Code loads at launch from `dir` actually has bytes.
- * An existing but EMPTY file (a freshly `touch`ed `~/.claude/CLAUDE.md`) is
- * nothing to load: Claude Code 2.1.246 fires no InstructionsLoaded event when
- * a launch has nothing in it, so the missing event is expected there, not a
- * sign the scanner is unwired.
+ * Whether any of `files` has bytes for the host to load. An existing but EMPTY
+ * file (a freshly `touch`ed `~/.claude/CLAUDE.md`) is nothing to load: Claude
+ * Code 2.1.246 fires no InstructionsLoaded event when a launch has nothing in
+ * it, so the missing event is expected there, not a sign the scanner is unwired.
  *
  * A file this uid cannot even STAT (EACCES, EISDIR, ELOOP…) is unvetted
  * context, not evidence of absence — the same split scan-invisible-chars.mjs's
@@ -382,11 +382,11 @@ export function launchInstructionFiles(dir) {
  * as "no content" would suppress the notice over a file that may carry a real,
  * unscanned payload, so only ENOENT counts as nothing there; anything else
  * counts as content and leaves the notice free to fire.
- * @param {string} dir
+ * @param {string[]} files
  * @returns {boolean}
  */
-function launchHasContent(dir) {
-  for (const file of launchInstructionFiles(dir)) {
+function anyFileHasBytes(files) {
+  for (const file of files) {
     try {
       if (statSync(file).size > 0) return true;
     } catch (err) {
@@ -398,12 +398,31 @@ function launchHasContent(dir) {
 }
 
 /**
+ * The files loading at launch from `dir` whose load `InstructionsLoaded` would
+ * ANNOUNCE. Claude Code names CLAUDE.md, CLAUDE.local.md and `.claude/rules` as
+ * it loads them and stays silent for every other kind, so a launch carrying only
+ * an `AGENTS.md` or a skill fires no event however the hook is wired — and its
+ * silence is evidence of nothing.
+ * @param {string} dir
+ * @returns {string[]}
+ */
+function announcedLaunchFiles(dir) {
+  return launchInstructionFiles(dir).filter(announcedByInstructionsLoaded);
+}
+
+/**
  * Whether the USER-GLOBAL `~/.claude` memory and rules — a second root Claude
  * Code loads at launch regardless of the project directory (see
- * scan-loaded-instructions.mjs's header) — has any bytes. `launchHasContent`
- * cannot see this root on its own: it is `dir`-relative, and `~/.claude` is
- * outside `dir`'s own tree whenever the project is not `$HOME` itself, exactly
- * the case a project opened anywhere but home is in.
+ * scan-loaded-instructions.mjs's header) — holds an announced file with bytes.
+ * {@link announcedLaunchFiles} cannot see this root on its own: it is
+ * `dir`-relative, and `~/.claude` is outside `dir`'s own tree whenever the
+ * project is not `$HOME` itself, exactly the case a project opened anywhere but
+ * home is in.
+ *
+ * Globs the announced kinds directly rather than filtering paths afterwards:
+ * this root IS a `.claude` directory, and under `CLAUDE_CONFIG_DIR` it may carry
+ * no `.claude` segment at all, so a path-shape classifier has nothing to read
+ * there and would answer "not announced" for every user-global rule.
  *
  * Honours `CLAUDE_CONFIG_DIR` the way plugin/scripts/enable-auto-update.mjs's
  * own resolution does, since that root — not always `~/.claude` — is where
@@ -413,19 +432,12 @@ function launchHasContent(dir) {
  */
 function userGlobalLaunchHasContent(env = process.env) {
   const configDir = env.CLAUDE_CONFIG_DIR || join(homedir(), ".claude");
-  const candidates = globSync(
-    ["*.md", ...CLAUDE_CONTEXT_SUBDIRS.map((sub) => `${sub}/**/*.md`)],
-    { cwd: configDir, exclude: excludeFromContextScan },
-  ).map((name) => join(configDir, name));
-  for (const file of candidates) {
-    try {
-      if (statSync(file).size > 0) return true;
-    } catch (err) {
-      if (/** @type {NodeJS.ErrnoException} */ (err).code !== "ENOENT")
-        return true;
-    }
-  }
-  return false;
+  return anyFileHasBytes(
+    globSync([...USER_GLOBAL_EVENT_NAMED_GLOBS], {
+      cwd: configDir,
+      exclude: excludeFromContextScan,
+    }).map((name) => join(configDir, name)),
+  );
 }
 
 /**
@@ -440,8 +452,9 @@ function userGlobalLaunchHasContent(env = process.env) {
  * tool touched a directory that DOES carry real, unscanned content.
  *
  * SessionStart scans what loads at launch; a subdirectory's file is scanned by
- * the event; no scan means nothing says so — unless nothing touched so far had
- * anything to scan either. The notice names all three remaining causes, since
+ * the event; no scan means nothing says so — unless nothing touched so far held
+ * a file the event would have ANNOUNCED, with bytes in it. The three remaining
+ * causes are named together, since
  * the marker cannot tell them apart: an unwired event, a Claude Code older than
  * EVENT_MIN_CLI_VERSION, or the hook disabled via AGENT_SANITIZER_DISABLED_HOOKS.
  * @param {string} [sessionId]  the harness's session identity (see
@@ -461,11 +474,14 @@ export function instructionsLoadedGapNotice(
   if (markerIsTrusted(instructionsLoadedNoticeFile(sessionId))) return null;
   const launchCached = markerIsTrusted(launchEmptyFile(sessionId));
   const launchHasBytes =
-    !launchCached && (launchHasContent(dir) || userGlobalLaunchHasContent());
+    !launchCached &&
+    (anyFileHasBytes(announcedLaunchFiles(dir)) ||
+      userGlobalLaunchHasContent());
   if (!launchCached && !launchHasBytes)
     writeSentinelFile(launchEmptyFile(sessionId));
   const touchedHasBytes =
-    touchedDir !== undefined && launchHasContent(touchedDir);
+    touchedDir !== undefined &&
+    anyFileHasBytes(announcedLaunchFiles(touchedDir));
   if (!launchHasBytes && !touchedHasBytes) return null;
   return (
     "agent-sanitizer: no InstructionsLoaded scan has run this session, so " +

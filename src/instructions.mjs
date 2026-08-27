@@ -51,6 +51,7 @@ import { excludeNodeModules } from "./claude-context.mjs";
 // reads that scope from instead of re-spelling it.
 export {
   ancestorInstructionFiles,
+  announcedByInstructionsLoaded,
   CLAUDE_CONTEXT_KINDS,
   CLAUDE_CONTEXT_SUBDIRS,
   CLAUDE_DIR_INSTRUCTION_FILES,
@@ -59,6 +60,7 @@ export {
   CLAUDE_MEMORY_FILES,
   contextScopeContradiction,
   excludeFromContextScan,
+  USER_GLOBAL_EVENT_NAMED_GLOBS,
 } from "./claude-context.mjs";
 
 // Prefix on any decoded tag-character payload. The decoded text is
