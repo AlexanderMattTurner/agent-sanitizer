@@ -1039,11 +1039,11 @@ _PEM_BODY = (
     r"(?:[ \t]*" + _PEM_CONTENT + r"[ \t]*\Z)?"
 )
 PEM_BLOCK_RE = re.compile(
-    r"-----BEGIN (?P<label>"
+    r"(?P<header>-----BEGIN (?P<label>"
     + _PEM_LABEL_RUN
     + r"PRIVATE KEY"
     + _PEM_LABEL_RUN
-    + r")-----"
+    + r")-----)"
     # A terminated block wins, and its body may hold anything — a PEM embedded in
     # a JSON string carries its whole body on one line as \n escapes. The
     # tempered "(?!-----BEGIN )" keeps that scan from reaching a LATER block's
@@ -1052,6 +1052,21 @@ PEM_BLOCK_RE = re.compile(
     r"|" + _PEM_BODY + r")",
     re.IGNORECASE,
 )
+
+
+def is_bare_pem_header(value: str) -> bool:
+    """True when ``value`` is a PEM block this engine matched with NO body after the
+    ``-----BEGIN … PRIVATE KEY-----`` line.
+
+    Redaction hides such a header on purpose: it reads a stream that may stop before
+    the body arrives, so hiding it fails safe. A caller reading WHOLE files has no such
+    doubt, and asks this to tell a header that names no key from one that wraps a body.
+    The answer comes from the same pattern the redaction took, so the two cannot
+    disagree about where a block starts and ends — a block written on one line, as a
+    key inside a JSON string is, carries a body and answers False.
+    """
+    match = PEM_BLOCK_RE.fullmatch(value.strip())
+    return match is not None and match.end("header") == match.end()
 
 
 def _redact_pem_blocks(
