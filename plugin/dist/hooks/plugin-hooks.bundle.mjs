@@ -46896,6 +46896,9 @@ function classifyContextPath(path2) {
     (row) => dirShapes.includes(row.shape) && row.name === tail[0]
   ) ?? null;
 }
+function announcedByInstructionsLoaded(path2) {
+  return classifyContextPath(path2)?.eventNamed === true;
+}
 function contextScopeContradiction(path2, loadReason) {
   if (!HOST_CHOSEN_LOAD_REASONS.includes(loadReason)) return null;
   const row = classifyContextPath(path2);
@@ -46911,7 +46914,7 @@ function contextScopeContradiction(path2, loadReason) {
   if (CLAUDE_BULK_SUBDIRS.includes(outer[0])) return null;
   return `.claude/${tail[0]}/ loaded as model context, and CLAUDE_CONTEXT_SUBDIRS does not list it: the SessionStart scan prunes that directory, so every OTHER file in it goes unscanned. Add it there if it is context, not bulk data`;
 }
-var CLAUDE_CONTEXT_KINDS, CLAUDE_CONTEXT_SUBDIRS, CLAUDE_BULK_SUBDIRS, CLAUDE_MEMORY_FILES, CLAUDE_DIR_INSTRUCTION_FILES, CLAUDE_INSTRUCTION_GLOBS, CLAUDE_LAUNCH_GLOBS, HOST_CHOSEN_LOAD_REASONS;
+var CLAUDE_CONTEXT_KINDS, CLAUDE_CONTEXT_SUBDIRS, CLAUDE_BULK_SUBDIRS, CLAUDE_MEMORY_FILES, CLAUDE_DIR_INSTRUCTION_FILES, CLAUDE_INSTRUCTION_GLOBS, CLAUDE_LAUNCH_GLOBS, USER_GLOBAL_EVENT_NAMED_GLOBS, HOST_CHOSEN_LOAD_REASONS;
 var init_claude_context = __esm({
   "src/claude-context.mjs"() {
     "use strict";
@@ -46955,6 +46958,11 @@ var init_claude_context = __esm({
       ...CLAUDE_DIR_INSTRUCTION_FILES,
       ...claudeDirPatterns("")
     ]);
+    USER_GLOBAL_EVENT_NAMED_GLOBS = Object.freeze(
+      CLAUDE_CONTEXT_KINDS.filter((row) => row.eventNamed).map(
+        (row) => row.shape === "dir-file" ? row.name : `${row.name}/**/*.md`
+      )
+    );
     HOST_CHOSEN_LOAD_REASONS = ["session_start", "nested_traversal"];
   }
 });
@@ -46968,7 +46976,9 @@ __export(instructions_exports, {
   CLAUDE_INSTRUCTION_GLOBS: () => CLAUDE_INSTRUCTION_GLOBS,
   CLAUDE_LAUNCH_GLOBS: () => CLAUDE_LAUNCH_GLOBS,
   CLAUDE_MEMORY_FILES: () => CLAUDE_MEMORY_FILES,
+  USER_GLOBAL_EVENT_NAMED_GLOBS: () => USER_GLOBAL_EVENT_NAMED_GLOBS,
   ancestorInstructionFiles: () => ancestorInstructionFiles,
+  announcedByInstructionsLoaded: () => announcedByInstructionsLoaded,
   atomicReplaceFile: () => atomicReplaceFile,
   cleanFile: () => cleanFile,
   contextScopeContradiction: () => contextScopeContradiction,
@@ -47958,8 +47968,8 @@ function launchInstructionFiles(dir) {
     ...ancestorInstructionFiles(dir).filter((file) => existsSync(file))
   ];
 }
-function launchHasContent(dir) {
-  for (const file of launchInstructionFiles(dir)) {
+function anyFileHasBytes(files) {
+  for (const file of files) {
     try {
       if (statSync(file).size > 0) return true;
     } catch (err) {
@@ -47972,33 +47982,26 @@ function launchHasContent(dir) {
   }
   return false;
 }
+function announcedLaunchFiles(dir) {
+  return launchInstructionFiles(dir).filter(announcedByInstructionsLoaded);
+}
 function userGlobalLaunchHasContent(env = process.env) {
   const configDir = env.CLAUDE_CONFIG_DIR || join3(homedir(), ".claude");
-  const candidates = globSync2(
-    ["*.md", ...CLAUDE_CONTEXT_SUBDIRS.map((sub) => `${sub}/**/*.md`)],
-    { cwd: configDir, exclude: excludeFromContextScan }
-  ).map((name50) => join3(configDir, name50));
-  for (const file of candidates) {
-    try {
-      if (statSync(file).size > 0) return true;
-    } catch (err) {
-      if (
-        /** @type {NodeJS.ErrnoException} */
-        err.code !== "ENOENT"
-      )
-        return true;
-    }
-  }
-  return false;
+  return anyFileHasBytes(
+    globSync2([...USER_GLOBAL_EVENT_NAMED_GLOBS], {
+      cwd: configDir,
+      exclude: excludeFromContextScan
+    }).map((name50) => join3(configDir, name50))
+  );
 }
 function instructionsLoadedGapNotice(sessionId, dir = PROJECT_DIR, touchedDir) {
   if (instructionsLoadedSeen(sessionId)) return null;
   if (markerIsTrusted(instructionsLoadedNoticeFile(sessionId))) return null;
   const launchCached = markerIsTrusted(launchEmptyFile(sessionId));
-  const launchHasBytes = !launchCached && (launchHasContent(dir) || userGlobalLaunchHasContent());
+  const launchHasBytes = !launchCached && (anyFileHasBytes(announcedLaunchFiles(dir)) || userGlobalLaunchHasContent());
   if (!launchCached && !launchHasBytes)
     writeSentinelFile(launchEmptyFile(sessionId));
-  const touchedHasBytes = touchedDir !== void 0 && launchHasContent(touchedDir);
+  const touchedHasBytes = touchedDir !== void 0 && anyFileHasBytes(announcedLaunchFiles(touchedDir));
   if (!launchHasBytes && !touchedHasBytes) return null;
   return `agent-sanitizer: no InstructionsLoaded scan has run this session, so instruction files loaded from SUBDIRECTORIES (a nested CLAUDE.md, a directory-scoped rule) are reaching the model unscanned for hidden Unicode \u2014 the session-start scan covers only the files loaded at launch. Tell the user, and name all three causes with the command that decides each: this host never wired the InstructionsLoaded event to scan-loaded-instructions (the \`/hooks\` command lists what this session actually registered, whichever config dir or plugin root the host uses; wiring it restores the coverage), a Claude Code older than ${EVENT_MIN_CLI_VERSION}, the first build that emits the event (\`claude --version\`; upgrading restores it), or scan-loaded-instructions switched off in AGENT_SANITIZER_DISABLED_HOOKS (\`echo $AGENT_SANITIZER_DISABLED_HOOKS\`).`;
 }

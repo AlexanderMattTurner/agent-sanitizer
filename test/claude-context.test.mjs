@@ -19,12 +19,14 @@ import { tmpdir } from "node:os";
 import { dirname, join, sep } from "node:path";
 
 import {
+  announcedByInstructionsLoaded,
   CLAUDE_CONTEXT_KINDS,
   CLAUDE_CONTEXT_SUBDIRS,
   CLAUDE_INSTRUCTION_GLOBS,
   contextScopeContradiction,
   excludeFromContextScan,
   findInstructionFiles,
+  USER_GLOBAL_EVENT_NAMED_GLOBS,
 } from "../src/instructions.mjs";
 import { isInsideDir } from "../src/claude-context.mjs";
 
@@ -314,5 +316,70 @@ describe("what a loaded path says about the scope table", () => {
       assert.equal(notice === null, SILENT_KINDS.includes(row.name), path);
       if (notice) assert.ok(notice.includes(row.name), notice);
     }
+  });
+});
+
+describe("which kinds the InstructionsLoaded event announces", () => {
+  it("answers each row of the table by its own eventNamed flag", () => {
+    const announced = CLAUDE_CONTEXT_KINDS.filter((row) => row.eventNamed);
+    // Non-vacuity: a table that marked nothing (or everything) would make every
+    // assertion below agree with the code for the wrong reason.
+    assert.ok(announced.length > 0);
+    assert.ok(announced.length < CLAUDE_CONTEXT_KINDS.length);
+    for (const row of CLAUDE_CONTEXT_KINDS) {
+      const path =
+        row.shape === "dir-file"
+          ? join(sep, "p", row.name)
+          : row.shape === "claude-md"
+            ? join(sep, "p", ".claude", "note.md")
+            : join(sep, "p", ".claude", row.name, "f.md");
+      assert.equal(announcedByInstructionsLoaded(path), row.eventNamed, path);
+    }
+  });
+
+  it("spells every announced kind for the user-global root", () => {
+    // That root is a `.claude` directory itself, so its files carry no `.claude`
+    // segment to classify by and the globs are the only reader of the column
+    // there. A row whose shape had no spelling would glob to nothing and read as
+    // "no event is coming" — the direction that silences the notice — so the
+    // shapes the builder handles are asserted rather than assumed.
+    const announced = CLAUDE_CONTEXT_KINDS.filter((row) => row.eventNamed);
+    assert.ok(announced.length > 0);
+    for (const row of announced)
+      assert.ok(
+        ["dir-file", "claude-subdir"].includes(row.shape),
+        `no user-global spelling for a ${row.shape} kind (${row.name})`,
+      );
+    assert.deepEqual([...USER_GLOBAL_EVENT_NAMED_GLOBS].sort(), [
+      "CLAUDE.local.md",
+      "CLAUDE.md",
+      "rules/**/*.md",
+    ]);
+    assert.ok(Object.isFrozen(USER_GLOBAL_EVENT_NAMED_GLOBS));
+  });
+
+  it("makes no claim for a path the table does not name", () => {
+    // Not "this file is uninteresting" — the answer this predicate owes is
+    // whether an event is COMING, and an unlisted path promises none.
+    assert.equal(
+      announcedByInstructionsLoaded(join(sep, "p", "README.md")),
+      false,
+    );
+    assert.equal(
+      announcedByInstructionsLoaded(join(sep, "p", ".claude", "todos", "t.md")),
+      false,
+    );
+  });
+
+  it("names a CLAUDE.md wherever it sits, including a nested one", () => {
+    // The subdirectory case is the whole point of the notice this feeds: a
+    // nested memory file loads by the same path and IS announced, so the
+    // predicate must not be root-relative.
+    assert.equal(
+      announcedByInstructionsLoaded(
+        join(sep, "p", "packages", "foo", "CLAUDE.md"),
+      ),
+      true,
+    );
   });
 });

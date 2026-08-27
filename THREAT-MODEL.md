@@ -383,6 +383,22 @@ build that emits that event, and `scan-loaded-instructions` switched off in
 Nothing on disk tells them apart, so the PreToolUse gate names all three, once
 per session, rather than leaving the gap silent.
 
+A fourth state is not one of them and is not reported as one: the host emits no
+event when it has nothing to announce. The gate therefore asks not "does anything
+load at launch" but "does anything load whose load `InstructionsLoaded` NAMES,
+with bytes in it" — the `eventNamed` column of the same table, read through
+`announcedByInstructionsLoaded` for the project's own tree and through
+`USER_GLOBAL_EVENT_NAMED_GLOBS` for the user-global root, whose files carry no
+`.claude` segment to classify by. A launch holding only an `AGENTS.md`, a skill
+or an empty `~/.claude/CLAUDE.md` fires no event however the hook is wired, so
+the missing scan there is evidence of nothing. The trade this accepts is a false
+NEGATIVE: a repo whose announced instruction files all sit in subdirectories —
+a monorepo of per-package `CLAUDE.md` under a root carrying only `AGENTS.md`, on
+a machine with no user-global memory — loses the notice until a tool call touches
+one of those directories, which is what the gate's per-call `touchedDir` check
+recovers. Weighed against a false POSITIVE on every session launched outside a
+project, which trains the operator to skip the notice everywhere.
+
 That table is a claim about someone else's product, so the event that names a
 loaded file is also what falsifies it. `contextScopeContradiction` checks every
 path the hook is handed and reports two observations: context loading out of a

@@ -603,6 +603,73 @@ describe("a session with no InstructionsLoaded scan is named, once", () => {
     }
   });
 
+  // Kinds Claude Code loads at launch but does NOT announce with an
+  // InstructionsLoaded event — CLAUDE_CONTEXT_KINDS marks each `eventNamed:
+  // false`. Non-empty and real context, so a check that asked only "does
+  // anything load" would count every one of them and warn about a missing event
+  // that was never coming. Rules and CLAUDE.md are the positive controls: the
+  // narrowing must not swallow the kinds the event DOES name.
+  const launchKinds = [
+    ["AGENTS.md", "AGENTS.md", false],
+    ["a top-level .claude note", join(".claude", "notes.md"), false],
+    ["a skill", join(".claude", "skills", "s", "SKILL.md"), false],
+    ["a subagent", join(".claude", "agents", "a.md"), false],
+    ["a directory-scoped rule", join(".claude", "rules", "style.md"), true],
+    ["CLAUDE.local.md", "CLAUDE.local.md", true],
+  ];
+
+  for (const [label, rel, announced] of launchKinds)
+    it(`${announced ? "warns" : "stays silent"} when the launch set holds only ${label}`, () => {
+      const dir = mkdtempSync(join(tmpdir(), "sanitizer-launch-kind-"));
+      const session = `sess-launch-kind-${rel.replace(/\W/gu, "_")}`;
+      try {
+        const abs = join(dir, rel);
+        mkdirSync(join(abs, ".."), { recursive: true });
+        writeFileSync(abs, PROSE);
+        const notice = instructionsLoadedGapNotice(session, dir);
+        if (announced) assert.match(notice, /unscanned/u);
+        else assert.equal(notice, null);
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+        rmSync(launchEmptyFile(session), { force: true });
+        rmSync(instructionsLoadedNoticeFile(session), { force: true });
+      }
+    });
+
+  it("does not count an unannounced kind in the user-global root either", () => {
+    // The same narrowing on the second root: `~/.claude/agents/` is real
+    // context Claude Code loads, but nothing announces it, so a project with an
+    // empty launch set beside it still has no event coming.
+    const projectEmptyDir = mkdtempSync(
+      join(tmpdir(), "sanitizer-global-neg-"),
+    );
+    const globalConfigDir = mkdtempSync(
+      join(tmpdir(), "sanitizer-global-cfg-"),
+    );
+    const session = "sess-user-global-unannounced";
+    try {
+      mkdirSync(join(globalConfigDir, "agents"), { recursive: true });
+      writeFileSync(join(globalConfigDir, "agents", "a.md"), PROSE);
+      process.env.CLAUDE_CONFIG_DIR = globalConfigDir;
+      assert.equal(instructionsLoadedGapNotice(session, projectEmptyDir), null);
+      // The control on the same root, so the null above cannot be passing
+      // because the glob simply failed to reach into the config directory.
+      rmSync(launchEmptyFile(session), { force: true });
+      mkdirSync(join(globalConfigDir, "rules"), { recursive: true });
+      writeFileSync(join(globalConfigDir, "rules", "r.md"), PROSE);
+      assert.match(
+        instructionsLoadedGapNotice(session, projectEmptyDir),
+        /unscanned/u,
+      );
+    } finally {
+      process.env.CLAUDE_CONFIG_DIR = emptyConfigDir;
+      rmSync(projectEmptyDir, { recursive: true, force: true });
+      rmSync(globalConfigDir, { recursive: true, force: true });
+      rmSync(launchEmptyFile(session), { force: true });
+      rmSync(instructionsLoadedNoticeFile(session), { force: true });
+    }
+  });
+
   it("treats an unstattable launch candidate as content, not absence", () => {
     // A file this uid cannot even stat (ELOOP here; EACCES/EISDIR in
     // production) is unvetted context, not proof nothing is there — the
