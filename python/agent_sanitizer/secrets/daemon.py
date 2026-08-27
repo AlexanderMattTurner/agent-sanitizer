@@ -21,6 +21,7 @@ import contextlib
 import fcntl
 import json
 import os
+import signal
 import socket
 import struct
 import sys
@@ -366,4 +367,9 @@ def main(argv: list[str] | None = None) -> None:
     args = sys.argv[1:] if argv is None else argv
     if len(args) != 1:
         raise SystemExit("usage: agent-secret-redactor-daemon <socket-path>")
+    # The default SIGHUP disposition kills a daemon when its start terminal closes,
+    # leaving the socket file with nothing listening, so every later request fails to
+    # connect. Ignore the hangup; SIGTERM and SIGINT still stop it. Only here, never
+    # in `serve`: tests drive `serve` on a thread, where `signal.signal` raises.
+    signal.signal(signal.SIGHUP, signal.SIG_IGN)
     serve(args[0])
