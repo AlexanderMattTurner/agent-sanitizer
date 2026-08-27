@@ -278,6 +278,8 @@ const PUBLISHED_EXPORTS = {
     "instructionsLoadedNoticeFile",
     "instructionsLoadedSeen",
     "invisibleCharAlert",
+    "launchEmptyFile",
+    "launchInstructionFiles",
     "recordInstructionsLoaded",
     "recordInstructionsLoadedNotice",
     "sessionPrefix",
