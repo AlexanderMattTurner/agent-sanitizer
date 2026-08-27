@@ -8,6 +8,14 @@ adhere to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+## [2.47.14] - 2026-08-27
+
+### Fixed
+
+- Fixed claude-hooks to count the user-global ~/.claude root as launch content, ensuring instructions are properly recognized.
+- Fixed InstructionsLoaded gap notice to remain visible past an empty launch when there is content to load.
+- Fixed InstructionsLoaded gap notice to be suppressed when there is nothing to load.
+
 ## [2.47.13] - 2026-08-26
 
 ### Fixed
