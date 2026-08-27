@@ -8,6 +8,12 @@ adhere to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+## [2.47.15] - 2026-08-27
+
+### Fixed
+
+- Fix claude-hooks to only expect an InstructionsLoaded event for kinds it announces, preventing spurious events from other announcement types.
+
 ## [2.47.14] - 2026-08-27
 
 ### Fixed
