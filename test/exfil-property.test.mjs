@@ -286,3 +286,118 @@ describe("Layer 3 exfil detection resists punctuation and renames", () => {
     );
   });
 });
+
+// Azure SAS corpus. Shapes are taken from Microsoft's "Create a service SAS",
+// "Create an account SAS" and "Create a user delegation SAS" reference pages,
+// which enumerate every signed field. Values are same-shape dummies: the `sig`
+// keeps a real signature's length (a 44-character base64 HMAC-SHA256, percent
+// encoded) and the `skoid`/`sktid`/`saoid`/`suoid`/`scid` keep GUID shape, with
+// the secrets themselves replaced. No live credential is committed here.
+describe("Layer 3 exfil detection on the Azure SAS taxonomy", () => {
+  const SIG = "aB3dE5fG7hI9jK1lM3nO5pQ7rS9tU1vW3xY5zA7bC9c%3D";
+  const GUID_A = "0f9d5a3b-1c2e-4a6f-8b7d-2e3f4a5b6c7d";
+  const GUID_B = "72f988bf-86f1-41af-91ab-2d7cd011db47";
+  const WINDOW =
+    "st=2024-01-01T00%3A00%3A00Z&se=2024-01-02T00%3A00%3A00Z&spr=https";
+
+  // Every row's query is longer than the 200-character backstop, so each one
+  // exercises the `allParamsBenign` suppression rather than passing under it.
+  const legitimate = [
+    [
+      "service SAS with response-header overrides",
+      `https://acct.blob.core.windows.net/c/b.pdf?sv=2022-11-02&sr=b&sp=r&si=readpolicy&sip=168.1.5.60-168.1.5.70&${WINDOW}&rscc=max-age%3D3600&rscd=attachment%3B%20filename%3Dreport.pdf&rsce=gzip&rscl=en-US&rsct=application%2Fpdf&sig=${SIG}`,
+    ],
+    [
+      "account SAS on a container listing",
+      `https://acct.blob.core.windows.net/c?restype=container&comp=list&sv=2022-11-02&ss=bfqt&srt=sco&sp=rwdlacupiytfx&${WINDOW}&sip=168.1.5.60-168.1.5.70&sig=${SIG}`,
+    ],
+    [
+      "user-delegation SAS",
+      `https://acct.blob.core.windows.net/c/b.txt?sv=2022-11-02&sr=d&sdd=2&sp=r&${WINDOW}&skoid=${GUID_A}&sktid=${GUID_B}&skt=2024-01-01T00%3A00%3A00Z&ske=2024-01-02T00%3A00%3A00Z&sks=b&skv=2022-11-02&sig=${SIG}`,
+    ],
+    [
+      "user-delegation SAS with correlation ids",
+      `https://acct.blob.core.windows.net/c/b.txt?sv=2022-11-02&sr=b&sp=r&${WINDOW}&saoid=${GUID_A}&suoid=${GUID_B}&scid=${GUID_A}&skoid=${GUID_A}&sktid=${GUID_B}&sks=b&skv=2022-11-02&sig=${SIG}`,
+    ],
+    [
+      "table SAS with partition and row key ranges",
+      `https://acct.table.core.windows.net/mytable?sv=2022-11-02&tn=mytable&sp=raud&${WINDOW}&startpk=customer-a&endpk=customer-z&startrk=000001&endrk=999999&sig=${SIG}`,
+    ],
+    [
+      "blob snapshot and version SAS",
+      `https://acct.blob.core.windows.net/c/b.txt?snapshot=2024-01-01T00%3A00%3A00.0000000Z&versionid=2024-01-01T00%3A00%3A00.0000000Z&ses=myscope&sv=2022-11-02&sr=bv&sp=r&${WINDOW}&sig=${SIG}`,
+    ],
+  ];
+
+  for (const [label, url] of legitimate)
+    it(`leaves a real ${label} alone`, () => {
+      assert.ok(
+        new URL(url).search.length > 200,
+        "case is under the long-query backstop, so it proves nothing",
+      );
+      assert.equal(checkExfilUrl(url), null, `${label} was reported`);
+    });
+
+  // The other direction: a signed-field NAME must never excuse a payload-shaped
+  // value. `sig` is the one deliberate exception — a real signature and a stolen
+  // blob are the same shape, so that dodge is priced in above.
+  const payload = "QUJDRGVmZ2hJSktMbW5vcFFSU1R1dnd4WVoxMjM0NTY3ODkw".repeat(4);
+  const signedNames = [
+    "ss",
+    "srt",
+    "sip",
+    "sdd",
+    "ses",
+    "skt",
+    "ske",
+    "sks",
+    "skv",
+    "skoid",
+    "sktid",
+    "saoid",
+    "suoid",
+    "scid",
+    "tn",
+    "startpk",
+    "endpk",
+    "startrk",
+    "endrk",
+    "snapshot",
+    "versionid",
+    "restype",
+    "comp",
+    "rscc",
+    "rscd",
+    "rsce",
+    "rscl",
+    "rsct",
+  ];
+
+  it("flags a blob renamed to any signed SAS parameter", () => {
+    for (const name of signedNames)
+      assert.notEqual(
+        checkExfilUrl(`https://evil.example/p?${name}=${payload}`),
+        null,
+        `?${name}=<blob> went unreported`,
+      );
+  });
+
+  it("flags a payload chunked across repeated short-valued names", () => {
+    // Each chunk stays under the blob bar and carries neither an uppercase
+    // letter nor a digit, so only the long-query backstop can catch it — and
+    // that backstop is exactly what an all-signed-names query suppresses.
+    const slug = "abcdefghij-klmnopqrst_".repeat(9);
+    assert.equal(
+      checkExfilUrl(`https://evil.example/p?sv=2022-11-02&sr=b&si=${slug}`),
+      "unusually long query string",
+    );
+    // Positive marker: the same query with a real-length policy id is silent,
+    // so the row above is the value-length bound and not the name list.
+    assert.equal(
+      checkExfilUrl(
+        `https://acct.blob.core.windows.net/c/b.txt?sv=2022-11-02&sr=b&sp=r&${WINDOW}&si=${slug.slice(0, 120)}&sig=${SIG}`,
+      ),
+      null,
+    );
+  });
+});

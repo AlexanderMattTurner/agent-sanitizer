@@ -45778,7 +45778,7 @@ function rawUrlKeywordExfil(url) {
 }
 function allParamsBenign(parsed) {
   return rawParams(parsed.search.slice(1)).every(
-    ([name50]) => BENIGN_BLOB_PARAM_RE.test(name50) || BENIGN_SHORT_PARAM_RE.test(name50)
+    ([name50, value]) => BENIGN_BLOB_PARAM_RE.test(name50) || BENIGN_SHORT_PARAM_RE.test(name50) && value.length <= BENIGN_SHORT_VALUE_MAX_LEN
   );
 }
 function checkUrlParams(parsed) {
@@ -45992,7 +45992,7 @@ function detectConfusableHosts(text5) {
   }
   return threats.length > 0 ? threats : null;
 }
-var NEAR_ZERO_EPSILON, OFFSCREEN_ABSOLUTE_THRESHOLD, OFFSCREEN_VIEWPORT_THRESHOLD, ABSOLUTE_UNITS, VIEWPORT_UNITS, ANGLE_UNITS, NAMED_COLORS, BLOCK_AXIS_EXTENT_PROPS, INLINE_AXIS_EXTENT_PROPS, BORDER_SHORTHANDS, BORDER_WIDTH_KEYWORDS, FONT_SIZE_UNITS, CSS_PROPERTY_IDENT_RE, REPORTED_TAGS, VOID_ELEMENTS2, FOREIGN_ELEMENTS, RAW_TEXT_ELEMENTS, parseFragment2, PLACEHOLDER_LABEL, PLACEHOLDER_KEY_LEN, LAYER2_PLACEHOLDER_RE, HIDDEN_PLACEHOLDER, COMMENT_PLACEHOLDER, UNPARSEABLE_PLACEHOLDER, mdParser, parseMarkdown, MARKDOWN_CODE_HINT, BOGUS_COMMENT_OPEN_RE, UNTERMINATED_MARKUP_TAIL_RE, PHRASING_ROOTS, FLOW_HTML_PARENTS, MAX_SPLICE_ROUNDS, EXFIL_INDICATORS, KEYWORD_PARAM_NAME_RE, LONG_QUERY_THRESHOLD, DATA_URI_ACTIVE_RE, DATA_URI_LENGTH_THRESHOLD, SCRIPT_URI_RE, RELATIVE_URL_BASE, BENIGN_BLOB_PARAM_RE, BENIGN_SHORT_PARAM_RE, OPAQUE_TOKEN_RE, VALUE_HAS_DIGIT_RE, BLOB_VALUE_B64_RE, BLOB_VALUE_HEX_RE, BLOB_VALUE_B64URL_RE, B64URL_MIXED_RE, PATH_BLOB_RE, PATH_BLOB_MIN_LEN, BLOB_SEPARATOR_RE, SRCSET_WS_RE, OFF_ORIGIN_REASON;
+var NEAR_ZERO_EPSILON, OFFSCREEN_ABSOLUTE_THRESHOLD, OFFSCREEN_VIEWPORT_THRESHOLD, ABSOLUTE_UNITS, VIEWPORT_UNITS, ANGLE_UNITS, NAMED_COLORS, BLOCK_AXIS_EXTENT_PROPS, INLINE_AXIS_EXTENT_PROPS, BORDER_SHORTHANDS, BORDER_WIDTH_KEYWORDS, FONT_SIZE_UNITS, CSS_PROPERTY_IDENT_RE, REPORTED_TAGS, VOID_ELEMENTS2, FOREIGN_ELEMENTS, RAW_TEXT_ELEMENTS, parseFragment2, PLACEHOLDER_LABEL, PLACEHOLDER_KEY_LEN, LAYER2_PLACEHOLDER_RE, HIDDEN_PLACEHOLDER, COMMENT_PLACEHOLDER, UNPARSEABLE_PLACEHOLDER, mdParser, parseMarkdown, MARKDOWN_CODE_HINT, BOGUS_COMMENT_OPEN_RE, UNTERMINATED_MARKUP_TAIL_RE, PHRASING_ROOTS, FLOW_HTML_PARENTS, MAX_SPLICE_ROUNDS, EXFIL_INDICATORS, KEYWORD_PARAM_NAME_RE, LONG_QUERY_THRESHOLD, DATA_URI_ACTIVE_RE, DATA_URI_LENGTH_THRESHOLD, SCRIPT_URI_RE, RELATIVE_URL_BASE, BENIGN_BLOB_PARAM_RE, BENIGN_SHORT_PARAM_RE, BENIGN_SHORT_VALUE_MAX_LEN, OPAQUE_TOKEN_RE, VALUE_HAS_DIGIT_RE, BLOB_VALUE_B64_RE, BLOB_VALUE_HEX_RE, BLOB_VALUE_B64URL_RE, B64URL_MIXED_RE, PATH_BLOB_RE, PATH_BLOB_MIN_LEN, BLOB_SEPARATOR_RE, SRCSET_WS_RE, OFF_ORIGIN_REASON;
 var init_html4 = __esm({
   "src/html.mjs"() {
     "use strict";
@@ -46299,8 +46299,9 @@ var init_html4 = __esm({
     DATA_URI_LENGTH_THRESHOLD = 4096;
     SCRIPT_URI_RE = /^\s*(?:javascript|vbscript):/i;
     RELATIVE_URL_BASE = "http://relative.invalid";
-    BENIGN_BLOB_PARAM_RE = /^(?:x-(?:amz|goog|ms|oss|obs)-[a-z0-9-]+|amz-[a-z0-9-]+|utm_[a-z]+|sig|signature|hmac|policy|credential|expires|key-pair-id|skoid|sktid|code|state|cursor|after|before|continuation|continuationtoken|continuation_token|pagetoken|page_token|nexttoken|next_token|gclid|fbclid|dclid|msclkid|gbraid|wbraid|_ga|_gl|mc_eid|mc_cid)$/i;
-    BENIGN_SHORT_PARAM_RE = /^(?:se|sp|sr|sv|st|spr|si)$/i;
+    BENIGN_BLOB_PARAM_RE = /^(?:x-(?:amz|goog|ms|oss|obs)-[a-z0-9-]+|amz-[a-z0-9-]+|utm_[a-z]+|sig|signature|hmac|policy|credential|expires|key-pair-id|code|state|cursor|after|before|continuation|continuationtoken|continuation_token|pagetoken|page_token|nexttoken|next_token|gclid|fbclid|dclid|msclkid|gbraid|wbraid|_ga|_gl|mc_eid|mc_cid)$/i;
+    BENIGN_SHORT_PARAM_RE = /^(?:se|sp|sr|sv|st|spr|si|sip|ss|srt|sdd|ses|sk(?:oid|tid|t|e|s|v)|saoid|suoid|scid|tn|start(?:pk|rk)|end(?:pk|rk)|snapshot|versionid|restype|comp|rsc[cdelt])$/i;
+    BENIGN_SHORT_VALUE_MAX_LEN = 128;
     OPAQUE_TOKEN_RE = /[A-Za-z0-9_]{20,}/g;
     VALUE_HAS_DIGIT_RE = /\d/;
     BLOB_VALUE_B64_RE = /^[A-Za-z0-9+/]{40,}={0,2}$/;

@@ -2377,7 +2377,7 @@ const RELATIVE_URL_BASE = "http://relative.invalid";
 // Parameter NAMES that legitimately carry a LONG opaque (base64/hex) value, so
 // a blob in one of them is NOT exfil: CDN request-signing (AWS SigV4 /
 // CloudFront `X-Amz-*`/`Signature`/`Policy`/`Key-Pair-Id`, GCS `X-Goog-*`,
-// Azure SAS `sv/sr/sig/se/sp/st/spr/skoid/sktid`), pagination cursors /
+// Azure SAS `sig` only), pagination cursors /
 // continuation tokens, and the long analytics click-IDs. Matched
 // case-insensitively against the exact (lowercased) parameter name. Scope is
 // deliberately limited to names whose benign value is genuinely a long token —
@@ -2392,16 +2392,33 @@ const RELATIVE_URL_BASE = "http://relative.invalid";
 // code, a signed CSRF nonce), so the value shape cannot separate them from a
 // payload.
 const BENIGN_BLOB_PARAM_RE =
-  /^(?:x-(?:amz|goog|ms|oss|obs)-[a-z0-9-]+|amz-[a-z0-9-]+|utm_[a-z]+|sig|signature|hmac|policy|credential|expires|key-pair-id|skoid|sktid|code|state|cursor|after|before|continuation|continuationtoken|continuation_token|pagetoken|page_token|nexttoken|next_token|gclid|fbclid|dclid|msclkid|gbraid|wbraid|_ga|_gl|mc_eid|mc_cid)$/i;
+  /^(?:x-(?:amz|goog|ms|oss|obs)-[a-z0-9-]+|amz-[a-z0-9-]+|utm_[a-z]+|sig|signature|hmac|policy|credential|expires|key-pair-id|code|state|cursor|after|before|continuation|continuationtoken|continuation_token|pagetoken|page_token|nexttoken|next_token|gclid|fbclid|dclid|msclkid|gbraid|wbraid|_ga|_gl|mc_eid|mc_cid)$/i;
 
-// The SHORT-valued companions of a signed-CDN link: Azure SAS carries a version
-// date (`sv`), a resource letter (`sr`), start/expiry timestamps (`st`/`se`), a
-// permissions letter (`sp`), a protocol (`spr`) and a policy id (`si`) beside
-// its one long `sig`. They mark a query as signed-CDN traffic, which is all
+// The SHORT-valued companions of a signed-CDN link. Azure SAS spells one long
+// `sig` beside a crowd of short fields, and the whole taxonomy is listed here:
+// service SAS (`sv` version, `sr` resource, `sp` permissions, `st`/`se`
+// start/expiry, `si` policy id, `sip` ip range, `spr` protocol, `sdd` directory
+// depth, `ses` encryption scope, `rscc`/`rscd`/`rsce`/`rscl`/`rsct` response
+// headers), account SAS (`ss` services, `srt` resource types), user-delegation
+// SAS (`skoid`/`sktid`/`saoid`/`suoid`/`scid` GUIDs, `skt`/`ske` key validity,
+// `sks` key service, `skv` key version) and the queue/table/blob operands
+// (`tn`, `startpk`/`endpk`/`startrk`/`endrk`, `snapshot`, `versionid`,
+// `restype`, `comp`). They mark a query as signed-CDN traffic, which is all
 // `allParamsBenign` needs — but a name whose benign value is short must never
 // excuse a BLOB, or renaming the payload to `?sr=<blob>` walks past every check
-// above.
-const BENIGN_SHORT_PARAM_RE = /^(?:se|sp|sr|sv|st|spr|si)$/i;
+// above. That is why every one of these sits here and not in the blob set: a
+// SAS timestamp, letter code, version date or GUID never reaches 40 characters.
+const BENIGN_SHORT_PARAM_RE =
+  /^(?:se|sp|sr|sv|st|spr|si|sip|ss|srt|sdd|ses|sk(?:oid|tid|t|e|s|v)|saoid|suoid|scid|tn|start(?:pk|rk)|end(?:pk|rk)|snapshot|versionid|restype|comp|rsc[cdelt])$/i;
+
+// Longest benign value any BENIGN_SHORT_PARAM_RE name carries: an encoded SAS
+// timestamp is ~24 characters and a response-header override (`rscd`) tens
+// more, so 128 leaves every real one room. Past it the name has stopped being a
+// short field, and `allParamsBenign` must not read it as signed-CDN traffic —
+// otherwise a payload split into 100-character chunks across repeated short
+// names (`?si=<chunk>&si=<chunk>…`, which `rawParams` keeps as separate pairs)
+// suppresses the long-query backstop while each chunk stays under the blob bar.
+const BENIGN_SHORT_VALUE_MAX_LEN = 128;
 
 // matchesSecretHint is a deliberately broad PRE-gate whose bare-keyword arms
 // (`token`, `secret`, `authorization`, …) also match ordinary hyphen/word
@@ -2635,8 +2652,10 @@ function rawUrlKeywordExfil(url) {
  */
 function allParamsBenign(parsed) {
   return rawParams(parsed.search.slice(1)).every(
-    ([name]) =>
-      BENIGN_BLOB_PARAM_RE.test(name) || BENIGN_SHORT_PARAM_RE.test(name),
+    ([name, value]) =>
+      BENIGN_BLOB_PARAM_RE.test(name) ||
+      (BENIGN_SHORT_PARAM_RE.test(name) &&
+        value.length <= BENIGN_SHORT_VALUE_MAX_LEN),
   );
 }
 
