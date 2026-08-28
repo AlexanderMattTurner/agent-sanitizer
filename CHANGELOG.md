@@ -8,6 +8,12 @@ adhere to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+## [2.48.1] - 2026-08-28
+
+### Fixed
+
+- The InstructionsLoaded gap notice is now silenced during cold starts when a live setup has not yet been established.
+
 ## [2.48.0] - 2026-08-27
 
 ### Added
