@@ -364,6 +364,7 @@ describe("Layer 3 exfil detection on the Azure SAS taxonomy", () => {
     "endrk",
     "snapshot",
     "versionid",
+    "expires",
     "restype",
     "comp",
     "rscc",

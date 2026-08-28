@@ -2392,7 +2392,7 @@ const RELATIVE_URL_BASE = "http://relative.invalid";
 // code, a signed CSRF nonce), so the value shape cannot separate them from a
 // payload.
 const BENIGN_BLOB_PARAM_RE =
-  /^(?:x-(?:amz|goog|ms|oss|obs)-[a-z0-9-]+|amz-[a-z0-9-]+|utm_[a-z]+|sig|signature|hmac|policy|credential|expires|key-pair-id|code|state|cursor|after|before|continuation|continuationtoken|continuation_token|pagetoken|page_token|nexttoken|next_token|gclid|fbclid|dclid|msclkid|gbraid|wbraid|_ga|_gl|mc_eid|mc_cid)$/i;
+  /^(?:x-(?:amz|goog|ms|oss|obs)-[a-z0-9-]+|amz-[a-z0-9-]+|utm_[a-z]+|sig|signature|hmac|policy|credential|key-pair-id|code|state|cursor|after|before|continuation|continuationtoken|continuation_token|pagetoken|page_token|nexttoken|next_token|gclid|fbclid|dclid|msclkid|gbraid|wbraid|_ga|_gl|mc_eid|mc_cid)$/i;
 
 // The SHORT-valued companions of a signed-CDN link. Azure SAS spells one long
 // `sig` beside a crowd of short fields, and the whole taxonomy is listed here:
@@ -2408,8 +2408,10 @@ const BENIGN_BLOB_PARAM_RE =
 // excuse a BLOB, or renaming the payload to `?sr=<blob>` walks past every check
 // above. That is why every one of these sits here and not in the blob set: a
 // SAS timestamp, letter code, version date or GUID never reaches 40 characters.
+// `expires` joins them for the same reason: every signed-URL scheme spells it as
+// a unix timestamp, so listing it as long-opaque only let `?expires=<blob>` ride.
 const BENIGN_SHORT_PARAM_RE =
-  /^(?:se|sp|sr|sv|st|spr|si|sip|ss|srt|sdd|ses|sk(?:oid|tid|t|e|s|v)|saoid|suoid|scid|tn|start(?:pk|rk)|end(?:pk|rk)|snapshot|versionid|restype|comp|rsc[cdelt])$/i;
+  /^(?:se|sp|sr|sv|st|spr|si|sip|ss|srt|sdd|ses|sk(?:oid|tid|t|e|s|v)|saoid|suoid|scid|tn|start(?:pk|rk)|end(?:pk|rk)|snapshot|versionid|restype|comp|rsc[cdelt]|expires)$/i;
 
 // Longest benign value any BENIGN_SHORT_PARAM_RE name carries: an encoded SAS
 // timestamp is ~24 characters and a response-header override (`rscd`) tens
