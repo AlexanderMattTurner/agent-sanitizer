@@ -27,6 +27,7 @@ import {
   hookgateMarkerPath,
   lazyImport,
   markerIsTrusted,
+  probeSetupAlive,
   PROJECT_DIR,
   PROJECT_HASH,
   scrubUntrustedText,
@@ -478,8 +479,11 @@ export function instructionsLoadedGapNotice(
   // may not have been able to run yet: a launch event fires within a second of
   // SessionStart, and a hook whose file or dependency setup has not written yet
   // never reached the marker. Every cause below would be wrong, so say nothing
-  // until the host is provisioned.
-  if (markerIsTrusted(hookgateMarkerPath())) return null;
+  // while setup RUNS. Liveness, not the marker alone: a setup killed mid-install
+  // leaves its marker behind, and a marker test alone would then silence this
+  // notice for every later session on the host.
+  const marker = hookgateMarkerPath();
+  if (markerIsTrusted(marker) && probeSetupAlive(marker)) return null;
   const launchCached = markerIsTrusted(launchEmptyFile(sessionId));
   const launchHasBytes =
     !launchCached &&
