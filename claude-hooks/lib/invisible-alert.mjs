@@ -24,6 +24,7 @@ import { randomBytes } from "node:crypto";
 import { basename, join } from "node:path";
 import { homedir, tmpdir, userInfo } from "node:os";
 import {
+  hookgateMarkerPath,
   lazyImport,
   markerIsTrusted,
   PROJECT_DIR,
@@ -442,8 +443,9 @@ function userGlobalLaunchHasContent(env = process.env) {
 
 /**
  * The one-time context line for a session where no InstructionsLoaded scan ran,
- * or null when the scan has been seen, the notice already ran this session, or
- * neither launch nor `touchedDir` could have fired the event.
+ * or null when the scan has been seen, the notice already ran this session, the
+ * host's cold-start marker says setup is still running, or neither launch nor
+ * `touchedDir` could have fired the event.
  *
  * PURE for the notice: nothing is recorded until the caller confirms it landed
  * in a returned response. Launch-emptiness is cached once found — fixed for the
@@ -472,6 +474,12 @@ export function instructionsLoadedGapNotice(
 ) {
   if (instructionsLoadedSeen(sessionId)) return null;
   if (markerIsTrusted(instructionsLoadedNoticeFile(sessionId))) return null;
+  // The host's setup script is still provisioning this session, so the scanner
+  // may not have been able to run yet: a launch event fires within a second of
+  // SessionStart, and a hook whose file or dependency setup has not written yet
+  // never reached the marker. Every cause below would be wrong, so say nothing
+  // until the host is provisioned.
+  if (markerIsTrusted(hookgateMarkerPath())) return null;
   const launchCached = markerIsTrusted(launchEmptyFile(sessionId));
   const launchHasBytes =
     !launchCached &&
