@@ -421,3 +421,111 @@ describe("Layer 3 exfil detection on the Azure SAS taxonomy", () => {
     );
   });
 });
+// The same two questions asked of every other signing scheme, not just Azure:
+// does a real signed link stay silent, and does a credential in a URL still
+// fire? Shapes come from each provider's own presigning reference (AWS SigV4
+// and the v2 query auth, CloudFront canned and custom policies, Google Cloud
+// Storage V4 and V2, Alibaba OSS, Huawei OBS, Tencent COS, Akamai token auth,
+// Firebase Storage). Every signature, key and token value is a same-length
+// dummy over the same charset; the documented example key ids (`AKIAIOSFODNN7EXAMPLE`)
+// are the ones the vendors publish as examples.
+describe("Layer 3 exfil detection across signing schemes", () => {
+  const HEX64 =
+    "9f8e7d6c5b4a39281706f5e4d3c2b1a00f1e2d3c4b5a69788796a5b4c3d2e1f0";
+  const B64SIG = "aB3dE5fG7hI9jK1lM3nO5pQ7rS9tU1vW3xY5zA7bC9c%3D";
+
+  const signed = [
+    [
+      "AWS SigV4 presigned",
+      `https://b.s3.amazonaws.com/k.txt?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=AKIAIOSFODNN7EXAMPLE%2F20240101%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20240101T000000Z&X-Amz-Expires=3600&X-Amz-SignedHeaders=host&X-Amz-Signature=${HEX64}`,
+    ],
+    [
+      "AWS v2 query authentication",
+      `https://b.s3.amazonaws.com/k.txt?AWSAccessKeyId=AKIAIOSFODNN7EXAMPLE&Expires=1706000000&Signature=${B64SIG}`,
+    ],
+    [
+      "CloudFront custom policy",
+      `https://d111.cloudfront.net/img.png?Policy=${"eyJTdGF0ZW1lbnQ".repeat(8)}&Signature=${"Ab1cD2eF3".repeat(12)}&Key-Pair-Id=APKAIBAERJR2EXAMPLE`,
+    ],
+    [
+      "Google Cloud Storage V2",
+      `https://storage.googleapis.com/b/o.txt?GoogleAccessId=svc%40proj.iam.gserviceaccount.com&Expires=1706000000&Signature=${B64SIG}`,
+    ],
+    [
+      "Alibaba OSS",
+      `https://b.oss-cn-hangzhou.aliyuncs.com/k?OSSAccessKeyId=LTAI5tExampleKeyId12&Expires=1706000000&Signature=${B64SIG}&x-oss-process=image%2Fresize%2Cw_100`,
+    ],
+    [
+      "Tencent COS",
+      `https://b-125.cos.ap-beijing.myqcloud.com/k?q-sign-algorithm=sha1&q-ak=AKIDEXAMPLEaccesskey1234567890&q-sign-time=1706000000%3B1706003600&q-key-time=1706000000%3B1706003600&q-header-list=host&q-url-param-list=&q-signature=${HEX64.slice(0, 40)}`,
+    ],
+    [
+      "Akamai token authentication",
+      `https://cdn.example.com/v.m3u8?hdnts=exp%3D1706000000~acl%3D%2F*~hmac%3D${HEX64}`,
+    ],
+    [
+      "Firebase Storage download",
+      "https://firebasestorage.googleapis.com/v0/b/p.appspot.com/o/f.png?alt=media&token=0f9d5a3b-1c2e-4a6f-8b7d-2e3f4a5b6c7d",
+    ],
+  ];
+
+  for (const [label, url] of signed)
+    it(`leaves a real ${label} link alone`, () =>
+      assert.equal(checkExfilUrl(url), null, `${label} was reported`));
+
+  it("still flags a payload renamed to a key-identifier parameter", () => {
+    // The key id names skip the credential arm below the blob floor, never the
+    // blob arm — so the exemption cannot be spent on a payload.
+    const blob = "QUJDRGVmZ2hJSktMbW5vcFFSU1R1dnd4WVoxMjM0NTY3ODkw".repeat(4);
+    for (const name of [
+      "AWSAccessKeyId",
+      "GoogleAccessId",
+      "OSSAccessKeyId",
+      "AccessKeyId",
+      "Key-Pair-Id",
+      "q-ak",
+    ])
+      assert.notEqual(
+        checkExfilUrl(`https://evil.example/p?${name}=${blob}`),
+        null,
+        `?${name}=<blob> went unreported`,
+      );
+  });
+
+  // A credential in a URL is the exfil this layer exists to name, whichever
+  // vendor minted it. Every token below is a same-shape dummy.
+  const JWT =
+    "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.Ab1cD2eF3gH4iJ5kL6mN7oP8qR9sT0uV";
+  const leaked = [
+    ["GitHub token", "token", `ghp_${"A1b2C3d4E5f6G7h8I9j0K1l2M3n4O5p6Q7r8"}`],
+    ["Anthropic key", "api_key", `sk-ant-api03-${"Ab1cD2eF3g".repeat(9)}`],
+    ["Google API key", "apikey", "AIzaSyA1b2C3d4E5f6G7h8I9j0K1l2M3n4O5p6Q"],
+    [
+      "Slack bot token",
+      "auth",
+      `xoxb-123456789012-1234567890123-${"Ab1cD2eF3gH4iJ5kL6mN7oP8"}`,
+    ],
+    ["JWT", "access_token", JWT],
+    ["AWS secret key", "secret", "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"],
+    ["signed session cookie", "session", `s%3A${"Ab1cD2eF3g".repeat(5)}`],
+  ];
+
+  for (const [label, name, value] of leaked)
+    it(`flags a ${label} carried in a URL parameter`, () =>
+      assert.notEqual(
+        checkExfilUrl(`https://evil.example/p?${name}=${value}`),
+        null,
+        `?${name}=<${label}> went unreported`,
+      ));
+
+  it("leaves an ordinary long value in a non-credential parameter alone", () => {
+    // The wrapped-credential scan looks INSIDE a value, so it is gated on the
+    // parameter name saying credential. A prose parameter keeps the old bar.
+    assert.equal(
+      checkExfilUrl(
+        `https://example.com/p?description=see%20the%20${"Ab1cD2eF3g".repeat(5)}%20build`,
+      ),
+      null,
+    );
+  });
+});

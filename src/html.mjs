@@ -2392,7 +2392,7 @@ const RELATIVE_URL_BASE = "http://relative.invalid";
 // code, a signed CSRF nonce), so the value shape cannot separate them from a
 // payload.
 const BENIGN_BLOB_PARAM_RE =
-  /^(?:x-(?:amz|goog|ms|oss|obs)-[a-z0-9-]+|amz-[a-z0-9-]+|utm_[a-z]+|sig|signature|hmac|policy|credential|key-pair-id|code|state|cursor|after|before|continuation|continuationtoken|continuation_token|pagetoken|page_token|nexttoken|next_token|gclid|fbclid|dclid|msclkid|gbraid|wbraid|_ga|_gl|mc_eid|mc_cid)$/i;
+  /^(?:x-(?:amz|goog|ms|oss|obs)-[a-z0-9-]+|amz-[a-z0-9-]+|utm_[a-z]+|sig|signature|hmac|q-signature|policy|credential|code|state|cursor|after|before|continuation|continuationtoken|continuation_token|pagetoken|page_token|nexttoken|next_token|gclid|fbclid|dclid|gbraid|wbraid|msclkid)$/i;
 
 // The SHORT-valued companions of a signed-CDN link. Azure SAS spells one long
 // `sig` beside a crowd of short fields, and the whole taxonomy is listed here:
@@ -2408,10 +2408,22 @@ const BENIGN_BLOB_PARAM_RE =
 // excuse a BLOB, or renaming the payload to `?sr=<blob>` walks past every check
 // above. That is why every one of these sits here and not in the blob set: a
 // SAS timestamp, letter code, version date or GUID never reaches 40 characters.
-// `expires` joins them for the same reason: every signed-URL scheme spells it as
-// a unix timestamp, so listing it as long-opaque only let `?expires=<blob>` ride.
+//
+// The set is not Azure's alone: every signed-URL scheme names its own short
+// fields, and each one listed here has a real value no longer opaque run can
+// hide in. `expires` is a unix timestamp; the access-key identifiers
+// (`AWSAccessKeyId`, `GoogleAccessId`, `OSSAccessKeyId`, `AccessKeyId`) are a
+// 20-character key id or a service-account address; CloudFront's `Key-Pair-Id`
+// is a key id; Tencent COS spells its algorithm, key id, time windows and
+// header lists in `q-*` beside one long `q-signature`; and the analytics ids
+// (`_ga`, `_gl`, `mc_eid`, `mc_cid`) are dot- and star-separated counters and
+// short hashes. Each sat in the blob set or nowhere, and both
+// placements were wrong: the blob set let `?key-pair-id=<blob>` ride, and being
+// absent made a real `?AWSAccessKeyId=…` link read as exfil. The long click-ids
+// (`gclid`, `fbclid`, `dclid`, `gbraid`, `wbraid`, `msclkid`) and `utm_*` stay
+// in the blob set, because their real values can be long opaque tokens.
 const BENIGN_SHORT_PARAM_RE =
-  /^(?:se|sp|sr|sv|st|spr|si|sip|ss|srt|sdd|ses|sk(?:oid|tid|t|e|s|v)|saoid|suoid|scid|tn|start(?:pk|rk)|end(?:pk|rk)|snapshot|versionid|restype|comp|rsc[cdelt]|expires)$/i;
+  /^(?:se|sp|sr|sv|st|spr|si|sip|ss|srt|sdd|ses|sk(?:oid|tid|t|e|s|v)|saoid|suoid|scid|tn|start(?:pk|rk)|end(?:pk|rk)|snapshot|versionid|restype|comp|rsc[cdelt]|expires|awsaccesskeyid|googleaccessid|ossaccesskeyid|accesskeyid|key-pair-id|q-(?:ak|sign-algorithm|sign-time|key-time|header-list|url-param-list)|_ga|_gl|mc_eid|mc_cid)$/i;
 
 // Longest benign value any BENIGN_SHORT_PARAM_RE name carries: an encoded SAS
 // timestamp is ~24 characters and a response-header override (`rscd`) tens
@@ -2429,6 +2441,18 @@ const BENIGN_SHORT_VALUE_MAX_LEN = 128;
 // overrides — spends a little over 300 characters, so 512 clears every real one
 // while capping what the suppression can ever hide.
 const BENIGN_SHORT_TOTAL_MAX_LEN = 512;
+
+// The access-key IDENTIFIER of a signed URL: AWS/GCS/OSS v2 presigning, Tencent
+// COS (`q-ak`) and CloudFront (`Key-Pair-Id`) all name the key in the URL beside
+// the signature. The id is public by design — the secret is what signs the
+// request, never what travels — but it reads as a credential to
+// `matchesSecretHint` (`AKIAIOSFODNN7EXAMPLE` is an opaque run with a digit and
+// an access-key prefix), so every real v2 presigned link fired. Below the blob
+// floor these names skip the credential arm only; the blob arm still runs, so a
+// payload renamed `?AWSAccessKeyId=<blob>` is still reported.
+const PUBLIC_KEY_ID_PARAM_RE =
+  /^(?:awsaccesskeyid|googleaccessid|ossaccesskeyid|accesskeyid|key-pair-id|q-ak)$/i;
+const BLOB_VALUE_MIN_LEN = 40;
 
 // matchesSecretHint is a deliberately broad PRE-gate whose bare-keyword arms
 // (`token`, `secret`, `authorization`, …) also match ordinary hyphen/word
@@ -2567,6 +2591,35 @@ function decodedBlobMatch(value) {
   return isBlobValue(decoded);
 }
 
+// A credential rarely travels alone in a parameter: a signed session cookie is
+// `s:<token>.<mac>`, an Authorization value is `Bearer <jwt>`, a versioned key is
+// `v1.<token>`. The blob tests are anchored to the WHOLE value, so any wrapper
+// defeats them. This splits a value on the characters no base64/hex alphabet
+// contains and asks whether one PART is a blob. Applied only where the parameter
+// NAME already says credential (`?session=`, `?auth=`, `?api_key=`), because on
+// an arbitrary parameter a 40-character run inside longer text is ordinary.
+const BLOB_RUN_SPLIT_RE = /[^A-Za-z0-9+/=_-]+/;
+
+/**
+ * True when some separator-delimited part of `value`, or of its
+ * percent-decoded form, is blob-shaped.
+ * @param {string} value
+ * @returns {boolean}
+ */
+function containsBlobRun(value) {
+  let decoded = value;
+  try {
+    decoded = decodeURIComponent(value);
+  } catch {
+    // A malformed percent-sequence is not a decoding this layer can trust; the
+    // raw form is still split below.
+  }
+  for (const form of decoded === value ? [value] : [value, decoded])
+    for (const part of form.split(BLOB_RUN_SPLIT_RE))
+      if (part !== form && isBlobValue(part)) return true;
+  return false;
+}
+
 /**
  * RAW (un-decoded) `name=value` pairs of a query/fragment string, split on `&`
  * and `;`. URLSearchParams is avoided on purpose: it percent-/`+`-decodes
@@ -2604,6 +2657,8 @@ function rawParams(qs) {
  */
 function paramExfilReason(name, value, rawName) {
   if (BENIGN_BLOB_PARAM_RE.test(name)) return null;
+  const publicKeyId =
+    PUBLIC_KEY_ID_PARAM_RE.test(name) && value.length < BLOB_VALUE_MIN_LEN;
   for (const candidate of [rawName, value]) {
     if (!candidate) continue;
     // A leaked credential is an OPAQUE, separator-free token. Gate the
@@ -2612,7 +2667,7 @@ function paramExfilReason(name, value, rawName) {
     // service/…abcdefghij1234567890`) otherwise matches "authorization" in one
     // place and a 20-char run in another and false-fires. Requiring both on the
     // SAME run keeps `ghp_…`-style contiguous tokens firing while dropping prose.
-    const opaqueRuns = candidate.match(OPAQUE_TOKEN_RE);
+    const opaqueRuns = publicKeyId ? null : candidate.match(OPAQUE_TOKEN_RE);
     if (
       opaqueRuns?.some(
         (run) => VALUE_HAS_DIGIT_RE.test(run) && matchesSecretHint(run),
@@ -2622,6 +2677,14 @@ function paramExfilReason(name, value, rawName) {
     if (isBlobValue(candidate) || decodedBlobMatch(candidate))
       return "suspicious query parameter";
   }
+  // A wrapped credential (`?session=s%3A<token>.<mac>`) in a parameter whose
+  // name already says credential. The whole-value tests above miss it because
+  // the wrapper is part of the value.
+  if (
+    (KEYWORD_PARAM_NAME_RE.test(name) || matchesSecretHint(name)) &&
+    containsBlobRun(value)
+  )
+    return "credential-shaped token in URL parameter";
   return null;
 }
 
