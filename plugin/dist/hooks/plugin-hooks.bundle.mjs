@@ -47997,6 +47997,7 @@ function userGlobalLaunchHasContent(env = process.env) {
 function instructionsLoadedGapNotice(sessionId, dir = PROJECT_DIR, touchedDir) {
   if (instructionsLoadedSeen(sessionId)) return null;
   if (markerIsTrusted(instructionsLoadedNoticeFile(sessionId))) return null;
+  if (markerIsTrusted(hookgateMarkerPath())) return null;
   const launchCached = markerIsTrusted(launchEmptyFile(sessionId));
   const launchHasBytes = !launchCached && (anyFileHasBytes(announcedLaunchFiles(dir)) || userGlobalLaunchHasContent());
   if (!launchCached && !launchHasBytes)
