@@ -465,7 +465,8 @@ describe("Layer 3 exfil detection across signing schemes", () => {
     ],
     [
       "Firebase Storage download",
-      "https://firebasestorage.googleapis.com/v0/b/p.appspot.com/o/f.png?alt=media&token=0f9d5a3b-1c2e-4a6f-8b7d-2e3f4a5b6c7d",
+      // A dummy download token, not a credential.
+      "https://firebasestorage.googleapis.com/v0/b/p.appspot.com/o/f.png?alt=media&token=0f9d5a3b-1c2e-4a6f-8b7d-2e3f4a5b6c7d", // gitleaks:allow
     ],
   ];
 
@@ -494,16 +495,18 @@ describe("Layer 3 exfil detection across signing schemes", () => {
 
   // A credential in a URL is the exfil this layer exists to name, whichever
   // vendor minted it. Every token below is a same-shape dummy.
+  // The `gitleaks:allow` markers below say the same thing to the secret scan,
+  // which reads the shapes and cannot know they were never minted.
   const JWT =
-    "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.Ab1cD2eF3gH4iJ5kL6mN7oP8qR9sT0uV";
+    "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.Ab1cD2eF3gH4iJ5kL6mN7oP8qR9sT0uV"; // gitleaks:allow
   const leaked = [
     ["GitHub token", "token", `ghp_${"A1b2C3d4E5f6G7h8I9j0K1l2M3n4O5p6Q7r8"}`],
     ["Anthropic key", "api_key", `sk-ant-api03-${"Ab1cD2eF3g".repeat(9)}`],
-    ["Google API key", "apikey", "AIzaSyA1b2C3d4E5f6G7h8I9j0K1l2M3n4O5p6Q"],
+    ["Google API key", "apikey", "AIzaSyA1b2C3d4E5f6G7h8I9j0K1l2M3n4O5p6Q"], // gitleaks:allow
     [
       "Slack bot token",
       "auth",
-      `xoxb-123456789012-1234567890123-${"Ab1cD2eF3gH4iJ5kL6mN7oP8"}`,
+      `xoxb-123456789012-1234567890123-${"Ab1cD2eF3gH4iJ5kL6mN7oP8"}`, // gitleaks:allow
     ],
     ["JWT", "access_token", JWT],
     ["AWS secret key", "secret", "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"],
