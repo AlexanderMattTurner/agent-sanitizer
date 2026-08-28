@@ -47,6 +47,7 @@ process.env.CLAUDE_CONFIG_DIR = emptyConfigDir;
 const { readLoadedFile, scanLoadedFile, loadedFileMessage, scopeNotice } =
   await import("../claude-hooks/scan-loaded-instructions.mjs");
 const { LONG_RUN_THRESHOLD } = await import("../src/invisible.mjs");
+const { hookgateMarkerPath } = await import("../claude-hooks/lib/hook-io.mjs");
 const {
   alertDir,
   appendAlert,
@@ -66,6 +67,9 @@ const SESSION = "sess-loaded-1";
 /** A payload long enough for the scanner's long-run threshold to flag it. */
 const PAYLOAD = "\u{e0001}".repeat(LONG_RUN_THRESHOLD + 2);
 const PROSE = "real prose the strip must keep\n";
+
+/** A pid above Linux's default pid_max, so no live process can carry it. */
+const DEAD_PID = 2 ** 31 - 1;
 
 const markers = [
   instructionsLoadedFile(),
@@ -553,6 +557,50 @@ describe("a session with no InstructionsLoaded scan is named, once", () => {
     } finally {
       rmSync(withContentDir, { recursive: true, force: true });
       rmSync(instructionsLoadedNoticeFile(contentSession), { force: true });
+    }
+  });
+
+  it("stays silent while the host's cold-start marker is present", () => {
+    // A launch event fires about a second after SessionStart, so a host that is
+    // still installing has not necessarily wired anything wrong: the three
+    // causes the notice names would all be false. This is the Claude Code web
+    // case, where the hook files are build output a fresh container lacks.
+    const coldDir = mkdtempSync(join(tmpdir(), "sanitizer-cold-start-"));
+    const runtimeDir = mkdtempSync(join(tmpdir(), "sanitizer-runtime-"));
+    const coldSession = "sess-cold-start";
+    const priorProject = process.env.CLAUDE_PROJECT_DIR;
+    const priorRuntime = process.env.XDG_RUNTIME_DIR;
+    try {
+      writeFileSync(join(coldDir, "CLAUDE.md"), PROSE);
+      process.env.CLAUDE_PROJECT_DIR = coldDir;
+      process.env.XDG_RUNTIME_DIR = runtimeDir;
+      const marker = /** @type {string} */ (hookgateMarkerPath());
+      writeFileSync(marker, String(process.pid));
+      assert.equal(instructionsLoadedGapNotice(coldSession, coldDir), null);
+      // A setup killed mid-install leaves its marker behind. The pid in it is
+      // then dead, and suppressing on the marker alone would silence this
+      // notice for every later session on the host.
+      writeFileSync(marker, String(DEAD_PID));
+      assert.match(
+        instructionsLoadedGapNotice(coldSession, coldDir),
+        /unscanned/u,
+      );
+      rmSync(instructionsLoadedNoticeFile(coldSession), { force: true });
+      // The same launch set warns once setup is done, so the silence above is
+      // the marker's doing and not an empty-launch answer.
+      rmSync(marker, { force: true });
+      assert.match(
+        instructionsLoadedGapNotice(coldSession, coldDir),
+        /unscanned/u,
+      );
+    } finally {
+      process.env.CLAUDE_PROJECT_DIR = /** @type {string} */ (priorProject);
+      if (priorRuntime === undefined) delete process.env.XDG_RUNTIME_DIR;
+      else process.env.XDG_RUNTIME_DIR = priorRuntime;
+      rmSync(coldDir, { recursive: true, force: true });
+      rmSync(runtimeDir, { recursive: true, force: true });
+      rmSync(launchEmptyFile(coldSession), { force: true });
+      rmSync(instructionsLoadedNoticeFile(coldSession), { force: true });
     }
   });
 
