@@ -402,7 +402,7 @@ describe("Layer 3 exfil detection on the Azure SAS taxonomy", () => {
     );
   });
 
-  it("flags a payload chunked across repeated short-valued names", () => {
+  it("flags an over-long value under a short-valued name", () => {
     // Each chunk stays under the blob bar and carries neither an uppercase
     // letter nor a digit, so only the long-query backstop can catch it — and
     // that backstop is exactly what an all-signed-names query suppresses.
