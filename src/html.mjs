@@ -2422,6 +2422,14 @@ const BENIGN_SHORT_PARAM_RE =
 // suppresses the long-query backstop while each chunk stays under the blob bar.
 const BENIGN_SHORT_VALUE_MAX_LEN = 128;
 
+// Budget for the short-named values of one query, summed. The per-value bound
+// alone leaves a payload spread across many distinct signed names, each value
+// sitting just inside it. The fullest real SAS measured here — a user-delegation
+// link carrying five GUIDs, both key-validity timestamps and the response-header
+// overrides — spends a little over 300 characters, so 512 clears every real one
+// while capping what the suppression can ever hide.
+const BENIGN_SHORT_TOTAL_MAX_LEN = 512;
+
 // matchesSecretHint is a deliberately broad PRE-gate whose bare-keyword arms
 // (`token`, `secret`, `authorization`, …) also match ordinary hyphen/word
 // delimited prose, and with no secret-redaction engine to refine the verdict
@@ -2649,16 +2657,30 @@ function rawUrlKeywordExfil(url) {
  * signed-CDN links, which are long by design. Only ever called once the query
  * is known to be long (and thus non-empty), so the vacuous-true empty case
  * cannot arise here.
+ *
+ * A short-valued name must clear three bars, not one. Each bar closes a way to
+ * spend the suppression on bulk data whose individual values stay under the
+ * blob bar: one over-long value, the same name repeated, and many distinct
+ * names each just inside the per-value bound.
  * @param {URL} parsed
  * @returns {boolean}
  */
 function allParamsBenign(parsed) {
-  return rawParams(parsed.search.slice(1)).every(
-    ([name, value]) =>
-      BENIGN_BLOB_PARAM_RE.test(name) ||
-      (BENIGN_SHORT_PARAM_RE.test(name) &&
-        value.length <= BENIGN_SHORT_VALUE_MAX_LEN),
-  );
+  /** @type {Set<string>} */
+  const shortNames = new Set();
+  let shortBytes = 0;
+  for (const [name, value] of rawParams(parsed.search.slice(1))) {
+    if (BENIGN_BLOB_PARAM_RE.test(name)) continue;
+    if (!BENIGN_SHORT_PARAM_RE.test(name)) return false;
+    if (value.length > BENIGN_SHORT_VALUE_MAX_LEN) return false;
+    // A signed URL spells each signed field once; the service rejects a
+    // duplicate. A repeat is therefore a payload split across one name.
+    if (shortNames.has(name)) return false;
+    shortNames.add(name);
+    shortBytes += value.length;
+    if (shortBytes > BENIGN_SHORT_TOTAL_MAX_LEN) return false;
+  }
+  return true;
 }
 
 /**

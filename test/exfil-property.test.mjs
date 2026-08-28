@@ -383,6 +383,25 @@ describe("Layer 3 exfil detection on the Azure SAS taxonomy", () => {
       );
   });
 
+  it("flags a payload spread across signed names", () => {
+    // Each chunk is under the per-value bound and carries no uppercase letter,
+    // so no value-shape test fires and only the long-query backstop can catch
+    // it — the backstop an all-signed-names query would otherwise suppress.
+    const chunk = "abcdef0123_".repeat(10);
+    assert.equal(
+      checkExfilUrl(`https://evil.example/p?comp=${chunk}&comp=${chunk}`),
+      "unusually long query string",
+      "a name repeated to carry two chunks went unreported",
+    );
+    assert.equal(
+      checkExfilUrl(
+        `https://evil.example/p?comp=${chunk}&tn=${chunk}&restype=${chunk}&si=${chunk}&sip=${chunk}`,
+      ),
+      "unusually long query string",
+      "a chunk per distinct signed name went unreported",
+    );
+  });
+
   it("flags a payload chunked across repeated short-valued names", () => {
     // Each chunk stays under the blob bar and carries neither an uppercase
     // letter nor a digit, so only the long-query backstop can catch it — and
