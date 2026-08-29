@@ -1009,9 +1009,27 @@ describe("unit: checkExfilUrl exact verdicts", () => {
     ));
   it("flags a hex blob in a fragment param (fragment walk)", () =>
     assert.equal(
-      checkExfilUrl(`https://e.com/p?a=1#x=${hex64}`),
+      // Past the digest ceiling, so the value is bulk data rather than a
+      // fingerprint; still under the 200-char long-fragment backstop, so the
+      // reason below is the fragment WALK and not the length check.
+      checkExfilUrl(`https://e.com/p?a=1#x=${"a".repeat(129)}`),
       "suspicious query parameter",
     ));
+  it("leaves a digest-length hex value alone (fingerprint, not payload)", () => {
+    // A cache-buster, an ETag, a git commit and a signed-CDN token are all a
+    // bare digest under a generic name. Both directions are asserted so the
+    // ceiling is pinned as a boundary rather than as one benign example.
+    for (const len of [32, 40, 64, 128])
+      assert.equal(
+        checkExfilUrl(`https://cdn.example.com/a.js?v=${"a".repeat(len)}`),
+        null,
+        `a ${len}-char hex digest was reported`,
+      );
+    assert.equal(
+      checkExfilUrl(`https://cdn.example.com/a.js?v=${"a".repeat(129)}`),
+      "suspicious query parameter",
+    );
+  });
   it("flags a long base64 blob in a path segment (beacon w/o query)", () =>
     assert.equal(
       checkExfilUrl(`https://e.com/${"A".repeat(220)}`),
@@ -1180,8 +1198,10 @@ describe("invariant: a parameter's exfil verdict ignores whether it carries an `
       "suspicious query parameter",
     ],
     [
+      // Past the digest ceiling: an all-hex value AT an MD5/SHA length is a
+      // fingerprint, so a hex payload has to be longer to read as bulk data.
       "a hex blob",
-      "a".repeat(16) + "b3c4d5e6f7081920",
+      "a".repeat(120) + "b3c4d5e6f7081920",
       "suspicious query parameter",
     ],
     ["an ordinary word", "guide", null],
@@ -2245,7 +2265,7 @@ describe("splice fidelity and regressions", () => {
     ));
   it("flags a payload-shaped keyword param in the fragment", () =>
     assert.notEqual(
-      checkExfilUrl(`https://ok.example/#token=${"a".repeat(64)}`),
+      checkExfilUrl(`https://ok.example/#token=${"Zm9vQmFy".repeat(8)}`),
       null,
     ));
   it("does not flag a SHORT keyword fragment param on its name alone (#20)", () =>
