@@ -8,6 +8,12 @@ adhere to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+## [2.48.5] - 2026-08-29
+
+### Changed
+
+- Copy gate's repeat cost is now documented against the linear sites.
+
 ## [2.48.4] - 2026-08-29
 
 ### Fixed
