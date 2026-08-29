@@ -286,3 +286,249 @@ describe("Layer 3 exfil detection resists punctuation and renames", () => {
     );
   });
 });
+
+// Azure SAS corpus. Shapes are taken from Microsoft's "Create a service SAS",
+// "Create an account SAS" and "Create a user delegation SAS" reference pages,
+// which enumerate every signed field. Values are same-shape dummies: the `sig`
+// keeps a real signature's length (a 44-character base64 HMAC-SHA256, percent
+// encoded) and the `skoid`/`sktid`/`saoid`/`suoid`/`scid` keep GUID shape, with
+// the secrets themselves replaced. No live credential is committed here.
+describe("Layer 3 exfil detection on the Azure SAS taxonomy", () => {
+  const SIG = "aB3dE5fG7hI9jK1lM3nO5pQ7rS9tU1vW3xY5zA7bC9c%3D";
+  const GUID_A = "0f9d5a3b-1c2e-4a6f-8b7d-2e3f4a5b6c7d";
+  const GUID_B = "72f988bf-86f1-41af-91ab-2d7cd011db47";
+  const WINDOW =
+    "st=2024-01-01T00%3A00%3A00Z&se=2024-01-02T00%3A00%3A00Z&spr=https";
+
+  // Every row's query is longer than the 200-character backstop, so each one
+  // exercises the `allParamsBenign` suppression rather than passing under it.
+  const legitimate = [
+    [
+      "service SAS with response-header overrides",
+      `https://acct.blob.core.windows.net/c/b.pdf?sv=2022-11-02&sr=b&sp=r&si=readpolicy&sip=168.1.5.60-168.1.5.70&${WINDOW}&rscc=max-age%3D3600&rscd=attachment%3B%20filename%3Dreport.pdf&rsce=gzip&rscl=en-US&rsct=application%2Fpdf&sig=${SIG}`,
+    ],
+    [
+      "account SAS on a container listing",
+      `https://acct.blob.core.windows.net/c?restype=container&comp=list&sv=2022-11-02&ss=bfqt&srt=sco&sp=rwdlacupiytfx&${WINDOW}&sip=168.1.5.60-168.1.5.70&sig=${SIG}`,
+    ],
+    [
+      "user-delegation SAS",
+      `https://acct.blob.core.windows.net/c/b.txt?sv=2022-11-02&sr=d&sdd=2&sp=r&${WINDOW}&skoid=${GUID_A}&sktid=${GUID_B}&skt=2024-01-01T00%3A00%3A00Z&ske=2024-01-02T00%3A00%3A00Z&sks=b&skv=2022-11-02&sig=${SIG}`,
+    ],
+    [
+      "user-delegation SAS with correlation ids",
+      `https://acct.blob.core.windows.net/c/b.txt?sv=2022-11-02&sr=b&sp=r&${WINDOW}&saoid=${GUID_A}&suoid=${GUID_B}&scid=${GUID_A}&skoid=${GUID_A}&sktid=${GUID_B}&sks=b&skv=2022-11-02&sig=${SIG}`,
+    ],
+    [
+      "table SAS with partition and row key ranges",
+      `https://acct.table.core.windows.net/mytable?sv=2022-11-02&tn=mytable&sp=raud&${WINDOW}&startpk=customer-a&endpk=customer-z&startrk=000001&endrk=999999&sig=${SIG}`,
+    ],
+    [
+      "blob snapshot and version SAS",
+      `https://acct.blob.core.windows.net/c/b.txt?snapshot=2024-01-01T00%3A00%3A00.0000000Z&versionid=2024-01-01T00%3A00%3A00.0000000Z&ses=myscope&sv=2022-11-02&sr=bv&sp=r&${WINDOW}&sig=${SIG}`,
+    ],
+  ];
+
+  for (const [label, url] of legitimate)
+    it(`leaves a real ${label} alone`, () => {
+      assert.ok(
+        new URL(url).search.length > 200,
+        "case is under the long-query backstop, so it proves nothing",
+      );
+      assert.equal(checkExfilUrl(url), null, `${label} was reported`);
+    });
+
+  // The other direction: a signed-field NAME must never excuse a payload-shaped
+  // value. `sig` is the one deliberate exception — a real signature and a stolen
+  // blob are the same shape, so that dodge is priced in above.
+  const payload = "QUJDRGVmZ2hJSktMbW5vcFFSU1R1dnd4WVoxMjM0NTY3ODkw".repeat(4);
+  const signedNames = [
+    "ss",
+    "srt",
+    "sip",
+    "sdd",
+    "ses",
+    "skt",
+    "ske",
+    "sks",
+    "skv",
+    "skoid",
+    "sktid",
+    "saoid",
+    "suoid",
+    "scid",
+    "tn",
+    "startpk",
+    "endpk",
+    "startrk",
+    "endrk",
+    "snapshot",
+    "versionid",
+    "expires",
+    "restype",
+    "comp",
+    "rscc",
+    "rscd",
+    "rsce",
+    "rscl",
+    "rsct",
+  ];
+
+  it("flags a blob renamed to any signed SAS parameter", () => {
+    for (const name of signedNames)
+      assert.notEqual(
+        checkExfilUrl(`https://evil.example/p?${name}=${payload}`),
+        null,
+        `?${name}=<blob> went unreported`,
+      );
+  });
+
+  it("flags a payload spread across signed names", () => {
+    // Each chunk is under the per-value bound and carries no uppercase letter,
+    // so no value-shape test fires and only the long-query backstop can catch
+    // it — the backstop an all-signed-names query would otherwise suppress.
+    const chunk = "abcdef0123_".repeat(10);
+    assert.equal(
+      checkExfilUrl(`https://evil.example/p?comp=${chunk}&comp=${chunk}`),
+      "unusually long query string",
+      "a name repeated to carry two chunks went unreported",
+    );
+    assert.equal(
+      checkExfilUrl(
+        `https://evil.example/p?comp=${chunk}&tn=${chunk}&restype=${chunk}&si=${chunk}&sip=${chunk}`,
+      ),
+      "unusually long query string",
+      "a chunk per distinct signed name went unreported",
+    );
+  });
+
+  it("flags an over-long value under a short-valued name", () => {
+    // Each chunk stays under the blob bar and carries neither an uppercase
+    // letter nor a digit, so only the long-query backstop can catch it — and
+    // that backstop is exactly what an all-signed-names query suppresses.
+    const slug = "abcdefghij-klmnopqrst_".repeat(9);
+    assert.equal(
+      checkExfilUrl(`https://evil.example/p?sv=2022-11-02&sr=b&si=${slug}`),
+      "unusually long query string",
+    );
+    // Positive marker: the same query with a real-length policy id is silent,
+    // so the row above is the value-length bound and not the name list.
+    assert.equal(
+      checkExfilUrl(
+        `https://acct.blob.core.windows.net/c/b.txt?sv=2022-11-02&sr=b&sp=r&${WINDOW}&si=${slug.slice(0, 120)}&sig=${SIG}`,
+      ),
+      null,
+    );
+  });
+});
+// The same two questions asked of every other signing scheme, not just Azure:
+// does a real signed link stay silent, and does a credential in a URL still
+// fire? Shapes come from each provider's own presigning reference (AWS SigV4
+// and the v2 query auth, CloudFront canned and custom policies, Google Cloud
+// Storage V4 and V2, Alibaba OSS, Huawei OBS, Tencent COS, Akamai token auth,
+// Firebase Storage). Every signature, key and token value is a same-length
+// dummy over the same charset; the documented example key ids (`AKIAIOSFODNN7EXAMPLE`)
+// are the ones the vendors publish as examples.
+describe("Layer 3 exfil detection across signing schemes", () => {
+  const HEX64 =
+    "9f8e7d6c5b4a39281706f5e4d3c2b1a00f1e2d3c4b5a69788796a5b4c3d2e1f0";
+  const B64SIG = "aB3dE5fG7hI9jK1lM3nO5pQ7rS9tU1vW3xY5zA7bC9c%3D";
+
+  const signed = [
+    [
+      "AWS SigV4 presigned",
+      `https://b.s3.amazonaws.com/k.txt?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=AKIAIOSFODNN7EXAMPLE%2F20240101%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20240101T000000Z&X-Amz-Expires=3600&X-Amz-SignedHeaders=host&X-Amz-Signature=${HEX64}`,
+    ],
+    [
+      "AWS v2 query authentication",
+      `https://b.s3.amazonaws.com/k.txt?AWSAccessKeyId=AKIAIOSFODNN7EXAMPLE&Expires=1706000000&Signature=${B64SIG}`,
+    ],
+    [
+      "CloudFront custom policy",
+      `https://d111.cloudfront.net/img.png?Policy=${"eyJTdGF0ZW1lbnQ".repeat(8)}&Signature=${"Ab1cD2eF3".repeat(12)}&Key-Pair-Id=APKAIBAERJR2EXAMPLE`,
+    ],
+    [
+      "Google Cloud Storage V2",
+      `https://storage.googleapis.com/b/o.txt?GoogleAccessId=svc%40proj.iam.gserviceaccount.com&Expires=1706000000&Signature=${B64SIG}`,
+    ],
+    [
+      "Alibaba OSS",
+      `https://b.oss-cn-hangzhou.aliyuncs.com/k?OSSAccessKeyId=LTAI5tExampleKeyId12&Expires=1706000000&Signature=${B64SIG}&x-oss-process=image%2Fresize%2Cw_100`,
+    ],
+    [
+      "Tencent COS",
+      `https://b-125.cos.ap-beijing.myqcloud.com/k?q-sign-algorithm=sha1&q-ak=AKIDEXAMPLEaccesskey1234567890&q-sign-time=1706000000%3B1706003600&q-key-time=1706000000%3B1706003600&q-header-list=host&q-url-param-list=&q-signature=${HEX64.slice(0, 40)}`,
+    ],
+    [
+      "Akamai token authentication",
+      `https://cdn.example.com/v.m3u8?hdnts=exp%3D1706000000~acl%3D%2F*~hmac%3D${HEX64}`,
+    ],
+    [
+      "Firebase Storage download",
+      // A dummy download token, not a credential.
+      "https://firebasestorage.googleapis.com/v0/b/p.appspot.com/o/f.png?alt=media&token=0f9d5a3b-1c2e-4a6f-8b7d-2e3f4a5b6c7d",
+    ],
+  ];
+
+  for (const [label, url] of signed)
+    it(`leaves a real ${label} link alone`, () =>
+      assert.equal(checkExfilUrl(url), null, `${label} was reported`));
+
+  it("still flags a payload renamed to a key-identifier parameter", () => {
+    // The key id names skip the credential arm below the blob floor, never the
+    // blob arm — so the exemption cannot be spent on a payload.
+    const blob = "QUJDRGVmZ2hJSktMbW5vcFFSU1R1dnd4WVoxMjM0NTY3ODkw".repeat(4);
+    for (const name of [
+      "AWSAccessKeyId",
+      "GoogleAccessId",
+      "OSSAccessKeyId",
+      "AccessKeyId",
+      "Key-Pair-Id",
+      "q-ak",
+    ])
+      assert.notEqual(
+        checkExfilUrl(`https://evil.example/p?${name}=${blob}`),
+        null,
+        `?${name}=<blob> went unreported`,
+      );
+  });
+
+  // A credential in a URL is the exfil this layer exists to name, whichever
+  // vendor minted it. Every token below is a same-shape dummy.
+  // `.gitleaks.toml` allowlists this file for the same reason: the scan reads
+  // the shapes and cannot know these were never minted.
+  const JWT =
+    "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.Ab1cD2eF3gH4iJ5kL6mN7oP8qR9sT0uV";
+  const leaked = [
+    ["GitHub token", "token", `ghp_${"A1b2C3d4E5f6G7h8I9j0K1l2M3n4O5p6Q7r8"}`],
+    ["Anthropic key", "api_key", `sk-ant-api03-${"Ab1cD2eF3g".repeat(9)}`],
+    ["Google API key", "apikey", "AIzaSyA1b2C3d4E5f6G7h8I9j0K1l2M3n4O5p6Q"],
+    [
+      "Slack bot token",
+      "auth",
+      `xoxb-123456789012-1234567890123-${"Ab1cD2eF3gH4iJ5kL6mN7oP8"}`,
+    ],
+    ["JWT", "access_token", JWT],
+    ["AWS secret key", "secret", "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"],
+    ["signed session cookie", "session", `s%3A${"Ab1cD2eF3g".repeat(5)}`],
+  ];
+
+  for (const [label, name, value] of leaked)
+    it(`flags a ${label} carried in a URL parameter`, () =>
+      assert.notEqual(
+        checkExfilUrl(`https://evil.example/p?${name}=${value}`),
+        null,
+        `?${name}=<${label}> went unreported`,
+      ));
+
+  it("leaves an ordinary long value in a non-credential parameter alone", () => {
+    // The wrapped-credential scan looks INSIDE a value, so it is gated on the
+    // parameter name saying credential. A prose parameter keeps the old bar.
+    assert.equal(
+      checkExfilUrl(
+        `https://example.com/p?description=see%20the%20${"Ab1cD2eF3g".repeat(5)}%20build`,
+      ),
+      null,
+    );
+  });
+});
