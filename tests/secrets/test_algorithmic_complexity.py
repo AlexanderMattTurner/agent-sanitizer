@@ -233,8 +233,9 @@ _COPY_SMALL_BYTES = 64 * 1024
 _COPY_LARGE_BYTES = 512 * 1024
 _COPY_GROWTH_LIMIT = 15.0
 # Samples of the SMALL side, whose best one is the denominator. Five, not more:
-# the small case is ~1/100th of the large one, so the repeats are free, and the
-# estimator only needs one sample that no collection or arena growth landed in.
+# the small case costs ~1/8th of the large one on the linear entry points (far
+# less on the quadratic control), so the repeats are cheap, and the estimator
+# only needs one sample that no collection or arena growth landed in.
 _COPY_SMALL_REPEATS = 5
 
 # `password="<next unit's `password=`>"` redacts once per TWO units, so the span
@@ -266,10 +267,10 @@ def _cpu_growth_ratio(thunk_for) -> float:
     :data:`_COPY_SMALL_REPEATS` samples. Noise can only ADD CPU time, so an
     anomalously LOW ratio can only come from an inflated denominator: one 64 KiB
     sample that absorbed a garbage collection or the allocator's first arena
-    growth at this size reads as the quadratic having gone away. That is what a
-    CI runner measured, putting the quadratic control at 11.26x against a 30.27x
-    baseline. The large side needs no repeat — inflating it only ever raises the
-    ratio, and no assertion here reads a raised ratio as a pass."""
+    growth at this size reads as the quadratic having gone away. The large side
+    needs no repeat — it burns far more CPU, so the same fixed pause is a much
+    smaller share of it, and inflating it only ever raises the ratio, which no
+    assertion here reads as a pass."""
     thunk_for(_long_field_line(_COPY_SMALL_BYTES))()
     small = min(
         _cpu_seconds(thunk_for(_long_field_line(_COPY_SMALL_BYTES)))
