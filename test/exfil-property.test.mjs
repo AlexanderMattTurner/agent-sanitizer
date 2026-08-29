@@ -540,6 +540,18 @@ describe("Layer 3 exfil detection across signing schemes", () => {
         `?${name}=<${label}> went unreported`,
       ));
 
+  it("keeps the hex floor below base64's, so a short hex payload still fires", () => {
+    // Hex costs two characters per byte, so 32 of them is already 16 bytes of
+    // payload — the hex arm's floor sits below the 40-character base64 one, and
+    // only the digest lengths are exempt rather than a range around them.
+    for (const len of [33, 36, 39, 41, 60])
+      assert.equal(
+        checkExfilUrl(`https://evil.example/p?d=${"a".repeat(len)}`),
+        "suspicious query parameter",
+        `a ${len}-char hex value went unreported`,
+      );
+  });
+
   it("accepts the digest-length and `verify` residuals, so the tradeoff is visible", () => {
     // Two costs of the rows above, pinned rather than left implicit. A payload
     // padded to exactly one digest length rides, and so does one renamed into

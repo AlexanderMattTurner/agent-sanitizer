@@ -2471,14 +2471,19 @@ const VALUE_HAS_DIGIT_RE = /\d/;
 // an incidental hex word never trips it. Both arms are linear.
 //
 // A value that is EXACTLY one digest — all hex, at an MD5/SHA length — is a
-// FINGERPRINT rather than a payload, and `isDigestShaped` below exempts it. A
+// FINGERPRINT rather than a payload, and `isBlobValue` below exempts it. A
 // cache-buster (`?v=<md5>`), an ETag, a request id, a git commit and a
 // signed-CDN token (imgix `?s=`, KeyCDN `?secure=`) are all a bare digest under
 // a generic name, and every one of them was reported before: hex is a subset of
 // base64's alphabet, so the 40-char base64 arm caught them on charset alone.
 const BLOB_VALUE_B64_RE = /^[A-Za-z0-9+/]{40,}={0,2}$/;
 const HEX_ONLY_RE = /^[A-Fa-f0-9]+$/;
-// MD5, SHA-1, SHA-224, SHA-256, SHA-384, SHA-512 in hex.
+// 16 bytes, the floor the hex arm has always carried.
+const HEX_BLOB_MIN_LEN = 32;
+// MD5, SHA-1, SHA-224, SHA-256, SHA-384, SHA-512 in hex. Exact lengths, not a
+// range: bulk data is any length, so only the digest sizes themselves are
+// ambiguous, and an attacker who pads a payload to exactly 64 hex characters
+// buys 32 bytes per parameter. A value one character either side is a payload.
 const DIGEST_HEX_LENGTHS = new Set([32, 40, 56, 64, 96, 128]);
 
 // RFC 4648 §5 url-safe base64 substitutes `-`/`_` for `+`/`/`, so a payload
@@ -2570,24 +2575,15 @@ function isChunkedPathBlob(segment) {
   );
 }
 
-/**
- * True for a value that is exactly one standard digest: an all-hex run at an
- * MD5/SHA-1/SHA-224/SHA-256/SHA-384/SHA-512 length. Hex is a subset of every
- * alphabet below, so this exemption is what makes a fingerprint benign: without
- * it the base64 arm reports a 64-character content hash as a payload on charset
- * alone. Exact lengths, not a range — bulk data is any length, so only the
- * digest sizes themselves are ambiguous, and an attacker who pads a payload to
- * exactly 64 hex characters buys 32 bytes per parameter.
- * @param {string} value
- * @returns {boolean}
- */
-function isDigestShaped(value) {
-  return DIGEST_HEX_LENGTHS.has(value.length) && HEX_ONLY_RE.test(value);
-}
-
 /** @param {string} value @returns {boolean} */
 function isBlobValue(value) {
-  if (isDigestShaped(value)) return false;
+  // An all-hex value keeps its own floor, which sits below base64's: hex costs
+  // two characters per byte, so 32 of them is already 16 bytes of payload. Only
+  // the digest lengths are exempt, never a range around them.
+  if (HEX_ONLY_RE.test(value))
+    return (
+      value.length >= HEX_BLOB_MIN_LEN && !DIGEST_HEX_LENGTHS.has(value.length)
+    );
   return BLOB_VALUE_B64_RE.test(value) || isBase64UrlBlob(value);
 }
 
