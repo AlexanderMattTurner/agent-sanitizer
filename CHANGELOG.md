@@ -8,6 +8,14 @@ adhere to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+## [2.48.6] - 2026-08-29
+
+### Fixed
+
+- Stop digest exemption from covering credential-named parameters
+- Keep the hex blob floor below base64's to prevent unnecessary base64 encoding
+- Treat a bare digest as a fingerprint instead of an exfiltration payload
+
 ## [2.48.5] - 2026-08-29
 
 ### Changed
