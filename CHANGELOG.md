@@ -8,6 +8,16 @@ adhere to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+## [2.48.2] - 2026-08-29
+
+### Fixed
+
+- HTML redaction no longer rewrites example key IDs in comments.
+- Signed-URL field recognition now covers all providers, not just Azure.
+- Signed-CDN queries are now properly bounded to prevent hiding from long-query checks.
+- Signed-URL `expires` timestamps are now treated as short parameters instead of blobs.
+- Azure SAS URL false positives are eliminated and signed-name blob dodges are closed.
+
 ## [2.48.1] - 2026-08-28
 
 ### Fixed
