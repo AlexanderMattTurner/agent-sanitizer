@@ -464,6 +464,25 @@ describe("Layer 3 exfil detection across signing schemes", () => {
       `https://cdn.example.com/v.m3u8?hdnts=exp%3D1706000000~acl%3D%2F*~hmac%3D${HEX64}`,
     ],
     [
+      // imgix signs with a bare MD5 under a one-letter name; KeyCDN and the
+      // cache-busters do the same under `secure`/`v`. Nothing but the digest
+      // length separates these from a payload of the same size.
+      "imgix signed image",
+      "https://ex.imgix.net/p.jpg?w=400&h=300&s=6b1b0e0f0d0c0b0a09080706050403f2",
+    ],
+    [
+      "KeyCDN token-authenticated asset",
+      `https://cdn.example.com/f.jpg?secure=${"a1b2c3d4e5f6a7b8".repeat(2)}&expires=1706000000`,
+    ],
+    [
+      "Cloudflare signed URL",
+      `https://cdn.example.com/f.mp4?verify=1706000000-${"Ab1cD2eF3g".repeat(4)}`,
+    ],
+    [
+      "asset cache-buster and a commit id",
+      "https://cdn.example.com/app.js?v=d41d8cd98f00b204e9800998ecf8427e&commit=9f86d081884c7d659a2feaa0c55ad015a3bf4f1b",
+    ],
+    [
       "Firebase Storage download",
       // A dummy download token, not a credential.
       "https://firebasestorage.googleapis.com/v0/b/p.appspot.com/o/f.png?alt=media&token=0f9d5a3b-1c2e-4a6f-8b7d-2e3f4a5b6c7d",
@@ -520,6 +539,47 @@ describe("Layer 3 exfil detection across signing schemes", () => {
         null,
         `?${name}=<${label}> went unreported`,
       ));
+
+  it("keeps the hex floor below base64's, so a short hex payload still fires", () => {
+    // Hex costs two characters per byte, so 32 of them is already 16 bytes of
+    // payload — the hex arm's floor sits below the 40-character base64 one, and
+    // only the digest lengths are exempt rather than a range around them.
+    for (const len of [33, 36, 39, 41, 60])
+      assert.equal(
+        checkExfilUrl(`https://evil.example/p?d=${"a".repeat(len)}`),
+        "suspicious query parameter",
+        `a ${len}-char hex value went unreported`,
+      );
+  });
+
+  it("accepts the digest-length and `verify` residuals, so the tradeoff is visible", () => {
+    // Two costs of the rows above, pinned rather than left implicit. Under a
+    // GENERIC name a payload padded to exactly one digest length rides, and so
+    // does one renamed into Cloudflare's signing field — the same trade
+    // `?sig=<blob>` already takes. Tightening either changes these rows.
+    assert.equal(
+      checkExfilUrl(`https://evil.example/p?v=${"ab".repeat(32)}`),
+      null,
+    );
+    // The exemption stops at a credential-named parameter: the same 64
+    // characters there are 32 bytes of hex-encoded payload.
+    assert.equal(
+      checkExfilUrl(`https://evil.example/p?d=${"ab".repeat(32)}`),
+      "suspicious query parameter",
+    );
+    assert.equal(
+      checkExfilUrl(
+        `https://evil.example/p?verify=${"QUJDRGVmZ2hJSktMbW5vcFFSU1R1dnd4WVoxMjM0NTY3ODkw".repeat(4)}`,
+      ),
+      null,
+    );
+    // Positive marker: one character past the digest length is bulk data again,
+    // so the row above is the exemption and not a threshold accident.
+    assert.equal(
+      checkExfilUrl(`https://evil.example/p?v=${"ab".repeat(32)}c`),
+      "suspicious query parameter",
+    );
+  });
 
   it("leaves an ordinary long value in a non-credential parameter alone", () => {
     // The wrapped-credential scan looks INSIDE a value, so it is gated on the
