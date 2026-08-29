@@ -2446,8 +2446,8 @@ const BENIGN_SHORT_TOTAL_MAX_LEN = 512;
 // COS (`q-ak`) and CloudFront (`Key-Pair-Id`) all name the key in the URL beside
 // the signature. The id is public by design — the secret is what signs the
 // request, never what travels — but it reads as a credential to
-// `matchesSecretHint` (`AKIAIOSFODNN7EXAMPLE` is an opaque run with a digit and
-// an access-key prefix), so every real v2 presigned link fired. Below the blob
+// `matchesSecretHint` (an `AKIA…` key id is an opaque run with a digit and an
+// access-key prefix), so every real v2 presigned link fired. Below the blob
 // floor these names skip the credential arm only; the blob arm still runs, so a
 // payload renamed `?AWSAccessKeyId=<blob>` is still reported.
 const PUBLIC_KEY_ID_PARAM_RE =
