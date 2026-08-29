@@ -8,6 +8,12 @@ adhere to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+## [2.48.4] - 2026-08-29
+
+### Fixed
+
+- Template sync now runs its own scripts from a staged copy with the tooling path passed through environment variables, improving reliability of the sync process.
+
 ## [2.48.3] - 2026-08-29
 
 ### Fixed
