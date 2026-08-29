@@ -45725,10 +45725,14 @@ function chunkedBlobResidue(value) {
 }
 function isChunkedPathBlob(segment) {
   const joined = chunkedBlobResidue(segment);
-  return joined !== null && joined.length > PATH_BLOB_MIN_LEN && (PATH_BLOB_RE.test(joined) && B64URL_MIXED_RE.test(joined) || isBase64UrlBlob(joined));
+  return joined !== null && joined.length > DIGEST_MAX_LEN && (PATH_BLOB_RE.test(joined) && B64URL_MIXED_RE.test(joined) || isBase64UrlBlob(joined));
+}
+function isDigestShaped(value) {
+  return DIGEST_HEX_LENGTHS.has(value.length) && HEX_ONLY_RE.test(value);
 }
 function isBlobValue(value) {
-  return BLOB_VALUE_B64_RE.test(value) || BLOB_VALUE_HEX_RE.test(value) || isBase64UrlBlob(value);
+  if (isDigestShaped(value)) return false;
+  return BLOB_VALUE_B64_RE.test(value) || isBase64UrlBlob(value);
 }
 function decodedBlobMatch(value) {
   let decoded;
@@ -45817,7 +45821,7 @@ function checkUrlParams(parsed) {
 }
 function checkUrlPath(parsed) {
   for (const segment of parsed.pathname.split("/")) {
-    if (segment.length > PATH_BLOB_MIN_LEN && (PATH_BLOB_RE.test(segment) || isBase64UrlBlob(segment)) || isChunkedPathBlob(segment))
+    if (segment.length > DIGEST_MAX_LEN && (PATH_BLOB_RE.test(segment) || isBase64UrlBlob(segment)) || isChunkedPathBlob(segment))
       return "encoded data blob in path segment";
   }
   return null;
@@ -46015,7 +46019,7 @@ function detectConfusableHosts(text5) {
   }
   return threats.length > 0 ? threats : null;
 }
-var NEAR_ZERO_EPSILON, OFFSCREEN_ABSOLUTE_THRESHOLD, OFFSCREEN_VIEWPORT_THRESHOLD, ABSOLUTE_UNITS, VIEWPORT_UNITS, ANGLE_UNITS, NAMED_COLORS, BLOCK_AXIS_EXTENT_PROPS, INLINE_AXIS_EXTENT_PROPS, BORDER_SHORTHANDS, BORDER_WIDTH_KEYWORDS, FONT_SIZE_UNITS, CSS_PROPERTY_IDENT_RE, REPORTED_TAGS, VOID_ELEMENTS2, FOREIGN_ELEMENTS, RAW_TEXT_ELEMENTS, parseFragment2, PLACEHOLDER_LABEL, PLACEHOLDER_KEY_LEN, LAYER2_PLACEHOLDER_RE, HIDDEN_PLACEHOLDER, COMMENT_PLACEHOLDER, UNPARSEABLE_PLACEHOLDER, mdParser, parseMarkdown, MARKDOWN_CODE_HINT, BOGUS_COMMENT_OPEN_RE, UNTERMINATED_MARKUP_TAIL_RE, PHRASING_ROOTS, FLOW_HTML_PARENTS, MAX_SPLICE_ROUNDS, EXFIL_INDICATORS, KEYWORD_PARAM_NAME_RE, LONG_QUERY_THRESHOLD, DATA_URI_ACTIVE_RE, DATA_URI_LENGTH_THRESHOLD, SCRIPT_URI_RE, RELATIVE_URL_BASE, BENIGN_BLOB_PARAM_RE, BENIGN_SHORT_PARAM_RE, BENIGN_SHORT_VALUE_MAX_LEN, BENIGN_SHORT_TOTAL_MAX_LEN, PUBLIC_KEY_ID_PARAM_RE, BLOB_VALUE_MIN_LEN, OPAQUE_TOKEN_RE, VALUE_HAS_DIGIT_RE, BLOB_VALUE_B64_RE, BLOB_VALUE_HEX_RE, BLOB_VALUE_B64URL_RE, B64URL_MIXED_RE, PATH_BLOB_RE, PATH_BLOB_MIN_LEN, BLOB_SEPARATOR_RE, BLOB_RUN_SPLIT_RE, SRCSET_WS_RE, OFF_ORIGIN_REASON;
+var NEAR_ZERO_EPSILON, OFFSCREEN_ABSOLUTE_THRESHOLD, OFFSCREEN_VIEWPORT_THRESHOLD, ABSOLUTE_UNITS, VIEWPORT_UNITS, ANGLE_UNITS, NAMED_COLORS, BLOCK_AXIS_EXTENT_PROPS, INLINE_AXIS_EXTENT_PROPS, BORDER_SHORTHANDS, BORDER_WIDTH_KEYWORDS, FONT_SIZE_UNITS, CSS_PROPERTY_IDENT_RE, REPORTED_TAGS, VOID_ELEMENTS2, FOREIGN_ELEMENTS, RAW_TEXT_ELEMENTS, parseFragment2, PLACEHOLDER_LABEL, PLACEHOLDER_KEY_LEN, LAYER2_PLACEHOLDER_RE, HIDDEN_PLACEHOLDER, COMMENT_PLACEHOLDER, UNPARSEABLE_PLACEHOLDER, mdParser, parseMarkdown, MARKDOWN_CODE_HINT, BOGUS_COMMENT_OPEN_RE, UNTERMINATED_MARKUP_TAIL_RE, PHRASING_ROOTS, FLOW_HTML_PARENTS, MAX_SPLICE_ROUNDS, EXFIL_INDICATORS, KEYWORD_PARAM_NAME_RE, LONG_QUERY_THRESHOLD, DATA_URI_ACTIVE_RE, DATA_URI_LENGTH_THRESHOLD, SCRIPT_URI_RE, RELATIVE_URL_BASE, BENIGN_BLOB_PARAM_RE, BENIGN_SHORT_PARAM_RE, BENIGN_SHORT_VALUE_MAX_LEN, BENIGN_SHORT_TOTAL_MAX_LEN, PUBLIC_KEY_ID_PARAM_RE, BLOB_VALUE_MIN_LEN, OPAQUE_TOKEN_RE, VALUE_HAS_DIGIT_RE, BLOB_VALUE_B64_RE, HEX_ONLY_RE, DIGEST_HEX_LENGTHS, BLOB_VALUE_B64URL_RE, B64URL_MIXED_RE, PATH_BLOB_RE, DIGEST_MAX_LEN, BLOB_SEPARATOR_RE, BLOB_RUN_SPLIT_RE, SRCSET_WS_RE, OFF_ORIGIN_REASON;
 var init_html4 = __esm({
   "src/html.mjs"() {
     "use strict";
@@ -46322,7 +46326,7 @@ var init_html4 = __esm({
     DATA_URI_LENGTH_THRESHOLD = 4096;
     SCRIPT_URI_RE = /^\s*(?:javascript|vbscript):/i;
     RELATIVE_URL_BASE = "http://relative.invalid";
-    BENIGN_BLOB_PARAM_RE = /^(?:x-(?:amz|goog|ms|oss|obs)-[a-z0-9-]+|amz-[a-z0-9-]+|utm_[a-z]+|sig|signature|hmac|q-signature|policy|credential|code|state|cursor|after|before|continuation|continuationtoken|continuation_token|pagetoken|page_token|nexttoken|next_token|gclid|fbclid|dclid|gbraid|wbraid|msclkid)$/i;
+    BENIGN_BLOB_PARAM_RE = /^(?:x-(?:amz|goog|ms|oss|obs)-[a-z0-9-]+|amz-[a-z0-9-]+|utm_[a-z]+|sig|signature|hmac|verify|q-signature|policy|credential|code|state|cursor|after|before|continuation|continuationtoken|continuation_token|pagetoken|page_token|nexttoken|next_token|gclid|fbclid|dclid|gbraid|wbraid|msclkid)$/i;
     BENIGN_SHORT_PARAM_RE = /^(?:se|sp|sr|sv|st|spr|si|sip|ss|srt|sdd|ses|sk(?:oid|tid|t|e|s|v)|saoid|suoid|scid|tn|start(?:pk|rk)|end(?:pk|rk)|snapshot|versionid|restype|comp|rsc[cdelt]|expires|awsaccesskeyid|googleaccessid|ossaccesskeyid|accesskeyid|key-pair-id|q-(?:ak|sign-algorithm|sign-time|key-time|header-list|url-param-list)|_ga|_gl|mc_eid|mc_cid)$/i;
     BENIGN_SHORT_VALUE_MAX_LEN = 128;
     BENIGN_SHORT_TOTAL_MAX_LEN = 512;
@@ -46331,11 +46335,12 @@ var init_html4 = __esm({
     OPAQUE_TOKEN_RE = /[A-Za-z0-9_]{20,}/g;
     VALUE_HAS_DIGIT_RE = /\d/;
     BLOB_VALUE_B64_RE = /^[A-Za-z0-9+/]{40,}={0,2}$/;
-    BLOB_VALUE_HEX_RE = /^[A-Fa-f0-9]{32,}$/;
+    HEX_ONLY_RE = /^[A-Fa-f0-9]+$/;
+    DIGEST_HEX_LENGTHS = /* @__PURE__ */ new Set([32, 40, 56, 64, 96, 128]);
     BLOB_VALUE_B64URL_RE = /^[A-Za-z0-9_-]{40,}={0,2}$/;
     B64URL_MIXED_RE = /(?=.*[A-Z])(?=.*[0-9])/;
     PATH_BLOB_RE = /^(?:[A-Za-z0-9+/]+={0,2}|[A-Fa-f0-9]+)$/;
-    PATH_BLOB_MIN_LEN = 128;
+    DIGEST_MAX_LEN = 128;
     BLOB_SEPARATOR_RE = /[.,]/g;
     BLOB_RUN_SPLIT_RE = /[^A-Za-z0-9+/=_-]+/;
     SRCSET_WS_RE = /[ \t\n\f\r]/;

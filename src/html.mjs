@@ -2377,7 +2377,7 @@ const RELATIVE_URL_BASE = "http://relative.invalid";
 // Parameter NAMES that legitimately carry a LONG opaque (base64/hex) value, so
 // a blob in one of them is NOT exfil: CDN request-signing (AWS SigV4 /
 // CloudFront `X-Amz-*`/`Signature`/`Policy`/`Key-Pair-Id`, GCS `X-Goog-*`,
-// Azure SAS `sig` only), pagination cursors /
+// Azure SAS `sig` only, Cloudflare `verify`), pagination cursors /
 // continuation tokens, and the long analytics click-IDs. Matched
 // case-insensitively against the exact (lowercased) parameter name. Scope is
 // deliberately limited to names whose benign value is genuinely a long token —
@@ -2392,7 +2392,7 @@ const RELATIVE_URL_BASE = "http://relative.invalid";
 // code, a signed CSRF nonce), so the value shape cannot separate them from a
 // payload.
 const BENIGN_BLOB_PARAM_RE =
-  /^(?:x-(?:amz|goog|ms|oss|obs)-[a-z0-9-]+|amz-[a-z0-9-]+|utm_[a-z]+|sig|signature|hmac|q-signature|policy|credential|code|state|cursor|after|before|continuation|continuationtoken|continuation_token|pagetoken|page_token|nexttoken|next_token|gclid|fbclid|dclid|gbraid|wbraid|msclkid)$/i;
+  /^(?:x-(?:amz|goog|ms|oss|obs)-[a-z0-9-]+|amz-[a-z0-9-]+|utm_[a-z]+|sig|signature|hmac|verify|q-signature|policy|credential|code|state|cursor|after|before|continuation|continuationtoken|continuation_token|pagetoken|page_token|nexttoken|next_token|gclid|fbclid|dclid|gbraid|wbraid|msclkid)$/i;
 
 // The SHORT-valued companions of a signed-CDN link. Azure SAS spells one long
 // `sig` beside a crowd of short fields, and the whole taxonomy is listed here:
@@ -2466,11 +2466,20 @@ const OPAQUE_TOKEN_RE = /[A-Za-z0-9_]{20,}/g;
 const VALUE_HAS_DIGIT_RE = /\d/;
 
 // A value that is ENTIRELY a long base64 (40+ chars, optional `=` padding) or
-// hex (32+ chars) run. Anchored to the whole value (operating on the RAW,
-// un-decoded query so a `+` in base64 is not turned into a space), so a benign
-// short value with an incidental hex word never trips it. Both arms are linear.
+// hex run. Anchored to the whole value (operating on the RAW, un-decoded query
+// so a `+` in base64 is not turned into a space), so a benign short value with
+// an incidental hex word never trips it. Both arms are linear.
+//
+// A value that is EXACTLY one digest — all hex, at an MD5/SHA length — is a
+// FINGERPRINT rather than a payload, and `isDigestShaped` below exempts it. A
+// cache-buster (`?v=<md5>`), an ETag, a request id, a git commit and a
+// signed-CDN token (imgix `?s=`, KeyCDN `?secure=`) are all a bare digest under
+// a generic name, and every one of them was reported before: hex is a subset of
+// base64's alphabet, so the 40-char base64 arm caught them on charset alone.
 const BLOB_VALUE_B64_RE = /^[A-Za-z0-9+/]{40,}={0,2}$/;
-const BLOB_VALUE_HEX_RE = /^[A-Fa-f0-9]{32,}$/;
+const HEX_ONLY_RE = /^[A-Fa-f0-9]+$/;
+// MD5, SHA-1, SHA-224, SHA-256, SHA-384, SHA-512 in hex.
+const DIGEST_HEX_LENGTHS = new Set([32, 40, 56, 64, 96, 128]);
 
 // RFC 4648 §5 url-safe base64 substitutes `-`/`_` for `+`/`/`, so a payload
 // encoded url-safe escapes the `[A-Za-z0-9+/]` arms above. Adding `-`/`_` to the
@@ -2497,7 +2506,10 @@ const B64URL_MIXED_RE = /(?=.*[A-Z])(?=.*[0-9])/;
 // for a payload; the url-safe arm re-admits `-`/`_` but, like the query arm
 // above, gates on a contiguous 40+ alphanumeric run to keep the slug benign.
 const PATH_BLOB_RE = /^(?:[A-Za-z0-9+/]+={0,2}|[A-Fa-f0-9]+)$/;
-const PATH_BLOB_MIN_LEN = 128;
+// SHA-512 is 128 hex characters and no standard digest is longer, so a run past
+// this is bulk encoded data rather than any fingerprint. Shared by the path
+// walk and the hex value arm so the two cannot drift apart.
+const DIGEST_MAX_LEN = 128;
 
 /**
  * True for an entirely-url-safe-base64 value (≥40 chars) whose character mix —
@@ -2552,19 +2564,31 @@ function isChunkedPathBlob(segment) {
   const joined = chunkedBlobResidue(segment);
   return (
     joined !== null &&
-    joined.length > PATH_BLOB_MIN_LEN &&
+    joined.length > DIGEST_MAX_LEN &&
     ((PATH_BLOB_RE.test(joined) && B64URL_MIXED_RE.test(joined)) ||
       isBase64UrlBlob(joined))
   );
 }
 
+/**
+ * True for a value that is exactly one standard digest: an all-hex run at an
+ * MD5/SHA-1/SHA-224/SHA-256/SHA-384/SHA-512 length. Hex is a subset of every
+ * alphabet below, so this exemption is what makes a fingerprint benign: without
+ * it the base64 arm reports a 64-character content hash as a payload on charset
+ * alone. Exact lengths, not a range — bulk data is any length, so only the
+ * digest sizes themselves are ambiguous, and an attacker who pads a payload to
+ * exactly 64 hex characters buys 32 bytes per parameter.
+ * @param {string} value
+ * @returns {boolean}
+ */
+function isDigestShaped(value) {
+  return DIGEST_HEX_LENGTHS.has(value.length) && HEX_ONLY_RE.test(value);
+}
+
 /** @param {string} value @returns {boolean} */
 function isBlobValue(value) {
-  return (
-    BLOB_VALUE_B64_RE.test(value) ||
-    BLOB_VALUE_HEX_RE.test(value) ||
-    isBase64UrlBlob(value)
-  );
+  if (isDigestShaped(value)) return false;
+  return BLOB_VALUE_B64_RE.test(value) || isBase64UrlBlob(value);
 }
 
 /**
@@ -2774,7 +2798,7 @@ function checkUrlParams(parsed) {
 function checkUrlPath(parsed) {
   for (const segment of parsed.pathname.split("/")) {
     if (
-      (segment.length > PATH_BLOB_MIN_LEN &&
+      (segment.length > DIGEST_MAX_LEN &&
         (PATH_BLOB_RE.test(segment) || isBase64UrlBlob(segment))) ||
       isChunkedPathBlob(segment)
     )
