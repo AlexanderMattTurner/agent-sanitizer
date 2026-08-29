@@ -179,6 +179,23 @@ jobs:
           filter: blob:none
           persist-credentials: false
 
+      # The sync writes conflict markers into .github/ itself — SYNC_PATHS
+      # covers .github/scripts — and the resolve step then checks out the
+      # template-sync branch, so every later `bash .github/scripts/...` would
+      # read a marker-bearing copy of its own tooling. Stage the default
+      # branch's .github/ once, before anything writes to the tree, and run
+      # every script of this workflow from there. Staging the whole directory
+      # keeps each script's own relative sources (lib/, ../tool-versions.sh)
+      # resolving next to it.
+      - name: Stage this workflow's tooling from the default branch
+        id: tools
+        run: |
+          dest="${RUNNER_TEMP}/template-sync-tools"
+          rm -rf "$dest"
+          mkdir -p "$dest"
+          cp -R .github "$dest/.github"
+          echo "scripts=${dest}/.github/scripts" >>"$GITHUB_OUTPUT"
+
       - name: Check token workflow scope
         env:
           # Mirrors the checkout step above — validates whichever token is
@@ -189,7 +206,7 @@ jobs:
         # Run the child repo's own copy — never execute scripts directly from
         # the template checkout. Template script updates arrive via sync PRs
         # and go through human review before they can execute.
-        run: bash .github/scripts/check-token-scope.sh
+        run: bash ${{ steps.tools.outputs.scripts }}/check-token-scope.sh
 
       - name: Sync template files with conflict detection
         id: sync
@@ -197,7 +214,7 @@ jobs:
           SYNC_PATHS: ${{ env.SYNC_PATHS }}
           EXCLUDE_PATHS: ${{ env.EXCLUDE_PATHS }}
           OPT_IN_PATHS: ${{ env.OPT_IN_PATHS }}
-        run: bash .github/scripts/template-sync.sh
+        run: bash ${{ steps.tools.outputs.scripts }}/template-sync.sh
 
       - name: Show diff (dry run)
         if: inputs.dry-run == true && steps.sync.outputs.has_changes == 'true'
@@ -206,7 +223,7 @@ jobs:
           HAS_DELETIONS: ${{ steps.sync.outputs.has_deletions }}
           CONFLICT_FILES: ${{ steps.sync.outputs.conflict_files }}
           DELETED_FILES: ${{ steps.sync.outputs.deleted_files }}
-        run: bash .github/scripts/show-sync-diff.sh
+        run: bash ${{ steps.tools.outputs.scripts }}/show-sync-diff.sh
 
       - name: Create Pull Request
         if: inputs.dry-run != true && (steps.sync.outputs.has_changes == 'true' || steps.sync.outputs.has_conflicts == 'true' || steps.sync.outputs.has_deletions == 'true')
@@ -292,7 +309,7 @@ jobs:
       # markers live on the sync branch, so switch to it before resolving.
       - name: Install mergiraf (pinned, digest-verified)
         if: inputs.dry-run != true && steps.sync.outputs.has_conflicts == 'true' && steps.create-pr.outputs.pull-request-number
-        run: bash .github/scripts/install-mergiraf.sh
+        run: bash ${{ steps.tools.outputs.scripts }}/install-mergiraf.sh
 
       # template-sync-resolve.sh's tier 2 hands unresolved conflicts to the
       # resolver's own auto-resolve/fanout.py, which no longer ships in this
@@ -328,7 +345,7 @@ jobs:
         run: |
           git fetch --no-tags origin "+refs/heads/template-sync:refs/remotes/origin/template-sync"
           git checkout -B template-sync origin/template-sync
-          bash .github/scripts/template-sync-resolve.sh
+          bash ${{ steps.tools.outputs.scripts }}/template-sync-resolve.sh
 
       - name: Push the resolutions
         if: steps.resolve.outcome == 'success' && (steps.resolve.outputs.deterministic != '' || steps.resolve.outputs.by_model != '')
@@ -337,7 +354,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.TEMPLATE_SYNC_TOKEN_ORG || secrets.GITHUB_TOKEN }}
           DETERMINISTIC: ${{ steps.resolve.outputs.deterministic }}
           BY_MODEL: ${{ steps.resolve.outputs.by_model }}
-        run: bash .github/scripts/template-sync-push.sh
+        run: bash ${{ steps.tools.outputs.scripts }}/template-sync-push.sh
 
       # A sync merges itself only when NOTHING needed judgement. See the script
       # for the full predicate; the two carve-outs are that a model-resolved file
@@ -353,4 +370,4 @@ jobs:
           HAS_DOWNGRADES: ${{ steps.sync.outputs.has_downgrades }}
           ALL_DETERMINISTIC: ${{ steps.resolve.outputs.all_deterministic }}
           CHANGED_PATHS: ${{ steps.sync.outputs.changed_paths }}
-        run: bash .github/scripts/template-sync-automerge.sh
+        run: bash ${{ steps.tools.outputs.scripts }}/template-sync-automerge.sh
