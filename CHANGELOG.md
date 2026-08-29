@@ -8,6 +8,13 @@ adhere to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+## [2.48.3] - 2026-08-29
+
+### Fixed
+
+- Resolved security scan failures caused by unset Claude credential by properly scoping OAuth credentials to the step that uses them.
+- Cleared four advisories reported by pnpm audit in the development dependency tree.
+
 ## [2.48.2] - 2026-08-29
 
 ### Fixed
