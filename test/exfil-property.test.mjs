@@ -553,13 +553,19 @@ describe("Layer 3 exfil detection across signing schemes", () => {
   });
 
   it("accepts the digest-length and `verify` residuals, so the tradeoff is visible", () => {
-    // Two costs of the rows above, pinned rather than left implicit. A payload
-    // padded to exactly one digest length rides, and so does one renamed into
-    // Cloudflare's signing field — the same trade `?sig=<blob>` already takes.
-    // Anyone tightening either has to change this row deliberately.
+    // Two costs of the rows above, pinned rather than left implicit. Under a
+    // GENERIC name a payload padded to exactly one digest length rides, and so
+    // does one renamed into Cloudflare's signing field — the same trade
+    // `?sig=<blob>` already takes. Tightening either changes these rows.
+    assert.equal(
+      checkExfilUrl(`https://evil.example/p?v=${"ab".repeat(32)}`),
+      null,
+    );
+    // The exemption stops at a credential-named parameter: the same 64
+    // characters there are 32 bytes of hex-encoded payload.
     assert.equal(
       checkExfilUrl(`https://evil.example/p?d=${"ab".repeat(32)}`),
-      null,
+      "suspicious query parameter",
     );
     assert.equal(
       checkExfilUrl(
@@ -570,7 +576,7 @@ describe("Layer 3 exfil detection across signing schemes", () => {
     // Positive marker: one character past the digest length is bulk data again,
     // so the row above is the exemption and not a threshold accident.
     assert.equal(
-      checkExfilUrl(`https://evil.example/p?d=${"ab".repeat(32)}c`),
+      checkExfilUrl(`https://evil.example/p?v=${"ab".repeat(32)}c`),
       "suspicious query parameter",
     );
   });

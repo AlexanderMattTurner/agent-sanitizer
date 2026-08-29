@@ -286,9 +286,7 @@ const CORPUS = {
     },
     {
       name: "fragment-keyword-exfil",
-      // A payload, not a digest: the base64 alphabet reaches past hex, which
-      // is what tells bulk bytes from a content hash of the same length.
-      input: `https://ok.example/p#token=${"Zm9vQmFy".repeat(8)}`,
+      input: `https://ok.example/p#token=${"a".repeat(64)}`,
       reason: "suspicious query parameter",
     },
     {
@@ -347,6 +345,8 @@ const CORPUS = {
     },
     {
       name: "fragment-param-blob",
+      // `x` is a generic name, where a digest-length hex value reads as a
+      // fingerprint — so this row's payload reaches past the hex alphabet.
       input: "https://ok.example/p?a=1#x=" + "Zm9vQmFy".repeat(8),
       reason: "suspicious query parameter",
     },
@@ -355,7 +355,7 @@ const CORPUS = {
       // keyword param IS payload-shaped and still flags after the name-only arm
       // was replaced by value-gating.
       name: "keyword-data-blob-retained",
-      input: "https://evil.example/c?data=" + "Zm9vQmFy".repeat(8),
+      input: "https://evil.example/c?data=" + "A".repeat(64),
       reason: "suspicious query parameter",
     },
     {

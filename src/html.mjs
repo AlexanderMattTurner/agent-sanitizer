@@ -2512,8 +2512,8 @@ const B64URL_MIXED_RE = /(?=.*[A-Z])(?=.*[0-9])/;
 // above, gates on a contiguous 40+ alphanumeric run to keep the slug benign.
 const PATH_BLOB_RE = /^(?:[A-Za-z0-9+/]+={0,2}|[A-Fa-f0-9]+)$/;
 // SHA-512 is 128 hex characters and no standard digest is longer, so a run past
-// this is bulk encoded data rather than any fingerprint. Shared by the path
-// walk and the hex value arm so the two cannot drift apart.
+// this is bulk encoded data rather than any fingerprint. Shared by the two path
+// walks so the segment gate and the chunked-residue gate cannot drift.
 const DIGEST_MAX_LEN = 128;
 
 /**
@@ -2575,14 +2575,25 @@ function isChunkedPathBlob(segment) {
   );
 }
 
-/** @param {string} value @returns {boolean} */
-function isBlobValue(value) {
+/**
+ * Bulk-encoded bytes, with the digest exemption applied. `digestIsBenign` says
+ * whether an exact-digest-length hex value counts as a fingerprint here: true
+ * under a generic parameter name, where a cache-buster or an ETag is the
+ * overwhelmingly likelier reading, and false under a name that already says
+ * credential, where the same 64 characters are as likely 32 bytes of hex-encoded
+ * cookie. The name is what separates them — the value shape cannot.
+ * @param {string} value
+ * @param {boolean} digestIsBenign
+ * @returns {boolean}
+ */
+function isBlobValue(value, digestIsBenign) {
   // An all-hex value keeps its own floor, which sits below base64's: hex costs
   // two characters per byte, so 32 of them is already 16 bytes of payload. Only
   // the digest lengths are exempt, never a range around them.
   if (HEX_ONLY_RE.test(value))
     return (
-      value.length >= HEX_BLOB_MIN_LEN && !DIGEST_HEX_LENGTHS.has(value.length)
+      value.length >= HEX_BLOB_MIN_LEN &&
+      !(digestIsBenign && DIGEST_HEX_LENGTHS.has(value.length))
     );
   return BLOB_VALUE_B64_RE.test(value) || isBase64UrlBlob(value);
 }
@@ -2599,16 +2610,17 @@ function isBlobValue(value) {
  * percent-sequence throws in `decodeURIComponent`; that failure is not a
  * blob shape either way, so it fails open (skip the decoded check).
  * @param {string} value
+ * @param {boolean} digestIsBenign
  * @returns {boolean}
  */
-function decodedBlobMatch(value) {
+function decodedBlobMatch(value, digestIsBenign) {
   let decoded;
   try {
     decoded = decodeURIComponent(value);
   } catch {
     return false;
   }
-  return isBlobValue(decoded);
+  return isBlobValue(decoded, digestIsBenign);
 }
 
 // A credential rarely travels alone in a parameter: a signed session cookie is
@@ -2636,7 +2648,7 @@ function containsBlobRun(value) {
   }
   for (const form of decoded === value ? [value] : [value, decoded])
     for (const part of form.split(BLOB_RUN_SPLIT_RE))
-      if (part !== form && isBlobValue(part)) return true;
+      if (part !== form && isBlobValue(part, false)) return true;
   return false;
 }
 
@@ -2679,6 +2691,13 @@ function paramExfilReason(name, value, rawName) {
   if (BENIGN_BLOB_PARAM_RE.test(name)) return null;
   const publicKeyId =
     PUBLIC_KEY_ID_PARAM_RE.test(name) && value.length < BLOB_VALUE_MIN_LEN;
+  // Every fingerprint the digest exemption exists for sits under a GENERIC name
+  // — a cache-buster `?v=`, an ETag, imgix's `?s=`, a commit id. Under a name
+  // that already says credential the same 64 hex characters read as 32 bytes of
+  // payload, so the exemption stops there.
+  const digestIsBenign = !(
+    KEYWORD_PARAM_NAME_RE.test(name) || matchesSecretHint(name)
+  );
   for (const candidate of [rawName, value]) {
     if (!candidate) continue;
     // A leaked credential is an OPAQUE, separator-free token. Gate the
@@ -2694,7 +2713,10 @@ function paramExfilReason(name, value, rawName) {
       )
     )
       return "credential-shaped token in URL parameter";
-    if (isBlobValue(candidate) || decodedBlobMatch(candidate))
+    if (
+      isBlobValue(candidate, digestIsBenign) ||
+      decodedBlobMatch(candidate, digestIsBenign)
+    )
       return "suspicious query parameter";
   }
   // A wrapped credential (`?session=s%3A<token>.<mac>`) in a parameter whose

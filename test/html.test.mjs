@@ -1017,9 +1017,10 @@ describe("unit: checkExfilUrl exact verdicts", () => {
     ));
   it("leaves a digest-length hex value alone (fingerprint, not payload)", () => {
     // A cache-buster, an ETag, a git commit and a signed-CDN token are all a
-    // bare digest under a generic name. Both directions are asserted so the
-    // ceiling is pinned as a boundary rather than as one benign example.
-    for (const len of [32, 40, 64, 128])
+    // bare digest under a GENERIC name. Every enumerated digest length is
+    // covered, and both directions are asserted, so the exemption is pinned as
+    // a boundary rather than as one benign example.
+    for (const len of [32, 40, 56, 64, 96, 128])
       assert.equal(
         checkExfilUrl(`https://cdn.example.com/a.js?v=${"a".repeat(len)}`),
         null,
@@ -2265,7 +2266,7 @@ describe("splice fidelity and regressions", () => {
     ));
   it("flags a payload-shaped keyword param in the fragment", () =>
     assert.notEqual(
-      checkExfilUrl(`https://ok.example/#token=${"Zm9vQmFy".repeat(8)}`),
+      checkExfilUrl(`https://ok.example/#token=${"a".repeat(64)}`),
       null,
     ));
   it("does not flag a SHORT keyword fragment param on its name alone (#20)", () =>

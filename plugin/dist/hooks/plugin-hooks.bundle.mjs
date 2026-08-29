@@ -45727,19 +45727,19 @@ function isChunkedPathBlob(segment) {
   const joined = chunkedBlobResidue(segment);
   return joined !== null && joined.length > DIGEST_MAX_LEN && (PATH_BLOB_RE.test(joined) && B64URL_MIXED_RE.test(joined) || isBase64UrlBlob(joined));
 }
-function isBlobValue(value) {
+function isBlobValue(value, digestIsBenign) {
   if (HEX_ONLY_RE.test(value))
-    return value.length >= HEX_BLOB_MIN_LEN && !DIGEST_HEX_LENGTHS.has(value.length);
+    return value.length >= HEX_BLOB_MIN_LEN && !(digestIsBenign && DIGEST_HEX_LENGTHS.has(value.length));
   return BLOB_VALUE_B64_RE.test(value) || isBase64UrlBlob(value);
 }
-function decodedBlobMatch(value) {
+function decodedBlobMatch(value, digestIsBenign) {
   let decoded;
   try {
     decoded = decodeURIComponent(value);
   } catch {
     return false;
   }
-  return isBlobValue(decoded);
+  return isBlobValue(decoded, digestIsBenign);
 }
 function containsBlobRun(value) {
   let decoded = value;
@@ -45749,7 +45749,7 @@ function containsBlobRun(value) {
   }
   for (const form of decoded === value ? [value] : [value, decoded])
     for (const part of form.split(BLOB_RUN_SPLIT_RE))
-      if (part !== form && isBlobValue(part)) return true;
+      if (part !== form && isBlobValue(part, false)) return true;
   return false;
 }
 function rawParams(qs) {
@@ -45766,6 +45766,7 @@ function rawParams(qs) {
 function paramExfilReason(name50, value, rawName) {
   if (BENIGN_BLOB_PARAM_RE.test(name50)) return null;
   const publicKeyId = PUBLIC_KEY_ID_PARAM_RE.test(name50) && value.length < BLOB_VALUE_MIN_LEN;
+  const digestIsBenign = !(KEYWORD_PARAM_NAME_RE.test(name50) || matchesSecretHint(name50));
   for (const candidate of [rawName, value]) {
     if (!candidate) continue;
     const opaqueRuns = publicKeyId ? null : candidate.match(OPAQUE_TOKEN_RE);
@@ -45773,7 +45774,7 @@ function paramExfilReason(name50, value, rawName) {
       (run) => VALUE_HAS_DIGIT_RE.test(run) && matchesSecretHint(run)
     ))
       return "credential-shaped token in URL parameter";
-    if (isBlobValue(candidate) || decodedBlobMatch(candidate))
+    if (isBlobValue(candidate, digestIsBenign) || decodedBlobMatch(candidate, digestIsBenign))
       return "suspicious query parameter";
   }
   if ((KEYWORD_PARAM_NAME_RE.test(name50) || matchesSecretHint(name50)) && containsBlobRun(value))
