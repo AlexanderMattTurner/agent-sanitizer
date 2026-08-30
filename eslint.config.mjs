@@ -1,4 +1,5 @@
 import js from "@eslint/js";
+import redos from "eslint-plugin-redos";
 import globals from "globals";
 import tseslint from "typescript-eslint";
 
@@ -92,6 +93,28 @@ export default tseslint.config(
       globals: { ...globals.node },
     },
     rules: { "consistent-return": "error" },
+  },
+  {
+    // Defense in depth beside the regexploit CI gate: regexploit reasons about
+    // Python-flavored patterns extracted statically, so it is blind to the
+    // JS-only constructs (lookbehind, `v`-mode classes) and to any pattern it
+    // fails to extract. `recheck` decides on the real JS regex AST instead, and
+    // it reads polynomial blow-up the extraction gate misses — the two patterns
+    // it found on the style and srcset paths were both invisible to regexploit.
+    //
+    // The SHIPPED code only, not the whole tree. A test asserting on a stderr
+    // string, or a script parsing a committed YAML line, reads input this repo
+    // wrote; recheck reports the same polynomial shapes there, and 56 findings
+    // nobody can act on is how a real one stops being read. The line is what the
+    // input is: attacker-controlled text goes through these files and no others.
+    files: [
+      "src/**/*.mjs",
+      "claude-hooks/**/*.mjs",
+      "bin/**/*.mjs",
+      "plugin/scripts/**/*.mjs",
+    ],
+    plugins: { redos },
+    rules: { "redos/no-vulnerable": "error" },
   },
   {
     // The one module allowed to call esbuild directly — it *is* the guard.
