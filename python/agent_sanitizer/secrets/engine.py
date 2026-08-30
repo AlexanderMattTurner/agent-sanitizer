@@ -770,57 +770,60 @@ def _is_metadata_field(c: Candidate) -> bool:
     return c.line[start:end].lower().endswith(_METADATA_SUFFIXES)
 
 
-# A credential noun preceded by an English DETERMINER or possessive — "their
-# secret: <v>", "the token = <v>" — is a SENTENCE naming a credential, not a
-# key/value pair holding one. The field-value grammar has no lookbehind (so
-# `mypassword: …` still matches), so a diagnostic line like
-#
-#     the plan-job ran without their secret: tiktok_automation_account_id
-#
-# read as an assignment and the env NAME the line exists to report was rewritten
-# to `[REDACTED]`.
-#
-# Determiners are the ONLY word class this gate trusts, and the list must never
-# grow past it. The tempting generalization — skip on any English function word
-# (prepositions, conjunctions, auxiliaries, negation) — is unsound, because
-# most of them legally precede an identifier holding a live literal in some
-# real grammar: Python `if not password == "…"` (`==` is in _ASSIGN_OP_CHARS),
-# OCaml `let a = 1 and password = "…"`, Ruby `x or password = "…"` / modifier
-# `unless`, Jinja `{% with secret = "…" %}`, BASIC `For x = …`, Python `as`,
-# Haskell `where` — and in juxtaposition languages (ML/Haskell application
-# `f x`) ANY word can precede an identifier, so the claim "no grammar assigns
-# after this word" is provable for no open-ended list. It holds for determiners
-# because `the`/`their`/`this` are keywords nowhere and two juxtaposed
-# identifiers around an assignment parse in no mainstream grammar. The guard
-# test pins known grammar keywords out of the list so it cannot regrow them.
-#
-# The verdict rests on the surrounding text rather than the value, so it is
-# forgeable — web ingress can prepend "their " to launder a credential — and it
-# therefore sits in NAME_TRUST_GATES, off for attacker-controlled text. The
-# entropy floor is the second condition: a value carrying an opaque
-# credential-shaped run (`their secret: ghp_…`) is never skipped, so the cost is
-# bounded to values holding no credential material. What remains uncovered is a
-# lowercase diceware passphrase in this position, the same tradeoff
-# `_is_lowercase_metavariable` documents.
+# The word class `_is_prose_field` trusts — determiners/possessives ONLY. Wider
+# function words legally precede an identifier holding a live literal in real
+# grammars (Python `if not password == "…"`, OCaml `and`, Ruby `or`/`unless`,
+# Jinja `{% with %}`, Haskell `where`), and ML/Haskell application (`f x`) lets
+# ANY word precede one — the guard test pins known grammar keywords out.
 _PROSE_DETERMINERS = frozenset(
     "a an the this that these those each every no another such "
     "my our your his her its their whose".split()
 )
 
+# The value shape the prose skip additionally requires: a lowercase
+# underscore-joined identifier of two or more segments — the env-var-NAME shape
+# the gate exists to preserve, and one no issuer's token takes.
+_LOWER_IDENT_RE = re.compile(r"[a-z][a-z0-9]*(?:_[a-z0-9]+)+")
+
 
 def _is_prose_field(c: Candidate) -> bool:
-    """True when the credential noun before the value is preceded by an English
-    determiner or possessive, so the line is prose naming a credential rather
-    than a field holding one."""
+    """True when the line is prose NAMING a credential, not a field holding one
+    — `the plan-job ran without their secret: tiktok_automation_account_id`
+    reads as a `secret: <v>` assignment (the field grammar has no lookbehind)
+    and the env NAME the diagnostic exists to report is redacted away.
+
+    This skip is what stops that mangling, and it requires ALL of:
+
+    * The credential noun is directly preceded, on its own line, by a separate
+      English determiner/possessive (`_PROSE_DETERMINERS`) — the one word class
+      that is a keyword in no grammar and cannot juxtapose an identifier around
+      an assignment. A quote pair wrapping the noun (`their "secret": …`) is
+      peeled first.
+    * The value is a lowercase multi-segment identifier (`_LOWER_IDENT_RE`) —
+      an env-var NAME, never an issued token, and not the hyphen/space-joined
+      shape of a diceware passphrase — carrying no opaque credential-shaped
+      run (`their secret: ghp_…` still redacts).
+
+    The determiner is forgeable text, so the gate is name-trust: off on web
+    ingress. Residual cost: a passphrase spelled exactly like a lowercase
+    underscore-joined env name in this position is passed through."""
     span = _assigned_field_span(c)
     if span is None or _has_opaque_run(c.value):
         return False
+    if _LOWER_IDENT_RE.fullmatch(c.value) is None:
+        return False
     line = c.line
-    # The determiner must be a SEPARATE word: the identifier walk above
-    # already consumed every alnum/underscore byte, so a glued spelling
-    # ("thesecret:") leaves no whitespace here and is not one at all.
-    before = _rstrip_index(line, span[0])
-    if before == span[0] or before == 0:
+    # A quoted noun (`their "secret": v`) keeps its opening quote glued to the
+    # identifier; peel it only when the closing side was quoted too.
+    start = span[0]
+    if start > 0 and line[start - 1] in "\"'" and line[start - 1] in line[span[1] :]:
+        start -= 1
+    # The determiner must be a SEPARATE word on the SAME line: the identifier
+    # walk above consumed every alnum/underscore byte (a glued "thesecret:" has
+    # no whitespace here), and on the field-value path `line` is the whole
+    # document, so a preceding LINE's trailing word must not decide this one.
+    before = _rstrip_index(line, start)
+    if before == start or before == 0 or "\n" in line[before:start]:
         return False
     word = line[_ident_run_start(line, before, "") : before]
     return word.lower() in _PROSE_DETERMINERS

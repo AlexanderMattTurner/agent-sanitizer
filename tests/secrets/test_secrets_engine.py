@@ -1071,8 +1071,14 @@ def test_repeated_value_defeats_the_metadata_skip(label, text):
         ),
         (
             "possessive",
-            "your password = correct-horse-battery",
-            "correct-horse-battery",
+            "your password = build_bot_env_password",
+            "build_bot_env_password",
+            True,
+        ),
+        (
+            "quoted noun",
+            'ran without their "secret": tiktok_automation_account_id',
+            "tiktok_automation_account_id",
             True,
         ),
         (
@@ -1086,6 +1092,29 @@ def test_repeated_value_defeats_the_metadata_skip(label, text):
             'their secret: "tiktok_automation_account_id"',
             "tiktok_automation_account_id",
             True,
+        ),
+        # The value must take the env-var-NAME shape: a hyphen/space-joined
+        # passphrase or a mixed-case token under a determiner is NOT skipped.
+        (
+            "possessive before a hyphen passphrase",
+            "your password = correct-horse-battery",
+            "correct-horse-battery",
+            False,
+        ),
+        (
+            "possessive before a mixed-case value",
+            "my password: Hunter2Passw0rdABCDEfgh",
+            "Hunter2Passw0rdABCDEfgh",
+            False,
+        ),
+        # The determiner must sit on the value's own line: on the field-value
+        # path `line` is the whole document, and a comment line ending in a
+        # determiner must not vouch for the next line's real assignment.
+        (
+            "previous line ends in a determiner",
+            "# rotate this\npassword: my_leaked_service_password",
+            "my_leaked_service_password",
+            False,
         ),
         # Wider function words are NOT trusted — most legally precede an
         # identifier in some grammar (see _PROSE_DETERMINERS' comment).
@@ -1145,11 +1174,11 @@ def test_repeated_value_defeats_the_metadata_skip(label, text):
             False,
         ),
         # The entropy floor: a value carrying credential material is never
-        # skipped, whatever sentence surrounds it.
+        # skipped, even when it spells itself as a lowercase identifier.
         (
             "opaque run under a determiner",
-            "their secret: ghp_A1b2C3d4E5f6G7h8I9j0K1l2M3n4O5",
-            "ghp_A1b2C3d4E5f6G7h8I9j0K1l2M3n4O5",
+            "their secret: ghp_a1b2c3d4e5f6g7h8i9j0k1l2m3n4o5",
+            "ghp_a1b2c3d4e5f6g7h8i9j0k1l2m3n4o5",
             False,
         ),
     ],
@@ -1229,6 +1258,7 @@ def test_prose_determiners_carry_no_grammar_keyword():
             "the plan-job ran without their secret: tiktok_automation_account_id",
         ),
         ("quoted, keyword path", 'their secret: "tiktok_automation_account_id"'),
+        ("quoted noun", 'ran without their "secret": tiktok_automation_account_id'),
         ("article", "restored the secret: tiktok_automation_account_id"),
         ("quantifier", "the run had no token: my_service_account_token_name"),
     ],
@@ -1249,6 +1279,16 @@ def test_prose_determiner_lines_are_not_redacted(label, text):
             "a credential-shaped value still redacts",
             "their secret: ghp_A1b2C3d4E5f6G7h8I9j0K1l2M3n4O5",
             "ghp_A1b2C3d4E5f6G7h8I9j0K1l2M3n4O5",
+        ),
+        (
+            "a passphrase under a possessive still redacts",
+            "your password = correct-horse-battery",
+            "correct-horse-battery",
+        ),
+        (
+            "a determiner on the previous line does not vouch",
+            "# rotate this\npassword: my_leaked_service_password",
+            "my_leaked_service_password",
         ),
         (
             "a shell control keyword is an assignment context",
