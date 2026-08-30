@@ -770,47 +770,50 @@ def _is_metadata_field(c: Candidate) -> bool:
     return c.line[start:end].lower().endswith(_METADATA_SUFFIXES)
 
 
-# The word class `_is_prose_field` trusts — determiners/possessives ONLY. Wider
-# function words legally precede an identifier holding a live literal in real
-# grammars (Python `if not password == "…"`, OCaml `and`, Ruby `or`/`unless`,
-# Jinja `{% with %}`, Haskell `where`), and ML/Haskell application (`f x`) lets
-# ANY word precede one — the guard test pins known grammar keywords out.
-_PROSE_DETERMINERS = frozenset(
-    "a an the this that these those each every no another such "
-    "my our your his her its their whose".split()
+# The closed set of grammar keywords that legally precede an assigned key with
+# only a space between them — the one shape running prose shares with real
+# structure. Declaration/binding keywords, the shell control keywords that
+# precede a one-line assignment, and the operators/keywords that precede an
+# identifier compared against a literal (`==` is in _ASSIGN_OP_CHARS). This is
+# a DENYLIST: a word here keeps its line structural, any other word marks
+# prose. Grammar keywords are a finite, spec-defined class, so the list can be
+# audited to completion — unlike English, which is why `_is_prose_field` does
+# not enumerate prose words. A missed keyword costs a bounded skip (the opaque-
+# run floor still redacts credential-shaped values); err on the side of adding.
+_STRUCTURAL_KEYWORDS = frozenset(
+    # Declaration/binding keywords.
+    "export set setenv env var val let const declare local readonly global "
+    "static final mut auto dim arg define alias typeset import using new "
+    "public private protected internal "
+    # Control keywords that precede a one-line assignment or comparison.
+    "then do else elif fi done esac if while until for when case begin "
+    "and or not with unless as where in is return".split()
 )
-
-# The value shape the prose skip additionally requires: a lowercase
-# underscore-joined identifier of two or more segments — the env-var-NAME shape
-# the gate exists to preserve, and one no issuer's token takes.
-_LOWER_IDENT_RE = re.compile(r"[a-z][a-z0-9]*(?:_[a-z0-9]+)+")
 
 
 def _is_prose_field(c: Candidate) -> bool:
-    """True when the line is prose NAMING a credential, not a field holding one
-    — `the plan-job ran without their secret: tiktok_automation_account_id`
-    reads as a `secret: <v>` assignment (the field grammar has no lookbehind)
-    and the env NAME the diagnostic exists to report is redacted away.
+    """True when the credential noun sits in PROSE position, so the key/value
+    reading does not apply at all — `the plan-job ran without their secret:
+    tiktok_automation_account_id` is a sentence naming a credential, and
+    redacting it removes the identifier the line exists to report.
 
-    This skip is what stops that mangling, and it requires ALL of:
+    A real key sits in a STRUCTURAL position: at line start or after
+    indentation, after punctuation (`{` `,` `-` a quote), glued into a longer
+    identifier (`my_secret:`), or after one of the grammar keywords that
+    legally precede an assigned key (`_STRUCTURAL_KEYWORDS` — `export`, `let`,
+    `then`, `and`, …). A noun preceded by any OTHER bare word plus a space is
+    running text, and running text gets no key/value interpretation — the
+    engine does not enumerate English to decide which prose words are safe,
+    because that class is open (any word precedes an identifier under
+    ML/Haskell application); the keyword class is closed and auditable.
 
-    * The credential noun is directly preceded, on its own line, by a separate
-      English determiner/possessive (`_PROSE_DETERMINERS`) — the one word class
-      that is a keyword in no grammar and cannot juxtapose an identifier around
-      an assignment. A quote pair wrapping the noun (`their "secret": …`) is
-      peeled first.
-    * The value is a lowercase multi-segment identifier (`_LOWER_IDENT_RE`) —
-      an env-var NAME, never an issued token, and not the hyphen/space-joined
-      shape of a diceware passphrase — carrying no opaque credential-shaped
-      run (`their secret: ghp_…` still redacts).
-
-    The determiner is forgeable text, so the gate is name-trust: off on web
-    ingress. Residual cost: a passphrase spelled exactly like a lowercase
-    underscore-joined env name in this position is passed through."""
+    Two bounds. A value carrying an opaque credential-shaped run redacts
+    anywhere — a real token pasted into prose is still a leak. And the wording
+    is forgeable, so the gate is name-trust: off on web ingress. Accepted
+    residual, deliberately: a low-entropy secret written into a prose-position
+    sentence (`your password = correct-horse-battery`) passes through."""
     span = _assigned_field_span(c)
     if span is None or _has_opaque_run(c.value):
-        return False
-    if _LOWER_IDENT_RE.fullmatch(c.value) is None:
         return False
     line = c.line
     # A quoted noun (`their "secret": v`) keeps its opening quote glued to the
@@ -818,15 +821,14 @@ def _is_prose_field(c: Candidate) -> bool:
     start = span[0]
     if start > 0 and line[start - 1] in "\"'" and line[start - 1] in line[span[1] :]:
         start -= 1
-    # The determiner must be a SEPARATE word on the SAME line: the identifier
-    # walk above consumed every alnum/underscore byte (a glued "thesecret:" has
-    # no whitespace here), and on the field-value path `line` is the whole
-    # document, so a preceding LINE's trailing word must not decide this one.
+    # The preceding word must sit on the SAME line: on the field-value path
+    # `line` is the whole document, and a preceding LINE's trailing word must
+    # not decide this one's position.
     before = _rstrip_index(line, start)
     if before == start or before == 0 or "\n" in line[before:start]:
         return False
     word = line[_ident_run_start(line, before, "") : before]
-    return word.lower() in _PROSE_DETERMINERS
+    return bool(word) and word.lower() not in _STRUCTURAL_KEYWORDS
 
 
 # A value that spans whitespace AND embeds a backtick is markdown prose, never

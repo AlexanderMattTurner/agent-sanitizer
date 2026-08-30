@@ -1043,11 +1043,11 @@ def test_repeated_value_defeats_the_metadata_skip(label, text):
     assert "Hunter2Passw0rdABC" not in redacted, label
 
 
-# A DETERMINER/possessive before the credential noun marks the line as a
-# SENTENCE naming a credential, not a field holding one. The gate's comment
-# claims determiners are the only trusted word class, so the cases sweep each
-# determiner sub-class, the wider function words and open-class modifiers that
-# must stay redacted, and the entropy floor that bounds the skip.
+# A credential noun in PROSE position — preceded by a bare word + space that is
+# not a structural grammar keyword — gets no key/value interpretation at all.
+# The cases sweep prose positions (which skip), structural positions and
+# grammar keywords (which redact), and the opaque-run floor that bounds the
+# skip to non-credential-shaped values.
 @pytest.mark.parametrize(
     "label, line, value, expected",
     [
@@ -1093,54 +1093,51 @@ def test_repeated_value_defeats_the_metadata_skip(label, text):
             "tiktok_automation_account_id",
             True,
         ),
-        # The value must take the env-var-NAME shape: a hyphen/space-joined
-        # passphrase or a mixed-case token under a determiner is NOT skipped.
-        (
-            "possessive before a hyphen passphrase",
-            "your password = correct-horse-battery",
-            "correct-horse-battery",
-            False,
-        ),
-        (
-            "possessive before a mixed-case value",
-            "my password: Hunter2Passw0rdABCDEfgh",
-            "Hunter2Passw0rdABCDEfgh",
-            False,
-        ),
-        # The determiner must sit on the value's own line: on the field-value
-        # path `line` is the whole document, and a comment line ending in a
-        # determiner must not vouch for the next line's real assignment.
-        (
-            "previous line ends in a determiner",
-            "# rotate this\npassword: my_leaked_service_password",
-            "my_leaked_service_password",
-            False,
-        ),
-        # Wider function words are NOT trusted — most legally precede an
-        # identifier in some grammar (see _PROSE_DETERMINERS' comment).
         (
             "preposition",
             "ran without secret: tiktok_automation_account_id",
             "tiktok_automation_account_id",
-            False,
-        ),
-        (
-            "auxiliary",
-            "value is secret: not_actually_a_secret_here",
-            "not_actually_a_secret_here",
-            False,
+            True,
         ),
         (
             "conjunction",
             "nothing but token: my_service_account_name",
             "my_service_account_name",
-            False,
+            True,
         ),
-        # An open-class modifier forms a compound credential LABEL.
         (
-            "client secret",
+            "open-class modifier",
             "client secret: tiktok_automation_account_id",
             "tiktok_automation_account_id",
+            True,
+        ),
+        (
+            "prose-position passphrase, the accepted residual",
+            "your password = correct-horse-battery",
+            "correct-horse-battery",
+            True,
+        ),
+        # A word in the closed grammar-keyword set keeps the line structural.
+        (
+            "python `is` chains a comparison",
+            "value is secret: not_actually_a_secret_here",
+            "not_actually_a_secret_here",
+            False,
+        ),
+        # An opaque credential-shaped value redacts in any position.
+        (
+            "opaque value in prose position",
+            "my password: Hunter2Passw0rdABCDEfgh",
+            "Hunter2Passw0rdABCDEfgh",
+            False,
+        ),
+        # The preceding word must sit on the value's own line: on the
+        # field-value path `line` is the whole document, and a comment line's
+        # trailing word must not vouch for the next line's real assignment.
+        (
+            "previous line ends in a bare word",
+            "# rotate this\npassword: my_leaked_service_password",
+            "my_leaked_service_password",
             False,
         ),
         (
@@ -1188,12 +1185,11 @@ def test_is_prose_field(label, line, value, expected):
     assert E._is_prose_field(offset) is expected, label
 
 
-def test_prose_determiners_carry_no_grammar_keyword():
-    """The gate's soundness rests on no listed word legally preceding an
-    identifier holding a live literal in a real grammar — there the line can
-    hold a secret, so `<keyword> secret = value` must keep redacting. Each
-    entry below names the grammar that bites, pinning the list against
-    regrowing past the determiner class."""
+def test_structural_keywords_cover_known_grammars():
+    """The prose-position skip is sound only while every word that legally
+    precedes an assigned/compared key in a real grammar is in the structural
+    denylist — a missing one turns that grammar's `<keyword> secret = value`
+    into "prose" and skips it. Each entry names the grammar that bites."""
     grammar_keywords = {
         # Declaration/assignment keywords.
         "export",
@@ -1244,10 +1240,17 @@ def test_prose_determiners_carry_no_grammar_keyword():
         "until",
         # Python chained comparison `x is password == "…"`.
         "is",
+        # Shell `alias secret=…` assigns; TS `import secret = require(…)`.
+        "alias",
+        "import",
     }
-    overlap = E._PROSE_DETERMINERS & grammar_keywords
-    assert not overlap, f"grammar keywords in the determiner list: {sorted(overlap)}"
-    assert all(w.isalpha() and w.islower() for w in E._PROSE_DETERMINERS)
+    missing = grammar_keywords - E._STRUCTURAL_KEYWORDS
+    assert not missing, f"grammar keywords absent from the denylist: {sorted(missing)}"
+    # Non-vacuity in the other direction: ordinary prose words must NOT be in
+    # the denylist, or the gate never fires and the skip is dead.
+    prose_words = {"the", "their", "without", "client", "ran", "restored"}
+    assert not (prose_words & E._STRUCTURAL_KEYWORDS)
+    assert all(w.isalpha() and w.islower() for w in E._STRUCTURAL_KEYWORDS)
 
 
 @pytest.mark.parametrize(
@@ -1261,9 +1264,11 @@ def test_prose_determiners_carry_no_grammar_keyword():
         ("quoted noun", 'ran without their "secret": tiktok_automation_account_id'),
         ("article", "restored the secret: tiktok_automation_account_id"),
         ("quantifier", "the run had no token: my_service_account_token_name"),
+        ("preposition", "ran without secret: tiktok_automation_account_id"),
+        ("compound label", "client secret: tiktok_automation_account_id"),
     ],
 )
-def test_prose_determiner_lines_are_not_redacted(label, text):
+def test_prose_position_lines_are_not_redacted(label, text):
     assert run_plain(text) is None, label
 
 
@@ -1271,22 +1276,12 @@ def test_prose_determiner_lines_are_not_redacted(label, text):
     "label, text, leak",
     [
         (
-            "an ordinary noun label still redacts",
-            "client secret: tiktok_automation_account_id",
-            "tiktok_automation_account_id",
-        ),
-        (
             "a credential-shaped value still redacts",
             "their secret: ghp_A1b2C3d4E5f6G7h8I9j0K1l2M3n4O5",
             "ghp_A1b2C3d4E5f6G7h8I9j0K1l2M3n4O5",
         ),
         (
-            "a passphrase under a possessive still redacts",
-            "your password = correct-horse-battery",
-            "correct-horse-battery",
-        ),
-        (
-            "a determiner on the previous line does not vouch",
+            "a word on the previous line does not vouch",
             "# rotate this\npassword: my_leaked_service_password",
             "my_leaked_service_password",
         ),
@@ -1295,13 +1290,8 @@ def test_prose_determiner_lines_are_not_redacted(label, text):
             "then secret=tiktok_automation_account_id",
             "tiktok_automation_account_id",
         ),
-        (
-            "a bare preposition is not trusted",
-            "ran without secret: tiktok_automation_account_id",
-            "tiktok_automation_account_id",
-        ),
-        # Function words that DO precede an identifier in a real grammar stay
-        # out of the list, so these low-entropy literals keep redacting.
+        # Grammar keywords keep their line structural, so these low-entropy
+        # literals keep redacting.
         (
             "python `not` before a comparison literal",
             'if not password == "hunter2horsebatterystaple":',
@@ -1326,7 +1316,7 @@ def test_prose_skip_stays_bounded(label, text, leak):
 
 
 def test_prose_skip_is_off_on_web_ingress():
-    """The determiner is a convention of the surrounding text, so attacker-
+    """Prose position is a convention of the surrounding text, so attacker-
     controlled ingress can forge it — the gate is name-trust, not shape."""
     text = "the plan-job ran without their secret: tiktok_automation_account_id"
     redacted = run_plain(text, cfg(web_ingress=True))
