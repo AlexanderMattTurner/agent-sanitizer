@@ -8,6 +8,19 @@ adhere to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+## [2.49.1] - 2026-08-30
+
+### Added
+- Linear-time algorithmic complexity guarantee for confusables and HTML sanitization, documented in THREAT-MODEL.md.
+- Linting rule via eslint-plugin-redos to detect and report super-linear regexes at build time.
+
+### Changed
+- HTML regex scans optimized to run in linear time relative to input size.
+- Confusables folding refactored to avoid rebuilding the tail on overlapping findings.
+
+### Fixed
+- Confusables finding span calculation now correctly counts in UTF-16 units at the fold gate.
+
 ## [2.49.0] - 2026-08-30
 
 ### Fixed
