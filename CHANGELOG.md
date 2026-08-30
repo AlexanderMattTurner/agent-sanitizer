@@ -8,6 +8,12 @@ adhere to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+## [2.49.2] - 2026-08-30
+
+### Fixed
+
+- Keep the redactor daemon alive across SIGHUP signal handling.
+
 ## [2.49.1] - 2026-08-30
 
 ### Added
