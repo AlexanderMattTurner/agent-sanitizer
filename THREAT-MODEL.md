@@ -787,9 +787,13 @@ hangs on a crafted paste has failed as completely as one that misses the
 payload. This is a property of the whole surface, not of any one layer, so it is
 stated once here rather than restated per layer.
 
-**The contract.** Every entry point costs time linear in its input, up to the
-constant factors a parse pays. Two gates enforce it, because neither can see
-what the other does.
+**The contract.** No entry point costs more than `n log n` in its input: linear
+up to the constant factors a parse pays, and one sort where findings or splice
+ranges arrive in an order the caller does not promise (`foldConfusables`,
+`mergeRanges`). The bound that matters is that nothing is _quadratic_ — a sort
+of the findings in a 1 MB paste is milliseconds, a quadratic rescan of it is
+minutes — and quadratic is what the two gates below are calibrated to catch,
+because neither can see what the other does.
 
 **Static — every pattern.** `tests/test_redos_js_static_guard.py` drives
 regexploit over an inventory that `scripts/extract-js-regexes.mjs` extracts by

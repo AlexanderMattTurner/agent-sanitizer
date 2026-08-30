@@ -37,6 +37,8 @@ import {
   timed,
 } from "./helpers/cpu-timing.mjs";
 
+/** @typedef {import("./helpers/cpu-timing.mjs").Timing} Timing */
+
 const { claudeAdapter } = await import("agent-control-plane-core/claude");
 const { judgeSanitizeUserPrompt } =
   await import("../claude-hooks/sanitize-user-prompt.mjs");
