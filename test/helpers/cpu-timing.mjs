@@ -13,6 +13,7 @@
  * and `test/algorithmic-complexity.test.mjs` (growth against input length).
  */
 import assert from "node:assert/strict";
+import { it } from "node:test";
 
 /**
  * Why a cost gate cannot be read under Stryker.
@@ -49,7 +50,7 @@ export const grow = (unit, n) =>
  * the dearest cells read up to 1.7x their own median, at eight up to 1.1x, which
  * is what lets the budgets stay tight enough to catch a doubling.
  */
-export const SAMPLES = 8;
+const SAMPLES = 8;
 
 /**
  * A timed block, in ms: the CPU time the process spent, and the wall clock it
@@ -62,7 +63,7 @@ export const SAMPLES = 8;
  * is charged to it — which is the intent, since the hook pays for those too.
  * @param {ReturnType<typeof process.cpuUsage>} mark
  * @returns {number} */
-export const cpuSince = (mark) => {
+const cpuSince = (mark) => {
   const spent = process.cpuUsage(mark);
   return (spent.user + spent.system) / 1000;
 };
@@ -81,8 +82,9 @@ export const cpuSince = (mark) => {
  * reuse — 81 ms for a 256 KB fragment against the 160 ms a hook pays for a
  * document it is seeing for the first time, which is the only case there is.
  * The inputs differ in length by one code point, so the shape is unchanged.
- * @param {(attempt: number) => string} input
- * @param {(text: string) => unknown | Promise<unknown>} fn
+ * @template T
+ * @param {(attempt: number) => T} input
+ * @param {(built: T) => unknown | Promise<unknown>} fn
  * @returns {Promise<Timing>}
  */
 export async function measure(input, fn) {
@@ -121,8 +123,9 @@ const BLOCK_RING = 8;
  * fastest-of-N is fair only between blocks of similar length (see
  * {@link measure}). Under {@link MIN_BLOCK_MS} the floor wins and the bias runs
  * the other way.
- * @param {(attempt: number) => string} input
- * @param {(text: string) => unknown | Promise<unknown>} fn
+ * @template T
+ * @param {(attempt: number) => T} input
+ * @param {(built: T) => unknown | Promise<unknown>} fn
  * @param {number} blockMs
  * @returns {Promise<number>}
  */
@@ -143,7 +146,7 @@ export async function measurePerCall(input, fn, blockMs) {
   for (let i = 0; i < Math.min(repeats, BLOCK_RING); i++)
     ring.push(input(SAMPLES + 1 + i));
   const block = await measure(
-    () => "",
+    () => /** @type {T} */ (/** @type {unknown} */ (undefined)),
     async () => {
       for (let i = 0; i < repeats; i++) await fn(ring[i % ring.length]);
     },
@@ -183,3 +186,18 @@ export function clockResolutionMs() {
  * cannot resolve a calibration pass, and {@link measurePerCall} would divide a
  * matched block by a zero. */
 export const RESOLUTION_CEILING_MS = 0.5;
+
+/**
+ * An `it` whose verdict rests on a timing, and so has none under a mutation run.
+ * @param {string} name
+ * @param {(t: import("node:test").TestContext) => void | Promise<void>} fn
+ * @returns {void}
+ */
+export const timed = (name, fn) =>
+  it(name, async (t) => {
+    if (MUTATION_RUN) {
+      t.skip(MUTATION_RUN);
+      return;
+    }
+    await fn(t);
+  });

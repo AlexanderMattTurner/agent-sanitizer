@@ -761,22 +761,39 @@ describe("differential: the base64url character-mix gate", () => {
   });
 });
 
+/** Each rewritten token pattern beside the spelling it replaced, plus one token
+ * the pair must ACCEPT: two patterns that reject everything agree on
+ * everything, and a random draw reaches an accepted token only by luck. */
 const NUMERIC_PATTERN_PAIRS = [
   [
     "rgb() percentage channel",
     /^\+?(\d*\.?\d+)%$/,
     /^\+?(\d+(?:\.\d+)?|\.\d+)%$/,
+    "50%",
   ],
-  ["rgb() number channel", /^\+?(\d*\.?\d+)$/, /^\+?(\d+(?:\.\d+)?|\.\d+)$/],
+  [
+    "rgb() number channel",
+    /^\+?(\d*\.?\d+)$/,
+    /^\+?(\d+(?:\.\d+)?|\.\d+)$/,
+    "128",
+  ],
   [
     "hsl() hue",
     /^([+-]?\d*\.?\d+)(deg|grad|rad|turn)?$/,
     /^([+-]?(?:\d+(?:\.\d+)?|\.\d+))(deg|grad|rad|turn)?$/,
+    "-90deg",
   ],
   [
     "hsl() saturation/lightness",
     /^\+?(\d*\.?\d+)%?$/,
     /^\+?(\d+(?:\.\d+)?|\.\d+)%?$/,
+    ".5",
+  ],
+  [
+    "transparent-zero alpha",
+    /^\+?(?:0*\.?0+)%?$/,
+    /^\+?(?:0+(?:\.0+)?|\.0+)%?$/,
+    "0.0%",
   ],
 ];
 // Whole units as single choices, so the generator reaches `90deg`/`.5turn` and
@@ -812,19 +829,14 @@ const structuredTokens = TOKEN_POSITIONS.reduce(
 );
 
 describe("differential: the CSS numeric-token patterns", () => {
-  for (const [label, reference, shipped] of NUMERIC_PATTERN_PAIRS) {
+  for (const [label, reference, shipped, accepts] of NUMERIC_PATTERN_PAIRS) {
     it(`${label} accepts the same tokens with the same captures`, () => {
-      // Two patterns that reject everything also agree on everything, so the
-      // run has to land on the accepting side too.
-      let accepted = 0;
+      assert.ok(shipped.test(accepts), `${label} rejects ${accepts}`);
+      agree(reference, shipped, accepts);
       fc.assert(
-        fc.property(numericToken, (token) => {
-          if (shipped.test(token)) accepted += 1;
-          agree(reference, shipped, token);
-        }),
+        fc.property(numericToken, (token) => agree(reference, shipped, token)),
         runOptions,
       );
-      assert.ok(accepted > 0, "no generated token was ever accepted");
     });
     it(`${label} agrees on every sign/integer/dot/fraction/suffix combination`, () => {
       let accepted = 0;

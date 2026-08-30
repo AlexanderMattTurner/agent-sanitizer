@@ -18,7 +18,7 @@
  * block is charged in CPU time rather than wall clock (see `measure` in
  * {@link ./helpers/cpu-timing.mjs}). {@link REALISTIC_MS} is the lone exception.
  */
-import { describe, it, before } from "node:test";
+import { describe, before } from "node:test";
 import assert from "node:assert/strict";
 import { classifyPrompt } from "../src/prompt.mjs";
 import { sanitizeText } from "../src/output.mjs";
@@ -34,6 +34,7 @@ import {
   grow,
   measure,
   measurePerCall,
+  timed,
 } from "./helpers/cpu-timing.mjs";
 
 const { claudeAdapter } = await import("agent-control-plane-core/claude");
@@ -337,18 +338,6 @@ before(async () => {
     }
   }
 });
-
-/** An `it` whose verdict rests on the timings, and so has none under Stryker.
- * @param {string} name
- * @param {(t: import("node:test").TestContext) => void | Promise<void>} fn */
-const timed = (name, fn) =>
-  it(name, async (t) => {
-    if (MUTATION_RUN) {
-      t.skip(MUTATION_RUN);
-      return;
-    }
-    await fn(t);
-  });
 
 describe("hook-path latency", () => {
   timed("the calibration is a measurement, not timer noise", () => {

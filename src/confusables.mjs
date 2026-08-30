@@ -403,7 +403,7 @@ export function foldConfusables(text, findings) {
     tail.push(finding.latinEquivalent);
     cursor = finding.index;
   }
-  return text.slice(0, cursor) + [...tail].reverse().join("");
+  return text.slice(0, cursor) + tail.reverse().join("");
 }
 
 /**

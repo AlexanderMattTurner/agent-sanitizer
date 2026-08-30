@@ -15,23 +15,17 @@
  * Neither is visible to a pattern analyzer, and the correctness suites are
  * indifferent to cost, so the only thing that catches them is measuring. Each
  * case below runs one entry point over an adversarial input at two sizes 8x
- * apart and asserts the cost grew like the input, not like its square. Ratios,
- * not milliseconds: machine speed and the coverage instrumentation scale both
- * sides (see `test/helpers/cpu-timing.mjs`).
+ * apart and asserts the cost grew like the input, not like its square — a ratio
+ * rather than a millisecond count, so machine speed and the coverage
+ * instrumentation scale both sides (see `test/helpers/cpu-timing.mjs`).
  *
- * Every shape here reads 5-11x on the implementations that ship. Two of them
- * read 64.0x and 61.1x against the implementations they were written for — the
- * `(?=.*[A-Z])(?=.*[0-9])` mix test on a long lowercase path segment, and a
- * `\d*\.?\d+` channel token on a long digit run — and the overlapping fold read
- * 27.1x against a whole-output rebuild per finding. {@link GROWTH_LIMIT} sits
- * between those two populations.
- *
- * The `sanitizeHtml` case is the one whose defect it does NOT demonstrate: the
- * markup-tail rescan it targets reads 11.3x either way, because parse5 dominates
- * a document this size and the tail the analysis sees is one node's raw source
- * rather than the whole input. It stays as a growth gate on the Layer-2 entry
- * point — a tail scan that went quadratic over a single large node would clear
- * the limit several times over — not as evidence of a defect caught.
+ * Every shape here reads 5-11x on the implementations that ship, and three read
+ * 64.0x, 61.1x and 27.1x against the ones they were written for;
+ * {@link GROWTH_LIMIT} sits between those two populations. `sanitizeHtml` is the
+ * exception: the `[^>]*$` tail reads 10.2x against 8.8x, because the document
+ * parse costs as much again as the rescan at BOTH sizes and pulls the blended
+ * ratio back toward linear. It is a growth gate on the Layer-2 entry point, not
+ * evidence of a defect caught.
  */
 import { describe, it, before } from "node:test";
 import assert from "node:assert/strict";
@@ -45,6 +39,7 @@ import {
   grow,
   measure,
   measurePerCall,
+  timed,
 } from "./helpers/cpu-timing.mjs";
 
 const KB = 1024;
@@ -53,13 +48,15 @@ const LARGE = 64 * KB;
 
 /**
  * LARGE is 8x SMALL, so a linear cost grows 8x and a quadratic one 64x. The
- * limit sits at three times linear: wide enough that a `n log n` pass, a
- * collector run landing on the large side, or a per-call constant that only the
- * small side amortizes cannot manufacture a failure, and far enough under 64x
- * that no quadratic reaches it. Both sides are measured in one process on one
+ * limit sits at 2.5x linear: wide enough that a `n log n` pass, a collector run
+ * landing on the large side, or a per-call constant that only the small side
+ * amortizes cannot manufacture a failure, and clear of the WEAKEST defect this
+ * file has measured (27.1x, the per-finding rebuild) rather than merely of the
+ * 64x an undiluted quadratic reads — a limit calibrated on the loud defects
+ * would sit above the quiet one. Both sides are measured in one process on one
  * machine, so nothing here needs headroom for machine speed.
  */
-const GROWTH_LIMIT = 24;
+const GROWTH_LIMIT = 20;
 
 const CYR_A = "а";
 
@@ -83,16 +80,27 @@ const lowercaseBlobPath = (n) => `https://e.com/${grow("abcdefg-", n)}`;
 const mixedBlobPath = (n) => `https://e.com/${grow("aB3defg-", n)}`;
 
 /**
- * One paragraph of prose carrying many `<` and no `>`. The markup-tail analysis
- * runs over a node's whole raw source, so this has to be ONE node: split into
- * paragraphs, each slice is short and no per-offset rescan can show. The comment
- * gives the document something to remove, so the pipeline runs to the end rather
- * than answering null.
+ * Many tag openers, then one `>`, then a hidden span, all in one paragraph.
+ * Every part is load-bearing, and getting any of them wrong makes the case
+ * measure nothing:
+ *
+ * - the opener is `<` plus a name letter, or the tail test declines it in
+ *   constant time (`<` plus a space is the trap: it looks adversarial and is
+ *   answered instantly);
+ * - the `!` keeps each opener from being a well-formed tag, which is what leaves
+ *   the whole run inside ONE inter-node raw slice — with `<ab ` openers the
+ *   final `<ab >` parses as an html node of its own and the slice handed to the
+ *   fold ends before the `>`, where the tail test answers in constant time;
+ * - the span is a real inline-html child, and the openers are the raw source
+ *   BETWEEN nodes, which is the slice the absorb state is folded over. Without
+ *   a child the document has no inline html and the fold never runs;
+ * - the paragraph opens with prose, or the run is block-level html and the
+ *   inline walk that folds the absorb state is never entered.
  * @param {number} n
  * @returns {string}
  */
-const openAngleProse = (n) =>
-  `<!--c-->\n\n<p>ok</p>\n\n${grow("a < b < c ", n)}`;
+const unterminatedOpeners = (n) =>
+  `hi ${grow("<a! ", n)}><span style="display:none">x</span>`;
 
 /**
  * A CSS color channel that is one long run of digits — the shape that makes a
@@ -103,7 +111,12 @@ const openAngleProse = (n) =>
  * @param {number} n
  * @returns {string}
  */
-const digitChannel = (n) => `color: rgb(${grow("9", n)}, 0, 0)`;
+const digitChannel = (n) => {
+  const huge = grow("9", n);
+  // Every channel out of range clamps to 255, so the declaration resolves to
+  // white on white — a verdict only reachable if the long token was READ.
+  return `color: rgb(${huge},${huge},${huge}); background: rgb(255,255,255)`;
+};
 
 /**
  * Text of paired Cyrillic look-alikes, and findings that all OVERLAP a fold
@@ -160,20 +173,23 @@ const CASES = {
         "encoded data blob in path segment" &&
       checkExfilUrl(lowercaseBlobPath(LARGE)) === null,
   },
-  "sanitizeHtml/open-angle-prose": {
-    input: (size, attempt) => openAngleProse(size - attempt),
+  "sanitizeHtml/unterminated-openers": {
+    input: (size, attempt) => unterminatedOpeners(size - attempt),
     run: (text) => sanitizeHtml(text),
-    // A document with no HTML tag is answered with null before any analysis
-    // runs, so the `<p>` this shape carries is load-bearing.
-    marker: () => sanitizeHtml(openAngleProse(512)) !== null,
+    // The hidden span is removed, which only happens once the walk has reached
+    // an inline-html child — and reaching one is what folds the absorb state
+    // over the openers before it. A document answered null, or one whose span
+    // survived, would be timing a walk that never got there.
+    marker: () =>
+      sanitizeHtml(unterminatedOpeners(LARGE))?.removed.hidden === 1,
   },
   "isHiddenStyle/digit-channel": {
     input: (size, attempt) => digitChannel(size - attempt),
     run: (style) => isHiddenStyle(style),
-    // White on white is the verdict the channel parser exists to reach, so a
-    // true here proves the tokens are being resolved rather than declined.
-    marker: () =>
-      isHiddenStyle("color: rgb(255, 255, 255); background: rgb(255,255,255)"),
+    // On the measured input at the measured size, not a comfortable stand-in: a
+    // length cap added to the declaration parser would leave a short marker
+    // green while the timing quietly moved to an early bail.
+    marker: () => isHiddenStyle(digitChannel(LARGE)),
   },
   "foldConfusables/overlapping-findings": {
     input: (size, attempt) => overlappingFolds(size - attempt),
@@ -241,18 +257,6 @@ before(
   // under it.
   { timeout: 300_000 },
 );
-
-/** An `it` whose verdict rests on the timings, and so has none under Stryker.
- * @param {string} name
- * @param {(t: import("node:test").TestContext) => void} fn */
-const timed = (name, fn) =>
-  it(name, (t) => {
-    if (MUTATION_RUN) {
-      t.skip(MUTATION_RUN);
-      return;
-    }
-    fn(t);
-  });
 
 describe("algorithmic complexity", () => {
   for (const [name, { marker }] of Object.entries(CASES))

@@ -809,12 +809,15 @@ carry no backtracking at all, so no pattern analyzer will ever report them:
 - work that is not a pattern at all — a string rebuilt once per finding, a
   prefix re-sliced inside a loop, a re-walk of an already-walked node.
 
-`test/algorithmic-complexity.test.mjs` runs each entry point over an adversarial
+`test/algorithmic-complexity.test.mjs` runs an entry point over an adversarial
 input at two sizes 8x apart and asserts the cost grew like the input rather than
 like its square, with a known-quadratic specimen as the control that proves the
-harness can still see one. `tests/secrets/test_algorithmic_complexity.py` is the
-twin over the Python engine, and `test/hook-latency.test.mjs` holds the same
-paths to a budget in absolute terms.
+harness can still see one. Each case also asserts, at the size it measures, that
+the input still reaches the code the case is about — a length gate answering
+first is how such a case quietly degrades into timing nothing.
+`tests/secrets/test_algorithmic_complexity.py` is the twin over the Python
+engine. `test/hook-latency.test.mjs` covers the three blocking hook paths
+instead, in cost per calibration pass, with one wall-clock ceiling.
 
 **Idioms new code is held to.** Each is the fix for a defect one of the gates
 caught:

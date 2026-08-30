@@ -44813,7 +44813,7 @@ function foldConfusables(text5, findings) {
     tail.push(finding2.latinEquivalent);
     cursor = finding2.index;
   }
-  return text5.slice(0, cursor) + [...tail].reverse().join("");
+  return text5.slice(0, cursor) + tail.reverse().join("");
 }
 function takeFromTail(tail, count) {
   const taken = [];

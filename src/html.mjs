@@ -590,14 +590,15 @@ function hexByte(n) {
  * clamps out-of-range) or a percentage `0%..100%` scaled to `0..255`. Returns
  * null (fail open) on any other shape — a `none`/`calc()`/negative channel we
  * cannot resolve to a concrete byte.
+ *
+ * The number shape here (and in `hueDegrees`/`hslPercent`) spells the integer
+ * and leading-`.` forms as disjoint alternatives rather than `\d*\.?\d+`: the
+ * latter's `\d*` and `\d+` both match a digit, so every split of a long digit
+ * run is retried against the rest of the pattern and a failing token costs
+ * O(n^2). Disjoint arms fail each backtrack step in constant time.
  * @param {string} token
  * @returns {number | null}
  */
-// The number shape below (and in `hueDegrees`/`hslPercent`) spells the integer
-// and leading-`.` forms as disjoint alternatives rather than `\d*\.?\d+`: the
-// latter's `\d*` and `\d+` both match a digit, so every split of a long digit
-// run is retried against the rest of the pattern and a failing token costs
-// O(n^2). Disjoint arms fail each backtrack step in constant time.
 function rgbChannel(token) {
   const pct = token.match(/^\+?(\d+(?:\.\d+)?|\.\d+)%$/);
   if (pct) return (Math.min(100, parseFloat(pct[1])) / 100) * 255;
@@ -2522,7 +2523,10 @@ const BLOB_VALUE_B64URL_RE = /^[A-Za-z0-9_-]{40,}={0,2}$/;
  * character mix that separates bulk-encoded bytes from a lowercase word-slug.
  * Two single-character-class scans rather than one `(?=.*[A-Z])(?=.*[0-9])`
  * regex: an unanchored lookahead pair costs a full scan at EVERY start offset,
- * so a long value that carries neither class is quadratic to reject.
+ * so a long value that carries neither class is quadratic to reject. The two
+ * agree on any value without a newline, which every caller guarantees by
+ * gating on an anchored pattern over a newline-free alphabet first — `.` in
+ * that lookahead does not cross a line, so only there could they differ.
  * @param {string} value
  * @returns {boolean}
  */
