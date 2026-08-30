@@ -44762,7 +44762,8 @@ function isTokenBoundary(ch) {
   return !isDigit2 && !isUpper && !isLower;
 }
 function selectFoldableFindings(text5, findings) {
-  for (const finding2 of findings) assertFinding(finding2, bytesAt(text5, finding2));
+  for (const finding2 of findings)
+    assertFinding(finding2, bytesAt(text5, finding2));
   const flagged = /* @__PURE__ */ new Set();
   for (const finding2 of findings)
     for (let i = 0; i < finding2.char.length; i++)
