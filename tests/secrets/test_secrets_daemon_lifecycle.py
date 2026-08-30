@@ -379,7 +379,7 @@ def test_main_daemon_keeps_serving_after_sighup(sock_dir):
         env={**os.environ, "PYTHONPATH": str(REPO_ROOT / "python")},
     )
     try:
-        wait_for_listener(socket_path)
+        wait_for_listener(socket_path, timeout=30)
         os.kill(proc.pid, signal.SIGHUP)
         client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         try:
@@ -387,7 +387,7 @@ def test_main_daemon_keeps_serving_after_sighup(sock_dir):
             client.connect(socket_path)
             body = json.dumps({"text": "key: AKIAIOSFODNN7EXAMPLE"}).encode("utf-8")
             client.sendall(struct.pack(">I", len(body)) + body)
-            assert _drain(client) is not None
+            assert "AWS Access Key" in _drain(client)["found"]
         finally:
             client.close()
         assert proc.poll() is None

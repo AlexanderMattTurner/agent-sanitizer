@@ -367,9 +367,10 @@ def main(argv: list[str] | None = None) -> None:
     args = sys.argv[1:] if argv is None else argv
     if len(args) != 1:
         raise SystemExit("usage: agent-secret-redactor-daemon <socket-path>")
-    # The default SIGHUP disposition kills a daemon when its start terminal closes,
-    # leaving the socket file with nothing listening, so every later request fails to
-    # connect. Ignore the hangup; SIGTERM and SIGINT still stop it. Only here, never
-    # in `serve`: tests drive `serve` on a thread, where `signal.signal` raises.
+    # Ignoring SIGHUP guards only a daemon run by hand in a foreground terminal:
+    # the production spawn (redactor-client.mjs spawnDaemon) detaches into its
+    # own session and never receives it. A foreground daemon still dies to
+    # Ctrl-C (SIGINT), which this leaves fatal. Only here, never in `serve`:
+    # tests drive `serve` on a thread, where `signal.signal` raises.
     signal.signal(signal.SIGHUP, signal.SIG_IGN)
     serve(args[0])
