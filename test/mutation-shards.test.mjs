@@ -52,7 +52,8 @@ const shards = expandShards(repoRoot);
  * straight off disk, so `mutatedSources` resolves for real — the derivation
  * under test is the live one, not a stand-in.
  *
- * @param {{split?: {id: string, file: string}[], groupCount?: number,
+ * @param {{split?: {id: string, file: string, splitEvery?: unknown}[],
+ *   groupCount?: number, splitEvery?: number,
  *   src?: Record<string, number>, tooling?: Record<string, number>,
  *   packs?: string[]}} spec file names mapped to their line counts
  * @returns {string} the scratch repo root
@@ -60,6 +61,7 @@ const shards = expandShards(repoRoot);
 function scratchRepo({
   split = [],
   groupCount = 2,
+  splitEvery = 300,
   src = {},
   tooling = {},
   packs = ["src/*.mjs"],
@@ -77,7 +79,7 @@ function scratchRepo({
   writeFileSync(join(root, "package.json"), JSON.stringify({ files: packs }));
   writeFileSync(
     join(root, ".github", "mutation-shards.json"),
-    JSON.stringify({ splitEvery: 300, split, groupCount }),
+    JSON.stringify({ splitEvery, split, groupCount }),
   );
   return root;
 }
@@ -260,16 +262,80 @@ describe("mutation shard matrix", () => {
     }
   });
 
-  it("caps every split slice at splitEvery lines (last slice excepted, it ends open)", () => {
-    const { splitEvery } = config;
+  it("caps every split slice at its entry's splitEvery (last slice excepted, it ends open)", () => {
+    const widthOf = new Map(
+      config.split.map((entry) => [
+        entry.file,
+        entry.splitEvery ?? config.splitEvery,
+      ]),
+    );
+    let checked = 0;
     for (const shard of shards) {
       for (const entry of parseMutate(shard.mutate)) {
         if (entry.start === undefined || entry.end >= EOF_SENTINEL) continue;
+        const width = widthOf.get(entry.file);
         assert.equal(
           entry.end - entry.start + 1,
-          splitEvery,
-          `${shard.id}: interior slice must be exactly ${splitEvery} lines`,
+          width,
+          `${shard.id}: interior slice must be exactly ${width} lines`,
         );
+        checked++;
+      }
+    }
+    // Every split file could be short enough to be one open-ended slice, in
+    // which case the loop above asserts nothing at all.
+    assert.ok(checked > 0, "no interior slice was measured");
+  });
+
+  it("narrows only the entry that overrides splitEvery", () => {
+    const root = scratchRepo({
+      splitEvery: 300,
+      src: { "wide.mjs": 600, "narrow.mjs": 600, "grouped.mjs": 5 },
+      split: [
+        { id: "wide", file: "src/wide.mjs" },
+        { id: "narrow", file: "src/narrow.mjs", splitEvery: 200 },
+      ],
+      groupCount: 1,
+    });
+    try {
+      const ranges = Object.fromEntries(
+        expandShards(root).map((s) => [s.id, s.mutate]),
+      );
+      // Both files are 600 written lines, so `split("\n")` counts 601 and each
+      // gets one extra slice past the last full-width boundary.
+      assert.deepEqual(
+        Object.entries(ranges).filter(([id]) => !id.startsWith("group-")),
+        [
+          ["wide-1", "src/wide.mjs:1-300"],
+          ["wide-2", "src/wide.mjs:301-600"],
+          ["wide-3", `src/wide.mjs:601-${EOF_SENTINEL}`],
+          ["narrow-1", "src/narrow.mjs:1-200"],
+          ["narrow-2", "src/narrow.mjs:201-400"],
+          ["narrow-3", "src/narrow.mjs:401-600"],
+          ["narrow-4", `src/narrow.mjs:601-${EOF_SENTINEL}`],
+        ],
+      );
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("refuses a per-entry splitEvery that is not a positive integer", () => {
+    // `null` is absent from this list on purpose: `??` treats it as "not set"
+    // and falls back to the global width, which is a valid expansion.
+    for (const splitEvery of [0, -1, 2.5, "7"]) {
+      const root = scratchRepo({
+        src: { "a.mjs": 5, "b.mjs": 5, "c.mjs": 5 },
+        split: [{ id: "bad", file: "src/a.mjs", splitEvery }],
+      });
+      try {
+        assert.throws(
+          () => expandShards(root),
+          /split entry bad has splitEvery .*, which is not a positive integer/,
+          `per-entry splitEvery ${JSON.stringify(splitEvery)} must be refused`,
+        );
+      } finally {
+        rmSync(root, { recursive: true, force: true });
       }
     }
   });
