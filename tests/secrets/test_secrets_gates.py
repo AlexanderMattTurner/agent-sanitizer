@@ -113,11 +113,12 @@ _NAME_TRUST_FIXTURES = {
         "/secret|token|password/i",
         "/secretsecretsecretsecret/i",
     ),
-    # The two gates below decide ON the field name, so "the verdict is
-    # independent of the field name" is not a property they can have — the field
-    # name IS their input. They are exercised by their own tests in
-    # test_secrets_engine.py (`test_is_benign_cursor`, `test_is_metadata_field`)
-    # and excluded from the independence matrix rather than given fake fixtures.
+    # The gates below decide ON the field name or the text around it, so "the
+    # verdict is independent of the field name" is not a property they can have
+    # — that context IS their input. They are exercised by their own tests in
+    # test_secrets_engine.py (`test_is_benign_cursor`, `test_is_metadata_field`,
+    # `test_is_prose_field`) and excluded from the independence matrix rather
+    # than given fake fixtures.
     "_is_benign_cursor": (),
     "_is_metadata_field": (),
     "_is_prose_field": (),

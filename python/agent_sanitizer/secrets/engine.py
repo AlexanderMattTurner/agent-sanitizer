@@ -770,25 +770,29 @@ def _is_metadata_field(c: Candidate) -> bool:
     return c.line[start:end].lower().endswith(_METADATA_SUFFIXES)
 
 
-# A credential noun preceded by an English FUNCTION WORD — "their secret: <v>",
-# "without secret: <v>", "no token = <v>" — is a SENTENCE naming a credential,
-# not a key/value pair holding one. The field-value grammar has no lookbehind
-# (so `mypassword: …` still matches), so a diagnostic line like
+# A credential noun preceded by an English DETERMINER or possessive — "their
+# secret: <v>", "the token = <v>" — is a SENTENCE naming a credential, not a
+# key/value pair holding one. The field-value grammar has no lookbehind (so
+# `mypassword: …` still matches), so a diagnostic line like
 #
 #     the plan-job ran without their secret: tiktok_automation_account_id
 #
 # read as an assignment and the env NAME the line exists to report was rewritten
 # to `[REDACTED]`.
 #
-# Function words are a CLOSED class, which is what lets this list eliminate the
-# grammatical-prose shape rather than chase it case by case: English places
-# only two kinds of word directly before a noun, a function word (finite —
-# determiners, pronouns, prepositions, conjunctions, auxiliaries, negation) or
-# an open-class modifier forming a compound ("client secret", "app token") —
-# and the compound IS a credential label, which must keep redacting. No config
-# format, log grammar or source language writes a function word before a key it
-# assigns; the shell control keywords that DO precede an assignment on one line
-# (`then TOKEN=…`, `do TOKEN=…`, `else`/`elif`) are deliberately absent.
+# Determiners are the ONLY word class this gate trusts, and the list must never
+# grow past it. The tempting generalization — skip on any English function word
+# (prepositions, conjunctions, auxiliaries, negation) — is unsound, because
+# most of them legally precede an identifier holding a live literal in some
+# real grammar: Python `if not password == "…"` (`==` is in _ASSIGN_OP_CHARS),
+# OCaml `let a = 1 and password = "…"`, Ruby `x or password = "…"` / modifier
+# `unless`, Jinja `{% with secret = "…" %}`, BASIC `For x = …`, Python `as`,
+# Haskell `where` — and in juxtaposition languages (ML/Haskell application
+# `f x`) ANY word can precede an identifier, so the claim "no grammar assigns
+# after this word" is provable for no open-ended list. It holds for determiners
+# because `the`/`their`/`this` are keywords nowhere and two juxtaposed
+# identifiers around an assignment parse in no mainstream grammar. The guard
+# test pins known grammar keywords out of the list so it cannot regrow them.
 #
 # The verdict rests on the surrounding text rather than the value, so it is
 # forgeable — web ingress can prepend "their " to launder a credential — and it
@@ -798,42 +802,28 @@ def _is_metadata_field(c: Candidate) -> bool:
 # bounded to values holding no credential material. What remains uncovered is a
 # lowercase diceware passphrase in this position, the same tradeoff
 # `_is_lowercase_metavariable` documents.
-_PROSE_FUNCTION_WORDS = frozenset(
-    # Determiners and quantifiers.
-    "a an the this that these those each every some any no none all both "
-    "few many much more most other another such same own several either neither "
-    # Possessives and pronouns.
-    "my our your his her its their whose i you he she it we they me him us "
-    "them mine yours hers ours theirs who whom which what "
-    # Prepositions.
-    "of in on at by for with without from into onto over under about above "
-    "after before between during through via per against within across along "
-    "around behind beyond beneath toward towards upon among amid despite "
-    "except near off out up down like unlike than "
-    # Conjunctions and negation.
-    "and or nor but so yet not as because although though since unless whether "
-    # Auxiliaries and copulas.
-    "am is are was were be been being have has had will would shall should "
-    "may might must can could need ought".split()
+_PROSE_DETERMINERS = frozenset(
+    "a an the this that these those each every no another such "
+    "my our your his her its their whose".split()
 )
 
 
 def _is_prose_field(c: Candidate) -> bool:
     """True when the credential noun before the value is preceded by an English
-    function word, so the line is prose naming a credential rather than a field
-    holding one."""
+    determiner or possessive, so the line is prose naming a credential rather
+    than a field holding one."""
     span = _assigned_field_span(c)
     if span is None or _has_opaque_run(c.value):
         return False
     line = c.line
-    # The function word must be a SEPARATE word: the identifier walk above
+    # The determiner must be a SEPARATE word: the identifier walk above
     # already consumed every alnum/underscore byte, so a glued spelling
     # ("thesecret:") leaves no whitespace here and is not one at all.
     before = _rstrip_index(line, span[0])
     if before == span[0] or before == 0:
         return False
     word = line[_ident_run_start(line, before, "") : before]
-    return word.lower() in _PROSE_FUNCTION_WORDS
+    return word.lower() in _PROSE_DETERMINERS
 
 
 # A value that spans whitespace AND embeds a backtick is markdown prose, never

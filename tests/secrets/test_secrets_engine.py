@@ -1043,11 +1043,11 @@ def test_repeated_value_defeats_the_metadata_skip(label, text):
     assert "Hunter2Passw0rdABC" not in redacted, label
 
 
-# A FUNCTION WORD before the credential noun marks the line as a SENTENCE
-# naming a credential, not a field holding one. The gate's comment claims the
-# closed word class is the whole discriminator, so the cases sweep one word
-# from each sub-class, the open-class modifiers that must stay redacted in the
-# same position, and the entropy floor that bounds the skip.
+# A DETERMINER/possessive before the credential noun marks the line as a
+# SENTENCE naming a credential, not a field holding one. The gate's comment
+# claims determiners are the only trusted word class, so the cases sweep each
+# determiner sub-class, the wider function words and open-class modifiers that
+# must stay redacted, and the entropy floor that bounds the skip.
 @pytest.mark.parametrize(
     "label, line, value, expected",
     [
@@ -1076,26 +1076,8 @@ def test_repeated_value_defeats_the_metadata_skip(label, text):
             True,
         ),
         (
-            "preposition",
-            "ran without secret: tiktok_automation_account_id",
-            "tiktok_automation_account_id",
-            True,
-        ),
-        (
             "quantifier",
             "found no token: my_service_account_name",
-            "my_service_account_name",
-            True,
-        ),
-        (
-            "auxiliary",
-            "value is secret: not_actually_a_secret_here",
-            "not_actually_a_secret_here",
-            True,
-        ),
-        (
-            "conjunction",
-            "name and token: my_service_account_name",
             "my_service_account_name",
             True,
         ),
@@ -1104,6 +1086,26 @@ def test_repeated_value_defeats_the_metadata_skip(label, text):
             'their secret: "tiktok_automation_account_id"',
             "tiktok_automation_account_id",
             True,
+        ),
+        # Wider function words are NOT trusted — most legally precede an
+        # identifier in some grammar (see _PROSE_DETERMINERS' comment).
+        (
+            "preposition",
+            "ran without secret: tiktok_automation_account_id",
+            "tiktok_automation_account_id",
+            False,
+        ),
+        (
+            "auxiliary",
+            "value is secret: not_actually_a_secret_here",
+            "not_actually_a_secret_here",
+            False,
+        ),
+        (
+            "conjunction",
+            "nothing but token: my_service_account_name",
+            "my_service_account_name",
+            False,
         ),
         # An open-class modifier forms a compound credential LABEL.
         (
@@ -1137,7 +1139,7 @@ def test_repeated_value_defeats_the_metadata_skip(label, text):
             False,
         ),
         (
-            "function word is the whole prefix",
+            "determiner is the whole prefix",
             "their tiktok_automation_account_id",
             "tiktok_automation_account_id",
             False,
@@ -1145,7 +1147,7 @@ def test_repeated_value_defeats_the_metadata_skip(label, text):
         # The entropy floor: a value carrying credential material is never
         # skipped, whatever sentence surrounds it.
         (
-            "opaque run under a function word",
+            "opaque run under a determiner",
             "their secret: ghp_A1b2C3d4E5f6G7h8I9j0K1l2M3n4O5",
             "ghp_A1b2C3d4E5f6G7h8I9j0K1l2M3n4O5",
             False,
@@ -1157,11 +1159,14 @@ def test_is_prose_field(label, line, value, expected):
     assert E._is_prose_field(offset) is expected, label
 
 
-def test_prose_function_words_are_a_closed_class():
-    """The elimination claim rests on the list being function words only: no
-    assignment/declaration keyword of a config or source grammar may appear,
-    or a real `<keyword> SECRET=value` line would be skipped."""
-    assignment_keywords = {
+def test_prose_determiners_carry_no_grammar_keyword():
+    """The gate's soundness rests on no listed word legally preceding an
+    identifier holding a live literal in a real grammar — there the line can
+    hold a secret, so `<keyword> secret = value` must keep redacting. Each
+    entry below names the grammar that bites, pinning the list against
+    regrowing past the determiner class."""
+    grammar_keywords = {
+        # Declaration/assignment keywords.
         "export",
         "set",
         "setenv",
@@ -1177,6 +1182,7 @@ def test_prose_function_words_are_a_closed_class():
         "final",
         "arg",
         "define",
+        # Shell control keywords that precede a one-line assignment.
         "then",
         "do",
         "else",
@@ -1184,10 +1190,35 @@ def test_prose_function_words_are_a_closed_class():
         "fi",
         "done",
         "esac",
+        "if",
+        "while",
+        # `if not password == "literal":` (Python/Ruby comparison; `==` is in
+        # _ASSIGN_OP_CHARS, so the line reads as an assignment).
+        "not",
+        # OCaml `let a = 1 and password = "…"`; Ruby `x or password = "…"`.
+        "and",
+        "or",
+        # Jinja `{% with secret = "…" %}`.
+        "with",
+        # BASIC/VB `For counter = …`; shell/Python loop headers.
+        "for",
+        # Ruby modifier `unless password = fetch()`.
+        "unless",
+        # Python `with x as secret:`; SQL column aliasing.
+        "as",
+        # Haskell `where secret = …`.
+        "where",
+        # OCaml `let x = 1 in password = "…"` (structural comparison holding
+        # the literal); Nix `let … in`.
+        "in",
+        # Ruby modifier `x until password == "…"`.
+        "until",
+        # Python chained comparison `x is password == "…"`.
+        "is",
     }
-    overlap = E._PROSE_FUNCTION_WORDS & assignment_keywords
-    assert not overlap, f"assignment keywords in the prose list: {sorted(overlap)}"
-    assert all(w.isalpha() and w.islower() for w in E._PROSE_FUNCTION_WORDS)
+    overlap = E._PROSE_DETERMINERS & grammar_keywords
+    assert not overlap, f"grammar keywords in the determiner list: {sorted(overlap)}"
+    assert all(w.isalpha() and w.islower() for w in E._PROSE_DETERMINERS)
 
 
 @pytest.mark.parametrize(
@@ -1199,11 +1230,10 @@ def test_prose_function_words_are_a_closed_class():
         ),
         ("quoted, keyword path", 'their secret: "tiktok_automation_account_id"'),
         ("article", "restored the secret: tiktok_automation_account_id"),
-        ("preposition", "the job ran without secret: tiktok_automation_account_id"),
         ("quantifier", "the run had no token: my_service_account_token_name"),
     ],
 )
-def test_prose_function_word_lines_are_not_redacted(label, text):
+def test_prose_determiner_lines_are_not_redacted(label, text):
     assert run_plain(text) is None, label
 
 
@@ -1225,6 +1255,28 @@ def test_prose_function_word_lines_are_not_redacted(label, text):
             "then secret=tiktok_automation_account_id",
             "tiktok_automation_account_id",
         ),
+        (
+            "a bare preposition is not trusted",
+            "ran without secret: tiktok_automation_account_id",
+            "tiktok_automation_account_id",
+        ),
+        # Function words that DO precede an identifier in a real grammar stay
+        # out of the list, so these low-entropy literals keep redacting.
+        (
+            "python `not` before a comparison literal",
+            'if not password == "hunter2horsebatterystaple":',
+            "hunter2horsebatterystaple",
+        ),
+        (
+            "ocaml `and` binding",
+            'let user = "bob" and password = "hunter2horsebatterystaple"',
+            "hunter2horsebatterystaple",
+        ),
+        (
+            "jinja `with` binding",
+            '{% with secret = "hunter2horsebatterystaple" %}',
+            "hunter2horsebatterystaple",
+        ),
     ],
 )
 def test_prose_skip_stays_bounded(label, text, leak):
@@ -1234,7 +1286,7 @@ def test_prose_skip_stays_bounded(label, text, leak):
 
 
 def test_prose_skip_is_off_on_web_ingress():
-    """The function word is a convention of the surrounding text, so attacker-
+    """The determiner is a convention of the surrounding text, so attacker-
     controlled ingress can forge it — the gate is name-trust, not shape."""
     text = "the plan-job ran without their secret: tiktok_automation_account_id"
     redacted = run_plain(text, cfg(web_ingress=True))
