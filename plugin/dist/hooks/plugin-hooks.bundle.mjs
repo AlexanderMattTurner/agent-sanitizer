@@ -44716,7 +44716,7 @@ function describeFolds(findings) {
   const shown = folds.slice(0, MAX_REPORTED_FOLDS).join(", ");
   return folds.length > MAX_REPORTED_FOLDS ? `${shown}, \u2026` : shown;
 }
-function assertFinding(text5, finding2) {
+function assertFinding(finding2, actual) {
   if (!Number.isInteger(finding2.index) || finding2.index < 0)
     throw new Error(
       `Confusable finding has an out-of-range index ${finding2.index}`
@@ -44729,7 +44729,7 @@ function assertFinding(text5, finding2) {
     throw new Error(
       `Confusable finding at index ${finding2.index} names an ASCII char ${JSON.stringify(finding2.char)}`
     );
-  if (!text5.startsWith(finding2.char, finding2.index))
+  if (!actual.startsWith(finding2.char))
     throw new Error(
       `Confusable finding does not match input at index ${finding2.index}: expected ${JSON.stringify(finding2.char)}`
     );
@@ -44750,6 +44750,9 @@ function assertFinding(text5, finding2) {
         )} is not ASCII`
       );
 }
+function bytesAt(text5, finding2) {
+  return text5.slice(finding2.index, finding2.index + finding2.char.length);
+}
 function isTokenBoundary(ch) {
   if (hasNonAscii(ch)) return false;
   const code4 = ch.charCodeAt(0);
@@ -44759,7 +44762,7 @@ function isTokenBoundary(ch) {
   return !isDigit2 && !isUpper && !isLower;
 }
 function selectFoldableFindings(text5, findings) {
-  for (const finding2 of findings) assertFinding(text5, finding2);
+  for (const finding2 of findings) assertFinding(finding2, bytesAt(text5, finding2));
   const flagged = /* @__PURE__ */ new Set();
   for (const finding2 of findings)
     for (let i = 0; i < finding2.char.length; i++)
@@ -44795,24 +44798,37 @@ function selectFoldableFindings(text5, findings) {
 function foldConfusables(text5, findings) {
   const tail = [];
   let cursor = text5.length;
-  const rebuild = () => [...tail].reverse().join("");
   for (const finding2 of [...findings].sort(
     (lhs, rhs) => rhs.index - lhs.index
   )) {
     const end = finding2.index + finding2.char.length;
     if (end <= cursor) {
-      assertFinding(text5, finding2);
+      assertFinding(finding2, bytesAt(text5, finding2));
       tail.push(text5.slice(end, cursor));
     } else {
-      const folded = rebuild();
-      assertFinding(text5.slice(0, cursor) + folded, finding2);
-      tail.length = 0;
-      tail.push(folded.slice(end - cursor));
+      const overlap = takeFromTail(tail, end - cursor);
+      assertFinding(finding2, text5.slice(finding2.index, cursor) + overlap);
     }
     tail.push(finding2.latinEquivalent);
     cursor = finding2.index;
   }
-  return text5.slice(0, cursor) + rebuild();
+  return text5.slice(0, cursor) + [...tail].reverse().join("");
+}
+function takeFromTail(tail, count) {
+  const taken = [];
+  let remaining = count;
+  while (remaining > 0) {
+    const entry = tail.pop();
+    if (entry === void 0) break;
+    if (entry.length > remaining) {
+      taken.push(entry.slice(0, remaining));
+      tail.push(entry.slice(remaining));
+      break;
+    }
+    taken.push(entry);
+    remaining -= entry.length;
+  }
+  return taken.join("");
 }
 function normalizeConfusables(tool, toolInput, options = {}) {
   const { scan: scan2, fields = DEFAULT_FIELDS } = options;

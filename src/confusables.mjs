@@ -198,14 +198,16 @@ function describeFolds(findings) {
 
 /**
  * Reject a finding that does not describe a real, foldable glyph at its reported
- * offset in `text`. Every consumer of a scanner finding runs this BEFORE acting
- * on it, so a buggy or adversarial scanner fails loud instead of silently
- * corrupting (or silently escaping the fold gate in) a path/command.
- * @param {string} text
+ * offset. Every consumer of a scanner finding runs this BEFORE acting on it, so
+ * a buggy or adversarial scanner fails loud instead of silently corrupting (or
+ * silently escaping the fold gate in) a path/command. `actual` is the bytes that
+ * sit at `finding.index` right now — from the input for an untouched region,
+ * from the folded output for one the caller has already rewritten.
  * @param {{ index: number, char: string, latinEquivalent: string }} finding
+ * @param {string} actual
  * @returns {void}
  */
-function assertFinding(text, finding) {
+function assertFinding(finding, actual) {
   // Fail loud on a finding that does not match the actual bytes at its offset:
   // a buggy/adversarial scanner reporting a wrong char/index would otherwise
   // silently corrupt the path/command, defeating the deny-rule protection.
@@ -235,7 +237,7 @@ function assertFinding(text, finding) {
     throw new Error(
       `Confusable finding at index ${finding.index} names an ASCII char ${JSON.stringify(finding.char)}`,
     );
-  if (!text.startsWith(finding.char, finding.index))
+  if (!actual.startsWith(finding.char))
     throw new Error(
       `Confusable finding does not match input at index ${finding.index}: expected ${JSON.stringify(finding.char)}`,
     );
@@ -262,6 +264,17 @@ function assertFinding(text, finding) {
           finding.latinEquivalent,
         )} is not ASCII`,
       );
+}
+
+/**
+ * The bytes `finding.char` claims to sit on, read from `text`. Bounded to the
+ * glyph's own length so validating a finding never copies the rest of the input.
+ * @param {string} text
+ * @param {{ index: number, char: string }} finding
+ * @returns {string}
+ */
+function bytesAt(text, finding) {
+  return text.slice(finding.index, finding.index + finding.char.length);
 }
 
 /**
@@ -295,7 +308,8 @@ function isTokenBoundary(ch) {
  * @returns {Array<{ index: number, char: string, latinEquivalent: string }>}
  */
 export function selectFoldableFindings(text, findings) {
-  for (const finding of findings) assertFinding(text, finding);
+  for (const finding of findings)
+    assertFinding(finding, bytesAt(text, finding));
 
   // Every UTF-16 offset a finding covers, not just its start: a scanner is free
   // to report a multi-code-point match, and treating only the first offset as
@@ -365,7 +379,6 @@ export function foldConfusables(text, findings) {
   /** @type {string[]} */
   const tail = [];
   let cursor = text.length;
-  const rebuild = () => [...tail].reverse().join("");
   for (const finding of [...findings].sort(
     (lhs, rhs) => rhs.index - lhs.index,
   )) {
@@ -374,21 +387,53 @@ export function foldConfusables(text, findings) {
     // a glyph that is not there fails loud. Highest-index-first leaves every
     // offset below `cursor` byte-identical to `text`, so a finding ending there
     // is checked against `text` itself; one reaching PAST `cursor` overlaps a
-    // fold already applied, and only the rebuilt tail carries the bytes it now
-    // sits on.
+    // fold already applied, and only the folded bytes carry what it now sits on.
     if (end <= cursor) {
-      assertFinding(text, finding);
+      assertFinding(finding, bytesAt(text, finding));
       tail.push(text.slice(end, cursor));
     } else {
-      const folded = rebuild();
-      assertFinding(text.slice(0, cursor) + folded, finding);
-      tail.length = 0;
-      tail.push(folded.slice(end - cursor));
+      // The overlap reaches at most `char.length` past `cursor`, and those bytes
+      // are the ones pushed most recently, so take them off the tail instead of
+      // re-joining all of it — a whole-tail rebuild per overlapping finding is
+      // the O(findings x length) cost this assembly exists to avoid. Consuming
+      // them is also what the fold means: `char` replaces those bytes.
+      const overlap = takeFromTail(tail, end - cursor);
+      assertFinding(finding, text.slice(finding.index, cursor) + overlap);
     }
     tail.push(finding.latinEquivalent);
     cursor = finding.index;
   }
-  return text.slice(0, cursor) + rebuild();
+  return text.slice(0, cursor) + [...tail].reverse().join("");
+}
+
+/**
+ * Remove and return the first `count` characters of the folded tail. The tail is
+ * stored back-to-front, so its lowest-offset bytes are the entries pushed most
+ * recently and popping walks them in reading order; a partially consumed entry
+ * is pushed back minus what was taken.
+ * @param {string[]} tail
+ * @param {number} count
+ * @returns {string}
+ */
+function takeFromTail(tail, count) {
+  /** @type {string[]} */
+  const taken = [];
+  let remaining = count;
+  while (remaining > 0) {
+    const entry = tail.pop();
+    // A tail shorter than `count` means the finding claims bytes past the end of
+    // the folded text — a mismatching finding, which the caller's assertion
+    // rejects by name once it sees the short result. Stop rather than pretend.
+    if (entry === undefined) break;
+    if (entry.length > remaining) {
+      taken.push(entry.slice(0, remaining));
+      tail.push(entry.slice(remaining));
+      break;
+    }
+    taken.push(entry);
+    remaining -= entry.length;
+  }
+  return taken.join("");
 }
 
 /**

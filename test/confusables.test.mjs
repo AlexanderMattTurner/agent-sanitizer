@@ -235,6 +235,88 @@ describe("foldConfusables", () => {
       "1/2 x",
     );
   });
+
+  // OVERLAPPING findings. Highest-index-first means the lower finding is
+  // validated against — and consumes — bytes an earlier fold already rewrote,
+  // so its `char` names the ALREADY-FOLDED text, not the input. makeScan never
+  // emits such a finding; a buggy or adversarial engine can, and the fold must
+  // stay byte-exact rather than corrupt the command.
+  const CYR_E = cp(0x0435);
+  const MATH_A = cp(0x1d400);
+  const MATH_B = cp(0x1d401);
+  for (const [name, text, findings, expected] of [
+    [
+      "folds an overlap of one UTF-16 unit into already-folded bytes",
+      `/${CYR_A}${CYR_O}/b`,
+      [
+        { index: 2, char: CYR_O, latinEquivalent: "o" },
+        { index: 1, char: `${CYR_A}o`, latinEquivalent: "AO" },
+      ],
+      "/AO/b",
+    ],
+    [
+      "folds an overlap that crosses a surrogate pair (astral confusables)",
+      `${MATH_A}${MATH_B}`,
+      [
+        { index: 2, char: MATH_B, latinEquivalent: "b" },
+        { index: 0, char: `${MATH_A}b`, latinEquivalent: "AB" },
+      ],
+      "AB",
+    ],
+    [
+      "folds a chain of three mutually overlapping findings",
+      `${CYR_A}${CYR_O}${CYR_E}`,
+      [
+        { index: 2, char: CYR_E, latinEquivalent: "e" },
+        { index: 1, char: `${CYR_O}e`, latinEquivalent: "OE" },
+        { index: 0, char: `${CYR_A}O`, latinEquivalent: "X" },
+      ],
+      "XE",
+    ],
+    [
+      "consumes only part of a one-to-many canon the overlap reaches into",
+      `${CYR_A}½`,
+      [
+        { index: 1, char: "½", latinEquivalent: "1/2" },
+        { index: 0, char: `${CYR_A}1`, latinEquivalent: "Z" },
+      ],
+      "Z/2",
+    ],
+  ]) {
+    it(name, () => assert.equal(foldConfusables(text, findings), expected));
+  }
+
+  for (const [name, text, findings] of [
+    [
+      "an overlapping finding whose char misses the folded bytes",
+      `/${CYR_A}${CYR_O}`,
+      [
+        { index: 2, char: CYR_O, latinEquivalent: "o" },
+        { index: 1, char: `${CYR_A}z`, latinEquivalent: "Q" },
+      ],
+    ],
+    [
+      "a finding claiming bytes past the end of the input",
+      `/${CYR_A}`,
+      [{ index: 1, char: `${CYR_A}bc`, latinEquivalent: "Q" }],
+    ],
+    [
+      "a finding claiming bytes past the end of the folded text",
+      `/${CYR_A}${CYR_O}`,
+      [
+        { index: 2, char: CYR_O, latinEquivalent: "o" },
+        { index: 1, char: `${CYR_A}oXY`, latinEquivalent: "Q" },
+      ],
+    ],
+  ]) {
+    // The mismatch must surface as the named finding error, not as an internal
+    // one from reading past the end of the assembled output.
+    it(`throws on ${name}`, () =>
+      assert.throws(
+        () => foldConfusables(text, findings),
+        /does not match input at index 1/,
+      ));
+  }
 });
 
 // ─── normalizeConfusables: folding positive cases ────────────────────────────
