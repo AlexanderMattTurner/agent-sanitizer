@@ -45059,14 +45059,16 @@ function hexByte(n) {
   return Math.max(0, Math.min(255, Math.round(n))).toString(16).padStart(2, "0");
 }
 function rgbChannel(token) {
-  const pct = token.match(/^\+?(\d*\.?\d+)%$/);
+  const pct = token.match(/^\+?(\d+(?:\.\d+)?|\.\d+)%$/);
   if (pct) return Math.min(100, parseFloat(pct[1])) / 100 * 255;
-  const num = token.match(/^\+?(\d*\.?\d+)$/);
+  const num = token.match(/^\+?(\d+(?:\.\d+)?|\.\d+)$/);
   if (num) return parseFloat(num[1]);
   return null;
 }
 function hueDegrees(token) {
-  const match = token.match(/^([+-]?\d*\.?\d+)(deg|grad|rad|turn)?$/);
+  const match = token.match(
+    /^([+-]?(?:\d+(?:\.\d+)?|\.\d+))(deg|grad|rad|turn)?$/
+  );
   if (!match) return null;
   const value = parseFloat(match[1]);
   const unit = match[2] || "deg";
@@ -45074,7 +45076,7 @@ function hueDegrees(token) {
   return (deg % 360 + 360) % 360;
 }
 function hslPercent(token) {
-  const match = token.match(/^\+?(\d*\.?\d+)%?$/);
+  const match = token.match(/^\+?(\d+(?:\.\d+)?|\.\d+)%?$/);
   return match ? Math.min(100, parseFloat(match[1])) : null;
 }
 function hslToHex(h2, s2, l) {
@@ -45101,7 +45103,8 @@ function canonicalizeColorFunction(value) {
     alpha = parts2[3];
     parts2.length = 3;
   }
-  if (alpha !== null && /^\+?0*\.?0+%?$/.test(alpha)) return "transparent";
+  if (alpha !== null && /^\+?(?:0+(?:\.0+)?|\.0+)%?$/.test(alpha))
+    return "transparent";
   if (parts2.length !== 3) return null;
   if (isRgb) {
     const channels = parts2.map(rgbChannel);
@@ -45481,8 +45484,10 @@ function scanFragmentTree(html4, tree) {
   return { ranges, warned };
 }
 function foldAbsorb(absorbing, raw) {
-  if (raw.includes(">")) return UNTERMINATED_MARKUP_TAIL_RE.test(raw);
-  return absorbing || UNTERMINATED_MARKUP_TAIL_RE.test(raw);
+  const lastClose = raw.lastIndexOf(">");
+  const opensMarkup = MARKUP_OPENER_RE.test(raw.slice(lastClose + 1));
+  if (lastClose !== -1) return opensMarkup;
+  return absorbing || opensMarkup;
 }
 function commentSpans(value) {
   const tree = parseFragment2(value);
@@ -45716,8 +45721,11 @@ function sanitizeHtml(text5) {
     splices: spliced.pairs
   };
 }
+function hasUpperAndDigit(value) {
+  return /[A-Z]/.test(value) && /[0-9]/.test(value);
+}
 function isBase64UrlBlob(value) {
-  return BLOB_VALUE_B64URL_RE.test(value) && B64URL_MIXED_RE.test(value);
+  return BLOB_VALUE_B64URL_RE.test(value) && hasUpperAndDigit(value);
 }
 function chunkedBlobResidue(value) {
   const joined = value.replace(BLOB_SEPARATOR_RE, "");
@@ -45725,7 +45733,7 @@ function chunkedBlobResidue(value) {
 }
 function isChunkedPathBlob(segment) {
   const joined = chunkedBlobResidue(segment);
-  return joined !== null && joined.length > DIGEST_MAX_LEN && (PATH_BLOB_RE.test(joined) && B64URL_MIXED_RE.test(joined) || isBase64UrlBlob(joined));
+  return joined !== null && joined.length > DIGEST_MAX_LEN && (PATH_BLOB_RE.test(joined) && hasUpperAndDigit(joined) || isBase64UrlBlob(joined));
 }
 function isBlobValue(value, digestIsBenign) {
   if (HEX_ONLY_RE.test(value))
@@ -45891,7 +45899,9 @@ function parseSrcset(value) {
     const start = i;
     while (i < n && !SRCSET_WS_RE.test(value[i])) i++;
     const run = value.slice(start, i);
-    const url = run.replace(/,+$/, "");
+    let cut = run.length;
+    while (cut > 0 && run[cut - 1] === ",") cut--;
+    const url = run.slice(0, cut);
     if (url) urls.push(url);
     if (run.endsWith(",")) continue;
     let depth = 0;
@@ -46018,7 +46028,7 @@ function detectConfusableHosts(text5) {
   }
   return threats.length > 0 ? threats : null;
 }
-var NEAR_ZERO_EPSILON, OFFSCREEN_ABSOLUTE_THRESHOLD, OFFSCREEN_VIEWPORT_THRESHOLD, ABSOLUTE_UNITS, VIEWPORT_UNITS, ANGLE_UNITS, NAMED_COLORS, BLOCK_AXIS_EXTENT_PROPS, INLINE_AXIS_EXTENT_PROPS, BORDER_SHORTHANDS, BORDER_WIDTH_KEYWORDS, FONT_SIZE_UNITS, CSS_PROPERTY_IDENT_RE, REPORTED_TAGS, VOID_ELEMENTS2, FOREIGN_ELEMENTS, RAW_TEXT_ELEMENTS, parseFragment2, PLACEHOLDER_LABEL, PLACEHOLDER_KEY_LEN, LAYER2_PLACEHOLDER_RE, HIDDEN_PLACEHOLDER, COMMENT_PLACEHOLDER, UNPARSEABLE_PLACEHOLDER, mdParser, parseMarkdown, MARKDOWN_CODE_HINT, BOGUS_COMMENT_OPEN_RE, UNTERMINATED_MARKUP_TAIL_RE, PHRASING_ROOTS, FLOW_HTML_PARENTS, MAX_SPLICE_ROUNDS, EXFIL_INDICATORS, KEYWORD_PARAM_NAME_RE, LONG_QUERY_THRESHOLD, DATA_URI_ACTIVE_RE, DATA_URI_LENGTH_THRESHOLD, SCRIPT_URI_RE, RELATIVE_URL_BASE, BENIGN_BLOB_PARAM_RE, BENIGN_SHORT_PARAM_RE, BENIGN_SHORT_VALUE_MAX_LEN, BENIGN_SHORT_TOTAL_MAX_LEN, PUBLIC_KEY_ID_PARAM_RE, BLOB_VALUE_MIN_LEN, OPAQUE_TOKEN_RE, VALUE_HAS_DIGIT_RE, BLOB_VALUE_B64_RE, HEX_ONLY_RE, HEX_BLOB_MIN_LEN, DIGEST_HEX_LENGTHS, BLOB_VALUE_B64URL_RE, B64URL_MIXED_RE, PATH_BLOB_RE, DIGEST_MAX_LEN, BLOB_SEPARATOR_RE, BLOB_RUN_SPLIT_RE, SRCSET_WS_RE, OFF_ORIGIN_REASON;
+var NEAR_ZERO_EPSILON, OFFSCREEN_ABSOLUTE_THRESHOLD, OFFSCREEN_VIEWPORT_THRESHOLD, ABSOLUTE_UNITS, VIEWPORT_UNITS, ANGLE_UNITS, NAMED_COLORS, BLOCK_AXIS_EXTENT_PROPS, INLINE_AXIS_EXTENT_PROPS, BORDER_SHORTHANDS, BORDER_WIDTH_KEYWORDS, FONT_SIZE_UNITS, CSS_PROPERTY_IDENT_RE, REPORTED_TAGS, VOID_ELEMENTS2, FOREIGN_ELEMENTS, RAW_TEXT_ELEMENTS, parseFragment2, PLACEHOLDER_LABEL, PLACEHOLDER_KEY_LEN, LAYER2_PLACEHOLDER_RE, HIDDEN_PLACEHOLDER, COMMENT_PLACEHOLDER, UNPARSEABLE_PLACEHOLDER, mdParser, parseMarkdown, MARKDOWN_CODE_HINT, BOGUS_COMMENT_OPEN_RE, MARKUP_OPENER_RE, PHRASING_ROOTS, FLOW_HTML_PARENTS, MAX_SPLICE_ROUNDS, EXFIL_INDICATORS, KEYWORD_PARAM_NAME_RE, LONG_QUERY_THRESHOLD, DATA_URI_ACTIVE_RE, DATA_URI_LENGTH_THRESHOLD, SCRIPT_URI_RE, RELATIVE_URL_BASE, BENIGN_BLOB_PARAM_RE, BENIGN_SHORT_PARAM_RE, BENIGN_SHORT_VALUE_MAX_LEN, BENIGN_SHORT_TOTAL_MAX_LEN, PUBLIC_KEY_ID_PARAM_RE, BLOB_VALUE_MIN_LEN, OPAQUE_TOKEN_RE, VALUE_HAS_DIGIT_RE, BLOB_VALUE_B64_RE, HEX_ONLY_RE, HEX_BLOB_MIN_LEN, DIGEST_HEX_LENGTHS, BLOB_VALUE_B64URL_RE, PATH_BLOB_RE, DIGEST_MAX_LEN, BLOB_SEPARATOR_RE, BLOB_RUN_SPLIT_RE, SRCSET_WS_RE, OFF_ORIGIN_REASON;
 var init_html4 = __esm({
   "src/html.mjs"() {
     "use strict";
@@ -46309,7 +46319,7 @@ var init_html4 = __esm({
     parseMarkdown = lastParseCached((text5) => mdParser.parse(text5));
     MARKDOWN_CODE_HINT = /```|~~~|^(?: {4}| *\t)/m;
     BOGUS_COMMENT_OPEN_RE = /<[!?]/g;
-    UNTERMINATED_MARKUP_TAIL_RE = /<(?:[!?]|\/?[a-zA-Z])[^>]*$/;
+    MARKUP_OPENER_RE = /<(?:[!?]|\/?[a-zA-Z])/;
     PHRASING_ROOTS = /* @__PURE__ */ new Set(["paragraph", "heading", "tableCell"]);
     FLOW_HTML_PARENTS = /* @__PURE__ */ new Set([
       "root",
@@ -46338,7 +46348,6 @@ var init_html4 = __esm({
     HEX_BLOB_MIN_LEN = 32;
     DIGEST_HEX_LENGTHS = /* @__PURE__ */ new Set([32, 40, 56, 64, 96, 128]);
     BLOB_VALUE_B64URL_RE = /^[A-Za-z0-9_-]{40,}={0,2}$/;
-    B64URL_MIXED_RE = /(?=.*[A-Z])(?=.*[0-9])/;
     PATH_BLOB_RE = /^(?:[A-Za-z0-9+/]+={0,2}|[A-Fa-f0-9]+)$/;
     DIGEST_MAX_LEN = 128;
     BLOB_SEPARATOR_RE = /[.,]/g;
