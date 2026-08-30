@@ -8,6 +8,15 @@ adhere to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+## [2.49.0] - 2026-08-30
+
+### Fixed
+
+- Improved credential detection in prose position by refusing key/value interpretation for credential nouns.
+- Enhanced prose skip logic to require proper env-name value shape and same-line determiner.
+- Refined prose skip detection to trust only determiners immediately before credential nouns.
+- Fixed over-redaction by stopping redaction of prose lines where English function words precede the credential noun.
+
 ## [2.48.6] - 2026-08-29
 
 ### Fixed
