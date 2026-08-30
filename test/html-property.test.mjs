@@ -666,3 +666,213 @@ describe("property: splice fidelity", () => {
       assert.equal(result.warned.tags.script, 1);
     }));
 });
+
+// ─── 6. Differential: two spellings, one language ────────────────────────────
+//
+// Each pattern below is spelled twice: the linear-time form the layer ships and
+// a reference form written for readability. The pair is inline because every
+// one of these patterns is module-private, and a difference on ANY generated
+// input is a real defect — the whole point of the shipped spelling is that it
+// accepts exactly the same language while failing in linear time.
+
+// A pattern's verdict AND its captures, as a plain array so two patterns can be
+// compared exactly (`null` when the pattern rejects).
+const captures = (pattern, text) => {
+  const match = text.match(pattern);
+  return match === null ? null : match.slice();
+};
+
+const agree = (reference, shipped, text) => {
+  assert.equal(
+    reference.test(text),
+    shipped.test(text),
+    `verdicts differ on ${JSON.stringify(text)}`,
+  );
+  assert.deepEqual(
+    captures(reference, text),
+    captures(shipped, text),
+    `captures differ on ${JSON.stringify(text)}`,
+  );
+};
+
+const B64URL_MIXED_REFERENCE = /(?=.*[A-Z])(?=.*[0-9])/;
+const base64UrlChar = fc.constantFrom(
+  ..."ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_-".split(
+    "",
+  ),
+);
+const base64UrlString = fc
+  .array(base64UrlChar, { maxLength: 60 })
+  .map((chars) => chars.join(""));
+
+describe("differential: the base64url character-mix gate", () => {
+  it("two scans agree with the lookahead pair", () =>
+    checkProperty(base64UrlString, (value) =>
+      assert.equal(
+        B64URL_MIXED_REFERENCE.test(value),
+        /[A-Z]/.test(value) && /[0-9]/.test(value),
+      ),
+    ));
+
+  // The gate through the public surface. Three-character groups joined by `-`
+  // hold every OTHER exfil rule off this value: the `-` keeps it out of the
+  // standard-base64 and hex arms, and no group reaches the 20-character
+  // contiguous run the credential-shape rule needs — so the character mix is
+  // the only thing that can move the verdict. One alphabet per value, so
+  // single-class values (which the gate must leave alone) are generated as
+  // often as mixed ones rather than drowned out by them.
+  const groupedValue = fc
+    .constantFrom(
+      "ABCDEFGHIJKLMNOPQRSTUVWXYZ",
+      "0123456789",
+      "abcdefghijklmnopqrstuvwxyz",
+      "ABCdef123_",
+    )
+    .chain((alphabet) =>
+      fc
+        .array(fc.constantFrom(...alphabet.split("")), {
+          minLength: 42,
+          maxLength: 90,
+        })
+        .map((chars) =>
+          chars
+            .join("")
+            .match(/.{1,3}/g)
+            .join("-"),
+        ),
+    );
+  it("decides checkExfilUrl's verdict on a hyphen-grouped query value", () => {
+    let flagged = 0;
+    let benign = 0;
+    fc.assert(
+      fc.property(groupedValue, (value) => {
+        assert.ok(value.length >= 40 && value.length < 190);
+        const mixed = B64URL_MIXED_REFERENCE.test(value);
+        if (mixed) flagged += 1;
+        else benign += 1;
+        assert.equal(
+          checkExfilUrl(`https://e.com/p?d=${value}`),
+          mixed ? "suspicious query parameter" : null,
+        );
+      }),
+      runOptions,
+    );
+    assert.ok(flagged > 0 && benign > 0, "one branch never generated");
+  });
+});
+
+/** Each rewritten token pattern beside the spelling it replaced, plus one token
+ * the pair must ACCEPT: two patterns that reject everything agree on
+ * everything, and a random draw reaches an accepted token only by luck. */
+const NUMERIC_PATTERN_PAIRS = [
+  [
+    "rgb() percentage channel",
+    /^\+?(\d*\.?\d+)%$/,
+    /^\+?(\d+(?:\.\d+)?|\.\d+)%$/,
+    "50%",
+  ],
+  [
+    "rgb() number channel",
+    /^\+?(\d*\.?\d+)$/,
+    /^\+?(\d+(?:\.\d+)?|\.\d+)$/,
+    "128",
+  ],
+  [
+    "hsl() hue",
+    /^([+-]?\d*\.?\d+)(deg|grad|rad|turn)?$/,
+    /^([+-]?(?:\d+(?:\.\d+)?|\.\d+))(deg|grad|rad|turn)?$/,
+    "-90deg",
+  ],
+  [
+    "hsl() saturation/lightness",
+    /^\+?(\d*\.?\d+)%?$/,
+    /^\+?(\d+(?:\.\d+)?|\.\d+)%?$/,
+    ".5",
+  ],
+  [
+    "transparent-zero alpha",
+    /^\+?(?:0*\.?0+)%?$/,
+    /^\+?(?:0+(?:\.0+)?|\.0+)%?$/,
+    "0.0%",
+  ],
+];
+// Whole units as single choices, so the generator reaches `90deg`/`.5turn` and
+// not only their one-character prefixes.
+const numericPiece = fc.constantFrom(
+  ..."0123456789.+-%e ".split(""),
+  "deg",
+  "grad",
+  "rad",
+  "turn",
+  "DEG",
+);
+const numericToken = fc
+  .array(numericPiece, { maxLength: 12 })
+  .map((pieces) => pieces.join(""));
+
+// The token positions the two spellings can possibly disagree on: a sign, an
+// integer part, a dot, a fraction part, a suffix. Random draws over these
+// alone leave gaps — a leading-dot fraction with a `%` is one draw in
+// thousands, and it is exactly the shape the disjoint arms exist for — so the
+// cross product is enumerated in full rather than sampled.
+const TOKEN_POSITIONS = [
+  ["", "+", "-", "++", "+-"],
+  ["", "0", "5", "12", "007"],
+  ["", ".", ".."],
+  ["", "0", "5", "25"],
+  ["", "%", "deg", "grad", "rad", "turn", "DEG", "e5", "px", " ", "%%"],
+];
+const structuredTokens = TOKEN_POSITIONS.reduce(
+  (tokens, position) =>
+    tokens.flatMap((token) => position.map((part) => token + part)),
+  [""],
+);
+
+describe("differential: the CSS numeric-token patterns", () => {
+  for (const [label, reference, shipped, accepts] of NUMERIC_PATTERN_PAIRS) {
+    it(`${label} accepts the same tokens with the same captures`, () => {
+      assert.ok(shipped.test(accepts), `${label} rejects ${accepts}`);
+      agree(reference, shipped, accepts);
+      fc.assert(
+        fc.property(numericToken, (token) => agree(reference, shipped, token)),
+        runOptions,
+      );
+    });
+    it(`${label} agrees on every sign/integer/dot/fraction/suffix combination`, () => {
+      let accepted = 0;
+      for (const token of structuredTokens) {
+        if (shipped.test(token)) accepted += 1;
+        agree(reference, shipped, token);
+      }
+      assert.ok(accepted > 0, "no enumerated token was ever accepted");
+    });
+  }
+});
+
+const UNTERMINATED_MARKUP_TAIL_REFERENCE = /<(?:[!?]|\/?[a-zA-Z])[^>]*$/;
+const MARKUP_OPENER = /<(?:[!?]|\/?[a-zA-Z])/;
+const markupChar = fc.constantFrom("<", ">", "/", "!", "?", "a", "B", " ");
+const markupSoup = fc
+  .array(markupChar, { maxLength: 24 })
+  .map((chars) => chars.join(""));
+
+describe("differential: the unterminated-markup tail test", () => {
+  it("the slice after the last `>` agrees with the anchored tail pattern", () => {
+    let open = 0;
+    let closed = 0;
+    fc.assert(
+      fc.property(markupSoup, (raw) => {
+        const unterminated = UNTERMINATED_MARKUP_TAIL_REFERENCE.test(raw);
+        if (unterminated) open += 1;
+        else closed += 1;
+        assert.equal(
+          unterminated,
+          MARKUP_OPENER.test(raw.slice(raw.lastIndexOf(">") + 1)),
+          `verdicts differ on ${JSON.stringify(raw)}`,
+        );
+      }),
+      runOptions,
+    );
+    assert.ok(open > 0 && closed > 0, "one branch never generated");
+  });
+});

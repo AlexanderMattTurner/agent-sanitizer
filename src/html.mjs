@@ -590,13 +590,19 @@ function hexByte(n) {
  * clamps out-of-range) or a percentage `0%..100%` scaled to `0..255`. Returns
  * null (fail open) on any other shape — a `none`/`calc()`/negative channel we
  * cannot resolve to a concrete byte.
+ *
+ * The number shape here (and in `hueDegrees`/`hslPercent`) spells the integer
+ * and leading-`.` forms as disjoint alternatives rather than `\d*\.?\d+`: the
+ * latter's `\d*` and `\d+` both match a digit, so every split of a long digit
+ * run is retried against the rest of the pattern and a failing token costs
+ * O(n^2). Disjoint arms fail each backtrack step in constant time.
  * @param {string} token
  * @returns {number | null}
  */
 function rgbChannel(token) {
-  const pct = token.match(/^\+?(\d*\.?\d+)%$/);
+  const pct = token.match(/^\+?(\d+(?:\.\d+)?|\.\d+)%$/);
   if (pct) return (Math.min(100, parseFloat(pct[1])) / 100) * 255;
-  const num = token.match(/^\+?(\d*\.?\d+)$/);
+  const num = token.match(/^\+?(\d+(?:\.\d+)?|\.\d+)$/);
   if (num) return parseFloat(num[1]);
   return null;
 }
@@ -608,7 +614,9 @@ function rgbChannel(token) {
  * @returns {number | null}
  */
 function hueDegrees(token) {
-  const match = token.match(/^([+-]?\d*\.?\d+)(deg|grad|rad|turn)?$/);
+  const match = token.match(
+    /^([+-]?(?:\d+(?:\.\d+)?|\.\d+))(deg|grad|rad|turn)?$/,
+  );
   if (!match) return null;
   const value = parseFloat(match[1]);
   const unit = match[2] || "deg";
@@ -630,7 +638,7 @@ function hueDegrees(token) {
  * @returns {number | null}
  */
 function hslPercent(token) {
-  const match = token.match(/^\+?(\d*\.?\d+)%?$/);
+  const match = token.match(/^\+?(\d+(?:\.\d+)?|\.\d+)%?$/);
   return match ? Math.min(100, parseFloat(match[1])) : null;
 }
 
@@ -688,7 +696,11 @@ function canonicalizeColorFunction(value) {
   }
   // A literal-zero alpha is fully transparent — bare number (`0`, `0.0`) or the
   // CSS Color 4 percentage form (`0%`), which a browser also renders invisible.
-  if (alpha !== null && /^\+?0*\.?0+%?$/.test(alpha)) return "transparent";
+  // Disjoint arms for the same reason the channel patterns above carry them:
+  // `0*` and `0+` both match a zero, so a long run of them would be retried at
+  // every split before the match could fail.
+  if (alpha !== null && /^\+?(?:0+(?:\.0+)?|\.0+)%?$/.test(alpha))
+    return "transparent";
   if (parts.length !== 3) return null;
   if (isRgb) {
     const channels = parts.map(rgbChannel);
@@ -1806,7 +1818,11 @@ const BOGUS_COMMENT_OPEN_RE = /<[!?]/g;
 // html-property "second pass changes nothing"). An open/end tag requires a
 // name letter after the `<`/`</`, so literal prose like `a < b` or an `i <3 u`
 // emoticon is not mistaken for markup.
-const UNTERMINATED_MARKUP_TAIL_RE = /<(?:[!?]|\/?[a-zA-Z])[^>]*$/;
+// Matched against the slice after the last `>` rather than as a `[^>]*$` tail:
+// the tail form has to rescan to end-of-input from every `<` in the source, so
+// a document of many `<` and no `>` costs O(n^2). This form is fixed-length, so
+// each start offset is constant.
+const MARKUP_OPENER_RE = /<(?:[!?]|\/?[a-zA-Z])/;
 
 /**
  * Fold a raw source slice into the "inside an unterminated tag" state. A `>`
@@ -1820,8 +1836,10 @@ const UNTERMINATED_MARKUP_TAIL_RE = /<(?:[!?]|\/?[a-zA-Z])[^>]*$/;
  * @returns {boolean}
  */
 function foldAbsorb(absorbing, raw) {
-  if (raw.includes(">")) return UNTERMINATED_MARKUP_TAIL_RE.test(raw);
-  return absorbing || UNTERMINATED_MARKUP_TAIL_RE.test(raw);
+  const lastClose = raw.lastIndexOf(">");
+  const opensMarkup = MARKUP_OPENER_RE.test(raw.slice(lastClose + 1));
+  if (lastClose !== -1) return opensMarkup;
+  return absorbing || opensMarkup;
 }
 
 /**
@@ -2499,7 +2517,22 @@ const DIGEST_HEX_LENGTHS = new Set([32, 40, 56, 64, 96, 128]);
 // the slug benign (no uppercase) while catching the scattered-separator blob the
 // run gate missed. Anchored to the whole value for the same RAW-query reason.
 const BLOB_VALUE_B64URL_RE = /^[A-Za-z0-9_-]{40,}={0,2}$/;
-const B64URL_MIXED_RE = /(?=.*[A-Z])(?=.*[0-9])/;
+
+/**
+ * True when `value` carries at least one uppercase letter AND one digit — the
+ * character mix that separates bulk-encoded bytes from a lowercase word-slug.
+ * Two single-character-class scans rather than one `(?=.*[A-Z])(?=.*[0-9])`
+ * regex: an unanchored lookahead pair costs a full scan at EVERY start offset,
+ * so a long value that carries neither class is quadratic to reject. The two
+ * agree on any value without a newline, which every caller guarantees by
+ * gating on an anchored pattern over a newline-free alphabet first — `.` in
+ * that lookahead does not cross a line, so only there could they differ.
+ * @param {string} value
+ * @returns {boolean}
+ */
+function hasUpperAndDigit(value) {
+  return /[A-Z]/.test(value) && /[0-9]/.test(value);
+}
 
 // A path segment whose whole value is a base64/hex run longer than any standard
 // content hash (SHA-512 hex is 128, base64 88; SHA-256 hex 64) is bulk encoded
@@ -2510,6 +2543,8 @@ const B64URL_MIXED_RE = /(?=.*[A-Z])(?=.*[0-9])/;
 // standard arm so a long word-slug (`the-secret-history-of-…`) is not mistaken
 // for a payload; the url-safe arm re-admits `-`/`_` but, like the query arm
 // above, gates on a contiguous 40+ alphanumeric run to keep the slug benign.
+// The two arms overlap on `[A-Fa-f0-9]` but stay linear: `={0,2}$` fails in
+// constant time after the first giveback, so each arm costs one pass.
 const PATH_BLOB_RE = /^(?:[A-Za-z0-9+/]+={0,2}|[A-Fa-f0-9]+)$/;
 // SHA-512 is 128 hex characters and no standard digest is longer, so a run past
 // this is bulk encoded data rather than any fingerprint. Shared by the two path
@@ -2526,7 +2561,7 @@ const DIGEST_MAX_LEN = 128;
  * @returns {boolean}
  */
 function isBase64UrlBlob(value) {
-  return BLOB_VALUE_B64URL_RE.test(value) && B64URL_MIXED_RE.test(value);
+  return BLOB_VALUE_B64URL_RE.test(value) && hasUpperAndDigit(value);
 }
 
 // `.` and `,` are legal in a URL but sit outside every blob alphabet above, so
@@ -2570,7 +2605,7 @@ function isChunkedPathBlob(segment) {
   return (
     joined !== null &&
     joined.length > DIGEST_MAX_LEN &&
-    ((PATH_BLOB_RE.test(joined) && B64URL_MIXED_RE.test(joined)) ||
+    ((PATH_BLOB_RE.test(joined) && hasUpperAndDigit(joined)) ||
       isBase64UrlBlob(joined))
   );
 }
@@ -2968,7 +3003,12 @@ function parseSrcset(value) {
     const start = i;
     while (i < n && !SRCSET_WS_RE.test(value[i])) i++;
     const run = value.slice(start, i);
-    const url = run.replace(/,+$/, "");
+    // The trailing commas come off by scanning back rather than by replacing
+    // `,+$`: that pattern is unanchored at the start, so a run of commas costs
+    // one match attempt per comma.
+    let cut = run.length;
+    while (cut > 0 && run[cut - 1] === ",") cut--;
+    const url = run.slice(0, cut);
     if (url) urls.push(url);
     // A URL run ending in a comma is a bare candidate (no descriptor); the
     // comma already delimits the next one, so skip descriptor parsing.
