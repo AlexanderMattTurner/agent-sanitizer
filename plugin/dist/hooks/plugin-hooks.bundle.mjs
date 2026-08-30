@@ -44792,9 +44792,11 @@ function selectFoldableFindings(text5, findings) {
     index2 += ch.length;
   }
   flushToken(index2);
-  return findings.filter(
-    (finding2) => [...finding2.char].every((_, i) => foldableAt[finding2.index + i] === 1)
-  );
+  return findings.filter((finding2) => {
+    for (let i = 0; i < finding2.char.length; i++)
+      if (foldableAt[finding2.index + i] !== 1) return false;
+    return true;
+  });
 }
 function foldConfusables(text5, findings) {
   const tail = [];

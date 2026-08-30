@@ -208,13 +208,11 @@ function describeFolds(findings) {
  * @returns {void}
  */
 function assertFinding(finding, actual) {
-  // Fail loud on a finding that does not match the actual bytes at its offset:
-  // a buggy/adversarial scanner reporting a wrong char/index would otherwise
-  // silently corrupt the path/command, defeating the deny-rule protection.
-  // A negative index is the gap the startsWith guard alone misses: when `char`
-  // is a prefix of the text, `startsWith(char, -1)` is true (the offset is
-  // clamped to 0), and the slice math below then mangles the string instead of
-  // throwing — so range-check the index explicitly first.
+  // A negative index is the gap the byte check alone misses: `String.slice`
+  // reads a negative offset from the END, so `actual` can be a genuine match
+  // taken from the wrong place — `{index: -2, char: "а"}` against `"aаb"`
+  // matches, and the splice math then folds a byte the finding never named.
+  // Range-check the index explicitly first.
   if (!Number.isInteger(finding.index) || finding.index < 0)
     throw new Error(
       `Confusable finding has an out-of-range index ${finding.index}`,
@@ -355,10 +353,15 @@ export function selectFoldableFindings(text, findings) {
 
   // Every offset the finding covers, not just its first: `char` may span a
   // boundary into a token the gate rejected, and folding it would rewrite that
-  // token — the exact mangling this gate exists to prevent.
-  return findings.filter((finding) =>
-    [...finding.char].every((_, i) => foldableAt[finding.index + i] === 1),
-  );
+  // token — the exact mangling this gate exists to prevent. Counted in UTF-16
+  // units, which is what `foldableAt` is indexed by: an astral glyph occupies
+  // two of them, so a code-point walk would leave the tail of a `char` that
+  // carries one unchecked.
+  return findings.filter((finding) => {
+    for (let i = 0; i < finding.char.length; i++)
+      if (foldableAt[finding.index + i] !== 1) return false;
+    return true;
+  });
 }
 
 /**

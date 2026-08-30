@@ -152,14 +152,25 @@ describe("foldConfusables", () => {
   });
 
   it("throws on a negative index instead of silently corrupting the text", () => {
-    // startsWith(char, -1) clamps to 0 and returns true when `char` is a prefix,
-    // so without the explicit range check this would splice to "abxabc".
     assert.throws(
       () =>
         foldConfusables("abc", [
           { index: -1, char: "a", latinEquivalent: "x" },
         ]),
       /out-of-range index -1/,
+    );
+  });
+
+  it("throws on a negative index whose bytes DO match, read from the end", () => {
+    // The byte check alone passes here: `slice(-2)` reads "аb" from the end, so
+    // `char` matches bytes the finding never named, and the splice would fold
+    // them to "axb". Only the range check refuses it.
+    assert.throws(
+      () =>
+        foldConfusables(`a${CYR_A}b`, [
+          { index: -2, char: CYR_A, latinEquivalent: "x" },
+        ]),
+      /out-of-range index -2/,
     );
   });
 
@@ -544,6 +555,30 @@ describe("selectFoldableFindings", () => {
       latinEquivalent: "ao",
     };
     assert.deepEqual(selectFoldableFindings(text, [finding]), [finding]);
+  });
+
+  it("rejects a finding whose ASTRAL char spans into a token the gate refused", () => {
+    // `foldableAt` is indexed in UTF-16 units, so a per-code-point walk checks
+    // two offsets for a four-unit `char` and never looks at the ones past it.
+    // Here the tail reaches the lone Cyrillic token, which the gate rejects —
+    // folding it would rewrite exactly the text the gate exists to protect.
+    const bold = (n) => cp(0x1d400 + n);
+    const text = `a${bold(0)}${bold(1)} ${CYR_O}`;
+    const mapped = [
+      { index: 1, char: bold(0), latinEquivalent: "A" },
+      { index: 3, char: bold(1), latinEquivalent: "B" },
+    ];
+    assert.deepEqual(
+      selectFoldableFindings(text, [
+        ...mapped,
+        {
+          index: 1,
+          char: `${bold(0)}${bold(1)} ${CYR_O}`,
+          latinEquivalent: "x",
+        },
+      ]),
+      mapped,
+    );
   });
 });
 

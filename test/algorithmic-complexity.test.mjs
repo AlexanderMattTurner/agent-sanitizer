@@ -80,22 +80,17 @@ const lowercaseBlobPath = (n) => `https://e.com/${grow("abcdefg-", n)}`;
 const mixedBlobPath = (n) => `https://e.com/${grow("aB3defg-", n)}`;
 
 /**
- * Many tag openers, then one `>`, then a hidden span, all in one paragraph.
- * Every part is load-bearing, and getting any of them wrong makes the case
- * measure nothing:
+ * Many tag openers, then one `>`, then a hidden span. Two parts are
+ * load-bearing, and getting either wrong makes the case measure nothing:
  *
- * - the opener is `<` plus a name letter, or the tail test declines it in
- *   constant time (`<` plus a space is the trap: it looks adversarial and is
- *   answered instantly);
- * - the `!` keeps each opener from being a well-formed tag, which is what leaves
- *   the whole run inside ONE inter-node raw slice — with `<ab ` openers the
- *   final `<ab >` parses as an html node of its own and the slice handed to the
- *   fold ends before the `>`, where the tail test answers in constant time;
+ * - the `!` keeps each opener from being a well-formed tag, which is what
+ *   leaves the whole run inside ONE inter-node raw slice reaching past the `>`.
+ *   With `<ab ` openers the final `<ab >` parses as an html node of its own,
+ *   the slice ends before the `>`, and a rescan from every `<` has nothing to
+ *   rescan to;
  * - the span is a real inline-html child, and the openers are the raw source
  *   BETWEEN nodes, which is the slice the absorb state is folded over. Without
- *   a child the document has no inline html and the fold never runs;
- * - the paragraph opens with prose, or the run is block-level html and the
- *   inline walk that folds the absorb state is never entered.
+ *   a child the document has no inline html and the fold never runs.
  * @param {number} n
  * @returns {string}
  */
