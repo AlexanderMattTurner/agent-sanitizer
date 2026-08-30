@@ -112,7 +112,7 @@ const EXFIL_URLS = [
   {
     // Percent-encoded blob: the raw value is percent-escapes, not a blob
     // shape, but decodes to a 40+ run of "A"s.
-    url: `https://pctblob.evil/log?q=${"%41".repeat(40)}`,
+    url: `https://pctblob.evil/log?q=${"%41%5A".repeat(20)}`,
     reason: "suspicious query parameter",
     target: "pctblob.evil",
   },

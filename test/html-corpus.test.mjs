@@ -295,8 +295,10 @@ const CORPUS = {
       reason: "suspicious query parameter",
     },
     {
+      // Past the SHA-512-hex ceiling: a digest-length hex value is a
+      // fingerprint (see the benign `query-hex-digest` row below).
       name: "query-hex-blob",
-      input: "https://ok.example/p?h=" + "a".repeat(40),
+      input: "https://ok.example/p?h=" + "a".repeat(150),
       reason: "suspicious query parameter",
     },
     {
@@ -343,7 +345,9 @@ const CORPUS = {
     },
     {
       name: "fragment-param-blob",
-      input: "https://ok.example/p?a=1#x=" + "a".repeat(64),
+      // `x` is a generic name, where a digest-length hex value reads as a
+      // fingerprint — so this row's payload reaches past the hex alphabet.
+      input: "https://ok.example/p?a=1#x=" + "Zm9vQmFy".repeat(8),
       reason: "suspicious query parameter",
     },
     {
@@ -382,7 +386,7 @@ const CORPUS = {
       // Percent-encoded blob: the raw value is percent-escapes, not a blob
       // shape, but it decodes to a 40+ run of "A"s.
       name: "percent-encoded-blob",
-      input: "https://evil.example/log?q=" + "%41".repeat(40),
+      input: "https://evil.example/log?q=" + "%41%5A".repeat(20),
       reason: "suspicious query parameter",
     },
   ],
@@ -476,6 +480,13 @@ const CORPUS = {
       // An analytics param may legitimately carry a url-safe blob.
       name: "b64url-in-utm",
       input: `https://x.com/p?utm_content=${B64URL_BLOB}`,
+    },
+    {
+      // A bare digest under a generic name is a fingerprint — a cache-buster,
+      // an ETag, a signed-CDN token (imgix `?s=`, KeyCDN `?secure=`) — and
+      // every one of them fired under the old 32-char hex floor.
+      name: "query-hex-digest",
+      input: `https://cdn.x/a.js?v=${"a".repeat(32)}&s=${"b".repeat(64)}`,
     },
   ],
   // Every comment form is invisible on a rendered page, so each is spliced —

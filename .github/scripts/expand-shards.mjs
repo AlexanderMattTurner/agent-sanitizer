@@ -3,8 +3,10 @@
  * Expand the declarative mutation-shard config into a concrete shard matrix.
  *
  * `.github/mutation-shards.json` declares only what a human must decide: which
- * big files are worth chunking into `splitEvery`-line slices, and how many
- * whole-file shards to spread everything else over. WHICH files get mutated is
+ * big files are worth chunking into `splitEvery`-line slices (a `split` entry
+ * may carry its own `splitEvery` where the global width runs long), and how
+ * many whole-file shards to spread everything else over. WHICH files get
+ * mutated is
  * `scripts/shipped-sources.mjs`'s answer, so a newly published module or a new
  * `.hooks/lib` one joins the matrix the moment it is committed — no config to
  * remember, and no hand-listed second copy of the mutated set to drift from it.
@@ -96,16 +98,26 @@ export function expandShards(repoRoot) {
   }
 
   const shards = [];
-  for (const { id, file } of config.split ?? []) {
-    const chunks = Math.max(
-      1,
-      Math.ceil(lineCount(repoRoot, file) / splitEvery),
-    );
+  for (const entry of config.split ?? []) {
+    const { id, file } = entry;
+    // A shard's runtime tracks the MUTANTS in its slice, not its line count, so
+    // a file whose lines are dense in mutable expressions needs thinner slices
+    // to stay under the matrix job's timeout. Per-entry rather than global:
+    // thinning every file to the densest one's width pays a full Stryker dry
+    // run per extra shard on files that already run in a third of the budget.
+    const lines = entry.splitEvery ?? splitEvery;
+    if (!Number.isInteger(lines) || lines <= 0) {
+      throw new Error(
+        `mutation-shards.json split entry ${id} has splitEvery ` +
+          `${JSON.stringify(entry.splitEvery)}, which is not a positive integer`,
+      );
+    }
+    const chunks = Math.max(1, Math.ceil(lineCount(repoRoot, file) / lines));
     for (let i = 0; i < chunks; i++) {
-      const start = i * splitEvery + 1;
+      const start = i * lines + 1;
       // The last chunk ends open so the tail is always covered even if the file
       // grew past the last boundary since this expansion was computed.
-      const end = i === chunks - 1 ? EOF_SENTINEL : (i + 1) * splitEvery;
+      const end = i === chunks - 1 ? EOF_SENTINEL : (i + 1) * lines;
       shards.push({ id: `${id}-${i + 1}`, mutate: `${file}:${start}-${end}` });
     }
   }

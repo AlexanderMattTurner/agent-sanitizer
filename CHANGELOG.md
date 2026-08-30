@@ -8,6 +8,71 @@ adhere to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+## [2.49.1] - 2026-08-30
+
+### Added
+- Linear-time algorithmic complexity guarantee for confusables and HTML sanitization, documented in THREAT-MODEL.md.
+- Linting rule via eslint-plugin-redos to detect and report super-linear regexes at build time.
+
+### Changed
+- HTML regex scans optimized to run in linear time relative to input size.
+- Confusables folding refactored to avoid rebuilding the tail on overlapping findings.
+
+### Fixed
+- Confusables finding span calculation now correctly counts in UTF-16 units at the fold gate.
+
+## [2.49.0] - 2026-08-30
+
+### Fixed
+
+- Improved credential detection in prose position by refusing key/value interpretation for credential nouns.
+- Enhanced prose skip logic to require proper env-name value shape and same-line determiner.
+- Refined prose skip detection to trust only determiners immediately before credential nouns.
+- Fixed over-redaction by stopping redaction of prose lines where English function words precede the credential noun.
+
+## [2.48.6] - 2026-08-29
+
+### Fixed
+
+- Stop digest exemption from covering credential-named parameters
+- Keep the hex blob floor below base64's to prevent unnecessary base64 encoding
+- Treat a bare digest as a fingerprint instead of an exfiltration payload
+
+## [2.48.5] - 2026-08-29
+
+### Changed
+
+- Copy gate's repeat cost is now documented against the linear sites.
+
+## [2.48.4] - 2026-08-29
+
+### Fixed
+
+- Template sync now runs its own scripts from a staged copy with the tooling path passed through environment variables, improving reliability of the sync process.
+
+## [2.48.3] - 2026-08-29
+
+### Fixed
+
+- Resolved security scan failures caused by unset Claude credential by properly scoping OAuth credentials to the step that uses them.
+- Cleared four advisories reported by pnpm audit in the development dependency tree.
+
+## [2.48.2] - 2026-08-29
+
+### Fixed
+
+- HTML redaction no longer rewrites example key IDs in comments.
+- Signed-URL field recognition now covers all providers, not just Azure.
+- Signed-CDN queries are now properly bounded to prevent hiding from long-query checks.
+- Signed-URL `expires` timestamps are now treated as short parameters instead of blobs.
+- Azure SAS URL false positives are eliminated and signed-name blob dodges are closed.
+
+## [2.48.1] - 2026-08-28
+
+### Fixed
+
+- The InstructionsLoaded gap notice is now silenced during cold starts when a live setup has not yet been established.
+
 ## [2.48.0] - 2026-08-27
 
 ### Added

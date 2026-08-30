@@ -152,14 +152,25 @@ describe("foldConfusables", () => {
   });
 
   it("throws on a negative index instead of silently corrupting the text", () => {
-    // startsWith(char, -1) clamps to 0 and returns true when `char` is a prefix,
-    // so without the explicit range check this would splice to "abxabc".
     assert.throws(
       () =>
         foldConfusables("abc", [
           { index: -1, char: "a", latinEquivalent: "x" },
         ]),
       /out-of-range index -1/,
+    );
+  });
+
+  it("throws on a negative index whose bytes DO match, read from the end", () => {
+    // The byte check alone passes here: `slice(-2)` reads "аb" from the end, so
+    // `char` matches bytes the finding never named, and the splice would fold
+    // them to "axb". Only the range check refuses it.
+    assert.throws(
+      () =>
+        foldConfusables(`a${CYR_A}b`, [
+          { index: -2, char: CYR_A, latinEquivalent: "x" },
+        ]),
+      /out-of-range index -2/,
     );
   });
 
@@ -235,6 +246,88 @@ describe("foldConfusables", () => {
       "1/2 x",
     );
   });
+
+  // OVERLAPPING findings. Highest-index-first means the lower finding is
+  // validated against — and consumes — bytes an earlier fold already rewrote,
+  // so its `char` names the ALREADY-FOLDED text, not the input. makeScan never
+  // emits such a finding; a buggy or adversarial engine can, and the fold must
+  // stay byte-exact rather than corrupt the command.
+  const CYR_E = cp(0x0435);
+  const MATH_A = cp(0x1d400);
+  const MATH_B = cp(0x1d401);
+  for (const [name, text, findings, expected] of [
+    [
+      "folds an overlap of one UTF-16 unit into already-folded bytes",
+      `/${CYR_A}${CYR_O}/b`,
+      [
+        { index: 2, char: CYR_O, latinEquivalent: "o" },
+        { index: 1, char: `${CYR_A}o`, latinEquivalent: "AO" },
+      ],
+      "/AO/b",
+    ],
+    [
+      "folds an overlap that crosses a surrogate pair (astral confusables)",
+      `${MATH_A}${MATH_B}`,
+      [
+        { index: 2, char: MATH_B, latinEquivalent: "b" },
+        { index: 0, char: `${MATH_A}b`, latinEquivalent: "AB" },
+      ],
+      "AB",
+    ],
+    [
+      "folds a chain of three mutually overlapping findings",
+      `${CYR_A}${CYR_O}${CYR_E}`,
+      [
+        { index: 2, char: CYR_E, latinEquivalent: "e" },
+        { index: 1, char: `${CYR_O}e`, latinEquivalent: "OE" },
+        { index: 0, char: `${CYR_A}O`, latinEquivalent: "X" },
+      ],
+      "XE",
+    ],
+    [
+      "consumes only part of a one-to-many canon the overlap reaches into",
+      `${CYR_A}½`,
+      [
+        { index: 1, char: "½", latinEquivalent: "1/2" },
+        { index: 0, char: `${CYR_A}1`, latinEquivalent: "Z" },
+      ],
+      "Z/2",
+    ],
+  ]) {
+    it(name, () => assert.equal(foldConfusables(text, findings), expected));
+  }
+
+  for (const [name, text, findings] of [
+    [
+      "an overlapping finding whose char misses the folded bytes",
+      `/${CYR_A}${CYR_O}`,
+      [
+        { index: 2, char: CYR_O, latinEquivalent: "o" },
+        { index: 1, char: `${CYR_A}z`, latinEquivalent: "Q" },
+      ],
+    ],
+    [
+      "a finding claiming bytes past the end of the input",
+      `/${CYR_A}`,
+      [{ index: 1, char: `${CYR_A}bc`, latinEquivalent: "Q" }],
+    ],
+    [
+      "a finding claiming bytes past the end of the folded text",
+      `/${CYR_A}${CYR_O}`,
+      [
+        { index: 2, char: CYR_O, latinEquivalent: "o" },
+        { index: 1, char: `${CYR_A}oXY`, latinEquivalent: "Q" },
+      ],
+    ],
+  ]) {
+    // The mismatch must surface as the named finding error, not as an internal
+    // one from reading past the end of the assembled output.
+    it(`throws on ${name}`, () =>
+      assert.throws(
+        () => foldConfusables(text, findings),
+        /does not match input at index 1/,
+      ));
+  }
 });
 
 // ─── normalizeConfusables: folding positive cases ────────────────────────────
@@ -462,6 +555,30 @@ describe("selectFoldableFindings", () => {
       latinEquivalent: "ao",
     };
     assert.deepEqual(selectFoldableFindings(text, [finding]), [finding]);
+  });
+
+  it("rejects a finding whose ASTRAL char spans into a token the gate refused", () => {
+    // `foldableAt` is indexed in UTF-16 units, so a per-code-point walk checks
+    // two offsets for a four-unit `char` and never looks at the ones past it.
+    // Here the tail reaches the lone Cyrillic token, which the gate rejects —
+    // folding it would rewrite exactly the text the gate exists to protect.
+    const bold = (n) => cp(0x1d400 + n);
+    const text = `a${bold(0)}${bold(1)} ${CYR_O}`;
+    const mapped = [
+      { index: 1, char: bold(0), latinEquivalent: "A" },
+      { index: 3, char: bold(1), latinEquivalent: "B" },
+    ];
+    assert.deepEqual(
+      selectFoldableFindings(text, [
+        ...mapped,
+        {
+          index: 1,
+          char: `${bold(0)}${bold(1)} ${CYR_O}`,
+          latinEquivalent: "x",
+        },
+      ]),
+      mapped,
+    );
   });
 });
 

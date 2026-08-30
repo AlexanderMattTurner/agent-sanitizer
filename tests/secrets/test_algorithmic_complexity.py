@@ -226,12 +226,17 @@ def test_entry_point_is_sub_quadratic_on_one_line(name):
 
 # The copy-volume gate's sizes and threshold. An 8x step, so linear is ~8x and
 # quadratic ~64x; the per-call fixed cost pulls the linear curve slightly under
-# 8. Both curves are MEASURED on the payload below — 7.85x when each line is
-# spliced in one pass, 30.27x when it is rebuilt per span — and 15.0 sits
-# between them with ~2x margin on each side.
+# 8. Both curves are MEASURED on the payload below — 8.18x at worst when each
+# line is spliced in one pass, 96.57x when it is rebuilt per span — and 15.0
+# sits between them with ~1.8x margin below and ~6x above.
 _COPY_SMALL_BYTES = 64 * 1024
 _COPY_LARGE_BYTES = 512 * 1024
 _COPY_GROWTH_LIMIT = 15.0
+# Samples of the SMALL side, whose best one is the denominator. Five, not more:
+# the small case costs ~1/8th of the large one on the linear entry points (far
+# less on the quadratic control), so the repeats are cheap, and the estimator
+# only needs one sample that no collection or arena growth landed in.
+_COPY_SMALL_REPEATS = 5
 
 # `password="<next unit's `password=`>"` redacts once per TWO units, so the span
 # count grows with the line and a per-span whole-line rebuild shows as the
@@ -256,9 +261,21 @@ def _cpu_seconds(call) -> float:
 def _cpu_growth_ratio(thunk_for) -> float:
     """CPU-time growth from :data:`_COPY_SMALL_BYTES` to :data:`_COPY_LARGE_BYTES`
     on ONE line, with the engine's lazy one-time setup warmed out first (same
-    reason :func:`_growth_ratio` warms up)."""
-    thunk_for(_long_field_line(1024))()
-    small = _cpu_seconds(thunk_for(_long_field_line(_COPY_SMALL_BYTES)))
+    reason :func:`_growth_ratio` warms up).
+
+    The warm-up runs at the SMALL size, and the small side is the best of
+    :data:`_COPY_SMALL_REPEATS` samples. Noise can only ADD CPU time, so an
+    anomalously LOW ratio can only come from an inflated denominator: one 64 KiB
+    sample that absorbed a garbage collection or the allocator's first arena
+    growth at this size reads as the quadratic having gone away. The large side
+    needs no repeat — it burns far more CPU, so the same fixed pause is a much
+    smaller share of it, and inflating it only ever raises the ratio, which no
+    assertion here reads as a pass."""
+    thunk_for(_long_field_line(_COPY_SMALL_BYTES))()
+    small = min(
+        _cpu_seconds(thunk_for(_long_field_line(_COPY_SMALL_BYTES)))
+        for _ in range(_COPY_SMALL_REPEATS)
+    )
     large = _cpu_seconds(thunk_for(_long_field_line(_COPY_LARGE_BYTES)))
     # allow-wall-clock: a zero measurement means the entry point never ran at
     # all, not that a loaded runner was fast — and the caller's real

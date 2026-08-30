@@ -32,3 +32,12 @@ description = "Layer-2 span-store identifiers (not credentials)"
 # nothing to leak. Scoped to the Layer-2 span/rehydrate test files, which exist
 # only to drive that store.
 paths = ['''^test/claude-hooks-layer2-[a-z]+\.test\.mjs$''']
+
+[[allowlists]]
+description = "Exfil-URL corpus tokens (not real secrets)"
+# Layer 3 decides whether a URL is carrying a credential, so its corpus has to
+# contain credential-SHAPED values: a JWT, a Google API key, a Slack bot token,
+# a Firebase download token. Each keeps a real token's length and charset with
+# the secret replaced, and several are the vendors' own published examples.
+# Scoped to the one test file that drives `checkExfilUrl`.
+paths = ['''^test/exfil-property\.test\.mjs$''']
