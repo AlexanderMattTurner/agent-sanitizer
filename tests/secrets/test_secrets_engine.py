@@ -1043,6 +1043,205 @@ def test_repeated_value_defeats_the_metadata_skip(label, text):
     assert "Hunter2Passw0rdABC" not in redacted, label
 
 
+# A FUNCTION WORD before the credential noun marks the line as a SENTENCE
+# naming a credential, not a field holding one. The gate's comment claims the
+# closed word class is the whole discriminator, so the cases sweep one word
+# from each sub-class, the open-class modifiers that must stay redacted in the
+# same position, and the entropy floor that bounds the skip.
+@pytest.mark.parametrize(
+    "label, line, value, expected",
+    [
+        (
+            "the reported diagnostic",
+            "the plan-job ran without their secret: tiktok_automation_account_id",
+            "tiktok_automation_account_id",
+            True,
+        ),
+        (
+            "article",
+            "the secret: tiktok_automation_account_id",
+            "tiktok_automation_account_id",
+            True,
+        ),
+        (
+            "demonstrative",
+            "this token = my_service_account_name",
+            "my_service_account_name",
+            True,
+        ),
+        (
+            "possessive",
+            "your password = correct-horse-battery",
+            "correct-horse-battery",
+            True,
+        ),
+        (
+            "preposition",
+            "ran without secret: tiktok_automation_account_id",
+            "tiktok_automation_account_id",
+            True,
+        ),
+        (
+            "quantifier",
+            "found no token: my_service_account_name",
+            "my_service_account_name",
+            True,
+        ),
+        (
+            "auxiliary",
+            "value is secret: not_actually_a_secret_here",
+            "not_actually_a_secret_here",
+            True,
+        ),
+        (
+            "conjunction",
+            "name and token: my_service_account_name",
+            "my_service_account_name",
+            True,
+        ),
+        (
+            "quoted value",
+            'their secret: "tiktok_automation_account_id"',
+            "tiktok_automation_account_id",
+            True,
+        ),
+        # An open-class modifier forms a compound credential LABEL.
+        (
+            "client secret",
+            "client secret: tiktok_automation_account_id",
+            "tiktok_automation_account_id",
+            False,
+        ),
+        (
+            "export is an assignment keyword, not prose",
+            "export secret: tiktok_automation_account_id",
+            "tiktok_automation_account_id",
+            False,
+        ),
+        (
+            "shell control keyword before a real assignment",
+            "then secret=tiktok_automation_account_id",
+            "tiktok_automation_account_id",
+            False,
+        ),
+        (
+            "glued, not a separate word",
+            "thesecret: tiktok_automation_account_id",
+            "tiktok_automation_account_id",
+            False,
+        ),
+        (
+            "no word before",
+            "secret: tiktok_automation_account_id",
+            "tiktok_automation_account_id",
+            False,
+        ),
+        (
+            "function word is the whole prefix",
+            "their tiktok_automation_account_id",
+            "tiktok_automation_account_id",
+            False,
+        ),
+        # The entropy floor: a value carrying credential material is never
+        # skipped, whatever sentence surrounds it.
+        (
+            "opaque run under a function word",
+            "their secret: ghp_A1b2C3d4E5f6G7h8I9j0K1l2M3n4O5",
+            "ghp_A1b2C3d4E5f6G7h8I9j0K1l2M3n4O5",
+            False,
+        ),
+    ],
+)
+def test_is_prose_field(label, line, value, expected):
+    offset = E.Candidate(value=value, line=line, value_start=line.rindex(value))
+    assert E._is_prose_field(offset) is expected, label
+
+
+def test_prose_function_words_are_a_closed_class():
+    """The elimination claim rests on the list being function words only: no
+    assignment/declaration keyword of a config or source grammar may appear,
+    or a real `<keyword> SECRET=value` line would be skipped."""
+    assignment_keywords = {
+        "export",
+        "set",
+        "setenv",
+        "env",
+        "var",
+        "let",
+        "const",
+        "declare",
+        "local",
+        "readonly",
+        "global",
+        "static",
+        "final",
+        "arg",
+        "define",
+        "then",
+        "do",
+        "else",
+        "elif",
+        "fi",
+        "done",
+        "esac",
+    }
+    overlap = E._PROSE_FUNCTION_WORDS & assignment_keywords
+    assert not overlap, f"assignment keywords in the prose list: {sorted(overlap)}"
+    assert all(w.isalpha() and w.islower() for w in E._PROSE_FUNCTION_WORDS)
+
+
+@pytest.mark.parametrize(
+    "label, text",
+    [
+        (
+            "reported diagnostic loses its env name",
+            "the plan-job ran without their secret: tiktok_automation_account_id",
+        ),
+        ("quoted, keyword path", 'their secret: "tiktok_automation_account_id"'),
+        ("article", "restored the secret: tiktok_automation_account_id"),
+        ("preposition", "the job ran without secret: tiktok_automation_account_id"),
+        ("quantifier", "the run had no token: my_service_account_token_name"),
+    ],
+)
+def test_prose_function_word_lines_are_not_redacted(label, text):
+    assert run_plain(text) is None, label
+
+
+@pytest.mark.parametrize(
+    "label, text, leak",
+    [
+        (
+            "an ordinary noun label still redacts",
+            "client secret: tiktok_automation_account_id",
+            "tiktok_automation_account_id",
+        ),
+        (
+            "a credential-shaped value still redacts",
+            "their secret: ghp_A1b2C3d4E5f6G7h8I9j0K1l2M3n4O5",
+            "ghp_A1b2C3d4E5f6G7h8I9j0K1l2M3n4O5",
+        ),
+        (
+            "a shell control keyword is an assignment context",
+            "then secret=tiktok_automation_account_id",
+            "tiktok_automation_account_id",
+        ),
+    ],
+)
+def test_prose_skip_stays_bounded(label, text, leak):
+    redacted = run_plain(text)
+    assert redacted is not None, f"{label}: nothing was redacted"
+    assert leak not in redacted["text"], label
+
+
+def test_prose_skip_is_off_on_web_ingress():
+    """The function word is a convention of the surrounding text, so attacker-
+    controlled ingress can forge it — the gate is name-trust, not shape."""
+    text = "the plan-job ran without their secret: tiktok_automation_account_id"
+    redacted = run_plain(text, cfg(web_ingress=True))
+    assert redacted is not None, "web ingress must not honour the prose skip"
+    assert "tiktok_automation_account_id" not in redacted["text"]
+
+
 # `passphrase` carries `field-value`; `credential`/`credentials` deliberately do
 # NOT. They are everyday variable names, and an attribute chain clears
 # FIELD_VALUE_RE's 20-byte floor while escaping every value-shape skip (which

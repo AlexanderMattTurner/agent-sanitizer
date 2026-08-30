@@ -120,6 +120,7 @@ _NAME_TRUST_FIXTURES = {
     # and excluded from the independence matrix rather than given fake fixtures.
     "_is_benign_cursor": (),
     "_is_metadata_field": (),
+    "_is_prose_field": (),
 }
 
 
@@ -138,6 +139,11 @@ _NOT_VALUE_ONLY_GATES = {
     "_is_call_or_code_ref": (
         "reads the byte immediately AFTER the value in the line, which a "
         "Candidate built as (value, line=value) has no room to carry"
+    ),
+    "_is_prose_field": (
+        "reads the WORD before the field name, so the sentence around the "
+        "field is its input rather than a variable the independence matrix "
+        "sweeps — see test_secrets_engine.py::test_is_prose_field"
     ),
 }
 
