@@ -646,15 +646,13 @@ test("a release stamps the plugin manifest and commits it with the release docs"
 });
 
 test("an Unreleased block past the cap still releases, rather than aborting on SIGPIPE", () => {
-  // The cap used to be `awk … | head -c 4000`. Under `set -o pipefail` head
-  // exits at its cap and SIGPIPEs awk, so the whole release aborted with 141 —
-  // it published nothing, tagged nothing and promoted no changelog. That is how
-  // agent-control-plane-core froze at 0.5.3 while its changelog sat at 0.3.0.
+  // Pins the Unreleased cap against a `| head -c` form: under `set -o pipefail`
+  // head exits at its cap and SIGPIPEs the writer, which aborts the whole
+  // release with 141 — publishing nothing, tagging nothing, promoting nothing.
   //
-  // The block must exceed the PIPE BUFFER (64 KiB), not merely the 4000-char
-  // cap: under the cap a writer whose whole output fits one buffered write
-  // finishes before head can close the pipe, so a 4001-char block passes on the
-  // buggy form too and the test would pin nothing.
+  // The fixture must exceed the PIPE BUFFER (64 KiB), not merely the 4000-char
+  // cap: a writer whose whole output fits one buffered write finishes before
+  // head can close the pipe, so a 4001-char block cannot fail and pins nothing.
   const entry = "- " + "x".repeat(120) + "\n";
   const oversized =
     "# Changelog\n\n## Unreleased\n\n### Added\n\n" +
