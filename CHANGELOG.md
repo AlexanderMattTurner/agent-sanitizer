@@ -8,6 +8,15 @@ adhere to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+## [2.51.0] - 2026-08-31
+
+### Added
+- Host-extension share naming in slow-hook notices for better debugging visibility.
+
+### Fixed
+- Hooks now properly charge every host callback to ensure all hooks are tracked.
+- Host-extension window is kept disjoint and the sync seam is properly charged for accurate timing measurements.
+
 ## [2.50.0] - 2026-08-31
 
 ### Fixed
