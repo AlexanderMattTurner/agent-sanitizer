@@ -243,13 +243,12 @@ else
   DIFF_STAT=$(git show --stat HEAD 2>/dev/null || echo "Unable to get diff")
 fi
 
-# Cap commit-message length: truncate each line, limit total length. The
-# `head -c` cap is byte-based and can split a multibyte UTF-8 character at the
-# tail; if it does, the only consequence is that `jq -n --arg` rejects the
-# invalid sequence and the Claude prose step falls back to the plain commit list
-# (the version decision never uses $COMMITS), so a corrupted tail costs only
-# the generated prose — the release itself still completes.
-COMMITS=$(echo "$COMMITS_RAW" | head -20 | cut -c1-100 | head -c 2000)
+# Cap commit-message length: 20 lines, 100 chars each, 2000 chars total. These
+# caps use no `| head`: head exits at its cap and SIGPIPEs the writer, which
+# `set -o pipefail` reports as a failure on exactly the large inputs the caps
+# exist for. A herestring feeds awk, so no pipeline survives to report one.
+COMMITS=$(awk 'NR <= 20 { print substr($0, 1, 100) }' <<<"$COMMITS_RAW")
+COMMITS="${COMMITS:0:2000}"
 
 if [[ -z "$COMMITS" ]]; then
   log "No commits to analyze. Skipping."
@@ -275,14 +274,16 @@ log "Conventional Commits bump level: $BUMP"
 
 # Extract the current "## Unreleased" block from CHANGELOG.md, if present.
 # The block runs from the "## Unreleased" heading up to (but not including) the
-# next "## " heading or end of file.
+# next "## " heading or end of file. Its cap is a parameter expansion for the
+# same SIGPIPE-under-pipefail reason as the COMMITS cap above.
 UNRELEASED_CONTENT=""
 if [[ -f CHANGELOG.md ]]; then
   UNRELEASED_CONTENT=$(awk '
     /^## Unreleased[[:space:]]*$/ { collecting = 1; next }
     collecting && /^## / { collecting = 0 }
     collecting { print }
-  ' CHANGELOG.md | head -c 4000)
+  ' CHANGELOG.md)
+  UNRELEASED_CONTENT="${UNRELEASED_CONTENT:0:4000}"
 fi
 
 # Draft the changelog body. The Claude API is used only for prose — any

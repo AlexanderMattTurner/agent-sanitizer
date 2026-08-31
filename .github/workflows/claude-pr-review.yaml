@@ -436,3 +436,10 @@ jobs:
             -f "context=Review findings resolved" \
             -f "description=Review deliberately skipped: bot-authored, or a chore/style/release title. Add needs-auto-review to force a full review." \
             -f "target_url=${RUN_URL}" >/dev/null
+
+  # This workflow deliberately does NOT arm auto-merge. Arming belongs to the
+  # flow that OPENS a pull request, because that flow is the only one holding the
+  # facts the decision needs: template-sync-automerge.sh refuses to arm a sync
+  # whose conflict a model resolved, and dependabot-auto-merge.yaml refuses a
+  # semver-major bump. A reviewer-side job that arms every skipped PR overrides
+  # both refusals, since it cannot see what either of them weighed.

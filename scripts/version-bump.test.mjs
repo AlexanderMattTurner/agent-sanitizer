@@ -311,7 +311,7 @@ const RELEASE_MANIFEST = join("plugin", ".claude-plugin", "plugin.json");
  * as it grows (a new file it reads, a new binary it shells out to), and three
  * near-identical bootstraps mean the odd one out fails opaquely.
  */
-function makeReleaseSandbox({ manifest } = {}) {
+function makeReleaseSandbox({ manifest, changelog } = {}) {
   const dir = mkdtempSync(join(tmpdir(), "vbump-release-"));
   const remote = join(dir, "remote.git");
   const work = join(dir, "work");
@@ -329,7 +329,7 @@ function makeReleaseSandbox({ manifest } = {}) {
   );
   writeFileSync(
     join(work, "CHANGELOG.md"),
-    "# Changelog\n\n## Unreleased\n\n### Added\n\n- A thing.\n",
+    changelog ?? "# Changelog\n\n## Unreleased\n\n### Added\n\n- A thing.\n",
   );
   if (manifest !== undefined) {
     mkdirSync(join(work, "plugin", ".claude-plugin"), { recursive: true });
@@ -639,6 +639,49 @@ test("a release stamps the plugin manifest and commits it with the release docs"
     assert.equal(
       JSON.parse(showOnRemote(sandbox.remote, "package.json")).version,
       "1.0.0",
+    );
+  } finally {
+    rmSync(sandbox.dir, { recursive: true, force: true });
+  }
+});
+
+test("an Unreleased block past the cap still releases, rather than aborting on SIGPIPE", () => {
+  // Pins the Unreleased cap against a `| head -c` form: under `set -o pipefail`
+  // head exits at its cap and SIGPIPEs the writer, which aborts the whole
+  // release with 141 — publishing nothing, tagging nothing, promoting nothing.
+  //
+  // The fixture must exceed the PIPE BUFFER (64 KiB), not merely the 4000-char
+  // cap: a writer whose whole output fits one buffered write finishes before
+  // head can close the pipe, so a 4001-char block cannot fail and pins nothing.
+  const entry = "- " + "x".repeat(120) + "\n";
+  const oversized =
+    "# Changelog\n\n## Unreleased\n\n### Added\n\n" +
+    entry.repeat(2000) +
+    "\n## [1.0.0] - 2026-01-01\n\n- Seed.\n";
+  assert.ok(
+    oversized.length > 64 * 1024,
+    "the fixture must exceed the pipe buffer or it cannot fail on the old form",
+  );
+  const sandbox = makeReleaseSandbox({ changelog: oversized });
+
+  try {
+    const res = runRelease(sandbox);
+    assert.equal(res.status, 0, res.stderr);
+
+    // The release actually completed: the old form died before any of this.
+    const remoteTags = execFileSync("git", ["-C", sandbox.remote, "tag"], {
+      encoding: "utf8",
+    });
+    assert.match(remoteTags, /^v1\.1\.0$/m, "the release tag must be pushed");
+    assert.match(
+      execFileSync(
+        "git",
+        ["-C", sandbox.remote, "log", "main", "--pretty=%s"],
+        {
+          encoding: "utf8",
+        },
+      ),
+      /docs: release 1\.1\.0/,
     );
   } finally {
     rmSync(sandbox.dir, { recursive: true, force: true });
