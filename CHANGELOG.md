@@ -8,6 +8,16 @@ adhere to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+## [2.50.0] - 2026-08-31
+
+### Fixed
+
+- Stop SIGPIPE from aborting a release once the changelog grows past a certain size.
+
+### Changed
+
+- Auto-merge on pull requests now arms when the reviewer skips the review, instead of on the reviewer side.
+
 ## [2.49.2] - 2026-08-30
 
 ### Fixed
