@@ -199,6 +199,7 @@ export async function runJudgeCli(
           tool,
           cpuMs: timer.cpuMs(),
           redactorMs: timer.redactorMs(),
+          hostMs: timer.hostMs(),
         }),
         event,
       ),
@@ -216,6 +217,7 @@ export async function runJudgeCli(
         tool,
         cpuMs: timer.cpuMs(),
         redactorMs: timer.redactorMs(),
+        hostMs: timer.hostMs(),
       });
     onError(err, input);
   }

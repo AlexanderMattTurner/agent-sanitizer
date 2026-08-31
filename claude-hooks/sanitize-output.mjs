@@ -26,6 +26,15 @@
  */
 import { redactViaDaemon, positiveMsOr } from "./lib/redactor-client.mjs";
 import {
+  chargeHostExtension,
+  chargeHostExtensionSync,
+} from "./lib/hook-timing.mjs";
+// Re-exported for a composer whose own awaited work runs INSIDE this hook's
+// judge (an audit POST, a policy call): charging it needs the same module
+// instance the timer reads, and a bundled composer that imports the package
+// subpath separately gets a second instance whose totals no timer sees.
+export { chargeHostExtension, chargeHostExtensionSync };
+import {
   isMain,
   lazyImport,
   emitHookResponse,
@@ -284,8 +293,13 @@ export async function sanitizeText(
           if (!secrets) return null;
           // The note is derived from the PRE-redaction text: the caller's reason for
           // annotating (which variable, which provenance) is exactly what redaction
-          // is about to remove.
-          const note = ext.redactNote?.(content);
+          // is about to remove. Charged like the other seams — this one must answer
+          // synchronously, so a composer that blocks here (a `spawnSync` lookup)
+          // would otherwise leave its wait unattributed and its CPU on the hook.
+          const redactNote = ext.redactNote;
+          const note = redactNote
+            ? chargeHostExtensionSync(() => redactNote(content))
+            : undefined;
           return note
             ? { text: secrets.text, found: secrets.found, note }
             : { text: secrets.text, found: secrets.found };
@@ -298,16 +312,18 @@ export async function sanitizeText(
   // The one place the seam's shape is normalized, so nothing downstream has to
   // branch on an absent `notes` and the banner composer sees one shape.
   const result = { ...seamResult, notes: seamResult.notes ?? [] };
-  return ext.postText
-    ? applyPostText(
-        result,
-        await ext.postText(result.cleaned, {
-          toolName,
-          webIngress,
-          deadline,
-        }),
-      )
-    : result;
+  // Charged to the host-extension window: the callback is the composer's code and
+  // may block on a subprocess or a socket, neither of which this process's CPU
+  // figure can see, so an uncharged wait would land in the slow-hook notice's
+  // unattributed remainder and name nobody.
+  const postText = ext.postText;
+  if (!postText) return result;
+  return applyPostText(
+    result,
+    await chargeHostExtension(() =>
+      postText(result.cleaned, { toolName, webIngress, deadline }),
+    ),
+  );
 }
 
 /**
@@ -837,8 +853,17 @@ registerFaultPolicy(HOOK_NAME, {
  */
 export async function evaluateToolOutput(input, ext = {}) {
   // Best-effort, like the default sink: a host callback that throws must not be
-  // the thing that suppresses a tool output (see bestEffortTrace).
-  const emitTrace = bestEffortTrace(ext.trace ?? trace);
+  // the thing that suppresses a tool output (see bestEffortTrace). A COMPOSER's
+  // sink is charged to the host window — it may write over a socket this process
+  // cannot see the cost of — while the package's own sink is not, since that
+  // file write is the sanitizer's own work.
+  const hostTrace = ext.trace;
+  const emitTrace = bestEffortTrace(
+    hostTrace
+      ? (event, fields) =>
+          chargeHostExtensionSync(() => hostTrace(event, fields))
+      : trace,
+  );
   /**
    * @param {string} outcome  noop | clean | flagged | modified
    * @param {{ mutated_output?: unknown, additional_context?: string } | null} fields
@@ -1044,16 +1069,22 @@ export async function judgeSanitizeOutput(event, ext = {}) {
   // with silent holes is worse than a suppressed tool output.
   if (ext.audit && event.response !== null && event.response !== undefined) {
     const modified = fields !== null && Object.hasOwn(fields, "mutated_output");
-    await ext.audit({
-      tool: event.tool,
-      // The session identity travels in `meta`, not alongside the tool fields, so
-      // a recorder filing one trail per session cannot reach it unless it is
-      // lifted here.
-      session_id: event.meta?.session_id,
-      modified,
-      output: modified ? fields?.mutated_output : event.response,
-      context: fields?.additional_context,
-    });
+    // Charged to the host-extension window for the same reason as `postText`
+    // above: a recorder that POSTs to an absent sink waits out its own connect
+    // bound, and the notice must be able to name that window.
+    const audit = ext.audit;
+    await chargeHostExtension(() =>
+      audit({
+        tool: event.tool,
+        // The session identity travels in `meta`, not alongside the tool fields,
+        // so a recorder filing one trail per session cannot reach it unless it is
+        // lifted here.
+        session_id: event.meta?.session_id,
+        modified,
+        output: modified ? fields?.mutated_output : event.response,
+        context: fields?.additional_context,
+      }),
+    );
   }
   /** @type {import("agent-control-plane-core").Verdict} */
   const verdict = { decision: Decision.ALLOW };

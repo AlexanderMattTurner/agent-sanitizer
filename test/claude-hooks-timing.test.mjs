@@ -11,6 +11,8 @@ import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 
 import {
+  chargeHostExtension,
+  chargeHostExtensionSync,
   excludeProvisioning,
   formatBytes,
   reportSlowHook,
@@ -345,6 +347,8 @@ describe("slowHookNotice", () => {
       notice,
       /The largest share was spent inside the redactor round trip/,
     );
+    // No host figure was passed, so the notice claims none and asks for three.
+    assert.doesNotMatch(notice, /inside host extensions/);
     assert.match(notice, /hook name and all three timings/);
   });
 
@@ -383,9 +387,91 @@ describe("slowHookNotice", () => {
     });
     assert.match(
       notice,
-      /The largest share is neither the redactor nor this hook/,
+      /The largest share is neither the redactor nor this hook computing/,
     );
-    assert.match(notice, /loaded machine/);
+    assert.match(notice, /a host extension this caller does not measure/);
+  });
+
+  it("names the host extension when the wait went into a composer's callback", () => {
+    // The report this window exists for: a composer's best-effort audit POST to
+    // an unreachable sink waited out its 1.0s connect bound on EVERY tool call,
+    // and the notice could attribute none of it — a reader was sent to the
+    // sanitizer for a wait its own extension spent.
+    const notice = slowHookNotice("sanitize-output", 1_150, undefined, {
+      cpuMs: 100,
+      redactorMs: 0,
+      hostMs: 1_000,
+    });
+    assert.match(notice, /1\.0s was inside host extensions/);
+    assert.match(
+      notice,
+      /The largest share was spent inside a host extension this hook called/,
+    );
+    assert.doesNotMatch(notice, /blocked on a loaded machine/);
+  });
+
+  it("counts a nested charge once, not once per bracket", async () => {
+    // The package brackets `postText` and `audit` itself AND publishes the
+    // charger, so a composer charging its own work inside one of those callbacks
+    // would double-count: a 60ms callback reported as 120ms of host time, which
+    // can exceed the run's own wall-clock and flip the largest-share verdict.
+    const timer = startHookTimer();
+    await chargeHostExtension(() =>
+      chargeHostExtension(
+        () => new Promise((resolve) => setTimeout(resolve, 60)),
+      ),
+    );
+    assert.ok(
+      timer.hostMs() >= 50 && timer.hostMs() < 120,
+      `one interval, charged once (${timer.hostMs()}ms)`,
+    );
+  });
+
+  it("charges a SYNCHRONOUS callback's wait and keeps its CPU off the hook", () => {
+    // `redactNote` must answer synchronously, so the async charger cannot wrap it.
+    // Its CPU lands in this process, so an uncharged sync callback is worse than
+    // an unmeasured one: the wait vanishes AND the sanitizer is billed for it.
+    const timer = startHookTimer();
+    const before = timer.cpuMs();
+    const value = chargeHostExtensionSync(() => {
+      const until = Date.now() + 60;
+      while (Date.now() < until) {
+        /* a callback that computes, as a spawnSync-based annotator does */
+      }
+      return "note";
+    });
+    assert.equal(value, "note");
+    assert.ok(timer.hostMs() >= 50, `charged (${timer.hostMs()}ms)`);
+    // The hook's own CPU figure must not grow by the callback's compute: it is
+    // the composer's cost, and charging it twice would name the sanitizer.
+    assert.ok(
+      timer.cpuMs() - before < 40,
+      `the callback's CPU stays off the hook (${timer.cpuMs() - before}ms)`,
+    );
+  });
+
+  it("tells a measured-empty host window apart from an unmeasured one", () => {
+    // A caller that runs the charger and saw no callback passes 0, and the zero is
+    // a finding: it rules the window OUT. A caller that cannot measure omits the
+    // number, and the notice must not invent a zero for it.
+    const measured = slowHookNotice("sanitize-output", 4_000, undefined, {
+      cpuMs: 3_800,
+      redactorMs: 100,
+      hostMs: 0,
+    });
+    assert.match(measured, /0\.0s was inside host extensions/);
+    assert.match(measured, /The largest share is this hook computing/);
+    const unmeasured = slowHookNotice(
+      "scan-invisible-chars",
+      4_000,
+      undefined,
+      {
+        cpuMs: 3_800,
+        redactorMs: 100,
+      },
+    );
+    assert.doesNotMatch(unmeasured, /inside host extensions/);
+    assert.match(unmeasured, /hook name and all three timings/);
   });
 
   it("admits it cannot attribute the wait when no CPU figure is given", () => {
@@ -653,7 +739,7 @@ describe("runJudgeCli times every judge hook", () => {
     // Compared, not pinned to 0.0s: the same window really does load the
     // control plane, and on a cold runner that is a tenth of a second of CPU.
     const timings = stdout.match(
-      /took (\d+\.\d)s .*?of which (\d+\.\d)s was this hook's own CPU and (\d+\.\d)s was inside redactor round trips/u,
+      /took (\d+\.\d)s .*?of which (\d+\.\d)s was this hook's own CPU, (\d+\.\d)s was inside redactor round trips/u,
     );
     assert.ok(timings, stdout);
     const [, wall, cpu, redactor] = timings;
@@ -665,10 +751,7 @@ describe("runJudgeCli times every judge hook", () => {
     // exonerates the redactor in: the notice can only place a wait in that call
     // when a round trip actually happened.
     assert.equal(redactor, "0.0", stdout);
-    assert.match(
-      stdout,
-      /The largest share is neither the redactor nor this hook/,
-    );
+    assert.match(stdout, /The largest share is none of those three/);
     assert.ok(
       errs.some((line) => line.includes("PERFORMANCE")),
       "the timing must also reach stderr",
@@ -711,12 +794,12 @@ describe("runJudgeCli times every judge hook", () => {
     assert.match(stderr, /sanitize-output hook error: judge exploded/);
     assert.match(stderr, /PERFORMANCE/);
     assert.match(stderr, /sanitize-output hook took/);
-    // The error path carries all three timings too: a judge that threw after
+    // The error path carries all four timings too: a judge that threw after
     // stalling inside a redaction call is the run whose redactor share is the
     // finding, and this stderr line is its only report.
     assert.match(
       stderr,
-      /of which \d+\.\ds was this hook's own CPU and 0\.0s was inside redactor round trips/u,
+      /of which \d+\.\ds was this hook's own CPU, 0\.0s was inside redactor round trips and 0\.0s was inside host extensions/u,
     );
     // The posture still runs: the timing is an addition to the fault report,
     // never a replacement for it.

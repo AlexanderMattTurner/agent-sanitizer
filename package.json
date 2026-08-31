@@ -214,6 +214,10 @@
     "./claude-hooks/lib/trace": {
       "types": "./types/claude-hooks/lib/trace.d.mts",
       "default": "./claude-hooks/lib/trace.mjs"
+    },
+    "./claude-hooks/lib/hook-timing": {
+      "types": "./types/claude-hooks/lib/hook-timing.d.mts",
+      "default": "./claude-hooks/lib/hook-timing.mjs"
     }
   },
   "files": [

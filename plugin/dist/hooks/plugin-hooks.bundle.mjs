@@ -73,6 +73,36 @@ async function chargeRedactorRoundTrip(work, now = Date.now) {
     redactorRoundTripMs += Math.max(0, now() - started);
   }
 }
+async function chargeHostExtension(work, now = Date.now, cpuNow = processCpuMs) {
+  const outermost = hostExtensionDepth === 0;
+  const started = now();
+  const cpuStarted = cpuNow();
+  hostExtensionDepth += 1;
+  try {
+    return await work();
+  } finally {
+    hostExtensionDepth -= 1;
+    if (outermost) {
+      hostExtensionMs += Math.max(0, now() - started);
+      hostExtensionCpuMs += Math.max(0, cpuNow() - cpuStarted);
+    }
+  }
+}
+function chargeHostExtensionSync(work, now = Date.now, cpuNow = processCpuMs) {
+  const outermost = hostExtensionDepth === 0;
+  const started = now();
+  const cpuStarted = cpuNow();
+  hostExtensionDepth += 1;
+  try {
+    return work();
+  } finally {
+    hostExtensionDepth -= 1;
+    if (outermost) {
+      hostExtensionMs += Math.max(0, now() - started);
+      hostExtensionCpuMs += Math.max(0, cpuNow() - cpuStarted);
+    }
+  }
+}
 async function excludeProvisioning(work, now = Date.now, cpuNow = processCpuMs) {
   const started = now();
   const cpuStarted = cpuNow();
@@ -89,27 +119,38 @@ function startHookTimer(now = Date.now, cpuNow = processCpuMs) {
   const provisionedBefore = provisioningMs;
   const provisionedCpuBefore = provisioningCpuMs;
   const redactorBefore = redactorRoundTripMs;
+  const hostBefore = hostExtensionMs;
+  const hostCpuBefore = hostExtensionCpuMs;
   return {
     wallMs: () => Math.max(0, now() - started - (provisioningMs - provisionedBefore)),
+    // Host-extension CPU is subtracted alongside provisioning's, so this figure is
+    // the SANITIZER's own work: a callback that computes in this process would
+    // otherwise be charged to the hook and to the host window both, and the
+    // largest-share verdict would name the sanitizer for the composer's cost.
     cpuMs: () => Math.max(
       0,
-      cpuNow() - cpuStarted - (provisioningCpuMs - provisionedCpuBefore)
+      cpuNow() - cpuStarted - (provisioningCpuMs - provisionedCpuBefore) - (hostExtensionCpuMs - hostCpuBefore)
     ),
-    redactorMs: () => Math.max(0, redactorRoundTripMs - redactorBefore)
+    redactorMs: () => Math.max(0, redactorRoundTripMs - redactorBefore),
+    hostMs: () => Math.max(0, hostExtensionMs - hostBefore)
   };
 }
-function attributeWait(elapsedMs, cpuMs, redactorMs) {
-  const otherMs = Math.max(0, elapsedMs - cpuMs - redactorMs);
-  const verdict = redactorMs >= cpuMs && redactorMs >= otherMs ? "The largest share was spent inside the redactor round trip \u2014 the daemon's scan, the host it shares, or both; this hook was not computing it." : cpuMs >= otherMs ? "The largest share is this hook computing \u2014 a per-call cost the sanitizer owns, repeated by every affected call." : "The largest share is neither the redactor nor this hook computing: it was blocked on a loaded machine or on something outside the sanitizer that it called.";
-  return `, of which ${formatSeconds(cpuMs)}s was this hook's own CPU and ${formatSeconds(redactorMs)}s was inside redactor round trips. ${verdict}`;
+function attributeWait(elapsedMs, cpuMs, redactorMs, hostMs) {
+  const measuredHostMs = hostMs ?? 0;
+  const otherMs = Math.max(0, elapsedMs - cpuMs - redactorMs - measuredHostMs);
+  const largest = Math.max(cpuMs, redactorMs, measuredHostMs, otherMs);
+  const verdict = redactorMs === largest ? "The largest share was spent inside the redactor round trip \u2014 the daemon's scan, the host it shares, or both; this hook was not computing it." : hostMs !== void 0 && hostMs === largest ? "The largest share was spent inside a host extension this hook called \u2014 a callback the composer injected, and a cost that composer owns; neither the sanitizer nor the redactor was computing it." : cpuMs === largest ? "The largest share is this hook computing \u2014 a per-call cost the sanitizer owns, repeated by every affected call." : hostMs === void 0 ? "The largest share is neither the redactor nor this hook computing: it was blocked on a loaded machine, on a host extension this caller does not measure, or on something else outside the sanitizer that it called." : "The largest share is none of those three: it was blocked on a loaded machine or on something outside the sanitizer that it called without measuring.";
+  const hostClause = hostMs === void 0 ? "" : ` and ${formatSeconds(hostMs)}s was inside host extensions`;
+  return `, of which ${formatSeconds(cpuMs)}s was this hook's own CPU${hostClause === "" ? " and" : ","} ${formatSeconds(redactorMs)}s was inside redactor round trips${hostClause}. ${verdict}`;
 }
 function slowHookNotice(hookName, elapsedMs, thresholdMs = SLOW_HOOK_THRESHOLD_MS, context) {
   if (elapsedMs <= thresholdMs) return null;
   const cpuMs = context?.cpuMs;
   const redactorMs = context?.redactorMs;
   const attributed = typeof cpuMs === "number" && typeof redactorMs === "number";
-  const attribution = attributed ? attributeWait(elapsedMs, cpuMs, redactorMs) : typeof cpuMs === "number" ? `, and used ${formatSeconds(cpuMs)}s of CPU. Only the CPU share is work every affected call repeats; the rest was spent waiting, on a busy machine or on something this hook called.` : ". Wall-clock alone cannot separate the sanitizer's own work from a busy machine.";
-  const timings = attributed ? "all three timings" : typeof cpuMs === "number" ? "both timings" : "timing";
+  const hostMs = typeof context?.hostMs === "number" ? context.hostMs : void 0;
+  const attribution = attributed ? attributeWait(elapsedMs, cpuMs, redactorMs, hostMs) : typeof cpuMs === "number" ? `, and used ${formatSeconds(cpuMs)}s of CPU. Only the CPU share is work every affected call repeats; the rest was spent waiting, on a busy machine or on something this hook called.` : ". Wall-clock alone cannot separate the sanitizer's own work from a busy machine.";
+  const timings = attributed ? hostMs === void 0 ? "all three timings" : "all four timings" : typeof cpuMs === "number" ? "both timings" : "timing";
   return `agent-sanitizer PERFORMANCE: the ${hookName} hook took ${formatSeconds(elapsedMs)}s${formatContextSuffix(context)}, over its ${formatSeconds(thresholdMs)}s budget${attribution} Tell the user, and suggest they report it at ${ISSUE_URL} with the hook name and ${timings}.`;
 }
 function writeSlowHookNotice(hookName, elapsedMs, writeErr = (chunk) => process.stderr.write(chunk), context) {
@@ -132,7 +173,7 @@ function reportSlowHook(hookName, elapsedMs, hookEventName, emit, writeErr = (ch
   emit(hookEventName, { additionalContext: notice });
   return true;
 }
-var SLOW_HOOK_THRESHOLD_MS, ISSUE_URL, provisioningMs, provisioningCpuMs, redactorRoundTripMs;
+var SLOW_HOOK_THRESHOLD_MS, ISSUE_URL, provisioningMs, provisioningCpuMs, redactorRoundTripMs, hostExtensionMs, hostExtensionCpuMs, hostExtensionDepth;
 var init_hook_timing = __esm({
   "claude-hooks/lib/hook-timing.mjs"() {
     "use strict";
@@ -141,6 +182,9 @@ var init_hook_timing = __esm({
     provisioningMs = 0;
     provisioningCpuMs = 0;
     redactorRoundTripMs = 0;
+    hostExtensionMs = 0;
+    hostExtensionCpuMs = 0;
+    hostExtensionDepth = 0;
   }
 });
 
@@ -47865,7 +47909,8 @@ async function runJudgeCli(hookName, judge, {
           payloadBytes,
           tool,
           cpuMs: timer.cpuMs(),
-          redactorMs: timer.redactorMs()
+          redactorMs: timer.redactorMs(),
+          hostMs: timer.hostMs()
         }),
         event
       )
@@ -47879,7 +47924,8 @@ async function runJudgeCli(hookName, judge, {
         payloadBytes,
         tool,
         cpuMs: timer.cpuMs(),
-        redactorMs: timer.redactorMs()
+        redactorMs: timer.redactorMs(),
+        hostMs: timer.hostMs()
       });
     onError(err, input);
   }
@@ -50165,6 +50211,8 @@ __export(sanitize_output_exports, {
   SECRET_HINT: () => SECRET_HINT2,
   SECRET_HINT_EXT: () => SECRET_HINT_EXT2,
   applyLayer1: () => applyLayer13,
+  chargeHostExtension: () => chargeHostExtension,
+  chargeHostExtensionSync: () => chargeHostExtensionSync,
   cliMain: () => cliMain2,
   collisionWarning: () => collisionWarning,
   composeContext: () => composeContext2,
@@ -50224,7 +50272,8 @@ async function sanitizeText2(text5, toolName, deadline = makeDeadline(SANITIZE_B
         throw l4err;
       }
       if (!secrets) return null;
-      const note2 = ext.redactNote?.(content3);
+      const redactNote = ext.redactNote;
+      const note2 = redactNote ? chargeHostExtensionSync(() => redactNote(content3)) : void 0;
       return note2 ? { text: secrets.text, found: secrets.found, note: note2 } : { text: secrets.text, found: secrets.found };
     }
   };
@@ -50233,14 +50282,14 @@ async function sanitizeText2(text5, toolName, deadline = makeDeadline(SANITIZE_B
     await sanitizeTextSeam(text5, seamOptions)
   );
   const result = { ...seamResult, notes: seamResult.notes ?? [] };
-  return ext.postText ? applyPostText(
+  const postText = ext.postText;
+  if (!postText) return result;
+  return applyPostText(
     result,
-    await ext.postText(result.cleaned, {
-      toolName,
-      webIngress,
-      deadline
-    })
-  ) : result;
+    await chargeHostExtension(
+      () => postText(result.cleaned, { toolName, webIngress, deadline })
+    )
+  );
 }
 function applyPostText(result, post) {
   if (post === null || post === void 0) return result;
@@ -50418,7 +50467,10 @@ function suppressionMessage(cause) {
   return `[SANITIZATION FAILED \u2014 original output suppressed for safety. Hook error: ${cause}]`;
 }
 async function evaluateToolOutput(input, ext = {}) {
-  const emitTrace = bestEffortTrace(ext.trace ?? trace);
+  const hostTrace = ext.trace;
+  const emitTrace = bestEffortTrace(
+    hostTrace ? (event, fields2) => chargeHostExtensionSync(() => hostTrace(event, fields2)) : trace
+  );
   const emit = (outcome, fields2) => {
     emitTrace(TraceEvent.HOOK_RAN, {
       hook: HOOK_NAME2,
@@ -50502,16 +50554,19 @@ async function judgeSanitizeOutput(event, ext = {}) {
   );
   if (ext.audit && event.response !== null && event.response !== void 0) {
     const modified = fields !== null && Object.hasOwn(fields, "mutated_output");
-    await ext.audit({
-      tool: event.tool,
-      // The session identity travels in `meta`, not alongside the tool fields, so
-      // a recorder filing one trail per session cannot reach it unless it is
-      // lifted here.
-      session_id: event.meta?.session_id,
-      modified,
-      output: modified ? fields?.mutated_output : event.response,
-      context: fields?.additional_context
-    });
+    const audit = ext.audit;
+    await chargeHostExtension(
+      () => audit({
+        tool: event.tool,
+        // The session identity travels in `meta`, not alongside the tool fields,
+        // so a recorder filing one trail per session cannot reach it unless it is
+        // lifted here.
+        session_id: event.meta?.session_id,
+        modified,
+        output: modified ? fields?.mutated_output : event.response,
+        context: fields?.additional_context
+      })
+    );
   }
   const verdict = { decision: Decision3.ALLOW };
   return fields === null ? verdict : { ...verdict, ...fields };
@@ -50546,6 +50601,7 @@ var init_sanitize_output = __esm({
   async "claude-hooks/sanitize-output.mjs"() {
     "use strict";
     init_redactor_client();
+    init_hook_timing();
     init_hook_io();
     init_hook_fault();
     await init_control_plane2();
