@@ -78,6 +78,7 @@ module.exports = async ({ context, core }) => {
   // catches single-line comments).
   const filtered = lessons
     .replace(/<!--[\s\S]*?-->/g, "")
+    .replace(/<!--/g, "") // a nested opener (`<!<!--x-->--`) reconstitutes `<!--` after the first pass
     .split("\n")
     .filter((line) => !line.trim().match(/^<[^>]*>$/))
     // Drop AI-attribution footers — session links, "Generated with Claude

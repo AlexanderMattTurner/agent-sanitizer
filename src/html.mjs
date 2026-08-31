@@ -2933,11 +2933,14 @@ export function urlHost(url) {
     // WHATWG rejects (e.g. a non-ASCII host).
     return "(unparsable URL)";
   }
-  if (
-    parsed.origin === RELATIVE_URL_BASE &&
-    !url.startsWith(RELATIVE_URL_BASE)
-  ) {
-    return "(relative URL)";
+  if (parsed.origin === RELATIVE_URL_BASE) {
+    // Relative URL: no standalone parse succeeds (no scheme), so it resolved to
+    // the sentinel. Explicit `http://relative.invalid/…` parses on its own.
+    try {
+      new URL(url);
+    } catch {
+      return "(relative URL)";
+    }
   }
   return parsed.host;
 }
@@ -2957,9 +2960,14 @@ function isOffOrigin(url) {
   } catch {
     return false;
   }
-  return (
-    parsed.origin !== RELATIVE_URL_BASE || url.startsWith(RELATIVE_URL_BASE)
-  );
+  if (parsed.origin !== RELATIVE_URL_BASE) return true;
+  // An explicit absolute reference to the sentinel domain is still off-origin.
+  try {
+    new URL(url);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 /**

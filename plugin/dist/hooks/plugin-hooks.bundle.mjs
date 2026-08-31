@@ -45888,8 +45888,12 @@ function urlHost(url) {
   } catch {
     return "(unparsable URL)";
   }
-  if (parsed.origin === RELATIVE_URL_BASE && !url.startsWith(RELATIVE_URL_BASE)) {
-    return "(relative URL)";
+  if (parsed.origin === RELATIVE_URL_BASE) {
+    try {
+      new URL(url);
+    } catch {
+      return "(relative URL)";
+    }
   }
   return parsed.host;
 }
@@ -45900,7 +45904,13 @@ function isOffOrigin(url) {
   } catch {
     return false;
   }
-  return parsed.origin !== RELATIVE_URL_BASE || url.startsWith(RELATIVE_URL_BASE);
+  if (parsed.origin !== RELATIVE_URL_BASE) return true;
+  try {
+    new URL(url);
+    return true;
+  } catch {
+    return false;
+  }
 }
 function metaRefreshUrl(content3) {
   const match = (

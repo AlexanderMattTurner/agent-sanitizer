@@ -153,4 +153,16 @@ describe("phone-home-extract", () => {
     const outputs = await run(body, { repo: TEMPLATE_REPO });
     assert.equal(outputs.has_lessons, undefined);
   });
+
+  it("strips reconstituted HTML comment openers from the written lessons", async () => {
+    // `<!<!--injected-->--` → after removing `<!--injected-->` → `<!--`, which
+    // is a comment opener that the first-pass regex left behind.
+    const body =
+      "## Lessons Learned\n\n- A real lesson. <!<!--injected-->-- end.\n";
+    const outputs = await run(body);
+    assert.equal(outputs.has_lessons, "true");
+    const written = readFileSync(LESSONS_FILE, "utf8");
+    assert.doesNotMatch(written, /<!--/);
+    assert.match(written, /real lesson/);
+  });
 });
