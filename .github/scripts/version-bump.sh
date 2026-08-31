@@ -243,13 +243,16 @@ else
   DIFF_STAT=$(git show --stat HEAD 2>/dev/null || echo "Unable to get diff")
 fi
 
-# Cap commit-message length: truncate each line, limit total length. The
-# `head -c` cap is byte-based and can split a multibyte UTF-8 character at the
-# tail; if it does, the only consequence is that `jq -n --arg` rejects the
-# invalid sequence and the Claude prose step falls back to the plain commit list
-# (the version decision never uses $COMMITS), so a corrupted tail costs only
-# the generated prose — the release itself still completes.
-COMMITS=$(echo "$COMMITS_RAW" | head -20 | cut -c1-100 | head -c 2000)
+# Cap commit-message length: truncate each line, limit total length. Both caps
+# avoid an early-exiting pipe consumer (`head -20`, `head -c 2000`), which would
+# close the pipe while the writer still has output and SIGPIPE it — a failure
+# `set -o pipefail` surfaces as an aborted release, on exactly the large inputs
+# the caps exist for. awk reads to EOF regardless of how much it prints, and the
+# total cap is a parameter expansion on an already-captured string. That
+# expansion counts characters, not bytes, so the tail can no longer be a split
+# multibyte sequence that `jq -n --arg` would reject.
+COMMITS=$(echo "$COMMITS_RAW" | awk 'NR <= 20 { print substr($0, 1, 100) }')
+COMMITS="${COMMITS:0:2000}"
 
 if [[ -z "$COMMITS" ]]; then
   log "No commits to analyze. Skipping."
@@ -276,13 +279,17 @@ log "Conventional Commits bump level: $BUMP"
 # Extract the current "## Unreleased" block from CHANGELOG.md, if present.
 # The block runs from the "## Unreleased" heading up to (but not including) the
 # next "## " heading or end of file.
+# Capped by parameter expansion, NOT `| head -c`: head exits at its byte cap and
+# SIGPIPEs awk, which `set -o pipefail` reports as a failure — aborting the
+# release whenever the Unreleased block grows past the cap.
 UNRELEASED_CONTENT=""
 if [[ -f CHANGELOG.md ]]; then
   UNRELEASED_CONTENT=$(awk '
     /^## Unreleased[[:space:]]*$/ { collecting = 1; next }
     collecting && /^## / { collecting = 0 }
     collecting { print }
-  ' CHANGELOG.md | head -c 4000)
+  ' CHANGELOG.md)
+  UNRELEASED_CONTENT="${UNRELEASED_CONTENT:0:4000}"
 fi
 
 # Draft the changelog body. The Claude API is used only for prose — any
