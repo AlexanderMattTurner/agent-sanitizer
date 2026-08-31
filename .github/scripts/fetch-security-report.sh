@@ -70,8 +70,12 @@ gh_api_section \
 # Skip when there's no Node project — setup-base-env leaves pnpm uninstalled
 # in that case, and `pnpm audit` would error out instead of returning "clean".
 if [[ -f package.json ]]; then
-  pnpm audit 2>&1 | head -100 >>"$REPORT_PATH"
-  pnpm_rc=${PIPESTATUS[0]}
+  # Captured then truncated, never `| head -100`: head exits at its cap and
+  # SIGPIPEs pnpm, so PIPESTATUS[0] read 141 on any audit over 100 lines and the
+  # report gained a false "encountered an error" line. awk reads to EOF.
+  audit_out=$(pnpm audit 2>&1)
+  pnpm_rc=$?
+  awk 'NR <= 100' <<<"$audit_out" >>"$REPORT_PATH"
   # Exit 0 = clean, exit 1 = vulnerabilities found (expected); higher = real error
   # echo-fallback-ok: this note is appended to a human-read report artifact,
   # never re-parsed for a decision — nothing downstream branches on its text.

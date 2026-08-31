@@ -243,15 +243,11 @@ else
   DIFF_STAT=$(git show --stat HEAD 2>/dev/null || echo "Unable to get diff")
 fi
 
-# Cap commit-message length: truncate each line, limit total length. Both caps
-# avoid an early-exiting pipe consumer (`head -20`, `head -c 2000`), which would
-# close the pipe while the writer still has output and SIGPIPE it — a failure
-# `set -o pipefail` surfaces as an aborted release, on exactly the large inputs
-# the caps exist for. awk reads to EOF regardless of how much it prints, and the
-# total cap is a parameter expansion on an already-captured string. That
-# expansion counts characters, not bytes, so the tail can no longer be a split
-# multibyte sequence that `jq -n --arg` would reject.
-COMMITS=$(echo "$COMMITS_RAW" | awk 'NR <= 20 { print substr($0, 1, 100) }')
+# Cap commit-message length: 20 lines, 100 chars each, 2000 chars total. These
+# caps use no `| head`: head exits at its cap and SIGPIPEs the writer, which
+# `set -o pipefail` reports as a failure on exactly the large inputs the caps
+# exist for. A herestring feeds awk, so no pipeline survives to report one.
+COMMITS=$(awk 'NR <= 20 { print substr($0, 1, 100) }' <<<"$COMMITS_RAW")
 COMMITS="${COMMITS:0:2000}"
 
 if [[ -z "$COMMITS" ]]; then
@@ -278,10 +274,8 @@ log "Conventional Commits bump level: $BUMP"
 
 # Extract the current "## Unreleased" block from CHANGELOG.md, if present.
 # The block runs from the "## Unreleased" heading up to (but not including) the
-# next "## " heading or end of file.
-# Capped by parameter expansion, NOT `| head -c`: head exits at its byte cap and
-# SIGPIPEs awk, which `set -o pipefail` reports as a failure — aborting the
-# release whenever the Unreleased block grows past the cap.
+# next "## " heading or end of file. Its cap is a parameter expansion for the
+# same SIGPIPE-under-pipefail reason as the COMMITS cap above.
 UNRELEASED_CONTENT=""
 if [[ -f CHANGELOG.md ]]; then
   UNRELEASED_CONTENT=$(awk '
