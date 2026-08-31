@@ -32,3 +32,19 @@ minimumReleaseAge: 4320
 # on either, and on any package outside the first-party set it names.
 minimumReleaseAgeExclude:
   - agent-control-plane-core@0.3.0
+
+# Transitive dev dependencies whose direct parent still resolves a version an
+# advisory covers. Each entry raises the floor to the advisory's own patched
+# version and no further, so the parent keeps choosing the version it wants as
+# soon as it ships one. Drop an entry once `pnpm why <name>` shows every path
+# already above the floor.
+overrides:
+  # GHSA-7p8r-x3mc-p8w7 — host confusion via a backslash. Via @commitlint/cli.
+  fast-uri@>=3.0.0 <3.1.5: "^3.1.5"
+  # GHSA-rgw5-rvv9-x895 — denial of service from unbounded expansion. Via eslint.
+  brace-expansion@>=4.0.0 <5.0.9: "^5.0.9"
+  # GHSA-5p4m-2wfm-xmqj — quadratic CPU use parsing !!omap. Via @commitlint/cli.
+  js-yaml@>=4.0.0 <4.3.1: "^4.3.1"
+  # GHSA-q8mj-m7cp-5q26 — remotely triggerable denial of service in qs.stringify.
+  # Via @stryker-mutator/core.
+  qs@>=6.11.1 <=6.15.1: "^6.15.2"

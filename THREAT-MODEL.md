@@ -383,6 +383,22 @@ build that emits that event, and `scan-loaded-instructions` switched off in
 Nothing on disk tells them apart, so the PreToolUse gate names all three, once
 per session, rather than leaving the gap silent.
 
+A fourth state is not one of them and is not reported as one: the host emits no
+event when it has nothing to announce. The gate therefore asks not "does anything
+load at launch" but "does anything load whose load `InstructionsLoaded` NAMES,
+with bytes in it" — the `eventNamed` column of the same table, read through
+`announcedByInstructionsLoaded` for the project's own tree and through
+`USER_GLOBAL_EVENT_NAMED_GLOBS` for the user-global root, whose files carry no
+`.claude` segment to classify by. A launch holding only an `AGENTS.md`, a skill
+or an empty `~/.claude/CLAUDE.md` fires no event however the hook is wired, so
+the missing scan there is evidence of nothing. The trade this accepts is a false
+NEGATIVE: a repo whose announced instruction files all sit in subdirectories —
+a monorepo of per-package `CLAUDE.md` under a root carrying only `AGENTS.md`, on
+a machine with no user-global memory — loses the notice until a tool call touches
+one of those directories, which is what the gate's per-call `touchedDir` check
+recovers. Weighed against a false POSITIVE on every session launched outside a
+project, which trains the operator to skip the notice everywhere.
+
 That table is a claim about someone else's product, so the event that names a
 loaded file is also what falsifies it. `contextScopeContradiction` checks every
 path the hook is handed and reports two observations: context loading out of a
@@ -762,6 +778,72 @@ is only as durable as the files carrying it.
 The knob adds no layer and changes no layer's semantics. Ambiguous input still
 fails open at the detection level (precision over recall), as it always has —
 that is a separate, and unrelated, sense of the phrase.
+
+## Linear-time guarantee
+
+Every layer here reads attacker-controlled text inside a hook the user waits on,
+so a cost blow-up is a denial of service against the agent: the sanitizer that
+hangs on a crafted paste has failed as completely as one that misses the
+payload. This is a property of the whole surface, not of any one layer, so it is
+stated once here rather than restated per layer.
+
+**The contract.** No entry point costs more than `n log n` in its input: linear
+up to the constant factors a parse pays, and one sort where findings or splice
+ranges arrive in an order the caller does not promise (`foldConfusables`,
+`mergeRanges`). The bound that matters is that nothing is _quadratic_ — a sort
+of the findings in a 1 MB paste is milliseconds, a quadratic rescan of it is
+minutes — and quadratic is what the two gates below are calibrated to catch,
+because neither can see what the other does.
+
+**Static — every pattern.** `tests/test_redos_js_static_guard.py` drives
+regexploit over an inventory that `scripts/extract-js-regexes.mjs` extracts by
+walking the TypeScript AST of every shipped `.mjs` (not by matching regex source
+with a regex), and fails on any pattern with super-linear backtracking. A
+`RegExp(…)` built at runtime must be statically resolvable or carry a written
+exemption, so a new dynamic pattern is a red build rather than a hole.
+`tests/secrets/test_redos_static_guard.py` is the twin over the Python engine,
+and `eslint-plugin-redos` reports the same class in the editor, before CI.
+
+**Empirical — everything the static gates cannot see.** Two shapes of quadratic
+carry no backtracking at all, so no pattern analyzer will ever report them:
+
+- an **unanchored** pattern retried at every start offset, each attempt linear
+  and none of them backtracking — `(?=.*[A-Z])(?=.*[0-9])` against a long value
+  carrying neither class, or a `[^>]*$` tail rescanned from every `<`;
+- work that is not a pattern at all — a string rebuilt once per finding, a
+  prefix re-sliced inside a loop, a re-walk of an already-walked node.
+
+`test/algorithmic-complexity.test.mjs` runs an entry point over an adversarial
+input at two sizes 8x apart and asserts the cost grew like the input rather than
+like its square, with a known-quadratic specimen as the control that proves the
+harness can still see one. Each case also asserts, at the size it measures, that
+the input still reaches the code the case is about — a length gate answering
+first is how such a case quietly degrades into timing nothing.
+`tests/secrets/test_algorithmic_complexity.py` is the twin over the Python
+engine. `test/hook-latency.test.mjs` covers the three blocking hook paths
+instead, in cost per calibration pass, with one wall-clock ceiling.
+
+**Idioms new code is held to.** Each is the fix for a defect one of the gates
+caught:
+
+- Anchor a tail scan, or slice the tail first (`lastIndexOf(">")`) and match a
+  fixed-length pattern against it — never `[^x]*$` over the whole input.
+- Spell alternatives disjointly (`\d+(?:\.\d+)?|\.\d+`, not `\d*\.?\d+`) so a
+  failing match gives up in constant time per step rather than retrying every
+  split of a long run.
+- Bound an unbounded quantifier that can span the input, and stitch the chunks
+  (`src/invisible.mjs`'s `LONG_RUN_CHUNK_RE`), so the backtrack stack has a
+  ceiling that does not move with the input.
+- Assemble a rewritten string once, from an array of pieces — never
+  `text.slice(0, i) + x + text.slice(j)` once per finding.
+- Bound every recursive walk by depth and memo, and thread the wall-clock
+  `Deadline` through the layers that can be skipped, so a budget already spent
+  refuses the work instead of starting it.
+
+The guarantee is about COST, not about verdicts. Where a bound and a detection
+disagree — a value too long to analyze, a walk past `MAX_DEPTH`, a spent
+deadline — the layer takes the false negative and says so, exactly as the
+precision-over-recall doctrine requires everywhere else.
 
 ## Benchmark (`test/injection-corpus.test.mjs`)
 

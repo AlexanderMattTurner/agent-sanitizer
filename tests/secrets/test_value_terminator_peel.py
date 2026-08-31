@@ -41,6 +41,7 @@ CASES: dict[str, tuple[str, str]] = {
     "_is_benign_cursor": ("next_token", "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"),
     "_is_filesystem_path": ("token", "/etc/vault/agent/current-token"),
     "_is_metadata_field": ("secret_name", "prod-database-primary-credential"),
+    "_is_prose_field": ("their secret", "tiktok_automation_account_id"),
     "_is_regex_literal": ("SECRET_HINT", "/secret|token|password/i"),
     # The value FIELD_VALUE_RE captures here is the identifier alone (its value
     # class excludes `(`), and the `(` that follows is what the gate reads.

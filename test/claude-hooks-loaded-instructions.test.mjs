@@ -33,9 +33,21 @@ import { repoRoot } from "./helpers/repo-root.mjs";
 const projectDir = mkdtempSync(join(tmpdir(), "sanitizer-loaded-proj-"));
 process.env.CLAUDE_PROJECT_DIR = projectDir;
 
+// instructionsLoadedGapNotice also checks the user-global `~/.claude` root
+// (CLAUDE_CONFIG_DIR), read fresh from process.env on every call rather than
+// captured at import time. Pointed at an empty directory of our own so a real
+// ~/.claude on the machine running these tests (skills, rules — this very
+// checkout ships some) cannot make an "empty launch" case find content by
+// accident. Tests that need the global root non-empty override this and
+// restore it, never delete it — a later test must not fall back to the host's
+// real ~/.claude either.
+const emptyConfigDir = mkdtempSync(join(tmpdir(), "sanitizer-empty-config-"));
+process.env.CLAUDE_CONFIG_DIR = emptyConfigDir;
+
 const { readLoadedFile, scanLoadedFile, loadedFileMessage, scopeNotice } =
   await import("../claude-hooks/scan-loaded-instructions.mjs");
 const { LONG_RUN_THRESHOLD } = await import("../src/invisible.mjs");
+const { hookgateMarkerPath } = await import("../claude-hooks/lib/hook-io.mjs");
 const {
   alertDir,
   appendAlert,
@@ -44,6 +56,7 @@ const {
   instructionsLoadedNoticeFile,
   instructionsLoadedSeen,
   invisibleCharAlert,
+  launchEmptyFile,
   recordInstructionsLoaded,
   recordInstructionsLoadedNotice,
 } = await import("../claude-hooks/lib/invisible-alert.mjs");
@@ -55,11 +68,18 @@ const SESSION = "sess-loaded-1";
 const PAYLOAD = "\u{e0001}".repeat(LONG_RUN_THRESHOLD + 2);
 const PROSE = "real prose the strip must keep\n";
 
+/** A pid above Linux's default pid_max, so no live process can carry it. */
+const DEAD_PID = 2 ** 31 - 1;
+
 const markers = [
   instructionsLoadedFile(),
   instructionsLoadedNoticeFile(),
   instructionsLoadedFile(SESSION),
   instructionsLoadedNoticeFile(SESSION),
+  // The "nothing loads at launch" cache instructionsLoadedGapNotice writes
+  // itself — see the "no InstructionsLoaded scan" describe block below.
+  launchEmptyFile(),
+  launchEmptyFile(SESSION),
 ];
 
 /** Every alert store these cases touch: the shared fallback and SESSION's. */
@@ -72,6 +92,7 @@ beforeEach(() => {
 
 after(() => {
   rmSync(projectDir, { recursive: true, force: true });
+  rmSync(emptyConfigDir, { recursive: true, force: true });
   for (const path of markers) rmSync(path, { force: true });
   for (const path of alertDirs) rmSync(path, { recursive: true, force: true });
 });
@@ -469,6 +490,13 @@ describe("the hook CLI, driven end to end on a real event", () => {
 });
 
 describe("a session with no InstructionsLoaded scan is named, once", () => {
+  // The notice is only a real gap when something at launch could have fired
+  // the event — see the "stays silent when nothing loads at launch" block
+  // below for the empty case. Written explicitly here rather than relying on
+  // an earlier describe block's fixture: it must survive whichever order the
+  // suite runs in.
+  beforeEach(() => project("CLAUDE.md", PROSE));
+
   it("warns while no scan has been seen, naming every cause", () => {
     const notice = instructionsLoadedGapNotice();
     assert.match(notice, /InstructionsLoaded/u);
@@ -488,6 +516,260 @@ describe("a session with no InstructionsLoaded scan is named, once", () => {
     // ...and the hook switched off by the operator.
     assert.match(notice, /AGENT_SANITIZER_DISABLED_HOOKS/u);
     assert.match(notice, /echo \$AGENT_SANITIZER_DISABLED_HOOKS/u);
+  });
+
+  it("stays silent when nothing loads at launch, even with no scan seen", () => {
+    // Reported bug: launching in a directory whose ancestor chain has no
+    // NON-EMPTY CLAUDE.md/rules file (e.g. an empty ~/.claude/CLAUDE.md) gives
+    // Claude Code nothing to fire InstructionsLoaded over, so the missing
+    // event is expected there, not evidence the scanner is unwired.
+    const emptyDir = mkdtempSync(join(tmpdir(), "sanitizer-empty-launch-"));
+    const emptySession = "sess-empty-launch";
+    try {
+      mkdirSync(join(emptyDir, ".claude"));
+      writeFileSync(join(emptyDir, ".claude", "CLAUDE.md"), "");
+      assert.equal(instructionsLoadedSeen(emptySession), false);
+      assert.equal(instructionsLoadedGapNotice(emptySession, emptyDir), null);
+      // Cached, not just silent this once: the launch set cannot change
+      // mid-session, so the first call must have recorded the answer rather
+      // than merely returning null (a call that never wrote the sentinel
+      // would pass this assertion by accident, by re-globbing the same
+      // empty answer every time).
+      assert.ok(existsSync(launchEmptyFile(emptySession)));
+      assert.equal(instructionsLoadedGapNotice(emptySession, emptyDir), null);
+    } finally {
+      rmSync(emptyDir, { recursive: true, force: true });
+      rmSync(launchEmptyFile(emptySession), { force: true });
+    }
+  });
+
+  it("still warns once the launch set actually has content", () => {
+    const withContentDir = mkdtempSync(
+      join(tmpdir(), "sanitizer-nonempty-launch-"),
+    );
+    const contentSession = "sess-nonempty-launch";
+    try {
+      writeFileSync(join(withContentDir, "CLAUDE.md"), PROSE);
+      assert.match(
+        instructionsLoadedGapNotice(contentSession, withContentDir),
+        /unscanned/u,
+      );
+    } finally {
+      rmSync(withContentDir, { recursive: true, force: true });
+      rmSync(instructionsLoadedNoticeFile(contentSession), { force: true });
+    }
+  });
+
+  it("stays silent while the host's cold-start marker is present", () => {
+    // A launch event fires about a second after SessionStart, so a host that is
+    // still installing has not necessarily wired anything wrong: the three
+    // causes the notice names would all be false. This is the Claude Code web
+    // case, where the hook files are build output a fresh container lacks.
+    const coldDir = mkdtempSync(join(tmpdir(), "sanitizer-cold-start-"));
+    const runtimeDir = mkdtempSync(join(tmpdir(), "sanitizer-runtime-"));
+    const coldSession = "sess-cold-start";
+    const priorProject = process.env.CLAUDE_PROJECT_DIR;
+    const priorRuntime = process.env.XDG_RUNTIME_DIR;
+    try {
+      writeFileSync(join(coldDir, "CLAUDE.md"), PROSE);
+      process.env.CLAUDE_PROJECT_DIR = coldDir;
+      process.env.XDG_RUNTIME_DIR = runtimeDir;
+      const marker = /** @type {string} */ (hookgateMarkerPath());
+      writeFileSync(marker, String(process.pid));
+      assert.equal(instructionsLoadedGapNotice(coldSession, coldDir), null);
+      // A setup killed mid-install leaves its marker behind. The pid in it is
+      // then dead, and suppressing on the marker alone would silence this
+      // notice for every later session on the host.
+      writeFileSync(marker, String(DEAD_PID));
+      assert.match(
+        instructionsLoadedGapNotice(coldSession, coldDir),
+        /unscanned/u,
+      );
+      rmSync(instructionsLoadedNoticeFile(coldSession), { force: true });
+      // The same launch set warns once setup is done, so the silence above is
+      // the marker's doing and not an empty-launch answer.
+      rmSync(marker, { force: true });
+      assert.match(
+        instructionsLoadedGapNotice(coldSession, coldDir),
+        /unscanned/u,
+      );
+    } finally {
+      process.env.CLAUDE_PROJECT_DIR = /** @type {string} */ (priorProject);
+      if (priorRuntime === undefined) delete process.env.XDG_RUNTIME_DIR;
+      else process.env.XDG_RUNTIME_DIR = priorRuntime;
+      rmSync(coldDir, { recursive: true, force: true });
+      rmSync(runtimeDir, { recursive: true, force: true });
+      rmSync(launchEmptyFile(coldSession), { force: true });
+      rmSync(instructionsLoadedNoticeFile(coldSession), { force: true });
+    }
+  });
+
+  it("counts a non-empty ancestor CLAUDE.md as launch content", () => {
+    // The ancestor-chain arm of the launch check, not the root glob: the
+    // checked directory itself carries nothing, but a PARENT does — matching
+    // a project opened one level below a repo-wide CLAUDE.md.
+    const parentDir = mkdtempSync(join(tmpdir(), "sanitizer-ancestor-"));
+    const childDir = join(parentDir, "child");
+    const ancestorSession = "sess-ancestor-launch";
+    try {
+      mkdirSync(childDir);
+      writeFileSync(join(parentDir, "CLAUDE.md"), PROSE);
+      assert.match(
+        instructionsLoadedGapNotice(ancestorSession, childDir),
+        /unscanned/u,
+      );
+    } finally {
+      rmSync(parentDir, { recursive: true, force: true });
+      rmSync(instructionsLoadedNoticeFile(ancestorSession), { force: true });
+    }
+  });
+
+  it("counts the user-global ~/.claude root as launch content", () => {
+    // A project opened somewhere other than $HOME still has Claude Code load
+    // the user-global `~/.claude` memory and rules at launch (see
+    // scan-loaded-instructions.mjs's header) — a second root the project's own
+    // launch glob and ancestor chain cannot see on their own.
+    const projectEmptyDir = mkdtempSync(
+      join(tmpdir(), "sanitizer-empty-launch2-"),
+    );
+    const globalConfigDir = mkdtempSync(
+      join(tmpdir(), "sanitizer-global-config-"),
+    );
+    const session = "sess-user-global-launch";
+    try {
+      writeFileSync(join(globalConfigDir, "CLAUDE.md"), PROSE);
+      process.env.CLAUDE_CONFIG_DIR = globalConfigDir;
+      assert.match(
+        instructionsLoadedGapNotice(session, projectEmptyDir),
+        /unscanned/u,
+      );
+    } finally {
+      process.env.CLAUDE_CONFIG_DIR = emptyConfigDir;
+      rmSync(projectEmptyDir, { recursive: true, force: true });
+      rmSync(globalConfigDir, { recursive: true, force: true });
+      rmSync(instructionsLoadedNoticeFile(session), { force: true });
+    }
+  });
+
+  // Kinds Claude Code loads at launch but does NOT announce with an
+  // InstructionsLoaded event — CLAUDE_CONTEXT_KINDS marks each `eventNamed:
+  // false`. Non-empty and real context, so a check that asked only "does
+  // anything load" would count every one of them and warn about a missing event
+  // that was never coming. Rules and CLAUDE.md are the positive controls: the
+  // narrowing must not swallow the kinds the event DOES name.
+  const launchKinds = [
+    ["AGENTS.md", "AGENTS.md", false],
+    ["a top-level .claude note", join(".claude", "notes.md"), false],
+    ["a skill", join(".claude", "skills", "s", "SKILL.md"), false],
+    ["a subagent", join(".claude", "agents", "a.md"), false],
+    ["a directory-scoped rule", join(".claude", "rules", "style.md"), true],
+    ["CLAUDE.local.md", "CLAUDE.local.md", true],
+  ];
+
+  for (const [label, rel, announced] of launchKinds)
+    it(`${announced ? "warns" : "stays silent"} when the launch set holds only ${label}`, () => {
+      const dir = mkdtempSync(join(tmpdir(), "sanitizer-launch-kind-"));
+      const session = `sess-launch-kind-${rel.replace(/\W/gu, "_")}`;
+      try {
+        const abs = join(dir, rel);
+        mkdirSync(join(abs, ".."), { recursive: true });
+        writeFileSync(abs, PROSE);
+        const notice = instructionsLoadedGapNotice(session, dir);
+        if (announced) assert.match(notice, /unscanned/u);
+        else assert.equal(notice, null);
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+        rmSync(launchEmptyFile(session), { force: true });
+        rmSync(instructionsLoadedNoticeFile(session), { force: true });
+      }
+    });
+
+  it("does not count an unannounced kind in the user-global root either", () => {
+    // The same narrowing on the second root: `~/.claude/agents/` is real
+    // context Claude Code loads, but nothing announces it, so a project with an
+    // empty launch set beside it still has no event coming.
+    const projectEmptyDir = mkdtempSync(
+      join(tmpdir(), "sanitizer-global-neg-"),
+    );
+    const globalConfigDir = mkdtempSync(
+      join(tmpdir(), "sanitizer-global-cfg-"),
+    );
+    const session = "sess-user-global-unannounced";
+    try {
+      mkdirSync(join(globalConfigDir, "agents"), { recursive: true });
+      writeFileSync(join(globalConfigDir, "agents", "a.md"), PROSE);
+      process.env.CLAUDE_CONFIG_DIR = globalConfigDir;
+      assert.equal(instructionsLoadedGapNotice(session, projectEmptyDir), null);
+      // The control on the same root, so the null above cannot be passing
+      // because the glob simply failed to reach into the config directory.
+      rmSync(launchEmptyFile(session), { force: true });
+      mkdirSync(join(globalConfigDir, "rules"), { recursive: true });
+      writeFileSync(join(globalConfigDir, "rules", "r.md"), PROSE);
+      assert.match(
+        instructionsLoadedGapNotice(session, projectEmptyDir),
+        /unscanned/u,
+      );
+    } finally {
+      process.env.CLAUDE_CONFIG_DIR = emptyConfigDir;
+      rmSync(projectEmptyDir, { recursive: true, force: true });
+      rmSync(globalConfigDir, { recursive: true, force: true });
+      rmSync(launchEmptyFile(session), { force: true });
+      rmSync(instructionsLoadedNoticeFile(session), { force: true });
+    }
+  });
+
+  it("treats an unstattable launch candidate as content, not absence", () => {
+    // A file this uid cannot even stat (ELOOP here; EACCES/EISDIR in
+    // production) is unvetted context, not proof nothing is there — the
+    // opposite of ENOENT. Silently reading it as "empty" would suppress the
+    // notice over a file that may carry a real, unscanned payload.
+    const loopDir = mkdtempSync(join(tmpdir(), "sanitizer-unstattable-"));
+    const loopSession = "sess-unstattable-launch";
+    const loopPath = join(loopDir, "CLAUDE.md");
+    try {
+      symlinkSync(loopPath, loopPath);
+      assert.match(
+        instructionsLoadedGapNotice(loopSession, loopDir),
+        /unscanned/u,
+      );
+    } finally {
+      rmSync(loopDir, { recursive: true, force: true });
+      rmSync(instructionsLoadedNoticeFile(loopSession), { force: true });
+    }
+  });
+
+  it("fires once a later call touches a directory the empty launch never covered", () => {
+    // The blocker this fix must not reintroduce: an empty LAUNCH must not
+    // silence the whole session. If the scanner is genuinely unwired and a
+    // later tool call reaches into a subdirectory that DOES carry real,
+    // still-unscanned content, the notice must still fire there — the
+    // launch-empty cache only ever answers for the launch half.
+    const emptyDir = mkdtempSync(join(tmpdir(), "sanitizer-empty-then-"));
+    const nestedDir = join(emptyDir, "packages", "foo");
+    const session = "sess-empty-then-nested";
+    try {
+      // Call 1: nothing at launch and no touched directory yet — silent, and
+      // the empty answer gets cached.
+      assert.equal(instructionsLoadedGapNotice(session, emptyDir), null);
+      assert.ok(existsSync(launchEmptyFile(session)));
+      // Call 2: still nothing touched — the cached empty answer alone must
+      // not manufacture a warning.
+      assert.equal(instructionsLoadedGapNotice(session, emptyDir), null);
+      // Call 3: a tool now reads a file in a subdirectory that carries real
+      // content, and the scanner STILL never fired InstructionsLoaded — the
+      // one case that must not stay silent.
+      mkdirSync(nestedDir, { recursive: true });
+      writeFileSync(join(nestedDir, "CLAUDE.md"), PROSE);
+      assert.equal(instructionsLoadedSeen(session), false);
+      assert.match(
+        instructionsLoadedGapNotice(session, emptyDir, nestedDir),
+        /unscanned/u,
+      );
+    } finally {
+      rmSync(emptyDir, { recursive: true, force: true });
+      rmSync(launchEmptyFile(session), { force: true });
+      rmSync(instructionsLoadedNoticeFile(session), { force: true });
+    }
   });
 
   it("does not repeat the warning once it has been surfaced", () => {

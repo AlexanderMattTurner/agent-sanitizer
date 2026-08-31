@@ -381,6 +381,42 @@ def test_a_non_noun_value_in_the_same_shape_still_redacts():
     assert found == ["Secret Keyword"]
 
 
+# ─── Bare-header detection, for a caller that reads whole files ──────────────
+
+_PEM_HEADER = "-----BEGIN PRIVATE KEY-----"
+
+
+@pytest.mark.parametrize(
+    ("value", "bare"),
+    [
+        (_PEM_HEADER, True),
+        (_PEM_HEADER + "\n", True),
+        (_PEM_HEADER.lower(), True),
+        (_PEM, False),
+        # One line, as a key inside a JSON string reaches the engine.
+        (_PEM.replace("\n", r"\n"), False),
+        (_PEM_HEADER + "\nQ29udGludWVkIGtleQ==", False),
+        (AWS_KEY, False),
+        ("-----BEGIN PASSWORD-----", False),
+        # Six dashes: "-----BEGIN " sits at offset 1, and only the anchor rejects it.
+        ("-" + _PEM_HEADER + "-", False),
+    ],
+)
+def test_is_bare_pem_header(value, bare):
+    """A header with no body answers True; anything carrying key bytes answers False."""
+    assert E.is_bare_pem_header(value) is bare
+
+
+def test_is_bare_pem_header_agrees_with_what_redaction_matched():
+    """The predicate reads the same pattern redaction took, so a value the engine
+    collapsed as a block with a body is never reported bare."""
+    for value in (_PEM, _PEM_HEADER):
+        found: list[str] = []
+        assert E._redact_pem_blocks(value, found) == "[REDACTED: Private Key]"
+        assert found == ["Private Key"]
+    assert E.is_bare_pem_header(_PEM_HEADER) and not E.is_bare_pem_header(_PEM)
+
+
 # ─── PEM block redaction ─────────────────────────────────────────────────────
 
 
@@ -1005,6 +1041,287 @@ def test_repeated_value_defeats_the_metadata_skip(label, text):
     redacted = run_plain(text)
     assert redacted is not None, f"{label}: the secret was forwarded verbatim"
     assert "Hunter2Passw0rdABC" not in redacted, label
+
+
+# A credential noun in PROSE position — preceded by a bare word + space that is
+# not a structural grammar keyword — gets no key/value interpretation at all.
+# The cases sweep prose positions (which skip), structural positions and
+# grammar keywords (which redact), and the opaque-run floor that bounds the
+# skip to non-credential-shaped values.
+@pytest.mark.parametrize(
+    "label, line, value, expected",
+    [
+        (
+            "the reported diagnostic",
+            "the plan-job ran without their secret: tiktok_automation_account_id",
+            "tiktok_automation_account_id",
+            True,
+        ),
+        (
+            "article",
+            "the secret: tiktok_automation_account_id",
+            "tiktok_automation_account_id",
+            True,
+        ),
+        (
+            "demonstrative",
+            "this token = my_service_account_name",
+            "my_service_account_name",
+            True,
+        ),
+        (
+            "possessive",
+            "your password = build_bot_env_password",
+            "build_bot_env_password",
+            True,
+        ),
+        (
+            "quoted noun",
+            'ran without their "secret": tiktok_automation_account_id',
+            "tiktok_automation_account_id",
+            True,
+        ),
+        (
+            "quantifier",
+            "found no token: my_service_account_name",
+            "my_service_account_name",
+            True,
+        ),
+        (
+            "quoted value",
+            'their secret: "tiktok_automation_account_id"',
+            "tiktok_automation_account_id",
+            True,
+        ),
+        (
+            "preposition",
+            "ran without secret: tiktok_automation_account_id",
+            "tiktok_automation_account_id",
+            True,
+        ),
+        (
+            "conjunction",
+            "nothing but token: my_service_account_name",
+            "my_service_account_name",
+            True,
+        ),
+        (
+            "open-class modifier",
+            "client secret: tiktok_automation_account_id",
+            "tiktok_automation_account_id",
+            True,
+        ),
+        (
+            "prose-position passphrase, the accepted residual",
+            "your password = correct-horse-battery",
+            "correct-horse-battery",
+            True,
+        ),
+        # A word in the closed grammar-keyword set keeps the line structural.
+        (
+            "python `is` chains a comparison",
+            "value is secret: not_actually_a_secret_here",
+            "not_actually_a_secret_here",
+            False,
+        ),
+        # An opaque credential-shaped value redacts in any position.
+        (
+            "opaque value in prose position",
+            "my password: Hunter2Passw0rdABCDEfgh",
+            "Hunter2Passw0rdABCDEfgh",
+            False,
+        ),
+        # The preceding word must sit on the value's own line: on the
+        # field-value path `line` is the whole document, and a comment line's
+        # trailing word must not vouch for the next line's real assignment.
+        (
+            "previous line ends in a bare word",
+            "# rotate this\npassword: my_leaked_service_password",
+            "my_leaked_service_password",
+            False,
+        ),
+        (
+            "export is an assignment keyword, not prose",
+            "export secret: tiktok_automation_account_id",
+            "tiktok_automation_account_id",
+            False,
+        ),
+        (
+            "shell control keyword before a real assignment",
+            "then secret=tiktok_automation_account_id",
+            "tiktok_automation_account_id",
+            False,
+        ),
+        (
+            "glued, not a separate word",
+            "thesecret: tiktok_automation_account_id",
+            "tiktok_automation_account_id",
+            False,
+        ),
+        (
+            "no word before",
+            "secret: tiktok_automation_account_id",
+            "tiktok_automation_account_id",
+            False,
+        ),
+        (
+            "determiner is the whole prefix",
+            "their tiktok_automation_account_id",
+            "tiktok_automation_account_id",
+            False,
+        ),
+        # The entropy floor: a value carrying credential material is never
+        # skipped, even when it spells itself as a lowercase identifier.
+        (
+            "opaque run under a determiner",
+            "their secret: ghp_a1b2c3d4e5f6g7h8i9j0k1l2m3n4o5",
+            "ghp_a1b2c3d4e5f6g7h8i9j0k1l2m3n4o5",
+            False,
+        ),
+    ],
+)
+def test_is_prose_field(label, line, value, expected):
+    offset = E.Candidate(value=value, line=line, value_start=line.rindex(value))
+    assert E._is_prose_field(offset) is expected, label
+
+
+def test_structural_keywords_cover_known_grammars():
+    """The prose-position skip is sound only while every word that legally
+    precedes an assigned/compared key in a real grammar is in the structural
+    denylist — a missing one turns that grammar's `<keyword> secret = value`
+    into "prose" and skips it. Each entry names the grammar that bites."""
+    grammar_keywords = {
+        # Declaration/assignment keywords.
+        "export",
+        "set",
+        "setenv",
+        "env",
+        "var",
+        "let",
+        "const",
+        "declare",
+        "local",
+        "readonly",
+        "global",
+        "static",
+        "final",
+        "arg",
+        "define",
+        # Shell control keywords that precede a one-line assignment.
+        "then",
+        "do",
+        "else",
+        "elif",
+        "fi",
+        "done",
+        "esac",
+        "if",
+        "while",
+        # `if not password == "literal":` (Python/Ruby comparison; `==` is in
+        # _ASSIGN_OP_CHARS, so the line reads as an assignment).
+        "not",
+        # OCaml `let a = 1 and password = "…"`; Ruby `x or password = "…"`.
+        "and",
+        "or",
+        # Jinja `{% with secret = "…" %}`.
+        "with",
+        # BASIC/VB `For counter = …`; shell/Python loop headers.
+        "for",
+        # Ruby modifier `unless password = fetch()`.
+        "unless",
+        # Python `with x as secret:`; SQL column aliasing.
+        "as",
+        # Haskell `where secret = …`.
+        "where",
+        # OCaml `let x = 1 in password = "…"` (structural comparison holding
+        # the literal); Nix `let … in`.
+        "in",
+        # Ruby modifier `x until password == "…"`.
+        "until",
+        # Python chained comparison `x is password == "…"`.
+        "is",
+        # Shell `alias secret=…` assigns; TS `import secret = require(…)`.
+        "alias",
+        "import",
+    }
+    missing = grammar_keywords - E._STRUCTURAL_KEYWORDS
+    assert not missing, f"grammar keywords absent from the denylist: {sorted(missing)}"
+    # Non-vacuity in the other direction: ordinary prose words must NOT be in
+    # the denylist, or the gate never fires and the skip is dead.
+    prose_words = {"the", "their", "without", "client", "ran", "restored"}
+    assert not (prose_words & E._STRUCTURAL_KEYWORDS)
+    assert all(w.isalpha() and w.islower() for w in E._STRUCTURAL_KEYWORDS)
+
+
+@pytest.mark.parametrize(
+    "label, text",
+    [
+        (
+            "reported diagnostic loses its env name",
+            "the plan-job ran without their secret: tiktok_automation_account_id",
+        ),
+        ("quoted, keyword path", 'their secret: "tiktok_automation_account_id"'),
+        ("quoted noun", 'ran without their "secret": tiktok_automation_account_id'),
+        ("article", "restored the secret: tiktok_automation_account_id"),
+        ("quantifier", "the run had no token: my_service_account_token_name"),
+        ("preposition", "ran without secret: tiktok_automation_account_id"),
+        ("compound label", "client secret: tiktok_automation_account_id"),
+    ],
+)
+def test_prose_position_lines_are_not_redacted(label, text):
+    assert run_plain(text) is None, label
+
+
+@pytest.mark.parametrize(
+    "label, text, leak",
+    [
+        (
+            "a credential-shaped value still redacts",
+            "their secret: ghp_A1b2C3d4E5f6G7h8I9j0K1l2M3n4O5",
+            "ghp_A1b2C3d4E5f6G7h8I9j0K1l2M3n4O5",
+        ),
+        (
+            "a word on the previous line does not vouch",
+            "# rotate this\npassword: my_leaked_service_password",
+            "my_leaked_service_password",
+        ),
+        (
+            "a shell control keyword is an assignment context",
+            "then secret=tiktok_automation_account_id",
+            "tiktok_automation_account_id",
+        ),
+        # Grammar keywords keep their line structural, so these low-entropy
+        # literals keep redacting.
+        (
+            "python `not` before a comparison literal",
+            'if not password == "hunter2horsebatterystaple":',
+            "hunter2horsebatterystaple",
+        ),
+        (
+            "ocaml `and` binding",
+            'let user = "bob" and password = "hunter2horsebatterystaple"',
+            "hunter2horsebatterystaple",
+        ),
+        (
+            "jinja `with` binding",
+            '{% with secret = "hunter2horsebatterystaple" %}',
+            "hunter2horsebatterystaple",
+        ),
+    ],
+)
+def test_prose_skip_stays_bounded(label, text, leak):
+    redacted = run_plain(text)
+    assert redacted is not None, f"{label}: nothing was redacted"
+    assert leak not in redacted["text"], label
+
+
+def test_prose_skip_is_off_on_web_ingress():
+    """Prose position is a convention of the surrounding text, so attacker-
+    controlled ingress can forge it — the gate is name-trust, not shape."""
+    text = "the plan-job ran without their secret: tiktok_automation_account_id"
+    redacted = run_plain(text, cfg(web_ingress=True))
+    assert redacted is not None, "web ingress must not honour the prose skip"
+    assert "tiktok_automation_account_id" not in redacted["text"]
 
 
 # `passphrase` carries `field-value`; `credential`/`credentials` deliberately do

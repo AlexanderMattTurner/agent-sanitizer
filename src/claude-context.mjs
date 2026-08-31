@@ -301,6 +301,46 @@ function classifyContextPath(path) {
   );
 }
 
+/**
+ * The `eventNamed` kinds spelled relative to the USER-GLOBAL config root — the
+ * `~/.claude` (or `CLAUDE_CONFIG_DIR`) directory Claude Code loads at launch
+ * whatever the project is.
+ *
+ * A second spelling because that root is a `.claude` directory ITSELF: its files
+ * are `CLAUDE.md` and `rules/x.md`, not `.claude/rules/x.md`, and under
+ * `CLAUDE_CONFIG_DIR` the path may carry no `.claude` segment at all — so
+ * {@link announcedByInstructionsLoaded}, which reads a path's own segments, has
+ * nothing there to classify by. Every row's shape is asserted in
+ * test/claude-context.test.mjs, since a shape with no spelling here would glob
+ * to nothing and read as "no event is coming".
+ */
+export const USER_GLOBAL_EVENT_NAMED_GLOBS = Object.freeze(
+  CLAUDE_CONTEXT_KINDS.filter((row) => row.eventNamed).map((row) =>
+    row.shape === "dir-file" ? row.name : `${row.name}/**/*.md`,
+  ),
+);
+
+/**
+ * Whether Claude Code announces loading `path` with an `InstructionsLoaded`
+ * event — the `eventNamed` column of {@link CLAUDE_CONTEXT_KINDS}, asked of one
+ * path.
+ *
+ * The complement of {@link contextScopeContradiction}, which checks the same
+ * column against an event that DID fire. This one answers before any fires, so a
+ * consumer can tell "the event is not coming" from "the event never came": a
+ * launch carrying only an `AGENTS.md` or a skill has nothing for the host to
+ * announce, and its silence is evidence of nothing.
+ *
+ * A path the table does not name gets `false`, the same conservative answer a
+ * row added without the flag gets: this says an event IS coming, never that a
+ * file is uninteresting.
+ * @param {string} path  absolute or relative; only its segments are read
+ * @returns {boolean}
+ */
+export function announcedByInstructionsLoaded(path) {
+  return classifyContextPath(path)?.eventNamed === true;
+}
+
 // The `load_reason` values that mean Claude Code reached the file on its own —
 // its launch scan, and its walk into a directory. Every other reason names a
 // file something else chose, which is not evidence about the scan's scope.

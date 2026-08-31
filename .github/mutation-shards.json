@@ -1,7 +1,7 @@
 {
   "splitEvery": 300,
   "split": [
-    { "id": "html", "file": "src/html.mjs" },
+    { "id": "html", "file": "src/html.mjs", "splitEvery": 200 },
     { "id": "standardized-variants", "file": "src/standardized-variants.mjs" },
     { "id": "invisible", "file": "src/invisible.mjs" },
     { "id": "output", "file": "src/output.mjs" },

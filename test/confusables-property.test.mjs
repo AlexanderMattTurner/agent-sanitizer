@@ -13,6 +13,7 @@ import fc from "fast-check";
 
 import {
   foldConfusables,
+  hasNonAscii,
   normalizeConfusables,
   selectFoldableFindings,
 } from "../src/confusables.mjs";
@@ -231,6 +232,138 @@ describe("foldConfusables (property)", () => {
         /does not match input at index/,
       );
     });
+  });
+
+  // Reference fold for arbitrary (possibly overlapping) findings: splice the
+  // whole string, highest index first. Its guard reads the PARTIALLY FOLDED
+  // string, which is what the real function validates an overlapping finding
+  // against, so the two agree on which findings are rejected as well as on the
+  // output — letting a generator emit invalid findings and compare outcomes.
+  const naiveFold = (t, findings) => {
+    let out = t;
+    for (const finding of [...findings].sort(
+      (lhs, rhs) => rhs.index - lhs.index,
+    )) {
+      if (!out.startsWith(finding.char, finding.index))
+        throw new Error(`does not match input at index ${finding.index}`);
+      out =
+        out.slice(0, finding.index) +
+        finding.latinEquivalent +
+        out.slice(finding.index + finding.char.length);
+    }
+    return out;
+  };
+
+  // A differential test compares OUTCOMES, so both calls are wrapped; the error
+  // is re-asserted by its message at the call site rather than swallowed.
+  const attempt = (fn) => {
+    try {
+      return { value: fn() };
+    } catch (error) {
+      return { error };
+    }
+  };
+
+  const rawFinding = fc.record({
+    start: fc.nat({ max: 63 }), // code-point position, taken modulo the text
+    // Bias half the findings to the highest offset still available: a uniformly
+    // placed one almost never reaches past the previous fold, so overlaps —
+    // the case under test — would be a rounding error in the generated corpus.
+    abutting: fc.boolean(),
+    glyphs: fc.integer({ min: 1, max: 2 }),
+    latinEquivalent: fc.string({
+      unit: fc.constantFrom("a", "b", "z", "/", "1"),
+      minLength: 1,
+      maxLength: 3,
+    }),
+  });
+
+  /** UTF-16 offset of each code-point boundary of `t`, plus its length. */
+  const boundaries = (t) => {
+    const offsets = [0];
+    for (const point of t)
+      offsets.push(offsets[offsets.length - 1] + point.length);
+    return offsets;
+  };
+
+  it("equals a naive whole-string splice on VALID overlapping findings", () => {
+    check(
+      fc.tuple(text, fc.array(rawFinding, { maxLength: 5 })),
+      ([t, raws]) => {
+        // Each `char` is read from the text as the folds applied so far have left
+        // it, which is the state the real function validates against — so every
+        // finding is valid when applied and the comparison is on OUTPUT, not on
+        // who rejects what. Reading from the original text instead would make
+        // essentially every overlap a mismatch and never exercise the fold.
+        let folded = t;
+        let cursor = t.length;
+        const findings = [];
+        for (const raw of raws) {
+          const points = [...folded];
+          const offsets = boundaries(folded);
+          const starts = points
+            .map((_, i) => i)
+            .filter((i) => offsets[i] < cursor);
+          if (starts.length === 0) break;
+          const at = raw.abutting
+            ? starts[starts.length - 1]
+            : starts[raw.start % starts.length];
+          const char = points.slice(at, at + raw.glyphs).join("");
+          // An ASCII-only `char` is refused by a finding-shape guard the naive
+          // splice does not model, so it is out of this property's scope.
+          if (!hasNonAscii(char)) continue;
+          const index = offsets[at];
+          findings.push({ index, char, latinEquivalent: raw.latinEquivalent });
+          folded =
+            folded.slice(0, index) +
+            raw.latinEquivalent +
+            folded.slice(index + char.length);
+          cursor = index;
+        }
+        assert.equal(
+          foldConfusables(t, findings),
+          naiveFold(t, findings),
+          `text=${JSON.stringify(t)} findings=${JSON.stringify(findings)}`,
+        );
+      },
+    );
+  });
+
+  it("rejects an invalid overlapping finding exactly when the reference does", () => {
+    check(
+      fc.tuple(text, fc.array(rawFinding, { maxLength: 5 })),
+      ([t, raws]) => {
+        // Chars read from the ORIGINAL text: a finding overlapping an applied fold
+        // then names bytes the fold rewrote, so both sides must reject it.
+        const points = [...t];
+        if (points.length === 0) return;
+        const offsets = boundaries(t);
+        const findings = [];
+        for (const raw of raws) {
+          const at = raw.start % points.length;
+          const char = points.slice(at, at + raw.glyphs).join("");
+          if (!hasNonAscii(char)) continue;
+          findings.push({
+            index: offsets[at],
+            char,
+            latinEquivalent: raw.latinEquivalent,
+          });
+        }
+        const actual = attempt(() => foldConfusables(t, findings));
+        const reference = attempt(() => naiveFold(t, findings));
+        const context = `text=${JSON.stringify(t)} findings=${JSON.stringify(findings)}`;
+        assert.equal(
+          actual.error === undefined,
+          reference.error === undefined,
+          `outcome differs from the naive reference: ${context} actual=${actual.error?.message ?? JSON.stringify(actual.value)} reference=${reference.error?.message ?? JSON.stringify(reference.value)}`,
+        );
+        if (actual.error !== undefined) {
+          assert.match(actual.error.message, /does not match input at index/);
+          return;
+        }
+        assert.equal(actual.value, reference.value, context);
+      },
+    );
   });
 });
 

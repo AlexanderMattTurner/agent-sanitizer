@@ -2,8 +2,11 @@
 
 import json
 import os
+import signal
 import socket
 import struct
+import subprocess
+import sys
 import threading
 import time
 from pathlib import Path
@@ -11,6 +14,7 @@ from pathlib import Path
 import pytest
 
 from agent_sanitizer.secrets import daemon as S
+from tests._helpers import REPO_ROOT
 from tests.secrets.redactor_helpers import wait_for_listener
 
 
@@ -353,6 +357,43 @@ def test_main_serves_until_stopped(sock_dir, monkeypatch):
     monkeypatch.setattr(S, "serve", _fake_serve)
     S.main([socket_path])
     assert called["path"] == socket_path
+
+
+def test_main_daemon_keeps_serving_after_sighup(sock_dir):
+    """A daemon started from a terminal must outlive that terminal's hangup.
+
+    Runs the CLI entry point in its OWN session (``start_new_session``) so the
+    SIGHUP this test sends reaches only that process, and asserts the daemon still
+    answers a request afterwards — not merely that the process is alive.
+    """
+    socket_path = str(sock_dir / "s.sock")
+    proc = subprocess.Popen(
+        [
+            sys.executable,
+            "-c",
+            "import sys; from agent_sanitizer.secrets.daemon import main; "
+            "main([sys.argv[1]])",
+            socket_path,
+        ],
+        start_new_session=True,
+        env={**os.environ, "PYTHONPATH": str(REPO_ROOT / "python")},
+    )
+    try:
+        wait_for_listener(socket_path, timeout=30)
+        os.kill(proc.pid, signal.SIGHUP)
+        client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        try:
+            client.settimeout(10)
+            client.connect(socket_path)
+            body = json.dumps({"text": "key: AKIAIOSFODNN7EXAMPLE"}).encode("utf-8")
+            client.sendall(struct.pack(">I", len(body)) + body)
+            assert "AWS Access Key" in _drain(client)["found"]
+        finally:
+            client.close()
+        assert proc.poll() is None
+    finally:
+        proc.terminate()
+        proc.wait(timeout=30)
 
 
 def test_serve_creates_socket_dir_with_mode(sock_dir):

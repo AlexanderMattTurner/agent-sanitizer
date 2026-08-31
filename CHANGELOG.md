@@ -8,6 +8,107 @@ adhere to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+## [2.50.0] - 2026-08-31
+
+### Fixed
+
+- Stop SIGPIPE from aborting a release once the changelog grows past a certain size.
+
+### Changed
+
+- Auto-merge on pull requests now arms when the reviewer skips the review, instead of on the reviewer side.
+
+## [2.49.2] - 2026-08-30
+
+### Fixed
+
+- Keep the redactor daemon alive across SIGHUP signal handling.
+
+## [2.49.1] - 2026-08-30
+
+### Added
+- Linear-time algorithmic complexity guarantee for confusables and HTML sanitization, documented in THREAT-MODEL.md.
+- Linting rule via eslint-plugin-redos to detect and report super-linear regexes at build time.
+
+### Changed
+- HTML regex scans optimized to run in linear time relative to input size.
+- Confusables folding refactored to avoid rebuilding the tail on overlapping findings.
+
+### Fixed
+- Confusables finding span calculation now correctly counts in UTF-16 units at the fold gate.
+
+## [2.49.0] - 2026-08-30
+
+### Fixed
+
+- Improved credential detection in prose position by refusing key/value interpretation for credential nouns.
+- Enhanced prose skip logic to require proper env-name value shape and same-line determiner.
+- Refined prose skip detection to trust only determiners immediately before credential nouns.
+- Fixed over-redaction by stopping redaction of prose lines where English function words precede the credential noun.
+
+## [2.48.6] - 2026-08-29
+
+### Fixed
+
+- Stop digest exemption from covering credential-named parameters
+- Keep the hex blob floor below base64's to prevent unnecessary base64 encoding
+- Treat a bare digest as a fingerprint instead of an exfiltration payload
+
+## [2.48.5] - 2026-08-29
+
+### Changed
+
+- Copy gate's repeat cost is now documented against the linear sites.
+
+## [2.48.4] - 2026-08-29
+
+### Fixed
+
+- Template sync now runs its own scripts from a staged copy with the tooling path passed through environment variables, improving reliability of the sync process.
+
+## [2.48.3] - 2026-08-29
+
+### Fixed
+
+- Resolved security scan failures caused by unset Claude credential by properly scoping OAuth credentials to the step that uses them.
+- Cleared four advisories reported by pnpm audit in the development dependency tree.
+
+## [2.48.2] - 2026-08-29
+
+### Fixed
+
+- HTML redaction no longer rewrites example key IDs in comments.
+- Signed-URL field recognition now covers all providers, not just Azure.
+- Signed-CDN queries are now properly bounded to prevent hiding from long-query checks.
+- Signed-URL `expires` timestamps are now treated as short parameters instead of blobs.
+- Azure SAS URL false positives are eliminated and signed-name blob dodges are closed.
+
+## [2.48.1] - 2026-08-28
+
+### Fixed
+
+- The InstructionsLoaded gap notice is now silenced during cold starts when a live setup has not yet been established.
+
+## [2.48.0] - 2026-08-27
+
+### Added
+
+- Export `is_bare_pem_header` function for use by whole-file callers in the secrets engine.
+
+## [2.47.15] - 2026-08-27
+
+### Fixed
+
+- Fix claude-hooks to only expect an InstructionsLoaded event for kinds it announces, preventing spurious events from other announcement types.
+
+## [2.47.14] - 2026-08-27
+
+### Fixed
+
+- Fixed claude-hooks to count the user-global ~/.claude root as launch content, ensuring instructions are properly recognized.
+- Fixed InstructionsLoaded gap notice to remain visible past an empty launch when there is content to load.
+- Fixed InstructionsLoaded gap notice to be suppressed when there is nothing to load.
+
 ## [2.47.13] - 2026-08-26
 
 ### Fixed
