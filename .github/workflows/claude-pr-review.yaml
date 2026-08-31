@@ -436,3 +436,37 @@ jobs:
             -f "context=Review findings resolved" \
             -f "description=Review deliberately skipped: bot-authored, or a chore/style/release title. Add needs-auto-review to force a full review." \
             -f "target_url=${RUN_URL}" >/dev/null
+
+  # Approving the PR and clearing the gate is only half the landing: the PR still
+  # sits open until a person presses merge. An automated `chore(release)` PR
+  # waited that way with every required check green. Arming is NOT merging —
+  # GitHub holds the PR until every required check passes, and a red one keeps
+  # holding it, so this widens what LANDS UNATTENDED but never what is allowed to
+  # land. Same shape as dependabot-auto-merge.yaml.
+  #
+  # A separate job, not a step in auto-approve-skipped: enabling auto-merge needs
+  # `contents: write`, and that job checks out repo content under
+  # pull_request_target. Keeping the write scope in a job that checks out nothing
+  # and runs one `gh` call leaves the approver at `contents: read`.
+  #
+  # `needs:` the approver so a PR only arms once its clearing approval and gate
+  # status are actually posted — arming a PR the approver failed on would leave it
+  # waiting on a required check nobody cleared.
+  arm-auto-merge:
+    name: Arm auto-merge on the skipped class
+    needs: auto-approve-skipped
+    # not-required-check: arms a landing, reports no verdict about the code.
+    if: >-
+      github.event.action == 'opened' ||
+      github.event.action == 'ready_for_review'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write # enablePullRequestAutoMerge records the pending merge
+      pull-requests: write # set the auto-merge flag on the PR
+    steps:
+      - name: Arm auto-merge so this class lands once its checks are green
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_URL: ${{ github.event.pull_request.html_url }}
+        run: gh pr merge --auto --squash "$PR_URL"
