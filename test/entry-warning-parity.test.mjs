@@ -108,6 +108,7 @@ describe("warning parity between sanitize() and sanitizeText()", () => {
     const root = await sanitize(input, options);
     const pipeline = await sanitizeText(input, options);
     assert.deepEqual(root.warnings, pipeline.warnings);
+    assert.deepEqual(root.notes, pipeline.notes);
     assert.ok(root.warnings.some((w) => /image to evil\.com/.test(w)));
     // Non-vacuity: the same input is silent at BOTH entries without the option,
     // so the assertion above is the option working and not the URL firing on

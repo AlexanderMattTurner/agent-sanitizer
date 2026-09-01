@@ -582,7 +582,7 @@ describe("Layer 3 exfil detection across signing schemes", () => {
   });
 
   it("reports every digest-length residual under `flagDigestValues`", () => {
-    // The opt-out for the residual the case above pins. The exemption keys on
+    // The switch that lifts the residual the case above pins. It keys on
     // the parameter NAME, which the caller writing the URL picks, so a payload
     // padded to exactly one digest length rides under any generic name; a
     // caller that would rather pay the fingerprint false positives turns the
@@ -609,7 +609,7 @@ describe("Layer 3 exfil detection across signing schemes", () => {
     // Non-vacuity in the other direction. The option must not degrade into
     // "flag everything": an ordinary short value, an allowlisted signing
     // parameter and a hex run below the 16-byte floor all stay quiet with it
-    // on, so the row above is the exemption lifting and not a blanket.
+    // on, so the case above is the exemption lifting and not a blanket.
     for (const url of [
       "https://ok.example/p?v=1.2.3",
       "https://ok.example/p?utm_source=news",
