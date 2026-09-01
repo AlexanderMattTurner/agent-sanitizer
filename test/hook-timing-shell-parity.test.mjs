@@ -17,10 +17,12 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
+import { readFileSync } from "node:fs";
 import path from "node:path";
 
 import {
   formatSeconds,
+  sanitizerVersion,
   slowHookNotice,
   slowProvisionNotice,
   SLOW_HOOK_THRESHOLD_MS,
@@ -55,6 +57,18 @@ function sh(argv) {
   );
 }
 
+/**
+ * The version both ports are pinned at for the comparisons below.
+ *
+ * Passed explicitly because the DEFAULTS are deliberately different: each port
+ * reads the version of the artifact it ships in (the node module its package's
+ * package.json, the shell port the plugin manifest beside it), and those two
+ * numbers differ in a checkout. What has to match byte-for-byte is the sentence
+ * built around the version, which is what pinning it here isolates — the
+ * defaults get their own cases at the bottom.
+ */
+const VERSION = "9.8.7";
+
 describe("hook timing: the shell port matches the node module", () => {
   // Every hundredths residue, both sides of each tenth, plus the exact halves
   // where a double and an integer rule are most likely to disagree.
@@ -74,15 +88,29 @@ describe("hook timing: the shell port matches the node module", () => {
   for (const ms of MS)
     it(`emits the same hook notice for ${ms}ms`, () =>
       assert.equal(
-        sh(["slow_hook_notice", "sanitize-output", String(ms)]),
-        slowHookNotice("sanitize-output", ms) ?? "",
+        sh(["slow_hook_notice", "sanitize-output", String(ms), "", VERSION]),
+        slowHookNotice("sanitize-output", ms, undefined, undefined, VERSION) ??
+          "",
       ));
 
   for (const ms of MS)
     it(`emits the same provisioning notice for ${ms}ms`, () =>
       assert.equal(
-        sh(["slow_provision_notice", "engine install", String(ms)]),
-        slowProvisionNotice("engine install", ms) ?? "",
+        sh([
+          "slow_provision_notice",
+          "engine install",
+          String(ms),
+          "",
+          "",
+          VERSION,
+        ]),
+        slowProvisionNotice(
+          "engine install",
+          ms,
+          undefined,
+          undefined,
+          VERSION,
+        ) ?? "",
       ));
 
   it("agrees on both thresholds, and on which side of them is quiet", () => {
@@ -119,20 +147,39 @@ describe("hook timing: the shell port matches the node module", () => {
     // is the node line for a caller that knows none. Pinning the CPU form as
     // DIFFERENT is what fails here if the node default ever starts carrying a
     // number the shell cannot produce.
-    const shell = sh(["slow_hook_notice", "safe-launch PreToolUse", "7200"]);
-    assert.equal(shell, slowHookNotice("safe-launch PreToolUse", 7200));
+    const shell = sh([
+      "slow_hook_notice",
+      "safe-launch PreToolUse",
+      "7200",
+      "",
+      VERSION,
+    ]);
+    assert.equal(
+      shell,
+      slowHookNotice(
+        "safe-launch PreToolUse",
+        7200,
+        undefined,
+        undefined,
+        VERSION,
+      ),
+    );
     assert.notEqual(
       shell,
-      slowHookNotice("safe-launch PreToolUse", 7200, undefined, {
-        cpuMs: 300,
-      }),
+      slowHookNotice(
+        "safe-launch PreToolUse",
+        7200,
+        undefined,
+        { cpuMs: 300 },
+        VERSION,
+      ),
     );
   });
 
   it("honors an explicit threshold argument, as the node signature does", () => {
     assert.equal(
-      sh(["slow_hook_notice", "h", "500", "100"]),
-      slowHookNotice("h", 500, 100),
+      sh(["slow_hook_notice", "h", "500", "100", VERSION]),
+      slowHookNotice("h", 500, 100, undefined, VERSION),
     );
   });
 
@@ -147,21 +194,113 @@ describe("hook timing: the shell port matches the node module", () => {
       "90000",
       "",
       advice,
+      VERSION,
     ]);
     assert.equal(
       shell,
-      slowProvisionNotice("hook binary download", 90000, undefined, advice),
+      slowProvisionNotice(
+        "hook binary download",
+        90000,
+        undefined,
+        advice,
+        VERSION,
+      ),
     );
     assert.match(shell, new RegExp(advice.replaceAll(".", "\\.")));
     assert.doesNotMatch(shell, /Installing uv/);
     // ...and omitting it still yields the engine-install default on both sides.
+    const defaulted = sh([
+      "slow_provision_notice",
+      "engine install",
+      "90000",
+      "",
+      "",
+      VERSION,
+    ]);
     assert.equal(
-      sh(["slow_provision_notice", "engine install", "90000"]),
-      slowProvisionNotice("engine install", 90000),
+      defaulted,
+      slowProvisionNotice(
+        "engine install",
+        90000,
+        undefined,
+        undefined,
+        VERSION,
+      ),
+    );
+    assert.match(defaulted, /Installing uv makes it faster/);
+  });
+
+  it("names the reporting version in both notices, in both ports", () => {
+    // The number a maintainer needs first on a performance report, and the one
+    // an operator is least likely to include by hand.
+    for (const argv of [
+      ["slow_hook_notice", "sanitize-output", "90000", "", VERSION],
+      ["slow_provision_notice", "engine install", "90000", "", "", VERSION],
+    ])
+      assert.match(sh(argv), new RegExp(`agent-sanitizer ${VERSION}`));
+    assert.match(
+      slowHookNotice("sanitize-output", 90000, undefined, undefined, VERSION),
+      new RegExp(`with agent-sanitizer ${VERSION}, the hook name`),
     );
     assert.match(
-      sh(["slow_provision_notice", "engine install", "90000"]),
-      /Installing uv makes it faster/,
+      slowProvisionNotice(
+        "engine install",
+        90000,
+        undefined,
+        undefined,
+        VERSION,
+      ),
+      new RegExp(`report it at \\S+ with agent-sanitizer ${VERSION}\\.$`),
+    );
+  });
+
+  it("asks the operator to look the version up when neither port knows it", () => {
+    // A build that cannot read its own manifest (a compiled hook binary) must
+    // ask rather than print a placeholder version nothing confirmed.
+    for (const [argv, node] of [
+      [
+        ["slow_hook_notice", "sanitize-output", "90000", "", ""],
+        slowHookNotice("sanitize-output", 90000, undefined, undefined, null),
+      ],
+      [
+        ["slow_provision_notice", "engine install", "90000", "", "", ""],
+        slowProvisionNotice(
+          "engine install",
+          90000,
+          undefined,
+          undefined,
+          null,
+        ),
+      ],
+    ]) {
+      assert.equal(sh(/** @type {string[]} */ (argv)), node);
+      assert.match(String(node), /with your agent-sanitizer version/);
+      assert.doesNotMatch(String(node), /agent-sanitizer [0-9]/);
+    }
+  });
+
+  it("defaults each port to the version of the artifact it ships in", () => {
+    // Not a shared default: the node module ships in the npm package (whose
+    // package.json carries the published version) and this shell lib ships in
+    // the plugin (whose manifest carries it). Both must resolve SOMETHING here,
+    // or the notices above would silently degrade to the look-it-up wording.
+    const manifest = JSON.parse(
+      readFileSync(
+        path.join(repoRoot, "plugin", ".claude-plugin", "plugin.json"),
+        "utf8",
+      ),
+    );
+    assert.match(
+      sh(["slow_hook_notice", "sanitize-output", "90000"]),
+      new RegExp(`with agent-sanitizer ${manifest.version}, the hook name`),
+    );
+    const pkg = JSON.parse(
+      readFileSync(path.join(repoRoot, "package.json"), "utf8"),
+    );
+    assert.equal(sanitizerVersion(), pkg.version);
+    assert.match(
+      slowHookNotice("sanitize-output", 90000),
+      new RegExp(`with agent-sanitizer ${pkg.version}, the hook name`),
     );
   });
 
@@ -169,8 +308,15 @@ describe("hook timing: the shell port matches the node module", () => {
     // They are two ports of two messages, not one message twice: a provisioning
     // wait is not paid per call, and saying it is would send the reader looking
     // for a per-call cost that does not exist.
-    const hook = sh(["slow_hook_notice", "x", "90000"]);
-    const provision = sh(["slow_provision_notice", "x", "90000"]);
+    const hook = sh(["slow_hook_notice", "x", "90000", "", VERSION]);
+    const provision = sh([
+      "slow_provision_notice",
+      "x",
+      "90000",
+      "",
+      "",
+      VERSION,
+    ]);
     assert.notEqual(hook, provision);
     assert.match(hook, /Wall-clock alone cannot separate/);
     assert.match(provision, /paid once per install/);

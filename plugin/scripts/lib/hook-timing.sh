@@ -24,6 +24,56 @@ SLOW_HOOK_THRESHOLD_MS="${_AGENT_SANITIZER_SLOW_HOOK_MS:-1000}"
 SLOW_PROVISION_THRESHOLD_MS="${_AGENT_SANITIZER_SLOW_PROVISION_MS:-60000}"
 HOOK_TIMING_ISSUE_URL="https://github.com/AlexanderMattTurner/agent-sanitizer/issues/new"
 
+# This build's version, for the report line the notices end with — the number a
+# maintainer needs first and the one an operator is least likely to include by
+# hand. Empty when it cannot be read, which the notices word as "your
+# agent-sanitizer version" rather than naming a number nothing confirmed.
+#
+# Read from the nearest `.claude-plugin/plugin.json` at or above this file: this
+# port only ever ships inside the plugin, whose manifest version is the one
+# version string committed to the repo (the node module reads package.json first
+# because its own artifact is the npm package — see readVersion there). Parsed
+# with bash builtins for the same reason provision-hook-binary.sh does it that
+# way: no JSON-capable tool is guaranteed on a bare PATH.
+hook_timing_version() {
+  local dir parent version line
+  dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd)"
+  [[ -n "$dir" ]] || return 0
+  while :; do
+    version=""
+    if [[ -r "$dir/.claude-plugin/plugin.json" ]]; then
+      while IFS= read -r line; do
+        case "$line" in
+        *'"version"'*)
+          version="${line#*\"version\"*:*\"}"
+          version="${version%%\"*}"
+          break
+          ;;
+        *) ;;
+        esac
+      done <"$dir/.claude-plugin/plugin.json"
+      if [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+        printf '%s' "$version"
+        return 0
+      fi
+    fi
+    parent="$(dirname "$dir")"
+    [[ "$parent" == "$dir" ]] && return 0
+    dir="$parent"
+  done
+}
+
+# The clause naming the version a report should carry: this build's when it
+# knows it, an instruction to look it up when it does not. $1 version (may be
+# empty). Mirrors versionClause in the node module.
+hook_timing_version_clause() {
+  if [[ -z "$1" ]]; then
+    printf '%s' "your agent-sanitizer version"
+  else
+    printf '%s' "agent-sanitizer $1"
+  fi
+}
+
 # Epoch milliseconds.
 #
 # $EPOCHREALTIME (bash 5+) is read as a string and stripped of its decimal
@@ -62,7 +112,10 @@ hook_timing_format_seconds() {
 }
 
 # The line for a hook that overran its budget, or nothing when it did not.
-# $1 hook name, $2 elapsed ms, $3 threshold ms (optional).
+# $1 hook name, $2 elapsed ms, $3 threshold ms (optional), $4 version
+# (optional; PASSED EMPTY means "unknown" and is worded as such, while OMITTED
+# resolves hook_timing_version — the two ports resolve their own artifact's
+# version, so the parity test passes this one explicitly on both sides).
 #
 # This is the node module's NO-CPU wording, and it is the honest one here. The
 # node timer splits the wait with process.cpuUsage(); bash's nearest equivalent
@@ -72,18 +125,21 @@ hook_timing_format_seconds() {
 slow_hook_notice() {
   local name="$1" elapsed="$2" threshold="${3:-$SLOW_HOOK_THRESHOLD_MS}"
   ((elapsed > threshold)) || return 0
-  printf '%s' "agent-sanitizer PERFORMANCE: the ${name} hook took $(hook_timing_format_seconds "$elapsed")s, over its $(hook_timing_format_seconds "$threshold")s budget. Wall-clock alone cannot separate the sanitizer's own work from a busy machine. Tell the user, and suggest they report it at ${HOOK_TIMING_ISSUE_URL} with the hook name and timing."
+  # Resolved only past the guard: a healthy run must not pay the manifest walk.
+  local version="${4-$(hook_timing_version)}"
+  printf '%s' "agent-sanitizer PERFORMANCE: the ${name} hook took $(hook_timing_format_seconds "$elapsed")s, over its $(hook_timing_format_seconds "$threshold")s budget. Wall-clock alone cannot separate the sanitizer's own work from a busy machine. Tell the user, and suggest they report it at ${HOOK_TIMING_ISSUE_URL} with $(hook_timing_version_clause "$version"), the hook name and timing."
 }
 
 # The line for a ONE-TIME provisioning step that overran its (much larger)
 # budget, or nothing when it did not. $1 step name, $2 elapsed ms, $3 threshold
 # ms (optional), $4 step-specific speedup advice (optional — the default fits
-# the engine install, not a download).
+# the engine install, not a download), $5 version (optional, as above).
 slow_provision_notice() {
   local name="$1" elapsed="$2" threshold="${3:-$SLOW_PROVISION_THRESHOLD_MS}"
   local advice="${4:-Installing uv makes it faster}"
   ((elapsed > threshold)) || return 0
-  printf '%s' "agent-sanitizer PERFORMANCE: one-time setup (${name}) took $(hook_timing_format_seconds "$elapsed")s, over its $(hook_timing_format_seconds "$threshold")s budget — this is paid once per install, not per tool call, so the session is not slow from here on. ${advice}; if it happens on EVERY new session, report it at ${HOOK_TIMING_ISSUE_URL}."
+  local version="${5-$(hook_timing_version)}"
+  printf '%s' "agent-sanitizer PERFORMANCE: one-time setup (${name}) took $(hook_timing_format_seconds "$elapsed")s, over its $(hook_timing_format_seconds "$threshold")s budget — this is paid once per install, not per tool call, so the session is not slow from here on. ${advice}; if it happens on EVERY new session, report it at ${HOOK_TIMING_ISSUE_URL} with $(hook_timing_version_clause "$version")."
 }
 
 # Report an overrun on stderr, or say nothing. stderr and not stdout: a hook's

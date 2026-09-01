@@ -9,6 +9,9 @@
  */
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 
 import {
   chargeHostExtension,
@@ -16,6 +19,7 @@ import {
   excludeProvisioning,
   formatBytes,
   reportSlowHook,
+  sanitizerVersion,
   slowHookNotice,
   startHookTimer,
   withSlowHookNotice,
@@ -543,6 +547,50 @@ describe("slowHookNotice", () => {
     );
     assert.match(toolOnly, /tool Bash/);
     assert.doesNotMatch(toolOnly, /payload/);
+  });
+});
+
+describe("the version an issue report is asked to carry", () => {
+  it("names this build, so the report does not have to be chased for it", () => {
+    // A timing means nothing without the build it was measured on: the report
+    // that prompted this arrived as "1.1s of hook CPU" with no version, and
+    // pinning it down took a round trip.
+    assert.match(
+      slowHookNotice("sanitize-output", 1_100, undefined, {
+        cpuMs: 1_100,
+        redactorMs: 0,
+        hostMs: 0,
+      }),
+      new RegExp(`with agent-sanitizer ${sanitizerVersion()}, the hook name`),
+    );
+  });
+
+  it("reads the version from this package's own manifest", () => {
+    const pkg = JSON.parse(
+      readFileSync(
+        path.join(
+          path.dirname(fileURLToPath(import.meta.url)),
+          "..",
+          "package.json",
+        ),
+        "utf8",
+      ),
+    );
+    assert.equal(sanitizerVersion(), pkg.version);
+  });
+
+  it("asks for the version rather than guessing one when it knows none", () => {
+    // A compiled hook binary resolves no manifest. Printing a placeholder
+    // version there would route every report to the wrong tree.
+    const unknown = slowHookNotice(
+      "sanitize-output",
+      1_100,
+      undefined,
+      undefined,
+      null,
+    );
+    assert.match(unknown, /with your agent-sanitizer version, the hook name/);
+    assert.doesNotMatch(unknown, /agent-sanitizer [0-9]/);
   });
 });
 
