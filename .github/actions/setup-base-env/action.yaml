@@ -25,26 +25,6 @@ inputs:
 runs:
   using: "composite"
   steps:
-<<<<<<< local
-||||||| base
-    - name: Set up Node.js
-      if: hashFiles('package.json') != ''
-      uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
-      with:
-        node-version: ${{ inputs.node-version }}
-        registry-url: ${{ inputs.registry-url }}
-
-=======
-    - name: Set up Node.js
-      if: hashFiles('package.json') != ''
-      uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
-      with:
-        # setup-node prefers node-version-file only when node-version is empty.
-        node-version: ${{ inputs.node-version-file == '' && inputs.node-version || '' }}
-        node-version-file: ${{ inputs.node-version-file }}
-        registry-url: ${{ inputs.registry-url }}
-
->>>>>>> template
     - name: Install pnpm
       if: hashFiles('package.json') != ''
       uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9

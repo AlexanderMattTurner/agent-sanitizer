@@ -26,7 +26,6 @@ jobs:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           persist-credentials: false
-<<<<<<< local
       - name: Set up uv
         uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39 # v8.2.0
 
@@ -37,49 +36,6 @@ jobs:
       # pinning a second copy in additional_dependencies that nothing syncs.
       - name: Setup base environment
         uses: ./.github/actions/setup-base-env
-||||||| base
-      # setup-python provides the `python3.11` on PATH that pre-commit binds
-      # every `language: python` hook to (default_language_version). uvx runs
-      # pre-commit itself; the two versions are kept in sync by
-      # tests/test_version_sync.py.
-      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
-        with:
-          python-version: "3.11"
-      - uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39 # v8.2.0
-      # Node deps must be installed for the node-based `language: system` hooks:
-      # check-proto-pollution does `import ts from "typescript"`, which resolves
-      # from the repo's node_modules (ESM ignores NODE_PATH), so the module is
-      # absent until `pnpm install` runs.
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
-        with:
-          node-version-file: ".nvmrc"
-      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
-      - name: Install node deps
-        # No --frozen-lockfile: the repo gitignores pnpm-lock.yaml, so CI resolves
-        # from package.json against the registry.
-        run: pnpm install --no-frozen-lockfile
-=======
-      # setup-python provides the `python3.11` on PATH that pre-commit binds
-      # every `language: python` hook to (default_language_version). uvx runs
-      # pre-commit itself; the two versions are kept in sync by
-      # tests/test_version_sync.py.
-      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
-        if: hashFiles('.pre-commit-config.yaml') != ''
-        with:
-          python-version: "3.11"
-      - uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39 # v8.2.0
-        if: hashFiles('.pre-commit-config.yaml') != ''
-      # check-proto-pollution does `import ts from "typescript"`, resolved from
-      # node_modules (ESM ignores NODE_PATH) — absent until `pnpm install` runs.
-      # The composite no-ops its Node half when package.json is absent.
-      # node-version-file errors if the file is missing, so .nvmrc is passed
-      # only when it exists.
-      - name: Setup base environment
-        if: hashFiles('.pre-commit-config.yaml') != ''
-        uses: ./.github/actions/setup-base-env
-        with:
-          node-version-file: ${{ hashFiles('.nvmrc') != '' && '.nvmrc' || '' }}
->>>>>>> template
       - name: Restore pre-commit cache
         if: hashFiles('.pre-commit-config.yaml') != ''
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
@@ -88,14 +44,7 @@ jobs:
           key: pre-commit-${{ runner.os }}-${{ hashFiles('.pre-commit-config.yaml') }}
           restore-keys: pre-commit-${{ runner.os }}-
       - name: Run pre-commit
-<<<<<<< local
         run: uv run --python 3.11 --with pre-commit==4.6.0 pre-commit run --all-files --show-diff-on-failure
-||||||| base
-        run: uvx pre-commit==4.6.0 run --all-files --show-diff-on-failure
-=======
-        if: hashFiles('.pre-commit-config.yaml') != ''
-        run: uvx pre-commit==4.6.0 run --all-files --show-diff-on-failure
->>>>>>> template
 
   # Stable Required check: runs even when `pre-commit` is cancelled/skipped, so
   # a protected branch never gets stuck on a check that never reports.

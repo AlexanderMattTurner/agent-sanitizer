@@ -1,16 +1,7 @@
 #!/usr/bin/env bash
 # Cancel the queued/in-progress Actions runs still executing on a closed PR's
-<<<<<<< local
 # head SHA. Invoked by pr-meta-privileged.yaml's `cancel` job with REPO, HEAD_REF, HEAD_SHA,
 # GH_TOKEN in the environment. Reclaims runner slots a merge/close would
-||||||| base
-# head SHA. Invoked by cancel-on-pr-close.yaml with REPO, HEAD_REF, HEAD_SHA,
-# GH_TOKEN in the environment. Reclaims runner slots a merge/close would
-=======
-# head SHA. Invoked by pr-meta-privileged.yaml's cancel job with REPO, HEAD_REF, HEAD_SHA,
-# GH_TOKEN in the environment; RUN_SWEEP_LIMIT (default 100) caps how many runs
-# on that branch one call lists. Reclaims runner slots a merge/close would
->>>>>>> template
 # otherwise leave held — GitHub cancels superseded runs only when a newer push
 # arrives, never on close.
 set -euo pipefail

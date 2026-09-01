@@ -84,17 +84,7 @@ def git_ok(*args: str) -> bool:
     # never silently inherit a stale one.
     return (
         subprocess.run(
-<<<<<<< local
             ["git", *args], capture_output=True, text=True, check=False, cwd=REPO_ROOT
-||||||| base
-            ["git", *args], capture_output=True, text=True, check=False
-=======
-            ["git", *args],
-            capture_output=True,
-            text=True,
-            check=False,
-            cwd=os.getcwd(),
->>>>>>> template
         ).returncode
         == 0
     )

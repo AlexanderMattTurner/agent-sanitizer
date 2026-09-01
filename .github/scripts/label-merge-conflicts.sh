@@ -59,16 +59,9 @@ list_prs() {
 }
 
 unknown=""
-<<<<<<< local
 # retry-loop-ok: each pass re-lists and re-labels every open PR, not one
 # failing command — lib-ci-retry.sh's `retry` re-runs a single argv and has
 # no equivalent for "re-sync a whole label pass".
-||||||| base
-=======
-# retry-loop-ok: not a retry-until-success loop — each pass labels every PR
-# whose state IS known this pass and only carries the still-UNKNOWN subset
-# forward, so the repo's single-command retry_cmd has no body to wrap here.
->>>>>>> template
 for ((pass = 1; pass <= ${MAX_PASSES:-2}; pass++)); do
   [[ "$pass" == "1" ]] || sleep "${RETRY_DELAY_SECS:-10}"
   unknown=""

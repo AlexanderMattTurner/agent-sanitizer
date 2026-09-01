@@ -46,24 +46,9 @@ jobs:
         with:
           persist-credentials: false
 
-<<<<<<< local
       # The script resolves ci-truth-serum through `uv run --with`, so uv has to
       # be on PATH — it is not on the stock runner image.
       - uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39 # v8.2.0
-||||||| base
-      - name: Install the apply tool (ci-truth-serum)
-        # Pin to the same ci-truth-serum commit the pre-commit hook uses so the
-        # lint and the apply step share one parser version.
-        run: python3 -m pip install --user "ci-truth-serum @ git+https://github.com/alexander-turner/ci-truth-serum@a5c3991e7b1eea7c8a65d9cd9573f3f65f520ee8"
-=======
-      - name: Install the apply tool (ci-truth-serum)
-        # Pin to the same ci-truth-serum commit the pre-commit hook uses so the
-        # lint and the apply step share one parser version.
-        run: |
-          # pin-exempt: PEP 508 `name @ git+URL@sha` pins to an exact commit;
-          # the commit SHA after the trailing @ is the pin, not a missing version.
-          python3 -m pip install --user "ci-truth-serum @ git+https://github.com/AlexanderMattTurner/ci-truth-serum@01aa20655323f8ce5a5b8554556dd9dbeeedc232"
->>>>>>> template
 
       # Delegate to the extracted script — the SSOT for this apply step, and
       # until now dead: the step it was extracted FROM was still inline here, so

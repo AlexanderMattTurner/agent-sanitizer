@@ -31,7 +31,6 @@ path_gate_matching_lines() {
   fi
   return 0
 }
-<<<<<<< local
 
 # path_gate_matching_fixed_lines PATTERNS TEXT — path_gate_matching_lines for a
 # newline-separated list of whole-line literals (a derived file closure) instead
@@ -55,29 +54,3 @@ path_gate_matching_fixed_lines() {
   fi
   return 0
 }
-||||||| base
-=======
-
-# path_gate_matching_members LIST TEXT — the lines of TEXT that are exact members
-# of the newline-separated LIST, or ALL of TEXT when grep failed or LIST is empty.
-# A clean no-match prints nothing. Always returns 0, like the helper above.
-#
-# The empty LIST is its own arm because a derivation that produced nothing is a
-# derivation that failed: reading it as "no member changed" is the silent skip
-# this file exists to prevent.
-path_gate_matching_members() {
-  local rc=0 out=""
-  if [[ -z "${1//[[:space:]]/}" ]]; then
-    printf '%s\n' "$2"
-    return 0
-  fi
-  out=$(grep -xFf <(printf '%s\n' "$1") <<<"$2") || rc=$?
-  if ((rc > 1)); then
-    out="$2"
-  fi
-  if [[ -n "$out" ]]; then
-    printf '%s\n' "$out"
-  fi
-  return 0
-}
->>>>>>> template

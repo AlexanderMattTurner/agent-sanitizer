@@ -14,25 +14,11 @@ on:
         type: string
         default: ""
         description: "ERE regex; if any changed file matches, run=true is set"
-<<<<<<< local
       paths-regex-file: # unused-input-ok: no caller wires this yet; tested directly in tests/test_decide_reusable_diff.py
-||||||| base
-      paths-regex-file:
-=======
-      paths-regex-file:
-        # unused-input-ok: this repo's own callers (hook-lifecycle.yaml, zizmor.yaml) don't need it yet; kept for a future local caller or a downstream repo referencing this reusable workflow cross-repo.
->>>>>>> template
         type: string
         default: ""
         description: "Repo path of a shell snippet defining GATE_PATHS_REGEX — the SSOT for a trigger regex a local git hook also sources, so the two consumers cannot drift. Mutually exclusive with paths-regex; a missing file/variable fails the decide job red (never a silent skip)"
-<<<<<<< local
       pytest-targets: # unused-input-ok: no caller wires this yet; tested directly in tests/test_decide_reusable_diff.py
-||||||| base
-      pytest-targets:
-=======
-      pytest-targets:
-        # unused-input-ok: this repo's own callers (hook-lifecycle.yaml, zizmor.yaml) don't need it yet; kept for a future local caller or a downstream repo referencing this reusable workflow cross-repo.
->>>>>>> template
         type: string
         default: ""
         description: "Space-separated pytest files this gate's job runs. The decide job derives their collection-time import closure (.github/scripts/pytest-import-closure.py) and treats every member as a watched path, so a caller states its test dependencies once — in the test's own import lines — instead of retyping them into paths-regex, where the copy drifts silently. Combines with paths-regex (either one matching sets run=true); a target that does not exist fails the decide job red"
@@ -40,36 +26,15 @@ on:
         type: string
         default: ""
         description: "Space-separated shell entry points this gate's job runs. The decide job derives every in-repo file they can reach (.github/scripts/shell-run-closure.py) and treats each as a watched path, so a caller states its script dependencies once — in the scripts' own text — instead of retyping them into paths-regex, where the copy drifts silently. The derivation over-approximates and cannot see a path built from variables, so it combines with paths-regex rather than replacing it; a target that is not tracked fails the decide job red"
-<<<<<<< local
       trigger-keyword: # unused-input-ok: no caller wires this yet; tested directly in tests/test_decide_reusable_diff.py
-||||||| base
-      trigger-keyword:
-=======
-      trigger-keyword:
-        # unused-input-ok: this repo's own callers (hook-lifecycle.yaml, zizmor.yaml) don't need it yet; kept for a future local caller or a downstream repo referencing this reusable workflow cross-repo.
->>>>>>> template
         type: string
         default: ""
         description: "Keyword in a commit title (subject line) that forces run=true"
-<<<<<<< local
       keyword-scope: # unused-input-ok: paired with trigger-keyword above — unused for the same reason, tested the same way
-||||||| base
-      keyword-scope:
-=======
-      keyword-scope:
-        # unused-input-ok: this repo's own callers (hook-lifecycle.yaml, zizmor.yaml) don't need it yet; kept for a future local caller or a downstream repo referencing this reusable workflow cross-repo.
->>>>>>> template
         type: string
         default: "range"
         description: "Where to scan for the trigger keyword: 'range' (every commit in the PR, the default) or 'head' (only the head commit, so the keyword fires once for the commit it tags and not on later untagged pushes)"
-<<<<<<< local
       skip-on-draft: # unused-input-ok: no caller wires this yet; tested directly in tests/test_decide_reusable_diff.py
-||||||| base
-      skip-on-draft:
-=======
-      skip-on-draft:
-        # unused-input-ok: this repo's own callers (hook-lifecycle.yaml, zizmor.yaml) don't need it yet; kept for a future local caller or a downstream repo referencing this reusable workflow cross-repo.
->>>>>>> template
         type: boolean
         default: false
         description: >
@@ -79,25 +44,11 @@ on:
           in MUST also list ready_for_review in its pull_request `types:` (else marking the
           PR ready won't re-fire the workflow). No effect off the pull_request path —
           push/merge_group/dispatch carry no draft flag.
-<<<<<<< local
       base-sha: # unused-input-ok: no caller wires this yet; tested directly in tests/test_decide_reusable_diff.py
-||||||| base
-      base-sha:
-=======
-      base-sha:
-        # unused-input-ok: this repo's own callers (hook-lifecycle.yaml, zizmor.yaml) don't need it yet; kept for a future local caller or a downstream repo referencing this reusable workflow cross-repo.
->>>>>>> template
         type: string
         default: ""
         description: "Explicit diff base for a run whose event payload carries no range (a workflow_dispatch forwarding a pushed before…sha). Takes precedence over the event-derived base; empty derives from the event, and an event with no range fails OPEN (run everything)"
-<<<<<<< local
       head-sha: # unused-input-ok: paired with base-sha above — unused for the same reason, tested the same way
-||||||| base
-      head-sha:
-=======
-      head-sha:
-        # unused-input-ok: this repo's own callers (hook-lifecycle.yaml, zizmor.yaml) don't need it yet; kept for a future local caller or a downstream repo referencing this reusable workflow cross-repo.
->>>>>>> template
         type: string
         default: ""
         description: "Explicit diff head paired with base-sha"
