@@ -16,8 +16,16 @@ source "$(dirname "${BASH_SOURCE[0]}")/lib-ci-retry.sh"
 # cancelling nothing. Match on HEAD_SHA too: a reused branch name can carry runs
 # from an unrelated head we must not touch. retry_stdout in a command
 # substitution rides out a transient list-API blip on this idempotent GET.
-runs_json="$(retry_stdout gh run list --repo "$REPO" --branch "$HEAD_REF" --limit 100 \
+RUN_SWEEP_LIMIT="${RUN_SWEEP_LIMIT:-100}"
+runs_json="$(retry_stdout gh run list --repo "$REPO" --branch "$HEAD_REF" --limit "$RUN_SWEEP_LIMIT" \
   --json databaseId,status,headSha)"
+# gh run list returns a branch's runs newest-first, so a full page means only
+# the RUN_SWEEP_LIMIT newest runs were seen; any in-flight run on HEAD_SHA older
+# than those (own push exceeding the limit, or a later push to the same branch
+# racing the close event) was never listed and so never cancelled.
+if [[ "$(jq 'length' <<<"$runs_json")" -eq "$RUN_SWEEP_LIMIT" ]]; then
+  echo "::warning::run sweep for ${HEAD_REF} listed only the ${RUN_SWEEP_LIMIT} newest runs on the branch; any in-flight run on ${HEAD_SHA:0:8} older than those was not cancelled."
+fi
 
 ids=()
 while IFS= read -r id; do

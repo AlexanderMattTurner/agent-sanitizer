@@ -24,7 +24,16 @@ jobs:
 
       # Version + SHA-256 pin live in .github/tool-versions.sh (one pin, shared
       # with phone-home.yaml); the script sha256-verifies before extracting.
+
+      - name: Restore cached gitleaks binary
+        id: gitleaks-cache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: gitleaks
+          key: gitleaks-${{ runner.os }}-${{ env.GITLEAKS_VERSION }}
+
       - name: Install pinned gitleaks
+        if: steps.gitleaks-cache.outputs.cache-hit != 'true'
         run: bash .github/scripts/install-gitleaks.sh
 
       - name: Run gitleaks
@@ -44,7 +53,6 @@ jobs:
         with:
           sparse-checkout: |
             .github/actions/report-job-result
-            .github/scripts
           persist-credentials: false
 
       - name: Report result

@@ -71,6 +71,18 @@ Before `git push` or `gh pr` commands, `pre-push-check.sh` runs any configured c
 
 Only runs scripts that are actually configured in `package.json`—skips placeholder scripts.
 
+### PostToolUse Hook
+
+After each tool call, `parallelism-nudge.mjs` measures from the session transcript whether the current user-turn is actually using parallel execution—sub-agent delegation (`Task`/`Agent`/`Workflow`) or same-message tool-call batches—and splices in a one-time nudge carrying the concrete counts when a long fully-serial streak is detected. It is the deterministic enforcement arm of CLAUDE.md's parallelism rule.
+
+**Posture: advisory.** It never blocks (`additionalContext` only), fails open on any internal error, and nudges at most once per user-turn segment, so a long turn is not re-narrated on every call.
+
+### UserPromptSubmit Hook
+
+`drop-superseded-ci-events.mjs` drops non-actionable PR webhook turns before the model runs. A session subscribed to a PR is woken for every check run and bot comment; two classes carry nothing to act on—a CI-failure event whose head SHA a newer push already superseded, and a `github-actions[bot]` alert carrying the `[ignore-notif]` opt-out marker. The bot-author check reads only the trusted header preceding the first `<untrusted_external_data>` tag, so a forged author line inside an untrusted comment body cannot drive suppression.
+
+**Posture: fail open.** It is a noise filter, not a defense—any uncertainty passes the turn through untouched.
+
 ### Skills
 
 Skills in `skills/` are reusable workflows that guide Claude through complex tasks. Each skill is a directory whose `SKILL.md` front matter describes what it does and when it activates—list `skills/` for the current set rather than trusting any enumeration here. One naming quirk worth knowing: the `conventional-commits` skill is invoked as `/commit` (the skill's `name` is `commit`).

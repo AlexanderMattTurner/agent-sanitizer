@@ -138,10 +138,10 @@ repos:
       # test/test-runner-partition.test.mjs is what makes this the registered
       # claim for those paths: a suite no runner claims fails there.
       - id: dot-directory-test-suites
-        name: run the *.test.mjs suites under .claude/hooks and .hooks
+        name: run the *.test.mjs suites under .claude/hooks, .hooks and .github/actions
         entry: node --test
         language: system
-        files: ^(\.claude/hooks/|\.hooks/).*\.test\.mjs$
+        files: ^(\.claude/hooks/|\.hooks/|\.github/actions/).*\.test\.mjs$
 
       - id: check-hook-stdin-guarded
         name: require readStdinJson() in a hook's isMain block to sit in a try

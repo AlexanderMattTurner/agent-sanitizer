@@ -60,6 +60,7 @@ jobs:
           setup-python: "true"
 
       # path-gate-ok: .github/scripts/run-hook-lifecycle.sh the decide job watches it through shell-targets, which derives it and everything it reaches; the checker reads paths-regex only
+      # path-gate-ok: .github/scripts/merge-driver-probe.sh run-hook-lifecycle.sh calls it, so shell-targets derives it too
       - name: Run hook lifecycle
         run: bash .github/scripts/run-hook-lifecycle.sh
 
@@ -73,7 +74,6 @@ jobs:
         with:
           sparse-checkout: |
             .github/actions/report-job-result
-            .github/scripts
           persist-credentials: false
 
       - name: Report result

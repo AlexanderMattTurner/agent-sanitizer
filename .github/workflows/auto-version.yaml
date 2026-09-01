@@ -70,6 +70,10 @@ jobs:
           # a recent npm) and point it at the npm registry so provenance works.
           node-version: 24
           registry-url: https://registry.npmjs.org
+          # uv, so .hooks/pre-push can run pre-commit over the `docs: release`
+          # commit this job pushes. Without it the hook refuses that push and the
+          # release publishes to npm with its CHANGELOG section stranded.
+          setup-python: true
 
       - name: Bump version and publish if commits warrant a release
         # `id: release` is load-bearing, not decoration: six steps below gate on

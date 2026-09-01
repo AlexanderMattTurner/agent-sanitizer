@@ -392,6 +392,7 @@ jobs:
           # requirement from the scripts' own `source` lines.
           sparse-checkout: |
             .github/scripts/auto-approve-skipped-pr.sh
+            .github/scripts/lib-post-review-with-retry.sh
           sparse-checkout-cone-mode: false
       - name: Approve so a review-required ruleset doesn't strand a skipped PR
         if: >-

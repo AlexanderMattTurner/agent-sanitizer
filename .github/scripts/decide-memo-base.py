@@ -78,6 +78,10 @@ def gh_api(path: str) -> dict | None:
 
 
 def git_ok(*args: str) -> bool:
+    # cwd-git-ok: explicitly names the process's own working directory (the
+    # repo this script is invoked against, in CI or in a test's scratch repo)
+    # instead of leaving it implicit, so an in-process caller elsewhere can
+    # never silently inherit a stale one.
     return (
         subprocess.run(
             ["git", *args], capture_output=True, text=True, check=False, cwd=REPO_ROOT

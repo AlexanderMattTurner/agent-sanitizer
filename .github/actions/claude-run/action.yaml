@@ -115,7 +115,7 @@ inputs:
       Newline-separated entries naming the files that hold untrusted input for
       this run (each entry is rendered as a bullet, so "label: /path (note)" is
       fine). When non-empty, the canonical untrusted-data guard in
-      .github/prompts/untrusted-data-preamble.md is prepended to the prompt.
+      untrusted-data-preamble.md (beside this manifest) is prepended to the prompt.
       Declare WHICH files are untrusted; never restate the rule in your prompt.
     required: false
     default: ""
@@ -198,8 +198,8 @@ runs:
       # so the guard text and the composer must come from the action's own
       # (base-ref) copy and never from whatever the PR head put at that path.
       run: |
-        PREAMBLE="${GITHUB_ACTION_PATH}/../../prompts/untrusted-data-preamble.md" \
-          bash "${GITHUB_ACTION_PATH}/../../scripts/compose-claude-prompt.sh"
+        PREAMBLE="${GITHUB_ACTION_PATH}/untrusted-data-preamble.md" \
+          bash "${GITHUB_ACTION_PATH}/compose-claude-prompt.sh"
 
     # The metered rung goes FIRST: a caller that wires anthropic_api_key wants
     # its reviews to land reliably and is choosing to pay for that on every
@@ -228,7 +228,7 @@ runs:
       shell: bash
       env:
         EXECUTION_FILE: ${{ steps.a0.outputs.execution_file }}
-      run: bash .github/scripts/claude-run-errored.sh
+      run: bash "${GITHUB_ACTION_PATH}/claude-run-errored.sh"
 
     - name: Ladder state after the metered API-key attempt
       id: s0
@@ -274,7 +274,7 @@ runs:
       shell: bash
       env:
         EXECUTION_FILE: ${{ steps.a1.outputs.execution_file }}
-      run: bash .github/scripts/claude-run-errored.sh
+      run: bash "${GITHUB_ACTION_PATH}/claude-run-errored.sh"
 
     # `still_needs_attempt` is the ladder's cumulative state and the only gate a
     # CREDENTIAL rung reads (the free same-credential retry below adds one further
@@ -342,7 +342,7 @@ runs:
       shell: bash
       env:
         EXECUTION_FILE: ${{ steps.a1r.outputs.execution_file }}
-      run: bash .github/scripts/claude-run-errored.sh
+      run: bash "${GITHUB_ACTION_PATH}/claude-run-errored.sh"
 
     # The free retry joins the same cumulative state the credential rungs use, so a
     # retry that WORKED ends the ladder and a retry that did not leaves the pending
@@ -401,7 +401,7 @@ runs:
       shell: bash
       env:
         EXECUTION_FILE: ${{ steps.a2.outputs.execution_file }}
-      run: bash .github/scripts/claude-run-errored.sh
+      run: bash "${GITHUB_ACTION_PATH}/claude-run-errored.sh"
 
     - name: Ladder state after the second-tier attempt
       id: s2
@@ -451,7 +451,7 @@ runs:
       shell: bash
       env:
         EXECUTION_FILE: ${{ steps.a2b.outputs.execution_file }}
-      run: bash .github/scripts/claude-run-errored.sh
+      run: bash "${GITHUB_ACTION_PATH}/claude-run-errored.sh"
 
     - name: Ladder state after the FALLBACK_2 attempt
       id: s2b
@@ -497,7 +497,7 @@ runs:
       shell: bash
       env:
         EXECUTION_FILE: ${{ steps.a3.outputs.execution_file }}
-      run: bash .github/scripts/claude-run-errored.sh
+      run: bash "${GITHUB_ACTION_PATH}/claude-run-errored.sh"
 
     - name: Ladder state after the third-tier attempt
       id: s3
@@ -543,7 +543,7 @@ runs:
       shell: bash
       env:
         EXECUTION_FILE: ${{ steps.a4.outputs.execution_file }}
-      run: bash .github/scripts/claude-run-errored.sh
+      run: bash "${GITHUB_ACTION_PATH}/claude-run-errored.sh"
 
     - name: Ladder state after the fourth-tier attempt
       id: s4
@@ -589,7 +589,7 @@ runs:
       shell: bash
       env:
         EXECUTION_FILE: ${{ steps.a5.outputs.execution_file }}
-      run: bash .github/scripts/claude-run-errored.sh
+      run: bash "${GITHUB_ACTION_PATH}/claude-run-errored.sh"
 
     - name: Ladder state after the fifth-tier attempt
       id: s5
@@ -635,7 +635,7 @@ runs:
       shell: bash
       env:
         EXECUTION_FILE: ${{ steps.a6.outputs.execution_file }}
-      run: bash .github/scripts/claude-run-errored.sh
+      run: bash "${GITHUB_ACTION_PATH}/claude-run-errored.sh"
 
     - name: Ladder state after the sixth-tier attempt
       id: s6
@@ -693,4 +693,4 @@ runs:
       env:
         CONTEXT: ${{ inputs.gate_context }}
         EXECUTION_FILE: ${{ steps.resolve_log.outputs.execution_file }}
-      run: bash "${GITHUB_ACTION_PATH}/../../scripts/check-claude-execution.sh"
+      run: bash "${GITHUB_ACTION_PATH}/check-claude-execution.sh"
