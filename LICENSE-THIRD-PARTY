@@ -1,3 +1,9 @@
+Third-party code redistributed in this package.
+
+src/vendor/gfm-autolink-literal.mjs
+  Copied from micromark-extension-gfm-autolink-literal@2.1.0, with one
+  function changed (see that file's header). Original licence follows.
+
 (The MIT License)
 
 Copyright (c) 2020 Titus Wormer <tituswormer@gmail.com>

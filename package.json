@@ -224,7 +224,6 @@
   "files": [
     "src/*.mjs",
     "src/vendor/*.mjs",
-    "src/vendor/LICENSE-micromark-extension-gfm-autolink-literal",
     "python/agent_sanitizer/data/invisible-charset.json",
     "python/agent_sanitizer/secrets/data/credential-names.json",
     "python/agent_sanitizer/secrets/data/redaction-floor.json",
@@ -234,6 +233,7 @@
     "bin/sanitize-cli.mjs",
     "types",
     "LICENSE",
+    "LICENSE-THIRD-PARTY",
     "README.md",
     "THREAT-MODEL.md",
     "SECURITY.md"

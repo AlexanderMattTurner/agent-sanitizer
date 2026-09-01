@@ -1,7 +1,7 @@
 /**
  * GFM autolink literals for micromark, vendored from
  * `micromark-extension-gfm-autolink-literal@2.1.0` (MIT, (c) 2020 Titus
- * Wormer). The licence sits beside this file.
+ * Wormer). The licence is in `LICENSE-THIRD-PARTY` at the repository root.
  *
  * WHY A COPY. `previousUnbalanced` below decides whether an autolink literal
  * may start at this position, and upstream answers it by walking back over
