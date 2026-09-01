@@ -8,6 +8,16 @@ adhere to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+## [2.52.0] - 2026-09-01
+
+### Changed
+
+- Hook performance reports now include the agent-sanitizer version for better diagnostics.
+
+### Removed
+
+- Removed mutation shard testing from every PR; now runs on a daily schedule instead for efficiency.
+
 ## [2.51.0] - 2026-08-31
 
 ### Added
