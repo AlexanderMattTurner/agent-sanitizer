@@ -15,7 +15,7 @@
  * bare `{ text, html }` keeps working). Per op:
  *
  *   sanitize           { text, html? }            -> { cleaned, found, warnings, notes, splices? }
- *   sanitizeText       { text, html?, exfilScan? } -> { cleaned, warnings, notes, modified, sgrNote }
+ *   sanitizeText       { text, html?, exfilScan?, flagDigestValues? } -> { cleaned, warnings, notes, modified, sgrNote }
  *   classifyPrompt     { text }                    -> { action, reason? }
  *   scanInstructionFiles { globs, cwd? }           -> { findings: [{ file, findings }] }
  *   cleanFile          { path }                    -> { changed }
@@ -135,6 +135,7 @@ export const OPS = {
       {
         html: Boolean(req.html),
         exfilScan: Boolean(req.exfilScan),
+        flagDigestValues: Boolean(req.flagDigestValues),
       },
     );
     return { cleaned, warnings, notes, modified, sgrNote };

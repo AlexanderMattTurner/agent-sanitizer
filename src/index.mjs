@@ -102,14 +102,23 @@ export {
  * legitimate markup — matching the separate flags `sanitizeText` takes for the
  * tool-output pipeline, which needs Layer 3's detection without Layer 2's
  * splice.
+ *
+ * `flagDigestValues` widens Layer 3 only: it drops the digest exemption, so an
+ * exact-digest-length hex value under a generic parameter name is reported as
+ * payload rather than read as a cache-buster or an ETag. Off by default, and
+ * like `exfilScan` it can only ADD detection.
  * @param {string} text
- * @param {{ html?: boolean, exfilScan?: boolean } | null} [options]
+ * @param {{ html?: boolean, exfilScan?: boolean, flagDigestValues?: boolean } | null} [options]
  * @returns {Promise<{ cleaned: string, found: string[], warnings: string[], notes: string[], splices?: Array<{ placeholder: string, original: string }> }>}
  */
 export async function sanitize(text, options) {
   if (typeof text !== "string")
     throw new TypeError("sanitize(text, options): text must be a string");
-  const { html = false, exfilScan = false } = options ?? {};
+  const {
+    html = false,
+    exfilScan = false,
+    flagDigestValues = false,
+  } = options ?? {};
   const { cleaned, found, warnings, notes, splices } = await sanitizeText(
     text,
     {
@@ -118,6 +127,7 @@ export async function sanitize(text, options) {
       // an opt-OUT would make `{ html: true, exfilScan: false }` splice Layer 2
       // while silently dropping Layer 3's report — a fail-open the docs deny.
       exfilScan: exfilScan || html,
+      flagDigestValues,
     },
   );
   return {

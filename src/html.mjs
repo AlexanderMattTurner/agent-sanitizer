@@ -2720,9 +2720,13 @@ function rawParams(qs) {
  * @param {string} name    lowercased parameter name, for the allowlist gate
  * @param {string} value   RAW (un-decoded) value
  * @param {string} rawName RAW (case-preserved, un-decoded) name
+ * @param {boolean} flagDigestValues  drop the digest exemption entirely. The
+ *   name is the weak half of the test above, because the caller writing the
+ *   URL picks it: a payload padded to exactly one digest length otherwise
+ *   rides under any generic name.
  * @returns {string | null}
  */
-function paramExfilReason(name, value, rawName) {
+function paramExfilReason(name, value, rawName, flagDigestValues) {
   if (BENIGN_BLOB_PARAM_RE.test(name)) return null;
   const publicKeyId =
     PUBLIC_KEY_ID_PARAM_RE.test(name) && value.length < BLOB_VALUE_MIN_LEN;
@@ -2730,9 +2734,9 @@ function paramExfilReason(name, value, rawName) {
   // — a cache-buster `?v=`, an ETag, imgix's `?s=`, a commit id. Under a name
   // that already says credential the same 64 hex characters read as 32 bytes of
   // payload, so the exemption stops there.
-  const digestIsBenign = !(
-    KEYWORD_PARAM_NAME_RE.test(name) || matchesSecretHint(name)
-  );
+  const digestIsBenign =
+    !flagDigestValues &&
+    !(KEYWORD_PARAM_NAME_RE.test(name) || matchesSecretHint(name));
   for (const candidate of [rawName, value]) {
     if (!candidate) continue;
     // A leaked credential is an OPAQUE, separator-free token. Gate the
@@ -2784,7 +2788,10 @@ function rawUrlKeywordExfil(url) {
   for (const segment of url.slice(qIdx + 1).split("#")) {
     for (const [name, value, rawName] of rawParams(segment)) {
       if (!KEYWORD_PARAM_NAME_RE.test(name)) continue;
-      const reason = paramExfilReason(name, value, rawName);
+      // Only credential-named params reach here, and the digest exemption never
+      // applies to those, so there is no exemption for `flagDigestValues` to
+      // lift on this path.
+      const reason = paramExfilReason(name, value, rawName, false);
       if (reason) return reason;
     }
   }
@@ -2826,19 +2833,18 @@ function allParamsBenign(parsed) {
 /**
  * Walk the query and fragment parameters of a parsed URL for an exfil reason.
  * @param {URL} parsed
+ * @param {boolean} flagDigestValues
  * @returns {string | null}
  */
-function checkUrlParams(parsed) {
-  for (const [name, value, rawName] of rawParams(parsed.search.slice(1))) {
-    const reason = paramExfilReason(name, value, rawName);
-    if (reason) return reason;
-  }
-  // The fragment carries the same `key=value` channel (`#token=…`); a bare
-  // anchor (`#section-2`) yields one empty-value param that trips nothing.
-  for (const [name, value, rawName] of rawParams(parsed.hash.slice(1))) {
-    const reason = paramExfilReason(name, value, rawName);
-    if (reason) return reason;
-  }
+function checkUrlParams(parsed, flagDigestValues) {
+  // Query and fragment are one channel: `#token=…` carries what `?token=…` does,
+  // and a bare anchor (`#section-2`) yields one empty-value param that trips
+  // nothing.
+  for (const segment of [parsed.search.slice(1), parsed.hash.slice(1)])
+    for (const [name, value, rawName] of rawParams(segment)) {
+      const reason = paramExfilReason(name, value, rawName, flagDigestValues);
+      if (reason) return reason;
+    }
   return null;
 }
 
@@ -2861,10 +2867,18 @@ function checkUrlPath(parsed) {
 }
 
 /**
+ * `flagDigestValues` drops the digest exemption: an exact-digest-length hex
+ * value under a generic parameter name is reported as payload rather than read
+ * as a fingerprint. Off by default because the exemption is what keeps a
+ * cache-buster, an ETag and a commit id quiet; on for a caller whose cost of a
+ * missed 16-to-64-byte channel beats its cost of those false positives. Like
+ * every option this module takes, it can only ADD detection.
  * @param {string} url
+ * @param {{ flagDigestValues?: boolean }} [options]
  * @returns {string | null}
  */
-export function checkExfilUrl(url) {
+export function checkExfilUrl(url, options = {}) {
+  const { flagDigestValues = false } = options;
   // A browser strips tab/newline/CR ANYWHERE in a URL before resolving its
   // scheme, so `java\tscript:alert(1)` navigates as `javascript:`. Strip them
   // for the scheme tests (the payload/length checks below keep the raw string).
@@ -2913,7 +2927,7 @@ export function checkExfilUrl(url) {
     return "unusually long query string";
   if (parsed.hash.length > LONG_QUERY_THRESHOLD)
     return "unusually long fragment";
-  return checkUrlParams(parsed) || checkUrlPath(parsed);
+  return checkUrlParams(parsed, flagDigestValues) || checkUrlPath(parsed);
 }
 
 /**
@@ -3177,9 +3191,10 @@ function collectUrls(text) {
  * link somebody has to follow. Both are reported; the caller uses it to decide
  * how loudly (see the exfil tier in ./output.mjs).
  * @param {string} text
+ * @param {{ flagDigestValues?: boolean }} [options] see {@link checkExfilUrl}
  * @returns {Array<{ isImage: boolean, autoFetched: boolean, reason: string, target: string }> | null}
  */
-export function detectExfil(text) {
+export function detectExfil(text, options = {}) {
   if (!needsUrlScan(text)) return null;
 
   /** @type {Array<{ isImage: boolean, autoFetched: boolean, reason: string, target: string }>} */
@@ -3188,7 +3203,7 @@ export function detectExfil(text) {
   try {
     for (const { url, isImage, autoFetched, context } of collectUrls(text)) {
       const reason =
-        checkExfilUrl(url) ||
+        checkExfilUrl(url, options) ||
         (context !== "resource" && isOffOrigin(url)
           ? OFF_ORIGIN_REASON[context]
           : null);
