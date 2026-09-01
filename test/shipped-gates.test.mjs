@@ -41,6 +41,7 @@ import {
   srcScope,
   TOOLING_SCOPE,
   toolingSources,
+  vendorScope,
 } from "../scripts/shipped-sources.mjs";
 
 const repoRoot = execFileSync("git", ["rev-parse", "--show-toplevel"], {
@@ -206,16 +207,28 @@ describe("coverage gate covers the shipped set", () => {
   it("partitions every shipped file into exactly one scope", () => {
     const perScope = SCOPES.map((scope) => scope.files(repoRoot));
     for (const files of perScope) assert.ok(files.length > 0);
-    const union = perScope.flat();
+    // Vendored third-party copies carry no coverage floor — a parity suite
+    // against the upstream package stands in for one (see VENDOR_SCOPE). They
+    // are still SHIPPED, so they belong to the partition; leaving them out of
+    // it entirely is how a file gets gated by nothing at all.
+    const vendored = vendorScope(repoRoot);
+    assert.ok(
+      vendored.length > 0,
+      "no file resolves to the vendor scope — delete the carve-out rather " +
+        "than leaving an exemption nothing uses",
+    );
+    const union = [...perScope.flat(), ...vendored];
     assert.equal(
       new Set(union).size,
       union.length,
-      "coverage scopes must not overlap (a file would be gated twice)",
+      "scopes must not overlap (a file would be gated twice, or exempted " +
+        "from a floor it is also held to)",
     );
     assert.deepEqual(
       [...union].sort(),
       shipped,
-      "coverage scopes must together cover exactly the shipped set",
+      "the coverage scopes plus the vendor scope must together cover exactly " +
+        "the shipped set",
     );
   });
 

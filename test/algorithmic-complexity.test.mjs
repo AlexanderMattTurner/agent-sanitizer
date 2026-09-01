@@ -19,8 +19,8 @@
  * rather than a millisecond count, so machine speed and the coverage
  * instrumentation scale both sides (see `test/helpers/cpu-timing.mjs`).
  *
- * Every shape here reads 5-11x on the implementations that ship, and three read
- * 64.0x, 61.1x and 27.1x against the ones they were written for;
+ * Every shape here reads 5-11x on the implementations that ship, and four read
+ * 70.4x, 64.0x, 61.1x and 27.1x against the ones they were written for;
  * {@link GROWTH_LIMIT} sits between those two populations. `sanitizeHtml` is the
  * exception: the `[^>]*$` tail reads 10.2x against 8.8x, because the document
  * parse costs as much again as the rescan at BOTH sizes and pulls the blended
@@ -30,7 +30,12 @@
 import { describe, it, before } from "node:test";
 import assert from "node:assert/strict";
 
-import { checkExfilUrl, isHiddenStyle, sanitizeHtml } from "../src/html.mjs";
+import {
+  checkExfilUrl,
+  detectExfil,
+  isHiddenStyle,
+  sanitizeHtml,
+} from "../src/html.mjs";
 import { foldConfusables } from "../src/confusables.mjs";
 import {
   MUTATION_RUN,
@@ -133,6 +138,31 @@ function overlappingFolds(n) {
   return { text, findings };
 }
 
+/** A link whose query names a credential — what the marker below reads back. */
+const EXFIL_LINK = "[x](https://e.com/?token=${SECRET})";
+
+/**
+ * Prose behind ONE `[` that never closes, ending in a markdown link Layer 3
+ * reports.
+ *
+ * The unmatched bracket is the whole case. GFM autolink literals may not start
+ * inside an unclosed label, so micromark asks "is there an unbalanced label
+ * before here" at every word character — and that question was answered by
+ * walking back over every event the document had produced so far, because the
+ * walk only memoized the "no" answer. One stray `[` therefore made the answer
+ * "yes" forever and turned an ordinary markdown parse quadratic. A JSON array
+ * is the everyday shape of it: `[{"a":1},…]` opens a label whose `]` is the
+ * last byte of the document, which is how a 59 KB `list_pull_requests` response
+ * cost 3.4s (#386).
+ *
+ * The prose carries no URL of its own so the URL detectors stay O(1) and the
+ * parse is what the ratio reads.
+ * @param {number} n
+ * @returns {string}
+ */
+const unclosedLabelProse = (n) =>
+  `[ ${grow("lorem ipsum dolor sit amet consectetur ", n)}${EXFIL_LINK}`;
+
 /**
  * The non-vacuity control for the harness itself: the very pattern this gate was
  * written after, kept here as a specimen. Unanchored with two `.*` lookaheads,
@@ -196,6 +226,16 @@ const CASES = {
       const { text, findings } = overlappingFolds(64);
       return foldConfusables(text, findings) === "b".repeat(32);
     },
+  },
+  "detectExfil/unclosed-label-prose": {
+    input: (size, attempt) => unclosedLabelProse(size - attempt),
+    run: (text) => detectExfil(text),
+    // The link at the end is reported, which only happens once the markdown
+    // parse has read the whole document. A run that answered null would be
+    // timing a gate that declined, not the parse this case is about.
+    marker: () =>
+      detectExfil(unclosedLabelProse(LARGE))?.[0]?.reason ===
+      "suspicious query parameter",
   },
   "control/quadratic-specimen": {
     input: (size, attempt) => grow("abcdefg-", size - attempt),
