@@ -22995,7 +22995,7 @@ var init_mdast_util_gfm = __esm({
   }
 });
 
-// node_modules/.pnpm/micromark-extension-gfm-autolink-literal@2.1.0_patch_hash=21b7d21f385c7dab633c5d46b7d5e_25bf108ac66f00d903e6ccb52e0d6272/node_modules/micromark-extension-gfm-autolink-literal/lib/syntax.js
+// node_modules/.pnpm/micromark-extension-gfm-autolink-literal@2.1.0_patch_hash=271504847ffd11c4454e614278690_a0f879fe753716897fd94153128081ef/node_modules/micromark-extension-gfm-autolink-literal/lib/syntax.js
 function gfmAutolinkLiteral() {
   return {
     text: text4
@@ -23269,35 +23269,36 @@ function gfmAtext(code4) {
 function previousUnbalanced(events) {
   let index2 = events.length;
   let result = false;
-  let unbalanced;
   while (index2--) {
     const token = events[index2][1];
     if ((token.type === "labelLink" || token.type === "labelImage") && !token._balanced) {
       result = true;
-      unbalanced = token;
       break;
     }
     if (token._gfmAutolinkLiteralWalkedInto) {
       result = false;
       break;
     }
-    const before = token._gfmAutolinkLiteralUnbalancedBefore;
-    if (before && !before._balanced) {
-      result = true;
-      unbalanced = before;
-      break;
+    const skip = token._gfmAutolinkLiteralSkipTo;
+    if (skip !== void 0 && skip.index < index2 && events[skip.index] !== void 0 && events[skip.index][1] === skip.token) {
+      index2 = skip.index + 1;
     }
   }
   if (events.length > 0) {
-    if (result)
-      events[events.length - 1][1]._gfmAutolinkLiteralUnbalancedBefore = unbalanced;
-    else events[events.length - 1][1]._gfmAutolinkLiteralWalkedInto = true;
+    if (!result) {
+      events[events.length - 1][1]._gfmAutolinkLiteralWalkedInto = true;
+    } else if (index2 >= 0) {
+      events[events.length - 1][1]._gfmAutolinkLiteralSkipTo = {
+        index: index2,
+        token: events[index2][1]
+      };
+    }
   }
   return result;
 }
 var wwwPrefix, domain, path, trail, emailDomainDotTrail, wwwAutolink, protocolAutolink, emailAutolink, text4, code3;
 var init_syntax = __esm({
-  "node_modules/.pnpm/micromark-extension-gfm-autolink-literal@2.1.0_patch_hash=21b7d21f385c7dab633c5d46b7d5e_25bf108ac66f00d903e6ccb52e0d6272/node_modules/micromark-extension-gfm-autolink-literal/lib/syntax.js"() {
+  "node_modules/.pnpm/micromark-extension-gfm-autolink-literal@2.1.0_patch_hash=271504847ffd11c4454e614278690_a0f879fe753716897fd94153128081ef/node_modules/micromark-extension-gfm-autolink-literal/lib/syntax.js"() {
     init_micromark_util_character();
     wwwPrefix = {
       tokenize: tokenizeWwwPrefix,
@@ -23353,9 +23354,9 @@ var init_syntax = __esm({
   }
 });
 
-// node_modules/.pnpm/micromark-extension-gfm-autolink-literal@2.1.0_patch_hash=21b7d21f385c7dab633c5d46b7d5e_25bf108ac66f00d903e6ccb52e0d6272/node_modules/micromark-extension-gfm-autolink-literal/index.js
+// node_modules/.pnpm/micromark-extension-gfm-autolink-literal@2.1.0_patch_hash=271504847ffd11c4454e614278690_a0f879fe753716897fd94153128081ef/node_modules/micromark-extension-gfm-autolink-literal/index.js
 var init_micromark_extension_gfm_autolink_literal = __esm({
-  "node_modules/.pnpm/micromark-extension-gfm-autolink-literal@2.1.0_patch_hash=21b7d21f385c7dab633c5d46b7d5e_25bf108ac66f00d903e6ccb52e0d6272/node_modules/micromark-extension-gfm-autolink-literal/index.js"() {
+  "node_modules/.pnpm/micromark-extension-gfm-autolink-literal@2.1.0_patch_hash=271504847ffd11c4454e614278690_a0f879fe753716897fd94153128081ef/node_modules/micromark-extension-gfm-autolink-literal/index.js"() {
     init_syntax();
   }
 });

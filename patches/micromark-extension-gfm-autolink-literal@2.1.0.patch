@@ -1,38 +1,28 @@
 diff --git a/dev/lib/syntax.js b/dev/lib/syntax.js
-index 904e27200ae4980183beda525d33feef70c2e7f7..1a34a57f681277239b454374fdca3590bfc036ba 100644
+index 904e27200ae4980183beda525d33feef70c2e7f7..9c56acf3d151afff91b959f2c96e07d097d25925 100644
 --- a/dev/lib/syntax.js
 +++ b/dev/lib/syntax.js
-@@ -953,6 +953,8 @@ function gfmAtext(code) {
- function previousUnbalanced(events) {
-   let index = events.length
-   let result = false
-+  /** @type {any} */
-+  let unbalanced
- 
-   while (index--) {
-     const token = events[index][1]
-@@ -962,6 +964,7 @@ function previousUnbalanced(events) {
-       !token._balanced
-     ) {
-       result = true
-+      unbalanced = token
-       break
-     }
- 
-@@ -971,12 +974,26 @@ function previousUnbalanced(events) {
+@@ -971,12 +971,38 @@ function previousUnbalanced(events) {
        result = false
        break
      }
 +
-+    // Likewise for a token marked as HAVING an unbalanced bracket before it.
-+    // The mark names the token it found, and `_balanced` only ever goes from
-+    // false to true, so the claim is re-checked rather than trusted: a token
-+    // that has since balanced falls through and the walk continues.
-+    const before = token._gfmAutolinkLiteralUnbalancedBefore
-+    if (before && !before._balanced) {
-+      result = true
-+      unbalanced = before
-+      break
++    // A run an earlier walk crossed without finding either of the above. Jump
++    // over it instead of re-reading it, so a document whose answer is “yes”
++    // stops costing one full walk per candidate character. The jump is only
++    // taken while the run’s far end still sits at the index it was recorded
++    // at and still holds the same token: a resolver that splices events can
++    // move a token out of the array, and the identity check is what notices.
++    // `skip.index < index` keeps the walk moving backwards whatever the array
++    // has done since.
++    const skip = token._gfmAutolinkLiteralSkipTo
++    if (
++      skip !== undefined &&
++      skip.index < index &&
++      events[skip.index] !== undefined &&
++      events[skip.index][1] === skip.token
++    ) {
++      index = skip.index + 1
 +    }
    }
  
@@ -41,47 +31,40 @@ index 904e27200ae4980183beda525d33feef70c2e7f7..1a34a57f681277239b454374fdca3590
 -    // anything.
 -    events[events.length - 1][1]._gfmAutolinkLiteralWalkedInto = true
 +  if (events.length > 0) {
-+    // Mark the last token with what the walk found, so the next call answers
-+    // from the mark instead of re-walking every event before it.
-+    if (result)
-+      events[events.length - 1][1]._gfmAutolinkLiteralUnbalancedBefore =
-+        unbalanced
-+    else events[events.length - 1][1]._gfmAutolinkLiteralWalkedInto = true
++    if (!result) {
++      // Mark the last token as “walked into” w/o finding
++      // anything.
++      events[events.length - 1][1]._gfmAutolinkLiteralWalkedInto = true
++    } else if (index >= 0) {
++      // Record where the walk stopped, so the next one resumes there.
++      events[events.length - 1][1]._gfmAutolinkLiteralSkipTo = {
++        index: index,
++        token: events[index][1]
++      }
++    }
    }
  
    return result
 diff --git a/lib/syntax.js b/lib/syntax.js
-index dffbaf15146b34d3b3f634286629ccb148866f4c..d7305af80378fadae039293ca307624018212338 100644
+index dffbaf15146b34d3b3f634286629ccb148866f4c..a21ffca6d216addd6ad6c70ec1c984cf042a295a 100644
 --- a/lib/syntax.js
 +++ b/lib/syntax.js
-@@ -831,10 +831,13 @@ function gfmAtext(code) {
- function previousUnbalanced(events) {
-   let index = events.length;
-   let result = false;
-+  /** @type {any} */
-+  let unbalanced;
-   while (index--) {
-     const token = events[index][1];
-     if ((token.type === 'labelLink' || token.type === 'labelImage') && !token._balanced) {
-       result = true;
-+      unbalanced = token;
-       break;
-     }
- 
-@@ -844,11 +847,25 @@ function previousUnbalanced(events) {
+@@ -844,11 +844,32 @@ function previousUnbalanced(events) {
        result = false;
        break;
      }
 +
-+    // Likewise for a token marked as HAVING an unbalanced bracket before it.
-+    // The mark names the token it found, and `_balanced` only ever goes from
-+    // false to true, so the claim is re-checked rather than trusted: a token
-+    // that has since balanced falls through and the walk continues.
-+    const before = token._gfmAutolinkLiteralUnbalancedBefore;
-+    if (before && !before._balanced) {
-+      result = true;
-+      unbalanced = before;
-+      break;
++    // A run an earlier walk crossed without finding either of the above. Jump
++    // over it instead of re-reading it, so a document whose answer is “yes”
++    // stops costing one full walk per candidate character. The jump is only
++    // taken while the run’s far end still sits at the index it was recorded
++    // at and still holds the same token: a resolver that splices events can
++    // move a token out of the array, and the identity check is what notices.
++    // `skip.index < index` keeps the walk moving backwards whatever the array
++    // has done since.
++    const skip = token._gfmAutolinkLiteralSkipTo;
++    if (skip !== undefined && skip.index < index && events[skip.index] !== undefined && events[skip.index][1] === skip.token) {
++      index = skip.index + 1;
 +    }
    }
 -  if (events.length > 0 && !result) {
@@ -89,12 +72,17 @@ index dffbaf15146b34d3b3f634286629ccb148866f4c..d7305af80378fadae039293ca3076240
 -    // anything.
 -    events[events.length - 1][1]._gfmAutolinkLiteralWalkedInto = true;
 +  if (events.length > 0) {
-+    // Mark the last token with what the walk found, so the next call answers
-+    // from the mark instead of re-walking every event before it.
-+    if (result)
-+      events[events.length - 1][1]._gfmAutolinkLiteralUnbalancedBefore =
-+        unbalanced;
-+    else events[events.length - 1][1]._gfmAutolinkLiteralWalkedInto = true;
++    if (!result) {
++      // Mark the last token as “walked into” w/o finding
++      // anything.
++      events[events.length - 1][1]._gfmAutolinkLiteralWalkedInto = true;
++    } else if (index >= 0) {
++      // Record where the walk stopped, so the next one resumes there.
++      events[events.length - 1][1]._gfmAutolinkLiteralSkipTo = {
++        index: index,
++        token: events[index][1]
++      };
++    }
    }
    return result;
  }
