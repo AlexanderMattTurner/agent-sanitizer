@@ -8,6 +8,14 @@ adhere to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+## [2.54.0] - 2026-09-01
+
+### Fixed
+
+- **Autolink fix:** The GFM autolink-literal extension is now vendored rather than patched, ensuring a more robust solution for autolink detection.
+- **Autolink memo validation:** Fixed validation of the autolink memo to check against the events array instead of relying on a flag alone.
+- **Performance:** Improved performance of micromark's autolink-literal bracket walk by eliminating quadratic behavior.
+
 ## [2.53.0] - 2026-09-01
 
 ### Added

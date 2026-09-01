@@ -48,7 +48,7 @@ import cssGenerate from "css-tree/generator";
 import { ident as cssIdent } from "css-tree/utils";
 import { unified } from "unified";
 import remarkParse from "remark-parse";
-import remarkGfm from "remark-gfm";
+import remarkGfm from "./gfm.mjs";
 import { parseHtmlFragment } from "./html-tree-adapter.mjs";
 import { SKIP, EXIT } from "unist-util-visit";
 import {

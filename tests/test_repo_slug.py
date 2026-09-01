@@ -63,10 +63,18 @@ EXTERNAL_REPOS = {
     "alexander-turner/claude-automation-template": "the upstream template this repo syncs from",
     "AlexanderMattTurner/ci-truth-serum": "an upstream CI tool this repo consumes",
     "astral-sh/ruff-pre-commit": "pinned pre-commit hook source",
+    "github/cmark-gfm": (
+        "GitHub's own GFM implementation, cited by line number in the vendored "
+        "autolink extension's comments (src/vendor/) as the behaviour it matches"
+    ),
     "gitleaks/gitleaks": "pinned pre-commit hook source",
     "pre-commit/pre-commit-hooks": "pinned pre-commit hook source",
     "scop/pre-commit-shfmt": "pinned pre-commit hook source",
     "shellcheck-py/shellcheck-py": "pinned pre-commit hook source",
+    "wooorm/markdown-rs": (
+        "the Rust port of micromark, cited the same way in the vendored "
+        "autolink extension's comments"
+    ),
     "Yelp/detect-secrets": "the secret-detection engine the redaction layer runs",
 }
 
