@@ -2779,17 +2779,19 @@ function paramExfilReason(name, value, rawName, flagDigestValues) {
  * blob in an unparseable-host URL (which the post-parse walk never reaches) is
  * still caught, preserving the coverage the old name-only arm had.
  * @param {string} url
- * @param {boolean} flagDigestValues
  * @returns {string | null}
  */
-function rawUrlKeywordExfil(url, flagDigestValues) {
+function rawUrlKeywordExfil(url) {
   // Strip the scheme+authority+path prefix: everything up to the first `?`/`#`.
   const qIdx = url.search(/[?#]/);
   if (qIdx === -1) return null;
   for (const segment of url.slice(qIdx + 1).split("#")) {
     for (const [name, value, rawName] of rawParams(segment)) {
       if (!KEYWORD_PARAM_NAME_RE.test(name)) continue;
-      const reason = paramExfilReason(name, value, rawName, flagDigestValues);
+      // Only credential-named params reach here, and the digest exemption never
+      // applies to those, so there is no exemption for `flagDigestValues` to
+      // lift on this path.
+      const reason = paramExfilReason(name, value, rawName, false);
       if (reason) return reason;
     }
   }
@@ -2902,7 +2904,7 @@ export function checkExfilUrl(url, options = {}) {
     return "suspicious query parameter";
   // Value-gated keyword params, scanned on the RAW string so a blob in an
   // unparseable-host URL is caught before `new URL()` would throw.
-  const keywordReason = rawUrlKeywordExfil(url, flagDigestValues);
+  const keywordReason = rawUrlKeywordExfil(url);
   if (keywordReason) return keywordReason;
   // Userinfo and an oversized fragment are exfil channels the param walk misses:
   // credentials smuggled as `user:secret@host`, or a payload tucked in `#<blob>`.

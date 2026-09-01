@@ -45886,13 +45886,13 @@ function paramExfilReason(name50, value, rawName, flagDigestValues) {
     return "credential-shaped token in URL parameter";
   return null;
 }
-function rawUrlKeywordExfil(url, flagDigestValues) {
+function rawUrlKeywordExfil(url) {
   const qIdx = url.search(/[?#]/);
   if (qIdx === -1) return null;
   for (const segment of url.slice(qIdx + 1).split("#")) {
     for (const [name50, value, rawName] of rawParams(segment)) {
       if (!KEYWORD_PARAM_NAME_RE.test(name50)) continue;
-      const reason = paramExfilReason(name50, value, rawName, flagDigestValues);
+      const reason = paramExfilReason(name50, value, rawName, false);
       if (reason) return reason;
     }
   }
@@ -45941,7 +45941,7 @@ function checkExfilUrl(url, options = {}) {
   const queryAndFragment = qfIdx === -1 ? "" : url.slice(qfIdx);
   if (queryAndFragment && EXFIL_INDICATORS.some((pattern) => pattern.test(queryAndFragment)))
     return "suspicious query parameter";
-  const keywordReason = rawUrlKeywordExfil(url, flagDigestValues);
+  const keywordReason = rawUrlKeywordExfil(url);
   if (keywordReason) return keywordReason;
   let parsed;
   try {
