@@ -4,8 +4,8 @@
 # verified against this file before it is installed.
 # repository=AlexanderMattTurner/agent-sanitizer
 # bun=1.3.11
-# bundle=987f3b0fd8659e91723f5178d8d28cf0a24c1a96aaea2620f49bec3beeb75156
-d6477090f2bc1b93e8642d0dd43132732e05666286997c72f14597f7eb1f4206  agent-sanitizer-hooks-darwin-arm64
-5d27de14e4e5c74adcb890d2ae01dd55c3c39073d6e100836bbc4d878351b3a8  agent-sanitizer-hooks-darwin-x64
-00262366b5c10a31b44d6a118d94cc18261696d2550540443a39e6cdac4e766f  agent-sanitizer-hooks-linux-arm64
-a7c81f6e40ff6f3e6ddc7008e811f37693487b7ccbd8a5ae3ed39f775ec84a40  agent-sanitizer-hooks-linux-x64
+# bundle=cd8a3c329ecc7947ea87c5ab297fad9b64fec264fed9c78d273ca83df202c0ea
+c5b02e236e06f88ae596827b93566fe8da40ace14533bc89f41fcf099cfcbab0  agent-sanitizer-hooks-darwin-arm64
+7669b6dd6e0a79e626fa00a894860d073725865d1f6d4942df0d5fac1ec92d30  agent-sanitizer-hooks-darwin-x64
+8744d4522da3e4772920ada5328c20c33840ef04a38324174cbbacabdb2e7404  agent-sanitizer-hooks-linux-arm64
+25c9ae2ffe896ae8322debb5f1b3114d1fb8eca8ab1344b2c966751e5bd78f1e  agent-sanitizer-hooks-linux-x64
