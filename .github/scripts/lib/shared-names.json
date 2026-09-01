@@ -4,20 +4,7 @@
     "merge_conflict": "merge-conflict",
     "auto_resolve_blocked": "auto-resolve-blocked"
   },
-<<<<<<< local
-  "commit_status_marks": {
-    "auto_resolve_attempt": "auto-resolve/attempted",
-    "released_suffix": "-released"
-  },
   "template_sync": {
     "conflict_marker_re": "^(<{7}|\\|{7}|={7}|>{7})([ \\t]|$)"
-||||||| base
-  "commit_status_marks": {
-    "auto_resolve_attempt": "auto-resolve/attempted",
-    "released_suffix": "-released"
-=======
-  "template_sync": {
-    "conflict_marker_re": "^(<{7}|\\|{7}|={7}|>{7})([ \\t]|$)"
->>>>>>> template
   }
 }
