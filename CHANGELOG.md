@@ -8,6 +8,26 @@ adhere to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+## [2.54.1] - 2026-09-01
+
+### Added
+- New `template-sync-marker-gate.sh` script to validate and handle template sync conflicts.
+- New `lib-post-review-with-retry.sh` library for managing PR review retries.
+- New `merge-driver-probe.sh` script and tests to detect and probe merge driver capabilities.
+- Additional Claude rules and documentation for prompt authoring and shell styling.
+- Expanded test coverage with new test files for merge conflict handling and merge driver probing.
+
+### Changed
+- Updated GitHub Actions setup and Claude run workflow components for improved reliability.
+- Enhanced merge conflict handling libraries with expanded conflict marker resolution.
+- Reorganized GitHub Actions scripts structure with improved modularity.
+
+### Fixed
+- Fixed dangling workflow references in CI configuration.
+- Resolved template synchronization conflicts and marker validation.
+- Fixed pre-push hook execution in template-sync workflow.
+- Improved sparse-checkout handling for retry library dependencies.
+
 ## [2.54.0] - 2026-09-01
 
 ### Fixed
