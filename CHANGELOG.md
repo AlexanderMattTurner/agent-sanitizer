@@ -8,6 +8,15 @@ adhere to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+## [2.53.0] - 2026-09-01
+
+### Added
+- `flagDigestValues` option to re-report digest-shaped URL values in HTML sanitization.
+- `flag_digest_values` parameter in Python `sanitize_text` function.
+
+### Changed
+- Refactored `rawUrlKeywordExfil` to remove the `flagDigestValues` argument.
+
 ## [2.52.0] - 2026-09-01
 
 ### Changed
