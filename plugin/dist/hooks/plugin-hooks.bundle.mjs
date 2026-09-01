@@ -45868,10 +45868,10 @@ function rawParams(qs) {
   }
   return pairs;
 }
-function paramExfilReason(name50, value, rawName) {
+function paramExfilReason(name50, value, rawName, flagDigestValues) {
   if (BENIGN_BLOB_PARAM_RE.test(name50)) return null;
   const publicKeyId = PUBLIC_KEY_ID_PARAM_RE.test(name50) && value.length < BLOB_VALUE_MIN_LEN;
-  const digestIsBenign = !(KEYWORD_PARAM_NAME_RE.test(name50) || matchesSecretHint(name50));
+  const digestIsBenign = !flagDigestValues && !(KEYWORD_PARAM_NAME_RE.test(name50) || matchesSecretHint(name50));
   for (const candidate of [rawName, value]) {
     if (!candidate) continue;
     const opaqueRuns = publicKeyId ? null : candidate.match(OPAQUE_TOKEN_RE);
@@ -45886,13 +45886,13 @@ function paramExfilReason(name50, value, rawName) {
     return "credential-shaped token in URL parameter";
   return null;
 }
-function rawUrlKeywordExfil(url) {
+function rawUrlKeywordExfil(url, flagDigestValues) {
   const qIdx = url.search(/[?#]/);
   if (qIdx === -1) return null;
   for (const segment of url.slice(qIdx + 1).split("#")) {
     for (const [name50, value, rawName] of rawParams(segment)) {
       if (!KEYWORD_PARAM_NAME_RE.test(name50)) continue;
-      const reason = paramExfilReason(name50, value, rawName);
+      const reason = paramExfilReason(name50, value, rawName, flagDigestValues);
       if (reason) return reason;
     }
   }
@@ -45912,15 +45912,12 @@ function allParamsBenign(parsed) {
   }
   return true;
 }
-function checkUrlParams(parsed) {
-  for (const [name50, value, rawName] of rawParams(parsed.search.slice(1))) {
-    const reason = paramExfilReason(name50, value, rawName);
-    if (reason) return reason;
-  }
-  for (const [name50, value, rawName] of rawParams(parsed.hash.slice(1))) {
-    const reason = paramExfilReason(name50, value, rawName);
-    if (reason) return reason;
-  }
+function checkUrlParams(parsed, flagDigestValues) {
+  for (const segment of [parsed.search.slice(1), parsed.hash.slice(1)])
+    for (const [name50, value, rawName] of rawParams(segment)) {
+      const reason = paramExfilReason(name50, value, rawName, flagDigestValues);
+      if (reason) return reason;
+    }
   return null;
 }
 function checkUrlPath(parsed) {
@@ -45930,7 +45927,8 @@ function checkUrlPath(parsed) {
   }
   return null;
 }
-function checkExfilUrl(url) {
+function checkExfilUrl(url, options = {}) {
+  const { flagDigestValues = false } = options;
   const schemeUrl = url.replace(/[\t\n\r]/g, "");
   if (/^\s*data:/i.test(schemeUrl)) {
     if (DATA_URI_ACTIVE_RE.test(schemeUrl)) return "active-content data: URI";
@@ -45943,7 +45941,7 @@ function checkExfilUrl(url) {
   const queryAndFragment = qfIdx === -1 ? "" : url.slice(qfIdx);
   if (queryAndFragment && EXFIL_INDICATORS.some((pattern) => pattern.test(queryAndFragment)))
     return "suspicious query parameter";
-  const keywordReason = rawUrlKeywordExfil(url);
+  const keywordReason = rawUrlKeywordExfil(url, flagDigestValues);
   if (keywordReason) return keywordReason;
   let parsed;
   try {
@@ -45956,7 +45954,7 @@ function checkExfilUrl(url) {
     return "unusually long query string";
   if (parsed.hash.length > LONG_QUERY_THRESHOLD)
     return "unusually long fragment";
-  return checkUrlParams(parsed) || checkUrlPath(parsed);
+  return checkUrlParams(parsed, flagDigestValues) || checkUrlPath(parsed);
 }
 function urlHost(url) {
   if (/^\s*data:/i.test(url)) return "(inline data: URI)";
@@ -46078,12 +46076,12 @@ function collectUrls(text5) {
   urls.push(...extractHtmlUrls(text5));
   return urls;
 }
-function detectExfil(text5) {
+function detectExfil(text5, options = {}) {
   if (!needsUrlScan(text5)) return null;
   const threats = [];
   try {
     for (const { url, isImage, autoFetched, context } of collectUrls(text5)) {
-      const reason = checkExfilUrl(url) || (context !== "resource" && isOffOrigin(url) ? OFF_ORIGIN_REASON[context] : null);
+      const reason = checkExfilUrl(url, options) || (context !== "resource" && isOffOrigin(url) ? OFF_ORIGIN_REASON[context] : null);
       if (!reason) continue;
       threats.push({ isImage, autoFetched, reason, target: urlHost(url) });
     }
@@ -46554,7 +46552,7 @@ function processLayer1(text5, sgrCarveOut) {
   }
   return { cleaned, found, findings, modified };
 }
-async function applyMarkdownPipeline(state, { html: html4, exfilScan, deadline }) {
+async function applyMarkdownPipeline(state, { html: html4, exfilScan, flagDigestValues, deadline }) {
   const inputText = state.text;
   let reveal;
   const splices = [];
@@ -46600,7 +46598,7 @@ async function applyMarkdownPipeline(state, { html: html4, exfilScan, deadline }
   }
   if (runLayer3) {
     refuseIfSpent();
-    const threats = detectExfil2(inputText);
+    const threats = detectExfil2(inputText, { flagDigestValues });
     if (threats) {
       state.found.push(CATEGORY.EXFIL_URLS);
       state.findings.push(
@@ -46948,7 +46946,11 @@ __export(src_exports, {
 async function sanitize(text5, options) {
   if (typeof text5 !== "string")
     throw new TypeError("sanitize(text, options): text must be a string");
-  const { html: html4 = false, exfilScan = false } = options ?? {};
+  const {
+    html: html4 = false,
+    exfilScan = false,
+    flagDigestValues = false
+  } = options ?? {};
   const { cleaned, found, warnings, notes, splices } = await sanitizeText(
     text5,
     {
@@ -46956,7 +46958,8 @@ async function sanitize(text5, options) {
       // `html` implies the scan unconditionally, and `exfilScan` can only ADD it:
       // an opt-OUT would make `{ html: true, exfilScan: false }` splice Layer 2
       // while silently dropping Layer 3's report — a fail-open the docs deny.
-      exfilScan: exfilScan || html4
+      exfilScan: exfilScan || html4,
+      flagDigestValues
     }
   );
   return {

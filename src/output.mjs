@@ -393,10 +393,13 @@ function processLayer1(text, sgrCarveOut) {
  * vet them before they leave. The transform itself stays pure — the caller owns
  * any persistence.
  * @param {PipelineState} state
- * @param {{ html?: boolean, exfilScan?: boolean, deadline?: Deadline }} options
+ * @param {{ html?: boolean, exfilScan?: boolean, flagDigestValues?: boolean, deadline?: Deadline }} options
  * @returns {Promise<{ reveal: string | undefined, splices: Array<{ placeholder: string, original: string }> }>}
  */
-async function applyMarkdownPipeline(state, { html, exfilScan, deadline }) {
+async function applyMarkdownPipeline(
+  state,
+  { html, exfilScan, flagDigestValues, deadline },
+) {
   const inputText = state.text;
   /** @type {string | undefined} */
   let reveal;
@@ -485,7 +488,7 @@ async function applyMarkdownPipeline(state, { html, exfilScan, deadline }) {
   // suspicious, not less, yet Layer 2 has already removed it from `cleaned`.
   if (runLayer3) {
     refuseIfSpent();
-    const threats = detectExfil(inputText);
+    const threats = detectExfil(inputText, { flagDigestValues });
     // Severity tracks who does the fetching. An auto-fetched target — an image,
     // a stylesheet, a form action, a meta refresh — exfiltrates the moment the
     // content renders, with nobody deciding anything: a WARNING. A plain LINK
@@ -571,6 +574,7 @@ async function vetStageValue(text, redact, findings, label) {
  * @typedef {{
  *   html?: boolean,
  *   exfilScan?: boolean,
+ *   flagDigestValues?: boolean,
  *   redact?: (text: string) => Promise<RedactResult|null> | (RedactResult|null),
  *   filterInjection?: (text: string) => Promise<Layer5Result|null> | (Layer5Result|null),
  *   sgrCarveOut?: boolean,

@@ -140,6 +140,18 @@ attributes (`src`/`href`/`background`/`srcset`/`ping`, form `action`/`formaction
 - off-origin form actions and `meta refresh` redirects
 - `javascript:` / `vbscript:` targets
 
+**The digest exemption, and the switch that lifts it.** A value that is
+exactly one digest width of hex (32/40/56/64/96/128) under a generic parameter
+name reads as a fingerprint, not a payload: a cache-buster `?v=<md5>`, an ETag,
+a request id, a git commit, imgix's `?s=`. Under a name that already says
+credential the same characters read as payload and still flag. That leaves a
+residual, because the caller writing the URL picks the name: a payload padded to
+exactly one digest length rides under a generic one, buying 16 to 64 bytes per
+parameter. `flagDigestValues` moves the trade-off — it drops the exemption
+entirely, at the cost of flagging every real fingerprint — for a caller whose
+job is monitoring rather than presenting text to a model. Like every Layer 3
+option it can only ADD detection; there is no switch that turns a report off.
+
 Each threat carries a `reason` and the destination `target` (never the
 payload-bearing query/fragment) — the finding is shown to the operator with the
 target named and the payload withheld, since re-presenting the exfil payload in

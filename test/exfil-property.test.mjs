@@ -581,6 +581,48 @@ describe("Layer 3 exfil detection across signing schemes", () => {
     );
   });
 
+  it("reports every digest-length residual under `flagDigestValues`", () => {
+    // The opt-out for the residual the case above pins. The exemption keys on
+    // the parameter NAME, which the caller writing the URL picks, so a payload
+    // padded to exactly one digest length rides under any generic name; a
+    // caller that would rather pay the fingerprint false positives turns the
+    // exemption off. Driven over EVERY exempt length, both channels, and the
+    // no-name form, because one length passing proves nothing about the set.
+    for (const len of [32, 40, 56, 64, 96, 128]) {
+      const hex = "a".repeat(len);
+      for (const url of [
+        `https://ok.example/p?h=${hex}`,
+        `https://ok.example/p#x=${hex}`,
+        `https://ok.example/p?${hex}`,
+      ]) {
+        assert.equal(checkExfilUrl(url), null, `${url} fired by default`);
+        assert.equal(
+          checkExfilUrl(url, { flagDigestValues: true }),
+          "suspicious query parameter",
+          `${url} went unreported under flagDigestValues`,
+        );
+      }
+    }
+  });
+
+  it("keeps `flagDigestValues` narrow: only the digest exemption goes", () => {
+    // Non-vacuity in the other direction. The option must not degrade into
+    // "flag everything": an ordinary short value, an allowlisted signing
+    // parameter and a hex run below the 16-byte floor all stay quiet with it
+    // on, so the row above is the exemption lifting and not a blanket.
+    for (const url of [
+      "https://ok.example/p?v=1.2.3",
+      "https://ok.example/p?utm_source=news",
+      `https://ok.example/p?h=${"a".repeat(31)}`,
+      `https://ok.example/i?sig=${"ab".repeat(32)}`,
+    ])
+      assert.equal(
+        checkExfilUrl(url, { flagDigestValues: true }),
+        null,
+        `${url} fired under flagDigestValues`,
+      );
+  });
+
   it("leaves an ordinary long value in a non-credential parameter alone", () => {
     // The wrapped-credential scan looks INSIDE a value, so it is gated on the
     // parameter name saying credential. A prose parameter keeps the old bar.
