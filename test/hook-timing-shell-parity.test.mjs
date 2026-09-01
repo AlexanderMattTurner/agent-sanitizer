@@ -60,12 +60,9 @@ function sh(argv) {
 /**
  * The version both ports are pinned at for the comparisons below.
  *
- * Passed explicitly because the DEFAULTS are deliberately different: each port
- * reads the version of the artifact it ships in (the node module its package's
- * package.json, the shell port the plugin manifest beside it), and those two
- * numbers differ in a checkout. What has to match byte-for-byte is the sentence
- * built around the version, which is what pinning it here isolates — the
- * defaults get their own cases at the bottom.
+ * Passed explicitly so the sweeps compare the SENTENCE rather than whatever
+ * each port resolves: a version that moves with every release would otherwise
+ * be baked into 96 comparisons. The resolved defaults get their own case below.
  */
 const VERSION = "9.8.7";
 
@@ -279,28 +276,23 @@ describe("hook timing: the shell port matches the node module", () => {
     }
   });
 
-  it("defaults each port to the version of the artifact it ships in", () => {
-    // Not a shared default: the node module ships in the npm package (whose
-    // package.json carries the published version) and this shell lib ships in
-    // the plugin (whose manifest carries it). Both must resolve SOMETHING here,
-    // or the notices above would silently degrade to the look-it-up wording.
+  it("agrees on the version when neither port is told one", () => {
+    // In a checkout both ports resolve the SAME manifest — the committed plugin
+    // one — so their defaults are comparable, and comparing them is what catches
+    // a port whose resolver silently stops finding anything and degrades to the
+    // look-it-up wording.
     const manifest = JSON.parse(
       readFileSync(
         path.join(repoRoot, "plugin", ".claude-plugin", "plugin.json"),
         "utf8",
       ),
     );
+    const shell = sh(["slow_hook_notice", "sanitize-output", "90000"]);
+    assert.equal(shell, slowHookNotice("sanitize-output", 90000));
+    assert.equal(sanitizerVersion(), manifest.version);
     assert.match(
-      sh(["slow_hook_notice", "sanitize-output", "90000"]),
+      shell,
       new RegExp(`with agent-sanitizer ${manifest.version}, the hook name`),
-    );
-    const pkg = JSON.parse(
-      readFileSync(path.join(repoRoot, "package.json"), "utf8"),
-    );
-    assert.equal(sanitizerVersion(), pkg.version);
-    assert.match(
-      slowHookNotice("sanitize-output", 90000),
-      new RegExp(`with agent-sanitizer ${pkg.version}, the hook name`),
     );
   });
 

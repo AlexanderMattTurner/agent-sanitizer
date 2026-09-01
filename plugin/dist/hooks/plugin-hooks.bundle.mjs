@@ -49,16 +49,12 @@ import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 function readVersion() {
-  let dir = dirname(fileURLToPath(import.meta.url));
-  for (; ; ) {
-    for (const manifest of VERSION_MANIFESTS) {
-      const version = readManifest(join(dir, manifest));
-      if (version !== null) return version;
-    }
-    const parent = dirname(dir);
-    if (parent === dir) return null;
-    dir = parent;
+  const dir = dirname(fileURLToPath(import.meta.url));
+  for (const manifest of VERSION_MANIFESTS) {
+    const version = readManifest(join(dir, manifest));
+    if (version !== null) return version;
   }
+  return null;
 }
 function readManifest(path2) {
   let manifest;
@@ -67,8 +63,7 @@ function readManifest(path2) {
   } catch {
     return null;
   }
-  if (manifest?.name !== "agent-sanitizer") return null;
-  return SEMVER.test(manifest.version) ? manifest.version : null;
+  return SEMVER.test(manifest?.version) ? manifest.version : null;
 }
 function sanitizerVersion() {
   if (cachedVersion === void 0) cachedVersion = readVersion();
@@ -212,7 +207,11 @@ var init_hook_timing = __esm({
     "use strict";
     SLOW_HOOK_THRESHOLD_MS = 1e3;
     ISSUE_URL = "https://github.com/AlexanderMattTurner/agent-sanitizer/issues/new";
-    VERSION_MANIFESTS = ["package.json", ".claude-plugin/plugin.json"];
+    VERSION_MANIFESTS = [
+      "../../.claude-plugin/plugin.json",
+      "../../plugin/.claude-plugin/plugin.json",
+      "../../package.json"
+    ];
     SEMVER = /^[0-9]+\.[0-9]+\.[0-9]+$/;
     provisioningMs = 0;
     provisioningCpuMs = 0;

@@ -9,9 +9,10 @@
  */
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { copyFileSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 import {
   chargeHostExtension,
@@ -565,18 +566,83 @@ describe("the version an issue report is asked to carry", () => {
     );
   });
 
-  it("reads the version from this package's own manifest", () => {
-    const pkg = JSON.parse(
-      readFileSync(
-        path.join(
-          path.dirname(fileURLToPath(import.meta.url)),
-          "..",
-          "package.json",
-        ),
-        "utf8",
+  /**
+   * Stage one artifact layout: a copy of the module under `moduleDir`, plus a
+   * manifest per entry of `manifests`, and report the version it resolves.
+   *
+   * A copy rather than a stub, so what answers is the shipped resolver reading
+   * a real tree — the layouts are exactly the offsets each artifact ships at.
+   * @param {string} moduleDir  the module's directory, relative to the root
+   * @param {Record<string, unknown>} manifests  root-relative path to contents
+   * @returns {Promise<string | null>}
+   */
+  async function versionUnderLayout(moduleDir, manifests) {
+    const root = mkdtempSync(path.join(tmpdir(), "hook-timing-layout-"));
+    for (const [file, contents] of Object.entries(manifests)) {
+      mkdirSync(path.dirname(path.join(root, file)), { recursive: true });
+      writeFileSync(path.join(root, file), JSON.stringify(contents));
+    }
+    const target = path.join(root, moduleDir, "hook-timing.mjs");
+    mkdirSync(path.dirname(target), { recursive: true });
+    copyFileSync(
+      path.join(
+        path.dirname(fileURLToPath(import.meta.url)),
+        "..",
+        "claude-hooks",
+        "lib",
+        "hook-timing.mjs",
       ),
+      target,
     );
-    assert.equal(sanitizerVersion(), pkg.version);
+    const staged = await import(pathToFileURL(target).href);
+    return staged.sanitizerVersion();
+  }
+
+  const PLUGIN_MANIFEST = ".claude-plugin/plugin.json";
+
+  it("reads the manifest each shipped artifact puts beside it", async () => {
+    // npm ships this module at claude-hooks/lib/ beside the package.json whose
+    // version is injected at publish; the plugin ships the bundle at
+    // plugin/dist/hooks/ beside its own manifest.
+    assert.equal(
+      await versionUnderLayout("claude-hooks/lib", {
+        "package.json": { name: "agent-sanitizer", version: "3.1.4" },
+      }),
+      "3.1.4",
+    );
+    assert.equal(
+      await versionUnderLayout("plugin/dist/hooks", {
+        [`plugin/${PLUGIN_MANIFEST}`]: { version: "5.6.7" },
+      }),
+      "5.6.7",
+    );
+  });
+
+  it("prefers a checkout's plugin manifest over package.json's placeholder", async () => {
+    // In a source tree package.json still holds the frozen placeholder npm
+    // overwrites at publish — a real past release, so reporting it would be
+    // indistinguishable from an install of that version.
+    assert.equal(
+      await versionUnderLayout("claude-hooks/lib", {
+        "package.json": { name: "agent-sanitizer", version: "1.0.1" },
+        [`plugin/${PLUGIN_MANIFEST}`]: { version: "2.2.2" },
+      }),
+      "2.2.2",
+    );
+  });
+
+  it("reads the fixed offsets only, never an ancestor's manifest", async () => {
+    // A copy sitting somewhere other than the offsets the artifacts ship at —
+    // vendored, relocated — has no manifest of its own, and the nearest one up
+    // the tree describes a DIFFERENT install of this package. Reporting 9.9.9
+    // from there sends the maintainer to the wrong tree, which is the whole
+    // failure the version exists to prevent.
+    assert.equal(
+      await versionUnderLayout("nested/claude-hooks/lib", {
+        "package.json": { name: "agent-sanitizer", version: "9.9.9" },
+      }),
+      null,
+    );
   });
 
   it("asks for the version rather than guessing one when it knows none", () => {

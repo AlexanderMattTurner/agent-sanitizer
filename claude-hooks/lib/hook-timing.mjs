@@ -68,14 +68,30 @@ const ISSUE_URL =
   "https://github.com/AlexanderMattTurner/agent-sanitizer/issues/new";
 
 /**
- * Manifests that carry this build's own version, in the order a directory is
- * asked for one. Both are checked at EVERY ancestor rather than one being
- * preferred globally, because the two shipped artifacts carry different ones:
- * the npm package's root `package.json` holds the published version (injected
- * at release), and an installed Claude Code plugin has no package.json at all — its version lives in the
- * plugin manifest, which is the one version string committed to this repo.
+ * Where this build's own version sits, relative to the directory this module
+ * runs from — each shipped artifact puts its manifest at a fixed offset, so the
+ * candidates are enumerated rather than searched for:
+ *
+ *   `../../.claude-plugin/plugin.json`        the installed Claude Code plugin,
+ *                                             whose bundle ships at
+ *                                             `plugin/dist/hooks/`
+ *   `../../plugin/.claude-plugin/plugin.json` a source checkout, where that same
+ *                                             manifest is the accurate version
+ *                                             and package.json's is the frozen
+ *                                             placeholder npm overwrites at
+ *                                             publish
+ *   `../../package.json`                      the npm package, which ships this
+ *                                             module at `claude-hooks/lib/` and
+ *                                             carries the published version
+ *
+ * First hit wins, and each candidate exists only inside the artifact it belongs
+ * to, so no foreign manifest is ever a candidate.
  */
-const VERSION_MANIFESTS = ["package.json", ".claude-plugin/plugin.json"];
+const VERSION_MANIFESTS = [
+  "../../.claude-plugin/plugin.json",
+  "../../plugin/.claude-plugin/plugin.json",
+  "../../package.json",
+];
 
 /** Strict X.Y.Z, the only shape this project's release tooling ever writes. */
 const SEMVER = /^[0-9]+\.[0-9]+\.[0-9]+$/;
@@ -85,36 +101,24 @@ const SEMVER = /^[0-9]+\.[0-9]+\.[0-9]+$/;
  * name it — a compiled hook binary whose `import.meta.url` points inside the
  * executable reads no manifest, and the notice then asks the operator to look
  * the version up rather than printing one nothing confirmed.
- *
- * Walks up from this module, taking the first manifest that both names this
- * package and carries a strict semver: a foreign `package.json` above an
- * installed plugin describes the USER's project, and reporting its version as
- * the sanitizer's would send every such report to the wrong tree. A git
- * checkout resolves package.json's un-injected placeholder, which is the right
- * answer there — a report from a working tree is about that tree, not a
- * release.
  * @returns {string | null}
  */
 function readVersion() {
-  let dir = dirname(fileURLToPath(import.meta.url));
-  for (;;) {
-    for (const manifest of VERSION_MANIFESTS) {
-      const version = readManifest(join(dir, manifest));
-      if (version !== null) return version;
-    }
-    const parent = dirname(dir);
-    if (parent === dir) return null;
-    dir = parent;
+  const dir = dirname(fileURLToPath(import.meta.url));
+  for (const manifest of VERSION_MANIFESTS) {
+    const version = readManifest(join(dir, manifest));
+    if (version !== null) return version;
   }
+  return null;
 }
 
 /**
- * `path`'s version when it is one of this package's manifests, else null.
+ * The strict semver `path` carries, or null when it carries none.
  *
  * The read and the parse are caught because neither failure is this function's
- * business: most candidate paths do not exist, and a malformed manifest
- * somewhere up the tree is not a reason for a PERFORMANCE notice to throw
- * inside the hook it is reporting on.
+ * business: every candidate but one is absent in any given artifact, and a
+ * manifest a packager corrupted is not a reason for a PERFORMANCE notice to
+ * throw inside the hook it is reporting on.
  * @param {string} path
  * @returns {string | null}
  */
@@ -125,8 +129,7 @@ function readManifest(path) {
   } catch {
     return null;
   }
-  if (manifest?.name !== "agent-sanitizer") return null;
-  return SEMVER.test(manifest.version) ? manifest.version : null;
+  return SEMVER.test(manifest?.version) ? manifest.version : null;
 }
 
 /** @type {string | null | undefined} */

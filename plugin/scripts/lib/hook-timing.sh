@@ -29,38 +29,29 @@ HOOK_TIMING_ISSUE_URL="https://github.com/AlexanderMattTurner/agent-sanitizer/is
 # hand. Empty when it cannot be read, which the notices word as "your
 # agent-sanitizer version" rather than naming a number nothing confirmed.
 #
-# Read from the nearest `.claude-plugin/plugin.json` at or above this file: this
-# port only ever ships inside the plugin, whose manifest version is the one
-# version string committed to the repo (the node module reads package.json first
-# because its own artifact is the npm package — see readVersion there). Parsed
-# with bash builtins for the same reason provision-hook-binary.sh does it that
-# way: no JSON-capable tool is guaranteed on a bare PATH.
+# Read from the plugin manifest at a FIXED offset from this file (`../..` from
+# plugin/scripts/lib/), which is where both the installed plugin and a checkout
+# put it: this port only ever ships inside the plugin, whose manifest version is
+# the one version string committed to the repo. Parsed with bash builtins for
+# the same reason provision-hook-binary.sh does it that way: no JSON-capable
+# tool is guaranteed on a bare PATH.
 hook_timing_version() {
-  local dir parent version line
-  dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd)"
-  [[ -n "$dir" ]] || return 0
-  while :; do
-    version=""
-    if [[ -r "$dir/.claude-plugin/plugin.json" ]]; then
-      while IFS= read -r line; do
-        case "$line" in
-        *'"version"'*)
-          version="${line#*\"version\"*:*\"}"
-          version="${version%%\"*}"
-          break
-          ;;
-        *) ;;
-        esac
-      done <"$dir/.claude-plugin/plugin.json"
-      if [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-        printf '%s' "$version"
-        return 0
-      fi
-    fi
-    parent="$(dirname "$dir")"
-    [[ "$parent" == "$dir" ]] && return 0
-    dir="$parent"
-  done
+  local manifest version line
+  manifest="$(dirname "${BASH_SOURCE[0]}")/../../.claude-plugin/plugin.json"
+  [[ -r "$manifest" ]] || return 0
+  version=""
+  while IFS= read -r line; do
+    case "$line" in
+    *'"version"'*)
+      version="${line#*\"version\"*:*\"}"
+      version="${version%%\"*}"
+      break
+      ;;
+    *) ;;
+    esac
+  done <"$manifest"
+  [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] && printf '%s' "$version"
+  return 0
 }
 
 # The clause naming the version a report should carry: this build's when it
