@@ -30,8 +30,13 @@
  * every session cry wolf, which is the alert fatigue this notice fights.
  *
  * Dependency-free on purpose: everything imports this, including hook-io, so a
- * back-import would close a cycle. The one emitter it needs is passed in.
+ * back-import would close a cycle. The one emitter it needs is passed in. The
+ * node builtins below are not such a dependency — they read one small manifest,
+ * once, to name this build's version in a report line.
  */
+import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 
 /**
  * Wall-clock a single hook invocation may spend before it is reported as slow.
@@ -61,6 +66,103 @@ export const SLOW_PROVISION_THRESHOLD_MS = 60000;
 /** Where a reader is asked to send the timing. */
 const ISSUE_URL =
   "https://github.com/AlexanderMattTurner/agent-sanitizer/issues/new";
+
+/**
+ * Where this build's own version sits, relative to the directory this module
+ * runs from — each shipped artifact puts its manifest at a fixed offset, so the
+ * candidates are enumerated rather than searched for:
+ *
+ *   `../../.claude-plugin/plugin.json`        the installed Claude Code plugin,
+ *                                             whose bundle ships at
+ *                                             `plugin/dist/hooks/`
+ *   `../../plugin/.claude-plugin/plugin.json` a source checkout, where that same
+ *                                             manifest is the accurate version
+ *                                             and package.json's is the frozen
+ *                                             placeholder npm overwrites at
+ *                                             publish
+ *   `../../package.json`                      the npm package, which ships this
+ *                                             module at `claude-hooks/lib/` and
+ *                                             carries the published version
+ *
+ * First hit wins, and each candidate exists only inside the artifact it belongs
+ * to, so no foreign manifest is ever a candidate.
+ */
+const VERSION_MANIFESTS = [
+  "../../.claude-plugin/plugin.json",
+  "../../plugin/.claude-plugin/plugin.json",
+  "../../package.json",
+];
+
+/** Strict X.Y.Z, the only shape this project's release tooling ever writes. */
+const SEMVER = /^[0-9]+\.[0-9]+\.[0-9]+$/;
+
+/**
+ * This build's version for the report line below, or null when nothing here can
+ * name it — a compiled hook binary whose `import.meta.url` points inside the
+ * executable reads no manifest, and the notice then asks the operator to look
+ * the version up rather than printing one nothing confirmed.
+ * @returns {string | null}
+ */
+function readVersion() {
+  const dir = dirname(fileURLToPath(import.meta.url));
+  for (const manifest of VERSION_MANIFESTS) {
+    const version = readManifest(join(dir, manifest));
+    if (version !== null) return version;
+  }
+  return null;
+}
+
+/**
+ * The strict semver `path` carries, or null when it carries none.
+ *
+ * The read and the parse are caught because neither failure is this function's
+ * business: every candidate but one is absent in any given artifact, and a
+ * manifest a packager corrupted is not a reason for a PERFORMANCE notice to
+ * throw inside the hook it is reporting on.
+ * @param {string} path
+ * @returns {string | null}
+ */
+function readManifest(path) {
+  let manifest;
+  try {
+    manifest = JSON.parse(readFileSync(path, "utf8"));
+  } catch {
+    return null;
+  }
+  return SEMVER.test(manifest?.version) ? manifest.version : null;
+}
+
+/** @type {string | null | undefined} */
+let cachedVersion;
+
+/**
+ * {@link readVersion}, computed once per process — the notice fires on a
+ * vanishing fraction of runs, and every hook imports this module on the hot
+ * path, so the manifest is read only once something is being reported.
+ * @returns {string | null}
+ */
+export function sanitizerVersion() {
+  if (cachedVersion === undefined) cachedVersion = readVersion();
+  return cachedVersion;
+}
+
+/**
+ * The clause naming the version an issue report should carry: this build's when
+ * it knows it, and otherwise an instruction to look it up — never a guess.
+ *
+ * Resolves the version HERE rather than in a caller's default argument, which
+ * would read the manifest on every healthy run too — the notices call this only
+ * once they have decided to report.
+ * @param {string | null | undefined} version  a caller's override; `undefined`
+ *   asks this build for its own, `null` says nothing could name it
+ * @returns {string}
+ */
+function versionClause(version) {
+  const resolved = version === undefined ? sanitizerVersion() : version;
+  return resolved
+    ? `agent-sanitizer ${resolved}`
+    : "your agent-sanitizer version";
+}
 
 /**
  * Milliseconds as the seconds string every notice below prints.
@@ -439,6 +541,9 @@ function attributeWait(elapsedMs, cpuMs, redactorMs, hostMs) {
  * @param {SlowHookContext} [context]  known CPU time / payload size /
  *   triggering tool, so the notice is self-diagnosing rather than requiring the
  *   next reader to reconstruct what was slow by hand
+ * @param {string | null} [version]  the build to name in the report line;
+ *   omitted asks {@link sanitizerVersion}, and the shell port passes its own,
+ *   read from the plugin manifest it ships beside
  * @returns {string | null}
  */
 export function slowHookNotice(
@@ -446,6 +551,7 @@ export function slowHookNotice(
   elapsedMs,
   thresholdMs = SLOW_HOOK_THRESHOLD_MS,
   context,
+  version,
 ) {
   if (elapsedMs <= thresholdMs) return null;
   const cpuMs = context?.cpuMs;
@@ -473,7 +579,7 @@ export function slowHookNotice(
   return (
     `agent-sanitizer PERFORMANCE: the ${hookName} hook took ` +
     `${formatSeconds(elapsedMs)}s${formatContextSuffix(context)}, over its ${formatSeconds(thresholdMs)}s budget${attribution} ` +
-    `Tell the user, and suggest they report it at ${ISSUE_URL} with the hook name and ${timings}.`
+    `Tell the user, and suggest they report it at ${ISSUE_URL} with ${versionClause(version)}, the hook name and ${timings}.`
   );
 }
 
@@ -498,6 +604,7 @@ export function slowHookNotice(
  * @param {string} [advice] step-specific speedup advice — the default fits the
  *   engine install; the hook-binary download passes its own, because telling a
  *   user mid-download that uv would help is advice about the wrong step
+ * @param {string | null} [version]  see {@link slowHookNotice}
  * @returns {string | null}
  */
 export function slowProvisionNotice(
@@ -505,13 +612,14 @@ export function slowProvisionNotice(
   elapsedMs,
   thresholdMs = SLOW_PROVISION_THRESHOLD_MS,
   advice = "Installing uv makes it faster",
+  version,
 ) {
   if (elapsedMs <= thresholdMs) return null;
   return (
     `agent-sanitizer PERFORMANCE: one-time setup (${stepName}) took ` +
     `${formatSeconds(elapsedMs)}s, over its ${formatSeconds(thresholdMs)}s budget — ` +
     "this is paid once per install, not per tool call, so the session is not slow from here on. " +
-    `${advice}; if it happens on EVERY new session, report it at ${ISSUE_URL}.`
+    `${advice}; if it happens on EVERY new session, report it at ${ISSUE_URL} with ${versionClause(version)}.`
   );
 }
 

@@ -320,6 +320,7 @@ const PUBLISHED_EXPORTS = {
     "formatBytes",
     "formatSeconds",
     "reportSlowHook",
+    "sanitizerVersion",
     "slowHookNotice",
     "slowProvisionNotice",
     "startHookTimer",

@@ -9,6 +9,10 @@
  */
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
+import { copyFileSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 import {
   chargeHostExtension,
@@ -16,6 +20,7 @@ import {
   excludeProvisioning,
   formatBytes,
   reportSlowHook,
+  sanitizerVersion,
   slowHookNotice,
   startHookTimer,
   withSlowHookNotice,
@@ -543,6 +548,115 @@ describe("slowHookNotice", () => {
     );
     assert.match(toolOnly, /tool Bash/);
     assert.doesNotMatch(toolOnly, /payload/);
+  });
+});
+
+describe("the version an issue report is asked to carry", () => {
+  it("names this build, so the report does not have to be chased for it", () => {
+    // A timing means nothing without the build it was measured on: the report
+    // that prompted this arrived as "1.1s of hook CPU" with no version, and
+    // pinning it down took a round trip.
+    assert.match(
+      slowHookNotice("sanitize-output", 1_100, undefined, {
+        cpuMs: 1_100,
+        redactorMs: 0,
+        hostMs: 0,
+      }),
+      new RegExp(`with agent-sanitizer ${sanitizerVersion()}, the hook name`),
+    );
+  });
+
+  /**
+   * Stage one artifact layout: a copy of the module under `moduleDir`, plus a
+   * manifest per entry of `manifests`, and report the version it resolves.
+   *
+   * A copy rather than a stub, so what answers is the shipped resolver reading
+   * a real tree — the layouts are exactly the offsets each artifact ships at.
+   * @param {string} moduleDir  the module's directory, relative to the root
+   * @param {Record<string, unknown>} manifests  root-relative path to contents
+   * @returns {Promise<string | null>}
+   */
+  async function versionUnderLayout(moduleDir, manifests) {
+    const root = mkdtempSync(path.join(tmpdir(), "hook-timing-layout-"));
+    for (const [file, contents] of Object.entries(manifests)) {
+      mkdirSync(path.dirname(path.join(root, file)), { recursive: true });
+      writeFileSync(path.join(root, file), JSON.stringify(contents));
+    }
+    const target = path.join(root, moduleDir, "hook-timing.mjs");
+    mkdirSync(path.dirname(target), { recursive: true });
+    copyFileSync(
+      path.join(
+        path.dirname(fileURLToPath(import.meta.url)),
+        "..",
+        "claude-hooks",
+        "lib",
+        "hook-timing.mjs",
+      ),
+      target,
+    );
+    const staged = await import(pathToFileURL(target).href);
+    return staged.sanitizerVersion();
+  }
+
+  const PLUGIN_MANIFEST = ".claude-plugin/plugin.json";
+
+  it("reads the manifest each shipped artifact puts beside it", async () => {
+    // npm ships this module at claude-hooks/lib/ beside the package.json whose
+    // version is injected at publish; the plugin ships the bundle at
+    // plugin/dist/hooks/ beside its own manifest.
+    assert.equal(
+      await versionUnderLayout("claude-hooks/lib", {
+        "package.json": { name: "agent-sanitizer", version: "3.1.4" },
+      }),
+      "3.1.4",
+    );
+    assert.equal(
+      await versionUnderLayout("plugin/dist/hooks", {
+        [`plugin/${PLUGIN_MANIFEST}`]: { version: "5.6.7" },
+      }),
+      "5.6.7",
+    );
+  });
+
+  it("prefers a checkout's plugin manifest over package.json's placeholder", async () => {
+    // In a source tree package.json still holds the frozen placeholder npm
+    // overwrites at publish — a real past release, so reporting it would be
+    // indistinguishable from an install of that version.
+    assert.equal(
+      await versionUnderLayout("claude-hooks/lib", {
+        "package.json": { name: "agent-sanitizer", version: "1.0.1" },
+        [`plugin/${PLUGIN_MANIFEST}`]: { version: "2.2.2" },
+      }),
+      "2.2.2",
+    );
+  });
+
+  it("reads the fixed offsets only, never an ancestor's manifest", async () => {
+    // A copy sitting somewhere other than the offsets the artifacts ship at —
+    // vendored, relocated — has no manifest of its own, and the nearest one up
+    // the tree describes a DIFFERENT install of this package. Reporting 9.9.9
+    // from there sends the maintainer to the wrong tree, which is the whole
+    // failure the version exists to prevent.
+    assert.equal(
+      await versionUnderLayout("nested/claude-hooks/lib", {
+        "package.json": { name: "agent-sanitizer", version: "9.9.9" },
+      }),
+      null,
+    );
+  });
+
+  it("asks for the version rather than guessing one when it knows none", () => {
+    // A compiled hook binary resolves no manifest. Printing a placeholder
+    // version there would route every report to the wrong tree.
+    const unknown = slowHookNotice(
+      "sanitize-output",
+      1_100,
+      undefined,
+      undefined,
+      null,
+    );
+    assert.match(unknown, /with your agent-sanitizer version, the hook name/);
+    assert.doesNotMatch(unknown, /agent-sanitizer [0-9]/);
   });
 });
 

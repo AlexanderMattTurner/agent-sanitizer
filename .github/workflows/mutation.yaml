@@ -1,82 +1,62 @@
 name: Mutation tests
 
+# Mutation judges the TREE, not a diff: the shards re-answer the same question
+# on every push and every PR, and the answer moves only when a source or its
+# tests move. So this runs once a day on main — a ~30-shard matrix that
+# dominated every PR run has no business gating a docs typo — and a PR that
+# wants the verdict before merge asks for it with the `ci:mutation` label.
+#
+# A red scheduled run pages through ci-failure-notify.yaml, which lists this
+# workflow by name.
 on:
-  push:
-    branches: ["main"]
-    paths:
-      - "src/**/*.mjs"
-      - "claude-hooks/**/*.mjs"
-      - "bin/**/*.mjs"
-      # Repo tooling that is mutation-gated as its own scope (see
-      # aggregate-mutation.mjs); derived by scripts/shipped-sources.mjs from the
-      # directory, so a new module here joins the gate and must join this gate too.
-      - ".hooks/lib/**/*.mjs"
-      - "test/**/*.mjs"
-      - "scripts/shipped-sources.mjs"
-      - "scripts/mutate.mjs"
-      - "stryker.conf.json"
-      - "package.json"
-      - "pnpm-lock.yaml"
-      - ".github/actions/setup-base-env/action.yaml"
-      - ".github/mutation-shards.json"
-      - ".github/workflows/mutation.yaml"
-      - ".github/scripts/mutation-changed.sh"
-      - ".github/scripts/run-mutation-dry-run.sh"
-      - ".github/scripts/run-mutation-shard.sh"
-      - ".github/scripts/aggregate-mutation.mjs"
-      - ".github/scripts/expand-shards.mjs"
-  # No paths filter on pull_request: this is a Required check, and a workflow-level
-  # path filter would skip the whole workflow (including the mutation-passed
-  # reporter) on PRs that don't touch these paths, stranding the check at
-  # "Expected — Waiting". The changes job below cheaply no-ops via
-  # mutation-changed.sh when nothing mutation-relevant changed, so the gate still
-  # reports green.
+  schedule:
+    # Daily, off the hour: GitHub queues every :00 cron in the fleet at once.
+    - cron: "37 4 * * *"
+  workflow_dispatch:
+  # No paths filter, and no `push` trigger to pair one with: the reporter below
+  # is a Required check, and a PR that produced no status at all would sit at
+  # "Expected — Waiting" forever. Every PR therefore reaches `mutation-passed`,
+  # which reports green without work unless the label asked for the shards.
   pull_request:
+    types: [opened, synchronize, reopened, labeled, unlabeled]
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  # PRs group by number so a new push supersedes the run it obsoletes. A
+  # schedule or a dispatch groups by RUN: they share a ref, and evicting the
+  # nightly because someone dispatched a run would drop the very verdict the
+  # cron exists to produce.
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
   cancel-in-progress: true
 
 permissions:
   contents: read
 
 jobs:
-  # Cheap gate: decide whether the expensive shards run at all, and hand the
-  # shard matrix to the mutation job from the committed shard list.
-  changes:
+  # Decide whether the expensive shards run at all, and hand the shard matrix to
+  # the mutation job from the committed shard list.
+  decide:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     outputs:
-      run: ${{ steps.changed.outputs.run }}
+      run: ${{ steps.gate.outputs.run }}
       shards: ${{ steps.shards.outputs.shards }}
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           persist-credentials: false
-          # mutation-changed.sh diffs the PR head against its base; full history
-          # is the simplest way to guarantee the base commit resolves.
-          fetch-depth: 0
 
-      - name: Skip when no mutation-relevant files changed
-        id: changed
+      - name: Decide whether the shards run
+        id: gate
+        # A schedule or a hand dispatch carries no diff to narrow by, so both
+        # mutate the full tree. A pull request runs only when it asked to.
         env:
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
-        # Exit contract: 0 = relevant changes, 1 = nothing relevant, >=2 = the
-        # script could not determine relevance (e.g. it failed to parse the
-        # on.push.paths SSOT out of this workflow) — fail the job rather than
-        # silently skipping a real gate.
+          RUN: >-
+            ${{ github.event_name != 'pull_request'
+             || contains(github.event.pull_request.labels.*.name, 'ci:mutation') }}
         run: |
-          rc=0
-          bash .github/scripts/mutation-changed.sh || rc=$?
-          if [ "$rc" -eq 0 ]; then
-            echo "run=true" >> "$GITHUB_OUTPUT"
-          elif [ "$rc" -eq 1 ]; then
-            echo "run=false" >> "$GITHUB_OUTPUT"
-            echo "::notice::No mutation-relevant files changed, skipping Stryker"
-          else
-            exit "$rc"
-          fi
+          echo "run=$RUN" >> "$GITHUB_OUTPUT"
+          [ "$RUN" = "true" ] ||
+            echo "::notice::Add the ci:mutation label to run the shards on this PR"
 
       - name: Load shard matrix
         id: shards
@@ -95,8 +75,8 @@ jobs:
   # would save the failure path but add its latency to every green run, and the
   # shards' own dry runs remain the backstop either way.
   dry-run: # required-check: false  # rolled up by mutation-passed (which needs: dry-run)
-    needs: changes
-    if: needs.changes.outputs.run == 'true'
+    needs: decide
+    if: needs.decide.outputs.run == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     # Same fixed fast-check seed the shards pin: a property test that rolled a
@@ -124,8 +104,8 @@ jobs:
   # incrementally with the break threshold disabled and uploads its JSON report;
   # the aggregate job scores each gated scope and applies its threshold.
   mutation:
-    needs: changes
-    if: needs.changes.outputs.run == 'true'
+    needs: decide
+    if: needs.decide.outputs.run == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 25
     # Mutation testing needs a deterministic oracle: Stryker aborts a shard if
@@ -138,7 +118,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        shard: ${{ fromJSON(needs.changes.outputs.shards) }}
+        shard: ${{ fromJSON(needs.decide.outputs.shards) }}
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
@@ -189,7 +169,7 @@ jobs:
   # break threshold from stryker.conf.json. This is the real gate; the shards
   # themselves run with break disabled.
   aggregate: # required-check: false  # rolled up by mutation-passed (which needs: aggregate)
-    needs: [changes, mutation]
+    needs: [decide, mutation]
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -200,11 +180,11 @@ jobs:
     # is gated on `run == 'true' && mutation.result != 'cancelled'`. A shard that
     # FAILED still aggregates: that one is a result, and it must be reported.
     env:
-      SCORE: ${{ needs.changes.outputs.run == 'true' && needs.mutation.result != 'cancelled' }}
+      SCORE: ${{ needs.decide.outputs.run == 'true' && needs.mutation.result != 'cancelled' }}
     steps:
       - name: Skip when shards did not run
-        if: needs.changes.outputs.run != 'true'
-        run: echo "::notice::No mutation-relevant files changed, nothing to aggregate"
+        if: needs.decide.outputs.run != 'true'
+        run: echo "::notice::Shards did not run on this PR, nothing to aggregate"
 
       - name: Skip when a newer commit cancelled the shards
         if: needs.mutation.result == 'cancelled'
@@ -236,7 +216,7 @@ jobs:
   # a protected branch never gets stuck on a check that never reports.
   mutation-passed: # required-check: true
     if: always()
-    needs: [changes, dry-run, mutation, aggregate]
+    needs: [decide, dry-run, mutation, aggregate]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -250,8 +230,8 @@ jobs:
       - name: Report result
         uses: ./.github/actions/report-job-result
         with:
-          run: ${{ needs.changes.outputs.run }}
-          decide-result: ${{ needs.changes.result }}
+          run: ${{ needs.decide.outputs.run }}
+          decide-result: ${{ needs.decide.result }}
           # Worst-of the three work jobs. Reporting only `mutation` here would
           # let a red aggregate (the real threshold gate) ride through green —
           # the reporter takes one result, so the combining has to happen at the

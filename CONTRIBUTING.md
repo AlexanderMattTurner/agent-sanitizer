@@ -39,6 +39,13 @@ resolving there means guard tests stop running with nothing red. That scope is
 derived from the directory, so a new module in it joins the gate on commit. It
 carries its own ratchet (`toolingScopeBreak`), same move-up-only rule.
 
+The mutation shards run **once a day on `main`**, not on every pull request:
+they mutate the whole tree rather than a diff, so a per-PR run re-answered the
+same question at ~30 runners a time. A red nightly pages through
+`ci-failure-notify.yaml`. To get the verdict on a pull request before it merges
+— when you have changed a mutation-gated source or the tests that kill its
+mutants — add the `ci:mutation` label, or dispatch the workflow by hand.
+
 Run the tests, lint, type-check, and formatter before pushing. The git hooks
 under `.hooks/` also enforce formatting and commit conventions on commit.
 

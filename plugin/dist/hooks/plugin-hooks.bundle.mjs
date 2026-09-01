@@ -45,6 +45,34 @@ var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__ge
 ));
 
 // claude-hooks/lib/hook-timing.mjs
+import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+function readVersion() {
+  const dir = dirname(fileURLToPath(import.meta.url));
+  for (const manifest of VERSION_MANIFESTS) {
+    const version = readManifest(join(dir, manifest));
+    if (version !== null) return version;
+  }
+  return null;
+}
+function readManifest(path2) {
+  let manifest;
+  try {
+    manifest = JSON.parse(readFileSync(path2, "utf8"));
+  } catch {
+    return null;
+  }
+  return SEMVER.test(manifest?.version) ? manifest.version : null;
+}
+function sanitizerVersion() {
+  if (cachedVersion === void 0) cachedVersion = readVersion();
+  return cachedVersion;
+}
+function versionClause(version) {
+  const resolved = version === void 0 ? sanitizerVersion() : version;
+  return resolved ? `agent-sanitizer ${resolved}` : "your agent-sanitizer version";
+}
 function formatSeconds(ms) {
   return (Math.round(ms / 100) / 10).toFixed(1);
 }
@@ -143,7 +171,7 @@ function attributeWait(elapsedMs, cpuMs, redactorMs, hostMs) {
   const hostClause = hostMs === void 0 ? "" : ` and ${formatSeconds(hostMs)}s was inside host extensions`;
   return `, of which ${formatSeconds(cpuMs)}s was this hook's own CPU${hostClause === "" ? " and" : ","} ${formatSeconds(redactorMs)}s was inside redactor round trips${hostClause}. ${verdict}`;
 }
-function slowHookNotice(hookName, elapsedMs, thresholdMs = SLOW_HOOK_THRESHOLD_MS, context) {
+function slowHookNotice(hookName, elapsedMs, thresholdMs = SLOW_HOOK_THRESHOLD_MS, context, version) {
   if (elapsedMs <= thresholdMs) return null;
   const cpuMs = context?.cpuMs;
   const redactorMs = context?.redactorMs;
@@ -151,7 +179,7 @@ function slowHookNotice(hookName, elapsedMs, thresholdMs = SLOW_HOOK_THRESHOLD_M
   const hostMs = typeof context?.hostMs === "number" ? context.hostMs : void 0;
   const attribution = attributed ? attributeWait(elapsedMs, cpuMs, redactorMs, hostMs) : typeof cpuMs === "number" ? `, and used ${formatSeconds(cpuMs)}s of CPU. Only the CPU share is work every affected call repeats; the rest was spent waiting, on a busy machine or on something this hook called.` : ". Wall-clock alone cannot separate the sanitizer's own work from a busy machine.";
   const timings = attributed ? hostMs === void 0 ? "all three timings" : "all four timings" : typeof cpuMs === "number" ? "both timings" : "timing";
-  return `agent-sanitizer PERFORMANCE: the ${hookName} hook took ${formatSeconds(elapsedMs)}s${formatContextSuffix(context)}, over its ${formatSeconds(thresholdMs)}s budget${attribution} Tell the user, and suggest they report it at ${ISSUE_URL} with the hook name and ${timings}.`;
+  return `agent-sanitizer PERFORMANCE: the ${hookName} hook took ${formatSeconds(elapsedMs)}s${formatContextSuffix(context)}, over its ${formatSeconds(thresholdMs)}s budget${attribution} Tell the user, and suggest they report it at ${ISSUE_URL} with ${versionClause(version)}, the hook name and ${timings}.`;
 }
 function writeSlowHookNotice(hookName, elapsedMs, writeErr = (chunk) => process.stderr.write(chunk), context) {
   const notice = slowHookNotice(hookName, elapsedMs, void 0, context);
@@ -173,12 +201,18 @@ function reportSlowHook(hookName, elapsedMs, hookEventName, emit, writeErr = (ch
   emit(hookEventName, { additionalContext: notice });
   return true;
 }
-var SLOW_HOOK_THRESHOLD_MS, ISSUE_URL, provisioningMs, provisioningCpuMs, redactorRoundTripMs, hostExtensionMs, hostExtensionCpuMs, hostExtensionDepth;
+var SLOW_HOOK_THRESHOLD_MS, ISSUE_URL, VERSION_MANIFESTS, SEMVER, cachedVersion, provisioningMs, provisioningCpuMs, redactorRoundTripMs, hostExtensionMs, hostExtensionCpuMs, hostExtensionDepth;
 var init_hook_timing = __esm({
   "claude-hooks/lib/hook-timing.mjs"() {
     "use strict";
     SLOW_HOOK_THRESHOLD_MS = 1e3;
     ISSUE_URL = "https://github.com/AlexanderMattTurner/agent-sanitizer/issues/new";
+    VERSION_MANIFESTS = [
+      "../../.claude-plugin/plugin.json",
+      "../../plugin/.claude-plugin/plugin.json",
+      "../../package.json"
+    ];
+    SEMVER = /^[0-9]+\.[0-9]+\.[0-9]+$/;
     provisioningMs = 0;
     provisioningCpuMs = 0;
     redactorRoundTripMs = 0;
@@ -193,7 +227,7 @@ import {
   openSync,
   closeSync,
   lstatSync,
-  readFileSync,
+  readFileSync as readFileSync2,
   unlinkSync,
   writeFileSync
 } from "node:fs";
@@ -356,7 +390,7 @@ function probeSetupAlive(markerPath) {
   if (markerPath === null) return true;
   let raw;
   try {
-    raw = readFileSync(markerPath, "utf8");
+    raw = readFileSync2(markerPath, "utf8");
   } catch {
     return true;
   }
@@ -10544,7 +10578,7 @@ var require_util = __commonJS({
       return path2;
     });
     exports.normalize = normalize3;
-    function join8(aRoot, aPath) {
+    function join9(aRoot, aPath) {
       if (aRoot === "") {
         aRoot = ".";
       }
@@ -10576,7 +10610,7 @@ var require_util = __commonJS({
       }
       return joined;
     }
-    exports.join = join8;
+    exports.join = join9;
     exports.isAbsolute = function(aPath) {
       return aPath.charAt(0) === "/" || urlRegexp.test(aPath);
     };
@@ -10790,7 +10824,7 @@ var require_util = __commonJS({
             parsed.path = parsed.path.substring(0, index2 + 1);
           }
         }
-        sourceURL = join8(urlGenerate(parsed), sourceURL);
+        sourceURL = join9(urlGenerate(parsed), sourceURL);
       }
       return normalize3(sourceURL);
     }
@@ -12159,7 +12193,7 @@ var init_minurl_shared = __esm({
 });
 
 // node_modules/.pnpm/vfile@6.0.3/node_modules/vfile/lib/minurl.js
-import { fileURLToPath } from "node:url";
+import { fileURLToPath as fileURLToPath2 } from "node:url";
 var init_minurl = __esm({
   "node_modules/.pnpm/vfile@6.0.3/node_modules/vfile/lib/minurl.js"() {
     init_minurl_shared();
@@ -12306,9 +12340,9 @@ var init_lib4 = __esm({
        * @returns {undefined}
        *   Nothing.
        */
-      set dirname(dirname7) {
+      set dirname(dirname8) {
         assertPath(this.basename, "dirname");
-        this.path = default2.join(dirname7 || "", this.basename);
+        this.path = default2.join(dirname8 || "", this.basename);
       }
       /**
        * Get the extname (including dot) (example: `'.js'`).
@@ -12367,7 +12401,7 @@ var init_lib4 = __esm({
        */
       set path(path2) {
         if (isUrl(path2)) {
-          path2 = fileURLToPath(path2);
+          path2 = fileURLToPath2(path2);
         }
         assertNonEmpty(path2, "path");
         if (this.path !== path2) {
@@ -46944,7 +46978,7 @@ var init_src = __esm({
 });
 
 // src/claude-context.mjs
-import { dirname, isAbsolute, join, relative, resolve } from "node:path";
+import { dirname as dirname2, isAbsolute, join as join2, relative, resolve } from "node:path";
 function kind(shape, name50, { ancestorChain = false, eventNamed = false } = {}) {
   return Object.freeze({ shape, name: name50, ancestorChain, eventNamed });
 }
@@ -46963,9 +46997,9 @@ function claudeDirPatterns(prefix) {
 function ancestorInstructionFiles(dir) {
   const files = [];
   let current = resolve(dir);
-  for (let parent = dirname(current); parent !== current; parent = dirname(current)) {
+  for (let parent = dirname2(current); parent !== current; parent = dirname2(current)) {
     current = parent;
-    for (const name50 of CLAUDE_MEMORY_FILES) files.push(join(current, name50));
+    for (const name50 of CLAUDE_MEMORY_FILES) files.push(join2(current, name50));
   }
   return files;
 }
@@ -47094,7 +47128,7 @@ __export(instructions_exports, {
   scanText: () => scanText
 });
 import {
-  readFileSync as readFileSync2,
+  readFileSync as readFileSync3,
   writeFileSync as writeFileSync2,
   globSync,
   renameSync,
@@ -47109,7 +47143,7 @@ import {
   constants
 } from "node:fs";
 import { randomBytes } from "node:crypto";
-import { join as join2, relative as relative2, resolve as resolve2, isAbsolute as isAbsolute2, dirname as dirname2, sep } from "node:path";
+import { join as join3, relative as relative2, resolve as resolve2, isAbsolute as isAbsolute2, dirname as dirname3, sep } from "node:path";
 function zeroWidthBits(cps) {
   let bits = "";
   for (const cp of cps) {
@@ -47228,7 +47262,7 @@ function findInstructionFiles(globs, { cwd = process.cwd(), exclude } = {}) {
       cwd,
       exclude: (entry) => excludeNodeModules(entry) || (exclude?.(entry) ?? false)
     })) {
-      const absPath = isAbsolute2(name50) ? name50 : join2(cwd, name50);
+      const absPath = isAbsolute2(name50) ? name50 : join3(cwd, name50);
       if (keepContained(absPath, realRoot, literalRoot, pattern))
         seen.add(absPath);
     }
@@ -47239,7 +47273,7 @@ function scanInstructionFiles(globs, { cwd = process.cwd(), exclude } = {}) {
   for (const file of findInstructionFiles(globs, { cwd, exclude })) {
     let content3;
     try {
-      content3 = readFileSync2(file, "utf-8");
+      content3 = readFileSync3(file, "utf-8");
     } catch {
       continue;
     }
@@ -47249,8 +47283,8 @@ function scanInstructionFiles(globs, { cwd = process.cwd(), exclude } = {}) {
   return out;
 }
 function atomicReplaceFile(absPath, data, mode, tmpName = () => `.${randomBytes(12).toString("hex")}.tmp`, remove = unlinkSync2) {
-  const dir = dirname2(absPath);
-  const tmp = join2(dir, tmpName());
+  const dir = dirname3(absPath);
+  const tmp = join3(dir, tmpName());
   const fd = openSync2(
     tmp,
     constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL,
@@ -47303,7 +47337,7 @@ function cleanFile(absPath, lstat = lstatSync2) {
           absPath
         )}`
       );
-    const raw = readFileSync2(fd);
+    const raw = readFileSync3(fd);
     const original = raw.toString("utf-8");
     if (!Buffer.from(original, "utf-8").equals(raw))
       throw new Error(
@@ -47972,12 +48006,12 @@ import {
   lstatSync as lstatSync3,
   mkdirSync,
   readdirSync,
-  readFileSync as readFileSync3,
+  readFileSync as readFileSync4,
   rmSync,
   statSync
 } from "node:fs";
 import { randomBytes as randomBytes2 } from "node:crypto";
-import { basename, join as join3 } from "node:path";
+import { basename, join as join4 } from "node:path";
 import { homedir, tmpdir, userInfo as userInfo2 } from "node:os";
 function sessionPrefix(sessionId) {
   const key = (sessionId ?? "").replace(/[^A-Za-z0-9._-]/gu, "_") || "no-session";
@@ -48022,7 +48056,7 @@ function sweepStaleSessions(sessionId) {
   for (const name50 of readdirSync(dir)) {
     if (!name50.startsWith(prefix)) continue;
     if (name50 === keep || name50.startsWith(`${keep}.`)) continue;
-    const path2 = join3(dir, name50);
+    const path2 = join4(dir, name50);
     try {
       if (lstatSync3(path2).mtimeMs >= cutoff) continue;
       rmSync(path2, { recursive: true, force: true });
@@ -48039,7 +48073,7 @@ function sweepStaleSessions(sessionId) {
 function sweepStaleFallback(sessionId) {
   const dir = alertDir();
   const inherited = alertDir(sessionId) !== dir && dirIsTrusted(dir);
-  const entries = inherited ? readdirSync(dir).map((name50) => join3(dir, name50)) : [];
+  const entries = inherited ? readdirSync(dir).map((name50) => join4(dir, name50)) : [];
   const drop = (path2) => {
     if (markerIsTrusted(path2)) rmSync(path2, { force: true });
   };
@@ -48066,7 +48100,7 @@ function launchInstructionFiles(dir) {
     ...globSync2([...CLAUDE_LAUNCH_GLOBS], {
       cwd: dir,
       exclude: excludeFromContextScan
-    }).map((name50) => join3(dir, name50)),
+    }).map((name50) => join4(dir, name50)),
     // Filtered, unlike the glob's matches: almost every parent directory holds
     // neither memory file, so the unfiltered chain would file ~10 phantom
     // targets per session into scan-invisible-chars.mjs's operator-facing
@@ -48093,12 +48127,12 @@ function announcedLaunchFiles(dir) {
   return launchInstructionFiles(dir).filter(announcedByInstructionsLoaded);
 }
 function userGlobalLaunchHasContent(env = process.env) {
-  const configDir = env.CLAUDE_CONFIG_DIR || join3(homedir(), ".claude");
+  const configDir = env.CLAUDE_CONFIG_DIR || join4(homedir(), ".claude");
   return anyFileHasBytes(
     globSync2([...USER_GLOBAL_EVENT_NAMED_GLOBS], {
       cwd: configDir,
       exclude: excludeFromContextScan
-    }).map((name50) => join3(configDir, name50))
+    }).map((name50) => join4(configDir, name50))
   );
 }
 function instructionsLoadedGapNotice(sessionId, dir = PROJECT_DIR, touchedDir) {
@@ -48124,10 +48158,10 @@ function invisibleCharAlert(sessionId) {
   for (const dir of dirs) {
     if (!dirIsTrusted(dir)) continue;
     for (const name50 of readdirSync(dir).sort()) {
-      const path2 = join3(dir, name50);
+      const path2 = join4(dir, name50);
       if (!markerIsTrusted(path2)) continue;
       if (dir !== own5 && !withinFallbackTtl(path2)) continue;
-      const text5 = readFileSync3(path2, "utf-8").trim();
+      const text5 = readFileSync4(path2, "utf-8").trim();
       if (text5 !== "") parts2.push(text5);
     }
   }
@@ -48136,7 +48170,7 @@ function invisibleCharAlert(sessionId) {
 }
 function appendAlert(text5, sessionId) {
   const dir = alertDir(sessionId);
-  const path2 = join3(dir, randomBytes2(8).toString("hex"));
+  const path2 = join4(dir, randomBytes2(8).toString("hex"));
   let usable;
   try {
     mkdirSync(dir, { recursive: true, mode: 448 });
@@ -48174,7 +48208,7 @@ var init_invisible_alert = __esm({
     init_claude_context();
     ({ applyLayer1WellFormed: applyLayer1WellFormed2 } = /** @type {typeof import("agent-sanitizer")} */
     await lazyImport("agent-sanitizer"));
-    ALERT_BASE = join3(
+    ALERT_BASE = join4(
       tmpdir(),
       `.claude-invisible-char-alert-${PROJECT_HASH}`
     );
@@ -48293,9 +48327,9 @@ var init_authored_content = __esm({
 });
 
 // src/credential-names.mjs
-import { readFileSync as readFileSync4 } from "node:fs";
-import { dirname as dirname3, join as join4 } from "node:path";
-import { fileURLToPath as fileURLToPath2 } from "node:url";
+import { readFileSync as readFileSync5 } from "node:fs";
+import { dirname as dirname4, join as join5 } from "node:path";
+import { fileURLToPath as fileURLToPath3 } from "node:url";
 function dedupe(values) {
   return [...new Set(values)];
 }
@@ -48357,7 +48391,7 @@ function parseCredentialNames(spec2) {
 }
 function credentialNames() {
   return _packaged ??= parseCredentialNames(
-    JSON.parse(readFileSync4(DATA_FILE, "utf8"))
+    JSON.parse(readFileSync5(DATA_FILE, "utf8"))
   );
 }
 function credentialNameMatcher(options = {}) {
@@ -48392,8 +48426,8 @@ var DATA_FILE, FILE_LABEL, ENV_NAME_USE, FIELD_VALUE_USE, KNOWN_USES, PART_RE, _
 var init_credential_names = __esm({
   "src/credential-names.mjs"() {
     "use strict";
-    DATA_FILE = join4(
-      dirname3(fileURLToPath2(import.meta.url)),
+    DATA_FILE = join5(
+      dirname4(fileURLToPath3(import.meta.url)),
       "..",
       "python",
       "agent_sanitizer",
@@ -48605,8 +48639,8 @@ import { spawn } from "node:child_process";
 import { existsSync as existsSync2, lstatSync as lstatSync4 } from "node:fs";
 import { createConnection } from "node:net";
 import { tmpdir as tmpdir2, userInfo as userInfo3 } from "node:os";
-import { dirname as dirname4, join as join5 } from "node:path";
-import { fileURLToPath as fileURLToPath3 } from "node:url";
+import { dirname as dirname5, join as join6 } from "node:path";
+import { fileURLToPath as fileURLToPath4 } from "node:url";
 function positiveMsOr(raw, fallback) {
   const ms = Number(raw);
   return Number.isFinite(ms) && ms > 0 ? ms : fallback;
@@ -48614,7 +48648,7 @@ function positiveMsOr(raw, fallback) {
 function daemonCommand() {
   const configured = process.env._AGENT_SANITIZER_REDACTOR_DAEMON;
   if (configured) return [configured];
-  const pyz = fileURLToPath3(new URL("../redactor/daemon.pyz", import.meta.url));
+  const pyz = fileURLToPath4(new URL("../redactor/daemon.pyz", import.meta.url));
   if (existsSync2(pyz)) return ["python3", pyz];
   return ["agent-secret-redactor-daemon"];
 }
@@ -48656,7 +48690,7 @@ function classifySocket(socketPath, deps = {}) {
   if (!st.isSocket() || st.uid !== uid) return "untrusted";
   let dir;
   try {
-    dir = lstat(dirname4(socketPath));
+    dir = lstat(dirname5(socketPath));
   } catch {
     return "untrusted";
   }
@@ -48841,7 +48875,7 @@ var init_redactor_client = __esm({
     init_hook_timing();
     init_env_config();
     FRAME_CAP = 16 * 1024 * 1024;
-    DEFAULT_SOCKET_PATH = process.env._AGENT_SANITIZER_REDACTOR_SOCKET || join5(tmpdir2(), "agent-sanitizer-redactor", "redactor.sock");
+    DEFAULT_SOCKET_PATH = process.env._AGENT_SANITIZER_REDACTOR_SOCKET || join6(tmpdir2(), "agent-sanitizer-redactor", "redactor.sock");
     WAIT_DEADLINE_MS = positiveMsOr(
       process.env._AGENT_SANITIZER_REDACTOR_WAIT_MS,
       8e3
@@ -48855,7 +48889,7 @@ var init_redactor_client = __esm({
 // claude-hooks/lib/secret-drop-guard.mjs
 import { createHash as createHash3 } from "node:crypto";
 import { lstatSync as lstatSync5, readdirSync as readdirSync2, unlinkSync as unlinkSync3 } from "node:fs";
-import { join as join6, dirname as dirname5 } from "node:path";
+import { join as join7, dirname as dirname6 } from "node:path";
 import { tmpdir as tmpdir3 } from "node:os";
 import { spawnSync as spawnSync2 } from "node:child_process";
 function dropFingerprint(filePath, content3, dropped = []) {
@@ -48865,7 +48899,7 @@ function dropFingerprint(filePath, content3, dropped = []) {
   return digest.digest("hex").slice(0, 32);
 }
 function confirmMarkerPath(fingerprint) {
-  return join6(tmpdir3(), `.claude-secret-drop-${PROJECT_HASH}-${fingerprint}`);
+  return join7(tmpdir3(), `.claude-secret-drop-${PROJECT_HASH}-${fingerprint}`);
 }
 function sweepStaleConfirms() {
   const dir = tmpdir3();
@@ -48873,7 +48907,7 @@ function sweepStaleConfirms() {
   const cutoff = Date.now() - CONFIRM_TTL_MS;
   for (const name50 of readdirSync2(dir)) {
     if (!name50.startsWith(prefix)) continue;
-    const path2 = join6(dir, name50);
+    const path2 = join7(dir, name50);
     try {
       if (lstatSync5(path2).mtimeMs < cutoff) unlinkSync3(path2);
     } catch (err) {
@@ -48887,7 +48921,7 @@ function sweepStaleConfirms() {
 }
 function gitTracked(filePath, spawn2 = spawnSync2) {
   const res = spawn2("git", ["ls-files", "--error-unmatch", "--", filePath], {
-    cwd: dirname5(filePath),
+    cwd: dirname6(filePath),
     stdio: "ignore"
   });
   if (res.error) return true;
@@ -48977,21 +49011,21 @@ import {
   readdirSync as readdirSync3,
   unlinkSync as unlinkSync4,
   openSync as openSync3,
-  readFileSync as readFileSync5,
+  readFileSync as readFileSync6,
   closeSync as closeSync3,
   constants as constants2
 } from "node:fs";
 import { tmpdir as tmpdir4, userInfo as userInfo4 } from "node:os";
-import { join as join7, resolve as resolve3, sep as sep2 } from "node:path";
+import { join as join8, resolve as resolve3, sep as sep2 } from "node:path";
 function revealDir() {
-  return process.env._AGENT_SANITIZER_REVEAL_DIR || join7(tmpdir4(), `agent-sanitizer-layer2-reveal-${PROJECT_HASH}`);
+  return process.env._AGENT_SANITIZER_REVEAL_DIR || join8(tmpdir4(), `agent-sanitizer-layer2-reveal-${PROJECT_HASH}`);
 }
 function sweepStaleReveals() {
   const dir = revealDir();
   if (!existsSync3(dir) || !revealDirIsSafe(dir)) return;
   const cutoff = Date.now() - REVEAL_TTL_MS;
   for (const name50 of readdirSync3(dir)) {
-    const path2 = join7(dir, name50);
+    const path2 = join8(dir, name50);
     try {
       if (lstatSync6(path2).mtimeMs < cutoff) unlinkSync4(path2);
     } catch (err) {
@@ -49005,7 +49039,7 @@ function sweepStaleReveals() {
 }
 function revealPathFor(content3) {
   const digest = createHash4("sha256").update(content3, "utf8").digest("hex");
-  return join7(revealDir(), `${digest}.txt`);
+  return join8(revealDir(), `${digest}.txt`);
 }
 function revealDirIsSafe(dir) {
   try {
@@ -49044,7 +49078,7 @@ function persistReveal(content3) {
 function spanPath(key) {
   if (!SPAN_KEY_RE.test(key))
     throw new Error(`spanPath: not a Layer-2 placeholder key: ${key}`);
-  return join7(revealDir(), `span-${key}.txt`);
+  return join8(revealDir(), `span-${key}.txt`);
 }
 function persistSpan(key, content3) {
   const dir = revealDir();
@@ -49056,7 +49090,7 @@ function persistSpan(key, content3) {
     );
     return false;
   }
-  const path2 = join7(dir, `span-${key}.txt`);
+  const path2 = join8(dir, `span-${key}.txt`);
   try {
     lstatSync6(path2);
     return true;
@@ -49078,14 +49112,14 @@ function readSpan(key) {
   let fd;
   try {
     fd = openSync3(
-      join7(dir, `span-${key}.txt`),
+      join8(dir, `span-${key}.txt`),
       constants2.O_RDONLY | constants2.O_NOFOLLOW
     );
   } catch {
     return null;
   }
   try {
-    return readFileSync5(fd, "utf8");
+    return readFileSync6(fd, "utf8");
   } finally {
     closeSync3(fd);
   }
@@ -49272,8 +49306,8 @@ __export(pretooluse_sanitize_exports, {
   rehydrateLayer2: () => rehydrateLayer2
 });
 import { createRequire as createRequire2 } from "node:module";
-import { readFileSync as readFileSync6 } from "node:fs";
-import { dirname as dirname6 } from "node:path";
+import { readFileSync as readFileSync7 } from "node:fs";
+import { dirname as dirname7 } from "node:path";
 function substituteLayer2(text5, field) {
   const matches = [...text5.matchAll(LAYER2_PLACEHOLDER_RE2)].map((match) => ({
     text: match[0],
@@ -49405,7 +49439,7 @@ function preToolUseLayers(rehydrate, env = process.env) {
 function toolTargetDir(tool, toolInput) {
   const field = PATH_FIELD_BY_TOOL[tool];
   const path2 = field && toolInput?.[field];
-  return typeof path2 === "string" && path2.startsWith("/") ? dirname6(path2) : void 0;
+  return typeof path2 === "string" && path2.startsWith("/") ? dirname7(path2) : void 0;
 }
 async function buildPreToolUseResponse(input, rehydrate = defaultRehydrate, sink = trace) {
   const emitTrace = bestEffortTrace(sink);
@@ -49620,7 +49654,7 @@ var init_pretooluse_sanitize = __esm({
       text5
     );
     redactorIo = {
-      readFile: (path2) => readFileSync6(path2, "utf8"),
+      readFile: (path2) => readFileSync7(path2, "utf8"),
       redactMap: async (text5) => (
         /** @type {any} */
         await redactViaDaemon(text5, { map: true })
@@ -50808,7 +50842,7 @@ __export(scan_invisible_chars_exports, {
   scanProject: () => scanProject,
   sessionIdFromStdin: () => sessionIdFromStdin
 });
-import { readFileSync as readFileSync7 } from "node:fs";
+import { readFileSync as readFileSync8 } from "node:fs";
 import { relative as relative3, resolve as resolve4 } from "node:path";
 async function ensureSanitizerLoaded() {
   if (typeof scanText2 === "function" && typeof cleanFile2 === "function")
@@ -50860,7 +50894,7 @@ function findInstructionFiles2(dir) {
   return launchInstructionFiles(dir);
 }
 function scanFile(filePath) {
-  return scanText2(readFileSync7(filePath, "utf-8"));
+  return scanText2(readFileSync8(filePath, "utf-8"));
 }
 function classifyReadFailure(err) {
   const code4 = (
@@ -51072,9 +51106,9 @@ __export(scan_loaded_instructions_exports, {
   scanLoadedFile: () => scanLoadedFile,
   scopeNotice: () => scopeNotice
 });
-import { readFileSync as readFileSync8 } from "node:fs";
+import { readFileSync as readFileSync9 } from "node:fs";
 function readInstructions(filePath) {
-  return readFileSync8(filePath, "utf-8");
+  return readFileSync9(filePath, "utf-8");
 }
 function faultLine2(ctx) {
   return `${HOOK_NAME5} hook error: ${ctx.message}. An instruction file Claude Code just loaded was NOT scanned for hidden Unicode, so any payload in it reaches the model unvetted.`;
