@@ -48,3 +48,6 @@ overrides:
   # GHSA-q8mj-m7cp-5q26 — remotely triggerable denial of service in qs.stringify.
   # Via @stryker-mutator/core.
   qs@>=6.11.1 <=6.15.1: "^6.15.2"
+
+patchedDependencies:
+  micromark-extension-gfm-autolink-literal@2.1.0: patches/micromark-extension-gfm-autolink-literal@2.1.0.patch

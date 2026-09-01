@@ -1,1 +1,6 @@
 plugin/dist/** -merge linguist-generated=true
+
+# A `.patch` is a diff: a blank context line IS " ", and stripping it makes
+# `git apply` reject the file. Exempt patches from the whitespace check
+# `.hooks/pre-commit` runs (`git diff --cached --check`).
+patches/*.patch -whitespace
