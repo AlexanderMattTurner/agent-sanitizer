@@ -389,20 +389,15 @@ jobs:
       # that holds the invariant: no file on `template-sync` carries a conflict
       # marker. It runs even when a step above it failed, because a resolve step
       # that died is exactly when the markers survive.
-      # It runs a BASE_SHA copy, not the workspace: `.github/scripts` is in
+      # It runs the STAGED copy, not the workspace: `.github/scripts` is in
       # SYNC_PATHS, so a sync can mark the gate's own file, and bash dies on it.
       - name: Refuse conflict markers on the sync branch
         if: ${{ !cancelled() && inputs.dry-run != true && steps.create-pr.outputs.pull-request-number }}
         env:
-          BASE_SHA: ${{ github.sha }}
+          SYNC_TOOLS: ${{ steps.tools.outputs.scripts }}
           # token-fallback-ok: designed graceful degradation, not an accident.
           GITHUB_TOKEN: ${{ secrets.TEMPLATE_SYNC_TOKEN_ORG || secrets.GITHUB_TOKEN }}
-        run: |
-          set -o pipefail
-          gate_dir="${RUNNER_TEMP}/marker-gate"
-          mkdir -p "${gate_dir}" # bare-mkdir-ok: the extraction below is the post-condition and fails loudly
-          timeout --kill-after=30 300 git archive "${BASE_SHA}" .github/scripts | tar -x -f - -C "${gate_dir}"
-          bash "${gate_dir}/.github/scripts/template-sync-marker-gate.sh"
+        run: bash "$SYNC_TOOLS/template-sync-marker-gate.sh"
 
       # A sync merges itself only when NOTHING needed judgement. See the script
       # for the full predicate; the two carve-outs are that a model-resolved file

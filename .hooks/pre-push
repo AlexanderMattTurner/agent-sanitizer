@@ -141,17 +141,10 @@ while read -r -u 3 _local_ref local_sha remote_ref remote_sha; do
   [[ ${#precommit_cmd[@]} -eq 0 ]] && continue
   from_ref="$remote_sha"
   if [[ "$from_ref" == "$zero" ]]; then
-    from_ref=$(git merge-base "$default_branch" "$local_tip" 2>/dev/null) ||
+    from_ref=$(git merge-base "$default_branch" "$local_sha" 2>/dev/null) ||
       from_ref=$(git hash-object -t tree /dev/null)
   fi
-  [[ "$from_ref" == "$local_tip" ]] && continue # nothing new to push
-  # The tool check sits BELOW the emptiness skip. A push that introduces no
-  # commits has nothing for pre-commit to look at, so demanding the tool first
-  # refuses a release-tag push from a runner that has no pre-commit — which is
-  # every runner auto-version.yaml tags from.
-  if [[ ${#precommit_cmd[@]} -eq 0 ]]; then
-    gate_die_missing_tool pre-push pre-commit "install uv (https://docs.astral.sh/uv/) or 'pip install pre-commit' so the pushed range can be checked, then push again."
-  fi
+  [[ "$from_ref" == "$local_sha" ]] && continue # nothing new to push
   # Redirect stdin from /dev/null: git feeds this loop the ref list on stdin,
   # and pre-commit (and the tools it drives) would otherwise inherit and consume
   # it, so a multi-ref push would check only the first range.
