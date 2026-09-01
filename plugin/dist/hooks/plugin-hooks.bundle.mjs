@@ -22995,372 +22995,6 @@ var init_mdast_util_gfm = __esm({
   }
 });
 
-// node_modules/.pnpm/micromark-extension-gfm-autolink-literal@2.1.0_patch_hash=271504847ffd11c4454e614278690_a0f879fe753716897fd94153128081ef/node_modules/micromark-extension-gfm-autolink-literal/lib/syntax.js
-function gfmAutolinkLiteral() {
-  return {
-    text: text4
-  };
-}
-function tokenizeEmailAutolink(effects, ok3, nok) {
-  const self = this;
-  let dot;
-  let data;
-  return start;
-  function start(code4) {
-    if (!gfmAtext(code4) || !previousEmail.call(self, self.previous) || previousUnbalanced(self.events)) {
-      return nok(code4);
-    }
-    effects.enter("literalAutolink");
-    effects.enter("literalAutolinkEmail");
-    return atext(code4);
-  }
-  function atext(code4) {
-    if (gfmAtext(code4)) {
-      effects.consume(code4);
-      return atext;
-    }
-    if (code4 === 64) {
-      effects.consume(code4);
-      return emailDomain;
-    }
-    return nok(code4);
-  }
-  function emailDomain(code4) {
-    if (code4 === 46) {
-      return effects.check(emailDomainDotTrail, emailDomainAfter, emailDomainDot)(code4);
-    }
-    if (code4 === 45 || code4 === 95 || asciiAlphanumeric(code4)) {
-      data = true;
-      effects.consume(code4);
-      return emailDomain;
-    }
-    return emailDomainAfter(code4);
-  }
-  function emailDomainDot(code4) {
-    effects.consume(code4);
-    dot = true;
-    return emailDomain;
-  }
-  function emailDomainAfter(code4) {
-    if (data && dot && asciiAlpha(self.previous)) {
-      effects.exit("literalAutolinkEmail");
-      effects.exit("literalAutolink");
-      return ok3(code4);
-    }
-    return nok(code4);
-  }
-}
-function tokenizeWwwAutolink(effects, ok3, nok) {
-  const self = this;
-  return wwwStart;
-  function wwwStart(code4) {
-    if (code4 !== 87 && code4 !== 119 || !previousWww.call(self, self.previous) || previousUnbalanced(self.events)) {
-      return nok(code4);
-    }
-    effects.enter("literalAutolink");
-    effects.enter("literalAutolinkWww");
-    return effects.check(wwwPrefix, effects.attempt(domain, effects.attempt(path, wwwAfter), nok), nok)(code4);
-  }
-  function wwwAfter(code4) {
-    effects.exit("literalAutolinkWww");
-    effects.exit("literalAutolink");
-    return ok3(code4);
-  }
-}
-function tokenizeProtocolAutolink(effects, ok3, nok) {
-  const self = this;
-  let buffer = "";
-  let seen = false;
-  return protocolStart;
-  function protocolStart(code4) {
-    if ((code4 === 72 || code4 === 104) && previousProtocol.call(self, self.previous) && !previousUnbalanced(self.events)) {
-      effects.enter("literalAutolink");
-      effects.enter("literalAutolinkHttp");
-      buffer += String.fromCodePoint(code4);
-      effects.consume(code4);
-      return protocolPrefixInside;
-    }
-    return nok(code4);
-  }
-  function protocolPrefixInside(code4) {
-    if (asciiAlpha(code4) && buffer.length < 5) {
-      buffer += String.fromCodePoint(code4);
-      effects.consume(code4);
-      return protocolPrefixInside;
-    }
-    if (code4 === 58) {
-      const protocol = buffer.toLowerCase();
-      if (protocol === "http" || protocol === "https") {
-        effects.consume(code4);
-        return protocolSlashesInside;
-      }
-    }
-    return nok(code4);
-  }
-  function protocolSlashesInside(code4) {
-    if (code4 === 47) {
-      effects.consume(code4);
-      if (seen) {
-        return afterProtocol;
-      }
-      seen = true;
-      return protocolSlashesInside;
-    }
-    return nok(code4);
-  }
-  function afterProtocol(code4) {
-    return code4 === null || asciiControl(code4) || markdownLineEndingOrSpace(code4) || unicodeWhitespace(code4) || unicodePunctuation(code4) ? nok(code4) : effects.attempt(domain, effects.attempt(path, protocolAfter), nok)(code4);
-  }
-  function protocolAfter(code4) {
-    effects.exit("literalAutolinkHttp");
-    effects.exit("literalAutolink");
-    return ok3(code4);
-  }
-}
-function tokenizeWwwPrefix(effects, ok3, nok) {
-  let size = 0;
-  return wwwPrefixInside;
-  function wwwPrefixInside(code4) {
-    if ((code4 === 87 || code4 === 119) && size < 3) {
-      size++;
-      effects.consume(code4);
-      return wwwPrefixInside;
-    }
-    if (code4 === 46 && size === 3) {
-      effects.consume(code4);
-      return wwwPrefixAfter;
-    }
-    return nok(code4);
-  }
-  function wwwPrefixAfter(code4) {
-    return code4 === null ? nok(code4) : ok3(code4);
-  }
-}
-function tokenizeDomain(effects, ok3, nok) {
-  let underscoreInLastSegment;
-  let underscoreInLastLastSegment;
-  let seen;
-  return domainInside;
-  function domainInside(code4) {
-    if (code4 === 46 || code4 === 95) {
-      return effects.check(trail, domainAfter, domainAtPunctuation)(code4);
-    }
-    if (code4 === null || markdownLineEndingOrSpace(code4) || unicodeWhitespace(code4) || code4 !== 45 && unicodePunctuation(code4)) {
-      return domainAfter(code4);
-    }
-    seen = true;
-    effects.consume(code4);
-    return domainInside;
-  }
-  function domainAtPunctuation(code4) {
-    if (code4 === 95) {
-      underscoreInLastSegment = true;
-    } else {
-      underscoreInLastLastSegment = underscoreInLastSegment;
-      underscoreInLastSegment = void 0;
-    }
-    effects.consume(code4);
-    return domainInside;
-  }
-  function domainAfter(code4) {
-    if (underscoreInLastLastSegment || underscoreInLastSegment || !seen) {
-      return nok(code4);
-    }
-    return ok3(code4);
-  }
-}
-function tokenizePath(effects, ok3) {
-  let sizeOpen = 0;
-  let sizeClose = 0;
-  return pathInside;
-  function pathInside(code4) {
-    if (code4 === 40) {
-      sizeOpen++;
-      effects.consume(code4);
-      return pathInside;
-    }
-    if (code4 === 41 && sizeClose < sizeOpen) {
-      return pathAtPunctuation(code4);
-    }
-    if (code4 === 33 || code4 === 34 || code4 === 38 || code4 === 39 || code4 === 41 || code4 === 42 || code4 === 44 || code4 === 46 || code4 === 58 || code4 === 59 || code4 === 60 || code4 === 63 || code4 === 93 || code4 === 95 || code4 === 126) {
-      return effects.check(trail, ok3, pathAtPunctuation)(code4);
-    }
-    if (code4 === null || markdownLineEndingOrSpace(code4) || unicodeWhitespace(code4)) {
-      return ok3(code4);
-    }
-    effects.consume(code4);
-    return pathInside;
-  }
-  function pathAtPunctuation(code4) {
-    if (code4 === 41) {
-      sizeClose++;
-    }
-    effects.consume(code4);
-    return pathInside;
-  }
-}
-function tokenizeTrail(effects, ok3, nok) {
-  return trail2;
-  function trail2(code4) {
-    if (code4 === 33 || code4 === 34 || code4 === 39 || code4 === 41 || code4 === 42 || code4 === 44 || code4 === 46 || code4 === 58 || code4 === 59 || code4 === 63 || code4 === 95 || code4 === 126) {
-      effects.consume(code4);
-      return trail2;
-    }
-    if (code4 === 38) {
-      effects.consume(code4);
-      return trailCharacterReferenceStart;
-    }
-    if (code4 === 93) {
-      effects.consume(code4);
-      return trailBracketAfter;
-    }
-    if (
-      // `<` is an end.
-      code4 === 60 || // So is whitespace.
-      code4 === null || markdownLineEndingOrSpace(code4) || unicodeWhitespace(code4)
-    ) {
-      return ok3(code4);
-    }
-    return nok(code4);
-  }
-  function trailBracketAfter(code4) {
-    if (code4 === null || code4 === 40 || code4 === 91 || markdownLineEndingOrSpace(code4) || unicodeWhitespace(code4)) {
-      return ok3(code4);
-    }
-    return trail2(code4);
-  }
-  function trailCharacterReferenceStart(code4) {
-    return asciiAlpha(code4) ? trailCharacterReferenceInside(code4) : nok(code4);
-  }
-  function trailCharacterReferenceInside(code4) {
-    if (code4 === 59) {
-      effects.consume(code4);
-      return trail2;
-    }
-    if (asciiAlpha(code4)) {
-      effects.consume(code4);
-      return trailCharacterReferenceInside;
-    }
-    return nok(code4);
-  }
-}
-function tokenizeEmailDomainDotTrail(effects, ok3, nok) {
-  return start;
-  function start(code4) {
-    effects.consume(code4);
-    return after;
-  }
-  function after(code4) {
-    return asciiAlphanumeric(code4) ? nok(code4) : ok3(code4);
-  }
-}
-function previousWww(code4) {
-  return code4 === null || code4 === 40 || code4 === 42 || code4 === 95 || code4 === 91 || code4 === 93 || code4 === 126 || markdownLineEndingOrSpace(code4);
-}
-function previousProtocol(code4) {
-  return !asciiAlpha(code4);
-}
-function previousEmail(code4) {
-  return !(code4 === 47 || gfmAtext(code4));
-}
-function gfmAtext(code4) {
-  return code4 === 43 || code4 === 45 || code4 === 46 || code4 === 95 || asciiAlphanumeric(code4);
-}
-function previousUnbalanced(events) {
-  let index2 = events.length;
-  let result = false;
-  while (index2--) {
-    const token = events[index2][1];
-    if ((token.type === "labelLink" || token.type === "labelImage") && !token._balanced) {
-      result = true;
-      break;
-    }
-    if (token._gfmAutolinkLiteralWalkedInto) {
-      result = false;
-      break;
-    }
-    const skip = token._gfmAutolinkLiteralSkipTo;
-    if (skip !== void 0 && skip.index < index2 && events[skip.index] !== void 0 && events[skip.index][1] === skip.token) {
-      index2 = skip.index + 1;
-    }
-  }
-  if (events.length > 0) {
-    if (!result) {
-      events[events.length - 1][1]._gfmAutolinkLiteralWalkedInto = true;
-    } else if (index2 >= 0) {
-      events[events.length - 1][1]._gfmAutolinkLiteralSkipTo = {
-        index: index2,
-        token: events[index2][1]
-      };
-    }
-  }
-  return result;
-}
-var wwwPrefix, domain, path, trail, emailDomainDotTrail, wwwAutolink, protocolAutolink, emailAutolink, text4, code3;
-var init_syntax = __esm({
-  "node_modules/.pnpm/micromark-extension-gfm-autolink-literal@2.1.0_patch_hash=271504847ffd11c4454e614278690_a0f879fe753716897fd94153128081ef/node_modules/micromark-extension-gfm-autolink-literal/lib/syntax.js"() {
-    init_micromark_util_character();
-    wwwPrefix = {
-      tokenize: tokenizeWwwPrefix,
-      partial: true
-    };
-    domain = {
-      tokenize: tokenizeDomain,
-      partial: true
-    };
-    path = {
-      tokenize: tokenizePath,
-      partial: true
-    };
-    trail = {
-      tokenize: tokenizeTrail,
-      partial: true
-    };
-    emailDomainDotTrail = {
-      tokenize: tokenizeEmailDomainDotTrail,
-      partial: true
-    };
-    wwwAutolink = {
-      name: "wwwAutolink",
-      tokenize: tokenizeWwwAutolink,
-      previous: previousWww
-    };
-    protocolAutolink = {
-      name: "protocolAutolink",
-      tokenize: tokenizeProtocolAutolink,
-      previous: previousProtocol
-    };
-    emailAutolink = {
-      name: "emailAutolink",
-      tokenize: tokenizeEmailAutolink,
-      previous: previousEmail
-    };
-    text4 = {};
-    code3 = 48;
-    while (code3 < 123) {
-      text4[code3] = emailAutolink;
-      code3++;
-      if (code3 === 58) code3 = 65;
-      else if (code3 === 91) code3 = 97;
-    }
-    text4[43] = emailAutolink;
-    text4[45] = emailAutolink;
-    text4[46] = emailAutolink;
-    text4[95] = emailAutolink;
-    text4[72] = [emailAutolink, protocolAutolink];
-    text4[104] = [emailAutolink, protocolAutolink];
-    text4[87] = [emailAutolink, wwwAutolink];
-    text4[119] = [emailAutolink, wwwAutolink];
-  }
-});
-
-// node_modules/.pnpm/micromark-extension-gfm-autolink-literal@2.1.0_patch_hash=271504847ffd11c4454e614278690_a0f879fe753716897fd94153128081ef/node_modules/micromark-extension-gfm-autolink-literal/index.js
-var init_micromark_extension_gfm_autolink_literal = __esm({
-  "node_modules/.pnpm/micromark-extension-gfm-autolink-literal@2.1.0_patch_hash=271504847ffd11c4454e614278690_a0f879fe753716897fd94153128081ef/node_modules/micromark-extension-gfm-autolink-literal/index.js"() {
-    init_syntax();
-  }
-});
-
 // node_modules/.pnpm/micromark-extension-gfm-footnote@2.1.0/node_modules/micromark-extension-gfm-footnote/lib/syntax.js
 function gfmFootnote() {
   return {
@@ -23632,7 +23266,7 @@ function tokenizeIndent2(effects, ok3, nok) {
   }
 }
 var indent;
-var init_syntax2 = __esm({
+var init_syntax = __esm({
   "node_modules/.pnpm/micromark-extension-gfm-footnote@2.1.0/node_modules/micromark-extension-gfm-footnote/lib/syntax.js"() {
     init_micromark_core_commonmark();
     init_micromark_factory_space();
@@ -23648,7 +23282,7 @@ var init_syntax2 = __esm({
 // node_modules/.pnpm/micromark-extension-gfm-footnote@2.1.0/node_modules/micromark-extension-gfm-footnote/index.js
 var init_micromark_extension_gfm_footnote = __esm({
   "node_modules/.pnpm/micromark-extension-gfm-footnote@2.1.0/node_modules/micromark-extension-gfm-footnote/index.js"() {
-    init_syntax2();
+    init_syntax();
   }
 });
 
@@ -23745,7 +23379,7 @@ function gfmStrikethrough(options) {
     }
   }
 }
-var init_syntax3 = __esm({
+var init_syntax2 = __esm({
   "node_modules/.pnpm/micromark-extension-gfm-strikethrough@2.1.0/node_modules/micromark-extension-gfm-strikethrough/lib/syntax.js"() {
     init_micromark_util_chunked();
     init_micromark_util_classify_character();
@@ -23756,7 +23390,7 @@ var init_syntax3 = __esm({
 // node_modules/.pnpm/micromark-extension-gfm-strikethrough@2.1.0/node_modules/micromark-extension-gfm-strikethrough/index.js
 var init_micromark_extension_gfm_strikethrough = __esm({
   "node_modules/.pnpm/micromark-extension-gfm-strikethrough@2.1.0/node_modules/micromark-extension-gfm-strikethrough/index.js"() {
-    init_syntax3();
+    init_syntax2();
   }
 });
 
@@ -24260,7 +23894,7 @@ function getPoint(events, index2) {
   const side = event[0] === "enter" ? "start" : "end";
   return event[1][side];
 }
-var init_syntax4 = __esm({
+var init_syntax3 = __esm({
   "node_modules/.pnpm/micromark-extension-gfm-table@2.1.1/node_modules/micromark-extension-gfm-table/lib/syntax.js"() {
     init_micromark_factory_space();
     init_micromark_util_character();
@@ -24272,7 +23906,7 @@ var init_syntax4 = __esm({
 // node_modules/.pnpm/micromark-extension-gfm-table@2.1.1/node_modules/micromark-extension-gfm-table/index.js
 var init_micromark_extension_gfm_table = __esm({
   "node_modules/.pnpm/micromark-extension-gfm-table@2.1.1/node_modules/micromark-extension-gfm-table/index.js"() {
-    init_syntax4();
+    init_syntax3();
   }
 });
 
@@ -24346,7 +23980,7 @@ function spaceThenNonSpace(effects, ok3, nok) {
   }
 }
 var tasklistCheck;
-var init_syntax5 = __esm({
+var init_syntax4 = __esm({
   "node_modules/.pnpm/micromark-extension-gfm-task-list-item@2.1.0/node_modules/micromark-extension-gfm-task-list-item/lib/syntax.js"() {
     init_micromark_factory_space();
     init_micromark_util_character();
@@ -24360,59 +23994,410 @@ var init_syntax5 = __esm({
 // node_modules/.pnpm/micromark-extension-gfm-task-list-item@2.1.0/node_modules/micromark-extension-gfm-task-list-item/index.js
 var init_micromark_extension_gfm_task_list_item = __esm({
   "node_modules/.pnpm/micromark-extension-gfm-task-list-item@2.1.0/node_modules/micromark-extension-gfm-task-list-item/index.js"() {
-    init_syntax5();
+    init_syntax4();
   }
 });
 
-// node_modules/.pnpm/micromark-extension-gfm@3.0.0/node_modules/micromark-extension-gfm/index.js
-function gfm(options) {
-  return combineExtensions([
-    gfmAutolinkLiteral(),
-    gfmFootnote(),
-    gfmStrikethrough(options),
-    gfmTable(),
-    gfmTaskListItem()
-  ]);
+// src/vendor/gfm-autolink-literal.mjs
+function gfmAutolinkLiteral() {
+  return {
+    text: text4
+  };
 }
-var init_micromark_extension_gfm = __esm({
-  "node_modules/.pnpm/micromark-extension-gfm@3.0.0/node_modules/micromark-extension-gfm/index.js"() {
-    init_micromark_util_combine_extensions();
-    init_micromark_extension_gfm_autolink_literal();
+function tokenizeEmailAutolink(effects, ok3, nok) {
+  const self = this;
+  let dot;
+  let data;
+  return start;
+  function start(code4) {
+    if (!gfmAtext(code4) || !previousEmail.call(self, self.previous) || previousUnbalanced(self.events)) {
+      return nok(code4);
+    }
+    effects.enter("literalAutolink");
+    effects.enter("literalAutolinkEmail");
+    return atext(code4);
+  }
+  function atext(code4) {
+    if (gfmAtext(code4)) {
+      effects.consume(code4);
+      return atext;
+    }
+    if (code4 === 64) {
+      effects.consume(code4);
+      return emailDomain;
+    }
+    return nok(code4);
+  }
+  function emailDomain(code4) {
+    if (code4 === 46) {
+      return effects.check(
+        emailDomainDotTrail,
+        emailDomainAfter,
+        emailDomainDot
+      )(code4);
+    }
+    if (code4 === 45 || code4 === 95 || asciiAlphanumeric(code4)) {
+      data = true;
+      effects.consume(code4);
+      return emailDomain;
+    }
+    return emailDomainAfter(code4);
+  }
+  function emailDomainDot(code4) {
+    effects.consume(code4);
+    dot = true;
+    return emailDomain;
+  }
+  function emailDomainAfter(code4) {
+    if (data && dot && asciiAlpha(self.previous)) {
+      effects.exit("literalAutolinkEmail");
+      effects.exit("literalAutolink");
+      return ok3(code4);
+    }
+    return nok(code4);
+  }
+}
+function tokenizeWwwAutolink(effects, ok3, nok) {
+  const self = this;
+  return wwwStart;
+  function wwwStart(code4) {
+    if (code4 !== 87 && code4 !== 119 || !previousWww.call(self, self.previous) || previousUnbalanced(self.events)) {
+      return nok(code4);
+    }
+    effects.enter("literalAutolink");
+    effects.enter("literalAutolinkWww");
+    return effects.check(
+      wwwPrefix,
+      effects.attempt(domain, effects.attempt(path, wwwAfter), nok),
+      nok
+    )(code4);
+  }
+  function wwwAfter(code4) {
+    effects.exit("literalAutolinkWww");
+    effects.exit("literalAutolink");
+    return ok3(code4);
+  }
+}
+function tokenizeProtocolAutolink(effects, ok3, nok) {
+  const self = this;
+  let buffer = "";
+  let seen = false;
+  return protocolStart;
+  function protocolStart(code4) {
+    if ((code4 === 72 || code4 === 104) && previousProtocol.call(self, self.previous) && !previousUnbalanced(self.events)) {
+      effects.enter("literalAutolink");
+      effects.enter("literalAutolinkHttp");
+      buffer += String.fromCodePoint(code4);
+      effects.consume(code4);
+      return protocolPrefixInside;
+    }
+    return nok(code4);
+  }
+  function protocolPrefixInside(code4) {
+    if (asciiAlpha(code4) && buffer.length < 5) {
+      buffer += String.fromCodePoint(code4);
+      effects.consume(code4);
+      return protocolPrefixInside;
+    }
+    if (code4 === 58) {
+      const protocol = buffer.toLowerCase();
+      if (protocol === "http" || protocol === "https") {
+        effects.consume(code4);
+        return protocolSlashesInside;
+      }
+    }
+    return nok(code4);
+  }
+  function protocolSlashesInside(code4) {
+    if (code4 === 47) {
+      effects.consume(code4);
+      if (seen) {
+        return afterProtocol;
+      }
+      seen = true;
+      return protocolSlashesInside;
+    }
+    return nok(code4);
+  }
+  function afterProtocol(code4) {
+    return code4 === null || asciiControl(code4) || markdownLineEndingOrSpace(code4) || unicodeWhitespace(code4) || unicodePunctuation(code4) ? nok(code4) : effects.attempt(
+      domain,
+      effects.attempt(path, protocolAfter),
+      nok
+    )(code4);
+  }
+  function protocolAfter(code4) {
+    effects.exit("literalAutolinkHttp");
+    effects.exit("literalAutolink");
+    return ok3(code4);
+  }
+}
+function tokenizeWwwPrefix(effects, ok3, nok) {
+  let size = 0;
+  return wwwPrefixInside;
+  function wwwPrefixInside(code4) {
+    if ((code4 === 87 || code4 === 119) && size < 3) {
+      size++;
+      effects.consume(code4);
+      return wwwPrefixInside;
+    }
+    if (code4 === 46 && size === 3) {
+      effects.consume(code4);
+      return wwwPrefixAfter;
+    }
+    return nok(code4);
+  }
+  function wwwPrefixAfter(code4) {
+    return code4 === null ? nok(code4) : ok3(code4);
+  }
+}
+function tokenizeDomain(effects, ok3, nok) {
+  let underscoreInLastSegment;
+  let underscoreInLastLastSegment;
+  let seen;
+  return domainInside;
+  function domainInside(code4) {
+    if (code4 === 46 || code4 === 95) {
+      return effects.check(trail, domainAfter, domainAtPunctuation)(code4);
+    }
+    if (code4 === null || markdownLineEndingOrSpace(code4) || unicodeWhitespace(code4) || code4 !== 45 && unicodePunctuation(code4)) {
+      return domainAfter(code4);
+    }
+    seen = true;
+    effects.consume(code4);
+    return domainInside;
+  }
+  function domainAtPunctuation(code4) {
+    if (code4 === 95) {
+      underscoreInLastSegment = true;
+    } else {
+      underscoreInLastLastSegment = underscoreInLastSegment;
+      underscoreInLastSegment = void 0;
+    }
+    effects.consume(code4);
+    return domainInside;
+  }
+  function domainAfter(code4) {
+    if (underscoreInLastLastSegment || underscoreInLastSegment || !seen) {
+      return nok(code4);
+    }
+    return ok3(code4);
+  }
+}
+function tokenizePath(effects, ok3) {
+  let sizeOpen = 0;
+  let sizeClose = 0;
+  return pathInside;
+  function pathInside(code4) {
+    if (code4 === 40) {
+      sizeOpen++;
+      effects.consume(code4);
+      return pathInside;
+    }
+    if (code4 === 41 && sizeClose < sizeOpen) {
+      return pathAtPunctuation(code4);
+    }
+    if (code4 === 33 || code4 === 34 || code4 === 38 || code4 === 39 || code4 === 41 || code4 === 42 || code4 === 44 || code4 === 46 || code4 === 58 || code4 === 59 || code4 === 60 || code4 === 63 || code4 === 93 || code4 === 95 || code4 === 126) {
+      return effects.check(trail, ok3, pathAtPunctuation)(code4);
+    }
+    if (code4 === null || markdownLineEndingOrSpace(code4) || unicodeWhitespace(code4)) {
+      return ok3(code4);
+    }
+    effects.consume(code4);
+    return pathInside;
+  }
+  function pathAtPunctuation(code4) {
+    if (code4 === 41) {
+      sizeClose++;
+    }
+    effects.consume(code4);
+    return pathInside;
+  }
+}
+function tokenizeTrail(effects, ok3, nok) {
+  return trail2;
+  function trail2(code4) {
+    if (code4 === 33 || code4 === 34 || code4 === 39 || code4 === 41 || code4 === 42 || code4 === 44 || code4 === 46 || code4 === 58 || code4 === 59 || code4 === 63 || code4 === 95 || code4 === 126) {
+      effects.consume(code4);
+      return trail2;
+    }
+    if (code4 === 38) {
+      effects.consume(code4);
+      return trailCharacterReferenceStart;
+    }
+    if (code4 === 93) {
+      effects.consume(code4);
+      return trailBracketAfter;
+    }
+    if (
+      // `<` is an end.
+      code4 === 60 || // So is whitespace.
+      code4 === null || markdownLineEndingOrSpace(code4) || unicodeWhitespace(code4)
+    ) {
+      return ok3(code4);
+    }
+    return nok(code4);
+  }
+  function trailBracketAfter(code4) {
+    if (code4 === null || code4 === 40 || code4 === 91 || markdownLineEndingOrSpace(code4) || unicodeWhitespace(code4)) {
+      return ok3(code4);
+    }
+    return trail2(code4);
+  }
+  function trailCharacterReferenceStart(code4) {
+    return asciiAlpha(code4) ? trailCharacterReferenceInside(code4) : nok(code4);
+  }
+  function trailCharacterReferenceInside(code4) {
+    if (code4 === 59) {
+      effects.consume(code4);
+      return trail2;
+    }
+    if (asciiAlpha(code4)) {
+      effects.consume(code4);
+      return trailCharacterReferenceInside;
+    }
+    return nok(code4);
+  }
+}
+function tokenizeEmailDomainDotTrail(effects, ok3, nok) {
+  return start;
+  function start(code4) {
+    effects.consume(code4);
+    return after;
+  }
+  function after(code4) {
+    return asciiAlphanumeric(code4) ? nok(code4) : ok3(code4);
+  }
+}
+function previousWww(code4) {
+  return code4 === null || code4 === 40 || code4 === 42 || code4 === 95 || code4 === 91 || code4 === 93 || code4 === 126 || markdownLineEndingOrSpace(code4);
+}
+function previousProtocol(code4) {
+  return !asciiAlpha(code4);
+}
+function previousEmail(code4) {
+  return !(code4 === 47 || gfmAtext(code4));
+}
+function gfmAtext(code4) {
+  return code4 === 43 || code4 === 45 || code4 === 46 || code4 === 95 || asciiAlphanumeric(code4);
+}
+function previousUnbalanced(events) {
+  let index2 = events.length;
+  let result = false;
+  while (index2--) {
+    const token = events[index2][1];
+    if ((token.type === "labelLink" || token.type === "labelImage") && !token._balanced) {
+      result = true;
+      break;
+    }
+    if (token._gfmAutolinkLiteralWalkedInto) {
+      result = false;
+      break;
+    }
+    const skip = token._gfmAutolinkLiteralSkipTo;
+    if (skip !== void 0 && skip.index < index2 && events[skip.index] !== void 0 && events[skip.index][1] === skip.token) {
+      index2 = skip.index + 1;
+    }
+  }
+  if (events.length > 0) {
+    if (!result) {
+      events[events.length - 1][1]._gfmAutolinkLiteralWalkedInto = true;
+    } else if (index2 >= 0) {
+      events[events.length - 1][1]._gfmAutolinkLiteralSkipTo = {
+        index: index2,
+        token: events[index2][1]
+      };
+    }
+  }
+  return result;
+}
+var wwwPrefix, domain, path, trail, emailDomainDotTrail, wwwAutolink, protocolAutolink, emailAutolink, text4, code3;
+var init_gfm_autolink_literal = __esm({
+  "src/vendor/gfm-autolink-literal.mjs"() {
+    "use strict";
+    init_micromark_util_character();
+    wwwPrefix = {
+      tokenize: tokenizeWwwPrefix,
+      partial: true
+    };
+    domain = {
+      tokenize: tokenizeDomain,
+      partial: true
+    };
+    path = {
+      tokenize: tokenizePath,
+      partial: true
+    };
+    trail = {
+      tokenize: tokenizeTrail,
+      partial: true
+    };
+    emailDomainDotTrail = {
+      tokenize: tokenizeEmailDomainDotTrail,
+      partial: true
+    };
+    wwwAutolink = {
+      name: "wwwAutolink",
+      tokenize: tokenizeWwwAutolink,
+      previous: previousWww
+    };
+    protocolAutolink = {
+      name: "protocolAutolink",
+      tokenize: tokenizeProtocolAutolink,
+      previous: previousProtocol
+    };
+    emailAutolink = {
+      name: "emailAutolink",
+      tokenize: tokenizeEmailAutolink,
+      previous: previousEmail
+    };
+    text4 = {};
+    code3 = 48;
+    while (code3 < 123) {
+      text4[code3] = emailAutolink;
+      code3++;
+      if (code3 === 58) code3 = 65;
+      else if (code3 === 91) code3 = 97;
+    }
+    text4[43] = emailAutolink;
+    text4[45] = emailAutolink;
+    text4[46] = emailAutolink;
+    text4[95] = emailAutolink;
+    text4[72] = [emailAutolink, protocolAutolink];
+    text4[104] = [emailAutolink, protocolAutolink];
+    text4[87] = [emailAutolink, wwwAutolink];
+    text4[119] = [emailAutolink, wwwAutolink];
+  }
+});
+
+// src/gfm.mjs
+function remarkGfmFixed() {
+  const data = this.data();
+  const micromarkExtensions = data.micromarkExtensions || (data.micromarkExtensions = []);
+  const fromMarkdownExtensions = data.fromMarkdownExtensions || (data.fromMarkdownExtensions = []);
+  const toMarkdownExtensions = data.toMarkdownExtensions || (data.toMarkdownExtensions = []);
+  micromarkExtensions.push(
+    combineExtensions([
+      gfmAutolinkLiteral(),
+      gfmFootnote(),
+      gfmStrikethrough(),
+      gfmTable(),
+      gfmTaskListItem()
+    ])
+  );
+  fromMarkdownExtensions.push(gfmFromMarkdown());
+  toMarkdownExtensions.push(gfmToMarkdown());
+}
+var init_gfm = __esm({
+  "src/gfm.mjs"() {
+    "use strict";
+    init_mdast_util_gfm();
     init_micromark_extension_gfm_footnote();
     init_micromark_extension_gfm_strikethrough();
     init_micromark_extension_gfm_table();
     init_micromark_extension_gfm_task_list_item();
-  }
-});
-
-// node_modules/.pnpm/remark-gfm@4.0.1/node_modules/remark-gfm/lib/index.js
-function remarkGfm(options) {
-  const self = (
-    /** @type {Processor<Root>} */
-    this
-  );
-  const settings = options || emptyOptions2;
-  const data = self.data();
-  const micromarkExtensions = data.micromarkExtensions || (data.micromarkExtensions = []);
-  const fromMarkdownExtensions = data.fromMarkdownExtensions || (data.fromMarkdownExtensions = []);
-  const toMarkdownExtensions = data.toMarkdownExtensions || (data.toMarkdownExtensions = []);
-  micromarkExtensions.push(gfm(settings));
-  fromMarkdownExtensions.push(gfmFromMarkdown());
-  toMarkdownExtensions.push(gfmToMarkdown(settings));
-}
-var emptyOptions2;
-var init_lib20 = __esm({
-  "node_modules/.pnpm/remark-gfm@4.0.1/node_modules/remark-gfm/lib/index.js"() {
-    init_mdast_util_gfm();
-    init_micromark_extension_gfm();
-    emptyOptions2 = {};
-  }
-});
-
-// node_modules/.pnpm/remark-gfm@4.0.1/node_modules/remark-gfm/index.js
-var init_remark_gfm = __esm({
-  "node_modules/.pnpm/remark-gfm@4.0.1/node_modules/remark-gfm/index.js"() {
-    init_lib20();
+    init_micromark_util_combine_extensions();
+    init_gfm_autolink_literal();
   }
 });
 
@@ -33794,7 +33779,7 @@ function parseSelector(selector2, defaultTagName) {
   };
 }
 var search2;
-var init_lib21 = __esm({
+var init_lib20 = __esm({
   "node_modules/.pnpm/hast-util-parse-selector@4.0.0/node_modules/hast-util-parse-selector/lib/index.js"() {
     search2 = /[#.]/g;
   }
@@ -33803,7 +33788,7 @@ var init_lib21 = __esm({
 // node_modules/.pnpm/hast-util-parse-selector@4.0.0/node_modules/hast-util-parse-selector/index.js
 var init_hast_util_parse_selector = __esm({
   "node_modules/.pnpm/hast-util-parse-selector@4.0.0/node_modules/hast-util-parse-selector/index.js"() {
-    init_lib21();
+    init_lib20();
   }
 });
 
@@ -34027,7 +34012,7 @@ var init_svg_case_sensitive_tag_names = __esm({
 
 // node_modules/.pnpm/hastscript@9.0.1/node_modules/hastscript/lib/index.js
 var h, s;
-var init_lib22 = __esm({
+var init_lib21 = __esm({
   "node_modules/.pnpm/hastscript@9.0.1/node_modules/hastscript/lib/index.js"() {
     init_property_information();
     init_create_h();
@@ -34040,7 +34025,7 @@ var init_lib22 = __esm({
 // node_modules/.pnpm/hastscript@9.0.1/node_modules/hastscript/index.js
 var init_hastscript = __esm({
   "node_modules/.pnpm/hastscript@9.0.1/node_modules/hastscript/index.js"() {
-    init_lib22();
+    init_lib21();
   }
 });
 
@@ -34091,7 +34076,7 @@ function next(value, from) {
   if (cr === -1 || cr + 1 === lf) return lf;
   return cr < lf ? cr : lf;
 }
-var init_lib23 = __esm({
+var init_lib22 = __esm({
   "node_modules/.pnpm/vfile-location@5.0.3/node_modules/vfile-location/lib/index.js"() {
   }
 });
@@ -34099,7 +34084,7 @@ var init_lib23 = __esm({
 // node_modules/.pnpm/vfile-location@5.0.3/node_modules/vfile-location/index.js
 var init_vfile_location = __esm({
   "node_modules/.pnpm/vfile-location@5.0.3/node_modules/vfile-location/index.js"() {
-    init_lib23();
+    init_lib22();
   }
 });
 
@@ -34298,7 +34283,7 @@ function point3(point4) {
   return point4.line && point4.column ? point4 : void 0;
 }
 var own4, proto;
-var init_lib24 = __esm({
+var init_lib23 = __esm({
   "node_modules/.pnpm/hast-util-from-parse5@8.0.3/node_modules/hast-util-from-parse5/lib/index.js"() {
     init_default2();
     init_hastscript();
@@ -34313,7 +34298,7 @@ var init_lib24 = __esm({
 // node_modules/.pnpm/hast-util-from-parse5@8.0.3/node_modules/hast-util-from-parse5/index.js
 var init_hast_util_from_parse5 = __esm({
   "node_modules/.pnpm/hast-util-from-parse5@8.0.3/node_modules/hast-util-from-parse5/index.js"() {
-    init_lib24();
+    init_lib23();
   }
 });
 
@@ -46144,7 +46129,7 @@ var init_html4 = __esm({
     init_utils2();
     init_unified();
     init_remark_parse();
-    init_remark_gfm();
+    init_gfm();
     init_html_tree_adapter();
     init_unist_util_visit();
     init_gates();
@@ -46421,7 +46406,7 @@ var init_html4 = __esm({
     HIDDEN_PLACEHOLDER = "[hidden HTML removed";
     COMMENT_PLACEHOLDER = "[HTML comment removed";
     UNPARSEABLE_PLACEHOLDER = "[HTML unparseable \u2014 withheld]";
-    mdParser = unified().use(remarkParse).use(remarkGfm);
+    mdParser = unified().use(remarkParse).use(remarkGfmFixed);
     parseMarkdown = lastParseCached((text5) => mdParser.parse(text5));
     MARKDOWN_CODE_HINT = /```|~~~|^(?: {4}| *\t)/m;
     BOGUS_COMMENT_OPEN_RE = /<[!?]/g;

@@ -7,5 +7,5 @@
     "rootDir": "src",
     "outDir": "types"
   },
-  "include": ["src/**/*.mjs"]
+  "include": ["src/**/*.mjs", "src/**/*.d.ts"]
 }
