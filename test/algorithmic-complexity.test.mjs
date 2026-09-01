@@ -19,8 +19,8 @@
  * rather than a millisecond count, so machine speed and the coverage
  * instrumentation scale both sides (see `test/helpers/cpu-timing.mjs`).
  *
- * Every shape here reads 5-11x on the implementations that ship, and three read
- * 64.0x, 61.1x and 27.1x against the ones they were written for;
+ * Every shape here reads 5-11x on the implementations that ship, and four read
+ * 70.4x, 64.0x, 61.1x and 27.1x against the ones they were written for;
  * {@link GROWTH_LIMIT} sits between those two populations. `sanitizeHtml` is the
  * exception: the `[^>]*$` tail reads 10.2x against 8.8x, because the document
  * parse costs as much again as the rescan at BOTH sizes and pulls the blended

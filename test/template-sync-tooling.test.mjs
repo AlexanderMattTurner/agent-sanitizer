@@ -59,6 +59,15 @@ const stagingStepId = JSON.stringify(syncJob ?? null).match(
   /steps\.([A-Za-z0-9_-]+)\.outputs\.[A-Za-z0-9_-]+\s*\}\}/,
 )?.[1];
 
+/**
+ * The expression a step must bind `SYNC_TOOLS` to.
+ *
+ * Presence of the key is not the invariant: `SYNC_TOOLS: .github/scripts` with
+ * `run: bash "$SYNC_TOOLS/x.sh"` clears every other assertion in this file and
+ * still runs the marker-bearing copy — the bug run 33209471506 hit.
+ */
+const STAGED_SCRIPTS = `\${{ steps.${stagingStepId}.outputs.scripts }}`;
+
 /** Every step of the `sync` job that runs a shell block, with its index. */
 const runSteps = (syncJob?.steps ?? [])
   .map((step, index) => ({ step, index }))
@@ -93,8 +102,8 @@ describe("template-sync.yaml: the sync job runs staged tooling", () => {
   it("names no script in the working tree", () => {
     for (const { step, index } of runSteps)
       assert.ok(
-        !step.run.includes(".github/scripts/"),
-        `${WORKFLOW}: ${label(step, index)} names .github/scripts/ — the sync ` +
+        !step.run.includes(".github/scripts"),
+        `${WORKFLOW}: ${label(step, index)} names .github/scripts — the sync ` +
           `writes conflict markers there, so run it from "$SYNC_TOOLS/…" instead`,
       );
   });
@@ -126,15 +135,15 @@ describe("template-sync.yaml: the sync job runs staged tooling", () => {
     );
   });
 
-  it("wires SYNC_TOOLS into the env of every step that reads it", () => {
+  it("sets SYNC_TOOLS to the staged copy in every step that reads it", () => {
     for (const { step, index } of runSteps) {
       if (!step.run.includes("SYNC_TOOLS")) continue;
-      assert.ok(
-        Object.hasOwn(step.env ?? {}, "SYNC_TOOLS") ||
-          Object.hasOwn(syncJob.env ?? {}, "SYNC_TOOLS"),
-        `${WORKFLOW}: ${label(step, index)} reads $SYNC_TOOLS but nothing sets ` +
-          `it — add \`SYNC_TOOLS: \${{ steps.${stagingStepId}.outputs.scripts }}\` ` +
-          `to the step's env, or to the job's`,
+      assert.equal(
+        (step.env ?? {}).SYNC_TOOLS ?? (syncJob.env ?? {}).SYNC_TOOLS,
+        STAGED_SCRIPTS,
+        `${WORKFLOW}: ${label(step, index)} reads $SYNC_TOOLS but does not set ` +
+          `it to the staged copy — add \`SYNC_TOOLS: ${STAGED_SCRIPTS}\` to the ` +
+          `step's env, or to the job's`,
       );
     }
   });
