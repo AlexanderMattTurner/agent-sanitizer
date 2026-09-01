@@ -87,9 +87,21 @@ fi
 # no BASE_REF and keep their exact ranges. Fail-open: any fetch/resolve failure leaves
 # BASE_SHA at the webhook value — today's safe over-run, never an under-run.
 if [[ -n "${BASE_REF:-}" && -n "${GH_TOKEN:-}" ]]; then
+<<<<<<< local
   auth="" # assigned by name below; shellcheck cannot follow printf -v
   git_auth_header_value auth "$GH_TOKEN"
   if timeout --kill-after=10 60 git -c "$GIT_AUTH_HEADER_KEY=$auth" \
+||||||| base
+  auth="$(printf 'x-access-token:%s' "$GH_TOKEN" | base64 | tr -d '\n')"
+  if git -c "http.extraheader=AUTHORIZATION: basic $auth" \
+=======
+  # Scope the header to github.com, never bare `http.extraheader`: an unscoped
+  # header rides along to EVERY host this git process contacts, so a redirect or
+  # a submodule URL pointing elsewhere receives the token. The scoped key is the
+  # repo's one auth idiom (auto-resolve/lib.sh, prepare-merge-delta-input.sh).
+  auth="$(printf 'x-access-token:%s' "$GH_TOKEN" | base64 | tr -d '\n')"
+  if timeout --kill-after=10 60 git -c "http.https://github.com/.extraheader=AUTHORIZATION: basic $auth" \
+>>>>>>> template
     fetch --no-tags --quiet origin "$BASE_REF" 2>/dev/null; then
     live_base="$(git rev-parse FETCH_HEAD 2>/dev/null || true)"
     # Only advance the base FORWARD along history: require the live tip to be a
@@ -124,7 +136,9 @@ fi
 # the collection-time import closure of a test; shell-targets gives what a shell
 # entry point can run. Both fail RED on a bad target and never fall back to the
 # regex alone: a silently empty closure would drop exactly the paths the input
-# exists to cover, which is the false green the caller opted in to prevent.
+# exists to cover, which is the false green the caller opted in to prevent. A
+# derivation that exits 0 with NO paths is caught below instead, by
+# path_gate_matching_members' empty-list arm.
 DERIVED_CLOSURE=""
 derive() {
   local _script="$1" _targets="$2" _what="$3" _out
@@ -160,7 +174,13 @@ paths_trigger() {
   fi
   if [[ -n "$DERIVED_CLOSURE" ]]; then
     mapfile -t -O "${#_matched[@]}" _matched < <(
+<<<<<<< local
       path_gate_matching_fixed_lines "$DERIVED_CLOSURE" "$_changed"
+||||||| base
+      grep -Fxf <(printf '%s\n' "$DERIVED_CLOSURE") <<<"$_changed" || true
+=======
+      path_gate_matching_members "$DERIVED_CLOSURE" "$_changed"
+>>>>>>> template
     )
   fi
   ((${#_matched[@]} > 0)) || return 0

@@ -134,6 +134,7 @@ if [[ "$NPM_VIEW_RC" -ne 0 ]]; then
     exit 1
   fi
 else
+<<<<<<< local
   # Stable X.Y.Z versions, highest first. `npm view versions --json` is a single
   # string when only one version exists, so normalize to an array; the strict
   # X.Y.Z filter drops prereleases so the arithmetic bump below can't misfire.
@@ -169,7 +170,36 @@ else
     log "Error: no live (non-deprecated) published version found. Refusing to guess a base."
     exit 1
   fi
+||||||| base
+  log "Error: npm view failed for '$PACKAGE_NAME' (not a 404 for an unpublished package):"
+  log "$(cat "$NPM_VIEW_ERR")"
+  exit 1
+=======
+  npm_view_err="$(cat "$NPM_VIEW_ERR")"
+  log "Error: npm view failed for '$PACKAGE_NAME' (not a 404 for an unpublished package):"
+  log "$npm_view_err"
+  exit 1
+>>>>>>> template
 fi
+<<<<<<< local
+||||||| base
+# `npm view` can print nothing on a success exit (never-published package) or
+# emit a prerelease like `1.2.3-beta.0`; take the first line and require strict
+# X.Y.Z so the arithmetic bump below can't silently misfire. Empty -> 0.0.0
+# (first release); any other non-semver value fails loudly.
+CURRENT_VERSION=$(printf '%s\n' "$CURRENT_VERSION" | head -n1)
+[[ -z "$CURRENT_VERSION" ]] && CURRENT_VERSION="0.0.0"
+=======
+# `npm view` can print nothing on a success exit (never-published package) or
+# emit a prerelease like `1.2.3-beta.0`; take the first line and require strict
+# X.Y.Z so the arithmetic bump below can't silently misfire. Empty -> 0.0.0
+# (first release); any other non-semver value fails loudly.
+# First line via parameter expansion, NOT `| head -n1`: head exits after one
+# line and SIGPIPEs the writer, which `set -o pipefail` reports as a failure —
+# aborting the release for the multi-line output this line exists to handle.
+CURRENT_VERSION="${CURRENT_VERSION%%$'\n'*}"
+[[ -z "$CURRENT_VERSION" ]] && CURRENT_VERSION="0.0.0"
+>>>>>>> template
 if ! [[ "$CURRENT_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
   log "Error: computed a non-semver current version: '$CURRENT_VERSION'. Refusing to guess a bump."
   exit 1
@@ -243,12 +273,33 @@ else
   DIFF_STAT=$(git show --stat HEAD 2>/dev/null || echo "Unable to get diff")
 fi
 
+<<<<<<< local
 # Cap commit-message length: 20 lines, 100 chars each, 2000 chars total. These
 # caps use no `| head`: head exits at its cap and SIGPIPEs the writer, which
 # `set -o pipefail` reports as a failure on exactly the large inputs the caps
 # exist for. A herestring feeds awk, so no pipeline survives to report one.
 COMMITS=$(awk 'NR <= 20 { print substr($0, 1, 100) }' <<<"$COMMITS_RAW")
 COMMITS="${COMMITS:0:2000}"
+||||||| base
+# Cap commit-message length: truncate each line, limit total length. The
+# `head -c` cap is byte-based and can split a multibyte UTF-8 character at the
+# tail; if it does, the only consequence is that `jq -n --arg` rejects the
+# invalid sequence and the Claude prose step falls back to the plain commit list
+# (the version decision never uses $COMMITS), so a corrupted tail costs only
+# the generated prose — the release itself still completes.
+COMMITS=$(echo "$COMMITS_RAW" | head -20 | cut -c1-100 | head -c 2000)
+=======
+# Cap commit-message length: truncate each line, limit total length. Both caps
+# avoid an early-exiting pipe consumer (`head -20`, `head -c 2000`), which would
+# close the pipe while the writer still has output and SIGPIPE it — a failure
+# `set -o pipefail` surfaces as an aborted release, on exactly the large inputs
+# the caps exist for. awk reads to EOF regardless of how much it prints, and the
+# total cap is a parameter expansion on an already-captured string. That
+# expansion counts characters, not bytes, so the tail can no longer be a split
+# multibyte sequence that `jq -n --arg` would reject.
+COMMITS=$(echo "$COMMITS_RAW" | awk 'NR <= 20 { print substr($0, 1, 100) }')
+COMMITS="${COMMITS:0:2000}"
+>>>>>>> template
 
 if [[ -z "$COMMITS" ]]; then
   log "No commits to analyze. Skipping."
@@ -274,8 +325,17 @@ log "Conventional Commits bump level: $BUMP"
 
 # Extract the current "## Unreleased" block from CHANGELOG.md, if present.
 # The block runs from the "## Unreleased" heading up to (but not including) the
+<<<<<<< local
 # next "## " heading or end of file. Its cap is a parameter expansion for the
 # same SIGPIPE-under-pipefail reason as the COMMITS cap above.
+||||||| base
+# next "## " heading or end of file.
+=======
+# next "## " heading or end of file.
+# Capped by parameter expansion, NOT `| head -c`: head exits at its byte cap and
+# SIGPIPEs awk, which `set -o pipefail` reports as a failure — aborting the
+# release whenever the Unreleased block grows past the cap.
+>>>>>>> template
 UNRELEASED_CONTENT=""
 if [[ -f CHANGELOG.md ]]; then
   UNRELEASED_CONTENT=$(awk '
@@ -460,6 +520,7 @@ fi
 log "$PUBLISH_OUTPUT"
 log "✅ Published $PACKAGE_NAME@$NEW_VERSION"
 
+<<<<<<< local
 # Signal the workflow to build and publish the coupled Python wheel at this same
 # version. Emitted only after a genuine npm publish (not on the "already exists"
 # early-exits above), so PyPI is published exactly when npm is. If a later step
@@ -467,6 +528,45 @@ log "✅ Published $PACKAGE_NAME@$NEW_VERSION"
 # (publish-python.yaml) can push the matching wheel.
 emit_output "released=true"
 emit_output "version=$NEW_VERSION"
+||||||| base
+# Tag the release IMMEDIATELY after a successful publish, before any docs work.
+# The tag is the dedup guard: it is what stops the next run from re-analyzing
+# these same commits and walking the version upward. Publishing, then pushing
+# docs, then tagging LAST once left a published-but-untagged release whenever the
+# docs push failed — the next run re-read the climbing npm version and bumped
+# again (a runaway version walk). The tag points at the commit that was actually
+# published; the release-docs commit below lands after it and is analyzed (and
+# skipped) by the next run's release-docs guard.
+git tag "v$NEW_VERSION"
+# Fail loudly if the tag never lands: the tag is what stops the next run from
+# re-analyzing these commits (re-drafting the changelog, re-pushing release
+# docs), so a silent failure here would quietly corrupt the next release.
+if ! retry_cmd 4 2 git push origin "v$NEW_VERSION"; then
+  log "Error: failed to push tag v$NEW_VERSION after retries. The release is published;"
+  log "       push the tag manually so the next run does not re-analyze these commits."
+  exit 1
+fi
+log "Pushed tag v$NEW_VERSION"
+=======
+# Tag the release IMMEDIATELY after a successful publish, before any docs work.
+# The tag is the dedup guard: it is what stops the next run from re-analyzing
+# these same commits and walking the version upward. Publishing, then pushing
+# docs, then tagging LAST once left a published-but-untagged release whenever the
+# docs push failed — the next run re-read the climbing npm version and bumped
+# again (a runaway version walk). The tag points at the commit that was actually
+# published; the release-docs commit below lands after it and is analyzed (and
+# skipped) by the next run's release-docs guard.
+git tag "v$NEW_VERSION"
+# Fail loudly if the tag never lands: the tag is what stops the next run from
+# re-analyzing these commits (re-drafting the changelog, re-pushing release
+# docs), so a silent failure here would quietly corrupt the next release.
+if ! retry_cmd 4 2 timeout --kill-after=10 60 git push origin "v$NEW_VERSION"; then
+  log "Error: failed to push tag v$NEW_VERSION after retries. The release is published;"
+  log "       push the tag manually so the next run does not re-analyze these commits."
+  exit 1
+fi
+log "Pushed tag v$NEW_VERSION"
+>>>>>>> template
 
 # Promote "## Unreleased" to a dated version section in CHANGELOG.md, using the
 # drafted body. The helper exits 0 even on its own errors: the package is
@@ -635,11 +735,25 @@ else
   git add -- "${RELEASE_DOCS_PATHS[@]}"
   git commit -m "docs: release $NEW_VERSION [skip ci]"
   # Push to the default branch explicitly so this works whether actions/checkout
+<<<<<<< local
   # left us on a branch or in detached HEAD state. Rebase-on-reject so a racing
   # merge to the branch mid-run can't strand the release (npm already published).
   if ! push_with_rebase "$DEFAULT_BRANCH" 4 2; then
     log "⚠️ Failed to push release-docs update. Release was published; docs can be updated manually."
     RELEASE_DOCS_PUSH_FAILED=1
+||||||| base
+  # left us on a branch or in detached HEAD state.
+  if ! retry_cmd 4 2 git push origin "HEAD:$DEFAULT_BRANCH"; then
+    log "Error: failed to push the release-docs update for v$NEW_VERSION."
+    log "       The release is published and tagged; push the CHANGELOG commit manually."
+    exit 1
+=======
+  # left us on a branch or in detached HEAD state.
+  if ! retry_cmd 4 2 timeout --kill-after=10 60 git push origin "HEAD:$DEFAULT_BRANCH"; then
+    log "Error: failed to push the release-docs update for v$NEW_VERSION."
+    log "       The release is published and tagged; push the CHANGELOG commit manually."
+    exit 1
+>>>>>>> template
   fi
 fi
 

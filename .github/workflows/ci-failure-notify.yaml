@@ -53,11 +53,20 @@ on: # zizmor: ignore[dangerous-triggers]
       - Sync from Template
       - Validate config
       - zizmor
+<<<<<<< local
     # Every watched workflow above is push-to-main or schedule: only (see the
     # header comment) — schedule fires on the default branch — so this filter
     # matches every run this workflow is meant to see and excludes a PR run of
     # a same-named multi-trigger workflow.
     branches: [main, master]
+||||||| base
+=======
+    # This notifier only alerts on a push/schedule failure of the default
+    # branch (see the job's own `if:` below); narrowing the trigger itself
+    # stops a PR-branch completion of a shared workflow (pre-commit, zizmor,
+    # …) from creating a run that the `if:` would only then discard.
+    branches: [main, master]
+>>>>>>> template
 
 concurrency:
   # Keyed per triggering workflow so failures of different workflows never

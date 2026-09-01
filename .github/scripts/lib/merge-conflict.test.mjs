@@ -98,3 +98,32 @@ test("the marker regex does not match ordinary prose that looks like one", () =>
     assert.equal(markerMatches(line), false, `${line} is not a marker`);
   }
 });
+
+// The marker VERDICT — what the sync gate withholds a file on — needs the whole
+// triple. One kind alone is ordinary text, so a single-kind verdict would call
+// prose damage and hand the adopter back a file nothing was wrong with.
+function hasMarkerTriple(text) {
+  const out = execFileSync(
+    "bash",
+    [
+      "-c",
+      `source "${LIB}"; printf '%s' "$1" | has_marker_triple && echo yes || echo no`,
+      "_",
+      text,
+    ],
+    { encoding: "utf8" },
+  );
+  return out.trim() === "yes";
+}
+
+test("has_marker_triple is true only for a complete diff3 conflict", () => {
+  const conflict =
+    "a\n<<<<<<< local\nb\n||||||| base\nc\n=======\nd\n>>>>>>> template\ne\n";
+  assert.equal(hasMarkerTriple(conflict), true);
+});
+
+test("has_marker_triple is false for prose carrying only one marker kind", () => {
+  // A Markdown setext heading rule, and an opening marker with no closing one.
+  for (const text of ["Title\n=======\nbody\n", "a\n<<<<<<< local\nb\n"])
+    assert.equal(hasMarkerTriple(text), false, `${text} is not a conflict`);
+});

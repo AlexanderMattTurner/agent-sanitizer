@@ -270,6 +270,7 @@ main() {
       ancestor=$(dirname "$ancestor")
     done
 
+<<<<<<< local
     if [[ "$parent_dir" != "." ]]; then
       mkdir -p "$parent_dir"
       [[ -d "$parent_dir" ]] || {
@@ -277,6 +278,17 @@ main() {
         return
       }
     fi
+||||||| base
+    [[ "$parent_dir" != "." ]] && mkdir -p "$parent_dir"
+=======
+    if [[ "$parent_dir" != "." ]]; then
+      mkdir -p "$parent_dir"
+      [[ -d "$parent_dir" ]] || {
+        echo "::error::could not create $parent_dir for $rel_path" >&2
+        return 1
+      }
+    fi
+>>>>>>> template
 
     # Case 1: absent locally — a new template file, unless the adopter removed it.
     if [[ ! -f "$rel_path" ]]; then
@@ -495,11 +507,21 @@ main() {
   fi
 
   if [[ -s "$CONFLICT_FILES" ]]; then
+<<<<<<< local
     # `tr` turns the list's final newline into a trailing space. That space rides
     # into .template-sync-conflicts, where pre-commit's trailing-whitespace fixer
     # strips it on the next run and fails CI with "hook(s) made changes".
     conflicts=$(tr '\n' ' ' <"$CONFLICT_FILES")
     conflicts="${conflicts% }"
+||||||| base
+    conflicts=$(tr '\n' ' ' <"$CONFLICT_FILES")
+=======
+    # paste, not `tr '\n' ' '`: the file ends in a newline, so tr leaves a
+    # TRAILING space. That space reaches .template-sync-conflicts below, where
+    # pre-commit's trailing-whitespace hook rewrites the file and fails the run —
+    # on every consumer that has a conflict.
+    conflicts=$(paste -sd' ' "$CONFLICT_FILES")
+>>>>>>> template
     {
       echo "has_conflicts=true"
       echo "conflict_files=$conflicts"

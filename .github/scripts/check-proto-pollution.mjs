@@ -48,12 +48,16 @@ const SUPPRESS = "proto-pollution-ok:";
 const SUPPRESS_HINT = "// proto-pollution-ok:";
 
 // The scan set: the JS/TS hook + CI-script surface where untrusted keys land.
-// `.github/scripts` stays in the default set because it holds untrusted-input
-// sanitizers (PR/webhook parsers). A generated `.bundle.mjs` (esbuild output) is
-// skipped — it inlines third-party code we don't own and can't fix here — as are
-// test and fuzz files (an intentional `__proto__` fixture is not a production
-// accumulator).
-export const DEFAULT_SCAN_DIRS = [".claude/hooks", ".github/scripts"];
+// `.github/scripts` holds untrusted-input sanitizers (PR/webhook parsers).
+// `.github/actions` matches no production file today; it is where a composite
+// action's own JS lands, because an action's scripts sit beside its action.yaml.
+// Skipped: a generated `.bundle.mjs` (third-party code we cannot fix here), and
+// test/fuzz files (an intentional `__proto__` fixture is not an accumulator).
+export const DEFAULT_SCAN_DIRS = [
+  ".claude/hooks",
+  ".github/scripts",
+  ".github/actions",
+];
 
 // Adopters with untrusted-input handlers outside the shipped surfaces extend the
 // scan via CHECK_PROTO_SCAN_DIRS (comma/space-separated). The defaults are always

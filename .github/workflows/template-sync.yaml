@@ -29,6 +29,27 @@ name: Sync from Template
 #    the deletion holds on its own and needs no EXCLUDE_PATHS entry.
 # 5. A workflow that must never be introduced into a repo that has its own
 #    equivalent (the release flow) belongs in OPT_IN_PATHS.
+# 6. A file the template MOVED arrives at its new path while the old one stays
+#    local, because this sync reports deletions and never applies them. Delete
+#    the local copy and repoint whatever names it. The case that fails silently:
+#    each composite action now carries its own scripts and tests under
+#    .github/actions/<name>/, so a repo whose package.json still runs
+#    `node --test ".github/scripts/**/*.test.mjs"` tests the stale copy and
+#    reports green while the action runs the new one. package.json is outside
+#    SYNC_PATHS, so adding `.github/actions/**/*.test.mjs` there is the
+#    consumer's edit to make.
+# =============================================================================
+#
+# ROOT SCAFFOLDING A SYNCED WORKFLOW MAY ASSUME
+#
+# SYNC_PATHS delivers no root project file: package.json, .nvmrc, pyproject.toml,
+# uv.lock and .pre-commit-config.yaml all stay with the consumer. So a synced
+# workflow step that needs one must be gated on `hashFiles('<file>') != ''` and
+# skip when it is absent. Ungated, it hard-fails on every PR in a consumer that
+# never had that scaffolding — a shell-only dotfiles repo, say — and names
+# neither the template nor the missing file in the failure. Adding a workflow to
+# EXCLUDE_PATHS is the consumer's escape hatch, not the fix; gate the step here
+# instead, so a new consumer needs no escape hatch at all.
 # =============================================================================
 
 on:
@@ -79,6 +100,7 @@ env:
   # The security-vulnerability-scan workflow + prompt are intentionally NOT
   # propagated to downstream repos; each consumer owns its own security-scan
   # cadence and model pin, so the template stops overwriting them on sync.
+<<<<<<< local
   #
   # allow-workflow-ref: claude-review.yaml names the UPSTREAM template repo's
   # workflow file, not one of this repo's own — this repo runs the reviewer as
@@ -93,6 +115,14 @@ env:
   # still carries it keeps its own copy rather than having sync delete it out
   # from under a caller that has not converted yet.
   EXCLUDE_PATHS: ".github/workflows/security-vulnerability-scan.yaml .github/prompts/security-vulnerability-scan.md .github/workflows/claude-review.yaml .github/scripts/auto-resolve"
+||||||| base
+  EXCLUDE_PATHS: ".github/workflows/security-vulnerability-scan.yaml .github/prompts/security-vulnerability-scan.md"
+=======
+  # .github/scripts/auto-resolve is the retired shell resolver. A consumer that
+  # still carries it keeps its own copy rather than having sync delete it out
+  # from under a caller that has not converted yet.
+  EXCLUDE_PATHS: ".github/workflows/security-vulnerability-scan.yaml .github/prompts/security-vulnerability-scan.md .github/scripts/auto-resolve"
+>>>>>>> template
   # Files the sync UPDATES but never INTRODUCES. Absent from the child repo they
   # are skipped; present, they sync like anything else. This is the opt-in half
   # of EXCLUDE_PATHS: opting in is creating the file once, opting out is deleting
@@ -301,7 +331,7 @@ jobs:
             Please review the changes and merge if appropriate.
           branch: template-sync
           delete-branch: true
-          labels: ${{ steps.sync.outputs.has_conflicts == 'true' && 'template-sync,merge-conflict' || 'template-sync' }}
+          labels: template-sync
 
       # Resolve IN THIS RUN rather than posting an @claude comment and hoping a
       # separate workflow gets to it. The PR then arrives readable instead of
@@ -351,7 +381,22 @@ jobs:
         run: |
           git fetch --no-tags origin "+refs/heads/template-sync:refs/remotes/origin/template-sync"
           git checkout -B template-sync origin/template-sync
+<<<<<<< local
           bash "$SYNC_TOOLS/template-sync-resolve.sh"
+||||||| base
+          bash .github/scripts/template-sync-resolve.sh
+=======
+          # Tier 2 of the conflict resolution is the resolver's own fan-out, which
+          # lives in its own repository now. Pinned by SHA to the same commit
+          # auto-resolve-conflicts.yaml calls, so both run one version of it.
+          resolver_dir="${RUNNER_TEMP}/template-sync-resolver"
+          git clone --no-tags --depth 1 \
+            "https://github.com/AlexanderMattTurner/agent-resolve-merge-conflicts.git" "${resolver_dir}"
+          git -C "${resolver_dir}" fetch --no-tags --depth 1 origin ca9a3fa872a9c06ade766de9bf69ff7b0329247f
+          git -C "${resolver_dir}" checkout --detach FETCH_HEAD
+          RESOLVER_DIR="${resolver_dir}/.github/resolver" \
+            bash .github/scripts/template-sync-resolve.sh
+>>>>>>> template
 
       - name: Push the resolutions
         if: steps.resolve.outcome == 'success' && (steps.resolve.outputs.deterministic != '' || steps.resolve.outputs.by_model != '')
@@ -363,13 +408,41 @@ jobs:
           BY_MODEL: ${{ steps.resolve.outputs.by_model }}
         run: bash "$SYNC_TOOLS/template-sync-push.sh"
 
+      # The markers reach the branch before either resolver tier runs, because
+      # create-pull-request commits the whole synced tree. So this is the step
+      # that holds the invariant: no file on `template-sync` carries a conflict
+      # marker. It runs even when a step above it failed, because a resolve step
+      # that died is exactly when the markers survive.
+      # It runs a BASE_SHA copy, not the workspace: `.github/scripts` is in
+      # SYNC_PATHS, so a sync can mark the gate's own file, and bash dies on it.
+      - name: Refuse conflict markers on the sync branch
+        if: ${{ !cancelled() && inputs.dry-run != true && steps.create-pr.outputs.pull-request-number }}
+        env:
+          BASE_SHA: ${{ github.sha }}
+          # token-fallback-ok: designed graceful degradation, not an accident.
+          GITHUB_TOKEN: ${{ secrets.TEMPLATE_SYNC_TOKEN_ORG || secrets.GITHUB_TOKEN }}
+        run: |
+          set -o pipefail
+          gate_dir="${RUNNER_TEMP}/marker-gate"
+          mkdir -p "${gate_dir}" # bare-mkdir-ok: the extraction below is the post-condition and fails loudly
+          timeout --kill-after=30 300 git archive "${BASE_SHA}" .github/scripts | tar -x -f - -C "${gate_dir}"
+          bash "${gate_dir}/.github/scripts/template-sync-marker-gate.sh"
+
       # A sync merges itself only when NOTHING needed judgement. See the script
       # for the full predicate; the two carve-outs are that a model-resolved file
       # never qualifies, and neither does a change to the supervision surface.
+      # It runs a BASE_SHA copy for the same reason the gate does: the gate
+      # passing only proves the branch carries no conflict marker, never that
+      # this script or the predicate it reads still match the reviewed version.
       - name: Enable auto-merge on a fully deterministic sync
         if: inputs.dry-run != true && steps.create-pr.outputs.pull-request-number && vars.TEMPLATE_SYNC_AUTOMERGE != 'false'
         env:
+<<<<<<< local
           SYNC_TOOLS: ${{ steps.tools.outputs.scripts }}
+||||||| base
+=======
+          BASE_SHA: ${{ github.sha }}
+>>>>>>> template
           GH_TOKEN: ${{ secrets.TEMPLATE_SYNC_TOKEN_ORG || github.token }}
           GH_REPO: ${{ github.repository }}
           PR_NUMBER: ${{ steps.create-pr.outputs.pull-request-number }}
@@ -378,4 +451,15 @@ jobs:
           HAS_DOWNGRADES: ${{ steps.sync.outputs.has_downgrades }}
           ALL_DETERMINISTIC: ${{ steps.resolve.outputs.all_deterministic }}
           CHANGED_PATHS: ${{ steps.sync.outputs.changed_paths }}
+<<<<<<< local
         run: bash "$SYNC_TOOLS/template-sync-automerge.sh"
+||||||| base
+        run: bash .github/scripts/template-sync-automerge.sh
+=======
+        run: |
+          set -o pipefail
+          automerge_dir="${RUNNER_TEMP}/marker-gate-automerge"
+          mkdir -p "${automerge_dir}" # bare-mkdir-ok: the extraction below is the post-condition and fails loudly
+          timeout --kill-after=30 300 git archive "${BASE_SHA}" .github/scripts | tar -x -f - -C "${automerge_dir}"
+          bash "${automerge_dir}/.github/scripts/template-sync-automerge.sh"
+>>>>>>> template

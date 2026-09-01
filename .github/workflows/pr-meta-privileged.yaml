@@ -30,7 +30,13 @@ on:
 permissions: {}
 
 jobs:
+<<<<<<< local
   # ── cancel: cancel orphaned runs for the closed PR ───────────────────────
+||||||| base
+  # ── cancel-on-pr-close.yaml ──────────────────────────────────────────────
+=======
+  # ── Cancel superseded PR runs on close ───────────────────────────────────────────────────────────────────────────────
+>>>>>>> template
   # SECURITY — pull_request_target is safe here because this job runs NO PR-authored
   # code. The only checkout is a sparse checkout of the BASE repo's own
   # .github/scripts at the trusted base ref (pull_request_target checks out the base,
@@ -67,7 +73,13 @@ jobs:
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: bash .github/scripts/cancel-pr-runs.sh
 
+<<<<<<< local
   # ── label: label open PRs that have merge conflicts ──────────────────────
+||||||| base
+  # ── merge-conflict-labeler.yaml ──────────────────────────────────────────
+=======
+  # ── Merge-conflict labeler ─────────────────────────────────────────────────────────────────────────────────────────
+>>>>>>> template
   # pull_request_target (not pull_request) so the label write has a write-scoped
   # token even from forks; it checks out only base-repo `.github/scripts` with no
   # persisted credentials and runs no PR-authored code, so the elevated token

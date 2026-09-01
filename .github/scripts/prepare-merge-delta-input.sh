@@ -28,10 +28,18 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 : "${GH_TOKEN:?GH_TOKEN required}"
 
 mkdir -p "$PR_INPUT_DIR"
+<<<<<<< local
 [[ -d "$PR_INPUT_DIR" ]] || {
   echo "prepare-merge-delta-input: cannot create $PR_INPUT_DIR" >&2
   exit 1
 }
+||||||| base
+=======
+[[ -d "$PR_INPUT_DIR" ]] || {
+  echo "::error::could not create PR_INPUT_DIR ($PR_INPUT_DIR)" >&2
+  exit 1
+}
+>>>>>>> template
 
 emit_output() {
   if [[ -n "${GITHUB_OUTPUT:-}" ]]; then
@@ -48,9 +56,17 @@ trap 'rm -f "$raw" "$err"' EXIT
 # diff, not code to run. A fetch or merge-base failure is a can't-verify, not a
 # no-op: fail loud rather than skip the review (a PR head always has a
 # refs/pull/N/head, so a failure here is a real problem, not "no merges").
+<<<<<<< local
 auth="" # assigned by name below; shellcheck cannot follow printf -v
 git_auth_header_value auth "$GH_TOKEN"
 if ! timeout --kill-after=10 60 git -c "$GIT_AUTH_HEADER_KEY=$auth" \
+||||||| base
+auth="AUTHORIZATION: basic $(printf 'x-access-token:%s' "${GH_TOKEN:-}" | base64 | tr -d '\n')"
+if ! git -c "http.https://github.com/.extraheader=${auth}" \
+=======
+auth="AUTHORIZATION: basic $(printf 'x-access-token:%s' "${GH_TOKEN:-}" | base64 | tr -d '\n')"
+if ! timeout --kill-after=10 60 git -c "http.https://github.com/.extraheader=${auth}" \
+>>>>>>> template
   fetch --no-tags --quiet origin "+refs/pull/${PR}/head:refs/remotes/pr/head"; then
   echo "::error::could not fetch refs/pull/${PR}/head as data — cannot review this PR's merge deltas" >&2
   exit 1
