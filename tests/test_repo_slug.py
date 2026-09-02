@@ -63,6 +63,9 @@ EXTERNAL_REPOS = {
     "alexander-turner/claude-automation-template": "the upstream template this repo syncs from",
     "AlexanderMattTurner/ci-truth-serum": "an upstream CI tool this repo consumes",
     "astral-sh/ruff-pre-commit": "pinned pre-commit hook source",
+    "crazytieguy/alignment-hive": (
+        "a third-party agent-safety index the README cites as recommending this plugin"
+    ),
     "github/cmark-gfm": (
         "GitHub's own GFM implementation, cited by line number in the vendored "
         "autolink extension's comments (src/vendor/) as the behaviour it matches"
