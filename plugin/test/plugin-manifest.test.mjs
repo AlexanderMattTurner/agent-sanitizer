@@ -16,13 +16,9 @@ import assert from "node:assert/strict";
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { dirname, isAbsolute, join, normalize } from "node:path";
 import { fileURLToPath } from "node:url";
-import {
-  DISABLED_HOOKS_ENV,
-  FAIL_OPEN_ENV,
-  failOpenEnabled,
-  HookEvent,
-} from "../../claude-hooks/lib/hook-io.mjs";
-import { SECRETS_ENABLED_ENV } from "../../claude-hooks/lib/env-config.mjs";
+import { failOpenEnabled, HookEvent } from "../../claude-hooks/lib/hook-io.mjs";
+import * as hookIo from "../../claude-hooks/lib/hook-io.mjs";
+import * as envConfig from "../../claude-hooks/lib/env-config.mjs";
 
 const ROOT = dirname(dirname(dirname(fileURLToPath(import.meta.url))));
 const MARKETPLACE_PATH = join(ROOT, ".claude-plugin", "marketplace.json");
@@ -31,6 +27,22 @@ const MANIFEST_PATH = join(ROOT, "plugin", ".claude-plugin", "plugin.json");
 const readJson = (path) => JSON.parse(readFileSync(path, "utf-8"));
 const marketplace = readJson(MARKETPLACE_PATH);
 const manifest = readJson(MANIFEST_PATH);
+
+/**
+ * Every operator-facing knob the hook modules name, read from the modules
+ * themselves. A hand-pasted list pins today's count and stays green for the
+ * next knob added, which is how one reached a release undocumented. A
+ * `_`-prefixed name is internal plumbing (plugin/README.md) and never belongs
+ * on the pre-install surface, so only the bare prefix counts.
+ */
+const PUBLIC_KNOBS = [hookIo, envConfig]
+  .flatMap((module) => Object.entries(module))
+  .filter(([name]) => name.endsWith("_ENV"))
+  .map(([, value]) => value)
+  .filter(
+    (value) =>
+      typeof value === "string" && value.startsWith("AGENT_SANITIZER_"),
+  );
 
 /** Documented top-level keys of marketplace.json. */
 const MARKETPLACE_KEYS = new Set([
@@ -217,7 +229,11 @@ test("the description names each hook's event and every public knob", () => {
   // that shipped opt-in with the description still implying it was always on).
   for (const event of Object.values(HookEvent))
     assert.match(manifest.description, new RegExp(event, "u"));
-  for (const knob of [FAIL_OPEN_ENV, DISABLED_HOOKS_ENV, SECRETS_ENABLED_ENV])
+  assert.ok(
+    PUBLIC_KNOBS.length,
+    "read no knob names from the hook modules — every case below would pass over nothing",
+  );
+  for (const knob of PUBLIC_KNOBS)
     assert.ok(
       manifest.description.includes(knob),
       `description does not mention ${knob}`,

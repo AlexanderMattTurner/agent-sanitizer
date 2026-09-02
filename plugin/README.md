@@ -120,6 +120,13 @@ Three opt-outs, for content the sanitizer would otherwise rewrite:
 | `AGENT_SANITIZER_TERMINAL_DISABLED=1`  | Keep raw escape sequences (fixtures that must contain them)        |
 | `AGENT_SANITIZER_OUTPUT_DISABLED=1`    | Both of the above                                                  |
 
+One opt-in, for a consumer that reads a digest in a URL as a leak rather than as
+an ordinary link — a monitor watching tool output for a commit or blob id:
+
+| Variable                               | Effect                                                                                                                                     |
+| -------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
+| `AGENT_SANITIZER_FLAG_DIGEST_VALUES=1` | Report a URL whose query or fragment value is exactly the length of a hex digest. Exempt by default, because such a value is usually an id |
+
 One opt-in, for the secret layer — its denies and asks are friction, so it
 engages only when an operator asked for it:
 
