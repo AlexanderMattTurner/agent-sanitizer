@@ -3227,36 +3227,21 @@ function scanAnsi(text5) {
   }
   return tokens;
 }
-function sgrConceals(token) {
+function sgrConcealState(token, concealed) {
   const params = token.slice(token.charCodeAt(0) === ESC ? 2 : 1, -1).split(";");
+  let state = concealed;
   for (let i = 0; i < params.length; i++) {
     const colonForm = params[i].includes(":");
     const value = Number(params[i].split(":")[0]);
-    if (value === SGR_CONCEAL_PARAM) return true;
+    if (value === SGR_CONCEAL) state = true;
+    else if (value === SGR_REVEAL || value === SGR_RESET) state = false;
     if (colonForm || !SGR_EXTENDED_COLOUR.has(value)) continue;
     const args = SGR_COLOUR_ARGS.get(Number(params[i + 1]));
-    if (args === void 0) return false;
-    i += 1 + args;
+    if (args !== void 0) i += 1 + args;
   }
-  return false;
+  return state;
 }
-function sgrCarriesPayload(text5) {
-  let run = 0;
-  let previousEnd = -1;
-  for (const token of scanAnsi(text5)) {
-    if (token.kind !== TOKEN_KIND.SGR) {
-      run = 0;
-      previousEnd = -1;
-      continue;
-    }
-    if (sgrConceals(text5.slice(token.start, token.end))) return true;
-    run = token.start === previousEnd ? run + 1 : 1;
-    if (run >= SGR_RUN_THRESHOLD) return true;
-    previousEnd = token.end;
-  }
-  return false;
-}
-var CONTROL_INTRODUCER_CODEPOINTS, CONTROL_INTRODUCER_SOURCE, SGR_SOURCE, SGR_RE, SGR_ANCHORED_RE, CSI_INTRO_CLASS, CSI_INTRO_RE, CSI_PARAM_CLASS, CSI_PARAM_RE, CSI_FINAL_CLASS, CSI_FINAL_RE, ESC, CSI_C1, ST_C1, BEL, CAN, SUB, LF, CR, STRING_INTRO_7BIT, OSC_7BIT, OSC_C1, STRING_INTRO_C1, ESCAPE_SEQUENCE_SOURCE, SGR_CONCEAL_PARAM, SGR_RUN_THRESHOLD, SGR_EXTENDED_COLOUR, SGR_COLOUR_ARGS, TOKEN_KIND, INTRODUCER_SCAN_RE;
+var CONTROL_INTRODUCER_CODEPOINTS, CONTROL_INTRODUCER_SOURCE, SGR_SOURCE, SGR_RE, SGR_ANCHORED_RE, CSI_INTRO_CLASS, CSI_INTRO_RE, CSI_PARAM_CLASS, CSI_PARAM_RE, CSI_FINAL_CLASS, CSI_FINAL_RE, ESC, CSI_C1, ST_C1, BEL, CAN, SUB, LF, CR, STRING_INTRO_7BIT, OSC_7BIT, OSC_C1, STRING_INTRO_C1, ESCAPE_SEQUENCE_SOURCE, SGR_RESET, SGR_CONCEAL, SGR_REVEAL, SGR_EXTENDED_COLOUR, SGR_COLOUR_ARGS, TOKEN_KIND, INTRODUCER_SCAN_RE;
 var init_ansi = __esm({
   "src/ansi.mjs"() {
     "use strict";
@@ -3302,12 +3287,17 @@ var init_ansi = __esm({
       const csiArm = `${charClass([ESC, CSI_C1])}${CSI_INTRO_CLASS}*(?!${CSI_INTRO_CLASS})${CSI_PARAM_CLASS}*${CSI_FINAL_CLASS}`;
       return `(?:${stringArm}|${csiArm})`;
     })();
-    SGR_CONCEAL_PARAM = 8;
-    SGR_RUN_THRESHOLD = 10;
+    SGR_RESET = 0;
+    SGR_CONCEAL = 8;
+    SGR_REVEAL = 28;
     SGR_EXTENDED_COLOUR = /* @__PURE__ */ new Set([38, 48, 58]);
     SGR_COLOUR_ARGS = /* @__PURE__ */ new Map([
-      [5, 1],
-      [2, 3]
+      [0, 0],
+      [1, 0],
+      [2, 3],
+      [3, 3],
+      [4, 4],
+      [5, 1]
     ]);
     TOKEN_KIND = Object.freeze({
       /** A display-only `ESC[…m` / `U+009B…m` colour sequence. */
@@ -4087,6 +4077,27 @@ function isBenignAnsiKinds(kinds) {
     (kind2) => kind2 === TOKEN_KIND.SGR || kind2 === TOKEN_KIND.ORPHAN
   );
 }
+function rendersNothing(gap) {
+  return gap.replace(STRIP, "") === "";
+}
+function sgrCarriesPayload(text5) {
+  let concealed = false;
+  let run = 0;
+  let previousEnd = 0;
+  for (const token of scanAnsi(text5)) {
+    const blankGap = rendersNothing(text5.slice(previousEnd, token.start));
+    previousEnd = token.end;
+    if (token.kind !== TOKEN_KIND.SGR) {
+      run = 0;
+      continue;
+    }
+    if (concealed && !blankGap) return true;
+    run = blankGap ? run + 1 : 1;
+    if (run >= SGR_RUN_THRESHOLD) return true;
+    concealed = sgrConcealState(text5.slice(token.start, token.end), concealed);
+  }
+  return concealed;
+}
 function isBenignAnsi(text5) {
   return isBenignAnsiKinds(applyLayer1(text5).ansiKinds);
 }
@@ -4127,7 +4138,7 @@ function applyLayer1WellFormed(text5) {
     found: [...result.found, CATEGORY.LONE_SURROGATES]
   };
 }
-var CONTROL_INTRODUCER_RE, LONE_SURROGATE_RE, MAX_ANSI_PASSES, INERT_ANSI_NOTE, MAX_LAYER1_PASSES;
+var CONTROL_INTRODUCER_RE, LONE_SURROGATE_RE, MAX_ANSI_PASSES, INERT_ANSI_NOTE, SGR_RUN_THRESHOLD, MAX_LAYER1_PASSES;
 var init_layer1 = __esm({
   "src/layer1.mjs"() {
     "use strict";
@@ -4137,6 +4148,7 @@ var init_layer1 = __esm({
     LONE_SURROGATE_RE = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g;
     MAX_ANSI_PASSES = 3;
     INERT_ANSI_NOTE = "Inert ANSI stripped (display-only colour and/or a stray escape byte that formed no control sequence); pipe through cat -v to inspect raw escapes.";
+    SGR_RUN_THRESHOLD = 10;
     MAX_LAYER1_PASSES = 4;
   }
 });
@@ -47009,7 +47021,6 @@ var init_src = __esm({
     "use strict";
     init_output();
     init_layer1();
-    init_ansi();
     init_invisible();
     init_gates();
   }

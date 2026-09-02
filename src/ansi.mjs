@@ -205,37 +205,30 @@ export const ESCAPE_SEQUENCE_SOURCE = (() => {
   return `(?:${stringArm}|${csiArm})`;
 })();
 
-// SGR parameter 8 is CONCEAL (ECMA-48 § 8.3.117 SGR, and every terminal that
-// implements it): the text that follows renders as blank while its bytes stay in
-// the file, so a human reading the file with `cat` sees nothing and a model
-// reading the bytes sees everything. That is a model-sees/human-sees divergence,
-// not a display choice — the one SGR parameter a consumer that PRESERVES
-// display-only colour must still refuse.
-const SGR_CONCEAL_PARAM = 8;
-
-/**
- * How many SGR sequences may sit back to back, with no character at all between
- * them, before the run is read as a covert channel rather than styling.
- *
- * A styling emitter puts colour AROUND text: `ls --color`, chalk and pygments
- * chain at most a handful of attributes before the glyphs they style. A run of
- * escape sequences with nothing between them renders as literally nothing to a
- * human while a model reads every byte, so past some length the run is not
- * styling any more — it is a message, in the same shape (and for the same
- * reason) as the invisible layer's LONG_RUN_THRESHOLD. Ten matches that
- * threshold and sits well above what a real emitter chains.
- */
-export const SGR_RUN_THRESHOLD = 10;
+// The three SGR parameters that move the CONCEAL state (ECMA-48 § 8.3.117).
+// Conceal renders the text that follows as blank while its bytes stay in the
+// file, so a human reading with `cat` sees nothing where a model reads
+// everything — a model-sees/human-sees divergence rather than a display choice.
+const SGR_RESET = 0;
+const SGR_CONCEAL = 8;
+const SGR_REVEAL = 28;
 // The extended-colour selectors. Their ARGUMENTS follow as further semicolon
 // parameters, so a reader that does not consume them reads a colour component as
 // a parameter of its own: `ESC[38;5;8m` is bright-black foreground, not conceal.
 const SGR_EXTENDED_COLOUR = new Set([38, 48, 58]);
-// How many parameters an extended-colour selector consumes after itself, keyed by
-// the colour-space selector that follows it: `5` takes one palette index, `2`
-// takes three rgb components.
+// How many parameters an extended-colour selector consumes after itself, keyed
+// by the colour-space selector that follows it, per ITU T.416 § 13.1.8: the
+// implementation-defined and transparent forms take none, direct-colour RGB and
+// CMY take three components, CMYK four, and indexed takes one palette entry.
+// Every selector the spec defines, so a value missing from this table is
+// malformed rather than merely unimplemented.
 const SGR_COLOUR_ARGS = new Map([
-  [5, 1],
+  [0, 0],
+  [1, 0],
   [2, 3],
+  [3, 3],
+  [4, 4],
+  [5, 1],
 ]);
 
 /** The seven things an introducer can turn out to be. */
@@ -459,77 +452,49 @@ export function scanAnsi(text) {
 }
 
 /**
- * True when the SGR token `token` sets CONCEAL (parameter 8).
+ * The CONCEAL state after the SGR token `token` is applied to a terminal already
+ * in state `concealed` — the state in which a terminal renders what follows as
+ * blank while its bytes stay readable to anything reading the file.
  *
- * The parameters are read the way a terminal reads them, not scanned for the
- * digit: `38`/`48`/`58` take their colour arguments from the parameters that
+ * A TRANSITION, not a property of the token: conceal is terminal state that
+ * outlives the sequence that set it, so `ESC[8m` followed by `ESC[31m` is still
+ * concealed — a per-token predicate would read the second token as "no conceal
+ * here" and lose the state. Only `8` (set), `28` (reveal) and `0` (reset all)
+ * move it, and the token's parameters are applied in order, so a later reveal or
+ * reset in the SAME token cancels an earlier `8`: `ESC[8;28;31m` renders red and
+ * visible.
+ *
+ * The parameters are read the way a terminal reads them rather than scanned for
+ * the digit. `38`/`48`/`58` take their colour arguments from the parameters that
  * FOLLOW them in the semicolon form, so `ESC[38;5;8m` is bright-black foreground
- * and its `8` is a palette index, not conceal. A parameter carrying its
- * arguments as ITU T.416 sub-parameters (`38:5:8`) is self-contained, so only
- * its head counts and nothing after it is consumed.
+ * and its `8` is a palette index; a parameter carrying its arguments as ITU T.416
+ * sub-parameters (`38:5:8`) is self-contained, so only its head counts and
+ * nothing after it is consumed. A colour-space selector T.416 gives no argument
+ * count for is malformed, and a terminal that ignores the colour form still
+ * applies what follows it, so the scan CONTINUES from the next parameter rather
+ * than consuming arguments it cannot size — reading one parameter too many costs
+ * a token shape no emitter produces, while stopping there would hand
+ * `ESC[38;9;8m` a pass.
  * @param {string} token  a token {@link scanAnsi} classified {@link TOKEN_KIND.SGR}
+ * @param {boolean} concealed  the state before this token
  * @returns {boolean}
  */
-function sgrConceals(token) {
+export function sgrConcealState(token, concealed) {
   // The parameter bytes: everything between the introducer (two characters in
   // the 7-bit `ESC [` form, one in the 8-bit C1 form) and the final `m`.
   const params = token
     .slice(token.charCodeAt(0) === ESC ? 2 : 1, -1)
     .split(";");
+  let state = concealed;
   for (let i = 0; i < params.length; i++) {
     const colonForm = params[i].includes(":");
     // An omitted parameter is 0 (`ESC[m` is `ESC[0m`), which `Number("")` gives.
     const value = Number(params[i].split(":")[0]);
-    if (value === SGR_CONCEAL_PARAM) return true;
+    if (value === SGR_CONCEAL) state = true;
+    else if (value === SGR_REVEAL || value === SGR_RESET) state = false;
     if (colonForm || !SGR_EXTENDED_COLOUR.has(value)) continue;
     const args = SGR_COLOUR_ARGS.get(Number(params[i + 1]));
-    // A colour-space selector this grammar has no argument count for is
-    // malformed, and what a terminal makes of the rest of the token is
-    // undefined. Stop and answer no rather than read an argument as a
-    // parameter: the answer that PRESERVES the content, which is the direction
-    // an unresolvable encoding fails in.
-    if (args === undefined) return false;
-    i += 1 + args;
+    if (args !== undefined) i += 1 + args;
   }
-  return false;
-}
-
-/**
- * True when the SGR sequences in `text` do more than style visible text — the
- * question a consumer must answer before PRESERVING escapes rather than
- * stripping them. Two arms, both model-sees/human-sees divergences:
- *
- *   1. a token that sets CONCEAL, which blanks the text that follows for a human
- *      while leaving its bytes for a model (see {@link sgrConceals});
- *   2. {@link SGR_RUN_THRESHOLD} or more sequences back to back with no
- *      character between them — nothing renders, so the run is carrying data
- *      rather than styling.
- *
- * What it does NOT claim: a message spread thinly through legitimately coloured
- * text — one sequence per line, say — is indistinguishable from styling, and
- * this answers no for it. That is the same bargain the invisible layer's
- * thresholds strike, and the same direction: an unprovable payload is left
- * alone rather than costing every colourized file its colour.
- *
- * Scans the RAW text in one pass, which is what a terminal does with these
- * bytes — no reconstitution across passes, because a preserved byte is never
- * removed to complete a sequence around it.
- * @param {string} text
- * @returns {boolean}
- */
-export function sgrCarriesPayload(text) {
-  let run = 0;
-  let previousEnd = -1;
-  for (const token of scanAnsi(text)) {
-    if (token.kind !== TOKEN_KIND.SGR) {
-      run = 0;
-      previousEnd = -1;
-      continue;
-    }
-    if (sgrConceals(text.slice(token.start, token.end))) return true;
-    run = token.start === previousEnd ? run + 1 : 1;
-    if (run >= SGR_RUN_THRESHOLD) return true;
-    previousEnd = token.end;
-  }
-  return false;
+  return state;
 }

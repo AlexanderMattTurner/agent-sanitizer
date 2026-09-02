@@ -102,11 +102,13 @@ const PUBLISHED_EXPORTS = {
   "./layer1": [
     "INERT_ANSI_NOTE",
     "LONE_SURROGATE_RE",
+    "SGR_RUN_THRESHOLD",
     "applyLayer1",
     "applyLayer1WellFormed",
     "isBenignAnsi",
     "isBenignAnsiKinds",
     "normalizeLoneSurrogates",
+    "sgrCarriesPayload",
     "stripAnsiFully",
   ],
   "./html": [

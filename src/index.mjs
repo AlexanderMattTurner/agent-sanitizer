@@ -30,14 +30,10 @@ export {
   isBenignAnsiKinds,
   normalizeLoneSurrogates,
   stripAnsiFully,
+  sgrCarriesPayload,
+  SGR_RUN_THRESHOLD,
   LONE_SURROGATE_RE,
 } from "./layer1.mjs";
-
-// The SGR grammar's own module: whether preserving a text's escapes (rather than
-// stripping them) would hand a model something a human cannot see. Layer 1 has
-// no view of it — it strips either way — so this rides straight from the
-// tokenizer that owns the parameter semantics.
-export { sgrCarriesPayload, SGR_RUN_THRESHOLD } from "./ansi.mjs";
 
 export {
   stripInvisible,

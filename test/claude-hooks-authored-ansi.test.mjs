@@ -23,7 +23,7 @@ import {
   AUTHORED_FIELDS,
   sanitizeAuthoredContent,
 } from "../claude-hooks/lib/authored-content.mjs";
-import { SGR_RUN_THRESHOLD } from "../src/ansi.mjs";
+import { SGR_RUN_THRESHOLD } from "../src/layer1.mjs";
 import { LONG_RUN_THRESHOLD } from "../src/invisible.mjs";
 import { inputFor, readField } from "./helpers/authored-fields.mjs";
 import { cp } from "./test-helpers.mjs";
@@ -100,6 +100,19 @@ test("a 256-colour index of 8 is styling, and is kept", () => {
 test("a run of sequences with nothing between them is a channel, and is stripped", () => {
   const run = `${ESC}[31m`.repeat(SGR_RUN_THRESHOLD);
   assert.equal(sanitized("Write", "content", `${run}text`), "text");
+});
+
+test("zero-width separators do not turn a run back into styling", () => {
+  // One ZWSP between each pair is the shape that slips BOTH gates: too few
+  // zero-widths for the invisible layer to call payload-capable, and enough to
+  // break a run counted on strict byte adjacency. The gaps render nothing, so
+  // the run is still a run — the separators themselves stay, being too few to
+  // strip on their own.
+  const run = Array.from({ length: SGR_RUN_THRESHOLD }, () => `${ESC}[31m`);
+  assert.equal(
+    sanitized("Write", "content", `${run.join(ZWSP)}text`),
+    `${ZWSP.repeat(SGR_RUN_THRESHOLD - 1)}text`,
+  );
 });
 
 test("the same count of sequences around visible text is styling, and is kept", () => {

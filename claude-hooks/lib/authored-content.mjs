@@ -23,8 +23,9 @@
  *      fixture, TUI golden file or prompt string it deliberately wrote. The
  *      carve-out ends where SGR stops being styling (see the engine's
  *      sgrCarriesPayload): a CONCEAL parameter blanks text for a human while a
- *      model still reads it, and a long run of back-to-back sequences renders as
- *      nothing at all, which is a covert channel rather than colour.
+ *      model still reads it, and a long run of sequences with nothing that
+ *      renders between them puts no glyph on the screen at all, which is a
+ *      covert channel rather than colour.
  *
  * SCOPE IS DECLARED, NOT INFERRED. Which tools this layer touches is a
  * partition — {@link AUTHORED_FIELDS} (covered, with the field list) and

@@ -308,11 +308,20 @@ golden file or prompt string it deliberately wrote, and buys no safety. Two
 shapes end the exception, both of them the model-sees/human-sees divergence
 rather than a display choice: a CONCEAL parameter (`ESC[8m`), which blanks the
 text that follows for a human while its bytes stay readable to a model, and a
-run of sequences back to back with no character between them, which renders as
-nothing at all and is therefore carrying data rather than colour. Either one
-strips the whole field. The parameters are read the way a terminal reads them,
-so an extended-colour argument is never mistaken for a parameter — `ESC[38;5;8m`
-is bright-black foreground, not conceal.
+run of sequences with nothing that RENDERS between them, which puts no glyph on
+the screen at all and is therefore carrying data rather than colour. Either one
+strips the whole field.
+
+Both shapes are read as terminal semantics rather than token shapes, because a
+reader that matches shapes is one encoding away from the wrong answer. Conceal
+is threaded as STATE, so a reveal or reset later in the same sequence cancels it
+(`ESC[8;28;31m` renders red and visible) while an erase between two sequences
+does not. The parameters are read the way a terminal reads them, so an
+extended-colour argument is never mistaken for a parameter — `ESC[38;5;8m` is
+bright-black foreground, not conceal. And the run is counted over characters
+that render, so a zero-width separator between two sequences is as transparent
+here as it is to a terminal, while a space — which is what an ANSI-art colour
+bar puts between its codes — breaks the run.
 
 What that exception does NOT claim: a message spread thinly through
 legitimately coloured text — a sequence per line, encoding a bit — is
