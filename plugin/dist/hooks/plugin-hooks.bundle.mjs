@@ -48309,6 +48309,10 @@ function sanitizeField(value) {
       actions.add("invisible characters");
     }
     if (cleaned === before) break;
+    if (pass === MAX_FIELD_PASSES - 1)
+      throw new Error(
+        "authored content did not reach a fixed point within MAX_FIELD_PASSES"
+      );
   }
   return actions.size > 0 ? { cleaned, actions: [...actions] } : null;
 }

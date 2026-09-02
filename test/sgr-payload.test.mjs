@@ -35,6 +35,10 @@ const CONCEAL_CASES = [
   ["conceal after an omitted parameter", `${ESC}[;8m`, true],
   ["conceal in the C1 encoding", `${CSI}8m`, true],
   ["conceal inside prose", `visible${ESC}[8mhidden${ESC}[28m`, true],
+  // Parameter scanning RESUMES after an extended colour's arguments: a reader
+  // that stopped at the colour selector instead of sizing its arguments would
+  // hand this one a pass.
+  ["conceal after an extended colour", `${ESC}[38;5;1;8m`, true],
   // The parameters apply in order, so `8` is live until something later in the
   // SAME token clears it.
   ["conceal set after a reset in one token", `${ESC}[0;8m`, true],

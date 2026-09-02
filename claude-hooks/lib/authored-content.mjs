@@ -184,10 +184,11 @@ function stripTerminalControls(text) {
 // protections FEED each other: removing invisibles completes a sequence that was
 // incomplete when the terminal stage ran (`ESC[` ZWSP `2J` is an orphan until the
 // ZWSP goes), and removing a sequence makes invisibles adjacent that were not.
-// One round of each therefore leaves the composition unfinished. Bounded on the
-// same argument as the engine's MAX_LAYER1_PASSES: each round deletes at least
-// one character, and past the bound what survives degrades to visible text
-// rather than a hidden control.
+// One round of each therefore leaves the composition unfinished. Each round
+// deletes at least one character, so the loop converges on its own; the bound is
+// a DoS guard. No residual sweep stands behind it — unlike the engine's
+// MAX_LAYER1_PASSES — so an unconverged value would persist a live sequence into
+// the file, and reaching the bound while still changing throws instead.
 const MAX_FIELD_PASSES = 3;
 
 // Returns the cleaned value plus the human-readable actions applied, or null if
@@ -222,6 +223,12 @@ function sanitizeField(value) {
       actions.add("invisible characters");
     }
     if (cleaned === before) break;
+    // This refusal is what blocks a still-changing value — one whose next round
+    // would remove another live sequence — from being written to the file.
+    if (pass === MAX_FIELD_PASSES - 1)
+      throw new Error(
+        "authored content did not reach a fixed point within MAX_FIELD_PASSES",
+      );
   }
 
   return actions.size > 0 ? { cleaned, actions: [...actions] } : null;
