@@ -8,6 +8,16 @@ adhere to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+## [2.55.0] - 2026-09-02
+
+### Added
+- New ANSI colour handling in model-authored content writes, preserving display-only colour information in the data model.
+- Test coverage for ANSI SGR payload handling and authored field colour preservation.
+
+### Fixed
+- Hooks now fail closed when a field misses its fixed point, preventing silent data corruption.
+- Terminal state is now correctly used to judge preserved SGR codes instead of token shape, improving colour handling accuracy.
+
 ## [2.54.2] - 2026-09-02
 
 ### Changed

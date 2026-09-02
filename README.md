@@ -284,7 +284,7 @@ singleton, and two copies in one bundle double-fire the inlined CLIs.
 | `claude-hooks/scan-loaded-instructions` | InstructionsLoaded scan of each instruction file as Claude Code loads it                   |
 | `claude-hooks/lib/hook-io`              | Shared hook I/O: the lazy-module registry, the CLI slot, deadlines, the hookgate marker    |
 | `claude-hooks/lib/control-plane`        | Bridge to `agent-control-plane-core` and the shared judge-CLI transport                    |
-| `claude-hooks/lib/authored-content`     | Stego + terminal-control stripping of the fields the MODEL authors                         |
+| `claude-hooks/lib/authored-content`     | Stego + terminal-control stripping of the fields the MODEL authors (colour is kept)        |
 | `claude-hooks/lib/env-config`           | The env-bound secret vocabulary the Layer-4 pre-gate and the redactor client share         |
 | `claude-hooks/lib/invisible-alert`      | Cross-hook alert state for uncleanable invisible-char injection in instruction files       |
 | `claude-hooks/lib/redactor-client`      | Client for the long-lived `agent-secret-redactor-daemon` (Layer 4's transport)             |

@@ -205,6 +205,32 @@ export const ESCAPE_SEQUENCE_SOURCE = (() => {
   return `(?:${stringArm}|${csiArm})`;
 })();
 
+// The three SGR parameters that move the CONCEAL state (ECMA-48 § 8.3.117).
+// Conceal renders the text that follows as blank while its bytes stay in the
+// file, so a human reading with `cat` sees nothing where a model reads
+// everything — a model-sees/human-sees divergence rather than a display choice.
+const SGR_RESET = 0;
+const SGR_CONCEAL = 8;
+const SGR_REVEAL = 28;
+// The extended-colour selectors. Their ARGUMENTS follow as further semicolon
+// parameters, so a reader that does not consume them reads a colour component as
+// a parameter of its own: `ESC[38;5;8m` is bright-black foreground, not conceal.
+const SGR_EXTENDED_COLOUR = new Set([38, 48, 58]);
+// How many parameters an extended-colour selector consumes after itself, keyed
+// by the colour-space selector that follows it, per ITU T.416 § 13.1.8: the
+// implementation-defined and transparent forms take none, direct-colour RGB and
+// CMY take three components, CMYK four, and indexed takes one palette entry.
+// Every selector the spec defines, so a value missing from this table is
+// malformed rather than merely unimplemented.
+const SGR_COLOUR_ARGS = new Map([
+  [0, 0],
+  [1, 0],
+  [2, 3],
+  [3, 3],
+  [4, 4],
+  [5, 1],
+]);
+
 /** The seven things an introducer can turn out to be. */
 export const TOKEN_KIND = Object.freeze({
   /** A display-only `ESC[…m` / `U+009B…m` colour sequence. */
@@ -423,4 +449,52 @@ export function scanAnsi(text) {
     INTRODUCER_SCAN_RE.lastIndex = end;
   }
   return tokens;
+}
+
+/**
+ * The CONCEAL state after the SGR token `token` is applied to a terminal already
+ * in state `concealed` — the state in which a terminal renders what follows as
+ * blank while its bytes stay readable to anything reading the file.
+ *
+ * A TRANSITION, not a property of the token: conceal is terminal state that
+ * outlives the sequence that set it, so `ESC[8m` followed by `ESC[31m` is still
+ * concealed — a per-token predicate would read the second token as "no conceal
+ * here" and lose the state. Only `8` (set), `28` (reveal) and `0` (reset all)
+ * move it, and the token's parameters are applied in order, so a later reveal or
+ * reset in the SAME token cancels an earlier `8`: `ESC[8;28;31m` renders red and
+ * visible.
+ *
+ * The parameters are read the way a terminal reads them rather than scanned for
+ * the digit. `38`/`48`/`58` take their colour arguments from the parameters that
+ * FOLLOW them in the semicolon form, so `ESC[38;5;8m` is bright-black foreground
+ * and its `8` is a palette index; a parameter carrying its arguments as ITU T.416
+ * sub-parameters (`38:5:8`) is self-contained, so only its head counts and
+ * nothing after it is consumed. A colour-space selector T.416 gives no argument
+ * count for is malformed, and a terminal that ignores the colour form still
+ * applies what follows it, so the scan CONTINUES from the next parameter rather
+ * than consuming arguments it cannot size — reading one parameter too many costs
+ * a token shape no emitter produces, while stopping there would hand
+ * `ESC[38;9;8m` a pass.
+ * @param {string} token  a token {@link scanAnsi} classified {@link TOKEN_KIND.SGR}
+ * @param {boolean} concealed  the state before this token
+ * @returns {boolean}
+ */
+export function sgrConcealState(token, concealed) {
+  // The parameter bytes: everything between the introducer (two characters in
+  // the 7-bit `ESC [` form, one in the 8-bit C1 form) and the final `m`.
+  const params = token
+    .slice(token.charCodeAt(0) === ESC ? 2 : 1, -1)
+    .split(";");
+  let state = concealed;
+  for (let i = 0; i < params.length; i++) {
+    const colonForm = params[i].includes(":");
+    // An omitted parameter is 0 (`ESC[m` is `ESC[0m`), which `Number("")` gives.
+    const value = Number(params[i].split(":")[0]);
+    if (value === SGR_CONCEAL) state = true;
+    else if (value === SGR_REVEAL || value === SGR_RESET) state = false;
+    if (colonForm || !SGR_EXTENDED_COLOUR.has(value)) continue;
+    const args = SGR_COLOUR_ARGS.get(Number(params[i + 1]));
+    if (args !== undefined) i += 1 + args;
+  }
+  return state;
 }

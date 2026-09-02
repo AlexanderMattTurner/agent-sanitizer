@@ -21,12 +21,13 @@
  * runs, and a consumer deriving offsets for redaction or view mapping wants that
  * one — see its own doc for why the choice matters.
  */
-import { stripInvisibleWithReport, CATEGORY } from "./invisible.mjs";
+import { stripInvisibleWithReport, CATEGORY, STRIP } from "./invisible.mjs";
 import {
   CONTROL_INTRODUCER_SOURCE,
   isOrphanKind,
   orphanKindFor,
   scanAnsi,
+  sgrConcealState,
   TOKEN_KIND,
 } from "./ansi.mjs";
 
@@ -170,6 +171,79 @@ export function isBenignAnsiKinds(kinds) {
   return [...kinds].every(
     (kind) => kind === TOKEN_KIND.SGR || kind === TOKEN_KIND.ORPHAN,
   );
+}
+
+/**
+ * How many SGR sequences may sit back to back, with nothing that RENDERS between
+ * them, before the run is read as a covert channel rather than styling.
+ *
+ * A styling emitter puts colour AROUND text: `ls --color`, chalk and pygments
+ * chain at most a handful of attributes before the glyphs they style. A run of
+ * escape sequences that puts no glyph on the screen renders as literally nothing
+ * to a human while a model reads every byte, so past some length the run is not
+ * styling any more — it is a message, in the same shape (and for the same
+ * reason) as the invisible layer's LONG_RUN_THRESHOLD. Ten matches that
+ * threshold and sits well above what a real emitter chains.
+ */
+export const SGR_RUN_THRESHOLD = 10;
+
+/**
+ * True when nothing in `gap` puts a glyph on the screen — the one primitive both
+ * arms of {@link sgrCarriesPayload} ask about. {@link STRIP} is the engine's
+ * single definition of a character with no visible presence, so a zero-width
+ * separator between two sequences is transparent here exactly as it is to a
+ * terminal, while a SPACE is not.
+ * @param {string} gap
+ * @returns {boolean}
+ */
+function rendersNothing(gap) {
+  return gap.replace(STRIP, "") === "";
+}
+
+/**
+ * True when the SGR sequences in `text` do more than style visible text — the
+ * question a consumer must answer before PRESERVING escapes rather than
+ * stripping them. Two arms, both model-sees/human-sees divergences:
+ *
+ *   1. CONCEAL is on while text that would otherwise render goes by, or the text
+ *      ENDS concealed (hiding its own tail, and everything the terminal prints
+ *      afterwards). Only SGR moves that state (see {@link sgrConcealState}) — a
+ *      cursor move or an erase leaves a terminal exactly as concealed as it was.
+ *   2. {@link SGR_RUN_THRESHOLD} sequences with nothing that renders between
+ *      them: the run puts no glyph on the screen, so it carries data rather than
+ *      styling.
+ *
+ * What it does NOT claim: a message spread thinly through legitimately coloured
+ * text — one sequence per line, say — is indistinguishable from styling, and
+ * this answers no for it. That is the same bargain the invisible layer's
+ * thresholds strike, and the same direction: an unprovable payload is left alone
+ * rather than costing every colourized file its colour.
+ *
+ * Scans the RAW text in one pass, which is what a terminal does with these
+ * bytes — no reconstitution across passes, because a preserved byte is never
+ * removed to complete a sequence around it.
+ * @param {string} text
+ * @returns {boolean}
+ */
+export function sgrCarriesPayload(text) {
+  let concealed = false;
+  let run = 0;
+  let previousEnd = 0;
+  for (const token of scanAnsi(text)) {
+    const blankGap = rendersNothing(text.slice(previousEnd, token.start));
+    previousEnd = token.end;
+    if (token.kind !== TOKEN_KIND.SGR) {
+      run = 0;
+      continue;
+    }
+    // This refusal is what blocks `ESC[8m` from hiding text from the human
+    // while leaving its bytes for the model.
+    if (concealed && !blankGap) return true;
+    run = blankGap ? run + 1 : 1;
+    if (run >= SGR_RUN_THRESHOLD) return true;
+    concealed = sgrConcealState(text.slice(token.start, token.end), concealed);
+  }
+  return concealed;
 }
 
 /**
