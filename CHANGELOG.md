@@ -8,6 +8,17 @@ adhere to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+## [2.56.0] - 2026-09-02
+
+### Added
+
+- Layer 3's digest exemption can now be disabled via a consumer-facing configuration option in the hooks.
+- Documentation on the digest-flagging configuration knob across both plugin installation surfaces.
+
+### Fixed
+
+- Test classification for crazytieguy/alignment-hive in the slug partition.
+
 ## [2.55.0] - 2026-09-02
 
 ### Added
