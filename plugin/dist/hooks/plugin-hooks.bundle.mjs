@@ -48670,6 +48670,9 @@ function extraSecretVars(env = process.env) {
 function secretsEnabled(env = process.env) {
   return env[SECRETS_ENABLED_ENV] === "1";
 }
+function digestFlaggingEnabled(env = process.env) {
+  return env[FLAG_DIGEST_VALUES_ENV] === "1";
+}
 function envBoundSecretVars(env = process.env) {
   return [
     .../* @__PURE__ */ new Set([
@@ -48681,7 +48684,7 @@ function envBoundSecretVars(env = process.env) {
     ])
   ];
 }
-var hostEnvConfigSource, HOST_SOURCE_LABEL, HOST_SOURCE_KEYS, _credentialRule, EXTRA_SECRET_VARS_ENV, EXTRA_TOKEN_RE, SECRETS_ENABLED_ENV;
+var hostEnvConfigSource, HOST_SOURCE_LABEL, HOST_SOURCE_KEYS, _credentialRule, EXTRA_SECRET_VARS_ENV, EXTRA_TOKEN_RE, SECRETS_ENABLED_ENV, FLAG_DIGEST_VALUES_ENV;
 var init_env_config = __esm({
   "claude-hooks/lib/env-config.mjs"() {
     "use strict";
@@ -48696,6 +48699,7 @@ var init_env_config = __esm({
     EXTRA_SECRET_VARS_ENV = "_AGENT_SANITIZER_EXTRA_SECRET_VARS";
     EXTRA_TOKEN_RE = /^[A-Z0-9_]+$/;
     SECRETS_ENABLED_ENV = "AGENT_SANITIZER_SECRETS_ENABLED";
+    FLAG_DIGEST_VALUES_ENV = "AGENT_SANITIZER_FLAG_DIGEST_VALUES";
   }
 });
 
@@ -50349,6 +50353,10 @@ async function sanitizeText2(text5, toolName, deadline = makeDeadline(SANITIZE_B
   const seamOptions = {
     html: html4,
     exfilScan: webIngress,
+    // Widens Layer 3 only, and only where the operator asked: without it the
+    // option the seam already accepts is unreachable from this entry, so a hook
+    // consumer that needs a digest in a URL flagged has no way to ask for it.
+    flagDigestValues: digestFlaggingEnabled(),
     sgrCarveOut: !webIngress,
     deadline,
     // Layer 4 — OPT-IN (secretsEnabled): with the knob unset the seam gets no

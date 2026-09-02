@@ -213,8 +213,10 @@ const PUBLISHED_EXPORTS = {
   ],
   "lib/control-plane": ["controlPlane", "nativeStdout", "runJudgeCli"],
   "lib/env-config": [
+    "FLAG_DIGEST_VALUES_ENV",
     "SECRETS_ENABLED_ENV",
     "configureEnvConfigSource",
+    "digestFlaggingEnabled",
     "dynamicSecretVars",
     "envBoundSecretVars",
     "extraSecretVars",

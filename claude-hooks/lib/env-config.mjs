@@ -238,6 +238,24 @@ export function secretsEnabled(env = process.env) {
   return env[SECRETS_ENABLED_ENV] === "1";
 }
 
+// Layer 3's digest exemption, which lets a URL carry an exact-digest-length hex
+// value without being read as a payload. A consumer that treats a digest in a
+// URL as exfil — a monitor reading tool output for a leaked commit or blob id —
+// turns the exemption off here. `checkExfilUrl` takes the same option directly;
+// this is the switch for the hook path, which composes its own seam options.
+export const FLAG_DIGEST_VALUES_ENV = "AGENT_SANITIZER_FLAG_DIGEST_VALUES";
+
+/**
+ * True when the operator opted into flagging digest-shaped URL values. `=== "1"`
+ * for the reason {@link secretsEnabled} gives: a typo fails toward the default,
+ * which is the exemption the precision rule prefers.
+ * @param {NodeJS.ProcessEnv | Record<string, string | undefined>} [env]
+ * @returns {boolean}
+ */
+export function digestFlaggingEnabled(env = process.env) {
+  return env[FLAG_DIGEST_VALUES_ENV] === "1";
+}
+
 /**
  * The env-bound redaction set: the UNION of the inference keys, the curated host
  * credentials, any credential-shaped var present in the environment, the
