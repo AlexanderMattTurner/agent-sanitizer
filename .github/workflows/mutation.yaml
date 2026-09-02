@@ -3,8 +3,8 @@ name: Mutation tests
 # Mutation judges the TREE, not a diff: the shards re-answer the same question
 # on every push and every PR, and the answer moves only when a source or its
 # tests move. So this runs once a day on main — a ~30-shard matrix that
-# dominated every PR run has no business gating a docs typo — and a PR that
-# wants the verdict before merge asks for it with the `ci:mutation` label.
+# dominated every PR run has no business gating a docs typo — never on a PR,
+# under any circumstance.
 #
 # A red scheduled run pages through ci-failure-notify.yaml, which lists this
 # workflow by name.
@@ -16,9 +16,9 @@ on:
   # No paths filter, and no `push` trigger to pair one with: the reporter below
   # is a Required check, and a PR that produced no status at all would sit at
   # "Expected — Waiting" forever. Every PR therefore reaches `mutation-passed`,
-  # which reports green without work unless the label asked for the shards.
+  # which reports green without doing any shard work — see `decide` below.
   pull_request:
-    types: [opened, synchronize, reopened, labeled, unlabeled]
+    types: [opened, synchronize, reopened]
 
 concurrency:
   # PRs group by number so a new push supersedes the run it obsoletes. A
@@ -48,15 +48,14 @@ jobs:
       - name: Decide whether the shards run
         id: gate
         # A schedule or a hand dispatch carries no diff to narrow by, so both
-        # mutate the full tree. A pull request runs only when it asked to.
+        # mutate the full tree. A pull request never runs the shards — see the
+        # header comment — it only needs `mutation-passed` to report.
         env:
-          RUN: >-
-            ${{ github.event_name != 'pull_request'
-             || contains(github.event.pull_request.labels.*.name, 'ci:mutation') }}
+          RUN: ${{ github.event_name != 'pull_request' }}
         run: |
           echo "run=$RUN" >> "$GITHUB_OUTPUT"
           [ "$RUN" = "true" ] ||
-            echo "::notice::Add the ci:mutation label to run the shards on this PR"
+            echo "::notice::Mutation shards run only on the nightly schedule or a manual dispatch, never on a PR"
 
       - name: Load shard matrix
         id: shards
