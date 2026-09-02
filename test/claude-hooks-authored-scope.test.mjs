@@ -29,30 +29,14 @@ import {
   sanitizeAuthoredContent,
 } from "../claude-hooks/lib/authored-content.mjs";
 import { liveToolSurface } from "./helpers/tool-surface.mjs";
+// Addressing the live field map — shared with claude-hooks-authored-ansi, so the
+// two suites cannot come to disagree about what a `key[].sub` spec means.
+import { inputFor, readField } from "./helpers/authored-fields.mjs";
 
 // A raw ESC built in-language: a literal one in a shell string trips this repo's
 // own PreToolUse guard, which is the layer under test.
 const ESC = "\u001b";
 const ANSI_PAYLOAD = `before${ESC}[2Jafter`;
-
-/**
- * A tool_input carrying `value` in the field `spec` addresses, so the positive
- * marker is built from the live field map instead of a second hand-kept copy.
- * @param {string} spec
- * @param {string} value
- */
-function inputFor(spec, value) {
-  const nested = /^(?<arr>\w+)\[\]\.(?<sub>\w+)$/u.exec(spec);
-  if (!nested) return { [spec]: value };
-  return { [nested.groups.arr]: [{ [nested.groups.sub]: value }] };
-}
-
-/** The field `spec` addresses, read back out of a sanitized tool_input. */
-function readField(spec, input) {
-  const nested = /^(?<arr>\w+)\[\]\.(?<sub>\w+)$/u.exec(spec);
-  if (!nested) return input[spec];
-  return input[nested.groups.arr][0][nested.groups.sub];
-}
 
 test("the tool surface is partitioned: every tool is covered or exempt, never both", () => {
   const unclassified = [];

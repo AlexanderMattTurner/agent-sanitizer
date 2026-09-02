@@ -15,11 +15,16 @@
  *      authored into a command — echoed and executed live — or into file
  *      content (a latent bomb when the file is later `cat`'d) can clear the
  *      screen, reposition the cursor, or overwrite what the user sees, hiding
- *      the real command behind spoofed output. Stripped *unconditionally*: a
- *      single sequence already does harm, so there is no volume threshold. The
- *      false-positive rate is low because real source represents escapes as
- *      *literals* (`\033`, `\x1b`, `\e`) — a *raw* ESC byte in authored content
- *      is anomalous.
+ *      the real command behind spoofed output. A single such sequence already
+ *      does harm, so there is no volume threshold: one of them strips the whole
+ *      field. Display-only SGR colour is the exception and is PRESERVED
+ *      byte-for-byte — it restyles text and can neither move the cursor nor
+ *      carry an OSC payload, so stripping it only costs a model the colourized
+ *      fixture, TUI golden file or prompt string it deliberately wrote. The
+ *      carve-out ends where SGR stops being styling (see the engine's
+ *      sgrCarriesPayload): a CONCEAL parameter blanks text for a human while a
+ *      model still reads it, and a long run of back-to-back sequences renders as
+ *      nothing at all, which is a covert channel rather than colour.
  *
  * SCOPE IS DECLARED, NOT INFERRED. Which tools this layer touches is a
  * partition — {@link AUTHORED_FIELDS} (covered, with the field list) and
@@ -50,9 +55,10 @@ import { lazyImport } from "./hook-io.mjs";
 // static import of this module, before its fail-closed catch runs). A failed
 // load leaves these bindings undefined, so sanitizeField's calls throw into
 // the fail-closed catch (ask) instead.
-const { stripAnsiFully } = /** @type {typeof import("agent-sanitizer")} */ (
-  await lazyImport("agent-sanitizer")
-);
+const { stripAnsiFully, isBenignAnsiKinds, sgrCarriesPayload } =
+  /** @type {typeof import("agent-sanitizer")} */ (
+    await lazyImport("agent-sanitizer")
+  );
 const { STRIP, SCATTERED_THRESHOLD, hasLongRun, stripInvisible } =
   /** @type {typeof import("agent-sanitizer/invisible")} */ (
     await lazyImport("agent-sanitizer/invisible")
@@ -147,38 +153,77 @@ function isPayloadCapable(text) {
   return (text.match(STRIP)?.length ?? 0) >= SCATTERED_THRESHOLD;
 }
 
+/**
+ * The de-ANSI'd `text`, or `text` itself when its escapes are display-only
+ * colour a reader authored on purpose.
+ *
+ * The two questions are answered by two different views, deliberately.
+ * `isBenignAnsiKinds` reads the kinds the strip actually REMOVED, so a sequence
+ * that only reconstitutes mid-strip is judged as the sequence it becomes rather
+ * than as the incomplete one it started as. `sgrCarriesPayload` reads the RAW
+ * bytes, because those are the bytes a terminal renders on the preserve path —
+ * it makes no second pass, so there is nothing to reconstitute there.
+ *
+ * Only COMPLETE tokens reach `kinds`: an introducer that opens no sequence is
+ * left in place by `stripAnsiFully` (it rewrites no display), so the orphan arms
+ * of `isBenignAnsiKinds` never decide anything here.
+ * @param {string} text
+ * @returns {string}
+ */
+function stripTerminalControls(text) {
+  /** @type {Set<string>} TOKEN_KINDs the strip removed. */
+  const kinds = new Set();
+  const deAnsi = stripAnsiFully(text, kinds);
+  if (deAnsi === text) return text;
+  if (isBenignAnsiKinds(kinds) && !sgrCarriesPayload(text)) return text;
+  return deAnsi;
+}
+
+// How many rounds of {terminal-control, invisible} the field may take. The two
+// protections FEED each other: removing invisibles completes a sequence that was
+// incomplete when the terminal stage ran (`ESC[` ZWSP `2J` is an orphan until the
+// ZWSP goes), and removing a sequence makes invisibles adjacent that were not.
+// One round of each therefore leaves the composition unfinished. Bounded on the
+// same argument as the engine's MAX_LAYER1_PASSES: each round deletes at least
+// one character, and past the bound what survives degrades to visible text
+// rather than a hidden control.
+const MAX_FIELD_PASSES = 3;
+
 // Returns the cleaned value plus the human-readable actions applied, or null if
 // the field is already clean. Each protection has its own opt-out (see the
 // header) so a deployment can keep one while dropping the other.
 /** @param {string} value */
 function sanitizeField(value) {
-  const actions = [];
+  // A Set, so a protection that fires in more than one round is described once.
+  /** @type {Set<string>} */
+  const actions = new Set();
   let cleaned = value;
 
-  // Strip terminal-control sequences first, so the invisible scan below runs on
-  // the same de-ANSI'd view sanitize-output uses (both go through the package's
-  // stripAnsiFully, which strips to a fixed point — so a sequence reconstituted
-  // when an inner one is removed is itself stripped on the next pass). Compare
-  // before/after rather than pre-testing for ESC: a lone control byte that forms
-  // no real sequence does not rewrite the display and is left alone, so we only
-  // report a genuine strip.
-  if (process.env.AGENT_SANITIZER_TERMINAL_DISABLED !== "1") {
-    const deAnsi = stripAnsiFully(cleaned);
-    if (deAnsi !== cleaned) {
-      cleaned = deAnsi;
-      actions.push("terminal-control sequences");
+  for (let pass = 0; pass < MAX_FIELD_PASSES; pass++) {
+    const before = cleaned;
+    // Terminal controls first, so the invisible scan runs on the same de-ANSI'd
+    // view sanitize-output uses. Compare before/after rather than pre-testing
+    // for ESC: escapes this layer deliberately leaves in place — a lone control
+    // byte, display-only colour — must not be reported as a strip.
+    if (process.env.AGENT_SANITIZER_TERMINAL_DISABLED !== "1") {
+      const deAnsi = stripTerminalControls(cleaned);
+      if (deAnsi !== cleaned) {
+        cleaned = deAnsi;
+        actions.add("terminal-control sequences");
+      }
     }
+
+    if (
+      process.env.AGENT_SANITIZER_INVISIBLE_DISABLED !== "1" &&
+      isPayloadCapable(cleaned)
+    ) {
+      cleaned = stripInvisible(cleaned);
+      actions.add("invisible characters");
+    }
+    if (cleaned === before) break;
   }
 
-  if (
-    process.env.AGENT_SANITIZER_INVISIBLE_DISABLED !== "1" &&
-    isPayloadCapable(cleaned)
-  ) {
-    cleaned = stripInvisible(cleaned);
-    actions.push("invisible characters");
-  }
-
-  return actions.length > 0 ? { cleaned, actions } : null;
+  return actions.size > 0 ? { cleaned, actions: [...actions] } : null;
 }
 
 /** @param {string[]} changed */

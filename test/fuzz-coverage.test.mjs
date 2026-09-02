@@ -114,6 +114,8 @@ const FUZZ_EXEMPT = Object.freeze({
   isIncidentalInvisible:
     "threshold read over counts the invisible analysis produced",
   isSgrOnly: "predicate over the tokens scanAnsi produced",
+  sgrCarriesPayload:
+    "reads the parameter bytes and the adjacency of the SGR tokens scanAnsi produced",
   isWalkableContainer: "shape predicate over one JSON value",
   looksLikeHtmlSource:
     "returns a verdict rather than a transform, and both branches it selects are fuzzed through sanitizeHtml",

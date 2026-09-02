@@ -290,6 +290,42 @@ reconstitute a secret the first pass never saw intact. On `Bash.command` it runs
 before `sanitizeAuthoredContent`, which is the assumption the confusable-folding
 soundness argument below relies on.
 
+## Model-authored writes (tool input)
+
+`claude-hooks/lib/authored-content` scrubs what the model EMITS — the file
+content, edits, notebook cells and command bodies that get persisted or executed
+— rather than what it reads. Two protections, with different gates. Stego
+(format characters, variation selectors) is stripped only when the volume can
+carry a message, because authored content is persisted and incidental joiners
+are legitimate. Terminal-control sequences are stripped on sight: one cursor
+move, erase or OSC string in a file is a latent bomb the next `cat` fires, and
+one in a command spoofs what the user is shown as it runs.
+
+Display-only SGR colour is the exception, and is preserved byte-for-byte. The
+SGR grammar is closed — parameters and a final `m` — so it restyles visible text
+and can do nothing else; stripping it costs a model the colourized fixture, TUI
+golden file or prompt string it deliberately wrote, and buys no safety. Two
+shapes end the exception, both of them the model-sees/human-sees divergence
+rather than a display choice: a CONCEAL parameter (`ESC[8m`), which blanks the
+text that follows for a human while its bytes stay readable to a model, and a
+run of sequences back to back with no character between them, which renders as
+nothing at all and is therefore carrying data rather than colour. Either one
+strips the whole field. The parameters are read the way a terminal reads them,
+so an extended-colour argument is never mistaken for a parameter — `ESC[38;5;8m`
+is bright-black foreground, not conceal.
+
+What that exception does NOT claim: a message spread thinly through
+legitimately coloured text — a sequence per line, encoding a bit — is
+indistinguishable from styling, and is left alone. That is the same bargain the
+invisible-character thresholds strike, in the same direction: an unprovable
+payload costs a false negative, while a wrong strip costs every colourized file
+its colour.
+
+Both protections run to a fixed point over each field rather than once each,
+because they feed one another: removing an invisible character completes a
+sequence that was incomplete when the terminal stage ran (`ESC[`⟨ZWSP⟩`2J`), and
+removing a sequence makes invisibles adjacent that were not.
+
 ## Confusable folding (tool input)
 
 `./confusables` folds look-alike glyphs in tool-call **input** fields (paths,

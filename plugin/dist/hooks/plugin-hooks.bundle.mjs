@@ -3227,7 +3227,36 @@ function scanAnsi(text5) {
   }
   return tokens;
 }
-var CONTROL_INTRODUCER_CODEPOINTS, CONTROL_INTRODUCER_SOURCE, SGR_SOURCE, SGR_RE, SGR_ANCHORED_RE, CSI_INTRO_CLASS, CSI_INTRO_RE, CSI_PARAM_CLASS, CSI_PARAM_RE, CSI_FINAL_CLASS, CSI_FINAL_RE, ESC, CSI_C1, ST_C1, BEL, CAN, SUB, LF, CR, STRING_INTRO_7BIT, OSC_7BIT, OSC_C1, STRING_INTRO_C1, ESCAPE_SEQUENCE_SOURCE, TOKEN_KIND, INTRODUCER_SCAN_RE;
+function sgrConceals(token) {
+  const params = token.slice(token.charCodeAt(0) === ESC ? 2 : 1, -1).split(";");
+  for (let i = 0; i < params.length; i++) {
+    const colonForm = params[i].includes(":");
+    const value = Number(params[i].split(":")[0]);
+    if (value === SGR_CONCEAL_PARAM) return true;
+    if (colonForm || !SGR_EXTENDED_COLOUR.has(value)) continue;
+    const args = SGR_COLOUR_ARGS.get(Number(params[i + 1]));
+    if (args === void 0) return false;
+    i += 1 + args;
+  }
+  return false;
+}
+function sgrCarriesPayload(text5) {
+  let run = 0;
+  let previousEnd = -1;
+  for (const token of scanAnsi(text5)) {
+    if (token.kind !== TOKEN_KIND.SGR) {
+      run = 0;
+      previousEnd = -1;
+      continue;
+    }
+    if (sgrConceals(text5.slice(token.start, token.end))) return true;
+    run = token.start === previousEnd ? run + 1 : 1;
+    if (run >= SGR_RUN_THRESHOLD) return true;
+    previousEnd = token.end;
+  }
+  return false;
+}
+var CONTROL_INTRODUCER_CODEPOINTS, CONTROL_INTRODUCER_SOURCE, SGR_SOURCE, SGR_RE, SGR_ANCHORED_RE, CSI_INTRO_CLASS, CSI_INTRO_RE, CSI_PARAM_CLASS, CSI_PARAM_RE, CSI_FINAL_CLASS, CSI_FINAL_RE, ESC, CSI_C1, ST_C1, BEL, CAN, SUB, LF, CR, STRING_INTRO_7BIT, OSC_7BIT, OSC_C1, STRING_INTRO_C1, ESCAPE_SEQUENCE_SOURCE, SGR_CONCEAL_PARAM, SGR_RUN_THRESHOLD, SGR_EXTENDED_COLOUR, SGR_COLOUR_ARGS, TOKEN_KIND, INTRODUCER_SCAN_RE;
 var init_ansi = __esm({
   "src/ansi.mjs"() {
     "use strict";
@@ -3273,6 +3302,13 @@ var init_ansi = __esm({
       const csiArm = `${charClass([ESC, CSI_C1])}${CSI_INTRO_CLASS}*(?!${CSI_INTRO_CLASS})${CSI_PARAM_CLASS}*${CSI_FINAL_CLASS}`;
       return `(?:${stringArm}|${csiArm})`;
     })();
+    SGR_CONCEAL_PARAM = 8;
+    SGR_RUN_THRESHOLD = 10;
+    SGR_EXTENDED_COLOUR = /* @__PURE__ */ new Set([38, 48, 58]);
+    SGR_COLOUR_ARGS = /* @__PURE__ */ new Map([
+      [5, 1],
+      [2, 3]
+    ]);
     TOKEN_KIND = Object.freeze({
       /** A display-only `ESC[…m` / `U+009B…m` colour sequence. */
       SGR: "sgr",
@@ -46923,6 +46959,7 @@ __export(src_exports, {
   SECRET_HINT: () => SECRET_HINT,
   SECRET_HINT_EXT: () => SECRET_HINT_EXT,
   SGR_RE: () => SGR_RE,
+  SGR_RUN_THRESHOLD: () => SGR_RUN_THRESHOLD,
   STRIP: () => STRIP,
   VS: () => VS,
   applyLayer1: () => applyLayer1,
@@ -46935,6 +46972,7 @@ __export(src_exports, {
   matchesSecretHint: () => matchesSecretHint,
   normalizeLoneSurrogates: () => normalizeLoneSurrogates,
   sanitize: () => sanitize,
+  sgrCarriesPayload: () => sgrCarriesPayload,
   stripAnsiFully: () => stripAnsiFully,
   stripInvisible: () => stripInvisible,
   stripInvisibleWithReport: () => stripInvisibleWithReport
@@ -46971,6 +47009,7 @@ var init_src = __esm({
     "use strict";
     init_output();
     init_layer1();
+    init_ansi();
     init_invisible();
     init_gates();
   }
@@ -48235,21 +48274,32 @@ function isPayloadCapable(text5) {
   if (hasLongRun2(text5)) return true;
   return (text5.match(STRIP2)?.length ?? 0) >= SCATTERED_THRESHOLD2;
 }
+function stripTerminalControls(text5) {
+  const kinds = /* @__PURE__ */ new Set();
+  const deAnsi = stripAnsiFully2(text5, kinds);
+  if (deAnsi === text5) return text5;
+  if (isBenignAnsiKinds2(kinds) && !sgrCarriesPayload2(text5)) return text5;
+  return deAnsi;
+}
 function sanitizeField(value) {
-  const actions = [];
+  const actions = /* @__PURE__ */ new Set();
   let cleaned = value;
-  if (process.env.AGENT_SANITIZER_TERMINAL_DISABLED !== "1") {
-    const deAnsi = stripAnsiFully2(cleaned);
-    if (deAnsi !== cleaned) {
-      cleaned = deAnsi;
-      actions.push("terminal-control sequences");
+  for (let pass = 0; pass < MAX_FIELD_PASSES; pass++) {
+    const before = cleaned;
+    if (process.env.AGENT_SANITIZER_TERMINAL_DISABLED !== "1") {
+      const deAnsi = stripTerminalControls(cleaned);
+      if (deAnsi !== cleaned) {
+        cleaned = deAnsi;
+        actions.add("terminal-control sequences");
+      }
     }
+    if (process.env.AGENT_SANITIZER_INVISIBLE_DISABLED !== "1" && isPayloadCapable(cleaned)) {
+      cleaned = stripInvisible2(cleaned);
+      actions.add("invisible characters");
+    }
+    if (cleaned === before) break;
   }
-  if (process.env.AGENT_SANITIZER_INVISIBLE_DISABLED !== "1" && isPayloadCapable(cleaned)) {
-    cleaned = stripInvisible2(cleaned);
-    actions.push("invisible characters");
-  }
-  return actions.length > 0 ? { cleaned, actions } : null;
+  return actions.size > 0 ? { cleaned, actions: [...actions] } : null;
 }
 function authoredContext(changed) {
   return `Sanitized model-authored content in: ${changed.join("; ")}. This removes a covert channel to other AIs and prevents authored content from rewriting the user's terminal. Opt out granularly with AGENT_SANITIZER_INVISIBLE_DISABLED=1 (i18n joiners) or AGENT_SANITIZER_TERMINAL_DISABLED=1 (raw-escape fixtures), or fully with AGENT_SANITIZER_OUTPUT_DISABLED=1.`;
@@ -48290,12 +48340,12 @@ function sanitizeAuthoredContent(tool, toolInput) {
   if (changed.length === 0) return null;
   return { updatedInput, changed };
 }
-var stripAnsiFully2, STRIP2, SCATTERED_THRESHOLD2, hasLongRun2, stripInvisible2, AUTHORED_FIELDS, EXEMPT_TOOLS2, EXEMPT_TOOL_PATTERNS2;
+var stripAnsiFully2, isBenignAnsiKinds2, sgrCarriesPayload2, STRIP2, SCATTERED_THRESHOLD2, hasLongRun2, stripInvisible2, AUTHORED_FIELDS, EXEMPT_TOOLS2, EXEMPT_TOOL_PATTERNS2, MAX_FIELD_PASSES;
 var init_authored_content = __esm({
   async "claude-hooks/lib/authored-content.mjs"() {
     "use strict";
     init_hook_io();
-    ({ stripAnsiFully: stripAnsiFully2 } = /** @type {typeof import("agent-sanitizer")} */
+    ({ stripAnsiFully: stripAnsiFully2, isBenignAnsiKinds: isBenignAnsiKinds2, sgrCarriesPayload: sgrCarriesPayload2 } = /** @type {typeof import("agent-sanitizer")} */
     await lazyImport("agent-sanitizer"));
     ({ STRIP: STRIP2, SCATTERED_THRESHOLD: SCATTERED_THRESHOLD2, hasLongRun: hasLongRun2, stripInvisible: stripInvisible2 } = /** @type {typeof import("agent-sanitizer/invisible")} */
     await lazyImport("agent-sanitizer/invisible"));
@@ -48322,6 +48372,7 @@ var init_authored_content = __esm({
         reason: `MCP tool inputs follow a server-declared schema this package cannot see, so there is no field it can name as authored free text. A blanket walk over every string in the input would buy recall at a real precision cost \u2014 it would rewrite opaque IDs, base64 blobs and protocol fields the server parses \u2014 so the gap is DECLARED rather than closed. A deployment that wants a specific server's body field covered adds it to AUTHORED_FIELDS by its full tool name (e.g. mcp__github__create_issue: ["body"]).`
       })
     ]);
+    MAX_FIELD_PASSES = 3;
   }
 });
 
