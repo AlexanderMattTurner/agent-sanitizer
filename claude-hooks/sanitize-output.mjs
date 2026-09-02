@@ -49,7 +49,7 @@ import { registerFaultPolicy, hookFaultOutcome } from "./lib/hook-fault.mjs";
 import { controlPlane, runJudgeCli } from "./lib/control-plane.mjs";
 import { bestEffortTrace, trace, TraceEvent } from "./lib/trace.mjs";
 import { hasEnvBoundSecret } from "./lib/secret-annotate.mjs";
-import { secretsEnabled } from "./lib/env-config.mjs";
+import { digestFlaggingEnabled, secretsEnabled } from "./lib/env-config.mjs";
 import {
   persistReveal,
   persistSpan,
@@ -267,6 +267,10 @@ export async function sanitizeText(
   const seamOptions = {
     html,
     exfilScan: webIngress,
+    // Widens Layer 3 only, and only where the operator asked: without it the
+    // option the seam already accepts is unreachable from this entry, so a hook
+    // consumer that needs a digest in a URL flagged has no way to ask for it.
+    flagDigestValues: digestFlaggingEnabled(),
     sgrCarveOut: !webIngress,
     deadline,
     // Layer 4 — OPT-IN (secretsEnabled): with the knob unset the seam gets no
