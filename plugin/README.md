@@ -123,9 +123,9 @@ Three opt-outs, for content the sanitizer would otherwise rewrite:
 One opt-in, for a consumer that reads a digest in a URL as a leak rather than as
 an ordinary link — a monitor watching tool output for a commit or blob id:
 
-| Variable                               | Effect                                                                                                                                     |
-| -------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
-| `AGENT_SANITIZER_FLAG_DIGEST_VALUES=1` | Report a URL whose query or fragment value is exactly the length of a hex digest. Exempt by default, because such a value is usually an id |
+| Variable                               | Effect                                                                                                                                                                                                                                                                        |
+| -------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `AGENT_SANITIZER_FLAG_DIGEST_VALUES=1` | Report a hex value one digest wide under a generic query or fragment parameter name. Exempt by default, because a commit or blob id in a link is ordinary. The default already flags one under a name that says credential (`token`, `key`), and never exempts a path segment |
 
 One opt-in, for the secret layer — its denies and asks are friction, so it
 engages only when an operator asked for it:

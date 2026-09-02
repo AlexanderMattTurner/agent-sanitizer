@@ -164,10 +164,12 @@ buy you:
 3. Look-alike glyphs in tool inputs are folded to ASCII, so a Cyrillic `а` can't
    walk a command past a deny rule.
 4. Tool output has invisible characters and terminal escapes stripped, hidden
-   HTML spliced out with a placeholder, and exfil-shaped URLs flagged. A URL
-   value the length of a hex digest is exempt, because a commit or blob id in a
-   link is ordinary; `AGENT_SANITIZER_FLAG_DIGEST_VALUES=1` turns that exemption
-   off for a consumer that reads such a value as a leak.
+   HTML spliced out with a placeholder, and exfil-shaped URLs flagged. A hex
+   value one digest wide is exempt under a generic query or fragment parameter
+   name, because a commit or blob id in a link is ordinary — under a name that
+   already says credential it still flags, and a path segment never reaches the
+   exemption at all. `AGENT_SANITIZER_FLAG_DIGEST_VALUES=1` turns it off for a
+   consumer that reads such a value as a leak.
 5. With `AGENT_SANITIZER_SECRETS_ENABLED=1` set, secrets in tool output are
    redacted locally by `detect-secrets` — the engine ships with the plugin and
    provisions itself on first run, no further setup from you.
