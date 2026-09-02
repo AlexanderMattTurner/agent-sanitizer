@@ -30,6 +30,8 @@ export {
   isBenignAnsiKinds,
   normalizeLoneSurrogates,
   stripAnsiFully,
+  sgrCarriesPayload,
+  SGR_RUN_THRESHOLD,
   LONE_SURROGATE_RE,
 } from "./layer1.mjs";
 

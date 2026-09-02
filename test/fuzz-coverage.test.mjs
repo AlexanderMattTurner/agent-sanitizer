@@ -186,6 +186,8 @@ const FUZZ_TODO = Object.freeze({
   needsMarkdownPipeline: "a fail-open pre-gate for Layers 2 and 3",
   overlapAwareCount: "decides Edit ambiguity over untrusted needles",
   pairDiskSpans: "maps redaction pairs onto on-disk spans",
+  sgrCarriesPayload:
+    "a fail-open pre-gate for the write path's SGR carve-out, over a hand-rolled parameter grammar",
 });
 
 // Entry points that owe SEMANTIC-CORRECTNESS fuzzing, not just structural
