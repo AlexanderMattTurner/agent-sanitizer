@@ -8,6 +8,11 @@ adhere to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+## [2.54.2] - 2026-09-02
+
+### Changed
+- Enhanced README with improved usage details and library features documentation.
+
 ## [2.54.1] - 2026-09-01
 
 ### Added
