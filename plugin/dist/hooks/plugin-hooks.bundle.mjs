@@ -49625,11 +49625,12 @@ function depLoadHint(err, remedy = DEFAULT_MISSING_PACKAGE_REMEDY, failedPackage
   return pkg === void 0 ? "" : ` ${missingPackageMessage(pkg, loadErrorFor(pkg), remedy)}`;
 }
 function failClosedFields(parsedOk, err, opts = {}) {
-  const { hint = depLoadHint(err) } = opts;
+  const { hint = depLoadHint(err), unavailableDecision } = opts;
   const messages = { ...PRE_TOOL_USE_MESSAGES, ...opts.messages };
   const cause = `${safeErrMessage(err)}${hint}`;
+  const unavailable = unavailableDecision === PermissionDecision.DENY ? PermissionDecision.DENY : PermissionDecision.ASK;
   return {
-    permissionDecision: parsedOk ? PermissionDecision.ASK : PermissionDecision.DENY,
+    permissionDecision: parsedOk ? unavailable : PermissionDecision.DENY,
     permissionDecisionReason: parsedOk ? messages.failed(cause) : messages.unparsable(cause)
   };
 }
