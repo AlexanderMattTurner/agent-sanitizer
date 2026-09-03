@@ -8,6 +8,12 @@ adhere to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+## [2.57.0] - 2026-09-03
+
+### Changed
+
+- `claude-hooks` now allows a host to choose the fail-closed verdict when clean-parse fails.
+
 ## [2.56.0] - 2026-09-02
 
 ### Added
