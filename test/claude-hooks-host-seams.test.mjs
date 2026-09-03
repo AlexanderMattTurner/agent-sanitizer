@@ -688,6 +688,31 @@ describe("PreToolUse fail-closed fields", () => {
     assert.equal(failClosedFields(false, err).permissionDecision, "deny");
   });
 
+  it("denies the clean-parse arm for a host that set unavailableDecision", () => {
+    // An unattended host has nobody to answer the ask, so it opts into a refusal.
+    // The reason text is the same one the ask carried, so the session still reads
+    // the cause and the remedy.
+    const err = new Error("boom");
+    const denied = failClosedFields(true, err, { unavailableDecision: "deny" });
+    assert.equal(denied.permissionDecision, "deny");
+    assert.equal(
+      denied.permissionDecisionReason,
+      failClosedFields(true, err).permissionDecisionReason,
+    );
+  });
+
+  it("falls back to ask for an unavailableDecision it does not recognize", () => {
+    // A typo must not widen this arm past the two closed verdicts, so anything
+    // other than "deny" keeps the default rather than being passed through.
+    for (const bogus of ["allow", "", "DENY", undefined, null, 1])
+      assert.equal(
+        failClosedFields(true, new Error("boom"), {
+          unavailableDecision: /** @type {any} */ (bogus),
+        }).permissionDecision,
+        "ask",
+      );
+  });
+
   it("routes both reasons through the host's table and hint", () => {
     const opts = {
       messages: {

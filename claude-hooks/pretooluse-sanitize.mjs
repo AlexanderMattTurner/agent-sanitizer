@@ -713,6 +713,11 @@ export function depLoadHint(
  * — redactor daemon down, package not loaded) is the sanitizer being UNAVAILABLE,
  * so it ASKS to keep a human in the loop rather than hard-block on infrastructure.
  *
+ * An UNATTENDED host has no human for that ask to reach, so the ask stops the
+ * call and buys no review. Such a host passes `unavailableDecision: DENY` and
+ * gets a hard refusal on the clean-parse arm too, with the same reason text.
+ * The default stays ASK, so a host that wires nothing keeps today's behavior.
+ *
  * Deliberately knob-blind: this is the fail-CLOSED posture itself, so it ignores
  * AGENT_SANITIZER_FAIL_OPEN — a host that wires it directly keeps strictness by
  * construction, with no env var to remember. A host that instead wants the
@@ -720,19 +725,27 @@ export function depLoadHint(
  * which delegates here when the posture is closed.
  * @param {boolean} parsedOk whether the input parsed before the failure
  * @param {unknown} err
- * @param {{ messages?: Partial<typeof PRE_TOOL_USE_MESSAGES>, hint?: string }} [opts]
+ * @param {{
+ *   messages?: Partial<typeof PRE_TOOL_USE_MESSAGES>,
+ *   hint?: string,
+ *   unavailableDecision?: (typeof PermissionDecision)[keyof typeof PermissionDecision],
+ * }} [opts]
  * @returns {Record<string, unknown>}
  */
 export function failClosedFields(parsedOk, err, opts = {}) {
-  const { hint = depLoadHint(err) } = opts;
+  const { hint = depLoadHint(err), unavailableDecision } = opts;
   // Merged, not substituted — see judgePreToolUseSanitize. This is the call site
   // where a missing field would throw out of the catch and fail OPEN.
   const messages = { ...PRE_TOOL_USE_MESSAGES, ...opts.messages };
   const cause = `${safeErrMessage(err)}${hint}`;
+  // An unknown or absent override falls back to ASK rather than being trusted:
+  // a typo must not silently widen this arm past the two closed verdicts.
+  const unavailable =
+    unavailableDecision === PermissionDecision.DENY
+      ? PermissionDecision.DENY
+      : PermissionDecision.ASK;
   return {
-    permissionDecision: parsedOk
-      ? PermissionDecision.ASK
-      : PermissionDecision.DENY,
+    permissionDecision: parsedOk ? unavailable : PermissionDecision.DENY,
     permissionDecisionReason: parsedOk
       ? messages.failed(cause)
       : messages.unparsable(cause),
