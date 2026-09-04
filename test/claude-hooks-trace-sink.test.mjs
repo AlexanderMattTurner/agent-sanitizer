@@ -49,7 +49,7 @@ const projectDir = mkdtempSync(join(tmpdir(), "sanitizer-trace-proj-"));
 process.env.CLAUDE_PROJECT_DIR = projectDir;
 process.env._AGENT_SANITIZER_TRACE = "info";
 
-const { TraceEvent, hostChargedTrace, trace } =
+const { TraceEvent, hookTrace, trace } =
   await import("../claude-hooks/lib/trace.mjs");
 const { SLOW_HOOK_THRESHOLD_MS } =
   await import("../claude-hooks/lib/hook-timing.mjs");
@@ -113,9 +113,12 @@ async function withStdin(payload, fn) {
 /**
  * One entry per hook: how to run it with and without a host sink, and what its
  * announcement looks like.
+ * `envelopeOnly` marks a hook with no verdict to fold a timing notice into, so
+ * its response envelope is the only route its attribution takes to the model.
  * @type {Array<{
  *   name: string,
  *   event: string,
+ *   envelopeOnly?: boolean,
  *   run: (sink?: import("../claude-hooks/lib/trace.mjs").TraceFn) => Promise<void>,
  * }>}
  */
@@ -168,12 +171,14 @@ const HOOKS = [
   {
     name: "scan-invisible-chars",
     event: TraceEvent.SCAN_INVISIBLE_CHARS_RAN,
+    envelopeOnly: true,
     run: (sink) =>
       sink ? scanInvisible.cliMain({ trace: sink }) : scanInvisible.cliMain(),
   },
   {
     name: "scan-loaded-instructions",
     event: TraceEvent.SCAN_LOADED_INSTRUCTIONS_RAN,
+    envelopeOnly: true,
     run: (sink) =>
       withStdin(
         {
@@ -239,12 +244,21 @@ for (const hook of HOOKS) {
 const HOST_SINK_WAIT_MS = SLOW_HOOK_THRESHOLD_MS + 100;
 const block = (ms) =>
   Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
-const waitingSink = () => block(HOST_SINK_WAIT_MS);
+
+/**
+ * A sink that records the events it is handed and then waits.
+ * @param {string[]} seen  filled with each event name as it arrives
+ */
+const waitingSink = (seen) => (event) => {
+  seen.push(event);
+  block(HOST_SINK_WAIT_MS);
+};
 
 /**
  * Run `fn` with `process.stderr` collected. Every hook writes the slow-hook
  * notice there whatever verdict channel it also rides, so it is the one place a
- * case below can read all five. The `write` PROPERTY is safe to patch here (see
+ * case below can read it for all five hooks alike. The `write` PROPERTY is safe
+ * to patch here (see
  * capture-stdout.mjs for why stdout is not): node:test reports on stdout.
  * @template T
  * @param {() => Promise<T>} fn
@@ -271,30 +285,23 @@ async function withCapturedStderr(fn, slowLines = () => false) {
 /** A trace line from the package's own sink, which writes one JSON object. */
 const isTraceLine = (line) => line.includes(`"event":"`);
 
-// The two hooks with no verdict to fold a timing notice into: their response
-// envelope is the only route their attribution takes to the model.
-const ENVELOPE_ONLY = new Set([
-  "scan-invisible-chars",
-  "scan-loaded-instructions",
-]);
-
 // Threaded by hand per hook, like the sink itself, so every hook is asserted
 // rather than one standing in for the rest.
 describe("a host sink's wait is charged to the host window", () => {
-  it("drives both envelope-only hooks (non-vacuous)", () => {
-    assert.deepEqual(
-      HOOKS.map(({ name }) => name).filter((name) => ENVELOPE_ONLY.has(name)),
-      [...ENVELOPE_ONLY],
-    );
-  });
-
   for (const hook of HOOKS)
     it(`${hook.name} names the host extension, not itself`, async () => {
       freshTraceFile();
+      /** @type {string[]} */
+      const seen = [];
       const {
         result: { stdout },
         stderr,
-      } = await withCapturedStderr(() => quietly(hook.run, waitingSink));
+      } = await withCapturedStderr(() => quietly(hook.run, waitingSink(seen)));
+      // The announcement reached the sink, so the wait asserted below is the
+      // sink's and the hook ran its clean path. A hook that faulted before
+      // announcing waits for nothing, and its notice — which this case would
+      // otherwise read as the finding — names no window at all.
+      assert.deepEqual(seen, [hook.event]);
       // The number, then the verdict: an uncharged host window reads 0.0s and
       // hands the same wait to the "blocked on a loaded machine" arm, which
       // sends the reader to their own machine for a cost their sink spent —
@@ -304,7 +311,10 @@ describe("a host sink's wait is charged to the host window", () => {
         stderr,
         /The largest share was spent inside a host extension/,
       );
-      if (!ENVELOPE_ONLY.has(hook.name)) return;
+      if (!hook.envelopeOnly) return;
+      // One envelope: these hooks fold the notice INTO their own response
+      // rather than emitting a second, so a parse that throws here is a real
+      // regression in that merge and not a loose assertion.
       const { additionalContext } = JSON.parse(stdout).hookSpecificOutput;
       // Every window MEASURED, so the notice rules the empty ones out rather
       // than listing them as candidates it cannot separate.
@@ -319,7 +329,7 @@ describe("a host sink's wait is charged to the host window", () => {
 // composer paid.
 describe("the package's own sink is never charged as a host extension", () => {
   it("hands the default back unwrapped, so nothing can charge it", () => {
-    assert.equal(hostChargedTrace(undefined), trace);
+    assert.equal(hookTrace(undefined), trace);
   });
 
   for (const hook of HOOKS)
@@ -332,6 +342,9 @@ describe("the package's own sink is never charged as a host extension", () => {
         () => quietly(hook.run),
         isTraceLine,
       );
+      // The line that blocked, so the budget was spent inside the package's own
+      // sink and not somewhere a faulting hook stopped short of.
+      assert.match(stderr, new RegExp(`"event":"${hook.event}"`));
       assert.match(stderr, /0\.0s was inside host extensions/);
       assert.doesNotMatch(
         stderr,

@@ -51,7 +51,7 @@ import {
 import { formatReport } from "./lib/invisible-report.mjs";
 import { sweepStaleReveals } from "./lib/reveal.mjs";
 import { sweepStaleConfirms } from "./lib/secret-drop-guard.mjs";
-import { bestEffortTrace, hostChargedTrace, TraceEvent } from "./lib/trace.mjs";
+import { hookTrace, TraceEvent } from "./lib/trace.mjs";
 import { reportSlowHook, startHookTimer } from "./lib/hook-timing.mjs";
 // Relative, not the `agent-sanitizer` specifier every other engine import uses:
 // this is the scan's SCOPE, which is hook policy, and package.json's exports map
@@ -414,8 +414,7 @@ export async function cliMain(opts = {}) {
       undefined,
       // All four windows, including the two this scan normally leaves empty: a
       // measured 0 rules a window OUT, where an omitted one leaves the notice
-      // naming candidates it cannot separate. The host window is a real
-      // measurement because the injected trace sink is charged above.
+      // naming candidates it cannot separate.
       {
         cpuMs: timer.cpuMs(),
         redactorMs: timer.redactorMs(),
@@ -439,8 +438,8 @@ export async function cliMain(opts = {}) {
 async function runScanCli({ trace: sink, scan: runScan, sessionId }) {
   // Bound best-effort: the announcements below run BEFORE the auto-clean and
   // the alert write, with no catch above them, so a throwing host sink would
-  // abort the scan silently (see bestEffortTrace).
-  const emitTrace = bestEffortTrace(hostChargedTrace(sink));
+  // abort the scan silently (see hookTrace).
+  const emitTrace = hookTrace(sink);
   // Everything the PreToolUse gate must surface this session, written once at
   // the end: an incomplete scan and an uncleanable file are independent reasons
   // to arm the gate, and two separate writes would have the second clobber the

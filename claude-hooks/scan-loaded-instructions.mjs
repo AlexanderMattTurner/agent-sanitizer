@@ -37,7 +37,7 @@ import {
   appendAlert,
   recordInstructionsLoaded,
 } from "./lib/invisible-alert.mjs";
-import { bestEffortTrace, hostChargedTrace, TraceEvent } from "./lib/trace.mjs";
+import { hookTrace, TraceEvent } from "./lib/trace.mjs";
 import { reportSlowHook, startHookTimer } from "./lib/hook-timing.mjs";
 import { formatReport } from "./lib/invisible-report.mjs";
 import {
@@ -258,7 +258,7 @@ export { HOOK_NAME };
  */
 export async function cliMain({ trace: sink } = {}) {
   const timer = startHookTimer();
-  const emitTrace = bestEffortTrace(hostChargedTrace(sink));
+  const emitTrace = hookTrace(sink);
   /** @type {string | undefined} */
   let sessionId;
   try {
@@ -323,8 +323,7 @@ export async function cliMain({ trace: sink } = {}) {
       undefined,
       // All four windows, including the two this scan normally leaves empty: a
       // measured 0 rules a window OUT, where an omitted one leaves the notice
-      // naming candidates it cannot separate. The host window is a real
-      // measurement because the injected trace sink is charged above.
+      // naming candidates it cannot separate.
       {
         cpuMs: timer.cpuMs(),
         redactorMs: timer.redactorMs(),

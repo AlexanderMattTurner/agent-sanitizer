@@ -27,7 +27,7 @@ import { chargeHostExtensionSync } from "./hook-timing.mjs";
  * default emits, so it can remap them onto its own channel's vocabulary.
  *
  * A sink is NOT required to be total — throw freely. Every hook binds the one it
- * was given through {@link bestEffortTrace}, which is what upholds the channel's
+ * was given through {@link hookTrace}, which is what upholds the channel's
  * never-breaks-a-hook posture on host code that cannot promise it.
  * @typedef {(event: string, fields?: Record<string, unknown>, level?: "info"|"debug") => void} TraceFn
  */
@@ -108,23 +108,26 @@ export function bestEffortTrace(sink) {
 }
 
 /**
- * The sink to emit through given a host's, or none: a HOST sink is charged to
- * the host-extension window, the package's own {@link trace} is not.
+ * The sink a hook emits through, given a host's or none: a HOST sink is made
+ * best-effort and charged to the slow-hook notice's host-extension window; the
+ * package's own {@link trace} is handed back untouched.
  *
  * A composer's sink may write over a socket or spawn a subprocess whose cost
- * this process cannot see, so an uncharged one leaves its wait in the slow-hook
- * notice's unattributed remainder and its in-process CPU billed to the
- * sanitizer. The default sink's file write IS the sanitizer's own work, so
- * charging it would move a real per-call cost out of the figure that names it.
+ * this process cannot see, so an uncharged one leaves its wait in the notice's
+ * unattributed remainder and its in-process CPU billed to the sanitizer. The
+ * default sink's file write IS the sanitizer's own work, so charging it would
+ * move a real per-call cost out of the figure that names it.
  *
- * Wrap the result in {@link bestEffortTrace}, not the other way round: the charge
- * is booked in a `finally`, so a host sink that THROWS — the one that spent the
- * most — is still measured before the throw is swallowed.
+ * The two wrappers compose in one order only, which is why every hook binds
+ * through this and not through the pieces: the charge is booked in a `finally`
+ * INSIDE the best-effort bracket, so a host sink that THROWS — the one that
+ * spent the most — is still measured before the throw is swallowed.
  * @param {TraceFn} [sink]  a host's sink; absent asks for the package channel
  * @returns {TraceFn}
  */
-export function hostChargedTrace(sink) {
+export function hookTrace(sink) {
   if (!sink) return trace;
-  return (event, fields, level) =>
-    chargeHostExtensionSync(() => sink(event, fields, level));
+  return bestEffortTrace((event, fields, level) =>
+    chargeHostExtensionSync(() => sink(event, fields, level)),
+  );
 }

@@ -49345,9 +49345,11 @@ function bestEffortTrace(sink) {
     }
   };
 }
-function hostChargedTrace(sink) {
+function hookTrace(sink) {
   if (!sink) return trace;
-  return (event, fields, level) => chargeHostExtensionSync(() => sink(event, fields, level));
+  return bestEffortTrace(
+    (event, fields, level) => chargeHostExtensionSync(() => sink(event, fields, level))
+  );
 }
 var TraceEvent, LEVELS;
 var init_trace = __esm({
@@ -49516,7 +49518,7 @@ function toolTargetDir(tool, toolInput) {
   return typeof path2 === "string" && path2.startsWith("/") ? dirname7(path2) : void 0;
 }
 async function buildPreToolUseResponse(input, rehydrate = defaultRehydrate, sink) {
-  const emitTrace = bestEffortTrace(hostChargedTrace(sink));
+  const emitTrace = hookTrace(sink);
   const asks = [];
   const contexts = [];
   const findings = invisibleCharAlert(input.session_id);
@@ -50580,7 +50582,7 @@ function suppressionMessage(cause) {
   return `[SANITIZATION FAILED \u2014 original output suppressed for safety. Hook error: ${cause}]`;
 }
 async function evaluateToolOutput(input, ext = {}) {
-  const emitTrace = bestEffortTrace(hostChargedTrace(ext.trace));
+  const emitTrace = hookTrace(ext.trace);
   const emit = (outcome, fields2) => {
     emitTrace(TraceEvent.HOOK_RAN, {
       hook: HOOK_NAME2,
@@ -50799,7 +50801,7 @@ async function main(read, write, opts = {}) {
     trace: sink,
     env = process.env
   } = opts;
-  const emitTrace = bestEffortTrace(hostChargedTrace(sink));
+  const emitTrace = hookTrace(sink);
   const messages = { ...USER_PROMPT_MESSAGES, ...overrides };
   await runJudgeCli(
     HOOK_NAME3,
@@ -51030,8 +51032,7 @@ async function cliMain3(opts = {}) {
       void 0,
       // All four windows, including the two this scan normally leaves empty: a
       // measured 0 rules a window OUT, where an omitted one leaves the notice
-      // naming candidates it cannot separate. The host window is a real
-      // measurement because the injected trace sink is charged above.
+      // naming candidates it cannot separate.
       {
         cpuMs: timer.cpuMs(),
         redactorMs: timer.redactorMs(),
@@ -51041,7 +51042,7 @@ async function cliMain3(opts = {}) {
   }
 }
 async function runScanCli({ trace: sink, scan: runScan, sessionId }) {
-  const emitTrace = bestEffortTrace(hostChargedTrace(sink));
+  const emitTrace = hookTrace(sink);
   const alertParts = [];
   if (!await ensureSanitizerLoaded()) {
     emitTrace(TraceEvent.SCAN_INVISIBLE_CHARS_RAN, { outcome: "skipped" });
@@ -51254,7 +51255,7 @@ ${tail}`;
 }
 async function cliMain4({ trace: sink } = {}) {
   const timer = startHookTimer();
-  const emitTrace = bestEffortTrace(hostChargedTrace(sink));
+  const emitTrace = hookTrace(sink);
   let sessionId;
   try {
     const payload = await readStdinJson();
@@ -51306,8 +51307,7 @@ async function cliMain4({ trace: sink } = {}) {
       void 0,
       // All four windows, including the two this scan normally leaves empty: a
       // measured 0 rules a window OUT, where an omitted one leaves the notice
-      // naming candidates it cannot separate. The host window is a real
-      // measurement because the injected trace sink is charged above.
+      // naming candidates it cannot separate.
       {
         cpuMs: timer.cpuMs(),
         redactorMs: timer.redactorMs(),

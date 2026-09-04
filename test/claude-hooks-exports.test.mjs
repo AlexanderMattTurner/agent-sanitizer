@@ -332,7 +332,7 @@ const PUBLISHED_EXPORTS = {
   "lib/trace": [
     "TraceEvent",
     "bestEffortTrace",
-    "hostChargedTrace",
+    "hookTrace",
     "trace",
     "traceThreshold",
   ],
