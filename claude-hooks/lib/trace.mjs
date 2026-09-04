@@ -19,6 +19,7 @@
  */
 
 import { appendFileSync } from "node:fs";
+import { chargeHostExtensionSync } from "./hook-timing.mjs";
 
 /**
  * The sink shape a hook emits through: the event name, its metadata fields, and
@@ -104,4 +105,26 @@ export function bestEffortTrace(sink) {
       // See above: an announcement must never be the thing that breaks a hook.
     }
   };
+}
+
+/**
+ * The sink to emit through given a host's, or none: a HOST sink is charged to
+ * the host-extension window, the package's own {@link trace} is not.
+ *
+ * A composer's sink may write over a socket or spawn a subprocess whose cost
+ * this process cannot see, so an uncharged one leaves its wait in the slow-hook
+ * notice's unattributed remainder and its in-process CPU billed to the
+ * sanitizer. The default sink's file write IS the sanitizer's own work, so
+ * charging it would move a real per-call cost out of the figure that names it.
+ *
+ * Wrap the result in {@link bestEffortTrace}, not the other way round: the charge
+ * is booked in a `finally`, so a host sink that THROWS — the one that spent the
+ * most — is still measured before the throw is swallowed.
+ * @param {TraceFn} [sink]  a host's sink; absent asks for the package channel
+ * @returns {TraceFn}
+ */
+export function hostChargedTrace(sink) {
+  if (!sink) return trace;
+  return (event, fields, level) =>
+    chargeHostExtensionSync(() => sink(event, fields, level));
 }

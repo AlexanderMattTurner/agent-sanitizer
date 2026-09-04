@@ -329,7 +329,13 @@ const PUBLISHED_EXPORTS = {
     "withSlowHookNotice",
     "writeSlowHookNotice",
   ],
-  "lib/trace": ["TraceEvent", "bestEffortTrace", "trace", "traceThreshold"],
+  "lib/trace": [
+    "TraceEvent",
+    "bestEffortTrace",
+    "hostChargedTrace",
+    "trace",
+    "traceThreshold",
+  ],
 };
 
 describe("claude-hooks composition surface resolves through the exports map", () => {

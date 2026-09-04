@@ -49345,10 +49345,15 @@ function bestEffortTrace(sink) {
     }
   };
 }
+function hostChargedTrace(sink) {
+  if (!sink) return trace;
+  return (event, fields, level) => chargeHostExtensionSync(() => sink(event, fields, level));
+}
 var TraceEvent, LEVELS;
 var init_trace = __esm({
   "claude-hooks/lib/trace.mjs"() {
     "use strict";
+    init_hook_timing();
     TraceEvent = Object.freeze({
       HOOK_RAN: "hook_ran",
       SCAN_INVISIBLE_CHARS_RAN: "scan_invisible_chars_ran",
@@ -49510,8 +49515,8 @@ function toolTargetDir(tool, toolInput) {
   const path2 = field && toolInput?.[field];
   return typeof path2 === "string" && path2.startsWith("/") ? dirname7(path2) : void 0;
 }
-async function buildPreToolUseResponse(input, rehydrate = defaultRehydrate, sink = trace) {
-  const emitTrace = bestEffortTrace(sink);
+async function buildPreToolUseResponse(input, rehydrate = defaultRehydrate, sink) {
+  const emitTrace = bestEffortTrace(hostChargedTrace(sink));
   const asks = [];
   const contexts = [];
   const findings = invisibleCharAlert(input.session_id);
@@ -50575,10 +50580,7 @@ function suppressionMessage(cause) {
   return `[SANITIZATION FAILED \u2014 original output suppressed for safety. Hook error: ${cause}]`;
 }
 async function evaluateToolOutput(input, ext = {}) {
-  const hostTrace = ext.trace;
-  const emitTrace = bestEffortTrace(
-    hostTrace ? (event, fields2) => chargeHostExtensionSync(() => hostTrace(event, fields2)) : trace
-  );
+  const emitTrace = bestEffortTrace(hostChargedTrace(ext.trace));
   const emit = (outcome, fields2) => {
     emitTrace(TraceEvent.HOOK_RAN, {
       hook: HOOK_NAME2,
@@ -50794,10 +50796,10 @@ async function main(read, write, opts = {}) {
   const {
     strip = stripAnsiFully3,
     overrides = USER_PROMPT_MESSAGES,
-    trace: sink = trace,
+    trace: sink,
     env = process.env
   } = opts;
-  const emitTrace = bestEffortTrace(sink);
+  const emitTrace = bestEffortTrace(hostChargedTrace(sink));
   const messages = { ...USER_PROMPT_MESSAGES, ...overrides };
   await runJudgeCli(
     HOOK_NAME3,
@@ -51026,12 +51028,20 @@ async function cliMain3(opts = {}) {
       HookEvent.SESSION_START,
       emitHookResponse,
       void 0,
-      { cpuMs: timer.cpuMs() }
+      // All four windows, including the two this scan normally leaves empty: a
+      // measured 0 rules a window OUT, where an omitted one leaves the notice
+      // naming candidates it cannot separate. The host window is a real
+      // measurement because the injected trace sink is charged above.
+      {
+        cpuMs: timer.cpuMs(),
+        redactorMs: timer.redactorMs(),
+        hostMs: timer.hostMs()
+      }
     );
   }
 }
-async function runScanCli({ trace: sink = trace, scan: runScan, sessionId }) {
-  const emitTrace = bestEffortTrace(sink);
+async function runScanCli({ trace: sink, scan: runScan, sessionId }) {
+  const emitTrace = bestEffortTrace(hostChargedTrace(sink));
   const alertParts = [];
   if (!await ensureSanitizerLoaded()) {
     emitTrace(TraceEvent.SCAN_INVISIBLE_CHARS_RAN, { outcome: "skipped" });
@@ -51242,9 +51252,9 @@ function loadedFileMessage({ report, cleaned, reason }, filePath) {
   return `${report}
 ${tail}`;
 }
-async function cliMain4({ trace: sink = trace } = {}) {
+async function cliMain4({ trace: sink } = {}) {
   const timer = startHookTimer();
-  const emitTrace = bestEffortTrace(sink);
+  const emitTrace = bestEffortTrace(hostChargedTrace(sink));
   let sessionId;
   try {
     const payload = await readStdinJson();
@@ -51294,7 +51304,15 @@ async function cliMain4({ trace: sink = trace } = {}) {
       HookEvent.INSTRUCTIONS_LOADED,
       emitHookResponse,
       void 0,
-      { cpuMs: timer.cpuMs() }
+      // All four windows, including the two this scan normally leaves empty: a
+      // measured 0 rules a window OUT, where an omitted one leaves the notice
+      // naming candidates it cannot separate. The host window is a real
+      // measurement because the injected trace sink is charged above.
+      {
+        cpuMs: timer.cpuMs(),
+        redactorMs: timer.redactorMs(),
+        hostMs: timer.hostMs()
+      }
     );
   }
 }

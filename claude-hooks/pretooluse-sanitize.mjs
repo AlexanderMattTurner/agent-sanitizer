@@ -73,7 +73,12 @@ import {
   LAYER2_PLACEHOLDER_RE,
 } from "./lib/placeholder-grammar.mjs";
 import { readSpan, spanPath } from "./lib/reveal.mjs";
-import { bestEffortTrace, trace, TraceEvent } from "./lib/trace.mjs";
+import {
+  bestEffortTrace,
+  hostChargedTrace,
+  trace,
+  TraceEvent,
+} from "./lib/trace.mjs";
 
 const HOOK_NAME = "pretooluse-sanitize";
 
@@ -474,11 +479,12 @@ function toolTargetDir(tool, toolInput) {
 export async function buildPreToolUseResponse(
   input,
   rehydrate = defaultRehydrate,
-  sink = trace,
+  sink,
 ) {
   // Every path into the announcement runs through here, so this is the one place
-  // a host sink has to be made best-effort (see bestEffortTrace).
-  const emitTrace = bestEffortTrace(sink);
+  // a host sink has to be made best-effort (see bestEffortTrace) and charged to
+  // the host window (see hostChargedTrace).
+  const emitTrace = bestEffortTrace(hostChargedTrace(sink));
   const asks = [];
   const contexts = [];
 

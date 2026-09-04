@@ -47,7 +47,7 @@ import {
 } from "./lib/hook-io.mjs";
 import { registerFaultPolicy, hookFaultOutcome } from "./lib/hook-fault.mjs";
 import { controlPlane, runJudgeCli } from "./lib/control-plane.mjs";
-import { bestEffortTrace, trace, TraceEvent } from "./lib/trace.mjs";
+import { bestEffortTrace, hostChargedTrace, TraceEvent } from "./lib/trace.mjs";
 import { hasEnvBoundSecret } from "./lib/secret-annotate.mjs";
 import { digestFlaggingEnabled, secretsEnabled } from "./lib/env-config.mjs";
 import {
@@ -857,17 +857,8 @@ registerFaultPolicy(HOOK_NAME, {
  */
 export async function evaluateToolOutput(input, ext = {}) {
   // Best-effort, like the default sink: a host callback that throws must not be
-  // the thing that suppresses a tool output (see bestEffortTrace). A COMPOSER's
-  // sink is charged to the host window — it may write over a socket this process
-  // cannot see the cost of — while the package's own sink is not, since that
-  // file write is the sanitizer's own work.
-  const hostTrace = ext.trace;
-  const emitTrace = bestEffortTrace(
-    hostTrace
-      ? (event, fields) =>
-          chargeHostExtensionSync(() => hostTrace(event, fields))
-      : trace,
-  );
+  // the thing that suppresses a tool output (see bestEffortTrace).
+  const emitTrace = bestEffortTrace(hostChargedTrace(ext.trace));
   /**
    * @param {string} outcome  noop | clean | flagged | modified
    * @param {{ mutated_output?: unknown, additional_context?: string } | null} fields
