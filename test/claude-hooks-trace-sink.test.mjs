@@ -49,7 +49,8 @@ const projectDir = mkdtempSync(join(tmpdir(), "sanitizer-trace-proj-"));
 process.env.CLAUDE_PROJECT_DIR = projectDir;
 process.env._AGENT_SANITIZER_TRACE = "info";
 
-const { TraceEvent } = await import("../claude-hooks/lib/trace.mjs");
+const { TraceEvent, hostChargedTrace, trace } =
+  await import("../claude-hooks/lib/trace.mjs");
 const { SLOW_HOOK_THRESHOLD_MS } =
   await import("../claude-hooks/lib/hook-timing.mjs");
 const preToolUse = await import("../claude-hooks/pretooluse-sanitize.mjs");
@@ -236,13 +237,9 @@ for (const hook of HOOKS) {
 // burns no CPU, exactly as a sink writing to an unanswered socket does. Past the
 // budget, so the run it is injected into reports.
 const HOST_SINK_WAIT_MS = SLOW_HOOK_THRESHOLD_MS + 100;
-const waitingSink = () =>
-  Atomics.wait(
-    new Int32Array(new SharedArrayBuffer(4)),
-    0,
-    0,
-    HOST_SINK_WAIT_MS,
-  );
+const block = (ms) =>
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+const waitingSink = () => block(HOST_SINK_WAIT_MS);
 
 /**
  * Run `fn` with `process.stderr` collected. Every hook writes the slow-hook
@@ -253,13 +250,15 @@ const waitingSink = () =>
  * @param {() => Promise<T>} fn
  * @returns {Promise<{ result: T, stderr: string }>}
  */
-async function withCapturedStderr(fn) {
+async function withCapturedStderr(fn, slowLines = () => false) {
   /** @type {string[]} */
   const chunks = [];
   const real = process.stderr.write;
   // @ts-expect-error -- narrower than the overloaded write signature.
   process.stderr.write = (chunk) => {
-    chunks.push(String(chunk));
+    const line = String(chunk);
+    chunks.push(line);
+    if (slowLines(line)) block(HOST_SINK_WAIT_MS);
     return true;
   };
   try {
@@ -268,6 +267,9 @@ async function withCapturedStderr(fn) {
     process.stderr.write = real;
   }
 }
+
+/** A trace line from the package's own sink, which writes one JSON object. */
+const isTraceLine = (line) => line.includes(`"event":"`);
 
 // The two hooks with no verdict to fold a timing notice into: their response
 // envelope is the only route their attribution takes to the model.
@@ -308,6 +310,33 @@ describe("a host sink's wait is charged to the host window", () => {
       // than listing them as candidates it cannot separate.
       assert.match(additionalContext, /0\.0s was inside redactor round trips/);
       assert.match(additionalContext, /hook name and all four timings/);
+    });
+});
+
+// The other half of the same claim, and the one a wrapper that RESOLVES the
+// default sink before the binding breaks: this package's own trace write is the
+// sanitizer's own work, so charging it would blame a composer for a cost no
+// composer paid.
+describe("the package's own sink is never charged as a host extension", () => {
+  it("hands the default back unwrapped, so nothing can charge it", () => {
+    assert.equal(hostChargedTrace(undefined), trace);
+  });
+
+  for (const hook of HOOKS)
+    it(`${hook.name} leaves the host window empty with no sink`, async () => {
+      // No trace FILE, so the package sink writes its line to stderr — where
+      // this case makes that one write block past the budget. Any hook that
+      // charged its own sink would report the wait as a host extension.
+      delete process.env._AGENT_SANITIZER_TRACE_FILE;
+      const { stderr } = await withCapturedStderr(
+        () => quietly(hook.run),
+        isTraceLine,
+      );
+      assert.match(stderr, /0\.0s was inside host extensions/);
+      assert.doesNotMatch(
+        stderr,
+        /The largest share was spent inside a host extension/,
+      );
     });
 });
 

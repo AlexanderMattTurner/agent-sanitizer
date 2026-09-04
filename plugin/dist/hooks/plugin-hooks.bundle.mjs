@@ -49588,7 +49588,7 @@ function assembleResponse({
   return fields;
 }
 async function judgePreToolUseSanitize(event, rehydrate, opts = {}) {
-  const { gates = [], trace: emitTrace = trace } = opts;
+  const { gates = [], trace: sink } = opts;
   const messages = { ...PRE_TOOL_USE_MESSAGES, ...opts.messages };
   const { Decision: Decision3, EventKind: EventKind3 } = controlPlane();
   if (event.event === EventKind3.UNKNOWN)
@@ -49603,7 +49603,7 @@ async function judgePreToolUseSanitize(event, rehydrate, opts = {}) {
     const denyReason = gate(input);
     if (denyReason) return { decision: Decision3.DENY, reason: denyReason };
   }
-  const fields = await buildPreToolUseResponse(input, rehydrate, emitTrace);
+  const fields = await buildPreToolUseResponse(input, rehydrate, sink);
   if (fields === null) return { decision: Decision3.ALLOW };
   const verdict = {
     decision: fields.permissionDecision ?? Decision3.ALLOW
@@ -49664,14 +49664,14 @@ function hookFailureFields(parsedOk, err, opts = {}) {
   );
 }
 async function cliMain(opts = {}) {
-  const { gates = [], trace: emitTrace = trace } = opts;
+  const { gates = [], trace: sink } = opts;
   const messages = { ...PRE_TOOL_USE_MESSAGES, ...opts.messages };
   await runJudgeCli(
     HOOK_NAME,
     (event) => judgePreToolUseSanitize(event, void 0, {
       messages,
       gates,
-      trace: emitTrace
+      trace: sink
     }),
     {
       // The caller's posture, WITHOUT the package: pass through with a warning
