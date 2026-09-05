@@ -747,9 +747,17 @@ it, so what anchors its trust is worth stating exactly.
   substituted release asset alone therefore cannot be installed: it fails the
   comparison, is deleted, and the launcher keeps degrading loudly through node.
 - **What the digest is worth rests on the compile being reproducible.** The
-  committed digests are generated from the committed bundle, and CI recompiles
-  and byte-compares them (`build-hook-binaries.mjs --check`), so a manifest that
-  does not describe the bundle in the same commit fails before release.
+  committed digests are generated from the committed bundle, and the release
+  recompiles and byte-compares them (`build-hook-binaries.mjs --check` in
+  `release-hook-binaries.sh`), so binaries that do not reproduce the manifest are
+  never uploaded. The manifest is refreshed on the default branch by
+  `auto-version.yaml`, ahead of that release, so what it describes is the bundle
+  the release ships.
+- **A manifest that has fallen behind its bundle installs nothing.** Between a
+  merge and that refresh, the default branch pins binaries compiled from the
+  previous bundle. The provisioner compares its own bundle against the manifest's
+  `# bundle=` pin and refuses on a mismatch, so the window degrades to the node
+  path rather than running a binary that is not the code the install ships.
 - **Not covered: an attacker who can write BOTH the repository and the release.**
   There is no signature; the manifest is trusted because it arrives through the
   same reviewed, gated path as the rest of the plugin. Rewriting it is rewriting
