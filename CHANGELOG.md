@@ -8,6 +8,14 @@ adhere to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+## [2.57.3] - 2026-09-05
+
+### Fixed
+
+- Output now correctly accepts explicit `null` values in block's nullable object fields.
+- Fixed prototype-pollution guard naming and pinning in block recognition logic.
+- Block content recognition now properly gates on each field's value shape to prevent false positives.
+
 ## [2.57.2] - 2026-09-05
 
 ### Fixed
