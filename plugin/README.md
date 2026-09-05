@@ -242,9 +242,10 @@ requirements.txt             the compiled, hash-pinned dependency lock (generate
 Both halves of the engine are built from this repository's own sources — the JS
 from `src/`, the Python wheel from `python/` — so the shipped hooks, the zipapp
 and the provisioned venv are one commit and cannot be three versions.
-`dist/hooks/` and `requirements.in` are regenerated offline by
+`dist/hooks/*.bundle.mjs` and `requirements.in` are regenerated offline by
 `node plugin/scripts/build-plugin.mjs` and verified byte-for-byte in CI; they
-change only when the hook sources or the engine's dependencies do.
+change only when the hook sources or the engine's dependencies do. The digest
+manifest beside them is the exception — see below.
 
 The compiled hook binaries are a third artifact class. At ~100 MB each they are
 not committed; they are attached to this repository's GitHub release

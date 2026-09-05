@@ -85,8 +85,15 @@ jobs:
       # release-hook-binaries.sh's `--check` and the SessionStart provisioner's
       # bundle pin both require. `--if-stale` makes this a no-op on the pushes
       # that leave the bundle alone.
+      # The existence guard mirrors version-bump.sh's own `[[ -f $PLUGIN_MANIFEST ]]`:
+      # this workflow syncs to repos that ship no plugin, where the generator is
+      # absent and there is nothing to refresh.
       - name: Refresh the hook-binary digest manifest
         run: |
+          if [ ! -f plugin/scripts/build-hook-binaries.mjs ]; then
+            echo "No plugin/scripts/build-hook-binaries.mjs in this repo; nothing to refresh."
+            exit 0
+          fi
           node plugin/scripts/build-hook-binaries.mjs --if-stale
           bash .github/scripts/commit-refreshed-manifest.sh
 
