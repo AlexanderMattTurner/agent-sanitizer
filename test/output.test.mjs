@@ -1493,6 +1493,20 @@ describe("suppressToolOutput collapses an Anthropic content block", () => {
       "text with cache_control",
       { type: "text", text: "leak", cache_control: { type: "ephemeral" } },
     ],
+    // Every optional object-valued field is nullable in the API schema, so an
+    // explicit null must not push the block back onto the walk.
+    [
+      "text with an explicit null cache_control",
+      { type: "text", text: "leak", cache_control: null },
+    ],
+    [
+      "document with an explicit null citations config",
+      {
+        type: "document",
+        source: { type: "text", media_type: "text/plain", data: "leak" },
+        citations: null,
+      },
+    ],
     [
       "search_result",
       {

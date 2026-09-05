@@ -1129,6 +1129,10 @@ const isRecord = (v) =>
 const isNullableString = (v) => v === null || isString(v);
 /** @type {FieldShape} */
 const isNullableArray = (v) => v === null || Array.isArray(v);
+// The API marks every optional object-valued block field nullable, and an
+// explicit null must not push the block back onto the walk that invalidates it.
+/** @type {FieldShape} */
+const isNullableRecord = (v) => v === null || isRecord(v);
 /** @type {FieldShape} */
 const isArray = (v) => Array.isArray(v);
 
@@ -1157,12 +1161,15 @@ const CONTENT_BLOCK_SCHEMA_ENTRIES = [
       required: { text: isString },
       // A response's text block carries `citations` as an array (or null); a
       // request's carries none.
-      optional: { citations: isNullableArray, cache_control: isRecord },
+      optional: { citations: isNullableArray, cache_control: isNullableRecord },
     },
   ],
   [
     "image",
-    { required: { source: isRecord }, optional: { cache_control: isRecord } },
+    {
+      required: { source: isRecord },
+      optional: { cache_control: isNullableRecord },
+    },
   ],
   [
     "document",
@@ -1172,8 +1179,8 @@ const CONTENT_BLOCK_SCHEMA_ENTRIES = [
       optional: {
         title: isNullableString,
         context: isNullableString,
-        citations: isRecord,
-        cache_control: isRecord,
+        citations: isNullableRecord,
+        cache_control: isNullableRecord,
       },
     },
   ],
@@ -1181,7 +1188,10 @@ const CONTENT_BLOCK_SCHEMA_ENTRIES = [
     "search_result",
     {
       required: { source: isString, title: isString, content: isArray },
-      optional: { citations: isRecord, cache_control: isRecord },
+      optional: {
+        citations: isNullableRecord,
+        cache_control: isNullableRecord,
+      },
     },
   ],
   [

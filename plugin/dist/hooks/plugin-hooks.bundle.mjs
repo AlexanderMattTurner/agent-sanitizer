@@ -46936,7 +46936,7 @@ function suppressAt(value, message, depth, seen, memo) {
     seen.delete(value);
   }
 }
-var FILTER_WARNING, FILTER_WARNING_LABELS, REDACTION_DOCTRINE, MAX_DEPTH, DEPTH_PLACEHOLDER, CYCLE_PLACEHOLDER, isString, isRecord, isNullableString, isNullableArray, isArray, CONTENT_BLOCK_SCHEMA_ENTRIES, CONTENT_BLOCK_SCHEMAS;
+var FILTER_WARNING, FILTER_WARNING_LABELS, REDACTION_DOCTRINE, MAX_DEPTH, DEPTH_PLACEHOLDER, CYCLE_PLACEHOLDER, isString, isRecord, isNullableString, isNullableArray, isNullableRecord, isArray, CONTENT_BLOCK_SCHEMA_ENTRIES, CONTENT_BLOCK_SCHEMAS;
 var init_output = __esm({
   "src/output.mjs"() {
     "use strict";
@@ -46969,6 +46969,7 @@ var init_output = __esm({
     isRecord = (v) => v !== null && typeof v === "object" && !Array.isArray(v);
     isNullableString = (v) => v === null || isString(v);
     isNullableArray = (v) => v === null || Array.isArray(v);
+    isNullableRecord = (v) => v === null || isRecord(v);
     isArray = (v) => Array.isArray(v);
     CONTENT_BLOCK_SCHEMA_ENTRIES = [
       [
@@ -46977,12 +46978,15 @@ var init_output = __esm({
           required: { text: isString },
           // A response's text block carries `citations` as an array (or null); a
           // request's carries none.
-          optional: { citations: isNullableArray, cache_control: isRecord }
+          optional: { citations: isNullableArray, cache_control: isNullableRecord }
         }
       ],
       [
         "image",
-        { required: { source: isRecord }, optional: { cache_control: isRecord } }
+        {
+          required: { source: isRecord },
+          optional: { cache_control: isNullableRecord }
+        }
       ],
       [
         "document",
@@ -46992,8 +46996,8 @@ var init_output = __esm({
           optional: {
             title: isNullableString,
             context: isNullableString,
-            citations: isRecord,
-            cache_control: isRecord
+            citations: isNullableRecord,
+            cache_control: isNullableRecord
           }
         }
       ],
@@ -47001,7 +47005,10 @@ var init_output = __esm({
         "search_result",
         {
           required: { source: isString, title: isString, content: isArray },
-          optional: { citations: isRecord, cache_control: isRecord }
+          optional: {
+            citations: isNullableRecord,
+            cache_control: isNullableRecord
+          }
         }
       ],
       [
