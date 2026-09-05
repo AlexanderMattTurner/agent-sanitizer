@@ -73,7 +73,7 @@ import {
   LAYER2_PLACEHOLDER_RE,
 } from "./lib/placeholder-grammar.mjs";
 import { readSpan, spanPath } from "./lib/reveal.mjs";
-import { bestEffortTrace, trace, TraceEvent } from "./lib/trace.mjs";
+import { hookTrace, TraceEvent } from "./lib/trace.mjs";
 
 const HOOK_NAME = "pretooluse-sanitize";
 
@@ -474,11 +474,11 @@ function toolTargetDir(tool, toolInput) {
 export async function buildPreToolUseResponse(
   input,
   rehydrate = defaultRehydrate,
-  sink = trace,
+  sink,
 ) {
-  // Every path into the announcement runs through here, so this is the one place
-  // a host sink has to be made best-effort (see bestEffortTrace).
-  const emitTrace = bestEffortTrace(sink);
+  // Every path into the announcement runs through here, so this is the one
+  // place a host sink has to be bound (see hookTrace).
+  const emitTrace = hookTrace(sink);
   const asks = [];
   const contexts = [];
 
@@ -618,7 +618,11 @@ function assembleResponse({
  * @returns {Promise<import("agent-control-plane-core").Verdict>}
  */
 export async function judgePreToolUseSanitize(event, rehydrate, opts = {}) {
-  const { gates = [], trace: emitTrace = trace } = opts;
+  // Forwarded UNRESOLVED: substituting the package sink for an absent one here
+  // would hand hookTrace a truthy sink, charging this package's own trace write
+  // to the host window — the misattribution the split exists to prevent. Only
+  // buildPreToolUseResponse's binding may pick the default.
+  const { gates = [], trace: sink } = opts;
   // MERGED over the defaults, never substituted for them. A host that overrides
   // one field would otherwise leave the rest undefined, and the miss lands in
   // the fail-closed path: failClosedFields runs inside runJudgeCli's catch, so a
@@ -653,7 +657,7 @@ export async function judgePreToolUseSanitize(event, rehydrate, opts = {}) {
     const denyReason = gate(input);
     if (denyReason) return { decision: Decision.DENY, reason: denyReason };
   }
-  const fields = await buildPreToolUseResponse(input, rehydrate, emitTrace);
+  const fields = await buildPreToolUseResponse(input, rehydrate, sink);
   if (fields === null) return { decision: Decision.ALLOW };
   /** @type {Record<string, unknown>} */
   const verdict = {
@@ -897,7 +901,8 @@ registerFaultPolicy(HOOK_NAME, {
  * @returns {Promise<void>}
  */
 export async function cliMain(opts = {}) {
-  const { gates = [], trace: emitTrace = trace } = opts;
+  // Unresolved, for the reason judgePreToolUseSanitize states.
+  const { gates = [], trace: sink } = opts;
   const messages = { ...PRE_TOOL_USE_MESSAGES, ...opts.messages };
   await runJudgeCli(
     HOOK_NAME,
@@ -905,7 +910,7 @@ export async function cliMain(opts = {}) {
       judgePreToolUseSanitize(event, undefined, {
         messages,
         gates,
-        trace: emitTrace,
+        trace: sink,
       }),
     {
       // The caller's posture, WITHOUT the package: pass through with a warning

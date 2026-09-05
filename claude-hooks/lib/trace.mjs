@@ -19,6 +19,7 @@
  */
 
 import { appendFileSync } from "node:fs";
+import { chargeHostExtensionSync } from "./hook-timing.mjs";
 
 /**
  * The sink shape a hook emits through: the event name, its metadata fields, and
@@ -26,7 +27,7 @@ import { appendFileSync } from "node:fs";
  * default emits, so it can remap them onto its own channel's vocabulary.
  *
  * A sink is NOT required to be total — throw freely. Every hook binds the one it
- * was given through {@link bestEffortTrace}, which is what upholds the channel's
+ * was given through {@link hookTrace}, which is what upholds the channel's
  * never-breaks-a-hook posture on host code that cannot promise it.
  * @typedef {(event: string, fields?: Record<string, unknown>, level?: "info"|"debug") => void} TraceFn
  */
@@ -104,4 +105,31 @@ export function bestEffortTrace(sink) {
       // See above: an announcement must never be the thing that breaks a hook.
     }
   };
+}
+
+/**
+ * The sink a hook emits through, given a host's or none: a HOST sink is made
+ * best-effort and charged to the slow-hook notice's host-extension window; the
+ * package's own {@link trace} is handed back untouched.
+ *
+ * A composer's sink may write over a socket or spawn a subprocess whose cost
+ * this process cannot see, so an uncharged one leaves its wait in the notice's
+ * unattributed remainder and its in-process CPU billed to the sanitizer. The
+ * default sink's file write IS the sanitizer's own work, so charging it would
+ * move a real per-call cost out of the figure that names it.
+ *
+ * Both properties are bound HERE, not at each hook, so a sixth caller can
+ * neither drop one nor nest them wrong — and the nesting is load-bearing twice
+ * over. The charge is booked in a `finally` inside the best-effort bracket, so
+ * a sink that spends its wait and THEN throws is measured before the throw is
+ * swallowed. And the exemption above reads the host's own sink, which a
+ * best-effort wrapper applied first would have replaced with a truthy one.
+ * @param {TraceFn} [sink]  a host's sink; absent asks for the package channel
+ * @returns {TraceFn}
+ */
+export function hookTrace(sink) {
+  if (!sink) return trace;
+  return bestEffortTrace((event, fields, level) =>
+    chargeHostExtensionSync(() => sink(event, fields, level)),
+  );
 }
