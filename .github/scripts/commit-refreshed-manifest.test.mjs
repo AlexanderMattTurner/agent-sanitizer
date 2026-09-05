@@ -1,8 +1,9 @@
 // commit-refreshed-manifest.sh drives real git against a real bare remote —
-// nothing here is stubbed, because the whole script IS its git handling. The
-// bun compile that produces the manifest is the half deliberately left out of
-// the script (auto-version.yaml runs the generator in the step above it), so
-// the four-target, ~400 MB download never has to happen for these cases.
+// the tip sync, the change detection, the commit and the push all run for real.
+// Only the generator is stood in for, and only because the real one
+// (`build-hook-binaries.mjs`) compiles four bun targets at ~100 MB each on a
+// cold cross-target cache: that is the licensed "cannot run in a test" case, and
+// it is why the script takes the generator as argv instead of calling it by name.
 //
 // Each case is a way the default branch can end up NOT carrying a manifest that
 // describes its bundle — the state the SessionStart provisioner refuses to
@@ -62,11 +63,36 @@ const scratchCheckout = () => {
   return { repo, remote };
 };
 
-/** Run the script in `repo`, with a fast retry so a rejected push is quick. */
-const refresh = (repo, env = {}) =>
-  spawnSync("bash", [SCRIPT], {
+/** A clone of `remote` that can land commits on main behind the run's back. */
+const racer = (remote) => {
+  const dir = scratchDir("refresh-manifest-racer-");
+  git(dir, "clone", remote, ".");
+  git(dir, "config", "user.name", "racer");
+  git(dir, "config", "user.email", "racer@example.invalid");
+  return dir;
+};
+const land = (dir, file, contents) => {
+  writeFileSync(join(dir, file), contents);
+  git(dir, "add", "-A");
+  git(dir, "commit", "-m", `feat: ${file}`);
+  git(dir, "push", "origin", "main");
+};
+
+/** Shell that writes `contents` into the manifest, as the real generator would. */
+const generatorWriting = (contents) =>
+  `mkdir -p ${dirname(MANIFEST)} && printf '%s\\n' '${contents}' >${MANIFEST}`;
+
+/**
+ * Run the script in `repo` with a stand-in generator.
+ * @param {string} repo
+ * @param {string} [generator] shell run as the generator; defaults to one that
+ *   writes a manifest differing from the seed.
+ */
+const refresh = (repo, generator = generatorWriting("fresh"), env = {}) =>
+  spawnSync("bash", [SCRIPT, "bash", "-c", generator], {
     cwd: repo,
     encoding: "utf8",
+    // A fast retry so the rejected-push case does not sit in backoff.
     env: {
       ...process.env,
       GITHUB_REF_NAME: "main",
@@ -76,18 +102,18 @@ const refresh = (repo, env = {}) =>
     },
   });
 
-test("pushes a changed manifest to the branch and commits nothing else", () => {
+test("pushes a changed manifest and commits only that file", () => {
   const { repo, remote } = scratchCheckout();
-  writeManifest(repo, "fresh\n");
-  // A second dirty file stands in for package.json, which version-bump.sh
-  // leaves modified in the working tree; committing it here would publish a
-  // version bump nobody asked for.
-  writeFileSync(join(repo, "package.json"), "{}\n");
 
-  const run = refresh(repo);
+  // The generator also drops a stray file: only the manifest may be committed,
+  // so an unrelated artifact of the build never rides along onto main.
+  const run = refresh(
+    repo,
+    `${generatorWriting("fresh")} && echo scratch >build.log`,
+  );
   assert.equal(run.status, 0, run.stderr);
 
-  assert.equal(git(remote, "show", "main:" + MANIFEST), "fresh");
+  assert.equal(git(remote, "show", `main:${MANIFEST}`), "fresh");
   assert.match(
     git(remote, "log", "-1", "--format=%s", "main"),
     /^chore\(plugin\):/,
@@ -98,49 +124,70 @@ test("pushes a changed manifest to the branch and commits nothing else", () => {
   );
 });
 
-test("does nothing when the manifest already describes this tree", () => {
+test("does nothing when the generator leaves the manifest alone", () => {
   const { repo, remote } = scratchCheckout();
   const before = git(remote, "rev-parse", "main");
 
-  const run = refresh(repo);
+  const run = refresh(repo, generatorWriting("old"));
   assert.equal(run.status, 0, run.stderr);
 
   assert.equal(git(remote, "rev-parse", "main"), before);
-  assert.match(run.stderr, /already describes this tree/);
+  assert.match(run.stderr, /already describes the tip/);
 });
 
 test("refuses a detached HEAD that GITHUB_REF_NAME does not name", () => {
   const { repo, remote } = scratchCheckout();
   git(repo, "checkout", "--detach", "HEAD");
-  writeManifest(repo, "fresh\n");
   const before = git(remote, "rev-parse", "main");
 
-  const run = refresh(repo, { GITHUB_REF_NAME: "" });
+  const run = refresh(repo, generatorWriting("fresh"), { GITHUB_REF_NAME: "" });
   assert.equal(run.status, 1);
   assert.match(run.stderr, /detached HEAD/);
   assert.equal(git(remote, "rev-parse", "main"), before);
 });
 
-// The self-healing case: a racing merge moved the branch, so this run's
-// manifest describes neither tree and must NOT be forced on. Going red here is
-// what stops auto-version.yaml from tagging a release the provisioner rejects.
-test("fails loudly when the branch moved under it", () => {
+test("refuses to run with no generator to run", () => {
   const { repo, remote } = scratchCheckout();
-  const racer = scratchDir("refresh-manifest-racer-");
-  git(racer, "clone", remote, ".");
-  git(racer, "config", "user.name", "racer");
-  git(racer, "config", "user.email", "racer@example.invalid");
-  writeFileSync(join(racer, "raced.txt"), "merged while we compiled\n");
-  git(racer, "add", "-A");
-  git(racer, "commit", "-m", "feat: race");
-  git(racer, "push", "origin", "main");
+  const before = git(remote, "rev-parse", "main");
+
+  const run = spawnSync("bash", [SCRIPT], {
+    cwd: repo,
+    encoding: "utf8",
+    env: { ...process.env, GITHUB_REF_NAME: "main" },
+  });
+  assert.equal(run.status, 1);
+  assert.match(run.stderr, /usage:/);
+  assert.equal(git(remote, "rev-parse", "main"), before);
+});
+
+// The concurrency group queues auto-version runs, so by the time one starts, the
+// branch can already carry a later merge than the SHA that triggered it.
+// Compiling from that stale checkout would describe a bundle no longer on the
+// branch AND be rejected non-fast-forward — one stale checkout, both failures.
+test("regenerates against the branch tip, not the checked-out SHA", () => {
+  const { repo, remote } = scratchCheckout();
+  land(racer(remote), "merged-first.txt", "landed before this run started\n");
   const raced = git(remote, "rev-parse", "main");
 
-  writeManifest(repo, "fresh\n");
   const run = refresh(repo);
+  assert.equal(run.status, 0, run.stderr);
+
+  assert.equal(git(remote, "show", `main:${MANIFEST}`), "fresh");
+  assert.equal(git(remote, "rev-parse", "main~1"), raced);
+});
+
+// A merge that lands DURING the compile is the residual case: this run's
+// manifest describes neither tree, so going red — which aborts the release —
+// beats forcing it on. The next push to main re-runs this from the new tip.
+test("fails loudly when the branch moves during the generator run", () => {
+  const { repo, remote } = scratchCheckout();
+  const during = racer(remote);
+  const run = refresh(
+    repo,
+    `${generatorWriting("fresh")} && git -C ${during} commit --allow-empty -m 'feat: race' -q && git -C ${during} push -q origin main`,
+  );
 
   assert.equal(run.status, 1);
   assert.match(run.stderr, /failed to push the refreshed/);
-  assert.equal(git(remote, "rev-parse", "main"), raced);
-  assert.equal(git(remote, "show", "main:" + MANIFEST), "old");
+  assert.equal(git(remote, "show", `main:${MANIFEST}`), "old");
 });

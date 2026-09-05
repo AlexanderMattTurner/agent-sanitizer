@@ -94,8 +94,8 @@ jobs:
             echo "No plugin/scripts/build-hook-binaries.mjs in this repo; nothing to refresh."
             exit 0
           fi
-          node plugin/scripts/build-hook-binaries.mjs --if-stale
-          bash .github/scripts/commit-refreshed-manifest.sh
+          bash .github/scripts/commit-refreshed-manifest.sh \
+            node plugin/scripts/build-hook-binaries.mjs --if-stale
 
       - name: Bump version and publish if commits warrant a release
         # `id: release` is load-bearing, not decoration: six steps below gate on

@@ -27,6 +27,24 @@ base_ref="${1:?usage: check-dist-provenance.sh <base-ref>}"
 
 changed="$(git diff --name-only "$base_ref"...HEAD)"
 
+# The digest manifest has exactly one writer, on the default branch
+# (auto-version.yaml), so a PR that carries a diff in it is either a hand-edit or
+# a stray `pnpm gen:hook-binaries`. Neither is caught downstream: the offline
+# suite checks only the manifest's shape, and auto-version's `--if-stale` reads
+# a manifest whose bundle and bun headers still match as current and leaves it
+# alone. The mismatch would then surface at `release-hook-binaries.sh`, after npm
+# and PyPI have published and the tag is pushed — a release with no hook-binary
+# assets. Refusing the diff here is what keeps that unreachable.
+MANIFEST="plugin/dist/hooks/hook-binaries.sha256"
+if grep -qxF "$MANIFEST" <<<"$changed"; then
+  echo "::error::$MANIFEST changed on a PR branch." >&2
+  echo "It is refreshed only on the default branch, by auto-version.yaml, so that two" >&2
+  echo "PRs regenerating it cannot conflict — every digest in it moves at once and" >&2
+  echo ".gitattributes marks plugin/dist binary. Drop this file from the diff:" >&2
+  echo "  git checkout \"$base_ref\" -- $MANIFEST" >&2
+  exit 1
+fi
+
 dist_changed=false
 input_changed=false
 while IFS= read -r file; do
