@@ -46893,9 +46893,20 @@ function composeContext(modified, warnings, { injectionAlert = "" } = {}) {
 function suppressToolOutput(value, message) {
   return suppressAt(value, message, 0, /* @__PURE__ */ new WeakSet(), depthMemo());
 }
+function isContentBlock(value) {
+  if (Array.isArray(value)) return false;
+  const keys = Object.keys(value);
+  if (!keys.includes("type")) return false;
+  const schema = CONTENT_BLOCK_SCHEMAS.get(value.type);
+  if (schema === void 0) return false;
+  return schema.required.every((key) => keys.includes(key)) && keys.every(
+    (key) => key === "type" || schema.required.includes(key) || schema.optional.includes(key)
+  );
+}
 function suppressAt(value, message, depth, seen, memo) {
   if (typeof value === "string") return message;
   if (!isWalkableContainer(value)) return value;
+  if (isContentBlock(value)) return { type: "text", text: message };
   const cached = memo.get(value, depth);
   if (cached !== void 0) return cached;
   if (seen.has(value) || depth >= MAX_DEPTH) return message;
@@ -46922,7 +46933,7 @@ function suppressAt(value, message, depth, seen, memo) {
     seen.delete(value);
   }
 }
-var FILTER_WARNING, FILTER_WARNING_LABELS, REDACTION_DOCTRINE, MAX_DEPTH, DEPTH_PLACEHOLDER, CYCLE_PLACEHOLDER;
+var FILTER_WARNING, FILTER_WARNING_LABELS, REDACTION_DOCTRINE, MAX_DEPTH, DEPTH_PLACEHOLDER, CYCLE_PLACEHOLDER, CONTENT_BLOCK_SCHEMAS;
 var init_output = __esm({
   "src/output.mjs"() {
     "use strict";
@@ -46951,6 +46962,45 @@ var init_output = __esm({
     MAX_DEPTH = 200;
     DEPTH_PLACEHOLDER = `[withheld: structured output nested beyond ${MAX_DEPTH} levels]`;
     CYCLE_PLACEHOLDER = "[withheld: circular reference in structured output]";
+    CONTENT_BLOCK_SCHEMAS = /* @__PURE__ */ new Map([
+      ["text", { required: ["text"], optional: ["citations", "cache_control"] }],
+      ["image", { required: ["source"], optional: ["cache_control"] }],
+      [
+        "document",
+        {
+          required: ["source"],
+          optional: ["title", "context", "citations", "cache_control"]
+        }
+      ],
+      [
+        "search_result",
+        {
+          required: ["source", "title", "content"],
+          optional: ["citations", "cache_control"]
+        }
+      ],
+      ["thinking", { required: ["thinking", "signature"], optional: [] }],
+      ["redacted_thinking", { required: ["data"], optional: [] }],
+      [
+        "tool_use",
+        { required: ["id", "name", "input"], optional: ["cache_control"] }
+      ],
+      [
+        "server_tool_use",
+        { required: ["id", "name", "input"], optional: ["cache_control"] }
+      ],
+      [
+        "tool_result",
+        {
+          required: ["tool_use_id"],
+          optional: ["content", "is_error", "cache_control"]
+        }
+      ],
+      [
+        "web_search_tool_result",
+        { required: ["tool_use_id", "content"], optional: ["cache_control"] }
+      ]
+    ]);
   }
 });
 

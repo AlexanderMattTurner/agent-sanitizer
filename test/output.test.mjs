@@ -1448,3 +1448,140 @@ describe("suppressToolOutput", () => {
     assert.equal(Object.getPrototypeOf(out), Object.prototype); // not hijacked
   });
 });
+
+// ─── suppressToolOutput: content-block tag awareness ─────────────────────────
+
+describe("suppressToolOutput collapses an Anthropic content block", () => {
+  const MSG = "[suppressed]";
+  const SUPPRESSED_BLOCK = { type: "text", text: MSG };
+  const IMAGE_SOURCE = {
+    type: "base64",
+    media_type: "image/png",
+    data: "QUJD",
+  };
+  // One block per tag the suppressor recognises: rewriting any of these tags
+  // (or a tagged union nested in them) yields a block the API rejects with a
+  // 400, and the invalid block then replays on every later turn.
+  const BLOCKS = [
+    ["image", { type: "image", source: IMAGE_SOURCE }],
+    [
+      "document",
+      {
+        type: "document",
+        source: { type: "text", media_type: "text/plain", data: "leak" },
+        title: "leak",
+      },
+    ],
+    [
+      "text with citations",
+      {
+        type: "text",
+        text: "leak",
+        citations: [
+          {
+            type: "char_location",
+            cited_text: "leak",
+            document_index: 0,
+            document_title: "leak",
+            start_char_index: 0,
+            end_char_index: 4,
+          },
+        ],
+      },
+    ],
+    [
+      "text with cache_control",
+      { type: "text", text: "leak", cache_control: { type: "ephemeral" } },
+    ],
+    [
+      "search_result",
+      {
+        type: "search_result",
+        source: "leak",
+        title: "leak",
+        content: [{ type: "text", text: "leak" }],
+      },
+    ],
+    ["thinking", { type: "thinking", thinking: "leak", signature: "c2ln" }],
+    ["redacted_thinking", { type: "redacted_thinking", data: "leak" }],
+    [
+      "tool_use",
+      { type: "tool_use", id: "toolu_1", name: "leak", input: { q: "leak" } },
+    ],
+    [
+      "server_tool_use",
+      {
+        type: "server_tool_use",
+        id: "srvtoolu_1",
+        name: "web_search",
+        input: { query: "leak" },
+      },
+    ],
+    [
+      "tool_result",
+      {
+        type: "tool_result",
+        tool_use_id: "toolu_1",
+        content: [{ type: "text", text: "leak" }],
+        is_error: false,
+      },
+    ],
+    [
+      "web_search_tool_result",
+      {
+        type: "web_search_tool_result",
+        tool_use_id: "srvtoolu_1",
+        content: [{ type: "web_search_result", url: "leak", title: "leak" }],
+      },
+    ],
+  ];
+  for (const [name, block] of BLOCKS)
+    it(`${name} → a single text block carrying the message`, () => {
+      const out = suppressToolOutput([block], MSG);
+      assert.deepEqual(out, [SUPPRESSED_BLOCK]);
+      // The collapse must still withhold everything the walk withheld.
+      assert.ok(!JSON.stringify(out).includes("leak"));
+    });
+
+  it("collapses a bare block passed as the whole tool response", () =>
+    assert.deepEqual(
+      suppressToolOutput({ type: "image", source: IMAGE_SOURCE }, MSG),
+      SUPPRESSED_BLOCK,
+    ));
+
+  it("collapses a block nested under an ordinary field", () =>
+    assert.deepEqual(
+      suppressToolOutput(
+        { content: [{ type: "image", source: IMAGE_SOURCE }], stdout: "leak" },
+        MSG,
+      ),
+      { content: [SUPPRESSED_BLOCK], stdout: MSG },
+    ));
+});
+
+describe("suppressToolOutput walks an object that is not a content block", () => {
+  const MSG = "[suppressed]";
+  // Precision: a `type` field is ordinary tool-output data unless the object
+  // matches a block schema exactly, so these keep the leaf-wise walk — which
+  // suppresses `type` itself, the behaviour that is correct for real data.
+  const NOT_BLOCKS = [
+    [
+      "an unknown tag",
+      { type: "widget", text: "leak" },
+      { type: MSG, text: MSG },
+    ],
+    [
+      "a known tag missing a required key",
+      { type: "text", value: "leak" },
+      { type: MSG, value: MSG },
+    ],
+    [
+      "a known tag with a key outside its schema",
+      { type: "image", source: "leak", width: 32 },
+      { type: MSG, source: MSG, width: 32 },
+    ],
+    ["a non-string tag", { type: 3, text: "leak" }, { type: 3, text: MSG }],
+  ];
+  for (const [name, input, expected] of NOT_BLOCKS)
+    it(name, () => assert.deepEqual(suppressToolOutput(input, MSG), expected));
+});
