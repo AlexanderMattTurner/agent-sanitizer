@@ -163,7 +163,8 @@ const FUZZ_EXEMPT = Object.freeze({
   scanHtmlFragment:
     "has no invariant of its own beyond what the sanitizeHtml round-trip and splice-fidelity properties assert on its output",
   stripAnsiFully: "the ANSI half of applyLayer1, fuzzed through layer1-ansi",
-  suppressToolOutput: "substitutes a sentinel for a subtree and parses nothing",
+  suppressToolOutput:
+    "substitutes a sentinel for a subtree and parses nothing; its content-block recogniser is an exact key/value match against a closed schema map, pinned by the block cases in output.test",
   toUtf16View:
     "converts a view between offset spaces, validated at construction",
   viewMapDefect: "self-check over a view the pipeline built",

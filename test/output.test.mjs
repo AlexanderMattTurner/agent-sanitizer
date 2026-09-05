@@ -1462,7 +1462,7 @@ describe("suppressToolOutput collapses an Anthropic content block", () => {
   // One block per tag the suppressor recognises: rewriting any of these tags
   // (or a tagged union nested in them) yields a block the API rejects with a
   // 400, and the invalid block then replays on every later turn.
-  const BLOCKS = [
+  const BLOCKS_TO_COLLAPSE = [
     ["image", { type: "image", source: IMAGE_SOURCE }],
     [
       "document",
@@ -1504,59 +1504,47 @@ describe("suppressToolOutput collapses an Anthropic content block", () => {
     ],
     ["thinking", { type: "thinking", thinking: "leak", signature: "c2ln" }],
     ["redacted_thinking", { type: "redacted_thinking", data: "leak" }],
-    [
-      "tool_use",
-      { type: "tool_use", id: "toolu_1", name: "leak", input: { q: "leak" } },
-    ],
-    [
-      "server_tool_use",
-      {
-        type: "server_tool_use",
-        id: "srvtoolu_1",
-        name: "web_search",
-        input: { query: "leak" },
-      },
-    ],
-    [
-      "tool_result",
-      {
-        type: "tool_result",
-        tool_use_id: "toolu_1",
-        content: [{ type: "text", text: "leak" }],
-        is_error: false,
-      },
-    ],
-    [
-      "web_search_tool_result",
-      {
-        type: "web_search_tool_result",
-        tool_use_id: "srvtoolu_1",
-        content: [{ type: "web_search_result", url: "leak", title: "leak" }],
-      },
-    ],
   ];
-  for (const [name, block] of BLOCKS)
-    it(`${name} → a single text block carrying the message`, () => {
-      const out = suppressToolOutput([block], MSG);
-      assert.deepEqual(out, [SUPPRESSED_BLOCK]);
-      // The collapse must still withhold everything the walk withheld.
-      assert.ok(!JSON.stringify(out).includes("leak"));
-    });
+  for (const [name, block] of BLOCKS_TO_COLLAPSE)
+    it(`${name} → a single text block carrying the message`, () =>
+      assert.deepStrictEqual(suppressToolOutput([block], MSG), [
+        SUPPRESSED_BLOCK,
+      ]));
 
   it("collapses a bare block passed as the whole tool response", () =>
-    assert.deepEqual(
+    assert.deepStrictEqual(
       suppressToolOutput({ type: "image", source: IMAGE_SOURCE }, MSG),
       SUPPRESSED_BLOCK,
     ));
 
   it("collapses a block nested under an ordinary field", () =>
-    assert.deepEqual(
+    assert.deepStrictEqual(
       suppressToolOutput(
         { content: [{ type: "image", source: IMAGE_SOURCE }], stdout: "leak" },
         MSG,
       ),
       { content: [SUPPRESSED_BLOCK], stdout: MSG },
     ));
+
+  /** `block` wrapped in `depth` nested single-element arrays. */
+  const wrap = (/** @type {number} */ depth) => {
+    /** @type {any} */
+    let nested = { type: "image", source: IMAGE_SOURCE };
+    for (let i = 0; i < depth; i++) nested = [nested];
+    return nested;
+  };
+  /** The value the walk reached at the bottom of `wrap(depth)`'s array chain. */
+  const bottom = (/** @type {number} */ depth) => {
+    let out = suppressToolOutput(wrap(depth), MSG);
+    for (let i = 0; i < depth && Array.isArray(out); i++) out = out[0];
+    return out;
+  };
+
+  it("collapses a block reached at exactly MAX_DEPTH — the collapse runs before the depth guard", () =>
+    assert.deepStrictEqual(bottom(MAX_DEPTH), SUPPRESSED_BLOCK));
+
+  it("truncates to the bare sentinel one level deeper, block or not — the residual case", () =>
+    assert.strictEqual(bottom(MAX_DEPTH + 1), MSG));
 });
 
 describe("suppressToolOutput walks an object that is not a content block", () => {
@@ -1577,11 +1565,50 @@ describe("suppressToolOutput walks an object that is not a content block", () =>
     ],
     [
       "a known tag with a key outside its schema",
-      { type: "image", source: "leak", width: 32 },
-      { type: MSG, source: MSG, width: 32 },
+      { type: "image", source: { data: "leak" }, width: 32 },
+      { type: MSG, source: { data: MSG }, width: 32 },
+    ],
+    // Gated on the value's shape, not the key name: a real image block's
+    // `source` is an object, so this record of a URL is ordinary tool data.
+    [
+      "a known tag whose required value has the wrong shape",
+      { type: "image", source: "https://cdn.example/x.png" },
+      { type: MSG, source: MSG },
+    ],
+    [
+      "a known tag whose optional value has the wrong shape",
+      { type: "text", text: "leak", citations: "leak" },
+      { type: MSG, text: MSG, citations: MSG },
     ],
     ["a non-string tag", { type: 3, text: "leak" }, { type: 3, text: MSG }],
+    // A tag that PAIRS with another block is deliberately not recognised:
+    // collapsing it would orphan its partner, the same permanent-400 class the
+    // collapse exists to prevent. Documented false negative — the tag is still
+    // rewritten here, so widening the schema map must revisit this case.
+    [
+      "a tool_result, whose tag pairs it with a tool_use",
+      { type: "tool_result", tool_use_id: "toolu_1", content: "leak" },
+      { type: MSG, tool_use_id: MSG, content: MSG },
+    ],
+    [
+      "a tool_use, whose tag pairs it with a tool_result",
+      { type: "tool_use", id: "toolu_1", name: "leak", input: { q: "leak" } },
+      { type: MSG, id: MSG, name: MSG, input: { q: MSG } },
+    ],
   ];
   for (const [name, input, expected] of NOT_BLOCKS)
-    it(name, () => assert.deepEqual(suppressToolOutput(input, MSG), expected));
+    it(name, () =>
+      assert.deepStrictEqual(suppressToolOutput(input, MSG), expected),
+    );
+
+  it("an array carrying own block-shaped properties stays an array", () => {
+    /** @type {any} */
+    const arr = ["leak"];
+    arr.type = "text";
+    arr.text = "leak";
+    // Object.keys would report a block's exact key set here, but an array
+    // occupies an array position — substituting a block for it changes the
+    // container's type, not a block's payload.
+    assert.deepStrictEqual(suppressToolOutput(arr, MSG), [MSG]);
+  });
 });
