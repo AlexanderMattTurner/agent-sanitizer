@@ -8,6 +8,12 @@ adhere to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+## [2.57.2] - 2026-09-05
+
+### Fixed
+
+- Collapse a content block instead of rewriting its type tag in output processing.
+
 ## [2.57.1] - 2026-09-05
 
 ### Fixed
