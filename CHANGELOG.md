@@ -8,6 +8,13 @@ adhere to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+## [2.57.1] - 2026-09-05
+
+### Fixed
+
+- Trace sink billing now correctly charges wait time to the host window instead of the trace sink itself.
+- PreToolUse's trace sink is now properly forwarded as unresolved to its binding.
+
 ## [2.57.0] - 2026-09-03
 
 ### Changed
