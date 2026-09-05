@@ -189,6 +189,27 @@ test("auto-version.yaml invokes exactly the live hardened release script", () =>
   assert.ok(existsSync(LIVE_SCRIPT), "the invoked script must exist on disk");
 });
 
+// The one ordering the release's correctness rests on, and the one thing a
+// reorder or a template-sync drop would break silently: version-bump.sh captures
+// PUBLISHED_SHA from HEAD and tags it, so a refresh landing after it tags a tree
+// whose manifest describes the PREVIOUS bundle — and release-hook-binaries.sh's
+// --check then refuses the upload, leaving that release with no hook binaries.
+// The symptom appears only at release time on main, where no PR can see it.
+test("the hook-binary manifest refresh runs before version-bump.sh tags HEAD", () => {
+  const yaml = readFileSync(AUTO_VERSION_YAML, "utf8");
+  const refresh = yaml.search(/bash\s+\S*commit-refreshed-manifest\.sh/);
+  const bump = yaml.search(/bash\s+\S*version-bump\.sh/);
+  assert.ok(
+    refresh >= 0,
+    "auto-version.yaml no longer refreshes the hook-binary manifest; main would carry a manifest describing an older bundle, and the SessionStart provisioner refuses to install a binary against one",
+  );
+  assert.ok(bump >= 0, "auto-version.yaml no longer invokes version-bump.sh");
+  assert.ok(
+    refresh < bump,
+    "the manifest refresh must precede version-bump.sh: it tags the HEAD it captures, so a later refresh tags a tree whose manifest describes the previous bundle",
+  );
+});
+
 test("the release checkout pushes with the org ruleset-bypass token or GITHUB_TOKEN, never a cross-account PAT", () => {
   // The release-docs commit and vX.Y.Z tag are pushed with the credentials the
   // checkout persists. github-actions[bot] (GITHUB_TOKEN) cannot push past this

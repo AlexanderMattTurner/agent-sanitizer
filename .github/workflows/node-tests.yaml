@@ -111,9 +111,7 @@ jobs:
   # the engine itself never executed.
   live-engine:
     runs-on: ubuntu-latest
-    # Covers the four-target `bun build --compile` in the digest round-trip
-    # below, whose cross-target runtimes download on a cold cache.
-    timeout-minutes: 30
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
