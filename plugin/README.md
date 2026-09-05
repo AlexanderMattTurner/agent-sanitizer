@@ -242,9 +242,10 @@ requirements.txt             the compiled, hash-pinned dependency lock (generate
 Both halves of the engine are built from this repository's own sources — the JS
 from `src/`, the Python wheel from `python/` — so the shipped hooks, the zipapp
 and the provisioned venv are one commit and cannot be three versions.
-`dist/hooks/` and `requirements.in` are regenerated offline by
+`dist/hooks/*.bundle.mjs` and `requirements.in` are regenerated offline by
 `node plugin/scripts/build-plugin.mjs` and verified byte-for-byte in CI; they
-change only when the hook sources or the engine's dependencies do.
+change only when the hook sources or the engine's dependencies do. The digest
+manifest beside them is the exception — see below.
 
 The compiled hook binaries are a third artifact class. At ~100 MB each they are
 not committed; they are attached to this repository's GitHub release
@@ -253,12 +254,20 @@ linux-x64, linux-arm64), compiled from the committed bundle with the pnpm-pinned
 bun (`bun build --compile`) by `plugin/scripts/build-hook-binaries.mjs`. What is
 committed is their SHA-256 manifest, `dist/hooks/hook-binaries.sha256`, which
 the same script generates — and because bun's compile is byte-deterministic for
-a fixed bun version, target, input bundle and outfile name, CI regenerates the
-binaries and byte-checks their digests against the manifest: the reproducibility
-gate survives as a digest round-trip. The provisioner verifies a downloaded
-binary against that manifest before it is ever installed, so a release asset that
-does not hash to the committed digest never runs. Compiled from the committed
-bundle, the binaries stay one commit with everything above.
+a fixed bun version, target, input bundle and outfile name, the release
+regenerates the binaries and byte-checks their digests against the manifest
+before uploading them: the reproducibility gate survives as a digest round-trip.
+The provisioner verifies a downloaded binary against that manifest before it is
+ever installed, so a release asset that does not hash to the committed digest
+never runs.
+
+Unlike everything above it, the manifest is refreshed only on the default
+branch, by `auto-version.yaml` ahead of the release — never on a PR branch,
+where regenerating it rewrites every digest and makes any two such branches
+conflict irreconcilably. So a merge leaves it briefly describing the previous
+bundle; the provisioner notices (it compares its own bundle against the
+manifest's `# bundle=` pin) and declines to install rather than running a binary
+built from other code.
 
 `requirements.txt` is the fully resolved third-party tree, every version and
 artifact hash pinned. It is what both `dist/redactor/daemon.pyz` is built from

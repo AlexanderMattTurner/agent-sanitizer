@@ -24,7 +24,6 @@ import {
   symlinkSync,
   writeFileSync,
 } from "node:fs";
-import { createHash } from "node:crypto";
 import { isBuiltin } from "node:module";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -41,7 +40,6 @@ import {
 import {
   MANIFEST_PATH,
   PLATFORMS,
-  installedBunVersion,
   parseManifest,
   repositorySlug,
 } from "../scripts/build-hook-binaries.mjs";
@@ -363,30 +361,14 @@ test("committed bundle matches a fresh build from this tree", async () => {
   assert.equal(readFileSync(BUNDLE_PATH, "utf-8"), await bundlePluginHook());
 });
 
-// The compiled hook binaries are release assets, not committed files (~100 MB
-// each), so what the offline suite CAN gate is the committed digest manifest:
-// it must describe THIS bundle and THIS bun pin, which is what makes the
-// deterministic rebuild elsewhere byte-comparable. The compile-and-compare
-// round trip itself (`build-hook-binaries.mjs --check`) runs in CI's
-// live-engine job, which has the network bun's cross-target runtimes need.
-test("committed hook-binary manifest is fresh for this tree", () => {
-  const manifest = parseManifest(readFileSync(MANIFEST_PATH, "utf-8"));
-  assert.equal(
-    manifest.bundle,
-    createHash("sha256").update(readFileSync(BUNDLE_PATH)).digest("hex"),
-    "hook-binaries.sha256 pins binaries compiled from a DIFFERENT bundle; regenerate with `pnpm gen:hook-binaries`",
-  );
-  assert.equal(
-    manifest.bun,
-    installedBunVersion(),
-    "hook-binaries.sha256 was compiled with a different bun than the pinned one; regenerate with `pnpm gen:hook-binaries`",
-  );
-  // The provisioner downloads from this slug's releases, so a fork that
-  // repoints package.json's repository.url must regenerate the manifest too —
-  // otherwise its users fetch (and reject, on digest) the upstream's binaries.
-  assert.equal(manifest.repository, repositorySlug());
-});
-
+// The manifest describes the binaries attached to the last RELEASE, and it is
+// refreshed on the default branch (auto-version.yaml) rather than per-PR, so on
+// a branch that moves the bundle it is stale BY DESIGN — there is no freshness
+// claim for the offline suite to assert. What it can still gate is the shape
+// the SessionStart provisioner reads, and the release slug, which is stable
+// across a bundle change and wrong for a fork that never regenerated. The
+// freshness round trip is release-hook-binaries.sh's `--check`: it refuses to
+// upload binaries that do not reproduce the manifest users verify against.
 test("hook-binary manifest carries a full digest for every supported platform", () => {
   const manifest = parseManifest(readFileSync(MANIFEST_PATH, "utf-8"));
   assert.deepEqual(
@@ -395,6 +377,10 @@ test("hook-binary manifest carries a full digest for every supported platform", 
   );
   for (const [platform, digest] of Object.entries(manifest.digests))
     assert.match(digest, /^[0-9a-f]{64}$/, `bad digest for ${platform}`);
+  // The provisioner downloads from this slug's releases, so a fork that
+  // repoints package.json's repository.url must regenerate the manifest too —
+  // otherwise its users fetch (and reject, on digest) the upstream's binaries.
+  assert.equal(manifest.repository, repositorySlug());
 });
 
 test("committed requirements.in matches the secrets extra", () => {

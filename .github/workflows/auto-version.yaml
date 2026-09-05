@@ -36,9 +36,10 @@ jobs:
   version-and-publish:
     name: Bump version and publish to npm
     runs-on: ubuntu-latest
-    # Generous because the last step compiles four bun hook binaries (~100 MB
-    # each) on a cold cross-target runtime cache before attaching them.
-    timeout-minutes: 30
+    # Generous because two steps compile four bun hook binaries (~100 MB each)
+    # on a cold cross-target runtime cache: the manifest refresh below, and the
+    # release step's `--check` rebuild that byte-compares against it.
+    timeout-minutes: 60
     steps:
       - name: Checkout
         # Credentials stay persisted: version-bump.sh pushes the release-docs
@@ -74,6 +75,27 @@ jobs:
           # commit this job pushes. Without it the hook refuses that push and the
           # release publishes to npm with its CHANGELOG section stranded.
           setup-python: true
+
+      # Refreshed HERE, on the default branch, and nowhere else: the manifest
+      # rewrites every digest in it whenever the bundle moves, and
+      # `.gitattributes` marks plugin/dist binary, so regenerating it per-PR
+      # made any two such PRs conflict irreconcilably on the second merge.
+      # Ordered before the release so the published tree — and the vX.Y.Z tag on
+      # it — carries a manifest describing THIS bundle, which is what
+      # release-hook-binaries.sh's `--check` and the SessionStart provisioner's
+      # bundle pin both require. `--if-stale` makes this a no-op on the pushes
+      # that leave the bundle alone.
+      # The existence guard mirrors version-bump.sh's own `[[ -f $PLUGIN_MANIFEST ]]`:
+      # this workflow syncs to repos that ship no plugin, where the generator is
+      # absent and there is nothing to refresh.
+      - name: Refresh the hook-binary digest manifest
+        run: |
+          if [ ! -f plugin/scripts/build-hook-binaries.mjs ]; then
+            echo "No plugin/scripts/build-hook-binaries.mjs in this repo; nothing to refresh."
+            exit 0
+          fi
+          bash .github/scripts/commit-refreshed-manifest.sh \
+            node plugin/scripts/build-hook-binaries.mjs --if-stale
 
       - name: Bump version and publish if commits warrant a release
         # `id: release` is load-bearing, not decoration: six steps below gate on

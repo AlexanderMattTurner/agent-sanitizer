@@ -8,6 +8,12 @@ name: Plugin dist autofix
 # pushed commit; when this workflow cannot run, that test stays red and blocks
 # the merge — the artifact is never silently stale.
 #
+# The hook-binary digest manifest is deliberately NOT among the artifacts this
+# rebuilds. It is refreshed on the default branch instead (auto-version.yaml →
+# commit-refreshed-manifest.sh), because a per-PR regen rewrites every digest in
+# it and `.gitattributes` marks plugin/dist binary, so any two such PRs conflict
+# irreconcilably on the second merge.
+#
 # SECURITY — split into two jobs so the push token and PR-authored code never
 # share a job. `regenerate` checks out the PR head and runs the build (which
 # runs the PR's OWN `pnpm install`/build lifecycle scripts) with no secret
@@ -58,9 +64,7 @@ jobs:
     # fix it.
     if: github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
-    # Regenerating the hook-binary manifest compiles four bun binaries (~100 MB
-    # each), downloading each cross-target runtime on a cold cache.
-    timeout-minutes: 30
+    timeout-minutes: 15
     outputs:
       changed: ${{ steps.build.outputs.changed }}
     steps:
@@ -89,9 +93,6 @@ jobs:
           # lock exists to stop.
           node plugin/scripts/lock-redactor-deps.mjs --if-stale
           node plugin/scripts/build-redactor-pyz.mjs
-          # --if-stale: skip the ~4-target bun compile when the committed digest
-          # manifest already matches this tree (same bundle, same pinned bun).
-          node plugin/scripts/build-hook-binaries.mjs --if-stale
           # `git diff --quiet` exits non-zero exactly when the build changed files.
           if git diff --quiet; then
             echo "changed=false" >>"$GITHUB_OUTPUT"

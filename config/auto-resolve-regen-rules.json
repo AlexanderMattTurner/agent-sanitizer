@@ -17,6 +17,7 @@
     "types/": "git-ignored build output of `pnpm build:types`.",
     "CHANGELOG.md": "written by scripts/version-bump.sh from the Conventional Commit subjects since the last tag, for one release. There is no generator to re-run over a merge: the resolution is the union of two releases' sections, which is a textual merge the model handles.",
     "plugin/.claude-plugin/plugin.json": "its version field is bumped by the same release workflow, and every other field is hand-written — a rule would claim the whole file to regenerate one line.",
+    "plugin/dist/hooks/hook-binaries.sha256": "written only on the default branch, by auto-version.yaml's refresh step. A PR branch never modifies it, so it cannot carry a conflict — which is why it is refreshed there and not by plugin-dist-autofix.yaml: regenerating it per-PR rewrites every digest, and .gitattributes marks plugin/dist binary, so any two such PRs conflicted irreconcilably on the second merge.",
     "plugin/requirements.txt": "compiled by plugin/scripts/lock-redactor-deps.mjs, which resolves the dependency tree over the NETWORK and is invoked with --if-stale. Under --if-stale it declines to rewrite a lock that already names no published engine, which is exactly the case where a conflict in it needs rewriting — so the rule would claim the path and then leave the markers in place. .github/workflows/plugin-dist-autofix.yaml owns this file instead."
   },
 
@@ -52,17 +53,6 @@
         "plugin/dist/hooks/plugin-hooks.bundle.mjs",
         "plugin/requirements.in"
       ],
-      "reviewOmit": true
-    },
-    {
-      "command": [
-        "node",
-        "plugin/scripts/build-hook-binaries.mjs",
-        "--if-stale"
-      ],
-      "sources": ["plugin/dist/hooks/plugin-hooks.bundle.mjs", "package.json"],
-      "sourcesPattern": "^(claude-hooks|src)/.*\\.mjs$",
-      "owns": ["plugin/dist/hooks/hook-binaries.sha256"],
       "reviewOmit": true
     },
     {
