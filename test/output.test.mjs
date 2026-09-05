@@ -1601,6 +1601,22 @@ describe("suppressToolOutput walks an object that is not a content block", () =>
       assert.deepStrictEqual(suppressToolOutput(input, MSG), expected),
     );
 
+  it("an object whose block tag comes from a polluted prototype is still walked", () => {
+    // The own-key `type` check is the only thing standing between this and a
+    // false collapse: `value.type` reads "text" straight through the prototype.
+    Object.defineProperty(Object.prototype, "type", {
+      value: "text",
+      configurable: true,
+    });
+    try {
+      assert.deepStrictEqual(suppressToolOutput({ text: "leak" }, MSG), {
+        text: MSG,
+      });
+    } finally {
+      delete (/** @type {any} */ (Object.prototype).type);
+    }
+  });
+
   it("an array carrying own block-shaped properties stays an array", () => {
     /** @type {any} */
     const arr = ["leak"];

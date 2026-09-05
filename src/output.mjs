@@ -1205,6 +1205,10 @@ function isContentBlock(value) {
   // position, where a block may not be substituted for the array itself.
   if (Array.isArray(value)) return false;
   const schema = CONTENT_BLOCK_SCHEMAS.get(value.type);
+  // The own-key check is what blocks a polluted `Object.prototype.type`: the
+  // `value.type` read above resolves through the prototype, so without it
+  // `{ text: "leak" }` would tag itself a text block and be collapsed, dropping
+  // a legitimate field on the fail-closed path.
   if (schema === undefined || !Object.hasOwn(value, "type")) return false;
   // Object.hasOwn, not a bare index: a bare lookup resolves inherited
   // Object.prototype members ("toString", "constructor") to real functions,
@@ -1240,13 +1244,9 @@ function suppressAt(value, message, depth, seen, memo) {
   // Same opaque-leaf rule as sanitizeValueAt: only arrays and plain objects are
   // walked; an exotic object would be corrupted to an empty clone.
   if (!isWalkableContainer(value)) return value;
-  // A content block's `type` tag tells the API how to parse the block, and the
-  // tagged unions under it (`citations`, `source`, `cache_control`) are
-  // validated the same way — so walking a block's keys yields one the API
-  // rejects with a 400, permanently: it stays in the transcript and replays on
-  // every later turn. Collapse to a text block, which is legal wherever a
-  // recognised block stands (see {@link CONTENT_BLOCK_SCHEMAS} on the paired
-  // tags it excludes for exactly that reason).
+  // Walking a block's keys rewrites its `type` tag and the tagged unions under
+  // it, yielding a block the API rejects with a 400 that then replays on every
+  // later turn. Collapse to the one block shape `message` is legal in.
   if (isContentBlock(value)) return { type: "text", text: message };
   const cached = memo.get(value, depth);
   if (cached !== undefined) return cached;
