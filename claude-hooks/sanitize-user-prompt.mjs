@@ -32,7 +32,7 @@ import {
   writeFaultOutcome,
 } from "./lib/hook-fault.mjs";
 import { controlPlane, runJudgeCli } from "./lib/control-plane.mjs";
-import { bestEffortTrace, trace, TraceEvent } from "./lib/trace.mjs";
+import { hookTrace, TraceEvent } from "./lib/trace.mjs";
 // classifyPrompt (the user-prompt verdict) and stripAnsiFully (its ANSI stripper)
 // come from the agent-sanitizer package. They are bound by a *caught* dynamic
 // import, never a bare top-level `import … from "…"`: a static npm import
@@ -208,10 +208,10 @@ export async function main(read, write, opts = {}) {
   const {
     strip = stripAnsiFully,
     overrides = USER_PROMPT_MESSAGES,
-    trace: sink = trace,
+    trace: sink,
     env = process.env,
   } = opts;
-  const emitTrace = bestEffortTrace(sink);
+  const emitTrace = hookTrace(sink);
   // Merged, not substituted — see judgeSanitizeUserPrompt. onError below is the
   // call site where a missing field would throw out of the catch and fail OPEN.
   const messages = { ...USER_PROMPT_MESSAGES, ...overrides };
