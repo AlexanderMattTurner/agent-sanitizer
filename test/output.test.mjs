@@ -1507,6 +1507,27 @@ describe("suppressToolOutput collapses an Anthropic content block", () => {
         citations: null,
       },
     ],
+    // A document's/search_result's `citations` is the `{ enabled }` toggle
+    // while a text block's is an array — the one place the schemas diverge, so
+    // it needs a case each or the two predicates are interchangeable.
+    [
+      "document with the { enabled } citations toggle",
+      {
+        type: "document",
+        source: { type: "text", media_type: "text/plain", data: "leak" },
+        citations: { enabled: true },
+      },
+    ],
+    [
+      "search_result with the { enabled } citations toggle",
+      {
+        type: "search_result",
+        source: "leak",
+        title: "leak",
+        content: [{ type: "text", text: "leak" }],
+        citations: { enabled: true },
+      },
+    ],
     [
       "search_result",
       {

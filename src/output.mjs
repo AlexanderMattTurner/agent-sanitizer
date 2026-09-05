@@ -1144,14 +1144,25 @@ const isArray = (v) => Array.isArray(v);
  * AND every present key's VALUE satisfies its predicate. Gating on the value's
  * shape and not the key name alone is what keeps an ordinary record like
  * `{ type: "image", source: "https://…/x.png" }` out: a real image block's
- * `source` is an object. An unrecognised object is walked as ordinary data, so
- * a schema that is too strict costs a false NEGATIVE (the leaf-wise walk) — the
- * direction this module prefers — while one that is too loose mangles real data.
+ * `source` is an object. An unrecognised object is walked as ordinary data.
+ *
+ * Both directions cost something, and they are not symmetric in the way the
+ * rest of this module's precision rule assumes. Too LOOSE mangles an object
+ * that was never a block. Too STRICT is fail-safe only for those same
+ * non-blocks: for a REAL block it sends the walk over the `type` tag, which is
+ * the permanently-rejected block this collapse exists to prevent. So a
+ * predicate must admit every value the API admits — hence the nullable
+ * variants below, since every optional object-valued field is `object | null`.
  *
  * A block whose tag PAIRS it with another block (`tool_use` ↔ `tool_result`,
  * and their server-tool twins) is deliberately absent: collapsing one to a text
  * block orphans its partner, which the API rejects exactly as permanently as
  * the rewritten tag this collapse exists to prevent. They keep the walk.
+ *
+ * Held as an entry list rather than annotated on the `new Map(...)` below
+ * because only the element-wise annotation typechecks: annotating the map lets
+ * tsc union the entry literals first, and that union's `source?: undefined`
+ * members fail `BlockSchema`'s index signature.
  * @type {[string, BlockSchema][]}
  */
 const CONTENT_BLOCK_SCHEMA_ENTRIES = [
@@ -1201,6 +1212,7 @@ const CONTENT_BLOCK_SCHEMA_ENTRIES = [
   ["redacted_thinking", { required: { data: isString }, optional: {} }],
 ];
 
+/** Tag → schema, keyed for {@link isContentBlock}'s lookup. */
 const CONTENT_BLOCK_SCHEMAS = new Map(CONTENT_BLOCK_SCHEMA_ENTRIES);
 
 /**
