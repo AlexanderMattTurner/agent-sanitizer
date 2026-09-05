@@ -118,10 +118,12 @@ export function bestEffortTrace(sink) {
  * default sink's file write IS the sanitizer's own work, so charging it would
  * move a real per-call cost out of the figure that names it.
  *
- * The two wrappers compose in one order only, which is why every hook binds
- * through this and not through the pieces: the charge is booked in a `finally`
- * INSIDE the best-effort bracket, so a host sink that THROWS — the one that
- * spent the most — is still measured before the throw is swallowed.
+ * Both properties are bound HERE, not at each hook, so a sixth caller can
+ * neither drop one nor nest them wrong — and the nesting is load-bearing twice
+ * over. The charge is booked in a `finally` inside the best-effort bracket, so
+ * a sink that spends its wait and THEN throws is measured before the throw is
+ * swallowed. And the exemption above reads the host's own sink, which a
+ * best-effort wrapper applied first would have replaced with a truthy one.
  * @param {TraceFn} [sink]  a host's sink; absent asks for the package channel
  * @returns {TraceFn}
  */

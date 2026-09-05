@@ -321,6 +321,26 @@ describe("a host sink's wait is charged to the host window", () => {
       assert.match(additionalContext, /0\.0s was inside redactor round trips/);
       assert.match(additionalContext, /hook name and all four timings/);
     });
+
+  // One hook, unlike the cases above: the wrap order lives inside hookTrace,
+  // which all five share, so a second hook would re-assert the same binder.
+  it("charges a host sink that waits and then THROWS", async () => {
+    freshTraceFile();
+    /** @type {string[]} */
+    const seen = [];
+    // The charge is booked in chargeHostExtensionSync's `finally`, so a sink
+    // that spends its wait and THEN throws is measured before best-effort
+    // swallows the throw. Booked on the success path instead, the sink that
+    // spent the most is the one sink the notice cannot see.
+    const { stderr } = await withCapturedStderr(() =>
+      quietly(HOOKS[0].run, (event, fields, level) => {
+        waitingSink(seen)(event, fields, level);
+        throw new Error("host channel down");
+      }),
+    );
+    assert.deepEqual(seen, [HOOKS[0].event]);
+    assert.match(stderr, /[1-9]\d*\.\ds was inside host extensions/);
+  });
 });
 
 // The other half of the same claim, and the one a wrapper that RESOLVES the
