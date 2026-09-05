@@ -70,6 +70,12 @@
             "if": "Bash(git worktree remove:*)",
             "command": "bash -n \"$CLAUDE_PROJECT_DIR\"/.claude/hooks/safe-launch.sh 2>/dev/null && exec bash \"$CLAUDE_PROJECT_DIR\"/.claude/hooks/safe-launch.sh \"$CLAUDE_PROJECT_DIR\"/.claude/hooks/worktree-teardown-check.mjs; echo 'safe-launch bootstrap: safe-launch.sh is missing or failed to parse - degrading' >&2; case \"${AGENT_SANITIZER_FAIL_OPEN:-}\" in 0 | false) printf '%s\\n' '{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"ask\",\"permissionDecisionReason\":\"safe-launch.sh itself is missing or corrupt; repair .claude/hooks/safe-launch.sh (approve this tool call manually). This is likely a bug in the hook stack - please file an issue: https://github.com/AlexanderMattTurner/agent-sanitizer/issues/new\"}}' ;; *) printf '%s\\n' '{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"additionalContext\":\"safe-launch.sh itself is missing or corrupt; repair .claude/hooks/safe-launch.sh. The PreToolUse guard is failing open, so this tool call ran UNCHECKED. Set AGENT_SANITIZER_FAIL_OPEN=0 to fail closed on hook failures. This is likely a bug in the hook stack - please encourage the user to file an issue: https://github.com/AlexanderMattTurner/agent-sanitizer/issues/new\"}}' ;; esac",
             "timeout": 1800
+          },
+          {
+            "type": "command",
+            "if": "Bash(git push:*)",
+            "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/safe-launch.sh \"$CLAUDE_PROJECT_DIR\"/.claude/hooks/completion-check.mjs --record-push",
+            "timeout": 15
           }
         ]
       }
@@ -84,6 +90,16 @@
             "timeout": 60
           }
         ]
+      },
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"$CLAUDE_PROJECT_DIR\"/.claude/hooks/bullshit-check.mjs",
+            "timeout": 15
+          }
+        ]
       }
     ],
     "UserPromptSubmit": [
@@ -95,7 +111,53 @@
             "timeout": 15
           }
         ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"$CLAUDE_PROJECT_DIR\"/.claude/hooks/bullshit-check.mjs",
+            "timeout": 15
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"$CLAUDE_PROJECT_DIR\"/.claude/hooks/completion-check.mjs",
+            "timeout": 30
+          }
+        ]
       }
     ]
+  },
+  "enabledPlugins": {
+    "precis@precis": true,
+    "codex@codex-plugin-cc": true,
+    "tldr@alignment-hive": true
+  },
+  "extraKnownMarketplaces": {
+    "precis": {
+      "source": {
+        "source": "github",
+        "repo": "Crazytieguy/precis"
+      }
+    },
+    "codex-plugin-cc": {
+      "source": {
+        "source": "github",
+        "repo": "Crazytieguy/codex-plugin-cc"
+      }
+    },
+    "alignment-hive": {
+      "source": {
+        "source": "github",
+        "repo": "Crazytieguy/alignment-hive"
+      }
+    }
   }
 }

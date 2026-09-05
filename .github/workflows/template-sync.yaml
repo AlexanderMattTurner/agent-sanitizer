@@ -249,6 +249,37 @@ jobs:
           DELETED_FILES: ${{ steps.sync.outputs.deleted_files }}
         run: bash "$SYNC_TOOLS/show-sync-diff.sh"
 
+      # The body is a script, not an inline `format()` chain: a chain that long
+      # is invisible to shellcheck, cannot be tested, and grew a shape nobody
+      # could read a conditional out of. It runs BEFORE create-pull-request,
+      # because that action reads the body from a file.
+      # It runs a BASE_SHA copy for the same reason the marker gate does:
+      # `.github/scripts` is in SYNC_PATHS, so a sync can leave conflict markers
+      # in this very script, and bash dies on them before any PR exists to show
+      # them — no PR, so neither the resolver nor the marker gate can repair it.
+      - name: Render the pull request body
+        if: inputs.dry-run != true && (steps.sync.outputs.has_changes == 'true' || steps.sync.outputs.has_conflicts == 'true' || steps.sync.outputs.has_deletions == 'true')
+        id: pr-body
+        env:
+          TEMPLATE_REPO: ${{ env.TEMPLATE_REPO }}
+          TEMPLATE_SHA_SHORT: ${{ steps.sync.outputs.template_sha_short }}
+          CHANGED_FILES: ${{ steps.sync.outputs.changed_files }}
+          CHANGELOG: ${{ steps.sync.outputs.changelog }}
+          DOWNGRADE_REPORT: ${{ steps.sync.outputs.downgrade_report }}
+          AUTO_MERGED_FILES: ${{ steps.sync.outputs.auto_merged_files }}
+          DECLINED_FILES: ${{ steps.sync.outputs.declined_files }}
+          INERT_ENTRIES: ${{ steps.sync.outputs.inert_entries }}
+          DELETED_FILES: ${{ steps.sync.outputs.deleted_files }}
+          CONFLICT_REPORT: ${{ steps.sync.outputs.conflict_report }}
+          PR_BODY_PATH: ${{ runner.temp }}/template-sync-body.md
+          BASE_SHA: ${{ github.sha }}
+        run: |
+          set -o pipefail
+          body_dir="${RUNNER_TEMP}/pr-body-scripts"
+          mkdir -p "${body_dir}" # bare-mkdir-ok: the extraction below is the post-condition and fails loudly
+          timeout --kill-after=30 300 git archive "${BASE_SHA}" .github/scripts | tar -x -f - -C "${body_dir}"
+          bash "${body_dir}/.github/scripts/template-sync-pr-body.sh"
+
       - name: Create Pull Request
         if: inputs.dry-run != true && (steps.sync.outputs.has_changes == 'true' || steps.sync.outputs.has_conflicts == 'true' || steps.sync.outputs.has_deletions == 'true')
         id: create-pr
@@ -263,63 +294,7 @@ jobs:
           token: ${{ secrets.TEMPLATE_SYNC_TOKEN_ORG || secrets.GITHUB_TOKEN }}
           commit-message: "chore: sync from template repository (${{ steps.sync.outputs.template_sha_short }})"
           title: "chore: sync from template repository"
-          body: |
-            This PR syncs updates from the template repository.
-
-            **Template version:** `${{ steps.sync.outputs.template_sha_short }}`
-            **Updated paths:** ${{ steps.sync.outputs.changed_paths }}
-            **Template repository:** ${{ env.TEMPLATE_REPO }}
-
-            ${{ steps.sync.outputs.changelog && format('### Changelog since last sync
-
-            ```
-            {0}
-            ```
-
-            ', steps.sync.outputs.changelog) }}${{ steps.sync.outputs.has_downgrades == 'true' && format('---
-
-            ## ⚠️ Adopter-ahead — review these auto-merges for lost customizations
-
-            A "clean" 3-way auto-merge dropped lines that existed in this repo''s local copy. The sync uses a single repo-wide merge base (`.template-version`), which can be stale for a file first synced at a different template revision — when it is, git reports no conflict while silently shrinking your changes. **Review each file below** and restore anything of yours the merge removed:
-
-            {0}
-
-            ', steps.sync.outputs.downgrade_report) || '' }}${{ steps.sync.outputs.auto_merged_files && format('### Auto-merged files
-
-            The following files were merged automatically (3-way merge, no conflicts):
-
-            `{0}`
-
-            ', steps.sync.outputs.auto_merged_files) || '' }}${{ steps.sync.outputs.declined_files && format('### Declined files (deleted here, not re-added)
-
-            The template still ships these, and this repo deleted them after an earlier sync. The sync left them out. To adopt one, copy it from the template by hand.
-
-            `{0}`
-
-            ', steps.sync.outputs.declined_files) || '' }}${{ steps.sync.outputs.inert_entries && format('### Inert EXCLUDE_PATHS / OPT_IN_PATHS entries
-
-            These entries name nothing in the template, so they cover nothing. Correct the spelling, or delete the entry.
-
-            `{0}`
-
-            ', steps.sync.outputs.inert_entries) || '' }}${{ steps.sync.outputs.has_deletions == 'true' && format('---
-
-            ## Files Removed from Template
-
-            The following files were **deleted in the template** but still exist locally. Consider removing them if they are no longer needed:
-
-            `{0}`
-
-            ', steps.sync.outputs.deleted_files) || '' }}${{ steps.sync.outputs.has_conflicts == 'true' && '---
-
-            ## Conflicts for Claude to Resolve
-
-            The following files need conflict resolution. Claude will resolve these automatically.
-
-            ' || '' }}${{ steps.sync.outputs.conflict_report }}
-
-            ---
-            Please review the changes and merge if appropriate.
+          body-path: ${{ runner.temp }}/template-sync-body.md
           branch: template-sync
           delete-branch: true
           labels: ${{ steps.sync.outputs.has_conflicts == 'true' && 'template-sync,merge-conflict' || 'template-sync' }}
