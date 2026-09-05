@@ -495,7 +495,17 @@ RECONSTITUTES during stripping is judged as the sequence it becomes.
 (a harness that gets a shape-mismatched value silently shows the raw output).
 Layer 4 (secret redaction) is an **injected** redactor and is the one
 fail-closed path: a redactor that throws makes the pipeline rethrow, so the
-caller suppresses the output rather than emit an unvetted value. In the Claude
+caller suppresses the output rather than emit an unvetted value. That
+suppression (`suppressToolOutput`) replaces string leaves in place so the
+placeholder still matches the tool's shape, with one exception it must make: an
+Anthropic **content block** is collapsed whole to `{ type: "text", text: … }`
+rather than walked, because rewriting the `type` tag (or a tagged union nested
+under it — `citations[]`, `source`, `cache_control`) produces a block the API
+rejects with a 400, and the invalid block then replays on every later turn, so
+no retry clears it. A block is recognised only when its own keys match that
+tag's schema exactly, so an ordinary object that merely carries a `type` field
+keeps the leaf-wise walk; only the enum-valued tag is preserved, never a string
+from the block itself. In the Claude
 Code hooks the entire secret layer is **opt-in**: `secretsEnabled()`
 (`claude-hooks/lib/env-config.mjs`) reads `AGENT_SANITIZER_SECRETS_ENABLED=1`,
 and every secret-layer guarantee below — Layer-4 redaction, rehydration, the

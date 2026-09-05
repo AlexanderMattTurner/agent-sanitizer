@@ -1094,7 +1094,9 @@ export function composeContext(
 /**
  * Replace every string leaf of `value` with `message`, preserving shape so a
  * fail-closed placeholder matches the tool's output schema. Non-string leaves
- * pass through.
+ * pass through. An Anthropic content block is the one exception: it is
+ * collapsed whole to `{ type: "text", text: message }`, because rewriting its
+ * `type` tag produces a block the API rejects (see {@link isContentBlock}).
  *
  * Shares {@link sanitizeValue}'s depth/cycle guard for the same reason: this
  * runs on the fail-closed path (an already-suspect output), so a 200k-deep or
@@ -1108,6 +1110,81 @@ export function composeContext(
  */
 export function suppressToolOutput(value, message) {
   return suppressAt(value, message, 0, new WeakSet(), depthMemo());
+}
+
+/**
+ * Own-key schema of every Anthropic content block the suppressor recognises,
+ * from the Messages API request shapes
+ * (https://docs.claude.com/en/api/messages). A block is recognised only when
+ * its own keys match its tag's schema exactly — every `required` key present,
+ * no key outside `required` ∪ `optional` ∪ `type`. An unrecognised object is
+ * walked as ordinary data, so a schema entry that is wrong or missing costs a
+ * false NEGATIVE (the leaf-wise walk) rather than collapsing a legitimate
+ * object that merely carries a `type` field.
+ * @type {Map<string, { required: string[], optional: string[] }>}
+ */
+const CONTENT_BLOCK_SCHEMAS = new Map([
+  ["text", { required: ["text"], optional: ["citations", "cache_control"] }],
+  ["image", { required: ["source"], optional: ["cache_control"] }],
+  [
+    "document",
+    {
+      required: ["source"],
+      optional: ["title", "context", "citations", "cache_control"],
+    },
+  ],
+  [
+    "search_result",
+    {
+      required: ["source", "title", "content"],
+      optional: ["citations", "cache_control"],
+    },
+  ],
+  ["thinking", { required: ["thinking", "signature"], optional: [] }],
+  ["redacted_thinking", { required: ["data"], optional: [] }],
+  [
+    "tool_use",
+    { required: ["id", "name", "input"], optional: ["cache_control"] },
+  ],
+  [
+    "server_tool_use",
+    { required: ["id", "name", "input"], optional: ["cache_control"] },
+  ],
+  [
+    "tool_result",
+    {
+      required: ["tool_use_id"],
+      optional: ["content", "is_error", "cache_control"],
+    },
+  ],
+  [
+    "web_search_tool_result",
+    { required: ["tool_use_id", "content"], optional: ["cache_control"] },
+  ],
+]);
+
+/**
+ * Whether `value` (already known to be a walkable container) is an Anthropic
+ * content block — an object whose `type` tag names a known block shape AND
+ * whose own keys match that shape exactly.
+ * @param {any} value
+ * @returns {boolean}
+ */
+function isContentBlock(value) {
+  if (Array.isArray(value)) return false;
+  const keys = Object.keys(value);
+  if (!keys.includes("type")) return false;
+  const schema = CONTENT_BLOCK_SCHEMAS.get(value.type);
+  if (schema === undefined) return false;
+  return (
+    schema.required.every((key) => keys.includes(key)) &&
+    keys.every(
+      (key) =>
+        key === "type" ||
+        schema.required.includes(key) ||
+        schema.optional.includes(key),
+    )
+  );
 }
 
 /**
@@ -1128,6 +1205,13 @@ function suppressAt(value, message, depth, seen, memo) {
   // Same opaque-leaf rule as sanitizeValueAt: only arrays and plain objects are
   // walked; an exotic object would be corrupted to an empty clone.
   if (!isWalkableContainer(value)) return value;
+  // A content block's `type` tag tells the API how to parse the block, and the
+  // tagged unions under it (`citations[]`, `source`, `cache_control`) are
+  // validated the same way — so walking a block's keys yields one the API
+  // rejects with a 400, permanently: it stays in the transcript and replays on
+  // every later turn. Collapse to the one block shape `message` is legal in.
+  // Only the enum-valued tag survives, never a string from the block itself.
+  if (isContentBlock(value)) return { type: "text", text: message };
   const cached = memo.get(value, depth);
   if (cached !== undefined) return cached;
   // Placeholders are not cached at all: they are O(1) to recompute, and the
