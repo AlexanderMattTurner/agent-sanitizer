@@ -1103,7 +1103,10 @@ export function composeContext(
  * self-referential value must NOT blow the stack here — that would re-open the
  * very hole suppression exists to close. Past {@link MAX_DEPTH} or on a cycle it
  * substitutes `message` for the offending subtree (already the suppression
- * sentinel, so the placeholder is consistent with the rest of the output).
+ * sentinel, so the placeholder is consistent with the rest of the output). A
+ * recognised block collapses BEFORE either guard and recurses no further, so it
+ * is subject to neither; a truncated subtree that is not itself a block is
+ * still replaced by the bare string, block position or not.
  * @param {any} value
  * @param {string} message
  * @returns {any}
@@ -1113,77 +1116,135 @@ export function suppressToolOutput(value, message) {
 }
 
 /**
- * Own-key schema of every Anthropic content block the suppressor recognises,
- * from the Messages API request shapes
- * (https://docs.claude.com/en/api/messages). A block is recognised only when
- * its own keys match its tag's schema exactly — every `required` key present,
- * no key outside `required` ∪ `optional` ∪ `type`. An unrecognised object is
- * walked as ordinary data, so a schema entry that is wrong or missing costs a
- * false NEGATIVE (the leaf-wise walk) rather than collapsing a legitimate
- * object that merely carries a `type` field.
- * @type {Map<string, { required: string[], optional: string[] }>}
+ * @typedef {(v: any) => boolean} FieldShape  a content-block field's value test
+ * @typedef {{ required: Record<string, FieldShape>, optional: Record<string, FieldShape> }} BlockSchema
  */
-const CONTENT_BLOCK_SCHEMAS = new Map([
-  ["text", { required: ["text"], optional: ["citations", "cache_control"] }],
-  ["image", { required: ["source"], optional: ["cache_control"] }],
+
+/** @type {FieldShape} */
+const isString = (v) => typeof v === "string";
+/** @type {FieldShape} */
+const isRecord = (v) =>
+  v !== null && typeof v === "object" && !Array.isArray(v);
+/** @type {FieldShape} */
+const isNullableString = (v) => v === null || isString(v);
+/** @type {FieldShape} */
+const isNullableArray = (v) => v === null || Array.isArray(v);
+// The API marks every optional object-valued block field nullable, and an
+// explicit null must not push the block back onto the walk that invalidates it.
+/** @type {FieldShape} */
+const isNullableRecord = (v) => v === null || isRecord(v);
+/** @type {FieldShape} */
+const isArray = (v) => Array.isArray(v);
+
+/**
+ * Schema of every Anthropic content block the suppressor recognises, from the
+ * Messages API block shapes (https://docs.claude.com/en/api/messages). A block
+ * is recognised only when its own keys match its tag's schema exactly — every
+ * `required` key present, no key outside `required` ∪ `optional` ∪ `type` —
+ * AND every present key's VALUE satisfies its predicate. Gating on the value's
+ * shape and not the key name alone is what keeps an ordinary record like
+ * `{ type: "image", source: "https://…/x.png" }` out: a real image block's
+ * `source` is an object. An unrecognised object is walked as ordinary data.
+ *
+ * Both directions cost something, and they are not symmetric in the way the
+ * rest of this module's precision rule assumes. Too LOOSE mangles an object
+ * that was never a block. Too STRICT is fail-safe only for those same
+ * non-blocks: for a REAL block it sends the walk over the `type` tag, which is
+ * the permanently-rejected block this collapse exists to prevent. So a
+ * predicate must admit every value the API admits — hence the nullable
+ * variants below, since every optional object-valued field is `object | null`.
+ *
+ * A block whose tag PAIRS it with another block (`tool_use` ↔ `tool_result`,
+ * and their server-tool twins) is deliberately absent: collapsing one to a text
+ * block orphans its partner, which the API rejects exactly as permanently as
+ * the rewritten tag this collapse exists to prevent. They keep the walk.
+ *
+ * Held as an entry list rather than annotated on the `new Map(...)` below
+ * because only the element-wise annotation typechecks: annotating the map lets
+ * tsc union the entry literals first, and that union's `source?: undefined`
+ * members fail `BlockSchema`'s index signature.
+ * @type {[string, BlockSchema][]}
+ */
+const CONTENT_BLOCK_SCHEMA_ENTRIES = [
+  [
+    "text",
+    {
+      required: { text: isString },
+      // A response's text block carries `citations` as an array (or null); a
+      // request's carries none.
+      optional: { citations: isNullableArray, cache_control: isNullableRecord },
+    },
+  ],
+  [
+    "image",
+    {
+      required: { source: isRecord },
+      optional: { cache_control: isNullableRecord },
+    },
+  ],
   [
     "document",
     {
-      required: ["source"],
-      optional: ["title", "context", "citations", "cache_control"],
+      required: { source: isRecord },
+      // A document's `citations` is the `{ enabled }` toggle, not a list.
+      optional: {
+        title: isNullableString,
+        context: isNullableString,
+        citations: isNullableRecord,
+        cache_control: isNullableRecord,
+      },
     },
   ],
   [
     "search_result",
     {
-      required: ["source", "title", "content"],
-      optional: ["citations", "cache_control"],
-    },
-  ],
-  ["thinking", { required: ["thinking", "signature"], optional: [] }],
-  ["redacted_thinking", { required: ["data"], optional: [] }],
-  [
-    "tool_use",
-    { required: ["id", "name", "input"], optional: ["cache_control"] },
-  ],
-  [
-    "server_tool_use",
-    { required: ["id", "name", "input"], optional: ["cache_control"] },
-  ],
-  [
-    "tool_result",
-    {
-      required: ["tool_use_id"],
-      optional: ["content", "is_error", "cache_control"],
+      required: { source: isString, title: isString, content: isArray },
+      optional: {
+        citations: isNullableRecord,
+        cache_control: isNullableRecord,
+      },
     },
   ],
   [
-    "web_search_tool_result",
-    { required: ["tool_use_id", "content"], optional: ["cache_control"] },
+    "thinking",
+    { required: { thinking: isString, signature: isString }, optional: {} },
   ],
-]);
+  ["redacted_thinking", { required: { data: isString }, optional: {} }],
+];
+
+/** Tag → schema, keyed for {@link isContentBlock}'s lookup. */
+const CONTENT_BLOCK_SCHEMAS = new Map(CONTENT_BLOCK_SCHEMA_ENTRIES);
 
 /**
  * Whether `value` (already known to be a walkable container) is an Anthropic
  * content block — an object whose `type` tag names a known block shape AND
- * whose own keys match that shape exactly.
+ * whose own keys and values match that shape exactly.
  * @param {any} value
  * @returns {boolean}
  */
 function isContentBlock(value) {
+  // An array with own `type`/`text` properties still occupies an array
+  // position, where a block may not be substituted for the array itself.
   if (Array.isArray(value)) return false;
-  const keys = Object.keys(value);
-  if (!keys.includes("type")) return false;
   const schema = CONTENT_BLOCK_SCHEMAS.get(value.type);
-  if (schema === undefined) return false;
+  // The own-key check is what blocks a polluted `Object.prototype.type`: the
+  // `value.type` read above resolves through the prototype, so without it
+  // `{ text: "leak" }` would tag itself a text block and be collapsed, dropping
+  // a legitimate field on the fail-closed path.
+  if (schema === undefined || !Object.hasOwn(value, "type")) return false;
+  // Object.hasOwn, not a bare index: a bare lookup resolves inherited
+  // Object.prototype members ("toString", "constructor") to real functions,
+  // letting a key outside the schema pass as if it had a predicate.
+  const isValidField = (/** @type {string} */ key) => {
+    if (Object.hasOwn(schema.required, key))
+      return schema.required[key](value[key]);
+    if (Object.hasOwn(schema.optional, key))
+      return schema.optional[key](value[key]);
+    return false;
+  };
   return (
-    schema.required.every((key) => keys.includes(key)) &&
-    keys.every(
-      (key) =>
-        key === "type" ||
-        schema.required.includes(key) ||
-        schema.optional.includes(key),
-    )
+    Object.keys(schema.required).every((key) => Object.hasOwn(value, key)) &&
+    Object.keys(value).every((key) => key === "type" || isValidField(key))
   );
 }
 
@@ -1205,12 +1266,9 @@ function suppressAt(value, message, depth, seen, memo) {
   // Same opaque-leaf rule as sanitizeValueAt: only arrays and plain objects are
   // walked; an exotic object would be corrupted to an empty clone.
   if (!isWalkableContainer(value)) return value;
-  // A content block's `type` tag tells the API how to parse the block, and the
-  // tagged unions under it (`citations[]`, `source`, `cache_control`) are
-  // validated the same way — so walking a block's keys yields one the API
-  // rejects with a 400, permanently: it stays in the transcript and replays on
-  // every later turn. Collapse to the one block shape `message` is legal in.
-  // Only the enum-valued tag survives, never a string from the block itself.
+  // Walking a block's keys rewrites its `type` tag and the tagged unions under
+  // it, yielding a block the API rejects with a 400 that then replays on every
+  // later turn. Collapse to the one block shape `message` is legal in.
   if (isContentBlock(value)) return { type: "text", text: message };
   const cached = memo.get(value, depth);
   if (cached !== undefined) return cached;
