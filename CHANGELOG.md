@@ -8,6 +8,17 @@ adhere to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+## [2.57.4] - 2026-09-05
+
+### Fixed
+
+- Manifest refresh now validates against the branch tip and rejects PR-side edits to prevent unintended modifications.
+- Manifest refresh is now guarded in repositories that do not ship plugins, preventing errors in such configurations.
+
+### Changed
+
+- Hook-binary digest manifest refresh now occurs on main branch instead of per-PR, improving release workflow efficiency.
+
 ## [2.57.3] - 2026-09-05
 
 ### Fixed
