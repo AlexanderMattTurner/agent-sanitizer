@@ -14,6 +14,7 @@ import { describe, it, before, after } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import {
+  existsSync,
   mkdirSync,
   mkdtempSync,
   realpathSync,
@@ -45,9 +46,12 @@ const plain = mkdtempSync(join(tmpdir(), "sanitizer-repo-scope-nogit-"));
 // in PHYSICAL paths whatever spelling the scan root was reached through.
 const linkParent = mkdtempSync(join(tmpdir(), "sanitizer-repo-scope-link-"));
 const linked = join(linkParent, "checkout");
+// Its own repo: `core.fsmonitor` below would otherwise run for every other
+// case's git call too.
+const hostile = mkdtempSync(join(tmpdir(), "sanitizer-repo-scope-hostile-"));
 
 after(() => {
-  for (const path of [root, plain, linkParent])
+  for (const path of [root, plain, linkParent, hostile])
     rmSync(path, { recursive: true, force: true });
 });
 
@@ -293,6 +297,68 @@ describe("parseWorktreeList", () => {
         ]),
       ),
       ["/repo/odd\nname"],
+    );
+  });
+});
+
+describe("the git query in a hostile checkout", () => {
+  // The scanned directory is the untrusted party, and `core.fsmonitor` is a
+  // COMMAND git runs to refresh the index — a planted `.git/config` would turn
+  // "scan this checkout for hidden-Unicode payloads" into code execution.
+  // `safe.directory` does not cover it: the config is owned by this same uid.
+  const LS_FILES = [
+    "ls-files",
+    "-o",
+    "-i",
+    "--directory",
+    "--exclude-standard",
+    "-z",
+  ];
+  const marker = () => join(hostile, "fsmonitor.sh.executed");
+
+  before(() => {
+    git(["init", "--quiet", "--initial-branch=main"], hostile);
+    git(["config", "user.email", "test@example.invalid"], hostile);
+    git(["config", "user.name", "Test"], hostile);
+    writeFileSync(join(hostile, ".gitignore"), "ignored/\n");
+    write(hostile, "ignored/CLAUDE.md");
+    git(["add", "-A"], hostile);
+    git(["commit", "--quiet", "-m", "seed"], hostile);
+    // Answers the v1 fsmonitor protocol (a trust marker, then a NUL-terminated
+    // path list) so git accepts the reply and this stays a test about WHETHER
+    // the command runs.
+    const hook = join(hostile, "fsmonitor.sh");
+    writeFileSync(
+      hook,
+      [
+        "#!/bin/sh",
+        'touch "$0.executed"',
+        'printf "/"',
+        'printf "\\000"',
+        "",
+      ].join("\n"),
+      { mode: 0o755 },
+    );
+    git(["config", "core.fsmonitor", hook], hostile);
+  });
+
+  // Non-vacuity, and the load-bearing half: an unpinned query DOES run it, so
+  // this suite fails loudly if git ever stops consulting the value rather than
+  // letting the guard below pass for the wrong reason.
+  it("would run it without the pin", () => {
+    rmSync(marker(), { force: true });
+    git(LS_FILES, hostile);
+    assert.equal(existsSync(marker()), true);
+  });
+
+  it("never runs it through the prune's own git", () => {
+    rmSync(marker(), { force: true });
+    // No injected `run`: this is the real runGit, which is where the pin lives.
+    assert.deepEqual([...repoPrunedDirs(hostile)], ["ignored"]);
+    assert.equal(
+      existsSync(marker()),
+      false,
+      "the scanned repo's core.fsmonitor command ran",
     );
   });
 });

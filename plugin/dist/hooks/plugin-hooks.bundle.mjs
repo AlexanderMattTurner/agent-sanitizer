@@ -47287,7 +47287,7 @@ var init_repo_scope = __esm({
     init_claude_context();
     GIT_TIMEOUT_MS = 1e4;
     GIT_MAX_BUFFER = 32 * 1024 * 1024;
-    runGit = (file, args, cwd) => execFileSync(file, args, {
+    runGit = (file, args, cwd) => execFileSync(file, ["-c", "core.fsmonitor=false", ...args], {
       cwd,
       encoding: "utf8",
       stdio: ["ignore", "pipe", "ignore"],

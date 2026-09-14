@@ -438,6 +438,13 @@ tool call — whereas anything the whole-tree walk skips is still scanned by
 never pruned in either walk: `CLAUDE.local.md` is gitignored by convention and
 loads as model context at launch.
 
+Asking git costs a subprocess inside the directory being scanned, and that
+directory is the untrusted party here — git reads its `.git/config`, and
+`ls-files` runs `core.fsmonitor` as a command to refresh the index, which
+`safe.directory` does not cover for a planted config owned by the same uid.
+`runGit` pins `core.fsmonitor=false` on every query so a scan of a hostile
+checkout cannot become code execution.
+
 The lazy half cannot block: the file is already in context when it fires, so its
 neutralization is to strip the payload from disk (so no reload re-reads it) and
 tell the model to treat what it just read as untrusted data. Auto-cleaning is

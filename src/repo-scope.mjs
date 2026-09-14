@@ -38,10 +38,16 @@ const GIT_MAX_BUFFER = 32 * 1024 * 1024;
  * The default {@link GitRun}: git's stdout, with its stderr dropped so a
  * dubious-ownership complaint never lands in the operator's terminal from a
  * scan that recovers from it anyway.
+ *
+ * `core.fsmonitor=false` is a security pin, not a tuning knob: the scanned
+ * checkout is the untrusted party here, `ls-files` runs that config value as a
+ * COMMAND to refresh the index, and `safe.directory` does not cover a planted
+ * `.git/config` owned by the same uid. Without it, "scan this directory for
+ * hidden-Unicode payloads" is arbitrary code execution.
  * @type {GitRun}
  */
 const runGit = (file, args, cwd) =>
-  execFileSync(file, args, {
+  execFileSync(file, ["-c", "core.fsmonitor=false", ...args], {
     cwd,
     encoding: "utf8",
     stdio: ["ignore", "pipe", "ignore"],
