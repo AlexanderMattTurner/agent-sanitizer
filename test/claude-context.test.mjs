@@ -88,8 +88,12 @@ describe("the exported Claude Code context scope", () => {
 
   it("judges bare names and root-relative paths alike", () => {
     assert.equal(excludeFromContextScan("node_modules"), true);
-    // A bare directory name carries no `.claude` context, so it is judged only
-    // against node_modules — a walker hands both forms to the same predicate.
+    // A workspace package's dependency tree is the same dependency tree, and it
+    // only ever reaches the predicate as a nested path.
+    assert.equal(excludeFromContextScan("packages/a/node_modules"), true);
+    assert.equal(excludeFromContextScan("src/node_modules_notes"), false);
+    // A top-level directory name carries no `.claude` context, so it is judged
+    // only against node_modules.
     assert.equal(excludeFromContextScan("worktrees"), false);
     assert.equal(excludeFromContextScan(".claude/worktrees"), true);
     assert.equal(excludeFromContextScan(".claude"), false);

@@ -15,7 +15,8 @@
  * Claude Code's own convention is re-exported below
  * ({@link CLAUDE_INSTRUCTION_GLOBS} for a whole tree,
  * {@link CLAUDE_LAUNCH_GLOBS} + {@link ancestorInstructionFiles} for just what a
- * session loads at launch, {@link excludeFromContextScan} to prune either walk)
+ * session loads at launch, {@link contextScanExclude} to prune either walk down
+ * to what git says is this checkout's own source)
  * so a caller that wants it takes the hooks' exact scope rather than
  * approximating it — see ./claude-context.mjs.
  */
@@ -62,6 +63,12 @@ export {
   excludeFromContextScan,
   USER_GLOBAL_EVENT_NAMED_GLOBS,
 } from "./claude-context.mjs";
+
+// The prune a caller should actually pass: the static scope above, plus the
+// directories git says are not this checkout's source. `excludeFromContextScan`
+// stays exported as the static half alone, for a caller with no repository to
+// ask.
+export { contextScanExclude } from "./repo-scope.mjs";
 
 // Prefix on any decoded tag-character payload. The decoded text is
 // attacker-controlled and flows into the scan report, which itself reaches model
@@ -337,6 +344,37 @@ function keepContained(absPath, realRoot, literalRoot, pattern) {
 }
 
 /**
+ * Every `globs` match under `cwd`, as an absolute path, with `node_modules` and
+ * whatever `exclude` rejects pruned from the WALK rather than filtered from its
+ * results — which is where a wide glob's cost actually is.
+ *
+ * `withFileTypes` is what makes the prune ANSWERABLE. Without it the walker
+ * calls `exclude` once with an entry's bare name and again with its
+ * root-relative path, so a predicate holding `build` cannot tell a top-level
+ * `build/` from a tracked `src/build/` and prunes both; under an absolute
+ * pattern it is handed absolute paths and matches neither. A Dirent carries an
+ * absolute `parentPath`, which normalizes to exactly one root-relative,
+ * `/`-separated entry per walked directory whatever shape the pattern has.
+ * @param {string[]} globs
+ * @param {string} cwd
+ * @param {(entry: string) => boolean} [exclude]
+ * @returns {string[]} absolute paths, one match per element
+ */
+export function walkContextGlobs(globs, cwd, exclude) {
+  const root = resolve(cwd);
+  /** @param {import("node:fs").Dirent} dirent @returns {string} */
+  const absolute = (dirent) => join(dirent.parentPath, dirent.name);
+  return globSync(globs, {
+    cwd,
+    withFileTypes: true,
+    exclude: (dirent) => {
+      const entry = relative(root, absolute(dirent)).split(sep).join("/");
+      return excludeNodeModules(entry) || (exclude?.(entry) ?? false);
+    },
+  }).map(absolute);
+}
+
+/**
  * Expand `globs` (relative to `cwd`) to absolute file paths, skipping
  * `node_modules`. The glob set is the caller's instruction-file convention.
  *
@@ -349,11 +387,11 @@ function keepContained(absPath, realRoot, literalRoot, pattern) {
  * tree), is SKIPPED, so one bad symlink never aborts scanning the rest of the
  * project.
  *
- * `exclude` prunes the WALK, which is where a wide glob's cost actually is —
- * a pattern that merely fails to match a bulk directory still pays to read it.
- * It is composed with, never replaces, the unconditional `node_modules` prune:
- * a caller narrowing the scan must not be able to widen it into a dependency
- * tree. Pass {@link excludeFromContextScan} to take Claude Code's own scope.
+ * `exclude` prunes the walk via {@link walkContextGlobs}, so it is handed one
+ * root-relative, `/`-separated path per entry. It is composed with, never
+ * replaces, the unconditional `node_modules` prune: a caller narrowing the scan
+ * must not be able to widen it into a dependency tree. Pass
+ * {@link excludeFromContextScan} to take Claude Code's own scope.
  * @param {string[]} globs
  * @param {{ cwd?: string, exclude?: (entry: string) => boolean }} [options]
  * @returns {string[]}
@@ -365,19 +403,12 @@ export function findInstructionFiles(
   const literalRoot = resolve(cwd);
   const realRoot = realpathSync(literalRoot);
   const seen = new Set();
+  // One pattern at a time, so a containment failure can name the glob that
+  // reached outside the tree.
   for (const pattern of globs)
-    for (const name of globSync(pattern, {
-      cwd,
-      exclude: (entry) =>
-        excludeNodeModules(entry) || (exclude?.(entry) ?? false),
-    })) {
-      // globSync returns absolute paths verbatim for an absolute pattern and
-      // cwd-relative names otherwise; joining an already-absolute name would
-      // double the prefix into a nonexistent path (the absolute-glob miss bug).
-      const absPath = isAbsolute(name) ? name : join(cwd, name);
+    for (const absPath of walkContextGlobs([pattern], cwd, exclude))
       if (keepContained(absPath, realRoot, literalRoot, pattern))
         seen.add(absPath);
-    }
   return [...seen];
 }
 

@@ -104,6 +104,8 @@ const FUZZ_EXEMPT = Object.freeze({
   announcedByInstructionsLoaded:
     "splits one path on its separators and looks the tail up in the kind table",
   closingTagName: "reads one tag name out of an already-tokenized HTML value",
+  contextScanExclude:
+    "composes excludeFromContextScan with a set of paths git listed; its one parse, the NUL-delimited listing, is pinned by the quoted-directory case in repo-scope.test.mjs",
   contextScopeContradiction:
     "maps a host-supplied load reason through a table, with no parse",
   excludeFromContextScan: "path-prefix predicate over one scan entry name",
@@ -136,6 +138,8 @@ const FUZZ_EXEMPT = Object.freeze({
   cleanFile: "reads a file and delegates the parse to scanText",
   findInstructionFiles: "enumerates paths and reads no file content",
   scanInstructionFiles: "reads files and delegates the parse to scanText",
+  walkContextGlobs:
+    "expands globs and normalizes each walked entry to a relative path; it parses nothing of its own",
 
   // ── compositions and views fuzzed through the entry point above them ─────
   applyLayer1:

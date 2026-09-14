@@ -222,11 +222,15 @@ export function isInsideDir(dir, file) {
  * The one directory no instruction-file walk ever descends into. Its own
  * function so the name is spelled once, and so the two predicates that need it
  * (a plain glob walk, and {@link excludeFromContextScan}) cannot disagree.
- * @param {string} entry  a bare entry name or a path relative to the scan root
+ *
+ * The LAST segment is what it reads: a dependency tree nested under a workspace
+ * package is the same dependency tree, and an entry naming one arrives as the
+ * path `packages/a/node_modules`, never as a bare name.
+ * @param {string} entry  a path relative to the scan root, `/`-separated
  * @returns {boolean}
  */
 export function excludeNodeModules(entry) {
-  return entry === "node_modules";
+  return entry.split(/[/\\]/).at(-1) === "node_modules";
 }
 
 // The path segments below one `.claude` directory in `path`, or null when it
@@ -256,10 +260,10 @@ function claudeTail(path, which) {
  * context: a doubled-star segment does cross into a dot directory when the
  * pattern names one.
  *
- * A walker calls this with both bare names and root-relative paths, so it must
- * answer for either; a bare name carries no `.claude` context and is judged only
- * against `node_modules`.
- * @param {string} entry  a bare entry name or a path relative to the scan root
+ * Entries are paths relative to the scan root, so a top-level one is a bare
+ * name: it carries no `.claude` context and is judged only against
+ * `node_modules`.
+ * @param {string} entry  a path relative to the scan root, `/`-separated
  * @returns {boolean}
  */
 export function excludeFromContextScan(entry) {
