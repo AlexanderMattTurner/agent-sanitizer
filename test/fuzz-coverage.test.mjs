@@ -104,6 +104,8 @@ const FUZZ_EXEMPT = Object.freeze({
   announcedByInstructionsLoaded:
     "splits one path on its separators and looks the tail up in the kind table",
   closingTagName: "reads one tag name out of an already-tokenized HTML value",
+  contextScanExclude:
+    "composes excludeFromContextScan with a set of paths git listed; its one parse, the NUL-delimited listing, is pinned by the quoted-directory case in repo-scope.test.mjs",
   contextScopeContradiction:
     "maps a host-supplied load reason through a table, with no parse",
   excludeFromContextScan: "path-prefix predicate over one scan entry name",

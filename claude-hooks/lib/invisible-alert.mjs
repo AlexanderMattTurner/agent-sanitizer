@@ -42,9 +42,9 @@ import {
   ancestorInstructionFiles,
   announcedByInstructionsLoaded,
   CLAUDE_LAUNCH_GLOBS,
-  excludeFromContextScan,
   USER_GLOBAL_EVENT_NAMED_GLOBS,
 } from "../../src/claude-context.mjs";
+import { contextScanExclude } from "../../src/repo-scope.mjs";
 
 // Layer-1 scrubber for the untrusted alert-store contents the gate splices into a
 // permissionDecisionReason. The WELL-FORMED composition, not the bare applyLayer1:
@@ -361,7 +361,10 @@ export function launchInstructionFiles(dir) {
   return [
     ...globSync([...CLAUDE_LAUNCH_GLOBS], {
       cwd: dir,
-      exclude: excludeFromContextScan,
+      // This walk is the only thing covering launch-time ingress — nothing
+      // rescans what it skips — so it takes the posture that refuses to let a
+      // repo's own `.gitignore` narrow it (see contextScanExclude).
+      exclude: contextScanExclude(dir, { ignoredDirs: false }),
     }).map((name) => join(dir, name)),
     // Filtered, unlike the glob's matches: almost every parent directory holds
     // neither memory file, so the unfiltered chain would file ~10 phantom
@@ -437,7 +440,7 @@ function userGlobalLaunchHasContent(env = process.env) {
   return anyFileHasBytes(
     globSync([...USER_GLOBAL_EVENT_NAMED_GLOBS], {
       cwd: configDir,
-      exclude: excludeFromContextScan,
+      exclude: contextScanExclude(configDir, { ignoredDirs: false }),
     }).map((name) => join(configDir, name)),
   );
 }

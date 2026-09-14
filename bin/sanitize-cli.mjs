@@ -18,6 +18,8 @@
  *   sanitizeText       { text, html?, exfilScan?, flagDigestValues? } -> { cleaned, warnings, notes, modified, sgrNote }
  *   classifyPrompt     { text }                    -> { action, reason? }
  *   scanInstructionFiles { globs, cwd? }           -> { findings: [{ file, findings }] }
+ *     Skips `node_modules`, the directories git ignores wholesale, and any
+ *     nested worktree — none of them is the scanned checkout's own source.
  *   cleanFile          { path }                    -> { changed }
  *
  * A failure response is `{ "error": string }`. Two modes, same binary:
@@ -170,9 +172,18 @@ export const OPS = {
     // (matches the fail-loud contract every other typed field here follows).
     if ("cwd" in req && typeof req.cwd !== "string")
       throw new Error("request.cwd must be a string");
-    const { scanInstructionFiles } = await import("../src/instructions.mjs");
-    const opts = typeof req.cwd === "string" ? { cwd: req.cwd } : {};
-    return { findings: scanInstructionFiles(globs, opts) };
+    const { contextScanExclude, scanInstructionFiles } =
+      await import("../src/instructions.mjs");
+    const cwd = typeof req.cwd === "string" ? req.cwd : process.cwd();
+    // Whole-tree scope: a gitignored build directory and a nested worktree are
+    // not this checkout's source, so a finding from one names a file the caller
+    // does not own — and `cleanFile` would rewrite it.
+    return {
+      findings: scanInstructionFiles(globs, {
+        cwd,
+        exclude: contextScanExclude(cwd),
+      }),
+    };
   },
 
   /** @param {Record<string, unknown>} req */

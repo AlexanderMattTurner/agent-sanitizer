@@ -29,6 +29,7 @@
 import { execFileSync } from "node:child_process";
 
 import { errMessage, isMain, readStdinJson } from "./lib-hook-io.mjs";
+import { linkedWorktrees } from "../../src/repo-scope.mjs";
 
 /**
  * Coarse text test for whether the payload is worth asking git about. It only
@@ -36,29 +37,6 @@ import { errMessage, isMain, readStdinJson } from "./lib-hook-io.mjs";
  * false positive here costs one `git worktree list` and produces no finding.
  */
 const REMOVE_RE = /\bgit\b[^\n]*\bworktree\b[^\n]*\bremove\b/;
-
-/**
- * Linked worktrees of the repo at `cwd`, main and bare ones excluded — those are
- * not removable, so their state is never at risk from this command.
- * @param {string} cwd
- * @param {(file: string, args: string[], cwd: string) => string} run
- * @returns {string[]} absolute worktree paths
- */
-export function linkedWorktrees(cwd, run) {
-  const records = run("git", ["worktree", "list", "--porcelain"], cwd).split(
-    "\n\n",
-  );
-  const paths = [];
-  // The first record is always the main worktree; `bare` marks a bare repo's.
-  // `prunable` marks one whose directory is already gone — it holds no work to
-  // lose, and asking git for its status would only spawn into a missing cwd.
-  for (const record of records.slice(1)) {
-    if (/^bare$/m.test(record) || /^prunable\b/m.test(record)) continue;
-    const line = record.split("\n").find((l) => l.startsWith("worktree "));
-    if (line) paths.push(line.slice("worktree ".length));
-  }
-  return paths;
-}
 
 /**
  * The worktrees among `paths` that hold uncommitted work, with a count of the

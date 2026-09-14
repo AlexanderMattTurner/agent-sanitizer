@@ -427,6 +427,17 @@ context KINDS, each row naming what loads it and when.
   sanitizer when a tool reads one. Covering those eagerly means the whole-tree
   walk at session start that this split exists to remove.
 
+Both walks skip what git says is not the checkout's own source: `node_modules`,
+the non-context children of a `.claude/` directory, and every nested worktree
+(`contextScanExclude`, `src/repo-scope.mjs`). The whole-tree walk also skips the
+directories git ignores wholesale; **the launch walk deliberately does not**.
+`.gitignore` is repo-controlled, so honouring it there would let a repo hide a
+planted `.claude/skills/…/SKILL.md` from the one scan that runs before the first
+tool call — whereas anything the whole-tree walk skips is still scanned by
+`scan-loaded-instructions` at the moment the host loads it. Ignored FILES are
+never pruned in either walk: `CLAUDE.local.md` is gitignored by convention and
+loads as model context at launch.
+
 The lazy half cannot block: the file is already in context when it fires, so its
 neutralization is to strip the payload from disk (so no reload re-reads it) and
 tell the model to treat what it just read as untrusted data. Auto-cleaning is

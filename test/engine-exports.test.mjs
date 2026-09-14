@@ -160,6 +160,7 @@ const PUBLISHED_EXPORTS = {
     "announcedByInstructionsLoaded",
     "atomicReplaceFile",
     "cleanFile",
+    "contextScanExclude",
     "contextScopeContradiction",
     "decodeRun",
     "excludeFromContextScan",

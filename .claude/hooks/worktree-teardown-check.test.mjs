@@ -14,11 +14,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, it } from "node:test";
 
-import {
-  dirtyWorktrees,
-  judgeTeardown,
-  linkedWorktrees,
-} from "./worktree-teardown-check.mjs";
+import { dirtyWorktrees, judgeTeardown } from "./worktree-teardown-check.mjs";
+import { linkedWorktrees } from "../../src/repo-scope.mjs";
 import { cleanGitEnv } from "../../test/helpers/git-env.mjs";
 
 /** Payload shape Claude Code hands a PreToolUse hook. */

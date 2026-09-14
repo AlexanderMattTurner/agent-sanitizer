@@ -15,7 +15,8 @@
  * Claude Code's own convention is re-exported below
  * ({@link CLAUDE_INSTRUCTION_GLOBS} for a whole tree,
  * {@link CLAUDE_LAUNCH_GLOBS} + {@link ancestorInstructionFiles} for just what a
- * session loads at launch, {@link excludeFromContextScan} to prune either walk)
+ * session loads at launch, {@link contextScanExclude} to prune either walk down
+ * to what git says is this checkout's own source)
  * so a caller that wants it takes the hooks' exact scope rather than
  * approximating it — see ./claude-context.mjs.
  */
@@ -62,6 +63,12 @@ export {
   excludeFromContextScan,
   USER_GLOBAL_EVENT_NAMED_GLOBS,
 } from "./claude-context.mjs";
+
+// The prune a caller should actually pass: the static scope above, plus the
+// directories git says are not this checkout's source. `excludeFromContextScan`
+// stays exported as the static half alone, for a caller with no repository to
+// ask.
+export { contextScanExclude } from "./repo-scope.mjs";
 
 // Prefix on any decoded tag-character payload. The decoded text is
 // attacker-controlled and flows into the scan report, which itself reaches model
