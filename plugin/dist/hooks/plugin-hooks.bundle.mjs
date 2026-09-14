@@ -45862,6 +45862,14 @@ function sanitizeHtml(text5) {
     splices: spliced.pairs
   };
 }
+function isRelativeUrl(url) {
+  try {
+    new URL(url);
+    return false;
+  } catch {
+    return true;
+  }
+}
 function hasUpperAndDigit(value) {
   return /[A-Z]/.test(value) && /[0-9]/.test(value);
 }
@@ -46008,7 +46016,7 @@ function urlHost(url) {
   } catch {
     return "(unparsable URL)";
   }
-  if (parsed.origin === RELATIVE_URL_BASE && !url.startsWith(RELATIVE_URL_BASE)) {
+  if (parsed.origin === RELATIVE_URL_BASE && isRelativeUrl(url)) {
     return "(relative URL)";
   }
   return parsed.host;
@@ -46020,7 +46028,7 @@ function isOffOrigin(url) {
   } catch {
     return false;
   }
-  return parsed.origin !== RELATIVE_URL_BASE || url.startsWith(RELATIVE_URL_BASE);
+  return parsed.origin !== RELATIVE_URL_BASE || !isRelativeUrl(url);
 }
 function metaRefreshUrl(content3) {
   const match = (

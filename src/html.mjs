@@ -2392,6 +2392,20 @@ const SCRIPT_URI_RE = /^\s*(?:javascript|vbscript):/i;
 
 const RELATIVE_URL_BASE = "http://relative.invalid";
 
+/**
+ * True when url has no scheme+authority and can only be parsed against a base.
+ * @param {string} url
+ * @returns {boolean}
+ */
+function isRelativeUrl(url) {
+  try {
+    new URL(url);
+    return false;
+  } catch {
+    return true;
+  }
+}
+
 // Parameter NAMES that legitimately carry a LONG opaque (base64/hex) value, so
 // a blob in one of them is NOT exfil: CDN request-signing (AWS SigV4 /
 // CloudFront `X-Amz-*`/`Signature`/`Policy`/`Key-Pair-Id`, GCS `X-Goog-*`,
@@ -2947,10 +2961,7 @@ export function urlHost(url) {
     // WHATWG rejects (e.g. a non-ASCII host).
     return "(unparsable URL)";
   }
-  if (
-    parsed.origin === RELATIVE_URL_BASE &&
-    !url.startsWith(RELATIVE_URL_BASE)
-  ) {
+  if (parsed.origin === RELATIVE_URL_BASE && isRelativeUrl(url)) {
     return "(relative URL)";
   }
   return parsed.host;
@@ -2971,9 +2982,7 @@ function isOffOrigin(url) {
   } catch {
     return false;
   }
-  return (
-    parsed.origin !== RELATIVE_URL_BASE || url.startsWith(RELATIVE_URL_BASE)
-  );
+  return parsed.origin !== RELATIVE_URL_BASE || !isRelativeUrl(url);
 }
 
 /**
