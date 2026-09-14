@@ -138,6 +138,8 @@ const FUZZ_EXEMPT = Object.freeze({
   cleanFile: "reads a file and delegates the parse to scanText",
   findInstructionFiles: "enumerates paths and reads no file content",
   scanInstructionFiles: "reads files and delegates the parse to scanText",
+  walkContextGlobs:
+    "expands globs and normalizes each walked entry to a relative path; it parses nothing of its own",
 
   // ── compositions and views fuzzed through the entry point above them ─────
   applyLayer1:

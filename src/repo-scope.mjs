@@ -17,7 +17,8 @@
  * with no filesystem of its own.
  */
 import { execFileSync } from "node:child_process";
-import { relative, resolve } from "node:path";
+import { realpathSync } from "node:fs";
+import { relative, resolve, sep } from "node:path";
 
 import { excludeFromContextScan, isInsideDir } from "./claude-context.mjs";
 
@@ -73,23 +74,46 @@ function askGit(run, args, dir) {
   }
 }
 
+// `-z` because the newline-framed form cannot represent a worktree whose path
+// contains a newline: the record truncates mid-path, and both readers below
+// then name a directory that does not exist. It needs git >= 2.36, and an
+// older git rejects the flag rather than mis-answering — the prune degrades
+// through askGit to its wider pre-prune scope, and the teardown guard reaches
+// its own entrypoint catch.
+const WORKTREE_LIST_ARGS = Object.freeze([
+  "worktree",
+  "list",
+  "--porcelain",
+  "-z",
+]);
+
 /**
- * The linked worktrees in a `git worktree list --porcelain` dump, main and bare
- * ones excluded — those are not removable, so their state is never at risk from
- * a teardown command, and the main one is the scan root a prune must never
+ * Whether `attrs` carries `name`, as a bare flag or with a value after it.
+ * @param {string[]} attrs @param {string} name @returns {boolean}
+ */
+const hasAttribute = (attrs, name) =>
+  attrs.some((attr) => attr === name || attr.startsWith(`${name} `));
+
+/**
+ * The linked worktrees in a `git worktree list --porcelain -z` dump, main and
+ * bare ones excluded — those are not removable, so their state is never at risk
+ * from a teardown command, and the main one is the scan root a prune must never
  * swallow.
  * @param {string} porcelain
  * @returns {string[]} absolute worktree paths
  */
 export function parseWorktreeList(porcelain) {
-  const records = porcelain.split("\n\n");
   const paths = [];
-  // The first record is always the main worktree; `bare` marks a bare repo's.
-  // `prunable` marks one whose directory is already gone — it holds no work to
-  // lose, and asking git for its status would only spawn into a missing cwd.
-  for (const record of records.slice(1)) {
-    if (/^bare$/m.test(record) || /^prunable\b/m.test(record)) continue;
-    const line = record.split("\n").find((l) => l.startsWith("worktree "));
+  // Attributes are NUL-TERMINATED and a record ends with the resulting empty
+  // attribute, so records split on a doubled NUL. The first is always the main
+  // worktree; `bare` marks a bare repo's. `prunable` marks one whose directory
+  // is already gone — it holds no work to lose, and asking git for its status
+  // would only spawn into a missing cwd.
+  for (const record of porcelain.split("\0\0").slice(1)) {
+    const attrs = record.split("\0");
+    if (hasAttribute(attrs, "bare") || hasAttribute(attrs, "prunable"))
+      continue;
+    const line = attrs.find((attr) => attr.startsWith("worktree "));
     if (line) paths.push(line.slice("worktree ".length));
   }
   return paths;
@@ -103,17 +127,7 @@ export function parseWorktreeList(porcelain) {
  * @returns {string[]} absolute worktree paths
  */
 export function linkedWorktrees(cwd, run) {
-  return parseWorktreeList(
-    run("git", ["worktree", "list", "--porcelain"], cwd),
-  );
-}
-
-/**
- * A path as the prune set spells it: `/`-separated, no trailing separator.
- * @param {string} path @returns {string}
- */
-function normalizeEntry(path) {
-  return path.split(/[/\\]/).filter(Boolean).join("/");
+  return parseWorktreeList(run("git", [...WORKTREE_LIST_ARGS], cwd));
 }
 
 /**
@@ -139,7 +153,7 @@ function ignoredDirectories(dir, run) {
   return out
     .split("\0")
     .filter((entry) => entry.endsWith("/"))
-    .map(normalizeEntry);
+    .map((entry) => entry.slice(0, -1));
 }
 
 /**
@@ -151,13 +165,18 @@ function ignoredDirectories(dir, run) {
  * @returns {string[]}
  */
 function nestedWorktrees(dir, run) {
-  const out = askGit(run, ["worktree", "list", "--porcelain"], dir);
+  const out = askGit(run, [...WORKTREE_LIST_ARGS], dir);
   if (out === null) return [];
-  const root = resolve(dir);
+  // git reports PHYSICAL paths, so a scan root reached through a symlink only
+  // ever matches once both sides are canonical. The relative tail it yields is
+  // valid under the literal spelling too, which is what the walker's entries
+  // are relative to. Asked after the git call so a missing `dir` still fails
+  // open through the spawn's ENOENT rather than throwing here.
+  const root = realpathSync(dir);
   return parseWorktreeList(out)
     .map((path) => resolve(path))
     .filter((path) => isInsideDir(root, path))
-    .map((path) => normalizeEntry(relative(root, path)));
+    .map((path) => relative(root, path).split(sep).join("/"));
 }
 
 // One prune set per scan root, because launchInstructionFiles runs on many tool
@@ -199,12 +218,17 @@ export function repoPrunedDirs(dir, { ignoredDirs = true, run } = {}) {
  * hostile repo hide a planted `.claude/skills/…/SKILL.md` from it by ignoring
  * that directory. The whole-tree scan can honour it because anything it prunes
  * is still scanned by scan-loaded-instructions at the moment the host loads it.
+ *
+ * The lookup is EXACT, so the walk must hand it the same spelling
+ * {@link repoPrunedDirs} uses — one root-relative, `/`-separated path per entry,
+ * which is what walkContextGlobs normalizes to. A predicate that accepted a bare
+ * name as well would prune a tracked `src/build/` for a top-level ignored
+ * `build/`, splicing real instruction files out of the scan.
  * @param {string} dir
  * @param {{ ignoredDirs?: boolean, run?: GitRun }} [options]
  * @returns {(entry: string) => boolean}
  */
 export function contextScanExclude(dir, options = {}) {
   const pruned = repoPrunedDirs(dir, options);
-  return (entry) =>
-    excludeFromContextScan(entry) || pruned.has(normalizeEntry(entry));
+  return (entry) => excludeFromContextScan(entry) || pruned.has(entry);
 }

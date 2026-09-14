@@ -17,6 +17,7 @@ import { describe, it } from "node:test";
 import { dirtyWorktrees, judgeTeardown } from "./worktree-teardown-check.mjs";
 import { linkedWorktrees } from "../../src/repo-scope.mjs";
 import { cleanGitEnv } from "../../test/helpers/git-env.mjs";
+import { worktreePorcelainZ } from "../../test/helpers/worktree-porcelain.mjs";
 
 /** Payload shape Claude Code hands a PreToolUse hook. */
 const bash = (command) => ({ tool_name: "Bash", tool_input: { command } });
@@ -37,11 +38,15 @@ function fakeGit(responses) {
   return { run, calls };
 }
 
-const WORKTREE_LIST = [
-  "worktree /repo\nHEAD abc\nbranch refs/heads/main\n",
-  "worktree /repo/.worktrees/feature\nHEAD def\nbranch refs/heads/feature\n",
-  "worktree /repo/.worktrees/spike\nHEAD 012\ndetached\n",
-].join("\n");
+const WORKTREE_LIST = worktreePorcelainZ([
+  ["worktree /repo", "HEAD abc", "branch refs/heads/main"],
+  [
+    "worktree /repo/.worktrees/feature",
+    "HEAD def",
+    "branch refs/heads/feature",
+  ],
+  ["worktree /repo/.worktrees/spike", "HEAD 012", "detached"],
+]);
 
 describe("linkedWorktrees", () => {
   it("lists the removable worktrees and excludes the main one", () => {
@@ -56,18 +61,39 @@ describe("linkedWorktrees", () => {
     // Its directory is gone, so it holds no work to lose, and asking git for its
     // status would only spawn into a missing cwd.
     const { run } = fakeGit({
-      "worktree list":
-        "worktree /repo\nHEAD abc\nbranch refs/heads/main\n\n" +
-        "worktree /repo/.worktrees/gone\nHEAD def\nprunable gitdir file points to non-existent location\n",
+      "worktree list": worktreePorcelainZ([
+        ["worktree /repo", "HEAD abc", "branch refs/heads/main"],
+        [
+          "worktree /repo/.worktrees/gone",
+          "HEAD def",
+          "prunable gitdir file points to non-existent location",
+        ],
+      ]),
     });
     assert.deepEqual(linkedWorktrees("/repo", run), []);
   });
 
   it("excludes a bare repo's record", () => {
     const { run } = fakeGit({
-      "worktree list": "worktree /repo\nbare\n\nworktree /repo/wt\nbare\n",
+      "worktree list": worktreePorcelainZ([
+        ["worktree /repo", "bare"],
+        ["worktree /repo/wt", "bare"],
+      ]),
     });
     assert.deepEqual(linkedWorktrees("/repo", run), []);
+  });
+
+  it("keeps a worktree whose path contains a newline whole", () => {
+    // The framing this `-z` parser exists for: under the newline-framed form
+    // the record would truncate mid-path and the guard would check — or the
+    // prune would name — a directory that does not exist.
+    const { run } = fakeGit({
+      "worktree list": worktreePorcelainZ([
+        ["worktree /repo", "HEAD abc", "branch refs/heads/main"],
+        ["worktree /repo/odd\nname", "HEAD def", "detached"],
+      ]),
+    });
+    assert.deepEqual(linkedWorktrees("/repo", run), ["/repo/odd\nname"]);
   });
 });
 

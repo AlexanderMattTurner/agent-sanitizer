@@ -12,7 +12,6 @@
  */
 import {
   existsSync,
-  globSync,
   lstatSync,
   mkdirSync,
   readdirSync,
@@ -35,9 +34,9 @@ import {
   writeSentinelFile,
 } from "./hook-io.mjs";
 // Relative, like scan-invisible-chars.mjs's own import of this module: the
-// launch scope is hook POLICY (see src/claude-context.mjs), and this table is
-// pure data with no fs access of its own — the fs calls below are this
-// module's, not a copy of the SessionStart hook's target-discovery glue.
+// launch scope is hook POLICY (see src/claude-context.mjs). Sharing the walk
+// itself is what keeps the prune's entry spelling from having two definitions —
+// an exclude predicate is only as precise as the entries it is handed.
 import {
   ancestorInstructionFiles,
   announcedByInstructionsLoaded,
@@ -45,6 +44,7 @@ import {
   USER_GLOBAL_EVENT_NAMED_GLOBS,
 } from "../../src/claude-context.mjs";
 import { contextScanExclude } from "../../src/repo-scope.mjs";
+import { walkContextGlobs } from "../../src/instructions.mjs";
 
 // Layer-1 scrubber for the untrusted alert-store contents the gate splices into a
 // permissionDecisionReason. The WELL-FORMED composition, not the bare applyLayer1:
@@ -359,13 +359,14 @@ export function launchEmptyFile(sessionId) {
  */
 export function launchInstructionFiles(dir) {
   return [
-    ...globSync([...CLAUDE_LAUNCH_GLOBS], {
-      cwd: dir,
-      // This walk is the only thing covering launch-time ingress — nothing
-      // rescans what it skips — so it takes the posture that refuses to let a
-      // repo's own `.gitignore` narrow it (see contextScanExclude).
-      exclude: contextScanExclude(dir, { ignoredDirs: false }),
-    }).map((name) => join(dir, name)),
+    // This walk is the only thing covering launch-time ingress — nothing
+    // rescans what it skips — so it takes the posture that refuses to let a
+    // repo's own `.gitignore` narrow it (see contextScanExclude).
+    ...walkContextGlobs(
+      [...CLAUDE_LAUNCH_GLOBS],
+      dir,
+      contextScanExclude(dir, { ignoredDirs: false }),
+    ),
     // Filtered, unlike the glob's matches: almost every parent directory holds
     // neither memory file, so the unfiltered chain would file ~10 phantom
     // targets per session into scan-invisible-chars.mjs's operator-facing
@@ -438,10 +439,11 @@ function announcedLaunchFiles(dir) {
 function userGlobalLaunchHasContent(env = process.env) {
   const configDir = env.CLAUDE_CONFIG_DIR || join(homedir(), ".claude");
   return anyFileHasBytes(
-    globSync([...USER_GLOBAL_EVENT_NAMED_GLOBS], {
-      cwd: configDir,
-      exclude: contextScanExclude(configDir, { ignoredDirs: false }),
-    }).map((name) => join(configDir, name)),
+    walkContextGlobs(
+      [...USER_GLOBAL_EVENT_NAMED_GLOBS],
+      configDir,
+      contextScanExclude(configDir, { ignoredDirs: false }),
+    ),
   );
 }
 

@@ -47124,7 +47124,7 @@ function isInsideDir(dir, file) {
   return rel !== "" && !rel.startsWith("..") && !isAbsolute(rel);
 }
 function excludeNodeModules(entry) {
-  return entry === "node_modules";
+  return entry.split(/[/\\]/).at(-1) === "node_modules";
 }
 function claudeTail(path2, which) {
   const parts2 = path2.split(/[/\\]/);
@@ -47224,7 +47224,8 @@ var init_claude_context = __esm({
 
 // src/repo-scope.mjs
 import { execFileSync } from "node:child_process";
-import { relative as relative2, resolve as resolve2 } from "node:path";
+import { realpathSync } from "node:fs";
+import { relative as relative2, resolve as resolve2, sep } from "node:path";
 function askGit(run, args, dir) {
   try {
     return run("git", args, dir);
@@ -47238,17 +47239,15 @@ function askGit(run, args, dir) {
   }
 }
 function parseWorktreeList(porcelain) {
-  const records = porcelain.split("\n\n");
   const paths = [];
-  for (const record of records.slice(1)) {
-    if (/^bare$/m.test(record) || /^prunable\b/m.test(record)) continue;
-    const line = record.split("\n").find((l) => l.startsWith("worktree "));
+  for (const record of porcelain.split("\0\0").slice(1)) {
+    const attrs = record.split("\0");
+    if (hasAttribute(attrs, "bare") || hasAttribute(attrs, "prunable"))
+      continue;
+    const line = attrs.find((attr) => attr.startsWith("worktree "));
     if (line) paths.push(line.slice("worktree ".length));
   }
   return paths;
-}
-function normalizeEntry(path2) {
-  return path2.split(/[/\\]/).filter(Boolean).join("/");
 }
 function ignoredDirectories(dir, run) {
   const out = askGit(
@@ -47257,13 +47256,13 @@ function ignoredDirectories(dir, run) {
     dir
   );
   if (out === null) return [];
-  return out.split("\0").filter((entry) => entry.endsWith("/")).map(normalizeEntry);
+  return out.split("\0").filter((entry) => entry.endsWith("/")).map((entry) => entry.slice(0, -1));
 }
 function nestedWorktrees(dir, run) {
-  const out = askGit(run, ["worktree", "list", "--porcelain"], dir);
+  const out = askGit(run, [...WORKTREE_LIST_ARGS], dir);
   if (out === null) return [];
-  const root2 = resolve2(dir);
-  return parseWorktreeList(out).map((path2) => resolve2(path2)).filter((path2) => isInsideDir(root2, path2)).map((path2) => normalizeEntry(relative2(root2, path2)));
+  const root2 = realpathSync(dir);
+  return parseWorktreeList(out).map((path2) => resolve2(path2)).filter((path2) => isInsideDir(root2, path2)).map((path2) => relative2(root2, path2).split(sep).join("/"));
 }
 function repoPrunedDirs(dir, { ignoredDirs = true, run } = {}) {
   const key = `${resolve2(dir)}\0${ignoredDirs}`;
@@ -47279,9 +47278,9 @@ function repoPrunedDirs(dir, { ignoredDirs = true, run } = {}) {
 }
 function contextScanExclude(dir, options = {}) {
   const pruned = repoPrunedDirs(dir, options);
-  return (entry) => excludeFromContextScan(entry) || pruned.has(normalizeEntry(entry));
+  return (entry) => excludeFromContextScan(entry) || pruned.has(entry);
 }
-var GIT_TIMEOUT_MS, GIT_MAX_BUFFER, runGit, pruneCache;
+var GIT_TIMEOUT_MS, GIT_MAX_BUFFER, runGit, WORKTREE_LIST_ARGS, hasAttribute, pruneCache;
 var init_repo_scope = __esm({
   "src/repo-scope.mjs"() {
     "use strict";
@@ -47295,6 +47294,13 @@ var init_repo_scope = __esm({
       timeout: GIT_TIMEOUT_MS,
       maxBuffer: GIT_MAX_BUFFER
     });
+    WORKTREE_LIST_ARGS = Object.freeze([
+      "worktree",
+      "list",
+      "--porcelain",
+      "-z"
+    ]);
+    hasAttribute = (attrs, name50) => attrs.some((attr) => attr === name50 || attr.startsWith(`${name50} `));
     pruneCache = /* @__PURE__ */ new Map();
   }
 });
@@ -47319,7 +47325,8 @@ __export(instructions_exports, {
   excludeFromContextScan: () => excludeFromContextScan,
   findInstructionFiles: () => findInstructionFiles,
   scanInstructionFiles: () => scanInstructionFiles,
-  scanText: () => scanText
+  scanText: () => scanText,
+  walkContextGlobs: () => walkContextGlobs
 });
 import {
   readFileSync as readFileSync3,
@@ -47328,7 +47335,7 @@ import {
   renameSync,
   lstatSync as lstatSync2,
   fstatSync,
-  realpathSync,
+  realpathSync as realpathSync2,
   openSync as openSync2,
   fsyncSync,
   fchmodSync,
@@ -47337,7 +47344,7 @@ import {
   constants
 } from "node:fs";
 import { randomBytes } from "node:crypto";
-import { join as join3, relative as relative3, resolve as resolve3, isAbsolute as isAbsolute2, dirname as dirname3, sep } from "node:path";
+import { join as join3, relative as relative3, resolve as resolve3, isAbsolute as isAbsolute2, dirname as dirname3, sep as sep2 } from "node:path";
 function zeroWidthBits(cps) {
   let bits = "";
   for (const cp of cps) {
@@ -47428,12 +47435,12 @@ function scanText(content3) {
 }
 function isContained(realRoot, realChild) {
   const rel = relative3(realRoot, realChild);
-  return rel === "" || !rel.startsWith(`..${sep}`) && rel !== ".." && !isAbsolute2(rel);
+  return rel === "" || !rel.startsWith(`..${sep2}`) && rel !== ".." && !isAbsolute2(rel);
 }
 function keepContained(absPath, realRoot, literalRoot, pattern) {
   let real;
   try {
-    real = realpathSync(absPath);
+    real = realpathSync2(absPath);
   } catch {
     return false;
   }
@@ -47447,19 +47454,26 @@ function keepContained(absPath, realRoot, literalRoot, pattern) {
     )} outside ${JSON.stringify(realRoot)}`
   );
 }
+function walkContextGlobs(globs, cwd, exclude) {
+  const root2 = resolve3(cwd);
+  const absolute = (dirent) => join3(dirent.parentPath, dirent.name);
+  return globSync(globs, {
+    cwd,
+    withFileTypes: true,
+    exclude: (dirent) => {
+      const entry = relative3(root2, absolute(dirent)).split(sep2).join("/");
+      return excludeNodeModules(entry) || (exclude?.(entry) ?? false);
+    }
+  }).map(absolute);
+}
 function findInstructionFiles(globs, { cwd = process.cwd(), exclude } = {}) {
   const literalRoot = resolve3(cwd);
-  const realRoot = realpathSync(literalRoot);
+  const realRoot = realpathSync2(literalRoot);
   const seen = /* @__PURE__ */ new Set();
   for (const pattern of globs)
-    for (const name50 of globSync(pattern, {
-      cwd,
-      exclude: (entry) => excludeNodeModules(entry) || (exclude?.(entry) ?? false)
-    })) {
-      const absPath = isAbsolute2(name50) ? name50 : join3(cwd, name50);
+    for (const absPath of walkContextGlobs([pattern], cwd, exclude))
       if (keepContained(absPath, realRoot, literalRoot, pattern))
         seen.add(absPath);
-    }
   return [...seen];
 }
 function scanInstructionFiles(globs, { cwd = process.cwd(), exclude } = {}) {
@@ -48197,7 +48211,6 @@ var init_control_plane2 = __esm({
 // claude-hooks/lib/invisible-alert.mjs
 import {
   existsSync,
-  globSync as globSync2,
   lstatSync as lstatSync3,
   mkdirSync,
   readdirSync,
@@ -48292,13 +48305,14 @@ function launchEmptyFile(sessionId) {
 }
 function launchInstructionFiles(dir) {
   return [
-    ...globSync2([...CLAUDE_LAUNCH_GLOBS], {
-      cwd: dir,
-      // This walk is the only thing covering launch-time ingress — nothing
-      // rescans what it skips — so it takes the posture that refuses to let a
-      // repo's own `.gitignore` narrow it (see contextScanExclude).
-      exclude: contextScanExclude(dir, { ignoredDirs: false })
-    }).map((name50) => join4(dir, name50)),
+    // This walk is the only thing covering launch-time ingress — nothing
+    // rescans what it skips — so it takes the posture that refuses to let a
+    // repo's own `.gitignore` narrow it (see contextScanExclude).
+    ...walkContextGlobs(
+      [...CLAUDE_LAUNCH_GLOBS],
+      dir,
+      contextScanExclude(dir, { ignoredDirs: false })
+    ),
     // Filtered, unlike the glob's matches: almost every parent directory holds
     // neither memory file, so the unfiltered chain would file ~10 phantom
     // targets per session into scan-invisible-chars.mjs's operator-facing
@@ -48327,10 +48341,11 @@ function announcedLaunchFiles(dir) {
 function userGlobalLaunchHasContent(env = process.env) {
   const configDir = env.CLAUDE_CONFIG_DIR || join4(homedir(), ".claude");
   return anyFileHasBytes(
-    globSync2([...USER_GLOBAL_EVENT_NAMED_GLOBS], {
-      cwd: configDir,
-      exclude: contextScanExclude(configDir, { ignoredDirs: false })
-    }).map((name50) => join4(configDir, name50))
+    walkContextGlobs(
+      [...USER_GLOBAL_EVENT_NAMED_GLOBS],
+      configDir,
+      contextScanExclude(configDir, { ignoredDirs: false })
+    )
   );
 }
 function instructionsLoadedGapNotice(sessionId, dir = PROJECT_DIR, touchedDir) {
@@ -48405,6 +48420,7 @@ var init_invisible_alert = __esm({
     init_hook_io();
     init_claude_context();
     init_repo_scope();
+    init_instructions();
     ({ applyLayer1WellFormed: applyLayer1WellFormed2 } = /** @type {typeof import("agent-sanitizer")} */
     await lazyImport("agent-sanitizer"));
     ALERT_BASE = join4(
@@ -49235,7 +49251,7 @@ import {
   constants as constants2
 } from "node:fs";
 import { tmpdir as tmpdir4, userInfo as userInfo4 } from "node:os";
-import { join as join8, resolve as resolve4, sep as sep2 } from "node:path";
+import { join as join8, resolve as resolve4, sep as sep3 } from "node:path";
 function revealDir() {
   return process.env._AGENT_SANITIZER_REVEAL_DIR || join8(tmpdir4(), `agent-sanitizer-layer2-reveal-${PROJECT_HASH}`);
 }
@@ -49348,7 +49364,7 @@ function isRevealRead(toolName, toolInput) {
     return false;
   const dir = resolve4(revealDir());
   const target = resolve4(toolInput.file_path);
-  return target === dir || target.startsWith(dir + sep2);
+  return target === dir || target.startsWith(dir + sep3);
 }
 var REVEAL_TTL_MS, SPAN_KEY_RE, SPAN_ROUNDTRIP_NOTICE, REVEAL_READ_ENVELOPE;
 var init_reveal = __esm({

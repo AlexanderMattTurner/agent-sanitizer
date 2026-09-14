@@ -167,6 +167,7 @@ const PUBLISHED_EXPORTS = {
     "findInstructionFiles",
     "scanInstructionFiles",
     "scanText",
+    "walkContextGlobs",
   ],
   "./prompt": ["classifyPrompt", "formatReason"],
   "./output": [

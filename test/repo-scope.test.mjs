@@ -13,7 +13,14 @@
 import { describe, it, before, after } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import {
+  mkdirSync,
+  mkdtempSync,
+  realpathSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, relative, sep } from "node:path";
 
@@ -24,17 +31,23 @@ import {
 import { findInstructionFiles } from "../src/instructions.mjs";
 import {
   contextScanExclude,
+  linkedWorktrees,
   parseWorktreeList,
   repoPrunedDirs,
 } from "../src/repo-scope.mjs";
 import { launchInstructionFiles } from "../claude-hooks/lib/invisible-alert.mjs";
 import { cleanGitEnv } from "./helpers/git-env.mjs";
+import { worktreePorcelainZ } from "./helpers/worktree-porcelain.mjs";
 
 const root = mkdtempSync(join(tmpdir(), "sanitizer-repo-scope-"));
 const plain = mkdtempSync(join(tmpdir(), "sanitizer-repo-scope-nogit-"));
+// A second spelling of `root`, outside its tree: git answers about the checkout
+// in PHYSICAL paths whatever spelling the scan root was reached through.
+const linkParent = mkdtempSync(join(tmpdir(), "sanitizer-repo-scope-link-"));
+const linked = join(linkParent, "checkout");
 
 after(() => {
-  for (const path of [root, plain])
+  for (const path of [root, plain, linkParent])
     rmSync(path, { recursive: true, force: true });
 });
 
@@ -56,13 +69,18 @@ before(() => {
   git(["init", "--quiet", "--initial-branch=main"]);
   git(["config", "user.email", "test@example.invalid"]);
   git(["config", "user.name", "Test"]);
+  // `/build/` is ANCHORED, so `src/build/` below is tracked source that merely
+  // shares a basename with the ignored directory — the case a prune matching
+  // bare entry names silently swallows.
   writeFileSync(
     join(root, ".gitignore"),
-    `build/\nCLAUDE.local.md\n${QUOTED_DIR}/\n.claude/skills/hidden/\n`,
+    `/build/\nCLAUDE.local.md\n${QUOTED_DIR}/\n.claude/skills/hidden/\n`,
   );
   write(root, "CLAUDE.md");
+  write(root, "src/build/CLAUDE.md");
   git(["add", "-A"]);
   git(["commit", "--quiet", "-m", "seed"]);
+  symlinkSync(root, linked);
 
   // Untracked and ignored, each holding a file the globs would otherwise match.
   write(root, "CLAUDE.local.md");
@@ -86,13 +104,12 @@ before(() => {
   ]);
 });
 
-/** Whole-tree matches under `root`, as `/`-separated relative paths. */
-function wholeTree(exclude) {
+/** Whole-tree matches under `dir`, as `/`-separated relative paths. */
+function wholeTree(exclude, globs = [...CLAUDE_INSTRUCTION_GLOBS], dir = root) {
   return new Set(
-    findInstructionFiles([...CLAUDE_INSTRUCTION_GLOBS], {
-      cwd: root,
-      exclude,
-    }).map((abs) => relative(root, abs).split(sep).join("/")),
+    findInstructionFiles(globs, { cwd: dir, exclude }).map((abs) =>
+      relative(dir, abs).split(sep).join("/"),
+    ),
   );
 }
 
@@ -159,9 +176,39 @@ describe("whole-tree context scan", () => {
       [
         "CLAUDE.md",
         "CLAUDE.local.md",
+        "src/build/CLAUDE.md",
         ".claude/skills/visible/SKILL.md",
       ].sort(),
     );
+  });
+
+  // A prune entry names one directory, not a basename to match at every depth.
+  // Losing this splices a tracked instruction file out of the scan — the
+  // false-positive direction, where the cost is content the model needed.
+  it("keeps a tracked directory that shares a name with an ignored one", () => {
+    assert.equal(
+      wholeTree(contextScanExclude(root)).has("src/build/CLAUDE.md"),
+      true,
+    );
+    assert.equal(repoPrunedDirs(root).has("build"), true);
+  });
+
+  // An absolute pattern makes the walker report entries by absolute path, which
+  // a root-relative prune set matches only once the walk normalizes them.
+  it("prunes the same set under an absolute glob as under its relative twin", () => {
+    const pattern = join("**", "CLAUDE.md");
+    const exclude = contextScanExclude(root);
+    const byRelative = [...wholeTree(exclude, [pattern])].sort();
+    const byAbsolute = [...wholeTree(exclude, [join(root, pattern)])].sort();
+    assert.deepEqual(byAbsolute, byRelative);
+    assert.deepEqual(byAbsolute, ["CLAUDE.md", "src/build/CLAUDE.md"]);
+  });
+
+  it("prunes a nested worktree through a symlinked scan root", () => {
+    const scanned = wholeTree(contextScanExclude(linked), undefined, linked);
+    assert.equal(scanned.has("worktrees/wt/CLAUDE.md"), false);
+    // Non-vacuity: the walk did reach this root's own files.
+    assert.equal(scanned.has("CLAUDE.md"), true);
   });
 
   it("prunes what git says is not this checkout's source", () => {
@@ -218,14 +265,50 @@ describe("parseWorktreeList", () => {
   it("drops the main worktree, bare repos and prunable registrations", () => {
     assert.deepEqual(
       parseWorktreeList(
-        [
-          "worktree /repo\nHEAD abc\nbranch refs/heads/main",
-          "worktree /repo/wt\nHEAD def\nbranch refs/heads/other",
-          "worktree /gone\nHEAD ghi\nprunable gitdir file points to non-existent location",
-          "worktree /bare\nbare",
-        ].join("\n\n"),
+        worktreePorcelainZ([
+          ["worktree /repo", "HEAD abc", "branch refs/heads/main"],
+          ["worktree /repo/wt", "HEAD def", "branch refs/heads/other"],
+          [
+            "worktree /gone",
+            "HEAD ghi",
+            "prunable gitdir file points to non-existent location",
+          ],
+          ["worktree /bare", "bare"],
+        ]),
       ),
       ["/repo/wt"],
+    );
+  });
+
+  // No filesystem can force `prunable`, and none can hold a repo whose path has
+  // a newline in it on every platform this runs on, so both are pinned here as
+  // pure strings. The newline is what `-z` exists for: under newline framing
+  // this record truncates and the prune names a directory that does not exist.
+  it("keeps a worktree path containing a newline whole", () => {
+    assert.deepEqual(
+      parseWorktreeList(
+        worktreePorcelainZ([
+          ["worktree /repo", "HEAD abc", "branch refs/heads/main"],
+          ["worktree /repo/odd\nname", "HEAD def", "detached"],
+        ]),
+      ),
+      ["/repo/odd\nname"],
+    );
+  });
+});
+
+describe("linkedWorktrees", () => {
+  // Against real git output, so the `-z` framing the parser above assumes is
+  // the framing git actually emits rather than the one this file made up.
+  it("names the fixture's linked worktrees and not its main one", () => {
+    const run = (file, args, cwd) =>
+      execFileSync(file, args, { cwd, encoding: "utf8", env: cleanGitEnv });
+    const real = realpathSync(root);
+    assert.deepEqual(
+      linkedWorktrees(root, run)
+        .map((path) => relative(real, path).split(sep).join("/"))
+        .sort(),
+      [".claude/skills/wt", "worktrees/wt"],
     );
   });
 });
