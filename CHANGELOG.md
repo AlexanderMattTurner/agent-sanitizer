@@ -8,6 +8,20 @@ adhere to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+## [2.58.0] - 2026-09-14
+
+### Added
+- New `repo-scope` module for enhanced path-based context scanning configuration.
+
+### Changed
+- Context scan now prunes on whole paths instead of bare names for more precise filtering.
+
+### Fixed
+- Core.fsmonitor is now pinned off during context scan's git queries to prevent interference.
+
+### Removed
+- Context scan no longer traverses gitignored directories and nested worktrees.
+
 ## [2.57.4] - 2026-09-05
 
 ### Fixed
