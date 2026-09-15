@@ -163,11 +163,26 @@ function startHookTimer(now = Date.now, cpuNow = processCpuMs) {
     hostMs: () => Math.max(0, hostExtensionMs - hostBefore)
   };
 }
-function attributeWait(elapsedMs, cpuMs, redactorMs, hostMs) {
+function largestWaitWindow(elapsedMs, cpuMs, redactorMs, hostMs) {
   const measuredHostMs = hostMs ?? 0;
   const otherMs = Math.max(0, elapsedMs - cpuMs - redactorMs - measuredHostMs);
   const largest = Math.max(cpuMs, redactorMs, measuredHostMs, otherMs);
-  const verdict = redactorMs === largest ? "The largest share was spent inside the redactor round trip \u2014 the daemon's scan, the host it shares, or both; this hook was not computing it." : hostMs !== void 0 && hostMs === largest ? "The largest share was spent inside a host extension this hook called \u2014 a callback the composer injected, and a cost that composer owns; neither the sanitizer nor the redactor was computing it." : cpuMs === largest ? "The largest share is this hook computing \u2014 a per-call cost the sanitizer owns, repeated by every affected call." : hostMs === void 0 ? "The largest share is neither the redactor nor this hook computing: it was blocked on a loaded machine, on a host extension this caller does not measure, or on something else outside the sanitizer that it called." : "The largest share is none of those three: it was blocked on a loaded machine or on something outside the sanitizer that it called without measuring.";
+  if (redactorMs === largest) return "redactor";
+  if (hostMs !== void 0 && hostMs === largest) return "host";
+  return cpuMs === largest ? "cpu" : "other";
+}
+function externalWaitOnly(elapsedMs, context, thresholdMs) {
+  const cpuMs = context?.cpuMs;
+  const redactorMs = context?.redactorMs;
+  if (typeof cpuMs !== "number" || typeof redactorMs !== "number") return false;
+  const hostMs = typeof context?.hostMs === "number" ? context.hostMs : void 0;
+  if (largestWaitWindow(elapsedMs, cpuMs, redactorMs, hostMs) !== "other")
+    return false;
+  return cpuMs + redactorMs + (hostMs ?? 0) <= thresholdMs;
+}
+function attributeWait(elapsedMs, cpuMs, redactorMs, hostMs) {
+  const dominant = largestWaitWindow(elapsedMs, cpuMs, redactorMs, hostMs);
+  const verdict = dominant === "redactor" ? "The largest share was spent inside the redactor round trip \u2014 the daemon's scan, the host it shares, or both; this hook was not computing it." : dominant === "host" ? "The largest share was spent inside a host extension this hook called \u2014 a callback the composer injected, and a cost that composer owns; neither the sanitizer nor the redactor was computing it." : dominant === "cpu" ? "The largest share is this hook computing \u2014 a per-call cost the sanitizer owns, repeated by every affected call." : hostMs === void 0 ? "The largest share is neither the redactor nor this hook computing: it was blocked on a loaded machine, on a host extension this caller does not measure, or on something else outside the sanitizer that it called." : "The largest share is none of those three: it was blocked on a loaded machine or on something outside the sanitizer that it called without measuring.";
   const hostClause = hostMs === void 0 ? "" : ` and ${formatSeconds(hostMs)}s was inside host extensions`;
   return `, of which ${formatSeconds(cpuMs)}s was this hook's own CPU${hostClause === "" ? " and" : ","} ${formatSeconds(redactorMs)}s was inside redactor round trips${hostClause}. ${verdict}`;
 }
@@ -198,6 +213,8 @@ function withSlowHookNotice(hookName, elapsedMs, verdict, writeErr = (chunk) => 
 function reportSlowHook(hookName, elapsedMs, hookEventName, emit, writeErr = (chunk) => process.stderr.write(chunk), context) {
   const notice = writeSlowHookNotice(hookName, elapsedMs, writeErr, context);
   if (notice === null) return false;
+  if (externalWaitOnly(elapsedMs, context, SLOW_HOOK_THRESHOLD_MS))
+    return false;
   emit(hookEventName, { additionalContext: notice });
   return true;
 }

@@ -792,6 +792,84 @@ describe("reportSlowHook (no-verdict events)", () => {
     assert.match(emitted[0][1].additionalContext, /used 0\.7s of CPU/);
     assert.match(errs[0], /used 0\.7s of CPU/);
   });
+
+  // The reported case: a launch scan doing ~14ms of work reported 2.7s while a
+  // neighbouring SessionStart hook ran its cold-start installs. Nothing here
+  // could have kept that run inside the budget, so the notice must not spend the
+  // model's context on it — and must still reach the transcript.
+  it("keeps an entirely external wait off the model channel", () => {
+    const errs = [];
+    const emitted = [];
+    const reported = reportSlowHook(
+      "scan-invisible-chars",
+      2_700,
+      "SessionStart",
+      (event, fields) => emitted.push([event, fields]),
+      (chunk) => errs.push(chunk),
+      { cpuMs: 14, redactorMs: 0, hostMs: 0 },
+    );
+    assert.equal(reported, false);
+    assert.deepEqual(emitted, []);
+    // Non-vacuity: the run DID overrun and WAS attributed, so the suppression is
+    // why the model heard nothing — not a within-budget run saying nothing.
+    assert.equal(errs.length, 1);
+    assert.match(errs[0], /took 2\.7s/);
+    assert.match(errs[0], /blocked on a loaded machine/);
+  });
+
+  it("still reports an overrun the hook's own work already earns", () => {
+    // Measured windows over budget on their own: external wait sits on top, but
+    // 1.4s of CPU is a per-call cost this repo owns and must hear about.
+    const errs = [];
+    const emitted = [];
+    const reported = reportSlowHook(
+      "scan-invisible-chars",
+      9_000,
+      "SessionStart",
+      (event, fields) => emitted.push([event, fields]),
+      (chunk) => errs.push(chunk),
+      { cpuMs: 1_400, redactorMs: 0, hostMs: 0 },
+    );
+    assert.equal(reported, true);
+    assert.equal(emitted.length, 1);
+    assert.match(
+      emitted[0][1].additionalContext,
+      /blocked on a loaded machine/,
+    );
+  });
+
+  it("still reports an overrun a measured window dominates", () => {
+    const errs = [];
+    const emitted = [];
+    const reported = reportSlowHook(
+      "scan-invisible-chars",
+      1_200,
+      "SessionStart",
+      (event, fields) => emitted.push([event, fields]),
+      (chunk) => errs.push(chunk),
+      { cpuMs: 900, redactorMs: 0, hostMs: 0 },
+    );
+    assert.equal(reported, true);
+    assert.match(
+      emitted[0][1].additionalContext,
+      /largest share is this hook computing/,
+    );
+  });
+
+  it("reports an unattributed overrun, having no grounds to call it external", () => {
+    const errs = [];
+    const emitted = [];
+    const reported = reportSlowHook(
+      "scan-invisible-chars",
+      2_700,
+      "SessionStart",
+      (event, fields) => emitted.push([event, fields]),
+      (chunk) => errs.push(chunk),
+      { cpuMs: 14 },
+    );
+    assert.equal(reported, true);
+    assert.equal(emitted.length, 1);
+  });
 });
 
 describe("runJudgeCli times every judge hook", () => {
