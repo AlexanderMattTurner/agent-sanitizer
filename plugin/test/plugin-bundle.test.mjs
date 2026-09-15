@@ -565,6 +565,29 @@ test("hooks.json wires exactly the four modes, each through the launcher", () =>
   );
 });
 
+test("no hook command names a variable beyond the plugin root", () => {
+  const commands = Object.values(
+    JSON.parse(readFileSync(join(PLUGIN_DIR, "hooks", "hooks.json"), "utf-8"))
+      .hooks,
+  )
+    .flat()
+    .flatMap((entry) => entry.hooks)
+    .map((h) => h.command);
+  // Non-vacuity: the one variable that IS allowed is actually used, so the
+  // assertion below is over real commands and not an empty set.
+  assert.ok(commands.some((c) => c.includes("${CLAUDE_PLUGIN_ROOT}")));
+  // A sandbox that re-runs plugin hooks from its own root-owned settings tier
+  // (a glovebox microVM) resolves CLAUDE_PLUGIN_ROOT and refuses any command
+  // whose remaining text carries a shell character — so a second variable here
+  // does not degrade the hook, it deletes it from the session entirely.
+  for (const command of commands)
+    assert.equal(
+      command.replaceAll("${CLAUDE_PLUGIN_ROOT}", "").includes("$"),
+      false,
+      `${command} names a variable the harness may not set`,
+    );
+});
+
 test("every wired mode is dispatchable (no unknown-mode fail-closed)", (t) => {
   const plugin = stagePlugin(t);
   for (const mode of HOOK_MODES) {
@@ -1961,7 +1984,7 @@ test("provision fast-paths on a matching stamp without any toolchain", (t) => {
 
   const res = spawnSync(
     "bash",
-    [join(plugin, "scripts", "provision-redactor.sh"), data],
+    [join(plugin, "scripts", "provision-redactor.sh")],
     // No python3, no uv, no pip on PATH: the fast path must not need them.
     // The opt-in is set so the exit 0 proves the STAMP path, not the skip.
     {
@@ -1969,6 +1992,7 @@ test("provision fast-paths on a matching stamp without any toolchain", (t) => {
       env: {
         PATH: stubBin(t, ["python3", "uv", "pip"]),
         AGENT_SANITIZER_SECRETS_ENABLED: "1",
+        CLAUDE_PLUGIN_DATA: data,
       },
     },
   );
@@ -1979,10 +2003,7 @@ test("provision fails loud when no Python toolchain exists", (t) => {
   const plugin = stagePlugin(t);
   const res = spawnSync(
     "bash",
-    [
-      join(plugin, "scripts", "provision-redactor.sh"),
-      join(scratch(t), "data"),
-    ],
+    [join(plugin, "scripts", "provision-redactor.sh")],
     {
       encoding: "utf8",
       // The secret opt-in must be set: without it the script's whole job is
@@ -1990,6 +2011,7 @@ test("provision fails loud when no Python toolchain exists", (t) => {
       env: {
         PATH: stubBin(t, ["python3", "uv", "pip"]),
         AGENT_SANITIZER_SECRETS_ENABLED: "1",
+        CLAUDE_PLUGIN_DATA: join(scratch(t), "data"),
       },
     },
   );
@@ -2009,13 +2031,14 @@ test("an install that produces no daemon fails loud, not silently", (t) => {
   writeFileSync(join(bin, "uv"), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
   const res = spawnSync(
     "bash",
-    [
-      join(plugin, "scripts", "provision-redactor.sh"),
-      join(scratch(t), "data"),
-    ],
+    [join(plugin, "scripts", "provision-redactor.sh")],
     {
       encoding: "utf8",
-      env: { PATH: bin, AGENT_SANITIZER_SECRETS_ENABLED: "1" },
+      env: {
+        PATH: bin,
+        AGENT_SANITIZER_SECRETS_ENABLED: "1",
+        CLAUDE_PLUGIN_DATA: join(scratch(t), "data"),
+      },
     },
   );
   assert.equal(res.status, 1);
@@ -2052,11 +2075,15 @@ test("two provisioners cannot install into the same venv at once", (t) => {
       "exit 0\n",
     { mode: 0o755 },
   );
-  const env = { PATH: bin, AGENT_SANITIZER_SECRETS_ENABLED: "1" };
+  const env = {
+    PATH: bin,
+    AGENT_SANITIZER_SECRETS_ENABLED: "1",
+    CLAUDE_PLUGIN_DATA: data,
+  };
   const script = join(plugin, "scripts", "provision-redactor.sh");
   const both = spawnSync(
     "bash",
-    ["-c", `bash ${script} ${data} & bash ${script} ${data}; wait`],
+    ["-c", `bash ${script} & bash ${script}; wait`],
     { encoding: "utf8", env },
   );
   assert.equal(both.status, 0, both.stderr);
@@ -2079,15 +2106,13 @@ test("a missing shared provisioning lib refuses to provision", (t) => {
   rmSync(join(plugin, "scripts", "lib", "provision-common.sh"));
   const res = spawnSync(
     "bash",
-    [
-      join(plugin, "scripts", "provision-redactor.sh"),
-      join(scratch(t), "data"),
-    ],
+    [join(plugin, "scripts", "provision-redactor.sh")],
     {
       encoding: "utf8",
       env: {
         PATH: stubBin(t, ["python3", "uv", "pip"]),
         AGENT_SANITIZER_SECRETS_ENABLED: "1",
+        CLAUDE_PLUGIN_DATA: join(scratch(t), "data"),
       },
     },
   );
@@ -2104,12 +2129,15 @@ test("provision is a silent no-op without the secret opt-in", (t) => {
   const plugin = stagePlugin(t);
   const res = spawnSync(
     "bash",
-    [
-      join(plugin, "scripts", "provision-redactor.sh"),
-      join(scratch(t), "data"),
-    ],
+    [join(plugin, "scripts", "provision-redactor.sh")],
     // No toolchain at all: the opt-out path must not even look for one.
-    { encoding: "utf8", env: { PATH: stubBin(t, ["python3", "uv", "pip"]) } },
+    {
+      encoding: "utf8",
+      env: {
+        PATH: stubBin(t, ["python3", "uv", "pip"]),
+        CLAUDE_PLUGIN_DATA: join(scratch(t), "data"),
+      },
+    },
   );
   assert.equal(res.status, 0, res.stderr);
   assert.equal(res.stderr, "");
@@ -2183,12 +2211,13 @@ test("a missing timing lib degrades to untimed provisioning, not to failure", (t
   stampProvisionInputs(plugin, data);
   const res = spawnSync(
     "bash",
-    [join(plugin, "scripts", "provision-redactor.sh"), data],
+    [join(plugin, "scripts", "provision-redactor.sh")],
     {
       encoding: "utf8",
       env: {
         PATH: stubBin(t, ["python3", "uv", "pip"]),
         AGENT_SANITIZER_SECRETS_ENABLED: "1",
+        CLAUDE_PLUGIN_DATA: data,
         ...REPORT_EVERY_RUN,
       },
     },
@@ -2215,7 +2244,7 @@ test("provisioning reports as one-time setup, not as a slow hook", (t) => {
   stampProvisionInputs(plugin, data);
   const res = spawnSync(
     "bash",
-    [join(plugin, "scripts", "provision-redactor.sh"), data],
+    [join(plugin, "scripts", "provision-redactor.sh")],
     {
       encoding: "utf8",
       env: {
@@ -2223,6 +2252,7 @@ test("provisioning reports as one-time setup, not as a slow hook", (t) => {
         // Without the secret opt-in the script exits before ever measuring,
         // and this test would fail on a silent early return.
         AGENT_SANITIZER_SECRETS_ENABLED: "1",
+        CLAUDE_PLUGIN_DATA: data,
         ...REPORT_EVERY_RUN,
       },
     },
@@ -2233,6 +2263,50 @@ test("provisioning reports as one-time setup, not as a slow hook", (t) => {
   assert.match(res.stderr, /PERFORMANCE: one-time setup/);
   assert.match(res.stderr, /paid once per install/);
   assert.equal(res.stderr.includes("hook took"), false, res.stderr);
+});
+
+test("the redactor provisioner degrades to the zipapp with no data dir", (t) => {
+  const plugin = stagePlugin(t);
+  const res = spawnSync(
+    "bash",
+    [join(plugin, "scripts", "provision-redactor.sh")],
+    // Opted in, so the exit 0 below is the no-data-dir arm and not the skip.
+    {
+      encoding: "utf8",
+      env: {
+        PATH: stubBin(t, ["python3", "uv", "pip"]),
+        AGENT_SANITIZER_SECRETS_ENABLED: "1",
+      },
+    },
+  );
+  assert.equal(res.status, 0, res.stderr);
+  assert.match(res.stderr, /CLAUDE_PLUGIN_DATA is unset/);
+  // Names what still redacts, not just what is missing: a line saying only
+  // "unset" reads as "Layer 4 is off" to an operator who opted in.
+  assert.match(res.stderr, /zipapp/);
+});
+
+test("the binary provisioner is a silent no-op with no data dir", (t) => {
+  const bin = stubBin(t, []);
+  // A supported platform, or the script's own unsupported-platform arm would be
+  // the silent exit 0 under test: stubBin stages no uname, so `uname -s` answers
+  // nothing and the dispatch falls through to `*) exit 0` with the data-dir
+  // guard removed. With this stub, deleting that guard reaches the download arm
+  // and reds the assertion below.
+  writeFileSync(
+    join(bin, "uname"),
+    '#!/bin/sh\ncase "$1" in\n-s) echo Linux ;;\n-m) echo x86_64 ;;\nesac\n',
+    { mode: 0o755 },
+  );
+  const res = spawnSync(
+    "bash",
+    [join(stagePlugin(t), "scripts", "provision-hook-binary.sh")],
+    { encoding: "utf8", env: { PATH: bin } },
+  );
+  assert.equal(res.status, 0, res.stderr);
+  // safe-launch.sh will not run a binary without CLAUDE_PLUGIN_DATA either, so
+  // the node path serves this session with nothing lost and nothing to say.
+  assert.equal(res.stderr, "");
 });
 
 test("a fast provisioning run says nothing about timing", (t) => {
@@ -2246,13 +2320,14 @@ test("a fast provisioning run says nothing about timing", (t) => {
   stampProvisionInputs(plugin, data);
   const res = spawnSync(
     "bash",
-    [join(plugin, "scripts", "provision-redactor.sh"), data],
+    [join(plugin, "scripts", "provision-redactor.sh")],
     {
       encoding: "utf8",
       env: {
         PATH: stubBin(t, ["python3", "uv", "pip"]),
         // Opted in so silence comes from the fast path, not the opt-in skip.
         AGENT_SANITIZER_SECRETS_ENABLED: "1",
+        CLAUDE_PLUGIN_DATA: data,
       },
     },
   );

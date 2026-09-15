@@ -15,7 +15,7 @@
  * non-zero on the first failure.
  */
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -59,9 +59,16 @@ function check(name, condition, detail) {
 // ── Provision the shipped engine exactly as SessionStart does ───────────────
 const provision = spawnSync(
   "bash",
-  [join(PLUGIN, "scripts", "provision-redactor.sh"), dataDir],
-  // The opt-in must be set or the script exits 0 without installing anything.
-  { env: { ...process.env, AGENT_SANITIZER_SECRETS_ENABLED: "1" } },
+  [join(PLUGIN, "scripts", "provision-redactor.sh")],
+  // Both env vars or the script exits 0 without installing anything: the opt-in
+  // gates the whole layer, and CLAUDE_PLUGIN_DATA is where it installs to.
+  {
+    env: {
+      ...process.env,
+      AGENT_SANITIZER_SECRETS_ENABLED: "1",
+      CLAUDE_PLUGIN_DATA: dataDir,
+    },
+  },
 );
 if (provision.status !== 0) {
   console.error(
@@ -70,6 +77,15 @@ if (provision.status !== 0) {
   process.exit(1);
 }
 const daemon = join(dataDir, "venv", "bin", "agent-secret-redactor-daemon");
+// The post-condition, not the exit status: every arm the provisioner takes when
+// it has nothing to install returns 0, so without this the corpus below fails
+// eight seconds later with "daemon did not start" and names no cause.
+if (!existsSync(daemon)) {
+  console.error(
+    `provisioning returned 0 but left no daemon at ${daemon}:\n${provision.stderr}`,
+  );
+  process.exit(1);
+}
 // A fresh socket per run, or a daemon left on the DEFAULT socket by anything
 // else on the machine would serve every check and this corpus would never
 // spawn — or test — the engine it just provisioned. (Found by the echo-stub

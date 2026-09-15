@@ -25,7 +25,6 @@ case "${AGENT_SANITIZER_HOOK_BINARY:-}" in
 *) echo "agent-sanitizer: AGENT_SANITIZER_HOOK_BINARY=${AGENT_SANITIZER_HOOK_BINARY} is not 0, 1 or unset — treating it as unset (auto)" >&2 ;;
 esac
 
-data_dir="${1:?usage: provision-hook-binary.sh <plugin-data-dir>}"
 script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 if [[ ! -r "$script_dir/lib/provision-common.sh" ]]; then
   echo "agent-sanitizer: $script_dir/lib/provision-common.sh is missing — the hook binary will not be provisioned (reinstall the plugin)" >&2
@@ -33,6 +32,12 @@ if [[ ! -r "$script_dir/lib/provision-common.sh" ]]; then
 fi
 # shellcheck source=lib/provision-common.sh
 . "$script_dir/lib/provision-common.sh"
+
+# Silent: safe-launch.sh already requires CLAUDE_PLUGIN_DATA before it will run a
+# binary, so a session without one takes the node path with nothing degraded.
+if [[ -z "$plugin_data" ]]; then
+  exit 0
+fi
 
 # Only the platforms the release carries binaries for (the case arms mirror
 # PLATFORMS in build-hook-binaries.mjs; provision-hook-binary.test.mjs drives
@@ -50,7 +55,7 @@ esac
 asset="agent-sanitizer-hooks-$platform"
 manifest="$plugin_root/dist/hooks/hook-binaries.sha256"
 bundle="$plugin_root/dist/hooks/plugin-hooks.bundle.mjs"
-dest_dir="$data_dir/hook-binary"
+dest_dir="$plugin_data/hook-binary"
 binary="$dest_dir/agent-sanitizer-hooks"
 installed_stamp="$dest_dir/.manifest-installed"
 reject_stamp="$dest_dir/.download-rejected"
@@ -67,7 +72,7 @@ trap 'rm -f -- "${download:-}"; provision_release_lock; provision_report_elapsed
 # itself is atomic, but the removal of a binary that fails its digest check is
 # not paired with it: a second session verifying the same file between this
 # one's `rm` and its refetch finds nothing and starts a second ~100 MB download.
-provision_hold_lock "$data_dir/.hook-binary-provision.lock"
+provision_hold_lock "$plugin_data/.hook-binary-provision.lock"
 
 if [[ ! -f "$manifest" ]]; then
   echo "agent-sanitizer: $manifest is missing — the hook binary cannot be verified, so it will not be provisioned (reinstall the plugin)" >&2
