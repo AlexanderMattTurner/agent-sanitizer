@@ -291,15 +291,11 @@ function stageSources(t, { omit = [] } = {}) {
 function stubBin(t, omit) {
   const dir = join(scratch(t), "bin");
   mkdirSync(dir, { recursive: true });
-  // mkdir/rmdir/find are here so a stripped PATH still models the real one for
-  // the launcher's degraded-warning marker; without them that state is
-  // unrecordable and every warning repeats, which would pass a dedupe test
-  // vacuously. cat/mktemp/rm likewise: the binary arm captures stdin to temp
-  // files so it can replay the payload to the node path. sleep and chmod are
-  // the provisioners': provision_hold_lock's fallback WAITS with `sleep`, so a
-  // PATH without it kills the loser at 127 under `set -e` instead of making it
-  // wait, and provision_require_executable rejects a daemon no `chmod` made
-  // runnable — both turn a serialization test into a one-survivor test.
+  // mkdir/rmdir/find let a stripped PATH still record the launcher's
+  // degraded-warning marker, without which every warning repeats and a dedupe
+  // test passes vacuously. cat/mktemp/rm replay a captured payload to the node
+  // path. sleep and chmod are the provisioners': without them the lock's
+  // waiting arm dies at 127 and the daemon it installs is not executable.
   for (const cmd of [
     "bash",
     "sh",
@@ -2122,9 +2118,12 @@ for (const primitive of ["flock", "mkdir fallback"]) {
     for (const { code, err } of runs) assert.equal(code, 0, err);
 
     const steps = readFileSync(trace, "utf8").trim().split("\n");
+    // ONE provisioner owned the whole critical section: the pid that opened it
+    // is the pid that closed it, and no second pid appears anywhere.
+    const [pid] = steps.map((step) => step.split(" ")[1]);
     assert.deepEqual(
-      steps.map((step) => step.split(" ")[0]),
-      ["enter", "leave"],
+      steps,
+      [`enter ${pid}`, `leave ${pid}`],
       `the venv was built more than once: ${JSON.stringify(steps)}`,
     );
     // Non-vacuity in the other direction: one install RAN, so the single pair
