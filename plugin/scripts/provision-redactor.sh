@@ -31,7 +31,6 @@ if [[ -z "$plugin_data" ]]; then
   echo "agent-sanitizer: CLAUDE_PLUGIN_DATA is unset — the secret-redaction engine (Layer 4) keeps no venv in this session and runs from the committed zipapp instead" >&2
   exit 0
 fi
-data_dir="$plugin_data"
 
 # The trap covers every exit, including the idempotent early return (which is
 # fast, so it prints nothing) and the failure arms.
@@ -42,14 +41,14 @@ trap 'provision_release_lock; provision_report_elapsed' EXIT
 # without it a second session that reads the check before this one finishes goes
 # on to `uv venv` the same path, recreating the venv under a daemon already
 # running out of it.
-provision_hold_lock "$data_dir/.redactor-provision.lock"
+provision_hold_lock "$plugin_data/.redactor-provision.lock"
 
 req="$plugin_root/requirements.txt"
 # The engine itself ships as a wheel beside the zipapp rather than being resolved
 # from PyPI: the venv and the committed daemon.pyz are then the SAME build, so
 # the fast path and the floor cannot be two different versions.
 wheel="$plugin_root/dist/redactor/agent_sanitizer-0.0.0-py3-none-any.whl"
-venv="$data_dir/venv"
+venv="$plugin_data/venv"
 stamp="$venv/.requirements-installed"
 wheel_stamp="$venv/.engine-wheel-installed"
 

@@ -38,7 +38,6 @@ fi
 if [[ -z "$plugin_data" ]]; then
   exit 0
 fi
-data_dir="$plugin_data"
 
 # Only the platforms the release carries binaries for (the case arms mirror
 # PLATFORMS in build-hook-binaries.mjs; provision-hook-binary.test.mjs drives
@@ -56,7 +55,7 @@ esac
 asset="agent-sanitizer-hooks-$platform"
 manifest="$plugin_root/dist/hooks/hook-binaries.sha256"
 bundle="$plugin_root/dist/hooks/plugin-hooks.bundle.mjs"
-dest_dir="$data_dir/hook-binary"
+dest_dir="$plugin_data/hook-binary"
 binary="$dest_dir/agent-sanitizer-hooks"
 installed_stamp="$dest_dir/.manifest-installed"
 reject_stamp="$dest_dir/.download-rejected"
@@ -73,7 +72,7 @@ trap 'rm -f -- "${download:-}"; provision_release_lock; provision_report_elapsed
 # itself is atomic, but the removal of a binary that fails its digest check is
 # not paired with it: a second session verifying the same file between this
 # one's `rm` and its refetch finds nothing and starts a second ~100 MB download.
-provision_hold_lock "$data_dir/.hook-binary-provision.lock"
+provision_hold_lock "$plugin_data/.hook-binary-provision.lock"
 
 if [[ ! -f "$manifest" ]]; then
   echo "agent-sanitizer: $manifest is missing — the hook binary cannot be verified, so it will not be provisioned (reinstall the plugin)" >&2

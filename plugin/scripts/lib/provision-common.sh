@@ -17,12 +17,12 @@ _provision_lib_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 # variables this file publishes rather than keeps to itself, hence the disables.
 # shellcheck disable=SC2034
 plugin_root="$(cd -- "$_provision_lib_dir/../.." && pwd)"
-# Read from the environment, exactly as safe-launch.sh reads it, so the hook command
-# in hooks.json carries no `$` for a harness to expand. Claude Code sets
-# CLAUDE_PLUGIN_DATA only for a hook it loaded FROM a plugin; a sandbox that re-runs
-# plugin hooks from its own root-owned tier (a glovebox microVM) sets nothing, so each
-# caller checks this for emptiness and exits 0 — there is nowhere to install into, and
-# a red SessionStart hook would say something untrue about a session that still works.
+# Read from the environment, exactly as safe-launch.sh reads it, so the hook command in
+# hooks.json names no variable beyond CLAUDE_PLUGIN_ROOT. A sandbox that re-runs plugin
+# hooks from its own root-owned tier (a glovebox microVM) resolves that one and sets
+# nothing else, so each caller checks this for emptiness and exits 0: there is nowhere
+# to install into, and a red SessionStart hook would say something untrue about a
+# session that still works.
 # shellcheck disable=SC2034
 plugin_data="${CLAUDE_PLUGIN_DATA:-}"
 

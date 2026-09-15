@@ -2287,11 +2287,21 @@ test("the redactor provisioner degrades to the zipapp with no data dir", (t) => 
 });
 
 test("the binary provisioner is a silent no-op with no data dir", (t) => {
-  const plugin = stagePlugin(t);
+  const bin = stubBin(t, []);
+  // A supported platform, or the script's own unsupported-platform arm would be
+  // the silent exit 0 under test: stubBin stages no uname, so `uname -s` answers
+  // nothing and the dispatch falls through to `*) exit 0` with the data-dir
+  // guard removed. With this stub, deleting that guard reaches the download arm
+  // and reds the assertion below.
+  writeFileSync(
+    join(bin, "uname"),
+    '#!/bin/sh\ncase "$1" in\n-s) echo Linux ;;\n-m) echo x86_64 ;;\nesac\n',
+    { mode: 0o755 },
+  );
   const res = spawnSync(
     "bash",
-    [join(plugin, "scripts", "provision-hook-binary.sh")],
-    { encoding: "utf8", env: { PATH: stubBin(t, ["curl", "wget"]) } },
+    [join(stagePlugin(t), "scripts", "provision-hook-binary.sh")],
+    { encoding: "utf8", env: { PATH: bin } },
   );
   assert.equal(res.status, 0, res.stderr);
   // safe-launch.sh will not run a binary without CLAUDE_PLUGIN_DATA either, so
