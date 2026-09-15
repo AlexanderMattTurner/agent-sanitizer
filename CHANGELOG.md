@@ -8,6 +8,13 @@ adhere to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+## [2.58.1] - 2026-09-15
+
+### Fixed
+
+- Plugin provisioners now read the data directory from the `CLAUDE_PLUGIN_DATA` environment variable, ensuring consistent configuration across test and production environments.
+- Fixed no-data-dir guards in tests to properly observe the configured data directory path.
+
 ## [2.58.0] - 2026-09-14
 
 ### Added
