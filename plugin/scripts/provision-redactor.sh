@@ -16,7 +16,6 @@ if [[ "${AGENT_SANITIZER_SECRETS_ENABLED:-}" != "1" ]]; then
   exit 0
 fi
 
-data_dir="${1:?usage: provision-redactor.sh <plugin-data-dir>}"
 script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 if [[ ! -r "$script_dir/lib/provision-common.sh" ]]; then
   echo "agent-sanitizer: $script_dir/lib/provision-common.sh is missing — the secret-redaction engine (Layer 4) cannot be provisioned (reinstall the plugin)" >&2
@@ -24,6 +23,15 @@ if [[ ! -r "$script_dir/lib/provision-common.sh" ]]; then
 fi
 # shellcheck source=lib/provision-common.sh
 . "$script_dir/lib/provision-common.sh"
+
+# Loud, because the operator asked for this layer: without the venv the client
+# falls back to the committed dist/redactor/daemon.pyz, so secrets are still
+# redacted, one zipapp self-extract slower on the first call of each session.
+if [[ -z "$plugin_data" ]]; then
+  echo "agent-sanitizer: CLAUDE_PLUGIN_DATA is unset — the secret-redaction engine (Layer 4) keeps no venv in this session and runs from the committed zipapp instead" >&2
+  exit 0
+fi
+data_dir="$plugin_data"
 
 # The trap covers every exit, including the idempotent early return (which is
 # fast, so it prints nothing) and the failure arms.

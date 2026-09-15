@@ -153,7 +153,7 @@ function provisionPath(
 function provision(staged, pathDir, env = {}) {
   return spawnSync(
     "bash",
-    [join(staged.plugin, "scripts", "provision-hook-binary.sh"), staged.data],
+    [join(staged.plugin, "scripts", "provision-hook-binary.sh")],
     {
       encoding: "utf8",
       cwd: tmpdir(),
@@ -161,6 +161,7 @@ function provision(staged, pathDir, env = {}) {
         PATH: pathDir,
         HOME: staged.dir,
         TMPDIR: staged.dir,
+        CLAUDE_PLUGIN_DATA: staged.data,
         // The node search must not find the runner's own node: these tests
         // model the host class the provisioner exists for.
         _AGENT_SANITIZER_NODE_SEARCH: "0",

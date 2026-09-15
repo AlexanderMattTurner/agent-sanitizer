@@ -2,21 +2,29 @@
 # `source=` paths below are relative to this file, not to shellcheck's cwd.
 # shellcheck source-path=SCRIPTDIR
 # The shared scaffolding of the SessionStart provisioners (provision-redactor.sh
-# and provision-hook-binary.sh). Both resolve the same plugin root, both must
-# report their wall-clock against the provisioning budget rather than the
-# per-hook one, and both owe the operator a loud line when the artifact they
-# just installed is not actually runnable — three answers that are the same for
-# reasons that have nothing to do with what either one installs.
+# and provision-hook-binary.sh). Both resolve the same plugin root and the same
+# data dir, both must report their wall-clock against the provisioning budget
+# rather than the per-hook one, and both owe the operator a loud line when the
+# artifact they just installed is not actually runnable — answers that are the
+# same for reasons that have nothing to do with what either one installs.
 #
 # A caller resolves its own directory (it cannot source a file whose path it has
 # not resolved yet) and sources this; everything after that line is shared.
 
 _provision_lib_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 
-# The plugin root, for the caller — the one variable this file publishes rather
-# than keeps to itself, hence the disable.
+# The plugin root and the plugin's persistent data dir, for the caller — the two
+# variables this file publishes rather than keeps to itself, hence the disables.
 # shellcheck disable=SC2034
 plugin_root="$(cd -- "$_provision_lib_dir/../.." && pwd)"
+# Read from the environment, exactly as safe-launch.sh reads it, so the hook command
+# in hooks.json carries no `$` for a harness to expand. Claude Code sets
+# CLAUDE_PLUGIN_DATA only for a hook it loaded FROM a plugin; a sandbox that re-runs
+# plugin hooks from its own root-owned tier (a glovebox microVM) sets nothing, so each
+# caller checks this for emptiness and exits 0 — there is nowhere to install into, and
+# a red SessionStart hook would say something untrue about a session that still works.
+# shellcheck disable=SC2034
+plugin_data="${CLAUDE_PLUGIN_DATA:-}"
 
 _provision_step=""
 _provision_started_ms=""

@@ -25,7 +25,6 @@ case "${AGENT_SANITIZER_HOOK_BINARY:-}" in
 *) echo "agent-sanitizer: AGENT_SANITIZER_HOOK_BINARY=${AGENT_SANITIZER_HOOK_BINARY} is not 0, 1 or unset — treating it as unset (auto)" >&2 ;;
 esac
 
-data_dir="${1:?usage: provision-hook-binary.sh <plugin-data-dir>}"
 script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 if [[ ! -r "$script_dir/lib/provision-common.sh" ]]; then
   echo "agent-sanitizer: $script_dir/lib/provision-common.sh is missing — the hook binary will not be provisioned (reinstall the plugin)" >&2
@@ -33,6 +32,13 @@ if [[ ! -r "$script_dir/lib/provision-common.sh" ]]; then
 fi
 # shellcheck source=lib/provision-common.sh
 . "$script_dir/lib/provision-common.sh"
+
+# Silent: safe-launch.sh already requires CLAUDE_PLUGIN_DATA before it will run a
+# binary, so a session without one takes the node path with nothing degraded.
+if [[ -z "$plugin_data" ]]; then
+  exit 0
+fi
+data_dir="$plugin_data"
 
 # Only the platforms the release carries binaries for (the case arms mirror
 # PLATFORMS in build-hook-binaries.mjs; provision-hook-binary.test.mjs drives

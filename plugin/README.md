@@ -25,6 +25,13 @@ either, provisioning fails loudly and tool output reaches the model
 **unredacted** — set `AGENT_SANITIZER_FAIL_OPEN=0` to have it suppressed
 instead.
 
+Both SessionStart provisioners read that directory from `CLAUDE_PLUGIN_DATA`,
+which Claude Code sets only for a hook it loaded from a plugin. A sandbox that
+re-runs plugin hooks from its own root-owned settings tier leaves it unset, so
+each provisioner skips: the redaction engine then runs from the committed
+`dist/redactor/daemon.pyz` and the hooks run on node, both under the same
+never-silent posture.
+
 ### Staying current
 
 Claude Code auto-updates Anthropic's own marketplaces by default and nobody
