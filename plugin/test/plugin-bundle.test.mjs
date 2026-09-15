@@ -291,14 +291,15 @@ function stageSources(t, { omit = [] } = {}) {
 function stubBin(t, omit) {
   const dir = join(scratch(t), "bin");
   mkdirSync(dir, { recursive: true });
-  // mkdir/rmdir/find are here so a stripped PATH still models the real one for
-  // the launcher's degraded-warning marker; without them that state is
-  // unrecordable and every warning repeats, which would pass a dedupe test
-  // vacuously. cat/mktemp/rm likewise: the binary arm captures stdin to temp
-  // files so it can replay the payload to the node path.
+  // mkdir/rmdir/find let a stripped PATH still record the launcher's
+  // degraded-warning marker, without which every warning repeats and a dedupe
+  // test passes vacuously. cat/mktemp/rm replay a captured payload to the node
+  // path. sleep and chmod are the provisioners': without them the lock's
+  // waiting arm dies at 127 and the daemon it installs is not executable.
   for (const cmd of [
     "bash",
     "sh",
+    "chmod",
     "dirname",
     "cat",
     "cmp",
@@ -309,6 +310,7 @@ function stubBin(t, omit) {
     "mkdir",
     "rm",
     "rmdir",
+    "sleep",
     "find",
   ]) {
     const found = spawnSync("command", ["-v", cmd], {
@@ -2049,57 +2051,96 @@ test("an install that produces no daemon fails loud, not silently", (t) => {
   assert.equal(res.stderr.includes("provisioned into"), false, res.stderr);
 });
 
-test("two provisioners cannot install into the same venv at once", (t) => {
-  // The check ("is the venv already the pinned build?") and the install
-  // (`uv venv`, which RECREATES the directory) are one critical section: two
-  // sessions starting together otherwise both read "not provisioned" and the
-  // second one rebuilds the venv under a daemon the first already launched
-  // from it. The lock makes the pair atomic, so the two installs are ordered
-  // rather than interleaved.
-  const plugin = stagePlugin(t);
-  const data = join(scratch(t), "data");
-  const bin = stubBin(t, ["python3", "pip"]);
-  const trace = join(scratch(t), "uv-trace");
-  // A `uv` slow enough that an unserialized pair MUST interleave: each run
-  // brackets its own work in the trace, so an interleaving is visible as
-  // "enter enter" rather than "enter leave enter leave".
-  writeFileSync(
-    join(bin, "uv"),
-    "#!/bin/sh\n" +
-      `echo enter >> ${trace}\n` +
-      "sleep 1\n" +
-      `echo leave >> ${trace}\n` +
-      // Leave a runnable daemon behind so the post-install check passes. The
-      // venv path is the LAST argument (`uv venv --quiet <path>`).
-      'if [ "$1" = venv ]; then for d in "$@"; do :; done; mkdir -p "$d/bin"; printf "#!/bin/sh\\n" > "$d/bin/agent-secret-redactor-daemon"; chmod 755 "$d/bin/agent-secret-redactor-daemon"; fi\n' +
-      "exit 0\n",
-    { mode: 0o755 },
-  );
-  const env = {
-    PATH: bin,
-    AGENT_SANITIZER_SECRETS_ENABLED: "1",
-    CLAUDE_PLUGIN_DATA: data,
-  };
-  const script = join(plugin, "scripts", "provision-redactor.sh");
-  const both = spawnSync(
-    "bash",
-    ["-c", `bash ${script} & bash ${script}; wait`],
-    { encoding: "utf8", env },
-  );
-  assert.equal(both.status, 0, both.stderr);
-  const steps = readFileSync(trace, "utf8").trim().split("\n");
-  // Non-vacuity: an install actually ran, so the ordering below is a real
-  // observation and not an empty trace.
-  assert.ok(steps.length >= 2, `no install ran: ${JSON.stringify(steps)}`);
-  let held = 0;
-  for (const step of steps) {
-    held += step === "enter" ? 1 : -1;
-    assert.ok(
-      held <= 1,
-      `two provisioners were inside the install at once: ${JSON.stringify(steps)}`,
+// provision_hold_lock has two implementations and only one runs per host:
+// flock(1) is util-linux, absent on a stock macOS, where it falls back to a
+// `mkdir` spin. A stub PATH carrying neither silently takes the fallback, so
+// the flock arm stages the host's own flock rather than leaving it to chance.
+for (const primitive of ["flock", "mkdir fallback"]) {
+  test(`two provisioners install once, not twice (${primitive})`, async (t) => {
+    // provision_hold_lock is held across the up-to-date CHECK as well as the
+    // install, so a serialized pair installs ONCE: the second provisioner takes
+    // the lock after the first has written its stamps, reads "already the pinned
+    // build", and exits without touching the venv. Unserialized, both read "not
+    // provisioned" before either writes one, and both run `uv venv` — which
+    // RECREATES the directory, under a daemon the first already launched from it.
+    const plugin = stagePlugin(t);
+    const data = join(scratch(t), "data");
+    const bin = stubBin(t, ["python3", "pip"]);
+    if (primitive === "flock") {
+      const real = spawnSync("command", ["-v", "flock"], {
+        shell: true,
+        encoding: "utf8",
+      }).stdout.trim();
+      // Not a skip: this arm is the path every Linux runner takes in production,
+      // so a runner without flock must say so rather than quietly test the other.
+      assert.ok(real, "flock is not on this host, so its arm cannot be driven");
+      symlinkSync(real, join(bin, "flock"));
+    }
+    const trace = join(scratch(t), "uv-trace");
+    // Only `uv venv` is bracketed and slow, and $PPID names the PROVISIONER that
+    // called it — uv's own pid is a fresh process per call and says nothing about
+    // whose critical section this is. One second is longer than the whole
+    // unserialized window, so a second install cannot hide inside the first.
+    writeFileSync(
+      join(bin, "uv"),
+      "#!/bin/sh\n" +
+        'if [ "$1" != venv ]; then exit 0; fi\n' +
+        `echo "enter $PPID" >> ${trace}\n` +
+        "sleep 1\n" +
+        `echo "leave $PPID" >> ${trace}\n` +
+        // Leave a runnable daemon behind so the post-install check passes. The
+        // venv path is the LAST argument (`uv venv --quiet <path>`).
+        'for d in "$@"; do :; done\n' +
+        'mkdir -p "$d/bin"\n' +
+        'printf "#!/bin/sh\\n" > "$d/bin/agent-secret-redactor-daemon"\n' +
+        'chmod 755 "$d/bin/agent-secret-redactor-daemon"\n',
+      { mode: 0o755 },
     );
-  }
-});
+    const env = {
+      PATH: bin,
+      AGENT_SANITIZER_SECRETS_ENABLED: "1",
+      CLAUDE_PLUGIN_DATA: data,
+    };
+    const script = join(plugin, "scripts", "provision-redactor.sh");
+    // Each child's own status, never `bash -c "A & B; wait"`: `wait` answers 0
+    // whatever the two exited with, so a provisioner that died in the lock's
+    // waiting arm read as a clean serialized run.
+    const run = () =>
+      new Promise((resolve) => {
+        const child = spawn("bash", [script], { env });
+        let err = "";
+        child.stderr.on("data", (chunk) => {
+          err += chunk;
+        });
+        child.on("close", (code) => resolve({ code, err }));
+      });
+    const runs = await Promise.all([run(), run()]);
+    for (const { code, err } of runs) assert.equal(code, 0, err);
+
+    const steps = readFileSync(trace, "utf8").trim().split("\n");
+    // ONE provisioner owned the whole critical section: the pid that opened it
+    // is the pid that closed it, and no second pid appears anywhere.
+    const [pid] = steps.map((step) => step.split(" ")[1]);
+    assert.deepEqual(
+      steps,
+      [`enter ${pid}`, `leave ${pid}`],
+      `the venv was built more than once: ${JSON.stringify(steps)}`,
+    );
+    // Non-vacuity in the other direction: one install RAN, so the single pair
+    // above is a serialized pair and not a provisioner that died before `uv`.
+    assert.ok(
+      existsSync(join(data, "venv", "bin", "agent-secret-redactor-daemon")),
+      "no venv was built, so nothing was serialized",
+    );
+    // And this arm drove the primitive it names: flock opens the lock PATH as a
+    // file, while the fallback only ever makes and removes `<path>.d`.
+    assert.equal(
+      existsSync(join(data, ".redactor-provision.lock")),
+      primitive === "flock",
+      `the ${primitive} arm did not take its own lock path`,
+    );
+  });
+}
 
 test("a missing shared provisioning lib refuses to provision", (t) => {
   const plugin = stagePlugin(t);
