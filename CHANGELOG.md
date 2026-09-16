@@ -8,6 +8,12 @@ adhere to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+## [2.58.4] - 2026-09-16
+
+### Changed
+
+- Documentation now requires a named command behind every "unverified" claim.
+
 ## [2.58.3] - 2026-09-16
 
 ### Fixed
