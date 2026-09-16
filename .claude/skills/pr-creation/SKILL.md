@@ -244,4 +244,13 @@ Use the `/pr-creation` skill. For contributions to others' repos, before writing
 
 Resolving a thread fires no event `review-findings-gate.yaml` listens for, so the `Review findings resolved` status stays stale until your next push re-runs it. The reviewer's own hold clears on the twice-hourly sweep (`claude-reviewer-hold-clear.yaml`) once no reviewer thread is unresolved. A hold whose concern lived only in the review BODY opens no thread to resolve — it clears when the reviewer re-reads your next push.
 
-No automated resolver covers it — every thread is resolved by whoever addressed it. `Review findings resolved` reads a gating (🔴/🟡) thread's resolved flag, not the diff, so one addressed-but-unresolved finding blocks the merge indefinitely. Resolving also fires no workflow event, so re-run the gate right after: `gh pr edit <N> --remove-label recheck-review-gate` then `--add-label recheck-review-gate`. Both halves, in that order — a bare add over a label already present fires nothing, since `labeled` fires on a transition. See CLAUDE.md's Pull Requests section for the mechanism.
+No automated resolver covers it — every thread is resolved by whoever addressed it. `Review findings resolved` reads a gating (🔴/🟡) thread's resolved flag, not the diff, so one addressed-but-unresolved finding blocks the merge indefinitely. Resolving also fires no workflow event, so re-run the gate right after. Not with `gh pr edit` — that subcommand routes through GraphQL, which 403s for agent-session tokens (`GitHub GraphQL is not available from Claude Code sessions`). Use the REST label endpoints, naming the repo in the path so a cross-repo run cannot relabel a same-numbered PR in the repo you are standing in:
+
+```
+gh api -X DELETE repos/<owner>/<repo>/issues/<N>/labels/recheck-review-gate
+gh api -X POST   repos/<owner>/<repo>/issues/<N>/labels -f 'labels[]=recheck-review-gate'
+```
+
+Both halves, in that order — a bare add over a label already present fires nothing, since `labeled` fires on a transition. A 404 on the remove just means the label was not there.
+
+`recheck-review-gate` is THIS repo's spelling and does not travel: on another repo, take the label name from that repo's failing `Review findings resolved` status, whose description names it outright. Applying the wrong name is not a harmless miss — the gate subscribes to `labeled` generically, so it fires one evaluation that reposts the verdict already standing and then sticks forever, leaving a dead retry hatch that looks like it worked. If you cannot resolve the target's label name, stop and ask rather than applying a guess. See CLAUDE.md's Pull Requests section for the full mechanism.
