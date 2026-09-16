@@ -17,6 +17,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import {
   chargeHostExtension,
   chargeHostExtensionSync,
+  CONCURRENT_PROVISION_CEILING_MS,
   excludeConcurrentProvisioning,
   excludeProvisioning,
   formatBytes,
@@ -231,6 +232,31 @@ describe("provisioning is not the hook's cost", () => {
       clock,
     );
     assert.equal(timer.wallMs(), 4_000);
+  });
+
+  it("pins the ceiling past which a wedged run is measured anyway", async () => {
+    // The founding case of this module — a SessionStart scan that blocked
+    // startup for 30 SECONDS — must not be bought off by an install that
+    // happened to be running. Both sides of the boundary, so moving the
+    // constant moves the test with it.
+    const discounted = async (/** @type {number} */ elapsed) => {
+      let t = 0;
+      const clock = () => t;
+      const timer = startHookTimer(clock);
+      await excludeConcurrentProvisioning(
+        async () => {
+          t += elapsed;
+        },
+        () => true,
+        clock,
+      );
+      return timer.wallMs();
+    };
+    assert.equal(await discounted(CONCURRENT_PROVISION_CEILING_MS), 0);
+    assert.equal(
+      await discounted(CONCURRENT_PROVISION_CEILING_MS + 1),
+      CONCURRENT_PROVISION_CEILING_MS + 1,
+    );
   });
 
   it("charges a concurrent-provisioning window that THREW", async () => {

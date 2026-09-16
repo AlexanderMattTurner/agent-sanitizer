@@ -314,6 +314,7 @@ const PUBLISHED_EXPORTS = {
   ],
   "lib/secret-annotate": ["envValueRegex", "hasEnvBoundSecret"],
   "lib/hook-timing": [
+    "CONCURRENT_PROVISION_CEILING_MS",
     "SLOW_HOOK_THRESHOLD_MS",
     "SLOW_PROVISION_THRESHOLD_MS",
     "chargeHostExtension",

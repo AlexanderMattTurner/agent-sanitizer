@@ -147,8 +147,9 @@ async function excludeConcurrentProvisioning(work, setupAlive, now = Date.now) {
   try {
     return await work();
   } finally {
-    if (startedAlive && setupAlive())
-      provisioningMs += Math.max(0, now() - started);
+    const elapsed = Math.max(0, now() - started);
+    if (startedAlive && elapsed <= CONCURRENT_PROVISION_CEILING_MS && setupAlive())
+      provisioningMs += elapsed;
   }
 }
 function startHookTimer(now = Date.now, cpuNow = processCpuMs) {
@@ -211,11 +212,12 @@ function reportSlowHook(hookName, elapsedMs, hookEventName, emit, writeErr = (ch
   emit(hookEventName, { additionalContext: notice });
   return true;
 }
-var SLOW_HOOK_THRESHOLD_MS, ISSUE_URL, VERSION_MANIFESTS, SEMVER, cachedVersion, provisioningMs, provisioningCpuMs, redactorRoundTripMs, hostExtensionMs, hostExtensionCpuMs, hostExtensionDepth;
+var SLOW_HOOK_THRESHOLD_MS, CONCURRENT_PROVISION_CEILING_MS, ISSUE_URL, VERSION_MANIFESTS, SEMVER, cachedVersion, provisioningMs, provisioningCpuMs, redactorRoundTripMs, hostExtensionMs, hostExtensionCpuMs, hostExtensionDepth;
 var init_hook_timing = __esm({
   "claude-hooks/lib/hook-timing.mjs"() {
     "use strict";
     SLOW_HOOK_THRESHOLD_MS = 1e3;
+    CONCURRENT_PROVISION_CEILING_MS = 10 * SLOW_HOOK_THRESHOLD_MS;
     ISSUE_URL = "https://github.com/AlexanderMattTurner/agent-sanitizer/issues/new";
     VERSION_MANIFESTS = [
       "../../.claude-plugin/plugin.json",

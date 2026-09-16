@@ -68,6 +68,19 @@ export const SLOW_HOOK_THRESHOLD_MS = 1000;
  */
 export const SLOW_PROVISION_THRESHOLD_MS = 60000;
 
+/**
+ * The longest window {@link excludeConcurrentProvisioning} will discount.
+ *
+ * Ten times the hook budget, because the discount's whole premise is that the
+ * hook's work is small and the machine is busy: an instruction scan is tens of
+ * milliseconds of work, so a wait this far past its budget is not a busy box any
+ * more, whatever else is installing. Past the ceiling the run is measured in
+ * full and reports — the founding case of this module is a SessionStart scan
+ * that blocked startup for 30 SECONDS, and a cold-start install running
+ * alongside it must not be what buys that silence.
+ */
+export const CONCURRENT_PROVISION_CEILING_MS = 10 * SLOW_HOOK_THRESHOLD_MS;
+
 /** Where a reader is asked to send the timing. */
 const ISSUE_URL =
   "https://github.com/AlexanderMattTurner/agent-sanitizer/issues/new";
@@ -429,11 +442,10 @@ export async function excludeProvisioning(
  * install runs in ANOTHER process, so none of it lands in this one's CPU figure,
  * and charging CPU here would discount the hook's own computing.
  *
- * The cost of the evidence: a run that spends its whole window inside a
- * provisioning step is not measured, so a regression that only ever happens
- * during setup hides behind it. That is the same trade `excludeProvisioning`
- * already makes, and the alternative — reporting a wait no reader can act on —
- * is the alert fatigue this module exists to fight.
+ * Bounded by {@link CONCURRENT_PROVISION_CEILING_MS}, which is what stops the
+ * discount from hiding a wedged run: a window past the ceiling is charged to
+ * nobody but the hook, however busy the machine was, because at that magnitude
+ * the hook is the thing that is broken.
  * @template T
  * @param {() => Promise<T>} work
  * @param {() => boolean} setupAlive  whether a session-level provisioning step
@@ -455,8 +467,13 @@ export async function excludeConcurrentProvisioning(
     // In a `finally`, like every other charge here: a scan that THREW still
     // waited out whatever the machine was doing, and the fault it reports is a
     // separate matter from how long the wait was.
-    if (startedAlive && setupAlive())
-      provisioningMs += Math.max(0, now() - started);
+    const elapsed = Math.max(0, now() - started);
+    if (
+      startedAlive &&
+      elapsed <= CONCURRENT_PROVISION_CEILING_MS &&
+      setupAlive()
+    )
+      provisioningMs += elapsed;
   }
 }
 
