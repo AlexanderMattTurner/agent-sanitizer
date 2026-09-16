@@ -33,6 +33,7 @@ import {
   lazyImport,
   markerIsTrusted,
   probeSetupAlive,
+  setupRunning,
   PROJECT_DIR,
   readStdinJson,
 } from "./lib/hook-io.mjs";
@@ -52,7 +53,11 @@ import { formatReport } from "./lib/invisible-report.mjs";
 import { sweepStaleReveals } from "./lib/reveal.mjs";
 import { sweepStaleConfirms } from "./lib/secret-drop-guard.mjs";
 import { hookTrace, TraceEvent } from "./lib/trace.mjs";
-import { reportSlowHook, startHookTimer } from "./lib/hook-timing.mjs";
+import {
+  excludeConcurrentProvisioning,
+  reportSlowHook,
+  startHookTimer,
+} from "./lib/hook-timing.mjs";
 // Relative, not the `agent-sanitizer` specifier every other engine import uses:
 // this is the scan's SCOPE, which is hook policy, and package.json's exports map
 // deliberately does not publish it — routing it through the specifier would fail
@@ -404,7 +409,13 @@ export async function cliMain(opts = {}) {
   // into a bug report (see lib/hook-timing.mjs).
   const timer = startHookTimer();
   try {
-    await runScanCli(opts);
+    // Charged to provisioning when the session's setup is installing THROUGHOUT
+    // this run: that install saturates the machine, and a scan that merely
+    // waited it out has no per-call cost to report (see hook-timing.mjs).
+    await excludeConcurrentProvisioning(
+      () => runScanCli(opts),
+      () => setupRunning(hookgateMarkerPath()),
+    );
   } finally {
     reportSlowHook(
       HOOK_NAME,

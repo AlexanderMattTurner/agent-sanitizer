@@ -17,6 +17,8 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import {
   chargeHostExtension,
   chargeHostExtensionSync,
+  CONCURRENT_PROVISION_CEILING_MS,
+  excludeConcurrentProvisioning,
   excludeProvisioning,
   formatBytes,
   reportSlowHook,
@@ -172,6 +174,127 @@ describe("provisioning is not the hook's cost", () => {
     });
     assert.deepEqual(loaded, { ok: true });
     assert.equal(timer.wallMs(), 0, "30s of install wait must not be charged");
+  });
+
+  it("excuses a wait spent entirely inside a SIBLING's provisioning", async () => {
+    // The reported case: a launch scan doing ~14ms of work measured 2.7s while a
+    // neighbouring SessionStart hook ran its cold-start installs. The install is
+    // another process, so excludeProvisioning cannot see it — the caller's
+    // cold-start marker is the evidence that it was running.
+    let t = 0;
+    const clock = () => t;
+    const timer = startHookTimer(clock);
+    await excludeConcurrentProvisioning(
+      async () => {
+        t += 2_700;
+      },
+      () => true,
+      clock,
+    );
+    assert.equal(timer.wallMs(), 0);
+    assert.equal(slowHookNotice("scan-invisible-chars", timer.wallMs()), null);
+  });
+
+  it("measures a slow run in full when no provisioning is in flight", async () => {
+    // Non-vacuity for the case above, and the answer to "a slow disk reads as a
+    // sibling's install": with nothing provisioning, the same 2.7s is the hook's
+    // to report.
+    let t = 0;
+    const clock = () => t;
+    const timer = startHookTimer(clock);
+    await excludeConcurrentProvisioning(
+      async () => {
+        t += 2_700;
+      },
+      () => false,
+      clock,
+    );
+    assert.equal(timer.wallMs(), 2_700);
+    assert.match(
+      slowHookNotice("scan-invisible-chars", timer.wallMs()),
+      /took 2\.7s/u,
+    );
+  });
+
+  it("measures in full a run the provisioning step ended inside", async () => {
+    // Alive at the start, gone by the end: the window cannot be apportioned
+    // between the install and the hook, and splitting it by guess would discount
+    // the hook's own work. Measured in full, so it reports honestly.
+    let t = 0;
+    const clock = () => t;
+    const timer = startHookTimer(clock);
+    const alive = [true, false];
+    await excludeConcurrentProvisioning(
+      async () => {
+        t += 4_000;
+      },
+      () => alive.shift() ?? false,
+      clock,
+    );
+    assert.equal(timer.wallMs(), 4_000);
+  });
+
+  it("pins the ceiling past which a wedged run is measured anyway", async () => {
+    // The founding case of this module — a SessionStart scan that blocked
+    // startup for 30 SECONDS — must not be bought off by an install that
+    // happened to be running. Both sides of the boundary, so moving the
+    // constant moves the test with it.
+    const discounted = async (/** @type {number} */ elapsed) => {
+      let t = 0;
+      const clock = () => t;
+      const timer = startHookTimer(clock);
+      await excludeConcurrentProvisioning(
+        async () => {
+          t += elapsed;
+        },
+        () => true,
+        clock,
+      );
+      return timer.wallMs();
+    };
+    assert.equal(await discounted(CONCURRENT_PROVISION_CEILING_MS), 0);
+    assert.equal(
+      await discounted(CONCURRENT_PROVISION_CEILING_MS + 1),
+      CONCURRENT_PROVISION_CEILING_MS + 1,
+    );
+  });
+
+  it("charges a concurrent-provisioning window that THREW", async () => {
+    let t = 0;
+    const clock = () => t;
+    const timer = startHookTimer(clock);
+    await assert.rejects(
+      excludeConcurrentProvisioning(
+        async () => {
+          t += 5_000;
+          throw new Error("scan died");
+        },
+        () => true,
+        clock,
+      ),
+      /scan died/u,
+    );
+    assert.equal(timer.wallMs(), 0);
+  });
+
+  it("leaves the hook's own CPU charged while discounting the wait", async () => {
+    // Wall-clock only: the install runs in another process, so none of it lands
+    // in this one's CPU — discounting CPU here would hide the hook's computing.
+    let t = 0;
+    let cpu = 0;
+    const clock = () => t;
+    const cpuClock = () => cpu;
+    const timer = startHookTimer(clock, cpuClock);
+    await excludeConcurrentProvisioning(
+      async () => {
+        t += 3_000;
+        cpu += 400;
+      },
+      () => true,
+      clock,
+    );
+    assert.equal(timer.wallMs(), 0);
+    assert.equal(timer.cpuMs(), 400);
   });
 
   it("excuses the cold redactor-daemon spawn", async () => {
