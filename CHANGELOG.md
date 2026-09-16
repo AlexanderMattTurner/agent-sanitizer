@@ -8,6 +8,13 @@ adhere to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+## [2.58.3] - 2026-09-16
+
+### Fixed
+- Bounded concurrent-provisioning discount at 10x the budget to prevent excessive cost calculations in hook-timing
+- Discount instruction scan wait time while session setup is installing, improving timing accuracy
+- Stop reporting launch scan's external wait in the model's context to provide more accurate performance metrics
+
 ## [2.58.1] - 2026-09-15
 
 ### Fixed
