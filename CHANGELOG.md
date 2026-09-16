@@ -8,6 +8,13 @@ adhere to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+## [2.58.5] - 2026-09-16
+
+### Fixed
+
+- Fixed relabel command for agent-session tokens and corrected the wrong-gate-label mechanism to require `-R` for cross-repo operations.
+- Resolved gate-recheck label names by loading from the target repository's SSOT instead of assuming predefined values.
+
 ## [2.58.4] - 2026-09-16
 
 ### Changed
