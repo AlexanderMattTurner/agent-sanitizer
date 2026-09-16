@@ -17,6 +17,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import {
   chargeHostExtension,
   chargeHostExtensionSync,
+  excludeConcurrentProvisioning,
   excludeProvisioning,
   formatBytes,
   reportSlowHook,
@@ -172,6 +173,102 @@ describe("provisioning is not the hook's cost", () => {
     });
     assert.deepEqual(loaded, { ok: true });
     assert.equal(timer.wallMs(), 0, "30s of install wait must not be charged");
+  });
+
+  it("excuses a wait spent entirely inside a SIBLING's provisioning", async () => {
+    // The reported case: a launch scan doing ~14ms of work measured 2.7s while a
+    // neighbouring SessionStart hook ran its cold-start installs. The install is
+    // another process, so excludeProvisioning cannot see it — the caller's
+    // cold-start marker is the evidence that it was running.
+    let t = 0;
+    const clock = () => t;
+    const timer = startHookTimer(clock);
+    await excludeConcurrentProvisioning(
+      async () => {
+        t += 2_700;
+      },
+      () => true,
+      clock,
+    );
+    assert.equal(timer.wallMs(), 0);
+    assert.equal(slowHookNotice("scan-invisible-chars", timer.wallMs()), null);
+  });
+
+  it("measures a slow run in full when no provisioning is in flight", async () => {
+    // Non-vacuity for the case above, and the answer to "a slow disk reads as a
+    // sibling's install": with nothing provisioning, the same 2.7s is the hook's
+    // to report.
+    let t = 0;
+    const clock = () => t;
+    const timer = startHookTimer(clock);
+    await excludeConcurrentProvisioning(
+      async () => {
+        t += 2_700;
+      },
+      () => false,
+      clock,
+    );
+    assert.equal(timer.wallMs(), 2_700);
+    assert.match(
+      slowHookNotice("scan-invisible-chars", timer.wallMs()),
+      /took 2\.7s/u,
+    );
+  });
+
+  it("measures in full a run the provisioning step ended inside", async () => {
+    // Alive at the start, gone by the end: the window cannot be apportioned
+    // between the install and the hook, and splitting it by guess would discount
+    // the hook's own work. Measured in full, so it reports honestly.
+    let t = 0;
+    const clock = () => t;
+    const timer = startHookTimer(clock);
+    const alive = [true, false];
+    await excludeConcurrentProvisioning(
+      async () => {
+        t += 4_000;
+      },
+      () => alive.shift() ?? false,
+      clock,
+    );
+    assert.equal(timer.wallMs(), 4_000);
+  });
+
+  it("charges a concurrent-provisioning window that THREW", async () => {
+    let t = 0;
+    const clock = () => t;
+    const timer = startHookTimer(clock);
+    await assert.rejects(
+      excludeConcurrentProvisioning(
+        async () => {
+          t += 5_000;
+          throw new Error("scan died");
+        },
+        () => true,
+        clock,
+      ),
+      /scan died/u,
+    );
+    assert.equal(timer.wallMs(), 0);
+  });
+
+  it("leaves the hook's own CPU charged while discounting the wait", async () => {
+    // Wall-clock only: the install runs in another process, so none of it lands
+    // in this one's CPU — discounting CPU here would hide the hook's computing.
+    let t = 0;
+    let cpu = 0;
+    const clock = () => t;
+    const cpuClock = () => cpu;
+    const timer = startHookTimer(clock, cpuClock);
+    await excludeConcurrentProvisioning(
+      async () => {
+        t += 3_000;
+        cpu += 400;
+      },
+      () => true,
+      clock,
+    );
+    assert.equal(timer.wallMs(), 0);
+    assert.equal(timer.cpuMs(), 400);
   });
 
   it("excuses the cold redactor-daemon spawn", async () => {
@@ -791,84 +888,6 @@ describe("reportSlowHook (no-verdict events)", () => {
     );
     assert.match(emitted[0][1].additionalContext, /used 0\.7s of CPU/);
     assert.match(errs[0], /used 0\.7s of CPU/);
-  });
-
-  // The reported case: a launch scan doing ~14ms of work reported 2.7s while a
-  // neighbouring SessionStart hook ran its cold-start installs. Nothing here
-  // could have kept that run inside the budget, so the notice must not spend the
-  // model's context on it — and must still reach the transcript.
-  it("keeps an entirely external wait off the model channel", () => {
-    const errs = [];
-    const emitted = [];
-    const reported = reportSlowHook(
-      "scan-invisible-chars",
-      2_700,
-      "SessionStart",
-      (event, fields) => emitted.push([event, fields]),
-      (chunk) => errs.push(chunk),
-      { cpuMs: 14, redactorMs: 0, hostMs: 0 },
-    );
-    assert.equal(reported, false);
-    assert.deepEqual(emitted, []);
-    // Non-vacuity: the run DID overrun and WAS attributed, so the suppression is
-    // why the model heard nothing — not a within-budget run saying nothing.
-    assert.equal(errs.length, 1);
-    assert.match(errs[0], /took 2\.7s/);
-    assert.match(errs[0], /blocked on a loaded machine/);
-  });
-
-  it("still reports an overrun the hook's own work already earns", () => {
-    // Measured windows over budget on their own: external wait sits on top, but
-    // 1.4s of CPU is a per-call cost this repo owns and must hear about.
-    const errs = [];
-    const emitted = [];
-    const reported = reportSlowHook(
-      "scan-invisible-chars",
-      9_000,
-      "SessionStart",
-      (event, fields) => emitted.push([event, fields]),
-      (chunk) => errs.push(chunk),
-      { cpuMs: 1_400, redactorMs: 0, hostMs: 0 },
-    );
-    assert.equal(reported, true);
-    assert.equal(emitted.length, 1);
-    assert.match(
-      emitted[0][1].additionalContext,
-      /blocked on a loaded machine/,
-    );
-  });
-
-  it("still reports an overrun a measured window dominates", () => {
-    const errs = [];
-    const emitted = [];
-    const reported = reportSlowHook(
-      "scan-invisible-chars",
-      1_200,
-      "SessionStart",
-      (event, fields) => emitted.push([event, fields]),
-      (chunk) => errs.push(chunk),
-      { cpuMs: 900, redactorMs: 0, hostMs: 0 },
-    );
-    assert.equal(reported, true);
-    assert.match(
-      emitted[0][1].additionalContext,
-      /largest share is this hook computing/,
-    );
-  });
-
-  it("reports an unattributed overrun, having no grounds to call it external", () => {
-    const errs = [];
-    const emitted = [];
-    const reported = reportSlowHook(
-      "scan-invisible-chars",
-      2_700,
-      "SessionStart",
-      (event, fields) => emitted.push([event, fields]),
-      (chunk) => errs.push(chunk),
-      { cpuMs: 14 },
-    );
-    assert.equal(reported, true);
-    assert.equal(emitted.length, 1);
   });
 });
 

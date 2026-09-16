@@ -7,10 +7,7 @@
  * bug to notice from inside — it looks exactly like a slow agent, so it goes
  * unreported for weeks (one SessionStart scan blocked startup for 30 SECONDS
  * before anyone traced it back here). A hook past the budget therefore says so
- * IN BAND, in the model's context, where it can be relayed to the operator —
- * except for the one overrun no operator can act on, a launch-time scan whose
- * every measured window fits the budget and whose wait went somewhere none of
- * them can see ({@link reportSlowHook}); that one stops at stderr.
+ * IN BAND, in the model's context, where it can be relayed to the operator.
  *
  * FOUR numbers, because wall-clock alone cannot say whose cost it is: a hook on
  * a contended host waits far longer than it computes (a 1.1 KB payload and a
@@ -30,7 +27,12 @@
  *
  * ONE-TIME PROVISIONING is excluded (see {@link excludeProvisioning}): charging
  * an install to the hook that merely waited it out would make the FIRST call of
- * every session cry wolf, which is the alert fatigue this notice fights.
+ * every session cry wolf, which is the alert fatigue this notice fights. A
+ * provisioning step running in ANOTHER process is excluded the same way and for
+ * the same reason ({@link excludeConcurrentProvisioning}) — a launch hook's
+ * install saturates the machine every other hook is sharing, and a wait spent
+ * inside a window the caller can show was provisioning is no more this hook's
+ * cost than its own install is.
  *
  * Dependency-free on purpose: everything imports this, including hook-io, so a
  * back-import would close a cycle. The one emitter it needs is passed in. The
@@ -412,6 +414,53 @@ export async function excludeProvisioning(
 }
 
 /**
+ * Run `work`, charging its duration to provisioning when a SESSION-LEVEL
+ * provisioning step was in flight for the whole of it — a neighbouring hook's
+ * dependency install, which saturates the machine this hook is only sharing.
+ * {@link excludeProvisioning} discounts the wait this process performs itself;
+ * this discounts the one it merely runs alongside.
+ *
+ * `setupAlive` is asked twice, before and after, and only a step alive at BOTH
+ * ends is charged. A step that started or finished mid-run leaves a window
+ * nothing here can apportion, and splitting it by guess would discount the
+ * hook's own work — so that run is measured in full and reports honestly.
+ *
+ * Wall-clock only, where {@link excludeProvisioning} charges CPU too: the
+ * install runs in ANOTHER process, so none of it lands in this one's CPU figure,
+ * and charging CPU here would discount the hook's own computing.
+ *
+ * The cost of the evidence: a run that spends its whole window inside a
+ * provisioning step is not measured, so a regression that only ever happens
+ * during setup hides behind it. That is the same trade `excludeProvisioning`
+ * already makes, and the alternative — reporting a wait no reader can act on —
+ * is the alert fatigue this module exists to fight.
+ * @template T
+ * @param {() => Promise<T>} work
+ * @param {() => boolean} setupAlive  whether a session-level provisioning step
+ *   is running right now; the caller owns the evidence (a cold-start marker and
+ *   its PID), since this module reads no files of its own
+ * @param {() => number} [now]  injectable clock, for tests
+ * @returns {Promise<T>}
+ */
+export async function excludeConcurrentProvisioning(
+  work,
+  setupAlive,
+  now = Date.now,
+) {
+  const startedAlive = setupAlive();
+  const started = now();
+  try {
+    return await work();
+  } finally {
+    // In a `finally`, like every other charge here: a scan that THREW still
+    // waited out whatever the machine was doing, and the fault it reports is a
+    // separate matter from how long the wait was.
+    if (startedAlive && setupAlive())
+      provisioningMs += Math.max(0, now() - started);
+  }
+}
+
+/**
  * Start measuring; each reader on the returned object reports what has elapsed
  * so far MINUS any provisioning charged in the meantime, and may be called more
  * than once.
@@ -461,65 +510,6 @@ export function startHookTimer(now = Date.now, cpuNow = processCpuMs) {
 }
 
 /**
- * Which of the four windows holds the largest share of a run: this hook
- * computing, its redactor round trips, a host extension it called, or none of
- * them. The SSOT both the attribution sentence and {@link externalWaitOnly}
- * read, so the verdict a notice prints and the decision to print it at all
- * cannot disagree.
- *
- * The three measured windows overlap by the framing this side does
- * mid-round-trip and mid-callback, so they do not sum to the elapsed time; the
- * share that dominates despite the overlap is still the one to act on. An
- * absent `hostMs` is a window the caller cannot measure, so it is left out of
- * the remainder and `other` covers it.
- * @param {number} elapsedMs
- * @param {number} cpuMs
- * @param {number} redactorMs
- * @param {number | undefined} hostMs  absent when the caller measures no host
- *   callbacks; a caller that does pass 0 when none ran
- * @returns {"redactor" | "host" | "cpu" | "other"}
- */
-function largestWaitWindow(elapsedMs, cpuMs, redactorMs, hostMs) {
-  const measuredHostMs = hostMs ?? 0;
-  const otherMs = Math.max(0, elapsedMs - cpuMs - redactorMs - measuredHostMs);
-  const largest = Math.max(cpuMs, redactorMs, measuredHostMs, otherMs);
-  if (redactorMs === largest) return "redactor";
-  if (hostMs !== undefined && hostMs === largest) return "host";
-  return cpuMs === largest ? "cpu" : "other";
-}
-
-/**
- * Whether a run's overrun is entirely outside everything this process measured:
- * the unmeasured window holds the largest share, AND the windows that WERE
- * measured would have stayed inside the budget on their own.
- *
- * Both halves are load-bearing. The first is {@link attributeWait}'s "blocked
- * on something outside the sanitizer" verdict. The second is the counterfactual
- * that makes such a notice unactionable: no change to this hook would have kept
- * the run inside its budget, so a report asks its reader to hunt a per-call cost
- * that does not exist. A run whose own measured work already exceeds the budget
- * is over it on the sanitizer's account and stays loud, however much external
- * wait sits on top of it.
- *
- * False for an unattributed run: a caller that measured nothing has no grounds
- * to call the wait external.
- * @param {number} elapsedMs
- * @param {SlowHookContext | undefined} context
- * @param {number} thresholdMs
- * @returns {boolean}
- */
-function externalWaitOnly(elapsedMs, context, thresholdMs) {
-  const cpuMs = context?.cpuMs;
-  const redactorMs = context?.redactorMs;
-  if (typeof cpuMs !== "number" || typeof redactorMs !== "number") return false;
-  const hostMs =
-    typeof context?.hostMs === "number" ? context.hostMs : undefined;
-  if (largestWaitWindow(elapsedMs, cpuMs, redactorMs, hostMs) !== "other")
-    return false;
-  return cpuMs + redactorMs + (hostMs ?? 0) <= thresholdMs;
-}
-
-/**
  * The attribution sentence for a run whose CPU and redactor-round-trip shares
  * are both known: the three numbers, then which of the four WINDOWS the time went
  * into — this hook computing, the redactor call, a host extension, or none of
@@ -553,15 +543,17 @@ function externalWaitOnly(elapsedMs, context, thresholdMs) {
 function attributeWait(elapsedMs, cpuMs, redactorMs, hostMs) {
   // `hostMs` absent means the caller cannot measure that window, not that it was
   // empty — a caller that CAN measure passes 0 and gets the zero printed. So an
-  // absent one is left out of the sentence, and the verdict's fourth arm names
-  // it as one of the unmeasured candidates.
-  const dominant = largestWaitWindow(elapsedMs, cpuMs, redactorMs, hostMs);
+  // absent one is left out of both the sentence and the remainder, and the
+  // verdict's fourth arm names it as one of the unmeasured candidates.
+  const measuredHostMs = hostMs ?? 0;
+  const otherMs = Math.max(0, elapsedMs - cpuMs - redactorMs - measuredHostMs);
+  const largest = Math.max(cpuMs, redactorMs, measuredHostMs, otherMs);
   const verdict =
-    dominant === "redactor"
+    redactorMs === largest
       ? "The largest share was spent inside the redactor round trip — the daemon's scan, the host it shares, or both; this hook was not computing it."
-      : dominant === "host"
+      : hostMs !== undefined && hostMs === largest
         ? "The largest share was spent inside a host extension this hook called — a callback the composer injected, and a cost that composer owns; neither the sanitizer nor the redactor was computing it."
-        : dominant === "cpu"
+        : cpuMs === largest
           ? "The largest share is this hook computing — a per-call cost the sanitizer owns, repeated by every affected call."
           : hostMs === undefined
             ? "The largest share is neither the redactor nor this hook computing: it was blocked on a loaded machine, on a host extension this caller does not measure, or on something else outside the sanitizer that it called."
@@ -749,16 +741,6 @@ export function withSlowHookNotice(
  * envelope rather than a control-plane verdict — SessionStart, which has no
  * verdict channel at all. A within-budget run emits nothing, so the quiet path
  * stays quiet (and the hook's silent-success contract is unchanged).
- *
- * The callers here are the LAUNCH-TIME scanners, which run concurrently with
- * whatever else the session is provisioning: a neighbouring hook's dependency
- * install saturates the box for seconds, and {@link excludeProvisioning} can
- * discount only the sanitizer's own. An overrun that is entirely that wait
- * ({@link externalWaitOnly}) stops at stderr instead of reaching the model —
- * still in the transcript for whoever is debugging, no longer spending the
- * user's attention on a report nothing in this repo can act on. The per-call
- * hooks report through {@link withSlowHookNotice} and are unaffected: a wait
- * every tool call repeats is worth naming whoever imposed it.
  * @param {string} hookName
  * @param {number} elapsedMs
  * @param {string} hookEventName
@@ -767,8 +749,7 @@ export function withSlowHookNotice(
  *   imported so this module stays dependency-free — see the module doc
  * @param {(chunk: string) => void} [writeErr]  injectable stderr sink, for tests
  * @param {SlowHookContext} [context]  see {@link slowHookNotice}
- * @returns {boolean}  whether the notice reached the MODEL; an overrun always
- *   reaches stderr, so false covers both a healthy run and an external wait
+ * @returns {boolean}  whether a notice was emitted
  */
 export function reportSlowHook(
   hookName,
@@ -780,8 +761,6 @@ export function reportSlowHook(
 ) {
   const notice = writeSlowHookNotice(hookName, elapsedMs, writeErr, context);
   if (notice === null) return false;
-  if (externalWaitOnly(elapsedMs, context, SLOW_HOOK_THRESHOLD_MS))
-    return false;
   emit(hookEventName, { additionalContext: notice });
   return true;
 }

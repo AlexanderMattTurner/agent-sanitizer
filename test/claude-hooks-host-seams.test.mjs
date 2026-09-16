@@ -33,6 +33,7 @@ const {
   configureMissingPackageRemedy,
   hookgateMarkerPath,
   probeSetupAlive,
+  setupRunning,
   SETUP_LOCK_DECLARATION,
   awaitLazyDependency,
   scrubUntrustedText,
@@ -822,6 +823,33 @@ describe("setup-liveness probe", () => {
     // Garbage contents are a write race, not a death: keep waiting.
     writeFileSync(marker, "not-a-pid");
     assert.equal(probeSetupAlive(marker), true);
+  });
+
+  it("falls the OTHER way in the strict twin, on the same inputs", async () => {
+    // setupRunning decides whether to stop charging a caller for time it spent,
+    // so every case probeSetupAlive resolves toward "alive" on an ABSENCE of
+    // evidence must resolve toward "not running" here. Same inputs, opposite
+    // answers: that contrast is the whole contract.
+    const { writeFileSync, mkdtempSync } = await import("node:fs");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+    const marker = join(mkdtempSync(join(tmpdir(), "seam-strict-")), "m");
+    const cases = [
+      ["a null path", null],
+      ["an unreadable marker", "/no/such/marker-ffc1a9"],
+    ];
+    for (const [label, path] of cases) {
+      assert.equal(probeSetupAlive(path), true, `${label} waits`);
+      assert.equal(setupRunning(path), false, `${label} is not evidence`);
+    }
+    writeFileSync(marker, "not-a-pid");
+    assert.equal(probeSetupAlive(marker), true, "garbage keeps the wait");
+    assert.equal(setupRunning(marker), false, "garbage is not evidence");
+    // The one case both agree on, so the strict probe is not simply `false`.
+    writeFileSync(marker, String(process.pid));
+    assert.equal(setupRunning(marker), true);
+    writeFileSync(marker, "2147483646");
+    assert.equal(setupRunning(marker), false);
   });
 
   it("judges a lock-declaring marker by the lock, not by its pid", async (t) => {

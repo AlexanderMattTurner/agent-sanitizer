@@ -21,12 +21,14 @@ import { readFileSync } from "node:fs";
 import {
   emitHookResponse,
   EmptyStdinError,
+  hookgateMarkerPath,
   HookEvent,
   isMain,
   lazyImport,
   PROJECT_DIR,
   readStdinJson,
   safeErrMessage,
+  setupRunning,
 } from "./lib/hook-io.mjs";
 import {
   registerFaultPolicy,
@@ -38,7 +40,11 @@ import {
   recordInstructionsLoaded,
 } from "./lib/invisible-alert.mjs";
 import { hookTrace, TraceEvent } from "./lib/trace.mjs";
-import { reportSlowHook, startHookTimer } from "./lib/hook-timing.mjs";
+import {
+  excludeConcurrentProvisioning,
+  reportSlowHook,
+  startHookTimer,
+} from "./lib/hook-timing.mjs";
 import { formatReport } from "./lib/invisible-report.mjs";
 import {
   contextScopeContradiction,
@@ -259,6 +265,41 @@ export { HOOK_NAME };
 export async function cliMain({ trace: sink } = {}) {
   const timer = startHookTimer();
   const emitTrace = hookTrace(sink);
+  try {
+    // Charged to provisioning when the session's setup is installing THROUGHOUT
+    // this run: that install saturates the machine, and a scan that merely
+    // waited it out has no per-call cost to report (see hook-timing.mjs).
+    await excludeConcurrentProvisioning(
+      () => runLoadedScanCli(emitTrace),
+      () => setupRunning(hookgateMarkerPath()),
+    );
+  } finally {
+    reportSlowHook(
+      HOOK_NAME,
+      timer.wallMs(),
+      HookEvent.INSTRUCTIONS_LOADED,
+      emitHookResponse,
+      undefined,
+      // All four windows, including the two this scan normally leaves empty: a
+      // measured 0 rules a window OUT, where an omitted one leaves the notice
+      // naming candidates it cannot separate.
+      {
+        cpuMs: timer.cpuMs(),
+        redactorMs: timer.redactorMs(),
+        hostMs: timer.hostMs(),
+      },
+    );
+  }
+}
+
+/**
+ * The scan itself. Split from {@link cliMain} so the timing wrapper above has a
+ * single call to bracket — every early return here is an exit that wrapper must
+ * still measure.
+ * @param {import("./lib/trace.mjs").TraceFn} emitTrace
+ * @returns {Promise<void>}
+ */
+async function runLoadedScanCli(emitTrace) {
   /** @type {string | undefined} */
   let sessionId;
   try {
@@ -314,22 +355,6 @@ export async function cliMain({ trace: sink } = {}) {
     // rather than in no store at all.
     if (outcome.armAlert)
       appendAlert(/** @type {string} */ (outcome.stderr), sessionId);
-  } finally {
-    reportSlowHook(
-      HOOK_NAME,
-      timer.wallMs(),
-      HookEvent.INSTRUCTIONS_LOADED,
-      emitHookResponse,
-      undefined,
-      // All four windows, including the two this scan normally leaves empty: a
-      // measured 0 rules a window OUT, where an omitted one leaves the notice
-      // naming candidates it cannot separate.
-      {
-        cpuMs: timer.cpuMs(),
-        redactorMs: timer.redactorMs(),
-        hostMs: timer.hostMs(),
-      },
-    );
   }
 }
 

@@ -102,15 +102,15 @@ model's context and on stderr, naming the step and the timing and asking you to
 report it, because a slow hook is otherwise indistinguishable from a slow agent.
 A healthy run says nothing.
 
-One overrun stops at stderr instead: a launch-time scan (`scan-invisible-chars`,
-`scan-loaded-instructions`) whose own measured windows — its CPU, its redactor
-round trips, its host extensions — would each have fit inside the budget, and
-whose wait therefore went somewhere none of them can see. Those two run while
-the session provisions, so a neighbouring hook's cold-start dependency install
-is enough to blow the budget on a machine the sanitizer is only sharing; the
-timing is still in the transcript for whoever is debugging, but it no longer
-asks you to report a slowdown this plugin cannot fix. A scan whose own work
-crosses the budget is reported in full, as before.
+Time spent waiting out an install is not charged, whichever process is running
+it. A hook's own cold-start wait was always excluded; a wait the two instruction
+scans spend while the SESSION's setup is installing is excluded too, since that
+install saturates the machine the hook is only sharing. The evidence is the
+cold-start marker and its lock — a scan is discounted only while a setup process
+is demonstrably running for the whole of it, so a slow disk, a wedged scan, or an
+install that ended mid-run is still measured and still reported. A host whose own
+setup script writes such a marker points the hooks at it with
+`configureHookgateMarker(path)`; without one, nothing is discounted.
 
 When a hook cannot run, it fails **open** by default: the guarded action
 proceeds and the model is told, in `additionalContext`, that what it is reading
