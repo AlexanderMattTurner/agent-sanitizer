@@ -57,7 +57,9 @@ instead of it, never the plan. If you can't yet name the mechanism, keep digging
 **Fix it in this PR.** "Pre-existing," "I didn't break it," and "out of scope" are
 not exemptions — a failure you can see is yours to fix. If it's genuinely
 unrelated, fix it in its own commit (`fix(test):`/`fix(ci):`) on this branch, not
-a future one.
+a future one. This branch is the answer whenever a commit here can carry the fix,
+which is what `CLAUDE.md`'s standing-down rule defers to; a separate PR is only
+for a breakage no commit on this branch can reach — one in another repo.
 
 **Reproduce, then fix at the root — do not guess.** Before touching anything,
 reproduce the failure (same parallelism, same OS marker, same inputs); never
