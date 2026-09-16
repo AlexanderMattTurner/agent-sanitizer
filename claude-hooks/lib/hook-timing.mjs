@@ -27,7 +27,12 @@
  *
  * ONE-TIME PROVISIONING is excluded (see {@link excludeProvisioning}): charging
  * an install to the hook that merely waited it out would make the FIRST call of
- * every session cry wolf, which is the alert fatigue this notice fights.
+ * every session cry wolf, which is the alert fatigue this notice fights. A
+ * provisioning step running in ANOTHER process is excluded the same way and for
+ * the same reason ({@link excludeConcurrentProvisioning}) — a launch hook's
+ * install saturates the machine every other hook is sharing, and a wait spent
+ * inside a window the caller can show was provisioning is no more this hook's
+ * cost than its own install is.
  *
  * Dependency-free on purpose: everything imports this, including hook-io, so a
  * back-import would close a cycle. The one emitter it needs is passed in. The
@@ -62,6 +67,19 @@ export const SLOW_HOOK_THRESHOLD_MS = 1000;
  * re-provisioning every session), which is worth saying out loud.
  */
 export const SLOW_PROVISION_THRESHOLD_MS = 60000;
+
+/**
+ * The longest window {@link excludeConcurrentProvisioning} will discount.
+ *
+ * Ten times the hook budget, because the discount's whole premise is that the
+ * hook's work is small and the machine is busy: an instruction scan is tens of
+ * milliseconds of work, so a wait this far past its budget is not a busy box any
+ * more, whatever else is installing. Past the ceiling the run is measured in
+ * full and reports — the founding case of this module is a SessionStart scan
+ * that blocked startup for 30 SECONDS, and a cold-start install running
+ * alongside it must not be what buys that silence.
+ */
+export const CONCURRENT_PROVISION_CEILING_MS = 10 * SLOW_HOOK_THRESHOLD_MS;
 
 /** Where a reader is asked to send the timing. */
 const ISSUE_URL =
@@ -405,6 +423,57 @@ export async function excludeProvisioning(
   } finally {
     provisioningMs += Math.max(0, now() - started);
     provisioningCpuMs += Math.max(0, cpuNow() - cpuStarted);
+  }
+}
+
+/**
+ * Run `work`, charging its duration to provisioning when a SESSION-LEVEL
+ * provisioning step was in flight for the whole of it — a neighbouring hook's
+ * dependency install, which saturates the machine this hook is only sharing.
+ * {@link excludeProvisioning} discounts the wait this process performs itself;
+ * this discounts the one it merely runs alongside.
+ *
+ * `setupAlive` is asked twice, before and after, and only a step alive at BOTH
+ * ends is charged. A step that started or finished mid-run leaves a window
+ * nothing here can apportion, and splitting it by guess would discount the
+ * hook's own work — so that run is measured in full and reports honestly.
+ *
+ * Wall-clock only, where {@link excludeProvisioning} charges CPU too: the
+ * install runs in ANOTHER process, so none of it lands in this one's CPU figure,
+ * and charging CPU here would discount the hook's own computing.
+ *
+ * Bounded by {@link CONCURRENT_PROVISION_CEILING_MS}, which is what stops the
+ * discount from hiding a wedged run: a window past the ceiling is charged to
+ * nobody but the hook, however busy the machine was, because at that magnitude
+ * the hook is the thing that is broken.
+ * @template T
+ * @param {() => Promise<T>} work
+ * @param {() => boolean} setupAlive  whether a session-level provisioning step
+ *   is running right now; the caller owns the evidence (a cold-start marker and
+ *   its PID), since this module reads no files of its own
+ * @param {() => number} [now]  injectable clock, for tests
+ * @returns {Promise<T>}
+ */
+export async function excludeConcurrentProvisioning(
+  work,
+  setupAlive,
+  now = Date.now,
+) {
+  const startedAlive = setupAlive();
+  const started = now();
+  try {
+    return await work();
+  } finally {
+    // In a `finally`, like every other charge here: a scan that THREW still
+    // waited out whatever the machine was doing, and the fault it reports is a
+    // separate matter from how long the wait was.
+    const elapsed = Math.max(0, now() - started);
+    if (
+      startedAlive &&
+      elapsed <= CONCURRENT_PROVISION_CEILING_MS &&
+      setupAlive()
+    )
+      provisioningMs += elapsed;
   }
 }
 

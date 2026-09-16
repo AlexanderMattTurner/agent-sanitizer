@@ -806,6 +806,51 @@ function markerLockHeld(markerPath) {
 }
 
 /**
+ * Is a setup process DEMONSTRABLY running right now?
+ *
+ * The strict twin of {@link probeSetupAlive}, and the two differ only in which
+ * way they fall when the evidence runs out. That one decides whether to keep
+ * WAITING for a dependency, so every ambiguity — an unreadable marker, an
+ * unparseable pid, no project dir — reads as alive: waiting a moment longer is
+ * cheap and giving up early fails a hook closed. This one decides whether to
+ * stop charging a caller for time it spent, so the same ambiguity must read as
+ * NOT running: an absence of evidence that the machine was busy is not evidence
+ * that it was, and discounting a wait on that basis would hide the very
+ * slowdowns the caller is measuring for.
+ *
+ * Positive evidence is one of two things: the setup lock is held (the kernel
+ * drops an flock the instant its holder dies, so held means running), or the
+ * marker's pid names a live process. A marker this uid does not own is not
+ * evidence about our setup at all.
+ * @param {string | null} markerPath
+ * @returns {boolean}
+ */
+export function setupRunning(markerPath) {
+  if (!markerIsTrusted(markerPath)) return false;
+  let raw;
+  try {
+    raw = readFileSync(/** @type {string} */ (markerPath), "utf8");
+  } catch {
+    return false;
+  }
+  const lines = raw.split("\n").map((line) => line.trim());
+  if (lines.includes(SETUP_LOCK_DECLARATION)) {
+    const held = markerLockHeld(/** @type {string} */ (markerPath));
+    if (held !== null) return held;
+  }
+  const pid = parseInt(lines[0], 10);
+  if (!Number.isInteger(pid) || pid <= 0) return false;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (err) {
+    // EPERM: the pid exists but belongs to another uid. It is running, which is
+    // what this answers; whose it is is markerIsTrusted's question, asked above.
+    return /** @type {NodeJS.ErrnoException} */ (err).code === "EPERM";
+  }
+}
+
+/**
  * Is the setup process that wrote `markerPath` still alive?
  *
  * A marker declaring {@link SETUP_LOCK_DECLARATION} is judged by the LOCK, and that

@@ -141,6 +141,17 @@ async function excludeProvisioning(work, now = Date.now, cpuNow = processCpuMs) 
     provisioningCpuMs += Math.max(0, cpuNow() - cpuStarted);
   }
 }
+async function excludeConcurrentProvisioning(work, setupAlive, now = Date.now) {
+  const startedAlive = setupAlive();
+  const started = now();
+  try {
+    return await work();
+  } finally {
+    const elapsed = Math.max(0, now() - started);
+    if (startedAlive && elapsed <= CONCURRENT_PROVISION_CEILING_MS && setupAlive())
+      provisioningMs += elapsed;
+  }
+}
 function startHookTimer(now = Date.now, cpuNow = processCpuMs) {
   const started = now();
   const cpuStarted = cpuNow();
@@ -201,11 +212,12 @@ function reportSlowHook(hookName, elapsedMs, hookEventName, emit, writeErr = (ch
   emit(hookEventName, { additionalContext: notice });
   return true;
 }
-var SLOW_HOOK_THRESHOLD_MS, ISSUE_URL, VERSION_MANIFESTS, SEMVER, cachedVersion, provisioningMs, provisioningCpuMs, redactorRoundTripMs, hostExtensionMs, hostExtensionCpuMs, hostExtensionDepth;
+var SLOW_HOOK_THRESHOLD_MS, CONCURRENT_PROVISION_CEILING_MS, ISSUE_URL, VERSION_MANIFESTS, SEMVER, cachedVersion, provisioningMs, provisioningCpuMs, redactorRoundTripMs, hostExtensionMs, hostExtensionCpuMs, hostExtensionDepth;
 var init_hook_timing = __esm({
   "claude-hooks/lib/hook-timing.mjs"() {
     "use strict";
     SLOW_HOOK_THRESHOLD_MS = 1e3;
+    CONCURRENT_PROVISION_CEILING_MS = 10 * SLOW_HOOK_THRESHOLD_MS;
     ISSUE_URL = "https://github.com/AlexanderMattTurner/agent-sanitizer/issues/new";
     VERSION_MANIFESTS = [
       "../../.claude-plugin/plugin.json",
@@ -385,6 +397,38 @@ function markerLockHeld(markerPath) {
   if (probe.status === 0) return false;
   if (probe.status === 1) return true;
   return null;
+}
+function setupRunning(markerPath) {
+  if (!markerIsTrusted(markerPath)) return false;
+  let raw;
+  try {
+    raw = readFileSync2(
+      /** @type {string} */
+      markerPath,
+      "utf8"
+    );
+  } catch {
+    return false;
+  }
+  const lines = raw.split("\n").map((line) => line.trim());
+  if (lines.includes(SETUP_LOCK_DECLARATION)) {
+    const held = markerLockHeld(
+      /** @type {string} */
+      markerPath
+    );
+    if (held !== null) return held;
+  }
+  const pid = parseInt(lines[0], 10);
+  if (!Number.isInteger(pid) || pid <= 0) return false;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (err) {
+    return (
+      /** @type {NodeJS.ErrnoException} */
+      err.code === "EPERM"
+    );
+  }
 }
 function probeSetupAlive(markerPath) {
   if (markerPath === null) return true;
@@ -51188,7 +51232,10 @@ function formatSkipped(skipped) {
 async function cliMain3(opts = {}) {
   const timer = startHookTimer();
   try {
-    await runScanCli(opts);
+    await excludeConcurrentProvisioning(
+      () => runScanCli(opts),
+      () => setupRunning(hookgateMarkerPath())
+    );
   } finally {
     reportSlowHook(
       HOOK_NAME4,
@@ -51422,6 +51469,30 @@ ${tail}`;
 async function cliMain4({ trace: sink } = {}) {
   const timer = startHookTimer();
   const emitTrace = hookTrace(sink);
+  try {
+    await excludeConcurrentProvisioning(
+      () => runLoadedScanCli(emitTrace),
+      () => setupRunning(hookgateMarkerPath())
+    );
+  } finally {
+    reportSlowHook(
+      HOOK_NAME5,
+      timer.wallMs(),
+      HookEvent.INSTRUCTIONS_LOADED,
+      emitHookResponse,
+      void 0,
+      // All four windows, including the two this scan normally leaves empty: a
+      // measured 0 rules a window OUT, where an omitted one leaves the notice
+      // naming candidates it cannot separate.
+      {
+        cpuMs: timer.cpuMs(),
+        redactorMs: timer.redactorMs(),
+        hostMs: timer.hostMs()
+      }
+    );
+  }
+}
+async function runLoadedScanCli(emitTrace) {
   let sessionId;
   try {
     const payload = await readStdinJson();
@@ -51464,22 +51535,6 @@ async function cliMain4({ trace: sink } = {}) {
         outcome.stderr,
         sessionId
       );
-  } finally {
-    reportSlowHook(
-      HOOK_NAME5,
-      timer.wallMs(),
-      HookEvent.INSTRUCTIONS_LOADED,
-      emitHookResponse,
-      void 0,
-      // All four windows, including the two this scan normally leaves empty: a
-      // measured 0 rules a window OUT, where an omitted one leaves the notice
-      // naming candidates it cannot separate.
-      {
-        cpuMs: timer.cpuMs(),
-        redactorMs: timer.redactorMs(),
-        hostMs: timer.hostMs()
-      }
-    );
   }
 }
 var scanText3, cleanFile3, HOOK_NAME5;
