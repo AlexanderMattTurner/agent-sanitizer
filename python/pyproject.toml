@@ -11,7 +11,13 @@
 # locally, run `node scripts/bundle-python-cli.mjs` from the repo root; then
 # `python -m build` (or `uv build`) from this `python/` directory.
 [build-system]
-requires = ["hatchling"]
+# Pinned because plugin/dist/redactor/ is a COMMITTED build of this project and
+# the live-engine job rebuilds it and byte-compares. The backend writes its own
+# version into the wheel's dist-info/WHEEL, so an unpinned `hatchling` resolves
+# whatever PyPI published most recently and the compare fails on every pull
+# request from that moment, whatever the diff. This pin is the version that
+# built the committed artifact: move the two together or the compare reds.
+requires = ["hatchling==1.32.0"]
 build-backend = "hatchling.build"
 
 [project]
