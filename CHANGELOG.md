@@ -8,6 +8,16 @@ adhere to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+## [2.58.6] - 2026-09-21
+
+### Fixed
+
+- Pinned the wheel build backend to the version that built the artifact, ensuring consistent and reproducible builds.
+
+### Changed
+
+- Upgraded agent-control-plane-core to 0.7.0.
+
 ## [2.58.5] - 2026-09-16
 
 ### Fixed
