@@ -38,7 +38,8 @@ const {
   awaitLazyDependency,
   scrubUntrustedText,
 } = await import("../claude-hooks/lib/hook-io.mjs");
-const { controlPlane } = await import("../claude-hooks/lib/control-plane.mjs");
+const { controlPlane, nativeStdout } =
+  await import("../claude-hooks/lib/control-plane.mjs");
 const { instructionsLoadedFile, recordInstructionsLoaded } =
   await import("../claude-hooks/lib/invisible-alert.mjs");
 const {
@@ -64,6 +65,36 @@ const HOST_REMEDY = "run ./setup.sh in the project root and retry.";
 const parse = (payload) => claudeAdapter.parse(payload);
 
 const unknownEvent = () => parse({ no_such_field: 1 });
+
+describe("the deny-when-blind body", () => {
+  // What the gates emit for a payload the adapter cannot name is the posture
+  // operators depend on, and it is the one thing a contract bump can move
+  // silently: the render's `this_call_vetoable`, `enforced` and `exit_code` all
+  // flipped between 0.3.0 and 0.6.4 while this body did not. `nativeStdout`
+  // ignores those three by design, so pinning the STRING is what proves it.
+  it("renders an unnameable event's deny as a block the host acts on", () => {
+    assert.equal(
+      nativeStdout(
+        claudeAdapter.render(
+          { decision: Decision.DENY, reason: "R" },
+          unknownEvent(),
+        ),
+      ),
+      '{"hookSpecificOutput":{"hookEventName":""},"decision":"block","reason":"R"}',
+    );
+  });
+
+  it("keeps that deny distinct from the allow it would otherwise collapse onto", () => {
+    // Without this half the assertion above could pass on a body that says
+    // nothing: an allow renders no directive at all, so nativeStdout answers null.
+    assert.equal(
+      nativeStdout(
+        claudeAdapter.render({ decision: Decision.ALLOW }, unknownEvent()),
+      ),
+      null,
+    );
+  });
+});
 
 describe("dependency-load diagnostics", () => {
   it("records why a package failed to load and names it as a failed package", async () => {
