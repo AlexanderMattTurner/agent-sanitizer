@@ -135,7 +135,7 @@ def test_every_exemption_names_a_version_we_actually_pin(
 # `agent-control-plane-core` is the guardrail contract the Claude hooks load on
 # every gated tool call. Its own repo publishes it through the same auto-version
 # and provenance path this repo uses.
-FIRST_PARTY_EXEMPTIONS = frozenset({"agent-control-plane-core@0.3.0"})
+FIRST_PARTY_EXEMPTIONS = frozenset({"agent-control-plane-core@0.6.4"})
 
 
 @pytest.mark.drift_guard
