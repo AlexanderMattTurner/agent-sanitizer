@@ -45538,7 +45538,7 @@ function isHiddenElement(node2) {
   return false;
 }
 function hasDataSrc(el) {
-  return typeof el.properties?.src === "string" && el.properties.src.startsWith("data:");
+  return typeof el.properties?.src === "string" && /^\s*data:/i.test(el.properties.src);
 }
 function walk(tree, test, visitor) {
   const nodes = [tree];

@@ -1428,7 +1428,7 @@ export function isHiddenElement(node) {
 function hasDataSrc(el) {
   return (
     typeof el.properties?.src === "string" &&
-    el.properties.src.startsWith("data:")
+    /^\s*data:/i.test(el.properties.src)
   );
 }
 
