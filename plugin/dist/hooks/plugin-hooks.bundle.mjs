@@ -683,12 +683,18 @@ __export(control_plane_exports, {
   EventKind: () => EventKind,
   IntegrationMode: () => IntegrationMode,
   MODELED_TOOLS: () => MODELED_TOOLS,
+  MODELED_TOOL_INPUT_KEYS: () => MODELED_TOOL_INPUT_KEYS,
   SCHEMA_VERSION: () => SCHEMA_VERSION,
+  STANDARD_META_FIELDS: () => STANDARD_META_FIELDS,
   TOOL_ALIASES: () => TOOL_ALIASES,
+  UNRENDERED_ON_UNKNOWN: () => UNRENDERED_ON_UNKNOWN,
+  VERDICT_CONTENT_FIELDS: () => VERDICT_CONTENT_FIELDS,
   asObject: () => asObject,
   asString: () => asString,
   asStringOrNull: () => asStringOrNull,
   assertAliasTargetsModeled: () => assertAliasTargetsModeled,
+  assertGatedKinds: () => assertGatedKinds,
+  baseMeta: () => baseMeta,
   canonicalTool: () => canonicalTool,
   classifyCallClass: () => classifyCallClass,
   collectPassthrough: () => collectPassthrough,
@@ -698,7 +704,9 @@ __export(control_plane_exports, {
   makeEvent: () => makeEvent,
   nativeResponse: () => nativeResponse,
   normalizeVerdict: () => normalizeVerdict,
-  sanitizeVerdict: () => sanitizeVerdict
+  readonlySet: () => readonlySet,
+  sanitizeVerdict: () => sanitizeVerdict,
+  vetoableFor: () => vetoableFor
 });
 function assertAliasTargetsModeled(aliases) {
   for (const canonical of Object.values(aliases)) {
@@ -720,12 +728,26 @@ function lookup(map3, key) {
   return Object.hasOwn(map3, key) ? map3[key] : void 0;
 }
 function coverageAllowsVeto(status) {
-  if (!COVERAGE_STATUS_VALUES.has(status)) {
+  if (!COVERAGE_STATUS_VALUES.has(
+    /** @type {string} */
+    status
+  )) {
     throw new Error(
       `control-plane: invalid coverage status ${JSON.stringify(status)}`
     );
   }
   return status === CoverageStatus.COVERED || status === CoverageStatus.PARTIAL;
+}
+function vetoableFor(kind2, gatedKinds, coverage) {
+  if (!gatedKinds.has(kind2)) return false;
+  return coverageAllowsVeto(coverage);
+}
+function assertGatedKinds(kinds, agent) {
+  for (const kind2 of kinds)
+    if (!GATEABLE_KINDS.has(kind2))
+      throw new Error(
+        `${agent} adapter: ${JSON.stringify(kind2)} is not a gateable event kind`
+      );
 }
 function isCoverageStatus(status) {
   return COVERAGE_STATUS_VALUES.has(
@@ -739,7 +761,37 @@ function classifyCallClass(tool, native) {
   const ctx = native ? native.mcp_context : void 0;
   if (ctx !== null && typeof ctx === "object" && !Array.isArray(ctx))
     return CallClass.MCP;
+  if (typeof native?.agent_type === "string" && native.agent_type !== "")
+    return CallClass.SUBAGENT;
   return CallClass.BUILTIN;
+}
+function readonlySet(values) {
+  const inner = new Set(values);
+  const facade = Object.freeze(
+    /** @type {any} */
+    {
+      /** @param {string} value */
+      has: (value) => inner.has(value),
+      keys: () => inner.keys(),
+      values: () => inner.values(),
+      entries: () => inner.entries(),
+      // The callback's third argument is the SET, and forwarding to
+      // `inner.forEach` hands the private mutable one straight to a consumer —
+      // `row.forEach((v, k, set) => set.clear())` would empty a row several
+      // adapters share. The shim passes the facade, so there is no reference to
+      // the inner Set anywhere a caller can reach.
+      /**
+       * @param {(value: string, key: string, set: ReadonlySet<string>) => void} fn
+       * @param {unknown} [thisArg]
+       */
+      forEach: (fn, thisArg) => inner.forEach((value) => fn.call(thisArg, value, value, facade)),
+      [Symbol.iterator]: () => inner[Symbol.iterator](),
+      get size() {
+        return inner.size;
+      }
+    }
+  );
+  return facade;
 }
 function makeEvent({
   event,
@@ -756,6 +808,10 @@ function makeEvent({
   if (typeof this_call_vetoable !== "boolean")
     throw new TypeError(
       `control-plane: makeEvent this_call_vetoable must be a boolean, got ${typeof this_call_vetoable}`
+    );
+  if (event === EventKind.UNKNOWN && this_call_vetoable)
+    throw new Error(
+      "control-plane: makeEvent got a vetoable UNKNOWN event \u2014 an unmodelled event has no host response to veto, so reporting one is a false block"
     );
   const evt = {
     schema_version: SCHEMA_VERSION,
@@ -844,6 +900,33 @@ function collectPassthrough(native, consumed) {
   }
   return rest;
 }
+function baseMeta({
+  agent,
+  native_event,
+  integration_mode,
+  primary_gate_present,
+  native,
+  consumed
+}) {
+  const meta = {
+    agent,
+    native_event,
+    integration_mode: (
+      /** @type {EventMeta["integration_mode"]} */
+      integration_mode
+    ),
+    primary_gate_present,
+    passthrough: collectPassthrough(
+      native,
+      /* @__PURE__ */ new Set([...consumed, ...STANDARD_META_FIELDS])
+    )
+  };
+  for (const field of STANDARD_META_FIELDS) {
+    const value = lookup(native, field);
+    if (typeof value === "string") Object.assign(meta, { [field]: value });
+  }
+  return meta;
+}
 function asObject(value) {
   return value !== null && typeof value === "object" && !Array.isArray(value) ? (
     /** @type {Record<string, unknown>} */
@@ -875,9 +958,9 @@ function nativeResponse({
   if (stderr !== void 0) out.stderr = stderr;
   return out;
 }
-var CONTROL_PLANE_SCHEMA, SCHEMA_VERSION, EventKind, EVENT_KIND_VALUES, Decision, MODELED_TOOLS, MODELED_TOOL_SET, TOOL_ALIASES, IntegrationMode, CallClass, CALL_CLASSES, CoverageStatus, COVERAGE_STATUS_VALUES;
+var CONTROL_PLANE_SCHEMA, SCHEMA_VERSION, EventKind, EVENT_KIND_VALUES, Decision, MODELED_TOOL_INPUT_KEYS, MODELED_TOOLS, MODELED_TOOL_SET, TOOL_ALIASES, IntegrationMode, CallClass, CALL_CLASSES, CoverageStatus, COVERAGE_STATUS_VALUES, GATEABLE_KINDS, VERDICT_CONTENT_FIELDS, UNRENDERED_ON_UNKNOWN, STANDARD_META_FIELDS;
 var init_control_plane = __esm({
-  "node_modules/.pnpm/agent-control-plane-core@0.3.0/node_modules/agent-control-plane-core/src/control-plane.mjs"() {
+  "node_modules/.pnpm/agent-control-plane-core@0.7.0/node_modules/agent-control-plane-core/src/control-plane.mjs"() {
     CONTROL_PLANE_SCHEMA = "control-plane/v1";
     SCHEMA_VERSION = 1;
     EventKind = Object.freeze({
@@ -893,13 +976,16 @@ var init_control_plane = __esm({
       DENY: "deny",
       ASK: "ask"
     });
-    MODELED_TOOLS = Object.freeze([
-      "Bash",
-      "Edit",
-      "Write",
-      "Read",
-      "WebFetch"
-    ]);
+    MODELED_TOOL_INPUT_KEYS = Object.freeze({
+      Bash: "command",
+      Edit: "file_path",
+      Write: "file_path",
+      Read: "file_path",
+      WebFetch: "url"
+    });
+    MODELED_TOOLS = Object.freeze(
+      Object.keys(MODELED_TOOL_INPUT_KEYS)
+    );
     MODELED_TOOL_SET = new Set(MODELED_TOOLS);
     TOOL_ALIASES = Object.freeze({
       run_shell_command: "Bash"
@@ -924,6 +1010,24 @@ var init_control_plane = __esm({
       UNKNOWN: "unknown"
     });
     COVERAGE_STATUS_VALUES = new Set(Object.values(CoverageStatus));
+    GATEABLE_KINDS = /* @__PURE__ */ new Set([
+      EventKind.PRE_TOOL,
+      EventKind.POST_TOOL,
+      EventKind.PROMPT_SUBMIT,
+      EventKind.SESSION_START
+    ]);
+    VERDICT_CONTENT_FIELDS = Object.freeze([
+      "mutated_input",
+      "mutated_output",
+      "additional_context"
+    ]);
+    UNRENDERED_ON_UNKNOWN = readonlySet(VERDICT_CONTENT_FIELDS);
+    STANDARD_META_FIELDS = Object.freeze([
+      "session_id",
+      "cwd",
+      "permission_mode",
+      "transcript_path"
+    ]);
   }
 });
 
@@ -934,6 +1038,9 @@ __export(claude_exports, {
   COVERAGE: () => COVERAGE,
   HookEvent: () => HookEvent2,
   INTEGRATION_MODE: () => INTEGRATION_MODE,
+  NATIVE_ASK_TIER: () => NATIVE_ASK_TIER,
+  NATIVE_EVENT_FOR: () => NATIVE_EVENT_FOR,
+  UNRENDERED_FIELDS: () => UNRENDERED_FIELDS,
   claudeAdapter: () => claudeAdapter,
   parse: () => parse,
   render: () => render
@@ -949,22 +1056,6 @@ function claudeTool(kind2, raw) {
     return null;
   return asStringOrNull(raw.tool_name);
 }
-function claudeMeta(nativeEvent, raw) {
-  const meta = {
-    agent: AGENT,
-    native_event: nativeEvent,
-    integration_mode: INTEGRATION_MODE,
-    primary_gate_present: true,
-    passthrough: collectPassthrough(raw, CONSUMED)
-  };
-  if (typeof raw.session_id === "string") meta.session_id = raw.session_id;
-  if (typeof raw.cwd === "string") meta.cwd = raw.cwd;
-  if (typeof raw.permission_mode === "string")
-    meta.permission_mode = raw.permission_mode;
-  if (typeof raw.transcript_path === "string")
-    meta.transcript_path = raw.transcript_path;
-  return meta;
-}
 function parse(native) {
   const raw = asObject(native);
   const nativeEvent = asString(raw.hook_event_name, "");
@@ -975,7 +1066,14 @@ function parse(native) {
   ) ?? EventKind.UNKNOWN;
   const response = kind2 === EventKind.POST_TOOL ? raw.tool_response : void 0;
   const nativeTool = claudeTool(kind2, raw);
-  const meta = claudeMeta(nativeEvent, raw);
+  const meta = baseMeta({
+    agent: AGENT,
+    native_event: nativeEvent,
+    integration_mode: INTEGRATION_MODE,
+    primary_gate_present: true,
+    native: raw,
+    consumed: CONSUMED
+  });
   if (nativeTool !== null) meta.native_tool = nativeTool;
   return makeEvent({
     event: kind2,
@@ -984,7 +1082,9 @@ function parse(native) {
     response,
     // Classify on the NATIVE name — MCP detection keys on `mcp__…`, which a
     // canonical builtin name would never carry.
-    this_call_vetoable: coverageAllowsVeto(
+    this_call_vetoable: vetoableFor(
+      kind2,
+      GATED_EVENTS,
       COVERAGE[classifyCallClass(nativeTool, raw)]
     ),
     meta
@@ -999,12 +1099,21 @@ function render(verdict, event, { soleGate = false } = {}) {
   );
   const isDeny = vd.decision === Decision.DENY;
   const enforced = isDeny && event.this_call_vetoable;
-  const stdout = kind2 === EventKind.PRE_TOOL ? gatingBody(hookEventName, vd, soleGate) : nonGatingBody(hookEventName, vd);
+  const stdout = kind2 === EventKind.PRE_TOOL ? gatingBody(hookEventName, vd, soleGate) : nonGatingBody(hookEventName, kind2, vd);
   return nativeResponse({
     transport: INTEGRATION_MODE,
     exit_code: enforced ? 2 : 0,
     enforced,
-    stdout
+    stdout,
+    // An ENFORCED deny exits 2, and Claude Code parses hook stdout as JSON only
+    // on exit 0: on an exit-2 PreToolUse block it discards the body and reads
+    // STDERR instead. So `permissionDecisionReason` never reached the model on
+    // the one path that actually blocks, and the call was refused with no
+    // rationale. Carry the reason on `NativeResponse.stderr`, which `emit`
+    // writes to fd 2 — the same block-reason channel the Amp and Gemini
+    // adapters use. ONLY the enforced path: an allow, an ask, and a deny this
+    // call cannot veto have blocked nothing, and their exit-0 body is read.
+    ...enforced && vd.reason !== void 0 ? { stderr: vd.reason } : {}
   });
 }
 function gatingBody(hookEventName, vd, soleGate) {
@@ -1018,11 +1127,11 @@ function gatingBody(hookEventName, vd, soleGate) {
     out.additionalContext = vd.additional_context;
   return { hookSpecificOutput: out };
 }
-function nonGatingBody(hookEventName, vd) {
+function nonGatingBody(hookEventName, kind2, vd) {
   const hookSpecificOutput = { hookEventName };
-  if (vd.mutated_output !== void 0)
+  if (kind2 === EventKind.POST_TOOL && vd.mutated_output !== void 0)
     hookSpecificOutput.updatedToolOutput = vd.mutated_output;
-  if (vd.additional_context !== void 0)
+  if (kind2 !== EventKind.UNKNOWN && vd.additional_context !== void 0)
     hookSpecificOutput.additionalContext = vd.additional_context;
   const out = { hookSpecificOutput };
   if (vd.decision !== Decision.ALLOW) {
@@ -1031,9 +1140,9 @@ function nonGatingBody(hookEventName, vd) {
   }
   return out;
 }
-var AGENT, INTEGRATION_MODE, COVERAGE, HookEvent2, NATIVE_TO_KIND, KIND_TO_NATIVE, CONSUMED, claudeAdapter;
+var AGENT, INTEGRATION_MODE, COVERAGE, GATED_EVENTS, CONTEXT_ONLY, UNRENDERED_FIELDS, NATIVE_ASK_TIER, HookEvent2, NATIVE_TO_KIND, KIND_TO_NATIVE, NATIVE_EVENT_FOR, CONSUMED, claudeAdapter;
 var init_claude = __esm({
-  "node_modules/.pnpm/agent-control-plane-core@0.3.0/node_modules/agent-control-plane-core/src/adapters/claude.mjs"() {
+  "node_modules/.pnpm/agent-control-plane-core@0.7.0/node_modules/agent-control-plane-core/src/adapters/claude.mjs"() {
     init_control_plane();
     AGENT = "claude";
     INTEGRATION_MODE = IntegrationMode.EXTERNAL_HOOK;
@@ -1043,6 +1152,19 @@ var init_claude = __esm({
       [CallClass.SUBAGENT]: CoverageStatus.COVERED,
       [CallClass.RESUMED]: CoverageStatus.COVERED
     });
+    GATED_EVENTS = Object.freeze(
+      /* @__PURE__ */ new Set([EventKind.PRE_TOOL, EventKind.POST_TOOL, EventKind.PROMPT_SUBMIT])
+    );
+    assertGatedKinds(GATED_EVENTS, AGENT);
+    CONTEXT_ONLY = readonlySet(["mutated_input", "mutated_output"]);
+    UNRENDERED_FIELDS = Object.freeze({
+      [EventKind.PRE_TOOL]: readonlySet(["mutated_output"]),
+      [EventKind.POST_TOOL]: readonlySet(["mutated_input"]),
+      [EventKind.PROMPT_SUBMIT]: CONTEXT_ONLY,
+      [EventKind.SESSION_START]: CONTEXT_ONLY,
+      [EventKind.UNKNOWN]: UNRENDERED_ON_UNKNOWN
+    });
+    NATIVE_ASK_TIER = true;
     HookEvent2 = Object.freeze({
       PRE_TOOL_USE: "PreToolUse",
       POST_TOOL_USE: "PostToolUse",
@@ -1061,12 +1183,9 @@ var init_claude = __esm({
       [EventKind.PROMPT_SUBMIT]: HookEvent2.USER_PROMPT_SUBMIT,
       [EventKind.SESSION_START]: HookEvent2.SESSION_START
     });
+    NATIVE_EVENT_FOR = KIND_TO_NATIVE;
     CONSUMED = /* @__PURE__ */ new Set([
       "hook_event_name",
-      "session_id",
-      "cwd",
-      "permission_mode",
-      "transcript_path",
       "tool_name",
       "tool_input",
       "tool_response",
@@ -1076,6 +1195,9 @@ var init_claude = __esm({
       AGENT,
       INTEGRATION_MODE,
       COVERAGE,
+      UNRENDERED_FIELDS,
+      NATIVE_ASK_TIER,
+      NATIVE_EVENT_FOR,
       parse,
       render
     };
