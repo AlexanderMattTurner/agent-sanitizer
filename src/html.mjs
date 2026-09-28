@@ -2391,6 +2391,11 @@ export const DATA_URI_LENGTH_THRESHOLD = 4096;
 const SCRIPT_URI_RE = /^\s*(?:javascript|vbscript):/i;
 
 const RELATIVE_URL_BASE = "http://relative.invalid";
+// Matches URLs that carry an explicit authority: either a scheme ("http://...")
+// or protocol-relative syntax ("//..."). Used to distinguish a URL that
+// deliberately targets a host from a path/query/fragment-relative reference
+// that only resolves to RELATIVE_URL_BASE because we supplied it as the base.
+const URL_HAS_AUTHORITY_RE = /^(?:[a-zA-Z][a-zA-Z0-9+\-.]*:|\/\/)/;
 
 // Parameter NAMES that legitimately carry a LONG opaque (base64/hex) value, so
 // a blob in one of them is NOT exfil: CDN request-signing (AWS SigV4 /
@@ -2947,10 +2952,7 @@ export function urlHost(url) {
     // WHATWG rejects (e.g. a non-ASCII host).
     return "(unparsable URL)";
   }
-  if (
-    parsed.origin === RELATIVE_URL_BASE &&
-    !url.startsWith(RELATIVE_URL_BASE)
-  ) {
+  if (parsed.origin === RELATIVE_URL_BASE && !URL_HAS_AUTHORITY_RE.test(url)) {
     return "(relative URL)";
   }
   return parsed.host;
@@ -2971,9 +2973,7 @@ function isOffOrigin(url) {
   } catch {
     return false;
   }
-  return (
-    parsed.origin !== RELATIVE_URL_BASE || url.startsWith(RELATIVE_URL_BASE)
-  );
+  return parsed.origin !== RELATIVE_URL_BASE || URL_HAS_AUTHORITY_RE.test(url);
 }
 
 /**

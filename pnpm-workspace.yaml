@@ -43,8 +43,8 @@ overrides:
   fast-uri@>=3.0.0 <3.1.5: "^3.1.5"
   # GHSA-rgw5-rvv9-x895 — denial of service from unbounded expansion. Via eslint.
   brace-expansion@>=4.0.0 <5.0.9: "^5.0.9"
-  # GHSA-5p4m-2wfm-xmqj — quadratic CPU use parsing !!omap. Via @commitlint/cli.
-  js-yaml@>=4.0.0 <4.3.1: "^4.3.1"
-  # GHSA-q8mj-m7cp-5q26 — remotely triggerable denial of service in qs.stringify.
+  # GHSA-5p4m-2wfm-xmqj / GHSA-2883-xcg3-v3hh — DoS via YAML merge keys. Via @commitlint/cli.
+  js-yaml@>=4.0.0 <4.3.2: "^4.3.2"
+  # GHSA-q8mj-m7cp-5q26 / GHSA-x5fp-wj9c-mxmx / GHSA-4mjr-xmp4-gh2g — DoS in qs.
   # Via @stryker-mutator/core.
-  qs@>=6.11.1 <=6.15.1: "^6.15.2"
+  qs@>=2.2.5 <6.16.0: "^6.16.0"
