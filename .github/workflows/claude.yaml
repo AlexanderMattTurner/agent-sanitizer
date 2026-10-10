@@ -83,7 +83,7 @@ jobs:
           oauth_token_fallback_4: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN_FALLBACK_4 }}
           oauth_token_fallback_5: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN_FALLBACK_5 }}
           oauth_token_fallback_6: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN_FALLBACK_6 }}
-          model: claude-sonnet-4-6
+          model: sonnet
           # TEMPLATE_SYNC_TOKEN is optional (see the AUTH note above) — repos
           # that haven't configured it still get a working responder under
           # GITHUB_TOKEN, just without the recursion-guard-evading push identity
