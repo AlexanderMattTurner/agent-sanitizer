@@ -92,9 +92,20 @@ inputs:
     default: ""
   model:
     description: >-
+<<<<<<< local
       Model slug (e.g. claude-opus-5). Rendered into the action's --model flag
       here, ahead of claude_args, so every attempt pins the tier explicitly and the
       action never rides its Opus default; keep the slug OUT of claude_args.
+||||||| base
+      Model slug (e.g. claude-sonnet-5). Rendered into the action's --model flag
+      here, ahead of claude_args, so every attempt pins the tier explicitly and
+      the action never rides its own default; keep the slug OUT of claude_args.
+=======
+      Model alias (opus, sonnet or haiku), which follows the newest model of
+      that tier. Rendered into the action's --model flag here, ahead of
+      claude_args, so every attempt pins the tier explicitly and the action
+      never rides its own default; keep the alias OUT of claude_args.
+>>>>>>> template
     required: true
   claude_args:
     description: "The --effort/--allowedTools/--add-dir/... arg string (NO --model — pass that as `model`)."
@@ -209,9 +220,15 @@ runs:
       id: a0
       if: inputs.anthropic_api_key != ''
       continue-on-error: true
+<<<<<<< local
       uses: anthropics/claude-code-action@428971d2ecd6e3a7cb0ee0da2a3a8b33fdb3678d # v1.0.157
       env:
         GH_TOKEN: ${{ inputs.gh_token || inputs.github_token }}
+||||||| base
+      uses: anthropics/claude-code-action@428971d2ecd6e3a7cb0ee0da2a3a8b33fdb3678d # v1.0.157
+=======
+      uses: anthropics/claude-code-action@97c53473391bff1901034d4b454b5bac7ab7a029 # v1.0.239
+>>>>>>> template
       with:
         anthropic_api_key: ${{ inputs.anthropic_api_key }}
         github_token: ${{ inputs.github_token }}
@@ -380,9 +397,15 @@ runs:
       id: a2
       if: steps.s1r.outputs.still_needs_attempt == 'true' && inputs.oauth_token_fallback != ''
       continue-on-error: true
+<<<<<<< local
       uses: anthropics/claude-code-action@428971d2ecd6e3a7cb0ee0da2a3a8b33fdb3678d # v1.0.157
       env:
         GH_TOKEN: ${{ inputs.gh_token || inputs.github_token }}
+||||||| base
+      uses: anthropics/claude-code-action@428971d2ecd6e3a7cb0ee0da2a3a8b33fdb3678d # v1.0.157
+=======
+      uses: anthropics/claude-code-action@97c53473391bff1901034d4b454b5bac7ab7a029 # v1.0.239
+>>>>>>> template
       with:
         claude_code_oauth_token: ${{ inputs.oauth_token_fallback }}
         github_token: ${{ inputs.github_token }}
@@ -478,9 +501,15 @@ runs:
       id: a3
       if: steps.s2b.outputs.still_needs_attempt == 'true' && inputs.oauth_token_fallback_3 != ''
       continue-on-error: true
+<<<<<<< local
       uses: anthropics/claude-code-action@428971d2ecd6e3a7cb0ee0da2a3a8b33fdb3678d # v1.0.157
       env:
         GH_TOKEN: ${{ inputs.gh_token || inputs.github_token }}
+||||||| base
+      uses: anthropics/claude-code-action@428971d2ecd6e3a7cb0ee0da2a3a8b33fdb3678d # v1.0.157
+=======
+      uses: anthropics/claude-code-action@97c53473391bff1901034d4b454b5bac7ab7a029 # v1.0.239
+>>>>>>> template
       with:
         claude_code_oauth_token: ${{ inputs.oauth_token_fallback_3 }}
         github_token: ${{ inputs.github_token }}
@@ -524,9 +553,15 @@ runs:
       id: a4
       if: steps.s3.outputs.still_needs_attempt == 'true' && inputs.oauth_token_fallback_4 != ''
       continue-on-error: true
+<<<<<<< local
       uses: anthropics/claude-code-action@428971d2ecd6e3a7cb0ee0da2a3a8b33fdb3678d # v1.0.157
       env:
         GH_TOKEN: ${{ inputs.gh_token || inputs.github_token }}
+||||||| base
+      uses: anthropics/claude-code-action@428971d2ecd6e3a7cb0ee0da2a3a8b33fdb3678d # v1.0.157
+=======
+      uses: anthropics/claude-code-action@97c53473391bff1901034d4b454b5bac7ab7a029 # v1.0.239
+>>>>>>> template
       with:
         claude_code_oauth_token: ${{ inputs.oauth_token_fallback_4 }}
         github_token: ${{ inputs.github_token }}
@@ -570,9 +605,15 @@ runs:
       id: a5
       if: steps.s4.outputs.still_needs_attempt == 'true' && inputs.oauth_token_fallback_5 != ''
       continue-on-error: true
+<<<<<<< local
       uses: anthropics/claude-code-action@428971d2ecd6e3a7cb0ee0da2a3a8b33fdb3678d # v1.0.157
       env:
         GH_TOKEN: ${{ inputs.gh_token || inputs.github_token }}
+||||||| base
+      uses: anthropics/claude-code-action@428971d2ecd6e3a7cb0ee0da2a3a8b33fdb3678d # v1.0.157
+=======
+      uses: anthropics/claude-code-action@97c53473391bff1901034d4b454b5bac7ab7a029 # v1.0.239
+>>>>>>> template
       with:
         claude_code_oauth_token: ${{ inputs.oauth_token_fallback_5 }}
         github_token: ${{ inputs.github_token }}
@@ -616,9 +657,15 @@ runs:
       id: a6
       if: steps.s5.outputs.still_needs_attempt == 'true' && inputs.oauth_token_fallback_6 != ''
       continue-on-error: true
+<<<<<<< local
       uses: anthropics/claude-code-action@428971d2ecd6e3a7cb0ee0da2a3a8b33fdb3678d # v1.0.157
       env:
         GH_TOKEN: ${{ inputs.gh_token || inputs.github_token }}
+||||||| base
+      uses: anthropics/claude-code-action@428971d2ecd6e3a7cb0ee0da2a3a8b33fdb3678d # v1.0.157
+=======
+      uses: anthropics/claude-code-action@97c53473391bff1901034d4b454b5bac7ab7a029 # v1.0.239
+>>>>>>> template
       with:
         claude_code_oauth_token: ${{ inputs.oauth_token_fallback_6 }}
         github_token: ${{ inputs.github_token }}
@@ -659,11 +706,62 @@ runs:
     # resolves to whichever check actually ran most recently.
     - name: Propagate the ladder result
       if: >-
+<<<<<<< local
         (steps.c6.outputs.errored || steps.c5.outputs.errored || steps.c4.outputs.errored ||
          steps.c3.outputs.errored || steps.c2b.outputs.errored || steps.c2.outputs.errored ||
          steps.c1r.outputs.errored || steps.c1.outputs.errored || steps.c0.outputs.errored) == 'true'
+||||||| base
+        steps.s6.outputs.still_needs_attempt == 'true' && inputs.fallback_oauth_token_6 != ''
+        && steps.s6.outputs.any_attempt == 'true'
+      shell: bash
+      env:
+        BACKOFF_SECONDS: "75"
+      run: sleep "$BACKOFF_SECONDS"
+    - name: Retry with the seventh-tier credential
+      id: a7
+      if: steps.s6.outputs.still_needs_attempt == 'true' && inputs.fallback_oauth_token_6 != ''
+      continue-on-error: true
+      uses: anthropics/claude-code-action@428971d2ecd6e3a7cb0ee0da2a3a8b33fdb3678d # v1.0.157
+      with:
+        claude_code_oauth_token: ${{ inputs.fallback_oauth_token_6 }}
+        github_token: ${{ inputs.github_token }}
+        prompt: ${{ steps.compose.outputs.prompt }}
+        claude_args: >-
+          --model ${{ inputs.model }}
+          ${{ inputs.claude_args }}
+        allowed_non_write_users: ${{ inputs.allowed_non_write_users }}
+        allowed_bots: ${{ inputs.allowed_bots }}
+    - name: Did the seventh-tier credential run?
+      id: c7
+      if: steps.s6.outputs.still_needs_attempt == 'true' && inputs.fallback_oauth_token_6 != ''
+=======
+        steps.s6.outputs.still_needs_attempt == 'true' && inputs.fallback_oauth_token_6 != ''
+        && steps.s6.outputs.any_attempt == 'true'
+      shell: bash
+      env:
+        BACKOFF_SECONDS: "75"
+      run: sleep "$BACKOFF_SECONDS"
+    - name: Retry with the seventh-tier credential
+      id: a7
+      if: steps.s6.outputs.still_needs_attempt == 'true' && inputs.fallback_oauth_token_6 != ''
+      continue-on-error: true
+      uses: anthropics/claude-code-action@97c53473391bff1901034d4b454b5bac7ab7a029 # v1.0.239
+      with:
+        claude_code_oauth_token: ${{ inputs.fallback_oauth_token_6 }}
+        github_token: ${{ inputs.github_token }}
+        prompt: ${{ steps.compose.outputs.prompt }}
+        claude_args: >-
+          --model ${{ inputs.model }}
+          ${{ inputs.claude_args }}
+        allowed_non_write_users: ${{ inputs.allowed_non_write_users }}
+        allowed_bots: ${{ inputs.allowed_bots }}
+    - name: Did the seventh-tier credential run?
+      id: c7
+      if: steps.s6.outputs.still_needs_attempt == 'true' && inputs.fallback_oauth_token_6 != ''
+>>>>>>> template
       shell: bash
       run: |
+<<<<<<< local
         echo "::error::claude-run: every configured Claude credential failed (set CLAUDE_CODE_OAUTH_TOKEN, CLAUDE_CODE_OAUTH_TOKEN_FALLBACK[_2..6], or the optional metered anthropic_api_key)." >&2
         exit 1
     # The gate and this composite's own `execution_file` output both need the log
@@ -673,6 +771,157 @@ runs:
     # the expression just renders empty. Every gated caller then failed with
     # "produced no execution log" even when a rung had run Claude to completion.
     # No `if:` — a ladder where every credential failed exits at the step above.
+||||||| base
+        set -euo pipefail
+        still="false"
+        if [[ "$PRIOR" == "true" && "$ERRORED" != "false" ]]; then
+          still="true"
+        fi
+        echo "still_needs_attempt=${still}" >>"$GITHUB_OUTPUT"
+        any="$ANY_PRIOR"
+        [[ -n "$ERRORED" ]] && any="true"
+        echo "any_attempt=${any}" >>"$GITHUB_OUTPUT"
+    # The free retry, on the LAST rung because that is the rung a minimal setup
+    # reaches. claude-run-errored.sh reports zero_cost=true only when the attempt
+    # billed nothing (total_cost_usd == 0, or no log at all), which proves
+    # inference was never reached — so a transient provider-side blip and a dead
+    # token look identical here, and one more attempt on the SAME credential
+    # costs nothing either way: it succeeds if the fault was the blip and fails
+    # the same way if the token is dead. Without it a blip is answered only by
+    # walking to the NEXT credential, which the last rung does not have — the
+    # attempt is then lost with zero retries. A failure that DID bill reached
+    # inference and failed on the work itself, so zero_cost=false skips this rung
+    # rather than spend real money failing the same way twice.
+    - name: Back off before the free same-credential retry
+      if: steps.s7.outputs.still_needs_attempt == 'true' && steps.c7.outputs.zero_cost == 'true'
+      shell: bash
+      env:
+        # Straddling the blip is the entire point: the failure returns in well
+        # under a second, so a back-to-back retry hits the same broken instant.
+        BACKOFF_SECONDS: "10"
+      run: sleep "$BACKOFF_SECONDS"
+    - name: Retry on the last credential
+      id: a7r
+      if: steps.s7.outputs.still_needs_attempt == 'true' && steps.c7.outputs.zero_cost == 'true'
+      continue-on-error: true
+      uses: anthropics/claude-code-action@428971d2ecd6e3a7cb0ee0da2a3a8b33fdb3678d # v1.0.157
+      with:
+        claude_code_oauth_token: ${{ inputs.fallback_oauth_token_6 }}
+        github_token: ${{ inputs.github_token }}
+        prompt: ${{ steps.compose.outputs.prompt }}
+        claude_args: >-
+          --model ${{ inputs.model }}
+          ${{ inputs.claude_args }}
+        allowed_non_write_users: ${{ inputs.allowed_non_write_users }}
+        allowed_bots: ${{ inputs.allowed_bots }}
+    - name: Did the same-credential retry run?
+      id: c7r
+      if: steps.s7.outputs.still_needs_attempt == 'true' && steps.c7.outputs.zero_cost == 'true'
+      shell: bash
+      env:
+        EXECUTION_FILE: ${{ steps.a7r.outputs.execution_file }}
+      run: bash "${GITHUB_ACTION_PATH}/claude-run-errored.sh"
+    # The free retry joins the same cumulative state the credential rungs use, so
+    # a retry that WORKED ends the ladder and a retry that did not leaves the
+    # pending state untouched. The propagate step below therefore reads s7r, not
+    # s7; a skipped retry emits an empty errored, which is not success, so the
+    # gap handling that lets an unset tier be stepped over covers this rung too.
+    - name: Ladder state after the free same-credential retry
+      id: s7r
+      shell: bash
+      env:
+        PRIOR: ${{ steps.s7.outputs.still_needs_attempt }}
+        ANY_PRIOR: ${{ steps.s7.outputs.any_attempt }}
+        ERRORED: ${{ steps.c7r.outputs.errored }}
+      run: |
+        set -euo pipefail
+        still="false"
+        if [[ "$PRIOR" == "true" && "$ERRORED" != "false" ]]; then
+          still="true"
+        fi
+        echo "still_needs_attempt=${still}" >>"$GITHUB_OUTPUT"
+        any="$ANY_PRIOR"
+        [[ -n "$ERRORED" ]] && any="true"
+        echo "any_attempt=${any}" >>"$GITHUB_OUTPUT"
+    # Resolve the winning rung's log ONCE. Both the `execution_file` output and
+    # the gate below read this step, so the coalesce has a single source rather
+    # than a copy per consumer that could drift apart.
+=======
+        set -euo pipefail
+        still="false"
+        if [[ "$PRIOR" == "true" && "$ERRORED" != "false" ]]; then
+          still="true"
+        fi
+        echo "still_needs_attempt=${still}" >>"$GITHUB_OUTPUT"
+        any="$ANY_PRIOR"
+        [[ -n "$ERRORED" ]] && any="true"
+        echo "any_attempt=${any}" >>"$GITHUB_OUTPUT"
+    # The free retry, on the LAST rung because that is the rung a minimal setup
+    # reaches. claude-run-errored.sh reports zero_cost=true only when the attempt
+    # billed nothing (total_cost_usd == 0, or no log at all), which proves
+    # inference was never reached — so a transient provider-side blip and a dead
+    # token look identical here, and one more attempt on the SAME credential
+    # costs nothing either way: it succeeds if the fault was the blip and fails
+    # the same way if the token is dead. Without it a blip is answered only by
+    # walking to the NEXT credential, which the last rung does not have — the
+    # attempt is then lost with zero retries. A failure that DID bill reached
+    # inference and failed on the work itself, so zero_cost=false skips this rung
+    # rather than spend real money failing the same way twice.
+    - name: Back off before the free same-credential retry
+      if: steps.s7.outputs.still_needs_attempt == 'true' && steps.c7.outputs.zero_cost == 'true'
+      shell: bash
+      env:
+        # Straddling the blip is the entire point: the failure returns in well
+        # under a second, so a back-to-back retry hits the same broken instant.
+        BACKOFF_SECONDS: "10"
+      run: sleep "$BACKOFF_SECONDS"
+    - name: Retry on the last credential
+      id: a7r
+      if: steps.s7.outputs.still_needs_attempt == 'true' && steps.c7.outputs.zero_cost == 'true'
+      continue-on-error: true
+      uses: anthropics/claude-code-action@97c53473391bff1901034d4b454b5bac7ab7a029 # v1.0.239
+      with:
+        claude_code_oauth_token: ${{ inputs.fallback_oauth_token_6 }}
+        github_token: ${{ inputs.github_token }}
+        prompt: ${{ steps.compose.outputs.prompt }}
+        claude_args: >-
+          --model ${{ inputs.model }}
+          ${{ inputs.claude_args }}
+        allowed_non_write_users: ${{ inputs.allowed_non_write_users }}
+        allowed_bots: ${{ inputs.allowed_bots }}
+    - name: Did the same-credential retry run?
+      id: c7r
+      if: steps.s7.outputs.still_needs_attempt == 'true' && steps.c7.outputs.zero_cost == 'true'
+      shell: bash
+      env:
+        EXECUTION_FILE: ${{ steps.a7r.outputs.execution_file }}
+      run: bash "${GITHUB_ACTION_PATH}/claude-run-errored.sh"
+    # The free retry joins the same cumulative state the credential rungs use, so
+    # a retry that WORKED ends the ladder and a retry that did not leaves the
+    # pending state untouched. The propagate step below therefore reads s7r, not
+    # s7; a skipped retry emits an empty errored, which is not success, so the
+    # gap handling that lets an unset tier be stepped over covers this rung too.
+    - name: Ladder state after the free same-credential retry
+      id: s7r
+      shell: bash
+      env:
+        PRIOR: ${{ steps.s7.outputs.still_needs_attempt }}
+        ANY_PRIOR: ${{ steps.s7.outputs.any_attempt }}
+        ERRORED: ${{ steps.c7r.outputs.errored }}
+      run: |
+        set -euo pipefail
+        still="false"
+        if [[ "$PRIOR" == "true" && "$ERRORED" != "false" ]]; then
+          still="true"
+        fi
+        echo "still_needs_attempt=${still}" >>"$GITHUB_OUTPUT"
+        any="$ANY_PRIOR"
+        [[ -n "$ERRORED" ]] && any="true"
+        echo "any_attempt=${any}" >>"$GITHUB_OUTPUT"
+    # Resolve the winning rung's log ONCE. Both the `execution_file` output and
+    # the gate below read this step, so the coalesce has a single source rather
+    # than a copy per consumer that could drift apart.
+>>>>>>> template
     - name: Resolve the execution log of the rung that ran
       id: resolve_log
       shell: bash
