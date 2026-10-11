@@ -295,7 +295,8 @@ function stubBin(t, omit) {
   // degraded-warning marker, without which every warning repeats and a dedupe
   // test passes vacuously. cat/mktemp/rm replay a captured payload to the node
   // path. sleep and chmod are the provisioners': without them the lock's
-  // waiting arm dies at 127 and the daemon it installs is not executable.
+  // waiting arm dies at 127 and the daemon it installs is not executable; mv
+  // swaps a freshly built venv in over the previous one.
   for (const cmd of [
     "bash",
     "sh",
@@ -308,6 +309,7 @@ function stubBin(t, omit) {
     "mktemp",
     "pwd",
     "mkdir",
+    "mv",
     "rm",
     "rmdir",
     "sleep",
