@@ -26,10 +26,10 @@ import {
   findInstructionFiles,
   scanInstructionFiles,
   cleanFile,
-  atomicReplaceFile,
   excludeFromContextScan,
   walkContextGlobs,
 } from "../src/instructions.mjs";
+import { atomicReplaceFile } from "../src/atomic-replace.mjs";
 import { LONG_RUN_THRESHOLD, SCATTERED_THRESHOLD } from "../src/invisible.mjs";
 import { cp } from "./test-helpers.mjs";
 

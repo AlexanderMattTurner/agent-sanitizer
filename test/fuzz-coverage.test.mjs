@@ -134,7 +134,6 @@ const FUZZ_EXEMPT = Object.freeze({
 
   // ── filesystem entry points whose only parse is an already-required one ──
   ancestorInstructionFiles: "pure parent-path arithmetic over a directory path",
-  atomicReplaceFile: "write primitive over text a required scan produced",
   cleanFile: "reads a file and delegates the parse to scanText",
   findInstructionFiles: "enumerates paths and reads no file content",
   scanInstructionFiles: "reads files and delegates the parse to scanText",

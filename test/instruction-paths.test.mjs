@@ -4,10 +4,11 @@
  *
  *   - WRITES: every rewrite of an instruction file goes through cleanFile's
  *     realpath containment, so a directory symlink in the project cannot carry
- *     an auto-clean to a file outside it.
- *   - RENDERS: every file path a scanner renders into a report, stderr or model
- *     context goes through displayUntrusted, so a hostile filename cannot carry its
- *     own payload (tag characters, an OSC sequence) into the report.
+ *     an auto-clean to a file outside it, and every other fs write in the
+ *     package is a named hook store.
+ *   - RENDERS: every file path or reason a scanner renders into a report,
+ *     stderr or model context goes through displayUntrusted, so a hostile
+ *     filename cannot carry its own payload (tag characters, an OSC sequence).
  *
  * Each partition pairs a behavioral check per site with an acorn enumeration of
  * the live sites, so a new site cannot land without a decision here.
@@ -26,7 +27,7 @@ import {
 import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
 import { parse } from "acorn";
-import { simple } from "acorn-walk";
+import { ancestor, simple } from "acorn-walk";
 
 import { repoRoot } from "./helpers/repo-root.mjs";
 import { withCapturedStdout } from "./helpers/capture-stdout.mjs";
@@ -215,7 +216,150 @@ describe("every instruction-file write stays inside its root", () => {
       .sort();
     assert.deepEqual(live, Object.keys(WRITE_SITES).sort());
   });
+
+  // Every node:fs call in src/ and claude-hooks/ that can create, change or
+  // remove a file, keyed `module::enclosingFunction`. The instruction-file
+  // rewrite is the first group; every other site writes the hooks' own state,
+  // never a scanned tree, and carries its reason.
+  const FS_MUTATORS = new Set([
+    "appendFileSync",
+    "chmodSync",
+    "chownSync",
+    "copyFileSync",
+    "cpSync",
+    "createWriteStream",
+    "fchmodSync",
+    "fchownSync",
+    "ftruncateSync",
+    "futimesSync",
+    "linkSync",
+    "mkdirSync",
+    "mkdtempSync",
+    "openSync",
+    "renameSync",
+    "rmSync",
+    "rmdirSync",
+    "symlinkSync",
+    "truncateSync",
+    "unlinkSync",
+    "utimesSync",
+    "writeFileSync",
+    "writeSync",
+  ]);
+  const INSTRUCTION_WRITE = [
+    "src/atomic-replace.mjs::atomicReplaceFile",
+    // The O_RDONLY|O_NOFOLLOW open of the already-contained target.
+    "src/instructions.mjs::cleanFile",
+  ];
+  /** @type {Record<string, string>} */
+  const FS_EXEMPT = {
+    "claude-hooks/lib/hook-io.mjs::writeFileNoFollow":
+      "a hook state file under $TMPDIR, created O_EXCL after unlinking a squatter",
+    "claude-hooks/lib/hook-io.mjs::writeSentinelFile":
+      "an empty hook sentinel under $TMPDIR, created O_EXCL",
+    "claude-hooks/lib/invisible-alert.mjs::appendAlert":
+      "the alert store under alertDir() in $TMPDIR",
+    "claude-hooks/lib/invisible-alert.mjs::drop":
+      "removes a session's alert store under alertDir()",
+    "claude-hooks/lib/invisible-alert.mjs::sweepStaleSessions":
+      "expires session alert stores under alertDir()",
+    "claude-hooks/lib/reveal.mjs::readSpan":
+      "an O_RDONLY|O_NOFOLLOW read of a span in the reveal store",
+    "claude-hooks/lib/reveal.mjs::revealDirIsSafe":
+      "creates the reveal store in $TMPDIR",
+    "claude-hooks/lib/reveal.mjs::sweepStaleReveals":
+      "expires spans in the reveal store",
+    "claude-hooks/lib/secret-drop-guard.mjs::consumeConfirm":
+      "consumes a single-use confirm marker in $TMPDIR",
+    "claude-hooks/lib/secret-drop-guard.mjs::sweepStaleConfirms":
+      "expires confirm markers in $TMPDIR",
+    "claude-hooks/lib/trace.mjs::trace":
+      "the opt-in debug log at the operator's _AGENT_SANITIZER_TRACE_FILE",
+  };
+
+  it("routes every fs write in the package through atomicReplaceFile or an exempt store", () => {
+    /** @type {Set<string>} */
+    const live = new Set();
+    for (const { rel, ast } of modules(["src", "claude-hooks"])) {
+      const fsNames = fsBindings(ast);
+      ancestor(ast, {
+        CallExpression(node, _state, ancestors) {
+          const callee = /** @type {any} */ (node).callee;
+          if (callee.type !== "Identifier") return;
+          if (!FS_MUTATORS.has(fsNames.get(callee.name) ?? "")) return;
+          live.add(`${rel}::${enclosingFunction(ancestors)}`);
+        },
+      });
+    }
+    assert.ok(
+      live.has(INSTRUCTION_WRITE[0]),
+      "the rewrite itself was not found",
+    );
+    assert.deepEqual(
+      [...live].sort(),
+      [...INSTRUCTION_WRITE, ...Object.keys(FS_EXEMPT)].sort(),
+    );
+  });
+
+  it("reaches atomicReplaceFile only from cleanFile", () => {
+    // acorn-walk visits a binding (declaration name, import specifier) as a
+    // pattern, not an Identifier expression, so only USES land here.
+    /** @type {string[]} */
+    const callers = [];
+    for (const { rel, ast } of modules(["src", "claude-hooks", "bin"]))
+      ancestor(ast, {
+        Identifier(node, _state, ancestors) {
+          if (node.name === "atomicReplaceFile")
+            callers.push(`${rel}::${enclosingFunction(ancestors)}`);
+        },
+      });
+    assert.deepEqual(callers, ["src/instructions.mjs::cleanFile"]);
+  });
 });
+
+/**
+ * Local name → node:fs export name, for every named import from node:fs.
+ * Throws on a namespace or default import, whose calls this map cannot see.
+ * @param {any} ast
+ * @returns {Map<string, string>}
+ */
+function fsBindings(ast) {
+  const names = new Map();
+  for (const node of ast.body) {
+    if (node.type !== "ImportDeclaration") continue;
+    if (!/^(?:node:)?fs(?:\/promises)?$/.test(node.source.value)) continue;
+    for (const spec of node.specifiers) {
+      if (spec.type !== "ImportSpecifier")
+        throw new Error(`unhandled fs import shape: ${spec.type}`);
+      names.set(spec.local.name, spec.imported.name);
+    }
+  }
+  return names;
+}
+
+/**
+ * Name of the innermost named function around the node `ancestors` ends at:
+ * a declaration's own name, or the binding a function expression is assigned
+ * to. Module scope is `<module>`.
+ * @param {any[]} ancestors
+ * @returns {string}
+ */
+function enclosingFunction(ancestors) {
+  for (let i = ancestors.length - 2; i >= 0; i--) {
+    const node = ancestors[i];
+    if (node.type === "FunctionDeclaration") return node.id.name;
+    if (
+      node.type !== "FunctionExpression" &&
+      node.type !== "ArrowFunctionExpression"
+    )
+      continue;
+    const parent = ancestors[i - 1];
+    if (parent.type === "VariableDeclarator") return parent.id.name;
+    if (parent.type === "Property" || parent.type === "MethodDefinition")
+      return parent.key.name;
+  }
+  return "<module>";
+}
 
 // ─── renders ─────────────────────────────────────────────────────────────────
 

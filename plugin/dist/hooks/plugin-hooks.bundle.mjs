@@ -10814,7 +10814,7 @@ var require_util = __commonJS({
       return path2;
     });
     exports.normalize = normalize3;
-    function join9(aRoot, aPath) {
+    function join10(aRoot, aPath) {
       if (aRoot === "") {
         aRoot = ".";
       }
@@ -10846,7 +10846,7 @@ var require_util = __commonJS({
       }
       return joined;
     }
-    exports.join = join9;
+    exports.join = join10;
     exports.isAbsolute = function(aPath) {
       return aPath.charAt(0) === "/" || urlRegexp.test(aPath);
     };
@@ -11060,7 +11060,7 @@ var require_util = __commonJS({
             parsed.path = parsed.path.substring(0, index2 + 1);
           }
         }
-        sourceURL = join9(urlGenerate(parsed), sourceURL);
+        sourceURL = join10(urlGenerate(parsed), sourceURL);
       }
       return normalize3(sourceURL);
     }
@@ -12576,9 +12576,9 @@ var init_lib4 = __esm({
        * @returns {undefined}
        *   Nothing.
        */
-      set dirname(dirname8) {
+      set dirname(dirname9) {
         assertPath(this.basename, "dirname");
-        this.path = default2.join(dirname8 || "", this.basename);
+        this.path = default2.join(dirname9 || "", this.basename);
       }
       /**
        * Get the extname (including dot) (example: `'.js'`).
@@ -47281,8 +47281,56 @@ var init_src = __esm({
   }
 });
 
+// src/atomic-replace.mjs
+import { randomBytes } from "node:crypto";
+import {
+  closeSync as closeSync2,
+  constants,
+  fchmodSync,
+  fsyncSync,
+  openSync as openSync2,
+  renameSync,
+  unlinkSync as unlinkSync2,
+  writeFileSync as writeFileSync2
+} from "node:fs";
+import { dirname as dirname2, join as join2 } from "node:path";
+function atomicReplaceFile(absPath, data, mode, tmpName = () => `.${randomBytes(12).toString("hex")}.tmp`, remove = unlinkSync2) {
+  const dir = dirname2(absPath);
+  const tmp = join2(dir, tmpName());
+  const fd = openSync2(
+    tmp,
+    constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL,
+    mode
+  );
+  try {
+    writeFileSync2(fd, data);
+    fchmodSync(fd, mode);
+    fsyncSync(fd);
+  } catch (err) {
+    closeSync2(fd);
+    try {
+      remove(tmp);
+    } catch {
+    }
+    throw err;
+  }
+  closeSync2(fd);
+  renameSync(tmp, absPath);
+  const dirFd = openSync2(dir, constants.O_RDONLY);
+  try {
+    fsyncSync(dirFd);
+  } finally {
+    closeSync2(dirFd);
+  }
+}
+var init_atomic_replace = __esm({
+  "src/atomic-replace.mjs"() {
+    "use strict";
+  }
+});
+
 // src/claude-context.mjs
-import { dirname as dirname2, isAbsolute, join as join2, relative, resolve, sep } from "node:path";
+import { dirname as dirname3, isAbsolute, join as join3, relative, resolve, sep } from "node:path";
 function kind(shape, name50, { ancestorChain = false, eventNamed = false } = {}) {
   return Object.freeze({ shape, name: name50, ancestorChain, eventNamed });
 }
@@ -47301,9 +47349,9 @@ function claudeDirPatterns(prefix) {
 function ancestorInstructionFiles(dir) {
   const files = [];
   let current = resolve(dir);
-  for (let parent = dirname2(current); parent !== current; parent = dirname2(current)) {
+  for (let parent = dirname3(current); parent !== current; parent = dirname3(current)) {
     current = parent;
-    for (const name50 of CLAUDE_MEMORY_FILES) files.push(join2(current, name50));
+    for (const name50 of CLAUDE_MEMORY_FILES) files.push(join3(current, name50));
   }
   return files;
 }
@@ -47517,7 +47565,6 @@ __export(instructions_exports, {
   USER_GLOBAL_EVENT_NAMED_GLOBS: () => USER_GLOBAL_EVENT_NAMED_GLOBS,
   ancestorInstructionFiles: () => ancestorInstructionFiles,
   announcedByInstructionsLoaded: () => announcedByInstructionsLoaded,
-  atomicReplaceFile: () => atomicReplaceFile,
   cleanFile: () => cleanFile,
   contextScanExclude: () => contextScanExclude,
   contextScopeContradiction: () => contextScopeContradiction,
@@ -47530,21 +47577,15 @@ __export(instructions_exports, {
 });
 import {
   readFileSync as readFileSync3,
-  writeFileSync as writeFileSync2,
   globSync,
-  renameSync,
   lstatSync as lstatSync2,
   fstatSync,
   realpathSync as realpathSync2,
-  openSync as openSync2,
-  fsyncSync,
-  fchmodSync,
-  closeSync as closeSync2,
-  unlinkSync as unlinkSync2,
-  constants
+  openSync as openSync3,
+  closeSync as closeSync3,
+  constants as constants2
 } from "node:fs";
-import { randomBytes } from "node:crypto";
-import { basename, join as join3, relative as relative3, resolve as resolve3, dirname as dirname3, sep as sep3 } from "node:path";
+import { basename, join as join4, relative as relative3, resolve as resolve3, dirname as dirname4, sep as sep3 } from "node:path";
 function zeroWidthBits(cps) {
   let bits = "";
   for (const cp of cps) {
@@ -47638,8 +47679,8 @@ function isContained(root2, child) {
 }
 function containedWritePath(absPath, root2) {
   const realRoot = realpathSync2(root2);
-  const target = join3(
-    realpathSync2(dirname3(resolve3(absPath))),
+  const target = join4(
+    realpathSync2(dirname4(resolve3(absPath))),
     basename(absPath)
   );
   if (isInsideDir(realRoot, target)) return target;
@@ -47702,35 +47743,6 @@ function scanInstructionFiles(globs, { cwd = process.cwd(), exclude } = {}) {
   }
   return out;
 }
-function atomicReplaceFile(absPath, data, mode, tmpName = () => `.${randomBytes(12).toString("hex")}.tmp`, remove = unlinkSync2) {
-  const dir = dirname3(absPath);
-  const tmp = join3(dir, tmpName());
-  const fd = openSync2(
-    tmp,
-    constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL,
-    mode
-  );
-  try {
-    writeFileSync2(fd, data);
-    fchmodSync(fd, mode);
-    fsyncSync(fd);
-  } catch (err) {
-    closeSync2(fd);
-    try {
-      remove(tmp);
-    } catch {
-    }
-    throw err;
-  }
-  closeSync2(fd);
-  renameSync(tmp, absPath);
-  const dirFd = openSync2(dir, constants.O_RDONLY);
-  try {
-    fsyncSync(dirFd);
-  } finally {
-    closeSync2(dirFd);
-  }
-}
 function cleanFile(absPath, { root: root2, lstat = lstatSync2 }) {
   if (typeof root2 !== "string")
     throw new TypeError(
@@ -47739,7 +47751,7 @@ function cleanFile(absPath, { root: root2, lstat = lstatSync2 }) {
   const path2 = containedWritePath(absPath, root2);
   let fd;
   try {
-    fd = openSync2(path2, constants.O_RDONLY | constants.O_NOFOLLOW);
+    fd = openSync3(path2, constants2.O_RDONLY | constants2.O_NOFOLLOW);
   } catch (err) {
     const code4 = (
       /** @type {NodeJS.ErrnoException} */
@@ -47782,13 +47794,14 @@ function cleanFile(absPath, { root: root2, lstat = lstatSync2 }) {
     atomicReplaceFile(path2, stripped, before.mode);
     return true;
   } finally {
-    closeSync2(fd);
+    closeSync3(fd);
   }
 }
 var UNTRUSTED_PREFIX, NEWLINE, ZW_BIT, BITS_SHOWN;
 var init_instructions = __esm({
   "src/instructions.mjs"() {
     "use strict";
+    init_atomic_replace();
     init_invisible();
     init_claude_context();
     init_claude_context();
@@ -48435,7 +48448,7 @@ import {
   statSync
 } from "node:fs";
 import { randomBytes as randomBytes2 } from "node:crypto";
-import { basename as basename2, join as join4 } from "node:path";
+import { basename as basename2, join as join5 } from "node:path";
 import { homedir, tmpdir, userInfo as userInfo2 } from "node:os";
 function sessionPrefix(sessionId) {
   const key = (sessionId ?? "").replace(/[^A-Za-z0-9._-]/gu, "_") || "no-session";
@@ -48480,7 +48493,7 @@ function sweepStaleSessions(sessionId) {
   for (const name50 of readdirSync(dir)) {
     if (!name50.startsWith(prefix)) continue;
     if (name50 === keep || name50.startsWith(`${keep}.`)) continue;
-    const path2 = join4(dir, name50);
+    const path2 = join5(dir, name50);
     try {
       if (lstatSync3(path2).mtimeMs >= cutoff) continue;
       rmSync(path2, { recursive: true, force: true });
@@ -48497,7 +48510,7 @@ function sweepStaleSessions(sessionId) {
 function sweepStaleFallback(sessionId) {
   const dir = alertDir();
   const inherited = alertDir(sessionId) !== dir && dirIsTrusted(dir);
-  const entries = inherited ? readdirSync(dir).map((name50) => join4(dir, name50)) : [];
+  const entries = inherited ? readdirSync(dir).map((name50) => join5(dir, name50)) : [];
   const drop = (path2) => {
     if (markerIsTrusted(path2)) rmSync(path2, { force: true });
   };
@@ -48555,7 +48568,7 @@ function announcedLaunchFiles(dir) {
   return launchInstructionFiles(dir).filter(announcedByInstructionsLoaded);
 }
 function userGlobalLaunchHasContent(env = process.env) {
-  const configDir = env.CLAUDE_CONFIG_DIR || join4(homedir(), ".claude");
+  const configDir = env.CLAUDE_CONFIG_DIR || join5(homedir(), ".claude");
   return anyFileHasBytes(
     walkContextGlobs(
       [...USER_GLOBAL_EVENT_NAMED_GLOBS],
@@ -48587,7 +48600,7 @@ function invisibleCharAlert(sessionId) {
   for (const dir of dirs) {
     if (!dirIsTrusted(dir)) continue;
     for (const name50 of readdirSync(dir).sort()) {
-      const path2 = join4(dir, name50);
+      const path2 = join5(dir, name50);
       if (!markerIsTrusted(path2)) continue;
       if (dir !== own5 && !withinFallbackTtl(path2)) continue;
       const text5 = readFileSync4(path2, "utf-8").trim();
@@ -48599,7 +48612,7 @@ function invisibleCharAlert(sessionId) {
 }
 function appendAlert(text5, sessionId) {
   const dir = alertDir(sessionId);
-  const path2 = join4(dir, randomBytes2(8).toString("hex"));
+  const path2 = join5(dir, randomBytes2(8).toString("hex"));
   let usable;
   try {
     mkdirSync(dir, { recursive: true, mode: 448 });
@@ -48639,7 +48652,7 @@ var init_invisible_alert = __esm({
     init_instructions();
     ({ applyLayer1WellFormed: applyLayer1WellFormed2 } = /** @type {typeof import("agent-sanitizer")} */
     await lazyImport("agent-sanitizer"));
-    ALERT_BASE = join4(
+    ALERT_BASE = join5(
       tmpdir(),
       `.claude-invisible-char-alert-${PROJECT_HASH}`
     );
@@ -48775,7 +48788,7 @@ var init_authored_content = __esm({
 
 // src/credential-names.mjs
 import { readFileSync as readFileSync5 } from "node:fs";
-import { dirname as dirname4, join as join5 } from "node:path";
+import { dirname as dirname5, join as join6 } from "node:path";
 import { fileURLToPath as fileURLToPath3 } from "node:url";
 function dedupe(values) {
   return [...new Set(values)];
@@ -48873,8 +48886,8 @@ var DATA_FILE, FILE_LABEL, ENV_NAME_USE, FIELD_VALUE_USE, KNOWN_USES, PART_RE, _
 var init_credential_names = __esm({
   "src/credential-names.mjs"() {
     "use strict";
-    DATA_FILE = join5(
-      dirname4(fileURLToPath3(import.meta.url)),
+    DATA_FILE = join6(
+      dirname5(fileURLToPath3(import.meta.url)),
       "..",
       "python",
       "agent_sanitizer",
@@ -49090,7 +49103,7 @@ import { spawn } from "node:child_process";
 import { existsSync as existsSync2, lstatSync as lstatSync4 } from "node:fs";
 import { createConnection } from "node:net";
 import { tmpdir as tmpdir2, userInfo as userInfo3 } from "node:os";
-import { dirname as dirname5, join as join6 } from "node:path";
+import { dirname as dirname6, join as join7 } from "node:path";
 import { fileURLToPath as fileURLToPath4 } from "node:url";
 function positiveMsOr(raw, fallback) {
   const ms = Number(raw);
@@ -49141,7 +49154,7 @@ function classifySocket(socketPath, deps = {}) {
   if (!st.isSocket() || st.uid !== uid) return "untrusted";
   let dir;
   try {
-    dir = lstat(dirname5(socketPath));
+    dir = lstat(dirname6(socketPath));
   } catch {
     return "untrusted";
   }
@@ -49326,7 +49339,7 @@ var init_redactor_client = __esm({
     init_hook_timing();
     init_env_config();
     FRAME_CAP = 16 * 1024 * 1024;
-    DEFAULT_SOCKET_PATH = process.env._AGENT_SANITIZER_REDACTOR_SOCKET || join6(tmpdir2(), "agent-sanitizer-redactor", "redactor.sock");
+    DEFAULT_SOCKET_PATH = process.env._AGENT_SANITIZER_REDACTOR_SOCKET || join7(tmpdir2(), "agent-sanitizer-redactor", "redactor.sock");
     WAIT_DEADLINE_MS = positiveMsOr(
       process.env._AGENT_SANITIZER_REDACTOR_WAIT_MS,
       8e3
@@ -49340,7 +49353,7 @@ var init_redactor_client = __esm({
 // claude-hooks/lib/secret-drop-guard.mjs
 import { createHash as createHash3 } from "node:crypto";
 import { lstatSync as lstatSync5, readdirSync as readdirSync2, unlinkSync as unlinkSync3 } from "node:fs";
-import { join as join7, dirname as dirname6 } from "node:path";
+import { join as join8, dirname as dirname7 } from "node:path";
 import { tmpdir as tmpdir3 } from "node:os";
 import { spawnSync as spawnSync2 } from "node:child_process";
 function dropFingerprint(filePath, content3, dropped = []) {
@@ -49350,7 +49363,7 @@ function dropFingerprint(filePath, content3, dropped = []) {
   return digest.digest("hex").slice(0, 32);
 }
 function confirmMarkerPath(fingerprint) {
-  return join7(tmpdir3(), `.claude-secret-drop-${PROJECT_HASH}-${fingerprint}`);
+  return join8(tmpdir3(), `.claude-secret-drop-${PROJECT_HASH}-${fingerprint}`);
 }
 function sweepStaleConfirms() {
   const dir = tmpdir3();
@@ -49358,7 +49371,7 @@ function sweepStaleConfirms() {
   const cutoff = Date.now() - CONFIRM_TTL_MS;
   for (const name50 of readdirSync2(dir)) {
     if (!name50.startsWith(prefix)) continue;
-    const path2 = join7(dir, name50);
+    const path2 = join8(dir, name50);
     try {
       if (lstatSync5(path2).mtimeMs < cutoff) unlinkSync3(path2);
     } catch (err) {
@@ -49372,7 +49385,7 @@ function sweepStaleConfirms() {
 }
 function gitTracked(filePath, spawn2 = spawnSync2) {
   const res = spawn2("git", ["ls-files", "--error-unmatch", "--", filePath], {
-    cwd: dirname6(filePath),
+    cwd: dirname7(filePath),
     stdio: "ignore"
   });
   if (res.error) return true;
@@ -49461,22 +49474,22 @@ import {
   lstatSync as lstatSync6,
   readdirSync as readdirSync3,
   unlinkSync as unlinkSync4,
-  openSync as openSync3,
+  openSync as openSync4,
   readFileSync as readFileSync6,
-  closeSync as closeSync3,
-  constants as constants2
+  closeSync as closeSync4,
+  constants as constants3
 } from "node:fs";
 import { tmpdir as tmpdir4, userInfo as userInfo4 } from "node:os";
-import { join as join8, resolve as resolve4, sep as sep4 } from "node:path";
+import { join as join9, resolve as resolve4, sep as sep4 } from "node:path";
 function revealDir() {
-  return process.env._AGENT_SANITIZER_REVEAL_DIR || join8(tmpdir4(), `agent-sanitizer-layer2-reveal-${PROJECT_HASH}`);
+  return process.env._AGENT_SANITIZER_REVEAL_DIR || join9(tmpdir4(), `agent-sanitizer-layer2-reveal-${PROJECT_HASH}`);
 }
 function sweepStaleReveals() {
   const dir = revealDir();
   if (!existsSync3(dir) || !revealDirIsSafe(dir)) return;
   const cutoff = Date.now() - REVEAL_TTL_MS;
   for (const name50 of readdirSync3(dir)) {
-    const path2 = join8(dir, name50);
+    const path2 = join9(dir, name50);
     try {
       if (lstatSync6(path2).mtimeMs < cutoff) unlinkSync4(path2);
     } catch (err) {
@@ -49490,7 +49503,7 @@ function sweepStaleReveals() {
 }
 function revealPathFor(content3) {
   const digest = createHash4("sha256").update(content3, "utf8").digest("hex");
-  return join8(revealDir(), `${digest}.txt`);
+  return join9(revealDir(), `${digest}.txt`);
 }
 function revealDirIsSafe(dir) {
   try {
@@ -49529,7 +49542,7 @@ function persistReveal(content3) {
 function spanPath(key) {
   if (!SPAN_KEY_RE.test(key))
     throw new Error(`spanPath: not a Layer-2 placeholder key: ${key}`);
-  return join8(revealDir(), `span-${key}.txt`);
+  return join9(revealDir(), `span-${key}.txt`);
 }
 function persistSpan(key, content3) {
   const dir = revealDir();
@@ -49541,7 +49554,7 @@ function persistSpan(key, content3) {
     );
     return false;
   }
-  const path2 = join8(dir, `span-${key}.txt`);
+  const path2 = join9(dir, `span-${key}.txt`);
   try {
     lstatSync6(path2);
     return true;
@@ -49562,9 +49575,9 @@ function readSpan(key) {
   if (!revealDirIsSafe(dir)) return null;
   let fd;
   try {
-    fd = openSync3(
-      join8(dir, `span-${key}.txt`),
-      constants2.O_RDONLY | constants2.O_NOFOLLOW
+    fd = openSync4(
+      join9(dir, `span-${key}.txt`),
+      constants3.O_RDONLY | constants3.O_NOFOLLOW
     );
   } catch {
     return null;
@@ -49572,7 +49585,7 @@ function readSpan(key) {
   try {
     return readFileSync6(fd, "utf8");
   } finally {
-    closeSync3(fd);
+    closeSync4(fd);
   }
 }
 function isRevealRead(toolName, toolInput) {
@@ -49765,7 +49778,7 @@ __export(pretooluse_sanitize_exports, {
 });
 import { createRequire as createRequire2 } from "node:module";
 import { readFileSync as readFileSync7 } from "node:fs";
-import { dirname as dirname7 } from "node:path";
+import { dirname as dirname8 } from "node:path";
 function substituteLayer2(text5, field) {
   const matches = [...text5.matchAll(LAYER2_PLACEHOLDER_RE2)].map((match) => ({
     text: match[0],
@@ -49897,7 +49910,7 @@ function preToolUseLayers(rehydrate, env = process.env) {
 function toolTargetDir(tool, toolInput) {
   const field = PATH_FIELD_BY_TOOL[tool];
   const path2 = field && toolInput?.[field];
-  return typeof path2 === "string" && path2.startsWith("/") ? dirname7(path2) : void 0;
+  return typeof path2 === "string" && path2.startsWith("/") ? dirname8(path2) : void 0;
 }
 async function buildPreToolUseResponse(input, rehydrate = defaultRehydrate, sink) {
   const emitTrace = hookTrace(sink);
