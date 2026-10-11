@@ -685,9 +685,12 @@ function markerIsTrusted(path2) {
 function currentUid() {
   return typeof process.getuid === "function" ? process.getuid() : null;
 }
-function ownedByCurrentUser(st) {
-  const uid = currentUid();
+function ownedByCurrentUser(st, uid = currentUid()) {
   return uid !== null && st.uid === uid;
+}
+function isPrivateDir(st, { uid = currentUid(), rootMayOwn = false } = {}) {
+  const owner = ownedByCurrentUser(st, uid) || uid !== null && rootMayOwn && st.uid === 0;
+  return st.isDirectory() && owner && (st.mode & 18) === 0;
 }
 function writeSentinelFile(path2) {
   try {
@@ -48614,7 +48617,7 @@ function dirIsTrusted(path2) {
   } catch {
     return false;
   }
-  return st.isDirectory() && ownedByCurrentUser(st);
+  return isPrivateDir(st);
 }
 function sweepStaleSessions(sessionId) {
   const dir = tmpdir();
@@ -49280,7 +49283,7 @@ function classifySocket(socketPath, deps = {}) {
   } catch {
     return "absent";
   }
-  if (!st.isSocket() || st.uid !== uid) return "untrusted";
+  if (!st.isSocket() || !ownedByCurrentUser(st, uid)) return "untrusted";
   let dir;
   try {
     dir = lstat(dirname5(socketPath));
@@ -49291,7 +49294,7 @@ function classifySocket(socketPath, deps = {}) {
   return "ok";
 }
 function isTrustedSocketDir(dir, uid) {
-  return dir.isDirectory() && (dir.uid === uid || dir.uid === 0) && (dir.mode & 18) === 0;
+  return isPrivateDir(dir, { uid, rootMayOwn: true });
 }
 function connectAndRequest(socketPath, request, deadlineMs = requestDeadlineMs()) {
   return new Promise((resolve6, reject) => {
@@ -49646,8 +49649,7 @@ function revealDirIsSafe(dir) {
   } catch {
     return false;
   }
-  const groupOrOtherWritable = (st.mode & 18) !== 0;
-  return st.isDirectory() && !st.isSymbolicLink() && ownedByCurrentUser(st) && !groupOrOtherWritable;
+  return isPrivateDir(st);
 }
 function persistReveal(content3) {
   const dir = revealDir();

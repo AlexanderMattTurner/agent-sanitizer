@@ -28,7 +28,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { envBoundSecretVars } from "./env-config.mjs";
-import { currentUid } from "./hook-io.mjs";
+import { currentUid, isPrivateDir, ownedByCurrentUser } from "./hook-io.mjs";
 import { readKnob } from "./knobs.mjs";
 
 // Refuse absurd frames rather than buffer unbounded (mirrors the daemon's cap).
@@ -193,7 +193,7 @@ export function classifySocket(socketPath, deps = {}) {
   } catch {
     return "absent";
   }
-  if (!st.isSocket() || st.uid !== uid) return "untrusted";
+  if (!st.isSocket() || !ownedByCurrentUser(st, uid)) return "untrusted";
   let dir;
   try {
     dir = lstat(dirname(socketPath));
@@ -231,11 +231,7 @@ export function classifySocket(socketPath, deps = {}) {
  * @returns {boolean}
  */
 function isTrustedSocketDir(dir, uid) {
-  return (
-    dir.isDirectory() &&
-    (dir.uid === uid || dir.uid === 0) &&
-    (dir.mode & 0o022) === 0
-  );
+  return isPrivateDir(dir, { uid, rootMayOwn: true });
 }
 
 /**

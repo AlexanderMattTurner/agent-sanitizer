@@ -33,11 +33,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve, sep } from "node:path";
-import {
-  PROJECT_HASH,
-  ownedByCurrentUser,
-  writeFileNoFollow,
-} from "./hook-io.mjs";
+import { PROJECT_HASH, isPrivateDir, writeFileNoFollow } from "./hook-io.mjs";
 import { readKnob } from "./knobs.mjs";
 
 /**
@@ -136,13 +132,7 @@ function revealDirIsSafe(dir) {
     return false;
   }
   /* c8 ignore stop */
-  const groupOrOtherWritable = (st.mode & 0o022) !== 0;
-  return (
-    st.isDirectory() &&
-    !st.isSymbolicLink() &&
-    ownedByCurrentUser(st) &&
-    !groupOrOtherWritable
-  );
+  return isPrivateDir(st);
 }
 
 /**

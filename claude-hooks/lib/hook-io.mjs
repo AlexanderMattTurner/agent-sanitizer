@@ -1070,13 +1070,38 @@ export function currentUid() {
  * predicate for every $TMPDIR store these hooks trust — a second spelling is how
  * four call sites came to share the passwd-lookup crash {@link currentUid}
  * documents. False when the platform has no uid model: ownership that cannot be
- * proven is not granted.
+ * proven is not granted. `uid` is a seam for a test that must model another
+ * uid's file; production takes the default.
  * @param {{ uid: number }} st
+ * @param {number | null} [uid]
  * @returns {boolean}
  */
-export function ownedByCurrentUser(st) {
-  const uid = currentUid();
+export function ownedByCurrentUser(st, uid = currentUid()) {
   return uid !== null && st.uid === uid;
+}
+
+/**
+ * Whether `st` (an lstat result) is a directory no untrusted uid can change: a
+ * real directory (lstat, so a planted symlink is not one), owned by this uid —
+ * or by root where `rootMayOwn` — with no group/other write bit. THE trust test
+ * for every private directory these hooks keep in $TMPDIR. Write is the
+ * property because creating, unlinking or replacing an entry needs write on its
+ * parent: a co-tenant holding it can delete the finding a gate needs, swap a
+ * reveal file, or rebind the redactor socket to a listener that redacts nothing.
+ * Root ownership is strictly stronger than ours, so a deployment may hand a dir
+ * to root (`rootMayOwn`); with no uid model nothing is trusted, root included.
+ * @param {{ isDirectory(): boolean, uid: number, mode: number }} st
+ * @param {{ uid?: number | null, rootMayOwn?: boolean }} [opts]  `uid` as in
+ *   {@link ownedByCurrentUser}
+ * @returns {boolean}
+ */
+export function isPrivateDir(
+  st,
+  { uid = currentUid(), rootMayOwn = false } = {},
+) {
+  const owner =
+    ownedByCurrentUser(st, uid) || (uid !== null && rootMayOwn && st.uid === 0);
+  return st.isDirectory() && owner && (st.mode & 0o022) === 0;
 }
 
 /**

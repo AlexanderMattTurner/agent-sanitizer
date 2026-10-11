@@ -253,6 +253,7 @@ const PUBLISHED_EXPORTS = {
     "hookIoSharedState",
     "hookgateMarkerPath",
     "isMain",
+    "isPrivateDir",
     "lastStdinByteLength",
     "lazyImport",
     "lazyImportErrorFor",

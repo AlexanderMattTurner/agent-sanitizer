@@ -28,10 +28,13 @@
 import { describe, it, after } from "node:test";
 import assert from "node:assert/strict";
 import {
+  lstatSync,
+  mkdirSync,
   mkdtempSync,
   readdirSync,
   readFileSync,
   rmSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -39,8 +42,12 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parse } from "acorn";
 
-const { configureHookgateMarker, hookgateMarkerPath, markerIsTrusted } =
-  await import("../claude-hooks/lib/hook-io.mjs");
+const {
+  configureHookgateMarker,
+  hookgateMarkerPath,
+  isPrivateDir,
+  markerIsTrusted,
+} = await import("../claude-hooks/lib/hook-io.mjs");
 
 const dir = mkdtempSync(join(tmpdir(), "sanitizer-marker-"));
 const HOST_MARKER = join(dir, "host-hookgate-inflight");
@@ -144,6 +151,27 @@ function identifierCounts(program) {
   return counts;
 }
 
+/**
+ * Property names `program` reads as `x.name` (non-computed member access) —
+ * what a stat's owner or mode looks like, as distinct from an options key
+ * (`{ mode: 0o700 }`) or a local named `uid`.
+ * @param {import("acorn").Program} program
+ * @returns {Set<string>}
+ */
+function memberReads(program) {
+  /** @type {Set<string>} */
+  const names = new Set();
+  const visit = (/** @type {any} */ node) => {
+    if (node === null || typeof node !== "object") return;
+    if (node.type === "MemberExpression" && !node.computed)
+      names.add(node.property.name);
+    for (const child of Array.isArray(node) ? node : Object.values(node))
+      visit(child);
+  };
+  visit(program);
+  return names;
+}
+
 describe("ownership checks read the kernel uid, never the passwd database", () => {
   it("survive a uid that has no passwd entry", async () => {
     // A container started as `--user 54321` has a uid and no passwd row, and
@@ -174,23 +202,42 @@ describe("ownership checks read the kernel uid, never the passwd database", () =
     }
   });
 
-  it("route every ownership test through the one helper", () => {
+  it("route every ownership and mode test through the hook-io predicates", () => {
     const programs = hookPrograms();
     assert.ok(programs.length > 5, "no hook modules parsed");
     const offenders = programs
       .filter(([, program]) => identifierCounts(program).has("userInfo"))
       .map(([rel]) => rel);
     assert.deepEqual(offenders, [], "os.userInfo() throws for an unmapped uid");
-    // Positive marker: the helper is what those sites became, so a refactor
-    // that drops the ownership checks altogether cannot pass this vacuously.
+    // A stat's owner and mode bits are read in hook-io alone, so a new store
+    // cannot hand-roll a weaker trust test beside the shared one.
+    const ownHome = join("lib", "hook-io.mjs");
+    const readers = programs.flatMap(([rel, program]) => {
+      const read = memberReads(program);
+      return ["uid", "mode", "getuid"]
+        .filter((name) => read.has(name))
+        .map((name) => `${rel}: .${name}`);
+    });
+    assert.deepEqual(
+      readers.filter((entry) => !entry.startsWith(`${ownHome}:`)),
+      [],
+    );
+    // Positive markers: hook-io is where they live, and the predicates are
+    // what the stores call — so dropping the checks cannot pass vacuously.
     // More than one reference = the import plus at least one use.
+    assert.deepEqual(readers, [
+      `${ownHome}: .uid`,
+      `${ownHome}: .mode`,
+      `${ownHome}: .getuid`,
+    ]);
     const users = programs
       .filter(([rel, program]) => {
         const counts = identifierCounts(program);
         return (
-          rel !== join("lib", "hook-io.mjs") &&
-          ((counts.get("ownedByCurrentUser") ?? 0) > 1 ||
-            (counts.get("currentUid") ?? 0) > 1)
+          rel !== ownHome &&
+          ["ownedByCurrentUser", "isPrivateDir", "currentUid"].some(
+            (name) => (counts.get(name) ?? 0) > 1,
+          )
         );
       })
       .map(([rel]) => rel);
@@ -199,6 +246,62 @@ describe("ownership checks read the kernel uid, never the passwd database", () =
       join("lib", "redactor-client.mjs"),
       join("lib", "reveal.mjs"),
     ]);
+  });
+});
+
+describe("isPrivateDir is the one private-directory trust test", () => {
+  const SELF = 1000;
+  /**
+   * A stat shape the test process could not create for real (another uid's
+   * directory, a root-owned one).
+   * @param {{ dir?: boolean, uid?: number, mode: number }} shape
+   */
+  const stat = ({ dir = true, uid = SELF, mode }) => ({
+    isDirectory: () => dir,
+    uid,
+    mode: (dir ? 0o040000 : 0o100000) | mode,
+  });
+  /** [case, stat shape, opts, trusted] */
+  const CASES = [
+    ["own 0700", { mode: 0o700 }, {}, true],
+    ["own 0755 (read is not the property)", { mode: 0o755 }, {}, true],
+    ["own, group-writable", { mode: 0o770 }, {}, false],
+    ["own, world-writable", { mode: 0o707 }, {}, false],
+    ["own, sticky world-writable", { mode: 0o1777 }, {}, false],
+    ["another uid's 0700", { uid: 4242, mode: 0o700 }, {}, false],
+    ["root's 0755, root not allowed", { uid: 0, mode: 0o755 }, {}, false],
+    [
+      "root's 0755, root allowed",
+      { uid: 0, mode: 0o755 },
+      { rootMayOwn: true },
+      true,
+    ],
+    [
+      "root's 0777, root allowed",
+      { uid: 0, mode: 0o777 },
+      { rootMayOwn: true },
+      false,
+    ],
+    ["a file, not a dir", { dir: false, mode: 0o600 }, {}, false],
+    [
+      "no uid model, root-owned",
+      { uid: 0, mode: 0o700 },
+      { uid: null, rootMayOwn: true },
+      false,
+    ],
+  ];
+  for (const [label, shape, opts, trusted] of CASES)
+    it(`${label}: ${trusted ? "trusted" : "refused"}`, () => {
+      assert.equal(isPrivateDir(stat(shape), { uid: SELF, ...opts }), trusted);
+    });
+
+  it("judges a real symlink to a private dir as the link, not the target", () => {
+    const target = join(dir, "private-target");
+    const link = join(dir, "private-link");
+    mkdirSync(target, { mode: 0o700 });
+    symlinkSync(target, link);
+    assert.equal(isPrivateDir(lstatSync(target)), true);
+    assert.equal(isPrivateDir(lstatSync(link)), false);
   });
 });
 

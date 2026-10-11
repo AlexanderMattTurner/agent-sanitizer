@@ -26,7 +26,7 @@ import {
   hookgateMarkerPath,
   lazyImport,
   markerIsTrusted,
-  ownedByCurrentUser,
+  isPrivateDir,
   probeSetupAlive,
   PROJECT_DIR,
   PROJECT_HASH,
@@ -206,11 +206,12 @@ function withinTtl(path, ttlMs) {
 const withinFallbackTtl = (path) => withinTtl(path, FALLBACK_TTL_MS);
 
 /**
- * Whether `path` is a real directory this uid owns — the directory counterpart
- * of markerIsTrusted. `lstat`, so a symlink planted at the predictable alert-dir
- * path is judged on ITSELF: followed, it would let a co-tenant aim the gate's
- * reader at a directory of unrelated files this uid owns and splice their bytes
- * into a permission prompt.
+ * Whether `path` is a private directory of this uid ({@link isPrivateDir}) —
+ * the directory counterpart of markerIsTrusted. `lstat`, so a symlink planted
+ * at the predictable alert-dir path is judged on ITSELF: followed, it would let
+ * a co-tenant aim the gate's reader at a directory of unrelated files this uid
+ * owns and splice their bytes into a permission prompt. A group/other-writable
+ * one is refused too: a co-tenant could unlink the finding the gate needs.
  * @param {string} path
  * @returns {boolean}
  */
@@ -221,7 +222,7 @@ function dirIsTrusted(path) {
   } catch {
     return false;
   }
-  return st.isDirectory() && ownedByCurrentUser(st);
+  return isPrivateDir(st);
 }
 
 /**
