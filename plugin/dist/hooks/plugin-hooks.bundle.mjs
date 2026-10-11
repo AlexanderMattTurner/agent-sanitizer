@@ -49090,6 +49090,8 @@ function resolveSocketPath(env, uid) {
 function daemonCommand() {
   const configured = process.env._AGENT_SANITIZER_REDACTOR_DAEMON;
   if (configured) return [configured];
+  const exported = process.env._AGENT_SANITIZER_REDACTOR_PYZ;
+  if (exported) return ["python3", exported];
   const pyz = fileURLToPath4(new URL("../redactor/daemon.pyz", import.meta.url));
   if (existsSync2(pyz)) return ["python3", pyz];
   return ["agent-secret-redactor-daemon"];

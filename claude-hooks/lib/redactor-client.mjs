@@ -114,8 +114,9 @@ export const DEFAULT_SOCKET_PATH = resolveSocketPath(
  *    sets it to the provisioned venv's console script when one exists, and
  *    tests point it at dead paths to drive the fail-closed arm; a fallback
  *    from an explicit setting would turn those arms into silent passes).
- * 2. The committed self-contained zipapp shipped BESIDE this bundle
- *    (`plugin/dist/redactor/daemon.pyz`) — the guaranteed floor: it needs only
+ * 2. The committed self-contained zipapp (`plugin/dist/redactor/daemon.pyz`),
+ *    at `_AGENT_SANITIZER_REDACTOR_PYZ` when the launcher exports it, else
+ *    BESIDE this bundle — the guaranteed floor: it needs only
  *    a python3 on PATH, so a cold start with no venv and no network still
  *    redacts instead of failing closed on every tool call.
  * 3. The packaged console script from PATH — the un-bundled/dev case, where
@@ -125,6 +126,11 @@ export const DEFAULT_SOCKET_PATH = resolveSocketPath(
 function daemonCommand() {
   const configured = process.env._AGENT_SANITIZER_REDACTOR_DAEMON;
   if (configured) return [configured];
+  // The launcher exports the zipapp's real path: inside the compiled hook
+  // binary import.meta.url names the binary's virtual filesystem, where no
+  // zipapp exists. Authoritative when set, like the daemon override above.
+  const exported = process.env._AGENT_SANITIZER_REDACTOR_PYZ;
+  if (exported) return ["python3", exported];
   // Inside the built bundle import.meta.url is .../plugin/dist/hooks/<bundle>,
   // so the committed zipapp sits one level up; from the raw sources no such
   // sibling exists and the check falls through.
