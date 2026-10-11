@@ -49,11 +49,32 @@ const INVALID = Symbol("invalid knob value");
  */
 
 /**
+ * `spec`, checked against {@link Knob} so a grammar and its fallback agree in
+ * type; {@link on} freezes it.
  * @template T
  * @param {Knob<T>} spec
- * @returns {Readonly<Knob<T>>}
+ * @returns {Knob<T>}
  */
-const knob = (spec) => Object.freeze(spec);
+const knob = (spec) => spec;
+
+/**
+ * Who sets a knob, which is where it must be documented (asserted in
+ * test/claude-hooks-knobs.test.mjs):
+ *   - `hooks`: a Claude Code plugin operator — plugin/README.md's knob tables;
+ *   - `cli`: a caller of bin/sanitize-cli.mjs — README.md;
+ *   - `internal`: `_`-prefixed plumbing hooks.json and tests set — no stable
+ *     interface, so documented nowhere by name.
+ * @typedef {"hooks" | "cli" | "internal"} Surface
+ */
+
+/**
+ * `spec`, tagged with the surface that sets it.
+ * @template {Knob<any>} S
+ * @param {Surface} surface
+ * @param {S} spec
+ * @returns {Readonly<S & { surface: Surface }>}
+ */
+const on = (surface, spec) => Object.freeze({ ...spec, surface });
 
 /** Unset and empty are the same request: the default. */
 const unset = (/** @type {string | undefined} */ raw) =>
@@ -64,7 +85,7 @@ const unset = (/** @type {string | undefined} */ raw) =>
  * layer on or off by accident; `0` and unset are the recognized off spellings,
  * and anything else (`true`, `yes`) is reported and reads as off.
  * @param {string} consequence  what an unrecognized value leaves in place
- * @returns {Readonly<Knob<boolean>>}
+ * @returns {Knob<boolean>}
  */
 const flag = (consequence) =>
   knob({
@@ -93,7 +114,7 @@ export function positiveMsOr(raw, fallback) {
 /**
  * A duration override in milliseconds.
  * @param {number} fallback
- * @returns {Readonly<Knob<number>>}
+ * @returns {Knob<number>}
  */
 const milliseconds = (fallback) =>
   knob({
@@ -110,7 +131,7 @@ const milliseconds = (fallback) =>
 /**
  * Free text the consumer interprets itself — a path, or a list whose entries
  * it validates against its own vocabulary. Empty reads as unset.
- * @returns {Readonly<Knob<string | undefined>>}
+ * @returns {Knob<string | undefined>}
  */
 const text = () =>
   knob({
@@ -134,56 +155,89 @@ const DEFAULT_MAX_INPUT_BYTES = 10 * 1024 * 1024;
 export const KNOBS = Object.freeze({
   // Fail-open unless one of FAIL_CLOSED_VALUES; the documented open spellings
   // are recognized too, so only a genuinely foreign value is reported.
-  AGENT_SANITIZER_FAIL_OPEN: knob({
-    parse: (raw) => {
-      if (raw !== undefined && FAIL_CLOSED_VALUES.includes(raw)) return false;
-      return unset(raw) || raw === "1" || raw === "true" ? true : INVALID;
-    },
-    fallback: true,
-    expect: `${FAIL_CLOSED_VALUES.join(" or ")} to fail closed, 1/true/unset for the default`,
-    consequence: "the hooks stay fail-OPEN",
-  }),
-  AGENT_SANITIZER_DISABLED_HOOKS: text(),
-  AGENT_SANITIZER_SECRETS_ENABLED: flag("the secret layer stays OFF"),
-  AGENT_SANITIZER_FLAG_DIGEST_VALUES: flag("digest-shaped values stay exempt"),
-  AGENT_SANITIZER_INVISIBLE_DISABLED: flag(
-    "invisible-character stripping stays ON",
+  AGENT_SANITIZER_FAIL_OPEN: on(
+    "hooks",
+    knob({
+      parse: (raw) => {
+        if (raw !== undefined && FAIL_CLOSED_VALUES.includes(raw)) return false;
+        return unset(raw) || raw === "1" || raw === "true" ? true : INVALID;
+      },
+      fallback: true,
+      expect: `${FAIL_CLOSED_VALUES.join(" or ")} to fail closed, 1/true/unset for the default`,
+      consequence: "the hooks stay fail-OPEN",
+    }),
   ),
-  AGENT_SANITIZER_TERMINAL_DISABLED: flag(
-    "terminal-control stripping stays ON",
+  AGENT_SANITIZER_DISABLED_HOOKS: on("hooks", text()),
+  AGENT_SANITIZER_SECRETS_ENABLED: on(
+    "hooks",
+    flag("the secret layer stays OFF"),
   ),
-  AGENT_SANITIZER_OUTPUT_DISABLED: flag("authored-content sanitizing stays ON"),
-  AGENT_SANITIZER_MAX_INPUT_BYTES: knob({
-    parse: (raw) => {
-      if (unset(raw)) return DEFAULT_MAX_INPUT_BYTES;
-      const bytes = Number(raw);
-      return Number.isInteger(bytes) && bytes >= 1 ? bytes : INVALID;
-    },
-    fallback: DEFAULT_MAX_INPUT_BYTES,
-    expect: "a positive whole number of bytes",
-    consequence: `the ${DEFAULT_MAX_INPUT_BYTES}-byte default applies`,
-  }),
-  _AGENT_SANITIZER_EXTRA_SECRET_VARS: text(),
-  _AGENT_SANITIZER_TRACE: knob({
-    parse: (raw) => {
-      const value = (raw ?? "").toLowerCase();
-      const level = Object.entries(TRACE_LEVELS).find(([, spellings]) =>
-        spellings.includes(value),
-      );
-      return level === undefined ? INVALID : Number(level[0]);
-    },
-    fallback: 0,
-    expect: "off/0, info/1/on/true, or debug/2",
-    consequence: "tracing stays off",
-  }),
-  _AGENT_SANITIZER_TRACE_FILE: text(),
-  _AGENT_SANITIZER_REDACTOR_SOCKET: text(),
-  _AGENT_SANITIZER_REDACTOR_DAEMON: text(),
-  _AGENT_SANITIZER_REDACTOR_WAIT_MS: milliseconds(8000),
-  _AGENT_SANITIZER_REDACTOR_REQUEST_MS: milliseconds(20000),
-  _AGENT_SANITIZER_SANITIZE_BUDGET_MS: milliseconds(120000),
-  _AGENT_SANITIZER_REVEAL_DIR: text(),
+  AGENT_SANITIZER_FLAG_DIGEST_VALUES: on(
+    "hooks",
+    flag("digest-shaped values stay exempt"),
+  ),
+  AGENT_SANITIZER_INVISIBLE_DISABLED: on(
+    "hooks",
+    flag("invisible-character stripping stays ON"),
+  ),
+  AGENT_SANITIZER_TERMINAL_DISABLED: on(
+    "hooks",
+    flag("terminal-control stripping stays ON"),
+  ),
+  AGENT_SANITIZER_OUTPUT_DISABLED: on(
+    "hooks",
+    flag("authored-content sanitizing stays ON"),
+  ),
+  AGENT_SANITIZER_MAX_INPUT_BYTES: on(
+    "cli",
+    knob({
+      parse: (raw) => {
+        if (unset(raw)) return DEFAULT_MAX_INPUT_BYTES;
+        const bytes = Number(raw);
+        return Number.isInteger(bytes) && bytes >= 1 ? bytes : INVALID;
+      },
+      fallback: DEFAULT_MAX_INPUT_BYTES,
+      expect: "a positive whole number of bytes",
+      consequence: `the ${DEFAULT_MAX_INPUT_BYTES}-byte default applies`,
+    }),
+  ),
+  _AGENT_SANITIZER_EXTRA_SECRET_VARS: on("internal", text()),
+  _AGENT_SANITIZER_TRACE: on(
+    "internal",
+    knob({
+      parse: (raw) => {
+        const value = (raw ?? "").toLowerCase();
+        const level = Object.entries(TRACE_LEVELS).find(([, spellings]) =>
+          spellings.includes(value),
+        );
+        return level === undefined ? INVALID : Number(level[0]);
+      },
+      fallback: 0,
+      expect: "off/0, info/1/on/true, or debug/2",
+      consequence: "tracing stays off",
+    }),
+  ),
+  _AGENT_SANITIZER_TRACE_FILE: on("internal", text()),
+  _AGENT_SANITIZER_REDACTOR_SOCKET: on("internal", text()),
+  _AGENT_SANITIZER_REDACTOR_DAEMON: on("internal", text()),
+  _AGENT_SANITIZER_REDACTOR_WAIT_MS: on("internal", milliseconds(8000)),
+  _AGENT_SANITIZER_REDACTOR_REQUEST_MS: on("internal", milliseconds(20000)),
+  _AGENT_SANITIZER_SANITIZE_BUDGET_MS: on("internal", milliseconds(120000)),
+  _AGENT_SANITIZER_REVEAL_DIR: on("internal", text()),
 });
+
+/**
+ * The operator knobs the plugin's shell launcher (plugin/scripts/) reads before
+ * any JS runs. They share plugin/README.md's knob tables with the `hooks`
+ * surface, so the tables document exactly these plus that surface; JS never
+ * reads them (the partition test holds JS reads to KNOBS).
+ */
+export const LAUNCHER_KNOBS = Object.freeze([
+  "AGENT_SANITIZER_NODE",
+  "AGENT_SANITIZER_HOOK_BINARY",
+  "AGENT_SANITIZER_COMPILE_CACHE",
+  "AGENT_SANITIZER_REPEAT_DEGRADED_CONTEXT",
+]);
 
 /** @typedef {typeof KNOBS} Knobs */
 

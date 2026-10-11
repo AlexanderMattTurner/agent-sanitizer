@@ -13,8 +13,10 @@
  *     the table's keys, and nothing reads one past readKnob (parsed, not
  *     grepped, so a mention in prose is not a read);
  *   - each knob's GRAMMAR, including the reported values;
- *   - every public knob is DOCUMENTED, since an operator can only set a knob
- *     they can find.
+ *   - the DOCS follow the table: plugin/README.md's knob tables list exactly
+ *     the hook-surface knobs (plus the launcher's), and README.md names every
+ *     CLI knob — an operator can only set a knob they can find, and a listed
+ *     knob nothing reads is a setting that silently does nothing.
  */
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
@@ -22,8 +24,11 @@ import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parse } from "acorn";
+import remarkGfm from "remark-gfm";
+import remarkParse from "remark-parse";
+import { unified } from "unified";
 
-import { KNOBS, readKnob } from "../claude-hooks/lib/knobs.mjs";
+import { KNOBS, LAUNCHER_KNOBS, readKnob } from "../claude-hooks/lib/knobs.mjs";
 import { failOpenEnabled } from "../claude-hooks/lib/hook-io.mjs";
 import { secretsEnabled } from "../claude-hooks/lib/env-config.mjs";
 
@@ -249,15 +254,62 @@ describe("each knob's grammar", () => {
   });
 });
 
-describe("every public knob is documented", () => {
-  it("appears in the README or the plugin README", () => {
-    const docs =
-      readFileSync(join(repo, "README.md"), "utf8") +
-      readFileSync(join(repo, "plugin", "README.md"), "utf8");
-    const publicKnobs = Object.keys(KNOBS).filter((n) => !n.startsWith("_"));
-    assert.ok(publicKnobs.length > 0, "no public knobs in the table");
+/** @param {string} surface */
+const knobsOn = (surface) =>
+  Object.entries(KNOBS)
+    .filter(([, spec]) => spec.surface === surface)
+    .map(([name]) => name)
+    .sort();
+
+/**
+ * The knob names plugin/README.md's knob tables (first column `Variable`)
+ * document: each body row's leading inline-code span, up to its `=`. Parsed as
+ * GFM, so a knob named in prose or in a code block is not a table entry.
+ * @param {string} markdown
+ * @returns {{ tables: number, names: string[] }}
+ */
+function documentedKnobs(markdown) {
+  const tree = unified().use(remarkParse).use(remarkGfm).parse(markdown);
+  let tables = 0;
+  /** @type {string[]} */
+  const names = [];
+  eachNode(tree, (node) => {
+    if (node.type !== "table") return;
+    const [header, ...body] = node.children;
+    const label = header.children[0].children[0];
+    if (label?.type !== "text" || label.value !== "Variable") return;
+    tables += 1;
+    for (const cell of body.map((row) => row.children[0].children[0])) {
+      assert.equal(cell?.type, "inlineCode", "a knob row names no variable");
+      names.push(cell.value.split("=")[0]);
+    }
+  });
+  return { tables, names: names.sort() };
+}
+
+describe("the table is what the docs document", () => {
+  it("marks exactly the `_`-prefixed knobs internal", () => {
+    const internal = Object.keys(KNOBS)
+      .filter((name) => name.startsWith("_"))
+      .sort();
+    assert.ok(internal.length > 0);
+    assert.deepEqual(knobsOn("internal"), internal);
+  });
+
+  it("plugin/README.md's tables list exactly the hook and launcher knobs", () => {
+    const { tables, names } = documentedKnobs(
+      readFileSync(join(repo, "plugin", "README.md"), "utf8"),
+    );
+    assert.ok(tables > 0, "found no knob table — the parse has rotted");
+    assert.deepEqual(names, [...knobsOn("hooks"), ...LAUNCHER_KNOBS].sort());
+  });
+
+  it("README.md names every CLI knob", () => {
+    const readme = readFileSync(join(repo, "README.md"), "utf8");
+    const cli = knobsOn("cli");
+    assert.ok(cli.length > 0);
     assert.deepEqual(
-      publicKnobs.filter((name) => !docs.includes(name)),
+      cli.filter((name) => !readme.includes(`\`${name}\``)),
       [],
     );
   });
