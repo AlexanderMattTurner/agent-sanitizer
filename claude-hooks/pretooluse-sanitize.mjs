@@ -67,6 +67,7 @@ import { redactViaDaemon } from "./lib/redactor-client.mjs";
 import { secretsEnabled } from "./lib/env-config.mjs";
 import { withSecretDropGuard } from "./lib/secret-drop-guard.mjs";
 import {
+  containsPlaceholder,
   placeholderNotice,
   layer2PlaceholderNotice,
   layer2Keys,
@@ -756,12 +757,11 @@ export function failClosedFields(parsedOk, err, opts = {}) {
   };
 }
 
-// The redaction-placeholder prefix, restated as a literal rather than imported:
-// this check belongs to the FAILURE posture and must work exactly when the
-// agent-sanitizer package (which exports it as DEFAULT_HINT) failed to load.
-// Exported so test/claude-hooks-fail-open.test.mjs can pin the two spellings
-// together with exact equality — a prefix-only behavioral check would keep
-// passing if this literal drifted shorter and the carve-out over-triggered.
+// The redaction-placeholder prefix the carve-out's reason names, restated as a
+// literal rather than imported: the reason is built on the FAILURE path, which
+// must work exactly when the agent-sanitizer package (which exports it as
+// DEFAULT_HINT) failed to load. Exported so test/claude-hooks-fail-open.test.mjs
+// can pin the two spellings together.
 export const REDACTION_HINT = "[REDACTED";
 // The file-editing tools whose input fields ARE the bytes persisted to disk.
 // Deliberately NOT exhaustive over every clobber path: Bash can also write a
@@ -778,14 +778,15 @@ export const WRITE_SHAPED_TOOLS = new Set([
 
 /**
  * True when a faulting PreToolUse call is the one case the OPEN posture must
- * still not pass: a write-shaped tool whose input carries the
- * redaction-placeholder prefix. Such a placeholder stands for a secret the
- * sanitizer redacted out of the model's view; with the sanitizer down,
- * rehydration cannot translate it back, so letting the call through would
- * persist the literal placeholder text over the real secret on disk — a
- * destructive clobber, not a missed scan. Package-free by construction (a Set
- * lookup and a substring test on the already-parsed payload), so it holds when
- * the failure IS the missing package.
+ * still not pass: a write-shaped tool whose input carries a redaction
+ * placeholder, matched by the real grammar (containsPlaceholder) so
+ * hint-prefixed prose such as `[REDACTED…]` is not mistaken for one. Such a
+ * placeholder stands for a secret the sanitizer redacted out of the model's
+ * view; with the sanitizer down, rehydration cannot translate it back, so
+ * letting the call through would persist the literal placeholder text over the
+ * real secret on disk — a destructive clobber, not a missed scan.
+ * Package-free by construction (a Set lookup and a walk of the already-parsed
+ * payload), so it holds when the failure IS the missing package.
  * @param {unknown} input raw parsed PreToolUse payload (undefined if unparsed)
  * @returns {boolean}
  */
@@ -794,11 +795,10 @@ export function hintedWriteFault(input) {
     /** @type {{tool_name?: unknown, tool_input?: unknown} | undefined} */ (
       input
     );
-  if (!WRITE_SHAPED_TOOLS.has(/** @type {string} */ (payload?.tool_name)))
-    return false;
-  // A parsed-JSON payload can hold no circular reference, so stringify cannot
-  // throw; `?? null` keeps a missing tool_input from stringifying to undefined.
-  return JSON.stringify(payload?.tool_input ?? null).includes(REDACTION_HINT);
+  return (
+    WRITE_SHAPED_TOOLS.has(/** @type {string} */ (payload?.tool_name)) &&
+    containsPlaceholder(payload?.tool_input)
+  );
 }
 
 /**

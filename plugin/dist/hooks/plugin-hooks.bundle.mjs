@@ -50008,12 +50008,10 @@ function hintedWriteFault(input) {
     /** @type {{tool_name?: unknown, tool_input?: unknown} | undefined} */
     input
   );
-  if (!WRITE_SHAPED_TOOLS.has(
+  return WRITE_SHAPED_TOOLS.has(
     /** @type {string} */
     payload?.tool_name
-  ))
-    return false;
-  return JSON.stringify(payload?.tool_input ?? null).includes(REDACTION_HINT);
+  ) && containsPlaceholder(payload?.tool_input);
 }
 function hookFailureFields(parsedOk, err, opts = {}) {
   return (
