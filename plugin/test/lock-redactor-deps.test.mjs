@@ -57,9 +57,8 @@ test("a lock with no recorded input digest is stale", () => {
 test("a lock that pins the published engine is stale whatever its digest", () => {
   const pinned = LOCK.replace(
     /^certifi==/m,
-    "agent-sanitizer==1.2.3 \\\n    --hash=sha256:" +
-      "0".repeat(64) +
-      "\ncertifi==",
+    () =>
+      `agent-sanitizer==1.2.3 \\\n    --hash=sha256:${"0".repeat(64)}\ncertifi==`,
   );
   assert.equal(lockIsStale(pinned, REQUIREMENTS_IN), true);
 });
