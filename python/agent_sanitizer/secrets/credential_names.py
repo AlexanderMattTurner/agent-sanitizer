@@ -29,7 +29,14 @@ neither may reach a consumer's pattern builder.
 
 The same file is published to JavaScript consumers as the npm subpath export
 ``agent-sanitizer/credential-names``.
+
+This module imports only the standard library and loads by file path on an
+interpreter below the package floor, so a stdlib-only consumer (a host's bare
+``python3``) can read the vocabulary without the engine. The ``__future__``
+import keeps its annotations from being evaluated there.
 """
+
+from __future__ import annotations
 
 import functools
 import json

@@ -24,6 +24,7 @@ must raise rather than build a pattern.
 
 import json
 import re
+import subprocess
 
 import pytest
 
@@ -469,3 +470,41 @@ def test_every_conformance_case_was_consumed() -> None:
     or distributed run it fails loudly rather than passing vacuously.
     """
     assert _CONSUMED == {case["id"] for case in CONFORMANCE_CASES}
+
+
+_LOAD_BY_PATH = """
+import importlib.util, sys
+spec = importlib.util.spec_from_file_location("credential_names", sys.argv[1])
+module = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(module)
+match = module.credential_name_matcher(scope="trailing", decline_non_secret=True)
+print(match("DATABASE_PASSWORD"), match("HOME"), bool(module.credential_field_name_patterns()))
+"""
+
+
+def test_the_module_loads_by_path_below_the_package_floor() -> None:
+    """A stdlib-only consumer reads the vocabulary by loading this one file on
+    whatever ``python3`` its host has. uv provides the older interpreter; a
+    failure to provide it fails the test rather than skipping it."""
+    result = subprocess.run(
+        [
+            "uv",
+            "run",
+            "--no-project",
+            "--python",
+            "3.9",
+            "python",
+            "-I",
+            "-c",
+            _LOAD_BY_PATH,
+            str(
+                credential_names.CREDENTIAL_NAMES_FILE.parent.parent
+                / "credential_names.py"
+            ),
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.split() == ["True", "False", "True"]
