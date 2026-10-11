@@ -49059,7 +49059,7 @@ var init_env_config = __esm({
 
 // claude-hooks/lib/redactor-client.mjs
 import { spawn } from "node:child_process";
-import { existsSync as existsSync2, lstatSync as lstatSync4 } from "node:fs";
+import { existsSync as existsSync2, lstatSync as lstatSync4, statSync as statSync2 } from "node:fs";
 import { createConnection } from "node:net";
 import { tmpdir as tmpdir2, userInfo as userInfo3 } from "node:os";
 import { dirname as dirname5, join as join6 } from "node:path";
@@ -49067,6 +49067,25 @@ import { fileURLToPath as fileURLToPath4 } from "node:url";
 function positiveMsOr(raw, fallback) {
   const ms = Number(raw);
   return Number.isFinite(ms) && ms > 0 ? ms : fallback;
+}
+function isPrivateRoot(root2, uid) {
+  let st;
+  try {
+    st = statSync2(root2);
+  } catch {
+    return false;
+  }
+  return st.isDirectory() && st.uid === uid && (st.mode & 18) === 0;
+}
+function resolveSocketPath(env, uid) {
+  const override = env._AGENT_SANITIZER_REDACTOR_SOCKET;
+  if (override) return override;
+  for (const root2 of [env.XDG_RUNTIME_DIR, env.CLAUDE_PLUGIN_DATA]) {
+    if (!root2 || !isPrivateRoot(root2, uid)) continue;
+    const path2 = join6(root2, "agent-sanitizer-redactor", "redactor.sock");
+    if (Buffer.byteLength(path2) <= SOCKET_PATH_MAX) return path2;
+  }
+  return join6(tmpdir2(), `agent-sanitizer-redactor-${uid}`, "redactor.sock");
 }
 function daemonCommand() {
   const configured = process.env._AGENT_SANITIZER_REDACTOR_DAEMON;
@@ -49291,14 +49310,19 @@ async function redactViaDaemon(text5, opts = {}) {
     }
   }
 }
-var FRAME_CAP, DEFAULT_SOCKET_PATH, WAIT_DEADLINE_MS, sleep;
+var FRAME_CAP, SOCKET_PATH_MAX, DEFAULT_SOCKET_PATH, WAIT_DEADLINE_MS, sleep;
 var init_redactor_client = __esm({
   "claude-hooks/lib/redactor-client.mjs"() {
     "use strict";
     init_hook_timing();
     init_env_config();
     FRAME_CAP = 16 * 1024 * 1024;
-    DEFAULT_SOCKET_PATH = process.env._AGENT_SANITIZER_REDACTOR_SOCKET || join6(tmpdir2(), "agent-sanitizer-redactor", "redactor.sock");
+    SOCKET_PATH_MAX = 103;
+    DEFAULT_SOCKET_PATH = resolveSocketPath(
+      process.env,
+      /** @type {() => number} */
+      process.getuid()
+    );
     WAIT_DEADLINE_MS = positiveMsOr(
       process.env._AGENT_SANITIZER_REDACTOR_WAIT_MS,
       8e3

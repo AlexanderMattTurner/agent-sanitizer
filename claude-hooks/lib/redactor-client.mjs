@@ -22,7 +22,7 @@ import {
   chargeRedactorRoundTrip,
   excludeProvisioning,
 } from "./hook-timing.mjs";
-import { existsSync, lstatSync } from "node:fs";
+import { existsSync, lstatSync, statSync } from "node:fs";
 import { createConnection } from "node:net";
 import { tmpdir, userInfo } from "node:os";
 import { dirname, join } from "node:path";
@@ -49,11 +49,63 @@ export function positiveMsOr(raw, fallback) {
   return Number.isFinite(ms) && ms > 0 ? ms : fallback;
 }
 
-// Per-session private socket. The daemon binds it 0600 under a 0700 dir AFTER
-// priming, so its mere existence means "ready". Overridable for tests.
-export const DEFAULT_SOCKET_PATH =
-  process.env._AGENT_SANITIZER_REDACTOR_SOCKET ||
-  join(tmpdir(), "agent-sanitizer-redactor", "redactor.sock");
+// sun_path is 104 bytes on macOS (108 on Linux), its terminating NUL included;
+// a longer path makes the daemon's bind() fail and every call fail closed.
+const SOCKET_PATH_MAX = 103;
+
+/**
+ * Whether `root` is a directory this uid owns that no group/other can write,
+ * so a socket dir created under it cannot be squatted. An unreadable or absent
+ * root is simply not a candidate; this runs at module load, where a throw would
+ * stop the hook loading at all.
+ * @param {string} root
+ * @param {number} uid
+ * @returns {boolean}
+ */
+function isPrivateRoot(root, uid) {
+  let st;
+  try {
+    st = statSync(root);
+  } catch {
+    return false;
+  }
+  return st.isDirectory() && st.uid === uid && (st.mode & 0o022) === 0;
+}
+
+/**
+ * The redactor socket path: one per user, shared by every session of that user
+ * (the daemon redacts each REQUESTER's env secrets, so sharing is safe). The
+ * daemon binds it 0600 under a 0700 dir AFTER priming, so its existence means
+ * "ready". Resolution order:
+ *
+ * 1. `_AGENT_SANITIZER_REDACTOR_SOCKET` — explicit override (tests, operators).
+ * 2. `$XDG_RUNTIME_DIR`, then `$CLAUDE_PLUGIN_DATA` — per-user directories no
+ *    other uid can write, so the socket dir under them cannot be pre-created by
+ *    a co-tenant. Each is taken only if it passes isPrivateRoot and the socket
+ *    path fits sun_path.
+ * 3. `<tmpdir>/agent-sanitizer-redactor-<uid>` — the fallback. On a shared /tmp a
+ *    co-tenant can still pre-create it; the daemon then refuses to serve and the
+ *    client refuses to connect (classifySocket), so a squat costs availability
+ *    and never leaks a secret.
+ * @param {NodeJS.ProcessEnv} env
+ * @param {number} uid
+ * @returns {string}
+ */
+function resolveSocketPath(env, uid) {
+  const override = env._AGENT_SANITIZER_REDACTOR_SOCKET;
+  if (override) return override;
+  for (const root of [env.XDG_RUNTIME_DIR, env.CLAUDE_PLUGIN_DATA]) {
+    if (!root || !isPrivateRoot(root, uid)) continue;
+    const path = join(root, "agent-sanitizer-redactor", "redactor.sock");
+    if (Buffer.byteLength(path) <= SOCKET_PATH_MAX) return path;
+  }
+  return join(tmpdir(), `agent-sanitizer-redactor-${uid}`, "redactor.sock");
+}
+
+export const DEFAULT_SOCKET_PATH = resolveSocketPath(
+  process.env,
+  /** @type {() => number} */ (process.getuid)(),
+);
 
 /**
  * The daemon command, as [argv0, ...leadingArgs]. Resolution order:
