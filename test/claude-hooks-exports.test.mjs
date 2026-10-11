@@ -116,6 +116,7 @@ const REQUIRED_EXPORT = {
   "lib/layer-pipeline": "runLayerPipeline",
   "lib/invisible-alert": "invisibleCharAlert",
   "lib/invisible-report": "formatReport",
+  "lib/knobs": "readKnob",
   "lib/redactor-client": "redactViaDaemon",
   "lib/reveal": "persistReveal",
   "lib/placeholder-grammar": "placeholderNotice",

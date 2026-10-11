@@ -12,6 +12,7 @@ import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { pathToFileURL } from "node:url";
 import { excludeProvisioning } from "./hook-timing.mjs";
+import { readKnob } from "./knobs.mjs";
 
 /**
  * EVERY process-wide slot these helpers keep — the four a host can observe or
@@ -211,20 +212,11 @@ export const PermissionDecision = Object.freeze({
 export const FAIL_OPEN_ENV = "AGENT_SANITIZER_FAIL_OPEN";
 
 /**
- * Values that turn the default posture back to fail-closed. Matched exactly:
- * a case-insensitive match would need `tr`, which the launcher cannot reach
- * (it runs its no-node arm on shell builtins alone).
- *
- * THE SINGLE SOURCE OF TRUTH for the closed set. The shell shims cannot import
- * it, so `plugin/scripts/lib/fail-open.sh` is GENERATED from it by
- * `scripts/gen-fail-open-lib.mjs` and committed; the round trip is asserted in
- * plugin/test/fail-open-parity.test.mjs. Everything else that spells the set
- * out by hand is an implementation that must appear in the parity table in
- * tests/test_safe_launch.py.
+ * Values that turn the default posture back to fail-closed. Defined beside the
+ * knob's grammar in lib/knobs.mjs and published here, where hosts and
+ * `scripts/gen-fail-open-lib.mjs` read it.
  */
-export const FAIL_CLOSED_VALUES = Object.freeze(["0", "false"]);
-
-const FAIL_CLOSED_SET = new Set(FAIL_CLOSED_VALUES);
+export { FAIL_CLOSED_VALUES } from "./knobs.mjs";
 
 /**
  * Whether hook failures pass the guarded action through. True unless the caller
@@ -235,12 +227,13 @@ const FAIL_CLOSED_SET = new Set(FAIL_CLOSED_VALUES);
  * mistake is reversed: those default to the safe side, so an unrecognized value
  * there costs nothing, while here it leaves an operator who asked for
  * strictness without it. `"false"` is the one spelling reached for by reflex,
- * so it is honored; everything else (`""`, `"no"`, `"off"`) is the open posture.
+ * so it is honored; everything else (`""`, `"no"`, `"off"`) is the open posture,
+ * and a value that is neither a closed nor an open spelling is reported.
  * @param {NodeJS.ProcessEnv | Record<string, string | undefined>} [env]
  * @returns {boolean}
  */
 export function failOpenEnabled(env = process.env) {
-  return !FAIL_CLOSED_SET.has(env[FAIL_OPEN_ENV] ?? "");
+  return readKnob(FAIL_OPEN_ENV, env);
 }
 
 /**
@@ -274,7 +267,7 @@ export function disabledHooks(
   env = process.env,
   report = (message) => process.stderr.write(`${message}\n`),
 ) {
-  const named = (env[DISABLED_HOOKS_ENV] ?? "")
+  const named = (readKnob(DISABLED_HOOKS_ENV, env) ?? "")
     .split(",")
     .map((name) => name.trim())
     .filter((name) => name !== "");

@@ -65,6 +65,7 @@ import {
 } from "./lib/authored-content.mjs";
 import { redactViaDaemon } from "./lib/redactor-client.mjs";
 import { secretsEnabled } from "./lib/env-config.mjs";
+import { readKnob } from "./lib/knobs.mjs";
 import { withSecretDropGuard } from "./lib/secret-drop-guard.mjs";
 import {
   placeholderNotice,
@@ -420,7 +421,7 @@ export function preToolUseLayers(rehydrate, env = process.env) {
       run: (tool, toolInput) => rehydrateLayer2(tool, toolInput),
     },
   ];
-  return env.AGENT_SANITIZER_OUTPUT_DISABLED === "1"
+  return readKnob("AGENT_SANITIZER_OUTPUT_DISABLED", env)
     ? layers.filter((layer) => layer.name !== "authored-content")
     : layers;
 }

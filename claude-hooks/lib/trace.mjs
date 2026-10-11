@@ -20,6 +20,7 @@
 
 import { appendFileSync } from "node:fs";
 import { chargeHostExtensionSync } from "./hook-timing.mjs";
+import { readKnob } from "./knobs.mjs";
 
 /**
  * The sink shape a hook emits through: the event name, its metadata fields, and
@@ -42,16 +43,13 @@ export const TraceEvent = Object.freeze({
 const LEVELS = Object.freeze({ off: 0, info: 1, debug: 2 });
 
 /**
- * Numeric verbosity from _AGENT_SANITIZER_TRACE: 0 off, 1 info, 2 debug.
- * Unknown, empty, or "off" → 0.
- * @param {NodeJS.ProcessEnv} [env]
+ * Numeric verbosity from _AGENT_SANITIZER_TRACE: 0 off, 1 info, 2 debug. Empty
+ * or "off" → 0; an unrecognized value is reported and reads as 0.
+ * @param {NodeJS.ProcessEnv | Record<string, string | undefined>} [env]
  * @returns {number}
  */
 export function traceThreshold(env = process.env) {
-  const value = (env._AGENT_SANITIZER_TRACE ?? "").toLowerCase();
-  if (value === "debug" || value === "2") return LEVELS.debug;
-  if (["info", "1", "true", "on"].includes(value)) return LEVELS.info;
-  return LEVELS.off;
+  return readKnob("_AGENT_SANITIZER_TRACE", env);
 }
 
 /**
@@ -70,7 +68,7 @@ export function trace(event, fields = {}, level = "info") {
   if (traceThreshold() < LEVELS[lvl]) return;
   const line =
     JSON.stringify({ ts: Date.now(), level: lvl, event, ...fields }) + "\n";
-  const file = process.env._AGENT_SANITIZER_TRACE_FILE;
+  const file = readKnob("_AGENT_SANITIZER_TRACE_FILE");
   try {
     if (file) appendFileSync(file, line);
     else process.stderr.write(line);

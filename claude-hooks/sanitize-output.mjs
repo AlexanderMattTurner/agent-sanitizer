@@ -24,7 +24,8 @@
  * Layer 3 and the strict secret mode run on all MCP connector output (see
  * isUntrustedIngress).
  */
-import { redactViaDaemon, positiveMsOr } from "./lib/redactor-client.mjs";
+import { redactViaDaemon } from "./lib/redactor-client.mjs";
+import { readKnob } from "./lib/knobs.mjs";
 import {
   chargeHostExtension,
   chargeHostExtensionSync,
@@ -118,10 +119,7 @@ export const REVEAL_WITHHELD_WARNING = withheldWarning("reveal sidecar");
 // would be shown (fail OPEN). The default sits comfortably above one legitimately
 // slow leaf (a cold redactor respawn + a full scan) yet far under the hook
 // timeout; env-tunable so tests can drive the exhausted-budget path fast.
-const SANITIZE_BUDGET_MS = positiveMsOr(
-  process.env._AGENT_SANITIZER_SANITIZE_BUDGET_MS,
-  120000,
-);
+const SANITIZE_BUDGET_MS = readKnob("_AGENT_SANITIZER_SANITIZE_BUDGET_MS");
 
 // Web-ingress tools always get the Layer 2 HTML rewrite; local tools — Read,
 // Bash, Grep, gh — never do. A local HTML/markdown pass either rewrites bytes the

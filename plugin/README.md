@@ -129,6 +129,12 @@ instead.
 
 ## Configuration
 
+The `=1` switches below are set by exactly `1` (and cleared by `0` or unset).
+Any other value — `true`, `yes` — leaves the switch at its default, and the
+hooks say so on stderr once per process rather than ignoring it silently; the
+same goes for an `AGENT_SANITIZER_FAIL_OPEN` value other than `0`, `false`, `1`
+or `true`.
+
 Three opt-outs, for content the sanitizer would otherwise rewrite:
 
 | Variable                               | Effect                                                             |

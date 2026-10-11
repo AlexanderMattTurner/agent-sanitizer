@@ -38,6 +38,7 @@ import {
   ownedByCurrentUser,
   writeFileNoFollow,
 } from "./hook-io.mjs";
+import { readKnob } from "./knobs.mjs";
 
 /**
  * Where reveal sidecars are stored. Exported so the PreToolUse placeholder
@@ -52,7 +53,7 @@ export function revealDir() {
   // instead. The 12-hex span KEY inside the directory is untouched — it is the
   // published placeholder grammar, not a path detail.
   return (
-    process.env._AGENT_SANITIZER_REVEAL_DIR ||
+    readKnob("_AGENT_SANITIZER_REVEAL_DIR") ??
     join(tmpdir(), `agent-sanitizer-layer2-reveal-${PROJECT_HASH}`)
   );
 }
