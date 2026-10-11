@@ -380,7 +380,12 @@ folding.
 
 The soundness argument assumes no later layer erases code points from the same
 field, which could remove an unmapped glyph the gate relied on after the decision
-was made. Layer 4 runs before `sanitizeAuthoredContent` on `Bash.command`.
+was made. In the PreToolUse hook the fold runs _before_ `sanitizeAuthoredContent`,
+which does erase code points from the same fields, so the hook's stage driver
+(`claude-hooks/lib/layer-pipeline.mjs`) re-runs both until the input stops
+changing — the emitted input is one the fold has judged in its final form — and
+holds the call for approval if it never settles. PreToolUse stage order:
+`confusables` → `authored-content` → `rehydrate` → `layer2-rehydrate`.
 
 **Declared tool scope.** Which tools the fold covers is a partition, not a
 fallthrough: `DEFAULT_FIELDS` names the covered tools and their fields, and
@@ -511,7 +516,9 @@ RECONSTITUTES during stripping is judged as the sequence it becomes.
 
 ## Tool-output pipeline & Layer 5
 
-`./output` runs Layers 1–4 over structured tool output, **preserving its shape**
+`./output` runs Layers 1–4 over structured tool output, **preserving its shape**.
+Layer order: 1 → 2–3 → 4 → 5 → 4, the second Layer 4 a re-scan of what Layer 5's
+deletions left. Shape matters
 (a harness that gets a shape-mismatched value silently shows the raw output).
 Layer 4 (secret redaction) is an **injected** redactor and is the one
 fail-closed path: a redactor that throws makes the pipeline rethrow, so the
@@ -972,11 +979,11 @@ the finding is **reported at the right tier**. One vector per named technique:
 - ANSI hidden text (garak `ansiescape`) → Layer 1.
 - Bidi override (Trojan Source; garak `badchars`) → Layer 1.
 - Markdown-image exfil URL (garak `web_injection.MarkdownImageExfil`) → Layer 3.
-- Homoglyph command (garak `smuggling.HomoglyphObfuscation`) → Layer 4.
+- Homoglyph command (garak `smuggling.HomoglyphObfuscation`) → confusable folding.
 
-Two things the corpus fixes that a naive harness gets wrong. It drives Layer 4
-through the wired `namespace-guard` seam, not `sanitize()` — which never reaches
-confusable folding, so a one-entry-point harness reports a false 0% on every
+Two things the corpus fixes that a naive harness gets wrong. It drives
+confusable folding through the wired `namespace-guard` seam, not `sanitize()` —
+which never reaches it, so a one-entry-point harness reports a false 0% on every
 homoglyph vector. And it pins the _observed_ verdict, not a wished one: a short
 bidi override is stripped and reported (`cf-format`) but is not payload-shaped,
 so `classifyPrompt` passes it — recorded as a measured partial-coverage point

@@ -35,9 +35,9 @@ const projectDir = mkdtempSync(join(tmpdir(), "sanitizer-l2-rt-proj-"));
 process.env.CLAUDE_PROJECT_DIR = projectDir;
 const base = mkdtempSync(join(tmpdir(), "sanitizer-l2-rt-"));
 
-const { evaluateToolOutput } =
+const { evaluateToolOutput, ON_DISK_PLACEHOLDER_WARNING } =
   await import("../claude-hooks/sanitize-output.mjs");
-const { rehydrateLayer2 } =
+const { rehydrateLayer2, buildPreToolUseResponse } =
   await import("../claude-hooks/pretooluse-sanitize.mjs");
 const { sanitizeValue } = await import("../src/output.mjs");
 const { layer2Placeholder } = await import("../src/html.mjs");
@@ -201,6 +201,11 @@ describe("persist → rehydrate round trip", () => {
 });
 
 describe("SECURITY: a secret inside a splice rehydrates to REDACTED bytes", () => {
+  // The redaction runs only under the secret opt-in; with it off the span is
+  // stored verbatim, like every other byte the hook passes through (pinned by
+  // the partition suite below).
+  before(() => (process.env.AGENT_SANITIZER_SECRETS_ENABLED = "1"));
+  after(() => delete process.env.AGENT_SANITIZER_SECRETS_ENABLED);
   it("persists the redacted original and restores only the redacted form", async () => {
     const secretHidden = `<div hidden>password: ${SECRET_VALUE}</div>`;
     const secretPh = layer2Placeholder("hidden", secretHidden);
@@ -272,5 +277,88 @@ describe("engine sanitizeValue accumulates splices for structured output", () =>
       splices,
     );
     assert.deepEqual(splices, []);
+  });
+});
+
+describe("the secret opt-in partitions every daemon dial", () => {
+  // One opt-in decision per hook run must govern EVERY secret-touching path:
+  // the walk, the reveal sidecar, the span store, the on-disk tripwire and the
+  // PreToolUse rehydrator. A path that dials with the layer off sends tool
+  // output to a daemon the user never enabled; prose that claims redaction
+  // with the layer off tells the model a stored raw secret is safe.
+  let dials = 0;
+  before(() => daemon.on("connection", () => (dials += 1)));
+  const secretHidden = `<div hidden>password: ${SECRET_VALUE}</div>`;
+  const secretComment = `<!-- password=${SECRET_VALUE} -->`;
+  const page = `page ${secretHidden} mid ${secretComment} end`;
+  const [hiddenKey] = layer2Keys(layer2Placeholder("hidden", secretHidden));
+  const onDisk = join(base, "on-disk.txt");
+  writeFileSync(onDisk, "alpha\nbeta\n");
+  const postToolUse = [
+    { tool_name: "WebFetch", tool_input: {}, tool_response: page },
+    {
+      tool_name: "mcp__docs__fetch",
+      tool_input: {},
+      tool_response: { result: { pages: [page] } },
+    },
+    {
+      tool_name: "Read",
+      tool_input: { file_path: "/tmp/notes.md" },
+      tool_response: `see ${REDACTED_MARK} and ${page}`,
+    },
+  ];
+  const preToolUse = [
+    {
+      tool_name: "Write",
+      tool_input: { file_path: onDisk, content: "alpha\nbeta\ngamma\n" },
+    },
+    {
+      tool_name: "Edit",
+      tool_input: { file_path: onDisk, old_string: "beta", new_string: "b" },
+    },
+  ];
+  /** Every model-facing string the corpus produces, after a fresh store. */
+  const runCorpus = async () => {
+    const texts = [];
+    for (const input of postToolUse) {
+      const fields = await evaluateToolOutput(input);
+      // A clean pass is null: nothing model-facing to inspect.
+      texts.push(JSON.stringify(fields));
+    }
+    for (const input of preToolUse) {
+      const fields = await buildPreToolUseResponse(input, undefined, () => {});
+      texts.push(JSON.stringify(fields));
+    }
+    return texts.join("\n");
+  };
+
+  it("opted out: no dial, spans stored verbatim, no redaction claimed", async () => {
+    delete process.env.AGENT_SANITIZER_SECRETS_ENABLED;
+    dials = 0;
+    const texts = await runCorpus();
+    assert.equal(dials, 0, "a secret path dialed the daemon while opted out");
+    assert.equal(readSpan(hiddenKey), secretHidden);
+    // Positive marker: the reveal sidecar really was written on this path, so
+    // the absence of the claim below is not the absence of the hint.
+    assert.match(texts, /the original output before HTML removal was saved/u);
+    assert.doesNotMatch(texts, /still redacted|redacted before storage/u);
+    assert.ok(!texts.includes(ON_DISK_PLACEHOLDER_WARNING));
+  });
+
+  it("opted in: the same corpus dials and stores the redacted form", async () => {
+    process.env.AGENT_SANITIZER_SECRETS_ENABLED = "1";
+    try {
+      dials = 0;
+      const texts = await runCorpus();
+      assert.ok(dials > 0, "the opted-in corpus never dialed the daemon");
+      assert.equal(
+        readSpan(hiddenKey),
+        `<div hidden>password: ${REDACTED_MARK}</div>`,
+      );
+      assert.match(texts, /before HTML removal \(secrets still redacted\)/u);
+      assert.ok(texts.includes(ON_DISK_PLACEHOLDER_WARNING));
+    } finally {
+      delete process.env.AGENT_SANITIZER_SECRETS_ENABLED;
+    }
   });
 });

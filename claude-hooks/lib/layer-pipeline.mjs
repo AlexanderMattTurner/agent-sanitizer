@@ -1,40 +1,42 @@
 /**
  * The PreToolUse layer chain as a DECLARED pipeline instead of a run of
- * sequential statements.
+ * sequential statements. The stages below are named, not numbered: the
+ * package's public "Layer N" numbering (THREAT-MODEL.md) is a different axis.
  *
- * The confusable fold (Layer 2) carries a soundness precondition: it deliberately
- * SKIPS a token that still holds an unmapped non-ASCII glyph, because such a
- * token can never come out byte-equal to an ASCII deny-rule target, so folding it
- * would only mangle real foreign-language text. That argument holds only while no
- * later layer ERASES code points from the same field — if it does, the glyph the
- * fold relied on can disappear after the decision was taken.
+ * The confusable fold carries a soundness precondition: it deliberately SKIPS a
+ * token that still holds an unmapped non-ASCII glyph, because such a token can
+ * never come out byte-equal to an ASCII deny-rule target. That argument holds
+ * only while no later stage ERASES code points from the same field.
  *
- * Layer 3 (authored-content stripping) erases exactly that: payload-capable
- * invisible characters. Running it after the fold made the precondition false,
- * and the gap was reachable: `cat /etc/p<CYRILLIC A><12 x ZWSP>sswd` put the
- * zero-width run inside the token, so the fold skipped it, then the strip removed
- * the padding and emitted `cat /etc/p<CYRILLIC A>sswd` — the homoglyph intact and
- * the evidence for skipping it gone. Zero-width padding suppressed the fold and
- * the next layer erased the reason.
+ * The authored-content strip erases exactly that: payload-capable invisible
+ * characters. `cat /etc/p<CYRILLIC A><12 x ZWSP>sswd` puts the zero-width run
+ * inside the token, so the fold skips it, then the strip removes the padding and
+ * emits `cat /etc/p<CYRILLIC A>sswd` — the homoglyph intact and the evidence for
+ * skipping it gone.
  *
- * The eliminator is structural: layers declare whether they ERASE code points and
- * whether their decision is SKIP-BASED (suppressible by code points another layer
- * erases), and this driver enforces the precondition rather than a comment
- * asking a future reader to preserve it. When the table puts an erasing layer
- * after a skip-based one, the driver re-runs the body to a FIXED POINT, so the
- * emitted value is one every skip-based layer has seen in its final form. A table
- * that needs no fixed point runs exactly once, so the cost is paid only by the
- * ordering that creates the hazard.
+ * So stages declare whether they ERASE code points and whether their decision is
+ * SKIP-BASED, and this driver enforces the precondition: when the table puts an
+ * erasing stage after a skip-based one, the body re-runs to a FIXED POINT, so the
+ * emitted value is one every skip-based stage has seen in its final form.
  *
- * Layers may be `terminal`: run once, after the fixed point, never re-run. That
- * is Layer 4 (rehydration), whose whole contract is that it sees the FINAL
- * authored text and its restored secrets are not re-stripped by Layer 3. Terminal
- * layers must be a suffix of the table, which the driver checks.
+ * Whether a stage changed anything is decided HERE, by deep equality of the
+ * value it returned — never by the stage's own report. A stage that reports a
+ * rewrite but returns an equal value would otherwise keep the loop from ever
+ * settling. A body that is still changing after {@link MAX_PIPELINE_PASSES}
+ * becomes an `ask` verdict, not a throw: a throw lands in the hook's fault
+ * posture, which by default passes the input through UNSANITIZED.
+ *
+ * Stages may be `terminal`: run once, after the fixed point, never re-run. That
+ * is the secret rehydrator, whose contract is that it sees the FINAL authored
+ * text and its restored secrets are not re-stripped. Terminal stages must be a
+ * suffix of the table, which the driver checks.
  */
+import { isDeepStrictEqual } from "node:util";
 
 /**
  * A layer's result: the rewritten input plus the model-facing note, a `deny`
- * verdict that ends the pipeline, or null when the layer changed nothing.
+ * verdict that ends the pipeline, or null when the layer changed nothing. A
+ * rewrite deep-equal to its input counts as null, whatever the layer reports.
  * @typedef {{ updatedInput: any, context: string } | { deny: string } | null} LayerResult
  */
 
@@ -56,11 +58,11 @@
 
 /**
  * Bound on fixed-point passes. Each pass either changes the input or ends the
- * loop, and the layers are contractive in practice (folding and stripping both
- * shrink the space of remaining findings), so a run that is still changing after
- * this many passes is a layer that oscillates — a bug. Throwing hands it to the
- * hook's fail-closed catch, which is the loud outcome; looping forever would be
- * silently killed by the harness and read as a non-blocking pass (fail OPEN).
+ * loop, and the stages are contractive in practice (folding and stripping both
+ * shrink the space of remaining findings), so a body still changing after this
+ * many passes holds a stage that oscillates. That yields an `ask` (see
+ * {@link runLayerPipeline}); looping forever would instead be killed by the
+ * harness, which reads a killed PreToolUse hook as a non-blocking pass.
  */
 export const MAX_PIPELINE_PASSES = 8;
 
@@ -81,16 +83,33 @@ export function needsFixedPoint(layers) {
 }
 
 /**
+ * The `ask` reason for a body that never settled, naming the stages still
+ * rewriting on the last pass so a reader knows which one oscillates.
+ * @param {string[]} stillChanging
+ * @returns {string}
+ */
+export function nonConvergenceReason(stillChanging) {
+  return (
+    `PreToolUse sanitization did not settle: the ${stillChanging.join(", ")} ` +
+    `stage(s) were still rewriting this input after ${MAX_PIPELINE_PASSES} ` +
+    "passes, so the sanitized form below cannot be trusted to be final. Review " +
+    "the call before allowing it."
+  );
+}
+
+/**
  * Run a declared layer chain over one tool input.
  *
- * Returns the final input, whether anything changed, and the model-facing notes
- * in the order they were produced (deduplicated: a fixed-point re-run that
- * repeats a layer's note would otherwise say the same thing twice). A layer that
- * denies ends the run immediately, with `deny` set.
+ * Returns the final input, whether any stage really changed it, and the
+ * model-facing notes of those stages, in order and deduplicated (a fixed-point
+ * re-run would otherwise repeat a note). A stage
+ * that denies ends the run immediately, with `deny` set. A body that never
+ * settles sets `ask` and still runs the terminal stages, so an approved call
+ * carries the same rehydration a settled one would.
  * @param {string} tool
  * @param {any} toolInput
  * @param {Layer[]} layers
- * @returns {Promise<{ updatedInput: any, changed: boolean, contexts: string[], deny?: string }>}
+ * @returns {Promise<{ updatedInput: any, changed: boolean, contexts: string[], deny?: string, ask?: string }>}
  */
 export async function runLayerPipeline(tool, toolInput, layers) {
   const firstTerminal = layers.findIndex((layer) => layer.terminal === true);
@@ -106,11 +125,22 @@ export async function runLayerPipeline(tool, toolInput, layers) {
   let changed = false;
   /** @type {string[]} */
   const contexts = [];
-  /** @param {{ updatedInput: any, context: string }} result */
-  const accept = (result) => {
+  const outcome = () => ({ updatedInput: current, changed, contexts });
+  /**
+   * Run one stage; true when it really changed `current`. A rewrite equal to
+   * the input is discarded with its note: the value, not the report, decides.
+   * @param {Layer} layer
+   * @returns {Promise<{ deny: string } | boolean>}
+   */
+  const step = async (layer) => {
+    const result = await layer.run(tool, current);
+    if (result === null) return false;
+    if ("deny" in result) return { deny: result.deny };
+    if (isDeepStrictEqual(result.updatedInput, current)) return false;
     current = result.updatedInput;
     changed = true;
     if (!contexts.includes(result.context)) contexts.push(result.context);
+    return true;
   };
 
   // Only the hazardous ordering pays for convergence: a table with no erasing
@@ -118,30 +148,23 @@ export async function runLayerPipeline(tool, toolInput, layers) {
   // not — there is no decision left to invalidate.
   const requireFixedPoint = needsFixedPoint(body);
   const passes = requireFixedPoint ? MAX_PIPELINE_PASSES : 1;
-  let settled = false;
-  for (let pass = 0; pass < passes && !settled; pass++) {
-    settled = true;
+  /** @type {string[]} */
+  let stillChanging = [];
+  for (let pass = 0; pass < passes; pass++) {
+    stillChanging = [];
     for (const layer of body) {
-      const result = await layer.run(tool, current);
-      if (result === null) continue;
-      if ("deny" in result)
-        return { updatedInput: current, changed, contexts, deny: result.deny };
-      accept(result);
-      settled = false;
+      const stepped = await step(layer);
+      if (typeof stepped === "object") return { ...outcome(), ...stepped };
+      if (stepped) stillChanging.push(layer.name);
     }
+    if (stillChanging.length === 0) break;
   }
-  if (requireFixedPoint && !settled)
-    throw new Error(
-      `layer pipeline did not reach a fixed point in ${passes} passes; a layer ` +
-        "is undoing another layer's rewrite",
-    );
 
   for (const layer of terminal) {
-    const result = await layer.run(tool, current);
-    if (result === null) continue;
-    if ("deny" in result)
-      return { updatedInput: current, changed, contexts, deny: result.deny };
-    accept(result);
+    const stepped = await step(layer);
+    if (typeof stepped === "object") return { ...outcome(), ...stepped };
   }
-  return { updatedInput: current, changed, contexts };
+  return requireFixedPoint && stillChanging.length > 0
+    ? { ...outcome(), ask: nonConvergenceReason(stillChanging) }
+    : outcome();
 }
