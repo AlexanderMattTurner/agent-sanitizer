@@ -20,6 +20,9 @@ dev = [
     "pyyaml>=6",
     "detect-secrets>=1.5.0",
     "hypothesis>=6",
+    # json5 parses renovate.json5 for the release-age window guard
+    # (tests/test_minimum_release_age.py).
+    "json5>=0.9",
     "regexploit>=1.0.0",
     "tomli>=2 ; python_version < '3.11'",
     # tree-sitter + its bash grammar answer the one structural question in
@@ -30,6 +33,12 @@ dev = [
     "tree-sitter>=0.25",
     "tree-sitter-bash>=0.25",
 ]
+
+[tool.uv]
+# Supply-chain cooling-off window for the Python dev toolchain: uv refuses any
+# distribution uploaded within the last 3 days, the same floor pnpm's
+# `minimumReleaseAge` holds for npm (tests/test_minimum_release_age.py).
+exclude-newer = "P3D"
 
 [tool.ruff]
 target-version = "py310"
