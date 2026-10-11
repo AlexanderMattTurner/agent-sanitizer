@@ -20,6 +20,7 @@
  * `ast` — not on regexes over source text: "validate against the actual
  * tokenizer/parser, not a hand-rolled approximation" (CLAUDE.md, Code Style).
  */
+import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { extname, join } from "node:path";
 import assert from "node:assert/strict";
@@ -132,7 +133,77 @@ describe("guard-pair residue (.hooks/guard-pairs.json)", () => {
       );
     }
   });
+
+  it("classifies every tracked shipped/tooling input: derived, residue, pending or CI-only", () => {
+    const population = execFileSync(
+      "git",
+      ["ls-files", "--", ...GUARDED_ROOTS],
+      { cwd: repoRoot, encoding: "utf8" },
+    )
+      .split("\n")
+      .filter((path) => path !== "" && !NOT_AN_INPUT.test(path));
+    assert.ok(population.length > 50, `only ${population.length} inputs`);
+    const parts = [
+      population.filter((path) => derived.has(path)),
+      Object.keys(pairs),
+      Object.keys(RESIDUE_PENDING),
+      Object.keys(CI_ONLY),
+    ];
+    assert.deepEqual(
+      [...population].sort(),
+      parts.flat().sort(),
+      "each tracked input must be derived by the scan, listed in the " +
+        ".hooks/guard-pairs.json residue, or named in RESIDUE_PENDING / CI_ONLY " +
+        "here with its reason — exactly once",
+    );
+    for (const [source, tests] of Object.entries(RESIDUE_PENDING))
+      for (const test of tests)
+        assert.ok(existsSync(join(repoRoot, test)), `${source}: ${test}`);
+    for (const [source, reason] of Object.entries(CI_ONLY))
+      assert.ok(reason.length > 10, `CI_ONLY[${source}] needs a real reason`);
+  });
 });
+
+/** The tracked trees whose files a commit should never change unguarded. */
+const GUARDED_ROOTS = [
+  "bin",
+  "claude-hooks",
+  "plugin/scripts",
+  "python/agent_sanitizer",
+  "scripts",
+  "src",
+];
+
+/** Suites, prose and package markers: not inputs a guard test reads. */
+const NOT_AN_INPUT = /(?:\.test\.mjs|\.md|(?:^|\/)__init__\.py)$/;
+
+/**
+ * Inputs the scan cannot chain to their suite and the `.hooks/guard-pairs.json`
+ * residue does not yet name. That file is synced from the template, so the
+ * entry is listed here, with the suite it should map to, until it lands there;
+ * the partition above fails once it does, which is the cue to delete it here.
+ */
+const RESIDUE_PENDING = {
+  // A third generator input beside the two the residue already names.
+  "scripts/data/IndicSyllabicCategory.Consonant.json": [
+    "test/joining-type.test.mjs",
+  ],
+  // Run as a `["node", "scripts/extract-js-regexes.mjs", …]` subprocess, an
+  // argv the scan does not resolve.
+  "scripts/extract-js-regexes.mjs": ["tests/test_redos_js_static_guard.py"],
+};
+
+/** Inputs with no commit-time suite by design, each with the gate it has. */
+const CI_ONLY = {
+  "plugin/scripts/build-redactor-pyz.mjs":
+    "installs from PyPI, so no offline commit-time suite can run it; node-tests and plugin-dist-autofix rebuild the zipapp in CI",
+  "plugin/scripts/lock-redactor-deps.mjs":
+    "re-locks plugin/requirements.txt over the network; plugin-dist-autofix runs it and plugin-bundle.test checks the lock it writes",
+  "scripts/bundle-python-cli.mjs":
+    "a release-time build run by auto-version and publish-python; its output is git-ignored",
+  "src/vendor/gfm-autolink-literal.d.ts":
+    "a type declaration whose only gate is `pnpm check` (tsc)",
+};
 
 describe("guarded-data scan (the map is derived from the tests)", () => {
   it("guards a source module with the suites that import it", () => {
