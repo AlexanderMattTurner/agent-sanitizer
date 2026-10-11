@@ -52,6 +52,37 @@ export function traceThreshold(env = process.env) {
   return readKnob("_AGENT_SANITIZER_TRACE", env);
 }
 
+/** The keys every trace line's envelope owns; a field cannot set them. */
+export const TRACE_RESERVED_KEYS = Object.freeze(["ts", "level", "event"]);
+
+/**
+ * THE trace line's record: the envelope ({@link TRACE_RESERVED_KEYS}) first,
+ * then `fields`. A field named like an envelope key cannot overwrite it — a
+ * reader buckets on `level` and `event`, so a producer field `level: "debug"`
+ * would misfile the line — and is not dropped silently either: its name lands in
+ * `shadowed`, so the producer bug is visible on the channel it broke.
+ * @param {string} event
+ * @param {Record<string, unknown>} fields
+ * @param {"info"|"debug"} level
+ * @param {number} ts
+ * @returns {Record<string, unknown>}
+ */
+export function traceRecord(event, fields, level, ts) {
+  const shadowed = TRACE_RESERVED_KEYS.filter((key) =>
+    Object.hasOwn(fields, key),
+  );
+  const rest = Object.fromEntries(
+    Object.entries(fields).filter(([key]) => !shadowed.includes(key)),
+  );
+  return {
+    ts,
+    level,
+    event,
+    ...rest,
+    ...(shadowed.length > 0 ? { shadowed } : {}),
+  };
+}
+
 /**
  * Emit one JSON trace line for `event` at `level` (default "info") carrying the
  * metadata `fields`. No-op when the channel is below `level`; best-effort on write.
@@ -67,7 +98,7 @@ export function trace(event, fields = {}, level = "info") {
   const lvl = level === "debug" ? "debug" : "info";
   if (traceThreshold() < LEVELS[lvl]) return;
   const line =
-    JSON.stringify({ ts: Date.now(), level: lvl, event, ...fields }) + "\n";
+    JSON.stringify(traceRecord(event, fields, lvl, Date.now())) + "\n";
   const file = readKnob("_AGENT_SANITIZER_TRACE_FILE");
   try {
     if (file) appendFileSync(file, line);

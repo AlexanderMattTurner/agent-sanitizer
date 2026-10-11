@@ -49850,10 +49850,25 @@ import { appendFileSync } from "node:fs";
 function traceThreshold(env = process.env) {
   return readKnob("_AGENT_SANITIZER_TRACE", env);
 }
+function traceRecord(event, fields, level, ts) {
+  const shadowed = TRACE_RESERVED_KEYS.filter(
+    (key) => Object.hasOwn(fields, key)
+  );
+  const rest = Object.fromEntries(
+    Object.entries(fields).filter(([key]) => !shadowed.includes(key))
+  );
+  return {
+    ts,
+    level,
+    event,
+    ...rest,
+    ...shadowed.length > 0 ? { shadowed } : {}
+  };
+}
 function trace(event, fields = {}, level = "info") {
   const lvl = level === "debug" ? "debug" : "info";
   if (traceThreshold() < LEVELS[lvl]) return;
-  const line = JSON.stringify({ ts: Date.now(), level: lvl, event, ...fields }) + "\n";
+  const line = JSON.stringify(traceRecord(event, fields, lvl, Date.now())) + "\n";
   const file = readKnob("_AGENT_SANITIZER_TRACE_FILE");
   try {
     if (file) appendFileSync(file, line);
@@ -49875,7 +49890,7 @@ function hookTrace(sink) {
     (event, fields, level) => chargeHostExtensionSync(() => sink(event, fields, level))
   );
 }
-var TraceEvent, LEVELS;
+var TraceEvent, LEVELS, TRACE_RESERVED_KEYS;
 var init_trace = __esm({
   "claude-hooks/lib/trace.mjs"() {
     "use strict";
@@ -49887,6 +49902,7 @@ var init_trace = __esm({
       SCAN_LOADED_INSTRUCTIONS_RAN: "scan_loaded_instructions_ran"
     });
     LEVELS = Object.freeze({ off: 0, info: 1, debug: 2 });
+    TRACE_RESERVED_KEYS = Object.freeze(["ts", "level", "event"]);
   }
 });
 

@@ -337,10 +337,12 @@ const PUBLISHED_EXPORTS = {
     "writeSlowHookNotice",
   ],
   "lib/trace": [
+    "TRACE_RESERVED_KEYS",
     "TraceEvent",
     "bestEffortTrace",
     "hookTrace",
     "trace",
+    "traceRecord",
     "traceThreshold",
   ],
 };
