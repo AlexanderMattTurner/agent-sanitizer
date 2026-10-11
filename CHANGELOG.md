@@ -8,6 +8,17 @@ adhere to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+## [2.58.9] - 2026-10-11
+
+### Fixed
+
+- ANSI escape sequence parsing now matches the full ECMA-48 CSI grammar, correctly handling all escape sequences as a terminal does.
+- Type annotations in the ANSI sequence-ending helper have been corrected to ensure the declaration build passes.
+
+### Changed
+
+- The escape sequence pattern (`escape_sequence_pattern`) has been updated to properly parse all escape sequences according to terminal behavior.
+
 ## [2.58.6] - 2026-09-21
 
 ### Fixed
