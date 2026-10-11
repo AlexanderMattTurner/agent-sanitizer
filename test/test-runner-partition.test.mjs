@@ -1,11 +1,10 @@
 /**
  * Every committed test suite is CLAIMED by a runner that actually executes it.
  *
- * `node --test`'s default discovery skips dot-directories. That is not a
- * hypothetical: planting three always-failing suites — one under `test/`, one
- * under `.claude/hooks/`, one under `.hooks/` — and running the default
- * discovery finds exactly the first, and the run goes green with two failing
- * suites in the tree. `.pre-commit-config.yaml` had even grown an
+ * `node --test`'s globbing skips dot-directories. That is not a hypothetical:
+ * planting three always-failing suites — one under `test/`, one under
+ * `.claude/hooks/`, one under `.hooks/` — and running `pnpm test`'s globs finds
+ * exactly the first, and the run goes green with two failing suites in the tree. `.pre-commit-config.yaml` had even grown an
  * `exclude: \.test\.mjs$` on its `^\.claude/hooks/.*\.mjs$` lints: the config
  * anticipated suites in a directory no runner reached.
  *
@@ -19,7 +18,7 @@
  * CONFIGURATION (the workflow's `node --test` arguments, the discovery script's
  * git pathspec, the pre-commit hook's `files:` regex) rather than from a copy
  * of it here, and asserts the union covers every tracked `*.test.mjs`. Claims
- * may overlap — `plugin/test/*.test.mjs` is both discovered by `pnpm test` and
+ * may overlap — `plugin/test/*.test.mjs` is both matched by `pnpm test` and
  * named explicitly in the workflow, deliberately — so the assertion is coverage,
  * not disjointness.
  */
@@ -34,8 +33,10 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, join, matchesGlob } from "node:path";
 import { describe, it } from "node:test";
+
+import { TEST_GLOBS, nodeTestCommand } from "../scripts/coverage.mjs";
 
 // The shipped tree, not the instrumented copy Stryker runs this beside. Resolved
 // from the helper's own location rather than `git rev-parse --show-toplevel`:
@@ -63,15 +64,17 @@ const WORKFLOWS = tracked(
 );
 
 /**
- * Whether `path` would be found by `node --test` with no file arguments.
+ * Whether `pnpm test` runs `path`: whether one of the `TEST_GLOBS` it hands
+ * `node --test` matches it.
  *
- * The rule is Node's, not ours, and `runnerDiscoveryRule` below re-derives it
- * from a real `node --test` run over a scratch tree — a hardcoded predicate
- * that Node later changed would silently claim files nothing runs.
+ * `matchesGlob` already skips dot-directories; `node_modules` is excluded by
+ * the runner itself, not by the glob. The last test below holds this predicate
+ * to a real `node --test` run over a scratch tree, so a runner that resolved
+ * the globs differently could not silently claim files nothing runs.
  */
-const discoveredByDefault = (path) =>
-  path.endsWith(".test.mjs") &&
-  !path.split("/").some((segment) => segment.startsWith("."));
+const claimedByTestGlobs = (path) =>
+  TEST_GLOBS.some((glob) => matchesGlob(path, glob)) &&
+  !path.split("/").includes("node_modules");
 
 /**
  * The file arguments of every `run: node --test …` step in the workflows.
@@ -146,9 +149,9 @@ const memberOf = (paths) => {
  */
 const RUNNERS = [
   {
-    name: "pnpm test (node --test default discovery)",
-    where: "package.json scripts.test -> scripts/coverage.mjs",
-    claims: discoveredByDefault,
+    name: "pnpm test (scripts/coverage.mjs TEST_GLOBS)",
+    where: "package.json scripts.test -> scripts/coverage.mjs TEST_GLOBS",
+    claims: claimedByTestGlobs,
   },
   {
     // Resolved once: `claims` is called for every suite, and re-shelling out to
@@ -194,12 +197,25 @@ describe("test-runner discovery partition", () => {
       assert.ok(SUITES.includes(known), `${known} is not a tracked suite`);
   });
 
+  it("runs no tracked non-suite module under test/ as a suite", () => {
+    // `node --test`'s default discovery executes every `.mjs` under a `test/`
+    // directory; run that way, test/generate-golden.mjs rewrote
+    // tests/golden.json before the golden freshness check read it.
+    const modules = tracked("test/*.mjs", "test/**/*.mjs").filter(
+      (path) => !SUITES.includes(path),
+    );
+    assert.ok(modules.includes("test/generate-golden.mjs"));
+    assert.deepEqual(modules.filter(claimedByTestGlobs), []);
+    // Positive marker: the freshness check it was defeating still runs.
+    assert.ok(claimedByTestGlobs("test/golden-corpus.test.mjs"));
+  });
+
   it("claims every tracked *.test.mjs with at least one runner", () => {
     const orphans = SUITES.filter((path) => claimants(path).length === 0);
     assert.deepEqual(
       orphans,
       [],
-      "these suites run in NO job — `node --test`'s default discovery skips " +
+      "these suites run in NO job — `node --test`'s globbing skips " +
         "dot-directories, so a suite there is silently never executed. Register " +
         "each with a runner: " +
         RUNNERS.map((r) => `${r.name} (${r.where})`).join("; "),
@@ -244,13 +260,17 @@ describe("test-runner discovery partition", () => {
       /run-script-tests\.sh/u,
       "no workflow invokes run-script-tests.sh, so its claim runs nothing",
     );
-    // `discoveredByDefault` stands in for `pnpm test` reaching `node --test`;
-    // repointing that script would retire the largest claim silently.
+    // `claimedByTestGlobs` stands in for `pnpm test` handing TEST_GLOBS to
+    // `node --test`; repointing that script, or dropping the globs from the
+    // command, would retire the largest claim silently.
     assert.match(
       JSON.parse(read("package.json")).scripts.test,
       /^node scripts\/coverage\.mjs$/u,
-      "`pnpm test` no longer reaches `node --test`, so default discovery claims nothing",
+      "`pnpm test` no longer reaches scripts/coverage.mjs, so TEST_GLOBS claims nothing",
     );
+    const command = nodeTestCommand(["--test-name-pattern=x"]);
+    assert.deepEqual(command.slice(0, 2), ["node", "--test"]);
+    assert.deepEqual(command.slice(-TEST_GLOBS.length), TEST_GLOBS);
   });
 
   it("runs the dot-directory suites rather than merely linting them", () => {
@@ -263,10 +283,11 @@ describe("test-runner discovery partition", () => {
     assert.equal(DOT_HOOK.language, "system");
   });
 
-  it("derives the default-discovery rule from a real `node --test` run", () => {
-    // The one claim with no configuration to read: Node's own discovery. Driven
-    // over a scratch tree so `discoveredByDefault` is checked against the runner
-    // rather than against a memory of its documentation.
+  it("derives the TEST_GLOBS rule from a real `node --test` run", () => {
+    // The one claim whose resolution is Node's, not ours. Driven over a scratch
+    // tree with the exact command scripts/coverage.mjs runs, so
+    // `claimedByTestGlobs` is checked against the runner rather than against a
+    // memory of its documentation.
     const scratch = mkdtempSync(join(tmpdir(), "runner-discovery-"));
     try {
       const planted = [
@@ -275,6 +296,8 @@ describe("test-runner discovery partition", () => {
         ".dothooks/c.test.mjs",
         "outer/.inner/d.test.mjs",
         "visible/not-a-suite.mjs",
+        "test/generator.mjs",
+        "node_modules/pkg/e.test.mjs",
       ];
       for (const path of planted) {
         mkdirSync(join(scratch, dirname(path)), { recursive: true });
@@ -291,20 +314,33 @@ describe("test-runner discovery partition", () => {
       // below would hold vacuously against an empty expectation.
       const env = { ...process.env };
       delete env.NODE_TEST_CONTEXT;
-      const stdout = execFileSync(
-        process.execPath,
-        ["--test", "--test-reporter=tap"],
-        { cwd: scratch, encoding: "utf8", env },
-      );
-      const found = planted.filter((path) => stdout.includes(path));
+      /** The planted files a `node --test` run with `args` executed. */
+      const executed = (args) => {
+        const stdout = execFileSync(process.execPath, args, {
+          cwd: scratch,
+          encoding: "utf8",
+          env,
+        });
+        return planted.filter((path) => stdout.includes(path)).sort();
+      };
+      const [, ...args] = nodeTestCommand([]);
+      const found = executed(args);
       assert.deepEqual(
-        found.sort(),
-        planted.filter(discoveredByDefault).sort(),
-        "node --test's default discovery no longer matches discoveredByDefault",
+        found,
+        planted.filter(claimedByTestGlobs).sort(),
+        "node --test no longer resolves TEST_GLOBS the way claimedByTestGlobs does",
       );
       // Non-vacuity: the equality above would also hold if BOTH sides were
       // empty, which is what a runner that found nothing looks like.
-      assert.ok(found.length > 0, "node --test discovered nothing at all");
+      assert.ok(found.length > 0, "node --test ran nothing at all");
+      // The fixture has teeth: with no globs, Node's default discovery DOES
+      // execute the non-suite module under test/ — the run TEST_GLOBS replaces.
+      assert.ok(
+        executed(["--test", "--test-reporter=tap"]).includes(
+          "test/generator.mjs",
+        ),
+        "default discovery no longer runs test/*.mjs; the scratch tree proves nothing",
+      );
     } finally {
       rmSync(scratch, { recursive: true, force: true });
     }
