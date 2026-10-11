@@ -47644,7 +47644,7 @@ function keepContained(absPath, realRoot, literalRoot, pattern) {
 }
 function walkContextGlobs(globs, cwd, exclude) {
   const root2 = resolve3(cwd);
-  const absolute = (dirent) => join3(dirent.parentPath, dirent.name);
+  const absolute = (dirent) => resolve3(root2, dirent.parentPath, dirent.name);
   return globSync(globs, {
     cwd,
     withFileTypes: true,
