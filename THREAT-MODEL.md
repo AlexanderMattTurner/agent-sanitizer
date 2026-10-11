@@ -128,9 +128,13 @@ exfil-shaped URLs.
 
 ## Layer 3—exfil URLs (detection only)
 
-Report—never rewrite—URLs in markdown links/images/definitions and HTML
-attributes (`src`/`href`/`background`/`srcset`/`ping`, form `action`/`formaction`,
-`meta refresh`) that are shaped to carry data off-origin:
+Report—never rewrite—URLs in markdown links/images/definitions, every HTML/SVG
+URL attribute in `src/url-attributes.mjs` (`src`, `href`, `xlink:href`,
+`srcset`/`imagesrcset`, `ping`, `poster`, `object data`, form
+`action`/`formaction`, `meta refresh`, …), CSS `url()` in `style` attributes and
+`<style>` elements, and the same again inside HTML comments, that are shaped to
+carry data off-origin. A URL's scheme is read by the WHATWG URL parser, and
+`srcset` and `meta refresh` by ports of the HTML Standard's own parsing steps:
 
 - suspicious query/fragment parameters (long base64/hex blobs, credential-shaped
   tokens), tuned to skip request-signing / pagination / analytics parameters

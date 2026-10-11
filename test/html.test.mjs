@@ -2168,7 +2168,7 @@ describe("unit: detectExfil HTML-attr + node types", () => {
       ).reason,
       "suspicious query parameter",
     ));
-  it("ignores a meta-refresh with no url= target (metaRefreshUrl null)", () =>
+  it("ignores a meta-refresh with no URL after its delay", () =>
     assert.equal(detectExfil(`<meta http-equiv="refresh" content="5">`), null));
   it("ignores a meta-refresh tag with no content attribute", () =>
     assert.equal(detectExfil(`<meta http-equiv="refresh">`), null));

@@ -54,6 +54,7 @@ import { unified } from "unified";
 import remarkParse from "remark-parse";
 import remarkGfm from "./gfm.mjs";
 import { parseHtmlFragment } from "./html-tree-adapter.mjs";
+import { URL_ATTRIBUTES } from "./url-attributes.mjs";
 import { SKIP, EXIT } from "unist-util-visit";
 import {
   HTML_TAG_PRESENT,
@@ -2093,11 +2094,15 @@ function mixedRegionSplice(root, verdicts) {
   return { ranges, rescan, mixed };
 }
 
-/** @param {any} el */
+/**
+ * True when an element loads a `data:` URI resource — through any URL
+ * attribute it fetches, read by the same table and scheme resolution Layer 3
+ * uses.
+ * @param {any} el
+ */
 function hasDataSrc(el) {
-  return (
-    typeof el.properties?.src === "string" &&
-    el.properties.src.startsWith("data:")
+  return elementUrls(el).some(
+    ({ url, autoFetched }) => autoFetched && resolveUrl(url)?.scheme === "data",
   );
 }
 
@@ -3099,16 +3104,84 @@ const LONG_QUERY_THRESHOLD = 200;
 // the query/credential/fragment checks below never fire on it. Active-content
 // types (HTML, SVG, JS) are a script-injection vector; an oversized blob of any
 // type is an inline exfil/injection payload. A small inline image (icon) is
-// left alone so the common case isn't drowned in noise.
-const DATA_URI_ACTIVE_RE =
-  /^\s*data:(?:text\/html|image\/svg\+xml|application\/(?:javascript|ecmascript|xhtml\+xml))[;,]/i;
+// left alone so the common case isn't drowned in noise. Compared against the
+// MIME type's essence (see {@link dataUrlEssence}).
+const ACTIVE_DATA_TYPES = new Set([
+  "text/html",
+  "image/svg+xml",
+  "application/javascript",
+  "application/ecmascript",
+  "application/xhtml+xml",
+]);
 export const DATA_URI_LENGTH_THRESHOLD = 4096;
 
 // javascript:/vbscript: URIs execute on navigation/load, never a legitimate
 // link target in fetched content — flagged regardless of payload.
-const SCRIPT_URI_RE = /^\s*(?:javascript|vbscript):/i;
+const SCRIPT_SCHEMES = new Set(["javascript", "vbscript"]);
 
 const RELATIVE_URL_BASE = "http://relative.invalid";
+const RELATIVE_URL_HOST = "relative.invalid";
+
+/**
+ * `url` as a browser resolves it, through the WHATWG URL parser — the one
+ * place this module reads a URL's scheme. The parser strips leading and
+ * trailing C0 controls and spaces and every tab/newline before it reads the
+ * scheme, so `&#1;javascript:`, `java\tscript:` and `DATA:` resolve exactly as
+ * they navigate; no pattern over the raw string can agree with it on all of
+ * those.
+ *
+ * `scheme` is null for a URL with none of its own, which resolves against the
+ * page; `relative` is true when it names no host of its own either. Null when
+ * the parser rejects the URL, as a browser's would.
+ * @param {string} url
+ * @returns {{ scheme: string | null, parsed: URL, relative: boolean } | null}
+ */
+function resolveUrl(url) {
+  const absolute = parseUrl(url);
+  if (absolute)
+    return {
+      scheme: absolute.protocol.slice(0, -1),
+      parsed: absolute,
+      relative: false,
+    };
+  const resolved = parseUrl(url, RELATIVE_URL_BASE);
+  if (!resolved) return null;
+  return {
+    scheme: null,
+    parsed: resolved,
+    relative: resolved.host === RELATIVE_URL_HOST,
+  };
+}
+
+/**
+ * @param {string} url
+ * @param {string} [base]
+ * @returns {URL | null}
+ */
+function parseUrl(url, base) {
+  try {
+    return new URL(url, base);
+  } catch {
+    return null; // the parser's only failure signal is the throw
+  }
+}
+
+/**
+ * The MIME type essence of a parsed `data:` URL, per the Fetch Standard's
+ * data: URL processor: the serialized URL (without fragment) up to its first
+ * comma, ASCII-whitespace-trimmed, cut at its first `;`, lowercased.
+ * @param {URL} parsed
+ * @returns {string}
+ */
+function dataUrlEssence(parsed) {
+  const body = parsed.href.slice(
+    "data:".length,
+    parsed.href.length - parsed.hash.length,
+  );
+  const comma = body.indexOf(",");
+  const mimeType = comma === -1 ? body : body.slice(0, comma);
+  return mimeType.split(";")[0].trim().toLowerCase();
+}
 
 // Parameter NAMES that legitimately carry a LONG opaque (base64/hex) value, so
 // a blob in one of them is NOT exfil: CDN request-signing (AWS SigV4 /
@@ -3597,17 +3670,16 @@ function checkUrlPath(parsed) {
  */
 export function checkExfilUrl(url, options = {}) {
   const { flagDigestValues = false } = options;
-  // A browser strips tab/newline/CR ANYWHERE in a URL before resolving its
-  // scheme, so `java\tscript:alert(1)` navigates as `javascript:`. Strip them
-  // for the scheme tests (the payload/length checks below keep the raw string).
-  const schemeUrl = url.replace(/[\t\n\r]/g, "");
-  if (/^\s*data:/i.test(schemeUrl)) {
-    if (DATA_URI_ACTIVE_RE.test(schemeUrl)) return "active-content data: URI";
+  const resolved = resolveUrl(url);
+  if (resolved?.scheme === "data") {
+    if (ACTIVE_DATA_TYPES.has(dataUrlEssence(resolved.parsed)))
+      return "active-content data: URI";
     if (url.length > DATA_URI_LENGTH_THRESHOLD)
       return "oversized inline data: payload";
     return null;
   }
-  if (SCRIPT_URI_RE.test(schemeUrl)) return "script-executing URI";
+  if (resolved?.scheme && SCRIPT_SCHEMES.has(resolved.scheme))
+    return "script-executing URI";
   // Template-injection shapes (`${…}`, `{{…}}`) only in the query/fragment: a
   // brace in the PATH or host is a legitimate templated doc URL
   // (`/api/{{version}}/guide`), and flagging it both false-positives and
@@ -3626,13 +3698,8 @@ export function checkExfilUrl(url, options = {}) {
   if (keywordReason) return keywordReason;
   // Userinfo and an oversized fragment are exfil channels the param walk misses:
   // credentials smuggled as `user:secret@host`, or a payload tucked in `#<blob>`.
-  // Parse against a sentinel base so relative URLs don't throw.
-  let parsed;
-  try {
-    parsed = new URL(url, RELATIVE_URL_BASE);
-  } catch {
-    return null;
-  }
+  if (!resolved) return null;
+  const { parsed } = resolved;
   if (parsed.username || parsed.password) return "embedded credentials";
   // A long query string is only suspicious when it carries a non-allowlisted
   // parameter — a signed-CDN URL is long by design (all `X-Amz-*`/SAS params).
@@ -3655,194 +3722,343 @@ export function checkExfilUrl(url, options = {}) {
  * @returns {string}
  */
 export function urlHost(url) {
+  const resolved = resolveUrl(url);
+  // checkExfilUrl's template and keyword tests read the raw string, so it can
+  // hand us a URL the parser rejects (e.g. a host with a space).
+  if (!resolved) return "(unparsable URL)";
   // A `data:` URI has no host; name the channel rather than echoing the payload.
-  if (/^\s*data:/i.test(url)) return "(inline data: URI)";
-  let parsed;
-  try {
-    parsed = new URL(url, RELATIVE_URL_BASE);
-  } catch {
-    // checkExfilUrl flags via regex before parsing, so it can hand us a URL
-    // WHATWG rejects (e.g. a non-ASCII host).
-    return "(unparsable URL)";
-  }
-  if (
-    parsed.origin === RELATIVE_URL_BASE &&
-    !url.startsWith(RELATIVE_URL_BASE)
-  ) {
-    return "(relative URL)";
-  }
-  return parsed.host;
+  if (resolved.scheme === "data") return "(inline data: URI)";
+  if (resolved.relative) return "(relative URL)";
+  return resolved.parsed.host;
 }
 
 /**
- * True when `url` is an absolute, off-origin target (an authority that is not
- * the relative-resolution sentinel). Used for form `action`/`formaction` and
- * `meta refresh` URLs, where pointing off the page's own origin is the
- * exfil/redirect signal regardless of the query shape.
+ * True when `url` leaves the page's origin: it names a scheme or a host of its
+ * own. Used for form `action`/`formaction` and `meta refresh` URLs, where
+ * pointing off the page's own origin is the exfil/redirect signal regardless
+ * of the query shape.
  * @param {string} url
  * @returns {boolean}
  */
 function isOffOrigin(url) {
-  let parsed;
-  try {
-    parsed = new URL(url, RELATIVE_URL_BASE);
-  } catch {
-    return false;
-  }
-  return (
-    parsed.origin !== RELATIVE_URL_BASE || url.startsWith(RELATIVE_URL_BASE)
-  );
+  const resolved = resolveUrl(url);
+  return resolved !== null && !resolved.relative;
+}
+
+// ASCII whitespace, as the HTML Standard's microsyntaxes define it.
+const ASCII_WHITESPACE = new Set([" ", "\t", "\n", "\f", "\r"]);
+
+/**
+ * The index of the first code unit at or after `from` that is not ASCII
+ * whitespace.
+ * @param {string} value
+ * @param {number} from
+ * @returns {number}
+ */
+function skipWhitespace(value, from) {
+  let at = from;
+  while (at < value.length && ASCII_WHITESPACE.has(value[at])) at++;
+  return at;
 }
 
 /**
- * The redirect URL of a `<meta http-equiv="refresh">` content value
- * (`"5; url=https://…"`), or null when it carries no `url=` target.
+ * The redirect URL of a `<meta http-equiv="refresh">` content value, or null
+ * when the browser would not redirect: a port of the HTML Standard's "shared
+ * declarative refresh steps". The URL may follow the delay with or without a
+ * `url=` label (`0; https://…` redirects too), quoted or not, and a delay that
+ * does not start with a digit or `.` voids the whole directive.
  * @param {string} content
  * @returns {string | null}
  */
-function metaRefreshUrl(content) {
-  // Do NOT exclude `;` from the URL run: the `;` separates the timeout from
-  // `url=` BEFORE the target, while WITHIN the target it is a legal query
-  // sub-delimiter — excluding it truncated a `?a=1;b=<blob>` exfil tail. The
-  // optional leading quote is consumed and the run then stops at the closing
-  // quote (quoted) or at whitespace (unquoted); a single group keeps both forms
-  // without an unreachable no-match arm.
-  const match = /** @type {{ groups: { url: string } } | null} */ (
-    content.match(/url\s*=\s*['"]?(?<url>[^'"\s]+)/i)
-  );
-  return match ? match.groups.url : null;
+function refreshUrl(content) {
+  let at = skipWhitespace(content, 0);
+  const delayStart = at;
+  while (at < content.length && content[at] >= "0" && content[at] <= "9") at++;
+  if (at === delayStart && content[at] !== ".") return null;
+  while (
+    at < content.length &&
+    ((content[at] >= "0" && content[at] <= "9") || content[at] === ".")
+  )
+    at++;
+  if (at === content.length) return null;
+  if (
+    content[at] !== ";" &&
+    content[at] !== "," &&
+    !ASCII_WHITESPACE.has(content[at])
+  )
+    return null;
+  at = skipWhitespace(content, at);
+  if (content[at] === ";" || content[at] === ",")
+    at = skipWhitespace(content, at + 1);
+  if (at === content.length) return null;
+  // `url` (any case), optional whitespace, `=`: a label the URL follows. A
+  // prefix of it that stops short is part of the URL instead.
+  let urlStart = at;
+  if (content.slice(at, at + 3).toLowerCase() === "url") {
+    const afterLabel = skipWhitespace(content, at + 3);
+    if (content[afterLabel] === "=")
+      urlStart = skipWhitespace(content, afterLabel + 1);
+  }
+  const quote = content[urlStart];
+  if (quote !== "'" && quote !== '"') return content.slice(urlStart);
+  const closing = content.indexOf(quote, urlStart + 1);
+  return content.slice(urlStart + 1, closing === -1 ? undefined : closing);
 }
 
-// HTML whitespace per the `srcset` grammar (ASCII whitespace).
-const SRCSET_WS_RE = /[ \t\n\f\r]/;
+// A valid floating-point number (HTML Standard §2.3.4.3) and a valid
+// non-negative integer, the two numerals a srcset descriptor takes.
+const FLOAT_RE = /^-?(?:\d+(?:\.\d+)?|\.\d+)(?:[eE][+-]?\d+)?$/;
+const NON_NEGATIVE_INTEGER_RE = /^\d+$/;
 
 /**
- * URLs of a `srcset` value, parsed per the WHATWG "parse a srcset attribute"
- * grammar rather than a naive `split(",")`: a candidate's URL is a run of
- * non-whitespace characters, so a URL that itself contains commas (a `data:`
- * URI, or a query with `,`) is kept intact. A comma only separates candidates
- * when it trails the URL run or follows the (paren-aware) descriptor. Trailing
- * commas on the URL run mark a candidate with no descriptor.
+ * True when a srcset candidate's descriptors are valid, so the browser keeps
+ * the candidate (HTML Standard "parse a srcset attribute", step 13): at most
+ * one width (`100w`, positive) or density (`2x`, not negative), and a height
+ * (`50h`) only beside a width.
+ * @param {string[]} descriptors
+ * @returns {boolean}
+ */
+function isValidSrcsetDescriptors(descriptors) {
+  let width = false;
+  let density = false;
+  let height = false;
+  for (const descriptor of descriptors) {
+    const numeral = descriptor.slice(0, -1);
+    const unit = descriptor.slice(-1);
+    if (
+      unit === "w" &&
+      !width &&
+      !density &&
+      NON_NEGATIVE_INTEGER_RE.test(numeral) &&
+      Number(numeral) > 0
+    )
+      width = true;
+    else if (
+      unit === "x" &&
+      !width &&
+      !density &&
+      !height &&
+      FLOAT_RE.test(numeral) &&
+      Number(numeral) >= 0
+    )
+      density = true;
+    else if (
+      unit === "h" &&
+      !height &&
+      !density &&
+      NON_NEGATIVE_INTEGER_RE.test(numeral) &&
+      Number(numeral) > 0
+    )
+      height = true;
+    else return false;
+  }
+  return !height || width;
+}
+
+/**
+ * The URLs of the candidates a browser keeps from a `srcset` value: a port of
+ * the HTML Standard's "parse a srcset attribute". A candidate's URL is a run
+ * of non-whitespace (so a comma inside a `data:` URI or a query stays in it),
+ * its descriptors run to the next comma outside a parenthesized group — a
+ * group the tokenizer closes at the FIRST `)`, so `1x((), next` ends the
+ * candidate at the comma — and a candidate with invalid descriptors is
+ * dropped, as the browser drops it.
  * @param {string} value
  * @returns {string[]}
  */
-function parseSrcset(value) {
-  /** @type {string[]} */ const urls = [];
-  let i = 0;
-  const n = value.length;
-  while (i < n) {
-    while (i < n && (SRCSET_WS_RE.test(value[i]) || value[i] === ",")) i++;
-    const start = i;
-    while (i < n && !SRCSET_WS_RE.test(value[i])) i++;
-    const run = value.slice(start, i);
-    // The trailing commas come off by scanning back rather than by replacing
-    // `,+$`: that pattern is unanchored at the start, so a run of commas costs
-    // one match attempt per comma.
-    let cut = run.length;
-    while (cut > 0 && run[cut - 1] === ",") cut--;
-    const url = run.slice(0, cut);
-    if (url) urls.push(url);
-    // A URL run ending in a comma is a bare candidate (no descriptor); the
-    // comma already delimits the next one, so skip descriptor parsing.
-    if (run.endsWith(",")) continue;
-    // Otherwise consume the descriptor up to the first unparenthesized comma.
-    let depth = 0;
-    while (i < n) {
-      const c = value[i];
-      if (c === "(") depth++;
-      else if (c === ")" && depth > 0) depth--;
-      else if (c === "," && depth === 0) {
-        i++;
-        break;
-      }
-      i++;
+function srcsetUrls(value) {
+  /** @type {string[]} */
+  const urls = [];
+  let at = 0;
+  while (at < value.length) {
+    while (
+      at < value.length &&
+      (ASCII_WHITESPACE.has(value[at]) || value[at] === ",")
+    )
+      at++;
+    if (at === value.length) break;
+    const urlStart = at;
+    while (at < value.length && !ASCII_WHITESPACE.has(value[at])) at++;
+    let url = value.slice(urlStart, at);
+    /** @type {string[]} */
+    const descriptors = [];
+    if (url.endsWith(",")) {
+      // Trailing commas end the candidate; trimmed by scanning back, since an
+      // unanchored `,+$` costs one match attempt per comma.
+      let cut = url.length;
+      while (cut > 0 && url[cut - 1] === ",") cut--;
+      url = url.slice(0, cut);
+    } else {
+      at = srcsetDescriptors(value, at, descriptors);
     }
+    if (url && isValidSrcsetDescriptors(descriptors)) urls.push(url);
   }
   return urls;
 }
 
 /**
- * Candidate URLs of a `srcset` (a "url descriptor" string parsed per the HTML
- * grammar) or `ping` (a space-separated url list hast delivers as an array)
- * attribute. An absent attribute (neither string nor array) yields none.
- * @param {unknown} value
+ * The descriptor tokenizer of "parse a srcset attribute": reads the
+ * descriptors after a candidate's URL into `descriptors` and returns the index
+ * just past the candidate (past its comma, or the end of the value).
+ * @param {string} value
+ * @param {number} from
+ * @param {string[]} descriptors
+ * @returns {number}
+ */
+function srcsetDescriptors(value, from, descriptors) {
+  let at = skipWhitespace(value, from);
+  let current = "";
+  let inParens = false;
+  const flush = () => {
+    if (current !== "") descriptors.push(current);
+    current = "";
+  };
+  for (; at < value.length; at++) {
+    const char = value[at];
+    if (inParens) {
+      current += char;
+      if (char === ")") inParens = false;
+    } else if (ASCII_WHITESPACE.has(char)) {
+      flush();
+    } else if (char === ",") {
+      flush();
+      return at + 1;
+    } else {
+      current += char;
+      if (char === "(") inParens = true;
+    }
+  }
+  flush();
+  return at;
+}
+
+const IMAGE_SET_FUNCTIONS = new Set(["image-set", "-webkit-image-set"]);
+
+/**
+ * The URLs a CSS source loads: every `url()`, the string arguments of an
+ * `image-set()`, and the string target of an `@import`. `context` is the
+ * css-tree parse context — "declarationList" for a `style` attribute,
+ * "stylesheet" for a `<style>` element's text. A value css-tree cannot parse
+ * (an escaped `\75 rl(`, which degrades to a `Raw` node) yields nothing.
+ * @param {string} css
+ * @param {"declarationList" | "stylesheet"} context
  * @returns {string[]}
  */
-function multiUrlAttr(value) {
-  if (Array.isArray(value))
-    return value
-      .map((candidate) => String(candidate).trim().split(/\s+/)[0])
-      .filter(Boolean);
-  if (typeof value === "string") return parseSrcset(value);
-  return [];
+function cssUrls(css, context) {
+  /** @type {string[]} */
+  const urls = [];
+  let ast;
+  try {
+    ast = cssParse(css, {
+      context,
+      parseCustomProperty: false,
+      onParseError() {},
+    });
+    /* c8 ignore start -- css-tree recovers from ordinary bad CSS through
+       onParseError; this only upholds the never-throws contract against a
+       pathological input. */
+  } catch {
+    return urls;
+  }
+  /* c8 ignore stop */
+  cssWalk(ast, (/** @type {any} */ node) => {
+    if (node.type === "Url") urls.push(node.value);
+    const name =
+      node.type === "Function" || node.type === "Atrule"
+        ? cssIdent.decode(node.name).toLowerCase()
+        : "";
+    const takesStrings =
+      (node.type === "Function" && IMAGE_SET_FUNCTIONS.has(name)) ||
+      (node.type === "Atrule" && name === "import");
+    if (!takesStrings) return;
+    const strings = node.type === "Atrule" ? node.prelude : node;
+    strings?.children?.forEach((/** @type {any} */ child) => {
+      if (child.type === "String") urls.push(child.value);
+    });
+  });
+  return urls;
 }
 
 /**
- * URL-bearing attributes of every HTML element in `text`, parsed with the real
- * HTML tokenizer so quoting/casing/entities are handled correctly (no
- * hand-rolled tag regex).
- * `context` selects the per-URL check the caller applies: resource URLs get the
- * exfil-shape test; form-submission and meta-refresh targets additionally flag
- * any absolute off-origin destination.
- *
- * `autoFetched` says whether reaching this URL takes a deliberate act. Exactly
- * one attribute here does: `href` on an `<a>`, which somebody has to follow.
- * Every other one is fetched by the renderer on sight (`src`, `srcset`,
- * `background`, and `href` on a `<link>`), fires on a click aimed at something
- * else (`ping`), or navigates on its own (a form action, a meta refresh). The
- * distinction is the caller's severity line, not a detection line — the URL is
- * reported either way (see the exfil tier in ../src/output.mjs).
- * @param {string} text
- * @returns {Array<{ url: string, isImage: boolean, autoFetched: boolean, context: "resource" | "form" | "refresh" }>}
+ * The URLs one attribute value holds, read by its grammar.
+ * @param {import("./url-attributes.mjs").UrlAttribute} attribute
+ * @param {unknown} value the hast property value
+ * @param {any} properties the element's hast properties
+ * @returns {string[]}
  */
-function extractHtmlUrls(text) {
-  const tree = parseFragment(text);
-  /** @type {Array<{ url: string, isImage: boolean, autoFetched: boolean, context: "resource" | "form" | "refresh" }>} */
-  const urls = [];
-  walk(tree, "element", (/** @type {any} */ node) => {
-    // hast element nodes always carry a `properties` object (parse5 sets it).
-    const props = node.properties;
-    const isImage = node.tagName === "img";
-    const isAnchor = node.tagName === "a";
-    for (const key of ["src", "href", "background"])
-      if (typeof props[key] === "string")
-        urls.push({
-          url: props[key],
-          isImage,
-          autoFetched: !(key === "href" && isAnchor),
-          context: "resource",
-        });
-    for (const key of ["srcSet", "ping"])
-      for (const url of multiUrlAttr(props[key]))
-        urls.push({ url, isImage, autoFetched: true, context: "resource" });
-    for (const key of ["action", "formAction"])
-      if (typeof props[key] === "string")
-        urls.push({
-          url: props[key],
-          isImage: false,
-          autoFetched: true,
-          context: "form",
-        });
-    // hast delivers `http-equiv` as an array (comma-separated); join it back
-    // so a `refresh` directive is matched regardless of how it was tokenized.
-    const httpEquiv = Array.isArray(props.httpEquiv)
-      ? props.httpEquiv.join(",").toLowerCase()
-      : "";
-    if (
-      node.tagName === "meta" &&
-      httpEquiv.includes("refresh") &&
-      typeof props.content === "string"
-    ) {
-      const url = metaRefreshUrl(props.content);
-      if (url)
-        urls.push({
-          url,
-          isImage: false,
-          autoFetched: true,
-          context: "refresh",
-        });
+function attributeUrls(attribute, value, properties) {
+  switch (attribute.grammar) {
+    case "url":
+      return typeof value === "string" ? [value] : [];
+    case "urls":
+      return Array.isArray(value) ? value.map(String) : [];
+    case "srcset":
+      return typeof value === "string" ? srcsetUrls(value) : [];
+    case "refresh": {
+      // hast delivers `http-equiv` as a comma-separated list.
+      const directive = Array.isArray(properties.httpEquiv)
+        ? properties.httpEquiv.join(",").toLowerCase()
+        : "";
+      if (directive.trim() !== "refresh" || typeof value !== "string")
+        return [];
+      const url = refreshUrl(value);
+      return url === null ? [] : [url];
     }
-  });
+    case "css":
+      return typeof value === "string" ? cssUrls(value, "declarationList") : [];
+  }
+  /* c8 ignore next -- every grammar the table may name has a case above */
+  throw new Error(
+    `URL_ATTRIBUTES names an unknown grammar: ${attribute.grammar}`,
+  );
+}
+
+// The elements whose URLs an `isImage` threat names as images.
+const IMAGE_ELEMENTS = new Set(["img", "image"]);
+
+/**
+ * @typedef {{ url: string, isImage: boolean, autoFetched: boolean, context: "resource" | "form" | "refresh" }} CollectedUrl
+ */
+
+/**
+ * Every URL one element carries, through {@link URL_ATTRIBUTES} (plus a
+ * `<style>` element's own stylesheet) — the one place an element's URLs are
+ * read.
+ *
+ * `autoFetched` says whether reaching the URL takes a deliberate act: a link's
+ * `href` waits for somebody to follow it, while a `src`, a stylesheet, a
+ * `ping`, a form action or a meta refresh fires on its own. The distinction is
+ * the caller's severity line, not a detection line — the URL is reported
+ * either way (see the exfil tier in ./output.mjs).
+ * @param {any} node a hast element
+ * @returns {CollectedUrl[]}
+ */
+function elementUrls(node) {
+  // hast element nodes always carry a `properties` object (parse5 sets it).
+  const properties = node.properties;
+  const isImage = IMAGE_ELEMENTS.has(node.tagName);
+  /** @type {CollectedUrl[]} */
+  const urls = [];
+  for (const attribute of URL_ATTRIBUTES) {
+    const value = properties[attribute.property];
+    if (value === undefined || value === null) continue;
+    if (attribute.elements && !attribute.elements.includes(node.tagName))
+      continue;
+    const autoFetched =
+      attribute.fetched && !attribute.notFetchedOn.includes(node.tagName);
+    for (const url of attributeUrls(attribute, value, properties))
+      urls.push({ url, isImage, autoFetched, context: attribute.context });
+  }
+  if (node.tagName === "style")
+    for (const child of node.children)
+      if (child.type === "text")
+        for (const url of cssUrls(child.value, "stylesheet"))
+          urls.push({
+            url,
+            isImage: false,
+            autoFetched: true,
+            context: "resource",
+          });
   return urls;
 }
 
@@ -3853,31 +4069,25 @@ const OFF_ORIGIN_REASON = {
   refresh: "off-origin meta-refresh redirect",
 };
 
-/**
- * @typedef {{ url: string, isImage: boolean, autoFetched: boolean, context: "resource" | "form" | "refresh" }} CollectedUrl
- */
+// The markup openers inside a comment's text: `<!`, `<?` and `</` open the
+// comments, declarations and bogus comments that would hide the rest of it.
+const COMMENT_INTERIOR_OPENER_RE = /<(?=[!?/])/g;
 
 /**
- * Every URL a Layer-3 detector reads: markdown links/images/definitions plus the
- * URL-bearing HTML attributes `extractHtmlUrls` covers. Both detectors below
- * consume this rather than deciding for themselves what counts as a URL, so a
- * node type is either in scope for all of them or for none — a second walk is
- * how one detector silently stops covering a shape the other still does.
- * `parseMarkdown` memoizes its last tree, so the detectors running back to back
- * over one document share the parse as well as the definition.
- *
- * A markdown node is reported with `context: "resource"`, which is the context
- * that applies no off-origin rule — markdown carries no form or refresh target.
+ * The URLs of one document, and the text of every HTML comment in it.
+ * `parseMd`/`parseHtml` are the parsers to read it with.
  * @param {string} text
- * @returns {CollectedUrl[]}
+ * @param {(text: string) => any} parseMd
+ * @param {(text: string) => any} parseHtml
+ * @returns {{ urls: CollectedUrl[], comments: string[] }}
  */
-function collectUrls(text) {
+function documentUrls(text, parseMd, parseHtml) {
   /** @type {CollectedUrl[]} */
   const urls = [];
   // Remark AST handles markdown links/images/definitions (balanced parens,
   // reference links, GFM autolink literals) correctly, unlike a hand-rolled
   // regex.
-  walk(parseMarkdown(text), null, (node) => {
+  walk(parseMd(text), null, (node) => {
     if (
       node.type !== "link" &&
       node.type !== "image" &&
@@ -3893,15 +4103,53 @@ function collectUrls(text) {
       context: "resource",
     });
   });
-  // HTML attributes (not AST nodes in remark).
-  urls.push(...extractHtmlUrls(text));
+  /** @type {string[]} */
+  const comments = [];
+  walk(parseHtml(text), null, (/** @type {any} */ node) => {
+    if (node.type === "comment") comments.push(node.value);
+    else if (node.type === "element") urls.push(...elementUrls(node));
+  });
+  return { urls, comments };
+}
+
+/**
+ * Every URL a Layer-3 detector reads: markdown links/images/definitions, the
+ * URL attributes of every HTML element, and the same again inside each HTML
+ * comment. Both detectors below consume this rather than deciding for
+ * themselves what counts as a URL, so a node type is either in scope for all
+ * of them or for none — a second walk is how one detector silently stops
+ * covering a shape the other still does. `parseMarkdown` memoizes its last
+ * tree, so the detectors running back to back over one document share the
+ * parse as well as the definition.
+ *
+ * A comment is invisible on the page but not to a model reading the source,
+ * and "render this image" inside one is an instruction aimed at exactly that
+ * reader. Its text is read as a document of its own with its markup openers
+ * defused — one level deep, so the cost stays linear — and what it names is
+ * reported as not fetched (nothing in a comment loads) and with no off-origin
+ * rule (nothing in it submits or redirects).
+ * @param {string} text
+ * @returns {CollectedUrl[]}
+ */
+function collectUrls(text) {
+  const { urls, comments } = documentUrls(text, parseMarkdown, parseFragment);
+  for (const comment of comments) {
+    const interior = comment.replace(COMMENT_INTERIOR_OPENER_RE, "< ");
+    const inner = documentUrls(
+      interior,
+      (md) => mdParser.parse(md),
+      parseHtmlFragment,
+    );
+    for (const { url, isImage } of inner.urls)
+      urls.push({ url, isImage, autoFetched: false, context: "resource" });
+  }
   return urls;
 }
 
 /**
- * Layer 3: report data-exfil-shaped URLs in markdown links/images/definitions
- * and HTML attributes (src/href/background/srcset/ping, form action/formaction,
- * meta-refresh). Detection only — the text is never modified; the caller
+ * Layer 3: report data-exfil-shaped URLs among the ones {@link collectUrls}
+ * reads (markdown, every URL_ATTRIBUTES attribute, CSS, comment interiors).
+ * Detection only — the text is never modified; the caller
  * surfaces the threats as a warning.
  *
  * `autoFetched` marks a threat that needs no deliberate act to fire — a
