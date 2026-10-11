@@ -1432,6 +1432,13 @@ describe("rehydrate: Write-path Layer-1 restoration", () => {
     );
   });
 
+  it("counts a whole-file round-trip's astral strips in characters", async () => {
+    const content = `ok${TAG.repeat(3)} done\n`;
+    const out = await write(modelView(content), liveIo(content));
+    assert.equal(out.updatedInput.content, content);
+    assert.match(out.context, /^3 invisible\/control character\(s\) stripped/);
+  });
+
   it("round-trips an unchanged Write of an ANSI/ZW-bearing file byte-identically", async () => {
     const content = `${GREEN}ok${RESET} done${ZW}\nplain tail\n`;
     const view = modelView(content);

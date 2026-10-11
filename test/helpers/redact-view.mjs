@@ -1,12 +1,11 @@
 /**
  * A fake redactor map for rehydrate fixtures, shaped exactly like the real
- * engine's: offsets in CODE POINTS. rehydrate brands the map `"codePoint"` and
- * converts it to UTF-16 itself (view-map.mjs's toUtf16View), so a fixture
- * emitting UTF-16 starts is fed through the conversion as if it were code
- * points — invisible on ASCII text, a mis-anchored pair on the first astral
- * character before a secret.
+ * engine's: offsets in CODE POINTS, carried in a FileView branded
+ * `"codePoint"`. The brand runs view-map's own range and ordering checks in
+ * that space, so the fixture states its unit instead of implying it; rehydrate
+ * then converts to UTF-16 itself (toUtf16View), as it does for the real map.
  */
-import { occurrences } from "../../src/view-map.mjs";
+import { makeFileView, occurrences } from "../../src/view-map.mjs";
 
 /**
  * Build a redactMap view from already-Layer-1-cleaned text: replace each
@@ -14,7 +13,7 @@ import { occurrences } from "../../src/view-map.mjs";
  * original, start) pairs at their code-point view offsets.
  * @param {string} cleaned
  * @param {{value: string, placeholder: string}[]} secrets
- * @returns {{text: string, pairs: {placeholder: string, original: string, start: number}[]}}
+ * @returns {import("../../src/view-map.mjs").FileView<"codePoint">}
  */
 export function mkView(cleaned, secrets) {
   const hits = [];
@@ -33,5 +32,5 @@ export function mkView(cleaned, secrets) {
     last = index + value.length;
   }
   text += cleaned.slice(last);
-  return { text, pairs };
+  return makeFileView(text, pairs, "codePoint");
 }

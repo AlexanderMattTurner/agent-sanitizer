@@ -47988,7 +47988,7 @@ async function rehydrateEdit(ti, content3, cleaned, view, deletions, io, hinted,
   const stripped = strippedChars(span.diskText, span.cleanedText);
   const notes = [
     span.pairs.length > 0 && `${hint}\u2026] placeholders were resolved to the file's real secret values (still hidden from you)`,
-    stripped > 0 && `the matched region carries ${stripped} invisible/control character(s) stripped from your view; they are replaced along with it`
+    stripped.n > 0 && `the matched region carries ${strippedPhrase(stripped)} stripped from your view; they are replaced along with it`
   ].filter(Boolean);
   return {
     updatedInput: { ...ti, old_string: span.diskText, new_string: newRes.text },
@@ -48014,7 +48014,8 @@ function foreignPlaceholders(out, hint, viewText, secretSpans) {
 }
 function restoreWriteRegion(ctx, viewStart, viewEnd, fallback) {
   const { content: content3, cleaned, view, deletions } = ctx;
-  if (viewStart >= viewEnd) return { text: "", pairs: [], restoredChars: 0 };
+  if (viewStart >= viewEnd)
+    return { text: "", pairs: [], restoredChars: NO_STRIPS };
   const span = resolveSpan(
     content3,
     cleaned,
@@ -48037,7 +48038,7 @@ function restoreWriteRegion(ctx, viewStart, viewEnd, fallback) {
         ctx.filePath,
         "use Edit for the changed region"
       );
-    return { text: fallback, pairs: [], restoredChars: 0 };
+    return { text: fallback, pairs: [], restoredChars: NO_STRIPS };
   }
   return {
     text: diskText,
@@ -48046,7 +48047,13 @@ function restoreWriteRegion(ctx, viewStart, viewEnd, fallback) {
   };
 }
 function strippedChars(diskText, cleanedText) {
-  return [...diskText].length - [...cleanedText].length;
+  return {
+    n: [...diskText].length - [...cleanedText].length,
+    space: "codePoint"
+  };
+}
+function strippedPhrase(count) {
+  return `${count.n} ${STRIPPED_NOUN[count.space]}`;
 }
 async function rehydrateWrite(ti, content3, cleaned, view, deletions, io, hint) {
   const viewText = view.text;
@@ -48056,7 +48063,7 @@ async function rehydrateWrite(ti, content3, cleaned, view, deletions, io, hint) 
       updatedInput: { ...ti, content: content3 },
       context: writeContext(
         ti.file_path,
-        content3.length - cleaned.length,
+        strippedChars(content3, cleaned),
         view.pairs.length,
         hint
       )
@@ -48147,17 +48154,20 @@ async function rehydrateWrite(ti, content3, cleaned, view, deletions, io, hint) 
     updatedInput: { ...ti, content: out },
     context: writeContext(
       ti.file_path,
-      prefix.restoredChars + suffix.restoredChars,
+      addCounts(prefix.restoredChars, suffix.restoredChars),
       middleSpans.length + prefix.pairs.length + suffix.pairs.length,
       hint
     )
   };
 }
-function writeContext(filePath, restoredChars, secretCount, hint) {
+function addCounts(a, b) {
+  return { n: a.n + b.n, space: a.space };
+}
+function writeContext(filePath, restored, secretCount, hint) {
   const parts2 = [];
-  if (restoredChars > 0)
+  if (restored.n > 0)
     parts2.push(
-      `${restoredChars} invisible/control character(s) stripped from your view of ${filePath} were restored from disk in the regions your Write left unchanged.`
+      `${strippedPhrase(restored)} stripped from your view of ${filePath} were restored from disk in the regions your Write left unchanged.`
     );
   if (secretCount > 0)
     parts2.push(
@@ -48266,13 +48276,17 @@ async function rehydrateRedacted(tool, toolInput, io, { hint = DEFAULT_HINT } = 
     hint
   ) : rehydrateWrite(toolInput, content3, cleaned, view, deletions, io, hint);
 }
-var DEFAULT_HINT;
+var DEFAULT_HINT, NO_STRIPS, STRIPPED_NOUN;
 var init_rehydrate = __esm({
   "src/rehydrate.mjs"() {
     "use strict";
     init_layer1();
     init_view_map();
     DEFAULT_HINT = "[REDACTED";
+    NO_STRIPS = Object.freeze({ n: 0, space: "codePoint" });
+    STRIPPED_NOUN = Object.freeze({
+      codePoint: "invisible/control character(s)"
+    });
   }
 });
 

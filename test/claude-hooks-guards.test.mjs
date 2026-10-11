@@ -22,6 +22,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { mkView } from "./helpers/redact-view.mjs";
 
 // An empty project dir, set before the hooks import: the PreToolUse gate reads
 // the invisible-char alert path derived from it at module load.
@@ -200,14 +201,7 @@ const dropIo = (disk) => ({
   readFile: () => disk,
   redact: (text) =>
     text.includes(SECRET_A) ? text.split(SECRET_A).join(PH) : null,
-  redactMap: (text) => {
-    const start = text.indexOf(SECRET_A);
-    if (start === -1) return { text, pairs: [] };
-    return {
-      text: text.split(SECRET_A).join(PH),
-      pairs: [{ placeholder: PH, original: SECRET_A, start }],
-    };
-  },
+  redactMap: (text) => mkView(text, [{ value: SECRET_A, placeholder: PH }]),
 });
 
 const DISK = `host=1.2.3.4\nvalue=${SECRET_A}\n`;
@@ -297,12 +291,7 @@ describe("secret-drop-guard", () => {
       readFile: () => `value=${OTHER}\n`,
       redact: (text) =>
         text.includes(OTHER) ? text.split(OTHER).join(PH) : null,
-      redactMap: (text) => ({
-        text: text.split(OTHER).join(PH),
-        pairs: [
-          { placeholder: PH, original: OTHER, start: text.indexOf(OTHER) },
-        ],
-      }),
+      redactMap: (text) => mkView(text, [{ value: OTHER, placeholder: PH }]),
     };
     const retry = await secretDropGuard(ti, otherIo, seams);
     assert.ok(retry !== null && "deny" in retry);
