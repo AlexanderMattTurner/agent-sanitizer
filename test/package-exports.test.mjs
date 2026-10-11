@@ -17,10 +17,9 @@ import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
+import { matchesGlob } from "node:path";
 
-const repoRoot = execFileSync("git", ["rev-parse", "--show-toplevel"], {
-  encoding: "utf8",
-}).trim();
+import { repoRoot } from "./helpers/repo-root.mjs";
 
 const pkg = JSON.parse(
   readFileSync(new URL("../package.json", import.meta.url), "utf8"),
@@ -90,6 +89,34 @@ describe("packaging contract: exports map vs. published tarball", () => {
       [],
       `exports promise .d.mts files the tarball does not ship: ${missing.join(", ")}. ` +
         "Did `prepack`/`build:types` or the `types` entry in `files` get dropped?",
+    );
+  });
+
+  it("packs something for every `files` entry and every bin target", () => {
+    // npm drops a `files` entry that matches nothing WITHOUT a warning, so a
+    // renamed data file or a typo'd glob ships a tarball that is silently
+    // missing it. Each entry must contribute at least one packed path: a glob
+    // by matching one, a literal by being one or by being its directory.
+    const contributes = (entry) =>
+      [...packed].some((path) =>
+        entry.includes("*")
+          ? matchesGlob(path, entry)
+          : path === entry || path.startsWith(`${entry}/`),
+      );
+    assert.ok(pkg.files.length > 0, "package.json lists no files");
+    for (const absent of ["src/missing.json", "src/*.nope", "sr"])
+      assert.ok(!contributes(absent), `${absent} must read as packing nothing`);
+    assert.deepEqual(
+      pkg.files.filter((entry) => !contributes(entry)),
+      [],
+      'package.json "files" entries that pack nothing',
+    );
+    const bins = Object.values(pkg.bin).map((f) => f.replace(/^\.\//, ""));
+    assert.ok(bins.length > 0, "package.json names no bin");
+    assert.deepEqual(
+      bins.filter((f) => !packed.has(f)),
+      [],
+      "bin targets the tarball does not ship",
     );
   });
 
