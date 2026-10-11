@@ -68,6 +68,7 @@ import {
   CLAUDE_CONTEXT_SUBDIRS,
   CLAUDE_INSTRUCTION_GLOBS,
   CLAUDE_LAUNCH_GLOBS,
+  displayUntrusted,
   isInsideDir,
 } from "../src/claude-context.mjs";
 
@@ -374,7 +375,10 @@ export function formatSkipped(skipped) {
     "not read them, so they were never checked for hidden Unicode. Treat their",
     "content as unvetted.",
     "",
-    ...skipped.map(({ file, reason }) => `  ${file}: ${reason}`),
+    ...skipped.map(
+      ({ file, reason }) =>
+        `  ${displayUntrusted(file)}: ${displayUntrusted(reason)}`,
+    ),
     "",
   ].join("\n");
 }
@@ -591,7 +595,7 @@ function autoCleanFindings(allFindings, dir) {
       // the same bindings, so this is a belt-and-braces rethrow.)
       if (err instanceof TypeError) throw err;
       process.stderr.write(
-        `scan-invisible-chars: could not clean ${file}: ${safeErrMessage(err)}\n`,
+        `scan-invisible-chars: could not clean ${displayUntrusted(file)}: ${displayUntrusted(safeErrMessage(err))}\n`,
       );
     }
     /* c8 ignore stop */

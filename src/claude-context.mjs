@@ -18,9 +18,11 @@
  * rather than through the `agent-sanitizer` specifier the plugin bundle pins to a
  * published engine. This scope is hook POLICY, not engine behavior — it must move
  * with the hook that walks it, or a plugin built against an older pin prunes the
- * wrong directories while believing it scanned everything.
+ * wrong directories while believing it scanned everything. Its one import,
+ * `./invisible.mjs` (for {@link displayUntrusted}), is package-free too.
  */
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { STRIP } from "./invisible.mjs";
 
 // One row of the kind table. Both flags default to the conservative answer —
 // this kind is not on the ancestor chain, and no event announces it — so a row
@@ -223,6 +225,36 @@ export function isInsideDir(dir, file) {
   );
 }
 
+// What rendered untrusted text must never carry raw: the payload-capable
+// invisibles Layer 1 strips (Cf incl. bidi controls and tag characters,
+// variation selectors, blank fillers), C0/C1 controls (ESC opens a terminal
+// escape, a newline forges a report line), line/paragraph separators, lone
+// surrogates.
+const DISPLAY_UNSAFE = new RegExp(
+  `${STRIP.source}|[\\p{Cc}\\p{Zl}\\p{Zp}\\p{Cs}]`,
+  "gu",
+);
+
+/**
+ * Untrusted text made safe to render into a report, stderr or model context:
+ * every {@link DISPLAY_UNSAFE} code point becomes a visible `\u{XXXX}` escape
+ * and everything else is kept, so a legitimate non-ASCII path reads unchanged.
+ * The scanners pass every path from a possibly hostile tree (a globbed
+ * filename, an event's `file_path`) and every reason that may quote one (an
+ * fs error's message) through it; a name carrying tag characters or an OSC
+ * sequence would otherwise smuggle an instruction to the model or drive the
+ * operator's terminal. Display only — the result never opens a file.
+ * @param {string} text
+ * @returns {string}
+ */
+export function displayUntrusted(text) {
+  return text.replace(
+    DISPLAY_UNSAFE,
+    (ch) =>
+      `\\u{${/** @type {number} */ (ch.codePointAt(0)).toString(16).toUpperCase()}}`,
+  );
+}
+
 /**
  * The one directory no instruction-file walk ever descends into. Its own
  * function so the name is spelled once, and so the two predicates that need it
@@ -400,7 +432,7 @@ export function contextScopeContradiction(path, loadReason) {
   const outer = /** @type {string[]} */ (claudeTail(path, "outermost"));
   if (CLAUDE_BULK_SUBDIRS.includes(outer[0])) return null;
   return (
-    `.claude/${tail[0]}/ loaded as model context, and CLAUDE_CONTEXT_SUBDIRS does not list it: ` +
+    `.claude/${displayUntrusted(tail[0])}/ loaded as model context, and CLAUDE_CONTEXT_SUBDIRS does not list it: ` +
     "the SessionStart scan prunes that directory, so every OTHER file in it goes unscanned. " +
     "Add it there if it is context, not bulk data"
   );

@@ -412,7 +412,9 @@ ASCII, zero-width **binary**), and catches scattered payloads below the long-run
 threshold. `cleanFile` strips the payload in place (Layer-1 strip), failing loud
 if a contaminated file cannot be rewritten or its realpath lies outside the
 caller's `root` (a directory symlink in the tree cannot carry the rewrite out of
-it).
+it). File paths rendered into a scan report or model context, and the error
+reasons that may quote them, have their invisible and control characters escaped,
+so a hostile filename cannot carry a payload of its own.
 
 As Claude Code hooks the coverage is split to match how Claude Code loads these
 files, and `src/claude-context.mjs` is where the split is defined: one table of

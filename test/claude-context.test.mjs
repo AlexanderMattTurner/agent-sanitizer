@@ -28,7 +28,7 @@ import {
   findInstructionFiles,
   USER_GLOBAL_EVENT_NAMED_GLOBS,
 } from "../src/instructions.mjs";
-import { isInsideDir } from "../src/claude-context.mjs";
+import { displayUntrusted, isInsideDir } from "../src/claude-context.mjs";
 
 const dir = mkdtempSync(join(tmpdir(), "sanitizer-claude-context-"));
 after(() => rmSync(dir, { recursive: true, force: true }));
@@ -119,6 +119,51 @@ describe("the exported Claude Code context scope", () => {
     assert.equal(isInsideDir(root, join(root, "..notes.md")), true);
     assert.equal(isInsideDir(root, join(root, "..", "x.md")), false);
     assert.equal(isInsideDir(root, join(root, "..")), false);
+  });
+
+  // Every class the neutralizer must escape, one code point each.
+  const UNSAFE = {
+    "tag character": "\u{E0041}",
+    "ESC (opens an ANSI/OSC sequence)": "\u001b",
+    BEL: "\u0007",
+    newline: "\n",
+    "carriage return": "\r",
+    DEL: "\u007f",
+    "C1 CSI": "\u009b",
+    "right-to-left override": "\u202e",
+    "bidi isolate": "\u2066",
+    "zero-width space": "\u200b",
+    "zero-width joiner": "\u200d",
+    "variation selector": "\ufe0f",
+    "Hangul filler": "\u3164",
+    "line separator": "\u2028",
+    "paragraph separator": "\u2029",
+    "lone surrogate": "\ud800",
+  };
+  for (const [name, ch] of Object.entries(UNSAFE))
+    it(`displayUntrusted escapes a ${name}`, () => {
+      const cp = /** @type {number} */ (ch.codePointAt(0));
+      const escaped = `\\u{${cp.toString(16).toUpperCase()}}`;
+      assert.equal(displayUntrusted(`a${ch}b.md`), `a${escaped}b.md`);
+    });
+
+  it("displayUntrusted leaves legitimate paths byte-identical", () => {
+    // The precision side: a real repo's paths, non-ASCII included, must render
+    // exactly as they are or the operator cannot find the file.
+    const LEGIT = [
+      "CLAUDE.md",
+      ".claude/rules/code-style.md",
+      join(sep, "home", "u", "proj", "AGENTS.md"),
+      "C:\\Users\\dev\\proj\\CLAUDE.md",
+      "docs/naïve café/résumé.md",
+      "ドキュメント/設定.md",
+      "Документы/правила.md",
+      "مستندات/قواعد.md",
+      "notes with spaces & (parens) [x].md",
+      "emoji-📁/rocket🚀.md",
+      "..notes.md",
+    ];
+    for (const path of LEGIT) assert.equal(displayUntrusted(path), path);
   });
 
   it("keeps pruning node_modules when a caller supplies its own exclude", () => {

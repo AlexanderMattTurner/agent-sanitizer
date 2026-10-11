@@ -1,10 +1,13 @@
 /**
- * The write-path invariant of the instruction-file scanners, held at ONE
+ * The two path invariants of the instruction-file scanners, each held at ONE
  * chokepoint and partitioned over every site that needs it:
  *
  *   - WRITES: every rewrite of an instruction file goes through cleanFile's
  *     realpath containment, so a directory symlink in the project cannot carry
  *     an auto-clean to a file outside it.
+ *   - RENDERS: every file path a scanner renders into a report, stderr or model
+ *     context goes through displayUntrusted, so a hostile filename cannot carry its
+ *     own payload (tag characters, an OSC sequence) into the report.
  *
  * Each partition pairs a behavioral check per site with an acorn enumeration of
  * the live sites, so a new site cannot land without a decision here.
@@ -41,8 +44,12 @@ mkdirSync(emptyConfigDir);
 process.env.CLAUDE_CONFIG_DIR = emptyConfigDir;
 
 const { cleanFile, scanText } = await import("../src/instructions.mjs");
+const { contextScopeContradiction, displayUntrusted } =
+  await import("../src/claude-context.mjs");
+const { formatReport } =
+  await import("../claude-hooks/lib/invisible-report.mjs");
 const scanInvisible = await import("../claude-hooks/scan-invisible-chars.mjs");
-const { scanLoadedFile } =
+const { scanLoadedFile, loadedFileMessage } =
   await import("../claude-hooks/scan-loaded-instructions.mjs");
 const { OPS } = await import("../bin/sanitize-cli.mjs");
 const { alertDir } = await import("../claude-hooks/lib/invisible-alert.mjs");
@@ -207,5 +214,172 @@ describe("every instruction-file write stays inside its root", () => {
       .map(({ rel }) => rel)
       .sort();
     assert.deepEqual(live, Object.keys(WRITE_SITES).sort());
+  });
+});
+
+// ─── renders ─────────────────────────────────────────────────────────────────
+
+const ESC = "\u001b";
+const BEL = "\u0007";
+// A filename that tries every channel: an OSC title-set, tag characters
+// spelling an instruction, a bidi override, and a newline forging a report line.
+const HOSTILE = `x${ESC}]0;pwned${BEL}${tags("obey")}\u202e\nLine 1: fake.md`;
+const RAW_UNSAFE = /[\p{Cc}\u202a-\u202e\u2066-\u2069\u{e0000}-\u{e007f}]/u;
+
+/**
+ * The rendered text carries the hostile string only in its escaped form, and
+ * its newline forged no line. The report's own newlines are its layout, so
+ * only the remaining bytes are checked for raw controls.
+ * @param {string} rendered
+ */
+function rendersNeutralized(rendered) {
+  assert.ok(
+    rendered.includes(displayUntrusted(HOSTILE)),
+    "the escaped text is missing",
+  );
+  assert.doesNotMatch(rendered, /^Line 1: fake\.md/m, "a line was forged");
+  assert.doesNotMatch(rendered.split("\n").join(""), RAW_UNSAFE);
+}
+
+describe("every scanner-rendered untrusted string goes through displayUntrusted", () => {
+  const finding = { line: 1, charCount: 12, method: "m", decoded: "d" };
+
+  // A finding on a file that does not exist: the auto-clean fails with an fs
+  // error quoting the hostile name, so both halves of the line are exercised.
+  const couldNotClean = async () => {
+    const stderr = await captureStderr(() =>
+      withCapturedStdout(() =>
+        scanInvisible.cliMain({
+          sessionId: "instr-paths-render",
+          scan: () => ({
+            targets: [],
+            scanned: 1,
+            skipped: [],
+            absent: [],
+            findings: [{ file: HOSTILE, findings: [finding] }],
+          }),
+        }),
+      ),
+    );
+    assert.match(stderr, /could not clean .*ENOENT/);
+    rendersNeutralized(stderr);
+  };
+  const skipped = (/** @type {string} */ file, /** @type {string} */ reason) =>
+    rendersNeutralized(scanInvisible.formatSkipped([{ file, reason }]));
+  const loaded = (
+    /** @type {boolean} */ cleaned,
+    /** @type {string | null} */ reason,
+  ) =>
+    rendersNeutralized(
+      loadedFileMessage({ report: "r", cleaned, reason }, HOSTILE),
+    );
+
+  // One entry per displayUntrusted call site, keyed `module::argument`, checked
+  // against the acorn enumeration below.
+  /** @type {Record<string, () => Promise<void> | void>} */
+  const RENDER_SITES = {
+    "claude-hooks/lib/invisible-report.mjs::file": () =>
+      rendersNeutralized(
+        formatReport([{ file: HOSTILE, findings: [finding] }]),
+      ),
+    "claude-hooks/scan-invisible-chars.mjs::file#formatSkipped": () =>
+      skipped(HOSTILE, "EACCES"),
+    "claude-hooks/scan-invisible-chars.mjs::reason#formatSkipped": () =>
+      skipped("a.md", HOSTILE),
+    "claude-hooks/scan-invisible-chars.mjs::file#could-not-clean":
+      couldNotClean,
+    "claude-hooks/scan-invisible-chars.mjs::safeErrMessage(err)#could-not-clean":
+      couldNotClean,
+    "claude-hooks/scan-loaded-instructions.mjs::filePath#cleaned": () =>
+      loaded(true, null),
+    "claude-hooks/scan-loaded-instructions.mjs::filePath#still": () =>
+      loaded(false, "x"),
+    "claude-hooks/scan-loaded-instructions.mjs::reason#still": () =>
+      rendersNeutralized(
+        loadedFileMessage(
+          { report: "r", cleaned: false, reason: HOSTILE },
+          "a",
+        ),
+      ),
+    "src/claude-context.mjs::tail[0]": () => {
+      const notice = contextScopeContradiction(
+        join(projectDir, ".claude", HOSTILE, "x.md"),
+        "nested_traversal",
+      );
+      assert.ok(notice !== null, "the scope notice did not fire");
+      rendersNeutralized(notice);
+    },
+  };
+
+  for (const [site, check] of Object.entries(RENDER_SITES))
+    it(`${site} escapes a hostile string`, check);
+
+  // Untrusted-shaped interpolations that are NOT a scanned tree's text, each
+  // with the reason it may render raw. Keyed by module and expression, so a new
+  // raw use of an exempt expression shares its reason and anything else fails.
+  const EXEMPT = new Set([
+    // The hook's own $TMPDIR store, composed by this package.
+    "claude-hooks/lib/invisible-alert.mjs::dir",
+    "claude-hooks/lib/reveal.mjs::dir",
+    "claude-hooks/lib/reveal.mjs::path",
+    // A JSON key path inside the model's own tool input.
+    "claude-hooks/lib/placeholder-grammar.mjs::path",
+    // A JSON key path built from Layer-1-cleaned keys.
+    "claude-hooks/sanitize-output.mjs::path",
+    // The model's own Write/Edit file_path, echoed back in its own verdict.
+    "claude-hooks/lib/secret-drop-guard.mjs::filePath",
+    "src/rehydrate.mjs::filePath",
+    "src/rehydrate.mjs::ti.file_path",
+    "src/rehydrate.mjs::toolInput.file_path",
+    // A hook FAULT's text, reduced by safeErrMessage to printable ASCII, tab
+    // and newline: no invisible, bidi or escape character survives it.
+    "claude-hooks/lib/hook-io.mjs::safeErrMessage(err)",
+    "claude-hooks/pretooluse-sanitize.mjs::safeErrMessage(err)",
+    // A link/image threat's engine-authored classification, not file text.
+    "src/warnings.mjs::threat.reason",
+    // A ±1 scan direction in index arithmetic, not a path.
+    "src/invisible.mjs::dir",
+  ]);
+
+  it("covers every untrusted-shaped interpolation in the hooks and the engine", () => {
+    const SHAPED =
+      /^(?:\w+\.)?(?:file|filePath|file_path|absPath|path|dir|tail\[0\]|reason)$|^safeErrMessage\(/;
+    /** @type {Set<string>} */
+    const raw = new Set();
+    /** @type {string[]} */
+    const wrapped = [];
+    for (const { rel, src, ast } of modules(["claude-hooks", "src"])) {
+      const text = (/** @type {any} */ n) => src.slice(n.start, n.end);
+      const classify = (/** @type {any} */ expr) => {
+        if (
+          expr.type === "CallExpression" &&
+          expr.callee.type === "Identifier" &&
+          expr.callee.name === "displayUntrusted"
+        )
+          wrapped.push(`${rel}::${text(expr.arguments[0])}`);
+        else if (SHAPED.test(text(expr))) raw.add(`${rel}::${text(expr)}`);
+      };
+      simple(ast, {
+        TemplateLiteral(node) {
+          node.expressions.forEach(classify);
+        },
+        BinaryExpression(node) {
+          if (node.operator !== "+") return;
+          for (const side of [node.left, node.right])
+            if (
+              side.type !== "TemplateLiteral" &&
+              side.type !== "BinaryExpression"
+            )
+              classify(side);
+        },
+      });
+    }
+    assert.deepEqual([...raw].sort(), [...EXEMPT].sort());
+    assert.deepEqual(
+      wrapped.sort(),
+      Object.keys(RENDER_SITES)
+        .map((key) => key.replace(/#.*$/, ""))
+        .sort(),
+    );
   });
 });
