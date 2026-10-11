@@ -743,6 +743,15 @@ function registerFaultPolicy(hook, policy) {
     throw new Error(
       `unknown hook ${JSON.stringify(hook)}: add it to FAULT_POLICY_HOOKS in claude-hooks/lib/hook-fault.mjs before registering a posture for it`
     );
+  for (
+    const arm of
+    /** @type {const} */
+    ["alwaysClosed", "closed"]
+  )
+    if (typeof policy[arm] !== "function")
+      throw new Error(
+        `fault policy for ${JSON.stringify(hook)} declares no \`${arm}\`; every hook states it explicitly (KNOB_DECIDES for alwaysClosed)`
+      );
   policies.set(hook, policy);
 }
 function faultPolicy(hook) {
@@ -758,13 +767,16 @@ function defaultOpen(ctx) {
 }
 function hookFaultOutcome(hook, err, ctx = {}) {
   const policy = faultPolicy(hook);
-  const open = failOpenEnabled(ctx.env);
+  const knobOpen = failOpenEnabled(ctx.env);
+  const pinnedClosed = knobOpen && policy.alwaysClosed(ctx.env);
+  const open = knobOpen && !pinnedClosed;
   const full = {
     ...ctx,
     hook,
     err,
     message: safeErrMessage(err),
-    openContext: failOpenContext(hook, policy.guarded, err)
+    openContext: failOpenContext(hook, policy.guarded, err),
+    pinnedClosed
   };
   const parts2 = (open ? policy.open ?? defaultOpen : policy.closed)(full);
   const fields = parts2.fields ?? null;
@@ -787,7 +799,7 @@ function writeFaultOutcome(outcome, write = (chunk) => process.stdout.write(chun
   if (outcome.stderr !== null) writeErr(outcome.stderr);
   return outcome.exitCode;
 }
-var FAULT_POLICY_HOOKS, policies;
+var FAULT_POLICY_HOOKS, KNOB_DECIDES, policies;
 var init_hook_fault = __esm({
   "claude-hooks/lib/hook-fault.mjs"() {
     "use strict";
@@ -800,6 +812,7 @@ var init_hook_fault = __esm({
       "scan-invisible-chars",
       "scan-loaded-instructions"
     ]);
+    KNOB_DECIDES = Object.freeze(() => false);
     policies = /* @__PURE__ */ new Map();
   }
 });
@@ -50251,6 +50264,7 @@ var init_pretooluse_sanitize = __esm({
     registerFaultPolicy(HOOK_NAME, {
       event: HookEvent.PRE_TOOL_USE,
       guarded: "tool input",
+      alwaysClosed: KNOB_DECIDES,
       open: (ctx) => {
         if (!secretsEnabled(ctx.env) || !hintedWriteFault(ctx.input))
           return defaultOpen(ctx);
@@ -50854,11 +50868,11 @@ async function sanitizeText2(text6, toolName, deadline = makeDeadline(SANITIZE_B
     // Layer 4 — OPT-IN (secretsEnabled): with the knob unset the seam gets no
     // redact callback at all, so plain output never spawns the daemon and no
     // placeholder ever enters the model's view. When it runs, the seam rethrows
-    // a redactor throw wrapped, and the CLI applies the caller's posture to it.
-    // Surface the failure to the operator's terminal here first: whatever the
-    // CLI decides rides in additionalContext, which only the model sees, so a
-    // degraded redactor would otherwise be invisible to the human — and under
-    // the fail-open default this line is the ONLY signal the human gets.
+    // a redactor throw wrapped, and this hook's fault policy suppresses the
+    // output under either posture (alwaysClosed). Surface the failure to the
+    // operator's terminal here first: the suppression note rides in what only
+    // the model sees, so a degraded redactor would otherwise be invisible to
+    // the human.
     redact: !secretsEnabled() ? void 0 : async (content3) => {
       let secrets;
       try {
@@ -51185,14 +51199,14 @@ async function cliMain2(ext = {}) {
       // back the parsed `input` even when the control-plane load failed, so the
       // suppression shape-matches the real tool_response). emitFailClosed itself
       // falls back to a bare string if that shape-matching replacement or its
-      // serialization throws, so even a pathological input fails closed. A caller
-      // that set AGENT_SANITIZER_FAIL_OPEN=1 gets the warning-only pass-through
-      // instead — see emitHookFailure.
+      // serialization throws, so even a pathological input fails closed. Under
+      // the open default with Layer 4 off the caller gets the warning-only
+      // pass-through instead — see emitHookFailure.
       onError: (err, input) => emitHookFailure(input, err, void 0, ext.remedy)
     }
   );
 }
-var _sanitizer, HTML_TAG_PRESENT2, applyLayer13, matchesSecretHint2, SECRET_HINT2, SECRET_HINT_EXT2, _output, sanitizeTextSeam, composeContextSeam, withheldWarning2, describeRemoved2, describeWarned2, suppressToolOutput2, HOOK_NAME2, REVEAL_WITHHELD_WARNING, SANITIZE_BUDGET_MS, WEB_INGRESS_TOOLS, COLLISION_WITHHELD_MESSAGE, nextWithheldIndex, ON_DISK_PLACEHOLDER_WARNING, FAIL_CLOSED_CONTEXT;
+var _sanitizer, HTML_TAG_PRESENT2, applyLayer13, matchesSecretHint2, SECRET_HINT2, SECRET_HINT_EXT2, _output, sanitizeTextSeam, composeContextSeam, withheldWarning2, describeRemoved2, describeWarned2, suppressToolOutput2, HOOK_NAME2, REVEAL_WITHHELD_WARNING, SANITIZE_BUDGET_MS, WEB_INGRESS_TOOLS, COLLISION_WITHHELD_MESSAGE, nextWithheldIndex, ON_DISK_PLACEHOLDER_WARNING, FAIL_CLOSED_CONTEXT, SECRETS_PIN_NOTE;
 var init_sanitize_output = __esm({
   async "claude-hooks/sanitize-output.mjs"() {
     "use strict";
@@ -51227,10 +51241,16 @@ var init_sanitize_output = __esm({
     nextWithheldIndex = /* @__PURE__ */ new WeakMap();
     ON_DISK_PLACEHOLDER_WARNING = "this file's raw on-disk bytes already contain literal [REDACTED\u2026] placeholder text (not inserted by this sanitizer). If an earlier write copied a placeholder from a sanitized view, the secret it stood for has been destroyed; verify with the user before trusting or propagating this file";
     FAIL_CLOSED_CONTEXT = "CRITICAL: sanitize-output hook failed; this tool's output was suppressed (replaced with a placeholder) to fail closed -- the unsanitized output was not shown. Investigate the hook error before relying on this tool.";
+    SECRETS_PIN_NOTE = ` Secret redaction is on (${SECRETS_ENABLED_ENV}=1), so output it could not vet is withheld under either AGENT_SANITIZER_FAIL_OPEN posture.`;
     registerFaultPolicy(HOOK_NAME2, {
       event: HookEvent.POST_TOOL_USE,
       guarded: "tool output",
-      closed: (ctx) => failClosedParts(ctx.input, suppressionMessage(ctx.message), ctx.remedy)
+      alwaysClosed: secretsEnabled,
+      closed: (ctx) => failClosedParts(
+        ctx.input,
+        suppressionMessage(ctx.message) + (ctx.pinnedClosed ? SECRETS_PIN_NOTE : ""),
+        ctx.remedy
+      )
     });
     if (isMain(import.meta.url)) {
       await cliMain2();
@@ -51328,6 +51348,7 @@ var init_sanitize_user_prompt = __esm({
     registerFaultPolicy(HOOK_NAME3, {
       event: HookEvent.USER_PROMPT_SUBMIT,
       guarded: "prompt",
+      alwaysClosed: KNOB_DECIDES,
       closed: (ctx) => ({
         envelope: {
           decision: "block",
@@ -51648,6 +51669,7 @@ var init_scan_invisible_chars = __esm({
     registerFaultPolicy(HOOK_NAME4, {
       event: HookEvent.SESSION_START,
       guarded: "instruction files",
+      alwaysClosed: KNOB_DECIDES,
       open: (ctx) => ({
         stderr: `${faultLine(ctx)} Passing through unguarded; set AGENT_SANITIZER_FAIL_OPEN=0 to arm the tool-call gate instead.
 `,
@@ -51826,6 +51848,7 @@ var init_scan_loaded_instructions = __esm({
     registerFaultPolicy(HOOK_NAME5, {
       event: HookEvent.INSTRUCTIONS_LOADED,
       guarded: "a loaded instruction file",
+      alwaysClosed: KNOB_DECIDES,
       open: (ctx) => emptyPayloadParts(ctx) ?? {
         stderr: `${faultLine2(ctx)} Passing through unguarded; set AGENT_SANITIZER_FAIL_OPEN=0 to arm the tool-call gate instead.
 `,
@@ -51856,6 +51879,7 @@ var unknownMode = (ctx) => ({
 registerFaultPolicy(HOOK_NAME6, {
   event: null,
   guarded: "hook payload",
+  alwaysClosed: KNOB_DECIDES,
   open: unknownMode,
   closed: unknownMode
 });

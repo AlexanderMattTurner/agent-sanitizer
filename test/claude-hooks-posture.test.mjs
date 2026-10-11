@@ -48,8 +48,14 @@ writeFileSync(join(projectDir, "AGENTS.md"), "ordinary, clean prose\n");
 
 const { FAIL_OPEN_ENV, missingPackageError } =
   await import("../claude-hooks/lib/hook-io.mjs");
-const { FAULT_POLICY_HOOKS, faultPolicy, hookFaultOutcome } =
-  await import("../claude-hooks/lib/hook-fault.mjs");
+const {
+  FAULT_POLICY_HOOKS,
+  faultPolicy,
+  hookFaultOutcome,
+  registerFaultPolicy,
+} = await import("../claude-hooks/lib/hook-fault.mjs");
+const { SECRETS_ENABLED_ENV } =
+  await import("../claude-hooks/lib/env-config.mjs");
 // Imported for their REGISTRATIONS: a policy is reachable only once its hook
 // module has loaded, which is what makes "declared where the hook lives" true.
 const preToolUse = await import("../claude-hooks/pretooluse-sanitize.mjs");
@@ -110,6 +116,72 @@ describe("every hook's failure posture comes from one table", () => {
       assert.equal(open, "open", `${hook} is not open by default`);
       assert.equal(closed, "closed", `${hook} ignores the opt-out`);
     }
+  });
+});
+
+describe("Layer 4 withholds what it could not vet, under either posture", () => {
+  const SECRETS_ON = { [SECRETS_ENABLED_ENV]: "1" };
+  const input = { tool_response: "aws_key=AKIAIOSFODNN7EXAMPLE" };
+  /** @param {Record<string, string>} env */
+  const emittedUnder = (env) => {
+    const emitted = [];
+    sanitizeOutput.emitHookFailure(
+      input,
+      FAULT,
+      (fields) => emitted.push(fields),
+      undefined,
+      env,
+    );
+    return emitted;
+  };
+
+  it("pins the output hook closed, and no other hook", () => {
+    const postures = Object.fromEntries(
+      FAULT_POLICY_HOOKS.map((hook) => [
+        hook,
+        hookFaultOutcome(hook, FAULT, { env: SECRETS_ON }).posture,
+      ]),
+    );
+    assert.deepEqual(postures, {
+      "plugin-hooks": "open",
+      "pretooluse-sanitize": "open",
+      "sanitize-output": "closed",
+      "sanitize-user-prompt": "open",
+      "scan-invisible-chars": "open",
+      "scan-loaded-instructions": "open",
+    });
+  });
+
+  it("refuses a policy that leaves either posture decision implicit", () => {
+    const complete = faultPolicy("sanitize-output");
+    for (const arm of ["alwaysClosed", "closed"])
+      assert.throws(
+        () =>
+          registerFaultPolicy("sanitize-output", {
+            ...complete,
+            [arm]: undefined,
+          }),
+        new RegExp(`declares no \`${arm}\``, "u"),
+      );
+    // The refused registrations left the real one in place.
+    assert.equal(faultPolicy("sanitize-output"), complete);
+  });
+
+  it("suppresses the output under the open default and says why", () => {
+    const [fields] = emittedUnder(SECRETS_ON);
+    assert.match(fields.updatedToolOutput, /SANITIZATION FAILED/u);
+    assert.match(
+      fields.updatedToolOutput,
+      /AGENT_SANITIZER_SECRETS_ENABLED=1\), so output it could not vet is withheld/u,
+    );
+    assert.ok(!JSON.stringify(fields).includes("AKIAIOSFODNN7EXAMPLE"));
+  });
+
+  it("adds nothing to the explicit opt-out, which was already closed", () => {
+    assert.deepEqual(
+      emittedUnder({ ...SECRETS_ON, [FAIL_OPEN_ENV]: "0" }),
+      emittedUnder({ [FAIL_OPEN_ENV]: "0" }),
+    );
   });
 });
 
