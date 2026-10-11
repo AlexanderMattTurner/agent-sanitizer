@@ -195,31 +195,25 @@ async function rehydrateEdit(
       // (the model supplied the secret's real bytes itself, e.g. a rotation)
       // extracts nothing and is left to the literal resolver below.
       const diskSpans = pairDiskSpans(view, deletions);
-      let intrusion = null;
-      for (const matchStart of occurrences(content, oldS)) {
+      const intrudes = occurrences(content, oldS).some((matchStart) => {
         const matchEnd = matchStart + oldS.length;
-        const secret = diskSpans.find(
+        return diskSpans.some(
           (span) =>
             matchStart < span.end &&
             span.start < matchEnd &&
             !(matchStart <= span.start && span.end <= matchEnd),
         );
-        if (secret) {
-          intrusion = { matchStart, matchEnd, secret };
-          break;
-        }
-      }
-      // Report both byte ranges. The refusal is conservative — it fires on an
-      // overlap with the redacted span the caller cannot see — so the caller
-      // needs the ranges to tell a true overlap from a mis-sized redaction.
-      if (intrusion)
+      });
+      // No offsets in the refusal: the secret's span is its length, and the
+      // match's position against it says how much of the secret the probe
+      // covered. The caller sees the file, never the secret.
+      if (intrudes)
         return {
           deny:
             `old_string does not appear in the sanitized view of ${ti.file_path}; on disk ` +
-            `it matches bytes ${intrusion.matchStart}-${intrusion.matchEnd}, which fall ` +
-            `inside a ${hint}…] redacted secret at bytes ${intrusion.secret.start}-` +
-            `${intrusion.secret.end} that are hidden from your view; edit only text you ` +
-            `can see (include each placeholder whole), or ask the user to make this change`,
+            `it matches text inside a ${hint}…] redacted secret that is hidden from your ` +
+            `view; edit only text you can see (include each placeholder whole), or ask ` +
+            `the user to make this change`,
         };
       const literalRes = rehydrateNewString(
         oldS,
@@ -351,11 +345,12 @@ async function rehydrateEdit(
     if (exposed > 0) return { deny: exposureDeny(exposed) };
   }
 
+  const stripped = strippedChars(span.diskText, span.cleanedText);
   const notes = [
     span.pairs.length > 0 &&
       `${hint}…] placeholders were resolved to the file's real secret values (still hidden from you)`,
-    span.invisibleBytes > 0 &&
-      `the matched region carries ${span.invisibleBytes} invisible/control character(s) stripped from your view; they are replaced along with it`,
+    stripped > 0 &&
+      `the matched region carries ${stripped} invisible/control character(s) stripped from your view; they are replaced along with it`,
   ].filter(Boolean);
   return {
     updatedInput: { ...ti, old_string: span.diskText, new_string: newRes.text },
@@ -438,8 +433,8 @@ function foreignPlaceholders(out, hint, viewText, secretSpans) {
  * region reaches that edge — re-attach those explicitly, since `diskOffset`
  * keeps boundary runs outside the span in both directions.
  *
- * `restoredChars` counts UTF-16 code units, matching the "character(s)" prose
- * in {@link writeContext}.
+ * `restoredChars` counts code points ({@link strippedChars}), matching the
+ * "character(s)" prose in {@link writeContext}.
  * @param {WriteRestoreContext} ctx per-Write invariants shared by both regions
  * @param {number} viewStart
  * @param {number} viewEnd
@@ -483,8 +478,21 @@ function restoreWriteRegion(ctx, viewStart, viewEnd, fallback) {
   return {
     text: diskText,
     pairs: span.pairs,
-    restoredChars: diskText.length - span.cleanedText.length,
+    restoredChars: strippedChars(diskText, span.cleanedText),
   };
+}
+
+/**
+ * How many characters Layer 1 stripped from `diskText` to leave `cleanedText`,
+ * counted in code points — the unit the "character(s)" prose names. A UTF-16
+ * difference double-counts every astral strip: one tag character is two units.
+ * Lone-surrogate normalization swaps one unit for one, so it adds nothing.
+ * @param {string} diskText on-disk bytes of a region
+ * @param {string} cleanedText that region's Layer-1 view
+ * @returns {number}
+ */
+function strippedChars(diskText, cleanedText) {
+  return [...diskText].length - [...cleanedText].length;
 }
 
 /**
@@ -679,7 +687,7 @@ async function rehydrateWrite(ti, content, cleaned, view, deletions, io, hint) {
 /**
  * Model-facing context line for a rewritten Write input.
  * @param {string} filePath
- * @param {number} restoredChars UTF-16 code units of stripped characters restored with the unchanged regions
+ * @param {number} restoredChars code points of stripped characters restored with the unchanged regions
  * @param {number} secretCount placeholders resolved (spliced or restored)
  * @param {string} hint placeholder prefix
  */

@@ -47860,20 +47860,15 @@ async function rehydrateEdit(ti, content3, cleaned, view, deletions, io, hinted,
   if (viewOcc.length === 0) {
     if (content3.includes(oldS)) {
       const diskSpans = pairDiskSpans(view, deletions);
-      let intrusion = null;
-      for (const matchStart of occurrences(content3, oldS)) {
+      const intrudes = occurrences(content3, oldS).some((matchStart) => {
         const matchEnd = matchStart + oldS.length;
-        const secret = diskSpans.find(
+        return diskSpans.some(
           (span2) => matchStart < span2.end && span2.start < matchEnd && !(matchStart <= span2.start && span2.end <= matchEnd)
         );
-        if (secret) {
-          intrusion = { matchStart, matchEnd, secret };
-          break;
-        }
-      }
-      if (intrusion)
+      });
+      if (intrudes)
         return {
-          deny: `old_string does not appear in the sanitized view of ${ti.file_path}; on disk it matches bytes ${intrusion.matchStart}-${intrusion.matchEnd}, which fall inside a ${hint}\u2026] redacted secret at bytes ${intrusion.secret.start}-${intrusion.secret.end} that are hidden from your view; edit only text you can see (include each placeholder whole), or ask the user to make this change`
+          deny: `old_string does not appear in the sanitized view of ${ti.file_path}; on disk it matches text inside a ${hint}\u2026] redacted secret that is hidden from your view; edit only text you can see (include each placeholder whole), or ask the user to make this change`
         };
       const literalRes = rehydrateNewString(
         oldS,
@@ -47948,9 +47943,10 @@ async function rehydrateEdit(ti, content3, cleaned, view, deletions, io, hinted,
     );
     if (exposed > 0) return { deny: exposureDeny(exposed) };
   }
+  const stripped = strippedChars(span.diskText, span.cleanedText);
   const notes = [
     span.pairs.length > 0 && `${hint}\u2026] placeholders were resolved to the file's real secret values (still hidden from you)`,
-    span.invisibleBytes > 0 && `the matched region carries ${span.invisibleBytes} invisible/control character(s) stripped from your view; they are replaced along with it`
+    stripped > 0 && `the matched region carries ${stripped} invisible/control character(s) stripped from your view; they are replaced along with it`
   ].filter(Boolean);
   return {
     updatedInput: { ...ti, old_string: span.diskText, new_string: newRes.text },
@@ -48004,8 +48000,11 @@ function restoreWriteRegion(ctx, viewStart, viewEnd, fallback) {
   return {
     text: diskText,
     pairs: span.pairs,
-    restoredChars: diskText.length - span.cleanedText.length
+    restoredChars: strippedChars(diskText, span.cleanedText)
   };
+}
+function strippedChars(diskText, cleanedText) {
+  return [...diskText].length - [...cleanedText].length;
 }
 async function rehydrateWrite(ti, content3, cleaned, view, deletions, io, hint) {
   const viewText = view.text;

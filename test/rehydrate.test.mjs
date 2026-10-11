@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { rehydrateRedacted, DEFAULT_HINT } from "../src/rehydrate.mjs";
 import { alignDeletions, occurrences } from "../src/view-map.mjs";
 import { applyLayer1, LONE_SURROGATE_RE } from "../src/layer1.mjs";
+import { mkView } from "./helpers/redact-view.mjs";
 
 // Secrets assembled at runtime so no complete token literal trips push
 // protection / gitleaks.
@@ -16,35 +17,9 @@ const ZW = String.fromCharCode(0x200b); // zero-width space (Layer 1 strips)
 const ESC = String.fromCharCode(0x1b);
 const GREEN = `${ESC}[32m`;
 const RESET = `${ESC}[0m`;
-
-/**
- * Build a redactMap view from already-Layer-1-cleaned text: replace each
- * secret occurrence with its placeholder, emitting ordered (placeholder,
- * original, start) pairs at the view offsets.
- * @param {string} cleaned
- * @param {{value: string, placeholder: string}[]} secrets
- * @returns {{text: string, pairs: {placeholder: string, original: string, start: number}[]}}
- */
-function mkView(cleaned, secrets) {
-  // Collect every secret occurrence in the cleaned text, ordered by position.
-  const hits = [];
-  for (const { value, placeholder } of secrets)
-    for (const index of occurrences(cleaned, value))
-      hits.push({ index, value, placeholder });
-  hits.sort((a, b) => a.index - b.index);
-
-  let text = "";
-  let last = 0;
-  const pairs = [];
-  for (const { index, value, placeholder } of hits) {
-    text += cleaned.slice(last, index);
-    pairs.push({ placeholder, original: value, start: text.length });
-    text += placeholder;
-    last = index + value.length;
-  }
-  text += cleaned.slice(last);
-  return { text, pairs };
-}
+// Astral: a tag character (Layer 1 strips) and a visible emoji (it keeps).
+const TAG = String.fromCodePoint(0xe0041);
+const KEY = String.fromCodePoint(0x1f511);
 
 /**
  * Fake io over a hand-built view. `redact` is what io.redact returns for the
@@ -663,6 +638,33 @@ describe("rehydrate: stripped-character re-anchoring", () => {
     );
   });
 
+  it("counts stripped astral characters in characters, not UTF-16 units", async () => {
+    // Three tag characters are three characters and six UTF-16 units.
+    const content = `A=1${TAG.repeat(3)}\nB=2\n`;
+    const out = await rehydrateRedacted(
+      "Edit",
+      { file_path: "/f", old_string: "A=1\nB=2", new_string: "A=1\nB=3" },
+      liveIo(content),
+    );
+    assert.equal(out.updatedInput.old_string, `A=1${TAG.repeat(3)}\nB=2`);
+    assert.equal(
+      out.context,
+      `Edit input was translated to the file's actual on-disk bytes: the ` +
+        `matched region carries 3 invisible/control character(s) stripped from ` +
+        `your view; they are replaced along with it.`,
+    );
+  });
+
+  it("the fixture redactor emits code-point offsets, as the real engine does", () => {
+    // rehydrate brands the map "codePoint"; a UTF-16 start here would be one
+    // unit long per astral character before the secret.
+    const view = mkView(`${KEY}=${SECRET_A}`, [
+      { value: SECRET_A, placeholder: PH },
+    ]);
+    assert.equal(view.pairs[0].start, [...`${KEY}=`].length);
+    assert.notEqual(view.pairs[0].start, `${KEY}=`.length);
+  });
+
   it("fails closed (null, no throw) on an empty old_string against a divergent-view file", async () => {
     // A stripped ANSI run makes the Layer-1 view diverge from disk, so this
     // Edit reaches rehydrateEdit. An empty old_string would otherwise hit
@@ -1103,9 +1105,10 @@ describe("rehydrate: hidden-span safety", () => {
     assert.equal(out.updatedInput, undefined);
   });
 
-  it("R1: the deny reports the disk byte range of both the match and the secret", async () => {
-    // The refusal is conservative, so the caller needs the two ranges to tell a
-    // real overlap from a redaction whose recorded span is too wide.
+  it("R1: the deny names no offset, so it leaks neither the secret's span nor its length", async () => {
+    // The secret's start-end IS its length, and the probe's position against
+    // it says how much of the secret the guess covered. The file path carries
+    // no digit, so any digit in the reason is an offset.
     const content = `PASSWORD=${SECRET_A}\nDEBUG=1\n`;
     const out = await rehydrateRedacted(
       "Edit",
@@ -1116,18 +1119,8 @@ describe("rehydrate: hidden-span safety", () => {
       },
       liveIo(content, [{ value: SECRET_A, placeholder: PH }], reRedact),
     );
-    const matchStart = content.indexOf(FRAGMENT_ONLY_IN_SECRET);
-    const secretStart = content.indexOf(SECRET_A);
-    assert.match(
-      out.deny,
-      new RegExp(
-        `matches bytes ${matchStart}-${matchStart + FRAGMENT_ONLY_IN_SECRET.length},`,
-      ),
-    );
-    assert.match(
-      out.deny,
-      new RegExp(`at bytes ${secretStart}-${secretStart + SECRET_A.length} `),
-    );
+    assert.match(out.deny, /inside a \[REDACTED…\] redacted secret/);
+    assert.doesNotMatch(out.deny, /\d/);
   });
 
   it("R1: denies a hint-free replace_all fragment that would splice inside the secret", async () => {
@@ -1423,6 +1416,21 @@ describe("rehydrate: Write-path Layer-1 restoration", () => {
     applyLayer1(content).cleaned.replace(LONE_SURROGATE_RE, "�");
   const write = (content, io) =>
     rehydrateRedacted("Write", { file_path: "/f", content }, io);
+
+  it("counts restored astral strips in characters, not UTF-16 units", async () => {
+    // Three tag characters are three characters and six UTF-16 units.
+    const content = `ok${TAG.repeat(3)} done\nplain tail\n`;
+    const out = await write("ok done\nplain tail!\n", liveIo(content));
+    assert.equal(
+      out.updatedInput.content,
+      `ok${TAG.repeat(3)} done\nplain tail!\n`,
+    );
+    assert.equal(
+      out.context,
+      `3 invisible/control character(s) stripped from your view of /f were ` +
+        `restored from disk in the regions your Write left unchanged.`,
+    );
+  });
 
   it("round-trips an unchanged Write of an ANSI/ZW-bearing file byte-identically", async () => {
     const content = `${GREEN}ok${RESET} done${ZW}\nplain tail\n`;
@@ -1875,33 +1883,10 @@ describe("view-map: alignDeletions", () => {
 
 // ─── Astral-char offset normalization (code-point → UTF-16) ──────────────────
 
-// Like mkView, but emits CODE-POINT start offsets — exactly what the Python
-// redactor's map mode produces (Python indexes strings by code point). The
-// rehydrate layer must normalize these to UTF-16 before the offset machinery
-// runs, or an astral char before a placeholder mis-anchors the edit.
-function mkViewCodePoints(cleaned, secrets) {
-  const hits = [];
-  for (const { value, placeholder } of secrets)
-    for (const index of occurrences(cleaned, value))
-      hits.push({ index, value, placeholder });
-  hits.sort((a, b) => a.index - b.index);
-  let text = "";
-  let last = 0;
-  const pairs = [];
-  for (const { index, value, placeholder } of hits) {
-    text += cleaned.slice(last, index);
-    pairs.push({
-      placeholder,
-      original: value,
-      start: Array.from(text).length,
-    });
-    text += placeholder;
-    last = index + value.length;
-  }
-  text += cleaned.slice(last);
-  return { text, pairs };
-}
-
+// mkView emits CODE-POINT start offsets — exactly what the Python redactor's
+// map mode produces (Python indexes strings by code point). The rehydrate layer
+// must normalize these to UTF-16 before the offset machinery runs, or an astral
+// char before a placeholder mis-anchors the edit.
 describe("rehydrate: astral chars before a placeholder", () => {
   // An emoji (astral: 1 code point, 2 UTF-16 units) sits immediately before the
   // secret, so the redactor's code-point start for the placeholder is one less
@@ -1910,9 +1895,7 @@ describe("rehydrate: astral chars before a placeholder", () => {
   // code-point/UTF-16 divergence flips a comparison in mapViewOffset and, absent
   // the conversion, makes resolveSpan reject the edit as cutting a placeholder.
   const content = `KEY=🔑${SECRET_A}\nDEBUG=1\n`;
-  const view = mkViewCodePoints(content, [
-    { value: SECRET_A, placeholder: PH },
-  ]);
+  const view = mkView(content, [{ value: SECRET_A, placeholder: PH }]);
 
   it("the fixture actually exercises the divergence (code-point start < UTF-16)", () => {
     // Guard against a vacuous test: if this fixture were BMP-only, the two

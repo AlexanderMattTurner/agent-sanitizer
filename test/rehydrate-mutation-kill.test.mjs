@@ -1,7 +1,7 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { rehydrateRedacted, DEFAULT_HINT } from "../src/rehydrate.mjs";
-import { occurrences } from "../src/view-map.mjs";
+import { mkView } from "./helpers/redact-view.mjs";
 
 // Placeholder shapes. PH2 shares the hint prefix but is a distinct placeholder.
 const PH = "[REDACTED]";
@@ -12,30 +12,6 @@ const ZW = String.fromCharCode(0x200b); // zero-width space (Layer 1 strips)
 // A redactor probe that reports "secrets present" (non-null) — needed so the
 // hint-free short-circuit in rehydrateRedacted does NOT pass the call through.
 const present = () => "redacted";
-
-/**
- * Build a redactMap view from Layer-1-cleaned text: replace each secret
- * occurrence with its placeholder, emitting ordered (placeholder, original,
- * start) pairs at the view offsets. (Same construction the sibling suite uses.)
- */
-function mkView(cleaned, secrets) {
-  const hits = [];
-  for (const { value, placeholder } of secrets)
-    for (const index of occurrences(cleaned, value))
-      hits.push({ index, value, placeholder });
-  hits.sort((a, b) => a.index - b.index);
-  let text = "";
-  let last = 0;
-  const pairs = [];
-  for (const { index, value, placeholder } of hits) {
-    text += cleaned.slice(last, index);
-    pairs.push({ placeholder, original: value, start: text.length });
-    text += placeholder;
-    last = index + value.length;
-  }
-  text += cleaned.slice(last);
-  return { text, pairs };
-}
 
 const fakeIo = (content, view, redact = () => null) => ({
   readFile: () => content,
