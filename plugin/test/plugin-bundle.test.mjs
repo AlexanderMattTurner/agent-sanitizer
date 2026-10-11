@@ -1189,6 +1189,13 @@ function stageHookBinary(t, body, { mode = 0o755, dirMode = 0o700 } = {}) {
   const bin = join(dir, "agent-sanitizer-hooks");
   writeFileSync(bin, `#!/bin/sh\n${body}\n`);
   chmodSync(bin, mode);
+  // The install stamp the provisioner writes beside every binary it installs:
+  // without it the launcher reads the binary as installed from some OTHER
+  // manifest and prefers node, which is not the state these cases model.
+  cpSync(
+    join(PLUGIN_DIR, "dist", "hooks", "hook-binaries.sha256"),
+    join(dir, ".manifest-installed"),
+  );
   // Stated, not inherited from the runner's umask: the launcher refuses to
   // execute a binary out of a group- or other-writable directory, so a
   // permissive umask would silently turn every case below into that refusal.

@@ -777,7 +777,11 @@ it, so what anchors its trust is worth stating exactly.
   merge and that refresh, the default branch pins binaries compiled from the
   previous bundle. The provisioner compares its own bundle against the manifest's
   `# bundle=` pin and refuses on a mismatch, so the window degrades to the node
-  path rather than running a binary that is not the code the install ships.
+  path rather than running a binary that is not the code the install ships. A
+  binary provisioned before the window stays installed but loses its install
+  stamp, and the launcher runs a binary whose stamp does not name the shipped
+  manifest only on a host where no node is found — there an older sanitizer
+  still beats an unsanitized call.
 - **Not covered: an attacker who can write BOTH the repository and the release.**
   There is no signature; the manifest is trusted because it arrives through the
   same reviewed, gated path as the rest of the plugin. Rewriting it is rewriting
@@ -796,11 +800,19 @@ it, so what anchors its trust is worth stating exactly.
   per install instead of once per tool call. V8 does not treat a code cache as
   untrusted input, so those files are code the session runs, exactly like the
   binary above. The launcher creates the directory mode 700 and gates it with
-  `trusted_exec_dir` — the same owner-only-write property, refused with a line on
+  `trusted_dir` — the same owner-only-write property, refused with a line on
   stderr when the directory does not hold it — so the same user-owned data
   directory is the assumption here too. It carries no digest and needs none:
   anything able to write there can already run code per the bullet above. Nothing
   is fetched for it, so it adds no supply-chain surface.
+- **The same gate covers everything else the launcher takes from a shared
+  location.** The provisioned redactor venv (`${CLAUDE_PLUGIN_DATA}/venv` and its
+  `bin/`, whose daemon receives every secret-bearing payload) is handed to the
+  client only when `trusted_dir` vouches for both directories; otherwise the
+  client redacts through the committed zipapp. The degraded-warning marker root
+  under `TMPDIR` is read only when this user owns it with owner-only write, so a
+  squatted shared-temp entry cannot pre-suppress the warning that a call ran
+  unsanitized.
 - **Opting out.** `AGENT_SANITIZER_HOOK_BINARY=0` never downloads and never runs
   a binary. That leaves the node path running the committed bundle and the
   compile cache above; `AGENT_SANITIZER_COMPILE_CACHE=0` turns the cache off as
