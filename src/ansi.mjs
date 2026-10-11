@@ -202,6 +202,7 @@ export const ESCAPE_SEQUENCE_SOURCE = (() => {
   const stringArm = `(?:${introducer7Bit}|${charClass(c1Introducers)})${body}${terminator}`;
   // A sequence ends at its final byte, or is ABORTED (see scanCsi): CAN/SUB is
   // consumed with it, another introducer ends it before that byte.
+  /** @param {string} finalClass */
   const ending = (finalClass) =>
     `(?:${finalClass}|${charClass(SEQUENCE_CANCEL)}|(?=${CONTROL_INTRODUCER_SOURCE}))`;
   const csiArm =
