@@ -786,22 +786,68 @@ export function hookgateMarkerPath(
 export const SETUP_LOCK_DECLARATION = "flock";
 
 /**
- * Whether an exclusive lock is currently held on `markerPath`, or null when the
- * question cannot be answered here (no `flock(1)` — it is util-linux, absent from a
- * stock macOS — or an exit status neither "acquired" nor "busy").
- * @param {string} markerPath
+ * Whether an exclusive lock is currently held on the file open at `fd`, or null
+ * when the question cannot be answered here (no `flock(1)` — it is util-linux,
+ * absent from a stock macOS — or an exit status neither "acquired" nor "busy").
+ *
+ * The probe locks the DESCRIPTOR the caller already opened, never the path.
+ * `flock <path>` opens with O_CREAT, so a probe that lost the race against the
+ * writer's final unlink re-created the marker — empty, owned by us, declaring
+ * nothing — and every later reader took that husk for a live setup whose pid it
+ * could not parse: a 900-second wait on each cold hook and a gap notice silenced
+ * for the session. Locking the inherited fd cannot create anything, and it judges
+ * the same inode the caller just read. The child's lock lives on the shared open
+ * file description, so it is released when the caller closes `fd`.
+ * @param {number} fd
  * @returns {boolean | null}
  */
-function markerLockHeld(markerPath) {
-  const probe = spawnSync(
-    "flock",
-    ["--nonblock", "--exclusive", markerPath, "true"],
-    { stdio: "ignore" },
-  );
+function lockHeldOn(fd) {
+  const probe = spawnSync("flock", ["--nonblock", "--exclusive", "3"], {
+    stdio: ["ignore", "ignore", "ignore", fd],
+  });
   if (probe.error) return null;
   if (probe.status === 0) return false; // acquired: nobody holds it
   if (probe.status === 1) return true; // busy: the writer still holds it
   return null;
+}
+
+/**
+ * A setup marker's trimmed lines and, when it declares
+ * {@link SETUP_LOCK_DECLARATION}, whether that lock is held (null: the
+ * declaration is absent, or no `flock(1)` could answer). Null when the marker
+ * cannot be opened or read — a missing marker included, which is how a probe
+ * that runs after the writer's unlink learns the install is over WITHOUT
+ * re-creating the file (see {@link lockHeldOn}).
+ *
+ * One descriptor serves both the read and the lock probe, so the two halves
+ * describe one inode: reading the path and then locking it by name can judge a
+ * marker the writer replaced in between.
+ * @param {string} markerPath
+ * @returns {{ lines: string[], lockHeld: boolean | null } | null}
+ */
+function readSetupMarker(markerPath) {
+  let fd;
+  try {
+    fd = openSync(markerPath, "r");
+  } catch {
+    return null;
+  }
+  try {
+    let raw;
+    try {
+      raw = readFileSync(fd, "utf8");
+    } catch {
+      // EISDIR and kin: opened but unreadable, the same answer as unopenable.
+      return null;
+    }
+    const lines = raw.split("\n").map((line) => line.trim());
+    return {
+      lines,
+      lockHeld: lines.includes(SETUP_LOCK_DECLARATION) ? lockHeldOn(fd) : null,
+    };
+  } finally {
+    closeSync(fd);
+  }
 }
 
 /**
@@ -826,18 +872,10 @@ function markerLockHeld(markerPath) {
  */
 export function setupRunning(markerPath) {
   if (!markerIsTrusted(markerPath)) return false;
-  let raw;
-  try {
-    raw = readFileSync(/** @type {string} */ (markerPath), "utf8");
-  } catch {
-    return false;
-  }
-  const lines = raw.split("\n").map((line) => line.trim());
-  if (lines.includes(SETUP_LOCK_DECLARATION)) {
-    const held = markerLockHeld(/** @type {string} */ (markerPath));
-    if (held !== null) return held;
-  }
-  const pid = parseInt(lines[0], 10);
+  const marker = readSetupMarker(/** @type {string} */ (markerPath));
+  if (marker === null) return false;
+  if (marker.lockHeld !== null) return marker.lockHeld;
+  const pid = parseInt(marker.lines[0], 10);
   if (!Number.isInteger(pid) || pid <= 0) return false;
   try {
     process.kill(pid, 0);
@@ -870,20 +908,12 @@ export function setupRunning(markerPath) {
  */
 export function probeSetupAlive(markerPath) {
   if (markerPath === null) return true;
-  let raw;
-  try {
-    raw = readFileSync(markerPath, "utf8");
-  } catch {
-    return true;
-  }
-  const lines = raw.split("\n").map((line) => line.trim());
-  if (lines.includes(SETUP_LOCK_DECLARATION)) {
-    const held = markerLockHeld(markerPath);
-    // null only: a host without flock(1) still gets the pid reading below rather
-    // than an answer this probe cannot support.
-    if (held !== null) return held;
-  }
-  const pid = parseInt(lines[0], 10);
+  const marker = readSetupMarker(markerPath);
+  if (marker === null) return true;
+  // null only: a host without flock(1) still gets the pid reading below rather
+  // than an answer this probe cannot support.
+  if (marker.lockHeld !== null) return marker.lockHeld;
+  const pid = parseInt(marker.lines[0], 10);
   if (!Number.isInteger(pid) || pid <= 0) return true;
   try {
     process.kill(pid, 0);

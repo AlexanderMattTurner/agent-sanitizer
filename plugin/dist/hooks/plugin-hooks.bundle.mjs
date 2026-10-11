@@ -386,38 +386,47 @@ function hookgateMarkerPath(projectDir = process.env.CLAUDE_PROJECT_DIR, runtime
   const flattened = projectDir.replace(/[^A-Za-z0-9]/g, "_");
   return `${base}/${HOOKGATE_MARKER_STEM}${flattened}-${digest}`;
 }
-function markerLockHeld(markerPath) {
-  const probe = spawnSync(
-    "flock",
-    ["--nonblock", "--exclusive", markerPath, "true"],
-    { stdio: "ignore" }
-  );
+function lockHeldOn(fd) {
+  const probe = spawnSync("flock", ["--nonblock", "--exclusive", "3"], {
+    stdio: ["ignore", "ignore", "ignore", fd]
+  });
   if (probe.error) return null;
   if (probe.status === 0) return false;
   if (probe.status === 1) return true;
   return null;
 }
+function readSetupMarker(markerPath) {
+  let fd;
+  try {
+    fd = openSync(markerPath, "r");
+  } catch {
+    return null;
+  }
+  try {
+    let raw;
+    try {
+      raw = readFileSync2(fd, "utf8");
+    } catch {
+      return null;
+    }
+    const lines = raw.split("\n").map((line) => line.trim());
+    return {
+      lines,
+      lockHeld: lines.includes(SETUP_LOCK_DECLARATION) ? lockHeldOn(fd) : null
+    };
+  } finally {
+    closeSync(fd);
+  }
+}
 function setupRunning(markerPath) {
   if (!markerIsTrusted(markerPath)) return false;
-  let raw;
-  try {
-    raw = readFileSync2(
-      /** @type {string} */
-      markerPath,
-      "utf8"
-    );
-  } catch {
-    return false;
-  }
-  const lines = raw.split("\n").map((line) => line.trim());
-  if (lines.includes(SETUP_LOCK_DECLARATION)) {
-    const held = markerLockHeld(
-      /** @type {string} */
-      markerPath
-    );
-    if (held !== null) return held;
-  }
-  const pid = parseInt(lines[0], 10);
+  const marker2 = readSetupMarker(
+    /** @type {string} */
+    markerPath
+  );
+  if (marker2 === null) return false;
+  if (marker2.lockHeld !== null) return marker2.lockHeld;
+  const pid = parseInt(marker2.lines[0], 10);
   if (!Number.isInteger(pid) || pid <= 0) return false;
   try {
     process.kill(pid, 0);
@@ -431,18 +440,10 @@ function setupRunning(markerPath) {
 }
 function probeSetupAlive(markerPath) {
   if (markerPath === null) return true;
-  let raw;
-  try {
-    raw = readFileSync2(markerPath, "utf8");
-  } catch {
-    return true;
-  }
-  const lines = raw.split("\n").map((line) => line.trim());
-  if (lines.includes(SETUP_LOCK_DECLARATION)) {
-    const held = markerLockHeld(markerPath);
-    if (held !== null) return held;
-  }
-  const pid = parseInt(lines[0], 10);
+  const marker2 = readSetupMarker(markerPath);
+  if (marker2 === null) return true;
+  if (marker2.lockHeld !== null) return marker2.lockHeld;
+  const pid = parseInt(marker2.lines[0], 10);
   if (!Number.isInteger(pid) || pid <= 0) return true;
   try {
     process.kill(pid, 0);
