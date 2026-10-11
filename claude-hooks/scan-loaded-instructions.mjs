@@ -194,7 +194,8 @@ export function scanLoadedFile(
     // `false` means cleanFile re-scanned and found nothing to strip — the file
     // changed under us, or the flagged run is one the stripper preserves. Either
     // way the payload this run flagged is still on disk, so it is not cleaned.
-    if (clean(filePath)) return { report, cleaned: true, reason: null };
+    if (clean(filePath, { root: projectDir }))
+      return { report, cleaned: true, reason: null };
     return {
       report,
       cleaned: false,

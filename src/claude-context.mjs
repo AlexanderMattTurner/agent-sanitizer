@@ -20,7 +20,7 @@
  * with the hook that walks it, or a plugin built against an older pin prunes the
  * wrong directories while believing it scanned everything.
  */
-import { dirname, isAbsolute, join, relative, resolve } from "node:path";
+import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 
 // One row of the kind table. Both flags default to the conservative answer —
 // this kind is not on the ancestor chain, and no event announces it — so a row
@@ -199,23 +199,28 @@ export function ancestorInstructionFiles(dir) {
 }
 
 /**
- * Whether `file` lives inside `dir`. Lexical, on already-absolute paths, and the
- * bound on where an instruction-file scanner may REWRITE: a file above the scan
- * root is shared with every other project beneath that root, so it is reported
- * rather than silently edited. Both scanners ask this — one for a target it
- * globbed, one for a path an event handed it — and a copy each is a copy that
- * can drift into rewriting a file the other would not.
+ * Whether `file` lives strictly inside `dir` — the ONE containment predicate:
+ * both scanners gate their auto-clean on it, the glob walk keeps a match by it,
+ * and cleanFile refuses a write it rejects. A file above the scan root is
+ * shared with every other project beneath that root, so it is reported rather
+ * than silently edited.
  *
- * Symlinks are deliberately not resolved: the guard that stops a link from
- * redirecting the write has to live at the write itself (cleanFile opens
- * O_NOFOLLOW), and resolving here would only duplicate it a check too early.
+ * Lexical on the paths it is handed. Where a WRITE lands, cleanFile hands it
+ * realpaths, which is what stops a directory symlink inside the tree from
+ * redirecting the rewrite out of it. `..` is tested as a whole SEGMENT, so a
+ * child named `..notes.md` is inside and `../x` is not.
  * @param {string} dir
  * @param {string} file
  * @returns {boolean}
  */
 export function isInsideDir(dir, file) {
   const rel = relative(dir, file);
-  return rel !== "" && !rel.startsWith("..") && !isAbsolute(rel);
+  return (
+    rel !== "" &&
+    rel !== ".." &&
+    !rel.startsWith(`..${sep}`) &&
+    !isAbsolute(rel)
+  );
 }
 
 /**

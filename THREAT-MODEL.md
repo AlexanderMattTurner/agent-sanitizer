@@ -410,7 +410,9 @@ set**), which bypasses a tool-output sanitizer entirely. It flags long invisible
 runs, decodes the two common smuggling encodings (Unicode **tag** characters →
 ASCII, zero-width **binary**), and catches scattered payloads below the long-run
 threshold. `cleanFile` strips the payload in place (Layer-1 strip), failing loud
-if a contaminated file cannot be rewritten.
+if a contaminated file cannot be rewritten or its realpath lies outside the
+caller's `root` (a directory symlink in the tree cannot carry the rewrite out of
+it).
 
 As Claude Code hooks the coverage is split to match how Claude Code loads these
 files, and `src/claude-context.mjs` is where the split is defined: one table of

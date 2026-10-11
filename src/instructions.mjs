@@ -36,14 +36,14 @@ import {
   constants,
 } from "node:fs";
 import { randomBytes } from "node:crypto";
-import { join, relative, resolve, isAbsolute, dirname, sep } from "node:path";
+import { basename, join, relative, resolve, dirname, sep } from "node:path";
 import {
   findLongRuns,
   SCATTERED_THRESHOLD,
   countPayloadInvisible,
   stripInvisible,
 } from "./invisible.mjs";
-import { excludeNodeModules } from "./claude-context.mjs";
+import { excludeNodeModules, isInsideDir } from "./claude-context.mjs";
 
 // The library's public door onto Claude Code's context scope. The definitions
 // live in a dependency-free data module because the SessionStart hook imports
@@ -274,21 +274,41 @@ export function scanText(content) {
 }
 
 /**
- * True when `realChild` is `realRoot` itself or lives beneath it. Both inputs
- * must already be realpath-resolved absolute paths. Containment is tested with
- * `relative(root, child)`: the result is "" when they are the same path, and
- * for a true descendant it is a forward path with no `..` segment and is not
- * itself absolute — so a sibling like `/proj-evil` (relative => `../proj-evil`)
- * is correctly rejected.
- * @param {string} realRoot
- * @param {string} realChild
+ * True when `child` is `root` itself or lives beneath it: {@link isInsideDir},
+ * the one containment predicate, widened by the root itself (a glob can match
+ * the scan root; a write never targets it).
+ * @param {string} root
+ * @param {string} child
  * @returns {boolean}
  */
-function isContained(realRoot, realChild) {
-  const rel = relative(realRoot, realChild);
-  return (
-    rel === "" ||
-    (!rel.startsWith(`..${sep}`) && rel !== ".." && !isAbsolute(rel))
+function isContained(root, child) {
+  return relative(root, child) === "" || isInsideDir(root, child);
+}
+
+/**
+ * The path a write to `absPath` may use, proven inside `root`: the realpath of
+ * its DIRECTORY joined with its own name, checked by {@link isInsideDir}
+ * against the realpath of `root`. Resolving the directory is what catches a
+ * directory symlink in the tree (`.claude/rules -> ~/.claude/rules`) that would
+ * otherwise carry the rewrite out of it; the final component is left
+ * unresolved so cleanFile's `O_NOFOLLOW` open still refuses a file symlink.
+ * Every later step of the write uses the returned path, never `absPath`.
+ * Throws when the write would land outside `root`.
+ * @param {string} absPath
+ * @param {string} root
+ * @returns {string}
+ */
+function containedWritePath(absPath, root) {
+  const realRoot = realpathSync(root);
+  const target = join(
+    realpathSync(dirname(resolve(absPath))),
+    basename(absPath),
+  );
+  if (isInsideDir(realRoot, target)) return target;
+  throw new Error(
+    `refusing to clean outside the root ${JSON.stringify(
+      realRoot,
+    )}: ${JSON.stringify(absPath)} resolves to ${JSON.stringify(target)}`,
   );
 }
 
@@ -558,20 +578,33 @@ export function atomicReplaceFile(
  * a temp file in the same directory which is then `rename`d over the original
  * (preserving the original file mode), fsync'd for crash-safety.
  *
- * Throws if the file cannot be read or written (the caller decides whether an
- * unwritable contaminated file is fatal or falls back to alerting).
+ * Root containment: the rewrite must land strictly inside `root`, judged on
+ * realpaths (see {@link containedWritePath}). `O_NOFOLLOW` guards only the
+ * final component, so without this a directory symlink in the tree carries the
+ * rewrite to a file outside it. Required, so no caller can write unbounded.
+ *
+ * Throws if the file cannot be read or written, or lies outside `root` (the
+ * caller decides whether an unwritable contaminated file is fatal or falls back
+ * to alerting).
  * @param {string} absPath
- * @param {(path: string) => import("node:fs").Stats} [lstat] injectable
- *   pre-rename recheck stat (fault-injection seam, mirrors
- *   {@link atomicReplaceFile}'s `tmpName`): lets a test drive the concurrent
- *   write/symlink-swap that the TOCTOU guard exists to catch, which is otherwise
- *   unreachable from this fully-synchronous path. Defaults to `lstatSync`.
+ * @param {{ root: string,
+ *   lstat?: (path: string) => import("node:fs").Stats }} options
+ *   `root` bounds the write. `lstat` is the injectable pre-rename recheck stat
+ *   (fault-injection seam, mirrors {@link atomicReplaceFile}'s `tmpName`): it
+ *   lets a test drive the concurrent write/symlink-swap that the TOCTOU guard
+ *   exists to catch, which is otherwise unreachable from this
+ *   fully-synchronous path. Defaults to `lstatSync`.
  * @returns {boolean}
  */
-export function cleanFile(absPath, lstat = lstatSync) {
+export function cleanFile(absPath, { root, lstat = lstatSync }) {
+  if (typeof root !== "string")
+    throw new TypeError(
+      "cleanFile requires options.root, the directory the rewrite must stay inside",
+    );
+  const path = containedWritePath(absPath, root);
   let fd;
   try {
-    fd = openSync(absPath, constants.O_RDONLY | constants.O_NOFOLLOW);
+    fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW);
   } catch (err) {
     // O_NOFOLLOW on a symlink fails ELOOP (some libc report EMLINK); surface
     // the same "regular files only" contract the old lstat check did. Other
@@ -613,7 +646,7 @@ export function cleanFile(absPath, lstat = lstatSync) {
     // Re-verify the on-path file against the open-time snapshot before writing:
     // an inode/size/mtime change (or a swap to a symlink) means someone modified
     // it under us, so fail loud rather than clobber their write (lost update).
-    const after = lstat(absPath);
+    const after = lstat(path);
     if (
       after.isSymbolicLink() ||
       after.ino !== before.ino ||
@@ -627,7 +660,7 @@ export function cleanFile(absPath, lstat = lstatSync) {
       );
     // `before.mode` is the opened regular file's mode. A crash before the rename
     // leaves the original intact; after it the new content is fully present.
-    atomicReplaceFile(absPath, stripped, before.mode);
+    atomicReplaceFile(path, stripped, before.mode);
     return true;
   } finally {
     closeSync(fd);

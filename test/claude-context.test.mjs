@@ -115,6 +115,10 @@ describe("the exported Claude Code context scope", () => {
     // root itself is not a file this decides about.
     assert.equal(isInsideDir(root, `${root}-other${sep}CLAUDE.md`), false);
     assert.equal(isInsideDir(root, root), false);
+    // `..` is a segment, not a prefix: a dot-dot-led NAME is inside.
+    assert.equal(isInsideDir(root, join(root, "..notes.md")), true);
+    assert.equal(isInsideDir(root, join(root, "..", "x.md")), false);
+    assert.equal(isInsideDir(root, join(root, "..")), false);
   });
 
   it("keeps pruning node_modules when a caller supplies its own exclude", () => {

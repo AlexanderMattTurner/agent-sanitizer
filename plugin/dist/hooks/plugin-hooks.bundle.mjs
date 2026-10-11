@@ -10770,7 +10770,7 @@ var require_util = __commonJS({
         }
         path2 = url.path;
       }
-      var isAbsolute3 = exports.isAbsolute(path2);
+      var isAbsolute2 = exports.isAbsolute(path2);
       var parts2 = [];
       var start = 0;
       var i = 0;
@@ -10805,7 +10805,7 @@ var require_util = __commonJS({
       }
       path2 = parts2.join("/");
       if (path2 === "") {
-        path2 = isAbsolute3 ? "/" : ".";
+        path2 = isAbsolute2 ? "/" : ".";
       }
       if (url) {
         url.path = path2;
@@ -12552,10 +12552,10 @@ var init_lib4 = __esm({
        * @returns {undefined}
        *   Nothing.
        */
-      set basename(basename2) {
-        assertNonEmpty(basename2, "basename");
-        assertPart(basename2, "basename");
-        this.path = default2.join(this.dirname || "", basename2);
+      set basename(basename3) {
+        assertNonEmpty(basename3, "basename");
+        assertPart(basename3, "basename");
+        this.path = default2.join(this.dirname || "", basename3);
       }
       /**
        * Get the parent path (example: `'~'`).
@@ -47282,7 +47282,7 @@ var init_src = __esm({
 });
 
 // src/claude-context.mjs
-import { dirname as dirname2, isAbsolute, join as join2, relative, resolve } from "node:path";
+import { dirname as dirname2, isAbsolute, join as join2, relative, resolve, sep } from "node:path";
 function kind(shape, name50, { ancestorChain = false, eventNamed = false } = {}) {
   return Object.freeze({ shape, name: name50, ancestorChain, eventNamed });
 }
@@ -47309,7 +47309,7 @@ function ancestorInstructionFiles(dir) {
 }
 function isInsideDir(dir, file) {
   const rel = relative(dir, file);
-  return rel !== "" && !rel.startsWith("..") && !isAbsolute(rel);
+  return rel !== "" && rel !== ".." && !rel.startsWith(`..${sep}`) && !isAbsolute(rel);
 }
 function excludeNodeModules(entry) {
   return entry.split(/[/\\]/).at(-1) === "node_modules";
@@ -47413,7 +47413,7 @@ var init_claude_context = __esm({
 // src/repo-scope.mjs
 import { execFileSync } from "node:child_process";
 import { realpathSync } from "node:fs";
-import { relative as relative2, resolve as resolve2, sep } from "node:path";
+import { relative as relative2, resolve as resolve2, sep as sep2 } from "node:path";
 function askGit(run, args, dir) {
   try {
     return run("git", args, dir);
@@ -47450,7 +47450,7 @@ function nestedWorktrees(dir, run) {
   const out = askGit(run, [...WORKTREE_LIST_ARGS], dir);
   if (out === null) return [];
   const root2 = realpathSync(dir);
-  return parseWorktreeList(out).map((path2) => resolve2(path2)).filter((path2) => isInsideDir(root2, path2)).map((path2) => relative2(root2, path2).split(sep).join("/"));
+  return parseWorktreeList(out).map((path2) => resolve2(path2)).filter((path2) => isInsideDir(root2, path2)).map((path2) => relative2(root2, path2).split(sep2).join("/"));
 }
 function repoPrunedDirs(dir, { ignoredDirs = true, run } = {}) {
   const key = `${resolve2(dir)}\0${ignoredDirs}`;
@@ -47532,7 +47532,7 @@ import {
   constants
 } from "node:fs";
 import { randomBytes } from "node:crypto";
-import { join as join3, relative as relative3, resolve as resolve3, isAbsolute as isAbsolute2, dirname as dirname3, sep as sep2 } from "node:path";
+import { basename, join as join3, relative as relative3, resolve as resolve3, dirname as dirname3, sep as sep3 } from "node:path";
 function zeroWidthBits(cps) {
   let bits = "";
   for (const cp of cps) {
@@ -47621,9 +47621,21 @@ function scanText(content3) {
   }
   return findings;
 }
-function isContained(realRoot, realChild) {
-  const rel = relative3(realRoot, realChild);
-  return rel === "" || !rel.startsWith(`..${sep2}`) && rel !== ".." && !isAbsolute2(rel);
+function isContained(root2, child) {
+  return relative3(root2, child) === "" || isInsideDir(root2, child);
+}
+function containedWritePath(absPath, root2) {
+  const realRoot = realpathSync2(root2);
+  const target = join3(
+    realpathSync2(dirname3(resolve3(absPath))),
+    basename(absPath)
+  );
+  if (isInsideDir(realRoot, target)) return target;
+  throw new Error(
+    `refusing to clean outside the root ${JSON.stringify(
+      realRoot
+    )}: ${JSON.stringify(absPath)} resolves to ${JSON.stringify(target)}`
+  );
 }
 function keepContained(absPath, realRoot, literalRoot, pattern) {
   let real;
@@ -47649,7 +47661,7 @@ function walkContextGlobs(globs, cwd, exclude) {
     cwd,
     withFileTypes: true,
     exclude: (dirent) => {
-      const entry = relative3(root2, absolute(dirent)).split(sep2).join("/");
+      const entry = relative3(root2, absolute(dirent)).split(sep3).join("/");
       return excludeNodeModules(entry) || (exclude?.(entry) ?? false);
     }
   }).map(absolute);
@@ -47707,10 +47719,15 @@ function atomicReplaceFile(absPath, data, mode, tmpName = () => `.${randomBytes(
     closeSync2(dirFd);
   }
 }
-function cleanFile(absPath, lstat = lstatSync2) {
+function cleanFile(absPath, { root: root2, lstat = lstatSync2 }) {
+  if (typeof root2 !== "string")
+    throw new TypeError(
+      "cleanFile requires options.root, the directory the rewrite must stay inside"
+    );
+  const path2 = containedWritePath(absPath, root2);
   let fd;
   try {
-    fd = openSync2(absPath, constants.O_RDONLY | constants.O_NOFOLLOW);
+    fd = openSync2(path2, constants.O_RDONLY | constants.O_NOFOLLOW);
   } catch (err) {
     const code4 = (
       /** @type {NodeJS.ErrnoException} */
@@ -47743,14 +47760,14 @@ function cleanFile(absPath, lstat = lstatSync2) {
       );
     if (scanText(original).length === 0) return false;
     const stripped = stripInvisible(original);
-    const after = lstat(absPath);
+    const after = lstat(path2);
     if (after.isSymbolicLink() || after.ino !== before.ino || after.size !== before.size || after.mtimeMs !== before.mtimeMs)
       throw new Error(
         `instruction file changed between read and write, refusing to clobber (possible concurrent write or symlink swap): ${JSON.stringify(
           absPath
         )}`
       );
-    atomicReplaceFile(absPath, stripped, before.mode);
+    atomicReplaceFile(path2, stripped, before.mode);
     return true;
   } finally {
     closeSync2(fd);
@@ -48406,7 +48423,7 @@ import {
   statSync
 } from "node:fs";
 import { randomBytes as randomBytes2 } from "node:crypto";
-import { basename, join as join4 } from "node:path";
+import { basename as basename2, join as join4 } from "node:path";
 import { homedir, tmpdir, userInfo as userInfo2 } from "node:os";
 function sessionPrefix(sessionId) {
   const key = (sessionId ?? "").replace(/[^A-Za-z0-9._-]/gu, "_") || "no-session";
@@ -48445,8 +48462,8 @@ function dirIsTrusted(path2) {
 }
 function sweepStaleSessions(sessionId) {
   const dir = tmpdir();
-  const prefix = `${basename(ALERT_BASE)}.s-`;
-  const keep = basename(sessionPrefix(sessionId));
+  const prefix = `${basename2(ALERT_BASE)}.s-`;
+  const keep = basename2(sessionPrefix(sessionId));
   const cutoff = Date.now() - MARKER_TTL_MS;
   for (const name50 of readdirSync(dir)) {
     if (!name50.startsWith(prefix)) continue;
@@ -49438,7 +49455,7 @@ import {
   constants as constants2
 } from "node:fs";
 import { tmpdir as tmpdir4, userInfo as userInfo4 } from "node:os";
-import { join as join8, resolve as resolve4, sep as sep3 } from "node:path";
+import { join as join8, resolve as resolve4, sep as sep4 } from "node:path";
 function revealDir() {
   return process.env._AGENT_SANITIZER_REVEAL_DIR || join8(tmpdir4(), `agent-sanitizer-layer2-reveal-${PROJECT_HASH}`);
 }
@@ -49551,7 +49568,7 @@ function isRevealRead(toolName, toolInput) {
     return false;
   const dir = resolve4(revealDir());
   const target = resolve4(toolInput.file_path);
-  return target === dir || target.startsWith(dir + sep3);
+  return target === dir || target.startsWith(dir + sep4);
 }
 var REVEAL_TTL_MS, SPAN_KEY_RE, SPAN_ROUNDTRIP_NOTICE, REVEAL_READ_ENVELOPE;
 var init_reveal = __esm({
@@ -51459,7 +51476,7 @@ function autoCleanFindings(allFindings, dir) {
     const absPath = resolve5(dir, file);
     if (!isInsideDir(dir, absPath)) continue;
     try {
-      if (cleanFile2(absPath)) cleaned++;
+      if (cleanFile2(absPath, { root: dir })) cleaned++;
     } catch (err) {
       if (err instanceof TypeError) throw err;
       process.stderr.write(
@@ -51589,7 +51606,8 @@ function scanLoadedFile(filePath, { projectDir = PROJECT_DIR, clean = cleanFile3
       reason: "it lives outside this project, so this hook does not rewrite it"
     };
   try {
-    if (clean(filePath)) return { report, cleaned: true, reason: null };
+    if (clean(filePath, { root: projectDir }))
+      return { report, cleaned: true, reason: null };
     return {
       report,
       cleaned: false,
