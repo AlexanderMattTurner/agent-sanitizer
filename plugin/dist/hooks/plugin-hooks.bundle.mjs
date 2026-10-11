@@ -3362,24 +3362,32 @@ function scanControlString(text5, start) {
   }
   return { end: text5.length, kind: kind2 };
 }
+function sequenceEnd(text5, i, finalRe) {
+  if (i >= text5.length) return -1;
+  if (finalRe.test(text5[i]) || SEQUENCE_CANCEL.includes(text5.charCodeAt(i)))
+    return i + 1;
+  return INTRODUCER_RE.test(text5[i]) ? i : -1;
+}
 function scanCsi(text5, start) {
   const code4 = text5.charCodeAt(start);
   let i;
   if (code4 === CSI_C1) i = start + 1;
   else if (code4 === ESC && text5[start + 1] === "[") i = start + 2;
   else return -1;
-  while (i < text5.length && CSI_PARAM_RE.test(text5[i])) i++;
-  while (i < text5.length && CSI_INTERMEDIATE_RE.test(text5[i])) i++;
-  if (i < text5.length && CSI_FINAL_RE.test(text5[i])) return i + 1;
-  return -1;
+  while (i < text5.length && CSI_BODY_RE.test(text5[i])) i++;
+  return sequenceEnd(text5, i, CSI_FINAL_RE);
 }
 function scanEscape(text5, start) {
   if (text5.charCodeAt(start) !== ESC) return -1;
   let i = start + 1;
-  while (i < text5.length && ESC_INTRO_RE.test(text5[i])) i++;
-  while (i < text5.length && ESC_PARAM_RE.test(text5[i])) i++;
-  if (i < text5.length && ESC_FINAL_RE.test(text5[i])) return i + 1;
-  return -1;
+  while (i < text5.length && ESC_INTERMEDIATE_RE.test(text5[i])) i++;
+  if (i > start + 1) return sequenceEnd(text5, i, ESC_FINAL_RE);
+  if (i >= text5.length) return -1;
+  const directEnd = ESC_DIRECT_FINAL_RE.test(text5[i]) || SEQUENCE_CANCEL.includes(text5.charCodeAt(i));
+  return directEnd ? i + 1 : -1;
+}
+function isCancelledOrphan(text5, token) {
+  return isOrphanKind(token.kind) && token.end < text5.length && INTRODUCER_RE.test(text5[token.end]);
 }
 function scanAnsi(text5) {
   const tokens = [];
@@ -3418,7 +3426,7 @@ function sgrConcealState(token, concealed) {
   }
   return state;
 }
-var CONTROL_INTRODUCER_CODEPOINTS, CONTROL_INTRODUCER_SOURCE, SGR_SOURCE, SGR_RE, SGR_ANCHORED_RE, CSI_PARAM_CLASS, CSI_PARAM_RE, CSI_INTERMEDIATE_CLASS, CSI_INTERMEDIATE_RE, CSI_FINAL_CLASS, CSI_FINAL_RE, ESC_INTRO_CLASS, ESC_INTRO_RE, ESC_PARAM_CLASS, ESC_PARAM_RE, ESC_FINAL_CLASS, ESC_FINAL_RE, ESC, CSI_C1, ST_C1, BEL, CAN, SUB, LF, CR, STRING_INTRO_7BIT, OSC_7BIT, OSC_C1, STRING_INTRO_C1, ESCAPE_SEQUENCE_SOURCE, SGR_RESET, SGR_CONCEAL, SGR_REVEAL, SGR_EXTENDED_COLOUR, SGR_COLOUR_ARGS, TOKEN_KIND, INTRODUCER_SCAN_RE;
+var CONTROL_INTRODUCER_CODEPOINTS, CONTROL_INTRODUCER_SOURCE, SGR_SOURCE, SGR_RE, SGR_ANCHORED_RE, CSI_BODY_CLASS, CSI_BODY_RE, CSI_FINAL_CLASS, CSI_FINAL_RE, ESC, CSI_C1, ST_C1, BEL, CAN, SUB, LF, CR, SEQUENCE_CANCEL, INTRODUCER_RE, STRING_INTRO_7BIT, OSC_7BIT, OSC_C1, STRING_INTRO_C1, ESC_INTERMEDIATE_CLASS, ESC_INTERMEDIATE_RE, ESC_FINAL_CLASS, ESC_FINAL_RE, ESC_DIRECT_FINAL_CLASS, ESC_DIRECT_FINAL_RE, ESCAPE_SEQUENCE_SOURCE, SGR_RESET, SGR_CONCEAL, SGR_REVEAL, SGR_EXTENDED_COLOUR, SGR_COLOUR_ARGS, TOKEN_KIND, INTRODUCER_SCAN_RE;
 var init_ansi = __esm({
   "src/ansi.mjs"() {
     "use strict";
@@ -3432,18 +3440,10 @@ var init_ansi = __esm({
     SGR_SOURCE = "(?:\\u001b\\[|\\u009b)[0-9;:]*m";
     SGR_RE = new RegExp(SGR_SOURCE, "g");
     SGR_ANCHORED_RE = new RegExp(`^${SGR_SOURCE}$`);
-    CSI_PARAM_CLASS = "[0-?]";
-    CSI_PARAM_RE = new RegExp(CSI_PARAM_CLASS);
-    CSI_INTERMEDIATE_CLASS = "[ -/]";
-    CSI_INTERMEDIATE_RE = new RegExp(CSI_INTERMEDIATE_CLASS);
+    CSI_BODY_CLASS = "[ -?]";
+    CSI_BODY_RE = new RegExp(CSI_BODY_CLASS);
     CSI_FINAL_CLASS = "[@-~]";
     CSI_FINAL_RE = new RegExp(CSI_FINAL_CLASS);
-    ESC_INTRO_CLASS = "[()#;?]";
-    ESC_INTRO_RE = new RegExp(ESC_INTRO_CLASS);
-    ESC_PARAM_CLASS = "[0-9;:]";
-    ESC_PARAM_RE = new RegExp(ESC_PARAM_CLASS);
-    ESC_FINAL_CLASS = "[A-PR-TZcf-nqrty~]";
-    ESC_FINAL_RE = new RegExp(ESC_FINAL_CLASS);
     ESC = 27;
     CSI_C1 = 155;
     ST_C1 = 156;
@@ -3452,10 +3452,22 @@ var init_ansi = __esm({
     SUB = 26;
     LF = 10;
     CR = 13;
+    SEQUENCE_CANCEL = [CAN, SUB];
+    INTRODUCER_RE = new RegExp(CONTROL_INTRODUCER_SOURCE);
     STRING_INTRO_7BIT = "]PX^_";
     OSC_7BIT = "]";
     OSC_C1 = 157;
     STRING_INTRO_C1 = /* @__PURE__ */ new Set([144, 152, OSC_C1, 158, 159]);
+    ESC_INTERMEDIATE_CLASS = "[ -/]";
+    ESC_INTERMEDIATE_RE = new RegExp(ESC_INTERMEDIATE_CLASS);
+    ESC_FINAL_CLASS = "[0-~]";
+    ESC_FINAL_RE = new RegExp(ESC_FINAL_CLASS);
+    ESC_DIRECT_FINAL_CLASS = charClass(
+      Array.from({ length: 126 - 48 + 1 }, (_, i) => 48 + i).filter(
+        (cp) => !`[${STRING_INTRO_7BIT}`.includes(String.fromCharCode(cp))
+      )
+    );
+    ESC_DIRECT_FINAL_RE = new RegExp(ESC_DIRECT_FINAL_CLASS);
     ESCAPE_SEQUENCE_SOURCE = (() => {
       const introducer7Bit = `${unicodeEscape(ESC)}${charClass(
         [...STRING_INTRO_7BIT].map((ch) => ch.charCodeAt(0))
@@ -3467,9 +3479,11 @@ var init_ansi = __esm({
       const escapeSt = `${unicodeEscape(ESC)}${unicodeEscape(92)}`;
       const terminator = `(?:${charClass(consumed)}|${escapeSt}|(?=${charClass(abortBefore)})|(?![\\s\\S]))`;
       const stringArm = `(?:${introducer7Bit}|${charClass(c1Introducers)})${body}${terminator}`;
-      const csiArm = `(?:${unicodeEscape(ESC)}\\[|${unicodeEscape(CSI_C1)})${CSI_PARAM_CLASS}*${CSI_INTERMEDIATE_CLASS}*${CSI_FINAL_CLASS}`;
-      const escapeArm = `${unicodeEscape(ESC)}${ESC_INTRO_CLASS}*(?!${ESC_INTRO_CLASS})${ESC_PARAM_CLASS}*${ESC_FINAL_CLASS}`;
-      return `(?:${stringArm}|${csiArm}|${escapeArm})`;
+      const ending = (finalClass) => `(?:${finalClass}|${charClass(SEQUENCE_CANCEL)}|(?=${CONTROL_INTRODUCER_SOURCE}))`;
+      const csiArm = `(?:${unicodeEscape(ESC)}\\[|${unicodeEscape(CSI_C1)})${CSI_BODY_CLASS}*${ending(CSI_FINAL_CLASS)}`;
+      const escapeArm = `${unicodeEscape(ESC)}(?:${ESC_INTERMEDIATE_CLASS}+${ending(ESC_FINAL_CLASS)}|${ESC_DIRECT_FINAL_CLASS}|${charClass(SEQUENCE_CANCEL)})`;
+      const cancelledArm = `${CONTROL_INTRODUCER_SOURCE}(?=${CONTROL_INTRODUCER_SOURCE})`;
+      return `(?:${stringArm}|${csiArm}|${escapeArm}|${cancelledArm})`;
     })();
     SGR_RESET = 0;
     SGR_CONCEAL = 8;
@@ -3505,9 +3519,9 @@ var init_ansi = __esm({
       /**
        * A 7-bit `ESC` that OPENS a CSI (`ESC [`) it never completes. Split from
        * {@link TOKEN_KIND.ORPHAN} because a terminal's CSI parser is STATEFUL: it
-       * keeps consuming what follows as parameters and intermediates until a final
-       * byte (0x40-0x7E) arrives, so `hello ESC[12 world` renders as `hello orld`
-       * — the ` w` is eaten as the sequence's intermediate and final. That is the
+       * executes a line break and keeps waiting for a final byte (0x40-0x7E), so
+       * `hello ESC[12` + LF + `world` renders `orld` on the second line — the `w`
+       * is eaten as the sequence's final. That is the
        * model-sees/human-sees divergence the gate exists for, so consumers that
        * downgrade an inert strip to a note must keep warning on this one; only a
        * lone `ESC` that opens nothing is inert.
@@ -4235,26 +4249,17 @@ function sweepIntroducers(text5, kinds) {
     return "";
   });
 }
-function stripAnsiOnce(text5, kinds) {
+function stripAnsiFully(input, kinds) {
   let out = "";
   let last = 0;
-  for (const token of scanAnsi(text5)) {
-    if (isOrphanKind(token.kind)) continue;
+  for (const token of scanAnsi(input)) {
+    if (isOrphanKind(token.kind) && !isCancelledOrphan(input, token)) continue;
     kinds?.add(token.kind);
-    out += text5.slice(last, token.start);
+    out += input.slice(last, token.start);
     last = token.end;
   }
-  if (last === 0) return text5;
-  return out + text5.slice(last);
-}
-function stripAnsiFully(input, kinds) {
-  let prev = input;
-  let out = stripAnsiOnce(prev, kinds);
-  for (let pass = 1; pass < MAX_ANSI_PASSES && out !== prev; pass++) {
-    prev = out;
-    out = stripAnsiOnce(prev, kinds);
-  }
-  return out;
+  if (last === 0) return input;
+  return out + input.slice(last);
 }
 function isBenignAnsiKinds(kinds) {
   return [...kinds].every(
@@ -4322,7 +4327,7 @@ function applyLayer1WellFormed(text5) {
     found: [...result.found, CATEGORY.LONE_SURROGATES]
   };
 }
-var CONTROL_INTRODUCER_RE, LONE_SURROGATE_RE, MAX_ANSI_PASSES, INERT_ANSI_NOTE, SGR_RUN_THRESHOLD, MAX_LAYER1_PASSES;
+var CONTROL_INTRODUCER_RE, LONE_SURROGATE_RE, INERT_ANSI_NOTE, SGR_RUN_THRESHOLD, MAX_LAYER1_PASSES;
 var init_layer1 = __esm({
   "src/layer1.mjs"() {
     "use strict";
@@ -4330,7 +4335,6 @@ var init_layer1 = __esm({
     init_ansi();
     CONTROL_INTRODUCER_RE = new RegExp(CONTROL_INTRODUCER_SOURCE, "g");
     LONE_SURROGATE_RE = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g;
-    MAX_ANSI_PASSES = 3;
     INERT_ANSI_NOTE = "Inert ANSI stripped (display-only colour and/or a stray escape byte that formed no control sequence); pipe through cat -v to inspect raw escapes.";
     SGR_RUN_THRESHOLD = 10;
     MAX_LAYER1_PASSES = 4;
@@ -50628,7 +50632,7 @@ var init_invisible_charset = __esm({
         158,
         159
       ],
-      escape_sequence_pattern: "(?:(?:\\u001b[\\u005d\\u0050\\u0058\\u005e\\u005f]|[\\u0090\\u0098\\u009d\\u009e\\u009f])[^\\u0007\\u000a\\u000d\\u0018\\u001a\\u001b\\u0090\\u0098\\u009c\\u009d\\u009e\\u009f]*(?:[\\u0007\\u0018\\u001a\\u009c]|\\u001b\\u005c|(?=[\\u000a\\u000d\\u001b\\u0090\\u0098\\u009d\\u009e\\u009f])|(?![\\s\\S]))|(?:\\u001b\\[|\\u009b)[0-?]*[ -/]*[@-~]|\\u001b[()#;?]*(?![()#;?])[0-9;:]*[A-PR-TZcf-nqrty~])"
+      escape_sequence_pattern: "(?:(?:\\u001b[\\u005d\\u0050\\u0058\\u005e\\u005f]|[\\u0090\\u0098\\u009d\\u009e\\u009f])[^\\u0007\\u000a\\u000d\\u0018\\u001a\\u001b\\u0090\\u0098\\u009c\\u009d\\u009e\\u009f]*(?:[\\u0007\\u0018\\u001a\\u009c]|\\u001b\\u005c|(?=[\\u000a\\u000d\\u001b\\u0090\\u0098\\u009d\\u009e\\u009f])|(?![\\s\\S]))|(?:\\u001b\\[|\\u009b)[ -?]*(?:[@-~]|[\\u0018\\u001a]|(?=[\\u001b\\u0080\\u0081\\u0082\\u0083\\u0084\\u0085\\u0086\\u0087\\u0088\\u0089\\u008a\\u008b\\u008c\\u008d\\u008e\\u008f\\u0090\\u0091\\u0092\\u0093\\u0094\\u0095\\u0096\\u0097\\u0098\\u0099\\u009a\\u009b\\u009c\\u009d\\u009e\\u009f]))|\\u001b(?:[ -/]+(?:[0-~]|[\\u0018\\u001a]|(?=[\\u001b\\u0080\\u0081\\u0082\\u0083\\u0084\\u0085\\u0086\\u0087\\u0088\\u0089\\u008a\\u008b\\u008c\\u008d\\u008e\\u008f\\u0090\\u0091\\u0092\\u0093\\u0094\\u0095\\u0096\\u0097\\u0098\\u0099\\u009a\\u009b\\u009c\\u009d\\u009e\\u009f]))|[\\u0030\\u0031\\u0032\\u0033\\u0034\\u0035\\u0036\\u0037\\u0038\\u0039\\u003a\\u003b\\u003c\\u003d\\u003e\\u003f\\u0040\\u0041\\u0042\\u0043\\u0044\\u0045\\u0046\\u0047\\u0048\\u0049\\u004a\\u004b\\u004c\\u004d\\u004e\\u004f\\u0051\\u0052\\u0053\\u0054\\u0055\\u0056\\u0057\\u0059\\u005a\\u005c\\u0060\\u0061\\u0062\\u0063\\u0064\\u0065\\u0066\\u0067\\u0068\\u0069\\u006a\\u006b\\u006c\\u006d\\u006e\\u006f\\u0070\\u0071\\u0072\\u0073\\u0074\\u0075\\u0076\\u0077\\u0078\\u0079\\u007a\\u007b\\u007c\\u007d\\u007e]|[\\u0018\\u001a])|[\\u001b\\u0080\\u0081\\u0082\\u0083\\u0084\\u0085\\u0086\\u0087\\u0088\\u0089\\u008a\\u008b\\u008c\\u008d\\u008e\\u008f\\u0090\\u0091\\u0092\\u0093\\u0094\\u0095\\u0096\\u0097\\u0098\\u0099\\u009a\\u009b\\u009c\\u009d\\u009e\\u009f](?=[\\u001b\\u0080\\u0081\\u0082\\u0083\\u0084\\u0085\\u0086\\u0087\\u0088\\u0089\\u008a\\u008b\\u008c\\u008d\\u008e\\u008f\\u0090\\u0091\\u0092\\u0093\\u0094\\u0095\\u0096\\u0097\\u0098\\u0099\\u009a\\u009b\\u009c\\u009d\\u009e\\u009f]))"
     };
   }
 });

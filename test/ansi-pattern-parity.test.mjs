@@ -24,6 +24,7 @@ import fc from "fast-check";
 
 import {
   ESCAPE_SEQUENCE_SOURCE,
+  isCancelledOrphan,
   isOrphanKind,
   scanAnsi,
 } from "../src/ansi.mjs";
@@ -46,12 +47,13 @@ function stripWithPattern(text) {
 }
 
 /** The same strip via the authoritative tokenizer: splice every non-orphan
- * token, leaving orphans to the residual sweep (`stripAnsiOnce`'s body). */
+ * token and every cancelled orphan, leaving the rest to the residual sweep
+ * (`stripAnsiFully`'s body). */
 function stripWithScanner(text) {
   let out = "";
   let last = 0;
   for (const token of scanAnsi(text)) {
-    if (isOrphanKind(token.kind)) continue;
+    if (isOrphanKind(token.kind) && !isCancelledOrphan(text, token)) continue;
     out += text.slice(last, token.start);
     last = token.end;
   }
@@ -138,26 +140,19 @@ const grammarText = fc
   })
   .map((parts) => parts.join(""));
 
-// The spec's CSI language, spelled from ECMA-48 § 5.4 rather than imported, so
-// it is an oracle for the shipped grammar and not a second copy of it.
-const SPEC_CSI_RE = new RegExp(
-  `(?:${ESC}\\[|${CSI})[\\x30-\\x3f]*[\\x20-\\x2f]*[\\x40-\\x7e]`,
+// The sequences a terminal swallows, spelled from the specs rather than imported,
+// so this is an oracle for the shipped grammar and not a second copy of it: a
+// CSI as DEC's parser reads it (every 0x20-0x3F byte, then a 0x40-0x7E final),
+// and an ECMA-35 escape (0x20-0x2F intermediates, then a 0x30-0x7E final; one
+// directly after ESC is not `[`, which opens a CSI instead).
+const TERMINAL_SEQUENCE_RE = new RegExp(
+  `(?:${ESC}\\[|${CSI})[\\x20-\\x3f]*[\\x40-\\x7e]` +
+    `|${ESC}(?:[\\x20-\\x2f]+[\\x30-\\x7e]|(?!\\[)[\\x30-\\x7e])`,
 );
 
-/** Apply one strip until it changes nothing. Unbounded on purpose: the
- * property below is about the grammar, not about Layer 1's pass cap. */
-function toFixedPoint(strip, text) {
-  let previous = text;
-  let next = strip(previous);
-  while (next !== previous) {
-    previous = next;
-    next = strip(previous);
-  }
-  return next;
-}
-
-// Valid CSI sequences the grammar used to miss: a private parameter marker
-// (`<=>`), an intermediate byte, and finals outside the old final class.
+// Sequences a terminal swallows whole that the grammar used to miss: CSI private
+// markers (`<=>`), CSI intermediates, finals outside the old final class, a
+// malformed CSI body DEC's parser still consumes, and ECMA-35 escapes.
 const WIDENED_CSI = [
   ["xterm modifyOtherKeys", `${ESC}[>4;1m`],
   ["private `=` marker", `${ESC}[=5h`],
@@ -171,6 +166,14 @@ const WIDENED_CSI = [
   ["`|` final", `${ESC}[2|`],
   ["DECERA `}`", `${ESC}[1}`],
   ["C1 private marker", `${CSI}>4;1m`],
+  ["malformed CSI (intermediate before parameter)", `${ESC}[(1m`],
+  ["DECSC", `${ESC}7`],
+  ["DECRC", `${ESC}8`],
+  ["DECKPAM", `${ESC}=`],
+  ["DECALN", `${ESC}#8`],
+  ["S7C1T (space intermediate)", `${ESC} F`],
+  ["CSI cancelled by CAN", `${ESC}[12${CAN}`],
+  ["escape cancelled by SUB", `${ESC}(${SUB}`],
 ];
 
 // Every way a control string can end, plus both CSI encodings — the arms the
@@ -189,6 +192,8 @@ const ARMS = [
   ["unterminated at EOF", `${ESC}]dangling`],
   ["CSI", `${ESC}[2J`],
   ["C1 CSI", `${CSI}31m`],
+  ["CSI aborted by ESC", `${ESC}[12 ${ESC}[31m`],
+  ["cancelled ESC", `${ESC}${ESC}[31m`],
   ...WIDENED_CSI,
 ];
 
@@ -232,7 +237,7 @@ describe("the shipped escape pattern and the scanner are one grammar", () => {
     }
   });
 
-  it("removes every ECMA-48 CSI whole, as one `csi` token", () => {
+  it("removes every sequence a terminal swallows, as one `csi` token", () => {
     for (const [name, sequence] of WIDENED_CSI) {
       const input = `A${sequence}Z`;
       assert.equal(stripWithPattern(input), "AZ", `${name} / pattern`);
@@ -245,14 +250,16 @@ describe("the shipped escape pattern and the scanner are one grammar", () => {
     }
   });
 
-  it("leaves no spec-valid CSI in a fixed point of either strip", () => {
+  it("reaches a fixed point in one pass that leaves no terminal sequence", () => {
     fc.assert(
       fc.property(grammarText, (text) => {
         for (const [name, strip] of [
           ["pattern", stripWithPattern],
           ["scanner", stripWithScanner],
         ]) {
-          const residue = SPEC_CSI_RE.exec(toFixedPoint(strip, text));
+          const once = strip(text);
+          assert.equal(strip(once), once, `${name}: a second pass changed it`);
+          const residue = TERMINAL_SEQUENCE_RE.exec(once);
           assert.equal(
             residue,
             null,

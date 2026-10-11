@@ -24,16 +24,11 @@ describe("sanitize: Layer 1 ESC neutralization + idempotency", () => {
       " payload",
     ],
     [
-      // The inner `ESC[32m` goes first; the residue `ESC[ p` is then a whole
-      // CSI (space intermediate, `p` final), which a terminal consumes too.
-      "nested split (residual completes a CSI)",
+      // Once the invisibles go, the outer `ESC[` is aborted by the inner ESC
+      // (a terminal drops it and starts afresh) and `ESC[32m` is a colour.
+      "nested split (aborted outer CSI)",
       `${ESC}${ZW}[${ESC}${ZW}[32m payload`,
-      "ayload",
-    ],
-    [
-      "nested split (incomplete residual)",
-      `${ESC}${ZW}[${ESC}${ZW}[32m\npayload`,
-      "[\npayload",
+      " payload",
     ],
     [
       // Digits are never a valid CSI final byte (ECMA-48 finals are
@@ -45,14 +40,17 @@ describe("sanitize: Layer 1 ESC neutralization + idempotency", () => {
       " payload",
     ],
     [
-      "ANSI removal reconstitutes a sequence",
+      // An ESC directly before another ESC is cancelled: a terminal shows the
+      // `[0m` that follows `ESC[32m` as text, so removing `ESC[32m` must not
+      // join the cancelled ESC to it.
+      "removal never joins a cancelled ESC to later text",
       `${ESC}${ESC}[32m[0m payload`,
-      " payload",
+      "[0m payload",
     ],
     [
-      "doubly nested ANSI reconstitution",
+      "doubly nested cancelled ESCs",
       `${ESC}${ESC}${ESC}[32m[31m[0m payload`,
-      " payload",
+      "[31m[0m payload",
     ],
   ]) {
     it(`reduces to its exact clean text and is idempotent (${name})`, async () => {

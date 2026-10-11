@@ -61,11 +61,11 @@ describe("classifyPrompt: inert ANSI passes with a note", () => {
     // 8-bit C1 CSI SGR (U+009B 31m … U+009B 0m): pure display-only color, just
     // like its 7-bit `ESC[31m` twin, so isSgrOnly classifies it SGR-only → note.
     ["C1 CSI SGR color span", `${C1_CSI}31mhello${C1_CSI}0m`],
-    // A 7-bit ESC that completes no sequence: a log line cut mid-escape, a
-    // stray byte pasted out of a file. It cannot move the cursor, erase, or
-    // open an OSC string — Layer 1 sweeps it and the prompt is usable, so a
-    // BLOCK here is a pure false positive (see isBenignAnsiKinds).
-    ["lone ESC byte (partial sequence)", `hello ${ESC} world`],
+    // A 7-bit ESC that completes no sequence: a log line cut mid-escape. It
+    // cannot move the cursor, erase, or open an OSC string — Layer 1 sweeps it
+    // and the prompt is usable, so a BLOCK here is a pure false positive (see
+    // isBenignAnsiKinds).
+    ["lone ESC byte (partial sequence)", `hello world${ESC}`],
     ["lone ESC between SGR color codes", `${ESC}[31mred${ESC}${ESC}[0m plain`],
   ]) {
     it(`note: ${name}`, () => {
@@ -194,6 +194,10 @@ describe("classifyPrompt: non-SGR ANSI blocks", () => {
     ["APC string", `${ESC}_payload${ESC}\\`],
     ["unterminated APC string", `${ESC}_dangling-payload`],
     ["SGR-lookalike with letter param", `${ESC}[31im`],
+    // ECMA-35 escapes a terminal swallows whole: DECSC saves the cursor so a
+    // later DECRC can overwrite what was printed, and `ESC SP w` eats the `w`.
+    ["DECSC (ESC 7)", `${ESC}7`],
+    ["escape with a space intermediate", `hello ${ESC} world`],
     // An ESC that OPENS a CSI and never finishes it is not inert debris: the
     // terminal's CSI parser keeps consuming until a final byte arrives, so
     // `ESC[12 world` renders as `orld` (the ` w` is eaten as intermediate +

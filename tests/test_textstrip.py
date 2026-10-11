@@ -139,6 +139,18 @@ _ANSI_CASES = [
     ("csi_save_cursor", "a\x1b[sb", "ab"),
     ("csi_restore_cursor", "a\x1b[ub", "ab"),
     ("c1_csi_private_marker", "a\x9b>4;1mb", "ab"),
+    # DEC's parser swallows a malformed CSI body through its final byte too.
+    ("csi_malformed_body", "a\x1b[(1mb", "ab"),
+    # ECMA-35 escapes: intermediates (0x20-0x2F), then a final (0x30-0x7E).
+    ("esc_decsc", "a\x1b7b", "ab"),
+    ("esc_deckpam", "a\x1b=b", "ab"),
+    ("esc_decaln", "a\x1b#8b", "ab"),
+    ("esc_space_intermediate", "a\x1b Fb", "ab"),
+    # Another introducer ABORTS a sequence: a terminal drops the swallowed bytes
+    # and re-reads the introducer, and a cancelled ESC never joins later text.
+    ("csi_aborted_by_esc", "a\x1b[12 \x1b[31mb", "ab"),
+    ("cancelled_esc_never_joins", "\x1b\x1b[32m[0m tail", "[0m tail"),
+    ("csi_cancelled_by_can", "a\x1b[12\x18b", "ab"),
 ]
 
 
@@ -160,39 +172,53 @@ def test_no_raw_esc_survives() -> None:
 
 @pytest.mark.parametrize(
     "sequence",
-    ["\x1b[>4;1m", "\x1b[=5h", "\x1b[1 q", "\x1b[<0;1;1M", "\x1b[s", "\x1b[u"],
+    [
+        "\x1b[>4;1m",
+        "\x1b[=5h",
+        "\x1b[1 q",
+        "\x1b[<0;1;1M",
+        "\x1b[s",
+        "\x1b[u",
+        "\x1b[(1m",
+        "\x1b7",
+        "\x1b=",
+        "\x1b#8",
+    ],
 )
-def test_ansi_re_removes_a_whole_csi(sequence: str) -> None:
+def test_ansi_re_removes_a_whole_sequence(sequence: str) -> None:
     """``ANSI_RE`` alone, with no residual sweep behind it: a stdlib consumer
     that compiles the shipped pattern gets the whole sequence removed."""
     assert ANSI_RE.sub("", sequence) == ""
 
 
-# The spec's CSI language (ECMA-48 § 5.4), spelled here rather than read from
-# the shipped pattern, so it is an oracle for that pattern and not a copy of it.
-_SPEC_CSI_RE = re.compile("(?:\x1b\\[|\x9b)[\x30-\x3f]*[\x20-\x2f]*[\x40-\x7e]")
-_CSI_PIECES = st.sampled_from(
-    ["\x1b", "\x9b", "\x1b]", "\x07", "\x1b\\", "[", "\n", "a", " "]
+# The sequences a terminal swallows, spelled from the specs rather than read from
+# the shipped pattern, so this is an oracle for that pattern and not a copy of
+# it: a CSI as DEC's parser reads it (every 0x20-0x3F byte, then a 0x40-0x7E
+# final) and an ECMA-35 escape (0x20-0x2F intermediates, then a 0x30-0x7E final;
+# one directly after ESC is not `[`, which opens a CSI instead).
+_TERMINAL_SEQUENCE_RE = re.compile(
+    "(?:\x1b\\[|\x9b)[\x20-\x3f]*[\x40-\x7e]"
+    "|\x1b(?:[\x20-\x2f]+[\x30-\x7e]|(?!\\[)[\x30-\x7e])"
+)
+_SEQUENCE_PIECES = st.sampled_from(
+    ["\x1b", "\x9b", "\x1b]", "\x07", "\x1b\\", "[", "\n", "a", " ", "(", "7"]
 ) | st.builds(
     "".join,
     st.tuples(
-        st.sampled_from(["\x1b[", "\x9b"]),
-        st.text(st.characters(min_codepoint=0x30, max_codepoint=0x3F), max_size=4),
-        st.text(st.characters(min_codepoint=0x20, max_codepoint=0x2F), max_size=2),
-        st.characters(min_codepoint=0x40, max_codepoint=0x7E),
+        st.sampled_from(["\x1b[", "\x9b", "\x1b"]),
+        st.text(st.characters(min_codepoint=0x20, max_codepoint=0x3F), max_size=4),
+        st.characters(min_codepoint=0x30, max_codepoint=0x7E),
     ),
 )
 
 
-@given(st.lists(_CSI_PIECES, max_size=24).map("".join))
-def test_no_spec_valid_csi_survives_a_fixed_point(text: str) -> None:
-    """Strip with ``ANSI_RE`` until nothing changes: no ESC/CSI followed by a
-    valid CSI body may remain. Unbounded on purpose — this is a property of the
-    grammar, not of the strip's pass cap."""
-    previous, current = None, text
-    while current != previous:
-        previous, current = current, ANSI_RE.sub("", current)
-    assert _SPEC_CSI_RE.search(current) is None
+@given(st.lists(_SEQUENCE_PIECES, max_size=24).map("".join))
+def test_one_pass_is_a_fixed_point_with_no_terminal_sequence(text: str) -> None:
+    """One ``ANSI_RE`` pass is final: a second pass changes nothing, and no
+    ESC/CSI followed by a sequence a terminal swallows remains."""
+    once = ANSI_RE.sub("", text)
+    assert ANSI_RE.sub("", once) == once
+    assert _TERMINAL_SEQUENCE_RE.search(once) is None
 
 
 # ─── The shipped grammar is an artifact, not an accident ─────────────────────
@@ -218,32 +244,26 @@ def test_pattern_compiles_under_plain_re_with_no_flags() -> None:
     assert ANSI_RE.pattern == pattern
 
 
-def test_pattern_does_not_backtrack_on_a_repartitioning_run() -> None:
+@pytest.mark.parametrize(
+    "bomb",
+    [
+        "\x1b[" + " " * 50_000,
+        "\x9b" + "?" * 50_000,
+        "\x1b" + " " * 50_000,
+        "\x1b[ " * 25_000,
+        "\x1b " * 25_000,
+        "\x1b]" + "x" * 50_000,
+    ],
+    ids=["csi-run", "c1-csi-run", "esc-run", "csi-repeat", "esc-repeat", "osc-run"],
+)
+def test_pattern_is_linear_on_an_unterminated_run(bomb: str) -> None:
     """The generated pattern runs on untrusted input inside a consumer with no
-    timeout, and ``regexploit`` (the repo's static ReDoS analyzer) does not model
-    this shape: two ADJACENT quantified classes that both accept ``;``, which
-    repartition quadratically with no nested quantifier for it to find. What
-    holds the CSI arm linear is the negative lookahead pinning the intro run
-    maximal, so the guard has to be the cost itself.
-
-    The control is DERIVED from the shipped pattern by deleting that lookahead,
-    so it cannot rot into testing some other regex, and the comparison is a ratio
-    on one machine rather than a wall-clock threshold on an unknown runner."""
-    bomb = "\x1b" + ";" * 8000
-    guarded = re.compile(escape_sequence_pattern())
-    unguarded = re.compile(re.sub(r"\(\?!\[[^]]*\]\)", "", escape_sequence_pattern()))
-    assert unguarded.pattern != guarded.pattern, "the lookahead was not found"
-
-    def seconds(compiled: re.Pattern) -> float:
-        start = time.perf_counter()
-        compiled.search(bomb)
-        return time.perf_counter() - start
-
-    fast, slow = seconds(guarded), seconds(unguarded)
-    # Non-vacuity: the input really is a backtracking bomb for the unguarded
-    # form (quadratic — ~4x per doubling of the run), so a pass here means the
-    # lookahead defused it rather than that the input was harmless.
-    assert slow > fast * 20, f"guarded {fast:.4f}s vs unguarded {slow:.4f}s"
+    timeout. Each arm's quantified class is disjoint from what follows it, so a
+    long run with no final byte fails in one pass; a quadratic pattern needs
+    billions of steps on these inputs, far past the bound."""
+    start = time.perf_counter()
+    ANSI_RE.sub("", bomb)
+    assert time.perf_counter() - start < 1.0
 
 
 # ─── Invisible charset completeness (the pinned-SSOT guarantee) ───────────────
