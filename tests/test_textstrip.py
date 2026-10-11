@@ -21,6 +21,7 @@ import re
 import time
 import unicodedata
 import warnings
+from collections.abc import Callable
 
 import pytest
 from hypothesis import given
@@ -244,26 +245,51 @@ def test_pattern_compiles_under_plain_re_with_no_flags() -> None:
     assert ANSI_RE.pattern == pattern
 
 
+def _growth(compiled: re.Pattern, text: Callable[[int], str], n: int) -> float:
+    """How much longer ``compiled`` takes on ``text(8 * n)`` than on ``text(n)``:
+    ~8 when linear, ~64 when quadratic. The best of five runs damps noise."""
+
+    def seconds(subject: str) -> float:
+        best = float("inf")
+        for _ in range(5):
+            start = time.perf_counter()
+            compiled.sub("", subject)
+            best = min(best, time.perf_counter() - start)
+        return best
+
+    return seconds(text(8 * n)) / seconds(text(n))
+
+
+# Between the ~8x of a linear pattern and the ~64x of a quadratic one.
+_LINEAR_GROWTH_BOUND = 24
+
+
 @pytest.mark.parametrize(
-    "bomb",
+    "text",
     [
-        "\x1b[" + " " * 50_000,
-        "\x9b" + "?" * 50_000,
-        "\x1b" + " " * 50_000,
-        "\x1b[ " * 25_000,
-        "\x1b " * 25_000,
-        "\x1b]" + "x" * 50_000,
+        lambda n: "\x1b[" * n,
+        lambda n: "\x9b?" * n,
+        lambda n: "\x1b " * n,
+        lambda n: "\x1b]x" * n,
+        lambda n: "\x1b[" + " " * n,
     ],
-    ids=["csi-run", "c1-csi-run", "esc-run", "csi-repeat", "esc-repeat", "osc-run"],
+    ids=["csi-repeat", "c1-csi-repeat", "esc-repeat", "osc-repeat", "csi-run"],
 )
-def test_pattern_is_linear_on_an_unterminated_run(bomb: str) -> None:
+def test_pattern_is_linear_on_unterminated_runs(text: Callable[[int], str]) -> None:
     """The generated pattern runs on untrusted input inside a consumer with no
     timeout. Each arm's quantified class is disjoint from what follows it, so a
-    long run with no final byte fails in one pass; a quadratic pattern needs
-    billions of steps on these inputs, far past the bound."""
-    start = time.perf_counter()
-    ANSI_RE.sub("", bomb)
-    assert time.perf_counter() - start < 1.0
+    run with no final byte fails in one pass. ``regexploit`` does not flag two
+    adjacent overlapping stars, so the guard is the cost itself: a ratio on one
+    machine, not a wall-clock threshold on an unknown runner."""
+    assert _growth(ANSI_RE, text, 20_000) < _LINEAR_GROWTH_BOUND
+
+
+def test_growth_bound_catches_a_quadratic_pattern() -> None:
+    """Non-vacuity: two adjacent stars over one class, the shape the arms avoid,
+    exceed the bound on an unterminated run."""
+    quadratic = re.compile("\x1b\\[[ -?]*[ -?]*[@-~]")
+    growth = _growth(quadratic, lambda n: "\x1b[" + " " * n, 300)
+    assert growth > _LINEAR_GROWTH_BOUND
 
 
 # ─── Invisible charset completeness (the pinned-SSOT guarantee) ───────────────
