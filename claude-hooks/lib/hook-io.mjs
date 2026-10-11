@@ -9,7 +9,6 @@ import {
   writeFileSync,
 } from "node:fs";
 import { spawnSync } from "node:child_process";
-import { userInfo } from "node:os";
 import { createHash } from "node:crypto";
 import { pathToFileURL } from "node:url";
 import { excludeProvisioning } from "./hook-timing.mjs";
@@ -1022,7 +1021,39 @@ export function markerIsTrusted(path) {
   } catch {
     return false;
   }
-  return st.isFile() && st.uid === userInfo().uid;
+  return st.isFile() && ownedByCurrentUser(st);
+}
+
+/**
+ * This process's real uid, or null on a platform with no POSIX uid model.
+ *
+ * `process.getuid()` and never `os.userInfo().uid`: userInfo() resolves the
+ * uid through the passwd database and THROWS (ENOENT) when the uid has no entry
+ * — the ordinary state of a container started with `--user 54321` — so every
+ * ownership check built on it crashed the hook that asked, and a crashed hook
+ * is non-blocking. The uid is a kernel fact; the passwd name is not needed.
+ *
+ * Null is explicit rather than the -1 userInfo() reports on Windows: callers
+ * test ownership through {@link ownedByCurrentUser}, which reads null as "cannot
+ * prove ownership" — the untrusted side every caller already handles.
+ * @returns {number | null}
+ */
+export function currentUid() {
+  return typeof process.getuid === "function" ? process.getuid() : null;
+}
+
+/**
+ * Whether `st` (an lstat result) is owned by this process's uid. THE ownership
+ * predicate for every $TMPDIR store these hooks trust — a second spelling is how
+ * four call sites came to share the passwd-lookup crash {@link currentUid}
+ * documents. False when the platform has no uid model: ownership that cannot be
+ * proven is not granted.
+ * @param {{ uid: number }} st
+ * @returns {boolean}
+ */
+export function ownedByCurrentUser(st) {
+  const uid = currentUid();
+  return uid !== null && st.uid === uid;
 }
 
 /**

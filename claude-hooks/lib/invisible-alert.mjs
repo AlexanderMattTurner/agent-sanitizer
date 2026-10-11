@@ -21,11 +21,12 @@ import {
 } from "node:fs";
 import { randomBytes } from "node:crypto";
 import { basename, join } from "node:path";
-import { homedir, tmpdir, userInfo } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import {
   hookgateMarkerPath,
   lazyImport,
   markerIsTrusted,
+  ownedByCurrentUser,
   probeSetupAlive,
   PROJECT_DIR,
   PROJECT_HASH,
@@ -220,7 +221,7 @@ function dirIsTrusted(path) {
   } catch {
     return false;
   }
-  return st.isDirectory() && st.uid === userInfo().uid;
+  return st.isDirectory() && ownedByCurrentUser(st);
 }
 
 /**

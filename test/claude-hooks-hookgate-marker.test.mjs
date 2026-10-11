@@ -27,9 +27,17 @@
  */
 import { describe, it, after } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import {
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
+import { parse } from "acorn";
 
 const { configureHookgateMarker, hookgateMarkerPath, markerIsTrusted } =
   await import("../claude-hooks/lib/hook-io.mjs");
@@ -90,6 +98,107 @@ describe("configureHookgateMarker", () => {
     // The late call still governs every LATER resolution — the warning names
     // what it could not reach, it does not discard the override.
     assert.equal(hookgateMarkerPath(), HOST_MARKER);
+  });
+});
+
+/**
+ * Every hook module under claude-hooks/, as [relative path, parsed program].
+ * Parsed with acorn rather than grepped: a mention in a comment or a string is
+ * not a reference, and a call split across lines is still one.
+ * @returns {Array<[string, import("acorn").Program]>}
+ */
+function hookPrograms() {
+  const root = fileURLToPath(new URL("../claude-hooks/", import.meta.url));
+  return readdirSync(root, { recursive: true })
+    .map(String)
+    .filter((rel) => rel.endsWith(".mjs"))
+    .sort()
+    .map((rel) => [
+      rel,
+      parse(readFileSync(join(root, rel), "utf8"), {
+        ecmaVersion: "latest",
+        sourceType: "module",
+      }),
+    ]);
+}
+
+/**
+ * Identifier and non-computed property names referenced in `program`, counted.
+ * @param {import("acorn").Program} program
+ * @returns {Map<string, number>}
+ */
+function identifierCounts(program) {
+  /** @type {Map<string, number>} */
+  const counts = new Map();
+  // Every child node, generically: acorn-walk's base visitor skips the
+  // Identifier children of import specifiers, which is where a bare
+  // `import { userInfo }` lives.
+  const visit = (/** @type {any} */ node) => {
+    if (node === null || typeof node !== "object") return;
+    if (node.type === "Identifier")
+      counts.set(node.name, (counts.get(node.name) ?? 0) + 1);
+    for (const child of Array.isArray(node) ? node : Object.values(node))
+      visit(child);
+  };
+  visit(program);
+  return counts;
+}
+
+describe("ownership checks read the kernel uid, never the passwd database", () => {
+  it("survive a uid that has no passwd entry", async () => {
+    // A container started as `--user 54321` has a uid and no passwd row, and
+    // os.userInfo() throws ENOENT there. Model exactly that: every ownership
+    // check must still answer, because a throw out of one crashes its hook.
+    const os = await import("node:os");
+    const { syncBuiltinESMExports } = await import("node:module");
+    const real = os.default.userInfo;
+    os.default.userInfo = () => {
+      throw Object.assign(new Error("uv_os_get_passwd returned ENOENT"), {
+        code: "ENOENT",
+      });
+    };
+    syncBuiltinESMExports();
+    try {
+      const own = join(dir, "own-marker");
+      writeFileSync(own, "");
+      assert.equal(markerIsTrusted(own), true);
+      const { classifySocket } =
+        await import("../claude-hooks/lib/redactor-client.mjs");
+      assert.equal(classifySocket(join(dir, "no-socket")), "absent");
+      const { ownedByCurrentUser } =
+        await import("../claude-hooks/lib/hook-io.mjs");
+      assert.equal(ownedByCurrentUser({ uid: -12345 }), false);
+    } finally {
+      os.default.userInfo = real;
+      syncBuiltinESMExports();
+    }
+  });
+
+  it("route every ownership test through the one helper", () => {
+    const programs = hookPrograms();
+    assert.ok(programs.length > 5, "no hook modules parsed");
+    const offenders = programs
+      .filter(([, program]) => identifierCounts(program).has("userInfo"))
+      .map(([rel]) => rel);
+    assert.deepEqual(offenders, [], "os.userInfo() throws for an unmapped uid");
+    // Positive marker: the helper is what those sites became, so a refactor
+    // that drops the ownership checks altogether cannot pass this vacuously.
+    // More than one reference = the import plus at least one use.
+    const users = programs
+      .filter(([rel, program]) => {
+        const counts = identifierCounts(program);
+        return (
+          rel !== join("lib", "hook-io.mjs") &&
+          ((counts.get("ownedByCurrentUser") ?? 0) > 1 ||
+            (counts.get("currentUid") ?? 0) > 1)
+        );
+      })
+      .map(([rel]) => rel);
+    assert.deepEqual(users, [
+      join("lib", "invisible-alert.mjs"),
+      join("lib", "redactor-client.mjs"),
+      join("lib", "reveal.mjs"),
+    ]);
   });
 });
 

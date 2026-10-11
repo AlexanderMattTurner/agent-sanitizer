@@ -24,10 +24,11 @@ import {
 } from "./hook-timing.mjs";
 import { existsSync, lstatSync } from "node:fs";
 import { createConnection } from "node:net";
-import { tmpdir, userInfo } from "node:os";
+import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { envBoundSecretVars } from "./env-config.mjs";
+import { currentUid } from "./hook-io.mjs";
 
 // Refuse absurd frames rather than buffer unbounded (mirrors the daemon's cap).
 export const FRAME_CAP = 16 * 1024 * 1024;
@@ -196,11 +197,11 @@ function failClosed(cause) {
  * `lstat`/`uid` are injectable seams so a test can drive a stat shape the test
  * process cannot create (a dir owned by another uid); production binds the real ones.
  * @param {string} socketPath
- * @param {{lstat?: typeof lstatSync, uid?: number}} [deps]
+ * @param {{lstat?: typeof lstatSync, uid?: number | null}} [deps]
  * @returns {"absent" | "untrusted" | "ok"}
  */
 export function classifySocket(socketPath, deps = {}) {
-  const { lstat = lstatSync, uid = userInfo().uid } = deps;
+  const { lstat = lstatSync, uid = currentUid() } = deps;
   let st;
   try {
     st = lstat(socketPath);
@@ -241,7 +242,7 @@ export function classifySocket(socketPath, deps = {}) {
  * root to hand it to: there the hook spawns the daemon as the ordinary user, which
  * binds under a 0700 dir it owns, and our own uid is not the adversary.
  * @param {import("node:fs").Stats} dir
- * @param {number} uid
+ * @param {number | null} uid
  * @returns {boolean}
  */
 function isTrustedSocketDir(dir, uid) {

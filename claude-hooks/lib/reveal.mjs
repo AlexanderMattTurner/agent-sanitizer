@@ -31,9 +31,13 @@ import {
   closeSync,
   constants,
 } from "node:fs";
-import { tmpdir, userInfo } from "node:os";
+import { tmpdir } from "node:os";
 import { join, resolve, sep } from "node:path";
-import { PROJECT_HASH, writeFileNoFollow } from "./hook-io.mjs";
+import {
+  PROJECT_HASH,
+  ownedByCurrentUser,
+  writeFileNoFollow,
+} from "./hook-io.mjs";
 
 /**
  * Where reveal sidecars are stored. Exported so the PreToolUse placeholder
@@ -135,7 +139,7 @@ function revealDirIsSafe(dir) {
   return (
     st.isDirectory() &&
     !st.isSymbolicLink() &&
-    st.uid === userInfo().uid &&
+    ownedByCurrentUser(st) &&
     !groupOrOtherWritable
   );
 }

@@ -244,7 +244,6 @@ import {
   writeFileSync
 } from "node:fs";
 import { spawnSync } from "node:child_process";
-import { userInfo } from "node:os";
 import { createHash } from "node:crypto";
 import { pathToFileURL } from "node:url";
 function isMain(importMetaUrl) {
@@ -528,7 +527,14 @@ function markerIsTrusted(path2) {
   } catch {
     return false;
   }
-  return st.isFile() && st.uid === userInfo().uid;
+  return st.isFile() && ownedByCurrentUser(st);
+}
+function currentUid() {
+  return typeof process.getuid === "function" ? process.getuid() : null;
+}
+function ownedByCurrentUser(st) {
+  const uid = currentUid();
+  return uid !== null && st.uid === uid;
 }
 function writeSentinelFile(path2) {
   try {
@@ -48408,7 +48414,7 @@ import {
 } from "node:fs";
 import { randomBytes as randomBytes2 } from "node:crypto";
 import { basename, join as join4 } from "node:path";
-import { homedir, tmpdir, userInfo as userInfo2 } from "node:os";
+import { homedir, tmpdir } from "node:os";
 function sessionPrefix(sessionId) {
   const key = (sessionId ?? "").replace(/[^A-Za-z0-9._-]/gu, "_") || "no-session";
   return `${ALERT_BASE}.s-${key}`;
@@ -48442,7 +48448,7 @@ function dirIsTrusted(path2) {
   } catch {
     return false;
   }
-  return st.isDirectory() && st.uid === userInfo2().uid;
+  return st.isDirectory() && ownedByCurrentUser(st);
 }
 function sweepStaleSessions(sessionId) {
   const dir = tmpdir();
@@ -49061,7 +49067,7 @@ var init_env_config = __esm({
 import { spawn } from "node:child_process";
 import { existsSync as existsSync2, lstatSync as lstatSync4 } from "node:fs";
 import { createConnection } from "node:net";
-import { tmpdir as tmpdir2, userInfo as userInfo3 } from "node:os";
+import { tmpdir as tmpdir2 } from "node:os";
 import { dirname as dirname5, join as join6 } from "node:path";
 import { fileURLToPath as fileURLToPath4 } from "node:url";
 function positiveMsOr(raw, fallback) {
@@ -49103,7 +49109,7 @@ function failClosed(cause) {
   );
 }
 function classifySocket(socketPath, deps = {}) {
-  const { lstat = lstatSync4, uid = userInfo3().uid } = deps;
+  const { lstat = lstatSync4, uid = currentUid() } = deps;
   let st;
   try {
     st = lstat(socketPath);
@@ -49297,6 +49303,7 @@ var init_redactor_client = __esm({
     "use strict";
     init_hook_timing();
     init_env_config();
+    init_hook_io();
     FRAME_CAP = 16 * 1024 * 1024;
     DEFAULT_SOCKET_PATH = process.env._AGENT_SANITIZER_REDACTOR_SOCKET || join6(tmpdir2(), "agent-sanitizer-redactor", "redactor.sock");
     WAIT_DEADLINE_MS = positiveMsOr(
@@ -49438,7 +49445,7 @@ import {
   closeSync as closeSync3,
   constants as constants2
 } from "node:fs";
-import { tmpdir as tmpdir4, userInfo as userInfo4 } from "node:os";
+import { tmpdir as tmpdir4 } from "node:os";
 import { join as join8, resolve as resolve4, sep as sep3 } from "node:path";
 function revealDir() {
   return process.env._AGENT_SANITIZER_REVEAL_DIR || join8(tmpdir4(), `agent-sanitizer-layer2-reveal-${PROJECT_HASH}`);
@@ -49477,7 +49484,7 @@ function revealDirIsSafe(dir) {
     return false;
   }
   const groupOrOtherWritable = (st.mode & 18) !== 0;
-  return st.isDirectory() && !st.isSymbolicLink() && st.uid === userInfo4().uid && !groupOrOtherWritable;
+  return st.isDirectory() && !st.isSymbolicLink() && ownedByCurrentUser(st) && !groupOrOtherWritable;
 }
 function persistReveal(content3) {
   const dir = revealDir();
