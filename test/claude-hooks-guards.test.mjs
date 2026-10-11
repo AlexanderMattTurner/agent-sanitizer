@@ -12,6 +12,7 @@
  */
 import { describe, it, after } from "node:test";
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import {
   existsSync,
   mkdtempSync,
@@ -22,6 +23,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { cleanGitEnv } from "./helpers/git-env.mjs";
 
 // An empty project dir, set before the hooks import: the PreToolUse gate reads
 // the invisible-char alert path derived from it at module load.
@@ -642,5 +644,83 @@ describe("withSecretDropGuard", () => {
       rehydrateDeny,
     );
     assert.equal(guarded, 0);
+  });
+});
+
+// ─── gitTracked against real repositories ────────────────────────────────────
+
+describe("gitTracked on real git", () => {
+  // Every probe runs with git's own variables stripped, so a suite driven from
+  // a git hook never resolves the outer repository instead of the fixture.
+  /** @type {typeof spawnSync} */
+  const spawn = (cmd, args, opts) =>
+    spawnSync(cmd, args, { ...opts, env: cleanGitEnv });
+  const root = mkdtempSync(join(tmpdir(), "sanitizer-git-tracked-"));
+  after(() => rmSync(root, { recursive: true, force: true }));
+  const git = (cwd, ...args) => {
+    const res = spawn("git", args, { cwd, encoding: "utf8" });
+    assert.equal(res.status, 0, `git ${args.join(" ")}: ${res.stderr}`);
+  };
+  /** A fresh repository holding one committed file and one untracked file. */
+  const repo = (name) => {
+    const dir = join(root, name);
+    git(root, "init", "-q", dir);
+    writeFileSync(join(dir, "tracked.txt"), "x\n");
+    writeFileSync(join(dir, "untracked.txt"), "y\n");
+    git(dir, "add", "tracked.txt");
+    return dir;
+  };
+
+  it("reports a tracked file tracked and an untracked one not", () => {
+    const dir = repo("plain");
+    assert.equal(gitTracked(join(dir, "tracked.txt"), spawn), true);
+    assert.equal(gitTracked(join(dir, "untracked.txt"), spawn), false);
+  });
+
+  it("reports a file outside any repository untracked, so the guard applies", () => {
+    const outside = mkdtempSync(join(root, "no-repo-"));
+    // Positive marker: the fixture really is outside every work tree, or the
+    // assertion below would be the untracked-in-a-repo case again.
+    const probe = spawn("git", ["rev-parse", "--is-inside-work-tree"], {
+      cwd: outside,
+      stdio: "ignore",
+    });
+    assert.equal(probe.status, 128);
+    assert.equal(gitTracked(join(outside, "f.txt"), spawn), false);
+  });
+
+  it("skips the guard when git cannot read the repository (corrupt index)", () => {
+    // Exit 128 here says nothing about the file: denying the write would turn
+    // a broken index into a blocked edit, contrary to the skip-on-ambiguity
+    // doctrine the module declares.
+    const dir = repo("corrupt");
+    writeFileSync(join(dir, ".git", "index"), "not an index");
+    const probe = spawn("git", ["ls-files", "--error-unmatch", "--", "f"], {
+      cwd: dir,
+      stdio: "ignore",
+    });
+    assert.equal(probe.status, 128);
+    assert.equal(gitTracked(join(dir, "untracked.txt"), spawn), true);
+  });
+
+  it("asks git whether a 128 came from a repository before reading it as 'none'", () => {
+    const calls = [];
+    const stub = (results) => (_cmd, args) => {
+      calls.push(args[0]);
+      return results[calls.length - 1];
+    };
+    assert.equal(
+      gitTracked("/f/x", stub([{ status: 128 }, { status: 0 }])),
+      true,
+    );
+    assert.deepEqual(calls, ["ls-files", "rev-parse"]);
+    calls.length = 0;
+    assert.equal(
+      gitTracked("/f/x", stub([{ status: 128 }, { error: new Error("x") }])),
+      true,
+    );
+    calls.length = 0;
+    assert.equal(gitTracked("/f/x", stub([{ status: 2 }])), true);
+    assert.deepEqual(calls, ["ls-files"]);
   });
 });
