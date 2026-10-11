@@ -62,8 +62,10 @@ UNRESOLVABLE_SITES = {
     ): (
         "The pattern is the caller's env-var VALUE, escaped character by "
         "character — a runtime string with no static spelling. Its shape is "
-        "fixed: escaped literals joined by the constant ENV_INVIS_RUN, which is "
-        "a character class, so the pattern carries no quantifier at all."
+        "fixed: escaped literals joined by the constant ENV_INVIS_RUN, a STARRED "
+        "character class. Every `*` gap sits between two required literals, so "
+        "no two quantifiers are adjacent; test_redos_js_exemption_instances.py "
+        "builds the pattern through the real module and analyzes it."
     ),
     (
         "src/ansi.mjs",
