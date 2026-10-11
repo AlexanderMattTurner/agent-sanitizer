@@ -352,9 +352,13 @@ function keepContained(absPath, realRoot, literalRoot, pattern) {
  * calls `exclude` once with an entry's bare name and again with its
  * root-relative path, so a predicate holding `build` cannot tell a top-level
  * `build/` from a tracked `src/build/` and prunes both; under an absolute
- * pattern it is handed absolute paths and matches neither. A Dirent carries an
- * absolute `parentPath`, which normalizes to exactly one root-relative,
- * `/`-separated entry per walked directory whatever shape the pattern has.
+ * pattern it is handed absolute paths and matches neither. A Dirent's
+ * `parentPath`, resolved against `cwd`, normalizes to exactly one
+ * root-relative, `/`-separated entry per walked directory.
+ *
+ * Against `cwd`, never the process's: a literal prefix's directories
+ * (`.claude/rules/**`) arrive with a parentPath RELATIVE to `cwd`, which a bare
+ * join resolves against process.cwd() and prunes `.claude/` from the scan.
  * @param {string[]} globs
  * @param {string} cwd
  * @param {(entry: string) => boolean} [exclude]
@@ -363,7 +367,7 @@ function keepContained(absPath, realRoot, literalRoot, pattern) {
 export function walkContextGlobs(globs, cwd, exclude) {
   const root = resolve(cwd);
   /** @param {import("node:fs").Dirent} dirent @returns {string} */
-  const absolute = (dirent) => join(dirent.parentPath, dirent.name);
+  const absolute = (dirent) => resolve(root, dirent.parentPath, dirent.name);
   return globSync(globs, {
     cwd,
     withFileTypes: true,

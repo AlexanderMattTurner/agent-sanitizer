@@ -27,6 +27,8 @@ import {
   scanInstructionFiles,
   cleanFile,
   atomicReplaceFile,
+  excludeFromContextScan,
+  walkContextGlobs,
 } from "../src/instructions.mjs";
 import { LONG_RUN_THRESHOLD, SCATTERED_THRESHOLD } from "../src/invisible.mjs";
 import { cp } from "./test-helpers.mjs";
@@ -653,6 +655,41 @@ describe("symlink containment", () => {
     assert.throws(() => cleanFile(link), /refusing to clean through a symlink/);
     // The symlink target is left byte-for-byte unchanged (no write-through).
     assert.equal(readFileSync(target, "utf-8"), original);
+  });
+});
+
+describe("walkContextGlobs resolves entries against its own root", () => {
+  let tmpDir;
+  beforeEach(() => {
+    tmpDir = mkdtempSync(join(tmpdir(), "walk-root-"));
+  });
+  afterEach(() => {
+    rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it("hands exclude root-relative entries when the process runs elsewhere", () => {
+    // Node passes a literal prefix's directories (`.claude`, `.claude/rules`)
+    // with a parentPath relative to the glob's cwd; resolved against the
+    // process cwd (this suite runs from the repo root) they would read as
+    // `../…/.claude`, and the context-scan prune would drop all of `.claude/`.
+    mkdirSync(join(tmpDir, ".claude", "rules"), { recursive: true });
+    const file = join(tmpDir, ".claude", "rules", "a.md");
+    writeFileSync(file, "rule\n");
+    assert.notEqual(process.cwd(), tmpDir, "precondition: cwd differs");
+    const seen = [];
+    const found = walkContextGlobs(
+      [".claude/rules/**/*.md"],
+      tmpDir,
+      (entry) => {
+        seen.push(entry);
+        return excludeFromContextScan(entry);
+      },
+    );
+    assert.deepEqual(found, [file]);
+    assert.ok(seen.length > 0, "exclude was never consulted");
+    for (const entry of seen)
+      assert.ok(!entry.startsWith(".."), `entry escaped the root: ${entry}`);
+    assert.ok(seen.includes(".claude"));
   });
 });
 
