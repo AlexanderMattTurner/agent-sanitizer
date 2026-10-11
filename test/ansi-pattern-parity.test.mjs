@@ -100,11 +100,78 @@ const grammarByte = fc.constantFrom(
   "a",
   "\n",
   "\r",
+  // The CSI bytes outside the old grammar: private parameter markers,
+  // intermediates, and finals the old class left out.
+  "<",
+  "=",
+  ">",
+  "!",
+  "/",
+  "@",
+  "`",
+  "{",
+  "|",
+  "}",
+  "q",
+  "s",
+  "u",
 );
 
+// A whole CSI drawn from ECMA-48 § 5.4 itself, so the corpus reaches every
+// parameter, intermediate and final byte rather than only the ones listed above.
+const byteIn = (lo, hi) =>
+  fc.integer({ min: lo, max: hi }).map((code) => String.fromCharCode(code));
+const validCsi = fc
+  .tuple(
+    fc.constantFrom(`${ESC}[`, CSI),
+    fc.array(byteIn(0x30, 0x3f), { maxLength: 4 }),
+    fc.array(byteIn(0x20, 0x2f), { maxLength: 2 }),
+    byteIn(0x40, 0x7e),
+  )
+  .map(([intro, params, intermediates, final]) =>
+    [intro, ...params, ...intermediates, final].join(""),
+  );
+
 const grammarText = fc
-  .array(grammarByte, { maxLength: 24 })
+  .array(fc.oneof({ weight: 4, arbitrary: grammarByte }, validCsi), {
+    maxLength: 24,
+  })
   .map((parts) => parts.join(""));
+
+// The spec's CSI language, spelled from ECMA-48 § 5.4 rather than imported, so
+// it is an oracle for the shipped grammar and not a second copy of it.
+const SPEC_CSI_RE = new RegExp(
+  `(?:${ESC}\\[|${CSI})[\\x30-\\x3f]*[\\x20-\\x2f]*[\\x40-\\x7e]`,
+);
+
+/** Apply one strip until it changes nothing. Unbounded on purpose: the
+ * property below is about the grammar, not about Layer 1's pass cap. */
+function toFixedPoint(strip, text) {
+  let previous = text;
+  let next = strip(previous);
+  while (next !== previous) {
+    previous = next;
+    next = strip(previous);
+  }
+  return next;
+}
+
+// Valid CSI sequences the grammar used to miss: a private parameter marker
+// (`<=>`), an intermediate byte, and finals outside the old final class.
+const WIDENED_CSI = [
+  ["xterm modifyOtherKeys", `${ESC}[>4;1m`],
+  ["private `=` marker", `${ESC}[=5h`],
+  ["DECSCUSR (space intermediate)", `${ESC}[1 q`],
+  ["SGR mouse report", `${ESC}[<0;1;1M`],
+  ["save cursor", `${ESC}[s`],
+  ["restore cursor", `${ESC}[u`],
+  ["insert char `@`", `${ESC}[4@`],
+  ["HPA backtick", `${ESC}[5\``],
+  ["DECSLE `{`", `${ESC}[1{`],
+  ["`|` final", `${ESC}[2|`],
+  ["DECERA `}`", `${ESC}[1}`],
+  ["C1 private marker", `${CSI}>4;1m`],
+];
 
 // Every way a control string can end, plus both CSI encodings — the arms the
 // pattern has to reproduce one for one.
@@ -122,6 +189,7 @@ const ARMS = [
   ["unterminated at EOF", `${ESC}]dangling`],
   ["CSI", `${ESC}[2J`],
   ["C1 CSI", `${CSI}31m`],
+  ...WIDENED_CSI,
 ];
 
 describe("the shipped escape pattern and the scanner are one grammar", () => {
@@ -162,6 +230,38 @@ describe("the shipped escape pattern and the scanner are one grammar", () => {
       assert.equal(stripWithPattern(input), input);
       assert.equal(stripWithScanner(input), input);
     }
+  });
+
+  it("removes every ECMA-48 CSI whole, as one `csi` token", () => {
+    for (const [name, sequence] of WIDENED_CSI) {
+      const input = `A${sequence}Z`;
+      assert.equal(stripWithPattern(input), "AZ", `${name} / pattern`);
+      assert.equal(stripWithScanner(input), "AZ", `${name} / scanner`);
+      assert.deepEqual(
+        scanAnsi(sequence),
+        [{ start: 0, end: sequence.length, kind: "csi" }],
+        name,
+      );
+    }
+  });
+
+  it("leaves no spec-valid CSI in a fixed point of either strip", () => {
+    fc.assert(
+      fc.property(grammarText, (text) => {
+        for (const [name, strip] of [
+          ["pattern", stripWithPattern],
+          ["scanner", stripWithScanner],
+        ]) {
+          const residue = SPEC_CSI_RE.exec(toFixedPoint(strip, text));
+          assert.equal(
+            residue,
+            null,
+            `${name} left ${JSON.stringify(residue)}`,
+          );
+        }
+      }),
+      fcRunOptions(),
+    );
   });
 
   it("agrees with the scanner over generated escape-dense text", () => {

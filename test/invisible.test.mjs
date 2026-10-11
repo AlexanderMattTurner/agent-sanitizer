@@ -1998,27 +1998,26 @@ describe("stripAnsiFully: CSI digits are never a final byte", () => {
   // Per ECMA-48, CSI final bytes occupy 0x40–0x7E; digits are PARAMETER bytes
   // and can never terminate a sequence. Regression: the final-byte class used
   // to include `\d`, so an incomplete `ESC[` swallowed following visible
-  // digits as if they were the sequence's final byte, deleting real content
-  // (`ESC[2024 report` used to become ` report` — "2024" gone).
+  // digits as if they were the sequence's final byte, deleting real content.
   it("does not swallow visible digits after an incomplete CSI intro", () => {
-    const cleaned = stripAnsiFully(`${cp(0x1b)}[2024 report`);
-    assert.ok(
-      cleaned.includes("2024 report"),
-      `visible digits were swallowed: ${JSON.stringify(cleaned)}`,
-    );
+    const cleaned = stripAnsiFully(`${cp(0x1b)}[2024\nreport`);
+    assert.equal(cleaned, `${cp(0x1b)}[2024\nreport`);
   });
 
   it("applyLayer1 sweeps the residual ESC but the digits/report text survive intact", () => {
-    // The incomplete `ESC[` itself never completes a valid CSI sequence (no
-    // valid final byte follows), so CSI_BRANCH does not match it at all; the
-    // final residual-sweep in applyLayer1 removes the bare ESC control byte,
-    // exactly like the existing "nested split (incomplete residual)" case in
-    // sanitize.test.mjs — the ASCII `[` is not a control byte, so a stray
-    // bracket may remain, but nothing user-visible past the intro is lost.
-    const { cleaned, found } = applyLayer1(`${cp(0x1b)}[2024 report`);
-    assert.ok(!cleaned.includes(cp(0x1b)), "ESC survived");
-    assert.equal(cleaned, "[2024 report");
+    // The incomplete `ESC[` never completes a CSI (no final byte follows the
+    // digits before the line break), so the strip leaves it whole; the residual
+    // sweep removes only the bare ESC. The ASCII `[` is not a control byte, so
+    // it stays, and nothing visible past the intro is lost.
+    const { cleaned, found } = applyLayer1(`${cp(0x1b)}[2024\nreport`);
+    assert.equal(cleaned, "[2024\nreport");
     assert.ok(found.includes(CATEGORY.ANSI));
+  });
+
+  it("reads a space after the digits as an intermediate byte, as a terminal does", () => {
+    // `ESC[2024 r` is a complete CSI: parameters `2024`, intermediate space,
+    // final `r`. A terminal consumes all of it, so the model must not see it.
+    assert.equal(stripAnsiFully(`${cp(0x1b)}[2024 report`), "eport");
   });
 
   it("still fully removes a genuine (complete) CSI sequence with numeric params", () => {
@@ -2032,9 +2031,8 @@ describe("stripAnsiFully: CSI digits are never a final byte", () => {
     assert.equal(stripAnsiFully(`${cp(0x1b)}[2Jhello`), "hello");
   });
 
-  // `=`, `<`, `>` (0x3C–0x3F minus `?`) are private PARAMETER-prefix bytes per
-  // ECMA-48 § 5.4, never final bytes; `~` (0x7E) IS a real final byte (vt220
-  // function-key sequences, e.g. Delete = `ESC[3~`) and must still match.
+  // `~` (0x7E) is a final byte (vt220 function-key sequences, e.g. Delete =
+  // `ESC[3~`) and must still match.
   it("still removes a vt220 function-key sequence ending in `~`", () => {
     assert.equal(stripAnsiFully(`${cp(0x1b)}[3~hello`), "hello");
   });

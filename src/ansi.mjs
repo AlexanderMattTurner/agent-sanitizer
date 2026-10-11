@@ -86,29 +86,27 @@ export const SGR_RE = new RegExp(SGR_SOURCE, "g");
 // scanner has already delimited.
 const SGR_ANCHORED_RE = new RegExp(`^${SGR_SOURCE}$`);
 
-// Private parameter-prefix and intermediate bytes that may follow an
-// introducer before the parameters (`ESC[?25h`, `ESC(B`, `ESC#8`). Also covers
-// the 7-bit `ESC [` CSI introducer's bracket itself.
-// The `[` is escaped though neither engine requires it: Python's `re` warns
-// `FutureWarning: Possible nested set` on a bare one, and this class ships as
-// the generated pattern a Python consumer compiles.
-const CSI_INTRO_CLASS = "[\\[()#;?]";
-const CSI_INTRO_RE = new RegExp(CSI_INTRO_CLASS);
-
-// ECMA-48 parameter bytes.
-const CSI_PARAM_CLASS = "[0-9;:]";
+// CSI per ECMA-48 § 5.4: `ESC [` or U+009B, then parameter bytes (0x30-0x3F,
+// which includes the private markers `<=>?`), then intermediate bytes
+// (0x20-0x2F, e.g. the space in DECSCUSR `ESC[1 q`), then one final byte
+// (0x40-0x7E). The three classes are disjoint, so the arm cannot backtrack.
+const CSI_PARAM_CLASS = "[0-?]";
 const CSI_PARAM_RE = new RegExp(CSI_PARAM_CLASS);
-
-// ECMA-48 final bytes, minus the ones a terminal never accepts here. Digits are
-// PARAMETER bytes and can never terminate a sequence — an unterminated `ESC[`
-// must not eat trailing visible digits (`ESC[2024 report` is NOT `ESC[` +
-// final-byte `2`; it is an incomplete intro whose ESC the residual sweep
-// removes, leaving "2024 report" intact). `<=>?` (0x3C-0x3F) are private
-// PARAMETER-prefix bytes per ECMA-48 § 5.4, not finals — including them let a
-// private-marker sequence terminate one byte too early. `~` (0x7E) IS a real
-// final byte (vt220 function keys, `ESC[3~` for Delete) and is kept.
-const CSI_FINAL_CLASS = "[A-PR-TZcf-nqrty~]";
+const CSI_INTERMEDIATE_CLASS = "[ -/]";
+const CSI_INTERMEDIATE_RE = new RegExp(CSI_INTERMEDIATE_CLASS);
+const CSI_FINAL_CLASS = "[@-~]";
 const CSI_FINAL_RE = new RegExp(CSI_FINAL_CLASS);
+
+// The other escapes a 7-bit ESC opens: charset designation (`ESC(B`), DEC line
+// attributes (`ESC#8`), and the two-byte Fe/Fs forms (`ESC M`, `ESC c`). The
+// intro and parameter classes share `;`, so the arm pins the intro run maximal
+// (see ESCAPE_SEQUENCE_SOURCE). Digits are never a final byte here.
+const ESC_INTRO_CLASS = "[()#;?]";
+const ESC_INTRO_RE = new RegExp(ESC_INTRO_CLASS);
+const ESC_PARAM_CLASS = "[0-9;:]";
+const ESC_PARAM_RE = new RegExp(ESC_PARAM_CLASS);
+const ESC_FINAL_CLASS = "[A-PR-TZcf-nqrty~]";
+const ESC_FINAL_RE = new RegExp(ESC_FINAL_CLASS);
 
 const ESC = 0x1b;
 const CSI_C1 = 0x9b;
@@ -142,8 +140,8 @@ const CR = 0x0d;
 // prompt gate the two bare `ESC`s tokenized as inert orphans, which is the
 // benign kind, so the gate answered `note` instead of `block`.
 // The second byte of the 7-bit form, keyed by introducer. `P` also happens to
-// be a CSI final byte, so without this table `ESC P` completed a two-byte CSI
-// and the DCS body survived that way instead.
+// be an escape final byte, so without this table `ESC P` completed a two-byte
+// escape and the DCS body survived that way instead.
 const STRING_INTRO_7BIT = "]PX^_";
 const OSC_7BIT = "]";
 const OSC_C1 = 0x9d;
@@ -159,7 +157,7 @@ const STRING_INTRO_C1 = new Set([0x90, 0x98, OSC_C1, 0x9e, 0x9f]);
  * The scanner below is AUTHORITATIVE and this is derived from its own constants,
  * never the other way round: the scanner emits token KINDS a regex cannot, and
  * it is linear by construction where the regex form has to carry an explicit
- * guard to stay linear (see the CSI arm's lookahead). What a regex CAN be is data —
+ * guard to stay linear (see the escape arm's lookahead). What a regex CAN be is data —
  * a stdlib-only Python filter on an uncontrolled host, with no install path for
  * this package, can read a pattern string but cannot import a tokenizer. So the
  * generator pins this into `data/invisible-charset.json` beside the introducer
@@ -192,17 +190,21 @@ export const ESCAPE_SEQUENCE_SOURCE = (() => {
     `(?:${charClass(consumed)}|${escapeSt}` +
     `|(?=${charClass(abortBefore)})|(?![\\s\\S]))`;
   const stringArm = `(?:${introducer7Bit}|${charClass(c1Introducers)})${body}${terminator}`;
-  // The negative lookahead pins the intro run MAXIMAL — which is what the
-  // scanner's `while` loop does — and in doing so removes the only place the
-  // two quantifiers could repartition (`;` is in both classes), so this cannot
-  // backtrack super-linearly the way an unbounded `[…;…]*[…;…]*` would.
   const csiArm =
-    `${charClass([ESC, CSI_C1])}${CSI_INTRO_CLASS}*(?!${CSI_INTRO_CLASS})` +
-    `${CSI_PARAM_CLASS}*${CSI_FINAL_CLASS}`;
+    `(?:${unicodeEscape(ESC)}\\[|${unicodeEscape(CSI_C1)})` +
+    `${CSI_PARAM_CLASS}*${CSI_INTERMEDIATE_CLASS}*${CSI_FINAL_CLASS}`;
+  // The negative lookahead pins the intro run MAXIMAL — which is what
+  // scanEscape's `while` loop does — and in doing so removes the only place the
+  // two quantifiers could repartition (`;` is in both classes), so this cannot
+  // backtrack super-linearly the way an unbounded `[…;…]*[…;…]*` would. Neither
+  // class holds `[`, so this arm and the CSI arm never match at the same ESC.
+  const escapeArm =
+    `${unicodeEscape(ESC)}${ESC_INTRO_CLASS}*(?!${ESC_INTRO_CLASS})` +
+    `${ESC_PARAM_CLASS}*${ESC_FINAL_CLASS}`;
   // The string arm runs FIRST for the same reason it does in scanAnsi: `P` is
-  // also a CSI final byte, so a CSI-first alternation takes `ESC P` alone and
-  // leaves the DCS body as visible text.
-  return `(?:${stringArm}|${csiArm})`;
+  // also an escape final byte, so an escape-first alternation takes `ESC P`
+  // alone and leaves the DCS body as visible text.
+  return `(?:${stringArm}|${csiArm}|${escapeArm})`;
 })();
 
 // The three SGR parameters that move the CONCEAL state (ECMA-48 § 8.3.117).
@@ -378,26 +380,38 @@ function scanControlString(text, start) {
 }
 
 /**
- * End index of the CSI / two-byte escape sequence starting at `start`, or -1
- * when the introducer completes no sequence.
- *
- * Single-pass and greedy: intro bytes, then parameter bytes, then exactly one
- * final byte. The previous regex form had to BOUND the intro run ({0,12})
- * because `;` lives in both the intro and parameter classes, so an unbounded
- * run let a `;#;#…` string be split between the two quantifiers — quadratic
- * backtracking (CodeQL js/polynomial-redos). A hand-written scanner never
- * backtracks, so the bound is gone and the scan is linear by construction.
+ * End index of the CSI sequence starting at `start`, or -1 when no complete
+ * CSI starts there. Greedy and single-pass over three disjoint byte classes.
  * @param {string} text
  * @param {number} start
  * @returns {number}
  */
 function scanCsi(text, start) {
   const code = text.charCodeAt(start);
-  if (code !== ESC && code !== CSI_C1) return -1;
-  let i = start + 1;
-  while (i < text.length && CSI_INTRO_RE.test(text[i])) i++;
+  let i;
+  if (code === CSI_C1) i = start + 1;
+  else if (code === ESC && text[start + 1] === "[") i = start + 2;
+  else return -1;
   while (i < text.length && CSI_PARAM_RE.test(text[i])) i++;
+  while (i < text.length && CSI_INTERMEDIATE_RE.test(text[i])) i++;
   if (i < text.length && CSI_FINAL_RE.test(text[i])) return i + 1;
+  return -1;
+}
+
+/**
+ * End index of the non-CSI escape (`ESC(B`, `ESC#8`, `ESC M`) starting at
+ * `start`, or -1. Single-pass and greedy — intro bytes, then parameter bytes,
+ * then one final byte — so it never backtracks although `;` is in both runs.
+ * @param {string} text
+ * @param {number} start
+ * @returns {number}
+ */
+function scanEscape(text, start) {
+  if (text.charCodeAt(start) !== ESC) return -1;
+  let i = start + 1;
+  while (i < text.length && ESC_INTRO_RE.test(text[i])) i++;
+  while (i < text.length && ESC_PARAM_RE.test(text[i])) i++;
+  if (i < text.length && ESC_FINAL_RE.test(text[i])) return i + 1;
   return -1;
 }
 
@@ -428,11 +442,12 @@ export function scanAnsi(text) {
   let match;
   while ((match = INTRODUCER_SCAN_RE.exec(text)) !== null) {
     const start = match.index;
-    // The string arms run FIRST: `ESC P` also completes a two-byte CSI (`P` is a
-    // final byte), so letting scanCsi answer first would take the DCS
+    // The string arms run FIRST: `ESC P` also completes a two-byte escape (`P`
+    // is a final byte), so letting scanEscape answer first would take the DCS
     // introducer alone and leave its body as visible text.
     const string = scanControlString(text, start);
-    const csiEnd = string ? -1 : scanCsi(text, start);
+    let csiEnd = string ? -1 : scanCsi(text, start);
+    if (!string && csiEnd < 0) csiEnd = scanEscape(text, start);
     let end = start + 1;
     /** @type {string} */
     let kind = orphanKindFor(text[start], text[start + 1]);

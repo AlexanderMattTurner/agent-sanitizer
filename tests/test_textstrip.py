@@ -23,19 +23,21 @@ import unicodedata
 import warnings
 
 import pytest
+from hypothesis import given
+from hypothesis import strategies as st
 
 from tests._helpers import REPO_ROOT, ensure_python_pkg_on_path
 
 ensure_python_pkg_on_path()
 
-from agent_sanitizer.invisible import (  # noqa: E402
+from agent_sanitizer.invisible import (
     cf_codepoints,
     control_introducers,
     escape_sequence_pattern,
     extra_codepoints,
     invisible_charset,
 )
-from agent_sanitizer.textstrip import ANSI_RE, strip_untrusted  # noqa: E402
+from agent_sanitizer.textstrip import ANSI_RE, strip_untrusted
 
 _INVISIBLE = invisible_charset()
 
@@ -128,6 +130,15 @@ _ANSI_CASES = [
     ("osc_body_swallows_ff", "x\x1b]0;a\x0cPAYLOAD\x07y", "xy"),
     ("osc_body_swallows_us", "x\x1b]0;a\x1fPAYLOAD\x07y", "xy"),
     ("osc_body_swallows_del", "x\x1b]0;a\x7fPAYLOAD\x07y", "xy"),
+    # The full ECMA-48 CSI: private parameter markers `<=>`, intermediate bytes
+    # (0x20-0x2F), and every final byte 0x40-0x7E.
+    ("csi_private_gt_marker", "a\x1b[>4;1mb", "ab"),
+    ("csi_private_eq_marker", "a\x1b[=5hb", "ab"),
+    ("csi_space_intermediate", "a\x1b[1 qb", "ab"),
+    ("csi_sgr_mouse_report", "a\x1b[<0;1;1Mb", "ab"),
+    ("csi_save_cursor", "a\x1b[sb", "ab"),
+    ("csi_restore_cursor", "a\x1b[ub", "ab"),
+    ("c1_csi_private_marker", "a\x9b>4;1mb", "ab"),
 ]
 
 
@@ -145,6 +156,43 @@ def test_no_raw_esc_survives() -> None:
     residual ESC the alternation can't consume must still be gone."""
     for text in ("\x1b", "\x1b\x1b\x1b", "plain\x1b", "\x1b\x00tail", "a\x1b"):
         assert "\x1b" not in strip_untrusted(text), repr(text)
+
+
+@pytest.mark.parametrize(
+    "sequence",
+    ["\x1b[>4;1m", "\x1b[=5h", "\x1b[1 q", "\x1b[<0;1;1M", "\x1b[s", "\x1b[u"],
+)
+def test_ansi_re_removes_a_whole_csi(sequence: str) -> None:
+    """``ANSI_RE`` alone, with no residual sweep behind it: a stdlib consumer
+    that compiles the shipped pattern gets the whole sequence removed."""
+    assert ANSI_RE.sub("", sequence) == ""
+
+
+# The spec's CSI language (ECMA-48 § 5.4), spelled here rather than read from
+# the shipped pattern, so it is an oracle for that pattern and not a copy of it.
+_SPEC_CSI_RE = re.compile("(?:\x1b\\[|\x9b)[\x30-\x3f]*[\x20-\x2f]*[\x40-\x7e]")
+_CSI_PIECES = st.sampled_from(
+    ["\x1b", "\x9b", "\x1b]", "\x07", "\x1b\\", "[", "\n", "a", " "]
+) | st.builds(
+    "".join,
+    st.tuples(
+        st.sampled_from(["\x1b[", "\x9b"]),
+        st.text(st.characters(min_codepoint=0x30, max_codepoint=0x3F), max_size=4),
+        st.text(st.characters(min_codepoint=0x20, max_codepoint=0x2F), max_size=2),
+        st.characters(min_codepoint=0x40, max_codepoint=0x7E),
+    ),
+)
+
+
+@given(st.lists(_CSI_PIECES, max_size=24).map("".join))
+def test_no_spec_valid_csi_survives_a_fixed_point(text: str) -> None:
+    """Strip with ``ANSI_RE`` until nothing changes: no ESC/CSI followed by a
+    valid CSI body may remain. Unbounded on purpose — this is a property of the
+    grammar, not of the strip's pass cap."""
+    previous, current = None, text
+    while current != previous:
+        previous, current = current, ANSI_RE.sub("", current)
+    assert _SPEC_CSI_RE.search(current) is None
 
 
 # ─── The shipped grammar is an artifact, not an accident ─────────────────────

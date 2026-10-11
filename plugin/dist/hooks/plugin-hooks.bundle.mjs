@@ -3364,11 +3364,21 @@ function scanControlString(text5, start) {
 }
 function scanCsi(text5, start) {
   const code4 = text5.charCodeAt(start);
-  if (code4 !== ESC && code4 !== CSI_C1) return -1;
-  let i = start + 1;
-  while (i < text5.length && CSI_INTRO_RE.test(text5[i])) i++;
+  let i;
+  if (code4 === CSI_C1) i = start + 1;
+  else if (code4 === ESC && text5[start + 1] === "[") i = start + 2;
+  else return -1;
   while (i < text5.length && CSI_PARAM_RE.test(text5[i])) i++;
+  while (i < text5.length && CSI_INTERMEDIATE_RE.test(text5[i])) i++;
   if (i < text5.length && CSI_FINAL_RE.test(text5[i])) return i + 1;
+  return -1;
+}
+function scanEscape(text5, start) {
+  if (text5.charCodeAt(start) !== ESC) return -1;
+  let i = start + 1;
+  while (i < text5.length && ESC_INTRO_RE.test(text5[i])) i++;
+  while (i < text5.length && ESC_PARAM_RE.test(text5[i])) i++;
+  if (i < text5.length && ESC_FINAL_RE.test(text5[i])) return i + 1;
   return -1;
 }
 function scanAnsi(text5) {
@@ -3378,7 +3388,8 @@ function scanAnsi(text5) {
   while ((match = INTRODUCER_SCAN_RE.exec(text5)) !== null) {
     const start = match.index;
     const string3 = scanControlString(text5, start);
-    const csiEnd = string3 ? -1 : scanCsi(text5, start);
+    let csiEnd = string3 ? -1 : scanCsi(text5, start);
+    if (!string3 && csiEnd < 0) csiEnd = scanEscape(text5, start);
     let end = start + 1;
     let kind2 = orphanKindFor(text5[start], text5[start + 1]);
     if (string3) {
@@ -3407,7 +3418,7 @@ function sgrConcealState(token, concealed) {
   }
   return state;
 }
-var CONTROL_INTRODUCER_CODEPOINTS, CONTROL_INTRODUCER_SOURCE, SGR_SOURCE, SGR_RE, SGR_ANCHORED_RE, CSI_INTRO_CLASS, CSI_INTRO_RE, CSI_PARAM_CLASS, CSI_PARAM_RE, CSI_FINAL_CLASS, CSI_FINAL_RE, ESC, CSI_C1, ST_C1, BEL, CAN, SUB, LF, CR, STRING_INTRO_7BIT, OSC_7BIT, OSC_C1, STRING_INTRO_C1, ESCAPE_SEQUENCE_SOURCE, SGR_RESET, SGR_CONCEAL, SGR_REVEAL, SGR_EXTENDED_COLOUR, SGR_COLOUR_ARGS, TOKEN_KIND, INTRODUCER_SCAN_RE;
+var CONTROL_INTRODUCER_CODEPOINTS, CONTROL_INTRODUCER_SOURCE, SGR_SOURCE, SGR_RE, SGR_ANCHORED_RE, CSI_PARAM_CLASS, CSI_PARAM_RE, CSI_INTERMEDIATE_CLASS, CSI_INTERMEDIATE_RE, CSI_FINAL_CLASS, CSI_FINAL_RE, ESC_INTRO_CLASS, ESC_INTRO_RE, ESC_PARAM_CLASS, ESC_PARAM_RE, ESC_FINAL_CLASS, ESC_FINAL_RE, ESC, CSI_C1, ST_C1, BEL, CAN, SUB, LF, CR, STRING_INTRO_7BIT, OSC_7BIT, OSC_C1, STRING_INTRO_C1, ESCAPE_SEQUENCE_SOURCE, SGR_RESET, SGR_CONCEAL, SGR_REVEAL, SGR_EXTENDED_COLOUR, SGR_COLOUR_ARGS, TOKEN_KIND, INTRODUCER_SCAN_RE;
 var init_ansi = __esm({
   "src/ansi.mjs"() {
     "use strict";
@@ -3421,12 +3432,18 @@ var init_ansi = __esm({
     SGR_SOURCE = "(?:\\u001b\\[|\\u009b)[0-9;:]*m";
     SGR_RE = new RegExp(SGR_SOURCE, "g");
     SGR_ANCHORED_RE = new RegExp(`^${SGR_SOURCE}$`);
-    CSI_INTRO_CLASS = "[\\[()#;?]";
-    CSI_INTRO_RE = new RegExp(CSI_INTRO_CLASS);
-    CSI_PARAM_CLASS = "[0-9;:]";
+    CSI_PARAM_CLASS = "[0-?]";
     CSI_PARAM_RE = new RegExp(CSI_PARAM_CLASS);
-    CSI_FINAL_CLASS = "[A-PR-TZcf-nqrty~]";
+    CSI_INTERMEDIATE_CLASS = "[ -/]";
+    CSI_INTERMEDIATE_RE = new RegExp(CSI_INTERMEDIATE_CLASS);
+    CSI_FINAL_CLASS = "[@-~]";
     CSI_FINAL_RE = new RegExp(CSI_FINAL_CLASS);
+    ESC_INTRO_CLASS = "[()#;?]";
+    ESC_INTRO_RE = new RegExp(ESC_INTRO_CLASS);
+    ESC_PARAM_CLASS = "[0-9;:]";
+    ESC_PARAM_RE = new RegExp(ESC_PARAM_CLASS);
+    ESC_FINAL_CLASS = "[A-PR-TZcf-nqrty~]";
+    ESC_FINAL_RE = new RegExp(ESC_FINAL_CLASS);
     ESC = 27;
     CSI_C1 = 155;
     ST_C1 = 156;
@@ -3450,8 +3467,9 @@ var init_ansi = __esm({
       const escapeSt = `${unicodeEscape(ESC)}${unicodeEscape(92)}`;
       const terminator = `(?:${charClass(consumed)}|${escapeSt}|(?=${charClass(abortBefore)})|(?![\\s\\S]))`;
       const stringArm = `(?:${introducer7Bit}|${charClass(c1Introducers)})${body}${terminator}`;
-      const csiArm = `${charClass([ESC, CSI_C1])}${CSI_INTRO_CLASS}*(?!${CSI_INTRO_CLASS})${CSI_PARAM_CLASS}*${CSI_FINAL_CLASS}`;
-      return `(?:${stringArm}|${csiArm})`;
+      const csiArm = `(?:${unicodeEscape(ESC)}\\[|${unicodeEscape(CSI_C1)})${CSI_PARAM_CLASS}*${CSI_INTERMEDIATE_CLASS}*${CSI_FINAL_CLASS}`;
+      const escapeArm = `${unicodeEscape(ESC)}${ESC_INTRO_CLASS}*(?!${ESC_INTRO_CLASS})${ESC_PARAM_CLASS}*${ESC_FINAL_CLASS}`;
+      return `(?:${stringArm}|${csiArm}|${escapeArm})`;
     })();
     SGR_RESET = 0;
     SGR_CONCEAL = 8;
@@ -50610,7 +50628,7 @@ var init_invisible_charset = __esm({
         158,
         159
       ],
-      escape_sequence_pattern: "(?:(?:\\u001b[\\u005d\\u0050\\u0058\\u005e\\u005f]|[\\u0090\\u0098\\u009d\\u009e\\u009f])[^\\u0007\\u000a\\u000d\\u0018\\u001a\\u001b\\u0090\\u0098\\u009c\\u009d\\u009e\\u009f]*(?:[\\u0007\\u0018\\u001a\\u009c]|\\u001b\\u005c|(?=[\\u000a\\u000d\\u001b\\u0090\\u0098\\u009d\\u009e\\u009f])|(?![\\s\\S]))|[\\u001b\\u009b][\\[()#;?]*(?![\\[()#;?])[0-9;:]*[A-PR-TZcf-nqrty~])"
+      escape_sequence_pattern: "(?:(?:\\u001b[\\u005d\\u0050\\u0058\\u005e\\u005f]|[\\u0090\\u0098\\u009d\\u009e\\u009f])[^\\u0007\\u000a\\u000d\\u0018\\u001a\\u001b\\u0090\\u0098\\u009c\\u009d\\u009e\\u009f]*(?:[\\u0007\\u0018\\u001a\\u009c]|\\u001b\\u005c|(?=[\\u000a\\u000d\\u001b\\u0090\\u0098\\u009d\\u009e\\u009f])|(?![\\s\\S]))|(?:\\u001b\\[|\\u009b)[0-?]*[ -/]*[@-~]|\\u001b[()#;?]*(?![()#;?])[0-9;:]*[A-PR-TZcf-nqrty~])"
     };
   }
 });

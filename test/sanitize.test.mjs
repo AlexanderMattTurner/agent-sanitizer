@@ -24,9 +24,16 @@ describe("sanitize: Layer 1 ESC neutralization + idempotency", () => {
       " payload",
     ],
     [
-      "nested split (incomplete residual)",
+      // The inner `ESC[32m` goes first; the residue `ESC[ p` is then a whole
+      // CSI (space intermediate, `p` final), which a terminal consumes too.
+      "nested split (residual completes a CSI)",
       `${ESC}${ZW}[${ESC}${ZW}[32m payload`,
-      "[ payload",
+      "ayload",
+    ],
+    [
+      "nested split (incomplete residual)",
+      `${ESC}${ZW}[${ESC}${ZW}[32m\npayload`,
+      "[\npayload",
     ],
     [
       // Digits are never a valid CSI final byte (ECMA-48 finals are
@@ -89,9 +96,10 @@ describe("sanitize: Layer 1 ESC neutralization + idempotency", () => {
   });
 
   it("sweeps a lone/incomplete C1 CSI introducer (U+009B), reporting it", async () => {
-    const out = await sanitize(`a${cp(0x9b)}b`);
+    // `1` is a parameter byte and nothing final follows, so no CSI completes.
+    const out = await sanitize(`a${cp(0x9b)}1`);
     assert.ok(!out.cleaned.includes(cp(0x9b)), "U+009B survived the sweep");
-    assert.equal(out.cleaned, "ab");
+    assert.equal(out.cleaned, "a1");
     assert.ok(out.found.includes(CATEGORY.ANSI));
     // The sweep must honor the no-silent-suppression contract deterministically,
     // not just probabilistically via the fuzz postcondition.
