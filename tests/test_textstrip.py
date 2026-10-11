@@ -30,14 +30,14 @@ from tests._helpers import REPO_ROOT, ensure_python_pkg_on_path
 
 ensure_python_pkg_on_path()
 
-from agent_sanitizer.invisible import (
+from agent_sanitizer.invisible import (  # noqa: E402
     cf_codepoints,
     control_introducers,
     escape_sequence_pattern,
     extra_codepoints,
     invisible_charset,
 )
-from agent_sanitizer.textstrip import ANSI_RE, strip_untrusted
+from agent_sanitizer.textstrip import ANSI_RE, strip_untrusted  # noqa: E402
 
 _INVISIBLE = invisible_charset()
 
