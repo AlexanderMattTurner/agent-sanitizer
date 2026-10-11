@@ -95,7 +95,13 @@ describe("zero-dimension hiding respects the border box", () => {
   for (const [dim, base] of Object.entries(HIDDEN_BASES))
     for (const prop of AXIS_OF[dim])
       it(`${dim}: a non-zero \`${prop}\` defeats the hide`, () => {
-        const value = prop.startsWith("border") ? "4px solid red" : "40px";
+        // Each value is valid for its property: the cascade drops an invalid
+        // declaration (`border-top-width:4px solid red`) as a browser does.
+        const value = prop.endsWith("-width")
+          ? "4px"
+          : prop.startsWith("border")
+            ? "4px solid red"
+            : "40px";
         assert.equal(
           isHiddenStyle(`${base};${prop}:${value}`),
           false,
@@ -130,10 +136,15 @@ describe("zero-dimension hiding respects the border box", () => {
     );
   });
 
-  it("an additive property declared with an empty value fails OPEN", () => {
-    // A declaration the parser hands back with no value tokens is not evidence
-    // of zero extent — it is evidence of nothing, so it must read as visible.
-    assert.equal(isHiddenStyle("height:0;padding-top:;overflow:hidden"), false);
+  it("an additive property declared with an empty value is dropped", () => {
+    // An empty value is invalid CSS: a browser drops the declaration, the
+    // padding keeps its initial 0, and the box really is collapsed. A value
+    // the lexer cannot judge (`var()`, below) still fails open.
+    assert.equal(isHiddenStyle("height:0;padding-top:;overflow:hidden"), true);
+    assert.equal(
+      isHiddenStyle("height:0;padding-top:var(--p);overflow:hidden"),
+      false,
+    );
   });
 
   it("a border shorthand with no explicit width computes to `medium`", () => {

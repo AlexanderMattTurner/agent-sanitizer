@@ -159,10 +159,15 @@ const HIDDEN_STYLE_CASES = [
   // ~zero AREA (width right-left or height bottom-top near zero) — parsing all
   // four edges, not just the first (bug: `rect(0,…)` spliced a visible window).
   ["clip:rect(0px,100px,100px,0px);position:absolute", false], // 100x100 visible window
-  ["position:absolute;clip:rect(1,1,1,1)", true], // degenerate 0x0 window (the sr-only clip hack)
+  ["position:absolute;clip:rect(1px,1px,1px,1px)", true], // degenerate 0x0 window (the sr-only clip hack)
+  // A unitless non-zero edge is not a <length>: a standards-mode browser drops
+  // the declaration and the element renders (it pinned `true` while the
+  // cascade read invalid declarations as applied).
+  ["position:absolute;clip:rect(1,1,1,1)", false],
   ["position:absolute;clip:rect(10px,10px,20px,10px)", true], // right==left → zero width
   ["position:absolute;clip:rect(0px,50px,0px,0px)", true], // bottom==top → zero height
-  ["position:absolute;clip:rect(10%,20%,10%,20%)", true], // percentage edges: top==bottom → zero height (same as legacy string parser)
+  ["position:absolute;clip:rect(10px,20px,10px,20px)", true], // top==bottom → zero height
+  ["position:absolute;clip:rect(10%,20%,10%,20%)", false], // rect() edges are <length> | auto; a % edge is invalid and dropped
   ["position:absolute;clip:rect(auto,auto,auto,auto)", false], // auto edges unresolvable — fail open
   ["position:absolute;clip:rect(0px,5em,1em,0px)", false], // mismatched-unit pairs — fail open
   ["position:absolute;clip:rect(0,0,0)", false], // only 3 edges — malformed, fail open
@@ -543,16 +548,18 @@ describe("unit: isHiddenStyle exact verdicts", () => {
 });
 
 // One row per numeric token, with the verdict it earns in each of the three
-// channel positions: an rgb() channel, an hsl() hue, an hsl() saturation.
+// channel positions: an rgb() channel, an hsl() hue, an hsl() saturation. The
+// hsl() rows use the LEGACY comma form, whose saturation is a <percentage>
+// only: a bare number there is invalid CSS the cascade drops, so it fails open.
 // `true` means the token RESOLVED (both sides canonicalize to the same concrete
 // color, so the text is hidden); `false` means the parser rejected it and the
 // declaration failed open.
 const COLOR_TOKEN_CASES = [
-  ["0", true, true, true],
-  ["255", true, true, true],
-  ["128.5", true, true, true],
-  [".5", true, true, true],
-  ["+5", true, true, true],
+  ["0", true, true, false],
+  ["255", true, true, false],
+  ["128.5", true, true, false],
+  [".5", true, true, false],
+  ["+5", true, true, false],
   // A hue is an <angle> or a <number>; `%` is neither.
   ["+5%", true, false, true],
   ["50%", true, false, true],
@@ -561,10 +568,8 @@ const COLOR_TOKEN_CASES = [
   // A fraction needs a digit on both sides of the dot.
   ["1.", false, false, false],
   [".", false, false, false],
-  // css-tree re-serializes this as the two numbers `1.2 .3`, so no channel
-  // parser ever receives it whole: rgb() then counts six channels and fails
-  // open, while hsl() reads four components and takes the last as an alpha.
-  ["1.2.3", false, true, true],
+  // Tokenized as the two numbers `1.2 .3`: one channel too many anywhere.
+  ["1.2.3", false, false, false],
   ["", false, false, false],
   ["abc", false, false, false],
   // Angle units belong to the hue alone; a signed value is a hue-only shape too.

@@ -46,6 +46,10 @@ import cssWalk from "css-tree/walker";
 import cssGenerate from "css-tree/generator";
 // @ts-ignore -- see above.
 import { ident as cssIdent } from "css-tree/utils";
+// @ts-ignore -- see above. The lexer is built over ./css-syntax-data.mjs, the
+// grammar strings alone, for the same bundle-size reason as the subpaths.
+import { Lexer as CssLexer } from "css-tree/lexer";
+import { CSS_SYNTAX } from "./css-syntax-data.mjs";
 import { unified } from "unified";
 import remarkParse from "remark-parse";
 import remarkGfm from "./gfm.mjs";
@@ -77,9 +81,11 @@ export {
 //
 // Values are tokenized by css-tree (its spec-compliant tokenizer/AST), not by
 // hand-rolled regexes: `parseDeclarations` splits declarations, decodes CSS
-// escapes, and strips `!important` through css-tree, and the structural
-// detectors below inspect the resulting typed value nodes (Number, Dimension,
-// Percentage, Function, …) directly. So an exponent (`scale(1e-3)`), an FF/CR
+// escapes, and reads the `!important` flag through css-tree,
+// `resolveCascade` picks the declaration a browser applies (css-tree's lexer
+// drops the invalid ones), and the structural detectors below inspect the
+// winning typed value nodes (Number, Dimension, Percentage, Function, …)
+// directly. So an exponent (`scale(1e-3)`), an FF/CR
 // escape terminator, an escaped `!important`, or a `;` inside a quoted value is
 // read exactly as a browser reads it — the tokenizer-divergence bugs a
 // hand-rolled parser kept re-introducing simply cannot arise. Ambiguity still
@@ -1190,22 +1196,25 @@ function canonicalizeValue(valueNode) {
 }
 
 /**
- * Parse a style string into a map of decoded lowercase property name -> parsed
- * and canonicalized value node, via css-tree's tolerant declaration-list
- * parser. This replaces the hand-rolled declaration splitter, per-declaration
- * salvage, escape decoder, and `!important` stripper in one pass: css-tree
- * recovers per-declaration exactly as a browser does (a bogus declaration is
- * dropped, the rest kept), keeps a `;` inside a string/`url()`/paren as part of
- * the value, and exposes `!important` as `node.important` (so an escaped
- * spelling `none!\69mportant` is stripped for free). Property names are
- * escape-decoded and gated to real CSS idents; anything else is dropped (fail
- * open). Later declarations win, per the cascade.
+ * One declaration of an inline style, in source order.
+ * @typedef {{ property: string, value: any, important: boolean, index: number }} StyleDeclaration
+ */
+
+/**
+ * Parse a style string into its declarations in source order, via css-tree's
+ * tolerant declaration-list parser: it recovers per-declaration exactly as a
+ * browser does (a bogus declaration is dropped, the rest kept), keeps a `;`
+ * inside a string/`url()`/paren as part of the value, and exposes the
+ * `!important` flag separately (so an escaped `none!\69mportant` is read as
+ * `none` plus the flag). Property names are escape-decoded and gated to real
+ * CSS idents; anything else is dropped (fail open). Which declaration WINS is
+ * {@link resolveCascade}'s job, not this parser's.
  * @param {string} styleStr
- * @returns {Map<string, any>}
+ * @returns {StyleDeclaration[]}
  */
 function parseDeclarations(styleStr) {
-  /** @type {Map<string, any>} */
-  const decls = new Map();
+  /** @type {StyleDeclaration[]} */
+  const declarations = [];
   let ast;
   try {
     ast = cssParse(styleStr, {
@@ -1218,7 +1227,7 @@ function parseDeclarations(styleStr) {
        pathological input (css-tree's onParseError recovers ordinary bad CSS);
        this fail-open upholds the module's never-throws contract for those. */
   } catch {
-    return decls;
+    return declarations;
   }
   /* c8 ignore stop */
   cssWalk(ast, {
@@ -1228,105 +1237,310 @@ function parseDeclarations(styleStr) {
       // token; property is escape-decoded then gated to a clean CSS ident.
       const property = cssIdent.decode(node.property).trim().toLowerCase();
       if (!CSS_PROPERTY_IDENT_RE.test(property)) return;
+      // css-tree accepts ANY ident after `!`; a browser accepts only
+      // `important` and drops the whole declaration otherwise (`none!imp`).
+      const flag =
+        typeof node.important === "string"
+          ? cssIdent.decode(node.important).toLowerCase()
+          : "";
+      if (flag !== "" && flag !== "important") return;
       canonicalizeValue(node.value);
-      decls.set(property, node.value);
+      declarations.push({
+        property,
+        value: node.value,
+        important: node.important === true || flag === "important",
+        index: declarations.length,
+      });
     },
   });
-  return decls;
+  return declarations;
+}
+
+// A value with more tokens than this is not handed to the lexer: css-tree's
+// matcher backtracks over `||`/`&&` grammars and gives up (with a console
+// warning) at 15000 steps, and no hiding value this module reads comes close.
+// An unvalidated declaration is treated as valid, which is how the cascade
+// read every declaration before validation existed.
+const LEXER_TOKEN_LIMIT = 64;
+
+// Per property, how many INVALID candidates the cascade validates before it
+// takes the next one unvalidated. Bounds the lexer work one style attribute
+// can buy at a constant per property, however many declarations it repeats.
+const VALIDATIONS_PER_PROPERTY = 8;
+
+/** @type {any} */
+let cssLexer = null;
+
+/** css-tree's lexer over the committed grammar tables, built on first use. */
+function declarationLexer() {
+  cssLexer ??= new CssLexer(
+    { generic: true, ...CSS_SYNTAX },
+    { generate: cssGenerate },
+  );
+  return cssLexer;
 }
 
 /**
- * @param {string} styleStr
+ * True when a browser DROPS this declaration as invalid at parse time, so it
+ * takes no part in the cascade: `display:none;display:bogus` renders hidden,
+ * because `bogus` is not a `display` value and the earlier declaration stands.
+ *
+ * Only a lexer MISMATCH drops a declaration. Everything the lexer cannot
+ * decide stays in the cascade, the direction that keeps an earlier hiding
+ * declaration from being resurrected on a guess: a `var()` (valid at parse
+ * time, resolved later), a custom or unknown property, and a value past
+ * {@link LEXER_TOKEN_LIMIT}, and a value css-tree could not parse at all or
+ * that spells `url(` with an escape. A browser decodes `\75 rl(` to `url(`
+ * before deciding it opens a URL token; css-tree's tokenizer does not, so its
+ * lexer reports a mismatch (or its parser a `Raw` value) the browser never
+ * makes.
+ * @param {StyleDeclaration} declaration
  * @returns {boolean}
  */
-export function isHiddenStyle(styleStr) {
-  const decls = parseDeclarations(styleStr);
-  if (decls.size === 0) return false;
+function isDroppedDeclaration(declaration) {
+  if (declaration.property.startsWith("--")) return false;
+  let tokens = 0;
+  let unreadable = false;
+  cssWalk(declaration.value, (/** @type {any} */ node) => {
+    tokens++;
+    if (
+      node.type === "Raw" ||
+      (node.type === "Function" && node.name === "url")
+    )
+      unreadable = true;
+  });
+  if (unreadable || tokens > LEXER_TOKEN_LIMIT) return false;
+  const { error } = declarationLexer().matchProperty(
+    declaration.property,
+    declaration.value,
+  );
+  return error?.rawMessage === "Mismatch";
+}
 
-  /** @param {string} key */
-  const nodeOf = (key) => decls.get(key) ?? null;
-  // `!important` is already excluded by css-tree; escapes are decoded in
-  // declText. Trim/lowercase for the case-insensitive keyword compares.
-  /** @param {string} key */
-  const textOf = (key) => declText(decls.get(key)).trim().toLowerCase();
+// The shorthands that RESET a longhand this module reads. When one of them
+// wins the cascade over the longhand's own declaration, the longhand's value
+// comes from the shorthand: `font-size:0;font:14px serif` renders 14px text.
+// `all` resets every property read here and is appended to each family.
+/** @type {Record<string, string[]>} */
+const RESETTING_SHORTHANDS = {
+  "font-size": ["font"],
+  "background-color": ["background"],
+  "background-image": ["background"],
+  "background-clip": ["background"],
+  "-webkit-text-stroke-color": ["-webkit-text-stroke"],
+  left: ["inset"],
+  top: ["inset"],
+  right: ["inset"],
+  bottom: ["inset"],
+};
 
-  if (textOf("display") === "none") return true;
-  if (textOf("visibility") === "hidden" || textOf("visibility") === "collapse")
-    return true;
+/**
+ * The inline style's cascade: a lookup from property to the value node of the
+ * declaration a browser APPLIES, or null when none applies.
+ *
+ * A browser drops invalid declarations first ({@link isDroppedDeclaration}),
+ * then an `!important` declaration beats every normal one, then the later of
+ * two equals wins. A longhand whose winning declaration is a resetting
+ * shorthand (or `all`) resolves to null: its own declaration no longer applies,
+ * and the detectors that read the shorthand read it there. Winners are
+ * resolved on first lookup, so only the properties a detector reads are ever
+ * validated.
+ * @param {StyleDeclaration[]} declarations
+ * @returns {(property: string) => any}
+ */
+function resolveCascade(declarations) {
+  /** @type {Map<string, StyleDeclaration[]>} */
+  const byProperty = new Map();
+  for (const declaration of declarations) {
+    const list = byProperty.get(declaration.property);
+    if (list) list.push(declaration);
+    else byProperty.set(declaration.property, [declaration]);
+  }
+  /** @type {Map<StyleDeclaration, boolean>} */
+  const dropped = new Map();
+  /** @type {Map<string, any>} */
+  const winners = new Map();
+  /** @param {StyleDeclaration} declaration */
+  const isDropped = (declaration) => {
+    let verdict = dropped.get(declaration);
+    if (verdict === undefined) {
+      verdict = isDroppedDeclaration(declaration);
+      dropped.set(declaration, verdict);
+    }
+    return verdict;
+  };
+  return (property) => {
+    if (winners.has(property)) return winners.get(property);
+    const family = [
+      property,
+      ...(Object.hasOwn(RESETTING_SHORTHANDS, property)
+        ? RESETTING_SHORTHANDS[property]
+        : []),
+      "all",
+    ];
+    const candidates = family
+      .flatMap((member) => byProperty.get(member) ?? [])
+      .sort(
+        (left, right) =>
+          Number(right.important) - Number(left.important) ||
+          right.index - left.index,
+      );
+    let winner = null;
+    for (const [rank, candidate] of candidates.entries()) {
+      if (rank === VALIDATIONS_PER_PROPERTY || !isDropped(candidate)) {
+        winner = candidate;
+        break;
+      }
+    }
+    const value = winner?.property === property ? winner.value : null;
+    winners.set(property, value);
+    return value;
+  };
+}
+
+// The inherited properties a hide can come from. A descendant that sets one of
+// them back to a visible value renders its own text, so a hide of this kind
+// covers an element's subtree only up to such an override (see
+// {@link inheritedHideOverride}). Every other hide is of the BOX: nothing a
+// descendant declares brings `display:none` or `opacity:0` content back.
+/** @typedef {"font-size" | "visibility" | "color" | "indent"} InheritedHide */
+
+/**
+ * The ways one element's inline style hides its text: `"box"` when the box
+ * itself is hidden, otherwise the inherited kinds hiding it (empty when
+ * visible).
+ *
+ * `inlineBox` says the element is a non-replaced INLINE box (a plain `<span>`,
+ * `<a>`, `<b>`): `transform`, `text-indent`, `content-visibility` and the
+ * width/height an `overflow:hidden` collapse rests on do not apply to one, so
+ * `<span style="transform:scale(0)">` renders its text and must not be read as
+ * hidden.
+ * @param {(property: string) => any} nodeOf the resolved cascade
+ * @param {boolean} inlineBox
+ * @returns {Set<"box" | InheritedHide>}
+ */
+function styleHides(nodeOf, inlineBox) {
+  // Escapes were decoded at the parse boundary; trim/lowercase for the
+  // case-insensitive keyword compares.
+  /** @param {string} key */
+  const textOf = (key) => declText(nodeOf(key)).trim().toLowerCase();
+  const BOX = new Set(/** @type {const} */ (["box"]));
+
+  if (textOf("display") === "none") return BOX;
   // `content-visibility:hidden` skips rendering the element's contents entirely
   // (not even laid out), so the text is invisible to a human but present in the
   // source. `auto`/`visible` keep it rendered and must not match.
-  if (textOf("content-visibility") === "hidden") return true;
+  if (!inlineBox && textOf("content-visibility") === "hidden") return BOX;
 
   // CSS clamps opacity to [0,1], so any NEGATIVE value renders fully
   // transparent — `< EPSILON` (no `Math.abs`) treats `-1`/`-0.5` as hidden.
-  // `opacity` is a <number> or <percentage>; any other token (`0px`, a bare
-  // Dimension) is an INVALID declaration a browser ignores (element stays
-  // visible), so fail open on anything that isn't a single Number/Percentage.
+  // A non-Number/Percentage token is an invalid declaration the cascade has
+  // already dropped, so only those two shapes reach here.
   const opacity = soleToken(nodeOf("opacity"));
   if (opacity) {
     let fraction = null;
     if (opacity.type === "Number") fraction = parseFloat(opacity.value);
     else if (opacity.type === "Percentage")
       fraction = parseFloat(opacity.value) / 100;
-    if (fraction !== null && fraction < NEAR_ZERO_EPSILON) return true;
+    if (fraction !== null && fraction < NEAR_ZERO_EPSILON) return BOX;
   }
 
-  // `height`/`width` are deliberately NOT tested standalone here: with the
-  // default `overflow:visible`, a zero-sized box still paints its overflowing
-  // children, so a bare `width:0`/`height:0` leaves content on screen.
-  // `isOverflowHidden` below already covers the case where a zero dimension
-  // DOES hide content — gated on `overflow:hidden` also being present.
-  // `font-size:0`, in contrast, reliably collapses text to nothing on its own.
-  if (isNearZeroLength(nodeOf("font-size"))) return true;
-  // The `font` shorthand also carries the font-size, so a `font:0px/1 serif`
-  // collapses text just like the longhand — check its size token too.
-  if (isFontShorthandHidden(nodeOf("font"))) return true;
-
-  if (isPositionedOffscreen(nodeOf, textOf)) return true;
-
-  if (isOffscreenOffset(nodeOf("text-indent"))) return true;
-
+  if (isPositionedOffscreen(nodeOf, textOf)) return BOX;
   // Clipped to nothing: the modern equivalent of the legacy `clip: rect(0…)`.
-  if (isClipPathHidden(nodeOf("clip-path"))) return true;
-  if (isHidingTransform(nodeOf("transform"))) return true;
-  if (isHidingFilter(nodeOf("filter"))) return true;
+  if (isClipPathHidden(nodeOf("clip-path"))) return BOX;
+  if (!inlineBox && isHidingTransform(nodeOf("transform"))) return BOX;
+  if (isHidingFilter(nodeOf("filter"))) return BOX;
+  if (!inlineBox && isOverflowHidden(nodeOf, textOf)) return BOX;
 
-  // Same-color text on its background (white-on-white) and fully transparent
-  // text are invisible to a human but plain text to the model. Colors are
-  // canonicalized so `white`/`#fff`/`rgb(255,255,255)` mixes still compare.
-  // The color actually PAINTED onto the glyphs: `-webkit-text-fill-color`
-  // overrides `color` for the fill when it is concrete, so both hide branches
-  // must reason about this effective fill, not the raw `color` property — else a
-  // `color:#fff;-webkit-text-fill-color:#000` element (black text) is compared as
-  // white and spliced white-on-white.
+  /** @type {Set<"box" | InheritedHide>} */
+  const hides = new Set();
+  if (textOf("visibility") === "hidden" || textOf("visibility") === "collapse")
+    hides.add("visibility");
+  // `height`/`width` are deliberately NOT tested standalone: with the default
+  // `overflow:visible`, a zero-sized box still paints its overflowing children,
+  // so a bare `width:0`/`height:0` leaves content on screen. `font-size:0`, in
+  // contrast, reliably collapses text to nothing on its own; the `font`
+  // shorthand carries the size too.
+  if (
+    isNearZeroLength(nodeOf("font-size")) ||
+    isFontShorthandHidden(nodeOf("font"))
+  )
+    hides.add("font-size");
+  if (!inlineBox && isOffscreenOffset(nodeOf("text-indent")))
+    hides.add("indent");
+  if (isColorHidden(colorState(nodeOf, textOf, null))) hides.add("color");
+  return hides;
+}
+
+/**
+ * What decides whether text is painted invisibly by color: the effective glyph
+ * fill and the backdrop it is painted on, plus the two things that make a
+ * transparent or same-colored fill readable anyway.
+ * @typedef {{ fill: string, backdrop: string, imageLayer: boolean, paintedVisible: boolean }} ColorState
+ */
+
+/**
+ * The color state of one element's own style, layered over `inherited` (the
+ * state its parent passes down) — or over nothing for an element read alone.
+ *
+ * `-webkit-text-fill-color` overrides `color` for the fill when it is
+ * concrete, so a `color:#fff;-webkit-text-fill-color:#000` element (black
+ * text) is compared as black, not spliced white-on-white. The backdrop is the
+ * element's own background color, or the inherited one when it paints none.
+ * @param {(property: string) => any} nodeOf
+ * @param {(property: string) => string} textOf
+ * @param {ColorState | null} inherited
+ * @returns {ColorState}
+ */
+function colorState(nodeOf, textOf, inherited) {
   const color = canonicalizeColor(textOf("color"));
   const fillOverride = canonicalizeColor(textOf("-webkit-text-fill-color"));
-  const effectiveColor = isConcreteColor(fillOverride) ? fillOverride : color;
-  // `color:transparent` (or a transparent fill override) hides text — UNLESS the
-  // glyphs are painted by a background-clip:text gradient, a concrete
-  // -webkit-text-fill-color, or a text stroke, in which case the text is visible.
-  if (effectiveColor === "transparent" && !isTextPaintedVisible(textOf))
-    return true;
-  const background =
+  const ownFill = isConcreteColor(fillOverride) ? fillOverride : color;
+  const ownBackdrop =
     canonicalizeColor(textOf("background-color")) ||
     backgroundColor(nodeOf("background"));
-  // Only flag same-color when BOTH sides resolve to a concrete color (`#rrggbb`
-  // or `transparent`), AND no background IMAGE layer is present (an image can
-  // make same-colored text readable). `var(--x)`, `inherit`, and `currentColor`
-  // canonicalize to their raw token, so two identical unresolved tokens (e.g. the
-  // ubiquitous `color:var(--fg);background:var(--fg)`, which resolve to DIFFERENT
-  // effective colors) would otherwise read as hidden and splice out visible text.
-  // Fail open on anything we can't resolve.
-  if (
-    effectiveColor &&
-    effectiveColor === background &&
-    isConcreteColor(effectiveColor) &&
-    !hasImageLayer(nodeOf)
-  )
-    return true;
+  return {
+    fill: ownFill || (inherited?.fill ?? ""),
+    backdrop:
+      ownBackdrop && ownBackdrop !== "transparent"
+        ? ownBackdrop
+        : (inherited?.backdrop ?? ownBackdrop),
+    imageLayer: hasImageLayer(nodeOf) || (inherited?.imageLayer ?? false),
+    paintedVisible: isTextPaintedVisible(textOf),
+  };
+}
 
-  return isOverflowHidden(nodeOf, textOf);
+/**
+ * True when a color state paints its text invisibly: a fully transparent fill
+ * (unless the glyphs are painted by a background-clip:text gradient or a text
+ * stroke), or a fill identical to its backdrop. The same-color arm needs BOTH
+ * sides concrete (`#rrggbb` or `transparent`) and no background IMAGE layer:
+ * `var(--x)`, `inherit` and `currentColor` canonicalize to their raw token, and
+ * two identical unresolved tokens (the ubiquitous
+ * `color:var(--fg);background:var(--fg)`) resolve to DIFFERENT colors.
+ * @param {ColorState} state
+ * @returns {boolean}
+ */
+function isColorHidden(state) {
+  if (state.fill === "transparent" && !state.paintedVisible) return true;
+  return (
+    state.fill !== "" &&
+    state.fill === state.backdrop &&
+    isConcreteColor(state.fill) &&
+    !state.imageLayer
+  );
+}
+
+/**
+ * True when an inline style hides its element's text, read without element
+ * context: the element is taken to be a block box, and nothing is inherited.
+ * @param {string} styleStr
+ * @returns {boolean}
+ */
+export function isHiddenStyle(styleStr) {
+  const declarations = parseDeclarations(styleStr);
+  if (declarations.length === 0) return false;
+  return styleHides(resolveCascade(declarations), false).size > 0;
 }
 
 // Scripting / resource-loading tags whose PRESENCE is reported to the model

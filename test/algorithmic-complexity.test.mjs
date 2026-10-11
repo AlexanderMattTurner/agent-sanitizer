@@ -119,6 +119,17 @@ const digitChannel = (n) => {
 };
 
 /**
+ * One hiding declaration followed by a run of INVALID declarations of a
+ * property the hide test reads. The cascade validates candidates against
+ * css-tree's lexer, so a style that buys one lexer match per repeat would cost
+ * a match per declaration of every property a detector consults.
+ * @param {number} n
+ * @returns {string}
+ */
+const repeatedInvalidDeclarations = (n) =>
+  `display:none;${grow("color:bogus-value;", n)}`;
+
+/**
  * Text of paired Cyrillic look-alikes, and findings that all OVERLAP a fold
  * already applied: the second glyph of each pair folds first, and the finding on
  * the first glyph then covers a byte that fold rewrote. That is the branch that
@@ -215,6 +226,13 @@ const CASES = {
     // length cap added to the declaration parser would leave a short marker
     // green while the timing quietly moved to an early bail.
     marker: () => isHiddenStyle(digitChannel(LARGE)),
+  },
+  "isHiddenStyle/repeated-invalid-declarations": {
+    input: (size, attempt) => repeatedInvalidDeclarations(size - attempt),
+    run: (style) => isHiddenStyle(style),
+    // Hidden only when the cascade read the leading `display:none` past the
+    // whole run: a parse that bailed early would answer false.
+    marker: () => isHiddenStyle(repeatedInvalidDeclarations(LARGE)),
   },
   "foldConfusables/overlapping-findings": {
     input: (size, attempt) => overlappingFolds(size - attempt),
