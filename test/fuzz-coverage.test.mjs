@@ -12,35 +12,22 @@
  * requiring a named fuzz target for each one can.
  *
  * Each obligation list is one part of a PARTITION over the population it draws
- * from: FUZZ_REQUIRED + FUZZ_EXEMPT + FUZZ_TODO cover every exported function,
- * SEMANTIC_FUZZ_REQUIRED + SEMANTIC_FUZZ_EXEMPT cover every required name, and
- * IN_SCOPE + OUT_OF_SCOPE cover every discovered suite. A required list on its
+ * from: FUZZ_REQUIRED + FUZZ_EXEMPT + FUZZ_TODO cover every function a shipped
+ * module exports, SEMANTIC_FUZZ_REQUIRED + SEMANTIC_FUZZ_EXEMPT cover every
+ * required name, and IN_SCOPE + OUT_OF_SCOPE cover every discovered suite. A required list on its
  * own proves only what it names; the other parts are what make a new export or
  * a new suite impossible to land without a human choosing a side.
  */
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { execFileSync } from "node:child_process";
 import { readFileSync, readdirSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
 import { parse } from "acorn";
 
-import * as invisible from "../src/invisible.mjs";
-import * as html from "../src/html.mjs";
-import * as index from "../src/index.mjs";
-import * as confusables from "../src/confusables.mjs";
-import * as instructions from "../src/instructions.mjs";
-import * as prompt from "../src/prompt.mjs";
-import * as viewMap from "../src/view-map.mjs";
-import * as rehydrate from "../src/rehydrate.mjs";
-import * as output from "../src/output.mjs";
-// Hook-layer entry points: the whole-process compositions that eat untrusted
-// tool output / tool input owe fuzz targets exactly like the engine parsers.
-import * as sanitizeOutputHook from "../claude-hooks/sanitize-output.mjs";
-import * as pretooluseHook from "../claude-hooks/pretooluse-sanitize.mjs";
-
+import { SRC_SCOPE, shippedSources } from "../scripts/shipped-sources.mjs";
 import { CHECKS } from "../src/invisible.mjs";
+import { repoRoot } from "./helpers/repo-root.mjs";
 import {
   THREAT_CODEPOINTS,
   IN_SCOPE_MEMBERS,
@@ -90,7 +77,15 @@ const FUZZ_REQUIRED = [
   "evaluateToolOutput",
   "buildPreToolUseResponse",
   "rehydrateLayer2",
+  // Byte-level parsers the shipped hooks and CLI run over untrusted input.
+  "scanAnsi",
+  "createLineSplitter",
+  "sanitizeAuthoredContent",
 ];
+
+/** FUZZ_EXEMPT entries for a group of names sharing one reason. */
+const withReason = (reason, names) =>
+  Object.fromEntries(names.map((name) => [name, reason]));
 
 /**
  * The DENIAL part of the export partition: every exported function that owes no
@@ -172,6 +167,257 @@ const FUZZ_EXEMPT = Object.freeze({
   toUtf16View:
     "converts a view between offset spaces, validated at construction",
   viewMapDefect: "self-check over a view the pipeline built",
+
+  // ── engine internals reached only through a fuzz-required entry point ─────
+  ...withReason("reads a token scanAnsi produced, fuzzed through applyLayer1", [
+    "isCancelledOrphan",
+    "isOrphanKind",
+    "orphanKindFor",
+    "sgrConcealState",
+  ]),
+  ...withReason("code-point table lookup with no parse step", [
+    "isBrahmicConsonant",
+    "isStandardizedVariant",
+    "isVirama",
+    "joiningType",
+  ]),
+  ...withReason(
+    "parse5 behind sanitizeHtml, fuzzed through it and pinned by html-tree-adapter.test",
+    ["createTreeAdapter", "parseHtmlFragment"],
+  ),
+  ...withReason(
+    "the micromark GFM assembly behind the markdown pipeline, fuzzed through sanitize; the vendored copy is held to upstream by gfm-autolink-parity",
+    ["gfmAutolinkLiteral", "src/gfm.mjs#default"],
+  ),
+  ...withReason(
+    "driven through detectConfusableHosts, which is fuzz-required",
+    ["confusableHost", "confusableLabel"],
+  ),
+  ...withReason("constructs or filters finding records; parses nothing", [
+    "finding",
+    "note",
+    "noteMessages",
+    "warning",
+    "warningMessages",
+  ]),
+  ...withReason("formats already-classified findings into prose", [
+    "describeConfusableHost",
+    "describeConfusableHosts",
+    "describeHtmlSanitized",
+  ]),
+  ...withReason("path predicate over one directory entry", [
+    "excludeNodeModules",
+    "isInsideDir",
+  ]),
+  ...withReason(
+    "parses git's own porcelain output, not untrusted text; pinned by repo-scope.test",
+    ["linkedWorktrees", "parseWorktreeList", "repoPrunedDirs"],
+  ),
+  ...withReason(
+    "validates or renders the shipped credential-names data, which is not untrusted input",
+    ["credentialNameMatcher", "credentialNames", "parseCredentialNames"],
+  ),
+
+  // ── hook stages reached through a fuzz-required hook entry point ──────────
+  ...withReason(
+    "the hook's wrapper over the same-named engine function, fuzzed end-to-end through evaluateToolOutput",
+    [
+      "claude-hooks/sanitize-output.mjs#composeContext",
+      "claude-hooks/sanitize-output.mjs#sanitizeText",
+      "claude-hooks/sanitize-output.mjs#sanitizeValue",
+    ],
+  ),
+  "claude-hooks/scan-invisible-chars.mjs#decodeRun":
+    "a call-time binding of the engine decodeRun, which is fuzz-required",
+  ...withReason(
+    "a stage of the hook pipeline, driven end-to-end by claude-hooks-roundtrip.fuzz through evaluateToolOutput / buildPreToolUseResponse",
+    [
+      "collectPlaceholders",
+      "containsPlaceholder",
+      "layer2Keys",
+      "layer2KeysIn",
+      "layer2PlaceholderNotice",
+      "needsFixedPoint",
+      "placeholderNotice",
+      "preToolUseLayers",
+      "runLayerPipeline",
+      "withSecretDropGuard",
+    ],
+  ),
+  ...withReason("reads files and delegates the parse to scanText", [
+    "readLoadedFile",
+    "scanFile",
+    "scanLoadedFile",
+    "scanProject",
+  ]),
+  ...withReason(
+    "enumerates launch-loaded instruction paths; reads no content",
+    [
+      "claude-hooks/scan-invisible-chars.mjs#findInstructionFiles",
+      "launchInstructionFiles",
+    ],
+  ),
+  ...withReason(
+    "a process entry point: its only parse is JSON.parse of the host event, whose untrusted text it hands to a classified function",
+    [
+      "claude-hooks/plugin-hooks.mjs#main",
+      "claude-hooks/pretooluse-sanitize.mjs#cliMain",
+      "claude-hooks/sanitize-output.mjs#cliMain",
+      "claude-hooks/sanitize-user-prompt.mjs#main",
+      "claude-hooks/scan-invisible-chars.mjs#cliMain",
+      "claude-hooks/scan-loaded-instructions.mjs#cliMain",
+      "judgePreToolUseSanitize",
+      "judgeSanitizeOutput",
+      "judgeSanitizeUserPrompt",
+      "readStdinJson",
+      "runJudgeCli",
+      "sessionIdFromStdin",
+    ],
+  ),
+
+  // ── hook plumbing: no untrusted bytes parsed or transformed ───────────────
+  ...withReason(
+    "reads operator configuration from the environment or argv, not untrusted text",
+    [
+      "configureEnvConfigSource",
+      "digestFlaggingEnabled",
+      "disabledHooks",
+      "dynamicSecretVars",
+      "envBoundSecretVars",
+      "envValueRegex",
+      "extraSecretVars",
+      "failOpenEnabled",
+      "inferenceKeyVars",
+      "looksLikeCredentialVar",
+      "minEnvSecretLen",
+      "parseArgs",
+      "positiveMsOr",
+      "readFlag",
+      "secretsEnabled",
+      "traceThreshold",
+    ],
+  ),
+  ...withReason("process lifecycle, shared state and lazy module loading", [
+    "EmptyStdinError",
+    "adoptHookIoSharedState",
+    "awaitLazyDependency",
+    "claimCliEntry",
+    "configureHookgateMarker",
+    "configureMissingPackageRemedy",
+    "controlPlane",
+    "defaultOpen",
+    "depLoadHint",
+    "failedLazyPackages",
+    "faultPolicy",
+    "hookFaultOutcome",
+    "hookIoSharedState",
+    "hookgateMarkerPath",
+    "isMain",
+    "lastStdinByteLength",
+    "lazyImport",
+    "lazyImportErrorFor",
+    "makeDeadline",
+    "markerIsTrusted",
+    "missingPackageError",
+    "missingPackageMessage",
+    "probeSetupAlive",
+    "registerFaultPolicy",
+    "registerLazyModules",
+    "registeredLazyModule",
+    "sanitizerDepsLoaded",
+    "sanitizerVersion",
+    "setupRunning",
+  ]),
+  ...withReason(
+    "builds or writes the hook's response from an already-computed verdict",
+    [
+      "authoredContext",
+      "collisionWarning",
+      "emitFailClosed",
+      "emitHookFailure",
+      "emitHookResponse",
+      "errMessage",
+      "failClosedContext",
+      "failClosedFields",
+      "failClosedReplacement",
+      "failOpenContext",
+      "formatReport",
+      "formatSkipped",
+      "gateAskReason",
+      "gateReminderContext",
+      "hintedWriteFault",
+      "hookFailureFields",
+      "instructionsLoadedGapNotice",
+      "loadedFileMessage",
+      "nativeStdout",
+      "scopeNotice",
+      "withPostToolUseDefault",
+      "writeFaultOutcome",
+    ],
+  ),
+  ...withReason("a tool-name or tool-path lookup with no parse", [
+    "authoredScopeDecision",
+    "isRevealRead",
+  ]),
+  ...withReason(
+    "per-user state files: paths, markers, hashes and TTL sweeps; parses no content",
+    [
+      "acknowledgeAlert",
+      "alertAckFile",
+      "alertAcknowledged",
+      "alertDir",
+      "appendAlert",
+      "confirmMarkerPath",
+      "dropFingerprint",
+      "gitTracked",
+      "instructionsLoadedFile",
+      "instructionsLoadedNoticeFile",
+      "instructionsLoadedSeen",
+      "invisibleCharAlert",
+      "launchEmptyFile",
+      "persistReveal",
+      "persistSpan",
+      "readSpan",
+      "recordInstructionsLoaded",
+      "recordInstructionsLoadedNotice",
+      "revealDir",
+      "sessionPrefix",
+      "spanPath",
+      "sweepStaleConfirms",
+      "sweepStaleReveals",
+      "sweepStaleSessions",
+      "writeFileNoFollow",
+      "writeSentinelFile",
+    ],
+  ),
+  ...withReason("diagnostics and timing; reads no untrusted bytes", [
+    "bestEffortTrace",
+    "chargeHostExtension",
+    "chargeHostExtensionSync",
+    "chargeRedactorRoundTrip",
+    "excludeConcurrentProvisioning",
+    "excludeProvisioning",
+    "formatBytes",
+    "formatSeconds",
+    "hookTrace",
+    "reportSlowHook",
+    "slowHookNotice",
+    "slowProvisionNotice",
+    "startHookTimer",
+    "trace",
+    "withSlowHookNotice",
+    "writeSlowHookNotice",
+  ]),
+  ...withReason(
+    "IPC with the local redactor daemon, which parses the text it carries",
+    [
+      "classifySocket",
+      "connectAndRequest",
+      "redactViaDaemon",
+      "spawnDaemon",
+      "waitForSocket",
+    ],
+  ),
 });
 
 /**
@@ -187,10 +433,19 @@ const FUZZ_EXEMPT = Object.freeze({
  */
 const FUZZ_TODO = Object.freeze({
   anchorSpans: "anchors a prefix/suffix over untrusted Write content",
+  hasEnvBoundSecret:
+    "a fail-open pre-gate for env-bound redaction, over untrusted tool output",
   matchesSecretHint: "a fail-open pre-gate for the secret scan",
   needsMarkdownPipeline: "a fail-open pre-gate for Layers 2 and 3",
+  needsUrlScan: "a fail-open pre-gate for Layer 3's URL scan",
   overlapAwareCount: "decides Edit ambiguity over untrusted needles",
   pairDiskSpans: "maps redaction pairs onto on-disk spans",
+  safeErrMessage:
+    "neutralizes escape and zero-width bytes in an error message that may quote untrusted text",
+  scrubUntrustedText:
+    "Layer 1 plus a code-point cap over untrusted text bound for model context",
+  secretDropGuard:
+    "decides a Write deny by comparing model-authored content against on-disk secrets",
   sgrCarriesPayload:
     "a fail-open pre-gate for the write path's SGR carve-out, over a hand-rolled parameter grammar",
 });
@@ -229,6 +484,8 @@ const SEMANTIC_FUZZ_EXEMPT = Object.freeze({
     "driven through rehydrateRedacted, where precision is asserted",
   buildPreToolUseResponse:
     "a whole-process composition; each layer's precision is asserted at its own entry point",
+  createLineSplitter:
+    "a byte framer with no detector: its exact-framing property is the whole contract, asserted in cli.test",
   decodeRun: "driven through scanText, where precision is asserted",
   deleteVerbatimSpans:
     "driven through sanitizeText, where precision is asserted",
@@ -245,15 +502,16 @@ const SEMANTIC_FUZZ_EXEMPT = Object.freeze({
   resolveSpan: "driven through rehydrateRedacted, where precision is asserted",
   sanitize:
     "the top-level composition over layers that each carry their own semantic suite",
+  sanitizeAuthoredContent:
+    "applies Layer 1 to model-authored fields; Layer 1's precision is asserted through sanitizeText",
+  scanAnsi:
+    "the tokenizer behind applyLayer1; ansi-pattern-parity holds it token-for-token to the reference grammar",
   spliceOrdered: "driven through sanitizeText, where precision is asserted",
   spliceRanges: "driven through sanitizeHtml, where precision is asserted",
   stripInvisibleWithReport:
     "driven through stripInvisible, where precision is asserted",
 });
 
-const repoRoot = execFileSync("git", ["rev-parse", "--show-toplevel"], {
-  encoding: "utf8",
-}).trim();
 const testDir = path.join(repoRoot, "test");
 
 // A "fuzz suite" is any test file that actually drives fast-check. Discovered by
@@ -690,39 +948,65 @@ const semanticFuzzFiles = fuzzFiles.filter((file) =>
   file.name.endsWith("-semantic-fuzz.test.mjs"),
 );
 
-const exportedFunctions = new Map(
-  [
-    invisible,
-    html,
-    index,
-    confusables,
-    instructions,
-    prompt,
-    viewMap,
-    rehydrate,
-    output,
-  ]
-    .flatMap((mod) => Object.entries(mod))
-    .filter(([, value]) => typeof value === "function"),
-);
+/**
+ * The population key of each distinct exported function.
+ *
+ * A function re-exported under one name by several modules is ONE member, keyed
+ * by its bare name. When distinct functions share a name — the hook layer's own
+ * `sanitizeText` wrapper beside the engine's, four hooks' `cliMain` — the one
+ * exported from `src/` keeps the bare name and every other is keyed
+ * `<module>#<name>`, so no obligation can be silently retargeted at a
+ * same-named wrapper. A `default` export is always qualified.
+ * @param {{ module: string, name: string, fn: Function }[]} bearers
+ * @returns {Map<string, Function>}
+ */
+const keyFunctions = (bearers) => {
+  /** @type {Map<string, Map<Function, string[]>>} name → fn → exporters */
+  const byName = new Map();
+  for (const { module, name, fn } of bearers) {
+    const identities = byName.get(name) ?? new Map();
+    identities.set(fn, [...(identities.get(fn) ?? []), module]);
+    byName.set(name, identities);
+  }
+  const keyed = new Map();
+  for (const [name, identities] of byName) {
+    const unique = identities.size === 1 && name !== "default";
+    const engine = [...identities].filter(([, modules]) =>
+      modules.some((module) => module.startsWith(SRC_SCOPE)),
+    );
+    if (!unique && engine.length > 1)
+      throw new Error(
+        `${engine.length} distinct src/ functions are all exported as ${name}; ` +
+          "the bare key cannot name one of them",
+      );
+    for (const [fn, modules] of identities) {
+      const bare = unique || (name !== "default" && engine[0]?.[0] === fn);
+      keyed.set(bare ? name : `${modules[0]}#${name}`, fn);
+    }
+  }
+  return keyed;
+};
 
-// The hook entry points are added BY NAME rather than by spreading the hook
-// modules' exports: both hook modules define their own `sanitizeText` /
-// `sanitizeValue` wrappers, and a bulk spread would silently retarget the
-// existing engine obligations for those names at the wrappers (`new Map`
-// lets the last entry win). Collisions are rejected outright so a future
-// same-named hook export fails loud instead of shadowing an engine parser.
-for (const [name, mod] of [
-  ["evaluateToolOutput", sanitizeOutputHook],
-  ["buildPreToolUseResponse", pretooluseHook],
-  ["rehydrateLayer2", pretooluseHook],
-]) {
-  assert.ok(
-    !exportedFunctions.has(name),
-    `${name} collides with an engine export — adding it would retarget that obligation`,
-  );
-  exportedFunctions.set(name, mod[name]);
-}
+/** The bare identifier a population key names, for matching suite sources. */
+const bareName = (key) => key.slice(key.indexOf("#") + 1);
+
+// The population is every function every SHIPPED module exports, derived from
+// the package manifest rather than listed, so a new shipped module or export
+// cannot land without a human placing each of its functions in the partition.
+const SHIPPED_MODULES = shippedSources(repoRoot);
+const shippedNamespaces = await Promise.all(
+  SHIPPED_MODULES.map(async (module) => ({
+    module,
+    namespace: await import(new URL(`../${module}`, import.meta.url).href),
+  })),
+);
+const exportedFunctions = keyFunctions(
+  shippedNamespaces.flatMap(({ module, namespace }) =>
+    Object.entries(namespace)
+      .filter(([, value]) => typeof value === "function")
+      .map(([name, fn]) => ({ module, name, fn })),
+  ),
+);
 
 /**
  * Assert `parts` partition `population` exactly, so a member of the population
@@ -805,6 +1089,50 @@ describe("fuzz-coverage obligation gate", () => {
       );
   });
 
+  it("draws the population from every shipped module, hooks and CLI included", () => {
+    // A population read from a hand-picked module list let 183 shipped
+    // functions sit outside the partition; each probe below is a module such a
+    // list left out.
+    assert.deepEqual(
+      shippedNamespaces.map(({ module }) => module),
+      SHIPPED_MODULES,
+    );
+    for (const key of [
+      "scrubUntrustedText", // claude-hooks/lib/hook-io.mjs
+      "createLineSplitter", // bin/sanitize-cli.mjs
+      "scanAnsi", // src/ansi.mjs
+      "claude-hooks/plugin-hooks.mjs#main",
+    ])
+      assert.equal(typeof exportedFunctions.get(key), "function", key);
+  });
+
+  it("keys a same-named wrapper apart from the engine function it shadows", () => {
+    const engine = () => {};
+    const wrapper = () => {};
+    const keyed = keyFunctions([
+      { module: "claude-hooks/hook.mjs", name: "parse", fn: wrapper },
+      { module: "src/a.mjs", name: "parse", fn: engine },
+      { module: "src/index.mjs", name: "parse", fn: engine },
+      { module: "src/a.mjs", name: "default", fn: engine },
+    ]);
+    assert.deepEqual(
+      [...keyed],
+      [
+        ["claude-hooks/hook.mjs#parse", wrapper],
+        ["parse", engine],
+        ["src/a.mjs#default", engine],
+      ],
+    );
+    assert.throws(
+      () =>
+        keyFunctions([
+          { module: "src/a.mjs", name: "parse", fn: engine },
+          { module: "src/b.mjs", name: "parse", fn: wrapper },
+        ]),
+      /2 distinct src\/ functions are all exported as parse/,
+    );
+  });
+
   it("the export partition rejects an unclassified name (assertion is not vacuous)", () => {
     const [required, exempt, todo] = exportParts;
     const population = [...exportedFunctions.keys(), "syntheticNewExport"];
@@ -865,7 +1193,7 @@ describe("fuzz-coverage obligation gate", () => {
     });
 
     it(`'${name}' is referenced by a fast-check suite`, () => {
-      const hits = fuzzFiles.filter((file) => file.fcNames.has(name));
+      const hits = fuzzFiles.filter((file) => file.fcNames.has(bareName(name)));
       assert.ok(
         hits.length > 0,
         `${name} handles untrusted input but no property/fuzz suite's ` +
@@ -1008,7 +1336,9 @@ describe("semantic-fuzz obligation gate", () => {
 
   for (const name of SEMANTIC_FUZZ_REQUIRED) {
     it(`'${name}' is referenced by a *-semantic-fuzz.test.mjs suite`, () => {
-      const hits = semanticFuzzFiles.filter((file) => file.fcNames.has(name));
+      const hits = semanticFuzzFiles.filter((file) =>
+        file.fcNames.has(bareName(name)),
+      );
       assert.ok(
         hits.length > 0,
         `${name} is a precision-sensitive entry point (structural fuzzing alone ` +
