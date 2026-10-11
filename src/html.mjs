@@ -1335,18 +1335,16 @@ const RESETTING_SHORTHANDS = {
 };
 
 /**
- * The inline style's cascade: a lookup from property to the value node of the
- * declaration a browser APPLIES, or null when none applies.
+ * The inline style's cascade: a lookup from property to the declaration a
+ * browser APPLIES for it — its own, a resetting shorthand's, or `all`'s — or
+ * null when none applies.
  *
  * A browser drops invalid declarations first ({@link isDroppedDeclaration}),
  * then an `!important` declaration beats every normal one, then the later of
- * two equals wins. A longhand whose winning declaration is a resetting
- * shorthand (or `all`) resolves to null: its own declaration no longer applies,
- * and the detectors that read the shorthand read it there. Winners are
- * resolved on first lookup, so only the properties a detector reads are ever
- * validated.
+ * two equals wins. Winners are resolved on first lookup, so only the
+ * properties a detector reads are ever validated.
  * @param {StyleDeclaration[]} declarations
- * @returns {(property: string) => any}
+ * @returns {(property: string) => StyleDeclaration | null}
  */
 function resolveCascade(declarations) {
   /** @type {Map<string, StyleDeclaration[]>} */
@@ -1358,7 +1356,7 @@ function resolveCascade(declarations) {
   }
   /** @type {Map<StyleDeclaration, boolean>} */
   const dropped = new Map();
-  /** @type {Map<string, any>} */
+  /** @type {Map<string, StyleDeclaration | null>} */
   const winners = new Map();
   /** @param {StyleDeclaration} declaration */
   const isDropped = (declaration) => {
@@ -1370,7 +1368,8 @@ function resolveCascade(declarations) {
     return verdict;
   };
   return (property) => {
-    if (winners.has(property)) return winners.get(property);
+    const known = winners.get(property);
+    if (known !== undefined) return known;
     const family = [
       property,
       ...(Object.hasOwn(RESETTING_SHORTHANDS, property)
@@ -1392,16 +1391,29 @@ function resolveCascade(declarations) {
         break;
       }
     }
-    const value = winner?.property === property ? winner.value : null;
-    winners.set(property, value);
-    return value;
+    winners.set(property, winner);
+    return winner;
+  };
+}
+
+/**
+ * The value node a property's OWN declaration contributes, or null when no
+ * declaration applies or a resetting shorthand (or `all`) won over it — the
+ * detectors that read the shorthand read it there.
+ * @param {(property: string) => StyleDeclaration | null} winnerOf
+ * @returns {(property: string) => any}
+ */
+function ownValues(winnerOf) {
+  return (property) => {
+    const winner = winnerOf(property);
+    return winner?.property === property ? winner.value : null;
   };
 }
 
 // The inherited properties a hide can come from. A descendant that sets one of
 // them back to a visible value renders its own text, so a hide of this kind
 // covers an element's subtree only up to such an override (see
-// {@link inheritedHideOverride}). Every other hide is of the BOX: nothing a
+// {@link regionVerdicts}). Every other hide is of the BOX: nothing a
 // descendant declares brings `display:none` or `opacity:0` content back.
 /** @typedef {"font-size" | "visibility" | "color" | "indent"} InheritedHide */
 
@@ -1472,6 +1484,8 @@ function styleHides(nodeOf, inlineBox) {
   return hides;
 }
 
+const INHERITED_COLOR_KEYWORDS = new Set(["inherit", "unset", "currentcolor"]);
+
 /**
  * What decides whether text is painted invisibly by color: the effective glyph
  * fill and the backdrop it is painted on, plus the two things that make a
@@ -1493,7 +1507,10 @@ function styleHides(nodeOf, inlineBox) {
  * @returns {ColorState}
  */
 function colorState(nodeOf, textOf, inherited) {
-  const color = canonicalizeColor(textOf("color"));
+  // `color` is inherited, so these spellings all take the parent's fill.
+  const color = INHERITED_COLOR_KEYWORDS.has(textOf("color"))
+    ? ""
+    : canonicalizeColor(textOf("color"));
   const fillOverride = canonicalizeColor(textOf("-webkit-text-fill-color"));
   const ownFill = isConcreteColor(fillOverride) ? fillOverride : color;
   const ownBackdrop =
@@ -1540,7 +1557,7 @@ function isColorHidden(state) {
 export function isHiddenStyle(styleStr) {
   const declarations = parseDeclarations(styleStr);
   if (declarations.length === 0) return false;
-  return styleHides(resolveCascade(declarations), false).size > 0;
+  return styleHides(ownValues(resolveCascade(declarations)), false).size > 0;
 }
 
 // Scripting / resource-loading tags whose PRESENCE is reported to the model
@@ -1616,26 +1633,464 @@ const RAW_TEXT_ELEMENTS = new Set([
   "plaintext",
 ]);
 
+// The non-replaced elements the HTML rendering rules leave at the initial
+// `display:inline`. Custom and unknown elements are inline by default too, but
+// are left out: a component's own stylesheet, which this layer cannot see,
+// routinely makes one a block.
+const INLINE_ELEMENTS = new Set([
+  "a",
+  "abbr",
+  "acronym",
+  "b",
+  "bdi",
+  "bdo",
+  "big",
+  "cite",
+  "code",
+  "data",
+  "del",
+  "dfn",
+  "em",
+  "font",
+  "i",
+  "ins",
+  "kbd",
+  "label",
+  "mark",
+  "nobr",
+  "q",
+  "s",
+  "samp",
+  "small",
+  "span",
+  "strike",
+  "strong",
+  "sub",
+  "sup",
+  "time",
+  "tt",
+  "u",
+  "var",
+]);
+
+// `display` values that leave an inline element an inline box: its initial
+// value, `contents` (no box at all), a `var()` and every CSS-wide keyword. An
+// `inherit` from a parent this element cannot see is read as inline, the side
+// that keeps rendered text.
+const INLINE_DISPLAYS = new Set([
+  "",
+  "inline",
+  "inline flow",
+  "contents",
+  "inherit",
+  "initial",
+  "unset",
+  "revert",
+  "revert-layer",
+]);
+
+// Absolute positioning and floating BLOCKIFY an inline element (CSS 2 §9.7),
+// and so does being a flex or grid item.
+const BLOCKIFYING_POSITIONS = new Set(["absolute", "fixed"]);
+const BLOCKIFYING_FLOATS = new Set([
+  "left",
+  "right",
+  "inline-start",
+  "inline-end",
+]);
+const ITEM_BLOCKIFYING_DISPLAYS = new Set([
+  "flex",
+  "grid",
+  "inline-flex",
+  "inline-grid",
+]);
+
+// Replaced elements whose content is not text. A font-size, color or
+// text-indent hide leaves the picture on screen; only `visibility` (and the
+// box hides) reach it.
+const REPLACED_ELEMENTS = new Set(["img", "video", "audio", "canvas", "embed"]);
+/** @type {InheritedHide[]} */
+const TEXT_ONLY_HIDES = ["font-size", "color", "indent"];
+
+/** @type {WeakMap<object, ((property: string) => StyleDeclaration | null) | null>} */
+const elementCascades = new WeakMap();
+
 /**
- * True for an element a rendered page would not show: `hidden` attribute or a
- * hiding inline style. Works on both hast nodes and parseHtmlTag results.
+ * The cascade of an element's inline style, or null for a non-element and an
+ * element with no declaration. Memoized per node: a scan reads an element's
+ * style as its own and again as its children's parent.
  * @param {any} node
+ * @returns {((property: string) => StyleDeclaration | null) | null}
+ */
+function elementCascade(node) {
+  if (node?.type !== "element") return null;
+  let cascade = elementCascades.get(node);
+  if (cascade === undefined) {
+    const style = node.properties?.style;
+    const declarations =
+      typeof style === "string" ? parseDeclarations(style) : [];
+    cascade = declarations.length > 0 ? resolveCascade(declarations) : null;
+    elementCascades.set(node, cascade);
+  }
+  return cascade;
+}
+
+/**
+ * The applied value of one property of a cascade as lowercased text, "" when
+ * nothing applies.
+ * @param {((property: string) => StyleDeclaration | null) | null} cascade
+ * @param {string} property
+ * @returns {string}
+ */
+function appliedText(cascade, property) {
+  if (!cascade) return "";
+  return declText(ownValues(cascade)(property)).trim().toLowerCase();
+}
+
+/**
+ * True when `node` lays out as a non-replaced INLINE box, so the box-only
+ * hides (`transform`, `text-indent`, `content-visibility`, an `overflow`
+ * collapse) do not apply to it. `parent` is its parent node when known; a
+ * flex or grid parent blockifies it.
+ * @param {any} node
+ * @param {any} [parent]
  * @returns {boolean}
  */
-export function isHiddenElement(node) {
-  if (node.type !== "element") return false;
+function isInlineBox(node, parent) {
+  if (!INLINE_ELEMENTS.has(node.tagName)) return false;
+  const own = elementCascade(node);
+  const display = appliedText(own, "display");
+  if (!INLINE_DISPLAYS.has(display) && !display.includes("var(")) return false;
+  if (BLOCKIFYING_POSITIONS.has(appliedText(own, "position"))) return false;
+  if (BLOCKIFYING_FLOATS.has(appliedText(own, "float"))) return false;
+  return !appliedText(elementCascade(parent), "display")
+    .split(" ")
+    .some((token) => ITEM_BLOCKIFYING_DISPLAYS.has(token));
+}
+
+/**
+ * The ways an element is hidden on its own (see {@link styleHides}), read in
+ * its element context: its tag, and its parent when known.
+ *
+ * `aria-hidden="true"` is deliberately NOT a hiding signal: it removes the
+ * element only from the ACCESSIBILITY TREE, and a sighted reader still sees
+ * the decorative icons and screen-reader-deduplicated text it marks.
+ * @param {any} node
+ * @param {any} [parent]
+ * @returns {Set<"box" | InheritedHide>}
+ */
+function elementHides(node, parent) {
+  if (node.type !== "element") return new Set();
   const { properties = {} } = node;
   if (properties.hidden !== undefined && properties.hidden !== null)
+    return new Set(["box"]);
+  const cascade = elementCascade(node);
+  if (!cascade) return new Set();
+  const hides = styleHides(ownValues(cascade), isInlineBox(node, parent));
+  if (REPLACED_ELEMENTS.has(node.tagName))
+    for (const kind of TEXT_ONLY_HIDES) hides.delete(kind);
+  return hides;
+}
+
+/**
+ * True for an element a rendered page would not show: `hidden` attribute or a
+ * hiding inline style, judged in its element context. Works on both hast nodes
+ * and parseHtmlTag results.
+ * @param {any} node
+ * @param {any} [parent] the element's parent, when known
+ * @returns {boolean}
+ */
+export function isHiddenElement(node, parent) {
+  return elementHides(node, parent).size > 0;
+}
+
+// The lengths a font-size of zero passes through unchanged: units and keywords
+// relative to the parent's font size.
+const PARENT_RELATIVE_FONT_UNITS = new Set(["em", "ex", "ch", "cap", "ic"]);
+const PARENT_RELATIVE_FONT_KEYWORDS = new Set(["smaller", "larger"]);
+// Keywords that take the parent's value of an inherited property.
+const INHERITING_KEYWORDS = new Set(["inherit", "unset"]);
+
+/**
+ * The font-size token of a `font` shorthand: the first length or percentage
+ * (a bare number there is a weight), or a relative size keyword.
+ * @param {any} node
+ * @returns {any | null}
+ */
+function fontShorthandSize(node) {
+  for (const token of valueTokens(node)) {
+    if (token.type === "Dimension" || token.type === "Percentage") return token;
+    if (
+      token.type === "Identifier" &&
+      PARENT_RELATIVE_FONT_KEYWORDS.has(token.name)
+    )
+      return token;
+  }
+  return null;
+}
+
+/**
+ * True when an element under a zero font-size keeps a zero font-size: it sets
+ * none, inherits it, or sets one relative to it (`1.2em`, `150%`, `larger`).
+ * Anything else — an absolute size, a keyword size, `calc()` — renders.
+ * @param {(property: string) => StyleDeclaration | null} winnerOf
+ * @returns {boolean}
+ */
+function keepsZeroFontSize(winnerOf) {
+  const winner = winnerOf("font-size");
+  if (!winner) return true;
+  if (INHERITING_KEYWORDS.has(declText(winner.value).trim().toLowerCase()))
     return true;
-  // `aria-hidden="true"` is deliberately NOT treated as a hiding signal: it
-  // removes the element only from the ACCESSIBILITY TREE, not the rendered
-  // page — a sighted human viewing the page still sees it (it's routinely
-  // used on decorative icons and icon-font glyphs, and on visible text
-  // duplicated for screen-reader dedup). Splicing on it would delete content
-  // a human plainly sees, which is real harm under the precision-over-recall
-  // doctrine for this layer.
-  if (properties.style && isHiddenStyle(properties.style)) return true;
-  return false;
+  if (winner.property === "all") return false;
+  const size =
+    winner.property === "font"
+      ? fontShorthandSize(winner.value)
+      : soleToken(winner.value);
+  if (!size) return false;
+  if (size.type === "Identifier")
+    return PARENT_RELATIVE_FONT_KEYWORDS.has(size.name);
+  if (size.type === "Percentage") return true;
+  if (size.type === "Dimension" && PARENT_RELATIVE_FONT_UNITS.has(size.unit))
+    return true;
+  return (
+    (size.type === "Number" || size.type === "Dimension") &&
+    Math.abs(parseFloat(size.value)) < NEAR_ZERO_EPSILON
+  );
+}
+
+/**
+ * True when an element under `visibility:hidden` stays hidden: `visible` (or
+ * a reset to the initial value) on the element itself is the only way back.
+ * @param {(property: string) => StyleDeclaration | null} winnerOf
+ * @returns {boolean}
+ */
+function keepsHiddenVisibility(winnerOf) {
+  const winner = winnerOf("visibility");
+  if (!winner) return true;
+  const text = declText(winner.value).trim().toLowerCase();
+  if (INHERITING_KEYWORDS.has(text)) return true;
+  return (
+    winner.property === "visibility" &&
+    (text === "hidden" || text === "collapse")
+  );
+}
+
+/**
+ * True when an element under an offscreen `text-indent` stays shifted. An
+ * inline box sits on its parent's shifted first line whatever it declares; a
+ * block shifts its own first line by the inherited indent unless it sets one.
+ * @param {(property: string) => StyleDeclaration | null} winnerOf
+ * @param {boolean} inlineBox
+ * @returns {boolean}
+ */
+function keepsOffscreenIndent(winnerOf, inlineBox) {
+  if (inlineBox) return true;
+  const winner = winnerOf("text-indent");
+  if (!winner) return true;
+  if (INHERITING_KEYWORDS.has(declText(winner.value).trim().toLowerCase()))
+    return true;
+  return winner.property === "text-indent" && isOffscreenOffset(winner.value);
+}
+
+/**
+ * What a region hidden by inherited kinds passes down to a descendant: the
+ * kinds still in force, and the color state the "color" kind is judged by.
+ * @typedef {{ kinds: Set<InheritedHide>, color: ColorState }} RegionState
+ */
+
+/**
+ * How one node inside such a region renders:
+ *  - `hidden`  — nothing of it is visible (non-blank text, an element whose
+ *    whole content stays hidden);
+ *  - `neutral` — it holds nothing to see either way (whitespace, a comment,
+ *    an empty element);
+ *  - `visible` — an element that overrides every hide in force, or a replaced
+ *    element the remaining kinds cannot hide;
+ *  - `mixed`   — an element holding both hidden and visible content.
+ * @typedef {"hidden" | "neutral" | "visible" | "mixed"} RegionVerdict
+ */
+
+/**
+ * The state an element inside a region hands its children, or its verdict
+ * when that is already settled: `hidden` for a box hide of its own, `visible`
+ * when every inherited kind is overridden. A kind only ever SHRINKS on the
+ * way down (an element's own context-free hides are added, nothing else), so
+ * the region never hides more than its elements would read alone.
+ * @param {any} node
+ * @param {any} parent
+ * @param {RegionState} state
+ * @returns {RegionState | "hidden" | "visible"}
+ */
+function descendState(node, parent, state) {
+  const own = elementHides(node, parent);
+  if (own.has("box")) return "hidden";
+  const winnerOf = elementCascade(node) ?? (() => null);
+  const nodeOf = ownValues(winnerOf);
+  /** @param {string} key */
+  const textOf = (key) => declText(nodeOf(key)).trim().toLowerCase();
+  const color = colorState(nodeOf, textOf, state.color);
+  const inlineBox = isInlineBox(node, parent);
+  /** @type {Set<InheritedHide>} */
+  const kinds = new Set();
+  for (const kind of state.kinds) {
+    const stays =
+      (kind === "font-size" && keepsZeroFontSize(winnerOf)) ||
+      (kind === "visibility" && keepsHiddenVisibility(winnerOf)) ||
+      (kind === "indent" && keepsOffscreenIndent(winnerOf, inlineBox)) ||
+      (kind === "color" && isColorHidden(color));
+    if (stays) kinds.add(kind);
+  }
+  for (const kind of own) kinds.add(/** @type {InheritedHide} */ (kind));
+  if (REPLACED_ELEMENTS.has(node.tagName))
+    return kinds.has("visibility") ? "hidden" : "visible";
+  if (kinds.size === 0) return "visible";
+  return { kinds, color };
+}
+
+/**
+ * True for text with nothing to see: whitespace, and the placeholders an
+ * earlier splice round left (re-splicing one would count it twice).
+ * @param {string} value
+ * @returns {boolean}
+ */
+function isBlankText(value) {
+  return value.replace(LAYER2_PLACEHOLDER_RE, "").trim() === "";
+}
+
+/**
+ * The {@link RegionVerdict} of every node of the region rooted at `root`, an
+ * element hidden by the inherited `kinds` alone. Iterative (a preorder list
+ * read back to front settles every child before its parent), so a deep region
+ * costs no stack.
+ * @param {any} root
+ * @param {Set<InheritedHide>} kinds
+ * @returns {Map<any, RegionVerdict>}
+ */
+function regionVerdicts(root, kinds) {
+  /** @type {Map<any, RegionVerdict>} */
+  const verdicts = new Map();
+  const nodeOf = ownValues(elementCascade(root) ?? (() => null));
+  /** @param {string} key */
+  const textOf = (key) => declText(nodeOf(key)).trim().toLowerCase();
+  /** @type {Array<[any, any, RegionState]>} */
+  const stack = [];
+  /** @param {any} node @param {RegionState} state */
+  const pushChildren = (node, state) => {
+    for (const child of node.children ?? []) stack.push([child, node, state]);
+  };
+  pushChildren(root, { kinds, color: colorState(nodeOf, textOf, null) });
+  const order = [root];
+  while (stack.length > 0) {
+    const [node, parent, state] = /** @type {[any, any, RegionState]} */ (
+      stack.pop()
+    );
+    order.push(node);
+    if (node.type === "text")
+      verdicts.set(node, isBlankText(node.value) ? "neutral" : "hidden");
+    else if (node.type !== "element") verdicts.set(node, "neutral");
+    else {
+      const next = descendState(node, parent, state);
+      if (typeof next === "string") verdicts.set(node, next);
+      else pushChildren(node, next);
+    }
+  }
+  for (let i = order.length - 1; i >= 0; i--) {
+    const node = order[i];
+    if (verdicts.has(node)) continue;
+    let hidden = false;
+    let shown = false;
+    for (const child of node.children ?? []) {
+      const verdict = verdicts.get(child);
+      if (verdict === "hidden") hidden = true;
+      else if (verdict === "visible" || verdict === "mixed") shown = true;
+    }
+    verdicts.set(node, shown ? "mixed" : hidden ? "hidden" : "neutral");
+  }
+  return verdicts;
+}
+
+/**
+ * The splice of a region whose root is `mixed`: each maximal run of hidden
+ * siblings (with the whitespace, comments and empty elements between them)
+ * becomes one hidden range, comments outside a run keep their own range, and
+ * every visible or neutral element outside a run is handed back for the
+ * ordinary scan. `mixed` holds the elements left standing, for the tag counts.
+ *
+ * Returns null when a node the splice needs has no position, or siblings'
+ * positions are out of source order or outside their parent's — parse5's
+ * recovery moves nodes — so a run could reach visible bytes; the caller then
+ * splices the whole root.
+ * @param {any} root
+ * @param {Map<any, RegionVerdict>} verdicts
+ * @returns {{ ranges: SpliceRange[], rescan: Array<[any, any]>, mixed: any[] } | null}
+ */
+function mixedRegionSplice(root, verdicts) {
+  /** @type {SpliceRange[]} */
+  const ranges = [];
+  /** @type {Array<[any, any]>} */
+  const rescan = [];
+  const mixed = [];
+  const stack = [root];
+  while (stack.length > 0) {
+    const node = stack.pop();
+    if (!node.position) return null;
+    mixed.push(node);
+    let lastEnd = node.position.start.offset;
+    let runStart = -1;
+    let runEnd = -1;
+    // Neutral comments and elements not yet inside a run: a later hidden
+    // sibling of an open run absorbs them; otherwise they are spliced or
+    // rescanned on their own.
+    /** @type {SpliceRange[]} */
+    let trailingComments = [];
+    /** @type {Array<[any, any]>} */
+    let trailingElements = [];
+    const closeRun = () => {
+      if (runStart !== -1)
+        ranges.push({ start: runStart, end: runEnd, kind: "hidden" });
+      ranges.push(...trailingComments);
+      rescan.push(...trailingElements);
+      runStart = -1;
+      trailingComments = [];
+      trailingElements = [];
+    };
+    for (const child of node.children) {
+      const position = child.position;
+      if (
+        !position ||
+        position.start.offset < lastEnd ||
+        position.end.offset > node.position.end.offset
+      )
+        return null;
+      lastEnd = position.end.offset;
+      const verdict = verdicts.get(child);
+      if (verdict === "hidden") {
+        if (runStart === -1) {
+          closeRun(); // what precedes the run stays outside it
+          runStart = position.start.offset;
+        }
+        runEnd = position.end.offset;
+        trailingComments = [];
+        trailingElements = [];
+      } else if (verdict === "mixed") {
+        closeRun();
+        stack.push(child);
+      } else if (verdict === "visible") {
+        closeRun();
+        rescan.push([child, node]);
+      } else if (child.type === "comment") {
+        trailingComments.push({
+          start: position.start.offset,
+          end: position.end.offset,
+          kind: "comment",
+        });
+      } else if (child.type === "element") {
+        trailingElements.push([child, node]);
+      }
+    }
+    closeRun();
+  }
+  return { ranges, rescan, mixed };
 }
 
 /** @param {any} el */
@@ -1662,14 +2117,15 @@ function hasDataSrc(el) {
  * @param {any} tree
  * @param {string | null} test
  * @param {(node: any, index: number | undefined, parent: any) => unknown} visitor
+ * @param {any} [treeParent] the parent `tree` is visited with, for a subtree
  */
-function walk(tree, test, visitor) {
+function walk(tree, test, visitor, treeParent = undefined) {
   /** @type {any[]} */
   const nodes = [tree];
   /** @type {Array<number | undefined>} */
   const indices = [undefined];
   /** @type {any[]} */
-  const parents = [undefined];
+  const parents = [treeParent];
   while (nodes.length > 0) {
     const node = nodes.pop();
     const index = indices.pop();
@@ -1967,21 +2423,47 @@ function scanFragmentTree(html, tree) {
   /** @type {SpliceRange[]} */
   const ranges = [];
   const warned = newWarned();
-  // @ts-ignore -- visit callback returns EXIT/SKIP only on matches; implicit undefined return is intentional
-  // eslint-disable-next-line consistent-return
-  walk(tree, null, (/** @type {any} */ node) => {
+  /** @param {any} node */
+  const countElement = (node) => {
+    if (REPORTED_TAGS.has(node.tagName)) countTag(warned, node.tagName);
+    if (hasDataSrc(node)) warned.dataSrc += 1;
+  };
+  // Subtrees still to scan, each with its parent: the tree itself, then the
+  // visible parts of every region hidden by inherited kinds alone.
+  /** @type {Array<[any, any]>} */
+  const pending = [[tree, undefined]];
+  let unpositioned = false;
+  /**
+   * @param {any} node
+   * @param {number | undefined} _index
+   * @param {any} parent
+   */
+  const visitor = (node, _index, parent) => {
     const isComment = node.type === "comment";
-    if (isComment || isHiddenElement(node)) {
+    const hides = isComment ? null : elementHides(node, parent);
+    if (isComment || (hides && hides.size > 0)) {
       /* c8 ignore start -- parse5 omits positions only on recovery-synthesized
          elements (tbody and friends), which carry no attributes and so can
          never be hidden; fail closed on the whole fragment if that assumption
          ever breaks. */
       if (!node.position) {
-        ranges.length = 0;
-        ranges.push({ start: 0, end: html.length, kind: "hidden" });
+        unpositioned = true;
         return EXIT;
       }
       /* c8 ignore stop */
+      const region =
+        hides && !hides.has("box")
+          ? inheritedRegionSplice(
+              node,
+              /** @type {Set<InheritedHide>} */ (hides),
+            )
+          : null;
+      if (region) {
+        ranges.push(...region.ranges);
+        region.mixed.forEach(countElement);
+        pending.push(...region.rescan);
+        return SKIP;
+      }
       ranges.push({
         start: node.position.start.offset,
         end: node.position.end.offset,
@@ -1989,11 +2471,32 @@ function scanFragmentTree(html, tree) {
       });
       return SKIP; // children are inside the spliced range
     }
-    if (node.type !== "element") return; // eslint-disable-line consistent-return -- unist visit: undefined return means "continue", same as falling off the end
-    if (REPORTED_TAGS.has(node.tagName)) countTag(warned, node.tagName);
-    if (hasDataSrc(node)) warned.dataSrc += 1;
-  });
+    if (node.type === "element") countElement(node);
+    return undefined;
+  };
+  while (pending.length > 0 && !unpositioned) {
+    const [node, parent] = /** @type {[any, any]} */ (pending.pop());
+    walk(node, null, visitor, parent);
+  }
+  if (unpositioned)
+    return { ranges: [{ start: 0, end: html.length, kind: "hidden" }], warned };
   return { ranges, warned };
+}
+
+/**
+ * The splice of an element hidden by inherited `kinds` alone, when some
+ * descendant overrides them and so renders: `<span style="font-size:0">` around
+ * a `<b style="font-size:14px">` hides the span's own text and shows the
+ * `<b>`. Null when nothing inside overrides (or the positions cannot be
+ * trusted), and the caller splices the whole element.
+ * @param {any} node
+ * @param {Set<InheritedHide>} kinds
+ * @returns {ReturnType<typeof mixedRegionSplice>}
+ */
+function inheritedRegionSplice(node, kinds) {
+  const verdicts = regionVerdicts(node, kinds);
+  if (verdicts.get(node) !== "mixed") return null;
+  return mixedRegionSplice(node, verdicts);
 }
 
 const mdParser = unified().use(remarkParse).use(remarkGfm);
@@ -2422,9 +2925,10 @@ const MAX_SPLICE_ROUNDS = 8;
  *
  * Every offset outside a placeholder maps by the length the splices before it
  * removed. No offset ever falls INSIDE one: a placeholder holds neither `<`
- * nor `>`, and a scanner range always opens on a `<` and closes after a `>` or
- * at the end of the text — so a placeholder edge is the closest an offset gets,
- * and the same shift is exact there.
+ * nor `>`, so it lies wholly inside one text node, and every scanner range edge
+ * is a node edge (a tag's, a comment's, a text node's) or the end of the text —
+ * so a placeholder edge is the closest an offset gets, and the same shift is
+ * exact there.
  * @param {SpliceRange[]} ranges
  * @param {SpliceRange[]} merged  the spliced spans, sorted, one per pair
  * @param {SplicePair[]} pairs

@@ -130,6 +130,20 @@ const repeatedInvalidDeclarations = (n) =>
   `display:none;${grow("color:bogus-value;", n)}`;
 
 /**
+ * A zero-font-size region whose descendants alternately reset the size and
+ * zero it again, nested: every level is a region of its own inside the
+ * visible part of the last, so a splice that re-judged a region's subtree per
+ * level would pay the depth once per node.
+ * @param {number} n
+ * @returns {string}
+ */
+const nestedInheritedRegions = (n) => {
+  const open = '<div style="font-size:0">s<b style="font-size:9px">v';
+  const levels = Math.max(1, Math.floor(n / open.length));
+  return `${open.repeat(levels)}${"</b></div>".repeat(levels)}`;
+};
+
+/**
  * Text of paired Cyrillic look-alikes, and findings that all OVERLAP a fold
  * already applied: the second glyph of each pair folds first, and the finding on
  * the first glyph then covers a byte that fold rewrote. That is the branch that
@@ -233,6 +247,20 @@ const CASES = {
     // Hidden only when the cascade read the leading `display:none` past the
     // whole run: a parse that bailed early would answer false.
     marker: () => isHiddenStyle(repeatedInvalidDeclarations(LARGE)),
+  },
+  "sanitizeHtml/nested-inherited-regions": {
+    input: (size, attempt) => nestedInheritedRegions(size - attempt),
+    run: (text) => sanitizeHtml(text),
+    // One hidden `s` per level spliced, every `v` kept: only a scan that split
+    // each region at its overriding child gets both.
+    marker: () => {
+      const result = sanitizeHtml(nestedInheritedRegions(LARGE));
+      return (
+        result !== null &&
+        !result.text.includes(">s<") &&
+        result.text.includes(">v<")
+      );
+    },
   },
   "foldConfusables/overlapping-findings": {
     input: (size, attempt) => overlappingFolds(size - attempt),
