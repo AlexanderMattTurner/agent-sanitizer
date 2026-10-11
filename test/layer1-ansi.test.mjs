@@ -148,6 +148,16 @@ describe("scanAnsi", () => {
     assert.deepEqual(kinds(`${CSI}31m`), ["sgr"]);
     assert.deepEqual(kinds(`${ESC}[2J`), ["csi"]);
     assert.deepEqual(kinds(`${ESC}(B`), ["csi"]);
+    // ECMA-35 escapes: intermediates (0x20-0x2F) then a final (0x30-0x7E). A
+    // terminal swallows each whole, so the final byte is not visible text.
+    for (const escape of [
+      `${ESC}#8`,
+      `${ESC}7`,
+      `${ESC}=`,
+      `${ESC} x`,
+      `${ESC}a`,
+    ])
+      assert.deepEqual(kinds(escape), ["csi"], hex(escape));
     assert.deepEqual(kinds(`${ESC}]0;title${BEL}`), ["osc"]);
     assert.deepEqual(kinds(`${OSC}0;title${ST}`), ["osc"]);
     assert.deepEqual(kinds(`${ESC}]0;title${ESC}\\`), ["osc"]);
@@ -171,7 +181,7 @@ describe("scanAnsi", () => {
     // following text as parameters), and a raw C1 byte that opens nothing.
     // Only the first is quiet.
     assert.deepEqual(kinds(ESC), ["orphan-introducer"]);
-    assert.deepEqual(kinds(`${ESC} x`), ["orphan-introducer"]);
+    assert.deepEqual(kinds(`${ESC}\n`), ["orphan-introducer"]);
     assert.deepEqual(kinds(`${ESC}[12`), ["orphan-csi-introducer"]);
     assert.deepEqual(kinds(`${ESC}[`), ["orphan-csi-introducer"]);
     // A lone C1 ST and a C1 byte outside the introducer grammar. The string

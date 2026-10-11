@@ -24,9 +24,11 @@ describe("sanitize: Layer 1 ESC neutralization + idempotency", () => {
       " payload",
     ],
     [
-      "nested split (incomplete residual)",
+      // Once the invisibles go, the outer `ESC[` is aborted by the inner ESC
+      // (a terminal drops it and starts afresh) and `ESC[32m` is a colour.
+      "nested split (aborted outer CSI)",
       `${ESC}${ZW}[${ESC}${ZW}[32m payload`,
-      "[ payload",
+      " payload",
     ],
     [
       // Digits are never a valid CSI final byte (ECMA-48 finals are
@@ -38,14 +40,17 @@ describe("sanitize: Layer 1 ESC neutralization + idempotency", () => {
       " payload",
     ],
     [
-      "ANSI removal reconstitutes a sequence",
+      // An ESC directly before another ESC is cancelled: a terminal shows the
+      // `[0m` that follows `ESC[32m` as text, so removing `ESC[32m` must not
+      // join the cancelled ESC to it.
+      "removal never joins a cancelled ESC to later text",
       `${ESC}${ESC}[32m[0m payload`,
-      " payload",
+      "[0m payload",
     ],
     [
-      "doubly nested ANSI reconstitution",
+      "doubly nested cancelled ESCs",
       `${ESC}${ESC}${ESC}[32m[31m[0m payload`,
-      " payload",
+      "[31m[0m payload",
     ],
   ]) {
     it(`reduces to its exact clean text and is idempotent (${name})`, async () => {
@@ -89,9 +94,10 @@ describe("sanitize: Layer 1 ESC neutralization + idempotency", () => {
   });
 
   it("sweeps a lone/incomplete C1 CSI introducer (U+009B), reporting it", async () => {
-    const out = await sanitize(`a${cp(0x9b)}b`);
+    // `1` is a parameter byte and nothing final follows, so no CSI completes.
+    const out = await sanitize(`a${cp(0x9b)}1`);
     assert.ok(!out.cleaned.includes(cp(0x9b)), "U+009B survived the sweep");
-    assert.equal(out.cleaned, "ab");
+    assert.equal(out.cleaned, "a1");
     assert.ok(out.found.includes(CATEGORY.ANSI));
     // The sweep must honor the no-silent-suppression contract deterministically,
     // not just probabilistically via the fuzz postcondition.

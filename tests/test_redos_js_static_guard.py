@@ -66,6 +66,14 @@ UNRESOLVABLE_SITES = {
         "a character class, so the pattern carries no quantifier at all."
     ),
     (
+        "src/ansi.mjs",
+        "new RegExp(ESC_DIRECT_FINAL_CLASS)",
+    ): (
+        "ESC_DIRECT_FINAL_CLASS is built by calling charClass() over 0x30-0x7E "
+        "minus `[` and the string introducers, and ansi.mjs does not export it. "
+        "It is a bare character class, so the pattern carries no quantifier."
+    ),
+    (
         "src/html.mjs",
         'new RegExp(`</${rawText}(?![a-z0-9-])`, "i")',
     ): (

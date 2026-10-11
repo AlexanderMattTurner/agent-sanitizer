@@ -86,28 +86,15 @@ export const SGR_RE = new RegExp(SGR_SOURCE, "g");
 // scanner has already delimited.
 const SGR_ANCHORED_RE = new RegExp(`^${SGR_SOURCE}$`);
 
-// Private parameter-prefix and intermediate bytes that may follow an
-// introducer before the parameters (`ESC[?25h`, `ESC(B`, `ESC#8`). Also covers
-// the 7-bit `ESC [` CSI introducer's bracket itself.
-// The `[` is escaped though neither engine requires it: Python's `re` warns
-// `FutureWarning: Possible nested set` on a bare one, and this class ships as
-// the generated pattern a Python consumer compiles.
-const CSI_INTRO_CLASS = "[\\[()#;?]";
-const CSI_INTRO_RE = new RegExp(CSI_INTRO_CLASS);
-
-// ECMA-48 parameter bytes.
-const CSI_PARAM_CLASS = "[0-9;:]";
-const CSI_PARAM_RE = new RegExp(CSI_PARAM_CLASS);
-
-// ECMA-48 final bytes, minus the ones a terminal never accepts here. Digits are
-// PARAMETER bytes and can never terminate a sequence — an unterminated `ESC[`
-// must not eat trailing visible digits (`ESC[2024 report` is NOT `ESC[` +
-// final-byte `2`; it is an incomplete intro whose ESC the residual sweep
-// removes, leaving "2024 report" intact). `<=>?` (0x3C-0x3F) are private
-// PARAMETER-prefix bytes per ECMA-48 § 5.4, not finals — including them let a
-// private-marker sequence terminate one byte too early. `~` (0x7E) IS a real
-// final byte (vt220 function keys, `ESC[3~` for Delete) and is kept.
-const CSI_FINAL_CLASS = "[A-PR-TZcf-nqrty~]";
+// CSI as a terminal parses it (DEC's parser, vt100.net/emu/dec_ansi_parser):
+// after `ESC [` or U+009B every byte in 0x20-0x3F is swallowed — ECMA-48's
+// parameters (0x30-0x3F, private markers `<=>?` included) and intermediates
+// (0x20-0x2F, e.g. the space in DECSCUSR `ESC[1 q`), well-formed or not — until
+// one final byte (0x40-0x7E) ends the sequence. The two classes are disjoint, so
+// the arm cannot backtrack.
+const CSI_BODY_CLASS = "[ -?]";
+const CSI_BODY_RE = new RegExp(CSI_BODY_CLASS);
+const CSI_FINAL_CLASS = "[@-~]";
 const CSI_FINAL_RE = new RegExp(CSI_FINAL_CLASS);
 
 const ESC = 0x1b;
@@ -132,6 +119,11 @@ const SUB = 0x1a;
 const LF = 0x0a;
 const CR = 0x0d;
 
+// CAN and SUB cancel a sequence in progress (ECMA-48; DEC's parser executes
+// them and returns to ground), so they are consumed with the bytes they cancel.
+const SEQUENCE_CANCEL = [CAN, SUB];
+const INTRODUCER_RE = new RegExp(CONTROL_INTRODUCER_SOURCE);
+
 // PROBLEM CLASS — a control string whose body the grammar leaves as visible
 // text. ECMA-48 opens FIVE strings, not one: OSC (`ESC ]` / U+009D), DCS
 // (`ESC P` / U+0090), SOS (`ESC X` / U+0098), PM (`ESC ^` / U+009E) and APC
@@ -142,8 +134,8 @@ const CR = 0x0d;
 // prompt gate the two bare `ESC`s tokenized as inert orphans, which is the
 // benign kind, so the gate answered `note` instead of `block`.
 // The second byte of the 7-bit form, keyed by introducer. `P` also happens to
-// be a CSI final byte, so without this table `ESC P` completed a two-byte CSI
-// and the DCS body survived that way instead.
+// be an escape final byte, so without this table `ESC P` completed a two-byte
+// escape and the DCS body survived that way instead.
 const STRING_INTRO_7BIT = "]PX^_";
 const OSC_7BIT = "]";
 const OSC_C1 = 0x9d;
@@ -152,14 +144,30 @@ const OSC_C1 = 0x9d;
 // set: opening a string is exactly what ends the one already open.
 const STRING_INTRO_C1 = new Set([0x90, 0x98, OSC_C1, 0x9e, 0x9f]);
 
+// Every other escape, per ECMA-35 § 13.1: `ESC`, intermediate bytes (0x20-0x2F),
+// one final byte (0x30-0x7E) — charset designation `ESC(B`, DECALN `ESC#8`,
+// DECSC `ESC 7`, keypad mode `ESC=`, RIS `ESC c`. A final DIRECTLY after the ESC
+// excludes `[` and the string introducers: those open a CSI or control string
+// instead, so an incomplete `ESC[` stays an orphan rather than a complete escape.
+const ESC_INTERMEDIATE_CLASS = "[ -/]";
+const ESC_INTERMEDIATE_RE = new RegExp(ESC_INTERMEDIATE_CLASS);
+const ESC_FINAL_CLASS = "[0-~]";
+const ESC_FINAL_RE = new RegExp(ESC_FINAL_CLASS);
+const ESC_DIRECT_FINAL_CLASS = charClass(
+  Array.from({ length: 0x7e - 0x30 + 1 }, (_, i) => 0x30 + i).filter(
+    (cp) => !`[${STRING_INTRO_7BIT}`.includes(String.fromCharCode(cp)),
+  ),
+);
+const ESC_DIRECT_FINAL_RE = new RegExp(ESC_DIRECT_FINAL_CLASS);
+
 /**
  * The same grammar {@link scanAnsi} implements, as a REGEX SOURCE — the shipped
  * artifact for a consumer that cannot run this module.
  *
  * The scanner below is AUTHORITATIVE and this is derived from its own constants,
  * never the other way round: the scanner emits token KINDS a regex cannot, and
- * it is linear by construction where the regex form has to carry an explicit
- * guard to stay linear (see the CSI arm's lookahead). What a regex CAN be is data —
+ * it is linear by construction. The regex stays linear too: in every arm each
+ * quantified class is disjoint from what follows it. What a regex CAN be is data —
  * a stdlib-only Python filter on an uncontrolled host, with no install path for
  * this package, can read a pattern string but cannot import a tokenizer. So the
  * generator pins this into `data/invisible-charset.json` beside the introducer
@@ -192,17 +200,23 @@ export const ESCAPE_SEQUENCE_SOURCE = (() => {
     `(?:${charClass(consumed)}|${escapeSt}` +
     `|(?=${charClass(abortBefore)})|(?![\\s\\S]))`;
   const stringArm = `(?:${introducer7Bit}|${charClass(c1Introducers)})${body}${terminator}`;
-  // The negative lookahead pins the intro run MAXIMAL — which is what the
-  // scanner's `while` loop does — and in doing so removes the only place the
-  // two quantifiers could repartition (`;` is in both classes), so this cannot
-  // backtrack super-linearly the way an unbounded `[…;…]*[…;…]*` would.
+  // A sequence ends at its final byte, or is ABORTED (see scanCsi): CAN/SUB is
+  // consumed with it, another introducer ends it before that byte.
+  /** @param {string} finalClass */
+  const ending = (finalClass) =>
+    `(?:${finalClass}|${charClass(SEQUENCE_CANCEL)}|(?=${CONTROL_INTRODUCER_SOURCE}))`;
   const csiArm =
-    `${charClass([ESC, CSI_C1])}${CSI_INTRO_CLASS}*(?!${CSI_INTRO_CLASS})` +
-    `${CSI_PARAM_CLASS}*${CSI_FINAL_CLASS}`;
+    `(?:${unicodeEscape(ESC)}\\[|${unicodeEscape(CSI_C1)})` +
+    `${CSI_BODY_CLASS}*${ending(CSI_FINAL_CLASS)}`;
+  const escapeArm =
+    `${unicodeEscape(ESC)}(?:${ESC_INTERMEDIATE_CLASS}+${ending(ESC_FINAL_CLASS)}` +
+    `|${ESC_DIRECT_FINAL_CLASS}|${charClass(SEQUENCE_CANCEL)})`;
+  // isCancelledOrphan's introducer: one directly before another introducer.
+  const cancelledArm = `${CONTROL_INTRODUCER_SOURCE}(?=${CONTROL_INTRODUCER_SOURCE})`;
   // The string arm runs FIRST for the same reason it does in scanAnsi: `P` is
-  // also a CSI final byte, so a CSI-first alternation takes `ESC P` alone and
-  // leaves the DCS body as visible text.
-  return `(?:${stringArm}|${csiArm})`;
+  // also an escape final byte, so an escape-first alternation takes `ESC P`
+  // alone and leaves the DCS body as visible text.
+  return `(?:${stringArm}|${csiArm}|${escapeArm}|${cancelledArm})`;
 })();
 
 // The three SGR parameters that move the CONCEAL state (ECMA-48 § 8.3.117).
@@ -254,9 +268,9 @@ export const TOKEN_KIND = Object.freeze({
   /**
    * A 7-bit `ESC` that OPENS a CSI (`ESC [`) it never completes. Split from
    * {@link TOKEN_KIND.ORPHAN} because a terminal's CSI parser is STATEFUL: it
-   * keeps consuming what follows as parameters and intermediates until a final
-   * byte (0x40-0x7E) arrives, so `hello ESC[12 world` renders as `hello orld`
-   * — the ` w` is eaten as the sequence's intermediate and final. That is the
+   * executes a line break and keeps waiting for a final byte (0x40-0x7E), so
+   * `hello ESC[12` + LF + `world` renders `orld` on the second line — the `w`
+   * is eaten as the sequence's final. That is the
    * model-sees/human-sees divergence the gate exists for, so consumers that
    * downgrade an inert strip to a note must keep warning on this one; only a
    * lone `ESC` that opens nothing is inert.
@@ -279,7 +293,7 @@ export const TOKEN_KIND = Object.freeze({
 /**
  * True for either orphan kind — the tokens {@link scanAnsi} emits for an
  * introducer that completes no sequence, which the stripper must leave in place
- * for the residual sweep rather than splice (see stripAnsiOnce).
+ * for the residual sweep rather than splice (see stripAnsiFully).
  * @param {string} kind one of {@link TOKEN_KIND}
  * @returns {boolean}
  */
@@ -300,8 +314,8 @@ export function isOrphanKind(kind) {
  * `[` is the only lookahead that matters. The five string introducers — `ESC ]`,
  * `ESC P`, `ESC X`, `ESC ^`, `ESC _` — are consumed whole by
  * {@link scanControlString}, to the end of input if unterminated, so they never
- * reach here; every other second byte (`ESC (`, `ESC #`) bounds what a terminal
- * swallows to a byte or two rather than running until a final byte arrives.
+ * reach here; any other incomplete escape (`ESC (` before a line break) costs a
+ * terminal at most intermediate bytes and one final byte, not a CSI's long run.
  * @param {string} ch
  * @param {string} [next]  the following character, or undefined at end of input
  * @returns {string}
@@ -378,27 +392,75 @@ function scanControlString(text, start) {
 }
 
 /**
- * End index of the CSI / two-byte escape sequence starting at `start`, or -1
- * when the introducer completes no sequence.
- *
- * Single-pass and greedy: intro bytes, then parameter bytes, then exactly one
- * final byte. The previous regex form had to BOUND the intro run ({0,12})
- * because `;` lives in both the intro and parameter classes, so an unbounded
- * run let a `;#;#…` string be split between the two quantifiers — quadratic
- * backtracking (CodeQL js/polynomial-redos). A hand-written scanner never
- * backtracks, so the bound is gone and the scan is linear by construction.
+ * Where a sequence whose body run stopped at `i` ends, or -1 when it is still
+ * incomplete there. A final byte (`finalRe`) or CAN/SUB ends it after that
+ * byte. Another control introducer ABORTS it before that byte: a terminal
+ * drops what it has swallowed so far and starts afresh, so the aborted bytes are
+ * one token and the introducer is re-read as its own.
+ * @param {string} text
+ * @param {number} i
+ * @param {RegExp} finalRe
+ * @returns {number}
+ */
+function sequenceEnd(text, i, finalRe) {
+  if (i >= text.length) return -1;
+  if (finalRe.test(text[i]) || SEQUENCE_CANCEL.includes(text.charCodeAt(i)))
+    return i + 1;
+  return INTRODUCER_RE.test(text[i]) ? i : -1;
+}
+
+/**
+ * End index of the CSI sequence starting at `start`, or -1 when no complete or
+ * aborted CSI starts there. Greedy and single-pass over two disjoint classes.
  * @param {string} text
  * @param {number} start
  * @returns {number}
  */
 function scanCsi(text, start) {
   const code = text.charCodeAt(start);
-  if (code !== ESC && code !== CSI_C1) return -1;
+  let i;
+  if (code === CSI_C1) i = start + 1;
+  else if (code === ESC && text[start + 1] === "[") i = start + 2;
+  else return -1;
+  while (i < text.length && CSI_BODY_RE.test(text[i])) i++;
+  return sequenceEnd(text, i, CSI_FINAL_RE);
+}
+
+/**
+ * End index of the non-CSI escape (`ESC(B`, `ESC#8`, `ESC 7`) starting at
+ * `start`, or -1 when no complete or aborted escape starts there. A bare `ESC`
+ * directly before another introducer is not one: see {@link isCancelledOrphan}.
+ * @param {string} text
+ * @param {number} start
+ * @returns {number}
+ */
+function scanEscape(text, start) {
+  if (text.charCodeAt(start) !== ESC) return -1;
   let i = start + 1;
-  while (i < text.length && CSI_INTRO_RE.test(text[i])) i++;
-  while (i < text.length && CSI_PARAM_RE.test(text[i])) i++;
-  if (i < text.length && CSI_FINAL_RE.test(text[i])) return i + 1;
-  return -1;
+  while (i < text.length && ESC_INTERMEDIATE_RE.test(text[i])) i++;
+  if (i > start + 1) return sequenceEnd(text, i, ESC_FINAL_RE);
+  if (i >= text.length) return -1;
+  const directEnd =
+    ESC_DIRECT_FINAL_RE.test(text[i]) ||
+    SEQUENCE_CANCEL.includes(text.charCodeAt(i));
+  return directEnd ? i + 1 : -1;
+}
+
+/**
+ * True for an orphan a terminal CANCELS: the next character is another control
+ * introducer, which starts afresh, so this one can never complete. A strip
+ * splices it at once — left in place, removing the sequence after it would join
+ * it to the text beyond, a sequence no terminal ever parses.
+ * @param {string} text
+ * @param {AnsiToken} token  a token {@link scanAnsi} returned for `text`
+ * @returns {boolean}
+ */
+export function isCancelledOrphan(text, token) {
+  return (
+    isOrphanKind(token.kind) &&
+    token.end < text.length &&
+    INTRODUCER_RE.test(text[token.end])
+  );
 }
 
 // Drives the scan: jumping introducer-to-introducer keeps the common case (text
@@ -428,11 +490,12 @@ export function scanAnsi(text) {
   let match;
   while ((match = INTRODUCER_SCAN_RE.exec(text)) !== null) {
     const start = match.index;
-    // The string arms run FIRST: `ESC P` also completes a two-byte CSI (`P` is a
-    // final byte), so letting scanCsi answer first would take the DCS
+    // The string arms run FIRST: `ESC P` also completes a two-byte escape (`P`
+    // is a final byte), so letting scanEscape answer first would take the DCS
     // introducer alone and leave its body as visible text.
     const string = scanControlString(text, start);
-    const csiEnd = string ? -1 : scanCsi(text, start);
+    let csiEnd = string ? -1 : scanCsi(text, start);
+    if (!string && csiEnd < 0) csiEnd = scanEscape(text, start);
     let end = start + 1;
     /** @type {string} */
     let kind = orphanKindFor(text[start], text[start + 1]);

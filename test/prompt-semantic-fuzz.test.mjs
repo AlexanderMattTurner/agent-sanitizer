@@ -66,7 +66,9 @@ const INERT_ANSI_TOKENS = [
   `${ESC}[m`,
   `${ESC}[1;4;38;5;196mloud${ESC}[0m`,
   `${C1_CSI}31mred${C1_CSI}0m`,
-  ESC, // lone partial escape: a log line cut mid-sequence
+  // A log line cut mid-sequence. The line break ends it: before the joining
+  // space an ESC would open an escape (`ESC SP x`) that eats the next byte.
+  `${ESC}\n`,
 ];
 
 // Genuine payload carriers per the module's rules: COMPLETE non-SGR escapes

@@ -54,9 +54,11 @@ table](./README.md#entry-points) maps each to its import.
 
 **Reassembly hardening.** The two passes feed each other in _both_ directions:
 stripping an invisible char can reconstitute an ANSI escape its split had
-hidden, removing one ANSI sequence can reconstitute another, and removing an
-ANSI sequence can make two invisibles adjacent that were not—a joiner run the
-invisible pass treats as a payload channel rather than as linguistic. So Layer 1
+hidden, and removing an ANSI sequence can make two invisibles adjacent that were
+not—a joiner run the invisible pass treats as a payload channel rather than as
+linguistic. One ANSI pass alone is already final: each token ends where a
+terminal's parser ends it, and an introducer that the next one cancels is
+removed with it, so no removal joins the remainder into a new sequence. Layer 1
 does not run a fixed sequence of passes; it iterates the whole
 {ANSI, invisible} composition to a fixed point (bounded, since each round
 deletes at least one character), and only once that is stable does it sweep any

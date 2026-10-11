@@ -24,6 +24,7 @@ import fc from "fast-check";
 
 import {
   ESCAPE_SEQUENCE_SOURCE,
+  isCancelledOrphan,
   isOrphanKind,
   scanAnsi,
 } from "../src/ansi.mjs";
@@ -46,12 +47,13 @@ function stripWithPattern(text) {
 }
 
 /** The same strip via the authoritative tokenizer: splice every non-orphan
- * token, leaving orphans to the residual sweep (`stripAnsiOnce`'s body). */
+ * token and every cancelled orphan, leaving the rest to the residual sweep
+ * (`stripAnsiFully`'s body). */
 function stripWithScanner(text) {
   let out = "";
   let last = 0;
   for (const token of scanAnsi(text)) {
-    if (isOrphanKind(token.kind)) continue;
+    if (isOrphanKind(token.kind) && !isCancelledOrphan(text, token)) continue;
     out += text.slice(last, token.start);
     last = token.end;
   }
@@ -100,11 +102,79 @@ const grammarByte = fc.constantFrom(
   "a",
   "\n",
   "\r",
+  // The CSI bytes outside the old grammar: private parameter markers,
+  // intermediates, and finals the old class left out.
+  "<",
+  "=",
+  ">",
+  "!",
+  "/",
+  "@",
+  "`",
+  "{",
+  "|",
+  "}",
+  "q",
+  "s",
+  "u",
 );
 
+// A whole CSI drawn from ECMA-48 § 5.4 itself, so the corpus reaches every
+// parameter, intermediate and final byte rather than only the ones listed above.
+const byteIn = (lo, hi) =>
+  fc.integer({ min: lo, max: hi }).map((code) => String.fromCharCode(code));
+const validCsi = fc
+  .tuple(
+    fc.constantFrom(`${ESC}[`, CSI),
+    fc.array(byteIn(0x30, 0x3f), { maxLength: 4 }),
+    fc.array(byteIn(0x20, 0x2f), { maxLength: 2 }),
+    byteIn(0x40, 0x7e),
+  )
+  .map(([intro, params, intermediates, final]) =>
+    [intro, ...params, ...intermediates, final].join(""),
+  );
+
 const grammarText = fc
-  .array(grammarByte, { maxLength: 24 })
+  .array(fc.oneof({ weight: 4, arbitrary: grammarByte }, validCsi), {
+    maxLength: 24,
+  })
   .map((parts) => parts.join(""));
+
+// The sequences a terminal swallows, spelled from the specs rather than imported,
+// so this is an oracle for the shipped grammar and not a second copy of it: a
+// CSI as DEC's parser reads it (every 0x20-0x3F byte, then a 0x40-0x7E final),
+// and an ECMA-35 escape (0x20-0x2F intermediates, then a 0x30-0x7E final; one
+// directly after ESC is not `[`, which opens a CSI instead).
+const TERMINAL_SEQUENCE_RE = new RegExp(
+  `(?:${ESC}\\[|${CSI})[\\x20-\\x3f]*[\\x40-\\x7e]` +
+    `|${ESC}(?:[\\x20-\\x2f]+[\\x30-\\x7e]|(?!\\[)[\\x30-\\x7e])`,
+);
+
+// Sequences a terminal swallows whole that the grammar used to miss: CSI private
+// markers (`<=>`), CSI intermediates, finals outside the old final class, a
+// malformed CSI body DEC's parser still consumes, and ECMA-35 escapes.
+const WIDENED_CSI = [
+  ["xterm modifyOtherKeys", `${ESC}[>4;1m`],
+  ["private `=` marker", `${ESC}[=5h`],
+  ["DECSCUSR (space intermediate)", `${ESC}[1 q`],
+  ["SGR mouse report", `${ESC}[<0;1;1M`],
+  ["save cursor", `${ESC}[s`],
+  ["restore cursor", `${ESC}[u`],
+  ["insert char `@`", `${ESC}[4@`],
+  ["HPA backtick", `${ESC}[5\``],
+  ["DECSLE `{`", `${ESC}[1{`],
+  ["`|` final", `${ESC}[2|`],
+  ["DECERA `}`", `${ESC}[1}`],
+  ["C1 private marker", `${CSI}>4;1m`],
+  ["malformed CSI (intermediate before parameter)", `${ESC}[(1m`],
+  ["DECSC", `${ESC}7`],
+  ["DECRC", `${ESC}8`],
+  ["DECKPAM", `${ESC}=`],
+  ["DECALN", `${ESC}#8`],
+  ["S7C1T (space intermediate)", `${ESC} F`],
+  ["CSI cancelled by CAN", `${ESC}[12${CAN}`],
+  ["escape cancelled by SUB", `${ESC}(${SUB}`],
+];
 
 // Every way a control string can end, plus both CSI encodings — the arms the
 // pattern has to reproduce one for one.
@@ -122,6 +192,9 @@ const ARMS = [
   ["unterminated at EOF", `${ESC}]dangling`],
   ["CSI", `${ESC}[2J`],
   ["C1 CSI", `${CSI}31m`],
+  ["CSI aborted by ESC", `${ESC}[12 ${ESC}[31m`],
+  ["cancelled ESC", `${ESC}${ESC}[31m`],
+  ...WIDENED_CSI,
 ];
 
 describe("the shipped escape pattern and the scanner are one grammar", () => {
@@ -162,6 +235,40 @@ describe("the shipped escape pattern and the scanner are one grammar", () => {
       assert.equal(stripWithPattern(input), input);
       assert.equal(stripWithScanner(input), input);
     }
+  });
+
+  it("removes every sequence a terminal swallows, as one `csi` token", () => {
+    for (const [name, sequence] of WIDENED_CSI) {
+      const input = `A${sequence}Z`;
+      assert.equal(stripWithPattern(input), "AZ", `${name} / pattern`);
+      assert.equal(stripWithScanner(input), "AZ", `${name} / scanner`);
+      assert.deepEqual(
+        scanAnsi(sequence),
+        [{ start: 0, end: sequence.length, kind: "csi" }],
+        name,
+      );
+    }
+  });
+
+  it("reaches a fixed point in one pass that leaves no terminal sequence", () => {
+    fc.assert(
+      fc.property(grammarText, (text) => {
+        for (const [name, strip] of [
+          ["pattern", stripWithPattern],
+          ["scanner", stripWithScanner],
+        ]) {
+          const once = strip(text);
+          assert.equal(strip(once), once, `${name}: a second pass changed it`);
+          const residue = TERMINAL_SEQUENCE_RE.exec(once);
+          assert.equal(
+            residue,
+            null,
+            `${name} left ${JSON.stringify(residue)}`,
+          );
+        }
+      }),
+      fcRunOptions(),
+    );
   });
 
   it("agrees with the scanner over generated escape-dense text", () => {

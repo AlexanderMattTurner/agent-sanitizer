@@ -21,8 +21,11 @@ import re
 import time
 import unicodedata
 import warnings
+from collections.abc import Callable
 
 import pytest
+from hypothesis import given
+from hypothesis import strategies as st
 
 from tests._helpers import REPO_ROOT, ensure_python_pkg_on_path
 
@@ -128,6 +131,27 @@ _ANSI_CASES = [
     ("osc_body_swallows_ff", "x\x1b]0;a\x0cPAYLOAD\x07y", "xy"),
     ("osc_body_swallows_us", "x\x1b]0;a\x1fPAYLOAD\x07y", "xy"),
     ("osc_body_swallows_del", "x\x1b]0;a\x7fPAYLOAD\x07y", "xy"),
+    # The full ECMA-48 CSI: private parameter markers `<=>`, intermediate bytes
+    # (0x20-0x2F), and every final byte 0x40-0x7E.
+    ("csi_private_gt_marker", "a\x1b[>4;1mb", "ab"),
+    ("csi_private_eq_marker", "a\x1b[=5hb", "ab"),
+    ("csi_space_intermediate", "a\x1b[1 qb", "ab"),
+    ("csi_sgr_mouse_report", "a\x1b[<0;1;1Mb", "ab"),
+    ("csi_save_cursor", "a\x1b[sb", "ab"),
+    ("csi_restore_cursor", "a\x1b[ub", "ab"),
+    ("c1_csi_private_marker", "a\x9b>4;1mb", "ab"),
+    # DEC's parser swallows a malformed CSI body through its final byte too.
+    ("csi_malformed_body", "a\x1b[(1mb", "ab"),
+    # ECMA-35 escapes: intermediates (0x20-0x2F), then a final (0x30-0x7E).
+    ("esc_decsc", "a\x1b7b", "ab"),
+    ("esc_deckpam", "a\x1b=b", "ab"),
+    ("esc_decaln", "a\x1b#8b", "ab"),
+    ("esc_space_intermediate", "a\x1b Fb", "ab"),
+    # Another introducer ABORTS a sequence: a terminal drops the swallowed bytes
+    # and re-reads the introducer, and a cancelled ESC never joins later text.
+    ("csi_aborted_by_esc", "a\x1b[12 \x1b[31mb", "ab"),
+    ("cancelled_esc_never_joins", "\x1b\x1b[32m[0m tail", "[0m tail"),
+    ("csi_cancelled_by_can", "a\x1b[12\x18b", "ab"),
 ]
 
 
@@ -145,6 +169,57 @@ def test_no_raw_esc_survives() -> None:
     residual ESC the alternation can't consume must still be gone."""
     for text in ("\x1b", "\x1b\x1b\x1b", "plain\x1b", "\x1b\x00tail", "a\x1b"):
         assert "\x1b" not in strip_untrusted(text), repr(text)
+
+
+@pytest.mark.parametrize(
+    "sequence",
+    [
+        "\x1b[>4;1m",
+        "\x1b[=5h",
+        "\x1b[1 q",
+        "\x1b[<0;1;1M",
+        "\x1b[s",
+        "\x1b[u",
+        "\x1b[(1m",
+        "\x1b7",
+        "\x1b=",
+        "\x1b#8",
+    ],
+)
+def test_ansi_re_removes_a_whole_sequence(sequence: str) -> None:
+    """``ANSI_RE`` alone, with no residual sweep behind it: a stdlib consumer
+    that compiles the shipped pattern gets the whole sequence removed."""
+    assert ANSI_RE.sub("", sequence) == ""
+
+
+# The sequences a terminal swallows, spelled from the specs rather than read from
+# the shipped pattern, so this is an oracle for that pattern and not a copy of
+# it: a CSI as DEC's parser reads it (every 0x20-0x3F byte, then a 0x40-0x7E
+# final) and an ECMA-35 escape (0x20-0x2F intermediates, then a 0x30-0x7E final;
+# one directly after ESC is not `[`, which opens a CSI instead).
+_TERMINAL_SEQUENCE_RE = re.compile(
+    "(?:\x1b\\[|\x9b)[\x20-\x3f]*[\x40-\x7e]"
+    "|\x1b(?:[\x20-\x2f]+[\x30-\x7e]|(?!\\[)[\x30-\x7e])"
+)
+_SEQUENCE_PIECES = st.sampled_from(
+    ["\x1b", "\x9b", "\x1b]", "\x07", "\x1b\\", "[", "\n", "a", " ", "(", "7"]
+) | st.builds(
+    "".join,
+    st.tuples(
+        st.sampled_from(["\x1b[", "\x9b", "\x1b"]),
+        st.text(st.characters(min_codepoint=0x20, max_codepoint=0x3F), max_size=4),
+        st.characters(min_codepoint=0x30, max_codepoint=0x7E),
+    ),
+)
+
+
+@given(st.lists(_SEQUENCE_PIECES, max_size=24).map("".join))
+def test_one_pass_is_a_fixed_point_with_no_terminal_sequence(text: str) -> None:
+    """One ``ANSI_RE`` pass is final: a second pass changes nothing, and no
+    ESC/CSI followed by a sequence a terminal swallows remains."""
+    once = ANSI_RE.sub("", text)
+    assert ANSI_RE.sub("", once) == once
+    assert _TERMINAL_SEQUENCE_RE.search(once) is None
 
 
 # ─── The shipped grammar is an artifact, not an accident ─────────────────────
@@ -170,32 +245,51 @@ def test_pattern_compiles_under_plain_re_with_no_flags() -> None:
     assert ANSI_RE.pattern == pattern
 
 
-def test_pattern_does_not_backtrack_on_a_repartitioning_run() -> None:
+def _growth(compiled: re.Pattern, text: Callable[[int], str], n: int) -> float:
+    """How much longer ``compiled`` takes on ``text(8 * n)`` than on ``text(n)``:
+    ~8 when linear, ~64 when quadratic. The best of five runs damps noise."""
+
+    def seconds(subject: str) -> float:
+        best = float("inf")
+        for _ in range(5):
+            start = time.perf_counter()
+            compiled.sub("", subject)
+            best = min(best, time.perf_counter() - start)
+        return best
+
+    return seconds(text(8 * n)) / seconds(text(n))
+
+
+# Between the ~8x of a linear pattern and the ~64x of a quadratic one.
+_LINEAR_GROWTH_BOUND = 24
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        lambda n: "\x1b[" * n,
+        lambda n: "\x9b?" * n,
+        lambda n: "\x1b " * n,
+        lambda n: "\x1b]x" * n,
+        lambda n: "\x1b[" + " " * n,
+    ],
+    ids=["csi-repeat", "c1-csi-repeat", "esc-repeat", "osc-repeat", "csi-run"],
+)
+def test_pattern_is_linear_on_unterminated_runs(text: Callable[[int], str]) -> None:
     """The generated pattern runs on untrusted input inside a consumer with no
-    timeout, and ``regexploit`` (the repo's static ReDoS analyzer) does not model
-    this shape: two ADJACENT quantified classes that both accept ``;``, which
-    repartition quadratically with no nested quantifier for it to find. What
-    holds the CSI arm linear is the negative lookahead pinning the intro run
-    maximal, so the guard has to be the cost itself.
+    timeout. Each arm's quantified class is disjoint from what follows it, so a
+    run with no final byte fails in one pass. ``regexploit`` does not flag two
+    adjacent overlapping stars, so the guard is the cost itself: a ratio on one
+    machine, not a wall-clock threshold on an unknown runner."""
+    assert _growth(ANSI_RE, text, 20_000) < _LINEAR_GROWTH_BOUND
 
-    The control is DERIVED from the shipped pattern by deleting that lookahead,
-    so it cannot rot into testing some other regex, and the comparison is a ratio
-    on one machine rather than a wall-clock threshold on an unknown runner."""
-    bomb = "\x1b" + ";" * 8000
-    guarded = re.compile(escape_sequence_pattern())
-    unguarded = re.compile(re.sub(r"\(\?!\[[^]]*\]\)", "", escape_sequence_pattern()))
-    assert unguarded.pattern != guarded.pattern, "the lookahead was not found"
 
-    def seconds(compiled: re.Pattern) -> float:
-        start = time.perf_counter()
-        compiled.search(bomb)
-        return time.perf_counter() - start
-
-    fast, slow = seconds(guarded), seconds(unguarded)
-    # Non-vacuity: the input really is a backtracking bomb for the unguarded
-    # form (quadratic — ~4x per doubling of the run), so a pass here means the
-    # lookahead defused it rather than that the input was harmless.
-    assert slow > fast * 20, f"guarded {fast:.4f}s vs unguarded {slow:.4f}s"
+def test_growth_bound_catches_a_quadratic_pattern() -> None:
+    """Non-vacuity: two adjacent stars over one class, the shape the arms avoid,
+    exceed the bound on an unterminated run."""
+    quadratic = re.compile("\x1b\\[[ -?]*[ -?]*[@-~]")
+    growth = _growth(quadratic, lambda n: "\x1b[" + " " * n, 300)
+    assert growth > _LINEAR_GROWTH_BOUND
 
 
 # ─── Invisible charset completeness (the pinned-SSOT guarantee) ───────────────

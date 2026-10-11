@@ -24,6 +24,7 @@
 import { stripInvisibleWithReport, CATEGORY, STRIP } from "./invisible.mjs";
 import {
   CONTROL_INTRODUCER_SOURCE,
+  isCancelledOrphan,
   isOrphanKind,
   orphanKindFor,
   scanAnsi,
@@ -63,60 +64,34 @@ function sweepIntroducers(text, kinds) {
 export const LONE_SURROGATE_RE =
   /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g;
 
-const MAX_ANSI_PASSES = 3;
-
 /**
  * Splice out every complete ANSI sequence {@link scanAnsi} finds — SGR, other
- * CSI/two-byte escapes, and whole OSC strings. An ORPHAN introducer (one that
- * starts no sequence) is deliberately LEFT: deleting it here would drop the
- * `ESC` out of `ESC`<ZWSP>`[32m` before the invisible pass could reconstitute
- * the sequence, turning a hidden control into visible `[32m` in the model's
- * view. Orphans are removed by applyLayer1's residual sweep, once no
- * reconstitution is possible.
- * @param {string} text
+ * CSI/escapes, aborted sequences and whole control strings — in ONE pass, which
+ * is already a fixed point: a token ends only where a terminal's parser would,
+ * and a cancelled orphan (see {@link isCancelledOrphan}) goes with it, so no
+ * removal can join what is left into a new sequence. Any other ORPHAN
+ * introducer is deliberately LEFT: deleting it here would drop the `ESC` out of
+ * `ESC`<ZWSP>`[32m` before the invisible pass could reconstitute the sequence,
+ * turning a hidden control into visible `[32m` in the model's view. Orphans are
+ * removed by applyLayer1's residual sweep, once no reconstitution is possible.
+ * @param {string} input
  * @param {Set<string>} [kinds]  collects the {@link TOKEN_KIND} of every
- *   sequence this pass actually removed, so a caller can tell a display-only
- *   colour strip from a cursor/erase/OSC one without re-scanning (see
+ *   sequence actually removed, so a caller can tell a display-only colour strip
+ *   from a cursor/erase/OSC one without re-scanning (see
  *   {@link isBenignAnsiKinds}).
  * @returns {string}
  */
-function stripAnsiOnce(text, kinds) {
+export function stripAnsiFully(input, kinds) {
   let out = "";
   let last = 0;
-  for (const token of scanAnsi(text)) {
-    if (isOrphanKind(token.kind)) continue;
+  for (const token of scanAnsi(input)) {
+    if (isOrphanKind(token.kind) && !isCancelledOrphan(input, token)) continue;
     kinds?.add(token.kind);
-    out += text.slice(last, token.start);
+    out += input.slice(last, token.start);
     last = token.end;
   }
-  if (last === 0) return text;
-  return out + text.slice(last);
-}
-
-/**
- * Strip ANSI escape sequences to a fixed point. Removing one sequence can
- * reconstitute another around it (a lone ESC left of `ESC[32m[0m` gains the
- * trailing `[0m` once the inner sequence is removed, forming a brand-new valid
- * sequence the single pass would miss), so iterate — but only a fixed few
- * times. Bounding by the input's ESC count is quadratic on attacker-controlled
- * text: `("\x1b[").repeat(n) + "m".repeat(n)` reconstitutes exactly ONE
- * sequence per pass, so n full O(n) scans run, and 48 KB already costs seconds.
- * The passes are not what makes Layer 1 safe — applyLayer1's residual
- * CONTROL_INTRODUCER_RE sweep is, and it removes every ESC/C1 byte whatever
- * survives here. Past the bound a reconstituted sequence therefore degrades to
- * VISIBLE text rather than a hidden control, which is the fail-open direction.
- * @param {string} input
- * @param {Set<string>} [kinds]  see {@link stripAnsiOnce}; accumulates across passes
- * @returns {string}
- */
-export function stripAnsiFully(input, kinds) {
-  let prev = input;
-  let out = stripAnsiOnce(prev, kinds);
-  for (let pass = 1; pass < MAX_ANSI_PASSES && out !== prev; pass++) {
-    prev = out;
-    out = stripAnsiOnce(prev, kinds);
-  }
-  return out;
+  if (last === 0) return input;
+  return out + input.slice(last);
 }
 
 /**
@@ -260,8 +235,8 @@ export function isBenignAnsi(text) {
 
 // How many times the {ANSI strip, invisible strip} composition may re-run before
 // the sweep is forced. Each iteration deletes at least one character, so the
-// loop terminates on its own; the bound is a DoS guard on the same quadratic
-// argument as MAX_ANSI_PASSES (n rounds of O(n) scans on adversarial input).
+// loop terminates on its own; the bound is a DoS guard: n rounds of O(n) scans
+// on adversarial input is quadratic.
 // Three rounds is what the deepest REAL reconstitution needs — strip
 // invisibles, remove the ANSI they hid, strip the joiners that ANSI removal
 // made adjacent, confirm — so four leaves a round of margin. Deeper nesting is
@@ -270,7 +245,7 @@ export function isBenignAnsi(text) {
 // escape sequence, and every joiner that hides one is therefore stripped by the
 // FIRST invisible pass. Past the bound the composition simply stops early — the
 // final sweep still holds the no-introducer guarantee, and what is left degrades
-// to visible text (the fail-open direction), exactly as with MAX_ANSI_PASSES.
+// to visible text (the fail-open direction).
 const MAX_LAYER1_PASSES = 4;
 
 /**
