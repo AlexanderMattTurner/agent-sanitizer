@@ -199,8 +199,11 @@ def test_pin_extraction_tells_a_pin_from_a_range(package_json: dict) -> None:
 
 # The ISO 8601 subset uv accepts for a relative `exclude-newer` (uv itself
 # rejects calendar months and years), and Renovate's `<n> <unit>` form.
-ISO_DURATION = re.compile(r"P(?:(\d+)W)?(?:(\d+)D)?(?:T(?:(\d+)H)?(?:(\d+)M)?)?")
-RENOVATE_DURATION = re.compile(r"(\d+) (minute|hour|day|week)s?")
+ISO_DURATION = re.compile(
+    r"P(?:(?P<weeks>\d+)W)?(?:(?P<days>\d+)D)?"
+    r"(?:T(?:(?P<hours>\d+)H)?(?:(?P<minutes>\d+)M)?)?"
+)
+RENOVATE_DURATION = re.compile(r"(?P<count>\d+) (?P<unit>minute|hour|day|week)s?")
 RENOVATE_UNIT_MINUTES = {"minute": 1, "hour": 60, "day": 24 * 60, "week": 7 * 24 * 60}
 
 
@@ -213,7 +216,9 @@ def _iso_duration_minutes(text: str) -> int:
             f"{text!r} is not an ISO 8601 week/day/hour/minute duration "
             f"(e.g. `P3D`); spell the window that way so this guard can read it"
         )
-    weeks, days, hours, minutes = (int(part or 0) for part in match.groups())
+    weeks, days, hours, minutes = (
+        int(match[unit] or 0) for unit in ("weeks", "days", "hours", "minutes")
+    )
     return ((weeks * 7 + days) * 24 + hours) * 60 + minutes
 
 
@@ -225,7 +230,7 @@ def _renovate_duration_minutes(text: str) -> int:
             f"{text!r} is not a `<n> <minute|hour|day|week>[s]` duration "
             f"(e.g. `3 days`); spell the window that way so this guard can read it"
         )
-    return int(match[1]) * RENOVATE_UNIT_MINUTES[match[2]]
+    return int(match["count"]) * RENOVATE_UNIT_MINUTES[match["unit"]]
 
 
 @pytest.mark.drift_guard
