@@ -50831,7 +50831,10 @@ function envValueRegex(value) {
   let re = ENV_VALUE_REGEX_CACHE.get(value);
   if (re === void 0) {
     const visible = [...value].filter(
-      (ch) => !ENV_INVIS_SET.has(ch.codePointAt(0))
+      (ch) => !ENV_INVIS_SET.has(
+        /** @type {number} */
+        ch.codePointAt(0)
+      )
     );
     re = new RegExp(
       visible.length > 0 ? visible.map(escapeLiteral).join(ENV_INVIS_RUN) : [...value].map(escapeLiteral).join(""),

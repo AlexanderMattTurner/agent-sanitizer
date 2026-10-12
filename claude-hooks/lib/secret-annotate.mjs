@@ -41,6 +41,7 @@ const ENV_INVIS_RUN =
   ENV_INVIS_CODEPOINTS.map((cp) => `\\u{${cp.toString(16)}}`).join("") +
   "]*";
 
+/** @param {string} ch */
 const escapeLiteral = (ch) => ch.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
 /**
@@ -63,7 +64,7 @@ export function envValueRegex(value) {
   let re = ENV_VALUE_REGEX_CACHE.get(value);
   if (re === undefined) {
     const visible = [...value].filter(
-      (ch) => !ENV_INVIS_SET.has(ch.codePointAt(0)),
+      (ch) => !ENV_INVIS_SET.has(/** @type {number} */ (ch.codePointAt(0))),
     );
     // A value made only of invisibles has no literal to anchor a gap on: match
     // it exactly rather than build a pattern that is nothing but gaps.
