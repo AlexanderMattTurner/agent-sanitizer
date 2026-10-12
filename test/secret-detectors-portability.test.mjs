@@ -116,7 +116,7 @@ const PATTERN_EXAMPLES = {
   "HashiCorpTerraformTokenDetector[0]": `${rep(14)}.atlasv1.${rep(60)}`,
   "GitHubFineGrainedPatDetector[0]": `github_pat_${rep(82)}`,
   "OpenRouterApiKeyDetector[0]": `sk-or-v1-${hex(64)}`,
-  "LooseProviderKeyDetector[0]": `sk-or-${rep(20)}`,
+  "LooseProviderKeyDetector[0]": `sk-or-A1${rep(18)}`,
   "GroqApiKeyDetector[0]": `gsk_${rep(32)}`,
   "XaiApiKeyDetector[0]": `xai-${rep(40)}`,
   "ReplicateApiTokenDetector[0]": `r8_${rep(37)}`,

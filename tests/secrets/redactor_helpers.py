@@ -165,6 +165,17 @@ LEGITIMATE = {
     "snake_case name containing a provider prefix": (
         "def test_mask_ant_tokens_in_every_streamed_chunk_of_tool_output():"
     ),
+    "long placeholder provider keys": (
+        "export ANTHROPIC_API_KEY=sk-ant-api03-your-api-key-here, "
+        "e.g. sk-ant-api03-XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX or "
+        "sk-ant-api03-REDACTED_REDACTED_REDACTED_REDACTED or "
+        "sk-ant-admin01-your-admin-key-here or sk-or-v1-your-openrouter-api-key"
+    ),
+    "provider prefix inside hyphenated names": (
+        "--sk-ant-placeholder-value-goes-here and "
+        'import x from "./sk-ant-design-tokens-and-theme-config" and '
+        "the sk-or-not-to-be-or-not-to-be-that-is-the-question"
+    ),
 }
 
 
@@ -184,6 +195,8 @@ SHAPE_ONLY_LEGITIMATE = (
     "placeholder provider keys",
     "hyphenated words containing a provider prefix",
     "snake_case name containing a provider prefix",
+    "long placeholder provider keys",
+    "provider prefix inside hyphenated names",
     "python import",
     "env reference in code",
     "oauth discovery doc",
