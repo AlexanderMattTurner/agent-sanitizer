@@ -39,6 +39,13 @@ import {
 } from "../src/invisible.mjs";
 import { applyLayer1, stripAnsiFully } from "../src/layer1.mjs";
 import {
+  assertLinear,
+  describeGrowth,
+  geometricSizes,
+  growth,
+  timed,
+} from "./helpers/cpu-timing.mjs";
+import {
   fcRunOptions,
   cp,
   unicodeChar,
@@ -1968,28 +1975,29 @@ describe("applyLayer1: OSC strings and C1 sequences", () => {
   // The deliberate bounded-intro / negated-body design keeps the ANSI grammar
   // linear; an adversarial never-completing string must not blow up.
   //
-  // We assert a GENEROUS ABSOLUTE wall-clock bound on one pass over a large
-  // adversarial input, not a ratio of two timings. The old ratio test
-  // (big / small < 40) divided by a tiny ~20k-char `small` denominator: under
-  // CI load spikes that denominator is so small and noisy that genuinely-linear
-  // code spikes the ratio past the threshold, producing false reds (it flaked
-  // #37 while passing locally). An absolute bound has no noisy denominator yet
-  // still catches the ReDoS class with a huge margin: linear stripping of this
-  // 400k-char input is single-digit milliseconds, whereas catastrophic /
-  // quadratic backtracking on a never-terminating n=200000 input would run for
-  // tens of seconds — orders of magnitude past 2000ms. So 2000ms cleanly
-  // separates linear-with-headroom from any super-linear blowup.
-  it("OSC/CSI stripping stays linear on adversarial never-terminating input", () => {
-    const n = 200000;
-    const input = `${ESC}]` + ";".repeat(n) + `${ESC}[` + ";#".repeat(n);
-    const t0 = process.hrtime.bigint();
-    applyLayer1(input);
-    const ms = Number(process.hrtime.bigint() - t0) / 1e6;
-    assert.ok(
-      ms < 2000,
-      `applyLayer1 on a ${input.length}-char adversarial input took ${ms.toFixed(1)}ms (>= 2000ms suggests super-linear backtracking)`,
-    );
-  });
+  // Classified by the shared growth estimator rather than a wall-clock bound
+  // or a ratio of two timings. A ratio of two single samples (big / small <
+  // 40) flaked #37: its ~20k-char denominator was small enough for one load
+  // spike to swing it. The estimator takes the fastest of several interleaved
+  // CPU samples per size, batches the small sizes to the large one's length,
+  // and fits an exponent over four sizes, so one bad sample moves the verdict
+  // by a fraction of its error. Measured at 0.97 on a loaded machine.
+  timed(
+    "OSC/CSI stripping stays linear on adversarial never-terminating input",
+    async (t) => {
+      const curve = await growth(
+        (n, attempt) =>
+          `${ESC}]` +
+          ";".repeat(n - attempt) +
+          `${ESC}[` +
+          ";#".repeat(n - attempt),
+        (input) => applyLayer1(input),
+        geometricSizes(25_000, 200_000),
+      );
+      t.diagnostic(describeGrowth(curve));
+      assertLinear("applyLayer1 on a never-terminating OSC/CSI run", curve);
+    },
+  );
 });
 
 // ─── stripAnsiFully: CSI final-byte grammar + OSC interior-ESC abort ─────────

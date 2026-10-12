@@ -1,0 +1,12 @@
+# Supply-chain cooling-off window for the Python dev toolchain: uv refuses any
+# distribution uploaded within the last 3 days, the same floor pnpm's
+# `minimumReleaseAge` holds for npm (tests/test_minimum_release_age.py).
+#
+# This lives in uv.toml, not `[tool.uv]` in pyproject.toml, because of the line
+# below it. A uv older than 0.9.17 cannot parse a relative `exclude-newer`: from
+# pyproject.toml it warns, discards the whole `[tool.uv]` table (this guard
+# included) and re-resolves with no cooldown. In uv.toml the same file carries
+# both keys, so an old uv fails on the file instead of quietly dropping the
+# window, and a current uv refuses to run below the floor.
+required-version = ">=0.9.17"
+exclude-newer = "P3D"

@@ -20,10 +20,11 @@
  */
 import { describe, it, beforeEach, before, after } from "node:test";
 import assert from "node:assert/strict";
-import { createServer } from "node:net";
 import { mkdtempSync, rmSync, readdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+
+import { startStandInDaemon } from "./redactor-stand-in.mjs";
 
 // Stub redactor daemon socket + fresh reveal store, both set BEFORE the hook
 // imports (the client resolves its socket path at module load; the reveal dir
@@ -35,9 +36,9 @@ const projectDir = mkdtempSync(join(tmpdir(), "sanitizer-l2-rt-proj-"));
 process.env.CLAUDE_PROJECT_DIR = projectDir;
 const base = mkdtempSync(join(tmpdir(), "sanitizer-l2-rt-"));
 
-const { evaluateToolOutput } =
+const { evaluateToolOutput, ON_DISK_PLACEHOLDER_WARNING } =
   await import("../claude-hooks/sanitize-output.mjs");
-const { rehydrateLayer2 } =
+const { rehydrateLayer2, buildPreToolUseResponse } =
   await import("../claude-hooks/pretooluse-sanitize.mjs");
 const { sanitizeValue } = await import("../src/output.mjs");
 const { layer2Placeholder } = await import("../src/html.mjs");
@@ -46,40 +47,20 @@ const { layer2Keys } =
 const { readSpan, SPAN_ROUNDTRIP_NOTICE } =
   await import("../claude-hooks/lib/reveal.mjs");
 
-// A SUBSTITUTING stub daemon over the real socket protocol (4-byte BE length +
-// JSON): it redacts exactly SECRET_VALUE wherever it appears, and reports
-// nothing to redact (null) otherwise — so redaction is observable per-text
-// instead of a fixed canned reply.
+// A SUBSTITUTING stand-in daemon: it redacts exactly SECRET_VALUE wherever it
+// appears, and reports nothing to redact (null) otherwise — so redaction is
+// observable per-text instead of a fixed canned reply.
 const SECRET_VALUE = "hunter2hunter2hunter2";
 const REDACTED_MARK = "[REDACTED: password]";
-function startStubDaemon() {
-  const server = createServer((sock) => {
-    const chunks = [];
-    sock.on("data", (chunk) => {
-      chunks.push(chunk);
-      const buf = Buffer.concat(chunks);
-      if (buf.length < 4) return;
-      const expected = buf.readUInt32BE(0);
-      if (buf.length < 4 + expected) return;
-      const request = JSON.parse(
-        buf.subarray(4, 4 + expected).toString("utf8"),
-      );
-      const reply = request.text.includes(SECRET_VALUE)
-        ? {
-            text: request.text.replaceAll(SECRET_VALUE, REDACTED_MARK),
-            found: ["StubPassword"],
-          }
-        : null;
-      const body = Buffer.from(JSON.stringify(reply), "utf8");
-      const header = Buffer.allocUnsafe(4);
-      header.writeUInt32BE(body.length, 0);
-      sock.end(Buffer.concat([header, body]));
-    });
-  });
-  return new Promise((resolve) => {
-    server.listen(socketPath, () => resolve(server));
-  });
-}
+const startStubDaemon = () =>
+  startStandInDaemon(socketPath, ({ text }) =>
+    text.includes(SECRET_VALUE)
+      ? {
+          text: text.replaceAll(SECRET_VALUE, REDACTED_MARK),
+          found: ["StubPassword"],
+        }
+      : null,
+  );
 
 /** @type {import("node:net").Server} */
 let daemon;
@@ -201,6 +182,11 @@ describe("persist → rehydrate round trip", () => {
 });
 
 describe("SECURITY: a secret inside a splice rehydrates to REDACTED bytes", () => {
+  // The redaction runs only under the secret opt-in; with it off the span is
+  // stored verbatim, like every other byte the hook passes through (pinned by
+  // the partition suite below).
+  before(() => (process.env.AGENT_SANITIZER_SECRETS_ENABLED = "1"));
+  after(() => delete process.env.AGENT_SANITIZER_SECRETS_ENABLED);
   it("persists the redacted original and restores only the redacted form", async () => {
     const secretHidden = `<div hidden>password: ${SECRET_VALUE}</div>`;
     const secretPh = layer2Placeholder("hidden", secretHidden);
@@ -224,6 +210,32 @@ describe("SECURITY: a secret inside a splice rehydrates to REDACTED bytes", () =
       `body <div hidden>password: ${REDACTED_MARK}</div>`,
     );
     assert.ok(!result.updatedInput.content.includes(SECRET_VALUE));
+  });
+});
+
+describe("SECURITY: enabling secrets later upgrades a span stored raw while they were off", () => {
+  it("replaces the raw entry, so rehydration restores only the redacted form", async () => {
+    const secretHidden = `<div hidden>password: ${SECRET_VALUE}</div>`;
+    const secretPh = layer2Placeholder("hidden", secretHidden);
+    const [key] = layer2Keys(secretPh);
+    const run = () =>
+      evaluateToolOutput({
+        tool_name: "WebFetch",
+        tool_input: {},
+        tool_response: `page ${secretHidden} end`,
+      });
+    // Opt-in off (the default): the span is stored verbatim under its key.
+    await run();
+    assert.equal(readSpan(key), secretHidden);
+    // Same page, opt-in on: the key is the same, so a dedupe that kept the
+    // existing entry would restore the raw secret under a "redacted" notice.
+    process.env.AGENT_SANITIZER_SECRETS_ENABLED = "1";
+    try {
+      await run();
+    } finally {
+      delete process.env.AGENT_SANITIZER_SECRETS_ENABLED;
+    }
+    assert.equal(readSpan(key), `<div hidden>password: ${REDACTED_MARK}</div>`);
   });
 });
 
@@ -272,5 +284,88 @@ describe("engine sanitizeValue accumulates splices for structured output", () =>
       splices,
     );
     assert.deepEqual(splices, []);
+  });
+});
+
+describe("the secret opt-in partitions every daemon dial", () => {
+  // One opt-in decision per hook run must govern EVERY secret-touching path:
+  // the walk, the reveal sidecar, the span store, the on-disk tripwire and the
+  // PreToolUse rehydrator. A path that dials with the layer off sends tool
+  // output to a daemon the user never enabled; prose that claims redaction
+  // with the layer off tells the model a stored raw secret is safe.
+  let dials = 0;
+  before(() => daemon.on("connection", () => (dials += 1)));
+  const secretHidden = `<div hidden>password: ${SECRET_VALUE}</div>`;
+  const secretComment = `<!-- password=${SECRET_VALUE} -->`;
+  const page = `page ${secretHidden} mid ${secretComment} end`;
+  const [hiddenKey] = layer2Keys(layer2Placeholder("hidden", secretHidden));
+  const onDisk = join(base, "on-disk.txt");
+  writeFileSync(onDisk, "alpha\nbeta\n");
+  const postToolUse = [
+    { tool_name: "WebFetch", tool_input: {}, tool_response: page },
+    {
+      tool_name: "mcp__docs__fetch",
+      tool_input: {},
+      tool_response: { result: { pages: [page] } },
+    },
+    {
+      tool_name: "Read",
+      tool_input: { file_path: "/tmp/notes.md" },
+      tool_response: `see ${REDACTED_MARK} and ${page}`,
+    },
+  ];
+  const preToolUse = [
+    {
+      tool_name: "Write",
+      tool_input: { file_path: onDisk, content: "alpha\nbeta\ngamma\n" },
+    },
+    {
+      tool_name: "Edit",
+      tool_input: { file_path: onDisk, old_string: "beta", new_string: "b" },
+    },
+  ];
+  /** Every model-facing string the corpus produces, after a fresh store. */
+  const runCorpus = async () => {
+    const texts = [];
+    for (const input of postToolUse) {
+      const fields = await evaluateToolOutput(input);
+      // A clean pass is null: nothing model-facing to inspect.
+      texts.push(JSON.stringify(fields));
+    }
+    for (const input of preToolUse) {
+      const fields = await buildPreToolUseResponse(input, undefined, () => {});
+      texts.push(JSON.stringify(fields));
+    }
+    return texts.join("\n");
+  };
+
+  it("opted out: no dial, spans stored verbatim, no redaction claimed", async () => {
+    delete process.env.AGENT_SANITIZER_SECRETS_ENABLED;
+    dials = 0;
+    const texts = await runCorpus();
+    assert.equal(dials, 0, "a secret path dialed the daemon while opted out");
+    assert.equal(readSpan(hiddenKey), secretHidden);
+    // Positive marker: the reveal sidecar really was written on this path, so
+    // the absence of the claim below is not the absence of the hint.
+    assert.match(texts, /the original output before HTML removal was saved/u);
+    assert.doesNotMatch(texts, /still redacted|redacted before storage/u);
+    assert.ok(!texts.includes(ON_DISK_PLACEHOLDER_WARNING));
+  });
+
+  it("opted in: the same corpus dials and stores the redacted form", async () => {
+    process.env.AGENT_SANITIZER_SECRETS_ENABLED = "1";
+    try {
+      dials = 0;
+      const texts = await runCorpus();
+      assert.ok(dials > 0, "the opted-in corpus never dialed the daemon");
+      assert.equal(
+        readSpan(hiddenKey),
+        `<div hidden>password: ${REDACTED_MARK}</div>`,
+      );
+      assert.match(texts, /before HTML removal \(secrets still redacted\)/u);
+      assert.ok(texts.includes(ON_DISK_PLACEHOLDER_WARNING));
+    } finally {
+      delete process.env.AGENT_SANITIZER_SECRETS_ENABLED;
+    }
   });
 });

@@ -10,8 +10,8 @@ import { minEnvSecretLen, envBoundSecretVars } from "./env-config.mjs";
 // (which ships with no data directory beside it) and Node resolves it from the
 // package when the hooks run from source. A DATA import, deliberately not a
 // static `agent-sanitizer/invisible` import — a top-level package import in a
-// hook lib aborts the process before the consuming hook's fail-closed catch
-// installs, which is a fail OPEN on the module that withholds secrets.
+// hook lib aborts the process before the consuming hook's fault-posture catch
+// installs, so the output passes with no warning at all.
 import charset from "../../python/agent_sanitizer/data/invisible-charset.json" with { type: "json" };
 
 // Invisible characters an attacker can splice between a value's characters to
@@ -27,14 +27,22 @@ import charset from "../../python/agent_sanitizer/data/invisible-charset.json" w
 // every gap are what bound the match — a `*` gap is never adjacent to another
 // gap, so there is no ambiguity to backtrack over and no ReDoS. (The class size
 // is irrelevant to that: a character class matches in O(1) whether it holds one
-// member or all 435.)
+// member or all 435.) That argument holds only while no literal is itself a
+// member of the class, so {@link envValueRegex} drops the value's own invisible
+// code points before it splices: `a<ZWSP>a` would otherwise build
+// `a[…]*<ZWSP>[…]*a`, whose two stars share the literal and backtrack
+// quadratically over a long run of ZWSP.
+const ENV_INVIS_CODEPOINTS = [
+  ...new Set([...charset.cf_codepoints, ...charset.extra_codepoints]),
+].sort((a, b) => a - b);
+const ENV_INVIS_SET = new Set(ENV_INVIS_CODEPOINTS);
 const ENV_INVIS_RUN =
   "[" +
-  [...new Set([...charset.cf_codepoints, ...charset.extra_codepoints])]
-    .sort((a, b) => a - b)
-    .map((cp) => `\\u{${cp.toString(16)}}`)
-    .join("") +
+  ENV_INVIS_CODEPOINTS.map((cp) => `\\u{${cp.toString(16)}}`).join("") +
   "]*";
+
+/** @param {string} ch */
+const escapeLiteral = (ch) => ch.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
 /**
  * Regex matching `value` tolerating invisible chars spliced between its
@@ -55,10 +63,15 @@ const ENV_INVIS_RUN =
 export function envValueRegex(value) {
   let re = ENV_VALUE_REGEX_CACHE.get(value);
   if (re === undefined) {
+    const visible = [...value].filter(
+      (ch) => !ENV_INVIS_SET.has(/** @type {number} */ (ch.codePointAt(0))),
+    );
+    // A value made only of invisibles has no literal to anchor a gap on: match
+    // it exactly rather than build a pattern that is nothing but gaps.
     re = new RegExp(
-      [...value]
-        .map((ch) => ch.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))
-        .join(ENV_INVIS_RUN),
+      visible.length > 0
+        ? visible.map(escapeLiteral).join(ENV_INVIS_RUN)
+        : [...value].map(escapeLiteral).join(""),
       "u",
     );
     ENV_VALUE_REGEX_CACHE.set(value, re);

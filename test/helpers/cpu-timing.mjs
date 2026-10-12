@@ -1,18 +1,47 @@
 /**
  * CPU-time measurement for the gates that read cost rather than correctness.
  *
- * Every such gate is a RATIO — a cost against a calibration, or a cost at one
- * input size against the same cost at another — because machine speed and the
- * coverage instrumentation scale both sides, so a ratio survives a slow or
- * instrumented runner in a way milliseconds do not. A ratio does not cancel a
- * BUSY machine, though, so a timed block is charged in CPU time rather than wall
- * clock: time descheduled behind another test worker is not time the code spent,
- * and the CPU clock does not charge it.
+ * Two kinds of gate read it. A BUDGET (`test/hook-latency.test.mjs`) is a cost
+ * against a calibration pass, a ratio because machine speed and the coverage
+ * instrumentation scale both sides. A GROWTH gate — every complexity gate in
+ * the repo — is a fitted EXPONENT: how cost grows across input sizes, never a
+ * ratio of two samples against a constant tuned for one test. A single sample
+ * on each side lands on either side of any constant on a loaded runner: one
+ * collector pause read a linear Python shape at ~580x, and a slow runner read
+ * a quadratic control at 12.99x against a limit of 15.
  *
- * Shared by `test/hook-latency.test.mjs` (budgets against a calibration pass)
- * and `test/algorithmic-complexity.test.mjs` (growth against input length).
+ * {@link growth} is the one estimator. It samples three or more geometrically
+ * spaced sizes, interleaved, keeping each size's fastest per-call CPU reading,
+ * and fits the slope of ln(cost) on ln(size). Every gate classifies that slope
+ * against ONE shared pair of thresholds, read from
+ * `tests/data/growth-exponents.json` so the Python twin (`tests/_growth.py`)
+ * means the same thing by "linear":
+ *
+ * - {@link LINEAR_MAX_EXPONENT} (1.35): a gate passes below it. Every gate
+ *   that ships read 0.74-1.14 here on a 4-core machine at load average 18-28
+ *   (the JS growth gates 0.74-1.14, the Python ones 0.79-1.07, a few constant-
+ *   cost entry points near 0), and `n log n` over an 8x span reads ~1.1. The
+ *   weakest real defect either suite has caught read 1.59 (a per-finding
+ *   rebuild, 27.1x for 8x) and 1.57 (`_redact_line`, 2.97x for 2x).
+ * - {@link SUPERLINEAR_MIN_EXPONENT} (1.7): a positive control passes above
+ *   it. The controls read 1.85-2.49 at the same load (quadratic specimen
+ *   1.98-2.05, the collision memo reverted 1.85, the copy-quadratic 2.47-2.49).
+ *   The band between the two is deliberately dead: a control drifting into it
+ *   fails, rather than a gate and its control sharing one cut-off that noise
+ *   can straddle.
+ *
+ * Every timed block is charged in CPU time rather than wall clock: time
+ * descheduled behind another test worker is not time the code spent. This
+ * module and `tests/_growth.py` are the only test code allowed to turn a clock
+ * reading into a verdict — `test/real-clock-thresholds.test.mjs` fails any
+ * other test that does, including one reading it through an accessor imported
+ * from here (`measure`, `growth`, `clockResolutionMs`). So a verdict on a
+ * reading — a budget in units, an absolute ceiling, the clock's granularity,
+ * the calibration floor, "this costs more than that" — is an `assert*` below
+ * that takes the reading and throws; the test never compares it itself.
  */
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { it } from "node:test";
 
 /**
@@ -104,54 +133,181 @@ export async function measure(input, fn) {
   return best;
 }
 
+/**
+ * The one pair of thresholds every growth gate in the repo classifies against,
+ * read from the same file the Python harness (`tests/_growth.py`) reads. The
+ * module header above gives the measurements behind the values.
+ */
+const EXPONENTS = JSON.parse(
+  readFileSync(
+    new URL("../../tests/data/growth-exponents.json", import.meta.url),
+    "utf8",
+  ),
+);
+/** A gate passes when its fitted exponent is BELOW this. */
+export const LINEAR_MAX_EXPONENT = EXPONENTS.linear_max_exponent;
+/** A positive control passes when its fitted exponent is ABOVE this. */
+export const SUPERLINEAR_MIN_EXPONENT = EXPONENTS.superlinear_min_exponent;
+
 /** A timed block has to last at least this long to be a measurement rather than
  * timer noise, however cheap the call it is made of. */
 const MIN_BLOCK_MS = 5;
-/** How many distinct documents a timed block cycles through. */
+/** ...and is matched to the largest size's call only up to this long. Past it a
+ * block is one call: a block this long no longer finds a quiet slot that a
+ * longer one would miss, and matching a 300 ms parse would multiply what every
+ * gate costs by the number of sizes. */
+const MAX_BLOCK_MS = 50;
+/** How many distinct inputs each size cycles through. */
 const BLOCK_RING = 8;
+/** Interleaved rounds: every size is sampled this many times, and the fastest
+ * per-call reading of each size is the one the fit reads. Fewer than the eight
+ * {@link measure} takes because a fit is less fragile than a budget: an end
+ * size read even 1.7x high (the worst four samples gave a budget) moves a
+ * four-size exponent by 0.23, inside the margin on either threshold — and every
+ * round costs one block per size. */
+const ROUNDS = 5;
 
 /**
- * The per-call CPU cost of `fn`, timed over as many calls as it takes to fill a
- * block of `blockMs`.
- *
- * One 32 KB pass costs a fraction of a millisecond on a fast machine, and that
- * is the number a scaling gate divides by. Timing a batch and dividing keeps
- * the small end meaningful at any machine speed.
- *
- * `blockMs` is what makes the two sides of a scaling ratio comparable: the
- * caller passes the cost of the side it will be divided into, since
- * fastest-of-N is fair only between blocks of similar length (see
- * {@link measure}). Under {@link MIN_BLOCK_MS} the floor wins and the bias runs
- * the other way.
- * @template T
- * @param {(attempt: number) => T} input
- * @param {(built: T) => unknown | Promise<unknown>} fn
- * @param {number} blockMs
- * @returns {Promise<number>}
+ * `count` sizes from `lo` to `hi` inclusive, evenly spaced on a log scale — so
+ * every step is the same RATIO, which is what a log-log fit weighs evenly.
+ * @param {number} lo
+ * @param {number} hi
+ * @param {number} [count]
+ * @returns {number[]}
  */
-export async function measurePerCall(input, fn, blockMs) {
-  const single = (await measure(input, fn)).cpu;
-  // A zero would divide into a repeat count no loop finishes. The resolution
-  // probe callers run first is what normally catches a clock too coarse to
-  // measure these calls; this refuses to hang if one gets past it.
-  assert.ok(single > 0, "the CPU clock reported no time for a timed call");
-  const repeats = Math.ceil(Math.max(MIN_BLOCK_MS, blockMs) / single);
-  if (repeats <= 1) return single;
-  // The block cycles a ring of distinct documents for the same reason `measure`
-  // varies its input, and a ring rather than one document per call because
-  // `repeats` runs to the hundreds on a fast machine and each document is a
-  // whole input. Consecutive calls always differ, which is what a one-entry
-  // parse memo needs to miss.
-  const ring = [];
-  for (let i = 0; i < Math.min(repeats, BLOCK_RING); i++)
-    ring.push(input(SAMPLES + 1 + i));
-  const block = await measure(
-    () => /** @type {T} */ (/** @type {unknown} */ (undefined)),
-    async () => {
-      for (let i = 0; i < repeats; i++) await fn(ring[i % ring.length]);
-    },
+export function geometricSizes(lo, hi, count = 4) {
+  assert.ok(count >= 3 && hi > lo, "a growth fit needs three or more sizes");
+  const step = (hi / lo) ** (1 / (count - 1));
+  return Array.from({ length: count }, (_, i) => Math.round(lo * step ** i));
+}
+
+/**
+ * The least-squares slope of ln(cost) against ln(size): the `k` in cost ~ n^k.
+ * @param {number[]} sizes
+ * @param {number[]} costs
+ * @returns {number}
+ */
+export function fitExponent(sizes, costs) {
+  assert.ok(
+    costs.every((c) => c > 0),
+    "a cost of zero has no logarithm; the CPU clock reported no time",
   );
-  return block.cpu / repeats;
+  const xs = sizes.map(Math.log);
+  const ys = costs.map(Math.log);
+  const mean = (/** @type {number[]} */ v) =>
+    v.reduce((a, b) => a + b, 0) / v.length;
+  const mx = mean(xs);
+  const my = mean(ys);
+  let num = 0;
+  let den = 0;
+  for (let i = 0; i < xs.length; i++) {
+    num += (xs[i] - mx) * (ys[i] - my);
+    den += (xs[i] - mx) ** 2;
+  }
+  return num / den;
+}
+
+/**
+ * A fitted growth curve: the exponent, and the per-call CPU ms each size read.
+ * @typedef {{exponent: number, sizes: number[], costs: number[]}} Growth
+ */
+
+/**
+ * How `fn`'s per-call CPU cost grows across `sizes`, as a fitted exponent.
+ *
+ * Three things make the number survive a loaded runner, each closing a way a
+ * single ratio of two samples did not:
+ *
+ * - EVERY size is sampled {@link ROUNDS} times, INTERLEAVED (sizes in order,
+ *   then reversed, round after round), and each keeps its fastest per-call
+ *   reading. A burst of load lands on every size alike rather than on
+ *   whichever size happened to be timing, and a collector pause has to hit the
+ *   same size in every round to survive the minimum.
+ * - Every timed block lasts about as long as one call at the LARGEST size (at
+ *   least {@link MIN_BLOCK_MS}, at most {@link MAX_BLOCK_MS}), with smaller
+ *   sizes batched to match. Fastest-of-N is fair only between blocks of
+ *   similar length: a 1 ms block reliably finds a quiet slot and a 250 ms one
+ *   never does, which biases a ratio of the two upward.
+ * - The verdict is a least-squares fit over three or more sizes, so one
+ *   misread size moves it by a fraction of its own error rather than all of it.
+ *
+ * Each call gets its own input from `input(size, attempt)`; `attempt` counts
+ * up from 0, and inputs at one size should differ only by a unit, so a memo
+ * that remembers its last argument cannot answer for the work (see
+ * {@link measure}).
+ * @template T
+ * @param {(size: number, attempt: number) => T} input
+ * @param {(built: T) => unknown | Promise<unknown>} fn
+ * @param {number[]} sizes
+ * @returns {Promise<Growth>}
+ */
+export async function growth(input, fn, sizes) {
+  // The first call per size warms the code. When even that is past the block
+  // cap it sizes the block (one call); otherwise one more call, now warm, does.
+  // Its noise only moves how many calls a block holds.
+  const single = [];
+  for (const size of sizes) {
+    let mark = process.cpuUsage();
+    await fn(input(size, 0));
+    let spent = cpuSince(mark);
+    if (spent < MAX_BLOCK_MS) {
+      mark = process.cpuUsage();
+      await fn(input(size, 1));
+      spent = cpuSince(mark);
+    }
+    single.push(spent);
+  }
+  const blockMs = Math.min(MAX_BLOCK_MS, Math.max(MIN_BLOCK_MS, ...single));
+  const repeats = single.map((ms) =>
+    Math.max(1, Math.ceil(blockMs / Math.max(ms, 1e-3))),
+  );
+  const rings = sizes.map((size) =>
+    Array.from({ length: BLOCK_RING }, (_, i) => input(size, 2 + i)),
+  );
+  const next = sizes.map(() => 0);
+  const costs = sizes.map(() => Infinity);
+  const order = sizes.map((_, i) => i);
+  for (let round = 0; round < ROUNDS; round++)
+    for (const i of round % 2 ? [...order].reverse() : order) {
+      const mark = process.cpuUsage();
+      for (let k = 0; k < repeats[i]; k++)
+        await fn(rings[i][next[i]++ % BLOCK_RING]);
+      costs[i] = Math.min(costs[i], cpuSince(mark) / repeats[i]);
+    }
+  return { exponent: fitExponent(sizes, costs), sizes, costs };
+}
+
+/**
+ * One line naming a curve, for a diagnostic or a failure message.
+ * @param {Growth} curve
+ * @returns {string}
+ */
+export const describeGrowth = ({ exponent, sizes, costs }) =>
+  `exponent ${exponent.toFixed(2)} over n=${sizes.join("/")} (${costs.map((c) => c.toFixed(3)).join("/")}ms CPU per call)`;
+
+/**
+ * The gate: `curve` must classify as at most linear.
+ * @param {string} name
+ * @param {Growth} curve
+ */
+export function assertLinear(name, curve) {
+  assert.ok(
+    curve.exponent < LINEAR_MAX_EXPONENT,
+    `${name} grew super-linearly: ${describeGrowth(curve)}; linear is below ${LINEAR_MAX_EXPONENT}`,
+  );
+}
+
+/**
+ * The positive control: `curve` must classify as super-linear, or the harness
+ * cannot see the defect class the gates beside it exist for.
+ * @param {string} name
+ * @param {Growth} curve
+ */
+export function assertSuperlinear(name, curve) {
+  assert.ok(
+    curve.exponent > SUPERLINEAR_MIN_EXPONENT,
+    `${name} is a deliberate super-linear control but read ${describeGrowth(curve)}; it must exceed ${SUPERLINEAR_MIN_EXPONENT}, so every linear verdict beside it is suspect`,
+  );
 }
 
 /** How long a probe block busy-waits, and how many it runs. */
@@ -183,9 +339,81 @@ export function clockResolutionMs() {
 }
 
 /** The coarsest clock a cost gate can be read on. A reading no finer than this
- * cannot resolve a calibration pass, and {@link measurePerCall} would divide a
- * matched block by a zero. */
-export const RESOLUTION_CEILING_MS = 0.5;
+ * cannot resolve a calibration pass, and {@link growth} would size its blocks
+ * from a reading of zero. */
+const RESOLUTION_CEILING_MS = 0.5;
+
+/**
+ * Throws unless this kernel's CPU clock is fine enough to read a cost gate on.
+ * @param {string} what  what would be quantized, for the message
+ */
+export function assertClockResolves(what) {
+  const resolution = clockResolutionMs();
+  assert.ok(
+    resolution <= RESOLUTION_CEILING_MS,
+    `process.cpuUsage resolves no finer than ${resolution.toFixed(3)}ms on this kernel, so ${what} quantized to within their own size`,
+  );
+}
+
+/** A calibration pass at or under this is quantized to within a percent of
+ * itself, so a ratio dividing by it means nothing. */
+const MIN_UNIT_MS = 0.1;
+
+/**
+ * Throws unless a calibration unit (CPU ms per pass) is a measurement and not
+ * timer noise.
+ * @param {number} unit
+ */
+export function assertCalibrated(unit) {
+  assert.ok(
+    unit > MIN_UNIT_MS,
+    `calibration ran in ${unit.toFixed(3)}ms of CPU — too fast to divide by`,
+  );
+}
+
+/**
+ * Throws unless a cost, in calibration units, is within `budget`.
+ * @param {string} label  what was timed
+ * @param {number} units
+ * @param {number} budget
+ * @param {number} cpuMs  the same cost in CPU ms, for the message
+ */
+export function assertWithinBudget(label, units, budget, cpuMs) {
+  assert.ok(
+    units <= budget,
+    `${label} ran in ${units.toFixed(1)} units (${cpuMs.toFixed(1)}ms CPU), budget ${budget}`,
+  );
+}
+
+/**
+ * Throws unless a cost fits an absolute ceiling. Read it off {@link measure}'s
+ * `cpu` — the fastest of {@link SAMPLES} runs in CPU time — and never its
+ * `wall`, which a loaded runner inflates without the code having changed.
+ * @param {string} label  what was timed
+ * @param {number} cpuMs
+ * @param {number} ceilingMs
+ */
+export function assertWithinCeiling(label, cpuMs, ceilingMs) {
+  assert.ok(
+    cpuMs <= ceilingMs,
+    `${label} took ${cpuMs.toFixed(1)}ms of CPU at best, ceiling ${ceilingMs}ms`,
+  );
+}
+
+/**
+ * Throws unless `cost` exceeds `baseline` — the positive control that a shape
+ * driving a dearer path really does cost more.
+ * @param {string} label
+ * @param {number} cost  CPU ms
+ * @param {number} baseline  CPU ms
+ * @param {string} why  what it means when this fails
+ */
+export function assertDearerThan(label, cost, baseline, why) {
+  assert.ok(
+    cost > baseline,
+    `${label} (${cost.toFixed(1)}ms CPU) no longer costs more than the baseline (${baseline.toFixed(1)}ms CPU) — ${why}`,
+  );
+}
 
 /**
  * An `it` whose verdict rests on a timing, and so has none under a mutation run.
