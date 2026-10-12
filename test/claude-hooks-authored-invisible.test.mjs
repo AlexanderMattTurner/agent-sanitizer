@@ -2,12 +2,9 @@
  * The INVISIBLE half of the write path: when an authored field counts as a
  * covert channel, and what the layer reports when it acts.
  *
- * The report is the contract under test. A field the strip leaves byte for byte
- * must come back as no rewrite at all — reporting "invisible characters" for an
- * unchanged field told the hook pipeline something changed, so it re-ran,
- * found the same "change" again, and ran out of passes on ordinary emoji text.
- * And the rewrite it does make is final: sanitizing its own output again finds
- * nothing, whatever reconstitution the input was built to need.
+ * A field the strip leaves byte for byte must come back as no rewrite at all
+ * (a phantom report made the pipeline re-run until it ran out of passes), and
+ * the rewrite it does make is a fixed point.
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";

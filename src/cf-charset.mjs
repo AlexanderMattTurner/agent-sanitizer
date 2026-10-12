@@ -13,9 +13,8 @@
 export const UNICODE_VERSION = "17.0.0";
 
 // GENERATED Unicode data, not hand-written logic. Its correctness is pinned by
-// the SSOT round-trip in test/invisible-charset.test.mjs (re-derive from the
-// pinned UCD, then assert every code point matches) — Stryker skips the numeric
-// literals.
+// the SSOT round-trip in test/invisible-charset.test.mjs (re-derive the Cf set,
+// then assert every code point matches) — Stryker skips the numeric literals.
 // Stryker disable all
 /** @type {readonly number[]} Sorted ascending. */
 export const CF_CODEPOINTS = Object.freeze([

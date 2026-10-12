@@ -39,17 +39,13 @@ table](./README.md#entry-points) maps each to its import.
   The carve-out fires only when **both**
   neighbors clearly belong to the context, and it is disabled once the total
   invisible count crosses a scatter floor—over-stripping beats under-stripping.
-- **An emoji glyph's own spelling** draws on no preserve budget: the VS16
-  that switches a text-default emoji (Emoji_Presentation=No, such as ❤ or ⚠)
-  to its emoji glyph, a ZWJ that UAX #29's GB11 keeps inside one grapheme
-  (`Extended_Pictographic Extend* ZWJ × Extended_Pictographic`: 🏳️‍🌈,
-  👨‍👩‍👧‍👦), and a registered subdivision flag's tag run, so a changelog of a
-  hundred rainbow flags is not a payload. A VS15, a VS16 on an emoji-default
-  base, and a ZWJ GB11 does not join stay metered. Residuals: whether a
-  text-default emoji carries its VS16 is one visible bit per such character;
-  a ZWJ between two pictographs Unicode never registered (😀‍😀) renders as two
-  glyphs either way, so it is about one hidden bit per adjacent pair. Past the
-  scatter floor these are stripped with everything else.
+- **An emoji glyph's own spelling** draws on no preserve budget: the VS16 on a
+  text-default emoji (❤, ⚠), a ZWJ that UAX #29's GB11 keeps inside one
+  grapheme (🏳️‍🌈, 👨‍👩‍👧‍👦), and a registered subdivision flag's tags. A VS15, a
+  VS16 on an emoji-default base, and a ZWJ GB11 does not join stay metered.
+  Residuals: one visible bit per text-default emoji (VS16 or not), and about one
+  hidden bit per adjacent pair of pictographs (an unregistered ZWJ like 😀‍😀
+  renders as two glyphs either way). Past the scatter floor all are stripped.
 - **Blank fillers doing real work in their own script**: the Braille blank
   (U+2800) beside a real cell, a Hangul filler beside a real jamo/syllable. A
   _run_ of fillers has only fillers for neighbors, so it fails the anchor and is
@@ -335,24 +331,17 @@ foreground painted in its own background (`ESC[30;40m`) while a glyph goes by,
 which hides it the same way; and a run of sequences with nothing that RENDERS
 between them, which puts no glyph on the screen at all and is therefore
 carrying data rather than colour. Conceal or a matching foreground still in
-force when the text ENDS counts too, whatever the tail holds: rendition outlives
-the bytes that set it, so a file left in either state blanks everything the
-terminal prints after it is `cat`ed. Any one strips the whole field, and the
-prompt gate blocks on the same answer instead of passing it with a note. The
-invisible-character verdict reads the de-ANSI'd view on both surfaces, since
-SGR parameter bytes render nothing and must not count as the visible cover that
-buys preserved joiners and selectors; a field that view calls payload-capable
-loses its colour along with the excess invisibles.
+force when the text ENDS counts too: rendition outlives its bytes. Any one
+strips the whole field, and the prompt gate blocks on the same answer. The
+invisible verdict reads the de-ANSI'd view on both surfaces, since SGR bytes
+render nothing and must not buy preserved joiners and selectors.
 
-The colour match is judged only where it is unambiguous. A default colour is
-unknown, so it matches nothing; bold over one of the eight basic colours is
-drawn brighter by many terminals, so it is not called hidden; and whitespace
-looks the same in any colour, so it hides nothing. Block Elements
-(U+2580–U+259F) are judged across the whole text instead of per glyph: in
-matching colours each one paints the same solid cell, so a single glyph
-repeated — what a half-block image renderer emits over a flat region — carries
-no choice and is styling, while a second distinct one makes the glyph choice a
-hidden channel and ends the exception.
+The colour match is judged only where unambiguous: a default colour matches
+nothing, bold over a basic colour may render brighter, and whitespace hides
+nothing. Block Elements (U+2580–U+259F) are judged across the whole text: in
+matching colours each paints a solid cell, so one glyph repeated (a half-block
+image's flat region) is styling, while a second distinct one is a hidden
+channel.
 
 All three are read as terminal semantics rather than token shapes, because a
 reader that matches shapes is one encoding away from the wrong answer. Conceal

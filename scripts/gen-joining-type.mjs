@@ -13,12 +13,9 @@
  *   - Indic_Syllabic_Category = Consonant    → the base a virama may sit on.
  *   - Script of each virama                  → whose consonants count.
  *
- * ECMAScript regex exposes neither property (`\p{Joining_Type=…}` and
- * `\p{Indic_Syllabic_Category=…}` are not in the supported set), so we compile
- * the three range tables into a committed, runtime-dependency-free data module.
- * `test/joining-type.test.mjs` re-derives from the same package and asserts the
- * committed module still matches — a drift fails CI, as an SSOT contract
- * should — and hand-checked anchors pin the data itself.
+ * ECMAScript regex exposes neither property, so we compile the three range
+ * tables into a committed data module; `test/joining-type.test.mjs` re-derives
+ * them and fails on drift.
  *
  * Run: `pnpm gen:joining-type`.
  */
@@ -32,10 +29,8 @@ import {
   ucdSpans,
 } from "./lib/ucd.mjs";
 
-/** The Joining_Type values the runtime table carries, by their one-letter tag.
- * Non_Joining (U) is the default and stays out of the table. The package lists
- * only ArabicShaping.txt's EXPLICIT entries; the rest of Transparent is derived
- * in loadUcd exactly as DerivedJoiningType.txt states it. */
+/** The Joining_Type values the table carries, by tag; U is the default. The
+ * package lists only ArabicShaping.txt's explicit entries (see loadUcd). */
 const JOINING_TAGS = {
   Join_Causing: "C",
   Dual_Joining: "D",
@@ -44,8 +39,7 @@ const JOINING_TAGS = {
   Transparent: "T",
 };
 
-/** Merge adjacent/overlapping same-type ranges and sort by start. Keeps the
- * table minimal so the binary search in the runtime module is tight.
+/** Merge adjacent/overlapping same-type ranges and sort by start.
  * @param {Array<[number, number, string]>} ranges  [start, end, tag]
  * @returns {Array<[number, number, string]>}
  */
@@ -90,13 +84,10 @@ export function deriveTables({ joining, virama, consonant, scripts }) {
 }
 
 /**
- * The scripts whose consonants the ZWJ/ZWNJ carve-out recognises as a virama
- * base: exactly the scripts that own an Indic_Syllabic_Category=Virama code
- * point, read off each virama's Script. A script without one (Khmer's coeng is
- * an Invisible_Stacker, Thai's phinthu a Pure_Killer) has no <consonant,
- * virama, joiner> spelling for a joiner to select, so it stays out. Throws when
- * a virama has no Script entry: a script table that stopped covering a virama
- * would otherwise drop that script's consonants without a word.
+ * The scripts whose consonants count as a virama base: exactly those owning an
+ * Indic_Syllabic_Category=Virama code point (Khmer's coeng and Thai's phinthu
+ * are not Virama, so they stay out). Throws on a virama with no Script rather
+ * than silently dropping its script's consonants.
  * @param {ReadonlyArray<readonly [number, number]>} virama
  * @param {ScriptSpan[]} scripts
  * @returns {string[]} script names, sorted
@@ -118,10 +109,7 @@ export function viramaScripts(virama, scripts) {
 /**
  * Script-tagged consonant spans: every Indic_Syllabic_Category=Consonant code
  * point whose Script is one of `wantedScripts`, merged into runs. Script comes
- * from the pinned package, never the runtime's `\p{Script=…}`: a Node whose
- * ICU predates a script would silently drop its consonants (see ./lib/ucd.mjs).
- * Both halves of the join are UCD properties, never a block range guessed from
- * a chart.
+ * from the pinned package, never the runtime's `\p{Script=…}`.
  * @param {ReadonlyArray<readonly [number, number]>} consonant
  * @param {string[]} wantedScripts
  * @param {ScriptSpan[]} scripts
@@ -129,29 +117,17 @@ export function viramaScripts(virama, scripts) {
  */
 function deriveBrahmic(consonant, wantedScripts, scripts) {
   const wanted = new Set(wantedScripts);
-  const spans = scripts
-    .filter(({ script }) => wanted.has(script))
-    .sort((a, b) => a.range[0] - b.range[0]);
-  /** @param {number} cp @returns {string | undefined} */
-  const scriptOf = (cp) => {
-    let lo = 0;
-    let hi = spans.length - 1;
-    while (lo <= hi) {
-      const mid = (lo + hi) >> 1;
-      const [start, end] = spans[mid].range;
-      if (cp < start) hi = mid - 1;
-      else if (cp > end) lo = mid + 1;
-      else return spans[mid].script;
-    }
-    return undefined;
-  };
+  /** @type {Map<number, string>} */
+  const scriptOf = new Map();
+  for (const { range, script } of scripts)
+    if (wanted.has(script))
+      for (const cp of codePointsOf([range])) scriptOf.set(cp, script);
   /** @type {Array<[number, number, string]>} */
   const tagged = [];
-  for (const [start, end] of consonant)
-    for (let cp = start; cp <= end; cp++) {
-      const name = scriptOf(cp);
-      if (name !== undefined) tagged.push([cp, cp, name]);
-    }
+  for (const cp of codePointsOf(consonant)) {
+    const name = scriptOf.get(cp);
+    if (name !== undefined) tagged.push([cp, cp, name]);
+  }
   return normalize(tagged);
 }
 

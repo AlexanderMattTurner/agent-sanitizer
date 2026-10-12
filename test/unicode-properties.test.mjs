@@ -2,14 +2,10 @@
  * The pinned Unicode properties (src/unicode-properties.mjs, generated from the
  * pinned UCD package by scripts/gen-unicode-properties.mjs).
  *
- * Two contracts. The SSOT round-trip: the committed module is byte-for-byte
- * what the generator writes from the package, and every table equals its
- * package-derived spans. The witness: wherever the RUNNING Node's own Unicode is
- * the pinned version, every live `\p{…}` escape names exactly the code points of
- * its pinned table — so a package of the wrong Unicode (ucd-full@17.0.0 ships
- * Unicode 16 data) or a generator that dropped entries fails here on CI's Node.
- * The carve-out's behaviour never reads the live escape; only this witness
- * does.
+ * Two contracts: the committed module is byte-for-byte a fresh generation, and,
+ * on a Node whose own Unicode is the pinned version, every live `\p{…}` names
+ * exactly its pinned table — so a package of the wrong Unicode (ucd-full@17.0.0
+ * ships Unicode 16) fails here. Only this witness reads the live escape.
  */
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
@@ -85,10 +81,8 @@ const PINNED = [
 ];
 
 // Only a runtime on the pinned version can witness the package: membership moves
-// BOTH ways between versions (Unicode 17 dropped 672 assigned code points such
-// as U+2605 from Extended_Pictographic while adding Extension J ideographs), so
-// no subset relation holds across versions. Another runtime skips by name
-// rather than asserting a relation that is false; CI's Node 22 is on the pin.
+// BOTH ways between versions, so another runtime skips by name. CI's Node 22 is
+// on the pin.
 const witnessSkip =
   runtime === pinned
     ? false

@@ -4061,11 +4061,6 @@ function extendedColour(args) {
     return `rgb:${args.slice(-3).map((component) => Number(component)).join(",")}`;
   return null;
 }
-function semicolonColourArgs(params, i) {
-  const count = SGR_COLOUR_ARGS.get(Number(params[i + 1]));
-  if (count === void 0) return null;
-  return params.slice(i + 1, i + 2 + count);
-}
 function sgrRendition(token, state) {
   const params = token.slice(token.charCodeAt(0) === ESC ? 2 : 1, -1).split(";");
   let { concealed, bold, fg, bg } = state;
@@ -4083,8 +4078,10 @@ function sgrRendition(token, state) {
     if (background !== void 0) bg = background;
     if (!SGR_EXTENDED_COLOUR.has(value)) continue;
     const colonForm = subParams.length > 1;
-    const args = colonForm ? subParams.slice(1) : semicolonColourArgs(params, i);
-    if (args === null) continue;
+    const count = SGR_COLOUR_ARGS.get(Number(params[i + 1]));
+    if (!colonForm && count === void 0) continue;
+    const args = colonForm ? subParams.slice(1) : params.slice(i + 1, i + 2 + /** @type {number} */
+    count);
     if (!colonForm) i += args.length;
     const colour = extendedColour(args);
     if (value === SGR_FOREGROUND) fg = colour;

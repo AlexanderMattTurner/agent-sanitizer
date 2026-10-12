@@ -4,19 +4,11 @@
  * ./lib/ucd.mjs for why every version-dependent property is pinned rather than
  * read from the runtime).
  *
- * The invisible-char carve-out decides whether an invisible does rendering work
- * from the Unicode properties of its neighbours: an emoji joiner needs an
- * Extended_Pictographic (or Emoji_Modifier) on its left and a pictograph on its
- * right, an ideographic variation selector needs a Unified_Ideograph base, and a
- * blank filler needs a Braille or Hangul neighbour, and a VS16 completing a
- * text-default emoji (Emoji but not Emoji_Presentation) is part of the glyph,
- * exempt from the cover budget. Each of those sets grows
- * with Unicode, so a live `\p{…}` made the carve-out on Node 22.22 (Unicode 16)
- * strip the Extension J ideograph sequences Node 22.23 (Unicode 17) preserved.
- * This compiles them into range tables instead.
- *
- * test/unicode-properties.test.mjs regenerates it and fails if the committed
- * module drifts.
+ * The carve-out reads its neighbours' Unicode properties (pictographs, skin
+ * tones, text-default emoji, ideographs, Braille, Hangul), and each set grows
+ * with Unicode: a live `\p{…}` once made Node 22.22 strip the Extension J
+ * sequences Node 22.23 preserved. test/unicode-properties.test.mjs regenerates
+ * this module and fails on drift.
  *
  * Run from the repo root: `node scripts/gen-unicode-properties.mjs`. The output
  * is already in Prettier's format, so it is committed exactly as written.
@@ -24,7 +16,12 @@
 import { writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
-import { UNICODE_VERSION, codePointsOf, ucdSpans } from "./lib/ucd.mjs";
+import {
+  UNICODE_VERSION,
+  codePointsOf,
+  spansOf,
+  ucdSpans,
+} from "./lib/ucd.mjs";
 
 const presentation = new Set(
   codePointsOf(await ucdSpans("Binary_Property/Emoji_Presentation")),
@@ -37,7 +34,7 @@ export const UNICODE_PROPERTIES = Object.freeze({
     "Binary_Property/Extended_Pictographic",
   ),
   EMOJI_MODIFIER: await ucdSpans("Binary_Property/Emoji_Modifier"),
-  EMOJI_TEXT_DEFAULT: spansOfCodePoints(
+  EMOJI_TEXT_DEFAULT: spansOf(
     codePointsOf(await ucdSpans("Binary_Property/Emoji")).filter(
       (cp) => !presentation.has(cp),
     ),
@@ -46,22 +43,6 @@ export const UNICODE_PROPERTIES = Object.freeze({
   SCRIPT_BRAILLE: await ucdSpans("Script/Braille"),
   SCRIPT_HANGUL: await ucdSpans("Script/Hangul"),
 });
-
-/**
- * Ascending code points as merged `[start, end]` spans.
- * @param {number[]} cps
- * @returns {Array<[number, number]>}
- */
-function spansOfCodePoints(cps) {
-  /** @type {Array<[number, number]>} */
-  const spans = [];
-  for (const cp of cps) {
-    const last = spans[spans.length - 1];
-    if (last && cp === last[1] + 1) last[1] = cp;
-    else spans.push([cp, cp]);
-  }
-  return spans;
-}
 
 /** @param {Array<[number, number]>} spans */
 const rows = (spans) =>

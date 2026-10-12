@@ -1,15 +1,9 @@
 /**
- * No shipped code and no generator asks the RUNNING Node for a Unicode property.
- *
- * A live `\p{…}` / `\P{…}` escape answers from the ICU the runtime bundles, so
- * the same package version behaved differently on Node 22.22 (Unicode 16) and
- * Node 22.23 (Unicode 17): different emoji anchors, different ideograph bases,
- * different generated tables. Every such property is now read from the pinned
- * UCD package (scripts/lib/ucd.mjs) and compiled into a committed data module.
- * This guard keeps it that way: it tokenizes every module in src/,
- * claude-hooks/ and scripts/gen-*.mjs with acorn and fails on a property escape
- * in a regex literal, or in a string or template that could feed `new RegExp`.
- * Comments are not tokens, so prose that names an escape does not trip it.
+ * No shipped code and no generator asks the RUNNING Node for a Unicode property
+ * (its ICU decides the answer; see scripts/lib/ucd.mjs). Tokenizes every module
+ * in src/, claude-hooks/ and scripts/gen-*.mjs with acorn and fails on a
+ * property escape in a regex literal, string or template; comments are not
+ * tokens, so prose naming an escape does not trip it.
  */
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
@@ -20,10 +14,6 @@ import { join } from "node:path";
 import { tokenizer } from "acorn";
 
 import { repoRoot } from "./helpers/repo-root.mjs";
-
-// Files allowed a live escape, with the reason. Empty: nothing needs one.
-/** @type {Record<string, string>} */
-const ALLOWLIST = {};
 
 /** An unescaped `\p{` or `\P{` (an even run of backslashes before it is literal). */
 const PROPERTY_ESCAPE = /(?<!\\)(?:\\\\)*\\[pP]\{/;
@@ -53,9 +43,8 @@ export function liveEscapes(source) {
   return found;
 }
 
-/** Every scanned module, repo-relative. Enumerated by `git ls-files` pathspec
- * (a git `*` crosses `/`) so the guard-pair scan attributes to this suite
- * exactly the files it reads, not every file under scripts/. */
+/** Every scanned module, by `git ls-files` pathspec (`*` crosses `/`), so the
+ * guard-pair scan attributes exactly these files to this suite. */
 const SCANNED = execFileSync(
   "git",
   ["ls-files", "--", "src/*.mjs", "claude-hooks/*.mjs", "scripts/gen-*.mjs"],
@@ -96,7 +85,7 @@ describe("no live Unicode property escape in shipped code or generators", () => 
       assert.deepEqual(liveEscapes(benign), [], benign);
   });
 
-  for (const file of SCANNED.filter((name) => !(name in ALLOWLIST)))
+  for (const file of SCANNED)
     it(`${file} has none`, () => {
       assert.deepEqual(
         liveEscapes(readFileSync(join(repoRoot, file), "utf8")),
@@ -104,15 +93,4 @@ describe("no live Unicode property escape in shipped code or generators", () => 
         `${file} asks the runtime for a Unicode property — read it from the pinned UCD (scripts/lib/ucd.mjs) instead`,
       );
     });
-
-  it("allowlists only scanned files that still hold an escape", () => {
-    for (const file of Object.keys(ALLOWLIST)) {
-      assert.ok(SCANNED.includes(file), `${file} is not scanned`);
-      const found = liveEscapes(readFileSync(join(repoRoot, file), "utf8"));
-      assert.ok(
-        found.length > 0,
-        `${file} no longer needs its allowlist entry`,
-      );
-    }
-  });
 });

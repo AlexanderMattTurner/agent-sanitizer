@@ -2,15 +2,12 @@
  * The pinned Unicode Character Database every generator reads: the exact-pinned
  * `@unicode/unicode-17.0.0` devDependency.
  *
- * Unicode property membership changes between Unicode versions, and a live
- * `\p{…}` escape answers from whatever ICU the running Node bundles — so the
- * same package version used to strip a different `Cf` set, anchor a different
- * set of CJK ideographs, and generate different tables on two patch releases of
- * one supported Node line. Every property whose membership can move is instead
- * read from this one package and compiled into committed data modules, which a
- * drift test regenerates and compares. The runtime's own Unicode version then
- * decides nothing. test/unicode-property-pin.test.mjs fails on a live property
- * escape in `src/`, `claude-hooks/` or a `scripts/gen-*.mjs` generator.
+ * A live `\p{…}` answers from the running Node's ICU, so the same release once
+ * stripped a different `Cf` set on two patch releases of one Node line. Every
+ * property whose membership can move is read from this package instead and
+ * compiled into committed modules that drift tests regenerate and compare;
+ * test/unicode-property-pin.test.mjs fails on a live property escape. To move
+ * to a new Unicode, bump the package and `pnpm install` (see gen-unicode.mjs).
  */
 const PACKAGE = "@unicode/unicode-17.0.0";
 
@@ -23,27 +20,24 @@ export const PROPERTY_VALUES = /** @type {Record<string, string[]>} */ (
 
 /**
  * The sorted, merged `[start, end]` spans of one property value, named as the
- * package lays it out: `"Binary_Property/Extended_Pictographic"`,
- * `"Script/Braille"`, `"General_Category/Format"`.
+ * package lays it out: `"Binary_Property/Extended_Pictographic"`.
  * @param {string} path
  * @returns {Promise<Array<[number, number]>>}
  */
 export async function ucdSpans(path) {
   /** @type {Array<{ begin: number, end: number }>} end-exclusive */
   const ranges = (await import(`${PACKAGE}/${path}/ranges.mjs`)).default;
-  /** @type {Array<[number, number]>} */
-  const merged = [];
-  for (const { begin, end } of [...ranges].sort((a, b) => a.begin - b.begin)) {
-    const last = merged[merged.length - 1];
-    if (last && begin <= last[1] + 1) last[1] = Math.max(last[1], end - 1);
-    else merged.push([begin, end - 1]);
-  }
-  if (merged.length === 0) throw new Error(`${PACKAGE}/${path} is empty`);
-  return merged;
+  const spans = spansOf(
+    codePointsOf(ranges.map(({ begin, end }) => [begin, end - 1])).sort(
+      (a, b) => a - b,
+    ),
+  );
+  if (spans.length === 0) throw new Error(`${PACKAGE}/${path} is empty`);
+  return spans;
 }
 
 /**
- * Every code point of `spans`, ascending.
+ * Every code point of `spans`.
  * @param {ReadonlyArray<readonly [number, number]>} spans
  * @returns {number[]}
  */
@@ -52,4 +46,20 @@ export function codePointsOf(spans) {
   for (const [start, end] of spans)
     for (let c = start; c <= end; c++) out.push(c);
   return out;
+}
+
+/**
+ * Ascending, distinct code points as merged `[start, end]` spans.
+ * @param {number[]} cps
+ * @returns {Array<[number, number]>}
+ */
+export function spansOf(cps) {
+  /** @type {Array<[number, number]>} */
+  const spans = [];
+  for (const cp of cps) {
+    const last = spans[spans.length - 1];
+    if (last && cp === last[1] + 1) last[1] = cp;
+    else spans.push([cp, cp]);
+  }
+  return spans;
 }

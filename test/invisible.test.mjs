@@ -62,6 +62,7 @@ const viramas = codePointsOf((await loadUcd()).virama);
 
 const ZWNJ = cp(0x200c);
 const ZWJ = cp(0x200d);
+const s = (...codePoints) => String.fromCodePoint(...codePoints);
 const CANCEL_TAG = cp(0xe007f);
 
 /** A subregional-flag emoji tag sequence: WAVING BLACK FLAG + tag chars for the
@@ -879,9 +880,7 @@ describe("document-wide preserved-joiner budget", () => {
     // on the anchor-proportional allowance instead, see below). N gap-separated
     // pictograph+VS16 pairs with NO ZWNJ/ZWJ anywhere still hit the same cap:
     // over-strip beats under-strip even for a purely selector-dense document.
-    // The base already defaults to emoji presentation, so the selector changes
-    // nothing on screen; on a text-default base it would be the registered
-    // glyph spelling, which draws on no budget (see "registered emoji glyphs").
+    // An emoji-default base, so the selector is budgeted (unlike on ❤).
     const pictographPlusSelector = cp(0x1f600) + cp(0xfe0f) + " ";
     const input = pictographPlusSelector.repeat(N);
     const { cleaned, found } = stripInvisibleWithReport(input);
@@ -933,9 +932,8 @@ describe("document-wide preserved-joiner budget", () => {
 // thing it protects. Charging the whole cluster at once makes that impossible by
 // construction.
 describe("preserve budget: grapheme clusters are indivisible", () => {
-  // A four-consonant Devanagari conjunct written with explicit half forms
-  // (KA-SSA-MA-YA, a ZWJ after each virama): one grapheme cluster under GB9c,
-  // whose three joiners each draw on the budget.
+  // KA-SSA-MA-YA with a ZWJ after each virama: one GB9c cluster whose three
+  // joiners each draw on the budget.
   const virama = cp(0x94d);
   const FAMILY_CLUSTER = [0x915, 0x937, 0x92e, 0x92f]
     .map((c) => cp(c))
@@ -1000,10 +998,8 @@ describe("preserve budget: grapheme clusters are indivisible", () => {
   });
 
   it("keeps multi-preservable clusters whole under the CONSECUTIVE caps too", () => {
-    // VS16 + ZWJ inside ONE cluster: two preservables that must rise and fall
-    // together no matter which limit bites. The skin tone takes neither VS16
-    // to a text-default glyph nor GB11 to a pictograph on the joiner's left,
-    // so both draw on the budget and 20 copies (40 preservables) overrun it.
+    // VS16 + ZWJ in ONE cluster, both budgeted (the bare skin tone is neither a
+    // text-default base nor a pictograph): they rise and fall together.
     const pair = `x${cp(0x1f3fd)}${cp(0xfe0f)}${ZWJ}${cp(0x1f600)}`;
     for (const n of [1, 6, 9, 20]) assertNoPartialCarve(pair.repeat(n));
     assert.notEqual(stripInvisible(pair.repeat(20)), pair.repeat(20));
@@ -1209,12 +1205,8 @@ describe("stripInvisible: emoji tag sequences (subregional flags)", () => {
   });
 
   it("keeps every registered flag however many the document holds", () => {
-    // A registered subdivision flag is a glyph's own spelling: its tag run is
-    // fixed by which of the three flags it draws, a visible choice, so it
-    // draws on no preserve budget. Forty Scotland flags carry 240 tag units —
-    // far past TOTAL_PRESERVED_JOINER_BUDGET and PRESERVE_HARD_CAP — and
-    // survive byte for byte, unreported. The budget's own atomic-overrun case
-    // is the unregistered ZWJ chain under "grapheme clusters are indivisible".
+    // A registered flag's tags are glyph spelling: forty Scotland flags (240
+    // tag units, far past PRESERVE_HARD_CAP) survive byte for byte.
     const flags = Array(40).fill(tagCode("gbsct")).join(" ");
     assert.ok(6 * 40 > PRESERVE_HARD_CAP);
     const { cleaned, found } = stripInvisibleWithReport(flags);
@@ -1223,52 +1215,28 @@ describe("stripInvisible: emoji tag sequences (subregional flags)", () => {
   });
 });
 
-// ─── Registered emoji glyphs ───────────────────────────────────────────────────
-// A registered glyph's own spelling draws on no preserve budget: VS16 after an
-// Emoji_Presentation=No base (it switches the visible glyph from text to
-// emoji), and a ZWJ UAX #29's GB11 keeps inside one grapheme — between two
-// pictographs, registered or not. Metering them is what flagged a changelog of
-// rainbow flags. A ZWJ GB11 does not join, and everything next to them that
-// changes nothing visible, stays metered.
+// ─── Emoji glyph spelling ───────────────────────────────────────────────────────
+// VS16 on a text-default base and a ZWJ GB11 keeps inside one grapheme draw on
+// no preserve budget; a ZWJ GB11 does not join, and a selector that changes
+// nothing visible, stay metered.
 describe("registered emoji glyphs", () => {
-  const ZWJ_CH = cp(0x200d);
-  const VS16_CH = cp(0xfe0f);
   const docOf = (unit) => Array(100).fill(unit).join(" ");
 
   for (const [name, unit] of [
-    ["rainbow flag", cp(0x1f3f3) + VS16_CH + ZWJ_CH + cp(0x1f308)],
-    [
-      "rainbow flag spelled without its VS16",
-      cp(0x1f3f3) + ZWJ_CH + cp(0x1f308),
-    ],
+    ["rainbow flag", s(0x1f3f3, 0xfe0f, 0x200d, 0x1f308)],
+    ["rainbow flag spelled without its VS16", s(0x1f3f3, 0x200d, 0x1f308)],
     [
       "family of four",
-      cp(0x1f468) +
-        ZWJ_CH +
-        cp(0x1f469) +
-        ZWJ_CH +
-        cp(0x1f467) +
-        ZWJ_CH +
-        cp(0x1f466),
+      s(0x1f468, 0x200d, 0x1f469, 0x200d, 0x1f467, 0x200d, 0x1f466),
     ],
-    [
-      "skin-toned technologist",
-      cp(0x1f469) + cp(0x1f3fd) + ZWJ_CH + cp(0x1f4bb),
-    ],
-    ["emoji-presentation heart", cp(0x2764) + VS16_CH],
-    ["emoji-presentation warning sign", cp(0x26a0) + VS16_CH],
-    // Not RGI: GB11 joins any two pictographs. The residual is one bit per
-    // adjacent pair, present or absent (see THREAT-MODEL.md).
-    ["unregistered ZWJ chain", cp(0x1f600) + ZWJ_CH + cp(0x1f600)],
+    ["skin-toned technologist", s(0x1f469, 0x1f3fd, 0x200d, 0x1f4bb)],
+    ["emoji-presentation heart", s(0x2764, 0xfe0f)],
+    ["emoji-presentation warning sign", s(0x26a0, 0xfe0f)],
+    // Not RGI: GB11 joins any two pictographs (see THREAT-MODEL.md).
+    ["unregistered ZWJ chain", s(0x1f600, 0x200d, 0x1f600)],
     [
       "registered family extended by one more pictograph",
-      cp(0x1f468) +
-        ZWJ_CH +
-        cp(0x1f469) +
-        ZWJ_CH +
-        cp(0x1f467) +
-        ZWJ_CH +
-        cp(0x1f600),
+      s(0x1f468, 0x200d, 0x1f469, 0x200d, 0x1f467, 0x200d, 0x1f600),
     ],
   ])
     it(`keeps a hundred of the ${name}, unreported and not payload`, () => {
@@ -1281,25 +1249,21 @@ describe("registered emoji glyphs", () => {
 
   for (const [name, unit, category] of [
     [
-      "a ZWJ after a skin tone with no pictograph before it",
-      `x${cp(0x1f3fd)}${ZWJ_CH}${cp(0x1f600)}`,
+      "a ZWJ after a bare skin tone",
+      s(0x78, 0x1f3fd, 0x200d, 0x1f600),
       CATEGORY.CF,
     ],
     [
       "a VS16 on an emoji-default base",
-      cp(0x1f600) + VS16_CH,
+      s(0x1f600, 0xfe0f),
       CATEGORY.VARIATION_SELECTORS,
     ],
     [
       "a text-presentation VS15",
-      cp(0x2764) + cp(0xfe0e),
+      s(0x2764, 0xfe0e),
       CATEGORY.VARIATION_SELECTORS,
     ],
-    [
-      "a doubled VS16",
-      cp(0x2764) + VS16_CH + VS16_CH,
-      CATEGORY.VARIATION_SELECTORS,
-    ],
+    ["a doubled VS16", s(0x2764, 0xfe0f, 0xfe0f), CATEGORY.VARIATION_SELECTORS],
   ])
     it(`meters ${name}: a hundred overrun the budget and are payload`, () => {
       const doc = docOf(unit);
@@ -1310,7 +1274,7 @@ describe("registered emoji glyphs", () => {
     });
 
   it("strips a registered glyph's joiners once payload switches the carve-out off", () => {
-    const rainbow = cp(0x1f3f3) + VS16_CH + ZWJ_CH + cp(0x1f308);
+    const rainbow = s(0x1f3f3, 0xfe0f, 0x200d, 0x1f308);
     const doc = Array(SCATTERED_THRESHOLD)
       .fill(`x${cp(0x200b)}`)
       .join(" ");
@@ -1569,12 +1533,9 @@ describe("stripInvisible: virama joiner requires a real consonant base", () => {
 describe("stripInvisible: a ZWJ BEFORE a virama selects the reph/eyelash form", () => {
   const RA = cp(0x930); // Devanagari RA
   const VIRAMA = cp(0x94d);
-  const s = (...codePoints) => String.fromCodePoint(...codePoints);
 
-  // Consonant + ZWJ + virama is the encoded spelling of a different glyph, not a
-  // decoration: the Bengali RA with ya-phala (as in RAB, the Rapid Action
-  // Battalion) and the Marathi eyelash RA. Dropping the ZWJ rewrites the word
-  // into its reph spelling.
+  // Consonant + ZWJ + virama spells a different glyph; dropping the ZWJ rewrites
+  // the word into its reph spelling.
   for (const [name, word] of [
     ["Bengali RA with ya-phala", s(0x9b0, 0x200d, 0x9cd, 0x9af, 0x9be, 0x9ac)],
     ["Marathi eyelash RA", s(0x930, 0x200d, 0x94d, 0x92f)],
@@ -1598,10 +1559,8 @@ describe("stripInvisible: a ZWJ BEFORE a virama selects the reph/eyelash form", 
       });
     });
 
-  // Every virama the UCD names, in its own script: both joiner positions
-  // around it are spellings, so a script the table missed fails here by name.
-  // The script is the ENGINE's \p{Script=…} of the virama, not the table's
-  // own tag, so a mislabelled span cannot vouch for itself.
+  // Every virama the UCD names, in its own script (the ENGINE's \p{Script=…},
+  // so a mislabelled span cannot vouch for itself): a missed script fails here.
   const scripts = [...new Set(BRAHMIC_CONSONANT_RANGES.map(([tag]) => tag))];
   it("has viramas to check", () => assert.ok(viramas.length >= 27));
   for (const virama of viramas) {

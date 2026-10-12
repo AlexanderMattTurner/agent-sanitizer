@@ -196,10 +196,9 @@ function rendersNothing(gap) {
  *      them: the run puts no glyph on the screen, so it carries data rather than
  *      styling.
  *
- * CONCEAL or a matching foreground still in force when the text ENDS is a
- * refusal too, whatever the tail holds: rendition outlives the bytes that set
- * it, so a file ending in `ESC[8m` or `ESC[30;40m` blanks everything the
- * terminal prints after it is `cat`ed — a latent spoof rather than styling.
+ * Either still in force when the text ENDS is a refusal too: rendition
+ * outlives its bytes, so a file ending in `ESC[8m` blanks whatever the terminal
+ * prints after it.
  *
  * What it does NOT claim: a message spread thinly through legitimately coloured
  * text — one sequence per line, say — is indistinguishable from styling, and
@@ -224,12 +223,9 @@ export function sgrCarriesPayload(text) {
     const gap = text.slice(previousEnd, token.start);
     const blankGap = rendersNothing(gap);
     previousEnd = token.end;
-    // This refusal is what blocks `ESC[8m` (or a foreground painted in its own
-    // background) from hiding text from the human while leaving its bytes for
-    // the model. A non-SGR token moves no rendition, so the gap before an erase
-    // or a cursor move is drawn in the state the last SGR left — judged here,
-    // ahead of the non-SGR exit, or `ESC[30;40m` + text + `ESC[2J` + reset
-    // would hide the text with no check at all.
+    // Judged ahead of the non-SGR exit: the gap before an erase or cursor move
+    // is drawn in the last SGR's state, so `ESC[30;40m` + text + `ESC[2J` +
+    // reset would otherwise hide the text unchecked.
     if (hidesText(rendition, gap, solidBlocks)) return true;
     if (token.kind !== TOKEN_KIND.SGR) {
       run = 0;
@@ -251,15 +247,10 @@ const BLOCK_ELEMENT = /[\u2580-\u259F]/gu;
 /**
  * True when `gap`, drawn in a foreground matching its background, brings the
  * text's count of distinct Block Elements (U+2580-U+259F) so drawn past one.
- *
- * In matching colours every Block Element paints the same solid cell, so the
- * glyph CHOICE is hidden from a human while a model reads it — a channel of up
- * to five bits a cell. One glyph throughout carries no choice, and that is what
- * a half-block image renderer emits (catimg-style `▀` with the top pixel as
- * foreground and the bottom as background, equal wherever the image is flat),
- * so a single distinct glyph stays styling and a second one is the refusal.
- * `seen` spans the whole text, so the choice cannot be spread one glyph per
- * sequence. Bounded: it never holds more than one glyph between calls.
+ * In matching colours every one paints a solid cell, hiding the glyph CHOICE
+ * from a human; a single glyph throughout is what a half-block image renderer
+ * (catimg's `▀`) emits, so only a second one is refused. `seen` spans the whole
+ * text so the choice cannot be spread one glyph per sequence.
  * @param {string} gap @param {Set<string>} seen
  * @returns {boolean}
  */
@@ -302,12 +293,10 @@ export function isBenignAnsi(text) {
 }
 
 /**
- * True when the escapes in `text` may be let through rather than blocked or
- * stripped: every removed kind is inert ({@link isBenignAnsiKinds}) AND the SGR
- * is still just styling ({@link sgrCarriesPayload}). THE answer for every
- * surface that preserves or waves through escapes — the prompt gate's
- * pass-with-note and the write path's colour carve-out — so `ESC[8m` cannot be
- * "inert colour" to one of them while it hides text in the other.
+ * True when the escapes in `text` may be let through: every removed kind is
+ * inert ({@link isBenignAnsiKinds}) AND the SGR is just styling
+ * ({@link sgrCarriesPayload}). THE answer for every surface that preserves
+ * escapes, so `ESC[8m` cannot be inert to one and hiding text in another.
  * @param {string} text  the raw text, as a terminal would receive it
  * @param {Iterable<string>} [kinds]  the {@link TOKEN_KIND}s a strip of `text`
  *   removed, when the caller already has them; defaults to Layer 1's
@@ -341,14 +330,9 @@ export function stripTerminalFully(text, kinds = new Set()) {
 
 /**
  * The carve-out-free Layer 1 a non-converging composition falls back to: EVERY
- * invisible first (preserved joiners and selectors included), then every
- * escape and introducer. Its output holds neither, so re-running Layer 1 on it
- * changes nothing — the fixed point the iterated composition could not reach
- * within its bound, bought by giving up the carve-out on adversarial input only.
- * It starts from what the caller SENT, not the composition's last state: a
- * round that swept the introducer off an escape still split by a preserved
- * selector has already turned that escape's body into text, which no later
- * strip can tell from prose.
+ * invisible, then every escape and introducer, so its output is a fixed point.
+ * It starts from what the caller SENT: an earlier sweep may already have turned
+ * an escape's body into text no later strip can tell from prose.
  * @param {string} text  what the caller sent
  * @param {Set<string>} found  collects the invisible CATEGORY codes removed
  * @param {Set<string>} kinds  collects the {@link TOKEN_KIND} of every removal
@@ -433,10 +417,8 @@ export function applyLayer1(text) {
     cleaned = swept;
   }
 
-  // This fallback is what keeps Layer 1 a FIXED POINT past the pass bound: an
-  // unconverged state re-cleans to something else (a re-clean of the view
-  // would then disagree with the view), and can still hold an escape the next
-  // round would have removed, which the sweep alone turns into visible text.
+  // Keeps Layer 1 a FIXED POINT past the pass bound: an unconverged state
+  // re-cleans to something else and may still hold an escape.
   if (!converged) cleaned = stripLayer1Monotone(text, found, ansiKinds);
 
   // Derived, not tracked in parallel: a kind is recorded exactly when an ANSI

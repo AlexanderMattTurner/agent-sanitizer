@@ -3,34 +3,19 @@
  * Generate src/standardized-variants.mjs from the vendored UCD
  * StandardizedVariants.txt (scripts/data/StandardizedVariants.txt).
  *
- * The invisible-char carve-out preserves a variation selector only when the
- * immediately preceding base forms a *registered* standardized variation
- * sequence — otherwise the selector is a hidden-payload byte and is
- * stripped. That registry is normative Unicode data (StandardizedVariants.txt in
- * the UCD), NOT a set anyone should hand-roll: a hand-picked base list would both
- * miss real glyphs (mangling legit content) and risk waving through a selector
- * that is not actually registered. So this generator parses the vendored UCD file
- * into a committed `[base, selector]` table that src/invisible.mjs reads.
- *
- * The output is a `.mjs` data module (mirroring the generated src/joining-type.mjs)
- * rather than a raw `.json` file for two hard toolchain reasons: the repo's eslint
- * is pinned to ecmaVersion 2023, which rejects import-attribute JSON imports
- * (`import … with { type: "json" }`), and the Python-CLI esbuild bundle does not
- * inline a `createRequire('*.json')` read — either path would break `pnpm lint`
- * or the release bundle. The module still holds nothing but generated data, and
- * test/invisible-charset.test.mjs re-derives from the same vendored file and
- * fails CI if the committed module drifts, exactly as an SSOT round-trip should.
+ * The carve-out preserves a variation selector only after a base that forms a
+ * *registered* standardized variation sequence with it; that registry is
+ * normative UCD data, never a hand-rolled list. The output is a `.mjs` module
+ * rather than JSON because the pinned eslint rejects import attributes and the
+ * Python-CLI esbuild bundle does not inline a `createRequire` JSON read.
+ * test/invisible-charset.test.mjs re-parses the file and fails on drift.
  *
  * This is the one UCD file still vendored: the pinned `@unicode/unicode-*`
- * package (./lib/ucd.mjs) carries no StandardizedVariants data, and
- * `ucd-full@17.0.0` ships Unicode 16's copy, which lacks 47 of Unicode 17's
- * sequences. loadStandardizedVariantsUcd throws when the file's header names a
- * version other than the package's, so bumping the package without refreshing
- * it from https://www.unicode.org/Public/<version>/ucd/StandardizedVariants.txt
- * fails the build.
+ * package has no StandardizedVariants data, and `ucd-full@17.0.0` ships
+ * Unicode 16's copy, which lacks 47 of Unicode 17's sequences. The loader
+ * refuses a file whose header names another version than the package's.
  *
- * Run from the repo root: `node scripts/gen-standardized-variants.mjs`. The
- * output is already in Prettier's format, so it is committed exactly as written.
+ * Run: `node scripts/gen-standardized-variants.mjs`.
  */
 import { readFileSync, writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
@@ -50,14 +35,10 @@ const isVariationSelector = (cp) =>
 const HEX_CODE_POINT = /^[0-9A-F]{4,6}$/u;
 
 /**
- * Parse UCD StandardizedVariants.txt into a sorted `[base, selector]` table.
- * Each data line is `BASE SELECTOR; description; # NAME`. Every data line is
- * kept: the file IS the registry, so which selectors it uses (VS1–VS14, the
- * Mongolian free variation selectors) is read from it, never restated here.
- * Throws on a data line that is not exactly two hex code points ending in a
- * Variation_Selector, so a format change fails the build instead of
- * dropping sequences. Pure so the contract test can call it on the same input
- * and compare with the committed module.
+ * Parse StandardizedVariants.txt (`BASE SELECTOR; description; # NAME` lines)
+ * into a sorted `[base, selector]` table, keeping every data line. Throws on a
+ * line that is not two hex code points ending in a Variation_Selector, so a
+ * format change fails the build instead of dropping sequences.
  * @param {string} text
  * @returns {Array<[number, number]>}
  */

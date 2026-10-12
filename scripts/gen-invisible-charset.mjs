@@ -15,12 +15,10 @@
  * ship DIFFERENT Unicode versions, so the two layers would strip DIFFERENT
  * `Cf` sets, and a key spliced with a code point in the version delta (e.g.
  * U+13439) would escape the layer on the older Unicode. `Cf` is instead
- * PINNED here at generation time — from the pinned UCD package, never the
- * generating Node's own `\p{Cf}`, so the output does not
- * depend on which Node ran the generator either — alongside the non-Cf extras,
- * and every consumer reads the pinned list. Version-locking the set is what
- * makes the JS layer and the Python port strip an identical set regardless of
- * each runtime's own Unicode version.
+ * PINNED here at generation time (from the UCD package, not Node's `\p{Cf}`)
+ * alongside the non-Cf extras, and every consumer reads the pinned list.
+ * Version-locking the set is what makes the JS layer and the Python port strip
+ * an identical set regardless of each runtime's own Unicode version.
  *
  * Writes two generated artifacts, both from the SAME pinned data so they cannot
  * drift:
@@ -52,8 +50,7 @@ export function extraCodepoints() {
   return [...cps].sort((a, b) => a - b);
 }
 
-/** Every general-category `Cf` code point in the pinned UCD, sorted ascending.
- * This is the set both layers read (see the header). */
+/** Every general-category `Cf` code point, sorted: the set both layers read. */
 const CF_CODEPOINTS = codePointsOf(await ucdSpans("General_Category/Format"));
 export function cfCodepoints() {
   return [...CF_CODEPOINTS];
@@ -118,9 +115,8 @@ export function cfCharsetModule() {
 export const UNICODE_VERSION = "${unicodeVersion()}";
 
 // GENERATED Unicode data, not hand-written logic. Its correctness is pinned by
-// the SSOT round-trip in test/invisible-charset.test.mjs (re-derive from the
-// pinned UCD, then assert every code point matches) — Stryker skips the numeric
-// literals.
+// the SSOT round-trip in test/invisible-charset.test.mjs (re-derive the Cf set,
+// then assert every code point matches) — Stryker skips the numeric literals.
 // Stryker disable all
 /** @type {readonly number[]} Sorted ascending. */
 export const CF_CODEPOINTS = Object.freeze([

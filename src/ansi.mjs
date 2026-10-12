@@ -540,12 +540,9 @@ const SGR_INDEXED = 5;
 const SGR_DIRECT = 2;
 
 /**
- * The palette-index key a basic colour parameter selects on the layer it sets
- * (`30`–`37`/`90`–`97` foreground, `40`–`47`/`100`–`107` background), `null`
- * for the layer's default (`39`/`49`), or undefined when `value` sets no
- * colour on that layer.
- * @param {number} value  the SGR parameter
- * @param {number} base  30 for the foreground, 40 for the background
+ * The palette key a basic colour parameter sets on the layer at `base` (30
+ * foreground, 40 background), `null` for its default, undefined for none.
+ * @param {number} value @param {number} base
  * @returns {string | null | undefined}
  */
 function basicColour(value, base) {
@@ -556,10 +553,8 @@ function basicColour(value, base) {
 }
 
 /**
- * The colour key an extended-colour selector's arguments name: `5;n` (or
- * `5:n`) is palette entry n, `2;r;g;b` (or the colon form, with or without its
- * colour-space id) is direct colour. Anything else is a colour this reader
- * cannot compare, so `null` — never equal to another colour.
+ * The colour key extended-colour arguments name (`5;n` palette, `2;r;g;b`
+ * direct, either separator), or `null` — never equal to another colour.
  * @param {string[]} args  the parameters after the selector, colour space first
  * @returns {string | null}
  */
@@ -572,19 +567,6 @@ function extendedColour(args) {
       .map((component) => Number(component))
       .join(",")}`;
   return null;
-}
-
-/**
- * The arguments the semicolon-form extended-colour selector at `params[i]`
- * consumes — its colour space and that space's components — or null when the
- * colour space is one T.416 gives no argument count for, so nothing is consumed.
- * @param {string[]} params @param {number} i
- * @returns {string[] | null}
- */
-function semicolonColourArgs(params, i) {
-  const count = SGR_COLOUR_ARGS.get(Number(params[i + 1]));
-  if (count === undefined) return null;
-  return params.slice(i + 1, i + 2 + count);
 }
 
 /**
@@ -632,10 +614,11 @@ export function sgrRendition(token, state) {
     if (background !== undefined) bg = background;
     if (!SGR_EXTENDED_COLOUR.has(value)) continue;
     const colonForm = subParams.length > 1;
+    const count = SGR_COLOUR_ARGS.get(Number(params[i + 1]));
+    if (!colonForm && count === undefined) continue; // unsized: consume nothing
     const args = colonForm
       ? subParams.slice(1)
-      : semicolonColourArgs(params, i);
-    if (args === null) continue;
+      : params.slice(i + 1, i + 2 + /** @type {number} */ (count));
     if (!colonForm) i += args.length;
     const colour = extendedColour(args);
     if (value === SGR_FOREGROUND) fg = colour;

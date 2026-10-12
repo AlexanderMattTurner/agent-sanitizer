@@ -215,11 +215,8 @@ export function decodeRun(run) {
  * effective invisible count outside those runs crosses the threshold-evasion
  * floor.
  *
- * Whether there is anything to report is {@link payloadVerdict}'s call — the
- * one the prompt gate and the write path make — so a Balinese conjunct chain
- * whose joiners outrun the carve-out's budget is a payload here exactly as it
- * is there, and a document of emoji ZWJ sequences or subdivision flags is
- * clean here exactly as it is there.
+ * Whether there is anything to report is {@link payloadVerdict}'s call, the
+ * one every other surface makes.
  * @param {string} content
  * @returns {Array<{ line: number | null, charCount: number, method: string, decoded: string }>}
  *   `line` is the 1-based line of a long-run finding, or `null` for the
@@ -238,9 +235,8 @@ export function scanText(content) {
   // order, so this scan only ever moves forward.
   let line = 1;
   let counted = 0;
-  // The verdict keeps only the first run; with one, every run is read off the
-  // payload view, which is index-aligned with `content` and masks the
-  // invisibles the carve-out preserves, so a run here is the payload's own.
+  // The verdict keeps only the first run; the rest come off the payload view,
+  // which is index-aligned with `content` and masks preserved invisibles.
   const runs =
     verdict.firstRun === null
       ? []
@@ -257,10 +253,8 @@ export function scanText(content) {
   }
 
   // Threshold-evasion: scattered invisible chars not in a long run can still be
-  // a payload. The verdict's count is the effective one — every payload
-  // invisible plus the joiners and selectors the carve-out's budget strips — and
-  // every run above is made of payload invisibles it counts, so subtracting the
-  // runs leaves exactly the invisibles no run reported.
+  // a payload. Every run above is made of invisibles the verdict's effective
+  // count includes, so subtracting them leaves exactly the unreported ones.
   const scattered = verdict.invisibleCount - runChars;
   if (scattered >= SCATTERED_THRESHOLD) {
     findings.push({

@@ -177,11 +177,8 @@ const MAX_FIELD_PASSES = 3;
 
 /**
  * The carve-out-free strip a field that did not converge falls back to: every
- * invisible, then every escape and raw introducer, each only where its
- * protection is on. Its output holds nothing either stage would remove, so it
- * is a fixed point of sanitizeField — the guarantee the bounded loop could not
- * give, bought by giving up the joiner carve-out and the colour carve-out on
- * adversarial input only.
+ * invisible, then every escape and raw introducer, each where its protection
+ * is on — a fixed point of sanitizeField, on adversarial input only.
  * @param {string} value  the field as the caller sent it (for the leading-BOM rule)
  * @param {string} cleaned  the loop's last state
  * @param {Set<string>} actions  collects the protections that changed the field
@@ -228,19 +225,14 @@ function sanitizeField(value) {
       }
     }
 
-    // The engine's payloadVerdict, so a Write body is stego exactly when the
-    // same text would block a prompt — judged, as the prompt gate judges it, on
-    // the de-ANSI'd view: the colour carve-out above leaves SGR in `cleaned`,
-    // and its parameter bytes render nothing, so they must not count as the
-    // visible cover that buys preserved joiners and selectors.
+    // The engine's payloadVerdict on the de-ANSI'd view, as the prompt gate
+    // judges it: SGR the colour carve-out kept renders nothing, so it must not
+    // count as cover that buys preserved joiners and selectors.
     if (!readKnob("AGENT_SANITIZER_INVISIBLE_DISABLED")) {
       const view = stripAnsiFully(cleaned);
       if (payloadVerdict(view).payloadCapable) {
-        // A field carrying a payload forfeits the colour carve-out: the strip
-        // must read the view the verdict read, or the same SGR bytes would fund
-        // the preserve budget the verdict refused. Under the terminal opt-out
-        // the escapes are the author's to keep, so the strip reads the raw
-        // field and only the invisibles go.
+        // A payload forfeits the colour carve-out, so the strip reads the view
+        // the verdict read — unless the terminal opt-out keeps the escapes.
         const source = readKnob("AGENT_SANITIZER_TERMINAL_DISABLED")
           ? cleaned
           : view;

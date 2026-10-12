@@ -1,20 +1,15 @@
 #!/usr/bin/env node
 /**
- * Regenerate every committed module compiled from the pinned UCD package
- * (./lib/ucd.mjs). `pnpm install` runs this through `prepare`, so bumping the
- * `@unicode/unicode-*` devDependency rewrites the tables in the same install,
- * and the diff shows up in `git status` to be committed with the bump.
- *
- * Under CI it writes nothing: the drift tests (test/unicode-properties,
- * test/joining-type, test/invisible-charset) compare the COMMITTED modules with
- * a fresh generation, and regenerating them first would make that comparison
- * compare a file with itself.
+ * Regenerate every module compiled from the pinned UCD package. `pnpm install`
+ * runs this through `prepare`, so a package bump rewrites the tables in the
+ * same install. Under CI it writes nothing: the drift tests compare the
+ * COMMITTED modules with a fresh generation, which regenerating first would
+ * make vacuous.
  */
 import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
-/** In dependency order: gen-invisible-charset imports src/invisible.mjs, which
- * imports the three modules the generators before it write. */
+// gen-invisible-charset last: it imports src/invisible.mjs, which reads the rest.
 const GENERATORS = [
   "gen-unicode-properties.mjs",
   "gen-joining-type.mjs",
