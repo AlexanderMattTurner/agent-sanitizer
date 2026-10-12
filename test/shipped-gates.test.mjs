@@ -23,8 +23,9 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { describe, it } from "node:test";
+import { fileURLToPath } from "node:url";
 
 import { expandShards } from "../.github/scripts/expand-shards.mjs";
 import {
@@ -43,10 +44,8 @@ import {
   toolingSources,
   vendorScope,
 } from "../scripts/shipped-sources.mjs";
-
-const repoRoot = execFileSync("git", ["rev-parse", "--show-toplevel"], {
-  encoding: "utf8",
-}).trim();
+import { cleanGitEnv } from "./helpers/git-env.mjs";
+import { repoRoot } from "./helpers/repo-root.mjs";
 
 const shipped = shippedSources(repoRoot);
 const mutated = mutatedSources(repoRoot);
@@ -94,7 +93,7 @@ const SRC_FLOORS = {
   functions: 100,
   statements: 100,
 };
-const HOOK_FLOORS = { lines: 93, branches: 88, functions: 93, statements: 93 };
+const HOOK_FLOORS = { lines: 93, branches: 91, functions: 93, statements: 93 };
 
 /** The hook layer's mutation ratchet, same contract as the coverage floors. */
 const HOOK_SCOPE_BREAK = 30;
@@ -197,6 +196,35 @@ describe("shipped sources", () => {
         JSON.stringify({ files: ["bin/*.mjs"] }),
       );
       assert.deepEqual(hookScope(scratch), ["bin/cli.mjs"]);
+    } finally {
+      rmSync(scratch, { recursive: true, force: true });
+    }
+  });
+
+  it("finds the repo root with GIT_DIR exported, as inside a git hook", () => {
+    // `git rev-parse --show-toplevel` answers with the CWD when GIT_DIR is set
+    // without GIT_WORK_TREE, so a git-derived root named `scripts/` itself and
+    // every gate read `scripts/package.json`. Driven in a child so the env is
+    // real, from `scripts/` so a CWD answer cannot pass by coincidence.
+    const scratch = mkdtempSync(join(tmpdir(), "git-dir-root-"));
+    try {
+      execFileSync("git", ["init", "-q", scratch], { env: cleanGitEnv });
+      const module = new URL("../scripts/shipped-sources.mjs", import.meta.url);
+      const printed = execFileSync(
+        process.execPath,
+        [
+          "--input-type=module",
+          "-e",
+          `import { findRepoRoot } from ${JSON.stringify(module.href)};\n` +
+            "process.stdout.write(findRepoRoot());",
+        ],
+        {
+          cwd: fileURLToPath(new URL(".", module)),
+          env: { ...cleanGitEnv, GIT_DIR: join(scratch, ".git") },
+          encoding: "utf8",
+        },
+      );
+      assert.equal(printed, resolve(fileURLToPath(new URL("..", module))));
     } finally {
       rmSync(scratch, { recursive: true, force: true });
     }

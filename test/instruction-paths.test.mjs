@@ -225,6 +225,7 @@ describe("every instruction-file write stays inside its root", () => {
     "claude-hooks/lib/invisible-alert.mjs::appendAlert",
     "claude-hooks/lib/invisible-alert.mjs::drop",
     "claude-hooks/lib/invisible-alert.mjs::sweepStaleSessions",
+    "claude-hooks/lib/reveal.mjs::persistSpan",
     "claude-hooks/lib/reveal.mjs::readSpan",
     "claude-hooks/lib/reveal.mjs::revealDirIsSafe",
     "claude-hooks/lib/reveal.mjs::sweepStaleReveals",

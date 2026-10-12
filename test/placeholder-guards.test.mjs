@@ -147,14 +147,12 @@ describe("PLACEHOLDER_RE: contract with placeholders.py", () => {
   });
 });
 
-// ─── UNPARSEABLE_MARKER: SSOT contract with the splicer ──────────────────────
+// ─── UNPARSEABLE_MARKER: the splicer's own constant ─────────────────────────
 
-describe("UNPARSEABLE_MARKER: contract with src/html.mjs", () => {
-  it("mirrors the splicer's un-keyed marker exactly", () => {
-    // The hooks copy exists because the shipped plugin bundle resolves the
-    // engine from a pinned release; this pins the copy to the producer so a
-    // reworded marker cannot silently stop being detected. The keyed markers
-    // have their own contract test (claude-hooks-layer2-grammar.test.mjs).
+describe("UNPARSEABLE_MARKER: the splicer's own constant", () => {
+  it("is the value src/html.mjs withholds unparseable input behind", () => {
+    // One definition (src/layer2-placeholder.mjs) under the hooks' published
+    // name, so a reworded marker cannot stop being detected.
     assert.equal(UNPARSEABLE_MARKER, UNPARSEABLE_PLACEHOLDER);
   });
 });
