@@ -3867,14 +3867,17 @@ function srcsetUrls(value) {
   return urls;
 }
 
-const IMAGE_SET_FUNCTIONS = new Set(["image-set", "-webkit-image-set"]);
+// The functions whose string arguments are URLs: `image-set()`, and a `url()`
+// spelled with an escape (`\75 rl("…")`), which a browser decodes to `url(` and
+// fetches while css-tree reads it as a plain function.
+const STRING_URL_FUNCTIONS = new Set(["url", "image-set", "-webkit-image-set"]);
 
 /**
  * The URLs a CSS source loads: every `url()`, the string arguments of an
  * `image-set()`, and the string target of an `@import`. `context` is the
  * css-tree parse context — "declarationList" for a `style` attribute,
  * "stylesheet" for a `<style>` element's text. A value css-tree cannot parse
- * (an escaped `\75 rl(`, which degrades to a `Raw` node) yields nothing.
+ * (an escaped `\75 rl(` around an unquoted URL degrades to `Raw`) yields nothing.
  * @param {string} css
  * @param {"declarationList" | "stylesheet"} context
  * @returns {string[]}
@@ -3903,7 +3906,7 @@ function cssUrls(css, context) {
         ? cssIdent.decode(node.name).toLowerCase()
         : "";
     const takesStrings =
-      (node.type === "Function" && IMAGE_SET_FUNCTIONS.has(name)) ||
+      (node.type === "Function" && STRING_URL_FUNCTIONS.has(name)) ||
       (node.type === "Atrule" && name === "import");
     if (!takesStrings) return;
     const strings = node.type === "Atrule" ? node.prelude : node;

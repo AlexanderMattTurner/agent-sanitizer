@@ -150,6 +150,11 @@ describe("CSS: css-tree reads the URLs a style loads", () => {
       "image-set() string",
       `<div style="background:image-set('${EVIL}' 1x)">x</div>`,
     ],
+    // A browser decodes the escape to `url(`; css-tree reads a plain function.
+    [
+      "escaped url() string",
+      `<div style="background:#fff \\75 rl('${EVIL}')">x</div>`,
+    ],
     ["<style> url()", `<style>body{background:url(${EVIL})}</style>`],
     ["<style> @import string", `<style>@import "${EVIL}";</style>`],
   ])
