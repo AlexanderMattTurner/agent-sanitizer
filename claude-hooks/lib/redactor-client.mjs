@@ -37,6 +37,7 @@ import {
 } from "./redactor-wire.mjs";
 import { currentUid, isPrivateDir, ownedByCurrentUser } from "./hook-io.mjs";
 import { readKnob } from "./knobs.mjs";
+import { displayUntrusted } from "../../src/claude-context.mjs";
 
 export { FRAME_CAP };
 
@@ -308,14 +309,16 @@ export function connectAndRequest(
       if (frameRead === undefined) return;
       const parsed = frameRead.value;
       if (isPlainObject(parsed) && "error" in parsed) {
-        // The daemon's error strings are fixed literals, never request data.
+        // Our daemon's error strings are fixed literals, but the wire types
+        // `error` only as a string: whatever answers on the socket chooses it,
+        // and this message reaches the operator and the model.
         const reason = conforms(parsed, PROTOCOL.responses.error)
           ? `: ${parsed.error}`
           : "";
         finish(
           reject,
           new Error(
-            `daemon reported redaction failure${reason}; its log is ${join(dirname(socketPath), "daemon.log")}`,
+            `daemon reported redaction failure${displayUntrusted(reason)}; its log is ${join(dirname(socketPath), "daemon.log")}`,
           ),
         );
         return;

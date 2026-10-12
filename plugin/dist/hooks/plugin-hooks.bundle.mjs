@@ -49514,7 +49514,7 @@ function connectAndRequest(socketPath, request, deadlineMs = requestDeadlineMs()
         finish(
           reject,
           new Error(
-            `daemon reported redaction failure${reason}; its log is ${join7(dirname6(socketPath), "daemon.log")}`
+            `daemon reported redaction failure${displayUntrusted(reason)}; its log is ${join7(dirname6(socketPath), "daemon.log")}`
           )
         );
         return;
@@ -49679,6 +49679,7 @@ var init_redactor_client = __esm({
     init_redactor_wire();
     init_hook_io();
     init_knobs();
+    init_claude_context();
     init_knobs();
     DEFAULT_SOCKET_PATH = readKnob("_AGENT_SANITIZER_REDACTOR_SOCKET") ?? join7(tmpdir2(), "agent-sanitizer-redactor", "redactor.sock");
     WAIT_DEADLINE_MS = readKnob("_AGENT_SANITIZER_REDACTOR_WAIT_MS");
