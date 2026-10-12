@@ -322,6 +322,12 @@ def _env_mark(
     return _mark(entries, placeholder_text, m.group(0))
 
 
+def _env_secrets_longest_first(config: RedactorConfig) -> list[tuple[str, str]]:
+    """``config.env_secrets`` ordered longest value first, so a secret that is a
+    substring of another never claims the longer one's bytes."""
+    return sorted(config.env_secrets.items(), key=lambda kv: -len(kv[1]))
+
+
 def _redact_env_bound(
     text: str,
     found: list[str],
@@ -335,8 +341,7 @@ def _redact_env_bound(
     would otherwise be masked first, splitting the longer value so its own
     pattern no longer matches and the remainder leaks verbatim."""
     charset = config.resolved_charset()
-    by_length = sorted(config.env_secrets.items(), key=lambda kv: -len(kv[1]))
-    for name, value in by_length:
+    for name, value in _env_secrets_longest_first(config):
         deadline.check("env-bound redaction")
         if not value or len(value) < config.min_secret_len:
             continue
@@ -1575,7 +1580,7 @@ def _cross_line_candidate_spans(
                     CrossLineSpan(cs, ce, placeholder(secret.type), secret.type)
                 )
                 start = stripped.find(value, end)
-    for name, value in config.env_secrets.items():
+    for name, value in _env_secrets_longest_first(config):
         deadline.check("cross-line env-value scan")
         if not value or len(value) < config.min_secret_len:
             continue

@@ -110,22 +110,28 @@ def test_redact_env_bound(label, field, var, value, text, expect_redacted):
         assert found == [], label
 
 
+_SHORT_ENV = "0123456789ABCDEF"
+_LONG_ENV = _SHORT_ENV + "-REST-OF-SECRET"
+
+
 @pytest.mark.parametrize(
     "provider_vars, host_cred_vars",
     [
-        ({"SHORT_KEY": _LONG}, {"LONG_KEY": _LONG + "Xy9Wv8"}),
-        ({"LONG_KEY": _LONG + "Xy9Wv8"}, {"SHORT_KEY": _LONG}),
+        ({"OPENROUTER_API_KEY": _SHORT_ENV}, {"GH_TOKEN": _LONG_ENV}),
+        ({"GH_TOKEN": _LONG_ENV}, {"OPENROUTER_API_KEY": _SHORT_ENV}),
     ],
     ids=["shorter-configured-first", "longer-configured-first"],
 )
-def test_redact_env_bound_masks_longer_secret_containing_shorter(
-    provider_vars, host_cred_vars
-):
+def test_env_secret_containing_another_redacts_whole(provider_vars, host_cred_vars):
     config = cfg(provider_vars=provider_vars, host_cred_vars=host_cred_vars)
-    found: list[str] = []
-    out = E._redact_env_bound(f"a {_LONG}Xy9Wv8 b {_LONG} c", found, config)
-    assert out == "a [REDACTED: LONG_KEY] b [REDACTED: SHORT_KEY] c"
-    assert found == ["LONG_KEY", "SHORT_KEY"]
+    assert redact(f"seen {_LONG_ENV} here", config) == (
+        "seen [REDACTED: GH_TOKEN] here",
+        ["GH_TOKEN"],
+    )
+    assert redact(f"a {_LONG_ENV} b {_SHORT_ENV} c", config) == (
+        "a [REDACTED: GH_TOKEN] b [REDACTED: OPENROUTER_API_KEY] c",
+        ["GH_TOKEN", "OPENROUTER_API_KEY"],
+    )
 
 
 def test_main_redacts_env_bound_value():
