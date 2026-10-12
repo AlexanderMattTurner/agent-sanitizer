@@ -4558,7 +4558,6 @@ function resolveSpan(content3, cleaned, view, deletions, viewStart, viewEnd) {
   return {
     diskText,
     cleanedText: cleaned.slice(cleanedStart, cleanedEnd),
-    invisibleBytes: diskText.length - (cleanedEnd - cleanedStart),
     pairs: view.pairs.filter(
       (pair) => pair.start >= viewStart && pair.start + pair.placeholder.length <= viewEnd
     )

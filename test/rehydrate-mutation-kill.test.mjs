@@ -237,7 +237,7 @@ describe("rehydrate mutation kill: exposure-sim gating", () => {
 
   it("L333: notes .filter(Boolean) drops the false placeholder-note (invisible-only edit)", async () => {
     // No placeholder in the span (span.pairs empty) but an interior zero-width
-    // char (invisibleBytes>0). Without .filter(Boolean) the notes array keeps a
+    // char (a non-empty strip count). Without .filter(Boolean) the notes array keeps a
     // boolean `false`, which join()s into the context as the literal "false".
     const content = `add(a, b)${ZW};\nDEBUG=1\n`;
     const out = await rehydrateRedacted(

@@ -346,9 +346,8 @@ function mapViewOffset(pairs, offset) {
  * Resolve view span [viewStart, viewEnd) to its on-disk text and the redaction
  * pairs it wholly contains, mapping across placeholder expansion (view →
  * cleaned) and stripped invisible runs (cleaned → disk). Null when a boundary
- * cuts through a placeholder. `invisibleBytes` counts stripped characters
- * inside the span (replaced along with it); runs at the boundaries stay
- * outside and are preserved. `cleanedText` is the span's Layer-1 view — the
+ * cuts through a placeholder. Stripped runs inside the span are replaced along
+ * with it; runs at the boundaries stay outside and are preserved. `cleanedText` is the span's Layer-1 view — the
  * caller MUST verify that re-cleaning `diskText` reproduces it before acting:
  * greedy alignment is ambiguous when a deleted run's edge character equals the
  * adjacent kept character (an ANSI sequence ending in `m` before a kept `m`),
@@ -379,7 +378,6 @@ export function resolveSpan(
   return {
     diskText,
     cleanedText: cleaned.slice(cleanedStart, cleanedEnd),
-    invisibleBytes: diskText.length - (cleanedEnd - cleanedStart),
     pairs: view.pairs.filter(
       (pair) =>
         pair.start >= viewStart &&

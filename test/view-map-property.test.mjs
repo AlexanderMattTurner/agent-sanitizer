@@ -9,8 +9,8 @@
  *   - alignDeletions: ROUND-TRIP — re-inserting each recovered run into the
  *     cleaned view reproduces content; throws iff cleaned is not a subsequence.
  *   - resolveSpan: re-cleaning diskText reproduces cleanedText (the caller's
- *     soundness contract); invisibleBytes counts exactly the deleted runs
- *     STRICTLY INSIDE the span — a run at either boundary stays outside; null
+ *     soundness contract); the stripped characters between diskText and
+ *     cleanedText are exactly the deleted runs STRICTLY INSIDE the span — a run at either boundary stays outside; null
  *     exactly when a boundary cuts a placeholder; returned pairs lie wholly
  *     inside the span.
  *   - rehydrateNewString: the verbatim fast path maps placeholders 1:1 to their
@@ -85,6 +85,12 @@ const SECRET_A = ["hunter2hunter2", "hunter2xA"].join("");
 const SECRET_B = ["hunter2hunter2", "hunter2xB"].join("");
 const PH = "[REDACTED]";
 const PH_KEY = "[REDACTED: Key]";
+
+// Characters Layer 1 stripped from a resolved span, in code points: the
+// quantity the production callers report, derived from the two texts the span
+// returns rather than from a field of its own.
+const strippedCount = (res) =>
+  [...res.diskText].length - [...res.cleanedText].length;
 
 // ─── Generators ──────────────────────────────────────────────────────────────
 
@@ -274,20 +280,19 @@ describe("resolveSpan (property): soundness on placeholder-free spans", () => {
         assert.equal(res.cleanedText, clean.slice(start, end));
         // Caller contract: re-cleaning the disk span reproduces the cleaned span.
         assert.equal(reclean(res.diskText), res.cleanedText);
-        assert.ok(res.invisibleBytes >= 0);
-        assert.equal(res.invisibleBytes, res.diskText.length - (end - start));
+        assert.equal(strippedCount(res), res.diskText.length - (end - start));
         assert.deepEqual(res.pairs, []);
       },
     );
   });
 
-  it("invisibleBytes counts the deleted runs strictly INSIDE the span; a run at either boundary stays outside", () => {
+  it("the stripped characters are the deleted runs strictly INSIDE the span; a run at either boundary stays outside", () => {
     // KILLS the trailing-boundary mutants: a deletion sitting exactly at the
     // span end (cleanedEnd) must stay OUTSIDE the disk span. diskOffset's
     // `del.start < off` → `<=` and resolveSpan's
     // `diskOffset(…, cleanedEnd, true)` → `false` each pull that end-boundary
-    // run INTO diskText, inflating invisibleBytes. The re-clean self-check
-    // can't catch it (the run still strips away), so the byte count is the
+    // run INTO diskText, inflating the stripped count. The re-clean self-check
+    // can't catch it (the run still strips away), so the count is the
     // discriminator. The regression example forces a deletion exactly at the
     // span end so the kill fires every run, seed-independent.
     let sawEndBoundary = false;
@@ -316,9 +321,9 @@ describe("resolveSpan (property): soundness on placeholder-free spans", () => {
             sawEndBoundary = true;
           if (interior.length) sawInterior = true;
           assert.equal(
-            res.invisibleBytes,
-            interior.reduce((acc, del) => acc + del.deleted.length, 0),
-            "invisibleBytes != strictly-interior deleted bytes",
+            strippedCount(res),
+            interior.reduce((acc, del) => acc + [...del.deleted].length, 0),
+            "stripped characters != strictly-interior deleted characters",
           );
         },
       ),
@@ -391,7 +396,7 @@ describe("resolveSpan (property): placeholder boundaries", () => {
         const ce = mapBack(fx.view.pairs, end);
         assert.equal(res.cleanedText, fx.cleaned.slice(cs, ce));
         assert.equal(res.diskText, res.cleanedText);
-        assert.equal(res.invisibleBytes, 0);
+        assert.equal(strippedCount(res), 0);
       },
     );
   });
