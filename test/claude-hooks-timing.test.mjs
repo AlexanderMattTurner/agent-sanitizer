@@ -815,8 +815,7 @@ describe("the version an issue report is asked to carry", () => {
 describe("a composer's own hook", () => {
   const glovebox = {
     name: "agent-glovebox",
-    issueUrl:
-      "https://github.com/AlexanderMattTurner/agent-glovebox/issues/new",
+    issueUrl: "https://composer.example/agent-glovebox/issues/new",
     version: "0.79.0",
   };
   // One context per attribution arm that names an owner, plus the unmeasured
@@ -842,7 +841,7 @@ describe("a composer's own hook", () => {
       assert.match(composed, /^agent-glovebox PERFORMANCE/u);
       assert.match(
         composed,
-        /report it at https:\/\/github\.com\/AlexanderMattTurner\/agent-glovebox\/issues\/new with agent-glovebox 0\.79\.0, the hook name/u,
+        /report it at https:\/\/composer\.example\/agent-glovebox\/issues\/new with agent-glovebox 0\.79\.0, the hook name/u,
       );
       assert.doesNotMatch(composed, /sanitizer/u);
     });
