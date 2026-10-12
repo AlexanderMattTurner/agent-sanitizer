@@ -57,6 +57,10 @@ from .prefilter import LiteralProbe, degroup, denylist_patterns, fold
 # metavariable shape (`YOUR_API_KEY`), a different concept from the redaction
 # placeholder text this matches.
 from .placeholders import PLACEHOLDER_RE as _REDACTED_TEXT_RE
+from .placeholders import MARK_CLOSE as _MARK_CLOSE
+from .placeholders import MARK_OPEN as _MARK_OPEN
+from .placeholders import MASK_SENTINEL as _MASK_SENTINEL
+from .placeholders import SENTINEL_CHARS as _SENTINEL_CHARS
 from .placeholders import placeholder
 
 # Bundled detect-secrets plugins, each mapped to whether its type is
@@ -196,17 +200,14 @@ PLUGINS_HIGH_CONFIDENCE = [p for p in ALL_PLUGINS if p["name"] != _KEYWORD_PLUGI
 # start offset) per occurrence. Detector matching runs against the pre-replacement
 # text, so the resolved text equals the normal-mode output. The sentinel keeps a
 # space inside so FIELD_VALUE_RE treats it like the space-bearing placeholder.
-_MARK_OPEN = "\ue000"
-_MARK_CLOSE = "\ue001"
 _MARK_RE = re.compile(f"{_MARK_OPEN}(\\d+) {_MARK_CLOSE}")
-# The private-use mask `mask_secret_lines` swaps to asterisks after masking.
-_MASK_SENTINEL = "\ue010"
 # Every code point the engine reserves for its own bookkeeping. Each is excluded
 # from FIELD_VALUE_RE's value class (so a value stops at a sentinel exactly as it
 # stops at the bracket of a plain-mode placeholder, keeping map mode's text equal
 # to plain mode's) and refused in input by every path that plants one: a text
-# already carrying one would be mis-paired with, or masked as, a secret.
-_SENTINEL_CHARS = _MARK_OPEN + _MARK_CLOSE + _MASK_SENTINEL
+# already carrying one would be mis-paired with, or masked as, a secret. The
+# constants live in `placeholders.py` so `RedactorConfig` can refuse an
+# invisible charset that would strip them.
 
 
 def _holds_sentinel(text: str) -> bool:
@@ -445,14 +446,19 @@ _VALUE_EXCLUDED = rf"\s{_QUOTE_CHARS}`{{}}()\[\]{_SENTINEL_CHARS}"
 
 def _field_value_re(*, nested: bool) -> re.Pattern[str]:
     """The ``field = value`` regex. ``nested`` builds the variant tried INSIDE a
-    value already judged benign: its value additionally stops where another
-    credential field's assignment begins, so `token_type=bearer&access_token=X`
-    judges `X` on its own span. That bound is also what keeps the nested pass
-    linear — each inner value ends at the next inner key instead of re-scanning
-    to the end of the enclosing value once per key. Top-level values do not stop
-    there: a human-chosen password containing `Secret:` must redact whole."""
-    body = rf"[^{_VALUE_EXCLUDED}]"
-    last = rf"[^{_VALUE_EXCLUDED};,]"
+    value already judged benign — a value made of further pairs, joined by a
+    pair delimiter (`&` `;` `,`). Its value stops at that delimiter, so
+    `token_type=bearer&access_token=X&expires_in=3600` judges `X` on its own
+    span and the redaction leaves `&expires_in=3600` (and the `&` before a
+    following credential pair) in place. It also stops where another credential
+    field's assignment begins, for a pair glued on with no delimiter; that bound
+    is what keeps the nested pass linear — each inner value ends at the next
+    inner key instead of re-scanning to the end of the enclosing value once per
+    key. Top-level values stop at neither: a human-chosen password containing
+    `&` or `Secret:` must redact whole."""
+    excluded = _VALUE_EXCLUDED + ("&;," if nested else "")
+    body = rf"[^{excluded}]"
+    last = rf"[^{excluded};,]"
     if nested:
         body = rf"(?:(?!{_FIELD_KEY}){body})"
         last = rf"(?!{_FIELD_KEY}){last}"
@@ -1197,8 +1203,9 @@ def _is_regex_literal(c: Candidate) -> bool:
 # of it: the label charset excludes "]" and every control character, so the atom
 # and the producer cannot disagree about where a placeholder ends.
 _PEM_B64_ATOM = (
-    # `\/` is a JSON encoder's escaped `/` (PHP's json_encode writes every one).
-    r"(?:[A-Za-z0-9+/=]|\\/"
+    # `\/` is a JSON encoder's escaped `/` (PHP's json_encode writes every one),
+    # at any escape depth for the same reason `_PEM_SEP` below accepts one.
+    r"(?:[A-Za-z0-9+/=]|\\+/"
     + f"|{re.escape(_MARK_OPEN)}"
     + r"\d+ "
     + f"{re.escape(_MARK_CLOSE)}"
@@ -1207,14 +1214,21 @@ _PEM_B64_ATOM = (
 # THE PEM body grammar, shared by both branches of PEM_BLOCK_RE: a block is its
 # header followed by LINES, each holding one base64 run or one RFC 1421
 # `Field: value` header (or nothing), separated by a real line break or the `\n`
-# escape a JSON string carries a key's line breaks as. A line holding anything
+# escape a JSON string carries a key's line breaks as — at ANY escape depth:
+# each re-serialisation doubles the backslashes (`\n`, `\\n`, `\\\\n`), and a
+# separator that knew one depth ended a doubly-encoded block at its header,
+# leaving the base64 body and END marker visible. A line holding anything
 # else ends the body, which is what keeps code or prose that merely NAMES both
 # markers (`if pem.startswith("-----BEGIN …")` … `"-----END …"`) from collapsing
 # every line between them into one placeholder.
-_PEM_SEP = r"(?:\r?\n|\\r\\n|\\n)"
+_PEM_SEP = r"(?:\r?\n|(?:\\+r)?\\+n)"
 # A header field runs to its line's end; the lookahead pins that end, so the
-# field parses one way only and cannot swallow a later line's base64.
-_PEM_FIELD = r"[A-Za-z][A-Za-z0-9-]*:[^\r\n\\]*(?=[\r\n\\]|\Z)"
+# field parses one way only and cannot swallow a later line's base64. A key
+# flattened onto one line (`echo $KEY`) has no line end before its END marker,
+# so the field also ends at `-----`: run to the end of the text instead, it
+# swallowed the END marker and every byte after it into the placeholder. No
+# header value contains `-----`.
+_PEM_FIELD = r"[A-Za-z][A-Za-z0-9-]*:(?:(?!-----)[^\r\n\\])*(?=[\r\n\\]|-----|\Z)"
 # Several runs share a line only as a key echoed with its line breaks turned to
 # spaces (`echo $KEY`): every run but the last is then a full 64-char line, so a
 # run under 16 chars cannot precede another — which keeps prose (`then the base64
@@ -1241,21 +1255,23 @@ PEM_BLOCK_RE = re.compile(
     # last, unterminated line counts only when it ends the text or a quoted
     # string; without that it would match the leading word of an ordinary
     # following line ("keep me" -> "keep").
-    + rf"|(?:{_PEM_LINE}{_PEM_SEP})*(?:[ \t]*{_PEM_CONTENT}[ \t]*(?=\Z|[\"']))?)",
+    + rf"|(?:{_PEM_LINE}{_PEM_SEP})*(?:[ \t]*{_PEM_CONTENT}[ \t]*(?=\Z|\\*[\"']))?)",
     re.IGNORECASE,
 )
 
 
 def _pem_gap_start(block: str, end: int) -> int:
     """Index where the trailing run of blanks and line breaks (real, or JSON
-    ``\\n``/``\\r`` escapes) ending at ``end`` begins. Walked by hand: a regex
-    anchored at ``\\Z`` and searched from the left re-scans a long gap once per
-    position."""
+    ``\\n``/``\\r`` escapes at any depth, as ``_PEM_SEP`` reads them) ending at
+    ``end`` begins. Walked by hand: a regex anchored at ``\\Z`` and searched from
+    the left re-scans a long gap once per position."""
     while end > 0:
         if block[end - 1] in " \t\r\n":
             end -= 1
-        elif block[max(end - 2, 0) : end] in ("\\n", "\\r"):
-            end -= 2
+        elif block[end - 1] in "nr" and block[end - 2 : end - 1] == "\\":
+            end -= 1
+            while end > 0 and block[end - 1] == "\\":
+                end -= 1
         else:
             break
     return end

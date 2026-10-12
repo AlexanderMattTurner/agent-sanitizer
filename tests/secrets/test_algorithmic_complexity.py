@@ -488,6 +488,10 @@ _ENGINE_SHAPES = {
     "pem headers": lambda n: "-----BEGIN PRIVATE KEY-----" * (n // 4),
     "pem body lines": lambda n: "-----BEGIN PRIVATE KEY-----\n" + "QUFB\n" * n,
     "pem json body": lambda n: "-----BEGIN PRIVATE KEY-----" + "\\nQUFB" * n,
+    "pem deep json body": lambda n: "-----BEGIN PRIVATE KEY-----" + "\\\\nQUFB" * n,
+    "pem field dashes": lambda n: (
+        "-----BEGIN PRIVATE KEY-----\nProc-Type: " + "----a" * n
+    ),
     "pem blocks": lambda n: "-----BEGIN PRIVATE KEY-----\nQUFB QUFB\n" * (n // 4),
     "pem markers in prose": lambda n: (
         "-----BEGIN PRIVATE KEY----- a " * (n // 4) + "-----END PRIVATE KEY-----"

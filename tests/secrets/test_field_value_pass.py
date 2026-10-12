@@ -56,6 +56,30 @@ def test_a_pair_inside_a_benign_value_is_still_judged(text, kept):
     assert out.startswith(kept), out
 
 
+_OPAQUE_2 = "Hc6JdNb4Xp9Rk2Vt7Lm3Zq8w"
+
+
+@pytest.mark.parametrize("sep", ["&", ";", ","])
+def test_a_nested_value_stops_at_the_pair_delimiter(sep):
+    """Only the credential's own bytes go: the delimiter and every pair after
+    it stay, and two adjacent credential pairs each keep their delimiter."""
+    pairs = [
+        "token_type=bearer",
+        f"access_token={_OPAQUE}",
+        f"refresh_token={_OPAQUE_2}",
+        "expires_in=3600",
+    ]
+    assert _plain(sep.join(pairs)) == sep.join(
+        [pairs[0], "access_token=[REDACTED]", "refresh_token=[REDACTED]", pairs[3]]
+    )
+
+
+def test_a_top_level_value_keeps_its_ampersand():
+    """The delimiter stop is for pairs nested in a benign value only: a
+    top-level password carrying `&` still redacts whole."""
+    assert _plain(f"password=Zq8w&{_OPAQUE} tail") == "password=[REDACTED] tail"
+
+
 @pytest.mark.parametrize("label", sorted(LEGITIMATE))
 @pytest.mark.parametrize("sep", ["&", ";", ","])
 def test_no_benign_prefix_shadows_a_following_secret(label, sep):

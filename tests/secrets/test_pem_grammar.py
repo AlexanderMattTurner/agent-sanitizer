@@ -8,6 +8,7 @@ them stays, line for line.
 
 import base64
 import hashlib
+import json
 
 import pytest
 
@@ -98,6 +99,20 @@ _FULL = "\n".join([_BEGIN, *_LINES, _END])
         ),
         ("space collapsed", " ".join([_BEGIN, *_LINES, _END]) + " after", " after"),
         (
+            "space collapsed with header fields",
+            " ".join(
+                [
+                    _BEGIN,
+                    "Proc-Type: 4,ENCRYPTED",
+                    "DEK-Info: AES-128-CBC,AB12CD34",
+                    *_LINES,
+                    _END,
+                ]
+            )
+            + " after\nnext line",
+            " after\nnext line",
+        ),
+        (
             "encrypted with header fields",
             "\n".join(
                 [
@@ -125,6 +140,50 @@ def test_a_real_block_collapses_to_one_placeholder(label, text, tail):
     assert view["text"] == out, label
 
 
+def _serialised(text: str, depth: int, *, php: bool) -> str:
+    """``text`` JSON-encoded ``depth`` times; ``php`` escapes every `/` on the
+    first layer, as PHP's json_encode does."""
+    for layer in range(depth):
+        text = json.dumps(text)
+        if php and layer == 0:
+            text = text.replace("/", "\\/")
+    return text
+
+
+@pytest.mark.parametrize("php", [False, True], ids=["json", "php"])
+@pytest.mark.parametrize("eol", ["\n", "\r\n"], ids=["lf", "crlf"])
+@pytest.mark.parametrize("depth", [0, 1, 2, 3])
+def test_a_block_redacts_whole_at_every_escape_depth(depth, eol, php):
+    """Each re-serialisation doubles the separator's backslashes; the body and
+    END marker go at every depth, and only the block goes."""
+    assert any("/" in line for line in _LINES)
+    pem = eol.join(["", "x", _BEGIN, *_LINES, _END, "y", ""])
+    text = _serialised(pem, depth, php=php)
+    out, found = redact(text)
+    assert "Private Key" in found
+    _assert_no_body(out)
+    start, end = text.index(_BEGIN), text.index(_END) + len(_END)
+    assert out == text[:start] + _PLACEHOLDER + text[end:]
+    view = redact_map(text)
+    assert reconstruct(view) == text
+    assert view["text"] == out
+
+
+@pytest.mark.parametrize("depth", [1, 2, 3])
+@pytest.mark.parametrize(
+    "label, text, kept", _CODE_NAMING_MARKERS, ids=[c[0] for c in _CODE_NAMING_MARKERS]
+)
+def test_escaped_code_naming_both_markers_is_untouched(label, text, kept, depth):
+    """Accepting any escape depth widens only the separator: escaped code that
+    names both markers redacts exactly as the raw code does (a bare header
+    only), so every line between the markers stays."""
+    escaped = _serialised(text, depth, php=False)
+    out = redact(escaped)[0]
+    assert out == _serialised(redact(text)[0], depth, php=False), label
+    for fragment in kept:
+        assert fragment in out, (label, fragment)
+
+
 def test_an_invisible_char_in_a_marker_does_not_hide_the_block():
     text = _FULL.replace("PRIVATE", "PRIV\u200bATE", 1) + "\nafter"
     out, _found = redact(text)
@@ -133,6 +192,6 @@ def test_an_invisible_char_in_a_marker_does_not_hide_the_block():
 
 
 def test_a_bare_header_is_recognised_across_every_line_break_spelling():
-    for gap in ("", "\n", "\r\n", "\\n", "\\r\\n", "\n\n  "):
+    for gap in ("", "\n", "\r\n", "\\n", "\\r\\n", "\\\\n", "\\\\r\\\\n", "\n\n  "):
         assert E.is_bare_pem_header(_BEGIN + gap), repr(gap)
     assert not E.is_bare_pem_header(_FULL)
