@@ -19,6 +19,7 @@ import {
   mkdtempSync,
   readFileSync,
   readdirSync,
+  renameSync,
   rmSync,
   statSync,
   symlinkSync,
@@ -2478,6 +2479,8 @@ const EXERCISED_ENV_VARS = new Set([
   "_AGENT_SANITIZER_REDACTOR_DAEMON",
   // "output hook redacts through the daemon wire protocol"
   "_AGENT_SANITIZER_REDACTOR_SOCKET",
+  // "…REDACTOR_PYZ is the only route to the zipapp when none sits beside the bundle"
+  "_AGENT_SANITIZER_REDACTOR_PYZ",
   // "…WAIT_MS bounds the wait for a daemon that never starts"
   "_AGENT_SANITIZER_REDACTOR_WAIT_MS",
   // "…REQUEST_MS is what ends a post-connect stall"
@@ -2519,6 +2522,54 @@ test("every _AGENT_SANITIZER_* var the sources read has a behavioural case", () 
     [],
     `these vars are read by the hooks but no test drives them: ${missing.join(", ")}`,
   );
+});
+
+test("_AGENT_SANITIZER_REDACTOR_PYZ is the only route to the zipapp when none sits beside the bundle", (t) => {
+  const plugin = stagePlugin(t);
+  // Move the zipapp out from beside the bundle: the sibling lookup then finds
+  // nothing, exactly as inside the compiled hook binary, so only the exported
+  // path can reach the engine.
+  const elsewhere = join(scratch(t), "daemon.pyz");
+  renameSync(join(plugin, "dist", "redactor", "daemon.pyz"), elsewhere);
+  const payload = {
+    hook_event_name: "PostToolUse",
+    tool_name: "Bash",
+    tool_input: {},
+    tool_response: { stdout: "key=AKIAIOSFODNN7EXAMPLE done" },
+  };
+  const env = {
+    ...FAIL_CLOSED,
+    _AGENT_SANITIZER_REDACTOR_WAIT_MS: "400",
+    _AGENT_SANITIZER_REDACTOR_REQUEST_MS: "400",
+    _AGENT_SANITIZER_SANITIZE_BUDGET_MS: "3000",
+  };
+
+  // Negative half: without the variable nothing finds the engine, so the hook
+  // fails closed. This is what makes the positive half non-vacuous.
+  const without = launch(plugin, "PostToolUse", "sanitize-output", payload, {
+    env: {
+      ...env,
+      _AGENT_SANITIZER_REDACTOR_SOCKET: join(scratch(t), "a.sock"),
+    },
+  });
+  assert.equal(without.status, 0, without.stderr);
+  assert.match(
+    JSON.parse(without.stdout).hookSpecificOutput.updatedToolOutput.stdout,
+    /SANITIZATION FAILED/,
+  );
+
+  // Positive half: a REAL engine run from the exported path.
+  const withPyz = launch(plugin, "PostToolUse", "sanitize-output", payload, {
+    env: {
+      ...FAIL_CLOSED,
+      _AGENT_SANITIZER_REDACTOR_SOCKET: join(scratch(t), "b.sock"),
+      _AGENT_SANITIZER_REDACTOR_PYZ: elsewhere,
+    },
+  });
+  assert.equal(withPyz.status, 0, withPyz.stderr);
+  const out = JSON.parse(withPyz.stdout).hookSpecificOutput;
+  assert.ok(!JSON.stringify(out).includes("AKIAIOSFODNN7EXAMPLE"));
+  assert.match(out.updatedToolOutput.stdout, /REDACTED/);
 });
 
 test("_AGENT_SANITIZER_REDACTOR_WAIT_MS bounds the wait for a daemon that never starts", (t) => {
