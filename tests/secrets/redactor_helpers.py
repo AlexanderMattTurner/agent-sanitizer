@@ -153,6 +153,18 @@ LEGITIMATE = {
     "snake_case name containing a token prefix": (
         "def test_planner_weighs_a_burned_in_check_at_its_own_repeat_count():"
     ),
+    # Loose Anthropic/OpenRouter prefixes: elided and placeholder keys in docs,
+    # and the same letters reached inside ordinary hyphenated or snake_case words.
+    "bare provider key prefixes": "keys start with sk-ant- or sk-or- then a body",
+    "elided provider keys": "e.g. sk-ant-api03-... or sk-or-v1-... in the docs",
+    "placeholder provider keys": "set sk-ant-your-key-here or sk-or-v1-your-key-here",
+    "hyphenated words containing a provider prefix": (
+        "a risk-or-reward call on the desk-or-table-xxxxxxxxxxxxxxxxxxxxxxxxxxxxx "
+        "layout and ask-ant-colony-optimization-for-every-route-planner"
+    ),
+    "snake_case name containing a provider prefix": (
+        "def test_mask_ant_tokens_in_every_streamed_chunk_of_tool_output():"
+    ),
 }
 
 
@@ -167,6 +179,11 @@ SHAPE_ONLY_LEGITIMATE = (
     "prose naming a key prefix",
     "pip requirement pin",
     "snake_case name containing a token prefix",
+    "bare provider key prefixes",
+    "elided provider keys",
+    "placeholder provider keys",
+    "hyphenated words containing a provider prefix",
+    "snake_case name containing a provider prefix",
     "python import",
     "env reference in code",
     "oauth discovery doc",
