@@ -18,10 +18,11 @@
  */
 import { describe, it, before, after } from "node:test";
 import assert from "node:assert/strict";
-import { createServer } from "node:net";
 import { mkdtempSync, rmSync, readdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+
+import { startStandInDaemon } from "./redactor-stand-in.mjs";
 
 // mkdtemp yields a 0700 dir owned by us — what both the client's socket check
 // and the reveal store's dir check demand. Set BEFORE importing the hook: both
@@ -60,36 +61,15 @@ const FAIL_MARKER = "poison";
  * "redaction" that rewrites the comment markers (so its output is
  * distinguishable from a pass-through AND no longer matches the `<!--` key).
  */
-function startStubDaemon() {
-  const server = createServer((sock) => {
-    /** @type {Buffer[]} */
-    const chunks = [];
-    sock.on("data", (chunk) => {
-      chunks.push(chunk);
-      const buf = Buffer.concat(chunks);
-      if (buf.length < 4) return;
-      const expected = buf.readUInt32BE(0);
-      if (buf.length < 4 + expected) return;
-      const { text } = JSON.parse(
-        buf.subarray(4, 4 + expected).toString("utf8"),
-      );
-      const reply =
-        text.includes(FAIL_MARKER) && !text.includes("<!--")
-          ? { error: "scan failed" }
-          : {
-              text: text.replaceAll("<!--", "(c:").replaceAll("-->", ":c)"),
-              found: ["FakeDetector"],
-            };
-      const body = Buffer.from(JSON.stringify(reply), "utf8");
-      const header = Buffer.allocUnsafe(4);
-      header.writeUInt32BE(body.length, 0);
-      sock.end(Buffer.concat([header, body]));
-    });
-  });
-  return new Promise((resolve) => {
-    server.listen(socketPath, () => resolve(server));
-  });
-}
+const startStubDaemon = () =>
+  startStandInDaemon(socketPath, ({ text }) =>
+    text.includes(FAIL_MARKER) && !text.includes("<!--")
+      ? { error: "scan failed" }
+      : {
+          text: text.replaceAll("<!--", "(c:").replaceAll("-->", ":c)"),
+          found: ["FakeDetector"],
+        },
+  );
 
 /** @type {import("node:net").Server} */
 let daemon;

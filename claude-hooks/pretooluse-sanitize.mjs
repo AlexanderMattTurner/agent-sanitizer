@@ -159,9 +159,11 @@ const confusableScan = (text) =>
 const redactorIo = {
   readFile: (path) => readFileSync(path, "utf8"),
   redactMap: async (text) =>
-    /** @type {any} */ (await redactViaDaemon(text, { map: true })),
+    /** @type {any} */ (
+      await redactViaDaemon(text, { map: true, webIngress: false })
+    ),
   redact: async (text) => {
-    const out = await redactViaDaemon(text, {});
+    const out = await redactViaDaemon(text, { webIngress: false });
     return out ? /** @type {string} */ (out.text) : null;
   },
 };

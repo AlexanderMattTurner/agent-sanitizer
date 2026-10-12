@@ -117,6 +117,7 @@ const REQUIRED_EXPORT = {
   "lib/invisible-alert": "invisibleCharAlert",
   "lib/invisible-report": "formatReport",
   "lib/redactor-client": "redactViaDaemon",
+  "lib/redactor-wire": "encodeFrame",
   "lib/reveal": "persistReveal",
   "lib/placeholder-grammar": "placeholderNotice",
   "lib/secret-annotate": "hasEnvBoundSecret",

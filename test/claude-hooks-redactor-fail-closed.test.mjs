@@ -8,7 +8,10 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
-import { redactViaDaemon } from "../claude-hooks/lib/redactor-client.mjs";
+import {
+  redactViaDaemon,
+  spawnDaemon,
+} from "../claude-hooks/lib/redactor-client.mjs";
 
 /** A connect failure the client treats as "no daemon" and respawns for. */
 function deadSocket() {
@@ -28,12 +31,16 @@ async function failure(promise) {
 describe("the fail-closed message is wrapped exactly once", () => {
   it("wraps a malformed response from the first dial once", async () => {
     const error = await failure(
-      redactViaDaemon("some text", { connect: async () => ({ found: [] }) }),
+      redactViaDaemon("some text", {
+        webIngress: false,
+        connect: async () => ({ found: [] }),
+      }),
     );
     assert.equal(
       error.message,
       "secret redaction unavailable (redactor returned a malformed plain " +
-        "response (no string `text`)); secret-shaped output could not be vetted",
+        "response (neither null nor `{text, found}`)); secret-shaped output " +
+        "could not be vetted",
     );
   });
 
@@ -44,6 +51,7 @@ describe("the fail-closed message is wrapped exactly once", () => {
     const error = await failure(
       redactViaDaemon("some text", {
         map: true,
+        webIngress: false,
         connect: async () => {
           if (++dialled === 1) throw deadSocket();
           return {};
@@ -56,7 +64,7 @@ describe("the fail-closed message is wrapped exactly once", () => {
     assert.equal(
       error.message,
       "secret redaction unavailable (redactor returned a malformed map " +
-        "response (no `unmappable` marker and no `{text, pairs}` map)); " +
+        "response (neither `{text, pairs, found}` nor `{unmappable}`)); " +
         "secret-shaped output could not be vetted",
     );
   });
@@ -69,6 +77,7 @@ describe("the respawn timeout names the wait that actually elapsed", () => {
     // never given the time.
     const error = await failure(
       redactViaDaemon("some text", {
+        webIngress: false,
         deadline: { remainingMs: () => 200 },
         connect: async () => {
           throw deadSocket();
@@ -92,6 +101,7 @@ describe("the respawn timeout names the wait that actually elapsed", () => {
     const timedOut = (opts) =>
       failure(
         redactViaDaemon("some text", {
+          webIngress: false,
           ...opts,
           connect: async () => {
             throw deadSocket();
@@ -110,5 +120,88 @@ describe("the respawn timeout names the wait that actually elapsed", () => {
       Number(named) > 200 && Number(named) < 999_999,
       `the wait must be the constant, not the budget: ${wide.message}`,
     );
+  });
+});
+
+describe("webIngress is a required choice, never a default", () => {
+  for (const [label, opts] of [
+    ["omitted options", undefined],
+    ["omitted flag", { map: true }],
+    ["non-boolean flag", { webIngress: "false" }],
+  ])
+    it(`refuses ${label} before dialing`, async () => {
+      let dialled = false;
+      const run = () =>
+        redactViaDaemon(
+          "some text",
+          opts && {
+            ...opts,
+            connect: async () => {
+              dialled = true;
+              return null;
+            },
+          },
+        );
+      await assert.rejects(run, {
+        name: "TypeError",
+        message: /opts\.webIngress must be true .* or false/u,
+      });
+      assert.equal(dialled, false);
+    });
+});
+
+describe("a daemon that dies on startup fails the call with its own reason", () => {
+  /**
+   * Drive the respawn arm with a REAL spawned process standing in for the
+   * daemon, and the real socket wait, bounded by `budgetMs`.
+   * @param {string[]} command
+   * @param {number} budgetMs
+   */
+  async function respawnWith(command, budgetMs) {
+    const started = Date.now();
+    const error = await failure(
+      redactViaDaemon("some text", {
+        webIngress: false,
+        socketPath: "/nonexistent-dir/redactor.sock",
+        deadline: { remainingMs: () => budgetMs - (Date.now() - started) },
+        connect: async () => {
+          throw deadSocket();
+        },
+        spawn: (socketPath) => spawnDaemon(socketPath, command),
+      }),
+    );
+    return { error, elapsedMs: Date.now() - started };
+  }
+
+  it("reports a non-zero exit with its stderr tail, without waiting out the budget", async () => {
+    const { error, elapsedMs } = await respawnWith(
+      [
+        "python3",
+        "-c",
+        "import sys; sys.stderr.write('refusing the cache dir\\n'); sys.exit(3)",
+      ],
+      6000,
+    );
+    assert.equal(
+      error.message,
+      "secret redaction unavailable (redactor daemon failed to start " +
+        "(exit 3: refusing the cache dir)); secret-shaped output could not be vetted",
+    );
+    assert.ok(elapsedMs < 4000, `waited ${elapsedMs}ms for a dead daemon`);
+  });
+
+  it("reports a daemon binary that does not exist", async () => {
+    const { error } = await respawnWith(["/nonexistent/redactor-daemon"], 6000);
+    assert.match(
+      error.message,
+      /redactor daemon failed to start \(spawn \/nonexistent\/redactor-daemon ENOENT\)/u,
+    );
+  });
+
+  it("keeps waiting after a clean exit, which is a lost bind race", async () => {
+    // Exit 0 is what a daemon does when another already owns the socket, so it
+    // must not abandon the wait: the failure is the plain timeout.
+    const { error } = await respawnWith(["python3", "-c", "pass"], 600);
+    assert.match(error.message, /redactor daemon did not start within \d+ms/u);
   });
 });
