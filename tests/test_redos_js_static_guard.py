@@ -166,9 +166,11 @@ def _analyze(pattern: str) -> str:
 
 
 def _widen_codepoint_escape(match: re.Match) -> str:
-    codepoint = int(match.group("hex"), 16)
-    spelling = f"\\u{codepoint:04x}" if codepoint <= 0xFFFF else f"\\U{codepoint:08x}"
-    return match.group("pairs") + spelling
+    return match.group("pairs") + _python_escape(int(match.group("hex"), 16))
+
+
+def _python_escape(codepoint: int) -> str:
+    return f"\\u{codepoint:04x}" if codepoint <= 0xFFFF else f"\\U{codepoint:08x}"
 
 
 def _to_python_syntax(pattern: str) -> str:

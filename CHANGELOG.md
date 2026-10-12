@@ -8,6 +8,26 @@ adhere to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+## [2.62.0] - 2026-10-12
+
+### Added
+- New `atomic-replace.mjs` module providing safer file write operations.
+- `cleanFile` instruction now requires an explicit root parameter and refuses to write symlinks outside the root boundary.
+- Support for scanning `.claude/` instruction files when hooks run outside the project directory.
+
+### Changed
+- **BREAKING:** Removed UTF-16 `invisibleBytes` field from `view-map` `resolveSpan` result.
+- **BREAKING:** Removed `atomicReplaceFile` export; use `cleanFile` for instruction-file writes instead.
+- Improved character counting in rehydration to use code points instead of character units, preventing secret offset leaks.
+
+### Fixed
+- Daemon error messages now properly quoted only when they are single printable-ASCII lines.
+- Invisible and control characters in file paths are now escaped before rendering to the model.
+- Exfiltration host and partition names are now escaped and render-safe.
+- Unicode general category (`\p{General_Category}`) analysis in the JS ReDoS guard.
+- Async filesystem operations coverage and fixture sharing in path-invariant test suites.
+- Trimmed unnecessary comments in containment and display-escape code logic.
+
 ## [2.61.3] - 2026-10-12
 
 ### Fixed

@@ -6,8 +6,10 @@
  * loaded after that — and a second copy would drift in exactly the way that
  * matters: the framing that keeps a decoded payload from reading as an
  * instruction (see decodeRun's `untrusted data` prefix) is part of the report,
- * not decoration on it.
+ * not decoration on it. So is {@link displayUntrusted} on each file name, which
+ * comes from the scanned tree.
  */
+import { displayUntrusted } from "../../src/claude-context.mjs";
 
 /**
  * @param {Array<{
@@ -32,7 +34,7 @@ export function formatReport(allFindings) {
   ];
 
   for (const { file, findings } of allFindings) {
-    lines.push(`  ${file}:`);
+    lines.push(`  ${displayUntrusted(file)}:`);
     for (const finding of findings) {
       // `line` is null for the whole-file scattered-chars finding, which is
       // not tied to any single line.
