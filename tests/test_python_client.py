@@ -324,7 +324,7 @@ def test_blank_request_does_not_hang_and_framing_survives() -> None:
     # read so the unfixed worker (which skips the blank line, emitting nothing)
     # fails fast as a timeout instead of hanging the whole suite.
     with pytest.MonkeyPatch.context() as mp:
-        mp.setattr(Sanitizer, "_READ_TIMEOUT_S", 8.0)
+        mp.setattr(ais, "_RESPONSE_TIMEOUT_S", 8.0)
         with Sanitizer() as worker:
             # A literally blank request line: the worker must answer it (with a
             # structured error), not skip it and leave the read hanging.
@@ -406,6 +406,20 @@ def test_non_json_stdout_raises_wrapped_error() -> None:
         mp.setattr(ais, "_CLI", fake_cli)
         with pytest.raises(RuntimeError, match="non-JSON output"):
             sanitize("x", persist=False)
+
+
+def test_oneshot_that_never_answers_times_out() -> None:
+    # The one-shot path ran with no timeout, so a wedged CLI hung the caller
+    # forever while the worker path bounded the same wait.
+    fake = _write_fake_cli("process.stdin.resume();\nsetInterval(() => {}, 1000);\n")
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(ais, "_CLI", fake)
+        mp.setattr(ais, "_RESPONSE_TIMEOUT_S", 1.0)
+        started = time.monotonic()
+        with pytest.raises(RuntimeError, match=r"did not respond within 1\.0s"):
+            sanitize("x", persist=False)
+        # allow-wall-clock: the bound is the point; unbounded would never return.
+        assert time.monotonic() - started < 10
 
 
 # ─── CLI resolution: bundled wheel CLI, env-var override, source sibling ──────
@@ -547,7 +561,7 @@ def test_worker_read_timeout_terminates_and_raises() -> None:
     )
     with pytest.MonkeyPatch.context() as mp:
         mp.setattr(ais, "_CLI", fake)
-        mp.setattr(Sanitizer, "_READ_TIMEOUT_S", 1.0)
+        mp.setattr(ais, "_RESPONSE_TIMEOUT_S", 1.0)
         worker = Sanitizer().start()
         node_pid = worker._proc.pid
         with pytest.raises(RuntimeError, match="did not respond"):

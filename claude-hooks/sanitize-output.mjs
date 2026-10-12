@@ -171,11 +171,11 @@ function isUntrustedIngress(toolName) {
  * daemon. A transient daemon failure fails only THIS call — no session-wide
  * sentinel — and the client respawns a dead daemon on the next call.
  * @param {string} text
- * @param {boolean} [webIngress]
+ * @param {boolean} webIngress
  * @param {{remainingMs: () => number}} [deadline] shared wall-clock budget
  * @returns {Promise<{ text: string, found: string[] } | null>}
  */
-async function redactSecrets(text, webIngress = false, deadline) {
+async function redactSecrets(text, webIngress, deadline) {
   if (!matchesSecretHint(text) && !hasEnvBoundSecret(text)) return null;
   // On web ingress the field name around a value is attacker-controlled, so the
   // redactor's benign-skip heuristics (metadata field / cursor / path) are a

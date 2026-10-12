@@ -118,6 +118,7 @@ const REQUIRED_EXPORT = {
   "lib/invisible-report": "formatReport",
   "lib/knobs": "readKnob",
   "lib/redactor-client": "redactViaDaemon",
+  "lib/redactor-wire": "encodeFrame",
   "lib/reveal": "persistReveal",
   "lib/placeholder-grammar": "placeholderNotice",
   "lib/secret-annotate": "hasEnvBoundSecret",
