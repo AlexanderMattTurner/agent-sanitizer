@@ -201,19 +201,17 @@ describe("resolveSpan", () => {
     assert.deepEqual(res, {
       cleanedText: "\u{1D11E}",
       diskText: "\u{1D11E}",
-      invisibleBytes: 0,
       pairs: [],
     });
   });
 
-  it("maps a span across an interior stripped run, counting it in invisibleBytes", () => {
+  it("maps a span across an interior stripped run, keeping it inside diskText", () => {
     const content = `ab${ZW}cd`;
     const cleaned = "abcd";
     const dels = alignDeletions(content, cleaned);
     const res = resolveSpan(content, cleaned, plainView(cleaned), dels, 1, 3);
     assert.equal(res.cleanedText, "bc");
     assert.equal(res.diskText, `b${ZW}c`);
-    assert.equal(res.invisibleBytes, 1);
     assert.deepEqual(res.pairs, []);
   });
 
@@ -225,7 +223,6 @@ describe("resolveSpan", () => {
     const res = resolveSpan(content, cleaned, plainView(cleaned), dels, 0, 2);
     assert.equal(res.cleanedText, "ab");
     assert.equal(res.diskText, "ab");
-    assert.equal(res.invisibleBytes, 0);
   });
 
   it("keeps a run sitting exactly at the span start OUTSIDE the span (preserved)", () => {
@@ -236,7 +233,6 @@ describe("resolveSpan", () => {
     const res = resolveSpan(content, cleaned, plainView(cleaned), dels, 2, 4);
     assert.equal(res.cleanedText, "cd");
     assert.equal(res.diskText, "cd");
-    assert.equal(res.invisibleBytes, 0);
   });
 
   it("maps view offsets across a placeholder expansion and returns contained pairs", () => {
@@ -252,7 +248,6 @@ describe("resolveSpan", () => {
     const res = resolveSpan(cleaned, cleaned, view, [], 0, view.text.length);
     assert.equal(res.cleanedText, cleaned);
     assert.equal(res.diskText, cleaned);
-    assert.equal(res.invisibleBytes, 0);
     assert.deepEqual(res.pairs, view.pairs);
   });
 

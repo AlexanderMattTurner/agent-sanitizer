@@ -40,6 +40,9 @@ import { readKnob } from "./knobs.mjs";
 
 export { FRAME_CAP };
 
+// The only daemon error text worth quoting: one short printable-ASCII line.
+const DAEMON_REASON = /^[\x20-\x7e]{1,200}$/u;
+
 // Published here, where hosts already import it; the parser behind every
 // millisecond knob lives with the knob table.
 export { positiveMsOr } from "./knobs.mjs";
@@ -308,10 +311,16 @@ export function connectAndRequest(
       if (frameRead === undefined) return;
       const parsed = frameRead.value;
       if (isPlainObject(parsed) && "error" in parsed) {
-        // The daemon's error strings are fixed literals, never request data.
-        const reason = conforms(parsed, PROTOCOL.responses.error)
-          ? `: ${parsed.error}`
-          : "";
+        // The wire types `error` only as a string, so whatever answers on the
+        // socket chooses it, and this message reaches the operator and the
+        // model. Quote it only as plain printable ASCII on one line; anything
+        // else is dropped, not escaped: this module must not import the engine.
+        const reason =
+          conforms(parsed, PROTOCOL.responses.error) &&
+          typeof parsed.error === "string" &&
+          DAEMON_REASON.test(parsed.error)
+            ? `: ${parsed.error}`
+            : "";
         finish(
           reject,
           new Error(
