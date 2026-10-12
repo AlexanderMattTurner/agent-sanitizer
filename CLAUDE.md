@@ -5,6 +5,7 @@
 - No running commentary or filler—don’t narrate tool use, restate my request, or recap after each step. Just do the work.
 - Save all explanation for the END: a short overview of what changed and how it fits, plus anything I need to run/use it. Proportional to the change.
 - Be direct. Flag real risks once; skip caveats I didn’t ask for. Don’t claim it works unless you ran it or read the code.
+- **Pick each subagent’s model for its task; never let a fan-out inherit the most expensive one by default.** Set `model` on every Agent call: `haiku` or `sonnet` for mechanical or narrow work (searches, doc fixes, small shell/test edits, wrap-up and PR-body chores), the top model only for hard design work, parser/engine rewrites or security-critical fixes. A ten-agent fan-out that all inherit the top model burns the session’s token budget on work a cheaper model does as well.
 
 ## Autonomy: front-load questions, then run to completion
 
