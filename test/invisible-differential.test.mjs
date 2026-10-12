@@ -109,6 +109,14 @@ const CASES = {
   "ivs-cjk": "漢" + IVS,
   "ivs-dense": ("漢" + IVS).repeat(30),
   "ivs-no-base": "a" + IVS,
+  // A run spent before a gap is stripped a stretch at a time; the gap reopens
+  // it, and a spent cluster may straddle the gap (two harakat in a row).
+  "ivs-past-cap-then-gap":
+    ("漢" + IVS).repeat(12) + "ab" + ("漢" + IVS).repeat(12),
+  "zwnj-past-cap-then-gap":
+    ("م" + ZWNJ).repeat(12) + "م ab " + ("م" + ZWNJ).repeat(12),
+  "spent-cluster-straddles-gap":
+    ("م" + ZWNJ).repeat(12) + "م" + ZWNJ + "ََ" + ZWNJ + "م",
   // Where Unicode 16 and 17 disagree: an Extension J base (new in 17) and a
   // star 17 dropped from Extended_Pictographic. Both modules read the pinned
   // tables, so they agree on every Node; an oracle asking the runtime did not.
@@ -140,6 +148,9 @@ const CASES = {
   "payload-runs-twice": ("漢" + IVS + ZWSP.repeat(10) + "b ").repeat(3),
   "payload-scattered": ("a" + SHY).repeat(40),
   "over-budget-joiners": ("م" + ZWNJ + "م").repeat(60),
+  // Past the cap the joining letters fund the allowance; one sits past the
+  // cached planes, where the letter test reads the tables directly.
+  "over-budget-joiners-astral": ("م" + ZWNJ + "م").repeat(60) + "\u{20000}",
   // The cluster around a joiner is read off pair verdicts where those cannot
   // depend on context, and off the segmenter everywhere else. These put a mark
   // after the joiner (it joins the cluster), a control before it (GB4), a lone

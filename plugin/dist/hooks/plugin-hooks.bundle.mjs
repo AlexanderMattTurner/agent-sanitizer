@@ -4402,14 +4402,14 @@ function codePointLength(text6) {
   return n;
 }
 function cpProps(cp) {
-  cpPropsTable ??= new Uint16Array(CP_PROPS_END);
-  const known = cpPropsTable[cp];
+  const table = propsTable();
+  const known = table[cp];
   if (known !== 0) return known;
   const type = JOINING_TYPES.indexOf(joiningType(cp));
   if (type < 1)
     throw new Error(`unknown Joining_Type for U+${cp.toString(16)}`);
-  const props = type | (isVirama(cp) ? PROP_VIRAMA : 0) | (isBrahmicConsonant(cp) ? PROP_BRAHMIC_CONSONANT : 0) | (inSpans(EMOJI_TEXT_DEFAULT, cp) ? PROP_EMOJI_TEXT_DEFAULT : 0) | (inSpans(EMOJI_MODIFIER, cp) ? PROP_EMOJI_MODIFIER : 0) | (inCjkIdeographTables(cp) ? PROP_CJK_IDEOGRAPH : 0) | (inSpans(EXTENDED_PICTOGRAPHIC, cp) ? PROP_EXTENDED_PICTOGRAPHIC : 0);
-  cpPropsTable[cp] = props;
+  const props = type | (isCursiveLetter(JOINING_TYPES[type]) || isBrahmicConsonant(cp) ? PROP_JOINING_LETTER : 0) | (isVirama(cp) ? PROP_VIRAMA : 0) | (isBrahmicConsonant(cp) ? PROP_BRAHMIC_CONSONANT : 0) | (inSpans(EMOJI_TEXT_DEFAULT, cp) ? PROP_EMOJI_TEXT_DEFAULT : 0) | (inSpans(EMOJI_MODIFIER, cp) ? PROP_EMOJI_MODIFIER : 0) | (inCjkIdeographTables(cp) ? PROP_CJK_IDEOGRAPH : 0) | (inSpans(EXTENDED_PICTOGRAPHIC, cp) ? PROP_EXTENDED_PICTOGRAPHIC : 0);
+  table[cp] = props;
   return props;
 }
 function jtOf(cp) {
@@ -4441,9 +4441,14 @@ function followsBrahmicConjunct(cps, i) {
   return isBrahmicConsonantCp(effectiveNeighbor(cps, j, -1));
 }
 function joiningLetterCount(cps, codes) {
+  const table = propsTable();
   let letters = 0;
-  for (let i = 0; i < cps.length; i++)
-    if (codes[i] === CODE_VISIBLE && isJoiningLetter(cps[i])) letters++;
+  for (let i = 0; i < cps.length; i++) {
+    const cp = cps[i];
+    if (codes[i] !== CODE_VISIBLE) continue;
+    if (cp < CP_PROPS_END ? ((table[cp] || cpProps(cp)) & PROP_JOINING_LETTER) !== 0 : isJoiningLetter(cp))
+      letters++;
+  }
   return letters;
 }
 function isJoiningLetter(cp) {
@@ -4653,7 +4658,7 @@ function localCluster(cps, at) {
   }
   return { start, end };
 }
-function clusterResolver(body, cps, offsets, candidates) {
+function clusterResolver(body, cps, offsetsOf, candidates) {
   const cpCount = cps.length;
   if (candidates * CONTAINING_CANDIDATE_SHARE < cpCount) {
     let segments = null;
@@ -4661,6 +4666,7 @@ function clusterResolver(body, cps, offsets, candidates) {
       const local = localCluster(cps, cp);
       if (local !== null) return local;
       segments ??= graphemeSegmenter().segment(body);
+      const offsets = offsetsOf();
       const found = (
         /** @type {{ index: number, segment: string }} */
         segments.containing(offsets[cp])
@@ -4678,6 +4684,7 @@ function clusterResolver(body, cps, offsets, candidates) {
     const local = localCluster(cps, cp);
     if (local !== null) return local;
     iterator ??= graphemeSegmenter().segment(body)[Symbol.iterator]();
+    const offsets = offsetsOf();
     while (end <= cp) {
       const step = (
         /** @type {{ value: { segment: string } }} */
@@ -4709,12 +4716,14 @@ function carveWalk(body, cps, analysis, build) {
   const n = cps.length;
   const candidateBuffer = new Int32Array(allowCarveOut ? invisible.length : 0);
   let candidateCount = 0;
+  let exemptCount = 0;
   if (allowCarveOut) {
     for (const k2 of invisible)
-      if (kind2[k2] !== KIND_NONE && kind2[k2] !== KIND_BLANK && kind2[k2] !== KIND_GLYPH)
-        candidateBuffer[candidateCount++] = k2;
+      if (kind2[k2] === KIND_BLANK || kind2[k2] === KIND_GLYPH) exemptCount++;
+      else if (kind2[k2] !== KIND_NONE) candidateBuffer[candidateCount++] = k2;
   }
   const candidates = candidateBuffer.subarray(0, candidateCount);
+  const tally = !build && !LONE_LOW_SURROGATE_RE.test(body);
   const coverAllowance = Math.min(
     PRESERVE_HARD_CAP,
     Math.max(
@@ -4733,26 +4742,40 @@ function carveWalk(body, cps, analysis, build) {
   let removed = 0;
   let stripOpen = false;
   let mergeLeft = -1;
-  const offsets = u16Offsets(cps);
+  let offsets = null;
+  const offsetsOf = () => offsets ??= u16Offsets(cps);
   let runStart = 0;
   let joinerRun = 0;
   let selectorRun = 0;
   let preservedTotal = 0;
   let preservedOther = 0;
   let prevVisible = false;
+  let nextInvisible = 0;
   const emit = (from, to, fits) => {
+    if (tally && !fits) {
+      if (prevVisible && codes[from] === CODE_VISIBLE || gapFrom(from + 1) < to) {
+        joinerRun = 0;
+        selectorRun = 0;
+      }
+      prevVisible = codes[to - 1] === CODE_VISIBLE;
+      return;
+    }
     for (let k2 = from; k2 < to; k2++) {
       const code4 = codes[k2];
       if (code4 === CODE_VISIBLE) {
+        while (nextInvisible < invisible.length && invisible[nextInvisible] < k2)
+          nextInvisible++;
+        const stop = nextInvisible < invisible.length ? Math.min(to, invisible[nextInvisible]) : to;
         if (stripOpen) {
           stripOpen = false;
           if (isHighSurrogate(mergeLeft) && isLowSurrogate(cps[k2])) removed++;
         }
-        if (prevVisible) {
+        if (prevVisible || stop - k2 > 1) {
           joinerRun = 0;
           selectorRun = 0;
         }
         prevVisible = true;
+        k2 = stop - 1;
         continue;
       }
       const exempt = kind2[k2] === KIND_BLANK || kind2[k2] === KIND_GLYPH;
@@ -4773,11 +4796,12 @@ function carveWalk(body, cps, analysis, build) {
       }
       prevVisible = false;
       if (!build) continue;
-      if (offsets[k2] > runStart) kept.push(body.slice(runStart, offsets[k2]));
-      runStart = offsets[k2 + 1];
+      const at = offsetsOf();
+      if (at[k2] > runStart) kept.push(body.slice(runStart, at[k2]));
+      runStart = at[k2 + 1];
     }
   };
-  const clusterOf = candidates.length > 0 ? clusterResolver(body, cps, offsets, candidates.length) : null;
+  const clusterOf = candidates.length > 0 ? clusterResolver(body, cps, offsetsOf, candidates.length) : null;
   let lastGap = -1;
   let leftJoiner = 0;
   let leftSelector = 0;
@@ -4805,6 +4829,23 @@ function carveWalk(body, cps, analysis, build) {
       return false;
     return true;
   };
+  const settle = (from, end) => {
+    for (let j = from; j < candidates.length && candidates[j] < end; j++) {
+      if (kind2[candidates[j]] === KIND_JOINER) leftJoiner--;
+      else if (kind2[candidates[j]] === KIND_IVS || kind2[candidates[j]] === KIND_STDVS)
+        leftSelector--;
+      else leftOther--;
+    }
+  };
+  let gap = -1;
+  const gapFrom = (at) => {
+    if (gap >= at) return gap;
+    gap = Math.max(at, 1);
+    while (gap < n && !(codes[gap] === CODE_VISIBLE && codes[gap - 1] === CODE_VISIBLE))
+      gap++;
+    return gap;
+  };
+  const spent = (c) => preservedTotal >= joinerAllowance || (kind2[c] === KIND_JOINER ? joinerRun >= CONSECUTIVE_JOINER_CAP : preservedOther >= coverAllowance || (kind2[c] === KIND_IVS || kind2[c] === KIND_STDVS) && selectorRun >= CONSECUTIVE_SELECTOR_CAP);
   let k = 0;
   let next2 = 0;
   while (k < n) {
@@ -4812,6 +4853,17 @@ function carveWalk(body, cps, analysis, build) {
     if (clusterOf === null || next2 === candidates.length || nothingLeftFits(k)) {
       emit(k, n, false);
       break;
+    }
+    let last = next2;
+    const reset = gapFrom(k);
+    while (last < candidates.length && candidates[last] < reset && spent(candidates[last]))
+      last++;
+    if (last > next2) {
+      const { end: end2 } = clusterOf(candidates[last - 1]);
+      emit(k, end2, false);
+      settle(next2, end2);
+      k = end2;
+      continue;
     }
     const { start, end } = clusterOf(candidates[next2]);
     if (start > k) emit(k, start, false);
@@ -4835,12 +4887,7 @@ function carveWalk(body, cps, analysis, build) {
       }
       seenVisible = codes[j] === CODE_VISIBLE;
     }
-    for (let j = next2; j < candidates.length && candidates[j] < end; j++) {
-      if (kind2[candidates[j]] === KIND_JOINER) leftJoiner--;
-      else if (kind2[candidates[j]] === KIND_IVS || kind2[candidates[j]] === KIND_STDVS)
-        leftSelector--;
-      else leftOther--;
-    }
+    settle(next2, end);
     emit(
       start,
       end,
@@ -4848,6 +4895,8 @@ function carveWalk(body, cps, analysis, build) {
     );
     k = end;
   }
+  if (tally)
+    removed = invisible.length - (allowCarveOut ? exemptCount : 0) - preservedTotal;
   if (!build) return { kept: null, foundCodes, removed };
   kept.push(body.slice(runStart));
   return { kept, foundCodes, removed };
@@ -4946,7 +4995,7 @@ function stripBody(body) {
 function stripInvisible(text6) {
   return stripInvisibleWithReport(text6).cleaned;
 }
-var VS, ZERO_WIDTH_MN, BLANK_NON_CF, REGEX_FLAGS, CF_CLASS_SOURCE, CATEGORY, CATEGORY_LABELS, CHECKS, STRIP, LONG_RUN_THRESHOLD, SCATTERED_THRESHOLD, LONG_RUN_RE, RUN_CHUNK, LONG_RUN_CHUNK_RE, RUN_TAIL_RE, BOM, ZWNJ, ZWJ, CONSECUTIVE_JOINER_CAP, CONSECUTIVE_SELECTOR_CAP, TOTAL_PRESERVED_JOINER_BUDGET, PRESERVED_JOINER_PER_VISIBLE, PRESERVE_HARD_CAP, TOTAL_PRESERVED_BLANK_BUDGET, PRESERVED_BLANK_PER_ANCHOR, LINGUISTIC_SCRIPTS, isEmojiLeft, KEYCAP_BASE, COMBINING_KEYCAP, isEmojiBase, VARIATION_SELECTOR, isKeycapBase, PRESENTATION_SELECTORS, TAG_BASE, TAG_CANCEL, TAG_SPEC_MIN, TAG_SPEC_MAX, REGISTERED_TAG_PAYLOADS, MAX_TAG_SPEC_CHARS, VS16, IVS_MIN, IVS_MAX, CJK_COMPATIBILITY_IDEOGRAPH_BLOCKS, inCjkIdeographTables, BRAILLE_BLANK, HANGUL_FILLERS, GATED_BLANK_RE, isBrailleScript, isHangulScript, CODE_VISIBLE, CODE_CF, CODE_VS, CODE_BLANK, KIND_NONE, KIND_JOINER, KIND_EMOJIVS, KIND_GLYPH, KIND_STDVS, KIND_IVS, KIND_BLANK, CODE_CATEGORY, TRACKED_INVISIBLE, TRACKED_TABLE_END, TRACKED_LOW, CP_PREDICATE_MEMO_CAP, isCursiveLetter, CP_PROPS_END, JOINING_TYPES, PROP_TYPE_MASK, PROP_VIRAMA, PROP_BRAHMIC_CONSONANT, PROP_EMOJI_TEXT_DEFAULT, PROP_EMOJI_MODIFIER, PROP_CJK_IDEOGRAPH, PROP_EXTENDED_PICTOGRAPHIC, cpPropsTable, STANDARDIZED_SELECTOR_MIN, STANDARDIZED_SELECTOR_MAX, segmenterCache, PAIR_BREAK_MEMO_CAP, PAIR_BREAK_MEMO, CONTAINING_CANDIDATE_SHARE, isHighSurrogate, isLowSurrogate, lastCarve, TAG_CHAR_RE;
+var VS, ZERO_WIDTH_MN, BLANK_NON_CF, REGEX_FLAGS, CF_CLASS_SOURCE, CATEGORY, CATEGORY_LABELS, CHECKS, STRIP, LONG_RUN_THRESHOLD, SCATTERED_THRESHOLD, LONG_RUN_RE, RUN_CHUNK, LONG_RUN_CHUNK_RE, RUN_TAIL_RE, BOM, ZWNJ, ZWJ, CONSECUTIVE_JOINER_CAP, CONSECUTIVE_SELECTOR_CAP, TOTAL_PRESERVED_JOINER_BUDGET, PRESERVED_JOINER_PER_VISIBLE, PRESERVE_HARD_CAP, TOTAL_PRESERVED_BLANK_BUDGET, PRESERVED_BLANK_PER_ANCHOR, LINGUISTIC_SCRIPTS, isEmojiLeft, KEYCAP_BASE, COMBINING_KEYCAP, isEmojiBase, VARIATION_SELECTOR, isKeycapBase, PRESENTATION_SELECTORS, TAG_BASE, TAG_CANCEL, TAG_SPEC_MIN, TAG_SPEC_MAX, REGISTERED_TAG_PAYLOADS, MAX_TAG_SPEC_CHARS, VS16, IVS_MIN, IVS_MAX, CJK_COMPATIBILITY_IDEOGRAPH_BLOCKS, inCjkIdeographTables, BRAILLE_BLANK, HANGUL_FILLERS, GATED_BLANK_RE, isBrailleScript, isHangulScript, CODE_VISIBLE, CODE_CF, CODE_VS, CODE_BLANK, KIND_NONE, KIND_JOINER, KIND_EMOJIVS, KIND_GLYPH, KIND_STDVS, KIND_IVS, KIND_BLANK, CODE_CATEGORY, TRACKED_INVISIBLE, TRACKED_TABLE_END, TRACKED_LOW, CP_PREDICATE_MEMO_CAP, isCursiveLetter, CP_PROPS_END, JOINING_TYPES, PROP_TYPE_MASK, PROP_VIRAMA, PROP_BRAHMIC_CONSONANT, PROP_EMOJI_TEXT_DEFAULT, PROP_EMOJI_MODIFIER, PROP_CJK_IDEOGRAPH, PROP_EXTENDED_PICTOGRAPHIC, PROP_JOINING_LETTER, cpPropsTable, propsTable, STANDARDIZED_SELECTOR_MIN, STANDARDIZED_SELECTOR_MAX, segmenterCache, PAIR_BREAK_MEMO_CAP, PAIR_BREAK_MEMO, CONTAINING_CANDIDATE_SHARE, LONE_LOW_SURROGATE_RE, isHighSurrogate, isLowSurrogate, lastCarve, TAG_CHAR_RE;
 var init_invisible = __esm({
   "src/invisible.mjs"() {
     "use strict";
@@ -5118,7 +5167,9 @@ var init_invisible = __esm({
     PROP_EMOJI_MODIFIER = 64;
     PROP_CJK_IDEOGRAPH = 128;
     PROP_EXTENDED_PICTOGRAPHIC = 256;
+    PROP_JOINING_LETTER = 512;
     cpPropsTable = null;
+    propsTable = () => cpPropsTable ??= new Uint16Array(CP_PROPS_END);
     STANDARDIZED_SELECTOR_MIN = Math.min(
       ...STANDARDIZED_VARIANTS.map(([, selector2]) => selector2)
     );
@@ -5129,6 +5180,7 @@ var init_invisible = __esm({
     PAIR_BREAK_MEMO_CAP = 4096;
     PAIR_BREAK_MEMO = /* @__PURE__ */ new Map();
     CONTAINING_CANDIDATE_SHARE = 4;
+    LONE_LOW_SURROGATE_RE = /(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/;
     isHighSurrogate = (cp) => cp >= 55296 && cp <= 56319;
     isLowSurrogate = (cp) => cp >= 56320 && cp <= 57343;
     lastCarve = null;

@@ -828,26 +828,31 @@ const PROP_EMOJI_TEXT_DEFAULT = 0b100000;
 const PROP_EMOJI_MODIFIER = 0b1000000;
 const PROP_CJK_IDEOGRAPH = 0b10000000;
 const PROP_EXTENDED_PICTOGRAPHIC = 0b100000000;
+const PROP_JOINING_LETTER = 0b1000000000;
 /** @type {Uint16Array | null} */
 let cpPropsTable = null;
+const propsTable = () => (cpPropsTable ??= new Uint16Array(CP_PROPS_END));
 
 /** The packed entry for `cp` (0 <= cp < CP_PROPS_END). @param {number} cp @returns {number} */
 function cpProps(cp) {
-  cpPropsTable ??= new Uint16Array(CP_PROPS_END);
-  const known = cpPropsTable[cp];
+  const table = propsTable();
+  const known = table[cp];
   if (known !== 0) return known;
   const type = JOINING_TYPES.indexOf(joiningType(cp));
   if (type < 1)
     throw new Error(`unknown Joining_Type for U+${cp.toString(16)}`);
   const props =
     type |
+    (isCursiveLetter(JOINING_TYPES[type]) || isBrahmicConsonant(cp)
+      ? PROP_JOINING_LETTER
+      : 0) |
     (isVirama(cp) ? PROP_VIRAMA : 0) |
     (isBrahmicConsonant(cp) ? PROP_BRAHMIC_CONSONANT : 0) |
     (inSpans(EMOJI_TEXT_DEFAULT, cp) ? PROP_EMOJI_TEXT_DEFAULT : 0) |
     (inSpans(EMOJI_MODIFIER, cp) ? PROP_EMOJI_MODIFIER : 0) |
     (inCjkIdeographTables(cp) ? PROP_CJK_IDEOGRAPH : 0) |
     (inSpans(EXTENDED_PICTOGRAPHIC, cp) ? PROP_EXTENDED_PICTOGRAPHIC : 0);
-  cpPropsTable[cp] = props;
+  table[cp] = props;
   return props;
 }
 
@@ -922,9 +927,20 @@ function followsBrahmicConjunct(cps, i) {
  * PRESERVE_HARD_CAP. @param {Int32Array} cps @param {Uint8Array} codes
  * @returns {number} */
 function joiningLetterCount(cps, codes) {
+  const table = propsTable();
   let letters = 0;
-  for (let i = 0; i < cps.length; i++)
-    if (codes[i] === CODE_VISIBLE && isJoiningLetter(cps[i])) letters++;
+  for (let i = 0; i < cps.length; i++) {
+    const cp = cps[i];
+    if (codes[i] !== CODE_VISIBLE) continue;
+    // The cache read in place: this visits every code point of a joiner-dense
+    // document, and a call per code point was most of what it cost.
+    if (
+      cp < CP_PROPS_END
+        ? ((table[cp] || cpProps(cp)) & PROP_JOINING_LETTER) !== 0
+        : isJoiningLetter(cp)
+    )
+      letters++;
+  }
   return letters;
 }
 
@@ -1407,11 +1423,13 @@ const CONTAINING_CANDIDATE_SHARE = 4;
  * Each candidate is first resolved by {@link localCluster}, falling back to the
  * segmenter only where that has no verdict: a `containing` call per joiner was
  * most of what carving a long Persian document cost.
- * @param {string} body @param {Int32Array} cps @param {Int32Array} offsets
+ * @param {string} body @param {Int32Array} cps
+ * @param {() => Int32Array} offsetsOf  {@link u16Offsets} of `cps`, asked for
+ *   only once the segmenter is
  * @param {number} candidates
  * @returns {(cp: number) => { start: number, end: number }}
  */
-function clusterResolver(body, cps, offsets, candidates) {
+function clusterResolver(body, cps, offsetsOf, candidates) {
   const cpCount = cps.length;
   if (candidates * CONTAINING_CANDIDATE_SHARE < cpCount) {
     /** @type {Intl.Segments | null} */
@@ -1420,6 +1438,7 @@ function clusterResolver(body, cps, offsets, candidates) {
       const local = localCluster(cps, cp);
       if (local !== null) return local;
       segments ??= graphemeSegmenter().segment(body);
+      const offsets = offsetsOf();
       // `offsets[cp]` is inside the string for every code-point index the walk
       // asks about, so the segment always exists.
       const found = /** @type {{ index: number, segment: string }} */ (
@@ -1442,6 +1461,7 @@ function clusterResolver(body, cps, offsets, candidates) {
     const local = localCluster(cps, cp);
     if (local !== null) return local;
     iterator ??= graphemeSegmenter().segment(body)[Symbol.iterator]();
+    const offsets = offsetsOf();
     while (end <= cp) {
       // ECMA-402 guarantees the segments partition the input, so every code
       // point inside it has a cluster and the iterator cannot run out first; if
@@ -1495,6 +1515,9 @@ function carveStrip(body, cps, analysis) {
   return { cleaned: kept.join(""), found, removed: walk.removed };
 }
 
+// A low surrogate that does not complete a pair.
+const LONE_LOW_SURROGATE_RE = /(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/;
+
 /** @param {number} cp @returns {boolean} */
 const isHighSurrogate = (cp) => cp >= 0xd800 && cp <= 0xdbff;
 /** @param {number} cp @returns {boolean} */
@@ -1513,7 +1536,7 @@ function carveRemoved(body, cps, analysis) {
 
 /**
  * The walk both of the above read (see {@link carveStrip}); `kept` is null
- * unless `build`.
+ * unless `build`, and `foundCodes` is read only off a built walk.
  * @param {string} body @param {Int32Array} cps
  * @param {ReturnType<typeof analyzeCarve>} analysis @param {boolean} build
  * @returns {{ kept: string[] | null, foundCodes: Set<string | null>, removed: number }}
@@ -1532,15 +1555,19 @@ function carveWalk(body, cps, analysis, build) {
   // fillers (budgeted in analyzeCarve) and glyph spelling are exempt.
   const candidateBuffer = new Int32Array(allowCarveOut ? invisible.length : 0);
   let candidateCount = 0;
+  // The exempt invisibles, every one of them preserved under allowCarveOut.
+  let exemptCount = 0;
   if (allowCarveOut)
     for (const k of invisible)
-      if (
-        kind[k] !== KIND_NONE &&
-        kind[k] !== KIND_BLANK &&
-        kind[k] !== KIND_GLYPH
-      )
-        candidateBuffer[candidateCount++] = k;
+      if (kind[k] === KIND_BLANK || kind[k] === KIND_GLYPH) exemptCount++;
+      else if (kind[k] !== KIND_NONE) candidateBuffer[candidateCount++] = k;
   const candidates = candidateBuffer.subarray(0, candidateCount);
+  // A count-only walk needs no per-code-point pass where nothing but the
+  // exempt kinds survives: what it strips is every invisible not preserved,
+  // totalled at the end, and the run counters only reset there. A lone low
+  // surrogate is the exception — a strip can close a lone high one against it
+  // into a pair (see `removed`), which only the full loop counts.
+  const tally = !build && !LONE_LOW_SURROGATE_RE.test(body);
 
   // Document-wide preserve allowance, proportional to visible text but never
   // below the floor (see TOTAL_PRESERVED_JOINER_BUDGET / PRESERVED_JOINER_PER_VISIBLE)
@@ -1578,7 +1605,11 @@ function carveWalk(body, cps, analysis, build) {
   // Whether the last code point was stripped, and the one kept before it.
   let stripOpen = false;
   let mergeLeft = -1;
-  const offsets = u16Offsets(cps);
+  // Only the built text and the segmenter speak UTF-16, so a count-only walk
+  // whose clusters all settle on pair verdicts never pays for the offsets.
+  /** @type {Int32Array | null} */
+  let offsets = null;
+  const offsetsOf = () => (offsets ??= u16Offsets(cps));
   // Start of the kept run currently being accumulated, in UTF-16 units. Output
   // is assembled from slices of `body` — one per uninterrupted kept run — rather
   // than a character at a time, so a document with nothing to strip costs one
@@ -1603,24 +1634,46 @@ function carveWalk(body, cps, analysis, build) {
   let preservedOther = 0;
   let prevVisible = false;
 
+  // The first entry of `invisible` the emit loop has not passed.
+  let nextInvisible = 0;
   /** Emit `[from, to)` under a settled `fits`, updating every counter.
    * @param {number} from @param {number} to @param {boolean} fits */
   const emit = (from, to, fits) => {
+    if (tally && !fits) {
+      if (
+        (prevVisible && codes[from] === CODE_VISIBLE) ||
+        gapFrom(from + 1) < to
+      ) {
+        joinerRun = 0;
+        selectorRun = 0;
+      }
+      prevVisible = codes[to - 1] === CODE_VISIBLE;
+      return;
+    }
     for (let k = from; k < to; k++) {
       const code = codes[k];
       if (code === CODE_VISIBLE) {
+        // A stretch of visible code points at once, up to the next invisible:
+        // they stay inside the kept run, only the first can close a strip, and
+        // a visible char following another visible char is a real word/segment
+        // boundary, not a join — the joined cluster (if any) ended there.
+        while (nextInvisible < invisible.length && invisible[nextInvisible] < k)
+          nextInvisible++;
+        const stop =
+          nextInvisible < invisible.length
+            ? Math.min(to, invisible[nextInvisible])
+            : to;
         if (stripOpen) {
           stripOpen = false;
           if (isHighSurrogate(mergeLeft) && isLowSurrogate(cps[k])) removed++;
         }
-        // A visible char following another visible char is a real word/segment
-        // boundary, not a join — the joined cluster (if any) ended here.
-        if (prevVisible) {
+        if (prevVisible || stop - k > 1) {
           joinerRun = 0;
           selectorRun = 0;
         }
         prevVisible = true;
-        continue; // ordinary visible character: stays inside the kept run
+        k = stop - 1;
+        continue;
       }
       // A blank filler and a glyph's spelling ride on allowCarveOut alone;
       // everything else rides on `fits`.
@@ -1642,14 +1695,15 @@ function carveWalk(body, cps, analysis, build) {
       }
       prevVisible = false; // a stripped invisible neither opens nor closes a gap
       if (!build) continue;
-      if (offsets[k] > runStart) kept.push(body.slice(runStart, offsets[k]));
-      runStart = offsets[k + 1];
+      const at = offsetsOf();
+      if (at[k] > runStart) kept.push(body.slice(runStart, at[k]));
+      runStart = at[k + 1];
     }
   };
 
   const clusterOf =
     candidates.length > 0
-      ? clusterResolver(body, cps, offsets, candidates.length)
+      ? clusterResolver(body, cps, offsetsOf, candidates.length)
       : null;
   // The last index at which the emit loop resets the run counters — a visible
   // code point directly after another visible one. The condition reads only
@@ -1697,6 +1751,48 @@ function carveWalk(body, cps, analysis, build) {
     return true;
   };
 
+  /** Take the candidates from index `from` up to code point `end` off the
+   * remaining counts. @param {number} from @param {number} end */
+  const settle = (from, end) => {
+    for (let j = from; j < candidates.length && candidates[j] < end; j++) {
+      if (kind[candidates[j]] === KIND_JOINER) leftJoiner--;
+      else if (
+        kind[candidates[j]] === KIND_IVS ||
+        kind[candidates[j]] === KIND_STDVS
+      )
+        leftSelector--;
+      else leftOther--;
+    }
+  };
+
+  // The first gap at or after a code-point index (n when none) — the next place
+  // the emit loop can reset a run counter. Asked in increasing order, so the
+  // cursor makes every reading together one pass.
+  let gap = -1;
+  /** @param {number} at */
+  const gapFrom = (at) => {
+    if (gap >= at) return gap;
+    gap = Math.max(at, 1);
+    while (
+      gap < n &&
+      !(codes[gap] === CODE_VISIBLE && codes[gap - 1] === CODE_VISIBLE)
+    )
+      gap++;
+    return gap;
+  };
+
+  /** True when candidate `c`, reached before the next gap, cannot be preserved:
+   * a limit it draws on is already spent, and nothing short of that gap
+   * restores one. Its whole cluster is then stripped, wherever it begins.
+   * @param {number} c */
+  const spent = (c) =>
+    preservedTotal >= joinerAllowance ||
+    (kind[c] === KIND_JOINER
+      ? joinerRun >= CONSECUTIVE_JOINER_CAP
+      : preservedOther >= coverAllowance ||
+        ((kind[c] === KIND_IVS || kind[c] === KIND_STDVS) &&
+          selectorRun >= CONSECUTIVE_SELECTOR_CAP));
+
   let k = 0;
   let next = 0;
   while (k < n) {
@@ -1708,6 +1804,24 @@ function carveWalk(body, cps, analysis, build) {
     ) {
       emit(k, n, false);
       break;
+    }
+    // Strip a stretch of spent candidates in one emit, resolving only the
+    // cluster of the last: an ideograph-selector chain past its cap would
+    // otherwise pay a cluster lookup per selector for a verdict already known.
+    let last = next;
+    const reset = gapFrom(k);
+    while (
+      last < candidates.length &&
+      candidates[last] < reset &&
+      spent(candidates[last])
+    )
+      last++;
+    if (last > next) {
+      const { end } = clusterOf(candidates[last - 1]);
+      emit(k, end, false);
+      settle(next, end);
+      k = end;
+      continue;
     }
     const { start, end } = clusterOf(candidates[next]);
     if (start > k) emit(k, start, false);
@@ -1747,15 +1861,7 @@ function carveWalk(body, cps, analysis, build) {
       }
       seenVisible = codes[j] === CODE_VISIBLE;
     }
-    for (let j = next; j < candidates.length && candidates[j] < end; j++) {
-      if (kind[candidates[j]] === KIND_JOINER) leftJoiner--;
-      else if (
-        kind[candidates[j]] === KIND_IVS ||
-        kind[candidates[j]] === KIND_STDVS
-      )
-        leftSelector--;
-      else leftOther--;
-    }
+    settle(next, end);
     emit(
       start,
       end,
@@ -1766,6 +1872,9 @@ function carveWalk(body, cps, analysis, build) {
     );
     k = end;
   }
+  if (tally)
+    removed =
+      invisible.length - (allowCarveOut ? exemptCount : 0) - preservedTotal;
   if (!build) return { kept: null, foundCodes, removed };
   kept.push(body.slice(runStart));
   return { kept, foundCodes, removed };
