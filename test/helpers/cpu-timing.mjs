@@ -34,7 +34,11 @@
  * descheduled behind another test worker is not time the code spent. This
  * module and `tests/_growth.py` are the only test code allowed to turn a clock
  * reading into a verdict — `test/real-clock-thresholds.test.mjs` fails any
- * other test that does.
+ * other test that does, including one reading it through an accessor imported
+ * from here (`measure`, `growth`, `clockResolutionMs`). So a verdict on a
+ * reading — a budget in units, an absolute ceiling, the clock's granularity,
+ * the calibration floor, "this costs more than that" — is an `assert*` below
+ * that takes the reading and throws; the test never compares it itself.
  */
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
@@ -337,7 +341,79 @@ export function clockResolutionMs() {
 /** The coarsest clock a cost gate can be read on. A reading no finer than this
  * cannot resolve a calibration pass, and {@link growth} would size its blocks
  * from a reading of zero. */
-export const RESOLUTION_CEILING_MS = 0.5;
+const RESOLUTION_CEILING_MS = 0.5;
+
+/**
+ * Throws unless this kernel's CPU clock is fine enough to read a cost gate on.
+ * @param {string} what  what would be quantized, for the message
+ */
+export function assertClockResolves(what) {
+  const resolution = clockResolutionMs();
+  assert.ok(
+    resolution <= RESOLUTION_CEILING_MS,
+    `process.cpuUsage resolves no finer than ${resolution.toFixed(3)}ms on this kernel, so ${what} quantized to within their own size`,
+  );
+}
+
+/** A calibration pass at or under this is quantized to within a percent of
+ * itself, so a ratio dividing by it means nothing. */
+const MIN_UNIT_MS = 0.1;
+
+/**
+ * Throws unless a calibration unit (CPU ms per pass) is a measurement and not
+ * timer noise.
+ * @param {number} unit
+ */
+export function assertCalibrated(unit) {
+  assert.ok(
+    unit > MIN_UNIT_MS,
+    `calibration ran in ${unit.toFixed(3)}ms of CPU — too fast to divide by`,
+  );
+}
+
+/**
+ * Throws unless a cost, in calibration units, is within `budget`.
+ * @param {string} label  what was timed
+ * @param {number} units
+ * @param {number} budget
+ * @param {number} cpuMs  the same cost in CPU ms, for the message
+ */
+export function assertWithinBudget(label, units, budget, cpuMs) {
+  assert.ok(
+    units <= budget,
+    `${label} ran in ${units.toFixed(1)} units (${cpuMs.toFixed(1)}ms CPU), budget ${budget}`,
+  );
+}
+
+/**
+ * Throws unless a cost fits an absolute ceiling. Read it off {@link measure}'s
+ * `cpu` — the fastest of {@link SAMPLES} runs in CPU time — and never its
+ * `wall`, which a loaded runner inflates without the code having changed.
+ * @param {string} label  what was timed
+ * @param {number} cpuMs
+ * @param {number} ceilingMs
+ */
+export function assertWithinCeiling(label, cpuMs, ceilingMs) {
+  assert.ok(
+    cpuMs <= ceilingMs,
+    `${label} took ${cpuMs.toFixed(1)}ms of CPU at best, ceiling ${ceilingMs}ms`,
+  );
+}
+
+/**
+ * Throws unless `cost` exceeds `baseline` — the positive control that a shape
+ * driving a dearer path really does cost more.
+ * @param {string} label
+ * @param {number} cost  CPU ms
+ * @param {number} baseline  CPU ms
+ * @param {string} why  what it means when this fails
+ */
+export function assertDearerThan(label, cost, baseline, why) {
+  assert.ok(
+    cost > baseline,
+    `${label} (${cost.toFixed(1)}ms CPU) no longer costs more than the baseline (${baseline.toFixed(1)}ms CPU) — ${why}`,
+  );
+}
 
 /**
  * An `it` whose verdict rests on a timing, and so has none under a mutation run.

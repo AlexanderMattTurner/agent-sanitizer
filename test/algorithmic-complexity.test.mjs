@@ -42,10 +42,9 @@ import {
 import { foldConfusables } from "../src/confusables.mjs";
 import {
   MUTATION_RUN,
-  RESOLUTION_CEILING_MS,
+  assertClockResolves,
   assertLinear,
   assertSuperlinear,
-  clockResolutionMs,
   describeGrowth,
   geometricSizes,
   grow,
@@ -264,11 +263,7 @@ const curves = {};
 before(
   async () => {
     if (MUTATION_RUN) return;
-    const resolution = clockResolutionMs();
-    assert.ok(
-      resolution <= RESOLUTION_CEILING_MS,
-      `process.cpuUsage resolves no finer than ${resolution.toFixed(3)}ms on this kernel, so these blocks are quantized to within their own size`,
-    );
+    assertClockResolves("these blocks are");
     for (const [name, { input, run }] of Object.entries(CASES))
       curves[name] = await growth(
         (size, attempt) => /** @type {any} */ (input(size, attempt)),

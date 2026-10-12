@@ -7,16 +7,25 @@ module's ``time``, a stubbed deadline); a test of COST goes through
 
 A threshold is an ``assert`` comparing a real-clock reading — directly, through
 a name assigned from one, or through a function returning one — against
-something that is not itself a clock reading. Reading a clock anywhere else is
-fine: a polling deadline, a socket wait, a timestamp. Those decide how long a
-test waits, never whether it passes. Parsed with :mod:`ast`, not grepped, so a
-mention in a string or a comment is not a reading.
+something that is not itself a clock reading. A reading also arrives through an
+ACCESSOR imported from the harness (``cpu_growth(...)``; see
+:data:`CLOCK_ACCESSORS`), because the taint is per-file and the clock itself is
+not in sight. Reading a clock anywhere else is fine: a polling deadline, a
+socket wait, a timestamp. Those decide how long a test waits, never whether it
+passes. Parsed with :mod:`ast`, not grepped, so a mention in a string or a
+comment is not a reading.
+
+The accessor vocabulary cannot rot silently: a test below fails when a listed
+accessor stops existing, and when a clock-returning function of the harness is
+missing from it.
 """
 
 import ast
+import inspect
 
 import pytest
 
+from tests import _growth
 from tests._helpers import REPO_ROOT
 
 #: The cost-gate harness: the one place a clock reading may decide a verdict.
@@ -35,6 +44,12 @@ CLOCK_READS = (
     "process_time_ns",
 )
 
+#: Functions that hand a test a clock reading without the test calling a clock,
+#: matched by name wherever they are called (``cpu_growth(...)`` and
+#: ``_growth.cpu_growth(...)`` alike). ``opcode_growth`` is deliberately absent:
+#: it counts interpreter opcodes, which no machine's load can move.
+CLOCK_ACCESSORS = ("cpu_growth",)
+
 _RELATIONAL = (ast.Lt, ast.LtE, ast.Gt, ast.GtE)
 
 
@@ -43,12 +58,14 @@ def _is_clock_read(node: ast.AST, bare: set[str]) -> bool:
         return False
     func = node.func
     if isinstance(func, ast.Attribute):
-        return (
+        return func.attr in CLOCK_ACCESSORS or (
             isinstance(func.value, ast.Name)
             and func.value.id == "time"
             and func.attr in CLOCK_READS
         )
-    return isinstance(func, ast.Name) and func.id in bare
+    return isinstance(func, ast.Name) and (
+        func.id in bare or func.id in CLOCK_ACCESSORS
+    )
 
 
 def _dotted(node: ast.AST) -> str | None:
@@ -193,6 +210,96 @@ def test_the_scan_reads_the_real_tree_and_finds_its_clock_reads():
         assert _RESULTS[path][1] > 0, f"{path} no longer reads a clock"
 
 
+def _clock_reading_functions(source: str) -> set[str]:
+    """The public functions in ``source`` that reach a real clock, through any
+    chain of the module's own functions, AND return a value. By call graph rather
+    than by data flow, so a pure helper (``fit_exponent``) that shares parameter
+    names with the readings beside it is not swept in."""
+    tree = ast.parse(source)
+    functions = {
+        node.name: node
+        for node in tree.body
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+    }
+
+    def calls(fn):
+        for node in ast.walk(fn):
+            if isinstance(node, ast.Call):
+                yield _dotted(node.func) or ""
+
+    reaching: set[str] = set()
+    before = -1
+    while len(reaching) != before:
+        before = len(reaching)
+        for name, fn in functions.items():
+            if any(
+                call.startswith("time.")
+                and call.split(".")[1] in CLOCK_READS
+                or call in reaching
+                for call in calls(fn)
+            ):
+                reaching.add(name)
+    return {
+        name
+        for name in reaching
+        if not name.startswith("_")
+        and any(
+            isinstance(node, ast.Return) and node.value is not None
+            for stmt in functions[name].body
+            for node in _outside_functions(stmt)
+        )
+    }
+
+
+def test_every_listed_accessor_exists_in_the_harness():
+    """A vocabulary entry for a function that was renamed away detects nothing
+    and says nothing, so each one is checked against the live module."""
+    for name in CLOCK_ACCESSORS:
+        assert callable(getattr(_growth, name)), name
+
+
+def test_no_clock_returning_function_of_the_harness_is_missing_from_the_vocabulary():
+    """Enumerated from a call-graph scan of the harness's own source, so a new
+    accessor that returns a reading fails here instead of escaping every file
+    that imports it."""
+    returning = _clock_reading_functions(inspect.getsource(_growth))
+    assert returning == set(CLOCK_ACCESSORS)
+
+
+# The idioms that carry an imported accessor's reading to an assertion in a file
+# that never names a clock.
+_IMPORTED = {
+    "a growth exponent": (
+        "from tests._growth import cpu_growth\n"
+        "growth = cpu_growth(call_for, SIZES)\nassert growth.exponent < 1.35\n"
+    ),
+    "a growth cost": (
+        "from tests._growth import cpu_growth\n"
+        "growth = cpu_growth(call_for, SIZES)\nassert growth.costs[0] < BUDGET\n"
+    ),
+    "a call inline": (
+        "from tests._growth import cpu_growth\n"
+        "assert cpu_growth(call_for, SIZES).exponent < 1.35\n"
+    ),
+    "a module-qualified call": (
+        "from tests import _growth\n"
+        "growth = _growth.cpu_growth(call_for, SIZES)\nassert growth.exponent < 1.35\n"
+    ),
+    "a local wrapper": (
+        "from tests._growth import cpu_growth\n"
+        "def curve():\n    return cpu_growth(call_for, SIZES)\n"
+        "assert curve().exponent < 1.35\n"
+    ),
+}
+
+
+@pytest.mark.parametrize("idiom", sorted(_IMPORTED))
+def test_flags_an_imported_accessor_in_each_idiom(idiom):
+    thresholds, reads = scan(_IMPORTED[idiom])
+    assert len(thresholds) == 1, thresholds
+    assert reads >= 1
+
+
 # Each idiom the guard must catch, built around every clock read in the
 # vocabulary, so a read that falls out of detection fails here by name.
 _OFFENDERS = {
@@ -250,6 +357,14 @@ _BENIGN = {
     "an untainted attribute beside a tainted one": (
         "import time\ntimer = Timer()\ntimer.elapsed = time.monotonic() - time.monotonic()\n"
         "timer.count = 3\nassert timer.count < LIMIT\nassert other.elapsed < LIMIT\n"
+    ),
+    "a harness verdict": (
+        "from tests._growth import assert_linear, cpu_growth\n"
+        "assert_linear('x', cpu_growth(call_for, SIZES))\n"
+    ),
+    "a deterministic opcode count": (
+        "from tests._growth import opcode_growth\n"
+        "assert opcode_growth(call_for, SIZES).exponent < 1.35\n"
     ),
     "a mention in a string": "assert 'time.monotonic() - started < 10' in doc\n",
 }

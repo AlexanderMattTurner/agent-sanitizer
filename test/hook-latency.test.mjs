@@ -16,7 +16,8 @@
  * for a native builtin, so it pays the same instrumentation tax as the code it
  * normalizes. A ratio does not cancel a BUSY machine, though, so every timed
  * block is charged in CPU time rather than wall clock (see `measure` in
- * {@link ./helpers/cpu-timing.mjs}). {@link REALISTIC_MS} is the lone exception.
+ * {@link ./helpers/cpu-timing.mjs}); {@link REALISTIC_MS} is an absolute ceiling,
+ * but is read off that same fastest-of-N CPU figure.
  */
 import { describe, before } from "node:test";
 import assert from "node:assert/strict";
@@ -29,9 +30,12 @@ import {
 } from "../src/confusables.mjs";
 import {
   MUTATION_RUN,
-  RESOLUTION_CEILING_MS,
+  assertCalibrated,
+  assertClockResolves,
+  assertDearerThan,
   assertLinear,
-  clockResolutionMs,
+  assertWithinBudget,
+  assertWithinCeiling,
   describeGrowth,
   geometricSizes,
   grow,
@@ -189,14 +193,15 @@ const FOLD_BUDGET = 16;
  * Every budget above is machine-relative on purpose, and a table of ratios can
  * stay green while each hook takes a second, so the thing a user actually
  * notices \u2014 the wait before a session starts, the wait before a prompt goes \u2014
- * needs a ceiling in milliseconds — and, alone here, in WALL-CLOCK milliseconds,
- * since a user waits through descheduling too and the CPU clock the ratios use
- * would understate the very thing this gate promises. The input is ordinary text
- * at 256 KB, larger than most pastes; the adversarial shapes keep their ratio
+ * needs a ceiling in milliseconds. It is read as the FASTEST of several runs in
+ * CPU time, not as one wall-clock reading: the hook computes synchronously, so
+ * its CPU is the time it takes on an idle machine, and a wall-clock ceiling
+ * passed locally and went red on a loaded runner without the code changing. The
+ * input is ordinary text at 256 KB, larger than most pastes; the adversarial shapes keep their ratio
  * budgets, because a ceiling wide enough for 256 KB of nothing but zero-width
  * space on a slow runner would not be a guarantee about anything.
  *
- * c8 multiplies wall clock by roughly seven here, which is a fact about the
+ * c8 multiplies the cost by roughly seven here, which is a fact about the
  * instrumentation and not about the hook, so this half stands down under
  * coverage \u2014 and `pnpm test` runs the whole suite under coverage. The
  * uninstrumented step in `.github/workflows/node-tests.yaml` ("Run the hook
@@ -273,8 +278,7 @@ const CASES = Object.keys(ENTRIES).flatMap((entry) =>
 );
 
 /**
- * Every figure here is CPU ms except `realistic`, which is the wall clock the
- * millisecond ceiling is about.
+ * Every figure here is CPU ms.
  * @typedef {import("./helpers/cpu-timing.mjs").Growth} Growth
  * @type {{unit: number, large: Record<string, number>,
  *   growth: Record<string, Growth>,
@@ -298,11 +302,7 @@ const timing = {
 // is downstream of it.
 before(async () => {
   if (MUTATION_RUN) return;
-  const resolution = clockResolutionMs();
-  assert.ok(
-    resolution <= RESOLUTION_CEILING_MS,
-    `process.cpuUsage resolves no finer than ${resolution.toFixed(3)}ms on this kernel, so the calibration pass is quantized to within its own size`,
-  );
+  assertClockResolves("the calibration pass is");
   timing.unit = await calibrate();
   for (const { entry, shape, name } of CASES) {
     const { run } = ENTRIES[entry];
@@ -326,7 +326,7 @@ before(async () => {
         (attempt) => REALISTIC_TEXT.slice(0, REALISTIC_TEXT.length - attempt),
         (text) => run(text, "realistic-prose"),
       )
-    ).wall;
+    ).cpu;
   // Built per input: enumerating the offsets is the scanner's job, not the
   // fold's, and timing it here would charge this gate for the test's own loop.
   const foldInput = (/** @type {number} */ size) => {
@@ -358,10 +358,7 @@ describe("hook-path latency", () => {
     // microseconds, so a pass under a tenth of a millisecond is quantized to
     // within a percent of itself and the ratios stop meaning anything — say so
     // loudly rather than passing on a division by noise.
-    assert.ok(
-      timing.unit > 0.1,
-      `calibration ran in ${timing.unit.toFixed(3)}ms of CPU — too fast to divide by`,
-    );
+    assertCalibrated(timing.unit);
   });
 
   for (const { entry, shape, name } of CASES)
@@ -376,10 +373,7 @@ describe("hook-path latency", () => {
       t.diagnostic(
         `${name}: ${timing.units[name].toFixed(1)}/${budget} units (${timing.large[name].toFixed(1)}ms CPU, unit ${timing.unit.toFixed(3)}ms)`,
       );
-      assert.ok(
-        timing.units[name] <= budget,
-        `${name} ran in ${timing.units[name].toFixed(1)} units (${timing.large[name].toFixed(1)}ms CPU), budget ${budget}`,
-      );
+      assertWithinBudget(name, timing.units[name], budget, timing.large[name]);
     });
 
   for (const { name } of CASES)
@@ -399,9 +393,11 @@ describe("hook-path latency", () => {
         ...cheap.map((shape) => timing.large[`${entry}/${shape}`]),
       );
       for (const shape of Object.keys(SHAPES).filter((s) => !cheap.includes(s)))
-        assert.ok(
-          timing.large[`${entry}/${shape}`] > dearest,
-          `${entry}/${shape} (${timing.large[`${entry}/${shape}`].toFixed(1)}ms CPU) no longer costs more than the dearest cheap shape (${dearest.toFixed(1)}ms CPU) — it is not exercising the path it was written for`,
+        assertDearerThan(
+          `${entry}/${shape}`,
+          timing.large[`${entry}/${shape}`],
+          dearest,
+          "it is not exercising the path it was written for",
         );
     });
 
@@ -411,7 +407,7 @@ describe("hook-path latency", () => {
       (t) => {
         if (process.env.NODE_V8_COVERAGE) {
           t.skip(
-            "c8 multiplies wall clock several-fold; the uninstrumented CI step reads this gate",
+            "c8 multiplies the cost several-fold; the uninstrumented CI step reads this gate",
           );
           return;
         }
@@ -419,9 +415,10 @@ describe("hook-path latency", () => {
         // input, and REALISTIC_TEXT is built by slicing a repeated unit, so its
         // length is worth asserting rather than assuming.
         assert.equal(REALISTIC_TEXT.length, REALISTIC_SIZE);
-        assert.ok(
-          timing.realistic[entry] <= REALISTIC_MS,
-          `${entry} took ${timing.realistic[entry].toFixed(1)}ms on 256 KB of ordinary text, ceiling ${REALISTIC_MS}ms`,
+        assertWithinCeiling(
+          `${entry} on 256 KB of ordinary text`,
+          timing.realistic[entry],
+          REALISTIC_MS,
         );
       },
     );
@@ -442,9 +439,11 @@ describe("hook-path latency", () => {
         () => prompt,
         () => judgeSanitizeUserPrompt(event),
       );
-      assert.ok(
-        units <= CHEAP_BUDGET,
-        `the hook judged a clean 256 KB prompt in ${units.toFixed(1)} units (${cost.cpu.toFixed(1)}ms CPU), budget ${CHEAP_BUDGET}`,
+      assertWithinBudget(
+        "the hook judging a clean 256 KB prompt",
+        units,
+        CHEAP_BUDGET,
+        cost.cpu,
       );
     },
   );
@@ -458,9 +457,11 @@ describe("hook-path latency", () => {
         timing.foldChanged,
         "the fold changed nothing — the gate is timing a no-op, not the fold",
       );
-      assert.ok(
-        timing.foldUnits <= FOLD_BUDGET,
-        `folding 256 KB of look-alikes took ${timing.foldUnits.toFixed(1)} units (${timing.fold.toFixed(1)}ms CPU), budget ${FOLD_BUDGET}`,
+      assertWithinBudget(
+        "folding 256 KB of look-alikes",
+        timing.foldUnits,
+        FOLD_BUDGET,
+        timing.fold,
       );
     },
   );
