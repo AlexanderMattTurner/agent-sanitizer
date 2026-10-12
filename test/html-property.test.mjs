@@ -29,12 +29,10 @@ const com = (original) => layer2Placeholder("comment", original);
 const PLACEHOLDER_RE = new RegExp(LAYER2_PLACEHOLDER_RE.source);
 
 // "Forbidden" = invisible on a rendered page: a comment, a hidden element no
-// descendant overrides, and non-blank text inside a hidden element that is not
-// under such an override. An override is judged independently of the layer's
-// region logic: a descendant whose own style, written after the hiding
-// element's, reads visible (`font-size:0` then `font-size:9px`) renders its
-// text, while one that cannot undo the hide (`display:none` then anything)
-// does not. A spliced placeholder is blank.
+// descendant overrides, or one with non-blank text outside its overriding
+// descendants. An override is judged apart from the layer's region logic: the
+// hiding style followed by the child's must read visible
+// (`font-size:0;font-size:9px`). A spliced placeholder is blank.
 function containsForbiddenNode(htmlText) {
   // rehype-parse, not the layer's own parse: an oracle built from the code
   // under test cannot contradict it. This one runs parse5 with the DEFAULT tree

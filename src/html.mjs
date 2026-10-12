@@ -86,14 +86,13 @@ export {
 //
 // Values are tokenized by css-tree (its spec-compliant tokenizer/AST), not by
 // hand-rolled regexes: `parseDeclarations` splits declarations, decodes CSS
-// escapes, and reads the `!important` flag through css-tree,
-// `resolveCascade` picks the declaration a browser applies (css-tree's lexer
-// drops the invalid ones), and the structural detectors below inspect the
-// winning typed value nodes (Number, Dimension, Percentage, Function, …)
-// directly. So an exponent (`scale(1e-3)`), an FF/CR
-// escape terminator, an escaped `!important`, or a `;` inside a quoted value is
-// read exactly as a browser reads it — the tokenizer-divergence bugs a
-// hand-rolled parser kept re-introducing simply cannot arise. Ambiguity still
+// escapes, and reads the `!important` flag through css-tree, `resolveCascade`
+// picks the declaration a browser applies, and the structural detectors below
+// inspect its typed value nodes (Number, Dimension, Percentage, Function, …)
+// directly. So an exponent (`scale(1e-3)`), an FF/CR escape terminator, an
+// escaped `!important`, or a `;` inside a quoted value is read exactly as a
+// browser reads it — the tokenizer-divergence bugs a hand-rolled parser kept
+// re-introducing simply cannot arise. Ambiguity still
 // fails OPEN (treated as visible): an unresolved unit, `calc()`, or `var()`
 // never counts as hidden.
 //
@@ -1198,41 +1197,34 @@ function canonicalizeValue(valueNode) {
   });
 }
 
-/**
- * One declaration of an inline style, in source order.
- * @typedef {{ property: string, value: any, important: boolean, index: number }} StyleDeclaration
- */
-
-/**
- * Parse a style string into its declarations in source order, via css-tree's
- * tolerant declaration-list parser: it recovers per-declaration exactly as a
- * browser does (a bogus declaration is dropped, the rest kept), keeps a `;`
- * inside a string/`url()`/paren as part of the value, and exposes the
- * `!important` flag separately (so an escaped `none!\69mportant` is read as
- * `none` plus the flag). Property names are escape-decoded and gated to real
- * CSS idents; anything else is dropped (fail open). Which declaration WINS is
- * {@link resolveCascade}'s job, not this parser's.
- * @param {string} styleStr
- * @returns {StyleDeclaration[]}
- */
-function parseDeclarations(styleStr) {
-  /** @type {StyleDeclaration[]} */
-  const declarations = [];
-  let ast;
+// css-tree's tolerant parse, or null (fail open, never throw) on the throw only
+// a pathological input reaches: onParseError recovers ordinary bad CSS.
+/** @param {string} css @param {"declarationList" | "stylesheet"} context */
+function parseCss(css, context) {
   try {
-    ast = cssParse(styleStr, {
-      context: "declarationList",
-      parseValue: true,
+    return cssParse(css, {
+      context,
       parseCustomProperty: false,
       onParseError() {},
     });
-    /* c8 ignore start -- the only reachable throw path is a non-string / deeply
-       pathological input (css-tree's onParseError recovers ordinary bad CSS);
-       this fail-open upholds the module's never-throws contract for those. */
+    /* c8 ignore start */
   } catch {
-    return declarations;
+    return null;
   }
   /* c8 ignore stop */
+}
+
+/** @typedef {{ property: string, value: any, important: boolean, index: number }} StyleDeclaration */
+
+// A style string's declarations in source order. Property names are
+// escape-decoded and gated to real CSS idents (else dropped, fail open).
+/** @param {string} styleStr @returns {StyleDeclaration[]} */
+function parseDeclarations(styleStr) {
+  /** @type {StyleDeclaration[]} */
+  const declarations = [];
+  const ast = parseCss(styleStr, "declarationList");
+  /* c8 ignore next -- see parseCss */
+  if (!ast) return declarations;
   cssWalk(ast, {
     visit: "Declaration",
     enter(/** @type {any} */ node) {
@@ -1259,40 +1251,23 @@ function parseDeclarations(styleStr) {
   return declarations;
 }
 
-// A value with more tokens than this is not handed to the lexer: css-tree's
-// matcher backtracks over `||`/`&&` grammars and gives up (with a console
-// warning) at 15000 steps, and no hiding value this module reads comes close.
-// An unvalidated declaration is treated as valid, which is how the cascade
-// read every declaration before validation existed.
+// A longer value is not validated (and so counts as valid): css-tree's matcher
+// backtracks over `||`/`&&` grammars and gives up at 15000 steps.
 const LEXER_TOKEN_LIMIT = 64;
 
-// How many declarations one style attribute may have the lexer validate,
-// shared by every property: it bounds the lexer work a style can buy at a
-// constant, and repeating ONE property cannot slip an invalid declaration past
-// it unvalidated, because a style that exhausts it reads as hidden. A real
-// style validates about one declaration per property a detector reads.
+// Lexer validations per style attribute, shared by every property so repeating
+// ONE property cannot outrun it; a style that exhausts it reads as hidden.
 const VALIDATION_BUDGET = 128;
 
 /** @type {any} */
 let cssLexer = null;
 
-/**
- * True when a browser DROPS this declaration as invalid at parse time, so it
- * takes no part in the cascade: `display:none;display:bogus` renders hidden,
- * because `bogus` is not a `display` value and the earlier declaration stands.
- *
- * Only a lexer MISMATCH drops a declaration. Everything the lexer cannot
- * decide stays in the cascade, the direction that keeps an earlier hiding
- * declaration from being resurrected on a guess: a `var()` (valid at parse
- * time, resolved later), a custom or unknown property, a value past
- * {@link LEXER_TOKEN_LIMIT}, and a value css-tree could not parse at all or
- * that spells `url(` with an escape. A browser decodes `\75 rl(` to `url(`
- * before deciding it opens a URL token; css-tree's tokenizer does not, so its
- * lexer reports a mismatch (or its parser a `Raw` value) the browser never
- * makes.
- * @param {StyleDeclaration} declaration
- * @returns {boolean}
- */
+// True when a browser drops this declaration as invalid, so it takes no part
+// in the cascade (`display:none;display:bogus` renders hidden). Only a lexer
+// MISMATCH drops; whatever it cannot decide stays in — a `var()`, an unknown
+// property, a long value, a `Raw` value, or a `url(` spelled with an escape
+// (`\75 rl(`), which a browser decodes and css-tree does not.
+/** @param {StyleDeclaration} declaration @returns {boolean} */
 function isDroppedDeclaration(declaration) {
   let tokens = 0;
   let unreadable = false;
@@ -1305,7 +1280,6 @@ function isDroppedDeclaration(declaration) {
       unreadable = true;
   });
   if (unreadable || tokens > LEXER_TOKEN_LIMIT) return false;
-  // Built on first use over the committed grammar tables.
   cssLexer ??= new CssLexer(
     { generic: true, ...CSS_SYNTAX },
     { generate: cssGenerate },
@@ -1317,10 +1291,8 @@ function isDroppedDeclaration(declaration) {
   return error?.rawMessage === "Mismatch";
 }
 
-// The shorthands that RESET a longhand this module reads. When one of them
-// wins the cascade over the longhand's own declaration, the longhand's value
-// comes from the shorthand: `font-size:0;font:14px serif` renders 14px text.
-// `all` resets every property read here and is appended to each family.
+// The shorthands that RESET a longhand read here (`font-size:0;font:14px serif`
+// renders 14px text); `all` resets every one and is appended to each family.
 /** @type {Record<string, string[]>} */
 const RESETTING_SHORTHANDS = {
   "font-size": ["font"],
@@ -1335,13 +1307,10 @@ const RESETTING_SHORTHANDS = {
 };
 
 /**
- * An inline style's cascade as the detectors read it. `winnerOf` is the
- * declaration a browser APPLIES for a property — its own, a resetting
- * shorthand's, or `all`'s — or null. `nodeOf` is the value of the property's
- * OWN winning declaration, null when a shorthand or `all` won (the detectors
- * that read the shorthand read it there), and `textOf` that value as trimmed
- * lowercase text. `exhausted` turns true once a lookup ran out of
- * {@link VALIDATION_BUDGET}.
+ * `winnerOf` is the declaration a browser applies for a property (its own, a
+ * resetting shorthand's or `all`'s); `nodeOf`/`textOf` the value of its OWN
+ * winning declaration (null/"" when a shorthand won); `exhausted` is set once
+ * a lookup ran out of {@link VALIDATION_BUDGET}.
  * @typedef {{
  *   winnerOf: (property: string) => StyleDeclaration | null,
  *   nodeOf: (property: string) => any,
@@ -1350,15 +1319,9 @@ const RESETTING_SHORTHANDS = {
  * }} Cascade
  */
 
-/**
- * The {@link Cascade} of a style's declarations. A browser drops invalid
- * declarations first ({@link isDroppedDeclaration}), then an `!important`
- * declaration beats every normal one, then the later of two equals wins.
- * Winners are resolved on first lookup, so only the properties a detector
- * reads are ever validated.
- * @param {StyleDeclaration[]} declarations
- * @returns {Cascade}
- */
+// The {@link Cascade} of a style: invalid declarations drop out, `!important`
+// beats normal, later beats earlier. Lazy, so only what is read is validated.
+/** @param {StyleDeclaration[]} declarations @returns {Cascade} */
 function resolveCascade(declarations) {
   /** @type {Map<string, StyleDeclaration[]>} */
   const byProperty = new Map();
@@ -1419,32 +1382,17 @@ function resolveCascade(declarations) {
   return cascade;
 }
 
-// The cascade of a style with no declaration: nothing applies.
 const NO_CASCADE = resolveCascade([]);
 
-// The inherited properties a hide can come from. A descendant that sets one of
-// them back to a visible value renders its own text, so a hide of this kind
-// covers an element's subtree only up to such an override (see
-// {@link regionVerdicts}). Every other hide is of the BOX: nothing a
-// descendant declares brings `display:none` or `opacity:0` content back.
+// The inherited hides, which a descendant can set back (see
+// {@link regionVerdicts}); every other hide is of the BOX and final.
 /** @typedef {"font-size" | "visibility" | "color" | "text-indent"} InheritedHide */
 
-/**
- * The ways one element's inline style hides its text: `"box"` when the box
- * itself is hidden (or the style exhausted {@link VALIDATION_BUDGET}),
- * otherwise the inherited kinds hiding it (empty when visible).
- *
- * `inlineBox` says the element is a non-replaced INLINE box (a plain `<span>`,
- * `<a>`, `<b>`): `transform`, `text-indent`, `content-visibility` and the
- * width/height an `overflow:hidden` collapse rests on do not apply to one, so
- * `<span style="transform:scale(0)">` renders its text and must not be read as
- * hidden.
- * @param {Cascade} cascade
- * @param {boolean} inlineBox
- * @returns {Set<"box" | InheritedHide>}
- */
+// How one element's style hides its text: `"box"` (or an exhausted budget),
+// else the inherited kinds (empty when visible). The box-only hides do not
+// apply to a non-replaced `inlineBox` (`<span style="transform:scale(0)">`).
+/** @param {Cascade} cascade @param {boolean} inlineBox @returns {Set<"box" | InheritedHide>} */
 function styleHides(cascade, inlineBox) {
-  // Escapes and case were resolved at the parse boundary.
   const { nodeOf, textOf } = cascade;
   const BOX = new Set(/** @type {const} */ (["box"]));
 
@@ -1456,8 +1404,6 @@ function styleHides(cascade, inlineBox) {
 
   // CSS clamps opacity to [0,1], so any NEGATIVE value renders fully
   // transparent — `< EPSILON` (no `Math.abs`) treats `-1`/`-0.5` as hidden.
-  // A non-Number/Percentage token is an invalid declaration the cascade has
-  // already dropped, so only those two shapes reach here.
   const opacity = soleToken(nodeOf("opacity"));
   if (opacity) {
     let fraction = null;
@@ -1478,11 +1424,8 @@ function styleHides(cascade, inlineBox) {
   const hides = new Set();
   if (textOf("visibility") === "hidden" || textOf("visibility") === "collapse")
     hides.add("visibility");
-  // `height`/`width` are deliberately NOT tested standalone: with the default
-  // `overflow:visible`, a zero-sized box still paints its overflowing children,
-  // so a bare `width:0`/`height:0` leaves content on screen. `font-size:0`, in
-  // contrast, reliably collapses text to nothing on its own; the `font`
-  // shorthand carries the size too.
+  // A bare `width:0`/`height:0` still paints overflowing children (the
+  // `overflow:hidden` case is above); `font-size:0` collapses text on its own.
   if (
     isNearZeroLength(nodeOf("font-size")) ||
     isFontShorthandHidden(nodeOf("font"))
@@ -1497,21 +1440,13 @@ function styleHides(cascade, inlineBox) {
 const INHERITED_COLOR_KEYWORDS = new Set(["inherit", "unset", "currentcolor"]);
 
 /**
- * What decides whether text is painted invisibly by color. `color` and the
- * `-webkit-text-fill-color` that paints the glyphs over it when concrete
- * (`textFill`) inherit SEPARATELY, so a child's own `color` does not undo a
- * transparent fill it inherits. The backdrop is the element's own background
- * color, or the inherited one when it paints none.
+ * `color` and a concrete `-webkit-text-fill-color` (`textFill`) inherit
+ * SEPARATELY, so a child's `color` does not undo an inherited transparent fill.
  * @typedef {{ color: string, textFill: string, backdrop: string, imageLayer: boolean, paintedVisible: boolean }} ColorState
  */
 
-/**
- * The color state of one element's own style, layered over `inherited` (the
- * state its parent passes down) — or over nothing for an element read alone.
- * @param {Cascade} cascade
- * @param {ColorState | null} inherited
- * @returns {ColorState}
- */
+// One element's color state, layered over its parent's (`inherited`).
+/** @param {Cascade} cascade @param {ColorState | null} inherited @returns {ColorState} */
 function colorState({ nodeOf, textOf }, inherited) {
   const color = textOf("color");
   const textFill = textOf("-webkit-text-fill-color");
@@ -1537,17 +1472,11 @@ function colorState({ nodeOf, textOf }, inherited) {
   };
 }
 
-/**
- * True when a color state paints its text invisibly: a fully transparent fill
- * (unless the glyphs are painted by a background-clip:text gradient or a text
- * stroke), or a fill identical to its backdrop. The same-color arm needs BOTH
- * sides concrete (`#rrggbb` or `transparent`) and no background IMAGE layer:
- * `var(--x)`, `inherit` and `currentColor` canonicalize to their raw token, and
- * two identical unresolved tokens (the ubiquitous
- * `color:var(--fg);background:var(--fg)`) resolve to DIFFERENT colors.
- * @param {ColorState} state
- * @returns {boolean}
- */
+// True for a transparent fill not painted some other way, or a fill equal to
+// its backdrop. Same-color needs both sides concrete and no image layer: two
+// identical unresolved tokens (`color:var(--fg);background:var(--fg)`) can
+// resolve to DIFFERENT colors.
+/** @param {ColorState} state @returns {boolean} */
 function isColorHidden(state) {
   const fill = state.textFill || state.color;
   if (fill === "transparent" && !state.paintedVisible) return true;
@@ -1560,8 +1489,8 @@ function isColorHidden(state) {
 }
 
 /**
- * True when an inline style hides its element's text, read without element
- * context: the element is taken to be a block box, and nothing is inherited.
+ * True when an inline style hides its element's text, read as a block box
+ * with nothing inherited.
  * @param {string} styleStr
  * @returns {boolean}
  */
@@ -1646,35 +1575,29 @@ const RAW_TEXT_ELEMENTS = new Set([
   "plaintext",
 ]);
 
-// Keywords that take the parent's value of an inherited property. `revert`
-// rolls back to the user-agent style, which sets none of the inherited
-// properties read here, so it inherits too; `revert-layer` could reach a page
-// stylesheet this layer cannot see and is read the same way, keeping the hide.
+// Keywords that take the parent's value of an inherited property: `revert`
+// reaches a UA style that sets none read here, and `revert-layer` is read alike.
 const INHERITING_KEYWORDS = new Set(
   "inherit unset revert revert-layer".split(" "),
 );
 
-// The non-replaced elements the HTML rendering rules leave at the initial
-// `display:inline`. Custom and unknown elements are inline by default too, but
-// are left out: a component's own stylesheet, which this layer cannot see,
-// routinely makes one a block.
+// The non-replaced elements the UA leaves `display:inline`. Custom elements are
+// left out: a component stylesheet this layer cannot see often blockifies one.
 const INLINE_ELEMENTS = new Set(
   `a abbr acronym b bdi bdo big cite code data del dfn em font i ins kbd
   label mark nobr q s samp small span strike strong sub sup time tt u
   var`.split(/\s+/),
 );
 
-// `display` values that leave an inline element an inline box: its initial
-// value, `contents` (no box at all), a `var()` and every CSS-wide keyword (an
-// `inherit` from an unseen parent reads as inline, keeping rendered text).
+// `display` values that leave an inline element an inline box (an `inherit`
+// from an unseen parent reads as inline, keeping rendered text).
 const INLINE_DISPLAYS = new Set(
   ["", "inline", "inline flow", "contents", "initial"].concat(
     ...INHERITING_KEYWORDS,
   ),
 );
-// Absolute positioning and floating BLOCKIFY an inline element (CSS 2 §9.7),
-// and so does being a flex or grid item. One set holds the `position` and
-// `float` values (neither property accepts the other's), one the `display`s.
+// Absolute positioning, floating (CSS 2 §9.7) and being a flex/grid item
+// BLOCKIFY an inline element; `position` and `float` share one value set.
 const BLOCKIFYING_VALUES = new Set(
   "absolute fixed left right inline-start inline-end".split(" "),
 );
@@ -1682,27 +1605,19 @@ const ITEM_BLOCKIFYING_DISPLAYS = new Set(
   "flex grid inline-flex inline-grid".split(" "),
 );
 
-// Replaced elements whose content is not text: a font-size, color or
-// text-indent hide leaves the picture on screen; only `visibility` (and the
-// box hides) reach it.
+// Replaced elements: only `visibility` and the box hides reach the picture.
 const REPLACED_ELEMENTS = new Set(["img", "video", "audio", "canvas", "embed"]);
 /** @type {InheritedHide[]} */
 const TEXT_ONLY_HIDES = ["font-size", "color", "text-indent"];
 
 /** @type {WeakMap<object, Cascade>} */
 const elementCascades = new WeakMap();
-// Each element's parent as a scan met it (hast keeps no parent links), for
-// the `display:contents` walk in {@link isInlineBox}.
+// Each element's parent as a scan met it (hast keeps no parent links).
 /** @type {WeakMap<object, any>} */
 const parents = new WeakMap();
 
-/**
- * The cascade of an element's inline style, {@link NO_CASCADE} for a
- * non-element or no declaration. Memoized per node: a scan reads an element's
- * style as its own and again as its children's parent.
- * @param {any} node
- * @returns {Cascade}
- */
+// An element's style cascade, memoized: it is read again as a parent.
+/** @param {any} node @returns {Cascade} */
 function elementCascade(node) {
   if (node?.type !== "element") return NO_CASCADE;
   let cascade = elementCascades.get(node);
@@ -1717,16 +1632,9 @@ function elementCascade(node) {
   return cascade;
 }
 
-/**
- * True when `node` lays out as a non-replaced INLINE box, so the box-only
- * hides (`transform`, `text-indent`, `content-visibility`, an `overflow`
- * collapse) do not apply to it. `parent` is its parent node when known: a
- * flex or grid container blockifies it, and a `display:contents` parent has no
- * box, so its own parent is the container.
- * @param {any} node
- * @param {any} [parent]
- * @returns {boolean}
- */
+// True when `node` lays out as a non-replaced INLINE box. A flex/grid `parent`
+// blockifies it; a `display:contents` parent defers to its own parent.
+/** @param {any} node @param {any} [parent] @returns {boolean} */
 function isInlineBox(node, parent) {
   if (!INLINE_ELEMENTS.has(node.tagName)) return false;
   const { textOf } = elementCascade(node);
@@ -1746,17 +1654,9 @@ function isInlineBox(node, parent) {
     .some((token) => ITEM_BLOCKIFYING_DISPLAYS.has(token));
 }
 
-/**
- * The ways an element is hidden on its own (see {@link styleHides}), read in
- * its element context: its tag, and its parent when known.
- *
- * `aria-hidden="true"` is deliberately NOT a hiding signal: it removes the
- * element only from the ACCESSIBILITY TREE, and a sighted reader still sees
- * the decorative icons and screen-reader-deduplicated text it marks.
- * @param {any} node
- * @param {any} [parent]
- * @returns {Set<"box" | InheritedHide>}
- */
+// {@link styleHides} in element context. `aria-hidden` is deliberately NOT a
+// hide: it leaves the accessibility tree only, and a sighted reader sees it.
+/** @param {any} node @param {any} [parent] @returns {Set<"box" | InheritedHide>} */
 function elementHides(node, parent) {
   if (node.type !== "element") return new Set();
   if (parent) parents.set(node, parent);
@@ -1772,9 +1672,8 @@ function elementHides(node, parent) {
 }
 
 /**
- * True for an element a rendered page would not show: `hidden` attribute or a
- * hiding inline style, judged in its element context. Works on both hast nodes
- * and parseHtmlTag results.
+ * True for an element a rendered page would not show (`hidden` or a hiding
+ * inline style, in element context). Takes hast nodes and parseHtmlTag results.
  * @param {any} node
  * @param {any} [parent] the element's parent, when known
  * @returns {boolean}
@@ -1783,22 +1682,14 @@ export function isHiddenElement(node, parent) {
   return elementHides(node, parent).size > 0;
 }
 
-// The lengths a font-size of zero passes through unchanged: units and keywords
-// relative to the parent's font size, and the math functions over them.
+// What a zero parent font-size passes through unchanged.
 const PARENT_RELATIVE_FONT_UNITS = new Set(["em", "ex", "ch", "cap", "ic"]);
 const PARENT_RELATIVE_FONT_KEYWORDS = new Set(["smaller", "larger"]);
 const MATH_FUNCTIONS = new Set(["calc", "min", "max", "clamp"]);
 
-/**
- * True when `kind`, in force on an element's parent, still hides the
- * element's own text. Only the element's own declaration of the property can
- * bring the text back; none, or an inheriting keyword, keeps the hide.
- * @param {InheritedHide} kind
- * @param {Cascade} cascade the element's
- * @param {boolean} inlineBox
- * @param {ColorState} color the element's, layered over its parent's
- * @returns {boolean}
- */
+// True when `kind`, in force on the parent, still hides the element's text:
+// only its own (non-inheriting) declaration can bring the text back.
+/** @param {InheritedHide} kind @param {Cascade} cascade the element's @param {boolean} inlineBox @param {ColorState} color the element's, layered over its parent's @returns {boolean} */
 function keepsHide(kind, cascade, inlineBox, color) {
   if (kind === "color") return isColorHidden(color);
   // An inline box sits on its parent's shifted first line whatever it sets.
@@ -1813,8 +1704,8 @@ function keepsHide(kind, cascade, inlineBox, color) {
   if (kind === "text-indent")
     return winner.property === kind && isOffscreenOffset(winner.value);
   if (winner.property === "all") return false;
-  // A `font` shorthand's size is its first length, percentage or math function
-  // (a bare number there is a weight), or a relative size keyword.
+  // A `font` shorthand's size is its first non-Number size token (a bare
+  // number there is a weight).
   const size =
     winner.property === "font"
       ? valueTokens(winner.value).find(
@@ -1826,9 +1717,7 @@ function keepsHide(kind, cascade, inlineBox, color) {
               PARENT_RELATIVE_FONT_KEYWORDS.has(token.name)),
         )
       : soleToken(winner.value);
-  // Under a zero parent size, a relative keyword (`larger`), a percentage, a
-  // parent-relative unit (`1.2em`), a zero, or a math function of only those
-  // (`calc(1em)`) stays zero; an absolute or keyword size renders.
+  // Relative sizes (`larger`, `150%`, `1.2em`, `calc(1em)`) stay zero.
   if (!size) return false;
   if (size.type === "Identifier")
     return PARENT_RELATIVE_FONT_KEYWORDS.has(size.name);
@@ -1846,33 +1735,14 @@ function keepsHide(kind, cascade, inlineBox, color) {
   return keeps;
 }
 
-/**
- * What a region hidden by inherited kinds passes down to a descendant: the
- * kinds still in force, and the color state the "color" kind is judged by.
- * @typedef {{ kinds: Set<InheritedHide>, color: ColorState }} RegionState
- */
+/** @typedef {{ kinds: Set<InheritedHide>, color: ColorState }} RegionState */
+// `neutral`: nothing to see either way; `mixed`: hidden and visible content.
+/** @typedef {"hidden" | "neutral" | "visible" | "mixed"} RegionVerdict */
 
-/**
- * How one node inside such a region renders:
- *  - `hidden`  — nothing of it is visible (non-blank text, an element whose
- *    whole content stays hidden);
- *  - `neutral` — it holds nothing to see either way (whitespace, a comment,
- *    an empty element);
- *  - `visible` — an element that overrides every hide in force, or a replaced
- *    element the remaining kinds cannot hide;
- *  - `mixed`   — an element holding both hidden and visible content.
- * @typedef {"hidden" | "neutral" | "visible" | "mixed"} RegionVerdict
- */
-
-/**
- * The {@link RegionVerdict} of every node of the region rooted at `root`, an
- * element hidden by the inherited `kinds` alone. Iterative (a preorder list
- * read back to front settles every child before its parent), so a deep region
- * costs no stack.
- * @param {any} root
- * @param {Set<InheritedHide>} kinds
- * @returns {Map<any, RegionVerdict>}
- */
+// The {@link RegionVerdict} of every node under `root`, an element hidden by
+// the inherited `kinds` alone. Iterative (a preorder list read back to front
+// settles children first), so a deep region costs no stack.
+/** @param {any} root @param {Set<InheritedHide>} kinds @returns {Map<any, RegionVerdict>} */
 function regionVerdicts(root, kinds) {
   /** @type {Map<any, RegionVerdict>} */
   const verdicts = new Map();
@@ -1903,11 +1773,8 @@ function regionVerdicts(root, kinds) {
       );
     else if (node.type !== "element") verdicts.set(node, "neutral");
     else {
-      // An element settles `hidden` on a box hide of its own and `visible`
-      // once every inherited kind is overridden; otherwise it hands its
-      // children the kinds still in force. A kind only ever SHRINKS on the way
-      // down (an element's own context-free hides are added, nothing else), so
-      // the region never hides more than its elements would read alone.
+      // Only an element's own context-free hides are ever added on the way
+      // down, so a region never hides more than its elements would alone.
       const own = elementHides(node, parent);
       if (own.has("box")) {
         verdicts.set(node, "hidden");
@@ -1940,24 +1807,14 @@ function regionVerdicts(root, kinds) {
   return verdicts;
 }
 
-/**
- * The splice of an element hidden by inherited `kinds` alone, when some
- * descendant overrides them and so renders: `<span style="font-size:0">` around
- * a `<b style="font-size:14px">` hides the span's own text and shows the `<b>`.
- * Each maximal run of hidden siblings (with the whitespace, comments and empty
- * elements between them) becomes one hidden range, comments outside a run keep
- * their own range, and every visible or neutral element outside a run is
- * handed back for the ordinary scan. `mixed` holds the elements left standing,
- * for the tag counts.
- *
- * Null when nothing inside overrides, or when a node the splice needs has no
- * position or siblings' positions are out of source order or outside their
- * parent's — parse5's recovery moves nodes — so a run could reach visible
- * bytes. The caller then splices the whole element.
- * @param {any} root
- * @param {Set<InheritedHide>} kinds
- * @returns {{ ranges: SpliceRange[], rescan: Array<[any, any]>, mixed: any[] } | null}
- */
+// The splice of an element hidden by inherited `kinds` alone whose descendant
+// overrides them (`<span style="font-size:0">a<b style="font-size:9px">`):
+// each maximal run of hidden siblings becomes one range, comments outside a run
+// keep their own, and elements outside a run go back to `rescan`. `mixed` holds
+// the elements left standing. Null when nothing overrides, or when a position
+// is missing or out of source order (parse5 recovery): the caller then splices
+// the whole element.
+/** @param {any} root @param {Set<InheritedHide>} kinds @returns {{ ranges: SpliceRange[], rescan: Array<[any, any]>, mixed: any[] } | null} */
 function inheritedRegionSplice(root, kinds) {
   const verdicts = regionVerdicts(root, kinds);
   if (verdicts.get(root) !== "mixed") return null;
@@ -1968,16 +1825,12 @@ function inheritedRegionSplice(root, kinds) {
   const mixed = [];
   const stack = [root];
   while (stack.length > 0) {
-    // Every node here is the root (positioned by the caller's own guard) or a
-    // child that passed the position check below.
     const node = stack.pop();
     mixed.push(node);
     let lastEnd = node.position.start.offset;
     let runStart = -1;
     let runEnd = -1;
-    // Neutral comments and elements not yet inside a run: a later hidden
-    // sibling of an open run absorbs them; otherwise they are spliced or
-    // rescanned on their own.
+    // Neutral siblings after an open run: absorbed if another hidden one follows.
     /** @type {SpliceRange[]} */
     let trailingComments = [];
     /** @type {Array<[any, any]>} */
@@ -2030,12 +1883,7 @@ function inheritedRegionSplice(root, kinds) {
   return { ranges, rescan, mixed };
 }
 
-/**
- * True when an element loads a `data:` URI resource — through any URL
- * attribute it fetches, read by the same table and scheme resolution Layer 3
- * uses.
- * @param {any} el
- */
+/** @param {any} el */
 function hasDataSrc(el) {
   return elementUrls(el).some(
     ({ url, autoFetched }) => autoFetched && resolveUrl(url)?.scheme === "data",
@@ -2327,11 +2175,7 @@ function scanFragmentTree(html, tree) {
   /** @type {Array<[any, any]>} */
   const pending = [[tree, undefined]];
   let unpositioned = false;
-  /**
-   * @param {any} node
-   * @param {number | undefined} _index
-   * @param {any} parent
-   */
+  /** @param {any} node @param {number | undefined} _index @param {any} parent */
   const visitor = (node, _index, parent) => {
     const isComment = node.type === "comment";
     const hides = isComment ? null : elementHides(node, parent);
@@ -2978,8 +2822,7 @@ const LONG_QUERY_THRESHOLD = 200;
 // the query/credential/fragment checks below never fire on it. Active-content
 // types (HTML, SVG, JS) are a script-injection vector; an oversized blob of any
 // type is an inline exfil/injection payload. A small inline image (icon) is
-// left alone so the common case isn't drowned in noise. Compared against the
-// MIME type's essence.
+// left alone so the common case isn't drowned in noise.
 const ACTIVE_DATA_TYPES = new Set([
   "text/html",
   "image/svg+xml",
@@ -2995,20 +2838,11 @@ const SCRIPT_SCHEMES = new Set(["javascript", "vbscript"]);
 
 const RELATIVE_URL_BASE = "http://relative.invalid";
 
-/**
- * `url` as a browser resolves it, through the WHATWG URL parser — the one
- * place this module reads a URL's scheme. The parser strips leading and
- * trailing C0 controls and spaces and every tab/newline before it reads the
- * scheme, so `&#1;javascript:`, `java\tscript:` and `DATA:` resolve exactly as
- * they navigate; no pattern over the raw string can agree with it on all of
- * those.
- *
- * `scheme` is null for a URL with none of its own, which resolves against the
- * page; `relative` is true when it names no host of its own either. Null when
- * the parser rejects the URL, as a browser's would.
- * @param {string} url
- * @returns {{ scheme: string | null, parsed: URL, relative: boolean } | null}
- */
+// `url` through the WHATWG URL parser, the one place a scheme is read: it
+// strips C0 controls, spaces and tabs/newlines as a browser does
+// (`&#1;javascript:`, `java\tscript:`). `scheme` is null for a page-relative
+// URL, `relative` true when it names no host either; null if unparsable.
+/** @param {string} url @returns {{ scheme: string | null, parsed: URL, relative: boolean } | null} */
 function resolveUrl(url) {
   const absolute = parseUrl(url);
   const parsed = absolute ?? parseUrl(url, RELATIVE_URL_BASE);
@@ -3518,9 +3352,7 @@ export function checkExfilUrl(url, options = {}) {
   const { flagDigestValues = false } = options;
   const resolved = resolveUrl(url);
   if (resolved?.scheme === "data") {
-    // The MIME type essence, per the Fetch Standard's data: URL processor: the
-    // URL without fragment up to its first comma, cut at `;`, trimmed,
-    // lowercased.
+    // The MIME type essence, per the Fetch Standard's data: URL processor.
     const { href, hash } = resolved.parsed;
     const mimeType = href.slice("data:".length, href.length - hash.length);
     const essence = mimeType.split(",")[0].split(";")[0].trim().toLowerCase();
@@ -3574,8 +3406,7 @@ export function checkExfilUrl(url, options = {}) {
  */
 export function urlHost(url) {
   const resolved = resolveUrl(url);
-  // checkExfilUrl's template and keyword tests read the raw string, so it can
-  // hand us a URL the parser rejects (e.g. a host with a space).
+  // checkExfilUrl's raw-string tests can flag a URL the parser rejects.
   if (!resolved) return "(unparsable URL)";
   // A `data:` URI has no host; name the channel rather than echoing the payload.
   if (resolved.scheme === "data") return "(inline data: URI)";
@@ -3583,28 +3414,18 @@ export function urlHost(url) {
   return resolved.parsed.host;
 }
 
-/**
- * The index of the first code unit at or after `from` that is not ASCII
- * whitespace, as the HTML Standard's microsyntaxes define it.
- * @param {string} value
- * @param {number} from
- * @returns {number}
- */
+// The first index at or after `from` that is not ASCII whitespace.
+/** @param {string} value @param {number} from */
 function skipWhitespace(value, from) {
   let at = from;
   while (/[\t\n\f\r ]/.test(value.charAt(at))) at++;
   return at;
 }
 
-/**
- * The redirect URL of a `<meta http-equiv="refresh">` content value, or null
- * when the browser would not redirect: a port of the HTML Standard's "shared
- * declarative refresh steps". The URL may follow the delay with or without a
- * `url=` label (`0; https://…` redirects too), quoted or not, and a delay that
- * does not start with a digit or `.` voids the whole directive.
- * @param {string} content
- * @returns {string | null}
- */
+// The redirect URL of a meta refresh `content`, or null when a browser would
+// not redirect: a port of the HTML Standard's "shared declarative refresh
+// steps" (the `url=` label and the quotes are optional).
+/** @param {string} content @returns {string | null} */
 function refreshUrl(content) {
   let at = skipWhitespace(content, 0);
   const delayStart = at;
@@ -3616,8 +3437,7 @@ function refreshUrl(content) {
   if (content[at] === ";" || content[at] === ",")
     at = skipWhitespace(content, at + 1);
   if (at === content.length) return null;
-  // `url` (any case), optional whitespace, `=`: a label the URL follows. A
-  // prefix of it that stops short is part of the URL instead.
+  // A `url =` label; a prefix of it that stops short is part of the URL.
   let urlStart = at;
   if (content.slice(at, at + 3).toLowerCase() === "url") {
     const afterLabel = skipWhitespace(content, at + 3);
@@ -3633,14 +3453,9 @@ function refreshUrl(content) {
 // A valid floating-point number (HTML Standard §2.3.4.3), a density's numeral.
 const FLOAT_RE = /^-?(?:\d+(?:\.\d+)?|\.\d+)(?:[eE][+-]?\d+)?$/;
 
-/**
- * True when a srcset candidate's descriptors are valid, so the browser keeps
- * the candidate (HTML Standard "parse a srcset attribute", step 13): at most
- * one width (`100w`, positive) or density (`2x`, not negative), and a height
- * (`50h`) only beside a width.
- * @param {string[]} descriptors
- * @returns {boolean}
- */
+// True when a browser keeps a srcset candidate with these descriptors ("parse
+// a srcset attribute", step 13): one `w` or `x` at most, `h` only beside `w`.
+/** @param {string[]} descriptors @returns {boolean} */
 function isValidSrcsetDescriptors(descriptors) {
   const units = new Set();
   for (const descriptor of descriptors) {
@@ -3659,23 +3474,14 @@ function isValidSrcsetDescriptors(descriptors) {
   return !units.has("h") || units.has("w");
 }
 
-// A srcset candidate's URL after the separators before it, and the
-// descriptors after a URL: they run to the next comma outside a parenthesized
-// group, which the tokenizer closes at the FIRST `)` (an unclosed one runs to
-// the end). Every descriptor holding a paren is invalid, so splitting the run
-// at whitespace inside a group changes no verdict.
+// A candidate's URL, then its descriptors: up to the next comma outside a
+// paren group, which closes at the FIRST `)` (an unclosed one runs to the end).
 const SRCSET_URL_RE = /[\t\n\f\r ,]*([^\t\n\f\r ,][^\t\n\f\r ]*)?/y;
 const SRCSET_DESCRIPTORS_RE = /(?:[^,(]|\([^)]*(?:\)|$))*/y;
 
-/**
- * The URLs of the candidates a browser keeps from a `srcset` value: a port of
- * the HTML Standard's "parse a srcset attribute". A candidate's URL is a run
- * of non-whitespace (so a comma inside a `data:` URI or a query stays in it),
- * trailing commas on it end the candidate, and a candidate with invalid
- * descriptors is dropped, as the browser drops it.
- * @param {string} value
- * @returns {string[]}
- */
+// The URLs a browser keeps from a `srcset`: a port of the HTML Standard's
+// "parse a srcset attribute" (a comma inside a URL run stays in it).
+/** @param {string} value @returns {string[]} */
 function srcsetUrls(value) {
   /** @type {string[]} */
   const urls = [];
@@ -3687,8 +3493,7 @@ function srcsetUrls(value) {
     at = SRCSET_URL_RE.lastIndex;
     let descriptors = "";
     if (url.endsWith(",")) {
-      // Trimmed by scanning back, since an unanchored `,+$` costs one match
-      // attempt per comma.
+      // Scanned back: an unanchored `,+$` costs one match attempt per comma.
       let cut = url.length;
       while (cut > 0 && url[cut - 1] === ",") cut--;
       url = url.slice(0, cut);
@@ -3705,38 +3510,18 @@ function srcsetUrls(value) {
   return urls;
 }
 
-// The functions whose string arguments are URLs: `image-set()`, and a `url()`
-// spelled with an escape (`\75 rl("…")`), which a browser decodes to `url(` and
-// fetches while css-tree reads it as a plain function.
+// Functions whose string arguments are URLs: css-tree reads an escaped
+// `\75 rl("…")` as a plain function named `url`.
 const STRING_URL_FUNCTIONS = new Set(["url", "image-set", "-webkit-image-set"]);
 
-/**
- * The URLs a CSS source loads: every `url()`, the string arguments of an
- * `image-set()`, and the string target of an `@import`. `context` is the
- * css-tree parse context — "declarationList" for a `style` attribute,
- * "stylesheet" for a `<style>` element's text. A value css-tree cannot parse
- * (an escaped `\75 rl(` around an unquoted URL degrades to `Raw`) yields nothing.
- * @param {string} css
- * @param {"declarationList" | "stylesheet"} context
- * @returns {string[]}
- */
+// The URLs a CSS source loads: `url()`, `image-set()` strings and `@import`.
+/** @param {string} css @param {"declarationList" | "stylesheet"} context @returns {string[]} */
 function cssUrls(css, context) {
   /** @type {string[]} */
   const urls = [];
-  let ast;
-  try {
-    ast = cssParse(css, {
-      context,
-      parseCustomProperty: false,
-      onParseError() {},
-    });
-    /* c8 ignore start -- css-tree recovers from ordinary bad CSS through
-       onParseError; this only upholds the never-throws contract against a
-       pathological input. */
-  } catch {
-    return urls;
-  }
-  /* c8 ignore stop */
+  const ast = parseCss(css, context);
+  /* c8 ignore next -- see parseCss */
+  if (!ast) return urls;
   cssWalk(ast, (/** @type {any} */ node) => {
     if (node.type === "Url") urls.push(node.value);
     const name =
@@ -3755,18 +3540,15 @@ function cssUrls(css, context) {
   return urls;
 }
 
-// How the value of each grammar URL_ATTRIBUTES names holds its URLs. The
-// table names only attributes whose hast value has the shape its grammar reads
-// (a string, or the array `ping` arrives as), so a value of another shape is a
-// table or parser bug and throws rather than reading as "no URL".
+// The URLs in a value of each URL_ATTRIBUTES grammar. A value of another shape
+// is a table bug and throws rather than reading as "no URL".
 /** @type {Record<string, (value: any, properties: any) => string[]>} */
 const GRAMMAR_READERS = {
   url: (value) => [value],
   urls: (value) => value.map(String),
   srcset: (value) => srcsetUrls(value),
   refresh(value, properties) {
-    // hast delivers `http-equiv` as a comma-separated list, which String()
-    // joins back.
+    // hast delivers `http-equiv` as a list, which String() joins back.
     const directive = String(properties.httpEquiv ?? "");
     const url =
       directive.trim().toLowerCase() === "refresh" ? refreshUrl(value) : null;
@@ -3775,23 +3557,12 @@ const GRAMMAR_READERS = {
   css: (value) => cssUrls(value, "declarationList"),
 };
 
-/**
- * @typedef {{ url: string, isImage: boolean, autoFetched: boolean, context: "resource" | "form" | "refresh" }} CollectedUrl
- */
+/** @typedef {{ url: string, isImage: boolean, autoFetched: boolean, context: "resource" | "form" | "refresh" }} CollectedUrl */
 
-/**
- * Every URL one element carries, through {@link URL_ATTRIBUTES} (plus a
- * `<style>` element's own stylesheet) — the one place an element's URLs are
- * read.
- *
- * `autoFetched` says whether reaching the URL takes a deliberate act: a link's
- * `href` waits for somebody to follow it, while a `src`, a stylesheet, a
- * `ping`, a form action or a meta refresh fires on its own. The distinction is
- * the caller's severity line, not a detection line — the URL is reported
- * either way (see the exfil tier in ./output.mjs).
- * @param {any} node a hast element
- * @returns {CollectedUrl[]}
- */
+// Every URL one element carries, through {@link URL_ATTRIBUTES} (plus a
+// `<style>`'s stylesheet): the one place an element's URLs are read.
+// `autoFetched` is false when reaching it takes a deliberate act (a link).
+/** @param {any} node a hast element @returns {CollectedUrl[]} */
 function elementUrls(node) {
   // hast element nodes always carry a `properties` object (parse5 sets it).
   const properties = node.properties;
@@ -3828,18 +3599,11 @@ const OFF_ORIGIN_REASON = {
   refresh: "off-origin meta-refresh redirect",
 };
 
-// The markup openers inside a comment's text: `<!`, `<?` and `</` open the
-// comments, declarations and bogus comments that would hide the rest of it.
+// `<!`, `<?` and `</` inside a comment would hide the rest of its text.
 const COMMENT_INTERIOR_OPENER_RE = /<(?=[!?/])/g;
 
-/**
- * The URLs of one document, and the text of every HTML comment in it.
- * `parseMd`/`parseHtml` are the parsers to read it with.
- * @param {string} text
- * @param {(text: string) => any} parseMd
- * @param {(text: string) => any} parseHtml
- * @returns {{ urls: CollectedUrl[], comments: string[] }}
- */
+// The URLs of one document, and the text of every HTML comment in it.
+/** @param {string} text @param {(text: string) => any} parseMd @param {(text: string) => any} parseHtml @returns {{ urls: CollectedUrl[], comments: string[] }} */
 function documentUrls(text, parseMd, parseHtml) {
   /** @type {CollectedUrl[]} */
   const urls = [];
@@ -3871,25 +3635,14 @@ function documentUrls(text, parseMd, parseHtml) {
   return { urls, comments };
 }
 
-/**
- * Every URL a Layer-3 detector reads: markdown links/images/definitions, the
- * URL attributes of every HTML element, and the same again inside each HTML
- * comment. Both detectors below consume this rather than deciding for
- * themselves what counts as a URL, so a node type is either in scope for all
- * of them or for none — a second walk is how one detector silently stops
- * covering a shape the other still does. `parseMarkdown` memoizes its last
- * tree, so the detectors running back to back over one document share the
- * parse as well as the definition.
- *
- * A comment is invisible on the page but not to a model reading the source,
- * and "render this image" inside one is an instruction aimed at exactly that
- * reader. Its text is read as a document of its own with its markup openers
- * defused — one level deep, so the cost stays linear — and what it names is
- * reported as not fetched (nothing in a comment loads) and with no off-origin
- * rule (nothing in it submits or redirects).
- * @param {string} text
- * @returns {CollectedUrl[]}
- */
+// Every URL a Layer-3 detector reads: markdown links/images/definitions and
+// the URL attributes of every element, also inside comments. Both detectors
+// below consume this, so a node type is in scope for all of them or for none;
+// `parseMarkdown` memoizes its tree, so back-to-back detectors share the parse.
+// A comment is invisible on the page but not to a model reading the source:
+// its text is read one level deep with its markup openers defused, and what it
+// names is not fetched and has no off-origin rule.
+/** @param {string} text @returns {CollectedUrl[]} */
 function collectUrls(text) {
   const { urls, comments } = documentUrls(text, parseMarkdown, parseFragment);
   for (const comment of comments) {
@@ -3907,9 +3660,8 @@ function collectUrls(text) {
 
 /**
  * Layer 3: report data-exfil-shaped URLs among the ones {@link collectUrls}
- * reads (markdown, every URL_ATTRIBUTES attribute, CSS, comment interiors).
- * Detection only — the text is never modified; the caller
- * surfaces the threats as a warning.
+ * reads. Detection only — the text is never modified; the caller surfaces the
+ * threats as a warning.
  *
  * `autoFetched` marks a threat that needs no deliberate act to fire — a
  * rendered image, a stylesheet, a form target, a meta refresh — as opposed to a

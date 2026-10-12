@@ -1,25 +1,14 @@
 #!/usr/bin/env node
 /**
- * Generate src/css-syntax-data.mjs: the CSS value grammars css-tree's lexer
- * validates an inline-style declaration against.
+ * Generate src/css-syntax-data.mjs, the grammars css-tree's lexer validates
+ * inline-style declarations against. css-tree's full tables pull ~400 KB of
+ * mdn-data into every bundle, so this keeps only the properties src/html.mjs
+ * names in a string literal (plus a vendor-prefixed one's basename) and the
+ * closure of what their grammars reference. A property outside the table is
+ * "Unknown" to the lexer, which the cascade treats as valid.
  *
- * Layer 2 resolves an inline style's cascade the way a browser does — an
- * INVALID declaration is dropped before `!important` and source order pick a
- * winner — and css-tree's lexer is the validator. Its full grammar tables
- * (`css-tree/definition-syntax-data`) pull ~400 KB of `mdn-data` JSON into
- * every bundle, yet the cascade only ever validates the properties
- * src/html.mjs reads. So this script keeps exactly those: every string literal
- * in src/html.mjs that names a CSS property (plus the unprefixed basename the
- * lexer falls back to for a vendor-prefixed one), and the transitive closure of
- * the types and properties their grammars reference. A property outside the
- * table is "Unknown" to the lexer, which the cascade treats as valid — the
- * pre-validation behaviour, never a new hide.
- *
- * `test/css-syntax-data.test.mjs` re-derives the table from the installed
- * css-tree and the current src/html.mjs and fails if the committed module
- * drifts, so reading a new property or bumping css-tree is a red build until
- * this is re-run: `node scripts/gen-css-syntax.mjs` from the repo root. The
- * output is one grammar per line and listed in .prettierignore.
+ * test/css-syntax-data.test.mjs fails when the committed module drifts; re-run
+ * `node scripts/gen-css-syntax.mjs` from the repo root.
  */
 import { readFileSync, writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
@@ -29,11 +18,7 @@ import { parse, walk } from "css-tree/definition-syntax";
 
 /** @typedef {{ types: Record<string, string>, properties: Record<string, string> }} CssSyntax */
 
-/**
- * The grammars the cascade can consult, given the reader module's source.
- * @param {string} [readerSource] src/html.mjs's text
- * @returns {CssSyntax}
- */
+/** @param {string} [readerSource] src/html.mjs's text @returns {CssSyntax} */
 export function deriveCssSyntax(
   readerSource = readFileSync(
     new URL("../src/html.mjs", import.meta.url),
@@ -67,11 +52,7 @@ export function deriveCssSyntax(
   return { types: sorted(out.types), properties: sorted(out.properties) };
 }
 
-/**
- * The committed module's source text.
- * @param {CssSyntax} syntax
- * @returns {string}
- */
+/** The committed module's source text. @param {CssSyntax} syntax */
 export function renderCssSyntax(syntax) {
   /** @param {Record<string, string>} table */
   const rows = (table) =>

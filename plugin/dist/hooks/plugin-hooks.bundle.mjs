@@ -49403,20 +49403,22 @@ function canonicalizeValue(valueNode) {
     }
   });
 }
-function parseDeclarations(styleStr) {
-  const declarations = [];
-  let ast;
+function parseCss(css, context) {
   try {
-    ast = parser_default2(styleStr, {
-      context: "declarationList",
-      parseValue: true,
+    return parser_default2(css, {
+      context,
       parseCustomProperty: false,
       onParseError() {
       }
     });
   } catch {
-    return declarations;
+    return null;
   }
+}
+function parseDeclarations(styleStr) {
+  const declarations = [];
+  const ast = parseCss(styleStr, "declarationList");
+  if (!ast) return declarations;
   walker_default2(ast, {
     visit: "Declaration",
     enter(node2) {
@@ -50363,17 +50365,8 @@ function srcsetUrls(value) {
 }
 function cssUrls(css, context) {
   const urls = [];
-  let ast;
-  try {
-    ast = parser_default2(css, {
-      context,
-      parseCustomProperty: false,
-      onParseError() {
-      }
-    });
-  } catch {
-    return urls;
-  }
+  const ast = parseCss(css, context);
+  if (!ast) return urls;
   walker_default2(ast, (node2) => {
     if (node2.type === "Url") urls.push(node2.value);
     const name50 = node2.type === "Function" || node2.type === "Atrule" ? ident_exports.decode(node2.name).toLowerCase() : "";

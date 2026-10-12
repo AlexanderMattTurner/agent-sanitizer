@@ -114,25 +114,15 @@ const digitChannel = (n) => {
   return `color: rgb(${huge},${huge},${huge}); background: rgb(255,255,255)`;
 };
 
-/**
- * One hiding declaration followed by a run of INVALID declarations of a
- * property the hide test reads. The cascade validates candidates against
- * css-tree's lexer, so a style that buys one lexer match per repeat would cost
- * a match per declaration of every property a detector consults.
- * @param {number} n
- * @returns {string}
- */
+// A hide followed by a run of INVALID declarations, each a lexer match the
+// cascade could be made to buy.
+/** @param {number} n @returns {string} */
 const repeatedInvalidDeclarations = (n) =>
   `display:none;${grow("color:bogus-value;", n)}`;
 
-/**
- * A zero-font-size region whose descendants alternately reset the size and
- * zero it again, nested: every level is a region of its own inside the
- * visible part of the last, so a splice that re-judged a region's subtree per
- * level would pay the depth once per node.
- * @param {number} n
- * @returns {string}
- */
+// Nested zero-font-size regions, each inside the visible part of the last: a
+// splice that re-judged a region's subtree per level would pay depth per node.
+/** @param {number} n @returns {string} */
 const nestedInheritedRegions = (n) => {
   const open = '<div style="font-size:0">s<b style="font-size:9px">v';
   const levels = Math.max(1, Math.floor(n / open.length));

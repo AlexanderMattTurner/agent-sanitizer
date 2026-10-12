@@ -3,13 +3,8 @@
 // this committed == regenerate(css-tree, src/html.mjs) freshness check.
 /**
  * `src/css-syntax-data.mjs` must equal what `scripts/gen-css-syntax.mjs`
- * derives from the INSTALLED css-tree and the CURRENT src/html.mjs. The lexer
- * that decides which inline-style declarations a browser drops reads these
- * grammars; a css-tree bump, or a detector reading a new property, without a
- * regenerate would leave the cascade judging declarations against stale or
- * missing grammar.
- *
- * Regenerate with `node scripts/gen-css-syntax.mjs`.
+ * derives from the INSTALLED css-tree and the CURRENT src/html.mjs, or the
+ * cascade judges declarations against stale or missing grammar.
  */
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
