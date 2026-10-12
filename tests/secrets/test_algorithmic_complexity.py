@@ -187,7 +187,9 @@ def test_entry_point_is_sub_quadratic_on_one_line(name):
 
 # The copy-volume gate's sizes, in bytes on ONE line. Large enough that a
 # per-span copy dominates the curve: the control below reads exponent 1.98-2.02
-# here; a whole-string rebuild per span reads 2.01 here.
+# here; a whole-string rebuild per span reads 2.01 here. The control's C work is
+# ``translate``, not ``memmove``, so it does NOT evidence that these sizes make a
+# memmove-bound rebuild read super-linear on a host with a fast ``memmove``.
 # The splicing entry points that ship read 0.97-1.03.
 _COPY_SIZES = geometric_sizes(32 * 1024, 256 * 1024, 3)
 
@@ -269,9 +271,11 @@ _SITE_BYTES = len(_FIELD_UNIT) * _FIELD_UNITS_PER_SITE
 
 
 def _rewrite_tail_per_site(text: str) -> None:
-    """Redact one site at a time by rewriting the whole remaining line through a
-    C ``translate`` — quadratic in ``len(text)``, with every byte of it handled
-    inside C, which is the shape both tests below are about.
+    """Walk the whole remaining line through a C ``translate`` once per site —
+    quadratic in ``len(text)``, with every byte handled inside C, which is the
+    shape both tests below are about. The first pass maps every ``password="``
+    byte to "X", so later passes re-walk an already-redacted tail; the walk, not
+    the redaction, is what the curve measures.
 
     The cost per site is a fixed interpreter overhead ``c`` plus C work ``k*n``
     on the tail, so the fitted exponent depends only on ``k*n/c`` at the
