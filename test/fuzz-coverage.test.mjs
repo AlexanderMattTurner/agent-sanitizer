@@ -167,7 +167,7 @@ const FUZZ_EXEMPT = Object.freeze({
     "the view the long-run probe reads, pinned by invisible-fast-path",
   payloadLongRunSample: "reads that same view, pinned by invisible-fast-path",
   payloadVerdict:
-    "bundles findLongRuns over that view with countEffectiveInvisible, both reads of the analysis stripInvisible already ran",
+    "bundles the first findLongRuns record over that view with countEffectiveInvisible, both reads of the analysis stripInvisible already ran",
   scanHtmlFragment:
     "has no invariant of its own beyond what the sanitizeHtml round-trip and splice-fidelity properties assert on its output",
   stripAnsiFully: "the ANSI half of applyLayer1, fuzzed through layer1-ansi",

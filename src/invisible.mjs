@@ -1691,27 +1691,27 @@ export function isIncidentalInvisible(text) {
 /**
  * THE decision whether `text` carries a payload-capable invisible channel: a
  * payload LONG RUN, or {@link SCATTERED_THRESHOLD} or more effective payload
- * invisibles (see {@link countEffectiveInvisible}). Every surface that gates on
- * it reads this one verdict — the prompt gate's block, the instruction-file
- * scanner's findings, and the write path's authored-content strip — so a
+ * invisibles (see {@link countEffectiveInvisible}). The prompt gate's block
+ * and the write path's authored-content strip both read this one verdict, so a
  * legitimate emoji ZWJ sequence or a Persian paragraph cannot be a payload to
- * one of them and clean to another.
+ * one of them and clean to the other.
  *
- * `longRuns` are the payload runs ({@link findLongRuns} records, indices valid
- * in `text`), and `invisibleCount` the effective count, so a caller that reports
- * the finding describes exactly what was judged.
+ * It stops at the first payload run, which is all a gate needs (the prompt
+ * gate quotes it, the write path reads only the boolean), so an 8 MB field of
+ * short runs costs one run record rather than one per run. `invisibleCount` is
+ * the effective count, so a caller that reports the finding describes exactly
+ * what was judged.
  * @param {string} text  the text a consumer acts on, ANSI-stripped where its
  *   surface can carry escapes (a sequence can hide invisibles)
- * @returns {{ longRuns: Array<{ index: number, text: string, charCount: number }>, invisibleCount: number, payloadCapable: boolean }}
+ * @returns {{ firstRun: { index: number, text: string, charCount: number } | null, invisibleCount: number, payloadCapable: boolean }}
  */
 export function payloadVerdict(text) {
-  const longRuns = [...payloadLongRuns(text)];
+  const firstRun = payloadLongRuns(text).next().value ?? null;
   const invisibleCount = countEffectiveInvisible(text);
   return {
-    longRuns,
+    firstRun,
     invisibleCount,
-    payloadCapable:
-      longRuns.length > 0 || invisibleCount >= SCATTERED_THRESHOLD,
+    payloadCapable: firstRun !== null || invisibleCount >= SCATTERED_THRESHOLD,
   };
 }
 

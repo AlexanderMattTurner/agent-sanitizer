@@ -123,7 +123,7 @@ export function classifyPrompt(prompt, strip = stripAnsiFully) {
     reason: formatReason(
       categories,
       verdict.invisibleCount,
-      verdict.longRuns[0]?.text ?? null,
+      verdict.firstRun?.text ?? null,
     ),
   };
 }

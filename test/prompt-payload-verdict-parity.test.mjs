@@ -86,6 +86,19 @@ const LEGITIMATE = [
     `${s(0x845b, 0xe0100)}飾区と${s(0x8fbb, 0xe0100)}さん。`.repeat(5),
   ],
   [
+    "Hindi prose with explicit half forms",
+    `हिन्दी में ${s(0x915, 0x94d, 0x200d, 0x937)} और ${s(0x924, 0x94d, 0x200d, 0x930)} जैसे आधे रूप लिखे जाते हैं। `.repeat(
+      20,
+    ),
+  ],
+  [
+    // "Om Swastyastu" with adeg-adeg conjuncts, then a ZWJ-requested form.
+    "Balinese prose",
+    `${s(0x1b12, 0x1b01, 0x1b32, 0x1b44, 0x1b2f, 0x1b32, 0x1b44, 0x1b22, 0x1b44, 0x1b2c, 0x1b32, 0x1b44, 0x1b22, 0x1b38)} ${s(0x1b27, 0x1b44, 0x200d, 0x1b2d, 0x1b1a)} `.repeat(
+      20,
+    ),
+  ],
+  [
     "Mongolian free variation selectors",
     `${s(0x1820, 0x180b)} ${s(0x1820, 0x180c)} `.repeat(5),
   ],
@@ -149,4 +162,30 @@ describe("payload verdict parity: a covert channel is caught everywhere", () => 
       ]);
       assert.notEqual(applyLayer1(text).cleaned, text);
     });
+});
+
+describe("payload verdict: a gate keeps one run, not one per run", () => {
+  // Short runs of ten zero-width spaces, one visible byte apart: every run is a
+  // payload run, so a verdict that materialized them all would hold one record
+  // and one substring per eleven bytes of hostile input.
+  const text = `${s(0x200b).repeat(10)}x`.repeat(2000);
+
+  it("returns only the first run", () => {
+    const verdict = payloadVerdict(text);
+    assert.deepEqual(Object.keys(verdict).sort(), [
+      "firstRun",
+      "invisibleCount",
+      "payloadCapable",
+    ]);
+    assert.deepEqual(verdict.firstRun, {
+      index: 0,
+      text: s(0x200b).repeat(10),
+      charCount: 10,
+    });
+    assert.equal(verdict.payloadCapable, true);
+  });
+
+  it("reports no run for text that has none", () => {
+    assert.equal(payloadVerdict(PERSIAN).firstRun, null);
+  });
 });

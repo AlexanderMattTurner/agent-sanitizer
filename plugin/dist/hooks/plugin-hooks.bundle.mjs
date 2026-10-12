@@ -4385,12 +4385,12 @@ function isIncidentalInvisible(text6) {
   return payloadLongRunSample(text6) === null && countEffectiveInvisible(text6) < LONG_RUN_THRESHOLD;
 }
 function payloadVerdict(text6) {
-  const longRuns = [...payloadLongRuns(text6)];
+  const firstRun = payloadLongRuns(text6).next().value ?? null;
   const invisibleCount = countEffectiveInvisible(text6);
   return {
-    longRuns,
+    firstRun,
     invisibleCount,
-    payloadCapable: longRuns.length > 0 || invisibleCount >= SCATTERED_THRESHOLD
+    payloadCapable: firstRun !== null || invisibleCount >= SCATTERED_THRESHOLD
   };
 }
 function stripInvisibleWithReport(text6, originalText = text6, { carveOut = true } = {}) {
@@ -48193,7 +48193,7 @@ function classifyPrompt(prompt, strip = stripAnsiFully) {
     reason: formatReason(
       categories,
       verdict.invisibleCount,
-      verdict.longRuns[0]?.text ?? null
+      verdict.firstRun?.text ?? null
     )
   };
 }
