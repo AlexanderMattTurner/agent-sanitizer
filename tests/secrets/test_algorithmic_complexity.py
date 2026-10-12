@@ -275,10 +275,17 @@ def _copy_tail_per_span(text: str) -> None:
     every size. It is the part of the cost that only grows linearly while the
     copy grows with the square, so on a runner where it is expensive it swamped
     the copy and the control read 13x against a 15x limit. The in-place shift
-    has nothing per span but the move itself, so the curve is the copy's own."""
+    has nothing per span but the move itself, so the curve is the copy's own.
+
+    Front to back, so the tail each span moves is the UNREDACTED remainder —
+    the whole line, not a tenth of it. Walking back to front instead moves only
+    the already-collapsed "X" run behind each span, so the copy per span is
+    ``len(_FIELD_UNIT)`` times smaller; at the smallest size that is a few KiB,
+    no more than the loop's own per-span cost, and on a runner whose cache
+    holds it the control read exponent 1.28 against the 1.7 it must clear."""
     buf = bytearray(text.encode())
-    for start in range(len(text) - len(_FIELD_UNIT), -1, -len(_FIELD_UNIT)):
-        buf[start : start + len(_FIELD_UNIT)] = b"X"
+    for collapsed in range(len(text) // len(_FIELD_UNIT)):
+        buf[collapsed : collapsed + len(_FIELD_UNIT)] = b"X"
 
 
 def test_the_cpu_measure_catches_a_copy_quadratic():
