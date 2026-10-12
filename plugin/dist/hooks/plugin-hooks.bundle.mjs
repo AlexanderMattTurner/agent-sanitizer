@@ -1836,7 +1836,34 @@ var init_joining_type = __esm({
       ["Sinhala", 3482, 3505],
       ["Sinhala", 3507, 3515],
       ["Sinhala", 3517, 3517],
-      ["Sinhala", 3520, 3526]
+      ["Sinhala", 3520, 3526],
+      ["Balinese", 6931, 6963],
+      ["Balinese", 6981, 6988],
+      ["Syloti_Nagri", 43015, 43018],
+      ["Syloti_Nagri", 43020, 43042],
+      ["Saurashtra", 43154, 43187],
+      ["Javanese", 43401, 43403],
+      ["Javanese", 43407, 43442],
+      ["Brahmi", 69651, 69687],
+      ["Brahmi", 69749, 69749],
+      ["Kaithi", 69773, 69807],
+      ["Sharada", 70033, 70066],
+      ["Khojki", 70152, 70161],
+      ["Khojki", 70163, 70187],
+      ["Khojki", 70207, 70207],
+      ["Grantha", 70421, 70440],
+      ["Grantha", 70442, 70448],
+      ["Grantha", 70450, 70451],
+      ["Grantha", 70453, 70457],
+      ["Newa", 70670, 70708],
+      ["Tirhuta", 70799, 70831],
+      ["Siddham", 71054, 71086],
+      ["Modi", 71182, 71215],
+      ["Takri", 71306, 71338],
+      ["Takri", 71352, 71352],
+      ["Dogra", 71690, 71723],
+      ["Nandinagari", 72110, 72144],
+      ["Bhaiksuki", 72718, 72750]
     ];
   }
 });
@@ -1867,6 +1894,66 @@ var init_standardized_variants = __esm({
       [4216, 65024],
       [4218, 65024],
       [4224, 65024],
+      [6176, 6155],
+      [6176, 6156],
+      [6177, 6155],
+      [6178, 6155],
+      [6179, 6155],
+      [6180, 6155],
+      [6181, 6155],
+      [6181, 6156],
+      [6182, 6155],
+      [6182, 6156],
+      [6184, 6155],
+      [6184, 6156],
+      [6184, 6157],
+      [6186, 6155],
+      [6188, 6155],
+      [6188, 6156],
+      [6188, 6157],
+      [6189, 6155],
+      [6189, 6156],
+      [6189, 6157],
+      [6192, 6155],
+      [6192, 6156],
+      [6194, 6155],
+      [6195, 6155],
+      [6197, 6155],
+      [6198, 6155],
+      [6198, 6156],
+      [6200, 6155],
+      [6212, 6155],
+      [6213, 6155],
+      [6214, 6155],
+      [6215, 6155],
+      [6215, 6156],
+      [6216, 6155],
+      [6217, 6155],
+      [6221, 6155],
+      [6222, 6155],
+      [6237, 6155],
+      [6238, 6155],
+      [6238, 6156],
+      [6240, 6155],
+      [6243, 6155],
+      [6248, 6155],
+      [6248, 6156],
+      [6249, 6155],
+      [6255, 6155],
+      [6259, 6155],
+      [6259, 6156],
+      [6259, 6157],
+      [6260, 6155],
+      [6260, 6156],
+      [6260, 6157],
+      [6262, 6155],
+      [6272, 6155],
+      [6273, 6155],
+      [6279, 6155],
+      [6279, 6156],
+      [6279, 6157],
+      [6280, 6155],
+      [6282, 6155],
       [8216, 65024],
       [8216, 65025],
       [8216, 65026],
@@ -3412,21 +3499,55 @@ function scanAnsi(text5) {
   }
   return tokens;
 }
-function sgrConcealState(token, concealed) {
-  const params = token.slice(token.charCodeAt(0) === ESC ? 2 : 1, -1).split(";");
-  let state = concealed;
-  for (let i = 0; i < params.length; i++) {
-    const colonForm = params[i].includes(":");
-    const value = Number(params[i].split(":")[0]);
-    if (value === SGR_CONCEAL) state = true;
-    else if (value === SGR_REVEAL || value === SGR_RESET) state = false;
-    if (colonForm || !SGR_EXTENDED_COLOUR.has(value)) continue;
-    const args = SGR_COLOUR_ARGS.get(Number(params[i + 1]));
-    if (args !== void 0) i += 1 + args;
-  }
-  return state;
+function basicColour(value, base) {
+  if (value >= base && value <= base + 7) return `i${value - base}`;
+  if (value >= base + 60 && value <= base + 67) return `i${value - base - 52}`;
+  if (value === base + 9) return null;
+  return void 0;
 }
-var CONTROL_INTRODUCER_CODEPOINTS, CONTROL_INTRODUCER_SOURCE, SGR_SOURCE, SGR_RE, SGR_ANCHORED_RE, CSI_BODY_CLASS, CSI_BODY_RE, CSI_FINAL_CLASS, CSI_FINAL_RE, ESC, CSI_C1, ST_C1, BEL, CAN, SUB, LF, CR, SEQUENCE_CANCEL, INTRODUCER_RE, STRING_INTRO_7BIT, OSC_7BIT, OSC_C1, STRING_INTRO_C1, ESC_INTERMEDIATE_CLASS, ESC_INTERMEDIATE_RE, ESC_FINAL_CLASS, ESC_FINAL_RE, ESC_DIRECT_FINAL_CLASS, ESC_DIRECT_FINAL_RE, ESCAPE_SEQUENCE_SOURCE, SGR_RESET, SGR_CONCEAL, SGR_REVEAL, SGR_EXTENDED_COLOUR, SGR_COLOUR_ARGS, TOKEN_KIND, INTRODUCER_SCAN_RE;
+function extendedColour(args) {
+  const space = Number(args[0]);
+  if (space === SGR_INDEXED && args.length >= 2) return `i${Number(args[1])}`;
+  if (space === SGR_DIRECT && args.length >= 4)
+    return `rgb:${args.slice(-3).map((component) => Number(component)).join(",")}`;
+  return null;
+}
+function semicolonColourArgs(params, i) {
+  const count = SGR_COLOUR_ARGS.get(Number(params[i + 1]));
+  if (count === void 0) return null;
+  return params.slice(i + 1, i + 2 + count);
+}
+function sgrRendition(token, state) {
+  const params = token.slice(token.charCodeAt(0) === ESC ? 2 : 1, -1).split(";");
+  let { concealed, bold, fg, bg } = state;
+  for (let i = 0; i < params.length; i++) {
+    const subParams = params[i].split(":");
+    const value = Number(subParams[0]);
+    if (value === SGR_RESET) ({ concealed, bold, fg, bg } = DEFAULT_RENDITION);
+    else if (value === SGR_CONCEAL) concealed = true;
+    else if (value === SGR_REVEAL) concealed = false;
+    else if (value === SGR_BOLD) bold = true;
+    else if (value === SGR_NORMAL_INTENSITY) bold = false;
+    const foreground = basicColour(value, 30);
+    if (foreground !== void 0) fg = foreground;
+    const background = basicColour(value, 40);
+    if (background !== void 0) bg = background;
+    if (!SGR_EXTENDED_COLOUR.has(value)) continue;
+    const colonForm = subParams.length > 1;
+    const args = colonForm ? subParams.slice(1) : semicolonColourArgs(params, i);
+    if (args === null) continue;
+    if (!colonForm) i += args.length;
+    const colour = extendedColour(args);
+    if (value === SGR_FOREGROUND) fg = colour;
+    else if (value === SGR_BACKGROUND) bg = colour;
+  }
+  return { concealed, bold, fg, bg };
+}
+function foregroundMatchesBackground({ bold, fg, bg }) {
+  if (fg === null || fg !== bg) return false;
+  return !(bold && /^i[0-7]$/u.test(fg));
+}
+var CONTROL_INTRODUCER_CODEPOINTS, CONTROL_INTRODUCER_SOURCE, SGR_SOURCE, SGR_RE, SGR_ANCHORED_RE, CSI_BODY_CLASS, CSI_BODY_RE, CSI_FINAL_CLASS, CSI_FINAL_RE, ESC, CSI_C1, ST_C1, BEL, CAN, SUB, LF, CR, SEQUENCE_CANCEL, INTRODUCER_RE, STRING_INTRO_7BIT, OSC_7BIT, OSC_C1, STRING_INTRO_C1, ESC_INTERMEDIATE_CLASS, ESC_INTERMEDIATE_RE, ESC_FINAL_CLASS, ESC_FINAL_RE, ESC_DIRECT_FINAL_CLASS, ESC_DIRECT_FINAL_RE, ESCAPE_SEQUENCE_SOURCE, SGR_RESET, SGR_CONCEAL, SGR_REVEAL, SGR_EXTENDED_COLOUR, SGR_COLOUR_ARGS, TOKEN_KIND, INTRODUCER_SCAN_RE, DEFAULT_RENDITION, SGR_BOLD, SGR_NORMAL_INTENSITY, SGR_FOREGROUND, SGR_BACKGROUND, SGR_INDEXED, SGR_DIRECT;
 var init_ansi = __esm({
   "src/ansi.mjs"() {
     "use strict";
@@ -3541,6 +3662,18 @@ var init_ansi = __esm({
       ORPHAN_C1: "orphan-c1-introducer"
     });
     INTRODUCER_SCAN_RE = new RegExp(CONTROL_INTRODUCER_SOURCE, "g");
+    DEFAULT_RENDITION = Object.freeze({
+      concealed: false,
+      bold: false,
+      fg: null,
+      bg: null
+    });
+    SGR_BOLD = 1;
+    SGR_NORMAL_INTENSITY = 22;
+    SGR_FOREGROUND = 38;
+    SGR_BACKGROUND = 48;
+    SGR_INDEXED = 5;
+    SGR_DIRECT = 2;
   }
 });
 
@@ -3576,6 +3709,7 @@ __export(invisible_exports, {
   isSgrOnly: () => isSgrOnly,
   payloadInvisibleView: () => payloadInvisibleView,
   payloadLongRunSample: () => payloadLongRunSample,
+  payloadVerdict: () => payloadVerdict,
   stripInvisible: () => stripInvisible,
   stripInvisibleWithReport: () => stripInvisibleWithReport
 });
@@ -3702,12 +3836,28 @@ function followsBrahmicConjunct(cps, i) {
   if (j < 0 || !isVirama(cps[j])) return false;
   return isBrahmicConsonantCp(effectiveNeighbor(cps, j, -1));
 }
+function joiningLetterCount(cps, codes) {
+  let letters = 0;
+  for (let i = 0; i < cps.length; i++)
+    if (codes[i] === CODE_VISIBLE && (isCursiveLetter(jtOf(cps[i])) || isBrahmicConsonantCp(cps[i])))
+      letters++;
+  return letters;
+}
+function precedesBrahmicVirama(cps, i) {
+  if (cps[i] !== ZWJ) return false;
+  let j = i + 1;
+  while (j < cps.length && !isJoinControl(cps[j]) && classifyCp(cps[j]) !== CODE_VISIBLE)
+    j++;
+  if (j >= cps.length || !isVirama(cps[j])) return false;
+  return isBrahmicConsonantCp(effectiveNeighbor(cps, i, -1));
+}
 function isPreservedJoiner(cps, i) {
   const cp = cps[i];
   if (cp !== ZWNJ && cp !== ZWJ) return false;
   if (cp === ZWJ && isEmojiLeft(leftNonSelector(cps, i)) && isEmojiBase(rightNonSelector(cps, i)))
     return true;
-  if (followsBrahmicConjunct(cps, i)) return true;
+  if (followsBrahmicConjunct(cps, i) || precedesBrahmicVirama(cps, i))
+    return true;
   const left = effectiveNeighbor(cps, i, -1);
   const right = effectiveNeighbor(cps, i, 1);
   if (isJoinControl(left) || isJoinControl(right)) return false;
@@ -3815,9 +3965,7 @@ function markTagSequences(cps) {
   return keep;
 }
 function isStandardizedVariationSelector(cps, i) {
-  const cp = cps[i];
-  if (cp < 65024 || cp > 65037) return false;
-  return i > 0 ? isStandardizedVariant(cps[i - 1], cp) : false;
+  return i > 0 && isStandardizedVariant(cps[i - 1], cps[i]);
 }
 function isIdeographicVariationSelector(cps, i) {
   const cp = cps[i];
@@ -3889,19 +4037,25 @@ function clusterResolver(body, offsets, candidates) {
 function carveStrip(body, cps = codePointArray(body), analysis = analyzeCarve(cps)) {
   const { codes, kind: kind2, payloadInvis, visibleLen } = analysis;
   const allowCarveOut = payloadInvis < SCATTERED_THRESHOLD;
-  const maxPreserved = Math.min(
-    PRESERVE_HARD_CAP,
-    Math.max(
-      TOTAL_PRESERVED_JOINER_BUDGET,
-      Math.ceil(visibleLen / PRESERVED_JOINER_PER_VISIBLE)
-    )
-  );
   const n = cps.length;
   const candidates = [];
   if (allowCarveOut) {
     for (let k2 = 0; k2 < n; k2++)
       if (kind2[k2] !== KIND_NONE && kind2[k2] !== KIND_BLANK) candidates.push(k2);
   }
+  const coverAllowance = Math.min(
+    PRESERVE_HARD_CAP,
+    Math.max(
+      TOTAL_PRESERVED_JOINER_BUDGET,
+      Math.ceil(visibleLen / PRESERVED_JOINER_PER_VISIBLE)
+    )
+  );
+  const maxPreserved = candidates.length <= coverAllowance ? coverAllowance : Math.max(
+    coverAllowance,
+    Math.ceil(
+      joiningLetterCount(cps, codes) / PRESERVED_JOINER_PER_VISIBLE
+    )
+  );
   const foundCodes = /* @__PURE__ */ new Set();
   const kept = [];
   const offsets = u16Offsets(cps);
@@ -4021,7 +4175,7 @@ function payloadInvisibleView(text5) {
   while (i < cps.length) {
     const maskFrom = i;
     while (i < cps.length && !isPayload(i)) i++;
-    if (i > maskFrom) parts2.push(" ".repeat(i - maskFrom));
+    if (i > maskFrom) parts2.push(" ".repeat(offsets[i] - offsets[maskFrom]));
     const keepFrom = i;
     while (i < cps.length && isPayload(i)) i++;
     if (i > keepFrom) parts2.push(text5.slice(offsets[keepFrom], offsets[i]));
@@ -4029,8 +4183,11 @@ function payloadInvisibleView(text5) {
   return parts2.join("");
 }
 function payloadLongRunSample(text5) {
-  if (!hasLongRun(text5)) return null;
-  return findLongRuns(payloadInvisibleView(text5)).next().value?.text ?? null;
+  return payloadLongRuns(text5).next().value?.text ?? null;
+}
+function* payloadLongRuns(text5) {
+  if (!hasLongRun(text5)) return;
+  yield* findLongRuns(payloadInvisibleView(text5));
 }
 function countEffectiveInvisible(text5) {
   if (!hasInvisibleCodePoint(text5)) return 0;
@@ -4048,10 +4205,19 @@ function surplusOver(payload, text5, stripped, cpLen) {
 function isIncidentalInvisible(text5) {
   return payloadLongRunSample(text5) === null && countEffectiveInvisible(text5) < LONG_RUN_THRESHOLD;
 }
-function stripInvisibleWithReport(text5, originalText = text5) {
+function payloadVerdict(text5) {
+  const longRuns = [...payloadLongRuns(text5)];
+  const invisibleCount = countEffectiveInvisible(text5);
+  return {
+    longRuns,
+    invisibleCount,
+    payloadCapable: longRuns.length > 0 || invisibleCount >= SCATTERED_THRESHOLD
+  };
+}
+function stripInvisibleWithReport(text5, originalText = text5, { carveOut = true } = {}) {
   const hasLeadingBom = originalText.charCodeAt(0) === 65279 && text5.charCodeAt(0) === 65279;
   const body = hasLeadingBom ? text5.slice(1) : text5;
-  const { cleaned, found } = stripBody(body);
+  const { cleaned, found } = carveOut ? stripBody(body) : bulkStrip(body);
   return { cleaned: hasLeadingBom ? BOM + cleaned : cleaned, found };
 }
 function stripBody(body, cps, analysis) {
@@ -4270,31 +4436,48 @@ function rendersNothing(gap) {
   return gap.replace(STRIP, "") === "";
 }
 function sgrCarriesPayload(text5) {
-  let concealed = false;
+  let rendition = DEFAULT_RENDITION;
   let run = 0;
   let previousEnd = 0;
   for (const token of scanAnsi(text5)) {
-    const blankGap = rendersNothing(text5.slice(previousEnd, token.start));
+    const gap = text5.slice(previousEnd, token.start);
+    const blankGap = rendersNothing(gap);
     previousEnd = token.end;
     if (token.kind !== TOKEN_KIND.SGR) {
       run = 0;
       continue;
     }
-    if (concealed && !blankGap) return true;
+    if (hidesText(rendition, gap)) return true;
     run = blankGap ? run + 1 : 1;
     if (run >= SGR_RUN_THRESHOLD) return true;
-    concealed = sgrConcealState(text5.slice(token.start, token.end), concealed);
+    rendition = sgrRendition(text5.slice(token.start, token.end), rendition);
   }
-  return concealed;
+  return rendition.concealed || hidesText(rendition, text5.slice(previousEnd));
+}
+function hidesText(rendition, gap) {
+  if (rendition.concealed) return !rendersNothing(gap);
+  return foregroundMatchesBackground(rendition) && COLOUR_HIDDEN_GLYPH.test(gap.replace(STRIP, ""));
 }
 function isBenignAnsi(text5) {
   return isBenignAnsiKinds(applyLayer1(text5).ansiKinds);
+}
+function escapesPreservable(text5, kinds = applyLayer1(text5).ansiKinds) {
+  return isBenignAnsiKinds([...kinds]) && !sgrCarriesPayload(text5);
+}
+function stripTerminalFully(text5, kinds = /* @__PURE__ */ new Set()) {
+  return sweepIntroducers(stripAnsiFully(text5, kinds), kinds);
+}
+function stripLayer1Monotone(text5, found, kinds) {
+  const bulk = stripInvisibleWithReport(text5, text5, { carveOut: false });
+  for (const category of bulk.found) found.add(category);
+  return stripTerminalFully(bulk.cleaned, kinds);
 }
 function applyLayer1(text5) {
   const ansiKinds = /* @__PURE__ */ new Set();
   const deAnsi = stripAnsiFully(text5, ansiKinds);
   const found = /* @__PURE__ */ new Set();
   let cleaned = text5;
+  let converged = false;
   for (let pass = 0; pass < MAX_LAYER1_PASSES; pass++) {
     const afterAnsi = pass === 0 ? deAnsi : stripAnsiFully(cleaned, ansiKinds);
     const { cleaned: afterInvis, found: passFound } = stripInvisibleWithReport(
@@ -4307,10 +4490,13 @@ function applyLayer1(text5) {
       continue;
     }
     const swept = sweepIntroducers(cleaned, ansiKinds);
-    if (swept === cleaned) break;
+    if (swept === cleaned) {
+      converged = true;
+      break;
+    }
     cleaned = swept;
   }
-  cleaned = sweepIntroducers(cleaned, ansiKinds);
+  if (!converged) cleaned = stripLayer1Monotone(text5, found, ansiKinds);
   if (ansiKinds.size > 0) found.add(CATEGORY.ANSI);
   return { cleaned, deAnsi, found: [...found], ansiKinds: [...ansiKinds] };
 }
@@ -4327,7 +4513,7 @@ function applyLayer1WellFormed(text5) {
     found: [...result.found, CATEGORY.LONE_SURROGATES]
   };
 }
-var CONTROL_INTRODUCER_RE, LONE_SURROGATE_RE, INERT_ANSI_NOTE, SGR_RUN_THRESHOLD, MAX_LAYER1_PASSES;
+var CONTROL_INTRODUCER_RE, LONE_SURROGATE_RE, INERT_ANSI_NOTE, SGR_RUN_THRESHOLD, COLOUR_HIDDEN_GLYPH, MAX_LAYER1_PASSES;
 var init_layer1 = __esm({
   "src/layer1.mjs"() {
     "use strict";
@@ -4337,6 +4523,7 @@ var init_layer1 = __esm({
     LONE_SURROGATE_RE = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g;
     INERT_ANSI_NOTE = "Inert ANSI stripped (display-only colour and/or a stray escape byte that formed no control sequence); pipe through cat -v to inspect raw escapes.";
     SGR_RUN_THRESHOLD = 10;
+    COLOUR_HIDDEN_GLYPH = /[^\s\u2580-\u259F]/u;
     MAX_LAYER1_PASSES = 4;
   }
 });
@@ -47231,6 +47418,7 @@ __export(src_exports, {
   VS: () => VS,
   applyLayer1: () => applyLayer1,
   applyLayer1WellFormed: () => applyLayer1WellFormed,
+  escapesPreservable: () => escapesPreservable,
   findLongRuns: () => findLongRuns,
   hasLongRun: () => hasLongRun,
   isBenignAnsi: () => isBenignAnsi,
@@ -47242,7 +47430,8 @@ __export(src_exports, {
   sgrCarriesPayload: () => sgrCarriesPayload,
   stripAnsiFully: () => stripAnsiFully,
   stripInvisible: () => stripInvisible,
-  stripInvisibleWithReport: () => stripInvisibleWithReport
+  stripInvisibleWithReport: () => stripInvisibleWithReport,
+  stripTerminalFully: () => stripTerminalFully
 });
 async function sanitize(text5, options) {
   if (typeof text5 !== "string")
@@ -47802,11 +47991,9 @@ function classifyPrompt(prompt, strip = stripAnsiFully) {
   if (!prompt) return { action: "pass" };
   const hasAnsi = ANSI_INTRODUCER.test(prompt);
   const deAnsi = strip(prompt);
-  const longRunSample = payloadLongRunSample(deAnsi);
-  const invisibleCount = countEffectiveInvisible(deAnsi);
-  const invisiblesBelowThreshold = longRunSample === null && invisibleCount < SCATTERED_THRESHOLD;
-  if (!hasAnsi && invisiblesBelowThreshold) return { action: "pass" };
-  if (hasAnsi && invisiblesBelowThreshold && isBenignAnsi(prompt))
+  const verdict = payloadVerdict(deAnsi);
+  if (!hasAnsi && !verdict.payloadCapable) return { action: "pass" };
+  if (hasAnsi && !verdict.payloadCapable && escapesPreservable(prompt))
     return { action: "note" };
   const categories = CHECKS.filter(([, re]) => deAnsi.search(re) !== -1).map(
     ([code4]) => CATEGORY_LABELS[code4]
@@ -47814,7 +48001,11 @@ function classifyPrompt(prompt, strip = stripAnsiFully) {
   if (hasAnsi) categories.push(CATEGORY_LABELS[CATEGORY.ANSI]);
   return {
     action: "block",
-    reason: formatReason(categories, invisibleCount, longRunSample)
+    reason: formatReason(
+      categories,
+      verdict.invisibleCount,
+      verdict.longRuns[0]?.text ?? null
+    )
   };
 }
 var ANSI_INTRODUCER;
@@ -48635,16 +48826,28 @@ function authoredScopeDecision(tool) {
   if (matched) return { kind: "exempt", reason: matched.reason };
   return { kind: "undeclared" };
 }
-function isPayloadCapable(text5) {
-  if (hasLongRun2(text5)) return true;
-  return (text5.match(STRIP2)?.length ?? 0) >= SCATTERED_THRESHOLD2;
-}
 function stripTerminalControls(text5) {
   const kinds = /* @__PURE__ */ new Set();
   const deAnsi = stripAnsiFully2(text5, kinds);
   if (deAnsi === text5) return text5;
-  if (isBenignAnsiKinds2(kinds) && !sgrCarriesPayload2(text5)) return text5;
+  if (escapesPreservable2(text5, kinds)) return text5;
   return deAnsi;
+}
+function settleField(value, cleaned, actions) {
+  let settled = cleaned;
+  if (process.env.AGENT_SANITIZER_INVISIBLE_DISABLED !== "1") {
+    const bulk = stripInvisibleWithReport2(settled, value, {
+      carveOut: false
+    }).cleaned;
+    if (bulk !== settled) actions.add("invisible characters");
+    settled = bulk;
+  }
+  if (process.env.AGENT_SANITIZER_TERMINAL_DISABLED !== "1") {
+    const swept = stripTerminalFully2(settled);
+    if (swept !== settled) actions.add("terminal-control sequences");
+    settled = swept;
+  }
+  return settled;
 }
 function sanitizeField(value) {
   const actions = /* @__PURE__ */ new Set();
@@ -48658,17 +48861,18 @@ function sanitizeField(value) {
         actions.add("terminal-control sequences");
       }
     }
-    if (process.env.AGENT_SANITIZER_INVISIBLE_DISABLED !== "1" && isPayloadCapable(cleaned)) {
-      cleaned = stripInvisible2(cleaned);
-      actions.add("invisible characters");
+    if (process.env.AGENT_SANITIZER_INVISIBLE_DISABLED !== "1" && payloadVerdict2(cleaned).payloadCapable) {
+      const stripped = stripInvisible2(cleaned);
+      if (stripped !== cleaned) {
+        cleaned = stripped;
+        actions.add("invisible characters");
+      }
     }
     if (cleaned === before) break;
     if (pass === MAX_FIELD_PASSES - 1)
-      throw new Error(
-        "authored content did not reach a fixed point within MAX_FIELD_PASSES"
-      );
+      cleaned = settleField(value, cleaned, actions);
   }
-  return actions.size > 0 ? { cleaned, actions: [...actions] } : null;
+  return cleaned === value ? null : { cleaned, actions: [...actions] };
 }
 function authoredContext(changed) {
   return `Sanitized model-authored content in: ${changed.join("; ")}. This removes a covert channel to other AIs and prevents authored content from rewriting the user's terminal. Opt out granularly with AGENT_SANITIZER_INVISIBLE_DISABLED=1 (i18n joiners) or AGENT_SANITIZER_TERMINAL_DISABLED=1 (raw-escape fixtures), or fully with AGENT_SANITIZER_OUTPUT_DISABLED=1.`;
@@ -48709,14 +48913,14 @@ function sanitizeAuthoredContent(tool, toolInput) {
   if (changed.length === 0) return null;
   return { updatedInput, changed };
 }
-var stripAnsiFully2, isBenignAnsiKinds2, sgrCarriesPayload2, STRIP2, SCATTERED_THRESHOLD2, hasLongRun2, stripInvisible2, AUTHORED_FIELDS, EXEMPT_TOOLS2, EXEMPT_TOOL_PATTERNS2, MAX_FIELD_PASSES;
+var stripAnsiFully2, stripTerminalFully2, escapesPreservable2, payloadVerdict2, stripInvisible2, stripInvisibleWithReport2, AUTHORED_FIELDS, EXEMPT_TOOLS2, EXEMPT_TOOL_PATTERNS2, MAX_FIELD_PASSES;
 var init_authored_content = __esm({
   async "claude-hooks/lib/authored-content.mjs"() {
     "use strict";
     init_hook_io();
-    ({ stripAnsiFully: stripAnsiFully2, isBenignAnsiKinds: isBenignAnsiKinds2, sgrCarriesPayload: sgrCarriesPayload2 } = /** @type {typeof import("agent-sanitizer")} */
+    ({ stripAnsiFully: stripAnsiFully2, stripTerminalFully: stripTerminalFully2, escapesPreservable: escapesPreservable2 } = /** @type {typeof import("agent-sanitizer")} */
     await lazyImport("agent-sanitizer"));
-    ({ STRIP: STRIP2, SCATTERED_THRESHOLD: SCATTERED_THRESHOLD2, hasLongRun: hasLongRun2, stripInvisible: stripInvisible2 } = /** @type {typeof import("agent-sanitizer/invisible")} */
+    ({ payloadVerdict: payloadVerdict2, stripInvisible: stripInvisible2, stripInvisibleWithReport: stripInvisibleWithReport2 } = /** @type {typeof import("agent-sanitizer/invisible")} */
     await lazyImport("agent-sanitizer/invisible"));
     AUTHORED_FIELDS = Object.freeze(
       Object.assign(/* @__PURE__ */ Object.create(null), {

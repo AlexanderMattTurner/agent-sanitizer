@@ -14,6 +14,7 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 
 import { unsandbox } from "./helpers/repo-root.mjs";
 
@@ -30,6 +31,7 @@ import { CF_CODEPOINTS } from "../src/cf-charset.mjs";
 import {
   parseStandardizedVariants,
   loadStandardizedVariantsUcd,
+  render as renderStandardizedVariants,
 } from "../scripts/gen-standardized-variants.mjs";
 import {
   STANDARDIZED_VARIANTS,
@@ -108,11 +110,39 @@ describe("standardized-variants SSOT", () => {
     assert.deepEqual(STANDARDIZED_VARIANTS, pairs);
   });
 
-  it("is a non-trivial table with only FE00–FE0D selectors", () => {
+  it("is a non-trivial table of variation-selector sequences", () => {
     assert.ok(pairs.length > 100, "expected a few hundred registered pairs");
-    for (const [, selector] of pairs) {
-      assert.ok(selector >= 0xfe00 && selector <= 0xfe0d);
+    for (const [, selector] of pairs)
+      assert.match(String.fromCodePoint(selector), /^\p{Variation_Selector}$/u);
+  });
+
+  // The emoji presentation selectors belong to the pictograph carve-out, and
+  // the UCD keeps their sequences in a different file: one appearing here
+  // would mean the vendored slice is not StandardizedVariants.txt.
+  it("registers no emoji presentation selector", () => {
+    for (const [, selector] of pairs)
+      assert.ok(selector !== 0xfe0e && selector !== 0xfe0f);
+  });
+
+  for (const [name, line] of [
+    ["a three-code-point sequence", "0030 FE00 FE01; form; # X"],
+    ["a non-hex code point", "00G0 FE00; form; # X"],
+    ["a selector that is not a variation selector", "0030 0041; form; # X"],
+  ])
+    it(`throws on ${name} instead of dropping it`, () => {
+      assert.throws(() => parseStandardizedVariants(line), /not a/u);
+    });
+
+  // Every selector the UCD slice registers a sequence for must survive the
+  // parse: a selector range narrower than the file's is how all 60 Mongolian
+  // free-variation sequences were silently dropped.
+  it("keeps every selector the vendored slice registers", () => {
+    const inFile = new Set();
+    for (const line of text.split("\n")) {
+      const seq = line.split("#")[0].split(";")[0].trim().split(/\s+/u);
+      if (seq.length === 2) inFile.add(parseInt(seq[1], 16));
     }
+    assert.deepEqual(new Set(pairs.map(([, selector]) => selector)), inFile);
   });
 
   it("isStandardizedVariant accepts every registered pair", () => {
@@ -129,6 +159,8 @@ describe("standardized-variants SSOT", () => {
     [0x30, 0xfe00, "DIGIT ZERO short diagonal stroke form"],
     [0x2205, 0xfe00, "EMPTY SET with long stroke overlay"],
     [0x4e0d, 0xfe00, "U+4E0D → CJK COMPATIBILITY IDEOGRAPH-F967"],
+    [0x1820, 0x180b, "MONGOLIAN LETTER A second form (FVS1)"],
+    [0x1820, 0x180c, "MONGOLIAN LETTER A third form (FVS2)"],
   ]) {
     it(`recognizes the registered sequence U+${base.toString(16)}+VS (${note})`, () =>
       assert.ok(isStandardizedVariant(base, selector)));
@@ -167,6 +199,22 @@ describe("generated modules are byte-identical to a fresh generation", () => {
       shipped(CF_MODULE_PATH),
       cfCharsetModule(),
       "src/cf-charset.mjs is stale — run `node scripts/gen-invisible-charset.mjs`",
+    );
+  });
+
+  it("src/standardized-variants.mjs matches its generator byte for byte", () => {
+    const { text, version } = loadStandardizedVariantsUcd();
+    assert.equal(
+      shipped(
+        fileURLToPath(
+          new URL("../src/standardized-variants.mjs", import.meta.url),
+        ),
+      ),
+      renderStandardizedVariants({
+        pairs: parseStandardizedVariants(text),
+        version,
+      }),
+      "src/standardized-variants.mjs is stale — run `node scripts/gen-standardized-variants.mjs`",
     );
   });
 

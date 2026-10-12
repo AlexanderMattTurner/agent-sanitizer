@@ -11,6 +11,7 @@
  *   - Joining_Type (DerivedJoiningType.txt) → the cursive join algorithm.
  *   - Indic_Syllabic_Category = Virama       → the Indic joiner trigger.
  *   - Indic_Syllabic_Category = Consonant    → the base a virama may sit on.
+ *   - Script of each virama (Scripts.txt)    → whose consonants count.
  *
  * ECMAScript regex exposes neither property (`\p{Joining_Type=…}` and
  * `\p{Indic_Syllabic_Category=…}` are not in the supported set), so we compile
@@ -74,9 +75,15 @@ function normalize(ranges) {
  * @param {{DerivedJoiningType: Array<{range: string[], type: string}>}} joiningJson
  * @param {{IndicSyllabicCategory: Array<{range: string[], syllabicCategory: string}>}} indicJson
  * @param {{IndicSyllabicCategory: Array<{range: string[], syllabicCategory: string}>}} consonantJson
+ * @param {{Scripts: Array<{range: string[], script: string}>}} scriptsJson
  * @returns {{ joining: Array<[number, number, string]>, virama: Array<[number, number]>, brahmic: Array<[number, number, string]> }}
  */
-export function deriveTables(joiningJson, indicJson, consonantJson) {
+export function deriveTables(
+  joiningJson,
+  indicJson,
+  consonantJson,
+  scriptsJson,
+) {
   const joining = normalize(
     joiningJson.DerivedJoiningType.map(({ range, type }) => {
       const [start, end] = parseRange(range);
@@ -91,46 +98,60 @@ export function deriveTables(joiningJson, indicJson, consonantJson) {
       return /** @type {[number, number, string]} */ ([start, end, "V"]);
     }),
   ).map(([start, end]) => /** @type {[number, number]} */ ([start, end]));
-  return { joining, virama, brahmic: deriveBrahmic(consonantJson) };
+  return {
+    joining,
+    virama,
+    brahmic: deriveBrahmic(
+      consonantJson,
+      viramaScripts(indicJson, scriptsJson),
+    ),
+  };
 }
 
 /**
  * The scripts whose consonants the ZWJ/ZWNJ carve-out recognises as a virama
- * base. Restricted, not "every Indic_Syllabic_Category=Consonant": widening the
- * set would preserve joiners in scripts the carve-out has never covered, which
- * is a behaviour change about which text is legible, not a drift fix. This list
- * is exactly the set the previous hand-written table named — what changed is
- * that the SPANS inside each script are now the UCD's, not a hand-typed
- * KA–HA approximation that swept up the holes between the real consonants.
+ * base: exactly the scripts that own an Indic_Syllabic_Category=Virama code
+ * point, read off each virama's Script. A script without one (Khmer's coeng is
+ * an Invisible_Stacker, Thai's phinthu a Pure_Killer) has no <consonant,
+ * virama, joiner> spelling for a joiner to select, so it stays out. Throws when
+ * a virama has no Script entry: a slice that stopped covering a virama would
+ * otherwise drop that script's consonants without a word.
+ * @param {{IndicSyllabicCategory: Array<{range: string[], syllabicCategory: string}>}} indicJson
+ * @param {{Scripts: Array<{range: string[], script: string}>}} scriptsJson
+ * @returns {string[]} script names, sorted
  */
-const BRAHMIC_SCRIPTS = [
-  "Devanagari",
-  "Bengali",
-  "Gurmukhi",
-  "Gujarati",
-  "Oriya",
-  "Tamil",
-  "Telugu",
-  "Kannada",
-  "Malayalam",
-  "Sinhala",
-];
+export function viramaScripts(indicJson, scriptsJson) {
+  const spans = scriptsJson.Scripts.map(({ range, script }) => ({
+    range: parseRange(range),
+    script,
+  }));
+  const names = new Set();
+  for (const entry of indicJson.IndicSyllabicCategory) {
+    if (entry.syllabicCategory !== "Virama") continue;
+    const [start, end] = parseRange(entry.range);
+    for (let cp = start; cp <= end; cp++) {
+      const span = spans.find(({ range }) => cp >= range[0] && cp <= range[1]);
+      if (!span)
+        throw new Error(`virama U+${cp.toString(16)} has no Script entry`);
+      names.add(span.script);
+    }
+  }
+  return [...names].sort();
+}
 
 /**
  * Script-tagged consonant spans: every Indic_Syllabic_Category=Consonant code
- * point that also has Script= one of {@link BRAHMIC_SCRIPTS}, merged into runs.
- * Script comes from the ENGINE's own `\p{Script=…}` (ECMAScript does expose
- * that one), so the two halves of the join are both properties, never a block
- * range guessed from a chart.
+ * point whose Script is one of `scripts`, merged into runs. Script comes from
+ * the ENGINE's own `\p{Script=…}` (ECMAScript does expose that one), so the
+ * two halves of the join are both properties, never a block range guessed
+ * from a chart.
  * @param {{IndicSyllabicCategory: Array<{range: string[], syllabicCategory: string}>}} consonantJson
+ * @param {string[]} scripts
  * @returns {Array<[number, number, string]>}
  */
-function deriveBrahmic(consonantJson) {
+function deriveBrahmic(consonantJson, scripts) {
   const isScript = Object.fromEntries(
-    BRAHMIC_SCRIPTS.map((name) => [
-      name,
-      new RegExp(`\\p{Script=${name}}`, "u"),
-    ]),
+    scripts.map((name) => [name, new RegExp(`\\p{Script=${name}}`, "u")]),
   );
   /** @type {Array<[number, string]>} */
   const tagged = [];
@@ -139,7 +160,7 @@ function deriveBrahmic(consonantJson) {
     const [start, end] = parseRange(entry.range);
     for (let cp = start; cp <= end; cp++) {
       const char = String.fromCodePoint(cp);
-      for (const name of BRAHMIC_SCRIPTS)
+      for (const name of scripts)
         if (isScript[name].test(char)) tagged.push([cp, name]);
     }
   }
@@ -157,6 +178,7 @@ export function loadUcd() {
     joiningJson: readData("DerivedJoiningType.json"),
     indicJson: readData("IndicSyllabicCategory.Virama.json"),
     consonantJson: readData("IndicSyllabicCategory.Consonant.json"),
+    scriptsJson: readData("Scripts.Virama.json"),
     version: UNICODE_VERSION,
   };
 }
@@ -207,9 +229,9 @@ ${virama.map(row).join("\n")}
 ];
 
 // [start, end, Script] Indic_Syllabic_Category = Consonant ranges restricted to
-// the Brahmic scripts the joiner carve-out covers — the only bases a virama
-// attaches to. Keyed by script name so the contract test can check each span
-// against the script it claims.
+// the scripts that own a virama — the only bases a virama attaches to. Keyed
+// by script name so the contract test can check each span against the script
+// it claims.
 /** @type {ReadonlyArray<readonly [string, number, number]>} */
 export const BRAHMIC_CONSONANT_RANGES = [
 ${brahmic.map(([start, end, tag]) => `  [${JSON.stringify(tag)}, 0x${start.toString(16).padStart(4, "0")}, 0x${end.toString(16).padStart(4, "0")}],`).join("\n")}
@@ -273,11 +295,13 @@ export function isBrahmicConsonant(cp) {
 
 // When run directly, (re)write the committed module.
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
-  const { joiningJson, indicJson, consonantJson, version } = loadUcd();
+  const { joiningJson, indicJson, consonantJson, scriptsJson, version } =
+    loadUcd();
   const { joining, virama, brahmic } = deriveTables(
     joiningJson,
     indicJson,
     consonantJson,
+    scriptsJson,
   );
   const out = fileURLToPath(
     new URL("../src/joining-type.mjs", import.meta.url),

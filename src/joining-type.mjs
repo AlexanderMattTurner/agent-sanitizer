@@ -575,9 +575,9 @@ const VIRAMA_RANGES = [
 ];
 
 // [start, end, Script] Indic_Syllabic_Category = Consonant ranges restricted to
-// the Brahmic scripts the joiner carve-out covers — the only bases a virama
-// attaches to. Keyed by script name so the contract test can check each span
-// against the script it claims.
+// the scripts that own a virama — the only bases a virama attaches to. Keyed
+// by script name so the contract test can check each span against the script
+// it claims.
 /** @type {ReadonlyArray<readonly [string, number, number]>} */
 export const BRAHMIC_CONSONANT_RANGES = [
   ["Devanagari", 0x0915, 0x0939],
@@ -628,6 +628,33 @@ export const BRAHMIC_CONSONANT_RANGES = [
   ["Sinhala", 0x0db3, 0x0dbb],
   ["Sinhala", 0x0dbd, 0x0dbd],
   ["Sinhala", 0x0dc0, 0x0dc6],
+  ["Balinese", 0x1b13, 0x1b33],
+  ["Balinese", 0x1b45, 0x1b4c],
+  ["Syloti_Nagri", 0xa807, 0xa80a],
+  ["Syloti_Nagri", 0xa80c, 0xa822],
+  ["Saurashtra", 0xa892, 0xa8b3],
+  ["Javanese", 0xa989, 0xa98b],
+  ["Javanese", 0xa98f, 0xa9b2],
+  ["Brahmi", 0x11013, 0x11037],
+  ["Brahmi", 0x11075, 0x11075],
+  ["Kaithi", 0x1108d, 0x110af],
+  ["Sharada", 0x11191, 0x111b2],
+  ["Khojki", 0x11208, 0x11211],
+  ["Khojki", 0x11213, 0x1122b],
+  ["Khojki", 0x1123f, 0x1123f],
+  ["Grantha", 0x11315, 0x11328],
+  ["Grantha", 0x1132a, 0x11330],
+  ["Grantha", 0x11332, 0x11333],
+  ["Grantha", 0x11335, 0x11339],
+  ["Newa", 0x1140e, 0x11434],
+  ["Tirhuta", 0x1148f, 0x114af],
+  ["Siddham", 0x1158e, 0x115ae],
+  ["Modi", 0x1160e, 0x1162f],
+  ["Takri", 0x1168a, 0x116aa],
+  ["Takri", 0x116b8, 0x116b8],
+  ["Dogra", 0x1180a, 0x1182b],
+  ["Nandinagari", 0x119ae, 0x119d0],
+  ["Bhaiksuki", 0x11c0e, 0x11c2e],
 ];
 // Stryker restore all
 

@@ -1,0 +1,31 @@
+{
+  "Scripts": [
+    { "range": ["094D"], "script": "Devanagari" },
+    { "range": ["09CD"], "script": "Bengali" },
+    { "range": ["0A4B", "0A4D"], "script": "Gurmukhi" },
+    { "range": ["0ACD"], "script": "Gujarati" },
+    { "range": ["0B4D"], "script": "Oriya" },
+    { "range": ["0BCD"], "script": "Tamil" },
+    { "range": ["0C4A", "0C4D"], "script": "Telugu" },
+    { "range": ["0CCC", "0CCD"], "script": "Kannada" },
+    { "range": ["0D4D"], "script": "Malayalam" },
+    { "range": ["0DCA"], "script": "Sinhala" },
+    { "range": ["A806"], "script": "Syloti_Nagri" },
+    { "range": ["1B43", "1B44"], "script": "Balinese" },
+    { "range": ["A8C4", "A8C5"], "script": "Saurashtra" },
+    { "range": ["A9BE", "A9C0"], "script": "Javanese" },
+    { "range": ["110B9", "110BA"], "script": "Kaithi" },
+    { "range": ["11038", "11046"], "script": "Brahmi" },
+    { "range": ["111BF", "111C0"], "script": "Sharada" },
+    { "range": ["116B6"], "script": "Takri" },
+    { "range": ["1134B", "1134D"], "script": "Grantha" },
+    { "range": ["11235"], "script": "Khojki" },
+    { "range": ["1163F", "11640"], "script": "Modi" },
+    { "range": ["115BF", "115C0"], "script": "Siddham" },
+    { "range": ["114C2", "114C3"], "script": "Tirhuta" },
+    { "range": ["11C3F"], "script": "Bhaiksuki" },
+    { "range": ["11442", "11444"], "script": "Newa" },
+    { "range": ["11839", "1183A"], "script": "Dogra" },
+    { "range": ["119E0"], "script": "Nandinagari" }
+  ]
+}

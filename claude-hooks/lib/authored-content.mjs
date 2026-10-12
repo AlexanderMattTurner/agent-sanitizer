@@ -7,9 +7,10 @@
  *      TAG block used for ASCII smuggling and zero-width joiners) and variation
  *      selectors can encode a hidden message that another AI reading the
  *      committed file / PR / commit later decodes, while staying invisible to a
- *      human reviewer. Stripped when payload-capable (see isPayloadCapable):
- *      gated on volume because incidental joiners / emoji selectors are benign
- *      and authored content is *persisted*, so over-stripping is costly.
+ *      human reviewer. Stripped when the engine's payloadVerdict calls the field
+ *      payload-capable: gated on volume because incidental joiners / emoji
+ *      selectors are benign and authored content is *persisted*, so
+ *      over-stripping is costly.
  *
  *   2. Terminal-display rewriting. ANSI/terminal control sequences (CSI/OSC)
  *      authored into a command — echoed and executed live — or into file
@@ -22,8 +23,9 @@
  *      carry an OSC payload, so stripping it only costs a model the colourized
  *      fixture, TUI golden file or prompt string it deliberately wrote. The
  *      carve-out ends where SGR stops being styling (see the engine's
- *      sgrCarriesPayload): a CONCEAL parameter blanks text for a human while a
- *      model still reads it, and a long run of sequences with nothing that
+ *      sgrCarriesPayload): a CONCEAL parameter or a foreground painted in its
+ *      own background blanks text for a human while a model still reads it,
+ *      and a long run of sequences with nothing that
  *      renders between them puts no glyph on the screen at all, which is a
  *      covert channel rather than colour.
  *
@@ -56,11 +58,11 @@ import { lazyImport } from "./hook-io.mjs";
 // static import of this module, before its fail-closed catch runs). A failed
 // load leaves these bindings undefined, so sanitizeField's calls throw into
 // the fail-closed catch (ask) instead.
-const { stripAnsiFully, isBenignAnsiKinds, sgrCarriesPayload } =
+const { stripAnsiFully, stripTerminalFully, escapesPreservable } =
   /** @type {typeof import("agent-sanitizer")} */ (
     await lazyImport("agent-sanitizer")
   );
-const { STRIP, SCATTERED_THRESHOLD, hasLongRun, stripInvisible } =
+const { payloadVerdict, stripInvisible, stripInvisibleWithReport } =
   /** @type {typeof import("agent-sanitizer/invisible")} */ (
     await lazyImport("agent-sanitizer/invisible")
   );
@@ -142,32 +144,14 @@ export function authoredScopeDecision(tool) {
   return { kind: "undeclared" };
 }
 
-// Payload-capable: a long contiguous run, or enough scattered invisibles to
-// carry a message. Mirrors sanitize-user-prompt so the model→world and
-// user→model surfaces share one definition of "stego payload".
-/** @param {string} text */
-function isPayloadCapable(text) {
-  // hasLongRun, not a pattern built here: the engine's scan is bounded per
-  // `exec`, which is what keeps an 8 MB run of zero-widths in a Write body from
-  // throwing `RangeError: Maximum call stack size exceeded` out of this hook.
-  if (hasLongRun(text)) return true;
-  return (text.match(STRIP)?.length ?? 0) >= SCATTERED_THRESHOLD;
-}
-
 /**
  * The de-ANSI'd `text`, or `text` itself when its escapes are display-only
- * colour a reader authored on purpose.
- *
- * The two questions are answered by two different views, deliberately.
- * `isBenignAnsiKinds` reads the kinds the strip actually REMOVED, so a sequence
- * that only reconstitutes mid-strip is judged as the sequence it becomes rather
- * than as the incomplete one it started as. `sgrCarriesPayload` reads the RAW
- * bytes, because those are the bytes a terminal renders on the preserve path —
- * it makes no second pass, so there is nothing to reconstitute there.
+ * colour a reader authored on purpose — the engine's `escapesPreservable`, the
+ * same answer the prompt gate gives, judged on the kinds THIS strip removed.
  *
  * Only COMPLETE tokens reach `kinds`: an introducer that opens no sequence is
  * left in place by `stripAnsiFully` (it rewrites no display), so the orphan arms
- * of `isBenignAnsiKinds` never decide anything here.
+ * of the inert-kind test never decide anything here.
  * @param {string} text
  * @returns {string}
  */
@@ -176,7 +160,7 @@ function stripTerminalControls(text) {
   const kinds = new Set();
   const deAnsi = stripAnsiFully(text, kinds);
   if (deAnsi === text) return text;
-  if (isBenignAnsiKinds(kinds) && !sgrCarriesPayload(text)) return text;
+  if (escapesPreservable(text, kinds)) return text;
   return deAnsi;
 }
 
@@ -186,10 +170,38 @@ function stripTerminalControls(text) {
 // ZWSP goes), and removing a sequence makes invisibles adjacent that were not.
 // One round of each therefore leaves the composition unfinished. Each round
 // deletes at least one character, so the loop converges on its own; the bound is
-// a DoS guard. No residual sweep stands behind it — unlike the engine's
-// MAX_LAYER1_PASSES — so an unconverged value would persist a live sequence into
-// the file, and reaching the bound while still changing throws instead.
+// a DoS guard. Reaching it still changing falls back to settleField, never to
+// the unconverged value, which could persist a live sequence into the file.
 const MAX_FIELD_PASSES = 3;
+
+/**
+ * The carve-out-free strip a field that did not converge falls back to: every
+ * invisible, then every escape and raw introducer, each only where its
+ * protection is on. Its output holds nothing either stage would remove, so it
+ * is a fixed point of sanitizeField — the guarantee the bounded loop could not
+ * give, bought by giving up the joiner carve-out and the colour carve-out on
+ * adversarial input only.
+ * @param {string} value  the field as the caller sent it (for the leading-BOM rule)
+ * @param {string} cleaned  the loop's last state
+ * @param {Set<string>} actions  collects the protections that changed the field
+ * @returns {string}
+ */
+function settleField(value, cleaned, actions) {
+  let settled = cleaned;
+  if (process.env.AGENT_SANITIZER_INVISIBLE_DISABLED !== "1") {
+    const bulk = stripInvisibleWithReport(settled, value, {
+      carveOut: false,
+    }).cleaned;
+    if (bulk !== settled) actions.add("invisible characters");
+    settled = bulk;
+  }
+  if (process.env.AGENT_SANITIZER_TERMINAL_DISABLED !== "1") {
+    const swept = stripTerminalFully(settled);
+    if (swept !== settled) actions.add("terminal-control sequences");
+    settled = swept;
+  }
+  return settled;
+}
 
 // Returns the cleaned value plus the human-readable actions applied, or null if
 // the field is already clean. Each protection has its own opt-out (see the
@@ -215,23 +227,27 @@ function sanitizeField(value) {
       }
     }
 
+    // The engine's payloadVerdict, so a Write body is stego exactly when the
+    // same text would block a prompt; an action is recorded only when the strip
+    // actually removed something.
     if (
       process.env.AGENT_SANITIZER_INVISIBLE_DISABLED !== "1" &&
-      isPayloadCapable(cleaned)
+      payloadVerdict(cleaned).payloadCapable
     ) {
-      cleaned = stripInvisible(cleaned);
-      actions.add("invisible characters");
+      const stripped = stripInvisible(cleaned);
+      if (stripped !== cleaned) {
+        cleaned = stripped;
+        actions.add("invisible characters");
+      }
     }
     if (cleaned === before) break;
-    // This refusal is what blocks a still-changing value — one whose next round
+    // This fallback is what blocks a still-changing value — one whose next round
     // would remove another live sequence — from being written to the file.
     if (pass === MAX_FIELD_PASSES - 1)
-      throw new Error(
-        "authored content did not reach a fixed point within MAX_FIELD_PASSES",
-      );
+      cleaned = settleField(value, cleaned, actions);
   }
 
-  return actions.size > 0 ? { cleaned, actions: [...actions] } : null;
+  return cleaned === value ? null : { cleaned, actions: [...actions] };
 }
 
 /** @param {string[]} changed */

@@ -10,10 +10,12 @@ Extracted from [`ucd-full`](https://www.npmjs.com/package/ucd-full)**@17.0.0**
   entries of `IndicSyllabicCategory.json` (the joiner trigger).
 - `IndicSyllabicCategory.Consonant.json` — the `syllabicCategory === "Consonant"`
   entries of the same file. Intersected with `\p{Script=…}` (which the engine
-  does expose) over the Brahmic scripts the joiner carve-out covers, these give
+  does expose) over the scripts that own a virama, these give
   `BRAHMIC_CONSONANT_RANGES` — the bases a virama may sit on.
+- `Scripts.Virama.json` — the entries of `Scripts.json` whose range holds a
+  `Virama` code point: each virama's Script, which names the scripts above.
 
 To refresh for a new Unicode version: `pnpm add -D ucd-full@<v>`, re-extract these
-three files, bump `UNICODE_VERSION` in the generator, run `pnpm gen:joining-type`,
+four files, bump `UNICODE_VERSION` in the generator, run `pnpm gen:joining-type`,
 then drop the dev dependency again. `test/joining-type.test.mjs` fails if the
 committed module drifts from these slices.

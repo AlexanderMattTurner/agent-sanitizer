@@ -332,13 +332,13 @@ export const TOTAL_PRESERVED_JOINER_BUDGET = 16;
 // residual channel to a fixed fraction of the cover text.
 export const PRESERVED_JOINER_PER_VISIBLE = 8;
 
-// Absolute ceiling on the document-wide preserve allowance, regardless of how
-// much visible cover text an attacker supplies. Without it, maxPreserved grows
-// linearly with visible length (visibleLen / PRESERVED_JOINER_PER_VISIBLE), so a
-// large benign-looking body lets the residual joiner/selector channel scale with
-// attacker input — preserved chars do not count toward the scatter floor, so
-// nothing else bounds it. This caps the whole channel at a fixed width no cover
-// text can widen.
+// Ceiling on the preserve allowance that cover text OUTSIDE the joining scripts
+// can buy. Without it, maxPreserved grows linearly with visible length, so a
+// large ASCII body would let the residual joiner/selector channel scale with
+// attacker input. Text in a joining script is the exception: there the joiners
+// are orthography, so the allowance also grows at PRESERVED_JOINER_PER_VISIBLE
+// of the JOINING LETTERS themselves (see joiningLetterCount) — a long Persian
+// document keeps every ZWNJ, while a channel denser than that still trips.
 export const PRESERVE_HARD_CAP = 64;
 
 // Floor on the document-wide allowance for PRESERVED blank fillers (the
@@ -480,17 +480,12 @@ const isCjkIdeograph = memoizedCpPredicate(CJK_IDEOGRAPH_RE);
 // A bare or base-less halant + ZWJ carries no rendering and is a smuggling
 // channel, so the Indic joiner is preserved only over one of these.
 //
-// The spans are GENERATED from the UCD (Indic_Syllabic_Category=Consonant,
-// restricted by Script) and live in ./joining-type.mjs alongside the virama
-// table they are read against — see scripts/gen-joining-type.mjs. They used to
-// be hand-typed per-block KA–HA approximations here, which swept up the holes
-// between the real consonants; ECMAScript exposes no
-// \p{Indic_Syllabic_Category=…} escape, and \p{Script=Devanagari} is the wrong
-// shape on its own (it also holds the independent vowels U+0904–U+0914, which a
-// virama never attaches to), so a generated table is the only drift-proof
-// answer. Re-exported here because it was part of this module's surface before
-// it moved, and because test/invisible-unicode-tables.test.mjs checks each span
-// against the script it claims.
+// The spans are GENERATED from the UCD (Indic_Syllabic_Category=Consonant in
+// every script that owns a virama) by scripts/gen-joining-type.mjs. ECMAScript
+// exposes no \p{Indic_Syllabic_Category=…} escape, and \p{Script=Devanagari}
+// is the wrong shape on its own (it also holds the independent vowels
+// U+0904–U+0914, which a virama never attaches to). Re-exported as part of
+// this module's published surface.
 export { BRAHMIC_CONSONANT_RANGES } from "./joining-type.mjs";
 
 /** True when the code point `cp` is a Brahmic consonant; -1 (past a string
@@ -787,11 +782,56 @@ function followsBrahmicConjunct(cps, i) {
 }
 
 /**
+ * How many VISIBLE code points of `cps` are letters a joiner does rendering work
+ * beside: cursive letters (Joining_Type D/R/L) and Brahmic consonants. This is
+ * the cover text that funds the joiner allowance past PRESERVE_HARD_CAP — only
+ * a script whose orthography uses joiners can buy room for more of them.
+ * @param {Int32Array} cps @param {Uint8Array} codes
+ * @returns {number}
+ */
+function joiningLetterCount(cps, codes) {
+  let letters = 0;
+  for (let i = 0; i < cps.length; i++)
+    if (
+      codes[i] === CODE_VISIBLE &&
+      (isCursiveLetter(jtOf(cps[i])) || isBrahmicConsonantCp(cps[i]))
+    )
+      letters++;
+  return letters;
+}
+
+/**
+ * True when the ZWJ at `cps[i]` sits between a Brahmic consonant and the virama
+ * that follows it — the <consonant, ZWJ, virama> spelling Unicode prescribes for
+ * the Bengali RA with ya-phala (U+09B0 ZWJ U+09CD U+09AF, not a reph), the
+ * Devanagari eyelash RA (U+0930 ZWJ U+094D) and the Sinhala touching letters
+ * (U+0D9A ZWJ U+0DCA U+0DC0). The joiner selects which form
+ * of the conjunct the virama opens, so it does rendering work. Steps right over
+ * removable invisibles to LAND on the virama — the mirror of
+ * {@link followsBrahmicConjunct} — so stripping them cannot flip the decision.
+ * @param {Int32Array} cps @param {number} i
+ * @returns {boolean}
+ */
+function precedesBrahmicVirama(cps, i) {
+  if (cps[i] !== ZWJ) return false;
+  let j = i + 1;
+  while (
+    j < cps.length &&
+    !isJoinControl(cps[j]) &&
+    classifyCp(cps[j]) !== CODE_VISIBLE
+  )
+    j++;
+  if (j >= cps.length || !isVirama(cps[j])) return false;
+  return isBrahmicConsonantCp(effectiveNeighbor(cps, i, -1));
+}
+
+/**
  * True when the joiner at `cps[i]` does real rendering work and so must be
  * preserved rather than stripped, decided from the neighbours' Joining_Type:
  *   - emoji ZWJ: between two emoji components (its left pictograph may sit behind
  *     a VS16, so step over selectors — see leftNonSelector);
- *   - Indic joiner: after a virama that sits on a real Brahmic consonant;
+ *   - Indic joiner: after a virama that sits on a real Brahmic consonant, or a
+ *     ZWJ between a consonant and the virama that follows it;
  *   - Arabic-family joiner: between two cursive letters (ZWNJ needs both, ZWJ at
  *     least one — it forces a connected form). A joiner whose effective neighbour
  *     is ANOTHER joiner is a run (a zero-width payload channel) and is rejected.
@@ -812,8 +852,9 @@ function isPreservedJoiner(cps, i) {
     isEmojiBase(rightNonSelector(cps, i))
   )
     return true;
-  // Indic: meaningful only after a virama sitting on a real consonant base.
-  if (followsBrahmicConjunct(cps, i)) return true;
+  // Indic: meaningful only beside a virama that sits on a real consonant base.
+  if (followsBrahmicConjunct(cps, i) || precedesBrahmicVirama(cps, i))
+    return true;
   // Arabic-family cursive joining, on the nearest non-Transparent neighbours.
   const left = effectiveNeighbor(cps, i, -1);
   const right = effectiveNeighbor(cps, i, 1);
@@ -952,7 +993,8 @@ export function countPayloadInvisible(text) {
 
 /**
  * Bulk strip (the common path: {@link needsCarveOut} found nothing the
- * carve-out could apply to). A single regex pass removes every payload-
+ * carve-out could apply to; also the carve-free fallback a non-converging
+ * composition asks for). A single regex pass removes every payload-
  * capable char; `found` names the category codes present via `.search`
  * (which ignores the `g` lastIndex).
  * @param {string} body
@@ -1036,17 +1078,15 @@ function markTagSequences(cps) {
 }
 
 /**
- * True when `cps[i]` is a standardized variation selector (U+FE00–U+FE0D) whose
- * immediately preceding code point forms a REGISTERED standardized variation
- * sequence (per the generated UCD table). Every unregistered FE00–FE0D selector
- * stays payload.
+ * True when `cps[i]` is a variation selector whose immediately preceding code
+ * point forms a REGISTERED standardized variation sequence with it (per the
+ * generated UCD table: VS1–VS14 and the Mongolian free variation selectors).
+ * Every unregistered pairing stays payload.
  * @param {Int32Array} cps @param {number} i
  * @returns {boolean}
  */
 function isStandardizedVariationSelector(cps, i) {
-  const cp = cps[i];
-  if (cp < 0xfe00 || cp > 0xfe0d) return false;
-  return i > 0 ? isStandardizedVariant(cps[i - 1], cp) : false;
+  return i > 0 && isStandardizedVariant(cps[i - 1], cps[i]);
 }
 
 /**
@@ -1237,18 +1277,6 @@ function carveStrip(
   // is drowning in hidden bytes, so the carve-out is off and even a meaningful
   // joiner is stripped (threshold-evasion catch — over-strip beats under).
   const allowCarveOut = payloadInvis < SCATTERED_THRESHOLD;
-  // Document-wide preserve allowance, proportional to visible text but never
-  // below the floor (see TOTAL_PRESERVED_JOINER_BUDGET / PRESERVED_JOINER_PER_VISIBLE)
-  // and never above PRESERVE_HARD_CAP — the absolute ceiling stops the channel
-  // scaling with attacker-supplied cover text.
-  const maxPreserved = Math.min(
-    PRESERVE_HARD_CAP,
-    Math.max(
-      TOTAL_PRESERVED_JOINER_BUDGET,
-      Math.ceil(visibleLen / PRESERVED_JOINER_PER_VISIBLE),
-    ),
-  );
-
   const n = cps.length;
   // Every code point that draws on the joiner/selector budget, in order. Blank
   // fillers are exempt (their allowance is already spent in analyzeCarve), so a
@@ -1258,6 +1286,28 @@ function carveStrip(
   if (allowCarveOut)
     for (let k = 0; k < n; k++)
       if (kind[k] !== KIND_NONE && kind[k] !== KIND_BLANK) candidates.push(k);
+
+  // Document-wide preserve allowance, proportional to visible text but never
+  // below the floor (see TOTAL_PRESERVED_JOINER_BUDGET / PRESERVED_JOINER_PER_VISIBLE)
+  // and, for cover text outside the joining scripts, never above
+  // PRESERVE_HARD_CAP. The joining-letter term is counted only when the
+  // candidates outrun the capped allowance, so ordinary text never pays for it.
+  const coverAllowance = Math.min(
+    PRESERVE_HARD_CAP,
+    Math.max(
+      TOTAL_PRESERVED_JOINER_BUDGET,
+      Math.ceil(visibleLen / PRESERVED_JOINER_PER_VISIBLE),
+    ),
+  );
+  const maxPreserved =
+    candidates.length <= coverAllowance
+      ? coverAllowance
+      : Math.max(
+          coverAllowance,
+          Math.ceil(
+            joiningLetterCount(cps, codes) / PRESERVED_JOINER_PER_VISIBLE,
+          ),
+        );
 
   const foundCodes = new Set();
   /** @type {string[]} */
@@ -1456,11 +1506,13 @@ function needsCarveOut(body) {
 }
 
 /**
- * The `text` with every carve-out-PRESERVABLE invisible (joiners/selectors/tags/
- * blank fillers doing real rendering work) replaced by a space, leaving only the
- * PAYLOAD invisibles in place. The LONG_RUN injection probe runs over this so a
- * legitimate emoji/flag/variation sequence never trips the "possible injection
- * payload" marker (alert fatigue), while a genuine hidden run still surfaces.
+ * The `text` with every visible character and every carve-out-PRESERVABLE
+ * invisible (joiners/selectors/tags/blank fillers doing real rendering work)
+ * replaced by spaces — one per UTF-16 unit, so the view is index-aligned with
+ * `text` — leaving only the PAYLOAD invisibles in place. The LONG_RUN injection
+ * probe runs over this so a legitimate emoji/flag/variation sequence never trips
+ * the "possible injection payload" marker (alert fatigue), while a genuine
+ * hidden run still surfaces.
  * @param {string} text
  * @returns {string}
  */
@@ -1479,9 +1531,10 @@ export function payloadInvisibleView(text) {
   while (i < cps.length) {
     const maskFrom = i;
     while (i < cps.length && !isPayload(i)) i++;
-    // One space per masked CODE POINT, so the view stays code-point-aligned with
-    // `text` even where an astral character is two UTF-16 units wide.
-    if (i > maskFrom) parts.push(" ".repeat(i - maskFrom));
+    // One space per masked UTF-16 UNIT, so every index into the view is the same
+    // index into `text` — a run found here can be located (and line-numbered)
+    // in `text` without remapping.
+    if (i > maskFrom) parts.push(" ".repeat(offsets[i] - offsets[maskFrom]));
     const keepFrom = i;
     while (i < cps.length && isPayload(i)) i++;
     if (i > keepFrom) parts.push(text.slice(offsets[keepFrom], offsets[i]));
@@ -1512,13 +1565,23 @@ export function payloadInvisibleView(text) {
  * @returns {string | null}
  */
 export function payloadLongRunSample(text) {
-  // The view is code-point-for-code-point with `text` and only ever REPLACES an
-  // invisible with a space, so a run in the view is a run in `text`: no long run
-  // in the raw text means none in the view. This hides no payload — the bulk
-  // scan reads the whole text, and a run it finds still goes through the full
-  // carve analysis below to decide what of it is really payload.
-  if (!hasLongRun(text)) return null;
-  return findLongRuns(payloadInvisibleView(text)).next().value?.text ?? null;
+  return payloadLongRuns(text).next().value?.text ?? null;
+}
+
+/**
+ * Every payload-invisible LONG RUN in `text`, in order, as {@link findLongRuns}
+ * reports them — `index` is valid in `text` itself, because the view is
+ * index-aligned with it.
+ * @param {string} text
+ * @returns {Generator<{ index: number, text: string, charCount: number }>}
+ */
+function* payloadLongRuns(text) {
+  // The view only ever REPLACES an invisible with a space, so a run in the view
+  // is a run in `text`: no long run in the raw text means none in the view. This
+  // hides no payload — the bulk scan reads the whole text, and a run it finds
+  // still goes through the full carve analysis to decide what of it is payload.
+  if (!hasLongRun(text)) return;
+  yield* findLongRuns(payloadInvisibleView(text));
 }
 
 /**
@@ -1608,6 +1671,33 @@ export function isIncidentalInvisible(text) {
 }
 
 /**
+ * THE decision whether `text` carries a payload-capable invisible channel: a
+ * payload LONG RUN, or {@link SCATTERED_THRESHOLD} or more effective payload
+ * invisibles (see {@link countEffectiveInvisible}). Every surface that gates on
+ * it reads this one verdict — the prompt gate's block, the instruction-file
+ * scanner's findings, and the write path's authored-content strip — so a
+ * legitimate emoji ZWJ sequence or a Persian paragraph cannot be a payload to
+ * one of them and clean to another.
+ *
+ * `longRuns` are the payload runs ({@link findLongRuns} records, indices valid
+ * in `text`), and `invisibleCount` the effective count, so a caller that reports
+ * the finding describes exactly what was judged.
+ * @param {string} text  the text a consumer acts on, ANSI-stripped where its
+ *   surface can carry escapes (a sequence can hide invisibles)
+ * @returns {{ longRuns: Array<{ index: number, text: string, charCount: number }>, invisibleCount: number, payloadCapable: boolean }}
+ */
+export function payloadVerdict(text) {
+  const longRuns = [...payloadLongRuns(text)];
+  const invisibleCount = countEffectiveInvisible(text);
+  return {
+    longRuns,
+    invisibleCount,
+    payloadCapable:
+      longRuns.length > 0 || invisibleCount >= SCATTERED_THRESHOLD,
+  };
+}
+
+/**
  * Strip payload-capable invisible chars and report which categories were
  * removed. A single leading U+FEFF (BOM) is preserved as a legitimate marker;
  * interior BOMs and all soft hyphens (U+00AD) are stripped, since either can
@@ -1619,18 +1709,28 @@ export function isIncidentalInvisible(text) {
  * decide whether a leading BOM is genuinely leading: an interior BOM that an
  * ANSI-strip left at index 0 of `text` (e.g. `ESC[m + interior U+FEFF`) must NOT be treated as a
  * legitimate leading marker. Defaults to `text` for the common single-arg call.
+ *
+ * `carveOut: false` strips EVERY payload-capable invisible, preserved joiners
+ * and selectors included — the monotone strip a caller falls back to when a
+ * composition around the carve-out fails to converge (its output holds no
+ * invisible at all, so nothing downstream can reconstitute through it).
  * @param {string} text
  * @param {string} [originalText]
+ * @param {{ carveOut?: boolean }} [options]
  * @returns {{ cleaned: string, found: string[] }}
  */
-export function stripInvisibleWithReport(text, originalText = text) {
+export function stripInvisibleWithReport(
+  text,
+  originalText = text,
+  { carveOut = true } = {},
+) {
   // Leading only when the BOM leads the ORIGINAL text (not merely `text` after an
   // ANSI strip shifted an interior BOM to index 0). The `text` guard keeps the
   // slice sound when the two disagree.
   const hasLeadingBom =
     originalText.charCodeAt(0) === 0xfeff && text.charCodeAt(0) === 0xfeff;
   const body = hasLeadingBom ? text.slice(1) : text;
-  const { cleaned, found } = stripBody(body);
+  const { cleaned, found } = carveOut ? stripBody(body) : bulkStrip(body);
   return { cleaned: hasLeadingBom ? BOM + cleaned : cleaned, found };
 }
 

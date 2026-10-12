@@ -112,7 +112,9 @@ const VECTORS = [
     kind: "reveal",
     conceal: [ESC],
     revealed: `report${PAYLOAD} done`,
-    classify: "note",
+    // CONCEAL hides the payload from the human who reads the prompt, so the
+    // escapes are not preservable styling and the gate blocks, not notes.
+    classify: "block",
   },
   {
     // Measured partial coverage: a short bidi override is stripped and reported

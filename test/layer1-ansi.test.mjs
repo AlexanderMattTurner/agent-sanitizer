@@ -45,6 +45,8 @@ import {
   CATEGORY,
   stripInvisible,
 } from "../src/invisible.mjs";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { fcRunOptions, cp } from "./test-helpers.mjs";
 
 const ESC = cp(0x1b);
@@ -59,6 +61,25 @@ const ZWNJ = cp(0x200c);
 const ZWSP = cp(0x200b);
 const ARABIC_MEEM = cp(0x645);
 
+const VS1 = cp(0xfe00);
+// `prefix` copies of a preserved `0` VS1 sequence, `pad` letters of cover text,
+// then a ZWSP-split SGR and `stages` escapes each hiding behind a VS1. The
+// shared corpus holds a few of these (`layer1_outruns_pass_bound_*`) so the
+// Python port is held to them too; the grid below sweeps the rest in JS.
+const adversarialNest = (stages, prefix, pad) =>
+  `0${VS1} `.repeat(prefix) +
+  "x".repeat(pad) +
+  `${ESC}${ZWSP}[0;0;0m` +
+  `${ESC}[0;0;0${VS1}m`.repeat(stages);
+/** The shared cross-language corpus, decoded (tests/golden-corpus.json). */
+const GOLDEN_CORPUS = new Map(
+  JSON.parse(
+    readFileSync(
+      fileURLToPath(new URL("../tests/golden-corpus.json", import.meta.url)),
+      "utf8",
+    ),
+  ).cases.map(({ name, units }) => [name, String.fromCharCode(...units)]),
+);
 const hex = (s) => [...s].map((c) => c.codePointAt(0).toString(16)).join(" ");
 
 // ─── Generators ──────────────────────────────────────────────────────────────
@@ -384,10 +405,9 @@ describe("applyLayer1 idempotence", () => {
     );
   });
 
-  it("sweeps every raw introducer even when the pass bound is exhausted", () => {
-    // `ESC[` xN + `m` xN reconstitutes exactly ONE sequence per pass, so it
-    // outruns any fixed bound by construction — the no-introducer guarantee has
-    // to come from the final unconditional sweep, not from the loop converging.
+  it("sweeps every raw introducer out of a deep introducer nest", () => {
+    // `ESC[` xN + `m` xN stacks N introducers; none may survive, whichever of
+    // the converging loop's sweep or the pass bound's fallback removes them.
     const depth = 40;
     const { cleaned, found } = applyLayer1(
       `${ESC}[`.repeat(depth) + "m".repeat(depth),
@@ -400,6 +420,53 @@ describe("applyLayer1 idempotence", () => {
       );
     }
     assert.deepEqual(found, [CATEGORY.ANSI]);
+  });
+
+  // Each `ESC[0;0;0` VS1 `m` hides its escape behind a standardized variation
+  // selector the carve-out preserves while the budget allows; every removal
+  // shortens the text, shrinks the budget and unmasks one more escape. That
+  // takes more rounds than the pass bound, and a second call used to remove
+  // more, with `[0;0;0m` reaching the model as visible text in between.
+  for (const [name, expected] of [
+    ["layer1_outruns_pass_bound_s6_p15_x75", "0 ".repeat(15) + "x".repeat(75)],
+    // Rounds that swept the introducer off a still-split escape had already
+    // made its body text; the fallback starts from the input, so none survives.
+    [
+      "layer1_outruns_pass_bound_s8_p25_x150",
+      "0 ".repeat(25) + "x".repeat(150),
+    ],
+  ])
+    it(`stays a fixed point past the pass bound: ${name} (regression)`, () => {
+      const once = applyLayer1(/** @type {string} */ (GOLDEN_CORPUS.get(name)));
+      const twice = applyLayer1(once.cleaned);
+
+      assert.equal(twice.cleaned, once.cleaned);
+      assert.deepEqual(twice.found, []);
+      assert.equal(once.cleaned, expected);
+      // The carve-out-free fallback ran: the cover text's own preserved
+      // `0` VS1 sequences went with it, which no converging pass removes.
+      assert.deepEqual(once.found, [
+        CATEGORY.CF,
+        CATEGORY.VARIATION_SELECTORS,
+        CATEGORY.ANSI,
+      ]);
+    });
+
+  it("is a fixed point over the shared corpus and a grid of nests", () => {
+    // tests/test_textstrip.py holds the Python port to the same corpus.
+    const names = [...GOLDEN_CORPUS.keys()];
+    assert.ok(names.some((n) => n.startsWith("layer1_reconstituted_")));
+    assert.ok(names.some((n) => n.startsWith("layer1_outruns_pass_bound_")));
+    const inputs = [...GOLDEN_CORPUS.values()];
+    for (let stages = 1; stages <= 8; stages++)
+      for (const prefix of [0, 5, 15, 25])
+        for (const pad of [0, 25, 75, 150])
+          inputs.push(adversarialNest(stages, prefix, pad));
+    assert.ok(inputs.length > GOLDEN_CORPUS.size);
+    for (const input of inputs) {
+      const once = applyLayer1(input).cleaned;
+      assert.equal(applyLayer1(once).cleaned, once, hex(input));
+    }
   });
 });
 

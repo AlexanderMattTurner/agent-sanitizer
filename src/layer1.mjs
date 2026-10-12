@@ -24,13 +24,17 @@
 import { stripInvisibleWithReport, CATEGORY, STRIP } from "./invisible.mjs";
 import {
   CONTROL_INTRODUCER_SOURCE,
+  DEFAULT_RENDITION,
+  foregroundMatchesBackground,
   isCancelledOrphan,
   isOrphanKind,
   orphanKindFor,
   scanAnsi,
-  sgrConcealState,
+  sgrRendition,
   TOKEN_KIND,
 } from "./ansi.mjs";
+
+/** @typedef {import("./ansi.mjs").SgrRendition} SgrRendition */
 
 // The ANSI grammar and the introducer charset live in ./ansi.mjs so this module
 // and invisible.mjs (which owns the public isSgrOnly / SGR_RE and cannot import
@@ -178,13 +182,16 @@ function rendersNothing(gap) {
 /**
  * True when the SGR sequences in `text` do more than style visible text — the
  * question a consumer must answer before PRESERVING escapes rather than
- * stripping them. Two arms, both model-sees/human-sees divergences:
+ * stripping them. Three arms, all model-sees/human-sees divergences:
  *
  *   1. CONCEAL is on while text that would otherwise render goes by, or the text
  *      ENDS concealed (hiding its own tail, and everything the terminal prints
- *      afterwards). Only SGR moves that state (see {@link sgrConcealState}) — a
+ *      afterwards). Only SGR moves that state (see {@link sgrRendition}) — a
  *      cursor move or an erase leaves a terminal exactly as concealed as it was.
- *   2. {@link SGR_RUN_THRESHOLD} sequences with nothing that renders between
+ *   2. The foreground is the background while a glyph goes by (`ESC[30;40m`):
+ *      concealment by colour, judged only where the match is unambiguous (see
+ *      {@link foregroundMatchesBackground}).
+ *   3. {@link SGR_RUN_THRESHOLD} sequences with nothing that renders between
  *      them: the run puts no glyph on the screen, so it carries data rather than
  *      styling.
  *
@@ -201,24 +208,48 @@ function rendersNothing(gap) {
  * @returns {boolean}
  */
 export function sgrCarriesPayload(text) {
-  let concealed = false;
+  /** @type {Readonly<SgrRendition>} */
+  let rendition = DEFAULT_RENDITION;
   let run = 0;
   let previousEnd = 0;
   for (const token of scanAnsi(text)) {
-    const blankGap = rendersNothing(text.slice(previousEnd, token.start));
+    const gap = text.slice(previousEnd, token.start);
+    const blankGap = rendersNothing(gap);
     previousEnd = token.end;
     if (token.kind !== TOKEN_KIND.SGR) {
       run = 0;
       continue;
     }
-    // This refusal is what blocks `ESC[8m` from hiding text from the human
-    // while leaving its bytes for the model.
-    if (concealed && !blankGap) return true;
+    // This refusal is what blocks `ESC[8m` (or a foreground painted in its own
+    // background) from hiding text from the human while leaving its bytes for
+    // the model.
+    if (hidesText(rendition, gap)) return true;
     run = blankGap ? run + 1 : 1;
     if (run >= SGR_RUN_THRESHOLD) return true;
-    concealed = sgrConcealState(text.slice(token.start, token.end), concealed);
+    rendition = sgrRendition(text.slice(token.start, token.end), rendition);
   }
-  return concealed;
+  return rendition.concealed || hidesText(rendition, text.slice(previousEnd));
+}
+
+// A glyph whose identity a foreground painted in its own background hides:
+// anything but whitespace (which looks the same either way) and the Block
+// Elements (U+2580-U+259F), which ANSI art paints as solid colour cells, so
+// matching colours there hide nothing a reader was meant to see.
+const COLOUR_HIDDEN_GLYPH = /[^\s\u2580-\u259F]/u;
+
+/**
+ * True when `rendition` hides some of `gap` from a human: CONCEAL blanks every
+ * glyph, and a foreground matching its background hides every
+ * {@link COLOUR_HIDDEN_GLYPH}.
+ * @param {Readonly<SgrRendition>} rendition @param {string} gap
+ * @returns {boolean}
+ */
+function hidesText(rendition, gap) {
+  if (rendition.concealed) return !rendersNothing(gap);
+  return (
+    foregroundMatchesBackground(rendition) &&
+    COLOUR_HIDDEN_GLYPH.test(gap.replace(STRIP, ""))
+  );
 }
 
 /**
@@ -233,20 +264,64 @@ export function isBenignAnsi(text) {
   return isBenignAnsiKinds(applyLayer1(text).ansiKinds);
 }
 
+/**
+ * True when the escapes in `text` may be let through rather than blocked or
+ * stripped: every removed kind is inert ({@link isBenignAnsiKinds}) AND the SGR
+ * is still just styling ({@link sgrCarriesPayload}). THE answer for every
+ * surface that preserves or waves through escapes — the prompt gate's
+ * pass-with-note and the write path's colour carve-out — so `ESC[8m` cannot be
+ * "inert colour" to one of them while it hides text in the other.
+ * @param {string} text  the raw text, as a terminal would receive it
+ * @param {Iterable<string>} [kinds]  the {@link TOKEN_KIND}s a strip of `text`
+ *   removed, when the caller already has them; defaults to Layer 1's
+ * @returns {boolean}
+ */
+export function escapesPreservable(text, kinds = applyLayer1(text).ansiKinds) {
+  return isBenignAnsiKinds([...kinds]) && !sgrCarriesPayload(text);
+}
+
 // How many times the {ANSI strip, invisible strip} composition may re-run before
-// the sweep is forced. Each iteration deletes at least one character, so the
-// loop terminates on its own; the bound is a DoS guard: n rounds of O(n) scans
-// on adversarial input is quadratic.
-// Three rounds is what the deepest REAL reconstitution needs — strip
-// invisibles, remove the ANSI they hid, strip the joiners that ANSI removal
-// made adjacent, confirm — so four leaves a round of margin. Deeper nesting is
-// not reachable through the carve-out: preserving a joiner requires cursive or
-// emoji neighbours on BOTH sides, so a preserved joiner can never sit inside an
-// escape sequence, and every joiner that hides one is therefore stripped by the
-// FIRST invisible pass. Past the bound the composition simply stops early — the
-// final sweep still holds the no-introducer guarantee, and what is left degrades
-// to visible text (the fail-open direction).
+// it falls back to {@link stripLayer1Monotone}. Each iteration deletes at least
+// one character, so the loop terminates on its own; the bound is a DoS guard: n
+// rounds of O(n) scans on adversarial input is quadratic. Three rounds is what
+// the deepest REAL reconstitution needs (strip invisibles, remove the ANSI they
+// hid, strip the joiners that removal made adjacent, confirm). Adversarial input
+// can need more — a registered variation selector preserved INSIDE an escape,
+// whose preserve budget shrinks as each removal shortens the text.
 const MAX_LAYER1_PASSES = 4;
+
+/**
+ * Remove every complete ANSI sequence and then every raw control introducer
+ * left over. The output holds no introducer, so no later pass can find an
+ * escape in it: a fixed point by construction.
+ * @param {string} text
+ * @param {Set<string>} [kinds]  collects the {@link TOKEN_KIND} of every removal
+ * @returns {string}
+ */
+export function stripTerminalFully(text, kinds = new Set()) {
+  return sweepIntroducers(stripAnsiFully(text, kinds), kinds);
+}
+
+/**
+ * The carve-out-free Layer 1 a non-converging composition falls back to: EVERY
+ * invisible first (preserved joiners and selectors included), then every
+ * escape and introducer. Its output holds neither, so re-running Layer 1 on it
+ * changes nothing — the fixed point the iterated composition could not reach
+ * within its bound, bought by giving up the carve-out on adversarial input only.
+ * It starts from what the caller SENT, not the composition's last state: a
+ * round that swept the introducer off an escape still split by a preserved
+ * selector has already turned that escape's body into text, which no later
+ * strip can tell from prose.
+ * @param {string} text  what the caller sent
+ * @param {Set<string>} found  collects the invisible CATEGORY codes removed
+ * @param {Set<string>} kinds  collects the {@link TOKEN_KIND} of every removal
+ * @returns {string}
+ */
+function stripLayer1Monotone(text, found, kinds) {
+  const bulk = stripInvisibleWithReport(text, text, { carveOut: false });
+  for (const category of bulk.found) found.add(category);
+  return stripTerminalFully(bulk.cleaned, kinds);
+}
 
 /**
  * Layer 1: ANSI + invisible-char strip with a result guaranteed free of every
@@ -266,9 +341,10 @@ const MAX_LAYER1_PASSES = 4;
  *
  * The residual sweep runs only once the composition is STABLE, because sweeping
  * an introducer early destroys the sequence a later ANSI pass would have removed
- * whole, promoting a hidden control to visible text. A final UNCONDITIONAL sweep
- * follows the loop so the no-raw-introducer guarantee does not depend on the
- * pass bound.
+ * whole, promoting a hidden control to visible text. A composition that has not
+ * converged within the pass bound falls back to a carve-out-free strip whose
+ * output holds no invisible and no introducer, so both the no-raw-introducer
+ * guarantee and idempotence hold whatever the bound.
  *
  * `deAnsi` is the ANSI strip of the ORIGINAL text (invisible runs intact), the
  * scope a LONG_RUN payload check needs — not an intermediate of the loop.
@@ -288,6 +364,7 @@ export function applyLayer1(text) {
   /** @type {Set<string>} Union of the categories every iteration reported. */
   const found = new Set();
   let cleaned = text;
+  let converged = false;
 
   for (let pass = 0; pass < MAX_LAYER1_PASSES; pass++) {
     const afterAnsi = pass === 0 ? deAnsi : stripAnsiFully(cleaned, ansiKinds);
@@ -312,11 +389,18 @@ export function applyLayer1(text) {
     // introducer can make invisibles adjacent, exactly as removing a sequence
     // can); one that changes nothing means the whole composition has converged.
     const swept = sweepIntroducers(cleaned, ansiKinds);
-    if (swept === cleaned) break;
+    if (swept === cleaned) {
+      converged = true;
+      break;
+    }
     cleaned = swept;
   }
 
-  cleaned = sweepIntroducers(cleaned, ansiKinds);
+  // This fallback is what keeps Layer 1 a FIXED POINT past the pass bound: an
+  // unconverged state re-cleans to something else (a re-clean of the view
+  // would then disagree with the view), and can still hold an escape the next
+  // round would have removed, which the sweep alone turns into visible text.
+  if (!converged) cleaned = stripLayer1Monotone(text, found, ansiKinds);
 
   // Derived, not tracked in parallel: a kind is recorded exactly when an ANSI
   // pass or the sweep removed bytes, so the category and the severity detail

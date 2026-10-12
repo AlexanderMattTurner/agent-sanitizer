@@ -14,8 +14,9 @@
  * output (test runs, build logs) is the single most common debugging action,
  * and SGR is display-only by the ECMA-48 grammar; an orphan `ESC` is not a
  * sequence at all. Neither can move the cursor, erase the screen, or carry an
- * OSC payload. Anything that IS a complete CSI/OSC token still blocks, as do
- * the invisible-char thresholds.
+ * OSC payload. Anything that IS a complete CSI/OSC token still blocks, as does
+ * SGR that hides text (CONCEAL, a foreground in its own background, a run that
+ * renders nothing) and the invisible-char verdict.
  */
 import {
   CHECKS,
@@ -23,10 +24,9 @@ import {
   CATEGORY_LABELS,
   LONG_RUN_THRESHOLD,
   SCATTERED_THRESHOLD,
-  countEffectiveInvisible,
-  payloadLongRunSample,
+  payloadVerdict,
 } from "./invisible.mjs";
-import { isBenignAnsi, stripAnsiFully } from "./layer1.mjs";
+import { escapesPreservable, stripAnsiFully } from "./layer1.mjs";
 import { CONTROL_INTRODUCER_SOURCE } from "./ansi.mjs";
 
 // Every raw ANSI control a prompt can carry: 7-bit ESC (U+001B) and the entire
@@ -95,27 +95,21 @@ export function classifyPrompt(prompt, strip = stripAnsiFully) {
   const hasAnsi = ANSI_INTRODUCER.test(prompt);
   const deAnsi = strip(prompt);
 
-  // Both gates read the SHARED definitions in ./invisible.mjs rather than
-  // spelling their own: what counts as a hidden run, and how many invisibles a
-  // text really carries once the carve-out's preserved joiners and its
-  // over-budget surplus are accounted for. See payloadLongRunSample /
-  // countEffectiveInvisible — including why the run probe masks the invisibles
-  // the strip layer would PRESERVE, so a legitimate emoji sequence cannot block
-  // a prompt that the strip layer would not even have flagged.
-  const longRunSample = payloadLongRunSample(deAnsi);
-  const invisibleCount = countEffectiveInvisible(deAnsi);
-  const invisiblesBelowThreshold =
-    longRunSample === null && invisibleCount < SCATTERED_THRESHOLD;
+  // The invisible half is payloadVerdict — the one definition the instruction
+  // scanner and the write path also gate on — so a legitimate emoji sequence
+  // cannot block a prompt that the other surfaces would not even have flagged.
+  const verdict = payloadVerdict(deAnsi);
 
-  if (!hasAnsi && invisiblesBelowThreshold) return { action: "pass" };
+  if (!hasAnsi && !verdict.payloadCapable) return { action: "pass" };
 
   // Inert escapes in an otherwise clean prompt — display-only colour and/or an
   // orphan introducer that forms no sequence: pass with a note instead of
   // blocking, so pasted colored logs and log fragments cut mid-escape remain
-  // usable. isBenignAnsi judges from what Layer 1's strip actually removed, so
-  // it covers the whole C1 block and any sequence that only reconstitutes
-  // during the strip; a complete CSI/OSC token falls through to the block.
-  if (hasAnsi && invisiblesBelowThreshold && isBenignAnsi(prompt))
+  // usable. escapesPreservable judges from what Layer 1's strip actually
+  // removed (the whole C1 block, and any sequence that only reconstitutes during
+  // the strip) AND refuses SGR that hides text; anything else falls through to
+  // the block.
+  if (hasAnsi && !verdict.payloadCapable && escapesPreservable(prompt))
     return { action: "note" };
 
   // CHECKS pairs a machine-readable category code with its detector; map each
@@ -126,6 +120,10 @@ export function classifyPrompt(prompt, strip = stripAnsiFully) {
   if (hasAnsi) categories.push(CATEGORY_LABELS[CATEGORY.ANSI]);
   return {
     action: "block",
-    reason: formatReason(categories, invisibleCount, longRunSample),
+    reason: formatReason(
+      categories,
+      verdict.invisibleCount,
+      verdict.longRuns[0]?.text ?? null,
+    ),
   };
 }

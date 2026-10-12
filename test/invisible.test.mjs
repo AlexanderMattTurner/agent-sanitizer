@@ -36,7 +36,9 @@ import {
   describeStripped,
   payloadInvisibleView,
   countPayloadInvisible,
+  BRAHMIC_CONSONANT_RANGES,
 } from "../src/invisible.mjs";
+import { loadUcd } from "../scripts/gen-joining-type.mjs";
 import { applyLayer1, stripAnsiFully } from "../src/layer1.mjs";
 import {
   fcRunOptions,
@@ -1301,29 +1303,43 @@ describe("stripInvisible: ideographic variation sequences", () => {
 // per-character variation-selected CJK run can't smuggle bits), and a real
 // Brahmic-consonant requirement before a virama (so a bare halant + ZWJ is not
 // mistaken for a conjunct). Each strip assertion is paired with a preserve one.
-describe("stripInvisible: preserve budget has an absolute hard cap", () => {
+describe("stripInvisible: the preserve budget's hard cap binds cover text, not joining letters", () => {
   const ZWNJ_CH = cp(0x200c);
   const countOf = (s, ch) => s.split(ch).length - 1;
+  // One Persian ZWNJ word: three joining letters (meem, yeh, khah) and the ZWNJ
+  // between the first two, which does real rendering work.
+  const word = cp(0x645) + cp(0x6cc) + ZWNJ_CH + cp(0x62e);
 
-  it(`never preserves more than PRESERVE_HARD_CAP joiners no matter how much cover text`, () => {
-    // 200 space-separated Persian ZWNJ words: each ZWNJ is meaningful (so none
-    // counts toward the scatter floor) and every gap resets the per-cluster cap,
-    // so ONLY the document-wide limit bounds the total. visibleLen ≈ 800 ⇒
-    // ceil(visibleLen / PER_VISIBLE) = 100, which WITHOUT the hard cap would
-    // preserve 100; the cap holds it to PRESERVE_HARD_CAP (64).
-    const unit = cp(0x645) + cp(0x6cc) + ZWNJ_CH + cp(0x62e) + " ";
-    const { cleaned, found } = stripInvisibleWithReport(unit.repeat(200));
+  it("cover text OUTSIDE the joining scripts cannot widen the allowance past PRESERVE_HARD_CAP", () => {
+    // 100 words, each padded with 30 ASCII characters: visibleLen = 3,300, so
+    // the proportional allowance (413) is capped at PRESERVE_HARD_CAP, and the
+    // 300 joining letters fund only ceil(300 / 8) = 38 — below the cap.
+    const { cleaned, found } = stripInvisibleWithReport(
+      (word + " " + "x".repeat(29)).repeat(100),
+    );
     assert.equal(countOf(cleaned, ZWNJ_CH), PRESERVE_HARD_CAP);
     assert.deepEqual(found, [CATEGORY.CF]);
   });
 
-  it("preserves every joiner when the count sits under the hard cap (precision)", () => {
-    // 40 words ⇒ 40 ZWNJ, below PRESERVE_HARD_CAP (64) and below ceil(160/8)=20?
-    // visibleLen ≈ 160 ⇒ ceil/8 = 20, floored to TOTAL_PRESERVED_JOINER_BUDGET…
-    // 40 would still overrun that floor, so pad each gap to keep the allowance
-    // above 40: 20-space gaps ⇒ visibleLen ≈ 40*23 = 920 ⇒ allowance 64, so all
-    // 40 survive. Counter-case proving the cap only clips the SURPLUS.
-    const unit = cp(0x645) + cp(0x6cc) + ZWNJ_CH + cp(0x62e) + " ".repeat(20);
+  it("joining letters fund the allowance at PRESERVED_JOINER_PER_VISIBLE, and a denser channel still trips", () => {
+    // 200 space-separated words: 600 joining letters buy ceil(600 / 8) = 75,
+    // above the cap; 200 joiners (one per three letters) overrun it, so the
+    // surplus is stripped and reported.
+    const { cleaned, found } = stripInvisibleWithReport(
+      (word + " ").repeat(200),
+    );
+    assert.equal(
+      countOf(cleaned, ZWNJ_CH),
+      Math.ceil(600 / PRESERVED_JOINER_PER_VISIBLE),
+    );
+    assert.ok(countOf(cleaned, ZWNJ_CH) > PRESERVE_HARD_CAP);
+    assert.deepEqual(found, [CATEGORY.CF]);
+  });
+
+  it("preserves every joiner when the count sits under the allowance (precision)", () => {
+    // 20-space gaps keep visibleLen ≈ 40 * 23 = 920 ⇒ allowance 64, so all 40
+    // survive. Counter-case proving the cap only clips the SURPLUS.
+    const unit = word + " ".repeat(20);
     const { cleaned, found } = stripInvisibleWithReport(unit.repeat(40));
     assert.equal(countOf(cleaned, ZWNJ_CH), 40);
     assert.deepEqual(found, []);
@@ -1398,6 +1414,83 @@ describe("stripInvisible: virama joiner requires a real consonant base", () => {
     const { cleaned, found } = stripInvisibleWithReport(conjunct);
     assert.equal(cleaned, conjunct);
     assert.deepEqual(found, []);
+  });
+});
+
+describe("stripInvisible: a ZWJ BEFORE a virama selects the reph/eyelash form", () => {
+  const RA = cp(0x930); // Devanagari RA
+  const VIRAMA = cp(0x94d);
+  const s = (...codePoints) => String.fromCodePoint(...codePoints);
+
+  // Consonant + ZWJ + virama is the encoded spelling of a different glyph, not a
+  // decoration: the Bengali RA with ya-phala (as in RAB, the Rapid Action
+  // Battalion) and the Marathi eyelash RA. Dropping the ZWJ rewrites the word
+  // into its reph spelling.
+  for (const [name, word] of [
+    ["Bengali RA with ya-phala", s(0x9b0, 0x200d, 0x9cd, 0x9af, 0x9be, 0x9ac)],
+    ["Marathi eyelash RA", s(0x930, 0x200d, 0x94d, 0x92f)],
+  ])
+    it(`preserves ${name} (precision)`, () => {
+      assert.deepEqual(stripInvisibleWithReport(word), {
+        cleaned: word,
+        found: [],
+      });
+    });
+
+  for (const [name, input, expected] of [
+    ["an ASCII base", `a${ZWJ}${VIRAMA}b`, `a${VIRAMA}b`],
+    ["no base at all", `${ZWJ}${VIRAMA}${cp(0x92f)}`, `${VIRAMA}${cp(0x92f)}`],
+    ["no virama after it", `${RA}${ZWJ}${cp(0x92f)}`, `${RA}${cp(0x92f)}`],
+  ])
+    it(`strips the ZWJ with ${name}`, () => {
+      assert.deepEqual(stripInvisibleWithReport(input), {
+        cleaned: expected,
+        found: [CATEGORY.CF],
+      });
+    });
+
+  // Every virama the UCD names, in its own script: both joiner positions
+  // around it are spellings, so a script the table missed fails here by name.
+  // The script is the ENGINE's \p{Script=…} of the virama, not the table's
+  // own tag, so a mislabelled span cannot vouch for itself.
+  const scripts = [...new Set(BRAHMIC_CONSONANT_RANGES.map(([tag]) => tag))];
+  const viramas = loadUcd()
+    .indicJson.IndicSyllabicCategory.filter(
+      (e) => e.syllabicCategory === "Virama",
+    )
+    .flatMap(({ range }) => {
+      const [start, end] = [range[0], range.at(-1)].map((h) => parseInt(h, 16));
+      return Array.from({ length: end - start + 1 }, (_, k) => start + k);
+    });
+  it("has viramas to check", () => assert.ok(viramas.length >= 27));
+  for (const virama of viramas) {
+    const name = `U+${virama.toString(16).toUpperCase()}`;
+    it(`preserves both joiner spellings around the virama ${name}`, () => {
+      const char = String.fromCodePoint(virama);
+      const script = scripts.find((tag) =>
+        new RegExp(`\\p{Script=${tag}}`, "u").test(char),
+      );
+      assert.ok(script, `${name} has no consonants in its own script`);
+      const spans = BRAHMIC_CONSONANT_RANGES.filter(([tag]) => tag === script);
+      const first = spans[0][1];
+      const last = spans[spans.length - 1][2];
+      for (const word of [
+        s(first, virama, 0x200d, last),
+        s(first, virama, 0x200c, last),
+        s(first, 0x200d, virama, last),
+      ])
+        assert.deepEqual(stripInvisibleWithReport(word), {
+          cleaned: word,
+          found: [],
+        });
+    });
+  }
+
+  it("strips a chain of them past the preserve budget", () => {
+    const chain = `${RA}${ZWJ}${VIRAMA}`.repeat(200);
+    const { cleaned, found } = stripInvisibleWithReport(chain);
+    assert.ok(cleaned.split(ZWJ).length - 1 <= PRESERVE_HARD_CAP);
+    assert.deepEqual(found, [CATEGORY.CF]);
   });
 });
 

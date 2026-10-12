@@ -108,6 +108,8 @@ const FUZZ_EXEMPT = Object.freeze({
     "composes excludeFromContextScan with a set of paths git listed; its one parse, the NUL-delimited listing, is pinned by the quoted-directory case in repo-scope.test.mjs",
   contextScopeContradiction:
     "maps a host-supplied load reason through a table, with no parse",
+  escapesPreservable:
+    "conjunction of isBenignAnsiKinds and sgrCarriesPayload, with no parse of its own",
   excludeFromContextScan: "path-prefix predicate over one scan entry name",
   hasNonAscii: "code-unit range predicate over one string",
   isBenignAnsiKinds:
@@ -164,9 +166,13 @@ const FUZZ_EXEMPT = Object.freeze({
   payloadInvisibleView:
     "the view the long-run probe reads, pinned by invisible-fast-path",
   payloadLongRunSample: "reads that same view, pinned by invisible-fast-path",
+  payloadVerdict:
+    "bundles findLongRuns over that view with countEffectiveInvisible, both reads of the analysis stripInvisible already ran",
   scanHtmlFragment:
     "has no invariant of its own beyond what the sanitizeHtml round-trip and splice-fidelity properties assert on its output",
   stripAnsiFully: "the ANSI half of applyLayer1, fuzzed through layer1-ansi",
+  stripTerminalFully:
+    "stripAnsiFully followed by the introducer sweep applyLayer1 runs, both fuzzed through layer1-ansi",
   suppressToolOutput:
     "substitutes a sentinel for a subtree and parses nothing; its content-block recogniser is an exact key/value match against a closed schema map, pinned by the block cases in output.test",
   toUtf16View:

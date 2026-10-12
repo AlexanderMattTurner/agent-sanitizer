@@ -247,11 +247,11 @@ def test_pattern_compiles_under_plain_re_with_no_flags() -> None:
 
 def _growth(compiled: re.Pattern, text: Callable[[int], str], n: int) -> float:
     """How much longer ``compiled`` takes on ``text(8 * n)`` than on ``text(n)``:
-    ~8 when linear, ~64 when quadratic. The best of five runs damps noise."""
+    ~8 when linear, ~64 when quadratic. The best of fifteen runs damps noise."""
 
     def seconds(subject: str) -> float:
         best = float("inf")
-        for _ in range(5):
+        for _ in range(15):
             start = time.perf_counter()
             compiled.sub("", subject)
             best = min(best, time.perf_counter() - start)
@@ -260,8 +260,9 @@ def _growth(compiled: re.Pattern, text: Callable[[int], str], n: int) -> float:
     return seconds(text(8 * n)) / seconds(text(n))
 
 
-# Between the ~8x of a linear pattern and the ~64x of a quadratic one.
-_LINEAR_GROWTH_BOUND = 24
+# Between a linear pattern (~8x ideal, ~16-24x measured at this size under cache
+# pressure and load) and the ~64x of a quadratic one.
+_LINEAR_GROWTH_BOUND = 32
 
 
 @pytest.mark.parametrize(
@@ -493,3 +494,75 @@ def test_matches_js_exactly_where_comparable(input_text: str, js_cleaned: str) -
     checked — byte equality against the recorded JS output, not the one-sided
     payload mask above, which passes whenever the port strips MORE."""
     assert strip_untrusted(input_text) == js_cleaned
+
+
+# ─── The composition loop: one pass is not enough ─────────────────────────────
+
+# The shared corpus carries the composition cases both ports are held to: each
+# `layer1_reconstituted_*` input hides an escape behind an invisible inside its
+# own introducer, so a single {escape, invisible} pass leaves its body (`[31m`)
+# as visible text, and each `layer1_outruns_pass_bound_*` nest needs more
+# rounds than the pass bound. test/layer1-ansi.test.mjs iterates the same file.
+_COMPOSITION_CASES = [
+    case
+    for case in _CORPUS
+    if case[0].startswith(("layer1_reconstituted_", "layer1_outruns_"))
+]
+
+
+def _strip_charset(text: str) -> str:
+    return "".join(
+        c for c in text if unicodedata.category(c) != "Cf" and ord(c) not in _INVISIBLE
+    )
+
+
+def _carve_out_inside_escape_body(js_cleaned: str) -> bool:
+    """The JS layer kept a carve-out character (a registered `0` + VS1) inside
+    what would be CSI parameters once it is gone. That character is what stops
+    the escape from forming there, and its introducer has already been swept,
+    so the JS output shows the body; the port deletes the character, the escape
+    forms, and it goes whole. Both are fixed points; they just differ."""
+    return any(
+        m.end() < len(js_cleaned) and ord(js_cleaned[m.end()]) in _INVISIBLE
+        for m in re.finditer(r"\[[0-?]*", js_cleaned)
+    )
+
+
+_RELATION_CORPUS = [
+    case
+    for case in _CORPUS
+    if not _has_lone_surrogate(case[1]) and not _carve_out_inside_escape_body(case[2])
+]
+
+
+def test_relation_corpus_excludes_only_the_designed_nests() -> None:
+    """Non-vacuity both ways: the composition cases are in the corpus, the
+    exclusion fires, and only on nests built to put a selector in an escape."""
+    assert {c[0] for c in _COMPOSITION_CASES} >= {
+        "layer1_reconstituted_nested_split",
+        "layer1_outruns_pass_bound_s6_p15_x75",
+    }
+    excluded = {c[0] for c in _CORPUS if _carve_out_inside_escape_body(c[2])}
+    assert excluded
+    assert all(name.startswith("layer1_outruns_pass_bound_") for name in excluded)
+    assert len(_RELATION_CORPUS) > len(_EQUALITY_CORPUS)
+
+
+@pytest.mark.parametrize(
+    "input_text,js_cleaned",
+    [(c[1], c[2]) for c in _RELATION_CORPUS],
+    ids=[c[0] for c in _RELATION_CORPUS],
+)
+def test_is_js_output_minus_the_carve_out(input_text: str, js_cleaned: str) -> None:
+    """The exact relation behind both one-sided checks above: the port is the
+    JS layer with its linguistic carve-out undone, so removing every charset
+    member from the recorded JS output gives the port's output byte for byte —
+    including the cases the equality corpus excludes for carrying invisibles,
+    and so pinning each composition case's exact output."""
+    assert strip_untrusted(input_text) == _strip_charset(js_cleaned)
+
+
+@pytest.mark.parametrize("text", [c[1] for c in _CORPUS], ids=[c[0] for c in _CORPUS])
+def test_is_a_fixed_point(text: str) -> None:
+    once = strip_untrusted(text)
+    assert strip_untrusted(once) == once

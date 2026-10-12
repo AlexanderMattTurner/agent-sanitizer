@@ -18,6 +18,10 @@
  */
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+
+import { unsandbox } from "./helpers/repo-root.mjs";
 
 import {
   joiningType,
@@ -26,13 +30,20 @@ import {
   BRAHMIC_CONSONANT_RANGES,
   UNICODE_VERSION,
 } from "../src/joining-type.mjs";
-import { deriveTables, loadUcd } from "../scripts/gen-joining-type.mjs";
+import {
+  deriveTables,
+  loadUcd,
+  render,
+  viramaScripts,
+} from "../scripts/gen-joining-type.mjs";
 
-const { joiningJson, indicJson, consonantJson, version } = loadUcd();
+const { joiningJson, indicJson, consonantJson, scriptsJson, version } =
+  loadUcd();
 const { joining, virama, brahmic } = deriveTables(
   joiningJson,
   indicJson,
   consonantJson,
+  scriptsJson,
 );
 
 const MAX_CP = 0x10ffff;
@@ -158,4 +169,63 @@ describe("joining-type generated module", () => {
   }
   it("does not treat a plain consonant as a virama", () =>
     assert.equal(isVirama(0x915), false));
+});
+
+// The consonant table's script set is DERIVED from the viramas, never listed:
+// every script that owns a virama contributes its consonants, and no other
+// script does. The engine's own \p{Script=…} is the independent witness for
+// each virama's script, so the vendored Scripts slice cannot vouch for itself.
+describe("Brahmic consonant scripts are exactly the scripts that own a virama", () => {
+  const tagged = [...new Set(BRAHMIC_CONSONANT_RANGES.map(([s]) => s))].sort();
+
+  it("the table's script tags equal the derived virama scripts", () => {
+    assert.deepEqual(tagged, viramaScripts(indicJson, scriptsJson));
+  });
+
+  it("every virama's engine-reported script has consonants in the table", () => {
+    assert.ok(virama.length > 0);
+    for (const [start, end] of virama)
+      for (let cp = start; cp <= end; cp++) {
+        const char = String.fromCodePoint(cp);
+        const owners = tagged.filter((s) =>
+          new RegExp(`\\p{Script=${s}}`, "u").test(char),
+        );
+        assert.equal(owners.length, 1, `U+${cp.toString(16)}: ${owners}`);
+      }
+  });
+
+  it("covers the scripts beyond the ten major Indic ones", () => {
+    for (const script of ["Brahmi", "Grantha", "Javanese", "Balinese", "Newa"])
+      assert.ok(tagged.includes(script), script);
+  });
+
+  it("leaves out scripts whose killer is not a Virama", () => {
+    for (const script of ["Khmer", "Myanmar", "Thai", "Tibetan"])
+      assert.ok(!tagged.includes(script), script);
+  });
+
+  it("throws rather than dropping a virama the Scripts slice does not cover", () => {
+    assert.throws(
+      () => viramaScripts(indicJson, { Scripts: scriptsJson.Scripts.slice(1) }),
+      /virama U\+94d has no Script entry/,
+    );
+  });
+});
+
+// The range checks above compare VALUES, so a hand edit or a template change
+// with no regeneration that leaves the tables intact (a comment, a helper, the
+// lookup code) stays green there. Bytes are what the generator owns.
+describe("src/joining-type.mjs is byte-identical to a fresh generation", () => {
+  it("matches render() of the vendored UCD slices", () => {
+    assert.equal(
+      readFileSync(
+        unsandbox(
+          fileURLToPath(new URL("../src/joining-type.mjs", import.meta.url)),
+        ),
+        "utf8",
+      ),
+      render({ joining, virama, brahmic, version }),
+      "src/joining-type.mjs is stale — run `pnpm gen:joining-type`",
+    );
+  });
 });
