@@ -47,7 +47,8 @@ _FRAGMENTS = [
 # Reserved sentinel code points make a map request unmappable by design; the
 # generated fragments never include them. Each fragment is followed by a space or
 # by nothing, so secrets are also glued directly onto a neighboring run — the
-# shape where a field value would run on into a detected secret's map sentinel.
+# shape where a field value would run on into a detected secret's map sentinel
+# (one such case is pinned in test_glued_secret_corner_round_trips).
 _text = st.lists(
     st.tuples(st.sampled_from(_FRAGMENTS), st.sampled_from(["", " "])), max_size=25
 ).map(lambda parts: "".join(fragment + sep for fragment, sep in parts))
@@ -106,3 +107,16 @@ def test_output_minus_placeholders_is_subsequence_of_input(text):
 def test_never_throws_on_arbitrary_text(text):
     redact(text, _CONFIG)
     redact_map(text, _CONFIG)
+
+
+def test_glued_secret_corner_round_trips():
+    """A long non-detected run glued with no separator onto a detected secret,
+    under a credential field. The field value stops at the AWS redaction's map
+    sentinel exactly as it stops at the plain-mode placeholder's `[`, so map
+    mode matches plain mode and the view round-trips."""
+    text = "password: q9X2mN7pK4rT8wY1cV5bZ3dF6gH0jL2eAKIAIOSFODNN7EXAMPLE"
+    plain = "password: [REDACTED][REDACTED: AWS Access Key]"
+    assert redact(text)[0] == plain
+    view = redact_map(text)
+    assert view["text"] == plain
+    assert reconstruct(view) == text

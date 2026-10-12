@@ -58,7 +58,8 @@ _DENYLISTS = {
 
 
 class AnthropicApiKeyDetector(RegexBasedDetector):
-    """Anthropic API keys (``sk-ant-…``). gitleaks rule: ``anthropic-api-key``."""
+    """Anthropic API and Admin API keys and OAuth access tokens
+    (``sk-ant-{api03,admin01,oat01}-…``). gitleaks rule: ``anthropic-api-key``."""
 
     secret_type = "Anthropic API Key"  # noqa: S105 — a detector label, not a secret
     denylist = _DENYLISTS["AnthropicApiKeyDetector"]
@@ -131,6 +132,16 @@ class OpenRouterApiKeyDetector(RegexBasedDetector):
 
     secret_type = "OpenRouter API Key"  # noqa: S105 — a detector label, not a secret
     denylist = _DENYLISTS["OpenRouterApiKeyDetector"]
+
+
+class LooseProviderKeyDetector(RegexBasedDetector):
+    """``sk-ant-…`` / ``sk-or-…`` keys outside the one fixed shape
+    ``AnthropicApiKeyDetector`` / ``OpenRouterApiKeyDetector`` match: other
+    version tags, lengths and body alphabets. A canonical key is left to its
+    sibling, so it keeps that one label."""
+
+    secret_type = "Provider API Key"  # noqa: S105 — a detector label, not a secret
+    denylist = _DENYLISTS["LooseProviderKeyDetector"]
 
 
 class GroqApiKeyDetector(RegexBasedDetector):
@@ -436,8 +447,14 @@ def _keyword_value(quote: str) -> str:
     quote — a backtick is allowed in the body, since a real credential can
     contain one. Each quote gets its own pattern (see ``denylist`` below)
     rather than a shared class, so open and close are the SAME literal
-    character and need no backreference, which would add a second group."""
-    word = rf"[^\s{quote}]{{1,{_KEYWORD_WORD_MAX}}}"
+    character and need no backreference, which would add a second group.
+
+    Inside a double-quoted value a backslash escapes the next character, so
+    a JSON ``"pass\\"word"`` is one value rather than ``pass\\`` plus a
+    leaked tail. A single-quoted value keeps the backslash literal: shell's
+    ``'abc\\'`` closes on that quote."""
+    char = r'(?:[^\s"\\]|\\\S|\\(?!\S))' if quote == '"' else rf"[^\s{quote}]"
+    word = rf"{char}{{1,{_KEYWORD_WORD_MAX}}}"
     return rf"((?=\w){word}(?:[ \t]{word}){{0,{_KEYWORD_WORDS_MAX - 1}}})"
 
 

@@ -16,9 +16,10 @@ from agent_sanitizer.secrets import (
     DEFAULT_MIN_SECRET_LEN,
     detected_secret_values,
     redact,
+    redact_map,
 )
 from agent_sanitizer.secrets.prefilter import LiteralProbe
-from redactor_helpers import cfg, run_plain
+from redactor_helpers import cfg, reconstruct, run_plain
 
 AWS_KEY = "AKIA" + "ZYXWVUT123456789"
 _LONG = "qZ7vK2mNp9rT4wX1cY6bA8dF3gH5jL0e"  # 32 chars, >= DEFAULT_MIN_SECRET_LEN
@@ -108,6 +109,52 @@ def test_redact_env_bound(label, field, var, value, text, expect_redacted):
     else:
         assert out == text, label
         assert found == [], label
+
+
+_SHORT_ENV = "0123456789ABCDEF"
+_LONG_ENV = _SHORT_ENV + "-REST-OF-SECRET"
+
+
+@pytest.mark.parametrize(
+    "provider_vars, host_cred_vars",
+    [
+        ({"OPENROUTER_API_KEY": _SHORT_ENV}, {"GH_TOKEN": _LONG_ENV}),
+        ({"GH_TOKEN": _LONG_ENV}, {"OPENROUTER_API_KEY": _SHORT_ENV}),
+    ],
+    ids=["shorter-configured-first", "longer-configured-first"],
+)
+def test_env_secret_containing_another_redacts_whole(provider_vars, host_cred_vars):
+    config = cfg(provider_vars=provider_vars, host_cred_vars=host_cred_vars)
+    assert redact(f"seen {_LONG_ENV} here", config) == (
+        "seen [REDACTED: GH_TOKEN] here",
+        ["GH_TOKEN"],
+    )
+    assert redact(f"a {_LONG_ENV} b {_SHORT_ENV} c", config) == (
+        "a [REDACTED: GH_TOKEN] b [REDACTED: OPENROUTER_API_KEY] c",
+        ["GH_TOKEN", "OPENROUTER_API_KEY"],
+    )
+
+
+def test_env_secret_order_counts_visible_length():
+    # Raw, the padded short value is the longer one; the matcher drops the
+    # invisibles, so ordering by raw length would let it claim the prefix.
+    padded = _SHORT_ENV + "\u200b" * 20
+    config = cfg(provider_vars={"OPENROUTER_API_KEY": padded, "GH_TOKEN": _LONG_ENV})
+    assert redact(f"seen {_LONG_ENV} here", config) == (
+        "seen [REDACTED: GH_TOKEN] here",
+        ["GH_TOKEN"],
+    )
+
+
+def test_env_secret_is_never_matched_inside_a_placeholder():
+    name = f"{_SHORT_ENV}_TOKEN"
+    config = cfg(provider_vars={"OPENROUTER_API_KEY": _SHORT_ENV, name: _LONG_ENV})
+    text = f"seen {_LONG_ENV} here"
+    expected = f"seen [REDACTED: {name}] here"
+    assert redact(text, config) == (expected, [name])
+    view = redact_map(text, config)
+    assert view["text"] == expected
+    assert reconstruct(view) == text
 
 
 def test_main_redacts_env_bound_value():
