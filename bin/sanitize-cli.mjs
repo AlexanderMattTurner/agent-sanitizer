@@ -20,7 +20,8 @@
  *   scanInstructionFiles { globs, cwd? }           -> { findings: [{ file, findings }] }
  *     Skips `node_modules`, the directories git ignores wholesale, and any
  *     nested worktree — none of them is the scanned checkout's own source.
- *   cleanFile          { path }                    -> { changed }
+ *   cleanFile          { path, root? }             -> { changed }
+ *     Refuses a write whose realpath leaves `root` (default: `path`'s own directory).
  *
  * A failure response is `{ "error": string }`. Two modes, same binary:
  *
@@ -48,6 +49,7 @@
  */
 import { Buffer } from "node:buffer";
 import { realpathSync } from "node:fs";
+import { dirname } from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
 
@@ -139,13 +141,12 @@ export const OPS = {
 
   // SECURITY (R8): `scanInstructionFiles` and `cleanFile` take filesystem
   // paths/globs straight from the request and read (and, for cleanFile, WRITE)
-  // whatever they resolve to, with NO root confinement — `cwd`/`path`/`globs`
-  // may escape any directory (absolute paths, `..`, symlinks). Unlike the
-  // text-in/text-out ops, the request here names files on the host. The stdin
-  // peer that sends these requests must therefore be FULLY TRUSTED: never wire
-  // this CLI's stdin to untrusted/model-controlled input for these ops. If you
-  // must accept untrusted callers, add opt-in root confinement (reject paths
-  // that resolve outside an allow-listed root) before exposing them.
+  // whatever they resolve to. Unlike the text-in/text-out ops, the request here
+  // names files on the host, so the stdin peer must be FULLY TRUSTED: never wire
+  // this CLI's stdin to untrusted/model-controlled input for these ops. The one
+  // confinement on offer is cleanFile's opt-in `root`, which refuses a write
+  // whose realpath leaves it; without one the write is bounded only by the
+  // file's own directory.
   /** @param {Record<string, unknown>} req */
   async scanInstructionFiles(req) {
     const globs = req.globs;
@@ -176,8 +177,9 @@ export const OPS = {
   /** @param {Record<string, unknown>} req */
   async cleanFile(req) {
     const path = requireString(req, "path");
+    const root = "root" in req ? requireString(req, "root") : dirname(path);
     const { cleanFile } = await import("../src/instructions.mjs");
-    return { changed: cleanFile(path) };
+    return { changed: cleanFile(path, { root }) };
   },
 };
 
