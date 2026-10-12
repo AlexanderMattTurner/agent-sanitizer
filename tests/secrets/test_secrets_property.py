@@ -45,13 +45,17 @@ _FRAGMENTS = [
 ]
 
 # Reserved sentinel code points make a map request unmappable by design; the
-# generated fragments never include them. Fragments are joined with a space so no
-# two secret tokens glue into one contiguous run: gluing a long non-detected run
-# directly onto a detected secret is the acknowledged pathological corner where
-# the field regex swallows a map sentinel (pinned separately in
-# test_glued_secret_corner_matches_reference), and the design only guarantees a
-# clean round-trip for separated secrets — which is every realistic input.
-_text = st.lists(st.sampled_from(_FRAGMENTS), max_size=25).map(" ".join)
+# generated fragments never include them. Each fragment is followed by a space or
+# by nothing, so secrets are also glued directly onto a neighboring run — the
+# shape where a field value would run on into a detected secret's map sentinel.
+_text = st.lists(
+    st.tuples(st.sampled_from(_FRAGMENTS), st.sampled_from(["", " "])), max_size=25
+).map(lambda parts: "".join(fragment + sep for fragment, sep in parts))
+# Idempotence is asked of space-separated text only. A token glued word-internally
+# onto another (`AKIA…EXAMPLEghp_…`) is refused by its boundary lookbehind, and
+# the first pass's placeholder (`…]ghp_…`) then hands it the boundary, so a
+# second pass redacts more than the first.
+_spaced_text = st.lists(st.sampled_from(_FRAGMENTS), max_size=25).map(" ".join)
 
 
 def _is_subsequence(sub: str, full: str) -> bool:
@@ -60,7 +64,7 @@ def _is_subsequence(sub: str, full: str) -> bool:
 
 
 @settings(max_examples=250, deadline=None)
-@given(_text)
+@given(_spaced_text)
 def test_redaction_is_idempotent(text):
     once, _ = redact(text, _CONFIG)
     twice, _ = redact(once, _CONFIG)
@@ -102,17 +106,3 @@ def test_output_minus_placeholders_is_subsequence_of_input(text):
 def test_never_throws_on_arbitrary_text(text):
     redact(text, _CONFIG)
     redact_map(text, _CONFIG)
-
-
-def test_glued_secret_corner_matches_reference():
-    """Pin the one acknowledged pathological corner byte-for-byte: a long
-    non-detected run glued with no separator directly onto a detected secret makes
-    the field-value regex swallow the AWS redaction's map sentinel, leaving a
-    dangling close-sentinel in the view (so it does NOT round-trip; the JS
-    rehydrator fails closed on such a view). This is the exact behaviour of the
-    original claude-guard engine — pinned here so a future change to the sentinel
-    handling is caught rather than silently altering the two-way map contract."""
-    text = "password: q9X2mN7pK4rT8wY1cV5bZ3dF6gH0jL2eAKIAIOSFODNN7EXAMPLE"
-    view = redact_map(text)
-    assert view["text"] == "password: [REDACTED] "
-    assert reconstruct(view) != text

@@ -111,7 +111,7 @@ _NAME_TRUST_FIXTURES = {
     ),
     "_is_regex_literal": (
         "/secret|token|password/i",
-        "/secretsecretsecretsecret/i",
+        "/^secretsecretsecretsecret$/i",
     ),
     # The gates below decide ON the field name or the text around it, so "the
     # verdict is independent of the field name" is not a property they can have

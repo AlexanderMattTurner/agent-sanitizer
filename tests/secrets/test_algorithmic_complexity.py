@@ -36,10 +36,12 @@ A quadratic that lives entirely in a dependency (detect-secrets calls
 """
 
 import hashlib
+import re
 import sys
 import time
 
 import pytest
+from detect_secrets.settings import get_plugins
 
 import agent_sanitizer.secrets as pkg
 from agent_sanitizer.secrets import (
@@ -55,6 +57,12 @@ from agent_sanitizer.secrets import (
     strip_invisible,
 )
 from agent_sanitizer.secrets.placeholders import PLACEHOLDER_RE
+from agent_sanitizer.secrets.prefilter import (
+    _c as _sre_constants,
+    _parser as _sre_parser,
+    denylist_patterns,
+    required_literals,
+)
 
 # Doubling the input doubles the work when the cost is linear and quadruples it
 # when it is quadratic. The sizes are what make that gap readable: the engine's
@@ -390,4 +398,113 @@ def test_the_measure_catches_a_quadratic():
     assert ratio >= _SUPER_LINEAR_RATIO, (
         f"a deliberately quadratic routine measured {ratio:.2f}x — the harness "
         "cannot tell quadratic from linear, so every assertion above is vacuous"
+    )
+
+
+# ─── Adversarial repetition of a pattern's own opening ───────────────────────
+# The quadratic shape a regex gate cannot see from the pattern alone: a pattern
+# whose attempts can start inside a run another attempt already read, repeated
+# until the run is long. `"sk-" * n` against the bundled OpenAI pattern measured
+# 35.8s at 96KB; `"eyJ-" * n` against an unanchored JWT pattern measured 64x CPU
+# for 8x input. Measured in CPU seconds as an 8x-step RATIO, like the copy gate.
+_SHAPE_SEPARATORS = ("", "-", "=", "_", ".", " ", "/")
+_SHAPE_SMALL_UNITS = 1000
+_SHAPE_GROWTH_LIMIT = 15.0
+# Below this CPU time on the LARGE side a ratio is timer noise, not a curve: a
+# linear scan of every payload here costs milliseconds, the measured quadratics
+# cost 0.4s to 2.6s.
+_SHAPE_NOISE_FLOOR_SECONDS = 0.05
+
+
+def _leading_literal(pattern: re.Pattern[str]) -> str:
+    """The literal a match of ``pattern`` opens with (after a leading lookbehind),
+    or, when it opens on a class or an alternation, its rarest required literal."""
+    out = []
+    for op, arg in _sre_parser.parse(pattern.pattern, pattern.flags):
+        if op is _sre_constants.ASSERT_NOT and not out:
+            continue
+        if op is not _sre_constants.LITERAL:
+            break
+        out.append(chr(arg))
+    if out:
+        return "".join(out)
+    literals = required_literals(pattern.pattern, pattern.flags)
+    return min(literals, key=lambda lit: (len(lit), lit)) if literals else "a"
+
+
+def _live_denylist_patterns() -> list[re.Pattern[str]]:
+    with configure_plugins():
+        return denylist_patterns(get_plugins())
+
+
+def _shape_growth(call_for) -> tuple[float, float]:
+    """(ratio, large-side CPU seconds) from SMALL to 8x SMALL units, BOTH sides
+    the best of three samples. `_cpu_growth_ratio` repeats only the small side
+    because its callers fail on a LOW ratio; this gate fails on a HIGH one, so a
+    single large sample that absorbs a garbage collection (a ~50ms pause once
+    the full suite's heap is live) reads as a quadratic in a literal pattern."""
+    small = min(_cpu_seconds(call_for(_SHAPE_SMALL_UNITS)) for _ in range(3))
+    large = min(_cpu_seconds(call_for(_SHAPE_SMALL_UNITS * 8)) for _ in range(3))
+    return large / max(small, 1e-7), large
+
+
+def test_no_live_pattern_is_quadratic_on_its_own_opening_repeated():
+    """Every live denylist pattern, fed its own opening literal repeated with
+    each separator a token body may admit."""
+    patterns = _live_denylist_patterns()
+    assert len(patterns) >= 40, len(patterns)
+    slow = []
+    for pattern in patterns:
+        literal = _leading_literal(pattern)
+        for sep in _SHAPE_SEPARATORS:
+            unit = literal + sep
+            ratio, large = _shape_growth(
+                lambda n, unit=unit, pattern=pattern: (
+                    lambda: list(pattern.finditer(unit * n))
+                )
+            )
+            if ratio >= _SHAPE_GROWTH_LIMIT and large >= _SHAPE_NOISE_FLOOR_SECONDS:
+                slow.append((pattern.pattern[:60], unit, round(ratio, 1), large))
+    assert slow == [], slow
+
+
+def test_the_shape_measure_catches_an_unanchored_quadratic():
+    """Non-vacuity: the bundled OpenAI shape, unanchored and unbounded, must
+    trip both the ratio and the noise floor."""
+    quadratic = re.compile(r"sk-[A-Za-z0-9_-]*[A-Za-z0-9]{20}T3BlbkFJ")
+    ratio, large = _shape_growth(lambda n: lambda: list(quadratic.finditer("sk-" * n)))
+    assert ratio >= _SHAPE_GROWTH_LIMIT, ratio
+    assert large >= _SHAPE_NOISE_FLOOR_SECONDS, large
+
+
+# Whole-engine payloads for the field-value and PEM passes, which run patterns
+# the denylist sweep above never sees. Each unit repeats the pass's own opening.
+_ENGINE_SHAPES = {
+    "identifier segments": lambda n: "token" + "_token" * n + "!",
+    "segment then junk": lambda n: "password_" + "a_" * n + "!",
+    "noun then whitespace": lambda n: ("password" + " " * 50) * (n // 8),
+    "nested benign url": lambda n: "token_url=" + "https://a/token=" * n,
+    "nested benign metadata": lambda n: "token_type=" + "xtoken_type=" * n,
+    "pem headers": lambda n: "-----BEGIN PRIVATE KEY-----" * (n // 4),
+    "pem body lines": lambda n: "-----BEGIN PRIVATE KEY-----\n" + "QUFB\n" * n,
+    "pem json body": lambda n: "-----BEGIN PRIVATE KEY-----" + "\\nQUFB" * n,
+    "pem blocks": lambda n: "-----BEGIN PRIVATE KEY-----\nQUFB QUFB\n" * (n // 4),
+    "pem markers in prose": lambda n: (
+        "-----BEGIN PRIVATE KEY----- a " * (n // 4) + "-----END PRIVATE KEY-----"
+    ),
+}
+
+
+@pytest.mark.parametrize("shape", sorted(_ENGINE_SHAPES))
+@pytest.mark.parametrize("web_ingress", [False, True])
+def test_engine_pass_is_linear_on_its_own_opening_repeated(shape, web_ingress):
+    """The field-value pass is tried at every credential noun and the PEM pass
+    at every header, so each must bound one attempt — `token` + `_token` * n
+    measured 87s at 96KB before the field key's segment run was bounded."""
+    config = RedactorConfig(web_ingress=web_ingress)
+    make = _ENGINE_SHAPES[shape]
+    redact(make(8), config)
+    ratio, large = _shape_growth(lambda n: lambda: redact(make(n), config))
+    assert ratio < _SHAPE_GROWTH_LIMIT or large < _SHAPE_NOISE_FLOOR_SECONDS, (
+        f"{shape}: {ratio:.1f}x CPU for 8x input ({large:.2f}s large side)"
     )

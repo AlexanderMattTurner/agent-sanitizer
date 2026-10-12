@@ -18,10 +18,11 @@ detect-secrets has no Google or Anthropic detector (verified against its plugin
 list); both are credential formats a coding agent's tool output can leak, so they
 must be redacted before the model sees them.
 
-The pure-regex classes load their ``denylist`` from the shared JSON. Three
+The pure-regex classes load their ``denylist`` from the shared JSON. Four
 families carry their regexes inline instead: ``JwtFullTokenDetector`` (it
 subclasses a bundled detector to keep its base64/JSON validation),
-``BoundedKeywordDetector`` (it is built from detect-secrets' own noun list), and
+``BoundedKeywordDetector`` (it is built from detect-secrets' own noun list),
+``OpenAIApiKeyDetector`` (a bounded copy of a bundled quadratic pattern), and
 the four keyword-context detectors that replace a bundled cubic-backtracking
 pattern (they need ``re.IGNORECASE``, which the JSON's JS-portable subset
 forbids as an inline flag).
@@ -166,6 +167,28 @@ class NpmDetector(RegexBasedDetector):
     denylist = _DENYLISTS["NpmDetector"]
 
 
+# detect-secrets' OpenAIDetector is `sk-[A-Za-z0-9-_]*[A-Za-z0-9]{20}T3BlbkFJ…`:
+# the unbounded run after `sk-` is retried at every `sk-` and scans to the end of
+# the text each time looking for `T3BlbkFJ`, so `"sk-" * n` costs O(n^2) (96KB
+# measured 35.8s in one redact() call). Inline rather than a JSON row because the
+# bundled shape is kept exactly — same secret_type, same body — and only bounded.
+class OpenAIApiKeyDetector(RegexBasedDetector):
+    """OpenAI API keys (``sk-…T3BlbkFJ…``). Bounded, boundary-anchored copy of
+    the bundled ``OpenAIDetector`` — see the module comment above."""
+
+    secret_type = "OpenAI Token"  # noqa: S105 — a detector label, not a secret
+    # The project/service-account name before the key body is bounded at 256,
+    # far past any real `sk-proj-`/`sk-svcacct-` prefix. The leading lookbehind
+    # covers the whole body class, `-` included, so no attempt starts inside a
+    # run another attempt already reads (`task-…`, `sk-sk-sk-…`).
+    denylist = [  # noqa: RUF012
+        re.compile(
+            r"(?<![A-Za-z0-9_-])sk-[A-Za-z0-9_-]{0,256}"
+            r"[A-Za-z0-9]{20}T3BlbkFJ[A-Za-z0-9]{20}"
+        ),
+    ]
+
+
 class ReplicateApiTokenDetector(RegexBasedDetector):
     """Replicate API tokens (``r8_…``). No gitleaks rule; prefix from Replicate's
     docs (https://replicate.com/docs/topics/security/api-tokens)."""
@@ -223,22 +246,19 @@ class JwtFullTokenDetector(_jwt.JwtTokenDetector):
     Subclasses ``JwtTokenDetector`` to keep its base64/JSON validation; only the
     signature quantifier changes from lazy to greedy. gitleaks rule: ``jwt``."""
 
-    # Per-segment quantifiers are BOUNDED ({1,65536}) rather than ``+``: an
-    # unbounded run retried at every ``eyJ`` start makes an unanchored search
-    # polynomial, and a finite bound is provably linear. The bound must clear a
-    # full RFC 7515 header carrying an ``x5c`` certificate CHAIN — several base64
-    # DER certs run well past 8192 chars, and a header that overflowed the bound
-    # matched NOTHING and leaked the whole JWT in cleartext. 65536 base64
-    # chars/segment dwarfs even a multi-cert chain while staying linear. The
-    # third segment is optional so unsigned (``header.payload.``) and two-part
-    # JWTs still match, exactly as the bundled detector did.
+    # Each segment is bounded at 65536, past a header carrying an ``x5c`` cert
+    # chain. A failed attempt can still read that far, so each starts on its own
+    # run: the lookbehind refuses a start after a body char (`eyJ-eyJ-…`), and `=`
+    # is only a segment's trailing padding, so `eyJ=eyJ=…` fails each start at
+    # once. The optional third segment keeps unsigned and two-part JWTs.
     # noqa rationale: detect-secrets' RegexBasedDetector declares `denylist` as an
     # instance attribute, so a ClassVar annotation errors pyright; the subclass sets it
     # as a class attribute by framework contract, which is the shared-state RUF012 flags.
     denylist = [  # noqa: RUF012
         re.compile(
-            r"eyJ[A-Za-z0-9_=-]{1,65536}\.[A-Za-z0-9_=-]{1,65536}"
-            r"(?:\.[A-Za-z0-9_=-]{0,65536})?"
+            r"(?<![A-Za-z0-9_-])eyJ[A-Za-z0-9_-]{1,65536}={0,2}"
+            r"\.[A-Za-z0-9_-]{1,65536}={0,2}"
+            r"(?:\.[A-Za-z0-9_-]{0,65536}={0,2})?"
         ),
     ]
 
