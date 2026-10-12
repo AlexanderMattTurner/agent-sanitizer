@@ -84,6 +84,9 @@ importers:
       '@types/node':
         specifier: 25.9.1
         version: 25.9.1
+      '@unicode/unicode-17.0.0':
+        specifier: 2.0.7
+        version: 2.0.7
       acorn:
         specifier: ^8.18.0
         version: 8.18.0
@@ -941,6 +944,9 @@ packages:
   '@typescript-eslint/visitor-keys@8.61.0':
     resolution: {integrity: sha512-QVLZu3ZPQEE+HICQyAMZ2yLQhxf0meY/wx6Hx14YcTNj13JB3qHlX3lJ02L3fLGHgERRH71kvYDwiXIguT3AjQ==}
     engines: {node: ^18.18.0 || ^20.9.0 || >=21.1.0}
+
+  '@unicode/unicode-17.0.0@2.0.7':
+    resolution: {integrity: sha512-XdCUsw7exiSD8QICrzwb99xx9O/e7qMx/Oew1e8MBQGavCIIR0VO6vID7OSH/wQjUjogcfydqmsuRLkGM6LfLA==}
 
   acorn-jsx@5.3.2:
     resolution: {integrity: sha512-rq9s+JNhf0IChjtDXxllJ7g41oZk5SlXtp0LHwyA5cejwn7vKmKp4pPri6YEePv2PU65sAsegbXtIinmDFDXgQ==}
@@ -3017,6 +3023,8 @@ snapshots:
     dependencies:
       '@typescript-eslint/types': 8.61.0
       eslint-visitor-keys: 5.0.1
+
+  '@unicode/unicode-17.0.0@2.0.7': {}
 
   acorn-jsx@5.3.2(acorn@8.18.0):
     dependencies:
