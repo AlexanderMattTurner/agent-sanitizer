@@ -423,17 +423,21 @@ describe("findInstructionFiles", () => {
 
   // Node's own globSync before 22.22.1 / 24.13.1 / 25.4.0 matches none of
   // these, so each case is red on such a Node without the expansion.
-  for (const [pattern, exclude, expected] of [
+  for (const [pattern, pruned, expected] of [
     [
       "**/.claude/*.md",
       undefined,
       [".claude/notes.md", "a/b/.claude/notes.md", "pkg/.claude/notes.md"],
     ],
+    ["**/.claude/*.md", "pkg", [".claude/notes.md", "a/b/.claude/notes.md"]],
+    // The dot segment itself pruned: an affected Node's rewrite spells it as a
+    // literal segment, which Node never hands to `exclude`.
     [
       "**/.claude/*.md",
-      (entry) => entry === "pkg",
+      "pkg/.claude",
       [".claude/notes.md", "a/b/.claude/notes.md"],
     ],
+    ["**/.claude/skills/**/*.md", "pkg/.claude", [".claude/skills/a/SKILL.md"]],
     [
       "**/.claude/skills/**/*.md",
       undefined,
@@ -445,7 +449,7 @@ describe("findInstructionFiles", () => {
       [".claude/.y/z.md", "a/.claude/.y/z.md"],
     ],
   ])
-    it(`walks ${pattern} into every non-dot depth${exclude ? " under exclude" : ""}`, () => {
+    it(`walks ${pattern} into every non-dot depth${pruned ? `, pruning ${pruned}` : ""}`, () => {
       for (const rel of [
         ".claude/notes.md",
         "a/b/.claude/notes.md",
@@ -460,7 +464,11 @@ describe("findInstructionFiles", () => {
         mkdirSync(join(tmpDir, rel, ".."), { recursive: true });
         writeFileSync(join(tmpDir, rel), "x");
       }
-      const found = walkContextGlobs([pattern], tmpDir, exclude).sort();
+      const found = walkContextGlobs(
+        [pattern],
+        tmpDir,
+        pruned && ((entry) => entry === pruned),
+      ).sort();
       assert.deepEqual(
         found,
         expected.map((rel) => join(tmpDir, rel)),

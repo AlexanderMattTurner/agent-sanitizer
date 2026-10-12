@@ -378,14 +378,35 @@ export function walkContextGlobs(globs, cwd, exclude) {
   // under a `.claude/worktrees/` checkout.
   /** @param {import("node:fs").Dirent} dirent @returns {string} */
   const absolute = (dirent) => resolve(root, dirent.parentPath, dirent.name);
-  return globSync(compatGlobs(globs), {
-    cwd,
-    withFileTypes: true,
-    exclude: (dirent) => {
-      const entry = relative(root, absolute(dirent)).split(sep).join("/");
-      return excludeNodeModules(entry) || (exclude?.(entry) ?? false);
-    },
-  }).map(absolute);
+  /** @param {string} entry @returns {boolean} */
+  const excluded = (entry) =>
+    excludeNodeModules(entry) || (exclude?.(entry) ?? false);
+  return (
+    globSync(compatGlobs(globs), {
+      cwd,
+      withFileTypes: true,
+      exclude: (dirent) =>
+        excluded(relative(root, absolute(dirent)).split(sep).join("/")),
+    })
+      .map(absolute)
+      // Node never consults `exclude` on some literal segments (the `.claude`
+      // compatGlobs spells out on an affected Node is one), so a match under a
+      // directory the caller pruned is dropped here instead.
+      .filter((path) => !ancestorEntries(relative(root, path)).some(excluded))
+  );
+}
+
+/**
+ * Every directory above `rel` (a root-relative path), as `/`-separated
+ * entries outermost first: `a/b/c.md` gives `a` and `a/b`.
+ * @param {string} rel
+ * @returns {string[]}
+ */
+function ancestorEntries(rel) {
+  const segments = rel.split(sep);
+  return segments
+    .slice(0, -1)
+    .map((_, i) => segments.slice(0, i + 1).join("/"));
 }
 
 /**

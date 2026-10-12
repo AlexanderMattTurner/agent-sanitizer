@@ -48757,14 +48757,16 @@ function keepContained(absPath, realRoot, literalRoot, pattern) {
 function walkContextGlobs(globs, cwd, exclude) {
   const root2 = resolve3(cwd);
   const absolute = (dirent) => resolve3(root2, dirent.parentPath, dirent.name);
+  const excluded = (entry) => excludeNodeModules(entry) || (exclude?.(entry) ?? false);
   return globSync(compatGlobs(globs), {
     cwd,
     withFileTypes: true,
-    exclude: (dirent) => {
-      const entry = relative3(root2, absolute(dirent)).split(sep3).join("/");
-      return excludeNodeModules(entry) || (exclude?.(entry) ?? false);
-    }
-  }).map(absolute);
+    exclude: (dirent) => excluded(relative3(root2, absolute(dirent)).split(sep3).join("/"))
+  }).map(absolute).filter((path2) => !ancestorEntries(relative3(root2, path2)).some(excluded));
+}
+function ancestorEntries(rel) {
+  const segments = rel.split(sep3);
+  return segments.slice(0, -1).map((_, i) => segments.slice(0, i + 1).join("/"));
 }
 function findInstructionFiles(globs, { cwd = process.cwd(), exclude } = {}) {
   const literalRoot = resolve3(cwd);
