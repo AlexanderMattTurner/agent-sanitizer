@@ -136,34 +136,27 @@ esac
 # then the quote, so the quote's inserted backslash is not re-escaped. An
 # unescaped quote would break the JSON, and unparsable stdout is read as a
 # non-blocking hook error — a fail OPEN in the posture that exists to prevent it.
-#
-# Control characters are folded to a space last: JSON forbids them raw, and a
-# reason splices in operator-supplied text (an AGENT_SANITIZER_NODE value with a
-# stray tab or newline) that would otherwise make the envelope unparsable.
+# Control characters fold to a space last: JSON forbids them raw, and a reason
+# splices in operator text (an AGENT_SANITIZER_NODE value with a stray tab).
 json_escape() {
   local esc="${1//\\/\\\\}"
   esc="${esc//\"/\\\"}"
   printf '%s' "${esc//[[:cntrl:]]/ }"
 }
 
-# Whether every directory named in "$@" keeps every OTHER uid from replacing
-# what lives in it. Replacing a file means creating an inode in its parent,
-# which needs write on the parent — so the parent's own mode and owner are the
-# property, not the file's. This is the shell port of isTrustedSocketDir in
-# claude-hooks/lib/redactor-client.mjs, minus its root-owned arm: the daemon's
-# socket dir may be handed to root after it binds, while these dirs are ones the
-# provisioners or this launcher create and write.
+# Whether every directory in "$@" keeps every OTHER uid from replacing what
+# lives in it. Replacing a file needs write on its parent, so the parent's mode
+# and owner are the property, not the file's. The shell port of
+# isTrustedSocketDir in claude-hooks/lib/redactor-client.mjs, minus its
+# root-owned arm: these dirs are ones the provisioners or this launcher write.
 #
-# The ONLY way this launcher trusts anything under CLAUDE_PLUGIN_DATA or TMPDIR,
-# both of which another uid may be able to pre-create: the hook binary it execs,
-# V8's code cache, the redactor venv it hands the client, and the degraded-
-# warning marker root. Each refusal is what keeps a path someone else controls
-# from becoming code in, or a silenced warning of, this session.
+# The ONLY way this launcher trusts anything under CLAUDE_PLUGIN_DATA or TMPDIR
+# (another uid may pre-create either): the hook binary, V8's code cache, the
+# redactor venv, and the degraded-warning marker root.
 #
-# An answer this cannot establish — no `find` to read the mode with, a
-# non-directory, a symlink — is NOT a pass: every caller has a safe fallback
-# (node, a recompile, the zipapp, a repeated warning), while trusting on doubt
-# is arbitrary code in every hook of the session.
+# An answer this cannot establish (no `find`, a non-directory, a symlink) is NOT
+# a pass: every caller has a safe fallback (node, a recompile, the zipapp, a
+# repeated warning), while trusting on doubt is code execution in every hook.
 trusted_dir() {
   local dir writable
   [[ "$#" -gt 0 ]] || return 1
@@ -219,15 +212,14 @@ degraded_context_already_sent() {
   marker="$marker_root/${key}__${class}"
   mkdir -m 700 "$marker_root" 2>/dev/null
   # A marker root another uid owns or can write (a squatted shared-temp entry)
-  # answers "not yet sent" without being read: a marker pre-created there would
-  # otherwise silence the one model-visible signal that this call ran unguarded.
+  # is not read: a pre-created marker would silence the one model-visible
+  # signal that this call ran unguarded.
   if ! trusted_dir "$marker_root"; then
     echo "agent-sanitizer: $marker_root is not a plain directory this user owns with owner-only write — ignoring any degraded-warning markers in it, so this warning repeats on every call" >&2
     return 1
   fi
   # Not `mkdir` as the test-and-set: a marker we cannot record must WARN, not go
-  # quiet, so the state is read first and every failure to record one falls
-  # through to the warning.
+  # quiet, so the state is read first.
   if [[ ! -d "$marker" ]]; then
     mkdir "$marker" 2>/dev/null
     return 1
@@ -331,9 +323,9 @@ if [[ -z "${_AGENT_SANITIZER_REDACTOR_DAEMON:-}" && -n "${CLAUDE_PLUGIN_DATA:-}"
     echo "agent-sanitizer: not using $venv_daemon — $venv_dir or its bin/ is not a plain directory this user owns with owner-only write, so anything that can write it can replace the daemon every secret is sent to; redacting through the committed zipapp instead (fix the directories' owner and mode, or delete $venv_dir and start a new session to re-provision)" >&2
   fi
 fi
-# The zipapp floor, by absolute path. The compiled hook binary resolves its own
-# modules inside bun's virtual filesystem, where a module-relative path to the
-# zipapp names no file on disk — so both runtimes are handed the committed one.
+# The compiled hook binary resolves modules inside bun's virtual filesystem,
+# where a module-relative zipapp path names no file on disk: hand both runtimes
+# the committed one by absolute path.
 export _AGENT_SANITIZER_REDACTOR_PYZ="${_AGENT_SANITIZER_REDACTOR_PYZ:-$plugin_root/dist/redactor/daemon.pyz}"
 
 # The post-condition's shape check, shared by both runtimes below: a verdict is
@@ -368,11 +360,11 @@ trap 'rm -f "$payload_file" "$bin_stdout_file" "$stdout_file"' EXIT
 hook_binary_dir="${CLAUDE_PLUGIN_DATA:-}/hook-binary"
 hook_binary="$hook_binary_dir/agent-sanitizer-hooks"
 
-# Whether the trusted binary was verified against the manifest this install
-# ships. The provisioner writes the stamp on install and REMOVES it when that
-# manifest has fallen behind the bundle, so a mismatch means the binary may run
-# an older sanitizer than the bundle beside it. Builtins only: hashing a ~100 MB
-# binary on every tool call is the cost this comparison stands in for.
+# Whether the binary was installed from the manifest this install ships. The
+# provisioner stamps on install and REMOVES the stamp when the manifest has
+# fallen behind the bundle, so a mismatch means an older sanitizer than the
+# bundle beside it. Builtins only: hashing ~100 MB per tool call is the cost
+# this comparison stands in for.
 hook_binary_matches_install() {
   local stamp="$hook_binary_dir/.manifest-installed"
   local manifest="$plugin_root/dist/hooks/hook-binaries.sha256"
@@ -380,10 +372,7 @@ hook_binary_matches_install() {
   [[ "$(<"$stamp")" == "$(<"$manifest")" ]]
 }
 
-# Resolved at most once: the binary arm asks first when it needs to know
-# whether node can stand in for a stale binary.
 node_bin=""
-node_resolved=0
 if [[ "${AGENT_SANITIZER_HOOK_BINARY:-}" != "0" && -n "${CLAUDE_PLUGIN_DATA:-}" && -f "$hook_binary" && -x "$hook_binary" ]]; then
   if ! trusted_dir "$hook_binary_dir"; then
     echo "agent-sanitizer: refusing to run $hook_binary — $hook_binary_dir is not a plain directory this user owns with owner-only write, so anything that can write it can replace the binary every hook executes; using the node runtime instead (fix the directory's owner and mode, or delete it and start a new session to re-provision)" >&2
@@ -391,12 +380,10 @@ if [[ "${AGENT_SANITIZER_HOOK_BINARY:-}" != "0" && -n "${CLAUDE_PLUGIN_DATA:-}" 
     payload_file="$(mktemp 2>/dev/null)"
     bin_stdout_file="$(mktemp 2>/dev/null)"
   else
-    # A stale binary still beats no sanitizer at all, so it runs only where
-    # node cannot run the bundle this install actually ships: none found, or one
-    # definitely below the floor (which dies before it can answer, after stdin
-    # is spent and the binary can no longer be handed the payload).
+    # A stale binary still beats no sanitizer, so it runs only where node
+    # cannot run this install's bundle: none found, or one below the floor
+    # (which dies after stdin is spent, too late to hand the binary the payload).
     node_bin="$(agent_sanitizer_resolve_node)"
-    node_resolved=1
     if [[ -z "$node_bin" || ! -x "$node_bin" ]] || ! agent_sanitizer_node_meets_floor "$node_bin"; then
       echo "agent-sanitizer: $hook_binary was not installed from the manifest this plugin ships, so it may run an older sanitizer than this install's bundle; node (${node_bin:-not found}) cannot run the bundle, so running it anyway (a new session re-provisions it)" >&2
       payload_file="$(mktemp 2>/dev/null)"
@@ -442,7 +429,7 @@ fi
 # see lib/node-resolve.sh for the hosts that answers nothing for, every one of
 # which would otherwise run unguarded. AGENT_SANITIZER_NODE overrides the
 # search.
-[[ "$node_resolved" -eq 1 ]] || node_bin="$(agent_sanitizer_resolve_node)"
+[[ -n "$node_bin" ]] || node_bin="$(agent_sanitizer_resolve_node)"
 if [[ -z "$node_bin" ]]; then
   echo "agent-sanitizer: no node found on PATH or in any known version-manager install — sanitization cannot run (set AGENT_SANITIZER_NODE to its path)" >&2
   emit_degraded "sanitizer plugin: node was not found on PATH or in any known version-manager install directory; verdict unavailable. If node is installed, set AGENT_SANITIZER_NODE to its absolute path — a session started outside an interactive shell (launchd, cron, CI, a GUI launch) does not inherit the PATH your shell builds."

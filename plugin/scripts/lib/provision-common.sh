@@ -31,14 +31,13 @@ _provision_started_ms=""
 _provision_lock_dir=""
 _provision_lock_owner=""
 
-# How long the lock-directory fallback waits for a LIVE holder before this
-# provisioner gives up for the session. Generous: it must outlast a real cold
-# install (a venv build, a ~100 MB download). A live holder is never broken.
+# How long the lock-directory fallback waits for a LIVE holder before giving up
+# for the session. Generous: it must outlast a real cold install (a venv build,
+# a ~100 MB download). A live holder is never broken.
 _provision_lock_timeout_s=900
 
 # How long a lock directory may carry no owner record before it counts as
-# abandoned. The record is written right after the mkdir that takes the lock,
-# so only a holder killed between those two steps leaves none behind.
+# abandoned: only a holder killed between its mkdir and writing the record.
 _provision_lock_ownerless_s=10
 
 # Start measuring a one-time provisioning step named $1.
@@ -110,9 +109,9 @@ provision_hold_lock() {
   fi
   # flock(1) is util-linux and absent on a stock macOS, where `mkdir` is the
   # portable atomic primitive. It has no kernel-backed release, so the holder
-  # records "<pid> <token>" inside the directory: a waiter breaks the lock only
-  # when that pid is gone (or no record ever appeared), and a holder releases it
-  # only while the record is still its own token.
+  # records "<pid> <token>" inside: a waiter breaks the lock only when that pid
+  # is gone (or no record ever appeared), and a holder releases it only while
+  # the record is still its own token.
   local dir="$lock_path.d"
   local me="$$ $RANDOM$RANDOM$RANDOM"
   local holder waited=0 ownerless=0
@@ -134,8 +133,7 @@ provision_hold_lock() {
     else
       ownerless=0
     fi
-    # Breaking a LIVE holder would run two installs into one path at once, so a
-    # wait that runs out gives up on this session instead.
+    # Breaking a LIVE holder would run two installs into one path at once.
     if [[ "$waited" -ge "$_provision_lock_timeout_s" ]]; then
       echo "agent-sanitizer: the provisioning lock $dir is still held by live pid ${holder%% *} after ${_provision_lock_timeout_s}s — not provisioning this session (delete $dir if that process is not a provisioner)" >&2
       return 1
@@ -171,10 +169,9 @@ _provision_break_lock() {
   rm -rf -- "$1"
 }
 
-# Release a lock-directory taken by provision_hold_lock. A no-op under flock,
-# whose release is the kernel's. Armed from the caller's EXIT trap so it covers
-# the failure arms too. Only while the record is still this holder's token: a
-# lock broken and re-taken by another provisioner is that one's to release.
+# Release a lock-directory taken by provision_hold_lock (a no-op under flock),
+# only while the record is still this holder's token: a lock broken and re-taken
+# by another provisioner is that one's to release. Armed from the EXIT trap.
 provision_release_lock() {
   [[ -n "$_provision_lock_dir" ]] || return 0
   _provision_lock_holder "$_provision_lock_dir"

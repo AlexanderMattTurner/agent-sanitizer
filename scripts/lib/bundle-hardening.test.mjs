@@ -264,45 +264,43 @@ const REQUIRE_SHAPES = [
     [],
   ],
   ["inside a comment", '// TODO: require("left-pad") here\n', []],
-  // The loaders that are not a `require` binding at all. Each is a shape the
-  // shipped plugin bundle carries today (src/confusables' resolveScan, hook-io's
-  // lazyImport) or esbuild emits for a CJS dependency (`__require`), and each
-  // throws on first use where node_modules is absent, exactly like a require.
+  // Loaders that are not a `require` binding, as the shipped bundle carries
+  // them (resolveScan, lazyImport) or esbuild emits them (`__require`).
   [
-    "through createRequire(...)(...)",
-    'defaultScan ??= createRequire(import.meta.url)("namespace-guard").scan;',
-    ["namespace-guard"],
+    "via createRequire(...)(...)",
+    'createRequire(import.meta.url)("ng");',
+    ["ng"],
   ],
   [
-    "through a renamed createRequire2(...)(...)",
-    'createRequire2(import.meta.url)("./data/patch.json");',
-    ["./data/patch.json"],
+    "via renamed createRequire2",
+    'createRequire2(import.meta.url)("./p.json");',
+    ["./p.json"],
   ],
   [
-    "through module.createRequire(...)(...)",
-    'module.createRequire(import.meta.url)("left-pad");',
-    ["left-pad"],
+    "via module.createRequire",
+    'module.createRequire(import.meta.url)("lp");',
+    ["lp"],
   ],
-  ["through esbuild's __require shim", '__require("left-pad");', ["left-pad"]],
+  ["via esbuild's __require shim", '__require("left-pad");', ["left-pad"]],
   ["as a literal dynamic import()", 'await import("left-pad");', ["left-pad"]],
   [
-    "as a computed dynamic import() outside any function",
-    "await import(specifier);",
+    "as a computed import() outside a function",
+    "await import(s);",
     [COMPUTED_SPECIFIER],
   ],
   // Qualified by its function, so an allowlist can name this ONE site.
   [
-    "as a computed dynamic import() inside a named function",
-    "async function lazyImport(specifier) { return await import(specifier); }",
+    "as a computed import() in a named function",
+    "async function lazyImport(s) { return await import(s); }",
     [`${COMPUTED_SPECIFIER} in lazyImport`],
   ],
   [
-    "computed, inside an arrow nested in a named function",
+    "computed, in an arrow nested in a named function",
     "function outer() { return (s) => require2(s); }",
     [`${COMPUTED_SPECIFIER} in outer`],
   ],
   // Negative corpus: shapes the shipped bundles carry that are NOT a runtime
-  // load of a missing module — a false positive here fails a correct build.
+  // load of a missing module.
   [
     "only as a JSDoc type import",
     '/** @type {typeof import("agent-sanitizer")} */ (x);',
@@ -330,24 +328,21 @@ for (const [shape, source, expected] of REQUIRE_SHAPES)
   });
 
 test("an allowlist cannot pass every computed load with a bare <computed>", () => {
-  // A function-qualified entry names one reviewed call site; the bare marker
-  // would also pass any computed load outside a named function.
   assert.throws(
     () => assertNoRuntimeRequires("import(x);", [COMPUTED_SPECIFIER]),
     /may not contain a bare <computed>/,
   );
+  const lazy = [`${COMPUTED_SPECIFIER} in lazyImport`];
   assert.doesNotThrow(() =>
-    assertNoRuntimeRequires("function lazyImport(s) { return import(s); }", [
-      `${COMPUTED_SPECIFIER} in lazyImport`,
-    ]),
+    assertNoRuntimeRequires(
+      "function lazyImport(s) { return import(s); }",
+      lazy,
+    ),
   );
-  // The qualifier is the site, not a prefix match: another function's computed
-  // load is still refused under the same allowlist.
+  // The qualifier is the site, not a prefix match.
   assert.throws(
     () =>
-      assertNoRuntimeRequires("function other(s) { return import(s); }", [
-        `${COMPUTED_SPECIFIER} in lazyImport`,
-      ]),
+      assertNoRuntimeRequires("function other(s) { return import(s); }", lazy),
     /<computed> in other.*not a string literal/s,
   );
 });

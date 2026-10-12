@@ -5,11 +5,9 @@
  *
  * The launcher reads four things from those trees: the hook binary it execs,
  * V8's compile cache, the redactor venv whose daemon it hands the client, and
- * the degraded-warning marker root. Each is code in the session (or, for the
- * marker, the one model-visible signal that a call ran unguarded), so each must
- * pass `trusted_dir`. The partition test below derives the set of paths the
- * launcher actually touches from bash's own execution trace, so a fifth path
- * added later without a gate fails here rather than shipping unguarded.
+ * the degraded-warning marker root. Each must pass `trusted_dir`. The partition
+ * test derives the set of paths the launcher touches from bash's own execution
+ * trace, so a fifth path added later without a gate fails here.
  *
  * Every case uses a stand-in node (a shell script reporting what it was
  * handed), so nothing here depends on the bundle or on a real node.
@@ -36,6 +34,8 @@ const ROOT = dirname(dirname(dirname(fileURLToPath(import.meta.url))));
 const PLUGIN_DIR = join(ROOT, "plugin");
 const MANIFEST_REL = join("dist", "hooks", "hook-binaries.sha256");
 const IS_ROOT = process.getuid?.() === 0;
+const NO_BINARY = { AGENT_SANITIZER_HOOK_BINARY: "0" };
+const PYZ_REL = join("dist", "redactor", "daemon.pyz");
 
 /** A scratch dir (mode 0700, from mkdtemp) removed when the test finishes. */
 function scratch(t) {
@@ -44,10 +44,7 @@ function scratch(t) {
   return dir;
 }
 
-/**
- * The launcher and its libs, plus the manifest its stale-binary check reads.
- * The stand-in node never opens the bundle, so the rest of dist/ is not staged.
- */
+/** The launcher and its libs, plus the manifest its stale-binary check reads. */
 function stagePlugin(t) {
   const plugin = join(scratch(t), "plugin");
   cpSync(join(PLUGIN_DIR, "scripts"), join(plugin, "scripts"), {
@@ -58,11 +55,7 @@ function stagePlugin(t) {
   return plugin;
 }
 
-/**
- * A PATH holding the shell utilities the launcher uses, and no node. Built once
- * per file: it is read-only to every case, and resolving it costs a shell per
- * utility.
- */
+/** A PATH holding the shell utilities the launcher uses, and no node. */
 let sharedBin;
 function stubBin() {
   if (sharedBin) return sharedBin;
@@ -125,12 +118,35 @@ function stageData(t, plugin, { stamp = true } = {}) {
   return data;
 }
 
+/** A fresh, owner-only TMPDIR. */
+function tmpDir(t) {
+  const dir = join(scratch(t), "tmp");
+  mkdirSync(dir, { mode: 0o700 });
+  return dir;
+}
+
 /**
- * Run the staged launcher once. `node` is a stand-in node dir to put on PATH,
- * or null for a host with none. Returns spawnSync's result.
+ * A staged launcher: plugin, data dir, owner-only TMPDIR and a stand-in node.
+ * `node` is a script body (default: REPORTING_NODE) or null for a host with none.
  */
-function launch(t, plugin, { data, tmp, node, env = {}, trace = false }) {
-  const path = node ? `${node}:${stubBin()}` : stubBin();
+function setup(t, { stamp = true, node } = {}) {
+  const plugin = stagePlugin(t);
+  let nodeBin = null;
+  if (node !== null) {
+    nodeBin = join(scratch(t), "node-bin");
+    writeExecutable(join(nodeBin, "node"), node ?? REPORTING_NODE);
+  }
+  return {
+    plugin,
+    data: stageData(t, plugin, { stamp }),
+    tmp: tmpDir(t),
+    node: nodeBin,
+  };
+}
+
+/** Run the staged launcher once; `over` replaces fields of `s`. */
+function launch(s, { env = {}, trace = false, ...over } = {}) {
+  const { plugin, data, tmp, node } = { ...s, ...over };
   return spawnSync(
     "bash",
     [
@@ -144,7 +160,7 @@ function launch(t, plugin, { data, tmp, node, env = {}, trace = false }) {
       encoding: "utf8",
       cwd: tmpdir(),
       env: {
-        PATH: path,
+        PATH: node ? `${node}:${stubBin()}` : stubBin(),
         HOME: tmp,
         TMPDIR: tmp,
         CLAUDE_PLUGIN_DATA: data,
@@ -156,20 +172,6 @@ function launch(t, plugin, { data, tmp, node, env = {}, trace = false }) {
   );
 }
 
-/** A stand-in node dir running `body`. */
-function nodeDir(t, body = REPORTING_NODE) {
-  const dir = join(scratch(t), "node-bin");
-  writeExecutable(join(dir, "node"), body);
-  return dir;
-}
-
-/** A fresh, owner-only TMPDIR. */
-function tmpDir(t) {
-  const dir = join(scratch(t), "tmp");
-  mkdirSync(dir, { mode: 0o700 });
-  return dir;
-}
-
 // ─── The partition: every path the launcher touches is gated or exempt ───────
 
 /** Directories the launcher must pass through trusted_dir, relative to a root. */
@@ -178,16 +180,13 @@ const GATED = Object.freeze({
   tmp: [`agent-sanitizer-degraded-${process.getuid?.() ?? 0}`],
 });
 
-/**
- * Paths the launcher may touch WITHOUT a gate, each with the reason it needs
- * none. Matched against the path relative to its root.
- */
+/** Paths the launcher may touch WITHOUT a gate, each with its reason. */
 const EXEMPT = Object.freeze([
   // The data root itself: tested for emptiness and used as a prefix, never
   // read or executed.
   { root: "data", pattern: /^$/ },
-  // mktemp's own files: created 0600 under a name nobody can predict, so no
-  // other uid can pre-place or swap them.
+  // mktemp's own files: created 0600 under an unpredictable name, so no other
+  // uid can pre-place or swap them.
   { root: "tmp", pattern: /^tmp\.[A-Za-z0-9]{10}$/ },
 ]);
 
@@ -207,26 +206,15 @@ function mentionedPaths(traceLines, roots) {
 }
 
 test("every CLAUDE_PLUGIN_DATA / TMPDIR path the launcher touches is gated or exempt", (t) => {
-  const plugin = stagePlugin(t);
-  const roots = {
-    data: stageData(t, plugin),
-    staleData: stageData(t, plugin, { stamp: false }),
-  };
-  const tmp = tmpDir(t);
-  const node = nodeDir(t);
+  const s = setup(t);
+  const stale = { ...s, data: stageData(t, s.plugin, { stamp: false }) };
   // One run per launcher branch that reads a different path: the binary
   // answering, a stale binary passed over for node (the stamp read and the
   // compile cache), and the degraded verdict (the marker root).
   const runs = [
-    launch(t, plugin, { data: roots.data, tmp, node, trace: true }),
-    launch(t, plugin, { data: roots.staleData, tmp, node, trace: true }),
-    launch(t, plugin, {
-      data: roots.data,
-      tmp,
-      node: null,
-      env: { AGENT_SANITIZER_HOOK_BINARY: "0" },
-      trace: true,
-    }),
+    launch(s, { trace: true }),
+    launch(stale, { trace: true }),
+    launch(s, { node: null, env: NO_BINARY, trace: true }),
   ];
   const answeredBy = (res) => {
     const out = JSON.parse(res.stdout);
@@ -242,8 +230,7 @@ test("every CLAUDE_PLUGIN_DATA / TMPDIR path the launcher touches is gated or ex
     .flatMap((r) => r.stderr.split("\n"))
     .filter((l) => /^\++ /.test(l));
 
-  // Gated: every directory handed to trusted_dir, relative to its root.
-  const rootPaths = { data: roots.data, staleData: roots.staleData, tmp };
+  const rootPaths = { data: s.data, staleData: stale.data, tmp: s.tmp };
   const gated = new Set();
   for (const line of trace) {
     const m = /^\++ trusted_dir (.+)$/.exec(line);
@@ -255,8 +242,7 @@ test("every CLAUDE_PLUGIN_DATA / TMPDIR path the launcher touches is gated or ex
     ...GATED.data.map((d) => `data:${d}`),
     ...GATED.tmp.map((d) => `tmp:${d}`),
   ];
-  // Exact: a gate that stops running fails here, and so does a new one that
-  // nobody declared.
+  // Exact: a gate that stops running fails here, and so does an undeclared one.
   assert.deepEqual([...gated].sort(), declared.sort());
 
   const exemptHits = new Set();
@@ -297,79 +283,45 @@ const UNTRUSTED = Object.freeze({
   "mode 0777": (dir) => chmodSync(dir, 0o777),
   "owned by another uid": (dir) => chownSync(dir, 65534, 65534),
 });
+/** A node:test `skip` for the cases only root can set up. */
+const skipUnlessRoot = (how) =>
+  how.startsWith("owned") &&
+  !IS_ROOT &&
+  "only root can hand a directory to another uid";
 
-/**
- * Per gated directory: what the launcher does when it is trustworthy, and the
- * assertion that it did NOT use it once it is not.
- */
+const daemonUsed = (res) =>
+  JSON.parse(res.stdout).daemon.endsWith(
+    "/venv/bin/agent-secret-redactor-daemon",
+  );
+const viaNode = (s) => launch(s, { env: NO_BINARY });
+
+/** Per gated directory: how to exercise it, and whether the launcher used it. */
 const GATE_CASES = Object.freeze({
   "hook-binary": {
-    run: (t, plugin, data, tmp) =>
-      launch(t, plugin, { data, tmp, node: nodeDir(t) }),
+    run: (s) => launch(s),
     used: (res) => JSON.parse(res.stdout).fromBinary === true,
   },
-  venv: {
-    run: (t, plugin, data, tmp) =>
-      launch(t, plugin, {
-        data,
-        tmp,
-        node: nodeDir(t),
-        env: { AGENT_SANITIZER_HOOK_BINARY: "0" },
-      }),
-    used: (res) =>
-      JSON.parse(res.stdout).daemon.endsWith(
-        "/venv/bin/agent-secret-redactor-daemon",
-      ),
-  },
-  "venv/bin": {
-    run: (t, plugin, data, tmp) =>
-      launch(t, plugin, {
-        data,
-        tmp,
-        node: nodeDir(t),
-        env: { AGENT_SANITIZER_HOOK_BINARY: "0" },
-      }),
-    used: (res) =>
-      JSON.parse(res.stdout).daemon.endsWith(
-        "/venv/bin/agent-secret-redactor-daemon",
-      ),
-  },
+  venv: { run: viaNode, used: daemonUsed },
+  "venv/bin": { run: viaNode, used: daemonUsed },
   "node-compile-cache": {
-    run: (t, plugin, data, tmp) => {
-      mkdirSync(join(data, "node-compile-cache"), {
-        mode: 0o700,
-        recursive: true,
-      });
-      return launch(t, plugin, {
-        data,
-        tmp,
-        node: nodeDir(t),
-        env: { AGENT_SANITIZER_HOOK_BINARY: "0" },
-      });
-    },
+    run: viaNode,
     used: (res) => JSON.parse(res.stdout).cache.endsWith("/node-compile-cache"),
   },
 });
 
 for (const [gate, { run, used }] of Object.entries(GATE_CASES)) {
   test(`${gate}: used when owner-only (positive control)`, (t) => {
-    const plugin = stagePlugin(t);
-    const res = run(t, plugin, stageData(t, plugin), tmpDir(t));
+    const res = run(setup(t));
     assert.equal(res.status, 0, res.stderr);
     assert.ok(used(res), res.stdout);
   });
   for (const [how, spoil] of Object.entries(UNTRUSTED))
-    test(`${gate}: refused when ${how}`, (t) => {
-      if (how.startsWith("owned") && !IS_ROOT) {
-        t.skip("only root can hand a directory to another uid");
-        return;
-      }
-      const plugin = stagePlugin(t);
-      const data = stageData(t, plugin);
+    test(`${gate}: refused when ${how}`, { skip: skipUnlessRoot(how) }, (t) => {
+      const s = setup(t);
       if (gate === "node-compile-cache")
-        mkdirSync(join(data, gate), { mode: 0o700 });
-      spoil(join(data, gate));
-      const res = run(t, plugin, data, tmpDir(t));
+        mkdirSync(join(s.data, gate), { mode: 0o700 });
+      spoil(join(s.data, gate));
+      const res = run(s);
       assert.equal(res.status, 0, res.stderr);
       assert.ok(!used(res), `the untrusted ${gate} was used: ${res.stdout}`);
       // Refused out loud, never in silence.
@@ -378,141 +330,100 @@ for (const [gate, { run, used }] of Object.entries(GATE_CASES)) {
 }
 
 /** Two degraded calls in one session; returns whether each carried context. */
-function degradedContexts(t, plugin, data, tmp) {
+function degradedContexts(s) {
   return [1, 2].map(() => {
-    const res = launch(t, plugin, {
-      data,
-      tmp,
-      node: null,
-      env: { AGENT_SANITIZER_HOOK_BINARY: "0" },
-    });
+    const res = launch(s, { node: null, env: NO_BINARY });
     assert.equal(res.status, 0, res.stderr);
     return "additionalContext" in JSON.parse(res.stdout).hookSpecificOutput;
   });
 }
 
 test("marker root: an owner-only root dedupes the warning (positive control)", (t) => {
-  const plugin = stagePlugin(t);
-  assert.deepEqual(
-    degradedContexts(t, plugin, stageData(t, plugin), tmpDir(t)),
-    [true, false],
-  );
+  assert.deepEqual(degradedContexts(setup(t)), [true, false]);
 });
 
 for (const [how, spoil] of Object.entries(UNTRUSTED))
-  test(`marker root: a pre-existing marker is ignored when the root is ${how}`, (t) => {
-    if (how.startsWith("owned") && !IS_ROOT) {
-      t.skip("only root can hand a directory to another uid");
-      return;
-    }
-    // The squat: the root, and this session's marker for this very fault, are
-    // already there. A launcher that trusted them would drop the warning from
-    // the FIRST degraded call — the one the model must see.
-    const plugin = stagePlugin(t);
-    const data = stageData(t, plugin);
-    const tmp = tmpDir(t);
-    assert.deepEqual(degradedContexts(t, plugin, data, tmp), [true, false]);
-    const markerRoot = join(tmp, GATED.tmp[0]);
-    assert.ok(existsSync(markerRoot));
-    spoil(markerRoot);
-    assert.deepEqual(degradedContexts(t, plugin, data, tmp), [true, true]);
-  });
+  test(
+    `marker root: a pre-existing marker is ignored when the root is ${how}`,
+    { skip: skipUnlessRoot(how) },
+    (t) => {
+      // The squat: the root, and this session's marker for this very fault,
+      // are already there. A launcher that trusted them would drop the warning
+      // from the FIRST degraded call — the one the model must see.
+      const s = setup(t);
+      assert.deepEqual(degradedContexts(s), [true, false]);
+      const markerRoot = join(s.tmp, GATED.tmp[0]);
+      assert.ok(existsSync(markerRoot));
+      spoil(markerRoot);
+      assert.deepEqual(degradedContexts(s), [true, true]);
+    },
+  );
 
 // ─── Stale binary: node runs the bundle this install ships ───────────────────
 
-test("a binary installed from another manifest is passed over for node", (t) => {
-  const plugin = stagePlugin(t);
-  const res = launch(t, plugin, {
-    data: stageData(t, plugin, { stamp: false }),
-    tmp: tmpDir(t),
-    node: nodeDir(t),
-  });
-  assert.equal(res.status, 0, res.stderr);
-  assert.equal(JSON.parse(res.stdout).fromNode, true);
-});
+/** A stand-in node answering `--version` with `v`, else REPORTING_NODE. */
+const nodeVersion = (v) =>
+  `[ "$1" = --version ] && { echo ${v}; exit 0; }\n${REPORTING_NODE}`;
 
-test("a stamp naming a different manifest is stale too", (t) => {
-  const plugin = stagePlugin(t);
-  const data = stageData(t, plugin);
-  writeFileSync(join(data, "hook-binary", ".manifest-installed"), "# older\n");
-  const res = launch(t, plugin, { data, tmp: tmpDir(t), node: nodeDir(t) });
-  assert.equal(JSON.parse(res.stdout).fromNode, true);
-});
+// A stale binary still beats an unsanitized call, so it answers (saying why on
+// stderr) only where node cannot run the bundle: none found, or one below the
+// floor, which would die after stdin is spent.
+const STALE_CASES = [
+  ["no install stamp", { stamp: false }, "node"],
+  [
+    "a stamp naming a different manifest",
+    {},
+    "node",
+    (s) =>
+      writeFileSync(
+        join(s.data, "hook-binary", ".manifest-installed"),
+        "# older\n",
+      ),
+  ],
+  ["no node on the host", { stamp: false, node: null }, "binary"],
+  [
+    "a node below the floor",
+    { stamp: false, node: nodeVersion("v20.1.0") },
+    "binary",
+  ],
+  [
+    "a node at the floor",
+    { stamp: false, node: nodeVersion("v22.14.0") },
+    "node",
+  ],
+];
 
-test("a stale binary still answers on a host with no node", (t) => {
-  // An older sanitizer beats an unsanitized call, so the binary runs — and
-  // says why on stderr.
-  const plugin = stagePlugin(t);
-  const res = launch(t, plugin, {
-    data: stageData(t, plugin, { stamp: false }),
-    tmp: tmpDir(t),
-    node: null,
+for (const [name, opts, runtime, mutate] of STALE_CASES)
+  test(`a stale binary with ${name} is answered by ${runtime}`, (t) => {
+    const s = setup(t, opts);
+    mutate?.(s);
+    const res = launch(s);
+    assert.equal(res.status, 0, res.stderr);
+    if (runtime === "node") {
+      assert.equal(JSON.parse(res.stdout).fromNode, true);
+      return;
+    }
+    assert.deepEqual(JSON.parse(res.stdout), { fromBinary: true });
+    assert.match(res.stderr, /running it anyway/);
   });
-  assert.equal(res.status, 0, res.stderr);
-  assert.deepEqual(JSON.parse(res.stdout), { fromBinary: true });
-  assert.match(res.stderr, /running it anyway/);
-});
-
-test("a stale binary still answers when the only node is below the floor", (t) => {
-  // That node would die on the bundle after stdin is spent, leaving the call
-  // unsanitized; the older binary can still guard it.
-  const plugin = stagePlugin(t);
-  const res = launch(t, plugin, {
-    data: stageData(t, plugin, { stamp: false }),
-    tmp: tmpDir(t),
-    node: nodeDir(
-      t,
-      `[ "$1" = --version ] && { echo v20.1.0; exit 0; }\n${REPORTING_NODE}`,
-    ),
-  });
-  assert.equal(res.status, 0, res.stderr);
-  assert.deepEqual(JSON.parse(res.stdout), { fromBinary: true });
-  assert.match(res.stderr, /running it anyway/);
-});
-
-test("a stale binary is still passed over for a node at the floor", (t) => {
-  const plugin = stagePlugin(t);
-  const res = launch(t, plugin, {
-    data: stageData(t, plugin, { stamp: false }),
-    tmp: tmpDir(t),
-    node: nodeDir(
-      t,
-      `[ "$1" = --version ] && { echo v22.14.0; exit 0; }\n${REPORTING_NODE}`,
-    ),
-  });
-  assert.equal(JSON.parse(res.stdout).fromNode, true);
-});
 
 // ─── What the runtimes are handed ────────────────────────────────────────────
 
 test("both runtimes are told where the committed zipapp is", (t) => {
   // The compiled binary resolves its modules inside bun's virtual filesystem,
   // where a module-relative zipapp path names nothing on disk.
-  const plugin = stagePlugin(t);
-  const res = launch(t, plugin, {
-    data: stageData(t, plugin),
-    tmp: tmpDir(t),
-    node: nodeDir(t),
-    env: { AGENT_SANITIZER_HOOK_BINARY: "0" },
-  });
+  const s = setup(t);
   assert.equal(
-    JSON.parse(res.stdout).pyz,
-    join(plugin, "dist", "redactor", "daemon.pyz"),
+    JSON.parse(launch(s, { env: NO_BINARY }).stdout).pyz,
+    join(s.plugin, PYZ_REL),
   );
   // The path names the artifact the plugin really ships there.
-  assert.ok(existsSync(join(PLUGIN_DIR, "dist", "redactor", "daemon.pyz")));
+  assert.ok(existsSync(join(PLUGIN_DIR, PYZ_REL)));
 });
 
 test("an explicit zipapp path is honored, not overwritten", (t) => {
-  const plugin = stagePlugin(t);
-  const res = launch(t, plugin, {
-    data: stageData(t, plugin),
-    tmp: tmpDir(t),
-    node: nodeDir(t),
-    env: {
-      AGENT_SANITIZER_HOOK_BINARY: "0",
-      _AGENT_SANITIZER_REDACTOR_PYZ: "/chosen/daemon.pyz",
-    },
+  const res = launch(setup(t), {
+    env: { ...NO_BINARY, _AGENT_SANITIZER_REDACTOR_PYZ: "/chosen/daemon.pyz" },
   });
   assert.equal(JSON.parse(res.stdout).pyz, "/chosen/daemon.pyz");
 });
@@ -527,15 +438,12 @@ const CONTROL_CHARS = Array.from({ length: 0x1f }, (_, i) =>
 for (const posture of ["open", "closed"])
   test(`a control character in AGENT_SANITIZER_NODE still yields parseable JSON (fail ${posture})`, (t) => {
     assert.equal(CONTROL_CHARS.length, 31);
-    const plugin = stagePlugin(t);
-    const data = stageData(t, plugin);
+    const s = setup(t, { node: null });
     for (const ch of CONTROL_CHARS) {
-      const res = launch(t, plugin, {
-        data,
+      const res = launch(s, {
         tmp: tmpDir(t),
-        node: null,
         env: {
-          AGENT_SANITIZER_HOOK_BINARY: "0",
+          ...NO_BINARY,
           AGENT_SANITIZER_NODE: `/opt/no${ch}de/bin/node`,
           AGENT_SANITIZER_FAIL_OPEN: posture === "open" ? "1" : "0",
         },

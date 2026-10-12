@@ -227,11 +227,8 @@ def test_entry_point_is_sub_quadratic_on_one_line(name):
 # The copy-volume gate's sizes and threshold. An 8x step, so linear is ~8x and
 # quadratic ~64x; the per-call fixed cost pulls the linear curve slightly under
 # 8. Both curves are MEASURED on the payload below — 8.18x at worst when each
-# line is spliced in one pass, and 280-400x (3.10/3.11, here) when the buffer's
-# tail is shifted per span — and 15.0 sits between them with ~1.8x margin below
-# and far more above. The control reads this high because its small line fits a
-# cache its large one does not; what matters is that it is at least the ~64x of
-# the copy alone, and a per-span allocation cost cannot pull it under the limit.
+# line is spliced in one pass, 280-400x when the buffer's tail is shifted per
+# span — and 15.0 sits between them with ~1.8x margin below and far more above.
 _COPY_SMALL_BYTES = 64 * 1024
 _COPY_LARGE_BYTES = 512 * 1024
 _COPY_GROWTH_LIMIT = 15.0
@@ -346,19 +343,14 @@ def test_copy_volume_is_linear_in_line_length(name):
 
 
 def _copy_tail_per_span(text: str) -> None:
-    """Redact every unit-aligned span of a mutable buffer in place, which shifts
-    the whole tail after each span — quadratic in ``len(text)``, with every one
-    of those bytes moved inside a C ``memmove``, which is the shape both tests
-    below are about.
+    """Redact every unit-aligned span of a mutable buffer in place, shifting the
+    whole tail each time — quadratic in ``len(text)``, every byte moved inside a
+    C ``memmove``, which is the shape both tests below are about.
 
-    A buffer, not a rebuilt ``str``: the per-span ``out[:i] + "X" + out[j:]``
-    allocates and frees three line-sized strings each time, and that allocator
-    work (plus the interpreter's own loop) costs about the same per span at both
-    sizes. It is the part of the cost that only grows 8x while the copy grows
-    64x, so on a runner where it is expensive it swamped the copy and the control
-    read 13x against a 15x limit. The in-place shift has nothing per span but
-    the move itself, so the ratio is the copy's own: at least ~64x, and more
-    where the small line fits a cache the large one does not."""
+    A buffer, not a rebuilt ``str``: rebuilding allocates three line-sized
+    strings per span, a cost that grows only 8x while the copy grows 64x, so on a
+    slow-allocator runner it swamped the copy and the control read 13x against a
+    15x limit. The in-place shift costs nothing per span but the move itself."""
     buf = bytearray(text.encode())
     for start in range(len(text) - len(_FIELD_UNIT), -1, -len(_FIELD_UNIT)):
         buf[start : start + len(_FIELD_UNIT)] = b"X"

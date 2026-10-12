@@ -98,10 +98,9 @@ if [[ ! "$repository" =~ ^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$ || ! "$expected_diges
   exit 1
 fi
 
-# A refresh that fails on a host that ALREADY has a binary leaves that binary
-# installed, and the launcher prefers it over node only while its install stamp
-# names this manifest — so one sentence cannot cover every case without
-# misnaming the runtime that is actually running. Recomputed rather than fixed,
+# A failed refresh leaves any ALREADY-installed binary in place, and the
+# launcher prefers it over node only while its stamp names this manifest — so
+# one sentence cannot name the runtime that is actually running. Recomputed
 # because removing a tampered binary or a stale stamp below changes the case.
 set_consequence() {
   if [[ -x "$binary" && -f "$installed_stamp" ]] && cmp -s "$manifest" "$installed_stamp"; then
@@ -189,9 +188,8 @@ if [[ ! "$expected_bundle" =~ ^[0-9a-f]{64}$ ]]; then
 fi
 installed_bundle="$(sha256_of "$bundle")" || installed_bundle=""
 if [[ "$installed_bundle" != "$expected_bundle" ]]; then
-  # A binary provisioned earlier was compiled from an older bundle too. Its
-  # stamp is what tells the launcher it matches this install, so removing it
-  # is what makes the launcher prefer node over it until a refresh lands.
+  # A binary provisioned earlier was compiled from an older bundle too; removing
+  # its stamp makes the launcher prefer node until a refresh lands.
   if [[ -f "$installed_stamp" ]]; then
     rm -f -- "$installed_stamp"
     if [[ -e "$installed_stamp" ]]; then

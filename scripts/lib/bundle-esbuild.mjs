@@ -75,14 +75,11 @@ const inlineRuntimeJsonRequires = {
 
 /**
  * Reported in place of a specifier whose value the bundle decides at runtime.
- * No allowlist may contain it bare, so such a call outside a named function
- * always fails the build: a specifier the build cannot read is a specifier the
- * build cannot prove resolvable in a deployment that has no node_modules.
- *
- * Inside a named function it is reported as `<computed> in <name>`, which an
- * allowlist may name — that is a reviewed statement about ONE call site (a
- * registry-first loader whose fallback is the computed load), never a blanket
- * pass for computed loads.
+ * An allowlist may not contain it bare, so such a call outside a named function
+ * always fails the build: a specifier the build cannot read is one it cannot
+ * prove resolvable in a deployment with no node_modules. Inside a named
+ * function it is reported as `<computed> in <name>`, which an allowlist may
+ * name: a reviewed statement about ONE call site, never a blanket pass.
  */
 export const COMPUTED_SPECIFIER = "<computed>";
 
@@ -116,9 +113,8 @@ export function assertNoRuntimeRequires(text, allowedRuntimeRequires) {
 
 /**
  * A callee that loads a module by name at runtime: the `require` binding
- * (esbuild renames it `require2`, and names its own shim `__require`), and
- * `createRequire` (or its renamed `createRequire2`) called for a loader that
- * is then called immediately.
+ * (esbuild renames it `require2`, and names its shim `__require`), or a
+ * `createRequire(…)` (renamed `createRequire2`) result called immediately.
  */
 const RUNTIME_REQUIRE_CALLEE = /^(?:__)?require\d*$/;
 const CREATE_REQUIRE = /^createRequire\d*$/;
@@ -140,57 +136,31 @@ function isCreateRequireCall(callee) {
 }
 
 /**
- * The specifier a module-loading expression names, or `COMPUTED_SPECIFIER`
- * when it is anything other than a single string literal — a variable, a
- * template literal, a concatenation, or no argument at all.
+ * What one module-loading site reports: its string-literal specifier, else
+ * `COMPUTED_SPECIFIER` (a variable, template, concatenation, or no argument)
+ * qualified by the innermost named function it sits in.
  * @param {readonly import("acorn").Node[]} args
- * @returns {string}
- */
-function literalSpecifier(args) {
-  const [arg, ...rest] = args;
-  if (
-    rest.length === 0 &&
-    arg?.type === "Literal" &&
-    typeof (/** @type {import("acorn").Literal} */ (arg).value) === "string"
-  )
-    return /** @type {string} */ (
-      /** @type {import("acorn").Literal} */ (arg).value
-    );
-  return COMPUTED_SPECIFIER;
-}
-
-/**
- * The name of the innermost named function enclosing a node, or undefined.
  * @param {readonly import("acorn").Node[]} ancestors outermost first, the node last
- * @returns {string | undefined}
- */
-function enclosingFunctionName(ancestors) {
-  for (let i = ancestors.length - 2; i >= 0; i--) {
-    const node = ancestors[i];
-    if (
-      (node.type === "FunctionDeclaration" ||
-        node.type === "FunctionExpression") &&
-      /** @type {import("acorn").Function} */ (node).id
-    )
-      return /** @type {import("acorn").Identifier} */ (
-        /** @type {import("acorn").Function} */ (node).id
-      ).name;
-  }
-  return undefined;
-}
-
-/**
- * What one module-loading site reports: its literal specifier, or the computed
- * marker qualified by the named function it sits in.
- * @param {readonly import("acorn").Node[]} args
- * @param {readonly import("acorn").Node[]} ancestors
  * @returns {string}
  */
 function reportedSpecifier(args, ancestors) {
-  const spec = literalSpecifier(args);
-  if (spec !== COMPUTED_SPECIFIER) return spec;
-  const fn = enclosingFunctionName(ancestors);
-  return fn ? `${COMPUTED_SPECIFIER} in ${fn}` : COMPUTED_SPECIFIER;
+  const [arg, ...rest] = args;
+  const literal = /** @type {import("acorn").Literal | undefined} */ (arg);
+  if (
+    rest.length === 0 &&
+    literal?.type === "Literal" &&
+    typeof literal.value === "string"
+  )
+    return literal.value;
+  for (let i = ancestors.length - 2; i >= 0; i--) {
+    const fn = /** @type {import("acorn").Function} */ (ancestors[i]);
+    if (
+      (fn.type === "FunctionDeclaration" || fn.type === "FunctionExpression") &&
+      fn.id
+    )
+      return `${COMPUTED_SPECIFIER} in ${fn.id.name}`;
+  }
+  return COMPUTED_SPECIFIER;
 }
 
 /**

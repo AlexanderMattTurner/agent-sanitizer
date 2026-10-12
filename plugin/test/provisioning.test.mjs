@@ -62,10 +62,10 @@ function binWith(t, cmds) {
  * A `uv` that behaves like the real one where it matters: `uv venv` REFUSES a
  * path that already exists, and the engine wheel's console script is written
  * with the absolute interpreter path of the venv it was installed into. Every
- * `uv pip install` argv is appended to `log`. `failLock` makes the hashed-lock
- * install fail, as a network or hash error would.
+ * `uv pip install` argv is appended to `<dir>/log`. `failLock` makes the
+ * hashed-lock install fail, as a network or hash error would.
  */
-function fakeUv(t, log, { failLock = false } = {}) {
+function fakeUv(t, { failLock = false } = {}) {
   const dir = join(scratch(t), "uv-bin");
   mkdirSync(dir);
   writeFileSync(
@@ -77,7 +77,7 @@ function fakeUv(t, log, { failLock = false } = {}) {
       '  mkdir -p "$d/bin" && printf "#!/bin/sh\\n" > "$d/bin/python" && chmod 755 "$d/bin/python"\n' +
       "  exit 0\n" +
       "fi\n" +
-      `echo "$*" >> "${log}"\n` +
+      `echo "$*" >> "${dir}/log"\n` +
       'py=""; prev=""; for a in "$@"; do [ "$prev" = --python ] && py="$a"; prev="$a"; done\n' +
       'case " $* " in\n' +
       `  *" -r "*) ${failLock ? "exit 1" : "exit 0"} ;;\n` +
@@ -142,22 +142,34 @@ function venvState(data) {
   };
 }
 
-test("a plugin update re-provisions an existing venv instead of failing on it", (t) => {
+/** A re-lock, so the provisioner sees the installed venv as out of date. */
+function bumpLock({ plugin }) {
+  const req = join(plugin, "requirements.txt");
+  writeFileSync(req, `${readFileSync(req, "utf8")}# a later re-lock\n`);
+}
+
+/** A first provision done, so the next one is a plugin update. */
+function provisioned(t, uvOpts) {
   const staged = stageRedactor(t);
-  const log = join(scratch(t), "uv-log");
-  const uv = fakeUv(t, log);
+  const uv = fakeUv(t, uvOpts);
   const first = provisionRedactor(staged, uv);
   assert.equal(first.status, 0, first.stderr);
+  return { staged, uv, before: venvState(staged.data) };
+}
 
+test("a plugin update re-provisions an existing venv instead of failing on it", (t) => {
+  const { staged, uv } = provisioned(t);
   // A re-lock and a new engine build land with the next plugin update.
-  const req = join(staged.plugin, "requirements.txt");
-  writeFileSync(req, `${readFileSync(req, "utf8")}# a later re-lock\n`);
+  bumpLock(staged);
   writeFileSync(join(staged.plugin, "dist", "redactor", WHEEL), "wheel v2\n");
   const second = provisionRedactor(staged, uv);
   assert.equal(second.status, 0, second.stderr);
 
   const state = venvState(staged.data);
-  assert.equal(state.lock, readFileSync(req, "utf8"));
+  assert.equal(
+    state.lock,
+    readFileSync(join(staged.plugin, "requirements.txt"), "utf8"),
+  );
   assert.equal(state.wheel, "wheel v2\n");
   // Built at a temporary path and swapped in: the daemon's interpreter must
   // name the venv's FINAL path, which is the only one that exists afterwards.
@@ -168,7 +180,7 @@ test("a plugin update re-provisions an existing venv instead of failing on it", 
   // Neither the build dir nor the retired venv is left behind.
   assert.deepEqual(state.siblings, ["venv"]);
   // Two installs, each with an explicit --require-hashes on the lock.
-  const lockInstalls = readFileSync(log, "utf8")
+  const lockInstalls = readFileSync(join(uv, "log"), "utf8")
     .trim()
     .split("\n")
     .filter((argv) => / -r /.test(argv));
@@ -178,9 +190,7 @@ test("a plugin update re-provisions an existing venv instead of failing on it", 
 
 test("a group-writable umask leaves nothing in the venv another uid could edit", (t) => {
   const staged = stageRedactor(t);
-  const res = provisionRedactor(staged, fakeUv(t, join(scratch(t), "uv-log")), {
-    umask: "002",
-  });
+  const res = provisionRedactor(staged, fakeUv(t), { umask: "002" });
   assert.equal(res.status, 0, res.stderr);
 
   const venv = join(staged.data, "venv");
@@ -196,25 +206,14 @@ test("a group-writable umask leaves nothing in the venv another uid could edit",
 });
 
 test("a re-provision that fails leaves the previous venv serving", (t) => {
-  const staged = stageRedactor(t);
-  const log = join(scratch(t), "uv-log");
-  assert.equal(provisionRedactor(staged, fakeUv(t, log)).status, 0);
-  const before = venvState(staged.data);
-
-  const req = join(staged.plugin, "requirements.txt");
-  writeFileSync(req, `${readFileSync(req, "utf8")}# a later re-lock\n`);
-  const res = provisionRedactor(staged, fakeUv(t, log, { failLock: true }));
+  const { staged, before } = provisioned(t);
+  bumpLock(staged);
+  const res = provisionRedactor(staged, fakeUv(t, { failLock: true }));
   assert.notEqual(res.status, 0);
   // Untouched, stamps and all, and the half-built venv is gone: the next
   // session sees the stamp mismatch and tries again.
   assert.deepEqual(venvState(staged.data), before);
 });
-
-/** A re-lock, so the provisioner sees the installed venv as out of date. */
-function bumpLock({ plugin }) {
-  const req = join(plugin, "requirements.txt");
-  writeFileSync(req, `${readFileSync(req, "utf8")}# a later re-lock\n`);
-}
 
 /**
  * A PATH dir whose `mv` refuses the named sources (matched against the path's
@@ -237,11 +236,7 @@ function mvRefusing(t, ...tags) {
 }
 
 test("a swap that cannot land the new venv puts the previous one back and says so", (t) => {
-  const staged = stageRedactor(t);
-  const log = join(scratch(t), "uv-log");
-  const uv = fakeUv(t, log);
-  assert.equal(provisionRedactor(staged, uv).status, 0);
-  const before = venvState(staged.data);
+  const { staged, uv, before } = provisioned(t);
   bumpLock(staged);
 
   const res = provisionRedactor(staged, `${mvRefusing(t, "new")}:${uv}`);
@@ -251,10 +246,7 @@ test("a swap that cannot land the new venv puts the previous one back and says s
 });
 
 test("a swap whose restore also fails still names where the previous venv is", (t) => {
-  const staged = stageRedactor(t);
-  const log = join(scratch(t), "uv-log");
-  const uv = fakeUv(t, log);
-  assert.equal(provisionRedactor(staged, uv).status, 0);
+  const { staged, uv } = provisioned(t);
   bumpLock(staged);
 
   const res = provisionRedactor(staged, `${mvRefusing(t, "new", "old")}:${uv}`);
@@ -270,11 +262,9 @@ test("a swap whose restore also fails still names where the previous venv is", (
 });
 
 test("a first-ever provision that cannot land the venv does not claim a previous one", (t) => {
-  const staged = stageRedactor(t);
-  const log = join(scratch(t), "uv-log");
   const res = provisionRedactor(
-    staged,
-    `${mvRefusing(t, "new")}:${fakeUv(t, log)}`,
+    stageRedactor(t),
+    `${mvRefusing(t, "new")}:${fakeUv(t)}`,
   );
   assert.equal(res.status, 1, res.stderr);
   assert.match(res.stderr, /newly built .* committed zipapp/);
@@ -299,6 +289,14 @@ function runLib(bin, body) {
   return spawnSync("bash", args, { encoding: "utf8", env });
 }
 
+/** The lock-fallback PATH and a fresh lock path. */
+function lockFixture(t) {
+  return {
+    bin: binWith(t, LOCK_PATH_CMDS),
+    lock: join(scratch(t), ".x.lock"),
+  };
+}
+
 /** A pid that has exited, so `kill -0` on it fails. */
 function deadPid() {
   const { pid } = spawnSync("true");
@@ -307,8 +305,7 @@ function deadPid() {
 }
 
 test("the lock fallback never breaks a LIVE holder, however long it holds", async (t) => {
-  const bin = binWith(t, LOCK_PATH_CMDS);
-  const lock = join(scratch(t), ".x.lock");
+  const { bin, lock } = lockFixture(t);
   const ready = `${lock}.d/owner`;
   const { args, env } = withLib(
     bin,
@@ -337,8 +334,7 @@ test("the lock fallback never breaks a LIVE holder, however long it holds", asyn
 });
 
 test("the lock fallback breaks a lock whose holder is gone", (t) => {
-  const bin = binWith(t, LOCK_PATH_CMDS);
-  const lock = join(scratch(t), ".x.lock");
+  const { bin, lock } = lockFixture(t);
   mkdirSync(`${lock}.d`);
   const pid = deadPid();
   writeFileSync(`${lock}.d/owner`, `${pid} 12345\n`);
@@ -355,8 +351,7 @@ test("the lock fallback breaks a lock whose holder is gone", (t) => {
 });
 
 test("the lock fallback breaks a lock no holder ever recorded itself in", (t) => {
-  const bin = binWith(t, LOCK_PATH_CMDS);
-  const lock = join(scratch(t), ".x.lock");
+  const { bin, lock } = lockFixture(t);
   mkdirSync(`${lock}.d`);
   const res = runLib(
     bin,
@@ -368,8 +363,7 @@ test("the lock fallback breaks a lock no holder ever recorded itself in", (t) =>
 });
 
 test("a holder never releases a lock that has been taken over", (t) => {
-  const bin = binWith(t, LOCK_PATH_CMDS);
-  const lock = join(scratch(t), ".x.lock");
+  const { bin, lock } = lockFixture(t);
   // The takeover a broken lock leads to: another provisioner's record is in
   // the directory by the time this holder's EXIT trap releases.
   const res = runLib(

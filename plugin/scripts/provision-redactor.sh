@@ -35,8 +35,7 @@ fi
 # The trap covers every exit, including the idempotent early return (which is
 # fast, so it prints nothing) and the failure arms.
 provision_begin "secret-redaction engine install"
-# $build names a venv under construction until the swap below hands it over, so
-# a failed install leaves the live venv untouched and no half-built one behind.
+# $build names a venv under construction until the swap below hands it over.
 build=""
 trap '[[ -z "$build" ]] || rm -rf -- "$build"; provision_release_lock; provision_report_elapsed' EXIT
 
@@ -68,10 +67,10 @@ if [[ -x "$venv/bin/agent-secret-redactor-daemon" ]] && cmp -s "$req" "$stamp" &
   exit 0
 fi
 
-# Built beside the live venv and swapped in only once it is installed, verified
-# and stamped: `uv venv` refuses a path that already holds a venv, and building
-# in place would hand the launcher a half-installed daemon mid-build. Leftovers
-# of a provisioner killed mid-build are ours to clear: the lock is held.
+# Built beside the live venv and swapped in once installed, verified and
+# stamped: `uv venv` refuses an existing venv, and building in place would hand
+# the launcher a half-installed daemon. Leftovers of a killed provisioner are
+# ours to clear: the lock is held.
 for leftover in "$plugin_data"/venv.new.* "$plugin_data"/venv.old.*; do
   if [[ -e "$leftover" || -L "$leftover" ]]; then
     rm -rf -- "$leftover"
@@ -81,10 +80,9 @@ build="$plugin_data/venv.new.$$"
 retired="$plugin_data/venv.old.$$"
 
 # --require-hashes is explicit, as in build-redactor-pyz.mjs, so an unhashed
-# line in the lock fails the install rather than turning hash checking off.
-# Unlike that build, prebuilt wheels are accepted: this venv only ever runs on
-# the host that built it, so a platform wheel is correct here and needs no
-# compiler, while the committed zipapp must stay platform-independent.
+# lock line fails the install rather than turning hash checking off. Unlike
+# that build, prebuilt platform wheels are fine: this venv runs only on the host
+# that built it.
 if command -v uv >/dev/null 2>&1; then
   uv venv --quiet "$build"
   uv pip install --quiet --python "$build/bin/python" --require-hashes -r "$req"
@@ -107,11 +105,9 @@ daemon="$build/bin/agent-secret-redactor-daemon"
 provision_require_executable "$daemon" \
   "agent-sanitizer: install finished but $daemon is not an executable file"
 
-# The installer wrote the daemon's interpreter as an absolute path inside
-# $build, which stops existing at the swap. Every occurrence is re-pointed at
-# $venv, where that same interpreter lives once the rename lands. Prefix/suffix
-# removal with a quoted pattern is literal in every bash, which a ${x//a/b}
-# replacement is not (bash 5.2 expands `&` in it).
+# The daemon's interpreter path points inside $build, which stops existing at
+# the swap: re-point every occurrence at $venv. Prefix/suffix removal with a
+# quoted pattern is literal in every bash; ${x//a/b} is not (5.2 expands `&`).
 script="$(cat -- "$daemon" && printf x)"
 script="${script%x}"
 relocated=""
@@ -124,23 +120,22 @@ printf '%s' "$relocated" >"$daemon.relocated"
 chmod 755 -- "$daemon.relocated"
 mv -f -- "$daemon.relocated" "$daemon"
 
-# The launcher refuses a venv another uid could write into (see trusted_dir in
-# safe-launch.sh), so a group-writable umask must not leave one it will refuse.
-# Recursive: the launcher vets only the root and bin/, but the daemon imports
-# from site-packages, and a module another uid in the group can edit there runs
-# with every secret-bearing payload. Done after the last write into $build.
+# The launcher refuses a venv another uid could write into (trusted_dir in
+# safe-launch.sh). Recursive: it vets only the root and bin/, but the daemon
+# imports from site-packages, where a group-editable module runs with every
+# secret-bearing payload. Done after the last write into $build.
 chmod -R go-w -- "$build"
 cp -- "$req" "$build/.requirements-installed"
 cp -- "$wheel" "$build/.engine-wheel-installed"
 
-# Two renames, not one: a rename cannot replace a non-empty directory. Between
-# them the launcher finds no venv and the client redacts through the zipapp.
+# Two renames: a rename cannot replace a non-empty directory. Between them the
+# client redacts through the zipapp.
 if [[ -e "$venv" || -L "$venv" ]]; then
   mv -- "$venv" "$retired"
 fi
 if ! mv -- "$build" "$venv"; then
-  # Every arm sits in a condition: a bare restore `mv` would abort under
-  # `set -e` before the message naming where the only surviving copy lives.
+  # Every arm sits in a condition: a bare `mv` would abort under `set -e`
+  # before the message naming where the only surviving copy lives.
   if [[ ! -e "$retired" ]]; then
     echo "agent-sanitizer: could not move the newly built secret-redaction engine into $venv — this session redacts through the committed zipapp" >&2
   elif mv -- "$retired" "$venv"; then

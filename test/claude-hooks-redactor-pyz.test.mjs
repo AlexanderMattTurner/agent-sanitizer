@@ -16,56 +16,52 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, it } from "node:test";
+import { test } from "node:test";
 import { setTimeout as sleep } from "node:timers/promises";
 
 import { spawnDaemon } from "../claude-hooks/lib/redactor-client.mjs";
 
-const ENV_KEYS = ["PATH", "_AGENT_SANITIZER_REDACTOR_PYZ"];
+/** [name, whether the named zipapp exists, the argv the stand-in records]. */
+const CASES = [
+  [
+    "runs the zipapp the variable names when it exists",
+    true,
+    "python3 PYZ /sock",
+  ],
+  [
+    "falls through to the PATH console script when the named file is missing",
+    false,
+    "agent-secret-redactor-daemon /sock",
+  ],
+];
 
-describe("_AGENT_SANITIZER_REDACTOR_PYZ selects the zipapp the daemon spawns from", () => {
-  /** @type {string} */
-  let dir;
-  /** @type {Record<string, string | undefined>} */
-  let saved;
-
-  beforeEach(() => {
-    dir = mkdtempSync(join(tmpdir(), "redactor-pyz-"));
-    saved = Object.fromEntries(ENV_KEYS.map((k) => [k, process.env[k]]));
+for (const [name, exists, want] of CASES)
+  test(`_AGENT_SANITIZER_REDACTOR_PYZ ${name}`, async (t) => {
+    const dir = mkdtempSync(join(tmpdir(), "redactor-pyz-"));
+    const saved = { ...process.env };
+    t.after(() => {
+      process.env = saved;
+      rmSync(dir, { recursive: true, force: true });
+    });
     // Both candidate launchers record their argv; which one runs is the result.
-    for (const name of ["python3", "agent-secret-redactor-daemon"]) {
-      const bin = join(dir, name);
-      writeFileSync(bin, `#!/bin/sh\necho "${name} $*" > "${dir}/argv"\n`);
-      chmodSync(bin, 0o755);
+    for (const bin of ["python3", "agent-secret-redactor-daemon"]) {
+      writeFileSync(
+        join(dir, bin),
+        `#!/bin/sh\necho "${bin} $*" > "${dir}/argv"\n`,
+      );
+      chmodSync(join(dir, bin), 0o755);
     }
+    const pyz = join(dir, "chosen.pyz");
+    if (exists) writeFileSync(pyz, "");
     process.env.PATH = `${dir}:${saved.PATH}`;
-  });
+    process.env._AGENT_SANITIZER_REDACTOR_PYZ = pyz;
 
-  afterEach(() => {
-    for (const k of ENV_KEYS)
-      if (saved[k] === undefined) delete process.env[k];
-      else process.env[k] = saved[k];
-    rmSync(dir, { recursive: true, force: true });
-  });
-
-  /** The argv the spawned stand-in recorded. */
-  async function spawned() {
     spawnDaemon("/sock");
     for (let i = 0; i < 200 && !existsSync(join(dir, "argv")); i++)
       await sleep(25);
     assert.ok(existsSync(join(dir, "argv")), "nothing was spawned");
-    return readFileSync(join(dir, "argv"), "utf8").trim();
-  }
-
-  it("runs the zipapp the variable names when it exists", async () => {
-    const pyz = join(dir, "chosen.pyz");
-    writeFileSync(pyz, "");
-    process.env._AGENT_SANITIZER_REDACTOR_PYZ = pyz;
-    assert.equal(await spawned(), `python3 ${pyz} /sock`);
+    assert.equal(
+      readFileSync(join(dir, "argv"), "utf8").trim(),
+      want.replace("PYZ", pyz),
+    );
   });
-
-  it("falls through to the PATH console script when the named file is missing", async () => {
-    process.env._AGENT_SANITIZER_REDACTOR_PYZ = join(dir, "absent.pyz");
-    assert.equal(await spawned(), "agent-secret-redactor-daemon /sock");
-  });
-});
