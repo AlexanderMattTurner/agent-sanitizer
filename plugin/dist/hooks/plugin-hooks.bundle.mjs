@@ -46883,11 +46883,11 @@ var init_html4 = __esm({
     BLOB_VALUE_MIN_LEN = 40;
     OPAQUE_TOKEN_RE = /[A-Za-z0-9_]{20,}/g;
     VALUE_HAS_DIGIT_RE = /\d/;
-    BLOB_VALUE_B64_RE = /^[A-Za-z0-9+/]{40,}={0,2}$/;
+    BLOB_VALUE_B64_RE = /^[A-Za-z0-9+/]{40}[A-Za-z0-9+/]*={0,2}$/;
     HEX_ONLY_RE = /^[A-Fa-f0-9]+$/;
     HEX_BLOB_MIN_LEN = 32;
     DIGEST_HEX_LENGTHS = /* @__PURE__ */ new Set([32, 40, 56, 64, 96, 128]);
-    BLOB_VALUE_B64URL_RE = /^[A-Za-z0-9_-]{40,}={0,2}$/;
+    BLOB_VALUE_B64URL_RE = /^[A-Za-z0-9_-]{40}[A-Za-z0-9_-]*={0,2}$/;
     PATH_BLOB_RE = /^(?:[A-Za-z0-9+/]+={0,2}|[A-Fa-f0-9]+)$/;
     DIGEST_MAX_LEN = 128;
     BLOB_SEPARATOR_RE = /[.,]/g;
