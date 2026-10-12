@@ -327,7 +327,11 @@ carrying data rather than colour. Conceal or a matching foreground still in
 force when the text ENDS counts too, whatever the tail holds: rendition outlives
 the bytes that set it, so a file left in either state blanks everything the
 terminal prints after it is `cat`ed. Any one strips the whole field, and the
-prompt gate blocks on the same answer instead of passing it with a note.
+prompt gate blocks on the same answer instead of passing it with a note. The
+invisible-character verdict reads the de-ANSI'd view on both surfaces, since
+SGR parameter bytes render nothing and must not count as the visible cover that
+buys preserved joiners and selectors; a field that view calls payload-capable
+loses its colour along with the excess invisibles.
 
 The colour match is judged only where it is unambiguous. A default colour is
 unknown, so it matches nothing; bold over one of the eight basic colours is

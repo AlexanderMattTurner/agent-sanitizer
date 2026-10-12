@@ -49050,11 +49050,14 @@ function sanitizeField(value) {
         actions.add("terminal-control sequences");
       }
     }
-    if (!readKnob("AGENT_SANITIZER_INVISIBLE_DISABLED") && payloadVerdict2(cleaned).payloadCapable) {
-      const stripped = stripInvisible2(cleaned);
-      if (stripped !== cleaned) {
+    if (!readKnob("AGENT_SANITIZER_INVISIBLE_DISABLED")) {
+      const view = stripAnsiFully2(cleaned);
+      if (payloadVerdict2(view).payloadCapable) {
+        const source = readKnob("AGENT_SANITIZER_TERMINAL_DISABLED") ? cleaned : view;
+        const stripped = stripInvisibleWithReport2(source, cleaned).cleaned;
+        if (source !== cleaned) actions.add("terminal-control sequences");
+        if (stripped !== source) actions.add("invisible characters");
         cleaned = stripped;
-        actions.add("invisible characters");
       }
     }
     if (cleaned === before) break;
@@ -49102,7 +49105,7 @@ function sanitizeAuthoredContent(tool, toolInput) {
   if (changed.length === 0) return null;
   return { updatedInput, changed };
 }
-var stripAnsiFully2, stripTerminalFully2, escapesPreservable2, payloadVerdict2, stripInvisible2, stripInvisibleWithReport2, AUTHORED_FIELDS, EXEMPT_TOOLS2, EXEMPT_TOOL_PATTERNS2, MAX_FIELD_PASSES;
+var stripAnsiFully2, stripTerminalFully2, escapesPreservable2, payloadVerdict2, stripInvisibleWithReport2, AUTHORED_FIELDS, EXEMPT_TOOLS2, EXEMPT_TOOL_PATTERNS2, MAX_FIELD_PASSES;
 var init_authored_content = __esm({
   async "claude-hooks/lib/authored-content.mjs"() {
     "use strict";
@@ -49110,7 +49113,7 @@ var init_authored_content = __esm({
     init_knobs();
     ({ stripAnsiFully: stripAnsiFully2, stripTerminalFully: stripTerminalFully2, escapesPreservable: escapesPreservable2 } = /** @type {typeof import("agent-sanitizer")} */
     await lazyImport("agent-sanitizer"));
-    ({ payloadVerdict: payloadVerdict2, stripInvisible: stripInvisible2, stripInvisibleWithReport: stripInvisibleWithReport2 } = /** @type {typeof import("agent-sanitizer/invisible")} */
+    ({ payloadVerdict: payloadVerdict2, stripInvisibleWithReport: stripInvisibleWithReport2 } = /** @type {typeof import("agent-sanitizer/invisible")} */
     await lazyImport("agent-sanitizer/invisible"));
     AUTHORED_FIELDS = Object.freeze(
       Object.assign(/* @__PURE__ */ Object.create(null), {

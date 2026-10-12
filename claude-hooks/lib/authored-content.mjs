@@ -63,7 +63,7 @@ const { stripAnsiFully, stripTerminalFully, escapesPreservable } =
   /** @type {typeof import("agent-sanitizer")} */ (
     await lazyImport("agent-sanitizer")
   );
-const { payloadVerdict, stripInvisible, stripInvisibleWithReport } =
+const { payloadVerdict, stripInvisibleWithReport } =
   /** @type {typeof import("agent-sanitizer/invisible")} */ (
     await lazyImport("agent-sanitizer/invisible")
   );
@@ -229,16 +229,25 @@ function sanitizeField(value) {
     }
 
     // The engine's payloadVerdict, so a Write body is stego exactly when the
-    // same text would block a prompt; an action is recorded only when the strip
-    // actually removed something.
-    if (
-      !readKnob("AGENT_SANITIZER_INVISIBLE_DISABLED") &&
-      payloadVerdict(cleaned).payloadCapable
-    ) {
-      const stripped = stripInvisible(cleaned);
-      if (stripped !== cleaned) {
+    // same text would block a prompt — judged, as the prompt gate judges it, on
+    // the de-ANSI'd view: the colour carve-out above leaves SGR in `cleaned`,
+    // and its parameter bytes render nothing, so they must not count as the
+    // visible cover that buys preserved joiners and selectors.
+    if (!readKnob("AGENT_SANITIZER_INVISIBLE_DISABLED")) {
+      const view = stripAnsiFully(cleaned);
+      if (payloadVerdict(view).payloadCapable) {
+        // A field carrying a payload forfeits the colour carve-out: the strip
+        // must read the view the verdict read, or the same SGR bytes would fund
+        // the preserve budget the verdict refused. Under the terminal opt-out
+        // the escapes are the author's to keep, so the strip reads the raw
+        // field and only the invisibles go.
+        const source = readKnob("AGENT_SANITIZER_TERMINAL_DISABLED")
+          ? cleaned
+          : view;
+        const stripped = stripInvisibleWithReport(source, cleaned).cleaned;
+        if (source !== cleaned) actions.add("terminal-control sequences");
+        if (stripped !== source) actions.add("invisible characters");
         cleaned = stripped;
-        actions.add("invisible characters");
       }
     }
     if (cleaned === before) break;

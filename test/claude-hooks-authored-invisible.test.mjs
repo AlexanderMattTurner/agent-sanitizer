@@ -79,3 +79,36 @@ test("the rewrite is a fixed point of the layer", () => {
   }
   assert.equal(rewritten, inputs.length);
 });
+
+// SGR parameter bytes render nothing, so they are no visible cover: the verdict
+// reads the de-ANSI'd view, as the prompt gate does. One SGR of a thousand
+// parameters used to buy the preserve budget for fifty hidden selectors.
+const SGR_COVER = `${ESC}[${"0;".repeat(1000)}0m`;
+
+test("SGR parameter bytes do not fund preserved selectors (regression)", () => {
+  const content = SGR_COVER + `0${VS1} `.repeat(50);
+  const result = authored(content);
+  assert.ok(result, "fifty selectors under SGR cover were left in the file");
+  assert.deepEqual(result.changed, [
+    "content (terminal-control sequences, invisible characters)",
+  ]);
+  const cleaned = /** @type {string} */ (result.updatedInput.content);
+  // The strip judged the same view the verdict did: no escape is left to buy
+  // cover on a second pass, and the selectors are cut to the view's budget.
+  assert.equal(cleaned.includes(ESC), false);
+  assert.ok(cleaned.split(VS1).length - 1 < 50);
+  assert.equal(cleaned.replaceAll(VS1, ""), "0 ".repeat(50));
+  assert.equal(authored(cleaned), null);
+});
+
+test("coloured text whose invisibles do rendering work keeps its colour and bytes (precision)", () => {
+  const PERSIAN = `ما می${ZWNJ}خواهیم این کتاب${ZWNJ}ها را بخوانیم. `;
+  for (const content of [
+    `${ESC}[32m${CHECKED}${ESC}[0m`.repeat(10),
+    `${ESC}[1;34m${PERSIAN}${ESC}[0m\n`.repeat(20),
+    `${ESC}[33m${FAMILY} family${ESC}[0m `.repeat(5),
+    SGR_COVER + `0${VS1} `.repeat(5),
+    `${ESC}[32m✔ ok${ESC}[0m\n${ESC}[31m✖ failed${ESC}[0m\n`.repeat(20),
+  ])
+    assert.equal(authored(content), null, JSON.stringify(content));
+});
