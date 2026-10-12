@@ -171,6 +171,12 @@ LEGITIMATE = {
         "sk-ant-api03-REDACTED_REDACTED_REDACTED_REDACTED or "
         "sk-ant-admin01-your-admin-key-here or sk-or-v1-your-openrouter-api-key"
     ),
+    "dummy provider key bodies": (
+        "sk-ant-api03-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx sk-ant-admin01-"
+        "aaaaaaaaaaaaaaaaaaaaaaaaaaaa sk-or-v1-0000000000000000000000000000 "
+        "sk-ant-Your-Api-Key-Goes-Here sk-or-YOUR_OPENROUTER_API_KEY_HERE "
+        "sk-or-xxxxxxxxxxxxxxxxxxxxxxxx"
+    ),
     "provider prefix inside hyphenated names": (
         "--sk-ant-placeholder-value-goes-here and "
         'import x from "./sk-ant-design-tokens-and-theme-config" and '
@@ -197,6 +203,7 @@ SHAPE_ONLY_LEGITIMATE = (
     "snake_case name containing a provider prefix",
     "long placeholder provider keys",
     "provider prefix inside hyphenated names",
+    "dummy provider key bodies",
     "python import",
     "env reference in code",
     "oauth discovery doc",

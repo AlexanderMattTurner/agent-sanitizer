@@ -189,9 +189,11 @@ def test_non_gitleaks_provider_detectors(cls_name, secret_type, hit, misses):
     ],
 )
 def test_prefix_detectors_pin_distinctive_length_floor(cls_name, prefix, floor):
+    # Mixed case and digits: a single-case body is a placeholder to the loose row.
+    body = "aB3" * 20
     denylist = getattr(D, cls_name).denylist[0]
-    assert denylist.search(prefix + "a" * floor)
-    assert not denylist.search(prefix + "a" * (floor - 1))
+    assert denylist.search(prefix + body[:floor])
+    assert not denylist.search(prefix + body[: floor - 1])
 
 
 # ─── sk-ant- / sk-or- keys: canonical shapes and every shape they miss ───────
@@ -210,8 +212,8 @@ _LOOSE = "[REDACTED: Provider API Key]"
             "auth: sk-ant-F" + _B62[:24] + " sent",
             ("auth: " + _LOOSE + " sent", ["Provider API Key"]),
         ),
-        ("sk-or-" + _B62[:24], (_LOOSE, ["Provider API Key"])),
-        ("sk-ant-api03-" + _B62[:26], (_LOOSE, ["Provider API Key"])),
+        ("sk-or-" + _B62[20:44], (_LOOSE, ["Provider API Key"])),
+        ("sk-ant-api03-" + _B62[20:46], (_LOOSE, ["Provider API Key"])),
         ("sk-or-v1-" + (_B62 * 2)[:64], (_LOOSE, ["Provider API Key"])),
         ("sk-ant-ort01-" + _B62, (_LOOSE, ["Provider API Key"])),
         ("sk-ant-" + _B62[:40], (_LOOSE, ["Provider API Key"])),

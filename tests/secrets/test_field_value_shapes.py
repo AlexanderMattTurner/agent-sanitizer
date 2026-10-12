@@ -239,6 +239,14 @@ def test_header_and_url_credentials_keep_their_shape(text, expected, found):
         '"password": "\u2022\u2022\u2022\u2022\u2022"',
         '"token": "Invalid token."',
         '"token": "The token you got from the dashboard"',
+        # Provider-prefixed dummy keys under a credential name.
+        "export ANTHROPIC_API_KEY=sk-ant-api03-" + "X" * 40,
+        '"OPENROUTER_API_KEY": "sk-or-v1-' + "0" * 40 + '"',
+        "ANTHROPIC_API_KEY=sk-ant-admin01-" + "a" * 40,
+        '"ANTHROPIC_API_KEY": "sk-ant-api03-REDACTED_REDACTED_REDACTED"',
+        "OPENROUTER_API_KEY=sk-or-YOUR_OPENROUTER_API_KEY_HERE",
+        "ANTHROPIC_API_KEY=sk-ant-Your-Api-Key-Goes-Here",
+        "OPENROUTER_API_KEY=sk-or-v1-your-openrouter-api-key",
     ],
 )
 def test_benign_field_text_is_untouched(text):

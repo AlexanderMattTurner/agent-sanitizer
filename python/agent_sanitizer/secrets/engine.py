@@ -860,6 +860,30 @@ def _is_call_or_code_ref(c: Candidate) -> bool:
     return c.line[after : after + 1] == "(" and not _has_opaque_run(c.value)
 
 
+# A provider key prefix (and version tag) in front of a dummy body: the loose
+# provider-key row skips the same bodies, and this lets the field and keyword
+# paths skip `ANTHROPIC_API_KEY=sk-ant-api03-XXXX...` too. A generated key body
+# mixes case and digits; one letter case alone, or a placeholder shape, is not one.
+_PROVIDER_KEY_PREFIX_RE = re.compile(r"sk-(?:ant|or|proj)-(?:[a-z]+[0-9]+-)?")
+_SINGLE_CASE_BODY_RE = re.compile(
+    r"(?:[a-z]+(?:[-_]+[a-z]+)*|[A-Z]+(?:[-_]+[A-Z]+)*"
+    r"|[A-Z][a-z]+(?:[-_]+[A-Za-z][a-z]*)+)[-_]*"
+)
+
+
+def _is_provider_key_placeholder(value: str) -> bool:
+    """True when ``value`` is a provider key prefix followed by a dummy body."""
+    prefix = _PROVIDER_KEY_PREFIX_RE.match(value)
+    if prefix is None or prefix.end() == len(value):
+        return False
+    body = value[prefix.end() :]
+    return (
+        _SINGLE_CASE_BODY_RE.fullmatch(body) is not None
+        or _PLACEHOLDER_RE.fullmatch(body) is not None
+        or _is_lowercase_metavariable(body)
+    )
+
+
 def _is_placeholder_value(c: Candidate) -> bool:
     """True when the value is a documentation placeholder, not a credential."""
     return (
@@ -867,6 +891,7 @@ def _is_placeholder_value(c: Candidate) -> bool:
         or c.value.lower() in _PLACEHOLDER_LITERALS
         or _normalize_ident(c.value) in _KEYWORD_NOUN_LITERALS
         or _is_lowercase_metavariable(c.value)
+        or _is_provider_key_placeholder(c.value)
     )
 
 
