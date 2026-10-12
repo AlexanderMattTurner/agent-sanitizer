@@ -8,6 +8,13 @@ adhere to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+## [2.60.3] - 2026-10-12
+
+### Fixed
+
+- Auto-resolve now correctly processes only complete conflict blocks and maintains clean git environment state.
+- Auto-resolve now properly stages regenerated outputs and respects the `--root` option.
+
 ## [2.60.2] - 2026-10-12
 
 ### Fixed
