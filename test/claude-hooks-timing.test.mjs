@@ -705,15 +705,15 @@ describe("the version an issue report is asked to carry", () => {
 
   /**
    * Stage one artifact layout: a copy of the module under `moduleDir`, plus a
-   * manifest per entry of `manifests`, and report the version it resolves.
+   * manifest per entry of `manifests`, and return the staged module.
    *
    * A copy rather than a stub, so what answers is the shipped resolver reading
    * a real tree — the layouts are exactly the offsets each artifact ships at.
    * @param {string} moduleDir  the module's directory, relative to the root
    * @param {Record<string, unknown>} manifests  root-relative path to contents
-   * @returns {Promise<string | null>}
+   * @returns {Promise<typeof import("../claude-hooks/lib/hook-timing.mjs")>}
    */
-  async function versionUnderLayout(moduleDir, manifests) {
+  async function stageLayout(moduleDir, manifests) {
     const root = mkdtempSync(path.join(tmpdir(), "hook-timing-layout-"));
     for (const [file, contents] of Object.entries(manifests)) {
       mkdirSync(path.dirname(path.join(root, file)), { recursive: true });
@@ -731,8 +731,16 @@ describe("the version an issue report is asked to carry", () => {
       ),
       target,
     );
-    const staged = await import(pathToFileURL(target).href);
-    return staged.sanitizerVersion();
+    return import(pathToFileURL(target).href);
+  }
+
+  /**
+   * @param {string} moduleDir
+   * @param {Record<string, unknown>} manifests
+   * @returns {Promise<string | null>}
+   */
+  async function versionUnderLayout(moduleDir, manifests) {
+    return (await stageLayout(moduleDir, manifests)).sanitizerVersion();
   }
 
   const PLUGIN_MANIFEST = ".claude-plugin/plugin.json";
@@ -749,7 +757,10 @@ describe("the version an issue report is asked to carry", () => {
     );
     assert.equal(
       await versionUnderLayout("plugin/dist/hooks", {
-        [`plugin/${PLUGIN_MANIFEST}`]: { version: "5.6.7" },
+        [`plugin/${PLUGIN_MANIFEST}`]: {
+          name: "agent-sanitizer",
+          version: "5.6.7",
+        },
       }),
       "5.6.7",
     );
@@ -762,7 +773,10 @@ describe("the version an issue report is asked to carry", () => {
     assert.equal(
       await versionUnderLayout("claude-hooks/lib", {
         "package.json": { name: "agent-sanitizer", version: "1.0.1" },
-        [`plugin/${PLUGIN_MANIFEST}`]: { version: "2.2.2" },
+        [`plugin/${PLUGIN_MANIFEST}`]: {
+          name: "agent-sanitizer",
+          version: "2.2.2",
+        },
       }),
       "2.2.2",
     );
@@ -782,6 +796,21 @@ describe("the version an issue report is asked to carry", () => {
     );
   });
 
+  it("never reports a composer's manifest as this build's version", async () => {
+    // A composer bundles this module into its own .claude/hooks/, so every
+    // fixed offset lands on the COMPOSER's manifests. Reading them printed the
+    // composer's 0.79.0 as the sanitizer version when the real pin was 2.58.9.
+    const staged = await stageLayout(".claude/hooks", {
+      "package.json": { name: "agent-glovebox", version: "0.79.0" },
+      [PLUGIN_MANIFEST]: { name: "glovebox-plugin", version: "0.78.0" },
+      [`plugin/${PLUGIN_MANIFEST}`]: { name: "other", version: "0.77.0" },
+    });
+    assert.equal(staged.sanitizerVersion(), null);
+    const notice = staged.slowHookNotice("gate-bash-calls", 1_100);
+    assert.doesNotMatch(notice, /0\.7[789]\.0/u);
+    assert.match(notice, /with your agent-sanitizer version, the hook name/);
+  });
+
   it("asks for the version rather than guessing one when it knows none", () => {
     // A compiled hook binary resolves no manifest. Printing a placeholder
     // version there would route every report to the wrong tree.
@@ -794,6 +823,135 @@ describe("the version an issue report is asked to carry", () => {
     );
     assert.match(unknown, /with your agent-sanitizer version, the hook name/);
     assert.doesNotMatch(unknown, /agent-sanitizer [0-9]/);
+  });
+});
+
+describe("a composer's own hook", () => {
+  const glovebox = {
+    name: "agent-glovebox",
+    issueUrl: "https://composer.example/agent-glovebox/issues/new",
+    version: "0.79.0",
+  };
+  // One context per attribution arm that names an owner, plus the unmeasured
+  // case: each must charge the composer once it names itself, and the sanitizer
+  // when it does not.
+  const arms = {
+    cpu: { cpuMs: 3_800, redactorMs: 100, hostMs: 0 },
+    host: { cpuMs: 100, redactorMs: 100, hostMs: 3_700 },
+    remainderMeasured: { cpuMs: 100, redactorMs: 100, hostMs: 0 },
+    remainderUnmeasured: { cpuMs: 100, redactorMs: 100 },
+    wallOnly: {},
+  };
+
+  for (const [arm, context] of Object.entries(arms))
+    it(`charges the composer it names, and only then (${arm})`, () => {
+      const own = slowHookNotice("gate-bash-calls", 4_000, undefined, context);
+      const composed = slowHookNotice("gate-bash-calls", 4_000, undefined, {
+        ...context,
+        reportTo: glovebox,
+      });
+      assert.match(own, /^agent-sanitizer PERFORMANCE/u);
+      assert.match(own, /agent-sanitizer\/issues\/new with agent-sanitizer /u);
+      assert.match(composed, /^agent-glovebox PERFORMANCE/u);
+      assert.match(
+        composed,
+        /report it at https:\/\/composer\.example\/agent-glovebox\/issues\/new with agent-glovebox 0\.79\.0, the hook name/u,
+      );
+      assert.doesNotMatch(composed, /sanitizer/u);
+    });
+
+  it("asks for the composer's version when the composer gives none", () => {
+    const composed = slowHookNotice("gate-bash-calls", 4_000, undefined, {
+      reportTo: { name: glovebox.name, issueUrl: glovebox.issueUrl },
+    });
+    assert.match(composed, /with your agent-glovebox version, the hook name/u);
+    assert.doesNotMatch(composed, /agent-glovebox [0-9]/u);
+  });
+
+  it("reaches the notice from runJudgeCli's own option", async () => {
+    const written = [];
+    const realErr = process.stderr.write.bind(process.stderr);
+    process.stderr.write = () => true;
+    try {
+      await runJudgeCli(
+        "gate-bash-calls",
+        async () => {
+          await new Promise((resolve) =>
+            setTimeout(resolve, SLOW_HOOK_THRESHOLD_MS + 100),
+          );
+          return { decision: "allow" };
+        },
+        {
+          onError: (err) => assert.fail(String(err)),
+          readInput: async () => ({
+            hook_event_name: "PreToolUse",
+            tool_name: "Bash",
+            tool_input: { command: "echo hi" },
+          }),
+          write: (chunk) => written.push(chunk),
+          reportTo: glovebox,
+        },
+      );
+    } finally {
+      process.stderr.write = realErr;
+    }
+    const stdout = written.join("");
+    assert.match(
+      stdout,
+      /agent-glovebox PERFORMANCE: the gate-bash-calls hook/u,
+    );
+    assert.match(
+      stdout,
+      /agent-glovebox\/issues\/new with agent-glovebox 0\.79\.0/u,
+    );
+  });
+
+  it("names the composer on the error path too", async () => {
+    // A judge that overran AND THEN THREW has this stderr line as its only
+    // report, so a reportTo that reaches the success path alone still blames
+    // the sanitizer exactly where the attribution matters most.
+    const errs = [];
+    let onErrorCalled = false;
+    const realErr = process.stderr.write.bind(process.stderr);
+    process.stderr.write = (chunk) => {
+      errs.push(String(chunk));
+      return true;
+    };
+    try {
+      await runJudgeCli(
+        "gate-bash-calls",
+        async () => {
+          await new Promise((resolve) =>
+            setTimeout(resolve, SLOW_HOOK_THRESHOLD_MS + 100),
+          );
+          throw new Error("judge exploded");
+        },
+        {
+          onError: () => {
+            onErrorCalled = true;
+          },
+          readInput: async () => ({
+            hook_event_name: "PreToolUse",
+            tool_name: "Bash",
+            tool_input: { command: "echo hi" },
+          }),
+          write: () => assert.fail("a throwing judge writes no verdict"),
+          reportTo: glovebox,
+        },
+      );
+    } finally {
+      process.stderr.write = realErr;
+    }
+    const stderr = errs.join("");
+    assert.match(
+      stderr,
+      /agent-glovebox PERFORMANCE: the gate-bash-calls hook/u,
+    );
+    assert.match(
+      stderr,
+      /agent-glovebox\/issues\/new with agent-glovebox 0\.79\.0/u,
+    );
+    assert.ok(onErrorCalled, "onError must still take the failure posture");
   });
 });
 

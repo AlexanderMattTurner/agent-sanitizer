@@ -63,7 +63,7 @@ function readManifest(path2) {
   } catch {
     return null;
   }
-  return SEMVER.test(manifest?.version) ? manifest.version : null;
+  return manifest?.name === OWN_NAME && SEMVER.test(manifest.version) ? manifest.version : null;
 }
 function sanitizerVersion() {
   if (cachedVersion === void 0) cachedVersion = readVersion();
@@ -72,6 +72,23 @@ function sanitizerVersion() {
 function versionClause(version) {
   const resolved = version === void 0 ? sanitizerVersion() : version;
   return resolved ? `agent-sanitizer ${resolved}` : "your agent-sanitizer version";
+}
+function noticeOwner(reportTo, version) {
+  if (reportTo === void 0)
+    return {
+      label: "agent-sanitizer",
+      owner: "the sanitizer",
+      issueUrl: ISSUE_URL,
+      versionClause: versionClause(version),
+      composer: void 0
+    };
+  return {
+    label: reportTo.name,
+    owner: reportTo.name,
+    issueUrl: reportTo.issueUrl,
+    versionClause: reportTo.version ? `${reportTo.name} ${reportTo.version}` : `your ${reportTo.name} version`,
+    composer: reportTo.name
+  };
 }
 function formatSeconds(ms) {
   return (Math.round(ms / 100) / 10).toFixed(1);
@@ -174,11 +191,11 @@ function startHookTimer(now = Date.now, cpuNow = processCpuMs) {
     hostMs: () => Math.max(0, hostExtensionMs - hostBefore)
   };
 }
-function attributeWait(elapsedMs, cpuMs, redactorMs, hostMs) {
+function attributeWait(elapsedMs, cpuMs, redactorMs, hostMs, owner) {
   const measuredHostMs = hostMs ?? 0;
   const otherMs = Math.max(0, elapsedMs - cpuMs - redactorMs - measuredHostMs);
   const largest = Math.max(cpuMs, redactorMs, measuredHostMs, otherMs);
-  const verdict = redactorMs === largest ? "The largest share was spent inside the redactor round trip \u2014 the daemon's scan, the host it shares, or both; this hook was not computing it." : hostMs !== void 0 && hostMs === largest ? "The largest share was spent inside a host extension this hook called \u2014 a callback the composer injected, and a cost that composer owns; neither the sanitizer nor the redactor was computing it." : cpuMs === largest ? "The largest share is this hook computing \u2014 a per-call cost the sanitizer owns, repeated by every affected call." : hostMs === void 0 ? "The largest share is neither the redactor nor this hook computing: it was blocked on a loaded machine, on a host extension this caller does not measure, or on something else outside the sanitizer that it called." : "The largest share is none of those three: it was blocked on a loaded machine or on something outside the sanitizer that it called without measuring.";
+  const verdict = redactorMs === largest ? "The largest share was spent inside the redactor round trip \u2014 the daemon's scan, the host it shares, or both; this hook was not computing it." : hostMs !== void 0 && hostMs === largest ? owner.composer === void 0 ? "The largest share was spent inside a host extension this hook called \u2014 a callback the composer injected, and a cost that composer owns; neither the sanitizer nor the redactor was computing it." : `The largest share was spent inside a host extension this hook called \u2014 a callback ${owner.composer} injected, and a cost ${owner.composer} owns; neither this hook nor the redactor was computing it.` : cpuMs === largest ? `The largest share is this hook computing \u2014 a per-call cost ${owner.owner} owns, repeated by every affected call.` : hostMs === void 0 ? `The largest share is neither the redactor nor this hook computing: it was blocked on a loaded machine, on a host extension this caller does not measure, or on something else outside ${owner.owner} that it called.` : `The largest share is none of those three: it was blocked on a loaded machine or on something outside ${owner.owner} that it called without measuring.`;
   const hostClause = hostMs === void 0 ? "" : ` and ${formatSeconds(hostMs)}s was inside host extensions`;
   return `, of which ${formatSeconds(cpuMs)}s was this hook's own CPU${hostClause === "" ? " and" : ","} ${formatSeconds(redactorMs)}s was inside redactor round trips${hostClause}. ${verdict}`;
 }
@@ -188,9 +205,10 @@ function slowHookNotice(hookName, elapsedMs, thresholdMs = SLOW_HOOK_THRESHOLD_M
   const redactorMs = context?.redactorMs;
   const attributed = typeof cpuMs === "number" && typeof redactorMs === "number";
   const hostMs = typeof context?.hostMs === "number" ? context.hostMs : void 0;
-  const attribution = attributed ? attributeWait(elapsedMs, cpuMs, redactorMs, hostMs) : typeof cpuMs === "number" ? `, and used ${formatSeconds(cpuMs)}s of CPU. Only the CPU share is work every affected call repeats; the rest was spent waiting, on a busy machine or on something this hook called.` : ". Wall-clock alone cannot separate the sanitizer's own work from a busy machine.";
+  const owner = noticeOwner(context?.reportTo, version);
+  const attribution = attributed ? attributeWait(elapsedMs, cpuMs, redactorMs, hostMs, owner) : typeof cpuMs === "number" ? `, and used ${formatSeconds(cpuMs)}s of CPU. Only the CPU share is work every affected call repeats; the rest was spent waiting, on a busy machine or on something this hook called.` : `. Wall-clock alone cannot separate ${owner.owner}'s own work from a busy machine.`;
   const timings = attributed ? hostMs === void 0 ? "all three timings" : "all four timings" : typeof cpuMs === "number" ? "both timings" : "timing";
-  return `agent-sanitizer PERFORMANCE: the ${hookName} hook took ${formatSeconds(elapsedMs)}s${formatContextSuffix(context)}, over its ${formatSeconds(thresholdMs)}s budget${attribution} Tell the user, and suggest they report it at ${ISSUE_URL} with ${versionClause(version)}, the hook name and ${timings}.`;
+  return `${owner.label} PERFORMANCE: the ${hookName} hook took ${formatSeconds(elapsedMs)}s${formatContextSuffix(context)}, over its ${formatSeconds(thresholdMs)}s budget${attribution} Tell the user, and suggest they report it at ${owner.issueUrl} with ${owner.versionClause}, the hook name and ${timings}.`;
 }
 function writeSlowHookNotice(hookName, elapsedMs, writeErr = (chunk) => process.stderr.write(chunk), context) {
   const notice = slowHookNotice(hookName, elapsedMs, void 0, context);
@@ -212,7 +230,7 @@ function reportSlowHook(hookName, elapsedMs, hookEventName, emit, writeErr = (ch
   emit(hookEventName, { additionalContext: notice });
   return true;
 }
-var SLOW_HOOK_THRESHOLD_MS, CONCURRENT_PROVISION_CEILING_MS, ISSUE_URL, VERSION_MANIFESTS, SEMVER, cachedVersion, provisioningMs, provisioningCpuMs, redactorRoundTripMs, hostExtensionMs, hostExtensionCpuMs, hostExtensionDepth;
+var SLOW_HOOK_THRESHOLD_MS, CONCURRENT_PROVISION_CEILING_MS, ISSUE_URL, VERSION_MANIFESTS, OWN_NAME, SEMVER, cachedVersion, provisioningMs, provisioningCpuMs, redactorRoundTripMs, hostExtensionMs, hostExtensionCpuMs, hostExtensionDepth;
 var init_hook_timing = __esm({
   "claude-hooks/lib/hook-timing.mjs"() {
     "use strict";
@@ -224,6 +242,7 @@ var init_hook_timing = __esm({
       "../../plugin/.claude-plugin/plugin.json",
       "../../package.json"
     ];
+    OWN_NAME = "agent-sanitizer";
     SEMVER = /^[0-9]+\.[0-9]+\.[0-9]+$/;
     provisioningMs = 0;
     provisioningCpuMs = 0;
@@ -49525,7 +49544,8 @@ async function runJudgeCli(hookName, judge, {
   onError,
   transformInput = (raw) => raw,
   readInput = readStdinJson,
-  write = (chunk) => process.stdout.write(chunk)
+  write = (chunk) => process.stdout.write(chunk),
+  reportTo
 }) {
   let input;
   let timer = null;
@@ -49546,7 +49566,8 @@ async function runJudgeCli(hookName, judge, {
           tool,
           cpuMs: timer.cpuMs(),
           redactorMs: timer.redactorMs(),
-          hostMs: timer.hostMs()
+          hostMs: timer.hostMs(),
+          reportTo
         }),
         event
       )
@@ -49561,7 +49582,8 @@ async function runJudgeCli(hookName, judge, {
         tool,
         cpuMs: timer.cpuMs(),
         redactorMs: timer.redactorMs(),
-        hostMs: timer.hostMs()
+        hostMs: timer.hostMs(),
+        reportTo
       });
     onError(err, input);
   }
@@ -52025,8 +52047,14 @@ var init_invisible_charset = __esm({
 function envValueRegex(value) {
   let re = ENV_VALUE_REGEX_CACHE.get(value);
   if (re === void 0) {
+    const visible = [...value].filter(
+      (ch) => !ENV_INVIS_SET.has(
+        /** @type {number} */
+        ch.codePointAt(0)
+      )
+    );
     re = new RegExp(
-      [...value].map((ch) => ch.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join(ENV_INVIS_RUN),
+      visible.length > 0 ? visible.map(escapeLiteral).join(ENV_INVIS_RUN) : [...value].map(escapeLiteral).join(""),
       "u"
     );
     ENV_VALUE_REGEX_CACHE.set(value, re);
@@ -52040,13 +52068,18 @@ function hasEnvBoundSecret(text6, env = process.env) {
     return value && [...value].length >= minLen && envValueRegex(value).test(text6);
   });
 }
-var ENV_INVIS_RUN, ENV_VALUE_REGEX_CACHE;
+var ENV_INVIS_CODEPOINTS, ENV_INVIS_SET, ENV_INVIS_RUN, escapeLiteral, ENV_VALUE_REGEX_CACHE;
 var init_secret_annotate = __esm({
   "claude-hooks/lib/secret-annotate.mjs"() {
     "use strict";
     init_env_config();
     init_invisible_charset();
-    ENV_INVIS_RUN = "[" + [.../* @__PURE__ */ new Set([...invisible_charset_default.cf_codepoints, ...invisible_charset_default.extra_codepoints])].sort((a, b) => a - b).map((cp) => `\\u{${cp.toString(16)}}`).join("") + "]*";
+    ENV_INVIS_CODEPOINTS = [
+      .../* @__PURE__ */ new Set([...invisible_charset_default.cf_codepoints, ...invisible_charset_default.extra_codepoints])
+    ].sort((a, b) => a - b);
+    ENV_INVIS_SET = new Set(ENV_INVIS_CODEPOINTS);
+    ENV_INVIS_RUN = "[" + ENV_INVIS_CODEPOINTS.map((cp) => `\\u{${cp.toString(16)}}`).join("") + "]*";
+    escapeLiteral = (ch) => ch.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
     ENV_VALUE_REGEX_CACHE = /* @__PURE__ */ new Map();
   }
 });

@@ -13,7 +13,8 @@
  */
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { readdirSync, readFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { readFileSync } from "node:fs";
 import { join } from "node:path";
 
 import { tokenizer } from "acorn";
@@ -52,18 +53,17 @@ export function liveEscapes(source) {
   return found;
 }
 
-/** Every scanned module, repo-relative. */
-const SCANNED = [
-  ...["src", "claude-hooks"].flatMap((dir) =>
-    readdirSync(join(repoRoot, dir), { recursive: true })
-      .map(String)
-      .filter((name) => name.endsWith(".mjs"))
-      .map((name) => join(dir, name)),
-  ),
-  ...readdirSync(join(repoRoot, "scripts"))
-    .filter((name) => /^gen-.*\.mjs$/.test(name))
-    .map((name) => join("scripts", name)),
-].sort();
+/** Every scanned module, repo-relative. Enumerated by `git ls-files` pathspec
+ * (a git `*` crosses `/`) so the guard-pair scan attributes to this suite
+ * exactly the files it reads, not every file under scripts/. */
+const SCANNED = execFileSync(
+  "git",
+  ["ls-files", "--", "src/*.mjs", "claude-hooks/*.mjs", "scripts/gen-*.mjs"],
+  { cwd: repoRoot, encoding: "utf8" },
+)
+  .split("\n")
+  .filter((path) => path !== "")
+  .sort();
 
 describe("no live Unicode property escape in shipped code or generators", () => {
   it("scans the modules that decide behaviour (non-vacuous)", () => {
