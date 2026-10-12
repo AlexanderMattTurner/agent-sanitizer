@@ -4341,6 +4341,147 @@ var init_layer1 = __esm({
   }
 });
 
+// src/claude-context.mjs
+import { dirname as dirname2, isAbsolute, join as join2, relative, resolve, sep } from "node:path";
+function kind(shape, name50, { ancestorChain = false, eventNamed = false } = {}) {
+  return Object.freeze({ shape, name: name50, ancestorChain, eventNamed });
+}
+function kindsOfShape(shape) {
+  return CLAUDE_CONTEXT_KINDS.filter((row) => row.shape === shape);
+}
+function namesOf(rows) {
+  return Object.freeze(rows.map((row) => row.name));
+}
+function claudeDirPatterns(prefix) {
+  return [
+    `${prefix}.claude/*.md`,
+    ...CLAUDE_CONTEXT_SUBDIRS.map((sub) => `${prefix}.claude/${sub}/**/*.md`)
+  ];
+}
+function ancestorInstructionFiles(dir) {
+  const files = [];
+  let current = resolve(dir);
+  for (let parent = dirname2(current); parent !== current; parent = dirname2(current)) {
+    current = parent;
+    for (const name50 of CLAUDE_MEMORY_FILES) files.push(join2(current, name50));
+  }
+  return files;
+}
+function isInsideDir(dir, file) {
+  const rel = relative(dir, file);
+  return rel !== "" && rel !== ".." && !rel.startsWith(`..${sep}`) && !isAbsolute(rel);
+}
+function displayUntrusted(text5) {
+  return text5.replace(
+    DISPLAY_UNSAFE,
+    (ch) => `\\u{${/** @type {number} */
+    ch.codePointAt(0).toString(16).toUpperCase()}}`
+  );
+}
+function excludeNodeModules(entry) {
+  return entry.split(/[/\\]/).at(-1) === "node_modules";
+}
+function claudeTail(path2, which) {
+  const parts2 = path2.split(/[/\\]/);
+  const claudeIndex = which === "outermost" ? parts2.indexOf(".claude") : parts2.lastIndexOf(".claude");
+  return claudeIndex === -1 ? null : parts2.slice(claudeIndex + 1);
+}
+function excludeFromContextScan(entry) {
+  if (excludeNodeModules(entry)) return true;
+  const tail = claudeTail(entry, "outermost");
+  if (tail === null || tail.length === 0) return false;
+  if (tail.length === 1 && tail[0].endsWith(".md")) return false;
+  return !CLAUDE_CONTEXT_SUBDIRS.includes(tail[0]);
+}
+function classifyContextPath(path2) {
+  const segments = path2.split(/[/\\]/);
+  const name50 = segments[segments.length - 1];
+  const dirFile = kindsOfShape("dir-file").find((row) => row.name === name50);
+  const tail = claudeTail(path2, "innermost");
+  if (dirFile || tail === null) return dirFile ?? null;
+  if (tail.length === 1 && name50.endsWith(".md"))
+    return kindsOfShape("claude-md")[0];
+  const dirShapes = ["claude-subdir", "claude-bulk"];
+  return CLAUDE_CONTEXT_KINDS.find(
+    (row) => dirShapes.includes(row.shape) && row.name === tail[0]
+  ) ?? null;
+}
+function announcedByInstructionsLoaded(path2) {
+  return classifyContextPath(path2)?.eventNamed === true;
+}
+function contextScopeContradiction(path2, loadReason) {
+  if (!HOST_CHOSEN_LOAD_REASONS.includes(loadReason)) return null;
+  const row = classifyContextPath(path2);
+  if (row?.eventNamed || row?.shape === "claude-bulk") return null;
+  if (row)
+    return `InstructionsLoaded named ${row.name}, which CLAUDE_CONTEXT_KINDS records as a kind the event never names: the lazy scan reaches further than this table, and the docs built on it, claim`;
+  const tail = claudeTail(path2, "innermost");
+  if (tail === null || tail.length < 2) return null;
+  const outer = (
+    /** @type {string[]} */
+    claudeTail(path2, "outermost")
+  );
+  if (CLAUDE_BULK_SUBDIRS.includes(outer[0])) return null;
+  return `.claude/${displayUntrusted(tail[0])}/ loaded as model context, and CLAUDE_CONTEXT_SUBDIRS does not list it: the SessionStart scan prunes that directory, so every OTHER file in it goes unscanned. Add it there if it is context, not bulk data`;
+}
+var CLAUDE_CONTEXT_KINDS, CLAUDE_CONTEXT_SUBDIRS, CLAUDE_BULK_SUBDIRS, CLAUDE_MEMORY_FILES, CLAUDE_DIR_INSTRUCTION_FILES, CLAUDE_INSTRUCTION_GLOBS, CLAUDE_LAUNCH_GLOBS, DISPLAY_UNSAFE, USER_GLOBAL_EVENT_NAMED_GLOBS, HOST_CHOSEN_LOAD_REASONS;
+var init_claude_context = __esm({
+  "src/claude-context.mjs"() {
+    "use strict";
+    init_invisible();
+    CLAUDE_CONTEXT_KINDS = Object.freeze([
+      kind("dir-file", "CLAUDE.md", { ancestorChain: true, eventNamed: true }),
+      kind("dir-file", "CLAUDE.local.md", {
+        ancestorChain: true,
+        eventNamed: true
+      }),
+      // AGENTS.md is the cross-agent convention Claude Code does not read itself,
+      // kept because this package guards agents generally. Off the ancestor chain
+      // for the same reason: that load is Claude Code's rule.
+      kind("dir-file", "AGENTS.md"),
+      kind("claude-md", ".claude/*.md"),
+      kind("claude-subdir", "agents"),
+      kind("claude-subdir", "commands"),
+      kind("claude-subdir", "output-styles"),
+      kind("claude-subdir", "rules", { eventNamed: true }),
+      kind("claude-subdir", "skills"),
+      // Repo checkouts and session transcripts: storage the host writes and reads
+      // back, so a load out of one is not evidence that the whitelist is short.
+      kind("claude-bulk", "worktrees"),
+      kind("claude-bulk", "projects"),
+      kind("claude-bulk", "todos")
+    ]);
+    CLAUDE_CONTEXT_SUBDIRS = namesOf(kindsOfShape("claude-subdir"));
+    CLAUDE_BULK_SUBDIRS = namesOf(kindsOfShape("claude-bulk"));
+    CLAUDE_MEMORY_FILES = namesOf(
+      // Shape first: only a per-directory file can be walked up a parent chain, so
+      // no `.claude/` row can reach this list whatever its flags say.
+      CLAUDE_CONTEXT_KINDS.filter(
+        (row) => row.shape === "dir-file" && row.ancestorChain
+      )
+    );
+    CLAUDE_DIR_INSTRUCTION_FILES = namesOf(kindsOfShape("dir-file"));
+    CLAUDE_INSTRUCTION_GLOBS = Object.freeze([
+      ...CLAUDE_DIR_INSTRUCTION_FILES.map((name50) => `**/${name50}`),
+      ...claudeDirPatterns("**/")
+    ]);
+    CLAUDE_LAUNCH_GLOBS = Object.freeze([
+      ...CLAUDE_DIR_INSTRUCTION_FILES,
+      ...claudeDirPatterns("")
+    ]);
+    DISPLAY_UNSAFE = new RegExp(
+      `${STRIP.source}|[\\p{Cc}\\p{Zl}\\p{Zp}\\p{Cs}]`,
+      "gu"
+    );
+    USER_GLOBAL_EVENT_NAMED_GLOBS = Object.freeze(
+      CLAUDE_CONTEXT_KINDS.filter((row) => row.eventNamed).map(
+        (row) => row.shape === "dir-file" ? row.name : `${row.name}/**/*.md`
+      )
+    );
+    HOST_CHOSEN_LOAD_REASONS = ["session_start", "nested_traversal"];
+  }
+});
+
 // src/warnings.mjs
 function describeRemoved(removed) {
   const parts2 = [];
@@ -4363,7 +4504,7 @@ function describeExfil(threats) {
   const reasons = [
     ...new Set(
       threats.map(
-        (threat) => `${threat.isImage ? "image" : "link"} to ${threat.target}: ${threat.reason}`
+        (threat) => `${threat.isImage ? "image" : "link"} to ${displayUntrusted(threat.target)}: ${threat.reason}`
       )
     )
   ];
@@ -4377,6 +4518,7 @@ var LONE_SURROGATE_WARNING, HTML_UNPARSEABLE_WARNING;
 var init_warnings = __esm({
   "src/warnings.mjs"() {
     "use strict";
+    init_claude_context();
     LONE_SURROGATE_WARNING = "Normalized lone UTF-16 surrogates";
     HTML_UNPARSEABLE_WARNING = "HTML unparseable \u2014 the entire output was withheld behind a placeholder; nothing was spliced";
   }
@@ -47292,10 +47434,10 @@ import {
   unlinkSync as unlinkSync2,
   writeFileSync as writeFileSync2
 } from "node:fs";
-import { dirname as dirname2, join as join2 } from "node:path";
+import { dirname as dirname3, join as join3 } from "node:path";
 function atomicReplaceFile(absPath, data, mode, tmpName = () => `.${randomBytes(12).toString("hex")}.tmp`, remove = unlinkSync2) {
-  const dir = dirname2(absPath);
-  const tmp = join2(dir, tmpName());
+  const dir = dirname3(absPath);
+  const tmp = join3(dir, tmpName());
   const fd = openSync2(
     tmp,
     constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL,
@@ -47325,147 +47467,6 @@ function atomicReplaceFile(absPath, data, mode, tmpName = () => `.${randomBytes(
 var init_atomic_replace = __esm({
   "src/atomic-replace.mjs"() {
     "use strict";
-  }
-});
-
-// src/claude-context.mjs
-import { dirname as dirname3, isAbsolute, join as join3, relative, resolve, sep } from "node:path";
-function kind(shape, name50, { ancestorChain = false, eventNamed = false } = {}) {
-  return Object.freeze({ shape, name: name50, ancestorChain, eventNamed });
-}
-function kindsOfShape(shape) {
-  return CLAUDE_CONTEXT_KINDS.filter((row) => row.shape === shape);
-}
-function namesOf(rows) {
-  return Object.freeze(rows.map((row) => row.name));
-}
-function claudeDirPatterns(prefix) {
-  return [
-    `${prefix}.claude/*.md`,
-    ...CLAUDE_CONTEXT_SUBDIRS.map((sub) => `${prefix}.claude/${sub}/**/*.md`)
-  ];
-}
-function ancestorInstructionFiles(dir) {
-  const files = [];
-  let current = resolve(dir);
-  for (let parent = dirname3(current); parent !== current; parent = dirname3(current)) {
-    current = parent;
-    for (const name50 of CLAUDE_MEMORY_FILES) files.push(join3(current, name50));
-  }
-  return files;
-}
-function isInsideDir(dir, file) {
-  const rel = relative(dir, file);
-  return rel !== "" && rel !== ".." && !rel.startsWith(`..${sep}`) && !isAbsolute(rel);
-}
-function displayUntrusted(text5) {
-  return text5.replace(
-    DISPLAY_UNSAFE,
-    (ch) => `\\u{${/** @type {number} */
-    ch.codePointAt(0).toString(16).toUpperCase()}}`
-  );
-}
-function excludeNodeModules(entry) {
-  return entry.split(/[/\\]/).at(-1) === "node_modules";
-}
-function claudeTail(path2, which) {
-  const parts2 = path2.split(/[/\\]/);
-  const claudeIndex = which === "outermost" ? parts2.indexOf(".claude") : parts2.lastIndexOf(".claude");
-  return claudeIndex === -1 ? null : parts2.slice(claudeIndex + 1);
-}
-function excludeFromContextScan(entry) {
-  if (excludeNodeModules(entry)) return true;
-  const tail = claudeTail(entry, "outermost");
-  if (tail === null || tail.length === 0) return false;
-  if (tail.length === 1 && tail[0].endsWith(".md")) return false;
-  return !CLAUDE_CONTEXT_SUBDIRS.includes(tail[0]);
-}
-function classifyContextPath(path2) {
-  const segments = path2.split(/[/\\]/);
-  const name50 = segments[segments.length - 1];
-  const dirFile = kindsOfShape("dir-file").find((row) => row.name === name50);
-  const tail = claudeTail(path2, "innermost");
-  if (dirFile || tail === null) return dirFile ?? null;
-  if (tail.length === 1 && name50.endsWith(".md"))
-    return kindsOfShape("claude-md")[0];
-  const dirShapes = ["claude-subdir", "claude-bulk"];
-  return CLAUDE_CONTEXT_KINDS.find(
-    (row) => dirShapes.includes(row.shape) && row.name === tail[0]
-  ) ?? null;
-}
-function announcedByInstructionsLoaded(path2) {
-  return classifyContextPath(path2)?.eventNamed === true;
-}
-function contextScopeContradiction(path2, loadReason) {
-  if (!HOST_CHOSEN_LOAD_REASONS.includes(loadReason)) return null;
-  const row = classifyContextPath(path2);
-  if (row?.eventNamed || row?.shape === "claude-bulk") return null;
-  if (row)
-    return `InstructionsLoaded named ${row.name}, which CLAUDE_CONTEXT_KINDS records as a kind the event never names: the lazy scan reaches further than this table, and the docs built on it, claim`;
-  const tail = claudeTail(path2, "innermost");
-  if (tail === null || tail.length < 2) return null;
-  const outer = (
-    /** @type {string[]} */
-    claudeTail(path2, "outermost")
-  );
-  if (CLAUDE_BULK_SUBDIRS.includes(outer[0])) return null;
-  return `.claude/${displayUntrusted(tail[0])}/ loaded as model context, and CLAUDE_CONTEXT_SUBDIRS does not list it: the SessionStart scan prunes that directory, so every OTHER file in it goes unscanned. Add it there if it is context, not bulk data`;
-}
-var CLAUDE_CONTEXT_KINDS, CLAUDE_CONTEXT_SUBDIRS, CLAUDE_BULK_SUBDIRS, CLAUDE_MEMORY_FILES, CLAUDE_DIR_INSTRUCTION_FILES, CLAUDE_INSTRUCTION_GLOBS, CLAUDE_LAUNCH_GLOBS, DISPLAY_UNSAFE, USER_GLOBAL_EVENT_NAMED_GLOBS, HOST_CHOSEN_LOAD_REASONS;
-var init_claude_context = __esm({
-  "src/claude-context.mjs"() {
-    "use strict";
-    init_invisible();
-    CLAUDE_CONTEXT_KINDS = Object.freeze([
-      kind("dir-file", "CLAUDE.md", { ancestorChain: true, eventNamed: true }),
-      kind("dir-file", "CLAUDE.local.md", {
-        ancestorChain: true,
-        eventNamed: true
-      }),
-      // AGENTS.md is the cross-agent convention Claude Code does not read itself,
-      // kept because this package guards agents generally. Off the ancestor chain
-      // for the same reason: that load is Claude Code's rule.
-      kind("dir-file", "AGENTS.md"),
-      kind("claude-md", ".claude/*.md"),
-      kind("claude-subdir", "agents"),
-      kind("claude-subdir", "commands"),
-      kind("claude-subdir", "output-styles"),
-      kind("claude-subdir", "rules", { eventNamed: true }),
-      kind("claude-subdir", "skills"),
-      // Repo checkouts and session transcripts: storage the host writes and reads
-      // back, so a load out of one is not evidence that the whitelist is short.
-      kind("claude-bulk", "worktrees"),
-      kind("claude-bulk", "projects"),
-      kind("claude-bulk", "todos")
-    ]);
-    CLAUDE_CONTEXT_SUBDIRS = namesOf(kindsOfShape("claude-subdir"));
-    CLAUDE_BULK_SUBDIRS = namesOf(kindsOfShape("claude-bulk"));
-    CLAUDE_MEMORY_FILES = namesOf(
-      // Shape first: only a per-directory file can be walked up a parent chain, so
-      // no `.claude/` row can reach this list whatever its flags say.
-      CLAUDE_CONTEXT_KINDS.filter(
-        (row) => row.shape === "dir-file" && row.ancestorChain
-      )
-    );
-    CLAUDE_DIR_INSTRUCTION_FILES = namesOf(kindsOfShape("dir-file"));
-    CLAUDE_INSTRUCTION_GLOBS = Object.freeze([
-      ...CLAUDE_DIR_INSTRUCTION_FILES.map((name50) => `**/${name50}`),
-      ...claudeDirPatterns("**/")
-    ]);
-    CLAUDE_LAUNCH_GLOBS = Object.freeze([
-      ...CLAUDE_DIR_INSTRUCTION_FILES,
-      ...claudeDirPatterns("")
-    ]);
-    DISPLAY_UNSAFE = new RegExp(
-      `${STRIP.source}|[\\p{Cc}\\p{Zl}\\p{Zp}\\p{Cs}]`,
-      "gu"
-    );
-    USER_GLOBAL_EVENT_NAMED_GLOBS = Object.freeze(
-      CLAUDE_CONTEXT_KINDS.filter((row) => row.eventNamed).map(
-        (row) => row.shape === "dir-file" ? row.name : `${row.name}/**/*.md`
-      )
-    );
-    HOST_CHOSEN_LOAD_REASONS = ["session_start", "nested_traversal"];
   }
 });
 

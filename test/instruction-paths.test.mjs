@@ -52,6 +52,7 @@ const { formatReport } =
 const scanInvisible = await import("../claude-hooks/scan-invisible-chars.mjs");
 const { scanLoadedFile, loadedFileMessage } =
   await import("../claude-hooks/scan-loaded-instructions.mjs");
+const { describeExfil } = await import("../src/warnings.mjs");
 const { OPS } = await import("../bin/sanitize-cli.mjs");
 const { alertDir } = await import("../claude-hooks/lib/invisible-alert.mjs");
 
@@ -459,14 +460,95 @@ describe("every scanner-rendered untrusted string goes through displayUntrusted"
       assert.ok(notice !== null, "the scope notice did not fire");
       rendersNeutralized(notice);
     },
+    "src/warnings.mjs::threat.target": () =>
+      rendersNeutralized(
+        describeExfil([{ isImage: false, target: HOSTILE, reason: "r" }]),
+      ),
   };
 
   for (const [site, check] of Object.entries(RENDER_SITES))
     it(`${site} escapes a hostile string`, check);
 
-  // Untrusted-shaped interpolations that are NOT a scanned tree's text, each
-  // with the reason it may render raw. Keyed by module and expression, so a new
-  // raw use of an exempt expression shares its reason and anything else fails.
+  // The modules whose output carries text from a scanned tree. In these EVERY
+  // interpolated or concatenated expression is either wrapped in
+  // displayUntrusted or listed in STRICT_EXEMPT with its reason: no name filter
+  // decides what counts as untrusted-shaped, so a hole spelled `target` or `rel`
+  // fails here instead of slipping past a list of spellings.
+  const STRICT_MODULES = [
+    "claude-hooks/lib/invisible-report.mjs",
+    "claude-hooks/scan-invisible-chars.mjs",
+    "claude-hooks/scan-loaded-instructions.mjs",
+    "src/claude-context.mjs",
+    "src/warnings.mjs",
+  ];
+  // Keyed `module` then expression source (whitespace collapsed). An expression
+  // is exempt by its spelling, so a variable named like an exempt one inherits
+  // the exemption: each pass-through below is the output of a formatter whose
+  // own sites are in RENDER_SITES and exercised with a hostile string.
+  /** @type {Record<string, Record<string, string>>} */
+  const STRICT_EXEMPT = {
+    "claude-hooks/lib/invisible-report.mjs": {
+      "BAR.slice(0, 11)": "the report's own rule glyphs",
+      "finding.line": "a line number or null, from scanText",
+      where: "'Whole file' or 'Line <number>'",
+      "finding.charCount": "a count",
+      "finding.method":
+        "one of decodeRun's fixed method labels, never file text",
+      "JSON.stringify(finding.decoded)":
+        "decodeRun's output: tag bytes rendered through neutralizeTagBytes (printable ASCII or a \\xNN escape), counts, and U+XXXX labels",
+    },
+    "claude-hooks/scan-invisible-chars.mjs": {
+      HOOK_NAME: "this hook's own name",
+      "ctx.message":
+        "a hook FAULT's text, reduced by safeErrMessage to printable ASCII, tab and newline",
+      "faultLine(ctx)": "HOOK_NAME plus the fault text above",
+      notice: "formatSkipped's output, whose file and reason are wrapped",
+      cleaned: "a count of cleaned files",
+      report: "formatReport's output, whose file names are wrapped",
+    },
+    "claude-hooks/scan-loaded-instructions.mjs": {
+      HOOK_NAME: "this hook's own name",
+      "ctx.message":
+        "a hook FAULT's text, reduced by safeErrMessage to printable ASCII, tab and newline",
+      "faultLine(ctx)": "HOOK_NAME plus the fault text above",
+      stale:
+        "contextScopeContradiction's notice, whose one path segment is wrapped",
+      report: "formatReport's output, whose file names are wrapped",
+      tail: "loadedFileMessage's closing paragraph, whose path and reason are wrapped",
+      notice: "scopeNotice's output: HOOK_NAME around the wrapped notice",
+      message: "loadedFileMessage's output: the wrapped report and tail",
+    },
+    "src/claude-context.mjs": {
+      prefix: "'' or '**/', chosen by claudeDirPatterns' callers",
+      sub: "an entry of CLAUDE_CONTEXT_SUBDIRS, a constant table",
+      name: "an entry of CLAUDE_DIR_INSTRUCTION_FILES, a constant table",
+      sep: "the platform path separator",
+      "STRIP.source": "the escape set's own regex source, not file text",
+      "(ch.codePointAt(0)).toString(16).toUpperCase()":
+        "hex digits of a code point, inside the escape itself",
+      "row.name": "a row of CLAUDE_CONTEXT_KINDS, a constant table",
+    },
+    "src/warnings.mjs": {
+      "removed.comments": "a count",
+      "removed.hidden": "a count",
+      "describeRemoved(removed)": "counts and fixed nouns",
+      count: "a count",
+      tag: "a key of warned.tags, which html.mjs fills only from REPORTED_TAGS",
+      "warned.dataSrc": "a count",
+      'parts.join(", ")': "counts and fixed nouns",
+      'threat.isImage ? "image" : "link"': "a fixed word",
+      "threat.reason":
+        "a link/image threat's engine-authored classification (html.mjs paramExfilReason and its fixed literals), never file text",
+      'reasons.join("; ")': "the sentences built above, target wrapped",
+      'hosts.join("; ")':
+        "confusable-host descriptions: the host as the WHATWG URL parser normalized it, which rejects or strips invisible and control code points; the look-alike letters are shown on purpose",
+    },
+  };
+
+  // Untrusted-shaped interpolations in every OTHER module that are NOT a
+  // scanned tree's text, each with the reason it may render raw. Keyed by module
+  // and expression, so a new raw use of an exempt expression shares its reason
+  // and anything else fails.
   const EXEMPT = new Set([
     // The hook's own $TMPDIR store, composed by this package.
     "claude-hooks/lib/invisible-alert.mjs::dir",
@@ -485,28 +567,44 @@ describe("every scanner-rendered untrusted string goes through displayUntrusted"
     // and newline: no invisible, bidi or escape character survives it.
     "claude-hooks/lib/hook-io.mjs::safeErrMessage(err)",
     "claude-hooks/pretooluse-sanitize.mjs::safeErrMessage(err)",
-    // A link/image threat's engine-authored classification, not file text.
-    "src/warnings.mjs::threat.reason",
-    // A ±1 scan direction in index arithmetic, not a path.
-    "src/invisible.mjs::dir",
   ]);
 
   it("covers every untrusted-shaped interpolation in the hooks and the engine", () => {
     const SHAPED =
       /^(?:\w+\.)?(?:file|filePath|file_path|absPath|path|dir|tail\[0\]|reason)$|^safeErrMessage\(/;
+    const strictModules = new Set(STRICT_MODULES);
+    // True for a `+` that builds a string: a string literal or template sits
+    // somewhere in its left spine or on its right. Numeric `+` is arithmetic.
+    const concatenates = (/** @type {any} */ node) =>
+      (node.type === "Literal" && typeof node.value === "string") ||
+      node.type === "TemplateLiteral" ||
+      (node.type === "BinaryExpression" &&
+        node.operator === "+" &&
+        (concatenates(node.left) || concatenates(node.right)));
     /** @type {Set<string>} */
     const raw = new Set();
+    /** @type {Set<string>} */
+    const strictRaw = new Set();
     /** @type {string[]} */
     const wrapped = [];
+    /** @type {Map<string, {classified: number, wrapped: number}>} */
+    const strictSeen = new Map();
     for (const { rel, src, ast } of modules(["claude-hooks", "src"])) {
-      const text = (/** @type {any} */ n) => src.slice(n.start, n.end);
+      const strict = strictModules.has(rel);
+      const seen = { classified: 0, wrapped: 0 };
+      if (strict) strictSeen.set(rel, seen);
+      const text = (/** @type {any} */ n) =>
+        src.slice(n.start, n.end).replace(/\s+/g, " ");
       const classify = (/** @type {any} */ expr) => {
+        seen.classified++;
         if (
           expr.type === "CallExpression" &&
           expr.callee.type === "Identifier" &&
           expr.callee.name === "displayUntrusted"
-        )
+        ) {
+          seen.wrapped++;
           wrapped.push(`${rel}::${text(expr.arguments[0])}`);
+        } else if (strict) strictRaw.add(`${rel}::${text(expr)}`);
         else if (SHAPED.test(text(expr))) raw.add(`${rel}::${text(expr)}`);
       };
       simple(ast, {
@@ -514,17 +612,34 @@ describe("every scanner-rendered untrusted string goes through displayUntrusted"
           node.expressions.forEach(classify);
         },
         BinaryExpression(node) {
-          if (node.operator !== "+") return;
+          if (node.operator !== "+" || !concatenates(node)) return;
           for (const side of [node.left, node.right])
             if (
               side.type !== "TemplateLiteral" &&
-              side.type !== "BinaryExpression"
+              side.type !== "BinaryExpression" &&
+              !(side.type === "Literal" && typeof side.value === "string")
             )
               classify(side);
         },
       });
     }
     assert.deepEqual([...raw].sort(), [...EXEMPT].sort());
+    assert.deepEqual(
+      [...strictRaw].sort(),
+      Object.entries(STRICT_EXEMPT)
+        .flatMap(([rel, exprs]) =>
+          Object.keys(exprs).map((e) => `${rel}::${e}`),
+        )
+        .sort(),
+    );
+    // Positive markers: every strict module was parsed, rendered something, and
+    // wraps at least one string, so an emptied or renamed module cannot pass by
+    // contributing nothing.
+    assert.deepEqual([...strictSeen.keys()].sort(), [...STRICT_MODULES].sort());
+    for (const [rel, { classified, wrapped: n }] of strictSeen) {
+      assert.ok(classified > 0, `${rel} classified no expression`);
+      assert.ok(n > 0, `${rel} wraps no untrusted string`);
+    }
     assert.deepEqual(
       wrapped.sort(),
       Object.keys(RENDER_SITES)

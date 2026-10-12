@@ -14,8 +14,12 @@
  *
  * Every function returns COUNTS and reasons, never the removed content itself:
  * echoing what Layer 2 just spliced out would re-inject the payload into the
- * very context the splice removed it from. This module imports nothing.
+ * very context the splice removed it from. The host `describeExfil` names is not
+ * removed content (Layer 3 leaves the URL intact) but is still text from the
+ * scanned input, so it is escaped with {@link displayUntrusted} rather than
+ * trusting the URL parser to have left it printable.
  */
+import { displayUntrusted } from "./claude-context.mjs";
 
 /**
  * Layer 1's lone-surrogate warning. A bare constant rather than a literal at
@@ -93,7 +97,7 @@ export function describeExfil(threats) {
     ...new Set(
       threats.map(
         (threat) =>
-          `${threat.isImage ? "image" : "link"} to ${threat.target}: ${threat.reason}`,
+          `${threat.isImage ? "image" : "link"} to ${displayUntrusted(threat.target)}: ${threat.reason}`,
       ),
     ),
   ];
