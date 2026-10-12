@@ -148,3 +148,24 @@ describe("every URL_ATTRIBUTES row is read end to end", () => {
         assert.equal(detectExfil(markup(entry, PLAIN)), null));
   }
 });
+
+// Pinned here rather than read from the table's `notFetchedOn`, so dropping a
+// tag from it fails: each is a link target that waits to be followed.
+describe("a link target is reported, but not auto-fetched", () => {
+  for (const [attribute, tag] of [
+    ["href", "a"],
+    ["href", "area"],
+    ["href", "base"],
+    ["xlink:href", "a"],
+  ])
+    it(`${attribute} on <${tag}>`, () => {
+      const inner = `<${tag} ${attribute}="${EVIL}"></${tag}>`;
+      const threats = detectExfil(
+        attribute === "xlink:href" ? `<svg>${inner}</svg>` : inner,
+      );
+      assert.deepEqual(
+        (threats ?? []).map((threat) => threat.autoFetched),
+        [false],
+      );
+    });
+});
