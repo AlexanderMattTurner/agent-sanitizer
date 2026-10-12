@@ -28,15 +28,39 @@ const com = (original) => layer2Placeholder("comment", original);
 // lastIndex between calls, silently skipping matches).
 const PLACEHOLDER_RE = new RegExp(LAYER2_PLACEHOLDER_RE.source);
 
-// "Forbidden" = invisible on a rendered page: comments and hidden elements.
+// "Forbidden" = invisible on a rendered page: a comment, a hidden element no
+// descendant overrides, and non-blank text inside a hidden element that is not
+// under such an override. An override is judged independently of the layer's
+// region logic: a descendant whose own style, written after the hiding
+// element's, reads visible (`font-size:0` then `font-size:9px`) renders its
+// text, while one that cannot undo the hide (`display:none` then anything)
+// does not. A spliced placeholder is blank.
 function containsForbiddenNode(htmlText) {
   // rehype-parse, not the layer's own parse: an oracle built from the code
   // under test cannot contradict it. This one runs parse5 with the DEFAULT tree
   // adapter, so it also checks the layer's adapter against a second reader.
   const tree = unified().use(rehypeParse, { fragment: true }).parse(htmlText);
   let forbidden = false;
-  visit(tree, (node) => {
-    if (node.type !== "comment" && !isHiddenElement(node)) return undefined;
+  visit(tree, (node, _index, parent) => {
+    if (node.type !== "comment" && !isHiddenElement(node, parent))
+      return undefined;
+    const style = node.properties?.style;
+    const overrides = (child) =>
+      typeof style === "string" &&
+      typeof child.properties?.style === "string" &&
+      !isHiddenStyle(`${style};${child.properties.style}`);
+    let overridden = false;
+    const leaks = (child) => {
+      if (child.type === "text")
+        return child.value.replace(LAYER2_PLACEHOLDER_RE, "").trim() !== "";
+      if (overrides(child)) {
+        overridden = true;
+        return false;
+      }
+      return (child.children ?? []).some(leaks);
+    };
+    if (node.type === "element" && !node.children.some(leaks) && overridden)
+      return undefined;
     forbidden = true;
     return EXIT;
   });
@@ -606,11 +630,18 @@ const adversarialStyle = fc.constantFrom(
   "overflow:hidden;max-width:0",
   "font-size:0",
 );
+// A descendant that sets every inherited hide back: it renders inside a
+// font-size, visibility, color or indent hide and nothing else.
+const OVERRIDE_STYLE = "font-size:9px;visibility:visible;text-indent:0";
 const adversarialNode = fc.oneof(
   fc.constant("<!-- secret -->"),
   fc.constant("<div hidden>x</div>"),
   adversarialStyle.map((style) => `<div style="${style}">h</div>`),
   adversarialStyle.map((style) => `<span style='${style}'>x</span>`),
+  adversarialStyle.map(
+    (style) =>
+      `<div style="${style}">h<p style="${OVERRIDE_STYLE}">v</p>h</div>`,
+  ),
 );
 const benignNode = fc.constantFrom(
   "hello",
