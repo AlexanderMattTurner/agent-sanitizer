@@ -40,11 +40,16 @@ minimumReleaseAgeExclude:
 # already above the floor.
 overrides:
   # GHSA-7p8r-x3mc-p8w7 — host confusion via a backslash. Via @commitlint/cli.
-  fast-uri@>=3.0.0 <3.1.5: "^3.1.5"
+  # GHSA-qw65-cvwx-89v3 — authority injection via unvalidated port in serialize.
+  # GHSA-58mr-gqgx-xq4g — host confusion via an unclosed bracket in URI authority.
+  fast-uri@>=3.0.0 <3.1.7: "^3.1.7"
   # GHSA-rgw5-rvv9-x895 — denial of service from unbounded expansion. Via eslint.
-  brace-expansion@>=4.0.0 <5.0.9: "^5.0.9"
+  # GHSA-qhr7-859c-m2p7 — DoS via uncontrolled recursion on nested brace groups.
+  # GHSA-q... — DoS via uncontrolled recursion in parseCommaParts.
+  brace-expansion@>=4.0.0 <5.0.11: "^5.0.11"
   # GHSA-5p4m-2wfm-xmqj — quadratic CPU use parsing !!omap. Via @commitlint/cli.
-  js-yaml@>=4.0.0 <4.3.1: "^4.3.1"
+  # GHSA-2883-xcg3-v3hh — maxTotalMergeKeys does not limit CPU use for empty sources.
+  js-yaml@>=4.0.0 <4.3.2: "^4.3.2"
   # GHSA-q8mj-m7cp-5q26 — remotely triggerable denial of service in qs.stringify.
   # Via @stryker-mutator/core.
   qs@>=6.11.1 <=6.15.1: "^6.15.2"

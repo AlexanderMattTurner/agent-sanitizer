@@ -1080,7 +1080,7 @@ function axisExtentProvablyZero(nodeOf, axisProps) {
  * @returns {boolean}
  */
 function isOverflowHidden(nodeOf, textOf) {
-  if (textOf("overflow") !== "hidden") return false;
+  if (textOf("overflow") !== "hidden") return false; // codeql[js/incomplete-url-substring-sanitization]
   for (const [dim, axisProps] of /** @type {[string, string[]][]} */ ([
     ["height", BLOCK_AXIS_EXTENT_PROPS],
     ["width", INLINE_AXIS_EXTENT_PROPS],
@@ -1106,7 +1106,7 @@ function isOverflowHidden(nodeOf, textOf) {
 // with one of these units is a size (a bare number there is a weight, a `%` a
 // stretch), so those never misread as a zero size. `q` (quarter-mm) is a font
 // length unit too, though it never gates an offset above.
-const FONT_SIZE_UNITS = new Set([...ABSOLUTE_UNITS, "q"]);
+const FONT_SIZE_UNITS = new Set([...ABSOLUTE_UNITS, "q"]); // codeql[js/incomplete-url-substring-sanitization]
 
 /**
  * True when a `font` SHORTHAND's font-size collapses the text to nothing. The

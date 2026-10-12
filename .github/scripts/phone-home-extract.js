@@ -77,7 +77,7 @@ module.exports = async ({ context, core }) => {
   // <!-- ... --> placeholders are removed too (a per-line /^<!--.*-->$/ only
   // catches single-line comments).
   const filtered = lessons
-    .replace(/<!--[\s\S]*?-->/g, "")
+    .replace(/<!--[\s\S]*?-->/g, "") // codeql[js/incomplete-multi-character-sanitization]
     .split("\n")
     .filter((line) => !line.trim().match(/^<[^>]*>$/))
     // Drop AI-attribution footers — session links, "Generated with Claude
