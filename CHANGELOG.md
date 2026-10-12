@@ -8,6 +8,55 @@ adhere to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+## [2.61.2] - 2026-10-12
+
+### Fixed
+
+- Pinned young generation in cost-gate heap flag measurements to ensure consistent testing.
+- Made C-level copy-quadratic control robustly exhibit super-linear behavior.
+
+## [2.61.1] - 2026-10-12
+
+### Added
+- New Unicode properties module supporting UAX #29 grapheme cluster boundaries with grapheme cluster rule GB11 for ZWJ sequences between pictographs.
+- Test coverage for prompt gate integration with instruction scanning, latency measurements, and carve/Layer 1 code paths.
+
+### Changed
+- Unicode data now sourced from the pinned @unicode/unicode-17.0.0 package instead of pre-computed slices.
+- Joiner cluster and joining type tables now read in O(1) time per character using table-based lookup instead of per-selector cluster computation.
+- Emoji and selector classes read from carve tables and long runs optimized for performance.
+
+### Fixed
+- ZWJ sequences now correctly exempt pictograph pairs per UAX #29 GB11, not just RGI sequences.
+- Registered emoji glyphs no longer incorrectly charged to the cover budget.
+- Instructions flagging now consistent with prompt gate behavior.
+- Latency test timing fixed to mark attempts at end to preserve HTML prose structure.
+- ReDoS skip-list entries made stale by Unicode pinning removed.
+
+### Removed
+- Unused Unicode data scripts (DerivedJoiningType.json, IndicSyllabicCategory files) replaced by UCD-based generation.
+
+## [2.61.0] - 2026-10-12
+
+### Added
+- Redaction of Anthropic OAuth tokens and non-canonical sk-ant-/sk-or- keys in secrets.
+- Support for redacting secrets split by terminal escape sequences.
+- Redaction of short values under upper-case credential environment names.
+- Support for reading escaped quotes inside double-quoted keyword values.
+- Ability to redact quoted credential values whole, including spaces and escaped quotes.
+
+### Fixed
+- Secrets matching now correctly orders redactions by visible length to mask longer env secrets before shorter ones they contain.
+- Environment secret matching against original text with proper ordering.
+- Cross-line env secrets now ordered longest-first, consistent with per-line redaction pass.
+
+## [2.60.3] - 2026-10-12
+
+### Fixed
+
+- Auto-resolve now correctly processes only complete conflict blocks and maintains clean git environment state.
+- Auto-resolve now properly stages regenerated outputs and respects the `--root` option.
+
 ## [2.60.2] - 2026-10-12
 
 ### Fixed

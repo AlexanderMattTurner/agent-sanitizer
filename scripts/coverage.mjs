@@ -66,6 +66,11 @@ export const TEST_GLOBS = ["**/*.test.mjs"];
 export const nodeTestCommand = (extra) => [
   "node",
   "--test",
+  // Forwarded to every suite's process: the cost gates read CPU on a young
+  // generation of one size, and throw without it (PINNED_HEAP_FLAGS in
+  // test/helpers/cpu-timing.mjs says why).
+  "--min-semi-space-size=16",
+  "--max-semi-space-size=16",
   // The spec reporter repeats every failure, with its assertion message, in a
   // block at the very END of the run. A CI log is read through a tail window,
   // and TAP's six lines per passing test push a mid-run `not ok` clean out of

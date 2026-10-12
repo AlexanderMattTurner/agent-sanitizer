@@ -26,10 +26,12 @@ import { sanitizeText } from "./output.mjs";
 export {
   applyLayer1,
   applyLayer1WellFormed,
+  escapesPreservable,
   isBenignAnsi,
   isBenignAnsiKinds,
   normalizeLoneSurrogates,
   stripAnsiFully,
+  stripTerminalFully,
   sgrCarriesPayload,
   SGR_RUN_THRESHOLD,
   LONE_SURROGATE_RE,
