@@ -110,6 +110,24 @@ def test_redact_env_bound(label, field, var, value, text, expect_redacted):
         assert found == [], label
 
 
+@pytest.mark.parametrize(
+    "provider_vars, host_cred_vars",
+    [
+        ({"SHORT_KEY": _LONG}, {"LONG_KEY": _LONG + "Xy9Wv8"}),
+        ({"LONG_KEY": _LONG + "Xy9Wv8"}, {"SHORT_KEY": _LONG}),
+    ],
+    ids=["shorter-configured-first", "longer-configured-first"],
+)
+def test_redact_env_bound_masks_longer_secret_containing_shorter(
+    provider_vars, host_cred_vars
+):
+    config = cfg(provider_vars=provider_vars, host_cred_vars=host_cred_vars)
+    found: list[str] = []
+    out = E._redact_env_bound(f"a {_LONG}Xy9Wv8 b {_LONG} c", found, config)
+    assert out == "a [REDACTED: LONG_KEY] b [REDACTED: SHORT_KEY] c"
+    assert found == ["LONG_KEY", "SHORT_KEY"]
+
+
 def test_main_redacts_env_bound_value():
     config = cfg(provider_vars={"VENICE_INFERENCE_KEY": _LONG})
     result = run_plain(f"model output mentioning {_LONG} verbatim", config)

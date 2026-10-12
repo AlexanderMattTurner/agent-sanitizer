@@ -329,9 +329,14 @@ def _redact_env_bound(
     entries: list[tuple[str, str]] | None = None,
     deadline: _Deadline = _NO_DEADLINE,
 ) -> str:
-    """Redact the literal value of each configured env var from ``text``."""
+    """Redact the literal value of each configured env var from ``text``.
+
+    Longest value first: a shorter secret that is a substring of a longer one
+    would otherwise be masked first, splitting the longer value so its own
+    pattern no longer matches and the remainder leaks verbatim."""
     charset = config.resolved_charset()
-    for name, value in config.env_secrets.items():
+    by_length = sorted(config.env_secrets.items(), key=lambda kv: -len(kv[1]))
+    for name, value in by_length:
         deadline.check("env-bound redaction")
         if not value or len(value) < config.min_secret_len:
             continue
