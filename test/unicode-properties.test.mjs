@@ -18,6 +18,7 @@ import { readFileSync } from "node:fs";
 import { unsandbox } from "./helpers/repo-root.mjs";
 import {
   MODULE_PATH,
+  deriveRgiEmojiZwjKeys,
   deriveUnicodeProperties,
   renderUnicodeProperties,
 } from "../scripts/gen-unicode-properties.mjs";
@@ -51,6 +52,15 @@ describe("src/unicode-properties.mjs is the pinned UCD", () => {
       assert.ok(spans.length > 0, `${name} is empty (vacuous)`);
     });
 
+  it("RGI_EMOJI_ZWJ_KEYS equals its slice-derived keys", () => {
+    assert.deepEqual(committed.RGI_EMOJI_ZWJ_KEYS, deriveRgiEmojiZwjKeys());
+    // Hand-checked anchors: the rainbow flag (its VS16 left out of the key),
+    // the family of four, and a skin-toned profession folded to one key.
+    for (const key of ["1f3f3 1f308", "1f468 1f469 1f467 1f466", "1f469 1f4bb"])
+      assert.ok(committed.RGI_EMOJI_ZWJ_KEYS.includes(key), key);
+    assert.ok(!committed.RGI_EMOJI_ZWJ_KEYS.includes("1f600 1f600"));
+  });
+
   it("inSpans answers membership at every span boundary", () => {
     const spans = committed.UNIFIED_IDEOGRAPH;
     for (const [start, end] of spans) {
@@ -73,6 +83,10 @@ const pinned = majorMinor(PINNED_VERSION);
 const PINNED = [
   ["\\p{Extended_Pictographic}", codePointsOf(derived.EXTENDED_PICTOGRAPHIC)],
   ["\\p{Emoji_Modifier}", codePointsOf(derived.EMOJI_MODIFIER)],
+  [
+    "[\\p{Emoji}--\\p{Emoji_Presentation}]",
+    codePointsOf(derived.EMOJI_TEXT_DEFAULT),
+  ],
   ["\\p{Unified_Ideograph}", codePointsOf(derived.UNIFIED_IDEOGRAPH)],
   ["\\p{Script=Braille}", codePointsOf(derived.SCRIPT_BRAILLE)],
   ["\\p{Script=Hangul}", codePointsOf(derived.SCRIPT_HANGUL)],
@@ -101,7 +115,7 @@ const witnessSkip =
 describe(`pinned properties equal this Node's Unicode ${process.versions.unicode}`, () => {
   for (const [escape, cps] of PINNED)
     it(`${escape} equals the live property`, { skip: witnessSkip }, () => {
-      const live = new RegExp(escape, "u");
+      const live = new RegExp(escape, "v");
       const table = new Set(cps);
       const unpinned = [];
       let liveCount = 0;
@@ -116,4 +130,31 @@ describe(`pinned properties equal this Node's Unicode ${process.versions.unicode
       assert.deepEqual(unpinned.slice(0, 12), [], "live members not pinned");
       assert.equal(table.size, liveCount, "pinned members not live");
     });
+});
+
+// A property of strings has no code-point loop to enumerate, so this witness
+// runs one way: every pinned sequence is one the live property names. A
+// sequence the slice holds and the runtime does not (wrong file, wrong version,
+// a mangled line) fails here.
+describe(`pinned RGI emoji ZWJ sequences are this Node's Unicode ${process.versions.unicode}`, () => {
+  const sequences = readUcdSlice("emoji-zwj-sequences.Rgi.json")[
+    "emoji-zwj-sequences"
+  ].map(({ sequence }) =>
+    String.fromCodePoint(
+      ...sequence.split(" ").map((hex) => parseInt(hex, 16)),
+    ),
+  );
+
+  it(
+    "every pinned sequence matches \\p{RGI_Emoji_ZWJ_Sequence}",
+    { skip: witnessSkip },
+    () => {
+      const live = /^\p{RGI_Emoji_ZWJ_Sequence}$/v;
+      assert.ok(sequences.length > 1000, `${sequences.length} (vacuous)`);
+      assert.deepEqual(
+        sequences.filter((seq) => !live.test(seq)).slice(0, 12),
+        [],
+      );
+    },
+  );
 });

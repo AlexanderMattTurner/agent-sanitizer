@@ -44,7 +44,8 @@
     {
       "generator": "scripts/gen-unicode-properties.mjs",
       "sources": [
-        "scripts/data/emoji-data.Pictographic.json",
+        "scripts/data/emoji-data.Pinned.json",
+        "scripts/data/emoji-zwj-sequences.Rgi.json",
         "scripts/data/PropList.Pinned.json",
         "scripts/data/Scripts.Pinned.json",
         "scripts/lib/ucd.mjs"

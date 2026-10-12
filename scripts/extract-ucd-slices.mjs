@@ -6,14 +6,17 @@
  * https://www.unicode.org/Public/<version>/ucd/ into ONE directory —
  * DerivedJoiningType.txt and DerivedGeneralCategory.txt (from extracted/),
  * emoji-data.txt (from emoji/), IndicSyllabicCategory.txt, PropList.txt,
- * Scripts.txt and StandardizedVariants.txt — then run
+ * Scripts.txt and StandardizedVariants.txt — plus emoji-zwj-sequences.txt from
+ * https://www.unicode.org/Public/<version>/emoji/, then run
  * `node scripts/extract-ucd-slices.mjs <that directory>` and the generators.
  *
- * Each slice keeps one entry per UCD data line, in the JSON shape the ucd-full
- * npm package uses (`{ range: [start, end?], <field>: value }`), and only the
- * values the generators read, so the vendored data stays small. Every input
- * file's header must name the pinned version: a mixed set would answer some
- * properties from one Unicode and some from another (see ./lib/ucd.mjs).
+ * Each property slice keeps one entry per UCD data line, in the JSON shape the
+ * ucd-full npm package uses (`{ range: [start, end?], <field>: value }`); the
+ * ZWJ-sequence slice keeps one `{ sequence }` per RGI sequence, its code points
+ * as the file writes them. Only the values the generators read are kept, so the
+ * vendored data stays small. Every input file's header must name the pinned
+ * version: a mixed set would answer some properties from one Unicode and some
+ * from another (see ./lib/ucd.mjs).
  */
 import { copyFileSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -111,12 +114,22 @@ export function cutSlices(dir) {
         (v) => v === "Unified_Ideograph" || v === "Variation_Selector",
       ),
     },
-    "emoji-data.Pictographic.json": {
-      "emoji-data": slice(
-        "emoji-data.txt",
-        "property",
-        (v) => v === "Extended_Pictographic" || v === "Emoji_Modifier",
+    "emoji-data.Pinned.json": {
+      "emoji-data": slice("emoji-data.txt", "property", (v) =>
+        [
+          "Emoji",
+          "Emoji_Presentation",
+          "Emoji_Modifier",
+          "Extended_Pictographic",
+        ].includes(v),
       ),
+    },
+    // A sequence line is `<code points> ; RGI_Emoji_ZWJ_Sequence ; <name>`, so
+    // its space-separated code points arrive as one unsplit "range".
+    "emoji-zwj-sequences.Rgi.json": {
+      "emoji-zwj-sequences": readUcdText(dir, "emoji-zwj-sequences.txt")
+        .filter(({ value }) => value === "RGI_Emoji_ZWJ_Sequence")
+        .map(({ range }) => ({ sequence: range[0] })),
     },
   };
 }

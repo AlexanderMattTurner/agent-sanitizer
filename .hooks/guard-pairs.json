@@ -19,7 +19,8 @@
       "test/invisible-charset.test.mjs",
       "test/unicode-properties.test.mjs"
     ],
-    "scripts/data/emoji-data.Pictographic.json": [
+    "scripts/data/emoji-data.Pinned.json": ["test/unicode-properties.test.mjs"],
+    "scripts/data/emoji-zwj-sequences.Rgi.json": [
       "test/unicode-properties.test.mjs"
     ]
   },
