@@ -12,6 +12,10 @@ import assert from "node:assert/strict";
 
 import { isHiddenStyle, sanitizeHtml } from "../src/html.mjs";
 
+/** `n` declarations `${prefix}0` … `${prefix}${n - 1}`. @param {string} prefix @param {number} n */
+const repeat = (prefix, n) =>
+  Array.from({ length: n }, (_, i) => `${prefix}${i}`).join(";");
+
 // One row per cascade rule, each the verdict a browser renders.
 const CASCADE_CASES = [
   // ── an invalid later declaration is dropped; the earlier one stands ──
@@ -57,6 +61,10 @@ const CASCADE_CASES = [
   ["all:unset;display:none", true],
   // An invalid resetting shorthand is dropped, so the longhand stands.
   ["font-size:0;font:bogus", true],
+  // ── the validation budget is shared, so repeating one property cannot
+  // outrun it, and a style that exhausts it is read as hidden ──
+  [`display:none;${repeat("display:a", 9)}`, true],
+  [`display:block;${repeat("color:bogus", 200)}`, true],
 ];
 
 // Legitimate fallback stacks real pages carry: progressive enhancement writes

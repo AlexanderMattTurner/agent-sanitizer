@@ -1262,22 +1262,15 @@ function parseDeclarations(styleStr) {
 // read every declaration before validation existed.
 const LEXER_TOKEN_LIMIT = 64;
 
-// Per property, how many INVALID candidates the cascade validates before it
-// takes the next one unvalidated. Bounds the lexer work one style attribute
-// can buy at a constant per property, however many declarations it repeats.
-const VALIDATIONS_PER_PROPERTY = 8;
+// How many declarations one style attribute may have the lexer validate,
+// shared by every property: it bounds the lexer work a style can buy at a
+// constant, and repeating ONE property cannot slip an invalid declaration past
+// it unvalidated, because a style that exhausts it reads as hidden. A real
+// style validates about one declaration per property a detector reads.
+const VALIDATION_BUDGET = 128;
 
 /** @type {any} */
 let cssLexer = null;
-
-/** css-tree's lexer over the committed grammar tables, built on first use. */
-function declarationLexer() {
-  cssLexer ??= new CssLexer(
-    { generic: true, ...CSS_SYNTAX },
-    { generate: cssGenerate },
-  );
-  return cssLexer;
-}
 
 /**
  * True when a browser DROPS this declaration as invalid at parse time, so it
@@ -1287,7 +1280,7 @@ function declarationLexer() {
  * Only a lexer MISMATCH drops a declaration. Everything the lexer cannot
  * decide stays in the cascade, the direction that keeps an earlier hiding
  * declaration from being resurrected on a guess: a `var()` (valid at parse
- * time, resolved later), a custom or unknown property, and a value past
+ * time, resolved later), a custom or unknown property, a value past
  * {@link LEXER_TOKEN_LIMIT}, and a value css-tree could not parse at all or
  * that spells `url(` with an escape. A browser decodes `\75 rl(` to `url(`
  * before deciding it opens a URL token; css-tree's tokenizer does not, so its
@@ -1308,7 +1301,12 @@ function isDroppedDeclaration(declaration) {
       unreadable = true;
   });
   if (unreadable || tokens > LEXER_TOKEN_LIMIT) return false;
-  const { error } = declarationLexer().matchProperty(
+  // Built on first use over the committed grammar tables.
+  cssLexer ??= new CssLexer(
+    { generic: true, ...CSS_SYNTAX },
+    { generate: cssGenerate },
+  );
+  const { error } = cssLexer.matchProperty(
     declaration.property,
     declaration.value,
   );
@@ -1333,49 +1331,52 @@ const RESETTING_SHORTHANDS = {
 };
 
 /**
- * The inline style's cascade: a lookup from property to the declaration a
- * browser APPLIES for it — its own, a resetting shorthand's, or `all`'s — or
- * null when none applies.
- *
- * A browser drops invalid declarations first ({@link isDroppedDeclaration}),
- * then an `!important` declaration beats every normal one, then the later of
- * two equals wins. Winners are resolved on first lookup, so only the
- * properties a detector reads are ever validated.
+ * An inline style's cascade as the detectors read it. `winnerOf` is the
+ * declaration a browser APPLIES for a property — its own, a resetting
+ * shorthand's, or `all`'s — or null. `nodeOf` is the value of the property's
+ * OWN winning declaration, null when a shorthand or `all` won (the detectors
+ * that read the shorthand read it there), and `textOf` that value as trimmed
+ * lowercase text. `exhausted` turns true once a lookup ran out of
+ * {@link VALIDATION_BUDGET}.
+ * @typedef {{
+ *   winnerOf: (property: string) => StyleDeclaration | null,
+ *   nodeOf: (property: string) => any,
+ *   textOf: (property: string) => string,
+ *   exhausted: boolean,
+ * }} Cascade
+ */
+
+/**
+ * The {@link Cascade} of a style's declarations. A browser drops invalid
+ * declarations first ({@link isDroppedDeclaration}), then an `!important`
+ * declaration beats every normal one, then the later of two equals wins.
+ * Winners are resolved on first lookup, so only the properties a detector
+ * reads are ever validated.
  * @param {StyleDeclaration[]} declarations
- * @returns {(property: string) => StyleDeclaration | null}
+ * @returns {Cascade}
  */
 function resolveCascade(declarations) {
   /** @type {Map<string, StyleDeclaration[]>} */
   const byProperty = new Map();
   for (const declaration of declarations) {
-    const list = byProperty.get(declaration.property);
-    if (list) list.push(declaration);
-    else byProperty.set(declaration.property, [declaration]);
+    const list = byProperty.get(declaration.property) ?? [];
+    list.push(declaration);
+    byProperty.set(declaration.property, list);
   }
   /** @type {Map<StyleDeclaration, boolean>} */
   const dropped = new Map();
   /** @type {Map<string, StyleDeclaration | null>} */
   const winners = new Map();
-  /** @param {StyleDeclaration} declaration */
-  const isDropped = (declaration) => {
-    let verdict = dropped.get(declaration);
-    if (verdict === undefined) {
-      verdict = isDroppedDeclaration(declaration);
-      dropped.set(declaration, verdict);
-    }
-    return verdict;
-  };
-  return (property) => {
+  let budget = VALIDATION_BUDGET;
+  /** @param {string} property */
+  const winnerOf = (property) => {
     const known = winners.get(property);
     if (known !== undefined) return known;
-    const family = [
+    const candidates = [
       property,
-      ...(Object.hasOwn(RESETTING_SHORTHANDS, property)
-        ? RESETTING_SHORTHANDS[property]
-        : []),
+      ...(RESETTING_SHORTHANDS[property] ?? []),
       "all",
-    ];
-    const candidates = family
+    ]
       .flatMap((member) => byProperty.get(member) ?? [])
       .sort(
         (left, right) =>
@@ -1383,8 +1384,16 @@ function resolveCascade(declarations) {
           right.index - left.index,
       );
     let winner = null;
-    for (const [rank, candidate] of candidates.entries()) {
-      if (rank === VALIDATIONS_PER_PROPERTY || !isDropped(candidate)) {
+    for (const candidate of candidates) {
+      if (!dropped.has(candidate)) {
+        if (budget === 0) {
+          cascade.exhausted = true;
+          break;
+        }
+        budget--;
+        dropped.set(candidate, isDroppedDeclaration(candidate));
+      }
+      if (!dropped.get(candidate)) {
         winner = candidate;
         break;
       }
@@ -1392,48 +1401,47 @@ function resolveCascade(declarations) {
     winners.set(property, winner);
     return winner;
   };
+  /** @type {Cascade} */
+  const cascade = {
+    winnerOf,
+    nodeOf(property) {
+      const winner = winnerOf(property);
+      return winner?.property === property ? winner.value : null;
+    },
+    textOf: (property) =>
+      declText(cascade.nodeOf(property)).trim().toLowerCase(),
+    exhausted: false,
+  };
+  return cascade;
 }
 
-/**
- * The value node a property's OWN declaration contributes, or null when no
- * declaration applies or a resetting shorthand (or `all`) won over it — the
- * detectors that read the shorthand read it there.
- * @param {(property: string) => StyleDeclaration | null} winnerOf
- * @returns {(property: string) => any}
- */
-function ownValues(winnerOf) {
-  return (property) => {
-    const winner = winnerOf(property);
-    return winner?.property === property ? winner.value : null;
-  };
-}
+// The cascade of a style with no declaration: nothing applies.
+const NO_CASCADE = resolveCascade([]);
 
 // The inherited properties a hide can come from. A descendant that sets one of
 // them back to a visible value renders its own text, so a hide of this kind
 // covers an element's subtree only up to such an override (see
 // {@link regionVerdicts}). Every other hide is of the BOX: nothing a
 // descendant declares brings `display:none` or `opacity:0` content back.
-/** @typedef {"font-size" | "visibility" | "color" | "indent"} InheritedHide */
+/** @typedef {"font-size" | "visibility" | "color" | "text-indent"} InheritedHide */
 
 /**
  * The ways one element's inline style hides its text: `"box"` when the box
- * itself is hidden, otherwise the inherited kinds hiding it (empty when
- * visible).
+ * itself is hidden (or the style exhausted {@link VALIDATION_BUDGET}),
+ * otherwise the inherited kinds hiding it (empty when visible).
  *
  * `inlineBox` says the element is a non-replaced INLINE box (a plain `<span>`,
  * `<a>`, `<b>`): `transform`, `text-indent`, `content-visibility` and the
  * width/height an `overflow:hidden` collapse rests on do not apply to one, so
  * `<span style="transform:scale(0)">` renders its text and must not be read as
  * hidden.
- * @param {(property: string) => any} nodeOf the resolved cascade
+ * @param {Cascade} cascade
  * @param {boolean} inlineBox
  * @returns {Set<"box" | InheritedHide>}
  */
-function styleHides(nodeOf, inlineBox) {
-  // Escapes were decoded at the parse boundary; trim/lowercase for the
-  // case-insensitive keyword compares.
-  /** @param {string} key */
-  const textOf = (key) => declText(nodeOf(key)).trim().toLowerCase();
+function styleHides(cascade, inlineBox) {
+  // Escapes and case were resolved at the parse boundary.
+  const { nodeOf, textOf } = cascade;
   const BOX = new Set(/** @type {const} */ (["box"]));
 
   if (textOf("display") === "none") return BOX;
@@ -1477,45 +1485,45 @@ function styleHides(nodeOf, inlineBox) {
   )
     hides.add("font-size");
   if (!inlineBox && isOffscreenOffset(nodeOf("text-indent")))
-    hides.add("indent");
-  if (isColorHidden(colorState(nodeOf, textOf, null))) hides.add("color");
-  return hides;
+    hides.add("text-indent");
+  if (isColorHidden(colorState(cascade, null))) hides.add("color");
+  return cascade.exhausted ? BOX : hides;
 }
 
 const INHERITED_COLOR_KEYWORDS = new Set(["inherit", "unset", "currentcolor"]);
 
 /**
- * What decides whether text is painted invisibly by color: the effective glyph
- * fill and the backdrop it is painted on, plus the two things that make a
- * transparent or same-colored fill readable anyway.
- * @typedef {{ fill: string, backdrop: string, imageLayer: boolean, paintedVisible: boolean }} ColorState
+ * What decides whether text is painted invisibly by color. `color` and the
+ * `-webkit-text-fill-color` that paints the glyphs over it when concrete
+ * (`textFill`) inherit SEPARATELY, so a child's own `color` does not undo a
+ * transparent fill it inherits. The backdrop is the element's own background
+ * color, or the inherited one when it paints none.
+ * @typedef {{ color: string, textFill: string, backdrop: string, imageLayer: boolean, paintedVisible: boolean }} ColorState
  */
 
 /**
  * The color state of one element's own style, layered over `inherited` (the
  * state its parent passes down) — or over nothing for an element read alone.
- *
- * `-webkit-text-fill-color` overrides `color` for the fill when it is
- * concrete, so a `color:#fff;-webkit-text-fill-color:#000` element (black
- * text) is compared as black, not spliced white-on-white. The backdrop is the
- * element's own background color, or the inherited one when it paints none.
- * @param {(property: string) => any} nodeOf
- * @param {(property: string) => string} textOf
+ * @param {Cascade} cascade
  * @param {ColorState | null} inherited
  * @returns {ColorState}
  */
-function colorState(nodeOf, textOf, inherited) {
-  // `color` is inherited, so these spellings all take the parent's fill.
-  const color = INHERITED_COLOR_KEYWORDS.has(textOf("color"))
-    ? ""
-    : canonicalizeColor(textOf("color"));
-  const fillOverride = canonicalizeColor(textOf("-webkit-text-fill-color"));
-  const ownFill = isConcreteColor(fillOverride) ? fillOverride : color;
+function colorState({ nodeOf, textOf }, inherited) {
+  const color = textOf("color");
+  const textFill = textOf("-webkit-text-fill-color");
+  const ownTextFill = canonicalizeColor(textFill);
   const ownBackdrop =
     canonicalizeColor(textOf("background-color")) ||
     backgroundColor(nodeOf("background"));
+  let inheritedTextFill = "";
+  if (textFill === "" || INHERITING_KEYWORDS.has(textFill))
+    inheritedTextFill = inherited?.textFill ?? "";
   return {
-    fill: ownFill || (inherited?.fill ?? ""),
+    // `color` is inherited, so these spellings all take the parent's.
+    color:
+      (INHERITED_COLOR_KEYWORDS.has(color) ? "" : canonicalizeColor(color)) ||
+      (inherited?.color ?? ""),
+    textFill: isConcreteColor(ownTextFill) ? ownTextFill : inheritedTextFill,
     backdrop:
       ownBackdrop && ownBackdrop !== "transparent"
         ? ownBackdrop
@@ -1537,11 +1545,12 @@ function colorState(nodeOf, textOf, inherited) {
  * @returns {boolean}
  */
 function isColorHidden(state) {
-  if (state.fill === "transparent" && !state.paintedVisible) return true;
+  const fill = state.textFill || state.color;
+  if (fill === "transparent" && !state.paintedVisible) return true;
   return (
-    state.fill !== "" &&
-    state.fill === state.backdrop &&
-    isConcreteColor(state.fill) &&
+    fill !== "" &&
+    fill === state.backdrop &&
+    isConcreteColor(fill) &&
     !state.imageLayer
   );
 }
@@ -1554,8 +1563,10 @@ function isColorHidden(state) {
  */
 export function isHiddenStyle(styleStr) {
   const declarations = parseDeclarations(styleStr);
-  if (declarations.length === 0) return false;
-  return styleHides(ownValues(resolveCascade(declarations)), false).size > 0;
+  return (
+    declarations.length > 0 &&
+    styleHides(resolveCascade(declarations), false).size > 0
+  );
 }
 
 // Scripting / resource-loading tags whose PRESENCE is reported to the model
@@ -1635,143 +1646,92 @@ const RAW_TEXT_ELEMENTS = new Set([
 // `display:inline`. Custom and unknown elements are inline by default too, but
 // are left out: a component's own stylesheet, which this layer cannot see,
 // routinely makes one a block.
-const INLINE_ELEMENTS = new Set([
-  "a",
-  "abbr",
-  "acronym",
-  "b",
-  "bdi",
-  "bdo",
-  "big",
-  "cite",
-  "code",
-  "data",
-  "del",
-  "dfn",
-  "em",
-  "font",
-  "i",
-  "ins",
-  "kbd",
-  "label",
-  "mark",
-  "nobr",
-  "q",
-  "s",
-  "samp",
-  "small",
-  "span",
-  "strike",
-  "strong",
-  "sub",
-  "sup",
-  "time",
-  "tt",
-  "u",
-  "var",
-]);
+const INLINE_ELEMENTS = new Set(
+  `a abbr acronym b bdi bdo big cite code data del dfn em font i ins kbd
+  label mark nobr q s samp small span strike strong sub sup time tt u
+  var`.split(/\s+/),
+);
 
 // `display` values that leave an inline element an inline box: its initial
 // value, `contents` (no box at all), a `var()` and every CSS-wide keyword. An
 // `inherit` from a parent this element cannot see is read as inline, the side
 // that keeps rendered text.
-const INLINE_DISPLAYS = new Set([
-  "",
-  "inline",
-  "inline flow",
-  "contents",
-  "inherit",
-  "initial",
-  "unset",
-  "revert",
-  "revert-layer",
-]);
+const INLINE_DISPLAYS = new Set(
+  ["", "inline", "inline flow", "contents"].concat(
+    "inherit initial unset revert revert-layer".split(" "),
+  ),
+);
 
 // Absolute positioning and floating BLOCKIFY an inline element (CSS 2 §9.7),
-// and so does being a flex or grid item.
-const BLOCKIFYING_POSITIONS = new Set(["absolute", "fixed"]);
-const BLOCKIFYING_FLOATS = new Set([
-  "left",
-  "right",
-  "inline-start",
-  "inline-end",
-]);
-const ITEM_BLOCKIFYING_DISPLAYS = new Set([
-  "flex",
-  "grid",
-  "inline-flex",
-  "inline-grid",
-]);
+// and so does being a flex or grid item. One set holds the `position` and the
+// `float` values: neither property accepts the other's.
+const BLOCKIFYING_VALUES = new Set(
+  "absolute fixed left right inline-start inline-end".split(" "),
+);
+const ITEM_BLOCKIFYING_DISPLAYS = new Set(
+  "flex grid inline-flex inline-grid".split(" "),
+);
 
 // Replaced elements whose content is not text. A font-size, color or
 // text-indent hide leaves the picture on screen; only `visibility` (and the
 // box hides) reach it.
 const REPLACED_ELEMENTS = new Set(["img", "video", "audio", "canvas", "embed"]);
 /** @type {InheritedHide[]} */
-const TEXT_ONLY_HIDES = ["font-size", "color", "indent"];
+const TEXT_ONLY_HIDES = ["font-size", "color", "text-indent"];
 
-/** @type {WeakMap<object, ((property: string) => StyleDeclaration | null) | null>} */
+/** @type {WeakMap<object, Cascade>} */
 const elementCascades = new WeakMap();
+// Each element's parent as a scan met it (hast keeps no parent links), for
+// the `display:contents` walk in {@link isInlineBox}.
+/** @type {WeakMap<object, any>} */
+const parents = new WeakMap();
 
 /**
- * The cascade of an element's inline style, or null for a non-element and an
- * element with no declaration. Memoized per node: a scan reads an element's
+ * The cascade of an element's inline style, {@link NO_CASCADE} for a
+ * non-element or no declaration. Memoized per node: a scan reads an element's
  * style as its own and again as its children's parent.
  * @param {any} node
- * @returns {((property: string) => StyleDeclaration | null) | null}
+ * @returns {Cascade}
  */
 function elementCascade(node) {
-  if (node?.type !== "element") return null;
+  if (node?.type !== "element") return NO_CASCADE;
   let cascade = elementCascades.get(node);
-  if (cascade === undefined) {
+  if (!cascade) {
     const style = node.properties?.style;
     const declarations =
       typeof style === "string" ? parseDeclarations(style) : [];
-    cascade = declarations.length > 0 ? resolveCascade(declarations) : null;
+    cascade =
+      declarations.length > 0 ? resolveCascade(declarations) : NO_CASCADE;
     elementCascades.set(node, cascade);
   }
   return cascade;
 }
 
 /**
- * {@link elementCascade} for a caller that reads winners unconditionally: an
- * element with no declaration answers null for every property.
- * @param {any} node
- * @returns {(property: string) => StyleDeclaration | null}
- */
-function cascadeOrNone(node) {
-  return elementCascade(node) ?? (() => null);
-}
-
-/**
- * The applied value of one property of a cascade as lowercased text, "" when
- * nothing applies.
- * @param {((property: string) => StyleDeclaration | null) | null} cascade
- * @param {string} property
- * @returns {string}
- */
-function appliedText(cascade, property) {
-  if (!cascade) return "";
-  return declText(ownValues(cascade)(property)).trim().toLowerCase();
-}
-
-/**
  * True when `node` lays out as a non-replaced INLINE box, so the box-only
  * hides (`transform`, `text-indent`, `content-visibility`, an `overflow`
- * collapse) do not apply to it. `parent` is its parent node when known; a
- * flex or grid parent blockifies it.
+ * collapse) do not apply to it. `parent` is its parent node when known: a
+ * flex or grid container blockifies it, and a `display:contents` parent has no
+ * box, so its own parent is the container.
  * @param {any} node
  * @param {any} [parent]
  * @returns {boolean}
  */
 function isInlineBox(node, parent) {
   if (!INLINE_ELEMENTS.has(node.tagName)) return false;
-  const own = elementCascade(node);
-  const display = appliedText(own, "display");
+  const { textOf } = elementCascade(node);
+  const display = textOf("display");
   if (!INLINE_DISPLAYS.has(display) && !display.includes("var(")) return false;
-  if (BLOCKIFYING_POSITIONS.has(appliedText(own, "position"))) return false;
-  if (BLOCKIFYING_FLOATS.has(appliedText(own, "float"))) return false;
-  return !appliedText(elementCascade(parent), "display")
+  if (
+    BLOCKIFYING_VALUES.has(textOf("position")) ||
+    BLOCKIFYING_VALUES.has(textOf("float"))
+  )
+    return false;
+  let container = parent;
+  while (elementCascade(container).textOf("display") === "contents")
+    container = parents.get(container);
+  return !elementCascade(container)
+    .textOf("display")
     .split(" ")
     .some((token) => ITEM_BLOCKIFYING_DISPLAYS.has(token));
 }
@@ -1789,12 +1749,13 @@ function isInlineBox(node, parent) {
  */
 function elementHides(node, parent) {
   if (node.type !== "element") return new Set();
+  if (parent) parents.set(node, parent);
   const { properties = {} } = node;
   if (properties.hidden !== undefined && properties.hidden !== null)
     return new Set(["box"]);
   const cascade = elementCascade(node);
-  if (!cascade) return new Set();
-  const hides = styleHides(ownValues(cascade), isInlineBox(node, parent));
+  if (cascade === NO_CASCADE) return new Set();
+  const hides = styleHides(cascade, isInlineBox(node, parent));
   if (REPLACED_ELEMENTS.has(node.tagName))
     for (const kind of TEXT_ONLY_HIDES) hides.delete(kind);
   return hides;
@@ -1812,92 +1773,92 @@ export function isHiddenElement(node, parent) {
   return elementHides(node, parent).size > 0;
 }
 
+// Keywords that take the parent's value of an inherited property. `revert`
+// rolls back to the user-agent style, which sets none of the inherited
+// properties read here, so it inherits too; `revert-layer` could reach a page
+// stylesheet this layer cannot see and is read the same way, keeping the hide.
+const INHERITING_KEYWORDS = new Set(
+  "inherit unset revert revert-layer".split(" "),
+);
 // The lengths a font-size of zero passes through unchanged: units and keywords
-// relative to the parent's font size.
+// relative to the parent's font size, and the math functions over them.
 const PARENT_RELATIVE_FONT_UNITS = new Set(["em", "ex", "ch", "cap", "ic"]);
 const PARENT_RELATIVE_FONT_KEYWORDS = new Set(["smaller", "larger"]);
-// Keywords that take the parent's value of an inherited property.
-const INHERITING_KEYWORDS = new Set(["inherit", "unset"]);
+const MATH_FUNCTIONS = new Set(["calc", "min", "max", "clamp"]);
 
 /**
- * The font-size token of a `font` shorthand: the first length or percentage
- * (a bare number there is a weight), or a relative size keyword.
+ * The font-size token of a `font` shorthand: the first length, percentage or
+ * math function (a bare number there is a weight), or a relative size keyword.
  * @param {any} node
  * @returns {any | null}
  */
 function fontShorthandSize(node) {
-  for (const token of valueTokens(node)) {
-    if (token.type === "Dimension" || token.type === "Percentage") return token;
-    if (
-      token.type === "Identifier" &&
-      PARENT_RELATIVE_FONT_KEYWORDS.has(token.name)
-    )
-      return token;
-  }
-  return null;
+  return (
+    valueTokens(node).find(
+      (/** @type {any} */ token) =>
+        token.type === "Dimension" ||
+        token.type === "Percentage" ||
+        (token.type === "Function" && MATH_FUNCTIONS.has(token.name)) ||
+        (token.type === "Identifier" &&
+          PARENT_RELATIVE_FONT_KEYWORDS.has(token.name)),
+    ) ?? null
+  );
 }
 
 /**
- * True when an element under a zero font-size keeps a zero font-size: it sets
- * none, inherits it, or sets one relative to it (`1.2em`, `150%`, `larger`).
- * Anything else — an absolute size, a keyword size, `calc()` — renders.
- * @param {(property: string) => StyleDeclaration | null} winnerOf
+ * True when a font-size under a zero parent size stays zero: a relative
+ * keyword (`larger`), a percentage, a parent-relative unit (`1.2em`), a zero,
+ * or a math function of only those (`calc(1em)`). An absolute size, a keyword
+ * size, or a function it cannot evaluate renders.
+ * @param {any} size
  * @returns {boolean}
  */
-function keepsZeroFontSize(winnerOf) {
-  const winner = winnerOf("font-size");
-  if (!winner) return true;
-  if (INHERITING_KEYWORDS.has(declText(winner.value).trim().toLowerCase()))
-    return true;
+function keepsZeroSize(size) {
+  if (size.type === "Identifier")
+    return PARENT_RELATIVE_FONT_KEYWORDS.has(size.name);
+  if (size.type === "Number")
+    return Math.abs(parseFloat(size.value)) < NEAR_ZERO_EPSILON;
+  let keeps = true;
+  cssWalk(size, (/** @type {any} */ node) => {
+    keeps &&=
+      ["Percentage", "Number", "Operator", "Parentheses"].includes(node.type) ||
+      (node.type === "Function" && MATH_FUNCTIONS.has(node.name)) ||
+      (node.type === "Dimension" &&
+        (PARENT_RELATIVE_FONT_UNITS.has(node.unit) ||
+          Math.abs(parseFloat(node.value)) < NEAR_ZERO_EPSILON));
+  });
+  return keeps;
+}
+
+/**
+ * True when `kind`, in force on an element's parent, still hides the
+ * element's own text. Only the element's own declaration of the property can
+ * bring the text back; none, or an inheriting keyword, keeps the hide.
+ * @param {InheritedHide} kind
+ * @param {Cascade} cascade the element's
+ * @param {boolean} inlineBox
+ * @param {ColorState} color the element's, layered over its parent's
+ * @returns {boolean}
+ */
+function keepsHide(kind, cascade, inlineBox, color) {
+  if (kind === "color") return isColorHidden(color);
+  // An inline box sits on its parent's shifted first line whatever it sets.
+  if (kind === "text-indent" && inlineBox) return true;
+  const winner = cascade.winnerOf(kind);
+  const text = declText(winner?.value).trim().toLowerCase();
+  if (!winner || INHERITING_KEYWORDS.has(text)) return true;
+  if (kind === "visibility")
+    return (
+      winner.property === kind && (text === "hidden" || text === "collapse")
+    );
+  if (kind === "text-indent")
+    return winner.property === kind && isOffscreenOffset(winner.value);
   if (winner.property === "all") return false;
   const size =
     winner.property === "font"
       ? fontShorthandSize(winner.value)
       : soleToken(winner.value);
-  if (!size) return false;
-  if (size.type === "Identifier")
-    return PARENT_RELATIVE_FONT_KEYWORDS.has(size.name);
-  if (size.type === "Percentage") return true;
-  if (size.type === "Dimension" && PARENT_RELATIVE_FONT_UNITS.has(size.unit))
-    return true;
-  return (
-    (size.type === "Number" || size.type === "Dimension") &&
-    Math.abs(parseFloat(size.value)) < NEAR_ZERO_EPSILON
-  );
-}
-
-/**
- * True when an element under `visibility:hidden` stays hidden: `visible` (or
- * a reset to the initial value) on the element itself is the only way back.
- * @param {(property: string) => StyleDeclaration | null} winnerOf
- * @returns {boolean}
- */
-function keepsHiddenVisibility(winnerOf) {
-  const winner = winnerOf("visibility");
-  if (!winner) return true;
-  const text = declText(winner.value).trim().toLowerCase();
-  if (INHERITING_KEYWORDS.has(text)) return true;
-  return (
-    winner.property === "visibility" &&
-    (text === "hidden" || text === "collapse")
-  );
-}
-
-/**
- * True when an element under an offscreen `text-indent` stays shifted. An
- * inline box sits on its parent's shifted first line whatever it declares; a
- * block shifts its own first line by the inherited indent unless it sets one.
- * @param {(property: string) => StyleDeclaration | null} winnerOf
- * @param {boolean} inlineBox
- * @returns {boolean}
- */
-function keepsOffscreenIndent(winnerOf, inlineBox) {
-  if (inlineBox) return true;
-  const winner = winnerOf("text-indent");
-  if (!winner) return true;
-  if (INHERITING_KEYWORDS.has(declText(winner.value).trim().toLowerCase()))
-    return true;
-  return winner.property === "text-indent" && isOffscreenOffset(winner.value);
+  return size !== null && keepsZeroSize(size);
 }
 
 /**
@@ -1932,37 +1893,15 @@ function keepsOffscreenIndent(winnerOf, inlineBox) {
 function descendState(node, parent, state) {
   const own = elementHides(node, parent);
   if (own.has("box")) return "hidden";
-  const winnerOf = cascadeOrNone(node);
-  const nodeOf = ownValues(winnerOf);
-  /** @param {string} key */
-  const textOf = (key) => declText(nodeOf(key)).trim().toLowerCase();
-  const color = colorState(nodeOf, textOf, state.color);
+  const cascade = elementCascade(node);
+  const color = colorState(cascade, state.color);
   const inlineBox = isInlineBox(node, parent);
-  /** @type {Set<InheritedHide>} */
-  const kinds = new Set();
-  for (const kind of state.kinds) {
-    const stays =
-      (kind === "font-size" && keepsZeroFontSize(winnerOf)) ||
-      (kind === "visibility" && keepsHiddenVisibility(winnerOf)) ||
-      (kind === "indent" && keepsOffscreenIndent(winnerOf, inlineBox)) ||
-      (kind === "color" && isColorHidden(color));
-    if (stays) kinds.add(kind);
-  }
-  for (const kind of own) kinds.add(/** @type {InheritedHide} */ (kind));
+  const kinds = /** @type {Set<InheritedHide>} */ (own);
+  for (const kind of state.kinds)
+    if (keepsHide(kind, cascade, inlineBox, color)) kinds.add(kind);
   if (REPLACED_ELEMENTS.has(node.tagName))
     return kinds.has("visibility") ? "hidden" : "visible";
-  if (kinds.size === 0) return "visible";
-  return { kinds, color };
-}
-
-/**
- * True for text with nothing to see: whitespace, and the placeholders an
- * earlier splice round left (re-splicing one would count it twice).
- * @param {string} value
- * @returns {boolean}
- */
-function isBlankText(value) {
-  return value.replace(LAYER2_PLACEHOLDER_RE, "").trim() === "";
+  return kinds.size === 0 ? "visible" : { kinds, color };
 }
 
 /**
@@ -1977,24 +1916,31 @@ function isBlankText(value) {
 function regionVerdicts(root, kinds) {
   /** @type {Map<any, RegionVerdict>} */
   const verdicts = new Map();
-  const nodeOf = ownValues(cascadeOrNone(root));
-  /** @param {string} key */
-  const textOf = (key) => declText(nodeOf(key)).trim().toLowerCase();
   /** @type {Array<[any, any, RegionState]>} */
   const stack = [];
   /** @param {any} node @param {RegionState} state */
   const pushChildren = (node, state) => {
     for (const child of node.children) stack.push([child, node, state]);
   };
-  pushChildren(root, { kinds, color: colorState(nodeOf, textOf, null) });
+  pushChildren(root, {
+    kinds,
+    color: colorState(elementCascade(root), null),
+  });
   const order = [root];
   while (stack.length > 0) {
     const [node, parent, state] = /** @type {[any, any, RegionState]} */ (
       stack.pop()
     );
     order.push(node);
+    // A placeholder an earlier splice round left is nothing to see:
+    // re-splicing one would count it twice.
     if (node.type === "text")
-      verdicts.set(node, isBlankText(node.value) ? "neutral" : "hidden");
+      verdicts.set(
+        node,
+        node.value.replace(LAYER2_PLACEHOLDER_RE, "").trim() === ""
+          ? "neutral"
+          : "hidden",
+      );
     else if (node.type !== "element") verdicts.set(node, "neutral");
     else {
       const next = descendState(node, parent, state);
@@ -2018,21 +1964,26 @@ function regionVerdicts(root, kinds) {
 }
 
 /**
- * The splice of a region whose root is `mixed`: each maximal run of hidden
- * siblings (with the whitespace, comments and empty elements between them)
- * becomes one hidden range, comments outside a run keep their own range, and
- * every visible or neutral element outside a run is handed back for the
- * ordinary scan. `mixed` holds the elements left standing, for the tag counts.
+ * The splice of an element hidden by inherited `kinds` alone, when some
+ * descendant overrides them and so renders: `<span style="font-size:0">` around
+ * a `<b style="font-size:14px">` hides the span's own text and shows the `<b>`.
+ * Each maximal run of hidden siblings (with the whitespace, comments and empty
+ * elements between them) becomes one hidden range, comments outside a run keep
+ * their own range, and every visible or neutral element outside a run is
+ * handed back for the ordinary scan. `mixed` holds the elements left standing,
+ * for the tag counts.
  *
- * Returns null when a node the splice needs has no position, or siblings'
- * positions are out of source order or outside their parent's — parse5's
- * recovery moves nodes — so a run could reach visible bytes; the caller then
- * splices the whole root.
+ * Null when nothing inside overrides, or when a node the splice needs has no
+ * position or siblings' positions are out of source order or outside their
+ * parent's — parse5's recovery moves nodes — so a run could reach visible
+ * bytes. The caller then splices the whole element.
  * @param {any} root
- * @param {Map<any, RegionVerdict>} verdicts
+ * @param {Set<InheritedHide>} kinds
  * @returns {{ ranges: SpliceRange[], rescan: Array<[any, any]>, mixed: any[] } | null}
  */
-function mixedRegionSplice(root, verdicts) {
+function inheritedRegionSplice(root, kinds) {
+  const verdicts = regionVerdicts(root, kinds);
+  if (verdicts.get(root) !== "mixed") return null;
   /** @type {SpliceRange[]} */
   const ranges = [];
   /** @type {Array<[any, any]>} */
@@ -2495,22 +2446,6 @@ function scanFragmentTree(html, tree) {
   if (unpositioned)
     return { ranges: [{ start: 0, end: html.length, kind: "hidden" }], warned };
   return { ranges, warned };
-}
-
-/**
- * The splice of an element hidden by inherited `kinds` alone, when some
- * descendant overrides them and so renders: `<span style="font-size:0">` around
- * a `<b style="font-size:14px">` hides the span's own text and shows the
- * `<b>`. Null when nothing inside overrides (or the positions cannot be
- * trusted), and the caller splices the whole element.
- * @param {any} node
- * @param {Set<InheritedHide>} kinds
- * @returns {ReturnType<typeof mixedRegionSplice>}
- */
-function inheritedRegionSplice(node, kinds) {
-  const verdicts = regionVerdicts(node, kinds);
-  if (verdicts.get(node) !== "mixed") return null;
-  return mixedRegionSplice(node, verdicts);
 }
 
 const mdParser = unified().use(remarkParse).use(remarkGfm);

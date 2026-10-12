@@ -25663,7 +25663,7 @@ function visitParents(tree, test, visitor, reverse) {
   const is2 = convert(check);
   const step = reverse ? -1 : 1;
   factory(tree, void 0, [])();
-  function factory(node2, index2, parents) {
+  function factory(node2, index2, parents2) {
     const value = (
       /** @type {Record<string, unknown>} */
       node2 && typeof node2 === "object" ? node2 : {}
@@ -25686,8 +25686,8 @@ function visitParents(tree, test, visitor, reverse) {
       let subresult;
       let offset;
       let grandparents;
-      if (!test || is2(node2, index2, parents[parents.length - 1] || void 0)) {
-        result = toResult(visitor(node2, parents));
+      if (!test || is2(node2, index2, parents2[parents2.length - 1] || void 0)) {
+        result = toResult(visitor(node2, parents2));
         if (result[0] === EXIT) {
           return result;
         }
@@ -25699,7 +25699,7 @@ function visitParents(tree, test, visitor, reverse) {
         );
         if (nodeAsParent.children && result[0] !== SKIP) {
           offset = (reverse ? nodeAsParent.children.length : -1) + step;
-          grandparents = parents.concat(nodeAsParent);
+          grandparents = parents2.concat(nodeAsParent);
           while (offset > -1 && offset < nodeAsParent.children.length) {
             const child = nodeAsParent.children[offset];
             subresult = factory(child, offset, grandparents)();
@@ -25751,11 +25751,11 @@ function findAndReplace(tree, list3, options) {
   while (++pairIndex < pairs.length) {
     visitParents(tree, "text", visitor);
   }
-  function visitor(node2, parents) {
+  function visitor(node2, parents2) {
     let index2 = -1;
     let grandparent;
-    while (++index2 < parents.length) {
-      const parent = parents[index2];
+    while (++index2 < parents2.length) {
+      const parent = parents2[index2];
       const siblings = grandparent ? grandparent.children : void 0;
       if (ignored(
         parent,
@@ -25767,11 +25767,11 @@ function findAndReplace(tree, list3, options) {
       grandparent = parent;
     }
     if (grandparent) {
-      return handler(node2, parents);
+      return handler(node2, parents2);
     }
   }
-  function handler(node2, parents) {
-    const parent = parents[parents.length - 1];
+  function handler(node2, parents2) {
+    const parent = parents2[parents2.length - 1];
     const find2 = pairs[pairIndex][0];
     const replace2 = pairs[pairIndex][1];
     let start = 0;
@@ -25786,7 +25786,7 @@ function findAndReplace(tree, list3, options) {
       const matchObject = {
         index: match.index,
         input: match.input,
-        stack: [...parents, node2]
+        stack: [...parents2, node2]
       };
       let value = replace2(...match, matchObject);
       if (typeof value === "string") {
@@ -26748,8 +26748,8 @@ function visit(tree, testOrVisitor, visitorOrReverse, maybeReverse) {
     reverse = maybeReverse;
   }
   visitParents(tree, test, overload, reverse);
-  function overload(node2, parents) {
-    const parent = parents[parents.length - 1];
+  function overload(node2, parents2) {
+    const parent = parents2[parents2.length - 1];
     const index2 = parent ? parent.children.indexOf(node2) : void 0;
     return visitor(node2, index2, parent);
   }
@@ -50289,13 +50289,6 @@ function parseDeclarations(styleStr) {
   });
   return declarations;
 }
-function declarationLexer() {
-  cssLexer ??= new Lexer(
-    { generic: true, ...CSS_SYNTAX },
-    { generate: generator_default2 }
-  );
-  return cssLexer;
-}
 function isDroppedDeclaration(declaration) {
   let tokens = 0;
   let unreadable = false;
@@ -50305,7 +50298,11 @@ function isDroppedDeclaration(declaration) {
       unreadable = true;
   });
   if (unreadable || tokens > LEXER_TOKEN_LIMIT) return false;
-  const { error } = declarationLexer().matchProperty(
+  cssLexer ??= new Lexer(
+    { generic: true, ...CSS_SYNTAX },
+    { generate: generator_default2 }
+  );
+  const { error } = cssLexer.matchProperty(
     declaration.property,
     declaration.value
   );
@@ -50314,34 +50311,34 @@ function isDroppedDeclaration(declaration) {
 function resolveCascade(declarations) {
   const byProperty = /* @__PURE__ */ new Map();
   for (const declaration of declarations) {
-    const list3 = byProperty.get(declaration.property);
-    if (list3) list3.push(declaration);
-    else byProperty.set(declaration.property, [declaration]);
+    const list3 = byProperty.get(declaration.property) ?? [];
+    list3.push(declaration);
+    byProperty.set(declaration.property, list3);
   }
   const dropped = /* @__PURE__ */ new Map();
   const winners = /* @__PURE__ */ new Map();
-  const isDropped = (declaration) => {
-    let verdict = dropped.get(declaration);
-    if (verdict === void 0) {
-      verdict = isDroppedDeclaration(declaration);
-      dropped.set(declaration, verdict);
-    }
-    return verdict;
-  };
-  return (property2) => {
+  let budget = VALIDATION_BUDGET;
+  const winnerOf = (property2) => {
     const known = winners.get(property2);
     if (known !== void 0) return known;
-    const family = [
+    const candidates = [
       property2,
-      ...Object.hasOwn(RESETTING_SHORTHANDS, property2) ? RESETTING_SHORTHANDS[property2] : [],
+      ...RESETTING_SHORTHANDS[property2] ?? [],
       "all"
-    ];
-    const candidates = family.flatMap((member) => byProperty.get(member) ?? []).sort(
+    ].flatMap((member) => byProperty.get(member) ?? []).sort(
       (left, right) => Number(right.important) - Number(left.important) || right.index - left.index
     );
     let winner = null;
-    for (const [rank, candidate] of candidates.entries()) {
-      if (rank === VALIDATIONS_PER_PROPERTY || !isDropped(candidate)) {
+    for (const candidate of candidates) {
+      if (!dropped.has(candidate)) {
+        if (budget === 0) {
+          cascade.exhausted = true;
+          break;
+        }
+        budget--;
+        dropped.set(candidate, isDroppedDeclaration(candidate));
+      }
+      if (!dropped.get(candidate)) {
         winner = candidate;
         break;
       }
@@ -50349,15 +50346,19 @@ function resolveCascade(declarations) {
     winners.set(property2, winner);
     return winner;
   };
-}
-function ownValues(winnerOf) {
-  return (property2) => {
-    const winner = winnerOf(property2);
-    return winner?.property === property2 ? winner.value : null;
+  const cascade = {
+    winnerOf,
+    nodeOf(property2) {
+      const winner = winnerOf(property2);
+      return winner?.property === property2 ? winner.value : null;
+    },
+    textOf: (property2) => declText(cascade.nodeOf(property2)).trim().toLowerCase(),
+    exhausted: false
   };
+  return cascade;
 }
-function styleHides(nodeOf, inlineBox) {
-  const textOf = (key) => declText(nodeOf(key)).trim().toLowerCase();
+function styleHides(cascade, inlineBox) {
+  const { nodeOf, textOf } = cascade;
   const BOX = /* @__PURE__ */ new Set(
     /** @type {const} */
     ["box"]
@@ -50383,69 +50384,71 @@ function styleHides(nodeOf, inlineBox) {
   if (isNearZeroLength(nodeOf("font-size")) || isFontShorthandHidden(nodeOf("font")))
     hides.add("font-size");
   if (!inlineBox && isOffscreenOffset(nodeOf("text-indent")))
-    hides.add("indent");
-  if (isColorHidden(colorState(nodeOf, textOf, null))) hides.add("color");
-  return hides;
+    hides.add("text-indent");
+  if (isColorHidden(colorState(cascade, null))) hides.add("color");
+  return cascade.exhausted ? BOX : hides;
 }
-function colorState(nodeOf, textOf, inherited) {
-  const color2 = INHERITED_COLOR_KEYWORDS.has(textOf("color")) ? "" : canonicalizeColor(textOf("color"));
-  const fillOverride = canonicalizeColor(textOf("-webkit-text-fill-color"));
-  const ownFill = isConcreteColor(fillOverride) ? fillOverride : color2;
+function colorState({ nodeOf, textOf }, inherited) {
+  const color2 = textOf("color");
+  const textFill = textOf("-webkit-text-fill-color");
+  const ownTextFill = canonicalizeColor(textFill);
   const ownBackdrop = canonicalizeColor(textOf("background-color")) || backgroundColor(nodeOf("background"));
+  let inheritedTextFill = "";
+  if (textFill === "" || INHERITING_KEYWORDS.has(textFill))
+    inheritedTextFill = inherited?.textFill ?? "";
   return {
-    fill: ownFill || (inherited?.fill ?? ""),
+    // `color` is inherited, so these spellings all take the parent's.
+    color: (INHERITED_COLOR_KEYWORDS.has(color2) ? "" : canonicalizeColor(color2)) || (inherited?.color ?? ""),
+    textFill: isConcreteColor(ownTextFill) ? ownTextFill : inheritedTextFill,
     backdrop: ownBackdrop && ownBackdrop !== "transparent" ? ownBackdrop : inherited?.backdrop ?? ownBackdrop,
     imageLayer: hasImageLayer(nodeOf) || (inherited?.imageLayer ?? false),
     paintedVisible: isTextPaintedVisible(textOf)
   };
 }
 function isColorHidden(state) {
-  if (state.fill === "transparent" && !state.paintedVisible) return true;
-  return state.fill !== "" && state.fill === state.backdrop && isConcreteColor(state.fill) && !state.imageLayer;
+  const fill = state.textFill || state.color;
+  if (fill === "transparent" && !state.paintedVisible) return true;
+  return fill !== "" && fill === state.backdrop && isConcreteColor(fill) && !state.imageLayer;
 }
 function isHiddenStyle(styleStr) {
   const declarations = parseDeclarations(styleStr);
-  if (declarations.length === 0) return false;
-  return styleHides(ownValues(resolveCascade(declarations)), false).size > 0;
+  return declarations.length > 0 && styleHides(resolveCascade(declarations), false).size > 0;
 }
 function isSelfClosedForeign(tagName, value) {
   return FOREIGN_ELEMENTS.has(tagName) && /\/\s*>\s*$/.test(value);
 }
 function elementCascade(node2) {
-  if (node2?.type !== "element") return null;
+  if (node2?.type !== "element") return NO_CASCADE;
   let cascade = elementCascades.get(node2);
-  if (cascade === void 0) {
+  if (!cascade) {
     const style2 = node2.properties?.style;
     const declarations = typeof style2 === "string" ? parseDeclarations(style2) : [];
-    cascade = declarations.length > 0 ? resolveCascade(declarations) : null;
+    cascade = declarations.length > 0 ? resolveCascade(declarations) : NO_CASCADE;
     elementCascades.set(node2, cascade);
   }
   return cascade;
 }
-function cascadeOrNone(node2) {
-  return elementCascade(node2) ?? (() => null);
-}
-function appliedText(cascade, property2) {
-  if (!cascade) return "";
-  return declText(ownValues(cascade)(property2)).trim().toLowerCase();
-}
 function isInlineBox(node2, parent) {
   if (!INLINE_ELEMENTS.has(node2.tagName)) return false;
-  const own5 = elementCascade(node2);
-  const display = appliedText(own5, "display");
+  const { textOf } = elementCascade(node2);
+  const display = textOf("display");
   if (!INLINE_DISPLAYS.has(display) && !display.includes("var(")) return false;
-  if (BLOCKIFYING_POSITIONS.has(appliedText(own5, "position"))) return false;
-  if (BLOCKIFYING_FLOATS.has(appliedText(own5, "float"))) return false;
-  return !appliedText(elementCascade(parent), "display").split(" ").some((token) => ITEM_BLOCKIFYING_DISPLAYS.has(token));
+  if (BLOCKIFYING_VALUES.has(textOf("position")) || BLOCKIFYING_VALUES.has(textOf("float")))
+    return false;
+  let container = parent;
+  while (elementCascade(container).textOf("display") === "contents")
+    container = parents.get(container);
+  return !elementCascade(container).textOf("display").split(" ").some((token) => ITEM_BLOCKIFYING_DISPLAYS.has(token));
 }
 function elementHides(node2, parent) {
   if (node2.type !== "element") return /* @__PURE__ */ new Set();
+  if (parent) parents.set(node2, parent);
   const { properties: properties2 = {} } = node2;
   if (properties2.hidden !== void 0 && properties2.hidden !== null)
     return /* @__PURE__ */ new Set(["box"]);
   const cascade = elementCascade(node2);
-  if (!cascade) return /* @__PURE__ */ new Set();
-  const hides = styleHides(ownValues(cascade), isInlineBox(node2, parent));
+  if (cascade === NO_CASCADE) return /* @__PURE__ */ new Set();
+  const hides = styleHides(cascade, isInlineBox(node2, parent));
   if (REPLACED_ELEMENTS.has(node2.tagName))
     for (const kind2 of TEXT_ONLY_HIDES) hides.delete(kind2);
   return hides;
@@ -50454,77 +50457,61 @@ function isHiddenElement(node2, parent) {
   return elementHides(node2, parent).size > 0;
 }
 function fontShorthandSize(node2) {
-  for (const token of valueTokens(node2)) {
-    if (token.type === "Dimension" || token.type === "Percentage") return token;
-    if (token.type === "Identifier" && PARENT_RELATIVE_FONT_KEYWORDS.has(token.name))
-      return token;
-  }
-  return null;
+  return valueTokens(node2).find(
+    (token) => token.type === "Dimension" || token.type === "Percentage" || token.type === "Function" && MATH_FUNCTIONS.has(token.name) || token.type === "Identifier" && PARENT_RELATIVE_FONT_KEYWORDS.has(token.name)
+  ) ?? null;
 }
-function keepsZeroFontSize(winnerOf) {
-  const winner = winnerOf("font-size");
-  if (!winner) return true;
-  if (INHERITING_KEYWORDS.has(declText(winner.value).trim().toLowerCase()))
-    return true;
-  if (winner.property === "all") return false;
-  const size = winner.property === "font" ? fontShorthandSize(winner.value) : soleToken(winner.value);
-  if (!size) return false;
+function keepsZeroSize(size) {
   if (size.type === "Identifier")
     return PARENT_RELATIVE_FONT_KEYWORDS.has(size.name);
-  if (size.type === "Percentage") return true;
-  if (size.type === "Dimension" && PARENT_RELATIVE_FONT_UNITS.has(size.unit))
-    return true;
-  return (size.type === "Number" || size.type === "Dimension") && Math.abs(parseFloat(size.value)) < NEAR_ZERO_EPSILON;
+  if (size.type === "Number")
+    return Math.abs(parseFloat(size.value)) < NEAR_ZERO_EPSILON;
+  let keeps = true;
+  walker_default2(size, (node2) => {
+    keeps &&= ["Percentage", "Number", "Operator", "Parentheses"].includes(node2.type) || node2.type === "Function" && MATH_FUNCTIONS.has(node2.name) || node2.type === "Dimension" && (PARENT_RELATIVE_FONT_UNITS.has(node2.unit) || Math.abs(parseFloat(node2.value)) < NEAR_ZERO_EPSILON);
+  });
+  return keeps;
 }
-function keepsHiddenVisibility(winnerOf) {
-  const winner = winnerOf("visibility");
-  if (!winner) return true;
-  const text6 = declText(winner.value).trim().toLowerCase();
-  if (INHERITING_KEYWORDS.has(text6)) return true;
-  return winner.property === "visibility" && (text6 === "hidden" || text6 === "collapse");
-}
-function keepsOffscreenIndent(winnerOf, inlineBox) {
-  if (inlineBox) return true;
-  const winner = winnerOf("text-indent");
-  if (!winner) return true;
-  if (INHERITING_KEYWORDS.has(declText(winner.value).trim().toLowerCase()))
-    return true;
-  return winner.property === "text-indent" && isOffscreenOffset(winner.value);
+function keepsHide(kind2, cascade, inlineBox, color2) {
+  if (kind2 === "color") return isColorHidden(color2);
+  if (kind2 === "text-indent" && inlineBox) return true;
+  const winner = cascade.winnerOf(kind2);
+  const text6 = declText(winner?.value).trim().toLowerCase();
+  if (!winner || INHERITING_KEYWORDS.has(text6)) return true;
+  if (kind2 === "visibility")
+    return winner.property === kind2 && (text6 === "hidden" || text6 === "collapse");
+  if (kind2 === "text-indent")
+    return winner.property === kind2 && isOffscreenOffset(winner.value);
+  if (winner.property === "all") return false;
+  const size = winner.property === "font" ? fontShorthandSize(winner.value) : soleToken(winner.value);
+  return size !== null && keepsZeroSize(size);
 }
 function descendState(node2, parent, state) {
   const own5 = elementHides(node2, parent);
   if (own5.has("box")) return "hidden";
-  const winnerOf = cascadeOrNone(node2);
-  const nodeOf = ownValues(winnerOf);
-  const textOf = (key) => declText(nodeOf(key)).trim().toLowerCase();
-  const color2 = colorState(nodeOf, textOf, state.color);
+  const cascade = elementCascade(node2);
+  const color2 = colorState(cascade, state.color);
   const inlineBox = isInlineBox(node2, parent);
-  const kinds = /* @__PURE__ */ new Set();
-  for (const kind2 of state.kinds) {
-    const stays = kind2 === "font-size" && keepsZeroFontSize(winnerOf) || kind2 === "visibility" && keepsHiddenVisibility(winnerOf) || kind2 === "indent" && keepsOffscreenIndent(winnerOf, inlineBox) || kind2 === "color" && isColorHidden(color2);
-    if (stays) kinds.add(kind2);
-  }
-  for (const kind2 of own5) kinds.add(
-    /** @type {InheritedHide} */
-    kind2
+  const kinds = (
+    /** @type {Set<InheritedHide>} */
+    own5
   );
+  for (const kind2 of state.kinds)
+    if (keepsHide(kind2, cascade, inlineBox, color2)) kinds.add(kind2);
   if (REPLACED_ELEMENTS.has(node2.tagName))
     return kinds.has("visibility") ? "hidden" : "visible";
-  if (kinds.size === 0) return "visible";
-  return { kinds, color: color2 };
-}
-function isBlankText(value) {
-  return value.replace(LAYER2_PLACEHOLDER_RE, "").trim() === "";
+  return kinds.size === 0 ? "visible" : { kinds, color: color2 };
 }
 function regionVerdicts(root2, kinds) {
   const verdicts = /* @__PURE__ */ new Map();
-  const nodeOf = ownValues(cascadeOrNone(root2));
-  const textOf = (key) => declText(nodeOf(key)).trim().toLowerCase();
   const stack = [];
   const pushChildren = (node2, state) => {
     for (const child of node2.children) stack.push([child, node2, state]);
   };
-  pushChildren(root2, { kinds, color: colorState(nodeOf, textOf, null) });
+  pushChildren(root2, {
+    kinds,
+    color: colorState(elementCascade(root2), null)
+  });
   const order2 = [root2];
   while (stack.length > 0) {
     const [node2, parent, state] = (
@@ -50533,7 +50520,10 @@ function regionVerdicts(root2, kinds) {
     );
     order2.push(node2);
     if (node2.type === "text")
-      verdicts.set(node2, isBlankText(node2.value) ? "neutral" : "hidden");
+      verdicts.set(
+        node2,
+        node2.value.replace(LAYER2_PLACEHOLDER_RE, "").trim() === "" ? "neutral" : "hidden"
+      );
     else if (node2.type !== "element") verdicts.set(node2, "neutral");
     else {
       const next2 = descendState(node2, parent, state);
@@ -50555,7 +50545,9 @@ function regionVerdicts(root2, kinds) {
   }
   return verdicts;
 }
-function mixedRegionSplice(root2, verdicts) {
+function inheritedRegionSplice(root2, kinds) {
+  const verdicts = regionVerdicts(root2, kinds);
+  if (verdicts.get(root2) !== "mixed") return null;
   const ranges = [];
   const rescan = [];
   const mixed = [];
@@ -50619,11 +50611,11 @@ function hasDataSrc(el) {
 function walk2(tree, test, visitor, treeParent = void 0) {
   const nodes = [tree];
   const indices = [void 0];
-  const parents = [treeParent];
+  const parents2 = [treeParent];
   while (nodes.length > 0) {
     const node2 = nodes.pop();
     const index2 = indices.pop();
-    const parent = parents.pop();
+    const parent = parents2.pop();
     const result = test === null || node2.type === test ? visitor(node2, index2, parent) : void 0;
     if (result === EXIT) return;
     if (result === SKIP) continue;
@@ -50632,7 +50624,7 @@ function walk2(tree, test, visitor, treeParent = void 0) {
     for (let i = children.length - 1; i >= 0; i--) {
       nodes.push(children[i]);
       indices.push(i);
-      parents.push(node2);
+      parents2.push(node2);
     }
   }
 }
@@ -50768,11 +50760,6 @@ function scanFragmentTree(html4, tree) {
   if (unpositioned)
     return { ranges: [{ start: 0, end: html4.length, kind: "hidden" }], warned };
   return { ranges, warned };
-}
-function inheritedRegionSplice(node2, kinds) {
-  const verdicts = regionVerdicts(node2, kinds);
-  if (verdicts.get(node2) !== "mixed") return null;
-  return mixedRegionSplice(node2, verdicts);
 }
 function foldAbsorb(absorbing, raw) {
   const lastClose = raw.lastIndexOf(">");
@@ -51382,7 +51369,7 @@ function detectConfusableHosts(text6) {
   }
   return threats.length > 0 ? threats : null;
 }
-var NEAR_ZERO_EPSILON, OFFSCREEN_ABSOLUTE_THRESHOLD, OFFSCREEN_VIEWPORT_THRESHOLD, ABSOLUTE_UNITS, VIEWPORT_UNITS, ANGLE_UNITS, NAMED_COLORS, BLOCK_AXIS_EXTENT_PROPS, INLINE_AXIS_EXTENT_PROPS, BORDER_SHORTHANDS, BORDER_WIDTH_KEYWORDS, FONT_SIZE_UNITS, CSS_PROPERTY_IDENT_RE, LEXER_TOKEN_LIMIT, VALIDATIONS_PER_PROPERTY, cssLexer, RESETTING_SHORTHANDS, INHERITED_COLOR_KEYWORDS, REPORTED_TAGS, VOID_ELEMENTS2, FOREIGN_ELEMENTS, RAW_TEXT_ELEMENTS, INLINE_ELEMENTS, INLINE_DISPLAYS, BLOCKIFYING_POSITIONS, BLOCKIFYING_FLOATS, ITEM_BLOCKIFYING_DISPLAYS, REPLACED_ELEMENTS, TEXT_ONLY_HIDES, elementCascades, PARENT_RELATIVE_FONT_UNITS, PARENT_RELATIVE_FONT_KEYWORDS, INHERITING_KEYWORDS, parseFragment2, PLACEHOLDER_LABEL, PLACEHOLDER_KEY_LEN, LAYER2_PLACEHOLDER_RE, HIDDEN_PLACEHOLDER, COMMENT_PLACEHOLDER, UNPARSEABLE_PLACEHOLDER, mdParser, parseMarkdown, MARKDOWN_CODE_HINT, BOGUS_COMMENT_OPEN_RE, MARKUP_OPENER_RE, PHRASING_ROOTS, FLOW_HTML_PARENTS, MAX_SPLICE_ROUNDS, EXFIL_INDICATORS, KEYWORD_PARAM_NAME_RE, LONG_QUERY_THRESHOLD, ACTIVE_DATA_TYPES, DATA_URI_LENGTH_THRESHOLD, SCRIPT_SCHEMES, RELATIVE_URL_BASE, BENIGN_BLOB_PARAM_RE, BENIGN_SHORT_PARAM_RE, BENIGN_SHORT_VALUE_MAX_LEN, BENIGN_SHORT_TOTAL_MAX_LEN, PUBLIC_KEY_ID_PARAM_RE, BLOB_VALUE_MIN_LEN, OPAQUE_TOKEN_RE, VALUE_HAS_DIGIT_RE, BLOB_VALUE_B64_RE, HEX_ONLY_RE, HEX_BLOB_MIN_LEN, DIGEST_HEX_LENGTHS, BLOB_VALUE_B64URL_RE, PATH_BLOB_RE, DIGEST_MAX_LEN, BLOB_SEPARATOR_RE, BLOB_RUN_SPLIT_RE, FLOAT_RE, NON_NEGATIVE_INTEGER_RE, SRCSET_URL_RE, SRCSET_DESCRIPTORS_RE, STRING_URL_FUNCTIONS, GRAMMAR_READERS, IMAGE_ELEMENTS, OFF_ORIGIN_REASON, COMMENT_INTERIOR_OPENER_RE;
+var NEAR_ZERO_EPSILON, OFFSCREEN_ABSOLUTE_THRESHOLD, OFFSCREEN_VIEWPORT_THRESHOLD, ABSOLUTE_UNITS, VIEWPORT_UNITS, ANGLE_UNITS, NAMED_COLORS, BLOCK_AXIS_EXTENT_PROPS, INLINE_AXIS_EXTENT_PROPS, BORDER_SHORTHANDS, BORDER_WIDTH_KEYWORDS, FONT_SIZE_UNITS, CSS_PROPERTY_IDENT_RE, LEXER_TOKEN_LIMIT, VALIDATION_BUDGET, cssLexer, RESETTING_SHORTHANDS, NO_CASCADE, INHERITED_COLOR_KEYWORDS, REPORTED_TAGS, VOID_ELEMENTS2, FOREIGN_ELEMENTS, RAW_TEXT_ELEMENTS, INLINE_ELEMENTS, INLINE_DISPLAYS, BLOCKIFYING_VALUES, ITEM_BLOCKIFYING_DISPLAYS, REPLACED_ELEMENTS, TEXT_ONLY_HIDES, elementCascades, parents, INHERITING_KEYWORDS, PARENT_RELATIVE_FONT_UNITS, PARENT_RELATIVE_FONT_KEYWORDS, MATH_FUNCTIONS, parseFragment2, PLACEHOLDER_LABEL, PLACEHOLDER_KEY_LEN, LAYER2_PLACEHOLDER_RE, HIDDEN_PLACEHOLDER, COMMENT_PLACEHOLDER, UNPARSEABLE_PLACEHOLDER, mdParser, parseMarkdown, MARKDOWN_CODE_HINT, BOGUS_COMMENT_OPEN_RE, MARKUP_OPENER_RE, PHRASING_ROOTS, FLOW_HTML_PARENTS, MAX_SPLICE_ROUNDS, EXFIL_INDICATORS, KEYWORD_PARAM_NAME_RE, LONG_QUERY_THRESHOLD, ACTIVE_DATA_TYPES, DATA_URI_LENGTH_THRESHOLD, SCRIPT_SCHEMES, RELATIVE_URL_BASE, BENIGN_BLOB_PARAM_RE, BENIGN_SHORT_PARAM_RE, BENIGN_SHORT_VALUE_MAX_LEN, BENIGN_SHORT_TOTAL_MAX_LEN, PUBLIC_KEY_ID_PARAM_RE, BLOB_VALUE_MIN_LEN, OPAQUE_TOKEN_RE, VALUE_HAS_DIGIT_RE, BLOB_VALUE_B64_RE, HEX_ONLY_RE, HEX_BLOB_MIN_LEN, DIGEST_HEX_LENGTHS, BLOB_VALUE_B64URL_RE, PATH_BLOB_RE, DIGEST_MAX_LEN, BLOB_SEPARATOR_RE, BLOB_RUN_SPLIT_RE, FLOAT_RE, NON_NEGATIVE_INTEGER_RE, SRCSET_URL_RE, SRCSET_DESCRIPTORS_RE, STRING_URL_FUNCTIONS, GRAMMAR_READERS, IMAGE_ELEMENTS, OFF_ORIGIN_REASON, COMMENT_INTERIOR_OPENER_RE;
 var init_html4 = __esm({
   "src/html.mjs"() {
     "use strict";
@@ -51626,7 +51613,7 @@ var init_html4 = __esm({
     FONT_SIZE_UNITS = /* @__PURE__ */ new Set([...ABSOLUTE_UNITS, "q"]);
     CSS_PROPERTY_IDENT_RE = /^-{0,2}[A-Za-z_][A-Za-z0-9_-]*$/;
     LEXER_TOKEN_LIMIT = 64;
-    VALIDATIONS_PER_PROPERTY = 8;
+    VALIDATION_BUDGET = 128;
     cssLexer = null;
     RESETTING_SHORTHANDS = {
       "font-size": ["font"],
@@ -51639,6 +51626,7 @@ var init_html4 = __esm({
       right: ["inset"],
       bottom: ["inset"]
     };
+    NO_CASCADE = resolveCascade([]);
     INHERITED_COLOR_KEYWORDS = /* @__PURE__ */ new Set(["inherit", "unset", "currentcolor"]);
     REPORTED_TAGS = /* @__PURE__ */ new Set([
       "script",
@@ -51677,71 +51665,32 @@ var init_html4 = __esm({
       "noframes",
       "plaintext"
     ]);
-    INLINE_ELEMENTS = /* @__PURE__ */ new Set([
-      "a",
-      "abbr",
-      "acronym",
-      "b",
-      "bdi",
-      "bdo",
-      "big",
-      "cite",
-      "code",
-      "data",
-      "del",
-      "dfn",
-      "em",
-      "font",
-      "i",
-      "ins",
-      "kbd",
-      "label",
-      "mark",
-      "nobr",
-      "q",
-      "s",
-      "samp",
-      "small",
-      "span",
-      "strike",
-      "strong",
-      "sub",
-      "sup",
-      "time",
-      "tt",
-      "u",
-      "var"
-    ]);
-    INLINE_DISPLAYS = /* @__PURE__ */ new Set([
-      "",
-      "inline",
-      "inline flow",
-      "contents",
-      "inherit",
-      "initial",
-      "unset",
-      "revert",
-      "revert-layer"
-    ]);
-    BLOCKIFYING_POSITIONS = /* @__PURE__ */ new Set(["absolute", "fixed"]);
-    BLOCKIFYING_FLOATS = /* @__PURE__ */ new Set([
-      "left",
-      "right",
-      "inline-start",
-      "inline-end"
-    ]);
-    ITEM_BLOCKIFYING_DISPLAYS = /* @__PURE__ */ new Set([
-      "flex",
-      "grid",
-      "inline-flex",
-      "inline-grid"
-    ]);
+    INLINE_ELEMENTS = new Set(
+      `a abbr acronym b bdi bdo big cite code data del dfn em font i ins kbd
+  label mark nobr q s samp small span strike strong sub sup time tt u
+  var`.split(/\s+/)
+    );
+    INLINE_DISPLAYS = new Set(
+      ["", "inline", "inline flow", "contents"].concat(
+        "inherit initial unset revert revert-layer".split(" ")
+      )
+    );
+    BLOCKIFYING_VALUES = new Set(
+      "absolute fixed left right inline-start inline-end".split(" ")
+    );
+    ITEM_BLOCKIFYING_DISPLAYS = new Set(
+      "flex grid inline-flex inline-grid".split(" ")
+    );
     REPLACED_ELEMENTS = /* @__PURE__ */ new Set(["img", "video", "audio", "canvas", "embed"]);
-    TEXT_ONLY_HIDES = ["font-size", "color", "indent"];
+    TEXT_ONLY_HIDES = ["font-size", "color", "text-indent"];
     elementCascades = /* @__PURE__ */ new WeakMap();
+    parents = /* @__PURE__ */ new WeakMap();
+    INHERITING_KEYWORDS = new Set(
+      "inherit unset revert revert-layer".split(" ")
+    );
     PARENT_RELATIVE_FONT_UNITS = /* @__PURE__ */ new Set(["em", "ex", "ch", "cap", "ic"]);
     PARENT_RELATIVE_FONT_KEYWORDS = /* @__PURE__ */ new Set(["smaller", "larger"]);
-    INHERITING_KEYWORDS = /* @__PURE__ */ new Set(["inherit", "unset"]);
+    MATH_FUNCTIONS = /* @__PURE__ */ new Set(["calc", "min", "max", "clamp"]);
     parseFragment2 = lastParseCached(parseHtmlFragment);
     PLACEHOLDER_LABEL = Object.freeze({
       hidden: "hidden HTML",

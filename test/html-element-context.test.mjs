@@ -95,6 +95,11 @@ const SPLICE_CASES = [
     '<div style="display:flex"><span style="transform:scale(0)">S</span></div>',
     '<div style="display:flex">[X]</div>',
   ],
+  // A `display:contents` parent has no box: the flex container is its parent.
+  [
+    '<div style="display:flex"><i style="display:contents"><span style="transform:scale(0)">S</span></i></div>',
+    '<div style="display:flex"><i style="display:contents">[X]</i></div>',
+  ],
   ['<span style="position:absolute;transform:scale(0)">S</span>', "[X]"],
   ['<span style="float:left;text-indent:-9999px">S</span>', "[X]"],
   ['<span style="display:block;transform:scale(0)">S</span>', "[X]"],
@@ -139,53 +144,15 @@ const SPLICE_CASES = [
     '<div style="font-size:0"><span style="display:none">S</span><b style="font-size:9px">SHOWN <i hidden>S2</i></b></div>',
     '<div style="font-size:0">[X]<b style="font-size:9px">SHOWN [X]</b></div>',
   ],
-  // ── a descendant that keeps the hide stays hidden with it ──
-  [
-    '<div style="font-size:0">S1 <b style="font-size:1.2em">S2</b></div>',
-    "[X]",
-  ],
-  ['<div style="font-size:0">S1 <b style="font-size:150%">S2</b></div>', "[X]"],
-  [
-    '<div style="font-size:0">S1 <b style="font-size:larger">S2</b></div>',
-    "[X]",
-  ],
-  ['<div style="font-size:0">S1 <b style="font:1em serif">S2</b></div>', "[X]"],
-  [
-    '<div style="font-size:0">S1 <b style="font-size:inherit">S2</b></div>',
-    "[X]",
-  ],
-  ['<div style="font-size:0">S1 <b style="all:unset">S2</b></div>', "[X]"],
-  [
-    '<div style="visibility:hidden">S1 <b style="visibility:inherit">S2</b></div>',
-    "[X]",
-  ],
-  [
-    '<div style="color:#fff;background:#fff">S1 <b style="color:inherit">S2</b></div>',
-    "[X]",
-  ],
+  // ── a descendant that keeps the hide stays hidden with it (see also
+  // KEEPS_HIDE_CASES) ──
   // An inline box cannot reset an indent: it sits on the shifted line.
   [
     '<div style="text-indent:-9999px">S1 <span style="text-indent:0">S2</span></div>',
     "[X]",
   ],
-  // An overriding value the cascade drops as invalid overrides nothing.
-  ['<div style="font-size:0">S1 <b style="font-size:14pz">S2</b></div>', "[X]"],
   // Visibility reaches an image; a font-size hide does not.
   ['<div style="visibility:hidden">S1 <img src="x.png"> S2</div>', "[X]"],
-  // ── a font shorthand resets the size unless its size is relative ──
-  [
-    '<div style="font-size:0">S1 <b style="font:x-small serif">S2</b></div>',
-    '<div style="font-size:0">[X]<b style="font:x-small serif">S2</b></div>',
-  ],
-  [
-    '<div style="font-size:0">S1 <b style="font:larger serif">S2</b></div>',
-    "[X]",
-  ],
-  ['<div style="font-size:0">S1 <b style="font:50% serif">S2</b></div>', "[X]"],
-  [
-    '<div style="font-size:0">S1 <b style="all:initial">S2</b></div>',
-    '<div style="font-size:0">[X]<b style="all:initial">S2</b></div>',
-  ],
   // ── a block keeps an indent it does not set, or hands back ──
   ['<div style="text-indent:-9999px">S1<p>S2</p></div>', "[X]"],
   [
@@ -221,44 +188,91 @@ describe("element context: exactly the bytes that stay hidden are spliced", () =
     it(JSON.stringify(input), () => assert.equal(shown(input), expected));
 });
 
+// [a region's style, its `<b>` child's style]. The child keeps the hide, so
+// the whole region is spliced.
+const KEEPS_HIDE_CASES = [
+  // A size relative to the zero parent size, including inside calc().
+  ["font-size:0", "font-size:1.2em"],
+  ["font-size:0", "font-size:150%"],
+  ["font-size:0", "font-size:larger"],
+  ["font-size:0", "font-size:calc(1em)"],
+  ["font-size:0", "font-size:0"],
+  ["font-size:0", "font:1em serif"],
+  ["font-size:0", "font:calc(1em) serif"],
+  ["font-size:0", "font:larger serif"],
+  ["font-size:0", "font:50% serif"],
+  // Inheriting keywords; `revert` rolls back to the user-agent style, which
+  // inherits too.
+  ["font-size:0", "font-size:inherit"],
+  ["font-size:0", "all:unset"],
+  ["visibility:hidden", "visibility:inherit"],
+  ["visibility:hidden", "visibility:revert"],
+  ["color:#fff;background:#fff", "color:inherit"],
+  // An overriding value the cascade drops as invalid overrides nothing.
+  ["font-size:0", "font-size:14pz"],
+  // A transparent text fill inherits apart from `color`.
+  ["-webkit-text-fill-color:transparent", "color:red"],
+];
+
+// [a region's style, its `<b>` child's style]. The child sets the hide back,
+// so only the region's own text is spliced.
+const OVERRIDES_HIDE_CASES = [
+  // An absolute size, even beside a relative one, and the shorthands that
+  // reset the size to one.
+  ["font-size:0", "font-size:calc(1em + 9px)"],
+  ["font-size:0", "font:x-small serif"],
+  ["font-size:0", "all:initial"],
+  ["-webkit-text-fill-color:transparent", "-webkit-text-fill-color:red"],
+];
+
+describe("element context: a child keeps an inherited hide or sets it back", () => {
+  for (const [outer, inner] of KEEPS_HIDE_CASES)
+    it(`${inner} keeps ${outer}`, () =>
+      assert.equal(
+        shown(`<div style="${outer}">S1 <b style="${inner}">S2</b></div>`),
+        "[X]",
+      ));
+  for (const [outer, inner] of OVERRIDES_HIDE_CASES)
+    it(`${inner} overrides ${outer}`, () =>
+      assert.equal(
+        shown(`<div style="${outer}">S1 <b style="${inner}">V</b></div>`),
+        `<div style="${outer}">[X]<b style="${inner}">V</b></div>`,
+      ));
+});
+
+// [tag, its properties, its parent's style (null: no parent given), hidden].
+/** @type {Array<[string, Record<string, unknown>, string | null, boolean]>} */
+const ELEMENT_CASES = [
+  // A transform does not apply to an inline box unless a flex or grid parent
+  // blockifies it; a div is a block box whatever its parent.
+  ["span", { style: "transform:scale(0)" }, null, false],
+  ["span", { style: "transform:scale(0)" }, "display:flex", true],
+  ["span", { style: "transform:scale(0)" }, "display:inline-grid", true],
+  ["span", { style: "transform:scale(0)" }, "display:block", false],
+  ["div", { style: "transform:scale(0)" }, null, true],
+  // The hidden attribute and visibility hide an image; font-size does not.
+  ["img", { hidden: true }, null, true],
+  ["img", { style: "visibility:hidden" }, null, true],
+  ["img", { style: "font-size:0" }, null, false],
+];
+
 describe("element context: isHiddenElement reads the parent it is given", () => {
   /** @param {string} tagName @param {Record<string, unknown>} properties */
-  const elem = (tagName, properties = {}) => ({
+  const elem = (tagName, properties) => ({
     type: "element",
     tagName,
     properties,
     children: [],
   });
-  const span = elem("span", { style: "transform:scale(0)" });
-  it("an inline span with a transform alone is visible", () =>
-    assert.equal(isHiddenElement(span), false));
-  it("a flex parent blockifies it, so the transform hides it", () =>
-    assert.equal(
-      isHiddenElement(span, elem("div", { style: "display:flex" })),
-      true,
-    ));
-  it("a grid parent does too", () =>
-    assert.equal(
-      isHiddenElement(span, elem("div", { style: "display:inline-grid" })),
-      true,
-    ));
-  it("a block parent does not", () =>
-    assert.equal(
-      isHiddenElement(span, elem("div", { style: "display:block" })),
-      false,
-    ));
-  it("a div is a block box whatever its parent", () =>
-    assert.equal(
-      isHiddenElement(elem("div", { style: "transform:scale(0)" })),
-      true,
-    ));
-  it("the hidden attribute hides an image", () =>
-    assert.equal(isHiddenElement(elem("img", { hidden: true })), true));
-  it("visibility hides an image; font-size does not", () => {
-    assert.equal(
-      isHiddenElement(elem("img", { style: "visibility:hidden" })),
-      true,
-    );
-    assert.equal(isHiddenElement(elem("img", { style: "font-size:0" })), false);
-  });
+  for (const [tag, properties, parentStyle, hidden] of ELEMENT_CASES)
+    it(`<${tag} ${JSON.stringify(properties)}> in ${parentStyle ?? "no parent"}`, () =>
+      assert.equal(
+        isHiddenElement(
+          elem(tag, properties),
+          parentStyle === null
+            ? undefined
+            : elem("div", { style: parentStyle }),
+        ),
+        hidden,
+      ));
 });
