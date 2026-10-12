@@ -83,3 +83,39 @@ describe("envValueRegex is memoized", () => {
     assert.ok(re.test(`out ${VALUE} put`), "shared instance carried state");
   });
 });
+
+describe("envValueRegex with a value that itself holds an invisible", () => {
+  // `a<ZWSP>a` used to build `a[…]*<ZWSP>[…]*a`: the required literal is a member
+  // of both neighbouring starred classes, so a long ZWSP run followed by a
+  // non-match backtracked over quadratically many partitions (~6 s at 16k).
+  const ZWSP = "​";
+  const VALUE_WITH_INVISIBLE = `abc${ZWSP}def`;
+
+  it("finishes a long invisible run followed by a non-match in linear time", () => {
+    const re = envValueRegex(VALUE_WITH_INVISIBLE);
+    const hostile = `abc${ZWSP.repeat(50_000)}x`;
+    const start = performance.now();
+    assert.equal(re.test(hostile), false);
+    // The quadratic form needs seconds here and this takes well under a
+    // millisecond, so the bound is about complexity class, not machine speed.
+    assert.ok(performance.now() - start < 1000, "invisible run backtracked");
+  });
+
+  it("still matches the value as typed, with the invisible removed, or re-spliced", () => {
+    const re = envValueRegex(VALUE_WITH_INVISIBLE);
+    for (const text of [
+      `out ${VALUE_WITH_INVISIBLE} put`,
+      "out abcdef put",
+      `out abc${ZWSP}${ZWSP}${ZWSP}def put`,
+      `out a⁠bc${ZWSP}def put`,
+    ])
+      assert.ok(re.test(text), JSON.stringify(text));
+    assert.equal(re.test("out abcxdef put"), false);
+  });
+
+  it("matches a value made only of invisibles exactly, not as a match-everything pattern", () => {
+    const re = envValueRegex(`${ZWSP}${ZWSP}`);
+    assert.equal(re.test("ordinary text"), false);
+    assert.ok(re.test(`x${ZWSP}${ZWSP}y`));
+  });
+});
