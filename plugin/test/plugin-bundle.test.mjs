@@ -497,13 +497,15 @@ test("bundle is self-contained: only builtin imports, no residue", () => {
   // tables in this way and took Layer 2 down on the first HTML tool output —
   // static import specifiers were all clean while the artifact was broken, which
   // is why this assertion exists beside them rather than trusting them.
-  const survivors = runtimeRequires(text);
+  // Sorted on both sides: runtimeRequires answers in the bundle's emission
+  // order, which esbuild does not promise and which is no part of the contract.
+  const survivors = runtimeRequires(text).sort();
   assert.deepEqual(
     survivors,
     // The declared allowlist, read from the shared bundle list rather than
-    // restated: today the registry-first namespace-guard fallback, which only
-    // runs on a host that has a node_modules.
-    [...bundleTarget("plugin-hooks").allowedRuntimeRequires],
+    // restated: the registry-first fallbacks that only run on a host that has
+    // a node_modules. Exact membership, not a subset.
+    [...bundleTarget("plugin-hooks").allowedRuntimeRequires].sort(),
     `bundle keeps unresolvable runtime require(): ${survivors.join(", ")}`,
   );
   // Layer 5 (prompt armor) is deliberately not shipped: its subprocess helper
