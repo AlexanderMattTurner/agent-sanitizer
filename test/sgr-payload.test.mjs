@@ -92,10 +92,27 @@ const COLOUR_CASES = [
   ["bright basic on itself", `${ESC}[97;107mx`, true],
   ["set across two tokens", `${ESC}[30m${ESC}[40mhidden`, true],
   ["hidden span inside prose", `shown ${ESC}[30;40mhidden${ESC}[0m`, true],
+  // A non-SGR token between the colour and the reset changes no rendition, so
+  // the text before it is still drawn in matching colours.
+  [
+    "hidden span before an erase",
+    `${ESC}[30;40mhidden${ESC}[2J${ESC}[0m`,
+    true,
+  ],
+  [
+    "hidden span before a cursor move",
+    `${ESC}[30;40mhidden${ESC}[H${ESC}[0m`,
+    true,
+  ],
   // Bold brightens only the 8 basic colours, so it disambiguates nothing here.
   ["bold over truecolor", `${ESC}[1;38;2;0;0;0;48;2;0;0;0mx`, true],
 
   ["whitespace painted in its own colour", `${ESC}[30;40m   ${ESC}[0m`, false],
+  [
+    "whitespace before an erase in its own colour",
+    `${ESC}[30;40m  ${ESC}[K${ESC}[0m`,
+    false,
+  ],
   ["ANSI-art block elements", `${ESC}[31;41m${BLOCK}${BLOCK}${ESC}[0m`, false],
   // In matching colours every Block Element is the same solid cell, so a
   // second distinct one is a hidden choice: the channel is the glyph identity.

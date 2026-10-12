@@ -4850,11 +4850,11 @@ function sgrCarriesPayload(text6) {
     const gap = text6.slice(previousEnd, token.start);
     const blankGap = rendersNothing(gap);
     previousEnd = token.end;
+    if (hidesText(rendition, gap, solidBlocks)) return true;
     if (token.kind !== TOKEN_KIND.SGR) {
       run = 0;
       continue;
     }
-    if (hidesText(rendition, gap, solidBlocks)) return true;
     run = blankGap ? run + 1 : 1;
     if (run >= SGR_RUN_THRESHOLD) return true;
     rendition = sgrRendition(text6.slice(token.start, token.end), rendition);

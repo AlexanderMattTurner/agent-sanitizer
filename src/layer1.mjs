@@ -224,14 +224,17 @@ export function sgrCarriesPayload(text) {
     const gap = text.slice(previousEnd, token.start);
     const blankGap = rendersNothing(gap);
     previousEnd = token.end;
+    // This refusal is what blocks `ESC[8m` (or a foreground painted in its own
+    // background) from hiding text from the human while leaving its bytes for
+    // the model. A non-SGR token moves no rendition, so the gap before an erase
+    // or a cursor move is drawn in the state the last SGR left — judged here,
+    // ahead of the non-SGR exit, or `ESC[30;40m` + text + `ESC[2J` + reset
+    // would hide the text with no check at all.
+    if (hidesText(rendition, gap, solidBlocks)) return true;
     if (token.kind !== TOKEN_KIND.SGR) {
       run = 0;
       continue;
     }
-    // This refusal is what blocks `ESC[8m` (or a foreground painted in its own
-    // background) from hiding text from the human while leaving its bytes for
-    // the model.
-    if (hidesText(rendition, gap, solidBlocks)) return true;
     run = blankGap ? run + 1 : 1;
     if (run >= SGR_RUN_THRESHOLD) return true;
     rendition = sgrRendition(text.slice(token.start, token.end), rendition);
