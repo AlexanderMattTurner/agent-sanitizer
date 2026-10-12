@@ -60,6 +60,12 @@
  */
 import { createRequire } from "node:module";
 
+import {
+  GENERAL_CATEGORY_MARK,
+  SCRIPT_LATIN,
+  inSpans,
+} from "./unicode-properties.mjs";
+
 /**
  * Default path/command fields to fold per tool. Agent-agnostic: the keys are
  * the conventional Claude/Anthropic tool names, but a caller with a different
@@ -171,8 +177,6 @@ export function hasNonAscii(value) {
 // fullwidth forms are Latin-script too, but no orthography spells a word with
 // them, so they stay look-alikes.
 const ORTHOGRAPHIC_LATIN = /^[\u00C0-\u024F\u1E00-\u1EFF]$/u;
-const LATIN_SCRIPT = /^\p{Script=Latin}$/u;
-const COMBINING_MARK = /^\p{M}$/u;
 
 /**
  * True when `glyph` holds a non-ASCII code point that is neither a combining
@@ -187,9 +191,10 @@ const COMBINING_MARK = /^\p{M}$/u;
  */
 export function isAsciiPretender(glyph) {
   for (const ch of glyph) {
-    if (!hasNonAscii(ch) || COMBINING_MARK.test(ch)) continue;
+    const cp = /** @type {number} */ (ch.codePointAt(0));
+    if (!hasNonAscii(ch) || inSpans(GENERAL_CATEGORY_MARK, cp)) continue;
     const orthographic =
-      LATIN_SCRIPT.test(ch) &&
+      inSpans(SCRIPT_LATIN, cp) &&
       ORTHOGRAPHIC_LATIN.test(ch) &&
       hasNonAscii(ch.normalize("NFKC"));
     if (!orthographic) return true;

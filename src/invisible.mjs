@@ -10,8 +10,20 @@
  * actual cursive-join semantics rather than a hand-rolled script guess.
  */
 import { joiningType, isVirama, isBrahmicConsonant } from "./joining-type.mjs";
-import { isStandardizedVariant } from "./standardized-variants.mjs";
+import {
+  STANDARDIZED_VARIANTS,
+  isStandardizedVariant,
+} from "./standardized-variants.mjs";
 import { CF_CODEPOINTS } from "./cf-charset.mjs";
+import {
+  EMOJI_MODIFIER,
+  EMOJI_TEXT_DEFAULT,
+  EXTENDED_PICTOGRAPHIC,
+  SCRIPT_BRAILLE,
+  SCRIPT_HANGUL,
+  UNIFIED_IDEOGRAPH,
+  inSpans,
+} from "./unicode-properties.mjs";
 import { scanAnsi, TOKEN_KIND } from "./ansi.mjs";
 
 // Unicode's Variation_Selector property, whole: the FE00 run, the Mongolian
@@ -334,13 +346,11 @@ export const TOTAL_PRESERVED_JOINER_BUDGET = 16;
 // residual channel to a fixed fraction of the cover text.
 export const PRESERVED_JOINER_PER_VISIBLE = 8;
 
-// Absolute ceiling on the document-wide preserve allowance, regardless of how
-// much visible cover text an attacker supplies. Without it, maxPreserved grows
-// linearly with visible length (visibleLen / PRESERVED_JOINER_PER_VISIBLE), so a
-// large benign-looking body lets the residual joiner/selector channel scale with
-// attacker input — preserved chars do not count toward the scatter floor, so
-// nothing else bounds it. This caps the whole channel at a fixed width no cover
-// text can widen.
+// Ceiling on the preserve allowance cover text can buy, so a large ASCII body
+// cannot scale the residual channel. Joiners alone may also grow at
+// PRESERVED_JOINER_PER_VISIBLE of the joining letters (see joiningLetterCount):
+// in a joining script they are orthography, so a long Persian document keeps
+// every ZWNJ while selectors and tags stay under this cap.
 export const PRESERVE_HARD_CAP = 64;
 
 // Floor on the document-wide allowance for PRESERVED blank fillers (the
@@ -387,35 +397,34 @@ export const LINGUISTIC_SCRIPTS = [
   "Malayalam",
   "Sinhala",
 ];
+// Every Unicode property below comes from the pinned-UCD tables, never a live
+// `\p{…}`, so the runtime's ICU cannot decide what is preserved.
 // Left side of an emoji joiner: a pictograph or a skin-tone modifier (a base
 // emoji may carry a modifier before the joiner, e.g. a health-worker sequence).
-const EMOJI_LEFT = /[\p{Extended_Pictographic}\p{Emoji_Modifier}]/u;
+/** @param {number} cp @returns {boolean} */
+const isEmojiLeft = (cp) => isExtendedPictographic(cp) || isEmojiModifierCp(cp);
 // The three keycap bases (digit, `#`, `*`) Unicode's keycap grammar allows
 // before VS16 + U+20E3 COMBINING ENCLOSING KEYCAP (1️⃣ #️⃣ *️⃣ … 9️⃣). None is
-// Extended_Pictographic or Emoji_Modifier, so EMOJI_LEFT misses them; the
+// Extended_Pictographic or Emoji_Modifier, so isEmojiLeft misses them; the
 // presentation-selector check accepts one ONLY when the required U+20E3 keycap
 // actually follows the selector (see isEmojiPresentationSelector). A bare
 // digit/`#`/`*` + VS with no keycap is NOT a glyph — it is a hidden presentation
 // selector spliced after ordinary text, the top low-effort VS-smuggling shape —
 // so it fails closed and is stripped. The base set is confined to the keycap
-// check (never folded into EMOJI_LEFT) so it cannot loosen the ZWJ carve-out.
+// check (never folded into isEmojiLeft) so it cannot loosen the ZWJ carve-out.
 const KEYCAP_BASE = /[0-9#*]/u;
 // U+20E3 COMBINING ENCLOSING KEYCAP — the mandatory terminator of a keycap
 // sequence, the one signal that a digit/`#`/`*` + VS16 is a real glyph.
 const COMBINING_KEYCAP = 0x20e3;
 // Right side of an emoji joiner is always the next component's base pictograph.
-const EMOJI_BASE = /\p{Extended_Pictographic}/u;
+/** @param {number} cp @returns {boolean} */
+const isEmojiBase = (cp) => isExtendedPictographic(cp);
 // A variation selector legitimately sits between a base pictograph and a
 // following ZWJ (🏳️‍🌈 = flag base, VS16, ZWJ, rainbow; 👁️‍🗨️), so the joiner's real
 // left neighbor for the emoji test is the pictograph, not the selector.
 const VARIATION_SELECTOR = new RegExp(`[${VS}]`, "u");
-// Code-point twins of the four single-character classes above, memoized: the
-// carve analysis asks these per invisible (and per neighbour), and a Unicode
-// property class costs far more than a table hit. See memoizedCpPredicate.
-const isEmojiLeft = memoizedCpPredicate(EMOJI_LEFT);
-const isEmojiBase = memoizedCpPredicate(EMOJI_BASE);
+// Code-point twin of KEYCAP_BASE (see memoizedCpPredicate).
 const isKeycapBase = memoizedCpPredicate(KEYCAP_BASE);
-const isVariationSelectorCp = memoizedCpPredicate(VARIATION_SELECTOR);
 // U+FE0F (VS16) forces emoji presentation, U+FE0E (VS15) forces text
 // presentation (☺︎ vs ☺); either one directly after a pictograph is part of a
 // visible glyph, not a hidden variation-selector run.
@@ -444,6 +453,68 @@ const REGISTERED_TAG_PAYLOADS = new Set(["gbeng", "gbsct", "gbwls"]);
 // a malformed-but-registered-prefix run can never carry a long ASCII rider.
 const MAX_TAG_SPEC_CHARS = 6;
 
+// ─── Emoji glyph spelling ─────────────────────────────────────────────────────
+// Some preserved invisibles are part of a glyph's spelling: an RGI subdivision
+// flag's tags, the VS16 a text-default emoji (Emoji but not Emoji_Presentation:
+// ⚠ ✔ 🏳 ❤, keycaps) needs, and a ZWJ between two pictographs (👨‍👩‍👧, 🏳️‍🌈).
+// They are KIND_GLYPH: preserved whenever the carve-out is on and charged to no
+// budget, since charging them made ten Scotland flags or fifty ⚠️ lines read as
+// a covert channel. A VS16 on an Emoji_Presentation base (😀️) and VS15 change
+// nothing that renders and keep their budget.
+//
+// The ZWJ rule is UAX #29's GB11, not the RGI list, so an unregistered pair
+// (😀‍😀) is exempt too: one bit per pair of adjacent pictographs, the accepted
+// residual.
+const VS16 = 0xfe0f;
+
+/** Whether `cp` is in an emoji property, read off its cpProps `bit` below
+ * CP_PROPS_END and off `spans` above it; -1 is in none.
+ * @param {number} cp @param {number} bit
+ * @param {ReadonlyArray<readonly [number, number]>} spans
+ * @returns {boolean} */
+function hasEmojiProp(cp, bit, spans) {
+  if (cp < 0) return false;
+  if (cp >= CP_PROPS_END) return inSpans(spans, cp);
+  return (cpProps(cp) & bit) !== 0;
+}
+
+/** Emoji but not Emoji_Presentation. @param {number} cp @returns {boolean} */
+const isTextDefaultEmoji = (cp) =>
+  hasEmojiProp(cp, PROP_EMOJI_TEXT_DEFAULT, EMOJI_TEXT_DEFAULT);
+/** A skin tone. @param {number} cp @returns {boolean} */
+const isEmojiModifierCp = (cp) =>
+  hasEmojiProp(cp, PROP_EMOJI_MODIFIER, EMOJI_MODIFIER);
+/** Extended_Pictographic. @param {number} cp @returns {boolean} */
+const isExtendedPictographic = (cp) =>
+  hasEmojiProp(cp, PROP_EXTENDED_PICTOGRAPHIC, EXTENDED_PICTOGRAPHIC);
+
+/**
+ * Upgrade to KIND_GLYPH each preserved VS16 on a text-default emoji, and each
+ * preserved ZWJ GB11 keeps inside one grapheme (`ExtPict Extend* ZWJ ×
+ * ExtPict`, Extend read as selectors and skin tones). Each walk stops at a ZWJ,
+ * which is not Extend, so the pass is linear.
+ * @param {Int32Array} cps @param {Int32Array} invisible  ascending indices
+ * @param {Uint8Array} kind  updated in place
+ */
+function markRegisteredGlyphs(cps, invisible, kind) {
+  for (const i of invisible) {
+    if (cps[i] === VS16) {
+      if (kind[i] === KIND_EMOJIVS && i > 0 && isTextDefaultEmoji(cps[i - 1]))
+        kind[i] = KIND_GLYPH;
+      continue;
+    }
+    if (kind[i] !== KIND_JOINER || cps[i] !== ZWJ) continue;
+    if (!isExtendedPictographic(i + 1 < cps.length ? cps[i + 1] : -1)) continue;
+    let p = i - 1;
+    while (
+      p >= 0 &&
+      (isVariationSelectorCp(cps[p]) || isEmojiModifierCp(cps[p]))
+    )
+      p--;
+    if (p >= 0 && isExtendedPictographic(cps[p])) kind[i] = KIND_GLYPH;
+  }
+}
+
 // ─── Ideographic variation selectors (VS17–VS256, U+E0100–U+E01EF) ────────────
 // An ideographic variation sequence is a CJK ideograph followed by a selector in
 // U+E0100–U+E01EF. Preserved ONLY when the immediately preceding code point is a
@@ -452,8 +523,8 @@ const MAX_TAG_SPEC_CHARS = 6;
 //
 // Derived from Unicode's own data rather than hand-transcribed block spans: the
 // Unified_Ideograph property IS the set of unified ideographs (URO + every
-// extension), versioned with the runtime's ICU, so a new extension arrives with
-// the Node upgrade instead of waiting for someone to notice. A hand-written
+// extension), generated from the pinned UCD, so a new extension arrives with
+// the next UCD refresh instead of waiting for someone to notice. A hand-written
 // table went stale exactly this way — it stopped at Extension H and so denied
 // the 4,298 Extension J ideographs (U+323B0–U+33479) a legitimate IVS base.
 //
@@ -464,42 +535,47 @@ const MAX_TAG_SPEC_CHARS = 6;
 // full stop anchor a variation selector.
 //
 // The two Compatibility Ideograph BLOCKS stay literal: they are not
-// Unified_Ideograph, and JS RegExp exposes no \p{Block=…}. Block boundaries are
+// Unified_Ideograph, and a block is not a property. Block boundaries are
 // immutable by Unicode's stability policy, so a literal span stays correct
 // forever; the contract test in test/invisible-unicode-tables.test.mjs pins
 // that every ASSIGNED code point inside them is a Script=Han letter.
 const IVS_MIN = 0xe0100;
 const IVS_MAX = 0xe01ef;
-const CJK_IDEOGRAPH_RE =
-  /[\p{Unified_Ideograph}\u{F900}-\u{FAFF}\u{2F800}-\u{2FA1F}]/u;
+/** @type {ReadonlyArray<readonly [number, number]>} */
+const CJK_COMPATIBILITY_IDEOGRAPH_BLOCKS = [
+  [0xf900, 0xfaff],
+  [0x2f800, 0x2fa1f],
+];
 
-/** True when `cp` is a CJK ideograph (the only base an ideographic variation
- * selector legitimately follows). -1 (past a string boundary) is not.
- * @type {(cp: number) => boolean} */
-const isCjkIdeograph = memoizedCpPredicate(CJK_IDEOGRAPH_RE);
+/** A CJK ideograph (the only legitimate IVS base); -1 is not.
+ * @param {number} cp @returns {boolean} */
+const inCjkIdeographTables = (cp) =>
+  inSpans(UNIFIED_IDEOGRAPH, cp) ||
+  inSpans(CJK_COMPATIBILITY_IDEOGRAPH_BLOCKS, cp);
+
+/** {@link inCjkIdeographTables} via cpProps. @param {number} cp @returns {boolean} */
+function isCjkIdeograph(cp) {
+  if (cp < 0 || cp >= CP_PROPS_END) return inCjkIdeographTables(cp);
+  return (cpProps(cp) & PROP_CJK_IDEOGRAPH) !== 0;
+}
 
 // Brahmic consonants: the only base a virama does half-form/conjunct work on.
 // A bare or base-less halant + ZWJ carries no rendering and is a smuggling
 // channel, so the Indic joiner is preserved only over one of these.
 //
-// The spans are GENERATED from the UCD (Indic_Syllabic_Category=Consonant,
-// restricted by Script) and live in ./joining-type.mjs alongside the virama
-// table they are read against — see scripts/gen-joining-type.mjs. They used to
-// be hand-typed per-block KA–HA approximations here, which swept up the holes
-// between the real consonants; ECMAScript exposes no
-// \p{Indic_Syllabic_Category=…} escape, and \p{Script=Devanagari} is the wrong
-// shape on its own (it also holds the independent vowels U+0904–U+0914, which a
-// virama never attaches to), so a generated table is the only drift-proof
-// answer. Re-exported here because it was part of this module's surface before
-// it moved, and because test/invisible-unicode-tables.test.mjs checks each span
-// against the script it claims.
+// The spans are GENERATED from the UCD (Indic_Syllabic_Category=Consonant in
+// every script that owns a virama) by scripts/gen-joining-type.mjs, since
+// \p{Script=…} also holds independent vowels a virama never attaches to.
+// Re-exported as part of this module's published surface.
 export { BRAHMIC_CONSONANT_RANGES } from "./joining-type.mjs";
 
 /** True when the code point `cp` is a Brahmic consonant; -1 (past a string
  * boundary) is not. A thin sign-guard over ./joining-type.mjs's table lookup.
  * @param {number} cp @returns {boolean} */
 function isBrahmicConsonantCp(cp) {
-  return cp >= 0 && isBrahmicConsonant(cp);
+  if (cp < 0) return false;
+  if (cp >= CP_PROPS_END) return isBrahmicConsonant(cp);
+  return (cpProps(cp) & PROP_BRAHMIC_CONSONANT) !== 0;
 }
 
 // ─── Blank-filler carve-out (Braille / archaic Hangul) ───────────────────────
@@ -530,11 +606,9 @@ const HANGUL_FILLERS = new Set([0x115f, 0x1160, 0x3164, 0xffa0]);
 // literal is invisible to the eye and a correctness landmine for the next editor.
 const GATED_BLANK_RE = new RegExp("[\\u115F\\u1160\\u2800\\u3164\\uFFA0]", "u");
 
-// Script=Braille, from the runtime's Unicode data (identical to
-// Script_Extensions=Braille — no character is shared with another script).
-const BRAILLE_RE = /\p{Script=Braille}/u;
-
-const isBrailleScript = memoizedCpPredicate(BRAILLE_RE);
+// Script=Braille (identical to Script_Extensions=Braille).
+/** @param {number} cp @returns {boolean} */
+const isBrailleScript = (cp) => inSpans(SCRIPT_BRAILLE, cp);
 
 /** A real (non-blank) Braille cell — the anchoring neighbour for a U+2800 blank.
  * @param {number} cp @returns {boolean} */
@@ -542,14 +616,11 @@ function isBrailleCell(cp) {
   return cp !== BRAILLE_BLANK && isBrailleScript(cp);
 }
 
-// Script=Hangul, straight from the runtime's Unicode data. NOT
-// Script_Extensions=Hangul: that set also holds the CJK punctuation Korean text
-// shares with Chinese and Japanese (U+3001 IDEOGRAPHIC COMMA, U+30FB KATAKANA
-// MIDDLE DOT, U+FF61–U+FF65 …), so a Japanese middle dot would anchor — and
-// thereby preserve — a Hangul filler in text with no Hangul in it at all.
-const HANGUL_RE = /\p{Script=Hangul}/u;
-
-const isHangulScript = memoizedCpPredicate(HANGUL_RE);
+// Script=Hangul. NOT Script_Extensions=Hangul: that also holds CJK punctuation
+// (U+3001, U+30FB, U+FF61–U+FF65 …), so a Japanese middle dot would anchor a
+// Hangul filler in text with no Hangul in it at all.
+/** @param {number} cp @returns {boolean} */
+const isHangulScript = (cp) => inSpans(SCRIPT_HANGUL, cp);
 
 /** A Hangul jamo/syllable (NOT itself one of the fillers) — the anchoring
  * neighbour for a Hangul filler. @param {number} cp @returns {boolean} */
@@ -577,7 +648,8 @@ const CODE_BLANK = 3;
 const KIND_NONE = 0;
 const KIND_JOINER = 1;
 const KIND_EMOJIVS = 2;
-const KIND_TAG = 3;
+// Part of an emoji glyph's spelling: outside every budget.
+const KIND_GLYPH = 3;
 const KIND_STDVS = 4;
 const KIND_IVS = 5;
 const KIND_BLANK = 6;
@@ -608,9 +680,12 @@ for (const [code, codepoints] of /** @type {[number, Iterable<number>][]} */ ([
   for (const cp of codepoints)
     if (!TRACKED_INVISIBLE.has(cp)) TRACKED_INVISIBLE.set(cp, code);
 
-// No tracked code point sits below this, so ASCII and Latin-1 text answers the
-// classifier without touching the map at all.
-const MIN_TRACKED_CP = Math.min(...TRACKED_INVISIBLE.keys());
+// The same classes for the BMP and SMP by array index (128 KB): every visible
+// character asks, and a hash lookup per character was a measurable cost.
+const TRACKED_TABLE_END = 0x20000;
+const TRACKED_LOW = new Uint8Array(TRACKED_TABLE_END);
+for (const [cp, code] of TRACKED_INVISIBLE)
+  if (cp < TRACKED_TABLE_END) TRACKED_LOW[cp] = code;
 
 /**
  * The CODE_* class a code point belongs to, or CODE_VISIBLE when it is not
@@ -619,9 +694,25 @@ const MIN_TRACKED_CP = Math.min(...TRACKED_INVISIBLE.keys());
  * @returns {number}
  */
 function classifyCp(cp) {
-  if (cp < MIN_TRACKED_CP) return CODE_VISIBLE;
+  if (cp < TRACKED_TABLE_END) return TRACKED_LOW[cp];
   return TRACKED_INVISIBLE.get(cp) ?? CODE_VISIBLE;
 }
+
+/** One of the {@link VS} selectors, read off the class table; the check below
+ * fails loudly if a VS code point were ever classified otherwise.
+ * @param {number} cp @returns {boolean} */
+function isVariationSelectorCp(cp) {
+  return cp >= 0 && classifyCp(cp) === CODE_VS;
+}
+for (const ch of VS)
+  if (!isVariationSelectorCp(/** @type {number} */ (ch.codePointAt(0))))
+    /* c8 ignore start -- an import-time consistency check of two committed
+       tables; it fires only if a regeneration broke one, which no test can
+       stage without a broken table to import. */
+    throw new Error(
+      `variation selector U+${ch.codePointAt(0)?.toString(16)} is not classified CODE_VS`,
+    );
+/* c8 ignore stop */
 
 // Distinct code points a memoizedCpPredicate will remember. Comfortably above
 // the character repertoire of any real document (and of every test corpus here)
@@ -634,10 +725,9 @@ const CP_PREDICATE_MEMO_CAP = 4096;
  *
  * The carve analysis asks these of the same handful of code points over and
  * over — a document is a few hundred distinct characters repeated — and each
- * ask otherwise costs a `String.fromCodePoint` allocation plus a Unicode
- * property-class match. The memo is a pure accelerator: it answers exactly what
- * the RegExp answers, for the same input, forever (a code point's Unicode
- * properties do not change inside a process).
+ * ask otherwise costs a `String.fromCodePoint` allocation plus a regex match.
+ * The memo is a pure accelerator: it answers exactly what the RegExp answers,
+ * for the same input, forever.
  *
  * The entry cap is a MEMORY policy, not a scan bound: past it the predicate
  * still answers every code point, just without recording new ones, so no input
@@ -731,9 +821,64 @@ function codePointLength(text) {
  * @param {string} jt @returns {boolean} */
 const isCursiveLetter = (jt) => jt === "D" || jt === "R" || jt === "L";
 
+// Every per-code-point Unicode table the carve reads, cached below CP_PROPS_END
+// (BMP + SMP) by array index: a binary search per ask was the analysis' largest
+// cost on Persian prose and ZWJ-dense pages. An entry packs the Joining_Type's
+// index into JOINING_TYPES (never 0, so 0 means "not yet asked") with one bit
+// per yes/no table; above the end the tables are searched directly.
+const CP_PROPS_END = 0x20000;
+const JOINING_TYPES = ["", "C", "D", "R", "L", "T", "U"];
+const PROP_TYPE_MASK = 0b111;
+const PROP_VIRAMA = 0b1000;
+const PROP_BRAHMIC_CONSONANT = 0b10000;
+const PROP_EMOJI_TEXT_DEFAULT = 0b100000;
+const PROP_EMOJI_MODIFIER = 0b1000000;
+const PROP_CJK_IDEOGRAPH = 0b10000000;
+const PROP_EXTENDED_PICTOGRAPHIC = 0b100000000;
+const PROP_JOINING_LETTER = 0b1000000000;
+/** @type {Uint16Array | null} */
+let cpPropsTable = null;
+const propsTable = () => (cpPropsTable ??= new Uint16Array(CP_PROPS_END));
+
+/** The packed entry for `cp` (0 <= cp < CP_PROPS_END). @param {number} cp @returns {number} */
+function cpProps(cp) {
+  const table = propsTable();
+  const known = table[cp];
+  if (known !== 0) return known;
+  const type = JOINING_TYPES.indexOf(joiningType(cp));
+  /* c8 ignore start -- the generated table holds only the types listed in
+     JOINING_TYPES; this fails loudly if a regeneration ever adds another. */
+  if (type < 1)
+    throw new Error(`unknown Joining_Type for U+${cp.toString(16)}`);
+  /* c8 ignore stop */
+  const props =
+    type |
+    (isCursiveLetter(JOINING_TYPES[type]) || isBrahmicConsonant(cp)
+      ? PROP_JOINING_LETTER
+      : 0) |
+    (isVirama(cp) ? PROP_VIRAMA : 0) |
+    (isBrahmicConsonant(cp) ? PROP_BRAHMIC_CONSONANT : 0) |
+    (inSpans(EMOJI_TEXT_DEFAULT, cp) ? PROP_EMOJI_TEXT_DEFAULT : 0) |
+    (inSpans(EMOJI_MODIFIER, cp) ? PROP_EMOJI_MODIFIER : 0) |
+    (inCjkIdeographTables(cp) ? PROP_CJK_IDEOGRAPH : 0) |
+    (inSpans(EXTENDED_PICTOGRAPHIC, cp) ? PROP_EXTENDED_PICTOGRAPHIC : 0);
+  table[cp] = props;
+  return props;
+}
+
 /** The Joining_Type of a code point, or "U" for -1 (past a string boundary).
  * @param {number} cp @returns {string} */
-const jtOf = (cp) => (cp < 0 ? "U" : joiningType(cp));
+function jtOf(cp) {
+  if (cp < 0) return "U";
+  if (cp >= CP_PROPS_END) return joiningType(cp);
+  return JOINING_TYPES[cpProps(cp) & PROP_TYPE_MASK];
+}
+
+/** @param {number} cp @returns {boolean} */
+function isViramaCp(cp) {
+  if (cp >= CP_PROPS_END) return isVirama(cp);
+  return (cpProps(cp) & PROP_VIRAMA) !== 0;
+}
 
 /** True when `cp` is itself a ZWNJ/ZWJ (used to reject joiner runs).
  * @param {number} cp @returns {boolean} */
@@ -784,8 +929,55 @@ function followsBrahmicConjunct(cps, i) {
     classifyCp(cps[j]) !== CODE_VISIBLE
   )
     j--;
-  if (j < 0 || !isVirama(cps[j])) return false;
+  if (j < 0 || !isViramaCp(cps[j])) return false;
   return isBrahmicConsonantCp(effectiveNeighbor(cps, j, -1));
+}
+
+/** The visible joining letters: the cover that funds joiners past
+ * PRESERVE_HARD_CAP. @param {Int32Array} cps @param {Uint8Array} codes
+ * @returns {number} */
+function joiningLetterCount(cps, codes) {
+  const table = propsTable();
+  let letters = 0;
+  for (let i = 0; i < cps.length; i++) {
+    const cp = cps[i];
+    if (codes[i] !== CODE_VISIBLE) continue;
+    // The cache read in place: this visits every code point of a joiner-dense
+    // document, and a call per code point was most of what it cost.
+    if (
+      cp < CP_PROPS_END
+        ? ((table[cp] || cpProps(cp)) & PROP_JOINING_LETTER) !== 0
+        : isJoiningLetter(cp)
+    )
+      letters++;
+  }
+  return letters;
+}
+
+/** A cursive letter or Brahmic consonant. @param {number} cp @returns {boolean} */
+function isJoiningLetter(cp) {
+  return cp >= 0x80 && (isCursiveLetter(jtOf(cp)) || isBrahmicConsonantCp(cp));
+}
+
+/**
+ * True when the ZWJ at `cps[i]` sits between a Brahmic consonant and the virama
+ * after it — Unicode's spelling for the Bengali RA with ya-phala, the
+ * Devanagari eyelash RA and the Sinhala touching letters. The mirror of
+ * {@link followsBrahmicConjunct}: it steps right over removable invisibles.
+ * @param {Int32Array} cps @param {number} i
+ * @returns {boolean}
+ */
+function precedesBrahmicVirama(cps, i) {
+  if (cps[i] !== ZWJ) return false;
+  let j = i + 1;
+  while (
+    j < cps.length &&
+    !isJoinControl(cps[j]) &&
+    classifyCp(cps[j]) !== CODE_VISIBLE
+  )
+    j++;
+  if (j >= cps.length || !isViramaCp(cps[j])) return false;
+  return isBrahmicConsonantCp(effectiveNeighbor(cps, i, -1));
 }
 
 /**
@@ -793,7 +985,8 @@ function followsBrahmicConjunct(cps, i) {
  * preserved rather than stripped, decided from the neighbours' Joining_Type:
  *   - emoji ZWJ: between two emoji components (its left pictograph may sit behind
  *     a VS16, so step over selectors — see leftNonSelector);
- *   - Indic joiner: after a virama that sits on a real Brahmic consonant;
+ *   - Indic joiner: after a virama that sits on a real Brahmic consonant, or a
+ *     ZWJ between a consonant and the virama that follows it;
  *   - Arabic-family joiner: between two cursive letters (ZWNJ needs both, ZWJ at
  *     least one — it forces a connected form). A joiner whose effective neighbour
  *     is ANOTHER joiner is a run (a zero-width payload channel) and is rejected.
@@ -814,8 +1007,9 @@ function isPreservedJoiner(cps, i) {
     isEmojiBase(rightNonSelector(cps, i))
   )
     return true;
-  // Indic: meaningful only after a virama sitting on a real consonant base.
-  if (followsBrahmicConjunct(cps, i)) return true;
+  // Indic: meaningful only beside a virama that sits on a real consonant base.
+  if (followsBrahmicConjunct(cps, i) || precedesBrahmicVirama(cps, i))
+    return true;
   // Arabic-family cursive joining, on the nearest non-Transparent neighbours.
   const left = effectiveNeighbor(cps, i, -1);
   const right = effectiveNeighbor(cps, i, 1);
@@ -855,7 +1049,7 @@ function isEmojiPresentationSelector(cps, i) {
  * floor counts only that, so meaningful joiners/selectors never push honest
  * prose over the threshold.
  * @param {Int32Array} cps
- * @returns {{ codes: Uint8Array, kind: Uint8Array, payloadInvis: number, visibleLen: number }}
+ * @returns {{ codes: Uint8Array, kind: Uint8Array, invisible: Int32Array, payloadInvis: number, visibleLen: number }}
  */
 function analyzeCarve(cps) {
   const codes = new Uint8Array(cps.length);
@@ -887,13 +1081,14 @@ function analyzeCarve(cps) {
   const tagKeep = hasTagBase ? markTagSequences(cps) : null;
   const kind = new Uint8Array(cps.length);
   for (const i of invisible) {
-    if (tagKeep !== null && tagKeep[i]) kind[i] = KIND_TAG;
+    if (tagKeep !== null && tagKeep[i]) kind[i] = KIND_GLYPH;
     else if (isPreservedJoiner(cps, i)) kind[i] = KIND_JOINER;
     else if (isEmojiPresentationSelector(cps, i)) kind[i] = KIND_EMOJIVS;
     else if (isStandardizedVariationSelector(cps, i)) kind[i] = KIND_STDVS;
     else if (isIdeographicVariationSelector(cps, i)) kind[i] = KIND_IVS;
     else if (isPreservedBlankFiller(cps, i)) kind[i] = KIND_BLANK;
   }
+  markRegisteredGlyphs(cps, invisible, kind);
   // Blank fillers are budgeted here, document-wide and all-or-nothing, against
   // the visible anchor-script text rather than against the joiner/selector
   // counter in carveStrip (see PRESERVED_BLANK_PER_ANCHOR for why the two
@@ -930,7 +1125,7 @@ function analyzeCarve(cps) {
   }
   let payloadInvis = 0;
   for (const i of invisible) if (kind[i] === KIND_NONE) payloadInvis++;
-  return { codes, kind, payloadInvis, visibleLen };
+  return { codes, kind, invisible, payloadInvis, visibleLen };
 }
 
 /**
@@ -949,12 +1144,13 @@ export function countPayloadInvisible(text) {
   // every code point — it is a necessary condition checked in full, not a scan
   // bound an attacker could paste past.
   if (!hasInvisibleCodePoint(text)) return 0;
-  return analyzeCarve(codePointArray(text)).payloadInvis;
+  return carveOf(text).analysis.payloadInvis;
 }
 
 /**
  * Bulk strip (the common path: {@link needsCarveOut} found nothing the
- * carve-out could apply to). A single regex pass removes every payload-
+ * carve-out could apply to; also the carve-free fallback a non-converging
+ * composition asks for). A single regex pass removes every payload-
  * capable char; `found` names the category codes present via `.search`
  * (which ignores the `g` lastIndex).
  * @param {string} body
@@ -1037,18 +1233,27 @@ function markTagSequences(cps) {
   return keep;
 }
 
+// The range the registered sequences' selectors span: a cheap pre-filter.
+const STANDARDIZED_SELECTOR_MIN = Math.min(
+  ...STANDARDIZED_VARIANTS.map(([, selector]) => selector),
+);
+const STANDARDIZED_SELECTOR_MAX = Math.max(
+  ...STANDARDIZED_VARIANTS.map(([, selector]) => selector),
+);
+
 /**
- * True when `cps[i]` is a standardized variation selector (U+FE00–U+FE0D) whose
- * immediately preceding code point forms a REGISTERED standardized variation
- * sequence (per the generated UCD table). Every unregistered FE00–FE0D selector
- * stays payload.
+ * True when `cps[i]` is a variation selector whose immediately preceding code
+ * point forms a REGISTERED standardized variation sequence with it (per the
+ * generated UCD table: VS1–VS14 and the Mongolian free variation selectors).
+ * Every unregistered pairing stays payload.
  * @param {Int32Array} cps @param {number} i
  * @returns {boolean}
  */
 function isStandardizedVariationSelector(cps, i) {
   const cp = cps[i];
-  if (cp < 0xfe00 || cp > 0xfe0d) return false;
-  return i > 0 ? isStandardizedVariant(cps[i - 1], cp) : false;
+  if (cp < STANDARDIZED_SELECTOR_MIN || cp > STANDARDIZED_SELECTOR_MAX)
+    return false;
+  return i > 0 && isStandardizedVariant(cps[i - 1], cp);
 }
 
 /**
@@ -1138,6 +1343,75 @@ function cpIndexOf(offsets, u16) {
   return lo;
 }
 
+/**
+ * True when a code point can only meet its left neighbour under a UAX #29 rule
+ * that reads those two code points alone. Only GB9c, GB11 and GB12/13 read
+ * further left, and each needs an Indic consonant, an Extended_Pictographic or
+ * a regional indicator on the RIGHT — which nothing below U+0900 but U+00A9 and
+ * U+00AE is, nor are the joiners, selectors, tags or CJK ideographs, in any
+ * Unicode version. Lone surrogates are left out: the segmenter reads UTF-16.
+ * @param {number} cp @returns {boolean}
+ */
+function contextFreeOnLeft(cp) {
+  if (cp < 0x900) return cp !== 0xa9 && cp !== 0xae;
+  if (cp === ZWNJ || cp === ZWJ) return true;
+  if (cp >= 0xfe00 && cp <= 0xfe0f) return true; // VS1–VS16
+  if (cp >= 0xe0020 && cp <= 0xe007f) return true; // tag characters
+  if (cp >= 0xe0100 && cp <= 0xe01ef) return true; // VS17–VS256
+  return isCjkIdeograph(cp);
+}
+
+// Distinct (left, right) pairs pairBreak remembers. Past the cap it declines,
+// and the caller asks the segmenter about the whole cluster instead.
+const PAIR_BREAK_MEMO_CAP = 4096;
+/** @type {Map<number, boolean>} */
+const PAIR_BREAK_MEMO = new Map();
+
+/**
+ * The segmenter's own verdict on a boundary between `left` and `right`, memoized
+ * per pair — or null when it could depend on further context (see
+ * {@link contextFreeOnLeft}) or the memo is full.
+ * @param {number} left @param {number} right
+ * @returns {boolean | null}
+ */
+function pairBreak(left, right) {
+  if (!contextFreeOnLeft(right) || (left >= 0xd800 && left <= 0xdfff))
+    return null;
+  const key = left * 0x110000 + right;
+  const hit = PAIR_BREAK_MEMO.get(key);
+  if (hit !== undefined) return hit;
+  if (PAIR_BREAK_MEMO.size >= PAIR_BREAK_MEMO_CAP) return null;
+  const pair = String.fromCodePoint(left, right);
+  const first = /** @type {{ segment: string }} */ (
+    graphemeSegmenter().segment(pair).containing(0)
+  );
+  const breaks = first.segment.length < pair.length;
+  PAIR_BREAK_MEMO.set(key, breaks);
+  return breaks;
+}
+
+/**
+ * The grapheme cluster containing code point `at`, read off {@link pairBreak}
+ * outward from it, or null where a verdict is missing.
+ * @param {Int32Array} cps @param {number} at
+ * @returns {{ start: number, end: number } | null}
+ */
+function localCluster(cps, at) {
+  let start = at;
+  for (; start > 0; start--) {
+    const breaks = pairBreak(cps[start - 1], cps[start]);
+    if (breaks === null) return null;
+    if (breaks) break;
+  }
+  let end = at + 1;
+  for (; end < cps.length; end++) {
+    const breaks = pairBreak(cps[end - 1], cps[end]);
+    if (breaks === null) return null;
+    if (breaks) break;
+  }
+  return { start, end };
+}
+
 // Above this share of the code points being carve-out CANDIDATES, resolving each
 // candidate's cluster with `Segments.containing` costs more than segmenting the
 // document once from the start (a `containing` call is a few times dearer than
@@ -1155,14 +1429,26 @@ const CONTAINING_CANDIDATE_SHARE = 4;
  * the clusters are resolved on demand around the candidates rather than by
  * segmenting the whole document — the difference between reading one emoji at
  * the end of an 8 MB log and segmenting the 8 MB.
- * @param {string} body @param {Int32Array} offsets @param {number} candidates
+ *
+ * Each candidate is first resolved by {@link localCluster}, falling back to the
+ * segmenter only where that has no verdict: a `containing` call per joiner was
+ * most of what carving a long Persian document cost.
+ * @param {string} body @param {Int32Array} cps
+ * @param {() => Int32Array} offsetsOf  {@link u16Offsets} of `cps`, asked for
+ *   only once the segmenter is
+ * @param {number} candidates
  * @returns {(cp: number) => { start: number, end: number }}
  */
-function clusterResolver(body, offsets, candidates) {
-  const cpCount = offsets.length - 1;
+function clusterResolver(body, cps, offsetsOf, candidates) {
+  const cpCount = cps.length;
   if (candidates * CONTAINING_CANDIDATE_SHARE < cpCount) {
-    const segments = graphemeSegmenter().segment(body);
+    /** @type {Intl.Segments | null} */
+    let segments = null;
     return (cp) => {
+      const local = localCluster(cps, cp);
+      if (local !== null) return local;
+      segments ??= graphemeSegmenter().segment(body);
+      const offsets = offsetsOf();
       // `offsets[cp]` is inside the string for every code-point index the walk
       // asks about, so the segment always exists.
       const found = /** @type {{ index: number, segment: string }} */ (
@@ -1175,13 +1461,17 @@ function clusterResolver(body, offsets, candidates) {
     };
   }
   // Dense candidates: walk the segmenter forward instead, keeping a code-point
-  // cursor in step with it so no boundary needs searching for. The iterator is
-  // abandoned wherever the last candidate leaves it, so a document whose
-  // preserve budget is spent in its first line is never segmented past it.
-  const iterator = graphemeSegmenter().segment(body)[Symbol.iterator]();
+  // cursor in step with it. Candidates arrive in increasing order, so this is
+  // one pass, abandoned wherever the last candidate leaves it.
+  /** @type {Iterator<Intl.SegmentData> | null} */
+  let iterator = null;
   let start = 0;
   let end = 0;
   return (cp) => {
+    const local = localCluster(cps, cp);
+    if (local !== null) return local;
+    iterator ??= graphemeSegmenter().segment(body)[Symbol.iterator]();
+    const offsets = offsetsOf();
     while (end <= cp) {
       // ECMA-402 guarantees the segments partition the input, so every code
       // point inside it has a cluster and the iterator cannot run out first; if
@@ -1222,49 +1512,114 @@ function clusterResolver(body, offsets, candidates) {
  * makes the caller claim a strip that did not happen, and a stuffed channel
  * surfaces as its category once it overruns the budget.
  * @param {string} body
- * @param {Int32Array} [cps]  `body`'s code points, when the caller already has them
- * @param {ReturnType<typeof analyzeCarve>} [analysis]  likewise the analysis
- * @returns {{ cleaned: string, found: string[] }}
+ * @param {Int32Array} cps  `body`'s code points
+ * @param {ReturnType<typeof analyzeCarve>} analysis  the analysis of `cps`
+ * @returns {{ cleaned: string, found: string[], removed: number }}
  */
-function carveStrip(
-  body,
-  cps = codePointArray(body),
-  analysis = analyzeCarve(cps),
-) {
+function carveStrip(body, cps, analysis) {
+  const walk = carveWalk(body, cps, analysis, true);
+  const kept = /** @type {string[]} */ (walk.kept);
+  const found = CHECKS.filter(([code]) => walk.foundCodes.has(code)).map(
+    ([code]) => code,
+  );
+  return { cleaned: kept.join(""), found, removed: walk.removed };
+}
+
+// A low surrogate that does not complete a pair.
+const LONE_LOW_SURROGATE_RE = /(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/;
+
+/** @param {number} cp @returns {boolean} */
+const isHighSurrogate = (cp) => cp >= 0xd800 && cp <= 0xdbff;
+/** @param {number} cp @returns {boolean} */
+const isLowSurrogate = (cp) => cp >= 0xdc00 && cp <= 0xdfff;
+
+/**
+ * How many code points {@link carveStrip} removes from `body`, without
+ * building the cleaned text — all a verdict needs.
+ * @param {string} body @param {Int32Array} cps
+ * @param {ReturnType<typeof analyzeCarve>} analysis
+ * @returns {number}
+ */
+function carveRemoved(body, cps, analysis) {
+  return carveWalk(body, cps, analysis, false).removed;
+}
+
+/**
+ * The walk both of the above read (see {@link carveStrip}); `kept` is null
+ * unless `build`, and `foundCodes` is read only off a built walk.
+ * @param {string} body @param {Int32Array} cps
+ * @param {ReturnType<typeof analyzeCarve>} analysis @param {boolean} build
+ * @returns {{ kept: string[] | null, foundCodes: Set<string | null>, removed: number }}
+ */
+function carveWalk(body, cps, analysis, build) {
   // Only PAYLOAD invisibles count toward the scatter floor, so a
   // meaningful-joiner-dense text (formal Persian, a long Devanagari conjunct
   // run) stays under it.
-  const { codes, kind, payloadInvis, visibleLen } = analysis;
+  const { codes, kind, invisible, payloadInvis, visibleLen } = analysis;
   // SCATTERED_THRESHOLD is the floor on payload invisibles: past it the document
   // is drowning in hidden bytes, so the carve-out is off and even a meaningful
   // joiner is stripped (threshold-evasion catch — over-strip beats under).
   const allowCarveOut = payloadInvis < SCATTERED_THRESHOLD;
+  const n = cps.length;
+  // Every code point that draws on the joiner/selector budget, in order. Blank
+  // fillers (budgeted in analyzeCarve) and glyph spelling are exempt.
+  const candidateBuffer = new Int32Array(allowCarveOut ? invisible.length : 0);
+  let candidateCount = 0;
+  // The exempt invisibles, every one of them preserved under allowCarveOut.
+  let exemptCount = 0;
+  if (allowCarveOut)
+    for (const k of invisible)
+      if (kind[k] === KIND_BLANK || kind[k] === KIND_GLYPH) exemptCount++;
+      else if (kind[k] !== KIND_NONE) candidateBuffer[candidateCount++] = k;
+  const candidates = candidateBuffer.subarray(0, candidateCount);
+  // A count-only walk needs no per-code-point pass where nothing but the
+  // exempt kinds survives: what it strips is every invisible not preserved,
+  // totalled at the end, and the run counters only reset there. A lone low
+  // surrogate is the exception — a strip can close a lone high one against it
+  // into a pair (see `removed`), which only the full loop counts.
+  const tally = !build && !LONE_LOW_SURROGATE_RE.test(body);
+
   // Document-wide preserve allowance, proportional to visible text but never
   // below the floor (see TOTAL_PRESERVED_JOINER_BUDGET / PRESERVED_JOINER_PER_VISIBLE)
-  // and never above PRESERVE_HARD_CAP — the absolute ceiling stops the channel
-  // scaling with attacker-supplied cover text.
-  const maxPreserved = Math.min(
+  // and never above PRESERVE_HARD_CAP. Every preserved kind draws on it.
+  const coverAllowance = Math.min(
     PRESERVE_HARD_CAP,
     Math.max(
       TOTAL_PRESERVED_JOINER_BUDGET,
       Math.ceil(visibleLen / PRESERVED_JOINER_PER_VISIBLE),
     ),
   );
+  // The allowance joining letters buy past the cap, for JOINERS alone (a
+  // selector beside Persian does no orthographic work). The total of every kind
+  // stays under it; non-joiners also stay under coverAllowance. Counted only
+  // when it could bind: the candidates outrun the cap and include a joiner.
+  const joinerAllowance =
+    candidates.length <= coverAllowance ||
+    !candidates.some((c) => kind[c] === KIND_JOINER)
+      ? coverAllowance
+      : Math.max(
+          coverAllowance,
+          Math.ceil(
+            joiningLetterCount(cps, codes) / PRESERVED_JOINER_PER_VISIBLE,
+          ),
+        );
 
-  const n = cps.length;
-  // Every code point that draws on the joiner/selector budget, in order. Blank
-  // fillers are exempt (their allowance is already spent in analyzeCarve), so a
-  // cluster holding only those needs no boundary of its own.
-  /** @type {number[]} */
-  const candidates = [];
-  if (allowCarveOut)
-    for (let k = 0; k < n; k++)
-      if (kind[k] !== KIND_NONE && kind[k] !== KIND_BLANK) candidates.push(k);
-
+  /** @type {Set<string | null>} */
   const foundCodes = new Set();
   /** @type {string[]} */
   const kept = [];
-  const offsets = u16Offsets(cps);
+  // Code points the cleaned text has fewer of than `body`: one per stripped
+  // code point, plus one where the strip closes a lone high surrogate against a
+  // lone low one into a pair — so it equals the `[...cleaned].length` gap.
+  let removed = 0;
+  // Whether the last code point was stripped, and the one kept before it.
+  let stripOpen = false;
+  let mergeLeft = -1;
+  // Only the built text and the segmenter speak UTF-16, so a count-only walk
+  // whose clusters all settle on pair verdicts never pays for the offsets.
+  /** @type {Int32Array | null} */
+  let offsets = null;
+  const offsetsOf = () => (offsets ??= u16Offsets(cps));
   // Start of the kept run currently being accumulated, in UTF-16 units. Output
   // is assembled from slices of `body` — one per uninterrupted kept run — rather
   // than a character at a time, so a document with nothing to strip costs one
@@ -1282,47 +1637,83 @@ function carveStrip(
   // surplus is stripped, closing the high-bit-rate variation-selector channel.
   let selectorRun = 0;
   // Preserved chars across the WHOLE string — never reset at a gap, so it bounds
-  // the document-wide channel joinerRun cannot. Past maxPreserved a preserved
+  // the document-wide channel joinerRun cannot. Past joinerAllowance a preserved
   // char is stripped and its category reported.
   let preservedTotal = 0;
+  // The non-joiner share of preservedTotal, bounded by coverAllowance.
+  let preservedOther = 0;
   let prevVisible = false;
 
+  // The first entry of `invisible` the emit loop has not passed.
+  let nextInvisible = 0;
   /** Emit `[from, to)` under a settled `fits`, updating every counter.
    * @param {number} from @param {number} to @param {boolean} fits */
   const emit = (from, to, fits) => {
+    if (tally && !fits) {
+      if (
+        (prevVisible && codes[from] === CODE_VISIBLE) ||
+        gapFrom(from + 1) < to
+      ) {
+        joinerRun = 0;
+        selectorRun = 0;
+      }
+      prevVisible = codes[to - 1] === CODE_VISIBLE;
+      return;
+    }
     for (let k = from; k < to; k++) {
       const code = codes[k];
       if (code === CODE_VISIBLE) {
-        // A visible char following another visible char is a real word/segment
-        // boundary, not a join — the joined cluster (if any) ended here.
-        if (prevVisible) {
+        // A stretch of visible code points at once, up to the next invisible:
+        // they stay inside the kept run, only the first can close a strip, and
+        // a visible char following another visible char is a real word/segment
+        // boundary, not a join — the joined cluster (if any) ended there.
+        while (nextInvisible < invisible.length && invisible[nextInvisible] < k)
+          nextInvisible++;
+        const stop =
+          nextInvisible < invisible.length
+            ? Math.min(to, invisible[nextInvisible])
+            : to;
+        if (stripOpen) {
+          stripOpen = false;
+          if (isHighSurrogate(mergeLeft) && isLowSurrogate(cps[k])) removed++;
+        }
+        if (prevVisible || stop - k > 1) {
           joinerRun = 0;
           selectorRun = 0;
         }
         prevVisible = true;
-        continue; // ordinary visible character: stays inside the kept run
+        k = stop - 1;
+        continue;
       }
-      // A blank filler rides on allowCarveOut alone (its own allowance is
-      // already spent in analyzeCarve); everything else rides on `fits`.
-      if (
-        kind[k] === KIND_BLANK ? allowCarveOut : fits && kind[k] !== KIND_NONE
-      ) {
+      // A blank filler and a glyph's spelling ride on allowCarveOut alone;
+      // everything else rides on `fits`.
+      const exempt = kind[k] === KIND_BLANK || kind[k] === KIND_GLYPH;
+      if (exempt ? allowCarveOut : fits && kind[k] !== KIND_NONE) {
         if (kind[k] === KIND_JOINER) joinerRun++;
         if (kind[k] === KIND_IVS || kind[k] === KIND_STDVS) selectorRun++;
-        if (kind[k] !== KIND_BLANK) preservedTotal++;
+        if (!exempt) preservedTotal++;
+        if (!exempt && kind[k] !== KIND_JOINER) preservedOther++;
         prevVisible = false; // a joiner/selector/tag/blank keeps the cluster open
+        stripOpen = false;
         continue;
       }
       foundCodes.add(CODE_CATEGORY[code]);
+      removed++;
+      if (!stripOpen) {
+        stripOpen = true;
+        mergeLeft = k > 0 ? cps[k - 1] : -1;
+      }
       prevVisible = false; // a stripped invisible neither opens nor closes a gap
-      if (offsets[k] > runStart) kept.push(body.slice(runStart, offsets[k]));
-      runStart = offsets[k + 1];
+      if (!build) continue;
+      const at = offsetsOf();
+      if (at[k] > runStart) kept.push(body.slice(runStart, at[k]));
+      runStart = at[k + 1];
     }
   };
 
   const clusterOf =
     candidates.length > 0
-      ? clusterResolver(body, offsets, candidates.length)
+      ? clusterResolver(body, cps, offsetsOf, candidates.length)
       : null;
   // The last index at which the emit loop resets the run counters — a visible
   // code point directly after another visible one. The condition reads only
@@ -1350,18 +1741,67 @@ function carveStrip(
 
   /** True when no cluster from here on can be preserved, so the rest of the
    * document is settled and needs no boundaries. Every term is monotone:
-   * `preservedTotal` only grows, and past `lastGap` the run counters only grow
-   * too, so a limit that is spent here is spent for good.
+   * `preservedTotal` and `preservedOther` only grow, and past `lastGap` the
+   * run counters only grow too, so a limit that is spent here is spent for good.
    * @param {number} at */
   const nothingLeftFits = (at) => {
-    if (preservedTotal >= maxPreserved) return true;
+    if (preservedTotal >= joinerAllowance) return true;
+    // Every non-joiner candidate needs room under coverAllowance.
+    const othersSpent = preservedOther >= coverAllowance;
+    if (othersSpent && leftJoiner === 0) return true;
     if (at <= lastGap) return false; // a reset ahead can reopen a spent run
-    if (leftOther > 0) return false; // a tag/presentation selector draws on neither run
+    if (!othersSpent && leftOther > 0) return false; // a presentation selector draws on neither run
     if (leftJoiner > 0 && joinerRun < CONSECUTIVE_JOINER_CAP) return false;
-    if (leftSelector > 0 && selectorRun < CONSECUTIVE_SELECTOR_CAP)
+    if (
+      !othersSpent &&
+      leftSelector > 0 &&
+      selectorRun < CONSECUTIVE_SELECTOR_CAP
+    )
       return false;
     return true;
   };
+
+  /** Take the candidates from index `from` up to code point `end` off the
+   * remaining counts. @param {number} from @param {number} end */
+  const settle = (from, end) => {
+    for (let j = from; j < candidates.length && candidates[j] < end; j++) {
+      if (kind[candidates[j]] === KIND_JOINER) leftJoiner--;
+      else if (
+        kind[candidates[j]] === KIND_IVS ||
+        kind[candidates[j]] === KIND_STDVS
+      )
+        leftSelector--;
+      else leftOther--;
+    }
+  };
+
+  // The first gap at or after a code-point index (n when none) — the next place
+  // the emit loop can reset a run counter. Asked in increasing order, so the
+  // cursor makes every reading together one pass.
+  let gap = -1;
+  /** @param {number} at */
+  const gapFrom = (at) => {
+    if (gap >= at) return gap;
+    gap = Math.max(at, 1);
+    while (
+      gap < n &&
+      !(codes[gap] === CODE_VISIBLE && codes[gap - 1] === CODE_VISIBLE)
+    )
+      gap++;
+    return gap;
+  };
+
+  /** True when candidate `c`, reached before the next gap, cannot be preserved:
+   * a limit it draws on is already spent, and nothing short of that gap
+   * restores one. Its whole cluster is then stripped, wherever it begins.
+   * @param {number} c */
+  const spent = (c) =>
+    preservedTotal >= joinerAllowance ||
+    (kind[c] === KIND_JOINER
+      ? joinerRun >= CONSECUTIVE_JOINER_CAP
+      : preservedOther >= coverAllowance ||
+        ((kind[c] === KIND_IVS || kind[c] === KIND_STDVS) &&
+          selectorRun >= CONSECUTIVE_SELECTOR_CAP));
 
   let k = 0;
   let next = 0;
@@ -1375,6 +1815,24 @@ function carveStrip(
       emit(k, n, false);
       break;
     }
+    // Strip a stretch of spent candidates in one emit, resolving only the
+    // cluster of the last: an ideograph-selector chain past its cap would
+    // otherwise pay a cluster lookup per selector for a verdict already known.
+    let last = next;
+    const reset = gapFrom(k);
+    while (
+      last < candidates.length &&
+      candidates[last] < reset &&
+      spent(candidates[last])
+    )
+      last++;
+    if (last > next) {
+      const { end } = clusterOf(candidates[last - 1]);
+      emit(k, end, false);
+      settle(next, end);
+      k = end;
+      continue;
+    }
     const { start, end } = clusterOf(candidates[next]);
     if (start > k) emit(k, start, false);
     // Charge the WHOLE cluster's preservables against every limit at once: if
@@ -1384,7 +1842,12 @@ function carveStrip(
     let joiners = 0;
     let selectors = 0;
     for (let j = start; j < end; j++) {
-      if (kind[j] === KIND_NONE || kind[j] === KIND_BLANK) continue;
+      if (
+        kind[j] === KIND_NONE ||
+        kind[j] === KIND_BLANK ||
+        kind[j] === KIND_GLYPH
+      )
+        continue;
       need++;
       if (kind[j] === KIND_JOINER) joiners++;
       if (kind[j] === KIND_IVS || kind[j] === KIND_STDVS) selectors++;
@@ -1408,29 +1871,51 @@ function carveStrip(
       }
       seenVisible = codes[j] === CODE_VISIBLE;
     }
-    for (let j = next; j < candidates.length && candidates[j] < end; j++) {
-      if (kind[candidates[j]] === KIND_JOINER) leftJoiner--;
-      else if (
-        kind[candidates[j]] === KIND_IVS ||
-        kind[candidates[j]] === KIND_STDVS
-      )
-        leftSelector--;
-      else leftOther--;
-    }
+    settle(next, end);
     emit(
       start,
       end,
-      preservedTotal + need <= maxPreserved &&
+      preservedTotal + need <= joinerAllowance &&
+        preservedOther + need - joiners <= coverAllowance &&
         runJoiner + joiners <= CONSECUTIVE_JOINER_CAP &&
         runSelector + selectors <= CONSECUTIVE_SELECTOR_CAP,
     );
     k = end;
   }
+  if (tally)
+    removed =
+      invisible.length - (allowCarveOut ? exemptCount : 0) - preservedTotal;
+  if (!build) return { kept: null, foundCodes, removed };
   kept.push(body.slice(runStart));
-  const found = CHECKS.filter(([code]) => foundCodes.has(code)).map(
-    ([code]) => code,
-  );
-  return { cleaned: kept.join(""), found };
+  return { kept, foundCodes, removed };
+}
+
+/**
+ * @typedef {{ body: string, cps: Int32Array,
+ *   analysis: ReturnType<typeof analyzeCarve>,
+ *   strip: { cleaned: string, found: string[], removed: number } | null,
+ *   removed: number | null }} CarveEntry
+ */
+
+/** @type {CarveEntry | null} */
+let lastCarve = null;
+
+/**
+ * The carve analysis of `body`, with the most recent one remembered — and its
+ * strip, or removal count, once asked for. One hook call often carves one
+ * document several times (the payload view, the effective count, then
+ * {@link isIncidentalInvisible}); every reading is a pure function of `body`,
+ * so the cache changes what a verdict costs, never the verdict. One entry,
+ * recorded only after the analysis returns.
+ * @param {string} body
+ * @returns {CarveEntry}
+ */
+function carveOf(body) {
+  if (lastCarve !== null && lastCarve.body === body) return lastCarve;
+  const cps = codePointArray(body);
+  const analysis = analyzeCarve(cps);
+  lastCarve = { body, cps, analysis, strip: null, removed: null };
+  return lastCarve;
 }
 
 // Any tag char (the whole U+E0000–U+E007F block is category Cf).
@@ -1458,17 +1943,21 @@ function needsCarveOut(body) {
 }
 
 /**
- * The `text` with every carve-out-PRESERVABLE invisible (joiners/selectors/tags/
- * blank fillers doing real rendering work) replaced by a space, leaving only the
- * PAYLOAD invisibles in place. The LONG_RUN injection probe runs over this so a
- * legitimate emoji/flag/variation sequence never trips the "possible injection
- * payload" marker (alert fatigue), while a genuine hidden run still surfaces.
+ * The `text` with every visible character and every carve-out-PRESERVABLE
+ * invisible (joiners/selectors/tags/blank fillers doing real rendering work)
+ * replaced by spaces — one per UTF-16 unit, so the view is index-aligned with
+ * `text` — leaving only the PAYLOAD invisibles in place. The LONG_RUN injection
+ * probe runs over this so a legitimate emoji/flag/variation sequence never trips
+ * the "possible injection payload" marker (alert fatigue), while a genuine
+ * hidden run still surfaces.
  * @param {string} text
  * @returns {string}
  */
 export function payloadInvisibleView(text) {
-  const cps = codePointArray(text);
-  const { codes, kind } = analyzeCarve(cps);
+  const {
+    cps,
+    analysis: { codes, kind },
+  } = carveOf(text);
   const offsets = u16Offsets(cps);
   /** @param {number} i */
   const isPayload = (i) => codes[i] !== CODE_VISIBLE && kind[i] === KIND_NONE;
@@ -1481,9 +1970,8 @@ export function payloadInvisibleView(text) {
   while (i < cps.length) {
     const maskFrom = i;
     while (i < cps.length && !isPayload(i)) i++;
-    // One space per masked CODE POINT, so the view stays code-point-aligned with
-    // `text` even where an astral character is two UTF-16 units wide.
-    if (i > maskFrom) parts.push(" ".repeat(i - maskFrom));
+    // One space per masked UTF-16 UNIT, so view indices are `text` indices.
+    if (i > maskFrom) parts.push(" ".repeat(offsets[i] - offsets[maskFrom]));
     const keepFrom = i;
     while (i < cps.length && isPayload(i)) i++;
     if (i > keepFrom) parts.push(text.slice(offsets[keepFrom], offsets[i]));
@@ -1514,13 +2002,36 @@ export function payloadInvisibleView(text) {
  * @returns {string | null}
  */
 export function payloadLongRunSample(text) {
-  // The view is code-point-for-code-point with `text` and only ever REPLACES an
-  // invisible with a space, so a run in the view is a run in `text`: no long run
-  // in the raw text means none in the view. This hides no payload — the bulk
-  // scan reads the whole text, and a run it finds still goes through the full
-  // carve analysis below to decide what of it is really payload.
-  if (!hasLongRun(text)) return null;
-  return findLongRuns(payloadInvisibleView(text)).next().value?.text ?? null;
+  return payloadLongRuns(text).next().value?.text ?? null;
+}
+
+/**
+ * Every payload-invisible LONG RUN in `text`, as {@link findLongRuns} reports
+ * them; `index` is valid in `text` (the view is index-aligned).
+ * @param {string} text
+ * @returns {Generator<{ index: number, text: string, charCount: number }>}
+ */
+function* payloadLongRuns(text) {
+  // The view only REPLACES invisibles with spaces, so no long run in `text`
+  // means none in the view. With the analysis in hand the question is answered
+  // off it exactly, cheaper than the regex on text dense with short runs.
+  const known = lastCarve?.body === text ? lastCarve.analysis : null;
+  if (known === null ? !hasLongRun(text) : !hasPayloadRun(known)) return;
+  yield* findLongRuns(payloadInvisibleView(text));
+}
+
+/** Whether the analysis holds {@link LONG_RUN_THRESHOLD} consecutive payload
+ * code points — exactly when {@link payloadInvisibleView} holds a long run.
+ * @param {ReturnType<typeof analyzeCarve>} analysis @returns {boolean} */
+function hasPayloadRun({ invisible, kind }) {
+  let run = 0; // payload code points in a row, ending at the previous invisible
+  let prev = -2;
+  for (const i of invisible) {
+    run = kind[i] !== KIND_NONE ? 0 : i === prev + 1 ? run + 1 : 1;
+    if (run >= LONG_RUN_THRESHOLD) return true;
+    prev = i;
+  }
+  return false;
 }
 
 /**
@@ -1553,12 +2064,20 @@ export function countEffectiveInvisible(text) {
   // the two would read different strings; that case pays for both separately.
   if (text.charCodeAt(0) === 0xfeff)
     return surplusOver(countPayloadInvisible(text), text, stripInvisible(text));
-  // Otherwise both terms are readings of ONE carve analysis of ONE string, so
-  // the analysis is done once and handed to the strip.
-  const cps = codePointArray(text);
-  const analysis = analyzeCarve(cps);
-  const { cleaned } = stripBody(text, cps, analysis);
-  return surplusOver(analysis.payloadInvis, text, cleaned, cps.length);
+  // Otherwise both terms read ONE carve analysis (see carveOf).
+  const entry = carveOf(text);
+  const payload = entry.analysis.payloadInvis;
+  if (!needsCarveOut(text))
+    return surplusOver(
+      payload,
+      text,
+      bulkStrip(text).cleaned,
+      entry.cps.length,
+    );
+  // Only the count is needed, so the walk need not assemble the text.
+  entry.removed ??=
+    entry.strip?.removed ?? carveRemoved(text, entry.cps, entry.analysis);
+  return payload + Math.max(0, entry.removed - payload);
 }
 
 /**
@@ -1610,6 +2129,27 @@ export function isIncidentalInvisible(text) {
 }
 
 /**
+ * THE decision whether `text` carries a payload-capable invisible channel: a
+ * payload LONG RUN, or {@link SCATTERED_THRESHOLD} or more effective payload
+ * invisibles. Every gate reads this one verdict, so a Persian paragraph cannot
+ * be a payload to one and clean to another. It stops at the first run, so an
+ * 8 MB field of short runs costs one record.
+ * @param {string} text  the text a consumer acts on, ANSI-stripped where its
+ *   surface can carry escapes (a sequence can hide invisibles)
+ * @returns {{ firstRun: { index: number, text: string, charCount: number } | null, invisibleCount: number, payloadCapable: boolean }}
+ */
+export function payloadVerdict(text) {
+  // The count first: it carves the text, which the run search then reads.
+  const invisibleCount = countEffectiveInvisible(text);
+  const firstRun = payloadLongRuns(text).next().value ?? null;
+  return {
+    firstRun,
+    invisibleCount,
+    payloadCapable: firstRun !== null || invisibleCount >= SCATTERED_THRESHOLD,
+  };
+}
+
+/**
  * Strip payload-capable invisible chars and report which categories were
  * removed. A single leading U+FEFF (BOM) is preserved as a legitimate marker;
  * interior BOMs and all soft hyphens (U+00AD) are stripped, since either can
@@ -1621,34 +2161,41 @@ export function isIncidentalInvisible(text) {
  * decide whether a leading BOM is genuinely leading: an interior BOM that an
  * ANSI-strip left at index 0 of `text` (e.g. `ESC[m + interior U+FEFF`) must NOT be treated as a
  * legitimate leading marker. Defaults to `text` for the common single-arg call.
+ *
+ * `carveOut: false` strips EVERY payload-capable invisible, preserved ones
+ * included — the monotone fallback for a composition that fails to converge.
  * @param {string} text
  * @param {string} [originalText]
+ * @param {{ carveOut?: boolean }} [options]
  * @returns {{ cleaned: string, found: string[] }}
  */
-export function stripInvisibleWithReport(text, originalText = text) {
+export function stripInvisibleWithReport(
+  text,
+  originalText = text,
+  { carveOut = true } = {},
+) {
   // Leading only when the BOM leads the ORIGINAL text (not merely `text` after an
   // ANSI strip shifted an interior BOM to index 0). The `text` guard keeps the
   // slice sound when the two disagree.
   const hasLeadingBom =
     originalText.charCodeAt(0) === 0xfeff && text.charCodeAt(0) === 0xfeff;
   const body = hasLeadingBom ? text.slice(1) : text;
-  const { cleaned, found } = stripBody(body);
+  const { cleaned, found } = carveOut ? stripBody(body) : bulkStrip(body);
   return { cleaned: hasLeadingBom ? BOM + cleaned : cleaned, found };
 }
 
 /**
  * The strip of a BOM-resolved body: the carve-out walk when anything in it could
- * be preserved, the single bulk regex pass otherwise. `cps` and `analysis` let a
- * caller that has already analyzed `body` hand the work over instead of paying
- * for it twice.
+ * be preserved, the single bulk regex pass otherwise.
  * @param {string} body
- * @param {Int32Array} [cps]
- * @param {ReturnType<typeof analyzeCarve>} [analysis]
  * @returns {{ cleaned: string, found: string[] }}
  */
-function stripBody(body, cps, analysis) {
+function stripBody(body) {
   if (!needsCarveOut(body)) return bulkStrip(body);
-  return carveStrip(body, cps, analysis);
+  const entry = carveOf(body);
+  entry.strip ??= carveStrip(body, entry.cps, entry.analysis);
+  // A copy, so a caller that edits its `found` cannot edit the cached one.
+  return { cleaned: entry.strip.cleaned, found: [...entry.strip.found] };
 }
 
 /**

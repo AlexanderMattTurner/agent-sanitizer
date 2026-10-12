@@ -100,22 +100,11 @@ UNRESOLVABLE_SITES = {
 }
 
 # Patterns regexploit cannot parse even after the translations below, keyed by
-# (file, pattern). All use \p{...} property escapes — single-character-class
-# constructs with no backtracking ambiguity of their own, but with no Python-re
-# spelling regexploit could analyze. Reviewed by hand: each is a bare character
-# class (optionally in a small alternation) with no nested quantifier.
-UNANALYZABLE_JS_ONLY = {
-    ("src/invisible.mjs", r"[\p{Extended_Pictographic}\p{Emoji_Modifier}]"),
-    ("src/invisible.mjs", r"\p{Extended_Pictographic}"),
-    (
-        "src/invisible.mjs",
-        r"[\p{Unified_Ideograph}\u{F900}-\u{FAFF}\u{2F800}-\u{2FA1F}]",
-    ),
-    ("src/invisible.mjs", r"\p{Script=Braille}"),
-    ("src/invisible.mjs", r"\p{Script=Hangul}"),
-    ("src/confusables.mjs", r"^\p{Script=Latin}$"),
-    ("src/confusables.mjs", r"^\p{M}$"),
-}
+# (file, pattern), each reviewed by hand. Empty: its only members were the
+# \p{...} property escapes src/invisible.mjs and src/confusables.mjs used to ask
+# the runtime for, and test/unicode-property-pin.test.mjs now fails on any such
+# escape in src/, so those properties are pinned range tables rather than regexes.
+UNANALYZABLE_JS_ONLY: set[tuple[str, str]] = set()
 
 # JS `(?<name>` -> Python `(?P<name>`, leaving lookbehinds `(?<=` / `(?<!`
 # untouched. Exact and backtracking-neutral: group naming has no effect on the

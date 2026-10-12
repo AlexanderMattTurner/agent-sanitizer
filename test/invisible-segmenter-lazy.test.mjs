@@ -29,10 +29,13 @@ class CountingSegmenter extends RealSegmenter {
 const NO_CANDIDATES = "plain ascii";
 
 /**
- * An emoji ZWJ sequence: the joiner is a preserve candidate, so the carve
- * analysis has to resolve the cluster it sits in and reaches the segmenter.
+ * An emoji ZWJ GB11 does not join (a skin tone with no pictograph before it):
+ * the joiner is a preserve candidate (one between two pictographs would be an
+ * exempt glyph and never reach the budget), and the pictograph after it leaves
+ * the pair verdict context-dependent, so the carve analysis has to resolve the
+ * cluster through the segmenter.
  */
-const NEEDS_CLUSTERS = "hello \u{1F469}‍\u{1F4BB} world";
+const NEEDS_CLUSTERS = "hello x\u{1F3FD}\u200d\u{1F600} world";
 
 Object.defineProperty(Intl, "Segmenter", {
   value: CountingSegmenter,

@@ -17,6 +17,13 @@
  * scattered sub-run invisibles), then assert scanText's findings match the
  * payload set EXACTLY — count, order, line, charCount, method, decoded — and
  * that benign density never shifts the scattered count.
+ *
+ * "Never" holds while the carve-out is on. scanText reads payloadVerdict, the
+ * gate's own count, and once the payload invisibles alone reach
+ * SCATTERED_THRESHOLD the carve-out switches off and the strip removes the
+ * benign joiners and selectors too; the count then reports them, because they
+ * were removed. The model below computes that from each token's hidden code
+ * points, never from the carve.
  */
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
@@ -106,6 +113,13 @@ const carvedBenignPiece = fc
     cp(0x1f3f3) + VS16 + ZWJ + cp(0x1f308),
   )
   .map((t) => ({ kind: "benign", t }));
+// The scatter test draws up to a hundred benign pieces, so it sets each in a
+// phrase carrying at least PRESERVED_JOINER_PER_VISIBLE visible characters —
+// the density real prose has. A bare `❤︎ ❤︎ ❤︎ …` outruns the cover budget by
+// design and the gate counts the overrun as payload; that is the budget's own
+// suite's subject (test/invisible.test.mjs), not this one's.
+const inProse = (arbitrary) =>
+  arbitrary.map((p) => ({ ...p, t: `see ${p.t} here` }));
 const payloadPiece = fc
   .constantFrom(...PAYLOAD_TOKENS)
   .map((p) => ({ kind: "payload", ...p }));
@@ -113,25 +127,48 @@ const payloadPiece = fc
 // never merge into a long run however they are interleaved.
 const scatterPiece = fc.constant({ kind: "scatter", t: `x${ZWSP}` });
 
+// Every hidden code point the benign tokens spell with: the joiners and the
+// presentation selectors. Read off the token text, not off the carve.
+const BENIGN_HIDDEN = new Set([ZWNJ, ZWJ, VS15, VS16]);
+
 /**
  * Join pieces with a single space (so adjacent invisible runs never merge) and
- * compute the EXACT finding scanText must report for each payload piece,
- * including its 1-based line number in the assembled document.
+ * compute the EXACT findings scanText must report: one per payload piece,
+ * with its 1-based line number in the assembled document, then the scattered
+ * finding. Scatter units are payload; so are the payload runs, which also
+ * count toward switching the carve-out off.
  */
 function buildDoc(pieces) {
   let text = "";
   const expected = [];
+  let planted = 0;
+  let payloadInvisible = 0;
+  let benignHidden = 0;
   for (const p of pieces) {
     if (text) text += " ";
-    if (p.kind === "payload")
+    if (p.kind === "payload") {
       expected.push({
         line: text.split("\n").length,
         charCount: p.charCount,
         method: p.method,
         decoded: p.decoded,
       });
+      payloadInvisible += p.charCount;
+    }
+    if (p.kind === "scatter") planted++;
+    if (p.kind === "benign")
+      benignHidden += [...p.t].filter((ch) => BENIGN_HIDDEN.has(ch)).length;
     text += p.t;
   }
+  const carveOff = planted + payloadInvisible >= SCATTERED_THRESHOLD;
+  const scattered = planted + (carveOff ? benignHidden : 0);
+  if (scattered >= SCATTERED_THRESHOLD)
+    expected.push({
+      line: null,
+      charCount: scattered,
+      method: "scattered invisible chars (possible threshold evasion)",
+      decoded: `[${scattered} invisible chars distributed across file]`,
+    });
   return { text, expected };
 }
 
@@ -155,8 +192,8 @@ describe("semantic-correctness fuzz: scanText precision on mixed documents", () 
   it("the scattered count tracks EXACTLY the planted scatter units, unmoved by benign emoji/joiner density", () => {
     const docGen = fc.array(
       fc.oneof(
-        { arbitrary: benignPiece, weight: 1 },
-        { arbitrary: carvedBenignPiece, weight: 3 },
+        { arbitrary: inProse(benignPiece), weight: 1 },
+        { arbitrary: inProse(carvedBenignPiece), weight: 3 },
         { arbitrary: scatterPiece, weight: 3 },
       ),
       // size:"max" makes fast-check actually sample lengths up to maxLength;
@@ -166,20 +203,7 @@ describe("semantic-correctness fuzz: scanText precision on mixed documents", () 
     );
     fc.assert(
       fc.property(docGen, (pieces) => {
-        const { text } = buildDoc(pieces);
-        const planted = pieces.filter((p) => p.kind === "scatter").length;
-        const expected =
-          planted >= SCATTERED_THRESHOLD
-            ? [
-                {
-                  line: null,
-                  charCount: planted,
-                  method:
-                    "scattered invisible chars (possible threshold evasion)",
-                  decoded: `[${planted} invisible chars distributed across file]`,
-                },
-              ]
-            : [];
+        const { text, expected } = buildDoc(pieces);
         assert.deepEqual(scanText(text), expected);
       }),
       fcRunOptions({ numRuns: 500 }),

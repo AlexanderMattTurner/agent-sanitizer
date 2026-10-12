@@ -51,3 +51,9 @@ python/agent_sanitizer/data/invisible-charset.json
 # test/invisible-charset.test.mjs because that test compares code points, not
 # bytes. The generator emits one code point per line and owns the format.
 src/cf-charset.mjs
+
+# Generated range tables (scripts/gen-unicode-properties.mjs). Prettier collapses
+# a one-span table onto one line and keeps a longer one a row per line, so
+# its output would differ from the generator's by table length; the generator
+# owns the format and test/unicode-properties.test.mjs compares bytes.
+src/unicode-properties.mjs
