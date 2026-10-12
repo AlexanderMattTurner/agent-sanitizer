@@ -131,9 +131,8 @@ export async function measure(input, fn) {
 
 /**
  * The one pair of thresholds every growth gate in the repo classifies against,
- * shared with the Python harness (`tests/_growth.py`) through one file so the
- * two languages cannot drift apart. Why these values is documented there and
- * in the module header above.
+ * read from the same file the Python harness (`tests/_growth.py`) reads. The
+ * module header above gives the measurements behind the values.
  */
 const EXPONENTS = JSON.parse(
   readFileSync(
