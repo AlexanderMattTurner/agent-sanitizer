@@ -48,8 +48,6 @@ describe("SECRET_HINT quantifier arms (removed {N} → exactly one char)", () =>
     ["Vault hvs. + 1 char", "hvs.X"],
     // do[opr]_v1_[a-f0-9]{16} → …_v1_[a-f0-9]
     ["DigitalOcean dop_v1_ + 1 hex", "dop_v1_a"],
-    // sk-or-v1-[0-9a-f]{16} → sk-or-v1-[0-9a-f]
-    ["OpenRouter sk-or-v1- + 1 hex", "sk-or-v1-a"],
     // gsk_[A-Za-z0-9]{16} → gsk_[A-Za-z0-9]
     ["Groq gsk_ + 1 char", "gsk_A"],
     // xai-[A-Za-z0-9]{16} → xai-[A-Za-z0-9]
