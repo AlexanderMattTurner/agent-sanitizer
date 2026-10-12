@@ -2494,7 +2494,14 @@ const VALUE_HAS_DIGIT_RE = /\d/;
 // signed-CDN token (imgix `?s=`, KeyCDN `?secure=`) are all a bare digest under
 // a generic name, and every one of them was reported before: hex is a subset of
 // base64's alphabet, so the 40-char base64 arm caught them on charset alone.
-const BLOB_VALUE_B64_RE = /^[A-Za-z0-9+/]{40,}={0,2}$/;
+//
+// Spelled `X{40}X*`, never the equivalent `X{40,}`: V8's irregexp compiles an
+// open-ended quantifier with a minimum above 3 as a counted loop that pushes a
+// backtrack entry per character, so a 64 KB value grows (and then frees) a
+// 64K-entry backtrack stack on every test — 4x the cost of the `X*` tail, which
+// takes the greedy-loop fast path, and an allocation whose price swings with
+// the process's malloc state. Same language, so the match set is unchanged.
+const BLOB_VALUE_B64_RE = /^[A-Za-z0-9+/]{40}[A-Za-z0-9+/]*={0,2}$/;
 const HEX_ONLY_RE = /^[A-Fa-f0-9]+$/;
 // 16 bytes, the floor the hex arm has always carried.
 const HEX_BLOB_MIN_LEN = 32;
@@ -2516,7 +2523,9 @@ const DIGEST_HEX_LENGTHS = new Set([32, 40, 56, 64, 96, 128]);
 // (`?d=<200-char base64url of cookies>`) routinely dodged it. The mix test keeps
 // the slug benign (no uppercase) while catching the scattered-separator blob the
 // run gate missed. Anchored to the whole value for the same RAW-query reason.
-const BLOB_VALUE_B64URL_RE = /^[A-Za-z0-9_-]{40,}={0,2}$/;
+// `X{40}X*` rather than `X{40,}` for the backtrack-stack reason given at
+// BLOB_VALUE_B64_RE.
+const BLOB_VALUE_B64URL_RE = /^[A-Za-z0-9_-]{40}[A-Za-z0-9_-]*={0,2}$/;
 
 /**
  * True when `value` carries at least one uppercase letter AND one digit — the
