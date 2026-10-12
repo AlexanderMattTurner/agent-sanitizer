@@ -38,11 +38,17 @@ PLACEHOLDER_RE = re.compile(
 )
 
 
+def is_placeholder_label(label: str) -> bool:
+    """Whether ``label`` is 1-:data:`PLACEHOLDER_LABEL_MAX_LEN` characters drawn
+    from :data:`PLACEHOLDER_LABEL_CHARS`."""
+    return _LABEL_RE.fullmatch(label) is not None
+
+
 def validate_placeholder_label(label: str, what: str = "redaction label") -> None:
-    """Raise ``ValueError`` unless ``label`` is 1-:data:`PLACEHOLDER_LABEL_MAX_LEN`
-    characters drawn from :data:`PLACEHOLDER_LABEL_CHARS`. ``what`` names the
-    caller's concept (an env-var name, a detector type) in the message."""
-    if _LABEL_RE.fullmatch(label) is None:
+    """Raise ``ValueError`` unless :func:`is_placeholder_label` accepts ``label``.
+    ``what`` names the caller's concept (an env-var name, a detector type) in the
+    message."""
+    if not is_placeholder_label(label):
         raise ValueError(
             f"{what} {label!r} is not 1-{PLACEHOLDER_LABEL_MAX_LEN} characters "
             f"from [{PLACEHOLDER_LABEL_CHARS}]"
