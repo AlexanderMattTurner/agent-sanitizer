@@ -891,6 +891,54 @@ describe("a composer's own hook", () => {
       /agent-glovebox\/issues\/new with agent-glovebox 0\.79\.0/u,
     );
   });
+
+  it("names the composer on the error path too", async () => {
+    // A judge that overran AND THEN THREW has this stderr line as its only
+    // report, so a reportTo that reaches the success path alone still blames
+    // the sanitizer exactly where the attribution matters most.
+    const errs = [];
+    let onErrorCalled = false;
+    const realErr = process.stderr.write.bind(process.stderr);
+    process.stderr.write = (chunk) => {
+      errs.push(String(chunk));
+      return true;
+    };
+    try {
+      await runJudgeCli(
+        "gate-bash-calls",
+        async () => {
+          await new Promise((resolve) =>
+            setTimeout(resolve, SLOW_HOOK_THRESHOLD_MS + 100),
+          );
+          throw new Error("judge exploded");
+        },
+        {
+          onError: () => {
+            onErrorCalled = true;
+          },
+          readInput: async () => ({
+            hook_event_name: "PreToolUse",
+            tool_name: "Bash",
+            tool_input: { command: "echo hi" },
+          }),
+          write: () => assert.fail("a throwing judge writes no verdict"),
+          reportTo: glovebox,
+        },
+      );
+    } finally {
+      process.stderr.write = realErr;
+    }
+    const stderr = errs.join("");
+    assert.match(
+      stderr,
+      /agent-glovebox PERFORMANCE: the gate-bash-calls hook/u,
+    );
+    assert.match(
+      stderr,
+      /agent-glovebox\/issues\/new with agent-glovebox 0\.79\.0/u,
+    );
+    assert.ok(onErrorCalled, "onError must still take the failure posture");
+  });
 });
 
 describe("formatBytes", () => {
