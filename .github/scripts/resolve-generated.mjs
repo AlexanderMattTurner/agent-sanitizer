@@ -203,14 +203,34 @@ function runRule(rule) {
   if (res.status !== 0) die(`${argv.join(" ")} exited ${res.status}`);
 }
 
-// A line that is nothing but a conflict marker. Anchored so a generated file
-// that merely quotes `<<<<<<<` mid-line is not mistaken for an unresolved one.
-const CONFLICT_MARKER = /^(?:<{7}(?: .*)?|={7}|>{7}(?: .*)?)$/m;
+// Whether `text` holds an opened-and-closed conflict block: a line that is
+// `<<<<<<<`, then a line that is exactly `=======`, then a line that is `>>>>>>>`,
+// in that order (a diff3 `|||||||` base section sits between the first two and
+// needs no handling of its own). A single separator is ordinary content — a
+// banner, a setext heading, an embedded multiline string — and refusing it would
+// leave a correctly regenerated output unmerged, the failure this script exists
+// to remove. One linear pass over the lines, with no backtracking regex.
+const OPEN_MARKER = /^<{7}(?: |$)/;
+const CLOSE_MARKER = /^>{7}(?: |$)/;
+
+function hasConflictBlock(text) {
+  let stage = 0;
+  for (const line of text.split(/\r?\n/)) {
+    if (stage === 0 && OPEN_MARKER.test(line)) stage = 1;
+    else if (stage === 1 && line === "=======") stage = 2;
+    else if (stage === 2 && CLOSE_MARKER.test(line)) return true;
+  }
+  return false;
+}
 
 /** Stage the still-unmerged outputs of `rule`, so the resolver sees them as
  * resolved. Only unmerged paths: staging anything else would put an edit
  * outside the conflicted set into the merge commit. Refuses a file that still
- * carries a conflict marker, since staging it would commit the markers. */
+ * carries a conflict block, since staging it would commit the markers.
+ *
+ * Every git call here runs with {@link scrubbedEnv}: the generator is PR-authored
+ * and can leave a clean filter or fsmonitor command in `.git/config`, which
+ * `git add` then executes with whatever environment it was handed. */
 function stageUnmergedOutputs(rule) {
   const pathspecs = [
     ...(rule.owns ?? []),
@@ -220,12 +240,14 @@ function stageUnmergedOutputs(rule) {
   // A root that is not a git checkout has no index, so nothing can be unmerged.
   const inRepo = spawnSync("git", ["rev-parse", "--is-inside-work-tree"], {
     cwd: REPO_ROOT,
+    env: scrubbedEnv(),
     stdio: "ignore",
   });
   if (inRepo.error) die(`git could not be run: ${inRepo.error.message}`);
   if (inRepo.status !== 0) return;
   const ls = spawnSync("git", ["ls-files", "-u", "-z", "--", ...pathspecs], {
     cwd: REPO_ROOT,
+    env: scrubbedEnv(),
     encoding: "utf8",
   });
   if (ls.error || ls.status !== 0)
@@ -241,13 +263,14 @@ function stageUnmergedOutputs(rule) {
   ];
   for (const path of unmerged) {
     const file = join(REPO_ROOT, path);
-    if (existsSync(file) && CONFLICT_MARKER.test(readFileSync(file, "latin1")))
+    if (existsSync(file) && hasConflictBlock(readFileSync(file, "latin1")))
       die(`${path} still carries conflict markers after regeneration`);
   }
   if (unmerged.length === 0) return;
   // --all records a deleted output as the resolution instead of failing the pathspec.
   const add = spawnSync("git", ["add", "--all", "--", ...unmerged], {
     cwd: REPO_ROOT,
+    env: scrubbedEnv(),
     encoding: "utf8",
   });
   if (add.error || add.status !== 0)

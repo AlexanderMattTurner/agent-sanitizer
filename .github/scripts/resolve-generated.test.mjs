@@ -305,8 +305,8 @@ function gitIn(dir, ...args) {
   });
 }
 
-function conflictedRepo({ generated }) {
-  const root = repoWith(GEN_RULES);
+function conflictedRepo({ generated, stray = false, rules = GEN_RULES }) {
+  const root = repoWith(rules);
   writeFileSync(
     join(root, "gen.mjs"),
     `import { writeFileSync } from "node:fs";\n` +
@@ -314,13 +314,16 @@ function conflictedRepo({ generated }) {
   );
   gitIn(root, "init", "-q", "-b", "main");
   writeFileSync(join(root, "out.bin"), Buffer.from([0, 1, 2]));
+  if (stray) writeFileSync(join(root, "stray.bin"), Buffer.from([0, 1, 2]));
   gitIn(root, "add", "-A");
   gitIn(root, "commit", "-q", "-m", "base");
   gitIn(root, "checkout", "-q", "-b", "feature");
   writeFileSync(join(root, "out.bin"), Buffer.from([0, 1, 3]));
+  if (stray) writeFileSync(join(root, "stray.bin"), Buffer.from([0, 1, 3]));
   gitIn(root, "commit", "-q", "-am", "feature");
   gitIn(root, "checkout", "-q", "main");
   writeFileSync(join(root, "out.bin"), Buffer.from([0, 1, 4]));
+  if (stray) writeFileSync(join(root, "stray.bin"), Buffer.from([0, 1, 4]));
   gitIn(root, "commit", "-q", "-am", "main");
   gitIn(root, "checkout", "-q", "feature");
   // Exits 1 on the conflict this setup exists to create.
@@ -330,6 +333,11 @@ function conflictedRepo({ generated }) {
     assert.equal(err.status, 1);
   }
   assert.match(gitIn(root, "ls-files", "-u", "--", "out.bin"), /out\.bin/);
+  if (stray)
+    assert.match(
+      gitIn(root, "ls-files", "-u", "--", "stray.bin"),
+      /stray\.bin/,
+    );
   return root;
 }
 
@@ -362,6 +370,32 @@ test("an output that still carries a conflict marker is never staged", () => {
   rmSync(root, { recursive: true, force: true });
 });
 
+// A lone separator is ordinary content (a banner, a setext heading, an embedded
+// multiline string); only an opened-and-closed block is an unresolved merge.
+for (const [name, generated] of [
+  ["a lone ======= line", "banner\n=======\nrest\n"],
+  ["a lone <<<<<<< line", "<<<<<<< not closed\nrest\n"],
+  ["a lone >>>>>>> line", "rest\n>>>>>>> not opened\n"],
+  ["markers in the wrong order", ">>>>>>> a\n=======\n<<<<<<< b\n"],
+]) {
+  test(`an output holding ${name} is staged, not refused`, () => {
+    const root = conflictedRepo({ generated });
+    const r = run(root);
+    assert.equal(r.status, 0, r.stderr);
+    assert.equal(gitIn(root, "ls-files", "-u", "--", "out.bin"), "");
+    rmSync(root, { recursive: true, force: true });
+  });
+}
+
+test("a diff3 conflict block (with a ||||||| base section) is refused", () => {
+  const root = conflictedRepo({
+    generated: "<<<<<<< HEAD\na\n||||||| base\nb\n=======\nc\n>>>>>>> main\n",
+  });
+  assert.equal(run(root).status, 1);
+  assert.match(gitIn(root, "ls-files", "-u", "--", "out.bin"), /out\.bin/);
+  rmSync(root, { recursive: true, force: true });
+});
+
 test("an output merely quoting a marker mid-line is staged", () => {
   const root = conflictedRepo({ generated: "x <<<<<<< y\n" });
   assert.equal(run(root).status, 0);
@@ -380,4 +414,75 @@ test("--root regenerates the named tree, not the script's own", () => {
   assert.equal(gitIn(tree, "ls-files", "-u", "--", "out.bin"), "");
   rmSync(self, { recursive: true, force: true });
   rmSync(tree, { recursive: true, force: true });
+});
+
+test("an unmerged path outside the rule's owns is left unmerged", () => {
+  const root = conflictedRepo({
+    generated: "\u0000\u0001\u0009",
+    stray: true,
+  });
+  assert.equal(run(root).status, 0);
+  assert.equal(gitIn(root, "ls-files", "-u", "--", "out.bin"), "");
+  assert.match(gitIn(root, "ls-files", "-u", "--", "stray.bin"), /stray\.bin/);
+  rmSync(root, { recursive: true, force: true });
+});
+
+test("a later rule's failure does not strand the earlier rule's staged output", () => {
+  const root = conflictedRepo({
+    generated: "\u0000\u0001\u0009",
+    stray: true,
+    rules: JSON.stringify({
+      rules: [
+        { generator: "gen.mjs", sources: ["src.txt"], owns: ["out.bin"] },
+        {
+          command: ["sh", "-c", "exit 3"],
+          sources: ["src.txt"],
+          owns: ["stray.bin"],
+        },
+      ],
+    }),
+  });
+  assert.equal(run(root).status, 1);
+  assert.equal(gitIn(root, "ls-files", "-u", "--", "out.bin"), "");
+  assert.match(gitIn(root, "ls-files", "-u", "--", "stray.bin"), /stray\.bin/);
+  rmSync(root, { recursive: true, force: true });
+});
+
+test("the generator cannot reach credentials through a git clean filter", () => {
+  // The generator is PR-authored, and so is whatever it writes under .git: a
+  // clean filter registered there runs inside the resolver's own `git add`, so
+  // that call must carry the same scrubbed environment the generator got.
+  const root = conflictedRepo({ generated: "\u0000\u0001\u0009" });
+  const leakSh = join(root, "leak.sh");
+  writeFileSync(leakSh, 'env > "$(dirname "$0")/leak.txt"\ncat\n');
+  const config = `[filter "leak"]\n\tclean = sh ${leakSh}\n`;
+  writeFileSync(
+    join(root, "gen.mjs"),
+    `import { appendFileSync, writeFileSync } from "node:fs";
+writeFileSync("out.bin", Buffer.from([0, 1, 9]));
+appendFileSync(".git/info/attributes", "out.bin filter=leak\\n");
+appendFileSync(".git/config", ${JSON.stringify(config)});
+`,
+  );
+  execFileSync("node", [join(root, SCRIPT_REL)], {
+    cwd: root,
+    stdio: "ignore",
+    env: {
+      ...process.env,
+      GIT_CONFIG_COUNT: "1",
+      GIT_CONFIG_KEY_0: "http.extraheader",
+      GIT_CONFIG_VALUE_0: "AUTHORIZATION: basic SECRETVALUE",
+      GITHUB_ENV: "/tmp/gh-env",
+      HARMLESS_VAR: "kept",
+    },
+  });
+  const leak = execFileSync("cat", [join(root, "leak.txt")], {
+    encoding: "utf8",
+  });
+  // Positive marker: the filter really ran, so the absences below are not vacuous.
+  assert.match(leak, /^HARMLESS_VAR=kept$/m, "the clean filter never ran");
+  assert.doesNotMatch(leak, /SECRETVALUE/);
+  assert.doesNotMatch(leak, /^GITHUB_ENV=/m);
+  assert.doesNotMatch(leak, /^GIT_CONFIG_COUNT=/m);
+  rmSync(root, { recursive: true, force: true });
 });
