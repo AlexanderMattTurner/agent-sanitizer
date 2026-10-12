@@ -75,9 +75,9 @@ const LEGITIMATE = [
     ).join("\n"),
   ],
   ["a checklist of thirty emoji-style ticks", CHECKED.repeat(30)],
-  // Every invisible below is part of a registered glyph's spelling: an RGI
-  // flag's tags, the VS16 a text-default emoji needs, an RGI sequence's ZWJs.
-  // Each document holds more of them than the cover allowance admits.
+  // Every invisible below is part of a glyph's spelling: an RGI flag's tags,
+  // the VS16 a text-default emoji needs, a ZWJ between two pictographs. Each
+  // document holds more of them than the cover allowance admits.
   ["thirty rainbow-flag lines", `- ${RAINBOW} pride\n`.repeat(30)],
   ["a hundred rainbow flags in a row", RAINBOW.repeat(100)],
   [
@@ -90,6 +90,11 @@ const LEGITIMATE = [
     `${s(0x1f469, 0x1f3fd, 0x200d, 0x1f4bb)} codes. `.repeat(100),
   ],
   ["a hundred warning lines", `- ${s(0x26a0, 0xfe0f)} careful\n`.repeat(100)],
+  // Not RGI, but GB11 joins any two pictographs (THREAT-MODEL.md's residual).
+  [
+    "an unregistered ZWJ chain on every line",
+    `- ${s(0x1f600, 0x200d, 0x1f600)} hi\n`.repeat(100),
+  ],
   [
     "a hundred keycaps",
     Array.from(
@@ -157,16 +162,16 @@ const STEGO = [
   ],
   ["zero-width spaces scattered through text", `a${s(0x200b)}`.repeat(40)],
   ["a Balinese conjunct chain", BALINESE_CONJUNCT.repeat(300)],
-  // The emoji shapes of the negative corpus with the registration removed: a
-  // VS16 on an emoji that already presents as one changes nothing on screen,
-  // and a ZWJ chain Unicode never registered does not join.
+  // The emoji shapes of the negative corpus with the glyph removed: a VS16 on
+  // an emoji that already presents as one changes nothing on screen, and a
+  // ZWJ after a bare skin tone joins no pictograph.
   [
     "a redundant VS16 on every line",
     `- ${s(0x1f600, 0xfe0f)} hi\n`.repeat(100),
   ],
   [
-    "an unregistered ZWJ chain on every line",
-    `- ${s(0x1f600, 0x200d, 0x1f600)} hi\n`.repeat(100),
+    "a ZWJ after a bare skin tone on every line",
+    `- x${s(0x1f3fd, 0x200d, 0x1f600)} hi\n`.repeat(100),
   ],
 ];
 

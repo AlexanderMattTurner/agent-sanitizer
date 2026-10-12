@@ -50,7 +50,6 @@ import {
   EMOJI_MODIFIER,
   EMOJI_TEXT_DEFAULT,
   EXTENDED_PICTOGRAPHIC,
-  RGI_EMOJI_ZWJ_KEYS,
   SCRIPT_BRAILLE,
   SCRIPT_HANGUL,
   UNIFIED_IDEOGRAPH,
@@ -125,23 +124,27 @@ const MAX_TAG_SPEC_CHARS = 6;
 
 // ─── Registered emoji glyphs ──────────────────────────────────────────────────
 // The invisibles a registered emoji glyph's own spelling holds — an RGI flag's
-// tag characters, the VS16 of a text-default emoji, the ZWJs of an RGI ZWJ
-// sequence — are "glyph": preserved whenever the carve-out is on and charged to
-// no budget. The ZWJ chains are found here by one regex over the text, where the
-// shipped module walks code points.
+// tag characters, the VS16 of a text-default emoji, a ZWJ UAX #29's GB11 keeps
+// inside one grapheme — are "glyph": preserved whenever the carve-out is on and
+// charged to no budget. GB11's ZWJs are found here by one regex over the text,
+// where the shipped module walks code points.
 const EMOJI_TEXT_DEFAULT_RE = pinned(EMOJI_TEXT_DEFAULT);
-const RGI_ZWJ_KEYS = new Set(RGI_EMOJI_ZWJ_KEYS);
-// What rides on a chain component without being one: VS16 or a skin tone.
-const COMPONENT_MARK = `\\u{FE0F}${EMOJI_MODIFIER.map(
-  ([from, to]) => `\\u{${from.toString(16)}}-\\u{${to.toString(16)}}`,
-).join("")}`;
-const COMPONENT_MARK_RE = new RegExp(`[${COMPONENT_MARK}]`, "u");
-const COMPONENT = `[^\\u{200D}${COMPONENT_MARK}][${COMPONENT_MARK}]*`;
-const ZWJ_CHAIN_RE = new RegExp(`${COMPONENT}(?:\\u{200D}${COMPONENT})+`, "gu");
+/** @param {ReadonlyArray<readonly [number, number]>} spans */
+const charClass = (spans) =>
+  spans
+    .map(([from, to]) => `\\u{${from.toString(16)}}-\\u{${to.toString(16)}}`)
+    .join("");
+const PICTOGRAPH = `[${charClass(EXTENDED_PICTOGRAPHIC)}]`;
+// `Extended_Pictographic Extend* ZWJ × Extended_Pictographic`, with Extend read
+// as the selectors and skin tones.
+const GB11_ZWJ_RE = new RegExp(
+  `(?<=${PICTOGRAPH}[${VS}${charClass(EMOJI_MODIFIER)}]*)\\u{200D}(?=${PICTOGRAPH})`,
+  "gu",
+);
 
 /**
- * Turn "emojivs" VS16s after a text-default emoji, and "joiner" ZWJs inside a
- * chain whose components name an RGI ZWJ sequence, into "glyph".
+ * Turn "emojivs" VS16s after a text-default emoji, and "joiner" ZWJs GB11 keeps
+ * inside a grapheme, into "glyph".
  * @param {string[]} cps @param {(string|null)[]} kind  updated in place
  */
 function markRegisteredGlyphs(cps, kind) {
@@ -159,18 +162,9 @@ function markRegisteredGlyphs(cps, kind) {
     indexAt.set(offset, i);
     offset += ch.length;
   });
-  for (const match of cps.join("").matchAll(ZWJ_CHAIN_RE)) {
-    const chain = Array.from(match[0]);
-    const key = chain
-      .filter((ch) => ch !== "\u200D" && !COMPONENT_MARK_RE.test(ch))
-      .map((ch) => /** @type {number} */ (ch.codePointAt(0)).toString(16))
-      .join(" ");
-    if (!RGI_ZWJ_KEYS.has(key)) continue;
-    const first = /** @type {number} */ (indexAt.get(match.index));
-    chain.forEach((ch, k) => {
-      if (ch === "\u200D" && kind[first + k] === "joiner")
-        kind[first + k] = "glyph";
-    });
+  for (const match of cps.join("").matchAll(GB11_ZWJ_RE)) {
+    const i = /** @type {number} */ (indexAt.get(match.index));
+    if (kind[i] === "joiner") kind[i] = "glyph";
   }
 }
 

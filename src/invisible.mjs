@@ -19,7 +19,6 @@ import {
   EMOJI_MODIFIER,
   EMOJI_TEXT_DEFAULT,
   EXTENDED_PICTOGRAPHIC,
-  RGI_EMOJI_ZWJ_KEYS,
   SCRIPT_BRAILLE,
   SCRIPT_HANGUL,
   UNIFIED_IDEOGRAPH,
@@ -462,19 +461,21 @@ const MAX_TAG_SPEC_CHARS = 6;
 
 // ─── Registered emoji glyphs ──────────────────────────────────────────────────
 // Some preserved invisibles are not a choice the author made beside a glyph but
-// part of the glyph's registered spelling: the tag characters of an RGI
-// subdivision flag, the VS16 that gives a text-default emoji (Emoji but not
-// Emoji_Presentation: ⚠ ✔ 🏳 ❤ and the keycap digits) its emoji form, and the
-// ZWJs of an RGI emoji ZWJ sequence (👨‍👩‍👧, 🏳️‍🌈). Each one changes what renders,
-// so what it carries is on screen; and each sits in a fixed position of a
-// registered sequence, so a run of them is a run of visible glyphs. They are
-// KIND_GLYPH, preserved whenever the carve-out is on and charged to no budget:
-// charging them made a README with ten Scotland flags, or fifty ⚠️ lines, read
-// as a covert channel the moment its glyphs outran a cover allowance sized for
-// the joiners and selectors that DO hide a bit apiece. A VS16 after an
-// Emoji_Presentation=Yes base (😀️) changes nothing that renders, and a ZWJ
-// chain Unicode never registered (😀‍😀) does not join; both keep their budget,
-// as does VS15, whose text form is the default it asks for.
+// part of the glyph's spelling: the tag characters of an RGI subdivision flag,
+// the VS16 that gives a text-default emoji (Emoji but not Emoji_Presentation:
+// ⚠ ✔ 🏳 ❤ and the keycap digits) its emoji form, and a ZWJ between two
+// pictographs (👨‍👩‍👧, 🏳️‍🌈). They are KIND_GLYPH, preserved whenever the
+// carve-out is on and charged to no budget: charging them made a README with
+// ten Scotland flags, or fifty ⚠️ lines, read as a covert channel the moment its
+// glyphs outran a cover allowance sized for the joiners and selectors that DO
+// hide a bit apiece. A VS16 after an Emoji_Presentation=Yes base (😀️) changes
+// nothing that renders and keeps its budget, as does VS15, whose text form is
+// the default it asks for.
+//
+// The ZWJ rule is UAX #29's GB11, not the RGI list, so a ZWJ between two
+// pictographs Unicode never registered (😀‍😀) is exempt too. It renders as two
+// glyphs either way, so it hides one bit, present or absent, per pair of
+// adjacent pictographs: the accepted residual.
 const VS16 = 0xfe0f;
 
 /** True when `cp` is Emoji but not Emoji_Presentation (see above).
@@ -484,15 +485,7 @@ function isTextDefaultEmoji(cp) {
   return (cpProps(cp) & PROP_EMOJI_TEXT_DEFAULT) !== 0;
 }
 
-/** A code point that rides on an emoji chain's component rather than being
- * one: a VS16 or a skin-tone modifier.
- * @param {number} cp @returns {boolean} */
-function isComponentMark(cp) {
-  return cp === VS16 || isEmojiModifierCp(cp);
-}
-
-/** True when `cp` is an Emoji_Modifier (a skin tone). -1 (past a string
- * boundary) is not.
+/** True when `cp` is an Emoji_Modifier (a skin tone); -1 is not.
  * @param {number} cp @returns {boolean} */
 function isEmojiModifierCp(cp) {
   if (cp < 0) return false;
@@ -500,8 +493,7 @@ function isEmojiModifierCp(cp) {
   return (cpProps(cp) & PROP_EMOJI_MODIFIER) !== 0;
 }
 
-/** True when `cp` is Extended_Pictographic. -1 (past a string boundary) is
- * not.
+/** True when `cp` is Extended_Pictographic; -1 is not.
  * @param {number} cp @returns {boolean} */
 function isExtendedPictographic(cp) {
   if (cp < 0) return false;
@@ -510,79 +502,33 @@ function isExtendedPictographic(cp) {
 }
 
 /**
- * @typedef {{ end: boolean, next: Map<number, RgiNode> }} RgiNode
- */
-/**
- * The RGI ZWJ sequences as a trie over their components, built from the keys
- * gen-unicode-properties writes (the components in lowercase hex, without the
- * joiners, VS16s and skin tones). A chain is looked up by walking it, so the
- * lookup allocates nothing however many chains a page holds.
- * @type {Map<number, RgiNode>}
- */
-const RGI_ZWJ_TRIE = new Map();
-for (const key of RGI_EMOJI_ZWJ_KEYS) {
-  let level = RGI_ZWJ_TRIE;
-  /** @type {RgiNode | undefined} */
-  let node;
-  for (const hex of key.split(" ")) {
-    const cp = parseInt(hex, 16);
-    node = level.get(cp);
-    if (node === undefined) {
-      node = { end: false, next: new Map() };
-      level.set(cp, node);
-    }
-    level = node.next;
-  }
-  if (node === undefined) throw new Error(`empty RGI ZWJ key ${key}`);
-  node.end = true;
-}
-
-/**
- * Upgrade to KIND_GLYPH every preserved VS16 and ZWJ a registered emoji glyph
- * requires (see above); tag characters are marked as they are found. A ZWJ chain
- * is a maximal `B M* (ZWJ B M*)+`, read left to right, where M is
- * {@link isComponentMark} and B is any other code point but a ZWJ; its joiners
- * are exempt only when its components name an RGI sequence. Each code point is
- * read by at most one chain, so this is linear.
+ * Upgrade to KIND_GLYPH each preserved VS16 on a text-default emoji, and each
+ * preserved ZWJ GB11 keeps inside one grapheme: `Extended_Pictographic Extend*
+ * ZWJ × Extended_Pictographic`. Extend is read as the selectors and skin tones,
+ * the only Extend a preserved emoji joiner can have on its left (leftNonSelector
+ * steps over selectors alone, and isEmojiLeft takes a modifier). Each walk stops
+ * at a ZWJ, which is not Extend, so the pass is linear. Tag characters are
+ * marked as they are found.
  * @param {Int32Array} cps @param {Int32Array} invisible  ascending indices
  * @param {Uint8Array} kind  updated in place
  */
 function markRegisteredGlyphs(cps, invisible, kind) {
-  let read = -1; // the last index a chain has read
   for (const i of invisible) {
-    const cp = cps[i];
-    if (cp === VS16) {
+    if (cps[i] === VS16) {
       if (kind[i] === KIND_EMOJIVS && i > 0 && isTextDefaultEmoji(cps[i - 1]))
         kind[i] = KIND_GLYPH;
-    } else if (cp === ZWJ && i > read) read = markRgiChain(cps, i, kind);
+      continue;
+    }
+    if (kind[i] !== KIND_JOINER || cps[i] !== ZWJ) continue;
+    if (!isExtendedPictographic(i + 1 < cps.length ? cps[i + 1] : -1)) continue;
+    let p = i - 1;
+    while (
+      p >= 0 &&
+      (isVariationSelectorCp(cps[p]) || isEmojiModifierCp(cps[p]))
+    )
+      p--;
+    if (p >= 0 && isExtendedPictographic(cps[p])) kind[i] = KIND_GLYPH;
   }
-}
-
-/**
- * Read the ZWJ chain whose first joiner is `cps[at]`, mark its joiners
- * KIND_GLYPH when it is an RGI sequence, and return the last index it read.
- * @param {Int32Array} cps @param {number} at @param {Uint8Array} kind
- * @returns {number}
- */
-function markRgiChain(cps, at, kind) {
-  let start = at - 1;
-  while (start >= 0 && isComponentMark(cps[start])) start--;
-  if (start < 0 || cps[start] === ZWJ) return at;
-  let node = RGI_ZWJ_TRIE.get(cps[start]);
-  let next = at;
-  while (next < cps.length && cps[next] === ZWJ) {
-    const base = next + 1;
-    if (base === cps.length || cps[base] === ZWJ || isComponentMark(cps[base]))
-      break;
-    node = node?.next.get(cps[base]);
-    next = base + 1;
-    while (next < cps.length && isComponentMark(cps[next])) next++;
-  }
-  if (next === at) return at; // no joiner had a component after it
-  if (node?.end)
-    for (let j = at; j < next; j++)
-      if (cps[j] === ZWJ && kind[j] === KIND_JOINER) kind[j] = KIND_GLYPH;
-  return next - 1;
 }
 
 // ─── Ideographic variation selectors (VS17–VS256, U+E0100–U+E01EF) ────────────
@@ -729,7 +675,7 @@ const CODE_BLANK = 3;
 const KIND_NONE = 0;
 const KIND_JOINER = 1;
 const KIND_EMOJIVS = 2;
-// Part of a registered emoji glyph's spelling, so outside every budget (see
+// Part of an emoji glyph's spelling, so outside every budget (see
 // markRegisteredGlyphs).
 const KIND_GLYPH = 3;
 const KIND_STDVS = 4;
@@ -1669,7 +1615,7 @@ function carveWalk(body, cps, analysis, build) {
   const n = cps.length;
   // Every code point that draws on the joiner/selector budget, in order. Blank
   // fillers are exempt (their allowance is already spent in analyzeCarve), and
-  // so is a registered glyph's own spelling (KIND_GLYPH), so a cluster holding
+  // so is a glyph's own spelling (KIND_GLYPH), so a cluster holding
   // only those needs no boundary of its own. Read off the invisible indices
   // into a buffer sized for all of them, since only an invisible has a kind.
   const candidateBuffer = new Int32Array(allowCarveOut ? invisible.length : 0);
@@ -1773,7 +1719,7 @@ function carveWalk(body, cps, analysis, build) {
         continue; // ordinary visible character: stays inside the kept run
       }
       // A blank filler (its own allowance is already spent in analyzeCarve)
-      // and a registered glyph's spelling ride on allowCarveOut alone, and draw
+      // and a glyph's spelling ride on allowCarveOut alone, and draw
       // on no budget; everything else rides on `fits`.
       const exempt = kind[k] === KIND_BLANK || kind[k] === KIND_GLYPH;
       if (exempt ? allowCarveOut : fits && kind[k] !== KIND_NONE) {

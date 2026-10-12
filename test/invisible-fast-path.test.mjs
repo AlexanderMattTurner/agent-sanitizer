@@ -89,12 +89,9 @@ const SHAPES = {
   "persian-prose": "می" + ZWNJ + "خواهم چند کتاب بخرم",
   "devanagari-conjunct": ("क्" + ZWJ + "ष").repeat(30),
   "emoji-zwj-vs16": ("\u{1F3F3}" + VS16 + ZWJ + "\u{1F308}").repeat(30),
-  "emoji-zwj-vs16-unregistered": (
-    "\u{1F600}" +
-    VS16 +
-    ZWJ +
-    "\u{1F600}"
-  ).repeat(30),
+  "emoji-zwj-redundant-vs16": ("\u{1F600}" + VS16 + ZWJ + "\u{1F600}").repeat(
+    30,
+  ),
   family:
     "\u{1F468}" + ZWJ + "\u{1F469}" + ZWJ + "\u{1F467}" + ZWJ + "\u{1F466}",
   keycap: "1" + VS16 + cp(0x20e3),
@@ -133,11 +130,12 @@ const BASELINE = {
   "mostly-stdvs": [120, 120, null],
   "persian-prose": [0, 0, null],
   "devanagari-conjunct": [0, 14, null],
-  // Thirty rainbow flags are registered glyphs and draw nothing from the
-  // cover budget (the decision recorded on PR #434); the same shape spelled
-  // with a sequence Unicode never registered still overruns it by 44.
+  // Thirty rainbow flags are glyphs and draw nothing from the cover budget
+  // (the decision recorded on PR #434). On an emoji-default base the joiners
+  // are still glyphs (GB11), but the thirty VS16s change nothing that renders
+  // and overrun the floor allowance of 16 by 14.
   "emoji-zwj-vs16": [0, 0, null],
-  "emoji-zwj-vs16-unregistered": [0, 44, null],
+  "emoji-zwj-redundant-vs16": [0, 14, null],
   family: [0, 0, null],
   keycap: [0, 0, null],
   "flag-tag-registered": [0, 0, null],

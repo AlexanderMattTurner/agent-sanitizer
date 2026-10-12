@@ -155,6 +155,13 @@ const CASES = {
   "rgi-zwj-skin-tone": ("\u{1F469}\u{1F3FD}" + ZWJ + "\u{1F4BB} ").repeat(100),
   "rgi-zwj-without-vs16": ("\u{1F3F3}" + ZWJ + "\u{1F308} ").repeat(100),
   "non-rgi-zwj-dense": ("\u{1F600}" + ZWJ + "\u{1F600} ").repeat(100),
+  // GB11 fails on the first two, so their joiners stay on the budget: a skin
+  // tone with no pictograph before it, and a selector after the joiner. GB11
+  // holds on the third. Twenty joiners outrun the floor allowance of 16 while
+  // the stray selectors stay under the scatter floor that would strip them all.
+  "zwj-after-bare-modifier": ("a\u{1F3FD}" + ZWJ + "\u{1F600} ").repeat(20),
+  "zwj-then-vs16": ("\u{1F600}" + ZWJ + VS16 + "\u{1F600} ").repeat(20),
+  "zwj-after-vs1": ("\u{1F600}" + VS1 + ZWJ + "\u{1F600} ").repeat(20),
   "text-default-vs16-dense": ("- \u26A0" + VS16 + " careful\n").repeat(100),
   "redundant-vs16-dense": ("- \u{1F600}" + VS16 + " hi\n").repeat(100),
   "zwj-chain-dangling": ("\u{1F468}" + ZWJ + "\u{1F469}" + ZWJ + " ").repeat(

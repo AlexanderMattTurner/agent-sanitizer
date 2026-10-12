@@ -39,17 +39,17 @@ table](./README.md#entry-points) maps each to its import.
   The carve-out fires only when **both**
   neighbors clearly belong to the context, and it is disabled once the total
   invisible count crosses a scatter floor—over-stripping beats under-stripping.
-- **A registered emoji glyph's own spelling** draws on no preserve budget: the
-  VS16 that switches a text-default emoji (Emoji_Presentation=No, such as ❤ or
-  ⚠) to its emoji glyph, the joiners of an RGI emoji ZWJ sequence (🏳️‍🌈,
-  👨‍👩‍👧‍👦; read from the pinned `emoji-zwj-sequences.txt`), and a registered
-  subdivision flag's tag run. Which of these a document spells shows on
-  screen, so a changelog of a hundred rainbow flags is not a payload. A VS15,
-  a VS16 on an emoji-default base, an unregistered chain, and an RGI chain
-  extended by one more pictograph change nothing visible and stay metered.
-  Residual: whether a text-default emoji carries its VS16 is one bit per such
-  character, and it is a visible bit. Past the scatter floor these are
-  stripped with everything else.
+- **An emoji glyph's own spelling** draws on no preserve budget: the VS16
+  that switches a text-default emoji (Emoji_Presentation=No, such as ❤ or ⚠)
+  to its emoji glyph, a ZWJ that UAX #29's GB11 keeps inside one grapheme
+  (`Extended_Pictographic Extend* ZWJ × Extended_Pictographic`: 🏳️‍🌈,
+  👨‍👩‍👧‍👦), and a registered subdivision flag's tag run, so a changelog of a
+  hundred rainbow flags is not a payload. A VS15, a VS16 on an emoji-default
+  base, and a ZWJ GB11 does not join stay metered. Residuals: whether a
+  text-default emoji carries its VS16 is one visible bit per such character;
+  a ZWJ between two pictographs Unicode never registered (😀‍😀) renders as two
+  glyphs either way, so it is about one hidden bit per adjacent pair. Past the
+  scatter floor these are stripped with everything else.
 - **Blank fillers doing real work in their own script**: the Braille blank
   (U+2800) beside a real cell, a Hangul filler beside a real jamo/syllable. A
   _run_ of fillers has only fillers for neighbors, so it fails the anchor and is

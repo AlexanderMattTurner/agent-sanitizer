@@ -783,20 +783,14 @@ describe("consecutive-joiner cap", () => {
     assert.deepEqual(found, [CATEGORY.CF]);
   });
 
-  it(`strips EVERY ZWJ of an over-cap emoji run (one cluster, atomic)`, () => {
-    // An emoji ZWJ run is a SINGLE grapheme cluster, and the preserve budget is
-    // charged per cluster: over the cap, the whole cluster's joiners go, rather
-    // than the first CONSECUTIVE_JOINER_CAP surviving and carving one grapheme
-    // in half. The visible pictographs are untouched either way.
+  it("keeps every ZWJ of a pictograph chain past the cap (GB11 joins each pair)", () => {
+    // A ZWJ between two pictographs is part of the glyph, not a joiner the cap
+    // meters, whether or not Unicode registered the sequence.
     const input =
       cp(0x1f468) + (ZWJ + cp(0x1f469)).repeat(CONSECUTIVE_JOINER_CAP + 12);
     const { cleaned, found } = stripInvisibleWithReport(input);
-    assert.equal(countOf(cleaned, ZWJ), 0);
-    assert.equal(
-      cleaned,
-      cp(0x1f468) + cp(0x1f469).repeat(CONSECUTIVE_JOINER_CAP + 12),
-    );
-    assert.deepEqual(found, [CATEGORY.CF]);
+    assert.equal(cleaned, input);
+    assert.deepEqual(found, []);
   });
 
   it("preserves exactly CONSECUTIVE_JOINER_CAP joiners (boundary, none stripped)", () => {
@@ -934,14 +928,16 @@ describe("document-wide preserved-joiner budget", () => {
 // thing it protects. Charging the whole cluster at once makes that impossible by
 // construction.
 describe("preserve budget: grapheme clusters are indivisible", () => {
-  // Four pictographs in one ZWJ chain that Unicode never registered, so its
-  // joiners draw on the budget. (The registered family 👨‍👩‍👧‍👦 is a glyph's
-  // own spelling and draws on none — see "registered emoji glyphs".)
-  const FAMILY_CLUSTER =
-    cp(0x1f600) + ZWJ + cp(0x1f603) + ZWJ + cp(0x1f604) + ZWJ + cp(0x1f601);
-  const FAMILY_BARE = cp(0x1f600) + cp(0x1f603) + cp(0x1f604) + cp(0x1f601);
-  // 3 ZWJ per chain against the 16-unit document budget: 5 chains fit (15),
-  // the 6th needs 3 more and does not.
+  // A four-consonant Devanagari conjunct written with explicit half forms
+  // (KA-SSA-MA-YA, a ZWJ after each virama): one grapheme cluster under GB9c,
+  // whose three joiners each draw on the budget.
+  const virama = cp(0x94d);
+  const FAMILY_CLUSTER = [0x915, 0x937, 0x92e, 0x92f]
+    .map((c) => cp(c))
+    .join(virama + ZWJ);
+  const FAMILY_BARE = FAMILY_CLUSTER.replaceAll(ZWJ, "");
+  // 3 ZWJ per cluster against the 16-unit document budget: 5 clusters fit
+  // (15), the 6th needs 3 more and does not.
   const FAMILIES_THAT_FIT = 5;
 
   const clustersOf = (text) =>
@@ -975,7 +971,7 @@ describe("preserve budget: grapheme clusters are indivisible", () => {
   };
 
   for (const n of [FAMILIES_THAT_FIT, FAMILIES_THAT_FIT + 1, 8, 12]) {
-    it(`carves ${n} family emoji all-or-nothing per cluster`, () => {
+    it(`carves ${n} conjuncts all-or-nothing per cluster`, () => {
       const input = FAMILY_CLUSTER.repeat(n);
       const kept = Math.min(n, FAMILIES_THAT_FIT);
       assert.equal(
@@ -1000,10 +996,10 @@ describe("preserve budget: grapheme clusters are indivisible", () => {
 
   it("keeps multi-preservable clusters whole under the CONSECUTIVE caps too", () => {
     // VS16 + ZWJ inside ONE cluster: two preservables that must rise and fall
-    // together no matter which limit bites. The base already defaults to emoji
-    // presentation and the chain is unregistered, so both draw on the budget
-    // and 20 copies (40 preservables) overrun it.
-    const pair = cp(0x1f600) + cp(0xfe0f) + ZWJ + cp(0x1f600);
+    // together no matter which limit bites. The skin tone takes neither VS16
+    // to a text-default glyph nor GB11 to a pictograph on the joiner's left,
+    // so both draw on the budget and 20 copies (40 preservables) overrun it.
+    const pair = `x${cp(0x1f3fd)}${cp(0xfe0f)}${ZWJ}${cp(0x1f600)}`;
     for (const n of [1, 6, 9, 20]) assertNoPartialCarve(pair.repeat(n));
     assert.notEqual(stripInvisible(pair.repeat(20)), pair.repeat(20));
   });
@@ -1225,10 +1221,10 @@ describe("stripInvisible: emoji tag sequences (subregional flags)", () => {
 // ─── Registered emoji glyphs ───────────────────────────────────────────────────
 // A registered glyph's own spelling draws on no preserve budget: VS16 after an
 // Emoji_Presentation=No base (it switches the visible glyph from text to
-// emoji), and the joiners of an RGI emoji ZWJ sequence (which one is drawn is
-// the whole visible glyph). Both choices show on screen, so neither hides a
-// bit; metering them is what flagged a changelog of rainbow flags. Everything
-// next to them that changes nothing visible stays metered.
+// emoji), and a ZWJ UAX #29's GB11 keeps inside one grapheme — between two
+// pictographs, registered or not. Metering them is what flagged a changelog of
+// rainbow flags. A ZWJ GB11 does not join, and everything next to them that
+// changes nothing visible, stays metered.
 describe("registered emoji glyphs", () => {
   const ZWJ_CH = cp(0x200d);
   const VS16_CH = cp(0xfe0f);
@@ -1256,6 +1252,19 @@ describe("registered emoji glyphs", () => {
     ],
     ["emoji-presentation heart", cp(0x2764) + VS16_CH],
     ["emoji-presentation warning sign", cp(0x26a0) + VS16_CH],
+    // Not RGI: GB11 joins any two pictographs. The residual is one bit per
+    // adjacent pair, present or absent (see THREAT-MODEL.md).
+    ["unregistered ZWJ chain", cp(0x1f600) + ZWJ_CH + cp(0x1f600)],
+    [
+      "registered family extended by one more pictograph",
+      cp(0x1f468) +
+        ZWJ_CH +
+        cp(0x1f469) +
+        ZWJ_CH +
+        cp(0x1f467) +
+        ZWJ_CH +
+        cp(0x1f600),
+    ],
   ])
     it(`keeps a hundred of the ${name}, unreported and not payload`, () => {
       const doc = docOf(unit);
@@ -1267,19 +1276,8 @@ describe("registered emoji glyphs", () => {
 
   for (const [name, unit, category] of [
     [
-      "an unregistered ZWJ chain",
-      cp(0x1f600) + ZWJ_CH + cp(0x1f600),
-      CATEGORY.CF,
-    ],
-    [
-      "a registered family extended by one more pictograph",
-      cp(0x1f468) +
-        ZWJ_CH +
-        cp(0x1f469) +
-        ZWJ_CH +
-        cp(0x1f467) +
-        ZWJ_CH +
-        cp(0x1f600),
+      "a ZWJ after a skin tone with no pictograph before it",
+      `x${cp(0x1f3fd)}${ZWJ_CH}${cp(0x1f600)}`,
       CATEGORY.CF,
     ],
     [
