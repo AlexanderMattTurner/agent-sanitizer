@@ -11,6 +11,7 @@ import { describe, it } from "node:test";
 import {
   redactViaDaemon,
   spawnDaemon,
+  waitForSocket,
 } from "../claude-hooks/lib/redactor-client.mjs";
 
 /** A connect failure the client treats as "no daemon" and respawns for. */
@@ -153,13 +154,16 @@ describe("webIngress is a required choice, never a default", () => {
 describe("a daemon that dies on startup fails the call with its own reason", () => {
   /**
    * Drive the respawn arm with a REAL spawned process standing in for the
-   * daemon, and the real socket wait, bounded by `budgetMs`.
+   * daemon, and the real socket wait, bounded by `budgetMs` — or, with
+   * `endless`, by nothing at all: the wait then ends only when the daemon is
+   * reported dead, which is what proves it did not wait out a budget.
    * @param {string[]} command
    * @param {number} budgetMs
+   * @param {{endless?: boolean}} [opts]
    */
-  async function respawnWith(command, budgetMs) {
+  async function respawnWith(command, budgetMs, { endless = false } = {}) {
     const started = Date.now();
-    const error = await failure(
+    return failure(
       redactViaDaemon("some text", {
         webIngress: false,
         socketPath: "/nonexistent-dir/redactor.sock",
@@ -168,30 +172,41 @@ describe("a daemon that dies on startup fails the call with its own reason", () 
           throw deadSocket();
         },
         spawn: (socketPath) => spawnDaemon(socketPath, command),
+        waitForSocket: endless
+          ? (socketPath, opts) =>
+              waitForSocket(socketPath, { ...opts, deadlineMs: Infinity })
+          : waitForSocket,
       }),
     );
-    return { error, elapsedMs: Date.now() - started };
   }
 
-  it("reports a non-zero exit with its stderr tail, without waiting out the budget", async () => {
-    const { error, elapsedMs } = await respawnWith(
-      [
-        "python3",
-        "-c",
-        "import sys; sys.stderr.write('refusing the cache dir\\n'); sys.exit(3)",
-      ],
-      6000,
-    );
-    assert.equal(
-      error.message,
-      "secret redaction unavailable (redactor daemon failed to start " +
-        "(exit 3: refusing the cache dir)); secret-shaped output could not be vetted",
-    );
-    assert.ok(elapsedMs < 4000, `waited ${elapsedMs}ms for a dead daemon`);
-  });
+  it(
+    "reports a non-zero exit with its stderr tail, without waiting out the budget",
+    // A hang bound, not a speed bound: a passing run returns as soon as the
+    // child exits, so no load comes near it.
+    { timeout: 60_000 },
+    async () => {
+      // The wait has no deadline here, so only the exit can end it: a wait that
+      // ignored the death would never return, and the timeout above reports it.
+      const error = await respawnWith(
+        [
+          "python3",
+          "-c",
+          "import sys; sys.stderr.write('refusing the cache dir\\n'); sys.exit(3)",
+        ],
+        6000,
+        { endless: true },
+      );
+      assert.equal(
+        error.message,
+        "secret redaction unavailable (redactor daemon failed to start " +
+          "(exit 3: refusing the cache dir)); secret-shaped output could not be vetted",
+      );
+    },
+  );
 
   it("reports a daemon binary that does not exist", async () => {
-    const { error } = await respawnWith(["/nonexistent/redactor-daemon"], 6000);
+    const error = await respawnWith(["/nonexistent/redactor-daemon"], 6000);
     assert.match(
       error.message,
       /redactor daemon failed to start \(spawn \/nonexistent\/redactor-daemon ENOENT\)/u,
@@ -201,7 +216,7 @@ describe("a daemon that dies on startup fails the call with its own reason", () 
   it("keeps waiting after a clean exit, which is a lost bind race", async () => {
     // Exit 0 is what a daemon does when another already owns the socket, so it
     // must not abandon the wait: the failure is the plain timeout.
-    const { error } = await respawnWith(["python3", "-c", "pass"], 600);
+    const error = await respawnWith(["python3", "-c", "pass"], 600);
     assert.match(error.message, /redactor daemon did not start within \d+ms/u);
   });
 });

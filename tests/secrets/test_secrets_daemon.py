@@ -4,7 +4,7 @@ import json
 import socket
 import struct
 import threading
-import time
+import types
 
 import pytest
 
@@ -12,6 +12,7 @@ import agent_sanitizer.secrets.engine as E
 from agent_sanitizer.secrets import daemon as S
 from agent_sanitizer.secrets import handle_request
 from agent_sanitizer.secrets.config import RedactorConfig
+from tests._growth import assert_fits_budget
 from tests.secrets.redactor_helpers import (
     LEGITIMATE,
     SAMPLES,
@@ -239,14 +240,50 @@ def test_an_over_budget_scan_fails_that_request_closed(monkeypatch):
         E.redact("api_key: AKIAIOSFODNN7EXAMPLE\nsecond line\n" * 50, config)
 
 
-def test_an_ordinary_payload_stays_well_inside_the_budget():
-    """Non-vacuity in the other direction: the budget must not be tripping on
-    legitimate traffic, or the check above would pass for the wrong reason."""
+def test_the_budget_trips_on_elapsed_time_alone(monkeypatch):
+    """Non-vacuity in the other direction: the raise above must come from the
+    clock passing the budget, not from the payload or the config — or the check
+    above would pass for the wrong reason. Same payload, same zero budget, and
+    the engine's clock frozen: nothing elapses, so nothing may trip. Driven
+    rather than timed, so a loaded runner cannot push a real payload past a
+    real budget and fail this for the machine."""
+    monkeypatch.setattr(S, "REQUEST_COMPUTE_BUDGET_SECONDS", 0.0)
+    monkeypatch.setattr(E, "time", types.SimpleNamespace(monotonic=lambda: 0.0))
     config = S.parse_request(wire_request("x")).config
-    text = "api_key: AKIAIOSFODNN7EXAMPLE\nordinary log line\n" * 200
-    started = time.monotonic()
-    E.redact(text, config)
-    assert time.monotonic() - started < S.REQUEST_COMPUTE_BUDGET_SECONDS / 2
+    assert config.compute_budget_seconds == 0.0
+    redacted, found = E.redact(
+        "api_key: AKIAIOSFODNN7EXAMPLE\nsecond line\n" * 50, config
+    )
+    assert "AWS Access Key" in found
+    assert "AKIAIOSFODNN7EXAMPLE" not in redacted
+
+
+def test_a_realistic_payload_fits_the_real_budget():
+    """The frozen-clock test above proves the check does not fire without elapsed
+    time; this proves the converse the shipped constant exists for: ordinary tool
+    output, scanned through the engine's request path with the REAL configured
+    budget, costs a small fraction of it. Measured as the fastest of several
+    CPU-time runs against budget / headroom (``tests/_growth.py``), so a loaded
+    runner cannot fail it."""
+    payload = (
+        "".join(
+            f"2026-01-01T00:00:{i % 60:02d}Z INFO worker-{i % 8} handled GET "
+            f"/api/v1/items/{i} status=200 bytes={1000 + i} latency_ms={i % 90}\n"
+            for i in range(60)
+        )
+        + "api_key: AKIAIOSFODNN7EXAMPLE\n"
+    )
+    assert len(payload) > 4000
+    config = S.parse_request(wire_request(payload)).config
+    assert config.compute_budget_seconds == S.REQUEST_COMPUTE_BUDGET_SECONDS
+    redacted, found = E.redact(payload, config)
+    assert "AWS Access Key" in found
+    assert "AKIAIOSFODNN7EXAMPLE" not in redacted
+    assert_fits_budget(
+        "redact() on a several-KB ordinary payload",
+        lambda: E.redact(payload, config),
+        S.REQUEST_COMPUTE_BUDGET_SECONDS,
+    )
 
 
 # ─── Live socket round-trip ──────────────────────────────────────────────────
@@ -410,25 +447,31 @@ def test_daemon_over_budget_request_errors_and_frees_the_worker(daemon, monkeypa
     assert "AWS Access Key" in ok["found"]
 
 
-def test_daemon_slow_client_does_not_block_a_second_client(daemon):
+def test_daemon_slow_client_does_not_block_a_second_client(daemon, monkeypatch):
     """A stalled client (partial frame, never completed) must not wedge the accept
     loop: with the worker pool, a second concurrent client is served promptly
     instead of waiting out the first client's CONN_TIMEOUT_SECONDS. Served inline,
     the second request could not return until the stall timed out."""
+    monkeypatch.setattr(S, "CONN_TIMEOUT_SECONDS", 3600.0)
     slow = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
     slow.connect(daemon)
     try:
         # 2 of the 4 header bytes, then silence: the handler blocks in
-        # `_recv_exact` until CONN_TIMEOUT_SECONDS (10s).
+        # `_recv_exact` for the whole connection timeout — an hour here, so the
+        # stall cannot time out and free the loop before the second request
+        # is answered. Served at all, it was served beside the stall rather
+        # than behind it; how fast is not the question, so no load can fail it.
         slow.sendall(b"\x00\x00")
-        start = time.time()
-        resp = _client_request(daemon, wire_request("key: AKIAIOSFODNN7EXAMPLE"))
-        elapsed = time.time() - start
+        fresh = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        # A hang bound, not a speed bound: a blocked accept loop never answers.
+        fresh.settimeout(60)
+        try:
+            fresh.connect(daemon)
+            S._write_frame(fresh, wire_request("key: AKIAIOSFODNN7EXAMPLE"))
+            resp = S._read_frame(fresh)
+        finally:
+            fresh.close()
         assert "AWS Access Key" in resp["found"]
-        # allow-wall-clock: comfortably under CONN_TIMEOUT_SECONDS — a blocked
-        # accept loop would make this second request wait ~10s behind the
-        # stalled first client, not merely run slow under CI load.
-        assert elapsed < 5, f"second client waited {elapsed:.1f}s behind slow client"
     finally:
         # Close so the stalled worker's recv returns immediately and the pool can
         # drain at daemon shutdown instead of waiting out the full timeout.

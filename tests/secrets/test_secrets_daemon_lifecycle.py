@@ -8,7 +8,6 @@ import struct
 import subprocess
 import sys
 import threading
-import time
 from pathlib import Path
 
 import pytest
@@ -531,17 +530,16 @@ def test_stalled_connection_does_not_block_the_daemon(sock_dir, monkeypatch):
 
         fresh.connect(socket_path)
         S._write_frame(fresh, wire_request("key: AKIAIOSFODNN7EXAMPLE"))
-        fresh.settimeout(5)
-        start = time.time()
+        # Hang bounds, not speed bounds: a passing run returns as soon as the
+        # daemon acts, so no load comes near them.
+        fresh.settimeout(60)
+        stalled.settimeout(60)
         result = S._read_frame(fresh)
-        elapsed = time.time() - start
         assert "AWS Access Key" in result["found"]
-        # allow-wall-clock: bounded by roughly CONN_TIMEOUT_SECONDS (the
-        # stalled connection ahead of it in accept order); a real hang would
-        # be unbounded, not merely slow under CI load.
-        assert elapsed < 3, (
-            f"a stalled peer must not block a fresh request ({elapsed}s)"
-        )
+        # The timeout itself, observed rather than timed: the daemon gives up
+        # on the stalled peer and closes it (EOF). Unbounded, it would hold the
+        # connection open and this read would hit its own bound instead.
+        assert stalled.recv(1) == b""
     finally:
         stalled.close()
         fresh.close()

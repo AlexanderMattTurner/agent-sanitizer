@@ -152,6 +152,9 @@ export function nativeStdout(response) {
  * @param {(input: unknown) => unknown} [opts.transformInput]  raw-payload normalization before adapter.parse
  * @param {() => Promise<unknown>} [opts.readInput]  injectable stdin reader
  * @param {(chunk: string) => void} [opts.write]  injectable stdout writer
+ * @param {import("./hook-timing.mjs").ReportTo} [opts.reportTo]  the composer
+ *   that owns this hook, which a slow-run notice names and sends the report to;
+ *   omitted, the notice names this package
  * @returns {Promise<void>}
  */
 export async function runJudgeCli(
@@ -162,6 +165,7 @@ export async function runJudgeCli(
     transformInput = (raw) => raw,
     readInput = readStdinJson,
     write = (chunk) => process.stdout.write(chunk),
+    reportTo,
   },
 ) {
   let input;
@@ -200,6 +204,7 @@ export async function runJudgeCli(
           cpuMs: timer.cpuMs(),
           redactorMs: timer.redactorMs(),
           hostMs: timer.hostMs(),
+          reportTo,
         }),
         event,
       ),
@@ -218,6 +223,7 @@ export async function runJudgeCli(
         cpuMs: timer.cpuMs(),
         redactorMs: timer.redactorMs(),
         hostMs: timer.hostMs(),
+        reportTo,
       });
     onError(err, input);
   }

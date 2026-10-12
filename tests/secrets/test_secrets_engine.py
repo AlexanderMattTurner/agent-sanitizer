@@ -8,7 +8,7 @@ env-bound values come from a :class:`RedactorConfig` instead of ``os.environ``.
 
 import hashlib
 import re
-import time
+import types
 
 import pytest
 
@@ -23,6 +23,8 @@ from agent_sanitizer.secrets import (
     secret_previews,
 )
 from redactor_helpers import SAMPLES, cfg, reconstruct, run_map, run_plain
+
+from tests._growth import assert_linear, cpu_growth, geometric_sizes
 
 
 def val_cand(value: str, line: str | None = None) -> E.Candidate:
@@ -140,22 +142,44 @@ def test_field_value_regex_case_insensitive_and_multiline():
     assert later.group("secret_value") == "abc123def456ghi789jkl012"
 
 
+def _underscore_run(n: int) -> str:
+    """A keyword, a run of `_`, then a byte that is not an assignment operator,
+    so no match ever completes."""
+    return "token" + "_" * n + "!"
+
+
 @pytest.mark.parametrize("n", [16, 32, 48, 64])
-def test_field_value_re_linear_on_underscore_run(n):
-    # ReDoS adversarial input: a keyword, a long run of `_`, then a byte that is
-    # not an assignment operator so no match ever completes. The old
-    # `(?:[_-]\w+)*` had separator `[_-]` and body `\w` both matching `_`, so the
-    # run repartitioned exponentially (measured 7.9s at n=38, doubling every 2
-    # chars). The non-overlapping `(?:[_-][A-Za-z0-9]+)*` — disjoint separator
-    # and body classes — parses the run exactly one way, so search stays linear.
-    adversarial = "token" + "_" * n + "!"
-    start = time.perf_counter()
-    assert E.FIELD_VALUE_RE.search(adversarial) is None
-    # allow-wall-clock: an exponential ReDoS blowup at these sizes cannot meet
-    # a 1s ceiling under any CI load — this asserts the regex has no
-    # catastrophic backtracking, run against the REAL compiled pattern (not
-    # an approximation).
-    assert time.perf_counter() - start < 1.0, n
+def test_field_value_re_rejects_an_underscore_run(n):
+    assert E.FIELD_VALUE_RE.search(_underscore_run(n)) is None
+
+
+def test_field_value_re_linear_on_underscore_run():
+    # ReDoS adversarial input. The old `(?:[_-]\w+)*` had separator `[_-]` and
+    # body `\w` both matching `_`, so the run repartitioned exponentially
+    # (measured 7.9s at n=38, doubling every 2 chars). The non-overlapping
+    # `(?:[_-][A-Za-z0-9]+)*` — disjoint separator and body classes — parses the
+    # run exactly one way, so search stays linear. Run against the REAL compiled
+    # pattern, not an approximation.
+    #
+    # The fit cannot be taken where the OLD pattern would finish. Below ~20
+    # underscores the string is too short for any match and the engine rejects
+    # it in ~90ns, and up to ~128 the fixed pattern's own curve still bends
+    # (it reads exponent 4.6 over 16-32 and 2.4 over 16-128 on a loaded
+    # machine) — while the old pattern costs ~1s at 32 and hours at 64. So the
+    # fit runs where the fixed pattern is in its linear regime (128-1024 reads
+    # ~1.0), and an exponential regression would hang this test rather than
+    # classify. The class itself is gated statically, without running it, by
+    # `test_redos_static_guard.py`, which analyses FIELD_VALUE_RE with the rest
+    # of the engine's patterns.
+    assert_linear(
+        "FIELD_VALUE_RE on an underscore run",
+        cpu_growth(
+            lambda n, k: (
+                lambda text=_underscore_run(n + k): E.FIELD_VALUE_RE.search(text)
+            ),
+            geometric_sizes(128, 1024),
+        ),
+    )
 
 
 # ─── Bracket-wrapped values ──────────────────────────────────────────────────
@@ -2382,6 +2406,36 @@ def test_env_value_re_not_memoized_so_no_plaintext_retention():
     assert E._env_value_re("abcdef", charset).fullmatch("abcdef")
 
 
+def test_env_value_re_value_holding_an_invisible_is_linear():
+    """A value that itself contains an invisible must not put that literal between
+    two starred invisible classes: ``a<ZWSP>a`` built ``a[…]*<ZWSP>[…]*a``, which
+    backtracks quadratically over a long ZWSP run that ends in a non-match. The
+    cause is structural, so assert it directly instead of timing a hostile input."""
+    from agent_sanitizer.secrets.invisible import default_charset, invisible_run_pattern
+
+    charset = default_charset()
+    zwsp = "\u200b"
+    pattern = E._env_value_re(f"abc{zwsp}def", charset)
+
+    run = invisible_run_pattern(charset)
+    # Positive marker: the gaps are there to strip, so the literals check below
+    # reads the pattern's real shape.
+    assert run in pattern.pattern
+    assert pattern.pattern.replace(run, "") == "abcdef"
+
+    for text in (f"abc{zwsp}def", "abcdef", f"abc{zwsp * 3}def", "ab\u2060cdef"):
+        assert pattern.search(text), repr(text)
+    assert pattern.search("abcxdef") is None
+
+
+def test_env_value_re_value_of_only_invisibles_is_not_match_everything():
+    from agent_sanitizer.secrets.invisible import default_charset
+
+    pattern = E._env_value_re("\u200b\u200b", default_charset())
+    assert pattern.search("ordinary text") is None
+    assert pattern.search("x\u200b\u200by")
+
+
 def test_configure_plugins_exit_propagates_cache_clear_error(eng, monkeypatch):
     """`configure_plugins().__exit__` must not swallow an exception raised in its
     `try` body. A `return` inside the `finally` would mask a failing
@@ -2560,7 +2614,7 @@ def test_overlap_test_is_sub_quadratic_in_the_secrets_on_one_line(monkeypatch):
     )
 
 
-def test_a_compute_budget_interrupts_one_very_long_line():
+def test_a_compute_budget_interrupts_one_very_long_line(monkeypatch):
     """The budget must bind INSIDE a line, not only between lines.
 
     A caller's ceiling exists so one request cannot deny service to the next.
@@ -2572,18 +2626,36 @@ def test_a_compute_budget_interrupts_one_very_long_line():
         "AKIA" + hashlib.sha256(str(i).encode()).hexdigest()[:16].upper()
         for i in range(4000)
     )
-    # Large enough to clear the whole-text stages ahead of the per-line loop (the
-    # candidate-line gate sweeps this 130KB payload once), small enough that the
-    # group build's ~n^2 re-scan — seconds of work for n=4000 — blows it. A budget
-    # tight enough to expire during an earlier stage would assert on that stage's
-    # name instead and stop testing what this test is about.
-    budgeted = RedactorConfig(compute_budget_seconds=0.05)
+    # The engine's clock is driven, not read: time advances one second per
+    # group-build check and not at all elsewhere. A wall-clock budget made which
+    # stage expired first depend on how loaded the machine was — under load the
+    # earlier whole-text stages alone overran it. Here only the property under
+    # test decides the outcome: with a 2.5 s budget the raise comes on the THIRD
+    # group-build check, which one line can only reach if the check sits inside
+    # the per-secret loop rather than once per line.
+    clock = [0.0]
+    group_build_checks = []
+    real_check = E._Deadline.check
+
+    def ticking_check(self, stage):
+        if stage == "per-line group build":
+            group_build_checks.append(stage)
+            clock[0] += 1.0
+        real_check(self, stage)
+
+    monkeypatch.setattr(E, "time", types.SimpleNamespace(monotonic=lambda: clock[0]))
+    monkeypatch.setattr(E._Deadline, "check", ticking_check)
+    budgeted = RedactorConfig(compute_budget_seconds=2.5)
     with pytest.raises(E.RedactionBudgetExceeded) as raised:
         redact(line, budgeted)
     # The SCAN phase must be bounded, not only the arbitration after it: the
     # group build re-scans the whole line once per detected secret, so it is the
     # largest term and it all runs before arbitration begins.
-    assert "group build" in str(raised.value), str(raised.value)
+    assert str(raised.value) == (
+        "redaction exceeded its compute budget during per-line group build"
+    )
+    assert len(group_build_checks) == 3
+    monkeypatch.undo()
     # Positive marker: the same input redacts normally with no budget, so the
     # raise above is the budget biting and not the input failing to scan.
     out, found = redact(line, RedactorConfig())

@@ -47,6 +47,7 @@ from .invisible import (
     identity_map,
     invisible_run_pattern,
     newline_offsets,
+    strip_invisible,
     strip_invisible_by_line,
     strip_invisible_with_map,
 )
@@ -300,9 +301,17 @@ def _env_value_re(value: str, charset: frozenset[int]) -> re.Pattern[str]:
 
     Each interior gap allows zero-or-more invisibles, so the plain value still
     matches (a superset of exact substring). Required literals between every gap
-    keep the pattern linear — no ReDoS."""
+    keep the pattern linear — no ReDoS — but only while no literal is itself an
+    invisible: ``a<ZWSP>a`` would build ``a[…]*<ZWSP>[…]*a``, two stars sharing the
+    literal, and backtrack quadratically over a long run of ZWSP. So the value's
+    own invisibles are dropped first (the text side is tolerant of them anyway).
+    A value made only of invisibles has no literal to anchor a gap on and is
+    matched exactly."""
+    visible = strip_invisible(value, charset)
+    if not visible:
+        return re.compile(re.escape(value))
     run = invisible_run_pattern(charset)
-    return re.compile(run.join(re.escape(c) for c in value))
+    return re.compile(run.join(re.escape(c) for c in visible))
 
 
 def _env_mark(

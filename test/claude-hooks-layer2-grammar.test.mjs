@@ -1,14 +1,11 @@
-// drift-guard-ok: the mirror is unavoidable — the shipped bundle cannot
-// import the engine at its pinned release.
 /**
- * The hooks-layer mirror of the keyed Layer-2 placeholder grammar.
+ * The keyed Layer-2 placeholder grammar as the hooks parse it.
  *
- * The engine (`src/html.mjs`) is the single PRODUCER of Layer-2 placeholders;
- * the hooks carry a MIRRORED regex (lib/placeholder-grammar.mjs) because the
- * shipped plugin bundle resolves the engine from a pinned registry release, so
- * an engine export the pin lacks would be undefined there. This suite is what
- * keeps the two regexes source-identical, and every placeholder the engine
- * can mint round-trips through the hooks' parser to the exact key.
+ * `src/layer2-placeholder.mjs` owns the grammar: the engine (`src/html.mjs`)
+ * mints placeholders from it and the hooks parse with the same regex object,
+ * re-exported by lib/placeholder-grammar.mjs, so there is one definition. This
+ * suite pins that every placeholder the engine can mint round-trips through
+ * the hooks' parser to the exact key.
  *
  * It also pins the property the PreToolUse composition RELIES on: the Layer-2
  * grammar and the secret-redaction grammar are DISJOINT, so the secret
@@ -33,16 +30,15 @@ const PRODUCER_CASES = [
   ["comment", ""],
 ];
 
-describe("hooks mirror of LAYER2_PLACEHOLDER_RE", () => {
-  it("is source- and flag-identical to the engine's grammar", () => {
-    assert.equal(LAYER2_PLACEHOLDER_RE.source, ENGINE_RE.source);
-    assert.equal(LAYER2_PLACEHOLDER_RE.flags, ENGINE_RE.flags);
+describe("the hooks' parse of LAYER2_PLACEHOLDER_RE", () => {
+  it("is the very grammar object the engine mints against", () => {
+    assert.equal(ENGINE_RE, LAYER2_PLACEHOLDER_RE);
   });
 
   for (const [kind, original] of PRODUCER_CASES) {
     it(`round-trips the ${kind} placeholder for ${JSON.stringify(original)}`, () => {
       const placeholder = layer2Placeholder(kind, original);
-      // The mirror matches the WHOLE placeholder, exactly once, and extracts
+      // The grammar matches the WHOLE placeholder, exactly once, and extracts
       // the same 12-hex key the engine minted.
       const matches = [...placeholder.matchAll(LAYER2_PLACEHOLDER_RE)];
       assert.equal(matches.length, 1);

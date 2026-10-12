@@ -38,10 +38,10 @@ import { hookTrace, TraceEvent } from "./lib/trace.mjs";
 // come from the agent-sanitizer package. They are bound by a *caught* dynamic
 // import, never a bare top-level `import … from "…"`: a static npm import
 // resolves before any try/catch, so a missing node_modules would crash this hook
-// at load and let the prompt through UNSANITIZED (fail-open). A failed load
+// at load and let the prompt through UNSANITIZED with no warning. A failed load
 // leaves that binding undefined, which the judge's typeof guards turn into a
-// fail-closed block — one guard each, since the two loads succeed or fail
-// independently.
+// throw that this hook's registered fault policy answers (lib/hook-fault.mjs)
+// — one guard each, since the two loads succeed or fail independently.
 /** @type {typeof import("agent-sanitizer/prompt").classifyPrompt} */
 export let classifyPrompt;
 /** @type {typeof import("agent-sanitizer").stripAnsiFully} */
@@ -101,7 +101,7 @@ registerFaultPolicy(HOOK_NAME, {
 /* c8 ignore start — module-load boundary: the imports resolve in every real
  * run, and their failure (the package absent) can't be simulated in-process, so
  * neither arm is observable to the in-process tests. The judge's typeof guard
- * converts an undefined stripper into a fail-closed block — that guard IS tested. */
+ * converts an undefined stripper into a fault — that guard IS tested. */
 // Stryker disable all
 // lazyImport rather than a bare `await import` in a try/catch: it RECORDS the
 // loader error, which is the only thing that can tell a missing install apart
@@ -109,7 +109,7 @@ registerFaultPolicy(HOOK_NAME, {
 // missingPackageError with nothing to report but a guess.
 // The cast asserts the loaded SHAPE, not that it loaded: lazyImport yields {} on
 // failure, so either binding can still be undefined here — which is exactly what
-// the judge's typeof guard turns into a fail-closed block.
+// the judge's typeof guard turns into a fault (see the posture note above).
 ({ classifyPrompt } = /** @type {typeof import("agent-sanitizer/prompt")} */ (
   await lazyImport("agent-sanitizer/prompt")
 ));
@@ -123,12 +123,11 @@ registerFaultPolicy(HOOK_NAME, {
  * Judge a normalized prompt-submit event. Agent-agnostic: consumes the
  * control-plane ToolCallEvent and returns a Verdict, so the same prompt gate
  * renders through any agent adapter, not just Claude's. Throws (into the
- * calling hook's catch) when the sanitizer package never loaded — this hook is
- * the only defense on user input, so a prompt it cannot classify must block,
- * never pass through.
+ * calling hook's catch) when the sanitizer package never loaded, so a prompt it
+ * cannot classify takes the hook's fault posture rather than a silent ALLOW.
  * @param {import("agent-control-plane-core").ToolCallEvent} event
  * @param {((s: string) => string) | null} [strip]  the ANSI stripper (defaults
- *   to the package's stripAnsiFully; injectable so the fail-closed path is testable)
+ *   to the package's stripAnsiFully; injectable so the fault path is testable)
  * @param {Partial<typeof USER_PROMPT_MESSAGES>} [overrides]  reason overrides,
  *   merged over the defaults so a partial table can never leave a field unset
  * @returns {import("agent-control-plane-core").Verdict}
@@ -199,7 +198,7 @@ export function judgeSanitizeUserPrompt(
  *   env?: NodeJS.ProcessEnv | Record<string, string | undefined>,
  * }} [opts]
  *   `strip` is the ANSI stripper (defaults to the package's stripAnsiFully;
- *   injectable so the fail-closed path is testable); `overrides` are reason
+ *   injectable so the fault path is testable); `overrides` are reason
  *   overrides, merged over the defaults so a partial table can never leave a field
  *   unset; `trace` is where engagement is announced, for a host with its own trace
  *   channel (see lib/trace.mjs); `env` is the failure-posture source (see
@@ -221,9 +220,8 @@ export async function main(read, write, opts = {}) {
   // runJudgeCli so this hook doesn't re-implement the control-plane boundary:
   // runJudgeCli reads stdin BEFORE loading the control-plane package, so a
   // load failure fails to this hook's posture (the onError block) instead of
-  // leaving stdin unread. onError writes its envelope by hand — the default
-  // warning-only pass-through, or the block a caller asked for with
-  // AGENT_SANITIZER_FAIL_OPEN=0 — because the adapter that would render it is
+  // leaving stdin unread. onError writes the registered fault policy's envelope
+  // (lib/hook-fault.mjs) by hand, because the adapter that would render it is
   // exactly what may have failed to load. Either way this is the HOOK failing;
   // a prompt the working stripper flagged is still blocked in both postures.
   await runJudgeCli(
