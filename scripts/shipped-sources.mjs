@@ -21,9 +21,8 @@
  * is named for: see the block above it for why that is the shape with no scope
  * decision in it.
  */
-import { execFileSync } from "node:child_process";
 import { readdirSync, readFileSync, realpathSync, statSync } from "node:fs";
-import { dirname, join, posix } from "node:path";
+import { join, posix, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 /** Files whose coverage/mutation scope is `src/`: the library proper. */
@@ -245,12 +244,16 @@ export const hookScope = (repoRoot) => {
   );
 };
 
-/** Repo root, resolved from git so this works from any cwd. */
+/**
+ * Repo root: the parent of the `scripts/` directory this module lives in, so it
+ * holds from any cwd and in any environment. Not `git rev-parse
+ * --show-toplevel`: with `GIT_DIR` exported and `GIT_WORK_TREE` not — which is
+ * how git runs hooks, and how anyone reproducing a hook sets it — git answers
+ * with the CWD, and this module's own directory became the "root".
+ * @returns {string} absolute path, no trailing separator
+ */
 export const findRepoRoot = () =>
-  execFileSync("git", ["rev-parse", "--show-toplevel"], {
-    encoding: "utf8",
-    cwd: dirname(fileURLToPath(import.meta.url)),
-  }).trim();
+  resolve(fileURLToPath(new URL("..", import.meta.url)));
 
 // The CLI prints the MUTATED set, a superset of the shipped one the module is
 // named for. Its one consumer is the mutation dry-run oracle, which has to

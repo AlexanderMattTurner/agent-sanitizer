@@ -2384,6 +2384,36 @@ def test_env_value_re_not_memoized_so_no_plaintext_retention():
     assert E._env_value_re("abcdef", charset).fullmatch("abcdef")
 
 
+def test_env_value_re_value_holding_an_invisible_is_linear():
+    """A value that itself contains an invisible must not put that literal between
+    two starred invisible classes: ``a<ZWSP>a`` built ``a[…]*<ZWSP>[…]*a``, which
+    backtracks quadratically over a long ZWSP run that ends in a non-match. The
+    cause is structural, so assert it directly instead of timing a hostile input."""
+    from agent_sanitizer.secrets.invisible import default_charset, invisible_run_pattern
+
+    charset = default_charset()
+    zwsp = "\u200b"
+    pattern = E._env_value_re(f"abc{zwsp}def", charset)
+
+    run = invisible_run_pattern(charset)
+    # Positive marker: the gaps are there to strip, so the literals check below
+    # reads the pattern's real shape.
+    assert run in pattern.pattern
+    assert pattern.pattern.replace(run, "") == "abcdef"
+
+    for text in (f"abc{zwsp}def", "abcdef", f"abc{zwsp * 3}def", "ab\u2060cdef"):
+        assert pattern.search(text), repr(text)
+    assert pattern.search("abcxdef") is None
+
+
+def test_env_value_re_value_of_only_invisibles_is_not_match_everything():
+    from agent_sanitizer.secrets.invisible import default_charset
+
+    pattern = E._env_value_re("\u200b\u200b", default_charset())
+    assert pattern.search("ordinary text") is None
+    assert pattern.search("x\u200b\u200by")
+
+
 def test_configure_plugins_exit_propagates_cache_clear_error(eng, monkeypatch):
     """`configure_plugins().__exit__` must not swallow an exception raised in its
     `try` body. A `return` inside the `finally` would mask a failing
