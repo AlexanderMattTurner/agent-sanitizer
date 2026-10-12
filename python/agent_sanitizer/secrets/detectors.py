@@ -143,14 +143,6 @@ class LooseProviderKeyDetector(RegexBasedDetector):
     denylist = _DENYLISTS["LooseProviderKeyDetector"]
 
 
-class OpenAiTokenDetector(RegexBasedDetector):
-    """OpenAI API keys (``sk-…T3BlbkFJ…``). Linear replacement for detect-secrets'
-    bundled ``OpenAIDetector``, under the same secret_type."""
-
-    secret_type = "OpenAI Token"  # noqa: S105 — a detector label, not a secret
-    denylist = _DENYLISTS["OpenAiTokenDetector"]
-
-
 class GroqApiKeyDetector(RegexBasedDetector):
     """Groq API keys (``gsk_…``). No gitleaks rule; prefix from Groq's console
     docs (https://console.groq.com/keys)."""
@@ -167,7 +159,7 @@ class XaiApiKeyDetector(RegexBasedDetector):
     denylist = _DENYLISTS["XaiApiKeyDetector"]
 
 
-# ── Reimplementation of a bundled detector with a quadratic pattern ───────────
+# ── Reimplementations of bundled detectors with a quadratic pattern ───────────
 # detect-secrets' NpmDetector denylist is `\/\/.+\/:_authToken=\s*((npm_.+)|
 # ([A-Fa-f0-9-]{36})).*` — the unbounded `.+` before the required
 # `/:_authToken=` literal is retried at every `//` in the scanned text, so a
@@ -183,6 +175,17 @@ class NpmDetector(RegexBasedDetector):
 
     secret_type = "NPM tokens"  # noqa: S105 — a detector label, not a secret
     denylist = _DENYLISTS["NpmDetector"]
+
+
+# detect-secrets' OpenAIDetector opens `sk-[A-Za-z0-9-_]*` with no boundary, so
+# every `sk-` in a long hyphen run restarts the unbounded body scan. The JSON
+# row keeps its body and adds token-boundary lookbehinds, which make it linear.
+class OpenAiTokenDetector(RegexBasedDetector):
+    """OpenAI API keys (``sk-…T3BlbkFJ…``). Linear replacement for detect-secrets'
+    bundled ``OpenAIDetector``, under the same secret_type."""
+
+    secret_type = "OpenAI Token"  # noqa: S105 — a detector label, not a secret
+    denylist = _DENYLISTS["OpenAiTokenDetector"]
 
 
 class ReplicateApiTokenDetector(RegexBasedDetector):
