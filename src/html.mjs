@@ -3205,38 +3205,52 @@ function collectUrls(text) {
  */
 export function detectExfil(text, options = {}) {
   if (!needsUrlScan(text)) return null;
+  return scanUrlsOrSentinel(
+    () => {
+      /** @type {Array<{ isImage: boolean, autoFetched: boolean, reason: string, target: string, unscannable?: true }>} */
+      const threats = [];
+      for (const { url, isImage, autoFetched, context } of collectUrls(text)) {
+        const reason =
+          checkExfilUrl(url, options) ||
+          (context !== "resource" && isOffOrigin(url)
+            ? OFF_ORIGIN_REASON[context]
+            : null);
+        if (!reason) continue;
+        threats.push({ isImage, autoFetched, reason, target: urlHost(url) });
+      }
+      return threats;
+    },
+    {
+      isImage: false,
+      // Fail closed on the severity tier too: an input the scanner could not
+      // read is not evidence that what it hides is harmless.
+      autoFetched: true,
+      reason: "input too deeply nested to scan for exfil URLs",
+      target: "(unparseable HTML)",
+      unscannable: true,
+    },
+  );
+}
 
-  /** @type {Array<{ isImage: boolean, autoFetched: boolean, reason: string, target: string }>} */
-  const threats = [];
-
+/**
+ * Run one URL scan and return its threats (null when there are none). Only a
+ * stack overflow on pathological nesting is the input's fault; any other throw
+ * is a bug in the scan and propagates. On the overflow, fail CLOSED with the one
+ * `sentinel` threat, marked `unscannable` because it names no URL, so the caller
+ * still warns. Both Layer-3 detectors share this, so the rethrow is one arm.
+ * @template T
+ * @param {() => T[]} scan
+ * @param {T} sentinel
+ * @returns {T[] | null}
+ */
+function scanUrlsOrSentinel(scan, sentinel) {
+  let threats;
   try {
-    for (const { url, isImage, autoFetched, context } of collectUrls(text)) {
-      const reason =
-        checkExfilUrl(url, options) ||
-        (context !== "resource" && isOffOrigin(url)
-          ? OFF_ORIGIN_REASON[context]
-          : null);
-      if (!reason) continue;
-      threats.push({ isImage, autoFetched, reason, target: urlHost(url) });
-    }
+    threats = scan();
   } catch (err) {
-    // Only a stack overflow on pathological nesting is the input's fault; any
-    // other throw is a bug here and propagates. Fail CLOSED on the overflow: one
-    // sentinel marked `unscannable` (it names no URL) so the caller still warns.
     if (!(err instanceof RangeError)) throw err;
-    return [
-      {
-        isImage: false,
-        // Fail closed on the severity tier too: an input the scanner could not
-        // read is not evidence that what it hides is harmless.
-        autoFetched: true,
-        reason: "input too deeply nested to scan for exfil URLs",
-        target: "(unparseable HTML)",
-        unscannable: true,
-      },
-    ];
+    return [sentinel];
   }
-
   return threats.length > 0 ? threats : null;
 }
 
@@ -3253,33 +3267,28 @@ export function detectExfil(text, options = {}) {
  */
 export function detectConfusableHosts(text) {
   if (!needsUrlScan(text)) return null;
-
-  /** @type {Array<{ severity: string, description: string }>} */
-  const threats = [];
-  /** @type {Set<string>} */
-  const seen = new Set();
-
-  try {
-    for (const { url } of collectUrls(text)) {
-      const found = confusableHost(url);
-      // One host repeated across a document is one deception, not N.
-      if (!found || seen.has(found.ascii)) continue;
-      seen.add(found.ascii);
-      threats.push({
-        severity: found.severity,
-        description: describeConfusableHost(found),
-      });
-    }
-  } catch (err) {
-    if (!(err instanceof RangeError)) throw err;
-    return [
-      {
-        severity: SEVERITY.WARNING,
-        description: "input too deeply nested to scan for confusable hosts",
-        unscannable: true,
-      },
-    ];
-  }
-
-  return threats.length > 0 ? threats : null;
+  return scanUrlsOrSentinel(
+    () => {
+      /** @type {Array<{ severity: string, description: string, unscannable?: true }>} */
+      const threats = [];
+      /** @type {Set<string>} */
+      const seen = new Set();
+      for (const { url } of collectUrls(text)) {
+        const found = confusableHost(url);
+        // One host repeated across a document is one deception, not N.
+        if (!found || seen.has(found.ascii)) continue;
+        seen.add(found.ascii);
+        threats.push({
+          severity: found.severity,
+          description: describeConfusableHost(found),
+        });
+      }
+      return threats;
+    },
+    {
+      severity: SEVERITY.WARNING,
+      description: "input too deeply nested to scan for confusable hosts",
+      unscannable: true,
+    },
+  );
 }

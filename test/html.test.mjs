@@ -1961,6 +1961,21 @@ describe("R1: parser stack overflow fails closed (never throws)", () => {
     assert.match(threats[0].description, /too deeply nested/);
   });
 
+  it("a throw that is not a stack overflow propagates instead of becoming the sentinel", () => {
+    // The sentinel is for input too nested to walk; a bug in the scan itself
+    // must surface, not read as "unscannable". A throwing option reaches the
+    // one rethrow both detectors share.
+    const options = {
+      get flagDigestValues() {
+        throw new TypeError("scan bug");
+      },
+    };
+    assert.throws(() => detectExfil("see https://x.example/?d=1", options), {
+      name: "TypeError",
+      message: "scan bug",
+    });
+  });
+
   it("top-level sanitize(html:true) never throws and returns a warned string", async () => {
     const { cleaned, found, warnings } = await sanitize(OVERFLOW, {
       html: true,
