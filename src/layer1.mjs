@@ -189,15 +189,17 @@ function rendersNothing(gap) {
  *      leaves a terminal exactly as concealed as it was.
  *   2. The foreground is the background while a glyph goes by (`ESC[30;40m`):
  *      concealment by colour, judged only where the match is unambiguous (see
- *      {@link foregroundMatchesBackground}).
- *
- * Either state still in force when the text ENDS is a refusal too, whatever
- * the tail holds: rendition outlives the bytes that set it, so a file ending in
- * `ESC[8m` or `ESC[30;40m` blanks everything the terminal prints after it is
- * `cat`ed — a latent spoof rather than styling.
+ *      {@link foregroundMatchesBackground}). Block Elements are the one
+ *      exception judged across the whole text rather than per glyph (see
+ *      {@link drawsSecondBlockElement}).
  *   3. {@link SGR_RUN_THRESHOLD} sequences with nothing that renders between
  *      them: the run puts no glyph on the screen, so it carries data rather than
  *      styling.
+ *
+ * CONCEAL or a matching foreground still in force when the text ENDS is a
+ * refusal too, whatever the tail holds: rendition outlives the bytes that set
+ * it, so a file ending in `ESC[8m` or `ESC[30;40m` blanks everything the
+ * terminal prints after it is `cat`ed — a latent spoof rather than styling.
  *
  * What it does NOT claim: a message spread thinly through legitimately coloured
  * text — one sequence per line, say — is indistinguishable from styling, and
@@ -216,6 +218,8 @@ export function sgrCarriesPayload(text) {
   let rendition = DEFAULT_RENDITION;
   let run = 0;
   let previousEnd = 0;
+  /** @type {Set<string>} */
+  const solidBlocks = new Set();
   for (const token of scanAnsi(text)) {
     const gap = text.slice(previousEnd, token.start);
     const blankGap = rendersNothing(gap);
@@ -227,7 +231,7 @@ export function sgrCarriesPayload(text) {
     // This refusal is what blocks `ESC[8m` (or a foreground painted in its own
     // background) from hiding text from the human while leaving its bytes for
     // the model.
-    if (hidesText(rendition, gap)) return true;
+    if (hidesText(rendition, gap, solidBlocks)) return true;
     run = blankGap ? run + 1 : 1;
     if (run >= SGR_RUN_THRESHOLD) return true;
     rendition = sgrRendition(text.slice(token.start, token.end), rendition);
@@ -237,22 +241,48 @@ export function sgrCarriesPayload(text) {
 
 // A glyph whose identity a foreground painted in its own background hides:
 // anything but whitespace (which looks the same either way) and the Block
-// Elements (U+2580-U+259F), which ANSI art paints as solid colour cells, so
-// matching colours there hide nothing a reader was meant to see.
+// Elements, which drawsSecondBlockElement judges instead.
 const COLOUR_HIDDEN_GLYPH = /[^\s\u2580-\u259F]/u;
+const BLOCK_ELEMENT = /[\u2580-\u259F]/gu;
+
+/**
+ * True when `gap`, drawn in a foreground matching its background, brings the
+ * text's count of distinct Block Elements (U+2580-U+259F) so drawn past one.
+ *
+ * In matching colours every Block Element paints the same solid cell, so the
+ * glyph CHOICE is hidden from a human while a model reads it — a channel of up
+ * to five bits a cell. One glyph throughout carries no choice, and that is what
+ * a half-block image renderer emits (catimg-style `▀` with the top pixel as
+ * foreground and the bottom as background, equal wherever the image is flat),
+ * so a single distinct glyph stays styling and a second one is the refusal.
+ * `seen` spans the whole text, so the choice cannot be spread one glyph per
+ * sequence. Bounded: it never holds more than one glyph between calls.
+ * @param {string} gap @param {Set<string>} seen
+ * @returns {boolean}
+ */
+function drawsSecondBlockElement(gap, seen) {
+  for (const [glyph] of gap.matchAll(BLOCK_ELEMENT)) {
+    seen.add(glyph);
+    if (seen.size > 1) return true;
+  }
+  return false;
+}
 
 /**
  * True when `rendition` hides some of `gap` from a human: CONCEAL blanks every
  * glyph, and a foreground matching its background hides every
- * {@link COLOUR_HIDDEN_GLYPH}.
+ * {@link COLOUR_HIDDEN_GLYPH} and the choice among Block Elements.
  * @param {Readonly<SgrRendition>} rendition @param {string} gap
+ * @param {Set<string>} solidBlocks  the Block Elements already drawn in
+ *   matching colours, across the whole text
  * @returns {boolean}
  */
-function hidesText(rendition, gap) {
+function hidesText(rendition, gap, solidBlocks) {
   if (rendition.concealed) return !rendersNothing(gap);
+  if (!foregroundMatchesBackground(rendition)) return false;
   return (
-    foregroundMatchesBackground(rendition) &&
-    COLOUR_HIDDEN_GLYPH.test(gap.replace(STRIP, ""))
+    COLOUR_HIDDEN_GLYPH.test(gap.replace(STRIP, "")) ||
+    drawsSecondBlockElement(gap, solidBlocks)
   );
 }
 

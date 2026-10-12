@@ -4614,6 +4614,7 @@ function sgrCarriesPayload(text6) {
   let rendition = DEFAULT_RENDITION;
   let run = 0;
   let previousEnd = 0;
+  const solidBlocks = /* @__PURE__ */ new Set();
   for (const token of scanAnsi(text6)) {
     const gap = text6.slice(previousEnd, token.start);
     const blankGap = rendersNothing(gap);
@@ -4622,16 +4623,24 @@ function sgrCarriesPayload(text6) {
       run = 0;
       continue;
     }
-    if (hidesText(rendition, gap)) return true;
+    if (hidesText(rendition, gap, solidBlocks)) return true;
     run = blankGap ? run + 1 : 1;
     if (run >= SGR_RUN_THRESHOLD) return true;
     rendition = sgrRendition(text6.slice(token.start, token.end), rendition);
   }
   return rendition.concealed || foregroundMatchesBackground(rendition);
 }
-function hidesText(rendition, gap) {
+function drawsSecondBlockElement(gap, seen) {
+  for (const [glyph] of gap.matchAll(BLOCK_ELEMENT)) {
+    seen.add(glyph);
+    if (seen.size > 1) return true;
+  }
+  return false;
+}
+function hidesText(rendition, gap, solidBlocks) {
   if (rendition.concealed) return !rendersNothing(gap);
-  return foregroundMatchesBackground(rendition) && COLOUR_HIDDEN_GLYPH.test(gap.replace(STRIP, ""));
+  if (!foregroundMatchesBackground(rendition)) return false;
+  return COLOUR_HIDDEN_GLYPH.test(gap.replace(STRIP, "")) || drawsSecondBlockElement(gap, solidBlocks);
 }
 function isBenignAnsi(text6) {
   return isBenignAnsiKinds(applyLayer1(text6).ansiKinds);
@@ -4688,7 +4697,7 @@ function applyLayer1WellFormed(text6) {
     found: [...result.found, CATEGORY.LONE_SURROGATES]
   };
 }
-var CONTROL_INTRODUCER_RE, LONE_SURROGATE_RE, INERT_ANSI_NOTE, SGR_RUN_THRESHOLD, COLOUR_HIDDEN_GLYPH, MAX_LAYER1_PASSES;
+var CONTROL_INTRODUCER_RE, LONE_SURROGATE_RE, INERT_ANSI_NOTE, SGR_RUN_THRESHOLD, COLOUR_HIDDEN_GLYPH, BLOCK_ELEMENT, MAX_LAYER1_PASSES;
 var init_layer1 = __esm({
   "src/layer1.mjs"() {
     "use strict";
@@ -4699,6 +4708,7 @@ var init_layer1 = __esm({
     INERT_ANSI_NOTE = "Inert ANSI stripped (display-only colour and/or a stray escape byte that formed no control sequence); pipe through cat -v to inspect raw escapes.";
     SGR_RUN_THRESHOLD = 10;
     COLOUR_HIDDEN_GLYPH = /[^\s\u2580-\u259F]/u;
+    BLOCK_ELEMENT = /[\u2580-\u259F]/gu;
     MAX_LAYER1_PASSES = 4;
   }
 });

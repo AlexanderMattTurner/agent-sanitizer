@@ -13,7 +13,7 @@
  *     index of 8 (`ESC[38;5;8m`) was never conceal at all.
  *   COLOUR — a foreground painted in its own background hides the same text by
  *     other means. The twins are what ANSI art does with matching colours
- *     (spaces, block elements) and the cases a terminal may render differently
+ *     (spaces, one block element repeated) and the cases a terminal may render differently
  *     (bold over a basic colour, the unknown default colours).
  *   RUN — sequences with nothing that RENDERS between them put no glyph on the
  *     screen, so past a threshold they carry data. The twin is the same count of
@@ -97,6 +97,42 @@ const COLOUR_CASES = [
 
   ["whitespace painted in its own colour", `${ESC}[30;40m   ${ESC}[0m`, false],
   ["ANSI-art block elements", `${ESC}[31;41m${BLOCK}${BLOCK}${ESC}[0m`, false],
+  // In matching colours every Block Element is the same solid cell, so a
+  // second distinct one is a hidden choice: the channel is the glyph identity.
+  ["two distinct block elements in one span", `${ESC}[31;41m▀▄${ESC}[0m`, true],
+  [
+    "a base-32 block-element stream",
+    `${ESC}[31;41m▀▁▂▃▄▅▆▇█▉▊▋▌▍▎▏${ESC}[0m`,
+    true,
+  ],
+  // `seen` spans the text: one glyph per sequence still spells the stream.
+  [
+    "one distinct block element per sequence",
+    `${ESC}[31;41m▀${ESC}[31;41m▄${ESC}[0m`,
+    true,
+  ],
+  [
+    "distinct block elements under two matching colours",
+    `${ESC}[31;41m▀${ESC}[0m ${ESC}[34;44m▄${ESC}[0m`,
+    true,
+  ],
+  // Half-block image renderers (catimg-style): top pixel as foreground, bottom
+  // as background, so a flat region repeats ONE glyph in matching colours.
+  [
+    "a half-block image with a flat region",
+    `${ESC}[38;5;1;48;5;1m▀${ESC}[38;5;1;48;5;2m▀${ESC}[38;5;1;48;5;1m▀${ESC}[38;5;3;48;5;3m▀${ESC}[0m\n`,
+    false,
+  ],
+  [
+    "distinct block elements in different colours",
+    `${ESC}[31;40m▀▄█▌▐░▒▓${ESC}[0m`,
+    false,
+  ],
+  [
+    "distinct block elements, only one in matching colours",
+    `${ESC}[31;41m█${ESC}[32;40m▀▄${ESC}[0m`,
+    false,
+  ],
   ["bold over a basic colour", `${ESC}[1;30;40mtext`, false],
   ["bold over a low palette index", `${ESC}[1;38;5;0;48;5;0mtext`, false],
   ["default colours, which are unknown", `${ESC}[39;49mtext`, false],
@@ -218,6 +254,17 @@ const ORDINARY_TERMINAL_OUTPUT = [
   ["truecolor highlight", `${ESC}[38;2;255;100;0;48;2;30;30;30mwarn${ESC}[0m`],
   ["colour left active at the end", `${ESC}[33mtrailing yellow`],
   ["background-only banner", `${ESC}[44m  deploy  ${ESC}[0m`],
+  ["block-element progress bar", `${ESC}[32;40m████████▌   ${ESC}[0m 71%\n`],
+  ["shaded meter", `${ESC}[36m▕▓▓▓▒▒░░  ▏${ESC}[0m`],
+  ["sparkline", `${ESC}[33m▁▂▃▅▇█▇▅▃▂${ESC}[0m`],
+  [
+    "box-drawing table",
+    `${ESC}[2m┌──────┬────┐${ESC}[0m\n${ESC}[2m│${ESC}[0m ${ESC}[1mname${ESC}[0m ${ESC}[2m│${ESC}[0m ok ${ESC}[2m│${ESC}[0m\n${ESC}[2m└──────┴────┘${ESC}[0m\n`,
+  ],
+  [
+    "coloured box on a background",
+    `${ESC}[37;44m╔══╗${ESC}[0m\n${ESC}[37;44m╚══╝${ESC}[0m`,
+  ],
 ];
 
 describe("sgrCarriesPayload: ordinary terminal output is styling", () => {

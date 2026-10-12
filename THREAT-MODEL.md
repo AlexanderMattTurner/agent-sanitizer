@@ -332,8 +332,12 @@ prompt gate blocks on the same answer instead of passing it with a note.
 The colour match is judged only where it is unambiguous. A default colour is
 unknown, so it matches nothing; bold over one of the eight basic colours is
 drawn brighter by many terminals, so it is not called hidden; and whitespace
-and Block Elements (U+2580–U+259F) are what ANSI art paints in matching
-colours, so they hide nothing a reader was meant to see.
+looks the same in any colour, so it hides nothing. Block Elements
+(U+2580–U+259F) are judged across the whole text instead of per glyph: in
+matching colours each one paints the same solid cell, so a single glyph
+repeated — what a half-block image renderer emits over a flat region — carries
+no choice and is styling, while a second distinct one makes the glyph choice a
+hidden channel and ends the exception.
 
 All three are read as terminal semantics rather than token shapes, because a
 reader that matches shapes is one encoding away from the wrong answer. Conceal
