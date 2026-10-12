@@ -73,7 +73,34 @@ describe("rehydrateLayer2 restores stored spans", () => {
       content: `a ${ORIGINAL} b ${COMMENT_ORIGINAL} c ${ORIGINAL} d`,
     });
     assert.match(result.context, /3 Layer-2 removed-content placeholder/);
-    assert.match(result.context, /redacted before storage/);
+  });
+
+  it("claims the stored spans were secret-redacted only when secret redaction ran", () => {
+    // persistSpan stores the span verbatim unless the secret layer redacted it
+    // first, so the "no raw secret is written" assurance is true only on an
+    // opted-in run; claiming it otherwise tells the model a raw secret is safe.
+    const input = { file_path: "/tmp/x.md", content: `a ${PH} b` };
+    const restored = `a ${ORIGINAL} b`;
+    const on = rehydrateLayer2("Write", input, true);
+    assert.equal(on.updatedInput.content, restored);
+    assert.match(on.context, /redacted before storage/);
+    const off = rehydrateLayer2("Write", input, false);
+    assert.equal(off.updatedInput.content, restored);
+    assert.doesNotMatch(off.context, /redact/);
+  });
+
+  it("a direct call with no opt-in argument follows the env knob", () => {
+    const input = { file_path: "/tmp/x.md", content: `a ${PH} b` };
+    process.env.AGENT_SANITIZER_SECRETS_ENABLED = "1";
+    try {
+      assert.match(
+        rehydrateLayer2("Write", input).context,
+        /redacted before storage/,
+      );
+    } finally {
+      delete process.env.AGENT_SANITIZER_SECRETS_ENABLED;
+    }
+    assert.doesNotMatch(rehydrateLayer2("Write", input).context, /redact/);
   });
 
   it("Edit new_string: restored; old_string untouched even when it carries a placeholder", () => {

@@ -10,8 +10,8 @@ import { minEnvSecretLen, envBoundSecretVars } from "./env-config.mjs";
 // (which ships with no data directory beside it) and Node resolves it from the
 // package when the hooks run from source. A DATA import, deliberately not a
 // static `agent-sanitizer/invisible` import — a top-level package import in a
-// hook lib aborts the process before the consuming hook's fail-closed catch
-// installs, which is a fail OPEN on the module that withholds secrets.
+// hook lib aborts the process before the consuming hook's fault-posture catch
+// installs, so the output passes with no warning at all.
 import charset from "../../python/agent_sanitizer/data/invisible-charset.json" with { type: "json" };
 
 // Invisible characters an attacker can splice between a value's characters to

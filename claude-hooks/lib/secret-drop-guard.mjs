@@ -22,10 +22,12 @@
  * {@link CONFIRM_TTL_MS}, so one confirmation approves exactly one prompt
  * Write — never a stale or standing auto-approval.
  *
- * Fail-open posture (per the package's precision-over-recall doctrine): a
+ * Skip-on-ambiguity (per the package's precision-over-recall doctrine): a
  * failed git probe, an unmappable redaction view, or a secret-free file all
  * skip the guard — a false denial here blocks legitimate work, while a false
- * pass costs only what today's behavior already allows.
+ * pass costs only what the call would do without this guard. This is a
+ * guard-local precision choice, not the hook fault posture: an unexpected
+ * throw still propagates to the hook's registered policy (lib/hook-fault.mjs).
  */
 import { createHash } from "node:crypto";
 import { lstatSync, readdirSync, unlinkSync } from "node:fs";
@@ -111,22 +113,38 @@ export function sweepStaleConfirms() {
 }
 
 /**
- * Whether git tracks `filePath`. Exit 0 is tracked; exit 1 (untracked) and 128
- * (not a repository) both mean "no git recovery exists", which is what the
- * guard actually cares about. A spawn-level failure (no git binary) means we
- * cannot tell — report tracked so the guard skips (fail open) rather than
- * denying on missing tooling.
+ * Whether git tracks `filePath`, with every probe failure on the skip side the
+ * module doc declares. Exit 0 is tracked and exit 1 untracked. Exit 128 is
+ * either "not a repository" — no git recovery exists, so the guard applies — or
+ * a repository git could not read (a corrupt index, a permission error), which
+ * says nothing about the file; a second probe asks git which, reading its
+ * printed answer (`false` inside a bare repository or a `.git` directory is
+ * also exit 0, and also has no recovery path). A spawn-level
+ * failure (no git binary) or any other status also means we cannot tell —
+ * report tracked so the guard skips rather than denying on broken tooling.
  * @param {string} filePath
  * @param {typeof spawnSync} [spawn]
  * @returns {boolean}
  */
 export function gitTracked(filePath, spawn = spawnSync) {
+  const cwd = dirname(filePath);
   const res = spawn("git", ["ls-files", "--error-unmatch", "--", filePath], {
-    cwd: dirname(filePath),
+    cwd,
     stdio: "ignore",
   });
   if (res.error) return true;
-  return res.status === 0;
+  if (res.status === 0 || res.status === 1) return res.status === 0;
+  if (res.status !== 128) return true;
+  const repo = spawn("git", ["rev-parse", "--is-inside-work-tree"], {
+    cwd,
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "ignore"],
+  });
+  if (repo.error) return true;
+  // Exit 0 does not mean "in a work tree": inside a bare repository or a
+  // repository's own `.git` directory it prints `false`. Such a path has no
+  // work-tree/index recovery, so only the printed `true` skips the guard.
+  return repo.status === 0 && String(repo.stdout).trim() === "true";
 }
 
 /**
