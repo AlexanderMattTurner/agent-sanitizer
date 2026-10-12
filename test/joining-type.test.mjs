@@ -76,7 +76,7 @@ function probePoints(ranges) {
 }
 
 describe("joining-type generated module", () => {
-  it("pins the Unicode version to the pinned ucd-full release", () => {
+  it("pins the Unicode version to the pinned UCD", () => {
     assert.equal(UNICODE_VERSION, version);
   });
 
@@ -205,8 +205,14 @@ describe("Brahmic consonant scripts are exactly the scripts that own a virama", 
   });
 
   it("throws rather than dropping a virama the Scripts slice does not cover", () => {
+    // Drop exactly the entry holding the Devanagari virama U+094D.
+    const covers094d = ({ range }) =>
+      parseInt(range[0], 16) <= 0x94d &&
+      parseInt(range[1] ?? range[0], 16) >= 0x94d;
+    const without = scriptsJson.Scripts.filter((e) => !covers094d(e));
+    assert.equal(without.length, scriptsJson.Scripts.length - 1);
     assert.throws(
-      () => viramaScripts(indicJson, { Scripts: scriptsJson.Scripts.slice(1) }),
+      () => viramaScripts(indicJson, { Scripts: without }),
       /virama U\+94d has no Script entry/,
     );
   });

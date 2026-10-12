@@ -1,0 +1,25 @@
+{
+  "DerivedGeneralCategory": [
+    { "range": ["00AD"], "category": "Cf" },
+    { "range": ["0600", "0605"], "category": "Cf" },
+    { "range": ["061C"], "category": "Cf" },
+    { "range": ["06DD"], "category": "Cf" },
+    { "range": ["070F"], "category": "Cf" },
+    { "range": ["0890", "0891"], "category": "Cf" },
+    { "range": ["08E2"], "category": "Cf" },
+    { "range": ["180E"], "category": "Cf" },
+    { "range": ["200B", "200F"], "category": "Cf" },
+    { "range": ["202A", "202E"], "category": "Cf" },
+    { "range": ["2060", "2064"], "category": "Cf" },
+    { "range": ["2066", "206F"], "category": "Cf" },
+    { "range": ["FEFF"], "category": "Cf" },
+    { "range": ["FFF9", "FFFB"], "category": "Cf" },
+    { "range": ["110BD"], "category": "Cf" },
+    { "range": ["110CD"], "category": "Cf" },
+    { "range": ["13430", "1343F"], "category": "Cf" },
+    { "range": ["1BCA0", "1BCA3"], "category": "Cf" },
+    { "range": ["1D173", "1D17A"], "category": "Cf" },
+    { "range": ["E0001"], "category": "Cf" },
+    { "range": ["E0020", "E007F"], "category": "Cf" }
+  ]
+}

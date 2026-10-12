@@ -24,7 +24,12 @@
   "rules": [
     {
       "generator": "scripts/gen-invisible-charset.mjs",
-      "sources": ["src/invisible.mjs", "src/ansi.mjs"],
+      "sources": [
+        "src/invisible.mjs",
+        "src/ansi.mjs",
+        "scripts/data/DerivedGeneralCategory.Cf.json",
+        "scripts/lib/ucd.mjs"
+      ],
       "owns": [
         "python/agent_sanitizer/data/invisible-charset.json",
         "src/cf-charset.mjs"
@@ -32,12 +37,27 @@
     },
     {
       "generator": "scripts/gen-joining-type.mjs",
+      "sources": ["scripts/lib/ucd.mjs"],
       "sourcesPattern": "^scripts/data/.*\\.json$",
       "owns": ["src/joining-type.mjs"]
     },
     {
+      "generator": "scripts/gen-unicode-properties.mjs",
+      "sources": [
+        "scripts/data/emoji-data.Pictographic.json",
+        "scripts/data/PropList.Pinned.json",
+        "scripts/data/Scripts.Pinned.json",
+        "scripts/lib/ucd.mjs"
+      ],
+      "owns": ["src/unicode-properties.mjs"]
+    },
+    {
       "generator": "scripts/gen-standardized-variants.mjs",
-      "sources": ["scripts/data/StandardizedVariants.txt"],
+      "sources": [
+        "scripts/data/StandardizedVariants.txt",
+        "scripts/data/PropList.Pinned.json",
+        "scripts/lib/ucd.mjs"
+      ],
       "owns": ["src/standardized-variants.mjs"]
     },
     {

@@ -1519,6 +1519,7 @@ var init_joining_type = __esm({
       [2182, 2182, "D"],
       [2185, 2189, "D"],
       [2190, 2190, "R"],
+      [2191, 2191, "D"],
       [2199, 2207, "T"],
       [2208, 2217, "D"],
       [2218, 2220, "R"],
@@ -1649,7 +1650,8 @@ var init_joining_type = __esm({
       [6757, 6764, "T"],
       [6771, 6780, "T"],
       [6783, 6783, "T"],
-      [6832, 6862, "T"],
+      [6832, 6877, "T"],
+      [6880, 6891, "T"],
       [6912, 6915, "T"],
       [6964, 6964, "T"],
       [6966, 6970, "T"],
@@ -1774,7 +1776,8 @@ var init_joining_type = __esm({
       [69291, 69292, "T"],
       [69314, 69314, "R"],
       [69315, 69316, "D"],
-      [69372, 69375, "T"],
+      [69318, 69319, "D"],
+      [69370, 69375, "T"],
       [69424, 69426, "D"],
       [69427, 69427, "R"],
       [69428, 69444, "D"],
@@ -1871,6 +1874,9 @@ var init_joining_type = __esm({
       [72281, 72283, "T"],
       [72330, 72342, "T"],
       [72344, 72345, "T"],
+      [72544, 72544, "T"],
+      [72546, 72548, "T"],
+      [72550, 72550, "T"],
       [72752, 72758, "T"],
       [72760, 72765, "T"],
       [72767, 72767, "T"],
@@ -1927,6 +1933,10 @@ var init_joining_type = __esm({
       [123628, 123631, "T"],
       [124140, 124143, "T"],
       [124398, 124399, "T"],
+      [124643, 124643, "T"],
+      [124646, 124646, "T"],
+      [124654, 124655, "T"],
+      [124661, 124661, "T"],
       [125136, 125142, "T"],
       [125184, 125251, "D"],
       [125252, 125259, "T"],
@@ -3593,6 +3603,223 @@ var init_cf_charset = __esm({
   }
 });
 
+// src/unicode-properties.mjs
+function inSpans(spans, cp) {
+  let lo = 0;
+  let hi = spans.length - 1;
+  while (lo <= hi) {
+    const mid = lo + hi >> 1;
+    if (cp < spans[mid][0]) hi = mid - 1;
+    else if (cp > spans[mid][1]) lo = mid + 1;
+    else return true;
+  }
+  return false;
+}
+var EXTENDED_PICTOGRAPHIC, EMOJI_MODIFIER, UNIFIED_IDEOGRAPH, SCRIPT_BRAILLE, SCRIPT_HANGUL;
+var init_unicode_properties = __esm({
+  "src/unicode-properties.mjs"() {
+    "use strict";
+    EXTENDED_PICTOGRAPHIC = [
+      [169, 169],
+      [174, 174],
+      [8252, 8252],
+      [8265, 8265],
+      [8482, 8482],
+      [8505, 8505],
+      [8596, 8601],
+      [8617, 8618],
+      [8986, 8987],
+      [9e3, 9e3],
+      [9167, 9167],
+      [9193, 9203],
+      [9208, 9210],
+      [9410, 9410],
+      [9642, 9643],
+      [9654, 9654],
+      [9664, 9664],
+      [9723, 9726],
+      [9728, 9732],
+      [9742, 9742],
+      [9745, 9745],
+      [9748, 9749],
+      [9752, 9752],
+      [9757, 9757],
+      [9760, 9760],
+      [9762, 9763],
+      [9766, 9766],
+      [9770, 9770],
+      [9774, 9775],
+      [9784, 9786],
+      [9792, 9792],
+      [9794, 9794],
+      [9800, 9811],
+      [9823, 9824],
+      [9827, 9827],
+      [9829, 9830],
+      [9832, 9832],
+      [9851, 9851],
+      [9854, 9855],
+      [9874, 9879],
+      [9881, 9881],
+      [9883, 9884],
+      [9888, 9889],
+      [9895, 9895],
+      [9898, 9899],
+      [9904, 9905],
+      [9917, 9918],
+      [9924, 9925],
+      [9928, 9928],
+      [9934, 9935],
+      [9937, 9937],
+      [9939, 9940],
+      [9961, 9962],
+      [9968, 9973],
+      [9975, 9978],
+      [9981, 9981],
+      [9986, 9986],
+      [9989, 9989],
+      [9992, 9997],
+      [9999, 9999],
+      [10002, 10002],
+      [10004, 10004],
+      [10006, 10006],
+      [10013, 10013],
+      [10017, 10017],
+      [10024, 10024],
+      [10035, 10036],
+      [10052, 10052],
+      [10055, 10055],
+      [10060, 10060],
+      [10062, 10062],
+      [10067, 10069],
+      [10071, 10071],
+      [10083, 10084],
+      [10133, 10135],
+      [10145, 10145],
+      [10160, 10160],
+      [10175, 10175],
+      [10548, 10549],
+      [11013, 11015],
+      [11035, 11036],
+      [11088, 11088],
+      [11093, 11093],
+      [12336, 12336],
+      [12349, 12349],
+      [12951, 12951],
+      [12953, 12953],
+      [126980, 126980],
+      [127020, 127023],
+      [127124, 127135],
+      [127151, 127152],
+      [127168, 127168],
+      [127183, 127184],
+      [127222, 127231],
+      [127344, 127345],
+      [127358, 127359],
+      [127374, 127374],
+      [127377, 127386],
+      [127406, 127461],
+      [127489, 127503],
+      [127514, 127514],
+      [127535, 127535],
+      [127538, 127546],
+      [127548, 127551],
+      [127561, 127583],
+      [127590, 127777],
+      [127780, 127891],
+      [127894, 127895],
+      [127897, 127899],
+      [127902, 127984],
+      [127987, 127989],
+      [127991, 127994],
+      [128e3, 128253],
+      [128255, 128317],
+      [128329, 128334],
+      [128336, 128359],
+      [128367, 128368],
+      [128371, 128378],
+      [128391, 128391],
+      [128394, 128397],
+      [128400, 128400],
+      [128405, 128406],
+      [128420, 128421],
+      [128424, 128424],
+      [128433, 128434],
+      [128444, 128444],
+      [128450, 128452],
+      [128465, 128467],
+      [128476, 128478],
+      [128481, 128481],
+      [128483, 128483],
+      [128488, 128488],
+      [128495, 128495],
+      [128499, 128499],
+      [128506, 128591],
+      [128640, 128709],
+      [128715, 128722],
+      [128725, 128741],
+      [128745, 128745],
+      [128747, 128752],
+      [128755, 128767],
+      [128986, 129023],
+      [129036, 129039],
+      [129096, 129103],
+      [129114, 129119],
+      [129160, 129167],
+      [129198, 129199],
+      [129212, 129215],
+      [129218, 129231],
+      [129241, 129279],
+      [129292, 129338],
+      [129340, 129349],
+      [129351, 129535],
+      [129624, 129631],
+      [129646, 129791],
+      [130048, 131069]
+    ];
+    EMOJI_MODIFIER = [
+      [127995, 127999]
+    ];
+    UNIFIED_IDEOGRAPH = [
+      [13312, 19903],
+      [19968, 40959],
+      [64014, 64015],
+      [64017, 64017],
+      [64019, 64020],
+      [64031, 64031],
+      [64033, 64033],
+      [64035, 64036],
+      [64039, 64041],
+      [131072, 173791],
+      [173824, 178205],
+      [178208, 183981],
+      [183984, 191456],
+      [191472, 192093],
+      [196608, 201546],
+      [201552, 210041]
+    ];
+    SCRIPT_BRAILLE = [
+      [10240, 10495]
+    ];
+    SCRIPT_HANGUL = [
+      [4352, 4607],
+      [12334, 12335],
+      [12593, 12686],
+      [12800, 12830],
+      [12896, 12926],
+      [43360, 43388],
+      [44032, 55203],
+      [55216, 55238],
+      [55243, 55291],
+      [65440, 65470],
+      [65474, 65479],
+      [65482, 65487],
+      [65490, 65495],
+      [65498, 65500]
+    ];
+  }
+});
+
 // src/ansi.mjs
 function unicodeEscape(cp) {
   return `\\u${cp.toString(16).padStart(4, "0")}`;
@@ -4406,13 +4633,14 @@ function stripBody(body, cps, analysis) {
 function stripInvisible(text6) {
   return stripInvisibleWithReport(text6).cleaned;
 }
-var VS, ZERO_WIDTH_MN, BLANK_NON_CF, REGEX_FLAGS, CF_CLASS_SOURCE, CATEGORY, CATEGORY_LABELS, CHECKS, STRIP, LONG_RUN_THRESHOLD, SCATTERED_THRESHOLD, LONG_RUN_RE, RUN_CHUNK, LONG_RUN_CHUNK_RE, RUN_TAIL_RE, BOM, ZWNJ, ZWJ, CONSECUTIVE_JOINER_CAP, CONSECUTIVE_SELECTOR_CAP, TOTAL_PRESERVED_JOINER_BUDGET, PRESERVED_JOINER_PER_VISIBLE, PRESERVE_HARD_CAP, TOTAL_PRESERVED_BLANK_BUDGET, PRESERVED_BLANK_PER_ANCHOR, LINGUISTIC_SCRIPTS, EMOJI_LEFT, KEYCAP_BASE, COMBINING_KEYCAP, EMOJI_BASE, VARIATION_SELECTOR, isEmojiLeft, isEmojiBase, isKeycapBase, isVariationSelectorCp, PRESENTATION_SELECTORS, TAG_BASE, TAG_CANCEL, TAG_SPEC_MIN, TAG_SPEC_MAX, REGISTERED_TAG_PAYLOADS, MAX_TAG_SPEC_CHARS, IVS_MIN, IVS_MAX, CJK_IDEOGRAPH_RE, isCjkIdeograph, BRAILLE_BLANK, HANGUL_FILLERS, GATED_BLANK_RE, BRAILLE_RE, isBrailleScript, HANGUL_RE, isHangulScript, CODE_VISIBLE, CODE_CF, CODE_VS, CODE_BLANK, KIND_NONE, KIND_JOINER, KIND_EMOJIVS, KIND_TAG, KIND_STDVS, KIND_IVS, KIND_BLANK, CODE_CATEGORY, TRACKED_INVISIBLE, MIN_TRACKED_CP, CP_PREDICATE_MEMO_CAP, isCursiveLetter, jtOf, segmenterCache, CONTAINING_CANDIDATE_SHARE, TAG_CHAR_RE;
+var VS, ZERO_WIDTH_MN, BLANK_NON_CF, REGEX_FLAGS, CF_CLASS_SOURCE, CATEGORY, CATEGORY_LABELS, CHECKS, STRIP, LONG_RUN_THRESHOLD, SCATTERED_THRESHOLD, LONG_RUN_RE, RUN_CHUNK, LONG_RUN_CHUNK_RE, RUN_TAIL_RE, BOM, ZWNJ, ZWJ, CONSECUTIVE_JOINER_CAP, CONSECUTIVE_SELECTOR_CAP, TOTAL_PRESERVED_JOINER_BUDGET, PRESERVED_JOINER_PER_VISIBLE, PRESERVE_HARD_CAP, TOTAL_PRESERVED_BLANK_BUDGET, PRESERVED_BLANK_PER_ANCHOR, LINGUISTIC_SCRIPTS, isEmojiLeft, KEYCAP_BASE, COMBINING_KEYCAP, isEmojiBase, VARIATION_SELECTOR, isKeycapBase, isVariationSelectorCp, PRESENTATION_SELECTORS, TAG_BASE, TAG_CANCEL, TAG_SPEC_MIN, TAG_SPEC_MAX, REGISTERED_TAG_PAYLOADS, MAX_TAG_SPEC_CHARS, IVS_MIN, IVS_MAX, CJK_COMPATIBILITY_IDEOGRAPH_BLOCKS, isCjkIdeograph, BRAILLE_BLANK, HANGUL_FILLERS, GATED_BLANK_RE, isBrailleScript, isHangulScript, CODE_VISIBLE, CODE_CF, CODE_VS, CODE_BLANK, KIND_NONE, KIND_JOINER, KIND_EMOJIVS, KIND_TAG, KIND_STDVS, KIND_IVS, KIND_BLANK, CODE_CATEGORY, TRACKED_INVISIBLE, MIN_TRACKED_CP, CP_PREDICATE_MEMO_CAP, isCursiveLetter, jtOf, segmenterCache, CONTAINING_CANDIDATE_SHARE, TAG_CHAR_RE;
 var init_invisible = __esm({
   "src/invisible.mjs"() {
     "use strict";
     init_joining_type();
     init_standardized_variants();
     init_cf_charset();
+    init_unicode_properties();
     init_ansi();
     init_ansi();
     init_joining_type();
@@ -4499,13 +4727,11 @@ var init_invisible = __esm({
       "Malayalam",
       "Sinhala"
     ];
-    EMOJI_LEFT = /[\p{Extended_Pictographic}\p{Emoji_Modifier}]/u;
+    isEmojiLeft = (cp) => inSpans(EXTENDED_PICTOGRAPHIC, cp) || inSpans(EMOJI_MODIFIER, cp);
     KEYCAP_BASE = /[0-9#*]/u;
     COMBINING_KEYCAP = 8419;
-    EMOJI_BASE = new RegExp("\\p{Extended_Pictographic}", "u");
+    isEmojiBase = (cp) => inSpans(EXTENDED_PICTOGRAPHIC, cp);
     VARIATION_SELECTOR = new RegExp(`[${VS}]`, "u");
-    isEmojiLeft = memoizedCpPredicate(EMOJI_LEFT);
-    isEmojiBase = memoizedCpPredicate(EMOJI_BASE);
     isKeycapBase = memoizedCpPredicate(KEYCAP_BASE);
     isVariationSelectorCp = memoizedCpPredicate(VARIATION_SELECTOR);
     PRESENTATION_SELECTORS = /* @__PURE__ */ new Set([65038, 65039]);
@@ -4517,15 +4743,16 @@ var init_invisible = __esm({
     MAX_TAG_SPEC_CHARS = 6;
     IVS_MIN = 917760;
     IVS_MAX = 917999;
-    CJK_IDEOGRAPH_RE = /[\p{Unified_Ideograph}\u{F900}-\u{FAFF}\u{2F800}-\u{2FA1F}]/u;
-    isCjkIdeograph = memoizedCpPredicate(CJK_IDEOGRAPH_RE);
+    CJK_COMPATIBILITY_IDEOGRAPH_BLOCKS = [
+      [63744, 64255],
+      [194560, 195103]
+    ];
+    isCjkIdeograph = (cp) => inSpans(UNIFIED_IDEOGRAPH, cp) || inSpans(CJK_COMPATIBILITY_IDEOGRAPH_BLOCKS, cp);
     BRAILLE_BLANK = 10240;
     HANGUL_FILLERS = /* @__PURE__ */ new Set([4447, 4448, 12644, 65440]);
     GATED_BLANK_RE = new RegExp("[\\u115F\\u1160\\u2800\\u3164\\uFFA0]", "u");
-    BRAILLE_RE = new RegExp("\\p{Script=Braille}", "u");
-    isBrailleScript = memoizedCpPredicate(BRAILLE_RE);
-    HANGUL_RE = new RegExp("\\p{Script=Hangul}", "u");
-    isHangulScript = memoizedCpPredicate(HANGUL_RE);
+    isBrailleScript = (cp) => inSpans(SCRIPT_BRAILLE, cp);
+    isHangulScript = (cp) => inSpans(SCRIPT_HANGUL, cp);
     CODE_VISIBLE = 0;
     CODE_CF = 1;
     CODE_VS = 2;
@@ -50563,8 +50790,8 @@ var invisible_charset_default;
 var init_invisible_charset = __esm({
   "python/agent_sanitizer/data/invisible-charset.json"() {
     invisible_charset_default = {
-      _comment: "SSOT for the payload-capable invisible code points, generated by scripts/gen-invisible-charset.mjs. `extra_codepoints` are the non-Cf extras (variation selectors, blank-rendering fillers, zero-width combining marks) from src/invisible.mjs (VS + BLANK_NON_CF). `cf_codepoints` is the general-category Cf set PINNED from Node's Unicode data at generation time (see `unicode_version`) \u2014 NOT resolved live per consumer, because Node and CPython ship different Unicode versions and a live-Cf split let a code point in the version delta escape one layer. The deletion set is the UNION of the two lists. `control_introducers` is the raw ANSI control-introducer set (ESC + the C1 block) from src/ansi.mjs, which Layer 1 sweeps and the Python textstrip port must sweep identically. `escape_sequence_pattern` is the escape GRAMMAR from that same module, as a regex source valid in JS and in Python `re` with no flags: src/ansi.mjs's scanner is the authoritative implementation, and a stdlib-only consumer compiles this rather than hand-writing a second spelling of it. Consumers in other languages read this file instead of forking the lists \u2014 a fork is a silent security regression.",
-      unicode_version: "17.0",
+      _comment: "SSOT for the payload-capable invisible code points, generated by scripts/gen-invisible-charset.mjs. `extra_codepoints` are the non-Cf extras (variation selectors, blank-rendering fillers, zero-width combining marks) from src/invisible.mjs (VS + BLANK_NON_CF). `cf_codepoints` is the general-category Cf set PINNED from the vendored UCD at generation time (see `unicode_version`) \u2014 NOT resolved live per consumer, because Node and CPython ship different Unicode versions and a live-Cf split let a code point in the version delta escape one layer. The deletion set is the UNION of the two lists. `control_introducers` is the raw ANSI control-introducer set (ESC + the C1 block) from src/ansi.mjs, which Layer 1 sweeps and the Python textstrip port must sweep identically. `escape_sequence_pattern` is the escape GRAMMAR from that same module, as a regex source valid in JS and in Python `re` with no flags: src/ansi.mjs's scanner is the authoritative implementation, and a stdlib-only consumer compiles this rather than hand-writing a second spelling of it. Consumers in other languages read this file instead of forking the lists \u2014 a fork is a silent security regression.",
+      unicode_version: "17.0.0",
       extra_codepoints: [
         847,
         4447,

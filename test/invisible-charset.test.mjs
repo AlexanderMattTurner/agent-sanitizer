@@ -50,7 +50,7 @@ describe("invisible-charset SSOT", () => {
     assert.deepEqual(committed.extra_codepoints, extraCodepoints());
   });
 
-  it("committed JSON's Cf code points equal Node's freshly enumerated \\p{Cf}", () => {
+  it("committed JSON's Cf code points equal the pinned UCD's General_Category=Cf", () => {
     assert.deepEqual(committed.cf_codepoints, cfCodepoints());
   });
 

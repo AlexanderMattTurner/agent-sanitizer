@@ -4,6 +4,23 @@
     "scripts/data/DerivedJoiningType.json": ["test/joining-type.test.mjs"],
     "scripts/data/IndicSyllabicCategory.Virama.json": [
       "test/joining-type.test.mjs"
+    ],
+    "scripts/data/IndicSyllabicCategory.Consonant.json": [
+      "test/joining-type.test.mjs"
+    ],
+    "scripts/data/Scripts.Pinned.json": [
+      "test/joining-type.test.mjs",
+      "test/unicode-properties.test.mjs"
+    ],
+    "scripts/data/DerivedGeneralCategory.Cf.json": [
+      "test/invisible-charset.test.mjs"
+    ],
+    "scripts/data/PropList.Pinned.json": [
+      "test/invisible-charset.test.mjs",
+      "test/unicode-properties.test.mjs"
+    ],
+    "scripts/data/emoji-data.Pictographic.json": [
+      "test/unicode-properties.test.mjs"
     ]
   },
   "tooSlowForCommit": {

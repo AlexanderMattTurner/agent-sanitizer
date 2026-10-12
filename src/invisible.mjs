@@ -12,6 +12,14 @@
 import { joiningType, isVirama, isBrahmicConsonant } from "./joining-type.mjs";
 import { isStandardizedVariant } from "./standardized-variants.mjs";
 import { CF_CODEPOINTS } from "./cf-charset.mjs";
+import {
+  EMOJI_MODIFIER,
+  EXTENDED_PICTOGRAPHIC,
+  SCRIPT_BRAILLE,
+  SCRIPT_HANGUL,
+  UNIFIED_IDEOGRAPH,
+  inSpans,
+} from "./unicode-properties.mjs";
 import { scanAnsi, TOKEN_KIND } from "./ansi.mjs";
 
 // Unicode's Variation_Selector property, whole: the FE00 run, the Mongolian
@@ -387,33 +395,39 @@ export const LINGUISTIC_SCRIPTS = [
   "Malayalam",
   "Sinhala",
 ];
+// Every Unicode property below is read from ./unicode-properties.mjs, the
+// tables generated from the pinned UCD, never from a live `\p{…}`: the runtime's
+// ICU version would otherwise decide what the carve-out preserves (see
+// scripts/lib/ucd.mjs).
+//
 // Left side of an emoji joiner: a pictograph or a skin-tone modifier (a base
 // emoji may carry a modifier before the joiner, e.g. a health-worker sequence).
-const EMOJI_LEFT = /[\p{Extended_Pictographic}\p{Emoji_Modifier}]/u;
+/** @param {number} cp @returns {boolean} */
+const isEmojiLeft = (cp) =>
+  inSpans(EXTENDED_PICTOGRAPHIC, cp) || inSpans(EMOJI_MODIFIER, cp);
 // The three keycap bases (digit, `#`, `*`) Unicode's keycap grammar allows
 // before VS16 + U+20E3 COMBINING ENCLOSING KEYCAP (1️⃣ #️⃣ *️⃣ … 9️⃣). None is
-// Extended_Pictographic or Emoji_Modifier, so EMOJI_LEFT misses them; the
+// Extended_Pictographic or Emoji_Modifier, so isEmojiLeft misses them; the
 // presentation-selector check accepts one ONLY when the required U+20E3 keycap
 // actually follows the selector (see isEmojiPresentationSelector). A bare
 // digit/`#`/`*` + VS with no keycap is NOT a glyph — it is a hidden presentation
 // selector spliced after ordinary text, the top low-effort VS-smuggling shape —
 // so it fails closed and is stripped. The base set is confined to the keycap
-// check (never folded into EMOJI_LEFT) so it cannot loosen the ZWJ carve-out.
+// check (never folded into isEmojiLeft) so it cannot loosen the ZWJ carve-out.
 const KEYCAP_BASE = /[0-9#*]/u;
 // U+20E3 COMBINING ENCLOSING KEYCAP — the mandatory terminator of a keycap
 // sequence, the one signal that a digit/`#`/`*` + VS16 is a real glyph.
 const COMBINING_KEYCAP = 0x20e3;
 // Right side of an emoji joiner is always the next component's base pictograph.
-const EMOJI_BASE = /\p{Extended_Pictographic}/u;
+/** @param {number} cp @returns {boolean} */
+const isEmojiBase = (cp) => inSpans(EXTENDED_PICTOGRAPHIC, cp);
 // A variation selector legitimately sits between a base pictograph and a
 // following ZWJ (🏳️‍🌈 = flag base, VS16, ZWJ, rainbow; 👁️‍🗨️), so the joiner's real
 // left neighbor for the emoji test is the pictograph, not the selector.
 const VARIATION_SELECTOR = new RegExp(`[${VS}]`, "u");
-// Code-point twins of the four single-character classes above, memoized: the
-// carve analysis asks these per invisible (and per neighbour), and a Unicode
-// property class costs far more than a table hit. See memoizedCpPredicate.
-const isEmojiLeft = memoizedCpPredicate(EMOJI_LEFT);
-const isEmojiBase = memoizedCpPredicate(EMOJI_BASE);
+// Code-point twins of the two single-character classes above, memoized: the
+// carve analysis asks these per invisible (and per neighbour). See
+// memoizedCpPredicate.
 const isKeycapBase = memoizedCpPredicate(KEYCAP_BASE);
 const isVariationSelectorCp = memoizedCpPredicate(VARIATION_SELECTOR);
 // U+FE0F (VS16) forces emoji presentation, U+FE0E (VS15) forces text
@@ -452,10 +466,12 @@ const MAX_TAG_SPEC_CHARS = 6;
 //
 // Derived from Unicode's own data rather than hand-transcribed block spans: the
 // Unified_Ideograph property IS the set of unified ideographs (URO + every
-// extension), versioned with the runtime's ICU, so a new extension arrives with
-// the Node upgrade instead of waiting for someone to notice. A hand-written
+// extension), generated from the pinned UCD, so a new extension arrives with
+// the next UCD refresh instead of waiting for someone to notice. A hand-written
 // table went stale exactly this way — it stopped at Extension H and so denied
-// the 4,298 Extension J ideographs (U+323B0–U+33479) a legitimate IVS base.
+// the 4,298 Extension J ideographs (U+323B0–U+33479) a legitimate IVS base. The
+// runtime's ICU is not consulted: on Node 22.22 (Unicode 16) it does not know
+// Extension J either.
 //
 // Script=Han is deliberately NOT used: it also covers radicals (U+2E80–U+2EF3),
 // Kangxi radicals, U+3005/U+3007 and the ideographic-description characters,
@@ -464,19 +480,24 @@ const MAX_TAG_SPEC_CHARS = 6;
 // full stop anchor a variation selector.
 //
 // The two Compatibility Ideograph BLOCKS stay literal: they are not
-// Unified_Ideograph, and JS RegExp exposes no \p{Block=…}. Block boundaries are
+// Unified_Ideograph, and a block is not a property. Block boundaries are
 // immutable by Unicode's stability policy, so a literal span stays correct
 // forever; the contract test in test/invisible-unicode-tables.test.mjs pins
 // that every ASSIGNED code point inside them is a Script=Han letter.
 const IVS_MIN = 0xe0100;
 const IVS_MAX = 0xe01ef;
-const CJK_IDEOGRAPH_RE =
-  /[\p{Unified_Ideograph}\u{F900}-\u{FAFF}\u{2F800}-\u{2FA1F}]/u;
+/** @type {ReadonlyArray<readonly [number, number]>} */
+const CJK_COMPATIBILITY_IDEOGRAPH_BLOCKS = [
+  [0xf900, 0xfaff],
+  [0x2f800, 0x2fa1f],
+];
 
 /** True when `cp` is a CJK ideograph (the only base an ideographic variation
  * selector legitimately follows). -1 (past a string boundary) is not.
- * @type {(cp: number) => boolean} */
-const isCjkIdeograph = memoizedCpPredicate(CJK_IDEOGRAPH_RE);
+ * @param {number} cp @returns {boolean} */
+const isCjkIdeograph = (cp) =>
+  inSpans(UNIFIED_IDEOGRAPH, cp) ||
+  inSpans(CJK_COMPATIBILITY_IDEOGRAPH_BLOCKS, cp);
 
 // Brahmic consonants: the only base a virama does half-form/conjunct work on.
 // A bare or base-less halant + ZWJ carries no rendering and is a smuggling
@@ -525,11 +546,10 @@ const HANGUL_FILLERS = new Set([0x115f, 0x1160, 0x3164, 0xffa0]);
 // literal is invisible to the eye and a correctness landmine for the next editor.
 const GATED_BLANK_RE = new RegExp("[\\u115F\\u1160\\u2800\\u3164\\uFFA0]", "u");
 
-// Script=Braille, from the runtime's Unicode data (identical to
-// Script_Extensions=Braille — no character is shared with another script).
-const BRAILLE_RE = /\p{Script=Braille}/u;
-
-const isBrailleScript = memoizedCpPredicate(BRAILLE_RE);
+// Script=Braille, from the pinned UCD (identical to Script_Extensions=Braille —
+// no character is shared with another script).
+/** @param {number} cp @returns {boolean} */
+const isBrailleScript = (cp) => inSpans(SCRIPT_BRAILLE, cp);
 
 /** A real (non-blank) Braille cell — the anchoring neighbour for a U+2800 blank.
  * @param {number} cp @returns {boolean} */
@@ -537,14 +557,13 @@ function isBrailleCell(cp) {
   return cp !== BRAILLE_BLANK && isBrailleScript(cp);
 }
 
-// Script=Hangul, straight from the runtime's Unicode data. NOT
-// Script_Extensions=Hangul: that set also holds the CJK punctuation Korean text
-// shares with Chinese and Japanese (U+3001 IDEOGRAPHIC COMMA, U+30FB KATAKANA
-// MIDDLE DOT, U+FF61–U+FF65 …), so a Japanese middle dot would anchor — and
+// Script=Hangul, from the pinned UCD. NOT Script_Extensions=Hangul: that set
+// also holds the CJK punctuation Korean text shares with Chinese and Japanese
+// (U+3001 IDEOGRAPHIC COMMA, U+30FB KATAKANA MIDDLE DOT, U+FF61–U+FF65 …), so
+// a Japanese middle dot would anchor — and
 // thereby preserve — a Hangul filler in text with no Hangul in it at all.
-const HANGUL_RE = /\p{Script=Hangul}/u;
-
-const isHangulScript = memoizedCpPredicate(HANGUL_RE);
+/** @param {number} cp @returns {boolean} */
+const isHangulScript = (cp) => inSpans(SCRIPT_HANGUL, cp);
 
 /** A Hangul jamo/syllable (NOT itself one of the fillers) — the anchoring
  * neighbour for a Hangul filler. @param {number} cp @returns {boolean} */
@@ -629,10 +648,9 @@ const CP_PREDICATE_MEMO_CAP = 4096;
  *
  * The carve analysis asks these of the same handful of code points over and
  * over — a document is a few hundred distinct characters repeated — and each
- * ask otherwise costs a `String.fromCodePoint` allocation plus a Unicode
- * property-class match. The memo is a pure accelerator: it answers exactly what
- * the RegExp answers, for the same input, forever (a code point's Unicode
- * properties do not change inside a process).
+ * ask otherwise costs a `String.fromCodePoint` allocation plus a regex match.
+ * The memo is a pure accelerator: it answers exactly what the RegExp answers,
+ * for the same input, forever.
  *
  * The entry cap is a MEMORY policy, not a scan bound: past it the predicate
  * still answers every code point, just without recording new ones, so no input

@@ -22,10 +22,9 @@
  * fails CI if the committed module drifts, exactly as an SSOT round-trip should.
  *
  * The vendored slice is StandardizedVariants.txt from the Unicode Character
- * Database (Unicode 17.0.0, matching Node 22's bundled ICU and the pinned
- * ucd-full release used by gen-joining-type). Refresh it from
- * https://www.unicode.org/Public/17.0.0/ucd/StandardizedVariants.txt and bump
- * UNICODE_VERSION together.
+ * Database, at the UNICODE_VERSION every slice is pinned to (./lib/ucd.mjs).
+ * Refresh it from https://www.unicode.org/Public/<version>/ucd/StandardizedVariants.txt
+ * together with the others.
  *
  * Run from the repo root: `node scripts/gen-standardized-variants.mjs`. The
  * output is already in Prettier's format, so it is committed exactly as written.
@@ -33,11 +32,19 @@
 import { readFileSync, writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
-// Unicode version of the vendored scripts/data/StandardizedVariants.txt slice.
-// Bump both together when regenerating.
-const UNICODE_VERSION = "17.0.0";
+import { UNICODE_VERSION, readUcdSlice, spansOf } from "./lib/ucd.mjs";
 
-const VARIATION_SELECTOR = /^\p{Variation_Selector}$/u;
+// Variation_Selector from the pinned PropList slice, not the runtime's
+// `\p{Variation_Selector}` (see ./lib/ucd.mjs).
+const VARIATION_SELECTOR_SPANS = spansOf(
+  readUcdSlice("PropList.Pinned.json").PropList,
+  ({ property }) => property === "Variation_Selector",
+);
+
+/** @param {number} cp @returns {boolean} */
+const isVariationSelector = (cp) =>
+  VARIATION_SELECTOR_SPANS.some(([start, end]) => cp >= start && cp <= end);
+
 const HEX_CODE_POINT = /^[0-9A-F]{4,6}$/u;
 
 /**
@@ -46,7 +53,7 @@ const HEX_CODE_POINT = /^[0-9A-F]{4,6}$/u;
  * kept: the file IS the registry, so which selectors it uses (VS1–VS14, the
  * Mongolian free variation selectors) is read from it, never restated here.
  * Throws on a data line that is not exactly two hex code points ending in a
- * \p{Variation_Selector}, so a format change fails the build instead of
+ * Variation_Selector, so a format change fails the build instead of
  * dropping sequences. Pure so the contract test can call it on the same input
  * and compare with the committed module.
  * @param {string} text
@@ -62,7 +69,7 @@ export function parseStandardizedVariants(text) {
     if (seq.length !== 2 || !seq.every((hex) => HEX_CODE_POINT.test(hex)))
       throw new Error(`not a base + selector sequence: ${line}`);
     const [base, selector] = seq.map((hex) => parseInt(hex, 16));
-    if (!VARIATION_SELECTOR.test(String.fromCodePoint(selector)))
+    if (!isVariationSelector(selector))
       throw new Error(`not a variation selector: ${line}`);
     pairs.push([base, selector]);
   }

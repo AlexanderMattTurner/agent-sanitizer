@@ -1,21 +1,38 @@
 # Vendored Unicode Character Database slices
 
-Pinned inputs for `scripts/gen-joining-type.mjs` → `src/joining-type.mjs`.
-Extracted from [`ucd-full`](https://www.npmjs.com/package/ucd-full)**@17.0.0**
-(Unicode 17.0.0, matching Node 22's bundled ICU):
+Every Unicode property the sanitizer's behaviour depends on is read from these
+files, never from the running Node's `\p{…}` (whose answer moves with its ICU:
+Node 22.22 is Unicode 16, Node 22.23 is Unicode 17). All of them are cut from
+ONE Unicode version, `UNICODE_VERSION` in `scripts/lib/ucd.mjs` (**17.0.0**), by
+`scripts/extract-ucd-slices.mjs` from the official text files at
+<https://www.unicode.org/Public/17.0.0/ucd/>. The extractor refuses a file whose
+header names another version. `test/unicode-property-pin.test.mjs` fails on a
+live property escape in `src/`, `claude-hooks/` or a `scripts/gen-*.mjs`.
 
-- `DerivedJoiningType.json` — verbatim `extracted/DerivedJoiningType.json`
-  (every code point's `Joining_Type`).
-- `IndicSyllabicCategory.Virama.json` — the `syllabicCategory === "Virama"`
-  entries of `IndicSyllabicCategory.json` (the joiner trigger).
-- `IndicSyllabicCategory.Consonant.json` — the `syllabicCategory === "Consonant"`
-  entries of the same file. Intersected with `\p{Script=…}` (which the engine
-  does expose) over the scripts that own a virama, these give
-  `BRAHMIC_CONSONANT_RANGES` — the bases a virama may sit on.
-- `Scripts.Virama.json` — the entries of `Scripts.json` whose range holds a
-  `Virama` code point: each virama's Script, which names the scripts above.
+Each JSON slice keeps the `{ range: [start, end?], <field>: value }` entry shape
+and only the values a generator reads:
 
-To refresh for a new Unicode version: `pnpm add -D ucd-full@<v>`, re-extract these
-four files, bump `UNICODE_VERSION` in the generator, run `pnpm gen:joining-type`,
-then drop the dev dependency again. `test/joining-type.test.mjs` fails if the
+| Slice                                  | Source file                            | Kept                                                 | Read by                                                           |
+| -------------------------------------- | -------------------------------------- | ---------------------------------------------------- | ----------------------------------------------------------------- |
+| `DerivedJoiningType.json`              | `extracted/DerivedJoiningType.txt`     | every `Joining_Type`                                 | `gen-joining-type.mjs` → `src/joining-type.mjs`                   |
+| `IndicSyllabicCategory.Virama.json`    | `IndicSyllabicCategory.txt`            | `Virama` (the joiner trigger)                        | `gen-joining-type.mjs`                                            |
+| `IndicSyllabicCategory.Consonant.json` | `IndicSyllabicCategory.txt`            | `Consonant` (the bases a virama may sit on)          | `gen-joining-type.mjs`                                            |
+| `Scripts.Pinned.json`                  | `Scripts.txt`                          | the scripts owning a virama, plus Braille and Hangul | `gen-joining-type.mjs`, `gen-unicode-properties.mjs`              |
+| `DerivedGeneralCategory.Cf.json`       | `extracted/DerivedGeneralCategory.txt` | `Cf`                                                 | `gen-invisible-charset.mjs` → `src/cf-charset.mjs` + Python JSON  |
+| `PropList.Pinned.json`                 | `PropList.txt`                         | `Unified_Ideograph`, `Variation_Selector`            | `gen-unicode-properties.mjs`, `gen-standardized-variants.mjs`     |
+| `emoji-data.Pictographic.json`         | `emoji/emoji-data.txt`                 | `Extended_Pictographic`, `Emoji_Modifier`            | `gen-unicode-properties.mjs` → `src/unicode-properties.mjs`       |
+| `StandardizedVariants.txt`             | `StandardizedVariants.txt`             | verbatim                                             | `gen-standardized-variants.mjs` → `src/standardized-variants.mjs` |
+
+Do not cut these from the `ucd-full` npm package: `ucd-full@17.0.0` ships
+Unicode **16** data (its PropList lacks CJK Extension J, U+323B0–U+33479, and
+its Extended_Pictographic is Unicode 16's 3537 code points where Unicode 17 has
+2848). `test/unicode-properties.test.mjs` compares every pinned table with the
+live escape on a Node whose Unicode is the pin, which is how that surfaced.
+
+To refresh for a new Unicode version: download the eight files above into one
+directory, bump `UNICODE_VERSION` in `scripts/lib/ucd.mjs`, run
+`node scripts/extract-ucd-slices.mjs <dir>`, `pnpm format`, then every generator
+(`pnpm gen:unicode-properties`, `pnpm gen:joining-type`,
+`node scripts/gen-invisible-charset.mjs`,
+`node scripts/gen-standardized-variants.mjs`). The contract tests fail if any
 committed module drifts from these slices.

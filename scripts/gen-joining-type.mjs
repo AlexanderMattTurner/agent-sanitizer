@@ -1,6 +1,6 @@
 /**
  * Generate src/joining-type.mjs from vendored slices of the Unicode Character
- * Database (scripts/data/*.json, extracted from ucd-full — see UNICODE_VERSION).
+ * Database (scripts/data/*.json — see scripts/lib/ucd.mjs).
  *
  * The invisible-char carve-out preserves ZWNJ/ZWJ only where they do real
  * rendering work. That is a SYNTACTIC property of the neighbouring characters,
@@ -16,7 +16,7 @@
  * ECMAScript regex exposes neither property (`\p{Joining_Type=…}` and
  * `\p{Indic_Syllabic_Category=…}` are not in the supported set), so we compile
  * the three range tables into a committed, runtime-dependency-free data module.
- * The UCD slices are vendored (~20 KB) rather than pulled as a 250 MB dev
+ * The UCD slices are vendored (see ./lib/ucd.mjs) rather than pulled as a 250 MB dev
  * dependency at build time: they are pinned data, so committing them keeps the
  * generator and the contract test hermetic with no install cost.
  * `test/joining-type.test.mjs` re-derives from the same vendored slices and
@@ -25,28 +25,10 @@
  *
  * Run: `pnpm gen:joining-type` (then `pnpm format` to prettify the output).
  */
-import { readFileSync, writeFileSync } from "node:fs";
+import { writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
-// Unicode version of the vendored scripts/data/*.json slices (ucd-full@17.0.0,
-// matching Node 22's bundled ICU). Bump both together when regenerating.
-const UNICODE_VERSION = "17.0.0";
-
-/** Read + parse a vendored UCD slice under scripts/data/. */
-const readData = (name) =>
-  JSON.parse(readFileSync(new URL(`./data/${name}`, import.meta.url), "utf8"));
-
-/**
- * Parse a UCD JSON `range` field (`["0640"]` or `["0883","0885"]`) into a
- * numeric `[start, end]` pair.
- * @param {string[]} range
- * @returns {[number, number]}
- */
-function parseRange(range) {
-  const start = parseInt(range[0], 16);
-  const end = parseInt(range[1] ?? range[0], 16);
-  return [start, end];
-}
+import { UNICODE_VERSION, parseRange, readUcdSlice } from "./lib/ucd.mjs";
 
 /** Merge adjacent/overlapping same-type ranges and sort by start. Keeps the
  * table minimal so the binary search in the runtime module is tight.
@@ -69,7 +51,7 @@ function normalize(ranges) {
 }
 
 /**
- * Derive the three range tables from parsed `ucd-full` JSON payloads. Pure so the
+ * Derive the three range tables from the parsed UCD slices. Pure so the
  * contract test can call it on the same inputs and compare with the committed
  * module.
  * @param {{DerivedJoiningType: Array<{range: string[], type: string}>}} joiningJson
@@ -104,6 +86,7 @@ export function deriveTables(
     brahmic: deriveBrahmic(
       consonantJson,
       viramaScripts(indicJson, scriptsJson),
+      scriptsJson,
     ),
   };
 }
@@ -142,26 +125,41 @@ export function viramaScripts(indicJson, scriptsJson) {
 /**
  * Script-tagged consonant spans: every Indic_Syllabic_Category=Consonant code
  * point whose Script is one of `scripts`, merged into runs. Script comes from
- * the ENGINE's own `\p{Script=…}` (ECMAScript does expose that one), so the
- * two halves of the join are both properties, never a block range guessed
- * from a chart.
+ * the vendored Scripts slice, never the runtime's `\p{Script=…}`: a Node whose
+ * ICU predates a script would silently drop its consonants (see ./lib/ucd.mjs).
+ * Both halves of the join are UCD properties, never a block range guessed from
+ * a chart.
  * @param {{IndicSyllabicCategory: Array<{range: string[], syllabicCategory: string}>}} consonantJson
  * @param {string[]} scripts
+ * @param {{Scripts: Array<{range: string[], script: string}>}} scriptsJson
  * @returns {Array<[number, number, string]>}
  */
-function deriveBrahmic(consonantJson, scripts) {
-  const isScript = Object.fromEntries(
-    scripts.map((name) => [name, new RegExp(`\\p{Script=${name}}`, "u")]),
-  );
+function deriveBrahmic(consonantJson, scripts, scriptsJson) {
+  const wanted = new Set(scripts);
+  const spans = scriptsJson.Scripts.filter(({ script }) => wanted.has(script))
+    .map(({ range, script }) => ({ range: parseRange(range), script }))
+    .sort((a, b) => a.range[0] - b.range[0]);
+  /** @param {number} cp @returns {string | undefined} */
+  const scriptOf = (cp) => {
+    let lo = 0;
+    let hi = spans.length - 1;
+    while (lo <= hi) {
+      const mid = (lo + hi) >> 1;
+      const [start, end] = spans[mid].range;
+      if (cp < start) hi = mid - 1;
+      else if (cp > end) lo = mid + 1;
+      else return spans[mid].script;
+    }
+    return undefined;
+  };
   /** @type {Array<[number, string]>} */
   const tagged = [];
   for (const entry of consonantJson.IndicSyllabicCategory) {
     if (entry.syllabicCategory !== "Consonant") continue;
     const [start, end] = parseRange(entry.range);
     for (let cp = start; cp <= end; cp++) {
-      const char = String.fromCodePoint(cp);
-      for (const name of scripts)
-        if (isScript[name].test(char)) tagged.push([cp, name]);
+      const name = scriptOf(cp);
+      if (name !== undefined) tagged.push([cp, name]);
     }
   }
   tagged.sort((left, right) => left[0] - right[0]);
@@ -175,10 +173,10 @@ function deriveBrahmic(consonantJson, scripts) {
 /** Load the vendored UCD slices used by the generator and the contract test. */
 export function loadUcd() {
   return {
-    joiningJson: readData("DerivedJoiningType.json"),
-    indicJson: readData("IndicSyllabicCategory.Virama.json"),
-    consonantJson: readData("IndicSyllabicCategory.Consonant.json"),
-    scriptsJson: readData("Scripts.Virama.json"),
+    joiningJson: readUcdSlice("DerivedJoiningType.json"),
+    indicJson: readUcdSlice("IndicSyllabicCategory.Virama.json"),
+    consonantJson: readUcdSlice("IndicSyllabicCategory.Consonant.json"),
+    scriptsJson: readUcdSlice("Scripts.Pinned.json"),
     version: UNICODE_VERSION,
   };
 }
@@ -197,7 +195,7 @@ function row(cols) {
 /** Build the full source text of src/joining-type.mjs. */
 export function render({ joining, virama, brahmic, version }) {
   return `/**
- * GENERATED by scripts/gen-joining-type.mjs from ucd-full@${version} — DO NOT EDIT.
+ * GENERATED by scripts/gen-joining-type.mjs from the pinned UCD ${version} — DO NOT EDIT.
  *
  * Unicode Joining_Type, Indic virama and Brahmic consonant range tables backing
  * the ZWNJ/ZWJ carve-out in invisible.mjs. Regenerate with \`pnpm gen:joining-type\`;
