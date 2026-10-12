@@ -225,11 +225,11 @@ export function isInsideDir(dir, file) {
 
 // What rendered untrusted text must never carry raw: what Layer 1 strips, C0/C1
 // controls (ESC opens a terminal escape, a newline forges a report line),
-// line/paragraph separators, lone surrogates. Written as literal ranges (Cc, Zl,
-// Zp and Cs are frozen) because a property escape would ask the running Node's
-// ICU; under the `u` flag the surrogate range matches only an unpaired one.
+// line/paragraph separators, lone surrogates. Spelled as ranges, not runtime
+// `\p{}` lookups: Cc and Cs are immutable under Unicode's stability policy, and
+// Zl/Zp are the single code points U+2028/U+2029.
 const DISPLAY_UNSAFE = new RegExp(
-  `${STRIP.source}|[\\u{0}-\\u{1f}\\u{7f}-\\u{9f}\\u{2028}\\u{2029}\\u{d800}-\\u{dfff}]`,
+  `${STRIP.source}|[\\u0000-\\u001F\\u007F-\\u009F\\u2028\\u2029\\uD800-\\uDFFF]`,
   "gu",
 );
 

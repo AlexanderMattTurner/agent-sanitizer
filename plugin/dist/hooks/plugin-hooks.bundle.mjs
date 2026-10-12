@@ -5464,7 +5464,7 @@ var init_claude_context = __esm({
       ...claudeDirPatterns("")
     ]);
     DISPLAY_UNSAFE = new RegExp(
-      `${STRIP.source}|[\\u{0}-\\u{1f}\\u{7f}-\\u{9f}\\u{2028}\\u{2029}\\u{d800}-\\u{dfff}]`,
+      `${STRIP.source}|[\\u0000-\\u001F\\u007F-\\u009F\\u2028\\u2029\\uD800-\\uDFFF]`,
       "gu"
     );
     USER_GLOBAL_EVENT_NAMED_GLOBS = Object.freeze(
