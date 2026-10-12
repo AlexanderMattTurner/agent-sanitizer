@@ -38,33 +38,10 @@ const propertyInformation = await import(
 // its index (§ "Attributes") gives as a URL, URL list or image-candidate list,
 // the obsolete URL attributes of § 16, the declarative-refresh `content`, the
 // `style` attribute's CSS, and SVG 2's `href` with its `xlink:href` legacy.
-const SPEC_URL_ATTRIBUTES = [
-  "action",
-  "archive",
-  "background",
-  "cite",
-  "classid",
-  "codebase",
-  "content",
-  "data",
-  "datasrc",
-  "dynsrc",
-  "formaction",
-  "href",
-  "imagesrcset",
-  "itemid",
-  "itemtype",
-  "longdesc",
-  "lowsrc",
-  "manifest",
-  "ping",
-  "poster",
-  "profile",
-  "src",
-  "srcset",
-  "style",
-  "xlink:href",
-];
+const SPEC_URL_ATTRIBUTES = `action archive background cite classid codebase
+  content data datasrc dynsrc formaction href imagesrcset itemid itemtype
+  longdesc lowsrc manifest ping poster profile src srcset style
+  xlink:href`.split(/\s+/);
 
 // URL-valued attributes the table deliberately does not read, each because no
 // current browser dereferences the URL it holds.

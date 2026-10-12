@@ -15440,7 +15440,7 @@ var init_css_syntax_data = __esm({
         "asin()": "asin( <calc-sum> )",
         "atan()": "atan( <calc-sum> )",
         "atan2()": "atan2( <calc-sum>, <calc-sum> )",
-        attachment: "scroll | fixed | local",
+        "attachment": "scroll | fixed | local",
         "attr()": "attr( <attr-name> <attr-type>? , <declaration-value>? )",
         "attr-matcher": "[ '~' | '|' | '^' | '$' | '*' ]? '='",
         "attr-modifier": "i | s",
@@ -15448,7 +15448,7 @@ var init_css_syntax_data = __esm({
         "attribute-selector": "'[' <wq-name> ']' | '[' <wq-name> <attr-matcher> [ <string-token> | <ident-token> ] <attr-modifier>? ']'",
         "auto-repeat": "repeat( [ auto-fill | auto-fit ] , [ <line-names>? <fixed-size> ]+ <line-names>? )",
         "auto-track-list": "[ <line-names>? [ <fixed-size> | <fixed-repeat> ] ]* <line-names>? <auto-repeat>\n[ <line-names>? [ <fixed-size> | <fixed-repeat> ] ]* <line-names>?",
-        axis: "block | inline | x | y",
+        "axis": "block | inline | x | y",
         "baseline-position": "[ first | last ]? baseline",
         "basic-shape": "<inset()> | <xywh()> | <rect()> | <circle()> | <ellipse()> | <polygon()> | <path()>",
         "basic-shape-rect": "<inset()> | <rect()> | <xywh()>",
@@ -15473,7 +15473,7 @@ var init_css_syntax_data = __esm({
         "clamp()": "clamp( <calc-sum>#{3} )",
         "class-selector": "'.' <ident-token>",
         "clip-source": "<url>",
-        color: "<color-base> | currentColor | <system-color> | <device-cmyk()>  | <light-dark()> | <-non-standard-color>",
+        "color": "<color-base> | currentColor | <system-color> | <device-cmyk()>  | <light-dark()> | <-non-standard-color>",
         "color()": "color( <colorspace-params> [ / [ <alpha-value> | none ] ]? )",
         "color-base": "<hex-color> | <color-function> | <named-color> | <color-mix()> | transparent",
         "color-function": "<rgb()> | <rgba()> | <hsl()> | <hsla()> | <hwb()> | <lab()> | <lch()> | <oklab()> | <oklch()> | <color()>",
@@ -15484,7 +15484,7 @@ var init_css_syntax_data = __esm({
         "color-stop-length": "<length-percentage>{1,2}",
         "color-stop-list": "<linear-color-stop> , [ <linear-color-hint>? , <linear-color-stop> ]#?",
         "colorspace-params": "[ <predefined-rgb-params> | <xyz-params>]",
-        combinator: "'>' | '+' | '~' | [ '|' '|' ]",
+        "combinator": "'>' | '+' | '~' | [ '|' '|' ]",
         "common-lig-values": "[ common-ligatures | no-common-ligatures ]",
         "compat-auto": "searchfield | textarea | checkbox | radio | menulist | listbox | meter | progress-bar | button",
         "compat-special": "textfield | menulist-button",
@@ -15508,7 +15508,7 @@ var init_css_syntax_data = __esm({
         "coord-box": "content-box | padding-box | border-box | fill-box | stroke-box | view-box",
         "corner-shape-value": "round | scoop | bevel | notch | square | squircle | <superellipse()>",
         "cos()": "cos( <calc-sum> )",
-        counter: "<counter()> | <counters()>",
+        "counter": "<counter()> | <counters()>",
         "counter()": "counter( <counter-name>, <counter-style>? )",
         "counter-name": "<custom-ident>",
         "counter-style": "<counter-style-name> | symbols()",
@@ -15520,7 +15520,7 @@ var init_css_syntax_data = __esm({
         "cursor-predefined": "auto | default | none | context-menu | help | pointer | progress | wait | cell | crosshair | text | vertical-text | alias | copy | move | no-drop | not-allowed | e-resize | n-resize | ne-resize | nw-resize | s-resize | se-resize | sw-resize | w-resize | ew-resize | ns-resize | nesw-resize | nwse-resize | col-resize | row-resize | all-scroll | zoom-in | zoom-out | grab | grabbing",
         "custom-color-space": "<dashed-ident>",
         "custom-params": "<dashed-ident> [ <number> | <percentage> | none ]+",
-        dasharray: "[ [ <length-percentage> | <number> ]+ ]#",
+        "dasharray": "[ [ <length-percentage> | <number> ]+ ]#",
         "dashndashdigit-ident": "<ident-token>",
         "deprecated-system-color": "ActiveBorder | ActiveCaption | AppWorkspace | Background | ButtonHighlight | ButtonShadow | CaptionText | InactiveBorder | InactiveCaption | InactiveCaptionText | InfoBackground | InfoText | Menu | MenuText | Scrollbar | ThreeDDarkShadow | ThreeDFace | ThreeDHighlight | ThreeDLightShadow | ThreeDShadow | Window | WindowFrame | WindowText",
         "discretionary-lig-values": "[ discretionary-ligatures | no-discretionary-ligatures ]",
@@ -15566,19 +15566,19 @@ var init_css_syntax_data = __esm({
         "generic-family": "<generic-script-specific>| <generic-complete> | <generic-incomplete> | <-non-standard-generic-family>",
         "generic-incomplete": "ui-serif | ui-sans-serif | ui-monospace | ui-rounded",
         "geometry-box": "<shape-box> | fill-box | stroke-box | view-box",
-        gradient: "<linear-gradient()> | <repeating-linear-gradient()> | <radial-gradient()> | <repeating-radial-gradient()> | <conic-gradient()> | <repeating-conic-gradient()> | <-legacy-gradient>",
+        "gradient": "<linear-gradient()> | <repeating-linear-gradient()> | <radial-gradient()> | <repeating-radial-gradient()> | <conic-gradient()> | <repeating-conic-gradient()> | <-legacy-gradient>",
         "grayscale()": "grayscale( [ <number> | <percentage> ]? )",
         "grid-line": "auto | <custom-ident> | [ <integer> && <custom-ident>? ] | [ span && [ <integer> || <custom-ident> ] ]",
         "historical-lig-values": "[ historical-ligatures | no-historical-ligatures ]",
         "hsl()": "hsl( <hue>, <percentage>, <percentage>, <alpha-value>? ) | hsl( [ <hue> | none ] [ <percentage> | <number> | none ] [ <percentage> | <number> | none ] [ / [ <alpha-value> | none ] ]? )",
         "hsla()": "hsla( <hue>, <percentage>, <percentage>, <alpha-value>? ) | hsla( [ <hue> | none ] [ <percentage> | <number> | none ] [ <percentage> | <number> | none ] [ / [ <alpha-value> | none ] ]? )",
-        hue: "<number> | <angle>",
+        "hue": "<number> | <angle>",
         "hue-interpolation-method": "[ shorter | longer | increasing | decreasing ] hue",
         "hue-rotate()": "hue-rotate( [ <angle> | <zero> ]? )",
         "hwb()": "hwb( [ <hue> | none ] [ <percentage> | <number> | none ] [ <percentage> | <number> | none ] [ / [ <alpha-value> | none ] ]? )",
         "hypot()": "hypot( <calc-sum># )",
         "id-selector": "<hash-token>",
-        image: "<url> | <image()> | <image-set()> | <element()> | <paint()> | <cross-fade()> | <gradient>",
+        "image": "<url> | <image()> | <image-set()> | <element()> | <paint()> | <cross-fade()> | <gradient>",
         "image()": "image( <image-tags>? [ <image-src>? , <color>? ]! )",
         "image-set()": "image-set( <image-set-option># )",
         "image-set-option": "[ <image> | <string> ] [ <resolution> || type(<string>) ]",
@@ -15586,7 +15586,7 @@ var init_css_syntax_data = __esm({
         "image-tags": "ltr | rtl",
         "inflexible-breadth": "<length-percentage> | min-content | max-content | auto",
         "inset()": "inset( <length-percentage>{1,4} [ round <'border-radius'> ]? )",
-        integer: "<number-token>",
+        "integer": "<number-token>",
         "invert()": "invert( [ <number> | <percentage> ]? )",
         "keyframe-block": "<keyframe-selector># {\n  <declaration-list>\n}",
         "keyframe-selector": "from | to | <percentage [0,100]> | <timeline-range-name> <percentage>",
@@ -15662,7 +15662,7 @@ var init_css_syntax_data = __esm({
         "page-selector": "<pseudo-page>+ | <ident> <pseudo-page>*",
         "page-selector-list": "[ <page-selector># ]?",
         "page-size": "A5 | A4 | A3 | B5 | B4 | JIS-B5 | JIS-B4 | letter | legal | ledger",
-        paint: "none | <color> | <url> [ none | <color> ]? | context-fill | context-stroke",
+        "paint": "none | <color> | <url> [ none | <color> ]? | context-fill | context-stroke",
         "paint()": "paint( <ident>, <declaration-value>? )",
         "paint-box": "<visual-box> | fill-box | stroke-box",
         "palette-identifier": "<dashed-ident>",
@@ -15671,7 +15671,7 @@ var init_css_syntax_data = __esm({
         "perspective()": "perspective( [ <length [0,\u221E]> | none ] )",
         "polar-color-space": "hsl | hwb | lch | oklch",
         "polygon()": "polygon( <'fill-rule'>? , [ <length-percentage> <length-percentage> ]# )",
-        position: "[ [ left | center | right ] || [ top | center | bottom ] | [ left | center | right | <length-percentage> ] [ top | center | bottom | <length-percentage> ]? | [ [ left | right ] <length-percentage> ] && [ [ top | bottom ] <length-percentage> ] ]",
+        "position": "[ [ left | center | right ] || [ top | center | bottom ] | [ left | center | right | <length-percentage> ] [ top | center | bottom | <length-percentage> ]? | [ [ left | right ] <length-percentage> ] && [ [ top | bottom ] <length-percentage> ] ]",
         "position-area": "[ [ left | center | right | span-left | span-right | x-start | x-end | span-x-start | span-x-end | x-self-start | x-self-end | span-x-self-start | span-x-self-end | span-all ] || [ top | center | bottom | span-top | span-bottom | y-start | y-end | span-y-start | span-y-end | y-self-start | y-self-end | span-y-self-start | span-y-self-end | span-all ] | [ block-start | center | block-end | span-block-start | span-block-end | span-all ] || [ inline-start | center | inline-end | span-inline-start | span-inline-end | span-all ] | [ self-block-start | center | self-block-end | span-self-block-start | span-self-block-end | span-all ] || [ self-inline-start | center | self-inline-end | span-self-inline-start | span-self-inline-end | span-all ] | [ start | center | end | span-start | span-end | span-all ]{1,2} | [ self-start | center | self-end | span-self-start | span-self-end | span-all ]{1,2} ]",
         "pow()": "pow( <calc-sum>, <calc-sum> )",
         "predefined-rgb": "srgb | srgb-linear | display-p3 | display-p3-linear | a98-rgb | prophoto-rgb | rec2020",
@@ -15680,13 +15680,13 @@ var init_css_syntax_data = __esm({
         "pseudo-element-selector": "':' <pseudo-class-selector> | <legacy-pseudo-element-selector>",
         "pseudo-page": ": [ left | right | first | blank ]",
         "query-in-parens": "( <container-condition> ) | ( <size-feature> ) | style( <style-query> ) | <general-enclosed>",
-        quote: "open-quote | close-quote | no-open-quote | no-close-quote",
+        "quote": "open-quote | close-quote | no-open-quote | no-close-quote",
         "radial-extent": "closest-corner | closest-side | farthest-corner | farthest-side",
         "radial-gradient()": "radial-gradient( [ <radial-gradient-syntax> ] )",
         "radial-gradient-syntax": "[ [ [ <radial-shape> || <radial-size> ]? [ at <position> ]? ] || <color-interpolation-method> ]? , <color-stop-list>",
         "radial-shape": "circle | ellipse",
         "radial-size": "<radial-extent> | <length [0,\u221E]> | <length-percentage [0,\u221E]>{2}",
-        ratio: "<number [0,\u221E]> [ / <number [0,\u221E]> ]?",
+        "ratio": "<number [0,\u221E]> [ / <number [0,\u221E]> ]?",
         "ray()": "ray( <angle> && <ray-size>? && contain? && [at <position>]? )",
         "ray-size": "closest-side | closest-corner | farthest-side | farthest-corner | sides",
         "rect()": "rect( [ <length-percentage> | auto ]{4} [ round <'border-radius'> ]? )",
@@ -15718,16 +15718,16 @@ var init_css_syntax_data = __esm({
         "scope-end": "<forgiving-selector-list>",
         "scope-start": "<forgiving-selector-list>",
         "scroll()": "scroll( [ <scroller> || <axis> ]? )",
-        scroller: "root | nearest | self",
+        "scroller": "root | nearest | self",
         "scroll-state-feature": "<media-query-list>",
         "scroll-state-in-parens": "( <scroll-state-query> ) | ( <scroll-state-feature> ) | <general-enclosed>",
         "scroll-state-query": "not <scroll-state-in-parens> | <scroll-state-in-parens> [ [ and <scroll-state-in-parens> ]* | [ or <scroll-state-in-parens> ]* ] | <scroll-state-feature>",
         "selector-list": "<complex-selector-list>",
         "self-position": "center | start | end | self-start | self-end | flex-start | flex-end",
         "sepia()": "sepia( [ <number> | <percentage> ]? )",
-        shadow: "inset? && <length>{2,4} && <color>?",
+        "shadow": "inset? && <length>{2,4} && <color>?",
         "shadow-t": "[ <length>{2,3} && <color>? ]",
-        shape: "rect( <top>, <right>, <bottom>, <left> ) | rect( <top> <right> <bottom> <left> )",
+        "shape": "rect( <top>, <right>, <bottom>, <left> ) | rect( <top> <right> <bottom> <left> )",
         "shape-box": "<visual-box> | margin-box",
         "side-or-corner": "[ left | right ] || [ top | bottom ]",
         "sign()": "sign( <calc-sum> )",
@@ -15743,7 +15743,7 @@ var init_css_syntax_data = __esm({
         "single-animation-timeline": "auto | none | <dashed-ident> | <scroll()> | <view()>",
         "single-transition": "[ none | <single-transition-property> ] || <time> || <easing-function> || <time> || <transition-behavior-value>",
         "single-transition-property": "all | <custom-ident>",
-        size: "closest-side | farthest-side | closest-corner | farthest-corner | <length> | <length-percentage>{2}",
+        "size": "closest-side | farthest-side | closest-corner | farthest-corner | <length> | <length-percentage>{2}",
         "size-feature": "<mf-plain> | <mf-boolean> | <mf-range>",
         "skew()": "skew( [ <angle> | <zero> ] , [ <angle> | <zero> ]? )",
         "skewX()": "skewX( [ <angle> | <zero> ] )",
@@ -15762,13 +15762,13 @@ var init_css_syntax_data = __esm({
         "supports-feature": "<supports-decl> | <supports-selector-fn>",
         "supports-in-parens": "( <supports-condition> ) | <supports-feature> | <general-enclosed>",
         "supports-selector-fn": "selector( <complex-selector> )",
-        symbol: "<string> | <image> | <custom-ident>",
+        "symbol": "<string> | <image> | <custom-ident>",
         "symbols()": "symbols( <symbols-type>? [ <string> | <image> ]+ )",
         "symbols-type": "cyclic | numeric | alphabetic | symbolic | fixed",
         "system-color": "AccentColor | AccentColorText | ActiveText | ButtonBorder | ButtonFace | ButtonText | Canvas | CanvasText | Field | FieldText | GrayText | Highlight | HighlightText | LinkText | Mark | MarkText | SelectedItem | SelectedItemText | VisitedText",
         "system-family-name": "caption | icon | menu | message-box | small-caption | status-bar",
         "tan()": "tan( <calc-sum> )",
-        target: "<target-counter()> | <target-counters()> | <target-text()>",
+        "target": "<target-counter()> | <target-counters()> | <target-text()>",
         "target-counter()": "target-counter( [ <string> | <url> ] , <custom-ident> , <counter-style>? )",
         "target-counters()": "target-counters( [ <string> | <url> ] , <custom-ident> , <string> , <counter-style>? )",
         "target-text()": "target-text( [ <string> | <url> ] , [ content | before | after | first-letter ]? )",
@@ -15797,7 +15797,7 @@ var init_css_syntax_data = __esm({
         "visual-box": "content-box | padding-box | border-box",
         "wq-name": "<ns-prefix>? <ident-token>",
         "xywh()": "xywh( <length-percentage>{2} <length-percentage [0,\u221E]>{2} [ round <'border-radius'> ]? )",
-        xyz: "xyz | xyz-d50 | xyz-d65",
+        "xyz": "xyz | xyz-d50 | xyz-d65",
         "xyz-params": "<xyz-space> [ <number> | <percentage> | none ]{3}",
         "-legacy-gradient": "<-webkit-gradient()> | <-legacy-linear-gradient> | <-legacy-repeating-linear-gradient> | <-legacy-radial-gradient> | <-legacy-repeating-radial-gradient>",
         "-legacy-linear-gradient": "-moz-linear-gradient( <-legacy-linear-gradient-arguments> ) | -webkit-linear-gradient( <-legacy-linear-gradient-arguments> ) | -o-linear-gradient( <-legacy-linear-gradient-arguments> )",
@@ -15823,23 +15823,23 @@ var init_css_syntax_data = __esm({
         "-ms-filter-function": "<-ms-filter-function-progid> | <-ms-filter-function-legacy>",
         "-ms-filter-function-progid": "'progid:' [ <ident-token> '.' ]* [ <ident-token> | <function-token> <any-value>? ) ]",
         "-ms-filter-function-legacy": "<ident-token> | <function-token> <any-value>? )",
-        age: "child | young | old",
+        "age": "child | young | old",
         "attr-name": "<wq-name>",
         "attr-fallback": "<any-value>",
-        autospace: "no-autospace | [ ideograph-alpha || ideograph-numeric || punctuation ] || [ insert | replace ]",
-        bottom: "<length> | auto",
+        "autospace": "no-autospace | [ ideograph-alpha || ideograph-numeric || punctuation ] || [ insert | replace ]",
+        "bottom": "<length> | auto",
         "generic-voice": "[ <age>? <gender> <integer>? ]",
-        gender: "male | female | neutral",
+        "gender": "male | female | neutral",
         "generic-script-specific": "generic(kai) | generic(fangsong) | generic(nastaliq)",
         "-non-standard-generic-family": "-apple-system | BlinkMacSystemFont",
         "intrinsic-size-keyword": "min-content | max-content | fit-content",
-        left: "<length> | auto",
+        "left": "<length> | auto",
         "device-cmyk()": "<legacy-device-cmyk-syntax> | <modern-device-cmyk-syntax>",
         "legacy-device-cmyk-syntax": "device-cmyk( <number>#{4} )",
         "modern-device-cmyk-syntax": "device-cmyk( <cmyk-component>{4} [ / [ <alpha-value> | none ] ]? )",
         "cmyk-component": "<number> | <percentage> | none",
         "color-space": "<rectangular-color-space> | <polar-color-space> | <custom-color-space>",
-        right: "<length> | auto",
+        "right": "<length> | auto",
         "forgiving-selector-list": "<complex-real-selector-list>",
         "forgiving-relative-selector-list": "<relative-real-selector-list>",
         "complex-real-selector-list": "<complex-real-selector>#",
@@ -15853,12 +15853,12 @@ var init_css_syntax_data = __esm({
         "legacy-pseudo-element-selector": " ':' [before | after | first-line | first-letter]",
         "svg-length": "<percentage> | <length> | <number>",
         "svg-writing-mode": "lr-tb | rl-tb | tb-rl | lr | rl | tb",
-        top: "<length> | auto",
-        x: "<number>",
-        y: "<number>",
-        declaration: "<ident-token> : <declaration-value>? [ '!' important ]?",
+        "top": "<length> | auto",
+        "x": "<number>",
+        "y": "<number>",
+        "declaration": "<ident-token> : <declaration-value>? [ '!' important ]?",
         "declaration-list": "[ <declaration>? ';' ]* <declaration>?",
-        url: "url( <string> <url-modifier>* ) | <url-token>",
+        "url": "url( <string> <url-modifier>* ) | <url-token>",
         "url-modifier": "<ident> | <function-token> <any-value> )",
         "number-zero-one": "<number [0,1]>",
         "number-one-or-greater": "<number [1,\u221E]>",
@@ -15866,7 +15866,7 @@ var init_css_syntax_data = __esm({
         "style-condition": "not <style-in-parens> | <style-in-parens> [ [ and <style-in-parens> ]* | [ or <style-in-parens> ]* ]",
         "-non-standard-display": "-ms-inline-flexbox | -ms-grid | -ms-inline-grid | -webkit-flex | -webkit-inline-flex | -webkit-box | -webkit-inline-box | -moz-inline-stack | -moz-box | -moz-inline-box",
         "inset-area": "[ [ left | center | right | span-left | span-right | x-start | x-end | span-x-start | span-x-end | x-self-start | x-self-end | span-x-self-start | span-x-self-end | span-all ] || [ top | center | bottom | span-top | span-bottom | y-start | y-end | span-y-start | span-y-end | y-self-start | y-self-end | span-y-self-start | span-y-self-end | span-all ] | [ block-start | center | block-end | span-block-start | span-block-end | span-all ] || [ inline-start | center | inline-end | span-inline-start | span-inline-end | span-all ] | [ self-block-start | self-block-end | span-self-block-start | span-self-block-end | span-all ] || [ self-inline-start | self-inline-end | span-self-inline-start | span-self-inline-end | span-all ] | [ start | center | end | span-start | span-end | span-all ]{1,2} | [ self-start | center | self-end | span-self-start | span-self-end | span-all ]{1,2} ]",
-        syntax: "'*' | <syntax-component> [ <syntax-combinator> <syntax-component> ]* | <syntax-string>",
+        "syntax": "'*' | <syntax-component> [ <syntax-combinator> <syntax-component> ]* | <syntax-string>",
         "syntax-component": "<syntax-single-component> <syntax-multiplier>? | '<' transform-list '>'",
         "syntax-single-component": "'<' <syntax-type-name> '>' | <ident>",
         "syntax-type-name": "angle | color | custom-ident | image | integer | length | length-percentage | number | percentage | resolution | string | time | url | transform-function",
@@ -15981,10 +15981,10 @@ var init_css_syntax_data = __esm({
         "align-self": "auto | normal | stretch | <baseline-position> | <overflow-position>? <self-position> | anchor-center",
         "align-tracks": "[ normal | <baseline-position> | <content-distribution> | <overflow-position>? <content-position> ]#",
         "alignment-baseline": "auto | baseline | before-edge | text-before-edge | middle | central | after-edge | text-after-edge | ideographic | alphabetic | hanging | mathematical",
-        all: "initial | inherit | unset | revert | revert-layer",
+        "all": "initial | inherit | unset | revert | revert-layer",
         "anchor-name": "none | <dashed-ident>#",
         "anchor-scope": "none | all | <dashed-ident>#",
-        animation: "<single-animation>#",
+        "animation": "<single-animation>#",
         "animation-composition": "<single-animation-composition>#",
         "animation-delay": "<time>#",
         "animation-direction": "<single-animation-direction>#",
@@ -15999,11 +15999,11 @@ var init_css_syntax_data = __esm({
         "animation-timeline": "<single-animation-timeline>#",
         "animation-timing-function": "<easing-function>#",
         "animation-trigger": "[ none | [ <dashed-ident> <animation-action>+ ]+ ]#",
-        appearance: "none | auto | <compat-auto> | <compat-special>",
+        "appearance": "none | auto | <compat-auto> | <compat-special>",
         "aspect-ratio": "auto || <ratio>",
         "backdrop-filter": "none | <filter-value-list>",
         "backface-visibility": "visible | hidden",
-        background: "<bg-layer>#? , <final-bg-layer>",
+        "background": "<bg-layer>#? , <final-bg-layer>",
         "background-attachment": "<attachment>#",
         "background-blend-mode": "<blend-mode>#",
         "background-clip": "<bg-clip>#",
@@ -16018,7 +16018,7 @@ var init_css_syntax_data = __esm({
         "baseline-shift": "baseline | sub | super | <svg-length>",
         "baseline-source": "auto | first | last",
         "block-size": "<'width'>",
-        border: "<line-width> || <line-style> || <color>",
+        "border": "<line-width> || <line-style> || <color>",
         "border-block": "<'border-block-start'>",
         "border-block-color": "<'border-top-color'>{1,2}",
         "border-block-end": "<'border-top-width'> || <'border-top-style'> || <color>",
@@ -16079,7 +16079,7 @@ var init_css_syntax_data = __esm({
         "border-top-style": "<line-style>",
         "border-top-width": "<line-width>",
         "border-width": "<line-width>{1,4}",
-        bottom: "auto | <length-percentage> | <anchor()> | <anchor-size()>",
+        "bottom": "auto | <length-percentage> | <anchor()> | <anchor-size()>",
         "box-align": "start | center | end | baseline | stretch",
         "box-decoration-break": "slice | clone",
         "box-direction": "normal | reverse | inherit",
@@ -16095,15 +16095,15 @@ var init_css_syntax_data = __esm({
         "break-before": "auto | avoid | always | all | avoid-page | page | left | right | recto | verso | avoid-column | column | avoid-region | region",
         "break-inside": "auto | avoid | avoid-page | avoid-column | avoid-region",
         "caption-side": "top | bottom",
-        caret: "<'caret-color'> || <'caret-animation'> || <'caret-shape'>",
+        "caret": "<'caret-color'> || <'caret-animation'> || <'caret-shape'>",
         "caret-animation": "auto | manual",
         "caret-color": "auto | <color>",
         "caret-shape": "auto | bar | block | underscore",
-        clear: "none | left | right | both | inline-start | inline-end",
-        clip: "<shape> | auto",
+        "clear": "none | left | right | both | inline-start | inline-end",
+        "clip": "<shape> | auto",
         "clip-path": "<clip-source> | [ <basic-shape> || <geometry-box> ] | none",
         "clip-rule": "nonzero | evenodd",
-        color: "<color>",
+        "color": "<color>",
         "color-interpolation-filters": "auto | sRGB | linearRGB",
         "color-scheme": "normal | [ light | dark | <custom-ident> ]+ && only?",
         "column-count": "<integer> | auto",
@@ -16117,17 +16117,17 @@ var init_css_syntax_data = __esm({
         "column-span": "none | all",
         "column-width": "auto | <length [0,\u221E]>",
         "column-wrap": "auto | nowrap | wrap",
-        columns: "[ <'column-width'> || <'column-count'> ] [ / <'column-height'> ]?",
-        contain: "none | strict | content | [ [ size || inline-size ] || layout || style || paint ]",
+        "columns": "[ <'column-width'> || <'column-count'> ] [ / <'column-height'> ]?",
+        "contain": "none | strict | content | [ [ size || inline-size ] || layout || style || paint ]",
         "contain-intrinsic-block-size": "auto? [ none | <length> ]",
         "contain-intrinsic-height": "auto? [ none | <length> ]",
         "contain-intrinsic-inline-size": "auto? [ none | <length> ]",
         "contain-intrinsic-size": "[ auto? [ none | <length> ] ]{1,2}",
         "contain-intrinsic-width": "auto? [ none | <length> ]",
-        container: "<'container-name'> [ / <'container-type'> ]?",
+        "container": "<'container-name'> [ / <'container-type'> ]?",
         "container-name": "none | <custom-ident>+",
         "container-type": "normal || [ size | inline-size ]",
-        content: "normal | none | [ <content-replacement> | <content-list> ] [ / [ <string> | <counter> | <attr()> ]+ ]?",
+        "content": "normal | none | [ <content-replacement> | <content-list> ] [ / [ <string> | <counter> | <attr()> ]+ ]?",
         "content-visibility": "visible | auto | hidden",
         "corner-block-end-shape": "<corner-shape-value>{1,2}",
         "corner-block-start-shape": "<corner-shape-value>{1,2}",
@@ -16149,31 +16149,31 @@ var init_css_syntax_data = __esm({
         "counter-increment": "[ <counter-name> <integer>? ]+ | none",
         "counter-reset": "[ <counter-name> <integer>? | <reversed-counter-name> <integer>? ]+ | none",
         "counter-set": "[ <counter-name> <integer>? ]+ | none",
-        cursor: "[ [ <url> [ <x> <y> ]? , ]* [ auto | default | none | context-menu | help | pointer | progress | wait | cell | crosshair | text | vertical-text | alias | copy | move | no-drop | not-allowed | e-resize | n-resize | ne-resize | nw-resize | s-resize | se-resize | sw-resize | w-resize | ew-resize | ns-resize | nesw-resize | nwse-resize | col-resize | row-resize | all-scroll | zoom-in | zoom-out | grab | grabbing | hand | -webkit-grab | -webkit-grabbing | -webkit-zoom-in | -webkit-zoom-out | -moz-grab | -moz-grabbing | -moz-zoom-in | -moz-zoom-out ] ]",
-        cx: "<length> | <percentage>",
-        cy: "<length> | <percentage>",
-        d: "none | path(<string>)",
-        direction: "ltr | rtl",
-        display: "[ <display-outside> || <display-inside> ] | <display-listitem> | <display-internal> | <display-box> | <display-legacy> | <-non-standard-display>",
+        "cursor": "[ [ <url> [ <x> <y> ]? , ]* [ auto | default | none | context-menu | help | pointer | progress | wait | cell | crosshair | text | vertical-text | alias | copy | move | no-drop | not-allowed | e-resize | n-resize | ne-resize | nw-resize | s-resize | se-resize | sw-resize | w-resize | ew-resize | ns-resize | nesw-resize | nwse-resize | col-resize | row-resize | all-scroll | zoom-in | zoom-out | grab | grabbing | hand | -webkit-grab | -webkit-grabbing | -webkit-zoom-in | -webkit-zoom-out | -moz-grab | -moz-grabbing | -moz-zoom-in | -moz-zoom-out ] ]",
+        "cx": "<length> | <percentage>",
+        "cy": "<length> | <percentage>",
+        "d": "none | path(<string>)",
+        "direction": "ltr | rtl",
+        "display": "[ <display-outside> || <display-inside> ] | <display-listitem> | <display-internal> | <display-box> | <display-legacy> | <-non-standard-display>",
         "dominant-baseline": "auto | use-script | no-change | reset-size | ideographic | alphabetic | hanging | mathematical | central | middle | text-after-edge | text-before-edge",
         "dynamic-range-limit": "standard | no-limit | constrained | <dynamic-range-limit-mix()>",
         "empty-cells": "show | hide",
         "field-sizing": "content | fixed",
-        fill: "<paint>",
+        "fill": "<paint>",
         "fill-opacity": "<number-zero-one> | <percentage>",
         "fill-rule": "nonzero | evenodd",
-        filter: "none | <filter-value-list> | <-ms-filter-function-list>",
-        flex: "none | [ <'flex-grow'> <'flex-shrink'>? || <'flex-basis'> ]",
+        "filter": "none | <filter-value-list> | <-ms-filter-function-list>",
+        "flex": "none | [ <'flex-grow'> <'flex-shrink'>? || <'flex-basis'> ]",
         "flex-basis": "content | <'width'>",
         "flex-direction": "row | row-reverse | column | column-reverse",
         "flex-flow": "<'flex-direction'> || <'flex-wrap'>",
         "flex-grow": "<number>",
         "flex-shrink": "<number>",
         "flex-wrap": "nowrap | wrap | wrap-reverse",
-        float: "left | right | none | inline-start | inline-end",
+        "float": "left | right | none | inline-start | inline-end",
         "flood-color": "<color>",
         "flood-opacity": "<'opacity'>",
-        font: "[ [ <'font-style'> || <font-variant-css2> || <'font-weight'> || <font-width-css3> ]? <'font-size'> [ / <'line-height'> ]? <'font-family'># ] | <system-family-name> | <-non-standard-font>",
+        "font": "[ [ <'font-style'> || <font-variant-css2> || <'font-weight'> || <font-width-css3> ]? <'font-size'> [ / <'line-height'> ]? <'font-family'># ] | <system-family-name> | <-non-standard-font>",
         "font-family": "[ <family-name> | <generic-family> ]#",
         "font-feature-settings": "normal | <feature-tag-value>#",
         "font-kerning": "auto | normal | none",
@@ -16202,8 +16202,8 @@ var init_css_syntax_data = __esm({
         "font-weight": "<font-weight-absolute> | bolder | lighter",
         "font-width": "normal | <percentage [0,\u221E]> | ultra-condensed | extra-condensed | condensed | semi-condensed | semi-expanded | expanded | extra-expanded | ultra-expanded",
         "forced-color-adjust": "auto | none | preserve-parent-color",
-        gap: "<'row-gap'> <'column-gap'>?",
-        grid: "<'grid-template'> | <'grid-template-rows'> / [ auto-flow && dense? ] <'grid-auto-columns'>? | [ auto-flow && dense? ] <'grid-auto-rows'>? / <'grid-template-columns'>",
+        "gap": "<'row-gap'> <'column-gap'>?",
+        "grid": "<'grid-template'> | <'grid-template-rows'> / [ auto-flow && dense? ] <'grid-auto-columns'>? | [ auto-flow && dense? ] <'grid-auto-rows'>? / <'grid-template-columns'>",
         "grid-area": "<grid-line> [ / <grid-line> ]{0,3}",
         "grid-auto-columns": "<track-size>+",
         "grid-auto-flow": "[ row | column ] || dense",
@@ -16222,10 +16222,10 @@ var init_css_syntax_data = __esm({
         "grid-template-columns": "none | <track-list> | <auto-track-list> | subgrid <line-name-list>?",
         "grid-template-rows": "none | <track-list> | <auto-track-list> | subgrid <line-name-list>?",
         "hanging-punctuation": "none | [ first || [ force-end | allow-end ] || last ]",
-        height: "auto | <length-percentage [0,\u221E]> | min-content | max-content | fit-content | fit-content(<length-percentage [0,\u221E]>) | <calc-size()> | <anchor-size()> | stretch | <-non-standard-size>",
+        "height": "auto | <length-percentage [0,\u221E]> | min-content | max-content | fit-content | fit-content(<length-percentage [0,\u221E]>) | <calc-size()> | <anchor-size()> | stretch | <-non-standard-size>",
         "hyphenate-character": "auto | <string>",
         "hyphenate-limit-chars": "[ auto | <integer> ]{1,3}",
-        hyphens: "none | manual | auto",
+        "hyphens": "none | manual | auto",
         "image-orientation": "from-image | <angle> | [ <angle>? flip ]",
         "image-rendering": "auto | crisp-edges | pixelated | smooth | optimizeSpeed | optimizeQuality | <-non-standard-image-rendering>",
         "image-resolution": "[ from-image || <resolution> ] && snap?",
@@ -16233,7 +16233,7 @@ var init_css_syntax_data = __esm({
         "initial-letter": "normal | [ <number> <integer>? ]",
         "initial-letter-align": "[ auto | alphabetic | hanging | ideographic ]",
         "inline-size": "<'width'>",
-        inset: "<'top'>{1,4}",
+        "inset": "<'top'>{1,4}",
         "inset-block": "<'top'>{1,2}",
         "inset-block-end": "<'top'>",
         "inset-block-start": "<'top'>",
@@ -16241,8 +16241,8 @@ var init_css_syntax_data = __esm({
         "inset-inline-end": "<'top'>",
         "inset-inline-start": "<'top'>",
         "interpolate-size": "numeric-only | allow-keywords",
-        isolation: "auto | isolate",
-        interactivity: "auto | inert",
+        "isolation": "auto | isolate",
+        "interactivity": "auto | inert",
         "interest-delay": "<'interest-delay-start'>{1,2}",
         "interest-delay-end": "normal | <time>",
         "interest-delay-start": "normal | <time>",
@@ -16250,7 +16250,7 @@ var init_css_syntax_data = __esm({
         "justify-items": "normal | stretch | <baseline-position> | <overflow-position>? [ <self-position> | left | right ] | legacy | legacy && [ left | right | center ] | anchor-center",
         "justify-self": "auto | normal | stretch | <baseline-position> | <overflow-position>? [ <self-position> | left | right ] | anchor-center",
         "justify-tracks": "[ normal | <content-distribution> | <overflow-position>? [ <content-position> | left | right ] ]#",
-        left: "auto | <length-percentage> | <anchor()> | <anchor-size()>",
+        "left": "auto | <length-percentage> | <anchor()> | <anchor-size()>",
         "letter-spacing": "normal | <length-percentage>",
         "lighting-color": "<color>",
         "line-break": "auto | loose | normal | strict | anywhere",
@@ -16261,7 +16261,7 @@ var init_css_syntax_data = __esm({
         "list-style-image": "<image> | none",
         "list-style-position": "inside | outside",
         "list-style-type": "<counter-style> | <string> | none",
-        margin: "<'margin-top'>{1,4}",
+        "margin": "<'margin-top'>{1,4}",
         "margin-block": "<'margin-top'>{1,2}",
         "margin-block-end": "<'margin-top'>",
         "margin-block-start": "<'margin-top'>",
@@ -16273,11 +16273,11 @@ var init_css_syntax_data = __esm({
         "margin-right": "<length-percentage> | auto | <anchor-size()>",
         "margin-top": "<length-percentage> | auto | <anchor-size()>",
         "margin-trim": "none | in-flow | all",
-        marker: "none | <url>",
+        "marker": "none | <url>",
         "marker-end": "none | <url>",
         "marker-mid": "none | <url>",
         "marker-start": "none | <url>",
-        mask: "<mask-layer>#",
+        "mask": "<mask-layer>#",
         "mask-border": "<'mask-border-source'> || <'mask-border-slice'> [ / <'mask-border-width'>? [ / <'mask-border-outset'> ]? ]? || <'mask-border-repeat'> || <'mask-border-mode'>",
         "mask-border-mode": "luminance | alpha",
         "mask-border-outset": "[ <length> | <number> ]{1,4}",
@@ -16311,21 +16311,21 @@ var init_css_syntax_data = __esm({
         "object-fit": "fill | contain | cover | none | scale-down",
         "object-position": "<position>",
         "object-view-box": "none | <basic-shape-rect>",
-        offset: "[ <'offset-position'>? [ <'offset-path'> [ <'offset-distance'> || <'offset-rotate'> ]? ]? ]! [ / <'offset-anchor'> ]?",
+        "offset": "[ <'offset-position'>? [ <'offset-path'> [ <'offset-distance'> || <'offset-rotate'> ]? ]? ]! [ / <'offset-anchor'> ]?",
         "offset-anchor": "auto | <position>",
         "offset-distance": "<length-percentage>",
         "offset-path": "none | <offset-path> || <coord-box>",
         "offset-position": "normal | auto | <position>",
         "offset-rotate": "[ auto | reverse ] || <angle>",
-        opacity: "<opacity-value>",
-        order: "<integer>",
-        orphans: "<integer>",
-        outline: "<'outline-width'> || <'outline-style'> || <'outline-color'>",
+        "opacity": "<opacity-value>",
+        "order": "<integer>",
+        "orphans": "<integer>",
+        "outline": "<'outline-width'> || <'outline-style'> || <'outline-color'>",
         "outline-color": "auto | <color>",
         "outline-offset": "<length>",
         "outline-style": "auto | <outline-line-style>",
         "outline-width": "<line-width>",
-        overflow: "[ visible | hidden | clip | scroll | auto ]{1,2} | <-non-standard-overflow>",
+        "overflow": "[ visible | hidden | clip | scroll | auto ]{1,2} | <-non-standard-overflow>",
         "overflow-anchor": "auto | none",
         "overflow-block": "visible | hidden | clip | scroll | auto | <-non-standard-overflow>",
         "overflow-clip-box": "padding-box | content-box",
@@ -16334,13 +16334,13 @@ var init_css_syntax_data = __esm({
         "overflow-wrap": "normal | break-word | anywhere",
         "overflow-x": "visible | hidden | clip | scroll | auto | <-non-standard-overflow>",
         "overflow-y": "visible | hidden | clip | scroll | auto | <-non-standard-overflow>",
-        overlay: "none | auto",
+        "overlay": "none | auto",
         "overscroll-behavior": "[ contain | none | auto ]{1,2}",
         "overscroll-behavior-block": "contain | none | auto",
         "overscroll-behavior-inline": "contain | none | auto",
         "overscroll-behavior-x": "contain | none | auto",
         "overscroll-behavior-y": "contain | none | auto",
-        padding: "<'padding-top'>{1,4}",
+        "padding": "<'padding-top'>{1,4}",
         "padding-block": "<'padding-top'>{1,2}",
         "padding-block-end": "<'padding-top'>",
         "padding-block-start": "<'padding-top'>",
@@ -16351,18 +16351,18 @@ var init_css_syntax_data = __esm({
         "padding-left": "<length-percentage [0,\u221E]>",
         "padding-right": "<length-percentage [0,\u221E]>",
         "padding-top": "<length-percentage [0,\u221E]>",
-        page: "auto | <custom-ident>",
+        "page": "auto | <custom-ident>",
         "page-break-after": "auto | always | avoid | left | right | recto | verso",
         "page-break-before": "auto | always | avoid | left | right | recto | verso",
         "page-break-inside": "auto | avoid",
         "paint-order": "normal | [ fill || stroke || markers ]",
-        perspective: "none | <length>",
+        "perspective": "none | <length>",
         "perspective-origin": "<position>",
         "place-content": "<'align-content'> <'justify-content'>?",
         "place-items": "<'align-items'> <'justify-items'>?",
         "place-self": "<'align-self'> <'justify-self'>?",
         "pointer-events": "auto | none | visiblePainted | visibleFill | visibleStroke | visible | painted | fill | stroke | all | inherit",
-        position: "static | relative | absolute | sticky | fixed | -webkit-sticky",
+        "position": "static | relative | absolute | sticky | fixed | -webkit-sticky",
         "position-anchor": "auto | none | <anchor-name>",
         "position-area": "none | <position-area>",
         "position-try": "<'position-try-order'>? <'position-try-fallbacks'>",
@@ -16370,21 +16370,21 @@ var init_css_syntax_data = __esm({
         "position-try-order": "normal | <try-size>",
         "position-visibility": "always | [ anchors-valid || anchors-visible || no-overflow ]",
         "print-color-adjust": "economy | exact",
-        quotes: "none | auto | [ <string> <string> ]+",
-        r: "<length> | <percentage>",
+        "quotes": "none | auto | [ <string> <string> ]+",
+        "r": "<length> | <percentage>",
         "reading-flow": "normal | source-order | flex-visual | flex-flow | grid-rows | grid-columns | grid-order",
         "reading-order": "<integer>",
-        resize: "none | both | horizontal | vertical | block | inline",
-        right: "auto | <length-percentage> | <anchor()> | <anchor-size()>",
-        rotate: "none | <angle> | [ x | y | z | <number>{3} ] && <angle>",
+        "resize": "none | both | horizontal | vertical | block | inline",
+        "right": "auto | <length-percentage> | <anchor()> | <anchor-size()>",
+        "rotate": "none | <angle> | [ x | y | z | <number>{3} ] && <angle>",
         "row-gap": "normal | <length-percentage>",
         "ruby-align": "start | center | space-between | space-around",
         "ruby-merge": "separate | collapse | auto",
         "ruby-overhang": "auto | none",
         "ruby-position": "[ alternate || [ over | under ] ] | inter-character",
-        rx: "<length> | <percentage>",
-        ry: "<length> | <percentage>",
-        scale: "none | [ <number> | <percentage> ]{1,3}",
+        "rx": "<length> | <percentage>",
+        "ry": "<length> | <percentage>",
+        "scale": "none | [ <number> | <percentage> ]{1,3}",
         "scroll-behavior": "auto | smooth",
         "scroll-initial-target": "none | nearest",
         "scroll-margin": "<length>{1,4}",
@@ -16433,7 +16433,7 @@ var init_css_syntax_data = __esm({
         "speak-as": "normal | spell-out || digits || [ literal-punctuation | no-punctuation ]",
         "stop-color": "<'color'>",
         "stop-opacity": "<'opacity'>",
-        stroke: "<paint>",
+        "stroke": "<paint>",
         "stroke-color": "<color>",
         "stroke-dasharray": "none | [ <svg-length>+ ]#",
         "stroke-dashoffset": "<svg-length>",
@@ -16488,19 +16488,19 @@ var init_css_syntax_data = __esm({
         "timeline-trigger-range-end": "[ normal | <length-percentage> | <timeline-range-name> <length-percentage>? ]#",
         "timeline-trigger-range-start": "[ normal | <length-percentage> | <timeline-range-name> <length-percentage>? ]#",
         "timeline-trigger-source": "<single-animation-timeline>#",
-        top: "auto | <length-percentage> | <anchor()> | <anchor-size()>",
+        "top": "auto | <length-percentage> | <anchor()> | <anchor-size()>",
         "touch-action": "auto | none | [ [ pan-x | pan-left | pan-right ] || [ pan-y | pan-up | pan-down ] || pinch-zoom ] | manipulation",
-        transform: "none | <transform-list>",
+        "transform": "none | <transform-list>",
         "transform-box": "content-box | border-box | fill-box | stroke-box | view-box",
         "transform-origin": "[ <length-percentage> | left | center | right | top | bottom ] | [ [ <length-percentage> | left | center | right ] && [ <length-percentage> | top | center | bottom ] ] <length>?",
         "transform-style": "flat | preserve-3d",
-        transition: "<single-transition>#",
+        "transition": "<single-transition>#",
         "transition-behavior": "<transition-behavior-value>#",
         "transition-delay": "<time>#",
         "transition-duration": "<time>#",
         "transition-property": "none | <single-transition-property>#",
         "transition-timing-function": "<easing-function>#",
-        translate: "none | <length-percentage> [ <length-percentage> <length>? ]?",
+        "translate": "none | <length-percentage> [ <length-percentage> <length>? ]?",
         "trigger-scope": "none | all | <dashed-ident>#",
         "unicode-bidi": "normal | embed | isolate | bidi-override | isolate-override | plaintext | -moz-isolate | -moz-isolate-override | -moz-plaintext | -webkit-isolate | -webkit-isolate-override | -webkit-plaintext",
         "user-select": "auto | text | none | all",
@@ -16512,20 +16512,20 @@ var init_css_syntax_data = __esm({
         "view-timeline-name": "[ none | <dashed-ident> ]#",
         "view-transition-class": "none | <custom-ident>+",
         "view-transition-name": "none | <custom-ident> | match-element",
-        visibility: "visible | hidden | collapse",
+        "visibility": "visible | hidden | collapse",
         "white-space": "normal | pre | pre-wrap | pre-line | <'white-space-collapse'> || <'text-wrap-mode'>",
         "white-space-collapse": "collapse | preserve | preserve-breaks | preserve-spaces | break-spaces",
-        widows: "<integer>",
-        width: "auto | <length-percentage [0,\u221E]> | min-content | max-content | fit-content | fit-content(<length-percentage [0,\u221E]>) | <calc-size()> | <anchor-size()> | stretch | <-non-standard-size>",
+        "widows": "<integer>",
+        "width": "auto | <length-percentage [0,\u221E]> | min-content | max-content | fit-content | fit-content(<length-percentage [0,\u221E]>) | <calc-size()> | <anchor-size()> | stretch | <-non-standard-size>",
         "will-change": "auto | <animateable-feature>#",
         "word-break": "normal | break-all | keep-all | break-word | auto-phrase",
         "word-spacing": "normal | <length>",
         "word-wrap": "normal | break-word",
         "writing-mode": "horizontal-tb | vertical-rl | vertical-lr | sideways-rl | sideways-lr | <svg-writing-mode>",
-        x: "<length> | <percentage>",
-        y: "<length> | <percentage>",
+        "x": "<length> | <percentage>",
+        "y": "<length> | <percentage>",
         "z-index": "auto | <integer>",
-        zoom: "normal | reset | <number [0,\u221E]> || <percentage [0,\u221E]>",
+        "zoom": "normal | reset | <number [0,\u221E]> || <percentage [0,\u221E]>",
         "-moz-background-clip": "padding | border",
         "-moz-border-radius-bottomleft": "<'border-bottom-left-radius'>",
         "-moz-border-radius-bottomright": "<'border-bottom-right-radius'>",
@@ -16555,21 +16555,21 @@ var init_css_syntax_data = __esm({
         "-webkit-print-color-adjust": "economy | exact",
         "-webkit-text-security": "none | circle | disc | square",
         "-webkit-user-drag": "none | element | auto",
-        behavior: "<url>+",
-        cue: "<'cue-before'> <'cue-after'>?",
+        "behavior": "<url>+",
+        "cue": "<'cue-before'> <'cue-after'>?",
         "cue-after": "<url> <decibel>? | none",
         "cue-before": "<url> <decibel>? | none",
         "glyph-orientation-horizontal": "<angle>",
         "glyph-orientation-vertical": "<angle>",
-        kerning: "auto | <svg-length>",
-        pause: "<'pause-before'> <'pause-after'>?",
+        "kerning": "auto | <svg-length>",
+        "pause": "<'pause-before'> <'pause-after'>?",
         "pause-after": "<time> | none | x-weak | weak | medium | strong | x-strong",
         "pause-before": "<time> | none | x-weak | weak | medium | strong | x-strong",
         "position-try-options": "<'position-try-fallbacks'>",
-        rest: "<'rest-before'> <'rest-after'>?",
+        "rest": "<'rest-before'> <'rest-after'>?",
         "rest-after": "<time> | none | x-weak | weak | medium | strong | x-strong",
         "rest-before": "<time> | none | x-weak | weak | medium | strong | x-strong",
-        speak: "auto | never | always",
+        "speak": "auto | never | always",
         "voice-balance": "<number> | left | center | right | leftwards | rightwards",
         "voice-duration": "auto | <time>",
         "voice-family": "[ [ <family-name> | <generic-voice> ] , ]* [ <family-name> | <generic-voice> ] | preserve",
@@ -39204,149 +39204,64 @@ var init_html_tree_adapter = __esm({
 });
 
 // src/url-attributes.mjs
-var URL_ATTRIBUTES;
+var DEFAULTS, URL_ATTRIBUTES;
 var init_url_attributes = __esm({
   "src/url-attributes.mjs"() {
     "use strict";
-    URL_ATTRIBUTES = Object.freeze([
-      {
-        attribute: "src",
-        property: "src",
-        grammar: "url",
-        elements: null,
-        context: "resource",
-        fetched: true,
-        notFetchedOn: []
-      },
-      {
-        attribute: "href",
-        property: "href",
-        grammar: "url",
-        elements: null,
-        context: "resource",
-        fetched: true,
+    DEFAULTS = Object.freeze({
+      grammar: "url",
+      elements: null,
+      context: "resource",
+      fetched: true,
+      notFetchedOn: []
+    });
+    URL_ATTRIBUTES = Object.freeze(
+      /** @type {Array<Partial<UrlAttribute> & { attribute: string, property: string }>} */
+      [
+        { attribute: "src", property: "src" },
         // A link waits for a click; `<base>` only changes how the page's relative
         // URLs resolve.
-        notFetchedOn: ["a", "area", "base"]
-      },
-      {
-        attribute: "xlink:href",
-        property: "xLinkHref",
-        grammar: "url",
-        elements: null,
-        context: "resource",
-        fetched: true,
-        notFetchedOn: ["a"]
-      },
-      {
-        attribute: "background",
-        property: "background",
-        grammar: "url",
-        elements: null,
-        context: "resource",
-        fetched: true,
-        notFetchedOn: []
-      },
-      {
-        attribute: "srcset",
-        property: "srcSet",
-        grammar: "srcset",
-        elements: null,
-        context: "resource",
-        fetched: true,
-        notFetchedOn: []
-      },
-      {
-        attribute: "imagesrcset",
-        property: "imageSrcSet",
-        grammar: "srcset",
-        elements: ["link"],
-        context: "resource",
-        fetched: true,
-        notFetchedOn: []
-      },
-      {
-        attribute: "ping",
-        property: "ping",
-        grammar: "urls",
-        elements: null,
-        context: "resource",
-        fetched: true,
-        notFetchedOn: []
-      },
-      {
-        attribute: "action",
-        property: "action",
-        grammar: "url",
-        elements: null,
-        context: "form",
-        fetched: true,
-        notFetchedOn: []
-      },
-      {
-        attribute: "formaction",
-        property: "formAction",
-        grammar: "url",
-        elements: null,
-        context: "form",
-        fetched: true,
-        notFetchedOn: []
-      },
-      {
-        attribute: "data",
-        property: "data",
-        grammar: "url",
-        elements: ["object"],
-        context: "resource",
-        fetched: true,
-        notFetchedOn: []
-      },
-      {
-        attribute: "poster",
-        property: "poster",
-        grammar: "url",
-        elements: ["video"],
-        context: "resource",
-        fetched: true,
-        notFetchedOn: []
-      },
-      {
-        attribute: "cite",
-        property: "cite",
-        grammar: "url",
-        elements: ["blockquote", "del", "ins", "q"],
-        context: "resource",
-        fetched: false,
-        notFetchedOn: []
-      },
-      {
-        attribute: "longdesc",
-        property: "longDesc",
-        grammar: "url",
-        elements: ["img", "iframe", "frame"],
-        context: "resource",
-        fetched: false,
-        notFetchedOn: []
-      },
-      {
-        attribute: "content",
-        property: "content",
-        grammar: "refresh",
-        elements: ["meta"],
-        context: "refresh",
-        fetched: true,
-        notFetchedOn: []
-      },
-      {
-        attribute: "style",
-        property: "style",
-        grammar: "css",
-        elements: null,
-        context: "resource",
-        fetched: true,
-        notFetchedOn: []
-      }
-    ]);
+        {
+          attribute: "href",
+          property: "href",
+          notFetchedOn: ["a", "area", "base"]
+        },
+        { attribute: "xlink:href", property: "xLinkHref", notFetchedOn: ["a"] },
+        { attribute: "background", property: "background" },
+        { attribute: "srcset", property: "srcSet", grammar: "srcset" },
+        {
+          attribute: "imagesrcset",
+          property: "imageSrcSet",
+          grammar: "srcset",
+          elements: ["link"]
+        },
+        { attribute: "ping", property: "ping", grammar: "urls" },
+        { attribute: "action", property: "action", context: "form" },
+        { attribute: "formaction", property: "formAction", context: "form" },
+        { attribute: "data", property: "data", elements: ["object"] },
+        { attribute: "poster", property: "poster", elements: ["video"] },
+        {
+          attribute: "cite",
+          property: "cite",
+          elements: ["blockquote", "del", "ins", "q"],
+          fetched: false
+        },
+        {
+          attribute: "longdesc",
+          property: "longDesc",
+          elements: ["img", "iframe", "frame"],
+          fetched: false
+        },
+        {
+          attribute: "content",
+          property: "content",
+          grammar: "refresh",
+          elements: ["meta"],
+          context: "refresh"
+        },
+        { attribute: "style", property: "style", grammar: "css" }
+      ].map((row) => Object.freeze({ ...DEFAULTS, ...row }))
+    );
   }
 });
 
@@ -51099,18 +51014,12 @@ function sanitizeHtml(text6) {
 }
 function resolveUrl(url) {
   const absolute = parseUrl(url);
-  if (absolute)
-    return {
-      scheme: absolute.protocol.slice(0, -1),
-      parsed: absolute,
-      relative: false
-    };
-  const resolved = parseUrl(url, RELATIVE_URL_BASE);
-  if (!resolved) return null;
+  const parsed = absolute ?? parseUrl(url, RELATIVE_URL_BASE);
+  if (!parsed) return null;
   return {
-    scheme: null,
-    parsed: resolved,
-    relative: resolved.host === RELATIVE_URL_HOST
+    scheme: absolute ? absolute.protocol.slice(0, -1) : null,
+    parsed,
+    relative: !absolute && parsed.origin === RELATIVE_URL_BASE
   };
 }
 function parseUrl(url, base) {
@@ -51278,18 +51187,14 @@ function isOffOrigin(url) {
 }
 function skipWhitespace(value, from) {
   let at = from;
-  while (at < value.length && ASCII_WHITESPACE.has(value[at])) at++;
+  while (/[\t\n\f\r ]/.test(value.charAt(at))) at++;
   return at;
 }
 function refreshUrl(content3) {
   let at = skipWhitespace(content3, 0);
   const delayStart = at;
-  while (at < content3.length && content3[at] >= "0" && content3[at] <= "9") at++;
-  if (at === delayStart && content3[at] !== ".") return null;
-  while (at < content3.length && (content3[at] >= "0" && content3[at] <= "9" || content3[at] === "."))
-    at++;
-  if (at === content3.length) return null;
-  if (content3[at] !== ";" && content3[at] !== "," && !ASCII_WHITESPACE.has(content3[at]))
+  while (/[\d.]/.test(content3.charAt(at))) at++;
+  if (at === delayStart || !/[;,\t\n\f\r ]/.test(content3.charAt(at)))
     return null;
   at = skipWhitespace(content3, at);
   if (content3[at] === ";" || content3[at] === ",")
@@ -51307,69 +51212,42 @@ function refreshUrl(content3) {
   return content3.slice(urlStart + 1, closing === -1 ? void 0 : closing);
 }
 function isValidSrcsetDescriptors(descriptors) {
-  let width = false;
-  let density = false;
-  let height = false;
+  const units = /* @__PURE__ */ new Set();
   for (const descriptor of descriptors) {
     const numeral = descriptor.slice(0, -1);
     const unit = descriptor.slice(-1);
-    if (unit === "w" && !width && !density && NON_NEGATIVE_INTEGER_RE.test(numeral) && Number(numeral) > 0)
-      width = true;
-    else if (unit === "x" && !width && !density && !height && FLOAT_RE.test(numeral) && Number(numeral) >= 0)
-      density = true;
-    else if (unit === "h" && !height && !density && NON_NEGATIVE_INTEGER_RE.test(numeral) && Number(numeral) > 0)
-      height = true;
-    else return false;
+    const valid2 = unit === "x" ? FLOAT_RE.test(numeral) && Number(numeral) >= 0 : (unit === "w" || unit === "h") && NON_NEGATIVE_INTEGER_RE.test(numeral) && Number(numeral) > 0;
+    if (!valid2 || units.has(unit)) return false;
+    units.add(unit);
   }
-  return !height || width;
+  if (units.has("x") && units.size > 1) return false;
+  return !units.has("h") || units.has("w");
 }
 function srcsetUrls(value) {
   const urls = [];
   let at = 0;
   while (at < value.length) {
-    while (at < value.length && (ASCII_WHITESPACE.has(value[at]) || value[at] === ","))
-      at++;
-    if (at === value.length) break;
-    const urlStart = at;
-    while (at < value.length && !ASCII_WHITESPACE.has(value[at])) at++;
-    let url = value.slice(urlStart, at);
-    const descriptors = [];
+    SRCSET_URL_RE.lastIndex = at;
+    let url = (
+      /** @type {RegExpExecArray} */
+      SRCSET_URL_RE.exec(value)[1] ?? ""
+    );
+    at = SRCSET_URL_RE.lastIndex;
+    let descriptors = "";
     if (url.endsWith(",")) {
       let cut = url.length;
       while (cut > 0 && url[cut - 1] === ",") cut--;
       url = url.slice(0, cut);
     } else {
-      at = srcsetDescriptors(value, at, descriptors);
+      SRCSET_DESCRIPTORS_RE.lastIndex = at;
+      descriptors = /** @type {RegExpExecArray} */
+      SRCSET_DESCRIPTORS_RE.exec(value)[0];
+      at = SRCSET_DESCRIPTORS_RE.lastIndex + 1;
     }
-    if (url && isValidSrcsetDescriptors(descriptors)) urls.push(url);
+    const tokens = descriptors.split(/[\t\n\f\r ]+/).filter(Boolean);
+    if (url && isValidSrcsetDescriptors(tokens)) urls.push(url);
   }
   return urls;
-}
-function srcsetDescriptors(value, from, descriptors) {
-  let at = skipWhitespace(value, from);
-  let current = "";
-  let inParens = false;
-  const flush = () => {
-    if (current !== "") descriptors.push(current);
-    current = "";
-  };
-  for (; at < value.length; at++) {
-    const char = value[at];
-    if (inParens) {
-      current += char;
-      if (char === ")") inParens = false;
-    } else if (ASCII_WHITESPACE.has(char)) {
-      flush();
-    } else if (char === ",") {
-      flush();
-      return at + 1;
-    } else {
-      current += char;
-      if (char === "(") inParens = true;
-    }
-  }
-  flush();
-  return at;
 }
 function cssUrls(css, context) {
   const urls = [];
@@ -51396,45 +51274,6 @@ function cssUrls(css, context) {
   });
   return urls;
 }
-function attributeUrls(attribute, value, properties2) {
-  switch (attribute.grammar) {
-    // The table names only attributes whose hast value has the shape its
-    // grammar reads (a string, or the array `ping` arrives as), so a value of
-    // another shape is a table or parser bug and throws rather than reading
-    // as "no URL".
-    case "url":
-      return [
-        /** @type {string} */
-        value
-      ];
-    case "urls":
-      return (
-        /** @type {string[]} */
-        value.map(String)
-      );
-    case "srcset":
-      return srcsetUrls(
-        /** @type {string} */
-        value
-      );
-    case "refresh": {
-      const directive = Array.isArray(properties2.httpEquiv) ? properties2.httpEquiv.join(",").toLowerCase() : "";
-      if (directive.trim() !== "refresh" || typeof value !== "string")
-        return [];
-      const url = refreshUrl(value);
-      return url === null ? [] : [url];
-    }
-    case "css":
-      return cssUrls(
-        /** @type {string} */
-        value,
-        "declarationList"
-      );
-  }
-  throw new Error(
-    `URL_ATTRIBUTES names an unknown grammar: ${attribute.grammar}`
-  );
-}
 function elementUrls(node2) {
   const properties2 = node2.properties;
   const isImage = IMAGE_ELEMENTS.has(node2.tagName);
@@ -51445,7 +51284,7 @@ function elementUrls(node2) {
     if (attribute.elements && !attribute.elements.includes(node2.tagName))
       continue;
     const autoFetched = attribute.fetched && !attribute.notFetchedOn.includes(node2.tagName);
-    for (const url of attributeUrls(attribute, value, properties2))
+    for (const url of GRAMMAR_READERS[attribute.grammar](value, properties2))
       urls.push({ url, isImage, autoFetched, context: attribute.context });
   }
   if (node2.tagName === "style") {
@@ -51543,7 +51382,7 @@ function detectConfusableHosts(text6) {
   }
   return threats.length > 0 ? threats : null;
 }
-var NEAR_ZERO_EPSILON, OFFSCREEN_ABSOLUTE_THRESHOLD, OFFSCREEN_VIEWPORT_THRESHOLD, ABSOLUTE_UNITS, VIEWPORT_UNITS, ANGLE_UNITS, NAMED_COLORS, BLOCK_AXIS_EXTENT_PROPS, INLINE_AXIS_EXTENT_PROPS, BORDER_SHORTHANDS, BORDER_WIDTH_KEYWORDS, FONT_SIZE_UNITS, CSS_PROPERTY_IDENT_RE, LEXER_TOKEN_LIMIT, VALIDATIONS_PER_PROPERTY, cssLexer, RESETTING_SHORTHANDS, INHERITED_COLOR_KEYWORDS, REPORTED_TAGS, VOID_ELEMENTS2, FOREIGN_ELEMENTS, RAW_TEXT_ELEMENTS, INLINE_ELEMENTS, INLINE_DISPLAYS, BLOCKIFYING_POSITIONS, BLOCKIFYING_FLOATS, ITEM_BLOCKIFYING_DISPLAYS, REPLACED_ELEMENTS, TEXT_ONLY_HIDES, elementCascades, PARENT_RELATIVE_FONT_UNITS, PARENT_RELATIVE_FONT_KEYWORDS, INHERITING_KEYWORDS, parseFragment2, PLACEHOLDER_LABEL, PLACEHOLDER_KEY_LEN, LAYER2_PLACEHOLDER_RE, HIDDEN_PLACEHOLDER, COMMENT_PLACEHOLDER, UNPARSEABLE_PLACEHOLDER, mdParser, parseMarkdown, MARKDOWN_CODE_HINT, BOGUS_COMMENT_OPEN_RE, MARKUP_OPENER_RE, PHRASING_ROOTS, FLOW_HTML_PARENTS, MAX_SPLICE_ROUNDS, EXFIL_INDICATORS, KEYWORD_PARAM_NAME_RE, LONG_QUERY_THRESHOLD, ACTIVE_DATA_TYPES, DATA_URI_LENGTH_THRESHOLD, SCRIPT_SCHEMES, RELATIVE_URL_BASE, RELATIVE_URL_HOST, BENIGN_BLOB_PARAM_RE, BENIGN_SHORT_PARAM_RE, BENIGN_SHORT_VALUE_MAX_LEN, BENIGN_SHORT_TOTAL_MAX_LEN, PUBLIC_KEY_ID_PARAM_RE, BLOB_VALUE_MIN_LEN, OPAQUE_TOKEN_RE, VALUE_HAS_DIGIT_RE, BLOB_VALUE_B64_RE, HEX_ONLY_RE, HEX_BLOB_MIN_LEN, DIGEST_HEX_LENGTHS, BLOB_VALUE_B64URL_RE, PATH_BLOB_RE, DIGEST_MAX_LEN, BLOB_SEPARATOR_RE, BLOB_RUN_SPLIT_RE, ASCII_WHITESPACE, FLOAT_RE, NON_NEGATIVE_INTEGER_RE, IMAGE_SET_FUNCTIONS, IMAGE_ELEMENTS, OFF_ORIGIN_REASON, COMMENT_INTERIOR_OPENER_RE;
+var NEAR_ZERO_EPSILON, OFFSCREEN_ABSOLUTE_THRESHOLD, OFFSCREEN_VIEWPORT_THRESHOLD, ABSOLUTE_UNITS, VIEWPORT_UNITS, ANGLE_UNITS, NAMED_COLORS, BLOCK_AXIS_EXTENT_PROPS, INLINE_AXIS_EXTENT_PROPS, BORDER_SHORTHANDS, BORDER_WIDTH_KEYWORDS, FONT_SIZE_UNITS, CSS_PROPERTY_IDENT_RE, LEXER_TOKEN_LIMIT, VALIDATIONS_PER_PROPERTY, cssLexer, RESETTING_SHORTHANDS, INHERITED_COLOR_KEYWORDS, REPORTED_TAGS, VOID_ELEMENTS2, FOREIGN_ELEMENTS, RAW_TEXT_ELEMENTS, INLINE_ELEMENTS, INLINE_DISPLAYS, BLOCKIFYING_POSITIONS, BLOCKIFYING_FLOATS, ITEM_BLOCKIFYING_DISPLAYS, REPLACED_ELEMENTS, TEXT_ONLY_HIDES, elementCascades, PARENT_RELATIVE_FONT_UNITS, PARENT_RELATIVE_FONT_KEYWORDS, INHERITING_KEYWORDS, parseFragment2, PLACEHOLDER_LABEL, PLACEHOLDER_KEY_LEN, LAYER2_PLACEHOLDER_RE, HIDDEN_PLACEHOLDER, COMMENT_PLACEHOLDER, UNPARSEABLE_PLACEHOLDER, mdParser, parseMarkdown, MARKDOWN_CODE_HINT, BOGUS_COMMENT_OPEN_RE, MARKUP_OPENER_RE, PHRASING_ROOTS, FLOW_HTML_PARENTS, MAX_SPLICE_ROUNDS, EXFIL_INDICATORS, KEYWORD_PARAM_NAME_RE, LONG_QUERY_THRESHOLD, ACTIVE_DATA_TYPES, DATA_URI_LENGTH_THRESHOLD, SCRIPT_SCHEMES, RELATIVE_URL_BASE, BENIGN_BLOB_PARAM_RE, BENIGN_SHORT_PARAM_RE, BENIGN_SHORT_VALUE_MAX_LEN, BENIGN_SHORT_TOTAL_MAX_LEN, PUBLIC_KEY_ID_PARAM_RE, BLOB_VALUE_MIN_LEN, OPAQUE_TOKEN_RE, VALUE_HAS_DIGIT_RE, BLOB_VALUE_B64_RE, HEX_ONLY_RE, HEX_BLOB_MIN_LEN, DIGEST_HEX_LENGTHS, BLOB_VALUE_B64URL_RE, PATH_BLOB_RE, DIGEST_MAX_LEN, BLOB_SEPARATOR_RE, BLOB_RUN_SPLIT_RE, FLOAT_RE, NON_NEGATIVE_INTEGER_RE, SRCSET_URL_RE, SRCSET_DESCRIPTORS_RE, IMAGE_SET_FUNCTIONS, GRAMMAR_READERS, IMAGE_ELEMENTS, OFF_ORIGIN_REASON, COMMENT_INTERIOR_OPENER_RE;
 var init_html4 = __esm({
   "src/html.mjs"() {
     "use strict";
@@ -51939,7 +51778,6 @@ var init_html4 = __esm({
     DATA_URI_LENGTH_THRESHOLD = 4096;
     SCRIPT_SCHEMES = /* @__PURE__ */ new Set(["javascript", "vbscript"]);
     RELATIVE_URL_BASE = "http://relative.invalid";
-    RELATIVE_URL_HOST = "relative.invalid";
     BENIGN_BLOB_PARAM_RE = /^(?:x-(?:amz|goog|ms|oss|obs)-[a-z0-9-]+|amz-[a-z0-9-]+|utm_[a-z]+|sig|signature|hmac|verify|q-signature|policy|credential|code|state|cursor|after|before|continuation|continuationtoken|continuation_token|pagetoken|page_token|nexttoken|next_token|gclid|fbclid|dclid|gbraid|wbraid|msclkid)$/i;
     BENIGN_SHORT_PARAM_RE = /^(?:se|sp|sr|sv|st|spr|si|sip|ss|srt|sdd|ses|sk(?:oid|tid|t|e|s|v)|saoid|suoid|scid|tn|start(?:pk|rk)|end(?:pk|rk)|snapshot|versionid|restype|comp|rsc[cdelt]|expires|awsaccesskeyid|googleaccessid|ossaccesskeyid|accesskeyid|key-pair-id|q-(?:ak|sign-algorithm|sign-time|key-time|header-list|url-param-list)|_ga|_gl|mc_eid|mc_cid)$/i;
     BENIGN_SHORT_VALUE_MAX_LEN = 128;
@@ -51957,10 +51795,22 @@ var init_html4 = __esm({
     DIGEST_MAX_LEN = 128;
     BLOB_SEPARATOR_RE = /[.,]/g;
     BLOB_RUN_SPLIT_RE = /[^A-Za-z0-9+/=_-]+/;
-    ASCII_WHITESPACE = /* @__PURE__ */ new Set([" ", "	", "\n", "\f", "\r"]);
     FLOAT_RE = /^-?(?:\d+(?:\.\d+)?|\.\d+)(?:[eE][+-]?\d+)?$/;
     NON_NEGATIVE_INTEGER_RE = /^\d+$/;
+    SRCSET_URL_RE = /[\t\n\f\r ,]*([^\t\n\f\r ,][^\t\n\f\r ]*)?/y;
+    SRCSET_DESCRIPTORS_RE = /(?:[^,(]|\([^)]*(?:\)|$))*/y;
     IMAGE_SET_FUNCTIONS = /* @__PURE__ */ new Set(["image-set", "-webkit-image-set"]);
+    GRAMMAR_READERS = {
+      url: (value) => [value],
+      urls: (value) => value.map(String),
+      srcset: (value) => srcsetUrls(value),
+      refresh(value, properties2) {
+        const directive = String(properties2.httpEquiv ?? "");
+        const url = directive.trim().toLowerCase() === "refresh" ? refreshUrl(value) : null;
+        return url === null ? [] : [url];
+      },
+      css: (value) => cssUrls(value, "declarationList")
+    };
     IMAGE_ELEMENTS = /* @__PURE__ */ new Set(["img", "image"]);
     OFF_ORIGIN_REASON = {
       form: "off-origin form action",

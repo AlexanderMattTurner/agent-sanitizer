@@ -117,6 +117,7 @@ const SRCSET_CASES = [
   // Invalid descriptors drop the candidate the browser would drop.
   [`${EVIL} 50h`, []],
   [`${EVIL} 2x 3x`, []],
+  [`${EVIL} 100w 2x`, []],
   [`${EVIL} -1x`, []],
   [`${EVIL} 0w`, []],
   [`${EVIL} 1.x`, []],
@@ -230,6 +231,11 @@ const LEGIT_CORPUS = [
 ];
 
 describe("negative corpus: legitimate URLs stay silent", () => {
+  it("an attribute off the elements it is a URL on is not read", () =>
+    assert.equal(
+      detectExfil(`<div poster="${EVIL}" data="${EVIL}">x</div>`),
+      null,
+    ));
   for (const markup of LEGIT_CORPUS)
     it(markup, () => assert.equal(detectExfil(markup), null));
 });

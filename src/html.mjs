@@ -3129,7 +3129,6 @@ export const DATA_URI_LENGTH_THRESHOLD = 4096;
 const SCRIPT_SCHEMES = new Set(["javascript", "vbscript"]);
 
 const RELATIVE_URL_BASE = "http://relative.invalid";
-const RELATIVE_URL_HOST = "relative.invalid";
 
 /**
  * `url` as a browser resolves it, through the WHATWG URL parser — the one
@@ -3147,26 +3146,16 @@ const RELATIVE_URL_HOST = "relative.invalid";
  */
 function resolveUrl(url) {
   const absolute = parseUrl(url);
-  if (absolute)
-    return {
-      scheme: absolute.protocol.slice(0, -1),
-      parsed: absolute,
-      relative: false,
-    };
-  const resolved = parseUrl(url, RELATIVE_URL_BASE);
-  if (!resolved) return null;
+  const parsed = absolute ?? parseUrl(url, RELATIVE_URL_BASE);
+  if (!parsed) return null;
   return {
-    scheme: null,
-    parsed: resolved,
-    relative: resolved.host === RELATIVE_URL_HOST,
+    scheme: absolute ? absolute.protocol.slice(0, -1) : null,
+    parsed,
+    relative: !absolute && parsed.origin === RELATIVE_URL_BASE,
   };
 }
 
-/**
- * @param {string} url
- * @param {string} [base]
- * @returns {URL | null}
- */
+/** @param {string} url @param {string} [base] @returns {URL | null} */
 function parseUrl(url, base) {
   try {
     return new URL(url, base);
@@ -3754,19 +3743,16 @@ function isOffOrigin(url) {
   return resolved !== null && !resolved.relative;
 }
 
-// ASCII whitespace, as the HTML Standard's microsyntaxes define it.
-const ASCII_WHITESPACE = new Set([" ", "\t", "\n", "\f", "\r"]);
-
 /**
  * The index of the first code unit at or after `from` that is not ASCII
- * whitespace.
+ * whitespace, as the HTML Standard's microsyntaxes define it.
  * @param {string} value
  * @param {number} from
  * @returns {number}
  */
 function skipWhitespace(value, from) {
   let at = from;
-  while (at < value.length && ASCII_WHITESPACE.has(value[at])) at++;
+  while (/[\t\n\f\r ]/.test(value.charAt(at))) at++;
   return at;
 }
 
@@ -3782,19 +3768,9 @@ function skipWhitespace(value, from) {
 function refreshUrl(content) {
   let at = skipWhitespace(content, 0);
   const delayStart = at;
-  while (at < content.length && content[at] >= "0" && content[at] <= "9") at++;
-  if (at === delayStart && content[at] !== ".") return null;
-  while (
-    at < content.length &&
-    ((content[at] >= "0" && content[at] <= "9") || content[at] === ".")
-  )
-    at++;
-  if (at === content.length) return null;
-  if (
-    content[at] !== ";" &&
-    content[at] !== "," &&
-    !ASCII_WHITESPACE.has(content[at])
-  )
+  while (/[\d.]/.test(content.charAt(at))) at++;
+  // The delay must be followed by a separator; `charAt` past the end is "".
+  if (at === delayStart || !/[;,\t\n\f\r ]/.test(content.charAt(at)))
     return null;
   at = skipWhitespace(content, at);
   if (content[at] === ";" || content[at] === ",")
@@ -3828,50 +3804,37 @@ const NON_NEGATIVE_INTEGER_RE = /^\d+$/;
  * @returns {boolean}
  */
 function isValidSrcsetDescriptors(descriptors) {
-  let width = false;
-  let density = false;
-  let height = false;
+  const units = new Set();
   for (const descriptor of descriptors) {
     const numeral = descriptor.slice(0, -1);
     const unit = descriptor.slice(-1);
-    if (
-      unit === "w" &&
-      !width &&
-      !density &&
-      NON_NEGATIVE_INTEGER_RE.test(numeral) &&
-      Number(numeral) > 0
-    )
-      width = true;
-    else if (
-      unit === "x" &&
-      !width &&
-      !density &&
-      !height &&
-      FLOAT_RE.test(numeral) &&
-      Number(numeral) >= 0
-    )
-      density = true;
-    else if (
-      unit === "h" &&
-      !height &&
-      !density &&
-      NON_NEGATIVE_INTEGER_RE.test(numeral) &&
-      Number(numeral) > 0
-    )
-      height = true;
-    else return false;
+    const valid =
+      unit === "x"
+        ? FLOAT_RE.test(numeral) && Number(numeral) >= 0
+        : (unit === "w" || unit === "h") &&
+          NON_NEGATIVE_INTEGER_RE.test(numeral) &&
+          Number(numeral) > 0;
+    if (!valid || units.has(unit)) return false;
+    units.add(unit);
   }
-  return !height || width;
+  if (units.has("x") && units.size > 1) return false;
+  return !units.has("h") || units.has("w");
 }
+
+// A srcset candidate's URL after the separators before it, and the
+// descriptors after a URL: they run to the next comma outside a parenthesized
+// group, which the tokenizer closes at the FIRST `)` (an unclosed one runs to
+// the end). Every descriptor holding a paren is invalid, so splitting the run
+// at whitespace inside a group changes no verdict.
+const SRCSET_URL_RE = /[\t\n\f\r ,]*([^\t\n\f\r ,][^\t\n\f\r ]*)?/y;
+const SRCSET_DESCRIPTORS_RE = /(?:[^,(]|\([^)]*(?:\)|$))*/y;
 
 /**
  * The URLs of the candidates a browser keeps from a `srcset` value: a port of
  * the HTML Standard's "parse a srcset attribute". A candidate's URL is a run
  * of non-whitespace (so a comma inside a `data:` URI or a query stays in it),
- * its descriptors run to the next comma outside a parenthesized group — a
- * group the tokenizer closes at the FIRST `)`, so `1x((), next` ends the
- * candidate at the comma — and a candidate with invalid descriptors is
- * dropped, as the browser drops it.
+ * trailing commas on it end the candidate, and a candidate with invalid
+ * descriptors is dropped, as the browser drops it.
  * @param {string} value
  * @returns {string[]}
  */
@@ -3880,65 +3843,28 @@ function srcsetUrls(value) {
   const urls = [];
   let at = 0;
   while (at < value.length) {
-    while (
-      at < value.length &&
-      (ASCII_WHITESPACE.has(value[at]) || value[at] === ",")
-    )
-      at++;
-    if (at === value.length) break;
-    const urlStart = at;
-    while (at < value.length && !ASCII_WHITESPACE.has(value[at])) at++;
-    let url = value.slice(urlStart, at);
-    /** @type {string[]} */
-    const descriptors = [];
+    SRCSET_URL_RE.lastIndex = at;
+    let url =
+      /** @type {RegExpExecArray} */ (SRCSET_URL_RE.exec(value))[1] ?? "";
+    at = SRCSET_URL_RE.lastIndex;
+    let descriptors = "";
     if (url.endsWith(",")) {
-      // Trailing commas end the candidate; trimmed by scanning back, since an
-      // unanchored `,+$` costs one match attempt per comma.
+      // Trimmed by scanning back, since an unanchored `,+$` costs one match
+      // attempt per comma.
       let cut = url.length;
       while (cut > 0 && url[cut - 1] === ",") cut--;
       url = url.slice(0, cut);
     } else {
-      at = srcsetDescriptors(value, at, descriptors);
+      SRCSET_DESCRIPTORS_RE.lastIndex = at;
+      descriptors = /** @type {RegExpExecArray} */ (
+        SRCSET_DESCRIPTORS_RE.exec(value)
+      )[0];
+      at = SRCSET_DESCRIPTORS_RE.lastIndex + 1; // past the comma
     }
-    if (url && isValidSrcsetDescriptors(descriptors)) urls.push(url);
+    const tokens = descriptors.split(/[\t\n\f\r ]+/).filter(Boolean);
+    if (url && isValidSrcsetDescriptors(tokens)) urls.push(url);
   }
   return urls;
-}
-
-/**
- * The descriptor tokenizer of "parse a srcset attribute": reads the
- * descriptors after a candidate's URL into `descriptors` and returns the index
- * just past the candidate (past its comma, or the end of the value).
- * @param {string} value
- * @param {number} from
- * @param {string[]} descriptors
- * @returns {number}
- */
-function srcsetDescriptors(value, from, descriptors) {
-  let at = skipWhitespace(value, from);
-  let current = "";
-  let inParens = false;
-  const flush = () => {
-    if (current !== "") descriptors.push(current);
-    current = "";
-  };
-  for (; at < value.length; at++) {
-    const char = value[at];
-    if (inParens) {
-      current += char;
-      if (char === ")") inParens = false;
-    } else if (ASCII_WHITESPACE.has(char)) {
-      flush();
-    } else if (char === ",") {
-      flush();
-      return at + 1;
-    } else {
-      current += char;
-      if (char === "(") inParens = true;
-    }
-  }
-  flush();
-  return at;
 }
 
 const IMAGE_SET_FUNCTIONS = new Set(["image-set", "-webkit-image-set"]);
@@ -3988,43 +3914,25 @@ function cssUrls(css, context) {
   return urls;
 }
 
-/**
- * The URLs one attribute value holds, read by its grammar.
- * @param {import("./url-attributes.mjs").UrlAttribute} attribute
- * @param {unknown} value the hast property value
- * @param {any} properties the element's hast properties
- * @returns {string[]}
- */
-function attributeUrls(attribute, value, properties) {
-  switch (attribute.grammar) {
-    // The table names only attributes whose hast value has the shape its
-    // grammar reads (a string, or the array `ping` arrives as), so a value of
-    // another shape is a table or parser bug and throws rather than reading
-    // as "no URL".
-    case "url":
-      return [/** @type {string} */ (value)];
-    case "urls":
-      return /** @type {string[]} */ (value).map(String);
-    case "srcset":
-      return srcsetUrls(/** @type {string} */ (value));
-    case "refresh": {
-      // hast delivers `http-equiv` as a comma-separated list.
-      const directive = Array.isArray(properties.httpEquiv)
-        ? properties.httpEquiv.join(",").toLowerCase()
-        : "";
-      if (directive.trim() !== "refresh" || typeof value !== "string")
-        return [];
-      const url = refreshUrl(value);
-      return url === null ? [] : [url];
-    }
-    case "css":
-      return cssUrls(/** @type {string} */ (value), "declarationList");
-  }
-  /* c8 ignore next 4 -- every grammar the table may name has a case above */
-  throw new Error(
-    `URL_ATTRIBUTES names an unknown grammar: ${attribute.grammar}`,
-  );
-}
+// How the value of each grammar URL_ATTRIBUTES names holds its URLs. The
+// table names only attributes whose hast value has the shape its grammar reads
+// (a string, or the array `ping` arrives as), so a value of another shape is a
+// table or parser bug and throws rather than reading as "no URL".
+/** @type {Record<string, (value: any, properties: any) => string[]>} */
+const GRAMMAR_READERS = {
+  url: (value) => [value],
+  urls: (value) => value.map(String),
+  srcset: (value) => srcsetUrls(value),
+  refresh(value, properties) {
+    // hast delivers `http-equiv` as a comma-separated list, which String()
+    // joins back.
+    const directive = String(properties.httpEquiv ?? "");
+    const url =
+      directive.trim().toLowerCase() === "refresh" ? refreshUrl(value) : null;
+    return url === null ? [] : [url];
+  },
+  css: (value) => cssUrls(value, "declarationList"),
+};
 
 // The elements whose URLs an `isImage` threat names as images.
 const IMAGE_ELEMENTS = new Set(["img", "image"]);
@@ -4059,7 +3967,7 @@ function elementUrls(node) {
       continue;
     const autoFetched =
       attribute.fetched && !attribute.notFetchedOn.includes(node.tagName);
-    for (const url of attributeUrls(attribute, value, properties))
+    for (const url of GRAMMAR_READERS[attribute.grammar](value, properties))
       urls.push({ url, isImage, autoFetched, context: attribute.context });
   }
   if (node.tagName === "style")

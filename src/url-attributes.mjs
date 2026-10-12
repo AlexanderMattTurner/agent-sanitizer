@@ -21,6 +21,8 @@
  *  - `fetched`: whether the browser loads the URL with nobody deciding to (on
  *    render, on submit, on refresh, on a click aimed at something else), and
  *    `notFetchedOn` the elements where it instead waits to be followed.
+ *
+ * A row states only where it differs from {@link DEFAULTS}.
  */
 
 /**
@@ -35,143 +37,59 @@
  * }} UrlAttribute
  */
 
+// A single URL, on any element, fetched as a resource.
+const DEFAULTS = Object.freeze({
+  grammar: "url",
+  elements: null,
+  context: "resource",
+  fetched: true,
+  notFetchedOn: [],
+});
+
 /** @type {readonly UrlAttribute[]} */
-export const URL_ATTRIBUTES = Object.freeze([
-  {
-    attribute: "src",
-    property: "src",
-    grammar: "url",
-    elements: null,
-    context: "resource",
-    fetched: true,
-    notFetchedOn: [],
-  },
-  {
-    attribute: "href",
-    property: "href",
-    grammar: "url",
-    elements: null,
-    context: "resource",
-    fetched: true,
+export const URL_ATTRIBUTES = Object.freeze(
+  /** @type {Array<Partial<UrlAttribute> & { attribute: string, property: string }>} */ ([
+    { attribute: "src", property: "src" },
     // A link waits for a click; `<base>` only changes how the page's relative
     // URLs resolve.
-    notFetchedOn: ["a", "area", "base"],
-  },
-  {
-    attribute: "xlink:href",
-    property: "xLinkHref",
-    grammar: "url",
-    elements: null,
-    context: "resource",
-    fetched: true,
-    notFetchedOn: ["a"],
-  },
-  {
-    attribute: "background",
-    property: "background",
-    grammar: "url",
-    elements: null,
-    context: "resource",
-    fetched: true,
-    notFetchedOn: [],
-  },
-  {
-    attribute: "srcset",
-    property: "srcSet",
-    grammar: "srcset",
-    elements: null,
-    context: "resource",
-    fetched: true,
-    notFetchedOn: [],
-  },
-  {
-    attribute: "imagesrcset",
-    property: "imageSrcSet",
-    grammar: "srcset",
-    elements: ["link"],
-    context: "resource",
-    fetched: true,
-    notFetchedOn: [],
-  },
-  {
-    attribute: "ping",
-    property: "ping",
-    grammar: "urls",
-    elements: null,
-    context: "resource",
-    fetched: true,
-    notFetchedOn: [],
-  },
-  {
-    attribute: "action",
-    property: "action",
-    grammar: "url",
-    elements: null,
-    context: "form",
-    fetched: true,
-    notFetchedOn: [],
-  },
-  {
-    attribute: "formaction",
-    property: "formAction",
-    grammar: "url",
-    elements: null,
-    context: "form",
-    fetched: true,
-    notFetchedOn: [],
-  },
-  {
-    attribute: "data",
-    property: "data",
-    grammar: "url",
-    elements: ["object"],
-    context: "resource",
-    fetched: true,
-    notFetchedOn: [],
-  },
-  {
-    attribute: "poster",
-    property: "poster",
-    grammar: "url",
-    elements: ["video"],
-    context: "resource",
-    fetched: true,
-    notFetchedOn: [],
-  },
-  {
-    attribute: "cite",
-    property: "cite",
-    grammar: "url",
-    elements: ["blockquote", "del", "ins", "q"],
-    context: "resource",
-    fetched: false,
-    notFetchedOn: [],
-  },
-  {
-    attribute: "longdesc",
-    property: "longDesc",
-    grammar: "url",
-    elements: ["img", "iframe", "frame"],
-    context: "resource",
-    fetched: false,
-    notFetchedOn: [],
-  },
-  {
-    attribute: "content",
-    property: "content",
-    grammar: "refresh",
-    elements: ["meta"],
-    context: "refresh",
-    fetched: true,
-    notFetchedOn: [],
-  },
-  {
-    attribute: "style",
-    property: "style",
-    grammar: "css",
-    elements: null,
-    context: "resource",
-    fetched: true,
-    notFetchedOn: [],
-  },
-]);
+    {
+      attribute: "href",
+      property: "href",
+      notFetchedOn: ["a", "area", "base"],
+    },
+    { attribute: "xlink:href", property: "xLinkHref", notFetchedOn: ["a"] },
+    { attribute: "background", property: "background" },
+    { attribute: "srcset", property: "srcSet", grammar: "srcset" },
+    {
+      attribute: "imagesrcset",
+      property: "imageSrcSet",
+      grammar: "srcset",
+      elements: ["link"],
+    },
+    { attribute: "ping", property: "ping", grammar: "urls" },
+    { attribute: "action", property: "action", context: "form" },
+    { attribute: "formaction", property: "formAction", context: "form" },
+    { attribute: "data", property: "data", elements: ["object"] },
+    { attribute: "poster", property: "poster", elements: ["video"] },
+    {
+      attribute: "cite",
+      property: "cite",
+      elements: ["blockquote", "del", "ins", "q"],
+      fetched: false,
+    },
+    {
+      attribute: "longdesc",
+      property: "longDesc",
+      elements: ["img", "iframe", "frame"],
+      fetched: false,
+    },
+    {
+      attribute: "content",
+      property: "content",
+      grammar: "refresh",
+      elements: ["meta"],
+      context: "refresh",
+    },
+    { attribute: "style", property: "style", grammar: "css" },
+  ]).map((row) => Object.freeze({ ...DEFAULTS, ...row })),
+);

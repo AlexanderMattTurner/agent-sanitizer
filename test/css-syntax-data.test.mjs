@@ -8,7 +8,7 @@
  * bump that changes one without a regenerate would leave the cascade judging
  * declarations against stale grammar.
  *
- * Regenerate with `node scripts/gen-css-syntax.mjs && pnpm format`.
+ * Regenerate with `node scripts/gen-css-syntax.mjs`.
  */
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";

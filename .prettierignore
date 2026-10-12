@@ -51,3 +51,7 @@ python/agent_sanitizer/data/invisible-charset.json
 # test/invisible-charset.test.mjs because that test compares code points, not
 # bytes. The generator emits one code point per line and owns the format.
 src/cf-charset.mjs
+
+# Generated: scripts/gen-css-syntax.mjs writes one CSS grammar per line; prettier
+# would wrap every long one onto two. The generator owns the format.
+src/css-syntax-data.mjs
