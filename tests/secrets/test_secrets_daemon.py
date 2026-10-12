@@ -12,6 +12,7 @@ import agent_sanitizer.secrets.engine as E
 from agent_sanitizer.secrets import daemon as S
 from agent_sanitizer.secrets import handle_request
 from agent_sanitizer.secrets.config import RedactorConfig
+from tests._growth import assert_fits_budget
 from tests.secrets.redactor_helpers import (
     LEGITIMATE,
     SAMPLES,
@@ -255,6 +256,34 @@ def test_the_budget_trips_on_elapsed_time_alone(monkeypatch):
     )
     assert "AWS Access Key" in found
     assert "AKIAIOSFODNN7EXAMPLE" not in redacted
+
+
+def test_a_realistic_payload_fits_the_real_budget():
+    """The frozen-clock test above proves the check does not fire without elapsed
+    time; this proves the converse the shipped constant exists for: ordinary tool
+    output, scanned through the engine's request path with the REAL configured
+    budget, costs a small fraction of it. Measured as the fastest of several
+    CPU-time runs against budget / headroom (``tests/_growth.py``), so a loaded
+    runner cannot fail it."""
+    payload = (
+        "".join(
+            f"2026-01-01T00:00:{i % 60:02d}Z INFO worker-{i % 8} handled GET "
+            f"/api/v1/items/{i} status=200 bytes={1000 + i} latency_ms={i % 90}\n"
+            for i in range(60)
+        )
+        + "api_key: AKIAIOSFODNN7EXAMPLE\n"
+    )
+    assert len(payload) > 4000
+    config = S.parse_request(wire_request(payload)).config
+    assert config.compute_budget_seconds == S.REQUEST_COMPUTE_BUDGET_SECONDS
+    redacted, found = E.redact(payload, config)
+    assert "AWS Access Key" in found
+    assert "AKIAIOSFODNN7EXAMPLE" not in redacted
+    assert_fits_budget(
+        "redact() on a several-KB ordinary payload",
+        lambda: E.redact(payload, config),
+        S.REQUEST_COMPUTE_BUDGET_SECONDS,
+    )
 
 
 # ─── Live socket round-trip ──────────────────────────────────────────────────

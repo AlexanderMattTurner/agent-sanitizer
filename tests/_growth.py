@@ -190,6 +190,34 @@ def cpu_growth(call_for: CallFor, sizes) -> Growth:
     return Growth(fit_exponent(sizes, best), tuple(sizes), tuple(best))
 
 
+#: How many times over a call must fit its budget: it passes when its
+#: FASTEST of :data:`ROUNDS` runs is under ``budget / BUDGET_HEADROOM``. The
+#: budget guards against a runaway scan (seconds, or unbounded); an ordinary
+#: payload costs milliseconds, so ten-fold headroom keeps a loaded runner from
+#: reading as a regression while a payload that genuinely nears the budget still
+#: fails. It lives here rather than in the exponents file because it is not a
+#: growth threshold and the JS twin has no use for it.
+BUDGET_HEADROOM = 10
+
+
+def assert_fits_budget(name: str, call: Callable[[], object], budget_seconds: float):
+    """A representative call fits ``budget_seconds`` with :data:`BUDGET_HEADROOM`
+    to spare, read as the fastest of :data:`ROUNDS` ``process_time`` runs.
+
+    Noise only ever ADDS CPU time, so the minimum is the reading closest to the
+    call's own cost: a loaded runner cannot fail it, and only a call whose
+    unloaded cost is within the headroom of the budget can."""
+    fastest = math.inf
+    for _ in range(ROUNDS):
+        start = time.process_time()
+        call()
+        fastest = min(fastest, time.process_time() - start)
+    assert fastest < budget_seconds / BUDGET_HEADROOM, (
+        f"{name} took {fastest:.4g}s CPU at best; it must fit the "
+        f"{budget_seconds}s budget with {BUDGET_HEADROOM}x headroom"
+    )
+
+
 def assert_linear(name: str, growth: Growth) -> None:
     """The gate: ``growth`` classifies as at most linear."""
     assert growth.exponent < LINEAR_MAX_EXPONENT, (
