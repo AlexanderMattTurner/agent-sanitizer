@@ -8,6 +8,19 @@ adhere to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+## [2.61.3] - 2026-10-12
+
+### Fixed
+
+- Improved OpenAI API key detection to handle line-wrapped keys after lines ending in hyphens and to properly redact quoted field values containing brackets, trailing symbols, or digit runs.
+- Secrets detector now correctly leaves dummy provider keys (all-digit or hyphenated-name variants like sk-ant-/sk-or-) unmasked when bare or under a credential name.
+- Field value redaction now skips short and quoted values to avoid false positives on templates, flags, and spliced strings.
+
+### Changed
+
+- OpenAI detector implementation replaced with a linear-time algorithm optimized for repeated sk- prefixes, improving performance on large inputs.
+- Reclassified the OpenAI detector under the quadratic-reimplementation section for better organization.
+
 ## [2.61.2] - 2026-10-12
 
 ### Fixed
