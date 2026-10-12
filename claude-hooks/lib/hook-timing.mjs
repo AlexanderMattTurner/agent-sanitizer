@@ -102,14 +102,19 @@ const ISSUE_URL =
  *                                             module at `claude-hooks/lib/` and
  *                                             carries the published version
  *
- * First hit wins, and each candidate exists only inside the artifact it belongs
- * to, so no foreign manifest is ever a candidate.
+ * First hit wins, and only a manifest naming {@link OWN_NAME} counts. The offsets
+ * alone do not exclude foreign manifests: a composer that bundles this module
+ * into its own `.claude/hooks/` puts `../../package.json` on the COMPOSER's
+ * manifest, whose version would otherwise be reported as this build's.
  */
 const VERSION_MANIFESTS = [
   "../../.claude-plugin/plugin.json",
   "../../plugin/.claude-plugin/plugin.json",
   "../../package.json",
 ];
+
+/** The `name` both this package's package.json and its plugin.json carry. */
+const OWN_NAME = "agent-sanitizer";
 
 /** Strict X.Y.Z, the only shape this project's release tooling ever writes. */
 const SEMVER = /^[0-9]+\.[0-9]+\.[0-9]+$/;
@@ -131,7 +136,8 @@ function readVersion() {
 }
 
 /**
- * The strict semver `path` carries, or null when it carries none.
+ * The strict semver `path` carries, or null when it carries none or names a
+ * package other than {@link OWN_NAME}.
  *
  * The read and the parse are caught because neither failure is this function's
  * business: every candidate but one is absent in any given artifact, and a
@@ -147,7 +153,9 @@ function readManifest(path) {
   } catch {
     return null;
   }
-  return SEMVER.test(manifest?.version) ? manifest.version : null;
+  return manifest?.name === OWN_NAME && SEMVER.test(manifest.version)
+    ? manifest.version
+    : null;
 }
 
 /** @type {string | null | undefined} */

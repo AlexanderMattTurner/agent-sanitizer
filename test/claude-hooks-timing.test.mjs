@@ -691,15 +691,15 @@ describe("the version an issue report is asked to carry", () => {
 
   /**
    * Stage one artifact layout: a copy of the module under `moduleDir`, plus a
-   * manifest per entry of `manifests`, and report the version it resolves.
+   * manifest per entry of `manifests`, and return the staged module.
    *
    * A copy rather than a stub, so what answers is the shipped resolver reading
    * a real tree — the layouts are exactly the offsets each artifact ships at.
    * @param {string} moduleDir  the module's directory, relative to the root
    * @param {Record<string, unknown>} manifests  root-relative path to contents
-   * @returns {Promise<string | null>}
+   * @returns {Promise<typeof import("../claude-hooks/lib/hook-timing.mjs")>}
    */
-  async function versionUnderLayout(moduleDir, manifests) {
+  async function stageLayout(moduleDir, manifests) {
     const root = mkdtempSync(path.join(tmpdir(), "hook-timing-layout-"));
     for (const [file, contents] of Object.entries(manifests)) {
       mkdirSync(path.dirname(path.join(root, file)), { recursive: true });
@@ -717,8 +717,16 @@ describe("the version an issue report is asked to carry", () => {
       ),
       target,
     );
-    const staged = await import(pathToFileURL(target).href);
-    return staged.sanitizerVersion();
+    return import(pathToFileURL(target).href);
+  }
+
+  /**
+   * @param {string} moduleDir
+   * @param {Record<string, unknown>} manifests
+   * @returns {Promise<string | null>}
+   */
+  async function versionUnderLayout(moduleDir, manifests) {
+    return (await stageLayout(moduleDir, manifests)).sanitizerVersion();
   }
 
   const PLUGIN_MANIFEST = ".claude-plugin/plugin.json";
@@ -735,7 +743,10 @@ describe("the version an issue report is asked to carry", () => {
     );
     assert.equal(
       await versionUnderLayout("plugin/dist/hooks", {
-        [`plugin/${PLUGIN_MANIFEST}`]: { version: "5.6.7" },
+        [`plugin/${PLUGIN_MANIFEST}`]: {
+          name: "agent-sanitizer",
+          version: "5.6.7",
+        },
       }),
       "5.6.7",
     );
@@ -748,7 +759,10 @@ describe("the version an issue report is asked to carry", () => {
     assert.equal(
       await versionUnderLayout("claude-hooks/lib", {
         "package.json": { name: "agent-sanitizer", version: "1.0.1" },
-        [`plugin/${PLUGIN_MANIFEST}`]: { version: "2.2.2" },
+        [`plugin/${PLUGIN_MANIFEST}`]: {
+          name: "agent-sanitizer",
+          version: "2.2.2",
+        },
       }),
       "2.2.2",
     );
@@ -766,6 +780,21 @@ describe("the version an issue report is asked to carry", () => {
       }),
       null,
     );
+  });
+
+  it("never reports a composer's manifest as this build's version", async () => {
+    // A composer bundles this module into its own .claude/hooks/, so every
+    // fixed offset lands on the COMPOSER's manifests. Reading them printed the
+    // composer's 0.79.0 as the sanitizer version when the real pin was 2.58.9.
+    const staged = await stageLayout(".claude/hooks", {
+      "package.json": { name: "agent-glovebox", version: "0.79.0" },
+      [PLUGIN_MANIFEST]: { name: "glovebox-plugin", version: "0.78.0" },
+      [`plugin/${PLUGIN_MANIFEST}`]: { name: "other", version: "0.77.0" },
+    });
+    assert.equal(staged.sanitizerVersion(), null);
+    const notice = staged.slowHookNotice("gate-bash-calls", 1_100);
+    assert.doesNotMatch(notice, /0\.7[789]\.0/u);
+    assert.match(notice, /with your agent-sanitizer version, the hook name/);
   });
 
   it("asks for the version rather than guessing one when it knows none", () => {

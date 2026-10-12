@@ -63,7 +63,7 @@ function readManifest(path2) {
   } catch {
     return null;
   }
-  return SEMVER.test(manifest?.version) ? manifest.version : null;
+  return manifest?.name === OWN_NAME && SEMVER.test(manifest.version) ? manifest.version : null;
 }
 function sanitizerVersion() {
   if (cachedVersion === void 0) cachedVersion = readVersion();
@@ -212,7 +212,7 @@ function reportSlowHook(hookName, elapsedMs, hookEventName, emit, writeErr = (ch
   emit(hookEventName, { additionalContext: notice });
   return true;
 }
-var SLOW_HOOK_THRESHOLD_MS, CONCURRENT_PROVISION_CEILING_MS, ISSUE_URL, VERSION_MANIFESTS, SEMVER, cachedVersion, provisioningMs, provisioningCpuMs, redactorRoundTripMs, hostExtensionMs, hostExtensionCpuMs, hostExtensionDepth;
+var SLOW_HOOK_THRESHOLD_MS, CONCURRENT_PROVISION_CEILING_MS, ISSUE_URL, VERSION_MANIFESTS, OWN_NAME, SEMVER, cachedVersion, provisioningMs, provisioningCpuMs, redactorRoundTripMs, hostExtensionMs, hostExtensionCpuMs, hostExtensionDepth;
 var init_hook_timing = __esm({
   "claude-hooks/lib/hook-timing.mjs"() {
     "use strict";
@@ -224,6 +224,7 @@ var init_hook_timing = __esm({
       "../../plugin/.claude-plugin/plugin.json",
       "../../package.json"
     ];
+    OWN_NAME = "agent-sanitizer";
     SEMVER = /^[0-9]+\.[0-9]+\.[0-9]+$/;
     provisioningMs = 0;
     provisioningCpuMs = 0;
