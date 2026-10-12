@@ -351,12 +351,25 @@ def _rebuild_per_span(text: str) -> None:
         out = out[:start] + "X" + out[start + len(_FIELD_UNIT) :]
 
 
+def _shift_tail_per_span(text: str) -> None:
+    """Splice every unit-aligned span into a ``bytearray`` front to back, so each
+    splice memmoves the whole remaining tail — quadratic in ``len(text)`` with
+    every byte moved inside C, like :func:`_rebuild_per_span`, but with NO
+    allocation per iteration. That matters for the CPU gate's non-vacuity check:
+    the rebuild's growth ratio was not stable across machines — 50-96x on a dev
+    box, 12.8-13.8x on three CI runs (against the 15.0 limit) — and its cost
+    includes a fresh multi-KiB allocation per span, which a memmove avoids."""
+    buf = bytearray(text, "ascii")
+    for pos in range(len(text) // len(_FIELD_UNIT)):
+        buf[pos : pos + len(_FIELD_UNIT)] = b"X"
+
+
 def test_the_cpu_measure_catches_a_copy_quadratic():
     """Non-vacuity: the CPU harness must FAIL a routine whose quadratic lives
     entirely in C, which is precisely what the opcode harness cannot see."""
-    ratio = _cpu_growth_ratio(lambda text: lambda: _rebuild_per_span(text))
+    ratio = _cpu_growth_ratio(lambda text: lambda: _shift_tail_per_span(text))
     assert ratio >= _COPY_GROWTH_LIMIT, (
-        f"a routine that rebuilds the whole string per span measured {ratio:.2f}x "
+        f"a routine that moves the whole tail per span measured {ratio:.2f}x "
         "— the harness cannot see a C-level copy quadratic, so every assertion "
         "above is vacuous"
     )
