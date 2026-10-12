@@ -1,42 +1,75 @@
 #!/usr/bin/env node
 /**
- * Generate src/css-syntax-data.mjs: the CSS property and type value grammars
- * css-tree's lexer validates a declaration against.
+ * Generate src/css-syntax-data.mjs: the CSS value grammars css-tree's lexer
+ * validates an inline-style declaration against.
  *
  * Layer 2 resolves an inline style's cascade the way a browser does — an
  * INVALID declaration is dropped before `!important` and source order pick a
- * winner — and css-tree's lexer is the validator. Its grammar tables ship as
- * `css-tree/definition-syntax-data`, which `createRequire`s ~400 KB of
- * `mdn-data` JSON (browser-compat metadata, MDN links, initial values) to
- * extract the ~85 KB of syntax strings the lexer actually reads. Importing that
- * entry would put all 400 KB into every shipped bundle and its parse on the
- * first HTML tool output of every hook process, so this script extracts the
- * syntax strings once and commits them as a plain data module.
+ * winner — and css-tree's lexer is the validator. Its full grammar tables
+ * (`css-tree/definition-syntax-data`) pull ~400 KB of `mdn-data` JSON into
+ * every bundle, yet the cascade only ever validates the properties
+ * src/html.mjs reads. So this script keeps exactly those: every string literal
+ * in src/html.mjs that names a CSS property (plus the unprefixed basename the
+ * lexer falls back to for a vendor-prefixed one), and the transitive closure of
+ * the types and properties their grammars reference. A property outside the
+ * table is "Unknown" to the lexer, which the cascade treats as valid — the
+ * pre-validation behaviour, never a new hide.
  *
- * `test/css-syntax-data.test.mjs` re-derives the tables from the installed
- * css-tree and fails if the committed module drifts, so a css-tree bump that
- * changes a grammar is a red build until this is re-run.
- *
- * Run from the repo root: `node scripts/gen-css-syntax.mjs`. The output is one
- * grammar per line and listed in .prettierignore: the generator owns its format.
+ * `test/css-syntax-data.test.mjs` re-derives the table from the installed
+ * css-tree and the current src/html.mjs and fails if the committed module
+ * drifts, so reading a new property or bumping css-tree is a red build until
+ * this is re-run: `node scripts/gen-css-syntax.mjs` from the repo root. The
+ * output is one grammar per line and listed in .prettierignore.
  */
-import { writeFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
 import cssSyntaxData from "css-tree/definition-syntax-data";
+import { parse, walk } from "css-tree/definition-syntax";
+
+/** @typedef {{ types: Record<string, string>, properties: Record<string, string> }} CssSyntax */
 
 /**
- * The lexer's grammar tables as css-tree assembles them (mdn-data plus
- * css-tree's own patch), minus the at-rule table no declaration match reads.
- * @returns {{ types: Record<string, string>, properties: Record<string, string> }}
+ * The grammars the cascade can consult, given the reader module's source.
+ * @param {string} [readerSource] src/html.mjs's text
+ * @returns {CssSyntax}
  */
-export function deriveCssSyntax() {
-  return { types: cssSyntaxData.types, properties: cssSyntaxData.properties };
+export function deriveCssSyntax(
+  readerSource = readFileSync(
+    new URL("../src/html.mjs", import.meta.url),
+    "utf8",
+  ),
+) {
+  const { types, properties } = cssSyntaxData;
+  /** @type {CssSyntax} */
+  const out = { types: {}, properties: {} };
+  /** @type {Array<[keyof CssSyntax, string]>} */
+  const queue = [];
+  for (const [, name] of readerSource.matchAll(/"(-?[a-z][a-z-]*)"/g))
+    for (const candidate of [name, name.replace(/^-[a-z]+-/, "")])
+      queue.push(["properties", candidate]);
+  while (queue.length > 0) {
+    const [table, name] = /** @type {[keyof CssSyntax, string]} */ (
+      queue.pop()
+    );
+    const source = table === "types" ? types : properties;
+    // Already kept, not a property, or a generic type the lexer builds itself.
+    if (Object.hasOwn(out[table], name) || !Object.hasOwn(source, name))
+      continue;
+    out[table][name] = source[name];
+    walk(parse(source[name]), (/** @type {any} */ node) => {
+      if (node.type === "Type") queue.push(["types", node.name]);
+      if (node.type === "Property") queue.push(["properties", node.name]);
+    });
+  }
+  /** @param {Record<string, string>} table */
+  const sorted = (table) => Object.fromEntries(Object.entries(table).sort());
+  return { types: sorted(out.types), properties: sorted(out.properties) };
 }
 
 /**
  * The committed module's source text.
- * @param {{ types: Record<string, string>, properties: Record<string, string> }} syntax
+ * @param {CssSyntax} syntax
  * @returns {string}
  */
 export function renderCssSyntax(syntax) {
@@ -49,12 +82,10 @@ export function renderCssSyntax(syntax) {
       )
       .join("");
   return `/**
- * GENERATED by scripts/gen-css-syntax.mjs from css-tree's
- * \`definition-syntax-data\` — DO NOT EDIT. test/css-syntax-data.test.mjs fails
- * when this drifts from the installed css-tree.
- *
- * The CSS value grammars (mdn-data, CC0, plus css-tree's patch) that
- * css-tree's lexer validates an inline-style declaration against.
+ * GENERATED by scripts/gen-css-syntax.mjs — DO NOT EDIT. The css-tree lexer
+ * grammars (mdn-data, CC0, plus css-tree's patch) of the properties
+ * src/html.mjs reads and everything their grammars reference.
+ * test/css-syntax-data.test.mjs fails when this drifts.
  */
 // Stryker disable all — generated grammar data; its correctness is the
 // round-trip in test/css-syntax-data.test.mjs, not anything a mutant can probe.
