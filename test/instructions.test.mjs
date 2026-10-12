@@ -25,9 +25,9 @@ import {
   scanText,
   findInstructionFiles,
   scanInstructionFiles,
+  walkContextGlobs,
   cleanFile,
   excludeFromContextScan,
-  walkContextGlobs,
 } from "../src/instructions.mjs";
 import { atomicReplaceFile } from "../src/atomic-replace.mjs";
 import { LONG_RUN_THRESHOLD, SCATTERED_THRESHOLD } from "../src/invisible.mjs";
@@ -416,6 +416,43 @@ describe("findInstructionFiles", () => {
     writeFileSync(join(skillDir, "SKILL.md"), "x");
     const found = findInstructionFiles(GLOBS, { cwd: tmpDir });
     assert.deepEqual(found, [join(tmpDir, ".claude", "skills", "SKILL.md")]);
+  });
+
+  it("hands exclude scan-root entries whatever the process cwd is", () => {
+    // A literal segment (`.claude` in `.claude/*.md`) reaches exclude with a
+    // parentPath relative to the glob's cwd. Resolved against process.cwd(), a
+    // process running under `.claude/worktrees/` reads its OWN `.claude` into
+    // the entry and prunes the scan root's.
+    const scanRoot = join(tmpDir, "scan");
+    mkdirSync(join(scanRoot, ".claude"), { recursive: true });
+    writeFileSync(join(scanRoot, ".claude", "notes.md"), "x");
+    const elsewhere = join(tmpDir, "host", ".claude", "worktrees", "wt");
+    // Node only consults exclude on a literal segment the PROCESS cwd also holds.
+    mkdirSync(join(elsewhere, ".claude"), { recursive: true });
+    /** @type {string[]} */
+    const entries = [];
+    const saved = process.cwd();
+    process.chdir(elsewhere);
+    let found;
+    try {
+      found = walkContextGlobs(
+        [".claude/*.md", ".claude/rules/**/*.md"],
+        scanRoot,
+        (entry) => {
+          entries.push(entry);
+          return false;
+        },
+      );
+    } finally {
+      process.chdir(saved);
+    }
+    assert.deepEqual(found, [join(scanRoot, ".claude", "notes.md")]);
+    assert.ok(entries.length > 0, "exclude was never consulted");
+    assert.deepEqual(
+      entries.filter((entry) => entry.startsWith("..")),
+      [],
+      "an exclude entry escaped the scan root",
+    );
   });
 });
 

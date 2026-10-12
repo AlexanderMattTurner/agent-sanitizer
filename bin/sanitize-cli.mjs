@@ -54,26 +54,13 @@ import { dirname } from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
 
+import { readKnob } from "../claude-hooks/lib/knobs.mjs";
 import { sanitize } from "../src/index.mjs";
 
 /** Largest single request accepted, in UTF-8 bytes. Caps memory per request so
- * a hostile or runaway caller can't OOM the process; override via the env var. */
-const DEFAULT_MAX_INPUT_BYTES = 10 * 1024 * 1024;
-
-/** Resolve the configured input cap, falling back to the default for an unset,
- * empty, non-numeric, or non-positive value. */
-function maxInputBytes() {
-  const raw = process.env.AGENT_SANITIZER_MAX_INPUT_BYTES;
-  const parsed = Number(raw);
-  if (
-    raw === undefined ||
-    raw === "" ||
-    !Number.isFinite(parsed) ||
-    parsed <= 0
-  )
-    return DEFAULT_MAX_INPUT_BYTES;
-  return Math.floor(parsed);
-}
+ * a hostile or runaway caller can't OOM the process; override via the env var.
+ * An unrecognized value is reported on stderr and the default applies. */
+const maxInputBytes = () => readKnob("AGENT_SANITIZER_MAX_INPUT_BYTES");
 
 /** The one-line reason reported for a caught throw. A thrown non-Error that
  * still carries a `message` keeps reporting it (the historical behaviour);

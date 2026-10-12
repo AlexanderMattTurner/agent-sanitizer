@@ -234,6 +234,158 @@ var init_hook_timing = __esm({
   }
 });
 
+// claude-hooks/lib/knobs.mjs
+function positiveMsOr(raw, fallback) {
+  const ms = Number(raw);
+  return Number.isFinite(ms) && ms > 0 ? ms : fallback;
+}
+function reportOnce(message) {
+  if (reported.has(message)) return;
+  reported.add(message);
+  process.stderr.write(`${message}
+`);
+}
+function readKnob(name50, env = process.env, report = reportOnce) {
+  if (!Object.hasOwn(KNOBS, name50))
+    throw new Error(
+      `unknown knob ${JSON.stringify(name50)}: declare it in KNOBS (claude-hooks/lib/knobs.mjs) before reading it`
+    );
+  const spec2 = KNOBS[name50];
+  const raw = env[name50];
+  const value = spec2.parse(raw);
+  if (value !== INVALID) return value;
+  const shown = JSON.stringify(
+    /** @type {string} */
+    raw.slice(0, 80)
+  );
+  report(
+    `agent-sanitizer: ${name50}=${shown} is not a recognized value (${spec2.expect}); ${spec2.consequence}.`
+  );
+  return spec2.fallback;
+}
+var FAIL_CLOSED_VALUES, INVALID, knob, on, unset, flag, milliseconds, text, TRACE_LEVELS, DEFAULT_MAX_INPUT_BYTES, KNOBS, LAUNCHER_KNOBS, reported;
+var init_knobs = __esm({
+  "claude-hooks/lib/knobs.mjs"() {
+    "use strict";
+    FAIL_CLOSED_VALUES = Object.freeze(["0", "false"]);
+    INVALID = /* @__PURE__ */ Symbol("invalid knob value");
+    knob = (spec2) => spec2;
+    on = (surface, spec2) => Object.freeze({ ...spec2, surface });
+    unset = (raw) => raw === void 0 || raw === "";
+    flag = (consequence) => knob({
+      parse: (raw) => {
+        if (raw === "1") return true;
+        return unset(raw) || raw === "0" ? false : INVALID;
+      },
+      fallback: false,
+      expect: "1 to set it, 0 or unset to leave it off",
+      consequence
+    });
+    milliseconds = (fallback) => knob({
+      parse: (raw) => {
+        if (unset(raw)) return fallback;
+        const ms = positiveMsOr(raw, Number.NaN);
+        return Number.isNaN(ms) ? INVALID : ms;
+      },
+      fallback,
+      expect: "a positive number of milliseconds",
+      consequence: `the ${fallback} ms default applies`
+    });
+    text = () => knob({
+      parse: (raw) => unset(raw) ? void 0 : raw,
+      fallback: void 0,
+      expect: "any text",
+      consequence: "it is ignored"
+    });
+    TRACE_LEVELS = Object.freeze({
+      0: ["", "0", "off", "false"],
+      1: ["1", "info", "true", "on"],
+      2: ["2", "debug"]
+    });
+    DEFAULT_MAX_INPUT_BYTES = 10 * 1024 * 1024;
+    KNOBS = Object.freeze({
+      // Fail-open unless one of FAIL_CLOSED_VALUES; the documented open spellings
+      // are recognized too, so only a genuinely foreign value is reported.
+      AGENT_SANITIZER_FAIL_OPEN: on(
+        "hooks",
+        knob({
+          parse: (raw) => {
+            if (raw !== void 0 && FAIL_CLOSED_VALUES.includes(raw)) return false;
+            return unset(raw) || raw === "1" || raw === "true" ? true : INVALID;
+          },
+          fallback: true,
+          expect: `${FAIL_CLOSED_VALUES.join(" or ")} to fail closed, 1/true/unset for the default`,
+          consequence: "the hooks stay fail-OPEN"
+        })
+      ),
+      AGENT_SANITIZER_DISABLED_HOOKS: on("hooks", text()),
+      AGENT_SANITIZER_SECRETS_ENABLED: on(
+        "hooks",
+        flag("the secret layer stays OFF")
+      ),
+      AGENT_SANITIZER_FLAG_DIGEST_VALUES: on(
+        "hooks",
+        flag("digest-shaped values stay exempt")
+      ),
+      AGENT_SANITIZER_INVISIBLE_DISABLED: on(
+        "hooks",
+        flag("invisible-character stripping stays ON")
+      ),
+      AGENT_SANITIZER_TERMINAL_DISABLED: on(
+        "hooks",
+        flag("terminal-control stripping stays ON")
+      ),
+      AGENT_SANITIZER_OUTPUT_DISABLED: on(
+        "hooks",
+        flag("authored-content sanitizing stays ON")
+      ),
+      AGENT_SANITIZER_MAX_INPUT_BYTES: on(
+        "cli",
+        knob({
+          parse: (raw) => {
+            if (unset(raw)) return DEFAULT_MAX_INPUT_BYTES;
+            const bytes = Number(raw);
+            return Number.isInteger(bytes) && bytes >= 1 ? bytes : INVALID;
+          },
+          fallback: DEFAULT_MAX_INPUT_BYTES,
+          expect: "a positive whole number of bytes",
+          consequence: `the ${DEFAULT_MAX_INPUT_BYTES}-byte default applies`
+        })
+      ),
+      _AGENT_SANITIZER_EXTRA_SECRET_VARS: on("internal", text()),
+      _AGENT_SANITIZER_TRACE: on(
+        "internal",
+        knob({
+          parse: (raw) => {
+            const value = (raw ?? "").toLowerCase();
+            const level = Object.entries(TRACE_LEVELS).find(
+              ([, spellings]) => spellings.includes(value)
+            );
+            return level === void 0 ? INVALID : Number(level[0]);
+          },
+          fallback: 0,
+          expect: "off/0, info/1/on/true, or debug/2",
+          consequence: "tracing stays off"
+        })
+      ),
+      _AGENT_SANITIZER_TRACE_FILE: on("internal", text()),
+      _AGENT_SANITIZER_REDACTOR_SOCKET: on("internal", text()),
+      _AGENT_SANITIZER_REDACTOR_DAEMON: on("internal", text()),
+      _AGENT_SANITIZER_REDACTOR_WAIT_MS: on("internal", milliseconds(8e3)),
+      _AGENT_SANITIZER_REDACTOR_REQUEST_MS: on("internal", milliseconds(2e4)),
+      _AGENT_SANITIZER_SANITIZE_BUDGET_MS: on("internal", milliseconds(12e4)),
+      _AGENT_SANITIZER_REVEAL_DIR: on("internal", text())
+    });
+    LAUNCHER_KNOBS = Object.freeze([
+      "AGENT_SANITIZER_NODE",
+      "AGENT_SANITIZER_HOOK_BINARY",
+      "AGENT_SANITIZER_COMPILE_CACHE",
+      "AGENT_SANITIZER_REPEAT_DEGRADED_CONTEXT"
+    ]);
+    reported = /* @__PURE__ */ new Set();
+  }
+});
+
 // claude-hooks/lib/hook-io.mjs
 import {
   openSync,
@@ -244,7 +396,6 @@ import {
   writeFileSync
 } from "node:fs";
 import { spawnSync } from "node:child_process";
-import { userInfo } from "node:os";
 import { createHash } from "node:crypto";
 import { pathToFileURL } from "node:url";
 function isMain(importMetaUrl) {
@@ -260,11 +411,11 @@ function readFlag(argv, name50) {
   return match === void 0 ? void 0 : match.slice(prefix.length);
 }
 function failOpenEnabled(env = process.env) {
-  return !FAIL_CLOSED_SET.has(env[FAIL_OPEN_ENV] ?? "");
+  return readKnob(FAIL_OPEN_ENV, env);
 }
 function disabledHooks(known, env = process.env, report = (message) => process.stderr.write(`${message}
 `)) {
-  const named = (env[DISABLED_HOOKS_ENV] ?? "").split(",").map((name50) => name50.trim()).filter((name50) => name50 !== "");
+  const named = (readKnob(DISABLED_HOOKS_ENV, env) ?? "").split(",").map((name50) => name50.trim()).filter((name50) => name50 !== "");
   const unknown = named.filter((name50) => !known.includes(name50));
   if (unknown.length > 0)
     report(
@@ -387,38 +538,47 @@ function hookgateMarkerPath(projectDir = process.env.CLAUDE_PROJECT_DIR, runtime
   const flattened = projectDir.replace(/[^A-Za-z0-9]/g, "_");
   return `${base}/${HOOKGATE_MARKER_STEM}${flattened}-${digest}`;
 }
-function markerLockHeld(markerPath) {
-  const probe = spawnSync(
-    "flock",
-    ["--nonblock", "--exclusive", markerPath, "true"],
-    { stdio: "ignore" }
-  );
+function lockHeldOn(fd) {
+  const probe = spawnSync("flock", ["--nonblock", "--exclusive", "3"], {
+    stdio: ["ignore", "ignore", "ignore", fd]
+  });
   if (probe.error) return null;
   if (probe.status === 0) return false;
   if (probe.status === 1) return true;
   return null;
 }
+function readSetupMarker(markerPath) {
+  let fd;
+  try {
+    fd = openSync(markerPath, "r");
+  } catch {
+    return null;
+  }
+  try {
+    let raw;
+    try {
+      raw = readFileSync2(fd, "utf8");
+    } catch {
+      return null;
+    }
+    const lines = raw.split("\n").map((line) => line.trim());
+    return {
+      lines,
+      lockHeld: lines.includes(SETUP_LOCK_DECLARATION) ? lockHeldOn(fd) : null
+    };
+  } finally {
+    closeSync(fd);
+  }
+}
 function setupRunning(markerPath) {
   if (!markerIsTrusted(markerPath)) return false;
-  let raw;
-  try {
-    raw = readFileSync2(
-      /** @type {string} */
-      markerPath,
-      "utf8"
-    );
-  } catch {
-    return false;
-  }
-  const lines = raw.split("\n").map((line) => line.trim());
-  if (lines.includes(SETUP_LOCK_DECLARATION)) {
-    const held = markerLockHeld(
-      /** @type {string} */
-      markerPath
-    );
-    if (held !== null) return held;
-  }
-  const pid = parseInt(lines[0], 10);
+  const marker2 = readSetupMarker(
+    /** @type {string} */
+    markerPath
+  );
+  if (marker2 === null) return false;
+  if (marker2.lockHeld !== null) return marker2.lockHeld;
+  const pid = parseInt(marker2.lines[0], 10);
   if (!Number.isInteger(pid) || pid <= 0) return false;
   try {
     process.kill(pid, 0);
@@ -432,18 +592,10 @@ function setupRunning(markerPath) {
 }
 function probeSetupAlive(markerPath) {
   if (markerPath === null) return true;
-  let raw;
-  try {
-    raw = readFileSync2(markerPath, "utf8");
-  } catch {
-    return true;
-  }
-  const lines = raw.split("\n").map((line) => line.trim());
-  if (lines.includes(SETUP_LOCK_DECLARATION)) {
-    const held = markerLockHeld(markerPath);
-    if (held !== null) return held;
-  }
-  const pid = parseInt(lines[0], 10);
+  const marker2 = readSetupMarker(markerPath);
+  if (marker2 === null) return true;
+  if (marker2.lockHeld !== null) return marker2.lockHeld;
+  const pid = parseInt(marker2.lines[0], 10);
   if (!Number.isInteger(pid) || pid <= 0) return true;
   try {
     process.kill(pid, 0);
@@ -528,7 +680,17 @@ function markerIsTrusted(path2) {
   } catch {
     return false;
   }
-  return st.isFile() && st.uid === userInfo().uid;
+  return st.isFile() && ownedByCurrentUser(st);
+}
+function currentUid() {
+  return typeof process.getuid === "function" ? process.getuid() : null;
+}
+function ownedByCurrentUser(st, uid = currentUid()) {
+  return uid !== null && st.uid === uid;
+}
+function isPrivateDir(st, { uid = currentUid(), rootMayOwn = false } = {}) {
+  const owner = ownedByCurrentUser(st, uid) || uid !== null && rootMayOwn && st.uid === 0;
+  return st.isDirectory() && owner && (st.mode & 18) === 0;
 }
 function writeSentinelFile(path2) {
   try {
@@ -558,11 +720,13 @@ function writeFileNoFollow(path2, content3, mode = 384) {
     closeSync(fd);
   }
 }
-var defaultSharedState, shared, HookEvent, PermissionDecision, FAIL_OPEN_ENV, FAIL_CLOSED_VALUES, FAIL_CLOSED_SET, DISABLED_HOOKS_ENV, MAX_STDIN_BYTES, lastStdinBytes, EmptyStdinError, lazyImportErrors, DEFAULT_MISSING_PACKAGE_REMEDY, UNTRUSTED_TEXT_CAP, PROJECT_DIR, PROJECT_HASH, HOOKGATE_MARKER_STEM, SETUP_LOCK_DECLARATION;
+var defaultSharedState, shared, HookEvent, PermissionDecision, FAIL_OPEN_ENV, DISABLED_HOOKS_ENV, MAX_STDIN_BYTES, lastStdinBytes, EmptyStdinError, lazyImportErrors, DEFAULT_MISSING_PACKAGE_REMEDY, UNTRUSTED_TEXT_CAP, PROJECT_DIR, PROJECT_HASH, HOOKGATE_MARKER_STEM, SETUP_LOCK_DECLARATION;
 var init_hook_io = __esm({
   "claude-hooks/lib/hook-io.mjs"() {
     "use strict";
     init_hook_timing();
+    init_knobs();
+    init_knobs();
     defaultSharedState = () => ({
       lazyModules: /* @__PURE__ */ Object.create(null),
       cliEntryClaimed: false,
@@ -584,8 +748,6 @@ var init_hook_io = __esm({
       ASK: "ask"
     });
     FAIL_OPEN_ENV = "AGENT_SANITIZER_FAIL_OPEN";
-    FAIL_CLOSED_VALUES = Object.freeze(["0", "false"]);
-    FAIL_CLOSED_SET = new Set(FAIL_CLOSED_VALUES);
     DISABLED_HOOKS_ENV = "AGENT_SANITIZER_DISABLED_HOOKS";
     MAX_STDIN_BYTES = 64 * 1024 * 1024;
     lastStdinBytes = null;
@@ -611,6 +773,15 @@ function registerFaultPolicy(hook, policy) {
     throw new Error(
       `unknown hook ${JSON.stringify(hook)}: add it to FAULT_POLICY_HOOKS in claude-hooks/lib/hook-fault.mjs before registering a posture for it`
     );
+  for (
+    const arm of
+    /** @type {const} */
+    ["alwaysClosed", "closed"]
+  )
+    if (typeof policy[arm] !== "function")
+      throw new Error(
+        `fault policy for ${JSON.stringify(hook)} declares no \`${arm}\`; every hook states it explicitly (KNOB_DECIDES for alwaysClosed)`
+      );
   policies.set(hook, policy);
 }
 function faultPolicy(hook) {
@@ -626,13 +797,16 @@ function defaultOpen(ctx) {
 }
 function hookFaultOutcome(hook, err, ctx = {}) {
   const policy = faultPolicy(hook);
-  const open = failOpenEnabled(ctx.env);
+  const knobOpen = failOpenEnabled(ctx.env);
+  const pinnedClosed = knobOpen && policy.alwaysClosed(ctx.env);
+  const open = knobOpen && !pinnedClosed;
   const full = {
     ...ctx,
     hook,
     err,
     message: safeErrMessage(err),
-    openContext: failOpenContext(hook, policy.guarded, err)
+    openContext: failOpenContext(hook, policy.guarded, err),
+    pinnedClosed
   };
   const parts2 = (open ? policy.open ?? defaultOpen : policy.closed)(full);
   const fields = parts2.fields ?? null;
@@ -655,7 +829,7 @@ function writeFaultOutcome(outcome, write = (chunk) => process.stdout.write(chun
   if (outcome.stderr !== null) writeErr(outcome.stderr);
   return outcome.exitCode;
 }
-var FAULT_POLICY_HOOKS, policies;
+var FAULT_POLICY_HOOKS, KNOB_DECIDES, policies;
 var init_hook_fault = __esm({
   "claude-hooks/lib/hook-fault.mjs"() {
     "use strict";
@@ -668,6 +842,7 @@ var init_hook_fault = __esm({
       "scan-invisible-chars",
       "scan-loaded-instructions"
     ]);
+    KNOB_DECIDES = Object.freeze(() => false);
     policies = /* @__PURE__ */ new Map();
   }
 });
@@ -3345,67 +3520,67 @@ function orphanKindFor(ch, next2) {
   if (ch.charCodeAt(0) !== ESC) return TOKEN_KIND.ORPHAN_C1;
   return next2 === "[" ? TOKEN_KIND.ORPHAN_CSI : TOKEN_KIND.ORPHAN;
 }
-function scanControlString(text5, start) {
-  const code4 = text5.charCodeAt(start);
-  const second = code4 === ESC ? text5[start + 1] : void 0;
+function scanControlString(text6, start) {
+  const code4 = text6.charCodeAt(start);
+  const second = code4 === ESC ? text6[start + 1] : void 0;
   const sevenBit = second !== void 0 && STRING_INTRO_7BIT.includes(second);
   if (!sevenBit && !STRING_INTRO_C1.has(code4)) return null;
   const kind2 = second === OSC_7BIT || code4 === OSC_C1 ? TOKEN_KIND.OSC : TOKEN_KIND.CONTROL_STRING;
   let i = sevenBit ? start + 2 : start + 1;
-  for (; i < text5.length; i++) {
-    const byte = text5.charCodeAt(i);
+  for (; i < text6.length; i++) {
+    const byte = text6.charCodeAt(i);
     if (byte === BEL || byte === ST_C1 || byte === CAN || byte === SUB)
       return { end: i + 1, kind: kind2 };
-    if (byte === ESC) return { end: text5[i + 1] === "\\" ? i + 2 : i, kind: kind2 };
+    if (byte === ESC) return { end: text6[i + 1] === "\\" ? i + 2 : i, kind: kind2 };
     if (STRING_INTRO_C1.has(byte) || byte === LF || byte === CR)
       return { end: i, kind: kind2 };
   }
-  return { end: text5.length, kind: kind2 };
+  return { end: text6.length, kind: kind2 };
 }
-function sequenceEnd(text5, i, finalRe) {
-  if (i >= text5.length) return -1;
-  if (finalRe.test(text5[i]) || SEQUENCE_CANCEL.includes(text5.charCodeAt(i)))
+function sequenceEnd(text6, i, finalRe) {
+  if (i >= text6.length) return -1;
+  if (finalRe.test(text6[i]) || SEQUENCE_CANCEL.includes(text6.charCodeAt(i)))
     return i + 1;
-  return INTRODUCER_RE.test(text5[i]) ? i : -1;
+  return INTRODUCER_RE.test(text6[i]) ? i : -1;
 }
-function scanCsi(text5, start) {
-  const code4 = text5.charCodeAt(start);
+function scanCsi(text6, start) {
+  const code4 = text6.charCodeAt(start);
   let i;
   if (code4 === CSI_C1) i = start + 1;
-  else if (code4 === ESC && text5[start + 1] === "[") i = start + 2;
+  else if (code4 === ESC && text6[start + 1] === "[") i = start + 2;
   else return -1;
-  while (i < text5.length && CSI_BODY_RE.test(text5[i])) i++;
-  return sequenceEnd(text5, i, CSI_FINAL_RE);
+  while (i < text6.length && CSI_BODY_RE.test(text6[i])) i++;
+  return sequenceEnd(text6, i, CSI_FINAL_RE);
 }
-function scanEscape(text5, start) {
-  if (text5.charCodeAt(start) !== ESC) return -1;
+function scanEscape(text6, start) {
+  if (text6.charCodeAt(start) !== ESC) return -1;
   let i = start + 1;
-  while (i < text5.length && ESC_INTERMEDIATE_RE.test(text5[i])) i++;
-  if (i > start + 1) return sequenceEnd(text5, i, ESC_FINAL_RE);
-  if (i >= text5.length) return -1;
-  const directEnd = ESC_DIRECT_FINAL_RE.test(text5[i]) || SEQUENCE_CANCEL.includes(text5.charCodeAt(i));
+  while (i < text6.length && ESC_INTERMEDIATE_RE.test(text6[i])) i++;
+  if (i > start + 1) return sequenceEnd(text6, i, ESC_FINAL_RE);
+  if (i >= text6.length) return -1;
+  const directEnd = ESC_DIRECT_FINAL_RE.test(text6[i]) || SEQUENCE_CANCEL.includes(text6.charCodeAt(i));
   return directEnd ? i + 1 : -1;
 }
-function isCancelledOrphan(text5, token) {
-  return isOrphanKind(token.kind) && token.end < text5.length && INTRODUCER_RE.test(text5[token.end]);
+function isCancelledOrphan(text6, token) {
+  return isOrphanKind(token.kind) && token.end < text6.length && INTRODUCER_RE.test(text6[token.end]);
 }
-function scanAnsi(text5) {
+function scanAnsi(text6) {
   const tokens = [];
   INTRODUCER_SCAN_RE.lastIndex = 0;
   let match;
-  while ((match = INTRODUCER_SCAN_RE.exec(text5)) !== null) {
+  while ((match = INTRODUCER_SCAN_RE.exec(text6)) !== null) {
     const start = match.index;
-    const string3 = scanControlString(text5, start);
-    let csiEnd = string3 ? -1 : scanCsi(text5, start);
-    if (!string3 && csiEnd < 0) csiEnd = scanEscape(text5, start);
+    const string3 = scanControlString(text6, start);
+    let csiEnd = string3 ? -1 : scanCsi(text6, start);
+    if (!string3 && csiEnd < 0) csiEnd = scanEscape(text6, start);
     let end = start + 1;
-    let kind2 = orphanKindFor(text5[start], text5[start + 1]);
+    let kind2 = orphanKindFor(text6[start], text6[start + 1]);
     if (string3) {
       end = string3.end;
       kind2 = string3.kind;
     } else if (csiEnd >= 0) {
       end = csiEnd;
-      kind2 = SGR_ANCHORED_RE.test(text5.slice(start, csiEnd)) ? TOKEN_KIND.SGR : TOKEN_KIND.CSI;
+      kind2 = SGR_ANCHORED_RE.test(text6.slice(start, csiEnd)) ? TOKEN_KIND.SGR : TOKEN_KIND.CSI;
     }
     tokens.push({ start, end, kind: kind2 });
     INTRODUCER_SCAN_RE.lastIndex = end;
@@ -3591,29 +3766,29 @@ function cfClassSource(codepoints) {
   }
   return src + "]";
 }
-function isSgrOnly(text5) {
-  return scanAnsi(text5).every((token) => token.kind === TOKEN_KIND.SGR);
+function isSgrOnly(text6) {
+  return scanAnsi(text6).every((token) => token.kind === TOKEN_KIND.SGR);
 }
-function* findLongRuns(text5) {
+function* findLongRuns(text6) {
   let pos = 0;
   for (; ; ) {
     LONG_RUN_CHUNK_RE.lastIndex = pos;
-    const match = LONG_RUN_CHUNK_RE.exec(text5);
+    const match = LONG_RUN_CHUNK_RE.exec(text6);
     if (match === null) return;
     let end = LONG_RUN_CHUNK_RE.lastIndex;
     for (; ; ) {
       RUN_TAIL_RE.lastIndex = end;
-      if (RUN_TAIL_RE.exec(text5) === null) break;
+      if (RUN_TAIL_RE.exec(text6) === null) break;
       end = RUN_TAIL_RE.lastIndex;
     }
-    const run = text5.slice(match.index, end);
+    const run = text6.slice(match.index, end);
     yield { index: match.index, text: run, charCount: codePointLength(run) };
     pos = end;
   }
 }
-function hasLongRun(text5) {
+function hasLongRun(text6) {
   LONG_RUN_CHUNK_RE.lastIndex = 0;
-  return LONG_RUN_CHUNK_RE.test(text5);
+  return LONG_RUN_CHUNK_RE.test(text6);
 }
 function describeStripped(invisFound, deAnsi) {
   let msg = `Stripped: ${invisFound.map((code4) => CATEGORY_LABELS[code4]).join(", ")}`;
@@ -3646,14 +3821,14 @@ function memoizedCpPredicate(re) {
     return answer;
   };
 }
-function codePointArray(text5) {
-  const cps = new Int32Array(text5.length);
+function codePointArray(text6) {
+  const cps = new Int32Array(text6.length);
   let n = 0;
-  for (let i = 0; i < text5.length; i++) {
-    const unit = text5.charCodeAt(i);
+  for (let i = 0; i < text6.length; i++) {
+    const unit = text6.charCodeAt(i);
     let cp = unit;
-    if (unit >= 55296 && unit <= 56319 && i + 1 < text5.length) {
-      const low = text5.charCodeAt(i + 1);
+    if (unit >= 55296 && unit <= 56319 && i + 1 < text6.length) {
+      const low = text6.charCodeAt(i + 1);
       if (low >= 56320 && low <= 57343) {
         cp = (unit - 55296) * 1024 + (low - 56320) + 65536;
         i++;
@@ -3663,11 +3838,11 @@ function codePointArray(text5) {
   }
   return n === cps.length ? cps : cps.subarray(0, n);
 }
-function hasInvisibleCodePoint(text5) {
-  for (let i = 0; i < text5.length; i++) {
-    let cp = text5.charCodeAt(i);
-    if (cp >= 55296 && cp <= 56319 && i + 1 < text5.length) {
-      const low = text5.charCodeAt(i + 1);
+function hasInvisibleCodePoint(text6) {
+  for (let i = 0; i < text6.length; i++) {
+    let cp = text6.charCodeAt(i);
+    if (cp >= 55296 && cp <= 56319 && i + 1 < text6.length) {
+      const low = text6.charCodeAt(i + 1);
       if (low >= 56320 && low <= 57343) {
         cp = (cp - 55296) * 1024 + (low - 56320) + 65536;
         i++;
@@ -3677,9 +3852,9 @@ function hasInvisibleCodePoint(text5) {
   }
   return false;
 }
-function codePointLength(text5) {
+function codePointLength(text6) {
   let n = 0;
-  const iterator = text5[Symbol.iterator]();
+  const iterator = text6[Symbol.iterator]();
   while (!iterator.next().done) n++;
   return n;
 }
@@ -3776,9 +3951,9 @@ function analyzeCarve(cps) {
   for (const i of invisible) if (kind2[i] === KIND_NONE) payloadInvis++;
   return { codes, kind: kind2, payloadInvis, visibleLen };
 }
-function countPayloadInvisible(text5) {
-  if (!hasInvisibleCodePoint(text5)) return 0;
-  return analyzeCarve(codePointArray(text5)).payloadInvis;
+function countPayloadInvisible(text6) {
+  if (!hasInvisibleCodePoint(text6)) return 0;
+  return analyzeCarve(codePointArray(text6)).payloadInvis;
 }
 function bulkStrip(body) {
   const found = CHECKS.filter(([, re]) => body.search(re) !== -1).map(
@@ -4011,8 +4186,8 @@ function carveStrip(body, cps = codePointArray(body), analysis = analyzeCarve(cp
 function needsCarveOut(body) {
   return body.includes(String.fromCodePoint(ZWNJ)) || body.includes(String.fromCodePoint(ZWJ)) || VARIATION_SELECTOR.test(body) || TAG_CHAR_RE.test(body) || GATED_BLANK_RE.test(body);
 }
-function payloadInvisibleView(text5) {
-  const cps = codePointArray(text5);
+function payloadInvisibleView(text6) {
+  const cps = codePointArray(text6);
   const { codes, kind: kind2 } = analyzeCarve(cps);
   const offsets = u16Offsets(cps);
   const isPayload = (i2) => codes[i2] !== CODE_VISIBLE && kind2[i2] === KIND_NONE;
@@ -4024,33 +4199,33 @@ function payloadInvisibleView(text5) {
     if (i > maskFrom) parts2.push(" ".repeat(i - maskFrom));
     const keepFrom = i;
     while (i < cps.length && isPayload(i)) i++;
-    if (i > keepFrom) parts2.push(text5.slice(offsets[keepFrom], offsets[i]));
+    if (i > keepFrom) parts2.push(text6.slice(offsets[keepFrom], offsets[i]));
   }
   return parts2.join("");
 }
-function payloadLongRunSample(text5) {
-  if (!hasLongRun(text5)) return null;
-  return findLongRuns(payloadInvisibleView(text5)).next().value?.text ?? null;
+function payloadLongRunSample(text6) {
+  if (!hasLongRun(text6)) return null;
+  return findLongRuns(payloadInvisibleView(text6)).next().value?.text ?? null;
 }
-function countEffectiveInvisible(text5) {
-  if (!hasInvisibleCodePoint(text5)) return 0;
-  if (text5.charCodeAt(0) === 65279)
-    return surplusOver(countPayloadInvisible(text5), text5, stripInvisible(text5));
-  const cps = codePointArray(text5);
+function countEffectiveInvisible(text6) {
+  if (!hasInvisibleCodePoint(text6)) return 0;
+  if (text6.charCodeAt(0) === 65279)
+    return surplusOver(countPayloadInvisible(text6), text6, stripInvisible(text6));
+  const cps = codePointArray(text6);
   const analysis = analyzeCarve(cps);
-  const { cleaned } = stripBody(text5, cps, analysis);
-  return surplusOver(analysis.payloadInvis, text5, cleaned, cps.length);
+  const { cleaned } = stripBody(text6, cps, analysis);
+  return surplusOver(analysis.payloadInvis, text6, cleaned, cps.length);
 }
-function surplusOver(payload, text5, stripped, cpLen) {
-  const removed = stripped === text5 ? 0 : (cpLen ?? codePointLength(text5)) - codePointLength(stripped);
+function surplusOver(payload, text6, stripped, cpLen) {
+  const removed = stripped === text6 ? 0 : (cpLen ?? codePointLength(text6)) - codePointLength(stripped);
   return payload + Math.max(0, removed - payload);
 }
-function isIncidentalInvisible(text5) {
-  return payloadLongRunSample(text5) === null && countEffectiveInvisible(text5) < LONG_RUN_THRESHOLD;
+function isIncidentalInvisible(text6) {
+  return payloadLongRunSample(text6) === null && countEffectiveInvisible(text6) < LONG_RUN_THRESHOLD;
 }
-function stripInvisibleWithReport(text5, originalText = text5) {
-  const hasLeadingBom = originalText.charCodeAt(0) === 65279 && text5.charCodeAt(0) === 65279;
-  const body = hasLeadingBom ? text5.slice(1) : text5;
+function stripInvisibleWithReport(text6, originalText = text6) {
+  const hasLeadingBom = originalText.charCodeAt(0) === 65279 && text6.charCodeAt(0) === 65279;
+  const body = hasLeadingBom ? text6.slice(1) : text6;
   const { cleaned, found } = stripBody(body);
   return { cleaned: hasLeadingBom ? BOM + cleaned : cleaned, found };
 }
@@ -4058,8 +4233,8 @@ function stripBody(body, cps, analysis) {
   if (!needsCarveOut(body)) return bulkStrip(body);
   return carveStrip(body, cps, analysis);
 }
-function stripInvisible(text5) {
-  return stripInvisibleWithReport(text5).cleaned;
+function stripInvisible(text6) {
+  return stripInvisibleWithReport(text6).cleaned;
 }
 var VS, ZERO_WIDTH_MN, BLANK_NON_CF, REGEX_FLAGS, CF_CLASS_SOURCE, CATEGORY, CATEGORY_LABELS, CHECKS, STRIP, LONG_RUN_THRESHOLD, SCATTERED_THRESHOLD, LONG_RUN_RE, RUN_CHUNK, LONG_RUN_CHUNK_RE, RUN_TAIL_RE, BOM, ZWNJ, ZWJ, CONSECUTIVE_JOINER_CAP, CONSECUTIVE_SELECTOR_CAP, TOTAL_PRESERVED_JOINER_BUDGET, PRESERVED_JOINER_PER_VISIBLE, PRESERVE_HARD_CAP, TOTAL_PRESERVED_BLANK_BUDGET, PRESERVED_BLANK_PER_ANCHOR, LINGUISTIC_SCRIPTS, EMOJI_LEFT, KEYCAP_BASE, COMBINING_KEYCAP, EMOJI_BASE, VARIATION_SELECTOR, isEmojiLeft, isEmojiBase, isKeycapBase, isVariationSelectorCp, PRESENTATION_SELECTORS, TAG_BASE, TAG_CANCEL, TAG_SPEC_MIN, TAG_SPEC_MAX, REGISTERED_TAG_PAYLOADS, MAX_TAG_SPEC_CHARS, IVS_MIN, IVS_MAX, CJK_IDEOGRAPH_RE, isCjkIdeograph, BRAILLE_BLANK, HANGUL_FILLERS, GATED_BLANK_RE, BRAILLE_RE, isBrailleScript, HANGUL_RE, isHangulScript, CODE_VISIBLE, CODE_CF, CODE_VS, CODE_BLANK, KIND_NONE, KIND_JOINER, KIND_EMOJIVS, KIND_TAG, KIND_STDVS, KIND_IVS, KIND_BLANK, CODE_CATEGORY, TRACKED_INVISIBLE, MIN_TRACKED_CP, CP_PREDICATE_MEMO_CAP, isCursiveLetter, jtOf, segmenterCache, CONTAINING_CANDIDATE_SHARE, TAG_CHAR_RE;
 var init_invisible = __esm({
@@ -4221,14 +4396,14 @@ var init_invisible = __esm({
 });
 
 // src/gates.mjs
-function needsMarkdownPipeline(text5) {
-  return HTML_TAG_PRESENT.test(text5) || MD_LINK_HINT.test(text5);
+function needsMarkdownPipeline(text6) {
+  return HTML_TAG_PRESENT.test(text6) || MD_LINK_HINT.test(text6);
 }
-function needsUrlScan(text5) {
-  return URL_PRESENT.test(text5) || needsMarkdownPipeline(text5);
+function needsUrlScan(text6) {
+  return URL_PRESENT.test(text6) || needsMarkdownPipeline(text6);
 }
-function matchesSecretHint(text5) {
-  return SECRET_HINT.test(text5) || SECRET_HINT_EXT.test(text5);
+function matchesSecretHint(text6) {
+  return SECRET_HINT.test(text6) || SECRET_HINT_EXT.test(text6);
 }
 var HTML_TAG_PRESENT, MD_LINK_HINT, URL_PRESENT, SECRET_HINT, SECRET_HINT_EXT;
 var init_gates = __esm({
@@ -4243,9 +4418,9 @@ var init_gates = __esm({
 });
 
 // src/layer1.mjs
-function sweepIntroducers(text5, kinds) {
-  return text5.replace(CONTROL_INTRODUCER_RE, (ch, offset) => {
-    kinds.add(orphanKindFor(ch, text5[offset + 1]));
+function sweepIntroducers(text6, kinds) {
+  return text6.replace(CONTROL_INTRODUCER_RE, (ch, offset) => {
+    kinds.add(orphanKindFor(ch, text6[offset + 1]));
     return "";
   });
 }
@@ -4269,12 +4444,12 @@ function isBenignAnsiKinds(kinds) {
 function rendersNothing(gap) {
   return gap.replace(STRIP, "") === "";
 }
-function sgrCarriesPayload(text5) {
+function sgrCarriesPayload(text6) {
   let concealed = false;
   let run = 0;
   let previousEnd = 0;
-  for (const token of scanAnsi(text5)) {
-    const blankGap = rendersNothing(text5.slice(previousEnd, token.start));
+  for (const token of scanAnsi(text6)) {
+    const blankGap = rendersNothing(text6.slice(previousEnd, token.start));
     previousEnd = token.end;
     if (token.kind !== TOKEN_KIND.SGR) {
       run = 0;
@@ -4283,23 +4458,23 @@ function sgrCarriesPayload(text5) {
     if (concealed && !blankGap) return true;
     run = blankGap ? run + 1 : 1;
     if (run >= SGR_RUN_THRESHOLD) return true;
-    concealed = sgrConcealState(text5.slice(token.start, token.end), concealed);
+    concealed = sgrConcealState(text6.slice(token.start, token.end), concealed);
   }
   return concealed;
 }
-function isBenignAnsi(text5) {
-  return isBenignAnsiKinds(applyLayer1(text5).ansiKinds);
+function isBenignAnsi(text6) {
+  return isBenignAnsiKinds(applyLayer1(text6).ansiKinds);
 }
-function applyLayer1(text5) {
+function applyLayer1(text6) {
   const ansiKinds = /* @__PURE__ */ new Set();
-  const deAnsi = stripAnsiFully(text5, ansiKinds);
+  const deAnsi = stripAnsiFully(text6, ansiKinds);
   const found = /* @__PURE__ */ new Set();
-  let cleaned = text5;
+  let cleaned = text6;
   for (let pass = 0; pass < MAX_LAYER1_PASSES; pass++) {
     const afterAnsi = pass === 0 ? deAnsi : stripAnsiFully(cleaned, ansiKinds);
     const { cleaned: afterInvis, found: passFound } = stripInvisibleWithReport(
       afterAnsi,
-      text5
+      text6
     );
     for (const category of passFound) found.add(category);
     if (afterInvis !== cleaned) {
@@ -4314,11 +4489,11 @@ function applyLayer1(text5) {
   if (ansiKinds.size > 0) found.add(CATEGORY.ANSI);
   return { cleaned, deAnsi, found: [...found], ansiKinds: [...ansiKinds] };
 }
-function normalizeLoneSurrogates(text5) {
-  return text5.replace(LONE_SURROGATE_RE, "\uFFFD");
+function normalizeLoneSurrogates(text6) {
+  return text6.replace(LONE_SURROGATE_RE, "\uFFFD");
 }
-function applyLayer1WellFormed(text5) {
-  const result = applyLayer1(text5);
+function applyLayer1WellFormed(text6) {
+  const result = applyLayer1(text6);
   const cleaned = normalizeLoneSurrogates(result.cleaned);
   if (cleaned === result.cleaned) return result;
   return {
@@ -4371,8 +4546,8 @@ function isInsideDir(dir, file) {
   const rel = relative(dir, file);
   return rel !== "" && rel !== ".." && !rel.startsWith(`..${sep}`) && !isAbsolute(rel);
 }
-function displayUntrusted(text5) {
-  return text5.replace(
+function displayUntrusted(text6) {
+  return text6.replace(
     DISPLAY_UNSAFE,
     (ch) => `\\u{${/** @type {number} */
     ch.codePointAt(0).toString(16).toUpperCase()}}`
@@ -4568,21 +4743,21 @@ __export(view_map_exports, {
   toUtf16View: () => toUtf16View,
   viewMapDefect: () => viewMapDefect
 });
-function makeFileView(text5, pairs, space) {
-  assertPairsOrdered(text5, pairs, space);
+function makeFileView(text6, pairs, space) {
+  assertPairsOrdered(text6, pairs, space);
   return Object.freeze({
     [FILE_VIEW]: true,
     space,
-    text: text5,
+    text: text6,
     pairs: Object.freeze(pairs.map((pair) => Object.freeze({ ...pair })))
   });
 }
-function unitLength(text5, space) {
-  return space === "utf16" ? text5.length : Array.from(text5).length;
+function unitLength(text6, space) {
+  return space === "utf16" ? text6.length : Array.from(text6).length;
 }
-function assertPairsOrdered(text5, pairs, space) {
+function assertPairsOrdered(text6, pairs, space) {
   if (pairs.length === 0) return;
-  const total = unitLength(text5, space);
+  const total = unitLength(text6, space);
   let prevEnd = 0;
   for (const pair of pairs) {
     if (!Number.isInteger(pair.start) || pair.start < 0 || pair.start > total)
@@ -4660,10 +4835,10 @@ function diskOffset(deletions, cleanedOffset, isEnd) {
   }
   return cleanedOffset + extra;
 }
-function pairsToUtf16(text5, pairs) {
+function pairsToUtf16(text6, pairs) {
   if (pairs.length === 0) return pairs;
-  assertPairsOrdered(text5, pairs, "codePoint");
-  const codePoints = Array.from(text5);
+  assertPairsOrdered(text6, pairs, "codePoint");
+  const codePoints = Array.from(text6);
   const prefix = new Array(codePoints.length + 1);
   prefix[0] = 0;
   for (let i = 0; i < codePoints.length; i++)
@@ -4705,26 +4880,26 @@ function resolveSpan(content3, cleaned, view, deletions, viewStart, viewEnd) {
     )
   };
 }
-function orderedMatches(text5, needles) {
+function orderedMatches(text6, needles) {
   const out = [];
   for (const needle of needles)
-    for (const index2 of occurrences(text5, needle))
+    for (const index2 of occurrences(text6, needle))
       out.push({ text: needle, index: index2 });
   return out.sort((left, right) => left.index - right.index);
 }
-function spliceOrdered(text5, matches, replacementFor) {
+function spliceOrdered(text6, matches, replacementFor) {
   let out = "";
   let last = 0;
   const spans = [];
   matches.forEach((match, i) => {
     if (match.index < last) return;
-    out += text5.slice(last, match.index);
+    out += text6.slice(last, match.index);
     const start = out.length;
     out += replacementFor(match, i);
     spans.push({ start, end: out.length });
     last = match.index + match.text.length;
   });
-  return { text: out + text5.slice(last), spans };
+  return { text: out + text6.slice(last), spans };
 }
 function anchorSpans(content3, view) {
   assertFileView(view, "utf16", "anchorSpans");
@@ -16393,7 +16568,7 @@ function resolveAllAttention(events, context) {
   let index2 = -1;
   let open;
   let group;
-  let text5;
+  let text6;
   let openingSequence;
   let closingSequence;
   let use;
@@ -16431,7 +16606,7 @@ function resolveAllAttention(events, context) {
             },
             end
           };
-          text5 = {
+          text6 = {
             type: use > 1 ? "strongText" : "emphasisText",
             start: {
               ...events[open][1].end
@@ -16459,9 +16634,9 @@ function resolveAllAttention(events, context) {
           if (events[open][1].end.offset - events[open][1].start.offset) {
             nextEvents = push(nextEvents, [["enter", events[open][1], context], ["exit", events[open][1], context]]);
           }
-          nextEvents = push(nextEvents, [["enter", group, context], ["enter", openingSequence, context], ["exit", openingSequence, context], ["enter", text5, context]]);
+          nextEvents = push(nextEvents, [["enter", group, context], ["enter", openingSequence, context], ["exit", openingSequence, context], ["enter", text6, context]]);
           nextEvents = push(nextEvents, resolveAll(context.parser.constructs.insideSpan.null, events.slice(open + 1, index2), context));
-          nextEvents = push(nextEvents, [["exit", text5, context], ["enter", closingSequence, context], ["exit", closingSequence, context], ["exit", group, context]]);
+          nextEvents = push(nextEvents, [["exit", text6, context], ["enter", closingSequence, context], ["exit", closingSequence, context], ["exit", group, context]]);
           if (events[index2][1].end.offset - events[index2][1].start.offset) {
             offset = 2;
             nextEvents = push(nextEvents, [["enter", events[index2][1], context], ["exit", events[index2][1], context]]);
@@ -18029,7 +18204,7 @@ function resolveHeadingAtx(events, context) {
   let contentEnd = events.length - 2;
   let contentStart = 3;
   let content3;
-  let text5;
+  let text6;
   if (events[contentStart][1].type === "whitespace") {
     contentStart += 2;
   }
@@ -18045,13 +18220,13 @@ function resolveHeadingAtx(events, context) {
       start: events[contentStart][1].start,
       end: events[contentEnd][1].end
     };
-    text5 = {
+    text6 = {
       type: "chunkText",
       start: events[contentStart][1].start,
       end: events[contentEnd][1].end,
       contentType: "text"
     };
-    splice(events, contentStart, contentEnd - contentStart + 1, [["enter", content3, context], ["enter", text5, context], ["exit", text5, context], ["exit", content3, context]]);
+    splice(events, contentStart, contentEnd - contentStart + 1, [["enter", content3, context], ["enter", text6, context], ["exit", text6, context], ["exit", content3, context]]);
   }
   return events;
 }
@@ -18959,7 +19134,7 @@ function resolveToLabelEnd(events, context) {
       ...events[close][1].end
     }
   };
-  const text5 = {
+  const text6 = {
     type: "labelText",
     start: {
       ...events[open + offset + 2][1].end
@@ -18970,9 +19145,9 @@ function resolveToLabelEnd(events, context) {
   };
   media = [["enter", group, context], ["enter", label, context]];
   media = push(media, events.slice(open + 1, open + offset + 3));
-  media = push(media, [["enter", text5, context]]);
+  media = push(media, [["enter", text6, context]]);
   media = push(media, resolveAll(context.parser.constructs.insideSpan.null, events.slice(open + offset + 4, close - 3), context));
-  media = push(media, [["exit", text5, context], events[close - 2], events[close - 1], ["exit", label, context]]);
+  media = push(media, [["exit", text6, context], events[close - 2], events[close - 1], ["exit", label, context]]);
   media = push(media, events.slice(close + 1));
   media = push(media, [["exit", group, context]]);
   splice(events, open, events.length, media);
@@ -19409,7 +19584,7 @@ var init_list = __esm({
 function resolveToSetextUnderline(events, context) {
   let index2 = events.length;
   let content3;
-  let text5;
+  let text6;
   let definition3;
   while (index2--) {
     if (events[index2][0] === "enter") {
@@ -19418,7 +19593,7 @@ function resolveToSetextUnderline(events, context) {
         break;
       }
       if (events[index2][1].type === "paragraph") {
-        text5 = index2;
+        text6 = index2;
       }
     } else {
       if (events[index2][1].type === "content") {
@@ -19438,9 +19613,9 @@ function resolveToSetextUnderline(events, context) {
       ...events[events.length - 1][1].end
     }
   };
-  events[text5][1].type = "setextHeadingText";
+  events[text6][1].type = "setextHeadingText";
   if (definition3) {
-    events.splice(text5, 0, ["enter", heading2, context]);
+    events.splice(text6, 0, ["enter", heading2, context]);
     events.splice(definition3 + 1, 0, ["exit", events[content3][1], context]);
     events[content3][1].end = {
       ...events[definition3][1].end
@@ -19586,10 +19761,10 @@ function initializeFactory(field) {
   function initializeText(effects) {
     const self = this;
     const constructs2 = this.parser.constructs[field];
-    const text5 = effects.attempt(constructs2, start, notText);
+    const text6 = effects.attempt(constructs2, start, notText);
     return start;
     function start(code4) {
-      return atBreak(code4) ? text5(code4) : notText(code4);
+      return atBreak(code4) ? text6(code4) : notText(code4);
     }
     function notText(code4) {
       if (code4 === null) {
@@ -19603,7 +19778,7 @@ function initializeFactory(field) {
     function data(code4) {
       if (atBreak(code4)) {
         effects.exit("data");
-        return text5(code4);
+        return text6(code4);
       }
       effects.consume(code4);
       return data;
@@ -19710,14 +19885,14 @@ function resolveAllLineSuffixes(events, context) {
   }
   return events;
 }
-var resolver, string, text;
+var resolver, string, text2;
 var init_text = __esm({
   "node_modules/.pnpm/micromark@4.0.2/node_modules/micromark/lib/initialize/text.js"() {
     resolver = {
       resolveAll: createResolver()
     };
     string = initializeFactory("string");
-    text = initializeFactory("text");
+    text2 = initializeFactory("text");
   }
 });
 
@@ -19732,9 +19907,9 @@ __export(constructs_exports, {
   flowInitial: () => flowInitial,
   insideSpan: () => insideSpan,
   string: () => string2,
-  text: () => text2
+  text: () => text3
 });
-var document2, contentInitial, flowInitial, flow2, string2, text2, insideSpan, attentionMarkers, disable;
+var document2, contentInitial, flowInitial, flow2, string2, text3, insideSpan, attentionMarkers, disable;
 var init_constructs = __esm({
   "node_modules/.pnpm/micromark@4.0.2/node_modules/micromark/lib/constructs.js"() {
     init_micromark_core_commonmark();
@@ -19777,7 +19952,7 @@ var init_constructs = __esm({
       [38]: characterReference,
       [92]: characterEscape
     };
-    text2 = {
+    text3 = {
       [-5]: lineEnding,
       [-4]: lineEnding,
       [-3]: lineEnding,
@@ -20148,7 +20323,7 @@ function parse51(options) {
     flow: create2(flow),
     lazy: {},
     string: create2(string),
-    text: create2(text)
+    text: create2(text2)
   };
   return parser;
   function create2(initial) {
@@ -20685,7 +20860,7 @@ function compiler(options) {
     const siblings = node2.children;
     let tail = siblings[siblings.length - 1];
     if (!tail || tail.type !== "text") {
-      tail = text5();
+      tail = text6();
       tail.position = {
         start: point2(token.start),
         // @ts-expect-error: we’ll add `end` later.
@@ -20930,7 +21105,7 @@ function compiler(options) {
       children: []
     };
   }
-  function text5() {
+  function text6() {
     return {
       type: "text",
       value: ""
@@ -22657,12 +22832,12 @@ function linkReference(node2, _, state, info) {
   let subexit = state.enter("label");
   const tracker = state.createTracker(info);
   let value = tracker.move("[");
-  const text5 = state.containerPhrasing(node2, {
+  const text6 = state.containerPhrasing(node2, {
     before: value,
     after: "]",
     ...tracker.current()
   });
-  value += tracker.move(text5 + "][");
+  value += tracker.move(text6 + "][");
   subexit();
   const stack = state.stack;
   state.stack = [];
@@ -22675,7 +22850,7 @@ function linkReference(node2, _, state, info) {
   subexit();
   state.stack = stack;
   exit3();
-  if (type === "full" || !text5 || text5 !== reference) {
+  if (type === "full" || !text6 || text6 !== reference) {
     value += tracker.move(reference + "]");
   } else if (type === "shortcut") {
     value = value.slice(0, -1);
@@ -22991,7 +23166,7 @@ var init_strong = __esm({
 });
 
 // node_modules/.pnpm/mdast-util-to-markdown@2.1.2/node_modules/mdast-util-to-markdown/lib/handle/text.js
-function text3(node2, _, state, info) {
+function text4(node2, _, state, info) {
   return state.safe(node2.value, info);
 }
 var init_text2 = __esm({
@@ -23068,7 +23243,7 @@ var init_handle = __esm({
       paragraph,
       root,
       strong,
-      text: text3,
+      text: text4,
       thematicBreak: thematicBreak2
     };
   }
@@ -23701,17 +23876,17 @@ function gfmStrikethrough(options) {
               start: Object.assign({}, events[open][1].start),
               end: Object.assign({}, events[index2][1].end)
             };
-            const text5 = {
+            const text6 = {
               type: "strikethroughText",
               start: Object.assign({}, events[open][1].end),
               end: Object.assign({}, events[index2][1].start)
             };
-            const nextEvents = [["enter", strikethrough, context], ["enter", events[open][1], context], ["exit", events[open][1], context], ["enter", text5, context]];
+            const nextEvents = [["enter", strikethrough, context], ["enter", events[open][1], context], ["exit", events[open][1], context], ["enter", text6, context]];
             const insideSpan2 = context.parser.constructs.insideSpan.null;
             if (insideSpan2) {
               splice(nextEvents, nextEvents.length, 0, resolveAll(insideSpan2, events.slice(open + 1, index2), context));
             }
-            splice(nextEvents, nextEvents.length, 0, [["exit", text5, context], ["enter", events[index2][1], context], ["exit", events[index2][1], context], ["exit", strikethrough, context]]);
+            splice(nextEvents, nextEvents.length, 0, [["exit", text6, context], ["enter", events[index2][1], context], ["exit", events[index2][1], context], ["exit", strikethrough, context]]);
             splice(events, open - 1, index2 - open + 3, nextEvents);
             index2 = open + nextEvents.length - 2;
             break;
@@ -24378,7 +24553,7 @@ var init_micromark_extension_gfm_task_list_item = __esm({
 // src/vendor/gfm-autolink-literal.mjs
 function gfmAutolinkLiteral() {
   return {
-    text: text4
+    text: text5
   };
 }
 function tokenizeEmailAutolink(effects, ok3, nok) {
@@ -24688,7 +24863,7 @@ function previousUnbalanced(events) {
   }
   return result;
 }
-var wwwPrefix, domain, path, trail, emailDomainDotTrail, wwwAutolink, protocolAutolink, emailAutolink, text4, code3;
+var wwwPrefix, domain, path, trail, emailDomainDotTrail, wwwAutolink, protocolAutolink, emailAutolink, text5, code3;
 var init_gfm_autolink_literal = __esm({
   "src/vendor/gfm-autolink-literal.mjs"() {
     "use strict";
@@ -24728,22 +24903,22 @@ var init_gfm_autolink_literal = __esm({
       tokenize: tokenizeEmailAutolink,
       previous: previousEmail
     };
-    text4 = {};
+    text5 = {};
     code3 = 48;
     while (code3 < 123) {
-      text4[code3] = emailAutolink;
+      text5[code3] = emailAutolink;
       code3++;
       if (code3 === 58) code3 = 65;
       else if (code3 === 91) code3 = 97;
     }
-    text4[43] = emailAutolink;
-    text4[45] = emailAutolink;
-    text4[46] = emailAutolink;
-    text4[95] = emailAutolink;
-    text4[72] = [emailAutolink, protocolAutolink];
-    text4[104] = [emailAutolink, protocolAutolink];
-    text4[87] = [emailAutolink, wwwAutolink];
-    text4[119] = [emailAutolink, wwwAutolink];
+    text5[43] = emailAutolink;
+    text5[45] = emailAutolink;
+    text5[46] = emailAutolink;
+    text5[95] = emailAutolink;
+    text5[72] = [emailAutolink, protocolAutolink];
+    text5[104] = [emailAutolink, protocolAutolink];
+    text5[87] = [emailAutolink, wwwAutolink];
+    text5[119] = [emailAutolink, wwwAutolink];
   }
 });
 
@@ -29219,22 +29394,22 @@ var init_default3 = __esm({
           node2.parentNode = null;
         }
       },
-      insertText(parentNode, text5) {
+      insertText(parentNode, text6) {
         if (parentNode.childNodes.length > 0) {
           const prevNode = parentNode.childNodes[parentNode.childNodes.length - 1];
           if (defaultTreeAdapter.isTextNode(prevNode)) {
-            prevNode.value += text5;
+            prevNode.value += text6;
             return;
           }
         }
-        defaultTreeAdapter.appendChild(parentNode, defaultTreeAdapter.createTextNode(text5));
+        defaultTreeAdapter.appendChild(parentNode, defaultTreeAdapter.createTextNode(text6));
       },
-      insertTextBefore(parentNode, text5, referenceNode) {
+      insertTextBefore(parentNode, text6, referenceNode) {
         const prevNode = parentNode.childNodes[parentNode.childNodes.indexOf(referenceNode) - 1];
         if (prevNode && defaultTreeAdapter.isTextNode(prevNode)) {
-          prevNode.value += text5;
+          prevNode.value += text6;
         } else {
-          defaultTreeAdapter.insertBefore(parentNode, defaultTreeAdapter.createTextNode(text5), referenceNode);
+          defaultTreeAdapter.insertBefore(parentNode, defaultTreeAdapter.createTextNode(text6), referenceNode);
         }
       },
       adoptAttributes(recipient, attrs) {
@@ -34726,14 +34901,14 @@ function createTreeAdapter() {
       defaultTreeAdapter.insertBefore(parent, child, reference);
     },
     /** @param {any} parent @param {string} text */
-    insertText(parent, text5) {
+    insertText(parent, text6) {
       flush(parent);
-      defaultTreeAdapter.insertText(parent, text5);
+      defaultTreeAdapter.insertText(parent, text6);
     },
     /** @param {any} parent @param {string} text @param {any} reference */
-    insertTextBefore(parent, text5, reference) {
+    insertTextBefore(parent, text6, reference) {
       flush(parent);
-      defaultTreeAdapter.insertTextBefore(parent, text5, reference);
+      defaultTreeAdapter.insertTextBefore(parent, text6, reference);
     }
   };
   return { adapter, settle };
@@ -35346,13 +35521,13 @@ function createInvisibleCharacterValidator(options) {
     return null;
   };
 }
-function canonicalise(text5, options) {
-  if (text5.length === 0) return "";
-  if (isAllAscii(text5) || !hasAnyConfusableChar(text5)) return text5;
+function canonicalise(text6, options) {
+  if (text6.length === 0) return "";
+  if (isAllAscii(text6) || !hasAnyConfusableChar(text6)) return text6;
   const normalized = normalizeScanOptions(options);
   const replaceAll = normalized.strategy === "all";
   const replacements = [];
-  forEachToken(text5, (token) => {
+  forEachToken(text6, (token) => {
     const { hasLatin } = hasMixedScriptsInToken(token);
     if (!replaceAll && !hasLatin) return;
     for (const item of token) {
@@ -35362,18 +35537,18 @@ function canonicalise(text5, options) {
       }
     }
   });
-  if (replacements.length === 0) return text5;
+  if (replacements.length === 0) return text6;
   let result = "";
   let pos = 0;
   for (const [idx, len, replacement] of replacements) {
-    result += text5.slice(pos, idx) + replacement;
+    result += text6.slice(pos, idx) + replacement;
     pos = idx + len;
   }
-  result += text5.slice(pos);
+  result += text6.slice(pos);
   return result;
 }
-function scan(text5, options) {
-  if (text5.length === 0 || isAllAscii(text5) || !hasAnyConfusableChar(text5)) {
+function scan(text6, options) {
+  if (text6.length === 0 || isAllAscii(text6) || !hasAnyConfusableChar(text6)) {
     return {
       hasConfusables: false,
       count: 0,
@@ -35394,7 +35569,7 @@ function scan(text5, options) {
   const mixedWords = /* @__PURE__ */ new Set();
   const targetedWords = /* @__PURE__ */ new Set();
   const treatAllAsMixed = normalized.strategy === "all";
-  forEachToken(text5, (token) => {
+  forEachToken(text6, (token) => {
     if (token.length === 0) return;
     const word = token.map((item) => item.ch).join("");
     const lowerWord = word.toLowerCase();
@@ -35444,14 +35619,14 @@ function scan(text5, options) {
     }
   };
 }
-function isClean(text5, options) {
-  if (text5.length === 0) return true;
-  if (isAllAscii(text5)) return true;
-  if (!hasAnyConfusableChar(text5)) return true;
+function isClean(text6, options) {
+  if (text6.length === 0) return true;
+  if (isAllAscii(text6)) return true;
+  if (!hasAnyConfusableChar(text6)) return true;
   const normalized = normalizeScanOptions(options);
   const checkAll = normalized.strategy === "all";
   let clean = true;
-  forEachToken(text5, (token) => {
+  forEachToken(text6, (token) => {
     if (!checkAll) {
       const { mixedScript } = hasMixedScriptsInToken(token);
       if (!mixedScript) return;
@@ -45201,8 +45376,8 @@ function assertFinding(finding2, actual) {
         )} is not ASCII`
       );
 }
-function bytesAt(text5, finding2) {
-  return text5.slice(finding2.index, finding2.index + finding2.char.length);
+function bytesAt(text6, finding2) {
+  return text6.slice(finding2.index, finding2.index + finding2.char.length);
 }
 function isTokenBoundary(ch) {
   if (hasNonAscii(ch)) return false;
@@ -45212,14 +45387,14 @@ function isTokenBoundary(ch) {
   const isLower = code4 >= 97 && code4 <= 122;
   return !isDigit2 && !isUpper && !isLower;
 }
-function selectFoldableFindings(text5, findings) {
+function selectFoldableFindings(text6, findings) {
   for (const finding2 of findings)
-    assertFinding(finding2, bytesAt(text5, finding2));
+    assertFinding(finding2, bytesAt(text6, finding2));
   const flagged = /* @__PURE__ */ new Set();
   for (const finding2 of findings)
     for (let i = 0; i < finding2.char.length; i++)
       flagged.add(finding2.index + i);
-  const foldableAt = new Uint8Array(text5.length);
+  const foldableAt = new Uint8Array(text6.length);
   let start = 0;
   let foldable = true;
   let glyphs = 0;
@@ -45231,7 +45406,7 @@ function selectFoldableFindings(text5, findings) {
     glyphs = 0;
     anchored = false;
   };
-  for (const ch of text5) {
+  for (const ch of text6) {
     if (isTokenBoundary(ch)) {
       flushToken(index2);
       start = index2 + ch.length;
@@ -45249,24 +45424,24 @@ function selectFoldableFindings(text5, findings) {
     return true;
   });
 }
-function foldConfusables(text5, findings) {
+function foldConfusables(text6, findings) {
   const tail = [];
-  let cursor = text5.length;
+  let cursor = text6.length;
   for (const finding2 of [...findings].sort(
     (lhs, rhs) => rhs.index - lhs.index
   )) {
     const end = finding2.index + finding2.char.length;
     if (end <= cursor) {
-      assertFinding(finding2, bytesAt(text5, finding2));
-      tail.push(text5.slice(end, cursor));
+      assertFinding(finding2, bytesAt(text6, finding2));
+      tail.push(text6.slice(end, cursor));
     } else {
       const overlap = takeFromTail(tail, end - cursor);
-      assertFinding(finding2, text5.slice(finding2.index, cursor) + overlap);
+      assertFinding(finding2, text6.slice(finding2.index, cursor) + overlap);
     }
     tail.push(finding2.latinEquivalent);
     cursor = finding2.index;
   }
-  return text5.slice(0, cursor) + tail.reverse().join("");
+  return text6.slice(0, cursor) + tail.reverse().join("");
 }
 function takeFromTail(tail, count) {
   const taken = [];
@@ -45848,10 +46023,10 @@ function walk(tree, test, visitor) {
 function lastParseCached(parse54) {
   let cachedText = null;
   let cachedTree = null;
-  return (text5) => {
-    if (cachedText === text5) return cachedTree;
-    const tree = parse54(text5);
-    cachedText = text5;
+  return (text6) => {
+    if (cachedText === text6) return cachedTree;
+    const tree = parse54(text6);
+    cachedText = text6;
     cachedTree = tree;
     return tree;
   };
@@ -45897,20 +46072,20 @@ function mergeRanges(ranges) {
   }
   return merged;
 }
-function spliceRanges(text5, ranges) {
+function spliceRanges(text6, ranges) {
   const merged = mergeRanges(ranges);
   let out = "";
   let cursor = 0;
   const pairs = [];
   for (const range of merged) {
-    out += text5.slice(cursor, range.start);
-    const original = text5.slice(range.start, range.end);
+    out += text6.slice(cursor, range.start);
+    const original = text6.slice(range.start, range.end);
     const placeholder = layer2Placeholder(range.kind, original);
     pairs.push({ placeholder, original, start: out.length });
     out += placeholder;
     cursor = range.end;
   }
-  return { text: out + text5.slice(cursor), pairs };
+  return { text: out + text6.slice(cursor), pairs };
 }
 function newWarned() {
   return { tags: {}, dataSrc: 0 };
@@ -46018,7 +46193,7 @@ function hasHtmlLeaf(node2) {
   for (const _ of inlineHtmlLeaves(node2)) return true;
   return false;
 }
-function scanInlineChildren(node2, text5, ranges, warned) {
+function scanInlineChildren(node2, text6, ranges, warned) {
   const state = (
     /** @type {{ tag: string | null, depth: number, regionStart: number }} */
     {
@@ -46037,7 +46212,7 @@ function scanInlineChildren(node2, text5, ranges, warned) {
     const value = child.value;
     const base = child.position.start.offset;
     const end = child.position.end.offset;
-    absorbing = foldAbsorb(absorbing, text5.slice(prevEnd, base));
+    absorbing = foldAbsorb(absorbing, text6.slice(prevEnd, base));
     if (rawText) {
       if (new RegExp(`</${rawText}(?![a-z0-9-])`, "i").test(value))
         rawText = null;
@@ -46074,14 +46249,14 @@ function scanInlineChildren(node2, text5, ranges, warned) {
     });
   }
 }
-function scanMarkdown(text5) {
-  const tree = parseMarkdown(text5);
+function scanMarkdown(text6) {
+  const tree = parseMarkdown(text6);
   const ranges = [];
   const warned = newWarned();
   walk(tree, "html", (node2, _index, parent) => {
     if (!FLOW_HTML_PARENTS.has(parent?.type)) return;
     const base = node2.position.start.offset;
-    const sub = scanHtmlFragment(text5.slice(base, node2.position.end.offset));
+    const sub = scanHtmlFragment(text6.slice(base, node2.position.end.offset));
     for (const range of sub.ranges) {
       ranges.push({
         start: base + range.start,
@@ -46094,22 +46269,22 @@ function scanMarkdown(text5) {
   walk(tree, null, (node2) => {
     if (!PHRASING_ROOTS.has(node2.type)) return;
     if (!hasHtmlLeaf(node2)) return;
-    scanInlineChildren(node2, text5, ranges, warned);
+    scanInlineChildren(node2, text6, ranges, warned);
   });
   return { ranges, warned };
 }
-function hasMarkdownCode(text5) {
-  if (!MARKDOWN_CODE_HINT.test(text5)) return false;
+function hasMarkdownCode(text6) {
+  if (!MARKDOWN_CODE_HINT.test(text6)) return false;
   let found = false;
-  walk(parseMarkdown(text5), "code", () => {
+  walk(parseMarkdown(text6), "code", () => {
     found = true;
     return EXIT;
   });
   return found;
 }
-function htmlSourceTree(text5) {
-  if (hasMarkdownCode(text5)) return null;
-  const tree = parseFragment2(text5);
+function htmlSourceTree(text6) {
+  if (hasMarkdownCode(text6)) return null;
+  const tree = parseFragment2(text6);
   let sawElement = false;
   for (const node2 of tree.children) {
     if (node2.type === "element") sawElement = true;
@@ -46117,8 +46292,8 @@ function htmlSourceTree(text5) {
   }
   return sawElement ? tree : null;
 }
-function looksLikeHtmlSource(text5) {
-  return htmlSourceTree(text5) !== null;
+function looksLikeHtmlSource(text6) {
+  return htmlSourceTree(text6) !== null;
 }
 function toSourceRanges(ranges, merged, pairs) {
   const ends = pairs.map((pair) => pair.start + pair.placeholder.length);
@@ -46139,10 +46314,10 @@ function toSourceRanges(ranges, merged, pairs) {
     kind: range.kind
   }));
 }
-function sanitizeHtml(text5) {
-  if (!HTML_TAG_PRESENT.test(text5)) return null;
+function sanitizeHtml(text6) {
+  if (!HTML_TAG_PRESENT.test(text6)) return null;
   let ranges = [];
-  let spliced = { text: text5, pairs: (
+  let spliced = { text: text6, pairs: (
     /** @type {SplicePair[]} */
     []
   ) };
@@ -46176,7 +46351,7 @@ function sanitizeHtml(text5) {
       ...ranges,
       ...toSourceRanges(scan2.ranges, ranges, spliced.pairs)
     ]);
-    const next2 = spliceRanges(text5, grown);
+    const next2 = spliceRanges(text6, grown);
     if (next2.text === spliced.text) break;
     for (const range of scan2.ranges)
       removed[range.kind === "comment" ? "comments" : "hidden"]++;
@@ -46392,8 +46567,8 @@ function multiUrlAttr(value) {
   if (typeof value === "string") return parseSrcset(value);
   return [];
 }
-function extractHtmlUrls(text5) {
-  const tree = parseFragment2(text5);
+function extractHtmlUrls(text6) {
+  const tree = parseFragment2(text6);
   const urls = [];
   walk(tree, "element", (node2) => {
     const props = node2.properties;
@@ -46432,9 +46607,9 @@ function extractHtmlUrls(text5) {
   });
   return urls;
 }
-function collectUrls(text5) {
+function collectUrls(text6) {
   const urls = [];
-  walk(parseMarkdown(text5), null, (node2) => {
+  walk(parseMarkdown(text6), null, (node2) => {
     if (node2.type !== "link" && node2.type !== "image" && node2.type !== "definition")
       return;
     urls.push({
@@ -46446,14 +46621,14 @@ function collectUrls(text5) {
       context: "resource"
     });
   });
-  urls.push(...extractHtmlUrls(text5));
+  urls.push(...extractHtmlUrls(text6));
   return urls;
 }
-function detectExfil(text5, options = {}) {
-  if (!needsUrlScan(text5)) return null;
+function detectExfil(text6, options = {}) {
+  if (!needsUrlScan(text6)) return null;
   const threats = [];
   try {
-    for (const { url, isImage, autoFetched, context } of collectUrls(text5)) {
+    for (const { url, isImage, autoFetched, context } of collectUrls(text6)) {
       const reason = checkExfilUrl(url, options) || (context !== "resource" && isOffOrigin(url) ? OFF_ORIGIN_REASON[context] : null);
       if (!reason) continue;
       threats.push({ isImage, autoFetched, reason, target: urlHost(url) });
@@ -46472,12 +46647,12 @@ function detectExfil(text5, options = {}) {
   }
   return threats.length > 0 ? threats : null;
 }
-function detectConfusableHosts(text5) {
-  if (!needsUrlScan(text5)) return null;
+function detectConfusableHosts(text6) {
+  if (!needsUrlScan(text6)) return null;
   const threats = [];
   const seen = /* @__PURE__ */ new Set();
   try {
-    for (const { url } of collectUrls(text5)) {
+    for (const { url } of collectUrls(text6)) {
       const found = confusableHost(url);
       if (!found || seen.has(found.ascii)) continue;
       seen.add(found.ascii);
@@ -46784,7 +46959,7 @@ var init_html4 = __esm({
     COMMENT_PLACEHOLDER = "[HTML comment removed";
     UNPARSEABLE_PLACEHOLDER = "[HTML unparseable \u2014 withheld]";
     mdParser = unified().use(remarkParse).use(remarkGfmFixed);
-    parseMarkdown = lastParseCached((text5) => mdParser.parse(text5));
+    parseMarkdown = lastParseCached((text6) => mdParser.parse(text6));
     MARKDOWN_CODE_HINT = /```|~~~|^(?: {4}| *\t)/m;
     BOGUS_COMMENT_OPEN_RE = /<[!?]/g;
     MARKUP_OPENER_RE = /<(?:[!?]|\/?[a-zA-Z])/;
@@ -46887,11 +47062,11 @@ async function runRedact(state, redact) {
 function withheldWarning(label) {
   return `Withheld the ${label}: it could not be vetted for secrets`;
 }
-function deleteVerbatimSpans(text5, spans) {
+function deleteVerbatimSpans(text6, spans) {
   const usable = spans.filter(
     (span) => typeof span === "string" && span !== ""
   );
-  const spliced = spliceOrdered(text5, orderedMatches(text5, usable), () => "");
+  const spliced = spliceOrdered(text6, orderedMatches(text6, usable), () => "");
   return { text: spliced.text, removed: spliced.spans.length };
 }
 function layer1Finding(invisFound, ansiKinds, deAnsi, sgrCarveOut) {
@@ -46900,7 +47075,7 @@ function layer1Finding(invisFound, ansiKinds, deAnsi, sgrCarveOut) {
   if (incidental && ansiOnly) return note(INERT_ANSI_NOTE);
   return finding(!incidental, describeStripped(invisFound, deAnsi));
 }
-function processLayer1(text5, sgrCarveOut) {
+function processLayer1(text6, sgrCarveOut) {
   const findings = [];
   const found = [];
   let modified = false;
@@ -46909,7 +47084,7 @@ function processLayer1(text5, sgrCarveOut) {
     deAnsi,
     found: invisFound,
     ansiKinds
-  } = applyLayer1(text5);
+  } = applyLayer1(text6);
   let cleaned = layer1;
   if (invisFound.length > 0) {
     found.push(...invisFound);
@@ -46995,20 +47170,20 @@ async function applyMarkdownPipeline(state, { html: html4, exfilScan, flagDigest
   }
   return { reveal, splices };
 }
-async function vetStageValue(text5, redact, findings, label) {
-  if (!redact) return text5;
+async function vetStageValue(text6, redact, findings, label) {
+  if (!redact) return text6;
   try {
-    const secrets = await redact(text5);
-    return secrets ? normalizeLoneSurrogates(secrets.text) : text5;
+    const secrets = await redact(text6);
+    return secrets ? normalizeLoneSurrogates(secrets.text) : text6;
   } catch {
     findings.push(warning(withheldWarning(label)));
     return void 0;
   }
 }
-async function sanitizeText(text5, options = {}) {
+async function sanitizeText(text6, options = {}) {
   const { redact, filterInjection, sgrCarveOut = false } = options;
   const { findings, found, cleaned, modified } = processLayer1(
-    text5,
+    text6,
     sgrCarveOut
   );
   const state = {
@@ -47385,8 +47560,8 @@ __export(src_exports, {
   stripInvisible: () => stripInvisible,
   stripInvisibleWithReport: () => stripInvisibleWithReport
 });
-async function sanitize(text5, options) {
-  if (typeof text5 !== "string")
+async function sanitize(text6, options) {
+  if (typeof text6 !== "string")
     throw new TypeError("sanitize(text, options): text must be a string");
   const {
     html: html4 = false,
@@ -47394,7 +47569,7 @@ async function sanitize(text5, options) {
     flagDigestValues = false
   } = options ?? {};
   const { cleaned, found, warnings, notes, splices } = await sanitizeText(
-    text5,
+    text6,
     {
       html: html4,
       // `html` implies the scan unconditionally, and `exfilScan` can only ADD it:
@@ -47879,8 +48054,8 @@ __export(rehydrate_exports, {
   DEFAULT_HINT: () => DEFAULT_HINT,
   rehydrateRedacted: () => rehydrateRedacted
 });
-function layer1View(text5) {
-  const { cleaned: layer1Cleaned } = applyLayer1(text5);
+function layer1View(text6) {
+  const { cleaned: layer1Cleaned } = applyLayer1(text6);
   return {
     layer1Cleaned,
     cleaned: normalizeLoneSurrogates(layer1Cleaned)
@@ -48466,7 +48641,7 @@ import {
 } from "node:fs";
 import { randomBytes as randomBytes2 } from "node:crypto";
 import { basename as basename2, join as join5 } from "node:path";
-import { homedir, tmpdir, userInfo as userInfo2 } from "node:os";
+import { homedir, tmpdir } from "node:os";
 function sessionPrefix(sessionId) {
   const key = (sessionId ?? "").replace(/[^A-Za-z0-9._-]/gu, "_") || "no-session";
   return `${ALERT_BASE}.s-${key}`;
@@ -48500,7 +48675,7 @@ function dirIsTrusted(path2) {
   } catch {
     return false;
   }
-  return st.isDirectory() && st.uid === userInfo2().uid;
+  return isPrivateDir(st);
 }
 function sweepStaleSessions(sessionId) {
   const dir = tmpdir();
@@ -48620,14 +48795,14 @@ function invisibleCharAlert(sessionId) {
       const path2 = join5(dir, name50);
       if (!markerIsTrusted(path2)) continue;
       if (dir !== own5 && !withinFallbackTtl(path2)) continue;
-      const text5 = readFileSync4(path2, "utf-8").trim();
-      if (text5 !== "") parts2.push(text5);
+      const text6 = readFileSync4(path2, "utf-8").trim();
+      if (text6 !== "") parts2.push(text6);
     }
   }
   if (parts2.length === 0) return null;
   return scrubUntrustedText(parts2.join("\n"), applyLayer1WellFormed2);
 }
-function appendAlert(text5, sessionId) {
+function appendAlert(text6, sessionId) {
   const dir = alertDir(sessionId);
   const path2 = join5(dir, randomBytes2(8).toString("hex"));
   let usable;
@@ -48637,7 +48812,7 @@ function appendAlert(text5, sessionId) {
   } catch {
     usable = false;
   }
-  if (usable && writeFileNoFollow(path2, text5 + "\n")) return true;
+  if (usable && writeFileNoFollow(path2, text6 + "\n")) return true;
   process.stderr.write(
     `agent-sanitizer: could not record an instruction-file finding under ${dir}; the PreToolUse gate will NOT surface it this session.
 `
@@ -48693,15 +48868,15 @@ function authoredScopeDecision(tool) {
   if (matched) return { kind: "exempt", reason: matched.reason };
   return { kind: "undeclared" };
 }
-function isPayloadCapable(text5) {
-  if (hasLongRun2(text5)) return true;
-  return (text5.match(STRIP2)?.length ?? 0) >= SCATTERED_THRESHOLD2;
+function isPayloadCapable(text6) {
+  if (hasLongRun2(text6)) return true;
+  return (text6.match(STRIP2)?.length ?? 0) >= SCATTERED_THRESHOLD2;
 }
-function stripTerminalControls(text5) {
+function stripTerminalControls(text6) {
   const kinds = /* @__PURE__ */ new Set();
-  const deAnsi = stripAnsiFully2(text5, kinds);
-  if (deAnsi === text5) return text5;
-  if (isBenignAnsiKinds2(kinds) && !sgrCarriesPayload2(text5)) return text5;
+  const deAnsi = stripAnsiFully2(text6, kinds);
+  if (deAnsi === text6) return text6;
+  if (isBenignAnsiKinds2(kinds) && !sgrCarriesPayload2(text6)) return text6;
   return deAnsi;
 }
 function sanitizeField(value) {
@@ -48709,14 +48884,14 @@ function sanitizeField(value) {
   let cleaned = value;
   for (let pass = 0; pass < MAX_FIELD_PASSES; pass++) {
     const before = cleaned;
-    if (process.env.AGENT_SANITIZER_TERMINAL_DISABLED !== "1") {
+    if (!readKnob("AGENT_SANITIZER_TERMINAL_DISABLED")) {
       const deAnsi = stripTerminalControls(cleaned);
       if (deAnsi !== cleaned) {
         cleaned = deAnsi;
         actions.add("terminal-control sequences");
       }
     }
-    if (process.env.AGENT_SANITIZER_INVISIBLE_DISABLED !== "1" && isPayloadCapable(cleaned)) {
+    if (!readKnob("AGENT_SANITIZER_INVISIBLE_DISABLED") && isPayloadCapable(cleaned)) {
       cleaned = stripInvisible2(cleaned);
       actions.add("invisible characters");
     }
@@ -48772,6 +48947,7 @@ var init_authored_content = __esm({
   async "claude-hooks/lib/authored-content.mjs"() {
     "use strict";
     init_hook_io();
+    init_knobs();
     ({ stripAnsiFully: stripAnsiFully2, isBenignAnsiKinds: isBenignAnsiKinds2, sgrCarriesPayload: sgrCarriesPayload2 } = /** @type {typeof import("agent-sanitizer")} */
     await lazyImport("agent-sanitizer"));
     ({ STRIP: STRIP2, SCATTERED_THRESHOLD: SCATTERED_THRESHOLD2, hasLongRun: hasLongRun2, stripInvisible: stripInvisible2 } = /** @type {typeof import("agent-sanitizer/invisible")} */
@@ -49069,7 +49245,7 @@ function dynamicSecretVars(env = process.env) {
   );
 }
 function extraSecretVars(env = process.env) {
-  const raw = env[EXTRA_SECRET_VARS_ENV];
+  const raw = readKnob(EXTRA_SECRET_VARS_ENV, env);
   if (raw === void 0 || raw.trim() === "") return [];
   const tokens = raw.split(",").map((token) => token.trim());
   for (const token of tokens)
@@ -49080,10 +49256,10 @@ function extraSecretVars(env = process.env) {
   return tokens;
 }
 function secretsEnabled(env = process.env) {
-  return env[SECRETS_ENABLED_ENV] === "1";
+  return readKnob(SECRETS_ENABLED_ENV, env);
 }
 function digestFlaggingEnabled(env = process.env) {
-  return env[FLAG_DIGEST_VALUES_ENV] === "1";
+  return readKnob(FLAG_DIGEST_VALUES_ENV, env);
 }
 function envBoundSecretVars(env = process.env) {
   return [
@@ -49105,6 +49281,7 @@ var init_env_config = __esm({
     init_redaction_floor();
     init_inference_key_vars();
     init_scrubbed_env_vars();
+    init_knobs();
     hostEnvConfigSource = null;
     HOST_SOURCE_LABEL = "configureEnvConfigSource";
     HOST_SOURCE_KEYS = ["minSecretLen", "extraVars"];
@@ -49119,22 +49296,18 @@ var init_env_config = __esm({
 import { spawn } from "node:child_process";
 import { existsSync as existsSync2, lstatSync as lstatSync4 } from "node:fs";
 import { createConnection } from "node:net";
-import { tmpdir as tmpdir2, userInfo as userInfo3 } from "node:os";
+import { tmpdir as tmpdir2 } from "node:os";
 import { dirname as dirname6, join as join7 } from "node:path";
 import { fileURLToPath as fileURLToPath4 } from "node:url";
-function positiveMsOr(raw, fallback) {
-  const ms = Number(raw);
-  return Number.isFinite(ms) && ms > 0 ? ms : fallback;
-}
 function daemonCommand() {
-  const configured = process.env._AGENT_SANITIZER_REDACTOR_DAEMON;
+  const configured = readKnob("_AGENT_SANITIZER_REDACTOR_DAEMON");
   if (configured) return [configured];
   const pyz = fileURLToPath4(new URL("../redactor/daemon.pyz", import.meta.url));
   if (existsSync2(pyz)) return ["python3", pyz];
   return ["agent-secret-redactor-daemon"];
 }
 function requestDeadlineMs() {
-  return positiveMsOr(process.env._AGENT_SANITIZER_REDACTOR_REQUEST_MS, 2e4);
+  return readKnob("_AGENT_SANITIZER_REDACTOR_REQUEST_MS");
 }
 function collectEnvSecrets() {
   const out = /* @__PURE__ */ Object.create(null);
@@ -49161,14 +49334,14 @@ function failClosed(cause) {
   );
 }
 function classifySocket(socketPath, deps = {}) {
-  const { lstat = lstatSync4, uid = userInfo3().uid } = deps;
+  const { lstat = lstatSync4, uid = currentUid() } = deps;
   let st;
   try {
     st = lstat(socketPath);
   } catch {
     return "absent";
   }
-  if (!st.isSocket() || st.uid !== uid) return "untrusted";
+  if (!st.isSocket() || !ownedByCurrentUser(st, uid)) return "untrusted";
   let dir;
   try {
     dir = lstat(dirname6(socketPath));
@@ -49179,7 +49352,7 @@ function classifySocket(socketPath, deps = {}) {
   return "ok";
 }
 function isTrustedSocketDir(dir, uid) {
-  return dir.isDirectory() && (dir.uid === uid || dir.uid === 0) && (dir.mode & 18) === 0;
+  return isPrivateDir(dir, { uid, rootMayOwn: true });
 }
 function connectAndRequest(socketPath, request, deadlineMs = requestDeadlineMs()) {
   return new Promise((resolve6, reject) => {
@@ -49279,7 +49452,7 @@ function canConnect(socketPath) {
     });
   });
 }
-async function redactViaDaemon(text5, opts = {}) {
+async function redactViaDaemon(text6, opts = {}) {
   const {
     map: map3 = false,
     webIngress = false,
@@ -49301,7 +49474,7 @@ async function redactViaDaemon(text5, opts = {}) {
   const outOfBudget = (where) => failClosed(new Error(`sanitization time budget exhausted ${where}`));
   if (budgetSpent()) throw outOfBudget("before secret vetting");
   const request = {
-    text: text5,
+    text: text6,
     map: map3,
     web_ingress: webIngress,
     env_secrets: collectEnvSecrets()
@@ -49355,12 +49528,12 @@ var init_redactor_client = __esm({
     "use strict";
     init_hook_timing();
     init_env_config();
+    init_hook_io();
+    init_knobs();
+    init_knobs();
     FRAME_CAP = 16 * 1024 * 1024;
-    DEFAULT_SOCKET_PATH = process.env._AGENT_SANITIZER_REDACTOR_SOCKET || join7(tmpdir2(), "agent-sanitizer-redactor", "redactor.sock");
-    WAIT_DEADLINE_MS = positiveMsOr(
-      process.env._AGENT_SANITIZER_REDACTOR_WAIT_MS,
-      8e3
-    );
+    DEFAULT_SOCKET_PATH = readKnob("_AGENT_SANITIZER_REDACTOR_SOCKET") ?? join7(tmpdir2(), "agent-sanitizer-redactor", "redactor.sock");
+    WAIT_DEADLINE_MS = readKnob("_AGENT_SANITIZER_REDACTOR_WAIT_MS");
     sleep = (ms) => new Promise((resolve6) => {
       setTimeout(resolve6, ms);
     });
@@ -49496,10 +49669,10 @@ import {
   closeSync as closeSync4,
   constants as constants3
 } from "node:fs";
-import { tmpdir as tmpdir4, userInfo as userInfo4 } from "node:os";
+import { tmpdir as tmpdir4 } from "node:os";
 import { join as join9, resolve as resolve4, sep as sep4 } from "node:path";
 function revealDir() {
-  return process.env._AGENT_SANITIZER_REVEAL_DIR || join9(tmpdir4(), `agent-sanitizer-layer2-reveal-${PROJECT_HASH}`);
+  return readKnob("_AGENT_SANITIZER_REVEAL_DIR") ?? join9(tmpdir4(), `agent-sanitizer-layer2-reveal-${PROJECT_HASH}`);
 }
 function sweepStaleReveals() {
   const dir = revealDir();
@@ -49534,8 +49707,7 @@ function revealDirIsSafe(dir) {
   } catch {
     return false;
   }
-  const groupOrOtherWritable = (st.mode & 18) !== 0;
-  return st.isDirectory() && !st.isSymbolicLink() && st.uid === userInfo4().uid && !groupOrOtherWritable;
+  return isPrivateDir(st);
 }
 function persistReveal(content3) {
   const dir = revealDir();
@@ -49617,6 +49789,7 @@ var init_reveal = __esm({
   "claude-hooks/lib/reveal.mjs"() {
     "use strict";
     init_hook_io();
+    init_knobs();
     REVEAL_TTL_MS = 7 * 24 * 60 * 60 * 1e3;
     SPAN_KEY_RE = /^[0-9a-f]{12}$/;
     SPAN_ROUNDTRIP_NOTICE = "the removed-content placeholders in this output are round-trippable: when copying or writing this text back anywhere, leave each [hidden HTML removed #\u2026]/[HTML comment removed #\u2026] placeholder byte-for-byte untouched \u2014 an Edit or Write that carries one restores the original content (secrets still redacted) automatically";
@@ -49625,8 +49798,8 @@ var init_reveal = __esm({
 });
 
 // claude-hooks/lib/placeholder-grammar.mjs
-function layer2Keys(text5) {
-  return [...text5.matchAll(LAYER2_PLACEHOLDER_RE2)].map((match) => match[1]);
+function layer2Keys(text6) {
+  return [...text6.matchAll(LAYER2_PLACEHOLDER_RE2)].map((match) => match[1]);
 }
 function layer2KeysIn(value, depth = 0) {
   if (depth > 32) return [];
@@ -49733,16 +49906,28 @@ var init_placeholder_grammar = __esm({
 // claude-hooks/lib/trace.mjs
 import { appendFileSync } from "node:fs";
 function traceThreshold(env = process.env) {
-  const value = (env._AGENT_SANITIZER_TRACE ?? "").toLowerCase();
-  if (value === "debug" || value === "2") return LEVELS.debug;
-  if (["info", "1", "true", "on"].includes(value)) return LEVELS.info;
-  return LEVELS.off;
+  return readKnob("_AGENT_SANITIZER_TRACE", env);
+}
+function traceRecord(event, fields, level, ts) {
+  const shadowed = TRACE_RESERVED_KEYS.filter(
+    (key) => Object.hasOwn(fields, key)
+  );
+  const rest = Object.fromEntries(
+    Object.entries(fields).filter(([key]) => !shadowed.includes(key))
+  );
+  return {
+    ts,
+    level,
+    event,
+    ...rest,
+    ...shadowed.length > 0 ? { shadowed } : {}
+  };
 }
 function trace(event, fields = {}, level = "info") {
   const lvl = level === "debug" ? "debug" : "info";
   if (traceThreshold() < LEVELS[lvl]) return;
-  const line = JSON.stringify({ ts: Date.now(), level: lvl, event, ...fields }) + "\n";
-  const file = process.env._AGENT_SANITIZER_TRACE_FILE;
+  const line = JSON.stringify(traceRecord(event, fields, lvl, Date.now())) + "\n";
+  const file = readKnob("_AGENT_SANITIZER_TRACE_FILE");
   try {
     if (file) appendFileSync(file, line);
     else process.stderr.write(line);
@@ -49763,17 +49948,19 @@ function hookTrace(sink) {
     (event, fields, level) => chargeHostExtensionSync(() => sink(event, fields, level))
   );
 }
-var TraceEvent, LEVELS;
+var TraceEvent, LEVELS, TRACE_RESERVED_KEYS;
 var init_trace = __esm({
   "claude-hooks/lib/trace.mjs"() {
     "use strict";
     init_hook_timing();
+    init_knobs();
     TraceEvent = Object.freeze({
       HOOK_RAN: "hook_ran",
       SCAN_INVISIBLE_CHARS_RAN: "scan_invisible_chars_ran",
       SCAN_LOADED_INSTRUCTIONS_RAN: "scan_loaded_instructions_ran"
     });
     LEVELS = Object.freeze({ off: 0, info: 1, debug: 2 });
+    TRACE_RESERVED_KEYS = Object.freeze(["ts", "level", "event"]);
   }
 });
 
@@ -49796,8 +49983,8 @@ __export(pretooluse_sanitize_exports, {
 import { createRequire as createRequire2 } from "node:module";
 import { readFileSync as readFileSync7 } from "node:fs";
 import { dirname as dirname8 } from "node:path";
-function substituteLayer2(text5, field) {
-  const matches = [...text5.matchAll(LAYER2_PLACEHOLDER_RE2)].map((match) => ({
+function substituteLayer2(text6, field) {
+  const matches = [...text6.matchAll(LAYER2_PLACEHOLDER_RE2)].map((match) => ({
     text: match[0],
     index: (
       /** @type {number} */
@@ -49818,7 +50005,7 @@ function substituteLayer2(text5, field) {
       deny: `${field} contains Layer-2 removed-content placeholder(s) whose original is not in the span store (missing key(s): ${missing.join(", ")}; expected file(s): ${missing.map((key) => spanPath(key)).join(", ")}), so the removed content cannot be restored automatically. Reconstruct that content yourself, deliberately drop the placeholder(s) if the removed content should stay removed, or ask the user to make this change`
     };
   const spliced = spliceOrdered2(
-    text5,
+    text6,
     matches,
     (_match, i) => (
       /** @type {string} */
@@ -49828,7 +50015,7 @@ function substituteLayer2(text5, field) {
   return { text: spliced.text, restored: matches.length };
 }
 function rehydrateLayer2(tool, toolInput) {
-  const hasL2 = (text5) => typeof text5 === "string" && layer2Keys(text5).length > 0;
+  const hasL2 = (text6) => typeof text6 === "string" && layer2Keys(text6).length > 0;
   if (tool === "MultiEdit" && Array.isArray(toolInput?.edits) && toolInput.edits.some(
     (edit) => hasL2(edit?.old_string) || hasL2(edit?.new_string)
   ))
@@ -49922,7 +50109,7 @@ function preToolUseLayers(rehydrate, env = process.env) {
       run: (tool, toolInput) => rehydrateLayer2(tool, toolInput)
     }
   ];
-  return env.AGENT_SANITIZER_OUTPUT_DISABLED === "1" ? layers.filter((layer) => layer.name !== "authored-content") : layers;
+  return readKnob("AGENT_SANITIZER_OUTPUT_DISABLED", env) ? layers.filter((layer) => layer.name !== "authored-content") : layers;
 }
 function toolTargetDir(tool, toolInput) {
   const field = PATH_FIELD_BY_TOOL[tool];
@@ -50117,6 +50304,7 @@ var init_pretooluse_sanitize = __esm({
     await init_authored_content();
     init_redactor_client();
     init_env_config();
+    init_knobs();
     await init_secret_drop_guard();
     init_placeholder_grammar();
     init_reveal();
@@ -50139,17 +50327,17 @@ var init_pretooluse_sanitize = __esm({
     ({ spliceOrdered: spliceOrdered2 } = /** @type {typeof import("agent-sanitizer/view-map")} */
     await lazyImport("agent-sanitizer/view-map"));
     require2 = createRequire2(import.meta.url);
-    confusableScan = (text5) => (registeredLazyModule("namespace-guard") ?? require2("namespace-guard")).scan(
-      text5
+    confusableScan = (text6) => (registeredLazyModule("namespace-guard") ?? require2("namespace-guard")).scan(
+      text6
     );
     redactorIo = {
       readFile: (path2) => readFileSync7(path2, "utf8"),
-      redactMap: async (text5) => (
+      redactMap: async (text6) => (
         /** @type {any} */
-        await redactViaDaemon(text5, { map: true })
+        await redactViaDaemon(text6, { map: true })
       ),
-      redact: async (text5) => {
-        const out = await redactViaDaemon(text5, {});
+      redact: async (text6) => {
+        const out = await redactViaDaemon(text6, {});
         return out ? (
           /** @type {string} */
           out.text
@@ -50179,6 +50367,7 @@ var init_pretooluse_sanitize = __esm({
     registerFaultPolicy(HOOK_NAME, {
       event: HookEvent.PRE_TOOL_USE,
       guarded: "tool input",
+      alwaysClosed: KNOB_DECIDES,
       open: (ctx) => {
         if (!secretsEnabled(ctx.env) || !hintedWriteFault(ctx.input))
           return defaultOpen(ctx);
@@ -50707,11 +50896,11 @@ function envValueRegex(value) {
   }
   return re;
 }
-function hasEnvBoundSecret(text5, env = process.env) {
+function hasEnvBoundSecret(text6, env = process.env) {
   const minLen = minEnvSecretLen();
   return envBoundSecretVars().some((name50) => {
     const value = env[name50];
-    return value && [...value].length >= minLen && envValueRegex(value).test(text5);
+    return value && [...value].length >= minLen && envValueRegex(value).test(text6);
   });
 }
 var ENV_INVIS_RUN, ENV_VALUE_REGEX_CACHE;
@@ -50760,16 +50949,16 @@ function isMcpTool(toolName) {
 function isUntrustedIngress(toolName) {
   return WEB_INGRESS_TOOLS.has(toolName) || isMcpTool(toolName);
 }
-async function redactSecrets(text5, webIngress = false, deadline) {
-  if (!matchesSecretHint2(text5) && !hasEnvBoundSecret(text5)) return null;
+async function redactSecrets(text6, webIngress = false, deadline) {
+  if (!matchesSecretHint2(text6) && !hasEnvBoundSecret(text6)) return null;
   return (
     /** @type {{ text: string, found: string[] } | null} */
-    await redactViaDaemon(text5, { webIngress, deadline })
+    await redactViaDaemon(text6, { webIngress, deadline })
   );
 }
-async function sanitizeText2(text5, toolName, deadline = makeDeadline(SANITIZE_BUDGET_MS), ext = {}) {
+async function sanitizeText2(text6, toolName, deadline = makeDeadline(SANITIZE_BUDGET_MS), ext = {}) {
   const webIngress = isUntrustedIngress(toolName);
-  const html4 = WEB_INGRESS_TOOLS.has(toolName) || isMcpTool(toolName) && HTML_TAG_PRESENT2.test(text5);
+  const html4 = WEB_INGRESS_TOOLS.has(toolName) || isMcpTool(toolName) && HTML_TAG_PRESENT2.test(text6);
   const seamOptions = {
     html: html4,
     exfilScan: webIngress,
@@ -50782,11 +50971,11 @@ async function sanitizeText2(text5, toolName, deadline = makeDeadline(SANITIZE_B
     // Layer 4 — OPT-IN (secretsEnabled): with the knob unset the seam gets no
     // redact callback at all, so plain output never spawns the daemon and no
     // placeholder ever enters the model's view. When it runs, the seam rethrows
-    // a redactor throw wrapped, and the CLI applies the caller's posture to it.
-    // Surface the failure to the operator's terminal here first: whatever the
-    // CLI decides rides in additionalContext, which only the model sees, so a
-    // degraded redactor would otherwise be invisible to the human — and under
-    // the fail-open default this line is the ONLY signal the human gets.
+    // a redactor throw wrapped, and this hook's fault policy suppresses the
+    // output under either posture (alwaysClosed). Surface the failure to the
+    // operator's terminal here first: the suppression note rides in what only
+    // the model sees, so a degraded redactor would otherwise be invisible to
+    // the human.
     redact: !secretsEnabled() ? void 0 : async (content3) => {
       let secrets;
       try {
@@ -50806,7 +50995,7 @@ async function sanitizeText2(text5, toolName, deadline = makeDeadline(SANITIZE_B
   };
   const seamResult = (
     /** @type {{ cleaned: string, warnings: string[], notes?: string[], modified: boolean, sgrNote: boolean, reveal?: string, splices?: Array<{ placeholder: string, original: string }> }} */
-    await sanitizeTextSeam(text5, seamOptions)
+    await sanitizeTextSeam(text6, seamOptions)
   );
   const result = { ...seamResult, notes: seamResult.notes ?? [] };
   const postText = ext.postText;
@@ -51113,18 +51302,19 @@ async function cliMain2(ext = {}) {
       // back the parsed `input` even when the control-plane load failed, so the
       // suppression shape-matches the real tool_response). emitFailClosed itself
       // falls back to a bare string if that shape-matching replacement or its
-      // serialization throws, so even a pathological input fails closed. A caller
-      // that set AGENT_SANITIZER_FAIL_OPEN=1 gets the warning-only pass-through
-      // instead — see emitHookFailure.
+      // serialization throws, so even a pathological input fails closed. Under
+      // the open default with Layer 4 off the caller gets the warning-only
+      // pass-through instead — see emitHookFailure.
       onError: (err, input) => emitHookFailure(input, err, void 0, ext.remedy)
     }
   );
 }
-var _sanitizer, HTML_TAG_PRESENT2, applyLayer13, matchesSecretHint2, SECRET_HINT2, SECRET_HINT_EXT2, _output, sanitizeTextSeam, composeContextSeam, withheldWarning2, describeRemoved2, describeWarned2, suppressToolOutput2, HOOK_NAME2, REVEAL_WITHHELD_WARNING, SANITIZE_BUDGET_MS, WEB_INGRESS_TOOLS, COLLISION_WITHHELD_MESSAGE, nextWithheldIndex, ON_DISK_PLACEHOLDER_WARNING, FAIL_CLOSED_CONTEXT;
+var _sanitizer, HTML_TAG_PRESENT2, applyLayer13, matchesSecretHint2, SECRET_HINT2, SECRET_HINT_EXT2, _output, sanitizeTextSeam, composeContextSeam, withheldWarning2, describeRemoved2, describeWarned2, suppressToolOutput2, HOOK_NAME2, REVEAL_WITHHELD_WARNING, SANITIZE_BUDGET_MS, WEB_INGRESS_TOOLS, COLLISION_WITHHELD_MESSAGE, nextWithheldIndex, ON_DISK_PLACEHOLDER_WARNING, FAIL_CLOSED_CONTEXT, SECRETS_PIN_NOTE;
 var init_sanitize_output = __esm({
   async "claude-hooks/sanitize-output.mjs"() {
     "use strict";
     init_redactor_client();
+    init_knobs();
     init_hook_timing();
     init_hook_io();
     init_hook_fault();
@@ -51148,19 +51338,22 @@ var init_sanitize_output = __esm({
     ({ describeRemoved: describeRemoved2, describeWarned: describeWarned2, suppressToolOutput: suppressToolOutput2 } = _output);
     HOOK_NAME2 = "sanitize-output";
     REVEAL_WITHHELD_WARNING = withheldWarning2("reveal sidecar");
-    SANITIZE_BUDGET_MS = positiveMsOr(
-      process.env._AGENT_SANITIZER_SANITIZE_BUDGET_MS,
-      12e4
-    );
+    SANITIZE_BUDGET_MS = readKnob("_AGENT_SANITIZER_SANITIZE_BUDGET_MS");
     WEB_INGRESS_TOOLS = /* @__PURE__ */ new Set(["WebFetch", "WebSearch"]);
     COLLISION_WITHHELD_MESSAGE = "[WITHHELD \u2014 this field's name collided with another after sanitization]";
     nextWithheldIndex = /* @__PURE__ */ new WeakMap();
     ON_DISK_PLACEHOLDER_WARNING = "this file's raw on-disk bytes already contain literal [REDACTED\u2026] placeholder text (not inserted by this sanitizer). If an earlier write copied a placeholder from a sanitized view, the secret it stood for has been destroyed; verify with the user before trusting or propagating this file";
     FAIL_CLOSED_CONTEXT = "CRITICAL: sanitize-output hook failed; this tool's output was suppressed (replaced with a placeholder) to fail closed -- the unsanitized output was not shown. Investigate the hook error before relying on this tool.";
+    SECRETS_PIN_NOTE = ` Secret redaction is on (${SECRETS_ENABLED_ENV}=1), so output it could not vet is withheld under either AGENT_SANITIZER_FAIL_OPEN posture.`;
     registerFaultPolicy(HOOK_NAME2, {
       event: HookEvent.POST_TOOL_USE,
       guarded: "tool output",
-      closed: (ctx) => failClosedParts(ctx.input, suppressionMessage(ctx.message), ctx.remedy)
+      alwaysClosed: secretsEnabled,
+      closed: (ctx) => failClosedParts(
+        ctx.input,
+        suppressionMessage(ctx.message) + (ctx.pinnedClosed ? SECRETS_PIN_NOTE : ""),
+        ctx.remedy
+      )
     });
     if (isMain(import.meta.url)) {
       await cliMain2();
@@ -51258,6 +51451,7 @@ var init_sanitize_user_prompt = __esm({
     registerFaultPolicy(HOOK_NAME3, {
       event: HookEvent.USER_PROMPT_SUBMIT,
       guarded: "prompt",
+      alwaysClosed: KNOB_DECIDES,
       closed: (ctx) => ({
         envelope: {
           decision: "block",
@@ -51581,6 +51775,7 @@ var init_scan_invisible_chars = __esm({
     registerFaultPolicy(HOOK_NAME4, {
       event: HookEvent.SESSION_START,
       guarded: "instruction files",
+      alwaysClosed: KNOB_DECIDES,
       open: (ctx) => ({
         stderr: `${faultLine(ctx)} Passing through unguarded; set AGENT_SANITIZER_FAIL_OPEN=0 to arm the tool-call gate instead.
 `,
@@ -51763,6 +51958,7 @@ var init_scan_loaded_instructions = __esm({
     registerFaultPolicy(HOOK_NAME5, {
       event: HookEvent.INSTRUCTIONS_LOADED,
       guarded: "a loaded instruction file",
+      alwaysClosed: KNOB_DECIDES,
       open: (ctx) => emptyPayloadParts(ctx) ?? {
         stderr: `${faultLine2(ctx)} Passing through unguarded; set AGENT_SANITIZER_FAIL_OPEN=0 to arm the tool-call gate instead.
 `,
@@ -51793,6 +51989,7 @@ var unknownMode = (ctx) => ({
 registerFaultPolicy(HOOK_NAME6, {
   event: null,
   guarded: "hook payload",
+  alwaysClosed: KNOB_DECIDES,
   open: unknownMode,
   closed: unknownMode
 });

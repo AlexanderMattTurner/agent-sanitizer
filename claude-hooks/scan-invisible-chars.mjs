@@ -39,6 +39,7 @@ import {
 } from "./lib/hook-io.mjs";
 import {
   registerFaultPolicy,
+  KNOB_DECIDES,
   hookFaultOutcome,
   writeFaultOutcome,
 } from "./lib/hook-fault.mjs";
@@ -164,6 +165,7 @@ function faultLine(ctx) {
 registerFaultPolicy(HOOK_NAME, {
   event: HookEvent.SESSION_START,
   guarded: "instruction files",
+  alwaysClosed: KNOB_DECIDES,
   open: (ctx) => ({
     stderr: `${faultLine(ctx)} Passing through unguarded; set AGENT_SANITIZER_FAIL_OPEN=0 to arm the tool-call gate instead.\n`,
     exitCode: 1,

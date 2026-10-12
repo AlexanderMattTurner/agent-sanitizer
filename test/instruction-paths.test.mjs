@@ -260,6 +260,8 @@ describe("every instruction-file write stays inside its root", () => {
   ];
   /** @type {Record<string, string>} */
   const FS_EXEMPT = {
+    "claude-hooks/lib/hook-io.mjs::readSetupMarker":
+      'opens the setup marker with flag "r" to read it and probe its flock',
     "claude-hooks/lib/hook-io.mjs::writeFileNoFollow":
       "a hook state file under $TMPDIR, created O_EXCL after unlinking a squatter",
     "claude-hooks/lib/hook-io.mjs::writeSentinelFile":
