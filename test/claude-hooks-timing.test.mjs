@@ -543,16 +543,25 @@ describe("slowHookNotice", () => {
     // charger, so a composer charging its own work inside one of those callbacks
     // would double-count: a 60ms callback reported as 120ms of host time, which
     // can exceed the run's own wall-clock and flip the largest-share verdict.
-    const timer = startHookTimer();
-    await chargeHostExtension(() =>
-      chargeHostExtension(
-        () => new Promise((resolve) => setTimeout(resolve, 60)),
-      ),
+    // A driven clock: a real 60ms timer stretched past the double-count bound on
+    // a loaded machine, failing the test for the machine rather than the code.
+    let clockMs = 0;
+    const now = () => clockMs;
+    const cpuNow = () => 0;
+    const timer = startHookTimer(now, cpuNow);
+    await chargeHostExtension(
+      () =>
+        chargeHostExtension(
+          async () => {
+            clockMs += 60;
+          },
+          now,
+          cpuNow,
+        ),
+      now,
+      cpuNow,
     );
-    assert.ok(
-      timer.hostMs() >= 50 && timer.hostMs() < 120,
-      `one interval, charged once (${timer.hostMs()}ms)`,
-    );
+    assert.equal(timer.hostMs(), 60, "one interval, charged once");
   });
 
   it("charges a SYNCHRONOUS callback's wait and keeps its CPU off the hook", () => {
