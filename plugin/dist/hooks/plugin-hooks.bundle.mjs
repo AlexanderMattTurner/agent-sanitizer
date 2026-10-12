@@ -1405,8 +1405,15 @@ function isVirama(cp) {
   );
 }
 function isBrahmicConsonant(cp) {
-  for (const [, start, end] of BRAHMIC_CONSONANT_RANGES)
-    if (cp >= start && cp <= end) return true;
+  let lo = 0;
+  let hi = BRAHMIC_CONSONANT_RANGES.length - 1;
+  while (lo <= hi) {
+    const mid = lo + hi >> 1;
+    const [, start, end] = BRAHMIC_CONSONANT_RANGES[mid];
+    if (cp < start) hi = mid - 1;
+    else if (cp > end) lo = mid + 1;
+    else return true;
+  }
   return false;
 }
 var JOINING_RANGES, VIRAMA_RANGES, BRAHMIC_CONSONANT_RANGES;
@@ -4158,7 +4165,9 @@ function describeStripped(invisFound, deAnsi) {
   return msg + " \u2014 inspect the removed bytes with a hex dump (xxd / od -c), which survives sanitization";
 }
 function isBrahmicConsonantCp(cp) {
-  return cp >= 0 && isBrahmicConsonant(cp);
+  if (cp < 0) return false;
+  if (cp >= JOINING_PROPS_END) return isBrahmicConsonant(cp);
+  return (joiningProps(cp) & PROP_BRAHMIC_CONSONANT) !== 0;
 }
 function isBrailleCell(cp) {
   return cp !== BRAILLE_BLANK && isBrailleScript(cp);
@@ -4219,6 +4228,26 @@ function codePointLength(text6) {
   while (!iterator.next().done) n++;
   return n;
 }
+function joiningProps(cp) {
+  joiningPropsTable ??= new Uint8Array(JOINING_PROPS_END);
+  const known = joiningPropsTable[cp];
+  if (known !== 0) return known;
+  const type = JOINING_TYPES.indexOf(joiningType(cp));
+  if (type < 1)
+    throw new Error(`unknown Joining_Type for U+${cp.toString(16)}`);
+  const props = type | (isVirama(cp) ? PROP_VIRAMA : 0) | (isBrahmicConsonant(cp) ? PROP_BRAHMIC_CONSONANT : 0);
+  joiningPropsTable[cp] = props;
+  return props;
+}
+function jtOf(cp) {
+  if (cp < 0) return "U";
+  if (cp >= JOINING_PROPS_END) return joiningType(cp);
+  return JOINING_TYPES[joiningProps(cp) & PROP_TYPE_MASK];
+}
+function isViramaCp(cp) {
+  if (cp >= JOINING_PROPS_END) return isVirama(cp);
+  return (joiningProps(cp) & PROP_VIRAMA) !== 0;
+}
 function isJoinControl(cp) {
   return cp === ZWNJ || cp === ZWJ;
 }
@@ -4235,22 +4264,24 @@ function followsBrahmicConjunct(cps, i) {
   let j = i - 1;
   while (j >= 0 && !isJoinControl(cps[j]) && classifyCp(cps[j]) !== CODE_VISIBLE)
     j--;
-  if (j < 0 || !isVirama(cps[j])) return false;
+  if (j < 0 || !isViramaCp(cps[j])) return false;
   return isBrahmicConsonantCp(effectiveNeighbor(cps, j, -1));
 }
 function joiningLetterCount(cps, codes) {
   let letters = 0;
   for (let i = 0; i < cps.length; i++)
-    if (codes[i] === CODE_VISIBLE && (isCursiveLetter(jtOf(cps[i])) || isBrahmicConsonantCp(cps[i])))
-      letters++;
+    if (codes[i] === CODE_VISIBLE && isJoiningLetter(cps[i])) letters++;
   return letters;
+}
+function isJoiningLetter(cp) {
+  return cp >= 128 && (isCursiveLetter(jtOf(cp)) || isBrahmicConsonantCp(cp));
 }
 function precedesBrahmicVirama(cps, i) {
   if (cps[i] !== ZWJ) return false;
   let j = i + 1;
   while (j < cps.length && !isJoinControl(cps[j]) && classifyCp(cps[j]) !== CODE_VISIBLE)
     j++;
-  if (j >= cps.length || !isVirama(cps[j])) return false;
+  if (j >= cps.length || !isViramaCp(cps[j])) return false;
   return isBrahmicConsonantCp(effectiveNeighbor(cps, i, -1));
 }
 function isPreservedJoiner(cps, i) {
@@ -4330,7 +4361,7 @@ function analyzeCarve(cps) {
 }
 function countPayloadInvisible(text6) {
   if (!hasInvisibleCodePoint(text6)) return 0;
-  return analyzeCarve(codePointArray(text6)).payloadInvis;
+  return carveOf(text6).analysis.payloadInvis;
 }
 function bulkStrip(body) {
   const found = CHECKS.filter(([, re]) => body.search(re) !== -1).map(
@@ -4406,11 +4437,45 @@ function cpIndexOf(offsets, u16) {
   }
   return lo;
 }
-function clusterResolver(body, offsets, candidates) {
-  const cpCount = offsets.length - 1;
+function pairBreak(left, right) {
+  if (!contextFreeOnLeft(right) || left >= 55296 && left <= 57343)
+    return null;
+  const key = left * 1114112 + right;
+  const hit = PAIR_BREAK_MEMO.get(key);
+  if (hit !== void 0) return hit;
+  if (PAIR_BREAK_MEMO.size >= PAIR_BREAK_MEMO_CAP) return null;
+  const pair = String.fromCodePoint(left, right);
+  const first = (
+    /** @type {{ segment: string }} */
+    graphemeSegmenter().segment(pair).containing(0)
+  );
+  const breaks = first.segment.length < pair.length;
+  PAIR_BREAK_MEMO.set(key, breaks);
+  return breaks;
+}
+function localCluster(cps, at) {
+  let start = at;
+  for (; start > 0; start--) {
+    const breaks = pairBreak(cps[start - 1], cps[start]);
+    if (breaks === null) return null;
+    if (breaks) break;
+  }
+  let end = at + 1;
+  for (; end < cps.length; end++) {
+    const breaks = pairBreak(cps[end - 1], cps[end]);
+    if (breaks === null) return null;
+    if (breaks) break;
+  }
+  return { start, end };
+}
+function clusterResolver(body, cps, offsets, candidates) {
+  const cpCount = cps.length;
   if (candidates * CONTAINING_CANDIDATE_SHARE < cpCount) {
-    const segments = graphemeSegmenter().segment(body);
+    let segments = null;
     return (cp) => {
+      const local = localCluster(cps, cp);
+      if (local !== null) return local;
+      segments ??= graphemeSegmenter().segment(body);
       const found = (
         /** @type {{ index: number, segment: string }} */
         segments.containing(offsets[cp])
@@ -4436,7 +4501,7 @@ function clusterResolver(body, offsets, candidates) {
     return { start, end };
   };
 }
-function carveStrip(body, cps = codePointArray(body), analysis = analyzeCarve(cps)) {
+function carveStrip(body, cps, analysis) {
   const { codes, kind: kind2, payloadInvis, visibleLen } = analysis;
   const allowCarveOut = payloadInvis < SCATTERED_THRESHOLD;
   const n = cps.length;
@@ -4452,7 +4517,7 @@ function carveStrip(body, cps = codePointArray(body), analysis = analyzeCarve(cp
       Math.ceil(visibleLen / PRESERVED_JOINER_PER_VISIBLE)
     )
   );
-  const joinerAllowance = candidates.length <= coverAllowance ? coverAllowance : Math.max(
+  const joinerAllowance = candidates.length <= coverAllowance || !candidates.some((c) => kind2[c] === KIND_JOINER) ? coverAllowance : Math.max(
     coverAllowance,
     Math.ceil(
       joiningLetterCount(cps, codes) / PRESERVED_JOINER_PER_VISIBLE
@@ -4492,7 +4557,7 @@ function carveStrip(body, cps = codePointArray(body), analysis = analyzeCarve(cp
       runStart = offsets[k2 + 1];
     }
   };
-  const clusterOf = candidates.length > 0 ? clusterResolver(body, offsets, candidates.length) : null;
+  const clusterOf = candidates.length > 0 ? clusterResolver(body, cps, offsets, candidates.length) : null;
   let lastGap = -1;
   let leftJoiner = 0;
   let leftSelector = 0;
@@ -4568,12 +4633,21 @@ function carveStrip(body, cps = codePointArray(body), analysis = analyzeCarve(cp
   );
   return { cleaned: kept.join(""), found };
 }
+function carveOf(body) {
+  if (lastCarve !== null && lastCarve.body === body) return lastCarve;
+  const cps = codePointArray(body);
+  const analysis = analyzeCarve(cps);
+  lastCarve = { body, cps, analysis, strip: null };
+  return lastCarve;
+}
 function needsCarveOut(body) {
   return body.includes(String.fromCodePoint(ZWNJ)) || body.includes(String.fromCodePoint(ZWJ)) || VARIATION_SELECTOR.test(body) || TAG_CHAR_RE.test(body) || GATED_BLANK_RE.test(body);
 }
 function payloadInvisibleView(text6) {
-  const cps = codePointArray(text6);
-  const { codes, kind: kind2 } = analyzeCarve(cps);
+  const {
+    cps,
+    analysis: { codes, kind: kind2 }
+  } = carveOf(text6);
   const offsets = u16Offsets(cps);
   const isPayload = (i2) => codes[i2] !== CODE_VISIBLE && kind2[i2] === KIND_NONE;
   const parts2 = [];
@@ -4599,9 +4673,8 @@ function countEffectiveInvisible(text6) {
   if (!hasInvisibleCodePoint(text6)) return 0;
   if (text6.charCodeAt(0) === 65279)
     return surplusOver(countPayloadInvisible(text6), text6, stripInvisible(text6));
-  const cps = codePointArray(text6);
-  const analysis = analyzeCarve(cps);
-  const { cleaned } = stripBody(text6, cps, analysis);
+  const { cps, analysis } = carveOf(text6);
+  const { cleaned } = stripBody(text6);
   return surplusOver(analysis.payloadInvis, text6, cleaned, cps.length);
 }
 function surplusOver(payload, text6, stripped, cpLen) {
@@ -4626,14 +4699,16 @@ function stripInvisibleWithReport(text6, originalText = text6, { carveOut = true
   const { cleaned, found } = carveOut ? stripBody(body) : bulkStrip(body);
   return { cleaned: hasLeadingBom ? BOM + cleaned : cleaned, found };
 }
-function stripBody(body, cps, analysis) {
+function stripBody(body) {
   if (!needsCarveOut(body)) return bulkStrip(body);
-  return carveStrip(body, cps, analysis);
+  const entry = carveOf(body);
+  entry.strip ??= carveStrip(body, entry.cps, entry.analysis);
+  return { cleaned: entry.strip.cleaned, found: [...entry.strip.found] };
 }
 function stripInvisible(text6) {
   return stripInvisibleWithReport(text6).cleaned;
 }
-var VS, ZERO_WIDTH_MN, BLANK_NON_CF, REGEX_FLAGS, CF_CLASS_SOURCE, CATEGORY, CATEGORY_LABELS, CHECKS, STRIP, LONG_RUN_THRESHOLD, SCATTERED_THRESHOLD, LONG_RUN_RE, RUN_CHUNK, LONG_RUN_CHUNK_RE, RUN_TAIL_RE, BOM, ZWNJ, ZWJ, CONSECUTIVE_JOINER_CAP, CONSECUTIVE_SELECTOR_CAP, TOTAL_PRESERVED_JOINER_BUDGET, PRESERVED_JOINER_PER_VISIBLE, PRESERVE_HARD_CAP, TOTAL_PRESERVED_BLANK_BUDGET, PRESERVED_BLANK_PER_ANCHOR, LINGUISTIC_SCRIPTS, isEmojiLeft, KEYCAP_BASE, COMBINING_KEYCAP, isEmojiBase, VARIATION_SELECTOR, isKeycapBase, isVariationSelectorCp, PRESENTATION_SELECTORS, TAG_BASE, TAG_CANCEL, TAG_SPEC_MIN, TAG_SPEC_MAX, REGISTERED_TAG_PAYLOADS, MAX_TAG_SPEC_CHARS, IVS_MIN, IVS_MAX, CJK_COMPATIBILITY_IDEOGRAPH_BLOCKS, isCjkIdeograph, BRAILLE_BLANK, HANGUL_FILLERS, GATED_BLANK_RE, isBrailleScript, isHangulScript, CODE_VISIBLE, CODE_CF, CODE_VS, CODE_BLANK, KIND_NONE, KIND_JOINER, KIND_EMOJIVS, KIND_TAG, KIND_STDVS, KIND_IVS, KIND_BLANK, CODE_CATEGORY, TRACKED_INVISIBLE, MIN_TRACKED_CP, CP_PREDICATE_MEMO_CAP, isCursiveLetter, jtOf, segmenterCache, CONTAINING_CANDIDATE_SHARE, TAG_CHAR_RE;
+var VS, ZERO_WIDTH_MN, BLANK_NON_CF, REGEX_FLAGS, CF_CLASS_SOURCE, CATEGORY, CATEGORY_LABELS, CHECKS, STRIP, LONG_RUN_THRESHOLD, SCATTERED_THRESHOLD, LONG_RUN_RE, RUN_CHUNK, LONG_RUN_CHUNK_RE, RUN_TAIL_RE, BOM, ZWNJ, ZWJ, CONSECUTIVE_JOINER_CAP, CONSECUTIVE_SELECTOR_CAP, TOTAL_PRESERVED_JOINER_BUDGET, PRESERVED_JOINER_PER_VISIBLE, PRESERVE_HARD_CAP, TOTAL_PRESERVED_BLANK_BUDGET, PRESERVED_BLANK_PER_ANCHOR, LINGUISTIC_SCRIPTS, isEmojiLeft, KEYCAP_BASE, COMBINING_KEYCAP, isEmojiBase, VARIATION_SELECTOR, isKeycapBase, isVariationSelectorCp, PRESENTATION_SELECTORS, TAG_BASE, TAG_CANCEL, TAG_SPEC_MIN, TAG_SPEC_MAX, REGISTERED_TAG_PAYLOADS, MAX_TAG_SPEC_CHARS, IVS_MIN, IVS_MAX, CJK_COMPATIBILITY_IDEOGRAPH_BLOCKS, isCjkIdeograph, BRAILLE_BLANK, HANGUL_FILLERS, GATED_BLANK_RE, isBrailleScript, isHangulScript, CODE_VISIBLE, CODE_CF, CODE_VS, CODE_BLANK, KIND_NONE, KIND_JOINER, KIND_EMOJIVS, KIND_TAG, KIND_STDVS, KIND_IVS, KIND_BLANK, CODE_CATEGORY, TRACKED_INVISIBLE, MIN_TRACKED_CP, CP_PREDICATE_MEMO_CAP, isCursiveLetter, JOINING_PROPS_END, JOINING_TYPES, PROP_TYPE_MASK, PROP_VIRAMA, PROP_BRAHMIC_CONSONANT, joiningPropsTable, segmenterCache, contextFreeOnLeft, PAIR_BREAK_MEMO_CAP, PAIR_BREAK_MEMO, CONTAINING_CANDIDATE_SHARE, lastCarve, TAG_CHAR_RE;
 var init_invisible = __esm({
   "src/invisible.mjs"() {
     "use strict";
@@ -4785,9 +4860,18 @@ var init_invisible = __esm({
     MIN_TRACKED_CP = Math.min(...TRACKED_INVISIBLE.keys());
     CP_PREDICATE_MEMO_CAP = 4096;
     isCursiveLetter = (jt) => jt === "D" || jt === "R" || jt === "L";
-    jtOf = (cp) => cp < 0 ? "U" : joiningType(cp);
+    JOINING_PROPS_END = 131072;
+    JOINING_TYPES = ["", "C", "D", "R", "L", "T", "U"];
+    PROP_TYPE_MASK = 7;
+    PROP_VIRAMA = 8;
+    PROP_BRAHMIC_CONSONANT = 16;
+    joiningPropsTable = null;
     segmenterCache = null;
+    contextFreeOnLeft = (cp) => cp < 2304 && cp !== 169 && cp !== 174 || cp === ZWNJ || cp === ZWJ;
+    PAIR_BREAK_MEMO_CAP = 4096;
+    PAIR_BREAK_MEMO = /* @__PURE__ */ new Map();
     CONTAINING_CANDIDATE_SHARE = 4;
+    lastCarve = null;
     TAG_CHAR_RE = /[\u{E0000}-\u{E007F}]/u;
   }
 });

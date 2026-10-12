@@ -109,6 +109,21 @@ const CASES = {
   "payload-run": ZWSP.repeat(40),
   "payload-scattered": ("a" + SHY).repeat(40),
   "over-budget-joiners": ("م" + ZWNJ + "م").repeat(60),
+  // The cluster around a joiner is read off pair verdicts where those cannot
+  // depend on context, and off the segmenter everywhere else. These put a mark
+  // after the joiner (it joins the cluster), a control before it (GB4), a lone
+  // surrogate beside it, and emoji ZWJ sequences between Persian joiners, so a
+  // budget that binds lands on clusters read both ways.
+  "zwnj-before-harakat": ("مَ" + ZWNJ + "َم ").repeat(80),
+  "zwj-after-newline": ("\n" + ZWJ + "م").repeat(40),
+  "lone-surrogate-before-zwnj": ("\ud800" + ZWNJ + "م ").repeat(40),
+  "persian-beside-emoji-zwj": (
+    "می" +
+    ZWNJ +
+    "خواهم \u{1F468}" +
+    ZWJ +
+    "\u{1F469} "
+  ).repeat(60),
   "mixed-everything":
     BOM +
     "می" +

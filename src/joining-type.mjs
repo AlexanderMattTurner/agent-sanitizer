@@ -711,12 +711,22 @@ export function isVirama(cp) {
 /**
  * True when `cp` is a Brahmic consonant — the only base a virama attaches to,
  * and therefore the only base after which a ZWJ/ZWNJ is a real conjunct
- * request rather than a zero-width payload.
+ * request rather than a zero-width payload. A binary search, like
+ * `lookup`: the spans are sorted and disjoint, and the carve analysis asks
+ * this of every visible code point of a long document, where a scan of all the
+ * spans per code point was the dominant cost.
  * @param {number} cp
  * @returns {boolean}
  */
 export function isBrahmicConsonant(cp) {
-  for (const [, start, end] of BRAHMIC_CONSONANT_RANGES)
-    if (cp >= start && cp <= end) return true;
+  let lo = 0;
+  let hi = BRAHMIC_CONSONANT_RANGES.length - 1;
+  while (lo <= hi) {
+    const mid = (lo + hi) >> 1;
+    const [, start, end] = BRAHMIC_CONSONANT_RANGES[mid];
+    if (cp < start) hi = mid - 1;
+    else if (cp > end) lo = mid + 1;
+    else return true;
+  }
   return false;
 }
