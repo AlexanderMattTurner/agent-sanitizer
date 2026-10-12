@@ -238,7 +238,6 @@ const FUZZ_EXEMPT = Object.freeze({
       "layer2KeysIn",
       "layer2PlaceholderNotice",
       "needsFixedPoint",
-      "nonConvergenceReason",
       "placeholderNotice",
       "preToolUseLayers",
       "runLayerPipeline",
@@ -428,6 +427,8 @@ const FUZZ_EXEMPT = Object.freeze({
   encodeFrame:
     "serializes our own request and throws over the frame cap; the parse of untrusted bytes is FrameReader's",
   isPlainObject: "shape predicate over one parsed JSON value",
+  nonConvergenceReason:
+    "formats the fault string from the pipeline's own stage names, never from tool input; its text is pinned in claude-hooks-layer-pipeline.test.mjs",
 });
 
 /**
