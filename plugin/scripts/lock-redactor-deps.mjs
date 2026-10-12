@@ -46,7 +46,11 @@ const COMPILE_COMMAND = "node plugin/scripts/lock-redactor-deps.mjs";
 const INPUT_DIGEST_LINE =
   /^# requirements\.in sha256: (?<digest>[0-9a-f]{64})$/m;
 
-/** The digest a lock records for the requirements.in text it was compiled from. */
+/**
+ * The digest a lock records for the requirements.in text it was compiled from.
+ * @param {string} requirementsInText
+ * @returns {string}
+ */
 export function requirementsInDigest(requirementsInText) {
   return createHash("sha256").update(requirementsInText).digest("hex");
 }
