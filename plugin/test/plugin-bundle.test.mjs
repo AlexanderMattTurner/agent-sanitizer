@@ -48,6 +48,8 @@ import {
   runtimeRequires,
 } from "../../scripts/lib/bundle-esbuild.mjs";
 import { HOOK_MODES } from "../../claude-hooks/plugin-hooks.mjs";
+import { startStandInDaemon } from "../../test/redactor-stand-in.mjs";
+import { KNOBS } from "../../claude-hooks/lib/knobs.mjs";
 
 const ROOT = dirname(dirname(dirname(fileURLToPath(import.meta.url))));
 const PLUGIN_DIR = join(ROOT, "plugin");
@@ -917,31 +919,10 @@ test("output hook redacts through the daemon wire protocol", async (t) => {
   const socketPath = join(sockDir, "redactor.sock");
   t.after(() => rmSync(sockDir, { recursive: true, force: true }));
 
-  // A stub daemon speaking the real protocol: 4-byte big-endian length prefix
-  // then that many bytes of UTF-8 JSON, both directions.
-  const server = createServer((sock) => {
-    /** @type {Buffer[]} */
-    const chunks = [];
-    sock.on("data", (chunk) => {
-      chunks.push(chunk);
-      const buf = Buffer.concat(chunks);
-      if (buf.length < 4) return;
-      const len = buf.readUInt32BE(0);
-      if (buf.length < 4 + len) return;
-      const req = JSON.parse(buf.subarray(4, 4 + len).toString("utf8"));
-      const body = Buffer.from(
-        JSON.stringify({
-          text: req.text.replace(/AKIA[0-9A-Z]{16}/g, "STUB-SCRUBBED"),
-          found: ["AWSKeyDetector"],
-        }),
-        "utf8",
-      );
-      const header = Buffer.allocUnsafe(4);
-      header.writeUInt32BE(body.length, 0);
-      sock.end(Buffer.concat([header, body]));
-    });
-  });
-  await new Promise((resolve) => server.listen(socketPath, resolve));
+  const server = await startStandInDaemon(socketPath, (req) => ({
+    text: req.text.replace(/AKIA[0-9A-Z]{16}/g, "STUB-SCRUBBED"),
+    found: ["AWSKeyDetector"],
+  }));
   t.after(() => server.close());
 
   // Async: the stub daemon above is served by THIS process, so a blocking
@@ -1762,7 +1743,7 @@ test("the repeat knob restores per-call context", (t) => {
     );
 });
 
-test("output hook fails OPEN when the redactor is unreachable", (t) => {
+test("output hook withholds under the OPEN default when the redactor is unreachable", (t) => {
   const res = launch(
     stagePlugin(t),
     "PostToolUse",
@@ -1788,13 +1769,16 @@ test("output hook fails OPEN when the redactor is unreachable", (t) => {
   );
   assert.equal(res.status, 0);
   const out = JSON.parse(res.stdout).hookSpecificOutput;
-  // A dead redactor is the commonest availability failure, and the default
-  // posture keeps the session moving through it — which means the unredacted
-  // response stays in the model's view. Asserted rather than left implicit: an
-  // operator who would rather withhold the secret sets the opt-out, which the
-  // mirror test above pins.
-  assert.equal(out.updatedToolOutput, undefined);
-  assert.match(out.additionalContext, /UNSANITIZED/);
+  // A dead redactor is the commonest availability failure, but with Layer 4
+  // opted in (baseEnv) the output was never vetted for secrets, so it is
+  // withheld even though AGENT_SANITIZER_FAIL_OPEN is unset — the secret layer
+  // fails closed under either posture.
+  assert.match(out.updatedToolOutput.stdout, /SANITIZATION FAILED/);
+  assert.match(
+    out.updatedToolOutput.stdout,
+    /AGENT_SANITIZER_SECRETS_ENABLED=1/,
+  );
+  assert.ok(!res.stdout.includes("AKIAIOSFODNN7EXAMPLE"));
   assert.match(res.stderr, /hook error/);
 });
 
@@ -1858,7 +1842,9 @@ test("a missing peer package fails the output hook OPEN", (t) => {
       }),
       encoding: "utf8",
       cwd: dir,
-      env: baseEnv(),
+      // Layer 4 off: with it on, an unvetted output is withheld in either
+      // posture, and this case pins the open default.
+      env: { ...baseEnv(), ...SECRETS_OFF },
     },
   );
   assert.ok(res.stdout.trim().length > 0, "empty stdout says nothing at all");
@@ -1906,8 +1892,10 @@ test("both postures answer a payload that never parsed, each in its own shape", 
     assert.ok(openShape[event], `no open shape stated for ${event}`);
     assert.ok(closedShape[event], `no closed shape stated for ${event}`);
     for (const payload of ["{not json at all", ""])
+      // Layer 4 off for the open arm: with it on, the output hook withholds an
+      // unvetted payload in either posture.
       for (const [env, shape] of [
-        [{}, openShape],
+        [SECRETS_OFF, openShape],
         [FAIL_CLOSED, closedShape],
       ]) {
         const res = launch(plugin, event, hook, payload, { env });
@@ -2469,8 +2457,9 @@ test("a missing peer package fails the output hook CLOSED under the opt-out", (t
 // to change.
 //
 // The coverage assertion is what keeps this list honest: the required set is
-// DERIVED from the property accesses in the sources, so a var added later
-// without a behavioural case fails here rather than shipping unexercised.
+// the internal surface of the knob table every read goes through
+// (claude-hooks/lib/knobs.mjs), so a var added later without a behavioural case
+// fails here rather than shipping unexercised.
 
 /** Each entry names the test below that SETS it and asserts the effect. */
 const EXERCISED_ENV_VARS = new Set([
@@ -2489,31 +2478,19 @@ const EXERCISED_ENV_VARS = new Set([
   "_AGENT_SANITIZER_TRACE_FILE",
   // "…REVEAL_DIR relocates the Layer-2 reveal store"
   "_AGENT_SANITIZER_REVEAL_DIR",
+  // Not set by a launch here: it widens the redaction set in-process, and
+  // test/claude-hooks-extensions.test.mjs drives it through extraSecretVars.
+  "_AGENT_SANITIZER_EXTRA_SECRET_VARS",
 ]);
 
 test("every _AGENT_SANITIZER_* var the sources read has a behavioural case", () => {
-  const sources = [
-    ...readdirSync(HOOKS_DIR)
-      .filter((f) => f.endsWith(".mjs"))
-      .map((f) => join(HOOKS_DIR, f)),
-    ...readdirSync(join(HOOKS_DIR, "lib")).map((f) =>
-      join(HOOKS_DIR, "lib", f),
-    ),
-  ];
-  const read = new Set();
-  for (const file of sources)
-    for (const m of readFileSync(file, "utf8").matchAll(
-      // Property access only — a name appearing in prose is not a read, and
-      // treating it as one would demand a test for a variable nothing consults.
-      /(?:process\.)?env\.(_AGENT_SANITIZER_[A-Z0-9_]+)/g,
-    ))
-      read.add(m[1]);
-
-  assert.ok(
-    read.size > 0,
-    "derivation found no env reads — the regex has rotted",
-  );
-  const missing = [...read].filter((v) => !EXERCISED_ENV_VARS.has(v));
+  // test/claude-hooks-knobs.test.mjs holds every hook read to this table, so
+  // its internal surface IS the set the sources read.
+  const read = Object.entries(KNOBS)
+    .filter(([, spec]) => spec.surface === "internal")
+    .map(([name]) => name);
+  assert.ok(read.length > 0, "the knob table has no internal surface");
+  const missing = read.filter((v) => !EXERCISED_ENV_VARS.has(v));
   assert.deepEqual(
     missing,
     [],
@@ -2531,11 +2508,15 @@ test("_AGENT_SANITIZER_REDACTOR_WAIT_MS bounds the wait for a daemon that never 
   };
   // The opt-out posture throughout this section: the suppression IS the
   // observable that the timeout fired, and the open default has none.
+  // A daemon that SPAWNS and then never listens (exit 0 is the bind-race loser,
+  // which the client does not treat as a death). A missing binary would not do:
+  // that fails the spawn at once with its own reason and never waits at all.
+  const daemon = join(scratch(t), "never-listens-daemon");
+  writeFileSync(daemon, "#!/bin/sh\nexit 0\n", { mode: 0o755 });
   const env = {
     ...FAIL_CLOSED,
     _AGENT_SANITIZER_REDACTOR_SOCKET: join(scratch(t), "absent.sock"),
-    _AGENT_SANITIZER_REDACTOR_DAEMON:
-      "/nonexistent/agent-secret-redactor-daemon",
+    _AGENT_SANITIZER_REDACTOR_DAEMON: daemon,
     _AGENT_SANITIZER_REDACTOR_REQUEST_MS: "300",
   };
 

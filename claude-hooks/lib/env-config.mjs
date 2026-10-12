@@ -25,6 +25,7 @@ import credentialNames from "../../python/agent_sanitizer/secrets/data/credentia
 import redactionFloor from "../../python/agent_sanitizer/secrets/data/redaction-floor.json" with { type: "json" };
 import inferenceKeys from "../config/inference-key-vars.json" with { type: "json" };
 import scrubbed from "../config/scrubbed-env-vars.json" with { type: "json" };
+import { readKnob } from "./knobs.mjs";
 
 /**
  * The inference-provider key env vars. Their values authenticate the agent to a
@@ -205,7 +206,7 @@ const EXTRA_TOKEN_RE = /^[A-Z0-9_]+$/;
  * @returns {string[]}
  */
 export function extraSecretVars(env = process.env) {
-  const raw = env[EXTRA_SECRET_VARS_ENV];
+  const raw = readKnob(EXTRA_SECRET_VARS_ENV, env);
   if (raw === undefined || raw.trim() === "") return [];
   const tokens = raw.split(",").map((token) => token.trim());
   for (const token of tokens)
@@ -227,15 +228,16 @@ export function extraSecretVars(env = process.env) {
 export const SECRETS_ENABLED_ENV = "AGENT_SANITIZER_SECRETS_ENABLED";
 
 /**
- * True when the operator opted into the secret-redaction layer. `=== "1"`
- * matches the other public knobs (`AGENT_SANITIZER_*_DISABLED`): any other
- * value — unset, "true", "yes" — keeps the layer off, so a typo can only fail
- * toward the default (no secret machinery), never silently enable it.
+ * True when the operator opted into the secret-redaction layer. Only `1`
+ * enables it, matching the other public switches (`AGENT_SANITIZER_*_DISABLED`)
+ * and the SessionStart provisioning gate in provision-redactor.sh, so the hooks
+ * never redact through an engine that was not provisioned. Any other value
+ * keeps the layer off — reported, so `true` is not silently a no-op.
  * @param {NodeJS.ProcessEnv | Record<string, string | undefined>} [env]
  * @returns {boolean}
  */
 export function secretsEnabled(env = process.env) {
-  return env[SECRETS_ENABLED_ENV] === "1";
+  return readKnob(SECRETS_ENABLED_ENV, env);
 }
 
 // Layer 3's digest exemption, which lets a URL carry an exact-digest-length hex
@@ -246,14 +248,14 @@ export function secretsEnabled(env = process.env) {
 export const FLAG_DIGEST_VALUES_ENV = "AGENT_SANITIZER_FLAG_DIGEST_VALUES";
 
 /**
- * True when the operator opted into flagging digest-shaped URL values. `=== "1"`
- * for the reason {@link secretsEnabled} gives: a typo fails toward the default,
- * which is the exemption the precision rule prefers.
+ * True when the operator opted into flagging digest-shaped URL values. Only
+ * `1`, for the reason {@link secretsEnabled} gives: a typo fails toward the
+ * default (reported), which is the exemption the precision rule prefers.
  * @param {NodeJS.ProcessEnv | Record<string, string | undefined>} [env]
  * @returns {boolean}
  */
 export function digestFlaggingEnabled(env = process.env) {
-  return env[FLAG_DIGEST_VALUES_ENV] === "1";
+  return readKnob(FLAG_DIGEST_VALUES_ENV, env);
 }
 
 /**
