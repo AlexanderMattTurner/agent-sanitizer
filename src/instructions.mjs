@@ -338,6 +338,30 @@ function keepContained(absPath, realRoot, literalRoot, pattern) {
   );
 }
 
+// A `**` segment directly followed by a dot-named one (`**/.claude`).
+const DOT_AFTER_GLOBSTAR = /(?:^|\/)\*\*\/(?=\.)/;
+
+/**
+ * `pattern` as patterns every supported Node answers alike.
+ *
+ * Node's globSync before 22.22.1, 24.13.1 and 25.4.0 (nodejs/node#61012)
+ * matches NOTHING for a `**` followed by a dot-named segment, so
+ * `**\/.claude/*.md` finds no file and the scan reports clean over files it
+ * never read. Such a `**\/` spans zero directories or one or more: dropping it
+ * is the first case and `**\/*\/` the second, and neither half puts a dot
+ * segment straight after a `**`. A `*` skips dot-named directories exactly as
+ * the fixed `**` does, so the halves together match what the fixed Node does.
+ * @param {string} pattern
+ * @returns {string[]}
+ */
+function expandDotGlobstar(pattern) {
+  const match = DOT_AFTER_GLOBSTAR.exec(pattern);
+  if (!match) return [pattern];
+  const head = pattern.slice(0, match.index + match[0].indexOf("*"));
+  const tail = pattern.slice(match.index + match[0].length);
+  return [`${head}${tail}`, `${head}**/*/${tail}`].flatMap(expandDotGlobstar);
+}
+
 /**
  * Every `globs` match under `cwd`, as an absolute path, with `node_modules` and
  * whatever `exclude` rejects pruned from the WALK rather than filtered from its
@@ -364,7 +388,7 @@ export function walkContextGlobs(globs, cwd, exclude) {
   // under a `.claude/worktrees/` checkout.
   /** @param {import("node:fs").Dirent} dirent @returns {string} */
   const absolute = (dirent) => resolve(root, dirent.parentPath, dirent.name);
-  return globSync(globs, {
+  return globSync(globs.flatMap(expandDotGlobstar), {
     cwd,
     withFileTypes: true,
     exclude: (dirent) => {

@@ -48649,10 +48649,17 @@ function keepContained(absPath, realRoot, literalRoot, pattern) {
     )} outside ${JSON.stringify(realRoot)}`
   );
 }
+function expandDotGlobstar(pattern) {
+  const match = DOT_AFTER_GLOBSTAR.exec(pattern);
+  if (!match) return [pattern];
+  const head = pattern.slice(0, match.index + match[0].indexOf("*"));
+  const tail = pattern.slice(match.index + match[0].length);
+  return [`${head}${tail}`, `${head}**/*/${tail}`].flatMap(expandDotGlobstar);
+}
 function walkContextGlobs(globs, cwd, exclude) {
   const root2 = resolve3(cwd);
   const absolute = (dirent) => resolve3(root2, dirent.parentPath, dirent.name);
-  return globSync(globs, {
+  return globSync(globs.flatMap(expandDotGlobstar), {
     cwd,
     withFileTypes: true,
     exclude: (dirent) => {
@@ -48763,7 +48770,7 @@ function cleanFile(absPath, lstat = lstatSync2) {
     closeSync2(fd);
   }
 }
-var UNTRUSTED_PREFIX, NEWLINE, ZW_BIT, BITS_SHOWN;
+var UNTRUSTED_PREFIX, NEWLINE, ZW_BIT, BITS_SHOWN, DOT_AFTER_GLOBSTAR;
 var init_instructions = __esm({
   "src/instructions.mjs"() {
     "use strict";
@@ -48779,6 +48786,7 @@ var init_instructions = __esm({
       [8205, "|"]
     ]);
     BITS_SHOWN = 80;
+    DOT_AFTER_GLOBSTAR = /(?:^|\/)\*\*\/(?=\.)/;
   }
 });
 

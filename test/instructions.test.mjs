@@ -417,6 +417,52 @@ describe("findInstructionFiles", () => {
     assert.deepEqual(found, [join(tmpDir, ".claude", "skills", "SKILL.md")]);
   });
 
+  // Node's own globSync before 22.22.1 / 24.13.1 / 25.4.0 matches none of
+  // these, so each case is red on such a Node without the expansion.
+  for (const [pattern, exclude, expected] of [
+    [
+      "**/.claude/*.md",
+      undefined,
+      [".claude/notes.md", "a/b/.claude/notes.md", "pkg/.claude/notes.md"],
+    ],
+    [
+      "**/.claude/*.md",
+      (entry) => entry === "pkg",
+      [".claude/notes.md", "a/b/.claude/notes.md"],
+    ],
+    [
+      "**/.claude/skills/**/*.md",
+      undefined,
+      [".claude/skills/a/SKILL.md", "pkg/.claude/skills/a/b/SKILL.md"],
+    ],
+    [
+      "**/.claude/**/.y/*.md",
+      undefined,
+      [".claude/.y/z.md", "a/.claude/.y/z.md"],
+    ],
+  ])
+    it(`walks ${pattern} into every non-dot depth${exclude ? " under exclude" : ""}`, () => {
+      for (const rel of [
+        ".claude/notes.md",
+        "a/b/.claude/notes.md",
+        "pkg/.claude/notes.md",
+        ".claude/skills/a/SKILL.md",
+        "pkg/.claude/skills/a/b/SKILL.md",
+        ".claude/.y/z.md",
+        "a/.claude/.y/z.md",
+        // A `**` never descends into a dot-named directory.
+        ".hidden/.claude/notes.md",
+      ]) {
+        mkdirSync(join(tmpDir, rel, ".."), { recursive: true });
+        writeFileSync(join(tmpDir, rel), "x");
+      }
+      const found = walkContextGlobs([pattern], tmpDir, exclude).sort();
+      assert.deepEqual(
+        found,
+        expected.map((rel) => join(tmpDir, rel)),
+      );
+    });
+
   it("hands exclude scan-root entries whatever the process cwd is", () => {
     // A literal segment (`.claude` in `.claude/*.md`) reaches exclude with a
     // parentPath relative to the glob's cwd. Resolved against process.cwd(), a
