@@ -8,7 +8,6 @@ env-bound values come from a :class:`RedactorConfig` instead of ``os.environ``.
 
 import hashlib
 import re
-import time
 import types
 
 import pytest
@@ -24,6 +23,8 @@ from agent_sanitizer.secrets import (
     secret_previews,
 )
 from redactor_helpers import SAMPLES, cfg, reconstruct, run_map, run_plain
+
+from tests._growth import assert_linear, cpu_growth, geometric_sizes
 
 
 def val_cand(value: str, line: str | None = None) -> E.Candidate:
@@ -141,22 +142,42 @@ def test_field_value_regex_case_insensitive_and_multiline():
     assert later.group("secret_value") == "abc123def456ghi789jkl012"
 
 
+def _underscore_run(n: int) -> str:
+    """A keyword, a run of `_`, then a byte that is not an assignment operator,
+    so no match ever completes."""
+    return "token" + "_" * n + "!"
+
+
 @pytest.mark.parametrize("n", [16, 32, 48, 64])
-def test_field_value_re_linear_on_underscore_run(n):
-    # ReDoS adversarial input: a keyword, a long run of `_`, then a byte that is
-    # not an assignment operator so no match ever completes. The old
-    # `(?:[_-]\w+)*` had separator `[_-]` and body `\w` both matching `_`, so the
-    # run repartitioned exponentially (measured 7.9s at n=38, doubling every 2
-    # chars). The non-overlapping `(?:[_-][A-Za-z0-9]+)*` — disjoint separator
-    # and body classes — parses the run exactly one way, so search stays linear.
-    adversarial = "token" + "_" * n + "!"
-    start = time.perf_counter()
-    assert E.FIELD_VALUE_RE.search(adversarial) is None
-    # allow-wall-clock: an exponential ReDoS blowup at these sizes cannot meet
-    # a 1s ceiling under any CI load — this asserts the regex has no
-    # catastrophic backtracking, run against the REAL compiled pattern (not
-    # an approximation).
-    assert time.perf_counter() - start < 1.0, n
+def test_field_value_re_rejects_an_underscore_run(n):
+    assert E.FIELD_VALUE_RE.search(_underscore_run(n)) is None
+
+
+def test_field_value_re_linear_on_underscore_run():
+    # ReDoS adversarial input. The old `(?:[_-]\w+)*` had separator `[_-]` and
+    # body `\w` both matching `_`, so the run repartitioned exponentially
+    # (measured 7.9s at n=38, doubling every 2 chars). The non-overlapping
+    # `(?:[_-][A-Za-z0-9]+)*` — disjoint separator and body classes — parses the
+    # run exactly one way, so search stays linear. Run against the REAL compiled
+    # pattern, not an approximation.
+    #
+    # The fit cannot be taken where the OLD pattern would finish. Below ~20
+    # underscores the string is too short for any match and the engine rejects
+    # it in ~90ns, and up to ~128 the fixed pattern's own curve still bends
+    # (it reads exponent 4.6 over 16-32 and 2.4 over 16-128 on a loaded
+    # machine) — while the old pattern costs ~1s at 32 and hours at 64. So the
+    # fit runs where the fixed pattern is in its linear regime (128-1024 reads
+    # ~1.0), and an exponential regression would hang this test rather than
+    # classify. The class itself is gated statically, without running it, by
+    # `test_redos_static_guard.py`, which analyses FIELD_VALUE_RE with the rest
+    # of the engine's patterns.
+    assert_linear(
+        "FIELD_VALUE_RE on an underscore run",
+        cpu_growth(
+            lambda n: lambda text=_underscore_run(n): E.FIELD_VALUE_RE.search(text),
+            geometric_sizes(128, 1024),
+        ),
+    )
 
 
 # ─── Bracket-wrapped values ──────────────────────────────────────────────────

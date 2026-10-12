@@ -18,7 +18,6 @@ match the JS by inspection:
 
 import json
 import re
-import time
 import unicodedata
 import warnings
 from collections.abc import Callable
@@ -27,6 +26,12 @@ import pytest
 from hypothesis import given
 from hypothesis import strategies as st
 
+from tests._growth import (
+    assert_linear,
+    assert_superlinear,
+    cpu_growth,
+    geometric_sizes,
+)
 from tests._helpers import REPO_ROOT, ensure_python_pkg_on_path
 
 ensure_python_pkg_on_path()
@@ -245,23 +250,13 @@ def test_pattern_compiles_under_plain_re_with_no_flags() -> None:
     assert ANSI_RE.pattern == pattern
 
 
-def _growth(compiled: re.Pattern, text: Callable[[int], str], n: int) -> float:
-    """How much longer ``compiled`` takes on ``text(8 * n)`` than on ``text(n)``:
-    ~8 when linear, ~64 when quadratic. The best of five runs damps noise."""
-
-    def seconds(subject: str) -> float:
-        best = float("inf")
-        for _ in range(5):
-            start = time.perf_counter()
-            compiled.sub("", subject)
-            best = min(best, time.perf_counter() - start)
-        return best
-
-    return seconds(text(8 * n)) / seconds(text(n))
-
-
-# Between the ~8x of a linear pattern and the ~64x of a quadratic one.
-_LINEAR_GROWTH_BOUND = 24
+def _curve(compiled: re.Pattern, text: Callable[[int], str], n: int):
+    """How ``compiled``'s cost grows from ``text(n)`` to ``text(8 * n)``, as the
+    shared estimator fits it (``tests/_growth.py``)."""
+    return cpu_growth(
+        lambda size: lambda subject=text(size): compiled.sub("", subject),
+        geometric_sizes(n, 8 * n),
+    )
 
 
 @pytest.mark.parametrize(
@@ -279,17 +274,20 @@ def test_pattern_is_linear_on_unterminated_runs(text: Callable[[int], str]) -> N
     """The generated pattern runs on untrusted input inside a consumer with no
     timeout. Each arm's quantified class is disjoint from what follows it, so a
     run with no final byte fails in one pass. ``regexploit`` does not flag two
-    adjacent overlapping stars, so the guard is the cost itself: a ratio on one
-    machine, not a wall-clock threshold on an unknown runner."""
-    assert _growth(ANSI_RE, text, 20_000) < _LINEAR_GROWTH_BOUND
+    adjacent overlapping stars, so the guard is the cost itself: a growth
+    exponent fitted on one machine, not a wall-clock threshold on an unknown
+    runner."""
+    assert_linear("ANSI_RE on an unterminated run", _curve(ANSI_RE, text, 20_000))
 
 
 def test_growth_bound_catches_a_quadratic_pattern() -> None:
     """Non-vacuity: two adjacent stars over one class, the shape the arms avoid,
-    exceed the bound on an unterminated run."""
+    classify as super-linear on an unterminated run."""
     quadratic = re.compile("\x1b\\[[ -?]*[ -?]*[@-~]")
-    growth = _growth(quadratic, lambda n: "\x1b[" + " " * n, 300)
-    assert growth > _LINEAR_GROWTH_BOUND
+    assert_superlinear(
+        "two adjacent stars over one class",
+        _curve(quadratic, lambda n: "\x1b[" + " " * n, 300),
+    )
 
 
 # ─── Invisible charset completeness (the pinned-SSOT guarantee) ───────────────
