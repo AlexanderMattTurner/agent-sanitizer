@@ -37,9 +37,11 @@ import {
 } from "./redactor-wire.mjs";
 import { currentUid, isPrivateDir, ownedByCurrentUser } from "./hook-io.mjs";
 import { readKnob } from "./knobs.mjs";
-import { displayUntrusted } from "../../src/claude-context.mjs";
 
 export { FRAME_CAP };
+
+// The only daemon error text worth quoting: one short printable-ASCII line.
+const DAEMON_REASON = /^[\x20-\x7e]{1,200}$/u;
 
 // Published here, where hosts already import it; the parser behind every
 // millisecond knob lives with the knob table.
@@ -310,15 +312,21 @@ export function connectAndRequest(
       const parsed = frameRead.value;
       if (isPlainObject(parsed) && "error" in parsed) {
         // Our daemon's error strings are fixed literals, but the wire types
-        // `error` only as a string: whatever answers on the socket chooses it,
-        // and this message reaches the operator and the model.
-        const reason = conforms(parsed, PROTOCOL.responses.error)
-          ? `: ${parsed.error}`
-          : "";
+        // `error` only as a string, so whatever answers on the socket chooses
+        // it, and this message reaches the operator and the model. Quote it
+        // only when it is plain printable ASCII on one line; anything else is
+        // dropped rather than escaped, because this module must not import the
+        // engine (the fault path has to load with no peer package installed).
+        const reason =
+          conforms(parsed, PROTOCOL.responses.error) &&
+          typeof parsed.error === "string" &&
+          DAEMON_REASON.test(parsed.error)
+            ? `: ${parsed.error}`
+            : "";
         finish(
           reject,
           new Error(
-            `daemon reported redaction failure${displayUntrusted(reason)}; its log is ${join(dirname(socketPath), "daemon.log")}`,
+            `daemon reported redaction failure${reason}; its log is ${join(dirname(socketPath), "daemon.log")}`,
           ),
         );
         return;

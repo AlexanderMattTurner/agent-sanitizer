@@ -31,7 +31,6 @@ import { ancestor, simple } from "acorn-walk";
 
 import { repoRoot } from "./helpers/repo-root.mjs";
 import { withCapturedStdout } from "./helpers/capture-stdout.mjs";
-import { startStandInDaemon } from "./redactor-stand-in.mjs";
 
 // Set before the hooks import: the SessionStart scan walks CLAUDE_PROJECT_DIR
 // and rewrites what it flags, so it must never point at this checkout.
@@ -56,8 +55,6 @@ const { scanLoadedFile, loadedFileMessage } =
 const { describeExfil } = await import("../src/warnings.mjs");
 const { OPS } = await import("../bin/sanitize-cli.mjs");
 const { alertDir } = await import("../claude-hooks/lib/invisible-alert.mjs");
-const { connectAndRequest } =
-  await import("../claude-hooks/lib/redactor-client.mjs");
 
 after(() => {
   rmSync(sandbox, { recursive: true, force: true });
@@ -457,29 +454,6 @@ describe("every scanner-rendered untrusted string goes through displayUntrusted"
           "a",
         ),
       ),
-    "claude-hooks/lib/redactor-client.mjs::reason": async () => {
-      // `error` is typed only as a string on the wire, so a peer on the socket
-      // picks it; it must reach the message escaped.
-      const dir = mkdtempSync(join(tmpdir(), "rp-"));
-      const socketPath = join(dir, "r.sock");
-      const server = await startStandInDaemon(socketPath, () => ({
-        error: HOSTILE,
-      }));
-      try {
-        const error = await connectAndRequest(
-          socketPath,
-          { text: "x", map: false, web_ingress: true, env_secrets: {} },
-          2000,
-        ).then(
-          () => assert.fail("an error response resolved"),
-          (/** @type {Error} */ err) => err,
-        );
-        rendersNeutralized(error.message);
-      } finally {
-        server.close();
-        rmSync(dir, { recursive: true, force: true });
-      }
-    },
     "src/claude-context.mjs::tail[0]": () => {
       const notice = contextScopeContradiction(
         join(projectDir, ".claude", HOSTILE, "x.md"),
@@ -594,6 +568,10 @@ describe("every scanner-rendered untrusted string goes through displayUntrusted"
     // A hook FAULT's text, reduced by safeErrMessage to printable ASCII, tab
     // and newline: no invisible, bidi or escape character survives it.
     "claude-hooks/lib/hook-io.mjs::safeErrMessage(err)",
+    // The daemon's error text, quoted only when it is one printable-ASCII line
+    // (DAEMON_REASON); pinned with a hostile string in
+    // redactor-client-protocol.test.mjs.
+    "claude-hooks/lib/redactor-client.mjs::reason",
     "claude-hooks/pretooluse-sanitize.mjs::safeErrMessage(err)",
   ]);
 

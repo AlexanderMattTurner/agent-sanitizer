@@ -49510,11 +49510,11 @@ function connectAndRequest(socketPath, request, deadlineMs = requestDeadlineMs()
       if (frameRead === void 0) return;
       const parsed = frameRead.value;
       if (isPlainObject2(parsed) && "error" in parsed) {
-        const reason = conforms(parsed, redactor_protocol_default.responses.error) ? `: ${parsed.error}` : "";
+        const reason = conforms(parsed, redactor_protocol_default.responses.error) && typeof parsed.error === "string" && DAEMON_REASON.test(parsed.error) ? `: ${parsed.error}` : "";
         finish(
           reject,
           new Error(
-            `daemon reported redaction failure${displayUntrusted(reason)}; its log is ${join7(dirname6(socketPath), "daemon.log")}`
+            `daemon reported redaction failure${reason}; its log is ${join7(dirname6(socketPath), "daemon.log")}`
           )
         );
         return;
@@ -49670,7 +49670,7 @@ async function redactViaDaemon(text6, opts) {
     }
   }
 }
-var DEFAULT_SOCKET_PATH, WAIT_DEADLINE_MS, sleep, STDERR_TAIL_CHARS;
+var DAEMON_REASON, DEFAULT_SOCKET_PATH, WAIT_DEADLINE_MS, sleep, STDERR_TAIL_CHARS;
 var init_redactor_client = __esm({
   "claude-hooks/lib/redactor-client.mjs"() {
     "use strict";
@@ -49679,8 +49679,8 @@ var init_redactor_client = __esm({
     init_redactor_wire();
     init_hook_io();
     init_knobs();
-    init_claude_context();
     init_knobs();
+    DAEMON_REASON = /^[\x20-\x7e]{1,200}$/u;
     DEFAULT_SOCKET_PATH = readKnob("_AGENT_SANITIZER_REDACTOR_SOCKET") ?? join7(tmpdir2(), "agent-sanitizer-redactor", "redactor.sock");
     WAIT_DEADLINE_MS = readKnob("_AGENT_SANITIZER_REDACTOR_WAIT_MS");
     sleep = (ms) => new Promise((resolve6) => {
