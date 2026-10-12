@@ -444,10 +444,25 @@ function refuseIfSpent(deadline) {
 }
 
 /**
- * The heavy HTML layer (./html.mjs), loaded on first use.
+ * The heavy HTML layer (./html.mjs), loaded on first use. The load is awaited,
+ * so it can spend the very budget the caller's pre-check saw, and every caller
+ * goes straight on to a synchronous, uninterruptible parse: the deadline is
+ * therefore re-checked HERE, after the import resolves, rather than left to
+ * each call site to remember. A cached module still yields a microtask turn.
+ * @param {Deadline | undefined} deadline
  * @returns {Promise<typeof import("./html.mjs")>}
  */
-async function loadHtmlLayer() {
+async function loadHtmlLayer(deadline) {
+  const layer = await importHtmlLayer();
+  refuseIfSpent(deadline);
+  return layer;
+}
+
+/**
+ * The bare dynamic import behind {@link loadHtmlLayer}.
+ * @returns {Promise<typeof import("./html.mjs")>}
+ */
+async function importHtmlLayer() {
   /* c8 ignore start -- a rejected dynamic import of a module that ships in
      this very package (not an optional peer dep) requires corrupting
      node_modules or the filesystem to trigger; there's no clean way to force
@@ -573,7 +588,7 @@ async function applyMarkdownPipeline(state, options) {
   const runLayer3 = Boolean(exfilScan) && needsUrlScan(inputText);
   if (!runLayer2 && !runLayer3) return { reveal: undefined, splices };
   refuseIfSpent(deadline);
-  const htmlLayer = await loadHtmlLayer();
+  const htmlLayer = await loadHtmlLayer(deadline);
   // Layer 2 — strips what a rendered page would not show (comments, hidden
   // elements); scripting/resource tags preserved+reported. Each cut leaves a
   // keyed placeholder whose original bytes ride out in `splices`.
@@ -635,7 +650,12 @@ async function applyMarkdownPipeline(state, options) {
  */
 async function rescanUrls(state, options) {
   if (!options.exfilScan || !needsUrlScan(state.text)) return;
-  applyLayer3(state, await loadHtmlLayer(), state.text, options);
+  applyLayer3(
+    state,
+    await loadHtmlLayer(options.deadline),
+    state.text,
+    options,
+  );
 }
 
 /**
@@ -1255,6 +1275,18 @@ async function sanitizeObject(value, ctx, depth, path) {
   const out = {};
   let modified = false;
   let sgrNote = false;
+  // Every source name is sanitized and RESERVED before any is written, so a
+  // generated `<name> [withheld duplicate N]` can never equal a later raw
+  // field's name and falsely withhold an unrelated value.
+  /** @type {Array<{ name: Awaited<ReturnType<typeof sanitizeString>>, item: unknown }>} */
+  const named = [];
+  /** @type {Set<string>} */
+  const reserved = new Set();
+  for (const [key, item] of Object.entries(value)) {
+    const name = await sanitizeString(key, ctx.key, ctx);
+    reserved.add(name.value);
+    named.push({ name, item });
+  }
   // Names already withheld, so a THIRD field colliding onto the same name does
   // not re-warn; and the next free duplicate index per name, so N collisions
   // probe in O(N) rather than O(N²) — the count is the tool output's to choose.
@@ -1262,8 +1294,7 @@ async function sanitizeObject(value, ctx, depth, path) {
   const collided = new Set();
   /** @type {Map<string, number>} */
   const nextDuplicate = new Map();
-  for (const [key, item] of Object.entries(value)) {
-    const name = await sanitizeString(key, ctx.key, ctx);
+  for (const { name, item } of named) {
     const result = await sanitizeValueAt(
       item,
       ctx,
@@ -1282,10 +1313,12 @@ async function sanitizeObject(value, ctx, depth, path) {
       ctx.warnings.push(collisionWarning(name.value, path));
       defineOwn(out, name.value, COLLISION_WITHHELD_MESSAGE);
     }
-    // The probe still checks `out`: a raw field already NAMED
-    // `<name> [withheld duplicate 2]` must not be clobbered.
+    // Skip every reserved source name AND every earlier generated one.
     let index = nextDuplicate.get(name.value) ?? 2;
-    while (Object.hasOwn(out, `${name.value} [withheld duplicate ${index}]`))
+    while (
+      reserved.has(`${name.value} [withheld duplicate ${index}]`) ||
+      Object.hasOwn(out, `${name.value} [withheld duplicate ${index}]`)
+    )
       index++;
     nextDuplicate.set(name.value, index + 1);
     defineOwn(

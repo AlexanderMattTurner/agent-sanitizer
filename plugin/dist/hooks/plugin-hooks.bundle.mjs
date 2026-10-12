@@ -46841,7 +46841,12 @@ function refuseIfSpent(deadline) {
       "CRITICAL: the sanitization time budget ran out before the hidden-HTML and exfil-URL layers finished, so this text was not fully checked. Failing closed \u2014 tool output suppressed."
     );
 }
-async function loadHtmlLayer() {
+async function loadHtmlLayer(deadline) {
+  const layer = await importHtmlLayer();
+  refuseIfSpent(deadline);
+  return layer;
+}
+async function importHtmlLayer() {
   try {
     return await Promise.resolve().then(() => (init_html4(), html_exports2));
   } catch (importErr) {
@@ -46897,7 +46902,7 @@ async function applyMarkdownPipeline(state, options) {
   const runLayer3 = Boolean(exfilScan) && needsUrlScan(inputText);
   if (!runLayer2 && !runLayer3) return { reveal: void 0, splices };
   refuseIfSpent(deadline);
-  const htmlLayer = await loadHtmlLayer();
+  const htmlLayer = await loadHtmlLayer(deadline);
   if (runLayer2) {
     const layer2 = htmlLayer.sanitizeHtml(state.text);
     if (layer2) {
@@ -46929,7 +46934,12 @@ async function applyMarkdownPipeline(state, options) {
 }
 async function rescanUrls(state, options) {
   if (!options.exfilScan || !needsUrlScan(state.text)) return;
-  applyLayer3(state, await loadHtmlLayer(), state.text, options);
+  applyLayer3(
+    state,
+    await loadHtmlLayer(options.deadline),
+    state.text,
+    options
+  );
 }
 async function vetStageValue(text5, redact, findings, label) {
   if (!redact) return text5;
@@ -47145,10 +47155,16 @@ async function sanitizeObject(value, ctx, depth, path2) {
   const out = {};
   let modified = false;
   let sgrNote = false;
-  const collided = /* @__PURE__ */ new Set();
-  const nextDuplicate = /* @__PURE__ */ new Map();
+  const named = [];
+  const reserved = /* @__PURE__ */ new Set();
   for (const [key, item] of Object.entries(value)) {
     const name50 = await sanitizeString(key, ctx.key, ctx);
+    reserved.add(name50.value);
+    named.push({ name: name50, item });
+  }
+  const collided = /* @__PURE__ */ new Set();
+  const nextDuplicate = /* @__PURE__ */ new Map();
+  for (const { name: name50, item } of named) {
     const result = await sanitizeValueAt(
       item,
       ctx,
@@ -47168,7 +47184,7 @@ async function sanitizeObject(value, ctx, depth, path2) {
       defineOwn(out, name50.value, COLLISION_WITHHELD_MESSAGE);
     }
     let index2 = nextDuplicate.get(name50.value) ?? 2;
-    while (Object.hasOwn(out, `${name50.value} [withheld duplicate ${index2}]`))
+    while (reserved.has(`${name50.value} [withheld duplicate ${index2}]`) || Object.hasOwn(out, `${name50.value} [withheld duplicate ${index2}]`))
       index2++;
     nextDuplicate.set(name50.value, index2 + 1);
     defineOwn(

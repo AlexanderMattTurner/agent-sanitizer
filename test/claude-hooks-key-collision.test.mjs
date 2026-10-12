@@ -161,4 +161,37 @@ describe("sanitize-output: key-collision recovery", () => {
     assert.equal(modified, false);
     assert.deepEqual(warnings, []);
   });
+
+  it("never lets a generated duplicate name overwrite a later raw field", async () => {
+    // `a` and `a<ZW>` collapse to `a`; the first free generated name is
+    // `a [withheld duplicate 2]`, which a LATER raw field already carries. The
+    // generated name must step past it so that unrelated value survives.
+    const { value, warnings } = await walk({
+      a: "one",
+      [`a${ZW}`]: "two",
+      "a [withheld duplicate 2]": "raw-survivor",
+    });
+    assert.deepEqual(Object.keys(value), [
+      "a",
+      "a [withheld duplicate 3]",
+      "a [withheld duplicate 2]",
+    ]);
+    assert.equal(value.a, COLLISION_WITHHELD_MESSAGE);
+    assert.equal(value["a [withheld duplicate 3]"], COLLISION_WITHHELD_MESSAGE);
+    assert.equal(value["a [withheld duplicate 2]"], "raw-survivor");
+    assert.equal(JSON.stringify(value).includes("one"), false);
+    assert.equal(JSON.stringify(value).includes("two"), false);
+    assert.deepEqual(collisions(warnings), [collisionWarning("a", "")]);
+  });
+
+  it("positive control: a raw field with no colliding source name keeps its value", async () => {
+    const { value } = await walk({
+      a: "one",
+      "a [withheld duplicate 2]": "raw-survivor",
+    });
+    assert.deepEqual(value, {
+      a: "one",
+      "a [withheld duplicate 2]": "raw-survivor",
+    });
+  });
 });
