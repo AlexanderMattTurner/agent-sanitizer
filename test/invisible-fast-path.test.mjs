@@ -274,16 +274,28 @@ describe("property: no input separates a fast path from the analysis", () => {
     // Counted, not assumed: a draw distribution that never produced a run of
     // ten would make every assertion below `[] === []`.
     let withRun = 0;
+    let withSecondRun = 0;
     fc.assert(
       fc.property(arbAnyText, (text) => {
         const runs = referenceRuns(text);
         if (runs.length > 0) withRun++;
+        if (runs.length > 1) withSecondRun++;
         assert.deepEqual([...findLongRuns(text)], runs);
         assert.equal(hasLongRun(text), runs.length > 0);
+        // Resuming at the end of the first run (what scanText does with the
+        // verdict's run in hand) yields exactly the runs after it.
+        if (runs.length > 0) {
+          const [first] = runs;
+          assert.deepEqual(
+            [...findLongRuns(text, first.index + first.text.length)],
+            runs.slice(1),
+          );
+        }
       }),
       { numRuns: 2000 },
     );
     assert.ok(withRun > 0, "no draw carried a long run");
+    assert.ok(withSecondRun > 0, "no draw carried a second long run");
   });
 
   it("payloadLongRunSample", () =>

@@ -236,11 +236,20 @@ export function scanText(content) {
   let line = 1;
   let counted = 0;
   // The verdict keeps only the first run; the rest come off the payload view,
-  // which is index-aligned with `content` and masks preserved invisibles.
+  // which is index-aligned with `content` and masks preserved invisibles. The
+  // search resumes past the first run rather than matching it a second time,
+  // which on one 256 KB payload run is a regex pass over the whole file.
+  const { firstRun } = verdict;
   const runs =
-    verdict.firstRun === null
+    firstRun === null
       ? []
-      : findLongRuns(payloadInvisibleView(content));
+      : [
+          firstRun,
+          ...findLongRuns(
+            payloadInvisibleView(content),
+            firstRun.index + firstRun.text.length,
+          ),
+        ];
   for (const run of runs) {
     for (; counted < run.index; counted++)
       if (content.charCodeAt(counted) === NEWLINE) line++;

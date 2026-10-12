@@ -218,14 +218,16 @@ const RUN_TAIL_RE = new RegExp(`(?:${STRIP.source}){1,${RUN_CHUNK}}`, "yu");
  * that hits the bound is continued by {@link RUN_TAIL_RE} until it ends, so the
  * runs reported are maximal at any length.
  * @param {string} text
+ * @param {number} [from]  UTF-16 offset to resume at: the end of a run already
+ *   taken off this text, so a caller holding the first run need not re-measure it
  * @returns {Generator<{ index: number, text: string, charCount: number }>}
  */
-export function* findLongRuns(text) {
+export function* findLongRuns(text, from = 0) {
   // Both regexes are module-level and carry `lastIndex`, and a generator can be
   // suspended anywhere — including inside another scan of another text. Every
   // exec below therefore sets its own start position first, so no scan can
   // inherit a position from one it interleaved with.
-  let pos = 0;
+  let pos = from;
   for (;;) {
     LONG_RUN_CHUNK_RE.lastIndex = pos;
     const match = LONG_RUN_CHUNK_RE.exec(text);
@@ -1231,12 +1233,11 @@ function markTagSequences(cps) {
   return keep;
 }
 
-// The range the registered sequences' selectors span: a cheap pre-filter.
-const STANDARDIZED_SELECTOR_MIN = Math.min(
-  ...STANDARDIZED_VARIANTS.map(([, selector]) => selector),
-);
-const STANDARDIZED_SELECTOR_MAX = Math.max(
-  ...STANDARDIZED_VARIANTS.map(([, selector]) => selector),
+// The selectors the registered sequences use: a cheap pre-filter. Not their
+// span — U+180B to U+FE0D also holds U+200B and most other Cf code points, so a
+// zero-width run paid the keyed sequence lookup once per character.
+const STANDARDIZED_SELECTORS = new Set(
+  STANDARDIZED_VARIANTS.map(([, selector]) => selector),
 );
 
 /**
@@ -1249,8 +1250,7 @@ const STANDARDIZED_SELECTOR_MAX = Math.max(
  */
 function isStandardizedVariationSelector(cps, i) {
   const cp = cps[i];
-  if (cp < STANDARDIZED_SELECTOR_MIN || cp > STANDARDIZED_SELECTOR_MAX)
-    return false;
+  if (!STANDARDIZED_SELECTORS.has(cp)) return false;
   return i > 0 && isStandardizedVariant(cps[i - 1], cp);
 }
 
@@ -1892,7 +1892,7 @@ function carveWalk(body, cps, analysis, build) {
  * @typedef {{ body: string, cps: Int32Array,
  *   analysis: ReturnType<typeof analyzeCarve>,
  *   strip: { cleaned: string, found: string[], removed: number } | null,
- *   removed: number | null }} CarveEntry
+ *   removed: number | null, view: string | null }} CarveEntry
  */
 
 /** @type {CarveEntry | null} */
@@ -1900,9 +1900,9 @@ let lastCarve = null;
 
 /**
  * The carve analysis of `body`, with the most recent one remembered — and its
- * strip, or removal count, once asked for. One hook call often carves one
- * document several times (the payload view, the effective count, then
- * {@link isIncidentalInvisible}); every reading is a pure function of `body`,
+ * strip, removal count or payload view, once asked for. One hook call often
+ * carves one document several times (the payload view, the effective count,
+ * then {@link isIncidentalInvisible}); every reading is a pure function of `body`,
  * so the cache changes what a verdict costs, never the verdict. One entry,
  * recorded only after the analysis returns.
  * @param {string} body
@@ -1912,7 +1912,7 @@ function carveOf(body) {
   if (lastCarve !== null && lastCarve.body === body) return lastCarve;
   const cps = codePointArray(body);
   const analysis = analyzeCarve(cps);
-  lastCarve = { body, cps, analysis, strip: null, removed: null };
+  lastCarve = { body, cps, analysis, strip: null, removed: null, view: null };
   return lastCarve;
 }
 
@@ -1952,10 +1952,13 @@ function needsCarveOut(body) {
  * @returns {string}
  */
 export function payloadInvisibleView(text) {
+  const entry = carveOf(text);
+  // The verdict's run search and a caller listing every run both read it.
+  if (entry.view !== null) return entry.view;
   const {
     cps,
     analysis: { codes, kind },
-  } = carveOf(text);
+  } = entry;
   const offsets = u16Offsets(cps);
   /** @param {number} i */
   const isPayload = (i) => codes[i] !== CODE_VISIBLE && kind[i] === KIND_NONE;
@@ -1974,7 +1977,8 @@ export function payloadInvisibleView(text) {
     while (i < cps.length && isPayload(i)) i++;
     if (i > keepFrom) parts.push(text.slice(offsets[keepFrom], offsets[i]));
   }
-  return parts.join("");
+  entry.view = parts.join("");
+  return entry.view;
 }
 
 /**
@@ -2065,6 +2069,17 @@ export function countEffectiveInvisible(text) {
   // Otherwise both terms read ONE carve analysis (see carveOf).
   const entry = carveOf(text);
   const payload = entry.analysis.payloadInvis;
+  // When every invisible is payload, nothing is preservable, so either strip
+  // removes exactly the invisibles and the surplus is zero — unless a removal
+  // closes a lone high surrogate against a lone low one, which the code-point
+  // gap counts too (see carveWalk's `removed`) and which needs a lone low one.
+  // A hidden run or a scatter of soft hyphens lands here, and answering off the
+  // analysis spares it a whole-text strip it would only measure.
+  if (
+    payload === entry.analysis.invisible.length &&
+    !LONE_LOW_SURROGATE_RE.test(text)
+  )
+    return payload;
   if (!needsCarveOut(text))
     return surplusOver(
       payload,

@@ -219,6 +219,15 @@ describe("scanText", () => {
     assert.equal(findings.length, 2);
     assert.equal(findings[0].decoded, untrusted("first payload"));
     assert.equal(findings[1].decoded, untrusted("second payload"));
+    // The first run comes off the verdict and the second off a search resumed
+    // past it, so each must still carry its own line and length.
+    assert.deepEqual(
+      findings.map(({ line, charCount }) => [line, charCount]),
+      [
+        [1, [...run1].length],
+        [3, [...run2].length],
+      ],
+    );
   });
 
   it("returns [] for clean content", () => {
