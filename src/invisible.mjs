@@ -465,25 +465,26 @@ const MAX_TAG_SPEC_CHARS = 6;
 // residual.
 const VS16 = 0xfe0f;
 
+/** Whether `cp` is in an emoji property, read off its cpProps `bit` below
+ * CP_PROPS_END and off `spans` above it; -1 is in none.
+ * @param {number} cp @param {number} bit
+ * @param {ReadonlyArray<readonly [number, number]>} spans
+ * @returns {boolean} */
+function hasEmojiProp(cp, bit, spans) {
+  if (cp < 0) return false;
+  if (cp >= CP_PROPS_END) return inSpans(spans, cp);
+  return (cpProps(cp) & bit) !== 0;
+}
+
 /** Emoji but not Emoji_Presentation. @param {number} cp @returns {boolean} */
-function isTextDefaultEmoji(cp) {
-  if (cp >= CP_PROPS_END) return inSpans(EMOJI_TEXT_DEFAULT, cp);
-  return (cpProps(cp) & PROP_EMOJI_TEXT_DEFAULT) !== 0;
-}
-
-/** A skin tone; -1 is not. @param {number} cp @returns {boolean} */
-function isEmojiModifierCp(cp) {
-  if (cp < 0) return false;
-  if (cp >= CP_PROPS_END) return inSpans(EMOJI_MODIFIER, cp);
-  return (cpProps(cp) & PROP_EMOJI_MODIFIER) !== 0;
-}
-
-/** Extended_Pictographic; -1 is not. @param {number} cp @returns {boolean} */
-function isExtendedPictographic(cp) {
-  if (cp < 0) return false;
-  if (cp >= CP_PROPS_END) return inSpans(EXTENDED_PICTOGRAPHIC, cp);
-  return (cpProps(cp) & PROP_EXTENDED_PICTOGRAPHIC) !== 0;
-}
+const isTextDefaultEmoji = (cp) =>
+  hasEmojiProp(cp, PROP_EMOJI_TEXT_DEFAULT, EMOJI_TEXT_DEFAULT);
+/** A skin tone. @param {number} cp @returns {boolean} */
+const isEmojiModifierCp = (cp) =>
+  hasEmojiProp(cp, PROP_EMOJI_MODIFIER, EMOJI_MODIFIER);
+/** Extended_Pictographic. @param {number} cp @returns {boolean} */
+const isExtendedPictographic = (cp) =>
+  hasEmojiProp(cp, PROP_EXTENDED_PICTOGRAPHIC, EXTENDED_PICTOGRAPHIC);
 
 /**
  * Upgrade to KIND_GLYPH each preserved VS16 on a text-default emoji, and each
@@ -703,9 +704,13 @@ function isVariationSelectorCp(cp) {
 }
 for (const ch of VS)
   if (!isVariationSelectorCp(/** @type {number} */ (ch.codePointAt(0))))
+    /* c8 ignore start -- an import-time consistency check of two committed
+       tables; it fires only if a regeneration broke one, which no test can
+       stage without a broken table to import. */
     throw new Error(
       `variation selector U+${ch.codePointAt(0)?.toString(16)} is not classified CODE_VS`,
     );
+/* c8 ignore stop */
 
 // Distinct code points a memoizedCpPredicate will remember. Comfortably above
 // the character repertoire of any real document (and of every test corpus here)
@@ -839,8 +844,11 @@ function cpProps(cp) {
   const known = table[cp];
   if (known !== 0) return known;
   const type = JOINING_TYPES.indexOf(joiningType(cp));
+  /* c8 ignore start -- the generated table holds only the types listed in
+     JOINING_TYPES; this fails loudly if a regeneration ever adds another. */
   if (type < 1)
     throw new Error(`unknown Joining_Type for U+${cp.toString(16)}`);
+  /* c8 ignore stop */
   const props =
     type |
     (isCursiveLetter(JOINING_TYPES[type]) || isBrahmicConsonant(cp)

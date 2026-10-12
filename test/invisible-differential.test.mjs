@@ -109,6 +109,14 @@ const CASES = {
   "ivs-cjk": "漢" + IVS,
   "ivs-dense": ("漢" + IVS).repeat(30),
   "ivs-no-base": "a" + IVS,
+  // Joining letters fund the joiners well past the cover allowance; the
+  // selectors after them, gapped so no run cap binds, spend the allowance
+  // with no joiner left to preserve.
+  "ivs-past-cover-allowance-after-joiners":
+    "م".repeat(2000) +
+    " " +
+    ("م" + ZWNJ + "م ").repeat(10) +
+    ("漢" + IVS + " ").repeat(80),
   // A run spent before a gap is stripped a stretch at a time; the gap reopens
   // it, and a spent cluster may straddle the gap (two harakat in a row).
   "ivs-past-cap-then-gap":

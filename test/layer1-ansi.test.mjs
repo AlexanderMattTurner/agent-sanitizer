@@ -30,6 +30,7 @@ import fc from "fast-check";
 import {
   applyLayer1,
   applyLayer1WellFormed,
+  isBenignAnsi,
   normalizeLoneSurrogates,
   stripAnsiFully,
 } from "../src/layer1.mjs";
@@ -642,4 +643,18 @@ describe("lone-surrogate divergence between Layer 1 and the model-facing view", 
     // A genuine pair is one astral character, never two lone halves.
     assert.equal(normalizeLoneSurrogates("x\u{1F600}y"), "x\u{1F600}y");
   });
+});
+
+describe("isBenignAnsi", () => {
+  // It judges what Layer 1's fixed point removed, not a scan of the raw text.
+  for (const [name, text, benign] of [
+    ["styling alone", "\x1b[31mred\x1b[0m", true],
+    ["no escape at all", "plain", true],
+    ["a screen erase", "\x1b[2Jcleared", false],
+    // An SGR inside an erase: removing it reconstitutes `ESC[2J`, which the
+    // strip's second pass removes.
+    ["an erase reconstituted by the strip", "\x1b[\x1b[m2J", false],
+  ])
+    it(`reads ${name} as ${benign ? "benign" : "not benign"}`, () =>
+      assert.equal(isBenignAnsi(text), benign));
 });
