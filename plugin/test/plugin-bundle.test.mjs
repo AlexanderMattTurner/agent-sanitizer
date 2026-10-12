@@ -48,6 +48,7 @@ import {
   runtimeRequires,
 } from "../../scripts/lib/bundle-esbuild.mjs";
 import { HOOK_MODES } from "../../claude-hooks/plugin-hooks.mjs";
+import { startStandInDaemon } from "../../test/redactor-stand-in.mjs";
 import { KNOBS } from "../../claude-hooks/lib/knobs.mjs";
 
 const ROOT = dirname(dirname(dirname(fileURLToPath(import.meta.url))));
@@ -941,31 +942,10 @@ test("output hook redacts through the daemon wire protocol", async (t) => {
   const socketPath = join(sockDir, "redactor.sock");
   t.after(() => rmSync(sockDir, { recursive: true, force: true }));
 
-  // A stub daemon speaking the real protocol: 4-byte big-endian length prefix
-  // then that many bytes of UTF-8 JSON, both directions.
-  const server = createServer((sock) => {
-    /** @type {Buffer[]} */
-    const chunks = [];
-    sock.on("data", (chunk) => {
-      chunks.push(chunk);
-      const buf = Buffer.concat(chunks);
-      if (buf.length < 4) return;
-      const len = buf.readUInt32BE(0);
-      if (buf.length < 4 + len) return;
-      const req = JSON.parse(buf.subarray(4, 4 + len).toString("utf8"));
-      const body = Buffer.from(
-        JSON.stringify({
-          text: req.text.replace(/AKIA[0-9A-Z]{16}/g, "STUB-SCRUBBED"),
-          found: ["AWSKeyDetector"],
-        }),
-        "utf8",
-      );
-      const header = Buffer.allocUnsafe(4);
-      header.writeUInt32BE(body.length, 0);
-      sock.end(Buffer.concat([header, body]));
-    });
-  });
-  await new Promise((resolve) => server.listen(socketPath, resolve));
+  const server = await startStandInDaemon(socketPath, (req) => ({
+    text: req.text.replace(/AKIA[0-9A-Z]{16}/g, "STUB-SCRUBBED"),
+    found: ["AWSKeyDetector"],
+  }));
   t.after(() => server.close());
 
   // Async: the stub daemon above is served by THIS process, so a blocking
@@ -2551,11 +2531,15 @@ test("_AGENT_SANITIZER_REDACTOR_WAIT_MS bounds the wait for a daemon that never 
   };
   // The opt-out posture throughout this section: the suppression IS the
   // observable that the timeout fired, and the open default has none.
+  // A daemon that SPAWNS and then never listens (exit 0 is the bind-race loser,
+  // which the client does not treat as a death). A missing binary would not do:
+  // that fails the spawn at once with its own reason and never waits at all.
+  const daemon = join(scratch(t), "never-listens-daemon");
+  writeFileSync(daemon, "#!/bin/sh\nexit 0\n", { mode: 0o755 });
   const env = {
     ...FAIL_CLOSED,
     _AGENT_SANITIZER_REDACTOR_SOCKET: join(scratch(t), "absent.sock"),
-    _AGENT_SANITIZER_REDACTOR_DAEMON:
-      "/nonexistent/agent-secret-redactor-daemon",
+    _AGENT_SANITIZER_REDACTOR_DAEMON: daemon,
     _AGENT_SANITIZER_REDACTOR_REQUEST_MS: "300",
   };
 

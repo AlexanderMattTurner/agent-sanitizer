@@ -79,7 +79,10 @@ describe("PreToolUse rehydration against the real daemon", { skip }, () => {
       "the real daemon never bound its socket",
     );
     writeFileSync(file, DISK);
-    const redacted = await redactViaDaemon(DISK, { map: true });
+    const redacted = await redactViaDaemon(DISK, {
+      map: true,
+      webIngress: false,
+    });
     view = /** @type {string} */ (redacted?.text);
     // Positive marker: the daemon really redacted the key, so the
     // restorations asserted below are the rehydrator's work, not a pass-through.
