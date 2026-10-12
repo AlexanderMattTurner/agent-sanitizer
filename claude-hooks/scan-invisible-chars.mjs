@@ -69,6 +69,7 @@ import {
   CLAUDE_CONTEXT_SUBDIRS,
   CLAUDE_INSTRUCTION_GLOBS,
   CLAUDE_LAUNCH_GLOBS,
+  displayUntrusted,
   isInsideDir,
 } from "../src/claude-context.mjs";
 
@@ -223,7 +224,7 @@ function decodeRun(run) {
 // The SSOT finder drops every target it cannot resolve, which is right for a
 // pure scan API; this hook must instead bucket it (see classifyReadFailure).
 // The write-side symlink hazard the SSOT finder guards against is covered here
-// by cleanFile's own O_NOFOLLOW open.
+// by cleanFile's own root containment and O_NOFOLLOW open.
 
 /**
  * Every file Claude Code loads as model context AT LAUNCH: `dir`'s own
@@ -376,7 +377,10 @@ export function formatSkipped(skipped) {
     "not read them, so they were never checked for hidden Unicode. Treat their",
     "content as unvetted.",
     "",
-    ...skipped.map(({ file, reason }) => `  ${file}: ${reason}`),
+    ...skipped.map(
+      ({ file, reason }) =>
+        `  ${displayUntrusted(file)}: ${displayUntrusted(reason)}`,
+    ),
     "",
   ].join("\n");
 }
@@ -567,8 +571,9 @@ function autoCleanFindings(allFindings, dir) {
     // cleanFile CLI to run against it deliberately.
     if (!isInsideDir(dir, absPath)) continue;
     try {
-      // The SSOT clean: O_NOFOLLOW open, UTF-8 round-trip check, TOCTOU
-      // recheck, atomic rename + fsync, mode preservation. The bare
+      // The SSOT clean: realpath containment in `dir` (the lexical check above
+      // cannot see a directory symlink), O_NOFOLLOW open, UTF-8 round-trip
+      // check, TOCTOU recheck, atomic rename + fsync, mode preservation. The bare
       // readFileSync/writeFileSync pair that lived here had none of those
       // guards — on the one hook that REWRITES instruction files.
       //
@@ -578,10 +583,10 @@ function autoCleanFindings(allFindings, dir) {
       // changed under us, or the flagged run is one the stripper PRESERVES —
       // so it is not a file we cleaned, and leaving `cleaned` short is what
       // routes it to the alert below instead of an "all clean" report.
-      if (cleanFile(absPath)) cleaned++;
-      /* c8 ignore start -- only fires on a file cleanFile refuses (symlink,
-         non-UTF-8, concurrent write) or cannot rewrite, which the test run
-         does not create */
+      if (cleanFile(absPath, { root: dir })) cleaned++;
+      /* c8 ignore start -- fires on a file cleanFile refuses (symlink,
+         outside the root, non-UTF-8, concurrent write) or cannot rewrite; the
+         TypeError rethrow inside it is unreachable from a test */
     } catch (err) {
       // The reason is REPORTED rather than swallowed: a refusal or an
       // unwritable file legitimately falls through to the alert path below. A
@@ -591,7 +596,7 @@ function autoCleanFindings(allFindings, dir) {
       // the same bindings, so this is a belt-and-braces rethrow.)
       if (err instanceof TypeError) throw err;
       process.stderr.write(
-        `scan-invisible-chars: could not clean ${file}: ${safeErrMessage(err)}\n`,
+        `scan-invisible-chars: could not clean ${displayUntrusted(file)}: ${displayUntrusted(safeErrMessage(err))}\n`,
       );
     }
     /* c8 ignore stop */

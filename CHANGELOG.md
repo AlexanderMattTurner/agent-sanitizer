@@ -8,6 +8,39 @@ adhere to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+## [2.62.0] - 2026-10-12
+
+### Added
+- New `atomic-replace.mjs` module providing safer file write operations.
+- `cleanFile` instruction now requires an explicit root parameter and refuses to write symlinks outside the root boundary.
+- Support for scanning `.claude/` instruction files when hooks run outside the project directory.
+
+### Changed
+- **BREAKING:** Removed UTF-16 `invisibleBytes` field from `view-map` `resolveSpan` result.
+- **BREAKING:** Removed `atomicReplaceFile` export; use `cleanFile` for instruction-file writes instead.
+- Improved character counting in rehydration to use code points instead of character units, preventing secret offset leaks.
+
+### Fixed
+- Daemon error messages now properly quoted only when they are single printable-ASCII lines.
+- Invisible and control characters in file paths are now escaped before rendering to the model.
+- Exfiltration host and partition names are now escaped and render-safe.
+- Unicode general category (`\p{General_Category}`) analysis in the JS ReDoS guard.
+- Async filesystem operations coverage and fixture sharing in path-invariant test suites.
+- Trimmed unnecessary comments in containment and display-escape code logic.
+
+## [2.61.3] - 2026-10-12
+
+### Fixed
+
+- Improved OpenAI API key detection to handle line-wrapped keys after lines ending in hyphens and to properly redact quoted field values containing brackets, trailing symbols, or digit runs.
+- Secrets detector now correctly leaves dummy provider keys (all-digit or hyphenated-name variants like sk-ant-/sk-or-) unmasked when bare or under a credential name.
+- Field value redaction now skips short and quoted values to avoid false positives on templates, flags, and spliced strings.
+
+### Changed
+
+- OpenAI detector implementation replaced with a linear-time algorithm optimized for repeated sk- prefixes, improving performance on large inputs.
+- Reclassified the OpenAI detector under the quadratic-reimplementation section for better organization.
+
 ## [2.61.2] - 2026-10-12
 
 ### Fixed

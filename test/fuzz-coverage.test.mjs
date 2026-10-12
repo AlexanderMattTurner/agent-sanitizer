@@ -124,6 +124,8 @@ const FUZZ_EXEMPT = Object.freeze({
   describeRemoved: "formats Layer 2's removal counts into prose",
   describeStripped: "formats Layer 1's CATEGORY codes into prose",
   describeWarned: "formats Layer 2's preserved-tag counts into prose",
+  displayUntrusted:
+    "total code-point escape for display, no parse; its property is pinned in claude-context.test.mjs",
   formatReason: "formats the prompt gate's block reason into prose",
   normalizeContext: "formats the folded field names into a model-facing note",
   withheldWarning:
