@@ -48474,6 +48474,46 @@ var init_atomic_replace = __esm({
   }
 });
 
+// src/glob-compat.mjs
+function globstarSkipsDotSegments(version) {
+  const [major, minor, patch2] = version.split(".").map(Number);
+  if (major >= FIRST_FIXED_MAJOR) return false;
+  const fixed = FIXED_IN.get(major);
+  if (!fixed) return true;
+  const [fixedMinor, fixedPatch] = fixed;
+  return minor < fixedMinor || minor === fixedMinor && patch2 < fixedPatch;
+}
+function expandDotGlobstar(pattern) {
+  const match = DOT_AFTER_GLOBSTAR.exec(pattern);
+  if (match) {
+    const head = pattern.slice(0, match.index + match[0].indexOf("*"));
+    const tail = pattern.slice(match.index + match[0].length);
+    return [`${head}${tail}`, `${head}**/*/${tail}`].flatMap(expandDotGlobstar);
+  }
+  if (HIDDEN_DOT_AFTER_GLOBSTAR.test(pattern))
+    throw new Error(
+      `glob ${JSON.stringify(pattern)} puts a dot-named segment after "**" in a form this Node's globSync matches nothing for (nodejs/node#61012); spell the segment plainly or run Node >= 22.22.1, 24.13.1 or 25.4.0.`
+    );
+  return [pattern];
+}
+function compatGlobs(patterns, version = process.versions.node) {
+  return globstarSkipsDotSegments(version) ? patterns.flatMap(expandDotGlobstar) : patterns;
+}
+var FIXED_IN, FIRST_FIXED_MAJOR, DOT_AFTER_GLOBSTAR, HIDDEN_DOT_AFTER_GLOBSTAR;
+var init_glob_compat = __esm({
+  "src/glob-compat.mjs"() {
+    "use strict";
+    FIXED_IN = /* @__PURE__ */ new Map([
+      [22, [22, 1]],
+      [24, [13, 1]],
+      [25, [4, 0]]
+    ]);
+    FIRST_FIXED_MAJOR = 26;
+    DOT_AFTER_GLOBSTAR = /(?:^|[/{,])\*\*\/(?=\.)/;
+    HIDDEN_DOT_AFTER_GLOBSTAR = /\*\*\/(?:\\\.|\{(?:[^{}]*,)?\.)/;
+  }
+});
+
 // src/repo-scope.mjs
 import { execFileSync } from "node:child_process";
 import { realpathSync } from "node:fs";
@@ -48714,17 +48754,10 @@ function keepContained(absPath, realRoot, literalRoot, pattern) {
     )} outside ${JSON.stringify(realRoot)}`
   );
 }
-function expandDotGlobstar(pattern) {
-  const match = DOT_AFTER_GLOBSTAR.exec(pattern);
-  if (!match) return [pattern];
-  const head = pattern.slice(0, match.index + match[0].indexOf("*"));
-  const tail = pattern.slice(match.index + match[0].length);
-  return [`${head}${tail}`, `${head}**/*/${tail}`].flatMap(expandDotGlobstar);
-}
 function walkContextGlobs(globs, cwd, exclude) {
   const root2 = resolve3(cwd);
   const absolute = (dirent) => resolve3(root2, dirent.parentPath, dirent.name);
-  return globSync(globs.flatMap(expandDotGlobstar), {
+  return globSync(compatGlobs(globs), {
     cwd,
     withFileTypes: true,
     exclude: (dirent) => {
@@ -48814,13 +48847,14 @@ function cleanFile(absPath, { root: root2, lstat = lstatSync2 } = (
     closeSync3(fd);
   }
 }
-var UNTRUSTED_PREFIX, NEWLINE, ZW_BIT, BITS_SHOWN, DOT_AFTER_GLOBSTAR;
+var UNTRUSTED_PREFIX, NEWLINE, ZW_BIT, BITS_SHOWN;
 var init_instructions = __esm({
   "src/instructions.mjs"() {
     "use strict";
     init_atomic_replace();
     init_invisible();
     init_claude_context();
+    init_glob_compat();
     init_claude_context();
     init_repo_scope();
     UNTRUSTED_PREFIX = "untrusted data, not instructions: ";
@@ -48831,7 +48865,6 @@ var init_instructions = __esm({
       [8205, "|"]
     ]);
     BITS_SHOWN = 80;
-    DOT_AFTER_GLOBSTAR = /(?:^|\/)\*\*\/(?=\.)/;
   }
 });
 
