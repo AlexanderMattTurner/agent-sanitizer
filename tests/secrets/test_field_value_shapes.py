@@ -1,5 +1,6 @@
 """Credential-named fields whose value is quoted with spaces or escapes, or is
-short under an upper-case env-style name — each case leaked on 2.58.9.
+short under an upper-case env-style name, and the benign code and prose shapes
+those wider value arms must leave alone.
 
 Driven through the public :func:`redact`, asserting the exact output, so the
 regex arm, the floor decision in ``_is_secret_field`` and the benign gates are
@@ -8,7 +9,8 @@ all exercised together.
 
 import pytest
 
-from agent_sanitizer.secrets import redact
+from agent_sanitizer.secrets import redact, redact_map
+from redactor_helpers import reconstruct
 
 _FIELD = ["named secret field"]
 _KEYWORD = ["Secret Keyword"]
@@ -91,10 +93,59 @@ def test_json_value_with_escaped_quote_redacts_whole(text, expected, found):
         ),
         ("PGPASSWORD=hunter2 psql", "PGPASSWORD=[REDACTED] psql"),
         ("GH_TOKEN=abc1;", "GH_TOKEN=[REDACTED];"),
+        # A quote closing an outer string does not hide the field after it.
+        (
+            'msg = "password=" ; GITHUB_TOKEN="Zx9qW7rT2pL5mN8bV3cX6zA1sD4f"',
+            'msg = "password=" ; GITHUB_TOKEN="[REDACTED]"',
+        ),
+        (
+            'f("token=", access_token="Zx9qW7rT2pL5mN8bV3cX6zA1sD4f")',
+            'f("token=", access_token="[REDACTED]")',
+        ),
+        # A quote of the other kind, or an apostrophe, opens no string.
+        (
+            "msg = \"don't\"; FOO_TOKEN='Abc1def2ghi3'",
+            "msg = \"don't\"; FOO_TOKEN='[REDACTED]'",
+        ),
+        ("don't set FOO_TOKEN='Abc1def2ghi3'", "don't set FOO_TOKEN='[REDACTED]'"),
+        (
+            "# it's the deploy key: export ACCESS_TOKEN='Zx9qW7rT2pL5mN8bV3cX6zA1s'",
+            "# it's the deploy key: export ACCESS_TOKEN='[REDACTED]'",
+        ),
+        # Brackets, a trailing symbol, a digit run and a list wrapper are all
+        # ordinary inside a real value.
+        ('FOO_TOKEN="Abc1(def2)ghi3"', 'FOO_TOKEN="[REDACTED]"'),
+        ('FOO_TOKEN="hunter2!"', 'FOO_TOKEN="[REDACTED]"'),
+        ("DB_PASSWORD=Passw0000rd1", "DB_PASSWORD=[REDACTED]"),
+        ('{"TOKEN": ["Abc1def2"]}', '{"TOKEN": ["[REDACTED]"]}'),
     ],
 )
 def test_short_value_under_credential_name_redacts(text, expected):
     assert redact(text) == (expected, _FIELD)
+
+
+@pytest.mark.parametrize(
+    "text, expected, found",
+    [
+        (
+            "GITHUB_TOKEN=ghp_Zx9qW7rT2pL5mN8bV3cX6zA1sD4fG7hJ2kLm",
+            "GITHUB_TOKEN=[REDACTED: GitHub Token]",
+            ["GitHub Token"],
+        ),
+        (
+            "export OPENROUTER_API_KEY=sk-or-v1-" + "0123456789abcdef" * 4,
+            "export OPENROUTER_API_KEY=[REDACTED: OpenRouter API Key]",
+            ["OpenRouter API Key"],
+        ),
+    ],
+)
+def test_earlier_placeholder_is_not_redacted_again(text, expected, found):
+    """The short-value arm must not read a structural detector's placeholder
+    (`[REDACTED: <type>]`) as the field's value, in either mode."""
+    assert redact(text) == (expected, found)
+    view = redact_map(text)
+    assert view["text"] == expected
+    assert reconstruct(view) == text
 
 
 @pytest.mark.parametrize(
@@ -167,6 +218,57 @@ def test_header_and_url_credentials_keep_their_shape(text, expected, found):
         # An "opening" quote that really closes an outer string.
         '(e.g. old_string: "password=", new_string: "notes=" — neither)',
         'msg = "set TOKEN=" + value',
+        # A string spliced around code: the quotes close and reopen literals.
+        'url = "https://api.example.com/v1?TOKEN="+tok+"&a=1"',
+        "'?api_key='+apiKey+'&q='",
+        'cmd = "PASSWORD="+pw+" ./run"',
+        "'token='.concat(t).concat('&x=1')",
+        # Long enough to skip the short-value gates: only the string context
+        # shows the "value" is code between two literals.
+        'cmd = "PASSWORD="+password_from_the_vault+" ./run"',
+        'url = "https://x.example/?token="+session.accessTokenValue+"&a=1"',
+        # Escaped quotes and bare symbols inside a JSON-encoded command.
+        '{"command": "GITHUB_TOKEN=\\"$(gh auth token)\\" ./release.sh"}',
+        '{"command": "API_KEY=\\"\\" pnpm test"}',
+        "TOKEN=\\",
+        "TOKEN=$",
+        "SECRET=*",
+        "PASSWORD=!",
+        # Shell expansions, CI templates and format placeholders.
+        'export GITHUB_TOKEN="${GITHUB_TOKEN:-}"',
+        'TOKEN="$(gh auth token)"',
+        'export GITHUB_TOKEN="${GITHUB_TOKEN_FROM_THE_VAULT}"',
+        'NPM_TOKEN="${{ secrets.NPM_TOKEN }}"',
+        '"Authorization": "Bearer ${TOKEN}"',
+        'password = "%s"',
+        '"password": "%(password)s"',
+        '"token": "%(access_token_from_session)s"',
+        'password = "{password}"',
+        '"secret": "{}"',
+        '"password": "${DATABASE_PASSWORD:-postgres}"',
+        'print(f"GITHUB_TOKEN={gh}")',
+        'print("TOKEN=%s" % tok)',
+        "x = f'TOKEN=' + tok",
+        # Flags, numbers, elisions and capitalised prose.
+        "ENABLE_TOKEN=true",
+        "USE_PASSWORD=false",
+        "REQUIRE_SECRET=1",
+        "API_KEY=null",
+        "OPENAI_API_KEY=sk-...",
+        "ANTHROPIC_API_KEY=sk-ant-xxxxx",
+        '"token": "..."',
+        '"password": "\u2022\u2022\u2022\u2022\u2022"',
+        '"token": "Invalid token."',
+        '"token": "The token you got from the dashboard"',
+        # Provider-prefixed dummy keys under a credential name.
+        "export ANTHROPIC_API_KEY=sk-ant-api03-" + "X" * 40,
+        '"OPENROUTER_API_KEY": "sk-or-v1-' + "0" * 40 + '"',
+        "ANTHROPIC_API_KEY=sk-ant-admin01-" + "a" * 40,
+        '"ANTHROPIC_API_KEY": "sk-ant-api03-REDACTED_REDACTED_REDACTED"',
+        "OPENROUTER_API_KEY=sk-or-YOUR_OPENROUTER_API_KEY_HERE",
+        "ANTHROPIC_API_KEY=sk-ant-Your-Api-Key-Goes-Here",
+        "OPENROUTER_API_KEY=sk-or-v1-your-openrouter-api-key",
+        "ANTHROPIC_API_KEY=sk-ant-api03-" + "1234567890" * 3,
     ],
 )
 def test_benign_field_text_is_untouched(text):

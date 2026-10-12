@@ -195,9 +195,10 @@ def test_entry_point_is_sub_quadratic_on_one_line(name):
 
 
 # The copy-volume gate's sizes, in bytes on ONE line. Large enough that a
-# per-span copy dominates the curve: the in-place control below reads exponent
-# ~1.08 at 8-64 KiB, where the interpreter's own loop still outweighs its
-# memmove, and 2.47-2.49 here; a whole-string rebuild per span reads 2.01 here.
+# per-span copy dominates the curve: the control below reads exponent 1.98-2.02
+# here; a whole-string rebuild per span reads 2.01 here. The control's C work is
+# ``translate``, not ``memmove``, so it does NOT evidence that these sizes make a
+# memmove-bound rebuild read super-linear on a host with a fast ``memmove``.
 # The splicing entry points that ship read 0.97-1.03.
 _COPY_SIZES = geometric_sizes(32 * 1024, 256 * 1024, 3)
 
@@ -272,29 +273,34 @@ def test_copy_volume_is_linear_in_line_length(name):
     )
 
 
-def _copy_tail_per_span(text: str) -> None:
-    """Redact every unit-aligned span of a mutable buffer in place, which shifts
-    the whole tail after each span — quadratic in ``len(text)``, with every one
-    of those bytes moved inside a C ``memmove``, which is the shape both tests
-    below are about.
+# Every byte of the field unit maps to "X": what the control below writes. The
+# mapping is irrelevant to its cost; ``translate`` walks every byte regardless.
+_REDACT_TABLE = bytes.maketrans(_FIELD_UNIT.encode(), b"X" * len(_FIELD_UNIT))
+_SITE_BYTES = len(_FIELD_UNIT) * _FIELD_UNITS_PER_SITE
 
-    A buffer, not a rebuilt ``str``: the per-span ``out[:i] + "X" + out[j:]``
-    allocates and frees three line-sized strings each time, and that allocator
-    work (plus the interpreter's own loop) costs about the same per span at
-    every size. It is the part of the cost that only grows linearly while the
-    copy grows with the square, so on a runner where it is expensive it swamped
-    the copy and the control read 13x against a 15x limit. The in-place shift
-    has nothing per span but the move itself, so the curve is the copy's own.
 
-    Front to back, so the tail each span moves is the UNREDACTED remainder —
-    the whole line, not a tenth of it. Walking back to front instead moves only
-    the already-collapsed "X" run behind each span, so the copy per span is
-    ``len(_FIELD_UNIT)`` times smaller; at the smallest size that is a few KiB,
-    no more than the loop's own per-span cost, and on a runner whose cache
-    holds it the control read exponent 1.28 against the 1.7 it must clear."""
-    buf = bytearray(text.encode())
-    for collapsed in range(len(text) // len(_FIELD_UNIT)):
-        buf[collapsed : collapsed + len(_FIELD_UNIT)] = b"X"
+def _rewrite_tail_per_site(text: str) -> None:
+    """Walk the whole remaining line through a C ``translate`` once per site —
+    quadratic in ``len(text)``, with every byte handled inside C, which is the
+    shape both tests below are about. The first pass maps every ``password="``
+    byte to "X", so later passes re-walk an already-redacted tail; the walk, not
+    the redaction, is what the curve measures.
+
+    The cost per site is a fixed interpreter overhead ``c`` plus C work ``k*n``
+    on the tail, so the fitted exponent depends only on ``k*n/c`` at the
+    smallest size: the control reads ~2 only while the C work dwarfs ``c``. A
+    ``memmove`` cannot promise that: its per-byte cost swings by more than an
+    order of magnitude between hosts. Shifting the tail by one slice assignment
+    per span cost 16 ms at 32 KiB on one host and 0.9 ms on a CI runner, where
+    ``k*n`` was therefore about ``c`` and the control read exponent 1.68
+    against the 1.7 it must clear. ``translate`` is a scalar byte loop on every
+    host: at 32 KiB it costs ~7.2 us per site against ~0.25 us of overhead.
+
+    One site per iteration (two units, matching what the engine redacts), not
+    one unit: the stride scales the runtime but not the exponent."""
+    line = bytearray(text.encode())
+    for start in range(0, len(line), _SITE_BYTES):
+        line[start:] = line[start:].translate(_REDACT_TABLE)
 
 
 def test_the_cpu_measure_catches_a_copy_quadratic():
@@ -302,19 +308,19 @@ def test_the_cpu_measure_catches_a_copy_quadratic():
     lives entirely in C as super-linear, which is precisely what the opcode
     harness cannot see."""
     assert_superlinear(
-        "_copy_tail_per_span (CPU)",
-        _cpu_curve(lambda text: lambda: _copy_tail_per_span(text)),
+        "_rewrite_tail_per_site (CPU)",
+        _cpu_curve(lambda text: lambda: _rewrite_tail_per_site(text)),
     )
 
 
 def test_the_opcode_measure_is_blind_to_a_copy_quadratic():
     """The CPU gate's whole rationale, asserted rather than claimed: the opcode
-    count does NOT rise super-linearly for :func:`_copy_tail_per_span`, so the
+    count does NOT rise super-linearly for :func:`_rewrite_tail_per_site`, so the
     gate above it would certify that routine as linear."""
     assert_linear(
-        "_copy_tail_per_span (opcodes) — if the opcode measure can now see this "
+        "_rewrite_tail_per_site (opcodes) — if the opcode measure can now see this "
         "class, the CPU gate's rationale needs rewriting",
-        _opcode_curve(lambda text: lambda: _copy_tail_per_span(text)),
+        _opcode_curve(lambda text: lambda: _rewrite_tail_per_site(text)),
     )
 
 

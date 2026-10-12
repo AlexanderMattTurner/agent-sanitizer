@@ -18,11 +18,10 @@ detect-secrets has no Google or Anthropic detector (verified against its plugin
 list); both are credential formats a coding agent's tool output can leak, so they
 must be redacted before the model sees them.
 
-The pure-regex classes load their ``denylist`` from the shared JSON. Four
+The pure-regex classes load their ``denylist`` from the shared JSON. Three
 families carry their regexes inline instead: ``JwtFullTokenDetector`` (it
 subclasses a bundled detector to keep its base64/JSON validation),
-``BoundedKeywordDetector`` (it is built from detect-secrets' own noun list),
-``OpenAIApiKeyDetector`` (a bounded copy of a bundled quadratic pattern), and
+``BoundedKeywordDetector`` (it is built from detect-secrets' own noun list), and
 the four keyword-context detectors that replace a bundled cubic-backtracking
 pattern (they need ``re.IGNORECASE``, which the JSON's JS-portable subset
 forbids as an inline flag).
@@ -160,7 +159,7 @@ class XaiApiKeyDetector(RegexBasedDetector):
     denylist = _DENYLISTS["XaiApiKeyDetector"]
 
 
-# ── Reimplementation of a bundled detector with a quadratic pattern ───────────
+# ── Reimplementations of bundled detectors with a quadratic pattern ───────────
 # detect-secrets' NpmDetector denylist is `\/\/.+\/:_authToken=\s*((npm_.+)|
 # ([A-Fa-f0-9-]{36})).*` — the unbounded `.+` before the required
 # `/:_authToken=` literal is retried at every `//` in the scanned text, so a
@@ -178,26 +177,16 @@ class NpmDetector(RegexBasedDetector):
     denylist = _DENYLISTS["NpmDetector"]
 
 
-# detect-secrets' OpenAIDetector is `sk-[A-Za-z0-9-_]*[A-Za-z0-9]{20}T3BlbkFJ…`:
-# the unbounded run after `sk-` is retried at every `sk-` and scans to the end of
-# the text each time looking for `T3BlbkFJ`, so `"sk-" * n` costs O(n^2) (96KB
-# measured 35.8s in one redact() call). Inline rather than a JSON row because the
-# bundled shape is kept exactly — same secret_type, same body — and only bounded.
-class OpenAIApiKeyDetector(RegexBasedDetector):
-    """OpenAI API keys (``sk-…T3BlbkFJ…``). Bounded, boundary-anchored copy of
-    the bundled ``OpenAIDetector`` — see the module comment above."""
+# detect-secrets' OpenAIDetector opens `sk-[A-Za-z0-9-_]*` with no boundary, so
+# every `sk-` in a long hyphen run restarts the unbounded body scan. The JSON
+# row adds token-boundary lookbehinds and caps the name run, which make it linear
+# per line and in cross-line discovery, where the lookbehinds are stripped.
+class OpenAiTokenDetector(RegexBasedDetector):
+    """OpenAI API keys (``sk-…T3BlbkFJ…``). Linear replacement for detect-secrets'
+    bundled ``OpenAIDetector``, under the same secret_type."""
 
     secret_type = "OpenAI Token"  # noqa: S105 — a detector label, not a secret
-    # The project/service-account name before the key body is bounded at 256,
-    # far past any real `sk-proj-`/`sk-svcacct-` prefix. The leading lookbehind
-    # covers the whole body class, `-` included, so no attempt starts inside a
-    # run another attempt already reads (`task-…`, `sk-sk-sk-…`).
-    denylist = [  # noqa: RUF012
-        re.compile(
-            r"(?<![A-Za-z0-9_-])sk-[A-Za-z0-9_-]{0,256}"
-            r"[A-Za-z0-9]{20}T3BlbkFJ[A-Za-z0-9]{20}"
-        ),
-    ]
+    denylist = _DENYLISTS["OpenAiTokenDetector"]
 
 
 class ReplicateApiTokenDetector(RegexBasedDetector):
