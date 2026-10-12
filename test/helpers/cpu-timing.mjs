@@ -39,6 +39,10 @@
  * reading — a budget in units, an absolute ceiling, the clock's granularity,
  * the calibration floor, "this costs more than that" — is an `assert*` below
  * that takes the reading and throws; the test never compares it itself.
+ *
+ * Every reading is also taken on a young generation of ONE size
+ * ({@link PINNED_HEAP_FLAGS}), so a cost is a fact about the code rather than
+ * about how big the heap's history happened to leave the nursery.
  */
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
@@ -61,6 +65,44 @@ import { it } from "node:test";
 export const MUTATION_RUN = process.env.STRYKER_NAMESPACE
   ? "Stryker instruments the code under test but not this file's timing, so the ratios measure the instrumentation"
   : null;
+
+/**
+ * The V8 flags every process that reads a cost gate runs with: the young
+ * generation pinned at the 16 MB semi-space V8 grows it to by default.
+ *
+ * Unpinned, V8 sizes the nursery from the process's history: it starts at 1 MB,
+ * doubles after scavenges that keep a lot alive, and drops back to 1 MB after a
+ * GC that is reducing memory. A call holding a working set proportional to its
+ * input pays a scavenge, which copies that working set, each time it allocates
+ * the nursery's capacity: roughly n / capacity scavenges of n each, so the
+ * smaller the nursery the more a fit over n reads the collector rather than the
+ * code. `sanitizeText` on a soft hyphen every other character is the case that
+ * showed it: it spends 68% of its CPU scavenging on a 1 MB semi-space against
+ * 11% on a 16 MB one. With the semi-space at 2-4 MB its fit reads 1.23-1.37 and
+ * its 256 KB call 10-13 ms; grown, the readings are 1.01-1.10 and ~5.5 ms. A CI
+ * run read 1.37 with 0.645/1.972/5.622/10.868 ms per call, while every other
+ * shape there read ~1.
+ *
+ * `v8.setFlagsFromString` does not reach a heap that is already configured, so
+ * the flags go on the command line. `node --test` forwards them to the process
+ * it runs each suite in. A memory-reducing GC then leaves the nursery at 16 MB,
+ * where without the flags it drops to 1 MB.
+ */
+const PINNED_HEAP_FLAGS = [
+  "--min-semi-space-size=16",
+  "--max-semi-space-size=16",
+];
+
+/** Throws unless this process runs with {@link PINNED_HEAP_FLAGS}. */
+function assertHeapPinned() {
+  const missing = PINNED_HEAP_FLAGS.filter(
+    (flag) => !process.execArgv.includes(flag),
+  );
+  assert.ok(
+    missing.length === 0,
+    `a cost gate needs the young generation pinned, and this process lacks ${missing.join(" ")}: run \`node --test ${PINNED_HEAP_FLAGS.join(" ")} <file>\` (see PINNED_HEAP_FLAGS in test/helpers/cpu-timing.mjs)`,
+  );
+}
 
 /** `unit` repeated to exactly `n` UTF-16 units. */
 export const grow = (unit, n) =>
@@ -117,6 +159,7 @@ const cpuSince = (mark) => {
  * @returns {Promise<Timing>}
  */
 export async function measure(input, fn) {
+  assertHeapPinned();
   await fn(input(0));
   const best = { cpu: Infinity, wall: Infinity };
   for (let i = 1; i <= SAMPLES; i++) {
@@ -242,6 +285,7 @@ export function fitExponent(sizes, costs) {
  * @returns {Promise<Growth>}
  */
 export async function growth(input, fn, sizes) {
+  assertHeapPinned();
   // The first call per size warms the code. When even that is past the block
   // cap it sizes the block (one call); otherwise one more call, now warm, does.
   // Its noise only moves how many calls a block holds.
