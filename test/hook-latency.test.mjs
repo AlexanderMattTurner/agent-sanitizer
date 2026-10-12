@@ -240,6 +240,24 @@ function calibrationPass(text) {
   return seen;
 }
 
+/**
+ * The document a shape's `attempt`-th timed call reads: `size` units, told
+ * apart from every other attempt's by a visible number up front.
+ *
+ * Not by length. Trimming a shape to a length can leave a partial unit at the
+ * end — a dangling joiner, say — that Layer 1 strips, and the stripped text is
+ * then exactly the next attempt's document. The carve remembers the last text
+ * it analysed, the composition's second pass is what carved the stripped text,
+ * and so every call after the first was timed as a memo hit: sanitizeText read
+ * 2.4 units on a 256 KB page of emoji ZWJ sequences that costs ~20 cold.
+ * @param {string} shape @param {number} size @param {number} attempt
+ * @returns {string}
+ */
+function attemptDoc(shape, size, attempt) {
+  const head = `${attempt} `;
+  return head + SHAPES[shape](size - head.length);
+}
+
 /** The unit, in CPU ms per pass. */
 const calibrate = async () =>
   (await measure(() => CALIBRATION_TEXT, calibrationPass)).cpu;
@@ -300,13 +318,13 @@ before(async () => {
   for (const { entry, shape, name } of CASES) {
     const { run } = ENTRIES[entry];
     const measured = await unitsFor(
-      (attempt) => SHAPES[shape](LARGE - attempt),
+      (attempt) => attemptDoc(shape, LARGE, attempt),
       (text) => run(text, shape),
     );
     timing.large[name] = measured.cost.cpu;
     timing.units[name] = measured.units;
     timing.small[name] = await measurePerCall(
-      (attempt) => SHAPES[shape](SMALL - attempt),
+      (attempt) => attemptDoc(shape, SMALL, attempt),
       (text) => run(text, shape),
       measured.cost.cpu,
     );
