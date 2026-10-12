@@ -83,22 +83,43 @@ export const FAULT_POLICY_HOOKS = Object.freeze([
 
 /**
  * The context a builder is handed: the caller's own inputs (whatever it passed
- * to {@link hookFaultOutcome}) plus the three values every hook derived by hand
+ * to {@link hookFaultOutcome}) plus the values every hook derived by hand
  * before — the hook name, the scrubbed error message, and the model-facing
- * open-posture warning.
+ * open-posture warning — and `pinnedClosed`, true when the policy's
+ * `alwaysClosed` overrode an open knob, so the closed arm can say why.
  * @typedef {Record<string, any> & {
  *   hook: string,
  *   err: unknown,
  *   message: string,
  *   openContext: string,
+ *   pinnedClosed: boolean,
  * }} FaultContext
  */
 
 /**
- * A hook's declared posture.
+ * Whether a hook's faults are withheld whatever AGENT_SANITIZER_FAIL_OPEN says,
+ * for the caller's environment.
+ * @typedef {(
+ *   env: NodeJS.ProcessEnv | Record<string, string | undefined> | undefined,
+ * ) => boolean} AlwaysClosed
+ */
+
+/**
+ * The `alwaysClosed` of a hook whose posture the knob alone decides.
+ * @type {AlwaysClosed}
+ */
+export const KNOB_DECIDES = Object.freeze(() => false);
+
+/**
+ * A hook's declared posture. `alwaysClosed` is REQUIRED, so every hook states
+ * on the record whether the knob can open it: {@link KNOB_DECIDES}, or a
+ * predicate that pins the CLOSED arm — how a guarantee the docs make
+ * unconditionally (Layer 4 withholds what it could not vet) is enforced in the
+ * one posture resolver rather than by a hook re-reading the knob.
  * @typedef {{
  *   event: string | null,
  *   guarded: string,
+ *   alwaysClosed: AlwaysClosed,
  *   open?: (ctx: FaultContext) => FaultParts,
  *   closed: (ctx: FaultContext) => FaultParts,
  * }} FaultPolicy
@@ -120,6 +141,14 @@ export function registerFaultPolicy(hook, policy) {
       `unknown hook ${JSON.stringify(hook)}: add it to FAULT_POLICY_HOOKS in ` +
         "claude-hooks/lib/hook-fault.mjs before registering a posture for it",
     );
+  // Checked here, not at fault time: a posture that is incomplete must fail the
+  // import, never the one fault it was supposed to answer.
+  for (const arm of /** @type {const} */ (["alwaysClosed", "closed"]))
+    if (typeof policy[arm] !== "function")
+      throw new Error(
+        `fault policy for ${JSON.stringify(hook)} declares no \`${arm}\`; ` +
+          "every hook states it explicitly (KNOB_DECIDES for alwaysClosed)",
+      );
   policies.set(hook, policy);
 }
 
@@ -161,7 +190,8 @@ export function defaultOpen(ctx) {
 /**
  * Resolve `hook`'s response to its own failure under the caller's posture. This
  * is the ONLY place {@link failOpenEnabled} is consulted on a hook fault, so the
- * knob cannot be honored in three hooks and skipped in the fourth.
+ * knob cannot be honored in three hooks and skipped in the fourth — and the
+ * only place a policy's `alwaysClosed` can override it.
  * @param {string} hook
  * @param {unknown} err
  * @param {Record<string, any> & {
@@ -174,7 +204,9 @@ export function defaultOpen(ctx) {
  */
 export function hookFaultOutcome(hook, err, ctx = {}) {
   const policy = faultPolicy(hook);
-  const open = failOpenEnabled(ctx.env);
+  const knobOpen = failOpenEnabled(ctx.env);
+  const pinnedClosed = knobOpen && policy.alwaysClosed(ctx.env);
+  const open = knobOpen && !pinnedClosed;
   /** @type {FaultContext} */
   const full = {
     ...ctx,
@@ -182,6 +214,7 @@ export function hookFaultOutcome(hook, err, ctx = {}) {
     err,
     message: safeErrMessage(err),
     openContext: failOpenContext(hook, policy.guarded, err),
+    pinnedClosed,
   };
   const parts = (open ? (policy.open ?? defaultOpen) : policy.closed)(full);
   const fields = parts.fields ?? null;

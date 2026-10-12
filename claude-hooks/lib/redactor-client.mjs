@@ -22,54 +22,52 @@ import {
   chargeRedactorRoundTrip,
   excludeProvisioning,
 } from "./hook-timing.mjs";
-import { existsSync, lstatSync, statSync } from "node:fs";
+import { existsSync, lstatSync } from "node:fs";
 import { createConnection } from "node:net";
-import { tmpdir, userInfo } from "node:os";
+import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { envBoundSecretVars } from "./env-config.mjs";
+import { currentUid, isPrivateDir, ownedByCurrentUser } from "./hook-io.mjs";
+import { readKnob } from "./knobs.mjs";
 
 // Refuse absurd frames rather than buffer unbounded (mirrors the daemon's cap).
 export const FRAME_CAP = 16 * 1024 * 1024;
 
-/**
- * Parse a millisecond deadline from an env override, falling back to `fallback`
- * unless the value is a finite positive number. A bare `Number(env) || fallback`
- * silently accepts a NEGATIVE override (`-5 || 8000` is -5) — a non-positive
- * deadline makes the fail-closed wait/request return immediately, defeating the
- * deadline. Unset/blank/NaN/<=0 all take the sane positive fallback; a load-time
- * throw is deliberately avoided so a misconfigured env can never crash these
- * fail-closed hooks into a fail-OPEN non-load.
- * @param {string|undefined} raw the env override value
- * @param {number} fallback the sane positive default
- * @returns {number}
- */
-export function positiveMsOr(raw, fallback) {
-  const ms = Number(raw);
-  return Number.isFinite(ms) && ms > 0 ? ms : fallback;
-}
+// Published here, where hosts already import it; the parser behind every
+// millisecond knob lives with the knob table.
+export { positiveMsOr } from "./knobs.mjs";
 
 // sun_path is 104 bytes on macOS (108 on Linux), its terminating NUL included;
 // a longer path makes the daemon's bind() fail and every call fail closed.
 const SOCKET_PATH_MAX = 103;
 
+const SOCKET_NAME = "redactor.sock";
+// The daemon binds a sibling named "." + 16 hex digits before renaming it onto
+// the published name (_publish_listener), and THAT bind is what the limit
+// constrains first. It is longer than SOCKET_NAME, so a root is only usable if
+// the longer of the two names fits.
+const TEMP_BIND_NAME = `.${"0".repeat(16)}`;
+
 /**
- * Whether `root` is a directory this uid owns that no group/other can write,
- * so a socket dir created under it cannot be squatted. An unreadable or absent
- * root is simply not a candidate; this runs at module load, where a throw would
- * stop the hook loading at all.
+ * Whether `root` is a real directory this uid owns that no group/other can
+ * write, so a socket dir created under it cannot be squatted. lstat, so a
+ * symlinked root is refused rather than followed: a co-tenant who can replace
+ * the link could point the dial at their own listener after the checks passed.
+ * An unreadable or absent root is simply not a candidate; this runs at module
+ * load, where a throw would stop the hook loading at all.
  * @param {string} root
- * @param {number} uid
+ * @param {number | null} uid
  * @returns {boolean}
  */
 function isPrivateRoot(root, uid) {
   let st;
   try {
-    st = statSync(root);
+    st = lstatSync(root);
   } catch {
     return false;
   }
-  return st.isDirectory() && st.uid === uid && (st.mode & 0o022) === 0;
+  return isPrivateDir(st, { uid });
 }
 
 /**
@@ -88,24 +86,28 @@ function isPrivateRoot(root, uid) {
  *    client refuses to connect (classifySocket), so a squat costs availability
  *    and never leaks a secret.
  * @param {NodeJS.ProcessEnv} env
- * @param {number} uid
+ * @param {number | null} uid  null where the platform has no uid model, which
+ *   trusts no root (see {@link isPrivateDir})
  * @returns {string}
  */
-function resolveSocketPath(env, uid) {
-  const override = env._AGENT_SANITIZER_REDACTOR_SOCKET;
+export function resolveSocketPath(env, uid) {
+  const override = readKnob("_AGENT_SANITIZER_REDACTOR_SOCKET", env);
   if (override) return override;
   for (const root of [env.XDG_RUNTIME_DIR, env.CLAUDE_PLUGIN_DATA]) {
     if (!root || !isPrivateRoot(root, uid)) continue;
-    const path = join(root, "agent-sanitizer-redactor", "redactor.sock");
-    if (Buffer.byteLength(path) <= SOCKET_PATH_MAX) return path;
+    const dir = join(root, "agent-sanitizer-redactor");
+    const longest = Math.max(SOCKET_NAME.length, TEMP_BIND_NAME.length);
+    if (Buffer.byteLength(dir) + 1 + longest <= SOCKET_PATH_MAX)
+      return join(dir, SOCKET_NAME);
   }
-  return join(tmpdir(), `agent-sanitizer-redactor-${uid}`, "redactor.sock");
+  return join(
+    tmpdir(),
+    `agent-sanitizer-redactor-${uid ?? "nouid"}`,
+    SOCKET_NAME,
+  );
 }
 
-export const DEFAULT_SOCKET_PATH = resolveSocketPath(
-  process.env,
-  /** @type {() => number} */ (process.getuid)(),
-);
+export const DEFAULT_SOCKET_PATH = resolveSocketPath(process.env, currentUid());
 
 /**
  * The daemon command, as [argv0, ...leadingArgs]. Resolution order:
@@ -124,12 +126,12 @@ export const DEFAULT_SOCKET_PATH = resolveSocketPath(
  * @returns {string[]}
  */
 function daemonCommand() {
-  const configured = process.env._AGENT_SANITIZER_REDACTOR_DAEMON;
+  const configured = readKnob("_AGENT_SANITIZER_REDACTOR_DAEMON");
   if (configured) return [configured];
   // The launcher exports the zipapp's real path: inside the compiled hook
   // binary import.meta.url names the binary's virtual filesystem, where no
   // zipapp exists. Authoritative when set, like the daemon override above.
-  const exported = process.env._AGENT_SANITIZER_REDACTOR_PYZ;
+  const exported = readKnob("_AGENT_SANITIZER_REDACTOR_PYZ");
   if (exported) return ["python3", exported];
   // Inside the built bundle import.meta.url is .../plugin/dist/hooks/<bundle>,
   // so the committed zipapp sits one level up; from the raw sources no such
@@ -141,10 +143,7 @@ function daemonCommand() {
 // How long to wait for a freshly-spawned daemon to start accepting. A cold start
 // pays the detect-secrets import + plugin prime (~1-3s), so the default leaves
 // margin; tests shorten it to exercise the give-up-and-fail-closed path quickly.
-const WAIT_DEADLINE_MS = positiveMsOr(
-  process.env._AGENT_SANITIZER_REDACTOR_WAIT_MS,
-  8000,
-);
+const WAIT_DEADLINE_MS = readKnob("_AGENT_SANITIZER_REDACTOR_WAIT_MS");
 
 // A daemon that ACCEPTS the connection but then stalls — a deadlock, a
 // pathological detect-secrets input, or a half-written length prefix that never
@@ -158,7 +157,7 @@ const WAIT_DEADLINE_MS = positiveMsOr(
 // timeout (two connects + the spawn wait must fit); tests shorten it via the env
 // override (read per call) or the deadlineMs parameter to exercise the path fast.
 function requestDeadlineMs() {
-  return positiveMsOr(process.env._AGENT_SANITIZER_REDACTOR_REQUEST_MS, 20000);
+  return readKnob("_AGENT_SANITIZER_REDACTOR_REQUEST_MS");
 }
 
 /**
@@ -254,18 +253,18 @@ function failClosed(cause) {
  * `lstat`/`uid` are injectable seams so a test can drive a stat shape the test
  * process cannot create (a dir owned by another uid); production binds the real ones.
  * @param {string} socketPath
- * @param {{lstat?: typeof lstatSync, uid?: number}} [deps]
+ * @param {{lstat?: typeof lstatSync, uid?: number | null}} [deps]
  * @returns {"absent" | "untrusted" | "ok"}
  */
 export function classifySocket(socketPath, deps = {}) {
-  const { lstat = lstatSync, uid = userInfo().uid } = deps;
+  const { lstat = lstatSync, uid = currentUid() } = deps;
   let st;
   try {
     st = lstat(socketPath);
   } catch {
     return "absent";
   }
-  if (!st.isSocket() || st.uid !== uid) return "untrusted";
+  if (!st.isSocket() || !ownedByCurrentUser(st, uid)) return "untrusted";
   let dir;
   try {
     dir = lstat(dirname(socketPath));
@@ -299,15 +298,11 @@ export function classifySocket(socketPath, deps = {}) {
  * root to hand it to: there the hook spawns the daemon as the ordinary user, which
  * binds under a 0700 dir it owns, and our own uid is not the adversary.
  * @param {import("node:fs").Stats} dir
- * @param {number} uid
+ * @param {number | null} uid
  * @returns {boolean}
  */
 function isTrustedSocketDir(dir, uid) {
-  return (
-    dir.isDirectory() &&
-    (dir.uid === uid || dir.uid === 0) &&
-    (dir.mode & 0o022) === 0
-  );
+  return isPrivateDir(dir, { uid, rootMayOwn: true });
 }
 
 /**

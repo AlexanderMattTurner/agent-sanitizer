@@ -549,9 +549,13 @@ describe("slowHookNotice", () => {
         () => new Promise((resolve) => setTimeout(resolve, 60)),
       ),
     );
+    // Bounded by the timer's own wall clock, not a fixed 120ms: a loaded host
+    // stretches the 60ms timeout (192ms seen) and a fixed ceiling then fails a
+    // correct single charge. Two charges of one interval are what the
+    // wall-clock bound exists to refuse — they sum past the elapsed time.
     assert.ok(
-      timer.hostMs() >= 50 && timer.hostMs() < 120,
-      `one interval, charged once (${timer.hostMs()}ms)`,
+      timer.hostMs() >= 50 && timer.hostMs() <= timer.wallMs() + 5,
+      `one interval, charged once (${timer.hostMs()}ms of ${timer.wallMs()}ms wall)`,
     );
   });
 
