@@ -8,6 +8,25 @@ adhere to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+## [2.60.1] - 2026-10-12
+
+### Fixed
+
+- Prevent environment-secret values containing invisible characters from backtracking in the redactor and pre-gate.
+- Ensure the Node.js glob-matching test suite resolves correctly and the Python package `__init__` modules classify properly in test partitions.
+- Correct TypeScript type annotations in the environment-value filter to allow builds to pass.
+- Require a minimum uv version when configuring the cooldown in uv.toml.
+- Resolve the repository root path from the script's location so that gates work correctly inside git hooks.
+
+### Changed
+
+- Derive the esbuild target from `engines.node` configuration and guard every Node.js floor version copy during builds.
+- Partition tracked shipped and tooling inputs into distinct guard classes in test coverage.
+
+### Added
+
+- Fail package.json validation when a `files` entry or bin target contains no actual content.
+
 ## [2.60.0] - 2026-10-12
 
 ### Added
