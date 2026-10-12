@@ -8,6 +8,13 @@ adhere to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+## [2.61.2] - 2026-10-12
+
+### Fixed
+
+- Pinned young generation in cost-gate heap flag measurements to ensure consistent testing.
+- Made C-level copy-quadratic control robustly exhibit super-linear behavior.
+
 ## [2.61.1] - 2026-10-12
 
 ### Added
