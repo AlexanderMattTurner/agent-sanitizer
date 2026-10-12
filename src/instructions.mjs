@@ -362,8 +362,13 @@ function keepContained(absPath, realRoot, literalRoot, pattern) {
  */
 export function walkContextGlobs(globs, cwd, exclude) {
   const root = resolve(cwd);
+  // Resolved against `root`, never joined: for a literal path segment (the
+  // `.claude` of `.claude/*.md`) Node hands `exclude` a Dirent whose
+  // parentPath is RELATIVE to the glob's cwd, and `relative()` would resolve
+  // it against process.cwd() — pruning `.claude` whenever the process runs
+  // under a `.claude/worktrees/` checkout.
   /** @param {import("node:fs").Dirent} dirent @returns {string} */
-  const absolute = (dirent) => join(dirent.parentPath, dirent.name);
+  const absolute = (dirent) => resolve(root, dirent.parentPath, dirent.name);
   return globSync(globs, {
     cwd,
     withFileTypes: true,

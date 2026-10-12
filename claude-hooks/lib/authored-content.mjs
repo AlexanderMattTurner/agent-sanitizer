@@ -52,6 +52,7 @@
  * AGENT_SANITIZER_OUTPUT_DISABLED=1 disables both.
  */
 import { lazyImport } from "./hook-io.mjs";
+import { readKnob } from "./knobs.mjs";
 
 // Bound via lazyImport (see its doc for the fail-OPEN hazard of a bare static
 // npm import — here the load crash would fire inside pretooluse-sanitize.mjs's
@@ -188,14 +189,14 @@ const MAX_FIELD_PASSES = 3;
  */
 function settleField(value, cleaned, actions) {
   let settled = cleaned;
-  if (process.env.AGENT_SANITIZER_INVISIBLE_DISABLED !== "1") {
+  if (!readKnob("AGENT_SANITIZER_INVISIBLE_DISABLED")) {
     const bulk = stripInvisibleWithReport(settled, value, {
       carveOut: false,
     }).cleaned;
     if (bulk !== settled) actions.add("invisible characters");
     settled = bulk;
   }
-  if (process.env.AGENT_SANITIZER_TERMINAL_DISABLED !== "1") {
+  if (!readKnob("AGENT_SANITIZER_TERMINAL_DISABLED")) {
     const swept = stripTerminalFully(settled);
     if (swept !== settled) actions.add("terminal-control sequences");
     settled = swept;
@@ -219,7 +220,7 @@ function sanitizeField(value) {
     // view sanitize-output uses. Compare before/after rather than pre-testing
     // for ESC: escapes this layer deliberately leaves in place — a lone control
     // byte, display-only colour — must not be reported as a strip.
-    if (process.env.AGENT_SANITIZER_TERMINAL_DISABLED !== "1") {
+    if (!readKnob("AGENT_SANITIZER_TERMINAL_DISABLED")) {
       const deAnsi = stripTerminalControls(cleaned);
       if (deAnsi !== cleaned) {
         cleaned = deAnsi;
@@ -231,7 +232,7 @@ function sanitizeField(value) {
     // same text would block a prompt; an action is recorded only when the strip
     // actually removed something.
     if (
-      process.env.AGENT_SANITIZER_INVISIBLE_DISABLED !== "1" &&
+      !readKnob("AGENT_SANITIZER_INVISIBLE_DISABLED") &&
       payloadVerdict(cleaned).payloadCapable
     ) {
       const stripped = stripInvisible(cleaned);
