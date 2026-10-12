@@ -163,7 +163,6 @@ const PUBLISHED_EXPORTS = {
     "USER_GLOBAL_EVENT_NAMED_GLOBS",
     "ancestorInstructionFiles",
     "announcedByInstructionsLoaded",
-    "atomicReplaceFile",
     "cleanFile",
     "contextScanExclude",
     "contextScopeContradiction",
