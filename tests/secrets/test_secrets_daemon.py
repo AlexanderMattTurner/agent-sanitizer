@@ -175,6 +175,16 @@ def test_parse_request_admits_nothing_that_does_not_conform(raw):
     assert S.parse_request(raw) is None
 
 
+def test_relabel_never_collides_with_a_passed_through_name():
+    """``env var 1`` is itself a legal label (space and digits are allowed), so a
+    request naming a variable that way must not be overwritten by the relabel of
+    a bad name: both secrets stay in ``provider_vars`` and both get redacted."""
+    bad = "BAD]NAME"
+    S._reported_labels.discard(bad)
+    got = S._env_secret_vars({"env var 1": "a" * 32, bad: "b" * 32})
+    assert got == {"env var 1": "a" * 32, "env var 2": "b" * 32}
+
+
 def test_parse_request_relabels_a_placeholder_breaking_env_var_name(capsys):
     """The socket is shared and unauthenticated, so a request's env-var NAMES are
     untrusted input. A name carrying ``]``/newline would otherwise be
@@ -347,6 +357,19 @@ def test_daemon_keeps_non_ascii_text_at_its_utf8_size(daemon):
     finally:
         sock.close()
     assert length < 2 * 1000 + 200
+
+
+def test_write_frame_escapes_a_lone_surrogate_instead_of_dropping_the_response():
+    """json.loads accepts a request's escaped lone surrogate, but the raw form has
+    no UTF-8 encoding: the response must fall back to the escaped form rather
+    than raise and leave the client without an answer."""
+    a, b = socket.socketpair()
+    try:
+        S._write_frame(a, {"text": "x\ud800y \u00e9", "found": []})
+        assert S._read_frame(b) == {"text": "x\ud800y \u00e9", "found": []}
+    finally:
+        a.close()
+        b.close()
 
 
 def test_write_frame_replaces_an_over_cap_response_with_an_error(monkeypatch):

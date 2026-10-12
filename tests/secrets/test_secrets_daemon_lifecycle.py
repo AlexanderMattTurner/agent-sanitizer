@@ -414,6 +414,31 @@ def test_log_to_refuses_a_symlink_planted_at_the_log_name(sock_dir):
     assert target.read_text(encoding="utf-8") == ""
 
 
+def test_log_failure_empties_a_log_past_the_cap_while_running(sock_dir, monkeypatch):
+    """The cap is enforced per diagnostic, not only at startup, so a long-lived
+    daemon that keeps failing cannot grow daemon.log without bound."""
+    monkeypatch.setattr(S, "LOG_CAP_BYTES", 64)
+    log = sock_dir / "daemon.log"
+    saved = os.dup(2)
+    try:
+        S._log_to(str(log))
+        os.write(2, b"x" * 200)
+        # pytest swaps sys.stderr for a capture object; the daemon writes to the
+        # real fd 2, which is what the cap guards.
+        with (
+            open(2, "w", encoding="utf-8", closefd=False) as fd2,
+            monkeypatch.context() as m,
+        ):
+            m.setattr(sys, "stderr", fd2)
+            S._log_failure("redaction failed", RuntimeError("secret-bearing"))
+    finally:
+        os.dup2(saved, 2)
+        os.close(saved)
+    text = log.read_text(encoding="utf-8")
+    assert text.startswith("redaction failed (RuntimeError)")
+    assert "x" * 200 not in text
+
+
 def test_main_daemon_keeps_serving_after_sighup(sock_dir):
     """A daemon started from a terminal must outlive that terminal's hangup.
 

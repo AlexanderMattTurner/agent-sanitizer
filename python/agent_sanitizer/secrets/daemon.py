@@ -29,6 +29,7 @@ import json
 import os
 import signal
 import socket
+import stat
 import struct
 import sys
 import threading
@@ -118,7 +119,13 @@ def _write_frame(conn: socket.socket, obj: object) -> None:
     size: escaped, every such character costs six bytes, and a response the
     client could accept would overflow its frame cap. A response over the cap
     is replaced by an error frame, which the client fails closed on."""
-    body = json.dumps(obj, ensure_ascii=False).encode("utf-8")
+    try:
+        body = json.dumps(obj, ensure_ascii=False).encode("utf-8")
+    except UnicodeEncodeError:
+        # A lone surrogate (json.loads accepts its escaped form in the request)
+        # has no UTF-8 encoding; the escaped form is the only one a strict
+        # decoder on the client accepts, so fall back to it for this frame.
+        body = json.dumps(obj).encode("utf-8")
     if len(body) > FRAME_CAP:
         body = json.dumps({"error": "response exceeds the frame cap"}).encode("utf-8")
     conn.sendall(struct.pack(">I", len(body)) + body)
@@ -174,8 +181,8 @@ def _env_secret_vars(env_secrets: dict[str, str]) -> dict[str, str]:
     Each name becomes the label of the placeholder written over its value, and
     :class:`RedactorConfig` refuses a name that could break out of one. One
     misconfigured name in the requester's list would then fail EVERY request,
-    so it is replaced here by a numbered ``env var N`` label (which no real
-    variable name can collide with, since names carry no spaces) and reported.
+    so it is replaced here by a numbered ``env var N`` label (skipping any number
+    the request already uses as a name) and reported.
     Its value is still redacted; only the label is lost.
     """
     out: dict[str, str] = {}
@@ -186,9 +193,16 @@ def _env_secret_vars(env_secrets: dict[str, str]) -> dict[str, str]:
             continue
         relabelled += 1
         label = f"env var {relabelled}"
+        # Space and digits are legal label characters, so a passed-through name
+        # (or an earlier relabel) can already hold this label; overwriting it
+        # would silently drop that secret from redaction.
+        while label in out or label in env_secrets:
+            relabelled += 1
+            label = f"env var {relabelled}"
         out[label] = value
         if name not in _reported_labels:
             _reported_labels.add(name)
+            _cap_log()
             sys.stderr.write(
                 f"env-var name {name!r} cannot label a placeholder; its value is "
                 f"redacted as [REDACTED: {label}]\n"
@@ -226,11 +240,22 @@ def parse_request(raw: object) -> WireRequest | None:
     )
 
 
+def _cap_log() -> None:
+    """Empty the log (fd 2, opened O_APPEND) once it passes ``LOG_CAP_BYTES``.
+    Checked before each diagnostic so a long-lived daemon that fails repeatedly
+    cannot grow it without bound. A no-op when fd 2 is not a regular file (the
+    in-process test runner's stderr)."""
+    st = os.fstat(2)
+    if stat.S_ISREG(st.st_mode) and st.st_size > LOG_CAP_BYTES:
+        os.ftruncate(2, 0)
+
+
 def _log_failure(what: str, exc: BaseException) -> None:
     """Log an exception's TYPE and stack FRAMES, never its message: the message
     can embed bytes of the secret-bearing input (e.g. a re/JSON error echoing
     the offending text), which must never reach the log. Frames are static
     source locations, not runtime data."""
+    _cap_log()
     sys.stderr.write(
         f"{what} ({type(exc).__name__}); input and exception message withheld "
         "from log:\n" + "".join(traceback.format_tb(exc.__traceback__))
