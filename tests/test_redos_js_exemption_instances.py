@@ -99,3 +99,15 @@ def test_env_value_pattern_has_no_super_linear_backtracking(
     assert "Worst-case complexity" not in out, (
         f"envValueRegex({value!r}) exhibits super-linear backtracking:\n{out}"
     )
+
+
+def test_invisible_only_value_builds_a_quantifier_free_pattern() -> None:
+    # The exemption's second arm: with no visible character to anchor a gap on,
+    # the value is matched exactly. Positive marker: the pattern is non-empty and
+    # holds every character of the value, so the no-quantifier claim is about
+    # the pattern that was built rather than an empty one.
+    value = "\u200b\u200c"
+    (source,) = _env_value_sources([value])
+    assert source, source
+    assert "*" not in source, source
+    assert all(f"\\u{{{ord(ch):x}}}" in source or ch in source for ch in value)
