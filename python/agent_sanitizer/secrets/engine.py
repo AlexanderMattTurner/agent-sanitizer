@@ -70,7 +70,9 @@ from .placeholders import placeholder
 # Cloudant, IBM Cloud IAM, IBM COS HMAC and SoftLayer are ABSENT: each bundled
 # pattern backtracks cubically on a run of spaces (regexploit complexity 3), so
 # `detectors.py` replaces them with linear equivalents carrying the identical
-# secret_type. See that module's "cubic-backtracking pattern" section.
+# secret_type. See that module's "cubic-backtracking pattern" section. OpenAI is
+# absent too: its pattern is quadratic over repeated `sk-`, and the
+# `OpenAiTokenDetector` row in data/secret-detectors.json replaces it.
 _BUNDLED_PLUGINS = {
     "AWSKeyDetector": True,
     "ArtifactoryDetector": False,
@@ -78,7 +80,6 @@ _BUNDLED_PLUGINS = {
     "BasicAuthDetector": False,
     "DiscordBotTokenDetector": True,
     "MailchimpDetector": False,
-    "OpenAIDetector": True,
     "PrivateKeyDetector": True,
     "PypiTokenDetector": True,
     "SendGridDetector": True,
@@ -498,16 +499,12 @@ FIELD_VALUE_RE = re.compile(
     # shorten a non-credential. `.` is deliberately NOT peeled: it is a JWT's
     # own segment separator.
     #
-    # The value takes one of four arms, tried in order. A QUOTED value is the
-    # whole span up to its own closing quote — spaces and backslash escapes
-    # included, so `"<key> tail"` and JSON's `"a\"<key>"` redact whole instead of
-    # leaking past the first space or escaped quote. The one-byte lookbehind is
-    # the quote group itself: nothing else in the prefix can end in a quote. An
-    # unquoted value is either the 20+ char run above, or a 1-19 char run that
-    # must end at a terminator; a short or spaced value is then accepted only by
-    # `_short_or_spaced_value_allowed`, which reads the whole field name. Every
-    # arm stops at a map-mode sentinel (U+E000/U+E001), as `[` stops it at a
-    # plain-mode placeholder, so an earlier redaction is never swallowed.
+    # A QUOTED value runs to its own closing quote, spaces, brackets and
+    # backslash escapes included: a password may hold any of them, so a template
+    # or expansion (`"${TOKEN}"`, `"%(pw)s"`) is told apart by `_TEMPLATE_RE` on
+    # the value, not by stopping short of it. Every arm stops at a map-mode
+    # sentinel. A short or spaced value must then pass
+    # `_short_or_spaced_value_allowed`.
     r"(?P<secret_value>"
     r'(?<=")(?:[^"\\\n\ue000\ue001]|\\[^\n\ue000\ue001]){1,4096}(?=")'
     r"|(?<=')(?:[^'\\\n\ue000\ue001]|\\[^\n\ue000\ue001]){1,4096}(?=')"
@@ -522,32 +519,54 @@ FIELD_VALUE_RE = re.compile(
 
 # A value under FIELD_VALUE_RE's 20-char floor, or one spanning whitespace, is
 # credible only where the key/value reading is unambiguous: the credential noun
-# ENDS the field name (`token_type`, `password_min_length` hold metadata), and
-# the value is quoted, or is assigned with `=` to an upper-case env-style name
-# (`API_KEY: str` is an annotation). `DB_PASSWORD=hunter2` and
-# `"FOO_TOKEN": "s3cret"` redact; `password=prose` stays.
+# ENDS the field name (`token_type` holds metadata), and the value is quoted, or
+# is assigned with `=` to an upper-case env-style name (`API_KEY: str` is an
+# annotation). `DB_PASSWORD=hunter2` and `"FOO_TOKEN": "s3cret"` redact.
 _FIELD_VALUE_FLOOR = 20
 _FIELD_NOUN_RE = re.compile(f"(?:{_FIELD_NAMES})", re.IGNORECASE)
 _ENV_STYLE_NAME_RE = re.compile(r"[A-Z0-9_]+")
-# Nouns whose value may legitimately be a run of plain words (a diceware
-# passphrase); under every other noun such a run is prose about the credential
-# (`"token": "the access token"`), since no issued token is lowercase words.
+# Only these nouns may hold a digit-free value (`changeme`, a diceware
+# passphrase); under every other noun one is a flag or prose (`TOKEN=true`,
+# `"token": "the access token"`), since an issued token carries a digit.
 _PASSPHRASE_NOUN_RE = re.compile(r"pass(?:word|wd|phrase)|secret", re.IGNORECASE)
-_SEPARATOR_CHARS = ",;:=)]}"
-_LOWERCASE_WORDS_RE = re.compile(r"[a-z]+(?:[ \t]+[a-z]+)+")
+_LITERAL_WORDS = frozenset(
+    {"true", "false", "null", "none", "nil", "undefined", "yes", "no", "on", "off"}
+)
+# An elision or mask run (`sk-...`, `xxxx`, a bullet mask) stands in for a
+# value. Only mask characters count: `Passw0000rd1` is a real password.
+_ELISION_RE = re.compile(r"\.\.\.|\u2026|(?P<fill>[xX*#\u2022])(?P=fill){3}")
+# Generated passwords end in a symbol often enough (`hunter2!`, base64 `=`), but
+# sentence and syntax punctuation (`.`, `:`, `-`, `>`) ends prose and code.
+_TRAILING_SYMBOLS = frozenset("!#$%&*+=?@^~")
+# An expansion, format slot or call stands in for a value rather than holding
+# one: `${TOKEN}`, `$(gh auth token)`, `%(pw)s`, `{{ secrets.X }}`, a
+# backtick command, a whole-value `{password}`, and a trailing `getpass()`.
+_TEMPLATE_RE = re.compile(r"\$[({]|%\(|\{\{|`|^\{[^{}]*\}$|\w\(\)$")
 
 
 def _short_or_spaced_value_allowed(m: re.Match[str], value: str) -> bool:
     """Whether a FIELD_VALUE_RE match whose ``value`` is short or spaced may
-    redact."""
+    redact: an opaque value under an unambiguous credential assignment."""
     noun = m.group("field_name")
-    if _FIELD_NOUN_RE.fullmatch(noun) is None:
+    # An unquoted bracketed value is code (`TOKEN={gh}` in an f-string); a
+    # quoted one inside a list or call (`"TOKEN": ["Abc1def2"]`) is a value.
+    if _FIELD_NOUN_RE.fullmatch(noun) is None or (
+        m.group("openbracket") and not m.group("quote")
+    ):
         return False
-    # Edge whitespace or a leading separator means the "opening" quote closed an
-    # outer string instead: `"password=", new: "x"` spans `, new: `.
-    if value[0].isspace() or value[-1].isspace() or value[0] in _SEPARATOR_CHARS:
+    if (
+        not value[0].isalnum()
+        or not (value[-1].isalnum() or value[-1] in _TRAILING_SYMBOLS)
+        or "\\" in value
+    ):
         return False
-    if _LOWERCASE_WORDS_RE.fullmatch(value) and (
+    if (
+        value.lower() in _LITERAL_WORDS
+        or _ELISION_RE.search(value)
+        or not any(ch.isalpha() for ch in value)
+    ):
+        return False
+    if not any(ch.isdigit() for ch in value) and (
         _PASSPHRASE_NOUN_RE.fullmatch(noun) is None
     ):
         return False
@@ -560,13 +579,69 @@ def _short_or_spaced_value_allowed(m: re.Match[str], value: str) -> bool:
     return _ENV_STYLE_NAME_RE.fullmatch(text, name_start, name_end) is not None
 
 
+_QUOTE_OR_NEWLINE_RE = re.compile(r"\n|(?<!\\)[\"']")
+# A single-letter string prefix (`f'`, `b'`, `r'`, `u'`) opens a literal even
+# though a letter sits on each side of its quote.
+_STRING_PREFIXES = frozenset("bfruBFRU")
+
+
+def _is_apostrophe(text: str, i: int) -> bool:
+    """Whether the `'` at ``i`` is prose (`don't`), not a string delimiter."""
+    if not (0 < i < len(text) - 1 and text[i - 1].isalnum() and text[i + 1].isalnum()):
+        return False
+    return not (
+        text[i - 1] in _STRING_PREFIXES and (i < 2 or not text[i - 2].isalnum())
+    )
+
+
+class _StringContext:
+    """Which quote, if any, has a string literal open at a position on its line.
+    Inside a string only its own quote closes it, so `"don't"` leaves no single
+    quote open. Positions are asked in ascending order, so the scan carries
+    forward and the whole text is read once; a position behind the last one
+    re-reads from its line start."""
+
+    def __init__(self, text: str) -> None:
+        self._text = text
+        self._pos = 0
+        self._open = ""
+
+    def open_at(self, pos: int) -> str:
+        if pos < self._pos:
+            self._pos = self._text.rfind("\n", 0, pos) + 1
+            self._open = ""
+        for hit in _QUOTE_OR_NEWLINE_RE.finditer(self._text, self._pos, pos):
+            ch = hit.group()
+            if ch == "\n" or ch == self._open:
+                self._open = ""
+            elif not self._open and not (
+                ch == "'" and _is_apostrophe(self._text, hit.start())
+            ):
+                self._open = ch
+        self._pos = pos
+        return self._open
+
+
+def _quoted_inside_string(m: re.Match[str], strings: _StringContext) -> bool:
+    """Whether a quoted match's field sits inside an enclosing string literal,
+    so its "opening" quote really closes that string: in `"?TOKEN="+tok+"&a=1"`
+    the span `+tok+` is code, not a value. A quoted key (`"TOKEN": "v"`) is
+    judged from before its own opening quote."""
+    quote, text = m.group("quote"), m.string
+    name_start = _ident_run_start(text, m.start("field_name"), "_-")
+    if text.startswith(quote, m.end("field_name")) and text.startswith(
+        quote, name_start - 1
+    ):
+        name_start -= 1
+    return strings.open_at(name_start) == quote
+
+
 _AUTH_SCHEME_RE = re.compile(r"(?:Bearer|Token|Basic)[ \t]+(?=\S)", re.IGNORECASE)
 
 
 def _quoted_auth_scheme(m: re.Match[str]) -> str:
-    """The ``Bearer ``/``Token ``/``Basic `` opening a QUOTED value, else ``""``."""
-    if not m.group("closequote"):
-        return ""
+    """The ``Bearer ``/``Token ``/``Basic `` opening a value, else ``""``. Only a
+    quoted value can hold one: the unquoted arms stop at whitespace."""
     scheme = _AUTH_SCHEME_RE.match(m.group("secret_value"))
     return scheme.group(0) if scheme else ""
 
@@ -819,6 +894,33 @@ def _is_call_or_code_ref(c: Candidate) -> bool:
     return c.line[after : after + 1] == "(" and not _has_opaque_run(c.value)
 
 
+# A provider key prefix (and version tag) in front of a dummy body, so the field
+# and keyword paths skip `ANTHROPIC_API_KEY=sk-ant-api03-XXXX...` as the loose
+# provider-key row does. A generated key body mixes case and digits; one letter
+# case alone, digits alone, or a placeholder shape is not one. The body is the
+# row's own lookahead text, verbatim (pinned by test_secrets_detectors.py).
+_DUMMY_KEY_BODY = (
+    r"(?:[a-z]+[0-9]+-)?(?:[a-z]+(?:[-_]+[a-z]+)*|[A-Z]+(?:[-_]+[A-Z]+)*"
+    r"|[A-Z][a-z]+(?:[-_]+[A-Za-z][a-z]*)+|[0-9]+)[-_]*"
+)
+_PROVIDER_KEY_PREFIX = r"sk-(?:ant|or|proj)-"
+_DUMMY_PROVIDER_KEY_RE = re.compile(_PROVIDER_KEY_PREFIX + _DUMMY_KEY_BODY)
+_PROVIDER_KEY_PREFIX_RE = re.compile(_PROVIDER_KEY_PREFIX + r"(?:[a-z]+[0-9]+-)?")
+
+
+def _is_provider_key_placeholder(value: str) -> bool:
+    """True when ``value`` is a provider key prefix followed by a dummy body."""
+    if _DUMMY_PROVIDER_KEY_RE.fullmatch(value) is not None:
+        return True
+    prefix = _PROVIDER_KEY_PREFIX_RE.match(value)
+    if prefix is None or prefix.end() == len(value):
+        return False
+    body = value[prefix.end() :]
+    return _PLACEHOLDER_RE.fullmatch(body) is not None or _is_lowercase_metavariable(
+        body
+    )
+
+
 def _is_placeholder_value(c: Candidate) -> bool:
     """True when the value is a documentation placeholder, not a credential."""
     return (
@@ -826,6 +928,7 @@ def _is_placeholder_value(c: Candidate) -> bool:
         or c.value.lower() in _PLACEHOLDER_LITERALS
         or _normalize_ident(c.value) in _KEYWORD_NOUN_LITERALS
         or _is_lowercase_metavariable(c.value)
+        or _is_provider_key_placeholder(c.value)
     )
 
 
@@ -1366,6 +1469,9 @@ _PREFILTER_WINDOW_PAD = 64
 # it would refuse a genuinely wrapped token at that end and no test would see
 # it, since the relax step would look like a no-op instead of a miss.
 _LEADING_BOUNDARY_LOOKBEHINDS = ("(?<![A-Za-z0-9_])", "(?<![A-Za-z0-9])")
+# A pattern may follow its boundary with this one, which refuses a hyphenated
+# identifier (`my-sk-ant-x`); it is a boundary too and relaxes with the first.
+_HYPHEN_LOOKBEHIND = "(?<!-)"
 _TRAILING_BOUNDARY_LOOKAHEADS = ("(?![A-Za-z0-9])", "(?!\\w)")
 _UNRECOGNIZED_LEADING_RE = re.compile(r"^\(\?<![^()]*\)")
 _UNRECOGNIZED_TRAILING_RE = re.compile(r"\(\?![^()]*\)$")
@@ -1390,7 +1496,7 @@ def _relax_leading_boundary(pattern: str) -> str:
     """
     for prefix in _LEADING_BOUNDARY_LOOKBEHINDS:
         if pattern.startswith(prefix):
-            return pattern[len(prefix) :]
+            return pattern[len(prefix) :].removeprefix(_HYPHEN_LOOKBEHIND)
     if _UNRECOGNIZED_LEADING_RE.match(pattern):
         raise ValueError(
             f"{pattern!r} opens with a leading lookbehind this repo does not "
@@ -2198,33 +2304,34 @@ def _redact_lines(
 
 def _redact_field_values(
     text: str,
-    replace: Callable[[re.Match[str]], str],
+    replace: Callable[[re.Match[str]], str | None],
     deadline: _Deadline = _NO_DEADLINE,
 ) -> str:
     """``FIELD_VALUE_RE.sub(replace, text)``, evaluated only where a match can
-    begin.
+    begin, except that ``replace`` may return ``None`` to decline a match.
 
     ``re.sub`` tries the pattern at every one of the payload's positions; this
     tries it only at the positions :data:`_FIELD_NAME_ANCHOR` matches, which is
     every position a match can START at (the guard beside that anchor is what
     holds the claim) plus, harmlessly, some where the rest of the pattern then
-    fails. The result is byte-identical, not an approximation, and the two reasons
-    are that ``Pattern.match(text, pos)`` is exactly the attempt ``sub`` makes at
+    fails. While ``replace`` declines nothing the result is byte-identical to
+    ``sub``: ``Pattern.match(text, pos)`` is exactly the attempt ``sub`` makes at
     ``pos`` — it reads the WHOLE string, so a lookbehind, ``^`` under
     ``re.MULTILINE`` and ``$`` all see the same text a full sweep shows them,
-    which slicing the payload into windows would not — and that resuming the
-    anchor search at the previous match's END reproduces ``sub``'s
-    non-overlapping, leftmost-first order.
+    which slicing the payload into windows would not — and resuming at the
+    previous match's END reproduces ``sub``'s non-overlapping order.
+
+    A declined QUOTED match resumes at its value instead: a quote that really
+    closed an outer string makes the match span the next field's name
+    (`"password=" ; TOKEN="<key>"`), which must still be tried. A quoted span
+    holds no quote of its own kind, so the rescans stay linear.
 
     A payload holding no credential noun anywhere therefore costs one failed
-    anchor search, which is why nothing gates this call: a whole-payload literal
-    probe in front of it would fold the payload a second time to reach the same
-    answer. A text ``fold`` refuses (a length-changing case fold, which no code
-    point reaches today) falls back to the full sweep: slower, never wrong.
+    anchor search, which is why nothing gates this call. A text ``fold`` refuses
+    (a length-changing case fold, which no code point reaches today) is swept
+    with ``FIELD_VALUE_RE.search`` instead: slower, never wrong.
     """
     folded = fold(text)
-    if folded is None:
-        return FIELD_VALUE_RE.sub(replace, text)
     out: list[str] = []
     cursor = 0
     # `at` is the next position to look from, and both the loop guard and every
@@ -2238,16 +2345,28 @@ def _redact_field_values(
         # is bounded work, so the deadline gets a chance to fire between them
         # rather than only after the whole pass.
         deadline.check("field-value scan")
-        anchor = _FIELD_NAME_ANCHOR.search(folded, at)
-        if anchor is None:
-            break
-        start = anchor.start()
-        match = FIELD_VALUE_RE.match(text, start)
-        if match is None:
-            at = start + 1
+        if folded is None:
+            match = FIELD_VALUE_RE.search(text, at)
+            if match is None:
+                break
+            start = match.start()
+        else:
+            anchor = _FIELD_NAME_ANCHOR.search(folded, at)
+            if anchor is None:
+                break
+            start = anchor.start()
+            match = FIELD_VALUE_RE.match(text, start)
+        replacement = None if match is None else replace(match)
+        if replacement is None:
+            resume = start + 1
+            if match is not None:
+                resume = (
+                    match.start("secret_value") if match.group("quote") else match.end()
+                )
+            at = max(resume, start + 1)
             continue
         out.append(text[cursor:start])
-        out.append(replace(match))
+        out.append(replacement)
         cursor = match.end()
         at = max(cursor, start + 1)
     out.append(text[cursor:])
@@ -2307,8 +2426,12 @@ def _redact_core(
         # high-confidence scan reports only structural detections.
         return rejoined, found
 
-    def _replace_field(m: re.Match[str]) -> str:
+    strings = _StringContext(rejoined)
+
+    def _replace_field(m: re.Match[str]) -> str | None:
         deadline.check("field-value scan")
+        if m.group("quote") and _quoted_inside_string(m, strings):
+            return None
         # The regex match supplies every positional field, so the name-based
         # gates (cursor / metadata field) are live on this path.
         candidate = Candidate.from_field_match(m)
@@ -2323,15 +2446,15 @@ def _redact_core(
             )
         value = candidate.value
         # A quoted value can enclose an earlier pass's placeholder.
-        if _REDACTED_TEXT_RE.search(value):
-            return m.group(0)
+        if _REDACTED_TEXT_RE.search(value) or _TEMPLATE_RE.search(value):
+            return None
         short_or_spaced = len(value) < _FIELD_VALUE_FLOOR or any(
             ch.isspace() for ch in value
         )
         if short_or_spaced and not _short_or_spaced_value_allowed(m, value):
-            return m.group(0)
+            return None
         if is_benign(candidate, web_ingress=web_ingress):
-            return m.group(0)
+            return None
         found.append("named secret field")
         return (
             m.group("field_prefix")

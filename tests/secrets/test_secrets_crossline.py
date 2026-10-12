@@ -546,6 +546,15 @@ def test_redact_text_catches_a_token_wrapped_right_before_the_next_line():
     assert found == ["Anthropic API Key"]
 
 
+def test_redact_text_catches_a_wrapped_openai_key_after_a_hyphen_ending_line():
+    """The OpenAI row adds `(?<!-)` after its boundary lookbehind; discovery must
+    relax both, or the previous line's `-` refuses the collapsed key."""
+    key = "sk-" + "aB3dE5fG7h" * 2 + "T3Blbk" + "FJ" + "zY8xW6vU4t" * 2
+    out, found = redact("prefix-\n" + key[:30] + "\n" + key[30:])
+    assert out == "prefix-\n[REDACTED: OpenAI Token]"
+    assert found == ["OpenAI Token"]
+
+
 def test_relax_leading_boundary_refuses_an_unrecognized_lookbehind():
     with pytest.raises(ValueError, match="leading lookbehind"):
         E._relax_leading_boundary(r"(?<!\w)ghp_[A-Za-z0-9_]{36,}")

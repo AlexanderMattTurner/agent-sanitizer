@@ -18,9 +18,11 @@
  * rather than through the `agent-sanitizer` specifier the plugin bundle pins to a
  * published engine. This scope is hook POLICY, not engine behavior — it must move
  * with the hook that walks it, or a plugin built against an older pin prunes the
- * wrong directories while believing it scanned everything.
+ * wrong directories while believing it scanned everything. Its one import,
+ * `./invisible.mjs`, is package-free too.
  */
-import { dirname, isAbsolute, join, relative, resolve } from "node:path";
+import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { STRIP } from "./invisible.mjs";
 
 // One row of the kind table. Both flags default to the conservative answer —
 // this kind is not on the ancestor chain, and no event announces it — so a row
@@ -199,23 +201,53 @@ export function ancestorInstructionFiles(dir) {
 }
 
 /**
- * Whether `file` lives inside `dir`. Lexical, on already-absolute paths, and the
- * bound on where an instruction-file scanner may REWRITE: a file above the scan
- * root is shared with every other project beneath that root, so it is reported
- * rather than silently edited. Both scanners ask this — one for a target it
- * globbed, one for a path an event handed it — and a copy each is a copy that
- * can drift into rewriting a file the other would not.
+ * Whether `file` lives strictly inside `dir` — the ONE containment predicate:
+ * both scanners gate their auto-clean on it, the glob walk keeps a match by it,
+ * and cleanFile refuses a write it rejects. A file above the scan root is
+ * shared with other projects, so it is reported rather than edited.
  *
- * Symlinks are deliberately not resolved: the guard that stops a link from
- * redirecting the write has to live at the write itself (cleanFile opens
- * O_NOFOLLOW), and resolving here would only duplicate it a check too early.
+ * Lexical; cleanFile hands it realpaths, which stops a directory symlink from
+ * redirecting a rewrite. `..` is tested as a whole SEGMENT, so `..notes.md` is
+ * inside and `../x` is not.
  * @param {string} dir
  * @param {string} file
  * @returns {boolean}
  */
 export function isInsideDir(dir, file) {
   const rel = relative(dir, file);
-  return rel !== "" && !rel.startsWith("..") && !isAbsolute(rel);
+  return (
+    rel !== "" &&
+    rel !== ".." &&
+    !rel.startsWith(`..${sep}`) &&
+    !isAbsolute(rel)
+  );
+}
+
+// What rendered untrusted text must never carry raw: what Layer 1 strips, C0/C1
+// controls (ESC opens a terminal escape, a newline forges a report line),
+// line/paragraph separators, lone surrogates. Written as literal ranges (Cc, Zl,
+// Zp and Cs are frozen) because a property escape would ask the running Node's
+// ICU; under the `u` flag the surrogate range matches only an unpaired one.
+const DISPLAY_UNSAFE = new RegExp(
+  `${STRIP.source}|[\\u{0}-\\u{1f}\\u{7f}-\\u{9f}\\u{2028}\\u{2029}\\u{d800}-\\u{dfff}]`,
+  "gu",
+);
+
+/**
+ * Untrusted text made safe to render into a report, stderr or model context:
+ * every {@link DISPLAY_UNSAFE} code point becomes a visible `\u{XXXX}` escape,
+ * everything else is kept. Scanners pass every path from a possibly hostile
+ * tree and every reason that may quote one through it. Display only — the
+ * result never opens a file.
+ * @param {string} text
+ * @returns {string}
+ */
+export function displayUntrusted(text) {
+  return text.replace(
+    DISPLAY_UNSAFE,
+    (ch) =>
+      `\\u{${/** @type {number} */ (ch.codePointAt(0)).toString(16).toUpperCase()}}`,
+  );
 }
 
 /**
@@ -395,7 +427,7 @@ export function contextScopeContradiction(path, loadReason) {
   const outer = /** @type {string[]} */ (claudeTail(path, "outermost"));
   if (CLAUDE_BULK_SUBDIRS.includes(outer[0])) return null;
   return (
-    `.claude/${tail[0]}/ loaded as model context, and CLAUDE_CONTEXT_SUBDIRS does not list it: ` +
+    `.claude/${displayUntrusted(tail[0])}/ loaded as model context, and CLAUDE_CONTEXT_SUBDIRS does not list it: ` +
     "the SessionStart scan prunes that directory, so every OTHER file in it goes unscanned. " +
     "Add it there if it is context, not bulk data"
   );
