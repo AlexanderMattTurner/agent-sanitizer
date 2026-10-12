@@ -50,6 +50,7 @@ const RELATIONAL = new Set(["<", "<=", ">", ">="]);
 /** `a.b.c` for a member chain of plain identifiers, else null. */
 function dotted(node) {
   if (node.type === "Identifier") return node.name;
+  if (node.type === "ThisExpression") return "this";
   if (node.type !== "MemberExpression" || node.computed) return null;
   const head = dotted(node.object);
   return head === null ? null : `${head}.${node.property.name}`;
@@ -100,6 +101,13 @@ function clockDerived(program) {
         if (CLOCK_READS.includes(callee ?? "")) return true;
         if (callee !== null && tainted.has(callee)) return true;
       }
+      // A member read matches by its FULL path: the walker never visits a
+      // non-computed property as an Identifier, so `timing.elapsed` is only
+      // seen as the path "timing.elapsed".
+      if (node.type === "MemberExpression") {
+        const path = dotted(node);
+        if (path !== null && tainted.has(path)) return true;
+      }
       return node.type === "Identifier" && tainted.has(node.name);
     });
   for (let before = -1; tainted.size !== before;) {
@@ -117,15 +125,8 @@ function clockDerived(program) {
         if (fn) markReturns(node.id.name, init, mark);
         else mark(node.id.name, init);
       }
-      if (node.type === "AssignmentExpression") {
-        const target = node.left;
-        mark(
-          target.type === "MemberExpression"
-            ? (target.property.name ?? null)
-            : (dotted(target) ?? null),
-          node.right,
-        );
-      }
+      if (node.type === "AssignmentExpression")
+        mark(dotted(node.left), node.right);
       if (node.type === "Property" && !node.computed && node.key.name)
         mark(node.key.name, node.value);
       if (node.type === "FunctionDeclaration" && node.id)
@@ -243,6 +244,10 @@ describe("real-clock thresholds", () => {
       `const cost = () => { const s = ${read}(); work(); return ${read}() - s; };\nassert.ok(cost() / 8 <= LIMIT);`,
     "against a named constant": (read) =>
       `let spent = ${read}(); spent = ${read}() - spent; assert(spent > BUDGET / 2);`,
+    "via an assigned member path": (read) =>
+      `const timing = {}; const start = ${read}(); work(); timing.elapsed = ${read}() - start;\nassert.ok(timing.elapsed < LIMIT);`,
+    "via an assigned this-member": (read) =>
+      `class T { run() { const s = ${read}(); this.elapsed = ${read}() - s; assert.ok(this.elapsed < LIMIT); } }`,
   };
   for (const read of CLOCK_READS)
     for (const [idiom, build] of Object.entries(OFFENDERS))
@@ -264,6 +269,8 @@ describe("real-clock thresholds", () => {
       "let now = 0; tick(() => now); now += 60; assert.equal(charged(), 60);",
     "clock ordering":
       "const a = Date.now(); const b = Date.now(); assert.ok(b >= a);",
+    "an untainted member beside a tainted one":
+      "const timing = {}; timing.elapsed = Date.now() - Date.now(); timing.count = 3; assert.ok(timing.count < LIMIT); assert.ok(other.elapsed < LIMIT);",
   };
   for (const [idiom, source] of Object.entries(BENIGN))
     it(`does not flag ${idiom}`, () => {
