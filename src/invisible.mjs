@@ -333,12 +333,14 @@ export const TOTAL_PRESERVED_JOINER_BUDGET = 16;
 export const PRESERVED_JOINER_PER_VISIBLE = 8;
 
 // Ceiling on the preserve allowance that cover text OUTSIDE the joining scripts
-// can buy. Without it, maxPreserved grows linearly with visible length, so a
+// can buy. Without it, the allowance grows linearly with visible length, so a
 // large ASCII body would let the residual joiner/selector channel scale with
-// attacker input. Text in a joining script is the exception: there the joiners
-// are orthography, so the allowance also grows at PRESERVED_JOINER_PER_VISIBLE
-// of the JOINING LETTERS themselves (see joiningLetterCount) — a long Persian
-// document keeps every ZWNJ, while a channel denser than that still trips.
+// attacker input. JOINERS in a joining script are the exception: there they are
+// orthography, so the joiner allowance alone also grows at
+// PRESERVED_JOINER_PER_VISIBLE of the JOINING LETTERS themselves (see
+// joiningLetterCount) — a long Persian document keeps every ZWNJ, while a
+// channel denser than that still trips, and selectors and tags stay under this
+// cap however much joining-script cover surrounds them.
 export const PRESERVE_HARD_CAP = 64;
 
 // Floor on the document-wide allowance for PRESERVED blank fillers (the
@@ -1289,9 +1291,7 @@ function carveStrip(
 
   // Document-wide preserve allowance, proportional to visible text but never
   // below the floor (see TOTAL_PRESERVED_JOINER_BUDGET / PRESERVED_JOINER_PER_VISIBLE)
-  // and, for cover text outside the joining scripts, never above
-  // PRESERVE_HARD_CAP. The joining-letter term is counted only when the
-  // candidates outrun the capped allowance, so ordinary text never pays for it.
+  // and never above PRESERVE_HARD_CAP. Every preserved kind draws on it.
   const coverAllowance = Math.min(
     PRESERVE_HARD_CAP,
     Math.max(
@@ -1299,7 +1299,14 @@ function carveStrip(
       Math.ceil(visibleLen / PRESERVED_JOINER_PER_VISIBLE),
     ),
   );
-  const maxPreserved =
+  // The allowance joining letters buy past the cap, for JOINERS alone: a
+  // selector or tag beside Persian text does no orthographic work, so letting
+  // eight Arabic letters fund one more preserved selector would make the
+  // selector channel scale with attacker-supplied cover again. The total of
+  // every kind stays under this; the non-joiners also stay under coverAllowance.
+  // The joining-letter term is counted only when the candidates outrun the
+  // capped allowance, so ordinary text never pays for it.
+  const joinerAllowance =
     candidates.length <= coverAllowance
       ? coverAllowance
       : Math.max(
@@ -1330,9 +1337,11 @@ function carveStrip(
   // surplus is stripped, closing the high-bit-rate variation-selector channel.
   let selectorRun = 0;
   // Preserved chars across the WHOLE string — never reset at a gap, so it bounds
-  // the document-wide channel joinerRun cannot. Past maxPreserved a preserved
+  // the document-wide channel joinerRun cannot. Past joinerAllowance a preserved
   // char is stripped and its category reported.
   let preservedTotal = 0;
+  // The non-joiner share of preservedTotal, bounded by coverAllowance.
+  let preservedOther = 0;
   let prevVisible = false;
 
   /** Emit `[from, to)` under a settled `fits`, updating every counter.
@@ -1358,6 +1367,7 @@ function carveStrip(
         if (kind[k] === KIND_JOINER) joinerRun++;
         if (kind[k] === KIND_IVS || kind[k] === KIND_STDVS) selectorRun++;
         if (kind[k] !== KIND_BLANK) preservedTotal++;
+        if (kind[k] !== KIND_BLANK && kind[k] !== KIND_JOINER) preservedOther++;
         prevVisible = false; // a joiner/selector/tag/blank keeps the cluster open
         continue;
       }
@@ -1398,15 +1408,22 @@ function carveStrip(
 
   /** True when no cluster from here on can be preserved, so the rest of the
    * document is settled and needs no boundaries. Every term is monotone:
-   * `preservedTotal` only grows, and past `lastGap` the run counters only grow
-   * too, so a limit that is spent here is spent for good.
+   * `preservedTotal` and `preservedOther` only grow, and past `lastGap` the
+   * run counters only grow too, so a limit that is spent here is spent for good.
    * @param {number} at */
   const nothingLeftFits = (at) => {
-    if (preservedTotal >= maxPreserved) return true;
+    if (preservedTotal >= joinerAllowance) return true;
+    // Every non-joiner candidate needs room under coverAllowance.
+    const othersSpent = preservedOther >= coverAllowance;
+    if (othersSpent && leftJoiner === 0) return true;
     if (at <= lastGap) return false; // a reset ahead can reopen a spent run
-    if (leftOther > 0) return false; // a tag/presentation selector draws on neither run
+    if (!othersSpent && leftOther > 0) return false; // a tag/presentation selector draws on neither run
     if (leftJoiner > 0 && joinerRun < CONSECUTIVE_JOINER_CAP) return false;
-    if (leftSelector > 0 && selectorRun < CONSECUTIVE_SELECTOR_CAP)
+    if (
+      !othersSpent &&
+      leftSelector > 0 &&
+      selectorRun < CONSECUTIVE_SELECTOR_CAP
+    )
       return false;
     return true;
   };
@@ -1468,7 +1485,8 @@ function carveStrip(
     emit(
       start,
       end,
-      preservedTotal + need <= maxPreserved &&
+      preservedTotal + need <= joinerAllowance &&
+        preservedOther + need - joiners <= coverAllowance &&
         runJoiner + joiners <= CONSECUTIVE_JOINER_CAP &&
         runSelector + selectors <= CONSECUTIVE_SELECTOR_CAP,
     );

@@ -743,8 +743,9 @@ function carveStrip(body) {
   // joiner is stripped (threshold-evasion catch — over-strip beats under).
   const allowCarveOut = payloadInvis < SCATTERED_THRESHOLD;
   // Document-wide preserve allowance, proportional to visible text but never
-  // below the floor; cover text outside the joining scripts buys at most
-  // PRESERVE_HARD_CAP, while joining letters keep buying at the same rate.
+  // below the floor and never above PRESERVE_HARD_CAP; joining letters keep
+  // buying at the same rate, but for JOINERS only — every other kind stays
+  // under the capped allowance.
   let joiningLetters = 0;
   for (let k = 0; k < cps.length; k++)
     if (
@@ -752,14 +753,15 @@ function carveStrip(body) {
       (isCursiveLetter(jtOf(cps[k])) || isBrahmicConsonantChar(cps[k]))
     )
       joiningLetters++;
-  const maxPreserved = Math.max(
-    Math.min(
-      PRESERVE_HARD_CAP,
-      Math.max(
-        TOTAL_PRESERVED_JOINER_BUDGET,
-        Math.ceil(visibleLen / PRESERVED_JOINER_PER_VISIBLE),
-      ),
+  const coverAllowance = Math.min(
+    PRESERVE_HARD_CAP,
+    Math.max(
+      TOTAL_PRESERVED_JOINER_BUDGET,
+      Math.ceil(visibleLen / PRESERVED_JOINER_PER_VISIBLE),
     ),
+  );
+  const joinerAllowance = Math.max(
+    coverAllowance,
     Math.ceil(joiningLetters / PRESERVED_JOINER_PER_VISIBLE),
   );
 
@@ -777,9 +779,11 @@ function carveStrip(body) {
   // surplus is stripped, closing the high-bit-rate variation-selector channel.
   let selectorRun = 0;
   // Preserved chars across the WHOLE string — never reset at a gap, so it bounds
-  // the document-wide channel joinerRun cannot. Past maxPreserved a preserved
+  // the document-wide channel joinerRun cannot. Past joinerAllowance a preserved
   // char is stripped and its category reported.
   let preservedTotal = 0;
+  // The non-joiner share of preservedTotal, bounded by coverAllowance.
+  let preservedOther = 0;
   let prevVisible = false;
   let start = 0;
   for (const end of clusterEnds(body)) {
@@ -820,7 +824,8 @@ function carveStrip(body) {
     }
     const fits =
       allowCarveOut &&
-      preservedTotal + need <= maxPreserved &&
+      preservedTotal + need <= joinerAllowance &&
+      preservedOther + need - joiners <= coverAllowance &&
       runJoiner + joiners <= CONSECUTIVE_JOINER_CAP &&
       runSelector + selectors <= CONSECUTIVE_SELECTOR_CAP;
     for (let k = start; k < end; k++) {
@@ -842,6 +847,7 @@ function carveStrip(body) {
         if (kind[k] === "joiner") joinerRun++;
         if (kind[k] === "ivs" || kind[k] === "stdvs") selectorRun++;
         if (kind[k] !== "blank") preservedTotal++;
+        if (kind[k] !== "blank" && kind[k] !== "joiner") preservedOther++;
         prevVisible = false; // a joiner/selector/tag/blank keeps the cluster open
         out += cps[k];
         continue;

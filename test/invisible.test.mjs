@@ -37,6 +37,7 @@ import {
   payloadInvisibleView,
   countPayloadInvisible,
   BRAHMIC_CONSONANT_RANGES,
+  payloadVerdict,
 } from "../src/invisible.mjs";
 import { loadUcd } from "../scripts/gen-joining-type.mjs";
 import { applyLayer1, stripAnsiFully } from "../src/layer1.mjs";
@@ -1343,6 +1344,34 @@ describe("stripInvisible: the preserve budget's hard cap binds cover text, not j
     const { cleaned, found } = stripInvisibleWithReport(unit.repeat(40));
     assert.equal(countOf(cleaned, ZWNJ_CH), 40);
     assert.deepEqual(found, []);
+  });
+
+  // Joining letters buy room for JOINERS: a selector beside Persian text does no
+  // orthographic work, so 800 letters must not fund 100 hidden selector bits.
+  const BEH = cp(0x628);
+  for (const [name, selector, unit] of [
+    ["registered variation selectors", cp(0xfe00), `0${cp(0xfe00)} `],
+    ["emoji presentation selectors", cp(0xfe0f), `${cp(0x2764)}${cp(0xfe0f)} `],
+  ])
+    it(`joining-letter cover cannot widen the allowance for ${name}`, () => {
+      const text = BEH.repeat(800) + unit.repeat(100);
+      const { cleaned, found } = stripInvisibleWithReport(text);
+      assert.equal(countOf(cleaned, selector), PRESERVE_HARD_CAP);
+      assert.deepEqual(found, [CATEGORY.VARIATION_SELECTORS]);
+      assert.equal(payloadVerdict(text).payloadCapable, true);
+    });
+
+  it("keeps every selector under the cap beside a joiner-dense Persian body (precision)", () => {
+    // 600 joining letters fund 75 joiners; the 10 selectors fit under the
+    // capped allowance, so they all survive, and only joiners are trimmed.
+    const text = `0${cp(0xfe00)} `.repeat(10) + (word + " ").repeat(200);
+    const { cleaned, found } = stripInvisibleWithReport(text);
+    assert.equal(countOf(cleaned, cp(0xfe00)), 10);
+    assert.equal(
+      countOf(cleaned, ZWNJ_CH),
+      Math.ceil(600 / PRESERVED_JOINER_PER_VISIBLE) - 10,
+    );
+    assert.deepEqual(found, [CATEGORY.CF]);
   });
 });
 

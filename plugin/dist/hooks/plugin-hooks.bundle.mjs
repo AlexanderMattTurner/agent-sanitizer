@@ -4225,7 +4225,7 @@ function carveStrip(body, cps = codePointArray(body), analysis = analyzeCarve(cp
       Math.ceil(visibleLen / PRESERVED_JOINER_PER_VISIBLE)
     )
   );
-  const maxPreserved = candidates.length <= coverAllowance ? coverAllowance : Math.max(
+  const joinerAllowance = candidates.length <= coverAllowance ? coverAllowance : Math.max(
     coverAllowance,
     Math.ceil(
       joiningLetterCount(cps, codes) / PRESERVED_JOINER_PER_VISIBLE
@@ -4238,6 +4238,7 @@ function carveStrip(body, cps = codePointArray(body), analysis = analyzeCarve(cp
   let joinerRun = 0;
   let selectorRun = 0;
   let preservedTotal = 0;
+  let preservedOther = 0;
   let prevVisible = false;
   const emit = (from, to, fits) => {
     for (let k2 = from; k2 < to; k2++) {
@@ -4254,6 +4255,7 @@ function carveStrip(body, cps = codePointArray(body), analysis = analyzeCarve(cp
         if (kind2[k2] === KIND_JOINER) joinerRun++;
         if (kind2[k2] === KIND_IVS || kind2[k2] === KIND_STDVS) selectorRun++;
         if (kind2[k2] !== KIND_BLANK) preservedTotal++;
+        if (kind2[k2] !== KIND_BLANK && kind2[k2] !== KIND_JOINER) preservedOther++;
         prevVisible = false;
         continue;
       }
@@ -4281,11 +4283,13 @@ function carveStrip(body, cps = codePointArray(body), analysis = analyzeCarve(cp
     }
   }
   const nothingLeftFits = (at) => {
-    if (preservedTotal >= maxPreserved) return true;
+    if (preservedTotal >= joinerAllowance) return true;
+    const othersSpent = preservedOther >= coverAllowance;
+    if (othersSpent && leftJoiner === 0) return true;
     if (at <= lastGap) return false;
-    if (leftOther > 0) return false;
+    if (!othersSpent && leftOther > 0) return false;
     if (leftJoiner > 0 && joinerRun < CONSECUTIVE_JOINER_CAP) return false;
-    if (leftSelector > 0 && selectorRun < CONSECUTIVE_SELECTOR_CAP)
+    if (!othersSpent && leftSelector > 0 && selectorRun < CONSECUTIVE_SELECTOR_CAP)
       return false;
     return true;
   };
@@ -4327,7 +4331,7 @@ function carveStrip(body, cps = codePointArray(body), analysis = analyzeCarve(cp
     emit(
       start,
       end,
-      preservedTotal + need <= maxPreserved && runJoiner + joiners <= CONSECUTIVE_JOINER_CAP && runSelector + selectors <= CONSECUTIVE_SELECTOR_CAP
+      preservedTotal + need <= joinerAllowance && preservedOther + need - joiners <= coverAllowance && runJoiner + joiners <= CONSECUTIVE_JOINER_CAP && runSelector + selectors <= CONSECUTIVE_SELECTOR_CAP
     );
     k = end;
   }
