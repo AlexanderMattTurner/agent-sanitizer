@@ -544,14 +544,19 @@ describe("slowHookNotice", () => {
     // would double-count: a 60ms callback reported as 120ms of host time, which
     // can exceed the run's own wall-clock and flip the largest-share verdict.
     const timer = startHookTimer();
+    const started = performance.now();
     await chargeHostExtension(() =>
       chargeHostExtension(
         () => new Promise((resolve) => setTimeout(resolve, 60)),
       ),
     );
+    // Bounded by the interval's own measured wall-clock, not a fixed 120ms: on
+    // a loaded runner the 60ms timer fires late, and a fixed ceiling then
+    // rejects a correct single charge. A double charge is ~2x the wall-clock.
+    const wall = performance.now() - started;
     assert.ok(
-      timer.hostMs() >= 50 && timer.hostMs() < 120,
-      `one interval, charged once (${timer.hostMs()}ms)`,
+      timer.hostMs() >= 50 && timer.hostMs() <= wall * 1.25,
+      `one interval, charged once (${timer.hostMs()}ms of ${wall}ms wall-clock)`,
     );
   });
 
