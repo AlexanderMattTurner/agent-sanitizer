@@ -1466,6 +1466,9 @@ _PREFILTER_WINDOW_PAD = 64
 # it would refuse a genuinely wrapped token at that end and no test would see
 # it, since the relax step would look like a no-op instead of a miss.
 _LEADING_BOUNDARY_LOOKBEHINDS = ("(?<![A-Za-z0-9_])", "(?<![A-Za-z0-9])")
+# A pattern may follow its boundary with this one, which refuses a hyphenated
+# identifier (`my-sk-ant-x`); it is a boundary too and relaxes with the first.
+_HYPHEN_LOOKBEHIND = "(?<!-)"
 _TRAILING_BOUNDARY_LOOKAHEADS = ("(?![A-Za-z0-9])", "(?!\\w)")
 _UNRECOGNIZED_LEADING_RE = re.compile(r"^\(\?<![^()]*\)")
 _UNRECOGNIZED_TRAILING_RE = re.compile(r"\(\?![^()]*\)$")
@@ -1490,7 +1493,7 @@ def _relax_leading_boundary(pattern: str) -> str:
     """
     for prefix in _LEADING_BOUNDARY_LOOKBEHINDS:
         if pattern.startswith(prefix):
-            return pattern[len(prefix) :]
+            return pattern[len(prefix) :].removeprefix(_HYPHEN_LOOKBEHIND)
     if _UNRECOGNIZED_LEADING_RE.match(pattern):
         raise ValueError(
             f"{pattern!r} opens with a leading lookbehind this repo does not "
