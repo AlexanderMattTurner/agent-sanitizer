@@ -382,8 +382,8 @@ describe("guarded-data scan (the map is derived from the tests)", () => {
       ),
       "pathspec `*` no longer crosses a directory separator",
     );
-    assert.deepEqual(expandPathspec("scripts/data/StandardizedVariants.txt"), [
-      "scripts/data/StandardizedVariants.txt",
+    assert.deepEqual(expandPathspec("scripts/lib/ucd.mjs"), [
+      "scripts/lib/ucd.mjs",
     ]);
     assert.throws(
       () => expandPathspec("src/[ai]*.mjs"),

@@ -31,6 +31,7 @@ import { CF_CODEPOINTS } from "../src/cf-charset.mjs";
 import {
   parseStandardizedVariants,
   loadStandardizedVariantsUcd,
+  PINNED_SHA256,
   render as renderStandardizedVariants,
 } from "../scripts/gen-standardized-variants.mjs";
 import {
@@ -96,21 +97,22 @@ describe("Cf charset is pinned identically for JS and Python", () => {
 
 // SSOT round-trip for the standardized variation sequence table backing the
 // FE00–FE0D carve-out in invisible.mjs. src/standardized-variants.mjs is
-// generated from the vendored UCD file; re-parsing that file here and
+// generated from the hash-pinned UCD file; re-parsing that file here and
 // asserting the committed module matches makes editing the data without
 // regenerating (or a mutant flipping a pair) a hard CI failure.
 describe("standardized-variants SSOT", () => {
   const { text, version } = loadStandardizedVariantsUcd();
   const pairs = parseStandardizedVariants(text);
 
-  it("pins the committed module's Unicode version to the vendored file", () => {
+  it("pins the committed module's Unicode version to the UCD file's", () => {
     assert.equal(SV_UNICODE_VERSION, version);
     assert.equal(version, UCD_PACKAGE_VERSION);
   });
 
-  // The one UCD file not read from the pinned package: a package bump that
-  // leaves it on the old version must fail rather than mix two Unicodes.
-  it("refuses a StandardizedVariants.txt from another Unicode version", () => {
+  // The one UCD file not read from the pinned package: bytes other than the
+  // pinned download (a tampered cache, another Unicode's copy) must fail
+  // rather than regenerate the table from unreviewed data.
+  it("refuses a StandardizedVariants.txt that is not the pinned file", () => {
     assert.throws(
       () =>
         loadStandardizedVariantsUcd(
@@ -119,7 +121,17 @@ describe("standardized-variants SSOT", () => {
             "# StandardizedVariants-16.0.0.txt",
           ),
         ),
-      /is "# StandardizedVariants-16\.0\.0\.txt", not Unicode 17\.0\.0/u,
+      /StandardizedVariants\.txt has SHA-256 [0-9a-f]{64}, not the pinned [0-9a-f]{64} for Unicode 17\.0\.0/u,
+    );
+  });
+
+  // A dead pin for an older Unicode is unreviewed surface, and the header
+  // proves the pinned bytes are the release the package names.
+  it("pins only the package's Unicode version, and that release's file", () => {
+    assert.deepEqual(Object.keys(PINNED_SHA256), [UCD_PACKAGE_VERSION]);
+    assert.equal(
+      text.slice(0, text.indexOf("\n")),
+      `# StandardizedVariants-${UCD_PACKAGE_VERSION}.txt`,
     );
   });
 
@@ -135,7 +147,7 @@ describe("standardized-variants SSOT", () => {
 
   // The emoji presentation selectors belong to the pictograph carve-out, and
   // the UCD keeps their sequences in a different file: one appearing here
-  // would mean the vendored file is not StandardizedVariants.txt.
+  // would mean the fetched file is not StandardizedVariants.txt.
   it("registers no emoji presentation selector", () => {
     for (const [, selector] of pairs)
       assert.ok(selector !== 0xfe0e && selector !== 0xfe0f);
@@ -153,7 +165,7 @@ describe("standardized-variants SSOT", () => {
   // Every selector the UCD file registers a sequence for must survive the
   // parse: a selector range narrower than the file's is how all 60 Mongolian
   // free-variation sequences were silently dropped.
-  it("keeps every selector the vendored file registers", () => {
+  it("keeps every selector the UCD file registers", () => {
     const inFile = new Set();
     for (const line of text.split("\n")) {
       const seq = line.split("#")[0].split(";")[0].trim().split(/\s+/u);

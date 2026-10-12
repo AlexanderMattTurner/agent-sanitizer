@@ -47,11 +47,7 @@
     },
     {
       "generator": "scripts/gen-standardized-variants.mjs",
-      "sources": [
-        "scripts/data/StandardizedVariants.txt",
-        "pnpm-lock.yaml",
-        "scripts/lib/ucd.mjs"
-      ],
+      "sources": ["pnpm-lock.yaml", "scripts/lib/ucd.mjs"],
       "owns": ["src/standardized-variants.mjs"]
     },
     {
