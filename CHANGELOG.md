@@ -8,6 +8,21 @@ adhere to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+## [2.58.11] - 2026-10-12
+
+### Fixed
+- Hooks now properly preserve trace field values (ts, level, event) and prevent overwriting.
+- Hooks refuse to use group- or world-writable invisible-character alert directories for security.
+- Hooks properly withhold unvetted tool output under SECRETS_ENABLED=1 even when failing open.
+- Hooks now report unrecognized AGENT_SANITIZER_* values instead of silently ignoring them.
+- Fixed setup-lock probe from resurrecting a finished setup's marker.
+- Fixed crash when the session's uid has no passwd entry.
+- Scan now properly handles `.claude` context when the hook runs under a `.claude/worktrees/` checkout.
+- CI assertion of live-engine dead-daemon cases against the Layer 4 withholding contract.
+
+### Added
+- New knob table system that derives documented and exercised knob sets for better configuration management.
+
 ## [2.58.10] - 2026-10-12
 
 ### Changed
