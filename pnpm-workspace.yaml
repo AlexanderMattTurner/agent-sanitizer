@@ -44,8 +44,8 @@ overrides:
   # GHSA-58mr-gqgx-xq4g — host confusion via an unclosed bracket in URI authority.
   fast-uri@>=3.0.0 <3.1.7: "^3.1.7"
   # GHSA-rgw5-rvv9-x895 — denial of service from unbounded expansion. Via eslint.
-  # GHSA-qhr7-859c-m2p7 — DoS via uncontrolled recursion on nested brace groups.
-  # GHSA-q... — DoS via uncontrolled recursion in parseCommaParts.
+  # GHSA-qhr7-859c-m2p7 — DoS via uncontrolled recursion in brace expansion parsing
+  # (covers both nested-brace-groups and parseCommaParts stack exhaustion vectors).
   brace-expansion@>=4.0.0 <5.0.11: "^5.0.11"
   # GHSA-5p4m-2wfm-xmqj — quadratic CPU use parsing !!omap. Via @commitlint/cli.
   # GHSA-2883-xcg3-v3hh — maxTotalMergeKeys does not limit CPU use for empty sources.
