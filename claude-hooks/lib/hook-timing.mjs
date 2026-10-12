@@ -191,6 +191,45 @@ function versionClause(version) {
 }
 
 /**
+ * A composer that bundles this hook runtime into hooks of its own names itself
+ * here, so a slow notice from one of ITS hooks charges the cost to it and sends
+ * the report to its tracker rather than this package's.
+ * @typedef {{
+ *   name: string,
+ *   issueUrl: string,
+ *   version?: string | null,
+ * }} ReportTo
+ */
+
+/**
+ * Who a slow-hook notice names as the hook's owner, where it sends the report,
+ * and the version clause the report carries: this package unless `reportTo`
+ * names a composer. A composer that passes no version gets the look-it-up
+ * clause, never this package's version under its name.
+ * @param {ReportTo | undefined} reportTo
+ * @param {string | null | undefined} version  see {@link versionClause}
+ */
+function noticeOwner(reportTo, version) {
+  if (reportTo === undefined)
+    return {
+      label: "agent-sanitizer",
+      owner: "the sanitizer",
+      issueUrl: ISSUE_URL,
+      versionClause: versionClause(version),
+      composer: undefined,
+    };
+  return {
+    label: reportTo.name,
+    owner: reportTo.name,
+    issueUrl: reportTo.issueUrl,
+    versionClause: reportTo.version
+      ? `${reportTo.name} ${reportTo.version}`
+      : `your ${reportTo.name} version`,
+    composer: reportTo.name,
+  };
+}
+
+/**
  * Milliseconds as the seconds string every notice below prints.
  *
  * Rounds tenths half-UP from an exact integer count of hundredths, rather than
@@ -237,6 +276,7 @@ export function formatBytes(bytes) {
  *   cpuMs?: number | null,
  *   redactorMs?: number | null,
  *   hostMs?: number | null,
+ *   reportTo?: ReportTo,
  * }} SlowHookContext
  */
 
@@ -563,9 +603,10 @@ export function startHookTimer(now = Date.now, cpuNow = processCpuMs) {
  * @param {number} redactorMs
  * @param {number | undefined} hostMs  absent when the caller measures no host
  *   callbacks; a caller that does pass 0 when none ran
+ * @param {ReturnType<typeof noticeOwner>} owner
  * @returns {string}
  */
-function attributeWait(elapsedMs, cpuMs, redactorMs, hostMs) {
+function attributeWait(elapsedMs, cpuMs, redactorMs, hostMs, owner) {
   // `hostMs` absent means the caller cannot measure that window, not that it was
   // empty — a caller that CAN measure passes 0 and gets the zero printed. So an
   // absent one is left out of both the sentence and the remainder, and the
@@ -577,12 +618,14 @@ function attributeWait(elapsedMs, cpuMs, redactorMs, hostMs) {
     redactorMs === largest
       ? "The largest share was spent inside the redactor round trip — the daemon's scan, the host it shares, or both; this hook was not computing it."
       : hostMs !== undefined && hostMs === largest
-        ? "The largest share was spent inside a host extension this hook called — a callback the composer injected, and a cost that composer owns; neither the sanitizer nor the redactor was computing it."
+        ? owner.composer === undefined
+          ? "The largest share was spent inside a host extension this hook called — a callback the composer injected, and a cost that composer owns; neither the sanitizer nor the redactor was computing it."
+          : `The largest share was spent inside a host extension this hook called — a callback ${owner.composer} injected, and a cost ${owner.composer} owns; neither this hook nor the redactor was computing it.`
         : cpuMs === largest
-          ? "The largest share is this hook computing — a per-call cost the sanitizer owns, repeated by every affected call."
+          ? `The largest share is this hook computing — a per-call cost ${owner.owner} owns, repeated by every affected call.`
           : hostMs === undefined
-            ? "The largest share is neither the redactor nor this hook computing: it was blocked on a loaded machine, on a host extension this caller does not measure, or on something else outside the sanitizer that it called."
-            : "The largest share is none of those three: it was blocked on a loaded machine or on something outside the sanitizer that it called without measuring.";
+            ? `The largest share is neither the redactor nor this hook computing: it was blocked on a loaded machine, on a host extension this caller does not measure, or on something else outside ${owner.owner} that it called.`
+            : `The largest share is none of those three: it was blocked on a loaded machine or on something outside ${owner.owner} that it called without measuring.`;
   const hostClause =
     hostMs === undefined
       ? ""
@@ -617,7 +660,8 @@ function attributeWait(elapsedMs, cpuMs, redactorMs, hostMs) {
  * @param {number} [thresholdMs]
  * @param {SlowHookContext} [context]  known CPU time / payload size /
  *   triggering tool, so the notice is self-diagnosing rather than requiring the
- *   next reader to reconstruct what was slow by hand
+ *   next reader to reconstruct what was slow by hand; its `reportTo` names the
+ *   composer that owns the hook, and replaces the owner, tracker and version
  * @param {string | null} [version]  the build to name in the report line;
  *   omitted asks {@link sanitizerVersion}, and the shell port passes its own,
  *   read from the plugin manifest it ships beside
@@ -640,12 +684,13 @@ export function slowHookNotice(
   // number, including when it is 0.
   const hostMs =
     typeof context?.hostMs === "number" ? context.hostMs : undefined;
+  const owner = noticeOwner(context?.reportTo, version);
   const attribution = attributed
-    ? attributeWait(elapsedMs, cpuMs, redactorMs, hostMs)
+    ? attributeWait(elapsedMs, cpuMs, redactorMs, hostMs, owner)
     : typeof cpuMs === "number"
       ? `, and used ${formatSeconds(cpuMs)}s of CPU. ` +
         "Only the CPU share is work every affected call repeats; the rest was spent waiting, on a busy machine or on something this hook called."
-      : ". Wall-clock alone cannot separate the sanitizer's own work from a busy machine.";
+      : `. Wall-clock alone cannot separate ${owner.owner}'s own work from a busy machine.`;
   const timings = attributed
     ? hostMs === undefined
       ? "all three timings"
@@ -654,9 +699,9 @@ export function slowHookNotice(
       ? "both timings"
       : "timing";
   return (
-    `agent-sanitizer PERFORMANCE: the ${hookName} hook took ` +
+    `${owner.label} PERFORMANCE: the ${hookName} hook took ` +
     `${formatSeconds(elapsedMs)}s${formatContextSuffix(context)}, over its ${formatSeconds(thresholdMs)}s budget${attribution} ` +
-    `Tell the user, and suggest they report it at ${ISSUE_URL} with ${versionClause(version)}, the hook name and ${timings}.`
+    `Tell the user, and suggest they report it at ${owner.issueUrl} with ${owner.versionClause}, the hook name and ${timings}.`
   );
 }
 

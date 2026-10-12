@@ -812,6 +812,88 @@ describe("the version an issue report is asked to carry", () => {
   });
 });
 
+describe("a composer's own hook", () => {
+  const glovebox = {
+    name: "agent-glovebox",
+    issueUrl:
+      "https://github.com/AlexanderMattTurner/agent-glovebox/issues/new",
+    version: "0.79.0",
+  };
+  // One context per attribution arm that names an owner, plus the unmeasured
+  // case: each must charge the composer once it names itself, and the sanitizer
+  // when it does not.
+  const arms = {
+    cpu: { cpuMs: 3_800, redactorMs: 100, hostMs: 0 },
+    host: { cpuMs: 100, redactorMs: 100, hostMs: 3_700 },
+    remainderMeasured: { cpuMs: 100, redactorMs: 100, hostMs: 0 },
+    remainderUnmeasured: { cpuMs: 100, redactorMs: 100 },
+    wallOnly: {},
+  };
+
+  for (const [arm, context] of Object.entries(arms))
+    it(`charges the composer it names, and only then (${arm})`, () => {
+      const own = slowHookNotice("gate-bash-calls", 4_000, undefined, context);
+      const composed = slowHookNotice("gate-bash-calls", 4_000, undefined, {
+        ...context,
+        reportTo: glovebox,
+      });
+      assert.match(own, /^agent-sanitizer PERFORMANCE/u);
+      assert.match(own, /agent-sanitizer\/issues\/new with agent-sanitizer /u);
+      assert.match(composed, /^agent-glovebox PERFORMANCE/u);
+      assert.match(
+        composed,
+        /report it at https:\/\/github\.com\/AlexanderMattTurner\/agent-glovebox\/issues\/new with agent-glovebox 0\.79\.0, the hook name/u,
+      );
+      assert.doesNotMatch(composed, /sanitizer/u);
+    });
+
+  it("asks for the composer's version when the composer gives none", () => {
+    const composed = slowHookNotice("gate-bash-calls", 4_000, undefined, {
+      reportTo: { name: glovebox.name, issueUrl: glovebox.issueUrl },
+    });
+    assert.match(composed, /with your agent-glovebox version, the hook name/u);
+    assert.doesNotMatch(composed, /agent-glovebox [0-9]/u);
+  });
+
+  it("reaches the notice from runJudgeCli's own option", async () => {
+    const written = [];
+    const realErr = process.stderr.write.bind(process.stderr);
+    process.stderr.write = () => true;
+    try {
+      await runJudgeCli(
+        "gate-bash-calls",
+        async () => {
+          await new Promise((resolve) =>
+            setTimeout(resolve, SLOW_HOOK_THRESHOLD_MS + 100),
+          );
+          return { decision: "allow" };
+        },
+        {
+          onError: (err) => assert.fail(String(err)),
+          readInput: async () => ({
+            hook_event_name: "PreToolUse",
+            tool_name: "Bash",
+            tool_input: { command: "echo hi" },
+          }),
+          write: (chunk) => written.push(chunk),
+          reportTo: glovebox,
+        },
+      );
+    } finally {
+      process.stderr.write = realErr;
+    }
+    const stdout = written.join("");
+    assert.match(
+      stdout,
+      /agent-glovebox PERFORMANCE: the gate-bash-calls hook/u,
+    );
+    assert.match(
+      stdout,
+      /agent-glovebox\/issues\/new with agent-glovebox 0\.79\.0/u,
+    );
+  });
+});
+
 describe("formatBytes", () => {
   it("tiers bytes, KB and MB", () => {
     assert.equal(formatBytes(512), "512 B");
