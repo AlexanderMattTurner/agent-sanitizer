@@ -108,6 +108,10 @@ def test_json_value_with_escaped_quote_redacts_whole(text, expected, found):
             "msg = \"don't\"; FOO_TOKEN='[REDACTED]'",
         ),
         ("don't set FOO_TOKEN='Abc1def2ghi3'", "don't set FOO_TOKEN='[REDACTED]'"),
+        (
+            "# it's the deploy key: export ACCESS_TOKEN='Zx9qW7rT2pL5mN8bV3cX6zA1s'",
+            "# it's the deploy key: export ACCESS_TOKEN='[REDACTED]'",
+        ),
         # Brackets, a trailing symbol, a digit run and a list wrapper are all
         # ordinary inside a real value.
         ('FOO_TOKEN="Abc1(def2)ghi3"', 'FOO_TOKEN="[REDACTED]"'),
@@ -219,6 +223,10 @@ def test_header_and_url_credentials_keep_their_shape(text, expected, found):
         "'?api_key='+apiKey+'&q='",
         'cmd = "PASSWORD="+pw+" ./run"',
         "'token='.concat(t).concat('&x=1')",
+        # Long enough to skip the short-value gates: only the string context
+        # shows the "value" is code between two literals.
+        'cmd = "PASSWORD="+password_from_the_vault+" ./run"',
+        'url = "https://x.example/?token="+session.accessTokenValue+"&a=1"',
         # Escaped quotes and bare symbols inside a JSON-encoded command.
         '{"command": "GITHUB_TOKEN=\\"$(gh auth token)\\" ./release.sh"}',
         '{"command": "API_KEY=\\"\\" pnpm test"}',
@@ -260,6 +268,7 @@ def test_header_and_url_credentials_keep_their_shape(text, expected, found):
         "OPENROUTER_API_KEY=sk-or-YOUR_OPENROUTER_API_KEY_HERE",
         "ANTHROPIC_API_KEY=sk-ant-Your-Api-Key-Goes-Here",
         "OPENROUTER_API_KEY=sk-or-v1-your-openrouter-api-key",
+        "ANTHROPIC_API_KEY=sk-ant-api03-" + "1234567890" * 3,
     ],
 )
 def test_benign_field_text_is_untouched(text):

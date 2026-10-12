@@ -719,6 +719,15 @@ _OPENAI_LEGACY = f"sk-{_OPENAI_20}T3BlbkFJ{_OPENAI_20}"
 _OPENAI_PROJECT = f"sk-proj-my_app-{_OPENAI_20}T3BlbkFJ{_OPENAI_20}"
 
 
+@pytest.mark.drift_guard(
+    "claude-guard reads secret-detectors.json patterns verbatim, so the loose "
+    "row cannot interpolate a fragment the engine's field path also compiles"
+)
+def test_field_path_dummy_body_is_the_loose_rows_lookahead():
+    (pattern,) = D._DENYLISTS["LooseProviderKeyDetector"]
+    assert f"(?!{E._DUMMY_KEY_BODY}(?![A-Za-z0-9_\\-]))" in pattern.pattern
+
+
 @pytest.mark.parametrize(
     "line, found",
     [
