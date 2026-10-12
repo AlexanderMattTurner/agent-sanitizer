@@ -184,12 +184,83 @@ def test_non_gitleaks_provider_detectors(cls_name, secret_type, hit, misses):
         ("GroqApiKeyDetector", "gsk_", 32),
         ("XaiApiKeyDetector", "xai-", 40),
         ("ReplicateApiTokenDetector", "r8_", 37),
+        ("LooseProviderKeyDetector", "sk-ant-", 20),
+        ("LooseProviderKeyDetector", "sk-or-", 20),
     ],
 )
 def test_prefix_detectors_pin_distinctive_length_floor(cls_name, prefix, floor):
     denylist = getattr(D, cls_name).denylist[0]
     assert denylist.search(prefix + "a" * floor)
     assert not denylist.search(prefix + "a" * (floor - 1))
+
+
+# ─── sk-ant- / sk-or- keys: canonical shapes and every shape they miss ───────
+
+_B62 = string.ascii_letters + string.digits
+_BODY93 = (_B62 * 2)[:93]
+_CANONICAL_ANTHROPIC = "sk-ant-api03-" + _BODY93 + "AA"
+_CANONICAL_OPENROUTER = "sk-or-v1-" + "0123456789abcdef" * 4
+_LOOSE = "[REDACTED: Provider API Key]"
+
+
+@pytest.mark.parametrize(
+    "text, expected",
+    [
+        (
+            "auth: sk-ant-F" + _B62[:24] + " sent",
+            ("auth: " + _LOOSE + " sent", ["Provider API Key"]),
+        ),
+        ("sk-or-" + _B62[:24], (_LOOSE, ["Provider API Key"])),
+        ("sk-ant-api03-" + _B62[:26], (_LOOSE, ["Provider API Key"])),
+        ("sk-or-v1-" + (_B62 * 2)[:64], (_LOOSE, ["Provider API Key"])),
+        ("sk-ant-ort01-" + _B62, (_LOOSE, ["Provider API Key"])),
+        ("sk-ant-" + _B62[:40], (_LOOSE, ["Provider API Key"])),
+        (_CANONICAL_ANTHROPIC + "xyz", (_LOOSE, ["Provider API Key"])),
+        (
+            _CANONICAL_OPENROUTER + "bcd",
+            (_LOOSE, ["Provider API Key", "OpenRouter API Key"]),
+        ),
+        (
+            "sk-ant-oat01-" + _BODY93 + "AA",
+            ("[REDACTED: Anthropic API Key]", ["Anthropic API Key"]),
+        ),
+    ],
+)
+def test_non_canonical_provider_key_redacts_whole(text, expected):
+    """A key outside the canonical shape redacts end to end. A canonical
+    OpenRouter body with a further body char names both types, but the wider
+    loose span wins arbitration, so the tail past the 64 hex goes too."""
+    assert E.redact(text) == expected
+
+
+@pytest.mark.parametrize(
+    "text, redacted, secret_type",
+    [
+        (_CANONICAL_ANTHROPIC, "{}", "Anthropic API Key"),
+        (_CANONICAL_ANTHROPIC + "-backup", "{}-backup", "Anthropic API Key"),
+        (_CANONICAL_OPENROUTER, "{}", "OpenRouter API Key"),
+        (_CANONICAL_OPENROUTER + ".", "{}.", "OpenRouter API Key"),
+    ],
+)
+def test_canonical_key_reports_only_its_canonical_type(text, redacted, secret_type):
+    """The loose row skips each canonical shape, so a canonical key is not
+    reported a second time under the loose label (equal spans both land in
+    ``found``). Every Anthropic version tag is pinned the same way by
+    ``test_prefix_family_member_redacts``."""
+    expected = redacted.format(f"[REDACTED: {secret_type}]")
+    assert E.redact(f"use {text} here") == (f"use {expected} here", [secret_type])
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "masked: sk-ant-X" + "\u2022" * 19,
+        "masked: sk-or-v1-" + "\u2022" * 19,
+        "a stub sk-ant-xxx in prose",
+    ],
+)
+def test_masked_or_short_provider_key_is_untouched(text):
+    assert E.redact(text) == (text, [])
 
 
 # ─── Precision: a shape detector must not fire on legitimate content ─────────
@@ -296,7 +367,7 @@ def _sample_token(secret_type: str) -> str:
 
 
 _PREFIX_FAMILIES = [
-    ("Anthropic API Key", "api03-", ["api03-", "admin01-"]),
+    ("Anthropic API Key", "api03-", ["api03-", "admin01-", "oat01-"]),
     ("DigitalOcean Token", "dop_", ["doo_", "dop_", "dor_"]),
     ("Vault Token", "hvs.", ["hvs.", "hvb."]),
     ("GitHub Token", "ghp_", ["ghp_", "gho_", "ghu_", "ghs_", "ghr_"]),
@@ -333,7 +404,7 @@ def test_prefix_family_member_redacts(secret_type, member, token):
     )
     result = run_plain(f"key: {token}")
     assert result is not None, (secret_type, member)
-    assert secret_type in result["found"], (secret_type, member)
+    assert result["found"] == [secret_type], (secret_type, member)
     assert token not in result["text"], (secret_type, member)
 
 
@@ -446,6 +517,7 @@ def test_cross_line_eligibility_partitions_every_active_detector():
         "Groq API Key",
         "xAI API Key",
         "Replicate API Token",
+        "Provider API Key",
         "Secret Keyword",
     } <= exempt
 
