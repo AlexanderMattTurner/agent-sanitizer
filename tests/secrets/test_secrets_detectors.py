@@ -13,6 +13,7 @@ import agent_sanitizer.secrets.engine as E
 from detect_secrets.plugins.cloudant import CloudantDetector as _UpstreamCloudant
 from detect_secrets.plugins.ibm_cloud_iam import IbmCloudIamDetector as _UpstreamIbmIam
 from detect_secrets.plugins.ibm_cos_hmac import IbmCosHmacDetector as _UpstreamIbmCos
+from detect_secrets.plugins.openai import OpenAIDetector as _UpstreamOpenAI
 from detect_secrets.plugins.softlayer import SoftlayerDetector as _UpstreamSoftlayer
 from detect_secrets.settings import get_plugins
 from redactor_helpers import LEGITIMATE, SAMPLES, run_plain
@@ -189,9 +190,11 @@ def test_non_gitleaks_provider_detectors(cls_name, secret_type, hit, misses):
     ],
 )
 def test_prefix_detectors_pin_distinctive_length_floor(cls_name, prefix, floor):
+    # Mixed case and digits: a single-case body is a placeholder to the loose row.
+    body = "aB3" * 20
     denylist = getattr(D, cls_name).denylist[0]
-    assert denylist.search(prefix + "a" * floor)
-    assert not denylist.search(prefix + "a" * (floor - 1))
+    assert denylist.search(prefix + body[:floor])
+    assert not denylist.search(prefix + body[: floor - 1])
 
 
 # ─── sk-ant- / sk-or- keys: canonical shapes and every shape they miss ───────
@@ -210,8 +213,8 @@ _LOOSE = "[REDACTED: Provider API Key]"
             "auth: sk-ant-F" + _B62[:24] + " sent",
             ("auth: " + _LOOSE + " sent", ["Provider API Key"]),
         ),
-        ("sk-or-" + _B62[:24], (_LOOSE, ["Provider API Key"])),
-        ("sk-ant-api03-" + _B62[:26], (_LOOSE, ["Provider API Key"])),
+        ("sk-or-" + _B62[20:44], (_LOOSE, ["Provider API Key"])),
+        ("sk-ant-api03-" + _B62[20:46], (_LOOSE, ["Provider API Key"])),
         ("sk-or-v1-" + (_B62 * 2)[:64], (_LOOSE, ["Provider API Key"])),
         ("sk-ant-ort01-" + _B62, (_LOOSE, ["Provider API Key"])),
         ("sk-ant-" + _B62[:40], (_LOOSE, ["Provider API Key"])),
@@ -706,6 +709,56 @@ def test_linear_detector_is_linear_on_a_space_run(secret_type):
         cpu_growth(
             lambda n, k: lambda text="key" + " " * (n + k): scan(text),
             geometric_sizes(500, 4000),
+        ),
+    )
+
+
+# ─── OpenAI: the bundled pattern is quadratic over repeated `sk-` ─────────────
+_OPENAI_20 = "Zx9qW7rT2pL5mN8bV3cX"
+_OPENAI_LEGACY = f"sk-{_OPENAI_20}T3BlbkFJ{_OPENAI_20}"
+_OPENAI_PROJECT = f"sk-proj-my_app-{_OPENAI_20}T3BlbkFJ{_OPENAI_20}"
+
+
+@pytest.mark.drift_guard(
+    "claude-guard reads secret-detectors.json patterns verbatim, so the loose "
+    "row cannot interpolate a fragment the engine's field path also compiles"
+)
+def test_field_path_dummy_body_is_the_loose_rows_lookahead():
+    (pattern,) = D._DENYLISTS["LooseProviderKeyDetector"]
+    assert f"(?!{E._DUMMY_KEY_BODY}(?![A-Za-z0-9_\\-]))" in pattern.pattern
+
+
+@pytest.mark.parametrize(
+    "line, found",
+    [
+        (f"key {_OPENAI_LEGACY} end", [_OPENAI_LEGACY]),
+        (f"OPENAI_API_KEY={_OPENAI_PROJECT}", [_OPENAI_PROJECT]),
+        (f'"{_OPENAI_LEGACY}"', [_OPENAI_LEGACY]),
+        (f"sk-{_OPENAI_20}T3BlbkFJ{_OPENAI_20[:-1]}", []),
+        # Glued onto a word or a hyphen run the replacement opens nowhere; the
+        # bundled pattern found the key inside the larger token.
+        (f"x{_OPENAI_LEGACY}", []),
+        (f"sk-ant-{_OPENAI_LEGACY}", [f"sk-ant-{_OPENAI_LEGACY}"]),
+    ],
+)
+def test_openai_replacement_matches_at_a_token_start(line, found):
+    assert D.OpenAiTokenDetector.secret_type == _UpstreamOpenAI.secret_type
+    assert [m for p in D.OpenAiTokenDetector.denylist for m in p.findall(line)] == (
+        found
+    )
+
+
+@pytest.mark.parametrize("unit", ["sk-ant-", "sk-or-", "sk-"])
+def test_redact_is_linear_on_a_repeated_sk_prefix(unit):
+    """The bundled OpenAI pattern retried `sk-[...]*` at every `sk-` in one
+    token, so any line another detector sent to the full plugin scan cost
+    seconds: a GitHub token beside 60KB of `sk-` took 9s in one redact()."""
+    token = "ghp_Zx9qW7rT2pL5mN8bV3cX6zA1sD4fG7hJ2kLm "
+    assert_linear(
+        f"redact() on a run of {unit!r}",
+        cpu_growth(
+            lambda n, k: lambda text=token + unit * (n + k): run_plain(text),
+            geometric_sizes(1000, 8000),
         ),
     )
 
