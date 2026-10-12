@@ -395,7 +395,9 @@ def test_daemon_writes_request_failures_to_its_log(sock_dir):
             assert S._read_frame(client) == {"error": "redaction failed"}
         finally:
             client.close()
-        assert "secret redaction failed (RedactionBudgetExceeded)" in log.read_text()
+        assert "secret redaction failed (RedactionBudgetExceeded)" in log.read_text(
+            encoding="utf-8"
+        )
         assert oct(log.stat().st_mode)[-3:] == "600"
     finally:
         proc.terminate()
@@ -405,11 +407,11 @@ def test_daemon_writes_request_failures_to_its_log(sock_dir):
 
 def test_log_to_refuses_a_symlink_planted_at_the_log_name(sock_dir):
     target = sock_dir / "elsewhere"
-    target.write_text("")
+    target.write_text("", encoding="utf-8")
     (sock_dir / "daemon.log").symlink_to(target)
     with pytest.raises(OSError):
         S._log_to(str(sock_dir / "daemon.log"))
-    assert target.read_text() == ""
+    assert target.read_text(encoding="utf-8") == ""
 
 
 def test_main_daemon_keeps_serving_after_sighup(sock_dir):

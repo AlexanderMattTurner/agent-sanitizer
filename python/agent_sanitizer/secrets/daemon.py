@@ -162,7 +162,9 @@ def conforms(value: object, shape: dict[str, str]) -> TypeGuard[dict]:
 
 # Env-var names already reported as unusable labels, so a misconfigured name
 # is logged once per daemon rather than once per request.
-_reported_labels: set[str] = set()
+_reported_labels: set[str] = (
+    set()
+)  # allow-unreset-state: per-process dedupe of a log line; a long-lived daemon must remember across requests
 
 
 def _env_secret_vars(env_secrets: dict[str, str]) -> dict[str, str]:
