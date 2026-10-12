@@ -22,6 +22,7 @@ should instead configure ONCE with :func:`configure_plugins` and call
 """
 
 import bisect
+import dataclasses
 import functools
 import json
 import re
@@ -423,7 +424,7 @@ FIELD_VALUE_RE = re.compile(
     # breaks every fullmatch-anchored value-shape skip at once and produces the
     # false positive that mangles real content. `===` is explicit for the same
     # reason: `==` alone would leave the third `=` on the value.
-    rf"(?P<field_prefix>(?:{_FIELD_NAMES})(?:[_-][A-Za-z0-9]+)*[\"']?\s*"
+    rf"(?P<field_prefix>(?P<field_name>(?:{_FIELD_NAMES})(?:[_-][A-Za-z0-9]+)*)[\"']?\s*"
     r"(?::=|===|==|=>|:[-+?]|[:=](?![-+?=>~]))\s*"
     r"(?:(?:Bearer|Token|Basic)\s+)?)"
     r"(?P<openbracket>[(\[{]?)"
@@ -441,12 +442,68 @@ FIELD_VALUE_RE = re.compile(
     # no issuer's token alphabet contains `;` or `,`, so the peel can only ever
     # shorten a non-credential. `.` is deliberately NOT peeled: it is a JWT's
     # own segment separator.
-    r"(?P<secret_value>[^\s\"'`{}()\[\]]{19,}[^\s\"'`{}()\[\];,])"
+    #
+    # The value takes one of four arms, tried in order. A QUOTED value is the
+    # whole span up to its own closing quote — spaces and backslash escapes
+    # included, so `"<key> tail"` and JSON's `"a\"<key>"` redact whole instead of
+    # leaking past the first space or escaped quote. The one-byte lookbehind is
+    # the quote group itself: nothing else in the prefix can end in a quote. An
+    # unquoted value is the 20+ char run above; a short or spaced quoted value is
+    # then accepted only by `_short_or_spaced_value_allowed`. Every arm stops at
+    # a map-mode sentinel (U+E000/U+E001), as `[` stops it at a plain-mode
+    # placeholder, so an earlier redaction is never swallowed into this one.
+    r"(?P<secret_value>"
+    r'(?<=")(?:[^"\\\n\ue000\ue001]|\\[^\n\ue000\ue001]){1,4096}(?=")'
+    r"|(?<=')(?:[^'\\\n\ue000\ue001]|\\[^\n\ue000\ue001]){1,4096}(?=')"
+    r"|[^\s\"'`{}()\[\]\ue000\ue001]{19,}[^\s\"'`{}()\[\];,\ue000\ue001]"
+    r")"
     r"(?P<terminator>[;,]*)"
     r"(?P<closequote>(?P=quote)?)"
     r"(?P<closebracket>[)\]}]?)",
     re.IGNORECASE | re.MULTILINE,
 )
+
+# A value under FIELD_VALUE_RE's 20-char floor, or one spanning whitespace, is
+# credible only where the key/value reading is unambiguous: the credential noun
+# ENDS the field name (`token_type`, `password_min_length` hold metadata), and
+# the value is quoted. `"FOO_TOKEN": "s3cret"` redacts; `password=prose` stays.
+_FIELD_VALUE_FLOOR = 20
+_FIELD_NOUN_RE = re.compile(f"(?:{_FIELD_NAMES})", re.IGNORECASE)
+# Nouns whose value may legitimately be a run of plain words (a diceware
+# passphrase); under every other noun such a run is prose about the credential
+# (`"token": "the access token"`), since no issued token is lowercase words.
+_PASSPHRASE_NOUN_RE = re.compile(r"pass(?:word|wd|phrase)|secret", re.IGNORECASE)
+_SEPARATOR_CHARS = ",;:=)]}"
+_LOWERCASE_WORDS_RE = re.compile(r"[a-z]+(?:[ \t]+[a-z]+)+")
+
+
+def _short_or_spaced_value_allowed(m: re.Match[str], value: str) -> bool:
+    """Whether a FIELD_VALUE_RE match whose ``value`` is short or spaced may
+    redact."""
+    noun = m.group("field_name")
+    if _FIELD_NOUN_RE.fullmatch(noun) is None:
+        return False
+    # Edge whitespace or a leading separator means the "opening" quote closed an
+    # outer string instead: `"password=", new: "x"` spans `, new: `.
+    if value[0].isspace() or value[-1].isspace() or value[0] in _SEPARATOR_CHARS:
+        return False
+    if _LOWERCASE_WORDS_RE.fullmatch(value) and (
+        _PASSPHRASE_NOUN_RE.fullmatch(noun) is None
+    ):
+        return False
+    return bool(m.group("closequote"))
+
+
+_AUTH_SCHEME_RE = re.compile(r"(?:Bearer|Token|Basic)[ \t]+(?=\S)", re.IGNORECASE)
+
+
+def _quoted_auth_scheme(m: re.Match[str]) -> str:
+    """The ``Bearer ``/``Token ``/``Basic `` opening a QUOTED value, else ``""``."""
+    if not m.group("closequote"):
+        return ""
+    scheme = _AUTH_SCHEME_RE.match(m.group("secret_value"))
+    return scheme.group(0) if scheme else ""
+
 
 # Pagination/cursor fields named "<prefix>token" are opaque page cursors, not
 # credentials (Twitter/X next_token, GCP nextPageToken, AWS NextToken,
@@ -1438,7 +1495,7 @@ _PEM_PROBE = LiteralProbe([PEM_BLOCK_RE])
 # sweeping it over the payload. Compiled from the same `_FIELD_NAMES` the regex
 # itself is built from, so the two cannot name different vocabularies; the guard
 # below is what says the noun list is still the FIRST thing the regex matches.
-_FIELD_NAME_ANCHOR_PREFIX = rf"(?P<field_prefix>(?:{_FIELD_NAMES})"
+_FIELD_NAME_ANCHOR_PREFIX = rf"(?P<field_prefix>(?P<field_name>(?:{_FIELD_NAMES})"
 if not FIELD_VALUE_RE.pattern.startswith(_FIELD_NAME_ANCHOR_PREFIX):
     raise RuntimeError(
         "FIELD_VALUE_RE no longer opens with the credential-noun alternation, so "
@@ -2092,6 +2149,24 @@ def _redact_core(
         # The regex match supplies every positional field, so the name-based
         # gates (cursor / metadata field) are live on this path.
         candidate = Candidate.from_field_match(m)
+        # A quoted header value keeps its auth scheme visible, exactly as the
+        # unquoted `Authorization: Bearer <v>` form does through the prefix.
+        scheme = _quoted_auth_scheme(m)
+        if scheme:
+            candidate = dataclasses.replace(
+                candidate,
+                value=candidate.value[len(scheme) :],
+                value_start=m.start("secret_value") + len(scheme),
+            )
+        value = candidate.value
+        # A quoted value can enclose an earlier pass's placeholder.
+        if _REDACTED_TEXT_RE.search(value):
+            return m.group(0)
+        short_or_spaced = len(value) < _FIELD_VALUE_FLOOR or any(
+            ch.isspace() for ch in value
+        )
+        if short_or_spaced and not _short_or_spaced_value_allowed(m, value):
+            return m.group(0)
         if is_benign(candidate, web_ingress=web_ingress):
             return m.group(0)
         found.append("named secret field")
@@ -2099,7 +2174,8 @@ def _redact_core(
             m.group("field_prefix")
             + m.group("openbracket")
             + m.group("quote")
-            + _mark(entries, placeholder(), candidate.value)
+            + scheme
+            + _mark(entries, placeholder(), value)
             # Re-emitted in source order (value, terminator, closequote) so the
             # bytes outside the placeholder are preserved exactly, quoted or not.
             + m.group("terminator")

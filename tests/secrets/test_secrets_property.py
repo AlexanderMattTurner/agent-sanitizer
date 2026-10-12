@@ -46,11 +46,8 @@ _FRAGMENTS = [
 
 # Reserved sentinel code points make a map request unmappable by design; the
 # generated fragments never include them. Fragments are joined with a space so no
-# two secret tokens glue into one contiguous run: gluing a long non-detected run
-# directly onto a detected secret is the acknowledged pathological corner where
-# the field regex swallows a map sentinel (pinned separately in
-# test_glued_secret_corner_matches_reference), and the design only guarantees a
-# clean round-trip for separated secrets — which is every realistic input.
+# two secret tokens glue into one contiguous run; the glued corner is pinned
+# separately in test_glued_secret_corner_round_trips.
 _text = st.lists(st.sampled_from(_FRAGMENTS), max_size=25).map(" ".join)
 
 
@@ -104,15 +101,14 @@ def test_never_throws_on_arbitrary_text(text):
     redact_map(text, _CONFIG)
 
 
-def test_glued_secret_corner_matches_reference():
-    """Pin the one acknowledged pathological corner byte-for-byte: a long
-    non-detected run glued with no separator directly onto a detected secret makes
-    the field-value regex swallow the AWS redaction's map sentinel, leaving a
-    dangling close-sentinel in the view (so it does NOT round-trip; the JS
-    rehydrator fails closed on such a view). This is the exact behaviour of the
-    original claude-guard engine — pinned here so a future change to the sentinel
-    handling is caught rather than silently altering the two-way map contract."""
+def test_glued_secret_corner_round_trips():
+    """A long non-detected run glued with no separator onto a detected secret,
+    under a credential field. The field value stops at the AWS redaction's map
+    sentinel exactly as it stops at the plain-mode placeholder's `[`, so map
+    mode matches plain mode and the view round-trips."""
     text = "password: q9X2mN7pK4rT8wY1cV5bZ3dF6gH0jL2eAKIAIOSFODNN7EXAMPLE"
+    plain = "password: [REDACTED][REDACTED: AWS Access Key]"
+    assert redact(text)[0] == plain
     view = redact_map(text)
-    assert view["text"] == "password: [REDACTED] "
-    assert reconstruct(view) != text
+    assert view["text"] == plain
+    assert reconstruct(view) == text
