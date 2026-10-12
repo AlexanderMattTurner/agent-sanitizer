@@ -30,10 +30,13 @@ import {
 import {
   MUTATION_RUN,
   RESOLUTION_CEILING_MS,
+  assertLinear,
   clockResolutionMs,
+  describeGrowth,
+  geometricSizes,
   grow,
+  growth,
   measure,
-  measurePerCall,
   timed,
 } from "./helpers/cpu-timing.mjs";
 
@@ -160,11 +163,11 @@ const ENTRIES = {
   },
 };
 
-// LARGE is 8x SMALL, so linear scaling costs 8x. Anything past this is
-// super-linear in the input length — the shape of blow-up that turns a tolerable
-// paste into a hang — and it is measured on one machine in one process, so it
-// needs no headroom for machine speed, only for timer noise.
-const SCALING_LIMIT = 24;
+// The sizes every scaling gate here is fitted over, 32 KB to 256 KB. Growth
+// past linear in the input length is the shape of blow-up that turns a tolerable
+// paste into a hang; it is classified by the exponent the shared estimator fits
+// (`growth` in ./helpers/cpu-timing.mjs), not by a ratio tuned for this file.
+const SCALING_SIZES = geometricSizes(SMALL, LARGE);
 
 /**
  * The confusable fold, which the PreToolUse hook runs over a tool call's path and
@@ -272,17 +275,21 @@ const CASES = Object.keys(ENTRIES).flatMap((entry) =>
 /**
  * Every figure here is CPU ms except `realistic`, which is the wall clock the
  * millisecond ceiling is about.
- * @type {{unit: number, large: Record<string, number>, small: Record<string, number>,
+ * @typedef {import("./helpers/cpu-timing.mjs").Growth} Growth
+ * @type {{unit: number, large: Record<string, number>,
+ *   growth: Record<string, Growth>,
  *   units: Record<string, number>,
  *   realistic: Record<string, number>,
- *   fold: Record<string, number>, foldUnits: number, foldChanged: boolean}} */
+ *   fold: number, foldGrowth: Growth | null, foldUnits: number,
+ *   foldChanged: boolean}} */
 const timing = {
   unit: 0,
   large: {},
-  small: {},
+  growth: {},
   units: {},
   realistic: {},
-  fold: { small: 0, large: 0 },
+  fold: 0,
+  foldGrowth: null,
   foldUnits: 0,
   foldChanged: false,
 };
@@ -305,10 +312,10 @@ before(async () => {
     );
     timing.large[name] = measured.cost.cpu;
     timing.units[name] = measured.units;
-    timing.small[name] = await measurePerCall(
-      (attempt) => SHAPES[shape](SMALL - attempt),
+    timing.growth[name] = await growth(
+      (size, attempt) => SHAPES[shape](size - attempt),
       (text) => run(text, shape),
-      measured.cost.cpu,
+      SCALING_SIZES,
     );
   }
   for (const [entry, { run }] of Object.entries(ENTRIES))
@@ -320,25 +327,29 @@ before(async () => {
         (text) => run(text, "realistic-prose"),
       )
     ).wall;
-  for (const [size, key] of [
-    [SMALL, "small"],
-    [LARGE, "large"],
-  ]) {
+  // Built per input: enumerating the offsets is the scanner's job, not the
+  // fold's, and timing it here would charge this gate for the test's own loop.
+  const foldInput = (/** @type {number} */ size) => {
     const text = foldText(size);
-    // Built once: enumerating the offsets is the scanner's job, not the fold's,
-    // and timing it here would charge this gate for the test's own loop.
-    const findings = foldFindings(text);
-    const fold = () =>
-      foldConfusables(text, selectFoldableFindings(text, findings));
-    // The fold takes no parse and holds no memo, so every run may share one
-    // input; the offsets `findings` carries are only valid for this one.
-    const measured = await unitsFor(() => text, fold);
-    timing.fold[key] = measured.cost.cpu;
-    if (key === "large") {
-      timing.foldUnits = measured.units;
-      timing.foldChanged = fold() !== text;
-    }
-  }
+    return { text, findings: foldFindings(text) };
+  };
+  const fold = (/** @type {{text: string, findings: any[]}} */ input) =>
+    foldConfusables(
+      input.text,
+      selectFoldableFindings(input.text, input.findings),
+    );
+  // The fold takes no parse and holds no memo, so every run may share one
+  // input; the offsets `findings` carries are only valid for this one.
+  const large = foldInput(LARGE);
+  const measured = await unitsFor(() => large, fold);
+  timing.fold = measured.cost.cpu;
+  timing.foldUnits = measured.units;
+  timing.foldChanged = fold(large) !== large.text;
+  timing.foldGrowth = await growth(
+    (size, attempt) => foldInput(size - attempt),
+    fold,
+    SCALING_SIZES,
+  );
 });
 
 describe("hook-path latency", () => {
@@ -372,12 +383,9 @@ describe("hook-path latency", () => {
     });
 
   for (const { name } of CASES)
-    timed(`${name}: cost grows with input length, not faster`, () => {
-      const growth = timing.large[name] / timing.small[name];
-      assert.ok(
-        growth <= SCALING_LIMIT,
-        `${name} cost ${growth.toFixed(1)}x for ${LARGE / SMALL}x the input, limit ${SCALING_LIMIT}x`,
-      );
+    timed(`${name}: cost grows with input length, not faster`, (t) => {
+      t.diagnostic(`${name}: ${describeGrowth(timing.growth[name])}`);
+      assertLinear(name, timing.growth[name]);
     });
 
   for (const entry of Object.keys(ENTRIES))
@@ -452,16 +460,19 @@ describe("hook-path latency", () => {
       );
       assert.ok(
         timing.foldUnits <= FOLD_BUDGET,
-        `folding 256 KB of look-alikes took ${timing.foldUnits.toFixed(1)} units (${timing.fold.large.toFixed(1)}ms CPU), budget ${FOLD_BUDGET}`,
+        `folding 256 KB of look-alikes took ${timing.foldUnits.toFixed(1)} units (${timing.fold.toFixed(1)}ms CPU), budget ${FOLD_BUDGET}`,
       );
     },
   );
 
-  timed("foldConfusables: cost grows with the field length, not faster", () => {
-    const growth = timing.fold.large / timing.fold.small;
-    assert.ok(
-      growth <= SCALING_LIMIT,
-      `the fold cost ${growth.toFixed(1)}x for ${LARGE / SMALL}x the field, limit ${SCALING_LIMIT}x`,
-    );
-  });
+  timed(
+    "foldConfusables: cost grows with the field length, not faster",
+    (t) => {
+      const curve = /** @type {import("./helpers/cpu-timing.mjs").Growth} */ (
+        timing.foldGrowth
+      );
+      t.diagnostic(`foldConfusables: ${describeGrowth(curve)}`);
+      assertLinear("foldConfusables", curve);
+    },
+  );
 });

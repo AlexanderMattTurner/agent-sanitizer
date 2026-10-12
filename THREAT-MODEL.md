@@ -923,9 +923,11 @@ carry no backtracking at all, so no pattern analyzer will ever report them:
   prefix re-sliced inside a loop, a re-walk of an already-walked node.
 
 `test/algorithmic-complexity.test.mjs` runs an entry point over an adversarial
-input at two sizes 8x apart and asserts the cost grew like the input rather than
-like its square, with a known-quadratic specimen as the control that proves the
-harness can still see one. Each case also asserts, at the size it measures, that
+input at four sizes spanning 8x and fits how its CPU cost grows — an exponent,
+classified against the one pair of thresholds every growth gate shares
+(`test/helpers/cpu-timing.mjs`, twin `tests/_growth.py`) — with a
+known-quadratic specimen as the control that proves the harness can still see
+one. Each case also asserts, at the size it measures, that
 the input still reaches the code the case is about — a length gate answering
 first is how such a case quietly degrades into timing nothing.
 `tests/secrets/test_algorithmic_complexity.py` is the twin over the Python
