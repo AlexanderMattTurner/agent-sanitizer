@@ -51,12 +51,26 @@ def _is_clock_read(node: ast.AST, bare: set[str]) -> bool:
     return isinstance(func, ast.Name) and func.id in bare
 
 
+def _dotted(node: ast.AST) -> str | None:
+    """``a.b.c`` for an attribute chain rooted at a plain name, else None."""
+    if isinstance(node, ast.Name):
+        return node.id
+    if isinstance(node, ast.Attribute):
+        head = _dotted(node.value)
+        return None if head is None else f"{head}.{node.attr}"
+    return None
+
+
 def _target_names(target: ast.AST):
-    """The names an assignment target binds: ``x``, ``a, b``, ``self.x``."""
+    """The names an assignment target binds: ``x``, ``a, b``, and the FULL path of
+    an attribute (``self.x``, ``timer.elapsed``) — a bare ``elapsed`` would never
+    match the ``ast.Attribute`` a later read of ``timer.elapsed`` loads."""
     if isinstance(target, ast.Name):
         yield target.id
     elif isinstance(target, ast.Attribute):
-        yield target.attr
+        path = _dotted(target)
+        if path is not None:
+            yield path
     elif isinstance(target, (ast.Tuple, ast.List)):
         for element in target.elts:
             yield from _target_names(element)
@@ -97,10 +111,9 @@ def scan(source: str) -> tuple[list[str], int]:
         for node in _outside_functions(root):
             if _is_clock_read(node, bare):
                 return True
-            if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
-                if node.func.id in tainted:
-                    return True
-            if isinstance(node, ast.Name) and node.id in tainted:
+            if isinstance(node, ast.Call) and _dotted(node.func) in tainted:
+                return True
+            if isinstance(node, (ast.Name, ast.Attribute)) and _dotted(node) in tainted:
                 return True
         return False
 
@@ -198,6 +211,10 @@ _OFFENDERS = {
     "against a named constant": (
         "import time\ns = time.{r}()\nassert time.{r}() - s < S.BUDGET / 2\n"
     ),
+    "via an assigned attribute": (
+        "import time\ntimer = Timer()\ns = time.{r}()\nwork()\n"
+        "timer.elapsed = time.{r}() - s\nassert timer.elapsed < LIMIT\n"
+    ),
     "imported bare": (
         "from time import {r}\ns = {r}()\nwork()\nassert {r}() - s < 3\n"
     ),
@@ -229,6 +246,10 @@ _BENIGN = {
     ),
     "clock ordering": (
         "import time\na = time.monotonic()\nb = time.monotonic()\nassert b >= a\n"
+    ),
+    "an untainted attribute beside a tainted one": (
+        "import time\ntimer = Timer()\ntimer.elapsed = time.monotonic() - time.monotonic()\n"
+        "timer.count = 3\nassert timer.count < LIMIT\nassert other.elapsed < LIMIT\n"
     ),
     "a mention in a string": "assert 'time.monotonic() - started < 10' in doc\n",
 }
