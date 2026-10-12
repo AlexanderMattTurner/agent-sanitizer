@@ -690,6 +690,316 @@
         ],
         "notes": []
       }
+    },
+    {
+      "name": "layer1_reconstituted_zwsp_split_sgr",
+      "plain": {
+        "cleaned": [97, 114, 101, 100, 98],
+        "found": ["cf-format", "ansi"],
+        "warnings": [
+          "Stripped: Format chars (Cf), ANSI escapes — inspect the removed bytes with a hex dump (xxd / od -c), which survives sanitization"
+        ],
+        "notes": []
+      },
+      "html": {
+        "cleaned": [97, 114, 101, 100, 98],
+        "found": ["cf-format", "ansi"],
+        "warnings": [
+          "Stripped: Format chars (Cf), ANSI escapes — inspect the removed bytes with a hex dump (xxd / od -c), which survives sanitization"
+        ],
+        "notes": []
+      }
+    },
+    {
+      "name": "layer1_reconstituted_split_in_params",
+      "plain": {
+        "cleaned": [97, 98],
+        "found": ["cf-format", "ansi"],
+        "warnings": [
+          "Stripped: Format chars (Cf), ANSI escapes — inspect the removed bytes with a hex dump (xxd / od -c), which survives sanitization"
+        ],
+        "notes": []
+      },
+      "html": {
+        "cleaned": [97, 98],
+        "found": ["cf-format", "ansi"],
+        "warnings": [
+          "Stripped: Format chars (Cf), ANSI escapes — inspect the removed bytes with a hex dump (xxd / od -c), which survives sanitization"
+        ],
+        "notes": []
+      }
+    },
+    {
+      "name": "layer1_reconstituted_zwj_split_csi",
+      "plain": {
+        "cleaned": [120, 121],
+        "found": ["cf-format", "ansi"],
+        "warnings": [
+          "Stripped: Format chars (Cf), ANSI escapes — inspect the removed bytes with a hex dump (xxd / od -c), which survives sanitization"
+        ],
+        "notes": []
+      },
+      "html": {
+        "cleaned": [120, 121],
+        "found": ["cf-format", "ansi"],
+        "warnings": [
+          "Stripped: Format chars (Cf), ANSI escapes — inspect the removed bytes with a hex dump (xxd / od -c), which survives sanitization"
+        ],
+        "notes": []
+      }
+    },
+    {
+      "name": "layer1_reconstituted_two_invisibles",
+      "plain": {
+        "cleaned": [97, 98],
+        "found": ["cf-format", "ansi"],
+        "warnings": [
+          "Stripped: Format chars (Cf), ANSI escapes — inspect the removed bytes with a hex dump (xxd / od -c), which survives sanitization"
+        ],
+        "notes": []
+      },
+      "html": {
+        "cleaned": [97, 98],
+        "found": ["cf-format", "ansi"],
+        "warnings": [
+          "Stripped: Format chars (Cf), ANSI escapes — inspect the removed bytes with a hex dump (xxd / od -c), which survives sanitization"
+        ],
+        "notes": []
+      }
+    },
+    {
+      "name": "layer1_reconstituted_tag_split",
+      "plain": {
+        "cleaned": [97, 98],
+        "found": ["cf-format", "ansi"],
+        "warnings": [
+          "Stripped: Format chars (Cf), ANSI escapes — inspect the removed bytes with a hex dump (xxd / od -c), which survives sanitization"
+        ],
+        "notes": []
+      },
+      "html": {
+        "cleaned": [97, 98],
+        "found": ["cf-format", "ansi"],
+        "warnings": [
+          "Stripped: Format chars (Cf), ANSI escapes — inspect the removed bytes with a hex dump (xxd / od -c), which survives sanitization"
+        ],
+        "notes": []
+      }
+    },
+    {
+      "name": "layer1_reconstituted_nested_split",
+      "plain": {
+        "cleaned": [97, 49, 109, 98],
+        "found": ["cf-format", "ansi"],
+        "warnings": [
+          "Stripped: Format chars (Cf), ANSI escapes — inspect the removed bytes with a hex dump (xxd / od -c), which survives sanitization"
+        ],
+        "notes": []
+      },
+      "html": {
+        "cleaned": [97, 49, 109, 98],
+        "found": ["cf-format", "ansi"],
+        "warnings": [
+          "Stripped: Format chars (Cf), ANSI escapes — inspect the removed bytes with a hex dump (xxd / od -c), which survives sanitization"
+        ],
+        "notes": []
+      }
+    },
+    {
+      "name": "layer1_outruns_pass_bound_s6_p15_x75",
+      "plain": {
+        "cleaned": [
+          48, 32, 48, 32, 48, 32, 48, 32, 48, 32, 48, 32, 48, 32, 48, 32, 48,
+          32, 48, 32, 48, 32, 48, 32, 48, 32, 48, 32, 48, 32, 120, 120, 120,
+          120, 120, 120, 120, 120, 120, 120, 120, 120, 120, 120, 120, 120, 120,
+          120, 120, 120, 120, 120, 120, 120, 120, 120, 120, 120, 120, 120, 120,
+          120, 120, 120, 120, 120, 120, 120, 120, 120, 120, 120, 120, 120, 120,
+          120, 120, 120, 120, 120, 120, 120, 120, 120, 120, 120, 120, 120, 120,
+          120, 120, 120, 120, 120, 120, 120, 120, 120, 120, 120, 120, 120, 120,
+          120, 120
+        ],
+        "found": ["cf-format", "variation-selectors", "ansi"],
+        "warnings": [
+          "Stripped: Format chars (Cf), Variation selectors, ANSI escapes — inspect the removed bytes with a hex dump (xxd / od -c), which survives sanitization"
+        ],
+        "notes": []
+      },
+      "html": {
+        "cleaned": [
+          48, 32, 48, 32, 48, 32, 48, 32, 48, 32, 48, 32, 48, 32, 48, 32, 48,
+          32, 48, 32, 48, 32, 48, 32, 48, 32, 48, 32, 48, 32, 120, 120, 120,
+          120, 120, 120, 120, 120, 120, 120, 120, 120, 120, 120, 120, 120, 120,
+          120, 120, 120, 120, 120, 120, 120, 120, 120, 120, 120, 120, 120, 120,
+          120, 120, 120, 120, 120, 120, 120, 120, 120, 120, 120, 120, 120, 120,
+          120, 120, 120, 120, 120, 120, 120, 120, 120, 120, 120, 120, 120, 120,
+          120, 120, 120, 120, 120, 120, 120, 120, 120, 120, 120, 120, 120, 120,
+          120, 120
+        ],
+        "found": ["cf-format", "variation-selectors", "ansi"],
+        "warnings": [
+          "Stripped: Format chars (Cf), Variation selectors, ANSI escapes — inspect the removed bytes with a hex dump (xxd / od -c), which survives sanitization"
+        ],
+        "notes": []
+      }
+    },
+    {
+      "name": "layer1_outruns_pass_bound_s1_p0_x0",
+      "plain": {
+        "cleaned": [91, 48, 59, 48, 59, 48, 65024, 109],
+        "found": ["cf-format", "ansi"],
+        "warnings": [
+          "Stripped: Format chars (Cf), ANSI escapes — inspect the removed bytes with a hex dump (xxd / od -c), which survives sanitization"
+        ],
+        "notes": []
+      },
+      "html": {
+        "cleaned": [91, 48, 59, 48, 59, 48, 65024, 109],
+        "found": ["cf-format", "ansi"],
+        "warnings": [
+          "Stripped: Format chars (Cf), ANSI escapes — inspect the removed bytes with a hex dump (xxd / od -c), which survives sanitization"
+        ],
+        "notes": []
+      }
+    },
+    {
+      "name": "layer1_outruns_pass_bound_s3_p15_x0",
+      "plain": {
+        "cleaned": [
+          48, 65024, 32, 48, 65024, 32, 48, 65024, 32, 48, 65024, 32, 48, 65024,
+          32, 48, 65024, 32, 48, 65024, 32, 48, 65024, 32, 48, 65024, 32, 48,
+          65024, 32, 48, 65024, 32, 48, 65024, 32, 48, 65024, 32, 48, 65024, 32,
+          48, 65024, 32, 91, 48, 59, 48, 59, 48, 65024, 109
+        ],
+        "found": ["cf-format", "variation-selectors", "ansi"],
+        "warnings": [
+          "Stripped: Format chars (Cf), Variation selectors, ANSI escapes — inspect the removed bytes with a hex dump (xxd / od -c), which survives sanitization"
+        ],
+        "notes": []
+      },
+      "html": {
+        "cleaned": [
+          48, 65024, 32, 48, 65024, 32, 48, 65024, 32, 48, 65024, 32, 48, 65024,
+          32, 48, 65024, 32, 48, 65024, 32, 48, 65024, 32, 48, 65024, 32, 48,
+          65024, 32, 48, 65024, 32, 48, 65024, 32, 48, 65024, 32, 48, 65024, 32,
+          48, 65024, 32, 91, 48, 59, 48, 59, 48, 65024, 109
+        ],
+        "found": ["cf-format", "variation-selectors", "ansi"],
+        "warnings": [
+          "Stripped: Format chars (Cf), Variation selectors, ANSI escapes — inspect the removed bytes with a hex dump (xxd / od -c), which survives sanitization"
+        ],
+        "notes": []
+      }
+    },
+    {
+      "name": "layer1_outruns_pass_bound_s4_p5_x25",
+      "plain": {
+        "cleaned": [
+          48, 65024, 32, 48, 65024, 32, 48, 65024, 32, 48, 65024, 32, 48, 65024,
+          32, 120, 120, 120, 120, 120, 120, 120, 120, 120, 120, 120, 120, 120,
+          120, 120, 120, 120, 120, 120, 120, 120, 120, 120, 120, 120, 91, 48,
+          59, 48, 59, 48, 65024, 109, 91, 48, 59, 48, 59, 48, 65024, 109, 91,
+          48, 59, 48, 59, 48, 65024, 109, 91, 48, 59, 48, 59, 48, 65024, 109
+        ],
+        "found": ["cf-format", "ansi"],
+        "warnings": [
+          "Stripped: Format chars (Cf), ANSI escapes — inspect the removed bytes with a hex dump (xxd / od -c), which survives sanitization"
+        ],
+        "notes": []
+      },
+      "html": {
+        "cleaned": [
+          48, 65024, 32, 48, 65024, 32, 48, 65024, 32, 48, 65024, 32, 48, 65024,
+          32, 120, 120, 120, 120, 120, 120, 120, 120, 120, 120, 120, 120, 120,
+          120, 120, 120, 120, 120, 120, 120, 120, 120, 120, 120, 120, 91, 48,
+          59, 48, 59, 48, 65024, 109, 91, 48, 59, 48, 59, 48, 65024, 109, 91,
+          48, 59, 48, 59, 48, 65024, 109, 91, 48, 59, 48, 59, 48, 65024, 109
+        ],
+        "found": ["cf-format", "ansi"],
+        "warnings": [
+          "Stripped: Format chars (Cf), ANSI escapes — inspect the removed bytes with a hex dump (xxd / od -c), which survives sanitization"
+        ],
+        "notes": []
+      }
+    },
+    {
+      "name": "layer1_outruns_pass_bound_s8_p0_x0",
+      "plain": {
+        "cleaned": [
+          91, 48, 59, 48, 59, 48, 65024, 109, 91, 48, 59, 48, 59, 48, 65024,
+          109, 91, 48, 59, 48, 59, 48, 65024, 109, 91, 48, 59, 48, 59, 48,
+          65024, 109, 91, 48, 59, 48, 59, 48, 65024, 109, 91, 48, 59, 48, 59,
+          48, 65024, 109, 91, 48, 59, 48, 59, 48, 65024, 109, 91, 48, 59, 48,
+          59, 48, 65024, 109
+        ],
+        "found": ["cf-format", "ansi"],
+        "warnings": [
+          "Stripped: Format chars (Cf), ANSI escapes — inspect the removed bytes with a hex dump (xxd / od -c), which survives sanitization"
+        ],
+        "notes": []
+      },
+      "html": {
+        "cleaned": [
+          91, 48, 59, 48, 59, 48, 65024, 109, 91, 48, 59, 48, 59, 48, 65024,
+          109, 91, 48, 59, 48, 59, 48, 65024, 109, 91, 48, 59, 48, 59, 48,
+          65024, 109, 91, 48, 59, 48, 59, 48, 65024, 109, 91, 48, 59, 48, 59,
+          48, 65024, 109, 91, 48, 59, 48, 59, 48, 65024, 109, 91, 48, 59, 48,
+          59, 48, 65024, 109
+        ],
+        "found": ["cf-format", "ansi"],
+        "warnings": [
+          "Stripped: Format chars (Cf), ANSI escapes — inspect the removed bytes with a hex dump (xxd / od -c), which survives sanitization"
+        ],
+        "notes": []
+      }
+    },
+    {
+      "name": "layer1_outruns_pass_bound_s8_p25_x150",
+      "plain": {
+        "cleaned": [
+          48, 32, 48, 32, 48, 32, 48, 32, 48, 32, 48, 32, 48, 32, 48, 32, 48,
+          32, 48, 32, 48, 32, 48, 32, 48, 32, 48, 32, 48, 32, 48, 32, 48, 32,
+          48, 32, 48, 32, 48, 32, 48, 32, 48, 32, 48, 32, 48, 32, 48, 32, 120,
+          120, 120, 120, 120, 120, 120, 120, 120, 120, 120, 120, 120, 120, 120,
+          120, 120, 120, 120, 120, 120, 120, 120, 120, 120, 120, 120, 120, 120,
+          120, 120, 120, 120, 120, 120, 120, 120, 120, 120, 120, 120, 120, 120,
+          120, 120, 120, 120, 120, 120, 120, 120, 120, 120, 120, 120, 120, 120,
+          120, 120, 120, 120, 120, 120, 120, 120, 120, 120, 120, 120, 120, 120,
+          120, 120, 120, 120, 120, 120, 120, 120, 120, 120, 120, 120, 120, 120,
+          120, 120, 120, 120, 120, 120, 120, 120, 120, 120, 120, 120, 120, 120,
+          120, 120, 120, 120, 120, 120, 120, 120, 120, 120, 120, 120, 120, 120,
+          120, 120, 120, 120, 120, 120, 120, 120, 120, 120, 120, 120, 120, 120,
+          120, 120, 120, 120, 120, 120, 120, 120, 120, 120, 120, 120, 120, 120,
+          120, 120, 120, 120, 120, 120, 120, 120, 120
+        ],
+        "found": ["cf-format", "variation-selectors", "ansi"],
+        "warnings": [
+          "Stripped: Format chars (Cf), Variation selectors, ANSI escapes — inspect the removed bytes with a hex dump (xxd / od -c), which survives sanitization"
+        ],
+        "notes": []
+      },
+      "html": {
+        "cleaned": [
+          48, 32, 48, 32, 48, 32, 48, 32, 48, 32, 48, 32, 48, 32, 48, 32, 48,
+          32, 48, 32, 48, 32, 48, 32, 48, 32, 48, 32, 48, 32, 48, 32, 48, 32,
+          48, 32, 48, 32, 48, 32, 48, 32, 48, 32, 48, 32, 48, 32, 48, 32, 120,
+          120, 120, 120, 120, 120, 120, 120, 120, 120, 120, 120, 120, 120, 120,
+          120, 120, 120, 120, 120, 120, 120, 120, 120, 120, 120, 120, 120, 120,
+          120, 120, 120, 120, 120, 120, 120, 120, 120, 120, 120, 120, 120, 120,
+          120, 120, 120, 120, 120, 120, 120, 120, 120, 120, 120, 120, 120, 120,
+          120, 120, 120, 120, 120, 120, 120, 120, 120, 120, 120, 120, 120, 120,
+          120, 120, 120, 120, 120, 120, 120, 120, 120, 120, 120, 120, 120, 120,
+          120, 120, 120, 120, 120, 120, 120, 120, 120, 120, 120, 120, 120, 120,
+          120, 120, 120, 120, 120, 120, 120, 120, 120, 120, 120, 120, 120, 120,
+          120, 120, 120, 120, 120, 120, 120, 120, 120, 120, 120, 120, 120, 120,
+          120, 120, 120, 120, 120, 120, 120, 120, 120, 120, 120, 120, 120, 120,
+          120, 120, 120, 120, 120, 120, 120, 120, 120
+        ],
+        "found": ["cf-format", "variation-selectors", "ansi"],
+        "warnings": [
+          "Stripped: Format chars (Cf), Variation selectors, ANSI escapes — inspect the removed bytes with a hex dump (xxd / od -c), which survives sanitization"
+        ],
+        "notes": []
+      }
     }
   ]
 }

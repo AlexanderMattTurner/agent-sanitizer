@@ -1425,8 +1425,15 @@ function isVirama(cp) {
   );
 }
 function isBrahmicConsonant(cp) {
-  for (const [, start, end] of BRAHMIC_CONSONANT_RANGES)
-    if (cp >= start && cp <= end) return true;
+  let lo = 0;
+  let hi = BRAHMIC_CONSONANT_RANGES.length - 1;
+  while (lo <= hi) {
+    const mid = lo + hi >> 1;
+    const [, start, end] = BRAHMIC_CONSONANT_RANGES[mid];
+    if (cp < start) hi = mid - 1;
+    else if (cp > end) lo = mid + 1;
+    else return true;
+  }
   return false;
 }
 var JOINING_RANGES, VIRAMA_RANGES, BRAHMIC_CONSONANT_RANGES;
@@ -1539,6 +1546,7 @@ var init_joining_type = __esm({
       [2182, 2182, "D"],
       [2185, 2189, "D"],
       [2190, 2190, "R"],
+      [2191, 2191, "D"],
       [2199, 2207, "T"],
       [2208, 2217, "D"],
       [2218, 2220, "R"],
@@ -1669,7 +1677,8 @@ var init_joining_type = __esm({
       [6757, 6764, "T"],
       [6771, 6780, "T"],
       [6783, 6783, "T"],
-      [6832, 6862, "T"],
+      [6832, 6877, "T"],
+      [6880, 6891, "T"],
       [6912, 6915, "T"],
       [6964, 6964, "T"],
       [6966, 6970, "T"],
@@ -1794,7 +1803,8 @@ var init_joining_type = __esm({
       [69291, 69292, "T"],
       [69314, 69314, "R"],
       [69315, 69316, "D"],
-      [69372, 69375, "T"],
+      [69318, 69319, "D"],
+      [69370, 69375, "T"],
       [69424, 69426, "D"],
       [69427, 69427, "R"],
       [69428, 69444, "D"],
@@ -1891,6 +1901,9 @@ var init_joining_type = __esm({
       [72281, 72283, "T"],
       [72330, 72342, "T"],
       [72344, 72345, "T"],
+      [72544, 72544, "T"],
+      [72546, 72548, "T"],
+      [72550, 72550, "T"],
       [72752, 72758, "T"],
       [72760, 72765, "T"],
       [72767, 72767, "T"],
@@ -1947,6 +1960,10 @@ var init_joining_type = __esm({
       [123628, 123631, "T"],
       [124140, 124143, "T"],
       [124398, 124399, "T"],
+      [124643, 124643, "T"],
+      [124646, 124646, "T"],
+      [124654, 124655, "T"],
+      [124661, 124661, "T"],
       [125136, 125142, "T"],
       [125184, 125251, "D"],
       [125252, 125259, "T"],
@@ -2031,7 +2048,34 @@ var init_joining_type = __esm({
       ["Sinhala", 3482, 3505],
       ["Sinhala", 3507, 3515],
       ["Sinhala", 3517, 3517],
-      ["Sinhala", 3520, 3526]
+      ["Sinhala", 3520, 3526],
+      ["Balinese", 6931, 6963],
+      ["Balinese", 6981, 6988],
+      ["Syloti_Nagri", 43015, 43018],
+      ["Syloti_Nagri", 43020, 43042],
+      ["Saurashtra", 43154, 43187],
+      ["Javanese", 43401, 43403],
+      ["Javanese", 43407, 43442],
+      ["Brahmi", 69651, 69687],
+      ["Brahmi", 69749, 69749],
+      ["Kaithi", 69773, 69807],
+      ["Sharada", 70033, 70066],
+      ["Khojki", 70152, 70161],
+      ["Khojki", 70163, 70187],
+      ["Khojki", 70207, 70207],
+      ["Grantha", 70421, 70440],
+      ["Grantha", 70442, 70448],
+      ["Grantha", 70450, 70451],
+      ["Grantha", 70453, 70457],
+      ["Newa", 70670, 70708],
+      ["Tirhuta", 70799, 70831],
+      ["Siddham", 71054, 71086],
+      ["Modi", 71182, 71215],
+      ["Takri", 71306, 71338],
+      ["Takri", 71352, 71352],
+      ["Dogra", 71690, 71723],
+      ["Nandinagari", 72110, 72144],
+      ["Bhaiksuki", 72718, 72750]
     ];
   }
 });
@@ -2062,6 +2106,66 @@ var init_standardized_variants = __esm({
       [4216, 65024],
       [4218, 65024],
       [4224, 65024],
+      [6176, 6155],
+      [6176, 6156],
+      [6177, 6155],
+      [6178, 6155],
+      [6179, 6155],
+      [6180, 6155],
+      [6181, 6155],
+      [6181, 6156],
+      [6182, 6155],
+      [6182, 6156],
+      [6184, 6155],
+      [6184, 6156],
+      [6184, 6157],
+      [6186, 6155],
+      [6188, 6155],
+      [6188, 6156],
+      [6188, 6157],
+      [6189, 6155],
+      [6189, 6156],
+      [6189, 6157],
+      [6192, 6155],
+      [6192, 6156],
+      [6194, 6155],
+      [6195, 6155],
+      [6197, 6155],
+      [6198, 6155],
+      [6198, 6156],
+      [6200, 6155],
+      [6212, 6155],
+      [6213, 6155],
+      [6214, 6155],
+      [6215, 6155],
+      [6215, 6156],
+      [6216, 6155],
+      [6217, 6155],
+      [6221, 6155],
+      [6222, 6155],
+      [6237, 6155],
+      [6238, 6155],
+      [6238, 6156],
+      [6240, 6155],
+      [6243, 6155],
+      [6248, 6155],
+      [6248, 6156],
+      [6249, 6155],
+      [6255, 6155],
+      [6259, 6155],
+      [6259, 6156],
+      [6259, 6157],
+      [6260, 6155],
+      [6260, 6156],
+      [6260, 6157],
+      [6262, 6155],
+      [6272, 6155],
+      [6273, 6155],
+      [6279, 6155],
+      [6279, 6156],
+      [6279, 6157],
+      [6280, 6155],
+      [6282, 6155],
       [8216, 65024],
       [8216, 65025],
       [8216, 65026],
@@ -3526,6 +3630,344 @@ var init_cf_charset = __esm({
   }
 });
 
+// src/unicode-properties.mjs
+function inSpans(spans, cp) {
+  let lo = 0;
+  let hi = spans.length - 1;
+  while (lo <= hi) {
+    const mid = lo + hi >> 1;
+    if (cp < spans[mid][0]) hi = mid - 1;
+    else if (cp > spans[mid][1]) lo = mid + 1;
+    else return true;
+  }
+  return false;
+}
+var EXTENDED_PICTOGRAPHIC, EMOJI_MODIFIER, EMOJI_TEXT_DEFAULT, UNIFIED_IDEOGRAPH, SCRIPT_BRAILLE, SCRIPT_HANGUL;
+var init_unicode_properties = __esm({
+  "src/unicode-properties.mjs"() {
+    "use strict";
+    EXTENDED_PICTOGRAPHIC = [
+      [169, 169],
+      [174, 174],
+      [8252, 8252],
+      [8265, 8265],
+      [8482, 8482],
+      [8505, 8505],
+      [8596, 8601],
+      [8617, 8618],
+      [8986, 8987],
+      [9e3, 9e3],
+      [9167, 9167],
+      [9193, 9203],
+      [9208, 9210],
+      [9410, 9410],
+      [9642, 9643],
+      [9654, 9654],
+      [9664, 9664],
+      [9723, 9726],
+      [9728, 9732],
+      [9742, 9742],
+      [9745, 9745],
+      [9748, 9749],
+      [9752, 9752],
+      [9757, 9757],
+      [9760, 9760],
+      [9762, 9763],
+      [9766, 9766],
+      [9770, 9770],
+      [9774, 9775],
+      [9784, 9786],
+      [9792, 9792],
+      [9794, 9794],
+      [9800, 9811],
+      [9823, 9824],
+      [9827, 9827],
+      [9829, 9830],
+      [9832, 9832],
+      [9851, 9851],
+      [9854, 9855],
+      [9874, 9879],
+      [9881, 9881],
+      [9883, 9884],
+      [9888, 9889],
+      [9895, 9895],
+      [9898, 9899],
+      [9904, 9905],
+      [9917, 9918],
+      [9924, 9925],
+      [9928, 9928],
+      [9934, 9935],
+      [9937, 9937],
+      [9939, 9940],
+      [9961, 9962],
+      [9968, 9973],
+      [9975, 9978],
+      [9981, 9981],
+      [9986, 9986],
+      [9989, 9989],
+      [9992, 9997],
+      [9999, 9999],
+      [10002, 10002],
+      [10004, 10004],
+      [10006, 10006],
+      [10013, 10013],
+      [10017, 10017],
+      [10024, 10024],
+      [10035, 10036],
+      [10052, 10052],
+      [10055, 10055],
+      [10060, 10060],
+      [10062, 10062],
+      [10067, 10069],
+      [10071, 10071],
+      [10083, 10084],
+      [10133, 10135],
+      [10145, 10145],
+      [10160, 10160],
+      [10175, 10175],
+      [10548, 10549],
+      [11013, 11015],
+      [11035, 11036],
+      [11088, 11088],
+      [11093, 11093],
+      [12336, 12336],
+      [12349, 12349],
+      [12951, 12951],
+      [12953, 12953],
+      [126980, 126980],
+      [127020, 127023],
+      [127124, 127135],
+      [127151, 127152],
+      [127168, 127168],
+      [127183, 127184],
+      [127222, 127231],
+      [127344, 127345],
+      [127358, 127359],
+      [127374, 127374],
+      [127377, 127386],
+      [127406, 127461],
+      [127489, 127503],
+      [127514, 127514],
+      [127535, 127535],
+      [127538, 127546],
+      [127548, 127551],
+      [127561, 127583],
+      [127590, 127777],
+      [127780, 127891],
+      [127894, 127895],
+      [127897, 127899],
+      [127902, 127984],
+      [127987, 127989],
+      [127991, 127994],
+      [128e3, 128253],
+      [128255, 128317],
+      [128329, 128334],
+      [128336, 128359],
+      [128367, 128368],
+      [128371, 128378],
+      [128391, 128391],
+      [128394, 128397],
+      [128400, 128400],
+      [128405, 128406],
+      [128420, 128421],
+      [128424, 128424],
+      [128433, 128434],
+      [128444, 128444],
+      [128450, 128452],
+      [128465, 128467],
+      [128476, 128478],
+      [128481, 128481],
+      [128483, 128483],
+      [128488, 128488],
+      [128495, 128495],
+      [128499, 128499],
+      [128506, 128591],
+      [128640, 128709],
+      [128715, 128722],
+      [128725, 128741],
+      [128745, 128745],
+      [128747, 128752],
+      [128755, 128767],
+      [128986, 129023],
+      [129036, 129039],
+      [129096, 129103],
+      [129114, 129119],
+      [129160, 129167],
+      [129198, 129199],
+      [129212, 129215],
+      [129218, 129231],
+      [129241, 129279],
+      [129292, 129338],
+      [129340, 129349],
+      [129351, 129535],
+      [129624, 129631],
+      [129646, 129791],
+      [130048, 131069]
+    ];
+    EMOJI_MODIFIER = [
+      [127995, 127999]
+    ];
+    EMOJI_TEXT_DEFAULT = [
+      [35, 35],
+      [42, 42],
+      [48, 57],
+      [169, 169],
+      [174, 174],
+      [8252, 8252],
+      [8265, 8265],
+      [8482, 8482],
+      [8505, 8505],
+      [8596, 8601],
+      [8617, 8618],
+      [9e3, 9e3],
+      [9167, 9167],
+      [9197, 9199],
+      [9201, 9202],
+      [9208, 9210],
+      [9410, 9410],
+      [9642, 9643],
+      [9654, 9654],
+      [9664, 9664],
+      [9723, 9724],
+      [9728, 9732],
+      [9742, 9742],
+      [9745, 9745],
+      [9752, 9752],
+      [9757, 9757],
+      [9760, 9760],
+      [9762, 9763],
+      [9766, 9766],
+      [9770, 9770],
+      [9774, 9775],
+      [9784, 9786],
+      [9792, 9792],
+      [9794, 9794],
+      [9823, 9824],
+      [9827, 9827],
+      [9829, 9830],
+      [9832, 9832],
+      [9851, 9851],
+      [9854, 9854],
+      [9874, 9874],
+      [9876, 9879],
+      [9881, 9881],
+      [9883, 9884],
+      [9888, 9888],
+      [9895, 9895],
+      [9904, 9905],
+      [9928, 9928],
+      [9935, 9935],
+      [9937, 9937],
+      [9939, 9939],
+      [9961, 9961],
+      [9968, 9969],
+      [9972, 9972],
+      [9975, 9977],
+      [9986, 9986],
+      [9992, 9993],
+      [9996, 9997],
+      [9999, 9999],
+      [10002, 10002],
+      [10004, 10004],
+      [10006, 10006],
+      [10013, 10013],
+      [10017, 10017],
+      [10035, 10036],
+      [10052, 10052],
+      [10055, 10055],
+      [10083, 10084],
+      [10145, 10145],
+      [10548, 10549],
+      [11013, 11015],
+      [12336, 12336],
+      [12349, 12349],
+      [12951, 12951],
+      [12953, 12953],
+      [127344, 127345],
+      [127358, 127359],
+      [127490, 127490],
+      [127543, 127543],
+      [127777, 127777],
+      [127780, 127788],
+      [127798, 127798],
+      [127869, 127869],
+      [127894, 127895],
+      [127897, 127899],
+      [127902, 127903],
+      [127947, 127950],
+      [127956, 127967],
+      [127987, 127987],
+      [127989, 127989],
+      [127991, 127991],
+      [128063, 128063],
+      [128065, 128065],
+      [128253, 128253],
+      [128329, 128330],
+      [128367, 128368],
+      [128371, 128377],
+      [128391, 128391],
+      [128394, 128397],
+      [128400, 128400],
+      [128421, 128421],
+      [128424, 128424],
+      [128433, 128434],
+      [128444, 128444],
+      [128450, 128452],
+      [128465, 128467],
+      [128476, 128478],
+      [128481, 128481],
+      [128483, 128483],
+      [128488, 128488],
+      [128495, 128495],
+      [128499, 128499],
+      [128506, 128506],
+      [128715, 128715],
+      [128717, 128719],
+      [128736, 128741],
+      [128745, 128745],
+      [128752, 128752],
+      [128755, 128755]
+    ];
+    UNIFIED_IDEOGRAPH = [
+      [13312, 19903],
+      [19968, 40959],
+      [64014, 64015],
+      [64017, 64017],
+      [64019, 64020],
+      [64031, 64031],
+      [64033, 64033],
+      [64035, 64036],
+      [64039, 64041],
+      [131072, 173791],
+      [173824, 178205],
+      [178208, 183981],
+      [183984, 191456],
+      [191472, 192093],
+      [196608, 201546],
+      [201552, 210041]
+    ];
+    SCRIPT_BRAILLE = [
+      [10240, 10495]
+    ];
+    SCRIPT_HANGUL = [
+      [4352, 4607],
+      [12334, 12335],
+      [12593, 12686],
+      [12800, 12830],
+      [12896, 12926],
+      [43360, 43388],
+      [44032, 55203],
+      [55216, 55238],
+      [55243, 55291],
+      [65440, 65470],
+      [65474, 65479],
+      [65482, 65487],
+      [65490, 65495],
+      [65498, 65500]
+    ];
+  }
+});
+
 // src/ansi.mjs
 function unicodeEscape(cp) {
   return `\\u${cp.toString(16).padStart(4, "0")}`;
@@ -3607,21 +4049,52 @@ function scanAnsi(text6) {
   }
   return tokens;
 }
-function sgrConcealState(token, concealed) {
-  const params = token.slice(token.charCodeAt(0) === ESC ? 2 : 1, -1).split(";");
-  let state = concealed;
-  for (let i = 0; i < params.length; i++) {
-    const colonForm = params[i].includes(":");
-    const value = Number(params[i].split(":")[0]);
-    if (value === SGR_CONCEAL) state = true;
-    else if (value === SGR_REVEAL || value === SGR_RESET) state = false;
-    if (colonForm || !SGR_EXTENDED_COLOUR.has(value)) continue;
-    const args = SGR_COLOUR_ARGS.get(Number(params[i + 1]));
-    if (args !== void 0) i += 1 + args;
-  }
-  return state;
+function basicColour(value, base) {
+  if (value >= base && value <= base + 7) return `i${value - base}`;
+  if (value >= base + 60 && value <= base + 67) return `i${value - base - 52}`;
+  if (value === base + 9) return null;
+  return void 0;
 }
-var CONTROL_INTRODUCER_CODEPOINTS, CONTROL_INTRODUCER_SOURCE, SGR_SOURCE, SGR_RE, SGR_ANCHORED_RE, CSI_BODY_CLASS, CSI_BODY_RE, CSI_FINAL_CLASS, CSI_FINAL_RE, ESC, CSI_C1, ST_C1, BEL, CAN, SUB, LF, CR, SEQUENCE_CANCEL, INTRODUCER_RE, STRING_INTRO_7BIT, OSC_7BIT, OSC_C1, STRING_INTRO_C1, ESC_INTERMEDIATE_CLASS, ESC_INTERMEDIATE_RE, ESC_FINAL_CLASS, ESC_FINAL_RE, ESC_DIRECT_FINAL_CLASS, ESC_DIRECT_FINAL_RE, ESCAPE_SEQUENCE_SOURCE, SGR_RESET, SGR_CONCEAL, SGR_REVEAL, SGR_EXTENDED_COLOUR, SGR_COLOUR_ARGS, TOKEN_KIND, INTRODUCER_SCAN_RE;
+function extendedColour(args) {
+  const space = Number(args[0]);
+  if (space === SGR_INDEXED && args.length >= 2) return `i${Number(args[1])}`;
+  if (space === SGR_DIRECT && args.length >= 4)
+    return `rgb:${args.slice(-3).map((component) => Number(component)).join(",")}`;
+  return null;
+}
+function sgrRendition(token, state) {
+  const params = token.slice(token.charCodeAt(0) === ESC ? 2 : 1, -1).split(";");
+  let { concealed, bold, fg, bg } = state;
+  for (let i = 0; i < params.length; i++) {
+    const subParams = params[i].split(":");
+    const value = Number(subParams[0]);
+    if (value === SGR_RESET) ({ concealed, bold, fg, bg } = DEFAULT_RENDITION);
+    else if (value === SGR_CONCEAL) concealed = true;
+    else if (value === SGR_REVEAL) concealed = false;
+    else if (value === SGR_BOLD) bold = true;
+    else if (value === SGR_NORMAL_INTENSITY) bold = false;
+    const foreground = basicColour(value, 30);
+    if (foreground !== void 0) fg = foreground;
+    const background = basicColour(value, 40);
+    if (background !== void 0) bg = background;
+    if (!SGR_EXTENDED_COLOUR.has(value)) continue;
+    const colonForm = subParams.length > 1;
+    const count = SGR_COLOUR_ARGS.get(Number(params[i + 1]));
+    if (!colonForm && count === void 0) continue;
+    const args = colonForm ? subParams.slice(1) : params.slice(i + 1, i + 2 + /** @type {number} */
+    count);
+    if (!colonForm) i += args.length;
+    const colour = extendedColour(args);
+    if (value === SGR_FOREGROUND) fg = colour;
+    else if (value === SGR_BACKGROUND) bg = colour;
+  }
+  return { concealed, bold, fg, bg };
+}
+function foregroundMatchesBackground({ bold, fg, bg }) {
+  if (fg === null || fg !== bg) return false;
+  return !(bold && /^i[0-7]$/u.test(fg));
+}
+var CONTROL_INTRODUCER_CODEPOINTS, CONTROL_INTRODUCER_SOURCE, SGR_SOURCE, SGR_RE, SGR_ANCHORED_RE, CSI_BODY_CLASS, CSI_BODY_RE, CSI_FINAL_CLASS, CSI_FINAL_RE, ESC, CSI_C1, ST_C1, BEL, CAN, SUB, LF, CR, SEQUENCE_CANCEL, INTRODUCER_RE, STRING_INTRO_7BIT, OSC_7BIT, OSC_C1, STRING_INTRO_C1, ESC_INTERMEDIATE_CLASS, ESC_INTERMEDIATE_RE, ESC_FINAL_CLASS, ESC_FINAL_RE, ESC_DIRECT_FINAL_CLASS, ESC_DIRECT_FINAL_RE, ESCAPE_SEQUENCE_SOURCE, SGR_RESET, SGR_CONCEAL, SGR_REVEAL, SGR_EXTENDED_COLOUR, SGR_COLOUR_ARGS, TOKEN_KIND, INTRODUCER_SCAN_RE, DEFAULT_RENDITION, SGR_BOLD, SGR_NORMAL_INTENSITY, SGR_FOREGROUND, SGR_BACKGROUND, SGR_INDEXED, SGR_DIRECT;
 var init_ansi = __esm({
   "src/ansi.mjs"() {
     "use strict";
@@ -3736,6 +4209,18 @@ var init_ansi = __esm({
       ORPHAN_C1: "orphan-c1-introducer"
     });
     INTRODUCER_SCAN_RE = new RegExp(CONTROL_INTRODUCER_SOURCE, "g");
+    DEFAULT_RENDITION = Object.freeze({
+      concealed: false,
+      bold: false,
+      fg: null,
+      bg: null
+    });
+    SGR_BOLD = 1;
+    SGR_NORMAL_INTENSITY = 22;
+    SGR_FOREGROUND = 38;
+    SGR_BACKGROUND = 48;
+    SGR_INDEXED = 5;
+    SGR_DIRECT = 2;
   }
 });
 
@@ -3771,6 +4256,7 @@ __export(invisible_exports, {
   isSgrOnly: () => isSgrOnly,
   payloadInvisibleView: () => payloadInvisibleView,
   payloadLongRunSample: () => payloadLongRunSample,
+  payloadVerdict: () => payloadVerdict,
   stripInvisible: () => stripInvisible,
   stripInvisibleWithReport: () => stripInvisibleWithReport
 });
@@ -3816,8 +4302,34 @@ function describeStripped(invisFound, deAnsi) {
     msg += " [LONG RUN \u2014 possible injection payload]";
   return msg + " \u2014 inspect the removed bytes with a hex dump (xxd / od -c), which survives sanitization";
 }
+function hasEmojiProp(cp, bit, spans) {
+  if (cp < 0) return false;
+  if (cp >= CP_PROPS_END) return inSpans(spans, cp);
+  return (cpProps(cp) & bit) !== 0;
+}
+function markRegisteredGlyphs(cps, invisible, kind2) {
+  for (const i of invisible) {
+    if (cps[i] === VS16) {
+      if (kind2[i] === KIND_EMOJIVS && i > 0 && isTextDefaultEmoji(cps[i - 1]))
+        kind2[i] = KIND_GLYPH;
+      continue;
+    }
+    if (kind2[i] !== KIND_JOINER || cps[i] !== ZWJ) continue;
+    if (!isExtendedPictographic(i + 1 < cps.length ? cps[i + 1] : -1)) continue;
+    let p = i - 1;
+    while (p >= 0 && (isVariationSelectorCp(cps[p]) || isEmojiModifierCp(cps[p])))
+      p--;
+    if (p >= 0 && isExtendedPictographic(cps[p])) kind2[i] = KIND_GLYPH;
+  }
+}
+function isCjkIdeograph(cp) {
+  if (cp < 0 || cp >= CP_PROPS_END) return inCjkIdeographTables(cp);
+  return (cpProps(cp) & PROP_CJK_IDEOGRAPH) !== 0;
+}
 function isBrahmicConsonantCp(cp) {
-  return cp >= 0 && isBrahmicConsonant(cp);
+  if (cp < 0) return false;
+  if (cp >= CP_PROPS_END) return isBrahmicConsonant(cp);
+  return (cpProps(cp) & PROP_BRAHMIC_CONSONANT) !== 0;
 }
 function isBrailleCell(cp) {
   return cp !== BRAILLE_BLANK && isBrailleScript(cp);
@@ -3827,8 +4339,11 @@ function isHangul(cp) {
   return isHangulScript(cp);
 }
 function classifyCp(cp) {
-  if (cp < MIN_TRACKED_CP) return CODE_VISIBLE;
+  if (cp < TRACKED_TABLE_END) return TRACKED_LOW[cp];
   return TRACKED_INVISIBLE.get(cp) ?? CODE_VISIBLE;
+}
+function isVariationSelectorCp(cp) {
+  return cp >= 0 && classifyCp(cp) === CODE_VS;
 }
 function memoizedCpPredicate(re) {
   const memo = /* @__PURE__ */ new Map();
@@ -3878,6 +4393,26 @@ function codePointLength(text6) {
   while (!iterator.next().done) n++;
   return n;
 }
+function cpProps(cp) {
+  const table = propsTable();
+  const known = table[cp];
+  if (known !== 0) return known;
+  const type = JOINING_TYPES.indexOf(joiningType(cp));
+  if (type < 1)
+    throw new Error(`unknown Joining_Type for U+${cp.toString(16)}`);
+  const props = type | (isCursiveLetter(JOINING_TYPES[type]) || isBrahmicConsonant(cp) ? PROP_JOINING_LETTER : 0) | (isVirama(cp) ? PROP_VIRAMA : 0) | (isBrahmicConsonant(cp) ? PROP_BRAHMIC_CONSONANT : 0) | (inSpans(EMOJI_TEXT_DEFAULT, cp) ? PROP_EMOJI_TEXT_DEFAULT : 0) | (inSpans(EMOJI_MODIFIER, cp) ? PROP_EMOJI_MODIFIER : 0) | (inCjkIdeographTables(cp) ? PROP_CJK_IDEOGRAPH : 0) | (inSpans(EXTENDED_PICTOGRAPHIC, cp) ? PROP_EXTENDED_PICTOGRAPHIC : 0);
+  table[cp] = props;
+  return props;
+}
+function jtOf(cp) {
+  if (cp < 0) return "U";
+  if (cp >= CP_PROPS_END) return joiningType(cp);
+  return JOINING_TYPES[cpProps(cp) & PROP_TYPE_MASK];
+}
+function isViramaCp(cp) {
+  if (cp >= CP_PROPS_END) return isVirama(cp);
+  return (cpProps(cp) & PROP_VIRAMA) !== 0;
+}
 function isJoinControl(cp) {
   return cp === ZWNJ || cp === ZWJ;
 }
@@ -3894,15 +4429,38 @@ function followsBrahmicConjunct(cps, i) {
   let j = i - 1;
   while (j >= 0 && !isJoinControl(cps[j]) && classifyCp(cps[j]) !== CODE_VISIBLE)
     j--;
-  if (j < 0 || !isVirama(cps[j])) return false;
+  if (j < 0 || !isViramaCp(cps[j])) return false;
   return isBrahmicConsonantCp(effectiveNeighbor(cps, j, -1));
+}
+function joiningLetterCount(cps, codes) {
+  const table = propsTable();
+  let letters = 0;
+  for (let i = 0; i < cps.length; i++) {
+    const cp = cps[i];
+    if (codes[i] !== CODE_VISIBLE) continue;
+    if (cp < CP_PROPS_END ? ((table[cp] || cpProps(cp)) & PROP_JOINING_LETTER) !== 0 : isJoiningLetter(cp))
+      letters++;
+  }
+  return letters;
+}
+function isJoiningLetter(cp) {
+  return cp >= 128 && (isCursiveLetter(jtOf(cp)) || isBrahmicConsonantCp(cp));
+}
+function precedesBrahmicVirama(cps, i) {
+  if (cps[i] !== ZWJ) return false;
+  let j = i + 1;
+  while (j < cps.length && !isJoinControl(cps[j]) && classifyCp(cps[j]) !== CODE_VISIBLE)
+    j++;
+  if (j >= cps.length || !isViramaCp(cps[j])) return false;
+  return isBrahmicConsonantCp(effectiveNeighbor(cps, i, -1));
 }
 function isPreservedJoiner(cps, i) {
   const cp = cps[i];
   if (cp !== ZWNJ && cp !== ZWJ) return false;
   if (cp === ZWJ && isEmojiLeft(leftNonSelector(cps, i)) && isEmojiBase(rightNonSelector(cps, i)))
     return true;
-  if (followsBrahmicConjunct(cps, i)) return true;
+  if (followsBrahmicConjunct(cps, i) || precedesBrahmicVirama(cps, i))
+    return true;
   const left = effectiveNeighbor(cps, i, -1);
   const right = effectiveNeighbor(cps, i, 1);
   if (isJoinControl(left) || isJoinControl(right)) return false;
@@ -3937,13 +4495,14 @@ function analyzeCarve(cps) {
   const tagKeep = hasTagBase ? markTagSequences(cps) : null;
   const kind2 = new Uint8Array(cps.length);
   for (const i of invisible) {
-    if (tagKeep !== null && tagKeep[i]) kind2[i] = KIND_TAG;
+    if (tagKeep !== null && tagKeep[i]) kind2[i] = KIND_GLYPH;
     else if (isPreservedJoiner(cps, i)) kind2[i] = KIND_JOINER;
     else if (isEmojiPresentationSelector(cps, i)) kind2[i] = KIND_EMOJIVS;
     else if (isStandardizedVariationSelector(cps, i)) kind2[i] = KIND_STDVS;
     else if (isIdeographicVariationSelector(cps, i)) kind2[i] = KIND_IVS;
     else if (isPreservedBlankFiller(cps, i)) kind2[i] = KIND_BLANK;
   }
+  markRegisteredGlyphs(cps, invisible, kind2);
   const blankIndices = { braille: [], hangul: [] };
   for (const i of invisible)
     if (kind2[i] === KIND_BLANK)
@@ -3969,11 +4528,11 @@ function analyzeCarve(cps) {
   }
   let payloadInvis = 0;
   for (const i of invisible) if (kind2[i] === KIND_NONE) payloadInvis++;
-  return { codes, kind: kind2, payloadInvis, visibleLen };
+  return { codes, kind: kind2, invisible, payloadInvis, visibleLen };
 }
 function countPayloadInvisible(text6) {
   if (!hasInvisibleCodePoint(text6)) return 0;
-  return analyzeCarve(codePointArray(text6)).payloadInvis;
+  return carveOf(text6).analysis.payloadInvis;
 }
 function bulkStrip(body) {
   const found = CHECKS.filter(([, re]) => body.search(re) !== -1).map(
@@ -4011,8 +4570,9 @@ function markTagSequences(cps) {
 }
 function isStandardizedVariationSelector(cps, i) {
   const cp = cps[i];
-  if (cp < 65024 || cp > 65037) return false;
-  return i > 0 ? isStandardizedVariant(cps[i - 1], cp) : false;
+  if (cp < STANDARDIZED_SELECTOR_MIN || cp > STANDARDIZED_SELECTOR_MAX)
+    return false;
+  return i > 0 && isStandardizedVariant(cps[i - 1], cp);
 }
 function isIdeographicVariationSelector(cps, i) {
   const cp = cps[i];
@@ -4051,11 +4611,54 @@ function cpIndexOf(offsets, u16) {
   }
   return lo;
 }
-function clusterResolver(body, offsets, candidates) {
-  const cpCount = offsets.length - 1;
+function contextFreeOnLeft(cp) {
+  if (cp < 2304) return cp !== 169 && cp !== 174;
+  if (cp === ZWNJ || cp === ZWJ) return true;
+  if (cp >= 65024 && cp <= 65039) return true;
+  if (cp >= 917536 && cp <= 917631) return true;
+  if (cp >= 917760 && cp <= 917999) return true;
+  return isCjkIdeograph(cp);
+}
+function pairBreak(left, right) {
+  if (!contextFreeOnLeft(right) || left >= 55296 && left <= 57343)
+    return null;
+  const key = left * 1114112 + right;
+  const hit = PAIR_BREAK_MEMO.get(key);
+  if (hit !== void 0) return hit;
+  if (PAIR_BREAK_MEMO.size >= PAIR_BREAK_MEMO_CAP) return null;
+  const pair = String.fromCodePoint(left, right);
+  const first = (
+    /** @type {{ segment: string }} */
+    graphemeSegmenter().segment(pair).containing(0)
+  );
+  const breaks = first.segment.length < pair.length;
+  PAIR_BREAK_MEMO.set(key, breaks);
+  return breaks;
+}
+function localCluster(cps, at) {
+  let start = at;
+  for (; start > 0; start--) {
+    const breaks = pairBreak(cps[start - 1], cps[start]);
+    if (breaks === null) return null;
+    if (breaks) break;
+  }
+  let end = at + 1;
+  for (; end < cps.length; end++) {
+    const breaks = pairBreak(cps[end - 1], cps[end]);
+    if (breaks === null) return null;
+    if (breaks) break;
+  }
+  return { start, end };
+}
+function clusterResolver(body, cps, offsetsOf, candidates) {
+  const cpCount = cps.length;
   if (candidates * CONTAINING_CANDIDATE_SHARE < cpCount) {
-    const segments = graphemeSegmenter().segment(body);
+    let segments = null;
     return (cp) => {
+      const local = localCluster(cps, cp);
+      if (local !== null) return local;
+      segments ??= graphemeSegmenter().segment(body);
+      const offsets = offsetsOf();
       const found = (
         /** @type {{ index: number, segment: string }} */
         segments.containing(offsets[cp])
@@ -4066,10 +4669,14 @@ function clusterResolver(body, offsets, candidates) {
       };
     };
   }
-  const iterator = graphemeSegmenter().segment(body)[Symbol.iterator]();
+  let iterator = null;
   let start = 0;
   let end = 0;
   return (cp) => {
+    const local = localCluster(cps, cp);
+    if (local !== null) return local;
+    iterator ??= graphemeSegmenter().segment(body)[Symbol.iterator]();
+    const offsets = offsetsOf();
     while (end <= cp) {
       const step = (
         /** @type {{ value: { segment: string } }} */
@@ -4081,55 +4688,112 @@ function clusterResolver(body, offsets, candidates) {
     return { start, end };
   };
 }
-function carveStrip(body, cps = codePointArray(body), analysis = analyzeCarve(cps)) {
-  const { codes, kind: kind2, payloadInvis, visibleLen } = analysis;
+function carveStrip(body, cps, analysis) {
+  const walk2 = carveWalk(body, cps, analysis, true);
+  const kept = (
+    /** @type {string[]} */
+    walk2.kept
+  );
+  const found = CHECKS.filter(([code4]) => walk2.foundCodes.has(code4)).map(
+    ([code4]) => code4
+  );
+  return { cleaned: kept.join(""), found, removed: walk2.removed };
+}
+function carveRemoved(body, cps, analysis) {
+  return carveWalk(body, cps, analysis, false).removed;
+}
+function carveWalk(body, cps, analysis, build) {
+  const { codes, kind: kind2, invisible, payloadInvis, visibleLen } = analysis;
   const allowCarveOut = payloadInvis < SCATTERED_THRESHOLD;
-  const maxPreserved = Math.min(
+  const n = cps.length;
+  const candidateBuffer = new Int32Array(allowCarveOut ? invisible.length : 0);
+  let candidateCount = 0;
+  let exemptCount = 0;
+  if (allowCarveOut) {
+    for (const k2 of invisible)
+      if (kind2[k2] === KIND_BLANK || kind2[k2] === KIND_GLYPH) exemptCount++;
+      else if (kind2[k2] !== KIND_NONE) candidateBuffer[candidateCount++] = k2;
+  }
+  const candidates = candidateBuffer.subarray(0, candidateCount);
+  const tally = !build && !LONE_LOW_SURROGATE_RE.test(body);
+  const coverAllowance = Math.min(
     PRESERVE_HARD_CAP,
     Math.max(
       TOTAL_PRESERVED_JOINER_BUDGET,
       Math.ceil(visibleLen / PRESERVED_JOINER_PER_VISIBLE)
     )
   );
-  const n = cps.length;
-  const candidates = [];
-  if (allowCarveOut) {
-    for (let k2 = 0; k2 < n; k2++)
-      if (kind2[k2] !== KIND_NONE && kind2[k2] !== KIND_BLANK) candidates.push(k2);
-  }
+  const joinerAllowance = candidates.length <= coverAllowance || !candidates.some((c) => kind2[c] === KIND_JOINER) ? coverAllowance : Math.max(
+    coverAllowance,
+    Math.ceil(
+      joiningLetterCount(cps, codes) / PRESERVED_JOINER_PER_VISIBLE
+    )
+  );
   const foundCodes = /* @__PURE__ */ new Set();
   const kept = [];
-  const offsets = u16Offsets(cps);
+  let removed = 0;
+  let stripOpen = false;
+  let mergeLeft = -1;
+  let offsets = null;
+  const offsetsOf = () => offsets ??= u16Offsets(cps);
   let runStart = 0;
   let joinerRun = 0;
   let selectorRun = 0;
   let preservedTotal = 0;
+  let preservedOther = 0;
   let prevVisible = false;
+  let nextInvisible = 0;
   const emit = (from, to, fits) => {
+    if (tally && !fits) {
+      if (prevVisible && codes[from] === CODE_VISIBLE || gapFrom(from + 1) < to) {
+        joinerRun = 0;
+        selectorRun = 0;
+      }
+      prevVisible = codes[to - 1] === CODE_VISIBLE;
+      return;
+    }
     for (let k2 = from; k2 < to; k2++) {
       const code4 = codes[k2];
       if (code4 === CODE_VISIBLE) {
-        if (prevVisible) {
+        while (nextInvisible < invisible.length && invisible[nextInvisible] < k2)
+          nextInvisible++;
+        const stop = nextInvisible < invisible.length ? Math.min(to, invisible[nextInvisible]) : to;
+        if (stripOpen) {
+          stripOpen = false;
+          if (isHighSurrogate(mergeLeft) && isLowSurrogate(cps[k2])) removed++;
+        }
+        if (prevVisible || stop - k2 > 1) {
           joinerRun = 0;
           selectorRun = 0;
         }
         prevVisible = true;
+        k2 = stop - 1;
         continue;
       }
-      if (kind2[k2] === KIND_BLANK ? allowCarveOut : fits && kind2[k2] !== KIND_NONE) {
+      const exempt = kind2[k2] === KIND_BLANK || kind2[k2] === KIND_GLYPH;
+      if (exempt ? allowCarveOut : fits && kind2[k2] !== KIND_NONE) {
         if (kind2[k2] === KIND_JOINER) joinerRun++;
         if (kind2[k2] === KIND_IVS || kind2[k2] === KIND_STDVS) selectorRun++;
-        if (kind2[k2] !== KIND_BLANK) preservedTotal++;
+        if (!exempt) preservedTotal++;
+        if (!exempt && kind2[k2] !== KIND_JOINER) preservedOther++;
         prevVisible = false;
+        stripOpen = false;
         continue;
       }
       foundCodes.add(CODE_CATEGORY[code4]);
+      removed++;
+      if (!stripOpen) {
+        stripOpen = true;
+        mergeLeft = k2 > 0 ? cps[k2 - 1] : -1;
+      }
       prevVisible = false;
-      if (offsets[k2] > runStart) kept.push(body.slice(runStart, offsets[k2]));
-      runStart = offsets[k2 + 1];
+      if (!build) continue;
+      const at = offsetsOf();
+      if (at[k2] > runStart) kept.push(body.slice(runStart, at[k2]));
+      runStart = at[k2 + 1];
     }
   };
-  const clusterOf = candidates.length > 0 ? clusterResolver(body, offsets, candidates.length) : null;
+  const clusterOf = candidates.length > 0 ? clusterResolver(body, cps, offsetsOf, candidates.length) : null;
   let lastGap = -1;
   let leftJoiner = 0;
   let leftSelector = 0;
@@ -4147,14 +4811,33 @@ function carveStrip(body, cps = codePointArray(body), analysis = analyzeCarve(cp
     }
   }
   const nothingLeftFits = (at) => {
-    if (preservedTotal >= maxPreserved) return true;
+    if (preservedTotal >= joinerAllowance) return true;
+    const othersSpent = preservedOther >= coverAllowance;
+    if (othersSpent && leftJoiner === 0) return true;
     if (at <= lastGap) return false;
-    if (leftOther > 0) return false;
+    if (!othersSpent && leftOther > 0) return false;
     if (leftJoiner > 0 && joinerRun < CONSECUTIVE_JOINER_CAP) return false;
-    if (leftSelector > 0 && selectorRun < CONSECUTIVE_SELECTOR_CAP)
+    if (!othersSpent && leftSelector > 0 && selectorRun < CONSECUTIVE_SELECTOR_CAP)
       return false;
     return true;
   };
+  const settle = (from, end) => {
+    for (let j = from; j < candidates.length && candidates[j] < end; j++) {
+      if (kind2[candidates[j]] === KIND_JOINER) leftJoiner--;
+      else if (kind2[candidates[j]] === KIND_IVS || kind2[candidates[j]] === KIND_STDVS)
+        leftSelector--;
+      else leftOther--;
+    }
+  };
+  let gap = -1;
+  const gapFrom = (at) => {
+    if (gap >= at) return gap;
+    gap = Math.max(at, 1);
+    while (gap < n && !(codes[gap] === CODE_VISIBLE && codes[gap - 1] === CODE_VISIBLE))
+      gap++;
+    return gap;
+  };
+  const spent = (c) => preservedTotal >= joinerAllowance || (kind2[c] === KIND_JOINER ? joinerRun >= CONSECUTIVE_JOINER_CAP : preservedOther >= coverAllowance || (kind2[c] === KIND_IVS || kind2[c] === KIND_STDVS) && selectorRun >= CONSECUTIVE_SELECTOR_CAP);
   let k = 0;
   let next2 = 0;
   while (k < n) {
@@ -4163,13 +4846,25 @@ function carveStrip(body, cps = codePointArray(body), analysis = analyzeCarve(cp
       emit(k, n, false);
       break;
     }
+    let last = next2;
+    const reset = gapFrom(k);
+    while (last < candidates.length && candidates[last] < reset && spent(candidates[last]))
+      last++;
+    if (last > next2) {
+      const { end: end2 } = clusterOf(candidates[last - 1]);
+      emit(k, end2, false);
+      settle(next2, end2);
+      k = end2;
+      continue;
+    }
     const { start, end } = clusterOf(candidates[next2]);
     if (start > k) emit(k, start, false);
     let need = 0;
     let joiners = 0;
     let selectors = 0;
     for (let j = start; j < end; j++) {
-      if (kind2[j] === KIND_NONE || kind2[j] === KIND_BLANK) continue;
+      if (kind2[j] === KIND_NONE || kind2[j] === KIND_BLANK || kind2[j] === KIND_GLYPH)
+        continue;
       need++;
       if (kind2[j] === KIND_JOINER) joiners++;
       if (kind2[j] === KIND_IVS || kind2[j] === KIND_STDVS) selectors++;
@@ -4184,31 +4879,35 @@ function carveStrip(body, cps = codePointArray(body), analysis = analyzeCarve(cp
       }
       seenVisible = codes[j] === CODE_VISIBLE;
     }
-    for (let j = next2; j < candidates.length && candidates[j] < end; j++) {
-      if (kind2[candidates[j]] === KIND_JOINER) leftJoiner--;
-      else if (kind2[candidates[j]] === KIND_IVS || kind2[candidates[j]] === KIND_STDVS)
-        leftSelector--;
-      else leftOther--;
-    }
+    settle(next2, end);
     emit(
       start,
       end,
-      preservedTotal + need <= maxPreserved && runJoiner + joiners <= CONSECUTIVE_JOINER_CAP && runSelector + selectors <= CONSECUTIVE_SELECTOR_CAP
+      preservedTotal + need <= joinerAllowance && preservedOther + need - joiners <= coverAllowance && runJoiner + joiners <= CONSECUTIVE_JOINER_CAP && runSelector + selectors <= CONSECUTIVE_SELECTOR_CAP
     );
     k = end;
   }
+  if (tally)
+    removed = invisible.length - (allowCarveOut ? exemptCount : 0) - preservedTotal;
+  if (!build) return { kept: null, foundCodes, removed };
   kept.push(body.slice(runStart));
-  const found = CHECKS.filter(([code4]) => foundCodes.has(code4)).map(
-    ([code4]) => code4
-  );
-  return { cleaned: kept.join(""), found };
+  return { kept, foundCodes, removed };
+}
+function carveOf(body) {
+  if (lastCarve !== null && lastCarve.body === body) return lastCarve;
+  const cps = codePointArray(body);
+  const analysis = analyzeCarve(cps);
+  lastCarve = { body, cps, analysis, strip: null, removed: null };
+  return lastCarve;
 }
 function needsCarveOut(body) {
   return body.includes(String.fromCodePoint(ZWNJ)) || body.includes(String.fromCodePoint(ZWJ)) || VARIATION_SELECTOR.test(body) || TAG_CHAR_RE.test(body) || GATED_BLANK_RE.test(body);
 }
 function payloadInvisibleView(text6) {
-  const cps = codePointArray(text6);
-  const { codes, kind: kind2 } = analyzeCarve(cps);
+  const {
+    cps,
+    analysis: { codes, kind: kind2 }
+  } = carveOf(text6);
   const offsets = u16Offsets(cps);
   const isPayload = (i2) => codes[i2] !== CODE_VISIBLE && kind2[i2] === KIND_NONE;
   const parts2 = [];
@@ -4216,7 +4915,7 @@ function payloadInvisibleView(text6) {
   while (i < cps.length) {
     const maskFrom = i;
     while (i < cps.length && !isPayload(i)) i++;
-    if (i > maskFrom) parts2.push(" ".repeat(i - maskFrom));
+    if (i > maskFrom) parts2.push(" ".repeat(offsets[i] - offsets[maskFrom]));
     const keepFrom = i;
     while (i < cps.length && isPayload(i)) i++;
     if (i > keepFrom) parts2.push(text6.slice(offsets[keepFrom], offsets[i]));
@@ -4224,17 +4923,38 @@ function payloadInvisibleView(text6) {
   return parts2.join("");
 }
 function payloadLongRunSample(text6) {
-  if (!hasLongRun(text6)) return null;
-  return findLongRuns(payloadInvisibleView(text6)).next().value?.text ?? null;
+  return payloadLongRuns(text6).next().value?.text ?? null;
+}
+function* payloadLongRuns(text6) {
+  const known = lastCarve?.body === text6 ? lastCarve.analysis : null;
+  if (known === null ? !hasLongRun(text6) : !hasPayloadRun(known)) return;
+  yield* findLongRuns(payloadInvisibleView(text6));
+}
+function hasPayloadRun({ invisible, kind: kind2 }) {
+  let run = 0;
+  let prev = -2;
+  for (const i of invisible) {
+    run = kind2[i] !== KIND_NONE ? 0 : i === prev + 1 ? run + 1 : 1;
+    if (run >= LONG_RUN_THRESHOLD) return true;
+    prev = i;
+  }
+  return false;
 }
 function countEffectiveInvisible(text6) {
   if (!hasInvisibleCodePoint(text6)) return 0;
   if (text6.charCodeAt(0) === 65279)
     return surplusOver(countPayloadInvisible(text6), text6, stripInvisible(text6));
-  const cps = codePointArray(text6);
-  const analysis = analyzeCarve(cps);
-  const { cleaned } = stripBody(text6, cps, analysis);
-  return surplusOver(analysis.payloadInvis, text6, cleaned, cps.length);
+  const entry = carveOf(text6);
+  const payload = entry.analysis.payloadInvis;
+  if (!needsCarveOut(text6))
+    return surplusOver(
+      payload,
+      text6,
+      bulkStrip(text6).cleaned,
+      entry.cps.length
+    );
+  entry.removed ??= entry.strip?.removed ?? carveRemoved(text6, entry.cps, entry.analysis);
+  return payload + Math.max(0, entry.removed - payload);
 }
 function surplusOver(payload, text6, stripped, cpLen) {
   const removed = stripped === text6 ? 0 : (cpLen ?? codePointLength(text6)) - codePointLength(stripped);
@@ -4243,26 +4963,38 @@ function surplusOver(payload, text6, stripped, cpLen) {
 function isIncidentalInvisible(text6) {
   return payloadLongRunSample(text6) === null && countEffectiveInvisible(text6) < LONG_RUN_THRESHOLD;
 }
-function stripInvisibleWithReport(text6, originalText = text6) {
+function payloadVerdict(text6) {
+  const invisibleCount = countEffectiveInvisible(text6);
+  const firstRun = payloadLongRuns(text6).next().value ?? null;
+  return {
+    firstRun,
+    invisibleCount,
+    payloadCapable: firstRun !== null || invisibleCount >= SCATTERED_THRESHOLD
+  };
+}
+function stripInvisibleWithReport(text6, originalText = text6, { carveOut = true } = {}) {
   const hasLeadingBom = originalText.charCodeAt(0) === 65279 && text6.charCodeAt(0) === 65279;
   const body = hasLeadingBom ? text6.slice(1) : text6;
-  const { cleaned, found } = stripBody(body);
+  const { cleaned, found } = carveOut ? stripBody(body) : bulkStrip(body);
   return { cleaned: hasLeadingBom ? BOM + cleaned : cleaned, found };
 }
-function stripBody(body, cps, analysis) {
+function stripBody(body) {
   if (!needsCarveOut(body)) return bulkStrip(body);
-  return carveStrip(body, cps, analysis);
+  const entry = carveOf(body);
+  entry.strip ??= carveStrip(body, entry.cps, entry.analysis);
+  return { cleaned: entry.strip.cleaned, found: [...entry.strip.found] };
 }
 function stripInvisible(text6) {
   return stripInvisibleWithReport(text6).cleaned;
 }
-var VS, ZERO_WIDTH_MN, BLANK_NON_CF, REGEX_FLAGS, CF_CLASS_SOURCE, CATEGORY, CATEGORY_LABELS, CHECKS, STRIP, LONG_RUN_THRESHOLD, SCATTERED_THRESHOLD, LONG_RUN_RE, RUN_CHUNK, LONG_RUN_CHUNK_RE, RUN_TAIL_RE, BOM, ZWNJ, ZWJ, CONSECUTIVE_JOINER_CAP, CONSECUTIVE_SELECTOR_CAP, TOTAL_PRESERVED_JOINER_BUDGET, PRESERVED_JOINER_PER_VISIBLE, PRESERVE_HARD_CAP, TOTAL_PRESERVED_BLANK_BUDGET, PRESERVED_BLANK_PER_ANCHOR, LINGUISTIC_SCRIPTS, EMOJI_LEFT, KEYCAP_BASE, COMBINING_KEYCAP, EMOJI_BASE, VARIATION_SELECTOR, isEmojiLeft, isEmojiBase, isKeycapBase, isVariationSelectorCp, PRESENTATION_SELECTORS, TAG_BASE, TAG_CANCEL, TAG_SPEC_MIN, TAG_SPEC_MAX, REGISTERED_TAG_PAYLOADS, MAX_TAG_SPEC_CHARS, IVS_MIN, IVS_MAX, CJK_IDEOGRAPH_RE, isCjkIdeograph, BRAILLE_BLANK, HANGUL_FILLERS, GATED_BLANK_RE, BRAILLE_RE, isBrailleScript, HANGUL_RE, isHangulScript, CODE_VISIBLE, CODE_CF, CODE_VS, CODE_BLANK, KIND_NONE, KIND_JOINER, KIND_EMOJIVS, KIND_TAG, KIND_STDVS, KIND_IVS, KIND_BLANK, CODE_CATEGORY, TRACKED_INVISIBLE, MIN_TRACKED_CP, CP_PREDICATE_MEMO_CAP, isCursiveLetter, jtOf, segmenterCache, CONTAINING_CANDIDATE_SHARE, TAG_CHAR_RE;
+var VS, ZERO_WIDTH_MN, BLANK_NON_CF, REGEX_FLAGS, CF_CLASS_SOURCE, CATEGORY, CATEGORY_LABELS, CHECKS, STRIP, LONG_RUN_THRESHOLD, SCATTERED_THRESHOLD, LONG_RUN_RE, RUN_CHUNK, LONG_RUN_CHUNK_RE, RUN_TAIL_RE, BOM, ZWNJ, ZWJ, CONSECUTIVE_JOINER_CAP, CONSECUTIVE_SELECTOR_CAP, TOTAL_PRESERVED_JOINER_BUDGET, PRESERVED_JOINER_PER_VISIBLE, PRESERVE_HARD_CAP, TOTAL_PRESERVED_BLANK_BUDGET, PRESERVED_BLANK_PER_ANCHOR, LINGUISTIC_SCRIPTS, isEmojiLeft, KEYCAP_BASE, COMBINING_KEYCAP, isEmojiBase, VARIATION_SELECTOR, isKeycapBase, PRESENTATION_SELECTORS, TAG_BASE, TAG_CANCEL, TAG_SPEC_MIN, TAG_SPEC_MAX, REGISTERED_TAG_PAYLOADS, MAX_TAG_SPEC_CHARS, VS16, isTextDefaultEmoji, isEmojiModifierCp, isExtendedPictographic, IVS_MIN, IVS_MAX, CJK_COMPATIBILITY_IDEOGRAPH_BLOCKS, inCjkIdeographTables, BRAILLE_BLANK, HANGUL_FILLERS, GATED_BLANK_RE, isBrailleScript, isHangulScript, CODE_VISIBLE, CODE_CF, CODE_VS, CODE_BLANK, KIND_NONE, KIND_JOINER, KIND_EMOJIVS, KIND_GLYPH, KIND_STDVS, KIND_IVS, KIND_BLANK, CODE_CATEGORY, TRACKED_INVISIBLE, TRACKED_TABLE_END, TRACKED_LOW, CP_PREDICATE_MEMO_CAP, isCursiveLetter, CP_PROPS_END, JOINING_TYPES, PROP_TYPE_MASK, PROP_VIRAMA, PROP_BRAHMIC_CONSONANT, PROP_EMOJI_TEXT_DEFAULT, PROP_EMOJI_MODIFIER, PROP_CJK_IDEOGRAPH, PROP_EXTENDED_PICTOGRAPHIC, PROP_JOINING_LETTER, cpPropsTable, propsTable, STANDARDIZED_SELECTOR_MIN, STANDARDIZED_SELECTOR_MAX, segmenterCache, PAIR_BREAK_MEMO_CAP, PAIR_BREAK_MEMO, CONTAINING_CANDIDATE_SHARE, LONE_LOW_SURROGATE_RE, isHighSurrogate, isLowSurrogate, lastCarve, TAG_CHAR_RE;
 var init_invisible = __esm({
   "src/invisible.mjs"() {
     "use strict";
     init_joining_type();
     init_standardized_variants();
     init_cf_charset();
+    init_unicode_properties();
     init_ansi();
     init_ansi();
     init_joining_type();
@@ -4349,15 +5081,12 @@ var init_invisible = __esm({
       "Malayalam",
       "Sinhala"
     ];
-    EMOJI_LEFT = /[\p{Extended_Pictographic}\p{Emoji_Modifier}]/u;
+    isEmojiLeft = (cp) => isExtendedPictographic(cp) || isEmojiModifierCp(cp);
     KEYCAP_BASE = /[0-9#*]/u;
     COMBINING_KEYCAP = 8419;
-    EMOJI_BASE = new RegExp("\\p{Extended_Pictographic}", "u");
+    isEmojiBase = (cp) => isExtendedPictographic(cp);
     VARIATION_SELECTOR = new RegExp(`[${VS}]`, "u");
-    isEmojiLeft = memoizedCpPredicate(EMOJI_LEFT);
-    isEmojiBase = memoizedCpPredicate(EMOJI_BASE);
     isKeycapBase = memoizedCpPredicate(KEYCAP_BASE);
-    isVariationSelectorCp = memoizedCpPredicate(VARIATION_SELECTOR);
     PRESENTATION_SELECTORS = /* @__PURE__ */ new Set([65038, 65039]);
     TAG_BASE = 127988;
     TAG_CANCEL = 917631;
@@ -4365,17 +5094,22 @@ var init_invisible = __esm({
     TAG_SPEC_MAX = 917630;
     REGISTERED_TAG_PAYLOADS = /* @__PURE__ */ new Set(["gbeng", "gbsct", "gbwls"]);
     MAX_TAG_SPEC_CHARS = 6;
+    VS16 = 65039;
+    isTextDefaultEmoji = (cp) => hasEmojiProp(cp, PROP_EMOJI_TEXT_DEFAULT, EMOJI_TEXT_DEFAULT);
+    isEmojiModifierCp = (cp) => hasEmojiProp(cp, PROP_EMOJI_MODIFIER, EMOJI_MODIFIER);
+    isExtendedPictographic = (cp) => hasEmojiProp(cp, PROP_EXTENDED_PICTOGRAPHIC, EXTENDED_PICTOGRAPHIC);
     IVS_MIN = 917760;
     IVS_MAX = 917999;
-    CJK_IDEOGRAPH_RE = /[\p{Unified_Ideograph}\u{F900}-\u{FAFF}\u{2F800}-\u{2FA1F}]/u;
-    isCjkIdeograph = memoizedCpPredicate(CJK_IDEOGRAPH_RE);
+    CJK_COMPATIBILITY_IDEOGRAPH_BLOCKS = [
+      [63744, 64255],
+      [194560, 195103]
+    ];
+    inCjkIdeographTables = (cp) => inSpans(UNIFIED_IDEOGRAPH, cp) || inSpans(CJK_COMPATIBILITY_IDEOGRAPH_BLOCKS, cp);
     BRAILLE_BLANK = 10240;
     HANGUL_FILLERS = /* @__PURE__ */ new Set([4447, 4448, 12644, 65440]);
     GATED_BLANK_RE = new RegExp("[\\u115F\\u1160\\u2800\\u3164\\uFFA0]", "u");
-    BRAILLE_RE = new RegExp("\\p{Script=Braille}", "u");
-    isBrailleScript = memoizedCpPredicate(BRAILLE_RE);
-    HANGUL_RE = new RegExp("\\p{Script=Hangul}", "u");
-    isHangulScript = memoizedCpPredicate(HANGUL_RE);
+    isBrailleScript = (cp) => inSpans(SCRIPT_BRAILLE, cp);
+    isHangulScript = (cp) => inSpans(SCRIPT_HANGUL, cp);
     CODE_VISIBLE = 0;
     CODE_CF = 1;
     CODE_VS = 2;
@@ -4383,7 +5117,7 @@ var init_invisible = __esm({
     KIND_NONE = 0;
     KIND_JOINER = 1;
     KIND_EMOJIVS = 2;
-    KIND_TAG = 3;
+    KIND_GLYPH = 3;
     KIND_STDVS = 4;
     KIND_IVS = 5;
     KIND_BLANK = 6;
@@ -4405,12 +5139,46 @@ var init_invisible = __esm({
     )
       for (const cp of codepoints)
         if (!TRACKED_INVISIBLE.has(cp)) TRACKED_INVISIBLE.set(cp, code4);
-    MIN_TRACKED_CP = Math.min(...TRACKED_INVISIBLE.keys());
+    TRACKED_TABLE_END = 131072;
+    TRACKED_LOW = new Uint8Array(TRACKED_TABLE_END);
+    for (const [cp, code4] of TRACKED_INVISIBLE)
+      if (cp < TRACKED_TABLE_END) TRACKED_LOW[cp] = code4;
+    for (const ch of VS)
+      if (!isVariationSelectorCp(
+        /** @type {number} */
+        ch.codePointAt(0)
+      ))
+        throw new Error(
+          `variation selector U+${ch.codePointAt(0)?.toString(16)} is not classified CODE_VS`
+        );
     CP_PREDICATE_MEMO_CAP = 4096;
     isCursiveLetter = (jt) => jt === "D" || jt === "R" || jt === "L";
-    jtOf = (cp) => cp < 0 ? "U" : joiningType(cp);
+    CP_PROPS_END = 131072;
+    JOINING_TYPES = ["", "C", "D", "R", "L", "T", "U"];
+    PROP_TYPE_MASK = 7;
+    PROP_VIRAMA = 8;
+    PROP_BRAHMIC_CONSONANT = 16;
+    PROP_EMOJI_TEXT_DEFAULT = 32;
+    PROP_EMOJI_MODIFIER = 64;
+    PROP_CJK_IDEOGRAPH = 128;
+    PROP_EXTENDED_PICTOGRAPHIC = 256;
+    PROP_JOINING_LETTER = 512;
+    cpPropsTable = null;
+    propsTable = () => cpPropsTable ??= new Uint16Array(CP_PROPS_END);
+    STANDARDIZED_SELECTOR_MIN = Math.min(
+      ...STANDARDIZED_VARIANTS.map(([, selector2]) => selector2)
+    );
+    STANDARDIZED_SELECTOR_MAX = Math.max(
+      ...STANDARDIZED_VARIANTS.map(([, selector2]) => selector2)
+    );
     segmenterCache = null;
+    PAIR_BREAK_MEMO_CAP = 4096;
+    PAIR_BREAK_MEMO = /* @__PURE__ */ new Map();
     CONTAINING_CANDIDATE_SHARE = 4;
+    LONE_LOW_SURROGATE_RE = /(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/;
+    isHighSurrogate = (cp) => cp >= 55296 && cp <= 56319;
+    isLowSurrogate = (cp) => cp >= 56320 && cp <= 57343;
+    lastCarve = null;
     TAG_CHAR_RE = /[\u{E0000}-\u{E007F}]/u;
   }
 });
@@ -4465,31 +5233,57 @@ function rendersNothing(gap) {
   return gap.replace(STRIP, "") === "";
 }
 function sgrCarriesPayload(text6) {
-  let concealed = false;
+  let rendition = DEFAULT_RENDITION;
   let run = 0;
   let previousEnd = 0;
+  const solidBlocks = /* @__PURE__ */ new Set();
   for (const token of scanAnsi(text6)) {
-    const blankGap = rendersNothing(text6.slice(previousEnd, token.start));
+    const gap = text6.slice(previousEnd, token.start);
+    const blankGap = rendersNothing(gap);
     previousEnd = token.end;
+    if (hidesText(rendition, gap, solidBlocks)) return true;
     if (token.kind !== TOKEN_KIND.SGR) {
       run = 0;
       continue;
     }
-    if (concealed && !blankGap) return true;
     run = blankGap ? run + 1 : 1;
     if (run >= SGR_RUN_THRESHOLD) return true;
-    concealed = sgrConcealState(text6.slice(token.start, token.end), concealed);
+    rendition = sgrRendition(text6.slice(token.start, token.end), rendition);
   }
-  return concealed;
+  return rendition.concealed || foregroundMatchesBackground(rendition);
+}
+function drawsSecondBlockElement(gap, seen) {
+  for (const [glyph] of gap.matchAll(BLOCK_ELEMENT)) {
+    seen.add(glyph);
+    if (seen.size > 1) return true;
+  }
+  return false;
+}
+function hidesText(rendition, gap, solidBlocks) {
+  if (rendition.concealed) return !rendersNothing(gap);
+  if (!foregroundMatchesBackground(rendition)) return false;
+  return COLOUR_HIDDEN_GLYPH.test(gap.replace(STRIP, "")) || drawsSecondBlockElement(gap, solidBlocks);
 }
 function isBenignAnsi(text6) {
   return isBenignAnsiKinds(applyLayer1(text6).ansiKinds);
+}
+function escapesPreservable(text6, kinds = applyLayer1(text6).ansiKinds) {
+  return isBenignAnsiKinds([...kinds]) && !sgrCarriesPayload(text6);
+}
+function stripTerminalFully(text6, kinds = /* @__PURE__ */ new Set()) {
+  return sweepIntroducers(stripAnsiFully(text6, kinds), kinds);
+}
+function stripLayer1Monotone(text6, found, kinds) {
+  const bulk = stripInvisibleWithReport(text6, text6, { carveOut: false });
+  for (const category of bulk.found) found.add(category);
+  return stripTerminalFully(bulk.cleaned, kinds);
 }
 function applyLayer1(text6) {
   const ansiKinds = /* @__PURE__ */ new Set();
   const deAnsi = stripAnsiFully(text6, ansiKinds);
   const found = /* @__PURE__ */ new Set();
   let cleaned = text6;
+  let converged = false;
   for (let pass = 0; pass < MAX_LAYER1_PASSES; pass++) {
     const afterAnsi = pass === 0 ? deAnsi : stripAnsiFully(cleaned, ansiKinds);
     const { cleaned: afterInvis, found: passFound } = stripInvisibleWithReport(
@@ -4502,10 +5296,13 @@ function applyLayer1(text6) {
       continue;
     }
     const swept = sweepIntroducers(cleaned, ansiKinds);
-    if (swept === cleaned) break;
+    if (swept === cleaned) {
+      converged = true;
+      break;
+    }
     cleaned = swept;
   }
-  cleaned = sweepIntroducers(cleaned, ansiKinds);
+  if (!converged) cleaned = stripLayer1Monotone(text6, found, ansiKinds);
   if (ansiKinds.size > 0) found.add(CATEGORY.ANSI);
   return { cleaned, deAnsi, found: [...found], ansiKinds: [...ansiKinds] };
 }
@@ -4522,7 +5319,7 @@ function applyLayer1WellFormed(text6) {
     found: [...result.found, CATEGORY.LONE_SURROGATES]
   };
 }
-var CONTROL_INTRODUCER_RE, LONE_SURROGATE_RE, INERT_ANSI_NOTE, SGR_RUN_THRESHOLD, MAX_LAYER1_PASSES;
+var CONTROL_INTRODUCER_RE, LONE_SURROGATE_RE, INERT_ANSI_NOTE, SGR_RUN_THRESHOLD, COLOUR_HIDDEN_GLYPH, BLOCK_ELEMENT, MAX_LAYER1_PASSES;
 var init_layer1 = __esm({
   "src/layer1.mjs"() {
     "use strict";
@@ -4532,6 +5329,8 @@ var init_layer1 = __esm({
     LONE_SURROGATE_RE = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g;
     INERT_ANSI_NOTE = "Inert ANSI stripped (display-only colour and/or a stray escape byte that formed no control sequence); pipe through cat -v to inspect raw escapes.";
     SGR_RUN_THRESHOLD = 10;
+    COLOUR_HIDDEN_GLYPH = /[^\s\u2580-\u259F]/u;
+    BLOCK_ELEMENT = /[\u2580-\u259F]/gu;
     MAX_LAYER1_PASSES = 4;
   }
 });
@@ -4791,7 +5590,7 @@ function anchorSpans(content3, view) {
   );
   const cut = interior(p);
   if (cut) p = cut.start;
-  if (p > 0 && isHighSurrogate(viewText.charCodeAt(p - 1))) p--;
+  if (p > 0 && isHighSurrogate2(viewText.charCodeAt(p - 1))) p--;
   const maxSuffix = maxPrefix - p;
   let s2 = 0;
   while (s2 < maxSuffix && content3[content3.length - 1 - s2] === viewText[viewText.length - 1 - s2])
@@ -4799,14 +5598,14 @@ function anchorSpans(content3, view) {
   let suffixStart = viewText.length - s2;
   const cutEnd = interior(suffixStart);
   if (cutEnd) suffixStart = cutEnd.start + cutEnd.placeholder.length;
-  if (suffixStart < viewText.length && isLowSurrogate(viewText.charCodeAt(suffixStart)))
+  if (suffixStart < viewText.length && isLowSurrogate2(viewText.charCodeAt(suffixStart)))
     suffixStart++;
   return { prefixEnd: p, suffixStart };
 }
-function isHighSurrogate(code4) {
+function isHighSurrogate2(code4) {
   return code4 >= 55296 && code4 <= 56319;
 }
-function isLowSurrogate(code4) {
+function isLowSurrogate2(code4) {
   return code4 >= 56320 && code4 <= 57343;
 }
 function pairDiskSpans(view, deletions) {
@@ -47435,6 +48234,7 @@ __export(src_exports, {
   VS: () => VS,
   applyLayer1: () => applyLayer1,
   applyLayer1WellFormed: () => applyLayer1WellFormed,
+  escapesPreservable: () => escapesPreservable,
   findLongRuns: () => findLongRuns,
   hasLongRun: () => hasLongRun,
   isBenignAnsi: () => isBenignAnsi,
@@ -47446,7 +48246,8 @@ __export(src_exports, {
   sgrCarriesPayload: () => sgrCarriesPayload,
   stripAnsiFully: () => stripAnsiFully,
   stripInvisible: () => stripInvisible,
-  stripInvisibleWithReport: () => stripInvisibleWithReport
+  stripInvisibleWithReport: () => stripInvisibleWithReport,
+  stripTerminalFully: () => stripTerminalFully
 });
 async function sanitize(text6, options) {
   if (typeof text6 !== "string")
@@ -47799,11 +48600,14 @@ function decodeRun(run) {
   };
 }
 function scanText(content3) {
+  const verdict = payloadVerdict(content3);
+  if (!verdict.payloadCapable) return [];
   const findings = [];
   let runChars = 0;
   let line = 1;
   let counted = 0;
-  for (const run of findLongRuns(content3)) {
+  const runs = verdict.firstRun === null ? [] : findLongRuns(payloadInvisibleView(content3));
+  for (const run of runs) {
     for (; counted < run.index; counted++)
       if (content3.charCodeAt(counted) === NEWLINE) line++;
     runChars += run.charCount;
@@ -47813,7 +48617,7 @@ function scanText(content3) {
       ...decodeRun(run.text)
     });
   }
-  const scattered = countPayloadInvisible(content3) - runChars;
+  const scattered = verdict.invisibleCount - runChars;
   if (scattered >= SCATTERED_THRESHOLD) {
     findings.push({
       line: null,
@@ -48006,11 +48810,9 @@ function classifyPrompt(prompt, strip = stripAnsiFully) {
   if (!prompt) return { action: "pass" };
   const hasAnsi = ANSI_INTRODUCER.test(prompt);
   const deAnsi = strip(prompt);
-  const longRunSample = payloadLongRunSample(deAnsi);
-  const invisibleCount = countEffectiveInvisible(deAnsi);
-  const invisiblesBelowThreshold = longRunSample === null && invisibleCount < SCATTERED_THRESHOLD;
-  if (!hasAnsi && invisiblesBelowThreshold) return { action: "pass" };
-  if (hasAnsi && invisiblesBelowThreshold && isBenignAnsi(prompt))
+  const verdict = payloadVerdict(deAnsi);
+  if (!hasAnsi && !verdict.payloadCapable) return { action: "pass" };
+  if (hasAnsi && !verdict.payloadCapable && escapesPreservable(prompt))
     return { action: "note" };
   const categories = CHECKS.filter(([, re]) => deAnsi.search(re) !== -1).map(
     ([code4]) => CATEGORY_LABELS[code4]
@@ -48018,7 +48820,11 @@ function classifyPrompt(prompt, strip = stripAnsiFully) {
   if (hasAnsi) categories.push(CATEGORY_LABELS[CATEGORY.ANSI]);
   return {
     action: "block",
-    reason: formatReason(categories, invisibleCount, longRunSample)
+    reason: formatReason(
+      categories,
+      verdict.invisibleCount,
+      verdict.firstRun?.text ?? null
+    )
   };
 }
 var ANSI_INTRODUCER;
@@ -48843,16 +49649,28 @@ function authoredScopeDecision(tool) {
   if (matched) return { kind: "exempt", reason: matched.reason };
   return { kind: "undeclared" };
 }
-function isPayloadCapable(text6) {
-  if (hasLongRun2(text6)) return true;
-  return (text6.match(STRIP2)?.length ?? 0) >= SCATTERED_THRESHOLD2;
-}
 function stripTerminalControls(text6) {
   const kinds = /* @__PURE__ */ new Set();
   const deAnsi = stripAnsiFully2(text6, kinds);
   if (deAnsi === text6) return text6;
-  if (isBenignAnsiKinds2(kinds) && !sgrCarriesPayload2(text6)) return text6;
+  if (escapesPreservable2(text6, kinds)) return text6;
   return deAnsi;
+}
+function settleField(value, cleaned, actions) {
+  let settled = cleaned;
+  if (!readKnob("AGENT_SANITIZER_INVISIBLE_DISABLED")) {
+    const bulk = stripInvisibleWithReport2(settled, value, {
+      carveOut: false
+    }).cleaned;
+    if (bulk !== settled) actions.add("invisible characters");
+    settled = bulk;
+  }
+  if (!readKnob("AGENT_SANITIZER_TERMINAL_DISABLED")) {
+    const swept = stripTerminalFully2(settled);
+    if (swept !== settled) actions.add("terminal-control sequences");
+    settled = swept;
+  }
+  return settled;
 }
 function sanitizeField(value) {
   const actions = /* @__PURE__ */ new Set();
@@ -48866,17 +49684,21 @@ function sanitizeField(value) {
         actions.add("terminal-control sequences");
       }
     }
-    if (!readKnob("AGENT_SANITIZER_INVISIBLE_DISABLED") && isPayloadCapable(cleaned)) {
-      cleaned = stripInvisible2(cleaned);
-      actions.add("invisible characters");
+    if (!readKnob("AGENT_SANITIZER_INVISIBLE_DISABLED")) {
+      const view = stripAnsiFully2(cleaned);
+      if (payloadVerdict2(view).payloadCapable) {
+        const source = readKnob("AGENT_SANITIZER_TERMINAL_DISABLED") ? cleaned : view;
+        const stripped = stripInvisibleWithReport2(source, cleaned).cleaned;
+        if (source !== cleaned) actions.add("terminal-control sequences");
+        if (stripped !== source) actions.add("invisible characters");
+        cleaned = stripped;
+      }
     }
     if (cleaned === before) break;
     if (pass === MAX_FIELD_PASSES - 1)
-      throw new Error(
-        "authored content did not reach a fixed point within MAX_FIELD_PASSES"
-      );
+      cleaned = settleField(value, cleaned, actions);
   }
-  return actions.size > 0 ? { cleaned, actions: [...actions] } : null;
+  return cleaned === value ? null : { cleaned, actions: [...actions] };
 }
 function authoredContext(changed) {
   return `Sanitized model-authored content in: ${changed.join("; ")}. This removes a covert channel to other AIs and prevents authored content from rewriting the user's terminal. Opt out granularly with AGENT_SANITIZER_INVISIBLE_DISABLED=1 (i18n joiners) or AGENT_SANITIZER_TERMINAL_DISABLED=1 (raw-escape fixtures), or fully with AGENT_SANITIZER_OUTPUT_DISABLED=1.`;
@@ -48917,15 +49739,15 @@ function sanitizeAuthoredContent(tool, toolInput) {
   if (changed.length === 0) return null;
   return { updatedInput, changed };
 }
-var stripAnsiFully2, isBenignAnsiKinds2, sgrCarriesPayload2, STRIP2, SCATTERED_THRESHOLD2, hasLongRun2, stripInvisible2, AUTHORED_FIELDS, EXEMPT_TOOLS2, EXEMPT_TOOL_PATTERNS2, MAX_FIELD_PASSES;
+var stripAnsiFully2, stripTerminalFully2, escapesPreservable2, payloadVerdict2, stripInvisibleWithReport2, AUTHORED_FIELDS, EXEMPT_TOOLS2, EXEMPT_TOOL_PATTERNS2, MAX_FIELD_PASSES;
 var init_authored_content = __esm({
   async "claude-hooks/lib/authored-content.mjs"() {
     "use strict";
     init_hook_io();
     init_knobs();
-    ({ stripAnsiFully: stripAnsiFully2, isBenignAnsiKinds: isBenignAnsiKinds2, sgrCarriesPayload: sgrCarriesPayload2 } = /** @type {typeof import("agent-sanitizer")} */
+    ({ stripAnsiFully: stripAnsiFully2, stripTerminalFully: stripTerminalFully2, escapesPreservable: escapesPreservable2 } = /** @type {typeof import("agent-sanitizer")} */
     await lazyImport("agent-sanitizer"));
-    ({ STRIP: STRIP2, SCATTERED_THRESHOLD: SCATTERED_THRESHOLD2, hasLongRun: hasLongRun2, stripInvisible: stripInvisible2 } = /** @type {typeof import("agent-sanitizer/invisible")} */
+    ({ payloadVerdict: payloadVerdict2, stripInvisibleWithReport: stripInvisibleWithReport2 } = /** @type {typeof import("agent-sanitizer/invisible")} */
     await lazyImport("agent-sanitizer/invisible"));
     AUTHORED_FIELDS = Object.freeze(
       Object.assign(/* @__PURE__ */ Object.create(null), {
@@ -50583,8 +51405,8 @@ var invisible_charset_default;
 var init_invisible_charset = __esm({
   "python/agent_sanitizer/data/invisible-charset.json"() {
     invisible_charset_default = {
-      _comment: "SSOT for the payload-capable invisible code points, generated by scripts/gen-invisible-charset.mjs. `extra_codepoints` are the non-Cf extras (variation selectors, blank-rendering fillers, zero-width combining marks) from src/invisible.mjs (VS + BLANK_NON_CF). `cf_codepoints` is the general-category Cf set PINNED from Node's Unicode data at generation time (see `unicode_version`) \u2014 NOT resolved live per consumer, because Node and CPython ship different Unicode versions and a live-Cf split let a code point in the version delta escape one layer. The deletion set is the UNION of the two lists. `control_introducers` is the raw ANSI control-introducer set (ESC + the C1 block) from src/ansi.mjs, which Layer 1 sweeps and the Python textstrip port must sweep identically. `escape_sequence_pattern` is the escape GRAMMAR from that same module, as a regex source valid in JS and in Python `re` with no flags: src/ansi.mjs's scanner is the authoritative implementation, and a stdlib-only consumer compiles this rather than hand-writing a second spelling of it. Consumers in other languages read this file instead of forking the lists \u2014 a fork is a silent security regression.",
-      unicode_version: "17.0",
+      _comment: "SSOT for the payload-capable invisible code points, generated by scripts/gen-invisible-charset.mjs. `extra_codepoints` are the non-Cf extras (variation selectors, blank-rendering fillers, zero-width combining marks) from src/invisible.mjs (VS + BLANK_NON_CF). `cf_codepoints` is the general-category Cf set PINNED from the UCD package at generation time (see `unicode_version`) \u2014 NOT resolved live per consumer, because Node and CPython ship different Unicode versions and a live-Cf split let a code point in the version delta escape one layer. The deletion set is the UNION of the two lists. `control_introducers` is the raw ANSI control-introducer set (ESC + the C1 block) from src/ansi.mjs, which Layer 1 sweeps and the Python textstrip port must sweep identically. `escape_sequence_pattern` is the escape GRAMMAR from that same module, as a regex source valid in JS and in Python `re` with no flags: src/ansi.mjs's scanner is the authoritative implementation, and a stdlib-only consumer compiles this rather than hand-writing a second spelling of it. Consumers in other languages read this file instead of forking the lists \u2014 a fork is a silent security regression.",
+      unicode_version: "17.0.0",
       extra_codepoints: [
         847,
         4447,

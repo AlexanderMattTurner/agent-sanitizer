@@ -515,15 +515,67 @@ export function scanAnsi(text) {
 }
 
 /**
- * The CONCEAL state after the SGR token `token` is applied to a terminal already
- * in state `concealed` — the state in which a terminal renders what follows as
- * blank while its bytes stay readable to anything reading the file.
+ * What a terminal's graphic rendition looks like after an SGR token: whether
+ * CONCEAL is on, whether BOLD is (which many terminals render as a brighter
+ * foreground), and the foreground/background colour as a comparable key — `i<n>`
+ * for a palette index (`31` and `38;5;1` are both `i1`), `rgb:<r>,<g>,<b>` for
+ * direct colour, `null` for the default or a colour this reader cannot size.
+ * @typedef {{ concealed: boolean, bold: boolean, fg: string | null, bg: string | null }} SgrRendition
+ */
+
+/** The rendition of a terminal no SGR has touched (and of `ESC[0m`).
+ * @type {Readonly<SgrRendition>} */
+export const DEFAULT_RENDITION = Object.freeze({
+  concealed: false,
+  bold: false,
+  fg: null,
+  bg: null,
+});
+
+const SGR_BOLD = 1;
+const SGR_NORMAL_INTENSITY = 22;
+const SGR_FOREGROUND = 38;
+const SGR_BACKGROUND = 48;
+const SGR_INDEXED = 5;
+const SGR_DIRECT = 2;
+
+/**
+ * The palette key a basic colour parameter sets on the layer at `base` (30
+ * foreground, 40 background), `null` for its default, undefined for none.
+ * @param {number} value @param {number} base
+ * @returns {string | null | undefined}
+ */
+function basicColour(value, base) {
+  if (value >= base && value <= base + 7) return `i${value - base}`;
+  if (value >= base + 60 && value <= base + 67) return `i${value - base - 52}`;
+  if (value === base + 9) return null;
+  return undefined;
+}
+
+/**
+ * The colour key extended-colour arguments name (`5;n` palette, `2;r;g;b`
+ * direct, either separator), or `null` — never equal to another colour.
+ * @param {string[]} args  the parameters after the selector, colour space first
+ * @returns {string | null}
+ */
+function extendedColour(args) {
+  const space = Number(args[0]);
+  if (space === SGR_INDEXED && args.length >= 2) return `i${Number(args[1])}`;
+  if (space === SGR_DIRECT && args.length >= 4)
+    return `rgb:${args
+      .slice(-3)
+      .map((component) => Number(component))
+      .join(",")}`;
+  return null;
+}
+
+/**
+ * The rendition after the SGR token `token` is applied to a terminal already in
+ * `state`.
  *
- * A TRANSITION, not a property of the token: conceal is terminal state that
+ * A TRANSITION, not a property of the token: rendition is terminal state that
  * outlives the sequence that set it, so `ESC[8m` followed by `ESC[31m` is still
- * concealed — a per-token predicate would read the second token as "no conceal
- * here" and lose the state. Only `8` (set), `28` (reveal) and `0` (reset all)
- * move it, and the token's parameters are applied in order, so a later reveal or
+ * concealed. The token's parameters are applied in order, so a later reveal or
  * reset in the SAME token cancels an earlier `8`: `ESC[8;28;31m` renders red and
  * visible.
  *
@@ -531,33 +583,60 @@ export function scanAnsi(text) {
  * the digit. `38`/`48`/`58` take their colour arguments from the parameters that
  * FOLLOW them in the semicolon form, so `ESC[38;5;8m` is bright-black foreground
  * and its `8` is a palette index; a parameter carrying its arguments as ITU T.416
- * sub-parameters (`38:5:8`) is self-contained, so only its head counts and
- * nothing after it is consumed. A colour-space selector T.416 gives no argument
- * count for is malformed, and a terminal that ignores the colour form still
- * applies what follows it, so the scan CONTINUES from the next parameter rather
- * than consuming arguments it cannot size — reading one parameter too many costs
- * a token shape no emitter produces, while stopping there would hand
- * `ESC[38;9;8m` a pass.
+ * sub-parameters (`38:5:8`) is self-contained, so nothing after it is consumed.
+ * A colour-space selector T.416 gives no argument count for is malformed, and a
+ * terminal that ignores the colour form still applies what follows it, so the
+ * scan CONTINUES from the next parameter rather than consuming arguments it
+ * cannot size — stopping there would hand `ESC[38;9;8m` a pass.
  * @param {string} token  a token {@link scanAnsi} classified {@link TOKEN_KIND.SGR}
- * @param {boolean} concealed  the state before this token
- * @returns {boolean}
+ * @param {Readonly<SgrRendition>} state  the rendition before this token
+ * @returns {SgrRendition}
  */
-export function sgrConcealState(token, concealed) {
+export function sgrRendition(token, state) {
   // The parameter bytes: everything between the introducer (two characters in
   // the 7-bit `ESC [` form, one in the 8-bit C1 form) and the final `m`.
   const params = token
     .slice(token.charCodeAt(0) === ESC ? 2 : 1, -1)
     .split(";");
-  let state = concealed;
+  let { concealed, bold, fg, bg } = state;
   for (let i = 0; i < params.length; i++) {
-    const colonForm = params[i].includes(":");
+    const subParams = params[i].split(":");
     // An omitted parameter is 0 (`ESC[m` is `ESC[0m`), which `Number("")` gives.
-    const value = Number(params[i].split(":")[0]);
-    if (value === SGR_CONCEAL) state = true;
-    else if (value === SGR_REVEAL || value === SGR_RESET) state = false;
-    if (colonForm || !SGR_EXTENDED_COLOUR.has(value)) continue;
-    const args = SGR_COLOUR_ARGS.get(Number(params[i + 1]));
-    if (args !== undefined) i += 1 + args;
+    const value = Number(subParams[0]);
+    if (value === SGR_RESET) ({ concealed, bold, fg, bg } = DEFAULT_RENDITION);
+    else if (value === SGR_CONCEAL) concealed = true;
+    else if (value === SGR_REVEAL) concealed = false;
+    else if (value === SGR_BOLD) bold = true;
+    else if (value === SGR_NORMAL_INTENSITY) bold = false;
+    const foreground = basicColour(value, 30);
+    if (foreground !== undefined) fg = foreground;
+    const background = basicColour(value, 40);
+    if (background !== undefined) bg = background;
+    if (!SGR_EXTENDED_COLOUR.has(value)) continue;
+    const colonForm = subParams.length > 1;
+    const count = SGR_COLOUR_ARGS.get(Number(params[i + 1]));
+    if (!colonForm && count === undefined) continue; // unsized: consume nothing
+    const args = colonForm
+      ? subParams.slice(1)
+      : params.slice(i + 1, i + 2 + /** @type {number} */ (count));
+    if (!colonForm) i += args.length;
+    const colour = extendedColour(args);
+    if (value === SGR_FOREGROUND) fg = colour;
+    else if (value === SGR_BACKGROUND) bg = colour;
   }
-  return state;
+  return { concealed, bold, fg, bg };
+}
+
+/**
+ * True when text drawn in `rendition` is invisible to a human because its
+ * foreground IS its background (`ESC[30;40m`, `ESC[38;5;7;48;5;7m`). Only an
+ * unambiguous match counts: a default colour is unknown, so it matches nothing,
+ * and BOLD over a basic colour is drawn brighter by many terminals, so
+ * `ESC[1;30;40m` is not called hidden — the precision direction.
+ * @param {Readonly<SgrRendition>} rendition
+ * @returns {boolean}
+ */
+export function foregroundMatchesBackground({ bold, fg, bg }) {
+  if (fg === null || fg !== bg) return false;
+  return !(bold && /^i[0-7]$/u.test(fg));
 }
