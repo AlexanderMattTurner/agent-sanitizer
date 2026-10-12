@@ -534,7 +534,7 @@ def test_npm_detector_denylist_is_linear_on_whitespace_free_input():
     assert_linear(
         "NpmDetector denylist on a whitespace-free line",
         cpu_growth(
-            lambda n: lambda text="//" + "a" * n: _NEW_NPM_RE.search(text),
+            lambda n, k: lambda text="//" + "a" * (n + k): _NEW_NPM_RE.search(text),
             geometric_sizes(25_000, 200_000),
         ),
     )
@@ -632,7 +632,7 @@ def test_linear_detector_is_linear_on_a_space_run(secret_type):
     assert_linear(
         f"{secret_type} on a space run",
         cpu_growth(
-            lambda n: lambda text="key" + " " * n: scan(text),
+            lambda n, k: lambda text="key" + " " * (n + k): scan(text),
             geometric_sizes(500, 4000),
         ),
     )
@@ -645,7 +645,7 @@ def test_redact_is_linear_on_the_reported_redos_payload():
     assert_linear(
         "redact() on the ReDoS payload",
         cpu_growth(
-            lambda n: lambda text="key" + " " * n: run_plain(text),
+            lambda n, k: lambda text="key" + " " * (n + k): run_plain(text),
             geometric_sizes(150, 1200),
         ),
     )

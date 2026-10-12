@@ -254,7 +254,7 @@ def _curve(compiled: re.Pattern, text: Callable[[int], str], n: int):
     """How ``compiled``'s cost grows from ``text(n)`` to ``text(8 * n)``, as the
     shared estimator fits it (``tests/_growth.py``)."""
     return cpu_growth(
-        lambda size: lambda subject=text(size): compiled.sub("", subject),
+        lambda size, k: lambda subject=text(size + k): compiled.sub("", subject),
         geometric_sizes(n, 8 * n),
     )
 

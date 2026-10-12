@@ -88,7 +88,7 @@ def _opcode_curve(thunk_for):
     entry point's setup (the detection pass feeding ``mask_secret_lines``) runs
     outside the measure and cannot bury the measured routine's own growth.
     """
-    return opcode_growth(lambda n: thunk_for(_secret_line(n)), _OPCODE_SIZES)
+    return opcode_growth(lambda n, k: thunk_for(_secret_line(n + k)), _OPCODE_SIZES)
 
 
 _CONFIG = RedactorConfig()
@@ -206,7 +206,7 @@ def _long_field_line(nbytes: int) -> str:
 
 def _cpu_curve(thunk_for):
     """CPU-time growth across :data:`_COPY_SIZES` on ONE line."""
-    return cpu_growth(lambda n: thunk_for(_long_field_line(n)), _COPY_SIZES)
+    return cpu_growth(lambda n, k: thunk_for(_long_field_line(n + k)), _COPY_SIZES)
 
 
 # The entry points whose cost this gate can actually read, and the reason each

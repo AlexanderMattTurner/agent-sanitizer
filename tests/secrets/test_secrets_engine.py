@@ -174,7 +174,9 @@ def test_field_value_re_linear_on_underscore_run():
     assert_linear(
         "FIELD_VALUE_RE on an underscore run",
         cpu_growth(
-            lambda n: lambda text=_underscore_run(n): E.FIELD_VALUE_RE.search(text),
+            lambda n, k: (
+                lambda text=_underscore_run(n + k): E.FIELD_VALUE_RE.search(text)
+            ),
             geometric_sizes(128, 1024),
         ),
     )

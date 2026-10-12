@@ -57,10 +57,16 @@ _MIN_BLOCK_SECONDS = 0.005
 #: a block is one call.
 _MAX_BLOCK_SECONDS = 0.05
 
-#: ``call_for(size)`` builds the zero-argument call to measure at ``size``.
-#: Only that call is measured, so building the input and any setup the entry
-#: point's caller would do happens outside the number.
-CallFor = Callable[[int], Callable[[], object]]
+#: ``call_for(size, attempt)`` builds the zero-argument call to measure at
+#: ``size``. Only that call is measured, so building the input and any setup the
+#: entry point's caller would do happens outside the number. ``attempt`` counts
+#: up from 0 and every call the sampler makes gets a distinct one: inputs at one
+#: size should differ only by a unit (``size + attempt``), so an entry point that
+#: memoizes on its argument is timed on the work rather than on cache hits.
+CallFor = Callable[[int, int], Callable[[], object]]
+#: How many distinct inputs each size of :func:`cpu_growth` cycles through (the
+#: JS twin's ``BLOCK_RING``).
+_BLOCK_RING = 8
 
 
 @dataclass(frozen=True)
@@ -133,10 +139,12 @@ def opcode_growth(call_for: CallFor, sizes) -> Growth:
 
     A warm-up call at the smallest size first: an entry point that builds a
     mapping or compiles a prefilter lazily would otherwise charge that one-time
-    cost to whichever size ran first and flatten the curve.
+    cost to whichever size ran first and flatten the curve. The warm-up and the
+    measured call take different ``attempt`` inputs, so a memoizing entry point
+    is not counted on the warm-up's cache hit.
     """
-    call_for(sizes[0])()
-    costs = tuple(_opcodes(call_for(size)) for size in sizes)
+    call_for(sizes[0], 0)()
+    costs = tuple(_opcodes(call_for(size, 1)) for size in sizes)
     return Growth(fit_exponent(sizes, costs), tuple(sizes), costs)
 
 
@@ -149,30 +157,35 @@ def cpu_growth(call_for: CallFor, sizes) -> Growth:
     charges nothing. Blocks are matched because fastest-of-N is fair only
     between blocks of similar length — a short block reliably finds a quiet
     slot and a long one never does."""
-    calls = [call_for(size) for size in sizes]
     single = []
-    for call in calls:
+    for size in sizes:
         # The warm-up pays lazy setup and first-touch allocation at this size.
         # When even that is past the block cap it sizes the block (one call);
-        # otherwise one more call, now warm, does.
+        # otherwise one more call, now warm, does. Each call has its own input,
+        # built before the clock starts.
+        call = call_for(size, 0)
         start = time.process_time()
         call()
         spent = time.process_time() - start
         if spent < _MAX_BLOCK_SECONDS:
+            call = call_for(size, 1)
             start = time.process_time()
             call()
             spent = time.process_time() - start
         single.append(spent)
     block = min(_MAX_BLOCK_SECONDS, max(_MIN_BLOCK_SECONDS, *single))
     repeats = [max(1, math.ceil(block / max(s, 1e-6))) for s in single]
-    best = [math.inf] * len(calls)
-    order = list(range(len(calls)))
+    rings = [[call_for(size, 2 + i) for i in range(_BLOCK_RING)] for size in sizes]
+    taken = [0] * len(sizes)
+    best = [math.inf] * len(sizes)
+    order = list(range(len(sizes)))
     for round_ in range(ROUNDS):
         for i in reversed(order) if round_ % 2 else order:
-            call = calls[i]
+            ring = rings[i]
             start = time.process_time()
             for _ in range(repeats[i]):
-                call()
+                ring[taken[i] % _BLOCK_RING]()
+                taken[i] += 1
             best[i] = min(best[i], (time.process_time() - start) / repeats[i])
     return Growth(fit_exponent(sizes, best), tuple(sizes), tuple(best))
 
