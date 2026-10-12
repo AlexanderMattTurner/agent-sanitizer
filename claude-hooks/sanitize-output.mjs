@@ -1011,7 +1011,7 @@ export async function evaluateToolOutput(input, ext = {}) {
       // fail the already-safe primary output over a convenience sidecar.
       continue;
     }
-    if (persistSpan(key, stored)) spanStored = true;
+    if (persistSpan(key, stored, secretsOn)) spanStored = true;
   }
   if (spanStored) warnings.push(SPAN_ROUNDTRIP_NOTICE);
   // On-disk placeholder tripwire (see ON_DISK_PLACEHOLDER_WARNING). Tested on

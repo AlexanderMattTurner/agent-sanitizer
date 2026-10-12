@@ -49536,9 +49536,11 @@ function gitTracked(filePath, spawn2 = spawnSync2) {
   if (res.status !== 128) return true;
   const repo = spawn2("git", ["rev-parse", "--is-inside-work-tree"], {
     cwd,
-    stdio: "ignore"
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "ignore"]
   });
-  return Boolean(repo.error) || repo.status === 0;
+  if (repo.error) return true;
+  return repo.status === 0 && String(repo.stdout).trim() === "true";
 }
 function dropDeny(count, filePath) {
   return `this Write removes ${count} redacted secret value(s) from ${filePath}, and the file is not tracked by git, so the secrets may be unrecoverable. If removing them is intended, re-issue this exact Write to confirm; otherwise keep each [REDACTED\u2026] placeholder (or its secret's line) in the new content`;
@@ -49692,7 +49694,7 @@ function spanPath(key) {
     throw new Error(`spanPath: not a Layer-2 placeholder key: ${key}`);
   return join8(revealDir(), `span-${key}.txt`);
 }
-function persistSpan(key, content3) {
+function persistSpan(key, content3, secretsRedacted = false) {
   const dir = revealDir();
   if (!SPAN_KEY_RE.test(key)) return false;
   if (!revealDirIsSafe(dir)) {
@@ -49705,9 +49707,14 @@ function persistSpan(key, content3) {
   const path2 = join8(dir, `span-${key}.txt`);
   try {
     lstatSync6(path2);
-    return true;
   } catch {
+    return createSpan(path2, content3);
   }
+  if (!secretsRedacted || readSpan(key) === content3) return true;
+  unlinkSync4(path2);
+  return createSpan(path2, content3);
+}
+function createSpan(path2, content3) {
   if (!writeFileNoFollow(path2, content3)) {
     process.stderr.write(
       `sanitize-output: could not save Layer-2 span to ${path2}
@@ -51230,7 +51237,7 @@ async function evaluateToolOutput(input, ext = {}) {
     } catch {
       continue;
     }
-    if (persistSpan(key, stored)) spanStored = true;
+    if (persistSpan(key, stored, secretsOn)) spanStored = true;
   }
   if (spanStored) warnings.push(SPAN_ROUNDTRIP_NOTICE);
   if (secretsOn && input.tool_name === "Read" && !revealRead && containsPlaceholder(toolOutput))

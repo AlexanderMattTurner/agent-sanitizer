@@ -232,6 +232,32 @@ describe("SECURITY: a secret inside a splice rehydrates to REDACTED bytes", () =
   });
 });
 
+describe("SECURITY: enabling secrets later upgrades a span stored raw while they were off", () => {
+  it("replaces the raw entry, so rehydration restores only the redacted form", async () => {
+    const secretHidden = `<div hidden>password: ${SECRET_VALUE}</div>`;
+    const secretPh = layer2Placeholder("hidden", secretHidden);
+    const [key] = layer2Keys(secretPh);
+    const run = () =>
+      evaluateToolOutput({
+        tool_name: "WebFetch",
+        tool_input: {},
+        tool_response: `page ${secretHidden} end`,
+      });
+    // Opt-in off (the default): the span is stored verbatim under its key.
+    await run();
+    assert.equal(readSpan(key), secretHidden);
+    // Same page, opt-in on: the key is the same, so a dedupe that kept the
+    // existing entry would restore the raw secret under a "redacted" notice.
+    process.env.AGENT_SANITIZER_SECRETS_ENABLED = "1";
+    try {
+      await run();
+    } finally {
+      delete process.env.AGENT_SANITIZER_SECRETS_ENABLED;
+    }
+    assert.equal(readSpan(key), `<div hidden>password: ${REDACTED_MARK}</div>`);
+  });
+});
+
 describe("engine sanitizeValue accumulates splices for structured output", () => {
   it("mirrors the reveals threading across nested leaves", async () => {
     const warnings = [];

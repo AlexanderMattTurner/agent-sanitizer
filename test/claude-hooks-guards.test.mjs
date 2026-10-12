@@ -703,6 +703,30 @@ describe("gitTracked on real git", () => {
     assert.equal(gitTracked(join(dir, "untracked.txt"), spawn), true);
   });
 
+  it("applies the guard to a file inside a bare repository or a .git directory", () => {
+    const bare = join(root, "bare.git");
+    git(root, "init", "-q", "--bare", bare);
+    writeFileSync(join(bare, "dropped.env"), "k=v\n");
+    // Positive marker: git really is exiting 128 here, then answering exit 0
+    // "false" to the work-tree probe — the case a status-only check misreads.
+    const ls = spawn(
+      "git",
+      ["ls-files", "--error-unmatch", "--", join(bare, "dropped.env")],
+      { cwd: bare, stdio: "ignore" },
+    );
+    assert.equal(ls.status, 128);
+    const probe = spawn("git", ["rev-parse", "--is-inside-work-tree"], {
+      cwd: bare,
+      encoding: "utf8",
+    });
+    assert.equal(probe.status, 0);
+    assert.equal(probe.stdout.trim(), "false");
+    assert.equal(gitTracked(join(bare, "dropped.env"), spawn), false);
+
+    const dotGit = join(repo("worktree"), ".git");
+    assert.equal(gitTracked(join(dotGit, "dropped.env"), spawn), false);
+  });
+
   it("asks git whether a 128 came from a repository before reading it as 'none'", () => {
     const calls = [];
     const stub = (results) => (_cmd, args) => {
@@ -710,10 +734,23 @@ describe("gitTracked on real git", () => {
       return results[calls.length - 1];
     };
     assert.equal(
-      gitTracked("/f/x", stub([{ status: 128 }, { status: 0 }])),
+      gitTracked(
+        "/f/x",
+        stub([{ status: 128 }, { status: 0, stdout: "true\n" }]),
+      ),
       true,
     );
     assert.deepEqual(calls, ["ls-files", "rev-parse"]);
+    // Exit 0 printing "false" (a bare repository, a .git directory) is no
+    // work tree: no recovery path, so the guard applies.
+    calls.length = 0;
+    assert.equal(
+      gitTracked(
+        "/f/x",
+        stub([{ status: 128 }, { status: 0, stdout: "false\n" }]),
+      ),
+      false,
+    );
     calls.length = 0;
     assert.equal(
       gitTracked("/f/x", stub([{ status: 128 }, { error: new Error("x") }])),

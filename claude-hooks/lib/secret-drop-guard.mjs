@@ -117,7 +117,9 @@ export function sweepStaleConfirms() {
  * module doc declares. Exit 0 is tracked and exit 1 untracked. Exit 128 is
  * either "not a repository" — no git recovery exists, so the guard applies — or
  * a repository git could not read (a corrupt index, a permission error), which
- * says nothing about the file; a second probe asks git which. A spawn-level
+ * says nothing about the file; a second probe asks git which, reading its
+ * printed answer (`false` inside a bare repository or a `.git` directory is
+ * also exit 0, and also has no recovery path). A spawn-level
  * failure (no git binary) or any other status also means we cannot tell —
  * report tracked so the guard skips rather than denying on broken tooling.
  * @param {string} filePath
@@ -135,9 +137,14 @@ export function gitTracked(filePath, spawn = spawnSync) {
   if (res.status !== 128) return true;
   const repo = spawn("git", ["rev-parse", "--is-inside-work-tree"], {
     cwd,
-    stdio: "ignore",
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "ignore"],
   });
-  return Boolean(repo.error) || repo.status === 0;
+  if (repo.error) return true;
+  // Exit 0 does not mean "in a work tree": inside a bare repository or a
+  // repository's own `.git` directory it prints `false`. Such a path has no
+  // work-tree/index recovery, so only the printed `true` skips the guard.
+  return repo.status === 0 && String(repo.stdout).trim() === "true";
 }
 
 /**
