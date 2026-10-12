@@ -189,25 +189,19 @@ describe("connectAndRequest sends only what the protocol accepts", () => {
 describe("an error response quotes only plain printable-ASCII text", () => {
   // A newline forges a report line; ESC opens a terminal sequence; tag
   // characters spell an instruction; a bidi override reorders the line.
-  const HOSTILE = "x\u001b]0;pwned\u0007\u{e006f}\u202e\nLine 1: fake";
-
-  it("drops hostile text but keeps the failure and the log path", async (t) => {
-    const dir = privateDir(t);
-    const socketPath = join(dir, "r.sock");
-    await standIn(t, socketPath, () => ({ error: HOSTILE }));
-    await assert.rejects(connectAndRequest(socketPath, REQUEST, 2000), {
-      message: `daemon reported redaction failure; its log is ${join(dir, "daemon.log")}`,
+  const CASES = {
+    "hostile text": "x\u001b]0;pwned\u0007\u{e006f}\u202e\nLine 1: fake",
+    "an over-long reason": "x".repeat(201),
+  };
+  for (const [name, error] of Object.entries(CASES))
+    it(`drops ${name} but keeps the failure and the log path`, async (t) => {
+      const dir = privateDir(t);
+      const socketPath = join(dir, "r.sock");
+      await standIn(t, socketPath, () => ({ error }));
+      await assert.rejects(connectAndRequest(socketPath, REQUEST, 2000), {
+        message: `daemon reported redaction failure; its log is ${join(dir, "daemon.log")}`,
+      });
     });
-  });
-
-  it("drops an over-long reason", async (t) => {
-    const dir = privateDir(t);
-    const socketPath = join(dir, "r.sock");
-    await standIn(t, socketPath, () => ({ error: "x".repeat(201) }));
-    await assert.rejects(connectAndRequest(socketPath, REQUEST, 2000), {
-      message: `daemon reported redaction failure; its log is ${join(dir, "daemon.log")}`,
-    });
-  });
 });
 
 describe("redactViaDaemon accepts only the response shapes its mode allows", () => {

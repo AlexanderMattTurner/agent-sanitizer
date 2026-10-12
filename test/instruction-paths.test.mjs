@@ -1,19 +1,14 @@
 /**
- * The two path invariants of the instruction-file scanners, each held at ONE
+ * Path invariants of the instruction-file scanners, each held at ONE
  * chokepoint and partitioned over every site that needs it:
- *
- *   - WRITES: every rewrite of an instruction file goes through cleanFile's
- *     realpath containment, so a directory symlink in the project cannot carry
- *     an auto-clean to a file outside it, and every other fs write in the
- *     package is a named hook store.
- *   - RENDERS: every file path or reason a scanner renders into a report,
- *     stderr or model context goes through displayUntrusted, so a hostile
- *     filename cannot carry its own payload (tag characters, an OSC sequence).
- *
+ *   - WRITES go through cleanFile's realpath containment, so a directory
+ *     symlink in the project cannot carry an auto-clean outside it.
+ *   - RENDERS of a file path or reason go through displayUntrusted, so a
+ *     hostile filename cannot carry its own payload.
  * Each partition pairs a behavioral check per site with an acorn enumeration of
  * the live sites, so a new site cannot land without a decision here.
  */
-import { describe, it, after, before } from "node:test";
+import { describe, it, after, before, mock } from "node:test";
 import assert from "node:assert/strict";
 import {
   mkdirSync,
@@ -66,11 +61,8 @@ const tags = (/** @type {string} */ ascii) =>
     .map((ch) => String.fromCodePoint(0xe0000 + ch.charCodeAt(0)))
     .join("");
 
-/**
- * Every parsed module under `dirs`, as `{ rel, src, ast }`.
- * @param {string[]} dirs  repo-relative
- */
-function modules(dirs) {
+/** Every parsed module under the repo-relative `dirs`, as `{ rel, src, ast }`. */
+function modules(/** @type {string[]} */ dirs) {
   const out = [];
   const walk = (/** @type {string} */ dir) => {
     for (const entry of readdirSync(join(repoRoot, dir), {
@@ -93,34 +85,22 @@ function modules(dirs) {
   return out;
 }
 
-/**
- * @param {() => Promise<unknown>} fn
- * @returns {Promise<string>}
- */
+/** @param {() => Promise<unknown>} fn */
 async function captureStderr(fn) {
-  /** @type {string[]} */
-  const chunks = [];
-  const real = process.stderr.write;
-  process.stderr.write = /** @type {any} */ (
-    (/** @type {unknown} */ chunk) => {
-      chunks.push(String(chunk));
-      return true;
-    }
-  );
+  const write = mock.method(process.stderr, "write", () => true);
   try {
     await fn();
   } finally {
-    process.stderr.write = real;
+    write.mock.restore();
   }
-  return chunks.join("");
+  return write.mock.calls.map((c) => String(c.arguments[0])).join("");
 }
 
 // ─── writes ──────────────────────────────────────────────────────────────────
 
 describe("every instruction-file write stays inside its root", () => {
-  // The committable relative link from the audit repro: `.claude/rules` in the
-  // project pointing at the user's global rules directory. O_NOFOLLOW guards
-  // only the final component, so it alone lets this rewrite through.
+  // `.claude/rules` in the project links to the user's global rules directory;
+  // O_NOFOLLOW guards only the final component, so it alone lets this through.
   const original = `user rule ${tags("abcdefghijkl")}\n`;
   const outsideFile = join(outsideDir, "mine.md");
   const viaLink = join(projectDir, ".claude", "rules", "mine.md");
@@ -156,8 +136,7 @@ describe("every instruction-file write stays inside its root", () => {
     untouched();
   });
 
-  // One entry per module that USES cleanFile, checked against the acorn
-  // enumeration below: a new write site lands here or the partition fails.
+  // One entry per module that USES cleanFile, checked against the acorn enumeration below.
   /** @type {Record<string, () => Promise<void> | void>} */
   const WRITE_SITES = {
     "claude-hooks/scan-invisible-chars.mjs": async () => {
@@ -168,8 +147,7 @@ describe("every instruction-file write stays inside its root", () => {
         ),
       );
       untouched();
-      // Positive marker: the scan reached the clean and reported the refusal,
-      // rather than never seeing the file.
+      // Positive marker: the scan reached the clean rather than never seeing the file.
       assert.match(
         stderr,
         /could not clean \.claude\/rules\/mine\.md: refusing to clean outside the root/,
@@ -219,35 +197,14 @@ describe("every instruction-file write stays inside its root", () => {
   });
 
   // Every node:fs call in src/ and claude-hooks/ that can create, change or
-  // remove a file, keyed `module::enclosingFunction`. The instruction-file
-  // rewrite is the first group; every other site writes the hooks' own state,
-  // never a scanned tree, and carries its reason.
-  // Base names; each is checked in both its callback/promise spelling
-  // (`node:fs/promises` imports are mapped by `fsBindings`) and its `Sync` one.
-  const FS_MUTATOR_BASES = [
-    "appendFile",
-    "chmod",
-    "chown",
-    "copyFile",
-    "cp",
-    "fchmod",
-    "fchown",
-    "ftruncate",
-    "futimes",
-    "link",
-    "mkdir",
-    "mkdtemp",
-    "open",
-    "rename",
-    "rm",
-    "rmdir",
-    "symlink",
-    "truncate",
-    "unlink",
-    "utimes",
-    "write",
-    "writeFile",
-  ];
+  // remove a file, keyed `module::enclosingFunction`: the instruction-file
+  // rewrite, or a hook's own state store with its reason. Each base name is
+  // checked in its callback/promise spelling (`fsBindings` maps
+  // `node:fs/promises` imports) and its `Sync` one.
+  const FS_MUTATOR_BASES =
+    "appendFile chmod chown copyFile cp fchmod fchown ftruncate futimes link mkdir mkdtemp open rename rm rmdir symlink truncate unlink utimes write writeFile".split(
+      " ",
+    );
   const FS_MUTATORS = new Set([
     "createWriteStream",
     ...FS_MUTATOR_BASES,
@@ -255,36 +212,26 @@ describe("every instruction-file write stays inside its root", () => {
   ]);
   const INSTRUCTION_WRITE = [
     "src/atomic-replace.mjs::atomicReplaceFile",
-    // The O_RDONLY|O_NOFOLLOW open of the already-contained target.
+    // The O_RDONLY|O_NOFOLLOW open of the contained target.
     "src/instructions.mjs::cleanFile",
   ];
-  /** @type {Record<string, string>} */
-  const FS_EXEMPT = {
-    "claude-hooks/lib/hook-io.mjs::readSetupMarker":
-      'opens the setup marker with flag "r" to read it and probe its flock',
-    "claude-hooks/lib/hook-io.mjs::writeFileNoFollow":
-      "a hook state file under $TMPDIR, created O_EXCL after unlinking a squatter",
-    "claude-hooks/lib/hook-io.mjs::writeSentinelFile":
-      "an empty hook sentinel under $TMPDIR, created O_EXCL",
-    "claude-hooks/lib/invisible-alert.mjs::appendAlert":
-      "the alert store under alertDir() in $TMPDIR",
-    "claude-hooks/lib/invisible-alert.mjs::drop":
-      "removes a session's alert store under alertDir()",
-    "claude-hooks/lib/invisible-alert.mjs::sweepStaleSessions":
-      "expires session alert stores under alertDir()",
-    "claude-hooks/lib/reveal.mjs::readSpan":
-      "an O_RDONLY|O_NOFOLLOW read of a span in the reveal store",
-    "claude-hooks/lib/reveal.mjs::revealDirIsSafe":
-      "creates the reveal store in $TMPDIR",
-    "claude-hooks/lib/reveal.mjs::sweepStaleReveals":
-      "expires spans in the reveal store",
-    "claude-hooks/lib/secret-drop-guard.mjs::consumeConfirm":
-      "consumes a single-use confirm marker in $TMPDIR",
-    "claude-hooks/lib/secret-drop-guard.mjs::sweepStaleConfirms":
-      "expires confirm markers in $TMPDIR",
-    "claude-hooks/lib/trace.mjs::trace":
-      "the opt-in debug log at the operator's _AGENT_SANITIZER_TRACE_FILE",
-  };
+  // The hooks' own state under $TMPDIR (state files, sentinels, alert, reveal
+  // and confirm stores with their sweeps, the setup marker's flock probe, the
+  // opt-in trace log): none touches a scanned tree.
+  const FS_EXEMPT = [
+    "claude-hooks/lib/hook-io.mjs::readSetupMarker",
+    "claude-hooks/lib/hook-io.mjs::writeFileNoFollow",
+    "claude-hooks/lib/hook-io.mjs::writeSentinelFile",
+    "claude-hooks/lib/invisible-alert.mjs::appendAlert",
+    "claude-hooks/lib/invisible-alert.mjs::drop",
+    "claude-hooks/lib/invisible-alert.mjs::sweepStaleSessions",
+    "claude-hooks/lib/reveal.mjs::readSpan",
+    "claude-hooks/lib/reveal.mjs::revealDirIsSafe",
+    "claude-hooks/lib/reveal.mjs::sweepStaleReveals",
+    "claude-hooks/lib/secret-drop-guard.mjs::consumeConfirm",
+    "claude-hooks/lib/secret-drop-guard.mjs::sweepStaleConfirms",
+    "claude-hooks/lib/trace.mjs::trace",
+  ];
 
   it("routes every fs write in the package through atomicReplaceFile or an exempt store", () => {
     /** @type {Set<string>} */
@@ -306,13 +253,12 @@ describe("every instruction-file write stays inside its root", () => {
     );
     assert.deepEqual(
       [...live].sort(),
-      [...INSTRUCTION_WRITE, ...Object.keys(FS_EXEMPT)].sort(),
+      [...INSTRUCTION_WRITE, ...FS_EXEMPT].sort(),
     );
   });
 
   it("reaches atomicReplaceFile only from cleanFile", () => {
-    // acorn-walk visits a binding (declaration name, import specifier) as a
-    // pattern, not an Identifier expression, so only USES land here.
+    // acorn-walk visits bindings as patterns, so only USES land here.
     /** @type {string[]} */
     const callers = [];
     for (const { rel, ast } of modules(["src", "claude-hooks", "bin"]))
@@ -326,13 +272,8 @@ describe("every instruction-file write stays inside its root", () => {
   });
 });
 
-/**
- * Local name → node:fs export name, for every named import from node:fs.
- * Throws on a namespace or default import, whose calls this map cannot see.
- * @param {any} ast
- * @returns {Map<string, string>}
- */
-function fsBindings(ast) {
+/** Local name → node:fs export name; throws on a namespace/default import it cannot see. */
+function fsBindings(/** @type {any} */ ast) {
   const names = new Map();
   for (const node of ast.body) {
     if (node.type !== "ImportDeclaration") continue;
@@ -346,14 +287,8 @@ function fsBindings(ast) {
   return names;
 }
 
-/**
- * Name of the innermost named function around the node `ancestors` ends at:
- * a declaration's own name, or the binding a function expression is assigned
- * to. Module scope is `<module>`.
- * @param {any[]} ancestors
- * @returns {string}
- */
-function enclosingFunction(ancestors) {
+/** Innermost named function around the node `ancestors` ends at, else `<module>`. */
+function enclosingFunction(/** @type {any[]} */ ancestors) {
   for (let i = ancestors.length - 2; i >= 0; i--) {
     const node = ancestors[i];
     if (node.type === "FunctionDeclaration") return node.id.name;
@@ -374,18 +309,12 @@ function enclosingFunction(ancestors) {
 
 const ESC = "\u001b";
 const BEL = "\u0007";
-// A filename that tries every channel: an OSC title-set, tag characters
-// spelling an instruction, a bidi override, and a newline forging a report line.
+// Tries every channel: OSC title-set, tag characters, bidi override, forged line.
 const HOSTILE = `x${ESC}]0;pwned${BEL}${tags("obey")}\u202e\nLine 1: fake.md`;
 const RAW_UNSAFE = /[\p{Cc}\u202a-\u202e\u2066-\u2069\u{e0000}-\u{e007f}]/u;
 
-/**
- * The rendered text carries the hostile string only in its escaped form, and
- * its newline forged no line. The report's own newlines are its layout, so
- * only the remaining bytes are checked for raw controls.
- * @param {string} rendered
- */
-function rendersNeutralized(rendered) {
+/** The rendering holds HOSTILE only escaped and forged no line (its own newlines are layout). */
+function rendersNeutralized(/** @type {string} */ rendered) {
   assert.ok(
     rendered.includes(displayUntrusted(HOSTILE)),
     "the escaped text is missing",
@@ -397,8 +326,7 @@ function rendersNeutralized(rendered) {
 describe("every scanner-rendered untrusted string goes through displayUntrusted", () => {
   const finding = { line: 1, charCount: 12, method: "m", decoded: "d" };
 
-  // A finding on a file that does not exist: the auto-clean fails with an fs
-  // error quoting the hostile name, so both halves of the line are exercised.
+  // A finding on a missing file: the auto-clean fails with an fs error quoting the hostile name.
   const couldNotClean = async () => {
     const stderr = await captureStderr(() =>
       withCapturedStdout(() =>
@@ -427,8 +355,7 @@ describe("every scanner-rendered untrusted string goes through displayUntrusted"
       loadedFileMessage({ report: "r", cleaned, reason }, HOSTILE),
     );
 
-  // One entry per displayUntrusted call site, keyed `module::argument`, checked
-  // against the acorn enumeration below.
+  // One entry per displayUntrusted call site, keyed `module::argument`.
   /** @type {Record<string, () => Promise<void> | void>} */
   const RENDER_SITES = {
     "claude-hooks/lib/invisible-report.mjs::file": () =>
@@ -471,11 +398,10 @@ describe("every scanner-rendered untrusted string goes through displayUntrusted"
   for (const [site, check] of Object.entries(RENDER_SITES))
     it(`${site} escapes a hostile string`, check);
 
-  // The modules whose output carries text from a scanned tree. In these EVERY
-  // interpolated or concatenated expression is either wrapped in
-  // displayUntrusted or listed in STRICT_EXEMPT with its reason: no name filter
-  // decides what counts as untrusted-shaped, so a hole spelled `target` or `rel`
-  // fails here instead of slipping past a list of spellings.
+  // Modules whose output carries scanned-tree text: EVERY interpolated or
+  // concatenated expression is wrapped in displayUntrusted or listed in
+  // STRICT_EXEMPT with its reason. No name filter decides what is untrusted-
+  // shaped, so a hole spelled `target` or `rel` fails here.
   const STRICT_MODULES = [
     "claude-hooks/lib/invisible-report.mjs",
     "claude-hooks/scan-invisible-chars.mjs",
@@ -483,10 +409,15 @@ describe("every scanner-rendered untrusted string goes through displayUntrusted"
     "src/claude-context.mjs",
     "src/warnings.mjs",
   ];
-  // Keyed `module` then expression source (whitespace collapsed). An expression
-  // is exempt by its spelling, so a variable named like an exempt one inherits
-  // the exemption: each pass-through below is the output of a formatter whose
-  // own sites are in RENDER_SITES and exercised with a hostile string.
+  const HOOK_FAULT = {
+    HOOK_NAME: "this hook's own name",
+    "ctx.message": "a hook FAULT's text, reduced by safeErrMessage",
+    "faultLine(ctx)": "HOOK_NAME plus the fault text above",
+    report: "formatReport's output, whose file names are wrapped",
+  };
+  // Keyed `module` then expression source (whitespace collapsed). Exempt by
+  // spelling, so a same-named variable inherits it: each pass-through below is
+  // a formatter whose own sites are in RENDER_SITES.
   /** @type {Record<string, Record<string, string>>} */
   const STRICT_EXEMPT = {
     "claude-hooks/lib/invisible-report.mjs": {
@@ -494,40 +425,30 @@ describe("every scanner-rendered untrusted string goes through displayUntrusted"
       "finding.line": "a line number or null, from scanText",
       where: "'Whole file' or 'Line <number>'",
       "finding.charCount": "a count",
-      "finding.method":
-        "one of decodeRun's fixed method labels, never file text",
-      "JSON.stringify(finding.decoded)":
-        "decodeRun's output: tag bytes rendered through neutralizeTagBytes (printable ASCII or a \\xNN escape), counts, and U+XXXX labels",
+      "finding.method": "one of decodeRun's fixed method labels",
+      "JSON.stringify(finding.decoded)": "decodeRun's neutralized output",
     },
     "claude-hooks/scan-invisible-chars.mjs": {
-      HOOK_NAME: "this hook's own name",
-      "ctx.message":
-        "a hook FAULT's text, reduced by safeErrMessage to printable ASCII, tab and newline",
-      "faultLine(ctx)": "HOOK_NAME plus the fault text above",
+      ...HOOK_FAULT,
       notice: "formatSkipped's output, whose file and reason are wrapped",
       cleaned: "a count of cleaned files",
-      report: "formatReport's output, whose file names are wrapped",
     },
     "claude-hooks/scan-loaded-instructions.mjs": {
-      HOOK_NAME: "this hook's own name",
-      "ctx.message":
-        "a hook FAULT's text, reduced by safeErrMessage to printable ASCII, tab and newline",
-      "faultLine(ctx)": "HOOK_NAME plus the fault text above",
+      ...HOOK_FAULT,
       stale:
-        "contextScopeContradiction's notice, whose one path segment is wrapped",
-      report: "formatReport's output, whose file names are wrapped",
-      tail: "loadedFileMessage's closing paragraph, whose path and reason are wrapped",
+        "contextScopeContradiction's notice, whose path segment is wrapped",
+      tail: "loadedFileMessage's paragraph, path and reason wrapped",
       notice: "scopeNotice's output: HOOK_NAME around the wrapped notice",
       message: "loadedFileMessage's output: the wrapped report and tail",
     },
     "src/claude-context.mjs": {
-      prefix: "'' or '**/', chosen by claudeDirPatterns' callers",
+      prefix: "'' or '**/'",
       sub: "an entry of CLAUDE_CONTEXT_SUBDIRS, a constant table",
       name: "an entry of CLAUDE_DIR_INSTRUCTION_FILES, a constant table",
       sep: "the platform path separator",
-      "STRIP.source": "the escape set's own regex source, not file text",
+      "STRIP.source": "the escape set's own regex source",
       "(ch.codePointAt(0)).toString(16).toUpperCase()":
-        "hex digits of a code point, inside the escape itself",
+        "hex digits in the escape",
       "row.name": "a row of CLAUDE_CONTEXT_KINDS, a constant table",
     },
     "src/warnings.mjs": {
@@ -535,22 +456,19 @@ describe("every scanner-rendered untrusted string goes through displayUntrusted"
       "removed.hidden": "a count",
       "describeRemoved(removed)": "counts and fixed nouns",
       count: "a count",
-      tag: "a key of warned.tags, which html.mjs fills only from REPORTED_TAGS",
+      tag: "a key of warned.tags, filled only from REPORTED_TAGS",
       "warned.dataSrc": "a count",
       'parts.join(", ")': "counts and fixed nouns",
       'threat.isImage ? "image" : "link"': "a fixed word",
-      "threat.reason":
-        "a link/image threat's engine-authored classification (html.mjs paramExfilReason and its fixed literals), never file text",
+      "threat.reason": "an engine-authored classification, never file text",
       'reasons.join("; ")': "the sentences built above, target wrapped",
       'hosts.join("; ")':
-        "confusable-host descriptions: the host as the WHATWG URL parser normalized it, which rejects or strips invisible and control code points; the look-alike letters are shown on purpose",
+        "hosts as the WHATWG URL parser normalized them (no invisible or control code points)",
     },
   };
 
-  // Untrusted-shaped interpolations in every OTHER module that are NOT a
-  // scanned tree's text, each with the reason it may render raw. Keyed by module
-  // and expression, so a new raw use of an exempt expression shares its reason
-  // and anything else fails.
+  // Untrusted-shaped interpolations in every OTHER module that are NOT a scanned
+  // tree's text, with the reason each may render raw.
   const EXEMPT = new Set([
     // The hook's own $TMPDIR store, composed by this package.
     "claude-hooks/lib/invisible-alert.mjs::dir",
@@ -565,12 +483,9 @@ describe("every scanner-rendered untrusted string goes through displayUntrusted"
     "src/rehydrate.mjs::filePath",
     "src/rehydrate.mjs::ti.file_path",
     "src/rehydrate.mjs::toolInput.file_path",
-    // A hook FAULT's text, reduced by safeErrMessage to printable ASCII, tab
-    // and newline: no invisible, bidi or escape character survives it.
+    // A hook FAULT's text, reduced by safeErrMessage to printable ASCII, tab and newline.
     "claude-hooks/lib/hook-io.mjs::safeErrMessage(err)",
-    // The daemon's error text, quoted only when it is one printable-ASCII line
-    // (DAEMON_REASON); pinned with a hostile string in
-    // redactor-client-protocol.test.mjs.
+    // The daemon's error text, quoted only as one printable-ASCII line (DAEMON_REASON).
     "claude-hooks/lib/redactor-client.mjs::reason",
     "claude-hooks/pretooluse-sanitize.mjs::safeErrMessage(err)",
   ]);
@@ -579,8 +494,7 @@ describe("every scanner-rendered untrusted string goes through displayUntrusted"
     const SHAPED =
       /^(?:\w+\.)?(?:file|filePath|file_path|absPath|path|dir|tail\[0\]|reason)$|^safeErrMessage\(/;
     const strictModules = new Set(STRICT_MODULES);
-    // True for a `+` that builds a string: a string literal or template sits
-    // somewhere in its left spine or on its right. Numeric `+` is arithmetic.
+    // True for a `+` that builds a string; numeric `+` is arithmetic.
     const concatenates = (/** @type {any} */ node) =>
       (node.type === "Literal" && typeof node.value === "string") ||
       node.type === "TemplateLiteral" ||
@@ -638,9 +552,7 @@ describe("every scanner-rendered untrusted string goes through displayUntrusted"
         )
         .sort(),
     );
-    // Positive markers: every strict module was parsed, rendered something, and
-    // wraps at least one string, so an emptied or renamed module cannot pass by
-    // contributing nothing.
+    // Positive markers: an emptied or renamed strict module cannot pass by contributing nothing.
     assert.deepEqual([...strictSeen.keys()].sort(), [...STRICT_MODULES].sort());
     for (const [rel, { classified, wrapped: n }] of strictSeen) {
       assert.ok(classified > 0, `${rel} classified no expression`);

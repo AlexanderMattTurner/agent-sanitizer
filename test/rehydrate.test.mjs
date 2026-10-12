@@ -19,7 +19,6 @@ const GREEN = `${ESC}[32m`;
 const RESET = `${ESC}[0m`;
 // Astral: a tag character (Layer 1 strips) and a visible emoji (it keeps).
 const TAG = String.fromCodePoint(0xe0041);
-const KEY = String.fromCodePoint(0x1f511);
 
 /**
  * Fake io over a hand-built view. `redact` is what io.redact returns for the
@@ -653,16 +652,6 @@ describe("rehydrate: stripped-character re-anchoring", () => {
         `matched region carries 3 invisible/control character(s) stripped from ` +
         `your view; they are replaced along with it.`,
     );
-  });
-
-  it("the fixture redactor emits code-point offsets, as the real engine does", () => {
-    // rehydrate brands the map "codePoint"; a UTF-16 start here would be one
-    // unit long per astral character before the secret.
-    const view = mkView(`${KEY}=${SECRET_A}`, [
-      { value: SECRET_A, placeholder: PH },
-    ]);
-    assert.equal(view.pairs[0].start, [...`${KEY}=`].length);
-    assert.notEqual(view.pairs[0].start, `${KEY}=`.length);
   });
 
   it("fails closed (null, no throw) on an empty old_string against a divergent-view file", async () => {

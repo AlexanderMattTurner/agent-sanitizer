@@ -1,16 +1,13 @@
 /**
- * A fake redactor map for rehydrate fixtures, shaped exactly like the real
- * engine's: offsets in CODE POINTS, carried in a FileView branded
- * `"codePoint"`. The brand runs view-map's own range and ordering checks in
- * that space, so the fixture states its unit instead of implying it; rehydrate
- * then converts to UTF-16 itself (toUtf16View), as it does for the real map.
+ * A fake redactor map for rehydrate fixtures, shaped like the real engine's:
+ * offsets in CODE POINTS, in a FileView branded `"codePoint"` so view-map's
+ * range checks run in that space.
  */
 import { makeFileView, occurrences } from "../../src/view-map.mjs";
 
 /**
- * Build a redactMap view from already-Layer-1-cleaned text: replace each
- * secret occurrence with its placeholder, emitting ordered (placeholder,
- * original, start) pairs at their code-point view offsets.
+ * Build a redactMap view from Layer-1-cleaned text: replace each secret
+ * occurrence with its placeholder, emitting ordered pairs at code-point offsets.
  * @param {string} cleaned
  * @param {{value: string, placeholder: string}[]} secrets
  * @returns {import("../../src/view-map.mjs").FileView<"codePoint">}

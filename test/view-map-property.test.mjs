@@ -9,8 +9,9 @@
  *   - alignDeletions: ROUND-TRIP — re-inserting each recovered run into the
  *     cleaned view reproduces content; throws iff cleaned is not a subsequence.
  *   - resolveSpan: re-cleaning diskText reproduces cleanedText (the caller's
- *     soundness contract); the stripped characters between diskText and
- *     cleanedText are exactly the deleted runs STRICTLY INSIDE the span — a run at either boundary stays outside; null
+ *     soundness contract); the characters stripped between diskText and
+ *     cleanedText are exactly the deleted runs STRICTLY INSIDE the span — a
+ *     run at either boundary stays outside; null
  *     exactly when a boundary cuts a placeholder; returned pairs lie wholly
  *     inside the span.
  *   - rehydrateNewString: the verbatim fast path maps placeholders 1:1 to their
@@ -86,9 +87,7 @@ const SECRET_B = ["hunter2hunter2", "hunter2xB"].join("");
 const PH = "[REDACTED]";
 const PH_KEY = "[REDACTED: Key]";
 
-// Characters Layer 1 stripped from a resolved span, in code points: the
-// quantity the production callers report, derived from the two texts the span
-// returns rather than from a field of its own.
+// Characters Layer 1 stripped from a resolved span, in code points (what rehydrate reports).
 const strippedCount = (res) =>
   [...res.diskText].length - [...res.cleanedText].length;
 

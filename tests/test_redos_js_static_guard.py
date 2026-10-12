@@ -33,10 +33,8 @@ silently:
 * codepoint escapes ``\\u{H…}`` are translated to Python's ``\\uHHHH`` /
   ``\\UHHHHHHHH`` (exact: both spell one code point);
 * two-letter General_Category escapes ``\\p{Cc}`` / ``\\p{Zl}`` / … are expanded
-  to the explicit code point ranges ``unicodedata`` reports for that category
-  (exact for the categories whose membership is stable across Unicode versions,
-  and a pure character-class swap either way — it cannot change how the
-  matcher backtracks), so every such class is analyzed rather than listed;
+  to the code point ranges ``unicodedata`` reports (a pure character-class
+  swap: it cannot change how the matcher backtracks), so they are analyzed;
 * every other ``\\p{…}`` (scripts, binary properties — no Python ``re``
   equivalent) is listed in
   ``UNANALYZABLE_JS_ONLY`` below — each entry is asserted to still exist in the
@@ -160,9 +158,8 @@ def _keyed_by_location(entries: list[dict]) -> dict[str, str]:
     return keyed
 
 
-# JS `\p{Xx}` with a two-letter General_Category value. Script=…, single-letter
-# groups and binary properties do not match, so they stay unparsed and must be
-# listed in UNANALYZABLE_JS_ONLY.
+# Two-letter General_Category only; scripts, single-letter groups and binary
+# properties stay unparsed and belong in UNANALYZABLE_JS_ONLY.
 _CATEGORY_ESCAPE_RE = re.compile(r"\\p\{(?P<category>[A-Z][a-z])\}")
 
 _EXTRACTED = _run_extractor()
@@ -192,14 +189,14 @@ def _python_escape(codepoint: int) -> str:
 @functools.lru_cache(maxsize=None)
 def _category_class_body(category: str) -> str:
     """The code points `unicodedata` files under `category`, as class-body ranges."""
-    ranges: list[tuple[int, int]] = []
+    ranges: list[list[int]] = []
     for codepoint in range(0x110000):
         if unicodedata.category(chr(codepoint)) != category:
             continue
         if ranges and ranges[-1][1] == codepoint - 1:
-            ranges[-1] = (ranges[-1][0], codepoint)
+            ranges[-1][1] = codepoint
         else:
-            ranges.append((codepoint, codepoint))
+            ranges.append([codepoint, codepoint])
     assert ranges, f"unicodedata knows no General_Category {category!r}"
     return "".join(
         _python_escape(lo) if lo == hi else f"{_python_escape(lo)}-{_python_escape(hi)}"
@@ -208,9 +205,8 @@ def _category_class_body(category: str) -> str:
 
 
 def _expand_general_categories(pattern: str) -> str:
-    # Walks escape pairs so `\\p{Cc}` (a literal backslash then text) is left
-    # alone, and tracks whether the escape sits inside a class: there it splices
-    # in as ranges, outside it needs its own brackets.
+    # Walks escape pairs so `\\p{Cc}` (escaped backslash, then text) is left
+    # alone; in a class the ranges splice in, outside one they need brackets.
     out: list[str] = []
     in_class = False
     i = 0
@@ -344,10 +340,8 @@ def test_codepoint_escape_translation_is_exact() -> None:
 
 
 def test_general_category_translation_is_exact() -> None:
-    # Cc is U+0000-001F and U+007F-009F; Zl/Zp are the two separators; Cs is the
-    # surrogate block. In a class the ranges splice in; outside one they get
-    # their own brackets; an escaped backslash before `p{Cc}` is just text; and
-    # a script property is NOT a category, so it stays untranslated.
+    # In a class the ranges splice in; outside one they get brackets; an escaped
+    # backslash before `p{Cc}` is text; a script property stays untranslated.
     cc = "\\u0000-\\u001f\\u007f-\\u009f"
     assert _expand_general_categories(r"[\p{Cc}]") == f"[{cc}]"
     assert _expand_general_categories(r"\p{Cc}") == f"[{cc}]"
@@ -358,8 +352,7 @@ def test_general_category_translation_is_exact() -> None:
 
 
 def test_general_category_translation_reaches_the_analyzer() -> None:
-    # Positive marker over the live inventory: a pattern spelled with a category
-    # escape is analyzed (not skipped), and its translated form parses.
+    # Positive marker: a category-escape pattern in the inventory is analyzed, not skipped.
     categorized = {
         name: pattern
         for name, pattern in _ALL.items()
