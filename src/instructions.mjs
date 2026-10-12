@@ -22,21 +22,16 @@
  */
 import {
   readFileSync,
-  writeFileSync,
   globSync,
-  renameSync,
   lstatSync,
   fstatSync,
   realpathSync,
   openSync,
-  fsyncSync,
-  fchmodSync,
   closeSync,
-  unlinkSync,
   constants,
 } from "node:fs";
-import { randomBytes } from "node:crypto";
-import { join, relative, resolve, isAbsolute, dirname, sep } from "node:path";
+import { basename, join, relative, resolve, dirname, sep } from "node:path";
+import { atomicReplaceFile } from "./atomic-replace.mjs";
 import {
   findLongRuns,
   SCATTERED_THRESHOLD,
@@ -44,7 +39,7 @@ import {
   payloadVerdict,
   stripInvisible,
 } from "./invisible.mjs";
-import { excludeNodeModules } from "./claude-context.mjs";
+import { excludeNodeModules, isInsideDir } from "./claude-context.mjs";
 
 // The library's public door onto Claude Code's context scope. The definitions
 // live in a dependency-free data module because the SessionStart hook imports
@@ -269,21 +264,38 @@ export function scanText(content) {
 }
 
 /**
- * True when `realChild` is `realRoot` itself or lives beneath it. Both inputs
- * must already be realpath-resolved absolute paths. Containment is tested with
- * `relative(root, child)`: the result is "" when they are the same path, and
- * for a true descendant it is a forward path with no `..` segment and is not
- * itself absolute — so a sibling like `/proj-evil` (relative => `../proj-evil`)
- * is correctly rejected.
- * @param {string} realRoot
- * @param {string} realChild
+ * True when `child` is `root` itself or beneath it: {@link isInsideDir} widened
+ * by the root (a glob can match the scan root; a write never targets it).
+ * @param {string} root
+ * @param {string} child
  * @returns {boolean}
  */
-function isContained(realRoot, realChild) {
-  const rel = relative(realRoot, realChild);
-  return (
-    rel === "" ||
-    (!rel.startsWith(`..${sep}`) && rel !== ".." && !isAbsolute(rel))
+function isContained(root, child) {
+  return relative(root, child) === "" || isInsideDir(root, child);
+}
+
+/**
+ * The path a write to `absPath` may use, proven inside `root`: the realpath of
+ * its DIRECTORY joined with its own name, checked against the realpath of
+ * `root`. Resolving the directory catches a directory symlink in the tree
+ * (`.claude/rules -> ~/.claude/rules`); the final component stays unresolved so
+ * cleanFile's `O_NOFOLLOW` open still refuses a file symlink. Every later step
+ * of the write uses the returned path. Throws when it would land outside `root`.
+ * @param {string} absPath
+ * @param {string} root
+ * @returns {string}
+ */
+function containedWritePath(absPath, root) {
+  const realRoot = realpathSync(root);
+  const target = join(
+    realpathSync(dirname(resolve(absPath))),
+    basename(absPath),
+  );
+  if (isInsideDir(realRoot, target)) return target;
+  throw new Error(
+    `refusing to clean outside the root ${JSON.stringify(
+      realRoot,
+    )}: ${JSON.stringify(absPath)} resolves to ${JSON.stringify(target)}`,
   );
 }
 
@@ -347,9 +359,10 @@ function keepContained(absPath, realRoot, literalRoot, pattern) {
  * calls `exclude` once with an entry's bare name and again with its
  * root-relative path, so a predicate holding `build` cannot tell a top-level
  * `build/` from a tracked `src/build/` and prunes both; under an absolute
- * pattern it is handed absolute paths and matches neither. A Dirent carries an
- * absolute `parentPath`, which normalizes to exactly one root-relative,
- * `/`-separated entry per walked directory whatever shape the pattern has.
+ * pattern it is handed absolute paths and matches neither. A Dirent's
+ * `parentPath`, resolved against `cwd` (not the process's: a literal prefix's
+ * directories arrive RELATIVE to `cwd`, and a bare join would prune `.claude/`),
+ * normalizes to one root-relative, `/`-separated entry per walked directory.
  * @param {string[]} globs
  * @param {string} cwd
  * @param {(entry: string) => boolean} [exclude]
@@ -440,81 +453,6 @@ export function scanInstructionFiles(
 }
 
 /**
- * Atomically replace `absPath`'s contents with `data`, preserving `mode`.
- *
- * Writes to a sibling temp in the same directory, then `rename`s it over the
- * original (same dir => same filesystem => the rename is atomic, not a
- * cross-device copy). The temp name is UNPREDICTABLE (`tmpName()` defaults to
- * crypto-random) and the temp is created exclusively (O_CREAT|O_EXCL): if the
- * path already exists — including an attacker-planted symlink at a guessable
- * temp name — the open fails (EEXIST) and does NOT follow the link to clobber
- * its target. On the rare collision we fail loud rather than retry into a
- * different attacker-controlled path.
- *
- * Crash-safety (matching the doc claim): the temp fd is `fsync`ed before the
- * rename and the directory fd is `fsync`ed after it, so a power loss can't leave
- * the renamed name pointing at unflushed/empty data or lose the rename itself.
- * The EXACT `mode` is applied with `fchmod` (openSync's create mode is
- * umask-masked, so it alone would drop bits), and a failed write/sync `unlink`s
- * the temp before rethrowing so no partial temp leaks. `tmpName` and `remove`
- * are injectable fault-injection seams for tests (force a known temp path; drive
- * a cleanup-unlink failure); production callers never pass them.
- * @param {string} absPath
- * @param {string} data
- * @param {number} mode
- * @param {() => string} [tmpName]
- * @param {(path: string) => void} [remove]
- */
-export function atomicReplaceFile(
-  absPath,
-  data,
-  mode,
-  tmpName = () => `.${randomBytes(12).toString("hex")}.tmp`,
-  remove = unlinkSync,
-) {
-  const dir = dirname(absPath);
-  const tmp = join(dir, tmpName());
-  // Exclusive create: EEXIST (incl. a planted symlink at the temp name)
-  // propagates directly — no temp of ours exists yet, so nothing to clean up
-  // and we must never unlink the attacker's pre-existing path.
-  const fd = openSync(
-    tmp,
-    constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL,
-    mode,
-  );
-  try {
-    // writeFileSync(fd, …) loops until every byte is written (a bare writeSync
-    // can short-write a large payload); it does not close the caller's fd.
-    writeFileSync(fd, data);
-    // Preserve the EXACT mode: openSync's create mode is umask-masked, fchmod is
-    // not, so this restores bits (e.g. group-write) the umask would have dropped.
-    fchmodSync(fd, mode);
-    // Flush the temp's bytes before the rename, else a crash can expose the
-    // renamed name pointing at empty/partial content.
-    fsyncSync(fd);
-  } catch (err) {
-    closeSync(fd);
-    try {
-      remove(tmp);
-    } catch {
-      // Best-effort cleanup only: rethrow the ORIGINAL failure below, not a
-      // secondary unlink error, so the real cause stays loud.
-    }
-    throw err;
-  }
-  closeSync(fd);
-  renameSync(tmp, absPath);
-  // fsync the DIRECTORY so the rename (a directory metadata change) is durable
-  // across a crash, not just the file's data blocks.
-  const dirFd = openSync(dir, constants.O_RDONLY);
-  try {
-    fsyncSync(dirFd);
-  } finally {
-    closeSync(dirFd);
-  }
-}
-
-/**
  * Strip payload-capable invisible characters from `absPath` in place. Returns
  * `true` when the file's bytes actually changed (a payload {@link scanText}
  * flags was removed) and `false` when {@link scanText} reports nothing to
@@ -554,20 +492,32 @@ export function atomicReplaceFile(
  * a temp file in the same directory which is then `rename`d over the original
  * (preserving the original file mode), fsync'd for crash-safety.
  *
- * Throws if the file cannot be read or written (the caller decides whether an
- * unwritable contaminated file is fatal or falls back to alerting).
+ * The rewrite must land strictly inside `root`, judged on realpaths (see
+ * {@link containedWritePath}): `O_NOFOLLOW` guards only the final component, so
+ * a directory symlink would otherwise carry it outside. `root` is required so
+ * no caller writes unbounded.
+ *
+ * Throws if the file cannot be read or written, or lies outside `root`.
  * @param {string} absPath
- * @param {(path: string) => import("node:fs").Stats} [lstat] injectable
- *   pre-rename recheck stat (fault-injection seam, mirrors
- *   {@link atomicReplaceFile}'s `tmpName`): lets a test drive the concurrent
- *   write/symlink-swap that the TOCTOU guard exists to catch, which is otherwise
- *   unreachable from this fully-synchronous path. Defaults to `lstatSync`.
+ * @param {{ root: string,
+ *   lstat?: (path: string) => import("node:fs").Stats }} options
+ *   `root` bounds the write. `lstat` is the injectable pre-rename recheck stat
+ *   (fault-injection seam) that lets a test drive the TOCTOU guard.
  * @returns {boolean}
  */
-export function cleanFile(absPath, lstat = lstatSync) {
+export function cleanFile(
+  absPath,
+  { root, lstat = lstatSync } = /** @type {any} */ ({}),
+) {
+  // The `{}` default routes a bare `cleanFile(path)` to the TypeError below.
+  if (typeof root !== "string")
+    throw new TypeError(
+      "cleanFile requires options.root, the directory the rewrite must stay inside",
+    );
+  const path = containedWritePath(absPath, root);
   let fd;
   try {
-    fd = openSync(absPath, constants.O_RDONLY | constants.O_NOFOLLOW);
+    fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW);
   } catch (err) {
     // O_NOFOLLOW on a symlink fails ELOOP (some libc report EMLINK); surface
     // the same "regular files only" contract the old lstat check did. Other
@@ -609,7 +559,7 @@ export function cleanFile(absPath, lstat = lstatSync) {
     // Re-verify the on-path file against the open-time snapshot before writing:
     // an inode/size/mtime change (or a swap to a symlink) means someone modified
     // it under us, so fail loud rather than clobber their write (lost update).
-    const after = lstat(absPath);
+    const after = lstat(path);
     if (
       after.isSymbolicLink() ||
       after.ino !== before.ino ||
@@ -623,7 +573,7 @@ export function cleanFile(absPath, lstat = lstatSync) {
       );
     // `before.mode` is the opened regular file's mode. A crash before the rename
     // leaves the original intact; after it the new content is fully present.
-    atomicReplaceFile(absPath, stripped, before.mode);
+    atomicReplaceFile(path, stripped, before.mode);
     return true;
   } finally {
     closeSync(fd);

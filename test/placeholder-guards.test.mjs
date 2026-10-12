@@ -22,6 +22,7 @@ import {
   PLACEHOLDER_LABEL_CHARS,
   UNPARSEABLE_MARKER,
 } from "../claude-hooks/lib/placeholder-grammar.mjs";
+import { mkView } from "./helpers/redact-view.mjs";
 
 // Keyed Layer-2 placeholders, minted by the engine's single producer so these
 // carry real keys rather than hand-typed ones.
@@ -43,23 +44,8 @@ const fakeIo = (content, view, redact = () => null) => ({
 });
 
 /** A view redacting every SECRET_A occurrence to PH. */
-function secretView(content) {
-  const pairs = [];
-  let text = "";
-  let last = 0;
-  for (
-    let index = content.indexOf(SECRET_A);
-    index !== -1;
-    index = content.indexOf(SECRET_A, index + SECRET_A.length)
-  ) {
-    text += content.slice(last, index);
-    pairs.push({ placeholder: PH, original: SECRET_A, start: text.length });
-    text += PH;
-    last = index + SECRET_A.length;
-  }
-  text += content.slice(last);
-  return { text, pairs };
-}
+const secretView = (/** @type {string} */ content) =>
+  mkView(content, [{ value: SECRET_A, placeholder: PH }]);
 
 /** @param {string} code */
 function fsError(code) {

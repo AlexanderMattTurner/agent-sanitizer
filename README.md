@@ -471,7 +471,9 @@ const findings = scanInstructionFiles(["CLAUDE.md", "**/SKILL.md"], {
   // nested worktrees. Ignored FILES (CLAUDE.local.md) are still scanned.
   exclude: contextScanExclude(projectDir),
 });
-for (const { file } of findings) cleanFile(`${projectDir}/${file}`);
+// `root` is required: a rewrite whose realpath leaves it throws instead.
+for (const { file } of findings)
+  cleanFile(`${projectDir}/${file}`, { root: projectDir });
 
 import { classifyPrompt } from "agent-sanitizer/prompt";
 classifyPrompt(submittedPrompt); // { action: "pass" | "note" | "block", reason? }
