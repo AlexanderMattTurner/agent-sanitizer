@@ -103,7 +103,23 @@ const COLOUR_CASES = [
   ["different colours", `${ESC}[31;40mtext`, false],
   ["a reset before the text", `${ESC}[30;40m${ESC}[0mtext`, false],
   ["foreground reset to default", `${ESC}[30;40;39mtext`, false],
-  ["matching colours with nothing after", `text${ESC}[30;40m`, false],
+  // Rendition outlives the text: a file left black-on-black blanks whatever
+  // the terminal prints after it, exactly as a trailing CONCEAL does.
+  ["matching colours with nothing after", `text${ESC}[30;40m`, true],
+  ["matching colours with only whitespace after", `text${ESC}[30;40m \n`, true],
+  [
+    "matching colours set by the last of two tokens",
+    `${ESC}[30m${ESC}[40m`,
+    true,
+  ],
+  [
+    "matching colours reset before the end",
+    `text${ESC}[30;40m${ESC}[0m`,
+    false,
+  ],
+  ["different colours left active at the end", `text${ESC}[32;40m`, false],
+  ["bold basic match left active at the end", `text${ESC}[1;30;40m`, false],
+  ["foreground alone left active at the end", `${ESC}[32mok`, false],
   ["only zero-width characters hidden", `${ESC}[30;40m${ZWSP}${ESC}[0m`, false],
 ];
 
@@ -175,4 +191,38 @@ describe("sgrCarriesPayload: runs", () => {
       false,
     );
   });
+});
+
+// Precision corpus: what real tools print. Every entry is styling, so every
+// arm above must answer no for all of them — a yes here costs a colourized
+// file or a pasted log its colour.
+const ORDINARY_TERMINAL_OUTPUT = [
+  ["test runner pass line", `${ESC}[32m✔ parses input${ESC}[0m (1.2ms)\n`],
+  [
+    "test runner failure",
+    `${ESC}[31m✖ fails${ESC}[39m\n${ESC}[2mat foo.js:1${ESC}[22m\n`,
+  ],
+  [
+    "git diff hunk",
+    `${ESC}[1mdiff --git a/x b/x${ESC}[m\n${ESC}[36m@@ -1 +1 @@${ESC}[m\n${ESC}[31m-old${ESC}[m\n${ESC}[32m+new${ESC}[m\n`,
+  ],
+  [
+    "ls --color",
+    `${ESC}[0m${ESC}[01;34msrc${ESC}[0m  ${ESC}[01;32mrun.sh${ESC}[0m\n`,
+  ],
+  ["inverse status bar", `${ESC}[7m NORMAL ${ESC}[27m main.c\n`],
+  [
+    "256-colour prompt",
+    `${ESC}[38;5;33muser${ESC}[0m@${ESC}[38;5;208mhost${ESC}[0m $ `,
+  ],
+  ["truecolor highlight", `${ESC}[38;2;255;100;0;48;2;30;30;30mwarn${ESC}[0m`],
+  ["colour left active at the end", `${ESC}[33mtrailing yellow`],
+  ["background-only banner", `${ESC}[44m  deploy  ${ESC}[0m`],
+];
+
+describe("sgrCarriesPayload: ordinary terminal output is styling", () => {
+  for (const [name, text] of ORDINARY_TERMINAL_OUTPUT)
+    it(name, () => {
+      assert.equal(sgrCarriesPayload(text), false);
+    });
 });

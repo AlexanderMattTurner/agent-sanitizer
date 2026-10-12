@@ -323,7 +323,10 @@ text that follows for a human while its bytes stay readable to a model; a
 foreground painted in its own background (`ESC[30;40m`) while a glyph goes by,
 which hides it the same way; and a run of sequences with nothing that RENDERS
 between them, which puts no glyph on the screen at all and is therefore
-carrying data rather than colour. Any one strips the whole field, and the
+carrying data rather than colour. Conceal or a matching foreground still in
+force when the text ENDS counts too, whatever the tail holds: rendition outlives
+the bytes that set it, so a file left in either state blanks everything the
+terminal prints after it is `cat`ed. Any one strips the whole field, and the
 prompt gate blocks on the same answer instead of passing it with a note.
 
 The colour match is judged only where it is unambiguous. A default colour is

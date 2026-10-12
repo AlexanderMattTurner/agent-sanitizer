@@ -4627,7 +4627,7 @@ function sgrCarriesPayload(text6) {
     if (run >= SGR_RUN_THRESHOLD) return true;
     rendition = sgrRendition(text6.slice(token.start, token.end), rendition);
   }
-  return rendition.concealed || hidesText(rendition, text6.slice(previousEnd));
+  return rendition.concealed || foregroundMatchesBackground(rendition);
 }
 function hidesText(rendition, gap) {
   if (rendition.concealed) return !rendersNothing(gap);

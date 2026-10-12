@@ -184,13 +184,17 @@ function rendersNothing(gap) {
  * question a consumer must answer before PRESERVING escapes rather than
  * stripping them. Three arms, all model-sees/human-sees divergences:
  *
- *   1. CONCEAL is on while text that would otherwise render goes by, or the text
- *      ENDS concealed (hiding its own tail, and everything the terminal prints
- *      afterwards). Only SGR moves that state (see {@link sgrRendition}) — a
- *      cursor move or an erase leaves a terminal exactly as concealed as it was.
+ *   1. CONCEAL is on while text that would otherwise render goes by. Only SGR
+ *      moves that state (see {@link sgrRendition}) — a cursor move or an erase
+ *      leaves a terminal exactly as concealed as it was.
  *   2. The foreground is the background while a glyph goes by (`ESC[30;40m`):
  *      concealment by colour, judged only where the match is unambiguous (see
  *      {@link foregroundMatchesBackground}).
+ *
+ * Either state still in force when the text ENDS is a refusal too, whatever
+ * the tail holds: rendition outlives the bytes that set it, so a file ending in
+ * `ESC[8m` or `ESC[30;40m` blanks everything the terminal prints after it is
+ * `cat`ed — a latent spoof rather than styling.
  *   3. {@link SGR_RUN_THRESHOLD} sequences with nothing that renders between
  *      them: the run puts no glyph on the screen, so it carries data rather than
  *      styling.
@@ -228,7 +232,7 @@ export function sgrCarriesPayload(text) {
     if (run >= SGR_RUN_THRESHOLD) return true;
     rendition = sgrRendition(text.slice(token.start, token.end), rendition);
   }
-  return rendition.concealed || hidesText(rendition, text.slice(previousEnd));
+  return rendition.concealed || foregroundMatchesBackground(rendition);
 }
 
 // A glyph whose identity a foreground painted in its own background hides:
