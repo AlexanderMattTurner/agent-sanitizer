@@ -84,6 +84,11 @@ const CASES = {
   "ivs-cjk": "漢" + IVS,
   "ivs-dense": ("漢" + IVS).repeat(30),
   "ivs-no-base": "a" + IVS,
+  // Where Unicode 16 and 17 disagree: an Extension J base (new in 17) and a
+  // star 17 dropped from Extended_Pictographic. Both modules read the pinned
+  // tables, so they agree on every Node; an oracle asking the runtime did not.
+  "ivs-extension-j": "\u{323B0}" + IVS,
+  "zwj-after-unicode-16-pictograph": "★" + ZWJ + "\u{1F525}",
   "stdvs-registered": "∅" + VS1,
   "stdvs-unregistered": "a" + VS1,
   "braille-blank": "⠓⠑⠇⠇⠕" + BRAILLE_BLANK + "⠺⠕⠗⠇⠙",
