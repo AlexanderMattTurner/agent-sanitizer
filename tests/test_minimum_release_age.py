@@ -268,10 +268,11 @@ def test_uv_cooldown_cannot_be_dropped_by_an_older_uv(uv_config: dict) -> None:
         "relative `exclude-newer` as a malformed timestamp and re-resolves "
         "without the cooldown"
     )
-    match = re.fullmatch(r">=(\d+)\.(\d+)\.(\d+)", required)
+    match = re.fullmatch(r">=(?P<major>\d+)\.(?P<minor>\d+)\.(?P<patch>\d+)", required)
     assert match, f"`required-version` {required!r} must be a single `>=X.Y.Z` floor"
     assert (
-        tuple(int(part) for part in match.groups()) >= UV_RELATIVE_WINDOW_MIN_VERSION
+        tuple(int(match[part]) for part in ("major", "minor", "patch"))
+        >= UV_RELATIVE_WINDOW_MIN_VERSION
     ), f"`required-version` {required!r} admits a uv without relative `exclude-newer`"
     assert "uv" not in tomllib.loads(
         (REPO_ROOT / "pyproject.toml").read_text("utf-8")

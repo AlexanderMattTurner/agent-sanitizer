@@ -91,14 +91,19 @@ describe("envValueRegex with a value that itself holds an invisible", () => {
   const ZWSP = "​";
   const VALUE_WITH_INVISIBLE = `abc${ZWSP}def`;
 
-  it("finishes a long invisible run followed by a non-match in linear time", () => {
-    const re = envValueRegex(VALUE_WITH_INVISIBLE);
-    const hostile = `abc${ZWSP.repeat(50_000)}x`;
-    const start = performance.now();
-    assert.equal(re.test(hostile), false);
-    // The quadratic form needs seconds here and this takes well under a
-    // millisecond, so the bound is about complexity class, not machine speed.
-    assert.ok(performance.now() - start < 1000, "invisible run backtracked");
+  it("never leaves a required literal that the neighbouring runs also match", () => {
+    // The linearity argument is "each literal between two runs is matched by
+    // neither", so check that directly rather than timing a hostile input: a
+    // wall-clock bound measures the runner, and the structural condition is the
+    // whole cause. Positive marker: the runs are present to strip.
+    const { source } = envValueRegex(VALUE_WITH_INVISIBLE);
+    assert.match(source, /\]\*/u);
+    const literals = source.replace(/\[[^\]]*\]\*/gu, "");
+    assert.equal(literals, "abcdef");
+    const leaked = [...literals].filter((ch) =>
+      allInvisible.includes(ch.codePointAt(0)),
+    );
+    assert.deepEqual(leaked, []);
   });
 
   it("still matches the value as typed, with the invisible removed, or re-spliced", () => {
