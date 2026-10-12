@@ -233,18 +233,51 @@ def _renovate_duration_minutes(text: str) -> int:
     return int(match["count"]) * RENOVATE_UNIT_MINUTES[match["unit"]]
 
 
+# Relative `exclude-newer` durations arrived in uv 0.9.17 (uv CHANGELOG). An
+# older uv cannot parse `P3D`, so the file that holds the window must also
+# refuse to run under one.
+UV_RELATIVE_WINDOW_MIN_VERSION = (0, 9, 17)
+
+
+@pytest.fixture(scope="module")
+def uv_config() -> dict:
+    """`uv.toml`, the file uv reads for the window — see the file for why not pyproject."""
+    return tomllib.loads((REPO_ROOT / "uv.toml").read_text("utf-8"))
+
+
 @pytest.mark.drift_guard
-def test_uv_release_age_window_clears_the_floor() -> None:
+def test_uv_release_age_window_clears_the_floor(uv_config: dict) -> None:
     """uv's `exclude-newer` holds the Python dev toolchain to the same floor."""
-    pyproject = tomllib.loads((REPO_ROOT / "pyproject.toml").read_text("utf-8"))
-    window = pyproject.get("tool", {}).get("uv", {}).get("exclude-newer")
+    window = uv_config.get("exclude-newer")
     assert isinstance(window, str), (
-        "pyproject.toml has no `[tool.uv] exclude-newer`, so `uv lock`/`uv run` "
+        "uv.toml has no `exclude-newer`, so `uv lock`/`uv run` "
         "accept a distribution uploaded seconds ago"
     )
     assert _iso_duration_minutes(window) >= MINIMUM_WINDOW_MINUTES, (
-        f"`[tool.uv] exclude-newer` is {window!r}, below the agreed "
+        f"uv.toml `exclude-newer` is {window!r}, below the agreed "
         f"{MINIMUM_WINDOW_MINUTES}-minute (3-day) floor"
+    )
+
+
+@pytest.mark.drift_guard
+def test_uv_cooldown_cannot_be_dropped_by_an_older_uv(uv_config: dict) -> None:
+    """A uv that cannot parse `P3D` must be refused, not left to ignore the window."""
+    required = uv_config.get("required-version")
+    assert isinstance(required, str), (
+        "uv.toml has no `required-version`: a uv older than 0.9.17 parses a "
+        "relative `exclude-newer` as a malformed timestamp and re-resolves "
+        "without the cooldown"
+    )
+    match = re.fullmatch(r">=(\d+)\.(\d+)\.(\d+)", required)
+    assert match, f"`required-version` {required!r} must be a single `>=X.Y.Z` floor"
+    assert (
+        tuple(int(part) for part in match.groups()) >= UV_RELATIVE_WINDOW_MIN_VERSION
+    ), f"`required-version` {required!r} admits a uv without relative `exclude-newer`"
+    assert "uv" not in tomllib.loads(
+        (REPO_ROOT / "pyproject.toml").read_text("utf-8")
+    ).get("tool", {}), (
+        "pyproject.toml carries a `[tool.uv]` table beside uv.toml: uv ignores "
+        "it, so any setting added there silently does nothing"
     )
 
 

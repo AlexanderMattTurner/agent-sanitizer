@@ -34,12 +34,6 @@ dev = [
     "tree-sitter-bash>=0.25",
 ]
 
-[tool.uv]
-# Supply-chain cooling-off window for the Python dev toolchain: uv refuses any
-# distribution uploaded within the last 3 days, the same floor pnpm's
-# `minimumReleaseAge` holds for npm (tests/test_minimum_release_age.py).
-exclude-newer = "P3D"
-
 [tool.ruff]
 target-version = "py310"
 
