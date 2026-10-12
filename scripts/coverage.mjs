@@ -106,7 +106,7 @@ export const SCOPES = [
     name: "claude-hooks + bin (ratchet)",
     files: hookScope,
     // Measured 96.34 / 91.19 / 90.15 / 96.34 — each floor sits ~3 points under.
-    thresholds: { lines: 93, branches: 88, functions: 87, statements: 93 },
+    thresholds: { lines: 93, branches: 88, functions: 93, statements: 93 },
   },
 ];
 

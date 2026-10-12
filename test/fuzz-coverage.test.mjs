@@ -424,6 +424,9 @@ const FUZZ_EXEMPT = Object.freeze({
       "waitForSocket",
     ],
   ),
+  encodeFrame:
+    "serializes our own request and throws over the frame cap; the parse of untrusted bytes is FrameReader's",
+  isPlainObject: "shape predicate over one parsed JSON value",
 });
 
 /**
@@ -439,6 +442,10 @@ const FUZZ_EXEMPT = Object.freeze({
  */
 const FUZZ_TODO = Object.freeze({
   anchorSpans: "anchors a prefix/suffix over untrusted Write content",
+  FrameReader:
+    "reassembles and JSON-parses length-prefixed frames from whatever answers on the redactor socket",
+  conforms:
+    "validates an untrusted daemon response against the wire protocol's field types",
   hasEnvBoundSecret:
     "a fail-open pre-gate for env-bound redaction, over untrusted tool output",
   matchesSecretHint: "a fail-open pre-gate for the secret scan",
