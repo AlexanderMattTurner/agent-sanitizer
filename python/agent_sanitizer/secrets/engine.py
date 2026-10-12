@@ -499,14 +499,15 @@ FIELD_VALUE_RE = re.compile(
     # shorten a non-credential. `.` is deliberately NOT peeled: it is a JWT's
     # own segment separator.
     #
-    # A QUOTED value runs to its own closing quote, spaces and backslash escapes
-    # included, but never through a bracket or backtick: those mark a template,
-    # call or expansion (`"${TOKEN}"`, `"%(pw)s"`), as the unquoted classes
-    # already treat them. Every arm stops at a map-mode sentinel. A short or
-    # spaced value must then pass `_short_or_spaced_value_allowed`.
+    # A QUOTED value runs to its own closing quote, spaces, brackets and
+    # backslash escapes included: a password may hold any of them, so a template
+    # or expansion (`"${TOKEN}"`, `"%(pw)s"`) is told apart by `_TEMPLATE_RE` on
+    # the value, not by stopping short of it. Every arm stops at a map-mode
+    # sentinel. A short or spaced value must then pass
+    # `_short_or_spaced_value_allowed`.
     r"(?P<secret_value>"
-    r'(?<=")(?:[^"\\\n`{}()\[\]\ue000\ue001]|\\[^\n\ue000\ue001]){1,4096}(?=")'
-    r"|(?<=')(?:[^'\\\n`{}()\[\]\ue000\ue001]|\\[^\n\ue000\ue001]){1,4096}(?=')"
+    r'(?<=")(?:[^"\\\n\ue000\ue001]|\\[^\n\ue000\ue001]){1,4096}(?=")'
+    r"|(?<=')(?:[^'\\\n\ue000\ue001]|\\[^\n\ue000\ue001]){1,4096}(?=')"
     r"|[^\s\"'`{}()\[\]\ue000\ue001]{19,}[^\s\"'`{}()\[\];,\ue000\ue001]"
     r"|[^\s\"'`{}()\[\];,\ue000\ue001]{1,19}(?=[\s;,)\]}\"'`]|$)"
     r")"
@@ -531,17 +532,33 @@ _PASSPHRASE_NOUN_RE = re.compile(r"pass(?:word|wd|phrase)|secret", re.IGNORECASE
 _LITERAL_WORDS = frozenset(
     {"true", "false", "null", "none", "nil", "undefined", "yes", "no", "on", "off"}
 )
-# An elision or fill run (`sk-...`, `xxxx`, a bullet mask) stands in for a value.
-_ELISION_RE = re.compile(r"\.\.\.|\u2026|(?P<fill>.)(?P=fill){3}")
+# An elision or mask run (`sk-...`, `xxxx`, a bullet mask) stands in for a
+# value. Only mask characters count: `Passw0000rd1` is a real password.
+_ELISION_RE = re.compile(r"\.\.\.|\u2026|(?P<fill>[xX*#\u2022])(?P=fill){3}")
+# Generated passwords end in a symbol often enough (`hunter2!`, base64 `=`), but
+# sentence and syntax punctuation (`.`, `:`, `-`, `>`) ends prose and code.
+_TRAILING_SYMBOLS = frozenset("!#$%&*+=?@^~")
+# An expansion, format slot or call stands in for a value rather than holding
+# one: `${TOKEN}`, `$(gh auth token)`, `%(pw)s`, `{{ secrets.X }}`, a
+# backtick command, a whole-value `{password}`, and a trailing `getpass()`.
+_TEMPLATE_RE = re.compile(r"\$[({]|%\(|\{\{|`|^\{[^{}]*\}$|\w\(\)$")
 
 
 def _short_or_spaced_value_allowed(m: re.Match[str], value: str) -> bool:
     """Whether a FIELD_VALUE_RE match whose ``value`` is short or spaced may
     redact: an opaque value under an unambiguous credential assignment."""
     noun = m.group("field_name")
-    if _FIELD_NOUN_RE.fullmatch(noun) is None or m.group("openbracket"):
+    # An unquoted bracketed value is code (`TOKEN={gh}` in an f-string); a
+    # quoted one inside a list or call (`"TOKEN": ["Abc1def2"]`) is a value.
+    if _FIELD_NOUN_RE.fullmatch(noun) is None or (
+        m.group("openbracket") and not m.group("quote")
+    ):
         return False
-    if not (value[0].isalnum() and value[-1].isalnum()) or "\\" in value:
+    if (
+        not value[0].isalnum()
+        or not (value[-1].isalnum() or value[-1] in _TRAILING_SYMBOLS)
+        or "\\" in value
+    ):
         return False
     if (
         value.lower() in _LITERAL_WORDS
@@ -563,33 +580,49 @@ def _short_or_spaced_value_allowed(m: re.Match[str], value: str) -> bool:
 
 
 _QUOTE_OR_NEWLINE_RE = re.compile(r"\n|(?<!\\)[\"']")
+# A single-letter string prefix (`f'`, `b'`, `r'`, `u'`) opens a literal even
+# though a letter sits on each side of its quote.
+_STRING_PREFIXES = frozenset("bfruBFRU")
 
 
-class _QuoteParity:
-    """Whether a position sits inside a string literal on its line, judged by
-    the parity of the unescaped quotes before it. Positions are asked in
-    ascending order, so the counts carry forward and the whole text is read
-    once; a position behind the last one re-reads from its line start."""
+def _is_apostrophe(text: str, i: int) -> bool:
+    """Whether the `'` at ``i`` is prose (`don't`), not a string delimiter."""
+    if not (0 < i < len(text) - 1 and text[i - 1].isalnum() and text[i + 1].isalnum()):
+        return False
+    return not (
+        text[i - 1] in _STRING_PREFIXES and (i < 2 or not text[i - 2].isalnum())
+    )
+
+
+class _StringContext:
+    """Which quote, if any, has a string literal open at a position on its line.
+    Inside a string only its own quote closes it, so `"don't"` leaves no single
+    quote open. Positions are asked in ascending order, so the scan carries
+    forward and the whole text is read once; a position behind the last one
+    re-reads from its line start."""
 
     def __init__(self, text: str) -> None:
         self._text = text
         self._pos = 0
-        self._counts = {'"': 0, "'": 0}
+        self._open = ""
 
-    def odd_before(self, pos: int, quote: str) -> bool:
+    def open_at(self, pos: int) -> str:
         if pos < self._pos:
             self._pos = self._text.rfind("\n", 0, pos) + 1
-            self._counts = {'"': 0, "'": 0}
+            self._open = ""
         for hit in _QUOTE_OR_NEWLINE_RE.finditer(self._text, self._pos, pos):
-            if hit.group() == "\n":
-                self._counts = {'"': 0, "'": 0}
-            else:
-                self._counts[hit.group()] += 1
+            ch = hit.group()
+            if ch == "\n" or ch == self._open:
+                self._open = ""
+            elif not self._open and not (
+                ch == "'" and _is_apostrophe(self._text, hit.start())
+            ):
+                self._open = ch
         self._pos = pos
-        return self._counts[quote] % 2 == 1
+        return self._open
 
 
-def _quoted_inside_string(m: re.Match[str], parity: _QuoteParity) -> bool:
+def _quoted_inside_string(m: re.Match[str], strings: _StringContext) -> bool:
     """Whether a quoted match's field sits inside an enclosing string literal,
     so its "opening" quote really closes that string: in `"?TOKEN="+tok+"&a=1"`
     the span `+tok+` is code, not a value. A quoted key (`"TOKEN": "v"`) is
@@ -600,7 +633,7 @@ def _quoted_inside_string(m: re.Match[str], parity: _QuoteParity) -> bool:
         quote, name_start - 1
     ):
         name_start -= 1
-    return parity.odd_before(name_start, quote)
+    return strings.open_at(name_start) == quote
 
 
 _AUTH_SCHEME_RE = re.compile(r"(?:Bearer|Token|Basic)[ \t]+(?=\S)", re.IGNORECASE)
@@ -2387,11 +2420,11 @@ def _redact_core(
         # high-confidence scan reports only structural detections.
         return rejoined, found
 
-    parity = _QuoteParity(rejoined)
+    strings = _StringContext(rejoined)
 
     def _replace_field(m: re.Match[str]) -> str | None:
         deadline.check("field-value scan")
-        if m.group("quote") and _quoted_inside_string(m, parity):
+        if m.group("quote") and _quoted_inside_string(m, strings):
             return None
         # The regex match supplies every positional field, so the name-based
         # gates (cursor / metadata field) are live on this path.
@@ -2407,7 +2440,7 @@ def _redact_core(
             )
         value = candidate.value
         # A quoted value can enclose an earlier pass's placeholder.
-        if _REDACTED_TEXT_RE.search(value):
+        if _REDACTED_TEXT_RE.search(value) or _TEMPLATE_RE.search(value):
             return None
         short_or_spaced = len(value) < _FIELD_VALUE_FLOOR or any(
             ch.isspace() for ch in value

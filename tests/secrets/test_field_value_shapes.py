@@ -102,6 +102,18 @@ def test_json_value_with_escaped_quote_redacts_whole(text, expected, found):
             'f("token=", access_token="Zx9qW7rT2pL5mN8bV3cX6zA1sD4f")',
             'f("token=", access_token="[REDACTED]")',
         ),
+        # A quote of the other kind, or an apostrophe, opens no string.
+        (
+            "msg = \"don't\"; FOO_TOKEN='Abc1def2ghi3'",
+            "msg = \"don't\"; FOO_TOKEN='[REDACTED]'",
+        ),
+        ("don't set FOO_TOKEN='Abc1def2ghi3'", "don't set FOO_TOKEN='[REDACTED]'"),
+        # Brackets, a trailing symbol, a digit run and a list wrapper are all
+        # ordinary inside a real value.
+        ('FOO_TOKEN="Abc1(def2)ghi3"', 'FOO_TOKEN="[REDACTED]"'),
+        ('FOO_TOKEN="hunter2!"', 'FOO_TOKEN="[REDACTED]"'),
+        ("DB_PASSWORD=Passw0000rd1", "DB_PASSWORD=[REDACTED]"),
+        ('{"TOKEN": ["Abc1def2"]}', '{"TOKEN": ["[REDACTED]"]}'),
     ],
 )
 def test_short_value_under_credential_name_redacts(text, expected):
@@ -228,6 +240,7 @@ def test_header_and_url_credentials_keep_their_shape(text, expected, found):
         '"password": "${DATABASE_PASSWORD:-postgres}"',
         'print(f"GITHUB_TOKEN={gh}")',
         'print("TOKEN=%s" % tok)',
+        "x = f'TOKEN=' + tok",
         # Flags, numbers, elisions and capitalised prose.
         "ENABLE_TOKEN=true",
         "USE_PASSWORD=false",
