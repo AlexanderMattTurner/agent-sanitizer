@@ -1,23 +1,24 @@
 /**
  * The redaction-placeholder grammar, mirrored from the single producer in
  * python/agent_sanitizer/secrets/placeholders.py (PLACEHOLDER_LABEL_CHARS /
- * PLACEHOLDER_RE there), the keyed Layer-2 splice-placeholder grammar mirrored
- * from src/html.mjs, plus the advisories for placeholder text in tool inputs
- * rehydration cannot re-anchor.
- *
- * This lives in the HOOKS layer, not the engine (`src/`), deliberately: the
- * plugin bundle inlines the hook sources from this repo but resolves the
- * engine from the pinned registry release, so an engine export the pin lacks
- * is undefined in the shipped bundle. The grammar's consumers (the PreToolUse
- * rehydrator/advisory, the PostToolUse span persistence and on-disk tripwire,
- * the drop guard's deny prose) are all hooks, so defining it here keeps the
- * shipped bundle and the source tree on one implementation.
- * test/placeholder-guards.test.mjs pins these constants against the Python
- * source, and test/claude-hooks-layer2-grammar.test.mjs pins the Layer-2
- * mirror against src/html.mjs, so an edit to either side that forgets the
- * other fails CI rather than letting the two parsers drift.
+ * PLACEHOLDER_RE there), plus the advisories for placeholder text in tool
+ * inputs rehydration cannot re-anchor. The secret grammar is MIRRORED because
+ * its producer is Python, which this module cannot import;
+ * test/placeholder-guards.test.mjs pins the two against each other. The keyed
+ * Layer-2 grammar has a JavaScript producer, so it is imported from the engine
+ * (src/layer2-placeholder.mjs) rather than copied: the plugin bundle resolves
+ * `agent-sanitizer` to this repo (`link:.`), so hooks and engine always ship
+ * the same code.
  */
+import {
+  LAYER2_PLACEHOLDER_RE,
+  UNPARSEABLE_PLACEHOLDER,
+} from "../../src/layer2-placeholder.mjs";
 import { spanPath, revealDir } from "./reveal.mjs";
+
+// Re-exported under this module's published names: consumers of the hooks
+// surface import the Layer-2 grammar from here.
+export { LAYER2_PLACEHOLDER_RE, UNPARSEABLE_PLACEHOLDER as UNPARSEABLE_MARKER };
 
 export const PLACEHOLDER_LABEL_CHARS = "A-Za-z0-9 ()._-";
 const PLACEHOLDER_LABEL_MAX_LEN = 64;
@@ -35,32 +36,6 @@ export const PLACEHOLDER_RE = new RegExp(
 // Global twin for token extraction. matchAll requires the g flag and clones
 // the regex per call, so sharing this module-level instance is state-safe.
 const PLACEHOLDER_RE_G = new RegExp(PLACEHOLDER_RE.source, "g");
-
-/**
- * The keyed Layer-2 splice placeholder grammar — `[hidden HTML removed #<key>]`
- * / `[HTML comment removed #<key>]`, capture group 1 = the 12-lowercase-hex key
- * (the first 12 hex chars of sha256 over the RAW spliced original). Mirrored
- * from the single producer in the engine (`src/html.mjs`,
- * `LAYER2_PLACEHOLDER_RE`) for the same pinned-registry reason as
- * PLACEHOLDER_RE above.
- *
- * Deliberately DISJOINT from the secret-redaction grammar: a Layer-2
- * placeholder never matches PLACEHOLDER_RE (no `[REDACTED` prefix) and a
- * secret placeholder never matches this — so the secret rehydrator and the
- * Layer-2 rehydrator can compose without either touching the other's tokens.
- */
-export const LAYER2_PLACEHOLDER_RE =
-  /\[(?:hidden HTML|HTML comment) removed #([0-9a-f]{12})\]/g;
-
-/**
- * The one Layer-2 marker that carries no key, mirrored from src/html.mjs
- * (UNPARSEABLE_PLACEHOLDER) for the bundle-pin reason above. The fail-closed
- * path withholds the WHOLE output, so there is no per-splice original to key:
- * the pre-splice text lives in the reveal sidecar (lib/reveal.mjs) whose exact
- * path the sanitize-time warning named. Not round-trippable — the advisory
- * points at the sidecar instead of a span file.
- */
-export const UNPARSEABLE_MARKER = "[HTML unparseable — withheld]";
 
 /**
  * The Layer-2 placeholder keys in `text`, in document order (duplicates kept —
@@ -161,8 +136,11 @@ export function collectPlaceholders(value) {
         if (!secret.has(match[0])) secret.set(match[0], path);
       for (const match of node.matchAll(LAYER2_PLACEHOLDER_RE))
         if (!layer2.has(match[0])) layer2.set(match[0], path);
-      if (node.includes(UNPARSEABLE_MARKER) && !layer2.has(UNPARSEABLE_MARKER))
-        layer2.set(UNPARSEABLE_MARKER, path);
+      if (
+        node.includes(UNPARSEABLE_PLACEHOLDER) &&
+        !layer2.has(UNPARSEABLE_PLACEHOLDER)
+      )
+        layer2.set(UNPARSEABLE_PLACEHOLDER, path);
       return;
     }
     if (Array.isArray(node)) {
@@ -267,10 +245,10 @@ export function layer2PlaceholderNotice(tool, toolInput) {
     routes.push(
       `The stored original(s) live at: ${keys.map((key) => spanPath(key)).join(", ")}`,
     );
-  if (layer2.some(({ token }) => token === UNPARSEABLE_MARKER))
+  if (layer2.some(({ token }) => token === UNPARSEABLE_PLACEHOLDER))
     routes.push(
-      `"${UNPARSEABLE_MARKER}" carries no key — it withheld a WHOLE output the ` +
-        `parser could not read, saved (secrets still redacted) to a reveal file ` +
+      `"${UNPARSEABLE_PLACEHOLDER}" carries no key — it withheld a WHOLE output ` +
+        `the parser could not read, saved to a reveal file ` +
         `under ${revealDir()}, whose exact path the sanitizer warning on that ` +
         `output named`,
     );

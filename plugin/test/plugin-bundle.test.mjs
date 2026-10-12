@@ -90,6 +90,15 @@ const PACKAGE_DATA_FILES = JSON.parse(
   });
 const ESC = "";
 
+// The directories of the shipped `src/*.mjs` entries, derived from package.json
+// `files` for the same reason PACKAGE_DATA_FILES is: a hook lib importing a new
+// engine module must not need a second hand-kept list here.
+const PACKAGE_SRC_DIRS = JSON.parse(
+  readFileSync(join(ROOT, "package.json"), "utf8"),
+)
+  .files.filter((entry) => /^src\/(?:vendor\/)?\*\.mjs$/.test(entry))
+  .map((entry) => dirname(entry));
+
 /** Tag-character encoding of `s` — the ASCII-smuggling payload class. */
 const tagChars = (s) =>
   [...s].map((c) => String.fromCodePoint(0xe0000 + c.codePointAt(0))).join("");
@@ -277,6 +286,20 @@ function stageSources(t, { omit = [] } = {}) {
     const dest = join(dir, rel);
     mkdirSync(dirname(dest), { recursive: true });
     cpSync(join(ROOT, rel), dest);
+  }
+  // The hook libs also import the engine's own modules at their package-relative
+  // `../../src/…` paths (the Layer-2 placeholder grammar), so stage the shipped
+  // `src/*.mjs` entries too: without them the entry dies at module load with
+  // nothing on stdout, which looks identical to the fail-OPEN under test.
+  assert.ok(
+    PACKAGE_SRC_DIRS.length > 0,
+    "no src/*.mjs in package.json files — the staging derivation broke",
+  );
+  for (const rel of PACKAGE_SRC_DIRS) {
+    mkdirSync(join(dir, rel), { recursive: true });
+    for (const file of readdirSync(join(ROOT, rel)))
+      if (file.endsWith(".mjs"))
+        cpSync(join(ROOT, rel, file), join(dir, rel, file));
   }
   const modules = join(dir, "node_modules");
   mkdirSync(modules, { recursive: true });

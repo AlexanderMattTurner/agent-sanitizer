@@ -9,11 +9,19 @@
  * preserved, and the warning names where the collision sat.
  *
  * Every fixture avoids the Layer-4 secret-hint vocabulary (`token`, `key`,
- * `secret`, …) and every control character apart from the one zero-width space
- * that forces the collision, so no live redactor daemon is needed.
+ * `secret`, …) and every control character apart from the zero-width space
+ * (and, for the many-field case, word joiner) that forces the collision, so no
+ * live redactor daemon is needed.
  */
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
+import {
+  assertLinear,
+  describeGrowth,
+  geometricSizes,
+  growth,
+  timed,
+} from "./helpers/cpu-timing.mjs";
 import {
   sanitizeValue,
   collisionWarning,
@@ -30,6 +38,30 @@ async function walk(value) {
   const warnings = [];
   const result = await sanitizeValue(value, "mcp__evil__list", warnings);
   return { ...result, warnings };
+}
+
+/** A second invisible character Layer 1 strips from a key, beside `ZW`. */
+const WJ = String.fromCharCode(0x2060);
+
+/**
+ * `{k: "0"}` plus `n` more raw keys that all sanitize to `k`. Each spells its
+ * index in binary over two stripped characters at one fixed width, so every
+ * key is the same length at every `n`: one zero-width space repeated `i` times
+ * would grow the INPUT quadratically in `n`, and a cost gate over it would read
+ * quadratic for a linear walk.
+ * @param {number} n
+ */
+function collidingFields(n) {
+  const width = 12;
+  assert.ok(n < 2 ** width, `${n} fields do not fit ${width} bits`);
+  /** @type {Record<string, string>} */
+  const fields = { k: "0" };
+  for (let i = 1; i <= n; i++) {
+    let key = "k";
+    for (let bit = 0; bit < width; bit++) key += (i >> bit) & 1 ? WJ : ZW;
+    fields[key] = String(i);
+  }
+  return fields;
 }
 
 /** The collision warnings only — Layer 1 also warns about the stripped key. */
@@ -104,21 +136,27 @@ describe("sanitize-output: key-collision recovery", () => {
     assert.equal(collisions(warnings).length, 2);
   });
 
-  it("does not rescan from the first slot on each collision", async () => {
-    // Non-vacuity for the memo: 400 fields collapsing to one name is an
-    // attacker-composable input, and an O(N^2) probe is a stall onto the
-    // raw-output fail-open. Correctness first — every field still lands in its
-    // own slot — then the bound.
-    const many = { k: "0" };
-    for (let index = 1; index <= 400; index++)
-      many[`k${ZW.repeat(index)}`] = String(index);
-    const started = process.hrtime.bigint();
-    const { value, warnings } = await walk(many);
-    const elapsedMs = Number(process.hrtime.bigint() - started) / 1e6;
+  it("collapses N raw keys into N slots with one warning", async () => {
+    // Correctness for the memo the cost gate below times: every field still
+    // lands in its own slot, and the warning is per name, not per field.
+    const { value, warnings } = await walk(collidingFields(400));
     assert.equal(Object.keys(value).length, 401);
     assert.equal(new Set(Object.values(value)).size, 1);
     assert.equal(collisions(warnings).length, 1);
-    assert.ok(elapsedMs < 5000, `collision handling took ${elapsedMs}ms`);
+  });
+
+  timed("does not rescan from the first slot on each collision", async (t) => {
+    // Non-vacuity for the memo: N fields collapsing to one name is an
+    // attacker-composable input, and an O(N^2) probe is a stall onto the
+    // raw-output fail-open. Restarting the probe at 2 on every collision read
+    // exponent 1.85 here, the memoized probe 1.05.
+    const curve = await growth(
+      (n, attempt) => collidingFields(n - attempt),
+      (fields) => walk(fields),
+      geometricSizes(200, 1600),
+    );
+    t.diagnostic(describeGrowth(curve));
+    assertLinear("the collision walk", curve);
   });
 
   it("handles three raw keys collapsing to one name, warning once", async () => {

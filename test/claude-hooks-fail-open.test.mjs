@@ -273,16 +273,19 @@ describe("the open posture's placeholder-write carve-out", () => {
     assert.equal(REDACTION_HINT, DEFAULT_HINT);
   });
 
-  it("recognizes write-shaped inputs carrying the package's hint prefix", () => {
-    // DEFAULT_HINT comes from the package; the hook restates the prefix as a
-    // literal so the check survives the package failing to load. Driving the
-    // package's spelling through the hook's literal pins the two together.
+  it("recognizes write-shaped inputs carrying a redaction placeholder", () => {
+    // Built from the package's DEFAULT_HINT, so a placeholder the redactor
+    // really mints is what the package-free grammar must recognize.
     for (const tool of ["Write", "Edit", "NotebookEdit"])
-      assert.equal(
-        hintedWriteFault({ tool_name: tool, tool_input: { x: DEFAULT_HINT } }),
-        true,
-        `${tool} carrying the hint must be held`,
-      );
+      for (const placeholder of [
+        `${DEFAULT_HINT}]`,
+        `${DEFAULT_HINT}: Secret]`,
+      ])
+        assert.equal(
+          hintedWriteFault({ tool_name: tool, tool_input: { x: placeholder } }),
+          true,
+          `${tool} carrying ${placeholder} must be held`,
+        );
     // The hint can sit arbitrarily deep (MultiEdit nests it in edits[]).
     assert.equal(
       hintedWriteFault({
@@ -302,6 +305,13 @@ describe("the open posture's placeholder-write carve-out", () => {
       { tool_name: "Bash", tool_input: { command: `echo ${DEFAULT_HINT}]` } },
       { tool_name: "Write", tool_input: { file_path: "/f", content: "plain" } },
       { tool_name: "Write" },
+      // Hint-prefixed prose that is no placeholder: holding it would turn a
+      // hook fault into an ask on every write that merely mentions redaction.
+      { tool_name: "Write", tool_input: { content: `${DEFAULT_HINT}…]` } },
+      {
+        tool_name: "Edit",
+        tool_input: { new_string: `see ${DEFAULT_HINT}ED` },
+      },
     ])
       assert.equal(hintedWriteFault(input), false);
   });

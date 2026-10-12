@@ -8,6 +8,14 @@ adhere to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+## [2.60.2] - 2026-10-12
+
+### Fixed
+
+- Fixed hook Layer-2 span upgrades to wait until secrets are available before writing; added guard to prevent writes inside `.git` directories
+- Fixed PreToolUse non-convergence routing to use fault posture instead of hard-coded fallback
+- Improved hook entry to properly stage shipped ES modules so bundled engine imports can load correctly
+
 ## [2.60.1] - 2026-10-12
 
 ### Fixed
