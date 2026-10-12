@@ -24,7 +24,8 @@
  * Layer 3 and the strict secret mode run on all MCP connector output (see
  * isUntrustedIngress).
  */
-import { redactViaDaemon, positiveMsOr } from "./lib/redactor-client.mjs";
+import { redactViaDaemon } from "./lib/redactor-client.mjs";
+import { readKnob } from "./lib/knobs.mjs";
 import {
   chargeHostExtension,
   chargeHostExtensionSync,
@@ -49,7 +50,11 @@ import { registerFaultPolicy, hookFaultOutcome } from "./lib/hook-fault.mjs";
 import { controlPlane, runJudgeCli } from "./lib/control-plane.mjs";
 import { hookTrace, TraceEvent } from "./lib/trace.mjs";
 import { hasEnvBoundSecret } from "./lib/secret-annotate.mjs";
-import { digestFlaggingEnabled, secretsEnabled } from "./lib/env-config.mjs";
+import {
+  digestFlaggingEnabled,
+  secretsEnabled,
+  SECRETS_ENABLED_ENV,
+} from "./lib/env-config.mjs";
 import {
   persistReveal,
   persistSpan,
@@ -125,10 +130,7 @@ export const REVEAL_WITHHELD_WARNING = withheldWarning("reveal sidecar");
 // would be shown (fail OPEN). The default sits comfortably above one legitimately
 // slow leaf (a cold redactor respawn + a full scan) yet far under the hook
 // timeout; env-tunable so tests can drive the exhausted-budget path fast.
-const SANITIZE_BUDGET_MS = positiveMsOr(
-  process.env._AGENT_SANITIZER_SANITIZE_BUDGET_MS,
-  120000,
-);
+const SANITIZE_BUDGET_MS = readKnob("_AGENT_SANITIZER_SANITIZE_BUDGET_MS");
 
 // Web-ingress tools always get the Layer 2 HTML rewrite; local tools — Read,
 // Bash, Grep, gh — never do. A local HTML/markdown pass either rewrites bytes the
@@ -176,11 +178,11 @@ function isUntrustedIngress(toolName) {
  * daemon. A transient daemon failure fails only THIS call — no session-wide
  * sentinel — and the client respawns a dead daemon on the next call.
  * @param {string} text
- * @param {boolean} [webIngress]
+ * @param {boolean} webIngress
  * @param {{remainingMs: () => number}} [deadline] shared wall-clock budget
  * @returns {Promise<{ text: string, found: string[] } | null>}
  */
-async function redactSecrets(text, webIngress = false, deadline) {
+async function redactSecrets(text, webIngress, deadline) {
   if (!matchesSecretHint(text) && !hasEnvBoundSecret(text)) return null;
   // On web ingress the field name around a value is attacker-controlled, so the
   // redactor's benign-skip heuristics (metadata field / cursor / path) are a
@@ -283,11 +285,11 @@ export async function sanitizeText(
     // Layer 4 — OPT-IN (secretsEnabled): with the knob unset the seam gets no
     // redact callback at all, so plain output never spawns the daemon and no
     // placeholder ever enters the model's view. When it runs, the seam rethrows
-    // a redactor throw wrapped, and the CLI applies the caller's posture to it.
-    // Surface the failure to the operator's terminal here first: whatever the
-    // CLI decides rides in additionalContext, which only the model sees, so a
-    // degraded redactor would otherwise be invisible to the human — and under
-    // the fail-open default this line is the ONLY signal the human gets.
+    // a redactor throw wrapped, and this hook's fault policy suppresses the
+    // output under either posture (alwaysClosed). Surface the failure to the
+    // operator's terminal here first: the suppression note rides in what only
+    // the model sees, so a degraded redactor would otherwise be invisible to
+    // the human.
     redact: !secretsEnabled()
       ? undefined
       : async (/** @type {string} */ content) => {
@@ -571,15 +573,14 @@ function failClosedParts(
  * fail-OPEN by default — a warning context and NO `updatedToolOutput`, leaving
  * the original tool output in the model's view — or the fail-closed
  * suppression of {@link emitFailClosed} when the caller set
- * AGENT_SANITIZER_FAIL_OPEN=0.
+ * AGENT_SANITIZER_FAIL_OPEN=0, or opted into Layer 4 (see the policy below).
  *
  * This is the hook where the two postures diverge the most, so state the open
  * one plainly: several of these layers throw on inputs an attacker composes (a
- * nesting depth that overflows the walk, a redaction budget spent on a thousand
- * secret-shaped leaves), and each of those throws is
- * guarding content the open posture hands to the model verbatim, secrets
- * included. An operator who cares more about withholding a secret than about
- * keeping the session moving sets the knob to `0`.
+ * nesting depth that overflows the walk), and each of those throws is guarding
+ * content the open posture hands to the model verbatim. An operator who cares
+ * more about withholding that than about keeping the session moving sets the
+ * knob to `0`.
  * @param {any} input  parsed hook input, or undefined if parsing threw
  * @param {unknown} err
  * @param {(fields: Record<string, unknown>) => void} [emit]
@@ -618,14 +619,29 @@ function suppressionMessage(cause) {
   return `[SANITIZATION FAILED — original output suppressed for safety. Hook error: ${cause}]`;
 }
 
+/** Why an open knob still suppressed: the secret layer's own guarantee. */
+const SECRETS_PIN_NOTE =
+  ` Secret redaction is on (${SECRETS_ENABLED_ENV}=1), so output it could ` +
+  "not vet is withheld under either AGENT_SANITIZER_FAIL_OPEN posture.";
+
 // This hook's entry in the one posture table (lib/hook-fault.mjs). OPEN is the
 // shared default (a warning context, the original output left in the model's
 // view); CLOSED replaces every string leaf of the output with the placeholder.
+// With Layer 4 opted in, a fault here means the output was never vetted for
+// secrets — a dead daemon, a spent budget, a walk that overflowed before the
+// redactor ran — so this pin is what keeps the open default from handing an
+// unredacted credential to the model.
 registerFaultPolicy(HOOK_NAME, {
   event: HookEvent.POST_TOOL_USE,
   guarded: "tool output",
+  alwaysClosed: secretsEnabled,
   closed: (ctx) =>
-    failClosedParts(ctx.input, suppressionMessage(ctx.message), ctx.remedy),
+    failClosedParts(
+      ctx.input,
+      suppressionMessage(ctx.message) +
+        (ctx.pinnedClosed ? SECRETS_PIN_NOTE : ""),
+      ctx.remedy,
+    ),
 });
 
 /**
@@ -925,9 +941,9 @@ export async function cliMain(ext = {}) {
       // back the parsed `input` even when the control-plane load failed, so the
       // suppression shape-matches the real tool_response). emitFailClosed itself
       // falls back to a bare string if that shape-matching replacement or its
-      // serialization throws, so even a pathological input fails closed. A caller
-      // that set AGENT_SANITIZER_FAIL_OPEN=1 gets the warning-only pass-through
-      // instead — see emitHookFailure.
+      // serialization throws, so even a pathological input fails closed. Under
+      // the open default with Layer 4 off the caller gets the warning-only
+      // pass-through instead — see emitHookFailure.
       onError: (err, input) =>
         emitHookFailure(input, err, undefined, ext.remedy),
     },

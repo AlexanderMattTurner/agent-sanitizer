@@ -20,10 +20,11 @@
  */
 import { describe, it, before, after } from "node:test";
 import assert from "node:assert/strict";
-import { createServer } from "node:net";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+
+import { startStandInDaemon } from "./redactor-stand-in.mjs";
 
 // mkdtemp yields a 0700 dir owned by us, which is exactly what the client's
 // socket-ownership check demands. Set BEFORE importing the hook: the client
@@ -46,29 +47,11 @@ const SECRET_TEXT = "here is a token: abc";
 const REDACTED_TEXT = "here is a token: [REDACTED]";
 
 /** A daemon that replies to every request with one fixed redaction. */
-function startStubDaemon() {
-  const server = createServer((sock) => {
-    /** @type {Buffer[]} */
-    const chunks = [];
-    sock.on("data", (chunk) => {
-      chunks.push(chunk);
-      const buf = Buffer.concat(chunks);
-      if (buf.length < 4) return;
-      const expected = buf.readUInt32BE(0);
-      if (buf.length < 4 + expected) return;
-      const body = Buffer.from(
-        JSON.stringify({ text: REDACTED_TEXT, found: ["FakeDetector"] }),
-        "utf8",
-      );
-      const header = Buffer.allocUnsafe(4);
-      header.writeUInt32BE(body.length, 0);
-      sock.end(Buffer.concat([header, body]));
-    });
-  });
-  return new Promise((resolve) => {
-    server.listen(socketPath, () => resolve(server));
-  });
-}
+const startStubDaemon = () =>
+  startStandInDaemon(socketPath, () => ({
+    text: REDACTED_TEXT,
+    found: ["FakeDetector"],
+  }));
 
 /** @type {import("node:net").Server} */
 let daemon;

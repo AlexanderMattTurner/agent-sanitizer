@@ -31,9 +31,10 @@ import {
   closeSync,
   constants,
 } from "node:fs";
-import { tmpdir, userInfo } from "node:os";
+import { tmpdir } from "node:os";
 import { join, resolve, sep } from "node:path";
-import { PROJECT_HASH, writeFileNoFollow } from "./hook-io.mjs";
+import { PROJECT_HASH, isPrivateDir, writeFileNoFollow } from "./hook-io.mjs";
+import { readKnob } from "./knobs.mjs";
 
 /**
  * Where reveal sidecars are stored. Exported so the PreToolUse placeholder
@@ -48,7 +49,7 @@ export function revealDir() {
   // instead. The 12-hex span KEY inside the directory is untouched — it is the
   // published placeholder grammar, not a path detail.
   return (
-    process.env._AGENT_SANITIZER_REVEAL_DIR ||
+    readKnob("_AGENT_SANITIZER_REVEAL_DIR") ??
     join(tmpdir(), `agent-sanitizer-layer2-reveal-${PROJECT_HASH}`)
   );
 }
@@ -131,13 +132,7 @@ function revealDirIsSafe(dir) {
     return false;
   }
   /* c8 ignore stop */
-  const groupOrOtherWritable = (st.mode & 0o022) !== 0;
-  return (
-    st.isDirectory() &&
-    !st.isSymbolicLink() &&
-    st.uid === userInfo().uid &&
-    !groupOrOtherWritable
-  );
+  return isPrivateDir(st);
 }
 
 /**
