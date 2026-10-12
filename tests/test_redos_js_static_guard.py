@@ -32,17 +32,25 @@ silently:
   (an exact, backtracking-neutral rewrite) before analysis;
 * codepoint escapes ``\\u{H…}`` are translated to Python's ``\\uHHHH`` /
   ``\\UHHHHHHHH`` (exact: both spell one code point);
-* patterns using ``\\p{…}`` (no Python ``re`` equivalent) are listed in
+* two-letter General_Category escapes ``\\p{Cc}`` / ``\\p{Zl}`` / … are expanded
+  to the explicit code point ranges ``unicodedata`` reports for that category
+  (exact for the categories whose membership is stable across Unicode versions,
+  and a pure character-class swap either way — it cannot change how the
+  matcher backtracks), so every such class is analyzed rather than listed;
+* every other ``\\p{…}`` (scripts, binary properties — no Python ``re``
+  equivalent) is listed in
   ``UNANALYZABLE_JS_ONLY`` below — each entry is asserted to still exist in the
   inventory AND to still fail regexploit's parser, so the skip list can neither
   rot nor grow to hide an analyzable pattern.
 """
 
 import collections
+import functools
 import json
 import re
 import shutil
 import subprocess
+import unicodedata
 
 import pytest
 
@@ -152,6 +160,11 @@ def _keyed_by_location(entries: list[dict]) -> dict[str, str]:
     return keyed
 
 
+# JS `\p{Xx}` with a two-letter General_Category value. Script=…, single-letter
+# groups and binary properties do not match, so they stay unparsed and must be
+# listed in UNANALYZABLE_JS_ONLY.
+_CATEGORY_ESCAPE_RE = re.compile(r"\\p\{(?P<category>[A-Z][a-z])\}")
+
 _EXTRACTED = _run_extractor()
 _INVENTORY = _EXTRACTED["patterns"]
 _SITES = _EXTRACTED["constructionSites"]
@@ -169,13 +182,61 @@ def _analyze(pattern: str) -> str:
 
 
 def _widen_codepoint_escape(match: re.Match) -> str:
-    codepoint = int(match.group("hex"), 16)
-    spelling = f"\\u{codepoint:04x}" if codepoint <= 0xFFFF else f"\\U{codepoint:08x}"
-    return match.group("pairs") + spelling
+    return match.group("pairs") + _python_escape(int(match.group("hex"), 16))
+
+
+def _python_escape(codepoint: int) -> str:
+    return f"\\u{codepoint:04x}" if codepoint <= 0xFFFF else f"\\U{codepoint:08x}"
+
+
+@functools.lru_cache(maxsize=None)
+def _category_class_body(category: str) -> str:
+    """The code points `unicodedata` files under `category`, as class-body ranges."""
+    ranges: list[tuple[int, int]] = []
+    for codepoint in range(0x110000):
+        if unicodedata.category(chr(codepoint)) != category:
+            continue
+        if ranges and ranges[-1][1] == codepoint - 1:
+            ranges[-1] = (ranges[-1][0], codepoint)
+        else:
+            ranges.append((codepoint, codepoint))
+    assert ranges, f"unicodedata knows no General_Category {category!r}"
+    return "".join(
+        _python_escape(lo) if lo == hi else f"{_python_escape(lo)}-{_python_escape(hi)}"
+        for lo, hi in ranges
+    )
+
+
+def _expand_general_categories(pattern: str) -> str:
+    # Walks escape pairs so `\\p{Cc}` (a literal backslash then text) is left
+    # alone, and tracks whether the escape sits inside a class: there it splices
+    # in as ranges, outside it needs its own brackets.
+    out: list[str] = []
+    in_class = False
+    i = 0
+    while i < len(pattern):
+        ch = pattern[i]
+        if ch == "\\":
+            match = _CATEGORY_ESCAPE_RE.match(pattern, i)
+            if match:
+                body = _category_class_body(match.group("category"))
+                out.append(body if in_class else f"[{body}]")
+                i = match.end()
+                continue
+            out.append(pattern[i : i + 2])
+            i += 2
+            continue
+        if ch == "[" and not in_class:
+            in_class = True
+        elif ch == "]" and in_class:
+            in_class = False
+        out.append(ch)
+        i += 1
+    return "".join(out)
 
 
 def _to_python_syntax(pattern: str) -> str:
-    named = _NAMED_GROUP_RE.sub("(?P<", pattern)
+    named = _NAMED_GROUP_RE.sub("(?P<", _expand_general_categories(pattern))
     return _CODEPOINT_ESCAPE_RE.sub(_widen_codepoint_escape, named)
 
 
@@ -280,6 +341,37 @@ def test_codepoint_escape_translation_is_exact() -> None:
     assert _to_python_syntax(r"\\u{41}") == r"\\u{41}"
     assert _to_python_syntax(r"\u{41}") == "\\u0041"
     assert _to_python_syntax(r"[\u{1F600}-\u{1F64F}]") == "[\\U0001f600-\\U0001f64f]"
+
+
+def test_general_category_translation_is_exact() -> None:
+    # Cc is U+0000-001F and U+007F-009F; Zl/Zp are the two separators; Cs is the
+    # surrogate block. In a class the ranges splice in; outside one they get
+    # their own brackets; an escaped backslash before `p{Cc}` is just text; and
+    # a script property is NOT a category, so it stays untranslated.
+    cc = "\\u0000-\\u001f\\u007f-\\u009f"
+    assert _expand_general_categories(r"[\p{Cc}]") == f"[{cc}]"
+    assert _expand_general_categories(r"\p{Cc}") == f"[{cc}]"
+    assert _expand_general_categories(r"[a\p{Zl}\p{Zp}]") == "[a\\u2028\\u2029]"
+    assert _expand_general_categories(r"[\p{Cs}]") == "[\\ud800-\\udfff]"
+    assert _expand_general_categories(r"\\p{Cc}") == r"\\p{Cc}"
+    assert _expand_general_categories(r"\p{Script=Hangul}") == r"\p{Script=Hangul}"
+
+
+def test_general_category_translation_reaches_the_analyzer() -> None:
+    # Positive marker over the live inventory: a pattern spelled with a category
+    # escape is analyzed (not skipped), and its translated form parses.
+    categorized = {
+        name: pattern
+        for name, pattern in _ALL.items()
+        if _CATEGORY_ESCAPE_RE.search(pattern)
+    }
+    assert categorized, (
+        r"expected at least one \p{Xx} category pattern in the inventory"
+    )
+    for name, pattern in categorized.items():
+        translated = _to_python_syntax(pattern)
+        assert "\\p{" not in translated, name
+        assert "Error parsing" not in _analyze(translated), name
 
 
 _RESOLVABLE_FIXTURE = """\
