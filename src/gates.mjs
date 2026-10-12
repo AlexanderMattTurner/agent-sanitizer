@@ -7,28 +7,40 @@
  * `export … from "./html.mjs"` would eagerly evaluate that ~200ms module on
  * every root import, defeating the lazy-load design. This module imports
  * nothing, so re-exporting it is free.
+ *
+ * INVARIANT: every gate here is a SUPERSET of what the parser behind it can
+ * recognise. A gate that skips an input the parser would have found something
+ * in turns its layer off for exactly that input — silently, and steerably (one
+ * stray `<` inside a comment was enough). A gate that fires needlessly only
+ * costs a parse. test/gates-superset.test.mjs checks this against the real
+ * tokenizers over a corpus.
  */
 
 // ─── Cheap pre-gates ─────────────────────────────────────────────────────────
 
 /**
- * Matches any HTML tag-like construct: opening tags, closing tags (`</`),
- * comments and bogus declarations (`<!`), and processing instructions / bogus
- * comments (`<?…?>`, which the HTML tokenizer hides exactly like a comment).
- * The `<!`/`<?` arms carry a comment-only document into the pipeline at all:
- * without them it would skip both Layer 2's splice of the comment and Layer 3's
- * exfil scan over the comment interior.
+ * Matches every point where the HTML tokenizer leaves the data state: `<`
+ * followed by an ASCII letter (start tag), `/` (end tag, or a bogus comment),
+ * `!` (comment, doctype, CDATA, bogus declaration) or `?` (bogus comment). A
+ * `<` followed by anything else is text to the tokenizer, so no tag, comment
+ * or attribute can exist in text this does not match. Deliberately no closing
+ * `>`: a comment holding `1 < 2`, or one left unterminated, is still a comment
+ * that hides everything after it.
  * Gate for Layer 2 (HTML sanitization) and the HTML img/a exfil path in
  * Layer 3.
  */
-export const HTML_TAG_PRESENT = /<[a-zA-Z/!?][^<>]*>/;
+export const HTML_TAG_PRESENT = /<[a-zA-Z/!?]/;
 
 /**
  * Matches markdown link/image syntax (`](`, `![`) and reference link
- * definitions (`[label]: url` at line start). Gate for Layer 3 (markdown
- * exfiltration detection).
+ * definitions (`[label]: url` at a line start, including one nested in a
+ * blockquote or list item — `> [x]: url`, `- [x]: url`, `1. [x]: url`). The
+ * label arm admits backslash escapes and line endings, as CommonMark labels
+ * do, but not an unescaped `[`, which no label can hold — that is also what
+ * keeps the scan linear. Gate for Layer 3 (markdown exfiltration detection).
  */
-export const MD_LINK_HINT = /\]\(|!\[|^[ \t]*\[[^[\]\n]+\]:\s/m;
+export const MD_LINK_HINT =
+  /\]\(|!\[|^[ \t]*(?:(?:>|[-+*]|\d{1,9}[.)])[ \t]*)*\[(?:[^\\[\]]|\\[\s\S])+\]:/m;
 
 /**
  * True when `text` is worth handing to the heavy remark/rehype graph at all:
@@ -45,12 +57,14 @@ export function needsMarkdownPipeline(text) {
 }
 
 /**
- * Matches an absolute http(s) URL anywhere in the text. Gate for the Layer-3
- * URL detectors, which read the URLs a GFM autolink literal yields and so find
- * a look-alike host or an exfil-shaped query in bare prose — no tag and no
- * link syntax required.
+ * Matches the start of every URL a GFM autolink literal yields — `http://`,
+ * `https://` and the scheme-less `www.` form — anywhere in the text. Gate for
+ * the Layer-3 URL detectors, which read those URLs and so find a look-alike
+ * host or an exfil-shaped query in bare prose — no tag and no link syntax
+ * required. (The third literal form, a bare e-mail address, becomes a
+ * `mailto:` URL with no host and no query, which neither detector can flag.)
  */
-export const URL_PRESENT = /https?:\/\//i;
+export const URL_PRESENT = /https?:\/\/|www\./i;
 
 /**
  * True when Layer 3 (exfil + confusable-host detection) can find something.
@@ -63,6 +77,28 @@ export const URL_PRESENT = /https?:\/\//i;
  */
 export function needsUrlScan(text) {
   return URL_PRESENT.test(text) || needsMarkdownPipeline(text);
+}
+
+// A comment / bogus-comment open: hides everything after it, closed or not.
+const MARKUP_DECLARATION_OPEN = /<[!?]/;
+
+/**
+ * POLICY, not a gate: true when `text` reads as an HTML document rather than as
+ * data that merely contains a `<` — a comment or bogus-comment open anywhere,
+ * or a tag open with a `>` somewhere after it. The output hook uses this to
+ * decide whether an MCP result earns the Layer-2 splice at all, so structured
+ * JSON/text output (`a<b`, `x <= y`) stays verbatim. Kept apart from
+ * {@link HTML_TAG_PRESENT} so widening that gate toward the tokenizer never
+ * silently widens which MCP output gets rewritten. One regex search plus one
+ * `indexOf`, so linear — a single `<…[^>]*>` regex would rescan the tail from
+ * every `<`.
+ * @param {string} text
+ * @returns {boolean}
+ */
+export function isHtmlShaped(text) {
+  if (MARKUP_DECLARATION_OPEN.test(text)) return true;
+  const open = text.search(HTML_TAG_PRESENT);
+  return open !== -1 && text.includes(">", open + 2);
 }
 
 // ─── Secret-shape pre-gate (Layer 3 URL-param reuse) ─────────────────────────
@@ -97,12 +133,27 @@ export const SECRET_HINT_EXT =
   /(?:AC|SK)[a-z0-9]{32}|SG\.[A-Za-z0-9_-]{22}\.[A-Za-z0-9_-]{43}|sq0csp-[0-9A-Za-z_-]{43}|(?<![0-9])[0-9]{8,10}:[0-9A-Za-z_-]{35}|(?<![0-9a-z])[0-9a-z]{32}-us[0-9]{1,2}|(?<![A-Za-z0-9_-])[MNO][A-Za-z0-9_-]{23,25}\.[A-Za-z0-9_-]{6}\.[A-Za-z0-9_-]{27}|T3BlbkFJ|pypi-AgE|(?<![A-Za-z0-9])AKC[A-Za-z0-9]{10}|(?<![A-Za-z0-9])AP[0-9A-Fa-f][A-Za-z0-9]{8}|:\/\/[^\s:/@]{1,64}:[^\s:/@]{1,64}@|(?:key|pw|pass)["']?[\s:=>]+["']?[A-Za-z0-9_/+-]{20}/i;
 
 /**
- * True when either pre-gate alternation shape-matches `text`. Split into two
- * literals (see SECRET_HINT) and OR'd so neither grows into a
- * polynomial-backtracking shape.
+ * True when either alternation shape-matches `text` exactly as written.
+ * @param {string} text
+ * @returns {boolean}
+ */
+function hintMatchesView(text) {
+  return SECRET_HINT.test(text) || SECRET_HINT_EXT.test(text);
+}
+
+/**
+ * True when either pre-gate alternation shape-matches `text`, or the same text
+ * with every `\n` removed. Split into two literals (see SECRET_HINT) and OR'd
+ * so neither grows into a polynomial-backtracking shape.
+ *
+ * The newline-free view is what makes this a superset of the redactor it gates:
+ * the engine re-joins a token wrapped across lines by scanning exactly that view
+ * (`_redact_cross_line` in python/…/secrets/engine.py drops `\n` and nothing
+ * else), so a key split mid-run would otherwise never reach it.
  * @param {string} text
  * @returns {boolean}
  */
 export function matchesSecretHint(text) {
-  return SECRET_HINT.test(text) || SECRET_HINT_EXT.test(text);
+  if (hintMatchesView(text)) return true;
+  return text.includes("\n") && hintMatchesView(text.replace(/\n/g, ""));
 }

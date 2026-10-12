@@ -24,12 +24,18 @@ import {
   MAX_DEPTH,
   FILTER_WARNING,
   REDACTION_DOCTRINE,
+  COLLISION_WITHHELD_MESSAGE,
+  collisionWarning,
+  MUTATION_RERUNS,
+  sanitizeValueWith,
 } from "../src/output.mjs";
 import { INERT_ANSI_NOTE } from "../src/layer1.mjs";
 // Not re-exported from ./output.mjs: `needsUrlScan` is an internal Layer-3
 // pre-gate, so the published surface stays what engine-exports.test.mjs pins.
 import { needsUrlScan } from "../src/gates.mjs";
 import { layer2Placeholder } from "../src/html.mjs";
+import { CATEGORY } from "../src/invisible.mjs";
+import { UNSCANNABLE_WARNING } from "../src/warnings.mjs";
 import { cp } from "./test-helpers.mjs";
 
 const hid = (original) => layer2Placeholder("hidden", original);
@@ -78,6 +84,8 @@ describe("needsUrlScan", () => {
     assert.equal(needsUrlScan("plain prose, nothing here"), false));
   it("stays false for a scheme-less host mention (precision)", () =>
     assert.equal(needsUrlScan("ask paypal.com about it"), false));
+  it("is true for a GFM www. autolink, which remark turns into a link node", () =>
+    assert.equal(needsUrlScan("visit www.example.com today"), true));
 });
 
 // ─── describeRemoved ─────────────────────────────────────────────────────────
@@ -299,6 +307,9 @@ describe("sanitizeText: sgrNote is honest across Layers 2/4/5", () => {
     assert.equal(r.cleaned, "a  b");
     assert.equal(r.modified, true);
     assert.equal(r.sgrNote, false);
+    assert.deepEqual(r.warnings, [
+      FILTER_WARNING_MESSAGE[FILTER_WARNING.SPANS_REMOVED],
+    ]);
   });
 
   it("re-redact after a Layer-5 deletion normalizes a lone surrogate left at the join", async () => {
@@ -355,6 +366,23 @@ describe("sanitizeText: Layer 2/3 markdown pipeline gating", () => {
     });
     assert.equal(r.cleaned, "plain prose, no markup");
     assert.equal(r.modified, false);
+    assert.deepEqual(r.warnings, []);
+  });
+
+  it("reports a document too deep to scan as `unscannable`, never as a URL finding", async () => {
+    const input = `${"<div>".repeat(5000)}https://x.example/?d=1`;
+    const r = await sanitizeText(input, { exfilScan: true });
+    assert.equal(r.cleaned, input);
+    assert.deepEqual(r.found, [CATEGORY.UNSCANNABLE]);
+    assert.deepEqual(r.warnings, [UNSCANNABLE_WARNING]);
+  });
+
+  it("does not report `unscannable` for ordinary nesting (negative)", async () => {
+    const r = await sanitizeText(
+      `${"<div>".repeat(50)}see https://example.com/docs`,
+      { exfilScan: true },
+    );
+    assert.deepEqual(r.found, []);
     assert.deepEqual(r.warnings, []);
   });
 
@@ -671,6 +699,65 @@ describe("sanitizeText: Layer 5 filterInjection", () => {
     assert.equal(r.modified, true);
   });
 
+  it("reports a deletion even when the filter returns no warning code (never silent)", async () => {
+    const r = await sanitizeText("docs BAD rules", {
+      filterInjection: () => ({ removeSpans: ["BAD"] }),
+    });
+    assert.equal(r.cleaned, "docs  rules");
+    assert.deepEqual(r.warnings, [
+      FILTER_WARNING_MESSAGE[FILTER_WARNING.SPANS_REMOVED],
+    ]);
+  });
+
+  it("folds a FILTER_FLAGGED code into the deletion report (bytes did change)", async () => {
+    const r = await sanitizeText("docs BAD rules", {
+      filterInjection: () => ({
+        removeSpans: ["BAD"],
+        warning: FILTER_WARNING.FILTER_FLAGGED,
+      }),
+    });
+    assert.deepEqual(r.warnings, [
+      FILTER_WARNING_MESSAGE[FILTER_WARNING.SPANS_REMOVED],
+    ]);
+  });
+
+  it("keeps a FILTER_ERROR code beside the deletion report", async () => {
+    const r = await sanitizeText("docs BAD rules", {
+      filterInjection: () => ({
+        removeSpans: ["BAD"],
+        warning: FILTER_WARNING.FILTER_ERROR,
+      }),
+    });
+    assert.deepEqual(r.warnings, [
+      FILTER_WARNING_MESSAGE[FILTER_WARNING.SPANS_REMOVED],
+      FILTER_WARNING_MESSAGE[FILTER_WARNING.FILTER_ERROR],
+    ]);
+  });
+
+  it("re-runs Layer 3 when a deletion joins a look-alike host", async () => {
+    // Before the deletion there is no URL at all; deleting "XX" forms
+    // https://аpple.com, which reads as "apple.com". Layer 3 must vet the
+    // text Layer 5 hands on, not only the text it was given.
+    const r = await sanitizeText("go to httXXps://аpple.com/login now", {
+      exfilScan: true,
+      filterInjection: () => ({ removeSpans: ["XX"] }),
+    });
+    assert.equal(r.cleaned, "go to https://аpple.com/login now");
+    assert.deepEqual(r.found, ["confusable-host"]);
+    assert.equal(r.warnings.length, 2);
+    assert.match(r.warnings[1], /reads as "apple\.com"/u);
+  });
+
+  it("does not re-run Layer 3 when exfilScan is off", async () => {
+    const r = await sanitizeText("go to httXXps://аpple.com/login now", {
+      filterInjection: () => ({ removeSpans: ["XX"] }),
+    });
+    assert.deepEqual(r.found, []);
+    assert.deepEqual(r.warnings, [
+      FILTER_WARNING_MESSAGE[FILTER_WARNING.SPANS_REMOVED],
+    ]);
+  });
+
   it("makes no change when the requested spans don't match", async () => {
     const filterInjection = () => ({ removeSpans: ["NOT PRESENT"] });
     const r = await sanitizeText("clean docs", { filterInjection });
@@ -820,7 +907,10 @@ describe("sanitizeText: Layer 5 span deletion is re-vetted by Layer 4 (reconstit
     assert.equal(calls, 2); // pre-Layer-5 pass + post-deletion re-scan
     assert.equal(r.cleaned, "a  b"); // span deleted, nothing else changed
     assert.equal(r.modified, true); // the deletion itself still counts
-    assert.deepEqual(r.warnings, []); // neither redact pass found anything
+    // Neither redact pass found anything; the deletion alone is reported.
+    assert.deepEqual(r.warnings, [
+      FILTER_WARNING_MESSAGE[FILTER_WARNING.SPANS_REMOVED],
+    ]);
   });
 
   it("does not re-run redact when Layer 5 finds nothing to delete (no span present)", async () => {
@@ -877,8 +967,87 @@ describe("sanitizeText: Layer 5 span deletion is re-vetted by Layer 4 (reconstit
     assert.equal(calls.length, 2); // pre- and post-deletion passes
     assert.equal(r.cleaned, "sk-live-[REDACTED]");
     assert.deepEqual(r.warnings, [
+      FILTER_WARNING_MESSAGE[FILTER_WARNING.SPANS_REMOVED],
       `API keys/secrets redacted: api-key${REDACTION_DOCTRINE}`,
     ]);
+  });
+});
+
+describe("MUTATION_RERUNS: each text-mutating layer re-vets exactly its declared downstream layers", () => {
+  it("declares the exact re-run table", () => {
+    assert.deepEqual(
+      Object.fromEntries(
+        Object.entries(MUTATION_RERUNS).map(([k, v]) => [k, [...v]]),
+      ),
+      {
+        "html-splice": [],
+        redact: [],
+        "span-delete": ["url-scan", "redact"],
+      },
+    );
+    assert.ok(Object.isFrozen(MUTATION_RERUNS));
+    for (const steps of Object.values(MUTATION_RERUNS))
+      assert.ok(Object.isFrozen(steps));
+  });
+
+  /** A redactor that counts its calls and never finds anything. */
+  const countingRedact = () => {
+    const calls = [];
+    return {
+      calls,
+      redact: (text) => {
+        calls.push(text);
+        return null;
+      },
+    };
+  };
+
+  // The number of Layer-4 passes is the observable trace of the table: one
+  // first pass, plus one per mutation whose source re-runs `redact`.
+  for (const [label, text, options, passes] of [
+    ["no mutation", "plain prose", {}, 1],
+    [
+      "an html-splice",
+      "a <!-- hidden --> b",
+      { html: true },
+      1 + MUTATION_RERUNS["html-splice"].filter((s) => s === "redact").length,
+    ],
+    [
+      "a span-delete",
+      "keep DROP keep",
+      { filterInjection: () => ({ removeSpans: ["DROP"] }) },
+      1 + MUTATION_RERUNS["span-delete"].filter((s) => s === "redact").length,
+    ],
+  ])
+    it(`runs Layer 4 ${passes} time(s) after ${label}`, async () => {
+      const { calls, redact } = countingRedact();
+      const r = await sanitizeText(text, { ...options, redact });
+      // vetStageValue also redacts the reveal and each splice original on the
+      // way out; those are exit vetting, not pipeline passes.
+      const stageValues = new Set([
+        r.reveal,
+        ...(r.splices ?? []).map((splice) => splice.original),
+      ]);
+      const pipelinePasses = calls.filter((t) => !stageValues.has(t));
+      assert.equal(pipelinePasses.length, passes);
+      assert.equal(
+        pipelinePasses.at(-1),
+        r.cleaned,
+        "the last pass saw the final text",
+      );
+    });
+
+  it("re-runs Layer 3 after a span-delete only when exfilScan enables it on the first pass", async () => {
+    const filterInjection = () => ({ removeSpans: ["XX"] });
+    const on = await sanitizeText("see httXXps://аpple.com", {
+      exfilScan: true,
+      filterInjection,
+    });
+    const off = await sanitizeText("see httXXps://аpple.com", {
+      filterInjection,
+    });
+    assert.deepEqual(on.found, [CATEGORY.CONFUSABLE_HOST]);
+    assert.deepEqual(off.found, []);
   });
 });
 
@@ -983,6 +1152,20 @@ describe("sanitizeValue", () => {
     );
     assert.equal(r.sgrNote, true);
     assert.equal(r.modified, true);
+  });
+
+  it("drops sgrNote when ANOTHER leaf warned (a note-only leaf must not headline a warned value)", async () => {
+    const warnings = [];
+    const redact = (text) =>
+      text === "SECRET" ? { text: "[REDACTED]", found: ["api-key"] } : null;
+    const r = await sanitizeValue(
+      [`${ESC}[31mred${ESC}[0m`, "SECRET"],
+      { sgrCarveOut: true, redact },
+      warnings,
+    );
+    assert.deepEqual(r.value, ["red", "[REDACTED]"]);
+    assert.equal(warnings.length, 1);
+    assert.equal(r.sgrNote, false);
   });
 
   it("leaves an all-clean array unmodified with sgrNote false", async () => {
@@ -1326,38 +1509,174 @@ describe("shared-substructure DAG is bounded (O2 memoization)", () => {
   );
 });
 
-// ─── sanitizeValue: hidden chars in object KEYS (S5) ─────────────────────────
+// ─── sanitizeValue: object KEYS run the same layers as leaves (S5) ───────────
+
+describe("sanitizeValueWith: the one walk behind the library's and the hook's sanitizeValue", () => {
+  it("hands each value leaf to `leaf` and each key to `key`, once apiece", async () => {
+    const leaves = [];
+    const keys = [];
+    const sinks = { warnings: [], notes: [], reveals: [], splices: [] };
+    const r = await sanitizeValueWith(
+      { alpha: "one", nested: { beta: ["two", 3, null] } },
+      {
+        leaf: async (text) => {
+          leaves.push(text);
+          return {
+            cleaned: text.toUpperCase(),
+            warnings: [],
+            notes: [],
+            modified: true,
+            sgrNote: false,
+          };
+        },
+        key: async (text) => {
+          keys.push(text);
+          return {
+            cleaned: text,
+            warnings: [],
+            notes: [],
+            modified: false,
+            sgrNote: false,
+          };
+        },
+      },
+      sinks,
+    );
+    assert.deepEqual(r.value, {
+      alpha: "ONE",
+      nested: { beta: ["TWO", 3, null] },
+    });
+    assert.equal(r.modified, true);
+    assert.deepEqual(leaves.sort(), ["one", "two"]);
+    assert.deepEqual(keys.sort(), ["alpha", "beta", "nested"]);
+  });
+
+  it("routes each verdict's findings into the caller's sinks", async () => {
+    const sinks = { warnings: [], notes: [], reveals: [], splices: [] };
+    await sanitizeValueWith(
+      { k: "v" },
+      {
+        leaf: async (text) => ({
+          cleaned: text,
+          warnings: ["leaf-w"],
+          notes: ["leaf-n"],
+          modified: false,
+          sgrNote: false,
+        }),
+        key: async (text) => ({
+          cleaned: text,
+          warnings: ["key-w"],
+          notes: [],
+          modified: false,
+          sgrNote: false,
+        }),
+      },
+      sinks,
+    );
+    assert.deepEqual(sinks.warnings.sort(), ["key-w", "leaf-w"]);
+    assert.deepEqual(sinks.notes, ["leaf-n"]);
+  });
+});
 
 describe("sanitizeValue key screening (S5)", () => {
-  it("flags a key carrying a ZWSP run + ESC but leaves `modified` false when the VALUE is clean (key-only finding, no bytes changed)", async () => {
+  it("rewrites a key carrying a ZWSP run + ESC, keeping its value under the cleaned name", async () => {
     const hiddenKey = `std${ZW.repeat(15)}${ESC}[31mout`;
     const warnings = [];
     const r = await sanitizeValue({ [hiddenKey]: "clean value" }, {}, warnings);
-    // Key is NOT rewritten (precision: rewriting could collide / break schema).
-    assert.deepEqual(Object.keys(r.value), [hiddenKey]);
-    assert.equal(r.value[hiddenKey], "clean value");
-    // `modified` means output BYTES changed (composeContext's contract); a
-    // key-only finding changes nothing byte-wise, so it must stay false even
-    // though the finding is still flagged via warnings.
-    assert.equal(r.modified, false);
+    assert.deepEqual(r.value, { stdout: "clean value" });
+    // The key's bytes changed, so the output did.
+    assert.equal(r.modified, true);
     assert.ok(
-      warnings.some((w) => w.includes("object key") && w.includes("hidden")),
-      "a key warning naming hidden chars is recorded",
+      warnings.some((w) => w.startsWith("Stripped:")),
+      "the key's Layer-1 strip is reported like a leaf's",
     );
   });
 
-  it("sets `modified` true when BOTH a key finding and a real value change occur together", async () => {
-    const hiddenKey = `std${ZW.repeat(15)}${ESC}[31mout`;
+  it("redacts a secret carried in a key (Layer 4 covers keys)", async () => {
+    const redact = (text) =>
+      text.includes("sk-live-AAAABBBB")
+        ? {
+            text: text.replaceAll("sk-live-AAAABBBB", "sk-live-[REDACTED]"),
+            found: ["api-key"],
+          }
+        : null;
     const warnings = [];
     const r = await sanitizeValue(
-      { [hiddenKey]: `mal${ZW}ware` },
+      { "token=sk-live-AAAABBBB": "x", ok: "y" },
+      { redact },
+      warnings,
+    );
+    assert.deepEqual(r.value, { "token=sk-live-[REDACTED]": "x", ok: "y" });
+    assert.equal(r.modified, true);
+    assert.deepEqual(warnings, [
+      `API keys/secrets redacted: api-key${REDACTION_DOCTRINE}`,
+    ]);
+  });
+
+  it("does not run Layer 5 on a key (a span deletion there could merge fields)", async () => {
+    const r = await sanitizeValue(
+      { aBADb: "BAD value" },
+      { filterInjection: () => ({ removeSpans: ["BAD"] }) },
+      [],
+    );
+    assert.deepEqual(r.value, { aBADb: " value" });
+  });
+
+  it("withholds every field whose key collapses onto another, keeping the field count", async () => {
+    const warnings = [];
+    const r = await sanitizeValue(
+      { stdout: "real", [`std${ZW}out`]: "forged", code: 0 },
       {},
       warnings,
     );
-    assert.deepEqual(Object.keys(r.value), [hiddenKey]);
-    assert.equal(r.value[hiddenKey], "malware"); // value WAS sanitized
-    assert.equal(r.modified, true); // real byte change on the value
-    assert.ok(warnings.some((w) => w.includes("object key")));
+    assert.deepEqual(r.value, {
+      stdout: COLLISION_WITHHELD_MESSAGE,
+      code: 0,
+      "stdout [withheld duplicate 2]": COLLISION_WITHHELD_MESSAGE,
+    });
+    assert.equal(r.modified, true);
+    assert.ok(warnings.includes(collisionWarning("stdout", "")));
+  });
+
+  it("warns once per collapsed name and names the nested location", async () => {
+    const warnings = [];
+    const r = await sanitizeValue(
+      { outer: { a: 1, [`a${ZW}`]: 2, [`${ZW}a`]: 3 } },
+      {},
+      warnings,
+    );
+    assert.deepEqual(r.value, {
+      outer: {
+        a: COLLISION_WITHHELD_MESSAGE,
+        "a [withheld duplicate 2]": COLLISION_WITHHELD_MESSAGE,
+        "a [withheld duplicate 3]": COLLISION_WITHHELD_MESSAGE,
+      },
+    });
+    assert.deepEqual(
+      warnings.filter((w) => w.includes("collapsed to the name")),
+      [collisionWarning("a", "outer")],
+    );
+  });
+
+  it("never clobbers a raw field already named like a disambiguated duplicate", async () => {
+    const r = await sanitizeValue(
+      { "a [withheld duplicate 2]": "raw", a: 1, [`a${ZW}`]: 2 },
+      {},
+      [],
+    );
+    assert.deepEqual(r.value, {
+      "a [withheld duplicate 2]": "raw",
+      a: COLLISION_WITHHELD_MESSAGE,
+      "a [withheld duplicate 3]": COLLISION_WITHHELD_MESSAGE,
+    });
+  });
+
+  it("keeps a sanitized __proto__ key as an own field, never as the prototype", async () => {
+    const input = JSON.parse(`{"__pro${ZW}to__": {"polluted": true}}`);
+    const r = await sanitizeValue(input, {}, []);
+    assert.deepEqual(Object.keys(r.value), ["__proto__"]);
+    assert.equal(Object.getPrototypeOf(r.value), Object.prototype);
+    assert.equal({}.polluted, undefined);
   });
 
   it("does not flag ordinary keys (negative: clean keys stay silent)", async () => {
@@ -1368,6 +1687,20 @@ describe("sanitizeValue key screening (S5)", () => {
       warnings,
     );
     assert.deepEqual(r.value, { stdout: "ok", code: 0, nested: { a: "b" } });
+    assert.equal(r.modified, false);
+    assert.deepEqual(warnings, []);
+  });
+
+  it("leaves non-ASCII keys of real languages untouched (negative corpus)", async () => {
+    const keys = ["名前", "имя", "Größe", "kadın", "día", "اسم", "नाम", "café"];
+    const input = Object.fromEntries(keys.map((key) => [key, "v"]));
+    const warnings = [];
+    const r = await sanitizeValue(
+      input,
+      { html: true, exfilScan: true },
+      warnings,
+    );
+    assert.deepEqual(r.value, input);
     assert.equal(r.modified, false);
     assert.deepEqual(warnings, []);
   });

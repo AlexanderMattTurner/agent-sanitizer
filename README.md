@@ -83,6 +83,7 @@ without notice.
 | `hidden-html`         | Elements hidden via CSS/attribute (`display:none`, `hidden`, etc.) spliced out by Layer 2                    |
 | `exfil-urls`          | Exfil-shaped URLs detected by Layer 3 (reported, not removed)                                                |
 | `confusable-host`     | URL hosts that are look-alikes of an ASCII name (`аpple.com`), detected by Layer 3 (reported, not rewritten) |
+| `unscannable`         | Input nested too deeply for Layer 3 to scan; any URL in it is unvetted (reported as a warning)               |
 
 ### warnings vs notes
 

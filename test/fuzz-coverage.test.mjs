@@ -110,9 +110,13 @@ const FUZZ_EXEMPT = Object.freeze({
     "maps a host-supplied load reason through a table, with no parse",
   excludeFromContextScan: "path-prefix predicate over one scan entry name",
   hasNonAscii: "code-unit range predicate over one string",
+  isAsciiPretender:
+    "code-point class predicate over one glyph, driven through selectFoldableFindings",
   isBenignAnsiKinds:
     "set membership over the TOKEN_KIND values Layer 1 removed",
   isHiddenOpen: "short-string predicate over one open tag",
+  isHtmlShaped:
+    "two regex searches over one string; policy-within-gate is asserted over the harvested corpus in gates-superset.test.mjs",
   isIncidentalInvisible:
     "threshold read over counts the invisible analysis produced",
   isSgrOnly: "predicate over the tokens scanAnsi produced",
@@ -122,6 +126,8 @@ const FUZZ_EXEMPT = Object.freeze({
   scopeFor: "looks a tool name up in the fold-scope table",
 
   // ── operator-facing prose built from an already-classified finding ───────
+  collisionWarning:
+    "formats one field name and path into the collision sentence",
   composeContext: "assembles the context block from a computed warning list",
   describeExfil: "formats Layer 3's classified threats into prose",
   describeRemoved: "formats Layer 2's removal counts into prose",
@@ -166,6 +172,8 @@ const FUZZ_EXEMPT = Object.freeze({
   payloadLongRunSample: "reads that same view, pinned by invisible-fast-path",
   scanHtmlFragment:
     "has no invariant of its own beyond what the sanitizeHtml round-trip and splice-fidelity properties assert on its output",
+  sanitizeValueWith:
+    "the walk sanitizeValue binds to sanitizeText, fuzzed through sanitizeValue",
   stripAnsiFully: "the ANSI half of applyLayer1, fuzzed through layer1-ansi",
   suppressToolOutput:
     "substitutes a sentinel for a subtree and parses nothing; its content-block recogniser is an exact key/value match against a closed schema map, pinned by the block cases in output.test",

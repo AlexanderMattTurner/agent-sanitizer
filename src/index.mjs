@@ -61,6 +61,7 @@ export {
 // would eagerly load on every root import.
 export {
   HTML_TAG_PRESENT,
+  isHtmlShaped,
   MD_LINK_HINT,
   SECRET_HINT,
   SECRET_HINT_EXT,

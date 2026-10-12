@@ -11,9 +11,11 @@
  * non-ASCII glyphs — see isTokenBoundary). A token folds only when both hold:
  *
  *   1. Folding makes it pure ASCII — every non-ASCII code point in it is
- *      flagged. The bypass requires the folded token to come out byte-equal to
- *      an ASCII deny-rule target, so a token left holding an unmapped glyph
- *      could never match one anyway; skipping it costs no enforcement.
+ *      flagged AND an ASCII pretender (see isAsciiPretender: a letter of a real
+ *      Latin orthography, `İ` or `í`, is a word's own letter, not a disguise).
+ *      The bypass requires the folded token to come out byte-equal to an ASCII
+ *      deny-rule target, so a token left holding an unmapped glyph could never
+ *      match one anyway; skipping it costs no enforcement.
  *   2. It is more than a lone non-ASCII glyph standing between two boundaries.
  *      A one-code-point token is a one-letter foreign word — Russian "с", "о",
  *      "у", "а" are among the most frequent words in the language — as readily
@@ -163,6 +165,44 @@ export function hasNonAscii(value) {
   return false;
 }
 
+// The Unicode blocks that hold the letters of living Latin-script orthographies:
+// Latin-1 Supplement, Latin Extended-A/B (U+00C0–U+024F) and Latin Extended
+// Additional (U+1E00–U+1EFF, Vietnamese). IPA, phonetic small capitals and the
+// fullwidth forms are Latin-script too, but no orthography spells a word with
+// them, so they stay look-alikes.
+const ORTHOGRAPHIC_LATIN = /^[\u00C0-\u024F\u1E00-\u1EFF]$/u;
+const LATIN_SCRIPT = /^\p{Script=Latin}$/u;
+const COMBINING_MARK = /^\p{M}$/u;
+
+/**
+ * True when `glyph` is pretending to be ASCII: it holds a non-ASCII code point
+ * that is neither a combining mark nor a letter of a real Latin-script
+ * orthography. THE predicate both confusable rules gate on — the host rule
+ * (./confusable-host.mjs) for its WARNING tier and the input fold (below) for
+ * what it may rewrite — so they cannot disagree about which glyph is a disguise.
+ *
+ * A Turkish `ı`/`İ`, a Spanish `í` or a Polish `ł` resembles an ASCII letter
+ * because it IS one plus a diacritic, in the same script; `altın.com` and a file
+ * named `día.txt` are words, and rewriting or flagging them is the false
+ * positive this repo weighs as the worse failure. What stays a pretender is a
+ * cross-script glyph (Cyrillic `а`, Cherokee `Ꭺ`) and a Latin-script one no
+ * orthography uses — IPA `ɡ`, small-capital `ᴀ`, and anything NFKC folds
+ * straight to ASCII (fullwidth `ａ`, the `ﬁ` ligature).
+ * @param {string} glyph one or more code points
+ * @returns {boolean}
+ */
+export function isAsciiPretender(glyph) {
+  for (const ch of glyph) {
+    if (!hasNonAscii(ch) || COMBINING_MARK.test(ch)) continue;
+    const orthographic =
+      LATIN_SCRIPT.test(ch) &&
+      ORTHOGRAPHIC_LATIN.test(ch) &&
+      hasNonAscii(ch.normalize("NFKC"));
+    if (!orthographic) return true;
+  }
+  return false;
+}
+
 /**
  * Model-facing note naming the fields whose confusables were folded.
  * @param {string[]} normalized
@@ -308,12 +348,18 @@ function isTokenBoundary(ch) {
 export function selectFoldableFindings(text, findings) {
   for (const finding of findings)
     assertFinding(finding, bytesAt(text, finding));
+  // A same-script orthographic letter (`İ` in `İstanbul`, `í` in `día`) is not
+  // a disguise, so it counts as an unmapped glyph below: its token is a word,
+  // and none of it folds.
+  const pretenders = findings.filter((finding) =>
+    isAsciiPretender(finding.char),
+  );
 
   // Every UTF-16 offset a finding covers, not just its start: a scanner is free
   // to report a multi-code-point match, and treating only the first offset as
   // flagged would read the rest as unmapped and reject an otherwise ASCII token.
   const flagged = new Set();
-  for (const finding of findings)
+  for (const finding of pretenders)
     for (let i = 0; i < finding.char.length; i++)
       flagged.add(finding.index + i);
 
@@ -357,7 +403,7 @@ export function selectFoldableFindings(text, findings) {
   // units, which is what `foldableAt` is indexed by: an astral glyph occupies
   // two of them, so a code-point walk would leave the tail of a `char` that
   // carries one unchecked.
-  return findings.filter((finding) => {
+  return pretenders.filter((finding) => {
     for (let i = 0; i < finding.char.length; i++)
       if (foldableAt[finding.index + i] !== 1) return false;
     return true;

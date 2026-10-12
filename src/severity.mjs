@@ -46,12 +46,25 @@ export const SEVERITY = Object.freeze({
  */
 
 /**
+ * The message, refused when empty. Every finding is built here, so an empty
+ * report — a byte change or a flag the caller is never told about — fails at
+ * construction instead of rendering as a blank banner line.
+ * @param {string} message
+ * @returns {string}
+ */
+function reportable(message) {
+  if (typeof message !== "string" || message === "")
+    throw new TypeError("agent-sanitizer: a finding needs a non-empty message");
+  return message;
+}
+
+/**
  * A WARNING-severity finding: injection-shaped, worth the banner.
  * @param {string} message
  * @returns {Finding}
  */
 export function warning(message) {
-  return { severity: SEVERITY.WARNING, message };
+  return { severity: SEVERITY.WARNING, message: reportable(message) };
 }
 
 /**
@@ -60,7 +73,7 @@ export function warning(message) {
  * @returns {Finding}
  */
 export function note(message) {
-  return { severity: SEVERITY.NOTE, message };
+  return { severity: SEVERITY.NOTE, message: reportable(message) };
 }
 
 /**

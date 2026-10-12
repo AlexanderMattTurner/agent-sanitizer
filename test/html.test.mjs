@@ -1968,7 +1968,9 @@ describe("R1: parser stack overflow fails closed (never throws)", () => {
     assert.equal(typeof cleaned, "string");
     assert.equal(cleaned, UNPARSEABLE_PLACEHOLDER);
     assert.ok(found.includes("hidden-html"));
-    assert.ok(found.includes("exfil-urls"));
+    // An unread document is reported as unscannable, not as a URL it never saw.
+    assert.ok(found.includes("unscannable"));
+    assert.ok(!found.includes("exfil-urls"));
     // The warning names the whole-output withhold, not a routine splice.
     assert.ok(warnings.includes(HTML_UNPARSEABLE_WARNING));
     assert.ok(!warnings.some((w) => w.includes("hidden element(s)")));

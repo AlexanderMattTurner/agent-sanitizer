@@ -63,7 +63,7 @@ import { containsPlaceholder, layer2Keys } from "./lib/placeholder-grammar.mjs";
 // doc for the fail-OPEN hazard of a bare static npm import). A load failure
 // leaves the bindings undefined and the dependent call throws into the CLI's
 // fail-closed catch, which suppresses the output.
-// HTML_TAG_PRESENT (the Layer-2 pre-gate) and the Layer-1 re-exports come from
+// isHtmlShaped (the MCP Layer-2 policy) and the Layer-1 re-exports come from
 // the package ROOT, which exposes them WITHOUT eagerly loading the
 // remark/rehype/unified graph (~120ms of module-load time). Importing `/html`
 // here instead would drag that graph onto every importer of this module. The
@@ -71,7 +71,7 @@ import { containsPlaceholder, layer2Keys } from "./lib/placeholder-grammar.mjs";
 const _sanitizer = /** @type {typeof import("agent-sanitizer")} */ (
   await lazyImport("agent-sanitizer")
 );
-const { HTML_TAG_PRESENT } = _sanitizer;
+const { isHtmlShaped } = _sanitizer;
 // applyLayer1 is the package's composite Layer-1 view (ANSI + invisible strip,
 // both 7-bit ESC and 8-bit C1 CSI introducers swept to a control-free result).
 // It and the pre-gate regexes are re-exported so the tests reach them through
@@ -93,10 +93,17 @@ const _output = /** @type {typeof import("agent-sanitizer/output")} */ (
 );
 const {
   sanitizeText: sanitizeTextSeam,
+  sanitizeValueWith,
   composeContext: composeContextSeam,
   withheldWarning,
 } = _output;
-export const { describeRemoved, describeWarned, suppressToolOutput } = _output;
+export const {
+  describeRemoved,
+  describeWarned,
+  suppressToolOutput,
+  COLLISION_WITHHELD_MESSAGE,
+  collisionWarning,
+} = _output;
 
 const HOOK_NAME = "sanitize-output";
 
@@ -256,14 +263,14 @@ export async function sanitizeText(
   // Layer 2 (HTML rewrite) runs on WebFetch/WebSearch always, and on MCP output
   // ONLY when it is HTML-shaped: a connector can relay an HTML doc (a rendered PR
   // body, a Drive export) carrying the same hidden-injection payloads as a fetched
-  // page, so it earns the same splice. Gating on HTML_TAG_PRESENT keeps the common
+  // page, so it earns the same splice. Gating on isHtmlShaped keeps the common
   // case — structured JSON/text MCP output the task needs verbatim — untouched.
   // Layer 3 (exfil detection) and the strict Layer-4 secret mode run on all
   // untrusted ingress (the field name around a value is attacker-controlled there,
   // so the redactor's relabelable benign-skips are disabled).
   const html =
     WEB_INGRESS_TOOLS.has(toolName) ||
-    (isMcpTool(toolName) && HTML_TAG_PRESENT.test(text));
+    (isMcpTool(toolName) && isHtmlShaped(text));
   const seamOptions = {
     html,
     exfilScan: webIngress,
@@ -358,35 +365,25 @@ function applyPostText(result, post) {
 }
 
 /**
- * Sanitize every string leaf of a tool-output value, preserving its shape.
- * Built-in tools return structured objects (Bash: `{stdout, stderr, interrupted,
- * isImage}`), and the harness ignores an `updatedToolOutput` whose shape does not
- * match the tool's schema — showing the raw output instead. So a single flat
- * string handed back for an object-shaped tool would leak the unsanitized output;
- * rewriting leaves in place keeps the shape intact. Object KEYS are sanitized
- * too (a connector can hide a secret in a field name); non-string leaves
- * (booleans, numbers, null) pass through untouched, and `warnings` accumulates
- * across leaves.
- * `sgrNote` is the OR across leaves: true when some leaf came back note-only.
- * `reveals` accumulates each leaf's pre-Layer-2 text (when the HTML splice
- * removed something) for the orchestrator to persist, and `notes` the leaves'
- * NOTE-severity findings — same mutated-accumulator shape as `warnings`.
- * `splices` accumulates each leaf's Layer-2 placeholder→original pairs (the
- * per-key twin of `reveals`, already vetted by the seam) for the orchestrator's
- * span persistence — same mutated-accumulator shape again.
+ * Sanitize every string leaf AND object key of a tool-output value under this
+ * hook's per-tool policy, preserving its shape. Built-in tools return
+ * structured objects (Bash: `{stdout, stderr, interrupted, isImage}`), and the
+ * harness ignores an `updatedToolOutput` whose shape does not match the tool's
+ * schema — showing the raw output instead. The walk, its key-collision
+ * withholding and its depth/cycle guards are the engine's sanitizeValueWith,
+ * so this hook and the library cannot disagree about a value's strings.
+ * `warnings`, `reveals`, `notes` and `splices` accumulate across strings.
  * @param {any} value
  * @param {string} toolName
  * @param {string[]} warnings
  * @param {string[]} [reveals]
  * @param {{remainingMs: () => number}} [deadline] shared wall-clock budget across
- *   every leaf of this value (created once by the top-level caller)
+ *   every string of this value (created once by the top-level caller)
  * @param {SanitizeExtensions} [ext]
  * @param {string[]} [notes]  appended last so an existing caller's positional
  *   arguments keep their meaning
  * @param {Array<{ placeholder: string, original: string }>} [splices]  appended
  *   after `notes` for the same positional-compatibility reason
- * @param {string} [path]  dotted location of `value` within the tool output,
- *   used only to name a key collision's location in its warning
  * @returns {Promise<{ value: any, modified: boolean, sgrNote: boolean }>}
  */
 export async function sanitizeValue(
@@ -398,228 +395,19 @@ export async function sanitizeValue(
   ext = {},
   notes = [],
   splices = [],
-  path = "",
 ) {
-  if (typeof value === "string") {
-    const result = await sanitizeText(value, toolName, deadline, ext);
-    warnings.push(...result.warnings);
-    notes.push(...result.notes);
-    if (result.reveal !== undefined) reveals.push(result.reveal);
-    if (result.splices !== undefined) splices.push(...result.splices);
-    return {
-      value: result.cleaned,
-      modified: result.modified,
-      sgrNote: result.sgrNote,
-    };
-  }
-  if (Array.isArray(value)) {
-    const out = [];
-    let modified = false;
-    let sgrNote = false;
-    for (const [index, item] of value.entries()) {
-      const result = await sanitizeValue(
-        item,
-        toolName,
-        warnings,
-        reveals,
-        deadline,
-        ext,
-        notes,
-        splices,
-        `${path}[${index}]`,
-      );
-      out.push(result.value);
-      if (result.modified) modified = true;
-      if (result.sgrNote) sgrNote = true;
-    }
-    return { value: out, modified, sgrNote };
-  }
-  if (value !== null && typeof value === "object")
-    return sanitizeObject(
-      value,
-      toolName,
-      warnings,
-      reveals,
-      deadline,
-      ext,
-      notes,
-      splices,
-      path,
-    );
-  return { value, modified: false, sgrNote: false };
-}
-
-// The value a colliding field is replaced with — the WHOLE value, not a
-// leaf-wise walk of it. A shape-preserving walk (suppressToolOutput) rewrites
-// only string leaves, so a colliding number, boolean or null would reach the
-// model verbatim while the warning claimed it was withheld — an attacker-chosen
-// scalar sitting under a legitimate field name, which is precisely the
-// misattribution this withholding exists to prevent. Replacing the value
-// outright changes that field's JSON type, and that is accepted here: the field
-// is off-schema by construction (a duplicate name is in no tool's schema), and
-// what the harness's shape check actually turns on — the object's key COUNT —
-// is preserved by the disambiguated slot below.
-export const COLLISION_WITHHELD_MESSAGE =
-  "[WITHHELD — this field's name collided with another after sanitization]";
-
-/**
- * Next free `[withheld duplicate N]` index, per output object and collided
- * name. Memoized because restarting the probe at 2 on every collision is
- * O(N²) in the number of colliding fields — and that count is the tool
- * response author's to choose, so the quadratic scan is an attacker-composable
- * stall onto the very raw-output fail-open this guard exists to prevent.
- * @type {WeakMap<object, Map<string, number>>}
- */
-const nextWithheldIndex = new WeakMap();
-
-/**
- * The warning for a post-sanitization key collision, naming where it sits.
- * Exported so tests assert by reference rather than re-typing the prose.
- * @param {string} name  the collapsed-to name
- * @param {string} path  dotted location of the owning object ("" = top level)
- * @returns {string}
- */
-export function collisionWarning(name, path) {
-  return (
-    `two or more fields in the tool output collapsed to the name "${name}" after ` +
-    `sanitization (at ${path === "" ? "the top level" : path}); their values were ` +
-    `WITHHELD (fail closed) because there is no way to tell which field was ` +
-    `legitimate. Sibling fields are unaffected — do not treat the withheld values ` +
-    `as empty or absent; re-request them by a means that does not depend on this ` +
-    `field name, or ask the user`
-  );
-}
-
-/**
- * A key not already present in `out`, derived from the collided name, so the
- * sanitized object keeps the same field COUNT as the raw response. A shape
- * REDUCTION is what the harness rejects (it then shows the raw, unvetted
- * output — a fail-open), so the withheld entry must still occupy a slot.
- * @param {Record<string, any>} out
- * @param {string} cleaned
- * @returns {string}
- */
-function withheldKeyFor(out, cleaned) {
-  let taken = nextWithheldIndex.get(out);
-  if (taken === undefined) nextWithheldIndex.set(out, (taken = new Map()));
-  // The probe loop stays even with the memo: a raw field already NAMED
-  // `<cleaned> [withheld duplicate 2]` must not be clobbered.
-  for (let n = taken.get(cleaned) ?? 2; ; n++) {
-    const candidate = `${cleaned} [withheld duplicate ${n}]`;
-    if (!Object.hasOwn(out, candidate)) {
-      taken.set(cleaned, n + 1);
-      return candidate;
-    }
-  }
-}
-
-/**
- * Sanitize a plain object: every KEY through sanitizeText (a field name is as
- * attacker-controlled as a leaf — an MCP connector can hide a secret or
- * invisible char in one) and every VALUE through sanitizeValue. Split out of
- * sanitizeValue to keep that function under the statement cap.
- * @param {Record<string, any>} value
- * @param {string} toolName
- * @param {string[]} warnings
- * @param {string[]} reveals
- * @param {{remainingMs: () => number}} deadline shared wall-clock budget
- * @param {SanitizeExtensions} ext
- * @param {string[]} notes  accumulates the leaves' NOTE-severity findings
- * @param {Array<{ placeholder: string, original: string }>} splices  accumulates
- *   the leaves' Layer-2 placeholder→original pairs
- * @param {string} [path]  dotted location of this object in the tool output
- * @returns {Promise<{ value: Record<string, any>, modified: boolean, sgrNote: boolean }>}
- */
-async function sanitizeObject(
-  value,
-  toolName,
-  warnings,
-  reveals,
-  deadline,
-  ext,
-  notes,
-  splices,
-  path = "",
-) {
-  /** @type {Record<string, any>} */
-  const out = {};
-  let modified = false;
-  let sgrNote = false;
-  // Names already withheld, so a THIRD field colliding onto the same name does
-  // not re-suppress (and re-warn about) the first occupant a second time.
-  /** @type {Set<string>} */
-  const collided = new Set();
-  for (const [key, item] of Object.entries(value)) {
-    // Layers 1-4 only — `ext` is deliberately NOT passed for a field NAME. A
-    // callback sees just the string and the tool, so it cannot tell a schema key
-    // from content; a rewrite here can collapse two fields into one name, which
-    // costs both of them their values below. Extensions run on value leaves.
-    const keyResult = await sanitizeText(key, toolName, deadline);
-    warnings.push(...keyResult.warnings);
-    notes.push(...keyResult.notes);
-    if (keyResult.reveal !== undefined) reveals.push(keyResult.reveal);
-    if (keyResult.splices !== undefined) splices.push(...keyResult.splices);
-    if (keyResult.modified) modified = true;
-    if (keyResult.sgrNote) sgrNote = true;
-    const result = await sanitizeValue(
-      item,
-      toolName,
-      warnings,
-      reveals,
-      deadline,
-      ext,
-      notes,
-      splices,
-      path === "" ? keyResult.cleaned : `${path}.${keyResult.cleaned}`,
-    );
-    // Two distinct raw keys can sanitize to the same name (e.g. `token` and a
-    // `token` carrying a zero-width space stripped by Layer 1). Overwriting
-    // would hand back an object with FEWER keys than the raw response; the
-    // harness rejects an updatedToolOutput whose shape doesn't match the tool's
-    // schema and shows the RAW, unsanitized output instead (fail OPEN). So the
-    // colliding fields — and ONLY they — fail closed: both values are withheld
-    // (there is no way to tell the legitimate field from the planted one, and
-    // insertion order is the attacker's to choose), the second one takes a
-    // distinct name so the field count is preserved, and every sibling keeps
-    // its sanitized value. A hostile connector can therefore cost the model the
-    // colliding subtree, never the whole tool output.
-    const collision = Object.hasOwn(out, keyResult.cleaned);
-    if (collision) {
-      if (!collided.has(keyResult.cleaned)) {
-        collided.add(keyResult.cleaned);
-        warnings.push(collisionWarning(keyResult.cleaned, path));
-        defineOwn(out, keyResult.cleaned, COLLISION_WITHHELD_MESSAGE);
-      }
-      modified = true;
-    }
-    defineOwn(
-      out,
-      collision ? withheldKeyFor(out, keyResult.cleaned) : keyResult.cleaned,
-      collision ? COLLISION_WITHHELD_MESSAGE : result.value,
-    );
-    if (result.modified) modified = true;
-    if (result.sgrNote) sgrNote = true;
-  }
-  return { value: out, modified, sgrNote };
-}
-
-/**
- * Write `key` as an own data property. Not `out[key] = value`: a "__proto__"
- * key assigned with = hits Object.prototype's setter, dropping the field from
- * JSON output and letting the value hijack `out`'s prototype. defineProperty
- * writes it as own data and leaves the prototype untouched.
- * @param {Record<string, any>} out
- * @param {string} key
- * @param {unknown} value
- * @returns {void}
- */
-function defineOwn(out, key, value) {
-  Object.defineProperty(out, key, {
+  return sanitizeValueWith(
     value,
-    writable: true,
-    enumerable: true,
-    configurable: true,
-  });
+    {
+      leaf: (text) => sanitizeText(text, toolName, deadline, ext),
+      // Layers 1-4 only — `ext` is deliberately NOT passed for a field NAME. A
+      // callback sees just the string and the tool, so it cannot tell a schema
+      // key from content; a rewrite here can collapse two fields into one name,
+      // which costs both of them their values. Extensions run on value leaves.
+      key: (text) => sanitizeText(text, toolName, deadline),
+    },
+    { warnings, notes, reveals, splices },
+  );
 }
 
 // On-disk placeholder tripwire: warning for a Read whose RAW bytes — before

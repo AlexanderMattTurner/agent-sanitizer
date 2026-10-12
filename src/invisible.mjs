@@ -91,6 +91,7 @@ export const CATEGORY = Object.freeze({
   HIDDEN_HTML: "hidden-html",
   EXFIL_URLS: "exfil-urls",
   CONFUSABLE_HOST: "confusable-host",
+  UNSCANNABLE: "unscannable",
 });
 
 // code -> human label, used only to build `warnings` text. Decoupled from
@@ -106,6 +107,7 @@ export const CATEGORY_LABELS = Object.freeze({
   [CATEGORY.HIDDEN_HTML]: "hidden HTML",
   [CATEGORY.EXFIL_URLS]: "exfil URLs",
   [CATEGORY.CONFUSABLE_HOST]: "confusable hosts",
+  [CATEGORY.UNSCANNABLE]: "input too deeply nested to scan for URLs",
 });
 
 /** @type {Array<[string, RegExp]>} Each entry pairs a CATEGORY code with its detector. */

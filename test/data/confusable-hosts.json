@@ -1,5 +1,5 @@
 {
-  "_comment": "Corpus for the confusable-host rule (src/confusable-host.mjs). SINGLE SOURCE: every test that scores the rule, and any external benchmark harness, reads this file rather than restating cases. `benign` is the half that decides whether the rule is honest — real internationalized domain labels across many scripts, every one of which must produce ZERO findings; a rule that flags one of these is trading a real false positive for recall. `attacks` carries the expected severity per label, and the two tiers are evidential strength rather than attack class: `warning` for a label whose whole TR39 skeleton is pure ASCII, so it reads as an ASCII name outright, and `note` for a label that carries a cross-script confusable but keeps an unmapped glyph, so it reads as no ASCII name — thin evidence, since an ordinary word with one look-alike letter produces the same shape. `misses` are vectors the rule does NOT catch, kept here so the residual is a tested fact rather than a claim in a doc.",
+  "_comment": "Corpus for the confusable-host rule (src/confusable-host.mjs). SINGLE SOURCE: every test that scores the rule, and any external benchmark harness, reads this file rather than restating cases. `benign` is the half that decides whether the rule is honest — real internationalized domain labels across many scripts, every one of which must produce ZERO findings; a rule that flags one of these is trading a real false positive for recall. `attacks` carries the expected severity per label, and the two tiers are evidential strength rather than attack class: `warning` for a label whose whole TR39 skeleton is pure ASCII, so it reads as an ASCII name outright, and `note` for a label that carries a cross-script confusable but keeps an unmapped glyph, so it reads as no ASCII name — thin evidence, since an ordinary word with one look-alike letter produces the same shape. `sameScript` are real words of Latin-script orthographies whose skeleton is ASCII only because a native letter (the Turkish/Azerbaijani dotless ı) maps to an ASCII one: each must stay at the quiet `note` tier, never `warning`, and the input fold must leave every one untouched. `misses` are vectors the rule does NOT catch, kept here so the residual is a tested fact rather than a claim in a doc.",
 
   "benign": [
     { "label": "münchen", "script": "Latin", "note": "German umlaut" },
@@ -65,6 +65,44 @@
     { "label": "हिन्दी", "script": "Devanagari" },
     { "label": "ไทย", "script": "Thai" },
     { "label": "กรุงเทพ", "script": "Thai" },
+    {
+      "label": "kılıç",
+      "script": "Latin",
+      "note": "Turkish dotless i beside a cedilla"
+    },
+    {
+      "label": "ışık",
+      "script": "Latin",
+      "note": "Turkish dotless i beside s-cedilla"
+    },
+    { "label": "iğdır", "script": "Latin", "note": "Turkish place name" },
+    { "label": "şırnak", "script": "Latin", "note": "Turkish place name" },
+    { "label": "çanakkale", "script": "Latin", "note": "Turkish cedilla" },
+    { "label": "gəncə", "script": "Latin", "note": "Azerbaijani schwa" },
+    { "label": "azərbaycan", "script": "Latin", "note": "Azerbaijani schwa" },
+    {
+      "label": "mingəçevir",
+      "script": "Latin",
+      "note": "Azerbaijani schwa and cedilla"
+    },
+    {
+      "label": "việt",
+      "script": "Latin",
+      "note": "Vietnamese stacked diacritics"
+    },
+    {
+      "label": "nguyễn",
+      "script": "Latin",
+      "note": "Vietnamese stacked diacritics"
+    },
+    { "label": "đà", "script": "Latin", "note": "Vietnamese d-bar" },
+    { "label": "phở", "script": "Latin", "note": "Vietnamese horn" },
+    {
+      "label": "tiếng",
+      "script": "Latin",
+      "note": "Vietnamese stacked diacritics"
+    },
+    { "label": "đức", "script": "Latin", "note": "Vietnamese d-bar" },
     {
       "label": "istanbul",
       "script": "ASCII",
@@ -140,6 +178,86 @@
       "reads": "googleж",
       "severity": "note",
       "script": "Cyrillic+Latin"
+    },
+    {
+      "label": "ɡithub",
+      "reads": "github",
+      "severity": "warning",
+      "script": "Latin (IPA)",
+      "note": "IPA script g is Latin-script but no orthography's letter, so it stays a pretender"
+    },
+    {
+      "label": "ᴀpple",
+      "reads": "apple",
+      "severity": "warning",
+      "script": "Latin (small capital)",
+      "note": "a phonetic small capital, no orthography's letter"
+    }
+  ],
+
+  "sameScript": [
+    {
+      "label": "altın",
+      "reads": "altin",
+      "severity": "note",
+      "script": "Latin",
+      "note": "Turkish 'gold'"
+    },
+    {
+      "label": "kadın",
+      "reads": "kadin",
+      "severity": "note",
+      "script": "Latin",
+      "note": "Turkish 'woman'"
+    },
+    {
+      "label": "yazılım",
+      "reads": "yazilim",
+      "severity": "note",
+      "script": "Latin",
+      "note": "Turkish 'software'"
+    },
+    {
+      "label": "kırmızı",
+      "reads": "kirmizi",
+      "severity": "note",
+      "script": "Latin",
+      "note": "Turkish 'red'"
+    },
+    {
+      "label": "diyarbakır",
+      "reads": "diyarbakir",
+      "severity": "note",
+      "script": "Latin",
+      "note": "Turkish city"
+    },
+    {
+      "label": "ılık",
+      "reads": "ilik",
+      "severity": "note",
+      "script": "Latin",
+      "note": "Turkish 'lukewarm'"
+    },
+    {
+      "label": "bakı",
+      "reads": "baki",
+      "severity": "note",
+      "script": "Latin",
+      "note": "Azerbaijani capital"
+    },
+    {
+      "label": "sumqayıt",
+      "reads": "sumqayit",
+      "severity": "note",
+      "script": "Latin",
+      "note": "Azerbaijani city"
+    },
+    {
+      "label": "gıthub",
+      "reads": "github",
+      "severity": "note",
+      "script": "Latin",
+      "note": "the same native letter in an English brand gets the same quiet tier: the cost of not reading a Turkish word as a disguise"
     }
   ],
 

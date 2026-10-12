@@ -369,7 +369,23 @@ describe("property: no filterInjection-supplied byte reaches the model-facing co
           assert.notEqual(w, code);
           assert.match(w, /^Layer-5 injection filter/);
         }
-        assert.ok(r.warnings.length <= 1);
+        // A deletion always reports itself first, in the library's words, and
+        // subsumes the two codes that would restate or contradict it; only an
+        // error code is reported beside it. No deletion: just the mapped code.
+        const deleted = expected !== text;
+        if (deleted)
+          assert.match(
+            r.warnings[0] ?? "",
+            /removed one or more verbatim spans/,
+          );
+        const expectedCount = deleted
+          ? code === FILTER_WARNING.FILTER_ERROR
+            ? 2
+            : 1
+          : code === undefined
+            ? 0
+            : 1;
+        assert.equal(r.warnings.length, expectedCount);
       }),
       deletionRunOptions,
     );

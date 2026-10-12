@@ -159,6 +159,29 @@ describe("alignDeletions", () => {
       /layer-1 view is not a subsequence of the file/,
     );
   });
+
+  it("never splits a surrogate pair whose high half matches the deleted run's", () => {
+    // U+1D173 (an astral Cf) and U+1D11E share the high surrogate D834; a
+    // UTF-16 unit walk matched that half and reported a lone low surrogate.
+    const dels = alignDeletions("a\u{1D173}\u{1D11E}b", "a\u{1D11E}b");
+    assert.deepEqual(dels, [{ start: 1, deleted: "\u{1D173}" }]);
+  });
+
+  it("puts every deletion boundary on a code-point boundary across the astral Cf run", () => {
+    const astral = "\u{1D11E}";
+    for (let code = 0x1d173; code <= 0x1d17a; code++) {
+      const cf = String.fromCodePoint(code);
+      const dels = alignDeletions(`${cf}${astral}${cf}`, astral);
+      assert.deepEqual(
+        dels,
+        [
+          { start: 0, deleted: cf },
+          { start: 2, deleted: cf },
+        ],
+        code.toString(16),
+      );
+    }
+  });
 });
 
 // ─── resolveSpan ─────────────────────────────────────────────────────────────
@@ -169,6 +192,20 @@ describe("alignDeletions", () => {
 const plainView = (cleaned) => makeFileView(cleaned, [], "utf16");
 
 describe("resolveSpan", () => {
+  it("maps a utf16-space span over an astral char beside a stripped astral Cf like its BMP analogue", () => {
+    const content = "a\u{1D173}\u{1D11E}b";
+    const cleaned = "a\u{1D11E}b";
+    const dels = alignDeletions(content, cleaned);
+    // [1,3) is the whole surrogate pair in the utf16 space the view declares.
+    const res = resolveSpan(content, cleaned, plainView(cleaned), dels, 1, 3);
+    assert.deepEqual(res, {
+      cleanedText: "\u{1D11E}",
+      diskText: "\u{1D11E}",
+      invisibleBytes: 0,
+      pairs: [],
+    });
+  });
+
   it("maps a span across an interior stripped run, counting it in invisibleBytes", () => {
     const content = `ab${ZW}cd`;
     const cleaned = "abcd";

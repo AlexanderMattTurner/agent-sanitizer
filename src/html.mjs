@@ -3192,7 +3192,7 @@ function collectUrls(text) {
  * how loudly (see the exfil tier in ./output.mjs).
  * @param {string} text
  * @param {{ flagDigestValues?: boolean }} [options] see {@link checkExfilUrl}
- * @returns {Array<{ isImage: boolean, autoFetched: boolean, reason: string, target: string }> | null}
+ * @returns {Array<{ isImage: boolean, autoFetched: boolean, reason: string, target: string, unscannable?: true }> | null}
  */
 export function detectExfil(text, options = {}) {
   if (!needsUrlScan(text)) return null;
@@ -3210,11 +3210,11 @@ export function detectExfil(text, options = {}) {
       if (!reason) continue;
       threats.push({ isImage, autoFetched, reason, target: urlHost(url) });
     }
-  } catch {
-    // The parse/visit blew up (stack overflow on pathological nesting). Fail
-    // CLOSED so the never-throw contract holds: report one sentinel threat so
-    // the caller still warns rather than crashing, since an input too nested to
-    // scan could itself be hiding an exfil URL.
+  } catch (err) {
+    // Only a stack overflow on pathological nesting is the input's fault; any
+    // other throw is a bug here and propagates. Fail CLOSED on the overflow: one
+    // sentinel marked `unscannable` (it names no URL) so the caller still warns.
+    if (!(err instanceof RangeError)) throw err;
     return [
       {
         isImage: false,
@@ -3223,6 +3223,7 @@ export function detectExfil(text, options = {}) {
         autoFetched: true,
         reason: "input too deeply nested to scan for exfil URLs",
         target: "(unparseable HTML)",
+        unscannable: true,
       },
     ];
   }
@@ -3239,7 +3240,7 @@ export function detectExfil(text, options = {}) {
  *
  * Fails CLOSED on a parse blow-up for the same reason detectExfil does.
  * @param {string} text
- * @returns {Array<{ severity: string, description: string }> | null}
+ * @returns {Array<{ severity: string, description: string, unscannable?: true }> | null}
  */
 export function detectConfusableHosts(text) {
   if (!needsUrlScan(text)) return null;
@@ -3260,11 +3261,13 @@ export function detectConfusableHosts(text) {
         description: describeConfusableHost(found),
       });
     }
-  } catch {
+  } catch (err) {
+    if (!(err instanceof RangeError)) throw err;
     return [
       {
         severity: SEVERITY.WARNING,
         description: "input too deeply nested to scan for confusable hosts",
+        unscannable: true,
       },
     ];
   }

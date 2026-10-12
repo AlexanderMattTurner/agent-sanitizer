@@ -20,9 +20,9 @@
  * filter can at most remove legitimate content — it can never inject new bytes
  * into the model's view. A consumer running a live LLM filter wires it here.
  * Because a span deletion joins the bytes on either side of the deleted span,
- * Layer 4 (`redact`) is re-run on the post-deletion text whenever Layer 5
- * actually removes something, so a secret that a deletion reconstitutes is
- * still caught before this function returns.
+ * Layers 3 (`exfilScan`) and 4 (`redact`) are re-run on the post-deletion text
+ * whenever Layer 5 actually removes something, so a URL or secret that a
+ * deletion assembles is still caught before this function returns.
  */
 import {
   CATEGORY,
@@ -43,6 +43,7 @@ import {
   HTML_UNPARSEABLE_WARNING,
   describeWarned,
   LONE_SURROGATE_WARNING,
+  UNSCANNABLE_WARNING,
 } from "./warnings.mjs";
 import {
   finding,
@@ -145,9 +146,9 @@ function errMessage(err) {
  */
 
 /**
- * @typedef {{ text: string, found: string[], findings: import("./severity.mjs").Finding[], modified: boolean, unreportedChange: boolean }} PipelineState
+ * @typedef {{ text: string, found: string[], findings: import("./severity.mjs").Finding[], modified: boolean }} PipelineState
  *   The running state of one {@link sanitizeText} call. Layers read `text` and
- *   mutate it ONLY through {@link applyMutation}. Findings carry their own
+ *   mutate it ONLY through {@link mutate}. Findings carry their own
  *   severity (see ./severity.mjs) and are split into `warnings`/`notes` at the
  *   single exit, so no layer can push into the wrong list. `found` is the
  *   machine-readable twin, unaffected by the split: the {@link CATEGORY} codes
@@ -155,48 +156,85 @@ function errMessage(err) {
  */
 
 /**
+ * The downstream layers each text-mutating layer re-runs over the text it
+ * leaves — the pipeline's declared re-vet step, keyed by mutation source. A
+ * mutation is followed by exactly the layers named here; the typedefs make an
+ * undeclared source or an unimplemented step a type error:
+ *
+ *   html-splice — none. Layer 3 scans the PRE-splice text on purpose (a beacon
+ *     hidden in a comment is more suspicious, not less), Layers 4-5 run after
+ *     the splice anyway, and a placeholder replaces the span, so no bytes join.
+ *   redact — none. A fixed placeholder replaces the secret; it cannot complete
+ *     a URL or another secret.
+ *   span-delete — Layer 3 (url-scan) and Layer 4 (redact). The deletion JOINS
+ *     the bytes around it, so `htt<span>ps://аpple.com` becomes a URL, and a
+ *     split key a secret, that neither layer saw intact. Re-vetting is what
+ *     keeps a compromised filter able only to REMOVE content.
+ * @type {Readonly<Record<"html-splice" | "redact" | "span-delete", readonly (keyof typeof RERUNNERS)[]>>}
+ */
+export const MUTATION_RERUNS = Object.freeze({
+  "html-splice": Object.freeze([]),
+  redact: Object.freeze([]),
+  "span-delete": Object.freeze(/** @type {const} */ (["url-scan", "redact"])),
+});
+
+/**
+ * How each downstream layer named in {@link MUTATION_RERUNS} re-runs. Each
+ * honors the same option that enables it on the first pass.
+ */
+const RERUNNERS = Object.freeze({
+  "url-scan": rescanUrls,
+  redact: runRedact,
+});
+
+/**
+ * @typedef {{ source: keyof typeof MUTATION_RERUNS, text: string, report: import("./severity.mjs").Finding }} Mutation
+ *   One layer's change to the pipeline text and the finding that reports it.
+ *   `report` is a required field, and a Finding cannot be built with an empty
+ *   message (see ./severity.mjs), so a byte change the caller is never told
+ *   about does not type-check — the guarantee `sgrNote` ("nothing here rose
+ *   above a note") rests on.
+ */
+
+/**
  * THE only way a layer may change `state.text`. Every byte mutation invalidates
- * the same three stage invariants, so all three are re-established in one place
- * rather than at each mutation site:
+ * the same stage invariants, so all are re-established in one place rather
+ * than at each mutation site:
  *
  *   1. lone surrogates are normalized. The module doc promises this "always",
  *      but each mutation can BREAK it again: a Layer-5 span deletion joins the
  *      bytes on either side of the deleted span and can leave a lone surrogate
  *      the model renders as a broken glyph and the redactor reads as U+FFFD.
- *      Repairing it inside whichever layer happens to need it — e.g. only in
- *      the post-span-deletion re-redact, so it runs only when a redactor is
- *      configured — would make an invariant of Layer 1 conditional on an
- *      unrelated option.
  *   2. `modified` is set — the caller's "bytes changed" banner.
- *   3. `unreportedChange` is set. A mutation that pushed no finding — a Layer-5
- *      span deletion whose filter returned no warning code — is a change the
- *      caller was never told about, and the returned `sgrNote` ("nothing here
- *      rose above a note") must not invite a quiet banner over one. A mutation
- *      that DID report itself is covered by its own WARNING, so this flag only
- *      ever costs a note that would have been misleading.
+ *   3. the change's report is pushed (see {@link Mutation}).
+ *   4. the downstream layers {@link MUTATION_RERUNS} declares for the source
+ *      re-run over the new text.
  *
  * Callers decide WHETHER a mutation happened (each layer already knows: a
- * changed splice output, a redactor finding, a removed span) and call this with
- * the new bytes; a no-op call would falsely set `modified`.
+ * changed splice output, a redactor finding, a removed span); a no-op call
+ * would falsely set `modified`.
  *
  * No warning is pushed for the normalization: the mutation that created the
  * lone surrogate reported itself, and a second "Normalized lone UTF-16
  * surrogates" line would describe the library repairing its own splice rather
  * than a finding about the input.
  * @param {PipelineState} state
- * @param {string} nextText
- * @returns {void}
+ * @param {Mutation} change
+ * @param {SanitizeTextOptions} options
+ * @returns {Promise<void>}
  */
-function applyMutation(state, nextText) {
-  state.text = normalizeLoneSurrogates(nextText);
+async function mutate(state, change, options) {
+  state.text = normalizeLoneSurrogates(change.text);
   state.modified = true;
-  state.unreportedChange = true;
+  state.findings.push(change.report);
+  for (const step of MUTATION_RERUNS[change.source])
+    await RERUNNERS[step](state, options);
 }
 
 /**
- * Run Layer 4 (`redact`) over the state's current text and fold any finding
- * back in. The single Layer-4 invocation site FOR THE PIPELINE STATE: the first
- * pass and the re-scan after a Layer-5 span deletion are the same call, so they
+ * Run Layer 4 (`options.redact`, when set) over the state's current text and
+ * fold any finding back in. The single Layer-4 invocation site FOR THE PIPELINE
+ * STATE: the first pass and every declared re-run are the same call, so they
  * share one fail-closed handling, warning prose and post-redaction invariant.
  *
  * One other site runs Layer 4 deliberately: {@link vetStageValue}, which vets a
@@ -210,10 +248,12 @@ function applyMutation(state, nextText) {
  * the throw is rethrown wrapped and the caller suppresses the output rather than
  * emitting an unvetted value with a warning.
  * @param {PipelineState} state
- * @param {(text: string) => Promise<RedactResult|null> | (RedactResult|null)} redact
+ * @param {SanitizeTextOptions} options
  * @returns {Promise<void>}
  */
-async function runRedact(state, redact) {
+async function runRedact(state, options) {
+  const { redact } = options;
+  if (!redact) return;
   /** @type {RedactResult|null} */
   let secrets;
   try {
@@ -226,13 +266,18 @@ async function runRedact(state, redact) {
     );
   }
   if (!secrets) return;
-  applyMutation(state, secrets.text);
   // Always a WARNING: a secret reached this output, and the caller-supplied
   // `note` (which credential, from where) is the part an operator acts on.
-  state.findings.push(
-    warning(
-      `API keys/secrets redacted: ${secrets.found.join(", ")}${secrets.note ?? ""}${REDACTION_DOCTRINE}`,
-    ),
+  await mutate(
+    state,
+    {
+      source: "redact",
+      text: secrets.text,
+      report: warning(
+        `API keys/secrets redacted: ${secrets.found.join(", ")}${secrets.note ?? ""}${REDACTION_DOCTRINE}`,
+      ),
+    },
+    options,
   );
 }
 
@@ -381,6 +426,123 @@ function processLayer1(text, sgrCarveOut) {
 }
 
 /**
+ * Refuse to START a parse with no budget left. Each of Layers 2/3 parses the
+ * whole document in ONE synchronous call, so nothing interrupts it, and a host
+ * that kills the overrun hook shows the RAW text. Called before EACH parse, and
+ * only after a pre-gate passed, so a declined call costs no time. Fails closed,
+ * as Layer 4 does.
+ * @param {Deadline | undefined} deadline
+ * @returns {void}
+ */
+function refuseIfSpent(deadline) {
+  if (deadline && deadline.remainingMs() <= 0)
+    throw new Error(
+      "CRITICAL: the sanitization time budget ran out before the hidden-HTML " +
+        "and exfil-URL layers finished, so this text was not fully checked. " +
+        "Failing closed — tool output suppressed.",
+    );
+}
+
+/**
+ * The heavy HTML layer (./html.mjs), loaded on first use.
+ * @returns {Promise<typeof import("./html.mjs")>}
+ */
+async function loadHtmlLayer() {
+  /* c8 ignore start -- a rejected dynamic import of a module that ships in
+     this very package (not an optional peer dep) requires corrupting
+     node_modules or the filesystem to trigger; there's no clean way to force
+     this from a test without fragile module-loader mocking (Node's
+     mock.module needs --experimental-test-module-mocks, which isn't wired
+     into this repo's test script). Fail loudly with context if it ever fires. */
+  try {
+    return await import("./html.mjs");
+  } catch (importErr) {
+    throw new Error(
+      "agent-sanitizer: failed to load ./html.mjs, so Layers 2/3 could not run " +
+        "(are the package's remark/rehype dependencies installed?)",
+      { cause: importErr },
+    );
+  }
+  /* c8 ignore stop */
+}
+
+/**
+ * Push `item` unless an equal entry is already there. Layer 3 runs twice when a
+ * Layer-5 deletion follows it, and the second scan re-finds what the first did.
+ * @template T
+ * @param {T[]} list
+ * @param {T} item
+ * @param {(a: T, b: T) => boolean} same
+ * @returns {void}
+ */
+function pushOnce(list, item, same) {
+  if (!list.some((entry) => same(entry, item))) list.push(item);
+}
+
+/**
+ * Layer 3 over `text`, folded into `state`: exfil-URL and confusable-host
+ * detection. Detection only — the URLs stay intact, the model is told not to
+ * use them. A finding `state` already holds is not repeated.
+ * @param {PipelineState} state
+ * @param {typeof import("./html.mjs")} htmlLayer
+ * @param {string} text
+ * @param {{ flagDigestValues?: boolean, deadline?: Deadline }} options
+ * @returns {void}
+ */
+function applyLayer3(state, htmlLayer, text, { flagDigestValues, deadline }) {
+  refuseIfSpent(deadline);
+  const exfil = htmlLayer.detectExfil(text, { flagDigestValues });
+  refuseIfSpent(deadline);
+  const hosts = htmlLayer.detectConfusableHosts(text);
+  /** @type {Array<[string, import("./severity.mjs").Finding]>} */
+  const reports = [];
+  // A scan that overflowed the stack found nothing and names no URL, so it is
+  // its own finding: reporting it as `exfil-urls`/`confusable-host` would tell
+  // a caller branching on `found` that a URL exists. A detector that overflows
+  // returns its one sentinel and nothing else.
+  const overflowed = (
+    /** @type {Array<{ unscannable?: true }> | null} */ list,
+  ) => list?.some((threat) => threat.unscannable) ?? false;
+  if (overflowed(exfil) || overflowed(hosts))
+    reports.push([CATEGORY.UNSCANNABLE, warning(UNSCANNABLE_WARNING)]);
+  // Severity tracks who does the fetching. An auto-fetched target — an image, a
+  // stylesheet, a form action, a meta refresh — exfiltrates the moment the
+  // content renders, with nobody deciding anything: a WARNING. A plain LINK
+  // cannot exfiltrate unless the model chooses to follow it, and the sentence it
+  // is reported in is precisely the instruction not to, so it is a NOTE. One
+  // auto-fetched threat raises the whole finding — the loudest member wins,
+  // since they share one line.
+  if (exfil && !overflowed(exfil))
+    reports.push([
+      CATEGORY.EXFIL_URLS,
+      finding(
+        exfil.some((threat) => threat.autoFetched),
+        describeExfil(exfil),
+      ),
+    ]);
+  // Confusable hosts ride the same scan flag but are a SEPARATE finding: a
+  // look-alike domain needs no exfil-shaped query to be the whole attack, and
+  // the two say different things to a reader. Tier per ./confusable-host.mjs,
+  // and the loudest member wins the shared line.
+  if (hosts && !overflowed(hosts))
+    reports.push([
+      CATEGORY.CONFUSABLE_HOST,
+      finding(
+        hosts.some((threat) => threat.severity === SEVERITY.WARNING),
+        describeConfusableHosts(hosts),
+      ),
+    ]);
+  for (const [code, report] of reports) {
+    pushOnce(state.found, code, (a, b) => a === b);
+    pushOnce(
+      state.findings,
+      report,
+      (a, b) => a.severity === b.severity && a.message === b.message,
+    );
+  }
+}
+
+/**
  * Layers 2+3: HTML sanitisation (`html`) and exfil-URL detection (`exfilScan`),
  * folded into `state`. Returns the pre-splice text when Layer 2 removed bytes so
  * the caller can hand it back for later inspection of what the splice hid (the
@@ -393,13 +555,11 @@ function processLayer1(text, sgrCarveOut) {
  * vet them before they leave. The transform itself stays pure — the caller owns
  * any persistence.
  * @param {PipelineState} state
- * @param {{ html?: boolean, exfilScan?: boolean, flagDigestValues?: boolean, deadline?: Deadline }} options
+ * @param {SanitizeTextOptions} options
  * @returns {Promise<{ reveal: string | undefined, splices: Array<{ placeholder: string, original: string }> }>}
  */
-async function applyMarkdownPipeline(
-  state,
-  { html, exfilScan, flagDigestValues, deadline },
-) {
+async function applyMarkdownPipeline(state, options) {
+  const { html, exfilScan, deadline } = options;
   const inputText = state.text;
   /** @type {string | undefined} */
   let reveal;
@@ -412,43 +572,13 @@ async function applyMarkdownPipeline(
   const runLayer2 = Boolean(html) && needsMarkdownPipeline(inputText);
   const runLayer3 = Boolean(exfilScan) && needsUrlScan(inputText);
   if (!runLayer2 && !runLayer3) return { reveal: undefined, splices };
-  // INVARIANT: this refusal stops a layer below from STARTING with no budget
-  // left. Each parses the whole document in ONE synchronous call, so nothing
-  // interrupts it, and a host that kills the overrun hook shows the RAW text.
-  // Called before EACH parse: Layer 2 spends the budget Layer 3 then runs on.
-  // After the pre-gate: a declined call costs no time. Fail closed, as Layer 4.
-  const refuseIfSpent = () => {
-    if (deadline && deadline.remainingMs() <= 0)
-      throw new Error(
-        "CRITICAL: the sanitization time budget ran out before the hidden-HTML " +
-          "and exfil-URL layers finished, so this text was not fully checked. " +
-          "Failing closed — tool output suppressed.",
-      );
-  };
-  refuseIfSpent();
-  let sanitizeHtml, detectExfil, detectConfusableHosts;
-  /* c8 ignore start -- a rejected dynamic import of a module that ships in
-     this very package (not an optional peer dep) requires corrupting
-     node_modules or the filesystem to trigger; there's no clean way to force
-     this from a test without fragile module-loader mocking (Node's
-     mock.module needs --experimental-test-module-mocks, which isn't wired
-     into this repo's test script). Fail loudly with context if it ever fires. */
-  try {
-    ({ sanitizeHtml, detectExfil, detectConfusableHosts } =
-      await import("./html.mjs"));
-  } catch (importErr) {
-    throw new Error(
-      "agent-sanitizer: failed to load ./html.mjs, so Layers 2/3 could not run " +
-        "(are the package's remark/rehype dependencies installed?)",
-      { cause: importErr },
-    );
-  }
-  /* c8 ignore stop */
+  refuseIfSpent(deadline);
+  const htmlLayer = await loadHtmlLayer();
   // Layer 2 — strips what a rendered page would not show (comments, hidden
   // elements); scripting/resource tags preserved+reported. Each cut leaves a
   // keyed placeholder whose original bytes ride out in `splices`.
   if (runLayer2) {
-    const layer2 = sanitizeHtml(state.text);
+    const layer2 = htmlLayer.sanitizeHtml(state.text);
     if (layer2) {
       if (layer2.text !== state.text) {
         reveal = state.text;
@@ -456,7 +586,6 @@ async function applyMarkdownPipeline(
         // point into THIS stage's text, which Layers 4/5 may still mutate.
         for (const { placeholder, original } of layer2.splices)
           splices.push({ placeholder, original });
-        applyMutation(state, layer2.text);
         if (layer2.removed.comments > 0)
           state.found.push(CATEGORY.HTML_COMMENTS);
         if (layer2.removed.hidden > 0) state.found.push(CATEGORY.HIDDEN_HTML);
@@ -466,12 +595,18 @@ async function applyMarkdownPipeline(
         // without the reveal sidecar. The unparseable fail-closed path withheld
         // the WHOLE output, not a spliced span, so it gets its own sentence
         // rather than a misleading "1 hidden element(s) replaced".
-        state.findings.push(
-          warning(
-            layer2.unparseable
-              ? HTML_UNPARSEABLE_WARNING
-              : describeHtmlSanitized(layer2.removed),
-          ),
+        await mutate(
+          state,
+          {
+            source: "html-splice",
+            text: layer2.text,
+            report: warning(
+              layer2.unparseable
+                ? HTML_UNPARSEABLE_WARNING
+                : describeHtmlSanitized(layer2.removed),
+            ),
+          },
+          options,
         );
       }
       // A NOTE: nothing was removed and nothing was hidden. This line says "the
@@ -482,46 +617,25 @@ async function applyMarkdownPipeline(
       if (preserved) state.findings.push(note(preserved));
     }
   }
-  // Layer 3 — detection only: the URLs stay intact, the model is told not to
-  // use them. Scan the ORIGINAL text, not the Layer-2 splice output: a beacon
-  // URL hidden inside a display:none element or an HTML comment is MORE
-  // suspicious, not less, yet Layer 2 has already removed it from `cleaned`.
-  if (runLayer3) {
-    refuseIfSpent();
-    const threats = detectExfil(inputText, { flagDigestValues });
-    // Severity tracks who does the fetching. An auto-fetched target — an image,
-    // a stylesheet, a form action, a meta refresh — exfiltrates the moment the
-    // content renders, with nobody deciding anything: a WARNING. A plain LINK
-    // cannot exfiltrate unless the model chooses to follow it, and the sentence
-    // it is reported in is precisely the instruction not to, so it is a NOTE.
-    // One auto-fetched threat raises the whole finding — the loudest member
-    // wins, since they share one line.
-    if (threats) {
-      state.found.push(CATEGORY.EXFIL_URLS);
-      state.findings.push(
-        finding(
-          threats.some((threat) => threat.autoFetched),
-          describeExfil(threats),
-        ),
-      );
-    }
-    // Confusable hosts ride the same scan flag but are a SEPARATE finding: a
-    // look-alike domain needs no exfil-shaped query to be the whole attack, and
-    // the two say different things to a reader. Tier per ./confusable-host.mjs,
-    // and the loudest member wins the shared line.
-    refuseIfSpent();
-    const confusable = detectConfusableHosts(inputText);
-    if (confusable) {
-      state.found.push(CATEGORY.CONFUSABLE_HOST);
-      state.findings.push(
-        finding(
-          confusable.some((threat) => threat.severity === SEVERITY.WARNING),
-          describeConfusableHosts(confusable),
-        ),
-      );
-    }
-  }
+  // Scan the ORIGINAL text, not the Layer-2 splice output: a beacon URL hidden
+  // inside a display:none element or an HTML comment is MORE suspicious, not
+  // less, yet Layer 2 has already removed it from `cleaned`.
+  if (runLayer3) applyLayer3(state, htmlLayer, inputText, options);
   return { reveal, splices };
+}
+
+/**
+ * Layer 3 over the state's CURRENT text, when `options.exfilScan` is set and
+ * its gate opens — the re-run {@link MUTATION_RERUNS} declares as `url-scan`.
+ * Layer 2 has no re-run: it hides what a human reading the ORIGINAL rendering
+ * could not see, and a later mutation does not change that rendering.
+ * @param {PipelineState} state
+ * @param {SanitizeTextOptions} options
+ * @returns {Promise<void>}
+ */
+async function rescanUrls(state, options) {
+  if (!options.exfilScan || !needsUrlScan(state.text)) return;
+  applyLayer3(state, await loadHtmlLayer(), state.text, options);
 }
 
 /**
@@ -542,10 +656,10 @@ async function applyMarkdownPipeline(
  * runs on attacker-influenced content. `label` names the withheld field in that
  * warning and comes from the call site below, never from a seam.
  *
- * Normalizes the redactor's output for the same reason {@link applyMutation}
+ * Normalizes the redactor's output for the same reason {@link mutate}
  * does — a redaction that cuts between the halves of an astral pair strands a
  * code unit, and this string is persisted and read back. It cannot USE
- * `applyMutation`: that folds into the `PipelineState`, and a stage value is not
+ * `mutate`: that folds into the `PipelineState`, and a stage value is not
  * the pipeline text — setting `modified`/`sgrNote` from a sidecar's redaction
  * would describe `cleaned`, which this call never touches. Only the
  * normalization is shared. `text` arrives post-Layer-1, so the no-redactor and
@@ -609,7 +723,7 @@ async function vetStageValue(text, redact, findings, label) {
  * and one that cannot be vetted is WITHHELD (dropped from the array) under the
  * same doctrine — Layer 4 never saw pre-splice text.
  *
- * Every byte mutation goes through {@link applyMutation} and every Layer-4 call
+ * Every byte mutation goes through {@link mutate} and every Layer-4 call
  * through {@link runRedact}, so a layer cannot re-establish some of the
  * post-mutation invariants and forget the rest, and every string in the returned
  * object has traversed Layer 4.
@@ -636,19 +750,13 @@ export async function sanitizeText(text, options = {}) {
     sgrCarveOut,
   );
   /** @type {PipelineState} */
-  const state = {
-    text: cleaned,
-    found,
-    findings,
-    modified,
-    unreportedChange: false,
-  };
+  const state = { text: cleaned, found, findings, modified };
 
   const { reveal: revealText, splices: stageSplices } =
     await applyMarkdownPipeline(state, options);
 
   // Layer 4 — fail closed (see runRedact).
-  if (redact) await runRedact(state, redact);
+  await runRedact(state, options);
 
   // Layer 5 — secure span-deletion slot (see module doc). A warning-only result
   // flags without changing bytes; only a deleted span sets `modified`. Awaited
@@ -658,23 +766,42 @@ export async function sanitizeText(text, options = {}) {
   if (filterInjection) {
     const res = await filterInjection(state.text);
     if (res) {
-      if (res.removeSpans && res.removeSpans.length > 0) {
-        const out = deleteVerbatimSpans(state.text, res.removeSpans);
-        if (out.removed > 0) {
-          applyMutation(state, out.text);
-          // A span deletion joins the bytes on either side of it, which can
-          // reconstitute a secret Layer 4 never saw intact (it ran on the
-          // ORIGINAL text, before the join). Re-vet the post-deletion text so a
-          // compromised filter can still only ever REMOVE legitimate content,
-          // never smuggle an unvetted secret through by splicing around it.
-          if (redact) await runRedact(state, redact);
-        }
-      }
       // A filter warning is a library-owned ENUM CODE, mapped here to its fixed
       // message; free text is refused (throws) so no filter-supplied byte ever
       // reaches the model-facing context. `null`/`undefined` means no warning.
-      if (res.warning != null)
-        state.findings.push(warning(mapFilterWarning(res.warning)));
+      // Mapped BEFORE any deletion, so an invalid code fails the call whether
+      // or not a span matched.
+      const filterWarning =
+        res.warning == null ? undefined : mapFilterWarning(res.warning);
+      const removed =
+        res.removeSpans && res.removeSpans.length > 0
+          ? deleteVerbatimSpans(state.text, res.removeSpans)
+          : { text: state.text, removed: 0 };
+      if (removed.removed > 0) {
+        // A deletion is reported in the library's own words whatever code the
+        // filter sent: a filter that returns none would otherwise change bytes
+        // silently.
+        // Re-vetted by the layers MUTATION_RERUNS declares for a deletion.
+        await mutate(
+          state,
+          {
+            source: "span-delete",
+            text: removed.text,
+            report: warning(
+              FILTER_WARNING_LABELS[FILTER_WARNING.SPANS_REMOVED],
+            ),
+          },
+          options,
+        );
+      }
+      // The deletion's own report already says spans were removed, and
+      // "flagged (content not modified)" would contradict it.
+      const subsumed =
+        removed.removed > 0 &&
+        (res.warning === FILTER_WARNING.SPANS_REMOVED ||
+          res.warning === FILTER_WARNING.FILTER_FLAGGED);
+      if (filterWarning !== undefined && !subsumed)
+        state.findings.push(warning(filterWarning));
     }
   }
 
@@ -720,9 +847,9 @@ export async function sanitizeText(text, options = {}) {
     // published field for a wording win is a breaking change) but derived
     // rather than tracked: "nothing here rose above a note". The inert-ANSI
     // strip is simply the most common way to end up note-only, not the only
-    // one this field now covers.
-    sgrNote:
-      notes.length > 0 && warnings.length === 0 && !state.unreportedChange,
+    // one this field now covers. Sound because every byte change carries its
+    // own finding (see mutation).
+    sgrNote: notes.length > 0 && warnings.length === 0,
     ...(reveal !== undefined && { reveal }),
     // Presence-gated like `reveal`: the field exists only when Layer 2 spliced
     // and at least one original survived vetting, so the common-case result
@@ -818,29 +945,12 @@ function depthMemo() {
 }
 
 /**
- * Sanitize every string leaf of a tool-output value, preserving its shape (a
- * structured tool output whose shape changes would be ignored by a harness,
- * leaking the raw value). Non-string leaves pass through; `warnings` and
- * `notes` accumulate across leaves, split by severity (see ./severity.mjs).
- * `sgrNote` is the OR across leaves — true when SOME leaf was note-only — so a
- * caller can still pick the quiet banner when no leaf raised a warning.
- *
- * Fails CLOSED on two hostile shapes that would otherwise throw a `RangeError`
- * as an unhandled async rejection (a DoS that leaves the output un-sanitized):
- * nesting past {@link MAX_DEPTH}, and a reference cycle. Either replaces the
- * offending subtree with a placeholder string + a warning, never passing the
- * raw subtree through. Keys are also screened for hidden chars (see below).
- *
- * `reveals` accumulates each string leaf's pre-Layer-2 text (present only when
- * the HTML splice removed bytes) so a caller can persist what was hidden — the
- * structured-output analogue of {@link sanitizeText}'s `reveal`. Same
- * mutated-accumulator contract as `warnings`.
- *
- * `splices` accumulates each string leaf's Layer-2 placeholder→original pairs
- * (each `original` already vetted, withheld entries dropped — see
- * {@link sanitizeText}) — the per-placeholder twin of `reveals`, so a hook
- * caller gets them for object-shaped tool output too. Same mutated-accumulator
- * contract as `reveals`.
+ * Sanitize every string of a tool-output value with `options` — each string
+ * leaf AND each object key — preserving its shape. The walk itself, and every
+ * rule it applies, is {@link sanitizeValueWith}'s; this binds the leaf and key
+ * sanitizers to {@link sanitizeText}. A key runs every layer a leaf does except
+ * Layer 5: a span deletion in a NAME can collapse two fields into one, which
+ * costs both their values (see the collision rule).
  * @param {any} value
  * @param {SanitizeTextOptions} options
  * @param {string[]} warnings
@@ -850,7 +960,7 @@ function depthMemo() {
  *   discards the notes, which is exactly as loud as before the split)
  * @param {Array<{ placeholder: string, original: string }>} [splices]  appended
  *   after `notes` for the same positional-compatibility reason
- * @returns {Promise<{ value: any, modified: boolean, sgrNote: boolean }>}
+ * @returns {Promise<WalkResult>}
  */
 export async function sanitizeValue(
   value,
@@ -860,77 +970,174 @@ export async function sanitizeValue(
   notes = [],
   splices = [],
 ) {
-  return sanitizeValueAt(
+  const keyOptions = { ...options, filterInjection: undefined };
+  return sanitizeValueWith(
     value,
-    options,
-    warnings,
-    notes,
-    reveals,
-    splices,
-    0,
-    new WeakSet(),
-    depthMemo(),
+    {
+      leaf: (text) => sanitizeText(text, options),
+      key: (text) => sanitizeText(text, keyOptions),
+    },
+    { warnings, notes, reveals, splices },
   );
 }
 
 /**
- * Recursion core for {@link sanitizeValue}, carrying the current `depth` and the
- * `seen` set of ancestor containers on the active path (a WeakSet, so a value
- * reused across sibling branches — legitimate sharing, not a cycle — is not
- * mistaken for a back-edge; only a true ancestor still on the stack triggers
- * the cycle guard, and it is removed on the way back up).
+ * THE structured-output walk, shared by {@link sanitizeValue} and the output
+ * hook so the two cannot disagree about what a value's strings are. Runs
+ * `sanitizers.leaf` on every string leaf and `sanitizers.key` on every object
+ * key — a key is as attacker-controlled as a leaf (a connector can put a secret
+ * or a hidden character in a field name) — and rebuilds the value with the same
+ * shape: a structured tool output whose shape changes is ignored by a harness,
+ * which then shows the RAW value. Non-string leaves pass through. Each string's
+ * findings, pre-Layer-2 `reveal` and Layer-2 `splices` are folded into `sinks`
+ * (mutated accumulators: the caller owns dedup — composeContext for warnings,
+ * content for reveals, the content-addressed key for splices).
+ *
+ * When two raw keys sanitize to the same name, overwriting would shrink the
+ * object, which a harness rejects for the RAW output. So the colliding fields —
+ * and only they — fail closed: every value under that name becomes
+ * {@link COLLISION_WITHHELD_MESSAGE}, the later ones under a disambiguated key
+ * so the field count is preserved, and {@link collisionWarning} names where.
+ *
+ * Fails CLOSED on two hostile shapes that would otherwise throw a `RangeError`
+ * as an unhandled async rejection (a DoS that leaves the output un-sanitized):
+ * nesting past {@link MAX_DEPTH}, and a reference cycle. Either replaces the
+ * offending subtree with a placeholder string + a warning.
+ *
+ * `sgrNote` is true when some string came back note-only AND the walk added no
+ * warning, so a quiet banner is never offered over a warning another string
+ * raised.
  * @param {any} value
- * @param {SanitizeTextOptions} options
- * @param {string[]} warnings
- * @param {string[]} notes  accumulates each string leaf's NOTE-severity findings
- * @param {string[]} reveals  accumulates each string leaf's pre-Layer-2 text
- * @param {Array<{ placeholder: string, original: string }>} splices  accumulates
- *   each string leaf's Layer-2 placeholder→original pairs (already vetted)
- * @param {number} depth
- * @param {WeakSet<object>} seen
- * @param {ReturnType<typeof depthMemo<{ value: any, modified: boolean, sgrNote: boolean }>>} memo
- *   Cache of the FULLY-PROCESSED result, keyed by `(node, depth)` — see
- *   {@link depthMemo} for why the depth belongs in the key. Without a memo at
- *   all, a shared-substructure DAG (one node reached by many parents) is
- *   re-sanitized once per PATH — exponential in the number of shared nodes (a
- *   ~25-object diamond measured at 68 s, far under MAX_DEPTH) — since the path-
- *   scoped `seen` set only guards cycles, not repeated work. Because warnings
- *   dedup in composeContext, skipping a cached node's duplicate warnings is
- *   harmless. A cached node's `reveals` and `splices` are likewise not
- *   re-emitted, harmless for the same reason (the caller dedups reveals by
- *   content and splices by their content-addressed key).
- * @returns {Promise<{ value: any, modified: boolean, sgrNote: boolean }>}
+ * @param {StringSanitizers} sanitizers
+ * @param {WalkSinks} sinks
+ * @returns {Promise<WalkResult>}
  */
-async function sanitizeValueAt(
-  value,
-  options,
-  warnings,
-  notes,
-  reveals,
-  splices,
-  depth,
-  seen,
-  memo,
-) {
-  if (typeof value === "string") {
-    const result = await sanitizeText(value, options);
-    warnings.push(...result.warnings);
-    notes.push(...result.notes);
-    if (result.reveal !== undefined) reveals.push(result.reveal);
-    if (result.splices !== undefined) splices.push(...result.splices);
-    return {
-      value: result.cleaned,
-      modified: result.modified,
-      sgrNote: result.sgrNote,
-    };
-  }
+export async function sanitizeValueWith(value, sanitizers, sinks) {
+  const warnedBefore = sinks.warnings.length;
+  const result = await sanitizeValueAt(
+    value,
+    {
+      ...sinks,
+      ...sanitizers,
+      seen: new WeakSet(),
+      memo: depthMemo(),
+    },
+    0,
+    "",
+  );
+  return {
+    ...result,
+    sgrNote: result.sgrNote && sinks.warnings.length === warnedBefore,
+  };
+}
+
+/**
+ * The value a colliding field is replaced with — the WHOLE value, not a
+ * leaf-wise walk of it: a colliding number or boolean would otherwise reach the
+ * model verbatim under a legitimate field's name while the warning claimed it
+ * was withheld. Replacing it outright changes that field's JSON type, which is
+ * accepted: a duplicate name is in no tool's schema, and the field COUNT a
+ * harness's shape check turns on is preserved by the disambiguated key.
+ */
+export const COLLISION_WITHHELD_MESSAGE =
+  "[WITHHELD — this field's name collided with another after sanitization]";
+
+/**
+ * The warning for a post-sanitization key collision, naming where it sits.
+ * Exported so tests assert by reference rather than re-typing the prose.
+ * @param {string} name  the collapsed-to name
+ * @param {string} path  dotted location of the owning object ("" = top level)
+ * @returns {string}
+ */
+export function collisionWarning(name, path) {
+  return (
+    `two or more fields in the tool output collapsed to the name "${name}" after ` +
+    `sanitization (at ${path === "" ? "the top level" : path}); their values were ` +
+    `WITHHELD (fail closed) because there is no way to tell which field was ` +
+    `legitimate. Sibling fields are unaffected — do not treat the withheld values ` +
+    `as empty or absent; re-request them by a means that does not depend on this ` +
+    `field name, or ask the user`
+  );
+}
+
+/**
+ * @typedef {{ value: any, modified: boolean, sgrNote: boolean }} WalkResult
+ * @typedef {{
+ *   cleaned: string,
+ *   warnings: string[],
+ *   notes: string[],
+ *   modified: boolean,
+ *   sgrNote: boolean,
+ *   reveal?: string,
+ *   splices?: Array<{ placeholder: string, original: string }>,
+ * }} StringVerdict  what a string sanitizer returns ({@link sanitizeText}'s shape)
+ * @typedef {{
+ *   leaf: (text: string) => Promise<StringVerdict>,
+ *   key: (text: string) => Promise<StringVerdict>,
+ * }} StringSanitizers
+ * @typedef {{
+ *   warnings: string[],
+ *   notes: string[],
+ *   reveals: string[],
+ *   splices: Array<{ placeholder: string, original: string }>,
+ * }} WalkSinks
+ * @typedef {WalkSinks & StringSanitizers & {
+ *   seen: WeakSet<object>,
+ *   memo: ReturnType<typeof depthMemo<WalkResult>>,
+ * }} WalkContext
+ *   One {@link sanitizeValueWith} call's sanitizers and sinks. `seen` holds the
+ *   ancestor containers on the active path (a WeakSet, so a value reused across
+ *   sibling branches — legitimate sharing, not a cycle — is not mistaken for a
+ *   back-edge; only a true ancestor still on the stack triggers the cycle
+ *   guard, and it is removed on the way back up). `memo` caches the
+ *   FULLY-PROCESSED result keyed by `(node, depth)` — see {@link depthMemo} for
+ *   why the depth belongs in the key. Without it, a shared-substructure DAG is
+ *   re-sanitized once per PATH — exponential in the number of shared nodes (a
+ *   ~25-object diamond measured at 68 s, far under MAX_DEPTH). Skipping a
+ *   cached node's duplicate warnings, reveals and splices is harmless: the
+ *   caller dedups warnings in composeContext, reveals by content and splices by
+ *   their content-addressed key.
+ */
+
+/**
+ * Run one string — a leaf or a key — through `sanitize` and fold its side
+ * outputs into the walk's sinks.
+ * @param {string} text
+ * @param {(text: string) => Promise<StringVerdict>} sanitize
+ * @param {WalkContext} ctx
+ * @returns {Promise<WalkResult>}
+ */
+async function sanitizeString(text, sanitize, ctx) {
+  const result = await sanitize(text);
+  ctx.warnings.push(...result.warnings);
+  ctx.notes.push(...result.notes);
+  if (result.reveal !== undefined) ctx.reveals.push(result.reveal);
+  if (result.splices !== undefined) ctx.splices.push(...result.splices);
+  return {
+    value: result.cleaned,
+    modified: result.modified,
+    sgrNote: result.sgrNote,
+  };
+}
+
+/**
+ * Recursion core for {@link sanitizeValueWith}.
+ * @param {any} value
+ * @param {WalkContext} ctx
+ * @param {number} depth
+ * @param {string} path  dotted location of `value`, named only in a key
+ *   collision's warning
+ * @returns {Promise<WalkResult>}
+ */
+async function sanitizeValueAt(value, ctx, depth, path) {
+  if (typeof value === "string") return sanitizeString(value, ctx.leaf, ctx);
   // Memo hit: a shared node already fully sanitized AT THIS DEPTH on another
   // path. Returning the cached result (same reference) collapses the DAG to
   // linear work and preserves shape; it never short-circuits the cycle guard,
   // since an on-stack ancestor is not cached until its subtree completes.
   const isObject = value !== null && typeof value === "object";
   if (isObject) {
-    const cached = memo.get(value, depth);
+    const cached = ctx.memo.get(value, depth);
     if (cached !== undefined) return cached;
   }
   // Exotic objects (Map/Set/Date/typed array/…) pass through opaque: walking
@@ -968,7 +1175,7 @@ async function sanitizeValueAt(
         !ArrayBuffer.isView(value) &&
         Object.keys(value).length > 0)
     )
-      warnings.push(
+      ctx.warnings.push(
         "An object with a non-plain prototype (e.g. a class instance, Map, Set, or typed array/Buffer) in structured tool output was passed through unsanitized — its contents could not be walked without corrupting the object's shape",
       );
     // An opaque leaf is never walked, so its result does not actually depend on
@@ -976,99 +1183,136 @@ async function sanitizeValueAt(
     // re-flags the same leaf once per distinct depth it appears at. The warnings
     // dedup in composeContext, so the model-facing text is unchanged.
     const leafResult = { value, modified: false, sgrNote: false };
-    if (isObject) memo.set(value, depth, leafResult);
+    if (isObject) ctx.memo.set(value, depth, leafResult);
     return leafResult;
   }
 
   // Fail closed before descending into a container: a back-edge to an ancestor
   // (cycle) or a depth past the cap is replaced with a placeholder, never the
   // raw subtree. Both set modified so the caller flags the output as sanitized.
-  if (seen.has(value)) {
-    warnings.push("Withheld a circular reference in structured tool output");
+  if (ctx.seen.has(value)) {
+    ctx.warnings.push(
+      "Withheld a circular reference in structured tool output",
+    );
     return { value: CYCLE_PLACEHOLDER, modified: true, sgrNote: false };
   }
   if (depth >= MAX_DEPTH) {
-    warnings.push(
+    ctx.warnings.push(
       `Structured tool output nested beyond ${MAX_DEPTH} levels — deeper content withheld`,
     );
     return { value: DEPTH_PLACEHOLDER, modified: true, sgrNote: false };
   }
 
-  seen.add(value);
+  ctx.seen.add(value);
   try {
-    if (Array.isArray(value)) {
-      const out = [];
-      let modified = false;
-      let sgrNote = false;
-      for (const item of value) {
-        const result = await sanitizeValueAt(
-          item,
-          options,
-          warnings,
-          notes,
-          reveals,
-          splices,
-          depth + 1,
-          seen,
-          memo,
-        );
-        out.push(result.value);
-        if (result.modified) modified = true;
-        if (result.sgrNote) sgrNote = true;
-      }
-      const arrResult = { value: out, modified, sgrNote };
-      memo.set(value, depth, arrResult);
-      return arrResult;
-    }
-    /** @type {Record<string, any>} */
-    const out = {};
-    let modified = false;
-    let sgrNote = false;
-    for (const [key, item] of Object.entries(value)) {
-      // Screen the KEY for hidden chars (Layer 1). We FLAG but do NOT rewrite:
-      // a sanitized key can collide with a sibling key (silently dropping a
-      // field) or break a downstream schema that matches on the exact name, so
-      // precision wins — we keep the original key and warn, letting an operator
-      // decide, rather than mangle the object's shape. (A clean key is silent.)
-      // A key-only finding does NOT set `modified`: `modified` means output
-      // BYTES changed (see composeContext's contract), and the key is left
-      // intact here on purpose — only the warning fires.
-      const { cleaned: cleanKey } = applyLayer1(key);
-      if (cleanKey !== key)
-        warnings.push(
-          "An object key in structured tool output carried hidden/invisible characters (key left intact, value sanitized)",
-        );
-      const result = await sanitizeValueAt(
-        item,
-        options,
-        warnings,
-        notes,
-        reveals,
-        splices,
-        depth + 1,
-        seen,
-        memo,
-      );
-      // Bracket assignment on a literal "__proto__" key triggers the special
-      // Object.prototype setter instead of creating an own property — the
-      // field would silently vanish from `out`'s own keys and `out`'s
-      // prototype would become attacker-controlled. defineProperty always
-      // creates a normal own data property regardless of the key's name.
-      Object.defineProperty(out, key, {
-        value: result.value,
-        enumerable: true,
-        writable: true,
-        configurable: true,
-      });
-      if (result.modified) modified = true;
-      if (result.sgrNote) sgrNote = true;
-    }
-    const objResult = { value: out, modified, sgrNote };
-    memo.set(value, depth, objResult);
-    return objResult;
+    const result = Array.isArray(value)
+      ? await sanitizeArray(value, ctx, depth, path)
+      : await sanitizeObject(value, ctx, depth, path);
+    ctx.memo.set(value, depth, result);
+    return result;
   } finally {
-    seen.delete(value);
+    ctx.seen.delete(value);
   }
+}
+
+/**
+ * @param {any[]} value
+ * @param {WalkContext} ctx
+ * @param {number} depth
+ * @param {string} path
+ * @returns {Promise<WalkResult>}
+ */
+async function sanitizeArray(value, ctx, depth, path) {
+  const out = [];
+  let modified = false;
+  let sgrNote = false;
+  for (const [index, item] of value.entries()) {
+    const result = await sanitizeValueAt(
+      item,
+      ctx,
+      depth + 1,
+      `${path}[${index}]`,
+    );
+    out.push(result.value);
+    if (result.modified) modified = true;
+    if (result.sgrNote) sgrNote = true;
+  }
+  return { value: out, modified, sgrNote };
+}
+
+/**
+ * A plain object: every key through {@link sanitizeString} (see
+ * {@link sanitizeValueWith} for why, and for the collision rule) and every value
+ * through {@link sanitizeValueAt}.
+ * @param {Record<string, any>} value
+ * @param {WalkContext} ctx
+ * @param {number} depth
+ * @param {string} path
+ * @returns {Promise<WalkResult>}
+ */
+async function sanitizeObject(value, ctx, depth, path) {
+  /** @type {Record<string, any>} */
+  const out = {};
+  let modified = false;
+  let sgrNote = false;
+  // Names already withheld, so a THIRD field colliding onto the same name does
+  // not re-warn; and the next free duplicate index per name, so N collisions
+  // probe in O(N) rather than O(N²) — the count is the tool output's to choose.
+  /** @type {Set<string>} */
+  const collided = new Set();
+  /** @type {Map<string, number>} */
+  const nextDuplicate = new Map();
+  for (const [key, item] of Object.entries(value)) {
+    const name = await sanitizeString(key, ctx.key, ctx);
+    const result = await sanitizeValueAt(
+      item,
+      ctx,
+      depth + 1,
+      path === "" ? name.value : `${path}.${name.value}`,
+    );
+    if (name.modified || result.modified) modified = true;
+    if (name.sgrNote || result.sgrNote) sgrNote = true;
+    if (!Object.hasOwn(out, name.value)) {
+      defineOwn(out, name.value, result.value);
+      continue;
+    }
+    modified = true;
+    if (!collided.has(name.value)) {
+      collided.add(name.value);
+      ctx.warnings.push(collisionWarning(name.value, path));
+      defineOwn(out, name.value, COLLISION_WITHHELD_MESSAGE);
+    }
+    // The probe still checks `out`: a raw field already NAMED
+    // `<name> [withheld duplicate 2]` must not be clobbered.
+    let index = nextDuplicate.get(name.value) ?? 2;
+    while (Object.hasOwn(out, `${name.value} [withheld duplicate ${index}]`))
+      index++;
+    nextDuplicate.set(name.value, index + 1);
+    defineOwn(
+      out,
+      `${name.value} [withheld duplicate ${index}]`,
+      COLLISION_WITHHELD_MESSAGE,
+    );
+  }
+  return { value: out, modified, sgrNote };
+}
+
+/**
+ * Write `key` as an own data property. Not `out[key] = value`: a "__proto__"
+ * key assigned with `=` hits Object.prototype's setter, silently dropping the
+ * field from `out`'s own keys and making `out`'s prototype attacker-controlled.
+ * @param {Record<string, any>} out
+ * @param {string} key
+ * @param {unknown} value
+ * @returns {void}
+ */
+function defineOwn(out, key, value) {
+  Object.defineProperty(out, key, {
+    value,
+    enumerable: true,
+    writable: true,
+    configurable: true,
+  });
 }
 
 /**
@@ -1288,15 +1532,7 @@ function suppressAt(value, message, depth, seen, memo) {
     /** @type {Record<string, any>} */
     const out = {};
     for (const [key, item] of Object.entries(value))
-      // See sanitizeValueAt's identical guard: bracket assignment on a literal
-      // "__proto__" key hits the special setter instead of creating an own
-      // property, silently dropping the field and mutating out's prototype.
-      Object.defineProperty(out, key, {
-        value: suppressAt(item, message, depth + 1, seen, memo),
-        enumerable: true,
-        writable: true,
-        configurable: true,
-      });
+      defineOwn(out, key, suppressAt(item, message, depth + 1, seen, memo));
     memo.set(value, depth, out);
     return out;
   } finally {
