@@ -108,7 +108,7 @@ repos:
       # file. Checked here, the stale lock reds the commit that made it stale.
       - id: uv-lock-fresh
         name: uv.lock agrees with pyproject.toml and uv.toml (root and python/)
-        entry: bash -c 'uv lock --check && uv lock --check --project python'
+        entry: bash -c 'uv lock --check --offline && uv lock --check --offline --project python'
         language: system
         pass_filenames: false
         files: (^|/)(pyproject\.toml|uv\.lock|uv\.toml)$
