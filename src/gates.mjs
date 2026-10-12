@@ -88,7 +88,7 @@ export function needsUrlScan(text) {
 // can't be retried at every offset; the atlasv1 arm in SECRET_HINT does the same.
 /** @type {RegExp} */
 export const SECRET_HINT =
-  /secret|token|password|passwd|pwd|bearer|credential|authorization|contrase[nñ]a|-----BEGIN|(?:api|auth|service|account|db|database|priv|private|client|access)[_-]?key|(?:db|database|key)[_-]?pass|(?:A3T|AKIA|AGPA|AIDA|AROA|AIPA|ANPA|ANVA|ASIA)[A-Z0-9]{16}|gh[pousr]_[A-Za-z0-9]|github_pat_|gl[a-z]{2,12}-[0-9A-Za-z_-]{20}|sk-ant-|AIza[0-9A-Za-z_-]{35}|sk_live_|sk_test_|rk_live_|rk_test_|xox[bpasr]-|eyJ[A-Za-z0-9]|do[opr]_v1_[a-f0-9]{16}|v1\.0-[a-f0-9]{24}-|hv[sb]\.[A-Za-z0-9_-]{20}|(?<![a-z0-9])[a-z0-9]{14}\.atlasv1\.|sk-or-v1-[0-9a-f]{16}|gsk_[A-Za-z0-9]{16}|xai-[A-Za-z0-9]{16}|r8_[A-Za-z0-9]{16}/i;
+  /secret|token|password|passwd|pwd|bearer|credential|authorization|contrase[nñ]a|-----BEGIN|(?:api|auth|service|account|db|database|priv|private|client|access)[_-]?key|(?:db|database|key)[_-]?pass|(?:A3T|AKIA|AGPA|AIDA|AROA|AIPA|ANPA|ANVA|ASIA)[A-Z0-9]{16}|gh[pousr]_[A-Za-z0-9]|github_pat_|gl[a-z]{2,12}-[0-9A-Za-z_-]{20}|sk-ant-|AIza[0-9A-Za-z_-]{35}|sk_live_|sk_test_|rk_live_|rk_test_|xox[bpasr]-|eyJ[A-Za-z0-9]|do[opr]_v1_[a-f0-9]{16}|v1\.0-[a-f0-9]{24}-|hv[sb]\.[A-Za-z0-9_-]{20}|(?<![a-z0-9])[a-z0-9]{14}\.atlasv1\.|sk-or-[0-9a-z_-]{16}|gsk_[A-Za-z0-9]{16}|xai-[A-Za-z0-9]{16}|r8_[A-Za-z0-9]{16}/i;
 
 // Second alternation (see SECRET_HINT): kept a separate literal so a redos
 // analyzer vets each alternation in isolation.

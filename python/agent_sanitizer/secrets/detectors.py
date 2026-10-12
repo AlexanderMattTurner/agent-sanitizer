@@ -57,7 +57,8 @@ _DENYLISTS = {
 
 
 class AnthropicApiKeyDetector(RegexBasedDetector):
-    """Anthropic API keys (``sk-ant-…``). gitleaks rule: ``anthropic-api-key``."""
+    """Anthropic API and Admin API keys and OAuth access tokens
+    (``sk-ant-{api03,admin01,oat01}-…``). gitleaks rule: ``anthropic-api-key``."""
 
     secret_type = "Anthropic API Key"  # noqa: S105 — a detector label, not a secret
     denylist = _DENYLISTS["AnthropicApiKeyDetector"]
@@ -130,6 +131,16 @@ class OpenRouterApiKeyDetector(RegexBasedDetector):
 
     secret_type = "OpenRouter API Key"  # noqa: S105 — a detector label, not a secret
     denylist = _DENYLISTS["OpenRouterApiKeyDetector"]
+
+
+class LooseProviderKeyDetector(RegexBasedDetector):
+    """``sk-ant-…`` / ``sk-or-…`` keys outside the one fixed shape
+    ``AnthropicApiKeyDetector`` / ``OpenRouterApiKeyDetector`` match: other
+    version tags, lengths and body alphabets. A canonical key is left to its
+    sibling, so it keeps that one label."""
+
+    secret_type = "Provider API Key"  # noqa: S105 — a detector label, not a secret
+    denylist = _DENYLISTS["LooseProviderKeyDetector"]
 
 
 class GroqApiKeyDetector(RegexBasedDetector):
