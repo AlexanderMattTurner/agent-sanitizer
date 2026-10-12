@@ -49071,7 +49071,7 @@ function positiveMsOr(raw, fallback) {
 function daemonCommand() {
   const configured = process.env._AGENT_SANITIZER_REDACTOR_DAEMON;
   if (configured) return [configured];
-  const pyz = fileURLToPath4(new URL("../redactor/daemon.pyz", import.meta.url));
+  const pyz = process.env._AGENT_SANITIZER_REDACTOR_PYZ || fileURLToPath4(new URL("../redactor/daemon.pyz", import.meta.url));
   if (existsSync2(pyz)) return ["python3", pyz];
   return ["agent-secret-redactor-daemon"];
 }

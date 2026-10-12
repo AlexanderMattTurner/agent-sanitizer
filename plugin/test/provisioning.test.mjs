@@ -16,6 +16,7 @@ import {
   chmodSync,
   cpSync,
   existsSync,
+  lstatSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -82,6 +83,7 @@ function fakeUv(t, log, { failLock = false } = {}) {
       `  *" -r "*) ${failLock ? "exit 1" : "exit 0"} ;;\n` +
       "esac\n" +
       'venv="$(dirname "$(dirname "$py")")"\n' +
+      'mkdir -p "$venv/lib/site-packages/pkg" && echo "x = 1" > "$venv/lib/site-packages/pkg/mod.py"\n' +
       'printf "#!%s/bin/python\\nimport sys\\n" "$venv" > "$venv/bin/agent-secret-redactor-daemon"\n' +
       'chmod 755 "$venv/bin/agent-secret-redactor-daemon"\n',
   );
@@ -104,15 +106,24 @@ function stageRedactor(t) {
   return { plugin, data: join(scratch(t), "data") };
 }
 
-function provisionRedactor({ plugin, data }, uvDir) {
-  return spawnSync("bash", [join(plugin, "scripts", "provision-redactor.sh")], {
-    encoding: "utf8",
-    env: {
-      PATH: `${uvDir}:/usr/bin:/bin`,
-      AGENT_SANITIZER_SECRETS_ENABLED: "1",
-      CLAUDE_PLUGIN_DATA: data,
+function provisionRedactor({ plugin, data }, uvDir, { umask = "022" } = {}) {
+  // Through `sh -c` so the umask is the case's to state, not the runner's.
+  return spawnSync(
+    "sh",
+    [
+      "-c",
+      `umask ${umask}; exec bash "$0"`,
+      join(plugin, "scripts", "provision-redactor.sh"),
+    ],
+    {
+      encoding: "utf8",
+      env: {
+        PATH: `${uvDir}:/usr/bin:/bin`,
+        AGENT_SANITIZER_SECRETS_ENABLED: "1",
+        CLAUDE_PLUGIN_DATA: data,
+      },
     },
-  });
+  );
 }
 
 /** What a provisioned venv records about itself. */
@@ -165,6 +176,25 @@ test("a plugin update re-provisions an existing venv instead of failing on it", 
   for (const argv of lockInstalls) assert.match(argv, /--require-hashes/);
 });
 
+test("a group-writable umask leaves nothing in the venv another uid could edit", (t) => {
+  const staged = stageRedactor(t);
+  const res = provisionRedactor(staged, fakeUv(t, join(scratch(t), "uv-log")), {
+    umask: "002",
+  });
+  assert.equal(res.status, 0, res.stderr);
+
+  const venv = join(staged.data, "venv");
+  const walked = readdirSync(venv, { recursive: true });
+  // Non-vacuity: the import tree the daemon loads from is among what was walked,
+  // and the umask really did make the installer's own files group-writable.
+  assert.ok(walked.includes(join("lib", "site-packages", "pkg", "mod.py")));
+  const writable = walked.filter(
+    (rel) => (lstatSync(join(venv, rel)).mode & 0o022) !== 0,
+  );
+  assert.deepEqual(writable, []);
+  assert.equal(lstatSync(venv).mode & 0o022, 0);
+});
+
 test("a re-provision that fails leaves the previous venv serving", (t) => {
   const staged = stageRedactor(t);
   const log = join(scratch(t), "uv-log");
@@ -178,6 +208,77 @@ test("a re-provision that fails leaves the previous venv serving", (t) => {
   // Untouched, stamps and all, and the half-built venv is gone: the next
   // session sees the stamp mismatch and tries again.
   assert.deepEqual(venvState(staged.data), before);
+});
+
+/** A re-lock, so the provisioner sees the installed venv as out of date. */
+function bumpLock({ plugin }) {
+  const req = join(plugin, "requirements.txt");
+  writeFileSync(req, `${readFileSync(req, "utf8")}# a later re-lock\n`);
+}
+
+/**
+ * A PATH dir whose `mv` refuses the named sources (matched against the path's
+ * `venv.<tag>.` prefix) and defers to the real one otherwise, so the swap's two
+ * renames can each be made to fail on their own.
+ */
+function mvRefusing(t, ...tags) {
+  const dir = join(scratch(t), "mv-bin");
+  mkdirSync(dir);
+  const cases = tags.map((tag) => `    *venv.${tag}.*) exit 1 ;;\n`).join("");
+  writeFileSync(
+    join(dir, "mv"),
+    "#!/bin/sh\n" +
+      'for a in "$@"; do case "$a" in --) ;; *) src="$a"; break ;; esac; done\n' +
+      `case "$src" in\n${cases}esac\n` +
+      'exec /bin/mv "$@"\n',
+  );
+  chmodSync(join(dir, "mv"), 0o755);
+  return dir;
+}
+
+test("a swap that cannot land the new venv puts the previous one back and says so", (t) => {
+  const staged = stageRedactor(t);
+  const log = join(scratch(t), "uv-log");
+  const uv = fakeUv(t, log);
+  assert.equal(provisionRedactor(staged, uv).status, 0);
+  const before = venvState(staged.data);
+  bumpLock(staged);
+
+  const res = provisionRedactor(staged, `${mvRefusing(t, "new")}:${uv}`);
+  assert.equal(res.status, 1, res.stderr);
+  assert.match(res.stderr, /the previous one stays in place/);
+  assert.deepEqual(venvState(staged.data), before);
+});
+
+test("a swap whose restore also fails still names where the previous venv is", (t) => {
+  const staged = stageRedactor(t);
+  const log = join(scratch(t), "uv-log");
+  const uv = fakeUv(t, log);
+  assert.equal(provisionRedactor(staged, uv).status, 0);
+  bumpLock(staged);
+
+  const res = provisionRedactor(staged, `${mvRefusing(t, "new", "old")}:${uv}`);
+  assert.equal(res.status, 1, res.stderr);
+  assert.match(
+    res.stderr,
+    /could not be restored from \S+venv\.old\.\d+ — .*move \S+venv\.old\.\d+ back by hand/,
+  );
+  // The message is true: the only copy sits at the retired path.
+  const siblings = readdirSync(staged.data).filter((n) => n.startsWith("venv"));
+  assert.equal(siblings.length, 1);
+  assert.match(siblings[0], /^venv\.old\.\d+$/);
+});
+
+test("a first-ever provision that cannot land the venv does not claim a previous one", (t) => {
+  const staged = stageRedactor(t);
+  const log = join(scratch(t), "uv-log");
+  const res = provisionRedactor(
+    staged,
+    `${mvRefusing(t, "new")}:${fakeUv(t, log)}`,
+  );
+  assert.equal(res.status, 1, res.stderr);
+  assert.match(res.stderr, /newly built .* committed zipapp/);
+  assert.doesNotMatch(res.stderr, /previous one/);
 });
 
 // ─── The lock-directory fallback ─────────────────────────────────────────────

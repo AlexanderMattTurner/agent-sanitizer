@@ -62,10 +62,13 @@ export const DEFAULT_SOCKET_PATH =
  *    sets it to the provisioned venv's console script when one exists, and
  *    tests point it at dead paths to drive the fail-closed arm; a fallback
  *    from an explicit setting would turn those arms into silent passes).
- * 2. The committed self-contained zipapp shipped BESIDE this bundle
- *    (`plugin/dist/redactor/daemon.pyz`) — the guaranteed floor: it needs only
- *    a python3 on PATH, so a cold start with no venv and no network still
- *    redacts instead of failing closed on every tool call.
+ * 2. The committed self-contained zipapp (`plugin/dist/redactor/daemon.pyz`) —
+ *    the guaranteed floor: it needs only a python3 on PATH, so a cold start
+ *    with no venv and no network still redacts instead of failing closed on
+ *    every tool call. Found at `_AGENT_SANITIZER_REDACTOR_PYZ` when the
+ *    launcher exports it (the compiled hook binary resolves modules inside
+ *    bun's virtual filesystem, where a module-relative path names no file on
+ *    disk), else beside this bundle.
  * 3. The packaged console script from PATH — the un-bundled/dev case, where
  *    no sibling dist tree exists.
  * @returns {string[]}
@@ -76,7 +79,9 @@ function daemonCommand() {
   // Inside the built bundle import.meta.url is .../plugin/dist/hooks/<bundle>,
   // so the committed zipapp sits one level up; from the raw sources no such
   // sibling exists and the check falls through.
-  const pyz = fileURLToPath(new URL("../redactor/daemon.pyz", import.meta.url));
+  const pyz =
+    process.env._AGENT_SANITIZER_REDACTOR_PYZ ||
+    fileURLToPath(new URL("../redactor/daemon.pyz", import.meta.url));
   if (existsSync(pyz)) return ["python3", pyz];
   return ["agent-secret-redactor-daemon"];
 }

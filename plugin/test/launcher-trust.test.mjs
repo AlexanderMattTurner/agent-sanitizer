@@ -453,6 +453,36 @@ test("a stale binary still answers on a host with no node", (t) => {
   assert.match(res.stderr, /running it anyway/);
 });
 
+test("a stale binary still answers when the only node is below the floor", (t) => {
+  // That node would die on the bundle after stdin is spent, leaving the call
+  // unsanitized; the older binary can still guard it.
+  const plugin = stagePlugin(t);
+  const res = launch(t, plugin, {
+    data: stageData(t, plugin, { stamp: false }),
+    tmp: tmpDir(t),
+    node: nodeDir(
+      t,
+      `[ "$1" = --version ] && { echo v20.1.0; exit 0; }\n${REPORTING_NODE}`,
+    ),
+  });
+  assert.equal(res.status, 0, res.stderr);
+  assert.deepEqual(JSON.parse(res.stdout), { fromBinary: true });
+  assert.match(res.stderr, /running it anyway/);
+});
+
+test("a stale binary is still passed over for a node at the floor", (t) => {
+  const plugin = stagePlugin(t);
+  const res = launch(t, plugin, {
+    data: stageData(t, plugin, { stamp: false }),
+    tmp: tmpDir(t),
+    node: nodeDir(
+      t,
+      `[ "$1" = --version ] && { echo v22.14.0; exit 0; }\n${REPORTING_NODE}`,
+    ),
+  });
+  assert.equal(JSON.parse(res.stdout).fromNode, true);
+});
+
 // ─── What the runtimes are handed ────────────────────────────────────────────
 
 test("both runtimes are told where the committed zipapp is", (t) => {

@@ -392,11 +392,13 @@ if [[ "${AGENT_SANITIZER_HOOK_BINARY:-}" != "0" && -n "${CLAUDE_PLUGIN_DATA:-}" 
     bin_stdout_file="$(mktemp 2>/dev/null)"
   else
     # A stale binary still beats no sanitizer at all, so it runs only where
-    # node cannot run the bundle this install actually ships.
+    # node cannot run the bundle this install actually ships: none found, or one
+    # definitely below the floor (which dies before it can answer, after stdin
+    # is spent and the binary can no longer be handed the payload).
     node_bin="$(agent_sanitizer_resolve_node)"
     node_resolved=1
-    if [[ -z "$node_bin" || ! -x "$node_bin" ]]; then
-      echo "agent-sanitizer: $hook_binary was not installed from the manifest this plugin ships, so it may run an older sanitizer than this install's bundle; no node was found to run the bundle, so running it anyway (a new session re-provisions it)" >&2
+    if [[ -z "$node_bin" || ! -x "$node_bin" ]] || ! agent_sanitizer_node_meets_floor "$node_bin"; then
+      echo "agent-sanitizer: $hook_binary was not installed from the manifest this plugin ships, so it may run an older sanitizer than this install's bundle; node (${node_bin:-not found}) cannot run the bundle, so running it anyway (a new session re-provisions it)" >&2
       payload_file="$(mktemp 2>/dev/null)"
       bin_stdout_file="$(mktemp 2>/dev/null)"
     fi

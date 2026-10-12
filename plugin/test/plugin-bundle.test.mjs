@@ -2487,6 +2487,8 @@ test("a missing peer package fails the output hook CLOSED under the opt-out", (t
 const EXERCISED_ENV_VARS = new Set([
   // "output hook fails CLOSED when the redactor is unreachable"
   "_AGENT_SANITIZER_REDACTOR_DAEMON",
+  // test/claude-hooks-redactor-pyz.test.mjs: "runs the zipapp the variable names"
+  "_AGENT_SANITIZER_REDACTOR_PYZ",
   // "output hook redacts through the daemon wire protocol"
   "_AGENT_SANITIZER_REDACTOR_SOCKET",
   // "…WAIT_MS bounds the wait for a daemon that never starts"

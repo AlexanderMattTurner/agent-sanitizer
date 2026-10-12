@@ -126,7 +126,10 @@ mv -f -- "$daemon.relocated" "$daemon"
 
 # The launcher refuses a venv another uid could write into (see trusted_dir in
 # safe-launch.sh), so a group-writable umask must not leave one it will refuse.
-chmod go-w -- "$build" "$build/bin"
+# Recursive: the launcher vets only the root and bin/, but the daemon imports
+# from site-packages, and a module another uid in the group can edit there runs
+# with every secret-bearing payload. Done after the last write into $build.
+chmod -R go-w -- "$build"
 cp -- "$req" "$build/.requirements-installed"
 cp -- "$wheel" "$build/.engine-wheel-installed"
 
@@ -136,10 +139,15 @@ if [[ -e "$venv" || -L "$venv" ]]; then
   mv -- "$venv" "$retired"
 fi
 if ! mv -- "$build" "$venv"; then
-  if [[ -e "$retired" ]]; then
-    mv -- "$retired" "$venv"
+  # Every arm sits in a condition: a bare restore `mv` would abort under
+  # `set -e` before the message naming where the only surviving copy lives.
+  if [[ ! -e "$retired" ]]; then
+    echo "agent-sanitizer: could not move the newly built secret-redaction engine into $venv — this session redacts through the committed zipapp" >&2
+  elif mv -- "$retired" "$venv"; then
+    echo "agent-sanitizer: could not move the new secret-redaction engine into $venv — the previous one stays in place" >&2
+  else
+    echo "agent-sanitizer: could not move the new secret-redaction engine into $venv, and the previous one could not be restored from $retired — this session redacts through the committed zipapp; move $retired back by hand, or start a new session to re-provision" >&2
   fi
-  echo "agent-sanitizer: could not move the new secret-redaction engine into $venv — the previous one stays in place" >&2
   exit 1
 fi
 build=""
