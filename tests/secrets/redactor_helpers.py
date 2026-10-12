@@ -56,6 +56,22 @@ def reconstruct(view: dict) -> str:
     return "".join(out)
 
 
+def wire_request(
+    text: str,
+    *,
+    map_mode: bool = False,
+    web_ingress: bool = True,
+    env_secrets: dict[str, str] | None = None,
+) -> dict:
+    """A daemon request carrying every field the wire protocol requires."""
+    return {
+        "text": text,
+        "map": map_mode,
+        "web_ingress": web_ingress,
+        "env_secrets": env_secrets or {},
+    }
+
+
 def wait_for_listener(socket_path: str, timeout: float = 10.0) -> None:
     """Block until a daemon is ACCEPTING on ``socket_path``, or raise.
 

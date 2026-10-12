@@ -16609,7 +16609,7 @@ var require_extend = __commonJS({
       }
       return toStr.call(arr) === "[object Array]";
     };
-    var isPlainObject2 = function isPlainObject3(obj) {
+    var isPlainObject3 = function isPlainObject4(obj) {
       if (!obj || toStr.call(obj) !== "[object Object]") {
         return false;
       }
@@ -16666,12 +16666,12 @@ var require_extend = __commonJS({
             src = getProperty(target, name50);
             copy = getProperty(options, name50);
             if (target !== copy) {
-              if (deep && copy && (isPlainObject2(copy) || (copyIsArray = isArray2(copy)))) {
+              if (deep && copy && (isPlainObject3(copy) || (copyIsArray = isArray2(copy)))) {
                 if (copyIsArray) {
                   copyIsArray = false;
                   clone = src && isArray2(src) ? src : [];
                 } else {
-                  clone = src && isPlainObject2(src) ? src : {};
+                  clone = src && isPlainObject3(src) ? src : {};
                 }
                 setProperty(target, { name: name50, newValue: extend2(deep, clone, copy) });
               } else if (typeof copy !== "undefined") {
@@ -54141,6 +54141,119 @@ var init_env_config = __esm({
   }
 });
 
+// python/agent_sanitizer/secrets/data/redactor-protocol.json
+var redactor_protocol_default;
+var init_redactor_protocol = __esm({
+  "python/agent_sanitizer/secrets/data/redactor-protocol.json"() {
+    redactor_protocol_default = {
+      description: "Wire protocol of the Layer-4 secret-redactor daemon. Both directions: a 4-byte big-endian unsigned length, then that many bytes of UTF-8 JSON, at most frame_cap bytes. The client (claude-hooks/lib/redactor-client.mjs) and the daemon (python/agent_sanitizer/secrets/daemon.py) both read this file. Every object has exactly the listed fields. Field types: string, boolean, index (a non-negative integer), string-list, string-map (an object whose values are strings), pair-list (a list of `pair` objects). A plain-mode reply may also be JSON null, meaning there was nothing to redact.",
+      frame_cap: 16777216,
+      request: {
+        text: "string",
+        map: "boolean",
+        web_ingress: "boolean",
+        env_secrets: "string-map"
+      },
+      responses: {
+        plain: { text: "string", found: "string-list" },
+        map: { text: "string", pairs: "pair-list", found: "string-list" },
+        unmappable: { unmappable: "string" },
+        error: { error: "string" }
+      },
+      pair: { placeholder: "string", original: "string", start: "index" }
+    };
+  }
+});
+
+// claude-hooks/lib/redactor-wire.mjs
+function hasType(value, kind2) {
+  switch (kind2) {
+    case "string":
+      return typeof value === "string";
+    case "boolean":
+      return typeof value === "boolean";
+    case "index":
+      return Number.isSafeInteger(value) && /** @type {number} */
+      value >= 0;
+    case "string-list":
+      return Array.isArray(value) && value.every((v) => typeof v === "string");
+    case "string-map":
+      return isPlainObject2(value) && Object.values(value).every((v) => typeof v === "string");
+    case "pair-list":
+      return Array.isArray(value) && value.every((v) => conforms(v, redactor_protocol_default.pair));
+    default:
+      throw new Error(`unknown protocol field type ${JSON.stringify(kind2)}`);
+  }
+}
+function isPlainObject2(value) {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+function conforms(value, shape) {
+  if (!isPlainObject2(value)) return false;
+  const names = Object.keys(shape);
+  return Object.keys(value).length === names.length && names.every(
+    (name50) => Object.hasOwn(value, name50) && hasType(value[name50], shape[name50])
+  );
+}
+function encodeFrame(value) {
+  const body = Buffer.from(JSON.stringify(value), "utf8");
+  if (body.length > FRAME_CAP) {
+    throw new Error(
+      `redactor frame of ${body.length} bytes exceeds the ${FRAME_CAP}-byte frame cap`
+    );
+  }
+  const header = Buffer.allocUnsafe(HEADER_BYTES);
+  header.writeUInt32BE(body.length, 0);
+  return Buffer.concat([header, body]);
+}
+var FRAME_CAP, HEADER_BYTES, FrameReader;
+var init_redactor_wire = __esm({
+  "claude-hooks/lib/redactor-wire.mjs"() {
+    "use strict";
+    init_redactor_protocol();
+    FRAME_CAP = redactor_protocol_default.frame_cap;
+    HEADER_BYTES = 4;
+    FrameReader = class {
+      /** @type {Buffer[]} */
+      #chunks = [];
+      #received = 0;
+      /** @type {number | null} */
+      #expected = null;
+      /**
+       * Feed one chunk. Returns `{ value }` once the whole frame has arrived and
+       * undefined before then; throws on a header over the frame cap or a body
+       * that is not JSON.
+       * @param {Buffer} chunk
+       * @returns {{ value: unknown } | undefined}
+       */
+      push(chunk) {
+        this.#chunks.push(chunk);
+        this.#received += chunk.length;
+        if (this.#expected === null) {
+          if (this.#received < HEADER_BYTES) return void 0;
+          this.#expected = this.#joined().readUInt32BE(0);
+          if (this.#expected > FRAME_CAP) {
+            throw new Error(
+              `redactor frame header claims ${this.#expected} bytes, over the ${FRAME_CAP}-byte frame cap`
+            );
+          }
+        }
+        const end = HEADER_BYTES + this.#expected;
+        if (this.#received < end) return void 0;
+        return {
+          value: JSON.parse(
+            this.#joined().subarray(HEADER_BYTES, end).toString("utf8")
+          )
+        };
+      }
+      /** The bytes buffered so far, copying only when more than one chunk is held. */
+      #joined() {
+        return this.#chunks.length === 1 ? this.#chunks[0] : Buffer.concat(this.#chunks, this.#received);
+      }
+    };
+  }
+});
+
 // claude-hooks/lib/redactor-client.mjs
 import { spawn } from "node:child_process";
 import { existsSync as existsSync2, lstatSync as lstatSync4 } from "node:fs";
@@ -54213,10 +54326,13 @@ function connectAndRequest(socketPath, request, deadlineMs = requestDeadlineMs()
       );
       return;
     }
+    if (!conforms(request, redactor_protocol_default.request)) {
+      reject(new Error("redactor request does not match the wire protocol"));
+      return;
+    }
+    const frame = encodeFrame(request);
     const sock = createConnection(socketPath);
-    const chunks = [];
-    let received = 0;
-    let expected = null;
+    const reader = new FrameReader();
     let timer = null;
     const finish = (fn, arg) => {
       if (timer) clearTimeout(timer);
@@ -54227,39 +54343,29 @@ function connectAndRequest(socketPath, request, deadlineMs = requestDeadlineMs()
       () => finish(reject, new Error("redactor response timeout")),
       deadlineMs
     );
-    const joined = () => chunks.length === 1 ? chunks[0] : Buffer.concat(chunks, received);
     sock.on("error", (err) => finish(reject, err));
-    sock.on("connect", () => {
-      const body = Buffer.from(JSON.stringify(request), "utf8");
-      const header = Buffer.allocUnsafe(4);
-      header.writeUInt32BE(body.length, 0);
-      sock.write(Buffer.concat([header, body]));
-    });
+    sock.on("connect", () => sock.write(frame));
     sock.on("data", (chunk) => {
-      chunks.push(
-        /** @type {Buffer} */
-        chunk
-      );
-      received += chunk.length;
-      if (expected === null) {
-        if (received < 4) return;
-        expected = joined().readUInt32BE(0);
-        if (expected > FRAME_CAP) {
-          finish(reject, new Error("oversize response frame"));
-          return;
-        }
-      }
-      if (received < 4 + expected) return;
-      const buf = joined();
-      let parsed;
+      let frameRead;
       try {
-        parsed = JSON.parse(buf.subarray(4, 4 + expected).toString("utf8"));
+        frameRead = reader.push(
+          /** @type {Buffer} */
+          chunk
+        );
       } catch (err) {
         finish(reject, err);
         return;
       }
-      if (parsed && typeof parsed === "object" && "error" in parsed) {
-        finish(reject, new Error("daemon reported redaction failure"));
+      if (frameRead === void 0) return;
+      const parsed = frameRead.value;
+      if (isPlainObject2(parsed) && "error" in parsed) {
+        const reason = conforms(parsed, redactor_protocol_default.responses.error) ? `: ${parsed.error}` : "";
+        finish(
+          reject,
+          new Error(
+            `daemon reported redaction failure${reason}; its log is ${join6(dirname5(socketPath), "daemon.log")}`
+          )
+        );
         return;
       }
       finish(resolve6, parsed);
@@ -54274,15 +54380,34 @@ function spawnDaemon(socketPath, command = daemonCommand()) {
   const [bin, ...leading] = command;
   const child = spawn(bin, [...leading, socketPath], {
     detached: true,
-    stdio: "ignore"
+    stdio: ["ignore", "ignore", "pipe"]
   });
-  child.on("error", () => {
+  const stderr = (
+    /** @type {import("node:net").Socket} */
+    child.stderr
+  );
+  let output = "";
+  let failure;
+  stderr.setEncoding("utf8");
+  stderr.on("data", (chunk) => {
+    output = (output + chunk).slice(-STDERR_TAIL_CHARS);
+  });
+  child.on("error", (err) => {
+    failure = err.message;
+  });
+  child.on("close", (code4, signal) => {
+    if (code4 === 0) return;
+    const status = signal ? `killed by ${signal}` : `exit ${code4}`;
+    const tail = output.trim();
+    failure ??= tail ? `${status}: ${tail}` : status;
   });
   child.unref();
+  stderr.unref();
+  return { failure: () => failure, release: () => stderr.destroy() };
 }
-async function waitForSocket(socketPath, { deadlineMs = WAIT_DEADLINE_MS, stepMs = 100 } = {}) {
+async function waitForSocket(socketPath, { deadlineMs = WAIT_DEADLINE_MS, stepMs = 100, abandon = () => false } = {}) {
   const deadline = Date.now() + deadlineMs;
-  while (Date.now() < deadline) {
+  while (Date.now() < deadline && !abandon()) {
     if (existsSync2(socketPath) && await canConnect(socketPath)) return true;
     await sleep(stepMs);
   }
@@ -54301,10 +54426,14 @@ function canConnect(socketPath) {
     });
   });
 }
-async function redactViaDaemon(text6, opts = {}) {
+async function redactViaDaemon(text6, opts) {
+  if (typeof opts?.webIngress !== "boolean")
+    throw new TypeError(
+      "redactViaDaemon: opts.webIngress must be true (attacker-controlled text) or false (local output)"
+    );
   const {
     map: map3 = false,
-    webIngress = false,
+    webIngress,
     socketPath = DEFAULT_SOCKET_PATH,
     deadline,
     connect = connectAndRequest,
@@ -54328,20 +54457,26 @@ async function redactViaDaemon(text6, opts = {}) {
     web_ingress: webIngress,
     env_secrets: collectEnvSecrets()
   };
+  const { responses } = redactor_protocol_default;
   const validate = (result) => {
-    if (result === null) return null;
     if (map3) {
-      if (result?.unmappable === void 0 && !(typeof result?.text === "string" && Array.isArray(result?.pairs)))
+      if (!conforms(result, responses.map) && !conforms(result, responses.unmappable))
         throw new Error(
-          "redactor returned a malformed map response (no `unmappable` marker and no `{text, pairs}` map)"
+          "redactor returned a malformed map response (neither `{text, pairs, found}` nor `{unmappable}`)"
         );
-      return result;
-    }
-    if (typeof result?.text !== "string")
-      throw new Error(
-        "redactor returned a malformed plain response (no string `text`)"
+      return (
+        /** @type {RedactResponse} */
+        result
       );
-    return result;
+    }
+    if (result !== null && !conforms(result, responses.plain))
+      throw new Error(
+        "redactor returned a malformed plain response (neither null nor `{text, found}`)"
+      );
+    return (
+      /** @type {RedactResponse|null} */
+      result
+    );
   };
   const dial = (deadlineMs) => chargeRedactorRoundTrip(
     () => connect(socketPath, request, deadlineMs),
@@ -54352,16 +54487,29 @@ async function redactViaDaemon(text6, opts = {}) {
   } catch (err) {
     if (!isRespawnable(err)) throw failClosed(err);
     if (budgetSpent()) throw outOfBudget("before redactor respawn");
-    spawnFn(socketPath);
+    const daemon = spawnFn(socketPath) ?? void 0;
     const budgetMs = remainingMs();
     const waitMs = budgetMs === void 0 ? WAIT_DEADLINE_MS : Math.min(WAIT_DEADLINE_MS, budgetMs);
-    const waitOpts = budgetMs === void 0 ? void 0 : { deadlineMs: waitMs };
-    if (!await excludeProvisioning(() => waitFn(socketPath, waitOpts), now))
+    const waitOpts = {
+      deadlineMs: waitMs,
+      abandon: () => daemon?.failure() !== void 0
+    };
+    const ready = await excludeProvisioning(
+      () => waitFn(socketPath, waitOpts),
+      now
+    );
+    daemon?.release();
+    const died = daemon?.failure();
+    if (!ready)
       throw failClosed(
-        // The CLAMPED wait, since that is what actually elapsed: naming
-        // WAIT_DEADLINE_MS tells an operator debugging a 200ms budget that the
-        // redactor got seconds it was never given.
-        new Error(`redactor daemon did not start within ${waitMs}ms`)
+        new Error(
+          died === void 0 ? (
+            // The CLAMPED wait, since that is what actually elapsed: naming
+            // WAIT_DEADLINE_MS tells an operator debugging a 200ms budget
+            // that the redactor got seconds it was never given.
+            `redactor daemon did not start within ${waitMs}ms`
+          ) : `redactor daemon failed to start (${died})`
+        )
       );
     if (budgetSpent()) throw outOfBudget("after redactor respawn");
     try {
@@ -54371,21 +54519,22 @@ async function redactViaDaemon(text6, opts = {}) {
     }
   }
 }
-var FRAME_CAP, DEFAULT_SOCKET_PATH, WAIT_DEADLINE_MS, sleep;
+var DEFAULT_SOCKET_PATH, WAIT_DEADLINE_MS, sleep, STDERR_TAIL_CHARS;
 var init_redactor_client = __esm({
   "claude-hooks/lib/redactor-client.mjs"() {
     "use strict";
     init_hook_timing();
     init_env_config();
+    init_redactor_wire();
     init_hook_io();
     init_knobs();
     init_knobs();
-    FRAME_CAP = 16 * 1024 * 1024;
     DEFAULT_SOCKET_PATH = readKnob("_AGENT_SANITIZER_REDACTOR_SOCKET") ?? join6(tmpdir2(), "agent-sanitizer-redactor", "redactor.sock");
     WAIT_DEADLINE_MS = readKnob("_AGENT_SANITIZER_REDACTOR_WAIT_MS");
     sleep = (ms) => new Promise((resolve6) => {
       setTimeout(resolve6, ms);
     });
+    STDERR_TAIL_CHARS = 2e3;
   }
 });
 
@@ -55183,10 +55332,10 @@ var init_pretooluse_sanitize = __esm({
       readFile: (path2) => readFileSync7(path2, "utf8"),
       redactMap: async (text6) => (
         /** @type {any} */
-        await redactViaDaemon(text6, { map: true })
+        await redactViaDaemon(text6, { map: true, webIngress: false })
       ),
       redact: async (text6) => {
-        const out = await redactViaDaemon(text6, {});
+        const out = await redactViaDaemon(text6, { webIngress: false });
         return out ? (
           /** @type {string} */
           out.text
@@ -55798,7 +55947,7 @@ function isMcpTool(toolName) {
 function isUntrustedIngress(toolName) {
   return WEB_INGRESS_TOOLS.has(toolName) || isMcpTool(toolName);
 }
-async function redactSecrets(text6, webIngress = false, deadline) {
+async function redactSecrets(text6, webIngress, deadline) {
   if (!matchesSecretHint2(text6) && !hasEnvBoundSecret(text6)) return null;
   return (
     /** @type {{ text: string, found: string[] } | null} */

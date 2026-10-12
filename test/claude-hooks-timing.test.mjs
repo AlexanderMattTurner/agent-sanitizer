@@ -304,6 +304,7 @@ describe("provisioning is not the hook's cost", () => {
     const dead = Object.assign(new Error("no socket"), { code: "ENOENT" });
     let dialled = 0;
     const result = await redactViaDaemon("some text", {
+      webIngress: false,
       // First dial fails as if the daemon were absent; the retry succeeds.
       connect: async () => {
         if (++dialled === 1) throw dead;
@@ -342,6 +343,7 @@ describe("the redactor round trip's share of the wait", () => {
     const clock = () => t;
     const timer = startHookTimer(clock, () => 0);
     const result = await redactViaDaemon("some text", {
+      webIngress: false,
       connect: async () => {
         t += 2_500;
         return { text: "some text", found: [] };
@@ -365,6 +367,7 @@ describe("the redactor round trip's share of the wait", () => {
     const timer = startHookTimer(clock, () => 0);
     await assert.rejects(
       redactViaDaemon("some text", {
+        webIngress: false,
         connect: async () => {
           t += 20_000;
           throw new Error("redactor response timeout");
@@ -383,6 +386,7 @@ describe("the redactor round trip's share of the wait", () => {
     const dead = Object.assign(new Error("no socket"), { code: "ENOENT" });
     let dialled = 0;
     await redactViaDaemon("some text", {
+      webIngress: false,
       connect: async () => {
         t += 400;
         if (++dialled === 1) throw dead;
@@ -402,6 +406,7 @@ describe("the redactor round trip's share of the wait", () => {
     let t = 0;
     const clock = () => t;
     await redactViaDaemon("some text", {
+      webIngress: false,
       connect: async () => {
         t += 5_000;
         return { text: "some text", found: [] };
