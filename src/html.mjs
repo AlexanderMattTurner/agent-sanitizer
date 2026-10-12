@@ -346,14 +346,14 @@ function isHidingFilter(node) {
 
 // One `clip: rect(...)` edge as a number and unit, or null for `auto`/any
 // non-length token (unresolvable → fail open). A bare Number carries unit "".
+// A `%` edge is invalid (rect() takes <length> | auto), so the cascade has
+// already dropped the declaration and it is a non-length here too.
 /** @param {any} token @returns {{ num: number, unit: string } | null} */
 function clipEdge(token) {
   if (token.type === "Dimension")
     return { num: parseFloat(token.value), unit: token.unit };
   if (token.type === "Number")
     return { num: parseFloat(token.value), unit: "" };
-  if (token.type === "Percentage")
-    return { num: parseFloat(token.value), unit: "%" };
   return null;
 }
 
@@ -870,9 +870,7 @@ function isClipPathHidden(node) {
       const radius = valueTokens(fn)[0];
       if (
         radius &&
-        (radius.type === "Number" ||
-          radius.type === "Dimension" ||
-          radius.type === "Percentage") &&
+        (radius.type === "Number" || radius.type === "Dimension") &&
         parseFloat(radius.value) === 0
       )
         return true;
@@ -1299,7 +1297,6 @@ function declarationLexer() {
  * @returns {boolean}
  */
 function isDroppedDeclaration(declaration) {
-  if (declaration.property.startsWith("--")) return false;
   let tokens = 0;
   let unreadable = false;
   cssWalk(declaration.value, (/** @type {any} */ node) => {
@@ -1737,6 +1734,16 @@ function elementCascade(node) {
 }
 
 /**
+ * {@link elementCascade} for a caller that reads winners unconditionally: an
+ * element with no declaration answers null for every property.
+ * @param {any} node
+ * @returns {(property: string) => StyleDeclaration | null}
+ */
+function cascadeOrNone(node) {
+  return elementCascade(node) ?? (() => null);
+}
+
+/**
  * The applied value of one property of a cascade as lowercased text, "" when
  * nothing applies.
  * @param {((property: string) => StyleDeclaration | null) | null} cascade
@@ -1925,7 +1932,7 @@ function keepsOffscreenIndent(winnerOf, inlineBox) {
 function descendState(node, parent, state) {
   const own = elementHides(node, parent);
   if (own.has("box")) return "hidden";
-  const winnerOf = elementCascade(node) ?? (() => null);
+  const winnerOf = cascadeOrNone(node);
   const nodeOf = ownValues(winnerOf);
   /** @param {string} key */
   const textOf = (key) => declText(nodeOf(key)).trim().toLowerCase();
@@ -1970,14 +1977,14 @@ function isBlankText(value) {
 function regionVerdicts(root, kinds) {
   /** @type {Map<any, RegionVerdict>} */
   const verdicts = new Map();
-  const nodeOf = ownValues(elementCascade(root) ?? (() => null));
+  const nodeOf = ownValues(cascadeOrNone(root));
   /** @param {string} key */
   const textOf = (key) => declText(nodeOf(key)).trim().toLowerCase();
   /** @type {Array<[any, any, RegionState]>} */
   const stack = [];
   /** @param {any} node @param {RegionState} state */
   const pushChildren = (node, state) => {
-    for (const child of node.children ?? []) stack.push([child, node, state]);
+    for (const child of node.children) stack.push([child, node, state]);
   };
   pushChildren(root, { kinds, color: colorState(nodeOf, textOf, null) });
   const order = [root];
@@ -2000,7 +2007,7 @@ function regionVerdicts(root, kinds) {
     if (verdicts.has(node)) continue;
     let hidden = false;
     let shown = false;
-    for (const child of node.children ?? []) {
+    for (const child of node.children) {
       const verdict = verdicts.get(child);
       if (verdict === "hidden") hidden = true;
       else if (verdict === "visible" || verdict === "mixed") shown = true;
@@ -2033,8 +2040,9 @@ function mixedRegionSplice(root, verdicts) {
   const mixed = [];
   const stack = [root];
   while (stack.length > 0) {
+    // Every node here is the root (positioned by the caller's own guard) or a
+    // child that passed the position check below.
     const node = stack.pop();
-    if (!node.position) return null;
     mixed.push(node);
     let lastEnd = node.position.start.offset;
     let runStart = -1;
@@ -2483,6 +2491,7 @@ function scanFragmentTree(html, tree) {
     const [node, parent] = /** @type {[any, any]} */ (pending.pop());
     walk(node, null, visitor, parent);
   }
+  /* c8 ignore next 2 -- the fail-closed half of the unpositioned guard above */
   if (unpositioned)
     return { ranges: [{ start: 0, end: html.length, kind: "hidden" }], warned };
   return { ranges, warned };
@@ -3988,12 +3997,16 @@ function cssUrls(css, context) {
  */
 function attributeUrls(attribute, value, properties) {
   switch (attribute.grammar) {
+    // The table names only attributes whose hast value has the shape its
+    // grammar reads (a string, or the array `ping` arrives as), so a value of
+    // another shape is a table or parser bug and throws rather than reading
+    // as "no URL".
     case "url":
-      return typeof value === "string" ? [value] : [];
+      return [/** @type {string} */ (value)];
     case "urls":
-      return Array.isArray(value) ? value.map(String) : [];
+      return /** @type {string[]} */ (value).map(String);
     case "srcset":
-      return typeof value === "string" ? srcsetUrls(value) : [];
+      return srcsetUrls(/** @type {string} */ (value));
     case "refresh": {
       // hast delivers `http-equiv` as a comma-separated list.
       const directive = Array.isArray(properties.httpEquiv)
@@ -4005,9 +4018,9 @@ function attributeUrls(attribute, value, properties) {
       return url === null ? [] : [url];
     }
     case "css":
-      return typeof value === "string" ? cssUrls(value, "declarationList") : [];
+      return cssUrls(/** @type {string} */ (value), "declarationList");
   }
-  /* c8 ignore next -- every grammar the table may name has a case above */
+  /* c8 ignore next 4 -- every grammar the table may name has a case above */
   throw new Error(
     `URL_ATTRIBUTES names an unknown grammar: ${attribute.grammar}`,
   );

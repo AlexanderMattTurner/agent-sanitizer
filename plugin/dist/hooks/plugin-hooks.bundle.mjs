@@ -49911,8 +49911,6 @@ function clipEdge(token) {
     return { num: parseFloat(token.value), unit: token.unit };
   if (token.type === "Number")
     return { num: parseFloat(token.value), unit: "" };
-  if (token.type === "Percentage")
-    return { num: parseFloat(token.value), unit: "%" };
   return null;
 }
 function isClipRectHidden(node2) {
@@ -50063,7 +50061,7 @@ function isClipPathHidden(node2) {
     const name50 = fn.name;
     if (name50 === "circle") {
       const radius = valueTokens(fn)[0];
-      if (radius && (radius.type === "Number" || radius.type === "Dimension" || radius.type === "Percentage") && parseFloat(radius.value) === 0)
+      if (radius && (radius.type === "Number" || radius.type === "Dimension") && parseFloat(radius.value) === 0)
         return true;
     } else if (name50 === "inset") {
       const edges = insetEdges(fn);
@@ -50209,7 +50207,6 @@ function declarationLexer() {
   return cssLexer;
 }
 function isDroppedDeclaration(declaration) {
-  if (declaration.property.startsWith("--")) return false;
   let tokens = 0;
   let unreadable = false;
   walker_default2(declaration.value, (node2) => {
@@ -50335,6 +50332,9 @@ function elementCascade(node2) {
   }
   return cascade;
 }
+function cascadeOrNone(node2) {
+  return elementCascade(node2) ?? (() => null);
+}
 function appliedText(cascade, property2) {
   if (!cascade) return "";
   return declText(ownValues(cascade)(property2)).trim().toLowerCase();
@@ -50404,7 +50404,7 @@ function keepsOffscreenIndent(winnerOf, inlineBox) {
 function descendState(node2, parent, state) {
   const own5 = elementHides(node2, parent);
   if (own5.has("box")) return "hidden";
-  const winnerOf = elementCascade(node2) ?? (() => null);
+  const winnerOf = cascadeOrNone(node2);
   const nodeOf = ownValues(winnerOf);
   const textOf = (key) => declText(nodeOf(key)).trim().toLowerCase();
   const color2 = colorState(nodeOf, textOf, state.color);
@@ -50428,11 +50428,11 @@ function isBlankText(value) {
 }
 function regionVerdicts(root2, kinds) {
   const verdicts = /* @__PURE__ */ new Map();
-  const nodeOf = ownValues(elementCascade(root2) ?? (() => null));
+  const nodeOf = ownValues(cascadeOrNone(root2));
   const textOf = (key) => declText(nodeOf(key)).trim().toLowerCase();
   const stack = [];
   const pushChildren = (node2, state) => {
-    for (const child of node2.children ?? []) stack.push([child, node2, state]);
+    for (const child of node2.children) stack.push([child, node2, state]);
   };
   pushChildren(root2, { kinds, color: colorState(nodeOf, textOf, null) });
   const order2 = [root2];
@@ -50456,7 +50456,7 @@ function regionVerdicts(root2, kinds) {
     if (verdicts.has(node2)) continue;
     let hidden = false;
     let shown = false;
-    for (const child of node2.children ?? []) {
+    for (const child of node2.children) {
       const verdict = verdicts.get(child);
       if (verdict === "hidden") hidden = true;
       else if (verdict === "visible" || verdict === "mixed") shown = true;
@@ -50472,7 +50472,6 @@ function mixedRegionSplice(root2, verdicts) {
   const stack = [root2];
   while (stack.length > 0) {
     const node2 = stack.pop();
-    if (!node2.position) return null;
     mixed.push(node2);
     let lastEnd = node2.position.start.offset;
     let runStart = -1;
@@ -51224,12 +51223,25 @@ function cssUrls(css, context) {
 }
 function attributeUrls(attribute, value, properties2) {
   switch (attribute.grammar) {
+    // The table names only attributes whose hast value has the shape its
+    // grammar reads (a string, or the array `ping` arrives as), so a value of
+    // another shape is a table or parser bug and throws rather than reading
+    // as "no URL".
     case "url":
-      return typeof value === "string" ? [value] : [];
+      return [
+        /** @type {string} */
+        value
+      ];
     case "urls":
-      return Array.isArray(value) ? value.map(String) : [];
+      return (
+        /** @type {string[]} */
+        value.map(String)
+      );
     case "srcset":
-      return typeof value === "string" ? srcsetUrls(value) : [];
+      return srcsetUrls(
+        /** @type {string} */
+        value
+      );
     case "refresh": {
       const directive = Array.isArray(properties2.httpEquiv) ? properties2.httpEquiv.join(",").toLowerCase() : "";
       if (directive.trim() !== "refresh" || typeof value !== "string")
@@ -51238,7 +51250,11 @@ function attributeUrls(attribute, value, properties2) {
       return url === null ? [] : [url];
     }
     case "css":
-      return typeof value === "string" ? cssUrls(value, "declarationList") : [];
+      return cssUrls(
+        /** @type {string} */
+        value,
+        "declarationList"
+      );
   }
   throw new Error(
     `URL_ATTRIBUTES names an unknown grammar: ${attribute.grammar}`

@@ -172,6 +172,42 @@ const SPLICE_CASES = [
   ['<div style="font-size:0">S1 <b style="font-size:14pz">S2</b></div>', "[X]"],
   // Visibility reaches an image; a font-size hide does not.
   ['<div style="visibility:hidden">S1 <img src="x.png"> S2</div>', "[X]"],
+  // ── a font shorthand resets the size unless its size is relative ──
+  [
+    '<div style="font-size:0">S1 <b style="font:x-small serif">S2</b></div>',
+    '<div style="font-size:0">[X]<b style="font:x-small serif">S2</b></div>',
+  ],
+  [
+    '<div style="font-size:0">S1 <b style="font:larger serif">S2</b></div>',
+    "[X]",
+  ],
+  ['<div style="font-size:0">S1 <b style="font:50% serif">S2</b></div>', "[X]"],
+  [
+    '<div style="font-size:0">S1 <b style="all:initial">S2</b></div>',
+    '<div style="font-size:0">[X]<b style="all:initial">S2</b></div>',
+  ],
+  // ── a block keeps an indent it does not set, or hands back ──
+  ['<div style="text-indent:-9999px">S1<p>S2</p></div>', "[X]"],
+  [
+    '<div style="text-indent:-9999px">S1<p style="text-indent:inherit">S2</p></div>',
+    "[X]",
+  ],
+  // ── an overriding descendant that hides in its own way is spliced too ──
+  [
+    '<div style="font-size:0">S1<b style="visibility:hidden">S2</b><i style="font-size:9px">V</i></div>',
+    '<div style="font-size:0">[X]<i style="font-size:9px">V</i></div>',
+  ],
+  // ── empty elements and whitespace beside the shown part stay as written ──
+  [
+    '<div style="font-size:0">S1<i></i><b style="font-size:9px">V</b><i></i> </div>',
+    '<div style="font-size:0">[X]<i></i><b style="font-size:9px">V</b><i></i> </div>',
+  ],
+  // parse5 synthesizes a <tbody> with no source position, so a run through it
+  // cannot be trusted: the whole element is spliced.
+  [
+    '<div style="font-size:0">S<table><tr><td><b style="font-size:9px">V</b></td></tr></table></div>',
+    "[X]",
+  ],
   // parse5 moves the overriding child out of source order (foster parenting
   // out of a table), so no run can be trusted: the whole element is spliced.
   [

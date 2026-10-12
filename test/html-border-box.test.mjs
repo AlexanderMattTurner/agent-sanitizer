@@ -145,6 +145,12 @@ describe("zero-dimension hiding respects the border box", () => {
       isHiddenStyle("height:0;padding-top:var(--p);overflow:hidden"),
       false,
     );
+    // A value the parser keeps unread (`{}` reads as a value with no tokens)
+    // is not validated either, and no tokens is no evidence of zero extent.
+    assert.equal(
+      isHiddenStyle("height:0;padding-top:{};overflow:hidden"),
+      false,
+    );
   });
 
   it("a border shorthand with no explicit width computes to `medium`", () => {

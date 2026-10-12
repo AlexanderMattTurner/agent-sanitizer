@@ -122,6 +122,10 @@ const SRCSET_CASES = [
   [`${EVIL} 1.x`, []],
   [`${EVIL} 2X`, []],
   [`${EVIL} 1e1x`, ["evil.example"]],
+  // Whitespace or commas after the last candidate end the list.
+  [`${EVIL}, `, ["evil.example"]],
+  [`${EVIL} 2x , `, ["evil.example"]],
+  [" , ", []],
 ];
 
 describe("srcset: the HTML Standard's parse decides the candidates", () => {

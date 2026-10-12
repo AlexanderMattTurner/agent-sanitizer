@@ -193,6 +193,8 @@ const HIDDEN_STYLE_CASES = [
   ["position:absolute;left:-1000", false], // unitless nonzero length is INVALID CSS; browser drops it, fails open
   ["position:absolute;left:-9999", false], // same, larger magnitude
   ["position:absolute;left:-9999deg", false], // a non-length unit (deg) is invalid for an offset; browser drops it, fails open
+  ["position:absolute;left:-9999svh", false], // a valid length unit outside the absolute and viewport sets cannot be resolved — fails open
+  ["position:absolute;left:-9999cqw", false], // container-query units likewise
   // ── text-indent offscreen ──
   ["text-indent:-9999px", true],
   ["text-indent:-100vw", true],
@@ -214,6 +216,8 @@ const HIDDEN_STYLE_CASES = [
   ["clip-path:inset(100%)", true],
   ["clip-path:inset(99.9%)", true], // fractional (bug: regex missed it)
   ["clip-path:circle(0)", true],
+  ["clip-path:circle(0px)", true], // a Dimension radius hides like a bare zero
+  ["clip-path:circle(0%)", false], // not a <shape-radius> in the grammar table: the cascade drops it, the element renders
   ["clip-path:none", false],
   ["clip-path:circle(50%)", false],
   ["clip-path:inset(10%)", false], // partial inset still shows content
@@ -272,6 +276,8 @@ const HIDDEN_STYLE_CASES = [
   ["transform:translate(0,-9999px)", true], // Y axis offscreen, X=0 (second arg was ignored)
   ["transform:translate(-9999px,0)", true], // X axis offscreen
   ["transform:translate(0,0)", false], // neither axis shifts
+  ["transform:none", false], // a keyword is not a transform function
+  ["transform:translate(-9999svw)", false], // a unit outside the absolute and viewport sets fails open
   ["transform:translate(5px,-10px)", false], // small two-axis shift stays on screen
   ["transform:translatex(-50vw)", false], // half-shift stays partly visible (precision)
   // A `%` translate is relative to the element's OWN size, not the viewport, so
@@ -352,6 +358,15 @@ const HIDDEN_STYLE_CASES = [
   ["color:hsl(nope 100% 50%)", false], // unresolvable hue — fail open
   ["color:rgb(1 2 3 / 4 / 5)", false], // two slashes — malformed, fail open
   ["color:rgb(1 2)", false], // wrong channel count — fail open
+  // The two above never reach the color parser: the cascade drops them as
+  // invalid. A value past the lexer's token limit is not validated, so these
+  // are the malformed colors the parser itself must fail open on — identical on
+  // both sides, they must still not read as a same-color hide.
+  [`color:rgb(${"1 ".repeat(70)});background:rgb(${"1 ".repeat(70)})`, false], // wrong channel count
+  [
+    `color:rgb(${"1 / ".repeat(40)}1);background:rgb(${"1 / ".repeat(40)}1)`,
+    false,
+  ], // two or more slashes
   ["color:red", false],
   ["color:white", false], // color alone, no background — never infer the page bg
   ["color:white;background:#fefefe", false], // near-white but not equal
