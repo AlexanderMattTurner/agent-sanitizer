@@ -1,6 +1,6 @@
 /**
- * Generate src/joining-type.mjs from vendored slices of the Unicode Character
- * Database (scripts/data/*.json — see scripts/lib/ucd.mjs).
+ * Generate src/joining-type.mjs from the pinned UCD package (see
+ * scripts/lib/ucd.mjs).
  *
  * The invisible-char carve-out preserves ZWNJ/ZWJ only where they do real
  * rendering work. That is a SYNTACTIC property of the neighbouring characters,
@@ -8,27 +8,41 @@
  * meaningful exactly at a join boundary (Arabic-family scripts), and an
  * Indic joiner is meaningful only immediately after a virama. Both facts live
  * in the UCD:
- *   - Joining_Type (DerivedJoiningType.txt) → the cursive join algorithm.
+ *   - Joining_Type                           → the cursive join algorithm.
  *   - Indic_Syllabic_Category = Virama       → the Indic joiner trigger.
  *   - Indic_Syllabic_Category = Consonant    → the base a virama may sit on.
- *   - Script of each virama (Scripts.txt)    → whose consonants count.
+ *   - Script of each virama                  → whose consonants count.
  *
  * ECMAScript regex exposes neither property (`\p{Joining_Type=…}` and
  * `\p{Indic_Syllabic_Category=…}` are not in the supported set), so we compile
  * the three range tables into a committed, runtime-dependency-free data module.
- * The UCD slices are vendored (see ./lib/ucd.mjs) rather than pulled as a 250 MB dev
- * dependency at build time: they are pinned data, so committing them keeps the
- * generator and the contract test hermetic with no install cost.
- * `test/joining-type.test.mjs` re-derives from the same vendored slices and
- * asserts the committed module still matches — a drift fails CI, as an SSOT
- * contract should — and hand-checked anchors pin the data itself.
+ * `test/joining-type.test.mjs` re-derives from the same package and asserts the
+ * committed module still matches — a drift fails CI, as an SSOT contract
+ * should — and hand-checked anchors pin the data itself.
  *
- * Run: `pnpm gen:joining-type` (then `pnpm format` to prettify the output).
+ * Run: `pnpm gen:joining-type`.
  */
 import { writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
-import { UNICODE_VERSION, parseRange, readUcdSlice } from "./lib/ucd.mjs";
+import {
+  PROPERTY_VALUES,
+  UNICODE_VERSION,
+  codePointsOf,
+  ucdSpans,
+} from "./lib/ucd.mjs";
+
+/** The Joining_Type values the runtime table carries, by their one-letter tag.
+ * Non_Joining (U) is the default and stays out of the table. The package lists
+ * only ArabicShaping.txt's EXPLICIT entries; the rest of Transparent is derived
+ * in loadUcd exactly as DerivedJoiningType.txt states it. */
+const JOINING_TAGS = {
+  Join_Causing: "C",
+  Dual_Joining: "D",
+  Right_Joining: "R",
+  Left_Joining: "L",
+  Transparent: "T",
+};
 
 /** Merge adjacent/overlapping same-type ranges and sort by start. Keeps the
  * table minimal so the binary search in the runtime module is tight.
@@ -51,43 +65,27 @@ function normalize(ranges) {
 }
 
 /**
- * Derive the three range tables from the parsed UCD slices. Pure so the
- * contract test can call it on the same inputs and compare with the committed
- * module.
- * @param {{DerivedJoiningType: Array<{range: string[], type: string}>}} joiningJson
- * @param {{IndicSyllabicCategory: Array<{range: string[], syllabicCategory: string}>}} indicJson
- * @param {{IndicSyllabicCategory: Array<{range: string[], syllabicCategory: string}>}} consonantJson
- * @param {{Scripts: Array<{range: string[], script: string}>}} scriptsJson
+ * @typedef {{ range: [number, number], script: string }} ScriptSpan
+ * @typedef {{
+ *   joining: Array<[number, number, string]>,
+ *   virama: Array<[number, number]>,
+ *   consonant: Array<[number, number]>,
+ *   scripts: ScriptSpan[],
+ *   version: string,
+ * }} Ucd
+ */
+
+/**
+ * Derive the three range tables from the loaded UCD. Pure so the contract test
+ * can call it on the same inputs and compare with the committed module.
+ * @param {Ucd} ucd
  * @returns {{ joining: Array<[number, number, string]>, virama: Array<[number, number]>, brahmic: Array<[number, number, string]> }}
  */
-export function deriveTables(
-  joiningJson,
-  indicJson,
-  consonantJson,
-  scriptsJson,
-) {
-  const joining = normalize(
-    joiningJson.DerivedJoiningType.map(({ range, type }) => {
-      const [start, end] = parseRange(range);
-      return /** @type {[number, number, string]} */ ([start, end, type]);
-    }),
-  );
-  const virama = normalize(
-    indicJson.IndicSyllabicCategory.filter(
-      (e) => e.syllabicCategory === "Virama",
-    ).map((e) => {
-      const [start, end] = parseRange(e.range);
-      return /** @type {[number, number, string]} */ ([start, end, "V"]);
-    }),
-  ).map(([start, end]) => /** @type {[number, number]} */ ([start, end]));
+export function deriveTables({ joining, virama, consonant, scripts }) {
   return {
-    joining,
+    joining: normalize(joining),
     virama,
-    brahmic: deriveBrahmic(
-      consonantJson,
-      viramaScripts(indicJson, scriptsJson),
-      scriptsJson,
-    ),
+    brahmic: deriveBrahmic(consonant, viramaScripts(virama, scripts), scripts),
   };
 }
 
@@ -97,47 +95,42 @@ export function deriveTables(
  * point, read off each virama's Script. A script without one (Khmer's coeng is
  * an Invisible_Stacker, Thai's phinthu a Pure_Killer) has no <consonant,
  * virama, joiner> spelling for a joiner to select, so it stays out. Throws when
- * a virama has no Script entry: a slice that stopped covering a virama would
- * otherwise drop that script's consonants without a word.
- * @param {{IndicSyllabicCategory: Array<{range: string[], syllabicCategory: string}>}} indicJson
- * @param {{Scripts: Array<{range: string[], script: string}>}} scriptsJson
+ * a virama has no Script entry: a script table that stopped covering a virama
+ * would otherwise drop that script's consonants without a word.
+ * @param {ReadonlyArray<readonly [number, number]>} virama
+ * @param {ScriptSpan[]} scripts
  * @returns {string[]} script names, sorted
  */
-export function viramaScripts(indicJson, scriptsJson) {
-  const spans = scriptsJson.Scripts.map(({ range, script }) => ({
-    range: parseRange(range),
-    script,
-  }));
+export function viramaScripts(virama, scripts) {
   const names = new Set();
-  for (const entry of indicJson.IndicSyllabicCategory) {
-    if (entry.syllabicCategory !== "Virama") continue;
-    const [start, end] = parseRange(entry.range);
+  for (const [start, end] of virama)
     for (let cp = start; cp <= end; cp++) {
-      const span = spans.find(({ range }) => cp >= range[0] && cp <= range[1]);
+      const span = scripts.find(
+        ({ range }) => cp >= range[0] && cp <= range[1],
+      );
       if (!span)
         throw new Error(`virama U+${cp.toString(16)} has no Script entry`);
       names.add(span.script);
     }
-  }
   return [...names].sort();
 }
 
 /**
  * Script-tagged consonant spans: every Indic_Syllabic_Category=Consonant code
- * point whose Script is one of `scripts`, merged into runs. Script comes from
- * the vendored Scripts slice, never the runtime's `\p{Script=…}`: a Node whose
+ * point whose Script is one of `wantedScripts`, merged into runs. Script comes
+ * from the pinned package, never the runtime's `\p{Script=…}`: a Node whose
  * ICU predates a script would silently drop its consonants (see ./lib/ucd.mjs).
  * Both halves of the join are UCD properties, never a block range guessed from
  * a chart.
- * @param {{IndicSyllabicCategory: Array<{range: string[], syllabicCategory: string}>}} consonantJson
- * @param {string[]} scripts
- * @param {{Scripts: Array<{range: string[], script: string}>}} scriptsJson
+ * @param {ReadonlyArray<readonly [number, number]>} consonant
+ * @param {string[]} wantedScripts
+ * @param {ScriptSpan[]} scripts
  * @returns {Array<[number, number, string]>}
  */
-function deriveBrahmic(consonantJson, scripts, scriptsJson) {
-  const wanted = new Set(scripts);
-  const spans = scriptsJson.Scripts.filter(({ script }) => wanted.has(script))
-    .map(({ range, script }) => ({ range: parseRange(range), script }))
+function deriveBrahmic(consonant, wantedScripts, scripts) {
+  const wanted = new Set(wantedScripts);
+  const spans = scripts
+    .filter(({ script }) => wanted.has(script))
     .sort((a, b) => a.range[0] - b.range[0]);
   /** @param {number} cp @returns {string | undefined} */
   const scriptOf = (cp) => {
@@ -152,31 +145,49 @@ function deriveBrahmic(consonantJson, scripts, scriptsJson) {
     }
     return undefined;
   };
-  /** @type {Array<[number, string]>} */
+  /** @type {Array<[number, number, string]>} */
   const tagged = [];
-  for (const entry of consonantJson.IndicSyllabicCategory) {
-    if (entry.syllabicCategory !== "Consonant") continue;
-    const [start, end] = parseRange(entry.range);
+  for (const [start, end] of consonant)
     for (let cp = start; cp <= end; cp++) {
       const name = scriptOf(cp);
-      if (name !== undefined) tagged.push([cp, name]);
+      if (name !== undefined) tagged.push([cp, cp, name]);
     }
-  }
-  tagged.sort((left, right) => left[0] - right[0]);
-  return normalize(
-    tagged.map(
-      ([cp, name]) => /** @type {[number, number, string]} */ ([cp, cp, name]),
-    ),
-  );
+  return normalize(tagged);
 }
 
-/** Load the vendored UCD slices used by the generator and the contract test. */
-export function loadUcd() {
+/** Load the pinned UCD properties the generator and the contract test read.
+ * @returns {Promise<Ucd>} */
+export async function loadUcd() {
+  /** @type {Array<[number, number, string]>} */
+  const joining = [];
+  for (const [value, tag] of Object.entries(JOINING_TAGS))
+    for (const [start, end] of await ucdSpans(`Joining_Type/${value}`))
+      joining.push([start, end, tag]);
+  // DerivedJoiningType.txt: a code point ArabicShaping.txt does not list is T
+  // when its General_Category is Mn, Me or Cf, and U otherwise.
+  const listed = new Set(
+    codePointsOf([
+      ...joining.map(
+        ([start, end]) => /** @type {[number, number]} */ ([start, end]),
+      ),
+      ...(await ucdSpans("Joining_Type/Non_Joining")),
+    ]),
+  );
+  for (const category of ["Nonspacing_Mark", "Enclosing_Mark", "Format"])
+    for (const cp of codePointsOf(
+      await ucdSpans(`General_Category/${category}`),
+    ))
+      if (!listed.has(cp)) joining.push([cp, cp, "T"]);
+  /** @type {ScriptSpan[]} */
+  const scripts = [];
+  for (const script of PROPERTY_VALUES.Script)
+    for (const range of await ucdSpans(`Script/${script}`))
+      scripts.push({ range, script });
   return {
-    joiningJson: readUcdSlice("DerivedJoiningType.json"),
-    indicJson: readUcdSlice("IndicSyllabicCategory.Virama.json"),
-    consonantJson: readUcdSlice("IndicSyllabicCategory.Consonant.json"),
-    scriptsJson: readUcdSlice("Scripts.Pinned.json"),
+    joining,
+    virama: await ucdSpans("Indic_Syllabic_Category/Virama"),
+    consonant: await ucdSpans("Indic_Syllabic_Category/Consonant"),
+    scripts,
     version: UNICODE_VERSION,
   };
 }
@@ -206,7 +217,7 @@ export const UNICODE_VERSION = ${JSON.stringify(version)};
 
 // The two range tables below are GENERATED UCD data, not hand-written logic.
 // Their correctness is pinned by the SSOT round-trip in
-// test/joining-type.test.mjs (re-derive from the vendored slices, then assert
+// test/joining-type.test.mjs (re-derive from the pinned UCD, then assert
 // every covered code point and range boundary matches) — a far stronger and
 // faster guard than mutation. Mutating ~550 numeric literals is pathologically
 // slow (the shard was cancelled at ~19 min) and redundant, so Stryker skips
@@ -303,20 +314,17 @@ export function isBrahmicConsonant(cp) {
 
 // When run directly, (re)write the committed module.
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
-  const { joiningJson, indicJson, consonantJson, scriptsJson, version } =
-    loadUcd();
-  const { joining, virama, brahmic } = deriveTables(
-    joiningJson,
-    indicJson,
-    consonantJson,
-    scriptsJson,
-  );
+  const ucd = await loadUcd();
+  const { joining, virama, brahmic } = deriveTables(ucd);
   const out = fileURLToPath(
     new URL("../src/joining-type.mjs", import.meta.url),
   );
-  writeFileSync(out, render({ joining, virama, brahmic, version }));
+  writeFileSync(
+    out,
+    render({ joining, virama, brahmic, version: ucd.version }),
+  );
   console.log(
     `wrote ${out}: ${joining.length} joining ranges, ${virama.length} virama ranges, ` +
-      `${brahmic.length} Brahmic consonant ranges (Unicode ${version})`,
+      `${brahmic.length} Brahmic consonant ranges (Unicode ${ucd.version})`,
   );
 }

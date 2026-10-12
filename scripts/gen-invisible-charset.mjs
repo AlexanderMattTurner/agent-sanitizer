@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /**
  * Generate the language-agnostic invisible-charset SSOT from invisible.mjs plus
- * the pinned Unicode data (scripts/data, see ./lib/ucd.mjs).
+ * the pinned UCD package (see ./lib/ucd.mjs).
  *
  * The authoritative definition of the payload-capable invisible characters lives
  * in `src/invisible.mjs` (the `VS` and `BLANK_NON_CF` exports) plus the Unicode
@@ -15,8 +15,8 @@
  * ship DIFFERENT Unicode versions, so the two layers would strip DIFFERENT
  * `Cf` sets, and a key spliced with a code point in the version delta (e.g.
  * U+13439) would escape the layer on the older Unicode. `Cf` is instead
- * PINNED here at generation time — from the vendored DerivedGeneralCategory
- * slice, never the generating Node's own `\p{Cf}`, so the output does not
+ * PINNED here at generation time — from the pinned UCD package, never the
+ * generating Node's own `\p{Cf}`, so the output does not
  * depend on which Node ran the generator either — alongside the non-Cf extras,
  * and every consumer reads the pinned list. Version-locking the set is what
  * makes the JS layer and the Python port strip an identical set regardless of
@@ -40,12 +40,7 @@ import {
   ESCAPE_SEQUENCE_SOURCE,
 } from "../src/ansi.mjs";
 import { VS, BLANK_NON_CF } from "../src/invisible.mjs";
-import {
-  UNICODE_VERSION,
-  codePointsOf,
-  readUcdSlice,
-  spansOf,
-} from "./lib/ucd.mjs";
+import { UNICODE_VERSION, codePointsOf, ucdSpans } from "./lib/ucd.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -59,13 +54,9 @@ export function extraCodepoints() {
 
 /** Every general-category `Cf` code point in the pinned UCD, sorted ascending.
  * This is the set both layers read (see the header). */
+const CF_CODEPOINTS = codePointsOf(await ucdSpans("General_Category/Format"));
 export function cfCodepoints() {
-  return codePointsOf(
-    spansOf(
-      readUcdSlice("DerivedGeneralCategory.Cf.json").DerivedGeneralCategory,
-      ({ category }) => category === "Cf",
-    ),
-  );
+  return [...CF_CODEPOINTS];
 }
 
 /** The Unicode version the pinned `Cf` set was generated from. */
@@ -80,7 +71,7 @@ export function charsetDoc() {
       "scripts/gen-invisible-charset.mjs. `extra_codepoints` are the non-Cf extras " +
       "(variation selectors, blank-rendering fillers, zero-width combining marks) " +
       "from src/invisible.mjs (VS + BLANK_NON_CF). `cf_codepoints` is the general-" +
-      "category Cf set PINNED from the vendored UCD at generation time (see " +
+      "category Cf set PINNED from the UCD package at generation time (see " +
       "`unicode_version`) — NOT resolved live per consumer, because Node and CPython " +
       "ship different Unicode versions and a live-Cf split let a code point in the " +
       "version delta escape one layer. The deletion set is the UNION of the two " +

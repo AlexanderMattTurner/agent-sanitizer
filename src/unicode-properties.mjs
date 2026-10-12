@@ -4,7 +4,7 @@
  * The Unicode properties src/invisible.mjs's carve-out reads, PINNED so the
  * carve-out answers the same on every Node whatever its ICU's Unicode version.
  * Regenerate with `node scripts/gen-unicode-properties.mjs`;
- * test/unicode-properties.test.mjs fails if this drifts from the vendored slices.
+ * test/unicode-properties.test.mjs fails if this drifts from the pinned package.
  */
 
 export const UNICODE_VERSION = "17.0.0";

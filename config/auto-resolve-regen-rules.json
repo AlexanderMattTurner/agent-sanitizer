@@ -27,7 +27,7 @@
       "sources": [
         "src/invisible.mjs",
         "src/ansi.mjs",
-        "scripts/data/DerivedGeneralCategory.Cf.json",
+        "pnpm-lock.yaml",
         "scripts/lib/ucd.mjs"
       ],
       "owns": [
@@ -37,25 +37,19 @@
     },
     {
       "generator": "scripts/gen-joining-type.mjs",
-      "sources": ["scripts/lib/ucd.mjs"],
-      "sourcesPattern": "^scripts/data/.*\\.json$",
+      "sources": ["pnpm-lock.yaml", "scripts/lib/ucd.mjs"],
       "owns": ["src/joining-type.mjs"]
     },
     {
       "generator": "scripts/gen-unicode-properties.mjs",
-      "sources": [
-        "scripts/data/emoji-data.Pinned.json",
-        "scripts/data/PropList.Pinned.json",
-        "scripts/data/Scripts.Pinned.json",
-        "scripts/lib/ucd.mjs"
-      ],
+      "sources": ["pnpm-lock.yaml", "scripts/lib/ucd.mjs"],
       "owns": ["src/unicode-properties.mjs"]
     },
     {
       "generator": "scripts/gen-standardized-variants.mjs",
       "sources": [
         "scripts/data/StandardizedVariants.txt",
-        "scripts/data/PropList.Pinned.json",
+        "pnpm-lock.yaml",
         "scripts/lib/ucd.mjs"
       ],
       "owns": ["src/standardized-variants.mjs"]

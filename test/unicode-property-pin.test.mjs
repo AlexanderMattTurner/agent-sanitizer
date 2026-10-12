@@ -4,8 +4,8 @@
  * A live `\p{…}` / `\P{…}` escape answers from the ICU the runtime bundles, so
  * the same package version behaved differently on Node 22.22 (Unicode 16) and
  * Node 22.23 (Unicode 17): different emoji anchors, different ideograph bases,
- * different generated tables. Every such property is now read from the vendored
- * UCD slices (scripts/lib/ucd.mjs) and compiled into a committed data module.
+ * different generated tables. Every such property is now read from the pinned
+ * UCD package (scripts/lib/ucd.mjs) and compiled into a committed data module.
  * This guard keeps it that way: it tokenizes every module in src/,
  * claude-hooks/ and scripts/gen-*.mjs with acorn and fails on a property escape
  * in a regex literal, or in a string or template that could feed `new RegExp`.

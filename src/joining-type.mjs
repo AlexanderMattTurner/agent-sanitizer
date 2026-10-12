@@ -10,7 +10,7 @@ export const UNICODE_VERSION = "17.0.0";
 
 // The two range tables below are GENERATED UCD data, not hand-written logic.
 // Their correctness is pinned by the SSOT round-trip in
-// test/joining-type.test.mjs (re-derive from the vendored slices, then assert
+// test/joining-type.test.mjs (re-derive from the pinned UCD, then assert
 // every covered code point and range boundary matches) — a far stronger and
 // faster guard than mutation. Mutating ~550 numeric literals is pathologically
 // slow (the shard was cancelled at ~19 min) and redundant, so Stryker skips

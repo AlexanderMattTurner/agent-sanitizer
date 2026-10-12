@@ -1,14 +1,14 @@
 /**
  * The pinned Unicode properties (src/unicode-properties.mjs, generated from the
- * vendored UCD slices by scripts/gen-unicode-properties.mjs).
+ * pinned UCD package by scripts/gen-unicode-properties.mjs).
  *
  * Two contracts. The SSOT round-trip: the committed module is byte-for-byte
- * what the generator writes from the slices, and every table equals its
- * slice-derived spans. The witness: wherever the RUNNING Node's own Unicode is
+ * what the generator writes from the package, and every table equals its
+ * package-derived spans. The witness: wherever the RUNNING Node's own Unicode is
  * the pinned version, every live `\p{…}` escape names exactly the code points of
- * its pinned table — so a slice cut from the wrong file or the wrong Unicode
- * (ucd-full@17.0.0 ships Unicode 16 data), or an extraction that dropped
- * entries, fails here on CI's Node. The carve-out's behaviour never reads the live escape; only this witness
+ * its pinned table — so a package of the wrong Unicode (ucd-full@17.0.0 ships
+ * Unicode 16 data) or a generator that dropped entries fails here on CI's Node.
+ * The carve-out's behaviour never reads the live escape; only this witness
  * does.
  */
 import { describe, it } from "node:test";
@@ -18,19 +18,16 @@ import { readFileSync } from "node:fs";
 import { unsandbox } from "./helpers/repo-root.mjs";
 import {
   MODULE_PATH,
-  deriveUnicodeProperties,
+  UNICODE_PROPERTIES as derived,
   renderUnicodeProperties,
 } from "../scripts/gen-unicode-properties.mjs";
 import {
   UNICODE_VERSION as PINNED_VERSION,
   codePointsOf,
-  readUcdSlice,
-  spansOf,
+  ucdSpans,
 } from "../scripts/lib/ucd.mjs";
 import * as committed from "../src/unicode-properties.mjs";
 import { CF_CODEPOINTS } from "../src/cf-charset.mjs";
-
-const derived = deriveUnicodeProperties();
 
 describe("src/unicode-properties.mjs is the pinned UCD", () => {
   it("is byte-identical to a fresh generation", () => {
@@ -41,12 +38,12 @@ describe("src/unicode-properties.mjs is the pinned UCD", () => {
     );
   });
 
-  it("pins the Unicode version every slice was cut from", () => {
+  it("pins the Unicode version of the UCD package", () => {
     assert.equal(committed.UNICODE_VERSION, PINNED_VERSION);
   });
 
   for (const [name, spans] of Object.entries(derived))
-    it(`${name} equals its slice-derived spans`, () => {
+    it(`${name} equals its package-derived spans`, () => {
       assert.deepEqual(committed[name], spans);
       assert.ok(spans.length > 0, `${name} is empty (vacuous)`);
     });
@@ -83,16 +80,11 @@ const PINNED = [
   ["\\p{Cf}", [...CF_CODEPOINTS]],
   [
     "\\p{Variation_Selector}",
-    codePointsOf(
-      spansOf(
-        readUcdSlice("PropList.Pinned.json").PropList,
-        ({ property }) => property === "Variation_Selector",
-      ),
-    ),
+    codePointsOf(await ucdSpans("Binary_Property/Variation_Selector")),
   ],
 ];
 
-// Only a runtime on the pinned version can witness the slices: membership moves
+// Only a runtime on the pinned version can witness the package: membership moves
 // BOTH ways between versions (Unicode 17 dropped 672 assigned code points such
 // as U+2605 from Extended_Pictographic while adding Extension J ideographs), so
 // no subset relation holds across versions. Another runtime skips by name

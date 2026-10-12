@@ -2,9 +2,9 @@
  * SSOT contract for the generated Unicode Joining_Type / virama / Brahmic
  * consonant tables.
  *
- * src/joining-type.mjs is generated from the vendored UCD slices by
+ * src/joining-type.mjs is generated from the pinned UCD package by
  * scripts/gen-joining-type.mjs. This test re-derives the tables from the SAME
- * slices and asserts the committed module still agrees — so editing the source
+ * package and asserts the committed module still agrees — so editing the source
  * data without regenerating (or a Stryker mutant flipping a range bound) fails
  * CI, exactly as an SSOT round-trip should.
  *
@@ -37,14 +37,9 @@ import {
   viramaScripts,
 } from "../scripts/gen-joining-type.mjs";
 
-const { joiningJson, indicJson, consonantJson, scriptsJson, version } =
-  loadUcd();
-const { joining, virama, brahmic } = deriveTables(
-  joiningJson,
-  indicJson,
-  consonantJson,
-  scriptsJson,
-);
+const ucd = await loadUcd();
+const { version } = ucd;
+const { joining, virama, brahmic } = deriveTables(ucd);
 
 const MAX_CP = 0x10ffff;
 
@@ -174,12 +169,12 @@ describe("joining-type generated module", () => {
 // The consonant table's script set is DERIVED from the viramas, never listed:
 // every script that owns a virama contributes its consonants, and no other
 // script does. The engine's own \p{Script=…} is the independent witness for
-// each virama's script, so the vendored Scripts slice cannot vouch for itself.
+// each virama's script, so the pinned Script table cannot vouch for itself.
 describe("Brahmic consonant scripts are exactly the scripts that own a virama", () => {
   const tagged = [...new Set(BRAHMIC_CONSONANT_RANGES.map(([s]) => s))].sort();
 
   it("the table's script tags equal the derived virama scripts", () => {
-    assert.deepEqual(tagged, viramaScripts(indicJson, scriptsJson));
+    assert.deepEqual(tagged, viramaScripts(ucd.virama, ucd.scripts));
   });
 
   it("every virama's engine-reported script has consonants in the table", () => {
@@ -204,15 +199,13 @@ describe("Brahmic consonant scripts are exactly the scripts that own a virama", 
       assert.ok(!tagged.includes(script), script);
   });
 
-  it("throws rather than dropping a virama the Scripts slice does not cover", () => {
+  it("throws rather than dropping a virama the Script table does not cover", () => {
     // Drop exactly the entry holding the Devanagari virama U+094D.
-    const covers094d = ({ range }) =>
-      parseInt(range[0], 16) <= 0x94d &&
-      parseInt(range[1] ?? range[0], 16) >= 0x94d;
-    const without = scriptsJson.Scripts.filter((e) => !covers094d(e));
-    assert.equal(without.length, scriptsJson.Scripts.length - 1);
+    const covers094d = ({ range }) => range[0] <= 0x94d && range[1] >= 0x94d;
+    const without = ucd.scripts.filter((e) => !covers094d(e));
+    assert.equal(without.length, ucd.scripts.length - 1);
     assert.throws(
-      () => viramaScripts(indicJson, { Scripts: without }),
+      () => viramaScripts(ucd.virama, without),
       /virama U\+94d has no Script entry/,
     );
   });
@@ -222,7 +215,7 @@ describe("Brahmic consonant scripts are exactly the scripts that own a virama", 
 // with no regeneration that leaves the tables intact (a comment, a helper, the
 // lookup code) stays green there. Bytes are what the generator owns.
 describe("src/joining-type.mjs is byte-identical to a fresh generation", () => {
-  it("matches render() of the vendored UCD slices", () => {
+  it("matches render() of the pinned UCD package", () => {
     assert.equal(
       readFileSync(
         unsandbox(

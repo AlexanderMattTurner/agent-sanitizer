@@ -38,6 +38,7 @@ import {
   isStandardizedVariant,
   UNICODE_VERSION as SV_UNICODE_VERSION,
 } from "../src/standardized-variants.mjs";
+import { UNICODE_VERSION as UCD_PACKAGE_VERSION } from "../scripts/lib/ucd.mjs";
 
 describe("invisible-charset SSOT", () => {
   const committed = JSON.parse(readFileSync(OUTPUT_PATH, "utf8"));
@@ -95,18 +96,34 @@ describe("Cf charset is pinned identically for JS and Python", () => {
 
 // SSOT round-trip for the standardized variation sequence table backing the
 // FE00–FE0D carve-out in invisible.mjs. src/standardized-variants.mjs is
-// generated from the vendored UCD slice; re-parsing that slice here and
+// generated from the vendored UCD file; re-parsing that file here and
 // asserting the committed module matches makes editing the data without
 // regenerating (or a mutant flipping a pair) a hard CI failure.
 describe("standardized-variants SSOT", () => {
   const { text, version } = loadStandardizedVariantsUcd();
   const pairs = parseStandardizedVariants(text);
 
-  it("pins the committed module's Unicode version to the vendored slice", () => {
+  it("pins the committed module's Unicode version to the vendored file", () => {
     assert.equal(SV_UNICODE_VERSION, version);
+    assert.equal(version, UCD_PACKAGE_VERSION);
   });
 
-  it("committed table equals the freshly parsed UCD slice", () => {
+  // The one UCD file not read from the pinned package: a package bump that
+  // leaves it on the old version must fail rather than mix two Unicodes.
+  it("refuses a StandardizedVariants.txt from another Unicode version", () => {
+    assert.throws(
+      () =>
+        loadStandardizedVariantsUcd(
+          text.replace(
+            /^# StandardizedVariants-[\d.]+\.txt/u,
+            "# StandardizedVariants-16.0.0.txt",
+          ),
+        ),
+      /is "# StandardizedVariants-16\.0\.0\.txt", not Unicode 17\.0\.0/u,
+    );
+  });
+
+  it("committed table equals the freshly parsed UCD file", () => {
     assert.deepEqual(STANDARDIZED_VARIANTS, pairs);
   });
 
@@ -118,7 +135,7 @@ describe("standardized-variants SSOT", () => {
 
   // The emoji presentation selectors belong to the pictograph carve-out, and
   // the UCD keeps their sequences in a different file: one appearing here
-  // would mean the vendored slice is not StandardizedVariants.txt.
+  // would mean the vendored file is not StandardizedVariants.txt.
   it("registers no emoji presentation selector", () => {
     for (const [, selector] of pairs)
       assert.ok(selector !== 0xfe0e && selector !== 0xfe0f);
@@ -133,10 +150,10 @@ describe("standardized-variants SSOT", () => {
       assert.throws(() => parseStandardizedVariants(line), /not a/u);
     });
 
-  // Every selector the UCD slice registers a sequence for must survive the
+  // Every selector the UCD file registers a sequence for must survive the
   // parse: a selector range narrower than the file's is how all 60 Mongolian
   // free-variation sequences were silently dropped.
-  it("keeps every selector the vendored slice registers", () => {
+  it("keeps every selector the vendored file registers", () => {
     const inFile = new Set();
     for (const line of text.split("\n")) {
       const seq = line.split("#")[0].split(";")[0].trim().split(/\s+/u);

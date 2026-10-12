@@ -17,7 +17,7 @@
     "sanitize-cli": "bin/sanitize-cli.mjs"
   },
   "scripts": {
-    "prepare": "pnpm build:types && if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then git config core.hooksPath .hooks; fi",
+    "prepare": "pnpm gen:unicode && pnpm build:types && if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then git config core.hooksPath .hooks; fi",
     "test": "node scripts/coverage.mjs",
     "coverage": "node scripts/coverage.mjs",
     "check": "tsc --noEmit && tsc -p tsconfig.hooks.json --noEmit",
@@ -25,6 +25,7 @@
     "build:types": "tsc -p tsconfig.build.json && tsc -p tsconfig.build-hooks.json",
     "prepack": "pnpm build:types",
     "gen:joining-type": "node scripts/gen-joining-type.mjs",
+    "gen:unicode": "node scripts/gen-unicode.mjs",
     "gen:unicode-properties": "node scripts/gen-unicode-properties.mjs",
     "gen:fail-open-lib": "node scripts/gen-fail-open-lib.mjs",
     "gen:node-floor-lib": "node scripts/gen-node-floor-lib.mjs",
@@ -71,6 +72,7 @@
     "@stryker-mutator/core": "^9.6.1",
     "@stryker-mutator/tap-runner": "^9.6.1",
     "@types/node": "25.9.1",
+    "@unicode/unicode-17.0.0": "2.0.7",
     "acorn": "^8.18.0",
     "acorn-walk": "^8.3.5",
     "agent-sanitizer": "link:.",

@@ -7,15 +7,14 @@
  * selector only when the immediately preceding base appears here; every other
  * one is stripped as a hidden-payload byte. Regenerate with
  * `node scripts/gen-standardized-variants.mjs`;
- * test/invisible-charset.test.mjs fails if this drifts from the pinned UCD
- * slice.
+ * test/invisible-charset.test.mjs fails if this drifts from the pinned UCD.
  */
 
 export const UNICODE_VERSION = "17.0.0";
 
 // The table below is GENERATED UCD data, not hand-written logic. Its correctness
 // is pinned by the SSOT round-trip in test/invisible-charset.test.mjs (re-parse
-// the vendored slice, then assert every pair matches) — a stronger and faster
+// the vendored file, then assert every pair matches) — a stronger and faster
 // guard than mutating a few hundred numeric literals, so Stryker skips them.
 // Stryker disable all
 /** @type {Array<[number, number]>} [base, selector], sorted by base then selector. */

@@ -1,66 +1,44 @@
 /**
- * The pinned Unicode Character Database every generator reads.
+ * The pinned Unicode Character Database every generator reads: the exact-pinned
+ * `@unicode/unicode-17.0.0` devDependency.
  *
  * Unicode property membership changes between Unicode versions, and a live
  * `\p{…}` escape answers from whatever ICU the running Node bundles — so the
  * same package version used to strip a different `Cf` set, anchor a different
  * set of CJK ideographs, and generate different tables on two patch releases of
  * one supported Node line. Every property whose membership can move is instead
- * read from the vendored slices under `scripts/data/` (see its README), all cut
- * from ONE Unicode release by scripts/extract-ucd-slices.mjs, and compiled into committed data modules. The
- * runtime's own Unicode version then decides nothing.
- *
- * test/unicode-property-pin.test.mjs fails on a live property escape in
- * `src/`, `claude-hooks/` or a `scripts/gen-*.mjs` generator.
+ * read from this one package and compiled into committed data modules, which a
+ * drift test regenerates and compares. The runtime's own Unicode version then
+ * decides nothing. test/unicode-property-pin.test.mjs fails on a live property
+ * escape in `src/`, `claude-hooks/` or a `scripts/gen-*.mjs` generator.
  */
-import { readFileSync } from "node:fs";
+const PACKAGE = "@unicode/unicode-17.0.0";
 
-// The Unicode version of every vendored scripts/data slice.
-// Bump it together with a re-extraction of ALL the slices: a mixed set would
-// answer some properties from one version and some from another.
-export const UNICODE_VERSION = "17.0.0";
+export const UNICODE_VERSION = PACKAGE.slice("@unicode/unicode-".length);
 
-/**
- * Read + parse a vendored UCD slice under scripts/data/.
- * @param {string} name
- * @returns {any}
- */
-export function readUcdSlice(name) {
-  return JSON.parse(
-    readFileSync(new URL(`../data/${name}`, import.meta.url), "utf8"),
-  );
-}
+/** Every value name of every property the package carries, by property. */
+export const PROPERTY_VALUES = /** @type {Record<string, string[]>} */ (
+  (await import(PACKAGE)).default
+);
 
 /**
- * Parse a UCD JSON `range` field (`["0640"]` or `["0883","0885"]`) into a
- * numeric `[start, end]` pair.
- * @param {string[]} range
- * @returns {[number, number]}
+ * The sorted, merged `[start, end]` spans of one property value, named as the
+ * package lays it out: `"Binary_Property/Extended_Pictographic"`,
+ * `"Script/Braille"`, `"General_Category/Format"`.
+ * @param {string} path
+ * @returns {Promise<Array<[number, number]>>}
  */
-export function parseRange(range) {
-  const start = parseInt(range[0], 16);
-  const end = parseInt(range[1] ?? range[0], 16);
-  return [start, end];
-}
-
-/**
- * The sorted, merged `[start, end]` spans of the slice entries `select` keeps.
- * @param {Array<{ range: string[] }>} entries
- * @param {(entry: any) => boolean} select
- * @returns {Array<[number, number]>}
- */
-export function spansOf(entries, select) {
-  const sorted = entries
-    .filter(select)
-    .map(({ range }) => parseRange(range))
-    .sort((a, b) => a[0] - b[0]);
+export async function ucdSpans(path) {
+  /** @type {Array<{ begin: number, end: number }>} end-exclusive */
+  const ranges = (await import(`${PACKAGE}/${path}/ranges.mjs`)).default;
   /** @type {Array<[number, number]>} */
   const merged = [];
-  for (const [start, end] of sorted) {
+  for (const { begin, end } of [...ranges].sort((a, b) => a.begin - b.begin)) {
     const last = merged[merged.length - 1];
-    if (last && start <= last[1] + 1) last[1] = Math.max(last[1], end);
-    else merged.push([start, end]);
+    if (last && begin <= last[1] + 1) last[1] = Math.max(last[1], end - 1);
+    else merged.push([begin, end - 1]);
   }
+  if (merged.length === 0) throw new Error(`${PACKAGE}/${path} is empty`);
   return merged;
 }
 

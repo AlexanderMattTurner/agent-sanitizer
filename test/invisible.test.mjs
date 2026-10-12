@@ -40,6 +40,8 @@ import {
   payloadVerdict,
 } from "../src/invisible.mjs";
 import { loadUcd } from "../scripts/gen-joining-type.mjs";
+import { codePointsOf } from "../scripts/lib/ucd.mjs";
+
 import { applyLayer1, stripAnsiFully } from "../src/layer1.mjs";
 import {
   assertLinear,
@@ -54,6 +56,9 @@ import {
   unicodeChar,
   loneSurrogate,
 } from "./test-helpers.mjs";
+
+/** Every Indic_Syllabic_Category=Virama code point in the pinned UCD. */
+const viramas = codePointsOf((await loadUcd()).virama);
 
 const ZWNJ = cp(0x200c);
 const ZWJ = cp(0x200d);
@@ -1598,14 +1603,6 @@ describe("stripInvisible: a ZWJ BEFORE a virama selects the reph/eyelash form", 
   // The script is the ENGINE's \p{Script=…} of the virama, not the table's
   // own tag, so a mislabelled span cannot vouch for itself.
   const scripts = [...new Set(BRAHMIC_CONSONANT_RANGES.map(([tag]) => tag))];
-  const viramas = loadUcd()
-    .indicJson.IndicSyllabicCategory.filter(
-      (e) => e.syllabicCategory === "Virama",
-    )
-    .flatMap(({ range }) => {
-      const [start, end] = [range[0], range.at(-1)].map((h) => parseInt(h, 16));
-      return Array.from({ length: end - start + 1 }, (_, k) => start + k);
-    });
   it("has viramas to check", () => assert.ok(viramas.length >= 27));
   for (const virama of viramas) {
     const name = `U+${virama.toString(16).toUpperCase()}`;

@@ -102,16 +102,16 @@ describe("guard-pair residue (.hooks/guard-pairs.json)", () => {
 
   it("keeps the generator inputs the scan genuinely cannot chain to a test", () => {
     // Non-vacuity for the residue: an emptied guard-pairs.json cannot pass.
-    // These two UCD tables reach a test only as data → generator → GENERATED
-    // module → the suites that import it, and the generated module is what the
-    // scan sees. Pinned by name because they are the whole reason the residue
-    // still exists; if the generator ever became a test dependency they would
-    // derive, and the assertion above would then tell you to delete them.
-    for (const source of [
-      "scripts/data/DerivedJoiningType.json",
-      "scripts/data/IndicSyllabicCategory.Virama.json",
-    ])
-      assert.deepEqual(pairs[source], ["test/joining-type.test.mjs"]);
+    // The UCD tables live in the pinned `@unicode/unicode-*` package under
+    // node_modules, which the scan never walks; what a bump of it changes in
+    // the tree is the lockfile. Pinned by name because it is the whole reason
+    // the residue still exists: a Unicode bump must run every suite that
+    // regenerates a table from the package and compares.
+    assert.deepEqual(pairs["pnpm-lock.yaml"], [
+      "test/invisible-charset.test.mjs",
+      "test/joining-type.test.mjs",
+      "test/unicode-properties.test.mjs",
+    ]);
   });
 
   it("excludes only real, reached, expensive suites from commit time", () => {
@@ -181,6 +181,8 @@ const GUARDED_ROOTS = [
   "python/agent_sanitizer",
   "scripts",
   "src",
+  // Pins the @unicode/unicode-* package the Unicode generators read.
+  "pnpm-lock.yaml",
 ];
 
 /** Suites and prose: not inputs a guard test reads. */
@@ -206,8 +208,6 @@ const CI_ONLY = {
     "re-locks plugin/requirements.txt over the network; plugin-dist-autofix runs it and plugin-bundle.test checks the lock it writes",
   "scripts/bundle-python-cli.mjs":
     "a release-time build run by auto-version and publish-python; its output is git-ignored",
-  "scripts/extract-ucd-slices.mjs":
-    "run by hand against the downloaded Unicode text files, which are not vendored; the slices it writes are held to the pinned version by the generator round-trips and the live-property witnesses",
   "src/vendor/gfm-autolink-literal.d.ts":
     "a type declaration whose only gate is `pnpm check` (tsc)",
 };
@@ -382,8 +382,8 @@ describe("guarded-data scan (the map is derived from the tests)", () => {
       ),
       "pathspec `*` no longer crosses a directory separator",
     );
-    assert.deepEqual(expandPathspec("scripts/data/README.md"), [
-      "scripts/data/README.md",
+    assert.deepEqual(expandPathspec("scripts/data/StandardizedVariants.txt"), [
+      "scripts/data/StandardizedVariants.txt",
     ]);
     assert.throws(
       () => expandPathspec("src/[ai]*.mjs"),

@@ -4,7 +4,7 @@
  *
  * The carve-out decides whether an invisible does real rendering work from the
  * script of its neighbour. That question is answered by Unicode's own tables,
- * compiled from the vendored UCD 17 slices into src/unicode-properties.mjs
+ * compiled from the pinned UCD 17 package into src/unicode-properties.mjs
  * (Unified_Ideograph, Script=Hangul, Script=Braille) rather than read from the
  * running Node's `\p{…}`, whose answer moves with its ICU. These tests pin the
  * derivation END-TO-END through the public API: for every code point in a scan

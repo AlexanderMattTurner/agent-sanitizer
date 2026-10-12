@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /**
  * Generate src/standardized-variants.mjs from the vendored UCD
- * StandardizedVariants.txt slice (scripts/data/StandardizedVariants.txt).
+ * StandardizedVariants.txt (scripts/data/StandardizedVariants.txt).
  *
  * The invisible-char carve-out preserves a variation selector only when the
  * immediately preceding base forms a *registered* standardized variation
@@ -18,13 +18,16 @@
  * (`import … with { type: "json" }`), and the Python-CLI esbuild bundle does not
  * inline a `createRequire('*.json')` read — either path would break `pnpm lint`
  * or the release bundle. The module still holds nothing but generated data, and
- * test/invisible-charset.test.mjs re-derives from the same vendored slice and
+ * test/invisible-charset.test.mjs re-derives from the same vendored file and
  * fails CI if the committed module drifts, exactly as an SSOT round-trip should.
  *
- * The vendored slice is StandardizedVariants.txt from the Unicode Character
- * Database, at the UNICODE_VERSION every slice is pinned to (./lib/ucd.mjs).
- * Refresh it from https://www.unicode.org/Public/<version>/ucd/StandardizedVariants.txt
- * together with the others.
+ * This is the one UCD file still vendored: the pinned `@unicode/unicode-*`
+ * package (./lib/ucd.mjs) carries no StandardizedVariants data, and
+ * `ucd-full@17.0.0` ships Unicode 16's copy, which lacks 47 of Unicode 17's
+ * sequences. loadStandardizedVariantsUcd throws when the file's header names a
+ * version other than the package's, so bumping the package without refreshing
+ * it from https://www.unicode.org/Public/<version>/ucd/StandardizedVariants.txt
+ * fails the build.
  *
  * Run from the repo root: `node scripts/gen-standardized-variants.mjs`. The
  * output is already in Prettier's format, so it is committed exactly as written.
@@ -32,13 +35,12 @@
 import { readFileSync, writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
-import { UNICODE_VERSION, readUcdSlice, spansOf } from "./lib/ucd.mjs";
+import { UNICODE_VERSION, ucdSpans } from "./lib/ucd.mjs";
 
-// Variation_Selector from the pinned PropList slice, not the runtime's
+// Variation_Selector from the pinned package, not the runtime's
 // `\p{Variation_Selector}` (see ./lib/ucd.mjs).
-const VARIATION_SELECTOR_SPANS = spansOf(
-  readUcdSlice("PropList.Pinned.json").PropList,
-  ({ property }) => property === "Variation_Selector",
+const VARIATION_SELECTOR_SPANS = await ucdSpans(
+  "Binary_Property/Variation_Selector",
 );
 
 /** @param {number} cp @returns {boolean} */
@@ -77,15 +79,21 @@ export function parseStandardizedVariants(text) {
   return pairs;
 }
 
-/** Read the vendored UCD slice used by the generator and the contract test. */
-export function loadStandardizedVariantsUcd() {
-  return {
-    text: readFileSync(
-      new URL("./data/StandardizedVariants.txt", import.meta.url),
-      "utf8",
-    ),
-    version: UNICODE_VERSION,
-  };
+/** Read the vendored UCD file used by the generator and the contract test,
+ * refusing one cut from a Unicode version other than the pinned package's.
+ * @param {string} [text] the file's contents; a test passes its own */
+export function loadStandardizedVariantsUcd(
+  text = readFileSync(
+    new URL("./data/StandardizedVariants.txt", import.meta.url),
+    "utf8",
+  ),
+) {
+  const header = text.slice(0, text.indexOf("\n"));
+  if (header !== `# StandardizedVariants-${UNICODE_VERSION}.txt`)
+    throw new Error(
+      `scripts/data/StandardizedVariants.txt is "${header}", not Unicode ${UNICODE_VERSION}`,
+    );
+  return { text, version: UNICODE_VERSION };
 }
 
 /** Render one `[base, selector]` row as hex-literal source. */
@@ -104,15 +112,14 @@ export function render({ pairs, version }) {
  * selector only when the immediately preceding base appears here; every other
  * one is stripped as a hidden-payload byte. Regenerate with
  * \`node scripts/gen-standardized-variants.mjs\`;
- * test/invisible-charset.test.mjs fails if this drifts from the pinned UCD
- * slice.
+ * test/invisible-charset.test.mjs fails if this drifts from the pinned UCD.
  */
 
 export const UNICODE_VERSION = ${JSON.stringify(version)};
 
 // The table below is GENERATED UCD data, not hand-written logic. Its correctness
 // is pinned by the SSOT round-trip in test/invisible-charset.test.mjs (re-parse
-// the vendored slice, then assert every pair matches) — a stronger and faster
+// the vendored file, then assert every pair matches) — a stronger and faster
 // guard than mutating a few hundred numeric literals, so Stryker skips them.
 // Stryker disable all
 /** @type {Array<[number, number]>} [base, selector], sorted by base then selector. */

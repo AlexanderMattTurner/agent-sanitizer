@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 /**
- * Generate src/unicode-properties.mjs from the vendored UCD slices under
- * scripts/data/ (see ./lib/ucd.mjs for why every version-dependent property is
- * pinned rather than read from the runtime).
+ * Generate src/unicode-properties.mjs from the pinned UCD package (see
+ * ./lib/ucd.mjs for why every version-dependent property is pinned rather than
+ * read from the runtime).
  *
  * The invisible-char carve-out decides whether an invisible does rendering work
  * from the Unicode properties of its neighbours: an emoji joiner needs an
@@ -15,8 +15,8 @@
  * strip the Extension J ideograph sequences Node 22.23 (Unicode 17) preserved.
  * This compiles them into range tables instead.
  *
- * test/unicode-properties.test.mjs re-derives from the same slices and fails if
- * the committed module drifts.
+ * test/unicode-properties.test.mjs regenerates it and fails if the committed
+ * module drifts.
  *
  * Run from the repo root: `node scripts/gen-unicode-properties.mjs`. The output
  * is already in Prettier's format, so it is committed exactly as written.
@@ -24,41 +24,28 @@
 import { writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
-import {
-  UNICODE_VERSION,
-  codePointsOf,
-  readUcdSlice,
-  spansOf,
-} from "./lib/ucd.mjs";
+import { UNICODE_VERSION, codePointsOf, ucdSpans } from "./lib/ucd.mjs";
 
-/**
- * The range tables, by the export name each gets in the generated module.
- * Pure over the slices so the contract test compares it with the module.
- * @returns {Record<string, Array<[number, number]>>}
- */
-export function deriveUnicodeProperties() {
-  const emoji = readUcdSlice("emoji-data.Pinned.json")["emoji-data"];
-  const propList = readUcdSlice("PropList.Pinned.json").PropList;
-  const scripts = readUcdSlice("Scripts.Pinned.json").Scripts;
-  /** @param {Array<{ range: string[] }>} entries @param {string} key @param {string} value */
-  const where = (entries, key, value) =>
-    spansOf(entries, (entry) => entry[key] === value);
-  const presentation = new Set(
-    codePointsOf(where(emoji, "property", "Emoji_Presentation")),
-  );
-  return {
-    EXTENDED_PICTOGRAPHIC: where(emoji, "property", "Extended_Pictographic"),
-    EMOJI_MODIFIER: where(emoji, "property", "Emoji_Modifier"),
-    EMOJI_TEXT_DEFAULT: spansOfCodePoints(
-      codePointsOf(where(emoji, "property", "Emoji")).filter(
-        (cp) => !presentation.has(cp),
-      ),
+const presentation = new Set(
+  codePointsOf(await ucdSpans("Binary_Property/Emoji_Presentation")),
+);
+
+/** The range tables, by the export name each gets in the generated module.
+ * @type {Readonly<Record<string, Array<[number, number]>>>} */
+export const UNICODE_PROPERTIES = Object.freeze({
+  EXTENDED_PICTOGRAPHIC: await ucdSpans(
+    "Binary_Property/Extended_Pictographic",
+  ),
+  EMOJI_MODIFIER: await ucdSpans("Binary_Property/Emoji_Modifier"),
+  EMOJI_TEXT_DEFAULT: spansOfCodePoints(
+    codePointsOf(await ucdSpans("Binary_Property/Emoji")).filter(
+      (cp) => !presentation.has(cp),
     ),
-    UNIFIED_IDEOGRAPH: where(propList, "property", "Unified_Ideograph"),
-    SCRIPT_BRAILLE: where(scripts, "script", "Braille"),
-    SCRIPT_HANGUL: where(scripts, "script", "Hangul"),
-  };
-}
+  ),
+  UNIFIED_IDEOGRAPH: await ucdSpans("Binary_Property/Unified_Ideograph"),
+  SCRIPT_BRAILLE: await ucdSpans("Script/Braille"),
+  SCRIPT_HANGUL: await ucdSpans("Script/Hangul"),
+});
 
 /**
  * Ascending code points as merged `[start, end]` spans.
@@ -86,7 +73,7 @@ const rows = (spans) =>
 
 /** Build the full source text of src/unicode-properties.mjs. */
 export function renderUnicodeProperties() {
-  const tables = Object.entries(deriveUnicodeProperties())
+  const tables = Object.entries(UNICODE_PROPERTIES)
     .map(
       ([name, spans]) =>
         `/** @type {ReadonlyArray<readonly [number, number]>} */\nexport const ${name} = [\n${rows(spans)}\n];`,
@@ -98,7 +85,7 @@ export function renderUnicodeProperties() {
  * The Unicode properties src/invisible.mjs's carve-out reads, PINNED so the
  * carve-out answers the same on every Node whatever its ICU's Unicode version.
  * Regenerate with \`node scripts/gen-unicode-properties.mjs\`;
- * test/unicode-properties.test.mjs fails if this drifts from the vendored slices.
+ * test/unicode-properties.test.mjs fails if this drifts from the pinned package.
  */
 
 export const UNICODE_VERSION = ${JSON.stringify(UNICODE_VERSION)};
