@@ -107,6 +107,8 @@ UNANALYZABLE_JS_ONLY = {
     ),
     ("src/invisible.mjs", r"\p{Script=Braille}"),
     ("src/invisible.mjs", r"\p{Script=Hangul}"),
+    ("src/confusables.mjs", r"^\p{Script=Latin}$"),
+    ("src/confusables.mjs", r"^\p{M}$"),
 }
 
 # JS `(?<name>` -> Python `(?P<name>`, leaving lookbehinds `(?<=` / `(?<!`
