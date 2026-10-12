@@ -379,12 +379,8 @@ describe("property: no filterInjection-supplied byte reaches the model-facing co
             /removed one or more verbatim spans/,
           );
         const expectedCount = deleted
-          ? code === FILTER_WARNING.FILTER_ERROR
-            ? 2
-            : 1
-          : code === undefined
-            ? 0
-            : 1;
+          ? 1 + Number(code === FILTER_WARNING.FILTER_ERROR)
+          : Number(code !== undefined);
         assert.equal(r.warnings.length, expectedCount);
       }),
       deletionRunOptions,

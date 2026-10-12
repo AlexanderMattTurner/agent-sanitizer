@@ -1,16 +1,12 @@
 /**
- * The Layer-2/3 pre-gates in src/gates.mjs must be SUPERSETS of what the
- * parsers behind them recognise: any input in which the real tokenizers find a
- * construct a layer acts on must open that layer's gate. A gate narrower than
- * its parser turns the layer off for exactly the inputs it misses: `<!-- 1 <
- * 2 -->` (a comment holding a `<`) for Layer 2, a bare `www.` autolink or a
- * ref-def nested in a blockquote for Layer 3.
- *
- * Checked against the same parsers the layers run (remark + the repo's GFM
- * build, parse5 via the repo's tree adapter), over a corpus harvested from the
- * HTML/output test suites and the cross-language golden corpus, plus each
- * string re-nested in the block containers CommonMark allows a definition in.
- * The secret pre-gate is held to the redactor engine's newline-collapsed view.
+ * The Layer-2/3 pre-gates in src/gates.mjs must be SUPERSETS of the parsers
+ * behind them: a gate narrower than its parser turns the layer off for exactly
+ * the inputs it misses (`<!-- 1 < 2 -->`, a bare `www.` autolink, a ref-def in
+ * a blockquote). Checked against the layers' own parsers (remark + the repo's
+ * GFM build, parse5 via its tree adapter) over literals harvested from the
+ * HTML/output suites and the golden corpus, each also re-nested in the block
+ * containers CommonMark allows a definition in. The secret pre-gate is held to
+ * the redactor engine's newline-collapsed view.
  */
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
@@ -38,9 +34,8 @@ const repoRoot = execFileSync("git", ["rev-parse", "--show-toplevel"], {
 }).trim();
 
 /**
- * Every string literal in a test file, plus every template literal with each
- * `${…}` substitution replaced by a fixed word — the surrounding markup is the
- * part a gate reads.
+ * Every string and template literal in a test file (each `${…}` replaced by a
+ * fixed word: the surrounding markup is what a gate reads).
  * @param {string} rel
  * @returns {string[]}
  */
@@ -96,14 +91,8 @@ const BASE = [
   ...REGRESSIONS,
 ];
 
-/**
- * `text` with `prefix` on every line — a blockquote/list nesting of the whole
- * document, which is what moves a line-start construct off the line start.
- * @param {string} text
- * @param {string} prefix
- * @returns {string}
- */
-const nest = (text, prefix) =>
+/** `text` nested in a blockquote/list: `prefix` on every line. */
+const nest = (/** @type {string} */ text, /** @type {string} */ prefix) =>
   text
     .split("\n")
     .map((line) => prefix + line)
@@ -126,16 +115,15 @@ const markdown = unified().use(remarkParse).use(remarkGfm);
  * @returns {boolean}
  */
 function some(node, test) {
-  if (test(node)) return true;
-  return (node.children ?? []).some((/** @type {any} */ child) =>
-    some(child, test),
+  return (
+    test(node) ||
+    (node.children ?? []).some((/** @type {any} */ c) => some(c, test))
   );
 }
 
 /**
  * What the Layer-2/3 parsers recognise in `text`.
  * @param {string} text
- * @returns {{ markup: boolean, url: boolean }}
  */
 function recognised(text) {
   const mdast = markdown.parse(text);

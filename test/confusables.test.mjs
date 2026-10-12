@@ -983,34 +983,10 @@ describe("isAsciiPretender", () => {
 
 describe("the default fold leaves same-script Latin words untouched (negative corpus)", () => {
   const WORDS = [
-    "İstanbul",
-    "İzmir",
-    "İçişleri",
-    "kitaplık",
-    "yazılım",
-    "Diyarbakır",
-    "Azərbaycan",
-    "Sumqayıt",
-    "Gəncə",
-    "día",
-    "país",
-    "aquí",
-    "sí",
-    "fīlm",
-    "Wisła",
-    "łza",
-    "Łódź",
-    "bị",
-    "mì",
-    "Việt",
-    "Nguyễn",
-    "Đức",
-    "tiếng",
-    "café",
-    "naïve",
-    "straße",
-    "Ångström",
-  ];
+    "İstanbul İzmir İçişleri kitaplık yazılım Diyarbakır",
+    "Azərbaycan Sumqayıt Gəncə día país aquí sí fīlm Wisła łza",
+    "Łódź bị mì Việt Nguyễn Đức tiếng café naïve straße Ångström",
+  ].flatMap((line) => line.split(" "));
 
   it("folds none of them in a path or a command", () => {
     const folded = WORDS.flatMap((word) =>

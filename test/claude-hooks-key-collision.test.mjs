@@ -209,16 +209,12 @@ describe("sanitize-output: key-collision recovery", () => {
       [`a${ZW}`]: "two",
       "a [withheld duplicate 2]": "raw-survivor",
     });
-    assert.deepEqual(Object.keys(value), [
-      "a",
-      "a [withheld duplicate 3]",
-      "a [withheld duplicate 2]",
+    // Exact entries, in order: neither colliding value survives anywhere.
+    assert.deepEqual(Object.entries(value), [
+      ["a", COLLISION_WITHHELD_MESSAGE],
+      ["a [withheld duplicate 3]", COLLISION_WITHHELD_MESSAGE],
+      ["a [withheld duplicate 2]", "raw-survivor"],
     ]);
-    assert.equal(value.a, COLLISION_WITHHELD_MESSAGE);
-    assert.equal(value["a [withheld duplicate 3]"], COLLISION_WITHHELD_MESSAGE);
-    assert.equal(value["a [withheld duplicate 2]"], "raw-survivor");
-    assert.equal(JSON.stringify(value).includes("one"), false);
-    assert.equal(JSON.stringify(value).includes("two"), false);
     assert.deepEqual(collisions(warnings), [collisionWarning("a", "")]);
   });
 
