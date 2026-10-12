@@ -48795,11 +48795,14 @@ function decodeRun(run) {
   };
 }
 function scanText(content3) {
+  const verdict = payloadVerdict(content3);
+  if (!verdict.payloadCapable) return [];
   const findings = [];
   let runChars = 0;
   let line = 1;
   let counted = 0;
-  for (const run of findLongRuns(content3)) {
+  const runs = verdict.firstRun === null ? [] : findLongRuns(payloadInvisibleView(content3));
+  for (const run of runs) {
     for (; counted < run.index; counted++)
       if (content3.charCodeAt(counted) === NEWLINE) line++;
     runChars += run.charCount;
@@ -48809,7 +48812,7 @@ function scanText(content3) {
       ...decodeRun(run.text)
     });
   }
-  const scattered = countPayloadInvisible(content3) - runChars;
+  const scattered = verdict.invisibleCount - runChars;
   if (scattered >= SCATTERED_THRESHOLD) {
     findings.push({
       line: null,

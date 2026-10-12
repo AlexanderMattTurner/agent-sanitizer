@@ -1,15 +1,17 @@
 /**
  * One payload verdict, four surfaces. The prompt gate, the instruction-file
  * scanner and the write path each decide "is this invisible content a covert
- * channel". The prompt gate and the write path read `payloadVerdict`; this
- * pins that the surfaces AGREE:
+ * channel", and all three read `payloadVerdict`; this pins that the surfaces
+ * AGREE:
  *
  *   - a negative corpus of real-world script and emoji text (each joiner or
  *     selector doing rendering work) that every surface leaves alone, Layer 1
- *     and the scanner included — the precision half;
- *   - a stego corpus the verdict, the prompt gate and the write path catch —
- *     the recall half, without which the negative half passes on a verdict
- *     that never says yes. The scanner keeps its own count (see below).
+ *     included — the precision half. Its emoji documents run well past the
+ *     carve-out's cover allowance, which a registered glyph's own invisibles
+ *     no longer draw on;
+ *   - a stego corpus every surface catches — the recall half, without which
+ *     the negative half passes on a verdict that never says yes. Its emoji
+ *     entries are the same shapes with the registration taken away.
  */
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
@@ -34,7 +36,20 @@ const SCOTLAND = s(
   0xe007f,
 );
 const WALES = s(0x1f3f4, 0xe0067, 0xe0062, 0xe0077, 0xe006c, 0xe0073, 0xe007f);
+const ENGLAND = s(
+  0x1f3f4,
+  0xe0067,
+  0xe0062,
+  0xe0065,
+  0xe006e,
+  0xe0067,
+  0xe007f,
+);
 const CHECKED = `- ${s(0x2714, 0xfe0f)} done\n`;
+const RAINBOW = s(0x1f3f3, 0xfe0f, 0x200d, 0x1f308);
+// Balinese KA, adeg-adeg (the virama), ZWJ, KA: a conjunct request on every
+// unit, so each joiner is individually legitimate and only the count is not.
+const BALINESE_CONJUNCT = s(0x1b13, 0x1b44, 0x200d, 0x1b13);
 // Formal Persian: a ZWNJ in roughly one word in three, which is ordinary
 // orthography (the plural suffix, the verb prefix), not a channel.
 const PERSIAN = `ما می${ZWNJ}خواهیم این کتاب${ZWNJ}ها را به دانش${ZWNJ}آموزان بدهیم و آن${ZWNJ}ها خوشحال می${ZWNJ}شوند. `;
@@ -60,6 +75,32 @@ const LEGITIMATE = [
     ).join("\n"),
   ],
   ["a checklist of thirty emoji-style ticks", CHECKED.repeat(30)],
+  // Every invisible below is part of a registered glyph's spelling: an RGI
+  // flag's tags, the VS16 a text-default emoji needs, an RGI sequence's ZWJs.
+  // Each document holds more of them than the cover allowance admits.
+  ["thirty rainbow-flag lines", `- ${RAINBOW} pride\n`.repeat(30)],
+  ["a hundred rainbow flags in a row", RAINBOW.repeat(100)],
+  [
+    "a fixture table of subdivision flags",
+    `| ${SCOTLAND} | ${ENGLAND} | ${WALES} |\n`.repeat(30),
+  ],
+  ["sixty family emoji lines", `- ${FAMILY} home\n`.repeat(60)],
+  [
+    "a hundred skin-toned ZWJ sequences",
+    `${s(0x1f469, 0x1f3fd, 0x200d, 0x1f4bb)} codes. `.repeat(100),
+  ],
+  ["a hundred warning lines", `- ${s(0x26a0, 0xfe0f)} careful\n`.repeat(100)],
+  [
+    "a hundred keycaps",
+    Array.from(
+      { length: 100 },
+      (_, i) => `${s(0x30 + (i % 10), 0xfe0f, 0x20e3)} step`,
+    ).join("\n"),
+  ],
+  [
+    "a flag-and-family changelog in Persian",
+    `${PERSIAN}${RAINBOW} ${FAMILY} ${SCOTLAND}\n`.repeat(40),
+  ],
   ["a long Persian paragraph", PERSIAN.repeat(100)],
   [
     "Arabic with a display ZWJ",
@@ -115,6 +156,18 @@ const STEGO = [
     `${s(0x628)}${ZWNJ}`.repeat(200) + s(0x628),
   ],
   ["zero-width spaces scattered through text", `a${s(0x200b)}`.repeat(40)],
+  ["a Balinese conjunct chain", BALINESE_CONJUNCT.repeat(300)],
+  // The emoji shapes of the negative corpus with the registration removed: a
+  // VS16 on an emoji that already presents as one changes nothing on screen,
+  // and a ZWJ chain Unicode never registered does not join.
+  [
+    "a redundant VS16 on every line",
+    `- ${s(0x1f600, 0xfe0f)} hi\n`.repeat(100),
+  ],
+  [
+    "an unregistered ZWJ chain on every line",
+    `- ${s(0x1f600, 0x200d, 0x1f600)} hi\n`.repeat(100),
+  ],
 ];
 
 /** @param {string} text */
@@ -151,11 +204,8 @@ describe("payload verdict parity: legitimate text is left alone everywhere", () 
 describe("payload verdict parity: a covert channel is caught everywhere", () => {
   for (const [name, text] of STEGO)
     it(name, () => {
-      // scanText is not held to this half: it counts only carve-out payload,
-      // not the over-budget joiner surplus, so it misses a ZWNJ-per-letter
-      // channel. Routing it through payloadVerdict needs the emoji-dense
-      // budget false positive fixed first, or it flags flag-emoji documents.
       assert.equal(payloadVerdict(text).payloadCapable, true);
+      assert.notDeepEqual(scanText(text), []);
       assert.equal(classifyPrompt(text).action, "block");
       assert.deepEqual(authored(text)?.changed, [
         "content (invisible characters)",

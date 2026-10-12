@@ -40,7 +40,8 @@ import { join, relative, resolve, isAbsolute, dirname, sep } from "node:path";
 import {
   findLongRuns,
   SCATTERED_THRESHOLD,
-  countPayloadInvisible,
+  payloadInvisibleView,
+  payloadVerdict,
   stripInvisible,
 } from "./invisible.mjs";
 import { excludeNodeModules } from "./claude-context.mjs";
@@ -209,15 +210,24 @@ export function decodeRun(run) {
 }
 
 /**
- * Scan a file's text for hidden-Unicode injection. Reports each long invisible
+ * Scan a file's text for hidden-Unicode injection. Reports each payload long
  * run (with its decoded payload) plus a single scattered-chars finding when the
- * non-run invisible count crosses the threshold-evasion floor.
+ * effective invisible count outside those runs crosses the threshold-evasion
+ * floor.
+ *
+ * Whether there is anything to report is {@link payloadVerdict}'s call — the
+ * one the prompt gate and the write path make — so a Balinese conjunct chain
+ * whose joiners outrun the carve-out's budget is a payload here exactly as it
+ * is there, and a document of emoji ZWJ sequences or subdivision flags is
+ * clean here exactly as it is there.
  * @param {string} content
  * @returns {Array<{ line: number | null, charCount: number, method: string, decoded: string }>}
  *   `line` is the 1-based line of a long-run finding, or `null` for the
  *   whole-file scattered-chars finding (not tied to a single line).
  */
 export function scanText(content) {
+  const verdict = payloadVerdict(content);
+  if (!verdict.payloadCapable) return [];
   const findings = [];
   let runChars = 0;
   // The line number is carried forward across runs. Deriving it per run from
@@ -228,7 +238,14 @@ export function scanText(content) {
   // order, so this scan only ever moves forward.
   let line = 1;
   let counted = 0;
-  for (const run of findLongRuns(content)) {
+  // The verdict keeps only the first run; with one, every run is read off the
+  // payload view, which is index-aligned with `content` and masks the
+  // invisibles the carve-out preserves, so a run here is the payload's own.
+  const runs =
+    verdict.firstRun === null
+      ? []
+      : findLongRuns(payloadInvisibleView(content));
+  for (const run of runs) {
     for (; counted < run.index; counted++)
       if (content.charCodeAt(counted) === NEWLINE) line++;
     runChars += run.charCount;
@@ -240,27 +257,11 @@ export function scanText(content) {
   }
 
   // Threshold-evasion: scattered invisible chars not in a long run can still be
-  // a payload. Always evaluated; chars already in a run are excluded so they
-  // aren't double-counted. countPayloadInvisible is invisible.mjs's carve-out
-  // counter (the SSOT the stripper itself gates on): it discounts every
-  // invisible that does real rendering work — emoji presentation selectors
-  // (VS16 *and* VS15) on a real pictograph, emoji-sequence ZWJ, and linguistic
-  // ZWNJ/ZWJ between cursive letters or after a virama. A hand-rolled emoji-only
-  // mirror lived here before and over-counted linguistic joiners and VS15, so a
-  // ZWNJ-dense Persian doc or a doc of text-presentation hearts (❤︎) tripped a
-  // scattered false positive on content stripInvisible would preserve.
-  //
-  // Asymmetry (deliberate, benign): the minuend discounts preserved
-  // selectors/joiners EVERYWHERE, while `runChars` is each run's RAW length. A
-  // long run is ≥LONG_RUN_THRESHOLD *consecutive* invisibles, and a preserved
-  // selector/joiner is always flanked by a visible neighbor — so it cannot sit
-  // inside such a run, and the two counts describe disjoint chars in practice.
-  // In the pathological case that they don't (e.g. a run of stacked VS16), the
-  // raw `runChars` subtracts at most a few more than the minuend added, biasing
-  // `scattered` slightly LOW — a false negative, the precision-favoring
-  // direction, never a spurious finding. `scattered` may even go negative; the
-  // `>=` gate treats that as "no scatter", which is correct.
-  const scattered = countPayloadInvisible(content) - runChars;
+  // a payload. The verdict's count is the effective one — every payload
+  // invisible plus the joiners and selectors the carve-out's budget strips — and
+  // every run above is made of payload invisibles it counts, so subtracting the
+  // runs leaves exactly the invisibles no run reported.
+  const scattered = verdict.invisibleCount - runChars;
   if (scattered >= SCATTERED_THRESHOLD) {
     findings.push({
       line: null, // whole-file finding: scattered chars aren't tied to one line
