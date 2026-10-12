@@ -20,8 +20,9 @@
   schedule: ["* 0-6 * * *"],
   rangeStrategy: "pin",
   // Supply-chain cooldown before a freshly published version can enter the
-  // lockfile.
-  minimumReleaseAge: "24 hours",
+  // lockfile. Held at pnpm's own `minimumReleaseAge` floor: a shorter window
+  // opens bump PRs whose install pnpm then refuses.
+  minimumReleaseAge: "3 days",
   // Default off, then opt each watched pin in below — a blanket enable would
   // open PRs for the whole dev toolchain, none of which affects the artifact.
   packageRules: [
