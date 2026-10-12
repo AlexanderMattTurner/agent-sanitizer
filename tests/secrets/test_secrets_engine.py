@@ -9,6 +9,7 @@ env-bound values come from a :class:`RedactorConfig` instead of ``os.environ``.
 import hashlib
 import re
 import time
+import types
 
 import pytest
 
@@ -2560,7 +2561,7 @@ def test_overlap_test_is_sub_quadratic_in_the_secrets_on_one_line(monkeypatch):
     )
 
 
-def test_a_compute_budget_interrupts_one_very_long_line():
+def test_a_compute_budget_interrupts_one_very_long_line(monkeypatch):
     """The budget must bind INSIDE a line, not only between lines.
 
     A caller's ceiling exists so one request cannot deny service to the next.
@@ -2572,18 +2573,36 @@ def test_a_compute_budget_interrupts_one_very_long_line():
         "AKIA" + hashlib.sha256(str(i).encode()).hexdigest()[:16].upper()
         for i in range(4000)
     )
-    # Large enough to clear the whole-text stages ahead of the per-line loop (the
-    # candidate-line gate sweeps this 130KB payload once), small enough that the
-    # group build's ~n^2 re-scan — seconds of work for n=4000 — blows it. A budget
-    # tight enough to expire during an earlier stage would assert on that stage's
-    # name instead and stop testing what this test is about.
-    budgeted = RedactorConfig(compute_budget_seconds=0.05)
+    # The engine's clock is driven, not read: time advances one second per
+    # group-build check and not at all elsewhere. A wall-clock budget made which
+    # stage expired first depend on how loaded the machine was — under load the
+    # earlier whole-text stages alone overran it. Here only the property under
+    # test decides the outcome: with a 2.5 s budget the raise comes on the THIRD
+    # group-build check, which one line can only reach if the check sits inside
+    # the per-secret loop rather than once per line.
+    clock = [0.0]
+    group_build_checks = []
+    real_check = E._Deadline.check
+
+    def ticking_check(self, stage):
+        if stage == "per-line group build":
+            group_build_checks.append(stage)
+            clock[0] += 1.0
+        real_check(self, stage)
+
+    monkeypatch.setattr(E, "time", types.SimpleNamespace(monotonic=lambda: clock[0]))
+    monkeypatch.setattr(E._Deadline, "check", ticking_check)
+    budgeted = RedactorConfig(compute_budget_seconds=2.5)
     with pytest.raises(E.RedactionBudgetExceeded) as raised:
         redact(line, budgeted)
     # The SCAN phase must be bounded, not only the arbitration after it: the
     # group build re-scans the whole line once per detected secret, so it is the
     # largest term and it all runs before arbitration begins.
-    assert "group build" in str(raised.value), str(raised.value)
+    assert str(raised.value) == (
+        "redaction exceeded its compute budget during per-line group build"
+    )
+    assert len(group_build_checks) == 3
+    monkeypatch.undo()
     # Positive marker: the same input redacts normally with no budget, so the
     # raise above is the budget biting and not the input failing to scan.
     out, found = redact(line, RedactorConfig())
