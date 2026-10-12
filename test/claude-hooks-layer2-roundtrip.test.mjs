@@ -20,10 +20,11 @@
  */
 import { describe, it, beforeEach, before, after } from "node:test";
 import assert from "node:assert/strict";
-import { createServer } from "node:net";
 import { mkdtempSync, rmSync, readdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+
+import { startStandInDaemon } from "./redactor-stand-in.mjs";
 
 // Stub redactor daemon socket + fresh reveal store, both set BEFORE the hook
 // imports (the client resolves its socket path at module load; the reveal dir
@@ -46,40 +47,20 @@ const { layer2Keys } =
 const { readSpan, SPAN_ROUNDTRIP_NOTICE } =
   await import("../claude-hooks/lib/reveal.mjs");
 
-// A SUBSTITUTING stub daemon over the real socket protocol (4-byte BE length +
-// JSON): it redacts exactly SECRET_VALUE wherever it appears, and reports
-// nothing to redact (null) otherwise — so redaction is observable per-text
-// instead of a fixed canned reply.
+// A SUBSTITUTING stand-in daemon: it redacts exactly SECRET_VALUE wherever it
+// appears, and reports nothing to redact (null) otherwise — so redaction is
+// observable per-text instead of a fixed canned reply.
 const SECRET_VALUE = "hunter2hunter2hunter2";
 const REDACTED_MARK = "[REDACTED: password]";
-function startStubDaemon() {
-  const server = createServer((sock) => {
-    const chunks = [];
-    sock.on("data", (chunk) => {
-      chunks.push(chunk);
-      const buf = Buffer.concat(chunks);
-      if (buf.length < 4) return;
-      const expected = buf.readUInt32BE(0);
-      if (buf.length < 4 + expected) return;
-      const request = JSON.parse(
-        buf.subarray(4, 4 + expected).toString("utf8"),
-      );
-      const reply = request.text.includes(SECRET_VALUE)
-        ? {
-            text: request.text.replaceAll(SECRET_VALUE, REDACTED_MARK),
-            found: ["StubPassword"],
-          }
-        : null;
-      const body = Buffer.from(JSON.stringify(reply), "utf8");
-      const header = Buffer.allocUnsafe(4);
-      header.writeUInt32BE(body.length, 0);
-      sock.end(Buffer.concat([header, body]));
-    });
-  });
-  return new Promise((resolve) => {
-    server.listen(socketPath, () => resolve(server));
-  });
-}
+const startStubDaemon = () =>
+  startStandInDaemon(socketPath, ({ text }) =>
+    text.includes(SECRET_VALUE)
+      ? {
+          text: text.replaceAll(SECRET_VALUE, REDACTED_MARK),
+          found: ["StubPassword"],
+        }
+      : null,
+  );
 
 /** @type {import("node:net").Server} */
 let daemon;
