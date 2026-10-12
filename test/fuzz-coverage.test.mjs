@@ -293,12 +293,18 @@ const FUZZ_EXEMPT = Object.freeze({
       "parseArgs",
       "positiveMsOr",
       "readFlag",
+      "readKnob",
       "secretsEnabled",
       "traceThreshold",
     ],
   ),
+  ...withReason(
+    "tests an lstat result or assembles a record from hook-supplied metadata; no untrusted bytes are parsed",
+    ["currentUid", "isPrivateDir", "ownedByCurrentUser", "traceRecord"],
+  ),
   ...withReason("process lifecycle, shared state and lazy module loading", [
     "EmptyStdinError",
+    "KNOB_DECIDES",
     "adoptHookIoSharedState",
     "awaitLazyDependency",
     "claimCliEntry",
