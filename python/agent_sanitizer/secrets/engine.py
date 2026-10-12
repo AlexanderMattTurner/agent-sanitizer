@@ -1077,55 +1077,77 @@ def _is_regex_literal(c: Candidate) -> bool:
     return close > 0 and all(ch in _REGEX_LITERAL_FLAGS for ch in value[close + 1 :])
 
 
-# detect-secrets' PrivateKeyDetector only matches the "-----BEGIN-----" header
-# line, so a per-line scan leaves the base64 body unredacted. Match and collapse
-# the whole PEM block. The keyword is "PRIVATE KEY" only, so public material
-# (certs, public keys, PGP messages) stays verbatim. The label runs are
-# length-capped so a crafted header can't drive O(n^2) backtracking.
-_PEM_LABEL_RUN = r"[A-Z0-9 ]{0,40}?"
-# One line of PEM body: RFC 7468 base64, or an RFC 1421 "Field: value" header.
-# Env-bound redaction runs before this one, so a base64 run may already carry its
-# output — a sentinel in map mode, the placeholder itself in plain mode. Both
+# One unit of base64 body: RFC 7468 base64, or a run env-bound redaction already
+# replaced. Env-bound redaction runs before this pass, so a base64 run may carry
+# its output — a sentinel in map mode, the placeholder itself in plain mode. Both
 # count as body, otherwise a key whose body embeds a configured env value would
 # end the block early and leave the rest of its base64 visible.
 # The placeholder alternative is PLACEHOLDER_RE's own pattern, not a restatement
 # of it: the label charset excludes "]" and every control character, so the atom
 # and the producer cannot disagree about where a placeholder ends.
 _PEM_B64_ATOM = (
-    r"(?:[A-Za-z0-9+/=]"
+    # `\/` is a JSON encoder's escaped `/` (PHP's json_encode writes every one).
+    r"(?:[A-Za-z0-9+/=]|\\/"
     + f"|{re.escape(_MARK_OPEN)}"
     + r"\d+ "
     + f"{re.escape(_MARK_CLOSE)}"
     + f"|{_REDACTED_TEXT_RE.pattern})"
 )
-_PEM_CONTENT = r"(?:" + _PEM_B64_ATOM + r"+|[A-Za-z][A-Za-z0-9-]*:[^\r\n]*)"
-# A block with no "-----END-----" still hides its body — truncated output must
-# FAIL SAFE — but only as far as the run of PEM-shaped lines after the header
-# (blank lines included, a truncated final line needing no newline). Stopping at
-# the first line that is neither is what keeps a lone header from swallowing the
-# rest of the file behind one placeholder: everything after it would vanish from
-# the caller's view of an otherwise secret-free document.
-_PEM_BODY = (
-    r"(?:[ \t]*(?:" + _PEM_CONTENT + r"[ \t]*)?\r?\n)*"
-    # A body line only counts when the PEM shape covers the WHOLE line, so the
-    # final unterminated line is anchored at end-of-text; without "\Z" it would
-    # match the leading word of an ordinary following line ("keep me" -> "keep").
-    r"(?:[ \t]*" + _PEM_CONTENT + r"[ \t]*\Z)?"
-)
+# THE PEM body grammar, shared by both branches of PEM_BLOCK_RE: a block is its
+# header followed by LINES, each holding one base64 run or one RFC 1421
+# `Field: value` header (or nothing), separated by a real line break or the `\n`
+# escape a JSON string carries a key's line breaks as. A line holding anything
+# else ends the body, which is what keeps code or prose that merely NAMES both
+# markers (`if pem.startswith("-----BEGIN …")` … `"-----END …"`) from collapsing
+# every line between them into one placeholder.
+_PEM_SEP = r"(?:\r?\n|\\r\\n|\\n)"
+# A header field runs to its line's end; the lookahead pins that end, so the
+# field parses one way only and cannot swallow a later line's base64.
+_PEM_FIELD = r"[A-Za-z][A-Za-z0-9-]*:[^\r\n\\]*(?=[\r\n\\]|\Z)"
+# Several runs share a line only as a key echoed with its line breaks turned to
+# spaces (`echo $KEY`): every run but the last is then a full 64-char line, so a
+# run under 16 chars cannot precede another — which keeps prose (`then the base64
+# body follows`) out.
+_PEM_CONTENT = rf"(?:{_PEM_FIELD}|(?:{_PEM_B64_ATOM}{{16,}}[ \t]+)*{_PEM_B64_ATOM}+)"
+_PEM_LINE = rf"[ \t]*(?:{_PEM_CONTENT}[ \t]*)?"
+_PEM_LABEL_RUN = r"[A-Z0-9 ]{0,40}?"
+# detect-secrets' PrivateKeyDetector only matches the "-----BEGIN-----" header
+# line, so a per-line scan leaves the base64 body unredacted. Match and collapse
+# the whole PEM block. The keyword is "PRIVATE KEY" only, so public material
+# (certs, public keys, PGP messages) stays verbatim. The label runs are
+# length-capped so a crafted header can't drive O(n^2) backtracking.
 PEM_BLOCK_RE = re.compile(
     r"(?P<header>-----BEGIN (?P<label>"
     + _PEM_LABEL_RUN
     + r"PRIVATE KEY"
     + _PEM_LABEL_RUN
     + r")-----)"
-    # A terminated block wins, and its body may hold anything — a PEM embedded in
-    # a JSON string carries its whole body on one line as \n escapes. The
-    # tempered "(?!-----BEGIN )" keeps that scan from reaching a LATER block's
-    # END line and collapsing the text between them.
-    r"(?:(?:(?!-----BEGIN )[\s\S])*?-----END (?P=label)-----"
-    r"|" + _PEM_BODY + r")",
+    # A terminated block wins. Its body cannot contain "-----", so it never
+    # reaches a LATER block's END line either.
+    + rf"(?:(?:{_PEM_LINE}{_PEM_SEP})*{_PEM_LINE}-----END (?P=label)-----"
+    # A block with no END still hides its body — truncated output must FAIL
+    # SAFE — but only as far as the run of body lines after the header. The
+    # last, unterminated line counts only when it ends the text or a quoted
+    # string; without that it would match the leading word of an ordinary
+    # following line ("keep me" -> "keep").
+    + rf"|(?:{_PEM_LINE}{_PEM_SEP})*(?:[ \t]*{_PEM_CONTENT}[ \t]*(?=\Z|[\"']))?)",
     re.IGNORECASE,
 )
+
+
+def _pem_gap_start(block: str, end: int) -> int:
+    """Index where the trailing run of blanks and line breaks (real, or JSON
+    ``\\n``/``\\r`` escapes) ending at ``end`` begins. Walked by hand: a regex
+    anchored at ``\\Z`` and searched from the left re-scans a long gap once per
+    position."""
+    while end > 0:
+        if block[end - 1] in " \t\r\n":
+            end -= 1
+        elif block[max(end - 2, 0) : end] in ("\\n", "\\r"):
+            end -= 2
+        else:
+            break
+    return end
 
 
 def is_bare_pem_header(value: str) -> bool:
@@ -1137,35 +1159,45 @@ def is_bare_pem_header(value: str) -> bool:
     doubt, and asks this to tell a header that names no key from one that wraps a body.
     The answer comes from the same pattern the redaction took, so the two cannot
     disagree about where a block starts and ends — a block written on one line, as a
-    key inside a JSON string is, carries a body and answers False.
+    key inside a JSON string is, carries a body and answers False. Line breaks after
+    the header (real, or JSON escapes) are not a body.
     """
     match = PEM_BLOCK_RE.fullmatch(value.strip())
-    return match is not None and match.end("header") == match.end()
+    return match is not None and _pem_gap_start(value.strip(), match.end()) == (
+        match.end("header")
+    )
 
 
 def _redact_pem_blocks(
-    text: str, found: list[str], entries: list[tuple[str, str]] | None = None
+    text: str,
+    found: list[str],
+    entries: list[tuple[str, str]] | None = None,
+    charset: frozenset[int] | None = None,
 ) -> str:
     """Collapse every PEM private-key block in ``text`` to one placeholder.
 
-    A payload with no ``-----BEGIN `` in it cannot hold a block, so the whole
-    `re.sub` — a pass over the entire request — is skipped on the probe's word
-    rather than run to find nothing.
+    Matched on the invisible-stripped view, like every other pass, so a
+    zero-width character spliced into a marker cannot hide the block. A payload
+    with no ``-----BEGIN `` in it cannot hold a block, so the pass is skipped on
+    the probe's word rather than run to find nothing.
     """
-    if not _PEM_PROBE.may_match(text):
+    view, offsets = strip_invisible_with_map(text, charset)
+    if not _PEM_PROBE.may_match(view):
         return text
-
-    def _repl(m: re.Match[str]) -> str:
+    spans = []
+    for m in PEM_BLOCK_RE.finditer(view):
         found.append("Private Key")
         # An unterminated body stops at a line break, so the match can end with
-        # the whitespace that separates the block from the following text. That
-        # whitespace is not key material: keep it outside the placeholder so the
-        # next line does not get pulled onto the placeholder's line.
-        block = m.group(0).rstrip(" \t\r\n")
-        trailing = m.group(0)[len(block) :]
-        return _mark(entries, placeholder("Private Key"), block) + trailing
-
-    return PEM_BLOCK_RE.sub(_repl, text)
+        # the separator that divides the block from the following text. That is
+        # not key material: keep it outside the placeholder so the next line does
+        # not get pulled onto the placeholder's line.
+        end = _pem_gap_start(view, m.end())
+        spans.append(
+            SpliceSpan(
+                offsets[m.start()], offsets[end - 1] + 1, placeholder("Private Key")
+            )
+        )
+    return _splice(text, spans, entries)
 
 
 # Cross-line redaction scans a newline-free collapse of the text, so two adjacent
@@ -2038,7 +2070,7 @@ def _redact_core(
     # Redact configured env-var values first, then collapse PEM blocks so the line
     # scan never sees the base64 key body.
     working = _redact_env_bound(text, found, config, entries, deadline)
-    working = _redact_pem_blocks(working, found, entries)
+    working = _redact_pem_blocks(working, found, entries, charset)
     # Catch newline-split tokens first, then scan what remains line by line.
     working = _redact_cross_line(working, found, config, entries, deadline)
     # Stage 1 of the per-line cascade: rule out whole lines in one C-speed sweep
