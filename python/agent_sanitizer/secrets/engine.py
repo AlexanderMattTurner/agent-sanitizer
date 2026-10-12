@@ -345,10 +345,34 @@ def _env_value_spans(
     return disjoint
 
 
-def _env_secrets_longest_first(config: RedactorConfig) -> list[tuple[str, str]]:
-    """``config.env_secrets`` ordered longest value first, so a secret that is a
-    substring of another never claims the longer one's bytes."""
-    return sorted(config.env_secrets.items(), key=lambda kv: -len(kv[1]))
+def _env_secrets_longest_first(
+    config: RedactorConfig, charset: frozenset[int]
+) -> list[tuple[str, str]]:
+    """``config.env_secrets`` ordered longest first by the visible length
+    :func:`_env_value_re` matches on, so a secret that is a substring of another
+    never claims the longer one's bytes."""
+    return sorted(
+        config.env_secrets.items(),
+        key=lambda kv: -len(strip_invisible(kv[1], charset)),
+    )
+
+
+def _merge_free_spans(
+    taken: list[SpliceSpan], spans: list[SpliceSpan]
+) -> list[SpliceSpan]:
+    """``taken`` plus every one of ``spans`` that overlaps none of it, both
+    ascending and disjoint, merged in one linear pass."""
+    merged: list[SpliceSpan] = []
+    i = 0
+    for span in spans:
+        while i < len(taken) and taken[i].end <= span.start:
+            merged.append(taken[i])
+            i += 1
+        if i < len(taken) and taken[i].start < span.end:
+            continue
+        merged.append(span)
+    merged.extend(taken[i:])
+    return merged
 
 
 def _redact_env_bound(
@@ -360,25 +384,29 @@ def _redact_env_bound(
 ) -> str:
     """Redact the literal value of each configured env var from ``text``.
 
-    Longest value first: a shorter secret that is a substring of a longer one
-    would otherwise be masked first, splitting the longer value so its own
-    pattern no longer matches and the remainder leaks verbatim."""
+    Every value is matched against the ORIGINAL ``text`` and the spans are
+    spliced once, so no value is ever matched inside another's placeholder.
+    Longest value first, and a span overlapping one already taken is dropped: a
+    shorter secret inside a longer one must not claim part of its bytes, which
+    would leave the rest of the longer secret unmatched and verbatim."""
     charset = config.resolved_charset()
     unescaped = strip_escapes_with_map(text, charset)
-    for name, value in _env_secrets_longest_first(config):
+    taken: list[SpliceSpan] = []
+    for name, value in _env_secrets_longest_first(config, charset):
         deadline.check("env-bound redaction")
         if not value or len(value) < config.min_secret_len:
             continue
-        spans = _env_value_spans(_env_value_re(value, charset), text, unescaped)
-        if spans:
-            text = _splice(
-                text,
-                [SpliceSpan(start, end, placeholder(name)) for start, end in spans],
-                entries,
+        spans = [
+            SpliceSpan(start, end, placeholder(name))
+            for start, end in _env_value_spans(
+                _env_value_re(value, charset), text, unescaped
             )
-            unescaped = strip_escapes_with_map(text, charset)
+        ]
+        merged = _merge_free_spans(taken, spans)
+        if len(merged) > len(taken):
             found.append(name)
-    return text
+        taken = merged
+    return _splice(text, taken, entries) if taken else text
 
 
 # detect-secrets' keyword detector knows only a fixed set of field names, omitting
@@ -1645,7 +1673,7 @@ def _cross_line_candidate_spans(
         spans.extend(
             _structural_cross_line_spans(stripped, offsets, deadline, newline_seams)
         )
-    for name, value in _env_secrets_longest_first(config):
+    for name, value in _env_secrets_longest_first(config, charset):
         deadline.check("cross-line env-value scan")
         if not value or len(value) < config.min_secret_len:
             continue
