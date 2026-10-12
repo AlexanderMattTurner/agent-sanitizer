@@ -2511,11 +2511,15 @@ test("_AGENT_SANITIZER_REDACTOR_WAIT_MS bounds the wait for a daemon that never 
   };
   // The opt-out posture throughout this section: the suppression IS the
   // observable that the timeout fired, and the open default has none.
+  // A daemon that SPAWNS and then never listens (exit 0 is the bind-race loser,
+  // which the client does not treat as a death). A missing binary would not do:
+  // that fails the spawn at once with its own reason and never waits at all.
+  const daemon = join(scratch(t), "never-listens-daemon");
+  writeFileSync(daemon, "#!/bin/sh\nexit 0\n", { mode: 0o755 });
   const env = {
     ...FAIL_CLOSED,
     _AGENT_SANITIZER_REDACTOR_SOCKET: join(scratch(t), "absent.sock"),
-    _AGENT_SANITIZER_REDACTOR_DAEMON:
-      "/nonexistent/agent-secret-redactor-daemon",
+    _AGENT_SANITIZER_REDACTOR_DAEMON: daemon,
     _AGENT_SANITIZER_REDACTOR_REQUEST_MS: "300",
   };
 
