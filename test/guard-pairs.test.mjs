@@ -164,6 +164,15 @@ describe("guard-pair residue (.hooks/guard-pairs.json)", () => {
   });
 });
 
+/*
+ * Declared BELOW the `describe` that reads them, on purpose. The scan walks this
+ * file in source order and only resolves a `git ls-files -- ...GUARDED_ROOTS`
+ * once the constant is bound, so hoisting these above the `describe` makes the
+ * partition's own enumeration count as a read of every guarded file: all of
+ * them derive to this suite and the partition passes on nothing. (`node:test`
+ * defers the `it` bodies, so the later declaration is initialised before use.)
+ */
+
 /** The tracked trees whose files a commit should never change unguarded. */
 const GUARDED_ROOTS = [
   "bin",
@@ -174,8 +183,8 @@ const GUARDED_ROOTS = [
   "src",
 ];
 
-/** Suites, prose and package markers: not inputs a guard test reads. */
-const NOT_AN_INPUT = /(?:\.test\.mjs|\.md|(?:^|\/)__init__\.py)$/;
+/** Suites and prose: not inputs a guard test reads. */
+const NOT_AN_INPUT = /(?:\.test\.mjs|\.md)$/;
 
 /**
  * Inputs the scan cannot chain to their suite and the `.hooks/guard-pairs.json`
