@@ -46,19 +46,15 @@ const COMPILE_COMMAND = "node plugin/scripts/lock-redactor-deps.mjs";
 const INPUT_DIGEST_LINE =
   /^# requirements\.in sha256: (?<digest>[0-9a-f]{64})$/m;
 
-/**
- * The digest a lock records for the requirements.in text it was compiled from.
- * @param {string} requirementsInText
- * @returns {string}
- */
+/** The digest a lock records for the requirements.in text it was compiled from. */
 export function requirementsInDigest(requirementsInText) {
   return createHash("sha256").update(requirementsInText).digest("hex");
 }
 
 /**
- * Stamp `lockText` with the digest of the requirements.in it was compiled
- * from, directly under uv's own header. Throws when that header is missing:
- * the stamp's position is what the "compiled, not hand-written" check reads.
+ * Stamp `lockText` with the digest of its requirements.in, directly under uv's
+ * own header; throws when that header is missing (the "compiled, not
+ * hand-written" check reads the stamp's position).
  * @param {string} lockText
  * @param {string} requirementsInText
  * @returns {string}
@@ -136,11 +132,9 @@ export function lockRedactorDeps() {
 
 /**
  * True when re-locking is MANDATORY: the lock still pins the engine (the build
- * refuses such a lock), or it was not compiled from the requirements.in beside
- * it — a raised floor or a new dependency in the `secrets` extra that the
- * shipped pins would otherwise never honor. The recorded input digest answers
- * that without re-deriving pip's specifier semantics, and without a network.
- * Everything else about the lock is deliberately frozen.
+ * refuses it), or it was not compiled from the requirements.in beside it (a
+ * raised floor or new dependency the shipped pins would never honor). The
+ * recorded digest answers that offline. Everything else is deliberately frozen.
  * @param {string} [lockText]
  * @param {string} [requirementsInText]
  * @returns {boolean}

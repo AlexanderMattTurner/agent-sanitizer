@@ -54,9 +54,8 @@ export const DEFAULT_SOCKET_PATH =
  * 2. The committed self-contained zipapp (`plugin/dist/redactor/daemon.pyz`) —
  *    the guaranteed floor: it needs only a python3 on PATH, so a cold start
  *    with no venv and no network still redacts instead of failing closed on
- *    every tool call. Found at `_AGENT_SANITIZER_REDACTOR_PYZ` when the
- *    launcher exports it (the compiled hook binary resolves modules inside
- *    bun's virtual filesystem, where a module-relative path names no file on
+ *    every tool call. At `_AGENT_SANITIZER_REDACTOR_PYZ` when the launcher
+ *    exports it (the compiled binary's module-relative path names no file on
  *    disk), else beside this bundle.
  * 3. The packaged console script from PATH — the un-bundled/dev case, where
  *    no sibling dist tree exists.
