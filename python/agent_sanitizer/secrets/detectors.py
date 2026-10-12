@@ -143,6 +143,14 @@ class LooseProviderKeyDetector(RegexBasedDetector):
     denylist = _DENYLISTS["LooseProviderKeyDetector"]
 
 
+class OpenAiTokenDetector(RegexBasedDetector):
+    """OpenAI API keys (``sk-…T3BlbkFJ…``). Linear replacement for detect-secrets'
+    bundled ``OpenAIDetector``, under the same secret_type."""
+
+    secret_type = "OpenAI Token"  # noqa: S105 — a detector label, not a secret
+    denylist = _DENYLISTS["OpenAiTokenDetector"]
+
+
 class GroqApiKeyDetector(RegexBasedDetector):
     """Groq API keys (``gsk_…``). No gitleaks rule; prefix from Groq's console
     docs (https://console.groq.com/keys)."""

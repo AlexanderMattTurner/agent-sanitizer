@@ -70,7 +70,9 @@ from .placeholders import placeholder
 # Cloudant, IBM Cloud IAM, IBM COS HMAC and SoftLayer are ABSENT: each bundled
 # pattern backtracks cubically on a run of spaces (regexploit complexity 3), so
 # `detectors.py` replaces them with linear equivalents carrying the identical
-# secret_type. See that module's "cubic-backtracking pattern" section.
+# secret_type. See that module's "cubic-backtracking pattern" section. OpenAI is
+# absent too: its pattern is quadratic over repeated `sk-`, and the
+# `OpenAiTokenDetector` row in data/secret-detectors.json replaces it.
 _BUNDLED_PLUGINS = {
     "AWSKeyDetector": True,
     "ArtifactoryDetector": False,
@@ -78,7 +80,6 @@ _BUNDLED_PLUGINS = {
     "BasicAuthDetector": False,
     "DiscordBotTokenDetector": True,
     "MailchimpDetector": False,
-    "OpenAIDetector": True,
     "PrivateKeyDetector": True,
     "PypiTokenDetector": True,
     "SendGridDetector": True,

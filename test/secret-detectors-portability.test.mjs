@@ -117,6 +117,7 @@ const PATTERN_EXAMPLES = {
   "GitHubFineGrainedPatDetector[0]": `github_pat_${rep(82)}`,
   "OpenRouterApiKeyDetector[0]": `sk-or-v1-${hex(64)}`,
   "LooseProviderKeyDetector[0]": `sk-or-A1${rep(18)}`,
+  "OpenAiTokenDetector[0]": `sk-${rep(20)}T3BlbkFJ${rep(20)}`,
   "GroqApiKeyDetector[0]": `gsk_${rep(32)}`,
   "XaiApiKeyDetector[0]": `xai-${rep(40)}`,
   "ReplicateApiTokenDetector[0]": `r8_${rep(37)}`,
