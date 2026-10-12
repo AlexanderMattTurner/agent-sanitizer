@@ -32,6 +32,7 @@ import {
 import { runJudgeCli } from "../claude-hooks/lib/control-plane.mjs";
 import { awaitLazyDependency } from "../claude-hooks/lib/hook-io.mjs";
 import { redactViaDaemon } from "../claude-hooks/lib/redactor-client.mjs";
+import { driveClocks } from "./helpers/driven-clock.mjs";
 
 /** A clock that advances by exactly the deltas it is given. */
 function fakeClock(...deltas) {
@@ -58,23 +59,25 @@ describe("startHookTimer", () => {
     assert.equal(timer.cpuMs(), 300);
   });
 
-  it("measures real CPU through the default clock", () => {
+  it("reads CPU through the default clock", (t) => {
     // Non-vacuity for the production path: the injected-clock cases above
-    // would all pass if process.cpuUsage() were never wired in at all.
+    // would all pass if process.cpuUsage() were never wired in at all. The
+    // default is driven, not spun on: 1.5s user + 0.5s system is 2000ms.
+    let usage = { user: 0, system: 0 };
+    t.mock.method(process, "cpuUsage", () => usage);
     const timer = startHookTimer();
-    let sink = 0;
-    for (let i = 0; i < 5_000_000; i++) sink += i % 7;
-    assert.ok(sink > 0);
-    assert.ok(timer.cpuMs() > 0, "a busy loop must show up as CPU");
+    usage = { user: 1_500_000, system: 500_000 };
+    assert.equal(timer.cpuMs(), 2_000);
   });
 
-  it("charges a hook that WAITS no CPU it did not spend", async () => {
+  it("charges a hook that WAITS no CPU it did not spend", (t) => {
     // The false positive this whole split closes: a hook parked on a loaded
     // scheduler or a slow socket burns wall-clock and no processor time.
+    const clock = driveClocks(t);
     const timer = startHookTimer();
-    await new Promise((resolve) => setTimeout(resolve, 50));
-    assert.ok(timer.wallMs() >= 45, `wall was ${timer.wallMs()}`);
-    assert.ok(timer.cpuMs() < 40, `sleeping cost ${timer.cpuMs()}ms of CPU`);
+    clock.wait(50);
+    assert.equal(timer.wallMs(), 50);
+    assert.equal(timer.cpuMs(), 0, "sleeping costs no CPU");
   });
 });
 
@@ -569,27 +572,21 @@ describe("slowHookNotice", () => {
     assert.equal(timer.hostMs(), 60, "one interval, charged once");
   });
 
-  it("charges a SYNCHRONOUS callback's wait and keeps its CPU off the hook", () => {
+  it("charges a SYNCHRONOUS callback's wait and keeps its CPU off the hook", (t) => {
     // `redactNote` must answer synchronously, so the async charger cannot wrap it.
     // Its CPU lands in this process, so an uncharged sync callback is worse than
     // an unmeasured one: the wait vanishes AND the sanitizer is billed for it.
+    const clock = driveClocks(t);
     const timer = startHookTimer();
-    const before = timer.cpuMs();
     const value = chargeHostExtensionSync(() => {
-      const until = Date.now() + 60;
-      while (Date.now() < until) {
-        /* a callback that computes, as a spawnSync-based annotator does */
-      }
+      clock.compute(60); // a callback that computes, as a spawnSync annotator does
       return "note";
     });
     assert.equal(value, "note");
-    assert.ok(timer.hostMs() >= 50, `charged (${timer.hostMs()}ms)`);
+    assert.equal(timer.hostMs(), 60);
     // The hook's own CPU figure must not grow by the callback's compute: it is
     // the composer's cost, and charging it twice would name the sanitizer.
-    assert.ok(
-      timer.cpuMs() - before < 40,
-      `the callback's CPU stays off the hook (${timer.cpuMs() - before}ms)`,
-    );
+    assert.equal(timer.cpuMs(), 0, "the callback's CPU stays off the hook");
   });
 
   it("tells a measured-empty host window apart from an unmeasured one", () => {

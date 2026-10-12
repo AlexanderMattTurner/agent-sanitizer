@@ -16,7 +16,8 @@
  * for a native builtin, so it pays the same instrumentation tax as the code it
  * normalizes. A ratio does not cancel a BUSY machine, though, so every timed
  * block is charged in CPU time rather than wall clock (see `measure` in
- * {@link ./helpers/cpu-timing.mjs}). {@link REALISTIC_MS} is the lone exception.
+ * {@link ./helpers/cpu-timing.mjs}); {@link REALISTIC_MS} is an absolute ceiling,
+ * but is read off that same fastest-of-N CPU figure.
  */
 import { describe, before } from "node:test";
 import assert from "node:assert/strict";
@@ -29,11 +30,17 @@ import {
 } from "../src/confusables.mjs";
 import {
   MUTATION_RUN,
-  RESOLUTION_CEILING_MS,
-  clockResolutionMs,
+  assertCalibrated,
+  assertClockResolves,
+  assertDearerThan,
+  assertLinear,
+  assertWithinBudget,
+  assertWithinCeiling,
+  describeGrowth,
+  geometricSizes,
   grow,
+  growth,
   measure,
-  measurePerCall,
   timed,
 } from "./helpers/cpu-timing.mjs";
 
@@ -160,11 +167,11 @@ const ENTRIES = {
   },
 };
 
-// LARGE is 8x SMALL, so linear scaling costs 8x. Anything past this is
-// super-linear in the input length — the shape of blow-up that turns a tolerable
-// paste into a hang — and it is measured on one machine in one process, so it
-// needs no headroom for machine speed, only for timer noise.
-const SCALING_LIMIT = 24;
+// The sizes every scaling gate here is fitted over, 32 KB to 256 KB. Growth
+// past linear in the input length is the shape of blow-up that turns a tolerable
+// paste into a hang; it is classified by the exponent the shared estimator fits
+// (`growth` in ./helpers/cpu-timing.mjs), not by a ratio tuned for this file.
+const SCALING_SIZES = geometricSizes(SMALL, LARGE);
 
 /**
  * The confusable fold, which the PreToolUse hook runs over a tool call's path and
@@ -186,14 +193,15 @@ const FOLD_BUDGET = 16;
  * Every budget above is machine-relative on purpose, and a table of ratios can
  * stay green while each hook takes a second, so the thing a user actually
  * notices \u2014 the wait before a session starts, the wait before a prompt goes \u2014
- * needs a ceiling in milliseconds — and, alone here, in WALL-CLOCK milliseconds,
- * since a user waits through descheduling too and the CPU clock the ratios use
- * would understate the very thing this gate promises. The input is ordinary text
- * at 256 KB, larger than most pastes; the adversarial shapes keep their ratio
+ * needs a ceiling in milliseconds. It is read as the FASTEST of several runs in
+ * CPU time, not as one wall-clock reading: the hook computes synchronously, so
+ * its CPU is the time it takes on an idle machine, and a wall-clock ceiling
+ * passed locally and went red on a loaded runner without the code changing. The
+ * input is ordinary text at 256 KB, larger than most pastes; the adversarial shapes keep their ratio
  * budgets, because a ceiling wide enough for 256 KB of nothing but zero-width
  * space on a slow runner would not be a guarantee about anything.
  *
- * c8 multiplies wall clock by roughly seven here, which is a fact about the
+ * c8 multiplies the cost by roughly seven here, which is a fact about the
  * instrumentation and not about the hook, so this half stands down under
  * coverage \u2014 and `pnpm test` runs the whole suite under coverage. The
  * uninstrumented step in `.github/workflows/node-tests.yaml` ("Run the hook
@@ -270,19 +278,22 @@ const CASES = Object.keys(ENTRIES).flatMap((entry) =>
 );
 
 /**
- * Every figure here is CPU ms except `realistic`, which is the wall clock the
- * millisecond ceiling is about.
- * @type {{unit: number, large: Record<string, number>, small: Record<string, number>,
+ * Every figure here is CPU ms.
+ * @typedef {import("./helpers/cpu-timing.mjs").Growth} Growth
+ * @type {{unit: number, large: Record<string, number>,
+ *   growth: Record<string, Growth>,
  *   units: Record<string, number>,
  *   realistic: Record<string, number>,
- *   fold: Record<string, number>, foldUnits: number, foldChanged: boolean}} */
+ *   fold: number, foldGrowth: Growth | null, foldUnits: number,
+ *   foldChanged: boolean}} */
 const timing = {
   unit: 0,
   large: {},
-  small: {},
+  growth: {},
   units: {},
   realistic: {},
-  fold: { small: 0, large: 0 },
+  fold: 0,
+  foldGrowth: null,
   foldUnits: 0,
   foldChanged: false,
 };
@@ -291,11 +302,7 @@ const timing = {
 // is downstream of it.
 before(async () => {
   if (MUTATION_RUN) return;
-  const resolution = clockResolutionMs();
-  assert.ok(
-    resolution <= RESOLUTION_CEILING_MS,
-    `process.cpuUsage resolves no finer than ${resolution.toFixed(3)}ms on this kernel, so the calibration pass is quantized to within its own size`,
-  );
+  assertClockResolves("the calibration pass is");
   timing.unit = await calibrate();
   for (const { entry, shape, name } of CASES) {
     const { run } = ENTRIES[entry];
@@ -305,10 +312,10 @@ before(async () => {
     );
     timing.large[name] = measured.cost.cpu;
     timing.units[name] = measured.units;
-    timing.small[name] = await measurePerCall(
-      (attempt) => SHAPES[shape](SMALL - attempt),
+    timing.growth[name] = await growth(
+      (size, attempt) => SHAPES[shape](size - attempt),
       (text) => run(text, shape),
-      measured.cost.cpu,
+      SCALING_SIZES,
     );
   }
   for (const [entry, { run }] of Object.entries(ENTRIES))
@@ -319,26 +326,30 @@ before(async () => {
         (attempt) => REALISTIC_TEXT.slice(0, REALISTIC_TEXT.length - attempt),
         (text) => run(text, "realistic-prose"),
       )
-    ).wall;
-  for (const [size, key] of [
-    [SMALL, "small"],
-    [LARGE, "large"],
-  ]) {
+    ).cpu;
+  // Built per input: enumerating the offsets is the scanner's job, not the
+  // fold's, and timing it here would charge this gate for the test's own loop.
+  const foldInput = (/** @type {number} */ size) => {
     const text = foldText(size);
-    // Built once: enumerating the offsets is the scanner's job, not the fold's,
-    // and timing it here would charge this gate for the test's own loop.
-    const findings = foldFindings(text);
-    const fold = () =>
-      foldConfusables(text, selectFoldableFindings(text, findings));
-    // The fold takes no parse and holds no memo, so every run may share one
-    // input; the offsets `findings` carries are only valid for this one.
-    const measured = await unitsFor(() => text, fold);
-    timing.fold[key] = measured.cost.cpu;
-    if (key === "large") {
-      timing.foldUnits = measured.units;
-      timing.foldChanged = fold() !== text;
-    }
-  }
+    return { text, findings: foldFindings(text) };
+  };
+  const fold = (/** @type {{text: string, findings: any[]}} */ input) =>
+    foldConfusables(
+      input.text,
+      selectFoldableFindings(input.text, input.findings),
+    );
+  // The fold takes no parse and holds no memo, so every run may share one
+  // input; the offsets `findings` carries are only valid for this one.
+  const large = foldInput(LARGE);
+  const measured = await unitsFor(() => large, fold);
+  timing.fold = measured.cost.cpu;
+  timing.foldUnits = measured.units;
+  timing.foldChanged = fold(large) !== large.text;
+  timing.foldGrowth = await growth(
+    (size, attempt) => foldInput(size - attempt),
+    fold,
+    SCALING_SIZES,
+  );
 });
 
 describe("hook-path latency", () => {
@@ -347,10 +358,7 @@ describe("hook-path latency", () => {
     // microseconds, so a pass under a tenth of a millisecond is quantized to
     // within a percent of itself and the ratios stop meaning anything — say so
     // loudly rather than passing on a division by noise.
-    assert.ok(
-      timing.unit > 0.1,
-      `calibration ran in ${timing.unit.toFixed(3)}ms of CPU — too fast to divide by`,
-    );
+    assertCalibrated(timing.unit);
   });
 
   for (const { entry, shape, name } of CASES)
@@ -365,19 +373,13 @@ describe("hook-path latency", () => {
       t.diagnostic(
         `${name}: ${timing.units[name].toFixed(1)}/${budget} units (${timing.large[name].toFixed(1)}ms CPU, unit ${timing.unit.toFixed(3)}ms)`,
       );
-      assert.ok(
-        timing.units[name] <= budget,
-        `${name} ran in ${timing.units[name].toFixed(1)} units (${timing.large[name].toFixed(1)}ms CPU), budget ${budget}`,
-      );
+      assertWithinBudget(name, timing.units[name], budget, timing.large[name]);
     });
 
   for (const { name } of CASES)
-    timed(`${name}: cost grows with input length, not faster`, () => {
-      const growth = timing.large[name] / timing.small[name];
-      assert.ok(
-        growth <= SCALING_LIMIT,
-        `${name} cost ${growth.toFixed(1)}x for ${LARGE / SMALL}x the input, limit ${SCALING_LIMIT}x`,
-      );
+    timed(`${name}: cost grows with input length, not faster`, (t) => {
+      t.diagnostic(`${name}: ${describeGrowth(timing.growth[name])}`);
+      assertLinear(name, timing.growth[name]);
     });
 
   for (const entry of Object.keys(ENTRIES))
@@ -391,9 +393,11 @@ describe("hook-path latency", () => {
         ...cheap.map((shape) => timing.large[`${entry}/${shape}`]),
       );
       for (const shape of Object.keys(SHAPES).filter((s) => !cheap.includes(s)))
-        assert.ok(
-          timing.large[`${entry}/${shape}`] > dearest,
-          `${entry}/${shape} (${timing.large[`${entry}/${shape}`].toFixed(1)}ms CPU) no longer costs more than the dearest cheap shape (${dearest.toFixed(1)}ms CPU) — it is not exercising the path it was written for`,
+        assertDearerThan(
+          `${entry}/${shape}`,
+          timing.large[`${entry}/${shape}`],
+          dearest,
+          "it is not exercising the path it was written for",
         );
     });
 
@@ -403,7 +407,7 @@ describe("hook-path latency", () => {
       (t) => {
         if (process.env.NODE_V8_COVERAGE) {
           t.skip(
-            "c8 multiplies wall clock several-fold; the uninstrumented CI step reads this gate",
+            "c8 multiplies the cost several-fold; the uninstrumented CI step reads this gate",
           );
           return;
         }
@@ -411,9 +415,10 @@ describe("hook-path latency", () => {
         // input, and REALISTIC_TEXT is built by slicing a repeated unit, so its
         // length is worth asserting rather than assuming.
         assert.equal(REALISTIC_TEXT.length, REALISTIC_SIZE);
-        assert.ok(
-          timing.realistic[entry] <= REALISTIC_MS,
-          `${entry} took ${timing.realistic[entry].toFixed(1)}ms on 256 KB of ordinary text, ceiling ${REALISTIC_MS}ms`,
+        assertWithinCeiling(
+          `${entry} on 256 KB of ordinary text`,
+          timing.realistic[entry],
+          REALISTIC_MS,
         );
       },
     );
@@ -434,9 +439,11 @@ describe("hook-path latency", () => {
         () => prompt,
         () => judgeSanitizeUserPrompt(event),
       );
-      assert.ok(
-        units <= CHEAP_BUDGET,
-        `the hook judged a clean 256 KB prompt in ${units.toFixed(1)} units (${cost.cpu.toFixed(1)}ms CPU), budget ${CHEAP_BUDGET}`,
+      assertWithinBudget(
+        "the hook judging a clean 256 KB prompt",
+        units,
+        CHEAP_BUDGET,
+        cost.cpu,
       );
     },
   );
@@ -450,18 +457,23 @@ describe("hook-path latency", () => {
         timing.foldChanged,
         "the fold changed nothing — the gate is timing a no-op, not the fold",
       );
-      assert.ok(
-        timing.foldUnits <= FOLD_BUDGET,
-        `folding 256 KB of look-alikes took ${timing.foldUnits.toFixed(1)} units (${timing.fold.large.toFixed(1)}ms CPU), budget ${FOLD_BUDGET}`,
+      assertWithinBudget(
+        "folding 256 KB of look-alikes",
+        timing.foldUnits,
+        FOLD_BUDGET,
+        timing.fold,
       );
     },
   );
 
-  timed("foldConfusables: cost grows with the field length, not faster", () => {
-    const growth = timing.fold.large / timing.fold.small;
-    assert.ok(
-      growth <= SCALING_LIMIT,
-      `the fold cost ${growth.toFixed(1)}x for ${LARGE / SMALL}x the field, limit ${SCALING_LIMIT}x`,
-    );
-  });
+  timed(
+    "foldConfusables: cost grows with the field length, not faster",
+    (t) => {
+      const curve = /** @type {import("./helpers/cpu-timing.mjs").Growth} */ (
+        timing.foldGrowth
+      );
+      t.diagnostic(`foldConfusables: ${describeGrowth(curve)}`);
+      assertLinear("foldConfusables", curve);
+    },
+  );
 });

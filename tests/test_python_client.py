@@ -412,14 +412,23 @@ def test_oneshot_that_never_answers_times_out() -> None:
     # The one-shot path ran with no timeout, so a wedged CLI hung the caller
     # forever while the worker path bounded the same wait.
     fake = _write_fake_cli("process.stdin.resume();\nsetInterval(() => {}, 1000);\n")
+    # Unbounded, the call would never return, so returning at all proves a
+    # bound; which bound is read off the call rather than off a stopwatch, so
+    # a loaded runner cannot fail it.
+    bounds = []
+    real_run = subprocess.run
+
+    def run(*args, **kwargs):
+        bounds.append(kwargs.get("timeout"))
+        return real_run(*args, **kwargs)
+
     with pytest.MonkeyPatch.context() as mp:
         mp.setattr(ais, "_CLI", fake)
         mp.setattr(ais, "_RESPONSE_TIMEOUT_S", 1.0)
-        started = time.monotonic()
+        mp.setattr(ais.subprocess, "run", run)
         with pytest.raises(RuntimeError, match=r"did not respond within 1\.0s"):
             sanitize("x", persist=False)
-        # allow-wall-clock: the bound is the point; unbounded would never return.
-        assert time.monotonic() - started < 10
+    assert bounds == [1.0]
 
 
 # ─── CLI resolution: bundled wheel CLI, env-var override, source sibling ──────

@@ -86,6 +86,34 @@ describe("persistSpan / readSpan round trip", () => {
     assert.equal(readSpan(SPAN_ID), "first");
   });
 
+  it("replaces a raw entry when the redacted write for the same key arrives", () => {
+    // The key is minted from the RAW original, so a span stored with the secret
+    // opt-in off sits under the key an opted-in run computes. Keeping it would
+    // restore the raw secret into a write whose notice says it was redacted.
+    const raw = "<div hidden>password: hunter2</div>";
+    const redacted = "<div hidden>password: [REDACTED]</div>";
+    assert.equal(persistSpan(SPAN_ID, raw), true);
+    assert.equal(readSpan(SPAN_ID), raw);
+    assert.equal(persistSpan(SPAN_ID, redacted, true), true);
+    assert.equal(readSpan(SPAN_ID), redacted);
+    assert.equal(statSync(spanPath(SPAN_ID)).mode & 0o777, 0o600);
+  });
+
+  it("keeps a redacted entry when a non-redacted write for the same key arrives", () => {
+    const raw = "<div hidden>password: hunter2</div>";
+    const redacted = "<div hidden>password: [REDACTED]</div>";
+    assert.equal(persistSpan(SPAN_ID, redacted, true), true);
+    assert.equal(persistSpan(SPAN_ID, raw), true);
+    assert.equal(readSpan(SPAN_ID), redacted);
+  });
+
+  it("leaves an identical entry untouched on a redacted write", () => {
+    assert.equal(persistSpan(SPAN_ID, "same", true), true);
+    const before = statSync(spanPath(SPAN_ID)).ino;
+    assert.equal(persistSpan(SPAN_ID, "same", true), true);
+    assert.equal(statSync(spanPath(SPAN_ID)).ino, before);
+  });
+
   it("keeps distinct keys in distinct files", () => {
     assert.equal(persistSpan(SPAN_ID, "one"), true);
     assert.equal(persistSpan(OTHER_SPAN_ID, "two"), true);
@@ -128,6 +156,10 @@ describe("failure paths are non-fatal", () => {
     // never following it: the victim file's bytes stay untouched.
     assert.equal(persistSpan(SPAN_ID, "attacker-visible"), true);
     assert.equal(readFileSync(victim, "utf8"), "victim bytes");
+    // A redacted write replaces the squatted link itself, never its target.
+    assert.equal(persistSpan(SPAN_ID, "redacted bytes", true), true);
+    assert.equal(readFileSync(victim, "utf8"), "victim bytes");
+    assert.equal(readSpan(SPAN_ID), "redacted bytes");
   });
 });
 
