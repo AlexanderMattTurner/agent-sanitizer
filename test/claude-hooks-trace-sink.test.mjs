@@ -32,12 +32,15 @@ import {
   existsSync,
   mkdirSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
+import { parse } from "acorn";
 
 import { withCapturedStdout } from "./helpers/capture-stdout.mjs";
 
@@ -49,7 +52,7 @@ const projectDir = mkdtempSync(join(tmpdir(), "sanitizer-trace-proj-"));
 process.env.CLAUDE_PROJECT_DIR = projectDir;
 process.env._AGENT_SANITIZER_TRACE = "info";
 
-const { TraceEvent, hookTrace, trace } =
+const { TRACE_RESERVED_KEYS, TraceEvent, hookTrace, trace, traceRecord } =
   await import("../claude-hooks/lib/trace.mjs");
 const { SLOW_HOOK_THRESHOLD_MS } =
   await import("../claude-hooks/lib/hook-timing.mjs");
@@ -404,6 +407,92 @@ describe("scan-invisible-chars with a throwing sink", () => {
     }
 
     assert.equal(readFileSync(file, "utf8").includes(payload), false);
+  });
+});
+
+describe("the trace line's envelope keys belong to traceRecord", () => {
+  it("keeps the envelope and names a field that tried to shadow it", () => {
+    assert.deepEqual(
+      traceRecord(
+        "hook_ran",
+        { level: "debug", event: "spoofed", ts: 0, outcome: "clean" },
+        "info",
+        42,
+      ),
+      {
+        ts: 42,
+        level: "info",
+        event: "hook_ran",
+        outcome: "clean",
+        shadowed: ["ts", "level", "event"],
+      },
+    );
+  });
+
+  it("adds nothing to a clean record", () => {
+    assert.deepEqual(
+      traceRecord("hook_ran", { outcome: "clean" }, "debug", 7),
+      {
+        ts: 7,
+        level: "debug",
+        event: "hook_ran",
+        outcome: "clean",
+      },
+    );
+  });
+
+  it("is what the package channel writes", () => {
+    const file = freshTraceFile();
+    trace(TraceEvent.HOOK_RAN, { level: "debug", hook: "h" });
+    const [line] = packageChannel(file);
+    assert.equal(line.level, "info");
+    assert.equal(line.event, TraceEvent.HOOK_RAN);
+    assert.deepEqual(line.shadowed, ["level"]);
+  });
+
+  it("no announcement site passes an envelope key as a field", () => {
+    const root = fileURLToPath(new URL("../claude-hooks/", import.meta.url));
+    /** @type {string[]} */
+    const keys = [];
+    /** @type {string[]} */
+    const opaque = [];
+    const visit = (/** @type {any} */ node, /** @type {string} */ rel) => {
+      if (node === null || typeof node !== "object") return;
+      const [first, second] =
+        node.type === "CallExpression" ? node.arguments : [];
+      if (
+        first?.type === "MemberExpression" &&
+        first.object.type === "Identifier" &&
+        first.object.name === "TraceEvent"
+      ) {
+        if (second?.type !== "ObjectExpression") opaque.push(rel);
+        else
+          for (const prop of second.properties)
+            keys.push(
+              prop.type === "Property" ? prop.key.name : `${rel}: ...spread`,
+            );
+      }
+      for (const child of Array.isArray(node) ? node : Object.values(node))
+        visit(child, rel);
+    };
+    for (const rel of readdirSync(root, { recursive: true }).map(String))
+      if (rel.endsWith(".mjs"))
+        visit(
+          parse(readFileSync(join(root, rel), "utf8"), {
+            ecmaVersion: "latest",
+            sourceType: "module",
+          }),
+          rel,
+        );
+    // Non-vacuous: the announcement sites were found and their fields read.
+    assert.ok(keys.includes("outcome"), `found no trace fields: ${keys}`);
+    assert.deepEqual(opaque, []);
+    assert.deepEqual(
+      keys.filter(
+        (key) => TRACE_RESERVED_KEYS.includes(key) || key.includes("..."),
+      ),
+      [],
+    );
   });
 });
 
