@@ -246,6 +246,7 @@ const FUZZ_EXEMPT = Object.freeze({
       "layer2KeysIn",
       "layer2PlaceholderNotice",
       "needsFixedPoint",
+      "nonConvergenceReason",
       "placeholderNotice",
       "preToolUseLayers",
       "runLayerPipeline",
