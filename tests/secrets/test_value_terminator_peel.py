@@ -156,14 +156,20 @@ def test_a_sub_floor_value_is_no_longer_inflated_over_the_floor_by_its_terminato
     because the terminator was counted as part of the value — the floor was being
     met by punctuation. Peeling the terminator means such a value now falls below
     the floor and is left alone, which is the floor working as intended rather
-    than a new blind spot.
+    than a new blind spot. The floor is enforced on the redaction, not the regex:
+    the regex also matches short values so upper-case env names can clear it.
     """
-    assert E.FIELD_VALUE_RE.search("password = abcdefghijklmnopqrs;") is None
+    sub_floor = "password = abcdefghijklmnopqrs;"
+    assert E.redact(sub_floor) == (sub_floor, [])
     # The same value one byte longer is still caught, so the floor moved by
     # exactly one byte's worth of punctuation and nothing else.
     m = E.FIELD_VALUE_RE.search("password = abcdefghijklmnopqrst;")
     assert m is not None
     assert m.group("secret_value") == "abcdefghijklmnopqrst"
+    assert E.redact("password = abcdefghijklmnopqrst;") == (
+        "password = [REDACTED];",
+        ["named secret field"],
+    )
 
 
 def test_a_dot_is_not_peeled() -> None:

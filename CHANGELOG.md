@@ -8,6 +8,20 @@ adhere to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+## [2.61.0] - 2026-10-12
+
+### Added
+- Redaction of Anthropic OAuth tokens and non-canonical sk-ant-/sk-or- keys in secrets.
+- Support for redacting secrets split by terminal escape sequences.
+- Redaction of short values under upper-case credential environment names.
+- Support for reading escaped quotes inside double-quoted keyword values.
+- Ability to redact quoted credential values whole, including spaces and escaped quotes.
+
+### Fixed
+- Secrets matching now correctly orders redactions by visible length to mask longer env secrets before shorter ones they contain.
+- Environment secret matching against original text with proper ordering.
+- Cross-line env secrets now ordered longest-first, consistent with per-line redaction pass.
+
 ## [2.60.3] - 2026-10-12
 
 ### Fixed
