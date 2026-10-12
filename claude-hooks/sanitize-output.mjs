@@ -67,7 +67,7 @@ import { containsPlaceholder, layer2Keys } from "./lib/placeholder-grammar.mjs";
 // Layer-1 primitives and the cheap pre-gates, bound via lazyImport (see its
 // doc for the fail-OPEN hazard of a bare static npm import). A load failure
 // leaves the bindings undefined and the dependent call throws into the CLI's
-// fail-closed catch, which suppresses the output.
+// catch, which applies this hook's fault posture (emitHookFailure).
 // HTML_TAG_PRESENT (the Layer-2 pre-gate) and the Layer-1 re-exports come from
 // the package ROOT, which exposes them WITHOUT eagerly loading the
 // remark/rehype/unified graph (~120ms of module-load time). Importing `/html`
@@ -194,8 +194,8 @@ async function redactSecrets(text, webIngress, deadline) {
  * never WHETHER their result is applied.
  *
  * A callback that throws is not caught here. That is deliberate: the throw lands
- * in the CLI's fail-closed catch and the tool output is suppressed, so a broken
- * extension cannot degrade into showing unvetted output.
+ * in the CLI's catch like any other sanitizer fault, so a broken extension gets
+ * exactly the posture the operator chose (emitHookFailure) and no quieter one.
  *
  * These are NOT the Layer-5 injection-filter seam and do not inherit its
  * delete-only, closed-enum restriction. (Its identifier is deliberately unspoken
@@ -246,6 +246,8 @@ async function redactSecrets(text, webIngress, deadline) {
  * @param {{remainingMs: () => number}} [deadline] shared wall-clock budget across
  *   all leaves of one hook run; a direct caller gets a fresh full budget
  * @param {SanitizeExtensions} [ext]
+ * @param {boolean} [secretsOn]  the secret opt-in, decided ONCE per hook run by
+ *   {@link evaluateToolOutput} and threaded down; a direct caller reads the env
  * @returns {Promise<{ cleaned: string, warnings: string[], notes: string[], modified: boolean, sgrNote: boolean, reveal?: string, splices?: Array<{ placeholder: string, original: string }> }>}
  */
 export async function sanitizeText(
@@ -253,6 +255,7 @@ export async function sanitizeText(
   toolName,
   deadline = makeDeadline(SANITIZE_BUDGET_MS),
   ext = {},
+  secretsOn = secretsEnabled(),
 ) {
   const webIngress = isUntrustedIngress(toolName);
   // Layer 2 (HTML rewrite) runs on WebFetch/WebSearch always, and on MCP output
@@ -275,7 +278,7 @@ export async function sanitizeText(
     flagDigestValues: digestFlaggingEnabled(),
     sgrCarveOut: !webIngress,
     deadline,
-    // Layer 4 — OPT-IN (secretsEnabled): with the knob unset the seam gets no
+    // Layer 4 — OPT-IN (`secretsOn`): with the knob unset the seam gets no
     // redact callback at all, so plain output never spawns the daemon and no
     // placeholder ever enters the model's view. When it runs, the seam rethrows
     // a redactor throw wrapped, and this hook's fault policy suppresses the
@@ -283,7 +286,7 @@ export async function sanitizeText(
     // operator's terminal here first: the suppression note rides in what only
     // the model sees, so a degraded redactor would otherwise be invisible to
     // the human.
-    redact: !secretsEnabled()
+    redact: !secretsOn
       ? undefined
       : async (/** @type {string} */ content) => {
           let secrets;
@@ -389,6 +392,7 @@ function applyPostText(result, post) {
  *   after `notes` for the same positional-compatibility reason
  * @param {string} [path]  dotted location of `value` within the tool output,
  *   used only to name a key collision's location in its warning
+ * @param {boolean} [secretsOn]  the secret opt-in (see {@link sanitizeText})
  * @returns {Promise<{ value: any, modified: boolean, sgrNote: boolean }>}
  */
 export async function sanitizeValue(
@@ -401,9 +405,16 @@ export async function sanitizeValue(
   notes = [],
   splices = [],
   path = "",
+  secretsOn = secretsEnabled(),
 ) {
   if (typeof value === "string") {
-    const result = await sanitizeText(value, toolName, deadline, ext);
+    const result = await sanitizeText(
+      value,
+      toolName,
+      deadline,
+      ext,
+      secretsOn,
+    );
     warnings.push(...result.warnings);
     notes.push(...result.notes);
     if (result.reveal !== undefined) reveals.push(result.reveal);
@@ -429,6 +440,7 @@ export async function sanitizeValue(
         notes,
         splices,
         `${path}[${index}]`,
+        secretsOn,
       );
       out.push(result.value);
       if (result.modified) modified = true;
@@ -447,6 +459,7 @@ export async function sanitizeValue(
       notes,
       splices,
       path,
+      secretsOn,
     );
   return { value, modified: false, sgrNote: false };
 }
@@ -529,7 +542,8 @@ function withheldKeyFor(out, cleaned) {
  * @param {string[]} notes  accumulates the leaves' NOTE-severity findings
  * @param {Array<{ placeholder: string, original: string }>} splices  accumulates
  *   the leaves' Layer-2 placeholder→original pairs
- * @param {string} [path]  dotted location of this object in the tool output
+ * @param {string} path  dotted location of this object in the tool output
+ * @param {boolean} secretsOn  the secret opt-in (see {@link sanitizeText})
  * @returns {Promise<{ value: Record<string, any>, modified: boolean, sgrNote: boolean }>}
  */
 async function sanitizeObject(
@@ -541,7 +555,8 @@ async function sanitizeObject(
   ext,
   notes,
   splices,
-  path = "",
+  path,
+  secretsOn,
 ) {
   /** @type {Record<string, any>} */
   const out = {};
@@ -556,7 +571,13 @@ async function sanitizeObject(
     // callback sees just the string and the tool, so it cannot tell a schema key
     // from content; a rewrite here can collapse two fields into one name, which
     // costs both of them their values below. Extensions run on value leaves.
-    const keyResult = await sanitizeText(key, toolName, deadline);
+    const keyResult = await sanitizeText(
+      key,
+      toolName,
+      deadline,
+      {},
+      secretsOn,
+    );
     warnings.push(...keyResult.warnings);
     notes.push(...keyResult.notes);
     if (keyResult.reveal !== undefined) reveals.push(keyResult.reveal);
@@ -573,6 +594,7 @@ async function sanitizeObject(
       notes,
       splices,
       path === "" ? keyResult.cleaned : `${path}.${keyResult.cleaned}`,
+      secretsOn,
     );
     // Two distinct raw keys can sanitize to the same name (e.g. `token` and a
     // `token` carrying a zero-width space stripped by Layer 1). Overwriting
@@ -908,6 +930,11 @@ export async function evaluateToolOutput(input, ext = {}) {
   const reveals = [];
   /** @type {Array<{ placeholder: string, original: string }>} */
   const splices = [];
+  // THE secret opt-in decision for this run. Every secret-touching path below —
+  // the walk's Layer 4, the reveal and span persistence, the on-disk tripwire,
+  // and the prose that claims redaction — reads this one value, so no path can
+  // dial the daemon or promise "redacted" while another treats the layer as off.
+  const secretsOn = secretsEnabled();
   // One shared wall-clock budget for every blocking daemon call this hook makes —
   // across all leaves of the walk AND the reveal/span-redaction loops below — so
   // their SUM cannot pile up past the hook kill (see SANITIZE_BUDGET_MS).
@@ -925,6 +952,8 @@ export async function evaluateToolOutput(input, ext = {}) {
     ext,
     notes,
     splices,
+    "",
+    secretsOn,
   );
   // Persist each leaf's pre-Layer-2 text (deduped by content) so the model can
   // Read back what the HTML splice removed; a successful write appends a hint
@@ -937,10 +966,10 @@ export async function evaluateToolOutput(input, ext = {}) {
     try {
       // Same opt-in as the main pass: with secrets off nothing was redacted
       // out of the primary output either, so the sidecar persists verbatim.
-      const secrets = secretsEnabled()
+      const redacted = secretsOn
         ? await redactSecrets(original, true, deadline)
         : null;
-      stored = secrets ? secrets.text : original;
+      stored = redacted ? redacted.text : original;
     } catch {
       // The pre-splice text carries the spliced hidden-element content, so a
       // secret hidden only inside such an element reaches the redactor here
@@ -952,16 +981,16 @@ export async function evaluateToolOutput(input, ext = {}) {
       warnings.push(REVEAL_WITHHELD_WARNING);
       continue;
     }
-    const hint = persistReveal(stored);
+    const hint = persistReveal(stored, secretsOn);
     if (hint) warnings.push(hint);
   }
   // Persist each splice's original beside the reveal, keyed by the placeholder's
   // content-addressed key, so the PreToolUse rehydrator can restore a keyed
   // placeholder the model writes back (Edit/Write) to the original bytes. Same
-  // re-redaction treatment as the reveals above — the seam already vetted each
-  // `original` on its way out, but this loop re-runs strict web-ingress
-  // redaction so NOTHING lands on disk that did not pass the same bar as the
-  // reveal sidecar. The key is EXTRACTED from the placeholder, never recomputed
+  // re-redaction treatment as the reveals above, under the same opt-in — the
+  // seam already vetted each `original` on its way out, but this loop re-runs
+  // strict web-ingress redaction so NOTHING lands on disk that did not pass the
+  // same bar as the reveal sidecar. The key is EXTRACTED from the placeholder, never recomputed
   // from the redacted original: it was minted from the RAW original's sha256,
   // so it is a name, not an integrity check — hashing the redacted bytes would
   // mint a key no placeholder carries. Persistence failure is non-fatal (the
@@ -973,14 +1002,16 @@ export async function evaluateToolOutput(input, ext = {}) {
     if (key === undefined) continue;
     let stored;
     try {
-      const secrets = await redactSecrets(original, true, deadline);
-      stored = secrets ? secrets.text : original;
+      const redacted = secretsOn
+        ? await redactSecrets(original, true, deadline)
+        : null;
+      stored = redacted ? redacted.text : original;
     } catch {
       // Same doctrine as the reveal loop: never write unvetted text, never
       // fail the already-safe primary output over a convenience sidecar.
       continue;
     }
-    if (persistSpan(key, stored)) spanStored = true;
+    if (persistSpan(key, stored, secretsOn)) spanStored = true;
   }
   if (spanStored) warnings.push(SPAN_ROUNDTRIP_NOTICE);
   // On-disk placeholder tripwire (see ON_DISK_PLACEHOLDER_WARNING). Tested on
@@ -993,7 +1024,7 @@ export async function evaluateToolOutput(input, ext = {}) {
   // inserts placeholders, so placeholder-shaped bytes are ordinary text and
   // the warning would be pure noise on every doc ABOUT redaction.
   if (
-    secretsEnabled() &&
+    secretsOn &&
     input.tool_name === "Read" &&
     !revealRead &&
     containsPlaceholder(toolOutput)
@@ -1045,17 +1076,18 @@ export async function evaluateToolOutput(input, ext = {}) {
  * {@link evaluateToolOutput} already returns those contract fields (or null),
  * so the judge only stamps the `allow` decision onto them — no native-envelope
  * translation. Throws only if a layer engine throws (or on an UNKNOWN event);
- * the CLI fails closed on any throw.
+ * the CLI applies this hook's fault posture to any throw (emitHookFailure).
  * @param {import("agent-control-plane-core").ToolCallEvent} event
  * @param {SanitizeExtensions} [ext]
  * @returns {Promise<import("agent-control-plane-core").Verdict>}
  */
 export async function judgeSanitizeOutput(event, ext = {}) {
   const { Decision, EventKind } = controlPlane();
-  // Fail closed on a payload the adapter cannot classify (contract/harness
-  // drift): this hook only ever receives PostToolUse, so an UNKNOWN event is an
-  // anomaly, and abstaining would let its output reach the model UNSANITIZED —
-  // fail OPEN. Throwing lands in the CLI's catch, which suppresses the output.
+  // Throw on a payload the adapter cannot classify (contract/harness drift):
+  // this hook only ever receives PostToolUse, so an UNKNOWN event is an
+  // anomaly, and abstaining would report a CLEAN run on output nobody vetted.
+  // Throwing lands in the CLI's catch, which applies this hook's registered
+  // fault policy (lib/hook-fault.mjs, rendered by emitHookFailure).
   if (event.event === EventKind.UNKNOWN)
     throw new Error(
       "sanitize-output: unrecognized hook payload (not PostToolUse)",
@@ -1108,9 +1140,9 @@ export async function judgeSanitizeOutput(event, ext = {}) {
  * omits the field is a PostToolUse call by construction. The claude adapter
  * extracts `tool_response` (this hook's actual input) ONLY for a PostToolUse
  * event; without this default a field-less but legitimate payload would parse as
- * UNKNOWN, {@link judgeSanitizeOutput} would throw, and the CLI would fail closed
- * (suppress) on real tool output. A payload carrying a DIFFERENT event name is
- * left untouched, so the judge's UNKNOWN guard still fails closed on a genuinely
+ * UNKNOWN, {@link judgeSanitizeOutput} would throw, and the CLI would take the
+ * fault posture on real tool output. A payload carrying a DIFFERENT event name
+ * is left untouched, so the judge's UNKNOWN guard still fires on a genuinely
  * unrecognized event.
  * @param {unknown} input  the raw stdin payload
  * @returns {unknown}
@@ -1147,15 +1179,9 @@ export async function cliMain(ext = {}) {
     (event) => judgeSanitizeOutput(event, ext),
     {
       transformInput: withPostToolUseDefault,
-      // Fail closed: replace every string leaf of the original output with the
-      // placeholder, preserving shape so the harness honors the suppression
-      // instead of falling back to the raw, unvetted output (runJudgeCli hands
-      // back the parsed `input` even when the control-plane load failed, so the
-      // suppression shape-matches the real tool_response). emitFailClosed itself
-      // falls back to a bare string if that shape-matching replacement or its
-      // serialization throws, so even a pathological input fails closed. Under
-      // the open default with Layer 4 off the caller gets the warning-only
-      // pass-through instead — see emitHookFailure.
+      // The registered fault policy, rendered by emitHookFailure. It needs the
+      // parsed `input`, which runJudgeCli hands back even when the control-plane
+      // load failed, so a suppressing arm can keep the output's shape.
       onError: (err, input) =>
         emitHookFailure(input, err, undefined, ext.remedy),
     },

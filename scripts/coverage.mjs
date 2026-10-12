@@ -16,7 +16,7 @@
  * applied afterwards by one `c8 report` pass per scope over the same raw
  * coverage — one test run, two gates.
  *
- * Usage: node scripts/coverage.mjs [extra node --test args]
+ * Usage: node scripts/coverage.mjs [extra node --test flags]
  */
 import { spawnSync } from "node:child_process";
 import { readFileSync, realpathSync, rmSync } from "node:fs";
@@ -43,6 +43,39 @@ export const srcRoots = (includes) => [
 ];
 
 const EXCLUDES = ["test/**", "**/*.test.mjs", "**/*.fuzz.test.mjs"];
+
+/**
+ * The suites the run executes, named rather than left to `node --test`'s default
+ * discovery. Default discovery also runs every `.mjs` under any `test/`
+ * directory as an entry point — helpers and generators included — and
+ * `test/generate-golden.mjs` run that way REWRITES `tests/golden.json`, so the
+ * golden freshness check later in the same run compared the file to itself.
+ * Node's glob skips `node_modules` and dot-directories either way;
+ * `test/test-runner-partition.test.mjs` re-derives that from a real run.
+ */
+export const TEST_GLOBS = ["**/*.test.mjs"];
+
+/**
+ * The `node --test` command the collecting run executes.
+ *
+ * `extra` is passed through ahead of the globs, so a positional file narrows
+ * nothing: it is run IN ADDITION to the suite. Narrow a local run with
+ * `--test-name-pattern=…` instead.
+ * @param {string[]} extra @returns {string[]}
+ */
+export const nodeTestCommand = (extra) => [
+  "node",
+  "--test",
+  // The spec reporter repeats every failure, with its assertion message, in a
+  // block at the very END of the run. A CI log is read through a tail window,
+  // and TAP's six lines per passing test push a mid-run `not ok` clean out of
+  // it — a red build then names nothing it failed on. Node picks TAP for a
+  // non-TTY stdout, so the choice has to be stated here.
+  "--test-reporter=spec",
+  "--test-reporter-destination=stdout",
+  ...extra,
+  ...TEST_GLOBS,
+];
 
 /**
  * The coverage floors, per scope. Together the scopes must partition the
@@ -72,8 +105,8 @@ export const SCOPES = [
   {
     name: "claude-hooks + bin (ratchet)",
     files: hookScope,
-    // Measured 96.34 / 91.19 / 90.15 / 96.34 — each floor sits ~3 points under.
-    thresholds: { lines: 93, branches: 88, functions: 93, statements: 93 },
+    // Measured 97.83 / 94.41 / 94.91 / 97.83 — each floor sits ~3 points under.
+    thresholds: { lines: 93, branches: 91, functions: 93, statements: 93 },
   },
 ];
 
@@ -134,16 +167,7 @@ function main() {
       "--reporter=text",
       "--reporter=lcov",
       "--check-coverage=false",
-      "node",
-      "--test",
-      // The spec reporter repeats every failure, with its assertion message, in
-      // a block at the very END of the run. A CI log is read through a tail
-      // window, and TAP's six lines per passing test push a mid-run `not ok`
-      // clean out of it — a red build then names nothing it failed on. Node
-      // picks TAP for a non-TTY stdout, so the choice has to be stated here.
-      "--test-reporter=spec",
-      "--test-reporter-destination=stdout",
-      ...process.argv.slice(2),
+      ...nodeTestCommand(process.argv.slice(2)),
     ],
     "test suite",
   );

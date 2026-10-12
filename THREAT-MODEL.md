@@ -387,7 +387,15 @@ folding.
 
 The soundness argument assumes no later layer erases code points from the same
 field, which could remove an unmapped glyph the gate relied on after the decision
-was made. Layer 4 runs before `sanitizeAuthoredContent` on `Bash.command`.
+was made. In the PreToolUse hook the fold runs _before_ `sanitizeAuthoredContent`,
+which does erase code points from the same fields, so the hook's stage driver
+(`claude-hooks/lib/layer-pipeline.mjs`) re-runs both until the input stops
+changing — the emitted input is one the fold has judged in its final form. If it
+never settles the driver reports a fault and the hook's fail-open/closed posture
+decides: open (the default) proceeds with the last pass's sanitized input and a
+warning, never the raw input; `AGENT_SANITIZER_FAIL_OPEN=0` holds the call for
+approval. PreToolUse stage order:
+`confusables` → `authored-content` → `rehydrate` → `layer2-rehydrate`.
 
 **Declared tool scope.** Which tools the fold covers is a partition, not a
 fallthrough: `DEFAULT_FIELDS` names the covered tools and their fields, and
@@ -518,7 +526,9 @@ RECONSTITUTES during stripping is judged as the sequence it becomes.
 
 ## Tool-output pipeline & Layer 5
 
-`./output` runs Layers 1–4 over structured tool output, **preserving its shape**
+`./output` runs Layers 1–4 over structured tool output, **preserving its shape**.
+Layer order: 1 → 2–3 → 4 → 5 → 4, the second Layer 4 a re-scan of what Layer 5's
+deletions left. Shape matters
 (a harness that gets a shape-mismatched value silently shows the raw output).
 Layer 4 (secret redaction) is an **injected** redactor and is the one
 fail-closed path: a redactor that throws makes the pipeline rethrow, so the
@@ -927,9 +937,11 @@ carry no backtracking at all, so no pattern analyzer will ever report them:
   prefix re-sliced inside a loop, a re-walk of an already-walked node.
 
 `test/algorithmic-complexity.test.mjs` runs an entry point over an adversarial
-input at two sizes 8x apart and asserts the cost grew like the input rather than
-like its square, with a known-quadratic specimen as the control that proves the
-harness can still see one. Each case also asserts, at the size it measures, that
+input at four sizes spanning 8x and fits how its CPU cost grows — an exponent,
+classified against the one pair of thresholds every growth gate shares
+(`test/helpers/cpu-timing.mjs`, twin `tests/_growth.py`) — with a
+known-quadratic specimen as the control that proves the harness can still see
+one. Each case also asserts, at the size it measures, that
 the input still reaches the code the case is about — a length gate answering
 first is how such a case quietly degrades into timing nothing.
 `tests/secrets/test_algorithmic_complexity.py` is the twin over the Python
@@ -981,11 +993,11 @@ the finding is **reported at the right tier**. One vector per named technique:
 - ANSI hidden text (garak `ansiescape`) → Layer 1.
 - Bidi override (Trojan Source; garak `badchars`) → Layer 1.
 - Markdown-image exfil URL (garak `web_injection.MarkdownImageExfil`) → Layer 3.
-- Homoglyph command (garak `smuggling.HomoglyphObfuscation`) → Layer 4.
+- Homoglyph command (garak `smuggling.HomoglyphObfuscation`) → confusable folding.
 
-Two things the corpus fixes that a naive harness gets wrong. It drives Layer 4
-through the wired `namespace-guard` seam, not `sanitize()` — which never reaches
-confusable folding, so a one-entry-point harness reports a false 0% on every
+Two things the corpus fixes that a naive harness gets wrong. It drives
+confusable folding through the wired `namespace-guard` seam, not `sanitize()` —
+which never reaches it, so a one-entry-point harness reports a false 0% on every
 homoglyph vector. And it pins the _observed_ verdict, not a wished one: a short
 bidi override is stripped and reported (`cf-format`) but is not payload-shaped,
 so `classifyPrompt` passes it — recorded as a measured partial-coverage point

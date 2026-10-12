@@ -83,3 +83,44 @@ describe("envValueRegex is memoized", () => {
     assert.ok(re.test(`out ${VALUE} put`), "shared instance carried state");
   });
 });
+
+describe("envValueRegex with a value that itself holds an invisible", () => {
+  // `a<ZWSP>a` used to build `a[…]*<ZWSP>[…]*a`: the required literal is a member
+  // of both neighbouring starred classes, so a long ZWSP run followed by a
+  // non-match backtracked over quadratically many partitions (~6 s at 16k).
+  const ZWSP = "​";
+  const VALUE_WITH_INVISIBLE = `abc${ZWSP}def`;
+
+  it("never leaves a required literal that the neighbouring runs also match", () => {
+    // The linearity argument is "each literal between two runs is matched by
+    // neither", so check that directly rather than timing a hostile input: a
+    // wall-clock bound measures the runner, and the structural condition is the
+    // whole cause. Positive marker: the runs are present to strip.
+    const { source } = envValueRegex(VALUE_WITH_INVISIBLE);
+    assert.match(source, /\]\*/u);
+    const literals = source.replace(/\[[^\]]*\]\*/gu, "");
+    assert.equal(literals, "abcdef");
+    const leaked = [...literals].filter((ch) =>
+      allInvisible.includes(ch.codePointAt(0)),
+    );
+    assert.deepEqual(leaked, []);
+  });
+
+  it("still matches the value as typed, with the invisible removed, or re-spliced", () => {
+    const re = envValueRegex(VALUE_WITH_INVISIBLE);
+    for (const text of [
+      `out ${VALUE_WITH_INVISIBLE} put`,
+      "out abcdef put",
+      `out abc${ZWSP}${ZWSP}${ZWSP}def put`,
+      `out a⁠bc${ZWSP}def put`,
+    ])
+      assert.ok(re.test(text), JSON.stringify(text));
+    assert.equal(re.test("out abcxdef put"), false);
+  });
+
+  it("matches a value made only of invisibles exactly, not as a match-everything pattern", () => {
+    const re = envValueRegex(`${ZWSP}${ZWSP}`);
+    assert.equal(re.test("ordinary text"), false);
+    assert.ok(re.test(`x${ZWSP}${ZWSP}y`));
+  });
+});

@@ -14,18 +14,21 @@
  *
  * Neither is visible to a pattern analyzer, and the correctness suites are
  * indifferent to cost, so the only thing that catches them is measuring. Each
- * case below runs one entry point over an adversarial input at two sizes 8x
- * apart and asserts the cost grew like the input, not like its square — a ratio
- * rather than a millisecond count, so machine speed and the coverage
- * instrumentation scale both sides (see `test/helpers/cpu-timing.mjs`).
+ * case below runs one entry point over an adversarial input at four sizes from
+ * 8 KB to 64 KB and fits how its cost grows — an EXPONENT, classified against
+ * the one pair of thresholds every growth gate here shares, rather than a ratio
+ * of two samples against a constant tuned for this file (see `growth` in
+ * `test/helpers/cpu-timing.mjs`).
  *
- * Every shape here reads 5-11x on the implementations that ship, and four read
- * 70.4x, 64.0x, 61.1x and 27.1x against the ones they were written for;
- * {@link GROWTH_LIMIT} sits between those two populations. `sanitizeHtml` is the
- * exception: the `[^>]*$` tail reads 10.2x against 8.8x, because the document
- * parse costs as much again as the rescan at BOTH sizes and pulls the blended
- * ratio back toward linear. It is a growth gate on the Layer-2 entry point, not
- * evidence of a defect caught.
+ * Every shape here reads 0.74-1.13 on the implementations that ship (on a
+ * loaded 4-core machine), and four read 70.4x, 64.0x, 61.1x and 27.1x for 8x
+ * the input against the ones they were written for — exponents 2.04, 2.00,
+ * 1.98 and 1.59, all over the shared linear ceiling of 1.35.
+ * `sanitizeHtml/unterminated-openers` is the exception: its `[^>]*$` tail read
+ * 10.2x against 8.8x (1.12 against 1.05), because the document parse costs as
+ * much again as the rescan at every size and pulls the blended curve back
+ * toward linear. It is a growth gate on the Layer-2 entry point, not evidence
+ * of a defect caught.
  */
 import { describe, it, before } from "node:test";
 import assert from "node:assert/strict";
@@ -39,11 +42,13 @@ import {
 import { foldConfusables } from "../src/confusables.mjs";
 import {
   MUTATION_RUN,
-  RESOLUTION_CEILING_MS,
-  clockResolutionMs,
+  assertClockResolves,
+  assertLinear,
+  assertSuperlinear,
+  describeGrowth,
+  geometricSizes,
   grow,
-  measure,
-  measurePerCall,
+  growth,
   timed,
 } from "./helpers/cpu-timing.mjs";
 
@@ -51,17 +56,8 @@ const KB = 1024;
 const SMALL = 8 * KB;
 const LARGE = 64 * KB;
 
-/**
- * LARGE is 8x SMALL, so a linear cost grows 8x and a quadratic one 64x. The
- * limit sits at 2.5x linear: wide enough that a `n log n` pass, a collector run
- * landing on the large side, or a per-call constant that only the small side
- * amortizes cannot manufacture a failure, and clear of the WEAKEST defect this
- * file has measured (27.1x, the per-finding rebuild) rather than merely of the
- * 64x an undiluted quadratic reads — a limit calibrated on the loud defects
- * would sit above the quiet one. Both sides are measured in one process on one
- * machine, so nothing here needs headroom for machine speed.
- */
-const GROWTH_LIMIT = 20;
+/** The sizes every real case is fitted over: 8, ~16, ~32 and 64 KB. */
+const SIZES = geometricSizes(SMALL, LARGE);
 
 const CYR_A = "а";
 
@@ -293,46 +289,35 @@ const CASES = {
   },
 };
 
-/** The name of the case that must FAIL the growth limit; every other case must
- * pass it. Kept as a name rather than a flag so the two assertions below read
- * from one declaration. */
+/** The name of the case that must classify as super-linear; every other case
+ * must classify as linear. Kept as a name rather than a flag so the two
+ * assertions below read from one declaration. */
 const CONTROL = "control/quadratic-specimen";
 
 /**
- * The specimen runs at a quarter of the size the real cases do: 64 KB of a
- * quadratic scan is nearly two seconds per call, and it is measured nine times.
- * The ratio is what the gate reads and it is scale-free, so a smaller pair says
- * exactly as much — but only while both sides stay clear of timer noise, which
- * is the floor a quarter buys and a sixty-fourth (128 bytes) does not.
+ * The specimen runs at an eighth of the size the real cases do: 64 KB of a
+ * quadratic scan is nearly two seconds per call, and every size is sampled in
+ * every round. The exponent is scale-free, so a smaller range says exactly as
+ * much — but only while every size stays clear of timer noise, which the
+ * smallest (1 KB, ~0.8 ms) still does and a sixty-fourth (128 bytes) would not.
  */
-const CONTROL_SCALE = 1 / 4;
+const CONTROL_SIZES = geometricSizes(SMALL / 8, LARGE / 8);
 
-/** @type {Record<string, {small: number, large: number, growth: number}>} */
-const timing = {};
+/** @type {Record<string, import("./helpers/cpu-timing.mjs").Growth>} */
+const curves = {};
 
 before(
   async () => {
     if (MUTATION_RUN) return;
-    const resolution = clockResolutionMs();
-    assert.ok(
-      resolution <= RESOLUTION_CEILING_MS,
-      `process.cpuUsage resolves no finer than ${resolution.toFixed(3)}ms on this kernel, so these blocks are quantized to within their own size`,
-    );
-    for (const [name, { input, run }] of Object.entries(CASES)) {
-      const scale = name === CONTROL ? CONTROL_SCALE : 1;
-      const large = await measure(
-        (attempt) => /** @type {any} */ (input(LARGE * scale, attempt)),
+    assertClockResolves("these blocks are");
+    for (const [name, { input, run }] of Object.entries(CASES))
+      curves[name] = await growth(
+        (size, attempt) => /** @type {any} */ (input(size, attempt)),
         (built) => run(built),
+        name === CONTROL ? CONTROL_SIZES : SIZES,
       );
-      const small = await measurePerCall(
-        (attempt) => /** @type {any} */ (input(SMALL * scale, attempt)),
-        (built) => run(built),
-        large.cpu,
-      );
-      timing[name] = { small, large: large.cpu, growth: large.cpu / small };
-    }
   },
-  // A quadratic path does not merely exceed the limit, it takes minutes to
+  // A quadratic path does not merely classify as one, it takes minutes to
   // measure — so an unbounded hook would hang rather than report. This is the
   // ceiling for the whole measured set; a green run is an order of magnitude
   // under it.
@@ -350,26 +335,16 @@ describe("algorithmic complexity", () => {
 
   for (const name of Object.keys(CASES).filter((c) => c !== CONTROL))
     timed(`${name}: cost grows with the input, not with its square`, (t) => {
-      const { small, large, growth } = timing[name];
       // Emitted on the green path too: this table is the only place a machine
-      // these ratios have never been read on reports its own numbers.
-      t.diagnostic(
-        `${name}: ${growth.toFixed(1)}x for ${LARGE / SMALL}x the input (${small.toFixed(3)}ms -> ${large.toFixed(3)}ms CPU)`,
-      );
-      assert.ok(
-        growth <= GROWTH_LIMIT,
-        `${name} cost ${growth.toFixed(1)}x for ${LARGE / SMALL}x the input, limit ${GROWTH_LIMIT}x`,
-      );
+      // these curves have never been read on reports its own numbers.
+      t.diagnostic(`${name}: ${describeGrowth(curves[name])}`);
+      assertLinear(name, curves[name]);
     });
 
   timed("the gate can see a quadratic at all", (t) => {
     // Without this the whole file passes on a machine, a Node version, or a
-    // measurement bug that flattens every ratio to noise.
-    const { growth } = timing[CONTROL];
-    t.diagnostic(`${CONTROL}: ${growth.toFixed(1)}x`);
-    assert.ok(
-      growth > GROWTH_LIMIT,
-      `the deliberately quadratic control grew only ${growth.toFixed(1)}x for ${LARGE / SMALL}x the input — this harness cannot currently detect a quadratic, so every other case here is passing for the wrong reason`,
-    );
+    // measurement bug that flattens every curve to noise.
+    t.diagnostic(`${CONTROL}: ${describeGrowth(curves[CONTROL])}`);
+    assertSuperlinear(CONTROL, curves[CONTROL]);
   });
 });

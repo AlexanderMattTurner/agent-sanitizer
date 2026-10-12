@@ -3,7 +3,6 @@
 import json
 import re
 import string
-import time
 
 import pytest
 from hypothesis import given, settings
@@ -17,6 +16,8 @@ from detect_secrets.plugins.ibm_cos_hmac import IbmCosHmacDetector as _UpstreamI
 from detect_secrets.plugins.softlayer import SoftlayerDetector as _UpstreamSoftlayer
 from detect_secrets.settings import get_plugins
 from redactor_helpers import LEGITIMATE, SAMPLES, run_plain
+
+from tests._growth import assert_linear, cpu_growth, geometric_sizes
 
 _DETECTORS_JSON = D.DETECTORS_FILE
 _INLINE_DETECTORS = tuple(E._INLINE_PLUGINS)
@@ -530,13 +531,13 @@ def test_npm_detector_value_stops_at_whitespace_unlike_upstream():
 # quadratic (its leading `.+` restarts at every `//`); this pins the fix at the
 # regex level, cheaper than re-running the whole-corpus benchmark per commit.
 def test_npm_detector_denylist_is_linear_on_whitespace_free_input():
-    adversarial = "//" + "a" * 200_000
-    started = time.monotonic()
-    _NEW_NPM_RE.search(adversarial)
-    elapsed = time.monotonic() - started
-    # allow-wall-clock: a regressed quadratic on 200k chars costs seconds, not
-    # milliseconds — no CI load pushes a linear match anywhere near 1s.
-    assert elapsed < 1.0, f"NpmDetector denylist took {elapsed:.2f}s — quadratic again?"
+    assert_linear(
+        "NpmDetector denylist on a whitespace-free line",
+        cpu_growth(
+            lambda n, k: lambda text="//" + "a" * (n + k): _NEW_NPM_RE.search(text),
+            geometric_sizes(25_000, 200_000),
+        ),
+    )
 
 
 # ─── Keyword-context detectors: equivalence with the upstream cubic patterns ──
@@ -621,29 +622,33 @@ def test_linear_detector_corpus_actually_exercises_it(secret_type):
 def test_linear_detector_is_linear_on_a_space_run(secret_type):
     """The defect itself: a run of spaces after a credential noun. Cubic means
     doubling the run costs 8x, so a 4000-space run is the shape that cost
-    seconds; every replacement must scan it in milliseconds."""
+    seconds; every replacement must scan it linearly."""
     _upstream, replacement = _REPLACED_DETECTORS[secret_type]
-    adversarial = "key" + " " * 4000
-    started = time.monotonic()
-    for pattern in replacement.denylist:
-        pattern.search(adversarial)
-    elapsed = time.monotonic() - started
-    # allow-wall-clock: a regressed cubic on a 4000-space run costs seconds,
-    # not milliseconds — no CI load pushes a linear scan anywhere near 0.5s.
-    assert elapsed < 0.5, f"{secret_type} took {elapsed:.2f}s on a space run"
+
+    def scan(text):
+        for pattern in replacement.denylist:
+            pattern.search(text)
+
+    assert_linear(
+        f"{secret_type} on a space run",
+        cpu_growth(
+            lambda n, k: lambda text="key" + " " * (n + k): scan(text),
+            geometric_sizes(500, 4000),
+        ),
+    )
 
 
 def test_redact_is_linear_on_the_reported_redos_payload():
-    """End-to-end floor for the whole engine on the audit's own repro: `"key" +
+    """End-to-end for the whole engine on the audit's own repro: `"key" +
     " "*1200` measured 8.53s of CPU, and 400/800/1600 spaces measured
-    0.54s/4.76s/40.1s (cubic). One second is far above the post-fix cost
-    (milliseconds) and far below the pre-fix one."""
-    started = time.monotonic()
-    run_plain("key" + " " * 1200)
-    elapsed = time.monotonic() - started
-    # allow-wall-clock: the pre-fix cost at this size was 8.53s of CPU; the
-    # post-fix cost is milliseconds, so no CI load closes a 1000x margin.
-    assert elapsed < 1.0, f"redact() took {elapsed:.2f}s on the ReDoS payload"
+    0.54s/4.76s/40.1s — exponent 3.1, cubic."""
+    assert_linear(
+        "redact() on the ReDoS payload",
+        cpu_growth(
+            lambda n, k: lambda text="key" + " " * (n + k): run_plain(text),
+            geometric_sizes(150, 1200),
+        ),
+    )
 
 
 # ─── Token prefixes must sit on a boundary, not inside a word ────────────────
