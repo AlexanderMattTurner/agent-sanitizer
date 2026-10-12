@@ -923,6 +923,57 @@ describe("setup-liveness probe", () => {
     );
   });
 
+  it("never re-creates a marker the writer unlinked mid-probe", async (t) => {
+    // The writer's last act is to unlink the marker; a reader that read it a
+    // moment earlier then probes the lock. Probing BY PATH (`flock <path>`)
+    // opens O_CREAT and resurrects the marker as an empty file we own, which
+    // every later reader takes for a live setup with an unparseable pid. A
+    // stand-in flock on PATH performs that unlink at exactly the probe's
+    // moment, then hands its arguments to the real one, so the race is
+    // deterministic rather than a timing window.
+    const { writeFileSync, mkdtempSync, existsSync, chmodSync } =
+      await import("node:fs");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+    const { spawnSync } = await import("node:child_process");
+    const which = spawnSync("sh", ["-c", "command -v flock"], {
+      encoding: "utf8",
+    });
+    const realFlock = which.stdout.trim();
+    if (which.status !== 0 || realFlock === "") {
+      t.skip("flock(1) is not available on this host");
+      return;
+    }
+    const dir = mkdtempSync(join(tmpdir(), "seam-unlink-race-"));
+    const marker = join(dir, "m");
+    const bin = join(dir, "bin");
+    const { mkdirSync } = await import("node:fs");
+    mkdirSync(bin);
+    const shim = join(bin, "flock");
+    writeFileSync(
+      shim,
+      `#!/bin/sh\nrm -f "$RACE_MARKER"\nexec "${realFlock}" "$@"\n`,
+    );
+    chmodSync(shim, 0o755);
+    const saved = { PATH: process.env.PATH, RACE: process.env.RACE_MARKER };
+    process.env.PATH = `${bin}:${process.env.PATH}`;
+    process.env.RACE_MARKER = marker;
+    t.after(() => {
+      process.env.PATH = saved.PATH;
+      if (saved.RACE === undefined) delete process.env.RACE_MARKER;
+      else process.env.RACE_MARKER = saved.RACE;
+    });
+    for (const probe of [probeSetupAlive, setupRunning]) {
+      writeFileSync(marker, `${process.pid}\n${SETUP_LOCK_DECLARATION}\n`);
+      assert.equal(probe(marker), false, `${probe.name}: the writer is gone`);
+      assert.equal(
+        existsSync(marker),
+        false,
+        `${probe.name} re-created the unlinked marker`,
+      );
+    }
+  });
+
   it("falls back to the pid for a marker that declares no lock", async () => {
     // The old data shape: writers adopt the lock declaration on their own
     // schedule, and until they do the pid is the only signal there is.
