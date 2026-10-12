@@ -425,7 +425,7 @@ FIELD_VALUE_RE = re.compile(
     # false positive that mangles real content. `===` is explicit for the same
     # reason: `==` alone would leave the third `=` on the value.
     rf"(?P<field_prefix>(?P<field_name>(?:{_FIELD_NAMES})(?:[_-][A-Za-z0-9]+)*)[\"']?\s*"
-    r"(?::=|===|==|=>|:[-+?]|[:=](?![-+?=>~]))\s*"
+    r"(?P<op>:=|===|==|=>|:[-+?]|[:=](?![-+?=>~]))\s*"
     r"(?:(?:Bearer|Token|Basic)\s+)?)"
     r"(?P<openbracket>[(\[{]?)"
     r"(?P<quote>[\"']?)"
@@ -448,14 +448,16 @@ FIELD_VALUE_RE = re.compile(
     # included, so `"<key> tail"` and JSON's `"a\"<key>"` redact whole instead of
     # leaking past the first space or escaped quote. The one-byte lookbehind is
     # the quote group itself: nothing else in the prefix can end in a quote. An
-    # unquoted value is the 20+ char run above; a short or spaced quoted value is
-    # then accepted only by `_short_or_spaced_value_allowed`. Every arm stops at
-    # a map-mode sentinel (U+E000/U+E001), as `[` stops it at a plain-mode
-    # placeholder, so an earlier redaction is never swallowed into this one.
+    # unquoted value is either the 20+ char run above, or a 1-19 char run that
+    # must end at a terminator; a short or spaced value is then accepted only by
+    # `_short_or_spaced_value_allowed`, which reads the whole field name. Every
+    # arm stops at a map-mode sentinel (U+E000/U+E001), as `[` stops it at a
+    # plain-mode placeholder, so an earlier redaction is never swallowed.
     r"(?P<secret_value>"
     r'(?<=")(?:[^"\\\n\ue000\ue001]|\\[^\n\ue000\ue001]){1,4096}(?=")'
     r"|(?<=')(?:[^'\\\n\ue000\ue001]|\\[^\n\ue000\ue001]){1,4096}(?=')"
     r"|[^\s\"'`{}()\[\]\ue000\ue001]{19,}[^\s\"'`{}()\[\];,\ue000\ue001]"
+    r"|[^\s\"'`{}()\[\];,\ue000\ue001]{1,19}(?=[\s;,)\]}\"'`]|$)"
     r")"
     r"(?P<terminator>[;,]*)"
     r"(?P<closequote>(?P=quote)?)"
@@ -466,9 +468,12 @@ FIELD_VALUE_RE = re.compile(
 # A value under FIELD_VALUE_RE's 20-char floor, or one spanning whitespace, is
 # credible only where the key/value reading is unambiguous: the credential noun
 # ENDS the field name (`token_type`, `password_min_length` hold metadata), and
-# the value is quoted. `"FOO_TOKEN": "s3cret"` redacts; `password=prose` stays.
+# the value is quoted, or is assigned with `=` to an upper-case env-style name
+# (`API_KEY: str` is an annotation). `DB_PASSWORD=hunter2` and
+# `"FOO_TOKEN": "s3cret"` redact; `password=prose` stays.
 _FIELD_VALUE_FLOOR = 20
 _FIELD_NOUN_RE = re.compile(f"(?:{_FIELD_NAMES})", re.IGNORECASE)
+_ENV_STYLE_NAME_RE = re.compile(r"[A-Z0-9_]+")
 # Nouns whose value may legitimately be a run of plain words (a diceware
 # passphrase); under every other noun such a run is prose about the credential
 # (`"token": "the access token"`), since no issued token is lowercase words.
@@ -491,7 +496,13 @@ def _short_or_spaced_value_allowed(m: re.Match[str], value: str) -> bool:
         _PASSPHRASE_NOUN_RE.fullmatch(noun) is None
     ):
         return False
-    return bool(m.group("closequote"))
+    if m.group("closequote"):
+        return True
+    if m.group("op") not in ("=", ":="):
+        return False
+    text, name_end = m.string, m.end("field_name")
+    name_start = _ident_run_start(text, m.start("field_name"), "_")
+    return _ENV_STYLE_NAME_RE.fullmatch(text, name_start, name_end) is not None
 
 
 _AUTH_SCHEME_RE = re.compile(r"(?:Bearer|Token|Basic)[ \t]+(?=\S)", re.IGNORECASE)

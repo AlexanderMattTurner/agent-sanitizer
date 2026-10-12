@@ -79,6 +79,25 @@ def test_json_value_with_escaped_quote_redacts_whole(text, expected, found):
 
 
 @pytest.mark.parametrize(
+    "text, expected",
+    [
+        ("DB_PASSWORD=hunter2", "DB_PASSWORD=[REDACTED]"),
+        ("FOO_TOKEN=hunter2", "FOO_TOKEN=[REDACTED]"),
+        ('"FOO_TOKEN": "s3cret-value"', '"FOO_TOKEN": "[REDACTED]"'),
+        ("export FOO_TOKEN=s3cret-value", "export FOO_TOKEN=[REDACTED]"),
+        (
+            "--build-arg ANTHROPIC_API_KEY=s3cret-value",
+            "--build-arg ANTHROPIC_API_KEY=[REDACTED]",
+        ),
+        ("PGPASSWORD=hunter2 psql", "PGPASSWORD=[REDACTED] psql"),
+        ("GH_TOKEN=abc1;", "GH_TOKEN=[REDACTED];"),
+    ],
+)
+def test_short_value_under_credential_name_redacts(text, expected):
+    assert redact(text) == (expected, _FIELD)
+
+
+@pytest.mark.parametrize(
     "text, expected, found",
     [
         # A quoted header keeps its scheme, as the unquoted form does.
