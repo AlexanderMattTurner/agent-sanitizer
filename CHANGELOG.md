@@ -8,6 +8,24 @@ adhere to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+## [2.60.0] - 2026-10-12
+
+### Added
+- Slow-hook notice can now name the composer that owns the hook.
+- Protocol file now defines the daemon wire for standardized redaction communication.
+- New redactor-client protocol test coverage.
+
+### Changed
+- `redactViaDaemon` now requires `opts.webIngres` parameter; protocol file defines the daemon wire as a breaking change.
+
+### Fixed
+- Slow-hook notice no longer incorrectly prints a composer's version as the sanitizer's version.
+- Python one-shot `sanitize()` calls now time out instead of hanging on a wedged CLI.
+- Redactor now properly escapes lone surrogates, caps daemon.log at runtime, and keeps colliding env labels.
+- Test daemon spawns but never listens to drive WAIT_MS properly.
+- Test coverage for claude-hooks functions raised to 93%.
+- reportTo error path coverage on runJudgeCli.
+
 ## [2.58.11] - 2026-10-12
 
 ### Fixed
