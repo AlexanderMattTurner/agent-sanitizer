@@ -1642,6 +1642,14 @@ const RAW_TEXT_ELEMENTS = new Set([
   "plaintext",
 ]);
 
+// Keywords that take the parent's value of an inherited property. `revert`
+// rolls back to the user-agent style, which sets none of the inherited
+// properties read here, so it inherits too; `revert-layer` could reach a page
+// stylesheet this layer cannot see and is read the same way, keeping the hide.
+const INHERITING_KEYWORDS = new Set(
+  "inherit unset revert revert-layer".split(" "),
+);
+
 // The non-replaced elements the HTML rendering rules leave at the initial
 // `display:inline`. Custom and unknown elements are inline by default too, but
 // are left out: a component's own stylesheet, which this layer cannot see,
@@ -1653,18 +1661,16 @@ const INLINE_ELEMENTS = new Set(
 );
 
 // `display` values that leave an inline element an inline box: its initial
-// value, `contents` (no box at all), a `var()` and every CSS-wide keyword. An
-// `inherit` from a parent this element cannot see is read as inline, the side
-// that keeps rendered text.
+// value, `contents` (no box at all), a `var()` and every CSS-wide keyword (an
+// `inherit` from an unseen parent reads as inline, keeping rendered text).
 const INLINE_DISPLAYS = new Set(
-  ["", "inline", "inline flow", "contents"].concat(
-    "inherit initial unset revert revert-layer".split(" "),
+  ["", "inline", "inline flow", "contents", "initial"].concat(
+    ...INHERITING_KEYWORDS,
   ),
 );
-
 // Absolute positioning and floating BLOCKIFY an inline element (CSS 2 §9.7),
-// and so does being a flex or grid item. One set holds the `position` and the
-// `float` values: neither property accepts the other's.
+// and so does being a flex or grid item. One set holds the `position` and
+// `float` values (neither property accepts the other's), one the `display`s.
 const BLOCKIFYING_VALUES = new Set(
   "absolute fixed left right inline-start inline-end".split(" "),
 );
@@ -1672,7 +1678,7 @@ const ITEM_BLOCKIFYING_DISPLAYS = new Set(
   "flex grid inline-flex inline-grid".split(" "),
 );
 
-// Replaced elements whose content is not text. A font-size, color or
+// Replaced elements whose content is not text: a font-size, color or
 // text-indent hide leaves the picture on screen; only `visibility` (and the
 // box hides) reach it.
 const REPLACED_ELEMENTS = new Set(["img", "video", "audio", "canvas", "embed"]);
@@ -1773,62 +1779,11 @@ export function isHiddenElement(node, parent) {
   return elementHides(node, parent).size > 0;
 }
 
-// Keywords that take the parent's value of an inherited property. `revert`
-// rolls back to the user-agent style, which sets none of the inherited
-// properties read here, so it inherits too; `revert-layer` could reach a page
-// stylesheet this layer cannot see and is read the same way, keeping the hide.
-const INHERITING_KEYWORDS = new Set(
-  "inherit unset revert revert-layer".split(" "),
-);
 // The lengths a font-size of zero passes through unchanged: units and keywords
 // relative to the parent's font size, and the math functions over them.
 const PARENT_RELATIVE_FONT_UNITS = new Set(["em", "ex", "ch", "cap", "ic"]);
 const PARENT_RELATIVE_FONT_KEYWORDS = new Set(["smaller", "larger"]);
 const MATH_FUNCTIONS = new Set(["calc", "min", "max", "clamp"]);
-
-/**
- * The font-size token of a `font` shorthand: the first length, percentage or
- * math function (a bare number there is a weight), or a relative size keyword.
- * @param {any} node
- * @returns {any | null}
- */
-function fontShorthandSize(node) {
-  return (
-    valueTokens(node).find(
-      (/** @type {any} */ token) =>
-        token.type === "Dimension" ||
-        token.type === "Percentage" ||
-        (token.type === "Function" && MATH_FUNCTIONS.has(token.name)) ||
-        (token.type === "Identifier" &&
-          PARENT_RELATIVE_FONT_KEYWORDS.has(token.name)),
-    ) ?? null
-  );
-}
-
-/**
- * True when a font-size under a zero parent size stays zero: a relative
- * keyword (`larger`), a percentage, a parent-relative unit (`1.2em`), a zero,
- * or a math function of only those (`calc(1em)`). An absolute size, a keyword
- * size, or a function it cannot evaluate renders.
- * @param {any} size
- * @returns {boolean}
- */
-function keepsZeroSize(size) {
-  if (size.type === "Identifier")
-    return PARENT_RELATIVE_FONT_KEYWORDS.has(size.name);
-  if (size.type === "Number")
-    return Math.abs(parseFloat(size.value)) < NEAR_ZERO_EPSILON;
-  let keeps = true;
-  cssWalk(size, (/** @type {any} */ node) => {
-    keeps &&=
-      ["Percentage", "Number", "Operator", "Parentheses"].includes(node.type) ||
-      (node.type === "Function" && MATH_FUNCTIONS.has(node.name)) ||
-      (node.type === "Dimension" &&
-        (PARENT_RELATIVE_FONT_UNITS.has(node.unit) ||
-          Math.abs(parseFloat(node.value)) < NEAR_ZERO_EPSILON));
-  });
-  return keeps;
-}
 
 /**
  * True when `kind`, in force on an element's parent, still hides the
@@ -1854,11 +1809,37 @@ function keepsHide(kind, cascade, inlineBox, color) {
   if (kind === "text-indent")
     return winner.property === kind && isOffscreenOffset(winner.value);
   if (winner.property === "all") return false;
+  // A `font` shorthand's size is its first length, percentage or math function
+  // (a bare number there is a weight), or a relative size keyword.
   const size =
     winner.property === "font"
-      ? fontShorthandSize(winner.value)
+      ? valueTokens(winner.value).find(
+          (/** @type {any} */ token) =>
+            token.type === "Dimension" ||
+            token.type === "Percentage" ||
+            (token.type === "Function" && MATH_FUNCTIONS.has(token.name)) ||
+            (token.type === "Identifier" &&
+              PARENT_RELATIVE_FONT_KEYWORDS.has(token.name)),
+        )
       : soleToken(winner.value);
-  return size !== null && keepsZeroSize(size);
+  // Under a zero parent size, a relative keyword (`larger`), a percentage, a
+  // parent-relative unit (`1.2em`), a zero, or a math function of only those
+  // (`calc(1em)`) stays zero; an absolute or keyword size renders.
+  if (!size) return false;
+  if (size.type === "Identifier")
+    return PARENT_RELATIVE_FONT_KEYWORDS.has(size.name);
+  if (size.type === "Number")
+    return Math.abs(parseFloat(size.value)) < NEAR_ZERO_EPSILON;
+  let keeps = true;
+  cssWalk(size, (/** @type {any} */ node) => {
+    keeps &&=
+      ["Percentage", "Number", "Operator", "Parentheses"].includes(node.type) ||
+      (node.type === "Function" && MATH_FUNCTIONS.has(node.name)) ||
+      (node.type === "Dimension" &&
+        (PARENT_RELATIVE_FONT_UNITS.has(node.unit) ||
+          Math.abs(parseFloat(node.value)) < NEAR_ZERO_EPSILON));
+  });
+  return keeps;
 }
 
 /**
@@ -1878,31 +1859,6 @@ function keepsHide(kind, cascade, inlineBox, color) {
  *  - `mixed`   — an element holding both hidden and visible content.
  * @typedef {"hidden" | "neutral" | "visible" | "mixed"} RegionVerdict
  */
-
-/**
- * The state an element inside a region hands its children, or its verdict
- * when that is already settled: `hidden` for a box hide of its own, `visible`
- * when every inherited kind is overridden. A kind only ever SHRINKS on the
- * way down (an element's own context-free hides are added, nothing else), so
- * the region never hides more than its elements would read alone.
- * @param {any} node
- * @param {any} parent
- * @param {RegionState} state
- * @returns {RegionState | "hidden" | "visible"}
- */
-function descendState(node, parent, state) {
-  const own = elementHides(node, parent);
-  if (own.has("box")) return "hidden";
-  const cascade = elementCascade(node);
-  const color = colorState(cascade, state.color);
-  const inlineBox = isInlineBox(node, parent);
-  const kinds = /** @type {Set<InheritedHide>} */ (own);
-  for (const kind of state.kinds)
-    if (keepsHide(kind, cascade, inlineBox, color)) kinds.add(kind);
-  if (REPLACED_ELEMENTS.has(node.tagName))
-    return kinds.has("visibility") ? "hidden" : "visible";
-  return kinds.size === 0 ? "visible" : { kinds, color };
-}
 
 /**
  * The {@link RegionVerdict} of every node of the region rooted at `root`, an
@@ -1943,9 +1899,26 @@ function regionVerdicts(root, kinds) {
       );
     else if (node.type !== "element") verdicts.set(node, "neutral");
     else {
-      const next = descendState(node, parent, state);
-      if (typeof next === "string") verdicts.set(node, next);
-      else pushChildren(node, next);
+      // An element settles `hidden` on a box hide of its own and `visible`
+      // once every inherited kind is overridden; otherwise it hands its
+      // children the kinds still in force. A kind only ever SHRINKS on the way
+      // down (an element's own context-free hides are added, nothing else), so
+      // the region never hides more than its elements would read alone.
+      const own = elementHides(node, parent);
+      if (own.has("box")) {
+        verdicts.set(node, "hidden");
+        continue;
+      }
+      const inForce = /** @type {Set<InheritedHide>} */ (own);
+      const cascade = elementCascade(node);
+      const color = colorState(cascade, state.color);
+      const inlineBox = isInlineBox(node, parent);
+      for (const kind of state.kinds)
+        if (keepsHide(kind, cascade, inlineBox, color)) inForce.add(kind);
+      if (REPLACED_ELEMENTS.has(node.tagName))
+        verdicts.set(node, inForce.has("visibility") ? "hidden" : "visible");
+      else if (inForce.size === 0) verdicts.set(node, "visible");
+      else pushChildren(node, { kinds: inForce, color });
     }
   }
   for (let i = order.length - 1; i >= 0; i--) {
@@ -3049,7 +3022,7 @@ const LONG_QUERY_THRESHOLD = 200;
 // types (HTML, SVG, JS) are a script-injection vector; an oversized blob of any
 // type is an inline exfil/injection payload. A small inline image (icon) is
 // left alone so the common case isn't drowned in noise. Compared against the
-// MIME type's essence (see {@link dataUrlEssence}).
+// MIME type's essence.
 const ACTIVE_DATA_TYPES = new Set([
   "text/html",
   "image/svg+xml",
@@ -3097,23 +3070,6 @@ function parseUrl(url, base) {
   } catch {
     return null; // the parser's only failure signal is the throw
   }
-}
-
-/**
- * The MIME type essence of a parsed `data:` URL, per the Fetch Standard's
- * data: URL processor: the serialized URL (without fragment) up to its first
- * comma, ASCII-whitespace-trimmed, cut at its first `;`, lowercased.
- * @param {URL} parsed
- * @returns {string}
- */
-function dataUrlEssence(parsed) {
-  const body = parsed.href.slice(
-    "data:".length,
-    parsed.href.length - parsed.hash.length,
-  );
-  const comma = body.indexOf(",");
-  const mimeType = comma === -1 ? body : body.slice(0, comma);
-  return mimeType.split(";")[0].trim().toLowerCase();
 }
 
 // Parameter NAMES that legitimately carry a LONG opaque (base64/hex) value, so
@@ -3605,8 +3561,13 @@ export function checkExfilUrl(url, options = {}) {
   const { flagDigestValues = false } = options;
   const resolved = resolveUrl(url);
   if (resolved?.scheme === "data") {
-    if (ACTIVE_DATA_TYPES.has(dataUrlEssence(resolved.parsed)))
-      return "active-content data: URI";
+    // The MIME type essence, per the Fetch Standard's data: URL processor: the
+    // URL without fragment up to its first comma, cut at `;`, trimmed,
+    // lowercased.
+    const { href, hash } = resolved.parsed;
+    const mimeType = href.slice("data:".length, href.length - hash.length);
+    const essence = mimeType.split(",")[0].split(";")[0].trim().toLowerCase();
+    if (ACTIVE_DATA_TYPES.has(essence)) return "active-content data: URI";
     if (url.length > DATA_URI_LENGTH_THRESHOLD)
       return "oversized inline data: payload";
     return null;
@@ -3666,19 +3627,6 @@ export function urlHost(url) {
 }
 
 /**
- * True when `url` leaves the page's origin: it names a scheme or a host of its
- * own. Used for form `action`/`formaction` and `meta refresh` URLs, where
- * pointing off the page's own origin is the exfil/redirect signal regardless
- * of the query shape.
- * @param {string} url
- * @returns {boolean}
- */
-function isOffOrigin(url) {
-  const resolved = resolveUrl(url);
-  return resolved !== null && !resolved.relative;
-}
-
-/**
  * The index of the first code unit at or after `from` that is not ASCII
  * whitespace, as the HTML Standard's microsyntaxes define it.
  * @param {string} value
@@ -3725,10 +3673,8 @@ function refreshUrl(content) {
   return content.slice(urlStart + 1, closing === -1 ? undefined : closing);
 }
 
-// A valid floating-point number (HTML Standard §2.3.4.3) and a valid
-// non-negative integer, the two numerals a srcset descriptor takes.
+// A valid floating-point number (HTML Standard §2.3.4.3), a density's numeral.
 const FLOAT_RE = /^-?(?:\d+(?:\.\d+)?|\.\d+)(?:[eE][+-]?\d+)?$/;
-const NON_NEGATIVE_INTEGER_RE = /^\d+$/;
 
 /**
  * True when a srcset candidate's descriptors are valid, so the browser keeps
@@ -3747,7 +3693,7 @@ function isValidSrcsetDescriptors(descriptors) {
       unit === "x"
         ? FLOAT_RE.test(numeral) && Number(numeral) >= 0
         : (unit === "w" || unit === "h") &&
-          NON_NEGATIVE_INTEGER_RE.test(numeral) &&
+          /^\d+$/.test(numeral) &&
           Number(numeral) > 0;
     if (!valid || units.has(unit)) return false;
     units.add(unit);
@@ -3872,9 +3818,6 @@ const GRAMMAR_READERS = {
   css: (value) => cssUrls(value, "declarationList"),
 };
 
-// The elements whose URLs an `isImage` threat names as images.
-const IMAGE_ELEMENTS = new Set(["img", "image"]);
-
 /**
  * @typedef {{ url: string, isImage: boolean, autoFetched: boolean, context: "resource" | "form" | "refresh" }} CollectedUrl
  */
@@ -3895,7 +3838,7 @@ const IMAGE_ELEMENTS = new Set(["img", "image"]);
 function elementUrls(node) {
   // hast element nodes always carry a `properties` object (parse5 sets it).
   const properties = node.properties;
-  const isImage = IMAGE_ELEMENTS.has(node.tagName);
+  const isImage = node.tagName === "img" || node.tagName === "image";
   /** @type {CollectedUrl[]} */
   const urls = [];
   for (const attribute of URL_ATTRIBUTES) {
@@ -4027,9 +3970,11 @@ export function detectExfil(text, options = {}) {
 
   try {
     for (const { url, isImage, autoFetched, context } of collectUrls(text)) {
+      // A form or meta-refresh target that names a scheme or host of its own
+      // leaves the page's origin: the exfil/redirect signal whatever its query.
       const reason =
         checkExfilUrl(url, options) ||
-        (context !== "resource" && isOffOrigin(url)
+        (context !== "resource" && resolveUrl(url)?.relative === false
           ? OFF_ORIGIN_REASON[context]
           : null);
       if (!reason) continue;

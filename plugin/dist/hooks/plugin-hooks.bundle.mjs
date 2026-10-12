@@ -49564,22 +49564,6 @@ function elementHides(node2, parent) {
 function isHiddenElement(node2, parent) {
   return elementHides(node2, parent).size > 0;
 }
-function fontShorthandSize(node2) {
-  return valueTokens(node2).find(
-    (token) => token.type === "Dimension" || token.type === "Percentage" || token.type === "Function" && MATH_FUNCTIONS.has(token.name) || token.type === "Identifier" && PARENT_RELATIVE_FONT_KEYWORDS.has(token.name)
-  ) ?? null;
-}
-function keepsZeroSize(size) {
-  if (size.type === "Identifier")
-    return PARENT_RELATIVE_FONT_KEYWORDS.has(size.name);
-  if (size.type === "Number")
-    return Math.abs(parseFloat(size.value)) < NEAR_ZERO_EPSILON;
-  let keeps = true;
-  walker_default2(size, (node2) => {
-    keeps &&= ["Percentage", "Number", "Operator", "Parentheses"].includes(node2.type) || node2.type === "Function" && MATH_FUNCTIONS.has(node2.name) || node2.type === "Dimension" && (PARENT_RELATIVE_FONT_UNITS.has(node2.unit) || Math.abs(parseFloat(node2.value)) < NEAR_ZERO_EPSILON);
-  });
-  return keeps;
-}
 function keepsHide(kind2, cascade, inlineBox, color2) {
   if (kind2 === "color") return isColorHidden(color2);
   if (kind2 === "text-indent" && inlineBox) return true;
@@ -49591,24 +49575,19 @@ function keepsHide(kind2, cascade, inlineBox, color2) {
   if (kind2 === "text-indent")
     return winner.property === kind2 && isOffscreenOffset(winner.value);
   if (winner.property === "all") return false;
-  const size = winner.property === "font" ? fontShorthandSize(winner.value) : soleToken(winner.value);
-  return size !== null && keepsZeroSize(size);
-}
-function descendState(node2, parent, state) {
-  const own5 = elementHides(node2, parent);
-  if (own5.has("box")) return "hidden";
-  const cascade = elementCascade(node2);
-  const color2 = colorState(cascade, state.color);
-  const inlineBox = isInlineBox(node2, parent);
-  const kinds = (
-    /** @type {Set<InheritedHide>} */
-    own5
-  );
-  for (const kind2 of state.kinds)
-    if (keepsHide(kind2, cascade, inlineBox, color2)) kinds.add(kind2);
-  if (REPLACED_ELEMENTS.has(node2.tagName))
-    return kinds.has("visibility") ? "hidden" : "visible";
-  return kinds.size === 0 ? "visible" : { kinds, color: color2 };
+  const size = winner.property === "font" ? valueTokens(winner.value).find(
+    (token) => token.type === "Dimension" || token.type === "Percentage" || token.type === "Function" && MATH_FUNCTIONS.has(token.name) || token.type === "Identifier" && PARENT_RELATIVE_FONT_KEYWORDS.has(token.name)
+  ) : soleToken(winner.value);
+  if (!size) return false;
+  if (size.type === "Identifier")
+    return PARENT_RELATIVE_FONT_KEYWORDS.has(size.name);
+  if (size.type === "Number")
+    return Math.abs(parseFloat(size.value)) < NEAR_ZERO_EPSILON;
+  let keeps = true;
+  walker_default2(size, (node2) => {
+    keeps &&= ["Percentage", "Number", "Operator", "Parentheses"].includes(node2.type) || node2.type === "Function" && MATH_FUNCTIONS.has(node2.name) || node2.type === "Dimension" && (PARENT_RELATIVE_FONT_UNITS.has(node2.unit) || Math.abs(parseFloat(node2.value)) < NEAR_ZERO_EPSILON);
+  });
+  return keeps;
 }
 function regionVerdicts(root2, kinds) {
   const verdicts = /* @__PURE__ */ new Map();
@@ -49634,9 +49613,24 @@ function regionVerdicts(root2, kinds) {
       );
     else if (node2.type !== "element") verdicts.set(node2, "neutral");
     else {
-      const next2 = descendState(node2, parent, state);
-      if (typeof next2 === "string") verdicts.set(node2, next2);
-      else pushChildren(node2, next2);
+      const own5 = elementHides(node2, parent);
+      if (own5.has("box")) {
+        verdicts.set(node2, "hidden");
+        continue;
+      }
+      const inForce = (
+        /** @type {Set<InheritedHide>} */
+        own5
+      );
+      const cascade = elementCascade(node2);
+      const color2 = colorState(cascade, state.color);
+      const inlineBox = isInlineBox(node2, parent);
+      for (const kind2 of state.kinds)
+        if (keepsHide(kind2, cascade, inlineBox, color2)) inForce.add(kind2);
+      if (REPLACED_ELEMENTS.has(node2.tagName))
+        verdicts.set(node2, inForce.has("visibility") ? "hidden" : "visible");
+      else if (inForce.size === 0) verdicts.set(node2, "visible");
+      else pushChildren(node2, { kinds: inForce, color: color2 });
     }
   }
   for (let i = order2.length - 1; i >= 0; i--) {
@@ -50124,15 +50118,6 @@ function parseUrl(url, base) {
     return null;
   }
 }
-function dataUrlEssence(parsed) {
-  const body = parsed.href.slice(
-    "data:".length,
-    parsed.href.length - parsed.hash.length
-  );
-  const comma = body.indexOf(",");
-  const mimeType = comma === -1 ? body : body.slice(0, comma);
-  return mimeType.split(";")[0].trim().toLowerCase();
-}
 function hasUpperAndDigit(value) {
   return /[A-Z]/.test(value) && /[0-9]/.test(value);
 }
@@ -50246,8 +50231,10 @@ function checkExfilUrl(url, options = {}) {
   const { flagDigestValues = false } = options;
   const resolved = resolveUrl(url);
   if (resolved?.scheme === "data") {
-    if (ACTIVE_DATA_TYPES.has(dataUrlEssence(resolved.parsed)))
-      return "active-content data: URI";
+    const { href, hash } = resolved.parsed;
+    const mimeType = href.slice("data:".length, href.length - hash.length);
+    const essence = mimeType.split(",")[0].split(";")[0].trim().toLowerCase();
+    if (ACTIVE_DATA_TYPES.has(essence)) return "active-content data: URI";
     if (url.length > DATA_URI_LENGTH_THRESHOLD)
       return "oversized inline data: payload";
     return null;
@@ -50275,10 +50262,6 @@ function urlHost(url) {
   if (resolved.scheme === "data") return "(inline data: URI)";
   if (resolved.relative) return "(relative URL)";
   return resolved.parsed.host;
-}
-function isOffOrigin(url) {
-  const resolved = resolveUrl(url);
-  return resolved !== null && !resolved.relative;
 }
 function skipWhitespace(value, from) {
   let at = from;
@@ -50311,7 +50294,7 @@ function isValidSrcsetDescriptors(descriptors) {
   for (const descriptor of descriptors) {
     const numeral = descriptor.slice(0, -1);
     const unit = descriptor.slice(-1);
-    const valid2 = unit === "x" ? FLOAT_RE.test(numeral) && Number(numeral) >= 0 : (unit === "w" || unit === "h") && NON_NEGATIVE_INTEGER_RE.test(numeral) && Number(numeral) > 0;
+    const valid2 = unit === "x" ? FLOAT_RE.test(numeral) && Number(numeral) >= 0 : (unit === "w" || unit === "h") && /^\d+$/.test(numeral) && Number(numeral) > 0;
     if (!valid2 || units.has(unit)) return false;
     units.add(unit);
   }
@@ -50371,7 +50354,7 @@ function cssUrls(css, context) {
 }
 function elementUrls(node2) {
   const properties2 = node2.properties;
-  const isImage = IMAGE_ELEMENTS.has(node2.tagName);
+  const isImage = node2.tagName === "img" || node2.tagName === "image";
   const urls = [];
   for (const attribute of URL_ATTRIBUTES) {
     const value = properties2[attribute.property];
@@ -50435,7 +50418,7 @@ function detectExfil(text6, options = {}) {
   const threats = [];
   try {
     for (const { url, isImage, autoFetched, context } of collectUrls(text6)) {
-      const reason = checkExfilUrl(url, options) || (context !== "resource" && isOffOrigin(url) ? OFF_ORIGIN_REASON[context] : null);
+      const reason = checkExfilUrl(url, options) || (context !== "resource" && resolveUrl(url)?.relative === false ? OFF_ORIGIN_REASON[context] : null);
       if (!reason) continue;
       threats.push({ isImage, autoFetched, reason, target: urlHost(url) });
     }
@@ -50477,7 +50460,7 @@ function detectConfusableHosts(text6) {
   }
   return threats.length > 0 ? threats : null;
 }
-var NEAR_ZERO_EPSILON, OFFSCREEN_ABSOLUTE_THRESHOLD, OFFSCREEN_VIEWPORT_THRESHOLD, ABSOLUTE_UNITS, VIEWPORT_UNITS, ANGLE_UNITS, NAMED_COLORS, BLOCK_AXIS_EXTENT_PROPS, INLINE_AXIS_EXTENT_PROPS, BORDER_SHORTHANDS, BORDER_WIDTH_KEYWORDS, FONT_SIZE_UNITS, CSS_PROPERTY_IDENT_RE, LEXER_TOKEN_LIMIT, VALIDATION_BUDGET, cssLexer, RESETTING_SHORTHANDS, NO_CASCADE, INHERITED_COLOR_KEYWORDS, REPORTED_TAGS, VOID_ELEMENTS2, FOREIGN_ELEMENTS, RAW_TEXT_ELEMENTS, INLINE_ELEMENTS, INLINE_DISPLAYS, BLOCKIFYING_VALUES, ITEM_BLOCKIFYING_DISPLAYS, REPLACED_ELEMENTS, TEXT_ONLY_HIDES, elementCascades, parents, INHERITING_KEYWORDS, PARENT_RELATIVE_FONT_UNITS, PARENT_RELATIVE_FONT_KEYWORDS, MATH_FUNCTIONS, parseFragment2, PLACEHOLDER_LABEL, PLACEHOLDER_KEY_LEN, LAYER2_PLACEHOLDER_RE, HIDDEN_PLACEHOLDER, COMMENT_PLACEHOLDER, UNPARSEABLE_PLACEHOLDER, mdParser, parseMarkdown, MARKDOWN_CODE_HINT, BOGUS_COMMENT_OPEN_RE, MARKUP_OPENER_RE, PHRASING_ROOTS, FLOW_HTML_PARENTS, MAX_SPLICE_ROUNDS, EXFIL_INDICATORS, KEYWORD_PARAM_NAME_RE, LONG_QUERY_THRESHOLD, ACTIVE_DATA_TYPES, DATA_URI_LENGTH_THRESHOLD, SCRIPT_SCHEMES, RELATIVE_URL_BASE, BENIGN_BLOB_PARAM_RE, BENIGN_SHORT_PARAM_RE, BENIGN_SHORT_VALUE_MAX_LEN, BENIGN_SHORT_TOTAL_MAX_LEN, PUBLIC_KEY_ID_PARAM_RE, BLOB_VALUE_MIN_LEN, OPAQUE_TOKEN_RE, VALUE_HAS_DIGIT_RE, BLOB_VALUE_B64_RE, HEX_ONLY_RE, HEX_BLOB_MIN_LEN, DIGEST_HEX_LENGTHS, BLOB_VALUE_B64URL_RE, PATH_BLOB_RE, DIGEST_MAX_LEN, BLOB_SEPARATOR_RE, BLOB_RUN_SPLIT_RE, FLOAT_RE, NON_NEGATIVE_INTEGER_RE, SRCSET_URL_RE, SRCSET_DESCRIPTORS_RE, STRING_URL_FUNCTIONS, GRAMMAR_READERS, IMAGE_ELEMENTS, OFF_ORIGIN_REASON, COMMENT_INTERIOR_OPENER_RE;
+var NEAR_ZERO_EPSILON, OFFSCREEN_ABSOLUTE_THRESHOLD, OFFSCREEN_VIEWPORT_THRESHOLD, ABSOLUTE_UNITS, VIEWPORT_UNITS, ANGLE_UNITS, NAMED_COLORS, BLOCK_AXIS_EXTENT_PROPS, INLINE_AXIS_EXTENT_PROPS, BORDER_SHORTHANDS, BORDER_WIDTH_KEYWORDS, FONT_SIZE_UNITS, CSS_PROPERTY_IDENT_RE, LEXER_TOKEN_LIMIT, VALIDATION_BUDGET, cssLexer, RESETTING_SHORTHANDS, NO_CASCADE, INHERITED_COLOR_KEYWORDS, REPORTED_TAGS, VOID_ELEMENTS2, FOREIGN_ELEMENTS, RAW_TEXT_ELEMENTS, INHERITING_KEYWORDS, INLINE_ELEMENTS, INLINE_DISPLAYS, BLOCKIFYING_VALUES, ITEM_BLOCKIFYING_DISPLAYS, REPLACED_ELEMENTS, TEXT_ONLY_HIDES, elementCascades, parents, PARENT_RELATIVE_FONT_UNITS, PARENT_RELATIVE_FONT_KEYWORDS, MATH_FUNCTIONS, parseFragment2, PLACEHOLDER_LABEL, PLACEHOLDER_KEY_LEN, LAYER2_PLACEHOLDER_RE, HIDDEN_PLACEHOLDER, COMMENT_PLACEHOLDER, UNPARSEABLE_PLACEHOLDER, mdParser, parseMarkdown, MARKDOWN_CODE_HINT, BOGUS_COMMENT_OPEN_RE, MARKUP_OPENER_RE, PHRASING_ROOTS, FLOW_HTML_PARENTS, MAX_SPLICE_ROUNDS, EXFIL_INDICATORS, KEYWORD_PARAM_NAME_RE, LONG_QUERY_THRESHOLD, ACTIVE_DATA_TYPES, DATA_URI_LENGTH_THRESHOLD, SCRIPT_SCHEMES, RELATIVE_URL_BASE, BENIGN_BLOB_PARAM_RE, BENIGN_SHORT_PARAM_RE, BENIGN_SHORT_VALUE_MAX_LEN, BENIGN_SHORT_TOTAL_MAX_LEN, PUBLIC_KEY_ID_PARAM_RE, BLOB_VALUE_MIN_LEN, OPAQUE_TOKEN_RE, VALUE_HAS_DIGIT_RE, BLOB_VALUE_B64_RE, HEX_ONLY_RE, HEX_BLOB_MIN_LEN, DIGEST_HEX_LENGTHS, BLOB_VALUE_B64URL_RE, PATH_BLOB_RE, DIGEST_MAX_LEN, BLOB_SEPARATOR_RE, BLOB_RUN_SPLIT_RE, FLOAT_RE, SRCSET_URL_RE, SRCSET_DESCRIPTORS_RE, STRING_URL_FUNCTIONS, GRAMMAR_READERS, OFF_ORIGIN_REASON, COMMENT_INTERIOR_OPENER_RE;
 var init_html4 = __esm({
   "src/html.mjs"() {
     "use strict";
@@ -50773,14 +50756,17 @@ var init_html4 = __esm({
       "noframes",
       "plaintext"
     ]);
+    INHERITING_KEYWORDS = new Set(
+      "inherit unset revert revert-layer".split(" ")
+    );
     INLINE_ELEMENTS = new Set(
       `a abbr acronym b bdi bdo big cite code data del dfn em font i ins kbd
   label mark nobr q s samp small span strike strong sub sup time tt u
   var`.split(/\s+/)
     );
     INLINE_DISPLAYS = new Set(
-      ["", "inline", "inline flow", "contents"].concat(
-        "inherit initial unset revert revert-layer".split(" ")
+      ["", "inline", "inline flow", "contents", "initial"].concat(
+        ...INHERITING_KEYWORDS
       )
     );
     BLOCKIFYING_VALUES = new Set(
@@ -50793,9 +50779,6 @@ var init_html4 = __esm({
     TEXT_ONLY_HIDES = ["font-size", "color", "text-indent"];
     elementCascades = /* @__PURE__ */ new WeakMap();
     parents = /* @__PURE__ */ new WeakMap();
-    INHERITING_KEYWORDS = new Set(
-      "inherit unset revert revert-layer".split(" ")
-    );
     PARENT_RELATIVE_FONT_UNITS = /* @__PURE__ */ new Set(["em", "ex", "ch", "cap", "ic"]);
     PARENT_RELATIVE_FONT_KEYWORDS = /* @__PURE__ */ new Set(["smaller", "larger"]);
     MATH_FUNCTIONS = /* @__PURE__ */ new Set(["calc", "min", "max", "clamp"]);
@@ -50853,7 +50836,6 @@ var init_html4 = __esm({
     BLOB_SEPARATOR_RE = /[.,]/g;
     BLOB_RUN_SPLIT_RE = /[^A-Za-z0-9+/=_-]+/;
     FLOAT_RE = /^-?(?:\d+(?:\.\d+)?|\.\d+)(?:[eE][+-]?\d+)?$/;
-    NON_NEGATIVE_INTEGER_RE = /^\d+$/;
     SRCSET_URL_RE = /[\t\n\f\r ,]*([^\t\n\f\r ,][^\t\n\f\r ]*)?/y;
     SRCSET_DESCRIPTORS_RE = /(?:[^,(]|\([^)]*(?:\)|$))*/y;
     STRING_URL_FUNCTIONS = /* @__PURE__ */ new Set(["url", "image-set", "-webkit-image-set"]);
@@ -50868,7 +50850,6 @@ var init_html4 = __esm({
       },
       css: (value) => cssUrls(value, "declarationList")
     };
-    IMAGE_ELEMENTS = /* @__PURE__ */ new Set(["img", "image"]);
     OFF_ORIGIN_REASON = {
       form: "off-origin form action",
       refresh: "off-origin meta-refresh redirect"
