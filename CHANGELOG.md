@@ -8,6 +8,12 @@ adhere to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+## [2.58.10] - 2026-10-12
+
+### Changed
+
+- Subagents now pick each model per task instead of inheriting the top-level model.
+
 ## [2.58.9] - 2026-10-11
 
 ### Fixed
