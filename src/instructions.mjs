@@ -516,7 +516,12 @@ export function scanInstructionFiles(
  *   fully-synchronous path. Defaults to `lstatSync`.
  * @returns {boolean}
  */
-export function cleanFile(absPath, { root, lstat = lstatSync }) {
+export function cleanFile(
+  absPath,
+  { root, lstat = lstatSync } = /** @type {any} */ ({}),
+) {
+  // The default keeps a bare `cleanFile(path)` (the pre-`root` call shape) on
+  // the TypeError below instead of a destructuring error.
   if (typeof root !== "string")
     throw new TypeError(
       "cleanFile requires options.root, the directory the rewrite must stay inside",

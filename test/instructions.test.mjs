@@ -725,6 +725,11 @@ describe("symlink containment", () => {
       () => cleanFile(file, /** @type {any} */ ({})),
       (err) => err instanceof TypeError && /options\.root/.test(err.message),
     );
+    // The pre-`root` call shape must reach the same message, not a destructure error.
+    assert.throws(
+      () => /** @type {any} */ (cleanFile)(file),
+      (err) => err instanceof TypeError && /options\.root/.test(err.message),
+    );
     assert.equal(readFileSync(file, "utf-8"), original);
   });
 });

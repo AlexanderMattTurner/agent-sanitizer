@@ -47743,7 +47743,10 @@ function scanInstructionFiles(globs, { cwd = process.cwd(), exclude } = {}) {
   }
   return out;
 }
-function cleanFile(absPath, { root: root2, lstat = lstatSync2 }) {
+function cleanFile(absPath, { root: root2, lstat = lstatSync2 } = (
+  /** @type {any} */
+  {}
+)) {
   if (typeof root2 !== "string")
     throw new TypeError(
       "cleanFile requires options.root, the directory the rewrite must stay inside"
