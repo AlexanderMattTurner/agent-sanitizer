@@ -240,11 +240,14 @@ plugin injects the Python engine from `agent-sanitizer[secrets]`
 
 **It is the one fail-closed layer.** A redactor that throws — unreachable
 daemon, engine error — is rethrown from `sanitizeValue` as `CRITICAL: secret
-redaction failed …` (`src/output.mjs`), so the caller suppresses the output
-rather than emit a value nothing vetted. That is distinct from an engine that
-was never provisioned: there the hooks' posture applies, passing the output
-through with a loud warning by default and suppressing it under
-`AGENT_SANITIZER_FAIL_OPEN=0`. Either way the gap is announced, never silent.
+redaction failed …` (`src/output.mjs`).
+With the layer opted in, the output hook's fault policy (`alwaysClosed` in
+`claude-hooks/sanitize-output.mjs`, resolved in `lib/hook-fault.mjs`) then
+suppresses the output under **either** `AGENT_SANITIZER_FAIL_OPEN` posture —
+and so does any other fault of that hook, since an output the hook failed on
+was never vetted for secrets either. One accepted gap: a launcher-level failure
+(no `node`, corrupt bundle) never runs the policy, so the launcher's own
+posture applies there, warning by default.
 
 **Lone surrogates are normalized to U+FFFD before the redactor sees the text.**
 A secret split by an interposed lone surrogate renders as contiguous to the
@@ -851,8 +854,10 @@ to hold precision. All other faults keep the open default, and
 **The open default is not enforceable against content.** Several of those
 failures are composable by whoever authored the payload — in the output hook
 alone, a nesting depth that overflows the sanitize walk and a redaction budget
-exhausted by many secret-shaped leaves. (A **key collision** — two field names
-that collapse to one after Layer 1 — used to be on that list. It no longer
+exhausted by many secret-shaped leaves — though with Layer 4 opted in, the
+output hook withholds on any fault whatever the knob says (see Layer 4). (A
+**key collision** — two field names that collapse to one after Layer 1 — used
+to be on that list. It no longer
 fails the hook at all: only the colliding fields are withheld, and every sibling
 field survives. Both colliding values are replaced **whole** by a marker string,
 not walked leaf-wise: a shape-preserving walk rewrites only string leaves, so a

@@ -32,6 +32,7 @@ import {
 } from "./lib/hook-io.mjs";
 import {
   registerFaultPolicy,
+  KNOB_DECIDES,
   hookFaultOutcome,
   writeFaultOutcome,
 } from "./lib/hook-fault.mjs";
@@ -121,6 +122,7 @@ function emptyPayloadParts(ctx) {
 registerFaultPolicy(HOOK_NAME, {
   event: HookEvent.INSTRUCTIONS_LOADED,
   guarded: "a loaded instruction file",
+  alwaysClosed: KNOB_DECIDES,
   open: (ctx) =>
     emptyPayloadParts(ctx) ?? {
       stderr: `${faultLine(ctx)} Passing through unguarded; set AGENT_SANITIZER_FAIL_OPEN=0 to arm the tool-call gate instead.\n`,

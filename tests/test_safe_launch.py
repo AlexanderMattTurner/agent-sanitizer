@@ -37,7 +37,7 @@ BASH_PAYLOAD = json.dumps(
 )
 
 # Values that select the fail-CLOSED posture, and values that must NOT — the
-# same split `FAIL_CLOSED_VALUES` makes in claude-hooks/lib/hook-io.mjs. `None`
+# same split `FAIL_CLOSED_VALUES` makes in claude-hooks/lib/knobs.mjs. `None`
 # means the variable is left unset entirely.
 CLOSED_VALUES = ["0", "false"]
 OPEN_VALUES = [None, "1", "", "no", "off", "true"]
@@ -131,7 +131,7 @@ def test_posture_values_are_disjoint_and_populated() -> None:
 #
 # `AGENT_SANITIZER_FAIL_OPEN` is decided in more than one language, so the
 # closed set gets spelled out more than once. `plugin/scripts/lib/fail-open.sh`
-# is GENERATED from `FAIL_CLOSED_VALUES` in `claude-hooks/lib/hook-io.mjs` and
+# is GENERATED from `FAIL_CLOSED_VALUES` in `claude-hooks/lib/knobs.mjs` and
 # sourced by the plugin launcher (that round trip is asserted in
 # plugin/test/fail-open-parity.test.mjs), but two implementations cannot reach
 # it: the repo's own `.claude/hooks/safe-launch.sh`, which ships to downstream
@@ -144,7 +144,8 @@ def test_posture_values_are_disjoint_and_populated() -> None:
 
 
 def _hook_io_says_open(fail_open: str | None, tmp_path: Path) -> bool:
-    """The JS source of truth, run for real."""
+    """The JS source of truth (lib/knobs.mjs), run for real through the
+    public `failOpenEnabled` in hook-io.mjs that every hook calls."""
     script = (
         "import(process.argv[1]).then(m => "
         "process.stdout.write(String(m.failOpenEnabled(JSON.parse(process.argv[2])))))"
@@ -232,7 +233,7 @@ def _path_with_node() -> str:
 
 
 PARITY_IMPLEMENTATIONS = {
-    "claude-hooks/lib/hook-io.mjs": _hook_io_says_open,
+    "claude-hooks/lib/knobs.mjs": _hook_io_says_open,
     "plugin/scripts/lib/fail-open.sh": _fail_open_lib_says_open,
     "plugin/scripts/safe-launch.sh": _plugin_shim_says_open,
     ".claude/hooks/safe-launch.sh": _repo_shim_says_open,
@@ -266,7 +267,7 @@ PARITY_DELEGATES = {
 
 @pytest.mark.drift_guard(
     "the posture knob is decided independently in shell (safe-launch.sh), JS "
-    "(hook-io.mjs) and the settings.json bootstrap — three runtimes that "
+    "(knobs.mjs) and the settings.json bootstrap — three runtimes that "
     "cannot share one source — so each is run for real and checked against "
     "the same expected closed-set semantics"
 )
