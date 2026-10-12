@@ -94,7 +94,7 @@ const SRC_FLOORS = {
   functions: 100,
   statements: 100,
 };
-const HOOK_FLOORS = { lines: 93, branches: 88, functions: 87, statements: 93 };
+const HOOK_FLOORS = { lines: 93, branches: 88, functions: 93, statements: 93 };
 
 /** The hook layer's mutation ratchet, same contract as the coverage floors. */
 const HOOK_SCOPE_BREAK = 30;
