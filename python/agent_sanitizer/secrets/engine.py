@@ -22,6 +22,7 @@ should instead configure ONCE with :func:`configure_plugins` and call
 """
 
 import bisect
+import dataclasses
 import functools
 import json
 import re
@@ -47,6 +48,7 @@ from .invisible import (
     identity_map,
     invisible_run_pattern,
     newline_offsets,
+    strip_escapes_with_map,
     strip_invisible,
     strip_invisible_by_line,
     strip_invisible_with_map,
@@ -314,12 +316,63 @@ def _env_value_re(value: str, charset: frozenset[int]) -> re.Pattern[str]:
     return re.compile(run.join(re.escape(c) for c in visible))
 
 
-def _env_mark(
-    placeholder_text: str, entries: list[tuple[str, str]] | None, m: re.Match[str]
-) -> str:
-    """re.sub replacement: redact a matched key span, recording its actual bytes
-    (m.group(0), not the clean value) so map-mode rehydration is byte-exact."""
-    return _mark(entries, placeholder_text, m.group(0))
+def _env_value_spans(
+    pattern: re.Pattern[str],
+    text: str,
+    unescaped: tuple[str, Sequence[int]] | None,
+) -> list[tuple[int, int]]:
+    """The ascending, disjoint spans of ``text`` an :func:`_env_value_re`
+    ``pattern`` matches: in ``text`` itself, or in ``unescaped``, its
+    :func:`strip_escapes_with_map` view, mapped back.
+
+    The gap stays invisible-only, because folding escape sequences into it would
+    make the pattern ambiguous: two of ANSI_RE's arms both match a lone C1
+    introducer, so a run of them backtracks exponentially. A view match covers
+    the escape bytes inside it and none at its edges, so map mode records the
+    exact bytes it replaced. Of two overlapping spans the earlier, then the
+    longer, wins, as ``re.sub`` would pick."""
+    spans = [m.span() for m in pattern.finditer(text)]
+    if unescaped is not None:
+        stripped, offsets = unescaped
+        spans.extend(
+            (offsets[m.start()], offsets[m.end() - 1] + 1)
+            for m in pattern.finditer(stripped)
+        )
+    disjoint: list[tuple[int, int]] = []
+    for start, end in sorted(spans, key=lambda span: (span[0], -span[1])):
+        if not disjoint or start >= disjoint[-1][1]:
+            disjoint.append((start, end))
+    return disjoint
+
+
+def _env_secrets_longest_first(
+    config: RedactorConfig, charset: frozenset[int]
+) -> list[tuple[str, str]]:
+    """``config.env_secrets`` ordered longest first by the visible length
+    :func:`_env_value_re` matches on, so a secret that is a substring of another
+    never claims the longer one's bytes."""
+    return sorted(
+        config.env_secrets.items(),
+        key=lambda kv: -len(strip_invisible(kv[1], charset)),
+    )
+
+
+def _merge_free_spans(
+    taken: list[SpliceSpan], spans: list[SpliceSpan]
+) -> list[SpliceSpan]:
+    """``taken`` plus every one of ``spans`` that overlaps none of it, both
+    ascending and disjoint, merged in one linear pass."""
+    merged: list[SpliceSpan] = []
+    i = 0
+    for span in spans:
+        while i < len(taken) and taken[i].end <= span.start:
+            merged.append(taken[i])
+            i += 1
+        if i < len(taken) and taken[i].start < span.end:
+            continue
+        merged.append(span)
+    merged.extend(taken[i:])
+    return merged
 
 
 def _redact_env_bound(
@@ -329,18 +382,31 @@ def _redact_env_bound(
     entries: list[tuple[str, str]] | None = None,
     deadline: _Deadline = _NO_DEADLINE,
 ) -> str:
-    """Redact the literal value of each configured env var from ``text``."""
+    """Redact the literal value of each configured env var from ``text``.
+
+    Every value is matched against the ORIGINAL ``text`` and the spans are
+    spliced once, so no value is ever matched inside another's placeholder.
+    Longest value first, and a span overlapping one already taken is dropped: a
+    shorter secret inside a longer one must not claim part of its bytes, which
+    would leave the rest of the longer secret unmatched and verbatim."""
     charset = config.resolved_charset()
-    for name, value in config.env_secrets.items():
+    unescaped = strip_escapes_with_map(text, charset)
+    taken: list[SpliceSpan] = []
+    for name, value in _env_secrets_longest_first(config, charset):
         deadline.check("env-bound redaction")
         if not value or len(value) < config.min_secret_len:
             continue
-        repl = functools.partial(_env_mark, placeholder(name), entries)
-        new_text, hits = _env_value_re(value, charset).subn(repl, text)
-        if hits:
-            text = new_text
+        spans = [
+            SpliceSpan(start, end, placeholder(name))
+            for start, end in _env_value_spans(
+                _env_value_re(value, charset), text, unescaped
+            )
+        ]
+        merged = _merge_free_spans(taken, spans)
+        if len(merged) > len(taken):
             found.append(name)
-    return text
+        taken = merged
+    return _splice(text, taken, entries) if taken else text
 
 
 # detect-secrets' keyword detector knows only a fixed set of field names, omitting
@@ -413,8 +479,8 @@ FIELD_VALUE_RE = re.compile(
     # breaks every fullmatch-anchored value-shape skip at once and produces the
     # false positive that mangles real content. `===` is explicit for the same
     # reason: `==` alone would leave the third `=` on the value.
-    rf"(?P<field_prefix>(?:{_FIELD_NAMES})(?:[_-][A-Za-z0-9]+)*[\"']?\s*"
-    r"(?::=|===|==|=>|:[-+?]|[:=](?![-+?=>~]))\s*"
+    rf"(?P<field_prefix>(?P<field_name>(?:{_FIELD_NAMES})(?:[_-][A-Za-z0-9]+)*)[\"']?\s*"
+    r"(?P<op>:=|===|==|=>|:[-+?]|[:=](?![-+?=>~]))\s*"
     r"(?:(?:Bearer|Token|Basic)\s+)?)"
     r"(?P<openbracket>[(\[{]?)"
     r"(?P<quote>[\"']?)"
@@ -431,12 +497,79 @@ FIELD_VALUE_RE = re.compile(
     # no issuer's token alphabet contains `;` or `,`, so the peel can only ever
     # shorten a non-credential. `.` is deliberately NOT peeled: it is a JWT's
     # own segment separator.
-    r"(?P<secret_value>[^\s\"'`{}()\[\]]{19,}[^\s\"'`{}()\[\];,])"
+    #
+    # The value takes one of four arms, tried in order. A QUOTED value is the
+    # whole span up to its own closing quote — spaces and backslash escapes
+    # included, so `"<key> tail"` and JSON's `"a\"<key>"` redact whole instead of
+    # leaking past the first space or escaped quote. The one-byte lookbehind is
+    # the quote group itself: nothing else in the prefix can end in a quote. An
+    # unquoted value is either the 20+ char run above, or a 1-19 char run that
+    # must end at a terminator; a short or spaced value is then accepted only by
+    # `_short_or_spaced_value_allowed`, which reads the whole field name. Every
+    # arm stops at a map-mode sentinel (U+E000/U+E001), as `[` stops it at a
+    # plain-mode placeholder, so an earlier redaction is never swallowed.
+    r"(?P<secret_value>"
+    r'(?<=")(?:[^"\\\n\ue000\ue001]|\\[^\n\ue000\ue001]){1,4096}(?=")'
+    r"|(?<=')(?:[^'\\\n\ue000\ue001]|\\[^\n\ue000\ue001]){1,4096}(?=')"
+    r"|[^\s\"'`{}()\[\]\ue000\ue001]{19,}[^\s\"'`{}()\[\];,\ue000\ue001]"
+    r"|[^\s\"'`{}()\[\];,\ue000\ue001]{1,19}(?=[\s;,)\]}\"'`]|$)"
+    r")"
     r"(?P<terminator>[;,]*)"
     r"(?P<closequote>(?P=quote)?)"
     r"(?P<closebracket>[)\]}]?)",
     re.IGNORECASE | re.MULTILINE,
 )
+
+# A value under FIELD_VALUE_RE's 20-char floor, or one spanning whitespace, is
+# credible only where the key/value reading is unambiguous: the credential noun
+# ENDS the field name (`token_type`, `password_min_length` hold metadata), and
+# the value is quoted, or is assigned with `=` to an upper-case env-style name
+# (`API_KEY: str` is an annotation). `DB_PASSWORD=hunter2` and
+# `"FOO_TOKEN": "s3cret"` redact; `password=prose` stays.
+_FIELD_VALUE_FLOOR = 20
+_FIELD_NOUN_RE = re.compile(f"(?:{_FIELD_NAMES})", re.IGNORECASE)
+_ENV_STYLE_NAME_RE = re.compile(r"[A-Z0-9_]+")
+# Nouns whose value may legitimately be a run of plain words (a diceware
+# passphrase); under every other noun such a run is prose about the credential
+# (`"token": "the access token"`), since no issued token is lowercase words.
+_PASSPHRASE_NOUN_RE = re.compile(r"pass(?:word|wd|phrase)|secret", re.IGNORECASE)
+_SEPARATOR_CHARS = ",;:=)]}"
+_LOWERCASE_WORDS_RE = re.compile(r"[a-z]+(?:[ \t]+[a-z]+)+")
+
+
+def _short_or_spaced_value_allowed(m: re.Match[str], value: str) -> bool:
+    """Whether a FIELD_VALUE_RE match whose ``value`` is short or spaced may
+    redact."""
+    noun = m.group("field_name")
+    if _FIELD_NOUN_RE.fullmatch(noun) is None:
+        return False
+    # Edge whitespace or a leading separator means the "opening" quote closed an
+    # outer string instead: `"password=", new: "x"` spans `, new: `.
+    if value[0].isspace() or value[-1].isspace() or value[0] in _SEPARATOR_CHARS:
+        return False
+    if _LOWERCASE_WORDS_RE.fullmatch(value) and (
+        _PASSPHRASE_NOUN_RE.fullmatch(noun) is None
+    ):
+        return False
+    if m.group("closequote"):
+        return True
+    if m.group("op") not in ("=", ":="):
+        return False
+    text, name_end = m.string, m.end("field_name")
+    name_start = _ident_run_start(text, m.start("field_name"), "_")
+    return _ENV_STYLE_NAME_RE.fullmatch(text, name_start, name_end) is not None
+
+
+_AUTH_SCHEME_RE = re.compile(r"(?:Bearer|Token|Basic)[ \t]+(?=\S)", re.IGNORECASE)
+
+
+def _quoted_auth_scheme(m: re.Match[str]) -> str:
+    """The ``Bearer ``/``Token ``/``Basic `` opening a QUOTED value, else ``""``."""
+    if not m.group("closequote"):
+        return ""
+    scheme = _AUTH_SCHEME_RE.match(m.group("secret_value"))
+    return scheme.group(0) if scheme else ""
+
 
 # Pagination/cursor fields named "<prefix>token" are opaque page cursors, not
 # credentials (Twitter/X next_token, GCP nextPageToken, AWS NextToken,
@@ -1389,6 +1522,29 @@ def _line_probe() -> LiteralProbe:
     return LiteralProbe(denylist_patterns(get_plugins()))
 
 
+def _probe_candidates(
+    text: str, stripped: str, charset: frozenset[int], deadline: _Deadline
+) -> dict[int, tuple[re.Pattern[str], ...]] | None:
+    """:meth:`LiteralProbe.candidates` over both detection views
+    :func:`_redact_line` scans: ``stripped`` (``text`` invisible-stripped) and,
+    when ``text`` holds an escape sequence, its escape-stripped view, each
+    line mapped to the union of the two verdicts. A key whose literal an escape
+    splits is visible to the second probe alone, and ruling its line out here
+    would leak it without ``_redact_line`` ever seeing it."""
+    candidates = _line_probe().candidates(stripped, deadline.check)
+    unescaped = strip_escapes_with_map(text, charset)
+    if candidates is None or unescaped is None:
+        return candidates
+    extra = _line_probe().candidates(unescaped[0], deadline.check)
+    if extra is None:
+        return None
+    for index, patterns in extra.items():
+        candidates[index] = tuple(
+            dict.fromkeys((*candidates.get(index, ()), *patterns))
+        )
+    return candidates
+
+
 @functools.cache
 def _eligible_probe() -> LiteralProbe:
     """The cross-line probe: the necessary condition for
@@ -1428,7 +1584,7 @@ _PEM_PROBE = LiteralProbe([PEM_BLOCK_RE])
 # sweeping it over the payload. Compiled from the same `_FIELD_NAMES` the regex
 # itself is built from, so the two cannot name different vocabularies; the guard
 # below is what says the noun list is still the FIRST thing the regex matches.
-_FIELD_NAME_ANCHOR_PREFIX = rf"(?P<field_prefix>(?:{_FIELD_NAMES})"
+_FIELD_NAME_ANCHOR_PREFIX = rf"(?P<field_prefix>(?P<field_name>(?:{_FIELD_NAMES})"
 if not FIELD_VALUE_RE.pattern.startswith(_FIELD_NAME_ANCHOR_PREFIX):
     raise RuntimeError(
         "FIELD_VALUE_RE no longer opens with the credential-noun alternation, so "
@@ -1480,13 +1636,13 @@ def _cross_line_candidate_spans(
     Only detector types in :func:`_cross_line_eligible_types` (long, structurally
     rigid) are eligible; the exact env-var values are always eligible.
 
-    Structural detection runs on an invisible-character-STRIPPED view of
-    ``collapsed`` (mirroring :func:`_redact_line`), so a structural secret split
-    across a newline AND carrying a spliced invisible char is still seen whole;
-    matched spans are translated back to ``collapsed``'s own offsets via the
-    strip's offset map before being returned. The env-value match already
-    tolerates spliced invisibles itself (:func:`_env_value_re`), so it runs
-    directly on ``collapsed``.
+    Structural detection runs on the same detection views of ``collapsed`` as
+    :func:`_redact_line` (invisible-stripped, plus escape-stripped when it holds
+    an escape sequence), so a structural secret split across a newline AND by a
+    spliced invisible char or escape is still seen whole; matched spans are
+    translated back to ``collapsed``'s own offsets via each view's offset map.
+    The env-value match tolerates spliced invisibles itself and consults the
+    escape view on its own (:func:`_env_value_spans`).
 
     Rather than running :func:`scan_line` over the whole (potentially huge)
     ``stripped`` view, this prefilters with :func:`_eligible_prefilter` (itself
@@ -1509,7 +1665,38 @@ def _cross_line_candidate_spans(
     """
     charset = config.resolved_charset()
     spans: list[CrossLineSpan] = []
-    stripped, offsets = strip_invisible_with_map(collapsed, charset)
+    views = [strip_invisible_with_map(collapsed, charset)]
+    unescaped = strip_escapes_with_map(collapsed, charset)
+    if unescaped is not None:
+        views.append(unescaped)
+    for stripped, offsets in views:
+        spans.extend(
+            _structural_cross_line_spans(stripped, offsets, deadline, newline_seams)
+        )
+    for name, value in _env_secrets_longest_first(config, charset):
+        deadline.check("cross-line env-value scan")
+        if not value or len(value) < config.min_secret_len:
+            continue
+        spans.extend(
+            CrossLineSpan(start, end, placeholder(name), name)
+            for start, end in _env_value_spans(
+                _env_value_re(value, charset), collapsed, unescaped
+            )
+        )
+    return spans
+
+
+def _structural_cross_line_spans(
+    stripped: str,
+    offsets: Sequence[int],
+    deadline: _Deadline,
+    newline_seams: Sequence[int],
+) -> list[CrossLineSpan]:
+    """:func:`_cross_line_candidate_spans`' structural half over ONE detection
+    view ``stripped`` of the collapse, its spans translated back through
+    ``offsets``. ``seen`` is per view: a value found in one view may sit at an
+    offset only the other can see."""
+    spans: list[CrossLineSpan] = []
     seen: set[tuple[str, str]] = set()
     # The eligible union's sweep over the whole collapse is the engine's single
     # costliest regex pass, so the probe both rules it out for a payload carrying
@@ -1570,12 +1757,6 @@ def _cross_line_candidate_spans(
                     CrossLineSpan(cs, ce, placeholder(secret.type), secret.type)
                 )
                 start = stripped.find(value, end)
-    for name, value in config.env_secrets.items():
-        deadline.check("cross-line env-value scan")
-        if not value or len(value) < config.min_secret_len:
-            continue
-        for m in _env_value_re(value, charset).finditer(collapsed):
-            spans.append(CrossLineSpan(m.start(), m.end(), placeholder(name), name))
     return spans
 
 
@@ -1716,6 +1897,15 @@ class _Group(NamedTuple):
     secret_type: str
 
 
+class _GroupKey(NamedTuple):
+    """What one :class:`_Group` redacts: a structural type's ``value`` wherever
+    it occurs, or one keyword ``span`` (``value`` is then empty)."""
+
+    secret_type: str
+    value: str
+    span: tuple[int, int] | None
+
+
 class AcceptedSpan(NamedTuple):
     """One arbitration winner on a line: the span to redact, with its raw
     detector type (not yet resolved to a placeholder)."""
@@ -1723,6 +1913,53 @@ class AcceptedSpan(NamedTuple):
     start: int
     end: int
     secret_type: str
+
+
+def _view_groups(
+    stripped: str,
+    offsets: Sequence[int],
+    web_ingress: bool,
+    patterns: tuple[re.Pattern[str], ...],
+    deadline: _Deadline,
+) -> list[tuple[_GroupKey, _Group]]:
+    """Every :class:`_Group` detected in one detection view ``stripped`` of a
+    line, its occurrences translated through ``offsets`` to the line's own
+    offsets, each keyed by what it redacts (see :class:`_GroupKey`)."""
+    secrets = (
+        list(scan_line(stripped))
+        if any(pattern.search(stripped) for pattern in patterns)
+        else []
+    )
+    groups: list[tuple[_GroupKey, _Group]] = []
+    for secret in secrets:
+        # Each pass below re-scans the WHOLE line for one value, so this loop is
+        # O(secrets x line) and is the largest remaining term on one long line.
+        # Checking here is what bounds it; the arbitration check in _redact_line
+        # runs only after every one of these scans has already happened.
+        deadline.check("per-line group build")
+        value = secret.secret_value
+        if not value or secret.type == _KEYWORD_SECRET_TYPE:
+            continue
+        occurrences = []
+        start = stripped.find(value)
+        while start != -1:
+            occurrences.append((offsets[start], offsets[start + len(value) - 1] + 1))
+            start = stripped.find(value, start + len(value))
+        groups.append(
+            (
+                _GroupKey(secret.type, value, None),
+                _Group(len(value), True, occurrences, secret.type),
+            )
+        )
+    for start, end in _keyword_candidate_spans(stripped, secrets, web_ingress):
+        span = (offsets[start], offsets[end - 1] + 1)
+        groups.append(
+            (
+                _GroupKey(_KEYWORD_SECRET_TYPE, "", span),
+                _Group(end - start, False, [span], _KEYWORD_SECRET_TYPE),
+            )
+        )
+    return groups
 
 
 def _redact_line(
@@ -1741,10 +1978,13 @@ def _redact_line(
     Detection runs against an invisible-character-STRIPPED view of ``line`` (so a
     key with a zero-width character spliced into its body is seen whole by every
     structural/plugin detector, not just the env-bound matcher's own tolerance —
-    see :func:`~agent_sanitizer.secrets.invisible.strip_invisible_with_map`),
-    then matched spans are translated back to ``line``'s ORIGINAL offsets before
-    redacting, so the invisible characters inside a redacted span disappear along
-    with the secret and everything outside a match is untouched byte-for-byte.
+    see :func:`~agent_sanitizer.secrets.invisible.strip_invisible_with_map`), and
+    on a line holding a terminal escape sequence also against the view with those
+    deleted (:func:`~agent_sanitizer.secrets.invisible.strip_escapes_with_map`).
+    Matched spans are translated back to ``line``'s ORIGINAL offsets before
+    redacting, so the invisible characters and escapes inside a redacted span
+    disappear along with the secret and everything outside a match is untouched
+    byte-for-byte.
     ``charset`` defaults to the shared SSOT charset (see
     :func:`~agent_sanitizer.secrets.invisible.default_charset`); callers on
     the hot path should pass ``config.resolved_charset()`` to avoid re-resolving
@@ -1780,11 +2020,33 @@ def _redact_line(
     bytes are removed by the wider span that covers them regardless, and the
     operator warning should say what was there, not drop it silently.
     """
-    stripped, offsets = (
+    views = [
         identity_map(line)
         if invisible_free
         else strip_invisible_with_map(line, charset)
-    )
+    ]
+    unescaped = strip_escapes_with_map(line, charset)
+    if unescaped is not None:
+        views.append(unescaped)
+    # A line none of `confirm`'s patterns match cannot hold anything scan_line
+    # would report (see _line_probe) — skip the reflection-heavy per-plugin
+    # dispatch entirely rather than pay it on every benign line of a large file.
+    patterns = _full_prefilter() if confirm is None else confirm
+    # One group per detected value across both views, so a key both views see
+    # is reported once and every occurrence either view found is redacted.
+    groups: dict[_GroupKey, _Group] = {}
+    for stripped, offsets in views:
+        for key, group in _view_groups(
+            stripped, offsets, web_ingress, patterns, deadline
+        ):
+            held = groups.get(key)
+            groups[key] = (
+                group
+                if held is None
+                else held._replace(
+                    occurrences=sorted({*held.occurrences, *group.occurrences})
+                )
+            )
     accepted: list[AcceptedSpan] = []
     # Accepted spans, disjoint by construction (an overlapping candidate is
     # skipped below) and held sorted by start so the test below is a binary
@@ -1801,45 +2063,13 @@ def _redact_line(
         after = bisect.bisect_left(span_starts, a_start)
         return after < len(span_starts) and span_starts[after] < a_end
 
-    # A line none of `confirm`'s patterns match cannot hold anything scan_line
-    # would report (see _line_probe) — skip the reflection-heavy per-plugin
-    # dispatch entirely rather than pay it on every benign line of a large file.
-    patterns = _full_prefilter() if confirm is None else confirm
-    secrets = (
-        list(scan_line(stripped))
-        if any(pattern.search(stripped) for pattern in patterns)
-        else []
-    )
-    groups: list[_Group] = []
-    for secret in secrets:
-        # Each pass below re-scans the WHOLE line for one value, so this loop is
-        # O(secrets x line) and is the largest remaining term on one long line.
-        # Checking here is what bounds it; the arbitration check further down
-        # runs only after every one of these scans has already happened.
-        deadline.check("per-line group build")
-        value = secret.secret_value
-        if not value or secret.type == _KEYWORD_SECRET_TYPE:
-            continue
-        occurrences = []
-        start = stripped.find(value)
-        while start != -1:
-            occurrences.append((start, start + len(value)))
-            start = stripped.find(value, start + len(value))
-        groups.append(_Group(len(value), True, occurrences, secret.type))
-    keyword_spans = _keyword_candidate_spans(stripped, secrets, web_ingress)
-    groups.extend(
-        _Group(end - start, False, [(start, end)], _KEYWORD_SECRET_TYPE)
-        for start, end in keyword_spans
-    )
-
     for group in sorted(
-        groups, key=lambda g: (g.length, g.is_structural), reverse=True
+        groups.values(), key=lambda g: (g.length, g.is_structural), reverse=True
     ):
         # One line can hold thousands of groups, so span arbitration is bounded
         # too, not only the scan above it.
         deadline.check("per-line redaction")
-        for start, end in group.occurrences:
-            orig_start, orig_end = offsets[start], offsets[end - 1] + 1
+        for orig_start, orig_end in group.occurrences:
             if _overlaps(orig_start, orig_end):
                 continue
             accepted.append(AcceptedSpan(orig_start, orig_end, group.secret_type))
@@ -2052,14 +2282,14 @@ def _redact_core(
     working = _redact_cross_line(working, found, config, entries, deadline)
     # Stage 1 of the per-line cascade: rule out whole lines in one C-speed sweep
     # over the payload, so the per-line prefilter and scan_line dispatch run only
-    # on the survivors. The probe is asked about the invisible-STRIPPED view for
-    # the same reason _redact_line scans one — a key with a zero-width character
-    # spliced into its body must be judged on the bytes the detector will see —
-    # and stripping deletes no newline, so a stripped line's index is its
+    # on the survivors. The probe is asked about the STRIPPED views for the same
+    # reason _redact_line scans them — a key with a zero-width character or an
+    # escape spliced into its body must be judged on the bytes the detector will
+    # see — and stripping deletes no newline, so a stripped line's index is its
     # original's.
     deadline.check("candidate-line probe")
     stripped, invisible_lines = strip_invisible_by_line(working, charset)
-    candidates = _line_probe().candidates(stripped, deadline.check)
+    candidates = _probe_candidates(working, stripped, charset, deadline)
     lines = _redact_lines(
         working.split("\n"),
         web_ingress,
@@ -2082,6 +2312,24 @@ def _redact_core(
         # The regex match supplies every positional field, so the name-based
         # gates (cursor / metadata field) are live on this path.
         candidate = Candidate.from_field_match(m)
+        # A quoted header value keeps its auth scheme visible, exactly as the
+        # unquoted `Authorization: Bearer <v>` form does through the prefix.
+        scheme = _quoted_auth_scheme(m)
+        if scheme:
+            candidate = dataclasses.replace(
+                candidate,
+                value=candidate.value[len(scheme) :],
+                value_start=m.start("secret_value") + len(scheme),
+            )
+        value = candidate.value
+        # A quoted value can enclose an earlier pass's placeholder.
+        if _REDACTED_TEXT_RE.search(value):
+            return m.group(0)
+        short_or_spaced = len(value) < _FIELD_VALUE_FLOOR or any(
+            ch.isspace() for ch in value
+        )
+        if short_or_spaced and not _short_or_spaced_value_allowed(m, value):
+            return m.group(0)
         if is_benign(candidate, web_ingress=web_ingress):
             return m.group(0)
         found.append("named secret field")
@@ -2089,7 +2337,8 @@ def _redact_core(
             m.group("field_prefix")
             + m.group("openbracket")
             + m.group("quote")
-            + _mark(entries, placeholder(), candidate.value)
+            + scheme
+            + _mark(entries, placeholder(), value)
             # Re-emitted in source order (value, terminator, closequote) so the
             # bytes outside the placeholder are preserved exactly, quoted or not.
             + m.group("terminator")

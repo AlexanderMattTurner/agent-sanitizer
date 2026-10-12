@@ -36,7 +36,12 @@ import {
   describeStripped,
   payloadInvisibleView,
   countPayloadInvisible,
+  BRAHMIC_CONSONANT_RANGES,
+  payloadVerdict,
 } from "../src/invisible.mjs";
+import { loadUcd } from "../scripts/gen-joining-type.mjs";
+import { codePointsOf } from "../scripts/lib/ucd.mjs";
+
 import { applyLayer1, stripAnsiFully } from "../src/layer1.mjs";
 import {
   assertLinear,
@@ -52,8 +57,12 @@ import {
   loneSurrogate,
 } from "./test-helpers.mjs";
 
+/** Every Indic_Syllabic_Category=Virama code point in the pinned UCD. */
+const viramas = codePointsOf((await loadUcd()).virama);
+
 const ZWNJ = cp(0x200c);
 const ZWJ = cp(0x200d);
+const s = (...codePoints) => String.fromCodePoint(...codePoints);
 const CANCEL_TAG = cp(0xe007f);
 
 /** A subregional-flag emoji tag sequence: WAVING BLACK FLAG + tag chars for the
@@ -780,20 +789,14 @@ describe("consecutive-joiner cap", () => {
     assert.deepEqual(found, [CATEGORY.CF]);
   });
 
-  it(`strips EVERY ZWJ of an over-cap emoji run (one cluster, atomic)`, () => {
-    // An emoji ZWJ run is a SINGLE grapheme cluster, and the preserve budget is
-    // charged per cluster: over the cap, the whole cluster's joiners go, rather
-    // than the first CONSECUTIVE_JOINER_CAP surviving and carving one grapheme
-    // in half. The visible pictographs are untouched either way.
+  it("keeps every ZWJ of a pictograph chain past the cap (GB11 joins each pair)", () => {
+    // A ZWJ between two pictographs is part of the glyph, not a joiner the cap
+    // meters, whether or not Unicode registered the sequence.
     const input =
       cp(0x1f468) + (ZWJ + cp(0x1f469)).repeat(CONSECUTIVE_JOINER_CAP + 12);
     const { cleaned, found } = stripInvisibleWithReport(input);
-    assert.equal(countOf(cleaned, ZWJ), 0);
-    assert.equal(
-      cleaned,
-      cp(0x1f468) + cp(0x1f469).repeat(CONSECUTIVE_JOINER_CAP + 12),
-    );
-    assert.deepEqual(found, [CATEGORY.CF]);
+    assert.equal(cleaned, input);
+    assert.deepEqual(found, []);
   });
 
   it("preserves exactly CONSECUTIVE_JOINER_CAP joiners (boundary, none stripped)", () => {
@@ -877,7 +880,8 @@ describe("document-wide preserved-joiner budget", () => {
     // on the anchor-proportional allowance instead, see below). N gap-separated
     // pictograph+VS16 pairs with NO ZWNJ/ZWJ anywhere still hit the same cap:
     // over-strip beats under-strip even for a purely selector-dense document.
-    const pictographPlusSelector = cp(0x2764) + cp(0xfe0f) + " ";
+    // An emoji-default base, so the selector is budgeted (unlike on ❤).
+    const pictographPlusSelector = cp(0x1f600) + cp(0xfe0f) + " ";
     const input = pictographPlusSelector.repeat(N);
     const { cleaned, found } = stripInvisibleWithReport(input);
     assert.equal(countOf(input, cp(0xfe0f)), N);
@@ -928,11 +932,15 @@ describe("document-wide preserved-joiner budget", () => {
 // thing it protects. Charging the whole cluster at once makes that impossible by
 // construction.
 describe("preserve budget: grapheme clusters are indivisible", () => {
-  const FAMILY_CLUSTER =
-    cp(0x1f468) + ZWJ + cp(0x1f469) + ZWJ + cp(0x1f467) + ZWJ + cp(0x1f466);
-  const FAMILY_BARE = cp(0x1f468) + cp(0x1f469) + cp(0x1f467) + cp(0x1f466);
-  // 3 ZWJ per family against the 16-unit document budget: 5 families fit (15),
-  // the 6th needs 3 more and does not.
+  // KA-SSA-MA-YA with a ZWJ after each virama: one GB9c cluster whose three
+  // joiners each draw on the budget.
+  const virama = cp(0x94d);
+  const FAMILY_CLUSTER = [0x915, 0x937, 0x92e, 0x92f]
+    .map((c) => cp(c))
+    .join(virama + ZWJ);
+  const FAMILY_BARE = FAMILY_CLUSTER.replaceAll(ZWJ, "");
+  // 3 ZWJ per cluster against the 16-unit document budget: 5 clusters fit
+  // (15), the 6th needs 3 more and does not.
   const FAMILIES_THAT_FIT = 5;
 
   const clustersOf = (text) =>
@@ -966,7 +974,7 @@ describe("preserve budget: grapheme clusters are indivisible", () => {
   };
 
   for (const n of [FAMILIES_THAT_FIT, FAMILIES_THAT_FIT + 1, 8, 12]) {
-    it(`carves ${n} family emoji all-or-nothing per cluster`, () => {
+    it(`carves ${n} conjuncts all-or-nothing per cluster`, () => {
       const input = FAMILY_CLUSTER.repeat(n);
       const kept = Math.min(n, FAMILIES_THAT_FIT);
       assert.equal(
@@ -990,10 +998,11 @@ describe("preserve budget: grapheme clusters are indivisible", () => {
   });
 
   it("keeps multi-preservable clusters whole under the CONSECUTIVE caps too", () => {
-    // 🏳️‍🌈 is VS16 + ZWJ inside ONE cluster: two preservables that must rise and
-    // fall together no matter which limit bites.
-    const rainbow = cp(0x1f3f3) + cp(0xfe0f) + ZWJ + cp(0x1f308);
-    for (const n of [1, 6, 9, 20]) assertNoPartialCarve(rainbow.repeat(n));
+    // VS16 + ZWJ in ONE cluster, both budgeted (the bare skin tone is neither a
+    // text-default base nor a pictograph): they rise and fall together.
+    const pair = `x${cp(0x1f3fd)}${cp(0xfe0f)}${ZWJ}${cp(0x1f600)}`;
+    for (const n of [1, 6, 9, 20]) assertNoPartialCarve(pair.repeat(n));
+    assert.notEqual(stripInvisible(pair.repeat(20)), pair.repeat(20));
   });
 
   it("judges each cluster on the run its own leading gap resets", () => {
@@ -1195,19 +1204,84 @@ describe("stripInvisible: emoji tag sequences (subregional flags)", () => {
     assert.equal(stripInvisible(once), once);
   });
 
-  it("atomically strips a well-formed flag once the preserve budget overruns", () => {
-    // Each 🏴gbsct sequence spends 6 tag units of the document-wide preserve
-    // budget (TOTAL_PRESERVED_JOINER_BUDGET = 16). Two flags fit (12 ≤ 16); the
-    // third's whole tag run overruns (18 > 16) and is stripped ATOMICALLY —
-    // never left as a malformed partial run — leaving only its bare flag base.
-    // Total tag chars (18) stay under the scatter floor, so this exercises the
-    // budget cut specifically, not the floor.
-    const flag = tagCode("gbsct");
-    const { cleaned, found } = stripInvisibleWithReport(
-      `${flag} ${flag} ${flag}`,
+  it("keeps every registered flag however many the document holds", () => {
+    // A registered flag's tags are glyph spelling: forty Scotland flags (240
+    // tag units, far past PRESERVE_HARD_CAP) survive byte for byte.
+    const flags = Array(40).fill(tagCode("gbsct")).join(" ");
+    assert.ok(6 * 40 > PRESERVE_HARD_CAP);
+    const { cleaned, found } = stripInvisibleWithReport(flags);
+    assert.equal(cleaned, flags);
+    assert.deepEqual(found, []);
+  });
+});
+
+// ─── Emoji glyph spelling ───────────────────────────────────────────────────────
+// VS16 on a text-default base and a ZWJ GB11 keeps inside one grapheme draw on
+// no preserve budget; a ZWJ GB11 does not join, and a selector that changes
+// nothing visible, stay metered.
+describe("registered emoji glyphs", () => {
+  const docOf = (unit) => Array(100).fill(unit).join(" ");
+
+  for (const [name, unit] of [
+    ["rainbow flag", s(0x1f3f3, 0xfe0f, 0x200d, 0x1f308)],
+    ["rainbow flag spelled without its VS16", s(0x1f3f3, 0x200d, 0x1f308)],
+    [
+      "family of four",
+      s(0x1f468, 0x200d, 0x1f469, 0x200d, 0x1f467, 0x200d, 0x1f466),
+    ],
+    ["skin-toned technologist", s(0x1f469, 0x1f3fd, 0x200d, 0x1f4bb)],
+    ["emoji-presentation heart", s(0x2764, 0xfe0f)],
+    ["emoji-presentation warning sign", s(0x26a0, 0xfe0f)],
+    // Not RGI: GB11 joins any two pictographs (see THREAT-MODEL.md).
+    ["unregistered ZWJ chain", s(0x1f600, 0x200d, 0x1f600)],
+    [
+      "registered family extended by one more pictograph",
+      s(0x1f468, 0x200d, 0x1f469, 0x200d, 0x1f467, 0x200d, 0x1f600),
+    ],
+  ])
+    it(`keeps a hundred of the ${name}, unreported and not payload`, () => {
+      const doc = docOf(unit);
+      const { cleaned, found } = stripInvisibleWithReport(doc);
+      assert.equal(cleaned, doc);
+      assert.deepEqual(found, []);
+      assert.equal(payloadVerdict(doc).payloadCapable, false);
+    });
+
+  for (const [name, unit, category] of [
+    [
+      "a ZWJ after a bare skin tone",
+      s(0x78, 0x1f3fd, 0x200d, 0x1f600),
+      CATEGORY.CF,
+    ],
+    [
+      "a VS16 on an emoji-default base",
+      s(0x1f600, 0xfe0f),
+      CATEGORY.VARIATION_SELECTORS,
+    ],
+    [
+      "a text-presentation VS15",
+      s(0x2764, 0xfe0e),
+      CATEGORY.VARIATION_SELECTORS,
+    ],
+    ["a doubled VS16", s(0x2764, 0xfe0f, 0xfe0f), CATEGORY.VARIATION_SELECTORS],
+  ])
+    it(`meters ${name}: a hundred overrun the budget and are payload`, () => {
+      const doc = docOf(unit);
+      const { cleaned, found } = stripInvisibleWithReport(doc);
+      assert.notEqual(cleaned, doc);
+      assert.deepEqual(found, [category]);
+      assert.equal(payloadVerdict(doc).payloadCapable, true);
+    });
+
+  it("strips a registered glyph's joiners once payload switches the carve-out off", () => {
+    const rainbow = s(0x1f3f3, 0xfe0f, 0x200d, 0x1f308);
+    const doc = Array(SCATTERED_THRESHOLD)
+      .fill(`x${cp(0x200b)}`)
+      .join(" ");
+    assert.equal(
+      stripInvisible(`${doc} ${rainbow}`),
+      `${doc.replaceAll(cp(0x200b), "")} ${cp(0x1f3f3)}${cp(0x1f308)}`,
     );
-    assert.equal(cleaned, `${flag} ${flag} ${cp(0x1f3f4)}`);
-    assert.deepEqual(found, [CATEGORY.CF]);
   });
 });
 
@@ -1308,32 +1382,80 @@ describe("stripInvisible: ideographic variation sequences", () => {
 // per-character variation-selected CJK run can't smuggle bits), and a real
 // Brahmic-consonant requirement before a virama (so a bare halant + ZWJ is not
 // mistaken for a conjunct). Each strip assertion is paired with a preserve one.
-describe("stripInvisible: preserve budget has an absolute hard cap", () => {
+describe("stripInvisible: the preserve budget's hard cap binds cover text, not joining letters", () => {
   const ZWNJ_CH = cp(0x200c);
   const countOf = (s, ch) => s.split(ch).length - 1;
+  // One Persian ZWNJ word: three joining letters (meem, yeh, khah) and the ZWNJ
+  // between the first two, which does real rendering work.
+  const word = cp(0x645) + cp(0x6cc) + ZWNJ_CH + cp(0x62e);
 
-  it(`never preserves more than PRESERVE_HARD_CAP joiners no matter how much cover text`, () => {
-    // 200 space-separated Persian ZWNJ words: each ZWNJ is meaningful (so none
-    // counts toward the scatter floor) and every gap resets the per-cluster cap,
-    // so ONLY the document-wide limit bounds the total. visibleLen ≈ 800 ⇒
-    // ceil(visibleLen / PER_VISIBLE) = 100, which WITHOUT the hard cap would
-    // preserve 100; the cap holds it to PRESERVE_HARD_CAP (64).
-    const unit = cp(0x645) + cp(0x6cc) + ZWNJ_CH + cp(0x62e) + " ";
-    const { cleaned, found } = stripInvisibleWithReport(unit.repeat(200));
+  it("cover text OUTSIDE the joining scripts cannot widen the allowance past PRESERVE_HARD_CAP", () => {
+    // 100 words, each padded with 30 ASCII characters: visibleLen = 3,300, so
+    // the proportional allowance (413) is capped at PRESERVE_HARD_CAP, and the
+    // 300 joining letters fund only ceil(300 / 8) = 38 — below the cap.
+    const { cleaned, found } = stripInvisibleWithReport(
+      (word + " " + "x".repeat(29)).repeat(100),
+    );
     assert.equal(countOf(cleaned, ZWNJ_CH), PRESERVE_HARD_CAP);
     assert.deepEqual(found, [CATEGORY.CF]);
   });
 
-  it("preserves every joiner when the count sits under the hard cap (precision)", () => {
-    // 40 words ⇒ 40 ZWNJ, below PRESERVE_HARD_CAP (64) and below ceil(160/8)=20?
-    // visibleLen ≈ 160 ⇒ ceil/8 = 20, floored to TOTAL_PRESERVED_JOINER_BUDGET…
-    // 40 would still overrun that floor, so pad each gap to keep the allowance
-    // above 40: 20-space gaps ⇒ visibleLen ≈ 40*23 = 920 ⇒ allowance 64, so all
-    // 40 survive. Counter-case proving the cap only clips the SURPLUS.
-    const unit = cp(0x645) + cp(0x6cc) + ZWNJ_CH + cp(0x62e) + " ".repeat(20);
+  it("joining letters fund the allowance at PRESERVED_JOINER_PER_VISIBLE, and a denser channel still trips", () => {
+    // 200 space-separated words: 600 joining letters buy ceil(600 / 8) = 75,
+    // above the cap; 200 joiners (one per three letters) overrun it, so the
+    // surplus is stripped and reported.
+    const { cleaned, found } = stripInvisibleWithReport(
+      (word + " ").repeat(200),
+    );
+    assert.equal(
+      countOf(cleaned, ZWNJ_CH),
+      Math.ceil(600 / PRESERVED_JOINER_PER_VISIBLE),
+    );
+    assert.ok(countOf(cleaned, ZWNJ_CH) > PRESERVE_HARD_CAP);
+    assert.deepEqual(found, [CATEGORY.CF]);
+  });
+
+  it("preserves every joiner when the count sits under the allowance (precision)", () => {
+    // 20-space gaps keep visibleLen ≈ 40 * 23 = 920 ⇒ allowance 64, so all 40
+    // survive. Counter-case proving the cap only clips the SURPLUS.
+    const unit = word + " ".repeat(20);
     const { cleaned, found } = stripInvisibleWithReport(unit.repeat(40));
     assert.equal(countOf(cleaned, ZWNJ_CH), 40);
     assert.deepEqual(found, []);
+  });
+
+  // Joining letters buy room for JOINERS: a selector beside Persian text does no
+  // orthographic work, so 800 letters must not fund 100 hidden selector bits.
+  const BEH = cp(0x628);
+  for (const [name, selector, unit] of [
+    ["registered variation selectors", cp(0xfe00), `0${cp(0xfe00)} `],
+    // On an emoji-default base, so the selector is redundant and budgeted; on
+    // ❤ it would be the registered glyph spelling, which no budget meters.
+    [
+      "emoji presentation selectors",
+      cp(0xfe0f),
+      `${cp(0x1f600)}${cp(0xfe0f)} `,
+    ],
+  ])
+    it(`joining-letter cover cannot widen the allowance for ${name}`, () => {
+      const text = BEH.repeat(800) + unit.repeat(100);
+      const { cleaned, found } = stripInvisibleWithReport(text);
+      assert.equal(countOf(cleaned, selector), PRESERVE_HARD_CAP);
+      assert.deepEqual(found, [CATEGORY.VARIATION_SELECTORS]);
+      assert.equal(payloadVerdict(text).payloadCapable, true);
+    });
+
+  it("keeps every selector under the cap beside a joiner-dense Persian body (precision)", () => {
+    // 600 joining letters fund 75 joiners; the 10 selectors fit under the
+    // capped allowance, so they all survive, and only joiners are trimmed.
+    const text = `0${cp(0xfe00)} `.repeat(10) + (word + " ").repeat(200);
+    const { cleaned, found } = stripInvisibleWithReport(text);
+    assert.equal(countOf(cleaned, cp(0xfe00)), 10);
+    assert.equal(
+      countOf(cleaned, ZWNJ_CH),
+      Math.ceil(600 / PRESERVED_JOINER_PER_VISIBLE) - 10,
+    );
+    assert.deepEqual(found, [CATEGORY.CF]);
   });
 });
 
@@ -1405,6 +1527,70 @@ describe("stripInvisible: virama joiner requires a real consonant base", () => {
     const { cleaned, found } = stripInvisibleWithReport(conjunct);
     assert.equal(cleaned, conjunct);
     assert.deepEqual(found, []);
+  });
+});
+
+describe("stripInvisible: a ZWJ BEFORE a virama selects the reph/eyelash form", () => {
+  const RA = cp(0x930); // Devanagari RA
+  const VIRAMA = cp(0x94d);
+
+  // Consonant + ZWJ + virama spells a different glyph; dropping the ZWJ rewrites
+  // the word into its reph spelling.
+  for (const [name, word] of [
+    ["Bengali RA with ya-phala", s(0x9b0, 0x200d, 0x9cd, 0x9af, 0x9be, 0x9ac)],
+    ["Marathi eyelash RA", s(0x930, 0x200d, 0x94d, 0x92f)],
+  ])
+    it(`preserves ${name} (precision)`, () => {
+      assert.deepEqual(stripInvisibleWithReport(word), {
+        cleaned: word,
+        found: [],
+      });
+    });
+
+  for (const [name, input, expected] of [
+    ["an ASCII base", `a${ZWJ}${VIRAMA}b`, `a${VIRAMA}b`],
+    ["no base at all", `${ZWJ}${VIRAMA}${cp(0x92f)}`, `${VIRAMA}${cp(0x92f)}`],
+    ["no virama after it", `${RA}${ZWJ}${cp(0x92f)}`, `${RA}${cp(0x92f)}`],
+  ])
+    it(`strips the ZWJ with ${name}`, () => {
+      assert.deepEqual(stripInvisibleWithReport(input), {
+        cleaned: expected,
+        found: [CATEGORY.CF],
+      });
+    });
+
+  // Every virama the UCD names, in its own script (the ENGINE's \p{Script=…},
+  // so a mislabelled span cannot vouch for itself): a missed script fails here.
+  const scripts = [...new Set(BRAHMIC_CONSONANT_RANGES.map(([tag]) => tag))];
+  it("has viramas to check", () => assert.ok(viramas.length >= 27));
+  for (const virama of viramas) {
+    const name = `U+${virama.toString(16).toUpperCase()}`;
+    it(`preserves both joiner spellings around the virama ${name}`, () => {
+      const char = String.fromCodePoint(virama);
+      const script = scripts.find((tag) =>
+        new RegExp(`\\p{Script=${tag}}`, "u").test(char),
+      );
+      assert.ok(script, `${name} has no consonants in its own script`);
+      const spans = BRAHMIC_CONSONANT_RANGES.filter(([tag]) => tag === script);
+      const first = spans[0][1];
+      const last = spans[spans.length - 1][2];
+      for (const word of [
+        s(first, virama, 0x200d, last),
+        s(first, virama, 0x200c, last),
+        s(first, 0x200d, virama, last),
+      ])
+        assert.deepEqual(stripInvisibleWithReport(word), {
+          cleaned: word,
+          found: [],
+        });
+    });
+  }
+
+  it("strips a chain of them past the preserve budget", () => {
+    const chain = `${RA}${ZWJ}${VIRAMA}`.repeat(200);
+    const { cleaned, found } = stripInvisibleWithReport(chain);
+    assert.ok(cleaned.split(ZWJ).length - 1 <= PRESERVE_HARD_CAP);
+    assert.deepEqual(found, [CATEGORY.CF]);
   });
 });
 

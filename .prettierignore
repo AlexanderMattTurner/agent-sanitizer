@@ -55,3 +55,9 @@ src/cf-charset.mjs
 # Generated: scripts/gen-css-syntax.mjs writes one CSS grammar per line; prettier
 # would wrap every long one onto two. The generator owns the format.
 src/css-syntax-data.mjs
+
+# Generated range tables (scripts/gen-unicode-properties.mjs). Prettier collapses
+# a one-span table onto one line and keeps a longer one a row per line, so
+# its output would differ from the generator's by table length; the generator
+# owns the format and test/unicode-properties.test.mjs compares bytes.
+src/unicode-properties.mjs

@@ -30,11 +30,22 @@ table](./README.md#entry-points) maps each to its import.
 
 - A **single leading BOM** (a legitimate marker); interior BOMs are stripped.
 - **ZWNJ (U+200C) / ZWJ (U+200D)** in genuine linguistic context: between two
-  letters of a script whose orthography requires them (Arabic, Devanagari,
-  Bengali, Gurmukhi, Gujarati, Oriya, Tamil, Telugu, Kannada, Malayalam,
-  Sinhala) or inside an emoji ZWJ sequence. The carve-out fires only when **both**
+  letters of a script whose orthography requires them (the Arabic-family
+  cursive scripts by Joining_Type, and every script that owns a Unicode
+  virama — Devanagari through Sinhala, plus Brahmi, Grantha, Javanese,
+  Balinese, Newa and the rest — after a virama on a consonant), a ZWJ between
+  a consonant and the virama after it (the Bengali RA with ya-phala, the
+  Marathi eyelash RA), or inside an emoji ZWJ sequence.
+  The carve-out fires only when **both**
   neighbors clearly belong to the context, and it is disabled once the total
   invisible count crosses a scatter floor—over-stripping beats under-stripping.
+- **An emoji glyph's own spelling** draws on no preserve budget: the VS16 on a
+  text-default emoji (❤, ⚠), a ZWJ that UAX #29's GB11 keeps inside one
+  grapheme (🏳️‍🌈, 👨‍👩‍👧‍👦), and a registered subdivision flag's tags. A VS15, a
+  VS16 on an emoji-default base, and a ZWJ GB11 does not join stay metered.
+  Residuals: one visible bit per text-default emoji (VS16 or not), and about one
+  hidden bit per adjacent pair of pictographs (an unregistered ZWJ like 😀‍😀
+  renders as two glyphs either way). Past the scatter floor all are stripped.
 - **Blank fillers doing real work in their own script**: the Braille blank
   (U+2800) beside a real cell, a Hangul filler beside a real jamo/syllable. A
   _run_ of fillers has only fillers for neighbors, so it fails the anchor and is
@@ -64,8 +75,11 @@ does not run a fixed sequence of passes; it iterates the whole
 deletes at least one character), and only once that is stable does it sweep any
 residual raw control introducer—7-bit ESC (U+001B) or any 8-bit C1 control
 (U+0080–U+009F)—outright. Sweeping earlier would strand a hidden control as
-visible text; a final unconditional sweep after the loop keeps the
-no-raw-introducer guarantee independent of the iteration bound. The result
+visible text. Input that outruns the iteration bound—escapes hidden behind
+selectors the carve-out keeps until each removal shrinks its budget—falls back
+to a carve-out-free strip of every invisible, every sequence and every
+introducer, so neither guarantee below depends on the bound; the carve-out is
+given up only on input built to outrun it. The result
 carries no raw ANSI introducer for _any_ input, and re-cleaning it reproduces
 it exactly—the idempotence the Edit-repair rehydrator's soundness gate assumes.
 One tokenizer answers every ANSI question (what to splice, and whether what was
@@ -313,15 +327,27 @@ one in a command spoofs what the user is shown as it runs.
 Display-only SGR colour is the exception, and is preserved byte-for-byte. The
 SGR grammar is closed — parameters and a final `m` — so it restyles visible text
 and can do nothing else; stripping it costs a model the colourized fixture, TUI
-golden file or prompt string it deliberately wrote, and buys no safety. Two
-shapes end the exception, both of them the model-sees/human-sees divergence
+golden file or prompt string it deliberately wrote, and buys no safety. Three
+shapes end the exception, all of them the model-sees/human-sees divergence
 rather than a display choice: a CONCEAL parameter (`ESC[8m`), which blanks the
-text that follows for a human while its bytes stay readable to a model, and a
-run of sequences with nothing that RENDERS between them, which puts no glyph on
-the screen at all and is therefore carrying data rather than colour. Either one
-strips the whole field.
+text that follows for a human while its bytes stay readable to a model; a
+foreground painted in its own background (`ESC[30;40m`) while a glyph goes by,
+which hides it the same way; and a run of sequences with nothing that RENDERS
+between them, which puts no glyph on the screen at all and is therefore
+carrying data rather than colour. Conceal or a matching foreground still in
+force when the text ENDS counts too: rendition outlives its bytes. Any one
+strips the whole field, and the prompt gate blocks on the same answer. The
+invisible verdict reads the de-ANSI'd view on both surfaces, since SGR bytes
+render nothing and must not buy preserved joiners and selectors.
 
-Both shapes are read as terminal semantics rather than token shapes, because a
+The colour match is judged only where unambiguous: a default colour matches
+nothing, bold over a basic colour may render brighter, and whitespace hides
+nothing. Block Elements (U+2580–U+259F) are judged across the whole text: in
+matching colours each paints a solid cell, so one glyph repeated (a half-block
+image's flat region) is styling, while a second distinct one is a hidden
+channel.
+
+All three are read as terminal semantics rather than token shapes, because a
 reader that matches shapes is one encoding away from the wrong answer. Conceal
 is threaded as STATE, so a reveal or reset later in the same sequence cancels it
 (`ESC[8;28;31m` renders red and visible) while an erase between two sequences
@@ -342,7 +368,10 @@ its colour.
 Both protections run to a fixed point over each field rather than once each,
 because they feed one another: removing an invisible character completes a
 sequence that was incomplete when the terminal stage ran (`ESC[`⟨ZWSP⟩`2J`), and
-removing a sequence makes invisibles adjacent that were not.
+removing a sequence makes invisibles adjacent that were not. A field still
+changing at the round bound gets the same carve-out-free strip as Layer 1's
+fallback rather than being written unfinished, and a field the strip leaves
+byte for byte is reported as untouched, never as a rewrite.
 
 ## Confusable folding (tool input)
 

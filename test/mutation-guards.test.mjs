@@ -403,13 +403,23 @@ describe("guard: carve-out preserve caps hold at the exact constant boundary", (
   const countOf = (s, ch) => s.split(ch).length - 1;
   const ZWNJ = cp(0x200c);
 
-  it("preserves EXACTLY PRESERVE_HARD_CAP joiners under unbounded cover text", () => {
-    // visibleLen ≈ 800 ⇒ ceil(visibleLen / 8) = 100; the Math.min ceiling clips
-    // that to PRESERVE_HARD_CAP. A mutant dropping the Math.min preserves 100,
-    // and an off-by-one shifts the count — both die on this exact-equality.
-    const unit = cp(0x645) + cp(0x6cc) + ZWNJ + cp(0x62e) + " ";
+  it("preserves EXACTLY PRESERVE_HARD_CAP joiners under non-joining cover text", () => {
+    // visibleLen ≈ 4600 ⇒ ceil(visibleLen / 8) = 575; the Math.min ceiling clips
+    // that to PRESERVE_HARD_CAP, and the 400 joining letters fund only 50. A
+    // mutant dropping the Math.min preserves 200, and an off-by-one shifts the
+    // count — both die on this exact-equality.
+    const unit = cp(0x645) + ZWNJ + cp(0x62e) + " " + "x".repeat(20);
     const { cleaned } = stripInvisibleWithReport(unit.repeat(200));
     assert.equal(countOf(cleaned, ZWNJ), PRESERVE_HARD_CAP);
+  });
+
+  it("lets joining-script cover text fund one joiner per eight letters past the cap", () => {
+    // 600 joining letters ⇒ ceil(600 / 8) = 75 > PRESERVE_HARD_CAP: a long
+    // Persian text keeps its ZWNJs past the 64th.
+    const unit = cp(0x645) + cp(0x6cc) + ZWNJ + cp(0x62e) + " ";
+    const { cleaned } = stripInvisibleWithReport(unit.repeat(200));
+    assert.ok(75 > PRESERVE_HARD_CAP);
+    assert.equal(countOf(cleaned, ZWNJ), 75);
   });
 
   it("preserves EXACTLY CONSECUTIVE_SELECTOR_CAP selectors in an unbroken CJK run", () => {

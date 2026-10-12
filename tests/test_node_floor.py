@@ -48,15 +48,6 @@ NOT_THE_FLOOR = {
     ("plugin/scripts/safe-launch.sh", "22.1"): (
         "the release NODE_COMPILE_CACHE first shipped in — a runtime feature fact"
     ),
-    ("scripts/gen-standardized-variants.mjs", "22"): (
-        "which Node's bundled ICU the vendored Unicode data matches"
-    ),
-    ("scripts/gen-joining-type.mjs", "22"): (
-        "the same bundled-ICU fact, from the joining-type generator"
-    ),
-    ("scripts/data/README.md", "22"): (
-        "the same bundled-ICU fact, from the vendored data's README"
-    ),
     ("plugin/test/plugin-bundle.test.mjs", "18"): (
         "the too-old runtime a fixture stubs to drive the below-floor diagnosis"
     ),

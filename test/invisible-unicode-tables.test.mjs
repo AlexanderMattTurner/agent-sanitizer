@@ -3,14 +3,14 @@
  * carve-outs.
  *
  * The carve-out decides whether an invisible does real rendering work from the
- * script of its neighbour. That question is answered by Unicode's own tables, so
- * the module asks the runtime for them (`\p{Unified_Ideograph}`,
- * `\p{Script=Hangul}`, `\p{Script=Braille}`) instead of carrying transcribed
- * ranges that go stale one Unicode revision at a time. These tests pin the
+ * script of its neighbour. That question is answered by Unicode's own tables,
+ * compiled from the pinned UCD 17 package into src/unicode-properties.mjs
+ * (Unified_Ideograph, Script=Hangul, Script=Braille) rather than read from the
+ * running Node's `\p{…}`, whose answer moves with its ICU. These tests pin the
  * derivation END-TO-END through the public API: for every code point in a scan
  * window, "does the carve-out treat this as an anchor?" must equal "does the
- * property hold?". A drift, a swapped property, or a re-introduced literal table
- * fails here.
+ * pinned property hold?" — on every Node. test/unicode-properties.test.mjs ties
+ * the pinned tables to the live escapes on a Node whose Unicode is the pin.
  *
  * The one table that CANNOT be derived — the Brahmic consonant spans, whose UCD
  * property (Indic_Syllabic_Category) JS RegExp does not expose — is instead
@@ -25,6 +25,12 @@ import assert from "node:assert/strict";
 
 import { stripInvisible, BRAHMIC_CONSONANT_RANGES } from "../src/invisible.mjs";
 import { cp } from "./test-helpers.mjs";
+import {
+  SCRIPT_BRAILLE,
+  SCRIPT_HANGUL,
+  UNIFIED_IDEOGRAPH,
+  inSpans,
+} from "../src/unicode-properties.mjs";
 
 const IVS17 = cp(0xe0100); // an ideographic variation selector
 const HANGUL_FILLER = cp(0x115f);
@@ -48,7 +54,7 @@ const expand = (ranges) => {
  * to pass on two empty sets.
  * @param {number[]} window
  * @param {(ch: string) => boolean} observed  via the public API
- * @param {(ch: string) => boolean} expected  via a Unicode property escape
+ * @param {(ch: string) => boolean} expected  via the pinned property table
  */
 function assertAnchorSetsAgree(window, observed, expected) {
   const hex = (c) => `U+${c.toString(16).toUpperCase()}`;
@@ -68,18 +74,27 @@ function assertAnchorSetsAgree(window, observed, expected) {
 }
 
 // ─── CJK ideographs (the base of an ideographic variation sequence) ───────────
-// Derived set: \p{Unified_Ideograph} plus the two CJK Compatibility Ideograph
-// BLOCKS (not Unified_Ideograph, and JS exposes no \p{Block=…}; block bounds are
-// immutable under Unicode's stability policy).
-const UNIFIED_PLUS_COMPAT =
-  /[\p{Unified_Ideograph}\u{F900}-\u{FAFF}\u{2F800}-\u{2FA1F}]/u;
+// Derived set: the pinned Unified_Ideograph plus the two CJK Compatibility
+// Ideograph BLOCKS (not Unified_Ideograph; block bounds are immutable under
+// Unicode's stability policy).
+const UNIFIED_PLUS_COMPAT = {
+  /** @param {string} ch */
+  test: (ch) => {
+    const c = /** @type {number} */ (ch.codePointAt(0));
+    return (
+      inSpans(UNIFIED_IDEOGRAPH, c) ||
+      (c >= 0xf900 && c <= 0xfaff) ||
+      (c >= 0x2f800 && c <= 0x2fa1f)
+    );
+  },
+};
 const CJK_SCAN = expand([
   [0x2e00, 0xffff], // radicals, Kangxi, Ext A, URO, compatibility ideographs
   [0x20000, 0x334ff], // Ext B–J and the compatibility supplement
 ]);
 
 describe("Unicode contract: CJK ideograph anchors", () => {
-  it("equal \\p{Unified_Ideograph} ∪ the compatibility-ideograph blocks", () => {
+  it("equal the pinned Unified_Ideograph ∪ the compatibility-ideograph blocks", () => {
     assertAnchorSetsAgree(
       CJK_SCAN,
       (ch) => stripInvisible(ch + IVS17).includes(IVS17),
@@ -149,21 +164,23 @@ describe("Unicode contract: CJK ideograph anchors", () => {
 describe("Unicode contract: blank-filler anchors", () => {
   const BMP = expand([[0x0000, 0xffff]]);
 
-  it("Hangul filler anchors equal \\p{Script=Hangul} minus the fillers", () => {
+  it("Hangul filler anchors equal the pinned Script=Hangul minus the fillers", () => {
     assertAnchorSetsAgree(
       BMP,
       (ch) => stripInvisible(HANGUL_FILLER + ch).includes(HANGUL_FILLER),
       (ch) =>
-        /\p{Script=Hangul}/u.test(ch) &&
+        inSpans(SCRIPT_HANGUL, /** @type {number} */ (ch.codePointAt(0))) &&
         !HANGUL_FILLERS.has(/** @type {number} */ (ch.codePointAt(0))),
     );
   });
 
-  it("Braille blank anchors equal \\p{Script=Braille} minus the blank", () => {
+  it("Braille blank anchors equal the pinned Script=Braille minus the blank", () => {
     assertAnchorSetsAgree(
       BMP,
       (ch) => stripInvisible(ch + BRAILLE_BLANK).includes(BRAILLE_BLANK),
-      (ch) => /\p{Script=Braille}/u.test(ch) && ch !== BRAILLE_BLANK,
+      (ch) =>
+        inSpans(SCRIPT_BRAILLE, /** @type {number} */ (ch.codePointAt(0))) &&
+        ch !== BRAILLE_BLANK,
     );
   });
 });

@@ -2,9 +2,9 @@
  * SSOT contract for the generated Unicode Joining_Type / virama / Brahmic
  * consonant tables.
  *
- * src/joining-type.mjs is generated from the vendored UCD slices by
+ * src/joining-type.mjs is generated from the pinned UCD package by
  * scripts/gen-joining-type.mjs. This test re-derives the tables from the SAME
- * slices and asserts the committed module still agrees — so editing the source
+ * package and asserts the committed module still agrees — so editing the source
  * data without regenerating (or a Stryker mutant flipping a range bound) fails
  * CI, exactly as an SSOT round-trip should.
  *
@@ -18,6 +18,10 @@
  */
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+
+import { unsandbox } from "./helpers/repo-root.mjs";
 
 import {
   joiningType,
@@ -26,14 +30,16 @@ import {
   BRAHMIC_CONSONANT_RANGES,
   UNICODE_VERSION,
 } from "../src/joining-type.mjs";
-import { deriveTables, loadUcd } from "../scripts/gen-joining-type.mjs";
+import {
+  deriveTables,
+  loadUcd,
+  render,
+  viramaScripts,
+} from "../scripts/gen-joining-type.mjs";
 
-const { joiningJson, indicJson, consonantJson, version } = loadUcd();
-const { joining, virama, brahmic } = deriveTables(
-  joiningJson,
-  indicJson,
-  consonantJson,
-);
+const ucd = await loadUcd();
+const { version } = ucd;
+const { joining, virama, brahmic } = deriveTables(ucd);
 
 const MAX_CP = 0x10ffff;
 
@@ -65,7 +71,7 @@ function probePoints(ranges) {
 }
 
 describe("joining-type generated module", () => {
-  it("pins the Unicode version to the pinned ucd-full release", () => {
+  it("pins the Unicode version to the pinned UCD", () => {
     assert.equal(UNICODE_VERSION, version);
   });
 
@@ -158,4 +164,67 @@ describe("joining-type generated module", () => {
   }
   it("does not treat a plain consonant as a virama", () =>
     assert.equal(isVirama(0x915), false));
+});
+
+// The consonant table's script set is DERIVED from the viramas, never listed:
+// every script that owns a virama contributes its consonants, and no other
+// script does. The engine's own \p{Script=…} is the independent witness for
+// each virama's script, so the pinned Script table cannot vouch for itself.
+describe("Brahmic consonant scripts are exactly the scripts that own a virama", () => {
+  const tagged = [...new Set(BRAHMIC_CONSONANT_RANGES.map(([s]) => s))].sort();
+
+  it("the table's script tags equal the derived virama scripts", () => {
+    assert.deepEqual(tagged, viramaScripts(ucd.virama, ucd.scripts));
+  });
+
+  it("every virama's engine-reported script has consonants in the table", () => {
+    assert.ok(virama.length > 0);
+    for (const [start, end] of virama)
+      for (let cp = start; cp <= end; cp++) {
+        const char = String.fromCodePoint(cp);
+        const owners = tagged.filter((s) =>
+          new RegExp(`\\p{Script=${s}}`, "u").test(char),
+        );
+        assert.equal(owners.length, 1, `U+${cp.toString(16)}: ${owners}`);
+      }
+  });
+
+  it("covers the scripts beyond the ten major Indic ones", () => {
+    for (const script of ["Brahmi", "Grantha", "Javanese", "Balinese", "Newa"])
+      assert.ok(tagged.includes(script), script);
+  });
+
+  it("leaves out scripts whose killer is not a Virama", () => {
+    for (const script of ["Khmer", "Myanmar", "Thai", "Tibetan"])
+      assert.ok(!tagged.includes(script), script);
+  });
+
+  it("throws rather than dropping a virama the Script table does not cover", () => {
+    // Drop exactly the entry holding the Devanagari virama U+094D.
+    const covers094d = ({ range }) => range[0] <= 0x94d && range[1] >= 0x94d;
+    const without = ucd.scripts.filter((e) => !covers094d(e));
+    assert.equal(without.length, ucd.scripts.length - 1);
+    assert.throws(
+      () => viramaScripts(ucd.virama, without),
+      /virama U\+94d has no Script entry/,
+    );
+  });
+});
+
+// The range checks above compare VALUES, so a hand edit or a template change
+// with no regeneration that leaves the tables intact (a comment, a helper, the
+// lookup code) stays green there. Bytes are what the generator owns.
+describe("src/joining-type.mjs is byte-identical to a fresh generation", () => {
+  it("matches render() of the pinned UCD package", () => {
+    assert.equal(
+      readFileSync(
+        unsandbox(
+          fileURLToPath(new URL("../src/joining-type.mjs", import.meta.url)),
+        ),
+        "utf8",
+      ),
+      render({ joining, virama, brahmic, version }),
+      "src/joining-type.mjs is stale — run `pnpm gen:joining-type`",
+    );
+  });
 });
