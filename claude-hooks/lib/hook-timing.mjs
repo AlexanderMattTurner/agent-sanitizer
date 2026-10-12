@@ -183,6 +183,17 @@ function versionClause(version) {
 }
 
 /**
+ * The version clause for a notice that carries `reportTo`: that project's name
+ * and the version its caller supplied, with the same look-it-up fallback as
+ * {@link versionClause} when the caller supplied none.
+ * @param {ReportTo} reportTo
+ * @returns {string}
+ */
+function reportToVersionClause({ project, version }) {
+  return version ? `${project} ${version}` : `your ${project} version`;
+}
+
+/**
  * Milliseconds as the seconds string every notice below prints.
  *
  * Rounds tenths half-UP from an exact integer count of hundredths, rather than
@@ -230,6 +241,15 @@ export function formatBytes(bytes) {
  *   redactorMs?: number | null,
  *   hostMs?: number | null,
  * }} SlowHookContext
+ */
+
+/**
+ * Who a slow-run notice asks the operator to report to, when that is not
+ * agent-sanitizer: a composer whose own gate hook runs on this runtime and
+ * ships in its own tree, so the sanitizer's issue tracker and version would
+ * name the wrong project. `version` is the composer's build, read by the
+ * composer, because this module reads the manifest of whatever bundle holds it.
+ * @typedef {{ project: string, issueUrl: string, version: string }} ReportTo
  */
 
 /**
@@ -613,6 +633,9 @@ function attributeWait(elapsedMs, cpuMs, redactorMs, hostMs) {
  * @param {string | null} [version]  the build to name in the report line;
  *   omitted asks {@link sanitizerVersion}, and the shell port passes its own,
  *   read from the plugin manifest it ships beside
+ * @param {ReportTo} [reportTo]  the project that owns this hook, when it is not
+ *   agent-sanitizer: its name, issue URL and version replace this package's in
+ *   the notice, and win over `version`
  * @returns {string | null}
  */
 export function slowHookNotice(
@@ -621,6 +644,7 @@ export function slowHookNotice(
   thresholdMs = SLOW_HOOK_THRESHOLD_MS,
   context,
   version,
+  reportTo,
 ) {
   if (elapsedMs <= thresholdMs) return null;
   const cpuMs = context?.cpuMs;
@@ -646,9 +670,9 @@ export function slowHookNotice(
       ? "both timings"
       : "timing";
   return (
-    `agent-sanitizer PERFORMANCE: the ${hookName} hook took ` +
+    `${reportTo?.project ?? "agent-sanitizer"} PERFORMANCE: the ${hookName} hook took ` +
     `${formatSeconds(elapsedMs)}s${formatContextSuffix(context)}, over its ${formatSeconds(thresholdMs)}s budget${attribution} ` +
-    `Tell the user, and suggest they report it at ${ISSUE_URL} with ${versionClause(version)}, the hook name and ${timings}.`
+    `Tell the user, and suggest they report it at ${reportTo?.issueUrl ?? ISSUE_URL} with ${reportTo ? reportToVersionClause(reportTo) : versionClause(version)}, the hook name and ${timings}.`
   );
 }
 
@@ -706,6 +730,7 @@ export function slowProvisionNotice(
  * @param {number} elapsedMs
  * @param {(chunk: string) => void} [writeErr]  injectable stderr sink, for tests
  * @param {SlowHookContext} [context]  see {@link slowHookNotice}
+ * @param {ReportTo} [reportTo]  see {@link slowHookNotice}
  * @returns {string | null}
  */
 export function writeSlowHookNotice(
@@ -713,8 +738,16 @@ export function writeSlowHookNotice(
   elapsedMs,
   writeErr = (chunk) => process.stderr.write(chunk),
   context,
+  reportTo,
 ) {
-  const notice = slowHookNotice(hookName, elapsedMs, undefined, context);
+  const notice = slowHookNotice(
+    hookName,
+    elapsedMs,
+    undefined,
+    context,
+    undefined,
+    reportTo,
+  );
   if (notice === null) return null;
   writeErr(notice + "\n");
   return notice;
@@ -734,6 +767,7 @@ export function writeSlowHookNotice(
  * @param {V} verdict
  * @param {(chunk: string) => void} [writeErr]  injectable stderr sink, for tests
  * @param {SlowHookContext} [context]  see {@link slowHookNotice}
+ * @param {ReportTo} [reportTo]  see {@link slowHookNotice}
  * @returns {V}
  */
 export function withSlowHookNotice(
@@ -742,8 +776,15 @@ export function withSlowHookNotice(
   verdict,
   writeErr = (chunk) => process.stderr.write(chunk),
   context,
+  reportTo,
 ) {
-  const notice = writeSlowHookNotice(hookName, elapsedMs, writeErr, context);
+  const notice = writeSlowHookNotice(
+    hookName,
+    elapsedMs,
+    writeErr,
+    context,
+    reportTo,
+  );
   if (notice === null) return verdict;
   return {
     ...verdict,

@@ -152,6 +152,9 @@ export function nativeStdout(response) {
  * @param {(input: unknown) => unknown} [opts.transformInput]  raw-payload normalization before adapter.parse
  * @param {() => Promise<unknown>} [opts.readInput]  injectable stdin reader
  * @param {(chunk: string) => void} [opts.write]  injectable stdout writer
+ * @param {import("./hook-timing.mjs").ReportTo} [opts.reportTo]  the project
+ *   that owns this hook when it is a composer's gate and not agent-sanitizer's
+ *   own: a slow-run notice names its project, issue URL and version
  * @returns {Promise<void>}
  */
 export async function runJudgeCli(
@@ -162,6 +165,7 @@ export async function runJudgeCli(
     transformInput = (raw) => raw,
     readInput = readStdinJson,
     write = (chunk) => process.stdout.write(chunk),
+    reportTo,
   },
 ) {
   let input;
@@ -194,13 +198,20 @@ export async function runJudgeCli(
     const judged = await judge(event);
     const out = nativeStdout(
       adapter.render(
-        withSlowHookNotice(hookName, timer.wallMs(), judged, undefined, {
-          payloadBytes,
-          tool,
-          cpuMs: timer.cpuMs(),
-          redactorMs: timer.redactorMs(),
-          hostMs: timer.hostMs(),
-        }),
+        withSlowHookNotice(
+          hookName,
+          timer.wallMs(),
+          judged,
+          undefined,
+          {
+            payloadBytes,
+            tool,
+            cpuMs: timer.cpuMs(),
+            redactorMs: timer.redactorMs(),
+            hostMs: timer.hostMs(),
+          },
+          reportTo,
+        ),
         event,
       ),
     );
@@ -212,13 +223,19 @@ export async function runJudgeCli(
     // model-facing channel here belongs to onError's fail-closed message, and a
     // performance aside must not dilute a "this output was never vetted".
     if (timer !== null)
-      writeSlowHookNotice(hookName, timer.wallMs(), undefined, {
-        payloadBytes,
-        tool,
-        cpuMs: timer.cpuMs(),
-        redactorMs: timer.redactorMs(),
-        hostMs: timer.hostMs(),
-      });
+      writeSlowHookNotice(
+        hookName,
+        timer.wallMs(),
+        undefined,
+        {
+          payloadBytes,
+          tool,
+          cpuMs: timer.cpuMs(),
+          redactorMs: timer.redactorMs(),
+          hostMs: timer.hostMs(),
+        },
+        reportTo,
+      );
     onError(err, input);
   }
 }

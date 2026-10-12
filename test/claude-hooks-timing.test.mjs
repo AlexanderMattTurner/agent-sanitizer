@@ -621,6 +621,48 @@ describe("slowHookNotice", () => {
       );
   });
 
+  it("names the reportTo project, URL and version, and ignores the version argument", () => {
+    const notice = slowHookNotice(
+      "gate-bash-calls",
+      SLOW_HOOK_THRESHOLD_MS + 500,
+      undefined,
+      undefined,
+      "1.2.3",
+      {
+        project: "agent-glovebox",
+        issueUrl: "https://example.test/glovebox/issues/new",
+        version: "9.8.7",
+      },
+    );
+    assert.match(
+      notice,
+      /^agent-glovebox PERFORMANCE: the gate-bash-calls hook/u,
+    );
+    assert.match(
+      notice,
+      /report it at https:\/\/example\.test\/glovebox\/issues\/new with agent-glovebox 9\.8\.7,/u,
+    );
+    assert.doesNotMatch(notice, /agent-sanitizer|1\.2\.3/u);
+  });
+
+  it("keeps agent-sanitizer's name, URL and version when reportTo is absent", () => {
+    const notice = slowHookNotice(
+      "sanitize-output",
+      SLOW_HOOK_THRESHOLD_MS + 500,
+      undefined,
+      undefined,
+      "1.2.3",
+    );
+    assert.match(
+      notice,
+      /^agent-sanitizer PERFORMANCE: the sanitize-output hook/u,
+    );
+    assert.match(
+      notice,
+      /report it at https:\/\/github\.com\/AlexanderMattTurner\/agent-sanitizer\/issues\/new with agent-sanitizer 1\.2\.3,/u,
+    );
+  });
+
   it("honors an explicit threshold", () => {
     assert.equal(slowHookNotice("x", 50, 100), null);
     assert.match(slowHookNotice("x", 300, 100), /0\.3s/);
@@ -993,6 +1035,68 @@ describe("runJudgeCli times every judge hook", () => {
       errs.some((line) => line.includes("PERFORMANCE")),
       "the timing must also reach stderr",
     );
+  });
+
+  it("names the composer in the notice when reportTo is given", async () => {
+    // A composer's gate hook runs on this runtime but ships in the composer's
+    // tree, so an issue filed at the sanitizer's tracker would reach the wrong
+    // project. Real overrun, as above, so the wiring is exercised end to end.
+    const reportTo = {
+      project: "agent-glovebox",
+      issueUrl:
+        "https://github.com/AlexanderMattTurner/agent-glovebox/issues/new",
+      version: "9.8.7",
+    };
+    const slowJudge = async () => {
+      await new Promise((resolve) =>
+        setTimeout(resolve, SLOW_HOOK_THRESHOLD_MS + 100),
+      );
+      return { decision: "allow" };
+    };
+    const written = [];
+    const errs = [];
+    const realErr = process.stderr.write.bind(process.stderr);
+    process.stderr.write = (chunk) => {
+      errs.push(String(chunk));
+      return true;
+    };
+    try {
+      await runJudgeCli("gate-bash-calls", slowJudge, {
+        onError: (err) => assert.fail(String(err)),
+        readInput: async () => event,
+        write: (chunk) => written.push(chunk),
+        reportTo,
+      });
+      const thrown = [];
+      await runJudgeCli(
+        "gate-bash-calls",
+        async () => {
+          await slowJudge();
+          throw new Error("judge exploded");
+        },
+        {
+          onError: (err) => thrown.push(err),
+          readInput: async () => event,
+          write: () => assert.fail("a throwing judge writes no verdict"),
+          reportTo,
+        },
+      );
+      assert.equal(thrown.length, 1);
+    } finally {
+      process.stderr.write = realErr;
+    }
+    // stdout carries the success-path notice; stderr carries both runs' copies.
+    for (const text of [written.join(""), errs.join("")]) {
+      assert.match(
+        text,
+        /agent-glovebox PERFORMANCE: the gate-bash-calls hook took/,
+      );
+      assert.match(
+        text,
+        /report it at https:\/\/github\.com\/AlexanderMattTurner\/agent-glovebox\/issues\/new with agent-glovebox 9\.8\.7,/u,
+      );
+      assert.doesNotMatch(text, /agent-sanitizer/);
+    }
   });
 
   it("reports the timing of a judge that overran AND THEN THREW", async () => {
