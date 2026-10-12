@@ -873,7 +873,10 @@ describe("document-wide preserved-joiner budget", () => {
     // on the anchor-proportional allowance instead, see below). N gap-separated
     // pictograph+VS16 pairs with NO ZWNJ/ZWJ anywhere still hit the same cap:
     // over-strip beats under-strip even for a purely selector-dense document.
-    const pictographPlusSelector = cp(0x2764) + cp(0xfe0f) + " ";
+    // The base already defaults to emoji presentation, so the selector changes
+    // nothing on screen; on a text-default base it would be the registered
+    // glyph spelling, which draws on no budget (see "registered emoji glyphs").
+    const pictographPlusSelector = cp(0x1f600) + cp(0xfe0f) + " ";
     const input = pictographPlusSelector.repeat(N);
     const { cleaned, found } = stripInvisibleWithReport(input);
     assert.equal(countOf(input, cp(0xfe0f)), N);
@@ -924,10 +927,13 @@ describe("document-wide preserved-joiner budget", () => {
 // thing it protects. Charging the whole cluster at once makes that impossible by
 // construction.
 describe("preserve budget: grapheme clusters are indivisible", () => {
+  // Four pictographs in one ZWJ chain that Unicode never registered, so its
+  // joiners draw on the budget. (The registered family 👨‍👩‍👧‍👦 is a glyph's
+  // own spelling and draws on none — see "registered emoji glyphs".)
   const FAMILY_CLUSTER =
-    cp(0x1f468) + ZWJ + cp(0x1f469) + ZWJ + cp(0x1f467) + ZWJ + cp(0x1f466);
-  const FAMILY_BARE = cp(0x1f468) + cp(0x1f469) + cp(0x1f467) + cp(0x1f466);
-  // 3 ZWJ per family against the 16-unit document budget: 5 families fit (15),
+    cp(0x1f600) + ZWJ + cp(0x1f603) + ZWJ + cp(0x1f604) + ZWJ + cp(0x1f601);
+  const FAMILY_BARE = cp(0x1f600) + cp(0x1f603) + cp(0x1f604) + cp(0x1f601);
+  // 3 ZWJ per chain against the 16-unit document budget: 5 chains fit (15),
   // the 6th needs 3 more and does not.
   const FAMILIES_THAT_FIT = 5;
 
@@ -986,10 +992,13 @@ describe("preserve budget: grapheme clusters are indivisible", () => {
   });
 
   it("keeps multi-preservable clusters whole under the CONSECUTIVE caps too", () => {
-    // 🏳️‍🌈 is VS16 + ZWJ inside ONE cluster: two preservables that must rise and
-    // fall together no matter which limit bites.
-    const rainbow = cp(0x1f3f3) + cp(0xfe0f) + ZWJ + cp(0x1f308);
-    for (const n of [1, 6, 9, 20]) assertNoPartialCarve(rainbow.repeat(n));
+    // VS16 + ZWJ inside ONE cluster: two preservables that must rise and fall
+    // together no matter which limit bites. The base already defaults to emoji
+    // presentation and the chain is unregistered, so both draw on the budget
+    // and 20 copies (40 preservables) overrun it.
+    const pair = cp(0x1f600) + cp(0xfe0f) + ZWJ + cp(0x1f600);
+    for (const n of [1, 6, 9, 20]) assertNoPartialCarve(pair.repeat(n));
+    assert.notEqual(stripInvisible(pair.repeat(20)), pair.repeat(20));
   });
 
   it("judges each cluster on the run its own leading gap resets", () => {
@@ -1191,19 +1200,114 @@ describe("stripInvisible: emoji tag sequences (subregional flags)", () => {
     assert.equal(stripInvisible(once), once);
   });
 
-  it("atomically strips a well-formed flag once the preserve budget overruns", () => {
-    // Each 🏴gbsct sequence spends 6 tag units of the document-wide preserve
-    // budget (TOTAL_PRESERVED_JOINER_BUDGET = 16). Two flags fit (12 ≤ 16); the
-    // third's whole tag run overruns (18 > 16) and is stripped ATOMICALLY —
-    // never left as a malformed partial run — leaving only its bare flag base.
-    // Total tag chars (18) stay under the scatter floor, so this exercises the
-    // budget cut specifically, not the floor.
-    const flag = tagCode("gbsct");
-    const { cleaned, found } = stripInvisibleWithReport(
-      `${flag} ${flag} ${flag}`,
+  it("keeps every registered flag however many the document holds", () => {
+    // A registered subdivision flag is a glyph's own spelling: its tag run is
+    // fixed by which of the three flags it draws, a visible choice, so it
+    // draws on no preserve budget. Forty Scotland flags carry 240 tag units —
+    // far past TOTAL_PRESERVED_JOINER_BUDGET and PRESERVE_HARD_CAP — and
+    // survive byte for byte, unreported. The budget's own atomic-overrun case
+    // is the unregistered ZWJ chain under "grapheme clusters are indivisible".
+    const flags = Array(40).fill(tagCode("gbsct")).join(" ");
+    assert.ok(6 * 40 > PRESERVE_HARD_CAP);
+    const { cleaned, found } = stripInvisibleWithReport(flags);
+    assert.equal(cleaned, flags);
+    assert.deepEqual(found, []);
+  });
+});
+
+// ─── Registered emoji glyphs ───────────────────────────────────────────────────
+// A registered glyph's own spelling draws on no preserve budget: VS16 after an
+// Emoji_Presentation=No base (it switches the visible glyph from text to
+// emoji), and the joiners of an RGI emoji ZWJ sequence (which one is drawn is
+// the whole visible glyph). Both choices show on screen, so neither hides a
+// bit; metering them is what flagged a changelog of rainbow flags. Everything
+// next to them that changes nothing visible stays metered.
+describe("registered emoji glyphs", () => {
+  const ZWJ_CH = cp(0x200d);
+  const VS16_CH = cp(0xfe0f);
+  const docOf = (unit) => Array(100).fill(unit).join(" ");
+
+  for (const [name, unit] of [
+    ["rainbow flag", cp(0x1f3f3) + VS16_CH + ZWJ_CH + cp(0x1f308)],
+    [
+      "rainbow flag spelled without its VS16",
+      cp(0x1f3f3) + ZWJ_CH + cp(0x1f308),
+    ],
+    [
+      "family of four",
+      cp(0x1f468) +
+        ZWJ_CH +
+        cp(0x1f469) +
+        ZWJ_CH +
+        cp(0x1f467) +
+        ZWJ_CH +
+        cp(0x1f466),
+    ],
+    [
+      "skin-toned technologist",
+      cp(0x1f469) + cp(0x1f3fd) + ZWJ_CH + cp(0x1f4bb),
+    ],
+    ["emoji-presentation heart", cp(0x2764) + VS16_CH],
+    ["emoji-presentation warning sign", cp(0x26a0) + VS16_CH],
+  ])
+    it(`keeps a hundred of the ${name}, unreported and not payload`, () => {
+      const doc = docOf(unit);
+      const { cleaned, found } = stripInvisibleWithReport(doc);
+      assert.equal(cleaned, doc);
+      assert.deepEqual(found, []);
+      assert.equal(payloadVerdict(doc).payloadCapable, false);
+    });
+
+  for (const [name, unit, category] of [
+    [
+      "an unregistered ZWJ chain",
+      cp(0x1f600) + ZWJ_CH + cp(0x1f600),
+      CATEGORY.CF,
+    ],
+    [
+      "a registered family extended by one more pictograph",
+      cp(0x1f468) +
+        ZWJ_CH +
+        cp(0x1f469) +
+        ZWJ_CH +
+        cp(0x1f467) +
+        ZWJ_CH +
+        cp(0x1f600),
+      CATEGORY.CF,
+    ],
+    [
+      "a VS16 on an emoji-default base",
+      cp(0x1f600) + VS16_CH,
+      CATEGORY.VARIATION_SELECTORS,
+    ],
+    [
+      "a text-presentation VS15",
+      cp(0x2764) + cp(0xfe0e),
+      CATEGORY.VARIATION_SELECTORS,
+    ],
+    [
+      "a doubled VS16",
+      cp(0x2764) + VS16_CH + VS16_CH,
+      CATEGORY.VARIATION_SELECTORS,
+    ],
+  ])
+    it(`meters ${name}: a hundred overrun the budget and are payload`, () => {
+      const doc = docOf(unit);
+      const { cleaned, found } = stripInvisibleWithReport(doc);
+      assert.notEqual(cleaned, doc);
+      assert.deepEqual(found, [category]);
+      assert.equal(payloadVerdict(doc).payloadCapable, true);
+    });
+
+  it("strips a registered glyph's joiners once payload switches the carve-out off", () => {
+    const rainbow = cp(0x1f3f3) + VS16_CH + ZWJ_CH + cp(0x1f308);
+    const doc = Array(SCATTERED_THRESHOLD)
+      .fill(`x${cp(0x200b)}`)
+      .join(" ");
+    assert.equal(
+      stripInvisible(`${doc} ${rainbow}`),
+      `${doc.replaceAll(cp(0x200b), "")} ${cp(0x1f3f3)}${cp(0x1f308)}`,
     );
-    assert.equal(cleaned, `${flag} ${flag} ${cp(0x1f3f4)}`);
-    assert.deepEqual(found, [CATEGORY.CF]);
   });
 });
 
@@ -1351,7 +1455,13 @@ describe("stripInvisible: the preserve budget's hard cap binds cover text, not j
   const BEH = cp(0x628);
   for (const [name, selector, unit] of [
     ["registered variation selectors", cp(0xfe00), `0${cp(0xfe00)} `],
-    ["emoji presentation selectors", cp(0xfe0f), `${cp(0x2764)}${cp(0xfe0f)} `],
+    // On an emoji-default base, so the selector is redundant and budgeted; on
+    // ❤ it would be the registered glyph spelling, which no budget meters.
+    [
+      "emoji presentation selectors",
+      cp(0xfe0f),
+      `${cp(0x1f600)}${cp(0xfe0f)} `,
+    ],
   ])
     it(`joining-letter cover cannot widen the allowance for ${name}`, () => {
       const text = BEH.repeat(800) + unit.repeat(100);

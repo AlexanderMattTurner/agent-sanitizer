@@ -4,7 +4,8 @@
  * `src/invisible.mjs` reads the document as an `Int32Array` of code points,
  * classifies into `Uint8Array`s, resolves grapheme clusters only around the
  * characters the carve-out could preserve, and lets `countEffectiveInvisible`
- * read its count and its strip off ONE analysis. Each of those is invisible to
+ * read its count and its strip off ONE analysis (or its count alone, off a walk
+ * that builds no text). Each of those is invisible to
  * the correctness suites — they change what the module COSTS, and a bug in any
  * of them changes what it DECIDES, which is a security verdict the user is
  * shown. So every entry point is differenced here against
@@ -52,12 +53,27 @@ const readings = (mod, text) => ({
   incidental: mod.isIncidentalInvisible(text),
 });
 
+/** Carve a different document, so the optimized module's one-entry cache
+ * holds nothing of the next text. */
+const evict = () => fast.countPayloadInvisible(`${ZWNJ}evict`);
+
 /** @param {string} text @param {string} label */
 function assertAgrees(text, label) {
+  // The effective count is read two ways: off a strip already built (readings
+  // strips first), and, on a cold cache, off a walk that builds no text.
+  evict();
+  const cold = fast.countEffectiveInvisible(text);
+  evict();
+  const reference = readings(slow, text);
   assert.deepEqual(
     readings(fast, text),
-    readings(slow, text),
+    reference,
     `${label}: optimized carve disagrees with the reference on ${JSON.stringify(text)}`,
+  );
+  assert.equal(
+    cold,
+    reference.effective,
+    `${label}: the count-only walk disagrees with the reference on ${JSON.stringify(text)}`,
   );
 }
 
@@ -117,6 +133,34 @@ const CASES = {
   "zwnj-before-harakat": ("مَ" + ZWNJ + "َم ").repeat(80),
   "zwj-after-newline": ("\n" + ZWJ + "م").repeat(40),
   "lone-surrogate-before-zwnj": ("\ud800" + ZWNJ + "م ").repeat(40),
+  // Registered glyphs ride outside the budget; their unregistered twins do
+  // not. Each runs past the cover allowance, so a misread kind shows up as a
+  // strip that one side makes and the other does not.
+  "rgi-zwj-dense": ("- \u{1F3F3}" + VS16 + ZWJ + "\u{1F308} ok\n").repeat(100),
+  "rgi-zwj-skin-tone": ("\u{1F469}\u{1F3FD}" + ZWJ + "\u{1F4BB} ").repeat(100),
+  "rgi-zwj-without-vs16": ("\u{1F3F3}" + ZWJ + "\u{1F308} ").repeat(100),
+  "non-rgi-zwj-dense": ("\u{1F600}" + ZWJ + "\u{1F600} ").repeat(100),
+  "text-default-vs16-dense": ("- \u26A0" + VS16 + " careful\n").repeat(100),
+  "redundant-vs16-dense": ("- \u{1F600}" + VS16 + " hi\n").repeat(100),
+  "zwj-chain-dangling": ("\u{1F468}" + ZWJ + "\u{1F469}" + ZWJ + " ").repeat(
+    60,
+  ),
+  "zwj-chain-after-letter": (
+    "a" +
+    ZWJ +
+    "\u{1F468}" +
+    ZWJ +
+    "\u{1F469} "
+  ).repeat(60),
+  "rgi-beside-persian": (
+    "می" +
+    ZWNJ +
+    "خواهم \u{1F468}" +
+    ZWJ +
+    "\u{1F469}" +
+    ZWJ +
+    "\u{1F467} "
+  ).repeat(60),
   "persian-beside-emoji-zwj": (
     "می" +
     ZWNJ +
@@ -173,6 +217,12 @@ const PIECES = [
   "⠃",
   "\u{1F3F3}",
   "\u{1F308}",
+  "\u{1F468}",
+  "\u{1F469}",
+  "\u{1F467}",
+  "\u{1F3FD}",
+  "\u26A0",
+  "\u{1F600}",
   "1",
   ZWNJ,
   ZWJ,

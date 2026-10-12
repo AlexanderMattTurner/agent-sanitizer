@@ -48,7 +48,9 @@ import { CF_CODEPOINTS } from "../../src/cf-charset.mjs";
 // disagree with it on every code point the two Unicode versions disagree on.
 import {
   EMOJI_MODIFIER,
+  EMOJI_TEXT_DEFAULT,
   EXTENDED_PICTOGRAPHIC,
+  RGI_EMOJI_ZWJ_KEYS,
   SCRIPT_BRAILLE,
   SCRIPT_HANGUL,
   UNIFIED_IDEOGRAPH,
@@ -120,6 +122,57 @@ const REGISTERED_TAG_PAYLOADS = new Set(["gbeng", "gbsct", "gbwls"]);
 // Longest registered subdivision payload is 5 tag chars; cap a touch above it so
 // a malformed-but-registered-prefix run can never carry a long ASCII rider.
 const MAX_TAG_SPEC_CHARS = 6;
+
+// ─── Registered emoji glyphs ──────────────────────────────────────────────────
+// The invisibles a registered emoji glyph's own spelling holds — an RGI flag's
+// tag characters, the VS16 of a text-default emoji, the ZWJs of an RGI ZWJ
+// sequence — are "glyph": preserved whenever the carve-out is on and charged to
+// no budget. The ZWJ chains are found here by one regex over the text, where the
+// shipped module walks code points.
+const EMOJI_TEXT_DEFAULT_RE = pinned(EMOJI_TEXT_DEFAULT);
+const RGI_ZWJ_KEYS = new Set(RGI_EMOJI_ZWJ_KEYS);
+// What rides on a chain component without being one: VS16 or a skin tone.
+const COMPONENT_MARK = `\\u{FE0F}${EMOJI_MODIFIER.map(
+  ([from, to]) => `\\u{${from.toString(16)}}-\\u{${to.toString(16)}}`,
+).join("")}`;
+const COMPONENT_MARK_RE = new RegExp(`[${COMPONENT_MARK}]`, "u");
+const COMPONENT = `[^\\u{200D}${COMPONENT_MARK}][${COMPONENT_MARK}]*`;
+const ZWJ_CHAIN_RE = new RegExp(`${COMPONENT}(?:\\u{200D}${COMPONENT})+`, "gu");
+
+/**
+ * Turn "emojivs" VS16s after a text-default emoji, and "joiner" ZWJs inside a
+ * chain whose components name an RGI ZWJ sequence, into "glyph".
+ * @param {string[]} cps @param {(string|null)[]} kind  updated in place
+ */
+function markRegisteredGlyphs(cps, kind) {
+  for (let i = 1; i < cps.length; i++)
+    if (
+      kind[i] === "emojivs" &&
+      cps[i] === "\uFE0F" &&
+      EMOJI_TEXT_DEFAULT_RE.test(cps[i - 1])
+    )
+      kind[i] = "glyph";
+  /** @type {Map<number, number>} UTF-16 offset -> code-point index */
+  const indexAt = new Map();
+  let offset = 0;
+  cps.forEach((ch, i) => {
+    indexAt.set(offset, i);
+    offset += ch.length;
+  });
+  for (const match of cps.join("").matchAll(ZWJ_CHAIN_RE)) {
+    const chain = Array.from(match[0]);
+    const key = chain
+      .filter((ch) => ch !== "\u200D" && !COMPONENT_MARK_RE.test(ch))
+      .map((ch) => /** @type {number} */ (ch.codePointAt(0)).toString(16))
+      .join(" ");
+    if (!RGI_ZWJ_KEYS.has(key)) continue;
+    const first = /** @type {number} */ (indexAt.get(match.index));
+    chain.forEach((ch, k) => {
+      if (ch === "\u200D" && kind[first + k] === "joiner")
+        kind[first + k] = "glyph";
+    });
+  }
+}
 
 // ─── Ideographic variation selectors (VS17–VS256, U+E0100–U+E01EF) ────────────
 // An ideographic variation sequence is a CJK ideograph followed by a selector in
@@ -468,7 +521,7 @@ function isEmojiPresentationSelector(cps, i) {
 /**
  * Per-invisible carve-out analysis, shared by carveStrip and
  * countPayloadInvisible: for each code point, its CHECKS category (null when
- * visible) and its preserve `kind` ("joiner" | "emojivs" | "tag" | "stdvs" |
+ * visible) and its preserve `kind` ("joiner" | "emojivs" | "glyph" | "stdvs" |
  * "ivs" | "blank" | null). Everything invisible that is NOT preserve-eligible is
  * payload; the scatter floor counts only that, so meaningful joiners/selectors
  * never push honest prose over the threshold.
@@ -499,13 +552,14 @@ function analyzeCarve(cps) {
   const tagKeep = hasTagBase ? markTagSequences(cps) : null;
   const kind = new Array(cps.length).fill(null);
   for (const i of invisible) {
-    if (tagKeep !== null && tagKeep[i]) kind[i] = "tag";
+    if (tagKeep !== null && tagKeep[i]) kind[i] = "glyph";
     else if (isPreservedJoiner(cps, i)) kind[i] = "joiner";
     else if (isEmojiPresentationSelector(cps, i)) kind[i] = "emojivs";
     else if (isStandardizedVariationSelector(cps, i)) kind[i] = "stdvs";
     else if (isIdeographicVariationSelector(cps, i)) kind[i] = "ivs";
     else if (isPreservedBlankFiller(cps, i)) kind[i] = "blank";
   }
+  markRegisteredGlyphs(cps, kind);
   // Blank fillers are budgeted here, document-wide and all-or-nothing, against
   // the visible anchor-script text rather than against the joiner/selector
   // counter in carveStrip (see PRESERVED_BLANK_PER_ANCHOR for why the two
@@ -823,8 +877,10 @@ function carveStrip(body) {
     for (let k = start; k < end; k++) {
       // "blank" is exempt: analyzeCarve already decided it against the
       // anchor-proportional allowance, so it neither draws on this budget nor
-      // is stripped by it (only by the scatter floor, via allowCarveOut).
-      if (kind[k] === null || kind[k] === "blank") continue;
+      // is stripped by it (only by the scatter floor, via allowCarveOut). So is
+      // "glyph", a registered glyph's own spelling.
+      if (kind[k] === null || kind[k] === "blank" || kind[k] === "glyph")
+        continue;
       need++;
       if (kind[k] === "joiner") joiners++;
       if (kind[k] === "ivs" || kind[k] === "stdvs") selectors++;
@@ -867,13 +923,14 @@ function carveStrip(body) {
         out += cps[k]; // ordinary visible character
         continue;
       }
-      // A blank filler rides on allowCarveOut alone (its own allowance is
-      // already spent in analyzeCarve); everything else rides on `fits`.
-      if (kind[k] === "blank" ? allowCarveOut : fits && kind[k] !== null) {
+      // A blank filler (its own allowance is already spent in analyzeCarve)
+      // and a glyph ride on allowCarveOut alone; everything else rides on `fits`.
+      const exempt = kind[k] === "blank" || kind[k] === "glyph";
+      if (exempt ? allowCarveOut : fits && kind[k] !== null) {
         if (kind[k] === "joiner") joinerRun++;
         if (kind[k] === "ivs" || kind[k] === "stdvs") selectorRun++;
-        if (kind[k] !== "blank") preservedTotal++;
-        if (kind[k] !== "blank" && kind[k] !== "joiner") preservedOther++;
+        if (!exempt) preservedTotal++;
+        if (!exempt && kind[k] !== "joiner") preservedOther++;
         prevVisible = false; // a joiner/selector/tag/blank keeps the cluster open
         out += cps[k];
         continue;
