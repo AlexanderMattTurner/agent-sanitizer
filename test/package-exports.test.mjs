@@ -17,7 +17,7 @@ import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
-import { matchesGlob } from "node:path";
+import { matchesGlob } from "./helpers/glob-match.mjs";
 
 import { repoRoot } from "./helpers/repo-root.mjs";
 

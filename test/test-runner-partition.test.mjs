@@ -33,10 +33,11 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join, matchesGlob } from "node:path";
+import { dirname, join } from "node:path";
 import { describe, it } from "node:test";
 
 import { TEST_GLOBS, nodeTestCommand } from "../scripts/coverage.mjs";
+import { matchesGlob } from "./helpers/glob-match.mjs";
 
 // The shipped tree, not the instrumented copy Stryker runs this beside. Resolved
 // from the helper's own location rather than `git rev-parse --show-toplevel`:
