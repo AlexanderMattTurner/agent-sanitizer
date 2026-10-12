@@ -250,7 +250,12 @@ function calibrationPass(text) {
 
 /**
  * The document a shape's `attempt`-th timed call reads: `size` units, told
- * apart from every other attempt's by a visible number up front.
+ * apart from every other attempt's by a visible number at the end.
+ *
+ * At the end, not up front: a document's opening decides how the HTML layer
+ * reads it. A page of `<p>` lines with a line of text in front cost more than
+ * twice what the page alone does, on main and on the carve rewrite alike, so a
+ * leading number timed html-prose as a different shape.
  *
  * Not by length. Trimming a shape to a length can leave a partial unit at the
  * end — a dangling joiner, say — that Layer 1 strips, and the stripped text is
@@ -262,8 +267,8 @@ function calibrationPass(text) {
  * @returns {string}
  */
 function attemptDoc(shape, size, attempt) {
-  const head = `${attempt} `;
-  return head + SHAPES[shape](size - head.length);
+  const tail = ` ${attempt}`;
+  return SHAPES[shape](size - tail.length) + tail;
 }
 
 /** The unit, in CPU ms per pass. */
