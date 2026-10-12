@@ -408,8 +408,7 @@ export const LINGUISTIC_SCRIPTS = [
 // Left side of an emoji joiner: a pictograph or a skin-tone modifier (a base
 // emoji may carry a modifier before the joiner, e.g. a health-worker sequence).
 /** @param {number} cp @returns {boolean} */
-const isEmojiLeft = (cp) =>
-  inSpans(EXTENDED_PICTOGRAPHIC, cp) || inSpans(EMOJI_MODIFIER, cp);
+const isEmojiLeft = (cp) => isExtendedPictographic(cp) || isEmojiModifierCp(cp);
 // The three keycap bases (digit, `#`, `*`) Unicode's keycap grammar allows
 // before VS16 + U+20E3 COMBINING ENCLOSING KEYCAP (1️⃣ #️⃣ *️⃣ … 9️⃣). None is
 // Extended_Pictographic or Emoji_Modifier, so isEmojiLeft misses them; the
@@ -425,16 +424,14 @@ const KEYCAP_BASE = /[0-9#*]/u;
 const COMBINING_KEYCAP = 0x20e3;
 // Right side of an emoji joiner is always the next component's base pictograph.
 /** @param {number} cp @returns {boolean} */
-const isEmojiBase = (cp) => inSpans(EXTENDED_PICTOGRAPHIC, cp);
+const isEmojiBase = (cp) => isExtendedPictographic(cp);
 // A variation selector legitimately sits between a base pictograph and a
 // following ZWJ (🏳️‍🌈 = flag base, VS16, ZWJ, rainbow; 👁️‍🗨️), so the joiner's real
 // left neighbor for the emoji test is the pictograph, not the selector.
 const VARIATION_SELECTOR = new RegExp(`[${VS}]`, "u");
-// Code-point twins of the two single-character classes above, memoized: the
-// carve analysis asks these per invisible (and per neighbour). See
-// memoizedCpPredicate.
+// Code-point twin of KEYCAP_BASE, memoized: the carve analysis asks it per
+// presentation selector. See memoizedCpPredicate.
 const isKeycapBase = memoizedCpPredicate(KEYCAP_BASE);
-const isVariationSelectorCp = memoizedCpPredicate(VARIATION_SELECTOR);
 // U+FE0F (VS16) forces emoji presentation, U+FE0E (VS15) forces text
 // presentation (☺︎ vs ☺); either one directly after a pictograph is part of a
 // visible glyph, not a hidden variation-selector run.
@@ -491,9 +488,25 @@ function isTextDefaultEmoji(cp) {
  * one: a VS16 or a skin-tone modifier.
  * @param {number} cp @returns {boolean} */
 function isComponentMark(cp) {
-  if (cp === VS16) return true;
+  return cp === VS16 || isEmojiModifierCp(cp);
+}
+
+/** True when `cp` is an Emoji_Modifier (a skin tone). -1 (past a string
+ * boundary) is not.
+ * @param {number} cp @returns {boolean} */
+function isEmojiModifierCp(cp) {
+  if (cp < 0) return false;
   if (cp >= CP_PROPS_END) return inSpans(EMOJI_MODIFIER, cp);
   return (cpProps(cp) & PROP_EMOJI_MODIFIER) !== 0;
+}
+
+/** True when `cp` is Extended_Pictographic. -1 (past a string boundary) is
+ * not.
+ * @param {number} cp @returns {boolean} */
+function isExtendedPictographic(cp) {
+  if (cp < 0) return false;
+  if (cp >= CP_PROPS_END) return inSpans(EXTENDED_PICTOGRAPHIC, cp);
+  return (cpProps(cp) & PROP_EXTENDED_PICTOGRAPHIC) !== 0;
 }
 
 /**
@@ -749,12 +762,14 @@ for (const [code, codepoints] of /** @type {[number, Iterable<number>][]} */ ([
   for (const cp of codepoints)
     if (!TRACKED_INVISIBLE.has(cp)) TRACKED_INVISIBLE.set(cp, code);
 
-// The same classes for the BMP, by array index: every visible character of a
-// CJK, Persian or Devanagari page asks, and a hash lookup per character is a
-// measurable share of analysing one. 64 KB, CODE_VISIBLE (0) where unset.
-const TRACKED_BMP = new Uint8Array(0x10000);
+// The same classes for the BMP and the SMP, by array index: every visible
+// character of a CJK, Persian or Devanagari page asks, and so does every
+// pictograph of an emoji page (the SMP), and a hash lookup per character is a
+// measurable share of analysing either. 128 KB, CODE_VISIBLE (0) where unset.
+const TRACKED_TABLE_END = 0x20000;
+const TRACKED_LOW = new Uint8Array(TRACKED_TABLE_END);
 for (const [cp, code] of TRACKED_INVISIBLE)
-  if (cp < 0x10000) TRACKED_BMP[cp] = code;
+  if (cp < TRACKED_TABLE_END) TRACKED_LOW[cp] = code;
 
 /**
  * The CODE_* class a code point belongs to, or CODE_VISIBLE when it is not
@@ -763,9 +778,23 @@ for (const [cp, code] of TRACKED_INVISIBLE)
  * @returns {number}
  */
 function classifyCp(cp) {
-  if (cp < 0x10000) return TRACKED_BMP[cp];
+  if (cp < TRACKED_TABLE_END) return TRACKED_LOW[cp];
   return TRACKED_INVISIBLE.get(cp) ?? CODE_VISIBLE;
 }
+
+/** True when `cp` is one of the {@link VS} variation selectors. Read off the
+ * class table: VS is exactly the code points classified CODE_VS, which the
+ * check below holds the table to, since a Cf code point in VS would be
+ * classified CODE_CF and silently stop counting as a selector here.
+ * @param {number} cp @returns {boolean} */
+function isVariationSelectorCp(cp) {
+  return cp >= 0 && classifyCp(cp) === CODE_VS;
+}
+for (const ch of VS)
+  if (!isVariationSelectorCp(/** @type {number} */ (ch.codePointAt(0))))
+    throw new Error(
+      `variation selector U+${ch.codePointAt(0)?.toString(16)} is not classified CODE_VS`,
+    );
 
 // Distinct code points a memoizedCpPredicate will remember. Comfortably above
 // the character repertoire of any real document (and of every test corpus here)
@@ -874,8 +903,8 @@ function codePointLength(text) {
  * @param {string} jt @returns {boolean} */
 const isCursiveLetter = (jt) => jt === "D" || jt === "R" || jt === "L";
 
-// The three ./joining-type.mjs tables, the two emoji tables the glyph pass
-// reads and the ideograph tables, each read once per distinct code point below
+// The three ./joining-type.mjs tables, the three emoji tables and the
+// ideograph tables, each read once per distinct code point below
 // CP_PROPS_END — the BMP and the SMP, where every joining script, virama and
 // emoji lives — and then by array index. The carve analysis asks them about every joiner's neighbours,
 // every visible character of a joiner-dense text and every emoji chain's
@@ -893,13 +922,14 @@ const PROP_BRAHMIC_CONSONANT = 0b10000;
 const PROP_EMOJI_TEXT_DEFAULT = 0b100000;
 const PROP_EMOJI_MODIFIER = 0b1000000;
 const PROP_CJK_IDEOGRAPH = 0b10000000;
-/** @type {Uint8Array | null} */
+const PROP_EXTENDED_PICTOGRAPHIC = 0b100000000;
+/** @type {Uint16Array | null} */
 let cpPropsTable = null;
 
 /** The packed table entry for `cp` (0 <= cp < CP_PROPS_END).
  * @param {number} cp @returns {number} */
 function cpProps(cp) {
-  cpPropsTable ??= new Uint8Array(CP_PROPS_END);
+  cpPropsTable ??= new Uint16Array(CP_PROPS_END);
   const known = cpPropsTable[cp];
   if (known !== 0) return known;
   const type = JOINING_TYPES.indexOf(joiningType(cp));
@@ -911,7 +941,8 @@ function cpProps(cp) {
     (isBrahmicConsonant(cp) ? PROP_BRAHMIC_CONSONANT : 0) |
     (inSpans(EMOJI_TEXT_DEFAULT, cp) ? PROP_EMOJI_TEXT_DEFAULT : 0) |
     (inSpans(EMOJI_MODIFIER, cp) ? PROP_EMOJI_MODIFIER : 0) |
-    (inCjkIdeographTables(cp) ? PROP_CJK_IDEOGRAPH : 0);
+    (inCjkIdeographTables(cp) ? PROP_CJK_IDEOGRAPH : 0) |
+    (inSpans(EXTENDED_PICTOGRAPHIC, cp) ? PROP_EXTENDED_PICTOGRAPHIC : 0);
   cpPropsTable[cp] = props;
   return props;
 }
@@ -2030,8 +2061,26 @@ function* payloadLongRuns(text) {
   // is a run in `text`: no long run in the raw text means none in the view. This
   // hides no payload — the bulk scan reads the whole text, and a run it finds
   // still goes through the full carve analysis to decide what of it is payload.
-  if (!hasLongRun(text)) return;
+  // With the analysis already in hand the question is answered off it exactly
+  // (a view run is a stretch of consecutive payload code points), which is
+  // cheaper than the regex on text dense with short preserved runs.
+  const known = lastCarve?.body === text ? lastCarve.analysis : null;
+  if (known === null ? !hasLongRun(text) : !hasPayloadRun(known)) return;
   yield* findLongRuns(payloadInvisibleView(text));
+}
+
+/** Whether the analysis holds {@link LONG_RUN_THRESHOLD} consecutive payload
+ * code points — exactly when {@link payloadInvisibleView} holds a long run.
+ * @param {ReturnType<typeof analyzeCarve>} analysis @returns {boolean} */
+function hasPayloadRun({ invisible, kind }) {
+  let run = 0; // payload code points in a row, ending at the previous invisible
+  let prev = -2;
+  for (const i of invisible) {
+    run = kind[i] !== KIND_NONE ? 0 : i === prev + 1 ? run + 1 : 1;
+    if (run >= LONG_RUN_THRESHOLD) return true;
+    prev = i;
+  }
+  return false;
 }
 
 /**
@@ -2148,8 +2197,10 @@ export function isIncidentalInvisible(text) {
  * @returns {{ firstRun: { index: number, text: string, charCount: number } | null, invisibleCount: number, payloadCapable: boolean }}
  */
 export function payloadVerdict(text) {
-  const firstRun = payloadLongRuns(text).next().value ?? null;
+  // The count first: it carves the text, and the run search then reads that
+  // carve rather than scanning the text again (see payloadLongRuns).
   const invisibleCount = countEffectiveInvisible(text);
+  const firstRun = payloadLongRuns(text).next().value ?? null;
   return {
     firstRun,
     invisibleCount,

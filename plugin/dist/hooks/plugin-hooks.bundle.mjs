@@ -4572,9 +4572,17 @@ function isTextDefaultEmoji(cp) {
   return (cpProps(cp) & PROP_EMOJI_TEXT_DEFAULT) !== 0;
 }
 function isComponentMark(cp) {
-  if (cp === VS16) return true;
+  return cp === VS16 || isEmojiModifierCp(cp);
+}
+function isEmojiModifierCp(cp) {
+  if (cp < 0) return false;
   if (cp >= CP_PROPS_END) return inSpans(EMOJI_MODIFIER, cp);
   return (cpProps(cp) & PROP_EMOJI_MODIFIER) !== 0;
+}
+function isExtendedPictographic(cp) {
+  if (cp < 0) return false;
+  if (cp >= CP_PROPS_END) return inSpans(EXTENDED_PICTOGRAPHIC, cp);
+  return (cpProps(cp) & PROP_EXTENDED_PICTOGRAPHIC) !== 0;
 }
 function markRegisteredGlyphs(cps, invisible, kind2) {
   let read = -1;
@@ -4624,8 +4632,11 @@ function isHangul(cp) {
   return isHangulScript(cp);
 }
 function classifyCp(cp) {
-  if (cp < 65536) return TRACKED_BMP[cp];
+  if (cp < TRACKED_TABLE_END) return TRACKED_LOW[cp];
   return TRACKED_INVISIBLE.get(cp) ?? CODE_VISIBLE;
+}
+function isVariationSelectorCp(cp) {
+  return cp >= 0 && classifyCp(cp) === CODE_VS;
 }
 function memoizedCpPredicate(re) {
   const memo = /* @__PURE__ */ new Map();
@@ -4676,13 +4687,13 @@ function codePointLength(text6) {
   return n;
 }
 function cpProps(cp) {
-  cpPropsTable ??= new Uint8Array(CP_PROPS_END);
+  cpPropsTable ??= new Uint16Array(CP_PROPS_END);
   const known = cpPropsTable[cp];
   if (known !== 0) return known;
   const type = JOINING_TYPES.indexOf(joiningType(cp));
   if (type < 1)
     throw new Error(`unknown Joining_Type for U+${cp.toString(16)}`);
-  const props = type | (isVirama(cp) ? PROP_VIRAMA : 0) | (isBrahmicConsonant(cp) ? PROP_BRAHMIC_CONSONANT : 0) | (inSpans(EMOJI_TEXT_DEFAULT, cp) ? PROP_EMOJI_TEXT_DEFAULT : 0) | (inSpans(EMOJI_MODIFIER, cp) ? PROP_EMOJI_MODIFIER : 0) | (inCjkIdeographTables(cp) ? PROP_CJK_IDEOGRAPH : 0);
+  const props = type | (isVirama(cp) ? PROP_VIRAMA : 0) | (isBrahmicConsonant(cp) ? PROP_BRAHMIC_CONSONANT : 0) | (inSpans(EMOJI_TEXT_DEFAULT, cp) ? PROP_EMOJI_TEXT_DEFAULT : 0) | (inSpans(EMOJI_MODIFIER, cp) ? PROP_EMOJI_MODIFIER : 0) | (inCjkIdeographTables(cp) ? PROP_CJK_IDEOGRAPH : 0) | (inSpans(EXTENDED_PICTOGRAPHIC, cp) ? PROP_EXTENDED_PICTOGRAPHIC : 0);
   cpPropsTable[cp] = props;
   return props;
 }
@@ -5159,8 +5170,19 @@ function payloadLongRunSample(text6) {
   return payloadLongRuns(text6).next().value?.text ?? null;
 }
 function* payloadLongRuns(text6) {
-  if (!hasLongRun(text6)) return;
+  const known = lastCarve?.body === text6 ? lastCarve.analysis : null;
+  if (known === null ? !hasLongRun(text6) : !hasPayloadRun(known)) return;
   yield* findLongRuns(payloadInvisibleView(text6));
+}
+function hasPayloadRun({ invisible, kind: kind2 }) {
+  let run = 0;
+  let prev = -2;
+  for (const i of invisible) {
+    run = kind2[i] !== KIND_NONE ? 0 : i === prev + 1 ? run + 1 : 1;
+    if (run >= LONG_RUN_THRESHOLD) return true;
+    prev = i;
+  }
+  return false;
 }
 function countEffectiveInvisible(text6) {
   if (!hasInvisibleCodePoint(text6)) return 0;
@@ -5186,8 +5208,8 @@ function isIncidentalInvisible(text6) {
   return payloadLongRunSample(text6) === null && countEffectiveInvisible(text6) < LONG_RUN_THRESHOLD;
 }
 function payloadVerdict(text6) {
-  const firstRun = payloadLongRuns(text6).next().value ?? null;
   const invisibleCount = countEffectiveInvisible(text6);
+  const firstRun = payloadLongRuns(text6).next().value ?? null;
   return {
     firstRun,
     invisibleCount,
@@ -5209,7 +5231,7 @@ function stripBody(body) {
 function stripInvisible(text6) {
   return stripInvisibleWithReport(text6).cleaned;
 }
-var VS, ZERO_WIDTH_MN, BLANK_NON_CF, REGEX_FLAGS, CF_CLASS_SOURCE, CATEGORY, CATEGORY_LABELS, CHECKS, STRIP, LONG_RUN_THRESHOLD, SCATTERED_THRESHOLD, LONG_RUN_RE, RUN_CHUNK, LONG_RUN_CHUNK_RE, RUN_TAIL_RE, BOM, ZWNJ, ZWJ, CONSECUTIVE_JOINER_CAP, CONSECUTIVE_SELECTOR_CAP, TOTAL_PRESERVED_JOINER_BUDGET, PRESERVED_JOINER_PER_VISIBLE, PRESERVE_HARD_CAP, TOTAL_PRESERVED_BLANK_BUDGET, PRESERVED_BLANK_PER_ANCHOR, LINGUISTIC_SCRIPTS, isEmojiLeft, KEYCAP_BASE, COMBINING_KEYCAP, isEmojiBase, VARIATION_SELECTOR, isKeycapBase, isVariationSelectorCp, PRESENTATION_SELECTORS, TAG_BASE, TAG_CANCEL, TAG_SPEC_MIN, TAG_SPEC_MAX, REGISTERED_TAG_PAYLOADS, MAX_TAG_SPEC_CHARS, VS16, RGI_ZWJ_TRIE, IVS_MIN, IVS_MAX, CJK_COMPATIBILITY_IDEOGRAPH_BLOCKS, inCjkIdeographTables, BRAILLE_BLANK, HANGUL_FILLERS, GATED_BLANK_RE, isBrailleScript, isHangulScript, CODE_VISIBLE, CODE_CF, CODE_VS, CODE_BLANK, KIND_NONE, KIND_JOINER, KIND_EMOJIVS, KIND_GLYPH, KIND_STDVS, KIND_IVS, KIND_BLANK, CODE_CATEGORY, TRACKED_INVISIBLE, TRACKED_BMP, CP_PREDICATE_MEMO_CAP, isCursiveLetter, CP_PROPS_END, JOINING_TYPES, PROP_TYPE_MASK, PROP_VIRAMA, PROP_BRAHMIC_CONSONANT, PROP_EMOJI_TEXT_DEFAULT, PROP_EMOJI_MODIFIER, PROP_CJK_IDEOGRAPH, cpPropsTable, STANDARDIZED_SELECTOR_MIN, STANDARDIZED_SELECTOR_MAX, segmenterCache, PAIR_BREAK_MEMO_CAP, PAIR_BREAK_MEMO, CONTAINING_CANDIDATE_SHARE, isHighSurrogate, isLowSurrogate, lastCarve, TAG_CHAR_RE;
+var VS, ZERO_WIDTH_MN, BLANK_NON_CF, REGEX_FLAGS, CF_CLASS_SOURCE, CATEGORY, CATEGORY_LABELS, CHECKS, STRIP, LONG_RUN_THRESHOLD, SCATTERED_THRESHOLD, LONG_RUN_RE, RUN_CHUNK, LONG_RUN_CHUNK_RE, RUN_TAIL_RE, BOM, ZWNJ, ZWJ, CONSECUTIVE_JOINER_CAP, CONSECUTIVE_SELECTOR_CAP, TOTAL_PRESERVED_JOINER_BUDGET, PRESERVED_JOINER_PER_VISIBLE, PRESERVE_HARD_CAP, TOTAL_PRESERVED_BLANK_BUDGET, PRESERVED_BLANK_PER_ANCHOR, LINGUISTIC_SCRIPTS, isEmojiLeft, KEYCAP_BASE, COMBINING_KEYCAP, isEmojiBase, VARIATION_SELECTOR, isKeycapBase, PRESENTATION_SELECTORS, TAG_BASE, TAG_CANCEL, TAG_SPEC_MIN, TAG_SPEC_MAX, REGISTERED_TAG_PAYLOADS, MAX_TAG_SPEC_CHARS, VS16, RGI_ZWJ_TRIE, IVS_MIN, IVS_MAX, CJK_COMPATIBILITY_IDEOGRAPH_BLOCKS, inCjkIdeographTables, BRAILLE_BLANK, HANGUL_FILLERS, GATED_BLANK_RE, isBrailleScript, isHangulScript, CODE_VISIBLE, CODE_CF, CODE_VS, CODE_BLANK, KIND_NONE, KIND_JOINER, KIND_EMOJIVS, KIND_GLYPH, KIND_STDVS, KIND_IVS, KIND_BLANK, CODE_CATEGORY, TRACKED_INVISIBLE, TRACKED_TABLE_END, TRACKED_LOW, CP_PREDICATE_MEMO_CAP, isCursiveLetter, CP_PROPS_END, JOINING_TYPES, PROP_TYPE_MASK, PROP_VIRAMA, PROP_BRAHMIC_CONSONANT, PROP_EMOJI_TEXT_DEFAULT, PROP_EMOJI_MODIFIER, PROP_CJK_IDEOGRAPH, PROP_EXTENDED_PICTOGRAPHIC, cpPropsTable, STANDARDIZED_SELECTOR_MIN, STANDARDIZED_SELECTOR_MAX, segmenterCache, PAIR_BREAK_MEMO_CAP, PAIR_BREAK_MEMO, CONTAINING_CANDIDATE_SHARE, isHighSurrogate, isLowSurrogate, lastCarve, TAG_CHAR_RE;
 var init_invisible = __esm({
   "src/invisible.mjs"() {
     "use strict";
@@ -5303,13 +5325,12 @@ var init_invisible = __esm({
       "Malayalam",
       "Sinhala"
     ];
-    isEmojiLeft = (cp) => inSpans(EXTENDED_PICTOGRAPHIC, cp) || inSpans(EMOJI_MODIFIER, cp);
+    isEmojiLeft = (cp) => isExtendedPictographic(cp) || isEmojiModifierCp(cp);
     KEYCAP_BASE = /[0-9#*]/u;
     COMBINING_KEYCAP = 8419;
-    isEmojiBase = (cp) => inSpans(EXTENDED_PICTOGRAPHIC, cp);
+    isEmojiBase = (cp) => isExtendedPictographic(cp);
     VARIATION_SELECTOR = new RegExp(`[${VS}]`, "u");
     isKeycapBase = memoizedCpPredicate(KEYCAP_BASE);
-    isVariationSelectorCp = memoizedCpPredicate(VARIATION_SELECTOR);
     PRESENTATION_SELECTORS = /* @__PURE__ */ new Set([65038, 65039]);
     TAG_BASE = 127988;
     TAG_CANCEL = 917631;
@@ -5375,9 +5396,18 @@ var init_invisible = __esm({
     )
       for (const cp of codepoints)
         if (!TRACKED_INVISIBLE.has(cp)) TRACKED_INVISIBLE.set(cp, code4);
-    TRACKED_BMP = new Uint8Array(65536);
+    TRACKED_TABLE_END = 131072;
+    TRACKED_LOW = new Uint8Array(TRACKED_TABLE_END);
     for (const [cp, code4] of TRACKED_INVISIBLE)
-      if (cp < 65536) TRACKED_BMP[cp] = code4;
+      if (cp < TRACKED_TABLE_END) TRACKED_LOW[cp] = code4;
+    for (const ch of VS)
+      if (!isVariationSelectorCp(
+        /** @type {number} */
+        ch.codePointAt(0)
+      ))
+        throw new Error(
+          `variation selector U+${ch.codePointAt(0)?.toString(16)} is not classified CODE_VS`
+        );
     CP_PREDICATE_MEMO_CAP = 4096;
     isCursiveLetter = (jt) => jt === "D" || jt === "R" || jt === "L";
     CP_PROPS_END = 131072;
@@ -5388,6 +5418,7 @@ var init_invisible = __esm({
     PROP_EMOJI_TEXT_DEFAULT = 32;
     PROP_EMOJI_MODIFIER = 64;
     PROP_CJK_IDEOGRAPH = 128;
+    PROP_EXTENDED_PICTOGRAPHIC = 256;
     cpPropsTable = null;
     STANDARDIZED_SELECTOR_MIN = Math.min(
       ...STANDARDIZED_VARIANTS.map(([, selector2]) => selector2)

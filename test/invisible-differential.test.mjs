@@ -60,9 +60,13 @@ const evict = () => fast.countPayloadInvisible(`${ZWNJ}evict`);
 /** @param {string} text @param {string} label */
 function assertAgrees(text, label) {
   // The effective count is read two ways: off a strip already built (readings
-  // strips first), and, on a cold cache, off a walk that builds no text.
+  // strips first), and, on a cold cache, off a walk that builds no text. The
+  // long run likewise: off the carve already in hand (readings), and cold, off
+  // the raw text.
   evict();
   const cold = fast.countEffectiveInvisible(text);
+  evict();
+  const coldRun = fast.payloadLongRunSample(text);
   evict();
   const reference = readings(slow, text);
   assert.deepEqual(
@@ -74,6 +78,11 @@ function assertAgrees(text, label) {
     cold,
     reference.effective,
     `${label}: the count-only walk disagrees with the reference on ${JSON.stringify(text)}`,
+  );
+  assert.equal(
+    coldRun,
+    reference.longRun,
+    `${label}: the cold long-run read disagrees with the reference on ${JSON.stringify(text)}`,
   );
 }
 
@@ -123,6 +132,12 @@ const CASES = {
   "lone-low-surrogate": "a\udc00b",
   "surrogate-pair-split": "\ud83d" + ZWSP + "\ude00",
   "payload-run": ZWSP.repeat(40),
+  // A long run is exactly LONG_RUN_THRESHOLD (10) payload code points in a
+  // row; a preserved selector in front of nine is not one.
+  "payload-run-at-threshold": "a" + ZWSP.repeat(10) + "b",
+  "payload-run-under-threshold": "a" + ZWSP.repeat(9) + "b",
+  "payload-run-after-preserved": "漢" + IVS + ZWSP.repeat(9) + "b",
+  "payload-runs-twice": ("漢" + IVS + ZWSP.repeat(10) + "b ").repeat(3),
   "payload-scattered": ("a" + SHY).repeat(40),
   "over-budget-joiners": ("م" + ZWNJ + "م").repeat(60),
   // The cluster around a joiner is read off pair verdicts where those cannot
