@@ -2413,6 +2413,27 @@ describe("splice fidelity and regressions", () => {
     assert.equal(checkExfilUrl("https://ok.example/#token=abc"), null));
   it("leaves a benign fragment anchor alone", () =>
     assert.equal(checkExfilUrl("https://ok.example/page#section-2"), null));
+  // `decodeURIComponent` throws on these; containsBlobRun must fall back to
+  // splitting the raw value rather than skipping the credential-named param.
+  const MALFORMED_PERCENT_TAILS = ["%", "%E0%A4%A", "%zz"];
+  for (const tail of MALFORMED_PERCENT_TAILS) {
+    it(`still flags a wrapped blob in a credential-named param with malformed escape ${tail}`, () => {
+      assert.throws(() => decodeURIComponent(tail), URIError);
+      assert.equal(
+        checkExfilUrl(
+          `https://ok.example/p?api_key=s:q9X2mN7pK4rT8wY1cV5bZ3dF6gH0jL2eQ8vN4xB7${tail}`,
+        ),
+        "credential-shaped token in URL parameter",
+      );
+    });
+    it(`leaves a short wrapped value with malformed escape ${tail} alone`, () => {
+      assert.throws(() => decodeURIComponent(tail), URIError);
+      assert.equal(
+        checkExfilUrl(`https://ok.example/p?api_key=s:abc${tail}`),
+        null,
+      );
+    });
+  }
 });
 
 // ─── Bogus-comment parity (finding: prose branch matched only `<!--`) ─────────
