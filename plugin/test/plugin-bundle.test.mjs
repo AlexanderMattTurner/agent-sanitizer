@@ -1286,6 +1286,51 @@ test("a provisioned binary answers even when node IS available", (t) => {
   assert.deepEqual(JSON.parse(res.stdout), { fromBinary: true });
 });
 
+test("the launcher hands the compiled binary the real zipapp path", (t) => {
+  // Inside the binary import.meta.url is a virtual filesystem with no zipapp
+  // beside it, so the exported path is the binary's only route to the engine.
+  const plugin = stagePlugin(t);
+  const run = (extra) =>
+    spawnSync(
+      "bash",
+      [
+        join(plugin, "scripts", "safe-launch.sh"),
+        "PreToolUse",
+        "--hook=pretooluse-sanitize",
+      ],
+      {
+        input: "{}",
+        encoding: "utf8",
+        cwd: tmpdir(),
+        env: {
+          ...baseEnv(),
+          ...sessionEnv(),
+          _AGENT_SANITIZER_REDACTOR_PYZ: "",
+          ...extra,
+          CLAUDE_PLUGIN_DATA: stageHookBinary(
+            t,
+            `cat >/dev/null; printf '{"pyz":"%s"}' "$_AGENT_SANITIZER_REDACTOR_PYZ"`,
+          ),
+        },
+      },
+    );
+
+  const unset = run({});
+  assert.equal(unset.status, 0, unset.stderr);
+  assert.deepEqual(JSON.parse(unset.stdout), {
+    pyz: join(plugin, "dist", "redactor", "daemon.pyz"),
+  });
+
+  // An explicit setting is authoritative, never overwritten.
+  const explicit = run({
+    _AGENT_SANITIZER_REDACTOR_PYZ: "/operator/daemon.pyz",
+  });
+  assert.equal(explicit.status, 0, explicit.stderr);
+  assert.deepEqual(JSON.parse(explicit.stdout), {
+    pyz: "/operator/daemon.pyz",
+  });
+});
+
 test("the binary receives the same argv and payload the bundle would", (t) => {
   const data = stageHookBinary(
     t,

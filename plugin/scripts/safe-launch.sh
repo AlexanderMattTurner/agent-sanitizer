@@ -288,6 +288,16 @@ if [[ -z "${_AGENT_SANITIZER_REDACTOR_DAEMON:-}" && -x "$venv_daemon" ]]; then
   export _AGENT_SANITIZER_REDACTOR_DAEMON="$venv_daemon"
 fi
 
+# The committed zipapp's real path, for the client's no-venv fallback. The
+# compiled hook binary cannot find it itself: inside the binary import.meta.url
+# names its virtual filesystem, where no zipapp sits beside the bundle, so
+# without this export every cold start there waits out the spawn deadline and
+# fails closed. An explicit setting wins, like the daemon override above.
+pyz="$plugin_root/dist/redactor/daemon.pyz"
+if [[ -z "${_AGENT_SANITIZER_REDACTOR_PYZ:-}" && -f "$pyz" ]]; then
+  export _AGENT_SANITIZER_REDACTOR_PYZ="$pyz"
+fi
+
 # The post-condition's shape check, shared by both runtimes below: a verdict is
 # a single JSON object, so the test is `{`…`}` over the trimmed bytes, done
 # with shell builtins alone. "Something was written" is not the same question —

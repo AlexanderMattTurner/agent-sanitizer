@@ -141,6 +141,37 @@ describe("the zipapp stub imports only from a cache no other uid can write", () 
     );
   });
 
+  it("falls back to the temp-dir cache when CLAUDE_PLUGIN_DATA cannot hold one", (t) => {
+    const dir = scratch(t);
+    const { pyz, digest } = buildArchive(dir);
+    // A plain file where the directory should be: the cache base cannot be
+    // created under it, whatever uid runs this (a 0500 directory would not
+    // stop root).
+    const data = join(dir, "plugin-data");
+    writeFileSync(data, "");
+    const res = runStub(pyz, { tmp: dir, pluginData: data });
+    assert.equal(res.status, 0, res.stderr);
+    assert.equal(
+      res.stdout.trim(),
+      `RAN ${join(dir, `agent-sanitizer-pyz-${UID}`, digest, "agent_sanitizer", "secrets", "daemon.py")}`,
+    );
+  });
+
+  it("does NOT fall back from a plugin-data cache that exists but is untrusted", (t) => {
+    // The fallback is for an unwritable base, never for a hostile one: moving
+    // to the temp dir would hide the squat that trusted_dir exists to report.
+    const dir = scratch(t);
+    const { pyz, digest } = buildArchive(dir);
+    const data = join(dir, "plugin-data");
+    const base = join(data, "redactor-pyz");
+    plant(join(base, digest));
+    chmodSync(base, 0o777);
+    const res = runStub(pyz, { tmp: dir, pluginData: data });
+    assert.notEqual(res.status, 0);
+    assert.match(res.stderr, /refusing .*: writable by group or other/);
+    assert.ok(!res.stdout.includes("PLANTED"), res.stdout);
+  });
+
   it("refuses a cache base writable by group or other", (t) => {
     const dir = scratch(t);
     const { pyz, digest } = buildArchive(dir);

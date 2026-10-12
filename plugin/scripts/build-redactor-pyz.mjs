@@ -123,7 +123,8 @@ export function buildEngineWheel() {
  * extracts fresh and stale trees are inert.
  *
  * The cache root is `$CLAUDE_PLUGIN_DATA/redactor-pyz` when Claude Code supplies
- * that per-install directory, else a uid-named directory in the temp dir. The
+ * that per-install directory and it is writable, else a uid-named directory in
+ * the temp dir. The
  * temp-dir name and the digest are both predictable, so every directory the
  * stub imports from must pass `trusted_dir` — see its docstring.
  */
@@ -158,13 +159,25 @@ def trusted_dir(path):
 with open(archive, "rb") as fh:
     digest = hashlib.sha256(fh.read()).hexdigest()[:16]
 
+candidates = [
+    os.path.join(tempfile.gettempdir(), f"agent-sanitizer-pyz-{os.getuid()}")
+]
 plugin_data = os.environ.get("CLAUDE_PLUGIN_DATA")
-base = (
-    os.path.join(plugin_data, "redactor-pyz")
-    if plugin_data
-    else os.path.join(tempfile.gettempdir(), f"agent-sanitizer-pyz-{os.getuid()}")
-)
-os.makedirs(base, mode=0o700, exist_ok=True)
+if plugin_data:
+    candidates.insert(0, os.path.join(plugin_data, "redactor-pyz"))
+# The per-install directory is preferred, but a host that cannot write it (the
+# same read-only plugin data that leaves no venv) still has a usable temp
+# cache. Only a base that cannot be created or written is skipped: a base that
+# exists and fails trusted_dir below is an attack signal and stays fatal.
+for base in candidates:
+    try:
+        os.makedirs(base, mode=0o700, exist_ok=True)
+    except OSError:
+        if base is candidates[-1]:
+            raise
+        continue
+    if os.access(base, os.W_OK) or base is candidates[-1]:
+        break
 trusted_dir(base)
 tree = os.path.join(base, digest)
 

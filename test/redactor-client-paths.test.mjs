@@ -14,6 +14,7 @@ import {
   mkdtempSync,
   readFileSync,
   rmSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -21,7 +22,10 @@ import { join } from "node:path";
 import { describe, it } from "node:test";
 import { setTimeout as sleep } from "node:timers/promises";
 
-import { spawnDaemon } from "../claude-hooks/lib/redactor-client.mjs";
+import {
+  resolveSocketPath,
+  spawnDaemon,
+} from "../claude-hooks/lib/redactor-client.mjs";
 
 const CLIENT = new URL(
   "../claude-hooks/lib/redactor-client.mjs",
@@ -114,6 +118,58 @@ describe("the default redactor socket lives in a per-user directory", () => {
       join(tmpdir(), `agent-sanitizer-redactor-${UID}`, "redactor.sock"),
     );
   });
+
+  it("skips a symlinked root even when its target is private", (t) => {
+    const dir = scratch(t);
+    const target = dirWithMode(join(dir, "target"), 0o700);
+    const link = join(dir, "link");
+    symlinkSync(target, link);
+    assert.equal(
+      resolvedSocket({ XDG_RUNTIME_DIR: link, CLAUDE_PLUGIN_DATA: link }),
+      join(tmpdir(), `agent-sanitizer-redactor-${UID}`, "redactor.sock"),
+    );
+  });
+
+  it("skips roots owned by another uid", (t) => {
+    const dir = scratch(t);
+    const runtime = dirWithMode(join(dir, "run"), 0o700);
+    const env = { XDG_RUNTIME_DIR: runtime, CLAUDE_PLUGIN_DATA: runtime };
+    // Positive pair: the same roots are taken by their own uid, so the
+    // foreign-uid result below is the owner clause and nothing else.
+    assert.equal(
+      resolveSocketPath(env, UID),
+      join(runtime, "agent-sanitizer-redactor", "redactor.sock"),
+    );
+    assert.equal(
+      resolveSocketPath(env, UID + 1),
+      join(tmpdir(), `agent-sanitizer-redactor-${UID + 1}`, "redactor.sock"),
+    );
+  });
+
+  // The daemon binds "." + 16 hex digits before renaming onto redactor.sock,
+  // four bytes longer, so the longer name is what must fit sun_path.
+  for (const [pathBytes, taken] of [
+    [99, true],
+    [100, false],
+    [103, false],
+  ]) {
+    it(`takes a root only if the daemon's temp bind fits (socket path ${pathBytes} bytes)`, (t) => {
+      const dir = scratch(t);
+      const suffix = join("agent-sanitizer-redactor", "redactor.sock");
+      // join(dir, "r" * k, suffix) is len(join(dir, suffix)) + 1 + k bytes.
+      const fill = pathBytes - Buffer.byteLength(join(dir, suffix)) - 1;
+      const root = dirWithMode(join(dir, "r".repeat(fill)), 0o700);
+      assert.equal(
+        Buffer.byteLength(join(root, suffix)),
+        pathBytes,
+        "fixture sizing drifted",
+      );
+      const expected = taken
+        ? join(root, suffix)
+        : join(tmpdir(), `agent-sanitizer-redactor-${UID}`, "redactor.sock");
+      assert.equal(resolveSocketPath({ XDG_RUNTIME_DIR: root }, UID), expected);
+    });
+  }
 
   it("falls back to a uid-named temp-dir socket, never a shared name", () => {
     assert.equal(
