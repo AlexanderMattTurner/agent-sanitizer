@@ -204,9 +204,8 @@ async function rehydrateEdit(
             !(matchStart <= span.start && span.end <= matchEnd),
         );
       });
-      // No offsets in the refusal: the secret's span is its length, and the
-      // match's position against it says how much of the secret the probe
-      // covered. The caller sees the file, never the secret.
+      // No offsets: a span is the secret's length, and the match's position
+      // against it says how much of the secret the probe covered.
       if (intrudes)
         return {
           deny:
@@ -483,9 +482,8 @@ function restoreWriteRegion(ctx, viewStart, viewEnd, fallback) {
 }
 
 /**
- * A count tagged with the space it was measured in — the same
- * {@link import("./view-map.mjs").OffsetSpace} tag a FileView carries for its
- * offsets — so the prose that renders it takes the unit from the value.
+ * A count tagged with the {@link import("./view-map.mjs").OffsetSpace} it was
+ * measured in, so the prose that renders it takes its unit from the value.
  * @template {import("./view-map.mjs").OffsetSpace} S
  * @typedef {{ readonly n: number, readonly space: S }} SpacedCount
  */
@@ -493,18 +491,15 @@ function restoreWriteRegion(ctx, viewStart, viewEnd, fallback) {
 /** @type {SpacedCount<"codePoint">} */
 const NO_STRIPS = Object.freeze({ n: 0, space: "codePoint" });
 
-// The noun each count space renders as. Only code points have one: the strip
-// notes speak in characters, so a count in another space fails the type check
-// at {@link strippedPhrase} instead of printing a unit it is not.
+// The noun each count space renders as; only code points have one, so a count
+// in another space fails the type check at {@link strippedPhrase}.
 const STRIPPED_NOUN = Object.freeze({
   codePoint: "invisible/control character(s)",
 });
 
 /**
  * How many characters Layer 1 stripped from `diskText` to leave `cleanedText`,
- * in code points. A UTF-16 difference double-counts every astral strip: one
- * tag character is two units. Lone-surrogate normalization swaps one unit for
- * one, so it adds nothing.
+ * in code points (a UTF-16 difference double-counts every astral strip).
  * @param {string} diskText on-disk bytes of a region
  * @param {string} cleanedText that region's Layer-1 view
  * @returns {SpacedCount<"codePoint">}

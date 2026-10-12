@@ -14,10 +14,9 @@
  *
  * Every function returns COUNTS and reasons, never the removed content itself:
  * echoing what Layer 2 just spliced out would re-inject the payload into the
- * very context the splice removed it from. The host `describeExfil` names is not
- * removed content (Layer 3 leaves the URL intact) but is still text from the
- * scanned input, so it is escaped with {@link displayUntrusted} rather than
- * trusting the URL parser to have left it printable.
+ * very context the splice removed it from. The target `describeExfil` names is
+ * not removed content but is still scanned-input text, so it goes through
+ * {@link displayUntrusted}.
  */
 import { displayUntrusted } from "./claude-context.mjs";
 

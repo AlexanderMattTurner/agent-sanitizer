@@ -269,9 +269,8 @@ export function scanText(content) {
 }
 
 /**
- * True when `child` is `root` itself or lives beneath it: {@link isInsideDir},
- * the one containment predicate, widened by the root itself (a glob can match
- * the scan root; a write never targets it).
+ * True when `child` is `root` itself or beneath it: {@link isInsideDir} widened
+ * by the root (a glob can match the scan root; a write never targets it).
  * @param {string} root
  * @param {string} child
  * @returns {boolean}
@@ -282,13 +281,11 @@ function isContained(root, child) {
 
 /**
  * The path a write to `absPath` may use, proven inside `root`: the realpath of
- * its DIRECTORY joined with its own name, checked by {@link isInsideDir}
- * against the realpath of `root`. Resolving the directory is what catches a
- * directory symlink in the tree (`.claude/rules -> ~/.claude/rules`) that would
- * otherwise carry the rewrite out of it; the final component is left
- * unresolved so cleanFile's `O_NOFOLLOW` open still refuses a file symlink.
- * Every later step of the write uses the returned path, never `absPath`.
- * Throws when the write would land outside `root`.
+ * its DIRECTORY joined with its own name, checked against the realpath of
+ * `root`. Resolving the directory catches a directory symlink in the tree
+ * (`.claude/rules -> ~/.claude/rules`); the final component stays unresolved so
+ * cleanFile's `O_NOFOLLOW` open still refuses a file symlink. Every later step
+ * of the write uses the returned path. Throws when it would land outside `root`.
  * @param {string} absPath
  * @param {string} root
  * @returns {string}
@@ -368,12 +365,9 @@ function keepContained(absPath, realRoot, literalRoot, pattern) {
  * root-relative path, so a predicate holding `build` cannot tell a top-level
  * `build/` from a tracked `src/build/` and prunes both; under an absolute
  * pattern it is handed absolute paths and matches neither. A Dirent's
- * `parentPath`, resolved against `cwd`, normalizes to exactly one
- * root-relative, `/`-separated entry per walked directory.
- *
- * Against `cwd`, never the process's: a literal prefix's directories
- * (`.claude/rules/**`) arrive with a parentPath RELATIVE to `cwd`, which a bare
- * join resolves against process.cwd() and prunes `.claude/` from the scan.
+ * `parentPath`, resolved against `cwd` (not the process's: a literal prefix's
+ * directories arrive RELATIVE to `cwd`, and a bare join would prune `.claude/`),
+ * normalizes to one root-relative, `/`-separated entry per walked directory.
  * @param {string[]} globs
  * @param {string} cwd
  * @param {(entry: string) => boolean} [exclude]
@@ -503,30 +497,24 @@ export function scanInstructionFiles(
  * a temp file in the same directory which is then `rename`d over the original
  * (preserving the original file mode), fsync'd for crash-safety.
  *
- * Root containment: the rewrite must land strictly inside `root`, judged on
- * realpaths (see {@link containedWritePath}). `O_NOFOLLOW` guards only the
- * final component, so without this a directory symlink in the tree carries the
- * rewrite to a file outside it. Required, so no caller can write unbounded.
+ * The rewrite must land strictly inside `root`, judged on realpaths (see
+ * {@link containedWritePath}): `O_NOFOLLOW` guards only the final component, so
+ * a directory symlink would otherwise carry it outside. `root` is required so
+ * no caller writes unbounded.
  *
- * Throws if the file cannot be read or written, or lies outside `root` (the
- * caller decides whether an unwritable contaminated file is fatal or falls back
- * to alerting).
+ * Throws if the file cannot be read or written, or lies outside `root`.
  * @param {string} absPath
  * @param {{ root: string,
  *   lstat?: (path: string) => import("node:fs").Stats }} options
  *   `root` bounds the write. `lstat` is the injectable pre-rename recheck stat
- *   (fault-injection seam, mirrors {@link atomicReplaceFile}'s `tmpName`): it
- *   lets a test drive the concurrent write/symlink-swap that the TOCTOU guard
- *   exists to catch, which is otherwise unreachable from this
- *   fully-synchronous path. Defaults to `lstatSync`.
+ *   (fault-injection seam) that lets a test drive the TOCTOU guard.
  * @returns {boolean}
  */
 export function cleanFile(
   absPath,
   { root, lstat = lstatSync } = /** @type {any} */ ({}),
 ) {
-  // The default keeps a bare `cleanFile(path)` (the pre-`root` call shape) on
-  // the TypeError below instead of a destructuring error.
+  // The `{}` default routes a bare `cleanFile(path)` to the TypeError below.
   if (typeof root !== "string")
     throw new TypeError(
       "cleanFile requires options.root, the directory the rewrite must stay inside",

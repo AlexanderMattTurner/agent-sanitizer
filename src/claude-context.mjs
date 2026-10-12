@@ -19,7 +19,7 @@
  * published engine. This scope is hook POLICY, not engine behavior — it must move
  * with the hook that walks it, or a plugin built against an older pin prunes the
  * wrong directories while believing it scanned everything. Its one import,
- * `./invisible.mjs` (for {@link displayUntrusted}), is package-free too.
+ * `./invisible.mjs`, is package-free too.
  */
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { STRIP } from "./invisible.mjs";
@@ -204,13 +204,11 @@ export function ancestorInstructionFiles(dir) {
  * Whether `file` lives strictly inside `dir` — the ONE containment predicate:
  * both scanners gate their auto-clean on it, the glob walk keeps a match by it,
  * and cleanFile refuses a write it rejects. A file above the scan root is
- * shared with every other project beneath that root, so it is reported rather
- * than silently edited.
+ * shared with other projects, so it is reported rather than edited.
  *
- * Lexical on the paths it is handed. Where a WRITE lands, cleanFile hands it
- * realpaths, which is what stops a directory symlink inside the tree from
- * redirecting the rewrite out of it. `..` is tested as a whole SEGMENT, so a
- * child named `..notes.md` is inside and `../x` is not.
+ * Lexical; cleanFile hands it realpaths, which stops a directory symlink from
+ * redirecting a rewrite. `..` is tested as a whole SEGMENT, so `..notes.md` is
+ * inside and `../x` is not.
  * @param {string} dir
  * @param {string} file
  * @returns {boolean}
@@ -225,11 +223,9 @@ export function isInsideDir(dir, file) {
   );
 }
 
-// What rendered untrusted text must never carry raw: the payload-capable
-// invisibles Layer 1 strips (Cf incl. bidi controls and tag characters,
-// variation selectors, blank fillers), C0/C1 controls (ESC opens a terminal
-// escape, a newline forges a report line), line/paragraph separators, lone
-// surrogates.
+// What rendered untrusted text must never carry raw: what Layer 1 strips, C0/C1
+// controls (ESC opens a terminal escape, a newline forges a report line),
+// line/paragraph separators, lone surrogates.
 const DISPLAY_UNSAFE = new RegExp(
   `${STRIP.source}|[\\p{Cc}\\p{Zl}\\p{Zp}\\p{Cs}]`,
   "gu",
@@ -237,13 +233,10 @@ const DISPLAY_UNSAFE = new RegExp(
 
 /**
  * Untrusted text made safe to render into a report, stderr or model context:
- * every {@link DISPLAY_UNSAFE} code point becomes a visible `\u{XXXX}` escape
- * and everything else is kept, so a legitimate non-ASCII path reads unchanged.
- * The scanners pass every path from a possibly hostile tree (a globbed
- * filename, an event's `file_path`) and every reason that may quote one (an
- * fs error's message) through it; a name carrying tag characters or an OSC
- * sequence would otherwise smuggle an instruction to the model or drive the
- * operator's terminal. Display only — the result never opens a file.
+ * every {@link DISPLAY_UNSAFE} code point becomes a visible `\u{XXXX}` escape,
+ * everything else is kept. Scanners pass every path from a possibly hostile
+ * tree and every reason that may quote one through it. Display only — the
+ * result never opens a file.
  * @param {string} text
  * @returns {string}
  */

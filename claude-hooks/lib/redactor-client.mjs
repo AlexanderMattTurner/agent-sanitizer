@@ -311,12 +311,10 @@ export function connectAndRequest(
       if (frameRead === undefined) return;
       const parsed = frameRead.value;
       if (isPlainObject(parsed) && "error" in parsed) {
-        // Our daemon's error strings are fixed literals, but the wire types
-        // `error` only as a string, so whatever answers on the socket chooses
-        // it, and this message reaches the operator and the model. Quote it
-        // only when it is plain printable ASCII on one line; anything else is
-        // dropped rather than escaped, because this module must not import the
-        // engine (the fault path has to load with no peer package installed).
+        // The wire types `error` only as a string, so whatever answers on the
+        // socket chooses it, and this message reaches the operator and the
+        // model. Quote it only as plain printable ASCII on one line; anything
+        // else is dropped, not escaped: this module must not import the engine.
         const reason =
           conforms(parsed, PROTOCOL.responses.error) &&
           typeof parsed.error === "string" &&

@@ -572,9 +572,8 @@ function autoCleanFindings(allFindings, dir) {
     if (!isInsideDir(dir, absPath)) continue;
     try {
       // The SSOT clean: realpath containment in `dir` (the lexical check above
-      // cannot see a directory symlink carrying the write out of the project),
-      // O_NOFOLLOW open, UTF-8 round-trip check, TOCTOU recheck, atomic
-      // rename + fsync, mode preservation. The bare
+      // cannot see a directory symlink), O_NOFOLLOW open, UTF-8 round-trip
+      // check, TOCTOU recheck, atomic rename + fsync, mode preservation. The bare
       // readFileSync/writeFileSync pair that lived here had none of those
       // guards — on the one hook that REWRITES instruction files.
       //

@@ -21,8 +21,7 @@
  *     Skips `node_modules`, the directories git ignores wholesale, and any
  *     nested worktree — none of them is the scanned checkout's own source.
  *   cleanFile          { path, root? }             -> { changed }
- *     Refuses a write whose realpath leaves `root` (default: `path`'s own
- *     directory, i.e. no confinement beyond it).
+ *     Refuses a write whose realpath leaves `root` (default: `path`'s own directory).
  *
  * A failure response is `{ "error": string }`. Two modes, same binary:
  *

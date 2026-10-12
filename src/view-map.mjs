@@ -347,7 +347,8 @@ function mapViewOffset(pairs, offset) {
  * pairs it wholly contains, mapping across placeholder expansion (view →
  * cleaned) and stripped invisible runs (cleaned → disk). Null when a boundary
  * cuts through a placeholder. Stripped runs inside the span are replaced along
- * with it; runs at the boundaries stay outside and are preserved. `cleanedText` is the span's Layer-1 view — the
+ * with it; runs at the boundaries stay outside and are preserved. `cleanedText`
+ * is the span's Layer-1 view — the
  * caller MUST verify that re-cleaning `diskText` reproduces it before acting:
  * greedy alignment is ambiguous when a deleted run's edge character equals the
  * adjacent kept character (an ANSI sequence ending in `m` before a kept `m`),

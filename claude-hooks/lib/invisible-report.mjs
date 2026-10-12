@@ -6,9 +6,8 @@
  * loaded after that — and a second copy would drift in exactly the way that
  * matters: the framing that keeps a decoded payload from reading as an
  * instruction (see decodeRun's `untrusted data` prefix) is part of the report,
- * not decoration on it. So is {@link displayUntrusted} on each file name: the name
- * comes from the scanned tree, and a hostile one would otherwise carry its own
- * payload into the very report that exposes the file's.
+ * not decoration on it. So is {@link displayUntrusted} on each file name, which
+ * comes from the scanned tree.
  */
 import { displayUntrusted } from "../../src/claude-context.mjs";
 
