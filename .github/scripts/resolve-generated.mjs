@@ -22,6 +22,12 @@
 //                      deliberately NOT listed, so both reviewers read it.
 //   (no flag)          run every rule whose sources changed, re-deriving its outputs.
 //   --changed <paths>  restrict the run to rules matching these changed paths.
+//   --root=<dir>       act on the tree at <dir> instead of this script's own repo.
+//
+// A run also STAGES each rule's outputs that are still unmerged once the rule
+// succeeds. A generated file git could not merge (plugin/dist is binary) keeps
+// its three index stages after the generator rewrites the working copy, and the
+// resolver reads "still unmerged" as "did not regenerate cleanly".
 //
 // Node stdlib only, and invoked as `node .github/scripts/resolve-generated.mjs`
 // rather than through a package script: a repo may have no package.json at all,
@@ -33,8 +39,18 @@ import { existsSync, readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
-const CONFIG_PATH = join(REPO_ROOT, "config", "auto-resolve-regen-rules.json");
+// The tree the rules act on. `--root` aims this script at a checkout that is not
+// its own repository: prepare.sh retries with the trusted-base copy of this
+// script when the PR's own copy is conflicted, and that copy lives in a bare
+// base worktree with no node_modules. Without it the retry regenerates the BASE
+// tree, not the merge. The RULES always come from the script's own repository,
+// so a tree under merge cannot declare its own.
+const SELF_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
+const rootArg = process.argv.slice(2).find((a) => a.startsWith("--root="));
+const REPO_ROOT = rootArg
+  ? resolve(rootArg.slice("--root=".length))
+  : SELF_ROOT;
+const CONFIG_PATH = join(SELF_ROOT, "config", "auto-resolve-regen-rules.json");
 
 const die = (msg) => {
   process.stderr.write(`resolve-generated: ${msg}\n`);
@@ -187,6 +203,58 @@ function runRule(rule) {
   if (res.status !== 0) die(`${argv.join(" ")} exited ${res.status}`);
 }
 
+// A line that is nothing but a conflict marker. Anchored so a generated file
+// that merely quotes `<<<<<<<` mid-line is not mistaken for an unresolved one.
+const CONFLICT_MARKER = /^(?:<{7}(?: .*)?|={7}|>{7}(?: .*)?)$/m;
+
+/** Stage the still-unmerged outputs of `rule`, so the resolver sees them as
+ * resolved. Only unmerged paths: staging anything else would put an edit
+ * outside the conflicted set into the merge commit. Refuses a file that still
+ * carries a conflict marker, since staging it would commit the markers. */
+function stageUnmergedOutputs(rule) {
+  const pathspecs = [
+    ...(rule.owns ?? []),
+    ...(rule.ownsPrefix ? [rule.ownsPrefix] : []),
+  ];
+  if (pathspecs.length === 0) return;
+  // A root that is not a git checkout has no index, so nothing can be unmerged.
+  const inRepo = spawnSync("git", ["rev-parse", "--is-inside-work-tree"], {
+    cwd: REPO_ROOT,
+    stdio: "ignore",
+  });
+  if (inRepo.error) die(`git could not be run: ${inRepo.error.message}`);
+  if (inRepo.status !== 0) return;
+  const ls = spawnSync("git", ["ls-files", "-u", "-z", "--", ...pathspecs], {
+    cwd: REPO_ROOT,
+    encoding: "utf8",
+  });
+  if (ls.error || ls.status !== 0)
+    die(`git ls-files -u failed: ${ls.error?.message ?? ls.stderr}`);
+  // `<mode> <sha> <stage>\t<path>` once per stage, so a path repeats.
+  const unmerged = [
+    ...new Set(
+      ls.stdout
+        .split("\0")
+        .filter(Boolean)
+        .map((entry) => entry.slice(entry.indexOf("\t") + 1)),
+    ),
+  ];
+  for (const path of unmerged) {
+    const file = join(REPO_ROOT, path);
+    if (existsSync(file) && CONFLICT_MARKER.test(readFileSync(file, "latin1")))
+      die(`${path} still carries conflict markers after regeneration`);
+  }
+  if (unmerged.length === 0) return;
+  // --all records a deleted output as the resolution instead of failing the pathspec.
+  const add = spawnSync("git", ["add", "--all", "--", ...unmerged], {
+    cwd: REPO_ROOT,
+    encoding: "utf8",
+  });
+  if (add.error || add.status !== 0)
+    die(`git add failed: ${add.error?.message ?? add.stderr}`);
+  process.stderr.write(`resolve-generated: staged ${unmerged.join(" ")}\n`);
+}
+
 function main(argv) {
   const rules = loadRules();
 
@@ -225,7 +293,12 @@ function main(argv) {
     );
     return;
   }
-  for (const rule of selected) runRule(rule);
+  // Per rule rather than once at the end: a later rule's crash (its sources
+  // still conflicted) must not strand the outputs an earlier rule did derive.
+  for (const rule of selected) {
+    runRule(rule);
+    stageUnmergedOutputs(rule);
+  }
 }
 
 main(process.argv.slice(2));
