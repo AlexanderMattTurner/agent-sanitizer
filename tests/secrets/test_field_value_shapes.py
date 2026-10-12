@@ -11,6 +11,7 @@ import pytest
 from agent_sanitizer.secrets import redact
 
 _FIELD = ["named secret field"]
+_KEYWORD = ["Secret Keyword"]
 
 
 @pytest.mark.parametrize(
@@ -53,6 +54,23 @@ def test_quoted_value_with_spaces_redacts_whole(text, expected, found):
             '{"FOO_TOKEN":"FAKEFAKEsecret0123456789\\"FAKEtail"}',
             '{"FOO_TOKEN":"[REDACTED]"}',
             _FIELD,
+        ),
+        # The keyword detector's double-quoted value reads `\"` as one unit too.
+        (
+            '{"password": "abc\\"defghijklmnopqrstuvwxyz"}',
+            '{"password": "[REDACTED: Secret Keyword]"}',
+            _KEYWORD,
+        ),
+        (
+            '{"password": "hu\\"nter2"}',
+            '{"password": "[REDACTED: Secret Keyword]"}',
+            _KEYWORD,
+        ),
+        # A single-quoted value keeps the backslash literal (shell `'v\'`).
+        (
+            "password: 'hunter2\\'",
+            "password: '[REDACTED: Secret Keyword]'",
+            _KEYWORD,
         ),
     ],
 )

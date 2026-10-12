@@ -416,8 +416,14 @@ def _keyword_value(quote: str) -> str:
     quote — a backtick is allowed in the body, since a real credential can
     contain one. Each quote gets its own pattern (see ``denylist`` below)
     rather than a shared class, so open and close are the SAME literal
-    character and need no backreference, which would add a second group."""
-    word = rf"[^\s{quote}]{{1,{_KEYWORD_WORD_MAX}}}"
+    character and need no backreference, which would add a second group.
+
+    Inside a double-quoted value a backslash escapes the next character, so
+    a JSON ``"pass\\"word"`` is one value rather than ``pass\\`` plus a
+    leaked tail. A single-quoted value keeps the backslash literal: shell's
+    ``'abc\\'`` closes on that quote."""
+    char = r'(?:[^\s"\\]|\\\S|\\(?!\S))' if quote == '"' else rf"[^\s{quote}]"
+    word = rf"{char}{{1,{_KEYWORD_WORD_MAX}}}"
     return rf"((?=\w){word}(?:[ \t]{word}){{0,{_KEYWORD_WORDS_MAX - 1}}})"
 
 
