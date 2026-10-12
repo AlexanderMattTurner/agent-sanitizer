@@ -2451,13 +2451,8 @@ const VALUE_HAS_DIGIT_RE = /\d/;
 // signed-CDN token (imgix `?s=`, KeyCDN `?secure=`) are all a bare digest under
 // a generic name, and every one of them was reported before: hex is a subset of
 // base64's alphabet, so the 40-char base64 arm caught them on charset alone.
-//
-// Spelled `X{40}X*`, never the equivalent `X{40,}`: V8's irregexp compiles an
-// open-ended quantifier with a minimum above 3 as a counted loop that pushes a
-// backtrack entry per character, so a 64 KB value grows (and then frees) a
-// 64K-entry backtrack stack on every test — 4x the cost of the `X*` tail, which
-// takes the greedy-loop fast path, and an allocation whose price swings with
-// the process's malloc state. Same language, so the match set is unchanged.
+// Spelled `X{40}X*`, not the equivalent `X{40,}`: irregexp runs `{40,}` as a
+// counted loop pushing a backtrack entry per character (4x slower on 64 KB).
 const BLOB_VALUE_B64_RE = /^[A-Za-z0-9+/]{40}[A-Za-z0-9+/]*={0,2}$/;
 const HEX_ONLY_RE = /^[A-Fa-f0-9]+$/;
 // 16 bytes, the floor the hex arm has always carried.
@@ -2480,8 +2475,7 @@ const DIGEST_HEX_LENGTHS = new Set([32, 40, 56, 64, 96, 128]);
 // (`?d=<200-char base64url of cookies>`) routinely dodged it. The mix test keeps
 // the slug benign (no uppercase) while catching the scattered-separator blob the
 // run gate missed. Anchored to the whole value for the same RAW-query reason.
-// `X{40}X*` rather than `X{40,}` for the backtrack-stack reason given at
-// BLOB_VALUE_B64_RE.
+// `X{40}X*` for the reason given at BLOB_VALUE_B64_RE.
 const BLOB_VALUE_B64URL_RE = /^[A-Za-z0-9_-]{40}[A-Za-z0-9_-]*={0,2}$/;
 
 /**
@@ -3190,11 +3184,9 @@ export function detectExfil(text, options = {}) {
 }
 
 /**
- * Run one URL scan and return its threats (null when there are none). Only a
- * stack overflow on pathological nesting is the input's fault; any other throw
- * is a bug in the scan and propagates. On the overflow, fail CLOSED with the one
- * `sentinel` threat, marked `unscannable` because it names no URL, so the caller
- * still warns. Both Layer-3 detectors share this, so the rethrow is one arm.
+ * Run one URL scan; null when it finds nothing. A stack overflow (pathological
+ * nesting) fails CLOSED as the lone `unscannable` sentinel; any other throw is
+ * a scan bug and propagates. Shared so both detectors have one rethrow arm.
  * @template T
  * @param {() => T[]} scan
  * @param {T} sentinel

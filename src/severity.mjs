@@ -46,9 +46,8 @@ export const SEVERITY = Object.freeze({
  */
 
 /**
- * The message, refused when empty. Every finding is built here, so an empty
- * report — a byte change or a flag the caller is never told about — fails at
- * construction instead of rendering as a blank banner line.
+ * The message, refused when empty: an unreported change fails at construction
+ * instead of rendering as a blank banner line.
  * @param {string} message
  * @returns {string}
  */

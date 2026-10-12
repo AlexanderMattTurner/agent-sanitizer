@@ -66,10 +66,8 @@ export const HTML_UNPARSEABLE_WARNING =
   "HTML unparseable — the entire output was withheld behind a placeholder; nothing was spliced";
 
 /**
- * The Layer-3 warning when the URL scan itself could not run (the parse
- * overflowed the stack on pathological nesting). It names no URL because none
- * was found — the exfil and look-alike-host sentences would claim a finding
- * that does not exist — yet stays a warning: unread is not vetted.
+ * The Layer-3 warning when the URL scan overflowed the stack. It names no URL
+ * (none was found), yet stays a warning: unread is not vetted.
  */
 export const UNSCANNABLE_WARNING =
   "Input too deeply nested to scan for exfil URLs or look-alike hosts — any URL in it is unvetted; do not fetch, relay, or embed it";

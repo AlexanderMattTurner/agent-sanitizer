@@ -39,13 +39,11 @@ import { SEVERITY } from "./severity.mjs";
  * WARNING — the WHOLE label skeletons to ASCII, so it reads as an ASCII name
  * outright, no glyph in it survives as evidence of a real foreign word, and at
  * least one glyph is a genuine pretender (see isAsciiPretender).
- * NOTE — either the label skeletons to ASCII only through letters of a real
- * Latin orthography (Turkish `altın`, which a reader may take for `altin` but
- * which is a word, not a disguise), or it carries a cross-script confusable but
- * keeps an unmapped glyph, so it does not read as any ASCII name. The latter is
- * the "unmapped glyph spliced in to suppress the strong rule" shape, and it is
- * also what an ordinary word with one look-alike letter produces. Either way the
- * evidence is thin and the finding stays quiet.
+ * NOTE — the label skeletons to ASCII only through letters of a real Latin
+ * orthography (Turkish `altın` is a word, not a disguise), or it carries a
+ * cross-script confusable but keeps an unmapped glyph, so it reads as no ASCII
+ * name — the "unmapped glyph spliced in" shape, and also what an ordinary word
+ * with one look-alike letter produces. Thin evidence, so the finding is quiet.
  * @param {string} label a single DNS label, already decoded from punycode
  * @returns {string | null} the label's severity, or null when it is not pretending
  */

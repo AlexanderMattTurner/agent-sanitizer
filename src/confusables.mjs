@@ -175,19 +175,13 @@ const LATIN_SCRIPT = /^\p{Script=Latin}$/u;
 const COMBINING_MARK = /^\p{M}$/u;
 
 /**
- * True when `glyph` is pretending to be ASCII: it holds a non-ASCII code point
- * that is neither a combining mark nor a letter of a real Latin-script
- * orthography. THE predicate both confusable rules gate on — the host rule
- * (./confusable-host.mjs) for its WARNING tier and the input fold (below) for
- * what it may rewrite — so they cannot disagree about which glyph is a disguise.
- *
- * A Turkish `ı`/`İ`, a Spanish `í` or a Polish `ł` resembles an ASCII letter
- * because it IS one plus a diacritic, in the same script; `altın.com` and a file
- * named `día.txt` are words, and rewriting or flagging them is the false
- * positive this repo weighs as the worse failure. What stays a pretender is a
- * cross-script glyph (Cyrillic `а`, Cherokee `Ꭺ`) and a Latin-script one no
- * orthography uses — IPA `ɡ`, small-capital `ᴀ`, and anything NFKC folds
- * straight to ASCII (fullwidth `ａ`, the `ﬁ` ligature).
+ * True when `glyph` holds a non-ASCII code point that is neither a combining
+ * mark nor a letter of a real Latin-script orthography. THE predicate both the
+ * host rule's WARNING tier and the input fold gate on, so they cannot disagree.
+ * Turkish `ı`, Spanish `í`, Polish `ł` are a word's own letters (`altın.com`,
+ * `día.txt`), and flagging them is the worse failure; a cross-script glyph
+ * (Cyrillic `а`), an IPA/small-capital one (`ɡ`, `ᴀ`) or anything NFKC folds
+ * to ASCII (`ａ`, `ﬁ`) stays a pretender.
  * @param {string} glyph one or more code points
  * @returns {boolean}
  */

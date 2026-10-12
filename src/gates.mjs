@@ -8,26 +8,19 @@
  * every root import, defeating the lazy-load design. This module imports
  * nothing, so re-exporting it is free.
  *
- * INVARIANT: every gate here is a SUPERSET of what the parser behind it can
- * recognise. A gate that skips an input the parser would have found something
- * in turns its layer off for exactly that input — silently, and steerably (one
- * stray `<` inside a comment was enough). A gate that fires needlessly only
- * costs a parse. test/gates-superset.test.mjs checks this against the real
- * tokenizers over a corpus.
+ * INVARIANT: every gate is a SUPERSET of its parser — a narrower gate silently
+ * turns its layer off for the inputs it misses, while a needless fire only
+ * costs a parse. Checked by test/gates-superset.test.mjs.
  */
 
 // ─── Cheap pre-gates ─────────────────────────────────────────────────────────
 
 /**
- * Matches every point where the HTML tokenizer leaves the data state: `<`
- * followed by an ASCII letter (start tag), `/` (end tag, or a bogus comment),
- * `!` (comment, doctype, CDATA, bogus declaration) or `?` (bogus comment). A
- * `<` followed by anything else is text to the tokenizer, so no tag, comment
- * or attribute can exist in text this does not match. Deliberately no closing
- * `>`: a comment holding `1 < 2`, or one left unterminated, is still a comment
- * that hides everything after it.
- * Gate for Layer 2 (HTML sanitization) and the HTML img/a exfil path in
- * Layer 3.
+ * Matches every point where the HTML tokenizer leaves the data state: `<` then
+ * an ASCII letter, `/`, `!` or `?`; any other `<` is text. Deliberately no
+ * closing `>`: a comment holding `1 < 2`, or one left unterminated, still
+ * hides everything after it. Gate for Layer 2 (HTML sanitization) and the
+ * HTML img/a exfil path in Layer 3.
  */
 export const HTML_TAG_PRESENT = /<[a-zA-Z/!?]/;
 
@@ -83,15 +76,12 @@ export function needsUrlScan(text) {
 const MARKUP_DECLARATION_OPEN = /<[!?]/;
 
 /**
- * POLICY, not a gate: true when `text` reads as an HTML document rather than as
- * data that merely contains a `<` — a comment or bogus-comment open anywhere,
- * or a tag open with a `>` somewhere after it. The output hook uses this to
- * decide whether an MCP result earns the Layer-2 splice at all, so structured
- * JSON/text output (`a<b`, `x <= y`) stays verbatim. Kept apart from
- * {@link HTML_TAG_PRESENT} so widening that gate toward the tokenizer never
- * silently widens which MCP output gets rewritten. One regex search plus one
- * `indexOf`, so linear — a single `<…[^>]*>` regex would rescan the tail from
- * every `<`.
+ * POLICY, not a gate: true when `text` reads as HTML rather than data that
+ * merely holds a `<` — a comment/bogus-comment open, or a tag open with a `>`
+ * after it. The output hook uses it to decide whether an MCP result earns the
+ * Layer-2 splice, so `a<b` stays verbatim; kept apart from
+ * {@link HTML_TAG_PRESENT} so widening the gate never widens that policy.
+ * Linear: one search plus one `includes`, not a `<…[^>]*>` regex.
  * @param {string} text
  * @returns {boolean}
  */
@@ -133,7 +123,7 @@ export const SECRET_HINT_EXT =
   /(?:AC|SK)[a-z0-9]{32}|SG\.[A-Za-z0-9_-]{22}\.[A-Za-z0-9_-]{43}|sq0csp-[0-9A-Za-z_-]{43}|(?<![0-9])[0-9]{8,10}:[0-9A-Za-z_-]{35}|(?<![0-9a-z])[0-9a-z]{32}-us[0-9]{1,2}|(?<![A-Za-z0-9_-])[MNO][A-Za-z0-9_-]{23,25}\.[A-Za-z0-9_-]{6}\.[A-Za-z0-9_-]{27}|T3BlbkFJ|pypi-AgE|(?<![A-Za-z0-9])AKC[A-Za-z0-9]{10}|(?<![A-Za-z0-9])AP[0-9A-Fa-f][A-Za-z0-9]{8}|:\/\/[^\s:/@]{1,64}:[^\s:/@]{1,64}@|(?:key|pw|pass)["']?[\s:=>]+["']?[A-Za-z0-9_/+-]{20}/i;
 
 /**
- * True when either alternation shape-matches `text` exactly as written.
+ * Either alternation against `text` exactly as written.
  * @param {string} text
  * @returns {boolean}
  */
@@ -145,11 +135,8 @@ function hintMatchesView(text) {
  * True when either pre-gate alternation shape-matches `text`, or the same text
  * with every `\n` removed. Split into two literals (see SECRET_HINT) and OR'd
  * so neither grows into a polynomial-backtracking shape.
- *
- * The newline-free view is what makes this a superset of the redactor it gates:
- * the engine re-joins a token wrapped across lines by scanning exactly that view
- * (`_redact_cross_line` in python/…/secrets/engine.py drops `\n` and nothing
- * else), so a key split mid-run would otherwise never reach it.
+ * The newline-free view keeps this a superset of the redactor: the engine's
+ * `_redact_cross_line` scans exactly that view for a key wrapped across lines.
  * @param {string} text
  * @returns {boolean}
  */

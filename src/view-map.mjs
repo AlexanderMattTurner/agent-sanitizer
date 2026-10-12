@@ -220,12 +220,8 @@ export function overlapAwareCount(haystack, needle) {
  * The character runs Layer 1 deleted, located by greedy subsequence alignment
  * (stripping only deletes, so `cleaned` is always a subsequence of `content`).
  * Throws if the subsequence property does not hold — the caller fails closed.
- *
- * Aligned a CODE POINT at a time, because Layer 1 deletes whole code points: a
- * per-code-unit walk matches the shared high surrogate of an astral format
- * character (U+1D173) against the next astral character's (U+1D11E), and the
- * recovered run then holds one half of each — a run that is neither. Offsets
- * stay UTF-16, the space every consumer here indexes by.
+ * Aligned per CODE POINT (Layer 1 deletes whole ones): a code-unit walk matches
+ * U+1D173's high surrogate against U+1D11E's and splits both. Offsets stay UTF-16.
  * @param {string} content disk bytes
  * @param {string} cleaned Layer-1 view of the same bytes
  * @returns {{start: number, deleted: string}[]}

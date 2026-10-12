@@ -47051,19 +47051,17 @@ function refuseIfSpent(deadline) {
     );
 }
 async function loadHtmlLayer(deadline) {
-  const layer = await importHtmlLayer();
-  refuseIfSpent(deadline);
-  return layer;
-}
-async function importHtmlLayer() {
+  let layer;
   try {
-    return await Promise.resolve().then(() => (init_html4(), html_exports2));
+    layer = await Promise.resolve().then(() => (init_html4(), html_exports2));
   } catch (importErr) {
     throw new Error(
       "agent-sanitizer: failed to load ./html.mjs, so Layers 2/3 could not run (are the package's remark/rehype dependencies installed?)",
       { cause: importErr }
     );
   }
+  refuseIfSpent(deadline);
+  return layer;
 }
 function pushOnce(list3, item, same) {
   if (!list3.some((entry) => same(entry, item))) list3.push(item);
@@ -47306,59 +47304,60 @@ async function sanitizeString(text6, sanitize2, ctx) {
 }
 async function sanitizeValueAt(value, ctx, depth, path2) {
   if (typeof value === "string") return sanitizeString(value, ctx.leaf, ctx);
+  const { warnings, seen, memo } = ctx;
   const isObject = value !== null && typeof value === "object";
   if (isObject) {
-    const cached = ctx.memo.get(value, depth);
+    const cached = memo.get(value, depth);
     if (cached !== void 0) return cached;
   }
   if (!isWalkableContainer(value)) {
     const isNonEmptyMapOrSet = (value instanceof Map || value instanceof Set) && value.size > 0;
     const isNonEmptyArrayBufferView = ArrayBuffer.isView(value) && value.byteLength > 0;
     if (isNonEmptyMapOrSet || isNonEmptyArrayBufferView || value !== null && typeof value === "object" && !ArrayBuffer.isView(value) && Object.keys(value).length > 0)
-      ctx.warnings.push(
+      warnings.push(
         "An object with a non-plain prototype (e.g. a class instance, Map, Set, or typed array/Buffer) in structured tool output was passed through unsanitized \u2014 its contents could not be walked without corrupting the object's shape"
       );
     const leafResult = { value, modified: false, sgrNote: false };
-    if (isObject) ctx.memo.set(value, depth, leafResult);
+    if (isObject) memo.set(value, depth, leafResult);
     return leafResult;
   }
-  if (ctx.seen.has(value)) {
-    ctx.warnings.push(
-      "Withheld a circular reference in structured tool output"
-    );
+  if (seen.has(value)) {
+    warnings.push("Withheld a circular reference in structured tool output");
     return { value: CYCLE_PLACEHOLDER, modified: true, sgrNote: false };
   }
   if (depth >= MAX_DEPTH) {
-    ctx.warnings.push(
+    warnings.push(
       `Structured tool output nested beyond ${MAX_DEPTH} levels \u2014 deeper content withheld`
     );
     return { value: DEPTH_PLACEHOLDER, modified: true, sgrNote: false };
   }
-  ctx.seen.add(value);
+  seen.add(value);
   try {
-    const result = Array.isArray(value) ? await sanitizeArray(value, ctx, depth, path2) : await sanitizeObject(value, ctx, depth, path2);
-    ctx.memo.set(value, depth, result);
-    return result;
+    if (Array.isArray(value)) {
+      const out = [];
+      let modified = false;
+      let sgrNote = false;
+      for (const [index2, item] of value.entries()) {
+        const result = await sanitizeValueAt(
+          item,
+          ctx,
+          depth + 1,
+          `${path2}[${index2}]`
+        );
+        out.push(result.value);
+        if (result.modified) modified = true;
+        if (result.sgrNote) sgrNote = true;
+      }
+      const arrResult = { value: out, modified, sgrNote };
+      memo.set(value, depth, arrResult);
+      return arrResult;
+    }
+    const objResult = await sanitizeObject(value, ctx, depth, path2);
+    memo.set(value, depth, objResult);
+    return objResult;
   } finally {
-    ctx.seen.delete(value);
+    seen.delete(value);
   }
-}
-async function sanitizeArray(value, ctx, depth, path2) {
-  const out = [];
-  let modified = false;
-  let sgrNote = false;
-  for (const [index2, item] of value.entries()) {
-    const result = await sanitizeValueAt(
-      item,
-      ctx,
-      depth + 1,
-      `${path2}[${index2}]`
-    );
-    out.push(result.value);
-    if (result.modified) modified = true;
-    if (result.sgrNote) sgrNote = true;
-  }
-  return { value: out, modified, sgrNote };
 }
 async function sanitizeObject(value, ctx, depth, path2) {
   const out = {};
@@ -47392,15 +47391,12 @@ async function sanitizeObject(value, ctx, depth, path2) {
       ctx.warnings.push(collisionWarning(name50.value, path2));
       defineOwn(out, name50.value, COLLISION_WITHHELD_MESSAGE);
     }
+    const slot = (n) => `${name50.value} [withheld duplicate ${n}]`;
     let index2 = nextDuplicate.get(name50.value) ?? 2;
-    while (reserved.has(`${name50.value} [withheld duplicate ${index2}]`) || Object.hasOwn(out, `${name50.value} [withheld duplicate ${index2}]`))
+    while (reserved.has(slot(index2)) || Object.hasOwn(out, slot(index2)))
       index2++;
     nextDuplicate.set(name50.value, index2 + 1);
-    defineOwn(
-      out,
-      `${name50.value} [withheld duplicate ${index2}]`,
-      COLLISION_WITHHELD_MESSAGE
-    );
+    defineOwn(out, slot(index2), COLLISION_WITHHELD_MESSAGE);
   }
   return { value: out, modified, sgrNote };
 }
