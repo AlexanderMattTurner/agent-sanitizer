@@ -351,12 +351,20 @@ def test_copy_volume_is_linear_in_line_length(name):
 
 
 def _rebuild_per_span(text: str) -> None:
-    """Redact every unit-aligned span by rebuilding the WHOLE string each time —
-    quadratic in ``len(text)``, with every one of those bytes copied inside a C
-    builtin, which is the shape both tests below are about."""
-    out = text
-    for start in range(len(text) - len(_FIELD_UNIT), -1, -len(_FIELD_UNIT)):
-        out = out[:start] + "X" + out[start + len(_FIELD_UNIT) :]
+    """Redact every unit-aligned span of a mutable buffer in place, front to
+    back, so each span shifts the whole unredacted remainder — quadratic in
+    ``len(text)``, with every one of those bytes moved inside a C ``memmove``,
+    which is the shape both tests below are about.
+
+    In place, not a rebuilt ``str``: the per-span ``out[:i] + "X" + out[j:]``
+    pays three allocations whose cost is flat per span, so on a runner where
+    the allocator is dear it swamped the copy and this control read 11.98x
+    against the 15x it must clear. Front to back, not back to front: walking
+    backwards shifts only the collapsed "X" run behind each span, a tenth of
+    the line, and the copy no longer dominates at the small size either."""
+    buf = bytearray(text.encode())
+    for collapsed in range(len(text) // len(_FIELD_UNIT)):
+        buf[collapsed : collapsed + len(_FIELD_UNIT)] = b"X"
 
 
 def test_the_cpu_measure_catches_a_copy_quadratic():
