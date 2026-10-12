@@ -17,6 +17,7 @@ match the JS by inspection:
 """
 
 import json
+import math
 import re
 import time
 import unicodedata
@@ -245,24 +246,44 @@ def test_pattern_compiles_under_plain_re_with_no_flags() -> None:
     assert ANSI_RE.pattern == pattern
 
 
+# The machine's own linear growth, measured on the same text in the same loop:
+# one star over a class disjoint from the final byte, so an unterminated run
+# fails in a single pass. It is the shape every ANSI_RE arm has and the
+# quadratic control below lacks.
+_LINEAR_REFERENCE = re.compile("\x1b\\[[ -?]*[@-~]")
+
+
 def _growth(compiled: re.Pattern, text: Callable[[int], str], n: int) -> float:
-    """How much longer ``compiled`` takes on ``text(8 * n)`` than on ``text(n)``:
-    ~8 when linear, ~64 when quadratic. The best of fifteen runs damps noise."""
-
-    def seconds(subject: str) -> float:
-        best = float("inf")
-        for _ in range(15):
+    """How much faster ``compiled`` slows down from ``text(n)`` to ``text(8 * n)``
+    than ``_LINEAR_REFERENCE`` does: ~1 when ``compiled`` is linear, ~8 when it
+    is quadratic. Each of the four timings is the best of fifteen, interleaved,
+    so cache pressure and load at the larger size land on both patterns alike
+    and divide out. The raw 8n/n ratio of a linear pattern alone was measured
+    anywhere from ~8 to ~24 under load, so a fixed bound on it was a guess about
+    the runner rather than a line between linear and quadratic."""
+    small, large = text(n), text(8 * n)
+    runs = (
+        ("subject_small", compiled, small),
+        ("reference_small", _LINEAR_REFERENCE, small),
+        ("subject_large", compiled, large),
+        ("reference_large", _LINEAR_REFERENCE, large),
+    )
+    best = dict.fromkeys((name for name, _, _ in runs), float("inf"))
+    for _ in range(15):
+        for name, pattern, subject in runs:
             start = time.perf_counter()
-            compiled.sub("", subject)
-            best = min(best, time.perf_counter() - start)
-        return best
+            pattern.sub("", subject)
+            best[name] = min(best[name], time.perf_counter() - start)
+    subject_growth = best["subject_large"] / best["subject_small"]
+    reference_growth = best["reference_large"] / best["reference_small"]
+    return subject_growth / reference_growth
 
-    return seconds(text(8 * n)) / seconds(text(n))
 
-
-# Between a linear pattern (~8x ideal, ~16-24x measured at this size under cache
-# pressure and load) and the ~64x of a quadratic one.
-_LINEAR_GROWTH_BOUND = 32
+# The geometric midpoint of linear (1) and quadratic (8) relative growth, so
+# either one would have to be misread by the same factor, sqrt(8) ~ 2.8, to
+# cross it. Measured on a loaded 4-core container: linear arms 0.93-1.18, the
+# quadratic control 7.9-8.5.
+_LINEAR_GROWTH_BOUND = math.sqrt(8)
 
 
 @pytest.mark.parametrize(
