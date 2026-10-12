@@ -45,6 +45,7 @@ import {
 } from "./lib/hook-io.mjs";
 import {
   registerFaultPolicy,
+  KNOB_DECIDES,
   hookFaultOutcome,
   defaultOpen,
 } from "./lib/hook-fault.mjs";
@@ -65,6 +66,7 @@ import {
 } from "./lib/authored-content.mjs";
 import { redactViaDaemon } from "./lib/redactor-client.mjs";
 import { secretsEnabled } from "./lib/env-config.mjs";
+import { readKnob } from "./lib/knobs.mjs";
 import { withSecretDropGuard } from "./lib/secret-drop-guard.mjs";
 import {
   containsPlaceholder,
@@ -429,7 +431,7 @@ export function preToolUseLayers(
       !(layer.name === "rehydrate" && rehydrate === null) &&
       !(
         layer.name === "authored-content" &&
-        env.AGENT_SANITIZER_OUTPUT_DISABLED === "1"
+        readKnob("AGENT_SANITIZER_OUTPUT_DISABLED", env)
       ),
   );
 }
@@ -884,6 +886,7 @@ export function hookFailureFields(parsedOk, err, opts = {}) {
 registerFaultPolicy(HOOK_NAME, {
   event: HookEvent.PRE_TOOL_USE,
   guarded: "tool input",
+  alwaysClosed: KNOB_DECIDES,
   open: (ctx) => {
     // Non-carve-out faults take the SHARED open rendering, not a copy of it —
     // hook-fault.mjs owns that body, and a restated one would silently drift.

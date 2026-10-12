@@ -20,6 +20,7 @@
 
 import { appendFileSync } from "node:fs";
 import { chargeHostExtensionSync } from "./hook-timing.mjs";
+import { readKnob } from "./knobs.mjs";
 
 /**
  * The sink shape a hook emits through: the event name, its metadata fields, and
@@ -42,16 +43,44 @@ export const TraceEvent = Object.freeze({
 const LEVELS = Object.freeze({ off: 0, info: 1, debug: 2 });
 
 /**
- * Numeric verbosity from _AGENT_SANITIZER_TRACE: 0 off, 1 info, 2 debug.
- * Unknown, empty, or "off" → 0.
- * @param {NodeJS.ProcessEnv} [env]
+ * Numeric verbosity from _AGENT_SANITIZER_TRACE: 0 off, 1 info, 2 debug. Empty
+ * or "off" → 0; an unrecognized value is reported and reads as 0.
+ * @param {NodeJS.ProcessEnv | Record<string, string | undefined>} [env]
  * @returns {number}
  */
 export function traceThreshold(env = process.env) {
-  const value = (env._AGENT_SANITIZER_TRACE ?? "").toLowerCase();
-  if (value === "debug" || value === "2") return LEVELS.debug;
-  if (["info", "1", "true", "on"].includes(value)) return LEVELS.info;
-  return LEVELS.off;
+  return readKnob("_AGENT_SANITIZER_TRACE", env);
+}
+
+/** The keys every trace line's envelope owns; a field cannot set them. */
+export const TRACE_RESERVED_KEYS = Object.freeze(["ts", "level", "event"]);
+
+/**
+ * THE trace line's record: the envelope ({@link TRACE_RESERVED_KEYS}) first,
+ * then `fields`. A field named like an envelope key cannot overwrite it — a
+ * reader buckets on `level` and `event`, so a producer field `level: "debug"`
+ * would misfile the line — and is not dropped silently either: its name lands in
+ * `shadowed`, so the producer bug is visible on the channel it broke.
+ * @param {string} event
+ * @param {Record<string, unknown>} fields
+ * @param {"info"|"debug"} level
+ * @param {number} ts
+ * @returns {Record<string, unknown>}
+ */
+export function traceRecord(event, fields, level, ts) {
+  const shadowed = TRACE_RESERVED_KEYS.filter((key) =>
+    Object.hasOwn(fields, key),
+  );
+  const rest = Object.fromEntries(
+    Object.entries(fields).filter(([key]) => !shadowed.includes(key)),
+  );
+  return {
+    ts,
+    level,
+    event,
+    ...rest,
+    ...(shadowed.length > 0 ? { shadowed } : {}),
+  };
 }
 
 /**
@@ -69,8 +98,8 @@ export function trace(event, fields = {}, level = "info") {
   const lvl = level === "debug" ? "debug" : "info";
   if (traceThreshold() < LEVELS[lvl]) return;
   const line =
-    JSON.stringify({ ts: Date.now(), level: lvl, event, ...fields }) + "\n";
-  const file = process.env._AGENT_SANITIZER_TRACE_FILE;
+    JSON.stringify(traceRecord(event, fields, lvl, Date.now())) + "\n";
+  const file = readKnob("_AGENT_SANITIZER_TRACE_FILE");
   try {
     if (file) appendFileSync(file, line);
     else process.stderr.write(line);

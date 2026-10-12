@@ -28,6 +28,7 @@ import {
 } from "./lib/hook-io.mjs";
 import {
   registerFaultPolicy,
+  KNOB_DECIDES,
   hookFaultOutcome,
   writeFaultOutcome,
 } from "./lib/hook-fault.mjs";
@@ -85,6 +86,7 @@ const HOOK_NAME = "sanitize-user-prompt";
 registerFaultPolicy(HOOK_NAME, {
   event: HookEvent.USER_PROMPT_SUBMIT,
   guarded: "prompt",
+  alwaysClosed: KNOB_DECIDES,
   closed: (ctx) => ({
     envelope: {
       decision: "block",

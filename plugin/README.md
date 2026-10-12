@@ -129,6 +129,12 @@ instead.
 
 ## Configuration
 
+The `=1` switches below are set by exactly `1` (and cleared by `0` or unset).
+Any other value — `true`, `yes` — leaves the switch at its default, and the
+hooks say so on stderr once per process rather than ignoring it silently; the
+same goes for an `AGENT_SANITIZER_FAIL_OPEN` value other than `0`, `false`, `1`
+or `true`.
+
 Three opt-outs, for content the sanitizer would otherwise rewrite:
 
 | Variable                               | Effect                                                             |
@@ -200,9 +206,10 @@ And one posture knob, for what happens when a hook itself fails:
 
 Unset, a missing `node`, a corrupt bundle, an uninstalled package, an
 unreachable redaction daemon or a layer that threw all let the guarded action
-proceed with the warning attached. One exception, with secrets enabled, when the
+proceed with the warning attached. Two exceptions, with secrets enabled, when the
 hook process does run at all: a placeholder-bearing write asks instead — see
-above. (A missing
+above — and the output hook withholds any tool output it failed on, since that
+output was never vetted for secrets. (A missing
 `node` or a corrupt bundle is handled by the launcher, which cannot inspect
 the payload and always warns.) Set to `0` (or `false`; every other value,
 including `1`, is the open default) they halt instead.
@@ -211,9 +218,9 @@ Worth knowing before you leave it open: some of those failures are reachable by
 whoever authored the content the hook is inspecting — colliding field names, a
 tool response nested deeply enough to overflow the sanitize walk, enough
 secret-shaped leaves to exhaust the redaction budget. Under the open posture a
-tool response that provokes one is shown to the model verbatim, secrets
-included. `=0` is the setting for a deployment where that matters more than the
-session staying unblocked.
+tool response that provokes one is shown to the model verbatim (with the secret
+layer on, the output hook withholds it instead). `=0` is the setting for a
+deployment where that matters more than the session staying unblocked.
 
 What neither posture touches is a sanitizer that RAN: a prompt or tool output
 that the layers actually flagged is blocked or rewritten the same way either

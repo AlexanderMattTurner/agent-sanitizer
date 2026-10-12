@@ -9,10 +9,10 @@ import {
   writeFileSync,
 } from "node:fs";
 import { spawnSync } from "node:child_process";
-import { userInfo } from "node:os";
 import { createHash } from "node:crypto";
 import { pathToFileURL } from "node:url";
 import { excludeProvisioning } from "./hook-timing.mjs";
+import { readKnob } from "./knobs.mjs";
 
 /**
  * EVERY process-wide slot these helpers keep — the four a host can observe or
@@ -212,20 +212,11 @@ export const PermissionDecision = Object.freeze({
 export const FAIL_OPEN_ENV = "AGENT_SANITIZER_FAIL_OPEN";
 
 /**
- * Values that turn the default posture back to fail-closed. Matched exactly:
- * a case-insensitive match would need `tr`, which the launcher cannot reach
- * (it runs its no-node arm on shell builtins alone).
- *
- * THE SINGLE SOURCE OF TRUTH for the closed set. The shell shims cannot import
- * it, so `plugin/scripts/lib/fail-open.sh` is GENERATED from it by
- * `scripts/gen-fail-open-lib.mjs` and committed; the round trip is asserted in
- * plugin/test/fail-open-parity.test.mjs. Everything else that spells the set
- * out by hand is an implementation that must appear in the parity table in
- * tests/test_safe_launch.py.
+ * Values that turn the default posture back to fail-closed. Defined beside the
+ * knob's grammar in lib/knobs.mjs and published here, where hosts and
+ * `scripts/gen-fail-open-lib.mjs` read it.
  */
-export const FAIL_CLOSED_VALUES = Object.freeze(["0", "false"]);
-
-const FAIL_CLOSED_SET = new Set(FAIL_CLOSED_VALUES);
+export { FAIL_CLOSED_VALUES } from "./knobs.mjs";
 
 /**
  * Whether hook failures pass the guarded action through. True unless the caller
@@ -236,12 +227,13 @@ const FAIL_CLOSED_SET = new Set(FAIL_CLOSED_VALUES);
  * mistake is reversed: those default to the safe side, so an unrecognized value
  * there costs nothing, while here it leaves an operator who asked for
  * strictness without it. `"false"` is the one spelling reached for by reflex,
- * so it is honored; everything else (`""`, `"no"`, `"off"`) is the open posture.
+ * so it is honored; everything else (`""`, `"no"`, `"off"`) is the open posture,
+ * and a value that is neither a closed nor an open spelling is reported.
  * @param {NodeJS.ProcessEnv | Record<string, string | undefined>} [env]
  * @returns {boolean}
  */
 export function failOpenEnabled(env = process.env) {
-  return !FAIL_CLOSED_SET.has(env[FAIL_OPEN_ENV] ?? "");
+  return readKnob(FAIL_OPEN_ENV, env);
 }
 
 /**
@@ -275,7 +267,7 @@ export function disabledHooks(
   env = process.env,
   report = (message) => process.stderr.write(`${message}\n`),
 ) {
-  const named = (env[DISABLED_HOOKS_ENV] ?? "")
+  const named = (readKnob(DISABLED_HOOKS_ENV, env) ?? "")
     .split(",")
     .map((name) => name.trim())
     .filter((name) => name !== "");
@@ -787,22 +779,68 @@ export function hookgateMarkerPath(
 export const SETUP_LOCK_DECLARATION = "flock";
 
 /**
- * Whether an exclusive lock is currently held on `markerPath`, or null when the
- * question cannot be answered here (no `flock(1)` — it is util-linux, absent from a
- * stock macOS — or an exit status neither "acquired" nor "busy").
- * @param {string} markerPath
+ * Whether an exclusive lock is currently held on the file open at `fd`, or null
+ * when the question cannot be answered here (no `flock(1)` — it is util-linux,
+ * absent from a stock macOS — or an exit status neither "acquired" nor "busy").
+ *
+ * The probe locks the DESCRIPTOR the caller already opened, never the path.
+ * `flock <path>` opens with O_CREAT, so a probe that lost the race against the
+ * writer's final unlink re-created the marker — empty, owned by us, declaring
+ * nothing — and every later reader took that husk for a live setup whose pid it
+ * could not parse: a 900-second wait on each cold hook and a gap notice silenced
+ * for the session. Locking the inherited fd cannot create anything, and it judges
+ * the same inode the caller just read. The child's lock lives on the shared open
+ * file description, so it is released when the caller closes `fd`.
+ * @param {number} fd
  * @returns {boolean | null}
  */
-function markerLockHeld(markerPath) {
-  const probe = spawnSync(
-    "flock",
-    ["--nonblock", "--exclusive", markerPath, "true"],
-    { stdio: "ignore" },
-  );
+function lockHeldOn(fd) {
+  const probe = spawnSync("flock", ["--nonblock", "--exclusive", "3"], {
+    stdio: ["ignore", "ignore", "ignore", fd],
+  });
   if (probe.error) return null;
   if (probe.status === 0) return false; // acquired: nobody holds it
   if (probe.status === 1) return true; // busy: the writer still holds it
   return null;
+}
+
+/**
+ * A setup marker's trimmed lines and, when it declares
+ * {@link SETUP_LOCK_DECLARATION}, whether that lock is held (null: the
+ * declaration is absent, or no `flock(1)` could answer). Null when the marker
+ * cannot be opened or read — a missing marker included, which is how a probe
+ * that runs after the writer's unlink learns the install is over WITHOUT
+ * re-creating the file (see {@link lockHeldOn}).
+ *
+ * One descriptor serves both the read and the lock probe, so the two halves
+ * describe one inode: reading the path and then locking it by name can judge a
+ * marker the writer replaced in between.
+ * @param {string} markerPath
+ * @returns {{ lines: string[], lockHeld: boolean | null } | null}
+ */
+function readSetupMarker(markerPath) {
+  let fd;
+  try {
+    fd = openSync(markerPath, "r");
+  } catch {
+    return null;
+  }
+  try {
+    let raw;
+    try {
+      raw = readFileSync(fd, "utf8");
+    } catch {
+      // EISDIR and kin: opened but unreadable, the same answer as unopenable.
+      return null;
+    }
+    const lines = raw.split("\n").map((line) => line.trim());
+    return {
+      lines,
+      lockHeld: lines.includes(SETUP_LOCK_DECLARATION) ? lockHeldOn(fd) : null,
+    };
+  } finally {
+    closeSync(fd);
+  }
 }
 
 /**
@@ -827,18 +865,10 @@ function markerLockHeld(markerPath) {
  */
 export function setupRunning(markerPath) {
   if (!markerIsTrusted(markerPath)) return false;
-  let raw;
-  try {
-    raw = readFileSync(/** @type {string} */ (markerPath), "utf8");
-  } catch {
-    return false;
-  }
-  const lines = raw.split("\n").map((line) => line.trim());
-  if (lines.includes(SETUP_LOCK_DECLARATION)) {
-    const held = markerLockHeld(/** @type {string} */ (markerPath));
-    if (held !== null) return held;
-  }
-  const pid = parseInt(lines[0], 10);
+  const marker = readSetupMarker(/** @type {string} */ (markerPath));
+  if (marker === null) return false;
+  if (marker.lockHeld !== null) return marker.lockHeld;
+  const pid = parseInt(marker.lines[0], 10);
   if (!Number.isInteger(pid) || pid <= 0) return false;
   try {
     process.kill(pid, 0);
@@ -871,20 +901,12 @@ export function setupRunning(markerPath) {
  */
 export function probeSetupAlive(markerPath) {
   if (markerPath === null) return true;
-  let raw;
-  try {
-    raw = readFileSync(markerPath, "utf8");
-  } catch {
-    return true;
-  }
-  const lines = raw.split("\n").map((line) => line.trim());
-  if (lines.includes(SETUP_LOCK_DECLARATION)) {
-    const held = markerLockHeld(markerPath);
-    // null only: a host without flock(1) still gets the pid reading below rather
-    // than an answer this probe cannot support.
-    if (held !== null) return held;
-  }
-  const pid = parseInt(lines[0], 10);
+  const marker = readSetupMarker(markerPath);
+  if (marker === null) return true;
+  // null only: a host without flock(1) still gets the pid reading below rather
+  // than an answer this probe cannot support.
+  if (marker.lockHeld !== null) return marker.lockHeld;
+  const pid = parseInt(marker.lines[0], 10);
   if (!Number.isInteger(pid) || pid <= 0) return true;
   try {
     process.kill(pid, 0);
@@ -1022,7 +1044,64 @@ export function markerIsTrusted(path) {
   } catch {
     return false;
   }
-  return st.isFile() && st.uid === userInfo().uid;
+  return st.isFile() && ownedByCurrentUser(st);
+}
+
+/**
+ * This process's real uid, or null on a platform with no POSIX uid model.
+ *
+ * `process.getuid()` and never `os.userInfo().uid`: userInfo() resolves the
+ * uid through the passwd database and THROWS (ENOENT) when the uid has no entry
+ * — the ordinary state of a container started with `--user 54321` — so every
+ * ownership check built on it crashed the hook that asked, and a crashed hook
+ * is non-blocking. The uid is a kernel fact; the passwd name is not needed.
+ *
+ * Null is explicit rather than the -1 userInfo() reports on Windows: callers
+ * test ownership through {@link ownedByCurrentUser}, which reads null as "cannot
+ * prove ownership" — the untrusted side every caller already handles.
+ * @returns {number | null}
+ */
+export function currentUid() {
+  return typeof process.getuid === "function" ? process.getuid() : null;
+}
+
+/**
+ * Whether `st` (an lstat result) is owned by this process's uid. THE ownership
+ * predicate for every $TMPDIR store these hooks trust — a second spelling is how
+ * four call sites came to share the passwd-lookup crash {@link currentUid}
+ * documents. False when the platform has no uid model: ownership that cannot be
+ * proven is not granted. `uid` is a seam for a test that must model another
+ * uid's file; production takes the default.
+ * @param {{ uid: number }} st
+ * @param {number | null} [uid]
+ * @returns {boolean}
+ */
+export function ownedByCurrentUser(st, uid = currentUid()) {
+  return uid !== null && st.uid === uid;
+}
+
+/**
+ * Whether `st` (an lstat result) is a directory no untrusted uid can change: a
+ * real directory (lstat, so a planted symlink is not one), owned by this uid —
+ * or by root where `rootMayOwn` — with no group/other write bit. THE trust test
+ * for every private directory these hooks keep in $TMPDIR. Write is the
+ * property because creating, unlinking or replacing an entry needs write on its
+ * parent: a co-tenant holding it can delete the finding a gate needs, swap a
+ * reveal file, or rebind the redactor socket to a listener that redacts nothing.
+ * Root ownership is strictly stronger than ours, so a deployment may hand a dir
+ * to root (`rootMayOwn`); with no uid model nothing is trusted, root included.
+ * @param {{ isDirectory(): boolean, uid: number, mode: number }} st
+ * @param {{ uid?: number | null, rootMayOwn?: boolean }} [opts]  `uid` as in
+ *   {@link ownedByCurrentUser}
+ * @returns {boolean}
+ */
+export function isPrivateDir(
+  st,
+  { uid = currentUid(), rootMayOwn = false } = {},
+) {
+  const owner =
+    ownedByCurrentUser(st, uid) || (uid !== null && rootMayOwn && st.uid === 0);
+  return st.isDirectory() && owner && (st.mode & 0o022) === 0;
 }
 
 /**

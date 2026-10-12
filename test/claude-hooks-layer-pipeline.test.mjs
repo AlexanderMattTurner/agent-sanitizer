@@ -536,7 +536,13 @@ describe("a stage's spurious change report never unsanitizes the hook's output",
       },
     );
     assert.equal(run.status, 0, run.stderr);
-    assert.equal(run.stderr, "");
+    // No error output. The slow-hook notice is the one stderr line a loaded
+    // machine legitimately adds to a correct run (the hook crossed its 1s
+    // budget), so it is carved out here and nothing else is.
+    assert.equal(
+      run.stderr.replace(/^agent-sanitizer PERFORMANCE: .*\n/gmu, ""),
+      "",
+    );
     const out = JSON.parse(run.stdout).hookSpecificOutput;
     assert.equal(out.updatedInput.command, CLEAN);
     assert.equal(out.permissionDecision, undefined);

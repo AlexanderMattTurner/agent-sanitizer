@@ -76,14 +76,30 @@ const calls = (name) =>
     (node) => node.callee.type === "Identifier" && node.callee.name === name,
   );
 
-/** Reads of `env[KEY]`, `env["literal"]` or `env.literal` for one knob. */
-const envReads = (constName, literal) =>
-  sites("MemberExpression", ({ computed, property }) =>
-    computed
-      ? (property.type === "Identifier" && property.name === constName) ||
-        (property.type === "Literal" && property.value === literal)
-      : property.name === literal,
-  );
+/**
+ * Reads of one knob: a direct `env[KEY]` / `env["literal"]` / `env.literal`
+ * member read (which would bypass the knob table) or the table's own
+ * `readKnob(KEY, env)` call. Both count, so a hand-rolled read in a hook shows
+ * up here exactly like a second accessor would.
+ */
+const envReads = (constName, literal) => {
+  const isKey = (node) =>
+    (node.type === "Identifier" && node.name === constName) ||
+    (node.type === "Literal" && node.value === literal);
+  return [
+    ...sites("MemberExpression", ({ computed, property }) =>
+      computed ? isKey(property) : property.name === literal,
+    ),
+    ...sites(
+      "CallExpression",
+      ({ callee, arguments: args }) =>
+        callee.type === "Identifier" &&
+        callee.name === "readKnob" &&
+        args.length > 0 &&
+        isKey(args[0]),
+    ),
+  ].sort();
+};
 
 describe("hook decision sites", () => {
   it("scans the hook tree (non-vacuous)", () => {
