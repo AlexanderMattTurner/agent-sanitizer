@@ -19,10 +19,21 @@ Two ways the window rots, both of which failed silently before this guard:
 
 So this asserts the window exists and is at least as long as the agreed floor,
 and that each exemption still names a version this repo genuinely pins.
+
+The same floor binds the other two resolvers that pick versions here: uv's
+`exclude-newer` for the Python dev toolchain, and Renovate's own
+`minimumReleaseAge`, which otherwise opens bump PRs pnpm then refuses to install.
 """
 
 import json
+import re
 
+try:
+    import tomllib
+except ModuleNotFoundError:  # Python 3.10 (the package floor) has no tomllib
+    import tomli as tomllib
+
+import json5
 import pytest
 import yaml
 
@@ -184,3 +195,136 @@ def test_pin_extraction_tells_a_pin_from_a_range(package_json: dict) -> None:
         "no exact version pins resolved out of the real package.json — the "
         "dependency fields it walks have been renamed or emptied"
     )
+
+
+# The ISO 8601 subset uv accepts for a relative `exclude-newer` (uv itself
+# rejects calendar months and years), and Renovate's `<n> <unit>` form.
+ISO_DURATION = re.compile(
+    r"P(?:(?P<weeks>\d+)W)?(?:(?P<days>\d+)D)?"
+    r"(?:T(?:(?P<hours>\d+)H)?(?:(?P<minutes>\d+)M)?)?"
+)
+RENOVATE_DURATION = re.compile(r"(?P<count>\d+) (?P<unit>minute|hour|day|week)s?")
+RENOVATE_UNIT_MINUTES = {"minute": 1, "hour": 60, "day": 24 * 60, "week": 7 * 24 * 60}
+
+
+def _iso_duration_minutes(text: str) -> int:
+    """Minutes in an ISO 8601 `P…` duration; raises on any other spelling."""
+    match = ISO_DURATION.fullmatch(text)
+    # `P` and a trailing `T` match the all-optional pattern yet name no span.
+    if not match or text == "P" or text.endswith("T"):
+        raise ValueError(
+            f"{text!r} is not an ISO 8601 week/day/hour/minute duration "
+            f"(e.g. `P3D`); spell the window that way so this guard can read it"
+        )
+    weeks, days, hours, minutes = (
+        int(match[unit] or 0) for unit in ("weeks", "days", "hours", "minutes")
+    )
+    return ((weeks * 7 + days) * 24 + hours) * 60 + minutes
+
+
+def _renovate_duration_minutes(text: str) -> int:
+    """Minutes in a Renovate `<n> <unit>` duration; raises on any other spelling."""
+    match = RENOVATE_DURATION.fullmatch(text)
+    if not match:
+        raise ValueError(
+            f"{text!r} is not a `<n> <minute|hour|day|week>[s]` duration "
+            f"(e.g. `3 days`); spell the window that way so this guard can read it"
+        )
+    return int(match["count"]) * RENOVATE_UNIT_MINUTES[match["unit"]]
+
+
+# Relative `exclude-newer` durations arrived in uv 0.9.17 (uv CHANGELOG). An
+# older uv cannot parse `P3D`, so the file that holds the window must also
+# refuse to run under one.
+UV_RELATIVE_WINDOW_MIN_VERSION = (0, 9, 17)
+
+
+@pytest.fixture(scope="module")
+def uv_config() -> dict:
+    """`uv.toml`, the file uv reads for the window — see the file for why not pyproject."""
+    return tomllib.loads((REPO_ROOT / "uv.toml").read_text("utf-8"))
+
+
+@pytest.mark.drift_guard
+def test_uv_release_age_window_clears_the_floor(uv_config: dict) -> None:
+    """uv's `exclude-newer` holds the Python dev toolchain to the same floor."""
+    window = uv_config.get("exclude-newer")
+    assert isinstance(window, str), (
+        "uv.toml has no `exclude-newer`, so `uv lock`/`uv run` "
+        "accept a distribution uploaded seconds ago"
+    )
+    assert _iso_duration_minutes(window) >= MINIMUM_WINDOW_MINUTES, (
+        f"uv.toml `exclude-newer` is {window!r}, below the agreed "
+        f"{MINIMUM_WINDOW_MINUTES}-minute (3-day) floor"
+    )
+
+
+@pytest.mark.drift_guard
+def test_uv_cooldown_cannot_be_dropped_by_an_older_uv(uv_config: dict) -> None:
+    """A uv that cannot parse `P3D` must be refused, not left to ignore the window."""
+    required = uv_config.get("required-version")
+    assert isinstance(required, str), (
+        "uv.toml has no `required-version`: a uv older than 0.9.17 parses a "
+        "relative `exclude-newer` as a malformed timestamp and re-resolves "
+        "without the cooldown"
+    )
+    match = re.fullmatch(r">=(?P<major>\d+)\.(?P<minor>\d+)\.(?P<patch>\d+)", required)
+    assert match, f"`required-version` {required!r} must be a single `>=X.Y.Z` floor"
+    assert (
+        tuple(int(match[part]) for part in ("major", "minor", "patch"))
+        >= UV_RELATIVE_WINDOW_MIN_VERSION
+    ), f"`required-version` {required!r} admits a uv without relative `exclude-newer`"
+    assert "uv" not in tomllib.loads(
+        (REPO_ROOT / "pyproject.toml").read_text("utf-8")
+    ).get("tool", {}), (
+        "pyproject.toml carries a `[tool.uv]` table beside uv.toml: uv ignores "
+        "it, so any setting added there silently does nothing"
+    )
+
+
+@pytest.mark.drift_guard
+def test_renovate_release_age_window_clears_the_floor() -> None:
+    """Renovate waits at least as long as pnpm will before proposing a bump."""
+    renovate = json5.loads((REPO_ROOT / "renovate.json5").read_text("utf-8"))
+    window = renovate.get("minimumReleaseAge")
+    assert isinstance(window, str), (
+        "renovate.json5 has no top-level `minimumReleaseAge`, so Renovate "
+        "proposes a version the moment it is published"
+    )
+    assert _renovate_duration_minutes(window) >= MINIMUM_WINDOW_MINUTES, (
+        f"renovate.json5 `minimumReleaseAge` is {window!r}, below the agreed "
+        f"{MINIMUM_WINDOW_MINUTES}-minute (3-day) floor: Renovate would open "
+        f"bump PRs whose install pnpm's own window refuses"
+    )
+
+
+@pytest.mark.parametrize(
+    "parse, text, minutes",
+    [
+        (_iso_duration_minutes, "P3D", 3 * 24 * 60),
+        (_iso_duration_minutes, "PT24H", 24 * 60),
+        (_iso_duration_minutes, "P1WT30M", 7 * 24 * 60 + 30),
+        (_renovate_duration_minutes, "3 days", 3 * 24 * 60),
+        (_renovate_duration_minutes, "1 day", 24 * 60),
+        (_renovate_duration_minutes, "24 hours", 24 * 60),
+    ],
+)
+def test_duration_parsers_read_the_window(parse, text: str, minutes: int) -> None:
+    assert parse(text) == minutes
+
+
+@pytest.mark.parametrize(
+    "parse, text",
+    [
+        (_iso_duration_minutes, "P"),
+        (_iso_duration_minutes, "PT"),
+        (_iso_duration_minutes, "P3DT"),
+        (_iso_duration_minutes, "P1M"),
+        (_iso_duration_minutes, "3 days"),
+        (_renovate_duration_minutes, "P3D"),
+        (_renovate_duration_minutes, "3 months"),
+    ],
+)
+def test_duration_parsers_reject_a_spelling_they_cannot_read(parse, text: str) -> None:
+    with pytest.raises(ValueError):
+        parse(text)

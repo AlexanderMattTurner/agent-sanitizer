@@ -19,9 +19,7 @@ import { execFileSync } from "node:child_process";
 import { describe, it } from "node:test";
 import { ESLint } from "eslint";
 
-const REPO_ROOT = execFileSync("git", ["rev-parse", "--show-toplevel"], {
-  encoding: "utf8",
-}).trim();
+import { repoRoot as REPO_ROOT } from "./helpers/repo-root.mjs";
 
 const tracked = (...pathspecs) =>
   execFileSync("git", ["ls-files", "--", ...pathspecs], {

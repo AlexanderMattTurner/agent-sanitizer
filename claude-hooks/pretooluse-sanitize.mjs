@@ -1,31 +1,31 @@
 /**
- * PreToolUse content-protection orchestrator. Runs five layers in ONE process:
+ * PreToolUse content-protection orchestrator. Runs five stages in ONE process
+ * (named, not numbered — the public "Layer N" numbering is a different axis):
  *
- *   1. Invisible-char injection gate (lib/invisible-alert.mjs)
- *   2. Confusable/homoglyph normalization of paths & commands
- *      (agent-sanitizer/confusables, namespace-guard scanner injected)
- *   3. Stego / terminal-control stripping of model-authored fields
- *      (lib/authored-content.mjs)
- *   4. Rehydration of secret-redaction placeholders in Edit/Write inputs
- *      (agent-sanitizer/rehydrate, redactor-daemon io injected)
- *   5. Rehydration of keyed Layer-2 splice placeholders in Edit/Write inputs
- *      ({@link rehydrateLayer2}, span store in lib/reveal.mjs) — disjoint
- *      grammar from step 4, run after it
+ *   - gate: invisible-char injection gate (lib/invisible-alert.mjs)
+ *   - confusables: homoglyph normalization of paths & commands
+ *     (agent-sanitizer/confusables, namespace-guard scanner injected)
+ *   - authored-content: stego / terminal-control stripping of model-authored
+ *     fields (lib/authored-content.mjs)
+ *   - rehydrate: secret-redaction (Layer-4) placeholders in Edit/Write inputs
+ *     (agent-sanitizer/rehydrate, redactor-daemon io injected)
+ *   - layer2-rehydrate: keyed Layer-2 splice placeholders in Edit/Write inputs
+ *     ({@link rehydrateLayer2}, span store in lib/reveal.mjs) — a grammar
+ *     disjoint from the secret one, run after it
  *
  * WHY ONE PROCESS: Claude Code runs PreToolUse hooks in parallel and does NOT
  * chain their `updatedInput` — each hook sees the original input and the last to
- * finish wins. Registered as three separate hooks, layers 2 and 3 both rewrite
- * the shared Bash `command` field from the original text, so a command carrying
- * BOTH a confusable AND a stego payload had one fix non-deterministically
- * clobbered by the other. Composing them here makes the rewrite deterministic
- * (normalize, then strip the normalized text) and pays a single Node start
- * instead of three on the hottest path. Layers 2-4 run through the declared
- * pipeline in lib/layer-pipeline.mjs, which is what keeps the confusable fold's
- * skip decisions sound once the erasing strip follows it.
+ * finish wins. As separate hooks, the confusable and authored-content stages
+ * both rewrite the Bash `command` field from the original text, so a command
+ * carrying both payloads would have one fix clobbered by the other. Composing
+ * them here makes the rewrite deterministic and pays one Node start instead of
+ * three on the hottest path. Every stage after the gate runs through the
+ * declared pipeline in lib/layer-pipeline.mjs, which keeps the confusable
+ * fold's skip decisions sound once the erasing strip follows it.
  *
- * Layers 2 and 4 are the provider-agnostic transforms in the agent-sanitizer
- * package; this file binds its peers (namespace-guard, the redactor daemon, the
- * filesystem) into them.
+ * The confusables and rehydrate stages are provider-agnostic transforms in the
+ * agent-sanitizer package; this file binds its peers (namespace-guard, the
+ * redactor daemon, the filesystem) into them.
  */
 import { createRequire } from "node:module";
 import { readFileSync } from "node:fs";
@@ -69,6 +69,7 @@ import { secretsEnabled } from "./lib/env-config.mjs";
 import { readKnob } from "./lib/knobs.mjs";
 import { withSecretDropGuard } from "./lib/secret-drop-guard.mjs";
 import {
+  containsPlaceholder,
   placeholderNotice,
   layer2PlaceholderNotice,
   layer2Keys,
@@ -113,10 +114,11 @@ export const PRE_TOOL_USE_MESSAGES = Object.freeze({
   remedy: DEFAULT_MISSING_PACKAGE_REMEDY,
 });
 
-// Layers 2 & 4 come from the agent-sanitizer package, bound via lazyImport (see
-// its doc for the fail-OPEN hazard of a bare static npm import); a failed load
-// leaves these bindings undefined, so the layer calls below throw into the CLI's
-// fail-closed catch (ask) instead.
+// The confusables and rehydrate stages come from the agent-sanitizer package,
+// bound via lazyImport (see its doc for the fail-OPEN hazard of a bare static
+// npm import); a failed load leaves these bindings undefined, so the stage calls
+// below throw into the CLI's catch, which applies this hook's fault posture
+// (hookFailureFields).
 const { normalizeConfusables, normalizeContext } =
   /** @type {typeof import("agent-sanitizer/confusables")} */ (
     await lazyImport("agent-sanitizer/confusables")
@@ -161,9 +163,11 @@ const confusableScan = (text) =>
 const redactorIo = {
   readFile: (path) => readFileSync(path, "utf8"),
   redactMap: async (text) =>
-    /** @type {any} */ (await redactViaDaemon(text, { map: true })),
+    /** @type {any} */ (
+      await redactViaDaemon(text, { map: true, webIngress: false })
+    ),
   redact: async (text) => {
-    const out = await redactViaDaemon(text, {});
+    const out = await redactViaDaemon(text, { webIngress: false });
     return out ? /** @type {string} */ (out.text) : null;
   },
 };
@@ -233,11 +237,12 @@ function substituteLayer2(text, field) {
  * removed #<key>]` placeholders (copied from sanitized tool output) has each
  * one restored to the stored original bytes from the reveal store's span files.
  *
- * SECURITY invariant: the stored span content was REDACTED before persistence
- * (sanitize-output runs strict web-ingress redaction on each splice original
- * before persistSpan), so this rehydration can never write a raw secret — the
- * worst it can restore is `[REDACTED…]` placeholder text standing where the
- * secret was, which the on-disk tripwire then flags on later Reads.
+ * SECURITY invariant, with the secret layer on: the stored span content was
+ * REDACTED before persistence (sanitize-output runs strict web-ingress
+ * redaction on each splice original before persistSpan), so this rehydration
+ * can never write a raw secret — the worst it can restore is `[REDACTED…]`
+ * placeholder text, which the on-disk tripwire then flags on later Reads. With
+ * the layer off, spans are stored verbatim and the context claims nothing.
  *
  * Composition with the secret rehydrator: this runs AFTER it (a later terminal
  * layer), and the two grammars are disjoint — a Layer-2 placeholder never
@@ -254,9 +259,12 @@ function substituteLayer2(text, field) {
  * edits / notebook JSON cannot be rehydrated).
  * @param {string} tool
  * @param {any} toolInput
+ * @param {boolean} [secretsOn]  the run's secret opt-in (decided once by
+ *   buildPreToolUseResponse; a direct caller reads the env); only with it on
+ *   does the context claim the restored bytes were redacted
  * @returns {{ updatedInput: any, context: string } | { deny: string } | null}
  */
-export function rehydrateLayer2(tool, toolInput) {
+export function rehydrateLayer2(tool, toolInput, secretsOn = secretsEnabled()) {
   const hasL2 = (/** @type {unknown} */ text) =>
     typeof text === "string" && layer2Keys(text).length > 0;
   if (
@@ -299,23 +307,12 @@ export function rehydrateLayer2(tool, toolInput) {
     updatedInput: { ...toolInput, [field]: result.text },
     context:
       `${result.restored} Layer-2 removed-content placeholder(s) in ${field} ` +
-      `were restored to the stored original content (secrets inside were ` +
-      `redacted before storage, so no raw secret is written).`,
+      `were restored to the stored original content` +
+      (secretsOn
+        ? ` (secrets inside were redacted before storage, so no raw secret is written).`
+        : "."),
   };
 }
-
-/**
- * The wired default gates the whole rehydration layer on the secret opt-in:
- * with secrets off the output hook never inserts placeholders, so there is
- * nothing to re-anchor — and skipping here (rather than inside the layer)
- * means an Edit on a plain file never touches the file system twice or spawns
- * the daemon. Consulted per call, not at module load, so a knob set after the
- * bundle loads still governs the next tool call.
- * @param {string} tool
- * @param {any} toolInput
- */
-const defaultRehydrate = async (tool, toolInput) =>
-  secretsEnabled() ? guardedRehydrate(tool, toolInput) : null;
 
 /**
  * Trace the response on the way out — "noop" (clean pass-through), "deny",
@@ -340,21 +337,28 @@ function emitTraced(emitTrace, toolName, fields) {
 }
 
 /**
- * The declared layer chain, layers 2-4. Every entry states the two properties
+ * The declared stage chain after the gate. Every entry states the two properties
  * the driver reasons about — whether it ERASES code points another layer reads,
  * and whether its own decision is SKIP-BASED and therefore invalidated by such
  * an erasure — so the confusable fold's ordering precondition is enforced by the
  * table instead of restated as a comment.
  *
- * Layer 3 is dropped from the table (not merely skipped at run time) when
+ * The authored-content stage is dropped from the table (not merely skipped) when
  * AGENT_SANITIZER_OUTPUT_DISABLED=1, so the driver sees the chain that will
  * actually run: with no erasing layer left after the fold there is no fixed
- * point to reach and no extra pass to pay for.
- * @param {(tool: string, toolInput: any) => ReturnType<typeof rehydrateRedacted>} rehydrate
+ * point to reach and no extra pass to pay for. A null `rehydrate` drops the
+ * secret rehydrator the same way.
+ * @param {((tool: string, toolInput: any) => ReturnType<typeof rehydrateRedacted>) | null} rehydrate
  * @param {NodeJS.ProcessEnv | Record<string, string | undefined>} [env]
+ * @param {boolean} [secretsOn]  the run's secret opt-in (see
+ *   buildPreToolUseResponse, which decides it once and passes it here)
  * @returns {import("./lib/layer-pipeline.mjs").Layer[]}
  */
-export function preToolUseLayers(rehydrate, env = process.env) {
+export function preToolUseLayers(
+  rehydrate,
+  env = process.env,
+  secretsOn = secretsEnabled(env),
+) {
   /** @type {import("./lib/layer-pipeline.mjs").Layer[]} */
   const layers = [
     {
@@ -398,10 +402,12 @@ export function preToolUseLayers(rehydrate, env = process.env) {
       skipBased: false,
       // Terminal by contract, not by luck: it re-anchors Edit/Write inputs onto
       // the on-disk bytes, and the secrets it restores must NOT be re-stripped
-      // by layer 3 or re-folded by layer 2 on a later pass.
+      // by the authored-content stage or re-folded on a later pass.
       terminal: true,
       run: async (tool, toolInput) => {
-        const rehydrated = await rehydrate(tool, toolInput);
+        const rehydrated = await /** @type {NonNullable<typeof rehydrate>} */ (
+          rehydrate
+        )(tool, toolInput);
         if (!rehydrated) return null;
         if ("deny" in rehydrated) return { deny: rehydrated.deny };
         return {
@@ -419,12 +425,17 @@ export function preToolUseLayers(rehydrate, env = process.env) {
       // legitimately contain [REDACTED…] text — must not be re-fed to the
       // secret resolver or re-stripped by an earlier layer.
       terminal: true,
-      run: (tool, toolInput) => rehydrateLayer2(tool, toolInput),
+      run: (tool, toolInput) => rehydrateLayer2(tool, toolInput, secretsOn),
     },
   ];
-  return readKnob("AGENT_SANITIZER_OUTPUT_DISABLED", env)
-    ? layers.filter((layer) => layer.name !== "authored-content")
-    : layers;
+  return layers.filter(
+    (layer) =>
+      !(layer.name === "rehydrate" && rehydrate === null) &&
+      !(
+        layer.name === "authored-content" &&
+        readKnob("AGENT_SANITIZER_OUTPUT_DISABLED", env)
+      ),
+  );
 }
 
 // The tools whose path field Claude Code sends as an absolute path by
@@ -462,29 +473,36 @@ function toolTargetDir(tool, toolInput) {
 }
 
 /**
- * Compose the four protections. Returns the `hookSpecificOutput` fields to
- * emit, or null for a clean no-op. Throws only if a layer's engine throws; the
- * caller fails closed (ask) on any throw. Every exit routes through emitTraced.
+ * Compose the five stages. Returns the `hookSpecificOutput` fields to emit, or
+ * null for a clean no-op. Throws only if a stage's engine throws; the caller
+ * then applies this hook's fault posture (open by default — see
+ * hookFailureFields). Every exit routes through emitTraced.
  * @param {any} input parsed PreToolUse event
  * @param {(tool: string, toolInput: any) => ReturnType<typeof rehydrateRedacted>} [rehydrate]
- * injectable for tests; the default binds the real redactor-daemon io (the
- * layer reads the target file and maps secrets through the daemon)
+ * injectable for tests, and then run whatever the secret opt-in says; the
+ * default binds the real redactor-daemon io (the layer reads the target file
+ * and maps secrets through the daemon) and runs only with the opt-in on
  * @param {import("./lib/trace.mjs").TraceFn} [sink]  where engagement is
  * announced; a host with its own trace channel passes its sink (see lib/trace.mjs)
+ * @param {import("./lib/layer-pipeline.mjs").Layer[]} [layers]  the stage table,
+ * injectable so a test can drive one the shipped stages never produce (an
+ * oscillating stage); defaults to {@link preToolUseLayers} for this call
  * @returns {Promise<Record<string, unknown> | null>}
  */
-export async function buildPreToolUseResponse(
-  input,
-  rehydrate = defaultRehydrate,
-  sink,
-) {
+export async function buildPreToolUseResponse(input, rehydrate, sink, layers) {
   // Every path into the announcement runs through here, so this is the one
   // place a host sink has to be bound (see hookTrace).
   const emitTrace = hookTrace(sink);
+  // THE secret opt-in decision for this call: the default rehydrator, the
+  // Layer-2 rehydration prose and the placeholder advisory all read this one
+  // value. With it off the output hook never inserts placeholders, so there is
+  // nothing to re-anchor and an Edit never spawns the daemon. Read per call,
+  // not at module load, so a knob set after the bundle loads still governs.
+  const secretsOn = secretsEnabled();
   const asks = [];
   const contexts = [];
 
-  // Layer 1: gate. Persists across the session until the injected files are
+  // The gate. Persists across the session until the injected files are
   // cleaned. It asks ONCE (a hard checkpoint, recorded once emitted) then
   // degrades to a passive reminder, so it doesn't prompt on every tool call.
   const findings = invisibleCharAlert(input.session_id);
@@ -512,21 +530,46 @@ export async function buildPreToolUseResponse(
   );
   if (gapNotice !== null) contexts.push(gapNotice);
 
-  // Layers 2-4, run by the declared pipeline: the driver — not this call order —
-  // is what keeps the confusable fold's soundness precondition true once an
-  // erasing layer follows it (see lib/layer-pipeline.mjs).
+  // The rewriting stages, run by the declared pipeline: the driver — not this
+  // call order — is what keeps the confusable fold's soundness precondition
+  // true once an erasing stage follows it (see lib/layer-pipeline.mjs).
   const {
     updatedInput: current,
     changed,
     contexts: layerContexts,
     deny,
-  } = await runLayerPipeline(tool, toolInput, preToolUseLayers(rehydrate));
+    fault,
+  } = await runLayerPipeline(
+    tool,
+    toolInput,
+    layers ??
+      preToolUseLayers(
+        rehydrate ?? (secretsOn ? guardedRehydrate : null),
+        process.env,
+        secretsOn,
+      ),
+  );
   if (deny !== undefined)
     return emitTraced(emitTrace, input.tool_name, {
       permissionDecision: PermissionDecision.DENY,
       permissionDecisionReason: deny,
     });
   contexts.push(...layerContexts);
+  // A body that never settled: the pipeline hands back its LAST pass's sanitized
+  // input plus the reason, and the verdict is this hook's registered fault
+  // posture — never a verdict decided here. Open proceeds with `current` (the
+  // sanitized value, not the raw input) and the reason as context; closed
+  // returns the policy's closed verdict. `input` lets the policy's write-shaped
+  // placeholder carve-out judge the value that would actually be written.
+  if (fault !== undefined) {
+    const faultFields = hookFailureFields(true, new Error(fault), {
+      input: { tool_name: tool, tool_input: current },
+    });
+    if (faultFields.permissionDecisionReason !== undefined)
+      asks.push(String(faultFields.permissionDecisionReason));
+    if (faultFields.additionalContext !== undefined)
+      contexts.push(String(faultFields.additionalContext));
+  }
 
   // Placeholder advisory for tools OUTSIDE the rehydrated set (Bash, MCP,
   // anything unknown): rehydration cannot re-anchor these, so a placeholder in
@@ -536,7 +579,7 @@ export async function buildPreToolUseResponse(
   // what the tool will actually receive.
   // Gated on the secret opt-in like the layer itself: with secrets off,
   // placeholder-shaped text is ordinary prose and the advisory is noise.
-  const notice = secretsEnabled() ? placeholderNotice(tool, current) : null;
+  const notice = secretsOn ? placeholderNotice(tool, current) : null;
   if (notice !== null) contexts.push(notice);
   // Same advisory for keyed Layer-2 splice placeholders (disjoint grammar, own
   // store): a Bash/MCP write path would persist them literally too, and the
@@ -587,10 +630,6 @@ function assembleResponse({
   if (changed) fields.updatedInput = current;
   if (asks.length > 0) {
     fields.permissionDecision = PermissionDecision.ASK;
-    // Stryker disable next-line StringLiteral: the gate is the only source that
-    // pushes onto `asks`, so the array never holds more than one reason and the
-    // separator is unobservable — join("") is equivalent. The paragraph break is
-    // kept for the day a second ask source is added.
     fields.permissionDecisionReason = asks.join("\n\n");
   }
   if (contexts.length > 0) fields.additionalContext = contexts.join(" ");
@@ -602,13 +641,13 @@ function assembleResponse({
 }
 
 /**
- * Agent-agnostic judge over the four protections: consumes a control-plane
+ * Agent-agnostic judge over the five stages: consumes a control-plane
  * ToolCallEvent and returns a Verdict, so a non-Claude host can run the same
  * sanitization pipeline through its own adapter. The wired Claude CLI below
  * routes through this judge and renders the Verdict with the Claude adapter; on
  * any throw (a control-plane package-load failure included) it falls back to
- * failClosedFields — a native response that needs no package — so the
- * fail-closed posture holds even when the adapter never loaded.
+ * hookFailureFields — a native response that needs no package — so the
+ * caller's fault posture holds even when the adapter never loaded.
  * @param {import("agent-control-plane-core").ToolCallEvent} event
  * @param {(tool: string, toolInput: any) => ReturnType<typeof rehydrateRedacted>} [rehydrate]
  * @param {{
@@ -627,10 +666,10 @@ export async function judgePreToolUseSanitize(event, rehydrate, opts = {}) {
   const { gates = [], trace: sink } = opts;
   // MERGED over the defaults, never substituted for them. A host that overrides
   // one field would otherwise leave the rest undefined, and the miss lands in
-  // the fail-closed path: failClosedFields runs inside runJudgeCli's catch, so a
+  // the fault path: hookFailureFields runs inside runJudgeCli's catch, so a
   // TypeError on a missing field escapes the handler, the hook exits with no
   // stdout, and Claude reads a PreToolUse hook that produced no response as
-  // non-blocking — the fail-closed ask becomes a fail-OPEN pass.
+  // non-blocking — the posture's ask or warning becomes a silent pass.
   const messages = { ...PRE_TOOL_USE_MESSAGES, ...opts.messages };
   const { Decision, EventKind } = controlPlane();
   // A payload the adapter cannot classify (a missing/unexpected hook_event_name)
@@ -758,12 +797,11 @@ export function failClosedFields(parsedOk, err, opts = {}) {
   };
 }
 
-// The redaction-placeholder prefix, restated as a literal rather than imported:
-// this check belongs to the FAILURE posture and must work exactly when the
-// agent-sanitizer package (which exports it as DEFAULT_HINT) failed to load.
-// Exported so test/claude-hooks-fail-open.test.mjs can pin the two spellings
-// together with exact equality — a prefix-only behavioral check would keep
-// passing if this literal drifted shorter and the carve-out over-triggered.
+// The redaction-placeholder prefix the carve-out's reason names, restated as a
+// literal rather than imported: the reason is built on the FAILURE path, which
+// must work exactly when the agent-sanitizer package (which exports it as
+// DEFAULT_HINT) failed to load. Exported so test/claude-hooks-fail-open.test.mjs
+// can pin the two spellings together.
 export const REDACTION_HINT = "[REDACTED";
 // The file-editing tools whose input fields ARE the bytes persisted to disk.
 // Deliberately NOT exhaustive over every clobber path: Bash can also write a
@@ -780,14 +818,15 @@ export const WRITE_SHAPED_TOOLS = new Set([
 
 /**
  * True when a faulting PreToolUse call is the one case the OPEN posture must
- * still not pass: a write-shaped tool whose input carries the
- * redaction-placeholder prefix. Such a placeholder stands for a secret the
- * sanitizer redacted out of the model's view; with the sanitizer down,
- * rehydration cannot translate it back, so letting the call through would
- * persist the literal placeholder text over the real secret on disk — a
- * destructive clobber, not a missed scan. Package-free by construction (a Set
- * lookup and a substring test on the already-parsed payload), so it holds when
- * the failure IS the missing package.
+ * still not pass: a write-shaped tool whose input carries a redaction
+ * placeholder, matched by the real grammar (containsPlaceholder) so
+ * hint-prefixed prose such as `[REDACTED…]` is not mistaken for one. Such a
+ * placeholder stands for a secret the sanitizer redacted out of the model's
+ * view; with the sanitizer down, rehydration cannot translate it back, so
+ * letting the call through would persist the literal placeholder text over the
+ * real secret on disk — a destructive clobber, not a missed scan.
+ * Package-free by construction (a Set lookup and a walk of the already-parsed
+ * payload), so it holds when the failure IS the missing package.
  * @param {unknown} input raw parsed PreToolUse payload (undefined if unparsed)
  * @returns {boolean}
  */
@@ -796,11 +835,10 @@ export function hintedWriteFault(input) {
     /** @type {{tool_name?: unknown, tool_input?: unknown} | undefined} */ (
       input
     );
-  if (!WRITE_SHAPED_TOOLS.has(/** @type {string} */ (payload?.tool_name)))
-    return false;
-  // A parsed-JSON payload can hold no circular reference, so stringify cannot
-  // throw; `?? null` keeps a missing tool_input from stringifying to undefined.
-  return JSON.stringify(payload?.tool_input ?? null).includes(REDACTION_HINT);
+  return (
+    WRITE_SHAPED_TOOLS.has(/** @type {string} */ (payload?.tool_name)) &&
+    containsPlaceholder(payload?.tool_input)
+  );
 }
 
 /**
@@ -916,12 +954,9 @@ export async function cliMain(opts = {}) {
         trace: sink,
       }),
     {
-      // The caller's posture, WITHOUT the package: pass through with a warning
-      // by default, or — under AGENT_SANITIZER_FAIL_OPEN=0 — hard-deny an
-      // unparsable INPUT (`input` undefined; adversary-inducible, no benefit to
-      // failing) and ASK on any throw after a clean parse, keeping a human in
-      // the loop. emitHookResponse renders natively, so either posture holds
-      // even when the adapter never loaded.
+      // The registered fault policy (hookFailureFields → lib/hook-fault.mjs),
+      // WITHOUT the package: emitHookResponse renders natively, so the policy
+      // holds even when the adapter never loaded.
       onError: (err, input) =>
         emitHookResponse(
           HookEvent.PRE_TOOL_USE,

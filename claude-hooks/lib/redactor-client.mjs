@@ -11,11 +11,10 @@
  * retries from scratch. If the socket is absent or dead we (re)spawn the daemon
  * once and retry — a crashed daemon self-heals on the next redaction.
  *
- * Wire protocol (both directions): a 4-byte big-endian unsigned length prefix
- * then that many bytes of UTF-8 JSON. Request {text, map, web_ingress,
- * env_secrets}; response is the same object the redactor's one-shot CLI would
- * print, or JSON null for the "nothing to redact" case, or {error} when the
- * daemon could not vet input.
+ * Wire protocol: python/agent_sanitizer/secrets/data/redactor-protocol.json,
+ * which the daemon reads too — the framing, the frame cap, and the exact shape
+ * of every request and response. A response that matches no shape the request
+ * allows fails closed.
  */
 import { spawn } from "node:child_process";
 import {
@@ -28,11 +27,18 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { envBoundSecretVars } from "./env-config.mjs";
+import {
+  FRAME_CAP,
+  FrameReader,
+  PROTOCOL,
+  conforms,
+  encodeFrame,
+  isPlainObject,
+} from "./redactor-wire.mjs";
 import { currentUid, isPrivateDir, ownedByCurrentUser } from "./hook-io.mjs";
 import { readKnob } from "./knobs.mjs";
 
-// Refuse absurd frames rather than buffer unbounded (mirrors the daemon's cap).
-export const FRAME_CAP = 16 * 1024 * 1024;
+export { FRAME_CAP };
 
 // Published here, where hosts already import it; the parser behind every
 // millisecond knob lives with the knob table.
@@ -242,10 +248,12 @@ function isTrustedSocketDir(dir, uid) {
  * Open one connection, send `request`, resolve with the parsed response object
  * (or null). Rejects on connect failure, a malformed/oversize/short frame, or an
  * {error} response — every one of which the caller turns into a fail-closed. A
- * socket present but not owned by us fails closed WITHOUT respawning (the error
- * carries no errno, so isRespawnable is false), so we never dial into a squat.
+ * socket present but not owned by us, and a request the protocol does not
+ * accept, fail closed WITHOUT dialing (the error carries no errno, so
+ * isRespawnable is false): we never dial into a squat, and an oversize request
+ * is not mistaken for a dead daemon worth respawning.
  * @param {string} socketPath
- * @param {{text: string, map: boolean, web_ingress: boolean}} request
+ * @param {Record<string, unknown>} request
  * @param {number} [deadlineMs] total exchange deadline; defaults to the env-tunable value
  * @returns {Promise<RedactResponse|null>}
  */
@@ -263,16 +271,15 @@ export function connectAndRequest(
       );
       return;
     }
+    if (!conforms(request, PROTOCOL.request)) {
+      reject(new Error("redactor request does not match the wire protocol"));
+      return;
+    }
+    // Encoded before dialing: an over-cap request throws here, rejecting with
+    // no errno, so it is not mistaken for a dead daemon worth respawning.
+    const frame = encodeFrame(request);
     const sock = createConnection(socketPath);
-    /** @type {Buffer[]} */
-    const chunks = [];
-    // Running total of buffered bytes, so we never re-concat the whole backlog on
-    // every 'data' event (that would be O(n^2) in the response size). We concat at
-    // most twice: once to read the 4-byte header if it straddles chunks, once to
-    // slice the full frame — both O(n) overall.
-    let received = 0;
-    /** @type {number|null} */
-    let expected = null;
+    const reader = new FrameReader();
     // Total deadline for the whole connect→request→response exchange, cleared by
     // finish() on the first terminal event. A stalled daemon (post-connect
     // silence) trips it and fails the call closed instead of hanging the hook.
@@ -290,41 +297,31 @@ export function connectAndRequest(
       () => finish(reject, new Error("redactor response timeout")),
       deadlineMs,
     );
-    // The bytes buffered so far as one Buffer, copying only when more than one
-    // chunk is held (a single chunk — the common case — is returned as-is).
-    const joined = () =>
-      chunks.length === 1 ? chunks[0] : Buffer.concat(chunks, received);
     sock.on("error", (err) => finish(reject, err));
-    sock.on("connect", () => {
-      const body = Buffer.from(JSON.stringify(request), "utf8");
-      const header = Buffer.allocUnsafe(4);
-      header.writeUInt32BE(body.length, 0);
-      sock.write(Buffer.concat([header, body]));
-    });
+    sock.on("connect", () => sock.write(frame));
     sock.on("data", (chunk) => {
-      // No setEncoding, so 'data' is always a Buffer at runtime; the cast tells the
-      // type checker that without a (never-taken, uncoverable) string branch.
-      chunks.push(/** @type {Buffer} */ (chunk));
-      received += chunk.length;
-      if (expected === null) {
-        if (received < 4) return;
-        expected = joined().readUInt32BE(0);
-        if (expected > FRAME_CAP) {
-          finish(reject, new Error("oversize response frame"));
-          return;
-        }
-      }
-      if (received < 4 + expected) return;
-      const buf = joined();
-      let parsed;
+      let frameRead;
       try {
-        parsed = JSON.parse(buf.subarray(4, 4 + expected).toString("utf8"));
+        // No setEncoding, so 'data' is always a Buffer at runtime.
+        frameRead = reader.push(/** @type {Buffer} */ (chunk));
       } catch (err) {
+        // Recovery: an over-cap or non-JSON frame fails THIS call closed.
         finish(reject, err);
         return;
       }
-      if (parsed && typeof parsed === "object" && "error" in parsed) {
-        finish(reject, new Error("daemon reported redaction failure"));
+      if (frameRead === undefined) return;
+      const parsed = frameRead.value;
+      if (isPlainObject(parsed) && "error" in parsed) {
+        // The daemon's error strings are fixed literals, never request data.
+        const reason = conforms(parsed, PROTOCOL.responses.error)
+          ? `: ${parsed.error}`
+          : "";
+        finish(
+          reject,
+          new Error(
+            `daemon reported redaction failure${reason}; its log is ${join(dirname(socketPath), "daemon.log")}`,
+          ),
+        );
         return;
       }
       finish(resolve, parsed);
@@ -335,43 +332,81 @@ export function connectAndRequest(
   });
 }
 
+// How much of a failed daemon's stderr is kept for the error message: the tail,
+// which is where a Python traceback names its exception.
+const STDERR_TAIL_CHARS = 2000;
+
+/**
+ * A spawned daemon, as far as the spawning hook can see it.
+ * @typedef {object} DaemonHandle
+ * @property {() => string | undefined} failure why the daemon died before it was
+ *   ready (its exit status and stderr tail), or undefined while it may still bind
+ * @property {() => void} release stop reading its stderr
+ */
+
 /**
  * Spawn the daemon detached so it outlives this hook process. The daemon's bind()
- * is the cross-process mutex, so a racing second spawn just exits — the spawn is
- * idempotent and needs no lock here.
+ * is the cross-process mutex, so a racing second spawn just exits 0 — the spawn
+ * is idempotent and needs no lock here.
+ *
+ * Its stderr is piped back so a daemon that dies on startup (an import error, a
+ * refused cache directory) fails the call at once with its own reason rather than
+ * after the whole spawn wait with none. The daemon points its stderr at a log
+ * file before it publishes the socket, so the pipe is only read until then.
  * @param {string} socketPath
  * @param {string[]} [command] daemon command as [argv0, ...leadingArgs]
  * (injectable so tests can drive the missing-binary arm in-process;
  * production always uses daemonCommand())
+ * @returns {DaemonHandle}
  */
 export function spawnDaemon(socketPath, command = daemonCommand()) {
   const [bin, ...leading] = command;
   const child = spawn(bin, [...leading, socketPath], {
     detached: true,
-    stdio: "ignore",
+    stdio: ["ignore", "ignore", "pipe"],
+  });
+  const stderr = /** @type {import("node:net").Socket} */ (child.stderr);
+  let output = "";
+  /** @type {string | undefined} */
+  let failure;
+  stderr.setEncoding("utf8");
+  stderr.on("data", (/** @type {string} */ chunk) => {
+    output = (output + chunk).slice(-STDERR_TAIL_CHARS);
   });
   // A missing daemon binary surfaces as an async 'error' event; UNHANDLED it
   // kills this hook process, which the harness reads as "no objection" — the
-  // tool output would pass through UNSANITIZED (fail open). Swallowed, the
-  // daemon simply never binds and waitForSocket's deadline fails the call
-  // CLOSED, the declared posture for an unreachable redactor.
-  child.on("error", () => {});
+  // tool output would pass through UNSANITIZED (fail open). Recorded instead,
+  // it ends the spawn wait and fails the call CLOSED.
+  child.on("error", (err) => {
+    failure = err.message;
+  });
+  // 'close', not 'exit': it fires after stderr has drained, so the tail is whole.
+  // Exit 0 is the daemon that lost the bind race to a live one.
+  child.on("close", (code, signal) => {
+    if (code === 0) return;
+    const status = signal ? `killed by ${signal}` : `exit ${code}`;
+    const tail = output.trim();
+    failure ??= tail ? `${status}: ${tail}` : status;
+  });
   child.unref();
+  stderr.unref();
+  return { failure: () => failure, release: () => stderr.destroy() };
 }
 
 /**
- * Poll until the daemon is accepting connections or the deadline passes. Probes by
- * connecting (not just existsSync) so it waits for listen(), not merely bind().
+ * Poll until the daemon is accepting connections, the deadline passes, or
+ * `abandon` reports the spawned daemon dead. Probes by connecting (not just
+ * existsSync) so it waits for listen(), not merely bind().
  * @param {string} socketPath
- * @param {{deadlineMs?: number, stepMs?: number}} [opts]
+ * @param {{deadlineMs?: number, stepMs?: number, abandon?: () => boolean}} [opts]
  * @returns {Promise<boolean>}
  */
 export async function waitForSocket(
   socketPath,
-  { deadlineMs = WAIT_DEADLINE_MS, stepMs = 100 } = {},
+  { deadlineMs = WAIT_DEADLINE_MS, stepMs = 100, abandon = () => false } = {},
 ) {
   const deadline = Date.now() + deadlineMs;
-  while (Date.now() < deadline) {
+  while (Date.now() < deadline && !abandon()) {
     if (existsSync(socketPath) && (await canConnect(socketPath))) return true;
     await sleep(stepMs);
   }
@@ -408,17 +443,26 @@ function canConnect(socketPath) {
  * budget fails CLOSED without dialing — never dial with a non-positive deadline,
  * which would race and could return the raw, unvetted secret (fail open). Omitted,
  * the redactor keeps its own per-call request deadline (the standalone default).
+ *
+ * `webIngress` is required: it chooses between the name-trusting heuristics for
+ * local output and the stricter ones for attacker-controlled text, and a
+ * default would make that choice silently for any caller that forgot it.
  * @param {string} text
- * @param {{map?: boolean, webIngress?: boolean, socketPath?: string,
+ * @param {{map?: boolean, webIngress: boolean, socketPath?: string,
  *   deadline?: {remainingMs: () => number},
- *   connect?: typeof connectAndRequest, spawn?: typeof spawnDaemon,
- *   waitForSocket?: typeof waitForSocket, now?: () => number}} [opts]
+ *   connect?: typeof connectAndRequest,
+ *   spawn?: (socketPath: string) => DaemonHandle | void,
+ *   waitForSocket?: typeof waitForSocket, now?: () => number}} opts
  * @returns {Promise<RedactResponse|null>}
  */
-export async function redactViaDaemon(text, opts = {}) {
+export async function redactViaDaemon(text, opts) {
+  if (typeof opts?.webIngress !== "boolean")
+    throw new TypeError(
+      "redactViaDaemon: opts.webIngress must be true (attacker-controlled text) or false (local output)",
+    );
   const {
     map = false,
-    webIngress = false,
+    webIngress,
     socketPath = DEFAULT_SOCKET_PATH,
     deadline,
     connect = connectAndRequest,
@@ -445,36 +489,33 @@ export async function redactViaDaemon(text, opts = {}) {
     web_ingress: webIngress,
     env_secrets: collectEnvSecrets(),
   };
-  // Response-contract guard — every out-of-contract shape fails CLOSED, because a
-  // caller reading a field the daemon didn't set gets `undefined` and would proceed
-  // on unvetted content (fail OPEN). null (nothing to redact) is in-contract in both
-  // modes. Plain mode: `{text, found}` — text must be a string. Map mode: the
-  // `{unmappable}` marker (the daemon could not build a reversible map, so the
-  // caller suppresses) OR a `{text, pairs}` map — string text AND an array of pairs;
-  // a bare `{}` or a missing/non-array `pairs` is refused, since rehydrateRedacted
-  // reading `result.pairs` on it would silently emit the original secret-shaped
-  // content. Validated AFTER the respawn/retry logic so a malformed response is not
-  // mistaken for a dead socket worth respawning.
-  // Each throw carries the BARE cause: every call sits inside a catch that
-  // wraps what it caught, so wrapping here too would nest the sentence in itself.
-  /** @param {RedactResponse|null} result @returns {RedactResponse|null} */
+  // Response-contract guard — every shape the protocol does not allow for this
+  // mode fails CLOSED, because a caller reading a field the daemon didn't set
+  // gets `undefined` and would proceed on unvetted content (fail OPEN). Plain
+  // mode: `{text, found}`, or null for nothing to redact. Map mode: a
+  // `{text, pairs, found}` map or the `{unmappable}` marker — never null, since
+  // the daemon always answers a map request with one of the two. Validated AFTER
+  // the respawn/retry logic so a malformed response is not mistaken for a dead
+  // socket worth respawning. Each throw carries the BARE cause: every call sits
+  // inside a catch that wraps what it caught.
+  const { responses } = PROTOCOL;
+  /** @param {unknown} result @returns {RedactResponse|null} */
   const validate = (result) => {
-    if (result === null) return null;
     if (map) {
       if (
-        result?.unmappable === undefined &&
-        !(typeof result?.text === "string" && Array.isArray(result?.pairs))
+        !conforms(result, responses.map) &&
+        !conforms(result, responses.unmappable)
       )
         throw new Error(
-          "redactor returned a malformed map response (no `unmappable` marker and no `{text, pairs}` map)",
+          "redactor returned a malformed map response (neither `{text, pairs, found}` nor `{unmappable}`)",
         );
-      return result;
+      return /** @type {RedactResponse} */ (result);
     }
-    if (typeof result?.text !== "string")
+    if (result !== null && !conforms(result, responses.plain))
       throw new Error(
-        "redactor returned a malformed plain response (no string `text`)",
+        "redactor returned a malformed plain response (neither null nor `{text, found}`)",
       );
-    return result;
+    return /** @type {RedactResponse|null} */ (result);
   };
   // Every dial is charged to the redactor share, so the slow-hook notice can
   // place the wait in this call rather than guess at it: the daemon is a
@@ -495,7 +536,7 @@ export async function redactViaDaemon(text, opts = {}) {
     // Socket absent or dead: (re)spawn the daemon, wait for it, retry exactly once
     // — but only if the shared budget still has room for a cold start + a scan.
     if (budgetSpent()) throw outOfBudget("before redactor respawn");
-    spawnFn(socketPath);
+    const daemon = spawnFn(socketPath) ?? undefined;
     // Clamp the cold-start wait to what the budget still allows, so a respawn can
     // never blow it. waitForSocket returns false when the daemon never bound
     // within the deadline; surface that as the actual cause rather than the opaque
@@ -505,18 +546,30 @@ export async function redactViaDaemon(text, opts = {}) {
       budgetMs === undefined
         ? WAIT_DEADLINE_MS
         : Math.min(WAIT_DEADLINE_MS, budgetMs);
-    const waitOpts =
-      budgetMs === undefined ? undefined : { deadlineMs: waitMs };
+    const waitOpts = {
+      deadlineMs: waitMs,
+      abandon: () => daemon?.failure() !== undefined,
+    };
     // The cold-start wait is PROVISIONING — a one-time detect-secrets import and
     // plugin prime (~1-3s, see WAIT_DEADLINE_MS), paid by whichever tool call
     // happens to be first and by no other. Charging it to this hook would make
     // the slow-hook notice fire once per session on a healthy install.
-    if (!(await excludeProvisioning(() => waitFn(socketPath, waitOpts), now)))
+    const ready = await excludeProvisioning(
+      () => waitFn(socketPath, waitOpts),
+      now,
+    );
+    daemon?.release();
+    const died = daemon?.failure();
+    if (!ready)
       throw failClosed(
-        // The CLAMPED wait, since that is what actually elapsed: naming
-        // WAIT_DEADLINE_MS tells an operator debugging a 200ms budget that the
-        // redactor got seconds it was never given.
-        new Error(`redactor daemon did not start within ${waitMs}ms`),
+        new Error(
+          died === undefined
+            ? // The CLAMPED wait, since that is what actually elapsed: naming
+              // WAIT_DEADLINE_MS tells an operator debugging a 200ms budget
+              // that the redactor got seconds it was never given.
+              `redactor daemon did not start within ${waitMs}ms`
+            : `redactor daemon failed to start (${died})`,
+        ),
       );
     if (budgetSpent()) throw outOfBudget("after redactor respawn");
     try {

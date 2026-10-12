@@ -34,6 +34,8 @@ import { parse } from "acorn";
 import { ancestor } from "acorn-walk";
 import { build } from "esbuild";
 
+import { nodeMajorFloor } from "../gen-node-floor-lib.mjs";
+
 /** Repo root (this module lives at scripts/lib/). */
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
 
@@ -235,13 +237,13 @@ export async function bundleHardened({
   const result = await build({
     entryPoints: [entry],
     bundle: true,
-    // Target the Node runtime the package requires (>=22): emits the modern
-    // syntax the sources rely on (top-level await, dynamic import) and preserves
-    // `import.meta.url`, which the CLI compares against process.argv[1] to
-    // decide whether it was invoked as a script.
+    // Target the Node runtime the package requires (engines.node): emits the
+    // modern syntax the sources rely on (top-level await, dynamic import) and
+    // preserves `import.meta.url`, which the CLI compares against
+    // process.argv[1] to decide whether it was invoked as a script.
     platform: "node",
     format: "esm",
-    target: "node22",
+    target: `node${nodeMajorFloor()}`,
     // Only Node's own builtins may remain as imports; everything else is
     // inlined. A bare (non-node:) import surviving would mean the artifact needs
     // a node_modules — the exact thing these bundles exist to avoid.

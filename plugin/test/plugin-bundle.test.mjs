@@ -48,6 +48,7 @@ import {
   runtimeRequires,
 } from "../../scripts/lib/bundle-esbuild.mjs";
 import { HOOK_MODES } from "../../claude-hooks/plugin-hooks.mjs";
+import { startStandInDaemon } from "../../test/redactor-stand-in.mjs";
 import { KNOBS } from "../../claude-hooks/lib/knobs.mjs";
 
 const ROOT = dirname(dirname(dirname(fileURLToPath(import.meta.url))));
@@ -87,6 +88,15 @@ const PACKAGE_DATA_FILES = JSON.parse(
     return entry;
   });
 const ESC = "";
+
+// The directories of the shipped `src/*.mjs` entries, derived from package.json
+// `files` for the same reason PACKAGE_DATA_FILES is: a hook lib importing a new
+// engine module must not need a second hand-kept list here.
+const PACKAGE_SRC_DIRS = JSON.parse(
+  readFileSync(join(ROOT, "package.json"), "utf8"),
+)
+  .files.filter((entry) => /^src\/(?:vendor\/)?\*\.mjs$/.test(entry))
+  .map((entry) => dirname(entry));
 
 /** Tag-character encoding of `s` — the ASCII-smuggling payload class. */
 const tagChars = (s) =>
@@ -275,6 +285,20 @@ function stageSources(t, { omit = [] } = {}) {
     const dest = join(dir, rel);
     mkdirSync(dirname(dest), { recursive: true });
     cpSync(join(ROOT, rel), dest);
+  }
+  // The hook libs also import the engine's own modules at their package-relative
+  // `../../src/…` paths (the Layer-2 placeholder grammar), so stage the shipped
+  // `src/*.mjs` entries too: without them the entry dies at module load with
+  // nothing on stdout, which looks identical to the fail-OPEN under test.
+  assert.ok(
+    PACKAGE_SRC_DIRS.length > 0,
+    "no src/*.mjs in package.json files — the staging derivation broke",
+  );
+  for (const rel of PACKAGE_SRC_DIRS) {
+    mkdirSync(join(dir, rel), { recursive: true });
+    for (const file of readdirSync(join(ROOT, rel)))
+      if (file.endsWith(".mjs"))
+        cpSync(join(ROOT, rel, file), join(dir, rel, file));
   }
   const modules = join(dir, "node_modules");
   mkdirSync(modules, { recursive: true });
@@ -922,31 +946,10 @@ test("output hook redacts through the daemon wire protocol", async (t) => {
   const socketPath = join(sockDir, "redactor.sock");
   t.after(() => rmSync(sockDir, { recursive: true, force: true }));
 
-  // A stub daemon speaking the real protocol: 4-byte big-endian length prefix
-  // then that many bytes of UTF-8 JSON, both directions.
-  const server = createServer((sock) => {
-    /** @type {Buffer[]} */
-    const chunks = [];
-    sock.on("data", (chunk) => {
-      chunks.push(chunk);
-      const buf = Buffer.concat(chunks);
-      if (buf.length < 4) return;
-      const len = buf.readUInt32BE(0);
-      if (buf.length < 4 + len) return;
-      const req = JSON.parse(buf.subarray(4, 4 + len).toString("utf8"));
-      const body = Buffer.from(
-        JSON.stringify({
-          text: req.text.replace(/AKIA[0-9A-Z]{16}/g, "STUB-SCRUBBED"),
-          found: ["AWSKeyDetector"],
-        }),
-        "utf8",
-      );
-      const header = Buffer.allocUnsafe(4);
-      header.writeUInt32BE(body.length, 0);
-      sock.end(Buffer.concat([header, body]));
-    });
-  });
-  await new Promise((resolve) => server.listen(socketPath, resolve));
+  const server = await startStandInDaemon(socketPath, (req) => ({
+    text: req.text.replace(/AKIA[0-9A-Z]{16}/g, "STUB-SCRUBBED"),
+    found: ["AWSKeyDetector"],
+  }));
   t.after(() => server.close());
 
   // Async: the stub daemon above is served by THIS process, so a blocking
@@ -2541,11 +2544,15 @@ test("_AGENT_SANITIZER_REDACTOR_WAIT_MS bounds the wait for a daemon that never 
   };
   // The opt-out posture throughout this section: the suppression IS the
   // observable that the timeout fired, and the open default has none.
+  // A daemon that SPAWNS and then never listens (exit 0 is the bind-race loser,
+  // which the client does not treat as a death). A missing binary would not do:
+  // that fails the spawn at once with its own reason and never waits at all.
+  const daemon = join(scratch(t), "never-listens-daemon");
+  writeFileSync(daemon, "#!/bin/sh\nexit 0\n", { mode: 0o755 });
   const env = {
     ...FAIL_CLOSED,
     _AGENT_SANITIZER_REDACTOR_SOCKET: join(scratch(t), "absent.sock"),
-    _AGENT_SANITIZER_REDACTOR_DAEMON:
-      "/nonexistent/agent-secret-redactor-daemon",
+    _AGENT_SANITIZER_REDACTOR_DAEMON: daemon,
     _AGENT_SANITIZER_REDACTOR_REQUEST_MS: "300",
   };
 

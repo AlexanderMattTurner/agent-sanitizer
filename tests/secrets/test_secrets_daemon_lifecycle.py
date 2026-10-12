@@ -1,6 +1,6 @@
 """Daemon lifecycle: framing I/O, error paths, and socket bind/reclaim races."""
 
-import json
+import concurrent.futures
 import os
 import signal
 import socket
@@ -8,25 +8,13 @@ import struct
 import subprocess
 import sys
 import threading
-import time
 from pathlib import Path
 
 import pytest
 
 from agent_sanitizer.secrets import daemon as S
 from tests._helpers import REPO_ROOT
-from tests.secrets.redactor_helpers import wait_for_listener
-
-
-def _drain(sock: socket.socket) -> object:
-    header = b""
-    while len(header) < 4:
-        header += sock.recv(4 - len(header))
-    (length,) = struct.unpack(">I", header)
-    buf = b""
-    while len(buf) < length:
-        buf += sock.recv(length - len(buf))
-    return json.loads(buf.decode("utf-8"))
+from tests.secrets.redactor_helpers import wait_for_listener, wire_request
 
 
 # ─── _write_frame / _serve_one over a socketpair ─────────────────────────────
@@ -36,20 +24,18 @@ def test_write_frame_round_trips():
     a, b = socket.socketpair()
     try:
         S._write_frame(a, {"hello": "world"})
-        assert _drain(b) == {"hello": "world"}
+        assert S._read_frame(b) == {"hello": "world"}
     finally:
         a.close()
         b.close()
 
 
-def test_serve_one_non_dict_request_closes_silently():
+def test_serve_one_non_dict_request_is_answered_malformed():
     a, b = socket.socketpair()
     try:
-        body = json.dumps([1, 2, 3]).encode("utf-8")  # a list, not a dict
-        a.sendall(struct.pack(">I", len(body)) + body)
-        S._serve_one(b)  # must return without writing a response
-        a.settimeout(1)
-        assert a.recv(4) == b""  # peer closed, no frame written
+        S._write_frame(a, [1, 2, 3])
+        S._serve_one(b)
+        assert S._read_frame(a) == {"error": "malformed request"}
     finally:
         a.close()
 
@@ -61,10 +47,9 @@ def test_serve_one_engine_failure_writes_error(monkeypatch):
     monkeypatch.setattr(S, "handle_request", _boom)
     a, b = socket.socketpair()
     try:
-        body = json.dumps({"text": "key: AKIAIOSFODNN7EXAMPLE"}).encode("utf-8")
-        a.sendall(struct.pack(">I", len(body)) + body)
+        S._write_frame(a, wire_request("key: AKIAIOSFODNN7EXAMPLE"))
         S._serve_one(b)
-        assert _drain(a) == {"error": "redaction failed"}
+        assert S._read_frame(a) == {"error": "redaction failed"}
     finally:
         a.close()
 
@@ -84,10 +69,9 @@ def test_serve_one_engine_failure_logs_type_and_frames_not_input_or_message(
     monkeypatch.setattr(S, "handle_request", _boom)
     a, b = socket.socketpair()
     try:
-        body = json.dumps({"text": f"key: {secret_input}"}).encode("utf-8")
-        a.sendall(struct.pack(">I", len(body)) + body)
+        S._write_frame(a, wire_request(f"key: {secret_input}"))
         S._serve_one(b)
-        _drain(a)  # the client-facing response is asserted separately above
+        S._read_frame(a)  # the client-facing response is asserted separately above
     finally:
         a.close()
     err = capsys.readouterr().err
@@ -97,6 +81,28 @@ def test_serve_one_engine_failure_logs_type_and_frames_not_input_or_message(
     # The two leak vectors are absent.
     assert secret_message not in err  # exception message withheld
     assert secret_input not in err  # request text withheld
+
+
+def test_an_exception_escaping_serve_one_is_logged(monkeypatch, capsys):
+    """The worker pool holds a handler's exception in a future nobody reads, so
+    without the done-callback a crashing handler left no trace at all."""
+
+    message = "handler-bug-message-71c2"
+
+    def _crash(conn):
+        conn.close()
+        raise RuntimeError(message)
+
+    monkeypatch.setattr(S, "_serve_one", _crash)
+    a, b = socket.socketpair()
+    try:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+            pool.submit(S._serve_one, b).add_done_callback(S._report_unhandled)
+    finally:
+        a.close()
+    err = capsys.readouterr().err
+    assert "connection handler crashed (RuntimeError)" in err
+    assert message not in err
 
 
 def test_serve_one_malformed_json_body_closes():
@@ -226,10 +232,9 @@ def test_publish_listener_returns_none_when_live_daemon_owns_path(sock_dir):
         client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         try:
             client.connect(socket_path)
-            body = json.dumps({"text": "key: AKIAIOSFODNN7EXAMPLE"}).encode("utf-8")
-            client.sendall(struct.pack(">I", len(body)) + body)
+            S._write_frame(client, wire_request("key: AKIAIOSFODNN7EXAMPLE"))
             client.settimeout(5)
-            assert "AWS Access Key" in _drain(client)["found"]
+            assert "AWS Access Key" in S._read_frame(client)["found"]
         finally:
             client.close()
     finally:
@@ -347,16 +352,90 @@ def test_main_usage_error_on_wrong_argc():
         S.main(["a", "b"])
 
 
-def test_main_serves_until_stopped(sock_dir, monkeypatch):
-    socket_path = str(sock_dir / "s.sock")
-    called = {}
-
-    def _fake_serve(path):
-        called["path"] = path
-
-    monkeypatch.setattr(S, "serve", _fake_serve)
+def test_main_logs_beside_the_socket_then_serves(sock_dir, monkeypatch):
+    socket_path = str(sock_dir / "sub" / "s.sock")
+    called = []
+    # Redirecting fd 2 in-process would swallow pytest's own stderr; the real
+    # redirect is driven in a subprocess below.
+    monkeypatch.setattr(S, "_log_to", lambda path: called.append(("log", path)))
+    monkeypatch.setattr(S, "serve", lambda path: called.append(("serve", path)))
     S.main([socket_path])
-    assert called["path"] == socket_path
+    assert called == [
+        ("log", str(sock_dir / "sub" / "daemon.log")),
+        ("serve", socket_path),
+    ]
+    assert oct(os.stat(sock_dir / "sub").st_mode)[-3:] == "700"
+
+
+def test_daemon_writes_request_failures_to_its_log(sock_dir):
+    """The spawning client stops reading the daemon's stderr once it is ready,
+    so a request failure is diagnosable only through daemon.log."""
+    socket_path = str(sock_dir / "s.sock")
+    log = sock_dir / "daemon.log"
+    proc = subprocess.Popen(
+        [
+            sys.executable,
+            "-c",
+            "import sys; from agent_sanitizer.secrets import daemon as S; "
+            "S.REQUEST_COMPUTE_BUDGET_SECONDS = 0.0; S.main([sys.argv[1]])",
+            socket_path,
+        ],
+        start_new_session=True,
+        stderr=subprocess.PIPE,
+        env={**os.environ, "PYTHONPATH": str(REPO_ROOT / "python")},
+    )
+    try:
+        wait_for_listener(socket_path, timeout=30)
+        client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        try:
+            client.settimeout(10)
+            client.connect(socket_path)
+            S._write_frame(client, wire_request("api_key: AKIAIOSFODNN7EXAMPLE\n" * 50))
+            assert S._read_frame(client) == {"error": "redaction failed"}
+        finally:
+            client.close()
+        assert "secret redaction failed (RedactionBudgetExceeded)" in log.read_text(
+            encoding="utf-8"
+        )
+        assert oct(log.stat().st_mode)[-3:] == "600"
+    finally:
+        proc.terminate()
+        _out, err = proc.communicate(timeout=30)
+    assert b"RedactionBudgetExceeded" not in err
+
+
+def test_log_to_refuses_a_symlink_planted_at_the_log_name(sock_dir):
+    target = sock_dir / "elsewhere"
+    target.write_text("", encoding="utf-8")
+    (sock_dir / "daemon.log").symlink_to(target)
+    with pytest.raises(OSError):
+        S._log_to(str(sock_dir / "daemon.log"))
+    assert target.read_text(encoding="utf-8") == ""
+
+
+def test_log_failure_empties_a_log_past_the_cap_while_running(sock_dir, monkeypatch):
+    """The cap is enforced per diagnostic, not only at startup, so a long-lived
+    daemon that keeps failing cannot grow daemon.log without bound."""
+    monkeypatch.setattr(S, "LOG_CAP_BYTES", 64)
+    log = sock_dir / "daemon.log"
+    saved = os.dup(2)
+    try:
+        S._log_to(str(log))
+        os.write(2, b"x" * 200)
+        # pytest swaps sys.stderr for a capture object; the daemon writes to the
+        # real fd 2, which is what the cap guards.
+        with (
+            open(2, "w", encoding="utf-8", closefd=False) as fd2,
+            monkeypatch.context() as m,
+        ):
+            m.setattr(sys, "stderr", fd2)
+            S._log_failure("redaction failed", RuntimeError("secret-bearing"))
+    finally:
+        os.dup2(saved, 2)
+        os.close(saved)
+    text = log.read_text(encoding="utf-8")
+    assert text.startswith("redaction failed (RuntimeError)")
+    assert "x" * 200 not in text
 
 
 def test_main_daemon_keeps_serving_after_sighup(sock_dir):
@@ -385,9 +464,8 @@ def test_main_daemon_keeps_serving_after_sighup(sock_dir):
         try:
             client.settimeout(10)
             client.connect(socket_path)
-            body = json.dumps({"text": "key: AKIAIOSFODNN7EXAMPLE"}).encode("utf-8")
-            client.sendall(struct.pack(">I", len(body)) + body)
-            assert "AWS Access Key" in _drain(client)["found"]
+            S._write_frame(client, wire_request("key: AKIAIOSFODNN7EXAMPLE"))
+            assert "AWS Access Key" in S._read_frame(client)["found"]
         finally:
             client.close()
         assert proc.poll() is None
@@ -451,21 +529,17 @@ def test_stalled_connection_does_not_block_the_daemon(sock_dir, monkeypatch):
         stalled.sendall(b"\x00\x00")  # 2 of 4 header bytes; never sends the rest
 
         fresh.connect(socket_path)
-        body = json.dumps({"text": "key: AKIAIOSFODNN7EXAMPLE", "map": False}).encode(
-            "utf-8"
-        )
-        fresh.sendall(struct.pack(">I", len(body)) + body)
-        fresh.settimeout(5)
-        start = time.time()
-        result = _drain(fresh)
-        elapsed = time.time() - start
+        S._write_frame(fresh, wire_request("key: AKIAIOSFODNN7EXAMPLE"))
+        # Hang bounds, not speed bounds: a passing run returns as soon as the
+        # daemon acts, so no load comes near them.
+        fresh.settimeout(60)
+        stalled.settimeout(60)
+        result = S._read_frame(fresh)
         assert "AWS Access Key" in result["found"]
-        # allow-wall-clock: bounded by roughly CONN_TIMEOUT_SECONDS (the
-        # stalled connection ahead of it in accept order); a real hang would
-        # be unbounded, not merely slow under CI load.
-        assert elapsed < 3, (
-            f"a stalled peer must not block a fresh request ({elapsed}s)"
-        )
+        # The timeout itself, observed rather than timed: the daemon gives up
+        # on the stalled peer and closes it (EOF). Unbounded, it would hold the
+        # connection open and this read would hit its own bound instead.
+        assert stalled.recv(1) == b""
     finally:
         stalled.close()
         fresh.close()

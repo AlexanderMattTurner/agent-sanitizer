@@ -20,10 +20,12 @@
  */
 import { describe, it, before, after } from "node:test";
 import assert from "node:assert/strict";
-import { createServer } from "node:net";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+
+import { startStandInDaemon } from "./redactor-stand-in.mjs";
+import { driveClocks } from "./helpers/driven-clock.mjs";
 
 // mkdtemp yields a 0700 dir owned by us, which is exactly what the client's
 // socket-ownership check demands. Set BEFORE importing the hook: the client
@@ -46,29 +48,11 @@ const SECRET_TEXT = "here is a token: abc";
 const REDACTED_TEXT = "here is a token: [REDACTED]";
 
 /** A daemon that replies to every request with one fixed redaction. */
-function startStubDaemon() {
-  const server = createServer((sock) => {
-    /** @type {Buffer[]} */
-    const chunks = [];
-    sock.on("data", (chunk) => {
-      chunks.push(chunk);
-      const buf = Buffer.concat(chunks);
-      if (buf.length < 4) return;
-      const expected = buf.readUInt32BE(0);
-      if (buf.length < 4 + expected) return;
-      const body = Buffer.from(
-        JSON.stringify({ text: REDACTED_TEXT, found: ["FakeDetector"] }),
-        "utf8",
-      );
-      const header = Buffer.allocUnsafe(4);
-      header.writeUInt32BE(body.length, 0);
-      sock.end(Buffer.concat([header, body]));
-    });
-  });
-  return new Promise((resolve) => {
-    server.listen(socketPath, () => resolve(server));
-  });
-}
+const startStubDaemon = () =>
+  startStandInDaemon(socketPath, () => ({
+    text: REDACTED_TEXT,
+    found: ["FakeDetector"],
+  }));
 
 /** @type {import("node:net").Server} */
 let daemon;
@@ -204,24 +188,19 @@ describe("postText", () => {
 });
 
 describe("postText timing", () => {
-  it("charges a blocking callback to the host-extension window", async () => {
+  it("charges a blocking callback to the host-extension window", async (t) => {
     // postText is where a composer runs a subprocess (an injection filter), whose
     // CPU lands in a child this process cannot see; uncharged, that wait is
     // indistinguishable from host contention.
+    const clock = driveClocks(t);
     const timer = startHookTimer();
     await sanitizeText("plain text", "WebFetch", undefined, {
       postText: () => {
-        const until = Date.now() + 60;
-        while (Date.now() < until) {
-          /* a callback that blocks, as a spawnSync-based filter does */
-        }
+        clock.wait(60); // a callback that blocks, as a spawnSync-based filter does
         return null;
       },
     });
-    assert.ok(
-      timer.hostMs() >= 50,
-      `the callback's wait must be charged (${timer.hostMs()}ms)`,
-    );
+    assert.equal(timer.hostMs(), 60, "the callback's wait must be charged");
   });
 });
 
@@ -276,44 +255,45 @@ describe("redactNote", () => {
 });
 
 describe("postText timing (failure path)", () => {
-  it("charges a callback that THREW — its wait still lands in the window", async () => {
+  it("charges a callback that THREW — its wait still lands in the window", async (t) => {
     // The costliest callback is the one that stalled and then failed; charging
     // outside `finally` would hand that whole wait to the unattributed remainder,
     // on exactly the error path runJudgeCli reports hostMs from.
+    const clock = driveClocks(t);
     const timer = startHookTimer();
     await assert.rejects(
       sanitizeText("plain text", "WebFetch", undefined, {
         postText: async () => {
-          await new Promise((resolve) => setTimeout(resolve, 60));
+          await Promise.resolve();
+          clock.wait(60);
           throw new Error("extension exploded");
         },
       }),
       /extension exploded/u,
     );
-    assert.ok(
-      timer.hostMs() >= 50,
-      `a failed callback's wait must still be charged (${timer.hostMs()}ms)`,
+    assert.equal(
+      timer.hostMs(),
+      60,
+      "a failed callback's wait must still be charged",
     );
   });
 });
 
 describe("trace timing", () => {
-  it("charges a composer's trace sink, and not the package's own", async () => {
+  it("charges a composer's trace sink, and not the package's own", async (t) => {
     // The sink is composer code on the same seam as the other callbacks: it may
     // write over a socket whose cost this process's CPU figure cannot see.
+    const clock = driveClocks(t);
     const hosted = startHookTimer();
     await evaluateToolOutput(
       { tool_name: "Bash", tool_input: {}, tool_response: "plain ls" },
       {
         trace: () => {
-          const until = Date.now() + 60;
-          while (Date.now() < until) {
-            /* a sink that blocks, as a socket write can */
-          }
+          clock.wait(60); // a sink that blocks, as a socket write can
         },
       },
     );
-    assert.ok(hosted.hostMs() >= 50, `charged (${hosted.hostMs()}ms)`);
+    assert.equal(hosted.hostMs(), 60);
     // The package's own sink is the sanitizer's work, so it charges nothing.
     const own = startHookTimer();
     await evaluateToolOutput({
@@ -326,26 +306,20 @@ describe("trace timing", () => {
 });
 
 describe("redactNote timing", () => {
-  it("charges a blocking annotator to the host-extension window", async () => {
+  it("charges a blocking annotator to the host-extension window", async (t) => {
     // redactNote must answer synchronously, so the async charger cannot wrap it;
     // uncharged, a composer that blocks here loses its wait to the unattributed
     // remainder AND has its CPU billed to the sanitizer.
+    const clock = driveClocks(t);
     const timer = startHookTimer();
-    const before = timer.cpuMs();
     await sanitizeText(SECRET_TEXT, "Bash", undefined, {
       redactNote: () => {
-        const until = Date.now() + 60;
-        while (Date.now() < until) {
-          /* a callback that computes, as a spawnSync-based annotator does */
-        }
+        clock.compute(60); // a callback that computes, as a spawnSync annotator does
         return "annotated";
       },
     });
-    assert.ok(timer.hostMs() >= 50, `charged (${timer.hostMs()}ms)`);
-    assert.ok(
-      timer.cpuMs() - before < 40,
-      `the annotator's CPU stays off the hook (${timer.cpuMs() - before}ms)`,
-    );
+    assert.equal(timer.hostMs(), 60);
+    assert.equal(timer.cpuMs(), 0, "the annotator's CPU stays off the hook");
   });
 });
 
@@ -394,21 +368,23 @@ describe("audit", () => {
     assert.match(String(records[0].context), /redacted/u);
   });
 
-  it("charges its wait to the host-extension window, not to the remainder", async () => {
+  it("charges its wait to the host-extension window, not to the remainder", async (t) => {
     // The defect this closes: a composer's audit POST to an unreachable sink
     // waited out its own connect bound on every tool call, and the slow-hook
     // notice could attribute none of that second to anything — it named a loaded
     // machine and sent the reader to the wrong repository.
+    const clock = driveClocks(t);
     const timer = startHookTimer();
     await judge("plain output", {
-      audit: () => new Promise((resolve) => setTimeout(resolve, 60)),
+      audit: async () => {
+        await Promise.resolve();
+        clock.wait(60);
+      },
     });
-    assert.ok(
-      timer.hostMs() >= 50,
-      `the callback's wait must be charged (${timer.hostMs()}ms)`,
-    );
-    assert.ok(
-      timer.cpuMs() < timer.hostMs(),
+    assert.equal(timer.hostMs(), 60, "the callback's wait must be charged");
+    assert.equal(
+      timer.cpuMs(),
+      0,
       "a sleeping callback burns wall-clock, not this process's CPU",
     );
   });
