@@ -248,6 +248,29 @@ function calibrationPass(text) {
   return seen;
 }
 
+/**
+ * The document a shape's `attempt`-th timed call reads: `size` units, told
+ * apart from every other attempt's by a visible number at the end.
+ *
+ * At the end, not up front: a document's opening decides how the HTML layer
+ * reads it. A page of `<p>` lines with a line of text in front cost more than
+ * twice what the page alone does, on main and on the carve rewrite alike, so a
+ * leading number timed html-prose as a different shape.
+ *
+ * Not by length. Trimming a shape to a length can leave a partial unit at the
+ * end — a dangling joiner, say — that Layer 1 strips, and the stripped text is
+ * then exactly the next attempt's document. The carve remembers the last text
+ * it analysed, the composition's second pass is what carved the stripped text,
+ * and so every call after the first was timed as a memo hit: sanitizeText read
+ * 2.4 units on a 256 KB page of emoji ZWJ sequences that costs ~20 cold.
+ * @param {string} shape @param {number} size @param {number} attempt
+ * @returns {string}
+ */
+function attemptDoc(shape, size, attempt) {
+  const tail = ` ${attempt}`;
+  return SHAPES[shape](size - tail.length) + tail;
+}
+
 /** The unit, in CPU ms per pass. */
 const calibrate = async () =>
   (await measure(() => CALIBRATION_TEXT, calibrationPass)).cpu;
@@ -307,13 +330,13 @@ before(async () => {
   for (const { entry, shape, name } of CASES) {
     const { run } = ENTRIES[entry];
     const measured = await unitsFor(
-      (attempt) => SHAPES[shape](LARGE - attempt),
+      (attempt) => attemptDoc(shape, LARGE, attempt),
       (text) => run(text, shape),
     );
     timing.large[name] = measured.cost.cpu;
     timing.units[name] = measured.units;
     timing.growth[name] = await growth(
-      (size, attempt) => SHAPES[shape](size - attempt),
+      (size, attempt) => attemptDoc(shape, size, attempt),
       (text) => run(text, shape),
       SCALING_SIZES,
     );

@@ -14,6 +14,7 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 
 import { unsandbox } from "./helpers/repo-root.mjs";
 
@@ -30,12 +31,14 @@ import { CF_CODEPOINTS } from "../src/cf-charset.mjs";
 import {
   parseStandardizedVariants,
   loadStandardizedVariantsUcd,
+  render as renderStandardizedVariants,
 } from "../scripts/gen-standardized-variants.mjs";
 import {
   STANDARDIZED_VARIANTS,
   isStandardizedVariant,
   UNICODE_VERSION as SV_UNICODE_VERSION,
 } from "../src/standardized-variants.mjs";
+import { UNICODE_VERSION as UCD_PACKAGE_VERSION } from "../scripts/lib/ucd.mjs";
 
 describe("invisible-charset SSOT", () => {
   const committed = JSON.parse(readFileSync(OUTPUT_PATH, "utf8"));
@@ -48,7 +51,7 @@ describe("invisible-charset SSOT", () => {
     assert.deepEqual(committed.extra_codepoints, extraCodepoints());
   });
 
-  it("committed JSON's Cf code points equal Node's freshly enumerated \\p{Cf}", () => {
+  it("committed JSON's Cf code points equal the pinned UCD's General_Category=Cf", () => {
     assert.deepEqual(committed.cf_codepoints, cfCodepoints());
   });
 
@@ -93,26 +96,70 @@ describe("Cf charset is pinned identically for JS and Python", () => {
 
 // SSOT round-trip for the standardized variation sequence table backing the
 // FE00–FE0D carve-out in invisible.mjs. src/standardized-variants.mjs is
-// generated from the vendored UCD slice; re-parsing that slice here and
+// generated from the vendored UCD file; re-parsing that file here and
 // asserting the committed module matches makes editing the data without
 // regenerating (or a mutant flipping a pair) a hard CI failure.
 describe("standardized-variants SSOT", () => {
   const { text, version } = loadStandardizedVariantsUcd();
   const pairs = parseStandardizedVariants(text);
 
-  it("pins the committed module's Unicode version to the vendored slice", () => {
+  it("pins the committed module's Unicode version to the vendored file", () => {
     assert.equal(SV_UNICODE_VERSION, version);
+    assert.equal(version, UCD_PACKAGE_VERSION);
   });
 
-  it("committed table equals the freshly parsed UCD slice", () => {
+  // The one UCD file not read from the pinned package: a package bump that
+  // leaves it on the old version must fail rather than mix two Unicodes.
+  it("refuses a StandardizedVariants.txt from another Unicode version", () => {
+    assert.throws(
+      () =>
+        loadStandardizedVariantsUcd(
+          text.replace(
+            /^# StandardizedVariants-[\d.]+\.txt/u,
+            "# StandardizedVariants-16.0.0.txt",
+          ),
+        ),
+      /is "# StandardizedVariants-16\.0\.0\.txt", not Unicode 17\.0\.0/u,
+    );
+  });
+
+  it("committed table equals the freshly parsed UCD file", () => {
     assert.deepEqual(STANDARDIZED_VARIANTS, pairs);
   });
 
-  it("is a non-trivial table with only FE00–FE0D selectors", () => {
+  it("is a non-trivial table of variation-selector sequences", () => {
     assert.ok(pairs.length > 100, "expected a few hundred registered pairs");
-    for (const [, selector] of pairs) {
-      assert.ok(selector >= 0xfe00 && selector <= 0xfe0d);
+    for (const [, selector] of pairs)
+      assert.match(String.fromCodePoint(selector), /^\p{Variation_Selector}$/u);
+  });
+
+  // The emoji presentation selectors belong to the pictograph carve-out, and
+  // the UCD keeps their sequences in a different file: one appearing here
+  // would mean the vendored file is not StandardizedVariants.txt.
+  it("registers no emoji presentation selector", () => {
+    for (const [, selector] of pairs)
+      assert.ok(selector !== 0xfe0e && selector !== 0xfe0f);
+  });
+
+  for (const [name, line] of [
+    ["a three-code-point sequence", "0030 FE00 FE01; form; # X"],
+    ["a non-hex code point", "00G0 FE00; form; # X"],
+    ["a selector that is not a variation selector", "0030 0041; form; # X"],
+  ])
+    it(`throws on ${name} instead of dropping it`, () => {
+      assert.throws(() => parseStandardizedVariants(line), /not a/u);
+    });
+
+  // Every selector the UCD file registers a sequence for must survive the
+  // parse: a selector range narrower than the file's is how all 60 Mongolian
+  // free-variation sequences were silently dropped.
+  it("keeps every selector the vendored file registers", () => {
+    const inFile = new Set();
+    for (const line of text.split("\n")) {
+      const seq = line.split("#")[0].split(";")[0].trim().split(/\s+/u);
+      if (seq.length === 2) inFile.add(parseInt(seq[1], 16));
     }
+    assert.deepEqual(new Set(pairs.map(([, selector]) => selector)), inFile);
   });
 
   it("isStandardizedVariant accepts every registered pair", () => {
@@ -129,6 +176,8 @@ describe("standardized-variants SSOT", () => {
     [0x30, 0xfe00, "DIGIT ZERO short diagonal stroke form"],
     [0x2205, 0xfe00, "EMPTY SET with long stroke overlay"],
     [0x4e0d, 0xfe00, "U+4E0D → CJK COMPATIBILITY IDEOGRAPH-F967"],
+    [0x1820, 0x180b, "MONGOLIAN LETTER A second form (FVS1)"],
+    [0x1820, 0x180c, "MONGOLIAN LETTER A third form (FVS2)"],
   ]) {
     it(`recognizes the registered sequence U+${base.toString(16)}+VS (${note})`, () =>
       assert.ok(isStandardizedVariant(base, selector)));
@@ -167,6 +216,22 @@ describe("generated modules are byte-identical to a fresh generation", () => {
       shipped(CF_MODULE_PATH),
       cfCharsetModule(),
       "src/cf-charset.mjs is stale — run `node scripts/gen-invisible-charset.mjs`",
+    );
+  });
+
+  it("src/standardized-variants.mjs matches its generator byte for byte", () => {
+    const { text, version } = loadStandardizedVariantsUcd();
+    assert.equal(
+      shipped(
+        fileURLToPath(
+          new URL("../src/standardized-variants.mjs", import.meta.url),
+        ),
+      ),
+      renderStandardizedVariants({
+        pairs: parseStandardizedVariants(text),
+        version,
+      }),
+      "src/standardized-variants.mjs is stale — run `node scripts/gen-standardized-variants.mjs`",
     );
   });
 

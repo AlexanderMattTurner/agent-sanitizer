@@ -93,6 +93,18 @@ test("a conceal parameter is not styling, so the field is stripped", () => {
   );
 });
 
+test("a foreground in its own background hides text, so the field is stripped", () => {
+  assert.equal(
+    sanitized("Write", "content", `visible${ESC}[30;40mhidden${ESC}[0m`),
+    "visiblehidden",
+  );
+  // The twin: black on white is ordinary styling.
+  assert.equal(
+    sanitized("Write", "content", `${ESC}[30;47mshown${ESC}[0m`),
+    null,
+  );
+});
+
 test("a 256-colour index of 8 is styling, and is kept", () => {
   assert.equal(sanitized("Write", "content", `${ESC}[38;5;8mgrey`), null);
 });

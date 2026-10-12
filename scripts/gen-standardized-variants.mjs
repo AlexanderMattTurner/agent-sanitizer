@@ -1,54 +1,44 @@
 #!/usr/bin/env node
 /**
  * Generate src/standardized-variants.mjs from the vendored UCD
- * StandardizedVariants.txt slice (scripts/data/StandardizedVariants.txt).
+ * StandardizedVariants.txt (scripts/data/StandardizedVariants.txt).
  *
- * The invisible-char carve-out preserves a variation selector in U+FE00–U+FE0D
- * only when the immediately preceding base forms a *registered* standardized
- * variation sequence — otherwise the selector is a hidden-payload byte and is
- * stripped. That registry is normative Unicode data (StandardizedVariants.txt in
- * the UCD), NOT a set anyone should hand-roll: a hand-picked base list would both
- * miss real glyphs (mangling legit content) and risk waving through a selector
- * that is not actually registered. So this generator parses the vendored UCD file
- * into a committed `[base, selector]` table that src/invisible.mjs reads.
+ * The carve-out preserves a variation selector only after a base that forms a
+ * *registered* standardized variation sequence with it; that registry is
+ * normative UCD data, never a hand-rolled list. The output is a `.mjs` module
+ * rather than JSON because the pinned eslint rejects import attributes and the
+ * Python-CLI esbuild bundle does not inline a `createRequire` JSON read.
+ * test/invisible-charset.test.mjs re-parses the file and fails on drift.
  *
- * The output is a `.mjs` data module (mirroring the generated src/joining-type.mjs)
- * rather than a raw `.json` file for two hard toolchain reasons: the repo's eslint
- * is pinned to ecmaVersion 2023, which rejects import-attribute JSON imports
- * (`import … with { type: "json" }`), and the Python-CLI esbuild bundle does not
- * inline a `createRequire('*.json')` read — either path would break `pnpm lint`
- * or the release bundle. The module still holds nothing but generated data, and
- * test/invisible-charset.test.mjs re-derives from the same vendored slice and
- * fails CI if the committed module drifts, exactly as an SSOT round-trip should.
+ * This is the one UCD file still vendored: the pinned `@unicode/unicode-*`
+ * package has no StandardizedVariants data, and `ucd-full@17.0.0` ships
+ * Unicode 16's copy, which lacks 47 of Unicode 17's sequences. The loader
+ * refuses a file whose header names another version than the package's.
  *
- * The vendored slice is StandardizedVariants.txt from the Unicode Character
- * Database (Unicode 17.0.0, matching Node 22's bundled ICU and the pinned
- * ucd-full release used by gen-joining-type). Refresh it from
- * https://www.unicode.org/Public/17.0.0/ucd/StandardizedVariants.txt and bump
- * UNICODE_VERSION together.
- *
- * Run from the repo root: `node scripts/gen-standardized-variants.mjs`
- * (then `pnpm format` to prettify the output).
+ * Run: `node scripts/gen-standardized-variants.mjs`.
  */
 import { readFileSync, writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
-// Unicode version of the vendored scripts/data/StandardizedVariants.txt slice.
-// Bump both together when regenerating.
-const UNICODE_VERSION = "17.0.0";
+import { UNICODE_VERSION, ucdSpans } from "./lib/ucd.mjs";
 
-// Standardized variation selectors occupy U+FE00–U+FE0D (VS1–VS14). U+FE0E/FE0F
-// (VS15/VS16) are the emoji/text presentation selectors, handled separately by
-// the pictograph-adjacency carve-out, so they are never part of this registry.
-const SELECTOR_MIN = 0xfe00;
-const SELECTOR_MAX = 0xfe0d;
+// Variation_Selector from the pinned package, not the runtime's
+// `\p{Variation_Selector}` (see ./lib/ucd.mjs).
+const VARIATION_SELECTOR_SPANS = await ucdSpans(
+  "Binary_Property/Variation_Selector",
+);
+
+/** @param {number} cp @returns {boolean} */
+const isVariationSelector = (cp) =>
+  VARIATION_SELECTOR_SPANS.some(([start, end]) => cp >= start && cp <= end);
+
+const HEX_CODE_POINT = /^[0-9A-F]{4,6}$/u;
 
 /**
- * Parse UCD StandardizedVariants.txt into a sorted `[base, selector]` table.
- * Each data line is `BASE SELECTOR; description; # NAME`; the base and selector
- * are single hex code points. Only sequences whose selector is a standardized
- * variation selector (U+FE00–U+FE0D) are kept. Pure so the contract test can
- * call it on the same input and compare with the committed module.
+ * Parse StandardizedVariants.txt (`BASE SELECTOR; description; # NAME` lines)
+ * into a sorted `[base, selector]` table, keeping every data line. Throws on a
+ * line that is not two hex code points ending in a Variation_Selector, so a
+ * format change fails the build instead of dropping sequences.
  * @param {string} text
  * @returns {Array<[number, number]>}
  */
@@ -58,30 +48,33 @@ export function parseStandardizedVariants(text) {
   for (const rawLine of text.split("\n")) {
     const line = rawLine.trim();
     if (line === "" || line.startsWith("#")) continue;
-    const semicolon = line.indexOf(";");
-    if (semicolon === -1) continue;
-    const seq = line.slice(0, semicolon).trim().split(/\s+/);
-    // A standardized variation sequence is exactly base + selector.
-    if (seq.length !== 2) continue;
-    const base = parseInt(seq[0], 16);
-    const selector = parseInt(seq[1], 16);
-    if (Number.isNaN(base) || Number.isNaN(selector)) continue;
-    if (selector < SELECTOR_MIN || selector > SELECTOR_MAX) continue;
+    const seq = line.split(";")[0].trim().split(/\s+/u);
+    if (seq.length !== 2 || !seq.every((hex) => HEX_CODE_POINT.test(hex)))
+      throw new Error(`not a base + selector sequence: ${line}`);
+    const [base, selector] = seq.map((hex) => parseInt(hex, 16));
+    if (!isVariationSelector(selector))
+      throw new Error(`not a variation selector: ${line}`);
     pairs.push([base, selector]);
   }
   pairs.sort((a, b) => a[0] - b[0] || a[1] - b[1]);
   return pairs;
 }
 
-/** Read the vendored UCD slice used by the generator and the contract test. */
-export function loadStandardizedVariantsUcd() {
-  return {
-    text: readFileSync(
-      new URL("./data/StandardizedVariants.txt", import.meta.url),
-      "utf8",
-    ),
-    version: UNICODE_VERSION,
-  };
+/** Read the vendored UCD file used by the generator and the contract test,
+ * refusing one cut from a Unicode version other than the pinned package's.
+ * @param {string} [text] the file's contents; a test passes its own */
+export function loadStandardizedVariantsUcd(
+  text = readFileSync(
+    new URL("./data/StandardizedVariants.txt", import.meta.url),
+    "utf8",
+  ),
+) {
+  const header = text.slice(0, text.indexOf("\n"));
+  if (header !== `# StandardizedVariants-${UNICODE_VERSION}.txt`)
+    throw new Error(
+      `scripts/data/StandardizedVariants.txt is "${header}", not Unicode ${UNICODE_VERSION}`,
+    );
+  return { text, version: UNICODE_VERSION };
 }
 
 /** Render one `[base, selector]` row as hex-literal source. */
@@ -95,19 +88,19 @@ export function render({ pairs, version }) {
  * GENERATED by scripts/gen-standardized-variants.mjs from UCD
  * StandardizedVariants.txt (Unicode ${version}) — DO NOT EDIT.
  *
- * Registered standardized variation sequences: a base code point followed by a
- * variation selector in U+FE00–U+FE0D. invisible.mjs preserves such a selector
- * only when the immediately preceding base appears here; every other FE00–FE0D
- * selector is stripped as a hidden-payload byte. Regenerate with
- * \`node scripts/gen-standardized-variants.mjs\`; test/invisible-charset.test.mjs
- * fails if this drifts from the pinned UCD slice.
+ * Registered standardized variation sequences: a base code point followed by the
+ * variation selector the UCD registers for it. invisible.mjs preserves such a
+ * selector only when the immediately preceding base appears here; every other
+ * one is stripped as a hidden-payload byte. Regenerate with
+ * \`node scripts/gen-standardized-variants.mjs\`;
+ * test/invisible-charset.test.mjs fails if this drifts from the pinned UCD.
  */
 
 export const UNICODE_VERSION = ${JSON.stringify(version)};
 
 // The table below is GENERATED UCD data, not hand-written logic. Its correctness
 // is pinned by the SSOT round-trip in test/invisible-charset.test.mjs (re-parse
-// the vendored slice, then assert every pair matches) — a stronger and faster
+// the vendored file, then assert every pair matches) — a stronger and faster
 // guard than mutating a few hundred numeric literals, so Stryker skips them.
 // Stryker disable all
 /** @type {Array<[number, number]>} [base, selector], sorted by base then selector. */
@@ -125,8 +118,8 @@ const VARIANT_KEYS = new Set(
 );
 
 /**
- * True when \`base\` followed by \`selector\` (a U+FE00–U+FE0D code point) is a
- * registered standardized variation sequence.
+ * True when \`base\` followed by \`selector\` is a registered standardized
+ * variation sequence.
  * @param {number} base
  * @param {number} selector
  * @returns {boolean}
