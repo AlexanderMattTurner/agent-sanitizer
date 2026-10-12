@@ -233,22 +233,28 @@ describe("the pipeline driver enforces the ordering precondition", () => {
     },
   ];
 
-  it("asks — never throws — when two layers undo each other", async () => {
-    // A throw lands in the hook's fault posture, which by default passes the
-    // input through UNSANITIZED; an oscillating table must instead hold the
-    // call for a human, naming the stages that never settled.
+  it("reports a fault — never throws — when two layers undo each other", async () => {
+    // A throw lands in the hook's fault posture with no sanitized value to
+    // carry, so by default the RAW input passes through. The driver instead
+    // returns the last pass's sanitized value plus the reason, naming the
+    // stages that never settled, and leaves the verdict to the caller.
     const out = await runLayerPipeline("Bash", { command: "a" }, oscillating());
-    assert.equal(out.ask, nonConvergenceReason(["up", "down"]));
-    assert.match(out.ask, /did not settle: the up, down stage/u);
+    assert.equal(out.fault, nonConvergenceReason(["up", "down"]));
+    assert.match(out.fault, /did not settle: the up, down stage/u);
     assert.match(
-      out.ask,
+      out.fault,
       new RegExp(`after ${MAX_PIPELINE_PASSES} passes`, "u"),
     );
     assert.equal(out.deny, undefined);
+    assert.equal(out.ask, undefined);
+    // Even passes: the last pass's value, which is not the raw input's twin by
+    // identity but is what every stage has actually rewritten.
+    assert.equal(out.changed, true);
+    assert.equal(out.updatedInput.command, "a");
   });
 
-  it("still runs the terminal stages under a non-convergence ask", async () => {
-    // An approved call must carry the same rehydration a settled one would.
+  it("still runs the terminal stages under a non-convergence fault", async () => {
+    // A call that proceeds must carry the same rehydration a settled one would.
     const runs = [];
     const terminal = {
       name: "terminal",
@@ -266,10 +272,10 @@ describe("the pipeline driver enforces the ordering precondition", () => {
     ]);
     assert.equal(runs.length, 1);
     assert.equal(out.updatedInput.command, `${runs[0]}T`);
-    assert.equal(typeof out.ask, "string");
+    assert.equal(typeof out.fault, "string");
   });
 
-  it("lets a terminal deny win over a non-convergence ask", async () => {
+  it("lets a terminal deny win over a non-convergence fault", async () => {
     const out = await runLayerPipeline("Bash", { command: "a" }, [
       ...oscillating(),
       {
@@ -281,7 +287,7 @@ describe("the pipeline driver enforces the ordering precondition", () => {
       },
     ]);
     assert.equal(out.deny, "nope");
-    assert.equal(out.ask, undefined);
+    assert.equal(out.fault, undefined);
   });
 
   it("decides 'changed' by value: a stage that always reports a rewrite of an equal value converges", async () => {
@@ -301,7 +307,7 @@ describe("the pipeline driver enforces the ordering precondition", () => {
     };
     const fold = appender("fold", "F", { erases: false, skipBased: true });
     const out = await runLayerPipeline("Bash", { command: "x" }, [fold, liar]);
-    assert.equal(out.ask, undefined);
+    assert.equal(out.fault, undefined);
     assert.equal(out.updatedInput.command, "xF");
     // The liar's note never reaches the model: it changed nothing.
     assert.deepEqual(out.contexts, ["fold"]);
@@ -537,16 +543,17 @@ describe("a stage's spurious change report never unsanitizes the hook's output",
     assert.doesNotMatch(out.additionalContext, /UNSANITIZED/u);
   });
 
-  it("turns a genuinely oscillating stage into an ask, not a pass", async () => {
-    // A skip-based stage followed by an erasing one: the ordering that makes
-    // the driver iterate to a fixed point, which `flip` never reaches.
-    const flip = {
-      name: "flip",
+  describe("a stage that never settles goes through the hook's fault posture", () => {
+    // `grow` rewrites its input on every pass, so no pass count settles it, and
+    // its output is distinguishable from the raw input — the open path must
+    // carry THAT, not the raw value.
+    const grow = {
+      name: "grow",
       erases: false,
       skipBased: true,
       run: (_tool, input) => ({
-        updatedInput: { command: input.command === "a" ? "b" : "a" },
-        context: "flip",
+        updatedInput: { command: `${input.command}x` },
+        context: "grow",
       }),
     };
     const eraseNothing = {
@@ -555,17 +562,51 @@ describe("a stage's spurious change report never unsanitizes the hook's output",
       skipBased: false,
       run: () => null,
     };
-    const fields = await buildPreToolUseResponse(
-      { tool_name: "Bash", tool_input: { command: "a" } },
-      undefined,
-      () => {},
-      [flip, eraseNothing],
-    );
-    assert.equal(fields?.permissionDecision, "ask");
-    assert.equal(
-      fields?.permissionDecisionReason,
-      nonConvergenceReason(["flip"]),
-    );
+    const respond = async (env) => {
+      const saved = process.env.AGENT_SANITIZER_FAIL_OPEN;
+      if (env === undefined) delete process.env.AGENT_SANITIZER_FAIL_OPEN;
+      else process.env.AGENT_SANITIZER_FAIL_OPEN = env;
+      try {
+        return await buildPreToolUseResponse(
+          { tool_name: "Bash", tool_input: { command: "a" } },
+          undefined,
+          () => {},
+          [grow, eraseNothing],
+        );
+      } finally {
+        if (saved === undefined) delete process.env.AGENT_SANITIZER_FAIL_OPEN;
+        else process.env.AGENT_SANITIZER_FAIL_OPEN = saved;
+      }
+    };
+    const reason = nonConvergenceReason(["grow"]);
+
+    it("OPEN (the default): proceeds with the last pass's sanitized input and warns", async () => {
+      const fields = await respond(undefined);
+      // No verdict: the call proceeds.
+      assert.equal(fields?.permissionDecision, undefined);
+      assert.equal(fields?.permissionDecisionReason, undefined);
+      // The sanitized value of the last pass, never the raw "a".
+      assert.equal(
+        fields?.updatedInput.command,
+        `a${"x".repeat(MAX_PIPELINE_PASSES)}`,
+      );
+      assert.match(
+        fields?.additionalContext,
+        /WARNING: the pretooluse-sanitize hook failed/u,
+      );
+      assert.ok(fields?.additionalContext.includes(reason));
+    });
+
+    it("CLOSED (AGENT_SANITIZER_FAIL_OPEN=0): the policy's closed verdict, naming the reason", async () => {
+      const fields = await respond("0");
+      assert.equal(fields?.permissionDecision, "ask");
+      assert.ok(fields?.permissionDecisionReason.includes(reason));
+      // Still the sanitized value, never the raw input, if the user approves.
+      assert.equal(
+        fields?.updatedInput.command,
+        `a${"x".repeat(MAX_PIPELINE_PASSES)}`,
+      );
+    });
   });
 });
 

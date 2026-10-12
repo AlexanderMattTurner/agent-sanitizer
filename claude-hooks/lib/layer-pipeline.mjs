@@ -23,8 +23,11 @@
  * value it returned — never by the stage's own report. A stage that reports a
  * rewrite but returns an equal value would otherwise keep the loop from ever
  * settling. A body that is still changing after {@link MAX_PIPELINE_PASSES}
- * becomes an `ask` verdict, not a throw: a throw lands in the hook's fault
- * posture, which by default passes the input through UNSANITIZED.
+ * returns the LAST pass's sanitized value with a `fault` reason, not a throw: a
+ * throw lands in the hook's fault posture with no sanitized value to carry, so
+ * by default the RAW input passes through. The caller renders `fault` through
+ * that same posture (hookFaultOutcome), so open proceeds with the sanitized
+ * value and closed holds the call.
  *
  * Stages may be `terminal`: run once, after the fixed point, never re-run. That
  * is the secret rehydrator, whose contract is that it sees the FINAL authored
@@ -60,7 +63,7 @@ import { isDeepStrictEqual } from "node:util";
  * Bound on fixed-point passes. Each pass either changes the input or ends the
  * loop, and the stages are contractive in practice (folding and stripping both
  * shrink the space of remaining findings), so a body still changing after this
- * many passes holds a stage that oscillates. That yields an `ask` (see
+ * many passes holds a stage that oscillates. That yields a `fault` (see
  * {@link runLayerPipeline}); looping forever would instead be killed by the
  * harness, which reads a killed PreToolUse hook as a non-blocking pass.
  */
@@ -83,7 +86,7 @@ export function needsFixedPoint(layers) {
 }
 
 /**
- * The `ask` reason for a body that never settled, naming the stages still
+ * The `fault` reason for a body that never settled, naming the stages still
  * rewriting on the last pass so a reader knows which one oscillates.
  * @param {string[]} stillChanging
  * @returns {string}
@@ -92,8 +95,8 @@ export function nonConvergenceReason(stillChanging) {
   return (
     `PreToolUse sanitization did not settle: the ${stillChanging.join(", ")} ` +
     `stage(s) were still rewriting this input after ${MAX_PIPELINE_PASSES} ` +
-    "passes, so the sanitized form below cannot be trusted to be final. Review " +
-    "the call before allowing it."
+    "passes, so the last-pass sanitized form this call carries cannot be " +
+    "trusted to be final."
   );
 }
 
@@ -104,12 +107,14 @@ export function nonConvergenceReason(stillChanging) {
  * model-facing notes of those stages, in order and deduplicated (a fixed-point
  * re-run would otherwise repeat a note). A stage
  * that denies ends the run immediately, with `deny` set. A body that never
- * settles sets `ask` and still runs the terminal stages, so an approved call
- * carries the same rehydration a settled one would.
+ * settles sets `fault` (the reason) alongside the last pass's sanitized
+ * `updatedInput`, and still runs the terminal stages, so a call that proceeds
+ * carries the same rehydration a settled one would. The verdict is the
+ * caller's: this driver renders none.
  * @param {string} tool
  * @param {any} toolInput
  * @param {Layer[]} layers
- * @returns {Promise<{ updatedInput: any, changed: boolean, contexts: string[], deny?: string, ask?: string }>}
+ * @returns {Promise<{ updatedInput: any, changed: boolean, contexts: string[], deny?: string, fault?: string }>}
  */
 export async function runLayerPipeline(tool, toolInput, layers) {
   const firstTerminal = layers.findIndex((layer) => layer.terminal === true);
@@ -165,6 +170,6 @@ export async function runLayerPipeline(tool, toolInput, layers) {
     if (typeof stepped === "object") return { ...outcome(), ...stepped };
   }
   return requireFixedPoint && stillChanging.length > 0
-    ? { ...outcome(), ask: nonConvergenceReason(stillChanging) }
+    ? { ...outcome(), fault: nonConvergenceReason(stillChanging) }
     : outcome();
 }

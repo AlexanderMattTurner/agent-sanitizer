@@ -383,8 +383,11 @@ field, which could remove an unmapped glyph the gate relied on after the decisio
 was made. In the PreToolUse hook the fold runs _before_ `sanitizeAuthoredContent`,
 which does erase code points from the same fields, so the hook's stage driver
 (`claude-hooks/lib/layer-pipeline.mjs`) re-runs both until the input stops
-changing — the emitted input is one the fold has judged in its final form — and
-holds the call for approval if it never settles. PreToolUse stage order:
+changing — the emitted input is one the fold has judged in its final form. If it
+never settles the driver reports a fault and the hook's fail-open/closed posture
+decides: open (the default) proceeds with the last pass's sanitized input and a
+warning, never the raw input; `AGENT_SANITIZER_FAIL_OPEN=0` holds the call for
+approval. PreToolUse stage order:
 `confusables` → `authored-content` → `rehydrate` → `layer2-rehydrate`.
 
 **Declared tool scope.** Which tools the fold covers is a partition, not a

@@ -48255,7 +48255,7 @@ function needsFixedPoint(layers) {
   return false;
 }
 function nonConvergenceReason(stillChanging) {
-  return `PreToolUse sanitization did not settle: the ${stillChanging.join(", ")} stage(s) were still rewriting this input after ${MAX_PIPELINE_PASSES} passes, so the sanitized form below cannot be trusted to be final. Review the call before allowing it.`;
+  return `PreToolUse sanitization did not settle: the ${stillChanging.join(", ")} stage(s) were still rewriting this input after ${MAX_PIPELINE_PASSES} passes, so the last-pass sanitized form this call carries cannot be trusted to be final.`;
 }
 async function runLayerPipeline(tool, toolInput, layers) {
   const firstTerminal = layers.findIndex((layer) => layer.terminal === true);
@@ -48293,7 +48293,7 @@ async function runLayerPipeline(tool, toolInput, layers) {
     const stepped = await step(layer);
     if (typeof stepped === "object") return { ...outcome(), ...stepped };
   }
-  return requireFixedPoint && stillChanging.length > 0 ? { ...outcome(), ask: nonConvergenceReason(stillChanging) } : outcome();
+  return requireFixedPoint && stillChanging.length > 0 ? { ...outcome(), fault: nonConvergenceReason(stillChanging) } : outcome();
 }
 var MAX_PIPELINE_PASSES;
 var init_layer_pipeline = __esm({
@@ -49917,7 +49917,7 @@ async function buildPreToolUseResponse(input, rehydrate, sink, layers) {
     changed,
     contexts: layerContexts,
     deny,
-    ask
+    fault
   } = await runLayerPipeline(
     tool,
     toolInput,
@@ -49932,8 +49932,16 @@ async function buildPreToolUseResponse(input, rehydrate, sink, layers) {
       permissionDecision: PermissionDecision.DENY,
       permissionDecisionReason: deny
     });
-  if (ask !== void 0) asks.push(ask);
   contexts.push(...layerContexts);
+  if (fault !== void 0) {
+    const faultFields = hookFailureFields(true, new Error(fault), {
+      input: { tool_name: tool, tool_input: current }
+    });
+    if (faultFields.permissionDecisionReason !== void 0)
+      asks.push(String(faultFields.permissionDecisionReason));
+    if (faultFields.additionalContext !== void 0)
+      contexts.push(String(faultFields.additionalContext));
+  }
   const notice = secretsOn ? placeholderNotice(tool, current) : null;
   if (notice !== null) contexts.push(notice);
   const layer2Notice = layer2PlaceholderNotice(tool, current);

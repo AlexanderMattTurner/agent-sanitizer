@@ -534,7 +534,7 @@ export async function buildPreToolUseResponse(input, rehydrate, sink, layers) {
     changed,
     contexts: layerContexts,
     deny,
-    ask,
+    fault,
   } = await runLayerPipeline(
     tool,
     toolInput,
@@ -550,8 +550,22 @@ export async function buildPreToolUseResponse(input, rehydrate, sink, layers) {
       permissionDecision: PermissionDecision.DENY,
       permissionDecisionReason: deny,
     });
-  if (ask !== undefined) asks.push(ask);
   contexts.push(...layerContexts);
+  // A body that never settled: the pipeline hands back its LAST pass's sanitized
+  // input plus the reason, and the verdict is this hook's registered fault
+  // posture — never a verdict decided here. Open proceeds with `current` (the
+  // sanitized value, not the raw input) and the reason as context; closed
+  // returns the policy's closed verdict. `input` lets the policy's write-shaped
+  // placeholder carve-out judge the value that would actually be written.
+  if (fault !== undefined) {
+    const faultFields = hookFailureFields(true, new Error(fault), {
+      input: { tool_name: tool, tool_input: current },
+    });
+    if (faultFields.permissionDecisionReason !== undefined)
+      asks.push(String(faultFields.permissionDecisionReason));
+    if (faultFields.additionalContext !== undefined)
+      contexts.push(String(faultFields.additionalContext));
+  }
 
   // Placeholder advisory for tools OUTSIDE the rehydrated set (Bash, MCP,
   // anything unknown): rehydration cannot re-anchor these, so a placeholder in
