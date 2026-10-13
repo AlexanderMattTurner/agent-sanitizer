@@ -99,6 +99,14 @@ jobs:
       # steps no-op on the far-more-common "no release this push" path.
       # publish-python.yaml is the manual break-glass for when a step below
       # fails after npm has already published.
+      # The CLI bundle inlines src/vendor/gfm-autolink-literal.mjs, which is
+      # git-ignored output of the patch generator. `pnpm install` already wrote
+      # it; regenerating here keeps the bundle independent of that, and fails
+      # loudly if the pinned upstream no longer matches the patch.
+      - name: Generate the patched GFM autolink module the bundle inlines
+        if: steps.release.outputs.released == 'true'
+        run: node scripts/gen-gfm-autolink.mjs
+
       - name: Bundle the CLI into the Python package
         if: steps.release.outputs.released == 'true'
         run: node scripts/bundle-python-cli.mjs

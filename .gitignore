@@ -84,3 +84,9 @@ src/joining-type.mjs
 src/standardized-variants.mjs
 src/unicode-properties.mjs
 python/agent_sanitizer/data/invisible-charset.json
+
+# Generated at install, pack and build time by scripts/gen-gfm-autolink.mjs
+# (`pnpm install` through `prepare`, `npm pack` through `prepack`): the pinned
+# upstream micromark-extension-gfm-autolink-literal with
+# scripts/patches/*.patch applied. Only the patch is tracked.
+src/vendor/gfm-autolink-literal.mjs
