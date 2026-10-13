@@ -178,7 +178,8 @@ export function credentialNames() {
  * See this module's header for why that choice belongs to the caller.
  *
  * `declineNonSecret` applies the vocabulary's `nonSecretSuffixes`: a name ending
- * in one holds an identifier or a public key (`AWS_ACCESS_KEY_ID`), not a secret.
+ * in one holds an identifier, a public key, or metadata about a secret
+ * (`AWS_ACCESS_KEY_ID`, `SECRET_TYPE`, `TOKEN_FILE`), not the secret itself.
  * Leave it on for a redactor, where redacting an identifier out of output is a
  * visible defect; turn it off for a scrub whose failure to strip is the worse
  * error. It is applied to the name's trailing run under both scopes, because a
@@ -198,26 +199,29 @@ export function credentialNameMatcher(options = {}) {
   const vocabulary = spec ? parseCredentialNames(spec) : credentialNames();
   const nouns = new Set(vocabulary.segments);
   const nonSecret = new Set(vocabulary.nonSecretSegments);
-  // The longest noun's run length. A run longer than this can match no noun, so
-  // bounding the walk here is what keeps it linear in the name's segment count —
-  // without it a 2000-underscore name costs quadratic time.
-  const maxRun = Math.max(
-    ...vocabulary.segments.map((noun) => noun.split("_").length),
-  );
-  /** @param {string[]} words @returns {string[]} */
-  const trailingRuns = (words) =>
-    Array.from({ length: Math.min(maxRun, words.length) }, (_, i) =>
+  // Each walk is bounded by the longest entry of the set it probes: a run longer
+  // than that matches nothing there, and the bound is what keeps the walk linear
+  // in the name's segment count. The bounds are separate because a two-word
+  // non-secret suffix (`PUBLIC_KEY`) must still be seen when every noun is one word.
+  /** @param {Iterable<string>} segments */
+  const longestRun = (segments) =>
+    Math.max(...Array.from(segments, (s) => s.split("_").length));
+  const maxRun = longestRun(nouns);
+  const maxNonSecretRun = longestRun(nonSecret);
+  /** @param {string[]} words @param {number} bound @returns {string[]} */
+  const trailingRuns = (words, bound) =>
+    Array.from({ length: Math.min(bound, words.length) }, (_, i) =>
       words.slice(words.length - (i + 1)).join("_"),
     );
   return (name) => {
     const words = name.toUpperCase().split("_");
     if (
       declineNonSecret &&
-      trailingRuns(words).some((run) => nonSecret.has(run))
+      trailingRuns(words, maxNonSecretRun).some((run) => nonSecret.has(run))
     )
       return false;
     if (scope === "trailing")
-      return trailingRuns(words).some((run) => nouns.has(run));
+      return trailingRuns(words, maxRun).some((run) => nouns.has(run));
     for (let start = 0; start < words.length; start++)
       for (let span = 1; span <= maxRun && start + span <= words.length; span++)
         if (nouns.has(words.slice(start, start + span).join("_"))) return true;

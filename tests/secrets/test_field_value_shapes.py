@@ -3,7 +3,7 @@ short under an upper-case env-style name, and the benign code and prose shapes
 those wider value arms must leave alone.
 
 Driven through the public :func:`redact`, asserting the exact output, so the
-regex arm, the floor decision in ``_replace_field`` and the benign gates are
+regex arm, the floor decision in ``_is_secret_field`` and the benign gates are
 all exercised together.
 """
 

@@ -45,10 +45,18 @@ _FRAGMENTS = [
 ]
 
 # Reserved sentinel code points make a map request unmappable by design; the
-# generated fragments never include them. Fragments are joined with a space so no
-# two secret tokens glue into one contiguous run; the glued corner is pinned
-# separately in test_glued_secret_corner_round_trips.
-_text = st.lists(st.sampled_from(_FRAGMENTS), max_size=25).map(" ".join)
+# generated fragments never include them. Each fragment is followed by a space or
+# by nothing, so secrets are also glued directly onto a neighboring run — the
+# shape where a field value would run on into a detected secret's map sentinel
+# (one such case is pinned in test_glued_secret_corner_round_trips).
+_text = st.lists(
+    st.tuples(st.sampled_from(_FRAGMENTS), st.sampled_from(["", " "])), max_size=25
+).map(lambda parts: "".join(fragment + sep for fragment, sep in parts))
+# Idempotence is asked of space-separated text only. A token glued word-internally
+# onto another (`AKIA…EXAMPLEghp_…`) is refused by its boundary lookbehind, and
+# the first pass's placeholder (`…]ghp_…`) then hands it the boundary, so a
+# second pass redacts more than the first.
+_spaced_text = st.lists(st.sampled_from(_FRAGMENTS), max_size=25).map(" ".join)
 
 
 def _is_subsequence(sub: str, full: str) -> bool:
@@ -57,7 +65,7 @@ def _is_subsequence(sub: str, full: str) -> bool:
 
 
 @settings(max_examples=250, deadline=None)
-@given(_text)
+@given(_spaced_text)
 def test_redaction_is_idempotent(text):
     once, _ = redact(text, _CONFIG)
     twice, _ = redact(once, _CONFIG)

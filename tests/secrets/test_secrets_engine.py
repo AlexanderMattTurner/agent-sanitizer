@@ -1784,7 +1784,8 @@ def test_crypt_hash_still_redacted(label, value):
         ("mount with cached", "/home/node/.claude:cached", True),
         ("single segment", "/wJalrXUtnFEMIK7MDENG", False),
         ("aws secret-shaped", "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY", False),
-        ("path-shaped token", "/abcdefghij/klmnopqrst/uvwxyz1234", False),
+        ("path of short segments", "/abcdefghij/klmnopqrst/uvwxyz1234", True),
+        ("path carrying a token", f"/srv/app/{_BRACKET_NEEDLE}", False),
     ],
 )
 def test_is_filesystem_path(label, value, expected):
@@ -2023,7 +2024,7 @@ def test_compose_mount_path_not_redacted():
     "value",
     [
         "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
-        "/abcdefghij/klmnopqrst/uvwxyz1234",
+        f"/srv/app/{_BRACKET_NEEDLE}",
     ],
 )
 def test_path_shaped_secret_still_redacted(value):
@@ -2537,18 +2538,27 @@ def test_benign_token_prefixes_every_member_passes_through():
         assert found == [], f"{prefix}_token reported a finding: {found}"
 
 
-def test_fs_path_every_root_skips_local_redaction():
-    inner = re.search(r"/\(\?:(?P<roots>[^)]+)\)", E._FS_PATH_RE.pattern)
-    assert inner, "could not locate the root alternation in _FS_PATH_RE"
-    roots = inner.group("roots").split("|")
-    assert len(roots) >= 15, roots
-    for root in roots:
-        out, found = redact(f"token: /{root}/{_BRACKET_NEEDLE}")
-        assert f"/{root}/{_BRACKET_NEEDLE}" in out, f"/{root}/ path was redacted"
-        assert found == [], f"/{root}/ path reported a finding"
-    out, found = redact(f"token: /notaroot/{_BRACKET_NEEDLE}")
-    assert _BRACKET_NEEDLE not in out, "non-root path unexpectedly skipped"
-    assert found
+_LOCATOR_SPELLINGS = (
+    "/etc/app/conf.d",
+    "/Users/alice/.ssh",
+    "~/.config/gh",
+    "./secrets/dev",
+    "../shared/keys",
+    "C:\\Users\\alice\\vault",
+    "D:/keys/deploy",
+)
+
+
+@pytest.mark.parametrize("locator", _LOCATOR_SPELLINGS)
+def test_fs_path_every_locator_spelling_skips_local_redaction(locator):
+    """A path is a location whatever it is rooted at; one carrying an opaque run
+    is a token in a path's clothing and redacts like any other value."""
+    out, found = redact(f"token: {locator}/current")
+    assert f"{locator}/current" in out, locator
+    assert found == [], locator
+    out, found = redact(f"token: {locator}/{_BRACKET_NEEDLE}")
+    assert _BRACKET_NEEDLE not in out, locator
+    assert found, locator
 
 
 def _counting_offsets_patch(monkeypatch, counter):
