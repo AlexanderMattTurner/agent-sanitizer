@@ -3,7 +3,7 @@
   extends: ["config:recommended"],
   // Dependabot stays enabled for SECURITY updates only (see .github/dependabot.yml).
   // Renovate's job here is narrower: keep the plugin's build/runtime peers
-  // current, since the committed bundle inlines them.
+  // current, since the released bundle inlines them.
   // npm ONLY. The `pip_requirements` manager's default file match covers
   // `requirements.txt` but not `requirements.in`, so it would edit
   // plugin/requirements.txt — rewriting a `==` pin in place WITHOUT regenerating
@@ -31,24 +31,22 @@
       enabled: false,
     },
     {
-      // Inlined into the bundle, so a bump changes the committed artifact.
+      // Inlined into the bundle, so a bump changes what the next release ships.
       groupName: "plugin runtime peers",
       matchPackageNames: ["agent-control-plane-core", "namespace-guard"],
       enabled: true,
       automerge: true,
     },
     {
-      // The bundler itself: its output bytes are part of the reproducibility
-      // contract, so a version bump must go through the same regenerate-and-verify
-      // path as an engine bump.
+      // The bundler itself: its output is the shipped bundle, so a version bump
+      // goes through the same required checks as an engine bump.
       matchPackageNames: ["esbuild"],
       enabled: true,
       automerge: true,
     },
   ],
-  // Automerge only once the required checks are green — the plugin-dist-autofix
-  // workflow pushes the regenerated bundle onto the bump PR first, and the
-  // reproducibility test is what proves it landed.
+  // Automerge only once the required checks are green; those build the plugin
+  // from the bumped lockfile and run its suites against that build.
   platformAutomerge: true,
   // Squash to match every other automated merge here (dependabot-auto-merge,
   // template-sync-automerge). Renovate's default is the repo's own default

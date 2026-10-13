@@ -37,10 +37,9 @@ runs:
         registry-url: ${{ inputs.registry-url }}
         cache: pnpm
 
-    # Frozen by default in CI: the committed plugin bundle is byte-compared
-    # against a fresh esbuild of the same dependency graph, so a resolution that
-    # drifts from the lockfile would fail that comparison on a diff that changed
-    # nothing.
+    # Frozen by default in CI: `prepare` builds the plugin bundle here, and the
+    # release bake ships that build, so it must come from exactly the locked
+    # dependency graph.
     - name: Install Node Dependencies
       if: hashFiles('package.json') != ''
       run: pnpm install

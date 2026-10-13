@@ -177,9 +177,9 @@ sha256_of() {
 }
 
 # The manifest pins the bundle the release binaries were compiled FROM
-# (build-hook-binaries.mjs verifies that pin when it builds them). A checkout
-# whose committed bundle has moved since the last manifest regen therefore
-# describes DIFFERENT sanitizer code than the release binary runs — and the
+# (build-hook-binaries.mjs verifies that pin when it builds them). A plugin tree
+# whose bundle differs from that pin — a rebuilt bundle beside an older
+# manifest — runs DIFFERENT sanitizer code than the release binary does, and the
 # launcher prefers the binary over the bundle, so provisioning here would guard
 # the session with code that is not the code in this install.
 if [[ ! "$expected_bundle" =~ ^[0-9a-f]{64}$ ]]; then

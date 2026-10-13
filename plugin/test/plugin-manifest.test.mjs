@@ -28,6 +28,21 @@ const readJson = (path) => JSON.parse(readFileSync(path, "utf-8"));
 const marketplace = readJson(MARKETPLACE_PATH);
 const manifest = readJson(MANIFEST_PATH);
 
+/** `owner/repo` this package is published from, per package.json. */
+const REPO_SLUG = (() => {
+  const { url } = readJson(join(ROOT, "package.json")).repository;
+  const slug = /github\.com\/(?<slug>[^/]+\/[^/.]+)/.exec(url)?.groups?.slug;
+  assert.ok(slug, `could not read an owner/repo slug from ${url}`);
+  return slug;
+})();
+
+/** The marketplace entry that installs plugin/, where plugin.json lives. */
+const pluginEntry = () => {
+  const entry = marketplace.plugins.find((p) => p.source?.path === "plugin");
+  assert.ok(entry, "no marketplace entry installs the plugin/ directory");
+  return entry;
+};
+
 /**
  * Every operator-facing knob the hook modules name, read from the modules
  * themselves. A hand-pasted list pins today's count and stays green for the
@@ -114,7 +129,7 @@ test("marketplace.json carries the required fields and only documented keys", ()
   );
 });
 
-test("every marketplace entry resolves to a real plugin inside the repo", () => {
+test("every marketplace entry installs this repo's plugin from the plugin-dist branch", () => {
   const seen = new Set();
   for (const entry of marketplace.plugins) {
     assert.match(entry.name, KEBAB);
@@ -128,28 +143,34 @@ test("every marketplace entry resolves to a real plugin inside the repo", () => 
       `unrecognized keys on entry ${entry.name}: ${unknown}`,
     );
 
-    // Only relative in-repo sources are used here; a string source that stopped
-    // being one means the distribution model changed and this test's
-    // path-traversal and manifest checks below silently stop applying.
-    assert.equal(typeof entry.source, "string");
+    // The plugin's build output lives only on plugin-dist (the release bakes
+    // it there), so a relative `./plugin` source would install a tree with no
+    // bundle, and a URL naming another repo would install someone else's code.
+    // No `sha`: pinning one would freeze every install at a single release.
+    assert.deepEqual(entry.source, {
+      source: "git-subdir",
+      url: `https://github.com/${REPO_SLUG}.git`,
+      path: entry.source.path,
+      ref: "plugin-dist",
+    });
+    const { path } = entry.source;
+    assert.equal(typeof path, "string");
+    assert.ok(!isAbsolute(path), `${entry.name}: path is absolute`);
     assert.ok(
-      entry.source.startsWith("./"),
-      `${entry.name}: source not relative`,
-    );
-    assert.ok(!isAbsolute(entry.source));
-    assert.ok(
-      !normalize(entry.source).startsWith(".."),
-      `${entry.name}: source escapes the marketplace root`,
+      !normalize(path).startsWith(".."),
+      `${entry.name}: path escapes the repo root`,
     );
 
-    const dir = join(ROOT, entry.source);
+    // plugin-dist's tree is a release tag's with the build output laid over
+    // it, so the plugin's sources are at the same path here.
+    const dir = join(ROOT, path);
     assert.ok(
       statSync(dir).isDirectory(),
       `${entry.name}: ${dir} is not a directory`,
     );
     assert.ok(
       existsSync(join(dir, ".claude-plugin", "plugin.json")),
-      `${entry.name}: no plugin.json under ${entry.source}`,
+      `${entry.name}: no plugin.json under ${path}`,
     );
 
     // The docs are explicit that plugin.json's version wins silently over the
@@ -183,9 +204,7 @@ test("plugin.json declares the version Claude Code updates users on", () => {
 });
 
 test("plugin.json and the marketplace entry name the same plugin", () => {
-  const entry = marketplace.plugins.find((p) => p.source === "./plugin");
-  assert.ok(entry, "no marketplace entry sources ./plugin");
-  assert.equal(entry.name, manifest.name);
+  assert.equal(pluginEntry().name, manifest.name);
 });
 
 test("plugin.json licence matches the package it ships", () => {
@@ -243,16 +262,13 @@ test("the description names each hook's event and every public knob", () => {
 // ─── the install commands the docs advertise ─────────────────────────────────
 
 test("both READMEs advertise the marketplace and plugin these manifests define", () => {
-  const entry = marketplace.plugins.find((p) => p.source === "./plugin");
+  const entry = pluginEntry();
   const install = `/plugin install ${entry.name}@${marketplace.name}`;
   // `/plugin marketplace add <owner>/<repo>` is a GitHub shorthand, so it has to
   // name the repo this marketplace is actually served from. A fork or a rename
   // leaves it pointing at the upstream, and every reader installs someone else's
   // plugin.
-  const { url } = readJson(join(ROOT, "package.json")).repository;
-  const slug = /github\.com\/(?<slug>[^/]+\/[^/.]+)/.exec(url)?.groups.slug;
-  assert.ok(slug, `could not read an owner/repo slug from ${url}`);
-  const add = `/plugin marketplace add ${slug}`;
+  const add = `/plugin marketplace add ${REPO_SLUG}`;
   // Auto-update is off by default for a third-party marketplace, so both READMEs
   // also advertise the manual refresh. Same rename hazard as the install pair.
   const refresh = `/plugin marketplace update ${marketplace.name}`;
@@ -267,15 +283,15 @@ test("both READMEs advertise the marketplace and plugin these manifests define",
   // which is the marketplace name `/plugin update ...@<name>` resolves against.
   const pluginReadme = readFileSync(join(ROOT, "plugin", "README.md"), "utf-8");
   assert.ok(
-    pluginReadme.includes(`"repo": "${slug}"`),
-    `plugin/README.md's extraKnownMarketplaces entry does not name ${slug}`,
+    pluginReadme.includes(`"repo": "${REPO_SLUG}"`),
+    `plugin/README.md's extraKnownMarketplaces entry does not name ${REPO_SLUG}`,
   );
   assert.ok(
     pluginReadme.includes(`"${marketplace.name}": {`),
     `plugin/README.md's extraKnownMarketplaces entry is not keyed ${marketplace.name}`,
   );
-  assert.equal(manifest.repository, `https://github.com/${slug}`);
-  assert.equal(manifest.homepage, `https://github.com/${slug}#readme`);
+  assert.equal(manifest.repository, `https://github.com/${REPO_SLUG}`);
+  assert.equal(manifest.homepage, `https://github.com/${REPO_SLUG}#readme`);
 });
 
 // ─── this repo's own sessions ────────────────────────────────────────────────
@@ -288,17 +304,14 @@ test("the project settings install and auto-update this marketplace's plugin", (
   // manifests, so a rename that missed this file leaves the entry pointing at a
   // marketplace nobody publishes — which fails silently, as a plugin that never
   // installs rather than an error.
-  const { url } = readJson(join(ROOT, "package.json")).repository;
-  const slug = /github\.com\/(?<slug>[^/]+\/[^/.]+)/.exec(url)?.groups.slug;
-  assert.ok(slug, `could not read an owner/repo slug from ${url}`);
   const settings = readJson(join(ROOT, ".claude", "settings.json"));
   const known = settings.extraKnownMarketplaces?.[marketplace.name];
-  assert.deepEqual(known?.source, { source: "github", repo: slug });
+  assert.deepEqual(known?.source, { source: "github", repo: REPO_SLUG });
   // Without this the marketplace clone is refreshed only when someone runs
   // `/plugin marketplace update` by hand, and sessions here silently keep
   // running whatever release was current the day they first trusted the folder.
   assert.equal(known?.autoUpdate, true);
-  const entry = marketplace.plugins.find((p) => p.source === "./plugin");
+  const entry = pluginEntry();
   assert.equal(
     settings.enabledPlugins?.[`${entry.name}@${marketplace.name}`],
     true,

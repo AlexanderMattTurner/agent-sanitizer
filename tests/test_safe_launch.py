@@ -18,6 +18,7 @@ Both postures are asserted on every fault path: an open-only shim strands the
 closed hosts, and a closed-only shim reintroduces the prompt stall.
 """
 
+import functools
 import json
 import re
 import shutil
@@ -130,11 +131,11 @@ def test_posture_values_are_disjoint_and_populated() -> None:
 # ── The posture parity table ────────────────────────────────────────────────
 #
 # `AGENT_SANITIZER_FAIL_OPEN` is decided in more than one language, so the
-# closed set gets spelled out more than once. `plugin/scripts/lib/fail-open.sh`
-# is GENERATED from `FAIL_CLOSED_VALUES` in `claude-hooks/lib/knobs.mjs` and
-# sourced by the plugin launcher (that round trip is asserted in
-# plugin/test/fail-open-parity.test.mjs), but two implementations cannot reach
-# it: the repo's own `.claude/hooks/safe-launch.sh`, which ships to downstream
+# closed set gets spelled out more than once. `scripts/gen-fail-open-lib.mjs`
+# renders `FAIL_CLOSED_VALUES` from `claude-hooks/lib/knobs.mjs` into the
+# `plugin/scripts/lib/fail-open.sh` the build writes and the plugin launcher
+# sources, but two implementations cannot reach it: the repo's own
+# `.claude/hooks/safe-launch.sh`, which ships to downstream
 # repos that have no `plugin/` tree, and the inline bootstrap in
 # `.claude/settings.json`, which guards the wrapper itself.
 #
@@ -166,9 +167,24 @@ def _hook_io_says_open(fail_open: str | None, tmp_path: Path) -> bool:
     return result.stdout == "true"
 
 
+@functools.cache
+def _generated_fail_open_lib() -> str:
+    """The bytes `pnpm build:plugin` writes to plugin/scripts/lib/fail-open.sh,
+    from the generator itself — the lib is git-ignored build output, so reading
+    the working tree would test whatever the last local build left there."""
+    return subprocess.run(
+        ["node", str(REPO_ROOT / "scripts" / "gen-fail-open-lib.mjs")],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout
+
+
 def _fail_open_lib_says_open(fail_open: str | None, tmp_path: Path) -> bool:
     """The generated shell function, sourced and called."""
-    lib = REPO_ROOT / "plugin" / "scripts" / "lib" / "fail-open.sh"
+    lib = tmp_path / "fail-open.sh"
+    lib.write_text(_generated_fail_open_lib(), encoding="utf-8")
     result = subprocess.run(
         ["bash", "-c", f'. "{lib}"; agent_sanitizer_fail_open'],
         capture_output=True,
@@ -195,6 +211,9 @@ def _plugin_shim_says_open(fail_open: str | None, tmp_path: Path) -> bool:
     """The shipped plugin launcher, driven onto its no-bundle fault."""
     sandbox = tmp_path / "plugin-shim"
     shutil.copytree(REPO_ROOT / "plugin" / "scripts", sandbox / "plugin" / "scripts")
+    (sandbox / "plugin" / "scripts" / "lib" / "fail-open.sh").write_text(
+        _generated_fail_open_lib(), encoding="utf-8"
+    )
     result = subprocess.run(
         [
             "bash",
@@ -234,7 +253,7 @@ def _path_with_node() -> str:
 
 PARITY_IMPLEMENTATIONS = {
     "claude-hooks/lib/knobs.mjs": _hook_io_says_open,
-    "plugin/scripts/lib/fail-open.sh": _fail_open_lib_says_open,
+    "scripts/gen-fail-open-lib.mjs": _fail_open_lib_says_open,
     "plugin/scripts/safe-launch.sh": _plugin_shim_says_open,
     ".claude/hooks/safe-launch.sh": _repo_shim_says_open,
     ".claude/settings.json": _bootstrap_says_open,
@@ -262,6 +281,7 @@ PARITY_ALLOWLIST: dict[str, str] = {
 # match the implementation idioms.
 PARITY_DELEGATES = {
     "plugin/scripts/safe-launch.sh": "sources the generated plugin/scripts/lib/fail-open.sh",
+    "scripts/gen-fail-open-lib.mjs": "renders FAIL_CLOSED_VALUES from claude-hooks/lib/knobs.mjs",
 }
 
 
@@ -309,9 +329,7 @@ def posture_implementation_files() -> list[str]:
     return sorted(
         path
         for path in listed
-        # dist/ is a generated bundle of the sources already covered here.
-        if not path.startswith("plugin/dist/")
-        and not _TEST_PATH.search(path)
+        if not _TEST_PATH.search(path)
         and any(
             idiom.search((REPO_ROOT / path).read_text(encoding="utf-8"))
             for idiom in IMPLEMENTATION_IDIOMS

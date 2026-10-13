@@ -1,5 +1,5 @@
 /**
- * Build the committed Python half of the plugin: a self-contained, platform-
+ * Build the Python half of the plugin: a self-contained, platform-
  * independent zipapp at plugin/dist/redactor/daemon.pyz carrying the redaction
  * engine built from this tree's `python/`, plus its third-party dependencies.
  *
@@ -8,10 +8,11 @@
  * optimization the launcher prefers when present. Both install the SAME engine
  * wheel this script writes, so the fast path and the floor are one build.
  *
- * NETWORK: this build resolves the third-party tree from PyPI, so it is NOT part
- * of the network-free reproducibility rebuild in the default test suite. The
- * live-engine CI job rebuilds and byte-compares it; the default suite asserts
- * the committed artifact's properties (tracked, pure-Python, runnable).
+ * NETWORK: this build resolves the third-party tree from PyPI, so it is NOT
+ * part of the network-free `prepare` build. node-tests runs it (`pnpm
+ * build:redactor`) before the plugin suites, which assert the built artifact's
+ * properties (pure-Python, runnable); the release bake runs it and ships the
+ * output on the plugin-dist branch.
  *
  * Determinism: third-party packages come from the fully resolved, hash-pinned
  * plugin/requirements.txt, so no transitive release can change these bytes, and
@@ -45,16 +46,16 @@ import {
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
 
-/** Committed artifact path. */
+/** Built artifact path; the release bake ships it on plugin-dist. */
 export const PYZ_PATH = join(ROOT, "plugin", "dist", "redactor", "daemon.pyz");
 
 /**
- * The engine wheel, committed beside the zipapp.
+ * The engine wheel, shipped beside the zipapp.
  *
  * It ships because the plugin is distributed as `plugin/` alone — a user's
  * machine has no `python/` tree — and `provision-redactor.sh` needs the same
  * engine the zipapp carries. One artifact consumed by both is what keeps the
- * provisioned venv and the committed floor from being two versions.
+ * provisioned venv and the shipped floor from being two versions.
  */
 export const WHEEL_PATH = join(
   ROOT,
@@ -65,18 +66,18 @@ export const WHEEL_PATH = join(
 );
 
 /**
- * Build the engine wheel from `python/` into its committed path and return it.
+ * Build the engine wheel from `python/` into its shipped path and return it.
  *
  * `SOURCE_DATE_EPOCH` is pinned for the same reason the zip below is written
  * with fixed timestamps: a wheel whose bytes move with the clock would make the
- * committed artifact differ from every rebuild.
+ * shipped artifact differ from every rebuild.
  * @returns {string}
  */
 export function buildEngineWheel() {
   // `python/` is staged without `_bundled/` first. pyproject force-includes the
   // git-ignored `_bundled/sanitize-cli.mjs` WHEN IT EXISTS, so building straight
   // off the checkout would let the builder's local state decide the bytes of a
-  // committed artifact — and a 1.7 MB Node bridge no consumer of this wheel
+  // shipped artifact — and a 1.7 MB Node bridge no consumer of this wheel
   // reaches (the daemon is pure Python) would ride into every rebuild's diff.
   const stage = mkdtempSync(join(tmpdir(), "agent-sanitizer-py-"));
   // Built into a scratch dir and copied in: `uv build --out-dir` drops a
@@ -279,9 +280,7 @@ export function buildRedactorPyz() {
   }
 }
 
-if (existsSync(PYZ_PATH) && process.argv.includes("--if-missing")) {
-  process.stderr.write("daemon.pyz already present, skipping (--if-missing)\n");
-} else if (
+if (
   import.meta.url === new URL(`file://${process.argv[1]}`).href ||
   process.argv[1]?.endsWith("build-redactor-pyz.mjs")
 ) {

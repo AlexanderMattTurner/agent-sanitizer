@@ -1,18 +1,13 @@
 /**
  * `plugin/scripts/lib/node-floor.sh` is GENERATED from `engines.node` in
- * `package.json`, so the launcher's runtime diagnosis and the floor npm
- * enforces cannot disagree about which node versions this package supports.
+ * `package.json` (by `pnpm build:plugin`, and by the release bake that ships
+ * it), so the launcher's runtime diagnosis and the floor npm enforces cannot
+ * disagree about which node versions this package supports.
  *
- * Two halves, and neither alone is enough:
- *
- *   - ROUND TRIP. The committed bytes are what the generator still produces —
- *     a raised `engines.node` that never reached the committed file, or a
- *     hand-edit of the file, fails here rather than in an operator's transcript
- *     as a version fault named against the wrong floor.
- *   - BEHAVIOUR. The generated functions, actually sourced and run by bash,
- *     classify real `node --version` answers the way the declared range does. A
- *     generator that emitted syntactically valid nonsense would pass the round
- *     trip alone.
+ * What is left to prove is BEHAVIOUR: the generated functions, actually sourced
+ * and run by bash, classify real `node --version` answers the way the declared
+ * range does. A generator that emitted syntactically valid nonsense would
+ * otherwise ship.
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -35,7 +30,12 @@ import {
 } from "../../scripts/gen-node-floor-lib.mjs";
 
 const ROOT = dirname(dirname(dirname(fileURLToPath(import.meta.url))));
-const LIB_PATH = join(ROOT, "plugin", "scripts", "lib", "node-floor.sh");
+
+/** The generated lib, written once for every case below to source. */
+const LIB_DIR = mkdtempSync(join(tmpdir(), "agent-sanitizer-node-floor-lib-"));
+process.on("exit", () => rmSync(LIB_DIR, { recursive: true, force: true }));
+const LIB_PATH = join(LIB_DIR, "node-floor.sh");
+writeFileSync(LIB_PATH, nodeFloorShellLib());
 
 /** A stub `node` whose `--version` answers `reported`. */
 function stubNode(t, reported) {
@@ -66,14 +66,6 @@ function askShell(bin) {
   assert.ok(["meets", "below"].includes(verdict), res.stdout);
   return { major, meetsFloor: verdict === "meets" };
 }
-
-test("the committed shell lib is exactly what the generator produces", () => {
-  assert.equal(
-    readFileSync(LIB_PATH, "utf8"),
-    nodeFloorShellLib(),
-    `${LIB_PATH} is stale or hand-edited — regenerate it (the command is in its header)`,
-  );
-});
 
 test("the rendered floor is the one package.json declares", () => {
   const declared = JSON.parse(readFileSync(join(ROOT, "package.json"), "utf8"))

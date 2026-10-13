@@ -202,8 +202,6 @@ const RESIDUE_PENDING = {
 
 /** Inputs with no commit-time suite by design, each with the gate it has. */
 const CI_ONLY = {
-  "plugin/scripts/build-redactor-pyz.mjs":
-    "installs from PyPI, so no offline commit-time suite can run it; node-tests and plugin-dist-autofix rebuild the zipapp in CI",
   "scripts/bundle-python-cli.mjs":
     "a release-time build run by auto-version and publish-python; its output is git-ignored",
   "src/vendor/gfm-autolink-literal.d.ts":
@@ -428,7 +426,8 @@ describe("guarded-data scan (the map is derived from the tests)", () => {
     // step id renders empty rather than erroring, so the whole coupled half
     // no-opped silently. And the generated fail-open shell lib landed on main
     // with no pair at all, because the branch that taught the scan to see .sh
-    // sources never saw the file.
+    // sources never saw the file; the lib is build output now, so its
+    // generator is what carries the pair.
     assertGuardedBy(
       derived,
       ".github/workflows/auto-version.yaml",
@@ -443,7 +442,7 @@ describe("guarded-data scan (the map is derived from the tests)", () => {
     );
     assertGuardedBy(
       derived,
-      "plugin/scripts/lib/fail-open.sh",
+      "scripts/gen-fail-open-lib.mjs",
       "plugin/test/fail-open-parity.test.mjs",
       "fail-open parity guard",
     );

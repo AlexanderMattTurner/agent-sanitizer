@@ -12,12 +12,13 @@ build/
 out/
 types/
 
-# ...except the Claude Code plugin's bundle, which is a COMMITTED artifact: an
-# installed plugin has no node_modules and no build step, so the shipped bytes
-# have to be in the repo. A test asserts it is tracked and byte-identical to a
-# fresh build. The directory itself must be re-included before its contents —
-# git cannot re-include a file whose parent directory is excluded.
-!plugin/dist/
+# The Claude Code plugin's build outputs, beside plugin/dist/ (already covered by
+# `dist/` above). `pnpm build:plugin` writes them; the release bakes them onto
+# the `plugin-dist` branch the marketplace installs from, so no other branch
+# carries them (plugin/scripts/baked-artifacts.mjs lists the full set).
+plugin/requirements.in
+plugin/scripts/lib/fail-open.sh
+plugin/scripts/lib/node-floor.sh
 
 # Environment files
 .env

@@ -5,10 +5,15 @@
  * Both halves of the plugin are built from THIS tree: the hooks' canonical
  * `agent-sanitizer` specifiers resolve to the repo itself (`link:.`), and the
  * zipapp beside them installs `agent_sanitizer` from `python/`. Neither carries
- * a published version, so the two cannot ship disagreeing engines and the
- * committed bundle is always the code the suite ran against. The cost is that
- * every `src/` change rewrites the artifact — `.hooks/rebuild-plugin-artifacts`
- * regenerates and stages it so a stale bundle cannot be committed.
+ * a published version, so the two cannot ship disagreeing engines.
+ *
+ * Everything this writes is git-ignored. `pnpm build:plugin` runs it (and so
+ * does `prepare`, on every `pnpm install`), so the suite tests a fresh build.
+ * The release workflow (`.github/workflows/plugin-dist.yaml`) runs it from the
+ * tagged tree and commits the output onto the `plugin-dist` branch, the only
+ * place an installed plugin's bytes are tracked. Offline by design: the zipapp
+ * (`build-redactor-pyz.mjs`) and the hook binaries (`build-hook-binaries.mjs`)
+ * are the steps that need the network.
  */
 import { existsSync, readFileSync, mkdirSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
@@ -16,6 +21,14 @@ import { fileURLToPath } from "node:url";
 
 import { parse as parseToml } from "smol-toml";
 
+import {
+  failOpenShellLib,
+  OUTPUT_PATH as FAIL_OPEN_LIB,
+} from "../../scripts/gen-fail-open-lib.mjs";
+import {
+  nodeFloorShellLib,
+  OUTPUT_PATH as NODE_FLOOR_LIB,
+} from "../../scripts/gen-node-floor-lib.mjs";
 import {
   bundleHardened,
   bundleTarget,
@@ -35,8 +48,14 @@ const TARGET = bundleTarget("plugin-hooks");
 /** The hook sources the bundle is built from. */
 export const PLUGIN_ENTRY = TARGET.entry;
 
-/** Committed artifact path. */
+/** Built bundle path. */
 export const BUNDLE_PATH = TARGET.outfile;
+
+/** The posture-knob reader `safe-launch.sh` sources. */
+export const FAIL_OPEN_LIB_PATH = join(ROOT, FAIL_OPEN_LIB);
+
+/** The node version floor `safe-launch.sh` and the provisioner source. */
+export const NODE_FLOOR_LIB_PATH = join(ROOT, NODE_FLOOR_LIB);
 
 /**
  * Direct requirements the lock is compiled FROM: the redactor daemon's
@@ -55,8 +74,8 @@ export const REQUIREMENTS_LOCK_PATH = join(ROOT, "plugin", "requirements.txt");
 // The packages inlined into the bundle. esbuild prefixes each inlined module
 // with a `// <path>` comment, and for a pnpm dep that path embeds the
 // content-addressed store hash, which varies with the store layout across
-// environments and would make a committed bundle differ from a CI rebuild for no
-// real reason.
+// environments and would make the same tree bundle to different bytes on a CI
+// runner than on a contributor's machine for no real reason.
 const INLINED_PACKAGES = ["agent-control-plane-core", "namespace-guard"];
 
 /**
@@ -116,8 +135,8 @@ export function lockedEngineVersion(lockText) {
 
 /**
  * Bundle the plugin entry into a self-contained ESM string, then normalize the
- * pnpm store paths in esbuild's module labels so the reproducibility test
- * compares actual code. The esbuild configuration itself — including the
+ * pnpm store paths in esbuild's module labels so a rebuild anywhere
+ * reproduces the baked bytes. The esbuild configuration itself — including the
  * runtime-`require()` inlining and the build-time assertion that none survive —
  * lives in `scripts/lib/bundle-esbuild.mjs`, shared with the wheel's CLI bundle.
  * @returns {Promise<string>}
@@ -133,8 +152,8 @@ export async function bundlePluginHook() {
 
 /**
  * Rewrite esbuild's `// <path>` module labels for the inlined packages to a
- * stable, package-relative form (`// <pkg>/<rest>`), so the reproducibility gate
- * compares actual code, not pnpm store paths. Done with plain string splits (no
+ * stable, package-relative form (`// <pkg>/<rest>`), so a rebuild elsewhere
+ * differs only in actual code, never in pnpm store paths. Plain string splits (no
  * regex) over the fixed store markers; the entry's own repo-relative label is
  * already stable.
  * @param {string} text
@@ -189,19 +208,19 @@ export function packageDirs() {
 }
 
 /**
- * Write the bundle and requirements.in, returning whether either changed.
- * requirements.txt is NOT written here: compiling it resolves the dependency
- * tree over the network, and this build is the offline reproducibility rebuild.
+ * Write the bundle, requirements.in and the two generated shell libs, returning
+ * whether any changed. requirements.txt is NOT written here: compiling it
+ * resolves the dependency tree over the network, and this build is offline.
  * @returns {Promise<boolean>}
  */
 async function writeArtifacts() {
-  const bundle = await bundlePluginHook();
-  const requirements = redactorRequirements();
   mkdirSync(dirname(BUNDLE_PATH), { recursive: true });
   let changed = false;
   for (const [path, content] of [
-    [BUNDLE_PATH, bundle],
-    [REQUIREMENTS_IN_PATH, requirements],
+    [BUNDLE_PATH, await bundlePluginHook()],
+    [REQUIREMENTS_IN_PATH, redactorRequirements()],
+    [FAIL_OPEN_LIB_PATH, failOpenShellLib()],
+    [NODE_FLOOR_LIB_PATH, nodeFloorShellLib()],
   ]) {
     let existing;
     try {
