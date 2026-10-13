@@ -38,22 +38,3 @@ reports/mutation/
 # Release sections are written by scripts/promote-changelog.mjs — keep the exact
 # ASCII `## [x.y.z] - date` formatting; don't let a formatter rewrite it.
 CHANGELOG.md
-
-# Generated: the invisible-charset SSOT is written by scripts/gen-invisible-charset.mjs
-# with JSON.stringify (one code point per line); prettier would repack the array
-# and fight the generator on every regeneration. The generator owns its format.
-python/agent_sanitizer/data/invisible-charset.json
-
-# Generated: the same generator's JS-side output. A flat number array is the one
-# shape Prettier repacks by `fill`, so a formatted copy and a freshly generated
-# one differ by whitespace alone — the committed module had already drifted from
-# its own generator that way, invisible to the SSOT round-trip in
-# test/invisible-charset.test.mjs because that test compares code points, not
-# bytes. The generator emits one code point per line and owns the format.
-src/cf-charset.mjs
-
-# Generated range tables (scripts/gen-unicode-properties.mjs). Prettier collapses
-# a one-span table onto one line and keeps a longer one a row per line, so
-# its output would differ from the generator's by table length; the generator
-# owns the format and test/unicode-properties.test.mjs compares bytes.
-src/unicode-properties.mjs

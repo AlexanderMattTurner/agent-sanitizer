@@ -52,7 +52,17 @@ function makeCheckout() {
   mkdirSync(join(dir, "src"));
   writeFileSync(
     join(dir, "src", "index.mjs"),
-    "export const sanitize = () => {};\n",
+    'export { TABLE } from "./table.mjs";\nexport const sanitize = () => {};\n',
+  );
+  // A generated, git-ignored module, as src/cf-charset.mjs and friends are:
+  // `git archive HEAD` omits it, so the install has to generate and stage it.
+  writeFileSync(join(dir, ".gitignore"), "src/table.mjs\n");
+  mkdirSync(join(dir, "scripts"));
+  writeFileSync(
+    join(dir, "scripts", "gen-unicode.mjs"),
+    `import { writeFileSync } from "node:fs";
+writeFileSync(new URL("../src/table.mjs", import.meta.url), "export const TABLE = 1;\\n");
+`,
   );
   // Outside `files`: proves the install still ships the PUBLISHED tree rather
   // than the whole checkout, which is what staging-then-packing preserves.
@@ -83,6 +93,7 @@ test("installs the local checkout without running its lifecycle scripts", () => 
   const ok = res.status === 0;
   const hasEntry = existsSync(join(installed, "src", "index.mjs"));
   const hasUnpublished = existsSync(join(installed, "unpublished.txt"));
+  const hasGenerated = existsSync(join(installed, "src", "table.mjs"));
   rmSync(dir, { recursive: true, force: true });
 
   assert.equal(ok, true, `install failed:\n${res.stdout}\n${res.stderr}`);
@@ -90,6 +101,11 @@ test("installs the local checkout without running its lifecycle scripts", () => 
     hasEntry,
     true,
     "the local checkout's entry point was not installed",
+  );
+  assert.equal(
+    hasGenerated,
+    true,
+    "the git-ignored generated module was not staged into the install",
   );
   assert.equal(
     hasUnpublished,
