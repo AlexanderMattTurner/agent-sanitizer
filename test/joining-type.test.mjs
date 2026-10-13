@@ -4,9 +4,10 @@
  *
  * src/joining-type.mjs is generated from the pinned UCD package by
  * scripts/gen-joining-type.mjs. This test re-derives the tables from the SAME
- * package and asserts the committed module still agrees — so editing the source
- * data without regenerating (or a Stryker mutant flipping a range bound) fails
- * CI, exactly as an SSOT round-trip should.
+ * package and asserts the generated module agrees — so a generator change that
+ * mislabels a range (or a Stryker mutant flipping a range bound) fails CI,
+ * exactly as an SSOT round-trip should. The module is git-ignored and generated
+ * at install time, so there is no committed copy to byte-compare.
  *
  * It checks EVERY covered code point plus the four boundary points around each
  * range (start-1, start, end, end+1). That is non-vacuous where it matters — an
@@ -18,10 +19,6 @@
  */
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
-import { fileURLToPath } from "node:url";
-
-import { unsandbox } from "./helpers/repo-root.mjs";
 
 import {
   joiningType,
@@ -33,7 +30,6 @@ import {
 import {
   deriveTables,
   loadUcd,
-  render,
   viramaScripts,
 } from "../scripts/gen-joining-type.mjs";
 
@@ -207,24 +203,6 @@ describe("Brahmic consonant scripts are exactly the scripts that own a virama", 
     assert.throws(
       () => viramaScripts(ucd.virama, without),
       /virama U\+94d has no Script entry/,
-    );
-  });
-});
-
-// The range checks above compare VALUES, so a hand edit or a template change
-// with no regeneration that leaves the tables intact (a comment, a helper, the
-// lookup code) stays green there. Bytes are what the generator owns.
-describe("src/joining-type.mjs is byte-identical to a fresh generation", () => {
-  it("matches render() of the pinned UCD package", () => {
-    assert.equal(
-      readFileSync(
-        unsandbox(
-          fileURLToPath(new URL("../src/joining-type.mjs", import.meta.url)),
-        ),
-        "utf8",
-      ),
-      render({ joining, virama, brahmic, version }),
-      "src/joining-type.mjs is stale — run `pnpm gen:joining-type`",
     );
   });
 });

@@ -1,37 +1,30 @@
-// drift-guard-ok: a tool-generated artifact for a non-JS consumer, guarded by
-// exactly this committed == regenerate(src/) freshness check.
 /**
  * The generated invisible-charset SSOT
- * (`python/agent_sanitizer/data/invisible-charset.json`) must equal what
- * `scripts/gen-invisible-charset.mjs` produces from `src/invisible.mjs` right
- * now. The JSON is what non-JS consumers (the Python `agent-secret-redactor`
- * engine) read instead of forking the invisible-character set; if it drifts from
+ * (`python/agent_sanitizer/data/invisible-charset.json`) must carry what
+ * `scripts/gen-invisible-charset.mjs` produces from `src/invisible.mjs`. The
+ * JSON is what non-JS consumers (the Python `agent-secret-redactor` engine)
+ * read instead of forking the invisible-character set; if it disagrees with
  * `invisible.mjs`, a key spliced with a newly-added code point escapes one layer.
  *
- * Regenerate with `node scripts/gen-invisible-charset.mjs` when `VS` /
- * `BLANK_NON_CF` change.
+ * Nothing here is committed: `pnpm install` generates the JSON and the JS-side
+ * tables (`scripts/gen-unicode.mjs`), so these tests check the generated state
+ * and the generators' behaviour, not a committed copy against a fresh run.
  */
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { fileURLToPath } from "node:url";
-
-import { unsandbox } from "./helpers/repo-root.mjs";
 
 import {
   extraCodepoints,
-  cfCodepoints,
   charsetDoc,
-  cfCharsetModule,
-  CF_MODULE_PATH,
   OUTPUT_PATH,
 } from "../scripts/gen-invisible-charset.mjs";
+import { cfCodepoints, cfCharsetModule } from "../scripts/gen-cf-charset.mjs";
 import { VS, BLANK_NON_CF, stripInvisible } from "../src/invisible.mjs";
 import { CF_CODEPOINTS } from "../src/cf-charset.mjs";
 import {
   parseStandardizedVariants,
   loadStandardizedVariantsUcd,
-  render as renderStandardizedVariants,
 } from "../scripts/gen-standardized-variants.mjs";
 import {
   STANDARDIZED_VARIANTS,
@@ -41,18 +34,22 @@ import {
 import { UNICODE_VERSION as UCD_PACKAGE_VERSION } from "../scripts/lib/ucd.mjs";
 
 describe("invisible-charset SSOT", () => {
-  const committed = JSON.parse(readFileSync(OUTPUT_PATH, "utf8"));
+  const generated = JSON.parse(readFileSync(OUTPUT_PATH, "utf8"));
 
-  it("committed JSON equals the freshly generated document (full round-trip)", () => {
-    assert.deepEqual(committed, charsetDoc());
+  // The JSON is written by an earlier process (`pnpm install`), so this is not a
+  // tautology: it fails when `invisible.mjs` moved since the install, and under
+  // mutation testing it kills a mutant of `VS` / `BLANK_NON_CF`, because the
+  // JSON was generated from the unmutated module.
+  it("generated JSON equals the document the generator produces now (full round-trip)", () => {
+    assert.deepEqual(generated, charsetDoc());
   });
 
-  it("committed JSON's extra code points equal the freshly generated ones", () => {
-    assert.deepEqual(committed.extra_codepoints, extraCodepoints());
+  it("generated JSON's extra code points equal the live ones", () => {
+    assert.deepEqual(generated.extra_codepoints, extraCodepoints());
   });
 
-  it("committed JSON's Cf code points equal the pinned UCD's General_Category=Cf", () => {
-    assert.deepEqual(committed.cf_codepoints, cfCodepoints());
+  it("generated JSON's Cf code points equal the pinned UCD's General_Category=Cf", () => {
+    assert.deepEqual(generated.cf_codepoints, cfCodepoints());
   });
 
   it("covers every VS and BLANK_NON_CF code point (no member dropped)", () => {
@@ -73,15 +70,27 @@ describe("invisible-charset SSOT", () => {
 
 // The cross-layer security invariant: the pinned Cf set the JS layer strips
 // (src/cf-charset.mjs) is IDENTICAL, member-for-member, to the set the Python
-// port reads from the committed JSON. If the two ever diverge, a key spliced with
+// port reads from the generated JSON. If the two ever diverge, a key spliced with
 // a code point one side omits escapes that layer — the exact bug pinning fixes.
 describe("Cf charset is pinned identically for JS and Python", () => {
-  const committed = JSON.parse(readFileSync(OUTPUT_PATH, "utf8"));
+  const generated = JSON.parse(readFileSync(OUTPUT_PATH, "utf8"));
 
-  it("the JS pinned Cf set equals the committed JSON's cf_codepoints", () => {
+  it("the JS pinned Cf set equals the generated JSON's cf_codepoints", () => {
     // Both artifacts are generated from the same source, so equality is exact
     // (same order, no set-membership fudge) — a stronger contract than ⊆/⊇.
-    assert.deepEqual([...CF_CODEPOINTS], committed.cf_codepoints);
+    assert.deepEqual([...CF_CODEPOINTS], generated.cf_codepoints);
+  });
+
+  // The byte comparison against a committed copy is gone with the committed
+  // copy; what remains worth pinning is that the generator's output is a module
+  // carrying exactly the Cf set it was given.
+  it("cfCharsetModule() renders a module exporting exactly the pinned Cf set", async () => {
+    const rendered = await import(
+      `data:text/javascript,${encodeURIComponent(cfCharsetModule())}`
+    );
+    assert.ok(cfCodepoints().length > 100, "Cf set is implausibly small");
+    assert.deepEqual([...rendered.CF_CODEPOINTS], cfCodepoints());
+    assert.equal(rendered.UNICODE_VERSION, UCD_PACKAGE_VERSION);
   });
 
   it("the JS layer actually strips a version-delta Cf char (U+13439)", () => {
@@ -97,13 +106,13 @@ describe("Cf charset is pinned identically for JS and Python", () => {
 // SSOT round-trip for the standardized variation sequence table backing the
 // FE00–FE0D carve-out in invisible.mjs. src/standardized-variants.mjs is
 // generated from the hash-pinned UCD file; re-parsing that file here and
-// asserting the committed module matches makes editing the data without
+// asserting the generated module matches makes editing the data without
 // regenerating (or a mutant flipping a pair) a hard CI failure.
 describe("standardized-variants SSOT", () => {
   const { text, version } = loadStandardizedVariantsUcd();
   const pairs = parseStandardizedVariants(text);
 
-  it("pins the committed module's Unicode version to the UCD file's", () => {
+  it("pins the generated module's Unicode version to the UCD file's", () => {
     assert.equal(SV_UNICODE_VERSION, version);
     assert.equal(version, UCD_PACKAGE_VERSION);
   });
@@ -132,7 +141,7 @@ describe("standardized-variants SSOT", () => {
     );
   });
 
-  it("committed table equals the freshly parsed UCD file", () => {
+  it("generated table equals the freshly parsed UCD file", () => {
     assert.deepEqual(STANDARDIZED_VARIANTS, pairs);
   });
 
@@ -201,54 +210,6 @@ describe("standardized-variants SSOT", () => {
     assert.ok(
       !isStandardizedVariant(0x30, 0xfe0f),
       "VS16 is an emoji presentation selector, never a standardized variant",
-    );
-  });
-});
-
-describe("generated modules are byte-identical to a fresh generation", () => {
-  // Read the SHIPPED file, not the copy this suite is running beside. Both paths
-  // come from the generator module and are absolute, so under Stryker they point
-  // INTO the sandbox — where src/cf-charset.mjs is instrumented, because it is a
-  // mutated source. A byte comparison against clean generator output then fails
-  // for a reason that has nothing to do with drift, and takes every shard's dry
-  // run with it. This is the #279 class, and this very test walked into it.
-  const shipped = (absolute) => readFileSync(unsandbox(absolute), "utf8");
-
-  // The SEMANTIC round-trips above compare code points, which is exactly why
-  // src/cf-charset.mjs was able to drift from its own generator by whitespace
-  // alone and stay green: Prettier repacked the flat number array the generator
-  // emitted, and nothing compared bytes. Removing Prettier from the file removed
-  // one cause of that drift, not the class — a hand edit, or a change to the
-  // generator's template with no regeneration, re-lands the same divergence.
-  it("src/cf-charset.mjs matches cfCharsetModule() byte for byte", () => {
-    assert.equal(
-      shipped(CF_MODULE_PATH),
-      cfCharsetModule(),
-      "src/cf-charset.mjs is stale — run `node scripts/gen-invisible-charset.mjs`",
-    );
-  });
-
-  it("src/standardized-variants.mjs matches its generator byte for byte", () => {
-    const { text, version } = loadStandardizedVariantsUcd();
-    assert.equal(
-      shipped(
-        fileURLToPath(
-          new URL("../src/standardized-variants.mjs", import.meta.url),
-        ),
-      ),
-      renderStandardizedVariants({
-        pairs: parseStandardizedVariants(text),
-        version,
-      }),
-      "src/standardized-variants.mjs is stale — run `node scripts/gen-standardized-variants.mjs`",
-    );
-  });
-
-  it("the charset JSON matches charsetDoc() byte for byte", () => {
-    assert.equal(
-      shipped(OUTPUT_PATH),
-      JSON.stringify(charsetDoc(), null, 2) + "\n",
-      "the charset JSON is stale — run `node scripts/gen-invisible-charset.mjs`",
     );
   });
 });

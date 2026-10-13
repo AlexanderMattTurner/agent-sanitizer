@@ -58,9 +58,9 @@ describe("no live Unicode property escape in shipped code or generators", () => 
   it("scans the modules that decide behaviour (non-vacuous)", () => {
     for (const expected of [
       "src/invisible.mjs",
-      "src/unicode-properties.mjs",
       "claude-hooks/lib/authored-content.mjs",
       "scripts/gen-joining-type.mjs",
+      "scripts/gen-cf-charset.mjs",
       "scripts/gen-invisible-charset.mjs",
       "scripts/gen-standardized-variants.mjs",
       "scripts/gen-unicode-properties.mjs",

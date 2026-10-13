@@ -280,8 +280,8 @@ describe("guarded-data scan (the map is derived from the tests)", () => {
         "module-relative join",
       ],
       [
-        "python/agent_sanitizer/data/invisible-charset.json",
-        "test/invisible-charset.test.mjs",
+        "plugin/dist/hooks/hook-binaries.sha256",
+        "plugin/test/plugin-bundle.test.mjs",
         "generator-exported path",
       ],
       [
