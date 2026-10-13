@@ -2788,21 +2788,16 @@ describe("indented code blocks are content, not hiding places", () => {
     });
 });
 
-// `\x3c` is `<`. These fixtures crash a sanitizer that predates the fix they
-// test, so spelling the `<` as an escape keeps a review pipeline that runs
-// such a sanitizer over a diff of this file from withholding the diff whole.
-//
 // `hast-util-from-parse5` recurses into a `template`'s parse5 `content`, which
 // only an HTML-namespace `<template>` has: an SVG or MathML one (and an HTML
-// `template.x` tag, which the converter reads as a selector naming `template`)
+// `<template.x>`, which the converter reads as a selector naming `template`)
 // threw, withholding the whole document over a benign element.
 describe("a template with no template content converts, it does not throw", () => {
   const b64 = "A".repeat(44);
   const KEPT = {
-    svg: "<p>a</p>\x3csvg><template><circle r='1'/></template></svg><p>b</p>",
-    math: "<p>a</p>\x3cmath><template><mi>x</mi></template></math><p>b</p>",
-    "HTML selector-shaped name":
-      "<p>a</p>\x3ctemplate.x>t</template.x><p>b</p>",
+    svg: "<p>a</p><svg><template><circle r='1'/></template></svg><p>b</p>",
+    math: "<p>a</p><math><template><mi>x</mi></template></math><p>b</p>",
+    "HTML selector-shaped name": "<p>a</p><template.x>t</template.x><p>b</p>",
   };
   for (const [label, html] of Object.entries(KEPT))
     it(`keeps the document whole: ${label}`, () => {
@@ -2873,9 +2868,9 @@ describe("a template with no template content converts, it does not throw", () =
     '<svg viewBox="0 0 24 24" width="24" height="24"><path d="M12 2L2 22h20z" fill="currentColor"/></svg>',
     '<svg><defs><linearGradient id="g"><stop offset="0" stop-color="#fff"/></linearGradient></defs><rect width="10" height="10" fill="url(#g)"/></svg>',
     '<svg><use href="#icon-home"/><title>Home</title></svg>',
-    '\x3csvg><template id="t"><circle cx="5" cy="5" r="4"/></template></svg>',
+    '<svg><template id="t"><circle cx="5" cy="5" r="4"/></template></svg>',
     "<math><mfrac><mi>a</mi><mn>2</mn></mfrac></math>",
-    "\x3cmath display='block'><msup><mi>x</mi><mn>2</mn></msup><template><mo>+</mo></template></math>",
+    "<math display='block'><msup><mi>x</mi><mn>2</mn></msup><template><mo>+</mo></template></math>",
   ];
   it("finds nothing in legitimate SVG and MathML", () => {
     for (const html of LEGITIMATE) {
