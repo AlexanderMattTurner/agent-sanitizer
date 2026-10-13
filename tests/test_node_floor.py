@@ -51,6 +51,9 @@ NOT_THE_FLOOR = {
     ("plugin/test/plugin-bundle.test.mjs", "18"): (
         "the too-old runtime a fixture stubs to drive the below-floor diagnosis"
     ),
+    ("src/glob-compat.mjs", "22.22.1"): (
+        "the first 22.x whose globSync carries nodejs/node#61012 — a runtime bug fact"
+    ),
 }
 
 # Positive markers: copies that cannot read package.json where they run, so
