@@ -13,6 +13,7 @@ import {
   EXEMPT_TOOLS,
   EXEMPT_TOOL_PATTERNS,
   hasNonAscii,
+  isAsciiPretender,
   normalizeContext,
   foldConfusables,
   normalizeConfusables,
@@ -946,5 +947,61 @@ describe("the fold's tool scope is a declared partition", () => {
       normalizeConfusables("constructor", { path: `p${CYR_A}` }),
       null,
     );
+  });
+});
+
+// ─── Same-script Latin: words, not disguises ─────────────────────────────────
+// Against the DEFAULT engine (namespace-guard), which flags `İ`, `í`, `ł`, `ị`
+// as confusables of their base letter: findings the predicate must decline.
+
+describe("isAsciiPretender", () => {
+  it("declines every letter of a real Latin orthography", () => {
+    // ı İ í ł ị ş ğ đ ơ — Turkish, Spanish, Polish, Vietnamese, Azerbaijani.
+    for (const code of [
+      0x131, 0x130, 0xed, 0x142, 0x1ecb, 0x15f, 0x11f, 0x111, 0x1a1,
+    ])
+      assert.equal(isAsciiPretender(cp(code)), false, code.toString(16));
+  });
+
+  it("keeps cross-script, phonetic, compatibility and symbol look-alikes", () => {
+    // Cyrillic а, Cherokee Ꭺ, IPA ɡ, small-capital ᴀ, fullwidth ａ, ligature ﬁ,
+    // fraction ½, and × (inside the Latin-1 range but a symbol).
+    for (const code of [
+      0x430, 0x13aa, 0x261, 0x1d00, 0xff41, 0xfb01, 0xbd, 0xd7,
+    ])
+      assert.equal(isAsciiPretender(cp(code)), true, code.toString(16));
+  });
+
+  it("ignores ASCII and combining marks, and reads every code point of a glyph", () => {
+    assert.equal(isAsciiPretender("abc"), false);
+    assert.equal(isAsciiPretender(`e${cp(0x301)}`), false);
+    assert.equal(isAsciiPretender(`${cp(0x131)}${cp(0x430)}`), true);
+  });
+
+  it("the default fold leaves same-script words untouched but still folds the disguises", () => {
+    const words = [
+      "İstanbul İzmir İçişleri kitaplık yazılım Diyarbakır",
+      "Azərbaycan Sumqayıt Gəncə día país aquí sí fīlm Wisła łza",
+      "Łódź bị mì Việt Nguyễn Đức tiếng café naïve straße Ångström",
+    ].flatMap((line) => line.split(" "));
+    const fold = (word) => [
+      normalizeConfusables("Read", { file_path: `/srv/docs/${word}.txt` }),
+      normalizeConfusables("Bash", { command: `cat ${word}.md` }),
+    ];
+    assert.deepEqual(
+      words.flatMap((word) => fold(word).filter(Boolean)),
+      [],
+    );
+    for (const disguise of [
+      `p${CYR_A}sswd`,
+      `${cp(0xff41)}pple`,
+      `${cp(0x261)}ithub`,
+    ]) {
+      const result = normalizeConfusables("Read", {
+        file_path: `/srv/${disguise}`,
+      });
+      assert.ok(result, disguise);
+      assert.equal(hasNonAscii(result.updatedInput.file_path), false, disguise);
+    }
   });
 });

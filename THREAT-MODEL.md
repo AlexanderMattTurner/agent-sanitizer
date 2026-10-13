@@ -206,23 +206,43 @@ deception). Its two tiers are evidential strength, not attack class — both
 describe a host that resolves and both deceive the same reader; they differ only
 in how certain the evidence is:
 
-- **WARNING** — the label holds a non-ASCII code point and its _whole_ TR39
-  skeleton is pure ASCII: it claims to be an ASCII name it is not. That is the
-  same argument the fold gate makes ("folds to pure ASCII"), so it inherits the
-  same precision story — a label keeping an unmapped glyph after skeletoning
-  (`россия` → `poccия`) is a real word in its own script, not a disguise.
-- **NOTE** — the label carries a cross-script confusable but keeps an unmapped
-  glyph, so it reads as no ASCII name. That is the "unmapped glyph spliced in to
-  suppress the strong rule" shape, and it is equally what an ordinary word with
-  one look-alike letter produces, so the evidence is thin and the finding stays
-  quiet.
+- **WARNING** — the label holds a non-ASCII code point, its _whole_ TR39
+  skeleton is pure ASCII, and at least one of its code points is an **ASCII
+  pretender** (`isAsciiPretender` in `src/confusables.mjs`): neither a combining
+  mark nor a letter of a real Latin-script orthography. It claims to be an ASCII
+  name it is not. That is the same argument the fold gate makes ("folds to pure
+  ASCII"), gated on the same predicate, so the two inherit one precision story —
+  a label keeping an unmapped glyph after skeletoning (`россия` → `poccия`) is a
+  real word in its own script, not a disguise.
+- **NOTE, same-script** — the skeleton is pure ASCII, but only through letters
+  of a real Latin orthography: Latin-1 Supplement, Latin Extended-A/B
+  (U+00C0–U+024F) or Latin Extended Additional (U+1E00–U+1EFF), none NFKC-folding
+  to ASCII. Turkish `altın` reads as `altin` because the dotless `ı` skeletons to
+  `i`, yet it is a word, not a disguise. The tier is per glyph, so `gıthub` lands
+  here too: that recall cost is the price of not flagging Turkish, and the NOTE
+  still reaches the model (see below). A cross-script glyph (Cyrillic `а`), an
+  IPA or small-capital letter (`ɡ`, `ᴀ`) and a fullwidth form (`ａ`) stay
+  pretenders and keep the WARNING.
+- **NOTE, unmapped glyph** — the label carries a confusable in a token that
+  mixes Latin with another script but keeps an unmapped glyph, so it reads as no
+  ASCII name. That is the "unmapped glyph spliced in to suppress the strong
+  rule" shape, and it is equally what an ordinary word with one look-alike
+  letter produces, so the evidence is thin and the finding stays quiet.
+
+**A NOTE is quieter, never dropped.** In the output hook every note reaches the
+model's `additional_context`: alone when nothing rose above a note, after the
+WARNING text when a warning co-occurs. The one exception is the inert-ANSI note
+(`INERT_ANSI_NOTE`), dropped beside a warning because "these were colour codes"
+adds nothing for a reader with a warning to act on. So a confusable host's "do
+not fetch them" survives an unrelated zero-width strip on the same page.
 
 Scored against `test/data/confusable-hosts.json`, which is the single source for
-both halves: **zero findings** across 52 real internationalized labels spanning
-Latin, Cyrillic, Greek, Han, Hiragana, Hangul, Arabic, Devanagari and Thai, and
-every attack label caught at its declared tier. Recall alone would reward a rule
-that flags everything, so the false-positive half is the half that makes the
-number mean anything.
+both halves: **zero findings** across 66 real internationalized labels spanning
+Latin (including Turkish, Azerbaijani and Vietnamese), Cyrillic, Greek, Han,
+Hiragana, Hangul, Arabic, Devanagari and Thai; every `sameScript` word at NOTE,
+never WARNING; and every attack label caught at its declared tier. Recall alone
+would reward a rule that flags everything, so the false-positive half is the
+half that makes the number mean anything.
 
 **Known false negatives**, each pinned as a test rather than left as a claim:
 
@@ -779,7 +799,7 @@ it is which banner the operator sees. That asymmetry is why a note is the right
 answer whenever the evidence is thin: an under-loud true finding is still
 delivered, while an over-loud false one costs the channel its credibility.
 
-Four decisions currently land at NOTE:
+Five decisions currently land at NOTE:
 
 - **An incidental Layer-1 strip** — inert ANSI (display-only SGR colour, or a
   lone `ESC` that opened nothing) together with too few invisible characters to
@@ -790,6 +810,8 @@ Four decisions currently land at NOTE:
   The Layer-2 **splice** stays a WARNING: those bytes were invisible to a human
   reading the rendered page.
 - **An exfil-shaped URL that is not auto-fetched** (Layer 3) — see above.
+- **A confusable host on thin evidence** (Layer 3) — a same-script orthographic
+  letter or a kept unmapped glyph; see [Confusable hosts](#confusable-hosts).
 - **The prompt gate's inert-escape carve-out**, which predates the tier and is
   the same judgement (see [User-prompt verdict](#user-prompt-verdict)).
 
@@ -801,7 +823,9 @@ The Layer-1 downgrade is gated on the caller asserting first-party ingress
 few the bytes, because that is the channel where a hidden character was _put_
 there. The `sgrNote` flag on a `./output` result means "nothing here rose above a
 note", so a caller can show the quiet line instead of the banner; one warning
-anywhere in the walk clears it.
+anywhere in the walk clears it. That changes what leads, not what is said:
+`composeContext`'s `notes` option appends every note after the WARNING text
+except the inert-ANSI one.
 
 ## Provisioned hook binary (supply chain)
 

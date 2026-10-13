@@ -156,6 +156,7 @@ describe("sanitizeText Layer 5 re-vet exact warning/error text", () => {
     });
     assert.equal(r.cleaned, "key: sk-live-[REDACTED] end");
     assert.deepEqual(r.warnings, [
+      "Layer-5 injection filter removed one or more verbatim spans it flagged as prompt injection",
       `API keys/secrets redacted: api-key${REDACTION_DOCTRINE}`,
     ]);
   });
