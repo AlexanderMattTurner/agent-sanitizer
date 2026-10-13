@@ -1,39 +1,46 @@
 #!/usr/bin/env bash
-# Rebuild the bun-compiled hook binaries and attach them to the GitHub release
-# for the version just published. `--check` recompiles all four platform
-# executables from this tree and fails loudly unless their digests reproduce
-# the committed manifest byte-for-byte — a mismatch means the release would
-# ship binaries the SessionStart provisioner's digest verification rejects, so
-# nothing is uploaded and the step's failure is the alert (via the
-# build-publish-notify workflow_run listener).
+# Attach the bun-compiled hook binaries to the GitHub release for $TAG. The
+# binaries were compiled by build-plugin-dist.sh in the same run that rendered
+# the hook-binary manifest baked onto `plugin-dist`, so their digests are the
+# manifest's by construction; this re-checks every one against that manifest
+# with `sha256sum -c` before uploading, so an artifact corrupted in transit is
+# never published as the asset the SessionStart provisioner downloads.
 #
-# Inputs: $VERSION — the released X.Y.Z; the tag "v$VERSION" is already pushed
-# by version-bump.sh before this runs. $GH_TOKEN — the workflow's github.token.
+# Usage: release-hook-binaries.sh <bin-dir> <manifest>
+# Env:   $TAG — the release tag (vX.Y.Z); $GH_TOKEN — a token with
+#        `contents: write` on this repo.
 # Idempotent on re-runs: when the release already exists, the assets are
 # re-uploaded with `--clobber` instead of failing on the duplicate create.
 set -euo pipefail
 
 log() { echo "$@" >&2; }
 
-VERSION="${VERSION:?VERSION (the released X.Y.Z version) must be set}"
-TAG="v$VERSION"
+BIN_DIR="${1:?usage: release-hook-binaries.sh <bin-dir> <manifest>}"
+MANIFEST="${2:?usage: release-hook-binaries.sh <bin-dir> <manifest>}"
+TAG="${TAG:?TAG (the release tag, vX.Y.Z) must be set}"
+MANIFEST_ABS="$(cd "$(dirname "$MANIFEST")" && pwd)/$(basename "$MANIFEST")"
 
-OUTDIR=$(mktemp -d)
-trap 'rm -rf "$OUTDIR"' EXIT
+NAMES="$(awk '/^[0-9a-f]{64}  / { print $2 }' "$MANIFEST_ABS")"
+ASSETS=()
+while IFS= read -r asset; do
+  if [[ -n "$asset" ]]; then
+    ASSETS+=("$BIN_DIR/$asset")
+  fi
+done <<<"$NAMES"
+if [[ "${#ASSETS[@]}" -eq 0 ]]; then
+  log "Error: $MANIFEST names no hook binaries."
+  exit 1
+fi
+# sha256sum skips the `# key=value` header lines as comments and fails on a
+# missing or mismatched binary; --strict also fails on a malformed line.
+(cd "$BIN_DIR" && sha256sum --check --strict "$MANIFEST_ABS")
 
-# --outdir keeps the digest-verified binaries around for the upload below.
-node plugin/scripts/build-hook-binaries.mjs --check --outdir="$OUTDIR"
-
-# --check above rendered the manifest from a digest of every file it compiled,
-# so a missing platform fails there rather than turning into a short upload.
-ASSETS=("$OUTDIR"/agent-sanitizer-hooks-*)
-
-# Notes stay minimal: the CHANGELOG's matching "## [$VERSION]" section is the
-# release-notes source of truth (promoted by version-bump.sh), so the release
-# just points there instead of duplicating prose that would drift.
+# Notes stay minimal: the CHANGELOG's matching section is the release-notes
+# source of truth (promoted by version-bump.sh), so the release just points
+# there instead of duplicating prose that would drift.
 CREATE_RC=0
 CREATE_OUTPUT=$(gh release create "$TAG" "${ASSETS[@]}" \
-  --title "$TAG" --notes "See CHANGELOG.md." 2>&1) || CREATE_RC=$?
+  --verify-tag --title "$TAG" --notes "See CHANGELOG.md." 2>&1) || CREATE_RC=$?
 if [[ "$CREATE_RC" -ne 0 ]]; then
   # Only an already-existing release (a re-run, or an out-of-band release for
   # this tag) downgrades to an asset upload — asked via `gh release view`, not

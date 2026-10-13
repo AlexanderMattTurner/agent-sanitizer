@@ -1,0 +1,128 @@
+name: Plugin dist bake
+
+# Build the Claude Code plugin from each release tag and commit the result onto
+# the `plugin-dist` branch, which .claude-plugin/marketplace.json names as the
+# plugin's source. No other branch tracks the plugin's build output (the hook
+# bundle, the redactor zipapp and wheel, the generated shell libs, the
+# hook-binary manifest): the release tag carries the sources, and plugin-dist
+# carries what they build into.
+#
+# Triggered by the release workflow finishing on the default branch:
+# version-bump.sh tags the exact SHA it published, so a run that released
+# leaves a vX.Y.Z tag on its head SHA, and one that released nothing leaves
+# none and this no-ops. To (re)bake a release by hand, dispatch with `tag` —
+# commit-plugin-dist.sh makes that a no-op for a tag plugin-dist already
+# contains, so a re-run never moves the branch backwards.
+#
+# Two jobs, split by privilege. `build` runs the repo's build and its
+# third-party toolchain (pnpm deps, uv, bun) with a read-only token. `publish`
+# holds the push credential and runs no dependency code: it checks out the tag,
+# re-verifies the binaries against the baked manifest, attaches them to the
+# GitHub release, and only then pushes plugin-dist — so no installed plugin ever
+# names a manifest whose binaries are not yet downloadable.
+
+on: # zizmor: ignore[dangerous-triggers]
+  # workflow_run is safe here: the only runs it accepts are the release
+  # workflow's own, on a push to the default branch, and the code checked out
+  # is that push's tagged commit — never a pull request's.
+  workflow_run:
+    workflows: [Auto version bump and publish]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag to bake (vX.Y.Z)
+        required: true
+        type: string
+
+concurrency:
+  group: plugin-dist
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build the plugin from the release tag
+    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.event == 'push'
+    runs-on: ubuntu-latest
+    # Four bun cross-compiles on a cold runtime cache plus the zipapp's PyPI
+    # install.
+    timeout-minutes: 45
+    outputs:
+      tag: ${{ steps.resolve.outputs.tag }}
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && format('refs/tags/{0}', inputs.tag) || github.event.workflow_run.head_sha }}
+          # Tags are only fetched with full history.
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Resolve the release tag
+        id: resolve
+        run: bash .github/scripts/resolve-release-tag.sh "$WANTED_TAG"
+        env:
+          WANTED_TAG: ${{ inputs.tag }}
+
+      - name: Setup base environment
+        if: steps.resolve.outputs.tag != ''
+        uses: ./.github/actions/setup-base-env
+        with:
+          setup-python: "true"
+
+      - name: Build and stage the plugin
+        if: steps.resolve.outputs.tag != ''
+        run: bash .github/scripts/build-plugin-dist.sh "$TAG" "$RUNNER_TEMP/plugin-dist/stage" "$RUNNER_TEMP/plugin-dist/bin"
+        env:
+          TAG: ${{ steps.resolve.outputs.tag }}
+
+      - name: Upload the baked plugin
+        if: steps.resolve.outputs.tag != ''
+        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5.0.0
+        with:
+          name: plugin-dist
+          path: ${{ runner.temp }}/plugin-dist
+          if-no-files-found: error
+          retention-days: 7
+
+  publish:
+    name: Release the hook binaries and push plugin-dist
+    needs: build
+    if: needs.build.outputs.tag != ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      # Release creation and asset upload (github.token).
+      contents: write
+    steps:
+      # Credentials stay persisted: commit-plugin-dist.sh pushes with them. The
+      # org PAT is the identity the plugin-dist branch ruleset lets push (the
+      # same bypass actor that pushes main's release commit in
+      # auto-version.yaml); the stock token is the fallback where it is unset.
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0 # zizmor: ignore[artipacked]
+        with:
+          ref: refs/tags/${{ needs.build.outputs.tag }}
+          fetch-depth: 0
+          # token-fallback-ok: a fork without TEMPLATE_SYNC_TOKEN_ORG bakes with
+          # the stock GITHUB_TOKEN, which pushes wherever no ruleset stops it.
+          token: ${{ secrets.TEMPLATE_SYNC_TOKEN_ORG || secrets.GITHUB_TOKEN }}
+
+      - name: Download the baked plugin
+        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0.0
+        with:
+          name: plugin-dist
+          path: ${{ runner.temp }}/plugin-dist
+
+      - name: Attach the hook binaries to the GitHub release
+        run: bash .github/scripts/release-hook-binaries.sh "$RUNNER_TEMP/plugin-dist/bin" "$RUNNER_TEMP/plugin-dist/stage/plugin/dist/hooks/hook-binaries.sha256"
+        env:
+          TAG: ${{ needs.build.outputs.tag }}
+          GH_TOKEN: ${{ github.token }}
+
+      - name: Commit the baked plugin onto plugin-dist
+        run: bash .github/scripts/commit-plugin-dist.sh "$TAG" "$RUNNER_TEMP/plugin-dist/stage"
+        env:
+          TAG: ${{ needs.build.outputs.tag }}
